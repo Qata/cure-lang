@@ -47,6 +47,10 @@ defmodule Cure.Core.Eval do
   def eval({:eq, ty, a, b}, env), do: {:veq, eval(ty, env), eval(a, env), eval(b, env)}
   def eval({:refl, a}, env), do: {:vrefl, eval(a, env)}
 
+  # `rewrite e at (x.M) in t` is erased at runtime to `t` (the proof and motive
+  # are computationally irrelevant — `rewrite e _ t ⇝ t`, §4.6).
+  def eval({:rewrite, _proof, _motive, body}, env), do: eval(body, env)
+
   def eval({:case, scrut, motive, branches}, env) do
     case eval(scrut, env) do
       {:vctor, cname, args} ->

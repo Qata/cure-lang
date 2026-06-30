@@ -74,6 +74,20 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  def infer(ctx, {:rewrite, proof, motive, body}) do
+    with {:ok, proof_type} <- infer(ctx, proof),
+         {:ok, a_value, b_value} <- ensure_eq(proof_type) do
+      # motive (x.M): result transports M[a/x] (the body's type) to M[b/x].
+      motive_value = Eval.eval(motive, Context.env(ctx))
+      expected_body = Eval.apply(motive_value, a_value)
+
+      case check(ctx, body, expected_body) do
+        :ok -> {:ok, Eval.apply(motive_value, b_value)}
+        {:error, _} -> {:error, :rewrite_premise}
+      end
+    end
+  end
+
   def infer(ctx, {:sigma, a, b}) do
     with {:ok, l1} <- infer_sort(ctx, a),
          a_value = Eval.eval(a, Context.env(ctx)),
@@ -272,6 +286,10 @@ defmodule Cure.Core.Kernel do
   # Require a type value to be a Σ; return its domain value + codomain closure.
   defp ensure_sigma({:vsigma, dom, cod_closure}), do: {:ok, dom, cod_closure}
   defp ensure_sigma(_), do: {:error, :not_a_sigma}
+
+  # Require a type value to be an equality; return its two endpoint values.
+  defp ensure_eq({:veq, _ty, a_value, b_value}), do: {:ok, a_value, b_value}
+  defp ensure_eq(_), do: {:error, :not_an_equality}
 
   # Check `args` against a dependent telescope, threading each evaluated arg so
   # later telescope types can depend on earlier args. Returns the arg values
