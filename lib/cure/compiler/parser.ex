@@ -1211,6 +1211,9 @@ defmodule Cure.Compiler.Parser do
       :type ->
         parse_type_def(state)
 
+      :indexed ->
+        parse_indexed_type(state)
+
       :proto ->
         parse_proto(state)
 
@@ -2354,6 +2357,83 @@ defmodule Cure.Compiler.Parser do
       end
 
     {ast, state}
+  end
+
+  # Indexed (GADT) type declaration:
+  #   indexed type NAME(i: T, ...) where
+  #     ctor : <type signature>
+  #     ...
+  # Each constructor signature is captured as a `{:gadt_ctor, [name: ...], type}`
+  # node; the elaborator infers the implicit index telescope from it.
+  defp parse_indexed_type(state) do
+    token = peek(state)
+    # consume `indexed` then the `type` keyword (both are :keyword tokens)
+    state = state |> advance() |> advance()
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    {index_params, state} =
+      case peek(state) do
+        %Token{type: :lparen} ->
+          state = advance(state)
+          {tp, state} = parse_typed_params(state)
+          state = expect(state, :rparen)
+          {tp, state}
+
+        _ ->
+          {[], state}
+      end
+
+    state = skip_newlines(state)
+
+    state =
+      case peek(state) do
+        %Token{type: :keyword, value: :where} ->
+          advance(state)
+
+        other ->
+          add_error(state, {:expected, :where, :got, other.type, other.line, other.col})
+      end
+
+    state = skip_newlines(state)
+
+    {opened_block, state} =
+      case peek(state) do
+        %Token{type: :indent} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
+    {ctors, state} = parse_gadt_ctors(state, [])
+
+    state =
+      if opened_block do
+        state |> skip_newlines() |> expect_dedent()
+      else
+        state
+      end
+
+    meta = [name: name, index_params: index_params, line: token.line, col: token.col]
+    {{:indexed_type, meta, ctors}, state}
+  end
+
+  defp parse_gadt_ctors(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        cname_token = peek(state)
+        cname = to_string(cname_token.value)
+        state = advance(state)
+        state = expect(state, :colon)
+        {type_expr, state} = parse_type_expr(state)
+        meta = [name: cname, line: cname_token.line, col: cname_token.col]
+        parse_gadt_ctors(state, [{:gadt_ctor, meta, type_expr} | acc])
+    end
   end
 
   defp parse_type_variant(state) do

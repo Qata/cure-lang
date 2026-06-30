@@ -45,7 +45,7 @@ defmodule Cure.Compiler.Lexer do
   # `parse_app_container/1` when the token is followed by an identifier
   # at block-prefix position.
   @keywords ~w(
-    mod fn let type rec proto impl fsm local use as
+    mod fn let type indexed rec proto impl fsm local use as
     match pickup if elif else then for do end
     in try catch finally throw return yield
     spawn send receive after
