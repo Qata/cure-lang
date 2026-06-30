@@ -18,11 +18,11 @@
 - **Commits:** never co-sign/co-author; author as the user only. Conventional-commit messages.
 - **OTP 26–28** (per repo `CLAUDE.md`); `start/0` entry convention is irrelevant here (compiler-internal work).
 - **Trusted vs untrusted boundary:** code under `lib/cure/core/` is the trusted kernel — keep it small, pure, deterministic, no side effects beyond returning results/errors. Cleverness (inference, unification, pattern compilation, the totality *closure walk*) lives in `lib/cure/elab/` and is re-checked by the kernel.
-- **Soundness invariant:** the kernel never trusts an elaborator-asserted certificate — it re-runs the termination+coverage check on the Core definition itself (Task M7).
+- **Soundness invariant:** the kernel never trusts an elaborator-asserted certificate — it re-runs the termination+coverage check on the Core definition itself (Task M7.2), over a def whose body it already type-checked (Task M7.1).
 - **Core terms are serializable** (commitment C2): every `Cure.Core.Term` node must round-trip through `Core.Term.to_external/1` / `from_external/1` (plain tagged tuples/maps, no PIDs/refs/closures) so an independent checker can re-validate. Add a round-trip test whenever a new node is introduced.
 
 **Milestone order (each self-contained, independently committable; halt cleanly on a boundary):**
-M0 Core term repr → M1 universes + NbE eval/conv (Π/λ) → M2 kernel check/infer (Π/λ/Type) → M3 indexed families + positivity → M4 dependent `case` + ι → M5 Σ types → M6 `Eq`/`refl`/`rewrite` → M7 totality certificates → M8 elaborator (implicits, pattern compilation, holes) → M9 erasure → codegen → M10 Slice-1 acceptance (incl. negatives) → M11 conformance-corpus seed + serialization.
+M0 Core term repr → M1 universes + NbE eval/conv (Π/λ) → M2 kernel check/infer (Π/λ/Type) → M3 indexed families + positivity → M4 dependent `case` + ι → M5 Σ types → M6 `Eq`/`refl`/`rewrite` → M7 global defs + kernel-revalidated totality certificates + type-level closure → M8 elaborator (declarations, implicits, pattern compilation, holes) → M9 erasure → codegen → M10 Slice-1 acceptance (incl. negatives) → M11 conformance-corpus seed + serialization.
 
 ---
 
@@ -90,15 +90,29 @@ git commit -m "feat(core): add Core term representation"
 - [ ] **Step 1: Write the failing test**
 
 ```elixir
-test "subst respects binder depth" do
-  # (λ. #1) [0 := a]  must shift `a` under the lambda, leaving #1 -> a-shifted
+test "shift lifts free vars at/above the cutoff, leaves bound vars" do
   alias Cure.Core.Term
-  t = {:lam, {:type, 0}, {:var, 1}}
-  assert {:lam, {:type, 0}, {:var, 0}} = Term.subst(t, 0, {:var, 0}) |> elem(0) |> then(&{&1, nil}) |> elem(0) |> then(fn _ -> Term.subst(t, 0, {:var, 0}) end)
+  # closed term (the body var #0 is bound by the λ) is unchanged by shifting
+  assert {:lam, {:type, 0}, {:var, 0}} == Term.shift({:lam, {:type, 0}, {:var, 0}}, 1, 0)
+  # a free var at/above the cutoff is lifted by the amount
+  assert {:var, 2} == Term.shift({:var, 0}, 2, 0)
+end
+
+test "subst replaces the target index under binders, leaves others" do
+  alias Cure.Core.Term
+  # `λ. #1`: the body var #1 refers to the OUTER binder (index 0 outside the λ).
+  # Substituting index 0 with a CLOSED replacement (shift is identity on it) must
+  # descend under the one binder (target becomes index 1 there) and replace #1.
+  assert {:lam, {:type, 0}, {:type, 1}} == Term.subst({:lam, {:type, 0}, {:var, 1}}, 0, {:type, 1})
+  # `λ. #0`: the body var #0 is bound by the λ itself, so substituting outer index 0
+  # must NOT touch it (capture-avoidance via the binder-depth shift).
+  assert {:lam, {:type, 0}, {:var, 0}} == Term.subst({:lam, {:type, 0}, {:var, 0}}, 0, {:type, 1})
+  # no-op when the target index does not occur.
+  assert {:type, 0} == Term.subst({:type, 0}, 0, {:type, 1})
 end
 ```
 
-*(Replace the contrived assertion above with the concrete expected term once the binder convention is fixed in Step 3; the behavioral contract: substituting index 0 into `λ. #1` yields `λ. (shift of replacement)`, and free indices below the binder are untouched. Write 3 cases: under-lambda capture-avoidance, no-op when index absent, shift of a closed term is identity.)*
+*(These assertions are convention-stable: the replacement is closed, so the under-binder behaviour is pinned by binder depth alone, not by the shift-of-replacement off-by-one. They are the immutable behavioral contract — capture-avoidance under a binder, an untouched bound var, and a no-op when absent.)*
 
 - [ ] **Step 2: Run** `mix test test/cure/core/term_test.exs` — Expected: FAIL.
 - [ ] **Step 3: Implement** `shift/3` and `subst/3` per `reference/lean4/src/kernel/instantiate.cpp` (`instantiate`/`lift` semantics). Increment cutoff at each binder.
@@ -136,7 +150,7 @@ end
 ### Task M1.2: NbE value domain
 
 **Files:** Create `lib/cure/core/value.ex`; Test `test/cure/core/value_test.exs`.
-**Interfaces:** Produces semantic values with closures + neutrals: `{:vtype, level}`, `{:vpi, dom_value, closure}`, `{:vlam, closure}`, `{:vsigma, dom_value, closure}`, `{:vpair, v, v}`, `{:vneutral, neutral}`, `{:vdata, name, [value]}`, `{:vctor, name, [value]}`; neutrals `{:nvar, lvl}` (de Bruijn *level*), `{:napp, neutral, value}`, `{:nfst, neutral}`, `{:nsnd, neutral}`, `{:ncase, neutral, motive_closure, branch_closures}`. A `closure` is `{:closure, env, term}`. Recogniser `Value.value?/1`.
+**Interfaces:** Produces semantic values with closures + neutrals: `{:vtype, level}`, `{:vpi, dom_value, closure}`, `{:vlam, closure}`, `{:vsigma, dom_value, closure}`, `{:vpair, v, v}`, `{:vneutral, neutral}`, `{:vdata, name, [value]}`, `{:vctor, name, [value]}`; neutrals `{:nvar, lvl}` (de Bruijn *level*), `{:nglobal, name}` (an opaque/uncertified global head — stuck until δ is permitted in M7.2), `{:napp, neutral, value}`, `{:nfst, neutral}`, `{:nsnd, neutral}`, `{:ncase, neutral, motive_closure, branch_closures}`. A `closure` is `{:closure, env, term}`. Recogniser `Value.value?/1`.
 
 - [ ] **Step 1:** Failing test: construct one of each value/neutral shape and assert `Value.value?/1`; assert a closure carries `{env, term}`.
 - [ ] **Step 2:** Run — FAIL.
@@ -149,7 +163,7 @@ end
 **Files:** Create `lib/cure/core/eval.ex`; Test `test/cure/core/eval_test.exs`.
 **Interfaces:** Consumes `Term`, `Value`. Produces `Eval.eval(term, env)` and `Eval.apply(vfun, varg)`; `env :: [value]` (de Bruijn). δ-unfolding of `:global` is gated (Task M7); until then globals eval to a neutral.
 
-- [ ] **Step 1:** Failing test — β: `eval((λ.#0) Type0, []) == {:vtype,0}`; projections: `eval(fst (pair Type0 Type1)) == {:vtype,0}`; a free var evaluates to `{:vneutral,{:nvar,_}}`.
+- [ ] **Step 1:** Failing test — β: `eval((λ.#0) Type0, []) == {:vtype,0}`; projections: `eval(fst (pair Type0 Type1)) == {:vtype,0}`; a free var evaluates to `{:vneutral,{:nvar,_}}`; an (uncertified) `{:global, name}` evaluates to `{:vneutral,{:nglobal, name}}` (opaque until M7.2).
 - [ ] **Step 2:** Run `mix test test/cure/core/eval_test.exs` — FAIL.
 - [ ] **Step 3:** Implement environment-based eval per `reference/idris2/src/Core/Normalise/Eval.idr`: `:lam`→`:vlam` closure; `:app`→`apply` (β if `:vlam`, else extend neutral); `:pair`/`:fst`/`:snd` with ι on `:vpair`; `:pi`/`:sigma`→closures.
 - [ ] **Step 4:** Run — PASS.
@@ -158,22 +172,22 @@ end
 ### Task M1.4: read-back (quote) `reify(value, depth) -> term`
 
 **Files:** Create `lib/cure/core/quote.ex` (or add to `eval.ex`); Test in `eval_test.exs`.
-**Interfaces:** Produces `Quote.reify(value, depth)` converting values (incl. neutrals via level→index) back to βη-normal `Term`. η-expands `:vpi` values.
+**Interfaces:** Produces `Quote.reify(value, depth)` converting values (incl. neutrals via level→index) back to a **β-normal** `Term`. η is **not** handled in read-back: η-expanding a neutral needs the neutral's type, which a `Value` does not carry, so reify stays untyped and β-normal. η is decided in `Conv.conv?` per the §4.5 rule (the λ-vs-neutral application trick), not by producing η-long normal forms here.
 
-- [ ] **Step 1:** Failing test — round-trip: `reify(eval(t, []), 0)` is βη-normal; identity `λ.#0` reifies to `{:lam, _, {:var,0}}`; η: a neutral function at Π type reifies η-long.
+- [ ] **Step 1:** Failing test — round-trip: `reify(eval(t, []), 0)` is β-normal; identity `λ.#0` reifies to `{:lam, _, {:var,0}}`; a neutral applied under binders — `λ.λ. (#1 #0)` — round-trips to itself (level→index conversion correct).
 - [ ] **Step 2:** Run — FAIL.
-- [ ] **Step 3:** Implement per `reference/idris2/src/Core/Normalise/Quote.idr` (level→index conversion = `depth - lvl - 1`); η-expand at Π.
+- [ ] **Step 3:** Implement per `reference/idris2/src/Core/Normalise/Quote.idr` (level→index conversion = `depth - lvl - 1`); produce β-normal forms (no η in read-back — see Interfaces).
 - [ ] **Step 4:** Run — PASS.
-- [ ] **Step 5:** Commit `feat(core): NbE read-back with eta`
+- [ ] **Step 5:** Commit `feat(core): NbE read-back (beta-normal)`
 
-### Task M1.5: conversion `conv?(t1, t2, ty)` (definitional equality)
+### Task M1.5: conversion `conv?(t1, t2, env, depth)` (definitional equality)
 
 **Files:** Create `lib/cure/core/conv.ex`; Test `test/cure/core/conv_test.exs`.
-**Interfaces:** Produces `Conv.conv?(term1, term2, env, depth)` — true iff definitionally equal (β/ι/η; δ added in M7). Used by the kernel.
+**Interfaces:** Produces `Conv.conv?(term1, term2, env, depth)` — true iff definitionally equal (β/ι/η; δ added in M7). η is handled **here**, type-free: when one side whnf's to a `:vlam` and the other does not, apply the non-λ side to a fresh neutral and compare bodies (the §4.5 η rule). **This `conv?/4` is the single canonical conversion signature — every caller (incl. M6 `refl`) uses it; there is no type-indexed variant.** Used by the kernel.
 
 - [ ] **Step 1:** Failing tests — `(λ.#0) Type0 ≡ Type0`; `λ.#0 ≡ λ.#0`; η: `f ≡ λ.(f #0)` at Π; **negative:** `Type0 ≢ Type1`; `Dcoupled-ish ctor a ≢ ctor b`.
 - [ ] **Step 2:** Run `mix test test/cure/core/conv_test.exs` — FAIL.
-- [ ] **Step 3:** Implement conversion by eval-both-then-compare-normal-forms (NbE) per `reference/idris2/src/Core/Normalise/Convert.idr` and `reference/lean4/src/kernel/type_checker.cpp` (`is_def_eq`). Compare neutrals structurally; η at Π/Σ.
+- [ ] **Step 3:** Implement conversion by eval-both-then-compare-normal-forms (NbE) per `reference/idris2/src/Core/Normalise/Convert.idr` and `reference/lean4/src/kernel/type_checker.cpp` (`is_def_eq`). Compare neutrals structurally; η at Π via the λ-vs-neutral application trick (Σ-η optional per §4.7).
 - [ ] **Step 4:** Run — PASS.
 - [ ] **Step 5:** Commit `feat(core): NbE definitional equality`
 
@@ -196,7 +210,7 @@ end
 **Files:** Create `lib/cure/core/kernel.ex`; Test `test/cure/core/kernel_test.exs`.
 **Interfaces:** Produces `Kernel.infer(ctx, term) -> {:ok, type_value} | {:error, reason}` and `Kernel.check(ctx, term, type_value) -> :ok | {:error, reason}`.
 
-- [ ] **Step 1:** Failing tests — `infer(Type0) == Type1`; `infer(var)` returns its context type; `infer(Π(Type0).#0) == Type1` (max-level rule §4.3); cumulativity: `check(Type0, Type1)` ok.
+- [ ] **Step 1:** Failing tests — `infer(Type0) == Type1`; `infer(var)` returns its context type; `infer(Π(Type0).#0) == Type1` (max-level rule §4.3); cumulativity: `check(Type0, {:type, 2})` ok (`Type0 : Type1 ≤ Type2` — this exercises the cumulative rule; `check(Type0, Type1)` would hold by the direct typing rule and would not test cumulativity).
 - [ ] **Step 2:** Run `mix test test/cure/core/kernel_test.exs` — FAIL.
 - [ ] **Step 3:** Implement bidirectional `infer`/`check` for `{:type,_}`, `{:var,_}`, `{:pi,_,_}`; `check` falls back to `infer`+`conv?` with cumulative `le?` on sorts. Reference Lean `type_checker.cpp`.
 - [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `feat(core): kernel infer for Type/var/Pi`.
@@ -218,7 +232,7 @@ end
 ### Task M3.1: family + constructor declaration representation
 
 **Files:** Create `lib/cure/core/inductive.ex`; Test `test/cure/core/inductive_test.exs`.
-**Interfaces:** Produces `Inductive.family(name, param_tele, index_tele, level)` and `Inductive.ctor(name, arg_tele, result_indices)` where a telescope is `[{var_name, type_term}]` and `result_indices` are index *terms* over params+args (§4.4). Stored in a `Core.Env` (global signature map).
+**Interfaces:** Produces `Inductive.family(name, param_tele, index_tele, level)`, `Inductive.ctor(name, arg_tele, result_indices)`, and the accessor `Inductive.ctor_result_indices(env, ctor_name) -> [index_term]`, where a telescope is `[{var_name, type_term}]` and `result_indices` are index *terms* over params+args (§4.4). Stored in the global signature map **`Cure.Core.Env`** — the module/struct defined here in `inductive.ex` that holds family/constructor signatures and (from M7.1) global function definitions; all later tasks refer to it as `Core.Env`.
 
 - [ ] **Step 1:** Failing test — declare `Dec` (no params/indices, level 0) with ctors `Dcoupled`/`Causal`; declare `SF` (params none, indices `[as:SVDesc, bs:SVDesc, d:Dec]`, level 0) with `seq` whose result index `d` is `and(d1,d2)`. Assert the env stores them and `Inductive.ctor_result_indices(env, :seq)` returns the `and(...)` term.
 - [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement the signature env. → **Step 4:** PASS. → **Step 5:** Commit `feat(core): indexed family + constructor signatures`.
@@ -226,9 +240,9 @@ end
 ### Task M3.2: kernel checks a family/constructor declaration well-formed
 
 **Files:** Modify `lib/cure/core/kernel.ex`; Test `kernel_test.exs`.
-**Interfaces:** `Kernel.check_family(env, family)` and `Kernel.check_ctor(env, family, ctor)` — telescopes well-typed; each `result_index` checks against the family's index telescope type (evaluating computed indices via NbE).
+**Interfaces:** `Kernel.check_family(env, family)` and `Kernel.check_ctor(env, family, ctor)` — telescopes well-typed; each `result_index` checks against the family's index telescope type (evaluating computed indices via NbE); the family's declared universe `level` is verified to be **≥ the level of every type stored in its constructors** (so a constructor field of type `Type₀` forces the family to level ≥ 1, per the §2/§3 two-universe requirement).
 
-- [ ] **Step 1:** Failing tests — well-formed `SF`/`seq` accepted; **negative:** a ctor whose `result_indices` arity ≠ family index arity → `{:error, :index_arity}`; a result index of wrong type (`Nat` where `Dec` expected) → `{:error, :type_mismatch}`.
+- [ ] **Step 1:** Failing tests — well-formed `SF`/`seq` accepted; the `Sig = C(Type) | E(Type)` data type (a constructor stores `Type₀`) is well-formed **only at level ≥ 1** (`Sig : Type₁` — the §2 "two universe levels" case); declaring `Sig` at level 0 → `{:error, :universe_level}`; **negative:** a ctor whose `result_indices` arity ≠ family index arity → `{:error, :index_arity}`; a result index of wrong type (`Nat` where `Dec` expected) → `{:error, :type_mismatch}`.
 - [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement per Lean `inductive.cpp` (check_inductive_decl). → **Step 4:** PASS. → **Step 5:** Commit `feat(core): well-formedness of indexed families`.
 
 ### Task M3.3: strict positivity check
@@ -242,9 +256,9 @@ end
 ### Task M3.4: kernel infers constructor application type with computed indices
 
 **Files:** Modify `lib/cure/core/kernel.ex`; Test `kernel_test.exs`.
-**Interfaces:** `infer({:ctor, name, args})` → checks args against the ctor telescope and returns `{:data, family, evaluated_result_indices}` (indices computed by NbE, e.g. `and(Causal,Causal) ⇝ Causal`).
+**Interfaces:** `infer({:ctor, name, args})` → checks args against the ctor telescope and returns the inferred **type value** `{:vdata, family_name, evaluated_params ++ evaluated_result_indices}` (the `:vdata` value shape from M1.2 — a single flat arg list; the source `{:data, name, params, indices}` term node from M0.1 keeps params and indices as separate lists and they flatten here). Indices computed by NbE, e.g. `and(Causal,Causal) ⇝ Causal`.
 
-- [ ] **Step 1:** Failing tests — `infer(seq(l, r))` where `l : SF(as,bs,Causal)`, `r : SF(bs,cs,Causal)` yields `SF(as,cs,Causal)` (because `and(Causal,Causal) ⇝ Causal`); **negative (the headline):** `seq(l, r')` with `r' : SF(bs',cs,_)` and `bs' ≠ bs` → `{:error, :index_mismatch}`.
+- [ ] **Step 1:** Failing tests — `infer(seq(l, r))` where `l : SF(as,bs,Causal)`, `r : SF(bs,cs,Causal)` yields `SF(as,cs,Causal)` (because `and(Causal,Causal) ⇝ Causal`); **negative (the headline):** `seq(l, r')` with `r' : SF(bs',cs,_)` and `bs' ≠ bs` → `{:error, :index_mismatch}`. (This is the **kernel-level** conversion check on already-explicit indices — a backstop. The user-facing §6(a) negative is produced earlier, in the elaborator's pattern/unification path, as `:index_unification` (M8.4 / M10.2a); `:index_mismatch` here is the kernel's internal reason for the same disagreement and is not one of the §10 user-facing codes.)
 - [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement: unify the shared index var `bs` between args (conversion check), then evaluate the result indices. → **Step 4:** PASS. → **Step 5:** Commit `feat(core): constructor typing with computed indices`.
 
 ---
@@ -283,7 +297,7 @@ end
 - [ ] **Step 1:** Failing tests — `Σ(Dec).SF(as,bs,#0)` is a type at level 0; `check((Causal, sf), Σ(Dec).SF(as,bs,#0))` ok when `sf : SF(as,bs,Causal)`; `infer(snd p)` substitutes `fst p`; **negative:** pair whose 2nd component's type ≠ `B[a/x]` → `{:error, :sigma_mismatch}`.
 - [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement (dual of Π; `fst`/`snd` substitution as in §4.7). → **Step 4:** PASS. → **Step 5:** Commit `feat(core): Sigma types, pairs, projections`.
 
-*(ι for `fst`/`snd` already added in M1.3; add a conv test here confirming `fst (a,b) ≡ a` at Σ.)*
+*(ι for `fst`/`snd` already added in M1.3; add conv tests here confirming **both** §11 projection rules — `fst (a,b) ≡ a` and `snd (a,b) ≡ b` — at Σ.)*
 
 ---
 
@@ -294,7 +308,7 @@ end
 ### Task M6.1: `Eq` formation + sound `refl`
 
 **Files:** Modify `lib/cure/core/kernel.ex`; Test `kernel_test.exs`.
-**Interfaces:** `infer({:eq, ty, a, b})` (homogeneous, level of `ty`); `check({:refl, a}, {:eq, ty, a', b'})` ok **iff** `conv?(a', b', ty)` AND `conv?(a, a', ty)` (the §4.6 soundness gate — the audit's bug was accepting any atom).
+**Interfaces:** `infer({:eq, ty, a, b})` (homogeneous, level of `ty`); `check({:refl, a}, {:eq, ty, a', b'})` ok **iff** `conv?(a', b', env, depth)` AND `conv?(a, a', env, depth)` (the canonical `conv?/4` from M1.5, with `env`/`depth` taken from `ctx`; the type `ty` is already known well-formed and is *not* an argument to conv). This is the §4.6 soundness gate — the audit's bug was accepting any atom.
 
 - [ ] **Step 1:** Failing tests — `refl Causal : Eq Dec Causal Causal` ok; `refl Causal : Eq Dec (and Causal Causal) Causal` ok (since `and Causal Causal ⇝ Causal`); **negative (the audit bug):** `refl Causal : Eq Dec Causal Dcoupled` → `{:error, :not_definitionally_equal}`.
 - [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement the conv-gated rule. → **Step 4:** PASS. → **Step 5:** Commit `feat(core): sound Eq formation and refl`.
@@ -313,21 +327,53 @@ end
 
 **Reference:** `reference/idris2/src/Core/Termination.idr` + `Termination/SizeChange.idr` + `Termination/CallGraph.idr`; existing `lib/cure/types/totality.ex` + `lib/cure/types/pattern_checker.ex`. Spec §7 (trust boundary).
 
-### Task M7.1: kernel re-runs termination+coverage when validating a certificate
+### Task M7.1: global function definitions — representation, kernel type-check, registration
+
+**Files:** Modify `lib/cure/core/inductive.ex` (the global signature env that already holds families, M3.1) and `lib/cure/core/kernel.ex`; Test `test/cure/core/kernel_test.exs`.
+**Interfaces:** `Core.Env.add_def(env, name, type_term, body_term)` stores a global function definition (declared type + Core body) in the same global signature env as families; `Kernel.check_def(env, def) -> :ok | {:error, reason}` type-checks `body` against `type` (reusing M2/M3 `check`) **before** the def may be registered or referenced as a `:global`. No δ yet — δ is gated on certification in M7.2; an unchecked/uncertified global stays opaque (neutral) per M1.3. (Families are checked by M3.2; this is the analogous step for function defs, and the prerequisite that makes a `:global` like `and` exist for M7.2/M10.)
+
+- [ ] **Step 1:** Failing tests — registering `and : Π(Dec).Π(Dec).Dec` with its Core body (`λλ. case …`) and `Kernel.check_def` returns `:ok` (the body checks against the declared Π type); **negative #1:** a def whose body's type ≠ its declared type (e.g. body `λ.Type0` declared `Dec→Dec`) → `{:error, :type_mismatch}`; **negative #2:** a `:global` reference to an unregistered name → `{:error, :unknown_global}`.
+- [ ] **Step 2:** Run `mix test test/cure/core/kernel_test.exs` — FAIL.
+- [ ] **Step 3:** Implement def storage in `Core.Env` + `check_def` per Lean `type_checker.cpp` (definition checking) and `reference/idris2/src/Core/Context.idr` (global def storage). The kernel checks the body itself — it never trusts an elaborator-supplied type.
+- [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `feat(core): global definition checking + registration`.
+
+### Task M7.2: kernel re-runs termination+coverage when validating a certificate
 
 **Files:** Create `lib/cure/core/certificate.ex`; Modify `lib/cure/core/kernel.ex`, `lib/cure/core/eval.ex`; Test `test/cure/core/certificate_test.exs`.
-**Interfaces:** `Kernel.validate_certificate(env, global_def) -> {:ok, :certified} | {:error, :not_total}` — invokes `Cure.Types.Totality` (termination) + `Cure.Types.PatternChecker` (coverage) on the Core def itself; only on `:ok` does `Eval` permit δ-unfolding of that `:global`.
+**Interfaces:** `Kernel.validate_certificate(env, global_def) -> {:ok, :certified} | {:error, :not_total}` — operates on a def already type-checked + registered by M7.1; invokes `Cure.Types.Totality` (termination) + `Cure.Types.PatternChecker` (coverage) on the Core def itself; only on `:ok` does `Eval` permit δ-unfolding of that `:global`. (The internal `:not_total` reason is surfaced to the user as the §10 `:totality_required` diagnostic by the elaborator's closure walk, M7.3.)
 
 - [ ] **Step 1:** Failing tests — `and` (structurally total, exhaustive) certifies; δ-unfolds in conv (`and Causal Causal ≡ Causal` now reduces via δ); **negative:** a non-terminating global (`loop = loop`) → `{:error, :not_total}` and stays opaque (δ refuses to unfold; `loop ≢ loop`-body).
 - [ ] **Step 2:** Run `mix test test/cure/core/certificate_test.exs` — FAIL.
 - [ ] **Step 3:** Implement: wire `totality.ex`/`pattern_checker.ex` decision procedures to run on Core defs; gate `Eval` δ on a certified set held in `Core.Env`. The kernel re-runs the check (does not trust an external flag).
 - [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `feat(core): kernel-revalidated totality certificates gating delta`.
 
+### Task M7.3: elaborator type-level totality closure + `:totality_required` (untrusted driver)
+
+**Reference:** Spec §7 (trust boundary — the elaborator decides *which* fns to submit; the kernel re-checks each); `reference/idris2/src/Core/Termination.idr` (what "total" means). This is the untrusted closure walk that §5/§7 assign to the elaborator — the half of §7 the kernel does *not* do.
+
+**Files:** Create `lib/cure/elab/totality_closure.ex`; Test `test/cure/elab/totality_closure_test.exs`.
+**Interfaces:** `TotalityClosure.type_level_fns(core_env) -> MapSet` — operates over the **Core defs/families registered in `Core.Env`** (M7.1/M3.1), *not* the surface AST, so it has no dependency on the M8 surface elaborator and is unit-testable with hand-built Core defs (as in the M7.1/M7.2 tests). It computes the transitive closure of every function reachable from a type (an index expression in a constructor signature, an argument/return type) plus any `@total`-flagged def. The elaborator submits each closure member to `Kernel.validate_certificate` (M7.2); a member that fails certification surfaces as the §10 `:totality_required` diagnostic **naming the offending function**. Runtime-only partial functions are NOT required to be total — their classification is merely reported. The walk is untrusted: a function it misses simply stays uncertified (opaque to δ), never a soundness hole (§7). (Surface `@total` annotations and the full program are wired into this walk at integration time, M9.2.)
+
+- [ ] **Step 1:** Failing tests — build a `Core.Env` with `SF`'s `seq` constructor (whose result index is `and(d1,d2)`) and the `and` def; `and` is in `type_level_fns(env)` (reached via `seq`'s index expression) and, being structurally total, certifies via M7.2; **negative:** a non-total function used in a type → `{:error, {:totality_required, name}}` (the §10 code, naming the fn); a partial **runtime-only** def (referenced in no type, not `@total`) is allowed — no error, reported as partial.
+- [ ] **Step 2:** Run `mix test test/cure/elab/totality_closure_test.exs` — FAIL.
+- [ ] **Step 3:** Implement the closure walk per spec §7 (mark type-level fns transitively); submit each to `Kernel.validate_certificate`; map a failure to `:totality_required`. Reach `lib/cure/types/totality.ex` only *through* the kernel (M7.2), never trusting its verdict directly here.
+- [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `feat(elab): type-level totality closure emitting totality-required`.
+
 ---
 
 ## Milestone M8 — Elaborator (surface → Core): implicits, pattern compilation, holes
 
 **Reference:** `reference/idris2/src/TTImp/Elab/{Check,App,ImplicitBind,Binders,Term}.idr`, `reference/idris2/src/Core/Unify.idr`; pattern matching `reference/agda/src/full/Agda/TypeChecking/Rules/LHS.hs` + `Rules/LHS/Unify.hs` + `Coverage.hs`, `reference/idris2/src/Core/Case/CaseBuilder.idr`; holes `reference/idris2/src/TTImp/Elab/Hole.idr`.
+
+### Task M8.0: surface declarations (`type` / `indexed type`) → Core families + constructors
+
+**Files:** Create `lib/cure/elab/declarations.ex`; Test `test/cure/elab/declarations_test.exs`. (Depends only on the M3 family API + M2 kernel, so it runs first in M8; no dependency on the expression elaborator M8.1.)
+**Interfaces:** `Declarations.elaborate(decl_ast, env) -> {:ok, env'} | {:error, diag}` — turns a surface `type X = …` ADT and an `indexed type D(…) where cⱼ : …` GADT into `Inductive.family/4` + `Inductive.ctor/3` (M3.1) registered in `Core.Env`, computing each constructor's `result_indices` term and the family's universe level, then running `Kernel.check_family`/`check_ctor` (M3.2) + `Inductive.positive?` (M3.3) so only well-formed families are registered. Consumes the existing parser AST for declarations (read `lib/cure/compiler/parser.ex`).
+
+- [ ] **Step 1:** Failing tests — elaborating surface `type Dec = Dcoupled | Causal` registers a Core family at level 0 with two nullary ctors (`Kernel.check_family` accepts it); elaborating `indexed type SF(as,bs,d) where prim : … ; seq : SF(as,bs,d1) -> SF(bs,cs,d2) -> SF(as,cs,and(d1,d2))` registers a family whose `seq` ctor has `result_indices` `[as, cs, and(d1,d2)]` (matching the hand-built family of M3.1) and passes `check_family`/positivity; **negative:** a declaration with a non-strictly-positive ctor → `{:error, :non_strictly_positive}` (surfaced from M3.3).
+- [ ] **Step 2:** Run `mix test test/cure/elab/declarations_test.exs` — FAIL.
+- [ ] **Step 3:** Implement declaration elaboration per `reference/idris2/src/TTImp/ProcessData.idr` (data declaration processing); build the Core family/ctors and submit them to the kernel checks.
+- [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `feat(elab): elaborate type/indexed-type declarations to Core families`.
 
 ### Task M8.1: surface AST → Core for the non-dependent core (Type/fn/app/var)
 
@@ -360,7 +406,7 @@ end
 **Files:** Create `lib/cure/elab/patterns.ex`; Test `test/cure/elab/patterns_test.exs`.
 **Interfaces:** `Patterns.compile(clauses, scrut_type, ctx) -> {:ok, core_case}|{:error, {:coverage,_}|{:index_unification,_}}` — compiles surface `match` clauses into a Core `:case`, running index unification per branch (refining indices) and a coverage check; emits impossible-branch elimination.
 
-- [ ] **Step 1:** Failing tests — `step`'s `match sf { prim → … ; seq → … }` compiles to a Core `:case` the kernel accepts with per-branch index refinement; **negative #1:** a non-exhaustive match → `{:error, :coverage}`; **negative #2:** a clause forcing an impossible index unification → flagged impossible/rejected.
+- [ ] **Step 1:** Failing tests — `step`'s `match sf { prim → … ; seq → … }` compiles to a Core `:case` the kernel accepts with per-branch index refinement; **Σ pair-pattern:** a `match p { (d, sf) → … }` over a `Σ(Dec).SF(as,bs,#0)` compiles to a Core `:case`/projection the kernel accepts, binding *both* components with the body's dependency on the first (this is the only place Σ pattern compilation is exercised, so it gets its own red test); **negative #1:** a non-exhaustive match → `{:error, :coverage}`; **negative #2:** a clause forcing an impossible index unification → flagged impossible/rejected.
 - [ ] **Step 2:** Run `mix test test/cure/elab/patterns_test.exs` — FAIL.
 - [ ] **Step 3:** Implement per `reference/agda/.../Rules/LHS/Unify.hs` + `Coverage.hs` and `reference/idris2/src/Core/Case/CaseBuilder.idr`. Start with the two-ctor `SF` (spec §12 risk note). Σ pair-patterns too (split a `:pair`).
 - [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `feat(elab): dependent pattern compilation + coverage`.
@@ -384,7 +430,7 @@ end
 ### Task M9.1: erase checked Core → runtime AST
 
 **Files:** Create `lib/cure/core/erase.ex`; Test `test/cure/core/erase_test.exs`.
-**Interfaces:** `Erase.erase(core_term) -> runtime_ast` — drops `0`-marked binders, type-level data, universe levels, `Eq` proofs; family ctors → tagged tuples; `:case` → runtime case. `SF`'s value structure (tags + embedded transition fns) survives; its index args erase (§8).
+**Interfaces:** `Erase.erase(annotated_core_term) -> runtime_ast` — consumes the `{0,ω}`-**annotated** Core produced by `Implicits.mark_erasure/1` (M8.3), **not** bare kernel-checked Core (which is fully relevant and mark-free per §4.1). The annotated term is what flows Elab(mark, M8.3) → Kernel(checks the relevant projection, ignores the marks) → Erase. Drops `0`-marked binders, type-level data, universe levels, `Eq` proofs; family ctors → tagged tuples; `:case` → runtime case. `SF`'s value structure (tags + embedded transition fns) survives; its index args erase (§8).
 
 - [ ] **Step 1:** Failing tests — erasing `compose` drops the 5 implicits; erasing `forget_dec` yields a 2-tuple; erasing `SF` ctors yields tagged tuples carrying the transition function, with index args gone; `Eq`/`refl`/`rewrite` erase to their payload/identity.
 - [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement erasure to the shape `codegen.ex` consumes. → **Step 4:** PASS. → **Step 5:** Commit `feat(core): erase Core to runtime AST`.
@@ -395,7 +441,7 @@ end
 **Interfaces:** Compilation routes `indexed type`/dependent fns through Elab→Kernel→Erase→codegen; non-dependent surface + refinements stay on the existing `checker.ex` path (spec §12 seam).
 
 - [ ] **Step 1:** Failing test — a module with an `indexed type` + `compose` compiles to BEAM (`{:ok, _beam}`); a plain refinement-typed module still compiles via the old path (regression guard).
-- [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement the seam (detect dependent constructs, dispatch). → **Step 4:** PASS. → **Step 5:** Commit `feat(compiler): route dependent fragment through Core pipeline`.
+- [ ] **Step 2:** Run — FAIL.  → **Step 3:** Implement the seam (detect dependent constructs, dispatch). The routed Elab pass runs, in order: declaration elaboration (M8.0), function-def elaboration (M8.1/M8.4) + `Core.Env` registration/`check_def` (M7.1), the type-level totality closure (M7.3, with surface `@total` flags supplied here), then kernel check + erase. → **Step 4:** PASS. → **Step 5:** Commit `feat(compiler): route dependent fragment through Core pipeline`.
 
 ---
 
@@ -406,7 +452,7 @@ end
 **Files:** Create `test/cure/core/slice1_acceptance_test.exs`; fixture `test/fixtures/slice1.cure` (the §6 program).
 **Interfaces:** end-to-end through the real compiler + run on generic-unix.
 
-- [ ] **Step 1:** Failing test — compile `slice1.cure`; assert it type-checks; assert `compose(prim_a, prim_b)` has inferred type `SF(as,cs,Causal)`; **run one `step`** and assert the output value (a concrete sequential-composition step) matches the hand-computed expected.
+- [ ] **Step 1:** Failing test — compile `slice1.cure`; assert it type-checks; assert `compose(prim_a, prim_b)` has inferred type `SF(as,cs,Causal)`; **run one `step`** and assert the output value (a concrete sequential-composition step) matches the hand-computed expected. **Fixture note:** keep `slice1.cure` self-contained — declare `SVDesc` as its own minimal inductive (e.g. `type SVDesc = SVNil | SVCons(Sig, SVDesc)`) rather than `List(Sig)`, since Slice 1 needs only the descriptor *type* (no `++`/`map`, deferred per §2) and M8.0 elaborates such sum-type declarations directly — this avoids an unstated dependency on a stdlib `List` family or type-alias machinery that the Core pipeline does not yet handle.
 - [ ] **Step 2:** Run `mix test test/cure/core/slice1_acceptance_test.exs` — FAIL.
 - [ ] **Step 3:** Resolve whatever the references indicate for any gap (this task does no new impl beyond wiring fixtures; if it fails, the defect is in M1–M9 — fix there with a new red test, never by weakening this one).
 - [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `test(core): Slice 1 positive acceptance`.
@@ -415,7 +461,7 @@ end
 
 **Files:** Modify `test/cure/core/slice1_acceptance_test.exs`; fixtures per case.
 
-- [ ] **Step 1:** Failing tests, one per §6 negative — (a) middle-index mismatch → `:index_unification`; (b) declared index contradicts `and` → `:conversion` (assert both normal forms in the message); (c) non-total `and` used in a type → `:totality_required`; (d) Σ pair 2nd-component mismatch → `:sigma_mismatch`; (e) unfilled hole → `:hole_goal` emitted AND no BEAM produced.
+- [ ] **Step 1:** Failing tests, one per §6 negative — (a) middle-index mismatch → `:index_unification`; (b) declared index contradicts `and` → `:conversion` (assert both normal forms in the message); (c) non-total `and` used in a type → `:totality_required` (emitted by the elaborator closure walk, M7.3); (d) Σ pair 2nd-component mismatch → `:sigma_mismatch`; (e) unfilled hole → `:hole_goal` emitted AND no BEAM produced.
 - [ ] **Step 2:** Run — FAIL (cases not yet all wired to the right codes).
 - [ ] **Step 3:** Ensure each diagnostic code (spec §10) is emitted; fix at the source module with its own red test if missing.
 - [ ] **Step 4:** Run — PASS.  → **Step 5:** Commit `test(core): Slice 1 negative acceptance`.
@@ -448,8 +494,8 @@ end
 
 ## Self-Review
 
-**Spec coverage:** §4.1 nodes → M0/M1/M4/M5/M6; §4.3 universes → M1.1/M2.2; §4.4 families+case → M3/M4; §4.5 conversion → M1.5/M7; §4.6 Eq/rewrite → M6; §4.7 Σ → M5; §5 architecture (kernel/elab split) → M2/M8; §5.1 module layout → all; §7 totality certificates (kernel re-runs) → M7.1; §8 erasure → M9; §6 Slice-1 program + negatives → M10; §10 diagnostics → M10.2; §11 testing layers → M1–M6 (kernel), M8 (elab), M10 (acceptance); commitments C2/C3 → M0.3/M11.1; retire faked modules (§1/§5.1) → M11.2. No uncovered spec section.
+**Spec coverage:** §4.1 nodes → M0/M1/M4/M5/M6; §4.3 universes → M1.1/M2.2; §4.4 families+case → M3/M4; §4.5 conversion → M1.5/M7.2; §4.6 Eq/rewrite → M6; §4.7 Σ → M5; §5 architecture (kernel/elab split) → M2/M8; §5.1 module layout → all; §7 totality (global def check → M7.1; kernel re-validation → M7.2; elaborator type-level closure → M7.3); §8 erasure → M9; §6 Slice-1 program + negatives → M10; §10 diagnostics → M10.2 (`:totality_required` via M7.3, `:index_unification` via M8.4, `:conversion`/`:universe_ceiling`/`:sigma_mismatch`/`:hole_goal` at their source tasks); §11 testing layers → M1–M7 (kernel unit + totality), M7.3/M8 (elab), M10 (acceptance); commitments C2/C3 → M0.3/M11.1; retire faked modules (§1/§5.1) → M11.2. (The plan creates `inductive`/`quote`/`certificate`/`erase`/`declarations`/`totality_closure` beyond §5.1's module sketch — finer granularity on the same trusted/untrusted boundary, not a deviation.) No uncovered spec section.
 
-**Placeholder scan:** Implementation steps for novel kernel internals cite the exact reference file + algorithm + interface signatures rather than pre-written speculative code — this is intentional per the Global "reference-first" rule and the research-grade domain, not a placeholder; every *test* step is concrete and immutable. The one contrived assertion (M0.2 Step 1) is explicitly flagged to be replaced with the concrete expected term once the binder convention is fixed in its Step 3.
+**Placeholder scan:** Implementation steps for novel kernel internals cite the exact reference file + algorithm + interface signatures rather than pre-written speculative code — this is intentional per the Global "reference-first" rule and the research-grade domain, not a placeholder; every *test* step is concrete and immutable. M0.2 Step 1 now uses concrete, convention-stable assertions (closed replacements pin the under-binder behaviour without depending on the shift-of-replacement off-by-one), so there is no remaining contrived/placeholder test.
 
-**Type consistency:** `Conv.conv?/4`, `Eval.eval/2`, `Quote.reify/2`, `Kernel.{infer/2,check/3,validate_certificate/2}`, `Unify.unify/3`, `Patterns.compile/3`, `Erase.erase/1`, `Term.{shift/3,subst/3,to_external/1,from_external/1}` are used consistently across milestones. Value/neutral and term node tags match §4.1.
+**Type consistency:** `Conv.conv?/4` (the sole conversion signature — η is handled in conv, type-free; no type-indexed variant), `Eval.eval/2`, `Quote.reify/2` (β-normal, untyped — η lives in conv, not read-back), `Kernel.{infer/2,check/3,check_def/2,validate_certificate/2}`, `Core.Env.add_def/4`, `TotalityClosure.type_level_fns/1`, `Unify.unify/3`, `Patterns.compile/3`, `Erase.erase/1` (consumes the M8.3-annotated Core), `Term.{shift/3,subst/3,to_external/1,from_external/1}` are used consistently across milestones. `infer` of a constructor application returns the `:vdata` type value (M1.2 shape). Value/neutral and term node tags match §4.1.
