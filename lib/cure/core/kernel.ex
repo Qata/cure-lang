@@ -58,6 +58,31 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  def infer(ctx, {:sigma, a, b}) do
+    with {:ok, l1} <- infer_sort(ctx, a),
+         a_value = Eval.eval(a, Context.env(ctx)),
+         ctx2 = Context.extend(ctx, a_value),
+         {:ok, l2} <- infer_sort(ctx2, b) do
+      {:ok, {:vtype, Universe.max(l1, l2)}}
+    end
+  end
+
+  def infer(ctx, {:fst, p}) do
+    with {:ok, ptype} <- infer(ctx, p),
+         {:ok, dom, _cod} <- ensure_sigma(ptype) do
+      {:ok, dom}
+    end
+  end
+
+  def infer(ctx, {:snd, p}) do
+    with {:ok, ptype} <- infer(ctx, p),
+         {:ok, _dom, cod_closure} <- ensure_sigma(ptype) do
+      # Second component's type is B[fst p / x] (§4.7).
+      fst_value = Eval.eval({:fst, p}, Context.env(ctx))
+      {:ok, Eval.apply_closure(cod_closure, fst_value)}
+    end
+  end
+
   def infer(ctx, {:app, f, a}) do
     with {:ok, f_type} <- infer(ctx, f),
          {:ok, dom, cod_closure} <- ensure_pi(f_type),
@@ -142,6 +167,20 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # A dependent pair is checked against a Σ: first component against the domain,
+  # second against the domain-instantiated codomain B[a/x] (§4.7).
+  def check(ctx, {:pair, a, b}, {:vsigma, dom, cod_closure}) do
+    with :ok <- check(ctx, a, dom) do
+      a_value = Eval.eval(a, Context.env(ctx))
+      expected_b = Eval.apply_closure(cod_closure, a_value)
+
+      case check(ctx, b, expected_b) do
+        :ok -> :ok
+        {:error, _} -> {:error, :sigma_mismatch}
+      end
+    end
+  end
+
   def check(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
       if subtype?(inferred, expected, ctx), do: :ok, else: {:error, :type_mismatch}
@@ -197,6 +236,10 @@ defmodule Cure.Core.Kernel do
   # Require a type value to be a Π; return its domain value + codomain closure.
   defp ensure_pi({:vpi, dom, cod_closure}), do: {:ok, dom, cod_closure}
   defp ensure_pi(_), do: {:error, :not_a_function}
+
+  # Require a type value to be a Σ; return its domain value + codomain closure.
+  defp ensure_sigma({:vsigma, dom, cod_closure}), do: {:ok, dom, cod_closure}
+  defp ensure_sigma(_), do: {:error, :not_a_sigma}
 
   # Check `args` against a dependent telescope, threading each evaluated arg so
   # later telescope types can depend on earlier args. Returns the arg values
