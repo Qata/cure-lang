@@ -10,20 +10,32 @@ defmodule Cure.Core.Context do
   evaluated and read back consistently under the context.
   """
 
-  alias Cure.Core.Value
+  alias Cure.Core.{Env, Value}
 
-  defstruct types: [], length: 0
+  defstruct types: [], length: 0, signature: nil
 
-  @type t :: %__MODULE__{types: [Value.t()], length: non_neg_integer()}
+  @type t :: %__MODULE__{
+          types: [Value.t()],
+          length: non_neg_integer(),
+          signature: Env.t() | nil
+        }
 
-  @doc "The empty context."
+  @doc "The empty context, carrying an empty global signature."
   @spec empty() :: t()
-  def empty, do: %__MODULE__{}
+  def empty, do: %__MODULE__{signature: Env.empty()}
+
+  @doc "The empty context carrying the given global signature (families, defs)."
+  @spec empty(Env.t()) :: t()
+  def empty(%Env{} = signature), do: %__MODULE__{signature: signature}
+
+  @doc "The global signature (families, constructors, defs) for this context."
+  @spec signature(t()) :: Env.t() | nil
+  def signature(%__MODULE__{signature: s}), do: s
 
   @doc "Extend the context with one more variable of the given type value."
   @spec extend(t(), Value.t()) :: t()
-  def extend(%__MODULE__{types: ts, length: n}, type_value),
-    do: %__MODULE__{types: [type_value | ts], length: n + 1}
+  def extend(%__MODULE__{} = ctx, type_value),
+    do: %{ctx | types: [type_value | ctx.types], length: ctx.length + 1}
 
   @doc "The type value of the variable at de Bruijn index `k` (0 = most recent)."
   @spec lookup(t(), non_neg_integer()) :: Value.t() | nil
