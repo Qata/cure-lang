@@ -16,7 +16,7 @@ defmodule Cure.Core.Kernel do
   definitions + certificates (M7).
   """
 
-  alias Cure.Core.{Context, Conv, Eval, Inductive, Quote, Universe}
+  alias Cure.Core.{Context, Conv, Env, Eval, Inductive, Quote, Universe}
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
@@ -55,6 +55,13 @@ defmodule Cure.Core.Kernel do
         cod_term = Quote.reify(cod_value, Context.length(ctx2))
         {:ok, {:vpi, dom_value, {:closure, Context.env(ctx), cod_term}}}
       end
+    end
+  end
+
+  def infer(ctx, {:global, name}) do
+    case Env.get_def(Context.signature(ctx), name) do
+      nil -> {:error, :unknown_global}
+      %{type: type_term} -> {:ok, Eval.eval(type_term, [])}
     end
   end
 
@@ -230,6 +237,27 @@ defmodule Cure.Core.Kernel do
   def check(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
       if subtype?(inferred, expected, ctx), do: :ok, else: {:error, :type_mismatch}
+    end
+  end
+
+  @doc """
+  Type-check a registered global definition: its declared type is a valid type,
+  and its body checks against that type. The kernel re-derives everything — it
+  never trusts an elaborator-supplied type. (δ-unfolding stays disabled until the
+  def is also totality-certified, M7.2.)
+  """
+  @spec check_def(Env.t(), atom()) :: :ok | {:error, term()}
+  def check_def(env, name) do
+    case Env.get_def(env, name) do
+      nil ->
+        {:error, :unknown_global}
+
+      %{type: type_term, body: body_term} ->
+        ctx = Context.empty(env)
+
+        with {:ok, _level} <- infer_sort(ctx, type_term) do
+          check(ctx, body_term, Eval.eval(type_term, []))
+        end
     end
   end
 

@@ -22,6 +22,28 @@ defmodule Cure.Core.Env do
   @doc "An empty signature."
   @spec empty() :: t()
   def empty, do: %__MODULE__{certified: MapSet.new()}
+
+  @doc """
+  Register a global function definition (declared type + Core body). The kernel
+  must `check_def/2` it before it may be referenced; certification (M7.2) gates
+  whether δ-reduction may unfold it.
+  """
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t()) :: t()
+  def add_def(%__MODULE__{} = env, name, type_term, body_term),
+    do: %{env | defs: Map.put(env.defs, name, %{name: name, type: type_term, body: body_term})}
+
+  @doc "The global definition `%{name, type, body}` for `name`, or nil."
+  @spec get_def(t(), atom()) :: map() | nil
+  def get_def(%__MODULE__{defs: defs}, name), do: Map.get(defs, name)
+
+  @doc "Mark a global as totality-certified (δ may unfold it). See M7.2."
+  @spec certify(t(), atom()) :: t()
+  def certify(%__MODULE__{certified: c} = env, name),
+    do: %{env | certified: MapSet.put(c, name)}
+
+  @doc "Is the global `name` certified total (δ-reducible)?"
+  @spec certified?(t(), atom()) :: boolean()
+  def certified?(%__MODULE__{certified: c}, name), do: MapSet.member?(c, name)
 end
 
 defmodule Cure.Core.Inductive do
