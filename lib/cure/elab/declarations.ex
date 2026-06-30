@@ -16,12 +16,23 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Env, Inductive, Kernel}
+  alias Cure.Core.{Context, Env, Inductive, Kernel, Quote}
+  alias Cure.Elab.Elaborator
 
   @ceiling 2
 
   @doc "Elaborate one declaration AST, returning the augmented signature."
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
+  def elaborate({:function_def, meta, _body} = ast, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    with {:ok, lambda, type_value} <- Elaborator.elaborate(ast, env),
+         :ok <- Kernel.check(Context.empty(env), lambda, type_value) do
+      type_term = Quote.reify(type_value)
+      {:ok, Env.add_def(env, name, type_term, lambda)}
+    end
+  end
+
   def elaborate({:container, meta, variants}, env) do
     case Keyword.get(meta, :container_type) do
       :enum ->
