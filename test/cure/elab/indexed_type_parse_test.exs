@@ -18,11 +18,18 @@ defmodule Cure.Elab.IndexedTypeParseTest do
     assert {:indexed_type, meta, ctors} = parse(src)
     assert Keyword.get(meta, :name) == "SF"
     assert length(Keyword.get(meta, :index_params)) == 3
-    assert [{:gadt_ctor, m1, _t1}, {:gadt_ctor, m2, t2}] = ctors
+    assert [{:gadt_ctor, m1, t1}, {:gadt_ctor, m2, t2}] = ctors
     assert Keyword.get(m1, :name) == "prim"
     assert Keyword.get(m2, :name) == "seq"
-    # seq's signature is a function-type chain (its arrows produce a Function type)
-    assert {:function_call, fmeta, _args} = t2
-    assert Keyword.get(fmeta, :function_type) == true
+
+    # prim: a single-element chain; the SF head is preserved (not mangled).
+    assert {:arrow_chain, [{:function_call, [name: "SF"], _}]} = t1
+
+    # seq: two domains + a result, every SF application head intact, and the
+    # computed result index `and(d1, d2)` preserved as a nested application.
+    assert {:arrow_chain, [dom1, dom2, result]} = t2
+    assert {:function_call, [name: "SF"], _} = dom1
+    assert {:function_call, [name: "SF"], _} = dom2
+    assert {:function_call, [name: "SF"], [_, _, {:function_call, [name: "and"], [_, _]}]} = result
   end
 end

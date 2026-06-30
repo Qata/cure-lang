@@ -2430,9 +2430,86 @@ defmodule Cure.Compiler.Parser do
         cname = to_string(cname_token.value)
         state = advance(state)
         state = expect(state, :colon)
-        {type_expr, state} = parse_type_expr(state)
+        {sig, state} = parse_ctor_signature(state)
         meta = [name: cname, line: cname_token.line, col: cname_token.col]
-        parse_gadt_ctors(state, [{:gadt_ctor, meta, type_expr} | acc])
+        parse_gadt_ctors(state, [{:gadt_ctor, meta, sig} | acc])
+    end
+  end
+
+  # A constructor signature is an arrow chain `Dom -> Dom -> ... -> Result`
+  # where each element is a full type application (`SF(as, bs, d1)`). The
+  # general `parse_type_expr` is unusable here: its `maybe_parse_function_type`
+  # splices a domain application's *arguments* into the arrow's parameter list
+  # and discards the head (so `SF(as, bs, d1) -> …` loses `SF`). This dedicated
+  # parser keeps each application intact and yields `{:arrow_chain, [atoms]}`
+  # with the last atom as the result type.
+  defp parse_ctor_signature(state) do
+    {first, state} = parse_type_atom(state)
+    collect_arrow_chain(state, [first])
+  end
+
+  defp collect_arrow_chain(state, acc) do
+    case peek(state) do
+      %Token{type: :arrow} ->
+        state = advance(state)
+        {atom, state} = parse_type_atom(state)
+        collect_arrow_chain(state, [atom | acc])
+
+      _ ->
+        {{:arrow_chain, Enum.reverse(acc)}, state}
+    end
+  end
+
+  # A single type application: `Name`, `Name(arg, ...)`, or `(atom)`.
+  defp parse_type_atom(state) do
+    token = peek(state)
+
+    case token.type do
+      :lparen ->
+        state = advance(state)
+        {inner, state} = parse_type_atom(state)
+        state = expect(state, :rparen)
+        {inner, state}
+
+      _ ->
+        name = to_string(token.value)
+        state = advance(state)
+
+        case peek(state) do
+          %Token{type: :lparen} ->
+            state = advance(state)
+            {args, state} = parse_type_atom_args(state)
+            state = expect(state, :rparen)
+            {{:function_call, [name: name], args}, state}
+
+          _ ->
+            {{:variable, [scope: :local], name}, state}
+        end
+    end
+  end
+
+  defp parse_type_atom_args(state) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :rparen} -> {[], state}
+      _ -> parse_type_atom_args_list(state)
+    end
+  end
+
+  defp parse_type_atom_args_list(state) do
+    {arg, state} = parse_type_atom(state)
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :comma} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {rest, state} = parse_type_atom_args_list(state)
+        {[arg | rest], state}
+
+      _ ->
+        {[arg], state}
     end
   end
 
