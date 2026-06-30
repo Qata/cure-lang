@@ -82,7 +82,7 @@ t,A,B ::=
    | c t̄                                    -- data constructor
    | case t of { c x̄ → uᵢ } : M            -- dependent eliminator with motive M
    | f                                      -- reference to a global def
-   | Eq A a b | refl a | rewrite e in t     -- minimal propositional equality (§4.5)
+   | Eq A a b | refl a | rewrite e at (x.M) in t  -- minimal propositional equality (§4.5)
 ```
 
 Implicits, erasure annotations, and **holes** exist only in the **surface/elaborator**; Core is fully explicit, fully relevant, and hole-free (a checked program contains no holes). Erasure (§8) happens *after* kernel checking.
@@ -118,6 +118,18 @@ data D (p̄ : P̄) : (ī : Ī) → Type ℓ where
 ```
 Parameters `p̄` are fixed across all constructors; indices `ī` may vary and may be **computed** in each constructor's result (`s̄ⱼ`). Typing of a constructor application checks `ā` against `Āⱼ` and yields `D p̄ s̄ⱼ` with `s̄ⱼ` evaluated by NbE. (Strict positivity is required; checked structurally.)
 
+The **dependent eliminator** (`case … : M`, the construct §12 keeps in Core for the kernel to check) is typed against a motive `M` that abstracts over the indices and the scrutinee. With `D` declared as above:
+```
+Γ ⊢ t : D p̄ ī
+Γ, (ȷ̄ : Ī), (x : D p̄ ȷ̄) ⊢ M : Type ℓ
+for each constructor  cⱼ : (āⱼ : Āⱼ) → D p̄ s̄ⱼ :
+    Γ, (āⱼ : Āⱼ) ⊢ uⱼ : M[s̄ⱼ/ȷ̄, (cⱼ āⱼ)/x]
+─────────────────────────────────────────────────── (dependent case)
+Γ ⊢ case t of { cⱼ x̄ⱼ → uⱼ } : M  :  M[ī/ȷ̄, t/x]
+```
+(`p̄` = the family's parameters, `āⱼ` = constructor `cⱼ`'s arguments, matching the declaration convention above.)
+Each branch is checked under its constructor's telescope with the index variables `ȷ̄` instantiated to that constructor's computed indices `s̄ⱼ` (this is the index refinement the elaborator's pattern compiler discharges via unification, §5); the eliminator's result type is `M` at the scrutinee's actual indices `ī` and `t`. Branches whose `s̄ⱼ` fail to unify with a reachable index are *impossible* and omitted (coverage, §7).
+
 ### 4.5 Definitional equality (conversion)
 
 Conversion is decided by **normalization by evaluation**: evaluate to weak-head/whole normal forms over a value domain with neutral terms, then compare by read-back. Reduction rules:
@@ -131,14 +143,20 @@ Because δ is gated on certified-total definitions and β/ι terminate on well-t
 ### 4.6 Minimal propositional equality
 
 ```
+Γ ⊢ A : Type ℓ   Γ ⊢ a : A   Γ ⊢ b : A
+───────────────────────────────────────  (Eq formation — homogeneous, at A's level)
+Γ ⊢ Eq A a b : Type ℓ
+
 Γ ⊢ a : A    Γ ⊢ a ≡ b : A
 ────────────────────────────         refl is well-typed at Eq A a b
 Γ ⊢ refl a : Eq A a b                ONLY when a ≡ b definitionally (NbE).
 
-Γ ⊢ e : Eq A a b    Γ ⊢ t : M[a/x]
-───────────────────────────────────  (transport / subst)
-Γ ⊢ rewrite e in t : M[b/x]
+Γ ⊢ e : Eq A a b    Γ, x:A ⊢ M : Type ℓ    Γ ⊢ t : M[a/x]
+──────────────────────────────────────────────────────────  (transport / subst)
+Γ ⊢ rewrite e at (x.M) in t : M[b/x]
 ```
+
+The motive `(x.M)` is carried **explicitly** in the Core term (like `case … : M`), keeping Core fully explicit: the kernel does not reconstruct which occurrences to abstract — that ambiguous higher-order choice is the elaborator's job (§5), and the kernel merely re-checks the supplied motive.
 
 This is the escape hatch for index equations reduction can't settle (e.g. `++` associativity). It is genuinely sound (`refl` is *not* the "any atom inhabits any Eq" rule the audit found). `Eq`, `refl`, and `rewrite` are erased at runtime.
 
@@ -200,7 +218,7 @@ New, untrusted — `lib/cure/elab/`:
 - `implicits.ex` — implicit insertion + erasure marking.
 - `holes.ex` — recognise surface `?`/`??`; emit `:hole_goal` (goal type + local context). Replaces the retired `types/holes.ex`.
 
-Reused: `lib/cure/types/totality.ex` (wired in at last), `lib/cure/types/pattern_checker.ex`, `lib/cure/compiler/codegen.ex`, the refinement+Z3 layer (untouched).
+Reused: `lib/cure/types/totality.ex` and `lib/cure/types/pattern_checker.ex` (wired in at last — their termination/coverage *decision procedures* are invoked by the kernel during certificate validation and so count as **trusted** when used that way, see §7; the elaborator's only role is the untrusted closure walk that decides *which* functions to submit), `lib/cure/compiler/codegen.ex`, the refinement+Z3 layer (untouched).
 
 Retired (replaced by Core/Elab; their intent reborn soundly): `types/sigma.ex`, `types/pi.ex`, `types/equality.ex`, `types/dependent.ex`, `types/holes.ex`, and `types/reduce.ex` (superseded by `core/eval.ex`).
 
@@ -219,7 +237,7 @@ Two standing caveats (also in the manifest): **don't import Idris's QTT multipli
 
 The smallest fragment of the paper that forces every foundational mechanism into existence: **construct a sequential composition and run one evaluation step.**
 
-**Must typecheck *and run one step*:**
+**Must typecheck (and, for the `compose`/`step` core, run one evaluation step):** the `compose` construction plus `step` must construct and execute one step end-to-end; `forget_dec`/`recover` (Σ) and `sketch` (hole) need only *typecheck* — `sketch` in particular carries a hole and, per the negatives below and §10, blocks codegen and does not run.
 
 ```cure
 type Dec = Dcoupled | Causal
@@ -261,15 +279,17 @@ fn sketch(l: SF(as, bs, d1), r: SF(bs, cs, d2)) -> SF(as, cs, and(d1, d2)) = ?bo
 - A pair `(a, b)` whose second component's type doesn't match `B[a/x]` → `Σ` type error.
 - An unfilled hole → the program reports the hole's goal type + context and **does not** emit BEAM.
 
-**Deferred to later slices:** `_++_`/`map` (needed by `**`/`loop`); `switch`/`dswitch`/`loop` constructors; `Init`/uninitialised-signal descriptors; broad use of the `Eq`/`rewrite` escape hatch. And the kernel self-host (phase 2) and verified metatheory (phase 3) per §9.
+**Deferred to later slices:** `_++_`/`map` (needed by `**`/`loop`); the `**`/`switch`/`dswitch`/`loop` constructors; `Init`/uninitialised-signal descriptors; broad use of the `Eq`/`rewrite` escape hatch. And the kernel self-host (phase 2) and verified metatheory (phase 3) per §9.
 
 ## 7. Totality integration (targeted)
 
 The elaborator computes the **type-level closure**: every function reachable from a type (transitively) or marked `@total`. Each must pass **termination** (`totality.ex`: structural descent + `tarjan_scc` mutual recursion) and **coverage** (`pattern_checker.ex`). On success the function gets a **totality certificate** in the Core global environment; the kernel only δ-unfolds certified functions during conversion (guaranteeing termination). A type-level function that fails → hard error. Runtime-only functions stay partial; their classification is merely reported.
 
+**Trust boundary for certificates (important — conversion termination depends on it).** Conversion termination is a *kernel* guarantee, so the kernel must not simply trust an elaborator-asserted certificate. The termination + coverage **decision procedure** is therefore part of the trusted base: `kernel.ex`'s certificate validation **re-runs** that check on the Core definition itself before accepting the certificate (it does not take the elaborator's word for it). What the *untrusted* elaborator contributes is only the **closure computation** — *which* functions to submit for checking — and that choice is safe to leave untrusted because a missed function simply stays uncertified (opaque to δ, never a soundness hole). The check's *logic* (the `totality.ex`/`pattern_checker.ex` algorithms) is invoked by the kernel and thus trusted; only its *driver* (the closure walk in the elaborator) is untrusted. This is why the §3 "Why `Type : Type` was rejected" tension does not bite: with the predicative hierarchy, **logical consistency** no longer depends on the totality checker at all (it is secured by the universes); only conversion **termination** does, and that obligation is a small, local, kernel-re-validated property — unlike `Type : Type`, where the universe itself is non-normalizing regardless of how correct the totality checker is.
+
 ## 8. Erasure → codegen
 
-After `kernel.check` succeeds, Core is erased to the existing runtime AST: implicit args, type-level data, universe levels, and `Eq` proofs are dropped; indexed-family constructors become ordinary tagged tuples (identical to today's ADT lowering); `case` trees become ordinary BEAM `case`. Purely type-level functions vanish; functions used at both levels are kept. Erasure is *licensed* by the `{0,ω}` check (§3): a `0`-marked binder is verified during elaboration never to be scrutinised at runtime, so dropping it is sound rather than a positional guess. Net effect: `SF` and all descriptors have **zero runtime footprint** — matching the paper's "descriptors exist only at the type level." `codegen.ex` is reused essentially unchanged.
+After `kernel.check` succeeds, Core is erased to the existing runtime AST: implicit args, type-level data, universe levels, and `Eq` proofs are dropped; indexed-family constructors become ordinary tagged tuples (identical to today's ADT lowering); `case` trees become ordinary BEAM `case`. Purely type-level functions vanish; functions used at both levels are kept. Erasure is *licensed* by the `{0,ω}` check (§3): a `0`-marked binder is verified during elaboration never to be scrutinised at runtime, so dropping it is sound rather than a positional guess. Net effect: the **descriptors** (`SVDesc`, `Sig`, and the `as/bs/cs/d` *index arguments* of `SF`) have **zero runtime footprint** — matching the paper's "descriptors exist only at the type level." `SF` itself is *not* fully erased: its value-relevant structure (constructor tags plus the embedded transition functions/continuations) survives as tagged tuples so that `step` can pattern-match on it at runtime (§6); only its erased type indices are dropped. `codegen.ex` is reused essentially unchanged.
 
 ## 9. Kernel-trust strategy (three phases)
 
@@ -291,8 +311,8 @@ New error codes, routed through the existing Socratic type-error assistant: **co
 ## 11. Testing & acceptance
 
 Red-green discipline per `~/agent_docs/testing.md`. Layers:
-- **Kernel unit tests** — conversion (β/ι/δ/η) + cumulativity; hand-written positive/negative `check`s on Core terms. These seed the **conformance corpus (C3)**.
-- **Elaborator tests** — implicit inference; dependent-pattern coverage; the index-unification reject.
+- **Kernel unit tests** — conversion (β/ι/δ/η) + cumulativity; the `Σ` projection ι-rules (`(a,b).1 ⇝ a`, `.2 ⇝ b`) and the pair-intro `B[a/x]` check (§4.7); hand-written positive/negative `check`s on Core terms. These seed the **conformance corpus (C3)**.
+- **Elaborator tests** — implicit inference; dependent-pattern coverage; the index-unification reject; `Σ` pair-pattern compilation; hole recognition + `:hole_goal` reporting (goal type + local context).
 - **Slice 1 acceptance** — the program in §6 constructs, typechecks, **and runs one step** on generic-unix; each §6 negative is rejected with the right code.
 
 ## 12. Risks & open questions
