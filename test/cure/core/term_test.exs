@@ -34,4 +34,33 @@ defmodule Cure.Core.TermTest do
     # no-op when the target index does not occur.
     assert {:type, 0} == Term.subst({:type, 0}, 0, {:type, 1})
   end
+
+  test "to_external/from_external round-trips every node kind into JSON-able maps" do
+    terms = [
+      {:type, 1},
+      {:var, 3},
+      {:pi, {:type, 0}, {:var, 0}},
+      {:lam, {:type, 0}, {:var, 0}},
+      {:app, {:var, 0}, {:var, 1}},
+      {:sigma, {:type, 0}, {:var, 0}},
+      {:pair, {:type, 0}, {:type, 1}},
+      {:fst, {:var, 0}},
+      {:snd, {:var, 0}},
+      {:data, :SF, [{:type, 0}], [{:var, 0}]},
+      {:ctor, :seq, [{:var, 0}, {:var, 1}]},
+      {:case, {:var, 0}, {:lam, {:type, 0}, {:type, 0}},
+       [{:prim, 0, {:type, 0}}, {:seq, 2, {:var, 1}}]},
+      {:global, :and},
+      {:eq, {:type, 0}, {:var, 0}, {:var, 0}},
+      {:refl, {:var, 0}},
+      {:rewrite, {:refl, {:var, 0}}, {:lam, {:type, 0}, {:type, 0}}, {:var, 0}}
+    ]
+
+    for t <- terms do
+      assert Term.term?(t), "test fixture #{inspect(t)} is not a valid term"
+      ext = Term.to_external(t)
+      assert is_map(ext), "external form of #{inspect(t)} must be a map"
+      assert t == Term.from_external(ext)
+    end
+  end
 end

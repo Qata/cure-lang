@@ -157,6 +157,117 @@ defmodule Cure.Core.Term do
   def subst({:rewrite, p, m, b}, j, r),
     do: {:rewrite, subst(p, j, r), subst(m, j, r), subst(b, j, r)}
 
+  # -- serialization (commitment C2) ------------------------------------------
+  #
+  # A language-agnostic, JSON-able encoding (maps / lists / strings / ints) so
+  # an independent checker can re-validate the same Core terms. No PIDs, refs,
+  # or closures appear in Core terms, so the encoding is total and reversible.
+
+  @doc "Encode a Core term as a JSON-able map."
+  @spec to_external(t()) :: map()
+  def to_external({:type, l}), do: %{"node" => "type", "level" => l}
+  def to_external({:var, k}), do: %{"node" => "var", "index" => k}
+  def to_external({:pi, d, c}), do: %{"node" => "pi", "dom" => to_external(d), "cod" => to_external(c)}
+
+  def to_external({:lam, d, b}),
+    do: %{"node" => "lam", "dom" => to_external(d), "body" => to_external(b)}
+
+  def to_external({:app, f, a}),
+    do: %{"node" => "app", "fun" => to_external(f), "arg" => to_external(a)}
+
+  def to_external({:sigma, a, b}),
+    do: %{"node" => "sigma", "fst" => to_external(a), "snd" => to_external(b)}
+
+  def to_external({:pair, a, b}),
+    do: %{"node" => "pair", "fst" => to_external(a), "snd" => to_external(b)}
+
+  def to_external({:fst, p}), do: %{"node" => "fst", "pair" => to_external(p)}
+  def to_external({:snd, p}), do: %{"node" => "snd", "pair" => to_external(p)}
+
+  def to_external({:data, n, ps, is}),
+    do: %{
+      "node" => "data",
+      "name" => Atom.to_string(n),
+      "params" => Enum.map(ps, &to_external/1),
+      "indices" => Enum.map(is, &to_external/1)
+    }
+
+  def to_external({:ctor, n, args}),
+    do: %{"node" => "ctor", "name" => Atom.to_string(n), "args" => Enum.map(args, &to_external/1)}
+
+  def to_external({:case, s, m, brs}),
+    do: %{
+      "node" => "case",
+      "scrut" => to_external(s),
+      "motive" => to_external(m),
+      "branches" =>
+        Enum.map(brs, fn {cn, ar, b} ->
+          %{"ctor" => Atom.to_string(cn), "arity" => ar, "body" => to_external(b)}
+        end)
+    }
+
+  def to_external({:global, n}), do: %{"node" => "global", "name" => Atom.to_string(n)}
+
+  def to_external({:eq, ty, a, b}),
+    do: %{"node" => "eq", "type" => to_external(ty), "lhs" => to_external(a), "rhs" => to_external(b)}
+
+  def to_external({:refl, a}), do: %{"node" => "refl", "value" => to_external(a)}
+
+  def to_external({:rewrite, p, m, b}),
+    do: %{
+      "node" => "rewrite",
+      "proof" => to_external(p),
+      "motive" => to_external(m),
+      "body" => to_external(b)
+    }
+
+  @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
+  @spec from_external(map()) :: t()
+  def from_external(%{"node" => "type", "level" => l}), do: {:type, l}
+  def from_external(%{"node" => "var", "index" => k}), do: {:var, k}
+
+  def from_external(%{"node" => "pi", "dom" => d, "cod" => c}),
+    do: {:pi, from_external(d), from_external(c)}
+
+  def from_external(%{"node" => "lam", "dom" => d, "body" => b}),
+    do: {:lam, from_external(d), from_external(b)}
+
+  def from_external(%{"node" => "app", "fun" => f, "arg" => a}),
+    do: {:app, from_external(f), from_external(a)}
+
+  def from_external(%{"node" => "sigma", "fst" => a, "snd" => b}),
+    do: {:sigma, from_external(a), from_external(b)}
+
+  def from_external(%{"node" => "pair", "fst" => a, "snd" => b}),
+    do: {:pair, from_external(a), from_external(b)}
+
+  def from_external(%{"node" => "fst", "pair" => p}), do: {:fst, from_external(p)}
+  def from_external(%{"node" => "snd", "pair" => p}), do: {:snd, from_external(p)}
+
+  def from_external(%{"node" => "data", "name" => n, "params" => ps, "indices" => is}),
+    do:
+      {:data, String.to_atom(n), Enum.map(ps, &from_external/1), Enum.map(is, &from_external/1)}
+
+  def from_external(%{"node" => "ctor", "name" => n, "args" => args}),
+    do: {:ctor, String.to_atom(n), Enum.map(args, &from_external/1)}
+
+  def from_external(%{"node" => "case", "scrut" => s, "motive" => m, "branches" => brs}),
+    do:
+      {:case, from_external(s), from_external(m),
+       Enum.map(brs, fn %{"ctor" => cn, "arity" => ar, "body" => b} ->
+         {String.to_atom(cn), ar, from_external(b)}
+       end)}
+
+  def from_external(%{"node" => "global", "name" => n}), do: {:global, String.to_atom(n)}
+
+  def from_external(%{"node" => "eq", "type" => ty, "lhs" => a, "rhs" => b}),
+    do: {:eq, from_external(ty), from_external(a), from_external(b)}
+
+  def from_external(%{"node" => "refl", "value" => a}), do: {:refl, from_external(a)}
+
+  def from_external(%{"node" => "rewrite", "proof" => p, "motive" => m, "body" => b}),
+    do: {:rewrite, from_external(p), from_external(m), from_external(b)}
+
   # -- helpers ----------------------------------------------------------------
 
   defp terms?(list) when is_list(list), do: Enum.all?(list, &term?/1)
