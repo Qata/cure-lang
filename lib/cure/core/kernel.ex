@@ -16,7 +16,7 @@ defmodule Cure.Core.Kernel do
   definitions + certificates (M7).
   """
 
-  alias Cure.Core.{Context, Conv, Env, Eval, Inductive, Quote, Universe}
+  alias Cure.Core.{Certificate, Context, Conv, Env, Eval, Inductive, Quote, Universe}
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
@@ -195,7 +195,7 @@ defmodule Cure.Core.Kernel do
   def check(ctx, {:lam, dom, body}, {:vpi, exp_dom, cod_closure}) do
     dom_value = Eval.eval(dom, Context.env(ctx))
 
-    if Conv.conv_values?(dom_value, exp_dom, Context.length(ctx)) do
+    if Conv.conv_values?(dom_value, exp_dom, Context.length(ctx), Context.signature(ctx)) do
       fresh = {:vneutral, {:nvar, Context.length(ctx)}}
       cod_value = Eval.apply_closure(cod_closure, fresh)
       check(Context.extend(ctx, exp_dom), body, cod_value)
@@ -212,7 +212,10 @@ defmodule Cure.Core.Kernel do
       depth = Context.length(ctx)
       a_refl = Eval.eval(a, Context.env(ctx))
 
-      if Conv.conv_values?(a_value, b_value, depth) and Conv.conv_values?(a_refl, a_value, depth) do
+      sig = Context.signature(ctx)
+
+      if Conv.conv_values?(a_value, b_value, depth, sig) and
+           Conv.conv_values?(a_refl, a_value, depth, sig) do
         :ok
       else
         {:error, :not_definitionally_equal}
@@ -258,6 +261,25 @@ defmodule Cure.Core.Kernel do
         with {:ok, _level} <- infer_sort(ctx, type_term) do
           check(ctx, body_term, Eval.eval(type_term, []))
         end
+    end
+  end
+
+  @doc """
+  Re-run the totality decision procedure on a registered, type-checked global
+  and, if it passes, certify it for δ-reduction (design spec §7). Coverage is
+  re-checked by `check_def` (the kernel's `case` typing); termination by
+  `Cure.Core.Certificate`. The kernel never trusts an elaborator's verdict — it
+  re-derives certification itself, returning the signature with the global
+  marked certified (the only way the certified set is populated).
+  """
+  @spec validate_certificate(Env.t(), atom()) :: {:ok, Env.t()} | {:error, term()}
+  def validate_certificate(env, name) do
+    with :ok <- check_def(env, name) do
+      %{body: body} = Env.get_def(env, name)
+
+      if Certificate.terminating?(name, body),
+        do: {:ok, Env.certify(env, name)},
+        else: {:error, :not_total}
     end
   end
 
@@ -479,5 +501,5 @@ defmodule Cure.Core.Kernel do
   defp subtype?({:vtype, l1}, {:vtype, l2}, _ctx), do: Universe.le?(l1, l2)
 
   defp subtype?(inferred, expected, ctx),
-    do: Conv.conv_values?(inferred, expected, Context.length(ctx))
+    do: Conv.conv_values?(inferred, expected, Context.length(ctx), Context.signature(ctx))
 end
