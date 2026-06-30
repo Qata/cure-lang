@@ -31,4 +31,23 @@ defmodule Cure.Core.ConvTest do
     assert Conv.conv?({:pi, {:type, 0}, {:var, 0}}, {:pi, {:type, 0}, {:var, 0}}, [], 0)
     refute Conv.conv?({:pi, {:type, 0}, {:var, 0}}, {:pi, {:type, 1}, {:var, 0}}, [], 0)
   end
+
+  test "a stuck case on a neutral scrutinee is convertible to itself" do
+    motive = {:lam, {:data, :Dec, [], []}, {:type, 0}}
+    branches = [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]
+    cas = {:case, {:var, 0}, motive, branches}
+    assert Conv.conv?(cas, cas, [{:vneutral, {:nvar, 0}}], 1)
+  end
+
+  test "stuck cases with different branch bodies are not convertible" do
+    motive = {:lam, {:data, :Dec, [], []}, {:type, 0}}
+    b1 = [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]
+    b2 = [{:Dcoupled, 0, {:type, 1}}, {:Causal, 0, {:type, 0}}]
+    refute Conv.conv?(
+             {:case, {:var, 0}, motive, b1},
+             {:case, {:var, 0}, motive, b2},
+             [{:vneutral, {:nvar, 0}}],
+             1
+           )
+  end
 end

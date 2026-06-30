@@ -97,5 +97,26 @@ defmodule Cure.Core.Conv do
 
   defp conv_neutral?({:nfst, n1}, {:nfst, n2}, depth), do: conv_neutral?(n1, n2, depth)
   defp conv_neutral?({:nsnd, n1}, {:nsnd, n2}, depth), do: conv_neutral?(n1, n2, depth)
+
+  defp conv_neutral?({:ncase, n1, m1, brs1}, {:ncase, n2, m2, brs2}, depth) do
+    conv_neutral?(n1, n2, depth) and conv_closure?(m1, m2, depth) and
+      conv_branches?(brs1, brs2, depth)
+  end
+
   defp conv_neutral?(_, _, _), do: false
+
+  defp conv_branches?(brs1, brs2, depth) do
+    length(brs1) == length(brs2) and
+      Enum.zip(brs1, brs2)
+      |> Enum.all?(fn {{c1, a1, cl1}, {c2, a2, cl2}} ->
+        c1 == c2 and a1 == a2 and conv_branch_bodies?(a1, cl1, cl2, depth)
+      end)
+  end
+
+  # Compare two branch-body closures under the constructor's `arity` binders.
+  defp conv_branch_bodies?(arity, {:closure, env1, body1}, {:closure, env2, body2}, depth) do
+    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
+    ext = Enum.reverse(fresh)
+    conv_val?(Eval.eval(body1, ext ++ env1), Eval.eval(body2, ext ++ env2), depth + arity)
+  end
 end

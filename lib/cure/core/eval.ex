@@ -44,6 +44,21 @@ defmodule Cure.Core.Eval do
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
+  def eval({:case, scrut, motive, branches}, env) do
+    case eval(scrut, env) do
+      {:vctor, cname, args} ->
+        {_cname, _arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+        # The branch body binds the constructor's arguments; the last argument is
+        # de Bruijn index 0, so the body's environment is reverse(args) ++ env.
+        eval(body, Enum.reverse(args) ++ env)
+
+      {:vneutral, neutral} ->
+        motive_closure = {:closure, env, motive}
+        branch_closures = Enum.map(branches, fn {c, ar, b} -> {c, ar, {:closure, env, b}} end)
+        {:vneutral, {:ncase, neutral, motive_closure, branch_closures}}
+    end
+  end
+
   @doc """
   Apply a function value to an argument value, performing β-reduction.
 

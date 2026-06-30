@@ -58,5 +58,20 @@ defmodule Cure.Core.Quote do
   defp reify_neutral({:nfst, n}, depth), do: {:fst, reify_neutral(n, depth)}
   defp reify_neutral({:nsnd, n}, depth), do: {:snd, reify_neutral(n, depth)}
 
-  # `:ncase` read-back is added with the dependent case eliminator (M4).
+  defp reify_neutral({:ncase, neutral, motive_cl, branch_cls}, depth) do
+    scrut = reify_neutral(neutral, depth)
+    motive = reify(instantiate(motive_cl), depth)
+    branches = Enum.map(branch_cls, fn {c, ar, cl} -> {c, ar, reify_branch(cl, ar, depth)} end)
+    {:case, scrut, motive, branches}
+  end
+
+  # Evaluate a closure body in its captured environment (no extra binder).
+  defp instantiate({:closure, env, term}), do: Eval.eval(term, env)
+
+  # Read a branch-body closure back under the constructor's `arity` binders.
+  defp reify_branch({:closure, env, body}, arity, depth) do
+    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
+    ext = Enum.reverse(fresh)
+    reify(Eval.eval(body, ext ++ env), depth + arity)
+  end
 end
