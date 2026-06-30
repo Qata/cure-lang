@@ -80,6 +80,28 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  def infer(ctx, {:ctor, name, args}) do
+    sig = Context.signature(ctx)
+
+    case Inductive.get_ctor(sig, name) do
+      nil ->
+        {:error, {:unknown_ctor, name}}
+
+      %{args: tele, result_indices: result_indices} ->
+        family_name = Inductive.ctor_family(sig, name)
+
+        with {:ok, arg_env} <- check_ctor_app(ctx, args, tele) do
+          # The accumulated arg values (most-recent first) are exactly the env in
+          # which the result-index terms are written; compute them by NbE (so a
+          # computed index like `and(d1,d2)` reduces once δ is available, M7).
+          # Slice-1 families are parameter-free; prepend evaluated params here
+          # when parameters are introduced.
+          index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+          {:ok, {:vdata, family_name, index_values}}
+        end
+    end
+  end
+
   @doc "Check `term` against the expected type value in `ctx`."
   @spec check(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) :: :ok | {:error, term()}
   # Bidirectional rule: a lambda is checked against a Π, propagating the expected
@@ -201,6 +223,34 @@ defmodule Cure.Core.Kernel do
   defp check_field_levels(levels, fam_level) do
     if Enum.all?(levels, &(&1 <= fam_level)), do: :ok, else: {:error, :universe_level}
   end
+
+  # Check a constructor application's args against its telescope (dependent),
+  # returning the accumulated arg values (most-recent first) for result-index
+  # computation. A failure on a data-typed argument is an index disagreement.
+  defp check_ctor_app(ctx, args, tele) do
+    if length(args) == length(tele) do
+      check_ctor_app_rec(ctx, Enum.zip(args, tele), [])
+    else
+      {:error, :ctor_arity}
+    end
+  end
+
+  defp check_ctor_app_rec(_ctx, [], vals), do: {:ok, vals}
+
+  defp check_ctor_app_rec(ctx, [{arg, {_name, type_term}} | rest], vals) do
+    expected = Eval.eval(type_term, vals)
+
+    case check(ctx, arg, expected) do
+      :ok -> check_ctor_app_rec(ctx, rest, [Eval.eval(arg, Context.env(ctx)) | vals])
+      {:error, _} = err -> remap_index_error(err, expected)
+    end
+  end
+
+  # A mismatch on a constructor argument whose expected type is a family value is
+  # an index disagreement (the kernel-level backstop; the elaborator surfaces the
+  # user-facing :index_unification earlier — see plan M3.4/M8.4).
+  defp remap_index_error(_err, {:vdata, _name, _args}), do: {:error, :index_mismatch}
+  defp remap_index_error(err, _expected), do: err
 
   defp check_result_indices(ctx_full, result_indices, index_tele) do
     if length(result_indices) == length(index_tele) do
