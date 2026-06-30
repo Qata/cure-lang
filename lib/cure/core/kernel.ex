@@ -16,7 +16,7 @@ defmodule Cure.Core.Kernel do
   definitions + certificates (M7).
   """
 
-  alias Cure.Core.{Context, Conv, Eval, Universe}
+  alias Cure.Core.{Context, Conv, Eval, Quote, Universe}
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
@@ -45,8 +45,44 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  def infer(ctx, {:lam, dom, body}) do
+    with {:ok, _level} <- infer_sort(ctx, dom) do
+      dom_value = Eval.eval(dom, Context.env(ctx))
+      ctx2 = Context.extend(ctx, dom_value)
+
+      with {:ok, cod_value} <- infer(ctx2, body) do
+        # Reify the body's type into a codomain family over the binder.
+        cod_term = Quote.reify(cod_value, Context.length(ctx2))
+        {:ok, {:vpi, dom_value, {:closure, Context.env(ctx), cod_term}}}
+      end
+    end
+  end
+
+  def infer(ctx, {:app, f, a}) do
+    with {:ok, f_type} <- infer(ctx, f),
+         {:ok, dom, cod_closure} <- ensure_pi(f_type),
+         :ok <- check(ctx, a, dom) do
+      a_value = Eval.eval(a, Context.env(ctx))
+      {:ok, Eval.apply_closure(cod_closure, a_value)}
+    end
+  end
+
   @doc "Check `term` against the expected type value in `ctx`."
   @spec check(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) :: :ok | {:error, term()}
+  # Bidirectional rule: a lambda is checked against a Π, propagating the expected
+  # domain into the body (more robust than infer when the body is not standalone).
+  def check(ctx, {:lam, dom, body}, {:vpi, exp_dom, cod_closure}) do
+    dom_value = Eval.eval(dom, Context.env(ctx))
+
+    if Conv.conv_values?(dom_value, exp_dom, Context.length(ctx)) do
+      fresh = {:vneutral, {:nvar, Context.length(ctx)}}
+      cod_value = Eval.apply_closure(cod_closure, fresh)
+      check(Context.extend(ctx, exp_dom), body, cod_value)
+    else
+      {:error, :domain_mismatch}
+    end
+  end
+
   def check(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
       if subtype?(inferred, expected, ctx), do: :ok, else: {:error, :type_mismatch}
@@ -64,6 +100,10 @@ defmodule Cure.Core.Kernel do
       end
     end
   end
+
+  # Require a type value to be a Π; return its domain value + codomain closure.
+  defp ensure_pi({:vpi, dom, cod_closure}), do: {:ok, dom, cod_closure}
+  defp ensure_pi(_), do: {:error, :not_a_function}
 
   # Cumulative subtyping: universe-level inclusion on sorts, conversion otherwise.
   defp subtype?({:vtype, l1}, {:vtype, l2}, _ctx), do: Universe.le?(l1, l2)

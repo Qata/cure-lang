@@ -54,6 +54,14 @@ defmodule Cure.Core.Eval do
   def apply({:vlam, _dom, {:closure, env, body}}, varg), do: eval(body, [varg | env])
   def apply({:vneutral, n}, varg), do: {:vneutral, {:napp, n, varg}}
 
+  @doc """
+  Instantiate a closure (e.g. a Π/Σ codomain family) at a value: evaluate the
+  closure body in its captured environment extended with `value` at index 0.
+  """
+  @spec apply_closure({:closure, [Cure.Core.Value.t()], Cure.Core.Term.t()}, Cure.Core.Value.t()) ::
+          Cure.Core.Value.t()
+  def apply_closure({:closure, env, body}, value), do: eval(body, [value | env])
+
   # -- projection ι -----------------------------------------------------------
 
   defp vfst({:vpair, a, _b}), do: a
