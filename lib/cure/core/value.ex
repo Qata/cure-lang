@@ -12,7 +12,8 @@ defmodule Cure.Core.Value do
 
     * `{:vtype, level}`                  universe
     * `{:vpi, dom_value, closure}`       Π type (closure = the codomain family)
-    * `{:vlam, closure}`                 λ
+    * `{:vlam, dom_value, closure}`      λ (domain kept so read-back is a true
+                                         inverse — mirrors Idris's `Lam … ty`)
     * `{:vsigma, dom_value, closure}`    Σ type
     * `{:vpair, value, value}`           pair
     * `{:vneutral, neutral}`             stuck term
@@ -40,7 +41,7 @@ defmodule Cure.Core.Value do
     do: is_integer(level) and level >= 0 and level <= Universe.ceiling()
 
   def value?({:vpi, dom, cl}), do: value?(dom) and closure?(cl)
-  def value?({:vlam, cl}), do: closure?(cl)
+  def value?({:vlam, dom, cl}), do: value?(dom) and closure?(cl)
   def value?({:vsigma, dom, cl}), do: value?(dom) and closure?(cl)
   def value?({:vpair, a, b}), do: value?(a) and value?(b)
   def value?({:vneutral, n}), do: neutral?(n)

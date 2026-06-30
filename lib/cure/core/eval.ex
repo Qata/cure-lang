@@ -29,7 +29,7 @@ defmodule Cure.Core.Eval do
   end
 
   def eval({:pi, dom, cod}, env), do: {:vpi, eval(dom, env), {:closure, env, cod}}
-  def eval({:lam, _dom, body}, env), do: {:vlam, {:closure, env, body}}
+  def eval({:lam, dom, body}, env), do: {:vlam, eval(dom, env), {:closure, env, body}}
   def eval({:sigma, a, b}, env), do: {:vsigma, eval(a, env), {:closure, env, b}}
   def eval({:app, f, a}, env), do: apply(eval(f, env), eval(a, env))
   def eval({:pair, a, b}, env), do: {:vpair, eval(a, env), eval(b, env)}
@@ -51,7 +51,7 @@ defmodule Cure.Core.Eval do
   with the argument; a neutral function accumulates the argument on its spine.
   """
   @spec apply(Cure.Core.Value.t(), Cure.Core.Value.t()) :: Cure.Core.Value.t()
-  def apply({:vlam, {:closure, env, body}}, varg), do: eval(body, [varg | env])
+  def apply({:vlam, _dom, {:closure, env, body}}, varg), do: eval(body, [varg | env])
   def apply({:vneutral, n}, varg), do: {:vneutral, {:napp, n, varg}}
 
   # -- projection ι -----------------------------------------------------------

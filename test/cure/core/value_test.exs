@@ -6,7 +6,7 @@ defmodule Cure.Core.ValueTest do
     cl = {:closure, [], {:var, 0}}
     assert Value.value?({:vtype, 0})
     assert Value.value?({:vpi, {:vtype, 0}, cl})
-    assert Value.value?({:vlam, cl})
+    assert Value.value?({:vlam, {:vtype, 0}, cl})
     assert Value.value?({:vsigma, {:vtype, 0}, cl})
     assert Value.value?({:vpair, {:vtype, 0}, {:vtype, 1}})
     assert Value.value?({:vneutral, {:nvar, 0}})
