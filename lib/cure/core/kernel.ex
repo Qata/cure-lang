@@ -102,6 +102,30 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  def infer(ctx, {:case, scrut, motive, branches}) do
+    sig = Context.signature(ctx)
+
+    case infer(ctx, scrut) do
+      {:ok, {:vdata, dname, scrut_indices}} ->
+        family = Inductive.get_family(sig, dname)
+        motive_value = Eval.eval(motive, Context.env(ctx))
+
+        with :ok <- check_motive_wf(ctx, motive_value, family),
+             :ok <- check_coverage(sig, dname, branches),
+             :ok <- check_case_branches(ctx, sig, motive_value, branches) do
+          # Result type = motive at the scrutinee's actual indices and value (§4.4).
+          scrut_value = Eval.eval(scrut, Context.env(ctx))
+          {:ok, apply_motive(motive_value, scrut_indices ++ [scrut_value])}
+        end
+
+      {:ok, _other} ->
+        {:error, :case_scrutinee_not_data}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   @doc "Check `term` against the expected type value in `ctx`."
   @spec check(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) :: :ok | {:error, term()}
   # Bidirectional rule: a lambda is checked against a Π, propagating the expected
@@ -251,6 +275,73 @@ defmodule Cure.Core.Kernel do
   # user-facing :index_unification earlier — see plan M3.4/M8.4).
   defp remap_index_error(_err, {:vdata, _name, _args}), do: {:error, :index_mismatch}
   defp remap_index_error(err, _expected), do: err
+
+  # -- dependent case (§4.4) --------------------------------------------------
+
+  # Apply a (curried) motive value to a list of argument values.
+  defp apply_motive(motive_value, args),
+    do: Enum.reduce(args, motive_value, fn arg, acc -> Eval.apply(acc, arg) end)
+
+  # Extend `ctx` by a (dependent) telescope; return the new context and the fresh
+  # neutral values bound for each telescope variable, in declaration order.
+  defp extend_with_telescope(ctx, tele) do
+    Enum.reduce(tele, {ctx, []}, fn {_name, type_term}, {c, vals} ->
+      level = Context.length(c)
+      type_value = Eval.eval(type_term, Context.env(c))
+      {Context.extend(c, type_value), vals ++ [{:vneutral, {:nvar, level}}]}
+    end)
+  end
+
+  # The motive must be a type family over the family's indices and the scrutinee:
+  # applied to fresh indices ȷ̄ and x : D p̄ ȷ̄, its body must itself be a type.
+  defp check_motive_wf(ctx, motive_value, %{name: dname, indices: index_tele}) do
+    {ctx_indices, index_vals} = extend_with_telescope(ctx, index_tele)
+    scrut_level = Context.length(ctx_indices)
+    data_value = {:vdata, dname, index_vals}
+    ctx_motive = Context.extend(ctx_indices, data_value)
+    x_value = {:vneutral, {:nvar, scrut_level}}
+
+    body_value = apply_motive(motive_value, index_vals ++ [x_value])
+    body_term = Quote.reify(body_value, Context.length(ctx_motive))
+
+    case infer_sort(ctx_motive, body_term) do
+      {:ok, _level} -> :ok
+      _ -> {:error, :bad_motive}
+    end
+  end
+
+  # Every declared constructor of the family must have a branch (§7 coverage).
+  defp check_coverage(sig, dname, branches) do
+    declared = sig |> Inductive.ctors_of(dname) |> Enum.map(& &1.name) |> MapSet.new()
+    covered = branches |> Enum.map(fn {c, _ar, _b} -> c end) |> MapSet.new()
+    if MapSet.subset?(declared, covered), do: :ok, else: {:error, :coverage}
+  end
+
+  # Each branch body is checked under its constructor's telescope, against the
+  # motive instantiated at that constructor's computed indices s̄ⱼ and value cⱼ āⱼ.
+  defp check_case_branches(ctx, sig, motive_value, branches) do
+    Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
+      case Inductive.get_ctor(sig, cname) do
+        nil ->
+          {:halt, {:error, {:unknown_ctor, cname}}}
+
+        %{args: tele, result_indices: result_indices} when length(tele) == arity ->
+          {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele)
+          # Result indices are written over the ctor's args (most-recent first).
+          s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
+          ctor_value = {:vctor, cname, arg_vals}
+          expected = apply_motive(motive_value, s_values ++ [ctor_value])
+
+          case check(ctx_branch, body, expected) do
+            :ok -> {:cont, :ok}
+            {:error, _} -> {:halt, {:error, :branch_type}}
+          end
+
+        %{} ->
+          {:halt, {:error, :branch_arity}}
+      end
+    end)
+  end
 
   defp check_result_indices(ctx_full, result_indices, index_tele) do
     if length(result_indices) == length(index_tele) do
