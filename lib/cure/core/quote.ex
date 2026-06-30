@@ -45,6 +45,11 @@ defmodule Cure.Core.Quote do
   def reify({:vdata, name, vs}, depth), do: {:data, name, Enum.map(vs, &reify(&1, depth)), []}
   def reify({:vctor, name, vs}, depth), do: {:ctor, name, Enum.map(vs, &reify(&1, depth))}
 
+  def reify({:veq, ty, a, b}, depth),
+    do: {:eq, reify(ty, depth), reify(a, depth), reify(b, depth)}
+
+  def reify({:vrefl, a}, depth), do: {:refl, reify(a, depth)}
+
   def reify({:vneutral, n}, depth), do: reify_neutral(n, depth)
 
   # -- neutrals ---------------------------------------------------------------

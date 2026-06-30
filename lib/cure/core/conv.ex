@@ -61,6 +61,11 @@ defmodule Cure.Core.Conv do
   defp conv_val?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth),
     do: n1 == n2 and conv_spine?(vs1, vs2, depth)
 
+  defp conv_val?({:veq, t1, a1, b1}, {:veq, t2, a2, b2}, depth),
+    do: conv_val?(t1, t2, depth) and conv_val?(a1, a2, depth) and conv_val?(b1, b2, depth)
+
+  defp conv_val?({:vrefl, a1}, {:vrefl, a2}, depth), do: conv_val?(a1, a2, depth)
+
   defp conv_val?(_, _, _), do: false
 
   # η / β-under-binder: apply both values to a fresh neutral and compare bodies.

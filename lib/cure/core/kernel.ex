@@ -58,6 +58,22 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  def infer(ctx, {:eq, ty, a, b}) do
+    with {:ok, level} <- infer_sort(ctx, ty),
+         ty_value = Eval.eval(ty, Context.env(ctx)),
+         :ok <- check(ctx, a, ty_value),
+         :ok <- check(ctx, b, ty_value) do
+      {:ok, {:vtype, level}}
+    end
+  end
+
+  def infer(ctx, {:refl, a}) do
+    with {:ok, ty_value} <- infer(ctx, a) do
+      a_value = Eval.eval(a, Context.env(ctx))
+      {:ok, {:veq, ty_value, a_value, a_value}}
+    end
+  end
+
   def infer(ctx, {:sigma, a, b}) do
     with {:ok, l1} <- infer_sort(ctx, a),
          a_value = Eval.eval(a, Context.env(ctx)),
@@ -164,6 +180,22 @@ defmodule Cure.Core.Kernel do
       check(Context.extend(ctx, exp_dom), body, cod_value)
     else
       {:error, :domain_mismatch}
+    end
+  end
+
+  # The §4.6 soundness gate: `refl a` checks against `Eq ty a' b'` iff the
+  # endpoints are definitionally equal AND `a` is convertible to them. This is
+  # the fix for the audit's bug (the old checker accepted any atom as a proof).
+  def check(ctx, {:refl, a}, {:veq, ty_value, a_value, b_value}) do
+    with :ok <- check(ctx, a, ty_value) do
+      depth = Context.length(ctx)
+      a_refl = Eval.eval(a, Context.env(ctx))
+
+      if Conv.conv_values?(a_value, b_value, depth) and Conv.conv_values?(a_refl, a_value, depth) do
+        :ok
+      else
+        {:error, :not_definitionally_equal}
+      end
     end
   end
 

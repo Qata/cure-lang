@@ -44,6 +44,9 @@ defmodule Cure.Core.Eval do
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
+  def eval({:eq, ty, a, b}, env), do: {:veq, eval(ty, env), eval(a, env), eval(b, env)}
+  def eval({:refl, a}, env), do: {:vrefl, eval(a, env)}
+
   def eval({:case, scrut, motive, branches}, env) do
     case eval(scrut, env) do
       {:vctor, cname, args} ->

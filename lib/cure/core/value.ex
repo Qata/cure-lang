@@ -47,6 +47,8 @@ defmodule Cure.Core.Value do
   def value?({:vneutral, n}), do: neutral?(n)
   def value?({:vdata, name, vs}), do: is_atom(name) and values?(vs)
   def value?({:vctor, name, vs}), do: is_atom(name) and values?(vs)
+  def value?({:veq, ty, a, b}), do: value?(ty) and value?(a) and value?(b)
+  def value?({:vrefl, a}), do: value?(a)
   def value?(_), do: false
 
   @doc "True when `neutral` is a structurally well-formed neutral (stuck) value."
