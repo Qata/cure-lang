@@ -28,6 +28,14 @@ defmodule Cure.Core.Conv do
     conv_val?(Eval.eval(term1, env), Eval.eval(term2, env), depth)
   end
 
+  @doc """
+  Value-level definitional equality — the core of `conv?/4` for callers (the
+  kernel's `check`) that already hold evaluated values. Same NbE algorithm; this
+  is **not** a type-indexed variant, just a different entry point.
+  """
+  @spec conv_values?(Cure.Core.Value.t(), Cure.Core.Value.t(), non_neg_integer()) :: boolean()
+  def conv_values?(v1, v2, depth), do: conv_val?(v1, v2, depth)
+
   # -- value-level conversion -------------------------------------------------
 
   # η first: a λ on either side, compared by applying both to a fresh neutral.
