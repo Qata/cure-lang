@@ -84,6 +84,42 @@ defmodule Antigen.Generators.Rewrite do
       "ill-typed: refl Causal : Eq Dec Dcoupled Dcoupled — conjunct 1 holds, subject≠endpoints (conjunct 2)")
   end
 
+  # -- 4.3 rewrite premise discipline -----------------------------------------
+  # Motive M = λx:Dec. P x; the equality proof is a hypothesis p : Eq Dec Causal
+  # Dcoupled (Causal≠Dcoupled has no ground proof, so it must be assumed). de
+  # Bruijn under `[p, h]`: `h`=var0, `p`=var1.
+  @p_causal {:data, :P, [], [{:ctor, :Causal, []}]}
+  @p_dcoupled {:data, :P, [], [{:ctor, :Dcoupled, []}]}
+  @motive {:lam, @dec, {:data, :P, [], [{:var, 0}]}}
+  @eq_cd {:eq, @dec, {:ctor, :Causal, []}, {:ctor, :Dcoupled, []}}
+
+  @spec rewrite_premise(:well_typed | :proof_not_eq | :body_mismatch) :: Challenge.t()
+  # def : Π(p:Eq Dec Causal Dcoupled). Π(h:P Causal). P Dcoupled
+  #     = λp.λh. rewrite p (λx.P x) h
+  def rewrite_premise(:well_typed) do
+    dt = {:pi, @eq_cd, {:pi, @p_causal, @p_dcoupled}}
+    body = {:lam, @eq_cd, {:lam, @p_causal, {:rewrite, {:var, 1}, @motive, {:var, 0}}}}
+    challenge(:well_typed, [dec_family(), p_family()], :rewrite_premise, dt, body,
+      "rewrite p (λx.P x) h : P Dcoupled from h : P Causal")
+  end
+
+  # proof is `h : P Causal`, not an equality → ensure_eq rejects.
+  def rewrite_premise(:proof_not_eq) do
+    dt = {:pi, @p_causal, @p_causal}
+    body = {:lam, @p_causal, {:rewrite, {:var, 0}, @motive, {:var, 0}}}
+    challenge(:ill_typed, [dec_family(), p_family()], :rewrite_premise, dt, body,
+      "ill-typed: rewrite proof is h : P Causal, not an equality")
+  end
+
+  # proof IS a genuine equality (so we reach the body check), but the body
+  # `Causal : Dec` does not check at M a = P Causal → :rewrite_premise.
+  def rewrite_premise(:body_mismatch) do
+    dt = {:pi, @eq_cd, @p_dcoupled}
+    body = {:lam, @eq_cd, {:rewrite, {:var, 0}, @motive, {:ctor, :Causal, []}}}
+    challenge(:ill_typed, [dec_family(), p_family()], :rewrite_premise, dt, body,
+      "ill-typed: rewrite body Causal:Dec, not P Causal → :rewrite_premise")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :rewrite_eq,

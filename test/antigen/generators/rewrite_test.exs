@@ -25,4 +25,13 @@ defmodule Antigen.Generators.RewriteTest do
       assert {:error, _} = checks?(c), "variant #{v} should be rejected"
     end
   end
+
+  test "4.3 rewrite_premise: well-typed accepted; proof-not-eq and body-mismatch rejected" do
+    assert :ok == checks?(Rewrite.rewrite_premise(:well_typed))
+    for v <- [:proof_not_eq, :body_mismatch] do
+      c = Rewrite.rewrite_premise(v)
+      assert c.label == :ill_typed
+      assert {:error, _} = checks?(c), "variant #{v} should be rejected"
+    end
+  end
 end
