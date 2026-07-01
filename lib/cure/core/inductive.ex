@@ -65,18 +65,33 @@ defmodule Cure.Core.Inductive do
   alias Cure.Core.Env
 
   @type telescope :: [{atom(), Cure.Core.Term.t()}]
+  @type quantity :: :erased | :present
   @type family :: %{name: atom(), params: telescope(), indices: telescope(), level: non_neg_integer()}
-  @type ctor :: %{name: atom(), args: telescope(), result_indices: [Cure.Core.Term.t()]}
+  @type ctor :: %{
+          name: atom(),
+          args: telescope(),
+          result_indices: [Cure.Core.Term.t()],
+          quantities: [quantity()]
+        }
 
   @doc "Build a family signature (no registration; see `declare/3`)."
   @spec family(atom(), telescope(), telescope(), non_neg_integer()) :: family()
   def family(name, param_tele, index_tele, level),
     do: %{name: name, params: param_tele, indices: index_tele, level: level}
 
-  @doc "Build a constructor signature."
+  @doc """
+  Build a constructor signature. Every argument defaults to runtime-relevant
+  (`:present`, quantity ω); use `ctor/4` to mark inferred index arguments
+  `:erased` (quantity 0) so they are dropped by erasure (M8.3 / M9).
+  """
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()]) :: ctor()
   def ctor(name, arg_tele, result_indices),
-    do: %{name: name, args: arg_tele, result_indices: result_indices}
+    do: ctor(name, arg_tele, result_indices, List.duplicate(:present, length(arg_tele)))
+
+  @doc "Build a constructor signature with explicit {0,ω} argument quantities."
+  @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()]) :: ctor()
+  def ctor(name, arg_tele, result_indices, quantities),
+    do: %{name: name, args: arg_tele, result_indices: result_indices, quantities: quantities}
 
   @doc "Register a family and its constructors in the env."
   @spec declare(Env.t(), family(), [ctor()]) :: Env.t()
@@ -125,6 +140,16 @@ defmodule Cure.Core.Inductive do
     case get_ctor(env, cname) do
       nil -> nil
       %{args: args} -> args
+    end
+  end
+
+  @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:present`)."
+  @spec ctor_quantities(Env.t(), atom()) :: [quantity()] | nil
+  def ctor_quantities(env, cname) do
+    case get_ctor(env, cname) do
+      nil -> nil
+      %{quantities: qs} -> qs
+      _ -> nil
     end
   end
 

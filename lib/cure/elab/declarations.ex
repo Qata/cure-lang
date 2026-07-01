@@ -110,7 +110,13 @@ defmodule Cure.Elab.Declarations do
 
           with {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env) do
             impl_tele = Enum.map(implicits, fn {n, ty} -> {String.to_atom(n), ty} end)
-            {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices)}
+            # Inferred index variables are erased (quantity 0); the explicit
+            # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
+            quantities =
+              List.duplicate(:erased, length(impl_tele)) ++
+                List.duplicate(:present, length(expl_tele))
+
+            {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities)}
           end
 
         {:error, _} = err ->
