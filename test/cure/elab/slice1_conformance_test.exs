@@ -1,0 +1,58 @@
+defmodule Cure.Elab.Slice1ConformanceTest do
+  @moduledoc """
+  Conformance corpus (design spec §11, M11.1): the full Slice-1 program from a
+  `.cure` fixture must elaborate + certify as a whole, and each §6 negative must
+  be rejected. This is the falsifiable acceptance the whole initiative targets.
+  """
+  use ExUnit.Case, async: true
+  alias Cure.Core.Env
+  alias Cure.Elab.{Erase, Program}
+
+  @fixture Path.join([__DIR__, "..", "..", "fixtures", "slice1.cure"])
+
+  test "the complete §6 program elaborates and certifies from the fixture" do
+    source = File.read!(@fixture)
+    assert {:ok, env} = Program.elaborate(source)
+
+    for name <- [:andd, :compose, :run, :forget_dec, :recover, :sketch] do
+      assert Env.get_def(env, name), "expected #{name} to be defined"
+    end
+  end
+
+  test "the sketch function carries a hole that blocks codegen" do
+    source = File.read!(@fixture)
+    {:ok, env} = Program.elaborate(source)
+    assert Erase.has_hole?(Env.get_def(env, :sketch).body)
+    # compose, by contrast, is hole-free and may be emitted.
+    refute Erase.has_hole?(Env.get_def(env, :compose).body)
+  end
+
+  # -- §6 negatives: each must be rejected --------------------------------------
+
+  defp negative(replace, with_) do
+    File.read!(@fixture) |> String.replace(replace, with_) |> Program.elaborate()
+  end
+
+  test "negative #1: seq with disagreeing middle indices" do
+    # give recover an ill-typed body that composes two SFs with mismatched middle
+    assert {:error, _} =
+             negative(
+               "fn recover({as: SVDesc}, {bs: SVDesc}, p: Sigma(x: Dec, SF(as, bs, x))) -> SF(as, bs, p.1) = p.2",
+               "fn bad_mid({as: SVDesc}, {bs: SVDesc}, {cs: SVDesc}, l: SF(as, bs, Causal), r: SF(cs, bs, Causal)) -> SF(as, bs, Causal) = seq(l, r)"
+             )
+  end
+
+  test "negative #2: declared return index contradicts and's computation" do
+    assert {:error, _} =
+             negative("-> SF(as, cs, andd(d1, d2)) = seq(l, r)", "-> SF(as, cs, Dcoupled) = seq(l, r)")
+  end
+
+  test "negative #3: a non-total function used in a type" do
+    assert {:error, {:totality_required, :andd}} =
+             negative("fn andd(x: Dec, y: Dec) -> Dec = x", "fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)")
+  end
+
+  test "negative #4: a Sigma pair whose second component mismatches B[a/x]" do
+    assert {:error, _} = negative("-> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]", "-> Sigma(x: Dec, SF(as, bs, x)) = %[Dcoupled, sf]")
+  end
+end
