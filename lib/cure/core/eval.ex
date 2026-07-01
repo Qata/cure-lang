@@ -109,8 +109,13 @@ defmodule Cure.Core.Eval do
   defp fold(:mul, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a * b}}
   defp fold(:div, [{:vint, _}, {:vint, 0}]), do: :stuck
   defp fold(:div, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, div(a, b)}}
+  defp fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
+  defp fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
 
   defp fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a == b}}
+  defp fold(:eq, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a == b}}
+  defp fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a != b}}
+  defp fold(:ne, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a != b}}
   defp fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a < b}}
   defp fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a <= b}}
   defp fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a > b}}

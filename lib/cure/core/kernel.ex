@@ -535,10 +535,10 @@ defmodule Cure.Core.Kernel do
 
   # Cumulative subtyping: universe-level inclusion on sorts, conversion otherwise.
   # Primitive operation signatures: {argument type values, result type value}.
-  defp prim_signature(op) when op in [:add, :sub, :mul, :div],
+  defp prim_signature(op) when op in [:add, :sub, :mul, :div, :rem],
     do: {[{:vint_type}, {:vint_type}], {:vint_type}}
 
-  defp prim_signature(op) when op in [:eq, :lt, :le, :gt, :ge],
+  defp prim_signature(op) when op in [:eq, :ne, :lt, :le, :gt, :ge],
     do: {[{:vint_type}, {:vint_type}], {:vbool_type}}
 
   defp prim_signature(op) when op in [:and, :or],

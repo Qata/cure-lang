@@ -47,6 +47,9 @@ defmodule Cure.Types.Reduce do
   feel "smart" without dragging in a full SMT call for trivial cases.
   """
 
+  alias Cure.Core.{Eval, Quote}
+  alias Cure.Types.CoreBridge
+
   @type ast :: tuple() | atom() | number() | binary()
   @type bindings :: %{optional(String.t()) => ast()}
 
@@ -60,7 +63,15 @@ defmodule Cure.Types.Reduce do
   """
   @spec normalize(ast(), bindings()) :: ast()
   def normalize(ast, bindings \\ %{}) do
-    do_normalize(ast, bindings)
+    substituted = do_substitute(ast, bindings)
+
+    # Delegate the arithmetic/logic/projection fragment to the trusted kernel
+    # (normalization-by-evaluation); fall back to the local syntactic engine for
+    # anything the bridge can't express (floats, named types, n-ary tuples, …).
+    case CoreBridge.to_core(substituted) do
+      {:ok, core} -> core |> Eval.eval([]) |> Quote.reify() |> CoreBridge.from_core()
+      :error -> do_normalize(substituted, bindings)
+    end
   end
 
   @doc """
