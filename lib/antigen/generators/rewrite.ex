@@ -120,6 +120,33 @@ defmodule Antigen.Generators.Rewrite do
       "ill-typed: rewrite body Causal:Dec, not P Causal → :rewrite_premise")
   end
 
+  # -- 4.4 transport result-type correctness ----------------------------------
+  @spec transport_type(:transport_correct | :refl_coherence | :left_at_source) :: Challenge.t()
+  # identical body to 4.3 well-typed; the point is the DECLARED codomain P Dcoupled.
+  def transport_type(:transport_correct) do
+    dt = {:pi, @eq_cd, {:pi, @p_causal, @p_dcoupled}}
+    body = {:lam, @eq_cd, {:lam, @p_causal, {:rewrite, {:var, 1}, @motive, {:var, 0}}}}
+    challenge(:well_typed, [dec_family(), p_family()], :transport_type, dt, body,
+      "declared P Dcoupled; rewrite moves the type to M b")
+  end
+
+  # refl coherence: rewrite (refl Causal) (λx.P x) h : P Causal (b = a).
+  def transport_type(:refl_coherence) do
+    dt = {:pi, @p_causal, @p_causal}
+    body = {:lam, @p_causal, {:rewrite, {:refl, {:ctor, :Causal, []}}, @motive, {:var, 0}}}
+    challenge(:well_typed, [dec_family(), p_family()], :transport_type, dt, body,
+      "rewrite (refl Causal) M h : P Causal — vacuous transport")
+  end
+
+  # left-at-source: SAME transport body but declared codomain P Causal (= M a).
+  # The kernel must reject: the rewrite's type is P Dcoupled ≢ P Causal.
+  def transport_type(:left_at_source) do
+    dt = {:pi, @eq_cd, {:pi, @p_causal, @p_causal}}
+    body = {:lam, @eq_cd, {:lam, @p_causal, {:rewrite, {:var, 1}, @motive, {:var, 0}}}}
+    challenge(:ill_typed, [dec_family(), p_family()], :transport_type, dt, body,
+      "ill-typed: declared P Causal but rewrite yields P Dcoupled — accepting = no transport")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :rewrite_eq,

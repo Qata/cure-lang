@@ -34,4 +34,14 @@ defmodule Antigen.Generators.RewriteTest do
       assert {:error, _} = checks?(c), "variant #{v} should be rejected"
     end
   end
+
+  test "4.4 transport_type: transport-correct + refl-coherence accepted; left-at-source rejected" do
+    for v <- [:transport_correct, :refl_coherence] do
+      assert :ok == checks?(Rewrite.transport_type(v)), "variant #{v} should typecheck"
+    end
+
+    lat = Rewrite.transport_type(:left_at_source)
+    assert lat.label == :ill_typed
+    assert {:error, _} = checks?(lat)
+  end
 end
