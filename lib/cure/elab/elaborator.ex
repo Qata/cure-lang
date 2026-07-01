@@ -291,7 +291,7 @@ defmodule Cure.Elab.Elaborator do
             build_motive(dname, family.indices, param_terms, idx_terms, scrut_term, result_type_term)
 
           with {:ok, branches} <-
-                 elaborate_branches(arms, names, ctx, env, idx_terms, scrut_term, result_type_term) do
+                 elaborate_branches(arms, names, ctx, env, idx_terms, param_vals, scrut_term, result_type_term) do
             {:ok, {:case, scrut_term, motive, branches}}
           end
 
@@ -401,7 +401,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp generalize(leaf, _rb, _s, _depth), do: leaf
 
-  defp elaborate_branches(arms, names, ctx, env, scrut_indices, scrut_term, result_type_term) do
+  defp elaborate_branches(arms, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
     Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, arm_meta, body}, {:ok, acc} ->
       pattern = Keyword.fetch!(arm_meta, :pattern)
 
@@ -412,6 +412,7 @@ defmodule Cure.Elab.Elaborator do
              ctx,
              env,
              scrut_indices,
+             scrut_param_vals,
              scrut_term,
              result_type_term
            ) do
@@ -421,7 +422,7 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
-  defp elaborate_branch(pattern, body_expr, names, ctx, env, scrut_indices, scrut_term, result_type_term) do
+  defp elaborate_branch(pattern, body_expr, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
     {cname, pattern_vars} = constructor_pattern(pattern)
 
     case Inductive.get_ctor(env, cname) do
@@ -437,7 +438,7 @@ defmodule Cure.Elab.Elaborator do
 
         branch_ctx =
           ctx
-          |> extend_context(telescope)
+          |> extend_context(telescope, scrut_param_vals)
           |> specialize_branch_context(result_indices, scrut_indices, length(telescope))
 
         branch_expected =
@@ -505,10 +506,24 @@ defmodule Cure.Elab.Elaborator do
     {:ctor, cname, args}
   end
 
-  defp extend_context(ctx, telescope) do
-    Enum.reduce(telescope, ctx, fn {_name, type_term}, c ->
-      Context.extend(c, Eval.eval(type_term, Context.env(c)))
-    end)
+  # Extend the branch context with a constructor's argument telescope. The
+  # telescope's type terms are written in the constructor's own isolated frame
+  # `ctx_full = params ++ args`, so — mirroring the kernel's `extend_with_
+  # telescope` — evaluate each against a local value environment seeded with the
+  # scrutinee's actual parameter values (`param_vals`) beneath fresh neutrals for
+  # the args already bound. A parameter reference in an arg type (e.g. `rest : a`
+  # in `prepend`) then resolves to the scrutinee's parameter, not a stray outer
+  # binder. Values carry absolute de Bruijn *levels*, so param_vals stay valid as
+  # the context grows. For a parameter-free family this is the previous behavior.
+  defp extend_context(ctx, telescope, param_vals) do
+    {ctx_final, _local_vals} =
+      Enum.reduce(telescope, {ctx, Enum.reverse(param_vals)}, fn {_name, type_term}, {c, local_vals} ->
+        type_value = Eval.eval(type_term, local_vals)
+        fresh_val = {:vneutral, {:nvar, Context.length(c)}}
+        {Context.extend(c, type_value), [fresh_val | local_vals]}
+      end)
+
+    ctx_final
   end
 
   # Matching `xs : D i...` against a constructor whose result indices include a
@@ -625,12 +640,20 @@ defmodule Cure.Elab.Elaborator do
     if is_nil(ctor) or is_nil(family) do
       {:error, {:unknown_constructor, cname}}
     else
-      telescope = Enum.zip(ctor.args, ctor.quantities)
+      # The family's parameters are bound outside the constructor's arg telescope
+      # (the kernel checks it as `ctx_full = params ++ args`). A constructor arg
+      # type — e.g. `prepend`'s `x : a` — can reference a parameter, so model the
+      # parameters as leading erased slots: their metavariables are seeded into
+      # the substitution frame and solved by unifying the present arguments. For
+      # a parameter-free family this prefix is empty (unchanged behavior).
+      param_tele = Inductive.param_telescope(env, family) || []
+      param_slots = Enum.map(param_tele, fn entry -> {entry, :erased} end)
+      telescope = param_slots ++ Enum.zip(ctor.args, ctor.quantities)
       init = {:ok, MetaCtx.new(), [], present_args}
 
       telescope
       |> Enum.reduce_while(init, &solve_arg/2)
-      |> finish_ctor_app(cname, family, ctor)
+      |> finish_ctor_app(cname, family, ctor, length(param_tele))
     end
   end
 
@@ -652,19 +675,25 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp finish_ctor_app({:error, _} = err, _cname, _family, _ctor), do: err
+  defp finish_ctor_app({:error, _} = err, _cname, _family, _ctor, _pc), do: err
 
-  defp finish_ctor_app({:ok, _mctx, _chosen, [_ | _]}, _cname, _family, _ctor),
+  defp finish_ctor_app({:ok, _mctx, _chosen, [_ | _]}, _cname, _family, _ctor, _pc),
     do: {:error, :too_many_arguments}
 
-  defp finish_ctor_app({:ok, mctx, chosen, []}, cname, family, ctor) do
-    args = Enum.map(chosen, &Unify.zonk(&1, mctx))
+  defp finish_ctor_app({:ok, mctx, chosen, []}, cname, family, ctor, pc) do
+    all = Enum.map(chosen, &Unify.zonk(&1, mctx))
 
-    if Enum.any?(args, &has_meta?/1) do
+    if Enum.any?(all, &has_meta?/1) do
       {:error, {:unsolved_metavariables, cname}}
     else
-      params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, args))
-      indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, args))
+      # `chosen` is [solved parameters] ++ [constructor args]. The Core `:ctor`
+      # term carries only the constructor args (parameters are erased and
+      # recovered from the value's type); result params/indices reference
+      # `ctx_full = params ++ args`, so instantiate them with the full frame.
+      {param_vals, args} = Enum.split(all, pc)
+      seed = param_vals ++ args
+      params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed))
+      indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed))
       result_type = Eval.eval({:data, family, params, indices}, [])
       {:ok, {:ctor, cname, args}, result_type}
     end

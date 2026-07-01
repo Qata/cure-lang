@@ -9,7 +9,7 @@ defmodule Cure.Elab.TotalityWiringTest do
   """
 
   @gadt """
-  indexed type SF(as: SVDesc, bs: SVDesc, d: Dec) where
+  type SF indices (as: SVDesc, bs: SVDesc, d: Dec)
     prim : SF(as, bs, Causal)
     seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs, andd(d1, d2))
   """

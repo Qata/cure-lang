@@ -7,7 +7,7 @@ mod LengthIndexed
 
   type Nat = Z | S(Nat)
 
-  indexed type Length(n: Nat) where
+  type Length indices (n: Nat)
     zero_len : Length(Z)
     succ_len : Length(n) -> Length(S(n))
 

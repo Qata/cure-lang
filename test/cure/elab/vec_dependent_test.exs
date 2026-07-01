@@ -10,14 +10,16 @@ defmodule Cure.Elab.VecDependentTest do
 
   @vec_core """
   type Nat = Z | S(Nat)
-  indexed type Vector(a: Type, n: Nat) where
+  type Vector(a: Type) indices (n: Nat)
     empty : Vector(a, Z)
     prepend : a -> Vector(a, n) -> Vector(a, S(n))
   """
 
   test "the length-indexed Vector family elaborates with a Type parameter and Nat index" do
     assert {:ok, env} = Program.elaborate(@vec_core)
-    assert %{indices: [a: {:type, 0}, n: {:data, :Nat, [], []}]} = Inductive.get_family(env, :Vector)
+    # `a` is a uniform parameter (never matched); `n` is the sole index.
+    assert %{params: [a: {:type, 0}], indices: [n: {:data, :Nat, [], []}]} =
+             Inductive.get_family(env, :Vector)
   end
 
   test "a total recursive plus over Nat elaborates and certifies" do

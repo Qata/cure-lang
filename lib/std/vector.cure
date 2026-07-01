@@ -8,7 +8,7 @@ mod Std.Vector
 
   fn __group__() -> Atom = :collections
 
-  indexed type Vector(a: Type, n: Nat) where
+  type Vector(a: Type) indices (n: Nat)
     empty : Vector(a, Z)
     prepend : a -> Vector(a, n) -> Vector(a, S(n))
 

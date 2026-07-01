@@ -67,15 +67,15 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  # Indexed (GADT) family: `indexed type SF(as: SVDesc, …) where <ctor sigs>`.
-  # Each constructor signature is an `{:arrow_chain, [dom…, result]}`; the
-  # implicit index-variable telescope is inferred from the signature (§5.2).
+  # Indexed (GADT) family: `type NAME(params) indices (idx) <ctor sigs>`. Head
+  # `(params)` are uniform parameters (restated, never matched); the `indices`
+  # clause lists the refined indices. Each constructor signature is an
+  # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
+  # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
   def elaborate({:indexed_type, meta, ctor_sigs}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    # New syntax carries `params` + `indices` separately; the legacy `indexed
-    # type … where` form only carries `index_params` (all args are indices).
     params = Keyword.get(meta, :params, [])
-    index_params = Keyword.get(meta, :indices) || Keyword.get(meta, :index_params, [])
+    index_params = Keyword.get(meta, :indices, [])
 
     # Parameters are the outer binders: elaborate the param telescope first, then
     # the index telescope in the scope of the parameters (most-recent first).
@@ -83,7 +83,12 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, param_tele} <- elaborate_index_telescope(params, name, env, []),
          {:ok, index_tele} <- elaborate_index_telescope(index_params, name, env, param_scope),
-         {:ok, ctors} <- elaborate_gadt_ctors(ctor_sigs, name, param_tele, index_tele, env) do
+         # Pre-register the family signature (empty ctors, tentative level) so
+         # self-references in constructor signatures — e.g. `Vector(a, n)` as a
+         # `prepend` domain — resolve their parameter arity via param_count when
+         # converted to Core. The authoritative declaration happens below.
+         working_env = Inductive.declare(env, Inductive.family(name, param_tele, index_tele, 0), []),
+         {:ok, ctors} <- elaborate_gadt_ctors(ctor_sigs, name, param_tele, index_tele, working_env) do
       declare_indexed_at_min_level(env, name, param_tele, index_tele, ctors, 0)
     end
   end
@@ -382,7 +387,11 @@ defmodule Cure.Elab.Declarations do
           {:ok, {:eq, ty, a, b}}
 
         atom == fam or Inductive.family?(env, atom) ->
-          {:ok, {:data, atom, [], core_args}}
+          # Split the applied arguments into the family's parameters (prefix) and
+          # indices (suffix); the kernel checks each slot against its own
+          # telescope. param_count is 0 for parameter-free families (all indices).
+          {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+          {:ok, {:data, atom, params, indices}}
 
         Inductive.get_ctor(env, atom) ->
           {:ok, {:ctor, atom, core_args}}

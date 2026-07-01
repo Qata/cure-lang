@@ -1232,12 +1232,6 @@ defmodule Cure.Compiler.Parser do
       :type ->
         parse_type_def(state)
 
-      # Legacy `indexed type … where` form. Retired at the surface (migrated to
-      # `type NAME indices (…)`), but kept parsing until the stdlib/fixtures are
-      # migrated (Task 8) so the stdlib keeps compiling in the interim.
-      :indexed ->
-        parse_indexed_type(state)
-
       :proto ->
         parse_proto(state)
 
@@ -2453,61 +2447,6 @@ defmodule Cure.Compiler.Parser do
       end
 
     {ast, state}
-  end
-
-  # Legacy `indexed type NAME(i: T, ...) where …` form (retired at Task 8). Emits
-  # the old single `index_params` meta key, elaborated by the pre-split path.
-  defp parse_indexed_type(state) do
-    token = peek(state)
-    # consume `indexed` then the `type` keyword (both are :keyword tokens)
-    state = state |> advance() |> advance()
-
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-
-    {index_params, state} =
-      case peek(state) do
-        %Token{type: :lparen} ->
-          state = advance(state)
-          {tp, state} = parse_typed_params(state)
-          state = expect(state, :rparen)
-          {tp, state}
-
-        _ ->
-          {[], state}
-      end
-
-    state = skip_newlines(state)
-
-    state =
-      case peek(state) do
-        %Token{type: :keyword, value: :where} ->
-          advance(state)
-
-        other ->
-          add_error(state, {:expected, :where, :got, other.type, other.line, other.col})
-      end
-
-    state = skip_newlines(state)
-
-    {opened_block, state} =
-      case peek(state) do
-        %Token{type: :indent} -> {true, advance(state)}
-        _ -> {false, state}
-      end
-
-    {ctors, state} = parse_gadt_ctors(state, [])
-
-    state =
-      if opened_block do
-        state |> skip_newlines() |> expect_dedent()
-      else
-        state
-      end
-
-    meta = [name: name, index_params: index_params, line: token.line, col: token.col]
-    {{:indexed_type, meta, ctors}, state}
   end
 
   defp parse_gadt_ctors(state, acc) do

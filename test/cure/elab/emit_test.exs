@@ -13,7 +13,7 @@ defmodule Cure.Elab.EmitTest do
   type Sig = CSig | ESig
   type SVDesc = SVNil | SVCons(Sig, SVDesc)
   fn andd(x: Dec, y: Dec) -> Dec = x
-  indexed type SF(as: SVDesc, bs: SVDesc, d: Dec) where
+  type SF indices (as: SVDesc, bs: SVDesc, d: Dec)
     prim : SF(as, bs, Causal)
     seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs, andd(d1, d2))
   fn compose({as: SVDesc}, {bs: SVDesc}, {cs: SVDesc}, {d1: Dec}, {d2: Dec}, l: SF(as, bs, d1), r: SF(bs, cs, d2)) -> SF(as, cs, andd(d1, d2)) = seq(l, r)

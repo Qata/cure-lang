@@ -9,7 +9,7 @@ defmodule Cure.Compiler.DependentVecCodegenTest do
   @src """
   mod VecCg
     type Nat = Z | S(Nat)
-    indexed type Vector(a: Type, n: Nat) where
+    type Vector(a: Type) indices (n: Nat)
       empty : Vector(a, Z)
       prepend : a -> Vector(a, n) -> Vector(a, S(n))
     fn plus(m: Nat, n: Nat) -> Nat = match m

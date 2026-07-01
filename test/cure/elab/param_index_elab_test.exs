@@ -84,4 +84,24 @@ defmodule Cure.Elab.ParamIndexElabTest do
     assert length(params) == 1, "motive dropped the parameter: #{inspect(scrut_binder_type)}"
     assert length(indices) == 2
   end
+
+  # A constructor argument whose declared type IS the family parameter (the
+  # `prepend`'s `x : a` / `append`'s `rest : Vector(a, …)` shape) must, inside a
+  # match branch, be typed at the *scrutinee's* actual parameter. The branch
+  # context has no parameter binder of its own, so the elaborator has to seed the
+  # constructor telescope with the scrutinee's parameter value; without it the
+  # parameter reference resolves to a stray outer binder and the branch body
+  # (which reuses the argument at the parameter type) fails to elaborate.
+  @src3 """
+  mod M
+    type Dec = Dcoupled | Causal
+    type Box(a: Type) indices (t: Dec)
+      boxed : a -> Box(a, Causal)
+    fn unbox({a: Type}, b: Box(a, Causal)) -> a = match b
+      boxed(x) -> x
+  """
+
+  test "a branch's pattern variable typed at the family parameter elaborates" do
+    assert {:ok, _env} = Program.elaborate(@src3)
+  end
 end

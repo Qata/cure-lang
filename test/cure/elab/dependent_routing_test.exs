@@ -15,7 +15,7 @@ defmodule Cure.Elab.DependentRoutingTest do
       parse!("""
       mod RouteIndexed
         type Nat = Z | S(Nat)
-        indexed type Vector(a: Type, n: Nat) where
+        type Vector(a: Type) indices (n: Nat)
           empty : Vector(a, Z)
       end
       """)

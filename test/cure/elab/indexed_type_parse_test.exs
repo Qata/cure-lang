@@ -10,14 +10,16 @@ defmodule Cure.Elab.IndexedTypeParseTest do
 
   test "parses an indexed type declaration with constructor signatures" do
     src = """
-    indexed type SF(as: SVDesc, bs: SVDesc, d: Dec) where
+    type SF indices (as: SVDesc, bs: SVDesc, d: Dec)
       prim : SF(as, bs, Causal)
       seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs, and(d1, d2))
     """
 
     assert {:indexed_type, meta, ctors} = parse(src)
     assert Keyword.get(meta, :name) == "SF"
-    assert length(Keyword.get(meta, :index_params)) == 3
+    # SF is parameter-free: all three appear in the `indices` clause.
+    assert Keyword.get(meta, :params) == []
+    assert length(Keyword.get(meta, :indices)) == 3
     assert [{:gadt_ctor, m1, t1}, {:gadt_ctor, m2, t2}] = ctors
     assert Keyword.get(m1, :name) == "prim"
     assert Keyword.get(m2, :name) == "seq"
