@@ -1,27 +1,36 @@
 defmodule Antigen.Runner do
   @moduledoc "Explore / generate / replay orchestration (spec §8)."
-  alias Antigen.{Backend, Corpus, Report, Challenge}
+  alias Antigen.{Backend, Corpus, Report, Challenge, Coverage}
+  alias Cure.Core.Term
 
   def explore(opts) do
     count = Keyword.get(opts, :count, 200)
     challenges = draw(opts[:gen], count)
 
-    Enum.reduce(challenges, %{infections: 0, seeds_banked: 0}, fn c, acc ->
-      c = %{c | seed: seed_of(c)}
-      acc = bank_seed(c, opts, acc)
+    final =
+      Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
+        c = %{c | seed: seed_of(c)}
 
-      case apply(opts[:assay] || assay_module(c.assay), :run, [c]) do
-        :ok ->
-          acc
+        if well_formed?(c) do
+          acc = %{acc | coverage: MapSet.union(acc.coverage, coverage_flags(c))}
+          acc = bank_seed(c, opts, acc)
 
-        {:violation, _detail} = v ->
-          {:ok, path} = Report.write_infection(opts[:report_dir], c, v, health(acc))
-          IO.puts(Report.breadcrumb(c, path))
-          Corpus.append(opts[:corpus_path], c, Corpus.dedup_key(c, :antibody))
-          %{acc | infections: acc.infections + 1}
-      end
-    end)
-    |> Map.put(:health, %{})
+          case apply(opts[:assay] || assay_module(c.assay), :run, [c]) do
+            :ok ->
+              acc
+
+            {:violation, _detail} = v ->
+              {:ok, path} = Report.write_infection(opts[:report_dir], c, v, summarize(acc, count))
+              IO.puts(Report.breadcrumb(c, path))
+              Corpus.append(opts[:corpus_path], c, Corpus.dedup_key(c, :antibody))
+              %{acc | infections: acc.infections + 1}
+          end
+        else
+          %{acc | discards: acc.discards + 1}
+        end
+      end)
+
+    %{infections: final.infections, seeds_banked: final.seeds_banked, health: summarize(final, count)}
   end
 
   def generate(opts) do
@@ -69,5 +78,21 @@ defmodule Antigen.Runner do
 
   defp draw(gen, count), do: Backend.StreamData.interp(gen) |> Enum.take(count)
   defp seed_of(c), do: c.seed || :erlang.phash2({c.kind, c.payload})
-  defp health(_acc), do: %{}
+
+  # Health gate (spec §9): discard rate (malformed candidates) + coverage buckets
+  # (the binder-shape flags actually hit). Reported, never hard-failed.
+  defp summarize(acc, count), do: %{discard_rate: acc.discards / max(count, 1), coverage: acc.coverage}
+
+  defp coverage_flags(c) do
+    {_ctors, _bucket, flags, _label} = Coverage.key(c)
+    flags
+  end
+
+  # A generator-quality failure: a candidate whose Core terms aren't well-formed.
+  # Distinct from a coverage-duplicate rejection (which is expected, not a discard).
+  defp well_formed?(c) do
+    c |> Coverage.terms_of() |> Enum.all?(&Term.term?/1)
+  rescue
+    _ -> false
+  end
 end

@@ -15,16 +15,37 @@ defmodule Antigen.Challenge do
           note: String.t() | nil
         }
 
+  # Force-intern the closed set of atoms that `decode_record`/`from_pieces/7`
+  # reconstruct via `String.to_existing_atom/1` (Task 5 safety note): the challenge
+  # `kind`s and `label`s (otherwise only present in `@type` specs, which don't
+  # reliably intern at runtime) plus every generator-produced name. These literals
+  # enter the atom table when this module loads — and it's always loaded before any
+  # decode — so replay succeeds even in a process that never loaded a generator
+  # (which would otherwise crash decoding a perfectly valid committed record). Keep
+  # in sync with the generator modules' fixed, literal name sets.
+  @known_atoms [
+    # kinds
+    :stub, :def_group, :family, :forcing_pair,
+    # labels
+    :terminating, :diverging, :positive, :negative, :none,
+    # generator-produced names
+    :f, :g, :h, :Dec, :Nat, :Z, :S, :Causal,
+    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :present, :erased
+  ]
+  @doc false
+  def __known_atoms__, do: @known_atoms
+
   @spec new(keyword()) :: t()
   def new(fields), do: struct!(__MODULE__, Keyword.merge([label: :none, seed: nil, note: nil], fields))
 
   @spec stub(Cure.Core.Term.t()) :: t()
   def stub(term), do: new(kind: :stub, assay: "stub", label: :none, payload: %{term: term})
 
+  # --- to_pieces: challenge → {non-Term scaffold, [{piece_id, Term}]} ---------
+
   @doc """
-  Split a challenge into its non-`Term` scaffold metadata and its list of
-  named `Term` pieces — the bridge the corpus serializes over (Task 5).
-  Phase 2 adds `:def_group` / `:family` / `:forcing_pair` clauses (Tasks 9–11).
+  Split a challenge into its non-`Term` scaffold metadata and its list of named
+  `Term` pieces — the bridge the corpus serializes over (Task 5).
   """
   @spec to_pieces(t()) :: {map(), [{String.t(), Cure.Core.Term.t()}]}
   def to_pieces(%__MODULE__{kind: :stub, payload: %{term: t}}), do: {%{}, [{"term", t}]}
@@ -35,21 +56,6 @@ defmodule Antigen.Challenge do
   def to_pieces(%__MODULE__{kind: :forcing_pair, payload: %{defs: defs, focus: focus, t: t, tprime: tp}}) do
     {scaffold, pieces} = def_group_pieces(defs, focus)
     {scaffold, pieces ++ [{"t", t}, {"tprime", tp}]}
-  end
-
-  defp def_group_pieces(defs, focus) do
-    scaffold = %{
-      "names" => Enum.map(defs, &Atom.to_string(&1.name)),
-      "focus" => Enum.map(focus, &Atom.to_string/1)
-    }
-
-    pieces =
-      Enum.flat_map(defs, fn d ->
-        n = Atom.to_string(d.name)
-        [{"type:" <> n, d.type}, {"body:" <> n, d.body}]
-      end)
-
-    {scaffold, pieces}
   end
 
   def to_pieces(%__MODULE__{kind: :family, payload: %{family: fam, ctors: ctors}}) do
@@ -86,36 +92,23 @@ defmodule Antigen.Challenge do
     {scaffold, param_pieces ++ index_pieces ++ ctor_pieces}
   end
 
+  # --- from_pieces: decoded record fields → challenge -------------------------
+
   @doc "Rebuild a challenge from a decoded record's fields, scaffold, and term pieces."
   @spec from_pieces(atom(), String.t(), atom(), integer() | nil, String.t() | nil, map(), [{String.t(), Cure.Core.Term.t()}]) :: t()
   def from_pieces(:stub, assay, label, seed, note, _scaffold, [{"term", t}]),
     do: new(kind: :stub, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
 
   def from_pieces(:def_group, assay, label, seed, note, scaffold, pieces) do
-    pmap = Map.new(pieces)
-    {defs, focus} = rebuild_defs(scaffold, pmap)
+    {defs, focus} = rebuild_defs(scaffold, Map.new(pieces))
     new(kind: :def_group, assay: assay, label: label, payload: %{defs: defs, focus: focus}, seed: seed, note: note)
   end
 
   def from_pieces(:forcing_pair, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)
     {defs, focus} = rebuild_defs(scaffold, pmap)
-
     payload = %{defs: defs, focus: focus, t: Map.fetch!(pmap, "t"), tprime: Map.fetch!(pmap, "tprime")}
     new(kind: :forcing_pair, assay: assay, label: label, payload: payload, seed: seed, note: note)
-  end
-
-  defp rebuild_defs(scaffold, pmap) do
-    defs =
-      Enum.map(scaffold["names"], fn n ->
-        %{
-          name: String.to_existing_atom(n),
-          type: Map.fetch!(pmap, "type:" <> n),
-          body: Map.fetch!(pmap, "body:" <> n)
-        }
-      end)
-
-    {defs, Enum.map(scaffold["focus"], &String.to_existing_atom/1)}
   end
 
   def from_pieces(:family, assay, label, seed, note, scaffold, pieces) do
@@ -139,6 +132,36 @@ defmodule Antigen.Challenge do
       end)
 
     new(kind: :family, assay: assay, label: label, payload: %{family: fam, ctors: ctors}, seed: seed, note: note)
+  end
+
+  # --- private helpers --------------------------------------------------------
+
+  defp def_group_pieces(defs, focus) do
+    scaffold = %{
+      "names" => Enum.map(defs, &Atom.to_string(&1.name)),
+      "focus" => Enum.map(focus, &Atom.to_string/1)
+    }
+
+    pieces =
+      Enum.flat_map(defs, fn d ->
+        n = Atom.to_string(d.name)
+        [{"type:" <> n, d.type}, {"body:" <> n, d.body}]
+      end)
+
+    {scaffold, pieces}
+  end
+
+  defp rebuild_defs(scaffold, pmap) do
+    defs =
+      Enum.map(scaffold["names"], fn n ->
+        %{
+          name: String.to_existing_atom(n),
+          type: Map.fetch!(pmap, "type:" <> n),
+          body: Map.fetch!(pmap, "body:" <> n)
+        }
+      end)
+
+    {defs, Enum.map(scaffold["focus"], &String.to_existing_atom/1)}
   end
 
   defp rebuild_telescope(names, prefix, pmap) do
