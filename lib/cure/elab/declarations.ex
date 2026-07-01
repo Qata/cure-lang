@@ -82,6 +82,15 @@ defmodule Cure.Elab.Declarations do
     Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
   end
 
+  # A pair `%[a, b]` is a dependent-pair introduction; the kernel checks it
+  # against the declared Σ return type.
+  defp elaborate_body({:tuple, _meta, [a_ast, b_ast]}, _return_core, scope, ctx, env) do
+    with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
+         {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
+      {:ok, {:pair, a_term, b_term}}
+    end
+  end
+
   defp elaborate_body(expr, _return_core, scope, ctx, env) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}
@@ -309,6 +318,24 @@ defmodule Cure.Elab.Declarations do
 
         true ->
           {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+      end
+    end
+  end
+
+  defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env) do
+    with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
+         {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
+      {:ok, {:sigma, dom, body}}
+    end
+  end
+
+  # A projection `p.1` / `p.2` used in a type position (e.g. `SF(as, bs, p.1)`).
+  defp idx_to_core({:attribute_access, meta, [inner_ast]}, scope, fam, env) do
+    with {:ok, inner} <- idx_to_core(inner_ast, scope, fam, env) do
+      case Keyword.fetch!(meta, :attribute) do
+        "1" -> {:ok, {:fst, inner}}
+        "2" -> {:ok, {:snd, inner}}
+        other -> {:error, {:bad_projection, other}}
       end
     end
   end

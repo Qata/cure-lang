@@ -3579,15 +3579,18 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         base_name = to_string(token.value)
 
-        case peek(state) do
-          %Token{type: :lparen} ->
+        cond do
+          base_name == "Sigma" and match?(%Token{type: :lparen}, peek(state)) ->
+            parse_sigma_type(state)
+
+          match?(%Token{type: :lparen}, peek(state)) ->
             state = advance(state)
             {params, state} = parse_type_param_list(state)
             state = expect(state, :rparen)
             ast = {:function_call, [name: base_name], params}
             maybe_parse_function_type(state, ast)
 
-          %Token{type: :arrow} ->
+          match?(%Token{type: :arrow}, peek(state)) ->
             # A -> B  (unary function type)
             state = advance(state)
             {ret, state} = parse_type_expr(state)
@@ -3595,11 +3598,43 @@ defmodule Cure.Compiler.Parser do
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
 
-          _ ->
+          true ->
             base = {:variable, [scope: :local], base_name}
-            {base, state}
+            maybe_parse_type_projection(base, state)
         end
     end
+  end
+
+  # A type-position projection `p.1` / `p.2` (used in dependent index positions,
+  # e.g. `SF(as, bs, p.1)`).
+  defp maybe_parse_type_projection(inner, state) do
+    case peek(state) do
+      %Token{type: :dot} ->
+        state = advance(state)
+        attr_token = peek(state)
+        attr = to_string(attr_token.value)
+        state = advance(state)
+        node = {:attribute_access, [attribute: attr], [inner]}
+        maybe_parse_type_projection(node, state)
+
+      _ ->
+        {inner, state}
+    end
+  end
+
+  # Sigma(x: DomType, BodyType) — a dependent-pair type (design spec §4.7). The
+  # body type may mention the binder `x`.
+  defp parse_sigma_type(state) do
+    state = advance(state)
+    name_token = peek(state)
+    binder = to_string(name_token.value)
+    state = advance(state)
+    state = expect(state, :colon)
+    {dom_type, state} = parse_type_expr(state)
+    state = expect(state, :comma)
+    {body_type, state} = parse_type_expr(state)
+    state = expect(state, :rparen)
+    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
   end
 
   defp maybe_parse_function_type(state, left) do

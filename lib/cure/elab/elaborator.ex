@@ -83,6 +83,18 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  def elaborate_expr_typed({:attribute_access, meta, [inner]}, names, ctx, env) do
+    with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
+      term =
+        case Keyword.fetch!(meta, :attribute) do
+          "1" -> {:fst, inner_term}
+          "2" -> {:snd, inner_term}
+        end
+
+      with {:ok, type} <- Kernel.infer(ctx, term), do: {:ok, term, type}
+    end
+  end
+
   def elaborate_expr_typed(other, names, ctx, env) do
     with {:ok, term} <- elaborate_expr(other, names, env),
          {:ok, type} <- Kernel.infer(ctx, term) do
