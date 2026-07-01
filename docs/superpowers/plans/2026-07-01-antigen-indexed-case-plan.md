@@ -36,7 +36,7 @@
 - `check_coverage(sig, dname, branches)` — only `MapSet.subset?(declared, covered)` (declared = family's ctor names; covered = branch ctor names). Does NOT reject `covered` having *extra* names. Returns `{:error, :coverage}` on failure.
 - `check_case_branches(ctx, sig, motive_value, branches, scrut_indices)` — for each `{cname, arity, body}`: looks up `Inductive.get_ctor(sig, cname)` in the **global** ctor namespace (not scoped to `dname`), checks arity, then `check`s `body` against the motive applied to that ctor's own computed `result_indices` ++ ctor value. Errors: `{:unknown_ctor, cname}`, `:branch_arity`, `:branch_type`.
 - `branch_index_subst(ctx, result_indices, scrut_indices, arity)` — records a refinement substitution ONLY when a ctor result index is a bare `{:var, i}`; the `{_other, _}` clause silently drops compound/ground result indices.
-- `check_motive_wf(ctx, motive_value, family)` — applies the motive to fresh indices + scrutinee and requires the body be a sort via `infer_type_value_sort/2` (catch-all → `{:error, :bad_motive}`). Under-applying the motive (too few `:lam` layers) raises `FunctionClauseError` in `Eval.apply/2` — AVOID that construction (see Task 6).
+- `check_motive_wf(ctx, motive_value, family)` — applies the motive to fresh indices + scrutinee and requires the body be a sort via `infer_type_value_sort/2` (catch-all → `{:error, :bad_motive}`). Under-applying the motive (too few `:lam` layers) raises `FunctionClauseError` in `Eval.apply/2` — AVOID that construction (see Task 5).
 
 **Existing `:family` challenge serialization** (`lib/antigen/challenge.ex`) is the template for the new kind — pieces are `{scaffold_map, [{piece_id_string, Term}]}`; `to_pieces/1` and `from_pieces/7` clauses per kind; `Antigen.Coverage.terms_of/1` returns every embedded Term; `Antigen.Corpus.encode_record/2`+`decode_record/1` bridge pieces ↔ base64 C2 (`Cure.Core.Serialize.encode/decode`).
 
@@ -58,7 +58,7 @@
 - **Modify** `test/antigen/challenge_test.exs` + `test/antigen/coverage_test.exs` — `:indexed_case` round-trip + `terms_of` coverage.
 - **Create (conditionally, at fix time)** `test/cure/core/case_soundness_test.exs` — red→green kernel tests for any hole found.
 - **Modify (conditionally, at fix time)** `lib/cure/core/kernel.ex` — the fix for any confirmed hole.
-- **Modify (Task 7)** `test/antigen/seeds.sexp` / `test/antigen/corpus.sexp` — seeded well-typed challenges / banked antibodies.
+- **Modify (Task 6)** `test/antigen/seeds.sexp` / `test/antigen/corpus.sexp` — seeded well-typed challenges / banked antibodies.
 
 The payload shape for `:indexed_case` (used across all tasks):
 
@@ -134,7 +134,7 @@ Append to `@known_atoms` (keep existing entries):
 ```elixir
   # indexed-case vertical: kind, labels, family/ctor/def names
   :indexed_case, :well_typed, :ill_typed,
-  :Dec, :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
+  :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
   :probe, :branch_family, :coverage_gap, :refine, :motive_wf
 ```
 
@@ -510,24 +510,35 @@ Run: `mix test test/cure/core/case_soundness_test.exs -v` → expected FAIL (`ch
 # at the infer/2 {:case,...} call site, pass dname:
 :ok <- check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices)
 
-# updated head + a family-scoping guard as the first clause of the case:
+# updated head + a family-scoping guard, binding the ctor lookup ONCE (not
+# re-fetched inside the existing body) so the nil/foreign/arity checks and the
+# per-branch checking body all share the same `ctor` value:
 defp check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices) do
   Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
-    cond do
-      Inductive.get_ctor(sig, cname) == nil ->
+    case Inductive.get_ctor(sig, cname) do
+      nil ->
         {:halt, {:error, {:unknown_ctor, cname}}}
 
-      Inductive.ctor_family(sig, cname) != dname ->
-        {:halt, {:error, {:foreign_ctor, cname}}}
+      ctor ->
+        cond do
+          Inductive.ctor_family(sig, cname) != dname ->
+            {:halt, {:error, {:foreign_ctor, cname}}}
 
-      true ->
-        # ... existing per-branch checking body, unchanged ...
+          length(ctor.args) != arity ->
+            {:halt, {:error, :branch_arity}}
+
+          true ->
+            %{args: tele, result_indices: result_indices} = ctor
+            # ... existing per-branch checking body, unchanged (extend_with_telescope,
+            # branch_index_subst, specialize_branch_context/value, then
+            # `case check(ctx_branch, body, expected) do :ok -> {:cont, :ok}; {:error, _} -> {:halt, {:error, :branch_type}} end`) ...
+        end
     end
   end)
 end
 ```
 
-Preserve the existing arity/telescope logic inside the `true ->` branch exactly as it was. Run the kernel test → PASS. Then bank the antibody: append the ill-typed challenge to `test/antigen/corpus.sexp` via a one-off `mix run`-free ExUnit helper OR (simpler) a temporary IEx-free script — but the sanctioned path is Task 7's seeding step; for now just note the antibody is due and let Task 7 write it. Re-run the assay test (Step 5) → both PASS.
+This binds `Inductive.get_ctor(sig, cname)` exactly once per branch (the original code's `%{args: tele, result_indices: result_indices} when length(tele) == arity -> ...` / `%{} -> {:halt, {:error, :branch_arity}}` two-clause match is now the explicit `length(ctor.args) != arity` guard inside the `cond`, using the already-bound `ctor`, and the family-scoping guard runs before it). Run the kernel test → PASS. Then bank the antibody: append the ill-typed challenge to `test/antigen/corpus.sexp` via a one-off `mix run`-free ExUnit helper OR (simpler) a temporary IEx-free script — but the sanctioned path is Task 6's seeding step; for now just note the antibody is due and let Task 6 write it. Re-run the assay test (Step 5) → both PASS.
 
 - [ ] **Step 9: Full suite once**
 
@@ -646,16 +657,24 @@ git commit -m "feat(antigen): coverage-exactness obligation (4.2)"
 
 **Background (from the Box/mk fixture in `case_typing_test.exs`):** `Box(d : Dec)` with `mk : (x : Dec) -> Box(x)` (result index `[{:var, 0}]`). A `case` on `mk Causal : Box(Causal)` with motive `λ(d:Dec). λ(bx : Box d). <T>` refines `d := Causal` in the `mk` branch. The `mk` branch body is checked against the motive applied to the ctor's own result index (`x`, the field) — this is the refinement path. `branch_index_subst` records the substitution because `mk`'s result index is `{:var, 0}` (a bare var). To exercise the *compound-index* drop, use a family whose ctor result index is a **non-variable computed term**.
 
-**Construction.** Family `Ix(n : Dec)` (index is a `Dec`); ctor `wrap : (p : Dec) -> Ix(Causal)` — result index is the *ground* term `{:ctor, :Causal, []}`, NOT a bare var, so `branch_index_subst` drops it. Scrutinee `wrap Dcoupled : Ix(Causal)`. Motive `λ(n:Dec). λ(ix : Ix n). Dec`. In the `wrap` branch the kernel checks the body against the motive at the ctor's computed index `Causal` and value — the index refinement `n := Causal` is what the drop discards.
+**Construction.** Family `Ix(n : Dec)` (index is a `Dec`); ctor `wrap : (p : Dec) -> Ix(Causal)` — result index is the *ground* term `{:ctor, :Causal, []}`, NOT a bare var, so `branch_index_subst` drops it.
 
-- `:well_typed` — a `wrap` branch whose body is a plain `Dec` term (`{:ctor, :Dcoupled, []}`), well-typed regardless of whether `n` is refined; the whole def type is `Dec` (motive at `Causal`). Must be accepted.
-- `:ill_typed` — engineer the motive so the branch's *expected* type depends on the dropped equation, and give a body that only typechecks if the equation is (unsoundly) assumed to hold in a direction it doesn't. Concretely: motive `λ(n:Dec). λ(ix : Ix n). Eq Dec n Causal` (the propositional equality that the index equals `Causal`), body `{:refl, {:var, ...}}`. If refinement is applied honestly, `n` is the ctor's computed index `Causal`, so `Eq Dec Causal Causal` holds and `refl` checks — that is actually *well-typed*. **This makes the naive ill-typed construction actually sound.** Therefore the genuinely-ill-typed direction is the reverse: a scrutinee whose index is a *free variable* `n` (not `Causal`), with a body `{:refl, ...}` proving `Eq Dec n Causal` — which only typechecks if the kernel wrongly refines `n := Causal` from a dropped compound equation.
+**First attempt, traced and rejected (recorded so it is not re-tried):** a def whose declared return type is `Eq Dec n Causal`, scrutinee `ix : Ix n` (variable index `n`), motive `λn.λix. Eq Dec n Causal`, body `refl` in the `wrap` branch. Tracing `check_case_branches`: the per-branch `expected` type is computed as `apply_motive(motive_value, s_values ++ [ctor_value])`, where `s_values` are evaluated **directly from the ctor's own declared result-index term** (`{:ctor, :Causal, []}` → the value `Causal`) — via ordinary function application, *not* via `branch_index_subst`. So `expected` already reduces to `Eq Dec Causal Causal` regardless of whether `branch_index_subst` records anything, and `refl` discharges it either way. **This construction never touches the drop** — it would be accepted by both the current kernel and a hypothetically-fixed one, giving zero signal. The bug only manifests in `specialize_branch_context`/`specialize_branch_value`, which refine *other, pre-existing context bindings* whose types mention the scrutinee's original (unrefined) index variable — not the motive's own direct application to the ctor's computed index. A probe must include such an external binding.
 
-  Precise `:ill_typed` term: def `bad : Π(n : Dec). Ix n -> Eq Dec n Causal`, body `λ(n:Dec). λ(ix : Ix n). case ix of { wrap p -> refl }`. Here the scrutinee `ix : Ix n` has a *variable* index `n`; the `wrap` ctor's result index is the ground `Causal`. Sound behavior: the branch cannot conclude `n = Causal` (the compound/ground equation `n = Causal` is exactly what a sound checker must record and use to refine the goal `Eq Dec n Causal` to `Eq Dec Causal Causal`; but a checker that *drops* it leaves the goal as `Eq Dec n Causal`, which `refl` canNOT prove since `n` is a neutral variable ≠ `Causal`). So: **a sound-but-refinement-complete checker ACCEPTS this** (it can refine and discharge), while the current drop-the-equation checker **REJECTS** it (leaves an unprovable goal). That inverts the label.
+**Corrected construction.** Add a Π-bound hypothesis `h : Ix n` *before* the scrutinee, and require the `wrap` branch to produce a value of type `Ix Causal` — the SAME family, at the ground index the ctor forces, but re-using `h`, which was declared (outside the case, before any refinement) at the unrefined index `Ix n`. Concretely:
 
-  **Resolution (important — decide the label by what a *sound* kernel does):** Since dropping the equation causes a *rejection* here (not an acceptance), this is an **incompleteness** manifestation, not a soundness infection. Label the variable-index/`refl` term `:well_typed` (a sound, refinement-complete kernel should accept it) and expect that the current kernel **wrongly rejects** it → the assay returns `{:wrongly_rejected, _}`, which is an **incompleteness finding, reported to the operator, NOT silently fixed** (spec §5 step 4 / success criterion 5).
+```
+def_type = Π(n : Dec). Π(h : Ix n). Π(ix : Ix n). Ix n
+motive   = λ(n' : Dec). λ(ix' : Ix n'). Ix n'        -- "the same family, at whichever index came in"
+body     = λ(n : Dec). λ(h : Ix n). λ(ix : Ix n). case ix of { wrap p -> h }
+```
 
-  To ALSO have a genuine `:ill_typed` (soundness) probe in this obligation, add a second ill-typed term that does NOT depend on the refinement gap: a `wrap` branch body of the wrong type outright (e.g. body `{:type, 0}` where a `Dec` is expected) — must be rejected with `:branch_type` regardless. This keeps the obligation bidirectional with a real soundness assertion.
+Tracing this: the **overall** case-expression's inferred type is `apply_motive(motive_value, scrut_indices ++ [scrut_value])` = `Ix(n)` (using the scrutinee's own, unrefined index value `n` — this matches the declared codomain `Ix n` trivially, independent of the bug). But the **per-branch** `expected` type (inside `check_case_branches`, for the `wrap` branch) is `apply_motive(motive_value, s_values ++ [ctor_value])` = `Ix(Causal)` (using the ctor's own computed index, `Causal`). Meanwhile `h`'s type, as recorded in `ctx_branch.types`, is whatever it was declared as **before** the case — `Ix(n)` — because `branch_index_subst` only fires for a bare-`{:var, i}` result index, and `wrap`'s result index is the ground `{:ctor, :Causal, []}`, so it is dropped and `specialize_branch_context` is a no-op. So `check(ctx_branch, h, Ix(Causal))` falls to the generic `check` clause, infers `h`'s (unrefined) type `Ix(n)`, and finds it **not convertible** to `Ix(Causal)` (`n` is a free/neutral variable, not the concrete value `Causal`) — `{:error, :branch_type}`.
+
+A **sound, refinement-complete** kernel — one that also used the `wrap` ctor's *ground* result index to refine `h`'s type from `Ix(n)` to `Ix(Causal)` inside the branch (the natural generalization of `branch_index_subst` to non-bare-var, i.e. ground, result indices) — would accept this: `h`, once known (inside this branch) to have index `Causal`, literally has the required type, and reusing it as the branch body is valid. So: **a sound kernel accepts; the current, dropping kernel rejects.** That is an **incompleteness** manifestation (rejection, not acceptance) — matching the same "report, don't silently patch" resolution as before, but now via a construction that actually depends on the drop.
+
+- `:well_typed` — the `Π(h : Ix n)...case ix of {wrap p -> h}` term above. A sound, refinement-complete kernel accepts it; the current kernel is expected to wrongly reject it (incompleteness, reported not fixed per spec §5 step 4 / success criterion 5).
+- `:ill_typed` — an independent soundness probe, unrelated to the refinement gap: a `wrap` branch body of the wrong type outright (e.g. body `{:type, 0}` where a `Dec` is expected) — must be rejected with `:branch_type` regardless. This keeps the obligation bidirectional with a real soundness assertion.
 
 - [ ] **Step 1: Add the builders** in `lib/antigen/generators/indexed.ex`:
 
@@ -670,40 +689,53 @@ refinement equation.
 """
 @spec refinement(:well_typed | :ill_typed) :: Challenge.t()
 def refinement(:well_typed) do
-  # bad-ly-refined but genuinely legal: scrutinee has variable index n; proving
-  # Eq Dec n Causal in the wrap branch NEEDS the dropped n:=Causal refinement.
-  # A sound, refinement-complete kernel accepts this. (Current kernel may reject
-  # → incompleteness, reported not fixed.)
-  ix_n = {:data, :Ix, [], [{:var, 0}]}
-  def_type = {:pi, @dec, {:pi, ix_n, {:eq, @dec, {:var, 1}, {:ctor, :Causal, []}}}}
-  motive = {:lam, @dec, {:lam, {:data, :Ix, [], [{:var, 0}]}, {:eq, @dec, {:var, 1}, {:ctor, :Causal, []}}}}
-  body = {:lam, @dec, {:lam, ix_n, {:case, {:var, 0}, motive, [{:wrap, 1, {:refl, {:ctor, :Causal, []}}}]}}}
+  # Refinement-complete but genuinely legal: `h`, bound before the case at the
+  # unrefined type `Ix n`, is reused in the `wrap` branch where the required
+  # type is `Ix Causal`. Only the dropped ground-index equation (n := Causal)
+  # bridges them. A sound, refinement-complete kernel accepts this by refining
+  # h's context type; the current kernel drops the equation and is expected to
+  # reject (incompleteness, reported not fixed).
+  ix_of_0 = {:data, :Ix, [], [{:var, 0}]}
+  ix_of_1 = {:data, :Ix, [], [{:var, 1}]}
+  ix_of_2 = {:data, :Ix, [], [{:var, 2}]}
+
+  def_type = {:pi, @dec, {:pi, ix_of_0, {:pi, ix_of_1, ix_of_2}}}
+  motive = {:lam, @dec, {:lam, ix_of_0, ix_of_1}}
+  body = {:lam, @dec, {:lam, ix_of_0, {:lam, ix_of_1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+
   challenge(:well_typed, [dec_family(), ix_family()], :refine, def_type, body,
-    "refinement-complete: proving Eq n Causal in the wrap branch needs n:=Causal")
+    "refinement-complete: reusing h : Ix n as Ix Causal in the wrap branch needs n:=Causal")
 end
 
 def refinement(:ill_typed) do
   # soundness probe independent of the refinement gap: wrong-typed branch body.
-  ix_causal = {:data, :Ix, [], [{:ctor, :Causal, []}]}
-  def_type = @dec
   motive = {:lam, @dec, {:lam, {:data, :Ix, [], [{:var, 0}]}, @dec}}
   body = {:case, {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}, motive, [{:wrap, 1, {:type, 0}}]}
-  challenge(:ill_typed, [dec_family(), ix_family()], :refine, def_type, body,
+  challenge(:ill_typed, [dec_family(), ix_family()], :refine, @dec, body,
     "ill-typed: wrap branch body {:type,0} where Dec is expected")
 end
 ```
 
 Add `:Ix, :wrap, :n, :p` to `@known_atoms`.
 
-- [ ] **Step 2: Add self-tests** to `test/antigen/generators/indexed_test.exs` asserting the structural facts (the `wrap` result index is a non-variable ground term; the ill-typed body is `{:type, 0}`):
+De Bruijn check for `:well_typed` (counting from the point of use, 0 = innermost): `def_type` = `Π(n:Dec). Π(h:Ix n). Π(ix:Ix n). Ix n` — in `ix_of_0` (h's domain), only `n` is bound so far, so `{:var,0}` = n; in `ix_of_1` (ix's domain), `h` has added one more binder, so `n` is now `{:var,1}`; in `ix_of_2` (the final codomain), `ix` has added yet another binder, so `n` is now `{:var,2}`. `motive` mirrors this with its own two lambdas (`n'` then `ix'`), fully self-contained (no free variables into the outer context — it is evaluated once via `Eval.eval(motive, Context.env(ctx))` and applied twice by the kernel, so it must not depend on the surrounding binders). In `body`, before the `case`, the binder order (innermost first) is `ix`(0), `h`(1), `n`(2); the `wrap` branch adds one new binder (`p`, arity 1), shifting everything else by 1, so `h` — referenced inside the branch — is `{:var, 2}` (1 + 1), not `{:var, 1}`.
+
+- [ ] **Step 2: Add self-tests** to `test/antigen/generators/indexed_test.exs` asserting the structural facts (the `wrap` result index is a non-variable ground term; `h`'s declared domain genuinely needs refining to match the branch's required output; the ill-typed body is `{:type, 0}`):
 
 ```elixir
-test "4.3 refinement family's wrap ctor has a NON-variable (ground) result index" do
+test "4.3 refinement family's wrap ctor has a NON-variable (ground) result index, and h needs it" do
   c = Antigen.Generators.Indexed.refinement(:well_typed)
   env = Antigen.Generators.Indexed.env_of(c)
   [ridx] = Cure.Core.Inductive.get_ctor(env, :wrap).result_indices
   refute match?({:var, _}, ridx)          # it's {:ctor, :Causal, []}, so refinement is DROPPED
   assert ridx == {:ctor, :Causal, []}
+
+  # def_type: Π(n:Dec). Π(h:Ix n). Π(ix:Ix n). Ix n — h's declared domain is
+  # `Ix n` (the SAME shape the wrap branch requires, `Ix _`), differing only in
+  # which index term fills the hole; only the dropped n:=Causal equation could
+  # ever bridge `Ix n` (h's declared type) to `Ix Causal` (the branch's goal).
+  {:pi, _dec, {:pi, h_dom, {:pi, _ix_dom, _cod}}} = c.payload.def_type
+  assert h_dom == {:data, :Ix, [], [{:var, 0}]}
 end
 
 test "4.3 ill-typed refinement body is a deliberately wrong-typed term" do
@@ -726,10 +758,12 @@ test "4.3 ill-typed wrap-branch (wrong body type) must be rejected" do
 end
 
 test "4.3 refinement-complete well-typed case — records kernel's verdict" do
-  # A sound + refinement-complete kernel returns :ok. The current kernel drops the
-  # compound-index equation, so it likely returns {:violation, {:wrongly_rejected, _}}
-  # — an INCOMPLETENESS finding (not unsoundness). Either way, assert the result is
-  # NOT a soundness infection ({:wrongly_accepted, _} would be the alarming case).
+  # A sound + refinement-complete kernel returns :ok (h, refined from Ix n to
+  # Ix Causal, matches the wrap branch's required type). The current kernel
+  # drops the ground-index equation, so it is expected to return
+  # {:violation, {:wrongly_rejected, _}} — an INCOMPLETENESS finding (not
+  # unsoundness). Either way, assert the result is NOT a soundness infection
+  # ({:wrongly_accepted, _} would be the alarming case).
   result = Antigen.Assays.Indexed.run(Antigen.Generators.Indexed.refinement(:well_typed))
   refute match?({:violation, {:wrongly_accepted, _}}, result)
 end
@@ -740,7 +774,7 @@ end
 Run: `mix test test/antigen/assays/indexed_test.exs -v`
 Expected:
 - The ill-typed (wrong-body) test PASSES (kernel rejects `{:type,0}` where `Dec` expected, via `:branch_type`).
-- The refinement-complete test PASSES the `refute wrongly_accepted` assertion. If its underlying `run` returns `{:wrongly_rejected, _}`, that is the **incompleteness finding** — record it in the Stage-5 report for the operator (spec success criterion 5). Do NOT change the kernel to fix incompleteness without operator sign-off.
+- The refinement-complete test PASSES the `refute wrongly_accepted` assertion. Its underlying `run` is expected to return `{:violation, {:wrongly_rejected, {:refine, :branch_type}}}` (h's unrefined `Ix n` fails conversion against the branch's required `Ix Causal`) — that is the **incompleteness finding**: record it in the Stage-5 report for the operator (spec success criterion 5). Do NOT change the kernel to fix incompleteness without operator sign-off.
 - If, unexpectedly, the ill-typed test fails with `{:wrongly_accepted, _}`, that is a genuine soundness infection — follow the Task 2 triage (red kernel test + fix + antibody-due note).
 
 - [ ] **Step 6: Full suite once + commit**
@@ -873,7 +907,7 @@ defmodule Antigen.IndexedSeedTest do
   @challenges [
     Indexed.branch_family(:well_typed), Indexed.branch_family(:ill_typed),
     Indexed.coverage(:well_typed), Indexed.coverage(:ill_typed),
-    Indexed.refinement(:ill_typed),
+    Indexed.refinement(:well_typed), Indexed.refinement(:ill_typed),
     Indexed.motive_wf(:well_typed), Indexed.motive_wf(:ill_typed)
   ]
 
@@ -889,9 +923,11 @@ defmodule Antigen.IndexedSeedTest do
     if lines != [], do: File.write!(@seeds, existing <> Enum.join(lines, "\n") <> "\n")
 
     # every indexed/case seed now decodes + replays to :ok
+    # (Runner.replay/2 returns `%{entry: challenge, verdict: verdict}` maps — the
+    # assay id lives on `entry`, e.g. `r.entry.assay`, NOT a top-level `r.assay`.)
     reg = %{"indexed/case" => Assays.Indexed}
     results = Antigen.Runner.replay([@seeds], Map.merge(reg, %{"stub" => Assays.Stub}))
-    indexed = Enum.filter(results, fn r -> r.assay == "indexed/case" end)
+    indexed = Enum.filter(results, fn r -> r.entry.assay == "indexed/case" end)
     refute indexed == []
     assert Enum.all?(indexed, fn r -> r.verdict == :ok end)
   end
