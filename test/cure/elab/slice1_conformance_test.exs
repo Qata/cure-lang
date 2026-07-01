@@ -33,18 +33,26 @@ defmodule Cure.Elab.Slice1ConformanceTest do
     File.read!(@fixture) |> String.replace(replace, with_) |> Program.elaborate()
   end
 
-  test "negative #1: seq with disagreeing middle indices" do
+  # The spec (§6/§11) requires each negative be rejected with the *right code*.
+  defp code({:error, err}) when is_tuple(err), do: elem(err, 0)
+  defp code({:error, err}), do: err
+
+  test "negative #1: seq with disagreeing middle indices — index-unification error" do
     # give recover an ill-typed body that composes two SFs with mismatched middle
-    assert {:error, _} =
-             negative(
-               "fn recover({as: SVDesc}, {bs: SVDesc}, p: Sigma(x: Dec, SF(as, bs, x))) -> SF(as, bs, p.1) = p.2",
-               "fn bad_mid({as: SVDesc}, {bs: SVDesc}, {cs: SVDesc}, l: SF(as, bs, Causal), r: SF(cs, bs, Causal)) -> SF(as, bs, Causal) = seq(l, r)"
-             )
+    result =
+      negative(
+        "fn recover({as: SVDesc}, {bs: SVDesc}, p: Sigma(x: Dec, SF(as, bs, x))) -> SF(as, bs, p.1) = p.2",
+        "fn bad_mid({as: SVDesc}, {bs: SVDesc}, {cs: SVDesc}, l: SF(as, bs, Causal), r: SF(cs, bs, Causal)) -> SF(as, bs, Causal) = seq(l, r)"
+      )
+
+    assert code(result) == :index_mismatch
   end
 
-  test "negative #2: declared return index contradicts and's computation" do
-    assert {:error, _} =
-             negative("-> SF(as, cs, andd(d1, d2)) = seq(l, r)", "-> SF(as, cs, Dcoupled) = seq(l, r)")
+  test "negative #2: declared return index contradicts and's computation — conversion error" do
+    result =
+      negative("-> SF(as, cs, andd(d1, d2)) = seq(l, r)", "-> SF(as, cs, Dcoupled) = seq(l, r)")
+
+    assert code(result) == :conversion_failure
   end
 
   test "negative #3: a non-total function used in a type" do
@@ -52,8 +60,11 @@ defmodule Cure.Elab.Slice1ConformanceTest do
              negative("fn andd(x: Dec, y: Dec) -> Dec = x", "fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)")
   end
 
-  test "negative #4: a Sigma pair whose second component mismatches B[a/x]" do
-    assert {:error, _} = negative("-> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]", "-> Sigma(x: Dec, SF(as, bs, x)) = %[Dcoupled, sf]")
+  test "negative #4: a Sigma pair whose second component mismatches B[a/x] — Sigma type error" do
+    result =
+      negative("-> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]", "-> Sigma(x: Dec, SF(as, bs, x)) = %[Dcoupled, sf]")
+
+    assert code(result) == :sigma_mismatch
   end
 
   test "negative #5: the program has an unfilled hole and is refused for codegen" do
