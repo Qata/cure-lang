@@ -13,7 +13,8 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Env, Eval, Inductive}
+  alias Cure.Core.{Env, Eval, Inductive, Quote}
+  alias Cure.Elab.{MetaCtx, Subst, Unify}
 
   @doc """
   Elaborate a top-level function definition into `{:ok, core_lambda, type_value}`
@@ -35,6 +36,78 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate(other, _env), do: {:error, {:unsupported_expression, other}}
+
+  @doc """
+  Elaborate a constructor application `C(a₁, …, aₙ)`, inferring the erased index
+  arguments (quantity 0) from the runtime-relevant (quantity ω) arguments'
+  types (design spec §5.2). `present_args` is `[{core_term, type_value}]` — the
+  already-elaborated ω arguments with their inferred types.
+
+  Fresh metavariables stand in for the erased arguments; each ω argument's
+  expected telescope type is specialised with the choices so far (`Subst`) and
+  unified against the provided argument's type (`Unify`). On success every
+  metavariable is solved, and the fully-applied `{:ctor, …}` term plus its result
+  type (the family at the computed indices) are returned.
+  """
+  @spec elaborate_ctor_app(Env.t(), atom(), [{term(), Cure.Core.Value.t()}]) ::
+          {:ok, term(), Cure.Core.Value.t()} | {:error, term()}
+  def elaborate_ctor_app(env, cname, present_args) do
+    ctor = Inductive.get_ctor(env, cname)
+    family = Inductive.ctor_family(env, cname)
+
+    if is_nil(ctor) or is_nil(family) do
+      {:error, {:unknown_constructor, cname}}
+    else
+      telescope = Enum.zip(ctor.args, ctor.quantities)
+      init = {:ok, MetaCtx.new(), [], present_args}
+
+      telescope
+      |> Enum.reduce_while(init, &solve_arg/2)
+      |> finish_ctor_app(cname, family, ctor)
+    end
+  end
+
+  # One telescope slot: erased → fresh meta; present → unify expected vs actual.
+  defp solve_arg({{_name, type_term}, :erased}, {:ok, mctx, chosen, present}) do
+    {mctx, id} = MetaCtx.fresh(mctx)
+    {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
+  end
+
+  defp solve_arg({{_name, _type_term}, :present}, {:ok, _mctx, _chosen, []}),
+    do: {:halt, {:error, :too_few_arguments}}
+
+  defp solve_arg({{_name, type_term}, :present}, {:ok, mctx, chosen, [{arg, arg_type} | rest]}) do
+    expected = Subst.instantiate(type_term, chosen)
+    actual = Quote.reify(arg_type)
+
+    case Unify.unify(expected, actual, mctx) do
+      {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [arg], rest}}
+      {:error, reason} -> {:halt, {:error, {:index_mismatch, reason}}}
+    end
+  end
+
+  defp finish_ctor_app({:error, _} = err, _cname, _family, _ctor), do: err
+
+  defp finish_ctor_app({:ok, _mctx, _chosen, [_ | _]}, _cname, _family, _ctor),
+    do: {:error, :too_many_arguments}
+
+  defp finish_ctor_app({:ok, mctx, chosen, []}, cname, family, ctor) do
+    args = Enum.map(chosen, &Unify.zonk(&1, mctx))
+
+    if Enum.any?(args, &has_meta?/1) do
+      {:error, {:unsolved_metavariables, cname}}
+    else
+      indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, args))
+      result_type = Eval.eval({:data, family, [], indices}, [])
+      {:ok, {:ctor, cname, args}, result_type}
+    end
+  end
+
+  defp has_meta?({:meta, _}), do: true
+  defp has_meta?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_meta?/1)
+  defp has_meta?({:ctor, _n, args}), do: Enum.any?(args, &has_meta?/1)
+  defp has_meta?({:app, f, x}), do: has_meta?(f) or has_meta?(x)
+  defp has_meta?(_), do: false
 
   # -- parameters / binders ---------------------------------------------------
 
