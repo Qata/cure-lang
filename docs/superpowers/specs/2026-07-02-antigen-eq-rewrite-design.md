@@ -4,6 +4,7 @@
 **Status:** approved design (operator gate passed); this is the ③ sub-project of
 the Eq/rewrite–case-refinement work. It ships FIRST as the audit net for ②
 (the case-refinement pattern-fragment unifier).
+**Vertical name:** `rewrite`. **Assay key:** `rewrite/eq`.
 
 ## 1. Goal
 
@@ -68,7 +69,16 @@ incompleteness (reported per criterion §5, patched only if cheap and sound).
 - ill-typed (**soundness**): `refl a` checked against `Eq A a b` with `a`, `b`
   **not** convertible → rejected (`:not_definitionally_equal`). This is the
   guard that keeps proof-erasing transport sound; its failure is the classic
-  "any-atom-is-a-proof" hole.
+  "any-atom-is-a-proof" hole. Isolates the guard's FIRST conjunct,
+  `conv(av, bv)`.
+- ill-typed (**soundness**): `refl a` checked against `Eq A a' a'` (endpoints
+  trivially convertible to each other) where `a` itself is **not** convertible
+  to `a'` (e.g. `a` is a different, unrelated constructor of `A`) → rejected
+  (`:not_definitionally_equal`). Isolates the guard's SECOND conjunct,
+  `conv(eval a, av)`, independently of the first: with only the first ill-typed
+  case above, a regression that dropped this second conjunct while keeping the
+  first would go undetected, since `av ≡ bv` here means the first conjunct is
+  satisfied and can no longer mask the second's absence.
 
 ### 4.3 rewrite premise discipline
 `rewrite (p : Eq A a b) (M) (body : M a) : M b`.
@@ -76,7 +86,14 @@ incompleteness (reported per criterion §5, patched only if cheap and sound).
 - ill-typed (**soundness**): `proof` is not an equality (e.g. a plain ctor) →
   rejected (`ensure_eq`).
 - ill-typed (**soundness**): `body` does not check at `M a` → rejected
-  (`:rewrite_premise`).
+  (`:rewrite_premise`). Load-bearing precision (mirrors the indexed-case 4.1
+  caution): `proof` in this sub-case must itself be a genuine, valid equality
+  term (e.g. a bound variable of type `Eq A a b`, or `refl a`) — if `proof`
+  were *also* the "not an equality" ctor from the bullet above, `ensure_eq`
+  would reject first and the challenge would never reach the
+  `check(body, expected_body)` step this sub-case exists to probe, giving a
+  false "confirmed sound" reading without exercising the body-checking
+  discipline at all.
 
 ### 4.4 transport result-type correctness (+ refl coherence)
 The kernel must assign the **transported** type `M b`, not the source `M a`.
@@ -101,37 +118,103 @@ The kernel must assign the **transported** type `M b`, not the source `M a`.
 
 ## 6. Architecture (mirror the indexed-case vertical)
 
-- `Antigen.Generators.Rewrite` — one builder per obligation, each taking
-  `:well_typed | :ill_typed` and returning `Challenge.t()` with kind
-  `:rewrite_eq` and payload `%{families, def_name, def_type, def_body}`. Reuse
-  the `env_of/1` + private `challenge/6` helper shape from `Generators.Indexed`.
-  Shared families: `Dec` (`Dcoupled`/`Causal`), `Foo` (`MkFoo`) for wrong-type
-  endpoints, and a tiny index family for the motive `M` in 4.3/4.4.
+- `Antigen.Generators.Rewrite` — one builder per obligation, returning
+  `Challenge.t()` with kind `:rewrite_eq` and payload
+  `%{families, def_name, def_type, def_body}`. Unlike `Generators.Indexed`
+  (where every obligation is exactly one `:well_typed` + one `:ill_typed`
+  challenge, so the builder's argument IS the label), §4's obligations here are
+  not all 1-well/1-ill: 4.1 is 1+1, but 4.2 is 2 well-typed variants (base,
+  redex) + 2 ill-typed variants (conjunct-1, conjunct-2), 4.3 is 1 well-typed +
+  2 ill-typed variants, 4.4 is 2 well-typed variants (transport-correct, refl
+  coherence) + 1 ill-typed. Each builder therefore takes a **variant atom**
+  (e.g. `refl_typing(:base | :redex | :conjunct1_violation |
+  :conjunct2_violation)`), not literally `:well_typed | :ill_typed`; every
+  clause still sets the returned `Challenge`'s `label` field to the correct
+  `:well_typed`/`:ill_typed` value — that field, not the variant atom, is the
+  assay's oracle (§4's header). 12 challenges total across the four
+  obligations (2 + 4 + 3 + 3). Reuse
+  the `env_of/1` + private `challenge/6` helper *shape* from `Generators.Indexed`
+  — `env_of/1`, `challenge/6`, `dec_family/0`, and `foo_family/0` are all `defp`
+  in `Generators.Indexed`, so they cannot literally be imported; this module
+  redefines the same handful of lines locally (`Generators.Indexed` itself
+  duplicates no code from `Generators.Positivity` for the same reason — this is
+  the established pattern, not a shortcut). Same conceptual families as
+  `Generators.Indexed`: `Dec` (`Dcoupled`/`Causal`), `Foo` (`MkFoo`) for
+  wrong-type endpoints, and a tiny index family for the motive `M` in 4.3/4.4
+  (a fresh family local to this module — it does not need to be `Ix`
+  specifically).
 - `Antigen.Assays.Rewrite` — `run(%Challenge{kind: :rewrite_eq})`: rebuild env
   via `Generators.Rewrite.env_of/1`, `Kernel.check_def`, return `:ok` iff
   acceptance matches the label, else `{:violation, {:wrongly_accepted|:wrongly_rejected, …}}`.
 - `Antigen.Challenge` — add kind `:rewrite_eq`; encode/decode uses the same
   tab-delimited base64 `Serialize` envelope + `@known_atoms` interning as
   `:indexed_case` (the payload shape is identical, so this is additive).
-- `Antigen.Runner` — register the `:rewrite_eq` generators in the explorer sweep;
-  register the assay in the replay registry so `mix test` statically replays any
-  banked `:rewrite_eq` antibodies.
-- `Antigen.Coverage` / seeds — bank coverage-deduped seeds for each obligation.
+- `Antigen.Coverage` — add a `terms_of/1` clause for kind `:rewrite_eq` (same
+  payload shape as `:indexed_case`, so it can mirror that clause's body).
+  `Coverage.terms_of/1`'s dispatch is exhaustive on `kind` with no fallback
+  clause — without this addition, `Runner.explore/1`'s `well_formed?/1` and
+  `Coverage.key/1` raise `FunctionClauseError` on any `:rewrite_eq` challenge.
+  This is a prerequisite, same status as the `Challenge` extension above, not
+  an incidental detail.
+- Wiring, stated against how `:indexed_case` actually ships today (not the
+  `mix antigen` explorer): `Generators.Indexed` has no `gen/0` and is absent
+  from `Mix.Tasks.Antigen`'s `default_gen/0` — its obligations are a fixed,
+  exhaustively-enumerable known-label battery, not a population worth random
+  exploration, so it is never wired into the explorer sweep. `Generators.Rewrite`
+  follows the same pattern: no `gen/0`; do **not** add it to `default_gen/0`.
+  Banking instead happens via a dedicated `test/antigen/rewrite_seed_test.exs`
+  (mirroring `test/antigen/indexed_seed_test.exs`): call each obligation's
+  builders directly, `Corpus.append/3` any confirmed-infection antibody into
+  `corpus.sexp` and every correctly-handled challenge into `seeds.sexp`, then
+  `Runner.replay/2` both stores against a local
+  `%{"rewrite/eq" => Assays.Rewrite}` registry to prove every banked record
+  already replays to `:ok`. Separately, add `"rewrite/eq" => Antigen.Assays.Rewrite`
+  to **both** of the two existing hardcoded registries this depends on:
+  `Antigen.Runner`'s private `assay_module/1` (backs `explore/1`, `generate/1`,
+  `replay_one/1`) and `test/antigen/corpus_replay_test.exs`'s `@registry` map
+  (the one that actually makes committed `:rewrite_eq` records replay on every
+  plain `mix test`) — they are separate maps and both must be updated.
 - **Arch rule (enforced):** nothing under `Antigen.Generators.*` /
   `Antigen.Assays.*` may import StreamData (existing architecture test).
 
 ## 7. Tests (TDD, mirror `test/antigen/{generators,assays}/…`)
 
+Built and verified **one obligation at a time**, in order 4.1 → 4.2 → 4.3 →
+4.4, following the indexed-case §5 loop: for each obligation, write the
+generator self-test first (item 1 below) and confirm it fails (no builder
+exists yet), then write only enough of the builder to make it pass; write the
+assay test first (item 2) and confirm it fails (no assay exists yet), then
+write only enough of the assay to make it pass; only then run that
+obligation's tests against the real kernel and triage per §5 of this spec (fix
+red-green + bank an antibody on a confirmed soundness hole; report, don't
+silently patch, an incompleteness). Run the full suite once and commit before
+starting the next obligation. Every test named below is immutable once green:
+a red test is turned green by fixing the generator, assay, or (only on a
+confirmed soundness hole) kernel code — never by loosening or deleting the
+test. The sole exception is a test later proven to encode incorrect behavior,
+which requires stating why before it is changed.
+
 For each obligation:
-1. **Generator self-test** — the `:well_typed` builder's rebuilt env + def
-   actually `check_def == :ok`; the `:ill_typed` builder's `check_def` returns
+1. **Generator self-test** — for every variant of this obligation (§6), a
+   `:well_typed`-labelled variant's rebuilt env + def actually
+   `check_def == :ok`; an `:ill_typed`-labelled variant's `check_def` returns
    `{:error, _}`. This proves the label is correct by construction (guards
    against a vacuous-green generator).
-2. **Assay test** — `Assays.Rewrite.run/1` returns `:ok` on a correctly-labelled
+2. **Assay test** — for at least one variant of each label present in this
+   obligation, `Assays.Rewrite.run/1` returns `:ok` on the correctly-labelled
    challenge and `{:violation, _}` on a deliberately mislabelled one.
-3. **Wiring** — `:rewrite_eq` round-trips through `Challenge` encode/decode; the
-   replay registry resolves the assay; a banked seed replays statically.
-4. **Coverage/seed** — one seed per obligation lands in `seeds.sexp`.
+3. **Wiring** — `:rewrite_eq` round-trips through `Challenge` encode/decode;
+   `Coverage.terms_of/1` returns every embedded `Term` for a `:rewrite_eq`
+   challenge; both `Antigen.Runner`'s `assay_module/1` and
+   `corpus_replay_test.exs`'s `@registry` resolve `"rewrite/eq"` to
+   `Assays.Rewrite`; a banked seed replays statically via
+   `rewrite_seed_test.exs` (§6).
+4. **Coverage/seed** — one seed per correctly-handled variant lands in
+   `seeds.sexp` (up to 12 candidates total across the four obligations — see
+   §6's per-obligation variant count — banked only if the assay already
+   returns `:ok` on them, per `indexed_seed_test.exs`'s pattern); any
+   wrongly-accepted `:ill_typed` variant is banked as a `corpus.sexp` antibody
+   instead (§5).
 
 ## 8. Invariants (carried from the Antigen design bible)
 
