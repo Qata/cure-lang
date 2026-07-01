@@ -51,6 +51,39 @@ defmodule Antigen.Generators.Rewrite do
       "ill-typed: Eq Dec Causal MkFoo — MkFoo : Foo, not Dec")
   end
 
+  # -- 4.2 refl typing + reflexive-conversion guard ---------------------------
+  @spec refl_typing(:base | :redex | :conjunct1_violation | :conjunct2_violation) :: Challenge.t()
+  # base: refl Causal : Eq Dec Causal Causal, in a def that checks the refl.
+  def refl_typing(:base) do
+    eq = {:eq, @dec, @causal, @causal}
+    challenge(:well_typed, [dec_family()], :refl_typing, eq, {:refl, @causal},
+      "refl Causal : Eq Dec Causal Causal")
+  end
+
+  # redex: endpoint is a redex that normalizes to Causal — conv is up-to-nf.
+  # (λx:Dec. x) Causal ≡ Causal, so refl Causal : Eq Dec Causal ((λx.x) Causal).
+  def refl_typing(:redex) do
+    redex = {:app, {:lam, @dec, {:var, 0}}, @causal}
+    eq = {:eq, @dec, @causal, redex}
+    challenge(:well_typed, [dec_family()], :refl_typing, eq, {:refl, @causal},
+      "refl Causal against Eq Dec Causal ((λx.x) Causal) — conv up-to-normalization")
+  end
+
+  # conjunct-1 violation: endpoints not convertible (Causal vs Dcoupled), a = Causal.
+  def refl_typing(:conjunct1_violation) do
+    eq = {:eq, @dec, @causal, @dcoupled}
+    challenge(:ill_typed, [dec_family()], :refl_typing, eq, {:refl, @causal},
+      "ill-typed: refl Causal : Eq Dec Causal Dcoupled — endpoints not convertible (conjunct 1)")
+  end
+
+  # conjunct-2 violation: endpoints equal to each other (Dcoupled,Dcoupled) so
+  # conjunct 1 holds, but refl's subject `a`=Causal is not convertible to them.
+  def refl_typing(:conjunct2_violation) do
+    eq = {:eq, @dec, @dcoupled, @dcoupled}
+    challenge(:ill_typed, [dec_family()], :refl_typing, eq, {:refl, @causal},
+      "ill-typed: refl Causal : Eq Dec Dcoupled Dcoupled — conjunct 1 holds, subject≠endpoints (conjunct 2)")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :rewrite_eq,

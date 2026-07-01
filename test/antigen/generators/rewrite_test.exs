@@ -13,4 +13,16 @@ defmodule Antigen.Generators.RewriteTest do
     assert :ok == checks?(wt)
     assert {:error, _} = checks?(it)
   end
+
+  test "4.2 refl_typing: base + redex well-typed; both conjunct violations rejected" do
+    for v <- [:base, :redex] do
+      assert :ok == checks?(Rewrite.refl_typing(v)), "variant #{v} should typecheck"
+    end
+
+    for v <- [:conjunct1_violation, :conjunct2_violation] do
+      c = Rewrite.refl_typing(v)
+      assert c.label == :ill_typed
+      assert {:error, _} = checks?(c), "variant #{v} should be rejected"
+    end
+  end
 end
