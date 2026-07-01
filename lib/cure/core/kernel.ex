@@ -202,7 +202,7 @@ defmodule Cure.Core.Kernel do
 
         with :ok <- check_motive_wf(ctx, motive_value, family),
              :ok <- check_coverage(sig, dname, branches),
-             :ok <- check_case_branches(ctx, sig, motive_value, branches, scrut_indices) do
+             :ok <- check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices) do
           # Result type = motive at the scrutinee's actual indices and value (§4.4).
           scrut_value = Eval.eval(scrut, Context.env(ctx))
           {:ok, apply_motive(motive_value, scrut_indices ++ [scrut_value])}
@@ -527,32 +527,42 @@ defmodule Cure.Core.Kernel do
 
   # Each branch body is checked under its constructor's telescope, against the
   # motive instantiated at that constructor's computed indices s̄ⱼ and value cⱼ āⱼ.
-  defp check_case_branches(ctx, sig, motive_value, branches, scrut_indices) do
+  # A branch must name a constructor of the scrutinee's OWN family `dname`; a
+  # constructor of any other family is ill-formed (it can never match), so it is
+  # rejected before its body is checked (`:foreign_ctor`).
+  defp check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices) do
     Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
       case Inductive.get_ctor(sig, cname) do
         nil ->
           {:halt, {:error, {:unknown_ctor, cname}}}
 
-        %{args: tele, result_indices: result_indices} when length(tele) == arity ->
-          {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele)
-          subst = branch_index_subst(ctx, result_indices, scrut_indices, arity)
-          ctx_branch = specialize_branch_context(ctx_branch, subst)
-          # Result indices are written over the ctor's args (most-recent first).
-          s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
-          ctor_value = {:vctor, cname, arg_vals}
+        ctor ->
+          cond do
+            Inductive.ctor_family(sig, cname) != dname ->
+              {:halt, {:error, {:foreign_ctor, cname}}}
 
-          expected =
-            motive_value
-            |> apply_motive(s_values ++ [ctor_value])
-            |> specialize_branch_value(ctx_branch, subst)
+            length(ctor.args) != arity ->
+              {:halt, {:error, :branch_arity}}
 
-          case check(ctx_branch, body, expected) do
-            :ok -> {:cont, :ok}
-            {:error, _} -> {:halt, {:error, :branch_type}}
+            true ->
+              %{args: tele, result_indices: result_indices} = ctor
+              {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele)
+              subst = branch_index_subst(ctx, result_indices, scrut_indices, arity)
+              ctx_branch = specialize_branch_context(ctx_branch, subst)
+              # Result indices are written over the ctor's args (most-recent first).
+              s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
+              ctor_value = {:vctor, cname, arg_vals}
+
+              expected =
+                motive_value
+                |> apply_motive(s_values ++ [ctor_value])
+                |> specialize_branch_value(ctx_branch, subst)
+
+              case check(ctx_branch, body, expected) do
+                :ok -> {:cont, :ok}
+                {:error, _} -> {:halt, {:error, :branch_type}}
+              end
           end
-
-        %{} ->
-          {:halt, {:error, :branch_arity}}
       end
     end)
   end
