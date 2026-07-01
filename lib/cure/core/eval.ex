@@ -48,6 +48,8 @@ defmodule Cure.Core.Eval do
   def eval({:int_lit, n}, _env), do: {:vint, n}
   def eval({:bool_type}, _env), do: {:vbool_type}
   def eval({:bool_lit, b}, _env), do: {:vbool, b}
+  def eval({:float_type}, _env), do: {:vfloat_type}
+  def eval({:float_lit, f}, _env), do: {:vfloat, f}
   def eval({:prim, op, args}, env), do: prim(op, Enum.map(args, &eval(&1, env)))
 
   # Opaque until the global is certified total (M7 gates δ here).
@@ -112,18 +114,31 @@ defmodule Cure.Core.Eval do
   defp fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
   defp fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
 
+  defp fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
+  defp fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
+  defp fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
+  defp fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
+
   defp fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a == b}}
+  defp fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a == b}}
   defp fold(:eq, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a == b}}
   defp fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a != b}}
+  defp fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a != b}}
   defp fold(:ne, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a != b}}
   defp fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a < b}}
+  defp fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a < b}}
   defp fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a <= b}}
+  defp fold(:le, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a <= b}}
   defp fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a > b}}
+  defp fold(:gt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a > b}}
   defp fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a >= b}}
+  defp fold(:ge, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a >= b}}
 
   defp fold(:and, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a and b}}
   defp fold(:or, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a or b}}
   defp fold(:not, [{:vbool, a}]), do: {:ok, {:vbool, not a}}
+  defp fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
+  defp fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
 
   defp fold(_op, _args), do: :stuck
 

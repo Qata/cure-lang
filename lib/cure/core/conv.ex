@@ -48,6 +48,8 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
   defp conv_struct?({:vbool_type}, {:vbool_type}, _depth, _sig), do: true
   defp conv_struct?({:vbool, a}, {:vbool, b}, _depth, _sig), do: a == b
+  defp conv_struct?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
+  defp conv_struct?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)

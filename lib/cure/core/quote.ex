@@ -54,6 +54,8 @@ defmodule Cure.Core.Quote do
   def reify({:vint, n}, _depth), do: {:int_lit, n}
   def reify({:vbool_type}, _depth), do: {:bool_type}
   def reify({:vbool, b}, _depth), do: {:bool_lit, b}
+  def reify({:vfloat_type}, _depth), do: {:float_type}
+  def reify({:vfloat, f}, _depth), do: {:float_lit, f}
 
   def reify({:vneutral, n}, depth), do: reify_neutral(n, depth)
 

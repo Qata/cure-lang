@@ -36,37 +36,17 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # Primitive Int/Bool: base types live in `Type0`, literals inhabit them, and
-  # each primitive op carries a fixed signature (argument types → result type)
-  # against which the kernel re-checks every argument.
+  # Primitive Int/Bool/Float: base types live in `Type0`, literals inhabit them,
+  # and each primitive op is typed against the kernel (arithmetic/comparison are
+  # numeric-polymorphic over Int or Float; connectives are on Bool).
   def infer(_ctx, {:int_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:int_lit, _n}), do: {:ok, {:vint_type}}
   def infer(_ctx, {:bool_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:bool_lit, _b}), do: {:ok, {:vbool_type}}
+  def infer(_ctx, {:float_type}), do: {:ok, {:vtype, 0}}
+  def infer(_ctx, {:float_lit, _f}), do: {:ok, {:vfloat_type}}
 
-  def infer(ctx, {:prim, op, args}) do
-    case prim_signature(op) do
-      nil ->
-        {:error, {:unknown_prim, op}}
-
-      {arg_types, result_type} when length(arg_types) == length(args) ->
-        args
-        |> Enum.zip(arg_types)
-        |> Enum.find_value(fn {arg, ty} ->
-          case check(ctx, arg, ty) do
-            :ok -> nil
-            {:error, _} = err -> err
-          end
-        end)
-        |> case do
-          nil -> {:ok, result_type}
-          {:error, _} = err -> err
-        end
-
-      _ ->
-        {:error, {:prim_arity, op}}
-    end
-  end
+  def infer(ctx, {:prim, op, args}), do: infer_prim(ctx, op, args)
 
   def infer(ctx, {:pi, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
@@ -534,18 +514,77 @@ defmodule Cure.Core.Kernel do
   end
 
   # Cumulative subtyping: universe-level inclusion on sorts, conversion otherwise.
-  # Primitive operation signatures: {argument type values, result type value}.
-  defp prim_signature(op) when op in [:add, :sub, :mul, :div, :rem],
-    do: {[{:vint_type}, {:vint_type}], {:vint_type}}
+  # Arithmetic: numeric-polymorphic (Int or Float), result matches the operands.
+  defp infer_prim(ctx, op, [a, b]) when op in [:add, :sub, :mul, :div] do
+    with {:ok, ta} <- infer(ctx, a),
+         true <- numeric_type?(ta),
+         :ok <- check(ctx, b, ta) do
+      {:ok, ta}
+    else
+      _ -> {:error, {:prim_type, op}}
+    end
+  end
 
-  defp prim_signature(op) when op in [:eq, :ne, :lt, :le, :gt, :ge],
-    do: {[{:vint_type}, {:vint_type}], {:vbool_type}}
+  # Integer remainder.
+  defp infer_prim(ctx, :rem, [a, b]) do
+    with :ok <- check(ctx, a, {:vint_type}), :ok <- check(ctx, b, {:vint_type}) do
+      {:ok, {:vint_type}}
+    else
+      _ -> {:error, {:prim_type, :rem}}
+    end
+  end
 
-  defp prim_signature(op) when op in [:and, :or],
-    do: {[{:vbool_type}, {:vbool_type}], {:vbool_type}}
+  # Ordered comparison: numeric operands, boolean result.
+  defp infer_prim(ctx, op, [a, b]) when op in [:lt, :le, :gt, :ge] do
+    with {:ok, ta} <- infer(ctx, a),
+         true <- numeric_type?(ta),
+         :ok <- check(ctx, b, ta) do
+      {:ok, {:vbool_type}}
+    else
+      _ -> {:error, {:prim_type, op}}
+    end
+  end
 
-  defp prim_signature(:not), do: {[{:vbool_type}], {:vbool_type}}
-  defp prim_signature(_op), do: nil
+  # Equality: any shared type, boolean result.
+  defp infer_prim(ctx, op, [a, b]) when op in [:eq, :ne] do
+    with {:ok, ta} <- infer(ctx, a), :ok <- check(ctx, b, ta) do
+      {:ok, {:vbool_type}}
+    else
+      _ -> {:error, {:prim_type, op}}
+    end
+  end
+
+  # Boolean connectives.
+  defp infer_prim(ctx, op, [a, b]) when op in [:and, :or] do
+    with :ok <- check(ctx, a, {:vbool_type}), :ok <- check(ctx, b, {:vbool_type}) do
+      {:ok, {:vbool_type}}
+    else
+      _ -> {:error, {:prim_type, op}}
+    end
+  end
+
+  defp infer_prim(ctx, :not, [a]) do
+    with :ok <- check(ctx, a, {:vbool_type}) do
+      {:ok, {:vbool_type}}
+    else
+      _ -> {:error, {:prim_type, :not}}
+    end
+  end
+
+  # Numeric negation: numeric operand, same result type.
+  defp infer_prim(ctx, :neg, [a]) do
+    with {:ok, ta} <- infer(ctx, a), true <- numeric_type?(ta) do
+      {:ok, ta}
+    else
+      _ -> {:error, {:prim_type, :neg}}
+    end
+  end
+
+  defp infer_prim(_ctx, op, _args), do: {:error, {:unknown_prim, op}}
+
+  defp numeric_type?({:vint_type}), do: true
+  defp numeric_type?({:vfloat_type}), do: true
+  defp numeric_type?(_), do: false
 
   defp subtype?({:vtype, l1}, {:vtype, l2}, _ctx), do: Universe.le?(l1, l2)
 
