@@ -62,4 +62,14 @@ defmodule Antigen.Generators.IndexedTest do
     {:case, _s, _m, [{:wrap, 1, body}]} = c.payload.def_body
     assert body == {:type, 0}
   end
+
+  test "4.4 ill-typed motive has an extra lambda layer (over-applied)" do
+    good = Indexed.motive_wf(:well_typed)
+    bad = Indexed.motive_wf(:ill_typed)
+    {:case, _s, {:lam, _, good_inner}, _} = good.payload.def_body
+    {:case, _s2, {:lam, _, bad_inner}, _} = bad.payload.def_body
+    # good_inner is a plain type; bad_inner is itself another lambda (the extra layer).
+    refute match?({:lam, _, _}, good_inner)
+    assert match?({:lam, _, _}, bad_inner)
+  end
 end

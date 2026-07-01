@@ -36,4 +36,12 @@ defmodule Antigen.Assays.IndexedTest do
     result = A.run(G.refinement(:well_typed))
     refute match?({:violation, {:wrongly_accepted, _}}, result)
   end
+
+  test "4.4 well-formed motive is accepted" do
+    assert :ok == A.run(G.motive_wf(:well_typed))
+  end
+
+  test "4.4 over-applied (malformed) motive must be rejected" do
+    assert :ok == A.run(G.motive_wf(:ill_typed))
+  end
 end

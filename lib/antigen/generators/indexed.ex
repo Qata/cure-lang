@@ -105,6 +105,28 @@ defmodule Antigen.Generators.Indexed do
       "ill-typed: wrap branch body {:type,0} where Dec is expected")
   end
 
+  # -- 4.4 motive well-formedness ---------------------------------------------
+  @doc """
+  Motive well-formedness obligation. `:ill_typed` over-applies the motive (an extra
+  `:lam` layer beyond index_arity+1), so `apply_motive` leaves a residual `{:vlam,...}`
+  which `infer_type_value_sort` rejects as {:error, :bad_motive}. (Do NOT under-apply
+  — that crashes Eval.apply; see spec §4.4.)
+  """
+  @spec motive_wf(:well_typed | :ill_typed) :: Challenge.t()
+  def motive_wf(:well_typed) do
+    body = {:case, {:ctor, :Causal, []}, {:lam, @dec, @dec},
+            [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
+    challenge(:well_typed, [dec_family()], :motive_wf, @dec, body, "well-formed motive λx:Dec. Dec")
+  end
+
+  def motive_wf(:ill_typed) do
+    over = {:lam, @dec, {:lam, @dec, @dec}}   # one lam too many for a 0-index family
+    body = {:case, {:ctor, :Causal, []}, over,
+            [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
+    # def_type is irrelevant to the motive check; use @dec (check fails before it matters).
+    challenge(:ill_typed, [dec_family()], :motive_wf, @dec, body, "over-applied motive → :bad_motive")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :indexed_case,
