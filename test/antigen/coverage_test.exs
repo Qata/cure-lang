@@ -38,4 +38,20 @@ defmodule Antigen.CoverageTest do
     {_c, _b, flags2, _l} = Coverage.key(Challenge.stub(curried_pi))
     assert :has_shadowing in flags2
   end
+
+  test "terms_of returns every embedded term of an indexed_case challenge" do
+    dec = {:data, :Dec, [], []}
+    fam = Cure.Core.Inductive.family(:Box, [], [{:d, dec}], 0)
+    ctors = [Cure.Core.Inductive.ctor(:mk, [{:x, dec}], [{:var, 0}])]
+    body = {:case, {:ctor, :mk, [{:ctor, :Causal, []}]}, {:lam, dec, {:lam, {:data, :Box, [], [{:var, 0}]}, dec}},
+            [{:mk, 1, {:var, 0}}]}
+
+    c = Antigen.Challenge.new(kind: :indexed_case, assay: "indexed/case", label: :well_typed,
+          payload: %{families: [{fam, ctors}], def_name: :probe, def_type: dec, def_body: body})
+
+    terms = Antigen.Coverage.terms_of(c)
+    assert dec in terms           # family index type
+    assert {:var, 0} in terms     # ctor result index
+    assert body in terms          # def body
+  end
 end

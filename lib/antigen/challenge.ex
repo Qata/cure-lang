@@ -4,8 +4,8 @@ defmodule Antigen.Challenge do
   @enforce_keys [:kind, :assay, :label, :payload]
   defstruct [:kind, :assay, :label, :payload, :seed, :note]
 
-  @type kind :: :stub | :def_group | :family | :forcing_pair
-  @type label :: :terminating | :diverging | :positive | :negative | :none
+  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case
+  @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
           assay: String.t(),
@@ -30,7 +30,12 @@ defmodule Antigen.Challenge do
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
     :f, :g, :h, :Dec, :Nat, :Z, :S, :Causal,
-    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :present, :erased
+    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :present, :erased,
+    # indexed-case vertical: kind, labels, family/ctor/def names
+    :indexed_case, :well_typed, :ill_typed,
+    :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
+    :probe, :branch_family, :coverage_gap, :refine, :motive_wf,
+    :Tri, :A, :B, :C, :Ix, :wrap, :n, :p
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -69,6 +74,57 @@ defmodule Antigen.Challenge do
         arg_pieces = ct.args |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"ctor:#{j}:arg:#{k}", t} end)
         ridx_pieces = ct.result_indices |> Enum.with_index() |> Enum.map(fn {t, k} -> {"ctor:#{j}:ridx:#{k}", t} end)
         arg_pieces ++ ridx_pieces
+      end)
+
+    ctor_scaffold =
+      Enum.map(ctors, fn ct ->
+        %{
+          "name" => Atom.to_string(ct.name),
+          "arg_names" => Enum.map(ct.args, fn {n, _t} -> Atom.to_string(n) end),
+          "ridx_count" => length(ct.result_indices),
+          "quantities" => Enum.map(ct.quantities, &Atom.to_string/1)
+        }
+      end)
+
+    scaffold = %{
+      "fam_name" => Atom.to_string(fam.name),
+      "fam_level" => fam.level,
+      "fam_param_names" => Enum.map(fam.params, fn {n, _t} -> Atom.to_string(n) end),
+      "fam_index_names" => Enum.map(fam.indices, fn {n, _t} -> Atom.to_string(n) end),
+      "ctors" => ctor_scaffold
+    }
+
+    {scaffold, param_pieces ++ index_pieces ++ ctor_pieces}
+  end
+
+  def to_pieces(%__MODULE__{kind: :indexed_case, payload: p}) do
+    %{families: families, def_name: dn, def_type: dt, def_body: db} = p
+
+    {fam_scaffolds, fam_pieces} =
+      families
+      |> Enum.with_index()
+      |> Enum.reduce({[], []}, fn {{fam, ctors}, i}, {scaffs, pcs} ->
+        {s, ps} = family_pieces(fam, ctors, "fam:#{i}")
+        {scaffs ++ [s], pcs ++ ps}
+      end)
+
+    scaffold = %{"families" => fam_scaffolds, "def_name" => Atom.to_string(dn)}
+    pieces = fam_pieces ++ [{"def_type", dt}, {"def_body", db}]
+    {scaffold, pieces}
+  end
+
+  # One family's scaffold + Term pieces, keyed under `prefix` (e.g. "fam:0").
+  defp family_pieces(fam, ctors, prefix) do
+    param_pieces = fam.params |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"#{prefix}:param:#{k}", t} end)
+    index_pieces = fam.indices |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"#{prefix}:index:#{k}", t} end)
+
+    ctor_pieces =
+      ctors
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {ct, j} ->
+        args = ct.args |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"#{prefix}:ctor:#{j}:arg:#{k}", t} end)
+        ridx = ct.result_indices |> Enum.with_index() |> Enum.map(fn {t, k} -> {"#{prefix}:ctor:#{j}:ridx:#{k}", t} end)
+        args ++ ridx
       end)
 
     ctor_scaffold =
@@ -134,7 +190,56 @@ defmodule Antigen.Challenge do
     new(kind: :family, assay: assay, label: label, payload: %{family: fam, ctors: ctors}, seed: seed, note: note)
   end
 
+  def from_pieces(:indexed_case, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+
+    families =
+      scaffold["families"]
+      |> Enum.with_index()
+      |> Enum.map(fn {fam_scaffold, i} -> rebuild_family(fam_scaffold, "fam:#{i}", pmap) end)
+
+    payload = %{
+      families: families,
+      def_name: String.to_existing_atom(scaffold["def_name"]),
+      def_type: Map.fetch!(pmap, "def_type"),
+      def_body: Map.fetch!(pmap, "def_body")
+    }
+
+    new(kind: :indexed_case, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
   # --- private helpers --------------------------------------------------------
+
+  # Rebuild one {family, [ctor]} from its scaffold + the piece map, keyed under `prefix`.
+  defp rebuild_family(fam_scaffold, prefix, pmap) do
+    params =
+      fam_scaffold["fam_param_names"]
+      |> Enum.with_index()
+      |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:param:#{k}")} end)
+
+    indices =
+      fam_scaffold["fam_index_names"]
+      |> Enum.with_index()
+      |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:index:#{k}")} end)
+
+    fam = Inductive.family(String.to_existing_atom(fam_scaffold["fam_name"]), params, indices, fam_scaffold["fam_level"])
+
+    ctors =
+      fam_scaffold["ctors"]
+      |> Enum.with_index()
+      |> Enum.map(fn {cs, j} ->
+        args =
+          cs["arg_names"]
+          |> Enum.with_index()
+          |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:ctor:#{j}:arg:#{k}")} end)
+
+        ridx = for k <- 0..(cs["ridx_count"] - 1)//1, do: Map.fetch!(pmap, "#{prefix}:ctor:#{j}:ridx:#{k}")
+        quantities = Enum.map(cs["quantities"], &String.to_existing_atom/1)
+        Inductive.ctor(String.to_existing_atom(cs["name"]), args, ridx, quantities)
+      end)
+
+    {fam, ctors}
+  end
 
   defp def_group_pieces(defs, focus) do
     scaffold = %{
