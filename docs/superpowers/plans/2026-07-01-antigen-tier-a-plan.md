@@ -20,11 +20,12 @@
 - **`mix test` never mutates a corpus (spec §2 crit. 4).** Only the explorer/generate runner appends; the replayer is read-only. CI stays git-clean.
 - **Ghost-written commits.** Commit per task; author as the user only, never co-sign.
 - **One full build/test run at any moment.** Never launch concurrent `mix test`/`mix compile` — a past concurrent full-suite run caused a kernel panic. Serialize all suite runs.
+- **Tests are immutable once green-by-design.** A red test written in Step 1 is fixed by changing the Step 3 implementation, never by editing, weakening, skipping, or deleting the test in Step 4. The only exception: the test itself is proven wrong (states the wrong expected behavior) — in that case, fix the test only after writing down why it's wrong, and treat that correction itself as a new Step 1/2 (re-verify it now fails for the *right* reason before touching implementation).
 
 ## Kernel API reference (verified against source — use these exact signatures)
 
 **`Cure.Core.Term`** (`lib/cure/core/term.ex`) — Core AST is plain tagged tuples, de Bruijn indices:
-`{:type, level}` · `{:var, k}` · `{:pi, dom, cod}` · `{:lam, dom, body}` · `{:app, f, a}` · `{:sigma, a, b}` · `{:pair, a, b}` · `{:fst, p}` · `{:snd, p}` · `{:data, name, params, indices}` · `{:ctor, name, args}` · `{:case, scrut, motive, branches}` (branches `[{ctor_name, arity, body}]`) · `{:global, name}` · `{:eq, ty, a, b}` · `{:refl, a}` · `{:rewrite, proof, motive, body}`. Also primitive literals: `{:int_type}`, `{:int_lit, n}`, `{:bool_type}`, `{:bool_lit, b}`, `{:float_type}`, `{:float_lit, f}`, `{:prim, op, args}`, `{:hole, name}`.
+`{:type, level}` · `{:var, k}` · `{:pi, dom, cod}` · `{:lam, dom, body}` · `{:app, f, a}` · `{:sigma, a, b}` · `{:pair, a, b}` · `{:fst, p}` · `{:snd, p}` · `{:data, name, params, indices}` · `{:ctor, name, args}` · `{:case, scrut, motive, branches}` (branches `[{ctor_name, arity, body}]`) · `{:global, name}` · `{:eq, ty, a, b}` · `{:refl, a}` · `{:rewrite, proof, motive, body}`. This is the complete node set `term.ex`'s own `term?/1`, `subst/3`, `shift/3`, and `to_external/1` recognize; its moduledoc explicitly disclaims "implicits, holes, or erasure annotations." **Caveat, verified against source:** `{:int_type}`, `{:int_lit, n}`, `{:bool_type}`, `{:bool_lit, b}`, `{:float_type}`, `{:float_lit, f}`, `{:prim, op, args}`, and `{:hole, name}` nodes *do* exist and are handled by `Eval`, `Kernel.infer/check`, `Serialize`, `Quote`, and `Value` — but **`Term.term?/1` has no clauses for any of them** (falls through to `false`). None of Tasks 9–11's generators need these nodes (they build Peano-style naturals via `:global`/`:ctor`/`:case`), so this gap is inert for Tier A — but if a future task's self-test asserts `Term.term?/1` on a term containing one of these nodes, expect a false negative; that would be a pre-existing kernel gap outside this plan's scope, not an Antigen bug.
 - `Term.subst(t, k, u) :: t()` (term.ex:122) — substitute de Bruijn index `k` with `u`.
 - `Term.shift(t, d, cutoff) :: t()` (term.ex:84) — lift free vars.
 - `Term.term?(t) :: boolean()` (term.ex:47) — shape check.
@@ -109,7 +110,7 @@ Expected: FAIL — `Antigen.Challenge` undefined.
 
 - [ ] **Step 3: Add the dep and the struct**
 
-In `mix.exs`, add to `deps/0`: `{:stream_data, "~> 1.0", only: [:test]}`. In `project/0` add `preferred_cli_env: ["antigen": :dev]` only if not present (the `antigen` task runs in `:dev`; it starts its own code paths — see Task 8). Then:
+In `mix.exs`, add to `deps/0`: `{:stream_data, "~> 1.0", only: [:test]}`. This repo's `mix.exs` declares a `def cli do [preferred_envs: [...]] end` callback (Elixir ≥ 1.15 style) rather than a `preferred_cli_env:` key in `project/0` — **the latter is silently ignored by Mix whenever `cli/0` is defined** (verified directly: with both present, only the `cli/0` entry takes effect). Since the `antigen` task's default env (`:dev`) already matches Mix's own default when no env is specified, no entry is strictly required; if one is added for explicitness, append `antigen: :dev` to the existing `def cli do [preferred_envs: [...]] end` list, not to `project/0`. Then:
 
 ```elixir
 # lib/antigen/challenge.ex
@@ -389,6 +390,16 @@ defmodule Antigen.CoverageTest do
     assert Coverage.key_string(Coverage.key(c)) == Coverage.key_string(Coverage.key(c))
     assert is_binary(Coverage.key_string(Coverage.key(c)))
   end
+
+  test "has_shadowing flag fires for a binder nested under another binder, not for a single binder" do
+    single = {:lam, {:type, 0}, {:var, 0}}
+    {_c, _b, flags1, _l} = Coverage.key(Challenge.stub(single))
+    refute :has_shadowing in flags1
+
+    curried_pi = {:pi, {:type, 0}, {:pi, {:type, 0}, {:type, 0}}}
+    {_c, _b, flags2, _l} = Coverage.key(Challenge.stub(curried_pi))
+    assert :has_shadowing in flags2
+  end
 end
 ```
 
@@ -433,11 +444,27 @@ defmodule Antigen.Coverage do
   defp bucket(d) when d <= 9, do: :b6_9
   defp bucket(_), do: :b10p
 
-  defp flags(%Challenge{kind: kind}, _terms, ctors) do
+  defp flags(%Challenge{kind: kind}, terms, ctors) do
     base = for {c, flag} <- @elim_flags, MapSet.member?(ctors, c), into: MapSet.new(), do: flag
     base = if kind in [:def_group, :forcing_pair], do: MapSet.put(base, :has_mutual_group), else: base
+    base = if Enum.any?(terms, &has_shadowing?/1), do: MapSet.put(base, :has_shadowing), else: base
     base
   end
+
+  # `:has_shadowing` (spec §7.2): a coarse approximation — any `:lam`/`:pi`/`:sigma`
+  # binder nested underneath another such binder. A single top-level binder does
+  # not count; only nesting (e.g. a curried `{:pi, _, {:pi, _, _}}`) does.
+  defp has_shadowing?(t), do: nested_binder?(t, false)
+
+  defp nested_binder?(t, inside?) when is_tuple(t) do
+    tag = elem(t, 0)
+    binder? = tag in [:lam, :pi, :sigma]
+    here = binder? and inside?
+    children = t |> Tuple.to_list() |> tl()
+    here or Enum.any?(children, fn c -> nested_binder?(c, inside? or binder?) end)
+  end
+  defp nested_binder?(list, inside?) when is_list(list), do: Enum.any?(list, &nested_binder?(&1, inside?))
+  defp nested_binder?(_, _), do: false
 
   # structural helpers over the tagged-tuple AST
   defp constructors(t), do: fold(t, [], fn node, acc -> [tag(node) | acc] end) |> Enum.reject(&is_nil/1)
@@ -452,16 +479,31 @@ defmodule Antigen.Coverage do
   defp fold(list, acc, f) when is_list(list), do: Enum.reduce(list, acc, fn c, a -> fold(c, a, f) end)
   defp fold(_leaf, acc, _f), do: acc
 
+  # A node's depth is 1 + the max depth of its *term-shaped* children (nested
+  # tuples/lists); non-term children (the leading tag atom, bare integers/de
+  # Bruijn indices, plain atoms) don't count, so a primitive leaf like
+  # `{:type, 0}` or `{:var, 0}` has depth 0, not 1 — verified against the
+  # Step-1 fixtures: `{:app, {:lam, {:type,0}, {:var,0}}, {:type,0}}` computes
+  # to depth 2 (bucket `:b0_2`, matching the first test) and the four-`:app`
+  # `deep` fixture in the third test computes to depth 3 (bucket `:b3_5`).
   defp fold_depth(t) when is_tuple(t) do
-    children = t |> Tuple.to_list() |> Enum.map(&fold_depth/1)
-    1 + Enum.max([0 | children])
+    child_depths =
+      t
+      |> Tuple.to_list()
+      |> Enum.filter(&(is_tuple(&1) or is_list(&1)))
+      |> Enum.map(&fold_depth/1)
+
+    case child_depths do
+      [] -> 0
+      ds -> 1 + Enum.max(ds)
+    end
   end
   defp fold_depth(list) when is_list(list), do: Enum.max([0 | Enum.map(list, &fold_depth/1)])
   defp fold_depth(_), do: 0
 end
 ```
 
-*Note:* the atom-tag first element (`:app`, `:var`, …) is itself a tuple element but is not a tuple, so `constructors/1`'s `tag/1` only records tuple heads — verify the test's `ctors` set excludes bare atoms like the de Bruijn index `0`. If the fold over-collects, restrict `fold` to skip `elem(t, 0)`. Adjust until the Step-1 tests pass exactly.
+*Note:* the atom-tag first element (`:app`, `:var`, …) is itself a tuple element but is not a tuple, so `constructors/1`'s `tag/1` (called only on the node `t` itself during `fold`, never on `t`'s individual elements) only records tuple heads — the `ctors` set correctly excludes bare atoms and the de Bruijn index `0`. `fold_depth`'s explicit `is_tuple/is_list` filter (above) similarly keeps primitive payload (atoms, integers) from inflating depth.
 
 - [ ] **Step 4: Run it, verify it passes**
 
@@ -489,14 +531,15 @@ git commit -m "feat(antigen): plateauing coverage-key feature vector"
   - `Corpus.append(path, Challenge.t(), dedup_key :: String.t()) :: :appended | :duplicate` — atomic single-write append, idempotent on `dedup_key`.
   - `Corpus.stream(path) :: Enumerable.t({:ok, Challenge.t()} | {:decode_error, line})` — one entry per line, decode errors surfaced not raised (spec §7.1).
   - `Corpus.dedup_key(Challenge.t(), :antibody | :seed) :: String.t()` — antibody key = canonical encode of `(assay, terms)`; seed key = `Coverage.key_string`.
+  - `Corpus.encode_scaffold(map()) :: String.t()` / `Corpus.decode_scaffold(String.t()) :: map()` — the generic (non-`Term`) metadata channel. Phase 1's only scaffold value is `%{}`; Phase 2 (Tasks 9–11) populate it with plain data (atoms, integers, lists/maps thereof) that isn't itself a `Cure.Core.Term.t()` — e.g. `:def_group`'s `focus` name list. **This is decided now, not deferred**: the record grammar gets its `scaffold=` field in this task so Phase 2 never has to touch `corpus.ex` or change the on-disk grammar (spec §7.1 "fixed now, stable forever").
 
 Record grammar (fixed now, stable forever — spec §7.1). One line, a tab-separated envelope where the last field carries the term pieces so `Serialize`'s space-delimited s-exprs never collide with the field delimiter:
 
 ```
-antigen-record\tkind=<kind>\tassay=<assay>\tlabel=<label>\tseed=<seed|->\tnote=<b64|->\tkey=<dedup_key_b64>\tpieces=<piece1>;;<piece2>;;...
+antigen-record\tkind=<kind>\tassay=<assay>\tlabel=<label>\tseed=<seed|->\tnote=<b64|->\tscaffold=<b64|->\tkey=<dedup_key_b64>\tpieces=<piece1>;;<piece2>;;...
 ```
 
-Each `<piece>` is `<piece_id>::<base64(Serialize.encode(term))>`. Base64 guarantees no `\t`, `;;`, or `::` inside a piece. Phase-1 stub emits a single piece `term::<...>`; Phase 2 emits `type:f`, `body:f`, … via `Challenge.to_pieces/1` (added in Task 9). Corpus delegates challenge↔pieces to `Antigen.Challenge` so the envelope never hard-codes kinds.
+Each `<piece>` is `<piece_id>::<base64(Serialize.encode(term))>`. Base64 guarantees no `\t`, `;;`, or `::` inside a piece. Phase-1 stub emits a single piece `term::<...>`; Phase 2 emits `type:f`, `body:f`, … via `Challenge.to_pieces/1` (added in Task 9). Corpus delegates challenge↔pieces to `Antigen.Challenge` so the envelope never hard-codes kinds. `scaffold=-` means an empty map (Phase-1's only case); otherwise it's `Base.encode64(:erlang.term_to_binary(scaffold))`, decoded with `:erlang.binary_to_term(bin, [:safe])` — **`[:safe]` refuses to create new atoms**, so any atom a scaffold carries (e.g. a generated def/family name like `:f`/`:g`) must already exist in the atom table at decode time. Concretely: Phase 2 generators (Tasks 9–11) must draw def/family/ctor names from a small **fixed, literal, closed set hardcoded in the generator module's source** (so the atoms exist the moment the module is compiled/loaded) — never mint them dynamically via `String.to_atom/1` at generation time, or a fresh process replaying a committed corpus (one that never ran the generator) will crash decoding a perfectly valid record.
 
 **Add to `Antigen.Challenge` (Task 1 module) the piece bridge** — implement here as part of this task since Corpus needs it:
 - `Challenge.to_pieces(Challenge.t()) :: {scaffold :: map(), [{piece_id :: String.t(), Term.t()}]}` — Phase-1: `{%{}, [{"term", term}]}` for `:stub`.
@@ -545,6 +588,18 @@ defmodule Antigen.CorpusTest do
     assert Enum.any?(results, &match?({:ok, %Challenge{}}, &1))
     assert Enum.any?(results, &match?({:decode_error, _}, &1))
   end
+
+  test "scaffold round-trips non-Term metadata through the record line (proves Phase-2 def_group/family carry-through)" do
+    scaffold = %{"focus" => ["f", "g"], "arity" => 2}
+    line = Corpus.encode_scaffold(scaffold)
+    refute String.contains?(line, "\t") or String.contains?(line, "\n")
+    assert Corpus.decode_scaffold(line) == scaffold
+  end
+
+  test "an empty scaffold encodes to the `-` sentinel and decodes back to an empty map" do
+    assert Corpus.encode_scaffold(%{}) == "-"
+    assert Corpus.decode_scaffold("-") == %{}
+  end
 end
 ```
 
@@ -578,13 +633,13 @@ defmodule Antigen.Corpus do
 
   @spec encode_record(Challenge.t()) :: String.t()
   def encode_record(%Challenge{} = c) do
-    {_scaffold, pieces} = Challenge.to_pieces(c)
+    {scaffold, pieces} = Challenge.to_pieces(c)
     piece_str = pieces |> Enum.map(fn {id, t} -> "#{id}::#{Base.encode64(Serialize.encode(t))}" end) |> Enum.join(";;")
     key = dedup_key(c, if(c.kind == :stub, do: :antibody, else: :antibody))
     Enum.join([
       @marker, "kind=#{c.kind}", "assay=#{c.assay}", "label=#{c.label}",
-      "seed=#{c.seed || "-"}", "note=#{enc_opt(c.note)}", "key=#{Base.encode64(key)}",
-      "pieces=#{piece_str}"
+      "seed=#{c.seed || "-"}", "note=#{enc_opt(c.note)}", "scaffold=#{encode_scaffold(scaffold)}",
+      "key=#{Base.encode64(key)}", "pieces=#{piece_str}"
     ], "\t")
   end
 
@@ -596,13 +651,24 @@ defmodule Antigen.Corpus do
       kind = String.to_existing_atom(m["kind"])
       label = String.to_existing_atom(m["label"])
       seed = if m["seed"] == "-", do: nil, else: String.to_integer(m["seed"])
-      {:ok, Challenge.from_pieces(kind, m["assay"], label, seed, dec_opt(m["note"]), %{}, pieces)}
+      scaffold = decode_scaffold(m["scaffold"] || "-")
+      {:ok, Challenge.from_pieces(kind, m["assay"], label, seed, dec_opt(m["note"]), scaffold, pieces)}
     else
       other -> {:error, {:bad_record, other}}
     end
   rescue
     e -> {:error, e}
   end
+
+  @doc "Encode arbitrary (non-Term) challenge metadata for the `scaffold=` field. `%{}` → `\"-\"`."
+  @spec encode_scaffold(map()) :: String.t()
+  def encode_scaffold(scaffold) when scaffold == %{}, do: "-"
+  def encode_scaffold(scaffold), do: Base.encode64(:erlang.term_to_binary(scaffold))
+
+  @doc "Decode the `scaffold=` field. `:safe` refuses to mint new atoms on decode — see the safety note above."
+  @spec decode_scaffold(String.t()) :: map()
+  def decode_scaffold("-"), do: %{}
+  def decode_scaffold(b64), do: :erlang.binary_to_term(Base.decode64!(b64), [:safe])
 
   @spec append(String.t(), Challenge.t(), String.t()) :: :appended | :duplicate
   def append(path, %Challenge{} = c, dedup_key) do
@@ -815,7 +881,7 @@ git commit -m "feat(antigen): failure reports flushed before stdout + breadcrumb
 - Consumes: `Backend.StreamData` (Task 3), `Corpus` (Task 5), `Report` (Task 6), `Coverage` (Task 4).
 - Produces:
   - `Runner.explore(opts) :: %{infections: non_neg_integer(), seeds_banked: non_neg_integer(), health: map()}` — generate + assay + bank; keeps going on infection (spec §8). `opts`: `:count` (rounds, default 200), `:gen`, `:assay`, `:corpus_path`, `:seeds_path`, `:report_dir`.
-  - `Runner.generate(opts) :: %{seeds_banked: non_neg_integer()}` — harvest-only; skips assays; runs until `:count` or an injected `:until` predicate (SIGINT trap lives in the Mix task, Task 8 — the runner takes a bounded count so it is unit-testable).
+  - `Runner.generate(opts) :: %{seeds_banked: non_neg_integer()}` — harvest-only; skips assays; runs until `:count` or an injected `:until` predicate (the SIGTERM trap for a clean summary lives in the Mix task, Task 8 — the runner takes a bounded count so it is unit-testable; Ctrl+C/SIGINT is not application-interceptable and simply kills the VM, which is safe since every record is already durably appended — see Task 8).
   - `Runner.replay(paths, assays) :: [%{entry: term(), verdict: :ok | {:violation, term()} | {:decode_error, String.t()}}]` — read-only, non-fail-fast over both stores (spec §8 replayer).
   - `Runner.replay_one(Challenge.t()) :: :ok | {:violation, term()}` — dispatch one challenge to its assay by `assay` id.
 - Produces (stub): `Antigen.Assays.Stub.run(Challenge.t()) :: :ok | {:violation, term()}` — violates iff the term is exactly `{:global, :boom}` (a deterministic fake infection to exercise the pipeline). `Antigen.Generators.Stub.gen() :: Gen.t()` — yields stub challenges, occasionally the `:boom` one.
@@ -978,7 +1044,7 @@ git add lib/antigen/runner.ex lib/antigen/assays/stub.ex lib/antigen/generators/
 git commit -m "feat(antigen): runner explore/generate/replay driven by a stub assay+generator"
 ```
 
-### Task 8: `Mix.Tasks.Antigen` — `mix antigen [generate]` with SIGINT flush
+### Task 8: `Mix.Tasks.Antigen` — `mix antigen [generate]` with SIGTERM-safe summary
 
 **Files:**
 - Create: `lib/mix/tasks/antigen.ex`
@@ -986,8 +1052,8 @@ git commit -m "feat(antigen): runner explore/generate/replay driven by a stub as
 
 **Interfaces:**
 - Consumes: `Antigen.Runner` (Task 7).
-- Produces: `mix antigen` (explore; `--count N`, `--budget Nm` override the default rounds), `mix antigen generate` (harvest-only, runs until SIGINT). Paths default to `test/antigen/corpus.sexp`, `test/antigen/seeds.sexp`, `tmp/antigen/`.
-- SIGINT trap: in `generate` mode the task traps exit and performs one final synchronous `Corpus` flush before exiting (spec §8 crit. 5). Because `Corpus.append` already writes per record atomically, the "flush" is a no-op-safe join on any in-flight append; implement by trapping `:sigterm`/`SIGINT` via `System.trap_signal/2` (Elixir ≥ 1.12) and returning cleanly.
+- Produces: `mix antigen` (explore; `--count N`, `--budget Nm` override the default rounds), `mix antigen generate` (harvest-only, runs until interrupted). Paths default to `test/antigen/corpus.sexp`, `test/antigen/seeds.sexp`, `tmp/antigen/`. `Mix.Tasks.Antigen.budget_to_count(String.t()) :: pos_integer()` — the pure `"Nm" -> round count` conversion (via the fixed rounds-per-minute constant), exposed and tested directly so `--budget`'s behavior has a red test independent of a real timed run.
+- Signal handling (spec §8 crit. 5), corrected against the real API: **`System.trap_signal/2,3` cannot trap `:sigint`** — verified directly (`System.trap_signal(:sigint, fn -> :ok end)` raises `FunctionClauseError`; the only signals accepted are `:sigquit`, `:sigterm`, `:sigusr1`, `:sighup`, `:sigabrt`, `:sigalrm`, `:sigusr2`, `:sigchld`, `:sigstop`, `:sigtstp`). Ctrl+C (SIGINT) delivered to a `-noshell` `mix` invocation terminates the VM directly and is not interceptable at the application level. This is safe because `Corpus.append` already performs a synchronous, atomic, per-record write (Task 5) — every banked seed or antibody is durable on disk the instant it's appended, so an untrapped SIGINT loses at most the in-flight record, never a previously-appended one, and there is no buffered state to flush. Trap `:sigterm` only (via `System.trap_signal/2`) so an operator-issued `kill -TERM` (or a supervising process) gets a clean final summary line instead of an abrupt exit; do not claim SIGINT is trapped anywhere in code, docs, or the task's moduledoc.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1018,6 +1084,12 @@ defmodule Mix.Tasks.AntigenTest do
     assert File.exists?(Path.join(@tmp, "seeds.sexp"))
     refute File.exists?(Path.join(@tmp, "latest.txt"))
   end
+
+  test "budget_to_count converts minutes to a round count via the fixed rounds-per-minute constant" do
+    one_minute = Mix.Tasks.Antigen.budget_to_count("1m")
+    assert one_minute > 0
+    assert Mix.Tasks.Antigen.budget_to_count("2m") == one_minute * 2
+  end
 end
 ```
 
@@ -1026,7 +1098,7 @@ end
 Run: `mix test test/antigen/mix_task_test.exs`
 Expected: FAIL — task undefined.
 
-- [ ] **Step 3: Implement the Mix task** (parse args; dispatch to `Runner.explore/1` or `Runner.generate/1`; in `generate`, install the signal trap; default the generator+assay to the Phase-1 stub, which Phase 2's Task 14 swaps for the real registry). Convert `--budget Nm` to a round count via a fixed rounds-per-minute constant, documented in the task moduledoc.
+- [ ] **Step 3: Implement the Mix task** (parse args; dispatch to `Runner.explore/1` or `Runner.generate/1`; in `generate`, install a `:sigterm` trap via `System.trap_signal/2` that prints the summary and returns cleanly — do not attempt to trap `:sigint`, it is not a valid `System.trap_signal/2,3` signal; default the generator+assay to the Phase-1 stub, which Phase 2's Task 14 swaps for the real registry). Implement `budget_to_count/1` as a pure function (parse the leading integer off `"Nm"`, multiply by a `@rounds_per_minute` module attribute documented in the moduledoc) and route `--budget` through it before passing `:count` to `Runner.explore/1`/`generate/1`.
 
 - [ ] **Step 4: Run it, verify it passes**
 
@@ -1037,7 +1109,7 @@ Expected: PASS.
 
 ```bash
 git add lib/mix/tasks/antigen.ex test/antigen/mix_task_test.exs
-git commit -m "feat(antigen): mix antigen [generate] task with SIGINT-safe harvest"
+git commit -m "feat(antigen): mix antigen [generate] task with SIGTERM-safe harvest summary"
 ```
 
 **Phase 1 gate (run once, serially):** `mix test test/antigen/` — the whole harness is green end-to-end on the stub. Commit nothing new; this is a checkpoint.
@@ -1059,19 +1131,20 @@ Replaces the stub with the three known-label generators, the four real assays, a
 **Interfaces:**
 - Consumes: `Antigen.Gen` (Task 2), `Cure.Core.{Term, Env}`.
 - Produces: `Generators.Totality.gen(opts) :: Gen.t()` yielding `Challenge` of `kind: :def_group`, `label ∈ {:terminating, :diverging}`, `payload: %{defs: [%{name: atom, type: Term, body: Term}], focus: [atom]}` (`focus` = the names whose termination the assay checks — all group members). `Generators.Totality.env_of(Challenge.t()) :: Env.t()` — rebuild the `Env` by folding `Env.add_def/4` over `payload.defs`.
-- `:def_group` piece encoding: pieces `type:<name>` and `body:<name>` per def; scaffold `%{"names" => [names], "focus" => [focus]}` (encoded as a small deterministic sub-string in the record — extend `to_pieces` to return the scaffold and have `Corpus.encode_record` serialize it into the `note`-adjacent slot, OR add a dedicated `scaffold=` tab field; pick the tab field to keep pieces pure terms).
+- `:def_group` piece encoding: pieces `type:<name>` and `body:<name>` per def (names as strings, e.g. `type:f`/`body:f`); scaffold `%{"names" => ["f", "g", ...], "focus" => ["f", "g", ...]}` (string names, not atoms — decoded with `String.to_existing_atom/1` in `from_pieces`, same safety discipline as the record envelope's `kind`/`label` fields, Task 5). The record's `scaffold=` field already exists (added generically in Task 5) — this task only needs to change `Challenge.to_pieces/from_pieces`; **`lib/antigen/corpus.ex` is not touched, and the on-disk grammar does not change.** Per Task 5's safety note, `diverging_mutual_pair/0` and `structural_terminating/0` (below) must use fixed literal atoms (`:f`, `:g`, …) — never `String.to_atom/1` on generator-time data.
 
 **Label correctness is the oracle (spec §5, umbrella §6) — the generator self-test (Task 12) is non-optional.** Generation shapes:
 - `:terminating` — non-recursive; single structural-recursion defs (self-call on a `{:var, _}` bound by a `case` branch at the guarded position); well-founded mutual groups (even/odd) whose cross-calls pass a structural subterm.
 - `:diverging` — direct self-loop with a non-decreasing arg; **mutual `f→g→f` with non-decreasing args (the confirmed hole)**; non-structural recursion.
 
-- [ ] **Step 1: Write the failing test** (assert the generator emits, for a fixed seed/opts, a `:diverging` mutual pair whose two bodies are `{:global, :g}`-headed / `{:global, :f}`-headed, and that `env_of` rebuilds an `Env` where `Env.get_def(env, :f).body` calls `{:global, :g}`; assert a `:terminating` structural def calls itself on a `case`-bound var).
+- [ ] **Step 1: Write the failing test** (assert the generator emits, for a fixed seed/opts, a `:diverging` mutual pair whose two bodies are `{:global, :g}`-headed / `{:global, :f}`-headed, and that `env_of` rebuilds an `Env` where `Env.get_def(env, :f).body` calls `{:global, :g}`; assert a `:terminating` structural def calls itself on a `case`-bound var; assert the `:def_group` challenge round-trips through `Corpus.encode_record/1` + `Corpus.decode_record/1` with `focus` intact — this is the concrete proof that Task 5's generic scaffold plumbing actually carries `:def_group` metadata, closing the loop flagged in Task 5).
 
 ```elixir
 # test/antigen/generators/totality_test.exs
 defmodule Antigen.Generators.TotalityTest do
   use ExUnit.Case, async: true
   alias Antigen.Generators.Totality
+  alias Antigen.Corpus
   alias Cure.Core.Env
 
   test "emits the confirmed diverging mutual cycle f→g→f as a labeled challenge" do
@@ -1089,11 +1162,18 @@ defmodule Antigen.Generators.TotalityTest do
     assert c.label == :terminating
   end
 
-  defp calls_global?(t, name), do: t |> :erlang.term_to_binary() |> :erlang.binary_to_term() |> occurs?(name)
-  defp occurs?({:global, n}, n), do: true
-  defp occurs?(t, n) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&occurs?(&1, n))
-  defp occurs?(l, n) when is_list(l), do: Enum.any?(l, &occurs?(&1, n))
-  defp occurs?(_, _), do: false
+  test "a :def_group challenge's focus list survives a corpus encode/decode round trip" do
+    c = Totality.diverging_mutual_pair()
+    line = Corpus.encode_record(c)
+    assert {:ok, c2} = Corpus.decode_record(line)
+    assert Enum.sort(c2.payload.focus) == Enum.sort(c.payload.focus)
+    assert Map.keys(Totality.env_of(c2).defs) |> Enum.sort() == Map.keys(Totality.env_of(c).defs) |> Enum.sort()
+  end
+
+  defp calls_global?({:global, n}, n), do: true
+  defp calls_global?(t, n) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&calls_global?(&1, n))
+  defp calls_global?(l, n) when is_list(l), do: Enum.any?(l, &calls_global?(&1, n))
+  defp calls_global?(_, _), do: false
 end
 ```
 
@@ -1112,9 +1192,9 @@ end
 **Interfaces:**
 - Consumes: `Cure.Core.Inductive` (`family/4`, `ctor/3,4`, `declare/3`).
 - Produces: `Generators.Positivity.gen(opts) :: Gen.t()` yielding `kind: :family`, `label ∈ {:positive, :negative}`, `payload: %{family: Inductive.family(), ctors: [Inductive.ctor()]}`. `Generators.Positivity.env_of(Challenge.t()) :: Env.t()` via `Inductive.declare/3`. Deterministic constructors `positive_family/0`, `negative_family/0` (a recursive occurrence left of an arrow in a ctor arg type) for the self-tests.
-- `:family` pieces: encode each telescope entry's `Term` and each `result_index` `Term` as pieces, with a scaffold recording binder-name atoms, arities, and quantities.
+- `:family` pieces: encode each telescope entry's `Term` and each `result_index` `Term` as pieces, with a scaffold recording binder-name **strings** (decoded via `String.to_existing_atom/1`, same discipline as Task 9's `:def_group` names — never `String.to_atom/1`), arities (integers), and quantities (`"erased"`/`"present"` strings mapped back to the fixed `:erased`/`:present` atoms). As with Task 9, this reuses the `scaffold=` field Task 5 already added — `lib/antigen/corpus.ex` is not touched.
 
-- [ ] **Step 1: Write the failing test** (assert `negative_family/0` is labeled `:negative` and, when declared, `Inductive.positive?(env, family)` returns `{:error, {:non_strictly_positive, _}}`; `positive_family/0` labeled `:positive` and `positive?` returns `:ok` — this cross-checks the generator's label against the real checker on the *known-good* set).
+- [ ] **Step 1: Write the failing test** (assert `negative_family/0` is labeled `:negative` and, when declared, `Inductive.positive?(env, family)` returns `{:error, {:non_strictly_positive, _}}`; `positive_family/0` labeled `:positive` and `positive?` returns `:ok` — this cross-checks the generator's label against the real checker on the *known-good* set; assert both challenges round-trip through `Corpus.encode_record/1` + `Corpus.decode_record/1` with the family's telescope/ctor structure intact, i.e. `Inductive.positive?/2`'s verdict on the decoded challenge's `env_of/1` matches the original).
 - [ ] **Step 2: Run it, verify it fails.**
 - [ ] **Step 3: Implement** (the two deterministic families with explicit `Inductive.family/4` + `Inductive.ctor/3,4` terms; `gen/1`; `env_of/1`; challenge + coverage clauses).
 - [ ] **Step 4: Run it, verify it passes.**
@@ -1131,6 +1211,7 @@ end
 - Consumes: `Generators.Totality` (Task 9), `Cure.Core.{Term, Env, Certificate}`.
 - Produces: `Generators.Forcing.gen(opts) :: Gen.t()` yielding `kind: :forcing_pair`, `label: :diverging`, `payload: %{defs: [...], focus: [atom], t: Term, tprime: Term}`. `Generators.Forcing.certified_env_of(Challenge.t()) :: Env.t()` — folds `Env.add_def/4`, then **runs the real certifier** (`Certificate.terminating?(name, Env.get_def(env,name).body)` per member; on the wrong `true`, `Env.certify(env, name)`), reproducing the hole's effect (spec §5.3). Deterministic `forcing_pair/0` constructor for the self-test.
 - `t = {:app, {:global, :f}, n}`; `t' =` one manual β/ι step of `f`'s body applied to `n`, landing head `{:global, :g}` — built with `Term.subst/3` (β) and a direct `case`-branch selection (ι), with `n` chosen so the one step reaches the `g`-calling branch. **`t` and `t'` must be structurally distinct** (guards against the `same_neutral_no_delta?` short-circuit, spec §4.3).
+- `:forcing_pair` piece/scaffold encoding reuses Task 9's `:def_group` convention for `defs`/`focus` (`type:<name>`/`body:<name>` pieces, string `"names"`/`"focus"` scaffold entries), plus two more pure-term pieces `t`/`tprime`. No new corpus-envelope work: same `scaffold=` field from Task 5, still untouched `lib/antigen/corpus.ex`.
 
 - [ ] **Step 1: Write the failing test** (assert `t != tprime`; assert `tprime` is headed by `{:global, :g}` and `t` by `{:global, :f}`; assert `certified_env_of/1` yields an env where `Env.certified?(env, :f)` is `true` — i.e. the certifier wrongly certified it).
 - [ ] **Step 2: Run it, verify it fails.**
