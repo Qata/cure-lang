@@ -62,6 +62,24 @@ defmodule Cure.Elab.Program do
   defp find_module_name(_other), do: nil
 
   @doc """
+  Hole goal reports (design spec §10/§11): for every definition whose body still
+  carries a hole, report the hole's **goal type** (the definition's return type)
+  and its **local context** (the parameter types in scope). This is the
+  `:hole_goal` diagnostic — a hole typechecks, reports what must fill it, and
+  blocks codegen until filled.
+  """
+  @spec hole_goals(Env.t()) :: [%{function: atom(), goal: term(), context: [term()]}]
+  def hole_goals(%Env{defs: defs}) do
+    for {name, %{type: type, body: body}} <- defs, Erase.has_hole?(body) do
+      {context, goal} = split_pi(type, [])
+      %{function: name, goal: goal, context: context}
+    end
+  end
+
+  defp split_pi({:pi, dom, cod}, acc), do: split_pi(cod, [dom | acc])
+  defp split_pi(goal, acc), do: {Enum.reverse(acc), goal}
+
+  @doc """
   Codegen gate (§6 negative #5): a program with an unfilled hole typechecks but
   must not be emitted. Returns `{:error, {:unfilled_hole, name}}` for the first
   definition that still carries a hole.
