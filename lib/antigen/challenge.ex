@@ -73,7 +73,8 @@ defmodule Antigen.Challenge do
       |> Enum.flat_map(fn {ct, j} ->
         arg_pieces = ct.args |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"ctor:#{j}:arg:#{k}", t} end)
         ridx_pieces = ct.result_indices |> Enum.with_index() |> Enum.map(fn {t, k} -> {"ctor:#{j}:ridx:#{k}", t} end)
-        arg_pieces ++ ridx_pieces
+        rparam_pieces = ctor_result_params(ct) |> Enum.with_index() |> Enum.map(fn {t, k} -> {"ctor:#{j}:rparam:#{k}", t} end)
+        arg_pieces ++ ridx_pieces ++ rparam_pieces
       end)
 
     ctor_scaffold =
@@ -82,6 +83,7 @@ defmodule Antigen.Challenge do
           "name" => Atom.to_string(ct.name),
           "arg_names" => Enum.map(ct.args, fn {n, _t} -> Atom.to_string(n) end),
           "ridx_count" => length(ct.result_indices),
+          "rparam_count" => length(ctor_result_params(ct)),
           "quantities" => Enum.map(ct.quantities, &Atom.to_string/1)
         }
       end)
@@ -124,7 +126,8 @@ defmodule Antigen.Challenge do
       |> Enum.flat_map(fn {ct, j} ->
         args = ct.args |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"#{prefix}:ctor:#{j}:arg:#{k}", t} end)
         ridx = ct.result_indices |> Enum.with_index() |> Enum.map(fn {t, k} -> {"#{prefix}:ctor:#{j}:ridx:#{k}", t} end)
-        args ++ ridx
+        rparam = ctor_result_params(ct) |> Enum.with_index() |> Enum.map(fn {t, k} -> {"#{prefix}:ctor:#{j}:rparam:#{k}", t} end)
+        args ++ ridx ++ rparam
       end)
 
     ctor_scaffold =
@@ -133,6 +136,7 @@ defmodule Antigen.Challenge do
           "name" => Atom.to_string(ct.name),
           "arg_names" => Enum.map(ct.args, fn {n, _t} -> Atom.to_string(n) end),
           "ridx_count" => length(ct.result_indices),
+          "rparam_count" => length(ctor_result_params(ct)),
           "quantities" => Enum.map(ct.quantities, &Atom.to_string/1)
         }
       end)
@@ -183,8 +187,9 @@ defmodule Antigen.Challenge do
           |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "ctor:#{j}:arg:#{k}")} end)
 
         ridx = for k <- 0..(cs["ridx_count"] - 1)//1, do: Map.fetch!(pmap, "ctor:#{j}:ridx:#{k}")
+        rparam = for k <- 0..((cs["rparam_count"] || 0) - 1)//1, do: Map.fetch!(pmap, "ctor:#{j}:rparam:#{k}")
         quantities = Enum.map(cs["quantities"], &String.to_existing_atom/1)
-        Inductive.ctor(String.to_existing_atom(cs["name"]), args, ridx, quantities)
+        Inductive.ctor(String.to_existing_atom(cs["name"]), args, ridx, quantities, rparam)
       end)
 
     new(kind: :family, assay: assay, label: label, payload: %{family: fam, ctors: ctors}, seed: seed, note: note)
@@ -234,12 +239,17 @@ defmodule Antigen.Challenge do
           |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:ctor:#{j}:arg:#{k}")} end)
 
         ridx = for k <- 0..(cs["ridx_count"] - 1)//1, do: Map.fetch!(pmap, "#{prefix}:ctor:#{j}:ridx:#{k}")
+        rparam = for k <- 0..((cs["rparam_count"] || 0) - 1)//1, do: Map.fetch!(pmap, "#{prefix}:ctor:#{j}:rparam:#{k}")
         quantities = Enum.map(cs["quantities"], &String.to_existing_atom/1)
-        Inductive.ctor(String.to_existing_atom(cs["name"]), args, ridx, quantities)
+        Inductive.ctor(String.to_existing_atom(cs["name"]), args, ridx, quantities, rparam)
       end)
 
     {fam, ctors}
   end
+
+  # A constructor's result-parameter terms, tolerant of legacy records lacking
+  # the field (defaults to []).
+  defp ctor_result_params(ct), do: Map.get(ct, :result_params, [])
 
   defp def_group_pieces(defs, focus) do
     scaffold = %{

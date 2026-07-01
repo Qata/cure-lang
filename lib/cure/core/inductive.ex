@@ -88,6 +88,7 @@ defmodule Cure.Core.Inductive do
           name: atom(),
           args: telescope(),
           result_indices: [Cure.Core.Term.t()],
+          result_params: [Cure.Core.Term.t()],
           quantities: [quantity()]
         }
 
@@ -108,7 +109,24 @@ defmodule Cure.Core.Inductive do
   @doc "Build a constructor signature with explicit {0,ω} argument quantities."
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()]) :: ctor()
   def ctor(name, arg_tele, result_indices, quantities),
-    do: %{name: name, args: arg_tele, result_indices: result_indices, quantities: quantities}
+    do: ctor(name, arg_tele, result_indices, quantities, [])
+
+  @doc """
+  Build a constructor signature carrying its result *parameter* terms (the
+  uniform parameter prefix of the family value it builds) separately from its
+  result *index* terms. The parameter-free forms (`ctor/3`, `ctor/4`) default
+  `result_params` to `[]`.
+  """
+  @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()], [Cure.Core.Term.t()]) ::
+          ctor()
+  def ctor(name, arg_tele, result_indices, quantities, result_params),
+    do: %{
+      name: name,
+      args: arg_tele,
+      result_indices: result_indices,
+      result_params: result_params,
+      quantities: quantities
+    }
 
   @doc "Register a family and its constructors in the env."
   @spec declare(Env.t(), family(), [ctor()]) :: Env.t()
@@ -185,6 +203,20 @@ defmodule Cure.Core.Inductive do
     case get_family(env, fname) do
       nil -> nil
       %{params: params} -> params
+    end
+  end
+
+  @doc "A family's parameter arity (0 if none / unknown)."
+  @spec param_count(Env.t(), atom()) :: non_neg_integer()
+  def param_count(env, fname), do: length(param_telescope(env, fname) || [])
+
+  @doc "A constructor's result *parameter* terms (the param prefix of its result)."
+  @spec ctor_result_params(Env.t(), atom()) :: [Cure.Core.Term.t()] | nil
+  def ctor_result_params(env, cname) do
+    case get_ctor(env, cname) do
+      nil -> nil
+      %{result_params: rps} -> rps
+      _ -> []
     end
   end
 
