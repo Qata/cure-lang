@@ -81,4 +81,46 @@ defmodule Cure.Core.ParamIndexSplitTest do
     assert {:error, {:non_uniform_parameter, info}} = Kernel.check_ctor(env, fam, wrong_arity)
     assert info.family == :P and info.ctor == :wrong_arity and info.position == :arity
   end
+
+  alias Cure.Core.Context
+
+  test "checking a param-bearing constructor application against its expected vdata carries params ++ indices" do
+    env = param_env()
+    ctx = Context.empty(env)
+    a_val = {:vdata, :Dec, []}
+    causal_val = {:vctor, :Causal, []}
+    term = {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}
+    expected = {:vdata, :P, [a_val, causal_val]}
+    assert :ok == Kernel.check(ctx, term, expected)
+  end
+
+  test "bare inference of a param-bearing constructor application is rejected (no expected type to source params from)" do
+    env = param_env()
+    ctx = Context.empty(env)
+    term = {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}
+    assert {:error, {:ctor_requires_checking_mode, :P}} == Kernel.infer(ctx, term)
+  end
+
+  test "infer of a param-free constructor is unchanged (regression)" do
+    env = param_env()
+    ctx = Context.empty(env)
+    assert {:ok, {:vdata, :Dec, []}} == Kernel.infer(ctx, {:ctor, :Dcoupled, []})
+  end
+
+  test "checking against a mismatched expected vdata is rejected (args checking ok is not enough)" do
+    # wrap(d) always produces index Causal — checking it against an expected
+    # type whose index is Dcoupled must fail, even though `d` itself checks
+    # fine against the parameter slot. Falsifies a clause that only verifies
+    # check_ctor_app succeeds without comparing the computed result to `expected`.
+    env = param_env()
+    ctx = Context.empty(env)
+    a_val = {:vdata, :Dec, []}
+    causal_val = {:vctor, :Causal, []}
+    wrong_index_val = {:vctor, :Dcoupled, []}
+    term = {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}
+    expected = {:vdata, :P, [a_val, wrong_index_val]}
+
+    assert {:error, {:conversion_failure, {:vdata, :P, [^a_val, ^causal_val]}, ^expected}} =
+             Kernel.check(ctx, term, expected)
+  end
 end

@@ -177,17 +177,26 @@ defmodule Cure.Core.Kernel do
       nil ->
         {:error, {:unknown_ctor, name}}
 
-      %{args: tele, result_indices: result_indices} ->
+      %{args: tele, result_indices: result_indices} = ctor_sig ->
         family_name = Inductive.ctor_family(sig, name)
+        result_params = Map.get(ctor_sig, :result_params, [])
 
-        with {:ok, arg_env} <- check_ctor_app(ctx, args, tele) do
-          # The accumulated arg values (most-recent first) are exactly the env in
-          # which the result-index terms are written; compute them by NbE (so a
-          # computed index like `and(d1,d2)` reduces once δ is available, M7).
-          # Slice-1 families are parameter-free; prepend evaluated params here
-          # when parameters are introduced.
-          index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-          {:ok, {:vdata, family_name, index_values}}
+        if Inductive.param_count(sig, family_name) > 0 do
+          # Parameters are implicit; nothing in a bare {:ctor,…} term carries
+          # them (only the untrusted elaborator's metavariable solver does, which
+          # the kernel does not trust). A param-bearing constructor must be
+          # type-CHECKED against an expected vdata that supplies the parameters —
+          # see the check/3 clause below.
+          {:error, {:ctor_requires_checking_mode, family_name}}
+        else
+          with {:ok, arg_env} <- check_ctor_app(ctx, [], args, tele) do
+            # The accumulated arg values (most-recent first) are exactly the env
+            # in which the result terms are written; compute them by NbE (so a
+            # computed index like `and(d1,d2)` reduces once δ is available, M7).
+            param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
+            index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+            {:ok, {:vdata, family_name, param_values ++ index_values}}
+          end
         end
     end
   end
@@ -268,6 +277,44 @@ defmodule Cure.Core.Kernel do
   # A hole is a deferred term: accepted at any goal type. Its obligation is
   # reported to the user and blocks codegen until filled (§6 / M8.5).
   def check(_ctx, {:hole, _name}, _expected), do: :ok
+
+  # Checking-mode constructor application: the expected vdata supplies the
+  # family's parameters (which pure inference cannot source), so this is the path
+  # a param-bearing constructor takes (from check_def's top-level check and from
+  # check_case_branches' per-branch check). `:vdata` is a 3-tuple carrying a
+  # single combined `params ++ indices` list; split off the params by param_count
+  # to seed check_ctor_app, then re-derive the actual result and compare it to
+  # `expected` (arguments checking against their own types is NOT enough — the
+  # computed indices must still match the expected type's).
+  def check(ctx, {:ctor, cname, args}, {:vdata, family, combined_args} = expected) do
+    sig = Context.signature(ctx)
+    pc = Inductive.param_count(sig, family)
+    {params, _indices} = Enum.split(combined_args, pc)
+
+    case Inductive.get_ctor(sig, cname) do
+      nil ->
+        {:error, {:unknown_ctor, cname}}
+
+      %{args: tele, result_indices: result_indices} = ctor_sig ->
+        result_params = Map.get(ctor_sig, :result_params, [])
+
+        if Inductive.ctor_family(sig, cname) != family do
+          {:error, {:foreign_ctor, cname}}
+        else
+          with {:ok, arg_env} <- check_ctor_app(ctx, params, args, tele) do
+            actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
+            actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+            actual = {:vdata, family, actual_params ++ actual_indices}
+
+            if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
+              :ok
+            else
+              {:error, {:conversion_failure, actual, expected}}
+            end
+          end
+        end
+    end
+  end
 
   def check(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
@@ -462,9 +509,14 @@ defmodule Cure.Core.Kernel do
   # Check a constructor application's args against its telescope (dependent),
   # returning the accumulated arg values (most-recent first) for result-index
   # computation. A failure on a data-typed argument is an index disagreement.
-  defp check_ctor_app(ctx, args, tele) do
+  defp check_ctor_app(ctx, param_vals, args, tele) do
     if length(args) == length(tele) do
-      check_ctor_app_rec(ctx, Enum.zip(args, tele), [])
+      # Seed the local evaluation environment with the family's actual parameter
+      # values (most-recent-first, mirroring check_ctor's ctx_full = params ++
+      # args numbering) so a ctor arg whose declared type references a parameter
+      # (e.g. `prepend`'s `x : a`) resolves to the real parameter, not a bogus
+      # out-of-range neutral.
+      check_ctor_app_rec(ctx, Enum.zip(args, tele), Enum.reverse(param_vals))
     else
       {:error, :ctor_arity}
     end
