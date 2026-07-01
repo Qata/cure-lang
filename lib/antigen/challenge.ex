@@ -4,7 +4,7 @@ defmodule Antigen.Challenge do
   @enforce_keys [:kind, :assay, :label, :payload]
   defstruct [:kind, :assay, :label, :payload, :seed, :note]
 
-  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case
+  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -35,7 +35,9 @@ defmodule Antigen.Challenge do
     :indexed_case, :well_typed, :ill_typed,
     :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
     :probe, :branch_family, :coverage_gap, :refine, :motive_wf,
-    :Tri, :A, :B, :C, :Ix, :wrap, :n, :p
+    :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
+    # rewrite/eq vertical: kind, def-names, motive family name
+    :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -99,7 +101,7 @@ defmodule Antigen.Challenge do
     {scaffold, param_pieces ++ index_pieces ++ ctor_pieces}
   end
 
-  def to_pieces(%__MODULE__{kind: :indexed_case, payload: p}) do
+  def to_pieces(%__MODULE__{kind: k, payload: p}) when k in [:indexed_case, :rewrite_eq] do
     %{families: families, def_name: dn, def_type: dt, def_body: db} = p
 
     {fam_scaffolds, fam_pieces} =
@@ -212,6 +214,10 @@ defmodule Antigen.Challenge do
 
     new(kind: :indexed_case, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
+
+  def from_pieces(:rewrite_eq, assay, label, seed, note, scaffold, pieces),
+    do: from_pieces(:indexed_case, assay, label, seed, note, scaffold, pieces)
+        |> Map.put(:kind, :rewrite_eq)
 
   # --- private helpers --------------------------------------------------------
 

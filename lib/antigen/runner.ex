@@ -69,6 +69,7 @@ defmodule Antigen.Runner do
   defp assay_module("positivity"), do: Antigen.Assays.Positivity
   defp assay_module("reflexivity"), do: Antigen.Assays.Reflexivity
   defp assay_module("indexed/case"), do: Antigen.Assays.Indexed
+  defp assay_module("rewrite/eq"), do: Antigen.Assays.Rewrite
 
   defp bank_seed(c, opts, acc) do
     case Corpus.append(opts[:seeds_path], c, Corpus.dedup_key(c, :seed)) do
