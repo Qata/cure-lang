@@ -141,13 +141,24 @@ depth). Accumulate a substitution or short-circuit:
   evaluated in the outer context and can never contain a ctor-telescope
   variable). Bind it to the other side after an **occurs-check** (the bound
   variable must not occur in its own solution). Record in `subst` keyed by the
-  de Bruijn index, with the shifting discipline of §4.4. **When both sides are
-  eligible variables** (a ctor-telescope var on `r` and an outer var on `s` in
-  the same pair) — bind the **outer** variable (`s`) to the ctor-telescope
-  variable (`r`), i.e. treat `s` as the key. This is the canonical direction:
-  it matches the feature's intent (narrowing an outer hypothesis using
-  branch-local information) and keeps the tie-break deterministic rather than
-  implementation-defined.
+  de Bruijn index, with the shifting discipline of §4.4. **When the `r` side is a
+  bare ctor-telescope var** (whether `s` is a term or itself a variable) — bind
+  the **ctor-telescope** variable (`r`) to `s`, i.e. treat `r` as the key. This
+  is the pre-existing direction and it is load-bearing: Cure declares every
+  `indexed type` with an EMPTY parameter telescope
+  (`Inductive.family(name, [], index_tele, level)`, `lib/cure/elab/declarations.ex:405`),
+  so a datatype's *uniform parameter* (e.g. `a` in `Vector(a: Type, n: Nat)`)
+  is carried as an index and shows up here as a bare-var-vs-var pair. Binding the
+  ctor's fresh var to the scrutinee (the caller's `a`) is a harmless no-op that
+  keeps the parameter identical across the scrutinee, the return type, and other
+  hypotheses. Binding the *other* direction (narrowing the caller's parameter to
+  a branch-local var) corrupts that shared parameter and breaks well-typed stdlib
+  code (`Std.Vector.append`). NOTE: an earlier draft of this spec mandated the
+  reverse ("bind the outer var") as a determinism tie-break; that was wrong —
+  Idris/Agda/Lean never unify parameters at all (they distinguish params from
+  indices), but Cure has no such distinction, so the only safe orientation for a
+  bare-var result index is the ctor-binding one. A genuine (non-uniform) index
+  that is a bare var is handled by the same clause and refines correctly.
 - **matching constructor/data heads** (`{:ctor, C, as}` vs `{:ctor, C, bs}` with
   equal head/arity, or two `:data` applications of the same family with equal
   arity) — recurse structurally over the pairwise-zipped argument **spine**,

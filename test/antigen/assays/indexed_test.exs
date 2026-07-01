@@ -26,15 +26,11 @@ defmodule Antigen.Assays.IndexedTest do
     assert :ok == A.run(G.refinement(:ill_typed))
   end
 
-  test "4.3 refinement-complete well-typed case — records kernel's verdict" do
-    # A sound + refinement-complete kernel returns :ok (h, refined from Ix n to
-    # Ix Causal, matches the wrap branch's required type). The current kernel
-    # drops the ground-index equation, so it is expected to return
-    # {:violation, {:wrongly_rejected, _}} — an INCOMPLETENESS finding (not
-    # unsoundness). Either way, assert the result is NOT a soundness infection
-    # ({:wrongly_accepted, _} would be the alarming case).
-    result = A.run(G.refinement(:well_typed))
-    refute match?({:violation, {:wrongly_accepted, _}}, result)
+  test "4.3 refinement-complete well-typed case is now accepted (completeness fix)" do
+    # Pre-fix this replayed {:wrongly_rejected, {:refine, :branch_type}} (the
+    # documented incompleteness). unify_indices now solves n := Causal from the
+    # wrap ctor's ground result index and refines h : Ix n to Ix Causal.
+    assert :ok == A.run(G.refinement(:well_typed))
   end
 
   test "4.4 well-formed motive is accepted" do

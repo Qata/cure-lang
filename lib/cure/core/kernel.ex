@@ -547,7 +547,15 @@ defmodule Cure.Core.Kernel do
             true ->
               %{args: tele, result_indices: result_indices} = ctor
               {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele)
-              subst = branch_index_subst(ctx, result_indices, scrut_indices, arity)
+
+              subst =
+                case unify_indices(ctx, result_indices, scrut_indices, arity) do
+                  {:solved, s} -> s
+                  :trivial -> %{}
+                  # :impossible is unreachable in Task 1; Task 2 adds a real arm here.
+                  :impossible -> %{}
+                end
+
               ctx_branch = specialize_branch_context(ctx_branch, subst)
               # Result indices are written over the ctor's args (most-recent first).
               s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
@@ -567,24 +575,112 @@ defmodule Cure.Core.Kernel do
     end)
   end
 
-  defp branch_index_subst(ctx, result_indices, scrut_indices, arity) do
-    depth = Context.length(ctx)
+  # Bidirectional first-order unification of a constructor's result-index vector
+  # (`result_indices`, terms over the ctor telescope — vars < arity) against the
+  # scrutinee's index vector (`scrut_indices`, outer-context values) in ctx_branch's
+  # de Bruijn space (spec §4.3/§4.4). Verdict: {:solved, subst} | :trivial | :impossible.
+  # In this task :impossible is not yet produced (clash/conflict → :undecided);
+  # Task 2 adds it.
+  defp unify_indices(ctx, result_indices, scrut_indices, arity) do
+    outer_depth = Context.length(ctx)
 
     result_indices
     |> Enum.zip(scrut_indices)
-    |> Enum.reduce(%{}, fn
-      {{:var, i}, scrut_value}, acc ->
-        replacement =
-          scrut_value
-          |> Quote.reify(depth)
-          |> Term.shift(arity, 0)
-
-        Map.put(acc, i, replacement)
-
-      {_other, _scrut_value}, acc ->
-        acc
+    |> Enum.map(fn {r, s_val} ->
+      {r, s_val |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
     end)
+    |> reduce_index_pairs(%{}, arity)
   end
+
+  defp reduce_index_pairs([], subst, _arity),
+    do: (if map_size(subst) == 0, do: :trivial, else: {:solved, subst})
+
+  defp reduce_index_pairs([{r, s} | rest], subst, arity) do
+    case unify_one(r, s, arity, subst) do
+      :impossible -> :impossible
+      {:ok, subst2} -> reduce_index_pairs(rest, subst2, arity)
+      :undecided -> reduce_index_pairs(rest, subst, arity)
+    end
+  end
+
+  # r-side vars are always < arity (ctor telescope); s-side vars always >= arity
+  # (outer). Disjoint ranges ⇒ the solve direction is unambiguous.
+  defp unify_one({:var, i}, s, arity, subst) when i < arity,
+    do: bind_index(i, s, subst)                         # ctor arg := scrutinee term (Box case / prior behavior)
+
+  defp unify_one(r, {:var, j}, arity, subst) when j >= arity,
+    do: bind_index(j, r, subst)                         # outer index var := ctor result index (4.3)
+
+  defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
+    do: unify_spine(as, bs, arity, subst)
+
+  # :data heads: compare the FLATTENED spine (params ++ indices); Quote.reify always
+  # emits an empty `indices` list, so never split ps-vs-is (spec §4.3).
+  defp unify_one({:data, n, ps, is}, {:data, n, ps2, is2}, arity, subst)
+       when length(ps) + length(is) == length(ps2) + length(is2),
+       do: unify_spine(ps ++ is, ps2 ++ is2, arity, subst)
+
+  defp unify_one(r, s, _arity, subst) when r == s, do: {:ok, subst}   # syntactically equal → consistent
+
+  defp unify_one(r, s, _arity, _subst) do
+    # Definite rigid head clash ⇒ impossible; anything else ⇒ conservative undecided.
+    # (Task 1 downgrades clash to :undecided — Task 2 activates :impossible.)
+    if rigid_index?(r) and rigid_index?(s) and head_key(r) != head_key(s),
+      do: :undecided,                                   # TASK 1: no :impossible yet
+      else: :undecided
+  end
+
+  defp unify_spine([], [], _arity, subst), do: {:ok, subst}
+  defp unify_spine([a | as], [b | bs], arity, subst) do
+    case unify_one(a, b, arity, subst) do
+      :impossible -> :impossible
+      {:ok, subst2} -> unify_spine(as, bs, arity, subst2)
+      :undecided -> unify_spine(as, bs, arity, subst)
+    end
+  end
+  defp unify_spine(_, _, _arity, subst), do: {:ok, subst}
+
+  # Add {key => term} after an occurs-check; on a same-key clash keep conservative.
+  defp bind_index(key, term, subst) do
+    cond do
+      occurs_index?(key, term) -> :undecided            # cyclic ⇒ degrade (spec §5.3)
+      Map.has_key?(subst, key) ->
+        old = Map.get(subst, key)
+        cond do
+          old == term -> {:ok, subst}                   # consistent
+          rigid_index?(old) and rigid_index?(term) and head_key(old) != head_key(term) ->
+            :undecided                                  # TASK 1: no :impossible yet (Task 2 flips)
+          true -> :undecided
+        end
+      true -> {:ok, Map.put(subst, key, term)}
+    end
+  end
+
+  defp rigid_index?({:ctor, _, _}), do: true
+  defp rigid_index?({:data, _, _, _}), do: true
+  defp rigid_index?({:type, _}), do: true
+  defp rigid_index?({:pi, _, _}), do: true
+  defp rigid_index?({:sigma, _, _}), do: true
+  defp rigid_index?({:int_type}), do: true
+  defp rigid_index?({:bool_type}), do: true
+  defp rigid_index?({:float_type}), do: true
+  defp rigid_index?({:int_lit, _}), do: true
+  defp rigid_index?({:bool_lit, _}), do: true
+  defp rigid_index?({:float_lit, _}), do: true
+  defp rigid_index?(_), do: false
+
+  defp head_key({:ctor, n, _}), do: {:ctor, n}
+  defp head_key({:data, n, _, _}), do: {:data, n}
+  defp head_key(t) when is_tuple(t), do: elem(t, 0)
+  defp head_key(other), do: other
+
+  # Conservative occurs-check: does {:var, key} appear anywhere in term? Ignores
+  # binder-depth shifts (over-approximates ⇒ at worst a spurious :undecided, never
+  # an unsound bind). Given disjoint ranges it effectively never fires on real input.
+  defp occurs_index?(key, {:var, k}), do: k == key
+  defp occurs_index?(key, t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&occurs_index?(key, &1))
+  defp occurs_index?(key, l) when is_list(l), do: Enum.any?(l, &occurs_index?(key, &1))
+  defp occurs_index?(_key, _), do: false
 
   defp specialize_branch_context(ctx, subst) when map_size(subst) == 0, do: ctx
 

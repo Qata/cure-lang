@@ -18,14 +18,15 @@ defmodule Antigen.IndexedSeedTest do
   # regresses, it replays {:wrongly_accepted, _} and the invariant test goes red.
   @antibodies [Indexed.branch_family(:ill_typed)]
 
-  # Known-good-behavior seeds: every OTHER indexed/case challenge the kernel
-  # currently handles correctly. `refinement(:well_typed)` is intentionally absent
-  # — it exposes a documented incompleteness (wrongly rejected), so it does not
-  # replay :ok and must not be banked as a "known-good" seed.
+  # Known-good-behavior seeds: every indexed/case challenge the kernel handles
+  # correctly. `refinement(:well_typed)` is now included — the 4.3 incompleteness
+  # (a dropped ground result index) is closed by unify_indices/4, so it replays
+  # :ok and is a legitimate known-good seed.
   @seed_candidates [
     Indexed.branch_family(:well_typed),
     Indexed.coverage(:well_typed),
     Indexed.coverage(:ill_typed),
+    Indexed.refinement(:well_typed),
     Indexed.refinement(:ill_typed),
     Indexed.motive_wf(:well_typed),
     Indexed.motive_wf(:ill_typed)

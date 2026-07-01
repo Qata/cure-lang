@@ -269,9 +269,14 @@ Expected: **Test 1 FAILS** (`check_def` returns `{:error, :branch_type}` — the
 
   # r-side vars are always < arity (ctor telescope); s-side vars always >= arity
   # (outer). Disjoint ranges ⇒ the solve direction is unambiguous.
-  defp unify_one({:var, i}, {:var, j}, arity, subst) when i < arity and j >= arity,
-    do: bind_index(j, {:var, i}, subst)                 # both eligible → bind OUTER (spec §4.3 tie-break)
-
+  # A bare ctor-telescope var on the r-side ALWAYS binds the ctor var to `s`
+  # (whether s is a term or a var). Cure declares indexed types with NO params
+  # (family(name, [], index_tele, level), declarations.ex:405), so a uniform
+  # "parameter-like" index shows up here as a bare-var-vs-var pair; binding the
+  # ctor's fresh var to the scrutinee is the harmless no-op that keeps the shared
+  # parameter identical everywhere. (An earlier draft had a var-vs-var "tie-break"
+  # binding the OUTER var instead — that corrupted uniform parameters and broke
+  # Std.Vector.append; removed. See spec §4.3.)
   defp unify_one({:var, i}, s, arity, subst) when i < arity,
     do: bind_index(i, s, subst)                         # ctor arg := scrutinee term (Box case / prior behavior)
 
