@@ -36,20 +36,35 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # Primitive Int. `Int : Type0`, literals are `Int`, and arithmetic is
-  # `Int → Int → Int` (each argument re-checked against `Int`).
+  # Primitive Int/Bool: base types live in `Type0`, literals inhabit them, and
+  # each primitive op carries a fixed signature (argument types → result type)
+  # against which the kernel re-checks every argument.
   def infer(_ctx, {:int_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:int_lit, _n}), do: {:ok, {:vint_type}}
+  def infer(_ctx, {:bool_type}), do: {:ok, {:vtype, 0}}
+  def infer(_ctx, {:bool_lit, _b}), do: {:ok, {:vbool_type}}
 
-  def infer(ctx, {:prim, op, args}) when op in [:add, :sub, :mul, :div] do
-    case Enum.find_value(args, fn arg ->
-           case check(ctx, arg, {:vint_type}) do
-             :ok -> nil
-             {:error, _} = err -> err
-           end
-         end) do
-      nil -> {:ok, {:vint_type}}
-      {:error, _} = err -> err
+  def infer(ctx, {:prim, op, args}) do
+    case prim_signature(op) do
+      nil ->
+        {:error, {:unknown_prim, op}}
+
+      {arg_types, result_type} when length(arg_types) == length(args) ->
+        args
+        |> Enum.zip(arg_types)
+        |> Enum.find_value(fn {arg, ty} ->
+          case check(ctx, arg, ty) do
+            :ok -> nil
+            {:error, _} = err -> err
+          end
+        end)
+        |> case do
+          nil -> {:ok, result_type}
+          {:error, _} = err -> err
+        end
+
+      _ ->
+        {:error, {:prim_arity, op}}
     end
   end
 
@@ -519,6 +534,19 @@ defmodule Cure.Core.Kernel do
   end
 
   # Cumulative subtyping: universe-level inclusion on sorts, conversion otherwise.
+  # Primitive operation signatures: {argument type values, result type value}.
+  defp prim_signature(op) when op in [:add, :sub, :mul, :div],
+    do: {[{:vint_type}, {:vint_type}], {:vint_type}}
+
+  defp prim_signature(op) when op in [:eq, :lt, :le, :gt, :ge],
+    do: {[{:vint_type}, {:vint_type}], {:vbool_type}}
+
+  defp prim_signature(op) when op in [:and, :or],
+    do: {[{:vbool_type}, {:vbool_type}], {:vbool_type}}
+
+  defp prim_signature(:not), do: {[{:vbool_type}], {:vbool_type}}
+  defp prim_signature(_op), do: nil
+
   defp subtype?({:vtype, l1}, {:vtype, l2}, _ctx), do: Universe.le?(l1, l2)
 
   defp subtype?(inferred, expected, ctx),

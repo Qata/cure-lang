@@ -46,6 +46,8 @@ defmodule Cure.Core.Eval do
   # (`n + 1`) read back and compare structurally.
   def eval({:int_type}, _env), do: {:vint_type}
   def eval({:int_lit, n}, _env), do: {:vint, n}
+  def eval({:bool_type}, _env), do: {:vbool_type}
+  def eval({:bool_lit, b}, _env), do: {:vbool, b}
   def eval({:prim, op, args}, env), do: prim(op, Enum.map(args, &eval(&1, env)))
 
   # Opaque until the global is certified total (M7 gates δ here).
@@ -93,23 +95,32 @@ defmodule Cure.Core.Eval do
 
   # -- projection ι -----------------------------------------------------------
 
-  # Fold a primitive when all arguments are concrete integers; a failed fold
+  # Fold a primitive when its arguments are concrete literals; a failed fold
   # (e.g. division by zero) or a non-literal argument leaves the op stuck.
   defp prim(op, args) do
-    with true <- Enum.all?(args, &match?({:vint, _}, &1)),
-         {:ok, n} <- fold(op, Enum.map(args, fn {:vint, k} -> k end)) do
-      {:vint, n}
-    else
-      _ -> {:vneutral, {:nprim, op, args}}
+    case fold(op, args) do
+      {:ok, value} -> value
+      :stuck -> {:vneutral, {:nprim, op, args}}
     end
   end
 
-  defp fold(:add, [a, b]), do: {:ok, a + b}
-  defp fold(:sub, [a, b]), do: {:ok, a - b}
-  defp fold(:mul, [a, b]), do: {:ok, a * b}
-  defp fold(:div, [_a, 0]), do: :error
-  defp fold(:div, [a, b]), do: {:ok, div(a, b)}
-  defp fold(_op, _args), do: :error
+  defp fold(:add, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a + b}}
+  defp fold(:sub, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a - b}}
+  defp fold(:mul, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a * b}}
+  defp fold(:div, [{:vint, _}, {:vint, 0}]), do: :stuck
+  defp fold(:div, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, div(a, b)}}
+
+  defp fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a == b}}
+  defp fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a < b}}
+  defp fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a <= b}}
+  defp fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a > b}}
+  defp fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a >= b}}
+
+  defp fold(:and, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a and b}}
+  defp fold(:or, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a or b}}
+  defp fold(:not, [{:vbool, a}]), do: {:ok, {:vbool, not a}}
+
+  defp fold(_op, _args), do: :stuck
 
   defp vfst({:vpair, a, _b}), do: a
   defp vfst({:vneutral, n}), do: {:vneutral, {:nfst, n}}

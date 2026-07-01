@@ -51,6 +51,8 @@ defmodule Cure.Core.Value do
   def value?({:vrefl, a}), do: value?(a)
   def value?({:vint_type}), do: true
   def value?({:vint, n}), do: is_integer(n)
+  def value?({:vbool_type}), do: true
+  def value?({:vbool, b}), do: is_boolean(b)
   def value?(_), do: false
 
   @doc "True when `neutral` is a structurally well-formed neutral (stuck) value."
