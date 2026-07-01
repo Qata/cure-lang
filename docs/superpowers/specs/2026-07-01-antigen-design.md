@@ -294,19 +294,48 @@ Antigen's own correctness matters (its generators are oracles):
 - **Replay determinism:** replaying a corpus term yields the same verdict every
   run.
 
-## 12. Open items (to fill next)
+## 12. Open items — status
 
-1. **Assay suite detail** (§7) — for each broad assay: exact assertion, the
-   generator that feeds it, and the oracle/differential strategy.
-2. **General term generator** (§5, kind 4) — concrete bidirectional-rules-as-generation
-   design; the small starting fragment and its growth path.
-3. **Positivity generator + assay** — labeled negative-occurrence generation.
-4. **`Antigen.Gen` DSL** — final primitive set + the StreamData interpreter
-   clause list.
-5. **`mix antigen` task** — budget/config (per-assay counts, time budget), output.
-6. **Milestones / phasing** — v1 = totality vertical end-to-end first (proves the
-   pipeline on the known hole), then broaden assay by assay.
-7. **Corpus file mechanics** — exact `(case …)` grammar, dedup key canonicalization.
+**Research complete.** All 11 prior-art papers are read and synthesized in
+`docs/research/pbt-dependent-types/synthesis.md`. **Slicing decided:** the engine
+is split into two tiers, each its own spec → plan → build cycle.
+
+- **Tier A** — the harness + the schema-directed (known-label) assays — is fully
+  designed in `docs/superpowers/specs/2026-07-01-antigen-tier-a-design.md`. It
+  resolves items 3–7 below and builds the pipeline end-to-end against the *known*
+  mutual-recursion hole with no dependence on the frontier generator.
+- **Tier B** — the general term generator + the differential assays (items 1–2) —
+  is deferred to its own later spec; it feeds the seed bank Tier A builds.
+
+**Locked decisions this session** (see the Tier-A spec + synthesis for detail):
+- Generator = bidirectional-rule inversion + INDIR (head-first elimination) + a
+  retained plain-elimination rule (redexes stay reachable) + interleaved
+  generation-and-checking + direct normal-form generation + deliberate shadowing;
+  conversion / index constraints discharged via the kernel conv-checker under a
+  fixed fuel budget (a hybrid: generate the structural skeleton, *check* the
+  semantic constraints — yield is the engineering unknown, not correctness).
+- Oracle strategy (the kernel-as-its-own-checker problem, which no paper faces):
+  differential/self-consistency assays, independent invariants (esp.
+  **reflexivity `conv(t,t)` ⟺ deep normalization** — the sharp cheap probe for the
+  hole), and known-label generation. Never trust the kernel against itself.
+- **Two committed, never-pruned, C2-serialized, generator-independent corpora:**
+  antibodies (counterexamples, admit-any) and a valid/seed bank (coverage-deduped
+  via a feature-vector key). Seeds folded into the bank; generator-independence
+  means a generator rewrite cannot cost the accumulated library.
+- **Budget model:** a fixed committed **fuel** budget decides the verdict
+  (deterministic replay); a fixed wall-clock **killswitch** is a safety net,
+  reported separately, never a verdict. Explorer self-terminates (default +
+  override); a dedicated **generate mode** harvests terms until killed without
+  running assays.
+- **Health gate:** discard-rate + coverage tracking (binder-usage / reduction
+  activity added in Tier B) — reported, guarding against vacuous green runs.
+
+**Remaining open (Tier B spec):**
+1. **General term generator** (§5, kind 4) — the hybrid design above, its small
+   starting fragment, and its yield/coverage measured against the Tier-A harness.
+2. **Differential assay detail** (§7) — for `subject_reduction`,
+   `infer_check_agreement`, `normalization_stability`, `conversion_termination`,
+   `erasure_preservation`: exact assertion, feeding generator, oracle strategy.
 
 ## 13. Relationship to the broader initiative
 
