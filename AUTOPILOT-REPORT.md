@@ -1,8 +1,9 @@
 # Autopilot completion report — Antigen Tier A
 
 **Branch:** `autopilot/cure-dependent-types-frp` (worktree `.claude/worktrees/cure-dependent-types-frp`)
-**Status:** ✅ Complete — do NOT auto-merged; ready for operator review & merge.
-**Full suite:** `mix test` → **2097 passed, 1 excluded** (the one exclusion is intentional — see §Operator decision). Working tree git-clean after the run.
+**Status:** ✅ Complete — ready for operator review & merge (not auto-merged).
+**Full suite:** `mix test` → **2100 passed, 0 excluded, 0 failures**. Working tree git-clean after the run.
+**Update:** the operator directed fixing the hole; the mutual-recursion soundness hole is now **fixed** in `Cure.Core.Certificate` (see §Hole fixed). The corpus-replay invariant test now runs by default and is green.
 
 ## What was built
 
@@ -28,7 +29,7 @@ The schema-directed half of **Antigen**, a property-based metatheory-testing eng
 5. ✅ `mix antigen generate` harvests into the seed bank; per-record atomic append means SIGINT loses nothing already banked.
 6. ✅ Architecture test green: nothing under `Antigen.Generators.*` / `Antigen.Assays.*` references `StreamData`.
 
-**Sequencing:** the kernel hole is still live (fixing it is a separate, out-of-scope spec), so criteria 1–2 are evidenced by **live antibodies**, exactly as the spec's sequencing note anticipates.
+**Sequencing:** the hole was caught live first (criteria 1–2 via live antibodies), then **fixed** at the operator's direction — so criteria 1–2 are now evidenced exactly as the spec's sequencing note's post-fix branch describes: the assays correctly report *no* violation, and the generator self-tests + never-pruned corpus antibodies stand as the enduring proof + regression guard.
 
 ## Key facts / notable engineering
 
@@ -37,17 +38,16 @@ The schema-directed half of **Antigen**, a property-based metatheory-testing eng
 - **Corpus is generator-independent:** two committed, never-pruned, C2-serialized stores (`test/antigen/corpus.sexp` antibodies, `test/antigen/seeds.sexp` seed bank). A record envelope composes `Serialize.encode/1` over each `Term` piece + a `scaffold=` metadata channel.
 - **Replay atom-safety fix (found by the replayer itself):** decoding a committed record in a fresh process that never ran a generator was crashing on `String.to_existing_atom`; fixed by force-interning the closed kind/label/name set in `Antigen.Challenge` (`@known_atoms`).
 
-## ⚠️ Operator decision required (spec §2 sequencing note)
+## Hole fixed (per operator instruction: "leave the test red and just fix the hole")
 
-The permanent regression test `test/antigen/corpus_replay_test.exs` asserts every committed entry satisfies its assay invariant. **While the mutual-recursion hole is live, that assertion is RED by design** (spec §7.1). I gated it behind `@tag :antigen_live_hole`, which `test/test_helper.exs` **excludes by default** so CI stays green; run it on demand with:
+Rather than exclude the red replay test, the mutual-recursion soundness hole is **fixed**:
 
-```
-mix test --only antigen_live_hole
-```
+- **`Cure.Core.Certificate.terminating?/3`** is now env-aware and rejects a def that sits on a **mutual cycle** — following calls through sibling globals, if a path returns to the def, it is not certified. Single-def structural recursion is unchanged; non-cyclic helper calls still certify regardless of certification order (verified against `TotalityClosure`'s arbitrary-order closure). `Kernel.validate_certificate` threads `env` through. This matches the module's own long-stated intent ("mutual recursion … soundly rejected") — previously aspirational, now enforced.
+- **Red→green proof:** `test/cure/core/certificate_test.exs` gained a test that the cycle `f→g→f` is rejected (`{:error, :not_total}`), plus a guard that a non-cyclic helper (`use_id → id`) still certifies. Both green.
+- **The `@tag :antigen_live_hole` exclusion is gone** — `test_helper.exs` no longer excludes anything; the corpus-replay invariant test runs in the default suite and is green.
+- **Antigen tests updated to post-fix reality** (spec §2 sequencing note): the totality/reflexivity assays now correctly report *no* violation on the (now-safe) kernel; the enduring proof of detection is the **generator self-tests** (label-correct by construction; `refute Certificate.terminating?(mutual)`), the **fuel mechanism test** (via a manual `Env.certify`, isolating the Conv bound from the certifier), and the **two never-pruned corpus antibodies** — permanent regression guards that go red again if the hole is ever reintroduced.
 
-It currently reports 4 failing entries — `{:wrongly_certified, [:f, :g]}` and `{:non_normalizing, :conv_exceeded_fuel}` — and flips to green the moment the certifier is fixed.
-
-**Your call:** keep it excluded-by-default (current — green CI, red on demand), or drop the exclude in `test_helper.exs` to leave the suite red until the fix lands. I chose excluded-by-default so autopilot could produce a green verification; nothing else depends on the choice.
+**No follow-up decision needed.** The kernel is sound against this hole and the suite is fully green.
 
 ## Not done (out of scope, as designed)
 

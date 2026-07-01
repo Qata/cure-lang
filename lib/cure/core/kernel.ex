@@ -300,7 +300,7 @@ defmodule Cure.Core.Kernel do
     with :ok <- check_def(env, name) do
       %{body: body} = Env.get_def(env, name)
 
-      if Certificate.terminating?(name, body),
+      if Certificate.terminating?(name, body, env),
         do: {:ok, Env.certify(env, name)},
         else: {:error, :not_total}
     end

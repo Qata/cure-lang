@@ -5,17 +5,12 @@ defmodule Antigen.CorpusReplayTest do
   kernel** — read-only, non-fail-fast, never mutating the files (so `mix test`
   stays git-clean).
 
-  While the mutual-recursion hole is LIVE, the `:diverging` and `:forcing_pair`
-  antibody entries replay to a violation, so the invariant-check test below is RED
-  by design (spec §7.1: a live infection keeps the suite red until the kernel is
-  fixed) and is tagged `:antigen_live_hole`, which `test_helper.exs` EXCLUDES from
-  the default run so CI is not permanently wedged. Run it explicitly with
-  `mix test --only antigen_live_hole`; it flips to green the moment the certifier
-  is fixed.
-
-  OPERATOR DECISION (flagged for the autopilot Stage-5 report): keep the live-hole
-  replay excluded-by-default (current choice — green CI, on-demand red), or drop
-  the exclude to leave the suite red until the fix lands.
+  The mutual-recursion hole has since been **fixed** in `Cure.Core.Certificate`
+  (mutual-cycle detection), so every committed entry now satisfies its invariant
+  and the invariant-check test below is GREEN. The two antibodies remain in the
+  corpus as **permanent regression guards** (never pruned, spec §7.1): if the hole
+  is ever reintroduced, `totality/diverging` and `reflexivity` replay to a
+  violation again and this test goes red.
   """
   use ExUnit.Case, async: true
   alias Antigen.{Runner, Assays}
@@ -47,15 +42,14 @@ defmodule Antigen.CorpusReplayTest do
     end
   end
 
-  @tag :antigen_live_hole
-  test "every committed entry satisfies its assay invariant (RED until the hole is fixed)" do
+  test "every committed entry satisfies its assay invariant (regression guard)" do
     failing =
       Runner.replay([@corpus, @seeds], @registry)
       |> Enum.reject(fn r -> r.verdict == :ok end)
 
     assert failing == [],
-           "#{length(failing)} committed entr(y/ies) fail their invariant " <>
-             "(expected while the mutual-recursion hole is live): " <>
+           "#{length(failing)} committed entr(y/ies) fail their invariant — the " <>
+             "mutual-recursion hole may have regressed: " <>
              inspect(Enum.map(failing, & &1.verdict))
   end
 end

@@ -27,23 +27,86 @@ defmodule Cure.Core.Certificate do
   function it cannot prove total, so δ never unfolds a non-terminating global.
   Higher-order recursion, non-variable decreasing arguments, and mutual
   recursion fall outside this criterion and are (soundly) rejected.
+
+  ## Mutual recursion
+
+  The single-body structural check above sees only one definition, so it cannot
+  witness a cycle that runs *through a sibling* global (`f` calls `g`, `g` calls
+  `f`): each body is self-call-free, so a naive check would wrongly pass both.
+  We close that gap with the signature: a definition is rejected when, following
+  calls to *other* globals through `env`, some path returns to it — i.e. it sits
+  on a mutual cycle. Well-founded mutual groups are conservatively rejected too
+  (incompleteness, not unsoundness); they stay opaque to δ, never a soundness
+  hole. A call to a global that does *not* lead back is a plain subroutine call
+  and is unaffected, so non-cyclic helpers still certify regardless of the order
+  in which the closure certifies them.
   """
 
-  @doc "True when the Core `body` of global `name` is provably terminating."
-  @spec terminating?(atom(), Cure.Core.Term.t()) :: boolean()
-  def terminating?(name, body) do
-    if not calls?(name, body) do
-      true
-    else
-      {params, inner} = peel_lams(body, 0)
-      arity = params
-      # Try each parameter position as the structurally-decreasing argument.
-      # Param i (0-based, outermost first) sits at de Bruijn index arity-1-i.
-      Enum.any?(0..(arity - 1)//1, fn p ->
-        arity > 0 and guarded?(name, p, inner, arity - 1 - p, MapSet.new())
-      end)
+  alias Cure.Core.Env
+
+  @doc """
+  True when the Core `body` of global `name` is provably terminating under the
+  signature `env` (needed to see mutual cycles through sibling globals).
+  """
+  @spec terminating?(atom(), Cure.Core.Term.t(), Env.t()) :: boolean()
+  def terminating?(name, body, env) do
+    cond do
+      # A cycle through a sibling global — mutual recursion — is rejected.
+      mutually_recursive?(name, body, env) ->
+        false
+
+      not calls?(name, body) ->
+        true
+
+      true ->
+        {params, inner} = peel_lams(body, 0)
+        arity = params
+        # Try each parameter position as the structurally-decreasing argument.
+        # Param i (0-based, outermost first) sits at de Bruijn index arity-1-i.
+        Enum.any?(0..(arity - 1)//1, fn p ->
+          arity > 0 and guarded?(name, p, inner, arity - 1 - p, MapSet.new())
+        end)
     end
   end
+
+  # -- mutual-recursion detection ---------------------------------------------
+
+  # `name` sits on a mutual cycle iff, following calls to globals *other than*
+  # `name` through the signature, some path returns to `name`. Direct
+  # self-recursion (name→name) is excluded here — it is the structural guard's
+  # job — so this only fires on cycles of length ≥ 2.
+  defp mutually_recursive?(name, body, env) do
+    callees = body |> called_globals() |> MapSet.delete(name) |> MapSet.to_list()
+    reaches?(env, callees, name, MapSet.new())
+  end
+
+  defp reaches?(_env, [], _target, _visited), do: false
+
+  defp reaches?(env, [g | rest], target, visited) do
+    cond do
+      g == target ->
+        true
+
+      MapSet.member?(visited, g) ->
+        reaches?(env, rest, target, visited)
+
+      true ->
+        next =
+          case Env.get_def(env, g) do
+            %{body: b} -> b |> called_globals() |> MapSet.to_list()
+            _ -> []
+          end
+
+        reaches?(env, next ++ rest, target, MapSet.put(visited, g))
+    end
+  end
+
+  # Every global name referenced anywhere in a Core term.
+  defp called_globals(term), do: gather_globals(term, MapSet.new())
+  defp gather_globals({:global, n}, acc), do: MapSet.put(acc, n)
+  defp gather_globals(t, acc) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.reduce(acc, &gather_globals/2)
+  defp gather_globals(l, acc) when is_list(l), do: Enum.reduce(l, acc, &gather_globals/2)
+  defp gather_globals(_, acc), do: acc
 
   # -- structural-recursion guard ---------------------------------------------
 

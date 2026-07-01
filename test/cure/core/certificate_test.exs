@@ -46,4 +46,27 @@ defmodule Cure.Core.CertificateTest do
     assert {:error, :not_total} = Kernel.validate_certificate(env, :loop)
     refute Conv.conv?({:global, :loop}, @causal, [], 0, env)
   end
+
+  test "a mutually-recursive cycle f→g→f is NOT certified (mutual recursion is soundly rejected)" do
+    ty = {:pi, @dec, @dec}
+    bf = {:lam, @dec, {:app, {:global, :g}, {:var, 0}}}
+    bg = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+    env = base() |> Env.add_def(:f, ty, bf) |> Env.add_def(:g, ty, bg)
+
+    assert {:error, :not_total} = Kernel.validate_certificate(env, :f)
+    assert {:error, :not_total} = Kernel.validate_certificate(env, :g)
+    # ...and neither δ-unfolds in conversion (stays opaque).
+    refute Conv.conv?({:app, {:global, :f}, @causal}, @causal, [], 0, env)
+  end
+
+  test "a def that calls an unrelated (non-cyclic) global is still certified" do
+    # `use_id = λx. id x` where `id = λx. x`: id does not call back, so use_id is
+    # not in a cycle and must remain certifiable (guards against over-rejection).
+    ty = {:pi, @dec, @dec}
+    id_body = {:lam, @dec, {:var, 0}}
+    use_body = {:lam, @dec, {:app, {:global, :id}, {:var, 0}}}
+    env = base() |> Env.add_def(:id, ty, id_body) |> Env.add_def(:use_id, ty, use_body)
+
+    assert {:ok, _} = Kernel.validate_certificate(env, :use_id)
+  end
 end

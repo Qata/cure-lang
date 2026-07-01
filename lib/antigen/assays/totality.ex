@@ -25,5 +25,5 @@ defmodule Antigen.Assays.Totality do
     if rejected == [], do: :ok, else: {:violation, {:wrongly_rejected, rejected}}
   end
 
-  defp certifies?(env, name), do: Certificate.terminating?(name, Env.get_def(env, name).body)
+  defp certifies?(env, name), do: Certificate.terminating?(name, Env.get_def(env, name).body, env)
 end

@@ -10,7 +10,7 @@ defmodule Antigen.E2ETest do
     :ok
   end
 
-  test "explore over the real totality generator catches the live hole and reports health" do
+  test "explore over the real totality generator runs clean post-fix, still exercising the mutual-group shape" do
     result =
       Runner.explore(
         gen: Generators.Totality.gen(),
@@ -20,9 +20,10 @@ defmodule Antigen.E2ETest do
         count: 50
       )
 
-    assert result.infections >= 1
-    assert File.exists?(Path.join(@tmp, "corpus.sexp"))
-    assert File.exists?(Path.join(@tmp, "latest.txt"))
+    # Hole fixed ⇒ the certifier soundly rejects the diverging pair ⇒ no infection.
+    assert result.infections == 0
+    refute File.exists?(Path.join(@tmp, "latest.txt"))
+    # ...but the run still generated and covered the mutual-group shape (health gate)
     assert MapSet.member?(result.health.coverage, :has_mutual_group)
     assert result.health.discard_rate == 0.0
   end

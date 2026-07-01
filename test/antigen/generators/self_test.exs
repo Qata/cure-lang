@@ -16,7 +16,7 @@ defmodule Antigen.Generators.SelfTest do
   test ":terminating def is genuinely accepted by the real certifier (completeness)" do
     c = Totality.structural_terminating()
     env = Totality.env_of(c)
-    assert Enum.all?(c.payload.focus, fn name -> Certificate.terminating?(name, Env.get_def(env, name).body) end)
+    assert Enum.all?(c.payload.focus, fn name -> Certificate.terminating?(name, Env.get_def(env, name).body, env) end)
   end
 
   test ":diverging mutual pair is genuinely non-terminating by construction (mutual back-edges, no self-call)" do
@@ -24,11 +24,14 @@ defmodule Antigen.Generators.SelfTest do
     env = Totality.env_of(c)
     bf = Env.get_def(env, :f).body
     bg = Env.get_def(env, :g).body
-    # genuine mutual cycle: each references its sibling, neither references itself
+    # genuine mutual cycle: each references its sibling, neither references itself.
+    # This label-by-construction check is the enduring proof the generator produces
+    # real divergence, independent of the certifier's live behaviour (spec §2).
     assert mentions_global?(bf, :g) and not mentions_global?(bf, :f)
     assert mentions_global?(bg, :f) and not mentions_global?(bg, :g)
-    # ...and the certifier wrongly accepts it — the confirmed hole this must flag
-    assert Certificate.terminating?(:f, bf) and Certificate.terminating?(:g, bg)
+    # ...and (post-fix) the certifier now correctly REJECTS the mutual cycle.
+    refute Certificate.terminating?(:f, bf, env)
+    refute Certificate.terminating?(:g, bg, env)
   end
 
   # --- Positivity: labels agree with the real positivity checker -------------

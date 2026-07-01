@@ -44,16 +44,18 @@ defmodule Antigen.Generators.Forcing do
   end
 
   @doc """
-  Rebuild the `Env` and reproduce the hole's effect: run the *real* certifier over
-  each focus member and, on its (wrong) `true`, mark the global certified — so δ
-  will unfold it in conversion, exactly as the live kernel does.
+  Rebuild the `Env` and certify each focus member for which the *real* certifier
+  vouches. While the mutual-recursion hole was live this wrongly certified the
+  diverging cycle (reproducing the hole's δ-unfolding effect); now that the
+  certifier is fixed it certifies nothing here — so conversion no longer unfolds
+  the cycle and the reflexivity assay correctly reports no infection.
   """
   @spec certified_env_of(Challenge.t()) :: Env.t()
   def certified_env_of(%Challenge{payload: %{defs: defs, focus: focus}}) do
     env = Enum.reduce(defs, Env.empty(), fn d, e -> Env.add_def(e, d.name, d.type, d.body) end)
 
     Enum.reduce(focus, env, fn name, e ->
-      if Certificate.terminating?(name, Env.get_def(e, name).body), do: Env.certify(e, name), else: e
+      if Certificate.terminating?(name, Env.get_def(e, name).body, e), do: Env.certify(e, name), else: e
     end)
   end
 end

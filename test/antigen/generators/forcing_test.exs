@@ -13,11 +13,13 @@ defmodule Antigen.Generators.ForcingTest do
     assert {:app, {:global, :g}, _} = tp
   end
 
-  test "certified_env_of reproduces the hole: the diverging globals are wrongly certified" do
+  test "certified_env_of leaves the diverging globals UNcertified (the certifier is fixed)" do
+    # Post-fix the real certifier soundly rejects the mutual cycle, so this
+    # env-builder certifies nothing — the designed post-fix state (spec §2).
     c = Forcing.forcing_pair()
     env = Forcing.certified_env_of(c)
-    assert Env.certified?(env, :f)
-    assert Env.certified?(env, :g)
+    refute Env.certified?(env, :f)
+    refute Env.certified?(env, :g)
   end
 
   test "a :forcing_pair round-trips through the corpus with t/tprime intact" do
