@@ -58,8 +58,8 @@ Tier A is done when:
    result is shrunk to a minimal cycle, written to `tmp/antigen/`, and appended
    to the antibody corpus — all in one self-terminating run.
 2. `reflexivity-as-normalization` independently flags the *downstream* consequence
-   of the same hole: a wrongly-certified diverging global, forced inside a term,
-   makes `conv(t,t)` exceed its fuel budget.
+   of the same hole: a wrongly-certified diverging global, forced inside a pair
+   of terms (§4.3), makes `conv(t, t')` exceed its fuel budget.
 3. `totality/terminating` and `positivity` pass on known-good inputs and would
    fail on injected known-bad ones (both directions exercised).
 4. `mix test` statically replays both corpora, reports **every** failing entry,
@@ -68,6 +68,17 @@ Tier A is done when:
    losing nothing on SIGINT.
 6. The architecture test passes: nothing under `Antigen.Generators.*` /
    `Antigen.Assays.*` references `StreamData`.
+
+**Sequencing note:** criteria 1–2 assume the mutual-recursion hole is still
+live in the kernel when Tier A reaches completion. The actual fix is a
+separate, out-of-scope spec (§1) that could land concurrently or first. If it
+does, criteria 1–2 are satisfied instead by: `totality/diverging` correctly
+reporting **no** violation post-fix, plus the generator self-tests of §12
+(which check label-correctness against ground truth, independent of the
+certifier's live behavior) standing as the enduring proof that the harness
+*would* have caught the hole. Either outcome demonstrates the same thing — a
+working detector — so this does not block Tier A; it only changes which
+artifact (a live antibody vs. a passing self-test) is the evidence.
 
 ## 3. Component architecture
 
@@ -92,6 +103,11 @@ Phase 2 — schema-directed assays + generators
   Antigen.Assays.Totality       # totality/{terminating,diverging} (§4.1)
   Antigen.Assays.Positivity     # positivity (§4.2)
   Antigen.Assays.Reflexivity    # reflexivity-as-normalization (§4.3)
+
+Phase 2 also touches existing kernel modules (not new `Antigen.*` code):
+  Cure.Core.Conv / Cure.Core.Eval  # add fuel instrumentation for the
+                                    #   reflexivity assay's conv(t, t') (§8) —
+                                    #   pure step-counting, no semantic change
 ```
 
 Phase 1 is a runnable engine with a trivial stub assay; Phase 2 replaces the stub
@@ -134,16 +150,32 @@ The umbrella §6 details the totality vertical; this is its Tier-A realization.
 The independent, downstream probe for the hole. From *Certify a Conversion
 Checker* (FSCD'25): **reflexivity of conversion is equivalent to deep
 normalization** — `conv(t,t)` terminates iff `t` deeply normalizes. So a
-budget-bounded `conv(t,t)` is a non-normalization detector that does **not** rely
-on trusting the checker's verdict (it relies only on whether it *halts*).
+budget-bounded conversion check is a non-normalization detector that does
+**not** rely on trusting the checker's verdict (it relies only on whether it
+*halts*).
 
-- **Generator:** §5.3 — a known-label **diverging** def registered in `Env`, plus
-  a small **schematic term** `t` that forces the global (built directly in `Core`,
-  not the general term generator).
-- **Oracle:** **fuel** (§8). Assert `conv(t,t)` halts within the fixed fuel
-  budget. Fuel exhaustion = a (suspected non-termination) infection.
+- **Generator:** §5.3 — a known-label **diverging mutual** group registered in
+  `Env` (certified for real, by calling the actual certifier — see §5.3), plus a
+  pair of small **schematic terms** `t`, `t'` that force the group (built
+  directly in `Core`, not the general term generator).
+- **Oracle:** **fuel** (§8). Assert `conv(t, t')` halts within the fixed fuel
+  budget. Fuel exhaustion = a (suspected non-termination) infection. **This is
+  not literal syntactic self-comparison `conv(t,t)`:** `Cure.Core.Conv`'s
+  `same_neutral_no_delta?` guard (`lib/cure/core/conv.ex`) deliberately
+  short-circuits two *structurally identical* stuck neutrals as equal *before*
+  attempting δ-unfolding — exactly the "same stuck recursive call on both sides"
+  case a naive `conv(t,t)` would hit, which would make the assay pass
+  immediately without ever forcing the diverging global, testing nothing. `t`
+  and `t'` must therefore be two **structurally distinct** presentations that
+  are only provably equal *through* δ-unfolding — e.g. `t = f(n)` (unsubstituted)
+  vs. `t' =` one manual substitution step of `f`'s registered body applied to
+  `n` (so `t'`'s head neutral is `g`, not `f`, for the `f→g→f` case), built
+  directly in `Core` by the generator, not via a call to `conv` itself. Both
+  sides must resolve to the *same* underlying value once genuinely normalized —
+  the failure mode under test is that they never do, because the group never
+  normalizes.
 - **Why it complements §4.1:** δ-reduction only unfolds *certified-total*
-  globals. So `conv(t,t)` can only loop here *because* the certifier already
+  globals. So `conv(t, t')` can only loop here *because* the certifier already
   wrongly certified the diverging def (§4.1's hole). `totality/diverging` catches
   the hole at the certifier; `reflexivity-as-normalization` catches its
   conversion-level consequence — and remains a general non-normalization probe for
@@ -172,8 +204,11 @@ ground-truth by construction:
 
 Generation parameters (fed by `Antigen.Gen`): arity, number of mutual
 participants, recursion-argument shape (decreasing vs. constant vs. increasing),
-guard pattern. Shrinking respects the label — a `:diverging` counterexample cannot
-shrink away its back-edge (umbrella §6).
+guard pattern. Shrinking respects the label — a `:diverging` counterexample
+cannot shrink away its back-edge — via the same mitigations as umbrella §4.2
+(shrink hints on the `Gen` DSL nodes that encode the back-edge / decreasing
+argument, plus umbrella §4.2's type-preserving post-shrink pass before an
+antibody is pinned), not an added Tier-A-specific mechanism.
 
 ### 5.2 Positivity generator (`Antigen.Generators.Positivity`)
 
@@ -186,11 +221,22 @@ Emits `(family, label)` where `label ∈ {:positive, :negative}`:
 
 ### 5.3 Forcing generator (`Antigen.Generators.Forcing`)
 
-For `reflexivity-as-normalization`: takes a `:diverging` def group from §5.1,
-registers it in `Env`, and builds a minimal schematic `Core` term `t` that applies
-/ forces the diverging global so that (once wrongly certified) its δ-unfolding
-drives conversion. This is a fixed schematic construction, **not** the general
-term generator — it stays schema-directed and Tier-A.
+For `reflexivity-as-normalization`: takes a `:diverging` **mutual** def group
+`f→g→f` from §5.1, registers it in `Env` by running the *actual* totality
+certifier over the group (not a hardcoded flag) — the certifier's wrong verdict
+is what marks the group certified-total and thus unfoldable, exactly reproducing
+the confirmed hole's effect. It then builds two minimal schematic `Core` terms:
+`t = f(n)` (an unsubstituted application forcing `f`) and `t' =` one manual
+evaluation step of `f`'s registered body applied to `n` — β-substitution *and*,
+where `f`'s guard pattern scrutinizes its argument (§5.1), the matching ι/`case`
+step, not bare syntactic substitution — so `t'` is headed by `g`, `f`'s cycle
+partner (the generator picks `n`'s shape itself, so it can guarantee this one
+step actually lands on the branch that calls `g`) — **not** `t` compared
+against a copy of itself. This asymmetry is required so conversion cannot resolve the pair via
+`Cure.Core.Conv`'s same-neutral-without-δ shortcut (§4.3) and must instead
+attempt genuine δ-unfolding, which is where the group's non-termination
+surfaces. This is a fixed schematic construction, **not** the general term
+generator — it stays schema-directed and Tier-A.
 
 ## 6. `Antigen.Gen` DSL + backend
 
@@ -204,7 +250,18 @@ compute/over-approximate a generator's **support set** by structural recursion
 (`support(bind g f) = ⋃_{a∈support g} support(f a)`) — which is what makes "what
 can this assay generator actually produce?" answerable rather than assumed.
 (`bind`'s continuation is a function, so its support is only *over-approximable* —
-an accepted limit.)
+an accepted limit.) This reconciles with the umbrella §4 primitive list
+(`int/bounded, one_of, frequency, constant, map, bind, sized, recurse`) as
+follows: `:return` is the umbrella's `constant`; `:member_of` generalizes
+`one_of` over a concrete enumerated list; `int/bounded` is expressed as
+`member_of`/`bind` over a range, not a separate primitive; `map` is dropped as a
+primitive since it is derivable from `bind` + `return`; `:resize` is new here,
+for explicit depth/arity control. `recurse` is **not** needed in Tier A — all
+three known-label generators (§5) produce finite, bounded-shape defs/families
+(fixed arity, fixed mutual-participant count, fixed guard depth), never an
+open-ended self-referential term; it is deferred to Tier B's general term
+generator, which does need a distinguished fixed-point node for the static
+support-set pass to terminate on.
 
 **Size-hygiene tags.** Each generator is tagged `:unsized` (size-independent
 support) or `:size_monotonic` (bigger size ⇒ superset). These license the clean
@@ -230,8 +287,15 @@ This is why a full generator rewrite cannot cost us the accumulated library.
 
 - **`test/antigen/corpus.sexp` — antibodies** (counterexamples). Admission rule:
   **admit any** infection. One C2 record per line (umbrella §8.2 grammar). Static
-  replay asserts each still violates → a live infection turns `mix test` **red**
-  and stays red until fixed. Pure verdicts, no `open`/xfail.
+  replay decodes each entry and re-runs its recorded assay, asserting the
+  assay's own pass condition (e.g. `totality/diverging`'s "kernel must NOT
+  certify") — **not** "this entry must still violate." While the underlying
+  kernel bug is live, that assertion fails on replay, so a live infection turns
+  `mix test` **red** and stays red until the kernel is fixed; once fixed, the
+  same entry starts satisfying its invariant and replay goes green — the
+  never-pruned corpus is a permanent regression guard, not a frozen "must stay
+  broken" snapshot (matches umbrella §8.2: "every entry must satisfy its
+  invariant"). Pure verdicts, no `open`/xfail.
 - **`test/antigen/seeds.sexp` — the valid/seed bank.** Admission rule: **admit iff
   coverage-novel** (§7.2). Holds well-typed / well-formed generated antigens
   regardless of assay outcome. Serves three jobs at once: static regression
@@ -243,6 +307,16 @@ This is why a full generator rewrite cannot cost us the accumulated library.
 Record grammar is shared; a `kind` distinguishes them where a reader needs it.
 Dedup on append is idempotent, keyed on the canonical C2 serialization of the
 `(assay, term)` for antibodies and on the **coverage key** for seeds.
+
+**Append is atomic per record.** Each record is fully assembled in memory and
+written with a single append syscall (not built up with multiple writes), so a
+kill (SIGINT/SIGKILL) between records never leaves a torn/corrupted line —
+required for both the interruptible run modes of §8 and for concurrent writers
+(explorer and `generate` mode both append to the seed store; the same
+single-write-per-record discipline makes concurrent appends safe to interleave
+at the line level). The replayer (§8) treats a line that fails to decode as its
+own reportable failure — distinct from an assay violation — and continues past
+it rather than aborting the run, consistent with "reports every failing entry."
 
 ### 7.2 The coverage key
 
@@ -268,11 +342,17 @@ Three modes on the runner. The budget model separates a **deterministic verdict*
 from **wall-clock safety**, so the committed corpus replays identically everywhere.
 
 - **Per-conversion fuel — the verdict, FIXED and committed.** The fuel bounding
-  `reflexivity-as-normalization`'s `conv(t,t)` is a **fixed constant baked into the
-  assay**, a count of reduction/normalization steps. It must not vary by run mode
-  or machine: otherwise the same term could read diverging on one box and
-  terminating on another, and a committed antibody could flip green↔red. Fuel
-  exhaustion is the deterministic, replayable verdict.
+  `reflexivity-as-normalization`'s `conv(t, t')` (§4.3) is a **fixed constant
+  baked into the assay**, a count of reduction/normalization steps. It must not
+  vary by run mode or machine: otherwise the same term could read diverging on
+  one box and terminating on another, and a committed antibody could flip
+  green↔red. Fuel exhaustion is the deterministic, replayable verdict. **No
+  step-counting mechanism exists in `Cure.Core.Conv`/`Cure.Core.Eval` today**
+  (δ-unfolding in `whnf_delta`/`unfold_head` recurses unconditionally) — Phase 2
+  must add fuel instrumentation to the conversion/evaluation path the assay
+  drives (a step counter threaded through, decremented per reduction, halting
+  the call when exhausted). This is pure instrumentation, not a semantic
+  change, but it does touch TCB modules and should be scoped accordingly.
 - **Per-conversion killswitch — safety, a fixed decent constant.** A wall-clock
   cap on a single conversion so one pathological term can't wedge the runner.
   Reported as a distinct "killswitch tripped" event, **never** an assay verdict.
@@ -287,10 +367,12 @@ from **wall-clock safety**, so the committed corpus replays identically everywhe
 - **Generate — `mix antigen generate`** (harvest-only). Produces well-typed /
   well-formed antigens, coverage-dedups, appends to the seed store, and **skips
   the assays entirely** (no verdicts, no infection-hunting). **Runs until killed**
-  (SIGINT), flushing to the store periodically so a kill loses nothing. This is
-  the "leave it running for hours to stack up expensive terms" tool; those terms
-  are assayed later by the replayer. (High-value mainly for Tier B's expensive
-  terms; the machinery is built here so Tier B inherits it.)
+  (SIGINT). To make "losing nothing on SIGINT" (§2 criterion 5) actually hold,
+  the runner **traps SIGINT and performs one final synchronous flush before
+  exiting** — periodic flushing alone only bounds the loss window, it does not
+  close it. This is the "leave it running for hours to stack up expensive terms"
+  tool; those terms are assayed later by the replayer. (High-value mainly for
+  Tier B's expensive terms; the machinery is built here so Tier B inherits it.)
 - **Replayer — in `mix test`** (read-only, static). Decodes both stores and runs
   the assays over them, reporting **every** failing entry (non-fail-fast). Never
   generates, never mutates — `mix test` stays git-clean for CI. Bounded by corpus
@@ -303,16 +385,24 @@ Coverage bounded by the generator is the field's dominant false-confidence trap
 interesting shape is vacuous. Tier A builds the plumbing:
 
 - **Discard rate** — fraction of generation attempts that fail to produce a
-  bankable object. For known-label generators this should be ≈0; a rising rate is
-  a red flag.
+  well-formed candidate at all (a generator-quality failure). This is distinct
+  from a coverage-duplicate rejection (§7.2's "admit iff coverage-novel"), which
+  is expected to rise as the corpus matures and is *not* counted as a discard.
+  For known-label generators the discard rate should be ≈0; a rising rate is a
+  red flag.
 - **Coverage** — which coverage-key buckets (§7.2) the run hit. Reported per run;
   a batch that never hits `has_mutual_group`, for instance, cannot have tested the
   hole.
 
 Tier A **reports** these (per-run summary + into `tmp/antigen/`); it does not hard-
 fail on them. Term-specific health metrics (binder-usage rate, reduction activity)
-are added in Tier B, where terms with binders exist — the `Antigen.Coverage`
-module is structured to receive them without rework.
+are added in Tier B. Tier A's own generated defs already have parameter binders,
+but by construction they use them deterministically (a known-label recursive def
+must reference its recursion argument to be labeled correctly) — so a
+binder-*usage-rate* metric would be constant and uninformative here; it only
+becomes meaningful once Tier B's general term generator can produce terms whose
+binders go unused. The `Antigen.Coverage` module is structured to receive these
+metrics without rework.
 
 ## 10. Reporting
 
@@ -333,8 +423,10 @@ One spec, two plan-phases (each an independently testable deliverable):
   explore/generate/replay/report/corpus data flow is exercised end-to-end before
   any real assay exists.
 - **Phase 2 — schema-directed assays + generators.** The three generators (§5)
-  and the four assays (§4). Replaces the stub. Phase 2's completion is
-  success-criterion #1–#3 (§2): the engine catches the confirmed hole two ways.
+  and the four assays (§4), plus the fuel instrumentation of
+  `Cure.Core.Conv`/`Eval` that `Antigen.Assays.Reflexivity` needs (§3, §8).
+  Replaces the stub. Phase 2's completion is success-criterion #1–#3 (§2): the
+  engine catches the confirmed hole two ways.
 
 ## 12. Testing Antigen itself
 
@@ -345,6 +437,12 @@ Per umbrella §11, plus Tier-A specifics:
 - **Generator self-tests** — the totality generator's `:terminating` / `:diverging`
   outputs are validated against a fixed known-good/known-bad set, *including* the
   confirmed mutual cycle Antigen must flag; the positivity generator likewise.
+  The forcing generator (§5.3) gets its own self-test: verify its two schematic
+  terms actually reach/force the registered global under plain (non-δ)
+  evaluation, and verify they are *not* structurally identical (guarding against
+  a regression to literal `t` vs. `t` — see §4.3), since a construction that
+  never forces the global, or that collapses to self-comparison, would make
+  `reflexivity-as-normalization` pass vacuously.
 - **Support-set characterization** — for each generator, a runnable soundness
   meta-test (`check all x <- gen: assert well_formed?(x)`) and a documented note on
   what its support set can/can't produce (synthesis §3.4). Soundness is tested;
