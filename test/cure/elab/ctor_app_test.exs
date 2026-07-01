@@ -1,7 +1,7 @@
 defmodule Cure.Elab.CtorAppTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
-  alias Cure.Core.{Env, Eval}
+  alias Cure.Core.Env
   alias Cure.Elab.{Declarations, Elaborator}
 
   @src """
@@ -24,14 +24,15 @@ defmodule Cure.Elab.CtorAppTest do
     end)
   end
 
-  defp sf_value(a, b, d) do
-    Eval.eval({:data, :SF, [], [{:ctor, a, []}, {:ctor, b, []}, {:ctor, d, []}]}, [])
+  # Type as a (closed) Core term, as the caller passes it.
+  defp sf_term(a, b, d) do
+    {:data, :SF, [], [{:ctor, a, []}, {:ctor, b, []}, {:ctor, d, []}]}
   end
 
   test "seq(l, r) infers the five erased index arguments from l and r's types" do
     env = build_env()
-    lspec = {{:global, :l}, sf_value(:SVNil, :SVNil, :Causal)}
-    rspec = {{:global, :r}, sf_value(:SVNil, :SVNil, :Causal)}
+    lspec = {{:global, :l}, sf_term(:SVNil, :SVNil, :Causal)}
+    rspec = {{:global, :r}, sf_term(:SVNil, :SVNil, :Causal)}
 
     assert {:ok, {:ctor, :seq, args}, result_type} =
              Elaborator.elaborate_ctor_app(env, :seq, [lspec, rspec])
@@ -55,13 +56,13 @@ defmodule Cure.Elab.CtorAppTest do
     env = build_env()
     # l : SF(SVNil, SVNil, Causal); r : SF(SVCons(..), SVNil, Causal)
     # l's bs (SVNil) must equal r's first index (SVCons ..) — it does not.
-    r_bs = Eval.eval({:data, :SF, [], [
+    r_bs = {:data, :SF, [], [
       {:ctor, :SVCons, [{:ctor, :CSig, []}, {:ctor, :SVNil, []}]},
       {:ctor, :SVNil, []},
       {:ctor, :Causal, []}
-    ]}, [])
+    ]}
 
-    lspec = {{:global, :l}, sf_value(:SVNil, :SVNil, :Causal)}
+    lspec = {{:global, :l}, sf_term(:SVNil, :SVNil, :Causal)}
     rspec = {{:global, :r}, r_bs}
 
     assert {:error, _} = Elaborator.elaborate_ctor_app(env, :seq, [lspec, rspec])

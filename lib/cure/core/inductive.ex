@@ -29,8 +29,25 @@ defmodule Cure.Core.Env do
   whether δ-reduction may unfold it.
   """
   @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t()) :: t()
-  def add_def(%__MODULE__{} = env, name, type_term, body_term),
-    do: %{env | defs: Map.put(env.defs, name, %{name: name, type: type_term, body: body_term})}
+  def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil)
+
+  @doc """
+  Register a global function definition with per-parameter {0,ω} quantities
+  (`nil` = unspecified/all runtime-relevant). Erased parameters are dropped by
+  erasure (M8.3 / M9).
+  """
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t(), [atom()] | nil) :: t()
+  def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities),
+    do: %{
+      env
+      | defs:
+          Map.put(env.defs, name, %{
+            name: name,
+            type: type_term,
+            body: body_term,
+            quantities: quantities
+          })
+    }
 
   @doc "The global definition `%{name, type, body}` for `name`, or nil."
   @spec get_def(t(), atom()) :: map() | nil

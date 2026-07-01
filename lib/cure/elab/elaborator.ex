@@ -66,7 +66,8 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_typed({:function_call, [name: name] = _meta, args}, names, ctx, env) do
+  def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
+    name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
 
     if Inductive.get_ctor(env, atom) do
@@ -90,9 +91,13 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp map_present_args(args, names, ctx, env) do
+    depth = Context.length(ctx)
+
     Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
       case elaborate_expr_typed(arg, names, ctx, env) do
-        {:ok, term, type} -> {:cont, {:ok, acc ++ [{term, type}]}}
+        # Reify the argument's type at the *context* depth so its de Bruijn
+        # indices are in the caller's frame (where the erased indices are solved).
+        {:ok, term, type} -> {:cont, {:ok, acc ++ [{term, Quote.reify(type, depth)}]}}
         {:error, _} = err -> {:halt, err}
       end
     end)
@@ -109,8 +114,11 @@ defmodule Cure.Elab.Elaborator do
   unified against the provided argument's type (`Unify`). On success every
   metavariable is solved, and the fully-applied `{:ctor, …}` term plus its result
   type (the family at the computed indices) are returned.
+
+  `present_args` is `[{core_term, type_term}]` — each ω argument with its type
+  already reified as a term in the caller's de Bruijn frame.
   """
-  @spec elaborate_ctor_app(Env.t(), atom(), [{term(), Cure.Core.Value.t()}]) ::
+  @spec elaborate_ctor_app(Env.t(), atom(), [{term(), term()}]) ::
           {:ok, term(), Cure.Core.Value.t()} | {:error, term()}
   def elaborate_ctor_app(env, cname, present_args) do
     ctor = Inductive.get_ctor(env, cname)
@@ -137,11 +145,10 @@ defmodule Cure.Elab.Elaborator do
   defp solve_arg({{_name, _type_term}, :present}, {:ok, _mctx, _chosen, []}),
     do: {:halt, {:error, :too_few_arguments}}
 
-  defp solve_arg({{_name, type_term}, :present}, {:ok, mctx, chosen, [{arg, arg_type} | rest]}) do
+  defp solve_arg({{_name, type_term}, :present}, {:ok, mctx, chosen, [{arg, arg_type_term} | rest]}) do
     expected = Subst.instantiate(type_term, chosen)
-    actual = Quote.reify(arg_type)
 
-    case Unify.unify(expected, actual, mctx) do
+    case Unify.unify(expected, arg_type_term, mctx) do
       {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [arg], rest}}
       {:error, reason} -> {:halt, {:error, {:index_mismatch, reason}}}
     end

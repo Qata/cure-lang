@@ -16,20 +16,29 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Context, Env, Inductive, Kernel, Quote}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel}
   alias Cure.Elab.Elaborator
 
   @ceiling 2
 
   @doc "Elaborate one declaration AST, returning the augmented signature."
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
-  def elaborate({:function_def, meta, _body} = ast, env) do
+  def elaborate({:function_def, meta, body}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    params = Keyword.get(meta, :params, [])
+    return_expr = Keyword.fetch!(meta, :return_type)
+    body_expr = single_body(body)
 
-    with {:ok, lambda, type_value} <- Elaborator.elaborate(ast, env),
-         :ok <- Kernel.check(Context.empty(env), lambda, type_value) do
-      type_term = Quote.reify(type_value)
-      {:ok, Env.add_def(env, name, type_term, lambda)}
+    with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
+         ctx = build_context(env, telescope),
+         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env),
+         return_value = Eval.eval(return_core, Context.env(ctx)),
+         {:ok, body_term, _body_type} <-
+           Elaborator.elaborate_expr_typed(body_expr, scope, ctx, env),
+         :ok <- Kernel.check(ctx, body_term, return_value) do
+      lambda = wrap_binders(:lam, telescope, body_term)
+      pi = wrap_binders(:pi, telescope, return_core)
+      {:ok, Env.add_def(env, name, pi, lambda, quantities)}
     end
   end
 
@@ -62,6 +71,50 @@ defmodule Cure.Elab.Declarations do
   end
 
   def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  # -- function elaboration ---------------------------------------------------
+
+  defp single_body([expr]), do: expr
+  defp single_body(expr), do: expr
+
+  # Convert the parameter list into a Core telescope + {0,ω} quantities, with each
+  # parameter type elaborated in the scope of the preceding parameters. Implicit
+  # (`{name}`) parameters are erased. Returns the scope (names, most-recent first).
+  defp elaborate_param_telescope(params, env) do
+    params
+    |> Enum.reduce_while({:ok, [], [], []}, fn {:param, pmeta, pname}, {:ok, tele, quants, scope} ->
+      case Keyword.get(pmeta, :type) do
+        nil ->
+          {:halt, {:error, {:untyped_parameter, pname}}}
+
+        type_expr ->
+          case idx_to_core(type_expr, scope, nil, env) do
+            {:ok, core} ->
+              q = if Keyword.get(pmeta, :implicit), do: :erased, else: :present
+              {:cont,
+               {:ok, tele ++ [{String.to_atom(pname), core}], quants ++ [q], [pname | scope]}}
+
+            {:error, _} = err ->
+              {:halt, err}
+          end
+      end
+    end)
+    |> case do
+      {:ok, tele, quants, scope} -> {:ok, tele, quants, scope}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp build_context(env, telescope) do
+    Enum.reduce(telescope, Context.empty(env), fn {_name, type_core}, ctx ->
+      type_value = Eval.eval(type_core, Context.env(ctx))
+      Context.extend(ctx, type_value)
+    end)
+  end
+
+  defp wrap_binders(tag, telescope, inner) do
+    Enum.reduce(Enum.reverse(telescope), inner, fn {_name, type}, acc -> {tag, type, acc} end)
+  end
 
   # -- indexed families -------------------------------------------------------
 
