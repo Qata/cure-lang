@@ -64,11 +64,26 @@ type Vector(a: Type) indices (n: Nat)
   matching Agda/Idris/Lean; the elaborator checks it is uniformly the family's
   own parameter variable (§5).
 
-`where` and `indexed` are removed from this construct. `where` is used *nowhere
-else* in Cure's surface syntax (every other occurrence in the tree is English
-prose in comments/docstrings), so removing it collides with nothing. Only two
-declarations exist to migrate: `lib/std/vector.cure` and
-`examples/length_indexed.cure`.
+`where` and `indexed` are removed from *this construct only* — not from the
+lexer's keyword table. `where` remains a keyword used elsewhere in real surface
+syntax: function constraint clauses (`fn … where Proto(T), …`,
+`lib/cure/compiler/parser.ex:1739`) and `impl … for … where …` constraint
+clauses (`lib/cure/compiler/parser.ex:2702`). (An earlier draft of this section
+claimed `where` appears nowhere else outside comments/docstrings — that was
+wrong; verified false by grep against those two call sites, both live parses,
+not prose.) Only `parse_indexed_type`'s consumption of `where` is deleted; the
+`:where` keyword token itself is untouched and continues to serve those two
+other constructs.
+
+Three declarations exist to migrate: `lib/std/vector.cure`,
+`examples/length_indexed.cure`, and `test/fixtures/slice1.cure` (line 12,
+exercised by `test/cure/elab/slice1_conformance_test.exs` — its `SF(as, bs, d)`
+family is fully index-only, since all three arguments are refined per
+constructor, so it migrates to the parameter-free form `type SF indices (as:
+SVDesc, bs: SVDesc, d: Dec)`). (An earlier draft said "only two"; grepping
+`^\s*indexed type` across `.cure` files under version control turns up this
+third, actively-tested fixture — missing it would silently break
+`slice1_conformance_test.exs` once the old syntax is removed.)
 
 ### 3.1 Disambiguation
 
@@ -77,7 +92,8 @@ disambiguates on what follows the head:
 
 - `type Option(a) = Some(a) | None` → ordinary ADT (an `=` follows).
 - `type Vector(a: Type) indices (n: Nat)` + indented constructor block → indexed
-  family (an `indices` clause and/or a typed-constructor block follows).
+  family (an `indices` clause follows — this, not the constructor block, is the
+  discriminator; see the required-clause rule below).
 
 For this change, the `indices (…)` clause is **required** for the family form —
 a `type NAME(...)` with an indented typed-constructor block but no `indices`
@@ -87,19 +103,52 @@ ADT is wanted; see §9). A parameter-free family still writes the clause:
 
 ## 4. Architecture
 
-Four layers change. Each is independently testable.
+Five layers change (a fifth — `lib/cure/elab/elaborator.ex` — is easy to miss
+because it isn't `declarations.ex`; see §4.5). Each is independently testable.
 
 ### 4.1 Parser (`lib/cure/compiler/parser.ex`)
 
-Replace `parse_indexed_type` (which consumes `indexed` `type` then requires
-`where`) with a `type`-headed path that:
+The new syntax has no leading `indexed` keyword — `type Vector(a: Type) indices
+(n: Nat)` starts with plain `type`, which the top-level keyword dispatcher
+already routes to `parse_type_def` (`:type -> parse_type_def(state)`,
+parser.ex:1232-1233), a **different** function from `parse_indexed_type`
+(reached only via the separate `:indexed -> parse_indexed_type(state)` dispatch
+arm, parser.ex:1235-1236). So this is not a one-function swap; it is:
 
-1. Parses the family name.
-2. Parses the optional head-paren parameter telescope (`parse_typed_params`).
-3. Requires the `indices (…)` clause and parses its telescope
-   (`parse_typed_params`).
-4. Parses the indentation-delimited constructor-signature block
-   (`parse_gadt_ctors`, unchanged — each ctor is a `{:gadt_ctor, …}` node).
+1. **Rework `parse_type_def`** (parser.ex:2322-2410) so it no longer
+   unconditionally requires `=` right after the optional head-paren params
+   (today's `state = expect(state, :assign)` at parser.ex:2343 fires
+   unconditionally with no lookahead). After parsing the optional head-paren
+   telescope, peek specifically for the `indices` keyword: `=` → existing
+   ordinary-ADT/alias path (unchanged); `indices` → the new indexed-family path
+   below. Per §3.1 the `indices` clause is what triggers the family path — not
+   "any indented typed-ctor block" — so neither `=` nor `indices` present is a
+   parse error (§3.1), and there is no ambiguous third case to resolve.
+2. The indexed-family path: parse the family name (already done before the
+   branch), the optional head-paren parameter telescope (already parsed —
+   reuse it as `params`, via `parse_typed_params` rather than `parse_type_def`'s
+   current untyped `parse_name_list`; see arity note below), require the
+   `indices (…)` clause and parse its telescope (`parse_typed_params`), then
+   the indentation-delimited constructor-signature block (`parse_gadt_ctors`,
+   unchanged — each ctor is a `{:gadt_ctor, …}` node).
+3. **Retire the now-dead `:indexed` dispatch arm** (parser.ex:1235-1236) and
+   `parse_indexed_type` itself (parser.ex:2418-2469) — no surface form begins
+   with a leading `indexed` keyword anymore, so nothing reaches them. (If the
+   plan instead wants `indexed type …` to keep parsing as an explicit
+   migration-hint error per §7 Test 7's "or explicitly errors" option, keep a
+   thin `parse_indexed_type` that immediately reports the hint — the plan
+   decides.)
+4. **Arity note:** `parse_type_def`'s existing head-paren parser
+   (`parse_name_list`, parser.ex:2335) parses bare names (`Option(a)`, no
+   type annotations) for ordinary ADTs; the new family form's head params are
+   *typed* (`Vector(a: Type)`), parsed by `parse_typed_params` instead. The
+   reworked `parse_type_def` must choose which head-param parser to run before
+   it knows which of the two forms it's in — resolved by parsing head params
+   permissively first (as `parse_typed_params`, which accepts a bare name with
+   no `: Type` per `parse_explicit_param`'s optional-colon handling — confirm
+   in the plan) and, on the ordinary-ADT branch, projecting out just the names
+   for the existing `type_params` meta key, so `Option(a) = Some(a) | None`
+   keeps working unchanged.
 
 Emit the same node shape the elaborator consumes, extended to carry the split:
 `{:indexed_type, [name: …, params: <param telescope>, indices: <index
@@ -125,6 +174,43 @@ the plan's first task; if any exist, they are in comments/strings only).
   parameter telescope (the `[]` at declarations.ex:405 becomes `param_tele`), and
   declare constructors carrying both `result_params` and `result_indices`.
 
+- **Constructor-elaboration scoping must change, not just the post-hoc split.**
+  Today `elaborate_gadt_ctors(sigs, fam, index_tele, env)`
+  (declarations.ex:73-80, 197-236) elaborates every constructor **independently**:
+  each occurrence of an index name (`n`, `d1`, `cs`, …) inside a constructor
+  signature is a *fresh, per-constructor-local* variable, inferred by
+  `infer_implicits`/`collect_implicit_vars` (declarations.ex:277-331) purely from
+  its *positional type* in `index_tele` — there is no shared variable identity
+  across constructors today (by design: index values genuinely differ per
+  constructor). A declared **parameter**, by contrast, must resolve to the
+  *same* de Bruijn variable in every constructor's telescope (that identity is
+  exactly what §5's uniformity check tests — "the family parameter telescope's
+  bound variables… within the constructor's telescope" only means something if
+  each constructor's telescope actually starts with that shared binding, the
+  way `check_ctor` already threads it at the kernel level:
+  `check_telescope(Context.empty(env), params)` first, then ctor args in that
+  scope, kernel.ex:351). So `elaborate_gadt_ctor`/`elaborate_gadt_ctors` must be
+  reworked to open each constructor's local `idx_to_core` scope with the
+  family's parameter names *pre-bound* (resolving to the outer parameter
+  positions, correctly shifted under each constructor's own implicit+explicit
+  arg count) before running implicit-index inference for that constructor —
+  parameters are no longer inference candidates at all.
+- **Positional misalignment in the existing implicit-inference plumbing.**
+  `collect_implicit_vars`'s family-application case (declarations.ex:286-305)
+  zips a family application's **full surface argument list** against
+  `family_index_types(name, fam, index_tele, env)` (declarations.ex:310-316) by
+  raw position (`Enum.at(index_types, pos)`), relying on today's invariant that
+  `index_tele` has exactly one entry per declared argument (since `params` is
+  always `[]`). Once `index_tele` only covers the index suffix, a surface
+  application like `Vector(a, n)` still passes 2 positional args but
+  `index_tele` now has arity 1 (`n` only) — a naive zip attributes `n`'s type to
+  position 0 (`a`) and falls off the end (`nil`) for position 1 (`n`), silently
+  breaking implicit-index-type inference for every family with `param_count >
+  0`. The plan must make this positional lookup skip the leading `param_count`
+  argument positions (or otherwise separate parameter args from the zip)
+  wherever a family/self application is scanned for implicits — not just where
+  `result_indices` is sliced from the constructor's declared result type.
+
 ### 4.3 Inductive registry (`lib/cure/core/inductive.ex`)
 
 - `family/4` already accepts a param telescope; no signature change. Confirm
@@ -135,9 +221,24 @@ the plan's first task; if any exist, they are in comments/strings only).
   (`param_count`), used by the kernel case path (§4.4).
 - `ctor/…` constructor-builder gains the `result_params` field; existing
   parameter-free callers (all kernel unit tests using
-  `Inductive.ctor(name, args, result_indices)`) must keep working — default
-  `result_params` to `[]` when omitted, so a family with no parameters is
-  unaffected.
+  `Inductive.ctor(name, args, result_indices)`, the 3-arity form) must keep
+  working — default `result_params` to `[]` when omitted, so a family with no
+  parameters is unaffected.
+- This is not only a test-fixture concern: the 4-arity form
+  `Inductive.ctor(name, args, result_indices, quantities)` has two **production**
+  callers that must be updated in lockstep with this change, not just
+  preserved as-is — `lib/cure/elab/declarations.ex:229` (`elaborate_gadt_ctor/4`,
+  the actual constructor-builder behind every indexed-type declaration) and
+  `lib/antigen/challenge.ex:187,238` (Antigen's challenge-decode
+  reconstruction path, which round-trips `Inductive.family`/`ctor` values and
+  already threads a `fam.params` field through `to_pieces/1` in anticipation of
+  non-empty parameter telescopes — see its scaffold at
+  `lib/antigen/challenge.ex:66-98`). The plan must pin the resulting arity/shape
+  (e.g. a 5-arity `ctor/5` inserting `result_params` before `quantities`, or a
+  keyword-based constructor) and update all three non-test call sites
+  (`declarations.ex:229`, `challenge.ex:187`, `challenge.ex:238`) — not just
+  "default it to `[]`" as the 3-arity note above does for genuinely
+  parameter-free test callers.
 
 ### 4.4 Kernel (`lib/cure/core/kernel.ex`, `eval.ex`)
 
@@ -199,6 +300,64 @@ The tie-break is **retired**: since params are sliced off before
 `unify_indices`, the unifier only ever sees genuine indices. The
 already-removed tie-break clause stays removed; no orientation decision exists.
 
+### 4.5 Untrusted elaborator (`lib/cure/elab/elaborator.ex`)
+
+§4 originally listed only four layers (parser, `declarations.ex`, the
+`Inductive` registry, the kernel). That's incomplete: `elaborator.ex` — the
+*untrusted* expression/`match` elaborator (distinct from `declarations.ex`,
+which only elaborates type/constructor *declarations*) — hardcodes or
+otherwise bakes in the params-are-always-empty assumption at four sites, and
+every one of them sits
+directly on the path that elaborates `Std.Vector.append` (the design's own
+headline regression target, §1/§7 Test 6). Left unfixed, `append` would very
+plausibly fail to elaborate post-split even though the kernel would accept the
+resulting term — a silent regression the kernel-level tests in §7 would not
+catch, since they exercise `Inductive.family/ctor` directly and never go
+through this file.
+
+1. **`elaborate_match`** (elaborator.ex:277-294) destructures the scrutinee's
+   inferred type as `{:vdata, dname, index_vals}` (line 280) and feeds the
+   *entire* value list to `build_motive` as `idx_terms` (line 282) — but per
+   §4.4, `{:vdata, ...}` carries `params ++ indices` unconditionally, so
+   `index_vals`/`idx_terms` will actually hold the parameter values too. This
+   must split by the family's `param_count` first (mirroring the kernel's
+   `infer({:case, …})` split in §4.4) and pass only the index portion onward.
+2. **`build_motive`** (elaborator.ex:306-332) hardcodes `scrut_type = {:data,
+   dname, [], …}` (line 309, literal empty parameter list) when building the
+   motive's `x : D j̄` binder type. For a param-bearing family this must carry
+   the scrutinee's *actual* parameter terms, not `[]` — the elaborator-side
+   analogue of `check_motive_wf`'s fix in §4.4.
+3. **`elaborate_branch` / `branch_expected_type` / `specialize_branch_context`
+   / `branch_index_subst`** (elaborator.ex:411-538) is elaborator.ex's *own*,
+   separate, one-directional branch-index-substitution heuristic (predates
+   `5646c63`'s kernel-side `unify_indices` and was never updated to match it —
+   the two now diverge). It zips a constructor's `result_indices` (which, after
+   §4.2's split, is genuinely index-only) against `scrut_indices` — but
+   `scrut_indices` is exactly the unsliced `idx_terms` from point 1 above, so
+   once params are non-empty the two lists have different arities
+   (`index_count` vs. `param_count + index_count`, with parameters occupying
+   the *leading* positions of `scrut_indices`). `Enum.zip/2`
+   (`branch_index_subst`, elaborator.ex:528-538) zips to the length of the
+   shorter list starting from each list's head — so `result_indices[0]` (a
+   genuine index) ends up paired against `scrut_indices[0]` (a *parameter*
+   value), not its true index counterpart, for every position; this is a
+   head-on misalignment, not a tail truncation. This heuristic must receive
+   the same index-only slice as point 1, or it degrades silently rather than
+   erroring (a completeness bug: `append`'s branches may
+   fail to type-check even though they're sound, since this is the mechanism
+   that lets `a := a0` aliasing make `prepend(x, append(rest, ys))` check —
+   see the doc comment at elaborator.ex:501-506).
+4. **`elaborate_ctor_app` / `finish_ctor_app`** (elaborator.ex:605-654)
+   hardcodes `result_type = Eval.eval({:data, family, [], indices}, [])`
+   (line 651, literal empty parameter list) when computing the type of an
+   elaborated constructor application (e.g. `empty()`, `prepend(x, xs)`) — the
+   elaborator-side analogue of the `infer({:ctor, …})` TODO in §4.4. This must
+   evaluate `ctor.result_params` (instantiated the same way `indices` already
+   is, line 650) and pass them as the real first component, or every
+   param-bearing constructor's elaborated type comes out with an empty/wrong
+   parameter slot, breaking Invariant 3 (§8) the moment that type is compared
+   against anything carrying the real parameter.
+
 ## 5. Uniformity check (reject non-uniform parameters)
 
 A constructor's result type must apply the family to the **family's own parameter
@@ -238,6 +397,12 @@ exact unsoundness this change removes.
   motive, which is not written by hand.
 - `examples/length_indexed.cure`: `indexed type Length(n: Nat) where` →
   `type Length indices (n: Nat)` (parameter-free; head parens omitted).
+- `test/fixtures/slice1.cure`: `indexed type SF(as: SVDesc, bs: SVDesc, d: Dec)
+  where` → `type SF indices (as: SVDesc, bs: SVDesc, d: Dec)` (parameter-free —
+  `as`, `bs`, and `d` are all genuinely refined per constructor: `prim : SF(as,
+  bs, Causal)`, `seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs,
+  andd(d1, d2))`; none is a uniform parameter). Exercised by
+  `test/cure/elab/slice1_conformance_test.exs`, which must stay green.
 
 ## 7. Testing strategy
 
@@ -274,6 +439,25 @@ Surface/integration:
 7. Parser: the new `type … indices (…)` form parses; the old `indexed type …
    where` form is gone (or explicitly errors with a migration hint — plan
    decides); `examples/length_indexed.cure` parses.
+8. **Elaborator-level coverage, not just one integration compile.** Tests 1-5
+   above construct `Inductive.family/ctor` records directly, bypassing
+   `declarations.ex`/`elaborator.ex` entirely — so §4.2's constructor-scoping
+   rework + positional-misalignment fix, and all four §4.5 `elaborator.ex`
+   sites, are otherwise covered only by Test 6, a single coarse pass/fail over
+   one two-argument family. That's too thin to localize a regression in any
+   one of those several independent fix-sites, or to catch one masking
+   another. The plan must add `test/cure/elab/…` coverage that exercises the
+   elaborator directly on a param-bearing family — at minimum: (a) elaborating
+   a surface-parsed multi-constructor param-bearing declaration and asserting
+   the registered ctor's `result_params`/`result_indices` split correctly
+   (covers §4.2's scoping rework and positional-misalignment fix); (b) an
+   `elaborate_match`/`elaborate_ctor_app` case on a param-bearing family
+   exercised through the untrusted elaborator (not just via a full `Std.Vector`
+   compile) asserting the resulting motive/result-type values carry the
+   correct (non-empty, correctly-sliced) parameter component (covers all four
+   §4.5 sites individually, ideally with a family whose param/index counts
+   differ from `Vector`'s 1-and-1 so an off-by-position bug can't hide behind
+   a coincidental match).
 
 Regression: the **entire existing suite stays green**, including all 4.3
 kernel/Antigen tests (`test/cure/core/case_soundness_index_test.exs`,
