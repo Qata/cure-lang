@@ -1867,6 +1867,35 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp parse_single_typed_param(state) do
+    case peek(state) do
+      %Token{type: :lbrace} -> parse_implicit_param(state)
+      _ -> parse_explicit_param(state)
+    end
+  end
+
+  # `{name}` or `{name: Type}` — an implicit, erased argument (design spec §6).
+  # Its type may be omitted and inferred by the elaborator from later parameter
+  # types / the return type.
+  defp parse_implicit_param(state) do
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    {type_ast, state} =
+      case peek(state) do
+        %Token{type: :colon} -> parse_type_expr(advance(state))
+        _ -> {nil, state}
+      end
+
+    state = expect(state, :rbrace)
+
+    meta = [implicit: true]
+    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
+    {{:param, meta, name}, state}
+  end
+
+  defp parse_explicit_param(state) do
     # Check for variadic: *name or **name
     {kind, state} =
       case peek(state) do
