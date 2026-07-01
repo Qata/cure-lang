@@ -33,8 +33,7 @@ defmodule Cure.Elab.Declarations do
          ctx = build_context(env, telescope),
          {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env),
          return_value = Eval.eval(return_core, Context.env(ctx)),
-         {:ok, body_term, _body_type} <-
-           Elaborator.elaborate_expr_typed(body_expr, scope, ctx, env),
+         {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env),
          :ok <- Kernel.check(ctx, body_term, return_value) do
       lambda = wrap_binders(:lam, telescope, body_term)
       pi = wrap_binders(:pi, telescope, return_core)
@@ -76,6 +75,18 @@ defmodule Cure.Elab.Declarations do
 
   defp single_body([expr]), do: expr
   defp single_body(expr), do: expr
+
+  # A `match` body needs the declared return type to build its motive (checking
+  # mode); every other body is elaborated in inference mode.
+  defp elaborate_body({:pattern_match, _meta, [scrut | arms]}, return_core, scope, ctx, env) do
+    Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
+  end
+
+  defp elaborate_body(expr, _return_core, scope, ctx, env) do
+    with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+      {:ok, term}
+    end
+  end
 
   # Convert the parameter list into a Core telescope + {0,ω} quantities, with each
   # parameter type elaborated in the scope of the preceding parameters. Implicit

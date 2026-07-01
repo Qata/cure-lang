@@ -104,6 +104,101 @@ defmodule Cure.Elab.Elaborator do
   end
 
   @doc """
+  Elaborate a surface `match scrut | C(pat…) -> body …` into a Core `:case`
+  (design spec §5, M8.4). `result_type_term` is the expected result type (Core
+  term in the current frame); the motive is built as a constant type family over
+  the scrutinee family's indices and value (dependent motives — a result that
+  varies with the matched indices — are a follow-up). Branch bodies are
+  elaborated under the constructor's full telescope (erased indices + present
+  args); surface pattern variables name the present positions. Coverage and
+  per-branch index refinement are then enforced by the kernel.
+  """
+  @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
+          {:ok, term()} | {:error, term()}
+  def elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env) do
+    with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
+      case scrut_type do
+        {:vdata, dname, _indices} ->
+          family = Inductive.get_family(env, dname)
+          motive = build_constant_motive(dname, family.indices, result_type_term)
+
+          with {:ok, branches} <- elaborate_branches(arms, ctx, env) do
+            {:ok, {:case, scrut_term, motive, branches}}
+          end
+
+        _ ->
+          {:error, :match_scrutinee_not_data}
+      end
+    end
+  end
+
+  # motive = λ(i₀:T₀)…λ(iₙ:Tₙ).λ(x : D ī). ResultType  (ResultType lifted over the
+  # n index binders + the scrutinee binder).
+  defp build_constant_motive(dname, index_tele, result_type_term) do
+    n = length(index_tele)
+    index_types = Enum.map(index_tele, &elem(&1, 1))
+    scrut_type = {:data, dname, [], Enum.map((n - 1)..0//-1, &{:var, &1})}
+    body = Subst.shift(result_type_term, n + 1, 0)
+
+    (index_types ++ [scrut_type])
+    |> Enum.reverse()
+    |> Enum.reduce(body, fn type, acc -> {:lam, type, acc} end)
+  end
+
+  defp elaborate_branches(arms, ctx, env) do
+    Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, arm_meta, body}, {:ok, acc} ->
+      pattern = Keyword.fetch!(arm_meta, :pattern)
+
+      case elaborate_branch(pattern, single_body(body), ctx, env) do
+        {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp elaborate_branch(pattern, body_expr, ctx, env) do
+    {cname, pattern_vars} = constructor_pattern(pattern)
+
+    case Inductive.get_ctor(env, cname) do
+      nil ->
+        {:error, {:unknown_pattern_constructor, cname}}
+
+      %{args: telescope, quantities: quantities} ->
+        branch_names = branch_scope(quantities, pattern_vars)
+        branch_ctx = extend_context(ctx, telescope)
+
+        with {:ok, body_term, _type} <- elaborate_expr_typed(body_expr, branch_names, branch_ctx, env) do
+          {:ok, {cname, length(telescope), body_term}}
+        end
+    end
+  end
+
+  defp constructor_pattern({:function_call, meta, args}) do
+    cname = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    vars = Enum.map(args, fn {:variable, _meta, v} -> v end)
+    {cname, vars}
+  end
+
+  # Names for the branch's telescope binders, most-recently-bound first: surface
+  # pattern variables name the present (ω) positions in order; erased positions
+  # are inaccessible, given a fresh placeholder.
+  defp branch_scope(quantities, pattern_vars) do
+    {names_in_order, _rest} =
+      Enum.map_reduce(quantities, pattern_vars, fn
+        :present, [v | rest] -> {v, rest}
+        :erased, vars -> {"_erased", vars}
+      end)
+
+    Enum.reverse(names_in_order)
+  end
+
+  defp extend_context(ctx, telescope) do
+    Enum.reduce(telescope, ctx, fn {_name, type_term}, c ->
+      Context.extend(c, Eval.eval(type_term, Context.env(c)))
+    end)
+  end
+
+  @doc """
   Elaborate a constructor application `C(a₁, …, aₙ)`, inferring the erased index
   arguments (quantity 0) from the runtime-relevant (quantity ω) arguments'
   types (design spec §5.2). `present_args` is `[{core_term, type_value}]` — the
