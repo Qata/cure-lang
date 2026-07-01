@@ -20,6 +20,18 @@ defmodule Cure.Core.Kernel do
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
+  @doc """
+  Normalize a Core term using the kernel's certified δ gate.
+
+  This is intentionally weak under stuck `case`: it unfolds certified global
+  heads and reduces β/ι redexes exposed at the current term, but it does not
+  recursively normalize branch bodies of a neutral case. That keeps recursive
+  certified definitions from expanding forever while still exposing the
+  definitional equalities the surface proof elaborator needs.
+  """
+  @spec normalize(Context.t(), Cure.Core.Term.t()) :: Cure.Core.Term.t()
+  def normalize(%Context{} = ctx, term), do: normalize_term(term, Context.signature(ctx))
+
   @doc "Synthesise the type value of `term` in `ctx`."
   @spec infer(Context.t(), Cure.Core.Term.t()) :: result()
   def infer(_ctx, {:type, level}) do
@@ -341,6 +353,137 @@ defmodule Cure.Core.Kernel do
   end
 
   # -- helpers ----------------------------------------------------------------
+
+  defp normalize_term({:app, _f, _a} = app, sig) do
+    {head, args} = term_spine(app, [])
+    args = Enum.map(args, &normalize_term(&1, sig))
+
+    case normalize_head(head, args, sig) do
+      {:reduced, term} -> normalize_term(term, sig)
+      :stuck -> Enum.reduce(args, normalize_term(head, sig), fn arg, acc -> {:app, acc, arg} end)
+    end
+  end
+
+  defp normalize_term({:case, scrut, motive, branches}, sig) do
+    scrut = normalize_term(scrut, sig)
+
+    case scrut do
+      {:ctor, cname, args} ->
+        case Enum.find(branches, fn {c, _ar, _body} -> c == cname end) do
+          {_c, _ar, body} -> normalize_term(instantiate_telescope(body, args), sig)
+          nil -> {:case, scrut, normalize_term(motive, sig), branches}
+        end
+
+      _ ->
+        {:case, scrut, motive, branches}
+    end
+  end
+
+  defp normalize_term({:pi, dom, cod}, sig), do: {:pi, normalize_term(dom, sig), normalize_term(cod, sig)}
+  defp normalize_term({:lam, dom, body}, sig), do: {:lam, normalize_term(dom, sig), normalize_term(body, sig)}
+  defp normalize_term({:sigma, a, b}, sig), do: {:sigma, normalize_term(a, sig), normalize_term(b, sig)}
+  defp normalize_term({:pair, a, b}, sig), do: {:pair, normalize_term(a, sig), normalize_term(b, sig)}
+  defp normalize_term({:fst, p}, sig), do: {:fst, normalize_term(p, sig)}
+  defp normalize_term({:snd, p}, sig), do: {:snd, normalize_term(p, sig)}
+
+  defp normalize_term({:data, n, ps, is}, sig),
+    do: {:data, n, Enum.map(ps, &normalize_term(&1, sig)), Enum.map(is, &normalize_term(&1, sig))}
+
+  defp normalize_term({:ctor, n, args}, sig), do: {:ctor, n, Enum.map(args, &normalize_term(&1, sig))}
+
+  defp normalize_term({:eq, ty, a, b}, sig),
+    do: {:eq, normalize_term(ty, sig), normalize_term(a, sig), normalize_term(b, sig)}
+
+  defp normalize_term({:refl, a}, sig), do: {:refl, normalize_term(a, sig)}
+
+  defp normalize_term({:rewrite, p, m, b}, sig),
+    do: {:rewrite, normalize_term(p, sig), normalize_term(m, sig), normalize_term(b, sig)}
+
+  defp normalize_term({:prim, op, args}, sig), do: {:prim, op, Enum.map(args, &normalize_term(&1, sig))}
+  defp normalize_term(other, _sig), do: other
+
+  defp normalize_head({:global, name}, args, sig) do
+    case Env.get_def(sig, name) do
+      %{body: body} ->
+        if Env.certified?(sig, name), do: reduce_lams(body, args), else: :stuck
+
+      _other ->
+        :stuck
+    end
+  end
+
+  defp normalize_head(_head, _args, _sig), do: :stuck
+
+  defp reduce_lams(body, []), do: {:reduced, body}
+  defp reduce_lams({:lam, _dom, body}, [arg | rest]), do: reduce_lams(instantiate_telescope(body, [arg]), rest)
+  defp reduce_lams(_body, _args), do: :stuck
+
+  defp term_spine({:app, f, x}, acc), do: term_spine(f, [x | acc])
+  defp term_spine(head, acc), do: {head, acc}
+
+  defp instantiate_telescope(term, values) do
+    env = Enum.reverse(values)
+    instantiate_replace(term, env, length(env), 0)
+  end
+
+  defp instantiate_replace({:var, i}, env, k, depth) do
+    cond do
+      i < depth -> {:var, i}
+      i - depth < k -> Term.shift(Enum.at(env, i - depth), depth, 0)
+      true -> {:var, i - k}
+    end
+  end
+
+  defp instantiate_replace({:type, _} = t, _env, _k, _depth), do: t
+  defp instantiate_replace({:global, _} = g, _env, _k, _depth), do: g
+
+  defp instantiate_replace({:pi, d, c}, env, k, depth),
+    do: {:pi, instantiate_replace(d, env, k, depth), instantiate_replace(c, env, k, depth + 1)}
+
+  defp instantiate_replace({:lam, d, b}, env, k, depth),
+    do: {:lam, instantiate_replace(d, env, k, depth), instantiate_replace(b, env, k, depth + 1)}
+
+  defp instantiate_replace({:sigma, a, b}, env, k, depth),
+    do: {:sigma, instantiate_replace(a, env, k, depth), instantiate_replace(b, env, k, depth + 1)}
+
+  defp instantiate_replace({:app, f, x}, env, k, depth),
+    do: {:app, instantiate_replace(f, env, k, depth), instantiate_replace(x, env, k, depth)}
+
+  defp instantiate_replace({:pair, a, b}, env, k, depth),
+    do: {:pair, instantiate_replace(a, env, k, depth), instantiate_replace(b, env, k, depth)}
+
+  defp instantiate_replace({:fst, p}, env, k, depth), do: {:fst, instantiate_replace(p, env, k, depth)}
+  defp instantiate_replace({:snd, p}, env, k, depth), do: {:snd, instantiate_replace(p, env, k, depth)}
+
+  defp instantiate_replace({:data, n, ps, is}, env, k, depth),
+    do:
+      {:data, n, Enum.map(ps, &instantiate_replace(&1, env, k, depth)),
+       Enum.map(is, &instantiate_replace(&1, env, k, depth))}
+
+  defp instantiate_replace({:ctor, n, args}, env, k, depth),
+    do: {:ctor, n, Enum.map(args, &instantiate_replace(&1, env, k, depth))}
+
+  defp instantiate_replace({:case, s, m, brs}, env, k, depth) do
+    {:case, instantiate_replace(s, env, k, depth), instantiate_replace(m, env, k, depth),
+     Enum.map(brs, fn {cn, ar, b} -> {cn, ar, instantiate_replace(b, env, k, depth + ar)} end)}
+  end
+
+  defp instantiate_replace({:eq, ty, a, b}, env, k, depth),
+    do:
+      {:eq, instantiate_replace(ty, env, k, depth), instantiate_replace(a, env, k, depth),
+       instantiate_replace(b, env, k, depth)}
+
+  defp instantiate_replace({:refl, a}, env, k, depth), do: {:refl, instantiate_replace(a, env, k, depth)}
+
+  defp instantiate_replace({:rewrite, p, m, b}, env, k, depth),
+    do:
+      {:rewrite, instantiate_replace(p, env, k, depth), instantiate_replace(m, env, k, depth),
+       instantiate_replace(b, env, k, depth)}
+
+  defp instantiate_replace({:prim, op, args}, env, k, depth),
+    do: {:prim, op, Enum.map(args, &instantiate_replace(&1, env, k, depth))}
+
+  defp instantiate_replace(other, _env, _k, _depth), do: other
 
   # Infer `term` and require its type to be a universe; return that level.
   defp infer_sort(ctx, term) do

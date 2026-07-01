@@ -143,10 +143,10 @@ defmodule Cure.Elab.Elaborator do
 
     with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
          {:ok, ty_value, a_value, b_value} <- eq_parts(proof_type),
-         ty = normalize_core(Quote.reify(ty_value, depth), env),
-         a = normalize_core(Quote.reify(a_value, depth), env),
-         b = normalize_core(Quote.reify(b_value, depth), env),
-         normalized_expected = normalize_core(expected_core, env),
+         ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
+         a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
+         b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
+         normalized_expected = Kernel.normalize(ctx, expected_core),
          {:ok, proof, motive, body_expected} <- rewrite_plan(proof_term, ty, a, b, normalized_expected),
          {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
          term = {:rewrite, proof, motive, body_term},
@@ -241,73 +241,6 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp rebuild(term, _children), do: term
-
-  defp normalize_core({:app, _f, _a} = app, env) do
-    {head, args} = spine(app, [])
-    args = Enum.map(args, &normalize_core(&1, env))
-
-    case normalize_head(head, args, env) do
-      {:reduced, term} -> normalize_core(term, env)
-      :stuck -> Enum.reduce(args, normalize_core(head, env), fn arg, acc -> {:app, acc, arg} end)
-    end
-  end
-
-  defp normalize_core({:case, scrut, motive, branches}, env) do
-    scrut = normalize_core(scrut, env)
-
-    case scrut do
-      {:ctor, cname, args} ->
-        case Enum.find(branches, fn {c, _ar, _body} -> c == cname end) do
-          {_c, _ar, body} -> normalize_core(Subst.instantiate(body, args), env)
-          nil -> {:case, scrut, normalize_core(motive, env), branches}
-        end
-
-      _ ->
-        {:case, scrut, motive, branches}
-    end
-  end
-
-  defp normalize_core({:pi, d, c}, env), do: {:pi, normalize_core(d, env), normalize_core(c, env)}
-  defp normalize_core({:lam, d, b}, env), do: {:lam, normalize_core(d, env), normalize_core(b, env)}
-  defp normalize_core({:sigma, a, b}, env), do: {:sigma, normalize_core(a, env), normalize_core(b, env)}
-  defp normalize_core({:pair, a, b}, env), do: {:pair, normalize_core(a, env), normalize_core(b, env)}
-  defp normalize_core({:fst, p}, env), do: {:fst, normalize_core(p, env)}
-  defp normalize_core({:snd, p}, env), do: {:snd, normalize_core(p, env)}
-
-  defp normalize_core({:data, n, ps, is}, env),
-    do: {:data, n, Enum.map(ps, &normalize_core(&1, env)), Enum.map(is, &normalize_core(&1, env))}
-
-  defp normalize_core({:ctor, n, args}, env), do: {:ctor, n, Enum.map(args, &normalize_core(&1, env))}
-
-  defp normalize_core({:eq, ty, a, b}, env),
-    do: {:eq, normalize_core(ty, env), normalize_core(a, env), normalize_core(b, env)}
-
-  defp normalize_core({:refl, a}, env), do: {:refl, normalize_core(a, env)}
-
-  defp normalize_core({:rewrite, p, m, b}, env),
-    do: {:rewrite, normalize_core(p, env), normalize_core(m, env), normalize_core(b, env)}
-
-  defp normalize_core({:prim, op, args}, env), do: {:prim, op, Enum.map(args, &normalize_core(&1, env))}
-  defp normalize_core(other, _env), do: other
-
-  defp normalize_head({:global, name}, args, env) do
-    case Env.get_def(env, name) do
-      %{body: body} ->
-        if Env.certified?(env, name), do: reduce_lams(body, args), else: :stuck
-
-      _other ->
-        :stuck
-    end
-  end
-
-  defp normalize_head(_head, _args, _env), do: :stuck
-
-  defp reduce_lams(body, []), do: {:reduced, body}
-  defp reduce_lams({:lam, _dom, body}, [arg | rest]), do: reduce_lams(Subst.instantiate(body, [arg]), rest)
-  defp reduce_lams(_body, _args), do: :stuck
-
-  defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
-  defp spine(head, acc), do: {head, acc}
 
   defp implicit_def?(env, atom) do
     case Env.get_def(env, atom) do
@@ -497,7 +430,7 @@ defmodule Cure.Elab.Elaborator do
         branch_expected =
           result_type_term
           |> branch_expected_type(scrut_term, cname, length(telescope), result_indices, scrut_indices)
-          |> normalize_core(env)
+          |> then(&Kernel.normalize(branch_ctx, &1))
 
         with {:ok, body_term} <- elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
           {:ok, {cname, length(telescope), body_term}}

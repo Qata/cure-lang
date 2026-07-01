@@ -26,6 +26,7 @@ defmodule Cure.Core.Term do
     * `{:eq, ty, a, b}`                      propositional equality type
     * `{:refl, a}`                           reflexivity proof
     * `{:rewrite, proof, motive, body}`      transport / subst
+    * `{:prim, op, args}`                    primitive operation
   """
 
   @ceiling 2
@@ -70,6 +71,8 @@ defmodule Cure.Core.Term do
   def term?({:rewrite, proof, motive, body}),
     do: term?(proof) and term?(motive) and term?(body)
 
+  def term?({:prim, op, args}), do: is_atom(op) and terms?(args)
+
   def term?(_), do: false
 
   # -- de Bruijn shift / substitution -----------------------------------------
@@ -102,15 +105,15 @@ defmodule Cure.Core.Term do
   def shift({:ctor, n, args}, a, c), do: {:ctor, n, Enum.map(args, &shift(&1, a, c))}
 
   def shift({:case, s, m, brs}, a, c),
-    do:
-      {:case, shift(s, a, c), shift(m, a, c),
-       Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, a, c + ar)} end)}
+    do: {:case, shift(s, a, c), shift(m, a, c), Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, a, c + ar)} end)}
 
   def shift({:eq, ty, x, y}, a, c), do: {:eq, shift(ty, a, c), shift(x, a, c), shift(y, a, c)}
   def shift({:refl, x}, a, c), do: {:refl, shift(x, a, c)}
 
   def shift({:rewrite, p, m, b}, a, c),
     do: {:rewrite, shift(p, a, c), shift(m, a, c), shift(b, a, c)}
+
+  def shift({:prim, op, args}, a, c), do: {:prim, op, Enum.map(args, &shift(&1, a, c))}
 
   @doc """
   Substitute the de Bruijn index `j` with `replacement` everywhere it occurs.
@@ -156,6 +159,8 @@ defmodule Cure.Core.Term do
 
   def subst({:rewrite, p, m, b}, j, r),
     do: {:rewrite, subst(p, j, r), subst(m, j, r), subst(b, j, r)}
+
+  def subst({:prim, op, args}, j, r), do: {:prim, op, Enum.map(args, &subst(&1, j, r))}
 
   # -- serialization (commitment C2) ------------------------------------------
   #
@@ -245,8 +250,7 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "snd", "pair" => p}), do: {:snd, from_external(p)}
 
   def from_external(%{"node" => "data", "name" => n, "params" => ps, "indices" => is}),
-    do:
-      {:data, String.to_atom(n), Enum.map(ps, &from_external/1), Enum.map(is, &from_external/1)}
+    do: {:data, String.to_atom(n), Enum.map(ps, &from_external/1), Enum.map(is, &from_external/1)}
 
   def from_external(%{"node" => "ctor", "name" => n, "args" => args}),
     do: {:ctor, String.to_atom(n), Enum.map(args, &from_external/1)}

@@ -88,7 +88,7 @@ defmodule Antigen.Corpus do
       |> Stream.map(fn line ->
         case decode_record(line) do
           {:ok, c} -> {:ok, c}
-          {:error, _} -> {:decode_error, String.trim(line)}
+          {:error, reason} -> {:decode_error, String.trim(line), reason}
         end
       end)
     else
