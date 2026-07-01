@@ -32,6 +32,36 @@ defmodule Cure.Elab.Program do
   end
 
   @doc """
+  Does a parsed program/AST use dependent constructs the kernel must check?
+  Currently keyed on the presence of an `indexed type` (GADT) declaration.
+  """
+  @spec dependent?(term()) :: boolean()
+  def dependent?({:indexed_type, _meta, _body}), do: true
+
+  def dependent?({_tag, _meta, children}) when is_list(children),
+    do: Enum.any?(children, &dependent?/1)
+
+  def dependent?(list) when is_list(list), do: Enum.any?(list, &dependent?/1)
+  def dependent?(_other), do: false
+
+  @doc """
+  Extract the `Cure.<Name>` module atom from a parsed `mod … end` program,
+  defaulting to `Cure.Main` when no module container is present.
+  """
+  @spec module_atom(term()) :: module()
+  def module_atom(ast), do: String.to_atom("Cure." <> (find_module_name(ast) || "Main"))
+
+  defp find_module_name({:container, meta, _body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :module, do: Keyword.get(meta, :name)
+  end
+
+  defp find_module_name({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &find_module_name/1)
+
+  defp find_module_name(list) when is_list(list), do: Enum.find_value(list, &find_module_name/1)
+  defp find_module_name(_other), do: nil
+
+  @doc """
   Codegen gate (§6 negative #5): a program with an unfilled hole typechecks but
   must not be emitted. Returns `{:error, {:unfilled_hole, name}}` for the first
   definition that still carries a hole.

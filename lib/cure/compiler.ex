@@ -225,15 +225,30 @@ defmodule Cure.Compiler do
   end
 
   defp codegen(ast, file, emit?, output_dir, declared_phases) do
-    opts = [file: file, emit_events: emit?, output_dir: output_dir]
+    if Cure.Elab.Program.dependent?(ast) do
+      dependent_codegen(ast)
+    else
+      opts = [file: file, emit_events: emit?, output_dir: output_dir]
 
-    opts =
-      if is_list(declared_phases),
-        do: Keyword.put(opts, :declared_phases, declared_phases),
-        else: opts
+      opts =
+        if is_list(declared_phases),
+          do: Keyword.put(opts, :declared_phases, declared_phases),
+          else: opts
 
-    case Codegen.compile_module(ast, opts) do
-      {:ok, forms} -> {:ok, forms}
+      case Codegen.compile_module(ast, opts) do
+        {:ok, forms} -> {:ok, forms}
+        {:error, reason} -> {:error, {:codegen_error, reason}}
+      end
+    end
+  end
+
+  # A dependent module is lowered by the kernel: elaborate to `Cure.Core`, erase
+  # its {0,ω} index arguments, and emit the erased residue as real BEAM forms.
+  defp dependent_codegen(ast) do
+    with {:ok, env} <- Cure.Elab.Program.check_ast(ast),
+         {:ok, forms} <- Cure.Elab.Emit.compile_forms(env, Cure.Elab.Program.module_atom(ast)) do
+      {:ok, forms}
+    else
       {:error, reason} -> {:error, {:codegen_error, reason}}
     end
   end

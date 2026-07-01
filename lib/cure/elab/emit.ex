@@ -43,6 +43,27 @@ defmodule Cure.Elab.Emit do
     end
   end
 
+  @doc """
+  Erlang abstract forms for *every* definition in `env`, as module `module`.
+
+  This is the codegen entry the real compiler pipeline calls for a dependent
+  module. Refuses the whole module if any definition still contains a hole
+  (§6 negative #5) and reports a definition the runtime fragment cannot express
+  rather than crashing the pipeline.
+  """
+  @spec compile_forms(Env.t(), module()) :: {:ok, [tuple()]} | {:error, term()}
+  def compile_forms(%Env{defs: defs} = env, module) do
+    names = Map.keys(defs)
+
+    with :ok <- reject_holes(env, names) do
+      try do
+        {:ok, module_forms(env, module, names)}
+      rescue
+        e in ArgumentError -> {:error, {:cannot_emit, Exception.message(e)}}
+      end
+    end
+  end
+
   @doc "The Erlang abstract forms for `functions` in `env`, as module `module`."
   @spec module_forms(Env.t(), module(), [atom()]) :: [tuple()]
   def module_forms(%Env{} = env, module, names) do

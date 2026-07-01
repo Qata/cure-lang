@@ -77,7 +77,7 @@ defmodule Cure.Types.Checker do
       |> Stdlib.install_qualified_types()
 
     cond do
-      dependent_ast?(ast) ->
+      Cure.Elab.Program.dependent?(ast) ->
         check_dependent_module(ast)
 
       true ->
@@ -98,14 +98,6 @@ defmodule Cure.Types.Checker do
         {:error, [{:dependent_type_error, "dependent type checking failed: #{inspect(reason)}", [line: 0]}]}
     end
   end
-
-  defp dependent_ast?({:indexed_type, _, _}), do: true
-
-  defp dependent_ast?({_tag, _meta, children}) when is_list(children),
-    do: Enum.any?(children, &dependent_ast?/1)
-
-  defp dependent_ast?(list) when is_list(list), do: Enum.any?(list, &dependent_ast?/1)
-  defp dependent_ast?(_), do: false
 
   defp check_module_dispatch(ast, env, emit?, file) do
     case ast do
