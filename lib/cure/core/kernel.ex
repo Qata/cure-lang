@@ -237,6 +237,10 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # A hole is a deferred term: accepted at any goal type. Its obligation is
+  # reported to the user and blocks codegen until filled (§6 / M8.5).
+  def check(_ctx, {:hole, _name}, _expected), do: :ok
+
   def check(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
       if subtype?(inferred, expected, ctx), do: :ok, else: {:error, :type_mismatch}

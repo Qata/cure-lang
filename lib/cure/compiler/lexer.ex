@@ -197,6 +197,7 @@ defmodule Cure.Compiler.Lexer do
       ?| -> lex_pipe_or_bar(state)
       ?. -> lex_dot(state)
       ?^ -> {:ok, emit_single(state, :caret, "^")}
+      ?? -> lex_hole(state)
       _ -> {:error, {:unexpected_character, peek(state), state.line, state.col}, state}
     end
   end
@@ -529,6 +530,31 @@ defmodule Cure.Compiler.Lexer do
   defp prepend_opening_tail(body, tail) do
     trimmed = String.trim(tail)
     if trimmed == "", do: body, else: trimmed <> "\n" <> body
+  end
+
+  # -- Holes -----------------------------------------------------------------
+
+  # `?name` (named hole) or `??` (anonymous hole) — a deferred term that reports
+  # its goal type and blocks codegen (design spec §6 / M8.5).
+  defp lex_hole(state) do
+    start_col = state.col
+    state = advance(state, 1)
+
+    {name, state} =
+      consume_while(state, fn c ->
+        c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c == ?_
+      end)
+
+    {name, state} =
+      if name == "" and peek(state) == ?? do
+        {"?", advance(state, 1)}
+      else
+        {name, state}
+      end
+
+    token = Token.new(:hole, name, state.line, start_col)
+    maybe_emit_event(state, token)
+    {:ok, %{state | tokens: [token | state.tokens]}}
   end
 
   # -- Identifiers & keywords -----------------------------------------------

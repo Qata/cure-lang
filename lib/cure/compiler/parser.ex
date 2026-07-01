@@ -229,6 +229,10 @@ defmodule Cure.Compiler.Parser do
       :char ->
         {literal(:char, token), advance(state)}
 
+      # A hole `?name` / `??` — a deferred term (design spec §6 / M8.5).
+      :hole ->
+        {{:hole, [name: token.value, line: token.line, col: token.col], []}, advance(state)}
+
       :string_interpolation ->
         parse_string_interpolation(state)
 

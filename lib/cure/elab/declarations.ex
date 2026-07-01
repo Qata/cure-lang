@@ -91,6 +91,12 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
+  # return type by the kernel; it blocks codegen until filled).
+  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, _env) do
+    {:ok, {:hole, Keyword.get(meta, :name, "")}}
+  end
+
   defp elaborate_body(expr, _return_core, scope, ctx, env) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}
