@@ -29,7 +29,15 @@ defmodule Antigen.Challenge do
   @spec to_pieces(t()) :: {map(), [{String.t(), Cure.Core.Term.t()}]}
   def to_pieces(%__MODULE__{kind: :stub, payload: %{term: t}}), do: {%{}, [{"term", t}]}
 
-  def to_pieces(%__MODULE__{kind: :def_group, payload: %{defs: defs, focus: focus}}) do
+  def to_pieces(%__MODULE__{kind: :def_group, payload: %{defs: defs, focus: focus}}),
+    do: def_group_pieces(defs, focus)
+
+  def to_pieces(%__MODULE__{kind: :forcing_pair, payload: %{defs: defs, focus: focus, t: t, tprime: tp}}) do
+    {scaffold, pieces} = def_group_pieces(defs, focus)
+    {scaffold, pieces ++ [{"t", t}, {"tprime", tp}]}
+  end
+
+  defp def_group_pieces(defs, focus) do
     scaffold = %{
       "names" => Enum.map(defs, &Atom.to_string(&1.name)),
       "focus" => Enum.map(focus, &Atom.to_string/1)
@@ -85,7 +93,19 @@ defmodule Antigen.Challenge do
 
   def from_pieces(:def_group, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)
+    {defs, focus} = rebuild_defs(scaffold, pmap)
+    new(kind: :def_group, assay: assay, label: label, payload: %{defs: defs, focus: focus}, seed: seed, note: note)
+  end
 
+  def from_pieces(:forcing_pair, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    {defs, focus} = rebuild_defs(scaffold, pmap)
+
+    payload = %{defs: defs, focus: focus, t: Map.fetch!(pmap, "t"), tprime: Map.fetch!(pmap, "tprime")}
+    new(kind: :forcing_pair, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  defp rebuild_defs(scaffold, pmap) do
     defs =
       Enum.map(scaffold["names"], fn n ->
         %{
@@ -95,8 +115,7 @@ defmodule Antigen.Challenge do
         }
       end)
 
-    focus = Enum.map(scaffold["focus"], &String.to_existing_atom/1)
-    new(kind: :def_group, assay: assay, label: label, payload: %{defs: defs, focus: focus}, seed: seed, note: note)
+    {defs, Enum.map(scaffold["focus"], &String.to_existing_atom/1)}
   end
 
   def from_pieces(:family, assay, label, seed, note, scaffold, pieces) do
