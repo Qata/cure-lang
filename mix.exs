@@ -83,7 +83,11 @@ defmodule Cure.MixProject do
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:oeditus_credo, "~> 0.4", only: [:dev, :test], runtime: false}
+      {:oeditus_credo, "~> 0.4", only: [:dev, :test], runtime: false},
+
+      # Antigen -- property-based metatheory testing (test-only; quarantined
+      # behind Antigen.Backend.StreamData per the architecture rule).
+      {:stream_data, "~> 1.0", only: [:test]}
     ]
   end
 
