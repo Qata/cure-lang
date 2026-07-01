@@ -55,4 +55,9 @@ defmodule Cure.Elab.Slice1ConformanceTest do
   test "negative #4: a Sigma pair whose second component mismatches B[a/x]" do
     assert {:error, _} = negative("-> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]", "-> Sigma(x: Dec, SF(as, bs, x)) = %[Dcoupled, sf]")
   end
+
+  test "negative #5: the program has an unfilled hole and is refused for codegen" do
+    {:ok, env} = Program.elaborate(File.read!(@fixture))
+    assert {:error, {:unfilled_hole, :sketch}} = Program.check_codegen_ready(env)
+  end
 end

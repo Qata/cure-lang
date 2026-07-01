@@ -9,7 +9,7 @@ defmodule Cure.Elab.Program do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Core.Env
-  alias Cure.Elab.{Declarations, TotalityClosure}
+  alias Cure.Elab.{Declarations, Erase, TotalityClosure}
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(source) when is_binary(source) do
@@ -17,6 +17,19 @@ defmodule Cure.Elab.Program do
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
          {:ok, env} <- elaborate_declarations(declarations(ast), Env.empty()) do
       TotalityClosure.certify_type_level(env)
+    end
+  end
+
+  @doc """
+  Codegen gate (§6 negative #5): a program with an unfilled hole typechecks but
+  must not be emitted. Returns `{:error, {:unfilled_hole, name}}` for the first
+  definition that still carries a hole.
+  """
+  @spec check_codegen_ready(Env.t()) :: :ok | {:error, {:unfilled_hole, atom()}}
+  def check_codegen_ready(%Env{defs: defs}) do
+    case Enum.find(defs, fn {_name, %{body: body}} -> Erase.has_hole?(body) end) do
+      nil -> :ok
+      {name, _def} -> {:error, {:unfilled_hole, name}}
     end
   end
 
