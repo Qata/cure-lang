@@ -1232,6 +1232,9 @@ defmodule Cure.Compiler.Parser do
       :type ->
         parse_type_def(state)
 
+      # Legacy `indexed type … where` form. Retired at the surface (migrated to
+      # `type NAME indices (…)`), but kept parsing until the stdlib/fixtures are
+      # migrated (Task 8) so the stdlib keeps compiling in the interim.
       :indexed ->
         parse_indexed_type(state)
 
@@ -2327,12 +2330,14 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    # Optional type params
-    {type_params, state} =
+    # Optional head params, parsed permissively (typed `a: Type` or bare `a`).
+    # The ordinary-ADT path projects out just the names; the indexed-family path
+    # (`type NAME(params) indices (idx)`) keeps the full typed telescope.
+    {head_params, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {tp, state} = parse_name_list(state, :rparen)
+          {tp, state} = parse_typed_params(state)
           state = expect(state, :rparen)
           {tp, state}
 
@@ -2340,6 +2345,47 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
+    case peek(state) do
+      %Token{type: :keyword, value: :indices} ->
+        parse_indexed_family(state, name, head_params, token)
+
+      _ ->
+        type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
+        parse_type_def_adt(state, name, type_params, token)
+    end
+  end
+
+  # Indexed (GADT) family: `type NAME(params) indices (idx)` followed by an
+  # indentation-delimited block of constructor signatures. Head-paren args are
+  # parameters (uniform, never matched); the `indices (…)` clause are indices.
+  defp parse_indexed_family(state, name, params, token) do
+    state = advance(state)
+    state = expect(state, :lparen)
+    {idx_tele, state} = parse_typed_params(state)
+    state = expect(state, :rparen)
+    state = skip_newlines(state)
+
+    {opened_block, state} =
+      case peek(state) do
+        %Token{type: :indent} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
+    {ctors, state} = parse_gadt_ctors(state, [])
+
+    state =
+      if opened_block do
+        state |> skip_newlines() |> expect_dedent()
+      else
+        state
+      end
+
+    meta = [name: name, params: params, indices: idx_tele, line: token.line, col: token.col]
+    {{:indexed_type, meta, ctors}, state}
+  end
+
+  # Ordinary ADT / alias / refinement body: `type NAME(type_params) = …`.
+  defp parse_type_def_adt(state, name, type_params, token) do
     state = expect(state, :assign)
     state = skip_newlines(state)
 
@@ -2409,12 +2455,8 @@ defmodule Cure.Compiler.Parser do
     {ast, state}
   end
 
-  # Indexed (GADT) type declaration:
-  #   indexed type NAME(i: T, ...) where
-  #     ctor : <type signature>
-  #     ...
-  # Each constructor signature is captured as a `{:gadt_ctor, [name: ...], type}`
-  # node; the elaborator infers the implicit index telescope from it.
+  # Legacy `indexed type NAME(i: T, ...) where …` form (retired at Task 8). Emits
+  # the old single `index_params` meta key, elaborated by the pre-split path.
   defp parse_indexed_type(state) do
     token = peek(state)
     # consume `indexed` then the `type` keyword (both are :keyword tokens)
