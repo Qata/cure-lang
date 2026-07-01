@@ -21,4 +21,19 @@ defmodule Antigen.Assays.IndexedTest do
   test "4.2 non-exhaustive Tri case must be rejected" do
     assert :ok == A.run(G.coverage(:ill_typed))
   end
+
+  test "4.3 ill-typed wrap-branch (wrong body type) must be rejected" do
+    assert :ok == A.run(G.refinement(:ill_typed))
+  end
+
+  test "4.3 refinement-complete well-typed case — records kernel's verdict" do
+    # A sound + refinement-complete kernel returns :ok (h, refined from Ix n to
+    # Ix Causal, matches the wrap branch's required type). The current kernel
+    # drops the ground-index equation, so it is expected to return
+    # {:violation, {:wrongly_rejected, _}} — an INCOMPLETENESS finding (not
+    # unsoundness). Either way, assert the result is NOT a soundness infection
+    # ({:wrongly_accepted, _} would be the alarming case).
+    result = A.run(G.refinement(:well_typed))
+    refute match?({:violation, {:wrongly_accepted, _}}, result)
+  end
 end

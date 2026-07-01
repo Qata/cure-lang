@@ -68,6 +68,43 @@ defmodule Antigen.Generators.Indexed do
     challenge(:ill_typed, [tri_family()], :coverage_gap, @tri, body, "non-exhaustive: C omitted")
   end
 
+  # -- 4.3 compound-index refinement (crown jewel) ----------------------------
+  defp ix_family, do: {Inductive.family(:Ix, [], [{:n, @dec}], 0),
+                       [Inductive.ctor(:wrap, [{:p, @dec}], [{:ctor, :Causal, []}])]}
+
+  @doc """
+  Compound-index refinement obligation. The `wrap` ctor's result index is the
+  GROUND term `Causal` (not a bare var), so `branch_index_subst` drops the
+  refinement equation.
+  """
+  @spec refinement(:well_typed | :ill_typed) :: Challenge.t()
+  def refinement(:well_typed) do
+    # Refinement-complete but genuinely legal: `h`, bound before the case at the
+    # unrefined type `Ix n`, is reused in the `wrap` branch where the required
+    # type is `Ix Causal`. Only the dropped ground-index equation (n := Causal)
+    # bridges them. A sound, refinement-complete kernel accepts this by refining
+    # h's context type; the current kernel drops the equation and is expected to
+    # reject (incompleteness, reported not fixed).
+    ix_of_0 = {:data, :Ix, [], [{:var, 0}]}
+    ix_of_1 = {:data, :Ix, [], [{:var, 1}]}
+    ix_of_2 = {:data, :Ix, [], [{:var, 2}]}
+
+    def_type = {:pi, @dec, {:pi, ix_of_0, {:pi, ix_of_1, ix_of_2}}}
+    motive = {:lam, @dec, {:lam, ix_of_0, ix_of_1}}
+    body = {:lam, @dec, {:lam, ix_of_0, {:lam, ix_of_1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+
+    challenge(:well_typed, [dec_family(), ix_family()], :refine, def_type, body,
+      "refinement-complete: reusing h : Ix n as Ix Causal in the wrap branch needs n:=Causal")
+  end
+
+  def refinement(:ill_typed) do
+    # soundness probe independent of the refinement gap: wrong-typed branch body.
+    motive = {:lam, @dec, {:lam, {:data, :Ix, [], [{:var, 0}]}, @dec}}
+    body = {:case, {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}, motive, [{:wrap, 1, {:type, 0}}]}
+    challenge(:ill_typed, [dec_family(), ix_family()], :refine, @dec, body,
+      "ill-typed: wrap branch body {:type,0} where Dec is expected")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :indexed_case,

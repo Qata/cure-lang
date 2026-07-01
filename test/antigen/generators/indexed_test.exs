@@ -41,4 +41,25 @@ defmodule Antigen.Generators.IndexedTest do
     covered = branches |> Enum.map(fn {cn, _, _} -> cn end) |> MapSet.new()
     assert MapSet.subset?(declared, covered)
   end
+
+  test "4.3 refinement family's wrap ctor has a NON-variable (ground) result index, and h needs it" do
+    c = Indexed.refinement(:well_typed)
+    env = Indexed.env_of(c)
+    [ridx] = Inductive.get_ctor(env, :wrap).result_indices
+    refute match?({:var, _}, ridx)          # it's {:ctor, :Causal, []}, so refinement is DROPPED
+    assert ridx == {:ctor, :Causal, []}
+
+    # def_type: Π(n:Dec). Π(h:Ix n). Π(ix:Ix n). Ix n — h's declared domain is
+    # `Ix n` (the SAME shape the wrap branch requires, `Ix _`), differing only in
+    # which index term fills the hole; only the dropped n:=Causal equation could
+    # ever bridge `Ix n` (h's declared type) to `Ix Causal` (the branch's goal).
+    {:pi, _dec, {:pi, h_dom, {:pi, _ix_dom, _cod}}} = c.payload.def_type
+    assert h_dom == {:data, :Ix, [], [{:var, 0}]}
+  end
+
+  test "4.3 ill-typed refinement body is a deliberately wrong-typed term" do
+    c = Indexed.refinement(:ill_typed)
+    {:case, _s, _m, [{:wrap, 1, body}]} = c.payload.def_body
+    assert body == {:type, 0}
+  end
 end
