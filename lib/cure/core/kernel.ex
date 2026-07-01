@@ -255,7 +255,14 @@ defmodule Cure.Core.Kernel do
 
   def check(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
-      if subtype?(inferred, expected, ctx), do: :ok, else: {:error, :type_mismatch}
+      if subtype?(inferred, expected, ctx) do
+        :ok
+      else
+        # Conversion failure diagnostic (§10): report both normal forms so the
+        # mismatch is legible (and serializable via C2 for independent checkers).
+        depth = Context.length(ctx)
+        {:error, {:conversion_failure, Quote.reify(inferred, depth), Quote.reify(expected, depth)}}
+      end
     end
   end
 

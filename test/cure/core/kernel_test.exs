@@ -55,7 +55,7 @@ defmodule Cure.Core.KernelTest do
     test "negative: argument type mismatch" do
       # λ(x:Type0).x expects a small type; Type0 itself is in Type1, not Type0.
       app = {:app, {:lam, {:type, 0}, {:var, 0}}, {:type, 0}}
-      assert {:error, :type_mismatch} = Kernel.infer(Context.empty(), app)
+      assert {:error, {:conversion_failure, _inferred, _expected}} = Kernel.infer(Context.empty(), app)
     end
   end
 end

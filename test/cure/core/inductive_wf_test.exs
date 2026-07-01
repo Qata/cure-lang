@@ -65,7 +65,7 @@ defmodule Cure.Core.InductiveWfTest do
     bad = Inductive.ctor(:mk, [{:s, @svdesc}], [{:var, 0}])
     env = Inductive.declare(base_env(), g, [bad])
 
-    assert {:error, :type_mismatch} ==
+    assert {:error, {:conversion_failure, _, _}} =
              Kernel.check_ctor(env, Inductive.get_family(env, :G), Inductive.get_ctor(env, :mk))
   end
 end
