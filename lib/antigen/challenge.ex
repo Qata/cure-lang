@@ -19,4 +19,17 @@ defmodule Antigen.Challenge do
 
   @spec stub(Cure.Core.Term.t()) :: t()
   def stub(term), do: new(kind: :stub, assay: "stub", label: :none, payload: %{term: term})
+
+  @doc """
+  Split a challenge into its non-`Term` scaffold metadata and its list of
+  named `Term` pieces — the bridge the corpus serializes over (Task 5).
+  Phase 2 adds `:def_group` / `:family` / `:forcing_pair` clauses (Tasks 9–11).
+  """
+  @spec to_pieces(t()) :: {map(), [{String.t(), Cure.Core.Term.t()}]}
+  def to_pieces(%__MODULE__{kind: :stub, payload: %{term: t}}), do: {%{}, [{"term", t}]}
+
+  @doc "Rebuild a challenge from a decoded record's fields, scaffold, and term pieces."
+  @spec from_pieces(atom(), String.t(), atom(), integer() | nil, String.t() | nil, map(), [{String.t(), Cure.Core.Term.t()}]) :: t()
+  def from_pieces(:stub, assay, label, seed, note, _scaffold, [{"term", t}]),
+    do: new(kind: :stub, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
 end
