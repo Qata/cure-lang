@@ -41,6 +41,13 @@ defmodule Cure.Core.Eval do
 
   def eval({:ctor, name, args}, env), do: {:vctor, name, Enum.map(args, &eval(&1, env))}
 
+  # Primitive Int: literals and arithmetic. `{:prim, op, args}` folds when every
+  # argument reduces to a literal; otherwise it stays neutral so open terms
+  # (`n + 1`) read back and compare structurally.
+  def eval({:int_type}, _env), do: {:vint_type}
+  def eval({:int_lit, n}, _env), do: {:vint, n}
+  def eval({:prim, op, args}, env), do: prim(op, Enum.map(args, &eval(&1, env)))
+
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
@@ -85,6 +92,24 @@ defmodule Cure.Core.Eval do
   def apply_closure({:closure, env, body}, value), do: eval(body, [value | env])
 
   # -- projection ι -----------------------------------------------------------
+
+  # Fold a primitive when all arguments are concrete integers; a failed fold
+  # (e.g. division by zero) or a non-literal argument leaves the op stuck.
+  defp prim(op, args) do
+    with true <- Enum.all?(args, &match?({:vint, _}, &1)),
+         {:ok, n} <- fold(op, Enum.map(args, fn {:vint, k} -> k end)) do
+      {:vint, n}
+    else
+      _ -> {:vneutral, {:nprim, op, args}}
+    end
+  end
+
+  defp fold(:add, [a, b]), do: {:ok, a + b}
+  defp fold(:sub, [a, b]), do: {:ok, a - b}
+  defp fold(:mul, [a, b]), do: {:ok, a * b}
+  defp fold(:div, [_a, 0]), do: :error
+  defp fold(:div, [a, b]), do: {:ok, div(a, b)}
+  defp fold(_op, _args), do: :error
 
   defp vfst({:vpair, a, _b}), do: a
   defp vfst({:vneutral, n}), do: {:vneutral, {:nfst, n}}

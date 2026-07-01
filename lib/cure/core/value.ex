@@ -49,6 +49,8 @@ defmodule Cure.Core.Value do
   def value?({:vctor, name, vs}), do: is_atom(name) and values?(vs)
   def value?({:veq, ty, a, b}), do: value?(ty) and value?(a) and value?(b)
   def value?({:vrefl, a}), do: value?(a)
+  def value?({:vint_type}), do: true
+  def value?({:vint, n}), do: is_integer(n)
   def value?(_), do: false
 
   @doc "True when `neutral` is a structurally well-formed neutral (stuck) value."
@@ -58,6 +60,7 @@ defmodule Cure.Core.Value do
   def neutral?({:napp, n, v}), do: neutral?(n) and value?(v)
   def neutral?({:nfst, n}), do: neutral?(n)
   def neutral?({:nsnd, n}), do: neutral?(n)
+  def neutral?({:nprim, op, args}), do: is_atom(op) and values?(args)
 
   def neutral?({:ncase, n, motive_cl, branches}),
     do: neutral?(n) and closure?(motive_cl) and branch_closures?(branches)

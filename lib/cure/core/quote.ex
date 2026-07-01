@@ -50,6 +50,9 @@ defmodule Cure.Core.Quote do
 
   def reify({:vrefl, a}, depth), do: {:refl, reify(a, depth)}
 
+  def reify({:vint_type}, _depth), do: {:int_type}
+  def reify({:vint, n}, _depth), do: {:int_lit, n}
+
   def reify({:vneutral, n}, depth), do: reify_neutral(n, depth)
 
   # -- neutrals ---------------------------------------------------------------
@@ -62,6 +65,9 @@ defmodule Cure.Core.Quote do
 
   defp reify_neutral({:nfst, n}, depth), do: {:fst, reify_neutral(n, depth)}
   defp reify_neutral({:nsnd, n}, depth), do: {:snd, reify_neutral(n, depth)}
+
+  defp reify_neutral({:nprim, op, args}, depth),
+    do: {:prim, op, Enum.map(args, &reify(&1, depth))}
 
   defp reify_neutral({:ncase, neutral, motive_cl, branch_cls}, depth) do
     scrut = reify_neutral(neutral, depth)

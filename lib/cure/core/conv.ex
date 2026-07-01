@@ -44,6 +44,9 @@ defmodule Cure.Core.Conv do
 
   defp conv_struct?({:vtype, l1}, {:vtype, l2}, _depth, _sig), do: l1 == l2
 
+  defp conv_struct?({:vint_type}, {:vint_type}, _depth, _sig), do: true
+  defp conv_struct?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
+
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)
 
@@ -135,6 +138,9 @@ defmodule Cure.Core.Conv do
 
   defp conv_neutral?({:nfst, n1}, {:nfst, n2}, depth, sig), do: conv_neutral?(n1, n2, depth, sig)
   defp conv_neutral?({:nsnd, n1}, {:nsnd, n2}, depth, sig), do: conv_neutral?(n1, n2, depth, sig)
+
+  defp conv_neutral?({:nprim, op1, a1}, {:nprim, op2, a2}, depth, sig),
+    do: op1 == op2 and conv_spine?(a1, a2, depth, sig)
 
   defp conv_neutral?({:ncase, n1, m1, brs1}, {:ncase, n2, m2, brs2}, depth, sig) do
     conv_neutral?(n1, n2, depth, sig) and conv_closure?(m1, m2, depth, sig) and

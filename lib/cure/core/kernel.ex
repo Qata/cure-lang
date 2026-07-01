@@ -36,6 +36,23 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # Primitive Int. `Int : Type0`, literals are `Int`, and arithmetic is
+  # `Int → Int → Int` (each argument re-checked against `Int`).
+  def infer(_ctx, {:int_type}), do: {:ok, {:vtype, 0}}
+  def infer(_ctx, {:int_lit, _n}), do: {:ok, {:vint_type}}
+
+  def infer(ctx, {:prim, op, args}) when op in [:add, :sub, :mul, :div] do
+    case Enum.find_value(args, fn arg ->
+           case check(ctx, arg, {:vint_type}) do
+             :ok -> nil
+             {:error, _} = err -> err
+           end
+         end) do
+      nil -> {:ok, {:vint_type}}
+      {:error, _} = err -> err
+    end
+  end
+
   def infer(ctx, {:pi, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
          dom_value = Eval.eval(dom, Context.env(ctx)),
