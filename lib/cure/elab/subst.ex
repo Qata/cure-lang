@@ -68,8 +68,21 @@ defmodule Cure.Elab.Subst do
   defp replace({:ctor, n, args}, env, k, depth),
     do: {:ctor, n, Enum.map(args, &replace(&1, env, k, depth))}
 
+  defp replace({:case, s, m, brs}, env, k, depth) do
+    {:case, replace(s, env, k, depth), replace(m, env, k, depth),
+     Enum.map(brs, fn {cn, ar, b} -> {cn, ar, replace(b, env, k, depth + ar)} end)}
+  end
+
   defp replace({:eq, ty, a, b}, env, k, depth),
     do: {:eq, replace(ty, env, k, depth), replace(a, env, k, depth), replace(b, env, k, depth)}
+
+  defp replace({:refl, a}, env, k, depth), do: {:refl, replace(a, env, k, depth)}
+
+  defp replace({:rewrite, p, m, b}, env, k, depth),
+    do: {:rewrite, replace(p, env, k, depth), replace(m, env, k, depth), replace(b, env, k, depth)}
+
+  defp replace({:prim, op, args}, env, k, depth),
+    do: {:prim, op, Enum.map(args, &replace(&1, env, k, depth))}
 
   defp replace(other, _env, _k, _depth), do: other
 
@@ -107,8 +120,21 @@ defmodule Cure.Elab.Subst do
   def shift({:ctor, n, args}, amount, cutoff),
     do: {:ctor, n, Enum.map(args, &shift(&1, amount, cutoff))}
 
+  def shift({:case, s, m, brs}, amount, cutoff) do
+    {:case, shift(s, amount, cutoff), shift(m, amount, cutoff),
+     Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, amount, cutoff + ar)} end)}
+  end
+
   def shift({:eq, ty, a, b}, amount, cutoff),
     do: {:eq, shift(ty, amount, cutoff), shift(a, amount, cutoff), shift(b, amount, cutoff)}
+
+  def shift({:refl, a}, amount, cutoff), do: {:refl, shift(a, amount, cutoff)}
+
+  def shift({:rewrite, p, m, b}, amount, cutoff),
+    do: {:rewrite, shift(p, amount, cutoff), shift(m, amount, cutoff), shift(b, amount, cutoff)}
+
+  def shift({:prim, op, args}, amount, cutoff),
+    do: {:prim, op, Enum.map(args, &shift(&1, amount, cutoff))}
 
   def shift(other, _amount, _cutoff), do: other
 end

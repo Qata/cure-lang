@@ -71,6 +71,15 @@ defmodule Cure.Elab.Elaborator do
     atom = String.to_atom(name)
 
     cond do
+      name == "refl" and length(args) == 1 ->
+        [arg] = args
+
+        with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
+             term = {:refl, arg_term},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
       Inductive.get_ctor(env, atom) ->
         with {:ok, present} <- map_present_args(args, names, ctx, env) do
           elaborate_ctor_app(env, atom, present)
@@ -106,7 +115,199 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
+    do: {:error, :rewrite_requires_expected_type}
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  @doc """
+  Checking-mode elaboration for proof forms whose Core term depends on the
+  expected type. Ordinary expressions fall back to infer-then-check.
+  """
+  @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
+          {:ok, term()} | {:error, term()}
+  def elaborate_expr_checked({:function_call, meta, [arg]} = expr, expected_core, names, ctx, env) do
+    if Keyword.get(meta, :name) == "refl" do
+      with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
+           term = {:refl, arg_term},
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
+    else
+      elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+    end
+  end
+
+  def elaborate_expr_checked({:rewrite_expr, _meta, [proof_ast, body_ast]}, expected_core, names, ctx, env) do
+    depth = Context.length(ctx)
+
+    with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
+         {:ok, ty_value, a_value, b_value} <- eq_parts(proof_type),
+         ty = normalize_core(Quote.reify(ty_value, depth), env),
+         a = normalize_core(Quote.reify(a_value, depth), env),
+         b = normalize_core(Quote.reify(b_value, depth), env),
+         normalized_expected = normalize_core(expected_core, env),
+         {:ok, proof, motive, body_expected} <- rewrite_plan(proof_term, ty, a, b, normalized_expected),
+         {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
+         term = {:rewrite, proof, motive, body_term},
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
+  def elaborate_expr_checked(expr, expected_core, names, ctx, env),
+    do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  defp elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+    with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
+  defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
+  defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
+
+  # Core rewrite transports M[a] -> M[b]. Idris-style source `rewrite p in t`
+  # checks `t` under the rewritten goal and returns the original goal, so when
+  # the expected type contains the proof's left endpoint we synthesize symmetry.
+  defp rewrite_plan(proof, ty, a, b, expected) do
+    cond do
+      contains_term?(expected, a) ->
+        with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
+             {:ok, motive} <- motive_for(expected, a, ty) do
+          {:ok, sym_proof, motive, replace_term(expected, a, b)}
+        end
+
+      contains_term?(expected, b) ->
+        {:ok, motive} = motive_for(expected, b, ty)
+        {:ok, proof, motive, replace_term(expected, b, a)}
+
+      true ->
+        {:error, {:rewrite_no_match, a, b, expected}}
+    end
+  end
+
+  defp symmetry_proof(proof, ty, a, _b) do
+    motive_body = {:eq, Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0)}
+    motive = {:lam, ty, motive_body}
+    {:ok, {:rewrite, proof, motive, {:refl, a}}}
+  end
+
+  defp motive_for(expected, target, ty), do: {:ok, {:lam, ty, abstract_term(expected, target, 0)}}
+
+  defp contains_term?(term, target), do: term == target or Enum.any?(children(term), &contains_term?(&1, target))
+
+  defp replace_term(term, target, replacement) when term == target, do: replacement
+
+  defp replace_term(term, target, replacement) when is_list(term),
+    do: Enum.map(term, &replace_term(&1, target, replacement))
+
+  defp replace_term(term, target, replacement) do
+    if term == target do
+      replacement
+    else
+      rebuild(term, Enum.map(children(term), &replace_term(&1, target, replacement)))
+    end
+  end
+
+  defp abstract_term(term, target, depth) when term == target, do: {:var, depth}
+  defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
+  defp abstract_term({:var, _} = var, _target, _depth), do: var
+
+  defp abstract_term({:pi, d, c}, target, depth),
+    do: {:pi, abstract_term(d, target, depth), abstract_term(c, target, depth + 1)}
+
+  defp abstract_term({:lam, d, b}, target, depth),
+    do: {:lam, abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
+
+  defp abstract_term({:sigma, a, b}, target, depth),
+    do: {:sigma, abstract_term(a, target, depth), abstract_term(b, target, depth + 1)}
+
+  defp abstract_term(term, target, depth) when is_tuple(term),
+    do: rebuild(term, Enum.map(children(term), &abstract_term(&1, target, depth)))
+
+  defp abstract_term(term, target, depth) when is_list(term),
+    do: Enum.map(term, &abstract_term(&1, target, depth))
+
+  defp abstract_term(term, _target, _depth), do: term
+
+  defp children(term) when is_tuple(term), do: term |> Tuple.to_list() |> tl()
+  defp children(term) when is_list(term), do: term
+  defp children(_term), do: []
+
+  defp rebuild(term, children) when is_tuple(term) do
+    [elem(term, 0) | children] |> List.to_tuple()
+  end
+
+  defp rebuild(term, _children), do: term
+
+  defp normalize_core({:app, _f, _a} = app, env) do
+    {head, args} = spine(app, [])
+    args = Enum.map(args, &normalize_core(&1, env))
+
+    case normalize_head(head, args, env) do
+      {:reduced, term} -> normalize_core(term, env)
+      :stuck -> Enum.reduce(args, normalize_core(head, env), fn arg, acc -> {:app, acc, arg} end)
+    end
+  end
+
+  defp normalize_core({:case, scrut, motive, branches}, env) do
+    scrut = normalize_core(scrut, env)
+
+    case scrut do
+      {:ctor, cname, args} ->
+        case Enum.find(branches, fn {c, _ar, _body} -> c == cname end) do
+          {_c, _ar, body} -> normalize_core(Subst.instantiate(body, args), env)
+          nil -> {:case, scrut, normalize_core(motive, env), branches}
+        end
+
+      _ ->
+        {:case, scrut, motive, branches}
+    end
+  end
+
+  defp normalize_core({:pi, d, c}, env), do: {:pi, normalize_core(d, env), normalize_core(c, env)}
+  defp normalize_core({:lam, d, b}, env), do: {:lam, normalize_core(d, env), normalize_core(b, env)}
+  defp normalize_core({:sigma, a, b}, env), do: {:sigma, normalize_core(a, env), normalize_core(b, env)}
+  defp normalize_core({:pair, a, b}, env), do: {:pair, normalize_core(a, env), normalize_core(b, env)}
+  defp normalize_core({:fst, p}, env), do: {:fst, normalize_core(p, env)}
+  defp normalize_core({:snd, p}, env), do: {:snd, normalize_core(p, env)}
+
+  defp normalize_core({:data, n, ps, is}, env),
+    do: {:data, n, Enum.map(ps, &normalize_core(&1, env)), Enum.map(is, &normalize_core(&1, env))}
+
+  defp normalize_core({:ctor, n, args}, env), do: {:ctor, n, Enum.map(args, &normalize_core(&1, env))}
+
+  defp normalize_core({:eq, ty, a, b}, env),
+    do: {:eq, normalize_core(ty, env), normalize_core(a, env), normalize_core(b, env)}
+
+  defp normalize_core({:refl, a}, env), do: {:refl, normalize_core(a, env)}
+
+  defp normalize_core({:rewrite, p, m, b}, env),
+    do: {:rewrite, normalize_core(p, env), normalize_core(m, env), normalize_core(b, env)}
+
+  defp normalize_core({:prim, op, args}, env), do: {:prim, op, Enum.map(args, &normalize_core(&1, env))}
+  defp normalize_core(other, _env), do: other
+
+  defp normalize_head({:global, name}, args, env) do
+    case Env.get_def(env, name) do
+      %{body: body} ->
+        if Env.certified?(env, name), do: reduce_lams(body, args), else: :stuck
+
+      _other ->
+        :stuck
+    end
+  end
+
+  defp normalize_head(_head, _args, _env), do: :stuck
+
+  defp reduce_lams(body, []), do: {:reduced, body}
+  defp reduce_lams({:lam, _dom, body}, [arg | rest]), do: reduce_lams(Subst.instantiate(body, [arg]), rest)
+  defp reduce_lams(_body, _args), do: :stuck
+
+  defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
+  defp spine(head, acc), do: {head, acc}
 
   defp implicit_def?(env, atom) do
     case Env.get_def(env, atom) do
@@ -146,9 +347,10 @@ defmodule Cure.Elab.Elaborator do
         {:vdata, dname, index_vals} ->
           family = Inductive.get_family(env, dname)
           idx_terms = Enum.map(index_vals, &Quote.reify(&1, Context.length(ctx)))
-          motive = build_motive(dname, family.indices, idx_terms, result_type_term)
+          motive = build_motive(dname, family.indices, idx_terms, scrut_term, result_type_term)
 
-          with {:ok, branches} <- elaborate_branches(arms, names, ctx, env, idx_terms) do
+          with {:ok, branches} <-
+                 elaborate_branches(arms, names, ctx, env, idx_terms, scrut_term, result_type_term) do
             {:ok, {:case, scrut_term, motive, branches}}
           end
 
@@ -168,7 +370,7 @@ defmodule Cure.Elab.Elaborator do
   # like `Vec a (plus m n)` typechecks per branch. When ResultType doesn't
   # mention an index variable the generalization is a no-op, degrading to the
   # constant motive.
-  defp build_motive(dname, index_tele, idx_terms, result_type_term) do
+  defp build_motive(dname, index_tele, idx_terms, scrut_term, result_type_term) do
     k = length(index_tele)
     index_types = Enum.map(index_tele, &elem(&1, 1))
     scrut_type = {:data, dname, [], Enum.map((k - 1)..0//-1, &{:var, &1})}
@@ -182,6 +384,12 @@ defmodule Cure.Elab.Elaborator do
         {{:var, orig}, pos}, acc -> Map.put(acc, orig, k - pos)
         {_non_var, _pos}, acc -> acc
       end)
+
+    rebind =
+      case scrut_term do
+        {:var, orig} -> Map.put(rebind, orig, 0)
+        _other -> rebind
+      end
 
     body = generalize(result_type_term, rebind, k + 1, 0)
 
@@ -224,9 +432,7 @@ defmodule Cure.Elab.Elaborator do
   defp generalize({:snd, p}, rb, s, depth), do: {:snd, generalize(p, rb, s, depth)}
 
   defp generalize({:data, n, ps, is}, rb, s, depth),
-    do:
-      {:data, n, Enum.map(ps, &generalize(&1, rb, s, depth)),
-       Enum.map(is, &generalize(&1, rb, s, depth))}
+    do: {:data, n, Enum.map(ps, &generalize(&1, rb, s, depth)), Enum.map(is, &generalize(&1, rb, s, depth))}
 
   defp generalize({:ctor, n, args}, rb, s, depth),
     do: {:ctor, n, Enum.map(args, &generalize(&1, rb, s, depth))}
@@ -237,33 +443,39 @@ defmodule Cure.Elab.Elaborator do
        Enum.map(brs, fn {c, ar, b} -> {c, ar, generalize(b, rb, s, depth + ar)} end)}
 
   defp generalize({:eq, t, a, b}, rb, s, depth),
-    do:
-      {:eq, generalize(t, rb, s, depth), generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
+    do: {:eq, generalize(t, rb, s, depth), generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
 
   defp generalize({:refl, a}, rb, s, depth), do: {:refl, generalize(a, rb, s, depth)}
 
   defp generalize({:rewrite, p, m, b}, rb, s, depth),
-    do:
-      {:rewrite, generalize(p, rb, s, depth), generalize(m, rb, s, depth),
-       generalize(b, rb, s, depth)}
+    do: {:rewrite, generalize(p, rb, s, depth), generalize(m, rb, s, depth), generalize(b, rb, s, depth)}
 
   defp generalize({:prim, op, args}, rb, s, depth),
     do: {:prim, op, Enum.map(args, &generalize(&1, rb, s, depth))}
 
   defp generalize(leaf, _rb, _s, _depth), do: leaf
 
-  defp elaborate_branches(arms, names, ctx, env, scrut_indices) do
+  defp elaborate_branches(arms, names, ctx, env, scrut_indices, scrut_term, result_type_term) do
     Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, arm_meta, body}, {:ok, acc} ->
       pattern = Keyword.fetch!(arm_meta, :pattern)
 
-      case elaborate_branch(pattern, single_body(body), names, ctx, env, scrut_indices) do
+      case elaborate_branch(
+             pattern,
+             single_body(body),
+             names,
+             ctx,
+             env,
+             scrut_indices,
+             scrut_term,
+             result_type_term
+           ) do
         {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
         {:error, _} = err -> {:halt, err}
       end
     end)
   end
 
-  defp elaborate_branch(pattern, body_expr, names, ctx, env, scrut_indices) do
+  defp elaborate_branch(pattern, body_expr, names, ctx, env, scrut_indices, scrut_term, result_type_term) do
     {cname, pattern_vars} = constructor_pattern(pattern)
 
     case Inductive.get_ctor(env, cname) do
@@ -276,15 +488,36 @@ defmodule Cure.Elab.Elaborator do
         # (function params, prior lets). extend_context shifts ctx the same way,
         # keeping surface names and de Bruijn indices aligned.
         branch_names = branch_scope(quantities, pattern_vars) ++ names
+
         branch_ctx =
           ctx
           |> extend_context(telescope)
           |> specialize_branch_context(result_indices, scrut_indices, length(telescope))
 
-        with {:ok, body_term, _type} <- elaborate_expr_typed(body_expr, branch_names, branch_ctx, env) do
+        branch_expected =
+          result_type_term
+          |> branch_expected_type(scrut_term, cname, length(telescope), result_indices, scrut_indices)
+          |> normalize_core(env)
+
+        with {:ok, body_term} <- elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
           {:ok, {cname, length(telescope), body_term}}
         end
     end
+  end
+
+  defp elaborate_branch_body({:rewrite_expr, _meta, _children} = expr, expected, names, ctx, env),
+    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+
+  defp elaborate_branch_body({:function_call, meta, _args} = expr, expected, names, ctx, env) do
+    if Keyword.get(meta, :name) == "refl" do
+      elaborate_expr_checked(expr, expected, names, ctx, env)
+    else
+      with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
+    end
+  end
+
+  defp elaborate_branch_body(expr, _expected, names, ctx, env) do
+    with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
   end
 
   defp constructor_pattern({:function_call, meta, args}) do
@@ -304,6 +537,26 @@ defmodule Cure.Elab.Elaborator do
       end)
 
     Enum.reverse(names_in_order)
+  end
+
+  defp branch_expected_type(result_type_term, scrut_term, cname, arity, result_indices, scrut_indices) do
+    shifted = Subst.shift(result_type_term, arity, 0)
+    subst = branch_index_subst(result_indices, scrut_indices, arity)
+
+    subst =
+      case scrut_term do
+        {:var, i} -> Map.put(subst, i + arity, branch_constructor_term(cname, arity))
+        _other -> subst
+      end
+
+    replace_branch_vars(shifted, subst)
+  end
+
+  defp branch_constructor_term(cname, 0), do: {:ctor, cname, []}
+
+  defp branch_constructor_term(cname, arity) do
+    args = for i <- 0..(arity - 1), do: {:var, arity - 1 - i}
+    {:ctor, cname, args}
   end
 
   defp extend_context(ctx, telescope) do
@@ -372,9 +625,7 @@ defmodule Cure.Elab.Elaborator do
   defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
 
   defp replace_branch_vars({:data, n, ps, is}, subst),
-    do:
-      {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)),
-       Enum.map(is, &replace_branch_vars(&1, subst))}
+    do: {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)), Enum.map(is, &replace_branch_vars(&1, subst))}
 
   defp replace_branch_vars({:ctor, n, args}, subst),
     do: {:ctor, n, Enum.map(args, &replace_branch_vars(&1, subst))}
@@ -385,16 +636,12 @@ defmodule Cure.Elab.Elaborator do
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
 
   defp replace_branch_vars({:eq, t, a, b}, subst),
-    do:
-      {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst),
-       replace_branch_vars(b, subst)}
+    do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
 
   defp replace_branch_vars({:rewrite, p, m, b}, subst),
-    do:
-      {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst),
-       replace_branch_vars(b, subst)}
+    do: {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:prim, op, args}, subst),
     do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}

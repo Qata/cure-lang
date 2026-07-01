@@ -54,18 +54,21 @@ defmodule Cure.Elab.Erase do
         |> Enum.reduce(erase(env, head), fn arg, acc -> {:app, acc, arg} end)
     end
   end
+
   def erase(env, {:pair, a, b}), do: {:pair, erase(env, a), erase(env, b)}
   def erase(env, {:fst, p}), do: {:fst, erase(env, p)}
   def erase(env, {:snd, p}), do: {:snd, erase(env, p)}
   def erase(env, {:pi, d, c}), do: {:pi, erase(env, d), erase(env, c)}
   def erase(env, {:sigma, a, b}), do: {:sigma, erase(env, a), erase(env, b)}
+  def erase(_env, {:refl, _a}), do: {:ctor, :cure_refl, []}
+  def erase(env, {:rewrite, _proof, _motive, body}), do: erase(env, body)
+  def erase(_env, {:eq, _ty, _a, _b}), do: {:ctor, :cure_eq, []}
 
   def erase(env, {:data, n, ps, is}),
     do: {:data, n, Enum.map(ps, &erase(env, &1)), Enum.map(is, &erase(env, &1))}
 
   def erase(env, {:case, s, m, branches}) do
-    {:case, erase(env, s), erase(env, m),
-     Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
+    {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
   end
 
   def erase(_env, term), do: term
@@ -83,6 +86,9 @@ defmodule Cure.Elab.Erase do
   def has_hole?({:pair, a, b}), do: has_hole?(a) or has_hole?(b)
   def has_hole?({:fst, p}), do: has_hole?(p)
   def has_hole?({:snd, p}), do: has_hole?(p)
+  def has_hole?({:eq, ty, a, b}), do: has_hole?(ty) or has_hole?(a) or has_hole?(b)
+  def has_hole?({:refl, a}), do: has_hole?(a)
+  def has_hole?({:rewrite, p, m, b}), do: has_hole?(p) or has_hole?(m) or has_hole?(b)
   def has_hole?({:ctor, _n, args}), do: Enum.any?(args, &has_hole?/1)
   def has_hole?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_hole?/1)
 

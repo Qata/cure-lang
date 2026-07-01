@@ -488,15 +488,15 @@ defmodule Cure.Core.Kernel do
   end
 
   defp infer_type_value_sort(ctx, {:vpi, _dom, _cod} = value) do
-    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
   end
 
   defp infer_type_value_sort(ctx, {:vsigma, _dom, _cod} = value) do
-    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
   end
 
   defp infer_type_value_sort(ctx, {:veq, _ty, _a, _b} = value) do
-    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
   end
 
   defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}
@@ -523,6 +523,7 @@ defmodule Cure.Core.Kernel do
           # Result indices are written over the ctor's args (most-recent first).
           s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
           ctor_value = {:vctor, cname, arg_vals}
+
           expected =
             motive_value
             |> apply_motive(s_values ++ [ctor_value])
@@ -605,9 +606,7 @@ defmodule Cure.Core.Kernel do
   defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
 
   defp replace_branch_vars({:data, n, ps, is}, subst),
-    do:
-      {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)),
-       Enum.map(is, &replace_branch_vars(&1, subst))}
+    do: {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)), Enum.map(is, &replace_branch_vars(&1, subst))}
 
   defp replace_branch_vars({:ctor, n, args}, subst),
     do: {:ctor, n, Enum.map(args, &replace_branch_vars(&1, subst))}
@@ -618,16 +617,12 @@ defmodule Cure.Core.Kernel do
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
 
   defp replace_branch_vars({:eq, t, a, b}, subst),
-    do:
-      {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst),
-       replace_branch_vars(b, subst)}
+    do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
 
   defp replace_branch_vars({:rewrite, p, m, b}, subst),
-    do:
-      {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst),
-       replace_branch_vars(b, subst)}
+    do: {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:prim, op, args}, subst),
     do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}

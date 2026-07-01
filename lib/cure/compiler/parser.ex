@@ -242,6 +242,9 @@ defmodule Cure.Compiler.Parser do
           "assert_type" ->
             parse_assert_type(state, token)
 
+          "rewrite" ->
+            parse_rewrite(state, token)
+
           # Soft keyword: `sup Name ...` at statement-prefix position is
           # the supervisor container. When `sup` is followed by anything
           # other than an identifier (`:`, `,`, `}`, `)`, etc.) we treat
@@ -337,6 +340,20 @@ defmodule Cure.Compiler.Parser do
     {type_ast, state} = parse_type_expr(state)
     ast = {:assert_type, [line: token.line, col: token.col], [expr, type_ast]}
     {ast, state}
+  end
+
+  # -- Propositional equality rewrite ---------------------------------------
+  #
+  # `rewrite proof in body` elaborates to a Core rewrite with an explicit motive
+  # synthesized by `Cure.Elab`. `rewrite` remains a soft keyword so existing
+  # values named `rewrite` only switch forms when used in expression-prefix
+  # position.
+  defp parse_rewrite(state, token) do
+    state = advance(state)
+    {proof, state} = parse_expr(state, 0)
+    state = expect_keyword(state, :in)
+    {body, state} = parse_expr(state, 0)
+    {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
   end
 
   # -- Pin Operator (pattern position) ---------------------------------------
@@ -4302,6 +4319,17 @@ defmodule Cure.Compiler.Parser do
       advance(state)
     else
       error = {:expected, expected_type, :got, token.type, token.line, token.col}
+      add_error(state, error)
+    end
+  end
+
+  defp expect_keyword(state, expected_value) do
+    token = peek(state)
+
+    if token.type == :keyword and token.value == expected_value do
+      advance(state)
+    else
+      error = {:expected, expected_value, :got, token.type, token.line, token.col}
       add_error(state, error)
     end
   end

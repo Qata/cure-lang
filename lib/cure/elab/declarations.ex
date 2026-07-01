@@ -100,6 +100,20 @@ defmodule Cure.Elab.Declarations do
     Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
   end
 
+  defp elaborate_body({:rewrite_expr, _meta, _children} = expr, return_core, scope, ctx, env) do
+    Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+  end
+
+  defp elaborate_body({:function_call, meta, _args} = expr, return_core, scope, ctx, env) do
+    if Keyword.get(meta, :name) == "refl" do
+      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+    else
+      with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+        {:ok, term}
+      end
+    end
+  end
+
   # A pair `%[a, b]` is a dependent-pair introduction; the kernel checks it
   # against the declared Σ return type.
   defp elaborate_body({:tuple, _meta, [a_ast, b_ast]}, _return_core, scope, ctx, env) do
@@ -135,8 +149,7 @@ defmodule Cure.Elab.Declarations do
           case idx_to_core(type_expr, scope, nil, env) do
             {:ok, core} ->
               q = if Keyword.get(pmeta, :implicit), do: :erased, else: :present
-              {:cont,
-               {:ok, tele ++ [{String.to_atom(pname), core}], quants ++ [q], [pname | scope]}}
+              {:cont, {:ok, tele ++ [{String.to_atom(pname), core}], quants ++ [q], [pname | scope]}}
 
             {:error, _} = err ->
               {:halt, err}
@@ -243,8 +256,7 @@ defmodule Cure.Elab.Declarations do
   defp build_explicit_tele(dom_exprs, impl_names, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names), []}, fn {dom, i},
-                                                                     {:ok, tele, scope, names} ->
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names), []}, fn {dom, i}, {:ok, tele, scope, names} ->
       case idx_to_core(dom, scope, fam, env) do
         {:ok, core} ->
           argname = "_a#{i}"
@@ -334,6 +346,10 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env) do
       cond do
+        atom == :Eq and length(core_args) == 3 ->
+          [ty, a, b] = core_args
+          {:ok, {:eq, ty, a, b}}
+
         atom == fam or Inductive.family?(env, atom) ->
           {:ok, {:data, atom, [], core_args}}
 

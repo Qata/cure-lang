@@ -53,12 +53,23 @@ defmodule Cure.Elab.Program do
   This is intentionally a surface-feature router, not a semantic checker. Forms
   that already have a trusted Core elaboration must take the dependent compiler
   path even when a module does not declare an indexed family. Legacy proof
-  containers and `Eq(...)` claims are not routed here until the Cure surface for
-  `Eq`/`refl`/`rewrite` is elaborated into Core.
+  containers are not routed here until proof containers elaborate into Core.
   """
   @spec dependent?(term()) :: boolean()
   def dependent?({:indexed_type, _meta, _body}), do: true
   def dependent?({:sigma_type, _meta, _body}), do: true
+  def dependent?({:rewrite_expr, _meta, _body}), do: true
+
+  def dependent?({:function_call, meta, children}) when is_list(meta) do
+    Keyword.get(meta, :name) in ["Eq", "refl"] or Enum.any?(children, &dependent?/1)
+  end
+
+  def dependent?({:container, meta, body}) when is_list(meta) do
+    case Keyword.get(meta, :container_type) do
+      :proof -> false
+      _other -> dependent?(body)
+    end
+  end
 
   def dependent?({:attribute_access, meta, children}) when is_list(meta) do
     Keyword.get(meta, :attribute) in ["1", "2"] or Enum.any?(children, &dependent?/1)
