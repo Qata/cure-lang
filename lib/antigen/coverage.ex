@@ -27,7 +27,13 @@ defmodule Antigen.Coverage do
   def terms_of(%Challenge{kind: :def_group, payload: %{defs: defs}}),
     do: Enum.flat_map(defs, fn d -> [d.type, d.body] end)
 
-  # Phase 2 adds :family / :forcing_pair clauses (Tasks 10–11).
+  def terms_of(%Challenge{kind: :family, payload: %{family: fam, ctors: ctors}}) do
+    fam_terms = Enum.map(fam.params, fn {_n, t} -> t end) ++ Enum.map(fam.indices, fn {_n, t} -> t end)
+    ctor_terms = Enum.flat_map(ctors, fn ct -> Enum.map(ct.args, fn {_n, t} -> t end) ++ ct.result_indices end)
+    fam_terms ++ ctor_terms
+  end
+
+  # Phase 2 adds the :forcing_pair clause (Task 11).
 
   defp bucket(d) when d <= 2, do: :b0_2
   defp bucket(d) when d <= 5, do: :b3_5
