@@ -23,7 +23,11 @@ defmodule Antigen.Coverage do
 
   @spec terms_of(Challenge.t()) :: [Cure.Core.Term.t()]
   def terms_of(%Challenge{kind: :stub, payload: %{term: t}}), do: [t]
-  # Phase 2 adds :def_group / :family / :forcing_pair clauses (Tasks 9–11).
+
+  def terms_of(%Challenge{kind: :def_group, payload: %{defs: defs}}),
+    do: Enum.flat_map(defs, fn d -> [d.type, d.body] end)
+
+  # Phase 2 adds :family / :forcing_pair clauses (Tasks 10–11).
 
   defp bucket(d) when d <= 2, do: :b0_2
   defp bucket(d) when d <= 5, do: :b3_5

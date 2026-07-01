@@ -28,8 +28,39 @@ defmodule Antigen.Challenge do
   @spec to_pieces(t()) :: {map(), [{String.t(), Cure.Core.Term.t()}]}
   def to_pieces(%__MODULE__{kind: :stub, payload: %{term: t}}), do: {%{}, [{"term", t}]}
 
+  def to_pieces(%__MODULE__{kind: :def_group, payload: %{defs: defs, focus: focus}}) do
+    scaffold = %{
+      "names" => Enum.map(defs, &Atom.to_string(&1.name)),
+      "focus" => Enum.map(focus, &Atom.to_string/1)
+    }
+
+    pieces =
+      Enum.flat_map(defs, fn d ->
+        n = Atom.to_string(d.name)
+        [{"type:" <> n, d.type}, {"body:" <> n, d.body}]
+      end)
+
+    {scaffold, pieces}
+  end
+
   @doc "Rebuild a challenge from a decoded record's fields, scaffold, and term pieces."
   @spec from_pieces(atom(), String.t(), atom(), integer() | nil, String.t() | nil, map(), [{String.t(), Cure.Core.Term.t()}]) :: t()
   def from_pieces(:stub, assay, label, seed, note, _scaffold, [{"term", t}]),
     do: new(kind: :stub, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
+
+  def from_pieces(:def_group, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+
+    defs =
+      Enum.map(scaffold["names"], fn n ->
+        %{
+          name: String.to_existing_atom(n),
+          type: Map.fetch!(pmap, "type:" <> n),
+          body: Map.fetch!(pmap, "body:" <> n)
+        }
+      end)
+
+    focus = Enum.map(scaffold["focus"], &String.to_existing_atom/1)
+    new(kind: :def_group, assay: assay, label: label, payload: %{defs: defs, focus: focus}, seed: seed, note: note)
+  end
 end
