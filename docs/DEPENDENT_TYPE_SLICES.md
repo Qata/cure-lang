@@ -108,17 +108,26 @@ compilation and BEAM execution.
 Slice 2 should make the trusted boundary comprehensive enough that dependent
 claims cannot bypass the kernel.
 
-Required capabilities:
+Completed in this slice:
 
-- route `Pi`, `Sigma`, `Eq`, `rewrite`, erased parameters, proof containers,
-  and type-level definitions through Core/Elab even when a module has no
-  `indexed type`
-- reject or quarantine legacy dependent-looking modules that are only checked
-  by `Cure.Types.*`
-- update stdlib documentation so runtime-only or refinement-only APIs do not
-  claim trusted dependent typing
-- replace or soften `Std.Vector`, `Std.Equal`, `Std.Proof`, and similar claims
-  until their implementations elaborate to Core
+- route the supported dependent surface through Core/Elab even when a module
+  has no `indexed type`: typed erased parameters, `Sigma(...)`, `%[...]`, and
+  `p.1` / `p.2` projections
+- prove that routing through real Cure compilation, erasure, BEAM emission, and
+  execution, not only AST elaboration tests
+- keep `Std.Vector` on the real dependent path with `Vector`, `empty`, and
+  `prepend`
+- document `Cure.Types.Reduce` as a Core-normalization compatibility facade
+- soften `Std.Equal`, `Std.Proof`, and `Std.CRDT` claims so runtime tokens and
+  law-shaped declarations are not described as trusted kernel proofs
+
+Still deliberately deferred:
+
+- public Cure `Eq(T, a, b)`, `refl`, and `rewrite` elaboration to Core
+- proof containers checked by `Cure.Core.Kernel`
+- retiring the legacy `Cure.Types.Pi`, `Cure.Types.Sigma`,
+  `Cure.Types.Equality`, `Cure.Types.Holes`, and `Cure.Types.Dependent`
+  compatibility modules
 
 This slice is about product honesty and trust-boundary hygiene.
 

@@ -69,7 +69,7 @@ for `Cure.Stdlib.Preload.known_groups/0`):
 - `:core` -- `Std.Core`, `Std.Equal`, `Std.Eq`, `Std.Ord`, `Std.Show`,
   `Std.Functor`, `Std.Refine`, `Std.Proof`. `Std.Proof` is the one
   module that relies on the compile-time default (`:core`); `proof`
-  containers only admit `Eq(...)` returns, so no explicit
+  containers only admit legacy proof-shaped returns, so no explicit
   `__group__/0` lives in its source.
 - `:collections` -- `Std.List`, `Std.Map`, `Std.Set`, `Std.Vector`,
   `Std.Pair`, `Std.Match`, `Std.Access`, `Std.Iter`.
@@ -493,24 +493,26 @@ call at runtime.
 - `positive?(n: Int) -> Bool`, `non_negative?(n: Int) -> Bool`.
 - `percentage?(p: Int) -> Bool`, `probability?(p: Float) -> Bool`.
 ### Std.Equal
-Propositional equality combinators. All four values reduce to the
-runtime atom `:cure_refl`; the types are meaningful only to the type
-checker, so these helpers are erased at runtime.
-- `refl(x: T) -> Eq(T, x, x)`  -- reflexivity.
-- `sym(eq: Eq(T, a, b)) -> Eq(T, b, a)`  -- symmetry.
-- `trans(p, q) -> Eq(T, a, c)`  -- transitivity.
-- `cong(f: T -> U, eq: Eq(T, a, b)) -> Eq(U, f(a), f(b))`  --
-  congruence.
+Legacy equality-token helpers. All four functions currently return
+the runtime atom `:cure_refl`; their public stdlib signatures are
+`Atom`-based compatibility APIs, not trusted kernel proofs.
+
+Core has internal `Eq`/`refl`/`rewrite` support and tests, but the
+Cure source surface for those proofs is not fully wired through the
+dependent compiler yet.
+- `refl(x: T) -> Atom`.
+- `sym(eq: Atom) -> Atom`.
+- `trans(p: Atom, q: Atom) -> Atom`.
+- `cong(f: T -> U, eq: Atom) -> Atom`.
 ### Std.Proof
 A `proof`-container (declared with `proof Std.Proof`) holding
-laws-as-programs. Like `Std.Equal`, every definition returns
-`:cure_refl` at runtime; the value is meaningful only at type-check
-time.
+legacy law-shaped declarations. The legacy checker requires each
+definition to return an `Eq(...)`-looking type, but those propositions
+are not yet validated by `Cure.Core.Kernel` from Cure source.
 #### Arithmetic
 - `plus_zero(n: Int) -> Eq(Int, n, n)`.
 - `zero_plus(n: Int) -> Eq(Int, n, n)`.
-- `plus_comm(a: Int, b: Int) -> Eq(Int, a, a)`  -- commutativity
-  witness (the statement is reduced by the checker).
+- `plus_comm(a: Int, b: Int) -> Eq(Int, a, a)`.
 #### List laws
 - `append_nil(xs: List(T)) -> Eq(List(T), xs, xs)`.
 - `map_id(xs: List(T)) -> Eq(List(T), xs, xs)`.

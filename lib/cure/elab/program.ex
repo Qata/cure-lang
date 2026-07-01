@@ -49,16 +49,39 @@ defmodule Cure.Elab.Program do
 
   @doc """
   Does a parsed program/AST use dependent constructs the kernel must check?
-  Currently keyed on the presence of an `indexed type` (GADT) declaration.
+
+  This is intentionally a surface-feature router, not a semantic checker. Forms
+  that already have a trusted Core elaboration must take the dependent compiler
+  path even when a module does not declare an indexed family. Legacy proof
+  containers and `Eq(...)` claims are not routed here until the Cure surface for
+  `Eq`/`refl`/`rewrite` is elaborated into Core.
   """
   @spec dependent?(term()) :: boolean()
   def dependent?({:indexed_type, _meta, _body}), do: true
+  def dependent?({:sigma_type, _meta, _body}), do: true
+
+  def dependent?({:attribute_access, meta, children}) when is_list(meta) do
+    Keyword.get(meta, :attribute) in ["1", "2"] or Enum.any?(children, &dependent?/1)
+  end
+
+  def dependent?({:function_def, meta, body}) when is_list(meta) do
+    dependent_params?(Keyword.get(meta, :params, [])) or
+      dependent?(Keyword.get(meta, :return_type)) or
+      dependent?(body)
+  end
+
+  def dependent?({:param, meta, _name}) when is_list(meta) do
+    Keyword.get(meta, :implicit) == true or dependent?(Keyword.get(meta, :type))
+  end
 
   def dependent?({_tag, _meta, children}) when is_list(children),
     do: Enum.any?(children, &dependent?/1)
 
   def dependent?(list) when is_list(list), do: Enum.any?(list, &dependent?/1)
   def dependent?(_other), do: false
+
+  defp dependent_params?(params) when is_list(params), do: Enum.any?(params, &dependent?/1)
+  defp dependent_params?(_other), do: false
 
   @doc """
   Extract the `Cure.<Name>` module atom from a parsed `mod … end` program,

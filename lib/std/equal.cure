@@ -1,37 +1,31 @@
 mod Std.Equal
-  ## Propositional equality combinators.
+  ## Legacy equality-token combinators.
   ##
-  ## `Eq(T, a, b)` is the type of proofs that `a` and `b` are equal.
-  ## The constructor `refl(x) : Eq(T, x, x)` witnesses reflexivity.
-  ## The eliminator `rewrite eq in expr` substitutes equal terms in
-  ## the type of `expr` while type-checking it.
-  ##
-  ## All bindings here are erased at runtime: an `Eq` value lives
-  ## only in the type checker. Every function returns the runtime
-  ## atom `:cure_refl`.
+  ## Core has internal `Eq`/`refl`/`rewrite` support, but this stdlib
+  ## module is still the compatibility surface: every function returns
+  ## the runtime atom `:cure_refl` and has an `Atom` return type.
+  ## These values are not trusted kernel proofs yet.
   ##
   ## ## Examples
   ##
   ## ```cure
   ## use Std.Equal
   ##
-  ## refl(42)                                # : Eq(Int, 42, 42)
-  ## trans(refl(1), refl(1))                 # : Eq(Int, 1, 1)
+  ## refl(42)                                # => :cure_refl
+  ## trans(refl(1), refl(1))                 # => :cure_refl
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   fn __group__() -> Atom = :core
 
-  ## Reflexivity: `x` equals itself. Produces the runtime witness
-  ## `:cure_refl` with type `Eq(T, x, x)`.
+  ## Reflexivity token. Produces the runtime witness `:cure_refl`.
   fn refl(_x: T) -> Atom = :cure_refl
 
-  ## Symmetry: if `a == b`, then `b == a`. Returns `:cure_refl`.
+  ## Symmetry token. Returns `:cure_refl`.
   fn sym(_eq: Atom) -> Atom = :cure_refl
 
-  ## Transitivity: if `a == b` and `b == c`, then `a == c`.
+  ## Transitivity token.
   fn trans(_p: Atom, _q: Atom) -> Atom = :cure_refl
 
-  ## Congruence: applying `f` preserves equality; from `a == b` derive
-  ## `f(a) == f(b)`.
+  ## Congruence token.
   fn cong(_f: T -> U, _eq: Atom) -> Atom = :cure_refl

@@ -41,18 +41,19 @@ Every MIDI-domain primitive is refinement-typed. Safe constructors (`note/2`,
 `chord/3`, `roll/3`) take the refined types, so out-of-range literals fail
 `cure check`, not at runtime.
 
-### Length-indexed patterns (`motif.cure:99`)
+### Pattern helpers (`motif.cure:99`)
 
-A `Pattern` is a `Std.Vector` of `Step`s, and the length claim is observable
-through `Std.Vector.length/1`:
+`Pattern` values are plain `List(Step)` values in this example. `Std.Vector` is
+now the real dependent indexed family, so this example no longer uses the old
+tuple-backed Vector helper API:
 
 ```cure
-fn concat(a: Tuple, b: Tuple) -> Tuple = Std.Vector.append(a, b)
+fn concat(a: List(Step), b: List(Step)) -> List(Step) = Std.List.append(a, b)
 
-fn repeat(p: Tuple, n: BarCount) -> Tuple = repeat_acc(p, n, empty_pattern())
+fn repeat(p: List(Step), n: BarCount) -> List(Step) = repeat_acc(p, n, empty_pattern())
 ```
 
-The test suite defends the dependent claims directly:
+The test suite still checks the runtime length behavior directly:
 
 ```elixir
 assert @motif.pattern_length(@motif.concat(a, b)) ==

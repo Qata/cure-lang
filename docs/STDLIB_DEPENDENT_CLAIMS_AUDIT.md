@@ -40,26 +40,25 @@ The erased runtime representation is the constructor shape `:empty` and
 
 Source: `lib/std/equal.cure`
 
-`Std.Equal` documents `Eq(T, a, b)` proofs, erased equality values, and rewrite
-behavior. The exported functions return plain `Atom`:
+`Std.Equal` used to document `Eq(T, a, b)` proofs, erased equality values, and
+rewrite behavior. The exported functions return plain `Atom`:
 
 - `refl(_x: T) -> Atom`
 - `sym(_eq: Atom) -> Atom`
 - `trans(_p: Atom, _q: Atom) -> Atom`
 - `cong(_f: T -> U, _eq: Atom) -> Atom`
 
-The docs describe a propositional equality API, but the stdlib function
-signatures do not expose those `Eq(...)` types. The runtime value is always
-`:cure_refl`, and there is no per-call kernel proof validation in this module.
+The stdlib comments now mark this as a legacy equality-token API. The runtime
+value is always `:cure_refl`, and there is no per-call kernel proof validation
+in this module.
 
 ### `Std.Proof`
 
 Source: `lib/std/proof.cure`
 
-`Std.Proof` claims laws-as-programs whose definitions return `Eq(...)`
-witnesses. The legacy checker only enforces a proof-shaped return type for
-proof containers. It does not validate the stated proposition in the trusted
-kernel.
+`Std.Proof` contains law-shaped definitions returning `Eq(...)`-looking types.
+The legacy checker only enforces a proof-shaped return type for proof
+containers. It does not validate the stated proposition in the trusted kernel.
 
 The legacy type representation also accepts any atom as an inhabitant of
 `Eq(...)` so proof functions can return `:cure_refl` directly. That makes these
@@ -81,11 +80,10 @@ example, `plus_comm` is documented as commutativity but states `Eq(Int, a, a)`.
 
 Source: `lib/std/crdt.cure`
 
-`Std.CRDT` claims that CRDT merge laws are asserted in companion `Std.Proof`
-obligations emitted by `lib/std/crdt.cure` when re-checked. No such companion
-obligations were found in `Std.Proof`, and because `Std.Proof` itself is only
-proof-shaped under the legacy checker, this claim is not currently backed by
-trusted kernel proof checking.
+`Std.CRDT` used to claim that CRDT merge laws were asserted in companion
+`Std.Proof` obligations emitted by `lib/std/crdt.cure` when re-checked. The
+source comment now says the runtime implementation is intended to satisfy those
+laws, but no trusted Core proof obligations are emitted yet.
 
 ## Borderline: Real Refinements, Not Kernel Dependent Types
 
@@ -107,10 +105,8 @@ distinguishes the two systems.
 
 ## Routing Implication
 
-The dependent-kernel handoff currently keys on `indexed type`. That means
-`Eq(...)`, `Sigma(...)`, `Pi(...)`, proof containers, and refinement aliases can
-appear in non-indexed modules without automatically entering the trusted
-dependent pipeline.
-
-Until that boundary changes, stdlib documentation should avoid implying that
-these modules are validated by the trusted kernel.
+The dependent-kernel handoff now routes the supported surface through Core:
+indexed types, typed erased parameters, `Sigma(...)`, pair literals, and pair
+projections. It still does not route public `Eq(...)`/`refl`/`rewrite` or proof
+containers as trusted proofs, because that Cure source elaboration is not
+implemented yet.

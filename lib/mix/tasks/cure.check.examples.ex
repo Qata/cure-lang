@@ -42,7 +42,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     "fsm_pipeline" => :compile_only,
     "hello" => "42",
     "holes_demo" => "0",
-    "length_indexed" => "6",
+    "length_indexed" => "{:succ_len, {:succ_len, :zero_len}}",
     "list_basics" => "15",
     "match_showcase" => "200",
     "math" => :compile_only,

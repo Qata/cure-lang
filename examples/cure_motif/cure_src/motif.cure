@@ -94,29 +94,27 @@ mod Motif
   fn rest() -> Step = Rest()
 
   # ---------------------------------------------------------------------------
-  # Pattern(n) helpers -- length tracked by Std.Vector
+  # Pattern helpers -- runtime lists
   # ---------------------------------------------------------------------------
   #
-  # A Pattern is a Std.Vector of Steps. The Vector tag keeps length metadata
-  # alongside the payload so the dependent claim "concat(a, b) has length
-  # |a| + |b|" is observable at runtime and verifiable in the checker.
+  # A Pattern is currently a plain list of Steps. The real `Std.Vector` module
+  # is now an indexed family checked by the dependent kernel, not the old
+  # tuple-backed helper module this example originally used.
 
   ## The empty pattern. Length 0.
-  fn empty_pattern() -> Tuple = Std.Vector.empty()
+  fn empty_pattern() -> List(Step) = []
 
   ## Build a pattern from an explicit list of Steps.
-  fn pattern_from_steps(steps: List(Step)) -> Tuple =
-    Std.Vector.from_list(steps)
+  fn pattern_from_steps(steps: List(Step)) -> List(Step) = steps
 
   ## Length of a pattern, in steps.
-  fn pattern_length(p: Tuple) -> Int = Std.Vector.length(p)
+  fn pattern_length(p: List(Step)) -> Int = Std.List.length(p)
 
   ## The underlying list of Steps.
-  fn pattern_steps(p: Tuple) -> List(Step) = Std.Vector.to_list(p)
+  fn pattern_steps(p: List(Step)) -> List(Step) = p
 
-  ## Concatenate two patterns. The length of the result equals the sum of
-  ## the input lengths; see the test suite for the observable claim.
-  fn concat(a: Tuple, b: Tuple) -> Tuple = Std.Vector.append(a, b)
+  ## Concatenate two patterns.
+  fn concat(a: List(Step), b: List(Step)) -> List(Step) = Std.List.append(a, b)
 
   ## Repeat a pattern `n` times. Length of the result is n * |p|.
   ##
@@ -125,16 +123,13 @@ mod Motif
   ## The `BarCount` type is kept above as documentation of the intended
   ## domain range; the test suite exercises `1`, `4`, and `8` which all
   ## fall inside it.
-  fn repeat(p: Tuple, n: Int) -> Tuple =
+  fn repeat(p: List(Step), n: Int) -> List(Step) =
     repeat_acc(p, n, empty_pattern())
 
-  local fn repeat_acc(p: Tuple, n: Int, acc: Tuple) -> Tuple =
+  local fn repeat_acc(p: List(Step), n: Int, acc: List(Step)) -> List(Step) =
     pickup
       n <= 0 -> acc
       else   -> repeat_acc(p, n - 1, concat(acc, p))
-
-  ## Prepend a single step onto a pattern.
-  fn cons_step(s: Step, p: Tuple) -> Tuple = Std.Vector.cons(s, p)
 
   # ---------------------------------------------------------------------------
   # Rendering helpers (plain functions rather than protocol impls because
@@ -161,7 +156,7 @@ mod Motif
   ## Render a whole pattern as an ASCII strip using show_step for each
   ## step. For instance a pattern of [Note, Rest, Note, Rest] renders as
   ## "N.N.".
-  fn show_pattern(p: Tuple) -> String =
+  fn show_pattern(p: List(Step)) -> String =
     show_pattern_steps(pattern_steps(p))
 
   local fn show_pattern_steps(steps: List(Step)) -> String =
@@ -197,7 +192,7 @@ mod Motif
 
   ## Render a whole pattern as a flat Event list. Every step is bracketed
   ## by a Tick so downstream consumers can align events to a tempo grid.
-  fn render(p: Tuple, channel: Channel) -> List(Event) =
+  fn render(p: List(Step), channel: Channel) -> List(Event) =
     render_steps(pattern_steps(p), 0, channel)
 
   local fn render_steps(steps: List(Step), tick: Int, channel: Channel) -> List(Event) =

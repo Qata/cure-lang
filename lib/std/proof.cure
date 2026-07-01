@@ -1,23 +1,21 @@
 proof Std.Proof
-  ## Laws-as-programs (v0.19.0).
+  ## Legacy law-shaped declarations.
   ##
-  ## Every function in this container returns an `Eq(...)` witness
-  ## and is erased at runtime; the value is the `:cure_refl` atom
-  ## that `Std.Equal.refl/1` also returns. A `proof` container is
-  ## the same as a `mod` container except that the type checker
-  ## elaborates its contents in definitional style.
+  ## Every function in this container has an `Eq(...)`-looking return
+  ## type and returns the `:cure_refl` atom. The current legacy checker
+  ## enforces the proof shape, but these propositions are not yet
+  ## elaborated to `Cure.Core.Kernel` from Cure source.
   ##
   ## ## Examples
   ##
   ## ```cure
-  ## # Every law here is a value of an `Eq` type that the type
-  ## # checker accepts when its two sides reduce to the same term.
+  ## # These are compatibility proof tokens, not trusted Core proofs yet.
   ## plus_zero(42)                           # : Eq(Int, 42, 42)
   ## append_nil([1, 2, 3])                   # : Eq(List(Int), [1,2,3], [1,2,3])
   ## ```
   ##
   ## Group: `:core` (inherited from the `Cure.Stdlib.Preload` default;
-  ## `proof` containers only allow `Eq(...)` returns, so no explicit
+  ## `proof` containers only allow proof-shaped returns, so no explicit
   ## `__group__/0` can live here).
 
   # -- Reflexivity and basic arithmetic laws ---------------------------------
@@ -28,8 +26,7 @@ proof Std.Proof
   ## `0 + n` equals `n` for every `n : Int`.
   fn zero_plus(_n: Int) -> Eq(Int, n, n) = :cure_refl
 
-  ## Commutativity witness (the type checker reduces the full
-  ## statement to refl).
+  ## Legacy commutativity-shaped token.
   fn plus_comm(_a: Int, _b: Int) -> Eq(Int, a, a) = :cure_refl
 
   # -- List laws --------------------------------------------------------------
