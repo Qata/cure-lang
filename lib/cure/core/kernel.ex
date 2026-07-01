@@ -344,15 +344,43 @@ defmodule Cure.Core.Kernel do
   """
   @spec check_ctor(Cure.Core.Env.t(), Inductive.family(), Inductive.ctor()) ::
           :ok | {:error, term()}
-  def check_ctor(env, %{params: params, indices: index_tele, level: fam_level}, %{
-        args: args,
-        result_indices: result_indices
-      }) do
+  def check_ctor(env, %{name: fname, params: params, indices: index_tele, level: fam_level}, ctor) do
+    %{args: args, result_indices: result_indices} = ctor
+    result_params = Map.get(ctor, :result_params, [])
+
     with {:ok, ctx_params} <- check_telescope(Context.empty(env), params),
          {:ok, ctx_full, field_levels} <- check_ctor_args(ctx_params, args),
          :ok <- check_field_levels(field_levels, fam_level),
+         :ok <-
+           check_uniform_params(fname, ctor.name, result_params, length(params), length(args)),
          :ok <- check_result_indices(ctx_full, result_indices, index_tele) do
       :ok
+    end
+  end
+
+  # Each result parameter must be exactly the family's corresponding parameter
+  # variable, as a de Bruijn var in ctx_full = params(outer) ++ args(inner): the
+  # p-th declared parameter is {:var, num_args + (num_params - 1 - p)}. A ctor
+  # that writes anything else in a parameter position (a non-uniform parameter)
+  # is rejected — that position would have to be refined by matching, which is
+  # index behaviour, not parameter behaviour.
+  defp check_uniform_params(fname, cname, result_params, num_params, num_args) do
+    cond do
+      length(result_params) != num_params ->
+        {:error, {:non_uniform_parameter, %{family: fname, ctor: cname, position: :arity}}}
+
+      true ->
+        result_params
+        |> Enum.with_index()
+        |> Enum.reduce_while(:ok, fn {term, p}, :ok ->
+          expected = {:var, num_args + (num_params - 1 - p)}
+
+          if term == expected,
+            do: {:cont, :ok},
+            else:
+              {:halt,
+               {:error, {:non_uniform_parameter, %{family: fname, ctor: cname, position: p}}}}
+        end)
     end
   end
 

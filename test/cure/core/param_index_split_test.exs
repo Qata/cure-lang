@@ -44,4 +44,41 @@ defmodule Cure.Core.ParamIndexSplitTest do
     assert c3.result_params == []
     assert c4.result_params == []
   end
+
+  alias Cure.Core.Inductive, as: Ind
+
+  test "check_ctor accepts a uniform parameter constructor" do
+    env = param_env()
+    fam = Ind.get_family(env, :P)
+    ctor = Ind.get_ctor(env, :wrap)
+    assert :ok == Kernel.check_ctor(env, fam, ctor)
+  end
+
+  test "check_ctor rejects a non-uniform parameter (param slot is not a)" do
+    # oddball : P(Bool-ish stand-in, Causal) — param slot is a GROUND family, not
+    # the parameter variable a. Use Dcoupled-indexed Dec as a stand-in rigid term.
+    env = param_env()
+    fam = Ind.get_family(env, :P)
+    bad =
+      Ind.ctor(:oddball, [], [{:ctor, :Causal, []}], [], [{:data, :Dec, [], []}])
+    assert {:error, {:non_uniform_parameter, info}} = Kernel.check_ctor(env, fam, bad)
+    assert info.family == :P and info.ctor == :oddball and info.position == 0
+  end
+
+  test "check_ctor on a param-free family is unchanged (regression)" do
+    env = param_env()
+    fam = Ind.get_family(env, :Dec)
+    assert :ok == Kernel.check_ctor(env, fam, Ind.get_ctor(env, :Causal))
+  end
+
+  test "check_ctor rejects a result_params arity mismatch (wrong count, not just wrong value)" do
+    env = param_env()
+    fam = Ind.get_family(env, :P)
+    # `wrong_arity` supplies zero result_params where the family declares 1 —
+    # exercises check_uniform_params' `:arity` branch, which the position-mismatch
+    # test above never reaches (it always supplies exactly 1 result_param).
+    wrong_arity = Ind.ctor(:wrong_arity, [], [{:ctor, :Causal, []}], [], [])
+    assert {:error, {:non_uniform_parameter, info}} = Kernel.check_ctor(env, fam, wrong_arity)
+    assert info.family == :P and info.ctor == :wrong_arity and info.position == :arity
+  end
 end
