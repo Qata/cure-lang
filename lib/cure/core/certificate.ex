@@ -8,20 +8,160 @@ defmodule Cure.Core.Certificate do
   typing (`check_def` re-runs it), so this module supplies the **termination**
   half.
 
-  The termination check is *sound but conservative*: a non-recursive definition
-  certifies; any self-recursion is rejected (`:not_total`). Slice-1 type-level
-  functions (e.g. `and`) are non-recursive, so this suffices; structural /
-  size-change recursion (cf. Idris `Core/Termination/SizeChange.idr`) is the
-  completion path for recursive type-level functions, out of Slice-1 scope (§2).
+  ## Termination: structural recursion (guarded by destructors)
+
+  The check is *sound but conservative*. A definition certifies when EITHER it
+  makes no self-call, OR there is a fixed argument position `p` such that every
+  self-call passes, at position `p`, a variable that is a **structural subterm**
+  of the function's `p`-th parameter — i.e. a variable bound by pattern-matching
+  (`case`) that parameter, transitively.
+
+  This is the classic guarded-recursion criterion (cf. Coq's guard checker,
+  Idris `Core/Termination/SizeChange.idr`). We track, in the current de Bruijn
+  frame, the parameter variable itself (the *root*) and the set of variables
+  known to be smaller than it; matching on the root or on a known-smaller
+  variable makes the branch's freshly-bound fields smaller. A self-call whose
+  `p`-th argument lands in that smaller-set is decreasing.
+
   A conservative *rejection* is always sound — the kernel never certifies a
   function it cannot prove total, so δ never unfolds a non-terminating global.
+  Higher-order recursion, non-variable decreasing arguments, and mutual
+  recursion fall outside this criterion and are (soundly) rejected.
   """
 
   @doc "True when the Core `body` of global `name` is provably terminating."
   @spec terminating?(atom(), Cure.Core.Term.t()) :: boolean()
-  def terminating?(name, body), do: not calls?(name, body)
+  def terminating?(name, body) do
+    if not calls?(name, body) do
+      true
+    else
+      {params, inner} = peel_lams(body, 0)
+      arity = params
+      # Try each parameter position as the structurally-decreasing argument.
+      # Param i (0-based, outermost first) sits at de Bruijn index arity-1-i.
+      Enum.any?(0..(arity - 1)//1, fn p ->
+        arity > 0 and guarded?(name, p, inner, arity - 1 - p, MapSet.new())
+      end)
+    end
+  end
 
-  # Does `term` contain a reference to the global `name` (a self-call)?
+  # -- structural-recursion guard ---------------------------------------------
+
+  # `guarded?/5` is true when every self-call to `name` inside `term` passes, at
+  # position `p`, a variable in `smaller` (structural subterms of the original
+  # `p`-th argument). `root` is the current de Bruijn index of that argument;
+  # `smaller` the indices proven smaller than it. Both are kept correct across
+  # binders by shifting.
+  defp guarded?(name, p, term, root, smaller) do
+    case spine(term) do
+      {{:global, ^name}, args} ->
+        # A self-call: its p-th argument must be a known-smaller variable, and
+        # each argument must itself be guarded.
+        decreasing?(args, p, smaller) and
+          Enum.all?(args, &guarded?(name, p, &1, root, smaller))
+
+      {head, args} when args != [] ->
+        # Some other application: recurse into head and arguments.
+        guarded?(name, p, head, root, smaller) and
+          Enum.all?(args, &guarded?(name, p, &1, root, smaller))
+
+      _ ->
+        guarded_node?(name, p, term, root, smaller)
+    end
+  end
+
+  # A bare self-reference (no arguments) cannot be shown decreasing.
+  defp guarded_node?(name, _p, {:global, n}, _root, _smaller), do: n != name
+
+  defp guarded_node?(name, p, {:case, scrut, motive, branches}, root, smaller) do
+    guarded?(name, p, scrut, root, smaller) and
+      guarded?(name, p, motive, root, smaller) and
+      Enum.all?(branches, fn {_c, ar, body} ->
+        root2 = root + ar
+        smaller2 = shift(smaller, ar)
+
+        smaller3 =
+          if subterm_scrutinee?(scrut, root, smaller),
+            do: add_fields(smaller2, ar),
+            else: smaller2
+
+        guarded?(name, p, body, root2, smaller3)
+      end)
+  end
+
+  defp guarded_node?(name, p, {:lam, d, b}, root, smaller),
+    do: guarded?(name, p, d, root, smaller) and guarded?(name, p, b, root + 1, shift(smaller, 1))
+
+  defp guarded_node?(name, p, {:pi, d, c}, root, smaller),
+    do: guarded?(name, p, d, root, smaller) and guarded?(name, p, c, root + 1, shift(smaller, 1))
+
+  defp guarded_node?(name, p, {:sigma, a, b}, root, smaller),
+    do: guarded?(name, p, a, root, smaller) and guarded?(name, p, b, root + 1, shift(smaller, 1))
+
+  defp guarded_node?(name, p, {:pair, a, b}, root, smaller),
+    do: guarded?(name, p, a, root, smaller) and guarded?(name, p, b, root, smaller)
+
+  defp guarded_node?(name, p, {:fst, x}, root, smaller), do: guarded?(name, p, x, root, smaller)
+  defp guarded_node?(name, p, {:snd, x}, root, smaller), do: guarded?(name, p, x, root, smaller)
+
+  defp guarded_node?(name, p, {:data, _n, ps, is}, root, smaller),
+    do:
+      Enum.all?(ps, &guarded?(name, p, &1, root, smaller)) and
+        Enum.all?(is, &guarded?(name, p, &1, root, smaller))
+
+  defp guarded_node?(name, p, {:ctor, _n, args}, root, smaller),
+    do: Enum.all?(args, &guarded?(name, p, &1, root, smaller))
+
+  defp guarded_node?(name, p, {:eq, t, a, b}, root, smaller),
+    do:
+      guarded?(name, p, t, root, smaller) and guarded?(name, p, a, root, smaller) and
+        guarded?(name, p, b, root, smaller)
+
+  defp guarded_node?(name, p, {:refl, a}, root, smaller), do: guarded?(name, p, a, root, smaller)
+
+  defp guarded_node?(name, p, {:rewrite, pr, m, b}, root, smaller),
+    do:
+      guarded?(name, p, pr, root, smaller) and guarded?(name, p, m, root, smaller) and
+        guarded?(name, p, b, root, smaller)
+
+  # Leaves (vars, literals, types, primitives with no self-call): trivially fine.
+  defp guarded_node?(_name, _p, _term, _root, _smaller), do: true
+
+  # The p-th argument (0-based) is a variable known to be structurally smaller.
+  defp decreasing?(args, p, smaller) do
+    case Enum.at(args, p) do
+      {:var, i} -> MapSet.member?(smaller, i)
+      _ -> false
+    end
+  end
+
+  # Matching on the root, or on an already-smaller variable, exposes strictly
+  # smaller fields.
+  defp subterm_scrutinee?({:var, i}, root, smaller),
+    do: i == root or MapSet.member?(smaller, i)
+
+  defp subterm_scrutinee?(_scrut, _root, _smaller), do: false
+
+  # A branch binds `ar` fresh fields at indices 0..ar-1 (outer indices shift up
+  # by `ar`, handled by the caller); those fields are the smaller subterms.
+  defp add_fields(smaller, ar),
+    do: Enum.reduce(0..(ar - 1)//1, smaller, &MapSet.put(&2, &1))
+
+  defp shift(set, by), do: MapSet.new(set, &(&1 + by))
+
+  # -- spine / lambda peeling -------------------------------------------------
+
+  # Flatten a left-nested application `((h a) b) …` into `{h, [a, b, …]}`.
+  defp spine(term), do: spine(term, [])
+  defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
+  defp spine(head, acc), do: {head, acc}
+
+  # Count leading lambdas and return the wrapped body.
+  defp peel_lams({:lam, _d, b}, n), do: peel_lams(b, n + 1)
+  defp peel_lams(term, n), do: {n, term}
+
+  # -- self-call detection (fast path) ----------------------------------------
+
   defp calls?(name, {:global, n}), do: n == name
   defp calls?(name, {:pi, d, c}), do: calls?(name, d) or calls?(name, c)
   defp calls?(name, {:lam, d, b}), do: calls?(name, d) or calls?(name, b)

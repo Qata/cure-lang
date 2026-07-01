@@ -41,7 +41,14 @@ defmodule Cure.Elab.Declarations do
          {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env1),
          :ok <- Kernel.check(ctx, body_term, return_value) do
       lambda = wrap_binders(:lam, telescope, body_term)
-      {:ok, Env.add_def(env1, name, pi, lambda, quantities)}
+      final = Env.add_def(env1, name, pi, lambda, quantities)
+      # Best-effort totality certification, eagerly and in declaration order, so a
+      # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
+      # must unfold while `append`'s body is checked). A function that fails the
+      # kernel's totality check simply stays uncertified — opaque to δ, never a
+      # soundness hole (§7). Whole-program enforcement of the *required* set still
+      # happens in TotalityClosure.certify_type_level.
+      {:ok, maybe_certify(final, name)}
     end
   end
 
@@ -74,6 +81,13 @@ defmodule Cure.Elab.Declarations do
   end
 
   def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  defp maybe_certify(env, name) do
+    case Kernel.validate_certificate(env, name) do
+      {:ok, certified} -> certified
+      {:error, _} -> env
+    end
+  end
 
   # -- function elaboration ---------------------------------------------------
 

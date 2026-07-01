@@ -16,7 +16,7 @@ defmodule Cure.Core.Kernel do
   definitions + certificates (M7).
   """
 
-  alias Cure.Core.{Certificate, Context, Conv, Env, Eval, Inductive, Quote, Universe}
+  alias Cure.Core.{Certificate, Context, Conv, Env, Eval, Inductive, Quote, Term, Universe}
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
@@ -186,7 +186,7 @@ defmodule Cure.Core.Kernel do
 
         with :ok <- check_motive_wf(ctx, motive_value, family),
              :ok <- check_coverage(sig, dname, branches),
-             :ok <- check_case_branches(ctx, sig, motive_value, branches) do
+             :ok <- check_case_branches(ctx, sig, motive_value, branches, scrut_indices) do
           # Result type = motive at the scrutinee's actual indices and value (§4.4).
           scrut_value = Eval.eval(scrut, Context.env(ctx))
           {:ok, apply_motive(motive_value, scrut_indices ++ [scrut_value])}
@@ -468,13 +468,38 @@ defmodule Cure.Core.Kernel do
     x_value = {:vneutral, {:nvar, scrut_level}}
 
     body_value = apply_motive(motive_value, index_vals ++ [x_value])
-    body_term = Quote.reify(body_value, Context.length(ctx_motive))
 
-    case infer_sort(ctx_motive, body_term) do
+    case infer_type_value_sort(ctx_motive, body_value) do
       {:ok, _level} -> :ok
       _ -> {:error, :bad_motive}
     end
   end
+
+  defp infer_type_value_sort(_ctx, {:vtype, level}), do: Universe.succ(level)
+  defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
+  defp infer_type_value_sort(_ctx, {:vbool_type}), do: {:ok, 0}
+  defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
+
+  defp infer_type_value_sort(ctx, {:vdata, name, _args}) do
+    case Inductive.get_family(Context.signature(ctx), name) do
+      nil -> {:error, {:unknown_family, name}}
+      %{level: level} -> {:ok, level}
+    end
+  end
+
+  defp infer_type_value_sort(ctx, {:vpi, _dom, _cod} = value) do
+    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+  end
+
+  defp infer_type_value_sort(ctx, {:vsigma, _dom, _cod} = value) do
+    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+  end
+
+  defp infer_type_value_sort(ctx, {:veq, _ty, _a, _b} = value) do
+    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+  end
+
+  defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}
 
   # Every declared constructor of the family must have a branch (§7 coverage).
   defp check_coverage(sig, dname, branches) do
@@ -485,7 +510,7 @@ defmodule Cure.Core.Kernel do
 
   # Each branch body is checked under its constructor's telescope, against the
   # motive instantiated at that constructor's computed indices s̄ⱼ and value cⱼ āⱼ.
-  defp check_case_branches(ctx, sig, motive_value, branches) do
+  defp check_case_branches(ctx, sig, motive_value, branches, scrut_indices) do
     Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
       case Inductive.get_ctor(sig, cname) do
         nil ->
@@ -493,10 +518,15 @@ defmodule Cure.Core.Kernel do
 
         %{args: tele, result_indices: result_indices} when length(tele) == arity ->
           {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele)
+          subst = branch_index_subst(ctx, result_indices, scrut_indices, arity)
+          ctx_branch = specialize_branch_context(ctx_branch, subst)
           # Result indices are written over the ctor's args (most-recent first).
           s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
           ctor_value = {:vctor, cname, arg_vals}
-          expected = apply_motive(motive_value, s_values ++ [ctor_value])
+          expected =
+            motive_value
+            |> apply_motive(s_values ++ [ctor_value])
+            |> specialize_branch_value(ctx_branch, subst)
 
           case check(ctx_branch, body, expected) do
             :ok -> {:cont, :ok}
@@ -507,6 +537,105 @@ defmodule Cure.Core.Kernel do
           {:halt, {:error, :branch_arity}}
       end
     end)
+  end
+
+  defp branch_index_subst(ctx, result_indices, scrut_indices, arity) do
+    depth = Context.length(ctx)
+
+    result_indices
+    |> Enum.zip(scrut_indices)
+    |> Enum.reduce(%{}, fn
+      {{:var, i}, scrut_value}, acc ->
+        replacement =
+          scrut_value
+          |> Quote.reify(depth)
+          |> Term.shift(arity, 0)
+
+        Map.put(acc, i, replacement)
+
+      {_other, _scrut_value}, acc ->
+        acc
+    end)
+  end
+
+  defp specialize_branch_context(ctx, subst) when map_size(subst) == 0, do: ctx
+
+  defp specialize_branch_context(ctx, subst) do
+    depth = Context.length(ctx)
+    env = Context.env(ctx)
+
+    types =
+      Enum.map(ctx.types, fn type_value ->
+        type_value
+        |> Quote.reify(depth)
+        |> replace_branch_vars(subst)
+        |> Eval.eval(env)
+      end)
+
+    %{ctx | types: types}
+  end
+
+  defp specialize_branch_value(value, _ctx, subst) when map_size(subst) == 0, do: value
+
+  defp specialize_branch_value(value, ctx, subst) do
+    value
+    |> Quote.reify(Context.length(ctx))
+    |> replace_branch_vars(subst)
+    |> Eval.eval(Context.env(ctx))
+  end
+
+  defp replace_branch_vars({:var, i}, subst), do: Map.get(subst, i, {:var, i})
+
+  defp replace_branch_vars({:pi, d, c}, subst),
+    do: {:pi, replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
+
+  defp replace_branch_vars({:lam, d, b}, subst),
+    do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
+
+  defp replace_branch_vars({:sigma, a, b}, subst),
+    do: {:sigma, replace_branch_vars(a, subst), replace_branch_vars(b, shift_subst(subst, 1))}
+
+  defp replace_branch_vars({:app, f, a}, subst),
+    do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}
+
+  defp replace_branch_vars({:pair, a, b}, subst),
+    do: {:pair, replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
+
+  defp replace_branch_vars({:fst, p}, subst), do: {:fst, replace_branch_vars(p, subst)}
+  defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
+
+  defp replace_branch_vars({:data, n, ps, is}, subst),
+    do:
+      {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)),
+       Enum.map(is, &replace_branch_vars(&1, subst))}
+
+  defp replace_branch_vars({:ctor, n, args}, subst),
+    do: {:ctor, n, Enum.map(args, &replace_branch_vars(&1, subst))}
+
+  defp replace_branch_vars({:case, scr, m, brs}, subst),
+    do:
+      {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
+       Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
+
+  defp replace_branch_vars({:eq, t, a, b}, subst),
+    do:
+      {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst),
+       replace_branch_vars(b, subst)}
+
+  defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
+
+  defp replace_branch_vars({:rewrite, p, m, b}, subst),
+    do:
+      {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst),
+       replace_branch_vars(b, subst)}
+
+  defp replace_branch_vars({:prim, op, args}, subst),
+    do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}
+
+  defp replace_branch_vars(other, _subst), do: other
+
+  defp shift_subst(subst, amount) do
+    Map.new(subst, fn {k, v} -> {k + amount, Term.shift(v, amount, 0)} end)
   end
 
   defp check_result_indices(ctx_full, result_indices, index_tele) do

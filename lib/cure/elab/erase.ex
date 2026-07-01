@@ -30,7 +30,30 @@ defmodule Cure.Elab.Erase do
   end
 
   def erase(env, {:lam, dom, body}), do: {:lam, erase(env, dom), erase(env, body)}
-  def erase(env, {:app, f, x}), do: {:app, erase(env, f), erase(env, x)}
+
+  def erase(env, {:app, _f, _x} = app) do
+    {head, args} = spine(app, [])
+
+    case head do
+      {:global, name} ->
+        quantities =
+          case Cure.Core.Env.get_def(env, name) do
+            %{quantities: qs} when is_list(qs) -> qs
+            _ -> List.duplicate(:present, length(args))
+          end
+
+        args
+        |> Enum.zip(quantities)
+        |> Enum.filter(fn {_arg, q} -> q == :present end)
+        |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
+        |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)
+
+      _ ->
+        args
+        |> Enum.map(&erase(env, &1))
+        |> Enum.reduce(erase(env, head), fn arg, acc -> {:app, acc, arg} end)
+    end
+  end
   def erase(env, {:pair, a, b}), do: {:pair, erase(env, a), erase(env, b)}
   def erase(env, {:fst, p}), do: {:fst, erase(env, p)}
   def erase(env, {:snd, p}), do: {:snd, erase(env, p)}
@@ -46,6 +69,9 @@ defmodule Cure.Elab.Erase do
   end
 
   def erase(_env, term), do: term
+
+  defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
+  defp spine(head, acc), do: {head, acc}
 
   @doc "Does the term still contain an unfilled hole?"
   @spec has_hole?(Cure.Core.Term.t()) :: boolean()

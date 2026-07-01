@@ -34,6 +34,11 @@ defmodule Cure.Core.Conv do
   def conv_values?(v1, v2, depth, sig \\ nil), do: conv_val?(v1, v2, depth, sig)
 
   # δ-whnf both sides (unfold certified-global heads), then compare structurally.
+  defp conv_val?({:vneutral, n1} = v1, {:vneutral, n2} = v2, depth, sig) do
+    same_neutral_no_delta?(n1, n2, depth) or
+      conv_struct?(whnf_delta(v1, sig), whnf_delta(v2, sig), depth, sig)
+  end
+
   defp conv_val?(v1, v2, depth, sig) do
     conv_struct?(whnf_delta(v1, sig), whnf_delta(v2, sig), depth, sig)
   end
@@ -165,5 +170,47 @@ defmodule Cure.Core.Conv do
     fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
     ext = Enum.reverse(fresh)
     conv_val?(Eval.eval(body1, ext ++ env1), Eval.eval(body2, ext ++ env2), depth + arity, sig)
+  end
+
+  # Syntactic equality for neutral values before δ. This prevents certified
+  # recursive globals from unfolding forever when conversion reaches the same
+  # stuck recursive call on both sides (`plus(k, n)` vs `plus(k, n)`), while still
+  # allowing δ when the two heads are not already identical.
+  defp same_neutral_no_delta?({:nvar, l1}, {:nvar, l2}, _depth), do: l1 == l2
+  defp same_neutral_no_delta?({:nglobal, a}, {:nglobal, b}, _depth), do: a == b
+
+  defp same_neutral_no_delta?({:napp, f1, a1}, {:napp, f2, a2}, depth),
+    do: same_neutral_no_delta?(f1, f2, depth) and same_value_no_delta?(a1, a2, depth)
+
+  defp same_neutral_no_delta?({:nfst, n1}, {:nfst, n2}, depth), do: same_neutral_no_delta?(n1, n2, depth)
+  defp same_neutral_no_delta?({:nsnd, n1}, {:nsnd, n2}, depth), do: same_neutral_no_delta?(n1, n2, depth)
+
+  defp same_neutral_no_delta?({:nprim, op1, args1}, {:nprim, op2, args2}, depth),
+    do: op1 == op2 and same_spine_no_delta?(args1, args2, depth)
+
+  defp same_neutral_no_delta?(_, _, _depth), do: false
+
+  defp same_value_no_delta?({:vneutral, n1}, {:vneutral, n2}, depth),
+    do: same_neutral_no_delta?(n1, n2, depth)
+
+  defp same_value_no_delta?({:vtype, l1}, {:vtype, l2}, _depth), do: l1 == l2
+  defp same_value_no_delta?({:vint_type}, {:vint_type}, _depth), do: true
+  defp same_value_no_delta?({:vint, a}, {:vint, b}, _depth), do: a == b
+  defp same_value_no_delta?({:vbool_type}, {:vbool_type}, _depth), do: true
+  defp same_value_no_delta?({:vbool, a}, {:vbool, b}, _depth), do: a == b
+  defp same_value_no_delta?({:vfloat_type}, {:vfloat_type}, _depth), do: true
+  defp same_value_no_delta?({:vfloat, a}, {:vfloat, b}, _depth), do: a == b
+
+  defp same_value_no_delta?({:vdata, n1, args1}, {:vdata, n2, args2}, depth),
+    do: n1 == n2 and same_spine_no_delta?(args1, args2, depth)
+
+  defp same_value_no_delta?({:vctor, n1, args1}, {:vctor, n2, args2}, depth),
+    do: n1 == n2 and same_spine_no_delta?(args1, args2, depth)
+
+  defp same_value_no_delta?(_a, _b, _depth), do: false
+
+  defp same_spine_no_delta?(args1, args2, depth) do
+    length(args1) == length(args2) and
+      Enum.zip(args1, args2) |> Enum.all?(fn {a, b} -> same_value_no_delta?(a, b, depth) end)
   end
 end

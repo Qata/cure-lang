@@ -1201,6 +1201,9 @@ defmodule Cure.Types.Checker do
               err
           end
 
+        {:ok, value_type} when args == [] ->
+          {:ok, value_type, env}
+
         {:ok, _other} ->
           {_, env} = infer_args(env, args)
           {:ok, :any, env}
@@ -2464,6 +2467,13 @@ defmodule Cure.Types.Checker do
   # aliases brought in by `use Std.Mod` -- and user-defined enum types
   # registered earlier in the same module -- become visible at every
   # signature/check site without any further plumbing.
+  defp resolve_with_env(env, {:variable, _meta, name}) when is_binary(name) do
+    case Env.lookup_type(env, name) do
+      {:ok, type} -> type
+      :error -> Env.deref(env, Type.resolve({:variable, [], name}))
+    end
+  end
+
   defp resolve_with_env(env, type_ast) do
     Env.deref(env, Type.resolve(type_ast))
   end

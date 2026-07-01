@@ -70,16 +70,27 @@ defmodule Cure.Elab.Elaborator do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
 
-    if Inductive.get_ctor(env, atom) do
-      with {:ok, present} <- map_present_args(args, names, ctx, env) do
-        elaborate_ctor_app(env, atom, present)
-      end
-    else
-      # Non-constructor application: elaborate to a term, then let the kernel type it.
-      with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
-           {:ok, type} <- Kernel.infer(ctx, term) do
-        {:ok, term, type}
-      end
+    cond do
+      Inductive.get_ctor(env, atom) ->
+        with {:ok, present} <- map_present_args(args, names, ctx, env) do
+          elaborate_ctor_app(env, atom, present)
+        end
+
+      # A global whose telescope carries erased (implicit) parameters: insert
+      # fresh metavariables for them and solve from the present arguments, the
+      # same way constructor indices are inferred (§5.2). Without this, the
+      # explicit args would be bound to the implicit positions.
+      implicit_def?(env, atom) ->
+        with {:ok, present} <- map_present_args(args, names, ctx, env) do
+          elaborate_global_app(env, atom, present, ctx)
+        end
+
+      true ->
+        # Non-constructor application: elaborate to a term, then let the kernel type it.
+        with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
     end
   end
 
@@ -95,10 +106,12 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_typed(other, names, ctx, env) do
-    with {:ok, term} <- elaborate_expr(other, names, env),
-         {:ok, type} <- Kernel.infer(ctx, term) do
-      {:ok, term, type}
+  def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp implicit_def?(env, atom) do
+    case Env.get_def(env, atom) do
+      %{quantities: q} when is_list(q) -> :erased in q
+      _ -> false
     end
   end
 
@@ -130,11 +143,12 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env) do
     with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
-        {:vdata, dname, _indices} ->
+        {:vdata, dname, index_vals} ->
           family = Inductive.get_family(env, dname)
-          motive = build_constant_motive(dname, family.indices, result_type_term)
+          idx_terms = Enum.map(index_vals, &Quote.reify(&1, Context.length(ctx)))
+          motive = build_motive(dname, family.indices, idx_terms, result_type_term)
 
-          with {:ok, branches} <- elaborate_branches(arms, ctx, env) do
+          with {:ok, branches} <- elaborate_branches(arms, names, ctx, env, idx_terms) do
             {:ok, {:case, scrut_term, motive, branches}}
           end
 
@@ -144,40 +158,128 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # motive = λ(i₀:T₀)…λ(iₙ:Tₙ).λ(x : D ī). ResultType  (ResultType lifted over the
-  # n index binders + the scrutinee binder).
-  defp build_constant_motive(dname, index_tele, result_type_term) do
-    n = length(index_tele)
+  # motive = λ(j₀:T₀)…λ(jₙ:Tₙ).λ(x : D j̄). ResultType[scrutinee-indices ↦ j̄]
+  #
+  # The result type is *generalized* over the scrutinee's index arguments: where
+  # the scrutinee is `x : D ā` with each aₖ a variable, every occurrence of aₖ in
+  # ResultType is rebound to the motive's k-th index binder. Each branch is then
+  # checked with that index specialized to the constructor's computed index —
+  # this is what refines `m` to `Z`/`S k` in `match (xs : Vec a m)` so a result
+  # like `Vec a (plus m n)` typechecks per branch. When ResultType doesn't
+  # mention an index variable the generalization is a no-op, degrading to the
+  # constant motive.
+  defp build_motive(dname, index_tele, idx_terms, result_type_term) do
+    k = length(index_tele)
     index_types = Enum.map(index_tele, &elem(&1, 1))
-    scrut_type = {:data, dname, [], Enum.map((n - 1)..0//-1, &{:var, &1})}
-    body = Subst.shift(result_type_term, n + 1, 0)
+    scrut_type = {:data, dname, [], Enum.map((k - 1)..0//-1, &{:var, &1})}
+
+    # Map each scrutinee index *variable* (in the current frame) to the de Bruijn
+    # index of its motive binder jₖ (which sits at depth k-pos above the body).
+    rebind =
+      idx_terms
+      |> Enum.with_index()
+      |> Enum.reduce(%{}, fn
+        {{:var, orig}, pos}, acc -> Map.put(acc, orig, k - pos)
+        {_non_var, _pos}, acc -> acc
+      end)
+
+    body = generalize(result_type_term, rebind, k + 1, 0)
 
     (index_types ++ [scrut_type])
     |> Enum.reverse()
     |> Enum.reduce(body, fn type, acc -> {:lam, type, acc} end)
   end
 
-  defp elaborate_branches(arms, ctx, env) do
+  # Rewrite the free variables of `term` for placement under the motive's k+1
+  # binders (`depth` counts binders entered *within* term): a free variable that
+  # names a scrutinee index becomes its motive binder (`rebind`); every other
+  # free variable is shifted past the new binders (`shift`).
+  defp generalize({:var, i}, _rebind, _shift, depth) when i < depth, do: {:var, i}
+
+  defp generalize({:var, i}, rebind, shift, depth) do
+    orig = i - depth
+
+    case Map.fetch(rebind, orig) do
+      {:ok, binder} -> {:var, binder + depth}
+      :error -> {:var, orig + shift + depth}
+    end
+  end
+
+  defp generalize({:pi, d, c}, rb, s, depth),
+    do: {:pi, generalize(d, rb, s, depth), generalize(c, rb, s, depth + 1)}
+
+  defp generalize({:lam, d, b}, rb, s, depth),
+    do: {:lam, generalize(d, rb, s, depth), generalize(b, rb, s, depth + 1)}
+
+  defp generalize({:sigma, a, b}, rb, s, depth),
+    do: {:sigma, generalize(a, rb, s, depth), generalize(b, rb, s, depth + 1)}
+
+  defp generalize({:app, f, a}, rb, s, depth),
+    do: {:app, generalize(f, rb, s, depth), generalize(a, rb, s, depth)}
+
+  defp generalize({:pair, a, b}, rb, s, depth),
+    do: {:pair, generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
+
+  defp generalize({:fst, p}, rb, s, depth), do: {:fst, generalize(p, rb, s, depth)}
+  defp generalize({:snd, p}, rb, s, depth), do: {:snd, generalize(p, rb, s, depth)}
+
+  defp generalize({:data, n, ps, is}, rb, s, depth),
+    do:
+      {:data, n, Enum.map(ps, &generalize(&1, rb, s, depth)),
+       Enum.map(is, &generalize(&1, rb, s, depth))}
+
+  defp generalize({:ctor, n, args}, rb, s, depth),
+    do: {:ctor, n, Enum.map(args, &generalize(&1, rb, s, depth))}
+
+  defp generalize({:case, scr, m, brs}, rb, s, depth),
+    do:
+      {:case, generalize(scr, rb, s, depth), generalize(m, rb, s, depth),
+       Enum.map(brs, fn {c, ar, b} -> {c, ar, generalize(b, rb, s, depth + ar)} end)}
+
+  defp generalize({:eq, t, a, b}, rb, s, depth),
+    do:
+      {:eq, generalize(t, rb, s, depth), generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
+
+  defp generalize({:refl, a}, rb, s, depth), do: {:refl, generalize(a, rb, s, depth)}
+
+  defp generalize({:rewrite, p, m, b}, rb, s, depth),
+    do:
+      {:rewrite, generalize(p, rb, s, depth), generalize(m, rb, s, depth),
+       generalize(b, rb, s, depth)}
+
+  defp generalize({:prim, op, args}, rb, s, depth),
+    do: {:prim, op, Enum.map(args, &generalize(&1, rb, s, depth))}
+
+  defp generalize(leaf, _rb, _s, _depth), do: leaf
+
+  defp elaborate_branches(arms, names, ctx, env, scrut_indices) do
     Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, arm_meta, body}, {:ok, acc} ->
       pattern = Keyword.fetch!(arm_meta, :pattern)
 
-      case elaborate_branch(pattern, single_body(body), ctx, env) do
+      case elaborate_branch(pattern, single_body(body), names, ctx, env, scrut_indices) do
         {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
         {:error, _} = err -> {:halt, err}
       end
     end)
   end
 
-  defp elaborate_branch(pattern, body_expr, ctx, env) do
+  defp elaborate_branch(pattern, body_expr, names, ctx, env, scrut_indices) do
     {cname, pattern_vars} = constructor_pattern(pattern)
 
     case Inductive.get_ctor(env, cname) do
       nil ->
         {:error, {:unknown_pattern_constructor, cname}}
 
-      %{args: telescope, quantities: quantities} ->
-        branch_names = branch_scope(quantities, pattern_vars)
-        branch_ctx = extend_context(ctx, telescope)
+      %{args: telescope, quantities: quantities, result_indices: result_indices} ->
+        # The branch scope is the pattern telescope (indices 0..n-1) *followed by*
+        # the enclosing names, so a branch body can still reach outer bindings
+        # (function params, prior lets). extend_context shifts ctx the same way,
+        # keeping surface names and de Bruijn indices aligned.
+        branch_names = branch_scope(quantities, pattern_vars) ++ names
+        branch_ctx =
+          ctx
+          |> extend_context(telescope)
+          |> specialize_branch_context(result_indices, scrut_indices, length(telescope))
 
         with {:ok, body_term, _type} <- elaborate_expr_typed(body_expr, branch_names, branch_ctx, env) do
           {:ok, {cname, length(telescope), body_term}}
@@ -208,6 +310,99 @@ defmodule Cure.Elab.Elaborator do
     Enum.reduce(telescope, ctx, fn {_name, type_term}, c ->
       Context.extend(c, Eval.eval(type_term, Context.env(c)))
     end)
+  end
+
+  # Matching `xs : D i...` against a constructor whose result indices include a
+  # direct telescope variable teaches the branch that this constructor variable
+  # aliases the scrutinee's index. For Vec, `vcons : ... -> Vec(a, S(n))` in a
+  # branch of `xs : Vec(a0, m)` gives `a := a0`; the `S(n) := m` refinement is
+  # not invertible in this minimal pass, but the direct alias is enough for
+  # `append(rest, ys)`.
+  defp specialize_branch_context(ctx, result_indices, scrut_indices, arity) do
+    subst = branch_index_subst(result_indices, scrut_indices, arity)
+
+    if map_size(subst) == 0 do
+      ctx
+    else
+      depth = Context.length(ctx)
+      env = Context.env(ctx)
+
+      types =
+        Enum.map(ctx.types, fn type_value ->
+          type_value
+          |> Quote.reify(depth)
+          |> replace_branch_vars(subst)
+          |> Eval.eval(env)
+        end)
+
+      %{ctx | types: types}
+    end
+  end
+
+  defp branch_index_subst(result_indices, scrut_indices, arity) do
+    result_indices
+    |> Enum.zip(scrut_indices)
+    |> Enum.reduce(%{}, fn
+      {{:var, i}, scrut_idx}, acc ->
+        Map.put(acc, i, Subst.shift(scrut_idx, arity, 0))
+
+      {_other, _scrut_idx}, acc ->
+        acc
+    end)
+  end
+
+  defp replace_branch_vars({:var, i}, subst), do: Map.get(subst, i, {:var, i})
+
+  defp replace_branch_vars({:pi, d, c}, subst),
+    do: {:pi, replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
+
+  defp replace_branch_vars({:lam, d, b}, subst),
+    do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
+
+  defp replace_branch_vars({:sigma, a, b}, subst),
+    do: {:sigma, replace_branch_vars(a, subst), replace_branch_vars(b, shift_subst(subst, 1))}
+
+  defp replace_branch_vars({:app, f, a}, subst),
+    do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}
+
+  defp replace_branch_vars({:pair, a, b}, subst),
+    do: {:pair, replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
+
+  defp replace_branch_vars({:fst, p}, subst), do: {:fst, replace_branch_vars(p, subst)}
+  defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
+
+  defp replace_branch_vars({:data, n, ps, is}, subst),
+    do:
+      {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)),
+       Enum.map(is, &replace_branch_vars(&1, subst))}
+
+  defp replace_branch_vars({:ctor, n, args}, subst),
+    do: {:ctor, n, Enum.map(args, &replace_branch_vars(&1, subst))}
+
+  defp replace_branch_vars({:case, scr, m, brs}, subst),
+    do:
+      {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
+       Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
+
+  defp replace_branch_vars({:eq, t, a, b}, subst),
+    do:
+      {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst),
+       replace_branch_vars(b, subst)}
+
+  defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
+
+  defp replace_branch_vars({:rewrite, p, m, b}, subst),
+    do:
+      {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst),
+       replace_branch_vars(b, subst)}
+
+  defp replace_branch_vars({:prim, op, args}, subst),
+    do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}
+
+  defp replace_branch_vars(other, _subst), do: other
+
+  defp shift_subst(subst, amount) do
+    Map.new(subst, fn {k, v} -> {k + amount, Subst.shift(v, amount, 0)} end)
   end
 
   @doc """
@@ -244,7 +439,7 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # One telescope slot: erased → fresh meta; present → unify expected vs actual.
-  defp solve_arg({{_name, type_term}, :erased}, {:ok, mctx, chosen, present}) do
+  defp solve_arg({{_name, _type_term}, :erased}, {:ok, mctx, chosen, present}) do
     {mctx, id} = MetaCtx.fresh(mctx)
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
@@ -275,6 +470,50 @@ defmodule Cure.Elab.Elaborator do
       indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, args))
       result_type = Eval.eval({:data, family, [], indices}, [])
       {:ok, {:ctor, cname, args}, result_type}
+    end
+  end
+
+  # A saturated call to a global function with implicit (erased) parameters.
+  # Peels the function's Π telescope, pairs each domain with its quantity, and
+  # runs the shared `solve_arg` loop: erased slots become fresh metavariables,
+  # present slots unify against the supplied arguments. Returns the applied term
+  # and its result type (the codomain instantiated with the solved arguments).
+  defp elaborate_global_app(env, name, present_args, ctx) do
+    %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
+    {domains, codomain} = peel_pi(pi_type, length(quantities))
+
+    telescope = Enum.zip(Enum.map(domains, &{:_, &1}), quantities)
+    init = {:ok, MetaCtx.new(), [], present_args}
+
+    telescope
+    |> Enum.reduce_while(init, &solve_arg/2)
+    |> finish_global_app(name, codomain, ctx)
+  end
+
+  defp peel_pi(type, 0), do: {[], type}
+
+  defp peel_pi({:pi, d, c}, n) do
+    {ds, co} = peel_pi(c, n - 1)
+    {[d | ds], co}
+  end
+
+  defp finish_global_app({:error, _} = err, _name, _cod, _ctx), do: err
+
+  defp finish_global_app({:ok, _mctx, _chosen, [_ | _]}, _name, _cod, _ctx),
+    do: {:error, :too_many_arguments}
+
+  defp finish_global_app({:ok, mctx, chosen, []}, name, codomain, ctx) do
+    args = Enum.map(chosen, &Unify.zonk(&1, mctx))
+
+    if Enum.any?(args, &has_meta?/1) do
+      {:error, {:unsolved_metavariables, name}}
+    else
+      term = Enum.reduce(args, {:global, name}, fn a, acc -> {:app, acc, a} end)
+      # The instantiated codomain lives in the caller's frame; evaluate it under
+      # the caller's environment so its context variables get correct de Bruijn
+      # levels (evaluating under `[]` would conflate index and level).
+      result_type = Eval.eval(Subst.instantiate(codomain, args), Context.env(ctx))
+      {:ok, term, result_type}
     end
   end
 

@@ -55,6 +55,17 @@ defmodule Cure.Elab.Emit do
   def compile_forms(%Env{defs: defs} = env, module) do
     names = Map.keys(defs)
 
+    compile_forms(env, module, names)
+  end
+
+  @doc """
+  Erlang abstract forms for a selected set of definitions in `env`.
+
+  Imported definitions may be present in the Core env so conversion can unfold
+  them, but an importing module should emit only its own local definitions.
+  """
+  @spec compile_forms(Env.t(), module(), [atom()]) :: {:ok, [tuple()]} | {:error, term()}
+  def compile_forms(%Env{} = env, module, names) do
     with :ok <- reject_holes(env, names) do
       try do
         {:ok, module_forms(env, module, names)}

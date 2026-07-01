@@ -235,15 +235,20 @@ delegates to `Std.Map`, keeping the implementation trivial.
 - `to_list(set) -> List(T)`, `from_list(list) -> Map`.
 - `union(a, b) -> Map`, `intersection(a, b) -> Map`,
   `difference(a, b) -> Map`.
+### Std.Nat
+Unary natural numbers for type-level indices.
+- `Nat = Z | S(Nat)`.
+- `plus(m, n) -> Nat` -- total Peano addition, usable in dependent result
+  types.
 ### Std.Vector
-Dynamic arrays with an explicit length field, backed by a list.
-Representation: `%[:vector, len, list]`.
-- `empty()`, `singleton(x)`, `from_list(list)`, `to_list(vec)`.
-- `length(vec) -> Int`, `is_empty(vec) -> Bool`.
-- `cons(x, vec) -> Tuple`, `head(vec) -> T`, `tail(vec) -> Tuple`.
-- `append(a, b) -> Tuple`, `map(vec, f) -> Tuple`.
-The length is tracked at the type level so dependent type checks can
-reason about vector sizes.
+Length-indexed vectors checked by the dependent kernel.
+Representation after erasure: `:empty` or `{:prepend, head, tail}`.
+- `Vector(a, n)` -- indexed family over element type `a` and length `n: Nat`.
+- `empty() -> Vector(a, Z)` at compile time; runtime value `:empty`.
+- `prepend(x, xs) -> Vector(a, S(n))` at runtime, with `a` and `n` erased.
+- `append(xs, ys) -> Vector(a, Std.Nat.plus(m, n))` at runtime, with `a`,
+  `m`, and `n` erased.
+The old tuple-backed `%[:vector, len, list]` API has been retired.
 ### Std.Pair
 Two-tuple helpers. Internally delegates to `:erlang.element/2`.
 - `element(index: Int, tuple) -> T`  -- 1-based BEAM accessor; also
