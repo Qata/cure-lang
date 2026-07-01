@@ -33,6 +33,12 @@ registries).
 - Compile with OTP 26–28. Ghost-writer commits (no co-sign).
 - Build and verify **one obligation at a time**, order 4.1 → 4.2 → 4.3 → 4.4;
   full suite once + commit before the next.
+- `Generators.Rewrite` gets **no `gen/0`** and is **not** added to
+  `Mix.Tasks.Antigen`'s `default_gen/0` — it mirrors `Generators.Indexed`,
+  which ships the exact same way (a fixed, exhaustively-enumerable known-label
+  battery banked via a dedicated seed test, not a population wired into the
+  `mix antigen` explorer sweep). Do not add this wiring by analogy with
+  verticals that do have `gen/0`.
 
 ---
 
@@ -120,8 +126,10 @@ defmodule Antigen.Generators.Rewrite do
   end
 
   # -- 4.1 Eq formation -------------------------------------------------------
-  @doc "Eq-formation obligation. The `Eq` type sits in a Pi domain so check_def's"
-  @doc "type-formation pass exercises `infer({:eq,…})` on its endpoints."
+  @doc """
+  Eq-formation obligation. The `Eq` type sits in a Pi domain so check_def's
+  type-formation pass exercises `infer({:eq,…})` on its endpoints.
+  """
   @spec eq_formation(:well_typed | :ill_typed) :: Challenge.t()
   def eq_formation(:well_typed) do
     eq = {:eq, @dec, @causal, @dcoupled}
@@ -214,6 +222,20 @@ end
 
 `lib/antigen/challenge.ex`:
 - Add `:rewrite_eq` to the `@type kind` union and to `@known_atoms` (kinds group).
+- **Also add every new atom this vertical introduces that `decode_record` /
+  `Serialize.decode` will reconstruct via `String.to_existing_atom` on a cold
+  process** (mirror the existing "indexed-case vertical" `@known_atoms` block,
+  which lists its def-names and family/ctor names alongside its kind — not just
+  `:indexed_case` itself; `Antigen.Corpus.decode_record/1`'s own comment
+  documents exactly this hazard: "a replay in a process that has not yet
+  loaded `Challenge`... fails to decode"). Concretely add: the four def_name
+  atoms `:eq_formation, :refl_typing, :rewrite_premise, :transport_type`, and
+  the new family name `:P` (introduced by `p_family`). If the Task 3 fallback
+  ever introduces a dummy constructor (see Task 3 Step 4), add its name too.
+  Skipping this step will not surface until a fresh-process replay (e.g.
+  `corpus_replay_test.exs` run without the generator already loaded) raises
+  `ArgumentError` decoding a committed record — verify by grepping the final
+  `@known_atoms` list for all of the above before Task 1's commit.
 - The payload is identical to `:indexed_case`, so share the bodies. Change the
   two `to_pieces`/`from_pieces` `:indexed_case` heads to also match `:rewrite_eq`:
 
@@ -231,9 +253,11 @@ def from_pieces(:rewrite_eq, assay, label, seed, note, scaffold, pieces),
         |> Map.put(:kind, :rewrite_eq)
 ```
 
-(Wrap the last line so the rebuilt challenge carries `kind: :rewrite_eq`; verify
-`new/1` allows post-hoc `Map.put` or instead inline the `new(kind: :rewrite_eq, …)`
-body — whichever the struct permits.)
+(The `Map.put(:kind, :rewrite_eq)` on the result is valid as written: `new/1`
+returns a plain `%Challenge{}` struct, and `Map.put/3` on a struct for an
+already-declared field key — `:kind` is declared via `defstruct` — is
+ordinary, idiomatic Elixir; it returns an updated struct of the same type. No
+inline `new(kind: :rewrite_eq, …)` rewrite is needed.)
 
 `lib/antigen/coverage.ex` — add a `terms_of` clause mirroring `:indexed_case`:
 
@@ -300,8 +324,10 @@ git commit -m "feat(antigen): rewrite/eq vertical scaffolding + Eq-formation obl
 
 ```elixir
   test "4.2 refl_typing: base + redex well-typed; both conjunct violations rejected" do
-    for v <- [:base, :redex], do: assert :ok == checks?(Rewrite.refl_typing(v)),
-      "variant #{v} should typecheck"
+    for v <- [:base, :redex] do
+      assert :ok == checks?(Rewrite.refl_typing(v)), "variant #{v} should typecheck"
+    end
+
     for v <- [:conjunct1_violation, :conjunct2_violation] do
       c = Rewrite.refl_typing(v)
       assert c.label == :ill_typed
@@ -426,9 +452,17 @@ no ground proof, so it must be assumed). de Bruijn under `[p, h]`: `h`=var0, `p`
   end
 ```
 
-- [ ] **Step 4: Run the test.** Expected: PASS. If `p_family` (empty ctors) is
-rejected by `check_family`/positivity, give `P` a dummy ctor `mkP : P(Causal)`
-(does not affect the obligations — `h` stays a hypothesis). Triage per §5.
+- [ ] **Step 4: Run the test.** Expected: PASS. `p_family`'s empty ctor list is
+NOT at risk of `check_family`/positivity rejection here: `env_of/1` builds the
+env via `Inductive.declare/2,3` alone, which is bare registration (stores the
+family/ctor maps) and never calls `Kernel.check_family/2` or
+`Inductive.positive?/2` — those are invoked only by the elaborator
+(`lib/cure/elab/declarations.ex`) and by the dedicated `Antigen.Generators/
+Assays.Positivity` vertical, neither of which is in this pipeline. So no
+fallback is needed on that front. (If, for some other reason, `p_family` needs
+a ctor later, add `mkP : P(Causal)` — it would not affect the obligations,
+since `h` stays a hypothesis — but the check_family/positivity concern itself
+does not apply.) Triage per §5.
 - [ ] **Step 5: Full antigen suite.** Expected: PASS.
 - [ ] **Step 6: Commit** `feat(antigen): rewrite/eq premise-discipline obligation`.
 
@@ -445,8 +479,10 @@ rejected by `check_family`/positivity, give `P` a dummy ctor `mkP : P(Causal)`
 
 ```elixir
   test "4.4 transport_type: transport-correct + refl-coherence accepted; left-at-source rejected" do
-    for v <- [:transport_correct, :refl_coherence], do:
+    for v <- [:transport_correct, :refl_coherence] do
       assert :ok == checks?(Rewrite.transport_type(v)), "variant #{v} should typecheck"
+    end
+
     lat = Rewrite.transport_type(:left_at_source)
     assert lat.label == :ill_typed
     assert {:error, _} = checks?(lat)
@@ -531,7 +567,7 @@ defmodule Antigen.RewriteSeedTest do
     end
 
     # Bank each as a coverage-deduped seed, then replay statically.
-    paths = Corpus.append_seeds(challenges)   # match the real Corpus API used by indexed_seed_test
+    paths = Corpus.append_seeds(challenges)   # PLACEHOLDER — see note below
     for path <- List.wrap(paths) do
       for {_c, res} <- Runner.replay([path], @registry), do: assert res == :ok
     end
@@ -539,10 +575,31 @@ defmodule Antigen.RewriteSeedTest do
 end
 ```
 
-**Before writing:** read `test/antigen/indexed_seed_test.exs` and match its exact
-`Corpus`/`Runner` API (function names, arity, dedup handling). The pseudo-call
-`Corpus.append_seeds/1` above is a placeholder for whatever that test actually
-uses — replicate it precisely, do not invent an API.
+**This whole block from the `# Bank each...` comment down is illustrative
+pseudocode, not code to transcribe as-is — two concrete, confirmed mismatches
+against the real APIs (verified by reading `lib/antigen/corpus.ex` and
+`lib/antigen/runner.ex` directly):**
+1. `Corpus.append_seeds/1` does not exist. The real `Corpus.append/3` takes a
+   fixed path, a challenge, and a dedup key, and returns `:appended |
+   :duplicate` — it does not discover or return "paths". The real pattern
+   (`indexed_seed_test.exs`) declares `@seeds`/`@corpus` as fixed module
+   attributes and calls `Corpus.append(@seeds, c, Corpus.dedup_key(c, :seed))`
+   (or `:antibody`) once per challenge.
+2. `Runner.replay/2` returns a list of **maps** `%{entry: c, verdict: v}`, not
+   `{c, res}` 2-tuples — `for {_c, res} <- Runner.replay(...)` would silently
+   match zero elements (a `for` generator skips non-matching elements rather
+   than raising) and the `assert` would never run, a vacuous-pass bug. The real
+   pattern filters/asserts over `r.entry`/`r.verdict` (see
+   `indexed_seed_test.exs`'s `Enum.filter(results, fn r -> match?(...) end)` /
+   `Enum.all?(indexed, fn r -> r.verdict == :ok end)`).
+
+**Before writing:** read `test/antigen/indexed_seed_test.exs` in full and port
+its exact `Corpus`/`Runner` usage (fixed `@seeds`/`@corpus` attributes,
+per-challenge `Corpus.append/3` + `Corpus.dedup_key/2`, `Runner.replay/2`'s
+map-shaped results filtered/asserted via `Enum.filter`/`Enum.all?`) — do not
+invent an API and do not trust any line above except the `@variants` table and
+the top-level `assert :ok == Assays.Rewrite.run(c)` loop, which are correct as
+written.
 
 - [ ] **Step 2: Run the seed test.** Expected: PASS; `seeds.sexp` grows
 (append-only). Confirm no seed is pruned.
@@ -566,9 +623,12 @@ registries/no-explorer) → T1 Step 9 + T5 seed test (no `default_gen` entry); �
 per-obligation TDD loop + immutability → task ordering + Global Constraints; §8
 invariants → Global Constraints; §9 net role → out of code scope.
 
-**Placeholder scan:** the only deliberately-unresolved call is `Corpus.append_seeds/1`
-in T5, explicitly flagged to be replaced by the real `indexed_seed_test.exs` API
-before writing — every other step has concrete code, path, and command.
+**Placeholder scan:** T5's "Bank each..." block is the only deliberately-illustrative
+code — flagged with two confirmed mismatches against the real `Corpus`/`Runner`
+APIs (`Corpus.append_seeds/1` doesn't exist; `Runner.replay/2`'s map-shaped
+results don't match the shown `{_c, res}` tuple destructure) and an explicit
+instruction to port `indexed_seed_test.exs`'s exact usage instead of trusting
+either line. Every other step has concrete, verified code, path, and command.
 
 **Type consistency:** `challenge/6`, `env_of/1`, `check_def/2`, `Challenge.new/1`
 kind `:rewrite_eq` + assay `"rewrite/eq"` used identically across all tasks;
