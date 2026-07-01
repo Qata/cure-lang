@@ -43,7 +43,7 @@ defmodule Cure.Types.Sigma do
   with type `B[x := value of x]`.
   """
 
-  alias Cure.Types.Type
+  alias Cure.Types.{Reduce, Type}
 
   @type t :: {:sigma, String.t(), term(), tuple() | nil}
 
@@ -120,8 +120,12 @@ defmodule Cure.Types.Sigma do
         :any
 
       ast ->
-        substituted = substitute(ast, var_name, value_ast)
-        Type.resolve(substituted)
+        # Substitute the first component and reduce the resulting index
+        # expressions in the trusted kernel (parallel to `Pi.apply_return`), so
+        # `Sigma(n: Int, Vector(T, n + 1))` at `n = 3` yields `Vector(T, 4)`.
+        ast
+        |> Reduce.normalize(%{var_name => value_ast})
+        |> Type.resolve()
     end
   end
 
@@ -153,15 +157,4 @@ defmodule Cure.Types.Sigma do
     "Sigma(#{v}: #{Type.display(f)}, #{Type.display(Type.resolve(s))})"
   end
 
-  # -- Substitution ------------------------------------------------------------
-
-  defp substitute({:variable, _meta, name} = ast, var, repl) do
-    if name == var, do: repl, else: ast
-  end
-
-  defp substitute({tag, meta, children}, var, repl) when is_list(children) do
-    {tag, meta, Enum.map(children, &substitute(&1, var, repl))}
-  end
-
-  defp substitute(other, _var, _repl), do: other
 end
