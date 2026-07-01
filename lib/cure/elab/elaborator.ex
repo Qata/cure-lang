@@ -277,10 +277,18 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env) do
     with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
-        {:vdata, dname, index_vals} ->
+        {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
-          idx_terms = Enum.map(index_vals, &Quote.reify(&1, Context.length(ctx)))
-          motive = build_motive(dname, family.indices, idx_terms, scrut_term, result_type_term)
+          # The scrutinee's args are parameters ++ indices; split off the leading
+          # parameters. Only the indices are abstracted by the motive and refined
+          # per branch — parameters are uniform (never matched).
+          pc = Inductive.param_count(env, dname)
+          {param_vals, idx_vals} = Enum.split(combined_vals, pc)
+          param_terms = Enum.map(param_vals, &Quote.reify(&1, Context.length(ctx)))
+          idx_terms = Enum.map(idx_vals, &Quote.reify(&1, Context.length(ctx)))
+
+          motive =
+            build_motive(dname, family.indices, param_terms, idx_terms, scrut_term, result_type_term)
 
           with {:ok, branches} <-
                  elaborate_branches(arms, names, ctx, env, idx_terms, scrut_term, result_type_term) do
@@ -303,10 +311,15 @@ defmodule Cure.Elab.Elaborator do
   # like `Vec a (plus m n)` typechecks per branch. When ResultType doesn't
   # mention an index variable the generalization is a no-op, degrading to the
   # constant motive.
-  defp build_motive(dname, index_tele, idx_terms, scrut_term, result_type_term) do
+  defp build_motive(dname, index_tele, param_terms, idx_terms, scrut_term, result_type_term) do
     k = length(index_tele)
     index_types = Enum.map(index_tele, &elem(&1, 1))
-    scrut_type = {:data, dname, [], Enum.map((k - 1)..0//-1, &{:var, &1})}
+    # The scrutinee-binder type `D params̄ j̄` sits under the k index binders j̄;
+    # the parameters were reified in the outer frame, so shift them past the k
+    # binders. Parameters are uniform, so they are constant across branches (no
+    # generalization) — only the indices become the fresh binders `(k-1)..0`.
+    param_terms_shifted = Enum.map(param_terms, &Subst.shift(&1, k, 0))
+    scrut_type = {:data, dname, param_terms_shifted, Enum.map((k - 1)..0//-1, &{:var, &1})}
 
     # Map each scrutinee index *variable* (in the current frame) to the de Bruijn
     # index of its motive binder jₖ (which sits at depth k-pos above the body).
@@ -525,6 +538,9 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Both `result_indices` (Task 6: ctor result stripped of its parameter prefix)
+  # and `scrut_indices` (elaborate_match passes the index-only slice) are
+  # index-only and equal-arity post param/index split, so they align head-to-head.
   defp branch_index_subst(result_indices, scrut_indices, arity) do
     result_indices
     |> Enum.zip(scrut_indices)
@@ -647,8 +663,9 @@ defmodule Cure.Elab.Elaborator do
     if Enum.any?(args, &has_meta?/1) do
       {:error, {:unsolved_metavariables, cname}}
     else
+      params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, args))
       indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, args))
-      result_type = Eval.eval({:data, family, [], indices}, [])
+      result_type = Eval.eval({:data, family, params, indices}, [])
       {:ok, {:ctor, cname, args}, result_type}
     end
   end
