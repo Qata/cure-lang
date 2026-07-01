@@ -134,15 +134,37 @@ each positional pair `(r, s)` where `r` is a constructor result-index **term**
 depth). Accumulate a substitution or short-circuit:
 
 - **variable on either side vs any term** — a solvable variable is (a) a
-  ctor-telescope de Bruijn index introduced by this branch, or (b) an
-  outer-context index variable (a rigid neutral var `{:vneutral, {:nvar, _}}`
-  reified to `{:var, k}`). Bind it to the other side after an **occurs-check**
-  (the bound variable must not occur in its own solution). Record in `subst`
-  keyed by the de Bruijn index, with the shifting discipline of §4.4.
-- **matching constructor/data heads** (`{:ctor, C, as}` vs `{:ctor, C, bs}`, or
-  `{:data, N, ps, is}` vs `{:data, N, ps', is'}` with equal head/arity) —
-  recurse structurally, unifying `as ~ bs` (and `ps ~ ps'`, `is ~ is'`),
-  merging substitutions.
+  ctor-telescope de Bruijn index introduced by this branch (always the `r`
+  side — `result_indices` only ever contains ctor-telescope variables), or (b)
+  an outer-context index variable (always the `s` side — a rigid neutral var
+  `{:vneutral, {:nvar, _}}` reified to `{:var, k}`; `scrut_indices` values are
+  evaluated in the outer context and can never contain a ctor-telescope
+  variable). Bind it to the other side after an **occurs-check** (the bound
+  variable must not occur in its own solution). Record in `subst` keyed by the
+  de Bruijn index, with the shifting discipline of §4.4. **When both sides are
+  eligible variables** (a ctor-telescope var on `r` and an outer var on `s` in
+  the same pair) — bind the **outer** variable (`s`) to the ctor-telescope
+  variable (`r`), i.e. treat `s` as the key. This is the canonical direction:
+  it matches the feature's intent (narrowing an outer hypothesis using
+  branch-local information) and keeps the tie-break deterministic rather than
+  implementation-defined.
+- **matching constructor/data heads** (`{:ctor, C, as}` vs `{:ctor, C, bs}` with
+  equal head/arity, or two `:data` applications of the same family with equal
+  arity) — recurse structurally over the pairwise-zipped argument **spine**,
+  merging substitutions. For `:data` heads, compare the *flattened* spine
+  (`params ++ indices` as one list), not a `ps`-vs-`is` split: `Eval.eval`
+  already flattens a `{:data, name, params, indices}` term into a single-list
+  `{:vdata, name, params ++ indices}` value (`lib/cure/core/eval.ex:39-40`),
+  and `Quote.reify` cannot recover the split when reading a value back into a
+  term — by its own comment it always emits the whole flattened list as
+  `params` with `indices: []` (`lib/cure/core/quote.ex:45`). Since `s` is
+  produced by `Quote.reify`, any nested `:data` term on that side would
+  *always* have an empty `indices` list; unifying a real `is` (from `r`, a
+  hand-written constructor result-index term) against an always-empty `is'`
+  (from `s`) is a representation artifact, not a real structural mismatch, and
+  must never be misread as an arity clash. Flattening both sides to one spine
+  before recursing (mirroring `Conv`'s own `conv_spine?`) avoids this
+  entirely — do not implement a `ps`-vs-`is` split.
 - **rigid ground vs rigid ground, definitionally equal** (via the kernel's own
   `Conv`) — contribute no binding (consistent).
 - **definite rigid head clash** — two distinct rigid constructor/data heads (or
@@ -152,21 +174,60 @@ depth). Accumulate a substitution or short-circuit:
   confidently classify → contribute **no** binding and do **not** signal
   `:impossible`. The branch then falls through to the existing conversion-based
   body check (today's behavior). This is the conservative escape hatch.
+- **re-solving an already-bound variable** — a positional pair, or a pair
+  produced by structural recursion, may name a de Bruijn key that an earlier
+  pair (in the same `unify_indices` call) already bound. Merging substitutions
+  is **not** a blind union: before adding `{key, new_term}` to the accumulator,
+  if `key` already maps to `old_term`, decide via the same case analysis as any
+  other pair — `old_term` and `new_term` definitionally equal (via `Conv`) →
+  keep the existing binding, contribute nothing new; a definite rigid clash
+  between them → the *whole* unification is `:impossible`; otherwise (neither
+  decided) → drop back to undecidable for that key (no binding change, no
+  `:impossible`). A naive `Map.merge` that lets the second binding silently
+  clobber the first is **not** an implementation of this spec: it can produce
+  an unsound `subst` (one where the two required equations are inconsistent)
+  that is nonetheless applied as if solved.
 
-The overall verdict: `:impossible` if any pair clashes; otherwise `{:solved,
-subst}` (or `:trivial` if `subst` is empty).
+The overall verdict: `:impossible` if any pair clashes (directly, or via a
+same-key merge conflict per the previous bullet); otherwise `{:solved, subst}`
+(or `:trivial` if `subst` is empty).
 
 ### 4.4 De Bruijn discipline (the main risk)
 
-Constructor-telescope variables and outer-context index variables live at
-different depths. The existing `arity`-shift (`Term.shift(arity, 0)` in
-`branch_index_subst`) is the template for constructor-side bindings; outer-side
-bindings (solving a scrutinee index variable) must be recorded at the correct
-outer depth so `replace_branch_vars` (which already `shift_subst`s under
-binders) applies them consistently to both `ctx.types` and the expected goal.
-The substitution merge across structural recursion must keep a single coherent
-index space. This is where correctness risk concentrates; it is covered by
-dedicated de Bruijn unit tests (§8).
+There is exactly **one** de Bruijn space `subst` lives in: `ctx_branch`'s own
+numbering (the branch's context *after* `extend_with_telescope`, the same
+numbering `specialize_branch_context`/`specialize_branch_value`/
+`replace_branch_vars` already consume). Every entry — regardless of which side
+of the unification produced it — must be a `{ctx_branch-relative index =>
+ctx_branch-relative term}` pair before it enters `subst`. There is no second
+"outer depth" that entries live at; solve-direction only changes **which half**
+of a binding needs a shift to land in that one space:
+
+- **Solving a constructor-telescope variable** (today's only case): the ctor's
+  own args occupy `ctx_branch`'s lowest indices `0..arity-1` (they are the most
+  recently bound; `extend_with_telescope` prepends them), so the bare-var *key*
+  from `result_indices` is already `ctx_branch`-relative — no shift needed. The
+  *replacement value* is a scrutinee-index value living at the outer depth
+  (`Context.length(ctx)`, before the telescope extension), so it must be
+  reified at that outer depth and then `Term.shift(arity, 0)`'d forward into
+  `ctx_branch`'s numbering — exactly what `branch_index_subst` already does.
+- **Solving an outer-context index variable** (the new case): here the
+  *scrutinee value* is the rigid neutral var `{:vneutral, {:nvar, _}}` being
+  solved, and it is the **key**, not the value, that needs the shift: reify it
+  at the outer depth, then `Term.shift(arity, 0)` the resulting `{:var, k}` to
+  get its `ctx_branch`-relative index. The *replacement term* is the
+  constructor's result-index term `r`, which — being written over the ctor's
+  own telescope — is already `ctx_branch`-relative and needs no shift.
+
+Getting this backwards (e.g., recording the outer variable's key at its
+*unshifted* outer-relative index) does not merely mis-refine — it produces a
+`subst` key that either (a) never matches any variable `replace_branch_vars`
+encounters while walking `ctx_branch`-numbered terms, so the substitution
+silently no-ops, or (b) numerically collides with an unrelated
+`ctx_branch`-local variable of the same small index, corrupting an unrelated
+type. The substitution merge across structural recursion (§4.3) must preserve
+this single coherent index space throughout. This is where correctness risk
+concentrates; it is covered by dedicated de Bruijn unit tests (§8).
 
 ### 4.5 Coverage unchanged
 
@@ -189,6 +250,12 @@ checked. No absurd-pattern surface syntax, no change to exhaustiveness.
    and no `:impossible`; the branch is then checked exactly as today. So the
    change is never *less* sound than the current kernel — it only *adds* accepted
    (well-typed) programs and *discharges* provably-dead branches.
+5. **Merge consistency.** If two positional pairs (or two branches of
+   structural recursion within one `unify_indices` call) each produce a
+   binding for the same de Bruijn key, the merged `subst` never keeps an
+   arbitrarily-chosen one without checking the two candidate terms are
+   definitionally equal; an inconsistency between them is a clash (yields
+   `:impossible`), never a silent overwrite (§4.3).
 
 ## 6. Files touched
 
@@ -197,6 +264,10 @@ checked. No absurd-pattern surface syntax, no change to exhaustiveness.
   small private helpers (structural unify, occurs-check) local to the kernel.
 - Reuse existing `Term.shift`, `Quote.reify`, `Conv`, `Inductive`,
   `replace_branch_vars`, `specialize_branch_context/value`. No new modules.
+- `test/antigen/assays/indexed_test.exs` — the 4.3 assay assertion flips from
+  expecting `{:violation, {:wrongly_rejected, _}}` to `assert :ok` (§8).
+- `test/cure/core/case_soundness_test.exs` (new, or a sibling of
+  `case_typing_test.exs`) — the seven kernel tests of §8.
 
 ## 7. Non-goals
 
@@ -217,24 +288,87 @@ becomes `assert :ok`, and the challenge is added to the seed bank.
 New kernel tests in `test/cure/core/case_soundness_test.exs` (or a sibling):
 
 1. **Positive refinement (4.3 core).** The `h : Ix n` reuse term is accepted by
-   `check_def`.
-2. **Impossible-branch discharge.** A `case` whose scrutinee's index rigidly
+   `check_def` — demonstrates the goal (§1/§2): the completeness gap is closed
+   via a correctly-`:solved` subst.
+2. **Refinement soundness (invariant §5.1).** A body that would only typecheck
+   under an equation the match does **not** actually establish is still
+   **rejected**: construct a branch whose expected type after correct
+   refinement requires index `A`, feed a body that only typechecks under a
+   *different*, unentailed index `B` (`A` and `B` distinct rigid ground terms),
+   and confirm the kernel rejects it. This is the direction Test 1 does not
+   cover (Test 1 only shows a previously-rejected *good* program now accepts;
+   this test shows an actually-bad program is not newly, wrongly accepted by
+   the same machinery).
+3. **Impossible-branch discharge.** A `case` whose scrutinee's index rigidly
    clashes with a constructor's ground result index accepts even with a
    deliberately ill-typed body in that branch — proving the body is *not* checked.
    A companion test proves a *reachable* branch with the same ill-typed body is
    still **rejected** (so discharge is not a blanket bypass).
-3. **Occurs-check.** A constructed pair that would require a cyclic solution is
+4. **Occurs-check.** A constructed pair that would require a cyclic solution is
    not mis-solved (documents the guard; the branch falls through rather than
    binding a cyclic term).
-4. **Clash vs undecidable.** A definite head clash yields discharge; a stuck /
-   undecidable index does **not** discharge (body still checked) — asserting
-   invariant §5.2.
-5. **Regressions.** The 4.1 foreign-branch antibody still **rejects**
-   (`{:foreign_ctor, _}` path intact); every existing `case_typing_test.exs`
-   case (the legit `Dec`/`Box` matches) still passes.
+5. **Clash vs undecidable.** A definite head clash yields discharge (invariant
+   §5.2's "only" direction); a stuck / undecidable index does **not** discharge
+   and the body is still checked (invariant §5.4, monotonic degradation) —
+   this test's two halves assert both invariants together, since they are the
+   two faces of the same impossible/undecidable boundary.
+6. **Merge consistency (invariant §5.5).** A family with two index positions
+   whose ctor result-indices share one telescope variable in both positions
+   (e.g. `mk : Π(p:Dec). Foo(p, p)`), matched against a scrutinee with two
+   *distinct rigid ground* indices, e.g. `Foo(Causal, Reversed)` — both
+   positional pairs are unambiguously ctor-var-vs-ground (no var-vs-var
+   tie-break involved), so `p` gets two candidate bindings, `Causal` and
+   `Reversed`, which are not definitionally equal. Confirms the conflicting
+   bindings for the shared key yield `:impossible`, not a silently-picked,
+   unsound `subst`.
+7. **Regressions.** The 4.1 branch-family-discipline antibody (`{:foreign_ctor,
+   _}` rejection) still **rejects**; every existing `case_typing_test.exs` case
+   (the legit `Dec`/`Box` matches) still passes.
 
 The full `indexed/case` Antigen suite + committed corpus/seeds are the standing
 regression net. One `mix test` process at a time (never concurrent).
+
+**Discipline for the implementer.** Write the flipped Antigen assertion and all
+seven `case_soundness_test.exs` tests above **first**, against the
+still-unmodified kernel (`branch_index_subst/4` in place) — before writing
+`unify_indices/4`. These tests split into two kinds, and both must be written
+up front:
+
+- **New-capability tests (must observably go red→green):** Test 1 and the
+  flipped Antigen assertion (today's kernel drops the `n := Causal` equation
+  and rejects the program) and Test 3 and Test 5's clash-half (today there is
+  no `:impossible` discharge at all, so a dead branch with a deliberately
+  ill-typed body makes the whole `case` rejected, not accepted). Confirm each
+  is actually red before implementing.
+- **Test 6 needs care, not an assumed red.** Today's `branch_index_subst`
+  processes the two `Foo(p, p)` index positions independently via a plain
+  `Map.put` in an `Enum.reduce`; if it silently *overwrites* `p`'s binding on
+  the second occurrence (rather than erroring), today's kernel may already
+  proceed with an inconsistent, unsoundly-chosen substitution instead of
+  cleanly rejecting — i.e., it may fail for a *different* reason than the one
+  Test 6 checks for, not simply "not yet solved." Observe what today's kernel
+  actually does for this construction before assuming it's a clean red; if it
+  is already silently accepting something it shouldn't, treat that as a
+  pre-existing bug this fix also happens to close, and say so in the test.
+- **Invariant/regression tests (written first as a characterization net, but
+  expected to already pass today and must keep passing):** Test 2 (soundness
+  never regresses — today's under-refining `branch_index_subst` can only drop
+  equations, never fabricate a false one, so it already can't wrongly accept),
+  Test 4, Test 5's undecidable-half, and Test 7. Confirm these pass before
+  *and* after the change; if one is unexpectedly red pre-fix, that is itself a
+  finding to investigate (it means today's kernel is already less sound than
+  assumed), not something to silence.
+
+Only after writing all seven and confirming the above, implement
+`unify_indices/4` and the `check_case_branches` integration arm, writing the
+minimum needed to turn the new-capability tests green while keeping the
+invariant tests green throughout — do not implement first and backfill tests.
+Once a test is written and confirmed to correctly encode the behavior
+described above, it is **immutable**: reaching green is achieved solely by
+changing `lib/cure/core/kernel.ex`, never by weakening, skipping, or deleting a
+test. The only exception is discovering a test itself encodes the wrong
+behavior, which must be argued explicitly (what the correct behavior is, and
+where the test diverges from it) before it may be edited.
 
 ## 9. Success criteria
 
@@ -244,9 +378,12 @@ regression net. One `mix test` process at a time (never concurrent).
    finding is closed and its challenge seeded.
 3. Impossible branches are discharged without body-checking; reachable ill-typed
    branches still rejected.
-4. Invariants §5.1–§5.4 hold, each with a test.
-5. Full suite green; the 4.1 antibody and all prior Antigen verticals still pass;
-   no coverage/exhaustiveness behavior change.
+4. Invariants §5.1–§5.5 hold, each with a dedicated test: §8 test 2 → §5.1,
+   test 3 → §5.2, test 4 → §5.3, test 5 → §5.2 and §5.4 (its clash/undecidable
+   halves), test 6 → §5.5. Test 1 demonstrates the goal (§1/§2); test 7 is the
+   general regression net.
+5. Full suite green; the 4.1 branch-family-discipline antibody and all prior
+   Antigen verticals still pass; no coverage/exhaustiveness behavior change.
 
 ## 10. Deferred sub-projects (not this run)
 
