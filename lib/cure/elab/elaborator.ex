@@ -13,7 +13,7 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Env, Eval, Inductive, Quote}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
   alias Cure.Elab.{MetaCtx, Subst, Unify}
 
   @doc """
@@ -36,6 +36,67 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate(other, _env), do: {:error, {:unsupported_expression, other}}
+
+  @doc """
+  Context-aware expression elaboration: elaborate `expr` to `{term, type_value}`
+  in a kernel typing `ctx` (whose variables are named, most-recently-bound first,
+  by `names`). Constructor applications route through `elaborate_ctor_app/3` so
+  their erased indices are inferred; other forms reuse the untyped elaborator and
+  the kernel's `infer/2` for their type.
+  """
+  @spec elaborate_expr_typed(term(), [String.t()], Context.t(), Env.t()) ::
+          {:ok, term(), Cure.Core.Value.t()} | {:error, term()}
+  def elaborate_expr_typed({:variable, _meta, "Type"}, _names, _ctx, _env),
+    do: {:ok, {:type, 0}, {:vtype, 1}}
+
+  def elaborate_expr_typed({:variable, _meta, name}, names, ctx, env) do
+    case Enum.find_index(names, &(&1 == name)) do
+      nil ->
+        with {:ok, term} <- resolve_free(name, env),
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
+      index ->
+        term = {:var, index}
+
+        with {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+    end
+  end
+
+  def elaborate_expr_typed({:function_call, [name: name] = _meta, args}, names, ctx, env) do
+    atom = String.to_atom(name)
+
+    if Inductive.get_ctor(env, atom) do
+      with {:ok, present} <- map_present_args(args, names, ctx, env) do
+        elaborate_ctor_app(env, atom, present)
+      end
+    else
+      # Non-constructor application: elaborate to a term, then let the kernel type it.
+      with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
+           {:ok, type} <- Kernel.infer(ctx, term) do
+        {:ok, term, type}
+      end
+    end
+  end
+
+  def elaborate_expr_typed(other, names, ctx, env) do
+    with {:ok, term} <- elaborate_expr(other, names, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    end
+  end
+
+  defp map_present_args(args, names, ctx, env) do
+    Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
+      case elaborate_expr_typed(arg, names, ctx, env) do
+        {:ok, term, type} -> {:cont, {:ok, acc ++ [{term, type}]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
 
   @doc """
   Elaborate a constructor application `C(a₁, …, aₙ)`, inferring the erased index
