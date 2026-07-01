@@ -19,12 +19,7 @@ defmodule Cure.Core.Conv do
   them. η is handled here too, type-free (the §4.5 λ-vs-neutral trick).
   """
 
-  alias Cure.Core.{Env, Eval}
-
-  # Antigen fuel instrumentation (additive; TCB-safe). A δ-unfold budget stored in
-  # the process dictionary and consulted ONLY when set — the plain `conv?/5` path
-  # never sets it, so its behaviour is byte-for-byte unchanged.
-  @fuel_key {__MODULE__, :fuel}
+  alias Cure.Core.{Env, Eval, Normalise}
 
   @doc """
   Like `conv?/5`, but bounds the total number of δ-unfolds to `fuel`. Returns
@@ -33,18 +28,19 @@ defmodule Cure.Core.Conv do
   assay's oracle, spec §4.3/§8). The verdict is a fixed step count, so it is
   machine-independent and replayable.
   """
-  @spec conv_within?(Cure.Core.Term.t(), Cure.Core.Term.t(), [Cure.Core.Value.t()], non_neg_integer(), Env.t() | nil, pos_integer()) ::
+  @spec conv_within?(
+          Cure.Core.Term.t(),
+          Cure.Core.Term.t(),
+          [Cure.Core.Value.t()],
+          non_neg_integer(),
+          Env.t() | nil,
+          pos_integer()
+        ) ::
           {:ok, boolean()} | :fuel_exhausted
   def conv_within?(term1, term2, env, depth, sig, fuel) when is_integer(fuel) and fuel > 0 do
-    Process.put(@fuel_key, fuel)
-
-    try do
+    Normalise.with_fuel(fuel, fn ->
       {:ok, conv?(term1, term2, env, depth, sig)}
-    catch
-      :throw, {@fuel_key, :exhausted} -> :fuel_exhausted
-    after
-      Process.delete(@fuel_key)
-    end
+    end)
   end
 
   @doc "True iff `term1` and `term2` are definitionally equal under `env`."
@@ -62,11 +58,11 @@ defmodule Cure.Core.Conv do
   # δ-whnf both sides (unfold certified-global heads), then compare structurally.
   defp conv_val?({:vneutral, n1} = v1, {:vneutral, n2} = v2, depth, sig) do
     same_neutral_no_delta?(n1, n2, depth) or
-      conv_struct?(whnf_delta(v1, sig), whnf_delta(v2, sig), depth, sig)
+      conv_struct?(Normalise.whnf_value(v1, sig), Normalise.whnf_value(v2, sig), depth, sig)
   end
 
   defp conv_val?(v1, v2, depth, sig) do
-    conv_struct?(whnf_delta(v1, sig), whnf_delta(v2, sig), depth, sig)
+    conv_struct?(Normalise.whnf_value(v1, sig), Normalise.whnf_value(v2, sig), depth, sig)
   end
 
   # η first: a λ on either side, compared by applying both to a fresh neutral.
@@ -107,49 +103,6 @@ defmodule Cure.Core.Conv do
 
   defp conv_struct?({:vrefl, a1}, {:vrefl, a2}, depth, sig), do: conv_val?(a1, a2, depth, sig)
   defp conv_struct?(_, _, _, _), do: false
-
-  # -- δ : unfold a certified-global head to weak-head normal form -------------
-
-  defp whnf_delta(value, nil), do: value
-
-  defp whnf_delta({:vneutral, neutral} = v, sig) do
-    case unfold_head(neutral, sig) do
-      {:ok, reduced} -> whnf_delta(spend_fuel(reduced), sig)
-      :stuck -> v
-    end
-  end
-
-  defp whnf_delta(value, _sig), do: value
-
-  # Charge one unit per δ-unfold when a fuel budget is set (via conv_within?/6).
-  # No-op — and thus zero behavioural change — when no budget is set.
-  defp spend_fuel(reduced) do
-    case Process.get(@fuel_key) do
-      nil -> reduced
-      0 -> throw({@fuel_key, :exhausted})
-      n -> Process.put(@fuel_key, n - 1); reduced
-    end
-  end
-
-  defp unfold_head(neutral, sig) do
-    {head, args} = spine(neutral, [])
-
-    case head do
-      {:nglobal, name} ->
-        if Env.certified?(sig, name) do
-          %{body: body} = Env.get_def(sig, name)
-          {:ok, Enum.reduce(args, Eval.eval(body, []), fn a, acc -> Eval.apply(acc, a) end)}
-        else
-          :stuck
-        end
-
-      _ ->
-        :stuck
-    end
-  end
-
-  defp spine({:napp, n, arg}, acc), do: spine(n, [arg | acc])
-  defp spine(head, acc), do: {head, acc}
 
   # -- η / β-under-binder -----------------------------------------------------
 

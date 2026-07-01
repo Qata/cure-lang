@@ -16,9 +16,17 @@ defmodule Cure.Core.Kernel do
   definitions + certificates (M7).
   """
 
-  alias Cure.Core.{Certificate, Context, Conv, Env, Eval, Inductive, Quote, Term, Universe}
+  alias Cure.Core.{Certificate, Context, Conv, Env, Eval, Inductive, Normalise, Quote, Term, Universe}
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
+
+  @doc "Normalize `term` in `ctx` via the shared trusted Core normalizer."
+  @spec normalize(Context.t(), Cure.Core.Term.t()) :: Cure.Core.Term.t() | :fuel_exhausted
+  def normalize(ctx, term), do: Normalise.nf(ctx, term)
+
+  @doc "Normalize `term` in `ctx` via the shared trusted Core normalizer."
+  @spec normalize(Context.t(), Cure.Core.Term.t(), Normalise.opts()) :: Cure.Core.Term.t() | :fuel_exhausted
+  def normalize(ctx, term, opts), do: Normalise.nf(ctx, term, opts)
 
   @doc "Synthesise the type value of `term` in `ctx`."
   @spec infer(Context.t(), Cure.Core.Term.t()) :: result()
