@@ -72,11 +72,19 @@ defmodule Cure.Elab.Declarations do
   # implicit index-variable telescope is inferred from the signature (§5.2).
   def elaborate({:indexed_type, meta, ctor_sigs}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    index_params = Keyword.get(meta, :index_params, [])
+    # New syntax carries `params` + `indices` separately; the legacy `indexed
+    # type … where` form only carries `index_params` (all args are indices).
+    params = Keyword.get(meta, :params, [])
+    index_params = Keyword.get(meta, :indices) || Keyword.get(meta, :index_params, [])
 
-    with {:ok, index_tele} <- elaborate_index_telescope(index_params, name, env),
-         {:ok, ctors} <- elaborate_gadt_ctors(ctor_sigs, name, index_tele, env) do
-      declare_indexed_at_min_level(env, name, index_tele, ctors, 0)
+    # Parameters are the outer binders: elaborate the param telescope first, then
+    # the index telescope in the scope of the parameters (most-recent first).
+    param_scope = params |> Enum.map(fn {:param, _m, n} -> n end) |> Enum.reverse()
+
+    with {:ok, param_tele} <- elaborate_index_telescope(params, name, env, []),
+         {:ok, index_tele} <- elaborate_index_telescope(index_params, name, env, param_scope),
+         {:ok, ctors} <- elaborate_gadt_ctors(ctor_sigs, name, param_tele, index_tele, env) do
+      declare_indexed_at_min_level(env, name, param_tele, index_tele, ctors, 0)
     end
   end
 
@@ -177,9 +185,9 @@ defmodule Cure.Elab.Declarations do
 
   # The family's index telescope, converting each `i: T` in the scope of the
   # preceding index binders (most-recently-bound first).
-  defp elaborate_index_telescope(params, fam, env) do
+  defp elaborate_index_telescope(params, fam, env, init_scope \\ []) do
     params
-    |> Enum.reduce_while({:ok, [], []}, fn {:param, pmeta, pname}, {:ok, tele, scope} ->
+    |> Enum.reduce_while({:ok, [], init_scope}, fn {:param, pmeta, pname}, {:ok, tele, scope} ->
       case idx_to_core(Keyword.fetch!(pmeta, :type), scope, fam, env) do
         {:ok, core} ->
           {:cont, {:ok, tele ++ [{String.to_atom(pname), core}], [pname | scope]}}
@@ -194,31 +202,42 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp elaborate_gadt_ctors(sigs, fam, index_tele, env) do
+  defp elaborate_gadt_ctors(sigs, fam, param_tele, index_tele, env) do
     Enum.reduce_while(sigs, {:ok, []}, fn sig, {:ok, acc} ->
-      case elaborate_gadt_ctor(sig, fam, index_tele, env) do
+      case elaborate_gadt_ctor(sig, fam, param_tele, index_tele, env) do
         {:ok, ctor} -> {:cont, {:ok, acc ++ [ctor]}}
         {:error, _} = err -> {:halt, err}
       end
     end)
   end
 
-  defp elaborate_gadt_ctor({:gadt_ctor, cmeta, {:arrow_chain, atoms}}, fam, index_tele, env) do
+  defp elaborate_gadt_ctor({:gadt_ctor, cmeta, {:arrow_chain, atoms}}, fam, param_tele, index_tele, env) do
     cname = cmeta |> Keyword.fetch!(:name) |> String.to_atom()
     {dom_exprs, result_expr} = split_last(atoms)
 
-    with {:ok, index_exprs} <- family_index_args(result_expr, fam) do
+    # The family's parameters are bound OUTSIDE this constructor's telescope (the
+    # kernel binds them first, then the ctor args). Referencing a parameter from
+    # a ctor arg type or the result therefore reaches past all ctor args into the
+    # param region — model that by appending the params (most-recent first, so
+    # they occupy the highest de Bruijn levels) to every local scope.
+    param_count = length(param_tele)
+    param_scope = param_tele |> Enum.map(fn {n, _t} -> Atom.to_string(n) end) |> Enum.reverse()
+
+    with {:ok, applied_exprs} <- family_index_args(result_expr, fam) do
       # Implicit index variables are inferred from every family application in
       # the signature (domains + the result), positionally typed by the family's
       # index telescope. Ordered by first appearance → the leading telescope.
-      implicits = infer_implicits(dom_exprs ++ [result_expr], fam, index_tele, env)
+      # Parameters are NOT inference candidates (see infer_implicits' skip).
+      implicits = infer_implicits(dom_exprs ++ [result_expr], fam, index_tele, env, param_count)
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
-      case build_explicit_tele(dom_exprs, impl_names, fam, env) do
+      case build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
         {:ok, expl_tele, expl_names} ->
-          full_scope = Enum.reverse(impl_names ++ expl_names)
+          full_scope = Enum.reverse(impl_names ++ expl_names) ++ param_scope
+          {param_exprs, index_exprs} = Enum.split(applied_exprs, param_count)
 
-          with {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env) do
+          with {:ok, result_params} <- map_idx_to_core(param_exprs, full_scope, fam, env),
+               {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env) do
             impl_tele = Enum.map(implicits, fn {n, ty} -> {String.to_atom(n), ty} end)
             # Inferred index variables are erased (quantity 0); the explicit
             # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
@@ -226,7 +245,8 @@ defmodule Cure.Elab.Declarations do
               List.duplicate(:erased, length(impl_tele)) ++
                 List.duplicate(:present, length(expl_tele))
 
-            {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities)}
+            {:ok,
+             Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
           end
 
         {:error, _} = err ->
@@ -253,10 +273,10 @@ defmodule Cure.Elab.Declarations do
 
   # Explicit-argument telescope: convert each domain in the scope of all
   # preceding binders (implicits, then earlier explicits). Anonymous names.
-  defp build_explicit_tele(dom_exprs, impl_names, fam, env) do
+  defp build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names), []}, fn {dom, i}, {:ok, tele, scope, names} ->
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, []}, fn {dom, i}, {:ok, tele, scope, names} ->
       case idx_to_core(dom, scope, fam, env) do
         {:ok, core} ->
           argname = "_a#{i}"
@@ -274,22 +294,33 @@ defmodule Cure.Elab.Declarations do
 
   # -- implicit index-variable inference --------------------------------------
 
-  defp infer_implicits(exprs, fam, index_tele, env) do
+  defp infer_implicits(exprs, fam, index_tele, env, self_param_count) do
     {ordered, _seen} =
       Enum.reduce(exprs, {[], MapSet.new()}, fn e, acc ->
-        collect_implicit_vars(e, fam, index_tele, env, acc)
+        collect_implicit_vars(e, fam, index_tele, env, self_param_count, acc)
       end)
 
     ordered
   end
 
-  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, acc) do
+  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc) do
     name = String.to_atom(Keyword.fetch!(fmeta, :name))
     index_types = family_index_types(name, fam, index_tele, env)
+
+    # A family application's leading `param_count` arguments are parameters, not
+    # index-typed positions — skip them so the remaining args align 0-based with
+    # the index telescope (and parameters are never collected as implicits).
+    app_param_count =
+      cond do
+        name == fam -> self_param_count
+        Inductive.family?(env, name) -> Inductive.param_count(env, name)
+        true -> 0
+      end
 
     acc =
       if index_types do
         args
+        |> Enum.drop(app_param_count)
         |> Enum.with_index()
         |> Enum.reduce(acc, fn {arg, pos}, a ->
           case arg do
@@ -301,10 +332,10 @@ defmodule Cure.Elab.Declarations do
         acc
       end
 
-    Enum.reduce(args, acc, fn a, ac -> collect_implicit_vars(a, fam, index_tele, env, ac) end)
+    Enum.reduce(args, acc, fn a, ac -> collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac) end)
   end
 
-  defp collect_implicit_vars(_other, _fam, _index_tele, _env, acc), do: acc
+  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
 
   # The positional index types of family `name` (self or already registered).
   defp family_index_types(name, fam, index_tele, env) do
@@ -401,8 +432,8 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
-  defp declare_indexed_at_min_level(env, name, index_tele, ctors, level) when level <= @ceiling do
-    family = Inductive.family(name, [], index_tele, level)
+  defp declare_indexed_at_min_level(env, name, param_tele, index_tele, ctors, level) when level <= @ceiling do
+    family = Inductive.family(name, param_tele, index_tele, level)
     env2 = Inductive.declare(env, family, ctors)
     family2 = Inductive.get_family(env2, name)
 
@@ -411,12 +442,15 @@ defmodule Cure.Elab.Declarations do
          :ok <- Inductive.positive?(env2, family2) do
       {:ok, env2}
     else
-      {:error, :universe_level} -> declare_indexed_at_min_level(env, name, index_tele, ctors, level + 1)
-      {:error, _} = err -> err
+      {:error, :universe_level} ->
+        declare_indexed_at_min_level(env, name, param_tele, index_tele, ctors, level + 1)
+
+      {:error, _} = err ->
+        err
     end
   end
 
-  defp declare_indexed_at_min_level(_env, _name, _index_tele, _ctors, _level),
+  defp declare_indexed_at_min_level(_env, _name, _param_tele, _index_tele, _ctors, _level),
     do: {:error, :universe_ceiling}
 
   # -- constructors -----------------------------------------------------------
