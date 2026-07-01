@@ -21,6 +21,32 @@ defmodule Cure.Core.Conv do
 
   alias Cure.Core.{Env, Eval}
 
+  # Antigen fuel instrumentation (additive; TCB-safe). A δ-unfold budget stored in
+  # the process dictionary and consulted ONLY when set — the plain `conv?/5` path
+  # never sets it, so its behaviour is byte-for-byte unchanged.
+  @fuel_key {__MODULE__, :fuel}
+
+  @doc """
+  Like `conv?/5`, but bounds the total number of δ-unfolds to `fuel`. Returns
+  `{:ok, boolean}` if conversion decides within budget, or `:fuel_exhausted` if the
+  δ-unfold count is hit first (a suspected non-normalization — the reflexivity
+  assay's oracle, spec §4.3/§8). The verdict is a fixed step count, so it is
+  machine-independent and replayable.
+  """
+  @spec conv_within?(Cure.Core.Term.t(), Cure.Core.Term.t(), [Cure.Core.Value.t()], non_neg_integer(), Env.t() | nil, pos_integer()) ::
+          {:ok, boolean()} | :fuel_exhausted
+  def conv_within?(term1, term2, env, depth, sig, fuel) when is_integer(fuel) and fuel > 0 do
+    Process.put(@fuel_key, fuel)
+
+    try do
+      {:ok, conv?(term1, term2, env, depth, sig)}
+    catch
+      :throw, {@fuel_key, :exhausted} -> :fuel_exhausted
+    after
+      Process.delete(@fuel_key)
+    end
+  end
+
   @doc "True iff `term1` and `term2` are definitionally equal under `env`."
   @spec conv?(Cure.Core.Term.t(), Cure.Core.Term.t(), [Cure.Core.Value.t()], non_neg_integer(), Env.t() | nil) ::
           boolean()
@@ -88,12 +114,22 @@ defmodule Cure.Core.Conv do
 
   defp whnf_delta({:vneutral, neutral} = v, sig) do
     case unfold_head(neutral, sig) do
-      {:ok, reduced} -> whnf_delta(reduced, sig)
+      {:ok, reduced} -> whnf_delta(spend_fuel(reduced), sig)
       :stuck -> v
     end
   end
 
   defp whnf_delta(value, _sig), do: value
+
+  # Charge one unit per δ-unfold when a fuel budget is set (via conv_within?/6).
+  # No-op — and thus zero behavioural change — when no budget is set.
+  defp spend_fuel(reduced) do
+    case Process.get(@fuel_key) do
+      nil -> reduced
+      0 -> throw({@fuel_key, :exhausted})
+      n -> Process.put(@fuel_key, n - 1); reduced
+    end
+  end
 
   defp unfold_head(neutral, sig) do
     {head, args} = spine(neutral, [])
