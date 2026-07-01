@@ -30,14 +30,18 @@ defmodule Cure.Elab.Declarations do
     body_expr = single_body(body)
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
-         ctx = build_context(env, telescope),
          {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env),
+         pi = wrap_binders(:pi, telescope, return_core),
+         # Pre-register the declared type so a recursive body's self-reference
+         # resolves (the placeholder body is never evaluated — δ stays off until
+         # certification, M7.2). The real body replaces it below.
+         env1 = Env.add_def(env, name, pi, {:hole, "__pending__"}, quantities),
+         ctx = build_context(env1, telescope),
          return_value = Eval.eval(return_core, Context.env(ctx)),
-         {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env),
+         {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env1),
          :ok <- Kernel.check(ctx, body_term, return_value) do
       lambda = wrap_binders(:lam, telescope, body_term)
-      pi = wrap_binders(:pi, telescope, return_core)
-      {:ok, Env.add_def(env, name, pi, lambda, quantities)}
+      {:ok, Env.add_def(env1, name, pi, lambda, quantities)}
     end
   end
 
