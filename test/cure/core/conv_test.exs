@@ -43,9 +43,23 @@ defmodule Cure.Core.ConvTest do
     motive = {:lam, {:data, :Dec, [], []}, {:type, 0}}
     b1 = [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]
     b2 = [{:Dcoupled, 0, {:type, 1}}, {:Causal, 0, {:type, 0}}]
+
     refute Conv.conv?(
              {:case, {:var, 0}, motive, b1},
              {:case, {:var, 0}, motive, b2},
+             [{:vneutral, {:nvar, 0}}],
+             1
+           )
+  end
+
+  test "stuck case branch bodies compare under fresh constructor binders" do
+    motive = {:lam, {:data, :Box, [], []}, {:type, 0}}
+    lhs_branches = [{:mk, 1, {:app, {:lam, {:type, 0}, {:var, 0}}, {:var, 0}}}]
+    rhs_branches = [{:mk, 1, {:var, 0}}]
+
+    assert Conv.conv?(
+             {:case, {:var, 0}, motive, lhs_branches},
+             {:case, {:var, 0}, motive, rhs_branches},
              [{:vneutral, {:nvar, 0}}],
              1
            )

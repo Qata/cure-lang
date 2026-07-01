@@ -24,7 +24,7 @@ defmodule Cure.Core.Normalise do
   @doc "Reduce `term` to weak-head normal form in `ctx` and read it back."
   @spec whnf(Context.t(), Cure.Core.Term.t(), opts()) :: Cure.Core.Term.t() | :fuel_exhausted
   def whnf(ctx, term, opts \\ []) do
-    run_with_fuel(opts, fn opts ->
+    run_with_fuel(Keyword.put(opts, :mode, :whnf), fn opts ->
       ctx
       |> eval_in(term)
       |> whnf_value(Context.signature(ctx), opts)
@@ -35,7 +35,7 @@ defmodule Cure.Core.Normalise do
   @doc "Reduce `term` to normal form in `ctx` and read it back."
   @spec nf(Context.t(), Cure.Core.Term.t(), opts()) :: Cure.Core.Term.t() | :fuel_exhausted
   def nf(ctx, term, opts \\ []) do
-    run_with_fuel(opts, fn opts ->
+    run_with_fuel(Keyword.put(opts, :mode, :nf), fn opts ->
       ctx
       |> eval_in(term)
       |> nf_value(Context.signature(ctx), Context.length(ctx), opts)
@@ -92,10 +92,36 @@ defmodule Cure.Core.Normalise do
   end
 
   defp normalize_opts(opts) do
+    opts =
+      opts
+      |> Keyword.put_new(:delta, :certified)
+      |> Keyword.put_new(:mode, :nf)
+      |> Keyword.put_new(:fuel, :infinity)
+      |> Keyword.put_new(:stuck_cases, :preserve)
+
+    delta = Keyword.fetch!(opts, :delta)
+    mode = Keyword.fetch!(opts, :mode)
+    fuel = Keyword.fetch!(opts, :fuel)
+    :preserve = Keyword.fetch!(opts, :stuck_cases)
+
+    unless delta in [:certified, :none] do
+      raise ArgumentError, "expected :delta to be :certified or :none, got: #{inspect(delta)}"
+    end
+
+    unless mode in [:whnf, :nf] do
+      raise ArgumentError, "expected :mode to be :whnf or :nf, got: #{inspect(mode)}"
+    end
+
+    unless fuel == :infinity or (is_integer(fuel) and fuel > 0) do
+      raise ArgumentError, "expected :fuel to be a positive integer or :infinity, got: #{inspect(fuel)}"
+    end
+
     opts
-    |> Keyword.put_new(:delta, :certified)
-    |> Keyword.put_new(:fuel, :infinity)
-    |> Keyword.put_new(:stuck_cases, :preserve)
+  rescue
+    MatchError ->
+      raise ArgumentError,
+            "expected normalization options delta: :certified | :none, mode: :whnf | :nf, " <>
+              "fuel: pos_integer() | :infinity, stuck_cases: :preserve"
   end
 
   defp nf_value(value, sig, depth, opts) do
