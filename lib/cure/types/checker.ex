@@ -76,6 +76,38 @@ defmodule Cure.Types.Checker do
       |> Stdlib.install_qualified()
       |> Stdlib.install_qualified_types()
 
+    cond do
+      dependent_ast?(ast) ->
+        check_dependent_module(ast)
+
+      true ->
+        check_module_dispatch(ast, env, emit?, file)
+    end
+  end
+
+  # A module that uses dependent constructs (currently: an `indexed type` GADT) is
+  # checked by the `Cure.Core` kernel via `Cure.Elab.Program`, surfacing the
+  # kernel's judgement through the checker's error channel. Non-dependent modules
+  # stay on the legacy path unchanged.
+  defp check_dependent_module(ast) do
+    case Cure.Elab.Program.check_ast(ast) do
+      {:ok, _env} ->
+        {:ok, ast}
+
+      {:error, reason} ->
+        {:error, [{:dependent_type_error, "dependent type checking failed: #{inspect(reason)}", [line: 0]}]}
+    end
+  end
+
+  defp dependent_ast?({:indexed_type, _, _}), do: true
+
+  defp dependent_ast?({_tag, _meta, children}) when is_list(children),
+    do: Enum.any?(children, &dependent_ast?/1)
+
+  defp dependent_ast?(list) when is_list(list), do: Enum.any?(list, &dependent_ast?/1)
+  defp dependent_ast?(_), do: false
+
+  defp check_module_dispatch(ast, env, emit?, file) do
     case ast do
       {:container, meta, body} when is_list(meta) ->
         case Keyword.get(meta, :container_type) do

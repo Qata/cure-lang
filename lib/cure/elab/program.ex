@@ -14,8 +14,19 @@ defmodule Cure.Elab.Program do
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(source) when is_binary(source) do
     with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false),
-         {:ok, env} <- elaborate_declarations(declarations(ast), Env.empty()) do
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+      check_ast(ast)
+    end
+  end
+
+  @doc """
+  Elaborate + totality-certify an already-parsed module/declaration AST. Unwraps
+  a `mod ... end` container to its body. This is the entry the real compiler's
+  type checker calls for dependent modules.
+  """
+  @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
+  def check_ast(ast) do
+    with {:ok, env} <- elaborate_declarations(declarations(ast), Env.empty()) do
       TotalityClosure.certify_type_level(env)
     end
   end
@@ -33,8 +44,26 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp declarations({:block, _meta, items}), do: items
-  defp declarations(single), do: [single]
+  # Flatten a parsed program into a flat list of top-level declarations,
+  # unwrapping `{:block, …}` groupings and `mod … end` module containers while
+  # leaving ADT/GADT/function declarations intact. Stray sibling nodes the parser
+  # can place next to a module container (e.g. a bare `{:variable, …}`) are
+  # dropped, mirroring how codegen locates the container and ignores siblings.
+  @declaration_tags [:function_def, :container, :indexed_type]
+
+  defp declarations({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &declarations/1)
+
+  defp declarations({:container, meta, body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :module do
+      body |> List.wrap() |> Enum.flat_map(&declarations/1)
+    else
+      [{:container, meta, body}]
+    end
+  end
+
+  defp declarations({tag, _meta, _body} = node) when tag in @declaration_tags, do: [node]
+  defp declarations(_other), do: []
 
   defp elaborate_declarations(items, env) do
     Enum.reduce_while(items, {:ok, env}, fn decl, {:ok, acc} ->
