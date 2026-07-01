@@ -48,6 +48,26 @@ defmodule Antigen.Generators.Indexed do
       "ill-typed: extra branch names MkFoo, a constructor of family Foo, not Dec")
   end
 
+  # -- 4.2 coverage exactness -------------------------------------------------
+  defp tri_family, do: {Inductive.family(:Tri, [], [], 0),
+                        [Inductive.ctor(:A, [], []), Inductive.ctor(:B, [], []), Inductive.ctor(:C, [], [])]}
+
+  @tri {:data, :Tri, [], []}
+
+  @doc "Coverage obligation. `:ill_typed` omits a required branch (expects {:error, :coverage})."
+  @spec coverage(:well_typed | :ill_typed) :: Challenge.t()
+  def coverage(:well_typed) do
+    body = {:case, {:ctor, :A, []}, {:lam, @tri, @tri},
+            [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}, {:C, 0, {:ctor, :A, []}}]}
+    challenge(:well_typed, [tri_family()], :coverage_gap, @tri, body, "exhaustive Tri case")
+  end
+
+  def coverage(:ill_typed) do
+    body = {:case, {:ctor, :A, []}, {:lam, @tri, @tri},
+            [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}]}
+    challenge(:ill_typed, [tri_family()], :coverage_gap, @tri, body, "non-exhaustive: C omitted")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :indexed_case,

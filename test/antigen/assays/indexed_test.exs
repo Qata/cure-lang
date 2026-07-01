@@ -13,4 +13,12 @@ defmodule Antigen.Assays.IndexedTest do
     # apply the family-scoping fix, then this returns :ok.
     assert :ok == A.run(G.branch_family(:ill_typed))
   end
+
+  test "4.2 exhaustive Tri case is accepted" do
+    assert :ok == A.run(G.coverage(:well_typed))
+  end
+
+  test "4.2 non-exhaustive Tri case must be rejected" do
+    assert :ok == A.run(G.coverage(:ill_typed))
+  end
 end

@@ -23,4 +23,22 @@ defmodule Antigen.Generators.IndexedTest do
     {:case, _s, _m, branches} = c.payload.def_body
     assert Enum.all?(branches, fn {cn, _ar, _b} -> Inductive.ctor_family(env, cn) == :Dec end)
   end
+
+  test "4.2 coverage :ill_typed genuinely omits a declared ctor" do
+    c = Indexed.coverage(:ill_typed)
+    env = Indexed.env_of(c)
+    declared = env |> Inductive.ctors_of(:Tri) |> Enum.map(& &1.name) |> MapSet.new()
+    {:case, _s, _m, branches} = c.payload.def_body
+    covered = branches |> Enum.map(fn {cn, _, _} -> cn end) |> MapSet.new()
+    refute MapSet.subset?(declared, covered)
+  end
+
+  test "4.2 coverage :well_typed covers every declared ctor" do
+    c = Indexed.coverage(:well_typed)
+    env = Indexed.env_of(c)
+    declared = env |> Inductive.ctors_of(:Tri) |> Enum.map(& &1.name) |> MapSet.new()
+    {:case, _s, _m, branches} = c.payload.def_body
+    covered = branches |> Enum.map(fn {cn, _, _} -> cn end) |> MapSet.new()
+    assert MapSet.subset?(declared, covered)
+  end
 end
