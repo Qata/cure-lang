@@ -205,16 +205,29 @@ defmodule Cure.Core.Kernel do
     sig = Context.signature(ctx)
 
     case infer(ctx, scrut) do
-      {:ok, {:vdata, dname, scrut_indices}} ->
+      {:ok, {:vdata, dname, scrut_args}} ->
         family = Inductive.get_family(sig, dname)
+        # {:vdata} carries params ++ indices; the motive and the branch-index
+        # unifier range over indices only, so split the params off up front.
+        pc = Inductive.param_count(sig, dname)
+        {scrut_params, scrut_idx} = Enum.split(scrut_args, pc)
         motive_value = Eval.eval(motive, Context.env(ctx))
 
-        with :ok <- check_motive_wf(ctx, motive_value, family),
+        with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
              :ok <- check_coverage(sig, dname, branches),
-             :ok <- check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices) do
+             :ok <-
+               check_case_branches(
+                 ctx,
+                 sig,
+                 dname,
+                 motive_value,
+                 branches,
+                 scrut_idx,
+                 scrut_params
+               ) do
           # Result type = motive at the scrutinee's actual indices and value (§4.4).
           scrut_value = Eval.eval(scrut, Context.env(ctx))
-          {:ok, apply_motive(motive_value, scrut_indices ++ [scrut_value])}
+          {:ok, apply_motive(motive_value, scrut_idx ++ [scrut_value])}
         end
 
       {:ok, _other} ->
@@ -547,20 +560,38 @@ defmodule Cure.Core.Kernel do
 
   # Extend `ctx` by a (dependent) telescope; return the new context and the fresh
   # neutral values bound for each telescope variable, in declaration order.
-  defp extend_with_telescope(ctx, tele) do
-    Enum.reduce(tele, {ctx, []}, fn {_name, type_term}, {c, vals} ->
-      level = Context.length(c)
-      type_value = Eval.eval(type_term, Context.env(c))
-      {Context.extend(c, type_value), vals ++ [{:vneutral, {:nvar, level}}]}
-    end)
+  #
+  # `param_vals` seeds the *isolated* local evaluation environment for `tele`'s
+  # own type terms (mirroring check_ctor's ctx_full = params ++ args numbering) —
+  # NOT the ambient `ctx`, which has an unrelated numbering. Each entry may still
+  # reference earlier entries of the same `tele` (threaded via the same local
+  # list). `ctx` is extended in parallel purely to keep the ambient context's
+  # depth/levels consistent for whatever uses the returned context afterward
+  # (e.g. checking a branch body, which IS written relative to the ambient ctx).
+  defp extend_with_telescope(ctx, tele, param_vals \\ []) do
+    {ctx_final, _local_vals, fresh_vals} =
+      Enum.reduce(tele, {ctx, Enum.reverse(param_vals), []}, fn {_name, type_term},
+                                                                {c, local_vals, fresh} ->
+        level = Context.length(c)
+        type_value = Eval.eval(type_term, local_vals)
+        fresh_val = {:vneutral, {:nvar, level}}
+        {Context.extend(c, type_value), [fresh_val | local_vals], fresh ++ [fresh_val]}
+      end)
+
+    {ctx_final, fresh_vals}
   end
 
   # The motive must be a type family over the family's indices and the scrutinee:
   # applied to fresh indices ȷ̄ and x : D p̄ ȷ̄, its body must itself be a type.
-  defp check_motive_wf(ctx, motive_value, %{name: dname, indices: index_tele}) do
-    {ctx_indices, index_vals} = extend_with_telescope(ctx, index_tele)
+  # The scrutinee's actual parameters (`scrut_params`) are fixed context: they
+  # seed the index telescope's own evaluation (an index type may mention a
+  # parameter) and fill the parameter slots of the scrutinee's data value. Values
+  # in this NbE representation reference free variables by absolute de Bruijn
+  # LEVEL, so `scrut_params` need no shift as more binders are added.
+  defp check_motive_wf(ctx, motive_value, %{name: dname, indices: index_tele}, scrut_params) do
+    {ctx_indices, index_vals} = extend_with_telescope(ctx, index_tele, scrut_params)
     scrut_level = Context.length(ctx_indices)
-    data_value = {:vdata, dname, index_vals}
+    data_value = {:vdata, dname, scrut_params ++ index_vals}
     ctx_motive = Context.extend(ctx_indices, data_value)
     x_value = {:vneutral, {:nvar, scrut_level}}
 
@@ -573,6 +604,21 @@ defmodule Cure.Core.Kernel do
   end
 
   defp infer_type_value_sort(_ctx, {:vtype, level}), do: Universe.succ(level)
+
+  # A neutral is a valid type of sort `sublevel` iff its own declared type in
+  # `ctx` is itself `{:vtype, sublevel}` — i.e. the variable it stands for was
+  # bound at a universe (e.g. a parameter `a : Type` used polymorphically as the
+  # case result type). de Bruijn index of a level-`level` neutral is
+  # `Context.length(ctx) - 1 - level`.
+  defp infer_type_value_sort(ctx, {:vneutral, {:nvar, level}}) do
+    idx = Context.length(ctx) - 1 - level
+
+    case Context.lookup(ctx, idx) do
+      {:vtype, sublevel} -> {:ok, sublevel}
+      _ -> {:error, :not_a_type_value}
+    end
+  end
+
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vbool_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
@@ -610,7 +656,7 @@ defmodule Cure.Core.Kernel do
   # A branch must name a constructor of the scrutinee's OWN family `dname`; a
   # constructor of any other family is ill-formed (it can never match), so it is
   # rejected before its body is checked (`:foreign_ctor`).
-  defp check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices) do
+  defp check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices, scrut_params) do
     Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
       case Inductive.get_ctor(sig, cname) do
         nil ->
@@ -626,7 +672,7 @@ defmodule Cure.Core.Kernel do
 
             true ->
               %{args: tele, result_indices: result_indices} = ctor
-              {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele)
+              {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
 
               subst =
                 case unify_indices(ctx, result_indices, scrut_indices, arity) do

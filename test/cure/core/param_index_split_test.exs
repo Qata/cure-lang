@@ -123,4 +123,63 @@ defmodule Cure.Core.ParamIndexSplitTest do
     assert {:error, {:conversion_failure, {:vdata, :P, [^a_val, ^causal_val]}, ^expected}} =
              Kernel.check(ctx, term, expected)
   end
+
+  # Test 1 (spec §7.1): a parameter survives matching unchanged. Match on a
+  # P(a, Causal); in the wrap branch, a hypothesis h : a is still usable at type a
+  # (the parameter is NOT refined away by the match).
+  test "a parameter-typed hypothesis is reusable in a branch (param not matched)" do
+    env = param_env()
+    # def probe : Π(a:Type). Π(h:a). Π(v:P(a,Causal)). a
+    #   = λa.λh.λv. case v of wrap(p) -> h
+    # de Bruijn under [a,h] (2 bindings, h=var0/a=var1): P(a, Causal) for the `v`
+    # binder's own type sits at the same depth in both def_type's third Pi domain
+    # and body's third lambda domain — no shift between them.
+    p_ac = {:data, :P, [{:var, 1}], [{:ctor, :Causal, []}]}
+
+    def_type = {:pi, @type0, {:pi, {:var, 0}, {:pi, p_ac, {:var, 2}}}}
+
+    # motive : λ(n:Dec). λ(x:P(a,n)). a — abstracts index_arity+1 = 2 args.
+    # Case context here is [v,h,a] (v=0/h=1/a=2); adding the motive's [x,n]
+    # binders gives [x,n,v,h,a]: a is var4, the index binder n is var0.
+    motive =
+      {:lam, @dec, {:lam, {:data, :P, [{:var, 3}], [{:var, 0}]}, {:var, 4}}}
+
+    body =
+      {:lam, @type0,
+       {:lam, {:var, 0}, {:lam, p_ac, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+
+    env = Env.add_def(env, :probe, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe)
+  end
+
+  # Test 4 (spec §7.4): param-free family behaves exactly as before.
+  test "param-free family case is unchanged" do
+    env =
+      Env.empty()
+      |> Inductive.declare(Inductive.family(:Dec, [], [], 0),
+           [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])])
+      |> Inductive.declare(Inductive.family(:Box, [], [{:d, @dec}], 0),
+           [Inductive.ctor(:mk, [{:x, @dec}], [{:var, 0}])])
+    box_causal = {:data, :Box, [], [{:ctor, :Causal, []}]}
+    motive = {:lam, @dec, {:lam, {:data, :Box, [], [{:var, 0}]}, @dec}}
+    def_type = {:pi, box_causal, @dec}
+    body = {:lam, box_causal, {:case, {:var, 0}, motive, [{:mk, 1, {:var, 0}}]}}
+    env = Env.add_def(env, :probe2, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe2)
+  end
+
+  # Branch-path instance of the scoping gap: a pattern-bound argument whose
+  # declared type is the family's own parameter (Vector's `prepend`'s `x : a`
+  # shape) must be usable at that parameter's type inside the branch body.
+  test "a branch's pattern variable typed at the family parameter has the correct type" do
+    env = param_env()
+    # def probe3 : Π(a:Type). Π(v:P(a,Causal)). a = λa.λv. case v of wrap(p) -> p
+    p_ac0 = {:data, :P, [{:var, 0}], [{:ctor, :Causal, []}]}
+    def_type = {:pi, @type0, {:pi, p_ac0, {:var, 1}}}
+    motive = {:lam, @dec, {:lam, {:data, :P, [{:var, 2}], [{:var, 0}]}, {:var, 3}}}
+    body =
+      {:lam, @type0, {:lam, p_ac0, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 0}}]}}}
+    env = Env.add_def(env, :probe3, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe3)
+  end
 end
