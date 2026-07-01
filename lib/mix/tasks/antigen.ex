@@ -39,8 +39,9 @@ defmodule Mix.Tasks.Antigen do
     count = resolve_count(opts)
 
     runner_opts = [
-      gen: Antigen.Generators.Stub.gen(),
-      assay: Antigen.Assays.Stub,
+      # The three schema-directed generators; explore dispatches each challenge to
+      # its assay via the runner's registry (no fixed `:assay` module).
+      gen: default_gen(),
       corpus_path: opts[:corpus] || "test/antigen/corpus.sexp",
       seeds_path: opts[:seeds] || "test/antigen/seeds.sexp",
       report_dir: opts[:report_dir] || "tmp/antigen",
@@ -64,6 +65,15 @@ defmodule Mix.Tasks.Antigen do
   def budget_to_count(budget) do
     {minutes, _rest} = Integer.parse(budget)
     max(minutes, 1) * @rounds_per_minute
+  end
+
+  # The Phase-2 default generator: the three known-label generators, one draw each.
+  defp default_gen do
+    Antigen.Gen.frequency([
+      {1, Antigen.Generators.Totality.gen()},
+      {1, Antigen.Generators.Positivity.gen()},
+      {1, Antigen.Generators.Forcing.gen()}
+    ])
   end
 
   defp resolve_count(opts) do

@@ -10,7 +10,7 @@ defmodule Antigen.Runner do
       c = %{c | seed: seed_of(c)}
       acc = bank_seed(c, opts, acc)
 
-      case apply(opts[:assay], :run, [c]) do
+      case apply(opts[:assay] || assay_module(c.assay), :run, [c]) do
         :ok ->
           acc
 
@@ -53,8 +53,12 @@ defmodule Antigen.Runner do
 
   def replay_one(%Challenge{assay: a} = c), do: apply(assay_module(a), :run, [c])
 
-  # Phase 2 registers the real assay modules here.
+  # The assay registry: challenge assay-id → assay module.
   defp assay_module("stub"), do: Antigen.Assays.Stub
+  defp assay_module("totality/diverging"), do: Antigen.Assays.Totality
+  defp assay_module("totality/terminating"), do: Antigen.Assays.Totality
+  defp assay_module("positivity"), do: Antigen.Assays.Positivity
+  defp assay_module("reflexivity"), do: Antigen.Assays.Reflexivity
 
   defp bank_seed(c, opts, acc) do
     case Corpus.append(opts[:seeds_path], c, Corpus.dedup_key(c, :seed)) do
