@@ -54,8 +54,8 @@ defmodule Antigen.Runner do
 
           %{entry: c, verdict: verdict}
 
-        {:decode_error, line} ->
-          %{entry: line, verdict: {:decode_error, line}}
+        {:decode_error, line, reason} ->
+          %{entry: line, verdict: {:decode_error, line, reason}}
       end)
     end)
   end

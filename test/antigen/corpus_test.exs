@@ -44,7 +44,7 @@ defmodule Antigen.CorpusTest do
     File.write!(path, File.read!(path) <> "this-is-not-a-record\n")
     results = Corpus.stream(path) |> Enum.to_list()
     assert Enum.any?(results, &match?({:ok, %Challenge{}}, &1))
-    assert Enum.any?(results, &match?({:decode_error, _}, &1))
+    assert Enum.any?(results, &match?({:decode_error, _, _}, &1))
   end
 
   test "scaffold round-trips non-Term metadata through the record line (proves Phase-2 def_group/family carry-through)" do

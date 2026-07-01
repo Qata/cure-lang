@@ -30,7 +30,7 @@ defmodule Antigen.CorpusReplayTest do
     for path <- [@corpus, @seeds], File.exists?(path) do
       results = Runner.replay([path], @registry)
       refute results == []
-      assert Enum.all?(results, fn r -> not match?({:decode_error, _}, r.verdict) end)
+      assert Enum.all?(results, fn r -> not match?({:decode_error, _, _}, r.verdict) end)
     end
   end
 

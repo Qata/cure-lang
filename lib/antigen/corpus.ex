@@ -42,6 +42,13 @@ defmodule Antigen.Corpus do
 
   @spec decode_record(String.t()) :: {:ok, Challenge.t()} | {:error, term()}
   def decode_record(line) do
+    # Force-intern the closed kind/label/name set BEFORE `decode_pieces` runs
+    # `Serialize.decode` (which calls `String.to_existing_atom` on family/ctor
+    # names like `:Dec`/`:Causal`). Loading `Challenge` interns every literal in
+    # its `@known_atoms`; without this, a replay in a process that has not yet
+    # loaded `Challenge` (async suite ordering) fails to decode. See spec §7.
+    _ = Challenge.__known_atoms__()
+
     with [@marker | fields] <- String.split(String.trim_trailing(line, "\n"), "\t"),
          m <- Map.new(fields, fn f -> List.to_tuple(String.split(f, "=", parts: 2)) end),
          {:ok, pieces} <- decode_pieces(m["pieces"]) do
@@ -88,7 +95,7 @@ defmodule Antigen.Corpus do
       |> Stream.map(fn line ->
         case decode_record(line) do
           {:ok, c} -> {:ok, c}
-          {:error, _} -> {:decode_error, String.trim(line)}
+          {:error, reason} -> {:decode_error, String.trim(line), reason}
         end
       end)
     else

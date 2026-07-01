@@ -20,14 +20,22 @@ defmodule Cure.Core.Kernel do
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
-  @doc "Normalize `term` in `ctx` via the shared trusted Core normalizer."
+  @doc """
+  Normalize `term` in `ctx` via the shared trusted Core normalizer
+  (`Cure.Core.Normalise`).
+
+  Full normal form under the certified δ gate, preserving stuck `case`
+  (`stuck_cases: :preserve`): it unfolds certified global heads and reduces β/ι
+  redexes but does not recurse into the branch bodies of a neutral case — which
+  keeps recursive certified definitions from expanding forever while still
+  exposing the definitional equalities the surface proof elaborator needs.
+  """
   @spec normalize(Context.t(), Cure.Core.Term.t()) :: Cure.Core.Term.t() | :fuel_exhausted
   def normalize(ctx, term), do: Normalise.nf(ctx, term)
 
-  @doc "Normalize `term` in `ctx` via the shared trusted Core normalizer."
+  @doc "Normalize `term` in `ctx` via the shared trusted Core normalizer, with options."
   @spec normalize(Context.t(), Cure.Core.Term.t(), Normalise.opts()) :: Cure.Core.Term.t() | :fuel_exhausted
   def normalize(ctx, term, opts), do: Normalise.nf(ctx, term, opts)
-
   @doc "Synthesise the type value of `term` in `ctx`."
   @spec infer(Context.t(), Cure.Core.Term.t()) :: result()
   def infer(_ctx, {:type, level}) do
@@ -350,6 +358,7 @@ defmodule Cure.Core.Kernel do
 
   # -- helpers ----------------------------------------------------------------
 
+
   # Infer `term` and require its type to be a universe; return that level.
   defp infer_sort(ctx, term) do
     with {:ok, type_value} <- infer(ctx, term) do
@@ -496,15 +505,15 @@ defmodule Cure.Core.Kernel do
   end
 
   defp infer_type_value_sort(ctx, {:vpi, _dom, _cod} = value) do
-    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
   end
 
   defp infer_type_value_sort(ctx, {:vsigma, _dom, _cod} = value) do
-    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
   end
 
   defp infer_type_value_sort(ctx, {:veq, _ty, _a, _b} = value) do
-    value |> Quote.reify(Context.length(ctx)) |> infer_sort(ctx)
+    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
   end
 
   defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}
@@ -531,6 +540,7 @@ defmodule Cure.Core.Kernel do
           # Result indices are written over the ctor's args (most-recent first).
           s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
           ctor_value = {:vctor, cname, arg_vals}
+
           expected =
             motive_value
             |> apply_motive(s_values ++ [ctor_value])
@@ -613,9 +623,7 @@ defmodule Cure.Core.Kernel do
   defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
 
   defp replace_branch_vars({:data, n, ps, is}, subst),
-    do:
-      {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)),
-       Enum.map(is, &replace_branch_vars(&1, subst))}
+    do: {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)), Enum.map(is, &replace_branch_vars(&1, subst))}
 
   defp replace_branch_vars({:ctor, n, args}, subst),
     do: {:ctor, n, Enum.map(args, &replace_branch_vars(&1, subst))}
@@ -626,16 +634,12 @@ defmodule Cure.Core.Kernel do
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
 
   defp replace_branch_vars({:eq, t, a, b}, subst),
-    do:
-      {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst),
-       replace_branch_vars(b, subst)}
+    do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
 
   defp replace_branch_vars({:rewrite, p, m, b}, subst),
-    do:
-      {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst),
-       replace_branch_vars(b, subst)}
+    do: {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:prim, op, args}, subst),
     do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}
