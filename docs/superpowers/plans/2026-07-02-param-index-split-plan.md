@@ -47,8 +47,11 @@ families are behaviorally identical to pre-change.
 - `lib/cure/core/inductive.ex` — add `result_params` to the ctor record;
   `ctor/5` builder; `param_count/2`, `ctor_result_params/2` accessors. (Task 1)
 - `lib/cure/core/kernel.ex` — `check_ctor` param + uniformity check (Task 2);
-  `infer({:ctor})` vdata param prefix (Task 3); `infer({:case})` split,
-  `check_case_branches` index-only, `check_motive_wf` reconciliation (Task 4).
+  `infer({:ctor})` vdata param prefix, `check_ctor_app` param-seeding, a new
+  `check/3` clause for param-bearing constructor application (Task 3);
+  `infer({:case})` split, `extend_with_telescope` param-seeding,
+  `check_motive_wf` reconciliation, `infer_type_value_sort` neutral-type clause,
+  `check_case_branches` index-only + param-seeded (Task 4).
 - `lib/cure/compiler/parser.ex` — `type … indices (…)` form; retire
   `parse_indexed_type` / `:indexed` arm; emit split meta. (Task 5)
 - `lib/cure/elab/declarations.ex` — read split meta; elaborate param telescope +
@@ -190,13 +193,31 @@ end
 
 - [ ] **Step 4: Update production call sites of the ctor builder**
 
-`lib/antigen/challenge.ex` reconstructs `Inductive.ctor` values at lines ~187 and
-~238 while decoding challenges, and already threads a `params` field in
-`to_pieces/1` (challenge.ex:66-98). Read both call sites; for each, pass the
-decoded `result_params` (default `[]` when the encoded piece has none) as the new
-5th argument, keeping `quantities` in the 4th. Confirm the encode side
-(`to_pieces/1`) emits `result_params` so a family round-trips; if it does not yet,
-add it symmetric to how it already emits `result_indices`. (Do NOT touch
+`lib/antigen/challenge.ex` reconstructs `Inductive.ctor` values at lines 187 and
+238 while decoding challenges (`from_pieces(:family, …)` and `rebuild_family/3`
+respectively), and already threads a family-level `params` field through
+`to_pieces/1`/`family_pieces/3` (challenge.ex:66-98, 117-149) — but **verified:
+today neither `to_pieces(:family, …)`/`family_pieces/3` (encode) nor
+`from_pieces(:family, …)`/`rebuild_family/3` (decode) touch ctor-level
+`result_params` at all** — `ctor_pieces`/`ctor_scaffold` in both encode
+functions only ever build `arg_pieces`/`ridx_pieces`/`"ridx_count"`, and decode
+only ever reads back `args`/`ridx`/`quantities`. This is not optional to skip:
+design §4.3 explicitly rules out "just default it to `[]`" for these two
+call sites, precisely because that would silently make every family this plan's
+own generators later produce with real parameters fail to round-trip through a
+committed corpus record (a family gets re-decoded with `result_params: []` on
+every ctor regardless of what was encoded). Add, in both directions:
+- **Encode** (`to_pieces(:family, …)` and `family_pieces/3`): a `"rparam_count"`
+  entry per ctor in `ctor_scaffold` (mirroring `"ridx_count"`) and a
+  `"ctor:#{j}:rparam:#{k}"` (resp. `"#{prefix}:ctor:#{j}:rparam:#{k}"`) piece per
+  result-param term (mirroring the `ridx` pieces), built from `ct.result_params`.
+- **Decode** (`from_pieces(:family, …)` and `rebuild_family/3`): read back
+  `for k <- 0..(cs["rparam_count"] - 1)//1, do: Map.fetch!(pmap, "ctor:#{j}:rparam:#{k}")`
+  (mirroring the existing `ridx` read), and pass the result as the **5th**
+  argument to `Inductive.ctor/5`, with `quantities` staying 4th.
+
+Do this unconditionally in both directions — not gated on "if it does not yet, add
+it," since it is verified absent on both sides today. (Do NOT touch
 `declarations.ex:229` yet — that is Task 6, which needs the split telescopes.)
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -254,6 +275,17 @@ git commit -m "feat(core): record datatype parameters separately from indices"
     env = param_env()
     fam = Ind.get_family(env, :Dec)
     assert :ok == Kernel.check_ctor(env, fam, Ind.get_ctor(env, :Causal))
+  end
+
+  test "check_ctor rejects a result_params arity mismatch (wrong count, not just wrong value)" do
+    env = param_env()
+    fam = Ind.get_family(env, :P)
+    # `wrong_arity` supplies zero result_params where the family declares 1 —
+    # exercises check_uniform_params' `:arity` branch, which the position-mismatch
+    # test above never reaches (it always supplies exactly 1 result_param).
+    wrong_arity = Ind.ctor(:wrong_arity, [], [{:ctor, :Causal, []}], [], [])
+    assert {:error, {:non_uniform_parameter, info}} = Kernel.check_ctor(env, fam, wrong_arity)
+    assert info.family == :P and info.ctor == :wrong_arity and info.position == :arity
   end
 ```
 
@@ -330,7 +362,7 @@ via `index_tele` already; verify and adjust only if it used a full-arity source.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `mix test test/cure/core/param_index_split_test.exs`
-Expected: PASS (Task-1 tests + 3 new).
+Expected: PASS (Task-1 tests + 4 new).
 
 - [ ] **Step 5: Commit**
 
@@ -344,78 +376,263 @@ git commit -m "feat(kernel): reject non-uniform parameters in check_ctor"
 ### Task 3: Kernel `infer({:ctor})` — prepend params to vdata
 
 **Files:**
-- Modify: `lib/cure/core/kernel.ex` (`infer({:ctor, …})`, ~180-190)
+- Modify: `lib/cure/core/kernel.ex` (`infer({:ctor, …})`, ~180-190; `check_ctor_app`/
+  `check_ctor_app_rec`, ~437-454; a new `check/3` clause)
 - Test: `test/cure/core/param_index_split_test.exs` (append)
 
 **Interfaces:**
 - Consumes: ctor `result_params` (Task 1).
 - Produces: `infer(ctx, {:ctor, name, args})` returns `{:vdata, fam, param_vals ++
-  index_vals}` (Invariant 3), implementing the standing TODO.
+  index_vals}` for `param_count(fam) == 0` (Invariant 3/5, implementing the
+  standing TODO) and a clear error for `param_count(fam) > 0` (inference alone
+  cannot source the parameters — see the blocking gap below); a new
+  `check(ctx, {:ctor,…}, {:vdata, fam, combined_args})` clause (note: `:vdata`
+  values are 3-tuples with a single combined `params ++ indices` list — see
+  point 3 below) handles the `param_count > 0` case, splitting `combined_args`
+  itself to recover the expected type's `params`.
 
-- [ ] **Step 1: Write the failing test** (append)
+**Blocking gap this task must close (verified against the current code, not
+hypothetical): the kernel has no way to resolve a parameter referenced by a
+constructor's own argument type, and this breaks the plan's own headline
+regression target, not just this task's test.**
+
+`check_ctor`'s validation of a ctor (Task 1's fixture comment) threads
+`ctx_full = params ++ args` starting from a **fresh, isolated**
+`Context.empty(env)` (kernel.ex:351: `check_telescope(Context.empty(env), params)`
+then `check_ctor_args(ctx_params, args)`) — so inside a ctor's own arg-telescope
+type terms, `{:var, k}` for `k >= length(args)` means "the family's parameter at
+that position," e.g. `wrap`'s arg `p : a` is declared as `{:p, {:var, 0}}` (Task
+1's own fixture, num_args=1). But the **use-site** paths that re-evaluate this
+same telescope — `check_ctor_app`/`check_ctor_app_rec` (kernel.ex:437-454, called
+from `infer(ctx, {:ctor,…})`) and `extend_with_telescope` (kernel.ex:470-476,
+called from `check_case_branches` and `check_motive_wf`) — do **not** start from
+an isolated params-seeded context. `check_ctor_app_rec`'s `vals` accumulator
+starts at `[]` and only ever grows with the ctor's own explicit arg values, never
+the family's params; `extend_with_telescope` evaluates each entry via
+`Context.env(c)`, where `c` is the **ambient outer context** (the case
+expression's or the construction call's own surrounding scope) — a completely
+different, unrelated numbering from `check_ctor`'s isolated one.
+
+Concretely, for the `param_env()` fixture: `Kernel.infer(ctx, {:ctor, :wrap,
+[{:ctor, :Dcoupled, []}]})` calls `check_ctor_app(ctx, [{:ctor,:Dcoupled,[]}],
+[{:p, {:var, 0}}])`; checking `p`'s declared type evaluates `{:var, 0}` over
+`vals = []`; `Eval.eval({:var, k}, env)` (eval.ex:24-29) does **not** error on an
+out-of-range index — it silently falls back to `{:vneutral, {:nvar, k}}`, a bogus
+placeholder standing for nothing real. `check(ctx, {:ctor,:Dcoupled,[]},
+{:vneutral,{:nvar,0}})` then infers `{:vdata,:Dec,[]}` for the argument and
+compares it against the bogus neutral via `Conv.conv_val?`, whose only clause for
+a `:vdata` vs. non-matching-`:vneutral` pair is the catch-all `conv_struct?(_, _,
+_, _), do: false` (conv.ex:105) — so the check fails outright with
+`{:conversion_failure, …}`, and `infer` never reaches the vdata-prefix code this
+task adds. **This is not a hypothetical edge case: `Std.Vector`'s `prepend : a ->
+Vector(a, n) -> Vector(a, S(n))` has the identical shape (`x : a`), and
+`Kernel.check_def` re-derives `Std.Vector.append`'s type from scratch — the
+untrusted elaborator's own metavariable solver (`Unify`/`MetaCtx`,
+elaborator.ex `solve_arg`) is not consulted by the kernel (`check_def`'s own
+moduledoc: "the kernel re-derives everything… it never trusts an elaborator-
+supplied type"). So without this fix, `append`'s body — Task 8's own regression
+target (design §1/§7 Test 6) — fails kernel re-validation.**
+
+The fix (needed by both this task and Task 4's `check_case_branches`):
+
+1. **`check_ctor_app`'s telescope processing must be seedable with the actual
+   parameter values**, mirroring `check_ctor`'s own `ctx_full = params ++ args`
+   convention. Change the arity:
+   ```elixir
+   defp check_ctor_app(ctx, param_vals, args, tele) do
+     if length(args) == length(tele) do
+       check_ctor_app_rec(ctx, Enum.zip(args, tele), Enum.reverse(param_vals))
+     else
+       {:error, :ctor_arity}
+     end
+   end
+   ```
+   (`check_ctor_app_rec/3` itself is unchanged — it already threads its `vals`
+   accumulator "most-recent-first"; seeding it with `Enum.reverse(param_vals)`
+   before any arg is processed reproduces `check_ctor`'s exact numbering: a
+   reference at index `length(args) + j` now correctly lands on
+   `Enum.at(param_vals, num_params - 1 - j)`.)
+2. **Pure inference has no source for the parameters** when
+   `param_count(sig, family) > 0` — params are implicit; nothing in a bare
+   `{:ctor, name, args}` term carries them (they are solved only by the
+   untrusted elaborator's metavariable unifier, which the kernel does not
+   trust). So `infer(ctx, {:ctor, name, args})` must call `check_ctor_app(ctx,
+   [], args, tele)` (unchanged behavior, Invariant 5) when `param_count == 0`,
+   and return `{:error, {:ctor_requires_checking_mode, family_name}}` when
+   `param_count > 0`:
+   ```elixir
+   def infer(ctx, {:ctor, name, args}) do
+     sig = Context.signature(ctx)
+
+     case Inductive.get_ctor(sig, name) do
+       nil ->
+         {:error, {:unknown_ctor, name}}
+
+       %{args: tele, result_indices: result_indices} = ctor_sig ->
+         family_name = Inductive.ctor_family(sig, name)
+         result_params = Map.get(ctor_sig, :result_params, [])
+
+         if Inductive.param_count(sig, family_name) > 0 do
+           {:error, {:ctor_requires_checking_mode, family_name}}
+         else
+           with {:ok, arg_env} <- check_ctor_app(ctx, [], args, tele) do
+             param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
+             index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+             {:ok, {:vdata, family_name, param_values ++ index_values}}
+           end
+         end
+     end
+   end
+   ```
+3. **Add a `check/3` clause** for `{:ctor, name, args}` against an expected
+   `:vdata` value — this is the site that actually has the parameters in hand
+   (from the expected type), and it is exactly the path every real program body
+   goes through: `Kernel.check_def` calls `check(ctx, body_term,
+   expected_type_value)` at the top level (kernel.ex:301), and
+   `check_case_branches`' `check(ctx_branch, body, expected)` (kernel.ex:569)
+   supplies an `expected` for every branch body. **`:vdata` values are 3-tuples**
+   — `{:vdata, name, args}` with a single *combined* `params ++ indices` list,
+   never a separate-fields 4-tuple (confirmed throughout the file: eval.ex:39-40,
+   kernel.ex:190/199/459/483/500 all construct/match the same 3-tuple shape) —
+   so the new clause must split the combined list itself via `param_count`.
+   Place this clause alongside the other specific `check/3` clauses (before the
+   general fallback, kernel.ex:219-272). **`check_ctor_app` succeeding only means
+   the arguments match their own declared (parameter-instantiated) types — it
+   says nothing about whether the resulting value matches `expected`'s own
+   indices** (e.g. checking `wrap(d)` — which always produces index `Causal` —
+   against an `expected` whose index slot is `Dcoupled` must still be rejected).
+   So, exactly like the general `check(ctx, term, expected)` fallback (infer,
+   then compare against `expected`), re-derive the actual result (the same
+   computation Task 3's `infer` clause already does for `param_count == 0`) and
+   compare it to `expected` via `Conv.conv_values?`:
+   ```elixir
+   def check(ctx, {:ctor, cname, args}, {:vdata, family, combined_args} = expected) do
+     sig = Context.signature(ctx)
+     pc = Inductive.param_count(sig, family)
+     {params, _indices} = Enum.split(combined_args, pc)
+
+     case Inductive.get_ctor(sig, cname) do
+       nil ->
+         {:error, {:unknown_ctor, cname}}
+
+       %{args: tele, result_indices: result_indices} = ctor_sig ->
+         result_params = Map.get(ctor_sig, :result_params, [])
+
+         cond do
+           Inductive.ctor_family(sig, cname) != family ->
+             {:error, {:foreign_ctor, cname}}
+
+           true ->
+             with {:ok, arg_env} <- check_ctor_app(ctx, params, args, tele) do
+               actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
+               actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+               actual = {:vdata, family, actual_params ++ actual_indices}
+
+               if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
+                 :ok
+               else
+                 {:error, {:conversion_failure, actual, expected}}
+               end
+             end
+         end
+     end
+   end
+   ```
+   For `param_count == 0`, `Enum.split(combined_args, 0) == {[], combined_args}`,
+   `check_ctor_app(ctx, [], args, tele)` behaves identically to the existing
+   3-arg form (Invariant 5), and `actual` is computed exactly as the unmodified
+   `infer({:ctor,…})` path already would — so for every family this plan
+   doesn't touch, this clause's verdict coincides with what the pre-existing
+   general fallback (`infer` then `conv_values?`) already produced; it is a
+   strict addition, not a behavior change.
+
+- [ ] **Step 1: Write the failing tests** (append)
 
 ```elixir
   alias Cure.Core.Context
 
-  test "infer of a param-bearing constructor carries params ++ indices in vdata" do
+  test "checking a param-bearing constructor application against its expected vdata carries params ++ indices" do
     env = param_env()
     ctx = Context.empty(env)
-    # wrap(d) where d : Dec (stand-in for a := Dec). Provide a concrete arg of a
-    # ground type by instantiating a := Dec through the arg's type at use.
-    # Here we infer wrap applied to a Causal value; param a is inferred from p's type.
+    a_val = {:vdata, :Dec, []}
+    causal_val = {:vctor, :Causal, []}
     term = {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}
-    assert {:ok, {:vdata, :P, [param, index]}} = Kernel.infer(ctx, term)
-    # index slot is the ctor's fixed Causal; param slot is present (arity 2, not 1).
-    assert index == {:vctor, :Causal, []} or match?({:vdata, :Dec, _}, index) or index != nil
-    assert param != nil
+    expected = {:vdata, :P, [a_val, causal_val]}
+    assert :ok == Kernel.check(ctx, term, expected)
+  end
+
+  test "bare inference of a param-bearing constructor application is rejected (no expected type to source params from)" do
+    env = param_env()
+    ctx = Context.empty(env)
+    term = {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}
+    assert {:error, {:ctor_requires_checking_mode, :P}} == Kernel.infer(ctx, term)
+  end
+
+  test "infer of a param-free constructor is unchanged (regression)" do
+    env = param_env()
+    ctx = Context.empty(env)
+    assert {:ok, {:vdata, :Dec, []}} == Kernel.infer(ctx, {:ctor, :Dcoupled, []})
+  end
+
+  test "checking against a mismatched expected vdata is rejected (args checking ok is not enough)" do
+    # wrap(d) always produces index Causal — checking it against an expected
+    # type whose index is Dcoupled must fail, even though `d` itself checks
+    # fine against the parameter slot. Falsifies a clause that only verifies
+    # check_ctor_app succeeds without comparing the computed result to `expected`.
+    #
+    # A loose `{:error, _}` assertion here would NOT be red before this fix: the
+    # pre-fix code already errors on this same call (via the check_ctor_app
+    # scoping bug this task also fixes), just for an unrelated reason and with a
+    # different (reified-term, 1-element) shape — so it would pass vacuously
+    # either way. Pin the *specific*, correctly-computed `actual` value (raw
+    # vdata VALUES, params ++ the ctor's real fixed index) so this only goes
+    # green once both the seeding fix and this comparison are in place.
+    env = param_env()
+    ctx = Context.empty(env)
+    a_val = {:vdata, :Dec, []}
+    causal_val = {:vctor, :Causal, []}
+    wrong_index_val = {:vctor, :Dcoupled, []}
+    term = {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}
+    expected = {:vdata, :P, [a_val, wrong_index_val]}
+
+    assert {:error, {:conversion_failure, {:vdata, :P, [^a_val, ^causal_val]}, ^expected}} =
+             Kernel.check(ctx, term, expected)
   end
 ```
 
-Note: the exact `param`/`index` values depend on how `a` is inferred from `p`'s
-type; the load-bearing assertion is **vdata arity 2** (`params ++ indices`), not
-arity 1. Refine the value assertions to the concrete inferred terms once the
-scenario type-checks (pre-green latitude).
+The first test's `a_val = {:vdata, :Dec, []}` is an arbitrary ground choice for
+`a` (any well-typed value works — `Dcoupled`'s own inferred type, `{:vdata,
+:Dec, []}`, is used here so the argument trivially checks against it).
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `mix test test/cure/core/param_index_split_test.exs`
-Expected: FAIL — current `infer({:ctor})` returns `{:vdata, :P, [index]}` (arity
-1, index-only), so the 2-element match fails.
+Expected: FAIL — today `check/3` has no `{:ctor,…}` clause (falls to the general
+`infer`-then-subtype fallback, which hits the bogus-neutral failure described
+above), `infer({:ctor,…})` never errors on `param_count > 0`, and
+`check_ctor_app` is 3-arity, not 4-arity.
 
-- [ ] **Step 3: Implement the prefix**
+- [ ] **Step 3: Implement the fix**
 
-In `kernel.ex`, `infer(ctx, {:ctor, name, args})`, the `%{args: tele,
-result_indices: result_indices}` arm currently ends:
-
-```elixir
-      index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-      {:ok, {:vdata, family_name, index_values}}
-```
-
-Bind `result_params` from the ctor and prepend their evaluated values:
-
-```elixir
-      %{args: tele, result_indices: result_indices} = ctor_sig
-      result_params = Map.get(ctor_sig, :result_params, [])
-      ...
-      param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
-      index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-      {:ok, {:vdata, family_name, param_values ++ index_values}}
-```
-
-(Match the existing local variable names in that clause — bind the ctor signature
-map so `result_params` is reachable.)
+Apply the three changes described above: (1) the 4-arity `check_ctor_app` with
+`param_vals` seeding, (2) `infer(ctx, {:ctor, name, args})`'s `param_count`
+branch, (3) the new `check/3` clause. (Match the existing local variable names in
+that clause — bind the ctor signature map so `result_params` is reachable, as
+shown.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `mix test test/cure/core/param_index_split_test.exs`
 Expected: PASS.
+Run: `mix test test/cure/core/` — Expected: PASS (no regression in existing
+param-free `infer`/`check` callers of `{:ctor,…}`; `check_ctor_app`'s only
+caller in the whole file is `infer({:ctor,…})`, now updated in lockstep).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add lib/cure/core/kernel.ex test/cure/core/param_index_split_test.exs
-git commit -m "feat(kernel): constructor values carry params ++ indices in vdata"
+git commit -m "feat(kernel): resolve constructor parameters via checking mode; vdata carries params ++ indices"
 ```
 
 ---
@@ -424,15 +641,66 @@ git commit -m "feat(kernel): constructor values carry params ++ indices in vdata
 
 **Files:**
 - Modify: `lib/cure/core/kernel.ex` (`infer({:case})`, `check_motive_wf`,
-  `check_case_branches`)
+  `check_case_branches`, `extend_with_telescope`)
 - Test: `test/cure/core/param_index_split_test.exs` (append)
 
 **Interfaces:**
 - Consumes: `Inductive.param_count/2`; ctor `result_indices` (now index-only for
   param families).
 - Produces: `infer({:case})` splits `scrut_args` by `param_count`; `check_motive_wf`
-  builds `data_value` with scrutinee params; `check_case_branches` unifies indices
-  only; motive applied to `index ++ [scrutinee]` everywhere (Invariant 4).
+  builds `data_value` with scrutinee params (no shift needed — see below);
+  `extend_with_telescope` accepts a `param_vals` seed so a branch's own
+  arg-telescope types (or an index telescope's types) that reference the
+  family's parameters resolve correctly, not against the ambient outer context;
+  `check_case_branches` unifies indices only; motive applied to `index ++
+  [scrutinee]` everywhere (Invariant 4).
+
+**Second instance of Task 3's scoping gap, in the branch path.**
+`check_case_branches`' `extend_with_telescope(ctx, tele)` (kernel.ex:549) has the
+exact same problem Task 3 fixes for `check_ctor_app`: `tele` is the matched
+constructor's **own** arg telescope, whose type terms are written in
+`check_ctor`'s isolated `params ++ args` numbering (e.g. `wrap`'s `p : a` is
+`{:p, {:var, 0}}`; `Std.Vector`'s `prepend`'s `x : a` is the identical shape).
+But `extend_with_telescope` evaluates each entry via `Context.env(c)`, where `c`
+is the **ambient case-context** (e.g. `probe`'s `[v, h, a]`), not an isolated
+params-prefixed one — so `{:var, 0}` for `p`/`x` resolves against whatever is
+most-recently-bound in the *ambient* context (e.g. the scrutinee `v` itself),
+not the family's parameter. This is silent (no error — `Context.env`/`Eval.eval`
+never fail on a resolvable index, they just resolve to the *wrong* value), so it
+only surfaces when a branch body actually uses the mis-typed pattern variable —
+exactly what `Std.Vector.append`'s `prepend(x, rest) -> prepend(x, append(rest,
+ys))` does with `x`. Fix `extend_with_telescope` once, generally, and use it from
+both `check_case_branches` (seeded with the scrutinee's `scrut_params`) and
+`check_motive_wf` (seeded with the same `scrut_params`, since design §4.2 allows
+an index type to mention a parameter):
+
+```elixir
+  # `param_vals` seeds the *isolated* local evaluation environment for `tele`'s
+  # own type terms (mirroring `check_ctor`'s ctx_full = params ++ args
+  # numbering) — NOT the ambient `ctx`, which has an unrelated numbering. Each
+  # entry may still reference *earlier* entries of the same `tele` (self-
+  # reference), threaded via the same local list. `ctx` itself is extended in
+  # parallel purely to keep the ambient context's own depth/levels consistent
+  # for whatever uses the returned context afterward (e.g. checking a branch
+  # body, which IS written relative to the ambient context).
+  defp extend_with_telescope(ctx, tele, param_vals \\ []) do
+    {ctx_final, _local_vals, fresh_vals} =
+      Enum.reduce(tele, {ctx, Enum.reverse(param_vals), []}, fn {_name, type_term}, {c, local_vals, fresh} ->
+        level = Context.length(c)
+        type_value = Eval.eval(type_term, local_vals)
+        fresh_val = {:vneutral, {:nvar, level}}
+        {Context.extend(c, type_value), [fresh_val | local_vals], fresh ++ [fresh_val]}
+      end)
+
+    {ctx_final, fresh_vals}
+  end
+```
+
+For `param_vals = []` and a `tele` whose entries are closed terms or reference
+only earlier entries of the same `tele` (every existing param-free kernel
+fixture — Box/Dec, the 4.3 tests), `local_vals` and the old `Context.env(c)`
+compute the identical result, so this is a strict extension, not a behavior
+change, for every family this plan doesn't touch (Invariant 5).
 
 - [ ] **Step 1: Write the failing tests** (append)
 
@@ -444,14 +712,27 @@ git commit -m "feat(kernel): constructor values carry params ++ indices in vdata
     env = param_env()
     # def probe : Π(a:Type). Π(h:a). Π(v:P(a,Causal)). a
     #   = λa.λh.λv. case v of wrap(p) -> h
-    # de Bruijn inside wrap branch (adds binder p): h was var1 before case → var2.
+    # de Bruijn under [a,h] (2 bindings, h=var0/a=var1): P(a, Causal) for the `v`
+    # binder's own type is IDENTICAL at both use sites below (def_type's third Pi
+    # domain, and body's third lambda domain) — both sit at the same depth
+    # (after a,h are bound, before v is), so there is no shift between them.
     p_ac = {:data, :P, [{:var, 1}], [{:ctor, :Causal, []}]}   # P(a, Causal) under a,h
-    def_type = {:pi, @type0, {:pi, {:var, 0}, {:pi, p_ac_shift(), {:var, 2}}}}
-    motive = {:lam, {:data, :P, [{:var, 2}], [{:var, 0}]}, {:var, 3}} # λ(idx n).λ(x). a
+
+    # def_type: Π(a:Type). Π(h:a). Π(v:P(a,Causal)). a
+    def_type = {:pi, @type0, {:pi, {:var, 0}, {:pi, p_ac, {:var, 2}}}}
+
+    # motive : λ(n:Dec). λ(x:P(a,n)). a — abstracts index_arity+1 = 2 args
+    # (Invariant 4), NOT 1: the case's own context at this point is [v,h,a] (3
+    # bindings, v=0/h=1/a=2). Adding the motive's own two binders [x,n] on top
+    # gives [x,n,v,h,a] (5 bindings): a is now var4, n (the index binder) is var0.
+    motive =
+      {:lam, @dec,
+       {:lam, {:data, :P, [{:var, 3}], [{:var, 0}]}, {:var, 4}}}
+
     body =
       {:lam, @type0,
        {:lam, {:var, 0},
-        {:lam, p_ac_shift(),
+        {:lam, p_ac,
          {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
     env = Env.add_def(env, :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
@@ -473,23 +754,35 @@ git commit -m "feat(kernel): constructor values carry params ++ indices in vdata
     env = Env.add_def(env, :probe2, def_type, body)
     assert :ok == Kernel.check_def(env, :probe2)
   end
-```
 
-The `p_ac_shift/0` helper and the exact de Bruijn indices in Test 1 encode
-"match refines the index, parameter `a` stays `a`"; correct them to faithfully
-express that intent while red (the motive abstracts the single index + scrutinee
-only — arity 2 — and reads the parameter `a` from the enclosing context, not from
-a motive binder). Add a small private helper returning the correctly-shifted
-`P(a, Causal)` type for the `v` binder position.
+  # Task 3's scoping gap, in the branch path: a pattern-bound argument whose
+  # declared type is the family's own parameter (Vector's `prepend`'s `x : a`
+  # shape) must be usable at that parameter's type inside the branch body — not
+  # silently mistyped to whatever is ambient in the outer context.
+  test "a branch's pattern variable typed at the family parameter has the correct type" do
+    env = param_env()
+    # def probe3 : Π(a:Type). Π(v:P(a,Causal)). a = λa.λv. case v of wrap(p) -> p
+    p_ac0 = {:data, :P, [{:var, 0}], [{:ctor, :Causal, []}]}   # P(a, Causal) under [a]
+    def_type = {:pi, @type0, {:pi, p_ac0, {:var, 1}}}
+    motive = {:lam, @dec, {:lam, {:data, :P, [{:var, 2}], [{:var, 0}]}, {:var, 3}}}
+    body =
+      {:lam, @type0,
+       {:lam, p_ac0,
+        {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 0}}]}}}
+    env = Env.add_def(env, :probe3, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe3)
+  end
+```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `mix test test/cure/core/param_index_split_test.exs`
-Expected: Test 1 FAILs (motive/vdata arity mismatch: `check_motive_wf` builds a
-1-element `data_value` while the scrutinee's vdata is 2-element; or the branch
-unifier receives params). Test 4 should PASS already (param-free) — it is the
-regression guard; if it fails, the split logic wrongly touches param-free
-families.
+Expected: Test 1 and the new pattern-variable test both FAIL (motive/vdata arity
+mismatch: `check_motive_wf` builds a 1-element `data_value` while the
+scrutinee's vdata is 2-element; and, independent of that, the branch's ctor-arg
+telescope resolves `p`'s type against the wrong ambient variable). Test 4 should
+PASS already (param-free) — it is the regression guard; if it fails, the split
+logic wrongly touches param-free families.
 
 - [ ] **Step 3: Implement the split + reconciliation**
 
@@ -506,24 +799,30 @@ args) by `param_count` and thread the pieces:
 
         with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
              :ok <- check_coverage(sig, dname, branches),
-             :ok <- check_case_branches(ctx, sig, dname, motive_value, branches, scrut_idx) do
+             :ok <- check_case_branches(ctx, sig, dname, motive_value, branches, scrut_idx, scrut_params) do
           scrut_value = Eval.eval(scrut, Context.env(ctx))
           {:ok, apply_motive(motive_value, scrut_idx ++ [scrut_value])}
         end
 ```
 
-(b) `check_motive_wf` — take the scrutinee params and build the scrutinee
-`data_value` as `params ++ fresh_indices`; the motive still abstracts indices +
-scrutinee only:
+(b) `extend_with_telescope` — apply the general fix shown above (accepts a
+`param_vals \\ []` seed).
+
+(c) `check_motive_wf` — take the scrutinee params and build the scrutinee
+`data_value` as `params ++ fresh_indices`; seed `extend_with_telescope` with
+`scrut_params` (so an index type that mentions a parameter also resolves
+correctly); the motive still abstracts indices + scrutinee only:
 
 ```elixir
   defp check_motive_wf(ctx, motive_value, %{name: dname, indices: index_tele}, scrut_params) do
-    {ctx_indices, index_vals} = extend_with_telescope(ctx, index_tele)
+    {ctx_indices, index_vals} = extend_with_telescope(ctx, index_tele, scrut_params)
     scrut_level = Context.length(ctx_indices)
-    # scrut_params are values from the outer ctx; shift them under the freshly
-    # added index binders so they refer correctly inside ctx_indices.
-    shifted_params = Enum.map(scrut_params, &shift_value(&1, length(index_tele)))
-    data_value = {:vdata, dname, shifted_params ++ index_vals}
+    # scrut_params need NO shift: values in this NbE representation reference
+    # free variables by absolute de Bruijn LEVEL (Quote.reify_neutral/2,
+    # quote.ex:64: `{:var, depth - level - 1}`), not relative index — a level
+    # is stable no matter how many more variables get bound afterward. Combine
+    # them with the freshly-bound index values as-is.
+    data_value = {:vdata, dname, scrut_params ++ index_vals}
     ctx_motive = Context.extend(ctx_indices, data_value)
     x_value = {:vneutral, {:nvar, scrut_level}}
 
@@ -536,18 +835,78 @@ scrutinee only:
   end
 ```
 
-Use the existing value-shifting utility for `shift_value/2` (the kernel already
-shifts values when extending telescopes — reuse that helper; if only a term-level
-`Term.shift` exists, reify→shift→eval, or shift the neutral levels, consistent
-with how `extend_with_telescope` produces `index_vals`). For `param_count = 0`,
-`scrut_params = []` and this is identical to the pre-change body (Invariant 5).
+There is no `shift_value/2` helper anywhere in the codebase (confirmed: it does
+not appear under `lib/` or `test/`), and none is needed — see the comment above.
+For `param_count = 0`, `scrut_params = []` and this is identical to the
+pre-change body (Invariant 5).
 
-(c) `check_case_branches` — already receives the index-only vector as its last
-argument (now named `scrut_idx`); no structural change beyond confirming
+**Additional gap this task's own Test 1 exposes:** `infer_type_value_sort`
+(kernel.ex:495-519) has no clause for a bare `{:vneutral, {:nvar, level}}` — it
+falls to the catch-all `{:error, :not_a_type_value}` (kernel.ex:519). This
+matters here because Test 1 (below) deliberately exercises spec §7.1's own
+scenario — "a parameter survives matching, and an `a`-typed hypothesis remains
+usable" — with the case's own result type being the abstract parameter `a`
+itself (used polymorphically); once the motive is fully applied, its body value
+is exactly such a neutral (representing `a`, a variable of type `Type` in the
+enclosing context), and `check_motive_wf`'s `infer_type_value_sort(ctx_motive,
+body_value)` call would otherwise reject it, making Test 1 unpassable even
+with (a)-(c) correctly implemented. Add the missing case — a neutral is a valid
+type of sort `sublevel` iff *its own* declared type in `ctx` is itself
+`{:vtype, sublevel}` (i.e., the variable it stands for was itself bound at a
+universe type):
+```elixir
+defp infer_type_value_sort(ctx, {:vneutral, {:nvar, level}}) do
+  idx = Context.length(ctx) - 1 - level
+
+  case Context.lookup(ctx, idx) do
+    {:vtype, sublevel} -> {:ok, sublevel}
+    _ -> {:error, :not_a_type_value}
+  end
+end
+```
+Place this before the final catch-all clause (kernel.ex:519); it is purely
+additive (no existing clause matches `{:vneutral, …}` today, so no existing
+test's behavior changes) and does not touch Invariant 5 (param-free tests never
+produce a bare-neutral motive result, since their motives return concrete
+`:vdata`/base types, per Test 4 below).
+
+(d) `check_case_branches` — thread `scrut_params` through (new last parameter)
+and seed `extend_with_telescope` with it when extending by the matched
+constructor's own arg telescope, fixing the branch-path instance of Task 3's
+scoping gap:
+
+```elixir
+  defp check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices, scrut_params) do
+    Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
+      case Inductive.get_ctor(sig, cname) do
+        nil ->
+          {:halt, {:error, {:unknown_ctor, cname}}}
+
+        ctor ->
+          cond do
+            Inductive.ctor_family(sig, cname) != dname ->
+              {:halt, {:error, {:foreign_ctor, cname}}}
+
+            length(ctor.args) != arity ->
+              {:halt, {:error, :branch_arity}}
+
+            true ->
+              %{args: tele, result_indices: result_indices} = ctor
+              {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
+              # … unchanged from here: unify_indices/specialize_branch_context/
+              # s_values/ctor_value/expected/check(ctx_branch, body, expected).
+          end
+      end
+    end)
+  end
+```
+
 `result_indices` (index-only after Task 6 for surface families; already
-index-only for these hand-built kernel families) unify against it. The
-`apply_motive(motive_value, s_values ++ [ctor_value])` call is already index-only
-because `s_values` derives from `result_indices`.
+index-only for these hand-built kernel families) unify against `scrut_indices`
+unchanged. The `apply_motive(motive_value, s_values ++ [ctor_value])` call is
+already index-only because `s_values` derives from `result_indices`. For
+`param_count = 0`, `scrut_params = []` and `extend_with_telescope`'s behavior is
+unchanged (Invariant 5).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -979,6 +1338,15 @@ freezes only *green* tests).
 
 **Type consistency:** `Inductive.ctor/5` (result_params trailing) used identically
 in Tasks 1, 6; `param_count/2` and `ctor_result_params/2` names consistent across
-Tasks 1, 4, 6, 7; `{:vdata, name, params ++ indices}` shape consistent Tasks 3, 4,
-7; the case-path split (`Enum.split(scrut_args, param_count)`) identical in kernel
-(Task 4) and elaborator (Task 7).
+Tasks 1, 4, 6, 7; `{:vdata, name, combined_args}` is consistently a **3-tuple**
+with a single combined `params ++ indices` list everywhere it is constructed or
+matched (Tasks 3, 4, 7; verified against eval.ex:39-40 and every existing
+`:vdata` site in kernel.ex) — no site treats it as a 4-tuple with separate
+`params`/`indices` fields; the case-path split (`Enum.split(scrut_args,
+param_count)`) identical in kernel (Task 4) and elaborator (Task 7).
+`check_ctor_app/4`'s `param_vals` seeding (Task 3) and `extend_with_telescope/3`'s
+`param_vals` seeding (Task 4) are the same fix applied at the two sites that
+re-evaluate a constructor's own arg-telescope terms at a use site (construction
+and case-branch matching, respectively) — both seed an *isolated*,
+`check_ctor`-numbering-compatible local environment with the actual parameter
+values, never the ambient outer context.
