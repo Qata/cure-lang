@@ -65,7 +65,7 @@ end
 - `scrut_indices` (the `s` side) are values in the OUTER context → reify at `Context.length(ctx)` then `Term.shift(arity, 0)` to lift into `ctx_branch` → all their vars are `≥ arity`.
 - The two var ranges are therefore DISJOINT, which fixes the solve direction unambiguously (no runtime ambiguity).
 
-**Antigen 4.3 probe** (`test/antigen/generators/indexed.ex`, `test/antigen/assays/indexed_test.exs`): `Generators.Indexed.refinement(:well_typed)` currently replays `{:violation, {:wrongly_rejected, {:refine, :branch_type}}}`; after the fix it replays `:ok`. `refinement(:ill_typed)` (wrong-body probe) must STILL replay `:ok` (rejected). The seed bank is `test/antigen/indexed_seed_test.exs` (`@seed_candidates`), which currently EXCLUDES `refinement(:well_typed)`.
+**Antigen 4.3 probe** (`lib/antigen/generators/indexed.ex`, `test/antigen/assays/indexed_test.exs`): `Generators.Indexed.refinement(:well_typed)` currently replays `{:violation, {:wrongly_rejected, {:refine, :branch_type}}}`; after the fix it replays `:ok`. `refinement(:ill_typed)` (wrong-body probe) must STILL replay `:ok` (rejected). The seed bank is `test/antigen/indexed_seed_test.exs` (`@seed_candidates`), which currently EXCLUDES `refinement(:well_typed)`.
 
 ---
 
@@ -75,7 +75,7 @@ end
 - Modify: `lib/cure/core/kernel.ex` (replace `branch_index_subst/4`; edit the `true ->` arm)
 - Modify: `test/antigen/assays/indexed_test.exs` (flip the 4.3 assertion)
 - Modify: `test/antigen/indexed_seed_test.exs` (seed `refinement(:well_typed)`)
-- Test: `test/cure/core/case_soundness_test.exs` (add Tests 1, 2, 4, 5b, 7)
+- Test: `test/cure/core/case_soundness_index_test.exs` (NEW file, sibling of the existing `case_soundness_test.exs`; Tests 1, 2, 4, 5b, 7)
 
 **Interfaces:**
 - Produces: `unify_indices(ctx, result_indices, scrut_indices, arity) :: {:solved, map()} | :trivial | :impossible`. In THIS task `:impossible` is *never returned* (clash/conflict → conservative `:undecided` internally → no binding); the value is introduced in Task 2. `check_case_branches` consumes `{:solved, s}`/`:trivial` only.
@@ -131,28 +131,38 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
   end
 
   # Test 2 — Refinement soundness (§5.1): the machinery does not fabricate a false
-  # equation. Same shape, but the branch body returns a value at an UNENTAILED
-  # index. Here the required branch type is Ix Causal; return `ix` (: Ix n, and n
-  # is NOT Causal in general) instead of the refined `h`. n is neither refined to
-  # Causal for ix's type (ix's own type is the scrutinee, refined) — construct so
-  # the body's type cannot be made to match without a false equation.
+  # equation. SAME shape and SAME def_type/body as Test 1 (reusing outer hypothesis
+  # `h : Ix n` in the wrap branch), but the motive now hard-demands the WRONG ground
+  # index: `Ix Dcoupled` instead of `Ix Causal`. wrap's own result index is always
+  # Causal, so a sound unifier can only ever derive `n := Causal` (the TRUE,
+  # entailed fact) — never `n := Dcoupled`. `h`, refined to `Ix Causal`, then does
+  # NOT match the required `Ix Dcoupled` (both rigid ground terms of the SAME
+  # family Ix, per design §8 item 2), so the case must still be rejected. This is
+  # the direction Test 1 does not cover: Test 1 shows a previously-rejected good
+  # program now accepts; this shows the same machinery does not go on to fabricate
+  # an equation the match never actually established.
   test "Test 2: a body relying on an unentailed index equation is still rejected" do
-    # def: Π(n:Dec). Π(ix:Ix n). Dec ; motive λn'.λix'. Ix Causal ; body: case ix { wrap p -> ??? }
-    # required branch type = Ix Causal. Feed a body of type Dec ({:ctor,:Causal,[]}),
-    # which is a DIFFERENT family — must be rejected (:branch_type), never accepted
-    # by a fabricated Ix-index equation.
-    def_type = {:pi, @dec, {:pi, @ix0, @dec}}
-    motive = {:lam, @dec, {:lam, @ix0, {:data, :Ix, [], [{:ctor, :Causal, []}]}}}
-    body = {:lam, @dec, {:lam, @ix0, {:case, {:var, 0}, motive, [{:wrap, 1, {:ctor, :Causal, []}}]}}}
+    def_type = {:pi, @dec, {:pi, @ix0, {:pi, @ix1, {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}}}}
+    motive = {:lam, @dec, {:lam, @ix0, {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}}}
+    body = {:lam, @dec, {:lam, @ix0, {:lam, @ix1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert {:error, _} = Kernel.check_def(env, :probe)
   end
 
-  # Test 4 — Occurs-check (§5.3): a would-be cyclic binding must not corrupt; the
-  # conservative guard degrades to no-binding (documents the guard is present).
-  # Given the disjoint-range invariant a true cycle cannot arise from real inputs,
-  # so this test asserts a benign, well-typed case that exercises structural
-  # recursion still checks (the guard never wrongly fires on legitimate input).
+  # Test 4 — Occurs-check (§5.3), regression half. Given the proven disjoint-range
+  # invariant (§4.4: r-side vars always < arity, s-side vars always >= arity after
+  # reify+shift), a real cyclic pair cannot arise from any legitimate case branch —
+  # so no adversarial construction exists to positively exercise occurs_index?/2
+  # returning true on real input while keeping this test green pre-fix (any
+  # fixture that meaningfully drives the new var-var solving path is, by
+  # construction, a NEW-capability case like Test 1/2, not a same-behavior
+  # regression). This test instead documents the honest, weaker claim: a
+  # legitimate bare-ctor-arg-var match (the one case today's kernel already
+  # handles) keeps checking unchanged under the new unifier — i.e. the occurs-check
+  # machinery, even though present on every bind, adds no false rejections on
+  # ordinary structural-recursion input. It does NOT prove the guard would
+  # actually catch a genuine cycle (no such input is constructible here); that
+  # guarantee rests on the disjoint-range proof in §4.4, not on this test.
   test "Test 4: structural-recursion refinement of a nested-index family still checks" do
     # Pair(a:Dec, b:Dec) family Two(Pair) with mk:(x:Dec)->Two(P x x)... kept simple:
     # Two(i:Dec) with pack:(y:Dec)->Two(y); match Two(m) with variable m → bind m := y.
@@ -170,16 +180,34 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
     assert :ok == Kernel.check_def(env, :probe)
   end
 
-  # Test 5b — Undecidable half (§5.4, monotonic degradation): when indices are
-  # stuck/undecidable the branch is NOT discharged; the body is still checked and
-  # a well-typed body still passes. (The clash half is Task 2's Test 5a.)
-  test "Test 5b: an undecidable index does not skip the body check (good body accepts)" do
-    def_type = {:pi, @dec, {:pi, @ix0, @ix1}}          # Π(n:Dec). Π(ix:Ix n). Ix n
-    motive = {:lam, @dec, {:lam, @ix0, @ix1}}          # λn'.λix'. Ix n'  (returns the SAME family/index)
-    body = {:lam, @dec, {:lam, @ix0, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 1}}]}}}
-    # body reuses ix (var1 inside the branch after +1 binder p → var? ) — see note.
-    env = Env.add_def(base_env(), :probe, def_type, body)
-    assert :ok == Kernel.check_def(env, :probe)
+  # Test 5b — Undecidable half (§5.4, monotonic degradation): a pairing the
+  # unifier cannot classify as either a solvable variable or a rigid clash must
+  # stay :undecided (never :impossible) and the branch must NOT be discharged.
+  # A "good body, assert :ok" framing CANNOT prove this: a wrongly-discharged
+  # branch and a correctly-checked-and-accepted branch are both observably :ok,
+  # so no such test can distinguish them. Instead: a fresh family `Stray(n:Dec)`
+  # whose only constructor's result index is one opaque global (`h`); the
+  # scrutinee's own index is a DIFFERENT opaque global (`g`). Neither side is a
+  # de Bruijn variable (so unify_one's var-solving clauses never fire) and
+  # neither is `rigid_index?/1` (a bare `{:global, _}` is not in that predicate's
+  # clauses), so the pair is genuinely :undecided in BOTH Task 1 and Task 2 —
+  # it can never become :impossible. The branch is given a deliberately
+  # ill-typed body (`{:type, 0}`); a kernel that wrongly discharged this branch,
+  # or wrongly fabricated a binding from it, would return :ok. The correct,
+  # conservative kernel does not discharge it, checks the body against the
+  # constant motive's `Dec` requirement, and rejects it.
+  test "Test 5b: an undecidable index does not skip the body check" do
+    env =
+      base_env()
+      |> Inductive.declare(Inductive.family(:Stray, [], [{:n, @dec}], 0),
+           [Inductive.ctor(:mkStray, [{:p, @dec}], [{:global, :h}])])
+      |> Env.add_def(:g, @dec, {:ctor, :Causal, []})
+    stray_g = {:data, :Stray, [], [{:global, :g}]}
+    motive = {:lam, @dec, {:lam, {:data, :Stray, [], [{:var, 0}]}, @dec}}
+    def_type = {:pi, stray_g, @dec}                    # Π(s: Stray(global g)). Dec
+    body = {:lam, stray_g, {:case, {:var, 0}, motive, [{:mkStray, 1, {:type, 0}}]}}
+    env = Env.add_def(env, :probe, def_type, body)
+    assert {:error, :branch_type} = Kernel.check_def(env, :probe)
   end
 
   # Test 7 — Regression: the legit Box/Dec matches (mirrors case_typing_test) still
@@ -204,7 +232,7 @@ end
 - [ ] **Step 4: Run the kernel tests, characterize** (against the unmodified kernel)
 
 Run: `mix test test/cure/core/case_soundness_index_test.exs -v`
-Expected: **Test 1 FAILS** (`check_def` returns `{:error, :branch_type}` — the dropped `n := Causal`). **Tests 2, 4, 5b, 7 PASS** (they characterize behavior that already holds — 2 = under-refining kernel can't fabricate a false equation; 4/5b/7 = legitimate matches already check). If any of 2/4/5b/7 is unexpectedly RED, STOP and investigate — it means the pre-fix kernel is already less sound/complete than assumed (a finding, not something to silence). If a construction is malformed (a `check_def` crash rather than `{:error, _}`), fix the FIXTURE (de Bruijn indexing) until it characterizes cleanly — these four are the net, not the target.
+Expected: **Test 1 FAILS** (`check_def` returns `{:error, :branch_type}` — the dropped `n := Causal`). **Tests 2, 4, 5b, 7 PASS** — but "PASS" means each test's OWN assertion already holds today, not that every test accepts a program: 2 asserts `{:error, _}` (the under-refining kernel can only drop equations, so it already can't wrongly accept a body that needs a false `n := Dcoupled`); 4 and 7 assert `:ok` (legitimate bare-ctor-arg-var matches already check); 5b asserts `{:error, :branch_type}` (an already-undecidable index pairing already falls through to a normal, rejecting body check — not because anything is refined, but because nothing is wrongly discharged or wrongly bound either). If any of 2/4/5b/7 is unexpectedly RED, STOP and investigate — it means the pre-fix kernel is already less sound/complete than assumed (a finding, not something to silence). If a construction is malformed (a `check_def` crash rather than `{:error, _}`), fix the FIXTURE (de Bruijn indexing) until it characterizes cleanly — these four are the net, not the target.
 
 > Note for Step 4: verify each fixture's de Bruijn indices by running; the `@ix0/@ix1/@ix2` depths and the `{:var, k}` body references are the fiddly part. Tests 2/4/5b/7 must be genuinely green pre-fix; Test 1 genuinely red. Do not proceed until this split is confirmed.
 
@@ -357,7 +385,13 @@ Expected: **Test 1 FAILS** (`check_def` returns `{:error, :branch_type}` — the
 Run: `mix test test/cure/core/case_soundness_index_test.exs test/antigen/assays/indexed_test.exs -v`
 Expected: ALL PASS — Test 1 now green (the `n := Causal` refinement applies), the flipped 4.3 assertion green, Tests 2/4/5b/7 still green.
 
-- [ ] **Step 8: Seed the now-passing 4.3 challenge.** In `test/antigen/indexed_seed_test.exs`, add `Indexed.refinement(:well_typed)` to the `@seed_candidates` list (it now replays `:ok`, so the `run(c) == :ok` filter will bank it). Update the accompanying comment to note the incompleteness is closed.
+- [ ] **Step 8: Seed the now-passing 4.3 challenge.** In `test/antigen/indexed_seed_test.exs`, add `Indexed.refinement(:well_typed)` to the `@seed_candidates` list (it now replays `:ok`, so the `run(c) == :ok` filter will bank it). Replace the comment above `@seed_candidates` (currently: `# Known-good-behavior seeds: every OTHER indexed/case challenge the kernel` / `# currently handles correctly. refinement(:well_typed) is intentionally absent` / `# — it exposes a documented incompleteness (wrongly rejected), so it does not` / `# replay :ok and must not be banked as a "known-good" seed.`) with:
+```elixir
+  # Known-good-behavior seeds: every indexed/case challenge the kernel handles
+  # correctly. `refinement(:well_typed)` is now included — the 4.3 incompleteness
+  # (a dropped ground result index) is closed by unify_indices/4, so it replays
+  # :ok and is a legitimate known-good seed.
+```
 
 - [ ] **Step 9: Run the seeding test alone** (writes seeds), then confirm git shows only `seeds.sexp` grew:
 
@@ -420,31 +454,40 @@ seeds the challenge. Impossible-branch discharge follows in the next commit."
     assert {:error, :branch_type} = Kernel.check_def(env, :probe)
   end
 
-  # Test 5a — Clash half (§5.2 "only" direction): a definite rigid head clash
-  # yields discharge (covered by Test 3); assert here that a NON-clashing but
-  # different-arity/undecidable pairing does NOT discharge (paired with 5b).
-  # (5a's clash assertion IS Test 3; this states the boundary explicitly.)
-  test "Test 5a: distinct rigid ground indices are a clash (branch discharged)" do
-    # Foo(a:Dec, b:Dec) with mk:(p:Dec)->Foo(p,p); scrutinee Foo(Causal, Dcoupled).
+  # Test 5a — Clash half (§5.2 "only" direction), DIRECT positional clash: a
+  # definite rigid head clash between a ground ctor-result-index term and a
+  # ground scrutinee index discharges the branch, WITHOUT going through
+  # bind_index's same-key merge path (that path is Test 6, a DIFFERENT code
+  # route: unify_one's own catch-all fires here, not a same-key conflict).
+  # Foo(a:Dec, b:Dec) with mk2:(y:Dec)->Foo(Causal, y) — position `a` is a
+  # HARDCODED ground index (Causal), position `b` is the ctor's own arg y (no
+  # shared key with `a`). Scrutinee Foo(Dcoupled, Dcoupled): position `a`
+  # clashes directly (Causal vs Dcoupled, two distinct rigid ground terms, no
+  # variable involved on either side) — verifying clash-detection also works
+  # positionally within a multi-index family, complementing Test 3's
+  # single-index Ix clash.
+  test "Test 5a: a direct positional clash (no shared key) discharges the branch" do
     env =
       base_env()
       |> Inductive.declare(Inductive.family(:Foo, [], [{:a, @dec}, {:b, @dec}], 0),
-           [Inductive.ctor(:mk, [{:p, @dec}], [{:var, 0}, {:var, 0}])])
-    foo_cd = {:data, :Foo, [], [{:ctor, :Causal, []}, {:ctor, :Dcoupled, []}]}
+           [Inductive.ctor(:mk2, [{:y, @dec}], [{:ctor, :Causal, []}, {:var, 0}])])
+    foo_dd = {:data, :Foo, [], [{:ctor, :Dcoupled, []}, {:ctor, :Dcoupled, []}]}
     motive = {:lam, @dec, {:lam, @dec, {:lam, {:data, :Foo, [], [{:var, 1}, {:var, 0}]}, @dec}}}
-    def_type = {:pi, foo_cd, @dec}
-    body = {:lam, foo_cd, {:case, {:var, 0}, motive, [{:mk, 1, {:type, 0}}]}}
+    def_type = {:pi, foo_dd, @dec}
+    body = {:lam, foo_dd, {:case, {:var, 0}, motive, [{:mk2, 1, {:type, 0}}]}}
     env = Env.add_def(env, :probe, def_type, body)
-    assert :ok == Kernel.check_def(env, :probe)   # mk can't build Foo(Causal,Dcoupled) ⇒ discharged
+    assert :ok == Kernel.check_def(env, :probe)   # mk2 can only build Foo(Causal,_) ⇒ discharged
   end
 
   # Test 6 — Merge consistency (§5.5): mk:(p:Dec)->Foo(p,p) matched against
   # Foo(Causal, Dcoupled) gives p two candidate bindings (Causal, Dcoupled) that
   # are not equal ⇒ :impossible (discharge), NOT a silently-overwritten unsound
-  # subst. (Structurally identical to 5a; this test asserts the SHARED-KEY path
-  # specifically by giving the branch a body that is ill-typed under BOTH candidate
-  # refinements, so a silent-overwrite kernel would reject and only a correct
-  # merge-conflict→impossible kernel accepts.)
+  # subst. Unlike Test 5a (a DIRECT positional clash via unify_one's own
+  # catch-all, no shared key), this construction specifically routes through
+  # bind_index's SAME-KEY conflict path (both index positions solve the one
+  # telescope var `p`), by giving the branch a body that is ill-typed under BOTH
+  # candidate refinements, so a silent-overwrite kernel would reject and only a
+  # correct merge-conflict→impossible kernel accepts.
   test "Test 6: conflicting shared-key bindings yield impossible, not a silent overwrite" do
     env =
       base_env()
