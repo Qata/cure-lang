@@ -53,4 +53,17 @@ defmodule Antigen.Assays.IndexedTest do
     # this replays {:wrongly_accepted, _} — the antibody goes red.
     assert :ok == A.run(G.discharge(:ill_typed))
   end
+
+  test "4.6 injectivity: an equation solved by descending through MkWr is accepted" do
+    # Result index MkWr(Causal) vs scrutinee index MkWr(n) unifies only by
+    # descending through the shared MkWr head (injectivity) to solve n := Causal.
+    assert :ok == A.run(G.injectivity(:well_typed))
+  end
+
+  test "4.6 SOUNDNESS: injectivity must not fabricate an unentailed equation" do
+    # The branch can only ever derive n := Causal; a body demanding IW(MkWr Dcoupled)
+    # must be rejected. If injectivity ever produced n := Dcoupled (or dropped the
+    # descent and mis-refined), this replays {:wrongly_accepted, _} — antibody red.
+    assert :ok == A.run(G.injectivity(:ill_typed))
+  end
 end

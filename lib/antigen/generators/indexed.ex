@@ -9,6 +9,7 @@ defmodule Antigen.Generators.Indexed do
   alias Cure.Core.{Env, Inductive}
 
   @dec {:data, :Dec, [], []}
+  @wr {:data, :Wr, [], []}
 
   # -- shared families --------------------------------------------------------
   defp dec_family, do: {Inductive.family(:Dec, [], [], 0),
@@ -153,6 +154,46 @@ defmodule Antigen.Generators.Indexed do
     body = {:lam, ix_causal, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
     challenge(:ill_typed, [dec_family(), ix_family()], :discharge, def_type, body,
       "ill-typed: wrap branch REACHABLE (scrutinee Ix Causal), {:type,0} body must be rejected")
+  end
+
+  # -- 4.6 constructor injectivity (spine descent) ----------------------------
+  # Wr = MkWr(Dec): a unary wrapper, so an index can be constructor-headed WITH an
+  # argument. IW(w:Wr) with iw:(p:Dec)->IW(MkWr Causal): the result index
+  # MkWr(Causal) unifies with a scrutinee index MkWr(n) ONLY by descending through
+  # the shared MkWr head (injectivity → unify_spine) to solve n := Causal. Without
+  # injectivity the pair is :undecided and the equation is dropped.
+  defp wr_family, do: {Inductive.family(:Wr, [], [], 0), [Inductive.ctor(:MkWr, [{:d, @dec}], [])]}
+
+  defp iw_family,
+    do: {Inductive.family(:IW, [], [{:w, @wr}], 0),
+         [Inductive.ctor(:iw, [{:p, @dec}], [{:ctor, :MkWr, [{:ctor, :Causal, []}]}])]}
+
+  # IW indexed by MkWr(var k).
+  defp iw_mk(k), do: {:data, :IW, [], [{:ctor, :MkWr, [{:var, k}]}]}
+
+  @doc """
+  Constructor-injectivity obligation. `:well_typed` reuses an outer hypothesis
+  `h : IW(MkWr n)` as `IW(MkWr Causal)` inside the `iw` branch — sound only
+  because injectivity descends through `MkWr` to solve `n := Causal`. `:ill_typed`
+  demands `IW(MkWr Dcoupled)` in the branch, an equation the match never
+  entails (injectivity yields only `n := Causal`), so it must be rejected.
+  """
+  @spec injectivity(:well_typed | :ill_typed) :: Challenge.t()
+  def injectivity(:well_typed) do
+    def_type = {:pi, @dec, {:pi, iw_mk(0), {:pi, iw_mk(1), iw_mk(2)}}}
+    motive = {:lam, @wr, {:lam, {:data, :IW, [], [{:var, 0}]}, {:data, :IW, [], [{:var, 1}]}}}
+    body = {:lam, @dec, {:lam, iw_mk(0), {:lam, iw_mk(1), {:case, {:var, 0}, motive, [{:iw, 1, {:var, 2}}]}}}}
+    challenge(:well_typed, [dec_family(), wr_family(), iw_family()], :inject, def_type, body,
+      "n := Causal solved by descending through MkWr (injectivity); reuse h:IW(MkWr n) as IW(MkWr Causal)")
+  end
+
+  def injectivity(:ill_typed) do
+    iw_dcoupled = {:data, :IW, [], [{:ctor, :MkWr, [{:ctor, :Dcoupled, []}]}]}
+    def_type = {:pi, @dec, {:pi, iw_mk(0), {:pi, iw_mk(1), iw_dcoupled}}}
+    motive = {:lam, @wr, {:lam, {:data, :IW, [], [{:var, 0}]}, iw_dcoupled}}
+    body = {:lam, @dec, {:lam, iw_mk(0), {:lam, iw_mk(1), {:case, {:var, 0}, motive, [{:iw, 1, {:var, 2}}]}}}}
+    challenge(:ill_typed, [dec_family(), wr_family(), iw_family()], :inject, def_type, body,
+      "ill-typed: injectivity yields only n:=Causal; body needs IW(MkWr Dcoupled) — must be rejected")
   end
 
   defp challenge(label, families, name, def_type, def_body, note) do

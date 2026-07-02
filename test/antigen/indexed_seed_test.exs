@@ -19,7 +19,15 @@ defmodule Antigen.IndexedSeedTest do
   # discharge(:ill_typed): a REACHABLE wrap branch with an ill-typed body. The
   # kernel must reject it; if impossible-branch discharge ever over-fires on a
   # live branch it would be {:wrongly_accepted, _} — a soundness regression.
-  @antibodies [Indexed.branch_family(:ill_typed), Indexed.discharge(:ill_typed)]
+  # injectivity(:ill_typed): a branch demanding an equation the match never
+  # entails (IW(MkWr Dcoupled) when injectivity can only give n := Causal). The
+  # kernel must reject it; if injectivity ever fabricates a false equation it
+  # would be {:wrongly_accepted, _} — a soundness regression.
+  @antibodies [
+    Indexed.branch_family(:ill_typed),
+    Indexed.discharge(:ill_typed),
+    Indexed.injectivity(:ill_typed)
+  ]
 
   # Known-good-behavior seeds: every indexed/case challenge the kernel handles
   # correctly. `refinement(:well_typed)` is now included — the 4.3 incompleteness
@@ -33,7 +41,8 @@ defmodule Antigen.IndexedSeedTest do
     Indexed.refinement(:ill_typed),
     Indexed.motive_wf(:well_typed),
     Indexed.motive_wf(:ill_typed),
-    Indexed.discharge(:well_typed)
+    Indexed.discharge(:well_typed),
+    Indexed.injectivity(:well_typed)
   ]
 
   test "indexed/case antibodies + seeds are banked and every one replays :ok" do

@@ -34,8 +34,9 @@ defmodule Antigen.Challenge do
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
     :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
-    :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge,
+    :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge, :inject,
     :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
+    :Wr, :MkWr, :IW, :iw, :w,
     # rewrite/eq vertical: kind, def-names, motive family name
     :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P
   ]
