@@ -147,9 +147,9 @@ defmodule Cure.Elab.Elaborator do
          a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
          b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
          normalized_expected = Kernel.normalize(ctx, expected_core),
-         {:ok, proof, motive, body_expected} <- rewrite_plan(proof_term, ty, a, b, normalized_expected),
+         {:ok, build, body_expected} <- rewrite_plan(ctx, proof_term, ty, a, b, normalized_expected),
          {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
-         term = {:rewrite, proof, motive, body_term},
+         term = build.(body_term),
          :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
       {:ok, term}
     end
@@ -168,23 +168,113 @@ defmodule Cure.Elab.Elaborator do
   defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
   defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
 
+  # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
+  # goal `expected`. Returns `{:ok, build, body_expected}`: `body_expected` is
+  # the goal the surface body `t` must satisfy, and `build.(body_core)` assembles
+  # the full Core `:rewrite` term(s) around the checked body. (A builder — rather
+  # than a fixed `proof`/`motive` pair — lets the bridge case below nest an outer
+  # rewrite around the original one.)
+  #
   # Core rewrite transports M[a] -> M[b]. Idris-style source `rewrite p in t`
   # checks `t` under the rewritten goal and returns the original goal, so when
   # the expected type contains the proof's left endpoint we synthesize symmetry.
-  defp rewrite_plan(proof, ty, a, b, expected) do
+  defp rewrite_plan(ctx, proof, ty, a, b, expected) do
     cond do
       contains_term?(expected, a) ->
         with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
              {:ok, motive} <- motive_for(expected, a, ty) do
-          {:ok, sym_proof, motive, replace_term(expected, a, b)}
+          {:ok, fn body -> {:rewrite, sym_proof, motive, body} end, replace_term(expected, a, b)}
         end
+
+      # Definitional-but-not-syntactic occurrence (P0, rw07): `a` is absent from
+      # the goal syntactically, but a δ-reducible sub-occurrence of the goal
+      # normalizes at top level to a form that *exposes* `a`. Bridge it — see
+      # `bridge_step/7` — instead of falling through to the (wrong) `b` branch.
+      bridge = find_bridge(ctx, expected, a) ->
+        bridge_step(ctx, proof, ty, a, b, expected, bridge)
 
       contains_term?(expected, b) ->
         {:ok, motive} = motive_for(expected, b, ty)
-        {:ok, proof, motive, replace_term(expected, b, a)}
+        {:ok, fn body -> {:rewrite, proof, motive, body} end, replace_term(expected, b, a)}
 
       true ->
         {:error, {:rewrite_no_match, a, b, expected}}
+    end
+  end
+
+  # Bridge-lemma rewrite step (P0 rw07, elaborator-only — no TCB change).
+  #
+  # The trusted normalizer preserves stuck `case`s and never δ-reduces the
+  # scrutinee, so a goal like `Eq(Nat, plus(plus(Z,n),Z), n)` freezes with the
+  # sub-term `plus(Z,n)` unreduced in scrutinee position; the proof's endpoint
+  # `plus(n,Z)` is therefore only *definitionally* (not syntactically) present
+  # and the syntactic occurrence match misses. The kernel cannot be asked to
+  # decide that conversion (its scrutinee stays stuck), but the *sub-occurrence*
+  # `plus(Z,n)` reduces to `n` at TOP level, a conversion the kernel does decide.
+  #
+  # We turn that top-level definitional step into an explicit propositional
+  # rewrite. The OUTER rewrite transports along an inline refl-bodied bridge
+  # proof of `Eq(ty_s, s', s)`; its residual goal is `expected` with `s` reduced
+  # to `s'`, which now contains `a` syntactically — so the ORIGINAL rewrite
+  # (recursively planned at that residual, the already-working `a`-branch) is
+  # nested as its body. Every conversion the kernel then sees is either
+  # top-level-decidable or between structurally identical terms.
+  #
+  # Scope (honest): this closes the reducible-inner-occurrence pattern rw07
+  # exercises — a single sub-occurrence whose top-level normal form exposes the
+  # proof endpoint. It does NOT implement fully general up-to-conversion
+  # occurrence matching.
+  defp find_bridge(ctx, expected, a) do
+    expected
+    |> reducible_subterms()
+    |> Enum.find_value(fn s ->
+      s_nf = Kernel.normalize(ctx, s)
+      if s_nf != s and contains_term?(replace_term(expected, s, s_nf), a) do
+        {s, s_nf}
+      end
+    end)
+  end
+
+  defp bridge_step(ctx, proof, ty, a, b, expected, {s, s_nf}) do
+    with {:ok, ty_s} <- infer_type_term(ctx, s),
+         residual = replace_term(expected, s, s_nf),
+         {:ok, inner_build, body_expected} <- rewrite_plan(ctx, proof, ty, a, b, residual) do
+      # Inline bridge proof `Eq(ty_s, s', s)`: the outer `rewrite` (its proof)
+      # infers this asymmetric equality via a constant motive `λ_. Eq(ty_s, s', s)`
+      # whose `refl s'` premise is *checked* against `Eq(ty_s, s', s)` — the
+      # top-level conversion `s' ≡ s` the kernel decides. (A bare `refl` in proof
+      # position would only *infer* the symmetric `Eq(ty_s, s', s')`.)
+      const_motive =
+        {:lam, ty_s,
+         {:eq, Subst.shift(ty_s, 1, 0), Subst.shift(s_nf, 1, 0), Subst.shift(s, 1, 0)}}
+
+      bridge_proof = {:rewrite, {:refl, s_nf}, const_motive, {:refl, s_nf}}
+      {:ok, outer_motive} = motive_for(expected, s, ty_s)
+
+      build = fn body ->
+        {:rewrite, bridge_proof, outer_motive, inner_build.(body)}
+      end
+
+      {:ok, build, body_expected}
+    end
+  end
+
+  # Global-headed applications occurring in `term` (outermost-first): the only
+  # sub-terms the trusted normalizer may δ-reduce, hence the bridge candidates.
+  defp reducible_subterms(term) do
+    here = if global_app?(term), do: [term], else: []
+    here ++ Enum.flat_map(children(term), &reducible_subterms/1)
+  end
+
+  defp global_app?({:app, f, _}), do: global_head?(f)
+  defp global_app?(_), do: false
+  defp global_head?({:global, _}), do: true
+  defp global_head?({:app, f, _}), do: global_head?(f)
+  defp global_head?(_), do: false
+
+  defp infer_type_term(ctx, term) do
+    with {:ok, ty_value} <- Kernel.infer(ctx, term) do
+      {:ok, Quote.reify(ty_value, Context.length(ctx))}
     end
   end
 

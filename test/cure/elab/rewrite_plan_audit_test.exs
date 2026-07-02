@@ -74,6 +74,33 @@ defmodule Cure.Elab.RewritePlanAuditTest do
     assert {:ok, _env} = Program.elaborate(src)
   end
 
+  # Candidate 2 — bridge-lemma rewrite step (rw07, red-green). The proof
+  # `plus_zero_right(n) : Eq(Nat, plus(n, Z), n)` has left endpoint `plus(n, Z)`,
+  # which does NOT appear syntactically in the goal
+  # `Eq(Nat, plus(plus(Z, n), Z), n)`: the trusted normalizer freezes the goal's
+  # LHS as a stuck `case` whose scrutinee is the UNREDUCED `plus(Z, n)` (never
+  # δ-reduced to `n`), so the syntactic occurrence match misses. Idris matches up
+  # to conversion and accepts.
+  #
+  # Fix (elaborator only, no TCB change): the reducible sub-occurrence `plus(Z, n)`
+  # normalizes to `n` at top level, and replacing it by `n` in the goal exposes
+  # `plus(n, Z)`. Synthesize an inline refl-bodied bridge proof
+  # `Eq(Nat, n, plus(Z, n))` (checked, not the blocked scrutinee conversion) and
+  # emit it as an OUTER rewrite wrapping the original, whose residual goal
+  # `Eq(Nat, plus(n, Z), n)` is exactly the rw01 pattern. Every conversion the
+  # kernel then sees is either top-level-decidable or structurally identical.
+  test "bridge-lemma rewrite closes a definitional (non-syntactic) occurrence (rw07)" do
+    src =
+      "mod M\n  #{@nat}\n#{@plus}\n" <>
+        "  fn plus_zero_right(n: Nat) -> Eq(Nat, plus(n, Z), n) = match n\n" <>
+        "    Z() -> refl(Z)\n" <>
+        "    S(k) -> rewrite plus_zero_right(k) in refl(S(k))\n" <>
+        "  fn conv_occurrence(n: Nat) -> Eq(Nat, plus(plus(Z, n), Z), n) = rewrite plus_zero_right(n) in refl(n)\n" <>
+        "end\n"
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
   defp error_tag(err) when is_atom(err), do: err
   defp error_tag(err) when is_tuple(err), do: elem(err, 0)
 end
