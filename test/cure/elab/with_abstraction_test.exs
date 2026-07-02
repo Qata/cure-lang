@@ -81,6 +81,47 @@ defmodule Cure.Elab.WithAbstractionTest do
     assert {:error, _} = Program.elaborate(src)
   end
 
+  # Sibling / other-argument refinement (transport encoding): `with g(n)` refines
+  # the in-scope parameter `pf : SNat(g(n))` per branch by TRANSPORTING it along
+  # the synthesized scrutinee equation `Eq(Nat, g(n), pat)` (a `:rewrite` term),
+  # so `consume` — which demands `SNat(m)` at the branch constructor — accepts it.
+  @sibling_preamble """
+  type Nat = Z | S(Nat)
+  type SNat indices (m: Nat)
+    szero : SNat(Z)
+    ssuc : SNat(m) -> SNat(S(m))
+  fn g(x: Nat) -> Nat = match x
+    Z() -> Z()
+    S(k) -> S(k)
+  fn consume(m: Nat, s: SNat(m)) -> Nat = m
+  """
+
+  test "(wi05) `with g(n)` refines the sibling param pf : SNat(g(n)) per branch" do
+    src =
+      @sibling_preamble <>
+        """
+        fn foo(n: Nat, pf: SNat(g(n))) -> Nat =
+          with g(n)
+            Z() -> consume(Z(), pf)
+            S(k) -> consume(S(k), pf)
+        """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "(differential) plain `match g(n)` does NOT refine the sibling — REJECTED" do
+    src =
+      @sibling_preamble <>
+        """
+        fn foo(n: Nat, pf: SNat(g(n))) -> Nat =
+          match g(n)
+            Z() -> consume(Z(), pf)
+            S(k) -> consume(S(k), pf)
+        """
+
+    assert {:error, _} = Program.elaborate(src)
+  end
+
   test "(differential) plain `match g(n)` for the SAME goal is REJECTED" do
     # `match` cannot refine the goal by the scrutinee's value: `g(n)` is not an
     # index variable, so the motive stays the constant `SNat(g(n))` and each

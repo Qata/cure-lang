@@ -354,6 +354,54 @@ defmodule Cure.Elab.Elaborator do
   defp children(term) when is_list(term), do: term
   defp children(_term), do: []
 
+  # Free de Bruijn indices in `term`, counted from `depth` binders in (binder-
+  # aware for Π/λ/Σ/case, mirroring abstract_term). Used to check convoy sibling
+  # independence.
+  defp free_indices({:var, i}, depth) when i >= depth, do: MapSet.new([i - depth])
+  defp free_indices({:var, _}, _depth), do: MapSet.new()
+
+  defp free_indices({:pi, d, c}, depth),
+    do: MapSet.union(free_indices(d, depth), free_indices(c, depth + 1))
+
+  defp free_indices({:lam, d, b}, depth),
+    do: MapSet.union(free_indices(d, depth), free_indices(b, depth + 1))
+
+  defp free_indices({:sigma, a, b}, depth),
+    do: MapSet.union(free_indices(a, depth), free_indices(b, depth + 1))
+
+  defp free_indices({:case, s, m, brs}, depth) do
+    base = MapSet.union(free_indices(s, depth), free_indices(m, depth))
+    Enum.reduce(brs, base, fn {_c, ar, b}, acc -> MapSet.union(acc, free_indices(b, depth + ar)) end)
+  end
+
+  defp free_indices(term, depth) when is_tuple(term),
+    do: term |> children() |> Enum.reduce(MapSet.new(), &MapSet.union(&2, free_indices(&1, depth)))
+
+  defp free_indices(term, depth) when is_list(term),
+    do: Enum.reduce(term, MapSet.new(), &MapSet.union(&2, free_indices(&1, depth)))
+
+  defp free_indices(_term, _depth), do: MapSet.new()
+
+  # `Quote.reify` collapses a `{:vdata, name, params ++ indices}` value into
+  # `{:data, name, all_args, []}` (the value rep does not track the param/index
+  # split). Restore the split for every data application in `term` using the
+  # family's declared param count, so the kernel's `:data` rule — which checks
+  # params and indices against separate telescopes — accepts reified sibling and
+  # transport types.
+  defp resplit_data({:data, name, params, indices}, env) do
+    combined = Enum.map(params ++ indices, &resplit_data(&1, env))
+    {ps, is} = Enum.split(combined, Inductive.param_count(env, name))
+    {:data, name, ps, is}
+  end
+
+  defp resplit_data(term, env) when is_tuple(term),
+    do: rebuild(term, Enum.map(children(term), &resplit_data(&1, env)))
+
+  defp resplit_data(term, env) when is_list(term),
+    do: Enum.map(term, &resplit_data(&1, env))
+
+  defp resplit_data(term, _env), do: term
+
   defp rebuild(term, children) when is_tuple(term) do
     [elem(term, 0) | children] |> List.to_tuple()
   end
@@ -430,18 +478,29 @@ defmodule Cure.Elab.Elaborator do
   branch's constructor value — goal refinement that plain `match` cannot do (its
   `build_motive` only generalizes type INDICES).
 
-  Capability B — `proof <name>`: the motive gains an Eq-arrow so each branch
-  receives `<name> : Eq(T, e, pat)` (the scrutinee equation), and the whole
-  `:case` is applied to `refl(e)` to discharge the arrow at the scrutinee's own
-  value. Encoding (sound; reuses the kernel's `Eq`/`refl`, no TCB):
+  Capabilities A (goal refinement), B (`proof <name>`), and sibling/other-
+  argument refinement share ONE Eq-arrow mechanism. Let `e : T`, goal `G`, and
+  the SIBLINGS be the in-scope parameters `h_j : H_j` whose type mentions `e`.
+  When either a proof clause or a sibling is present, the motive carries the
+  scrutinee equation:
 
       motive = λ(w:T). Eq(T, e, w) -> G[e↦w]
-      branch = λ(pf : Eq(T, e, pat)). body : G[e↦pat]
       term   = (case e of … branches …) (refl e)   : G
 
-  Restricted to a non-indexed scrutinee family (capability A is value, not
-  index, refinement); an indexed scrutinee is deferred (`match` handles index
-  refinement). Sibling/other-argument refinement is deferred to a later step.
+  and each branch receives `prf : Eq(T, e, pat)` (the user's proof name, or an
+  internal one). Siblings are refined **by transport in the branch body**, NOT
+  by generalizing their type into the motive (a `Π(SNat(w))…` motive domain
+  trips `Quote.reify`'s `{:vdata}` param/index collapse — a real kernel gap,
+  reach-pinned separately). For each sibling:
+
+      h_j' = rewrite prf (λx. H_j[e↦x]) h_j   : H_j[e↦pat]
+
+  bound in the arm body via `(λ h_j'. body) h_j'`, so the ORIGINAL name resolves
+  to the refined `h_j'`. The indexed-data type only ever appears as a `:rewrite`
+  motive RESULT (which the kernel `Eval.apply`s, never reifies) — sound, no TCB.
+  Capability A is the no-equation special case (bare value-abstracting motive).
+  Restricted to a non-indexed scrutinee family; this slice generalizes only
+  siblings that form an independent set (see `collect_with_siblings`).
   """
   @spec elaborate_with(term(), [tuple()], String.t() | nil, term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
@@ -454,22 +513,38 @@ defmodule Cure.Elab.Elaborator do
           if family.indices == [] do
             pc = Inductive.param_count(env, dname)
             {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
-            scrut_type_term = Quote.reify(scrut_type, Context.length(ctx))
-            g_abs = abstract_term(result_type_term, scrut_term, 0)
-            motive = with_motive(proof_name, scrut_type_term, scrut_term, g_abs)
+            scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
 
-            with {:ok, branches} <-
-                   elaborate_with_branches(
-                     arms, names, ctx, env, dname, param_vals, motive, proof_name
-                   ) do
-              case_term = {:case, scrut_term, motive, branches}
+            with {:ok, siblings} <- collect_with_siblings(scrut_term, names, ctx, env) do
+              g_abs = abstract_term(result_type_term, scrut_term, 0)
+              # An Eq-arrow is needed when the user asked for a proof OR when a
+              # sibling must be transported (both consume `prf : Eq(T,e,pat)`).
+              need_eq = proof_name != nil or siblings != []
 
-              # With a proof clause the case's result type is `Eq(T,e,e) -> G`;
-              # discharge it with `refl(e)` to land back at the goal `G`.
-              result =
-                if proof_name, do: {:app, case_term, {:refl, scrut_term}}, else: case_term
+              motive =
+                if need_eq,
+                  do: eq_arrow_motive(scrut_type_term, scrut_term, g_abs),
+                  else: {:lam, scrut_type_term, g_abs}
 
-              {:ok, result}
+              cfg = %{
+                names: names,
+                ctx: ctx,
+                env: env,
+                dname: dname,
+                param_vals: param_vals,
+                motive: motive,
+                need_eq: need_eq,
+                siblings: siblings,
+                prf_name: proof_name || "$with_prf",
+                scrut_term: scrut_term,
+                scrut_type_term: scrut_type_term
+              }
+
+              with {:ok, branches} <- elaborate_with_branches(arms, cfg) do
+                case_term = {:case, scrut_term, motive, branches}
+                result = if need_eq, do: {:app, case_term, {:refl, scrut_term}}, else: case_term
+                {:ok, result}
+              end
             end
           else
             {:error, {:with_indexed_scrutinee_unsupported, dname}}
@@ -481,27 +556,66 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Capability A: value-abstracting motive `λ(w:T). G[e↦w]`.
-  defp with_motive(nil, scrut_type_term, _scrut_term, g_abs),
-    do: {:lam, scrut_type_term, g_abs}
-
-  # Capability B: Eq-arrow motive `λ(w:T). Eq(T, e, w) -> G[e↦w]`. Under the
-  # `w`-binder, `e`/`T` shift by +1; `G[e↦w]` (= g_abs, itself sitting under one
-  # binder) shifts by +1 more to clear the extra Eq-arrow (proof) binder.
-  defp with_motive(_proof, scrut_type_term, scrut_term, g_abs) do
+  # Eq-arrow motive `λ(w:T). Eq(T, e, w) -> G[e↦w]`. Under the `w`-binder, `e`/`T`
+  # shift by +1; `g_abs` (= `G[e↦w]`, already under one binder) shifts +1 more to
+  # clear the extra Eq-arrow (proof) binder.
+  defp eq_arrow_motive(scrut_type_term, scrut_term, g_abs) do
     eq_ty_w =
       {:eq, Subst.shift(scrut_type_term, 1, 0), Subst.shift(scrut_term, 1, 0), {:var, 0}}
 
     {:lam, scrut_type_term, {:pi, eq_ty_w, Subst.shift(g_abs, 1, 0)}}
   end
 
-  # Emit one Core branch per surface arm, checked against the motive applied to
-  # the arm's constructor value. Reuses partition_arms (same validation as
-  # match: own-family ctors, no duplicates) and the shared branch-body checker.
-  # A `-> impossible` arm becomes an `{:absurd}` branch; coverage (a reachable
-  # omitted constructor) is enforced by the kernel's check_coverage when the
-  # assembled `:case` is checked.
-  defp elaborate_with_branches(arms, names, ctx, env, dname, param_vals, motive, proof_name) do
+  # In-scope parameters whose (reified) type mentions the scrutinee term, in
+  # scope order (outermost binder first). STOPs (rather than mis-building) when a
+  # generalized sibling's type mentions another generalized sibling, or a kept
+  # parameter depends on a generalized one — this slice handles only an
+  # independent set.
+  defp collect_with_siblings(scrut_term, names, ctx, env) do
+    depth = Context.length(ctx)
+
+    gen =
+      names
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {name, i} ->
+        if is_binary(name) do
+          type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
+
+          if contains_term?(type_term, scrut_term),
+            do: [%{name: name, index: i, type_term: type_term}],
+            else: []
+        else
+          []
+        end
+      end)
+      |> Enum.sort_by(& &1.index, :desc)
+
+    gen_set = gen |> Enum.map(& &1.index) |> MapSet.new()
+
+    cond do
+      Enum.any?(gen, fn %{type_term: t, index: idx} ->
+        not MapSet.disjoint?(free_indices(t, 0), MapSet.delete(gen_set, idx))
+      end) ->
+        {:error, {:with_sibling_dependency_unsupported, :sibling_references_sibling}}
+
+      Enum.any?(0..(depth - 1)//1, fn i ->
+        not MapSet.member?(gen_set, i) and
+          not MapSet.disjoint?(
+            free_indices(resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env), 0),
+            gen_set
+          )
+      end) ->
+        {:error, {:with_sibling_dependency_unsupported, :kept_references_sibling}}
+
+      true ->
+        {:ok, gen}
+    end
+  end
+
+  # Emit one Core branch per surface arm. Reuses partition_arms (same validation
+  # as match: own-family ctors, no duplicates). A `-> impossible` arm becomes an
+  # `{:absurd}` branch; coverage is enforced by the kernel's check_coverage.
+  defp elaborate_with_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
     with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
@@ -510,9 +624,7 @@ defmodule Cure.Elab.Elaborator do
           {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
 
         {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->
-          case elaborate_with_branch(
-                 cname, pattern, body_expr, names, ctx, env, param_vals, motive, proof_name
-               ) do
+          case elaborate_with_branch(cname, pattern, body_expr, cfg) do
             {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
             {:error, _} = err -> {:halt, err}
           end
@@ -520,40 +632,85 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp elaborate_with_branch(cname, pattern, body_expr, names, ctx, env, param_vals, motive, proof_name) do
+  defp elaborate_with_branch(cname, pattern, body_expr, cfg) do
+    %{
+      names: names,
+      ctx: ctx,
+      env: env,
+      param_vals: param_vals,
+      motive: motive,
+      need_eq: need_eq
+    } = cfg
+
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names = branch_scope(quantities, pattern_vars) ++ names
-    branch_ctx = extend_context(ctx, telescope, param_vals)
+    branch_names0 = branch_scope(quantities, pattern_vars) ++ names
+    branch_ctx0 = extend_context(ctx, telescope, param_vals)
 
-    # Motive (shifted under the ctor telescope) applied to this constructor's
-    # value, then normalized (β-reduces the application).
     ctor_term = branch_constructor_term(cname, arity)
     motive_shifted = Subst.shift(motive, arity, 0)
-    applied = Kernel.normalize(branch_ctx, {:app, motive_shifted, ctor_term})
+    applied = Kernel.normalize(branch_ctx0, {:app, motive_shifted, ctor_term})
 
-    case proof_name do
-      nil ->
-        with {:ok, body_term} <-
-               elaborate_branch_body(body_expr, applied, branch_names, branch_ctx, env) do
-          {:ok, {cname, arity, body_term}}
-        end
+    if need_eq do
+      elaborate_with_eq_branch(cname, arity, ctor_term, applied, branch_ctx0, branch_names0, body_expr, cfg)
+    else
+      with {:ok, body_term} <-
+             elaborate_branch_body(body_expr, applied, branch_names0, branch_ctx0, env) do
+        {:ok, {cname, arity, body_term}}
+      end
+    end
+  end
 
-      _ ->
-        # `applied` is the Pi `Eq(T,e,pat) -> G[e↦pat]`: bind the proof and
-        # check the arm body against the codomain in the extended context, then
-        # wrap it as the expected lambda.
-        {:pi, eq_dom_term, cod_term} = applied
-        eq_dom_value = Eval.eval(eq_dom_term, Context.env(branch_ctx))
-        proof_ctx = Context.extend(branch_ctx, eq_dom_value)
-        proof_names = [proof_name | branch_names]
-        cod_expected = Kernel.normalize(proof_ctx, cod_term)
+  # The Eq-arrow branch: bind `prf : Eq(T,e,pat)`, transport each `e`-mentioning
+  # sibling to its refined type, check the arm body under the refined names, and
+  # wrap as `λprf. (λh_1. … (λh_m. body) t_m …) t_1`.
+  defp elaborate_with_eq_branch(cname, arity, ctor_term, applied, branch_ctx0, branch_names0, body_expr, cfg) do
+    %{env: env, siblings: siblings, prf_name: prf_name,
+      scrut_term: scrut_term, scrut_type_term: scrut_type_term} = cfg
 
-        with {:ok, inner} <-
-               elaborate_branch_body(body_expr, cod_expected, proof_names, proof_ctx, env) do
-          {:ok, {cname, arity, {:lam, eq_dom_term, inner}}}
-        end
+    # `applied` = Π(prf : Eq(T,e,pat)). G[e↦pat]. Bind prf → the branch_ctx1 frame.
+    {:pi, eq_dom_term, cod_b1} = applied
+    eq_dom_value = Eval.eval(eq_dom_term, Context.env(branch_ctx0))
+    branch_ctx1 = Context.extend(branch_ctx0, eq_dom_value)
+    branch_names1 = [prf_name | branch_names0]
+
+    # Constants in the branch_ctx1 frame (ctx + ctor telescope + prf).
+    sc = arity + 1
+    e_b1 = Subst.shift(scrut_term, sc, 0)
+    t_b1 = Subst.shift(scrut_type_term, sc, 0)
+    pat_b1 = Subst.shift(ctor_term, 1, 0)
+
+    # Per-sibling transport (`prf = {:var,0}`; original `h_j` = {:var, idx+sc}).
+    sib_data =
+      Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
+        h_b1 = Subst.shift(h_ctx, sc, 0)
+        motive_j = {:lam, t_b1, abstract_term(h_b1, e_b1, 0)}
+        transport = {:rewrite, {:var, 0}, motive_j, {:var, idx + sc}}
+        %{name: sname, dom: replace_term(h_b1, e_b1, pat_b1), transport: transport}
+      end)
+
+    m = length(sib_data)
+
+    branch_ctx_full =
+      Enum.reduce(sib_data, branch_ctx1, fn %{dom: d}, c ->
+        Context.extend(c, Eval.eval(d, Context.env(branch_ctx1)))
+      end)
+
+    body_names = Enum.reduce(sib_data, branch_names1, fn %{name: s}, acc -> [s | acc] end)
+    cod_expected = Kernel.normalize(branch_ctx_full, Subst.shift(cod_b1, m, 0))
+
+    with {:ok, inner} <-
+           elaborate_branch_body(body_expr, cod_expected, body_names, branch_ctx_full, env) do
+      wrapped =
+        sib_data
+        |> Enum.with_index()
+        |> Enum.reverse()
+        |> Enum.reduce(inner, fn {%{dom: d, transport: t}, i}, acc ->
+          {:app, {:lam, Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
+        end)
+
+      {:ok, {cname, arity, {:lam, eq_dom_term, wrapped}}}
     end
   end
 
