@@ -34,7 +34,7 @@ faster and lands closer to Idris semantics than independent re-derivation.
   and architecturally entangled (no small-TCB split). A wholesale port would
   trade an audited TCB for an unaudited one. Ports land in the untrusted
   elaborator wherever possible; the two exceptions are scoped in §6 (P1) and
-  the roadmap's ④ (`{:absurd}` leaf).
+  the roadmap's ④ (`{:absurd}` leaf — since landed in `3b24829`).
 - **No QTT, no universe changes, no new capability domains** (roadmap §4).
 - This spec does not design the individual ports. Each cluster's spec does
   that; this spec fixes the shared machinery, the cluster boundaries, the
@@ -74,6 +74,20 @@ roadmap commit `dd76d22` and later).
    `agda/.../TypeChecking/With.hs`. All exist in the local clones the
    manifest points to; refreshing is a copy (P4 prerequisite, cheap to do in
    P0).
+6. **④ is landing on this branch, and it built P2/P3's seams.** The
+   `{:absurd}` discharged-branch leaf is in the kernel (`3b24829`), the
+   parser recognizes `-> impossible` (`d770aa1`), and the elaborator's
+   coverage/discharge pass is in the working tree: `elaborate_branches` now
+   iterates *every* declared constructor of the scrutinee's family, consults
+   `Cure.Core.Kernel.branch_unify/4` per constructor, discharges impossible
+   omitted/marked branches to `{:absurd}`, and rejects `missing_branch`,
+   `reachable_impossible`, `foreign_ctor`, and `duplicate_branch`. Two
+   consequences for this program: (a) that pass is the single-level
+   coverage baseline P2 generalizes rather than a green field; (b)
+   `constructor_pattern/1` now *returns* `{:error, {:unsupported_pattern,
+   shape}}` for non-constructor patterns — the precise rejection point P2
+   (nested patterns) and P3 (`_`, literals, as-patterns, dots) replace with
+   real handling. Ledger rows 2/8/16 flip as these pieces commit.
 
 Findings 2 and 3 generalize: **two of two ledger rows checked in depth were
 stale.** Hence design decision D5 (audit-first) below.
@@ -171,7 +185,8 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
   candidate deltas: Idris' distinct "rewriting did not change type" error,
   occurrence matching up to conversion vs. syntactic-on-normal-forms,
   behavior under binders — fix what's real, with a red test per fix per the
-  house TDD rule; (d) correct ledger rows #7 and #13 to reflect the tree.
+  house TDD rule; (d) correct ledger rows #7 and #13 to reflect the tree,
+  and flip rows 2/8/16 if ④'s pieces (finding 6) have committed by then.
 - **Gates:** oracle fixtures for the rewrite corpus banked; roadmap accurate;
   any fixes covered red-green.
 - **Why first:** calibrates the brief format and the oracle at near-zero port
@@ -207,10 +222,19 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
   path of `elaborator.ex` / `declarations.ex`. Kernel unchanged.
 - **Scope:** clause-matrix → nested kernel-`:case` compilation (defaults,
   specificity, dependency order of scrutinees), and coverage diagnostics over
-  nested patterns computed from the tree.
-- **Dependencies:** ④ merged (impossible clauses / discharge interact with
-  coverage); `TTImp/Elab/Case.idr` vendored (P0) for expression-level match
-  lifting.
+  nested patterns computed from the tree. **Baseline to generalize, not
+  bypass (finding 6):** ④'s `elaborate_branches` already does
+  all-declared-constructors enumeration with per-constructor
+  `Kernel.branch_unify/4` verdicts and `{:absurd}` discharge at a single
+  level. The tree compiler must apply that verdict/discharge logic at *every
+  split node* (this is exactly where the manifest marks Agda's `Coverage.hs`
+  primary), and ④'s error vocabulary (`missing_branch`,
+  `reachable_impossible`, `foreign_ctor`, `duplicate_branch`,
+  `unsupported_pattern`) is the diagnostics contract to preserve and extend
+  with nested-position paths.
+- **Dependencies:** ④ committed on this branch (its elaborator pass is
+  currently uncommitted working-tree state); `TTImp/Elab/Case.idr` vendored
+  (P0) for expression-level match lifting.
 - **Gates:** existing single-level match corpus unchanged (refactor safety);
   nested-pattern oracle corpus; Antigen `indexed/case` antibodies extended to
   nested splits.
@@ -226,7 +250,9 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
 - **Scope:** elaborate LHS patterns with metavariables; positions unification
   *solves* are forced (checked, not matched) — covering `_`, literals, and
   as-patterns in dependent positions (#4) as the degenerate cases; erase
-  forced arguments (#5).
+  forced arguments (#5). The surface entry point is ④'s
+  `constructor_pattern/1` rejection (`{:unsupported_pattern, shape}`,
+  finding 6) — P3 turns those rejected shapes into elaborated patterns.
 - **Dependencies:** P2 (patterns flow through the new lowering pass).
 - **Gates:** roadmap row 24's `forcing` vertical becomes real (a dot-pattern
   Antigen vertical); oracle corpus of forced-pattern programs.
@@ -295,7 +321,8 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
 
 ## 9. Sequencing
 
-**P0 → P1 → (④ merges) → P2 → P3 → P4 → P5**, interleaved with the roadmap's
+**P0 → P1 → (④ commits; already landing on this branch, finding 6) → P2 →
+P3 → P4 → P5**, interleaved with the roadmap's
 Antigen items per its §5 (A2–A4 are independent of this program; A8's term
 generator multiplies the value of every antibody the ports bank, so landing it
 early remains attractive). P1 no longer jumps the queue for soundness — the
