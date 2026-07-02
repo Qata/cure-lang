@@ -67,15 +67,50 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
-    # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
-    # left "unknown"): elaborate the callee expression, then apply the outer
-    # arguments to its (function-typed) result.
-    if callee = Keyword.get(meta, :callee) do
-      with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
-        check_app_args(head, head_type, args, names, ctx, env)
-      end
-    else
-      elaborate_named_call(meta, args, names, ctx, env)
+    cond do
+      # Record construction `Point{x: .., y: ..}` desugars to the positional
+      # constructor `Point(.., ..)` (fields ordered by the record's telescope).
+      Keyword.get(meta, :record) ->
+        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
+          elaborate_expr_typed(positional, names, ctx, env)
+        end
+
+      # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
+      # left "unknown"): elaborate the callee expression, then apply the outer
+      # arguments to its (function-typed) result.
+      callee = Keyword.get(meta, :callee) ->
+        with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
+          check_app_args(head, head_type, args, names, ctx, env)
+        end
+
+      true ->
+        elaborate_named_call(meta, args, names, ctx, env)
+    end
+  end
+
+  # Desugar record construction `Point{x: .., y: ..}` (a `record: true` call whose
+  # arguments are `field: value` pairs) into the positional constructor application
+  # `Point(.., ..)`, ordering the values by the record constructor's field telescope
+  # (the constructor's argument names ARE the field names). Missing or extra fields
+  # are rejected.
+  defp desugar_record_construction(meta, field_pairs, env) do
+    name = Keyword.fetch!(meta, :name)
+    atom = String.to_atom(name)
+
+    case Inductive.get_ctor(env, atom) do
+      nil ->
+        {:error, {:unknown_record, atom}}
+
+      ctor ->
+        order = Enum.map(ctor.args, fn {n, _t} -> n end)
+        provided = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
+
+        if map_size(provided) == length(order) and
+             Enum.all?(order, &Map.has_key?(provided, &1)) do
+          {:ok, {:function_call, [name: name], Enum.map(order, &Map.fetch!(provided, &1))}}
+        else
+          {:error, {:record_field_mismatch, atom}}
+        end
     end
   end
 
@@ -193,6 +228,11 @@ defmodule Cure.Elab.Elaborator do
     atom = String.to_atom(name)
 
     cond do
+      Keyword.get(meta, :record) ->
+        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
+          elaborate_expr_checked(positional, expected_core, names, ctx, env)
+        end
+
       name == "refl" and length(args) == 1 ->
         [arg] = args
 
@@ -2620,7 +2660,18 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr({:function_call, meta, args}, scope, env) do
+  def elaborate_expr({:function_call, meta, args}, scope, env)
+      when is_list(meta) do
+    if Keyword.get(meta, :record) do
+      with {:ok, positional} <- desugar_record_construction(meta, args, env) do
+        elaborate_expr(positional, scope, env)
+      end
+    else
+      elaborate_named_call_scoped(meta, args, scope, env)
+    end
+  end
+
+  defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
 

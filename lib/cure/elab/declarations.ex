@@ -85,9 +85,34 @@ defmodule Cure.Elab.Declarations do
             declare_parameterized(name, params, [], sigs, env)
         end
 
+      :struct ->
+        # A record `rec Point\n  x: T\n  y: U` is a single-constructor family whose
+        # constructor shares the family name and whose argument telescope is named by
+        # the fields. The field names carried on the constructor telescope are what
+        # record construction (`Point{x: .., y: ..}`) and projection (`p.x`) read to
+        # map names to positions — no separate registry, and the kernel treats the
+        # argument names as plain labels.
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+        with {:ok, tele} <- struct_field_telescope(variants) do
+          declare_at_min_level(env, name, [Inductive.ctor(name, tele, [])], 0)
+        end
+
       other ->
         {:error, {:unsupported_container, other}}
     end
+  end
+
+  # A record's fields `[{:param, [type: T], "x"}, …]` become a constructor argument
+  # telescope named by the fields: `[{:x, T_core}, …]`.
+  defp struct_field_telescope(fields) do
+    fields
+    |> Enum.reduce_while({:ok, []}, fn {:param, pmeta, fname}, {:ok, acc} ->
+      case type_to_core(Keyword.fetch!(pmeta, :type)) do
+        {:ok, core} -> {:cont, {:ok, acc ++ [{String.to_atom(fname), core}]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
   end
 
   # A positional enum variant, seen as a GADT constructor signature that returns
@@ -653,9 +678,13 @@ defmodule Cure.Elab.Declarations do
   defp resolve_index_name(name, env) do
     atom = String.to_atom(name)
 
+    # This runs only in a *type* position (`idx_to_core`), so a name that is both a
+    # family and a constructor — a record, whose constructor shares the family name
+    # — resolves to the family. A name that is only a constructor (a nullary value
+    # like `Z` used as an index argument) still resolves to the constructor.
     cond do
-      Inductive.get_ctor(env, atom) -> {:ctor, atom, []}
       Inductive.family?(env, atom) -> {:data, atom, [], []}
+      Inductive.get_ctor(env, atom) -> {:ctor, atom, []}
       true -> {:global, atom}
     end
   end
