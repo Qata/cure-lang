@@ -187,6 +187,56 @@ defmodule Antigen.ShrinkTest do
     assert Shrink.size(out) == 4
   end
 
+  defmodule BuggyMutationAssay do
+    # wraps Assays.Mutation with an infer that WRONGLY ACCEPTS :head_swap mutants
+    alias Cure.Core.Kernel
+
+    def run(%{payload: %{fault: %{kind: :head_swap}}} = c) do
+      Antigen.Assays.Mutation.run(c, fn ctx, t ->
+        case Kernel.infer(ctx, t) do
+          {:error, _} -> {:ok, {:type, 0}}   # pretend it type-checks ⇒ wrongly accepted
+          ok -> ok
+        end
+      end)
+    end
+
+    def run(c), do: Antigen.Assays.Mutation.run(c)
+  end
+
+  test "Runner shrinks a deep head_swap survivor to the bare minimal witness before banking (§7.5)" do
+    alias Antigen.Generators.Mutation
+    tmp = System.tmp_dir!()
+    corpus = Path.join(tmp, "shrink_ab_#{:erlang.unique_integer([:positive])}.sexp")
+    File.rm(corpus)
+
+    # a deep head_swap mutant (grown by deepen), in a padded context
+    deep =
+      B.interp(Mutation.mutant())
+      |> Enum.take(400)
+      |> Enum.find(fn c -> c.payload.fault.kind == :head_swap and c.payload.fault.depth >= 3 end)
+
+    assert deep, "no deep head_swap mutant sampled"
+
+    Antigen.Runner.explore(
+      challenges: [deep], count: 1, assay: BuggyMutationAssay,
+      corpus_path: corpus, seeds_path: Path.join(tmp, "seeds_ignore.sexp"),
+      report_dir: tmp
+    )
+
+    banked = Antigen.Corpus.stream(corpus) |> Enum.flat_map(fn {:ok, c} -> [c]; _ -> [] end)
+    assert [ab] = banked
+    # NOTE on what this does/doesn't prove: `Antigen.Assays.Mutation.run/2`
+    # (unmodified) treats ANY `{:ok, _}` from `infer_fun` as a violation, and
+    # this wrapper returns `{:ok, _}` unconditionally, so `pred` is true for any
+    # well-formed candidate — rule 1 will likely collapse `deep` to an unrelated
+    # minimal atom on the first accepted edit. That's expected (spec §2). What
+    # this proves is narrower than "the minimal head_swap witness": that
+    # `explore/1` wires minimize-before-bank correctly, that `minimize` makes
+    # real progress, and that the banked artifact still trips the configured assay.
+    assert Antigen.Shrink.size(ab) < Antigen.Shrink.size(deep)
+    assert match?({:violation, {:accepted_ill_typed, _, _}}, BuggyMutationAssay.run(ab))
+  end
+
   defp contains_vcons?({:ctor, :vcons, _}), do: true
   defp contains_vcons?(t) when is_tuple(t), do: t |> Tuple.to_list() |> tl() |> Enum.any?(&contains_vcons?/1)
   defp contains_vcons?(l) when is_list(l), do: Enum.any?(l, &contains_vcons?/1)

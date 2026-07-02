@@ -11,7 +11,7 @@ defmodule Antigen.Runner do
 
   def explore(opts) do
     count = Keyword.get(opts, :count, 200)
-    challenges = draw(opts[:gen], count)
+    challenges = opts[:challenges] || draw(opts[:gen], count)
 
     final =
       Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
@@ -25,10 +25,26 @@ defmodule Antigen.Runner do
             :ok ->
               acc
 
-            {:violation, _detail} = v ->
-              {:ok, path} = Report.write_infection(opts[:report_dir], c, v, summarize(acc, count))
-              IO.puts(Report.breadcrumb(c, path))
-              Corpus.append(opts[:corpus_path], c, Corpus.dedup_key(c, :antibody))
+            {:violation, orig_detail} = v ->
+              assay = opts[:assay] || assay_module(c.assay)
+
+              pred = fn ch ->
+                case apply(assay, :run, [ch]) do
+                  {:violation, detail} -> same_shape?(detail, orig_detail)
+                  _ -> false
+                end
+              end
+
+              # only :typed_term/:mutant_term payloads carry the type/term/ctx keys
+              # Shrink dereferences; other kinds this shared branch serves bank as-is.
+              c_min =
+                if c.kind in [:typed_term, :mutant_term],
+                  do: Antigen.Shrink.minimize(c, pred, shrink_budget(opts)),
+                  else: c
+
+              {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, summarize(acc, count))
+              IO.puts(Report.breadcrumb(c_min, path))
+              Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
               %{acc | infections: acc.infections + 1}
           end
         else
@@ -313,6 +329,15 @@ defmodule Antigen.Runner do
 
   defp draw(gen, count), do: Backend.StreamData.interp(gen) |> Enum.take(count)
   defp seed_of(c), do: c.seed || :erlang.phash2({c.kind, c.payload})
+
+  @shrink_budget 2000
+  defp shrink_budget(opts), do: opts[:shrink_budget] || @shrink_budget
+
+  # compare only the violation TAG (leading atom of the detail tuple), never the
+  # payload — which shrinks with the artifact. Fallback for non-tuple details
+  # (e.g. Assays.Stub's bare :boom) avoids an elem/2 crash.
+  defp same_shape?(d1, d2) when is_tuple(d1) and is_tuple(d2), do: elem(d1, 0) == elem(d2, 0)
+  defp same_shape?(d1, d2), do: d1 == d2
 
   # Health gate (spec §9): discard rate (malformed candidates) + coverage buckets
   # (the binder-shape flags actually hit). Reported, never hard-failed.
