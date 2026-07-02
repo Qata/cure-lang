@@ -1,0 +1,92 @@
+defmodule Antigen.Generators.Universes do
+  @moduledoc """
+  Known-label universe-rule challenges (pre-port banking spec §4 W5): the fixed
+  cumulative hierarchy `Type 0 : Type 1 : Type 2` (`Cure.Core.Universe`), no
+  Type-in-Type, the ceiling, and the two-universe constructor-field rule —
+  roadmap #20's rules, previously with zero Antigen coverage (A4).
+
+  Def-shaped probes reuse the `:indexed_case` record shape (families + one def,
+  checked by `Kernel.check_def`); family-shaped probes (ctor fields) use the
+  `:family` shape (checked by `Kernel.check_family` + `check_ctor`). Labels are
+  `:well_typed`/`:ill_typed`, correct by construction (argument in each @doc).
+  """
+  alias Antigen.Challenge
+  alias Cure.Core.{Env, Inductive}
+
+  @nat {:data, :Nat, [], []}
+
+  defp nat_family,
+    do:
+      {Inductive.family(:Nat, [], [], 0),
+       [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, @nat}], [])]}
+
+  @doc "Girard guard: `def u : Type 0 = Type 0` must be rejected — Type 0 inhabits Type 1 only."
+  @spec type_in_type(:ill_typed) :: Challenge.t()
+  def type_in_type(:ill_typed) do
+    def_challenge(:ill_typed, [], {:type, 0}, {:type, 0},
+      "Type-in-Type: Type 0 : Type 0 must reject (Type 0 : Type 1)")
+  end
+
+  @doc """
+  Ceiling: `def u : Type 2 = Type 1` must be rejected — a def's TYPE must itself
+  be well-sorted, and `Type 2` has no successor sort in the fixed 0..2 hierarchy
+  (`Universe.succ/1` → `:universe_ceiling`). The ceiling is a classifier of last
+  resort, not an annotatable def type.
+  """
+  @spec ceiling(:ill_typed) :: Challenge.t()
+  def ceiling(:ill_typed) do
+    def_challenge(:ill_typed, [], {:type, 2}, {:type, 1},
+      "ceiling: Type 2 has no sort — a def cannot be annotated AT Type 2")
+  end
+
+  @doc "Cumulativity: `Nat : Type 0` accepted at `Type 1` (`Type 0 <: Type 1`)."
+  @spec cumulativity(:well_typed) :: Challenge.t()
+  def cumulativity(:well_typed) do
+    def_challenge(:well_typed, [nat_family()], {:type, 1}, @nat,
+      "cumulativity: Nat (level 0) accepted at Type 1")
+  end
+
+  @doc "Exact stratification: `def u : Type 1 = Type 0` accepted."
+  @spec stratification(:well_typed) :: Challenge.t()
+  def stratification(:well_typed) do
+    def_challenge(:well_typed, [], {:type, 1}, {:type, 0},
+      "stratification: Type 0 : Type 1 accepted")
+  end
+
+  @doc """
+  Two-universe constructor-field rule (`Kernel.check_ctor` → `:universe_level`):
+  a field of type `Type 0` has sort level 1, so it fits a level-1 family
+  (`:well_typed`) and does NOT fit a level-0 family (`:ill_typed`).
+  """
+  @spec ctor_field(:well_typed | :ill_typed) :: Challenge.t()
+  def ctor_field(label) do
+    level = if label == :well_typed, do: 1, else: 0
+    fam = Inductive.family(:Foo, [], [], level)
+    ctors = [Inductive.ctor(:MkFoo, [{:x, {:type, 0}}], [])]
+
+    Challenge.new(
+      kind: :family,
+      assay: "universes",
+      label: label,
+      payload: %{family: fam, ctors: ctors},
+      note: "two-universe rule: field x : Type 0 (sort level 1) vs family level #{level}"
+    )
+  end
+
+  @doc "Rebuild the Env for a def-shaped universes challenge."
+  @spec env_of(Challenge.t()) :: Env.t()
+  def env_of(%Challenge{kind: :indexed_case, payload: %{families: families, def_name: dn, def_type: dt, def_body: db}}) do
+    env = Enum.reduce(families, Env.empty(), fn {fam, ctors}, e -> Inductive.declare(e, fam, ctors) end)
+    Env.add_def(env, dn, dt, db)
+  end
+
+  defp def_challenge(label, families, def_type, def_body, note) do
+    Challenge.new(
+      kind: :indexed_case,
+      assay: "universes",
+      label: label,
+      payload: %{families: families, def_name: :u, def_type: def_type, def_body: def_body},
+      note: note
+    )
+  end
+end

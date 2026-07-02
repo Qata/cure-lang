@@ -38,7 +38,9 @@ defmodule Antigen.Challenge do
     :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
     :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,
     # rewrite/eq vertical: kind, def-names, motive family name
-    :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P
+    :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P,
+    # universes vertical
+    :u
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
