@@ -19,4 +19,29 @@ defmodule Antigen.Generators.MutationTest do
       end
     end
   end
+
+  test "each operator's fault carries a kernel-INDEPENDENT witness of ill-typedness" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+
+    for kind <- Mutation.operators() do
+      {_gen, f} = Mutation.build(ctx, kind)
+
+      case f.witness do
+        :head ->
+          assert f.expected_head != f.injected_head,
+                 "#{kind}: heads must differ (#{inspect(f.expected_head)} vs #{inspect(f.injected_head)})"
+        :index ->
+          # distinct closed index constructors ⇒ non-convertible, decided syntactically
+          assert f.expected_head != f.injected_head
+        :level ->
+          {:type, req} = f.expected_head
+          {:type, act} = f.injected_head
+          assert act > req, "#{kind}: injected level must exceed required (predicativity)"
+        :scope ->
+          {k, gamma_len} = f.scope
+          assert k >= gamma_len, "#{kind}: var index must be out of scope"
+      end
+    end
+  end
 end
