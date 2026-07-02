@@ -41,7 +41,17 @@ defmodule Antigen.IndexedSeedTest do
     Indexed.injectivity(:ill_typed),
     Indexed.deletion(:ill_typed),
     Indexed.motive_indexed_domain(:well_typed),
-    Indexed.motive_indexed_domain(:ill_typed)
+    Indexed.motive_indexed_domain(:ill_typed),
+    # Convoy soundness guards (indexed with-clause LHS re-match). The elaborator
+    # convoy leans on these kernel properties; the negative controls go red if
+    # either regresses. data_split: the kernel validates a {:data} slot split
+    # against the signature (a wrong split is rejected, never mis-accepted).
+    # reify_distinct: the reify {:vdata} collapse never lets conv equate two
+    # distinct indexed types (incompleteness, not unsoundness).
+    Indexed.data_split_validation(:well_typed),
+    Indexed.data_split_validation(:ill_typed),
+    Indexed.reify_collapse_distinct(:well_typed),
+    Indexed.reify_collapse_distinct(:ill_typed)
   ]
 
   # Known-good-behavior seeds: every indexed/case challenge the kernel handles
