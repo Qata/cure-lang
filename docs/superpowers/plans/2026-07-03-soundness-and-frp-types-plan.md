@@ -216,7 +216,18 @@ metamorphic transforms; assay `run/1 :: :ok | {:violation, term}`).
 - [ ] **Step 4:** full Antigen suite once. Commit
   `feat(antigen): elab/erasure vertical — two-sided relevance-check pin`.
 
-### Task A5: Kernel trust-marker hardening (TCB; HARD-STOP gate)
+### Task A5: Kernel trust-marker hardening (TCB; HARD-STOP gate) — IMPLEMENTED, verification in flight
+
+Implemented (committed as one reviewed unit, HEAD): `Term.closed?/1` (free-var
+scan mirroring `Term.shift`'s binder structure; holes/leaves closed) + unfold-site
+guard in `normalise.ex` (non-closed certified body → `:stuck`, robust vs.
+raw-struct forgery) + `Env.certify/2` raises on an open body. Prior art re-checked
+(Lean: no mutable cert marker; Idris: totality flags post-verification). Red-green
+in `certify_hardening_test.exs` (open body leaked `{:var,-4}` pre-fix); full suite
+2376, zero regressions. **PENDING:** independent adversarial verifier (dispatched,
+background — attacking `closed?` binder-completeness); Antigen antibody in the
+certificate family; operator review at merge. Do NOT seal until the verifier
+returns SOUND.
 
 The two PRE-EXISTING exposures flagged out-of-scope by the Phase-4a adversarial
 verification (a9962257), now brought in scope:
