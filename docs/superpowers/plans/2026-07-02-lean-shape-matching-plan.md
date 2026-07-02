@@ -131,7 +131,11 @@ Not in the original plan; run between Phases 2 and 3 at the operator's direction
 - [x] **Step 3: implement the combined motive. DONE.** (1a) is the existing index inversion (`branch_unify` verdict subst + `specialize_branch_context_subst`, which reverts index-dependent siblings); (1b) is the Phase-2½ value-refinement ported from `elaborate_matched_branch` into `elaborate_rematch_branch` — thread `scrut_term`, replace the scrutinee (var → subst key `i+arity`; computed → `replace_term` whole-term) with `branch_constructor_term` in the shifted goal, plus `refine_scrutinee_in_body`. Shared `build_motive` already abstracts the computed scrutinee. E-only; kernel re-checks. (Scope note: sibling types depending on the scrutinee's *value* rather than its *index* remain on capability-B's Eq-transport, not exercised by gm01.)
 - [x] **Step 4: green + load-bearing. DONE.** gm01 red→green; gm02 (index-only control, needs 1a) and gm03 (soundness — mismatched ctor rejected) hold; elab suite 135, `mix cure.oracle with` 7/7 `same`, full suite 2384 zero-regress.
 
-### Task 3.2: Subsume + retire capability A (bare value-abstraction only — B shares this function, see caveat)
+### Task 3.2: Subsume + retire capability A (bare value-abstraction only — B shares this function, see caveat) — DONE (2c83330)
+
+Steps 1–5 done: `need_eq == false` routes to `elaborate_match`; bare-value motive
+removed; B (`need_eq == true`) untouched; `elaborate_with_value` retained.
+with_abstraction 6/6, oracle `with` 7/7 `same`, full suite 2384 zero-regress.
 
 **Caveat (checked against the actual tree):** `elaborate_with_value` (`elaborator.ex:527`) is **not** capability-A-only code — its own comment reads "Capability A/B (no LHS re-match)... This is the original `elaborate_with` body, unchanged," and it branches internally on `need_eq` (false → A's bare motive, true → B's eq-arrow motive). `test/cure/elab/with_abstraction_test.exs` (cited below as "A's suite") contains both: `wi01` is A-only, `wi04`/`wi05`/`wi06` are B's proof/sibling-transport cases. Deleting `elaborate_with_value` wholesale in this task would retire B too, before Task 3.3's mandatory boundary decision (HEq vs non-indexed-permanent) has run. This task is therefore scoped to the `need_eq == false` path only.
 
