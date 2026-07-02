@@ -2651,10 +2651,20 @@ defmodule Cure.Compiler.Parser do
               {{:container, meta, variants}, state}
 
             _ ->
-              # Type alias: type Name = ExistingType
-              meta = [name: name, line: token.line, col: token.col]
-              meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-              {{:type_annotation, meta, [first_variant]}, state}
+              if variant_ctor?(first_variant) do
+                # Single-constructor ADT: `type Box = MkBox(Nat)` is a one-ctor
+                # inductive family, not a type alias. (A constructor variant carries
+                # `variant: true`; a genuine alias RHS — `type Celsius = Int` — is a
+                # plain type expression and stays a `:type_annotation`.)
+                meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+                meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                {{:container, meta, [first_variant]}, state}
+              else
+                # Type alias: type Name = ExistingType
+                meta = [name: name, line: token.line, col: token.col]
+                meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                {{:type_annotation, meta, [first_variant]}, state}
+              end
           end
       end
 
@@ -2766,6 +2776,11 @@ defmodule Cure.Compiler.Parser do
         {[arg], state}
     end
   end
+
+  # A parsed type-body variant that is genuinely a constructor (has fields, so it
+  # carries `variant: true`) rather than a type-alias RHS.
+  defp variant_ctor?({:function_def, meta, _}), do: Keyword.get(meta, :variant, false)
+  defp variant_ctor?(_), do: false
 
   defp parse_type_variant(state) do
     name_token = peek(state)
