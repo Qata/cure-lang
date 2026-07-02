@@ -62,14 +62,44 @@ defmodule Cure.Elab.Declarations do
       :enum ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        case build_ctors(variants) do
-          {:ok, ctors} -> declare_at_min_level(env, name, ctors, 0)
-          {:error, _} = err -> err
+        case Keyword.get(meta, :type_params, []) do
+          [] ->
+            case build_ctors(variants) do
+              {:ok, ctors} -> declare_at_min_level(env, name, ctors, 0)
+              {:error, _} = err -> err
+            end
+
+          type_params ->
+            # Parameterized ADT (`type List(a) = Nil | Cons(a, List(a))`). Each
+            # positional variant is an implicit constructor signature returning the
+            # family applied to its own parameters; reuse the parameterized-family
+            # (GADT) machinery with an empty index telescope.
+            params = Enum.map(type_params, fn p -> {:param, [], p} end)
+            sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
+            declare_parameterized(name, params, [], sigs, env)
         end
 
       other ->
         {:error, {:unsupported_container, other}}
     end
+  end
+
+  # A positional enum variant, seen as a GADT constructor signature that returns
+  # the family applied to its own parameters. `Nil` → `Nil : List(a)`;
+  # `Cons(a, List(a))` → `Cons : a -> List(a) -> List(a)`.
+  defp variant_to_gadt_sig({:variable, _meta, vname}, fam, type_params) do
+    {:gadt_ctor, [name: vname], {:arrow_chain, [family_app(fam, type_params)]}}
+  end
+
+  defp variant_to_gadt_sig({:function_def, cmeta, _body}, fam, type_params) do
+    cname = Keyword.fetch!(cmeta, :name)
+    field_asts = Keyword.fetch!(cmeta, :params)
+    {:gadt_ctor, [name: cname], {:arrow_chain, field_asts ++ [family_app(fam, type_params)]}}
+  end
+
+  defp family_app(fam, type_params) do
+    args = Enum.map(type_params, fn p -> {:variable, [scope: :local], p} end)
+    {:function_call, [name: Atom.to_string(fam)], args}
   end
 
   # Indexed (GADT) family: `type NAME(params) indices (idx) <ctor sigs>`. Head
@@ -93,7 +123,13 @@ defmodule Cure.Elab.Declarations do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
     params = Keyword.get(meta, :params, [])
     index_params = Keyword.get(meta, :indices, [])
+    declare_parameterized(name, params, index_params, ctor_sigs, env)
+  end
 
+  # Declare a family with a parameter telescope and (optionally) an index
+  # telescope from GADT-style constructor signatures. Shared by indexed types and
+  # parameterized enums (the latter pass no indices).
+  defp declare_parameterized(name, params, index_params, ctor_sigs, env) do
     # Parameters are the outer binders: elaborate the param telescope first, then
     # the index telescope in the scope of the parameters (most-recent first).
     param_scope = params |> Enum.map(fn {:param, _m, n} -> n end) |> Enum.reverse()
@@ -232,7 +268,11 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_index_telescope(params, fam, env, init_scope \\ []) do
     params
     |> Enum.reduce_while({:ok, [], init_scope}, fn {:param, pmeta, pname}, {:ok, tele, scope} ->
-      case idx_to_core(Keyword.fetch!(pmeta, :type), scope, fam, env) do
+      # A bare type parameter (`type Box(a)` → `{:param, [], "a"}`) carries no
+      # explicit kind; it ranges over types, so default its kind to `Type`.
+      type_ast = Keyword.get(pmeta, :type, {:variable, [scope: :local], "Type"})
+
+      case idx_to_core(type_ast, scope, fam, env) do
         {:ok, core} ->
           {:cont, {:ok, tele ++ [{String.to_atom(pname), core}], [pname | scope]}}
 
