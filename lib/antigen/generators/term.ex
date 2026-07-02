@@ -16,8 +16,8 @@ defmodule Antigen.Generators.Term do
   def gen_fuel, do: @gen_fuel
 
   # The `Antigen.Gen` DSL builds `frequency` branches EAGERLY, so `gen/3`
-  # constructs its whole generator tree before StreamData samples it — a tree
-  # whose size is exponential in the recursion depth. StreamData's `sized` feeds
+  # constructs its whole generator tree before the backend samples it — a tree
+  # whose size is exponential in the recursion depth. The backend's `sized` feeds
   # sizes up to the sample count (~80), which would make that eager tree
   # astronomically large. Cap the effective size to a small constant: this keeps
   # the v1 fragment small (spec §11 "small v1 fragment keeps shrink chains
