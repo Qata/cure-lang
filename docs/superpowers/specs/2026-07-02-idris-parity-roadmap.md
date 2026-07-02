@@ -48,7 +48,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 3 | Pattern matching depth | Nested/deep patterns → decision-tree compiler (M8.4). Kernel case already nests, so this is a lowering pass, not a kernel change | E | additive (refactors match path) | ⬜ |
 | 4 | Pattern forms | Non-constructor patterns in dependent position (`_`, literal, as-patterns) handled, not merely rejected | E | additive | ⬜ |
 | 5 | Pattern matching | Forced/dot patterns + forced-argument erasure | E, C | additive | ⬜ |
-| 6 | Dependent matching | `with`-abstraction (match on an intermediate, refine the goal) — *borderline; core to Idris matching quality* | E, P | additive | ⬜ |
+| 6 | Dependent matching | `with`-abstraction (match on an intermediate, refine the goal) — *borderline; core to Idris matching quality*. **Capability A landed** (`58037d6`): block/inline `with <single-expr>` over a **non-indexed** scrutinee, refining the GOAL by the scrutinee's *value* via a value-abstracting motive `{:lam, ty, abstract_term(goal, e, 0)}` (the `motive_for` pattern, not index-refinement) elaborated in place as `{:case,…}`; kernel accepted the value-abstracting motive unchanged (no TCB). Strictly beyond `match` (oracle wi01: plain `match` on the same goal is rejected). *Reach*: `proof` clause (B), sibling/other-argument refinement (M), multiple with-exprs, LHS re-matching of parent patterns, views (C), and codegen/runtime lowering (type-checks only today); indexed scrutinee is explicitly rejected (`{:with_indexed_scrutinee_unsupported,_}`) — that is `match`'s domain | E, P | additive | 🟡 (capability A; reach: proof/sibling/views/codegen) |
 | 7 | Propositional equality | Automatic `rewrite` motive inference (abstract LHS occurrences in the goal, à la Idris `rewrite … in`) — implemented in `rewrite_plan/6`, audited to parity with `elabRewrite` (P0); motive-under-`:case`-binder capture bug fixed. Conversion-occurrence rewriting (oracle probe rw07) now **parity** (`same`) via an elaborator bridge-lemma step (`2ac4add`): a refl-bodied bridge checked at the asymmetric endpoint through a constant motive, so the kernel only ever decides a top-level conversion. Underlying **K-layer reach** tracked in the TCB note below (multi-occurrence / deep up-to-conversion still uncovered by the single-occurrence bridge) | E | additive | ✅ |
 | 8 | Equality / absurdity | `Void`/absurd elimination at the surface (`{:absurd}`) | K (leaf), E | additive | ✅ |
 | 9 | Inference unification | First-order metavariable engine: alloc, occurs-checked solve, zonk (`lib/cure/elab/unify.ex`) | E | — | ✅ |
@@ -101,9 +101,11 @@ transliteration-P0 audit landed ④'s rows 2/8/16 and #7's audited-complete
 `rewrite` motive inference (rw07 now closed via the elaborator bridge lemma),
 the pre-port banking run closed #13's mutual-recursion hole (now a reach item),
 #19's nested positivity, and #23's missing antibodies, and the post-merge port
-run landed checked-mode expression-level `match` (#26, `fcdf5ce`). The remaining
-13 are reach (#3–#6, #13, #14, #17, #26), ergonomics/inference (#10, #11), or
-assurance strength (#22, #24, #25).
+run landed checked-mode expression-level `match` (#26, `fcdf5ce`) and
+`with`-abstraction capability A (#6, `58037d6`). The remaining 13 are reach
+(#3–#6, #13, #14, #17, #26 — several now *partially* landed: #6 capability A,
+#26 checked mode), ergonomics/inference (#10, #11), or assurance strength (#22,
+#24, #25).
 Highest-leverage single item: **#22** — without a term generator, Antigen
 proves "these specific holes stay closed," not "the kernel is sound."
 
