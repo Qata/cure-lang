@@ -67,6 +67,19 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
+    # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
+    # left "unknown"): elaborate the callee expression, then apply the outer
+    # arguments to its (function-typed) result.
+    if callee = Keyword.get(meta, :callee) do
+      with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
+        check_app_args(head, head_type, args, names, ctx, env)
+      end
+    else
+      elaborate_named_call(meta, args, names, ctx, env)
+    end
+  end
+
+  defp elaborate_named_call(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
 

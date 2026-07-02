@@ -42,8 +42,13 @@ defmodule Cure.Elab.Erase do
             _ -> List.duplicate(:present, length(args))
           end
 
+        # Arguments beyond the callee's own parameters apply to the *result* it
+        # returns (`mk()(z)`), and are always present — pad so `zip` keeps them
+        # rather than truncating to the shorter quantity list.
+        padded = quantities ++ List.duplicate(:present, max(0, length(args) - length(quantities)))
+
         args
-        |> Enum.zip(quantities)
+        |> Enum.zip(padded)
         |> Enum.filter(fn {_arg, q} -> q == :present end)
         |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
         |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)

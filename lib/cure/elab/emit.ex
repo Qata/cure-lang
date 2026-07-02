@@ -166,9 +166,12 @@ defmodule Cure.Elab.Emit do
     {head, args} = spine(app, [])
 
     case head do
-      # A saturated named function is one multi-argument BEAM call.
+      # A named function takes its declared arity in one BEAM call; any further
+      # arguments apply (curried) to the function it returns — `mk()(z)`.
       {:global, name} ->
-        {:call, @line, {:atom, @line, name}, Enum.map(args, &lower(env, &1, ctx))}
+        {direct, extra} = Enum.split(args, present_arity(env, name))
+        base = {:call, @line, {:atom, @line, name}, Enum.map(direct, &lower(env, &1, ctx))}
+        Enum.reduce(extra, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
 
       # Applying a closure value (a lambda or a function-typed binder) is curried:
       # apply one argument at a time to the BEAM fun.

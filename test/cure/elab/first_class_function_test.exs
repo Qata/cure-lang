@@ -79,6 +79,34 @@ defmodule Cure.Elab.FirstClassFunctionTest do
     assert apply(mod, :g, [:Z]) == {:S, :Z}
   end
 
+  test "chained application of a call result runs (mk()(z))" do
+    # `mk()(z)` parses with the inner call as `:callee`; the elaborator applies the
+    # outer argument to mk's function-typed result, and codegen calls mk() then
+    # applies z to the returned fun (erase keeps the over-applied argument).
+    src =
+      @nat <>
+        "  fn mk() -> (Nat) -> Nat = fn(y) -> S(y)\n" <>
+        "  fn g(z: Nat) -> Nat = mk()(z)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfChain", functions: [:mk, :g])
+
+    assert apply(mod, :g, [:Z]) == {:S, :Z}
+  end
+
+  test "multi-level chained application (adder()(a)(b))" do
+    src =
+      @nat <>
+        "  fn adder() -> (Nat) -> (Nat) -> Nat = fn(a) -> fn(b) -> S(a)\n" <>
+        "  fn g() -> Nat = adder()(S(Z()))(Z())\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfChain2", functions: [:adder, :g])
+
+    # S(a) with a = S(Z).
+    assert apply(mod, :g, []) == {:S, {:S, :Z}}
+  end
+
   test "a lambda checked against a non-function type is rejected" do
     src = @nat <> "  fn bad() -> Nat = fn(y) -> S(y)\nend\n"
 
