@@ -37,8 +37,10 @@
 - `lib/antigen/coverage.ex` — add a `terms_of/1` clause for `:typed_term`.
 - `lib/antigen/runner.ex` — add three assay-registry entries; compute binder-usage / reduction-activity / fuel-exhausted metrics; add health floors as module attributes; stamp `:healthy`/`:vacuous`.
 - `lib/mix/tasks/antigen.ex` — extend `default_gen/0` with the three new branches.
-- `test/antigen/architecture_test.exs` — assert the two new module namespaces are StreamData-free.
+- `test/antigen/mix_task_test.exs` — add a red test proving Tier B is actually drawn by the wired-in `default_gen/0` (Task 10).
 - `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` — update rows #22 / A8 / A10.
+
+**Verify, not modify:** `test/antigen/architecture_test.exs` already glob-enforces StreamData-freedom over `lib/antigen/{generators,assays}/**/*.ex` (confirmed against source — see Task 9), which by construction of the paths above already covers every module this plan creates; no edit to that file is needed.
 
 ---
 
@@ -249,6 +251,14 @@ defmodule Antigen.Generators.SigMenu do
   end
 
   # -- helpers ----------------------------------------------------------------
+  # Deliberately unbounded (unlike Generators.Term's own `whnf/2`, which spec
+  # §6.3 requires to run under @gen_fuel): this helper backs the totality
+  # FALLBACK (`inhabitable?`/`canon`), not a generator choice being accepted
+  # or rejected against a goal — it is not one of the "semantic conditions"
+  # locked decision #3 scopes. `canon/2`'s job is to always terminate with an
+  # answer given v1's finite, closed menu, and threading a fuel budget through
+  # here would change `inhabitable?/2`/`canon/2`'s public 2-arity (used
+  # throughout Tasks 1/3/4/6/7/8/9) for no v1 behavioral benefit.
   defp whnf(ctx, term) do
     case Cure.Core.Normalise.whnf(ctx, term) do
       :fuel_exhausted -> term
@@ -334,9 +344,9 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 # test/antigen/generators/context_test.exs
 defmodule Antigen.Generators.ContextTest do
   use ExUnit.Case, async: true
-  alias Antigen.Generators.{Context, SigMenu}
+  alias Antigen.Generators.SigMenu
   alias Antigen.Backend.StreamData, as: B
-  alias Cure.Core.{Kernel, Context, Context.Rebuild}
+  alias Cure.Core.Kernel
 
   test "every generated telescope is well-formed (each entry checks in its outer prefix)" do
     env = SigMenu.env_of(:v1)
@@ -490,6 +500,21 @@ defmodule Antigen.Generators.TermTest do
     assert Enum.any?(ts, &match?({:lam, _, _}, &1))
     for t <- ts, do: assert {:ok, _} = Kernel.infer(ctx, t)
   end
+
+  test "a Type 0 goal yields a menu type former (the {:type,_} intro row)" do
+    # `{:type, 0}` is never drawn as a goal by `Term.typed_term/1`'s `goal_gen`
+    # (Task 6) or by `Generators.Context` (Task 2) — see the goal-space note
+    # after Task 6 — so this is the ONLY place the `{:type,_}` clause of
+    # `intro_rules` (and its var/INDIR-only elimination companions) gets
+    # exercised at all. Without this test the clause would ship with zero
+    # coverage.
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    goal = {:type, 0}
+    ts = sample(Term.gen_term(ctx, goal), 40)
+    assert Enum.all?(ts, &(&1 in [SigMenu.nat(), SigMenu.bd(), SigMenu.vec({:ctor, :Z, []})]))
+    for t <- ts, do: assert {:ok, _} = Kernel.infer(ctx, t)
+  end
 end
 ```
 
@@ -608,8 +633,12 @@ defmodule Antigen.Generators.Term do
   end
 
   # whnf that degrades to the input term on fuel exhaustion (never crashes gen).
+  # Bounded by @gen_fuel, not the default :infinity — spec §6.3: the shape/
+  # index inspections this backs ("is the goal a Pi/data/Vec(S j)?") are
+  # semantic conditions and must run under the same @gen_fuel-bounded kernel
+  # calls as the acceptance rule, "not a separate unbounded check".
   defp whnf(ctx, term) do
-    case Normalise.whnf(ctx, term) do
+    case Normalise.whnf(ctx, term, fuel: @gen_fuel) do
       :fuel_exhausted -> term
       w -> w
     end
@@ -620,7 +649,7 @@ end
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/antigen/generators/term_test.exs`
-Expected: PASS (2 tests).
+Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -752,17 +781,32 @@ Add:
   defp app_rule(_ctx, _goal, _size), do: []
 
   # case on a menu family scrutinee (Nat or Bd), constant motive λ_. goal.
+  # Gated on the goal's (whnf'd) shape, mirroring `app_rule`: spec §6.1's
+  # `Type 0` row is deliberately narrower than the full elimination menu
+  # (var/INDIR only) — WITHOUT this guard, `case` would still typecheck at a
+  # `{:type, _}` goal (a case whose branches are themselves menu type-formers
+  # is a perfectly well-typed universe-valued case expression: e.g.
+  # `case n of Z -> Nat | S _ -> Bd : Type 0`), so leaving it ungated is sound
+  # but silently broadens the generator past what the rule table documents —
+  # and would make any test asserting the `{:type,_}` row's candidate set
+  # (see Task 3's Type-0-goal test) unreliable.
   defp case_rule(ctx, goal, size) when size > 1 do
-    Enum.flat_map([{:Nat, [:Z, :S]}, {:Bd, [:T, :F]}], fn {fam, _ctors} ->
-      scrut_ty = {:data, fam, [], []}
-      motive = {:lam, scrut_ty, shift_goal(goal)}
-      [{2,
-        Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
-          Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
-            Gen.return({:case, scrut, motive, brs})
-          end)
-        end)}]
-    end)
+    case whnf(ctx, goal) do
+      {:type, _} ->
+        []
+
+      _ ->
+        Enum.flat_map([{:Nat, [:Z, :S]}, {:Bd, [:T, :F]}], fn {fam, _ctors} ->
+          scrut_ty = {:data, fam, [], []}
+          motive = {:lam, scrut_ty, shift_goal(goal)}
+          [{2,
+            Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
+              Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
+                Gen.return({:case, scrut, motive, brs})
+              end)
+            end)}]
+        end)
+    end
   end
   defp case_rule(_ctx, _goal, _size), do: []
 
@@ -868,7 +912,7 @@ Notes for the implementer:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/antigen/generators/term_test.exs`
-Expected: PASS (4 tests). The redex/elimination-coverage assertions now hold.
+Expected: PASS (5 tests). The redex/elimination-coverage assertions now hold.
 
 - [ ] **Step 5: Commit**
 
@@ -1088,7 +1132,7 @@ Expected: FAIL — `Term.typed_term/1` undefined.
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/antigen/generators/term_test.exs`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1097,6 +1141,45 @@ git add lib/antigen/generators/term.ex test/antigen/generators/term_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(antigen): typed_term/1 + default_gen — assay-id-tagged challenges"
 ```
+
+**Deviation note (goal-space narrowing vs. spec §5/§5.1):** two places in this
+plan deliberately implement a narrower goal-type space than the spec's prose
+describes, on top of the already-documented Sigma-unreachability (Task 1's
+`subst0` note):
+
+1. §5.1 describes the context generator as recursing into the engine itself
+   — `gen_term(Γ_so_far, Type 0)` — to draw each entry's type. Task 2's
+   `Generators.Context.entry_type/2` does not do this: it is a fixed,
+   hand-written `Gen.frequency` over `SigMenu.nat/bd/vec`, with no dependency
+   on `Generators.Term`. This is a genuine simplification, not a slip: Task 2
+   is built before Task 3 (`gen_term` does not exist yet when Context is
+   written), and introducing a Context → Term dependency would invert that
+   ordering. The two are behaviorally aligned regardless — `entry_type/2`'s
+   choices are drawn from exactly the same menu vocabulary `intro_rules`'s
+   `{:type,_}` clause (Task 3/4) would itself offer — so nothing unsound is
+   introduced, only untested: the `{:type,_}` row is never reached via
+   Context, only via the dedicated unit test added in Task 3.
+2. §5 lists the goal-type space as "`Nat`, `Bd`, `Vec(i)` ..., `Pi`/`Sigma`
+   over these". Task 6's `goal_gen/1` (the generator that actually feeds
+   `typed_term/1`, and therefore the health gate, the assays, and the banked
+   corpus) only ever offers `SigMenu.goal_types()` (`Nat`, `Bd`, closed
+   `Vec`) plus `Vec(var)` goals — **never** a `Pi` or `Sigma` goal. The `Pi`
+   introduction rule (`intro_rules(ctx, _goal, {:pi, dom, cod}, size)`, Task
+   3) is real, correctly implemented, and unit-tested in isolation (Task 3's
+   "a Pi goal yields a lambda" test, Task 9's canonical-fallback totality
+   matrix) — but it is never exercised through the actual `typed_term`/
+   `default_gen`/health-gate/assay pipeline, so no banked seed or assay run
+   ever claims a Pi-typed term. `Sigma` is separately unreachable end-to-end
+   per Task 1's note. This is accepted as a v1 scope decision (menu richness
+   grows by *version*, per the Global Constraints' "signature menu is
+   versioned" rule) rather than fixed here, because widening `goal_gen` to
+   include Pi goals changes the health-metric distribution (a canonical
+   `Pi(A,B) → lam(canon(B))` inhabitant may leave its binder unused, which
+   would need frequency-weight tuning against the live floors in Task 8/10 —
+   a judgment call that belongs with whoever runs the acceptance pass with
+   real numbers in hand, not a blind edit here). If a future version widens
+   `goal_gen` to include Pi/Sigma, re-verify the binder-usage floor still
+   clears (§11's "tuning is measurable inside acceptance run 1" applies).
 
 ---
 
@@ -1200,8 +1283,13 @@ defmodule Antigen.Assays.Term do
   end
 
   # --- term/subject_reduction ------------------------------------------------
+  # `fuel: @assay_fuel` is required, not cosmetic: `Normalise.nf/3`'s default
+  # (2-arg call) is `fuel: :infinity`, which would make `:fuel_exhausted`
+  # below permanently unreachable — silently defeating locked decision #6
+  # ("fixed committed fuel decides verdicts") and this module's own moduledoc
+  # claim that fuel exhaustion is its own violation class.
   defp dispatch("term/subject_reduction", ctx, p, inferred) do
-    case Normalise.nf(ctx, p.term) do
+    case Normalise.nf(ctx, p.term, fuel: @assay_fuel) do
       :fuel_exhausted -> {:violation, {:fuel_exhausted, :nf}}
       nf ->
         case Kernel.check(ctx, nf, inferred) do
@@ -1213,8 +1301,8 @@ defmodule Antigen.Assays.Term do
 
   # --- term/normalization ----------------------------------------------------
   defp dispatch("term/normalization", ctx, p, inferred) do
-    with nf when nf != :fuel_exhausted <- Normalise.nf(ctx, p.term),
-         nf2 when nf2 != :fuel_exhausted <- Normalise.nf(ctx, nf) do
+    with nf when nf != :fuel_exhausted <- Normalise.nf(ctx, p.term, fuel: @assay_fuel),
+         nf2 when nf2 != :fuel_exhausted <- Normalise.nf(ctx, nf, fuel: @assay_fuel) do
       cond do
         nf2 != nf -> {:violation, {:not_idempotent, nf, nf2}}
         Kernel.check(ctx, nf, inferred) != :ok -> {:violation, {:nf_ill_typed, nf}}
@@ -1349,7 +1437,13 @@ Expected: FAIL — `Runner.health_metrics/1` and `Runner.assay_module_for/1` und
         env = Antigen.Generators.SigMenu.env_of(c.payload.sig)
         ctx = Antigen.Generators.SigMenu.rebuild_context(env, c.payload.ctx)
 
-        case Cure.Core.Normalise.nf(ctx, c.payload.term) do
+        # `fuel: ...` matters here for the same reason it does in Assays.Term:
+        # the 2-arg call defaults to :infinity, which would make
+        # `fuel_exhausted_count` permanently 0 regardless of the corpus.
+        # Reuse Assays.Term's committed constant rather than inventing a
+        # second one — Runner has no fuel budget of its own (§6.6/§8: the two
+        # named constants are @gen_fuel and @assay_fuel, nothing else).
+        case Cure.Core.Normalise.nf(ctx, c.payload.term, fuel: Antigen.Assays.Term.assay_fuel()) do
           :fuel_exhausted -> {f, d, fx + 1}
           nf -> {f + (if nf != c.payload.term, do: 1, else: 0), d + 1, fx}
         end
@@ -1559,6 +1653,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Files:**
 - Modify: `lib/mix/tasks/antigen.ex`
+- Modify: `test/antigen/mix_task_test.exs` (new red test for the wiring)
 - Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`
 - Commits: banked `seeds.sexp` (and any `corpus.sexp`/`reach.sexp` produced by triage)
 
@@ -1566,7 +1661,50 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - Consumes: `Antigen.Generators.Term.default_gen/0`.
 - Produces: the six-branch `default_gen/0` in the mix task; a banked `:typed_term` seed corpus; updated ledger rows.
 
-- [ ] **Step 1: Extend the mix task's `default_gen/0`**
+`default_gen/0` is private, so this task's red test has to observe the wiring
+through the mix task's own public surface — the same way the existing
+`test/antigen/mix_task_test.exs` tests already do (run the task, inspect its
+side effects) — rather than calling `default_gen/0` directly. The existing
+"`mix antigen --count` runs the explorer and prints a summary" test in that
+file is NOT a substitute: it only asserts the output contains "antigen" and
+either "infection" or "banked", which is already true today with just Tier
+A's three branches, so it passes identically before and after this task's
+change and proves nothing about Tier B actually being wired in.
+
+- [ ] **Step 1: Write the failing test (add to `test/antigen/mix_task_test.exs`)**
+
+```elixir
+  test "the wired-in default_gen draws :typed_term challenges (Tier B is live)" do
+    seeds_path = Path.join(@tmp, "seeds_tier_b.sexp")
+
+    Mix.Tasks.Antigen.run([
+      "generate",
+      "--count",
+      "300",
+      "--seeds",
+      seeds_path,
+      "--report-dir",
+      @tmp
+    ])
+
+    kinds =
+      Antigen.Corpus.stream(seeds_path)
+      |> Enum.flat_map(fn
+        {:ok, c} -> [c.kind]
+        _ -> []
+      end)
+      |> MapSet.new()
+
+    assert :typed_term in kinds
+  end
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `mix test test/antigen/mix_task_test.exs`
+Expected: FAIL — `default_gen/0` only draws Tier-A's three known-label generators, so no `:typed_term` challenge is ever banked at any sample count; `:typed_term in kinds` is false.
+
+- [ ] **Step 3: Extend the mix task's `default_gen/0`**
 
 Edit `lib/mix/tasks/antigen.ex` — replace the private `default_gen/0`:
 ```elixir
@@ -1584,20 +1722,25 @@ Edit `lib/mix/tasks/antigen.ex` — replace the private `default_gen/0`:
   end
 ```
 
-- [ ] **Step 2: Run the acceptance explore (spec §10 criterion 1)**
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `mix test test/antigen/mix_task_test.exs`
+Expected: PASS (4 tests) — `:typed_term` now appears among the 300 harvested seeds' kinds.
+
+- [ ] **Step 5: Run the acceptance explore (spec §10 criterion 1)**
 
 Run: `mix antigen --count 500`
 Expected: a run that prints `antigen: N infection(s), M seed(s) banked` and the `antigen health[typed_term]: …→ healthy` line. Roughly ~250 of 500 draws are `:typed_term` at equal weighting.
 
-- If any infection is reported: read the `tmp/antigen/` report, apply §7.4 triage — reproduce the term by hand, then either (a) fix the generator and re-run this step, or (b) if genuinely a kernel incompleteness (wrongly rejected), pin it in `test/antigen/reach.sexp` via a dedicated commit. Do NOT proceed to Step 4 with an unexplained infection.
+- If any infection is reported: read the `tmp/antigen/` report, apply §7.4 triage — reproduce the term by hand, then either (a) fix the generator and re-run this step, or (b) if genuinely a kernel incompleteness (wrongly rejected), pin it in `test/antigen/reach.sexp` via a dedicated commit. Do NOT proceed to Step 7 with an unexplained infection.
 - If `→ vacuous`: raise `:lam`/`:case`/`:app` frequency weights in `term.ex` (spec §11) and re-run. Do not lower floors.
 
-- [ ] **Step 3: Run the full suite once (spec §10 criterion 4)**
+- [ ] **Step 6: Run the full suite once (spec §10 criterion 4)**
 
 Run: `mix test`
 Expected: green. (Only one suite at a time — never concurrent.) Note: `mix test` sets `Mix.env() == :test`, so the mix task's SIGTERM trap stays uninstalled, as designed.
 
-- [ ] **Step 4: Bank the seed corpus and commit it**
+- [ ] **Step 7: Bank the seed corpus and commit it**
 
 The `mix antigen --count 500` run already appended to `test/antigen/seeds.sexp` (and possibly `corpus.sexp`). Verify the static-health meta-test now sees a populated corpus:
 
@@ -1606,12 +1749,12 @@ Expected: the banked-corpus health test now asserts over real records and passes
 
 ```bash
 git add test/antigen/seeds.sexp test/antigen/corpus.sexp test/antigen/reach.sexp 2>/dev/null; \
-git add lib/mix/tasks/antigen.ex
+git add lib/mix/tasks/antigen.ex test/antigen/mix_task_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(antigen): wire Tier-B into mix antigen; bank typed_term seed corpus"
 ```
 
-- [ ] **Step 5: Update the parity ledger and commit**
+- [ ] **Step 8: Update the parity ledger and commit**
 
 Edit `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`:
 - Row **#22** (`Term-generator metatheory engine`): change Status from `⬜ (designed)` to `✅` (or `🟡` if any assay landed as a reach pin rather than green), and update the cell to note the three differential assays + health gate landed, referencing this plan.
@@ -1631,7 +1774,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **1. Spec coverage:**
 - §1 in-scope generator → Tasks 1–6; context generator → Task 2; `:typed_term` kind → Task 5; three assays → Task 7; health gate → Task 8. ✓
-- §2 locked decisions → Global Constraints + enforced in Tasks 1 (real certification), 4/7 (fuel-bounded conv), 9 (architecture test). ✓
+- §2 locked decisions → Global Constraints + enforced in Tasks 1 (real certification), 3/4/7/8 (fuel-bounded whnf/conv/nf — every call site explicitly passes `fuel:`, confirmed during this review), 9 (architecture test). ✓
 - §5 signature menu / §5.1 context → Tasks 1, 2. ✓
 - §6 engine (rule table, INDIR, ctor choice, canonical fallback, redexes/case, size/determinism) → Tasks 3, 4. ✓
 - §7 assays incl. triage → Task 7 (+ triage applied in Tasks 7/10). ✓
@@ -1645,4 +1788,4 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **3. Type consistency:** `typed_term/1` returns a `%Challenge{}` (Task 6) consumed by `Assays.Term.run/1` (Task 7) and `Runner.health_metrics/1` (Task 8) with matching payload keys `%{sig, ctx, type, term}`. `assay_ids/0` (Task 6) is used by Tasks 8/9. `env_of/1`, `rebuild_context/2`, `canon/2`, `inhabitable?/2` signatures (Task 1) are used identically downstream. `conv_within?/6` and `Normalise.nf/2`/`quote/2` arities match the verified reference block.
 
-**Deviations recorded:** (a) support-set §9 is a documented non-test per above; (b) `subst0/3` (Task 1) is a real eval/quote substitution — unreachable in v1 (no Sigma goal ever arises) but implemented correctly rather than as an identity no-op, per the recursive-skeptical-review pass that found the identity version silently mis-scoped free variables; (c) `Term.shift/3`'s signature is confirmed against source (`shift(term, amount, cutoff \\ 0)`) and `Term.shift(goal, 1, 0)` in Task 4 is verified correct — no open question remains.
+**Deviations recorded:** (a) support-set §9 is a documented non-test per above; (b) `subst0/3` (Task 1) is a real eval/quote substitution — unreachable in v1 (no Sigma goal ever arises) but implemented correctly rather than as an identity no-op, per the recursive-skeptical-review pass that found the identity version silently mis-scoped free variables; (c) `Term.shift/3`'s signature is confirmed against source (`shift(term, amount, cutoff \\ 0)`) and `Term.shift(goal, 1, 0)` in Task 4 is verified correct — no open question remains; (d) the goal-type space actually reachable through `typed_term`/`goal_gen` (Task 6) is narrower than spec §5/§5.1's prose (no `Pi`/`Sigma` goal, and `Generators.Context` does not recurse into `gen_term` for `Type 0`) — see the deviation note after Task 6 for the task-ordering and health-metric rationale; the `{:type,_}` and `Pi` rule-table rows still get direct (if isolated) unit coverage via the dedicated tests added in Task 3, and `case_rule` (Task 4) was corrected during this review to gate on the goal's whnf shape so it no longer fires at a `{:type,_}` goal, matching spec §6.1's Type-0 row and keeping Task 3's new Type-0 test deterministic; (e) every `Normalise.nf`/`Normalise.whnf` call in `Generators.Term` (Task 3/4's own `whnf/2`), `Assays.Term` (Task 7's `subject_reduction`/`normalization` dispatch), and `Runner.health_metrics/1` (Task 8) was corrected during this review to pass an explicit `fuel:` option (`@gen_fuel` / `@assay_fuel`) — the plan as first drafted called all of these with the 2-arg form, whose default is `fuel: :infinity` (confirmed against `Normalise.nf/3`'s `normalize_opts/1`), which would have made every `:fuel_exhausted` branch described in spec §6.3/§7.2/§7.3/§8 (and locked decision #6, "fixed committed fuel decides verdicts") permanently dead code. `Generators.SigMenu`'s own `whnf/2` (Task 1) is deliberately left unbounded — see the comment added there — since it backs the totality fallback, not a generator choice being accepted/rejected against a goal.
