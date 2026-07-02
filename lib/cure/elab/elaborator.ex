@@ -881,7 +881,8 @@ defmodule Cure.Elab.Elaborator do
   # as match: own-family ctors, no duplicates). A `-> impossible` arm becomes an
   # `{:absurd}` branch; coverage is enforced by the kernel's check_coverage.
   defp elaborate_with_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
-    with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
+    with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
+         :ok <- reject_with_default(default) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
@@ -896,6 +897,11 @@ defmodule Cure.Elab.Elaborator do
       end)
     end
   end
+
+  # A `with`/`with`-rematch clause refines by restating constructor patterns; a
+  # bare variable/wildcard catch-all has no refinement to offer here.
+  defp reject_with_default(nil), do: :ok
+  defp reject_with_default({vname, _body}), do: {:error, {:unsupported_pattern, {:default_in_with, vname}}}
 
   defp elaborate_with_branch(cname, pattern, body_expr, cfg) do
     %{
@@ -1192,7 +1198,7 @@ defmodule Cure.Elab.Elaborator do
   # branch's expected type comes from the kernel's branch_unify verdict subst
   # plus the scrutinee-value refinement (see elaborate_matched_branch).
   defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term, carried) do
-    with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
+    with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname) do
       sig = Context.signature(ctx)
 
       sig
@@ -1220,50 +1226,116 @@ defmodule Cure.Elab.Elaborator do
             end
 
           nil ->
-            # omitted constructor
-            if verdict == :impossible do
-              {arity, _} = ctor_arity(env, cname)
-              {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
-            else
-              {:halt, {:error, {:missing_branch, cname}}}
+            # omitted constructor — discharge if impossible, else covered by a
+            # variable/wildcard catch-all (`x -> …`), else a genuine gap.
+            cond do
+              verdict == :impossible ->
+                {arity, _} = ctor_arity(env, cname)
+                {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+
+              default != nil ->
+                case elaborate_default_branch(
+                       verdict, cname, default, names, ctx, env,
+                       param_vals, scrut_term, result_type_term, carried
+                     ) do
+                  {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+                  {:error, _} = err -> {:halt, err}
+                end
+
+              true ->
+                {:halt, {:error, {:missing_branch, cname}}}
             end
         end
       end)
     end
   end
 
-  # Build a map cname => {:matched, pattern, body} | {:impossible_marked, pattern}.
-  # Validates every arm names one of dname's OWN declared constructors (spec §5
-  # step 2 gap) and rejects duplicate arms.
+  # Build `{arm_map, default}` where arm_map is cname => {:matched, pattern, body}
+  # | {:impossible_marked, pattern}, and `default` is `nil` or `{vname, body}` for
+  # a single variable/wildcard catch-all arm (`x -> …` / `_ -> …`), which covers
+  # every constructor not explicitly matched (Idris/Lean variable-pattern
+  # coverage). Validates every constructor arm names one of dname's OWN declared
+  # constructors (spec §5 step 2 gap) and rejects duplicate arms / duplicate
+  # defaults / an impossible-marked catch-all.
   defp partition_arms(arms, ctx, env, dname) do
     sig = Context.signature(ctx)
 
-    Enum.reduce_while(arms, {:ok, %{}}, fn {:match_arm, arm_meta, body}, {:ok, acc} ->
+    Enum.reduce_while(arms, {:ok, {%{}, nil}}, fn {:match_arm, arm_meta, body}, {:ok, {acc, default}} ->
       pattern = Keyword.fetch!(arm_meta, :pattern)
 
-      case constructor_pattern(pattern) do
-        {:error, _} = err ->
-          {:halt, err}
-
-        {:ok, {cname, _vars}} ->
+      case pattern do
+        {:variable, _vmeta, vname} ->
           cond do
-            Inductive.get_ctor(env, cname) == nil ->
-              {:halt, {:error, {:unknown_pattern_constructor, cname}}}
-
-            Inductive.ctor_family(sig, cname) != dname ->
-              {:halt, {:error, {:foreign_ctor, cname}}}
-
-            Map.has_key?(acc, cname) ->
-              {:halt, {:error, {:duplicate_branch, cname}}}
-
             Keyword.get(arm_meta, :impossible) == true ->
-              {:cont, {:ok, Map.put(acc, cname, {:impossible_marked, pattern})}}
+              {:halt, {:error, {:impossible_default_pattern, vname}}}
+
+            default != nil ->
+              {:halt, {:error, {:duplicate_default_pattern, vname}}}
 
             true ->
-              {:cont, {:ok, Map.put(acc, cname, {:matched, pattern, single_body(body)})}}
+              {:cont, {:ok, {acc, {vname, single_body(body)}}}}
+          end
+
+        _ ->
+          case constructor_pattern(pattern) do
+            {:error, _} = err ->
+              {:halt, err}
+
+            {:ok, {cname, _vars}} ->
+              cond do
+                Inductive.get_ctor(env, cname) == nil ->
+                  {:halt, {:error, {:unknown_pattern_constructor, cname}}}
+
+                Inductive.ctor_family(sig, cname) != dname ->
+                  {:halt, {:error, {:foreign_ctor, cname}}}
+
+                Map.has_key?(acc, cname) ->
+                  {:halt, {:error, {:duplicate_branch, cname}}}
+
+                Keyword.get(arm_meta, :impossible) == true ->
+                  {:cont, {:ok, {Map.put(acc, cname, {:impossible_marked, pattern}), default}}}
+
+                true ->
+                  {:cont, {:ok, {Map.put(acc, cname, {:matched, pattern, single_body(body)}), default}}}
+              end
           end
       end
     end)
+  end
+
+  # A variable/wildcard catch-all covers `cname` (not explicitly matched): rebuild
+  # the constructor pattern `cname(fresh…)`, substitute the catch-all's name with
+  # that reconstruction in the body (so the bound var resolves to the very term
+  # the kernel's branch goal expects), and route through the normal matched-branch
+  # path — index inversion, goal refinement, carried-eq, and scrutinee
+  # substitution all apply unchanged. E-layer, no TCB.
+  defp elaborate_default_branch(verdict, cname, {vname, body_expr}, names, ctx, env, param_vals, scrut_term, result_type_term, carried) do
+    # A surface constructor pattern names only the PRESENT (non-erased) args; the
+    # erased indices are reconstructed from the telescope, not bound in the source.
+    %{quantities: quantities} = Inductive.get_ctor(env, cname)
+    present = Enum.count(quantities, &(&1 == :present))
+    fresh = default_pattern_vars(cname, present)
+    syn_pattern = {:function_call, [name: Atom.to_string(cname)], Enum.map(fresh, &{:variable, [], &1})}
+
+    cond do
+      vname == "_" ->
+        elaborate_matched_branch(verdict, syn_pattern, body_expr, names, ctx, env, param_vals, scrut_term, result_type_term, carried)
+
+      binds_any?(body_expr, [vname]) ->
+        # The catch-all's name is rebound inside its own body; a naive surface
+        # substitution would capture. Reject rather than miscompile.
+        {:error, {:unsupported_pattern, :shadowed_default}}
+
+      true ->
+        body2 = subst_surface_var(body_expr, vname, syn_pattern)
+        elaborate_matched_branch(verdict, syn_pattern, body2, names, ctx, env, param_vals, scrut_term, result_type_term, carried)
+    end
+  end
+
+  # Fresh, collision-proof binder names for a synthesized catch-all constructor
+  # pattern (`$<ctor>_<n>`); empty for a nullary constructor.
+  defp default_pattern_vars(cname, arity) do
+    for i <- 1..arity//1, do: "$" <> Atom.to_string(cname) <> "_" <> Integer.to_string(i)
   end
 
   # Arity of a constructor named directly or by a pattern (spec §5 steps 4/5).
