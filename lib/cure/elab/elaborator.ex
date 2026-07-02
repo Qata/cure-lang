@@ -1615,8 +1615,17 @@ defmodule Cure.Elab.Elaborator do
 
   defp constructor_pattern({:function_call, meta, args}) do
     cname = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    vars = Enum.map(args, fn {:variable, _meta, v} -> v end)
-    {:ok, {cname, vars}}
+
+    # A surface constructor pattern binds only variables in its argument
+    # positions. A NESTED constructor/literal sub-pattern (`S(S(m))`, `C(Z(),y)`)
+    # needs decision-tree lowering (parity #3), not yet implemented — report a
+    # clean error rather than crashing on the non-variable arg.
+    if Enum.all?(args, &match?({:variable, _m, _v}, &1)) do
+      vars = Enum.map(args, fn {:variable, _meta, v} -> v end)
+      {:ok, {cname, vars}}
+    else
+      {:error, {:unsupported_pattern, :nested_constructor_arg}}
+    end
   end
 
   defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
