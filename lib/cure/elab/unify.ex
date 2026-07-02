@@ -55,10 +55,22 @@ defmodule Cure.Elab.Unify do
 
   @type uterm :: Cure.Core.Term.t() | {:meta, MetaCtx.id()}
 
-  @doc "Unify two (possibly metavariable-bearing) terms, refining the context."
-  @spec unify(uterm(), uterm(), MetaCtx.t()) :: {:ok, MetaCtx.t()} | {:error, term()}
-  def unify(t1, t2, ctx) do
-    do_unify(force(t1, ctx), force(t2, ctx), ctx)
+  @doc """
+  Unify two (possibly metavariable-bearing) terms, refining the context.
+
+  When `sig` (a `Cure.Core.Env` signature) is supplied, a syntactic failure on
+  two CLOSED, metavariable-free terms falls back to the trusted δ-capable
+  conversion (`Cure.Core.Conv`) — so a computed index like `dmeet(DDec, DDec)`
+  unifies with its normal form `DDec` (Idris parity for composed computed
+  indices). This is a COMPLETENESS improvement only: it uses the same conversion
+  the kernel uses, and the kernel independently re-checks the assembled term, so
+  no soundness rests on this fallback (a wrong accept here is caught downstream).
+  Without `sig` the behaviour is exactly the prior purely-syntactic unification.
+  """
+  @spec unify(uterm(), uterm(), MetaCtx.t(), Cure.Core.Env.t() | nil) ::
+          {:ok, MetaCtx.t()} | {:error, term()}
+  def unify(t1, t2, ctx, sig \\ nil) do
+    do_unify(force(t1, ctx), force(t2, ctx), ctx, sig)
   end
 
   # Follow the chain of solutions until the head is not a solved metavariable.
@@ -71,43 +83,75 @@ defmodule Cure.Elab.Unify do
 
   defp force(t, _ctx), do: t
 
-  defp do_unify({:meta, id}, {:meta, id}, ctx), do: {:ok, ctx}
-  defp do_unify({:meta, id}, t, ctx), do: solve(id, t, ctx)
-  defp do_unify(t, {:meta, id}, ctx), do: solve(id, t, ctx)
+  defp do_unify({:meta, id}, {:meta, id}, ctx, _sig), do: {:ok, ctx}
+  defp do_unify({:meta, id}, t, ctx, _sig), do: solve(id, t, ctx)
+  defp do_unify(t, {:meta, id}, ctx, _sig), do: solve(id, t, ctx)
 
-  defp do_unify({:type, l}, {:type, l}, ctx), do: {:ok, ctx}
-  defp do_unify({:var, i}, {:var, i}, ctx), do: {:ok, ctx}
-  defp do_unify({:global, g}, {:global, g}, ctx), do: {:ok, ctx}
+  defp do_unify({:type, l}, {:type, l}, ctx, _sig), do: {:ok, ctx}
+  defp do_unify({:var, i}, {:var, i}, ctx, _sig), do: {:ok, ctx}
+  defp do_unify({:global, g}, {:global, g}, ctx, _sig), do: {:ok, ctx}
 
-  defp do_unify({:data, f, ps1, is1}, {:data, f, ps2, is2}, ctx),
-    do: unify_lists(ps1 ++ is1, ps2 ++ is2, ctx)
+  defp do_unify({:data, f, ps1, is1}, {:data, f, ps2, is2}, ctx, sig),
+    do: unify_lists(ps1 ++ is1, ps2 ++ is2, ctx, sig)
 
-  defp do_unify({:ctor, c, a1}, {:ctor, c, a2}, ctx), do: unify_lists(a1, a2, ctx)
+  defp do_unify({:ctor, c, a1}, {:ctor, c, a2}, ctx, sig), do: unify_lists(a1, a2, ctx, sig)
 
-  defp do_unify({:app, f1, x1}, {:app, f2, x2}, ctx) do
-    with {:ok, ctx} <- unify(f1, f2, ctx), do: unify(x1, x2, ctx)
+  defp do_unify({:app, f1, x1}, {:app, f2, x2}, ctx, sig) do
+    with {:ok, ctx} <- unify(f1, f2, ctx, sig), do: unify(x1, x2, ctx, sig)
   end
 
-  defp do_unify({:pi, d1, c1}, {:pi, d2, c2}, ctx) do
-    with {:ok, ctx} <- unify(d1, d2, ctx), do: unify(c1, c2, ctx)
+  defp do_unify({:pi, d1, c1}, {:pi, d2, c2}, ctx, sig) do
+    with {:ok, ctx} <- unify(d1, d2, ctx, sig), do: unify(c1, c2, ctx, sig)
   end
 
-  defp do_unify({:lam, d1, b1}, {:lam, d2, b2}, ctx) do
-    with {:ok, ctx} <- unify(d1, d2, ctx), do: unify(b1, b2, ctx)
+  defp do_unify({:lam, d1, b1}, {:lam, d2, b2}, ctx, sig) do
+    with {:ok, ctx} <- unify(d1, d2, ctx, sig), do: unify(b1, b2, ctx, sig)
   end
 
   # Structurally identical (literals, atoms, etc.).
-  defp do_unify(t, t, ctx), do: {:ok, ctx}
+  defp do_unify(t, t, ctx, _sig), do: {:ok, ctx}
 
-  defp do_unify(t1, t2, _ctx), do: {:error, {:cannot_unify, t1, t2}}
-
-  defp unify_lists([], [], ctx), do: {:ok, ctx}
-
-  defp unify_lists([x | xs], [y | ys], ctx) do
-    with {:ok, ctx} <- unify(x, y, ctx), do: unify_lists(xs, ys, ctx)
+  # Last resort: two terms that are not syntactically unifiable may still be
+  # DEFINITIONALLY equal via δ (e.g. `DDec` vs the redex `dmeet(DDec, DDec)`).
+  # Only attempt this when a signature is available and both sides are closed and
+  # metavariable-free — then they carry no unification variables to solve, so a
+  # convertibility check is exactly the right question, and `env=[] depth=0` is
+  # sound (no free de Bruijn vars). Open neutral spines (e.g. `app(av, cv)`) unify
+  # syntactically and never reach here.
+  defp do_unify(t1, t2, ctx, sig) do
+    if delta_convertible?(t1, t2, ctx, sig) do
+      {:ok, ctx}
+    else
+      {:error, {:cannot_unify, t1, t2}}
+    end
   end
 
-  defp unify_lists(l1, l2, _ctx), do: {:error, {:arity_mismatch, length(l1), length(l2)}}
+  defp delta_convertible?(_t1, _t2, _ctx, nil), do: false
+
+  defp delta_convertible?(t1, t2, ctx, sig) do
+    z1 = zonk(t1, ctx)
+    z2 = zonk(t2, ctx)
+
+    meta_free?(z1) and meta_free?(z2) and
+      Cure.Core.Term.closed?(z1) and Cure.Core.Term.closed?(z2) and
+      Cure.Core.Conv.conv?(z1, z2, [], 0, sig)
+  end
+
+  defp meta_free?({:meta, _}), do: false
+  defp meta_free?({:data, _f, ps, is}), do: Enum.all?(ps ++ is, &meta_free?/1)
+  defp meta_free?({:ctor, _c, args}), do: Enum.all?(args, &meta_free?/1)
+  defp meta_free?({:app, f, x}), do: meta_free?(f) and meta_free?(x)
+  defp meta_free?({:pi, d, c}), do: meta_free?(d) and meta_free?(c)
+  defp meta_free?({:lam, d, b}), do: meta_free?(d) and meta_free?(b)
+  defp meta_free?(_), do: true
+
+  defp unify_lists([], [], ctx, _sig), do: {:ok, ctx}
+
+  defp unify_lists([x | xs], [y | ys], ctx, sig) do
+    with {:ok, ctx} <- unify(x, y, ctx, sig), do: unify_lists(xs, ys, ctx, sig)
+  end
+
+  defp unify_lists(l1, l2, _ctx, _sig), do: {:error, {:arity_mismatch, length(l1), length(l2)}}
 
   defp solve(id, t, ctx) do
     if occurs?(id, t, ctx) do

@@ -1777,24 +1777,33 @@ defmodule Cure.Elab.Elaborator do
       init = {:ok, MetaCtx.new(), [], present_args}
 
       telescope
-      |> Enum.reduce_while(init, &solve_arg/2)
+      |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
       |> finish_ctor_app(cname, family, ctor, length(param_tele))
     end
   end
 
   # One telescope slot: erased → fresh meta; present → unify expected vs actual.
-  defp solve_arg({{_name, _type_term}, :erased}, {:ok, mctx, chosen, present}) do
+  # `env` is threaded as the conversion signature so a present argument whose type
+  # carries a *computed* index (`seq`'s `dmeet(d1, d2)`) unifies up-to-δ against
+  # the expected `DDec` — closing the composed-computed-index reach (Idris parity)
+  # without any kernel change (`Unify` uses the trusted `Conv`; the kernel still
+  # re-checks the assembled ctor). See `Unify.unify/4`.
+  defp solve_arg({{_name, _type_term}, :erased}, {:ok, mctx, chosen, present}, _env) do
     {mctx, id} = MetaCtx.fresh(mctx)
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
-  defp solve_arg({{_name, _type_term}, :present}, {:ok, _mctx, _chosen, []}),
+  defp solve_arg({{_name, _type_term}, :present}, {:ok, _mctx, _chosen, []}, _env),
     do: {:halt, {:error, :too_few_arguments}}
 
-  defp solve_arg({{_name, type_term}, :present}, {:ok, mctx, chosen, [{arg, arg_type_term} | rest]}) do
+  defp solve_arg(
+         {{_name, type_term}, :present},
+         {:ok, mctx, chosen, [{arg, arg_type_term} | rest]},
+         env
+       ) do
     expected = Subst.instantiate(type_term, chosen)
 
-    case Unify.unify(expected, arg_type_term, mctx) do
+    case Unify.unify(expected, arg_type_term, mctx, env) do
       {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [arg], rest}}
       {:error, reason} -> {:halt, {:error, {:index_mismatch, reason}}}
     end
@@ -1837,7 +1846,7 @@ defmodule Cure.Elab.Elaborator do
     init = {:ok, MetaCtx.new(), [], present_args}
 
     telescope
-    |> Enum.reduce_while(init, &solve_arg/2)
+    |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
     |> finish_global_app(name, codomain, ctx)
   end
 
