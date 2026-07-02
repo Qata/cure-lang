@@ -270,9 +270,42 @@ defmodule Cure.Elab.Program do
     }
   end
 
+  # Two passes so that forward references and mutual recursion resolve: first
+  # every type/record is elaborated and every function *signature* is registered;
+  # then every function *body* is elaborated against the fully-populated
+  # environment. Non-function declarations are elaborated in source order in pass
+  # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env) do
-    Enum.reduce_while(items, {:ok, env}, fn decl, {:ok, acc} ->
-      case Declarations.elaborate(decl, acc) do
+    with {:ok, env1, fn_decls} <- register_pass(items, env) do
+      body_pass(fn_decls, env1)
+    end
+  end
+
+  defp register_pass(items, env) do
+    Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
+      case decl do
+        {:function_def, _meta, _body} ->
+          case Declarations.register_signature(decl, acc) do
+            {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl]}}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        _ ->
+          case Declarations.elaborate(decl, acc) do
+            {:ok, acc2} -> {:cont, {:ok, acc2, fns}}
+            {:error, _} = err -> {:halt, err}
+          end
+      end
+    end)
+    |> case do
+      {:ok, _env, _fns} = ok -> ok
+      {:error, _} = err -> err
+    end
+  end
+
+  defp body_pass(fn_decls, env) do
+    Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
+      case Declarations.elaborate_function_body(decl, acc) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
         {:error, _} = err -> {:halt, err}
       end

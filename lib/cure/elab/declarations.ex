@@ -23,11 +23,60 @@ defmodule Cure.Elab.Declarations do
 
   @doc "Elaborate one declaration AST, returning the augmented signature."
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
-  def elaborate({:function_def, meta, body}, env) do
+  def elaborate({:function_def, _meta, _body} = decl, env) do
+    with {:ok, env1} <- register_signature(decl, env) do
+      elaborate_function_body(decl, env1)
+    end
+  end
+
+  # Elaborate a function's signature to its Π type and register it (with a
+  # placeholder body) so that later-defined functions and mutually-recursive peers
+  # resolve as globals. Called for every function in a first pass, before any body
+  # is elaborated (see `Program.elaborate_declarations`).
+  def register_signature({:function_def, meta, _body}, env) do
+    with {:ok, sig} <- function_signature(meta, env) do
+      {:ok, Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)}
+    end
+  end
+
+  # Elaborate a function's body against its (already registered) signature and
+  # replace the placeholder with the real lambda. The environment already carries
+  # every function's signature, so forward references and mutual recursion resolve.
+  def elaborate_function_body({:function_def, meta, body}, env) do
+    body_expr = single_body(body)
+
+    with {:ok, sig} <- function_signature(meta, env) do
+      ctx = build_context(env, sig.telescope)
+      return_value = Eval.eval(sig.return_core, Context.env(ctx))
+
+      with {:ok, body_term} <-
+             elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+           :ok <- Kernel.check(ctx, body_term, return_value),
+           # {0,ω} relevance check (M8.3): erasure will drop the `:erased` parameter
+           # slots, so reject any body that uses one relevantly (returned / passed
+           # in a present position / scrutinised / applied). E-layer; the kernel
+           # stays quantity-blind. See `Cure.Elab.Relevance`.
+           :ok <- Relevance.check(env, sig.name, sig.quantities, body_term) do
+        lambda = wrap_binders(:lam, sig.telescope, body_term)
+        final = Env.add_def(env, sig.name, sig.pi, lambda, sig.quantities)
+        # Best-effort totality certification, eagerly and in declaration order, so a
+        # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
+        # must unfold while `append`'s body is checked). A function that fails the
+        # kernel's totality check simply stays uncertified — opaque to δ, never a
+        # soundness hole (§7). Whole-program enforcement of the *required* set still
+        # happens in TotalityClosure.certify_type_level.
+        {:ok, maybe_certify(final, sig.name)}
+      end
+    end
+  end
+
+  # Shared signature elaboration: auto-generalize free type variables, build the
+  # parameter telescope and the Π type. Deterministic in the type environment, so
+  # the signature computed in the registration pass and the body pass agree.
+  defp function_signature(meta, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
     params0 = Keyword.get(meta, :params, [])
     return_expr = Keyword.fetch!(meta, :return_type)
-    body_expr = single_body(body)
 
     # Idris-style auto-generalization: a free lowercase type variable in the
     # signature (`fn id(x: a) -> a`) is bound as a leading implicit `{a: Type}`
@@ -36,30 +85,17 @@ defmodule Cure.Elab.Declarations do
     params = auto_generalize(params0, return_expr, env) ++ params0
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
-         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env),
-         pi = wrap_binders(:pi, telescope, return_core),
-         # Pre-register the declared type so a recursive body's self-reference
-         # resolves (the placeholder body is never evaluated — δ stays off until
-         # certification, M7.2). The real body replaces it below.
-         env1 = Env.add_def(env, name, pi, {:hole, "__pending__"}, quantities),
-         ctx = build_context(env1, telescope),
-         return_value = Eval.eval(return_core, Context.env(ctx)),
-         {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env1, params),
-         :ok <- Kernel.check(ctx, body_term, return_value),
-         # {0,ω} relevance check (M8.3): erasure will drop the `:erased` parameter
-         # slots, so reject any body that uses one relevantly (returned / passed
-         # in a present position / scrutinised / applied). E-layer; the kernel
-         # stays quantity-blind. See `Cure.Elab.Relevance`.
-         :ok <- Relevance.check(env1, name, quantities, body_term) do
-      lambda = wrap_binders(:lam, telescope, body_term)
-      final = Env.add_def(env1, name, pi, lambda, quantities)
-      # Best-effort totality certification, eagerly and in declaration order, so a
-      # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
-      # must unfold while `append`'s body is checked). A function that fails the
-      # kernel's totality check simply stays uncertified — opaque to δ, never a
-      # soundness hole (§7). Whole-program enforcement of the *required* set still
-      # happens in TotalityClosure.certify_type_level.
-      {:ok, maybe_certify(final, name)}
+         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env) do
+      {:ok,
+       %{
+         name: name,
+         params: params,
+         telescope: telescope,
+         quantities: quantities,
+         scope: scope,
+         return_core: return_core,
+         pi: wrap_binders(:pi, telescope, return_core)
+       }}
     end
   end
 
