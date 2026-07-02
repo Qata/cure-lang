@@ -15,7 +15,9 @@
 - **Closed atom set:** every new generator-produced name (def names, family names, ctor names, telescope binder names) MUST be added to `@known_atoms` in `lib/cure/elab/../../antigen/challenge.ex` (`lib/antigen/challenge.ex:26-42`) or `:safe` corpus decode crashes in processes that never loaded the generator.
 - **Full suite before every commit:** `mix test` (not just `test/antigen`). Any task touching `lib/cure/core/` is a TCB change — say so in the commit body with a `TCB:` line.
 - **Labels state mathematical truth** (spec D3): a well-founded def is `:terminating` even while the checker rejects it. Every new challenge's `@doc` states its by-construction ground-truth argument.
-- Work happens on a dedicated worktree branched from `autopilot/case-index-unification` (creation via superpowers:using-git-worktrees at execution time). Roadmap edits in this plan touch ONLY §3 of `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§2 rows belong to the parallel P0 plan — keeps the merge trivial).
+- Work happens on a dedicated worktree branched from `autopilot/case-index-unification` (creation via superpowers:using-git-worktrees at execution time). Roadmap edits in this plan touch ONLY §3 of `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` plus the status cells (and stale-hole parenthetical of row 13) of §2 rows 13, 19, 23 — all other §2 text belongs to the parallel P0 plan (keeps the merge trivial).
+- **D4 symmetric reroute (hardened spec D4/gate 4):** a must-*accept*-today challenge (W3's `deletion(:well_typed)`; W5's `:well_typed` probes — NOT W2, whose pins are expected-rejected) that the kernel wrongly rejects is an *incompleteness surprise*, not a soundness hole: keep its `:well_typed` label (D3), pin its current documented violation, and bank it in `test/antigen/reach.sexp` instead of `corpus.sexp`/`seeds.sexp`; the affected ledger row stays open in Task 11 (gate 5). Never relabel, never silently drop.
+- **Tests are immutable once they correctly encode intended/observed behavior:** make a red test green by changing implementation code only (or, for a reach/pin entry, by the sanctioned reach→corpus migration in the port that achieves it) — never by deleting, skipping, or weakening an assertion. The one exception is a test that is provably wrong. Reach/pin/audit tests are characterizations of *current* kernel behavior by design (D2/D3): if a Step-1 prediction of the exact violation shape doesn't match what the kernel actually returns on the first red run, correcting the literal to the observed truth *before that entry is banked* is the intended workflow, not a violation of this rule — the record becomes immutable only once committed (append-only, above).
 
 ---
 
@@ -74,6 +76,8 @@ with
 `- **A1 is the only red item** — a known hole whose antibody is already banked, waiting on the checker fix.`
 with
 `- **A1 is closed** (`d13d718`): the checker conservatively rejects every mutual cycle and the banked antibody replays `:ok`. What remains of mutual recursion is *reach* (accepting well-founded groups — transliteration program P1), not soundness.`
+
+4. §2 row 13 (gate 5 names this; the parallel P0 plan also carries it — whichever runs first does it, and P0 has not run: the row still shows 🔴). Change the row's parenthetical `(confirmed hole; antibody banked, checker must be fixed)` to `(hole fixed `d13d718`; antibody banked as permanent regression guard)` and its status cell `🔴` → `✅`. Touch nothing else in the row (P0 scope-split). If the row is ALREADY corrected (P0 ran first), verify it matches this wording and skip.
 
 - [ ] **Step 4: Run the full suite**
 
@@ -680,12 +684,15 @@ git commit -m "test(antigen): reach.sexp store + pinned replay for P1 reach targ
 - Modify: `test/antigen/indexed_seed_test.exs` (extend `@antibodies` / `@seed_candidates`)
 - Create: `test/cure/core/branch_unify_occurs_test.exs`
 - Modify (generated): `test/antigen/corpus.sexp`, `test/antigen/seeds.sexp`
+- Modify (conditional — only if Step 5's D4 reroute fires): `test/antigen/reach_pin_test.exs`, `test/antigen/reach.sexp`
 
 **Interfaces:**
 - Consumes: `Antigen.Generators.Indexed.challenge/6` (existing private helper), `Cure.Core.Kernel.branch_unify/4` (public), `Cure.Core.{Context, Env, Inductive, Eval}`.
 - Produces: `Antigen.Generators.Indexed.deletion(:well_typed | :ill_typed) :: Challenge.t()` (assay `"indexed/case"`, def_name `:delete`).
 
-**Background for the implementer:** the kernel's case-index unifier (`lib/cure/core/kernel.ex:749-830`) has a *deletion* rule — `unify_one(r, s, _arity, subst) when r == s → {:ok, subst}` (syntactically equal index pair is consistent, no refinement) — and an *occurs check* — `bind_index` degrades a cyclic solve to `:undecided` (`kernel.ex:810`). Constructor-headed equal pairs are consumed by the injectivity clause first, so the deletion rule is exercised by index terms that are equal but NOT constructor/data-headed: integer literals. Roadmap A2/#23 wants a *named* antibody for each rule.
+**Background for the implementer:** the kernel's case-index unifier (`lib/cure/core/kernel.ex:749-847`) has a *deletion* rule — `unify_one(r, s, _arity, subst) when r == s → {:ok, subst}` (syntactically equal index pair is consistent, no refinement) — and an *occurs check* — `bind_index` degrades a cyclic solve to `:undecided` (`kernel.ex:810`). Constructor-headed equal pairs are consumed by the injectivity clause first, so the deletion rule is exercised by index terms that are equal but NOT constructor/data-headed: integer literals. Roadmap A2/#23 wants a *named* antibody for each rule.
+
+**Divergence from spec W3's literal framing, and why:** §4 W3 describes both antibodies as `:indexed_case` challenges "named in the assay tests." The occurs-check antibody below instead goes directly through the public `Kernel.branch_unify/4` in a standalone kernel-level test (Step 6), not through `Antigen.Generators.Indexed`/`Assays.Indexed`. Reason: the occurs check guards an out-of-telescope index reference — a signature shape `Inductive.declare/3` does not itself validate (confirmed: `declare/3` is a plain metadata insertion, `lib/cure/core/inductive.ex:132-143`), but one that a challenge built and typechecked through the normal Antigen apparatus would never organically produce (well-formed elaborator output always closes result indices over their own telescope). Reaching the kernel's defensive branch therefore requires constructing the adversarial signature directly, bypassing the challenge layer. The antibody still runs on every `mix test` and is a permanent regression guard; it is just not corpus-banked or assay-dispatched. Task 11 records it as an "occurs pin," distinct from the deletion "antibody," to keep this distinction visible in the ledger.
 
 - [ ] **Step 1: Write the failing assay tests**
 
@@ -756,7 +763,11 @@ In `lib/antigen/challenge.ex`, change
 to
 `    :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,`
 
-- [ ] **Step 5: Run the assay tests** — `mix test test/antigen/assays/indexed_test.exs`, expected PASS. If `deletion(:well_typed)` fails with `{:wrongly_rejected, …}`, inspect the reason: this is an audit finding (D4) about how the kernel evaluates/reifies literal index values — report it in the run summary and STOP this task for user input rather than relabeling.
+- [ ] **Step 5: Run the assay tests** — `mix test test/antigen/assays/indexed_test.exs`, expected PASS. If `deletion(:well_typed)` fails with `{:wrongly_rejected, …}`, inspect the reason: this is D4's *incompleteness surprise* (kernel wrongly rejects a must-accept-today challenge), likely in how the kernel evaluates/reifies literal index values. Apply the D4 symmetric reroute (Global Constraints): keep the `:well_typed` label, change this test to pin the exact current violation, bank the entry in `reach.sexp` instead of `seeds.sexp` in Step 8, record the surprise in the run report, and have Task 11 leave A2/#23 open rather than ✅. Do NOT relabel, do NOT stop the task.
+
+  Extending `test/antigen/reach_pin_test.exs` for this entry is not a one-line addition: that file (Task 5) hardcodes a single assay dispatch (`Assays.Totality.run(c)`) and keys `@expected` by `c.payload.focus`, and `indexed/case` challenges have neither. Generalize it: replace the hardcoded call with a per-entry dispatch keyed by `c.assay` (a small registry, e.g. `%{"totality/terminating" => Assays.Totality, "indexed/case" => Assays.Indexed}`, mirroring `corpus_replay_test.exs`'s `@registry`), and replace the `focus`-keyed `@expected` map with a shape-agnostic key such as `c.note` (every entry's note is already a unique, human-legible identifier) so both `focus`-bearing and `def_name`-bearing entries key uniformly.
+
+  Symmetrically: if `deletion(:ill_typed)` instead fails by wrongly ACCEPTING (the deletion rule discharges the branch without checking its ill-typed body), that is a soundness hole, not an incompleteness surprise — apply D4's default rule (spec D4, first sentence): stop, do not bank, report it, and fix it red-green in the kernel (mirror Task 7/8's audit-then-fix pattern and its `TCB:` commit-body line) before proceeding to Step 6.
 
 - [ ] **Step 6: Write the occurs-check pin (kernel-level named antibody)**
 
@@ -837,6 +848,8 @@ git add lib/antigen/generators/indexed.ex lib/antigen/challenge.ex \
   test/cure/core/branch_unify_occurs_test.exs test/antigen/corpus.sexp test/antigen/seeds.sexp
 git commit -m "test(antigen): named deletion-rule antibody + kernel occurs-check pin (W3, closes #23)" --author="Made In Heaven <madeinheaven@madeinheaven.com>"
 ```
+
+If Step 5's D4 reroute fired, also `git add test/antigen/reach_pin_test.exs test/antigen/reach.sexp` into this same commit (or a follow-up commit before moving on) — the reroute is not a separable, deferrable change.
 
 ---
 
@@ -1215,6 +1228,7 @@ git commit -m "test(antigen): bank W4 positivity escape-hatch antibodies (A3/#19
 - Test: `test/antigen/assays/universes_test.exs`
 - Create: `test/antigen/universes_seed_test.exs`
 - Modify (generated): `test/antigen/corpus.sexp`, `test/antigen/seeds.sexp`
+- Modify (conditional — only if Step 6's D4 reroute fires): `test/antigen/reach_pin_test.exs`, `test/antigen/reach.sexp`
 
 **Interfaces:**
 - Consumes: `Cure.Core.Kernel.check_def/2`, `Kernel.check_family/2`, `Kernel.check_ctor/3`, `Cure.Core.Universe` (ceiling 2, `succ` errors `:universe_ceiling`), the `:indexed_case` and `:family` record shapes.
@@ -1415,7 +1429,7 @@ end
    `    :u`
    (`:Foo`, `:MkFoo`, `:x`, `:n`, `:Nat`, `:Z`, `:S` are already interned.)
 
-- [ ] **Step 6: Run the assay tests** — `mix test test/antigen/assays/universes_test.exs`, expected `6 tests, 0 failures`. Any failure is an audit finding on roadmap #20's claims (D4): report it; if it is a wrongly-ACCEPTED `:ill_typed`, stop for a red-green kernel fix before banking.
+- [ ] **Step 6: Run the assay tests** — `mix test test/antigen/assays/universes_test.exs`, expected `6 tests, 0 failures`. Any failure is an audit finding on roadmap #20's claims (D4): report it. If it is a wrongly-ACCEPTED `:ill_typed`, stop for a red-green kernel fix before banking (soundness hole). If it is a wrongly-REJECTED `:well_typed` (cumulativity/stratification/ctor_field), apply the D4 symmetric reroute (Global Constraints): keep the label, pin the exact current violation in this test, bank that entry in `reach.sexp` (extend `reach_pin_test.exs` per the generalization described in Task 6 Step 5 — dispatch by `c.assay` via a small registry, key `@expected` by `c.note` rather than `focus`, since `universes` entries carry neither a uniform `focus` list nor always a `def_name`) — do NOT rely on Step 7's `:ok` seed filter to silently drop it — and have Task 11 leave A4 open rather than ✅.
 
 - [ ] **Step 7: Bank**
 
@@ -1427,6 +1441,14 @@ defmodule Antigen.UniversesSeedTest do
   Banks the W5 universes vertical (pre-port banking spec §4 W5; roadmap A4 —
   first Antigen coverage of the universe rules). Ill-typed probes are antibodies
   (corpus.sexp); well-typed probes are known-good seeds (seeds.sexp). Idempotent.
+
+  Store deltas: corpus +3 antibodies, seeds +2 (NOT +3). `stratification(:well_typed)`
+  and `ctor_field(:well_typed)` are coverage-equivalent under the plateauing seed
+  key (`ctors=[type]|depth=b0_2|flags=[]|label=well_typed`), so only the first
+  banks as a seed — by design, one seed per coverage cell (the coverage key IS the
+  seed store's identity; making it finer would orphan every stored key).
+  `ctor_field(:well_typed)`'s acceptance remains guarded on every run by the assay
+  test in `universes_test.exs`.
   """
   use ExUnit.Case, async: false
   alias Antigen.{Corpus, Runner, Assays}
@@ -1461,7 +1483,9 @@ defmodule Antigen.UniversesSeedTest do
         match?(%Antigen.Challenge{assay: "universes"}, r.entry)
       end)
 
-    assert length(uni) >= 6
+    # 3 antibodies + 2 seeds: stratification(:well_typed) and ctor_field(:well_typed)
+    # share one coverage cell (see moduledoc), so the seed store holds one of them.
+    assert length(uni) >= 5
 
     assert Enum.all?(uni, &(&1.verdict == :ok)),
            inspect(uni |> Enum.reject(&(&1.verdict == :ok)) |> Enum.map(& &1.verdict))
@@ -1469,7 +1493,9 @@ defmodule Antigen.UniversesSeedTest do
 end
 ```
 
-Run twice (bank + idempotence): `mix test test/antigen/universes_seed_test.exs`. If a `Coverage.key/1` clause error surfaces on the `:family`-kind seed (coverage keys are computed on banking), inspect `lib/antigen/coverage.ex` — the positivity vertical already banks `:family` seeds, so the path exists; match its usage.
+Run twice (bank + idempotence): `mix test test/antigen/universes_seed_test.exs`. Expected store deltas on the first run: `corpus.sexp` +3 lines, `seeds.sexp` +2 lines (byte-stable on the second run). If a `Coverage.key/1` clause error surfaces on the `:family`-kind seed (coverage keys are computed on banking), inspect `lib/antigen/coverage.ex` — the positivity vertical already banks `:family` seeds, so the path exists; match its usage.
+
+> **Execution-time correction (sanctioned by the Global Constraints immutability carve-out — a wrong predicted literal corrected to first-observed truth before the entry is committed):** the plan originally predicted seeds +3 and asserted `length(uni) >= 6`. First red run showed seeds +2: `stratification(:well_typed)` and `ctor_field(:well_typed)` collide on the coverage-plateau seed dedup key (`ctors=[type]|depth=b0_2|flags=[]|label=well_typed`). This is the seed store's *intended* semantics (one seed per coverage cell; the persisted key string is each record's identity, so a finer key would orphan every stored key and break dedup for all existing seed tests). Resolution: correct the count literal to `>= 5` and document the collision — do NOT touch the generators or `Coverage` to defeat dedup. Apparatus-design observation, not a kernel finding; the W5 audit itself was fully green (no holes, no D4 reroute — A4 closes unconditionally).
 
 - [ ] **Step 8: Full suite and commit**
 
@@ -1482,6 +1508,8 @@ git add lib/antigen/generators/universes.ex lib/antigen/assays/universes.ex \
 git commit -m "test(antigen): universes vertical — Type-in-Type, ceiling, cumulativity, ctor-field rule (W5/A4)" --author="Made In Heaven <madeinheaven@madeinheaven.com>"
 ```
 
+If Step 6's D4 reroute fired, also `git add test/antigen/reach_pin_test.exs test/antigen/reach.sexp` into this same commit — the reroute is not a separable, deferrable change.
+
 ---
 
 ### Task 11: close the ledger (§3) + final gate
@@ -1493,10 +1521,12 @@ git commit -m "test(antigen): universes vertical — Type-in-Type, ceiling, cumu
 
 - [ ] **Step 1: Update §3.2 rows**
 
+Per gate 5, every ✅ below is conditional: if a D4 incompleteness reroute sent one of that row's entries to `reach.sexp`, mark the row `partial (…)` naming the rerouted entry instead of ✅.
+
 - A2: Priority cell → `✅ done (deletion antibody + occurs pin banked)`
 - A3: Priority cell → `✅ done (three escape hatches banked; holes found+fixed per W4 audit)` — match the actual Task 7/8 outcome.
 - A4: Priority cell → `✅ done (universes vertical banked)`
-- A9: Priority cell → `✅ done (subsumed by W1 adversarial set)`
+- A9: Priority cell → `✅ done (subsumed by W1 adversarial set)` (unconditional — W1 has no reroute branch)
 
 - [ ] **Step 2: Update §3.1 table**
 
@@ -1507,12 +1537,12 @@ git commit -m "test(antigen): universes vertical — Type-in-Type, ceiling, cumu
 - [ ] **Step 3: Update §2 status cells for rows 19 and 23** (status column ONLY — row text belongs to P0's plan scope-split):
 
 - Row 19: `⬜` → `✅ (W4: audited, holes fixed, antibodies banked)` — match the audit outcome.
-- Row 23: `⬜` → `✅ (W3: deletion antibody + occurs pin)`
+- Row 23: `⬜` → `✅ (W3: deletion antibody + occurs pin)` — if the Task 6 Step 5 reroute fired, use `partial (occurs pin banked; deletion well-typed rerouted to reach.sexp)` instead.
 
 - [ ] **Step 4: Final gate**
 
 Run: `mix test`
-Expected: full PASS. Then re-run the three banking tests once more and `git status --short` — expected: clean tree (all stores stable).
+Expected: full PASS. Then re-run all five banking/pin test files once more (`totality_seed_test.exs`, `reach_pin_test.exs`, `indexed_seed_test.exs`, `positivity_seed_test.exs`, `universes_seed_test.exs`) and `git status --short` — expected: clean tree (all stores stable).
 
 - [ ] **Step 5: Commit**
 

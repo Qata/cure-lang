@@ -29,16 +29,18 @@ defmodule Antigen.Challenge do
     # labels
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
-    :f, :g, :h, :Dec, :Nat, :Z, :S, :Causal,
-    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :present, :erased,
+    :f, :g, :h, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
+    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
     :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
     :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge, :inject,
     :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
-    :Wr, :MkWr, :IW, :iw, :w,
+    :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,
     # rewrite/eq vertical: kind, def-names, motive family name
-    :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P
+    :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P,
+    # universes vertical
+    :u
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

@@ -27,6 +27,9 @@ defmodule Cure.Core.Term do
     * `{:refl, a}`                           reflexivity proof
     * `{:rewrite, proof, motive, body}`      transport / subst
     * `{:prim, op, args}`                    primitive operation
+    * `{:int_type}` / `{:int_lit, n}`        integer type / literal
+    * `{:bool_type}` / `{:bool_lit, b}`      boolean type / literal
+    * `{:float_type}` / `{:float_lit, f}`    float type / literal
   """
 
   @ceiling 2
@@ -73,6 +76,13 @@ defmodule Cure.Core.Term do
 
   def term?({:prim, op, args}), do: is_atom(op) and terms?(args)
 
+  def term?({:int_type}), do: true
+  def term?({:int_lit, n}), do: is_integer(n)
+  def term?({:bool_type}), do: true
+  def term?({:bool_lit, b}), do: is_boolean(b)
+  def term?({:float_type}), do: true
+  def term?({:float_lit, f}), do: is_float(f)
+
   def term?(_), do: false
 
   # -- de Bruijn shift / substitution -----------------------------------------
@@ -91,6 +101,14 @@ defmodule Cure.Core.Term do
   def shift({:var, _} = v, _amount, _cutoff), do: v
   def shift({:type, _} = t, _amount, _cutoff), do: t
   def shift({:global, _} = t, _amount, _cutoff), do: t
+
+  # Literals / type constants bind nothing and contain no variables: identity.
+  def shift({:int_type} = t, _amount, _cutoff), do: t
+  def shift({:int_lit, _} = t, _amount, _cutoff), do: t
+  def shift({:bool_type} = t, _amount, _cutoff), do: t
+  def shift({:bool_lit, _} = t, _amount, _cutoff), do: t
+  def shift({:float_type} = t, _amount, _cutoff), do: t
+  def shift({:float_lit, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
   def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
   def shift({:sigma, x, y}, a, c), do: {:sigma, shift(x, a, c), shift(y, a, c + 1)}
@@ -127,6 +145,14 @@ defmodule Cure.Core.Term do
   def subst({:var, _} = v, _j, _r), do: v
   def subst({:type, _} = t, _j, _r), do: t
   def subst({:global, _} = t, _j, _r), do: t
+
+  # Literals / type constants bind nothing and contain no variables: identity.
+  def subst({:int_type} = t, _j, _r), do: t
+  def subst({:int_lit, _} = t, _j, _r), do: t
+  def subst({:bool_type} = t, _j, _r), do: t
+  def subst({:bool_lit, _} = t, _j, _r), do: t
+  def subst({:float_type} = t, _j, _r), do: t
+  def subst({:float_lit, _} = t, _j, _r), do: t
 
   def subst({:pi, dom, cod}, j, r),
     do: {:pi, subst(dom, j, r), subst(cod, j + 1, shift(r, 1, 0))}

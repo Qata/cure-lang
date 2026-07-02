@@ -79,8 +79,10 @@ patterns, P3 dot/forced patterns, P4 `with` — transliteration spec §8).
   migrated (the one sanctioned move, below). A dedicated
   replay test asserts each entry currently replays to its *documented*
   violation (e.g. `{:violation, {:wrongly_rejected, [:even, :odd]}}`) — so an
-  accidental acceptance (possible unsoundness elsewhere) and an accidental
-  new rejection are both loud. The port run that closes the gap (P1 for all
+  accidental acceptance (verdict flips to `:ok`; possible unsoundness
+  elsewhere) and an accidental change to the violation's own shape (still
+  rejected, but for a different reason or a different affected-name set
+  than documented) are both loud. The port run that closes the gap (P1 for all
   initial entries) migrates the record to `corpus.sexp`, where the ordinary
   `:ok` replay and its never-pruned rule take over. Migration is
   append-there + remove-here in the port's commit; the record's content is
@@ -93,8 +95,14 @@ patterns, P3 dot/forced patterns, P4 `with` — transliteration spec §8).
   challenges against the current kernel. A must-reject challenge the kernel
   *accepts* is a live soundness hole discovered early: stop banking, report
   it, fix it red-green per the house testing rule, then bank the antibody as
-  the regression guard. This is exactly how roadmap #19's "verify" half
-  (W4) resolves either way.
+  the regression guard. Symmetrically, a must-*accept*-today challenge (W3's
+  deletion-rule case; W5's cumulativity / two-universe cases — not W2, whose
+  reach pins are *expected* rejected) that the kernel wrongly rejects is an
+  incompleteness surprise, not a soundness hole: per D3 its ground truth
+  doesn't change, so it reroutes to `reach.sexp` under D2 instead of
+  blocking the work item — it is not banked in `corpus.sexp` until the
+  kernel actually accepts it. This is exactly how roadmap #19's "verify"
+  half (W4) resolves either way.
 
 ## 4. Work items
 
@@ -193,11 +201,17 @@ runs first does it, the other verifies).
 2. Every new generator name interned in `Challenge.@known_atoms`; a decode
    round-trip test per new record shape.
 3. Every challenge @doc states its by-construction ground-truth argument.
-4. Any W4/W5 audit surprise (kernel accepts a must-reject) is reported as a
-   soundness finding and fixed red-green before its antibody banks; the K
-   diff, if any, is called out as a TCB change.
-5. Roadmap ledger updated: A1 ✅ (stale-closed), A2 ✅, A3/#19 resolved
-   per audit outcome, A4 ✅, A9 ✅ (subsumed), #23 ✅.
+4. Any W3/W4/W5 audit surprise where the kernel wrongly accepts a
+   must-reject challenge is reported as a soundness finding and fixed
+   red-green before its antibody banks; the K diff, if any, is called out
+   as a TCB change. A symmetric surprise where the kernel wrongly rejects a
+   must-accept-today challenge (W3, W5) reroutes that entry to
+   `reach.sexp` per D4 instead.
+5. Roadmap ledger updated: A1 ✅ (stale-closed) with parity-ledger `#13` and
+   §3.1's `totality/diverging` strength cell corrected to match (W6); A2/#23,
+   A3/#19, and A4 each resolved per audit outcome (✅ if every challenge
+   banks as designed; left open if D4's incompleteness reroute sends an
+   entry to `reach.sexp` instead); A9 ✅ (subsumed).
 
 ## 6. Sequencing
 
@@ -212,4 +226,4 @@ that ordering is the entire point of this spec.
 A5 (conversion vertical), A6 (ctor-formation vertical), A8/A10 (term
 generator + wiring), A7/#25 (④ surface corpus — post-④), all syntax-gated
 port challenges (transliteration spec §8 gate 4), and any kernel change
-except one forced by a W4/W5 audit surprise under gate 4.
+except one forced by a W3/W4/W5 audit surprise under gate 4.
