@@ -29,7 +29,7 @@ defmodule Antigen.Challenge do
     # labels
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
-    :f, :g, :h, :total_id, :Dec, :Nat, :Z, :S, :Causal,
+    :f, :g, :h, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
     :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :present, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,

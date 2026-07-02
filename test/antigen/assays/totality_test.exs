@@ -50,4 +50,24 @@ defmodule Antigen.Assays.TotalityTest do
   test "W1: one-leg-decreasing mutual pair is not certified" do
     assert :ok == A.run(G.diverging_one_leg_pair())
   end
+
+  # -- W2: reach pins (pre-port banking spec §4 W2, D2/D3) --------------------
+  # Labels state mathematical truth (:terminating — each IS well-founded); the
+  # assertions pin today's CONSERVATIVE REJECTION. P1 (size-change) flips these
+  # to :ok by migrating the banked records from reach.sexp into corpus.sexp —
+  # at which point these assertions are updated to assert :ok in the same commit.
+
+  test "W2 reach pin: even/odd structural mutual pair is conservatively rejected today" do
+    assert {:violation, {:wrongly_rejected, [:even, :odd]}} ==
+             A.run(G.wellfounded_even_odd())
+  end
+
+  test "W2 reach pin: Ackermann (lexicographic two-argument descent) is conservatively rejected today" do
+    assert {:violation, {:wrongly_rejected, [:ack]}} == A.run(G.wellfounded_ackermann())
+  end
+
+  test "W2 reach pin: permuted well-founded pair is conservatively rejected today" do
+    assert {:violation, {:wrongly_rejected, [:f, :g]}} ==
+             A.run(G.wellfounded_permuted_pair())
+  end
 end

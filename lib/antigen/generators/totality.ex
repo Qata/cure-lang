@@ -224,6 +224,136 @@ defmodule Antigen.Generators.Totality do
     )
   end
 
+  # -- W2: reach pins (pre-port banking spec §4 W2) ----------------------------
+  # Ground-truth :terminating (argument in each @doc), conservatively rejected by
+  # today's certifier (mutual groups rejected wholesale; multi-argument descent
+  # fails the fixed-position guard). Banked in test/antigen/reach.sexp, NOT
+  # corpus.sexp; P1 migrates them. Labels are truth, not checker behavior (D3).
+
+  @doc """
+  Well-founded structural mutual pair: `even = λn. case n of {Z -> Z; S y -> odd y}`,
+  `odd = λn. case n of {Z -> S Z; S y -> even y}` over `Nat → Nat` (Nat-valued to
+  stay in one family). Every cross-call passes the strict predecessor, so the
+  composed cycle strictly decreases: total. Label `:terminating` — rejected today
+  only because the certifier rejects all mutual cycles.
+  """
+  @spec wellfounded_even_odd() :: Challenge.t()
+  def wellfounded_even_odd do
+    motive = {:lam, @nat, @nat}
+
+    be =
+      {:lam, @nat,
+       {:case, {:var, 0}, motive,
+        [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :odd}, {:var, 0}}}]}}
+
+    bo =
+      {:lam, @nat,
+       {:case, {:var, 0}, motive,
+        [
+          {:Z, 0, {:ctor, :S, [{:ctor, :Z, []}]}},
+          {:S, 1, {:app, {:global, :even}, {:var, 0}}}
+        ]}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{
+        defs: [
+          %{name: :even, type: {:pi, @nat, @nat}, body: be},
+          %{name: :odd, type: {:pi, @nat, @nat}, body: bo}
+        ],
+        focus: [:even, :odd]
+      },
+      note: "W2 reach pin: well-founded mutual even/odd (P1 target)"
+    )
+  end
+
+  @doc """
+  Ackermann over `Nat → Nat → Nat`:
+  `ack Z n = S n; ack (S m') Z = ack m' (S Z); ack (S m') (S n') = ack m' (ack (S m') n')`.
+  Total by the lexicographic measure (m, n): every call either decreases m, or
+  keeps m and decreases n. Rejected today: no SINGLE fixed argument position
+  decreases at every self-call (the inner call's first argument is `S m'`, a
+  constructor, not a bound variable). Label `:terminating`.
+  """
+  @spec wellfounded_ackermann() :: Challenge.t()
+  def wellfounded_ackermann do
+    motive = {:lam, @nat, @nat}
+
+    # frame under λm. λn.: m = var 1, n = var 0
+    body =
+      {:lam, @nat,
+       {:lam, @nat,
+        {:case, {:var, 1}, motive,
+         [
+           # Z: S n
+           {:Z, 0, {:ctor, :S, [{:var, 0}]}},
+           # S m' (binds m' at 0; n shifts to 1, m to 2)
+           {:S, 1,
+            {:case, {:var, 1}, motive,
+             [
+               # n = Z: ack m' (S Z)
+               {:Z, 0,
+                {:app, {:app, {:global, :ack}, {:var, 0}}, {:ctor, :S, [{:ctor, :Z, []}]}}},
+               # n = S n' (binds n' at 0; m' shifts to 1): ack m' (ack (S m') n')
+               {:S, 1,
+                {:app, {:app, {:global, :ack}, {:var, 1}},
+                 {:app, {:app, {:global, :ack}, {:ctor, :S, [{:var, 1}]}}, {:var, 0}}}}
+             ]}}
+         ]}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{
+        defs: [%{name: :ack, type: {:pi, @nat, {:pi, @nat, @nat}}, body: body}],
+        focus: [:ack]
+      },
+      note: "W2 reach pin: Ackermann, lexicographic (m, n) descent (P1 target)"
+    )
+  end
+
+  @doc """
+  Permuted well-founded pair over `Nat`: `f = λn. λm. case n of {Z -> m; S y -> g m y}`
+  and `g = λa. λb. f b a`. Descent is visible only by tracking arguments across the
+  swap: `f (S y) m → g m y → f y m` — f's first argument strictly decreases every
+  round trip. Total; rejected today as a mutual cycle. The accept-side twin of W1's
+  `diverging_permuting_pair`. Label `:terminating`.
+  """
+  @spec wellfounded_permuted_pair() :: Challenge.t()
+  def wellfounded_permuted_pair do
+    motive = {:lam, @nat, @nat}
+
+    # f frame: n = var 1, m = var 0; S-branch binds y at 0 (m -> 1, n -> 2)
+    bf =
+      {:lam, @nat,
+       {:lam, @nat,
+        {:case, {:var, 1}, motive,
+         [
+           {:Z, 0, {:var, 0}},
+           {:S, 1, {:app, {:app, {:global, :g}, {:var, 1}}, {:var, 0}}}
+         ]}}}
+
+    # g a b = f b a; frame: a = var 1, b = var 0
+    bg = {:lam, @nat, {:lam, @nat, {:app, {:app, {:global, :f}, {:var, 0}}, {:var, 1}}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{
+        defs: [
+          %{name: :f, type: {:pi, @nat, {:pi, @nat, @nat}}, body: bf},
+          %{name: :g, type: {:pi, @nat, {:pi, @nat, @nat}}, body: bg}
+        ],
+        focus: [:f, :g]
+      },
+      note: "W2 reach pin: descent visible only across the argument swap (P1 target)"
+    )
+  end
+
   @doc "Rebuild the def-group's `Env` by folding `Env.add_def/4` over the payload."
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{payload: %{defs: defs}}) do
