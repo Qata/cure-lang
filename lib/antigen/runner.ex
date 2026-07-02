@@ -56,6 +56,16 @@ defmodule Antigen.Runner do
       )
     end
 
+    cm = conversion_metrics(challenges)
+
+    if cm.conv_reject_count + cm.conv_accept_count > 0 do
+      IO.puts(
+        "antigen health[conversion]: carriers=#{cm.conv_carrier_diversity} " <>
+          "both_polarities=#{cm.conv_both_polarities} " <>
+          "reject=#{cm.conv_reject_count} accept=#{cm.conv_accept_count} → #{conversion_stamp(cm)}"
+      )
+    end
+
     %{
       infections: final.infections,
       seeds_banked: final.seeds_banked,
@@ -156,6 +166,46 @@ defmodule Antigen.Runner do
         do: :healthy,
         else: :vacuous
       )
+
+  @conv_carrier_floor 2
+
+  @doc """
+  Structural carrier tag of a `:typed_term` conversion accept carrier, or nil.
+  Accept challenges are ordinary `:typed_term`s (no fault field), so the conversion
+  subset must be recognised by term shape. Safe in v1: the ordinary `Term` generator
+  never emits a `plus`-headed Vec index (spec §6).
+  """
+  def conv_carrier_of(%Challenge{kind: :typed_term, payload: %{term: t}}) do
+    case t do
+      {:ctor, :vcons, [{:app, {:app, {:global, :plus}, _}, _}, _, _]} -> :conv_index
+      {:case, _, {:lam, _, {:data, :Vec, _, [{:app, {:app, {:global, :plus}, _}, _}]}}, _} -> :conv_motive
+      _ -> nil
+    end
+  end
+
+  def conv_carrier_of(_), do: nil
+
+  @doc "Conversion-subset vacuity metrics over both polarities (spec §6)."
+  def conversion_metrics(challenges) do
+    rej =
+      challenges
+      |> Enum.filter(fn c ->
+        match?(%Challenge{kind: :mutant_term}, c) and Map.get(c.payload.fault, :witness) == :conv
+      end)
+      |> Enum.map(fn c -> c.payload.fault.carrier end)
+
+    acc = challenges |> Enum.map(&conv_carrier_of/1) |> Enum.reject(&is_nil/1)
+
+    %{
+      conv_carrier_diversity: MapSet.size(MapSet.new(rej ++ acc)),
+      conv_both_polarities: rej != [] and acc != [],
+      conv_reject_count: length(rej),
+      conv_accept_count: length(acc)
+    }
+  end
+
+  def conversion_stamp(%{conv_carrier_diversity: d, conv_both_polarities: both}),
+    do: if(d >= @conv_carrier_floor and both, do: :healthy, else: :vacuous)
 
   # Count binders (lam / case-branch) and how many bind a variable that occurs.
   defp binder_stats(t), do: binder_stats(t, {0, 0})

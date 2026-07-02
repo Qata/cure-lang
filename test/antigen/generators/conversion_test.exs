@@ -72,6 +72,20 @@ defmodule Antigen.Generators.ConversionTest do
     assert rej != [] and acc != []
   end
 
+  test "conversion_metrics: ≥2 carriers, both polarities present" do
+    cs = sample(Mix.Tasks.Antigen.default_gen(), 800)
+    m = Antigen.Runner.conversion_metrics(cs)
+    assert m.conv_carrier_diversity >= 2
+    assert m.conv_both_polarities == true
+    assert m.conv_reject_count > 0 and m.conv_accept_count > 0
+  end
+
+  test "conversion_metrics does NOT misclassify ordinary typed-terms (no plus) as accept carriers" do
+    ordinary = sample(Antigen.Generators.Term.typed_term("term/infer_check"), 200)
+    m = Antigen.Runner.conversion_metrics(ordinary)
+    assert m.conv_accept_count == 0
+  end
+
   defp redex?(:conv_index, {:ctor, :vcons, [n, _, _]}), do: is_plus(n)
   defp redex?(:conv_motive, {:case, _, {:lam, _, {:data, :Vec, _, [idx]}}, _}), do: is_plus(idx)
   defp is_plus({:app, {:app, {:global, :plus}, _}, _}), do: true
