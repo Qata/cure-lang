@@ -33,9 +33,9 @@ Probe (d∈{1,6}, both carriers): reject → `infer` `:error` **and** `Assays.Mu
 
 ## File Structure
 
-- **Create** `lib/antigen/generators/conversion.ex` — carriers, `vec_of/1`, `num/1`, depth-split draw, `conv_reject/0`, `conv_accept/1`, `carriers/0`, `max_depth/0`, `conv_carrier_of/1` (structural accept detector).
+- **Create** `lib/antigen/generators/conversion.ex` — carriers, `vec_of/1`, `num/1`, depth-split draw, `conv_reject/0`, `conv_accept/1`, `carriers/0`, `max_depth/0`.
 - **Modify** `lib/antigen/challenge.ex` — `@known_atoms` += the 8 conversion atoms.
-- **Modify** `lib/antigen/runner.ex` — `conversion_metrics/1` (`conv_carrier_diversity`, `conv_both_polarities`) + health line.
+- **Modify** `lib/antigen/runner.ex` — `conversion_metrics/1` (`conv_carrier_diversity`, `conv_both_polarities`), `conv_carrier_of/1` (structural accept detector), + health line.
 - **Modify** `lib/mix/tasks/antigen.ex` — `default_gen` += `conv_reject` (×1) and `conv_accept` (×3, one per `term/*` assay).
 - **Modify** `test/antigen/seeds.sexp` — bank reject + accept conversion seeds.
 - **Create** `test/antigen/generators/conversion_test.exs`; **Extend** `test/antigen/challenge_test.exs`, `test/antigen/mutation_meta_test.exs`.
@@ -151,7 +151,6 @@ defmodule Antigen.Generators.Conversion do
   """
   alias Antigen.Challenge
   alias Antigen.Gen
-  alias Antigen.Generators.SigMenu
 
   @carriers [:conv_index, :conv_motive]
   def carriers, do: @carriers
@@ -194,10 +193,11 @@ defmodule Antigen.Generators.Conversion do
 
   defp carrier_gen, do: Gen.frequency(Enum.map(@carriers, fn c -> {1, Gen.return(c)} end))
 
+  # Carriers are closed, binder-free terms (spec §4) — no env/context is needed
+  # to construct them; the assays independently rebuild their own env from the
+  # payload's `sig: :v1` field when they run.
   @spec conv_reject() :: Gen.t()
   def conv_reject do
-    _env = SigMenu.env_of(:v1)
-
     Gen.bind(carrier_gen(), fn carrier ->
       Gen.bind(depth_split(), fn {d, a, b} ->
         term = carrier_term(carrier, a, b, d + 1)   # filler one deeper ⇒ mismatch
@@ -324,9 +324,19 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
   end
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (no conversion challenges in `default_gen`). If `default_gen/0` is private, make it public (`def default_gen`) as the minimal change — it is already called by the task body.
+- [ ] **Step 2: Run — expect FAIL** `mix test test/antigen/generators/conversion_test.exs`
+Expected: `Mix.Tasks.Antigen.default_gen/0` is undefined (it is currently `defp`) — a compile error, not an assertion failure. This is expected; fixed by Step 3's first edit below.
 
-- [ ] **Step 3: Implement** — in `lib/mix/tasks/antigen.ex`, add to the `Antigen.Gen.frequency([...])` list:
+- [ ] **Step 3: Implement** — in `lib/mix/tasks/antigen.ex`, two edits:
+  1. Make `default_gen` public (minimal visibility change — it is already called by `run/1`):
+```elixir
+  defp default_gen do
+```
+  →
+```elixir
+  def default_gen do
+```
+  2. Add the conversion branches to its `Antigen.Gen.frequency([...])` list:
 ```elixir
       {1, Antigen.Generators.Conversion.conv_reject()},
       {1, Antigen.Generators.Conversion.conv_accept("term/infer_check")},
