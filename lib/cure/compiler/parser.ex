@@ -2625,6 +2625,15 @@ defmodule Cure.Compiler.Parser do
           meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
           {{:type_annotation, meta, refinement}, state}
 
+        %Token{type: :lparen} ->
+          # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
+          # The full type-expression parser handles the arrow; the result is a plain
+          # type alias (`:type_annotation`).
+          {rhs, state} = parse_type_expr(state)
+          meta = [name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+          {{:type_annotation, meta, [rhs]}, state}
+
         _ ->
           # v0.21.0: accept an optional leading `|` before the first variant.
           state =

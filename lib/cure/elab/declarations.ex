@@ -434,7 +434,16 @@ defmodule Cure.Elab.Declarations do
 
   defp build_context(env, telescope) do
     Enum.reduce(telescope, Context.empty(env), fn {_name, type_core}, ctx ->
-      type_value = Eval.eval(type_core, Context.env(ctx))
+      # Weak-head-normalise each binder type so a type alias (`type Endo = (Nat) ->
+      # Nat`, a certified δ-def) is stored as the underlying Π/Σ/data value the
+      # kernel inspects — e.g. applying an `Endo`-typed parameter reaches a Π. This
+      # is conversion-preserving (the alias is definitionally its right-hand side)
+      # and idempotent for a type already in head form.
+      type_value =
+        type_core
+        |> Eval.eval(Context.env(ctx))
+        |> Cure.Core.Normalise.whnf_value(env)
+
       Context.extend(ctx, type_value)
     end)
   end
