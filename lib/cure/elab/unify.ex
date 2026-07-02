@@ -75,15 +75,31 @@ defmodule Cure.Elab.Unify do
 
   # Depth-tracked unification: `depth` counts the binders crossed so far (Π/λ/Σ
   # codomains). A metavariable is allocated in the *ambient* context (depth 0), so
-  # when it is solved against a term found under `depth` binders that term must be
-  # strengthened back to the ambient frame — otherwise a variable captured inside a
-  # Π codomain (`?b := b` while unifying `(a) -> b` against `(?a) -> ?b`) is off by
-  # the binder count and reappears mis-levelled in the result type.
+  # its solution is stored in that frame. The two directions are duals:
+  #   * on *solve* (`?m := t` under `depth` binders) the term is strengthened back
+  #     to the ambient frame (`solve/4`), and
+  #   * on *force* (reading `?m`'s solution under `depth` binders) the ambient
+  #     solution is shifted *up* by `depth` into the current scope (`force_d/3`).
+  # Together they keep `(a) -> b` vs `(?a) -> ?b` — and the endomorphism `(a) -> a`,
+  # whose variable recurs on both sides of the binder — correctly levelled.
   defp unify_d(t1, t2, ctx, sig, depth) do
-    do_unify(force(t1, ctx), force(t2, ctx), ctx, sig, depth)
+    do_unify(force_d(t1, ctx, depth), force_d(t2, ctx, depth), ctx, sig, depth)
   end
 
-  # Follow the chain of solutions until the head is not a solved metavariable.
+  # Resolve a metavariable's solution and lift it from the ambient frame into the
+  # current binder `depth`. A non-metavariable head is already in the current
+  # scope, so it is returned unshifted.
+  defp force_d({:meta, id} = t, ctx, depth) do
+    case MetaCtx.solution(ctx, id) do
+      nil -> t
+      sol -> force_d(Cure.Elab.Subst.shift(sol, depth, 0), ctx, depth)
+    end
+  end
+
+  defp force_d(t, _ctx, _depth), do: t
+
+  # Follow the chain of solutions until the head is not a solved metavariable
+  # (depth-agnostic; used by `occurs?`/`zonk` where no binder lifting applies).
   defp force({:meta, id} = t, ctx) do
     case MetaCtx.solution(ctx, id) do
       nil -> t

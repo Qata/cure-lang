@@ -45,4 +45,22 @@ defmodule Cure.Elab.HigherOrderUnifyTest do
 
     assert {:ok, _env} = Program.elaborate(src)
   end
+
+  test "an endomorphism argument (a) -> a maps and runs" do
+    # The dual of the strengthen fix: the single implicit `a` recurs on both sides
+    # of the `(a) -> a` binder, so a solved metavariable read under the codomain
+    # binder must be shifted *up* into scope (force_d). Oracle `poly/pl07_endo_map`.
+    src =
+      @lst <>
+        "  fn emap({a}, f: (a)->a, l: Lst(a)) -> Lst(a) = match l\n" <>
+        "    Nil() -> Nil()\n    Cons(x, xs) -> Cons(f(x), emap(f, xs))\n" <>
+        "  fn s(n: Nat) -> Nat = S(n)\n" <>
+        "  fn mk() -> Lst(Nat) = Cons(Z(), Cons(S(Z()), Nil()))\n" <>
+        "  fn g() -> Lst(Nat) = emap(s, mk())\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.EndoMap", functions: [:emap, :s, :mk, :g])
+
+    assert apply(mod, :g, []) == {:Cons, {:S, :Z}, {:Cons, {:S, {:S, :Z}}, :Nil}}
+  end
 end
