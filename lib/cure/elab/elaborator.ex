@@ -176,8 +176,25 @@ defmodule Cure.Elab.Elaborator do
       # same way constructor indices are inferred (§5.2). Without this, the
       # explicit args would be bound to the implicit positions.
       implicit_def?(env, atom) ->
-        with {:ok, present} <- map_present_args(args, names, ctx, env) do
-          elaborate_global_app(env, atom, present, ctx)
+        result =
+          with {:ok, present} <- map_present_args(args, names, ctx, env) do
+            elaborate_global_app(env, atom, present, ctx)
+          end
+
+        # When up-front inference of the arguments fails — an argument that is
+        # underdetermined until an implicit parameter is solved (`map(s, Cons(Z(),
+        # Nil()))`) — retry with left-to-right bidirectional application. Additive:
+        # reached only after the inference path errored, and its own failure
+        # surfaces the original error, so a working call is untouched.
+        case result do
+          {:ok, _, _} = ok ->
+            ok
+
+          {:error, _} = orig ->
+            case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx) do
+              {:ok, _, _} = ok -> ok
+              {:error, _} -> orig
+            end
         end
 
       # A call carrying a lambda argument needs the callee's parameter types to
@@ -2726,6 +2743,59 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Bidirectional application for a global with implicit (erased) parameters, used
+  # only as a fallback when the ordinary inference path fails — a call whose
+  # argument cannot be inferred in isolation but *can* be checked once the callee's
+  # implicit parameters are solved, e.g. `map(s, Cons(Z(), Nil()))` whose list
+  # argument is underdetermined until `a` is fixed from `s : (Nat) -> Nat`.
+  #
+  # It folds the callee's Π telescope left to right: each erased slot becomes a
+  # fresh metavariable; each present slot's domain is instantiated with the
+  # arguments chosen so far and zonked — if that domain is now metavariable-free
+  # the argument is *checked* against it (so an underdetermined constructor
+  # argument reaches the checking-mode constructor path), otherwise the argument is
+  # *inferred* and its type unified against the domain to solve the metavariables.
+  # `finish_global_app` assembles and the caller's kernel re-check gates the result,
+  # so nothing unsound rests on the inference order.
+  defp elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx) do
+    %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
+    {domains, codomain} = peel_pi(pi_type, length(quantities))
+
+    domains
+    |> Enum.zip(quantities)
+    |> Enum.reduce_while({:ok, MetaCtx.new(), [], arg_asts}, &bidir_app_slot(&1, &2, names, ctx, env))
+    |> finish_global_app(name, codomain, ctx)
+  end
+
+  defp bidir_app_slot({_dom, :erased}, {:ok, mctx, chosen, args}, _names, _ctx, _env) do
+    {mctx, id} = MetaCtx.fresh(mctx)
+    {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args}}
+  end
+
+  defp bidir_app_slot({_dom, :present}, {:ok, _mctx, _chosen, []}, _names, _ctx, _env),
+    do: {:halt, {:error, :too_few_arguments}}
+
+  defp bidir_app_slot({dom, :present}, {:ok, mctx, chosen, [arg | rest]}, names, ctx, env) do
+    dom_inst = dom |> Subst.instantiate(chosen) |> Unify.zonk(mctx)
+
+    if has_meta?(dom_inst) do
+      # Domain still unsolved — infer the argument and unify to solve metavariables.
+      with {:ok, term, ty} <- elaborate_expr_typed(arg, names, ctx, env),
+           ty_term = Quote.reify(ty, Context.length(ctx)),
+           {:ok, mctx} <- Unify.unify(dom_inst, ty_term, mctx, env) do
+        {:cont, {:ok, mctx, chosen ++ [term], rest}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    else
+      # Domain fully known — check the argument against it (reaches checking mode).
+      case elaborate_expr_checked(arg, dom_inst, names, ctx, env) do
+        {:ok, term} -> {:cont, {:ok, mctx, chosen ++ [term], rest}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end
+  end
+
   # Bidirectional checking-mode constructor elaboration, used only as a fallback
   # when the inference path fails (an underdetermined nested constructor like
   # `Cons(Z(), Nil())` at `-> List(Nat)`). Rather than infer each argument, it
@@ -2846,6 +2916,12 @@ defmodule Cure.Elab.Elaborator do
   defp has_meta?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_meta?/1)
   defp has_meta?({:ctor, _n, args}), do: Enum.any?(args, &has_meta?/1)
   defp has_meta?({:app, f, x}), do: has_meta?(f) or has_meta?(x)
+  defp has_meta?({:pi, d, c}), do: has_meta?(d) or has_meta?(c)
+  defp has_meta?({:lam, d, b}), do: has_meta?(d) or has_meta?(b)
+  defp has_meta?({:sigma, d, c}), do: has_meta?(d) or has_meta?(c)
+  defp has_meta?({:pair, a, b}), do: has_meta?(a) or has_meta?(b)
+  defp has_meta?({:fst, p}), do: has_meta?(p)
+  defp has_meta?({:snd, p}), do: has_meta?(p)
   defp has_meta?(_), do: false
 
   # -- parameters / binders ---------------------------------------------------

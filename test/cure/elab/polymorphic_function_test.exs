@@ -61,4 +61,33 @@ defmodule Cure.Elab.PolymorphicFunctionTest do
     assert {:error, {:untyped_parameter, _}} =
              Program.elaborate(@nat <> "  fn f(x) -> Nat = Z()\nend\n")
   end
+
+  @lst "mod M\n  type Nat = Z | S(Nat)\n  type Lst(a) = Nil | Cons(a, Lst(a))\n"
+
+  test "an implicit solved from an early argument lets a later underdetermined argument check" do
+    # `firstOr(Z(), Cons(S(Z()), Nil()))`: the list argument is underdetermined in
+    # isolation (its inner `Nil()` has no parameter), so up-front inference fails.
+    # The bidirectional fallback solves `a = Nat` from the first argument `Z()`,
+    # then checks `Cons(S(Z()), Nil())` against `Lst(Nat)`. Oracle
+    # `poly/pl05_implicit_solved_arg`.
+    src =
+      @lst <>
+        "  fn firstOr({a}, d: a, l: Lst(a)) -> a = match l\n    Cons(x, xs) -> x\n    Nil() -> d\n" <>
+        "  fn g() -> Nat = firstOr(Z(), Cons(S(Z()), Nil()))\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FirstOr", functions: [:firstOr, :g])
+
+    assert apply(mod, :g, []) == {:S, :Z}
+  end
+
+  test "a wrongly-typed underdetermined argument is still rejected" do
+    assert {:error, _} =
+             Program.elaborate(
+               @lst <>
+                 "  type Bool = T | F\n" <>
+                 "  fn firstOr({a}, d: a, l: Lst(a)) -> a = d\n" <>
+                 "  fn g() -> Nat = firstOr(Z(), Cons(T(), Nil()))\nend\n"
+             )
+  end
 end
