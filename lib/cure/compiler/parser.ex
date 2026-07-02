@@ -1604,14 +1604,27 @@ defmodule Cure.Compiler.Parser do
   defp parse_match_arm(state) do
     # Parse pattern
     {pattern, state} = parse_expr(state, 0)
-    parse_match_arm_tail(pattern, state)
+
+    # As-pattern: `name @ <pattern>` binds the whole matched value to `name` in
+    # addition to destructuring it. `@` (`:at`) is a decorator prefix only at
+    # declaration position, so in pattern position it is unambiguously an
+    # as-binding.
+    case {pattern, peek(state)} do
+      {{:variable, _m, name}, %Token{type: :at}} ->
+        state = advance(state)
+        {inner, state} = parse_expr(state, 0)
+        parse_match_arm_tail(inner, state, name)
+
+      _ ->
+        parse_match_arm_tail(pattern, state)
+    end
   end
 
   # The tail of a match arm after its pattern has been parsed: optional `when`
   # guard, the `->`, and the body (or `impossible`). Factored out so with-clause
   # arms can fall through to it once they have decided they are NOT a rematch arm
   # (see `parse_with_clause_arm`).
-  defp parse_match_arm_tail(pattern, state) do
+  defp parse_match_arm_tail(pattern, state, as_bind \\ nil) do
     state = skip_newlines(state)
 
     # Optional guard: when expr
@@ -1630,16 +1643,18 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :arrow)
     state = skip_newlines(state)
 
+    extra =
+      [] |> then(&if(guard, do: &1 ++ [guard: guard], else: &1))
+         |> then(&if(as_bind, do: &1 ++ [as_bind: as_bind], else: &1))
+
     # `impossible` is a soft keyword recognized only as an entire arm body
     # (spec §4): `pat -> impossible`. Any other use stays an ordinary identifier.
     if impossible_body?(state) do
       state = advance(state)
-      meta = if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
-      {{:match_arm, meta, [nil]}, state}
+      {{:match_arm, [pattern: pattern] ++ extra ++ [impossible: true], [nil]}, state}
     else
       {body, state} = parse_expr_or_block(state)
-      meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
-      {{:match_arm, meta, [body]}, state}
+      {{:match_arm, [pattern: pattern] ++ extra, [body]}, state}
     end
   end
 

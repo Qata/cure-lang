@@ -500,7 +500,8 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
-    with {:ok, arms} <- desugar_nested_arms(arms0, scrut_expr),
+    with {:ok, arms1} <- desugar_as_binds(arms0),
+         {:ok, arms} <- desugar_nested_arms(arms1, scrut_expr),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
@@ -1249,6 +1250,33 @@ defmodule Cure.Elab.Elaborator do
         end
       end)
     end
+  end
+
+  # --- as-pattern desugaring (parity #4) -------------------------------------
+  #
+  # `name @ <pattern> -> body` binds the whole matched value to `name` as well as
+  # destructuring it. Since a pattern and its value-reconstruction share the same
+  # `{:function_call}`/`{:variable}` surface shape, the pattern itself IS the
+  # expression rebuilding the value, so the arm lowers to `<pattern> -> body[name
+  # ↦ <pattern>]` — which then flows through nested-pattern lowering unchanged.
+  defp desugar_as_binds(arms) do
+    Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body} = arm, {:ok, acc} ->
+      case Keyword.get(meta, :as_bind) do
+        nil ->
+          {:cont, {:ok, acc ++ [arm]}}
+
+        name ->
+          pat = Keyword.fetch!(meta, :pattern)
+          b = single_body(body)
+
+          if binds_any?(b, [name]) do
+            {:halt, {:error, {:unsupported_pattern, :shadowed_as}}}
+          else
+            b2 = subst_surface_var(b, name, pat)
+            {:cont, {:ok, acc ++ [{:match_arm, Keyword.delete(meta, :as_bind), b2}]}}
+          end
+      end
+    end)
   end
 
   # --- nested-pattern desugaring (parity #3) ---------------------------------
