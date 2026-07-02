@@ -2816,36 +2816,79 @@ defmodule Cure.Elab.Elaborator do
 
     domains
     |> Enum.zip(quantities)
-    |> Enum.reduce_while({:ok, MetaCtx.new(), [], arg_asts}, &bidir_app_slot(&1, &2, names, ctx, env))
+    |> Enum.reduce_while({:ok, MetaCtx.new(), [], arg_asts, []}, &bidir_app_slot(&1, &2, names, ctx, env))
+    |> resolve_deferred_slots(names, ctx, env)
     |> finish_global_app(name, codomain, ctx)
   end
 
-  defp bidir_app_slot({_dom, :erased}, {:ok, mctx, chosen, args}, _names, _ctx, _env) do
+  defp bidir_app_slot({_dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
     {mctx, id} = MetaCtx.fresh(mctx)
-    {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args}}
+    {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 
-  defp bidir_app_slot({_dom, :present}, {:ok, _mctx, _chosen, []}, _names, _ctx, _env),
+  defp bidir_app_slot({_dom, :present}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env),
     do: {:halt, {:error, :too_few_arguments}}
 
-  defp bidir_app_slot({dom, :present}, {:ok, mctx, chosen, [arg | rest]}, names, ctx, env) do
+  defp bidir_app_slot({dom, :present}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
     dom_inst = dom |> Subst.instantiate(chosen) |> Unify.zonk(mctx)
 
     if has_meta?(dom_inst) do
       # Domain still unsolved — infer the argument and unify to solve metavariables.
-      with {:ok, term, ty} <- elaborate_expr_typed(arg, names, ctx, env),
-           ty_term = Quote.reify(ty, Context.length(ctx)),
-           {:ok, mctx} <- Unify.unify(dom_inst, ty_term, mctx, env) do
-        {:cont, {:ok, mctx, chosen ++ [term], rest}}
-      else
-        {:error, reason} -> {:halt, {:error, reason}}
+      case elaborate_expr_typed(arg, names, ctx, env) do
+        {:ok, term, ty} ->
+          ty_term = Quote.reify(ty, Context.length(ctx))
+
+          case Unify.unify(dom_inst, ty_term, mctx, env) do
+            {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+
+        {:error, _} ->
+          # An underdetermined argument at a still-unsolved domain — e.g. `fz()` at
+          # `Fin(?n)`, whose index only a *later* argument (the vector) determines.
+          # It cannot infer standalone, so defer it: a placeholder metavariable holds
+          # its position in `chosen` (keeping later domains' de Bruijn frames aligned),
+          # and `resolve_deferred_slots` checks it against the now-solved domain and
+          # back-patches the placeholder once the later arguments have run.
+          {mctx, ph} = MetaCtx.fresh(mctx)
+          {:cont, {:ok, mctx, chosen ++ [{:meta, ph}], rest, deferred ++ [{ph, arg, dom, length(chosen)}]}}
       end
     else
       # Domain fully known — check the argument against it (reaches checking mode).
       case elaborate_expr_checked(arg, dom_inst, names, ctx, env) do
-        {:ok, term} -> {:cont, {:ok, mctx, chosen ++ [term], rest}}
+        {:ok, term} -> {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
         {:error, _} = err -> {:halt, err}
       end
+    end
+  end
+
+  # Second pass over the arguments deferred by `bidir_app_slot` (each an
+  # underdetermined argument whose domain metavariables a later argument solves).
+  # By now those metavariables are solved, so each deferred domain instantiates to a
+  # concrete type; check the argument against it and solve the placeholder to the
+  # resulting term. A deferred domain still bearing a metavariable means no later
+  # argument determined it — a genuinely ambiguous call, reported as unsolved.
+  defp resolve_deferred_slots({:error, _} = err, _names, _ctx, _env), do: err
+
+  defp resolve_deferred_slots({:ok, mctx, chosen, args, []}, _names, _ctx, _env),
+    do: {:ok, mctx, chosen, args}
+
+  defp resolve_deferred_slots({:ok, mctx, chosen, args, deferred}, names, ctx, env) do
+    Enum.reduce_while(deferred, {:ok, mctx}, fn {ph, arg, dom, k}, {:ok, mctx} ->
+      dom_inst = dom |> Subst.instantiate(Enum.take(chosen, k)) |> Unify.zonk(mctx)
+
+      if has_meta?(dom_inst) do
+        {:halt, {:error, {:unsolved_metavariables, :deferred_argument}}}
+      else
+        case elaborate_expr_checked(arg, dom_inst, names, ctx, env) do
+          {:ok, term} -> {:cont, {:ok, MetaCtx.put_solution(mctx, ph, term)}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end
+    end)
+    |> case do
+      {:ok, mctx} -> {:ok, mctx, chosen, args}
+      {:error, _} = err -> err
     end
   end
 
