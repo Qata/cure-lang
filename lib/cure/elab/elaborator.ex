@@ -502,6 +502,7 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms} <- desugar_nested_arms(arms1, scrut_expr),
+         :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
@@ -1303,6 +1304,49 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp strip_as_patterns(other), do: {other, []}
+
+  # --- tuple-pattern matching (parity #4) ------------------------------------
+  #
+  # A Σ/pair is irrefutable — a single tuple-pattern arm `%[x, y] -> body` just
+  # destructures. Lower it to the (already-supported) projections `.1`/`.2`:
+  # `body[x ↦ p.1, y ↦ p.2]`, elaborated directly. Restricted to a VARIABLE
+  # scrutinee (so the projections are cheap and re-evaluation-free) and a flat
+  # 2-element tuple of variables/wildcards; anything else falls through to the
+  # ordinary (`{:vdata}`) dispatch and its clean error.
+  defp try_tuple_match({:variable, _sm, _sn} = scrut, [{:match_arm, meta, body}], expected, names, ctx, env) do
+    case Keyword.fetch!(meta, :pattern) do
+      {:tuple, _tm, [_e1, _e2] = elems} ->
+        with {:ok, subs} <- tuple_elem_subs(elems, scrut) do
+          b = single_body(body)
+
+          if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
+            {:error, {:unsupported_pattern, :shadowed_tuple}}
+          else
+            b2 = Enum.reduce(subs, b, fn {n, r}, acc -> subst_surface_var(acc, n, r) end)
+            elaborate_expr_checked(b2, expected, names, ctx, env)
+          end
+        end
+
+      _ ->
+        :not_applicable
+    end
+  end
+
+  defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  defp tuple_elem_subs([e1, e2], scrut) do
+    p1 = {:attribute_access, [attribute: "1"], [scrut]}
+    p2 = {:attribute_access, [attribute: "2"], [scrut]}
+
+    with {:ok, s1} <- tuple_elem_sub(e1, p1),
+         {:ok, s2} <- tuple_elem_sub(e2, p2) do
+      {:ok, s1 ++ s2}
+    end
+  end
+
+  defp tuple_elem_sub({:variable, _m, "_"}, _proj), do: {:ok, []}
+  defp tuple_elem_sub({:variable, _m, name}, proj), do: {:ok, [{name, proj}]}
+  defp tuple_elem_sub(_other, _proj), do: {:error, {:unsupported_pattern, :nested_tuple_element}}
 
   # --- nested-pattern desugaring (parity #3) ---------------------------------
   #
