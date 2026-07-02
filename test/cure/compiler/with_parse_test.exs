@@ -45,6 +45,48 @@ defmodule Cure.Compiler.WithParseTest do
     assert Enum.all?(arms, &match?({:match_arm, _, [_]}, &1))
   end
 
+  test "`with e proof p <arms>` carries the proof name in meta (capability B)" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn foo(n: Nat) -> Nat =
+        with n proof pf
+          Z() -> Z()
+          S(k) -> S(k)
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    node =
+      collect(ast, [])
+      |> Enum.find(fn t -> match?({:with_abs, _, [_ | _]}, t) end)
+
+    assert {:with_abs, meta, [scrut | arms]} = node
+    assert {:variable, _, "n"} = scrut
+    assert Keyword.get(meta, :proof) == "pf"
+    assert length(arms) == 2
+  end
+
+  test "no-proof `with` leaves :proof absent in meta (capability A unchanged)" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn foo(n: Nat) -> Nat =
+        with n
+          Z() -> Z()
+          S(k) -> S(k)
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    node =
+      collect(ast, [])
+      |> Enum.find(fn t -> match?({:with_abs, _, [_ | _]}, t) end)
+
+    assert {:with_abs, meta, _} = node
+    assert Keyword.get(meta, :proof) == nil
+  end
+
   # Regression: `with` is still the FSM/actor payload-binder identifier.
   test "`actor Name with Payload` still parses (with-abstraction is contextual)" do
     src = """

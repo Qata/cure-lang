@@ -40,6 +40,47 @@ defmodule Cure.Elab.WithAbstractionTest do
     assert {:ok, _env} = Program.elaborate(src)
   end
 
+  # Capability B: `proof <name>` binds the scrutinee equation
+  # `Eq(Nat, g(n), pat)` in each branch. `lemma` demands exactly that equation,
+  # so the body only type-checks with the bound proof — making it load-bearing.
+  @proof_preamble """
+  type Nat = Z | S(Nat)
+  fn g(m: Nat) -> Nat = match m
+    Z() -> Z()
+    S(k) -> S(k)
+  fn lemma(a: Nat, b: Nat, eq: Eq(Nat, a, b)) -> Nat = b
+  """
+
+  test "(wi04) `with g(n) proof pf` binds Eq(g(n), pat), consumed by a lemma" do
+    src =
+      @proof_preamble <>
+        """
+        fn foo(n: Nat) -> Nat =
+          with g(n) proof pf
+            Z() -> lemma(g(n), Z(), pf)
+            S(k) -> lemma(g(n), S(k), pf)
+        """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "(differential) the SAME body WITHOUT `proof` is REJECTED (pf unbound)" do
+    # Plain capability-A `with` does not bind `pf`; the lemma call references an
+    # unbound variable, so it must fail — proving the `proof` clause is
+    # load-bearing. (Not an oracle probe: Idris would report an unbound name too,
+    # but the point is the Cure-side binding, so keep it a unit test.)
+    src =
+      @proof_preamble <>
+        """
+        fn foo(n: Nat) -> Nat =
+          with g(n)
+            Z() -> lemma(g(n), Z(), pf)
+            S(k) -> lemma(g(n), S(k), pf)
+        """
+
+    assert {:error, _} = Program.elaborate(src)
+  end
+
   test "(differential) plain `match g(n)` for the SAME goal is REJECTED" do
     # `match` cannot refine the goal by the scrutinee's value: `g(n)` is not an
     # index variable, so the motive stays the constant `SNat(g(n))` and each

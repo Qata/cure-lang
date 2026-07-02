@@ -423,18 +423,29 @@ defmodule Cure.Elab.Elaborator do
   end
 
   @doc """
-  Elaborate a surface `with <scrut> | C(pat…) -> body …` (capability A) into a
+  Elaborate a surface `with <scrut> [proof <name>] | C(pat…) -> body …` into a
   Core `:case`. Unlike `elaborate_match`, the motive is *value-abstracting*: the
   scrutinee EXPRESSION is abstracted out of the goal (`motive_for`-style), so
   each branch's expected type is the goal with the scrutinee replaced by that
   branch's constructor value — goal refinement that plain `match` cannot do (its
-  `build_motive` only generalizes type INDICES). Restricted to a non-indexed
-  scrutinee family (capability A is value, not index, refinement); an indexed
-  scrutinee is deferred (`match` already handles index refinement).
+  `build_motive` only generalizes type INDICES).
+
+  Capability B — `proof <name>`: the motive gains an Eq-arrow so each branch
+  receives `<name> : Eq(T, e, pat)` (the scrutinee equation), and the whole
+  `:case` is applied to `refl(e)` to discharge the arrow at the scrutinee's own
+  value. Encoding (sound; reuses the kernel's `Eq`/`refl`, no TCB):
+
+      motive = λ(w:T). Eq(T, e, w) -> G[e↦w]
+      branch = λ(pf : Eq(T, e, pat)). body : G[e↦pat]
+      term   = (case e of … branches …) (refl e)   : G
+
+  Restricted to a non-indexed scrutinee family (capability A is value, not
+  index, refinement); an indexed scrutinee is deferred (`match` handles index
+  refinement). Sibling/other-argument refinement is deferred to a later step.
   """
-  @spec elaborate_with(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
+  @spec elaborate_with(term(), [tuple()], String.t() | nil, term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
-  def elaborate_with(scrut_expr, arms, result_type_term, names, ctx, env) do
+  def elaborate_with(scrut_expr, arms, proof_name, result_type_term, names, ctx, env) do
     with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
@@ -444,13 +455,21 @@ defmodule Cure.Elab.Elaborator do
             pc = Inductive.param_count(env, dname)
             {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
             scrut_type_term = Quote.reify(scrut_type, Context.length(ctx))
-
-            # Value-abstracting motive: λ(x : scrut_type). goal[scrut ↦ x].
-            motive = {:lam, scrut_type_term, abstract_term(result_type_term, scrut_term, 0)}
+            g_abs = abstract_term(result_type_term, scrut_term, 0)
+            motive = with_motive(proof_name, scrut_type_term, scrut_term, g_abs)
 
             with {:ok, branches} <-
-                   elaborate_with_branches(arms, names, ctx, env, dname, param_vals, motive) do
-              {:ok, {:case, scrut_term, motive, branches}}
+                   elaborate_with_branches(
+                     arms, names, ctx, env, dname, param_vals, motive, proof_name
+                   ) do
+              case_term = {:case, scrut_term, motive, branches}
+
+              # With a proof clause the case's result type is `Eq(T,e,e) -> G`;
+              # discharge it with `refl(e)` to land back at the goal `G`.
+              result =
+                if proof_name, do: {:app, case_term, {:refl, scrut_term}}, else: case_term
+
+              {:ok, result}
             end
           else
             {:error, {:with_indexed_scrutinee_unsupported, dname}}
@@ -462,13 +481,27 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Emit one Core branch per surface arm, checked against the value-abstracting
-  # motive applied to the arm's constructor value. Reuses partition_arms (same
-  # validation as match: own-family ctors, no duplicates) and the shared
-  # branch-body checker. A `-> impossible` arm becomes an `{:absurd}` branch;
-  # coverage (a reachable omitted constructor) is enforced by the kernel's
-  # check_coverage when the assembled `:case` is checked.
-  defp elaborate_with_branches(arms, names, ctx, env, dname, param_vals, motive) do
+  # Capability A: value-abstracting motive `λ(w:T). G[e↦w]`.
+  defp with_motive(nil, scrut_type_term, _scrut_term, g_abs),
+    do: {:lam, scrut_type_term, g_abs}
+
+  # Capability B: Eq-arrow motive `λ(w:T). Eq(T, e, w) -> G[e↦w]`. Under the
+  # `w`-binder, `e`/`T` shift by +1; `G[e↦w]` (= g_abs, itself sitting under one
+  # binder) shifts by +1 more to clear the extra Eq-arrow (proof) binder.
+  defp with_motive(_proof, scrut_type_term, scrut_term, g_abs) do
+    eq_ty_w =
+      {:eq, Subst.shift(scrut_type_term, 1, 0), Subst.shift(scrut_term, 1, 0), {:var, 0}}
+
+    {:lam, scrut_type_term, {:pi, eq_ty_w, Subst.shift(g_abs, 1, 0)}}
+  end
+
+  # Emit one Core branch per surface arm, checked against the motive applied to
+  # the arm's constructor value. Reuses partition_arms (same validation as
+  # match: own-family ctors, no duplicates) and the shared branch-body checker.
+  # A `-> impossible` arm becomes an `{:absurd}` branch; coverage (a reachable
+  # omitted constructor) is enforced by the kernel's check_coverage when the
+  # assembled `:case` is checked.
+  defp elaborate_with_branches(arms, names, ctx, env, dname, param_vals, motive, proof_name) do
     with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
@@ -477,7 +510,9 @@ defmodule Cure.Elab.Elaborator do
           {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
 
         {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->
-          case elaborate_with_branch(cname, pattern, body_expr, names, ctx, env, param_vals, motive) do
+          case elaborate_with_branch(
+                 cname, pattern, body_expr, names, ctx, env, param_vals, motive, proof_name
+               ) do
             {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
             {:error, _} = err -> {:halt, err}
           end
@@ -485,21 +520,40 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp elaborate_with_branch(cname, pattern, body_expr, names, ctx, env, param_vals, motive) do
+  defp elaborate_with_branch(cname, pattern, body_expr, names, ctx, env, param_vals, motive, proof_name) do
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
     branch_names = branch_scope(quantities, pattern_vars) ++ names
     branch_ctx = extend_context(ctx, telescope, param_vals)
 
-    # Expected branch type = motive (shifted under the ctor telescope) applied to
-    # this constructor's value, then normalized (β-reduces the application).
+    # Motive (shifted under the ctor telescope) applied to this constructor's
+    # value, then normalized (β-reduces the application).
     ctor_term = branch_constructor_term(cname, arity)
     motive_shifted = Subst.shift(motive, arity, 0)
-    expected = Kernel.normalize(branch_ctx, {:app, motive_shifted, ctor_term})
+    applied = Kernel.normalize(branch_ctx, {:app, motive_shifted, ctor_term})
 
-    with {:ok, body_term} <- elaborate_branch_body(body_expr, expected, branch_names, branch_ctx, env) do
-      {:ok, {cname, arity, body_term}}
+    case proof_name do
+      nil ->
+        with {:ok, body_term} <-
+               elaborate_branch_body(body_expr, applied, branch_names, branch_ctx, env) do
+          {:ok, {cname, arity, body_term}}
+        end
+
+      _ ->
+        # `applied` is the Pi `Eq(T,e,pat) -> G[e↦pat]`: bind the proof and
+        # check the arm body against the codomain in the extended context, then
+        # wrap it as the expected lambda.
+        {:pi, eq_dom_term, cod_term} = applied
+        eq_dom_value = Eval.eval(eq_dom_term, Context.env(branch_ctx))
+        proof_ctx = Context.extend(branch_ctx, eq_dom_value)
+        proof_names = [proof_name | branch_names]
+        cod_expected = Kernel.normalize(proof_ctx, cod_term)
+
+        with {:ok, inner} <-
+               elaborate_branch_body(body_expr, cod_expected, proof_names, proof_ctx, env) do
+          {:ok, {cname, arity, {:lam, eq_dom_term, inner}}}
+        end
     end
   end
 

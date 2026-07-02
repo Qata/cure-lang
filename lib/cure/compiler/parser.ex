@@ -1414,23 +1414,48 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     {scrutinee, state} = parse_expr(state, 0)
+    # Optional `proof <ident>` (capability B): binds the scrutinee equation
+    # `Eq(T, e, pat)` in each branch. `proof` is a soft keyword recognised only
+    # in this slot; elsewhere it stays an ordinary identifier.
+    {proof, state} = parse_optional_with_proof(state)
     state = skip_newlines(state)
+
+    base_meta = [line: token.line, col: token.col]
+    meta = if proof, do: Keyword.put(base_meta, :proof, proof), else: base_meta
 
     case peek(state) do
       %Token{type: :lbrace} ->
         state = advance(state)
         {arms, state} = parse_inline_match_arms(state)
         state = expect(state, :rbrace)
-        {{:with_abs, [line: token.line, col: token.col], [scrutinee | arms]}, state}
+        {{:with_abs, meta, [scrutinee | arms]}, state}
 
       %Token{type: :indent} ->
         state = advance(state)
         {arms, state} = parse_block_match_arms(state)
         state = expect_dedent(state)
-        {{:with_abs, [line: token.line, col: token.col], [scrutinee | arms]}, state}
+        {{:with_abs, meta, [scrutinee | arms]}, state}
 
       _ ->
-        {{:with_abs, [line: token.line, col: token.col], [scrutinee]}, state}
+        {{:with_abs, meta, [scrutinee]}, state}
+    end
+  end
+
+  # `proof <ident>` after a with-scrutinee. Returns `{name, state}` (name a
+  # string) when present, else `{nil, state}` leaving the stream untouched.
+  defp parse_optional_with_proof(state) do
+    case peek(state) do
+      %Token{type: :keyword, value: :proof} ->
+        case peek_at(state, 1) do
+          %Token{type: :identifier, value: name} ->
+            {name, state |> advance() |> advance()}
+
+          _ ->
+            {nil, state}
+        end
+
+      _ ->
+        {nil, state}
     end
   end
 
