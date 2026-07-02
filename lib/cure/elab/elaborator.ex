@@ -160,13 +160,23 @@ defmodule Cure.Elab.Elaborator do
   # (which builds the motive, refines indices per branch, and enforces coverage),
   # then let the kernel re-check the assembled `:case` — mirroring `:rewrite_expr`
   # above. Reached from `rewrite … in match …` (line ~151) and from nested arm
-  # bodies (`elaborate_branch_body`). Inference-position inline match (no expected
-  # type) and let-blocks stay unimplemented (a separate aux-function lift).
+  # bodies (`elaborate_branch_body`). `let`-blocks are now handled in checking
+  # mode (the `{:block, …}` clause below); inference-position inline match (no
+  # expected type) stays unimplemented (a separate aux-function lift).
   def elaborate_expr_checked({:pattern_match, _meta, [scrut | arms]}, expected_core, names, ctx, env) do
     with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
          :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
       {:ok, term}
     end
+  end
+
+  # A `let x = e ⏎ body` block, in checking mode. There is no `:let` in Core, so
+  # each binding desugars to a β-redex `(λ x:T. body) e`: infer the rhs, extend
+  # the context with `x : T`, check the remainder against the expected type
+  # shifted under the new binder, and wrap. The kernel re-checks the assembled
+  # redex against the expected type.
+  def elaborate_expr_checked({:block, _meta, stmts}, expected_core, names, ctx, env) do
+    elaborate_let_block(stmts, expected_core, names, ctx, env)
   end
 
   # Dependent-pair introduction `%[a, b]` in checking mode. The expected type must
@@ -1407,6 +1417,42 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_branch_body(expr, _expected, names, ctx, env) do
     with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
   end
+
+  # A `let x = e ⏎ …` block. Each `let` desugars by SURFACE substitution —
+  # `let x = e in body` ≡ `body[x := e]` — then the remainder is elaborated
+  # normally. This sidesteps de Bruijn bookkeeping entirely (the rhs is
+  # re-elaborated at each use site of `x`; a naming convenience, not sharing).
+  # Sound: a later binder that shadows `x` (or would capture a free variable of
+  # `e`) is guarded by `binds_any?`; and every substituted body is re-checked by
+  # the kernel, so an unsound inline yields a REJECTION, never a bad accept.
+  defp elaborate_let_block([final], expected_core, names, ctx, env),
+    do: elaborate_expr_checked(final, expected_core, names, ctx, env)
+
+  defp elaborate_let_block(
+         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         expected_core,
+         names,
+         ctx,
+         env
+       ) do
+    cond do
+      not Keyword.get(meta, :let, false) ->
+        {:error, {:unsupported_block_statement, meta}}
+
+      Enum.any?(rest, &binds_any?(&1, [name])) ->
+        # A later statement rebinds `name` (shadowing) — surface substitution
+        # would capture it; refuse rather than silently mis-inline.
+        {:error, {:let_shadowed_binder, name}}
+
+      true ->
+        rest
+        |> Enum.map(&subst_surface_var(&1, name, rhs))
+        |> elaborate_let_block(expected_core, names, ctx, env)
+    end
+  end
+
+  defp elaborate_let_block(other, _expected_core, _names, _ctx, _env),
+    do: {:error, {:unsupported_block, other}}
 
   # Surface-level scrutinee refinement (Lean `Cases.lean:219-227`): in a branch,
   # a VARIABLE scrutinee *is* the pattern, so free occurrences of its name in

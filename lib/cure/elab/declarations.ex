@@ -156,6 +156,12 @@ defmodule Cure.Elab.Declarations do
     {:ok, {:hole, Keyword.get(meta, :name, "")}}
   end
 
+  # A `let … ⏎ body` block: check it against the declared return type (there is
+  # no `:let` in Core — the elaborator desugars each binding to a β-redex).
+  defp elaborate_body({:block, _meta, _stmts} = expr, return_core, scope, ctx, env, _params) do
+    Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+  end
+
   defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}
