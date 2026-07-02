@@ -15,7 +15,7 @@
 - **Ghost-authored commits:** `git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>"` with **no** `Co-Authored-By` trailer.
 - **One full build/test run at any moment** — never launch concurrent suites (a past concurrent full-suite run caused a kernel panic).
 - **Fueled nf:** any `Normalise.nf` call must pass `fuel:` (the mutation gate uses `infer` only, so this generally won't arise, but honor it if added).
-- **Assay uses `infer`, so mutants must fail `infer`, not merely mismatch a goal.** Verified constructions (empty ctx, `SigMenu.env_of(:v1)`):
+- **Assay uses `infer`, so mutants must fail `infer`, not merely mismatch a goal.** Verified constructions (empty ctx, `SigMenu.env_of(:v1)`, using the FIXED canonical closed fillers named below — not the randomized `Term.gen_term` fillers Task 3 actually uses):
 
   | `fault.kind` | scaffold term | `Kernel.infer` result |
   |---|---|---|
@@ -28,6 +28,8 @@
   | `:universe` | `{:eq, {:type,0}, {:type,0}, {:type,0}}` | `{:error, {:conversion_failure, {:type,1}, {:type,0}}}` |
 
   where `NAT`/`VEC`/`VEC_SZ` are well-typed filler terms (`Z = {:ctor,:Z,[]}`, `S(n) = {:ctor,:S,[n]}`, `vnil = {:ctor,:vnil,[]} : Vec Z`, `NatT = {:data,:Nat,[],[]}`). Note the raw kernel reasons **collapse** (`:index_mismatch` covers 3 kinds, `{:foreign_ctor,_}` covers 2) — this is exactly why the diversity metric (Task 7) buckets on `fault.kind`, not the raw reason.
+
+  **Raw-tag determinism differs by operator — traced against `kernel.ex` for the ACTUAL Task-3 implementation (randomized `Term.gen_term` fillers, not the fixed canonical ones above):** `:ctor_arg` and `:index_mismatch` inject inside a `{:ctor, :vcons, args}` spine, which `Kernel.check_ctor_app_rec/4`'s `remap_index_error/2` unconditionally rewrites to `{:error, :index_mismatch}` whenever the position's expected type is a `:vdata` (true for every v1 menu type) — so those two rows are deterministic regardless of which concrete filler shape `Term.gen_term` draws. `:head_swap` and `:app_domain`, by contrast, check their faulty argument directly via `infer({:app, f, a})`'s own `check(ctx, a, dom)`, which is **not** wrapped by `remap_index_error` — so the raw tag is `{:error, {:foreign_ctor, cname}}` only when the drawn filler happens to be `:ctor`-headed at the top; a var/app/case/proj-headed filler instead yields `{:error, {:conversion_failure, ...}}`. Both rows above are therefore illustrative (verified for the canonical filler only), not a deterministic guarantee for the general operator — the property that IS guaranteed and that Task 3's test actually asserts is the wildcard `{:error, _}`, which holds either way (§3(b): the value-level type head always differs, so `subtype?`/`Conv.conv_values?` always fails regardless of the filler's syntax).
 
 - **`fault` schema** (rides in the `scaffold=` field via `term_to_binary`/`binary_to_term [:safe]`, so every atom in it must be interned in `Challenge.@known_atoms`):
   ```
@@ -53,15 +55,15 @@
 
 ## File Structure
 
-- **Create** `lib/antigen/generators/mutation.ex` — `Antigen.Generators.Mutation`: the 7 operators (each returns `{Gen.t(term), fault}`), `applicable/1`, weighted selection, `gen_mutant/2`, `mutant/1` (challenge), `assay_id/0`, `default_gen/0`.
+- **Create** `lib/antigen/generators/mutation.ex` — `Antigen.Generators.Mutation`: `operators/0` (the 7 kinds), `build/2` (each operator, returns `{Gen.t(term), fault}`), a private uniformly-weighted `select/0` (no `applicable/1` — the §5 applicability flattening, see Self-Review, means every operator is applicable at every draw), `mutant/0` (challenge), `assay_id/0`, `default_gen/0`.
 - **Create** `lib/antigen/assays/mutation.ex` — `Antigen.Assays.Mutation`: `run/1`, with an overridable infer seam for the polarity test.
 - **Modify** `lib/antigen/challenge.ex` — `:mutant_term` in `@type kind` + `@known_atoms` + `to_pieces/1` + `from_pieces/7`.
 - **Modify** `lib/antigen/coverage.ex` — `terms_of/1` clause.
-- **Modify** `lib/antigen/runner.ex` — assay registry, `mutation_metrics/1` + health line, `default_gen` wiring.
-- **Modify** `lib/mix/tasks/antigen.ex` — `:mutant_term` branch in `default_gen`.
+- **Modify** `lib/antigen/runner.ex` — assay registry, `mutation_metrics/1`/`mutation_stamp/1` + health line (`explore/1` takes its generator via the caller-supplied `gen:` option — no `default_gen` concept lives here).
+- **Modify** `lib/mix/tasks/antigen.ex` — `:mutant_term` branch in its own `default_gen/0`.
 - **Modify** `test/antigen/corpus_replay_test.exs` — `mutation/rejection` in the replay `@registry`.
 - **Modify** `test/antigen/seeds.sexp` — bank coverage-deduped `:mutant_term` seeds (Task 9).
-- **Create** tests: `test/antigen/generators/mutation_test.exs`, `test/antigen/assays/mutation_test.exs`, `test/antigen/mutation_health_gate_test.exs`.
+- **Create** tests: `test/antigen/generators/mutation_test.exs`, `test/antigen/assays/mutation_test.exs`, `test/antigen/mutation_health_gate_test.exs`, `test/antigen/mutation_meta_test.exs` (static-replay diversity floor over the banked corpus, spec §7 test family 4 — mirrors `typed_term_meta_test.exs`).
 
 ---
 
@@ -116,14 +118,14 @@ Expected: FAIL — `to_pieces`/`from_pieces` have no `:mutant_term` clause (Func
 
 In `lib/antigen/challenge.ex`, extend `@type kind` (line 7) to add `| :mutant_term`.
 
-Extend `@known_atoms` (line 26 list) — add these (verified against the codebase: `:ill_typed` already present; `:fst/:snd/:pair/:sigma` already interned by `Cure.Core.Serialize`; `:Nat/:Vec/:Bd` already present via `:typed_term`):
+Extend `@known_atoms` (line 26 list) — the only atoms genuinely NEW (verified against the actual current list, lines 26-46): `:mutant_term` (new kind), the 7 fault kinds, and the 4 witness-enum atoms plus `:Sigma`:
 ```elixir
-    :mutant_term, :ill_typed,
+    :mutant_term,
     :head_swap, :ctor_arg, :index_mismatch, :app_domain,
     :out_of_scope_var, :proj_non_pair, :universe,
-    :head, :index, :level, :scope, :Sigma, :Z, :S
+    :head, :index, :level, :scope, :Sigma
 ```
-(`:ill_typed` is a no-op if already listed — keep the list a set; do not duplicate. `:Z`/`:S` are the index-witness heads for `:index_mismatch`.)
+`:ill_typed` needs **no** addition — already present (interned by the `:indexed_case` vertical, line 35). `:Z`/`:S` (the index-witness heads for `:index_mismatch`) need **no** addition either — already present in the "generator-produced names" group (line 32). Do not re-list any of these three; the list must stay a set with no duplicate literals.
 
 Add `to_pieces` clause (after the `:typed_term` clause, ~line 130):
 ```elixir
@@ -419,10 +421,13 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `mix test test/antigen/generators/mutation_test.exs --only nothing` then the full file.
-Expected before Task-3 records are correct: FAIL. With Task 3 complete it should already PASS — so to see red, temporarily assert the *opposite* is NOT the point. Instead: this test is a **guard**; verify it fails if a `fault` witness is wrong by running: transiently edit `:universe`'s `injected_head` to `{:type, 0}` and confirm FAIL, then revert.
+This test has no natural pre-implementation red state — Task 3's `fault` records are already correct, so the assertion passes immediately if run as-is. Since the test's job is to be a **permanent regression guard** (catch a future incorrect `fault` record), demonstrate it has teeth by transiently breaking the implementation, not the test:
 
-Run: `mix test test/antigen/generators/mutation_test.exs -n` (all). Expected: FAIL on the mutated record, PASS after revert.
+1. Run `mix test test/antigen/generators/mutation_test.exs` now. Expected: PASSES (Task 3's records are already correct — this is the baseline, not the red step).
+2. In `lib/antigen/generators/mutation.ex`, temporarily edit `:universe`'s fault record so `injected_head: {:type, 0}` (instead of `{:type, 1}`).
+3. Re-run `mix test test/antigen/generators/mutation_test.exs`. Expected: FAIL — the new assertion `act > req` in this test's `:level` branch now fails (`0 > 0` is false), proving the test would catch a wrong witness.
+4. Revert the transient edit.
+5. Re-run `mix test test/antigen/generators/mutation_test.exs`. Expected: PASS again.
 
 - [ ] **Step 3: (no new impl)** — Task 3's `fault` records already satisfy the invariant. If the transient-edit red step above did not fail, the witness logic is too weak; strengthen it before proceeding.
 
@@ -478,10 +483,11 @@ Expected: FAIL — `Mutation.mutant/0` undefined.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `lib/antigen/generators/mutation.ex`:
+Add to `lib/antigen/generators/mutation.ex`. **Alias hazard:** Task 3 already opened this module with `alias Cure.Core.Context` (needed for `Context.length(ctx)` in the `:out_of_scope_var` clause). `Antigen.Generators.Context` (the context-telescope generator, needed here for `gen/1`) is a DIFFERENT module — aliasing it bare as `Context` too would collide and break one or the other depending on where the alias lands in the file (`Antigen.Generators.Context` has no `length/1`; `Cure.Core.Context` has no `gen/1`). `lib/antigen/generators/term.ex` already solves this exact collision by aliasing it `CtxGen` — follow that precedent, not a bare re-alias:
 ```elixir
   alias Antigen.Challenge
-  alias Antigen.Generators.{Context, SigMenu}
+  alias Antigen.Generators.Context, as: CtxGen
+  alias Antigen.Generators.SigMenu
 
   def assay_id, do: "mutation/rejection"
 
@@ -490,7 +496,7 @@ Add to `lib/antigen/generators/mutation.ex`:
   def mutant do
     env = SigMenu.env_of(:v1)
 
-    Gen.bind(Context.gen(env), fn ctx_types ->
+    Gen.bind(CtxGen.gen(env), fn ctx_types ->
       ctx = SigMenu.rebuild_context(env, ctx_types)
 
       Gen.bind(select(), fn kind ->
@@ -750,19 +756,33 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
 
 - [ ] **Step 1: Write the failing test**
 
+`default_gen/0` in `lib/mix/tasks/antigen.ex` is `defp` (private) — confirmed by reading the file; it is NOT called directly by any existing test. The existing Tier-B analog (`test/antigen/mix_task_test.exs:46`, "the wired-in default_gen draws :typed_term challenges") exercises it only *indirectly*, via `Mix.Tasks.Antigen.run(["generate", ...])` followed by reading the banked seeds file. Follow that exact same proven pattern — do not call `default_gen/0` directly and do not change its visibility:
+
 ```elixir
   test "the wired-in default_gen draws :mutant_term challenges" do
-    gen = Mix.Tasks.Antigen.default_gen()
-    kinds = Antigen.Backend.StreamData.interp(gen) |> Enum.take(300) |> Enum.map(& &1.kind) |> Enum.uniq()
+    seeds_path = Path.join(@tmp, "seeds_mutant.sexp")
+
+    Mix.Tasks.Antigen.run([
+      "generate",
+      "--count", "300",
+      "--seeds", seeds_path,
+      "--report-dir", @tmp
+    ])
+
+    kinds =
+      Antigen.Corpus.stream(seeds_path)
+      |> Enum.flat_map(fn {:ok, c} -> [c.kind]; _ -> [] end)
+      |> MapSet.new()
+
     assert :mutant_term in kinds
   end
 ```
-(Add `alias Antigen.Generators.Mutation` / ensure `Mix.Tasks.Antigen.default_gen/0` is public — it is used already by the existing Tier-B test.)
+(Place this inside the existing `Mix.Tasks.AntigenTest` module, alongside the `:typed_term` analog it mirrors — reuses that module's `@tmp` setup.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `mix test test/antigen/mix_task_test.exs`
-Expected: FAIL — no `:mutant_term` in the drawn kinds.
+Expected: FAIL — no `:mutant_term` in the drawn kinds (the harvested seeds file contains only the pre-existing Tier-A/B kinds).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -790,14 +810,15 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
 **Files:**
 - Modify: `test/antigen/corpus_replay_test.exs` (add `mutation/rejection` to the `@registry` map).
 - Modify: `test/antigen/seeds.sexp` (bank coverage-deduped `:mutant_term` seeds).
+- Create: `test/antigen/mutation_meta_test.exs` (static diversity-floor meta-test over the banked seeds, spec §7 test family 4).
 
 **Interfaces:**
-- Consumes: `Antigen.Assays.Mutation`, `Mutation.mutant/0`.
-- Produces: banked `:mutant_term` seeds replay to `:ok` (correct rejection), no `{:unknown_assay, _}`.
+- Consumes: `Antigen.Assays.Mutation`, `Mutation.mutant/0`, `Runner.mutation_metrics/1`.
+- Produces: banked `:mutant_term` seeds replay to `:ok` (correct rejection), no `{:unknown_assay, _}`, and meet the §6.2 diversity floor as a static/committed fact (not just a fresh-sample property).
 
-**Reference:** this is the exact gap that bit Tier-B Task 10 — banked seeds carry an assay id the replay `@registry` map must know, separately from `Runner`'s registry.
+**Reference:** this is the exact gap that bit Tier-B Task 10 — banked seeds carry an assay id the replay `@registry` map must know, separately from `Runner`'s registry. Spec §7 test family 4 ("Diversity floor") explicitly requires a **second** test beyond Task 7's dynamic/sampled one: "a static-replay meta-test enforces the floor on the banked corpus (mirrors the Tier-B health-gate meta-test)" — the mirrored precedent is `test/antigen/typed_term_meta_test.exs`'s "banked :typed_term seed corpus meets the health floors (static replay)" test. This task adds the `:mutant_term` analog; Task 7 alone does not satisfy this spec requirement.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```elixir
 # in test/antigen/corpus_replay_test.exs — add to the assertions that every banked
@@ -810,10 +831,33 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
   end
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+```elixir
+# test/antigen/mutation_meta_test.exs — new file, mirrors typed_term_meta_test.exs's
+# "banked :typed_term seed corpus meets the health floors (static replay)" test.
+defmodule Antigen.MutationMetaTest do
+  use ExUnit.Case, async: true
+  alias Antigen.{Runner, Corpus, Challenge}
 
-Run: `mix test test/antigen/corpus_replay_test.exs`
-Expected: FAIL — no `:mutant_term` seeds in `seeds.sexp` (empty list assertion), and/or `mutation/rejection` missing from the replay `@registry`.
+  @seeds_path "test/antigen/seeds.sexp"
+  test "banked :mutant_term seed corpus meets the diversity floor (static replay)" do
+    banked =
+      Corpus.stream(@seeds_path)
+      |> Enum.flat_map(fn
+        {:ok, %Challenge{kind: :mutant_term} = c} -> [c]
+        _ -> []
+      end)
+
+    assert banked != [], "no :mutant_term seeds banked yet"
+    m = Runner.mutation_metrics(banked)
+    assert m.reason_diversity >= 5, "banked reason_diversity #{m.reason_diversity} below floor"
+  end
+end
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `mix test test/antigen/corpus_replay_test.exs test/antigen/mutation_meta_test.exs`
+Expected: FAIL — no `:mutant_term` seeds in `seeds.sexp` (empty list assertions), and/or `mutation/rejection` missing from the replay `@registry`.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -827,18 +871,18 @@ Bank seeds by running the explorer against a temp corpus, then copy the coverage
 MIX_ENV=test mix antigen --count 300 --seeds /tmp/mut_seeds.sexp --corpus /tmp/mut_corpus.sexp
 # then append the :mutant_term lines from /tmp/mut_seeds.sexp into test/antigen/seeds.sexp
 ```
-(De-dup is by `Corpus.dedup_key(_, :seed)`; the append is idempotent. Bank ~one seed per distinct fault kind — aim for ≥5 to keep the static diversity meta-test green.)
+(De-dup is by `Corpus.dedup_key(_, :seed)`; the append is idempotent. Bank at least one seed per distinct fault kind, covering ≥5 of the 7 — required to make `mutation_meta_test.exs`'s new static diversity assertion pass, not merely "aimed for.")
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Run: `mix test test/antigen/corpus_replay_test.exs`
+Run: `mix test test/antigen/corpus_replay_test.exs test/antigen/mutation_meta_test.exs`
 Expected: PASS. Also confirm the full replay test (every seed → known assay) stays green.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add test/antigen/corpus_replay_test.exs test/antigen/seeds.sexp
-git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(antigen): replay registry + banked :mutant_term seeds"
+git add test/antigen/corpus_replay_test.exs test/antigen/mutation_meta_test.exs test/antigen/seeds.sexp
+git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(antigen): replay registry + banked :mutant_term seeds + static diversity meta-test"
 ```
 
 ---
@@ -856,10 +900,16 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(an
 
 ## Self-Review
 
-**Spec coverage:** §1 motivation → the inverted assay (Task 6). §2 scope → v1 menu reused (Tasks 3/5). §3 correctness invariant → construction-guarantee test (Task 3) + kernel-independent witness meta-test (Task 4). §4 challenge model → Task 1 (kind/serialization) + Task 2 (coverage) + Task 7 (kind-isolation). §5 fault operators → Task 3 (all 7, verified constructions). §6.1 assay → Task 6. §6.2 diversity gate → Task 7. §7 tests → Tasks 1–9 map to the seven test families. §8 architecture/atoms → Tasks 1, 3, 6, 7, 8. §9 relationship → out of scope (documented as follow-on), no task.
+**Spec coverage:** §1 motivation → the inverted assay (Task 6). §2 scope → v1 menu reused (Tasks 3/5). §3 correctness invariant → construction-guarantee test (Task 3) + kernel-independent witness meta-test (Task 4). §4 challenge model → Task 1 (kind/serialization) + Task 2 (coverage) + Task 7 (kind-isolation). §5 fault operators → Task 3 (all 7, verified constructions — see the applicability note below for a design-level gap). §6.1 assay → Task 6. §6.2 diversity gate → Task 7 (dynamic/sampled) **and** Task 9 (static replay over the banked corpus, spec §7 test family 4 — the precedent this mirrors is `typed_term_meta_test.exs`, not covered by Task 7 alone). §7 tests → Tasks 1–9 map to the seven test families (family 4's static-replay half lives specifically in Task 9, not Task 7). §8 architecture/atoms → Tasks 1, 3, 6, 7, 8. §9 relationship → out of scope (documented as follow-on), no task.
 
-**Placeholder scan:** every code step contains complete, verified code (constructions probed against the real kernel). Task 9's seed-banking is a shell procedure, not a code placeholder.
+**Placeholder scan:** every code step contains complete, verified code (constructions probed against the real kernel, with the fixed-canonical-filler caveat noted in Global Constraints — see below). Task 9's seed-banking is a shell procedure, not a code placeholder.
 
-**Type consistency:** `build/2` returns `{Gen.t, fault}` (Tasks 3→5); `mutant/0` returns `Gen.t(Challenge)` (Tasks 5→7→8); `run/1|2` returns `:ok | {:violation, {:accepted_ill_typed, term, fault}}` (Tasks 6→7); `mutation_metrics/1` shape `%{reason_diversity, survivors, mutants_total}` (Task 7 producer + test). `fault` schema is identical across Tasks 1, 3, 4, 6, 7.
+**Type consistency:** `build/2` returns `{Gen.t, fault}` (Tasks 3→5); `mutant/0` returns `Gen.t(Challenge)` (Tasks 5→7→8); `run/1|2` returns `:ok | {:violation, {:accepted_ill_typed, term, fault}}` (Tasks 6→7); `mutation_metrics/1` shape `%{reason_diversity, survivors, mutants_total}` (Task 7 producer + test, reused by Task 9's static meta-test). `fault` schema is identical across Tasks 1, 3, 4, 6, 7.
 
-**Note on spec §5 applicability:** the plan flattens §5's site-restricted "applicable set" to "all 7 operators applicable at every draw," because each operator owns its checked scaffold rather than injecting into a drawn `gen_term` node. This preserves every spec *guarantee* (construction-guaranteed ill-typedness, §3(a) checked position via the operator's enclosing form, `fault.kind` diversity) while being less invasive than threading an injection hook through the lazy `gen_term`. The `type` field's site-nominal `goal_of/1` keeps §4's documentation-only contract. Flagged here for the plan reviewer.
+**Note on spec §5 applicability — two distinct simplifications, not one:**
+
+1. *Applicable-set flattening.* The plan flattens §5's site-restricted "applicable set" to "all 7 operators applicable at every draw," because each operator owns its checked scaffold rather than injecting into a drawn `gen_term` node. This preserves construction-guaranteed ill-typedness, §3(a) checked position (via the operator's own enclosing form), and `fault.kind` diversity — the three properties the correctness invariant (§3) and the challenge model (§4) actually require.
+
+2. *Fault depth/burial — genuinely dropped, not merely simplified.* §5 opens by describing injection "at exactly one randomly chosen node" reached during `gen_term`'s own recursive traversal, and states explicitly for operator 3: "generation-time injection buries it in a real, deep surrounding term." The plan's architecture does not do this: every operator's fault sits at the scaffold's own root (or one level down, e.g. inside the outer `{:app, {:app, plus, VEC}, NAT}`), with well-typed `Term.gen_term` filler only ever appearing as a *sibling* of the fault, never as an *ancestor* containing it at an arbitrary depth. The filler itself can be deep, but the fault is always shallow. This means the corpus never exercises whether the kernel correctly propagates a rejection up through many nested levels of `with`/`check_ctor_app_rec`/`check_case_branches` — a distinct, real class of kernel bug (error-swallowing or mis-threading at depth) that §5's "buried" design was explicitly aimed at for operator 3. This is accepted here as a deliberate v1 simplification (implementing arbitrary-depth injection would mean threading an injection hook through `Term.gen_term`'s own lazy rule dispatch, materially more invasive than the self-contained-scaffold design) — but it should be recorded as an explicit, named follow-on (e.g. "v2: deep-injection variant of operator 3"), not silently folded into "preserves every spec guarantee," since it does not.
+
+The `type` field's site-nominal `goal_of/1` keeps §4's documentation-only contract. Flagged here for the plan reviewer.
