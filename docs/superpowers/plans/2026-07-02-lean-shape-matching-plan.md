@@ -189,4 +189,28 @@
 
 ## Phase→Stage-5 handoff
 
-At Phase 6 completion: full suite ONCE; completion report (per-phase commits, each TCB gate's antibody + independent-verification outcome, the A/B/C-retirement proof, the `frp` cluster table); push notification `autopilot done — review & merge autopilot/lean-shape-matching`; **do NOT auto-merge** — operator reviews all TCB diffs (Phase 1 if any, Phase 2 if escalated, Phase 3.3 if HEq, Phase 5) and merges.
+At Phase 6 completion: full suite ONCE; completion report (per-phase commits, each TCB gate's antibody + independent-verification outcome, the A/B/C-retirement proof, the `frp` cluster table); push notification `autopilot done — review & merge autopilot/lean-shape-matching`; **do NOT auto-merge** — operator reviews all TCB diffs (Phase 1 if any, Phase 2 if escalated, Phase 3.3 if HEq, Phase 5, **Phase 4a** below) and merges.
+
+---
+
+## Execution findings (Stage 4) — amendments discovered during the run
+
+### Phase 0 finding (commit 9785763): the acceptance driver bottoms out in a NORMALIZER WHNF gap (TCB), not lemma plumbing
+
+`frp01` is red for the right reason (`:not_definitionally_equal` on a nested `++`), but the root cause is deeper than Phase 4 assumed: **Cure's conversion/normalisation does not force a `case` scrutinee that is itself a function redex to WHNF.** Evidence (isolation probes): `app(SNil,y) ≡ y` ✅, `app(SNil, app(y,z)) ≡ app(y,z)` ✅, but `app(app(SNil,y),z) ≡ app(y,z)` ❌ (and the Nat analog `plus(plus(Z,y),z) ≡ plus(y,z)` ❌). At the SF-index level this is exactly `{:conversion_failure, SF(app(app(SNil,y),z),…), SF(app(y,z),…)}` — the computed-`++`-index conversion.
+
+**Consequence — new discovered TCB task, inserted as Phase 4a (runs BEFORE Phase 4's lemma stock, likely pulled forward per the spec ordering contingency):**
+
+### Task 4a.1: Nested-redex-scrutinee WHNF in conversion (TCB; gated)
+
+**Files:** `lib/cure/core/normalise.ex` (whnf/`unfold_head` seam — likely an extension of the `d37721f` stuck-eliminator seam so a `case`/eliminator forces its SCRUTINEE to WHNF when the scrutinee is itself a redex) and/or `lib/cure/core/conv.ex`. Test: `test/cure/core/nested_redex_conv_test.exs`. Antibody: `lib/antigen/…` + corpus.
+
+- [ ] **Step 1: Lean/Agda re-check.** Confirm both fully normalize a redex scrutinee before deciding a match is stuck (Lean whnf `Meta`/kernel `whnf`; Agda `Reduce.hs`). Note it.
+- [ ] **Step 2: red.** `test/cure/core/nested_redex_conv_test.exs`: assert `conv?(plus(plus(Z,y),z), plus(y,z))` and `conv?(app(app(SNil,y),z), app(y,z))` — RED today (`:not_definitionally_equal`). Record.
+- [ ] **Step 3: implement** forcing the eliminator scrutinee to WHNF (reduce the inner redex before judging the outer stuck). Minimal, localized.
+- [ ] **Step 4: TCB gate.** New antibody: "forcing a redex scrutinee to WHNF terminates + equates no distinct normal forms (only reduces genuine redexes, never merges neutrals)" + full Antigen + full suite + **independent adversarial-verification subagent**. Per `elaborator-hard-stop-principle` first confirm no E-only term dodges it (it can't — this is a conversion-completeness gap the elaborator cannot route around; a rewrite still asks the kernel this exact conv question).
+- [ ] **Step 5:** confirm `appAssoc` becomes provable in Cure (the base case now converts), then re-check whether `frp01`'s `parAssoc` SF-index rewrite also goes through — if the nested-redex fix alone closes `frp01`, Phase 4's lemma-stock discharge shrinks accordingly. Commit kernel diff + antibody as one reviewed unit; present diff (no auto-merge).
+
+**Gate:** nested-redex conv test green; `appAssoc` provable; TCB gate fully green incl. independent adversarial verification; 0-regress vs baseline 2275.
+
+**Impact on Phase 4:** the lemma stock (`++` assoc/identity, `∧`/`∨`) is NOT refl-trivial until 4a lands; Phase 4 depends on 4a. If 4a alone flips `frp01` to accept, Phase 4 may reduce to the multi-occurrence discharge case (Task 4.2) only. Re-assess Phase 4 scope after 4a.
