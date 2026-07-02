@@ -204,14 +204,19 @@ defmodule Antigen.Generators.Term do
   defp indir_rules(_ctx, _goal, _size), do: []
 
   # Plain application (manufactures β-redexes INDIR cannot): apply a freshly
-  # generated lambda. Only offered at Nat/Bd goals in v1 (non-dependent codomain).
+  # generated lambda. Restricted to a Nat goal so the Nat-typed binder can be
+  # USED by the body (via `gen_referencing/4`) rather than shipped unused — a
+  # Bd/Vec-goal body cannot reference a Nat argument, so such a lam would be
+  # dead weight that only drags down the binder-usage health metric (spec §8).
+  # Redex coverage at other goals still comes from the binderless Bd-`case`
+  # (ι-redex) and INDIR (δ/ι), so nothing is lost.
   defp app_rule(ctx, goal, size) when size > 1 do
     case whnf(ctx, goal) do
-      {:data, fam, _, _} when fam in [:Nat, :Bd] ->
+      {:data, :Nat, _, _} ->
         dom = SigMenu.nat()
         body_ctx = Context.extend(ctx, Eval.eval(dom, Context.env(ctx)))
         [{2,
-          Gen.bind(gen(body_ctx, shift_goal(goal), size - 1), fn body ->
+          Gen.bind(gen_referencing(body_ctx, shift_goal(goal), size - 1, 0), fn body ->
             Gen.bind(gen(ctx, dom, size - 1), fn arg ->
               Gen.return({:app, {:lam, dom, body}, arg})
             end)
@@ -220,6 +225,28 @@ defmodule Antigen.Generators.Term do
     end
   end
   defp app_rule(_ctx, _goal, _size), do: []
+
+  # A generator biased to REFERENCE de Bruijn index `k` (a Nat variable in
+  # scope), so binders it sits under don't ship unused (health gate §8). Only
+  # meaningful when the goal is Nat (the sole v1 type reachable from a bare Nat
+  # variable); otherwise it falls back to the ordinary generator.
+  defp gen_referencing(ctx, goal, size, k) do
+    case whnf(ctx, goal) do
+      {:data, :Nat, _, _} ->
+        Gen.frequency([
+          {4, Gen.return({:var, k})},
+          {2, Gen.return({:ctor, :S, [{:var, k}]})},
+          {2,
+           Gen.bind(gen(ctx, SigMenu.nat(), size - 1), fn m ->
+             Gen.return({:app, {:app, {:global, :plus}, {:var, k}}, m})
+           end)},
+          {1, gen(ctx, goal, size)}
+        ])
+
+      _ ->
+        gen(ctx, goal, size)
+    end
+  end
 
   # case on a menu family scrutinee (Nat or Bd), constant motive λ_. goal.
   # Gated on the goal's (whnf'd) shape, mirroring `app_rule`: spec §6.1's
@@ -230,22 +257,37 @@ defmodule Antigen.Generators.Term do
   defp case_rule(ctx, goal, size) when size > 1 do
     case whnf(ctx, goal) do
       {:type, _} ->
+        # Spec §6.1's Type-0 row is var/INDIR only.
         []
 
+      {:data, :Nat, _, _} ->
+        # At a Nat goal both families are useful: the Bd-`case` is binderless,
+        # and the Nat-`case`'s S-branch predecessor (a Nat) CAN be used by the
+        # Nat-typed branch body (`branches/4` biases toward it).
+        case_for(ctx, :Bd, goal, size) ++ case_for(ctx, :Nat, goal, size)
+
       _ ->
-        Enum.flat_map([{:Nat, [:Z, :S]}, {:Bd, [:T, :F]}], fn {fam, _ctors} ->
-          scrut_ty = {:data, fam, [], []}
-          motive = {:lam, scrut_ty, shift_goal(goal)}
-          [{2,
-            Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
-              Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
-                Gen.return({:case, scrut, motive, brs})
-              end)
-            end)}]
-        end)
+        # At a Bd/Vec goal only the binderless Bd-`case` is offered: a Nat-`case`
+        # here would bind a Nat predecessor its non-Nat body can never reference,
+        # producing a dead binder that only hurts binder-usage (spec §8). Redex
+        # coverage is preserved (Bd-`case` on a constructor scrutinee is an
+        # ι-redex; INDIR supplies δ/ι).
+        case_for(ctx, :Bd, goal, size)
     end
   end
   defp case_rule(_ctx, _goal, _size), do: []
+
+  defp case_for(ctx, fam, goal, size) do
+    scrut_ty = {:data, fam, [], []}
+    motive = {:lam, scrut_ty, shift_goal(goal)}
+
+    [{2,
+      Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
+        Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
+          Gen.return({:case, scrut, motive, brs})
+        end)
+      end)}]
+  end
 
   # fst/snd of a Γ-variable of Sigma type whose relevant component meets the goal.
   defp proj_rules(ctx, goal) do
@@ -295,11 +337,14 @@ defmodule Antigen.Generators.Term do
     Normalise.quote(Eval.eval(cod, [Eval.eval(a, env) | env]), Context.length(ctx))
   end
 
-  # Branch bodies for a `case` on `fam` at (constant-motive) goal.
+  # Branch bodies for a `case` on `fam` at (constant-motive) goal. The Nat
+  # S-branch's body is generated with `gen_referencing/4` so it tends to USE the
+  # bound predecessor (var 0) — this is only invoked at a Nat goal (see
+  # `case_rule`), where the predecessor is type-compatible with the body.
   defp branches(ctx, :Nat, goal, size) do
     Gen.bind(gen(ctx, goal, size), fn zbody ->
       kctx = Context.extend(ctx, Eval.eval(SigMenu.nat(), Context.env(ctx)))
-      Gen.bind(gen(kctx, shift_goal(goal), size), fn sbody ->
+      Gen.bind(gen_referencing(kctx, shift_goal(goal), size, 0), fn sbody ->
         Gen.return([{:Z, 0, zbody}, {:S, 1, sbody}])
       end)
     end)
