@@ -88,21 +88,38 @@ indices in constructor ARGUMENT positions**, neither a TCB matter:
    function's domain telescope. Red-green in
    `test/cure/elab/computed_index_arg_test.exs`. This unblocks frp03/frp04.
 
-2. **Argument index-unification does not normalise a computed index
-   (SCOPE-PINNED).** Passing a body whose Dec index is itself computed —
-   `loop(seq(a, b))`, where `seq`'s result index is `dmeet(DDec, DDec)` —
-   fails with `{:index_mismatch, {:cannot_unify, DDec, dmeet(DDec,DDec)}}`: the
-   elaborator's first-order `Unify` (E-layer, `unify.ex`) compares index terms
-   syntactically and does not reduce `dmeet(DDec,DDec) ≡ DDec`. The SAME equation
-   *does* discharge when it appears as body-vs-return **kernel conversion**
-   (frp02 `seqDec` accepts) — the gap is specifically the elaborator's
-   argument-index unify path lacking a normalise step. It is **orthogonal to the
-   safety demonstration** (frp03 uses a directly-typed decoupled body, isolating
-   the well-formedness rule) and is reach-pinned here as follow-on completeness
-   work: normalise both index terms before/at unify (needs the kernel context
-   threaded into the ctor-application arg solver, or a normalising fallback in
-   `Unify` given an env). No soundness exposure — a false REJECT, never a false
-   accept.
+2. **Composed-loop `loop(seq(a,b))` — a computed index in argument position — is
+   a TWO-LAYER reach; the second layer is a TCB gap (SCOPE-PINNED, not fixed).**
+   The probe: a loop whose body is a composition, so `seq`'s result Dec index is
+   `dmeet(DDec, DDec)` fed to `loop`'s `DDec` slot. Idris reduces it and accepts;
+   Cure rejects (a genuine `cure=reject / idris=accept` reach — verified live,
+   then the probe was removed to keep the committed oracle green). Diagnosed to
+   TWO independent layers, both of which must be fixed for parity:
+
+   - **(a) E-layer — the elaborator's argument index-unification is syntactic.**
+     `solve_arg` (`elaborator.ex`) calls the first-order `Unify` on the ctor
+     argument's inferred type; `Unify` compares `DDec` vs `dmeet(DDec,DDec)`
+     syntactically → `{:cannot_unify, …}`. A prototyped fix (retry-on-failure,
+     reducing only the **ground/closed** index arguments — `dmeet(DDec,DDec)→DDec`
+     — while leaving open neutral spines like `app(av,cv)` intact so they still
+     unify against the ctor's index metavariables; a full `normalize` wrongly
+     δ-unfolds the stuck `app` into a `case`-tree) resolves THIS layer. Sound
+     (retry only on failure; ground reduction cannot capture). Not committed
+     because it does not flip the probe green on its own — layer (b) still bites.
+
+   - **(b) TCB-layer — the KERNEL's index unification does not normalise the
+     computed index either.** With (a) applied, the assembled `loop(seq(a,b))`
+     term reaches `Kernel.check` and is rejected with a bare `:index_mismatch`
+     (`kernel.ex:558 remap_index_error` on the `{:vdata, SF, …}`). `loop(body)`
+     with a *concrete* `DDec` body (frp03) checks fine, so the kernel's `{:vdata}`
+     index unification specifically fails to reduce `dmeet(DDec,DDec) ≡ DDec` in
+     this position. That is a **kernel completeness gap → HARD-STOP-and-review**:
+     it needs a reviewed TCB change (index unification reducing a computed index
+     before comparing) with the full gate (red-green + antibody + independent
+     adversarial verification), not an E-layer patch. **Deferred.**
+
+   Orthogonal to the safety demonstration (frp03/frp04 use directly-typed bodies).
+   No soundness exposure at either layer — a false REJECT, never a false accept.
 
 **Decision (explicit, not improvised):** the capstone (Task 6.2) demonstrates the
 safety property on the *specified* core — `≫`/`∗∗`/`loop` + `Dec` decoupledness —
