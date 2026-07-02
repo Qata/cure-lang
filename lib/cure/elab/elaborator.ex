@@ -1328,8 +1328,8 @@ defmodule Cure.Elab.Elaborator do
   # ordinary (`{:vdata}`) dispatch and its clean error.
   defp try_tuple_match({:variable, _sm, _sn} = scrut, [{:match_arm, meta, body}], expected, names, ctx, env) do
     case Keyword.fetch!(meta, :pattern) do
-      {:tuple, _tm, [_e1, _e2] = elems} ->
-        with {:ok, subs} <- tuple_elem_subs(elems, scrut) do
+      {:tuple, _tm, [_, _ | _] = elems} ->
+        with {:ok, subs} <- tuple_subs(elems, scrut) do
           b = single_body(body)
 
           if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
@@ -1347,18 +1347,23 @@ defmodule Cure.Elab.Elaborator do
 
   defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
 
-  defp tuple_elem_subs([e1, e2], scrut) do
-    p1 = {:attribute_access, [attribute: "1"], [scrut]}
-    p2 = {:attribute_access, [attribute: "2"], [scrut]}
+  # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
+  # `e1 = base.1`, `e2 = base.2.1`, …, `en = base.2.….2` (the final tail). Each
+  # element may itself be a nested tuple, recursing on its own projection base.
+  defp tuple_subs([last], base), do: tuple_elem_sub(last, base)
 
-    with {:ok, s1} <- tuple_elem_sub(e1, p1),
-         {:ok, s2} <- tuple_elem_sub(e2, p2) do
+  defp tuple_subs([e | rest], base) do
+    with {:ok, s1} <- tuple_elem_sub(e, tuple_proj(base, "1")),
+         {:ok, s2} <- tuple_subs(rest, tuple_proj(base, "2")) do
       {:ok, s1 ++ s2}
     end
   end
 
+  defp tuple_proj(base, n), do: {:attribute_access, [attribute: n], [base]}
+
   defp tuple_elem_sub({:variable, _m, "_"}, _proj), do: {:ok, []}
   defp tuple_elem_sub({:variable, _m, name}, proj), do: {:ok, [{name, proj}]}
+  defp tuple_elem_sub({:tuple, _m, [_, _ | _] = sub_elems}, proj), do: tuple_subs(sub_elems, proj)
   defp tuple_elem_sub(_other, _proj), do: {:error, {:unsupported_pattern, :nested_tuple_element}}
 
   # --- nested-pattern desugaring (parity #3) ---------------------------------

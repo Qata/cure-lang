@@ -62,6 +62,30 @@ defmodule Cure.Elab.TuplePatternTest do
     assert apply(mod, :g, []) == {:S, :Z}
   end
 
+  test "an n-element tuple pattern projects through the right-nested Σ" do
+    src =
+      @nat <>
+        "  fn f(p: Sigma(a: Nat, Sigma(b: Nat, Nat))) -> Nat = match p\n    %[x, y, z] -> z\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.TripleTupleE2E", functions: [:f])
+
+    # p = (Z, (S Z, S(S Z))); the third element is p.2.2.
+    assert apply(mod, :f, [{:Z, {{:S, :Z}, {:S, {:S, :Z}}}}]) == {:S, {:S, :Z}}
+  end
+
+  test "a nested tuple pattern binds through the inner Σ" do
+    src =
+      @nat <>
+        "  fn f(p: Sigma(a: Nat, Sigma(b: Nat, Nat))) -> Nat = match p\n    %[x, %[y, z]] -> y\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.NestedTupleE2E", functions: [:f])
+
+    # y is the first component of the inner pair, i.e. p.2.1.
+    assert apply(mod, :f, [{:Z, {{:S, :Z}, {:S, {:S, :Z}}}}]) == {:S, :Z}
+  end
+
   test "a let-bound pair can be projected (Σ β-rule through substitution)" do
     # `let` is substitution-based, so `p.2` inlines to `%[Z(), S(Z())].2`, which
     # reduces to the second component directly — no pair term, no bare-pair infer.
