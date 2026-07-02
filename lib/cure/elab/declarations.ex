@@ -77,6 +77,18 @@ defmodule Cure.Elab.Declarations do
   # clause lists the refined indices. Each constructor signature is an
   # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
   # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
+  # Type alias `type Name = RHS`: a nullary definition `Name : Type := RHS`.
+  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is
+  # trivially total, so it certifies and δ becomes available). No new type former.
+  def elaborate({:type_annotation, meta, [rhs]}, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env) do
+      env1 = Env.add_def(env, name, {:type, 0}, rhs_core, [])
+      {:ok, maybe_certify(env1, name)}
+    end
+  end
+
   def elaborate({:indexed_type, meta, ctor_sigs}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
     params = Keyword.get(meta, :params, [])

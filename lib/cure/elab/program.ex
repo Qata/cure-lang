@@ -163,6 +163,15 @@ defmodule Cure.Elab.Program do
   end
 
   defp declarations({tag, _meta, _body} = node) when tag in [:container, :indexed_type], do: [node]
+
+  # A top-level type alias `type Name = RHS` (named, non-refinement). Inline
+  # refinement/annotation `:type_annotation` nodes are not declarations.
+  defp declarations({:type_annotation, meta, _} = node) when is_list(meta) do
+    if Keyword.has_key?(meta, :name) and not Keyword.get(meta, :refinement, false),
+      do: [node],
+      else: []
+  end
+
   defp declarations(_other), do: []
 
   defp local_def_names(ast) do
