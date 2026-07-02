@@ -17,6 +17,7 @@
 - **Labels state mathematical truth** (spec D3): a well-founded def is `:terminating` even while the checker rejects it. Every new challenge's `@doc` states its by-construction ground-truth argument.
 - Work happens on a dedicated worktree branched from `autopilot/case-index-unification` (creation via superpowers:using-git-worktrees at execution time). Roadmap edits in this plan touch ONLY §3 of `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` plus the status cells (and stale-hole parenthetical of row 13) of §2 rows 13, 19, 23 — all other §2 text belongs to the parallel P0 plan (keeps the merge trivial).
 - **D4 symmetric reroute (hardened spec D4/gate 4):** a must-*accept*-today challenge (W3's `deletion(:well_typed)`; W5's `:well_typed` probes — NOT W2, whose pins are expected-rejected) that the kernel wrongly rejects is an *incompleteness surprise*, not a soundness hole: keep its `:well_typed` label (D3), pin its current documented violation, and bank it in `test/antigen/reach.sexp` instead of `corpus.sexp`/`seeds.sexp`; the affected ledger row stays open in Task 11 (gate 5). Never relabel, never silently drop.
+- **Tests are immutable once they correctly encode intended/observed behavior:** make a red test green by changing implementation code only (or, for a reach/pin entry, by the sanctioned reach→corpus migration in the port that achieves it) — never by deleting, skipping, or weakening an assertion. The one exception is a test that is provably wrong. Reach/pin/audit tests are characterizations of *current* kernel behavior by design (D2/D3): if a Step-1 prediction of the exact violation shape doesn't match what the kernel actually returns on the first red run, correcting the literal to the observed truth *before that entry is banked* is the intended workflow, not a violation of this rule — the record becomes immutable only once committed (append-only, above).
 
 ---
 
@@ -683,12 +684,15 @@ git commit -m "test(antigen): reach.sexp store + pinned replay for P1 reach targ
 - Modify: `test/antigen/indexed_seed_test.exs` (extend `@antibodies` / `@seed_candidates`)
 - Create: `test/cure/core/branch_unify_occurs_test.exs`
 - Modify (generated): `test/antigen/corpus.sexp`, `test/antigen/seeds.sexp`
+- Modify (conditional — only if Step 5's D4 reroute fires): `test/antigen/reach_pin_test.exs`, `test/antigen/reach.sexp`
 
 **Interfaces:**
 - Consumes: `Antigen.Generators.Indexed.challenge/6` (existing private helper), `Cure.Core.Kernel.branch_unify/4` (public), `Cure.Core.{Context, Env, Inductive, Eval}`.
 - Produces: `Antigen.Generators.Indexed.deletion(:well_typed | :ill_typed) :: Challenge.t()` (assay `"indexed/case"`, def_name `:delete`).
 
-**Background for the implementer:** the kernel's case-index unifier (`lib/cure/core/kernel.ex:749-830`) has a *deletion* rule — `unify_one(r, s, _arity, subst) when r == s → {:ok, subst}` (syntactically equal index pair is consistent, no refinement) — and an *occurs check* — `bind_index` degrades a cyclic solve to `:undecided` (`kernel.ex:810`). Constructor-headed equal pairs are consumed by the injectivity clause first, so the deletion rule is exercised by index terms that are equal but NOT constructor/data-headed: integer literals. Roadmap A2/#23 wants a *named* antibody for each rule.
+**Background for the implementer:** the kernel's case-index unifier (`lib/cure/core/kernel.ex:749-847`) has a *deletion* rule — `unify_one(r, s, _arity, subst) when r == s → {:ok, subst}` (syntactically equal index pair is consistent, no refinement) — and an *occurs check* — `bind_index` degrades a cyclic solve to `:undecided` (`kernel.ex:810`). Constructor-headed equal pairs are consumed by the injectivity clause first, so the deletion rule is exercised by index terms that are equal but NOT constructor/data-headed: integer literals. Roadmap A2/#23 wants a *named* antibody for each rule.
+
+**Divergence from spec W3's literal framing, and why:** §4 W3 describes both antibodies as `:indexed_case` challenges "named in the assay tests." The occurs-check antibody below instead goes directly through the public `Kernel.branch_unify/4` in a standalone kernel-level test (Step 6), not through `Antigen.Generators.Indexed`/`Assays.Indexed`. Reason: the occurs check guards an out-of-telescope index reference — a signature shape `Inductive.declare/3` does not itself validate (confirmed: `declare/3` is a plain metadata insertion, `lib/cure/core/inductive.ex:132-143`), but one that a challenge built and typechecked through the normal Antigen apparatus would never organically produce (well-formed elaborator output always closes result indices over their own telescope). Reaching the kernel's defensive branch therefore requires constructing the adversarial signature directly, bypassing the challenge layer. The antibody still runs on every `mix test` and is a permanent regression guard; it is just not corpus-banked or assay-dispatched. Task 11 records it as an "occurs pin," distinct from the deletion "antibody," to keep this distinction visible in the ledger.
 
 - [ ] **Step 1: Write the failing assay tests**
 
@@ -759,7 +763,11 @@ In `lib/antigen/challenge.ex`, change
 to
 `    :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,`
 
-- [ ] **Step 5: Run the assay tests** — `mix test test/antigen/assays/indexed_test.exs`, expected PASS. If `deletion(:well_typed)` fails with `{:wrongly_rejected, …}`, inspect the reason: this is D4's *incompleteness surprise* (kernel wrongly rejects a must-accept-today challenge), likely in how the kernel evaluates/reifies literal index values. Apply the D4 symmetric reroute (Global Constraints): keep the `:well_typed` label, change this test to pin the exact current violation, bank the entry in `reach.sexp` instead of `seeds.sexp` in Step 8 (extend `test/antigen/reach_pin_test.exs` with an assay-appropriate pin — key it by `def_name` since indexed challenges have no `focus`), record the surprise in the run report, and have Task 11 leave A2/#23 open rather than ✅. Do NOT relabel, do NOT stop the task.
+- [ ] **Step 5: Run the assay tests** — `mix test test/antigen/assays/indexed_test.exs`, expected PASS. If `deletion(:well_typed)` fails with `{:wrongly_rejected, …}`, inspect the reason: this is D4's *incompleteness surprise* (kernel wrongly rejects a must-accept-today challenge), likely in how the kernel evaluates/reifies literal index values. Apply the D4 symmetric reroute (Global Constraints): keep the `:well_typed` label, change this test to pin the exact current violation, bank the entry in `reach.sexp` instead of `seeds.sexp` in Step 8, record the surprise in the run report, and have Task 11 leave A2/#23 open rather than ✅. Do NOT relabel, do NOT stop the task.
+
+  Extending `test/antigen/reach_pin_test.exs` for this entry is not a one-line addition: that file (Task 5) hardcodes a single assay dispatch (`Assays.Totality.run(c)`) and keys `@expected` by `c.payload.focus`, and `indexed/case` challenges have neither. Generalize it: replace the hardcoded call with a per-entry dispatch keyed by `c.assay` (a small registry, e.g. `%{"totality/terminating" => Assays.Totality, "indexed/case" => Assays.Indexed}`, mirroring `corpus_replay_test.exs`'s `@registry`), and replace the `focus`-keyed `@expected` map with a shape-agnostic key such as `c.note` (every entry's note is already a unique, human-legible identifier) so both `focus`-bearing and `def_name`-bearing entries key uniformly.
+
+  Symmetrically: if `deletion(:ill_typed)` instead fails by wrongly ACCEPTING (the deletion rule discharges the branch without checking its ill-typed body), that is a soundness hole, not an incompleteness surprise — apply D4's default rule (spec D4, first sentence): stop, do not bank, report it, and fix it red-green in the kernel (mirror Task 7/8's audit-then-fix pattern and its `TCB:` commit-body line) before proceeding to Step 6.
 
 - [ ] **Step 6: Write the occurs-check pin (kernel-level named antibody)**
 
@@ -840,6 +848,8 @@ git add lib/antigen/generators/indexed.ex lib/antigen/challenge.ex \
   test/cure/core/branch_unify_occurs_test.exs test/antigen/corpus.sexp test/antigen/seeds.sexp
 git commit -m "test(antigen): named deletion-rule antibody + kernel occurs-check pin (W3, closes #23)" --author="Made In Heaven <madeinheaven@madeinheaven.com>"
 ```
+
+If Step 5's D4 reroute fired, also `git add test/antigen/reach_pin_test.exs test/antigen/reach.sexp` into this same commit (or a follow-up commit before moving on) — the reroute is not a separable, deferrable change.
 
 ---
 
@@ -1218,6 +1228,7 @@ git commit -m "test(antigen): bank W4 positivity escape-hatch antibodies (A3/#19
 - Test: `test/antigen/assays/universes_test.exs`
 - Create: `test/antigen/universes_seed_test.exs`
 - Modify (generated): `test/antigen/corpus.sexp`, `test/antigen/seeds.sexp`
+- Modify (conditional — only if Step 6's D4 reroute fires): `test/antigen/reach_pin_test.exs`, `test/antigen/reach.sexp`
 
 **Interfaces:**
 - Consumes: `Cure.Core.Kernel.check_def/2`, `Kernel.check_family/2`, `Kernel.check_ctor/3`, `Cure.Core.Universe` (ceiling 2, `succ` errors `:universe_ceiling`), the `:indexed_case` and `:family` record shapes.
@@ -1418,7 +1429,7 @@ end
    `    :u`
    (`:Foo`, `:MkFoo`, `:x`, `:n`, `:Nat`, `:Z`, `:S` are already interned.)
 
-- [ ] **Step 6: Run the assay tests** — `mix test test/antigen/assays/universes_test.exs`, expected `6 tests, 0 failures`. Any failure is an audit finding on roadmap #20's claims (D4): report it. If it is a wrongly-ACCEPTED `:ill_typed`, stop for a red-green kernel fix before banking (soundness hole). If it is a wrongly-REJECTED `:well_typed` (cumulativity/stratification/ctor_field), apply the D4 symmetric reroute (Global Constraints): keep the label, pin the exact current violation in this test, bank that entry in `reach.sexp` (extend `reach_pin_test.exs`; key by `def_name` or family name) — do NOT rely on Step 7's `:ok` seed filter to silently drop it — and have Task 11 leave A4 open rather than ✅.
+- [ ] **Step 6: Run the assay tests** — `mix test test/antigen/assays/universes_test.exs`, expected `6 tests, 0 failures`. Any failure is an audit finding on roadmap #20's claims (D4): report it. If it is a wrongly-ACCEPTED `:ill_typed`, stop for a red-green kernel fix before banking (soundness hole). If it is a wrongly-REJECTED `:well_typed` (cumulativity/stratification/ctor_field), apply the D4 symmetric reroute (Global Constraints): keep the label, pin the exact current violation in this test, bank that entry in `reach.sexp` (extend `reach_pin_test.exs` per the generalization described in Task 6 Step 5 — dispatch by `c.assay` via a small registry, key `@expected` by `c.note` rather than `focus`, since `universes` entries carry neither a uniform `focus` list nor always a `def_name`) — do NOT rely on Step 7's `:ok` seed filter to silently drop it — and have Task 11 leave A4 open rather than ✅.
 
 - [ ] **Step 7: Bank**
 
@@ -1485,6 +1496,8 @@ git add lib/antigen/generators/universes.ex lib/antigen/assays/universes.ex \
 git commit -m "test(antigen): universes vertical — Type-in-Type, ceiling, cumulativity, ctor-field rule (W5/A4)" --author="Made In Heaven <madeinheaven@madeinheaven.com>"
 ```
 
+If Step 6's D4 reroute fired, also `git add test/antigen/reach_pin_test.exs test/antigen/reach.sexp` into this same commit — the reroute is not a separable, deferrable change.
+
 ---
 
 ### Task 11: close the ledger (§3) + final gate
@@ -1517,7 +1530,7 @@ Per gate 5, every ✅ below is conditional: if a D4 incompleteness reroute sent 
 - [ ] **Step 4: Final gate**
 
 Run: `mix test`
-Expected: full PASS. Then re-run the three banking tests once more and `git status --short` — expected: clean tree (all stores stable).
+Expected: full PASS. Then re-run all five banking/pin test files once more (`totality_seed_test.exs`, `reach_pin_test.exs`, `indexed_seed_test.exs`, `positivity_seed_test.exs`, `universes_seed_test.exs`) and `git status --short` — expected: clean tree (all stores stable).
 
 - [ ] **Step 5: Commit**
 
