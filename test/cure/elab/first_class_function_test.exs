@@ -64,6 +64,21 @@ defmodule Cure.Elab.FirstClassFunctionTest do
     assert g.(:Z).({:S, :Z}) == {:S, :Z}
   end
 
+  test "a lambda passed as a higher-order argument runs end-to-end" do
+    # Bidirectional application routes the callee's parameter type `(Nat)->Nat` to
+    # the untyped lambda so it can be checked (`elaborate_bidirectional_app`).
+    src =
+      @nat <>
+        "  fn ap(f: (Nat) -> Nat, x: Nat) -> Nat = f(x)\n" <>
+        "  fn g(n: Nat) -> Nat = ap(fn(y) -> S(y), n)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfLamArg", functions: [:ap, :g])
+
+    # ap((\y. S y), Z) = S(Z).
+    assert apply(mod, :g, [:Z]) == {:S, :Z}
+  end
+
   test "a lambda checked against a non-function type is rejected" do
     src = @nat <> "  fn bad() -> Nat = fn(y) -> S(y)\nend\n"
 

@@ -94,12 +94,48 @@ defmodule Cure.Elab.Elaborator do
           elaborate_global_app(env, atom, present, ctx)
         end
 
+      # A call carrying a lambda argument needs the callee's parameter types to
+      # reach the (untyped-in-surface) lambda: elaborate bidirectionally, checking
+      # each argument against its Π domain. Restricted to lambda-bearing calls so
+      # every other application keeps its exact existing inference path.
+      Enum.any?(args, &match?({:lambda, _m, _b}, &1)) ->
+        elaborate_bidirectional_app(name, args, names, ctx, env)
+
       true ->
         # Non-constructor application: elaborate to a term, then let the kernel type it.
         with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
+    end
+  end
+
+  # Saturated application checked argument-by-argument against the callee's Π
+  # telescope, so a lambda argument is elaborated in checking mode (its parameter
+  # types come from the domain). The codomain is instantiated at each argument's
+  # value, so a dependent parameter type is honoured too.
+  defp elaborate_bidirectional_app(name, args, names, ctx, env) do
+    with {:ok, head} <- elaborate_expr({:variable, [], name}, names, env),
+         {:ok, head_type} <- Kernel.infer(ctx, head) do
+      check_app_args(head, head_type, args, names, ctx, env)
+    end
+  end
+
+  defp check_app_args(term, type, [], _names, _ctx, _env), do: {:ok, term, type}
+
+  defp check_app_args(term, type, [arg | rest], names, ctx, env) do
+    case type do
+      {:vpi, dom_value, cod_closure} ->
+        dom_term = Quote.reify(dom_value, Context.length(ctx))
+
+        with {:ok, arg_term} <- elaborate_expr_checked(arg, dom_term, names, ctx, env) do
+          arg_value = Eval.eval(arg_term, Context.env(ctx))
+          next_type = Eval.apply_closure(cod_closure, arg_value)
+          check_app_args({:app, term, arg_term}, next_type, rest, names, ctx, env)
+        end
+
+      _ ->
+        {:error, :applied_non_function}
     end
   end
 
