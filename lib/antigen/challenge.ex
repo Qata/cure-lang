@@ -4,7 +4,7 @@ defmodule Antigen.Challenge do
   @enforce_keys [:kind, :assay, :label, :payload]
   defstruct [:kind, :assay, :label, :payload, :seed, :note]
 
-  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq
+  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq | :typed_term
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -40,7 +40,9 @@ defmodule Antigen.Challenge do
     # rewrite/eq vertical: kind, def-names, motive family name
     :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P,
     # universes vertical
-    :u
+    :u,
+    # tier-B typed-term vertical: kind, family/ctor/def names, sig version
+    :typed_term, :v1, :Bd, :T, :F, :Vec, :vnil, :vcons, :plus, :dbl, :x, :xs
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -118,6 +120,13 @@ defmodule Antigen.Challenge do
     scaffold = %{"families" => fam_scaffolds, "def_name" => Atom.to_string(dn)}
     pieces = fam_pieces ++ [{"def_type", dt}, {"def_body", db}]
     {scaffold, pieces}
+  end
+
+  def to_pieces(%__MODULE__{kind: :typed_term, payload: p}) do
+    %{sig: sig, ctx: ctx, type: type, term: term} = p
+    ctx_pieces = ctx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"ctx#{i}", t} end)
+    scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx)}
+    {scaffold, ctx_pieces ++ [{"type", type}, {"term", term}]}
   end
 
   # One family's scaffold + Term pieces, keyed under `prefix` (e.g. "fam:0").
@@ -221,6 +230,21 @@ defmodule Antigen.Challenge do
   def from_pieces(:rewrite_eq, assay, label, seed, note, scaffold, pieces),
     do: from_pieces(:indexed_case, assay, label, seed, note, scaffold, pieces)
         |> Map.put(:kind, :rewrite_eq)
+
+  def from_pieces(:typed_term, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    len = scaffold["ctx_len"]
+    ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
+
+    payload = %{
+      sig: String.to_existing_atom(scaffold["sig"]),
+      ctx: ctx,
+      type: Map.fetch!(pmap, "type"),
+      term: Map.fetch!(pmap, "term")
+    }
+
+    new(kind: :typed_term, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
 
   # --- private helpers --------------------------------------------------------
 
