@@ -86,6 +86,31 @@ defmodule Cure.Elab.RecordTest do
              Program.elaborate(@pt <> "  fn f(p: Point) -> Nat = p.z\nend\n")
   end
 
+  test "a parameterized record constructs, matches, and projects" do
+    src =
+      "mod M\n  type Nat = Z | S(Nat)\n  rec Box(a)\n    val: a\n" <>
+        "  fn unbox(b: Box(Nat)) -> Nat = b.val\n  fn g() -> Nat = unbox(Box{val: S(Z())})\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.RecBox", functions: [:unbox, :g])
+
+    assert apply(mod, :g, []) == {:S, :Z}
+  end
+
+  test "a two-parameter record projects the correct field by position" do
+    # `snd` is field index 1; its type `b` must resolve through the parameter
+    # substitution, exercising the de-Bruijn-correct projected type.
+    src =
+      "mod M\n  type Nat = Z | S(Nat)\n  rec Pair(a, b)\n    fst: a\n    snd: b\n" <>
+        "  fn gs(p: Pair(Nat, Nat)) -> Nat = p.snd\n" <>
+        "  fn g() -> Nat = gs(Pair{fst: Z(), snd: S(S(Z()))})\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.RecPair", functions: [:gs, :g])
+
+    assert apply(mod, :g, []) == {:S, {:S, :Z}}
+  end
+
   test "a missing record field is rejected" do
     assert {:error, {:record_field_mismatch, :Point}} =
              Program.elaborate(@pt <> "  fn g() -> Point = Point{x: S(Z())}\nend\n")

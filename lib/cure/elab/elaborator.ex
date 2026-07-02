@@ -224,13 +224,15 @@ defmodule Cure.Elab.Elaborator do
   # family; the field name is looked up in the (single) constructor's telescope —
   # whose argument names ARE the field names — and the projection is elaborated as a
   # one-branch `match obj | Rec(f0, …, fn) -> f_i` in checking mode, the field's own
-  # type as the goal. The field type must be closed (a non-parameterized,
-  # non-dependent record); a field type that references parameters or earlier fields
-  # is left for a later step.
+  # type as the goal. The field type lives in the constructor frame `params ++
+  # fields`; its parameter references are instantiated with the record value's
+  # actual arguments (so `val : a` in `Box(Nat)` becomes `Nat`). A field type that
+  # references an EARLIER FIELD stays non-closed and is rejected — a genuinely
+  # dependent record field, which projection does not yet support.
   defp record_projection(inner, field, names, ctx, env) do
     with {:ok, _obj_term, obj_type} <- elaborate_expr_typed(inner, names, ctx, env) do
       case Quote.reify(obj_type, Context.length(ctx)) do
-        {:data, rec, _params, _indices} ->
+        {:data, rec, params, _indices} ->
           ctor = Inductive.get_ctor(env, rec)
 
           cond do
@@ -241,15 +243,25 @@ defmodule Cure.Elab.Elaborator do
               fields = ctor.args
               idx = Enum.find_index(fields, fn {n, _t} -> Atom.to_string(n) == field end)
 
+              # Instantiate the field's type in `params ++ fields`: the parameters
+              # get the record's actual arguments, earlier-field slots get a
+              # sentinel var (so a field-dependent field type is caught as
+              # non-closed below).
+              ftype =
+                idx &&
+                  Subst.instantiate(
+                    elem(Enum.at(fields, idx), 1),
+                    params ++ List.duplicate({:var, 1_000_000}, idx)
+                  )
+
               cond do
                 is_nil(idx) ->
                   {:error, {:unknown_field, rec, field}}
 
-                not closed_term?(elem(Enum.at(fields, idx), 1)) ->
+                not closed_term?(ftype) ->
                   {:error, {:dependent_record_projection, rec, field}}
 
                 true ->
-                  {_fname, ftype} = Enum.at(fields, idx)
                   binders = for i <- 0..(length(fields) - 1), do: {:variable, [scope: :local], "$proj#{i}"}
                   arm = {:match_arm, [pattern: {:function_call, [name: Atom.to_string(rec)], binders}], [Enum.at(binders, idx)]}
 

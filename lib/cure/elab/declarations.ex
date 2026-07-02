@@ -94,13 +94,44 @@ defmodule Cure.Elab.Declarations do
         # argument names as plain labels.
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        with {:ok, tele} <- struct_field_telescope(variants) do
-          declare_at_min_level(env, name, [Inductive.ctor(name, tele, [])], 0)
+        case Keyword.get(meta, :type_params, []) do
+          [] ->
+            with {:ok, tele} <- struct_field_telescope(variants) do
+              declare_at_min_level(env, name, [Inductive.ctor(name, tele, [])], 0)
+            end
+
+          type_params ->
+            declare_parameterized_struct(name, type_params, variants, env)
         end
 
       other ->
         {:error, {:unsupported_container, other}}
     end
+  end
+
+  # A parameterized record `rec Box(a)\n  val: a` is a single-constructor
+  # parameterized family. Build the constructor through the shared parameterized
+  # machinery (which handles the parameter telescope and the de-Bruijn-correct
+  # result parameters), then rename its anonymous argument slots back to the field
+  # names so construction and projection can find them.
+  defp declare_parameterized_struct(name, type_params, fields, env) do
+    params = Enum.map(type_params, fn p -> {:param, [], p} end)
+    field_names = Enum.map(fields, fn {:param, _m, fname} -> String.to_atom(fname) end)
+    field_types = Enum.map(fields, fn {:param, m, _fname} -> Keyword.fetch!(m, :type) end)
+    sig = {:gadt_ctor, [name: Atom.to_string(name)], {:arrow_chain, field_types ++ [family_app(name, type_params)]}}
+
+    with {:ok, param_tele} <- elaborate_index_telescope(params, name, env, []),
+         working_env = Inductive.declare(env, Inductive.family(name, param_tele, [], 0), []),
+         {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, param_tele, [], working_env) do
+      renamed = %{ctor | args: rename_ctor_args(ctor.args, field_names)}
+      declare_indexed_at_min_level(env, name, param_tele, [], [renamed], 0)
+    end
+  end
+
+  defp rename_ctor_args(args, names) do
+    args
+    |> Enum.zip(names)
+    |> Enum.map(fn {{_old, type}, new} -> {new, type} end)
   end
 
   # A record's fields `[{:param, [type: T], "x"}, …]` become a constructor argument
