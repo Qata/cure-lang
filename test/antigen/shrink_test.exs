@@ -99,6 +99,58 @@ defmodule Antigen.ShrinkTest do
     assert pred.(out)
   end
 
+  test "context drop removes an unreferenced entry and shifts higher vars down" do
+    # ctx [Nat, Nat]; term uses only var 0 ⇒ entry 1 is droppable, var 0 stays, higher shift
+    a = art({:var, 0}, [{:data, :Nat, [], []}, {:data, :Nat, [], []}])
+    out = Shrink.minimize(a, fn _ -> true end, 1000)
+    assert length(out.payload.ctx) < 2
+    # every var in the result is in-scope for its ctx
+    assert Antigen.Shrink.closed?(out)
+  end
+
+  test "context drop is REJECTED when the entry is referenced" do
+    # term uses var 1 ⇒ entry 1 (abs index 1) may not be dropped; but entry 0 (var 0 unused) may
+    a = art({:var, 1}, [{:data, :Nat, [], []}, {:data, :Nat, [], []}])
+    out = Shrink.minimize(a, fn ch -> Antigen.Shrink.occurs?(ch.payload.term, 0) end, 1000)
+    # predicate forces keeping a reference to abs-0 after shifts; result stays closed + valid
+    assert Antigen.Shrink.closed?(out)
+    assert Antigen.Shrink.occurs?(out.payload.term, 0)
+  end
+
+  test "every ctx-drop candidate is de-Bruijn closed (regression guard for §7.3)" do
+    a = art({:app, {:var, 0}, {:var, 2}},
+            [{:data, :Nat, [], []}, {:data, :Nat, [], []}, {:data, :Nat, [], []}])
+    for c <- Antigen.Shrink.candidates_for_test(a) do
+      assert Antigen.Shrink.closed?(c), "candidate not closed: #{inspect(c.payload)}"
+    end
+  end
+
+  test "context drop shifts cross-referencing sibling entries correctly (dependent ctx, §7.3)" do
+    # An all-`Nat` ctx (no entry ever references another) can pass `closed?`
+    # trivially even if the sibling-shift cutoff (`Term.shift(e, -1, d - pos)`)
+    # were wrong, because every shift on such a ctx is a no-op — it never
+    # exercises spec §4 rule 3's "asymmetric before/after-drop-position
+    # handling". This ctx is genuinely dependent: pos0 references BOTH pos1
+    # and pos3, straddling the sole droppable position (pos2), so a wrong
+    # cutoff would produce a wrong (but still shape-`closed?`) index. Hand
+    # (and mechanically probe-)verified expected output before writing this
+    # assertion.
+    ctx = [
+      {:eq, {:type, 0}, {:var, 0}, {:var, 2}},   # pos0: local 0 -> abs 1 (pos1); local 2 -> abs 3 (pos3)
+      {:data, :Vec, [], [{:var, 1}]},             # pos1: local 1 -> abs 3 (pos3)
+      {:data, :Nat, [], []},                      # pos2: unreferenced — the sole droppable entry
+      {:data, :Nat, [], []}                       # pos3
+    ]
+    a = art({:var, 0}, ctx)
+    assert [c] = Antigen.Shrink.candidates_for_test(a)   # only pos2 is unreferenced
+    assert c.payload.ctx == [
+      {:eq, {:type, 0}, {:var, 0}, {:var, 1}},    # pos0: local 2 -> local 1 (target abs shifted 3 -> 2)
+      {:data, :Vec, [], [{:var, 0}]},             # pos1: local 1 -> local 0 (target abs shifted 3 -> 2)
+      {:data, :Nat, [], []}                       # old pos3, now pos2, content unchanged
+    ]
+    assert Antigen.Shrink.closed?(c)
+  end
+
   defp contains_vcons?({:ctor, :vcons, _}), do: true
   defp contains_vcons?(t) when is_tuple(t), do: t |> Tuple.to_list() |> tl() |> Enum.any?(&contains_vcons?/1)
   defp contains_vcons?(l) when is_list(l), do: Enum.any?(l, &contains_vcons?/1)

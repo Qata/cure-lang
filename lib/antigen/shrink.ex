@@ -44,9 +44,51 @@ defmodule Antigen.Shrink do
   defp reseed(%Challenge{} = ch), do: %{ch | seed: :erlang.phash2({ch.kind, ch.payload})}
 
   # ── candidate enumeration (pinned order: ctx → type → term) ──────────────────
-  # Task 1 covers type + term. Task 2 prepends ctx-drop candidates.
   defp candidates(%Challenge{payload: p} = ch) do
-    field_cands(ch, :type, p.type) ++ field_cands(ch, :term, p.term)
+    ctx_candidates(ch) ++ field_cands(ch, :type, p.type) ++ field_cands(ch, :term, p.term)
+  end
+
+  # rule 3: drop each unreferenced absolute ctx position d (index 0 = innermost/list head)
+  #
+  # NOTE the explicit `//1` step: `0..(n - 1)` WITHOUT a step is an Elixir
+  # footgun — when n=0 this is `0..-1`, whose implicit step is -1, so it
+  # enumerates `[0, -1]` (two phantom elements), not `[]`. For an empty ctx
+  # (the default) those phantom drops produce a no-op candidate that
+  # `first_accepted` would accept every sweep, burning the whole budget on
+  # nothing. `//1` makes n=0 correctly yield an empty range.
+  defp ctx_candidates(%Challenge{payload: p} = ch) do
+    n = length(p.ctx)
+
+    0..(n - 1)//1
+    |> Enum.map(fn d -> drop_candidate(ch, d) end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp drop_candidate(%Challenge{payload: p} = ch, d) do
+    ctx = p.ctx
+
+    referenced? =
+      occurs?(p.term, d) or occurs?(p.type, d) or
+        ctx
+        |> Enum.with_index()
+        |> Enum.any?(fn {e, pos} -> pos < d and occurs?(e, d - pos - 1) end)
+
+    if referenced? do
+      nil
+    else
+      new_ctx =
+        ctx
+        |> Enum.with_index()
+        |> Enum.reject(fn {_e, pos} -> pos == d end)
+        |> Enum.map(fn
+          {e, pos} when pos < d -> Term.shift(e, -1, d - pos)   # local k>=d-pos shift down
+          {e, _pos} -> e                                         # pos>d: content unchanged
+        end)
+
+      %{ch | payload: %{p | ctx: new_ctx,
+                            term: Term.shift(p.term, -1, d + 1),
+                            type: Term.shift(p.type, -1, d + 1)}}
+    end
   end
 
   defp field_cands(ch, field, t) do
@@ -164,4 +206,36 @@ defmodule Antigen.Shrink do
   rescue
     _ -> false
   end
+
+  # de-Bruijn closedness of the WHOLE artifact (term/type against ctx length,
+  # each ctx entry against the entries outward of it). Test/guard helper.
+  def closed?(%Challenge{payload: p}) do
+    n = length(p.ctx)
+
+    max_index_below(p.term, 0) < n and max_index_below(p.type, 0) < n and
+      p.ctx
+      |> Enum.with_index()
+      |> Enum.all?(fn {e, pos} -> max_index_below(e, 0) < n - pos - 1 end)
+  end
+
+  # highest free index (relative to `depth` binders already entered), or -1 if closed-at-depth
+  defp max_index_below({:var, k}, depth) when k >= depth, do: k - depth
+  defp max_index_below({:var, _}, _depth), do: -1
+  defp max_index_below({:lam, d, b}, depth), do: max(max_index_below(d, depth), max_index_below(b, depth + 1))
+  defp max_index_below({:pi, d, c}, depth), do: max(max_index_below(d, depth), max_index_below(c, depth + 1))
+  defp max_index_below({:sigma, a, b}, depth), do: max(max_index_below(a, depth), max_index_below(b, depth + 1))
+  defp max_index_below({:case, s, m, brs}, depth) do
+    [max_index_below(s, depth), max_index_below(m, depth) |
+     Enum.map(brs, fn {_c, ar, body} -> max_index_below(body, depth + ar) end)] |> Enum.max()
+  end
+  defp max_index_below(t, depth) when is_tuple(t),
+    do: t |> Tuple.to_list() |> tl() |> Enum.map(&max_index_below(&1, depth)) |> max_or(-1)
+  defp max_index_below(l, depth) when is_list(l),
+    do: l |> Enum.map(&max_index_below(&1, depth)) |> max_or(-1)
+  defp max_index_below(_leaf, _depth), do: -1
+  defp max_or([], default), do: default
+  defp max_or(xs, _default), do: Enum.max(xs)
+
+  # test-only: expose the full candidate list for the §7.3 closure sweep
+  def candidates_for_test(ch), do: candidates(ch)
 end
