@@ -514,7 +514,8 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
-         {:ok, arms} <- desugar_nested_arms(arms1, scrut_expr),
+         {:ok, arms1b} <- desugar_tuple_args(arms1),
+         {:ok, arms} <- desugar_nested_arms(arms1b, scrut_expr),
          :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env),
          :not_applicable <-
@@ -1319,6 +1320,63 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp strip_as_patterns(other), do: {other, []}
+
+  # --- tuple sub-patterns inside a constructor argument (parity #4) -----------
+  #
+  # `A(%[x, y]) -> body` destructures a Σ-typed field. Replace each tuple
+  # constructor-argument with a fresh `$tup_i` binder (the `$` prefix cannot clash
+  # with a user identifier) and substitute the tuple's variables by projections of
+  # that binder in the body — so `A(%[x, y]) -> body` becomes
+  # `A($tup_0) -> body[x ↦ $tup_0.1, y ↦ $tup_0.2]`, which then flows through the
+  # ordinary all-variable constructor path. Only direct constructor arguments are
+  # rewritten; a top-level tuple pattern is left for `try_tuple_match`, and a tuple
+  # nested inside a *nested* constructor falls through to that path's clean error.
+  defp desugar_tuple_args(arms) do
+    Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body} = arm, {:ok, acc} ->
+      case strip_tuple_args_in_ctor(Keyword.fetch!(meta, :pattern)) do
+        {:ok, _clean, []} ->
+          {:cont, {:ok, acc ++ [arm]}}
+
+        {:ok, clean, subs} ->
+          b = single_body(body)
+
+          if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
+            {:halt, {:error, {:unsupported_pattern, :shadowed_tuple_arg}}}
+          else
+            b2 = Enum.reduce(subs, b, fn {n, r}, acc_b -> subst_surface_var(acc_b, n, r) end)
+            {:cont, {:ok, acc ++ [{:match_arm, Keyword.put(meta, :pattern, clean), b2}]}}
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
+  defp strip_tuple_args_in_ctor({:function_call, m, args}) do
+    args
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, [], []}, fn {arg, i}, {:ok, cargs, subs} ->
+      case arg do
+        {:tuple, _tm, [_, _ | _] = elems} ->
+          fresh_var = {:variable, [], "$tup_" <> Integer.to_string(i)}
+
+          case tuple_subs(elems, fresh_var) do
+            {:ok, s} -> {:cont, {:ok, cargs ++ [fresh_var], subs ++ s}}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        _ ->
+          {:cont, {:ok, cargs ++ [arg], subs}}
+      end
+    end)
+    |> case do
+      {:ok, cargs, subs} -> {:ok, {:function_call, m, cargs}, subs}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp strip_tuple_args_in_ctor(other), do: {:ok, other, []}
 
   # --- tuple-pattern matching (parity #4) ------------------------------------
   #

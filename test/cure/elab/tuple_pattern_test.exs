@@ -68,6 +68,19 @@ defmodule Cure.Elab.TuplePatternTest do
     assert {:error, _} = Program.elaborate(src)
   end
 
+  test "a tuple pattern inside a constructor argument destructures the Σ field" do
+    # `A(%[x, y])` becomes `A($tup_0)` with `x ↦ $tup_0.1`, `y ↦ $tup_0.2`.
+    src =
+      @nat <>
+        "  type T = A(Sigma(a: Nat, Nat)) | B\n  fn f(t: T) -> Nat = match t\n    A(%[x, y]) -> y\n    B() -> Z()\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.TupleInCtorE2E", functions: [:f])
+
+    assert apply(mod, :f, [{:A, {:Z, {:S, :Z}}}]) == {:S, :Z}
+    assert apply(mod, :f, [:B]) == :Z
+  end
+
   test "a plain constructor match is unaffected by the tuple path" do
     src = @nat <> "  fn f(n: Nat) -> Nat = match n\n    S(m) -> m\n    Z() -> Z()\nend\n"
 
