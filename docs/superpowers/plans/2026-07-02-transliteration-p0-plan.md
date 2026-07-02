@@ -155,9 +155,9 @@ Expected: `chezscheme present`, or a completed `brew install`. Homebrew installs
 Run:
 ```bash
 cd /Users/ch/Develop/Idris2
-make bootstrap SCHEME=chez
+CPATH=/opt/homebrew/include LIBRARY_PATH=/opt/homebrew/lib make bootstrap SCHEME=chez
 ```
-(If Step 2 showed the binary is `scheme`, use `SCHEME=scheme`.) Expected: a long build ending without error. This is a heavy, single build — do not run any other `mix`/`make` build concurrently (global constraint).
+(If Step 2 showed the binary is `scheme`, use `SCHEME=scheme`.) The `CPATH`/`LIBRARY_PATH` exports point the bootstrap C compile at Homebrew's `gmp` — without them the build fails with `gmp.h: No such file or directory` on a Homebrew-only macOS toolchain (empirically confirmed on this machine). Expected: a long build ending without error. This is a heavy, single build — do not run any other `mix`/`make` build concurrently (global constraint).
 
 - [ ] **Step 4: Verify the binary runs**
 
@@ -316,19 +316,53 @@ defmodule Cure.Oracle do
   end
 
   @doc """
-  Idris' verdict via `idris2 --check`. Runs in the system tmp dir so Idris'
-  build artifacts (`build/`) never pollute the repo; the `.idr` path is
-  expanded to an absolute path first.
+  Idris' verdict via `idris2 --check`. The `.idr` is copied into a fresh
+  throwaway directory and checked from there, so Idris' `build/` artifacts
+  (which it writes into the current working directory) never pollute the repo.
+  `IDRIS2_PATH` is set to the Prelude/base `.ttc` trees (see `idris_lib_path/1`)
+  so `--check` resolves the standard library without a global `make install` —
+  without this, every probe fails with "Module Prelude not found" and would
+  false-`:reject`. An explicit `$IDRIS2_PATH` in the environment wins if set.
   """
   @spec idris_verdict(String.t(), String.t()) :: :accept | :reject
   def idris_verdict(bin, idr_path) do
-    {_out, status} =
-      System.cmd(bin, ["--check", Path.expand(idr_path)],
-        cd: System.tmp_dir!(),
-        stderr_to_stdout: true
-      )
+    work = Path.join(System.tmp_dir!(), "cure_oracle_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(work)
+    base = Path.basename(idr_path)
+    File.cp!(idr_path, Path.join(work, base))
 
-    if status == 0, do: :accept, else: :reject
+    env =
+      case System.get_env("IDRIS2_PATH") || idris_lib_path(bin) do
+        nil -> []
+        path -> [{"IDRIS2_PATH", path}]
+      end
+
+    try do
+      {_out, status} =
+        System.cmd(bin, ["--check", base], cd: work, env: env, stderr_to_stdout: true)
+
+      if status == 0, do: :accept, else: :reject
+    after
+      File.rm_rf(work)
+    end
+  end
+
+  # The Prelude/base `.ttc` search path derived from the idris2 binary's
+  # location (`.../build/exec/idris2` → `.../libs/{prelude,base}/build/ttc`).
+  # We `make bootstrap` the clone but never `make install`, so the stdlib lives
+  # only in the build tree. Returns nil when those dirs are absent (e.g. a
+  # system-installed idris2 that already knows its own Prelude path).
+  @spec idris_lib_path(String.t()) :: String.t() | nil
+  defp idris_lib_path(bin) do
+    root = bin |> Path.dirname() |> Path.dirname() |> Path.dirname()
+    prelude = Path.join([root, "libs", "prelude", "build", "ttc"])
+    base = Path.join([root, "libs", "base", "build", "ttc"])
+
+    if File.dir?(prelude) and File.dir?(base) do
+      Enum.join([prelude, base], ":")
+    else
+      nil
+    end
   end
 
   @doc "Default Idris binary: `$IDRIS2_BIN` or the pinned clone's build output."
