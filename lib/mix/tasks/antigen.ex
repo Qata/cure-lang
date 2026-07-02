@@ -67,12 +67,16 @@ defmodule Mix.Tasks.Antigen do
     max(minutes, 1) * @rounds_per_minute
   end
 
-  # The Phase-2 default generator: the three known-label generators, one draw each.
+  # Explorer default: Tier-A's three known-label generators + Tier-B's three
+  # typed-term/assay-id branches, weight 1 each (six branches).
   defp default_gen do
     Antigen.Gen.frequency([
       {1, Antigen.Generators.Totality.gen()},
       {1, Antigen.Generators.Positivity.gen()},
-      {1, Antigen.Generators.Forcing.gen()}
+      {1, Antigen.Generators.Forcing.gen()},
+      {1, Antigen.Generators.Term.typed_term("term/infer_check")},
+      {1, Antigen.Generators.Term.typed_term("term/subject_reduction")},
+      {1, Antigen.Generators.Term.typed_term("term/normalization")}
     ])
   end
 

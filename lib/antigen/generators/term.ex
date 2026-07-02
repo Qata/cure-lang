@@ -201,6 +201,13 @@ defmodule Antigen.Generators.Term do
     end)
   end
 
+  # Weight for the redex-producing eliminations (β-`app`, ι-`case`, δ-INDIR).
+  # Deliberately higher than the leaf/intro weights so a comfortable majority of
+  # generated terms contain a firing redex — keeps the reduction-activity health
+  # metric (spec §8, floor 0.25) well clear of its floor rather than hovering at
+  # it (which made it flaky at weight 2). Tuning, not floor-lowering (spec §11).
+  @redex_weight 5
+
   defp indir_rules(_ctx, _goal, _size), do: []
 
   # Plain application (manufactures β-redexes INDIR cannot): apply a freshly
@@ -215,7 +222,7 @@ defmodule Antigen.Generators.Term do
       {:data, :Nat, _, _} ->
         dom = SigMenu.nat()
         body_ctx = Context.extend(ctx, Eval.eval(dom, Context.env(ctx)))
-        [{2,
+        [{@redex_weight,
           Gen.bind(gen_referencing(body_ctx, shift_goal(goal), size - 1, 0), fn body ->
             Gen.bind(gen(ctx, dom, size - 1), fn arg ->
               Gen.return({:app, {:lam, dom, body}, arg})
@@ -281,7 +288,7 @@ defmodule Antigen.Generators.Term do
     scrut_ty = {:data, fam, [], []}
     motive = {:lam, scrut_ty, shift_goal(goal)}
 
-    [{2,
+    [{@redex_weight,
       Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
         Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
           Gen.return({:case, scrut, motive, brs})
@@ -311,7 +318,7 @@ defmodule Antigen.Generators.Term do
   defp saturate(ctx, head_term, head_ty, goal, size) do
     args_gen = gen_args(ctx, head_ty, size, [])
 
-    [{2,
+    [{@redex_weight,
       Gen.bind(args_gen, fn args ->
         term = Enum.reduce(args, head_term, fn a, acc -> {:app, acc, a} end)
         if accept_infer?(ctx, term, goal), do: Gen.return(term), else: Gen.return(SigMenu.canon(ctx, goal))
