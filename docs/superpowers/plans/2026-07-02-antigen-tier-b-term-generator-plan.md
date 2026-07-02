@@ -19,6 +19,7 @@
 - **Tier B generates only the positive direction:** every `:typed_term` challenge has `label: :well_typed`. Ill-typed mutation is deferred.
 - **Signature menu is versioned:** v1 is fixed; corpus records name their `sig:` version. Growing the menu is a new version, never an edit to v1.
 - **Commit discipline:** commit per task; author `Made In Heaven <madeinheaven@madeinheaven.com>`; never co-sign, no `Co-Authored-By`. Only one full build/test run at a time — never launch concurrent suites.
+- **Tests are immutable once written (strict TDD, red→green→commit):** for every task, Step 1's test is written and confirmed red (Step 2) before any implementation code is written; Step 3 implements only enough to turn it green (Step 4); the test itself is never weakened, skipped, or deleted to reach green. The sole exception is a test later proven to encode the wrong behavior — that must be argued explicitly (what the correct behavior is and where the test diverges), not asserted as a shortcut to green. Tasks 7/8/10's specific "do NOT weaken the assay" / "NOT lowering the floor" instructions are instances of this general rule, not special cases of it.
 
 ---
 
@@ -45,9 +46,9 @@
 
 These are the exact signatures the tasks below rely on (verified against the tree at authoring time). Do not guess variants.
 
-**`Cure.Core.Env`** (defined in `lib/cure/core/inductive.ex`): `empty/0`, `add_def(env, name, type_term, body_term)`, `add_def/5`, `get_def(env, name)`, `certify(env, name)`, `certified?(env, name)`, `get_family/2`, `get_ctor/2`, `ctor_family/2`, `arg_telescope/2`, `ctor_result_indices/2`, `index_telescope/2`, `ctors_of/2`.
+**`Cure.Core.Env`** (defined in `lib/cure/core/inductive.ex`): `empty/0`, `add_def(env, name, type_term, body_term)`, `add_def/5`, `get_def(env, name)`, `certify(env, name)`, `certified?(env, name)`. **Not** on `Env`, despite living in the same source file: `get_family/2`, `get_ctor/2`, `ctor_family/2`, `arg_telescope/2`, `ctor_result_indices/2`, `index_telescope/2`, `ctors_of/2` — those are all `Cure.Core.Inductive` functions (see below). `inductive.ex` defines two separate modules; do not call `Env.get_family/2` etc. — it does not exist and will raise `UndefinedFunctionError`.
 
-**`Cure.Core.Inductive`**: `family(name, param_tele, index_tele, level)`, `ctor(name, arg_tele, result_indices)` / `ctor/4` / `ctor/5`, `declare(env, family, ctors)`. A telescope is a list of `{atom_name, type_term}`.
+**`Cure.Core.Inductive`** (also defined in `lib/cure/core/inductive.ex`): `family(name, param_tele, index_tele, level)`, `ctor(name, arg_tele, result_indices)` / `ctor/4` / `ctor/5`, `declare(env, family, ctors)`, `get_family(env, name)`, `get_ctor(env, name)`, `ctor_family(env, cname)`, `arg_telescope(env, cname)`, `ctor_result_indices(env, cname)`, `index_telescope(env, fname)`, `ctors_of(env, fname)`. A telescope is a list of `{atom_name, type_term}`.
 
 **`Cure.Core.Context`**: `empty/0`, `empty(env)`, `signature(ctx)`, `extend(ctx, type_value)`, `lookup(ctx, k)`, `length(ctx)`, `env(ctx)` (→ `[Value.t()]`, index 0 = highest de Bruijn level).
 
@@ -96,16 +97,16 @@ These are the exact signatures the tasks below rely on (verified against the tre
 defmodule Antigen.Generators.SigMenuTest do
   use ExUnit.Case, async: true
   alias Antigen.Generators.SigMenu
-  alias Cure.Core.{Env, Context, Kernel}
+  alias Cure.Core.{Env, Inductive, Context, Kernel}
 
   test "env_of(:v1) certifies plus and dbl through the real certifier" do
     env = SigMenu.env_of(:v1)
     assert Env.certified?(env, :plus)
     assert Env.certified?(env, :dbl)
-    # families present
-    assert Env.get_family(env, :Nat)
-    assert Env.get_family(env, :Bd)
-    assert Env.get_family(env, :Vec)
+    # families present (get_family/2 is on Inductive, not Env — see Reference)
+    assert Inductive.get_family(env, :Nat)
+    assert Inductive.get_family(env, :Bd)
+    assert Inductive.get_family(env, :Vec)
   end
 
   test "canon builds a well-typed inhabitant for each closed goal type" do
@@ -237,8 +238,7 @@ defmodule Antigen.Generators.SigMenu do
         {:lam, dom, canon(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)}
       {:sigma, a, b} ->
         av = canon(ctx, a)
-        bctx = Context.extend(ctx, Eval.eval(a, Context.env(ctx)))
-        {:pair, av, canon(bctx, subst0(b, av))}
+        {:pair, av, canon(ctx, subst0(b, av, ctx))}
       {:data, :Vec, _, [i]} = vgoal ->
         case whnf(ctx, i) do
           {:ctor, :Z, []} -> {:ctor, :vnil, []}
@@ -279,15 +279,29 @@ defmodule Antigen.Generators.SigMenu do
     end)
   end
 
-  # Substitute `arg` (a closed-enough term) for de Bruijn 0 in `b` by evaluating
-  # under an env whose head is `arg`'s value, then quoting back.
-  defp subst0(b, arg) do
-    b
+  # β-substitute `arg`'s value for the Sigma's own bound variable (de Bruijn 0)
+  # into `b`. `b` is written one binder deeper than `ctx` (the `:sigma` binding
+  # convention: `{:sigma, a, b}` binds in `b`, matching `Kernel.infer`'s
+  # `ctx2 = Context.extend(ctx, a_value)` before checking `b`) — but the
+  # component actually placed in `{:pair, av, ...}` must be a term in the
+  # UNEXTENDED `ctx` (`Kernel.check`'s `:pair` clause checks its second
+  # component in the original `ctx`, against `cod_closure` applied to
+  # `a_value` — never in an extended context). A raw `Term.subst/3` is not
+  # enough: it replaces only index 0 and leaves every OTHER free index in `b`
+  # unchanged, so a reference to an outer `ctx` variable would stay off-by-one.
+  # Evaluating `b` under `[arg_value | env]` and quoting back (the same
+  # technique `subst_cod` in Task 4 uses) performs the substitution and the
+  # necessary renumbering in one step.
+  @spec subst0(Cure.Core.Term.t(), Cure.Core.Term.t(), Context.t()) :: Cure.Core.Term.t()
+  def subst0(b, arg, ctx) do
+    env = Context.env(ctx)
+    arg_value = Eval.eval(arg, env)
+    Cure.Core.Normalise.quote(Eval.eval(b, [arg_value | env]), Context.length(ctx))
   end
 end
 ```
 
-Note on `subst0/2`: for v1 the only Sigma bodies `canon` builds come from `gen_term`'s own Sigma goals, which in the v1 menu are non-dependent (`b` does not mention index 0) — so the identity substitution is correct for v1. The test matrix in Step 1 exercises only non-dependent Sigma. If a later menu version adds dependent Sigma goals, `subst0` becomes a real eval/quote and its own test; that is out of v1 scope.
+Note on `subst0/3`: `{:sigma, ...}` never actually appears as a goal in v1 — `SigMenu.goal_types/0` has no Sigma entry, `Generators.Context.entry_type/2` (Task 2) never offers one as a context-entry type, and `Term.intro_rules`'s `Type 0` clause (Task 3) never offers a Sigma type-former — so `canon`'s and `intro_rules`'s Sigma clauses are unreachable under the v1 menu (no code path ever calls `gen_term`/`canon` with an actual `{:sigma, _, _}` goal). `subst0/3` is still implemented as a real eval/quote substitution rather than an identity no-op: an identity subst would be wrong even for a "non-dependent" `b` (one that doesn't mention the Sigma's own bound variable) whenever `b` references some OTHER outer `ctx` variable — only a fully closed `b` makes identity correct. This also matches the spec's own canonical-inhabitant formula `canon(B[canon(A)])` (§6.4), which is a genuine substitution, not a context-extension trick. Getting this right now, while unreachable, avoids banking a latent bug for the day a later signature-menu version adds a Sigma goal — the test matrix in Step 1 exercises only non-Sigma goals, matching what v1 actually reaches.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -528,8 +542,15 @@ defmodule Antigen.Generators.Term do
   defp intro_rules(ctx, _goal, {:sigma, a, b}, size) do
     [{3,
       Gen.bind(gen(ctx, a, size - 1), fn av ->
-        # v1 Sigma bodies are non-dependent (SigMenu §5), so `b` needs no subst.
-        Gen.bind(gen(ctx, b, size - 1), fn bv -> Gen.return({:pair, av, bv}) end)
+        # `b` is written one binder deeper than `ctx` (sigma binds in `b`); the
+        # component that ends up inside `{:pair, av, bv}` must be a term in the
+        # UNEXTENDED `ctx` (`Kernel.check`'s `:pair` clause checks it there) —
+        # so β-substitute `av` for `b`'s own bound variable via `SigMenu.subst0/3`
+        # (same reasoning as `SigMenu.canon`'s Sigma clause, Task 1) before
+        # recursing. Unreachable in v1 (see Task 1's note) but must stay correct.
+        Gen.bind(gen(ctx, SigMenu.subst0(b, av, ctx), size - 1), fn bv ->
+          Gen.return({:pair, av, bv})
+        end)
       end)}]
   end
 
@@ -618,7 +639,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - Test: `test/antigen/generators/term_test.exs` (add cases)
 
 **Interfaces:**
-- Consumes: everything from Task 3 plus `Cure.Core.{Kernel, Conv, Normalise}` and `Env` telescope accessors (`Env.arg_telescope/2`, `Env.get_def/2`).
+- Consumes: everything from Task 3 plus `Cure.Core.{Kernel, Conv, Normalise}`, `Env.get_def/2`, and (if needed) `Inductive.arg_telescope/2` — note `arg_telescope/2` is on `Inductive`, not `Env`, despite both living in `inductive.ex` (see Reference).
 - Produces: extends `gen/3` with an `elim_rules/4` branch merged into every goal's rule set. Adds `@gen_fuel`-bounded acceptance via `accept_infer?/4`. No signature change to `gen_term/2`.
 
 - [ ] **Step 1: Write the failing test (add to term_test.exs)**
@@ -840,11 +861,9 @@ Add:
 ```
 
 Notes for the implementer:
-- `Cure.Core.Term.shift/3` is the kernel's de Bruijn shift (`shift(term, amount, cutoff)`); confirm its arity against `lib/cure/core/term.ex` and adjust the call if the cutoff argument order differs. If a `shift/2` exists, prefer it.
+- `Cure.Core.Term.shift/3` is confirmed against `lib/cure/core/term.ex`: `shift(term, amount, cutoff \\ 0)`, lifting every free de Bruijn index ≥ `cutoff` by `amount`. `Cure.Core.Term.shift(goal, 1, 0)` is therefore exactly the right call for "shift every free index in `goal` by 1" (moving it under one new binder, cutoff 0) — no adjustment needed, no `shift/2` to prefer.
 - `saturate/5` uses `SigMenu.canon/2` as the fallback when the saturated application does not converge with the goal — this keeps every offered branch well-typed rather than emitting an ill-typed application. The canonical fallback is already trusted from Task 1.
 - The `accept_infer?` gate is what keeps the elimination rules sound: nothing is offered whose inferred type the kernel cannot reconcile with the goal within fuel.
-
-- [ ] **Step 2b: If `Term.shift/3` differs, adjust and re-run — do not invent an API.** Read `lib/cure/core/term.ex` for the exact shift signature before finalizing.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1385,7 +1404,13 @@ Expected: FAIL — `Runner.health_metrics/1` and `Runner.assay_module_for/1` und
   defp occurs?({:sigma, a, b}, k), do: occurs?(a, k) or occurs?(b, k + 1)
 
   defp occurs?({:case, scrut, motive, branches}, k) do
-    occurs?(scrut, k) or occurs?(motive, k + 1) or
+    # `motive` is itself a `:lam`-headed term (spec §6.5's constant-motive
+    # convention). It does NOT get a `k + 1` bump here: `Term.shift`/`Term.subst`'s
+    # own `:case` clauses thread the SAME cutoff/index into `motive` (never `+1`),
+    # because the extra binder lives inside motive's own `:lam` node and is
+    # already handled by the generic `:lam` clause below. Bumping here too would
+    # double-shift and cause `occurs?` to silently miss real occurrences.
+    occurs?(scrut, k) or occurs?(motive, k) or
       Enum.any?(branches, fn {_c, arity, body} -> occurs?(body, k + arity) end)
   end
 
@@ -1413,7 +1438,7 @@ Expected: FAIL — `Runner.health_metrics/1` and `Runner.assay_module_for/1` und
       health: summarize(final, count), health_metrics: metrics, stamp: stamp}
 ```
 
-Note: `occurs?/2`'s generic tuple/list fallbacks intentionally do NOT re-increment `k` for non-binder nodes — only the explicit `:lam`/`:pi`/`:sigma`/`:case` clauses cross binders. Confirm no other Core term form binds a variable (per `lib/cure/core/term.ex` there is none besides these); if one exists, add its clause.
+Note: `occurs?/2`'s generic tuple/list fallbacks intentionally do NOT re-increment `k` for non-binder nodes — only the explicit `:lam`/`:pi`/`:sigma` clauses (body/cod at `k + 1`) and `:case`'s branches (body at `k + arity`) cross binders; `:case`'s `motive` argument stays at the SAME `k` (see the comment on that clause — motive's own `:lam` supplies the crossing). Confirm no other Core term form binds a variable (per `lib/cure/core/term.ex` there is none besides these); if one exists, add its clause.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1434,7 +1459,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Files:**
 - Create: `test/antigen/typed_term_meta_test.exs`
-- Modify: `test/antigen/architecture_test.exs`
+- Verify (no modification expected): `test/antigen/architecture_test.exs` — confirmed glob-based, see below.
 
 **Interfaces:**
 - Consumes: `Term.{typed_term, assay_ids}`, `Assays.Term.run/1`, `Runner.health_metrics/1`, `Corpus.stream/1`, `SigMenu`.
@@ -1501,20 +1526,19 @@ defmodule Antigen.TypedTermMetaTest do
 end
 ```
 
-Extend `test/antigen/architecture_test.exs` — add the two new namespaces to whatever the existing test iterates. If the existing test already globs `lib/antigen/generators/*.ex` and `lib/antigen/assays/*.ex`, confirm `sig_menu.ex`, `context.ex`, `term.ex`, and `assays/term.ex` are covered (they will be, being in those dirs). If it enumerates modules explicitly, add:
+`test/antigen/architecture_test.exs` is confirmed (read against the tree) to glob by directory, not enumerate modules — its entire body is:
 ```elixir
-    Antigen.Generators.SigMenu,
-    Antigen.Generators.Context,
-    Antigen.Generators.Term,
-    Antigen.Assays.Term,
+Path.wildcard("lib/antigen/{generators,assays}/**/*.ex")
+|> Enum.filter(fn f -> File.read!(f) =~ ~r/\bStreamData\b/ end)
 ```
+This pattern already covers `sig_menu.ex`, `context.ex`, `term.ex` (under `lib/antigen/generators/`) and `assays/term.ex` (under `lib/antigen/assays/`) — **no code change to this file is needed** for Task 9; it already enforces the StreamData-free constraint on every file this plan creates, by construction of the file paths in the File Structure section. (There is no module-enumeration branch to fall back to.)
 
 - [ ] **Step 2: Run the test to verify it fails (then passes for the ones already satisfiable)**
 
 Run: `mix test test/antigen/typed_term_meta_test.exs test/antigen/architecture_test.exs`
 Expected: the soundness + totality tests PASS immediately (they exercise Tasks 1–6); the banked-corpus test is a no-op until Task 10 populates `seeds.sexp`. Architecture test PASS.
 
-- [ ] **Step 3: (no new impl)** — if the architecture test globs by directory, no code change is needed; if it enumerates, add the four modules as shown.
+- [ ] **Step 3: (no new impl)** — confirmed glob-based (see above); no code change to `architecture_test.exs` is needed.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1621,4 +1645,4 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **3. Type consistency:** `typed_term/1` returns a `%Challenge{}` (Task 6) consumed by `Assays.Term.run/1` (Task 7) and `Runner.health_metrics/1` (Task 8) with matching payload keys `%{sig, ctx, type, term}`. `assay_ids/0` (Task 6) is used by Tasks 8/9. `env_of/1`, `rebuild_context/2`, `canon/2`, `inhabitable?/2` signatures (Task 1) are used identically downstream. `conv_within?/6` and `Normalise.nf/2`/`quote/2` arities match the verified reference block.
 
-**Deviations recorded:** (a) support-set §9 is a documented non-test per above; (b) `subst0/2` is identity for v1 (non-dependent Sigma) with a forward note; (c) `Term.shift` arity to be confirmed against source before finalizing Task 4.
+**Deviations recorded:** (a) support-set §9 is a documented non-test per above; (b) `subst0/3` (Task 1) is a real eval/quote substitution — unreachable in v1 (no Sigma goal ever arises) but implemented correctly rather than as an identity no-op, per the recursive-skeptical-review pass that found the identity version silently mis-scoped free variables; (c) `Term.shift/3`'s signature is confirmed against source (`shift(term, amount, cutoff \\ 0)`) and `Term.shift(goal, 1, 0)` in Task 4 is verified correct — no open question remains.
