@@ -63,4 +63,29 @@ defmodule Cure.Elab.HigherOrderUnifyTest do
 
     assert apply(mod, :g, []) == {:Cons, {:S, :Z}, {:Cons, {:S, {:S, :Z}}, :Nil}}
   end
+
+  test "a polymorphic call used as an argument to another call elaborates and runs" do
+    # `hd(Z(), map(s, mklist()))` — the `map(...)` result is an argument in
+    # inference position. The scoped application path bound the nested implicit
+    # call positionally (mis-binding `Lst(Nat)` to the `{a} : Type` slot); the
+    # bidirectional fallback checks each argument against the callee's Π domain, so
+    # the nested implicit call elaborates in checking mode. Oracle
+    # `poly/pl08_map_as_argument`.
+    src =
+      @lst <>
+        "  fn map({a}, {b}, f: (a)->b, l: Lst(a)) -> Lst(b) = match l\n" <>
+        "    Nil() -> Nil()\n    Cons(x, xs) -> Cons(f(x), map(f, xs))\n" <>
+        "  fn s(n: Nat) -> Nat = S(n)\n" <>
+        "  fn mklist() -> Lst(Nat) = Cons(Z(), Cons(S(Z()), Nil()))\n" <>
+        "  fn hd(d: Nat, l: Lst(Nat)) -> Nat = match l\n    Cons(x, xs) -> x\n    Nil() -> d\n" <>
+        "  fn g() -> Nat = hd(Z(), map(s, mklist()))\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+
+    {:ok, mod} =
+      Emit.compile_and_load(env, module: :"Cure.MapArg", functions: [:map, :s, :mklist, :hd, :g])
+
+    # head of map(+1, [0, 1]) = head of [1, 2] = 1
+    assert apply(mod, :g, []) == {:S, :Z}
+  end
 end

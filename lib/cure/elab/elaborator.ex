@@ -206,9 +206,28 @@ defmodule Cure.Elab.Elaborator do
 
       true ->
         # Non-constructor application: elaborate to a term, then let the kernel type it.
-        with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
+        result =
+          with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
+               {:ok, type} <- Kernel.infer(ctx, term) do
+            {:ok, term, type}
+          end
+
+        # The scoped path binds arguments positionally and does not insert
+        # metavariables for a *nested* implicit call, so an argument like
+        # `len(mklist())` / `map(s, xs)` — an implicit-parameter call — is
+        # mis-bound (`Lst(Nat)` checked against the `{a} : Type` slot). When that
+        # fails, retry checking each argument against the callee's Π domain, which
+        # elaborates a nested implicit call in checking mode. Additive: reached only
+        # after the scoped path errored, original error surfaced otherwise.
+        case result do
+          {:ok, _, _} = ok ->
+            ok
+
+          {:error, _} = orig ->
+            case elaborate_bidirectional_app(name, args, names, ctx, env) do
+              {:ok, _, _} = ok -> ok
+              {:error, _} -> orig
+            end
         end
     end
   end
