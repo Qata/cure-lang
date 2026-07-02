@@ -66,4 +66,13 @@ defmodule Antigen.Assays.IndexedTest do
     # descent and mis-refined), this replays {:wrongly_accepted, _} — antibody red.
     assert :ok == A.run(G.injectivity(:ill_typed))
   end
+
+  # -- W3: deletion rule (pre-port banking spec §4 W3; roadmap A2/#23) --------
+  test "W3 deletion: equal literal indices are consistent — branch reachable, well-typed body accepted" do
+    assert :ok == A.run(G.deletion(:well_typed))
+  end
+
+  test "W3 deletion: equal literal indices never discharge the branch — ill-typed body rejected" do
+    assert :ok == A.run(G.deletion(:ill_typed))
+  end
 end

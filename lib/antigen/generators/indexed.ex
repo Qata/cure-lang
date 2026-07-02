@@ -196,6 +196,43 @@ defmodule Antigen.Generators.Indexed do
       "ill-typed: injectivity yields only n:=Causal; body needs IW(MkWr Dcoupled) — must be rejected")
   end
 
+  # -- W3: deletion rule (pre-port banking spec §4 W3) -------------------------
+  # IxN is indexed by a raw integer; wrapn's GROUND result index is the literal 3.
+  # A scrutinee at `IxN 3` yields the index equation `3 ~ 3`, which no other
+  # unifier clause consumes (not a var, not ctor/data-headed) — it is discharged
+  # by the DELETION rule (r == s ⇒ consistent, kernel.ex `unify_one`). The branch
+  # is therefore REACHABLE with no refinement.
+  defp ixn_family,
+    do:
+      {Inductive.family(:IxN, [], [{:i, {:int_type}}], 0),
+       [Inductive.ctor(:wrapn, [{:p, @dec}], [{:int_lit, 3}])]}
+
+  @doc """
+  Deletion-rule obligation. `:well_typed`: the reachable-via-deletion branch has a
+  well-typed body and must be ACCEPTED — the antibody against deletion degrading
+  to `:impossible` (which would discharge a live branch and, on the ill side,
+  wrongly accept). `:ill_typed`: the same reachable branch with an ill-typed body
+  (`{:type,0}` where `Dec` is expected) must be REJECTED — deletion must never
+  skip the body check.
+  """
+  @spec deletion(:well_typed | :ill_typed) :: Challenge.t()
+  def deletion(label) do
+    ixn3 = {:data, :IxN, [], [{:int_lit, 3}]}
+    motive = {:lam, {:int_type}, {:lam, {:data, :IxN, [], [{:var, 0}]}, @dec}}
+    def_type = {:pi, ixn3, @dec}
+
+    branch_body =
+      case label do
+        :well_typed -> {:ctor, :Dcoupled, []}
+        :ill_typed -> {:type, 0}
+      end
+
+    body = {:lam, ixn3, {:case, {:var, 0}, motive, [{:wrapn, 1, branch_body}]}}
+
+    challenge(label, [dec_family(), ixn_family()], :delete, def_type, body,
+      "deletion rule: index equation 3 ~ 3 is consistent (r==s); branch reachable, body #{label}")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :indexed_case,

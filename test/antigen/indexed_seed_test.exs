@@ -23,10 +23,16 @@ defmodule Antigen.IndexedSeedTest do
   # entails (IW(MkWr Dcoupled) when injectivity can only give n := Causal). The
   # kernel must reject it; if injectivity ever fabricates a false equation it
   # would be {:wrongly_accepted, _} — a soundness regression.
+  # deletion(:ill_typed): a branch REACHABLE via the deletion rule (equal
+  # literal indices, 3 ~ 3 ⇒ consistent, no refinement) with an ill-typed body.
+  # The kernel must reject it; if deletion ever degrades to :impossible (or
+  # skips the body check) it would be {:wrongly_accepted, _} — a soundness
+  # regression (W3, roadmap A2/#23).
   @antibodies [
     Indexed.branch_family(:ill_typed),
     Indexed.discharge(:ill_typed),
-    Indexed.injectivity(:ill_typed)
+    Indexed.injectivity(:ill_typed),
+    Indexed.deletion(:ill_typed)
   ]
 
   # Known-good-behavior seeds: every indexed/case challenge the kernel handles
@@ -42,7 +48,8 @@ defmodule Antigen.IndexedSeedTest do
     Indexed.motive_wf(:well_typed),
     Indexed.motive_wf(:ill_typed),
     Indexed.discharge(:well_typed),
-    Indexed.injectivity(:well_typed)
+    Indexed.injectivity(:well_typed),
+    Indexed.deletion(:well_typed)
   ]
 
   test "indexed/case antibodies + seeds are banked and every one replays :ok" do

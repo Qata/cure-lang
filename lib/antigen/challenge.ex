@@ -36,7 +36,7 @@ defmodule Antigen.Challenge do
     :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
     :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge, :inject,
     :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
-    :Wr, :MkWr, :IW, :iw, :w,
+    :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,
     # rewrite/eq vertical: kind, def-names, motive family name
     :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P
   ]
