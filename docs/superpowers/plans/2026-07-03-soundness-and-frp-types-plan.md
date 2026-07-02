@@ -394,9 +394,22 @@ did not fire.
   wall (`infer_type_value_sort` Eq-endpoint false-rejection), B3 runs before
   B1 completes.
 
-### Task B4: FRP capstone probes (= Phase 6)
+### Task B4: FRP capstone probes (= Phase 6) — SAFETY PROPERTY DEMONSTRATED on the specified core; switch/Init scoped out on source
 
-- [ ] Execute lean-shape Tasks 6.1–6.2 as written: re-derive `Init`/`switch`
+Done: `docs/superpowers/notes/2026-07-02-frp-index-algebra.md` (loop decoupledness
+algebra); `frp` cluster 4/4 `same` — frp03 well-formed decoupled loop accept/accept,
+frp04 instantaneous causal loop reject/reject (`{:cannot_unify, DDec, DCau}`). The
+paper's headline safety property (ill-formed feedback cycles are a static type
+error) is demonstrated in Cure, agreeing with Idris. Two E-layer gaps surfaced:
+(1) implicit inference for computed-index constructor arguments — **FIXED**
+(unblocks loop); (2) argument index-unification not normalising a computed index
+(`loop(seq …)` with `dmeet(DDec,DDec)`) — **scope-pinned** (false-reject only, no
+soundness exposure; see note). **Deferred, source-gated:** `switch`/`Init`
+"uninitialised-signal escape" (6.2c) — the ICFP'09 Agda source is not vendored;
+deriving its index algebra from memory would violate verify-against-source.
+Predicted (unconfirmed) to need no new mechanism (another computed lattice index).
+
+- [x] Execute lean-shape Tasks 6.1–6.2 as written: re-derive `Init`/`switch`
   index algebra into `docs/superpowers/notes/2026-07-02-frp-index-algebra.md`
   (scope-expansion gate — a new mechanism gap discovered here is scoped
   explicitly, not improvised); then paired `.cure`/`.idr` probes — well-formed
