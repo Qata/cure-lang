@@ -13,6 +13,9 @@ Related:
 (the kernel architecture the ports must respect),
 [`2026-07-01-antigen-tier-a-design.md`](2026-07-01-antigen-tier-a-design.md)
 (the assurance apparatus every port banks antibodies into),
+[`2026-07-02-antigen-pre-port-banking-design.md`](2026-07-02-antigen-pre-port-banking-design.md)
+(the bank-now half of the antibody discipline: everything expressible before
+the ports, banked before them; runs before P1),
 [`reference/MANIFEST.md`](../../../../reference/MANIFEST.md)
 (the pinned reference snapshot; at `~/Develop/esp32-beam/reference/`).
 
@@ -207,10 +210,14 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
   the fast path; SCT is the fallback that turns today's conservative
   mutual-cycle rejection into acceptance of well-founded mutual and
   lexicographic recursion. Diagnostics must name the offending cycle.
-- **Gates:** `diverging_mutual_pair` still replays `:ok` (regression);
-  new antibodies for accepted well-founded mutual pairs, longer/indirect
-  cycles, guarded vs. unguarded (subsumes roadmap A9); oracle corpus of
-  paired mutual/lex-descent programs; TCB diff reviewed as such.
+- **Gates:** the pre-port banking run (W1/W2 of its spec) has landed first —
+  P1 is developed against its adversarial diverging set (which must keep
+  replaying `:ok`, `diverging_mutual_pair` included) and is accepted by
+  migrating its reach pins (well-founded mutual, lexicographic, permuted
+  descent) from `reach.sexp` into the main corpus; oracle corpus of paired
+  mutual/lex-descent programs; TCB diff reviewed as such. This is the one
+  cluster with no kernel backstop, so the pre-banked net is the primary
+  defense (§10).
 
 ### P2 — decision-tree pattern compilation (ledger #3, #17)
 
@@ -312,8 +319,21 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
 2. **Red-green TDD** per the house testing rule — each behavioral delta gets
    a failing test first.
 3. **Kernel green:** full existing suite + Antigen corpus replay untouched.
-4. **Antibodies banked:** every new rule/acceptance the port introduces gets
-   named Antigen challenges (the port's durable regression net).
+4. **Antibodies banked, in polarity order:** every new rule/acceptance the
+   port introduces gets named Antigen challenges (the port's durable
+   regression net). Ordering discipline:
+   - Everything expressible with *pre-port* surface/Core forms is banked
+     **before** the port by the pre-port banking spec — must-reject
+     antibodies (whose only failure window opens when the port makes the
+     checker more permissive) plus reach pins in `test/antigen/reach.sexp`
+     whose ground-truth labels the port must achieve. The port's acceptance
+     migrates its reach pins into the main corpus; it never edits them.
+   - **Syntax-gated challenges** — those inexpressible until the cluster's
+     own new surface forms exist — are authored *inside* the cluster's run:
+     after the minimal syntax/representation lands, **before** the semantic
+     logic they guard. Concretely: P2's nested-pattern split challenges
+     (extending `indexed/case`), P3's dot/forced `forcing` vertical
+     (roadmap row 24), and P4's `with` surface corpus.
 5. **Oracle:** the cluster's paired corpus exists with committed verdicts;
    replay green.
 6. **TCB discipline:** any K-layer diff (only P1 expected) is called out as
@@ -321,21 +341,23 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
 
 ## 9. Sequencing
 
-**P0 → P1 → (④ commits; already landing on this branch, finding 6) → P2 →
-P3 → P4 → P5**, interleaved with the roadmap's
-Antigen items per its §5 (A2–A4 are independent of this program; A8's term
-generator multiplies the value of every antibody the ports bank, so landing it
-early remains attractive). P1 no longer jumps the queue for soundness — the
-hole is closed — but stays second because its source is small, its gates are
-already banked, and it retires two ledger rows at once.
+**P0 → pre-port banking run → P1 → (④ commits; already landing on this
+branch, finding 6) → P2 → P3 → P4 → P5.** The pre-port banking spec absorbs
+roadmap items A1–A4/A9 and must precede P1, whose gates consume its W1/W2
+stores; P0 and the banking run are otherwise independent and may swap or
+overlap. A8's term generator multiplies the value of every antibody the ports
+bank, so landing it early remains attractive. P1 no longer jumps the queue
+for soundness — the hole is closed — but stays early because its source is
+small, its net is pre-banked, and it retires two ledger rows at once.
 
 ## 10. Risks
 
 - **Silent de Bruijn errors** (the mapping's riskiest row): mitigated by the
   kernel backstop (D2), the oracle (D4), Antigen replay, and — once roadmap
   A8 lands — generated-term coverage. For P1, which lacks the kernel
-  backstop, the antibody gate is the primary defense; its cluster spec must
-  include adversarial diverging-program challenges beyond the banked pair.
+  backstop, the antibody gate is the primary defense; the pre-port banking
+  spec's W1 adversarial diverging set (banked before P1 runs) is that
+  defense, deliberately authored independently of the port.
 - **Reference drift:** the manifest pins commits; refreshes are recorded
   there. Briefs cite the snapshot, never the live clones.
 - **Ledger staleness** (already observed twice): D5 makes the audit a gate,
