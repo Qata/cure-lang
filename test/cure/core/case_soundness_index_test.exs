@@ -124,4 +124,74 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
     env = Env.add_def(env, :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
   end
+
+  # Test 3 — Impossible-branch discharge: scrutinee Ix Dcoupled, wrap builds
+  # Ix Causal ⇒ the wrap branch is unreachable; its (deliberately ill-typed) body
+  # is NOT checked. Companion: a REACHABLE Ix Causal scrutinee with the same body
+  # is still rejected (discharge is not a blanket bypass).
+  test "Test 3: an impossible wrap branch is discharged without checking its body" do
+    ix_dcoupled = {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}
+    motive = {:lam, @dec, {:lam, @ix0, @dec}}                 # λn'.λix'. Dec
+    def_type = {:pi, ix_dcoupled, @dec}                        # Π(s:Ix Dcoupled). Dec
+    # body is {:type,0} where Dec is expected — only accepted because the branch is dead.
+    body = {:lam, ix_dcoupled, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
+    env = Env.add_def(base_env(), :probe, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe)
+  end
+
+  test "Test 3 companion: the SAME ill-typed body in a REACHABLE branch is rejected" do
+    ix_causal = {:data, :Ix, [], [{:ctor, :Causal, []}]}
+    motive = {:lam, @dec, {:lam, @ix0, @dec}}
+    def_type = {:pi, ix_causal, @dec}                          # Π(s:Ix Causal). Dec — wrap IS reachable
+    body = {:lam, ix_causal, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
+    env = Env.add_def(base_env(), :probe, def_type, body)
+    assert {:error, :branch_type} = Kernel.check_def(env, :probe)
+  end
+
+  # Test 5a — Clash half (§5.2 "only" direction), DIRECT positional clash: a
+  # definite rigid head clash between a ground ctor-result-index term and a
+  # ground scrutinee index discharges the branch, WITHOUT going through
+  # bind_index's same-key merge path (that path is Test 6, a DIFFERENT code
+  # route: unify_one's own catch-all fires here, not a same-key conflict).
+  # Foo(a:Dec, b:Dec) with mk2:(y:Dec)->Foo(Causal, y) — position `a` is a
+  # HARDCODED ground index (Causal), position `b` is the ctor's own arg y (no
+  # shared key with `a`). Scrutinee Foo(Dcoupled, Dcoupled): position `a`
+  # clashes directly (Causal vs Dcoupled, two distinct rigid ground terms, no
+  # variable involved on either side) — verifying clash-detection also works
+  # positionally within a multi-index family, complementing Test 3's
+  # single-index Ix clash.
+  test "Test 5a: a direct positional clash (no shared key) discharges the branch" do
+    env =
+      base_env()
+      |> Inductive.declare(Inductive.family(:Foo, [], [{:a, @dec}, {:b, @dec}], 0),
+           [Inductive.ctor(:mk2, [{:y, @dec}], [{:ctor, :Causal, []}, {:var, 0}])])
+    foo_dd = {:data, :Foo, [], [{:ctor, :Dcoupled, []}, {:ctor, :Dcoupled, []}]}
+    motive = {:lam, @dec, {:lam, @dec, {:lam, {:data, :Foo, [], [{:var, 1}, {:var, 0}]}, @dec}}}
+    def_type = {:pi, foo_dd, @dec}
+    body = {:lam, foo_dd, {:case, {:var, 0}, motive, [{:mk2, 1, {:type, 0}}]}}
+    env = Env.add_def(env, :probe, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe)   # mk2 can only build Foo(Causal,_) ⇒ discharged
+  end
+
+  # Test 6 — Merge consistency (§5.5): mk:(p:Dec)->Foo(p,p) matched against
+  # Foo(Causal, Dcoupled) gives p two candidate bindings (Causal, Dcoupled) that
+  # are not equal ⇒ :impossible (discharge), NOT a silently-overwritten unsound
+  # subst. Unlike Test 5a (a DIRECT positional clash via unify_one's own
+  # catch-all, no shared key), this construction specifically routes through
+  # bind_index's SAME-KEY conflict path (both index positions solve the one
+  # telescope var `p`), by giving the branch a body that is ill-typed under BOTH
+  # candidate refinements, so a silent-overwrite kernel would reject and only a
+  # correct merge-conflict→impossible kernel accepts.
+  test "Test 6: conflicting shared-key bindings yield impossible, not a silent overwrite" do
+    env =
+      base_env()
+      |> Inductive.declare(Inductive.family(:Foo, [], [{:a, @dec}, {:b, @dec}], 0),
+           [Inductive.ctor(:mk, [{:p, @dec}], [{:var, 0}, {:var, 0}])])
+    foo_cd = {:data, :Foo, [], [{:ctor, :Causal, []}, {:ctor, :Dcoupled, []}]}
+    motive = {:lam, @dec, {:lam, @dec, {:lam, {:data, :Foo, [], [{:var, 1}, {:var, 0}]}, @dec}}}
+    def_type = {:pi, foo_cd, @dec}
+    body = {:lam, foo_cd, {:case, {:var, 0}, motive, [{:mk, 1, {:type, 0}}]}}
+    env = Env.add_def(env, :probe, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe)
+  end
 end

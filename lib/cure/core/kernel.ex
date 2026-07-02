@@ -672,29 +672,33 @@ defmodule Cure.Core.Kernel do
 
             true ->
               %{args: tele, result_indices: result_indices} = ctor
-              {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
 
-              subst =
-                case unify_indices(ctx, result_indices, scrut_indices, arity) do
-                  {:solved, s} -> s
-                  :trivial -> %{}
-                  # :impossible is unreachable in Task 1; Task 2 adds a real arm here.
-                  :impossible -> %{}
-                end
+              case unify_indices(ctx, result_indices, scrut_indices, arity) do
+                :impossible ->
+                  {:cont, :ok}                         # unreachable branch: body NOT checked
 
-              ctx_branch = specialize_branch_context(ctx_branch, subst)
-              # Result indices are written over the ctor's args (most-recent first).
-              s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
-              ctor_value = {:vctor, cname, arg_vals}
+                verdict ->
+                  subst =
+                    case verdict do
+                      {:solved, s} -> s
+                      :trivial -> %{}
+                    end
 
-              expected =
-                motive_value
-                |> apply_motive(s_values ++ [ctor_value])
-                |> specialize_branch_value(ctx_branch, subst)
+                  {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
+                  ctx_branch = specialize_branch_context(ctx_branch, subst)
+                  # Result indices are written over the ctor's args (most-recent first).
+                  s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
+                  ctor_value = {:vctor, cname, arg_vals}
 
-              case check(ctx_branch, body, expected) do
-                :ok -> {:cont, :ok}
-                {:error, _} -> {:halt, {:error, :branch_type}}
+                  expected =
+                    motive_value
+                    |> apply_motive(s_values ++ [ctor_value])
+                    |> specialize_branch_value(ctx_branch, subst)
+
+                  case check(ctx_branch, body, expected) do
+                    :ok -> {:cont, :ok}
+                    {:error, _} -> {:halt, {:error, :branch_type}}
+                  end
               end
           end
       end
@@ -705,8 +709,8 @@ defmodule Cure.Core.Kernel do
   # (`result_indices`, terms over the ctor telescope — vars < arity) against the
   # scrutinee's index vector (`scrut_indices`, outer-context values) in ctx_branch's
   # de Bruijn space (spec §4.3/§4.4). Verdict: {:solved, subst} | :trivial | :impossible.
-  # In this task :impossible is not yet produced (clash/conflict → :undecided);
-  # Task 2 adds it.
+  # :impossible fires on a definite rigid index-head clash or a same-key merge
+  # conflict; uncertainty is always :undecided (never :impossible).
   defp unify_indices(ctx, result_indices, scrut_indices, arity) do
     outer_depth = Context.length(ctx)
 
@@ -750,9 +754,8 @@ defmodule Cure.Core.Kernel do
 
   defp unify_one(r, s, _arity, _subst) do
     # Definite rigid head clash ⇒ impossible; anything else ⇒ conservative undecided.
-    # (Task 1 downgrades clash to :undecided — Task 2 activates :impossible.)
     if rigid_index?(r) and rigid_index?(s) and head_key(r) != head_key(s),
-      do: :undecided,                                   # TASK 1: no :impossible yet
+      do: :impossible,
       else: :undecided
   end
 
@@ -775,7 +778,7 @@ defmodule Cure.Core.Kernel do
         cond do
           old == term -> {:ok, subst}                   # consistent
           rigid_index?(old) and rigid_index?(term) and head_key(old) != head_key(term) ->
-            :undecided                                  # TASK 1: no :impossible yet (Task 2 flips)
+            :impossible                                 # same-key merge conflict ⇒ impossible
           true -> :undecided
         end
       true -> {:ok, Map.put(subst, key, term)}
