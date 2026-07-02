@@ -61,4 +61,17 @@ defmodule Cure.Elab.TuplePatternTest do
     # g constructs %[Z, S(Z)] and f returns its second component.
     assert apply(mod, :g, []) == {:S, :Z}
   end
+
+  test "a let-bound pair can be projected (Σ β-rule through substitution)" do
+    # `let` is substitution-based, so `p.2` inlines to `%[Z(), S(Z())].2`, which
+    # reduces to the second component directly — no pair term, no bare-pair infer.
+    src =
+      @nat <>
+        "  fn g() -> Nat =\n    let p = %[Z(), S(Z())]\n    p.2\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.LetPairProjE2E", functions: [:g])
+
+    assert apply(mod, :g, []) == {:S, :Z}
+  end
 end

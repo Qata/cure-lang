@@ -103,6 +103,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Projection of a literal pair reduces by the Σ β-rule (`fst %[a,b] = a`,
+  # `snd %[a,b] = b`), so we take the component directly — no `{:pair, …}` is built
+  # and the kernel is never asked to infer a bare pair. This is what makes a
+  # let-bound pair work: `let p = %[a, b]` is substitution-based, so `p.1`/`p.2`
+  # become `%[a, b].1`/`.2` after inlining.
+  def elaborate_expr_typed({:attribute_access, meta, [{:tuple, _tm, [a, b]}]} = expr, names, ctx, env) do
+    case Keyword.fetch!(meta, :attribute) do
+      "1" -> elaborate_expr_typed(a, names, ctx, env)
+      "2" -> elaborate_expr_typed(b, names, ctx, env)
+      _ -> {:error, {:unsupported_expression, expr}}
+    end
+  end
+
   def elaborate_expr_typed({:attribute_access, meta, [inner]}, names, ctx, env) do
     with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
       term =
