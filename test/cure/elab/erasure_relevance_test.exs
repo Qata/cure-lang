@@ -41,7 +41,6 @@ defmodule Cure.Elab.ErasureRelevanceTest do
   """
   use ExUnit.Case, async: true
   alias Cure.Elab.Program
-  alias Cure.Core.Env
 
   # Nat, the singleton family SNat(n), the indexed family NV(n) (so `v : NV(n)`
   # makes `n` genuinely occur only in a TYPE position in the signature), plus the
@@ -125,20 +124,4 @@ defmodule Cure.Elab.ErasureRelevanceTest do
     end
   end
 
-  # A2 DELETES this test: its replacement is probe (a)'s rejection above. It
-  # exists only to WITNESS today's severity — that elaboration accepts a def
-  # whose erased binder is returned, so erasure is already primed to drop a slot
-  # the body depends on.
-  @tag :characterization
-  test "(witness) probe (a) elaborates today, with `n` already marked erased" do
-    src =
-      mod("""
-        fn f({n: Nat}, v: NV(n)) -> Nat = n
-      """)
-
-    assert {:ok, env} = Program.elaborate(src)
-    # The binder the body returns is marked `:erased` — erasure will drop its
-    # slot while the body still references it. That is the miscompile A2 closes.
-    assert %{quantities: [:erased | _]} = Env.get_def(env, :f)
-  end
 end

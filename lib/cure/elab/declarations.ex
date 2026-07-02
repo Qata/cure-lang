@@ -17,7 +17,7 @@ defmodule Cure.Elab.Declarations do
   """
 
   alias Cure.Core.{Context, Env, Eval, Inductive, Kernel}
-  alias Cure.Elab.Elaborator
+  alias Cure.Elab.{Elaborator, Relevance}
 
   @ceiling 2
 
@@ -39,7 +39,12 @@ defmodule Cure.Elab.Declarations do
          ctx = build_context(env1, telescope),
          return_value = Eval.eval(return_core, Context.env(ctx)),
          {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env1, params),
-         :ok <- Kernel.check(ctx, body_term, return_value) do
+         :ok <- Kernel.check(ctx, body_term, return_value),
+         # {0,ω} relevance check (M8.3): erasure will drop the `:erased` parameter
+         # slots, so reject any body that uses one relevantly (returned / passed
+         # in a present position / scrutinised / applied). E-layer; the kernel
+         # stays quantity-blind. See `Cure.Elab.Relevance`.
+         :ok <- Relevance.check(env1, name, quantities, body_term) do
       lambda = wrap_binders(:lam, telescope, body_term)
       final = Env.add_def(env1, name, pi, lambda, quantities)
       # Best-effort totality certification, eagerly and in declaration order, so a

@@ -33,7 +33,7 @@ defmodule Cure.Elab.SigmaSurfaceTest do
   test "forget_dec packages the decoupledness index into a Sigma pair" do
     src =
       @base <>
-        "fn forget_dec({as: SVDesc}, {bs: SVDesc}, {d: Dec}, sf: SF(as, bs, d)) -> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]\n"
+        "fn forget_dec({as: SVDesc}, {bs: SVDesc}, d: Dec, sf: SF(as, bs, d)) -> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]\n"
 
     assert {:ok, env} = elaborate_all(src)
     assert %{name: :forget_dec, type: type, body: body} = Env.get_def(env, :forget_dec)

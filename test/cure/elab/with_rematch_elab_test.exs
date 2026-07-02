@@ -71,7 +71,7 @@ defmodule Cure.Elab.WithRematchElabTest do
     # arm fail with an index mismatch, so the sibling threading is load-bearing.
     src =
       mod("""
-        fn rel({k: Nat}, a: SNat(k), b: SNat(S(k))) -> Nat = k
+        fn rel({k: Nat}, a: SNat(k), b: SNat(S(k))) -> Nat = Z()
         fn foo(n: Nat, w: SNat(n)) -> Nat =
           with view(n)
             Z(), w | vz() -> Z()
