@@ -231,8 +231,42 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Lambda in checking mode: the expected type supplies the parameter types the
+  # surface leaves untyped. `fn(a, b) -> body` against `Π a. Π b. C` curries to
+  # `λa. λb. body` — each parameter is bound at the corresponding domain and the
+  # body checked against the final codomain. A lambda needs a known Π (Idris
+  # likewise only *checks*, never *infers*, an unannotated lambda); one in an
+  # inference position (e.g. a bare higher-order argument) still needs the
+  # expected type routed to it, which is a separate bidirectional-application step.
+  def elaborate_expr_checked({:lambda, meta, [body_expr]}, expected_core, names, ctx, env) do
+    with {:ok, term} <-
+           elaborate_lambda(Keyword.fetch!(meta, :params), body_expr, expected_core, names, ctx, env),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  defp elaborate_lambda([], body_expr, expected_core, names, ctx, env),
+    do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)
+
+  defp elaborate_lambda([{:param, _pm, pname} | rest], body_expr, expected_core, names, ctx, env) do
+    case Kernel.normalize(ctx, expected_core) do
+      {:pi, dom_term, cod_term} ->
+        dom_value = Eval.eval(dom_term, Context.env(ctx))
+        ctx1 = Context.extend(ctx, dom_value)
+
+        with {:ok, body_term} <-
+               elaborate_lambda(rest, body_expr, cod_term, [pname | names], ctx1, env) do
+          {:ok, {:lam, dom_term, body_term}}
+        end
+
+      _ ->
+        {:error, {:lambda_expected_pi, expected_core}}
+    end
+  end
 
   defp elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
     with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),

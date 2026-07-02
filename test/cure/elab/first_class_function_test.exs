@@ -1,0 +1,72 @@
+defmodule Cure.Elab.FirstClassFunctionTest do
+  @moduledoc """
+  First-class functions (Idris parity). Three layers cooperate:
+
+    * a non-dependent arrow type `(A) -> B` elaborates to a native Core Π
+      (`declarations.ex` `arrow_to_pi`), so the kernel can apply function-typed
+      values and check lambdas against them;
+    * a lambda `fn(y) -> body` is elaborated in checking mode against the
+      expected Π (`elaborator.ex` `elaborate_lambda`), currying multi-parameter
+      lambdas;
+    * codegen erases a lambda to a curried 1-arg BEAM fun, applies a closure one
+      argument at a time, and passes a named function as `fun name/arity`
+      (`emit.ex`).
+
+  Oracle `func/fn01_higher_order` + `func/fn02_lambda_body` pin accept/accept.
+  """
+  use ExUnit.Case, async: true
+
+  alias Cure.Elab.{Program, Emit}
+
+  @nat "mod M\n  type Nat = Z | S(Nat)\n"
+
+  test "a higher-order function applied to a named function runs end-to-end" do
+    src =
+      @nat <>
+        "  fn ap(f: (Nat) -> Nat, x: Nat) -> Nat = f(x)\n" <>
+        "  fn inc(n: Nat) -> Nat = S(n)\n" <>
+        "  fn g() -> Nat = ap(inc, S(Z()))\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfHof", functions: [:ap, :inc, :g])
+
+    # ap(inc, S(Z)) = inc(S(Z)) = S(S(Z)).
+    assert apply(mod, :g, []) == {:S, {:S, :Z}}
+  end
+
+  test "a lambda returned by a function is a curried BEAM fun" do
+    src = @nat <> "  fn mk() -> (Nat) -> Nat = fn(y) -> S(y)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfLam", functions: [:mk])
+
+    f = apply(mod, :mk, [])
+    assert is_function(f, 1)
+    assert f.(:Z) == {:S, :Z}
+  end
+
+  test "a function-typed parameter is applied (closure application)" do
+    src = @nat <> "  fn ap(f: (Nat) -> Nat, x: Nat) -> Nat = f(x)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfAp", functions: [:ap])
+
+    assert apply(mod, :ap, [fn n -> {:S, n} end, :Z]) == {:S, :Z}
+  end
+
+  test "a curried two-parameter lambda applies one argument at a time" do
+    src = @nat <> "  fn adder() -> (Nat) -> (Nat) -> Nat = fn(a) -> fn(b) -> S(a)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfCurry", functions: [:adder])
+
+    g = apply(mod, :adder, [])
+    assert g.(:Z).({:S, :Z}) == {:S, :Z}
+  end
+
+  test "a lambda checked against a non-function type is rejected" do
+    src = @nat <> "  fn bad() -> Nat = fn(y) -> S(y)\nend\n"
+
+    assert {:error, _} = Program.elaborate(src)
+  end
+end

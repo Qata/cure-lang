@@ -154,19 +154,47 @@ defmodule Cure.Elab.Emit do
   defp lower(env, {:fst, p}, ctx), do: element(1, lower(env, p, ctx))
   defp lower(env, {:snd, p}, ctx), do: element(2, lower(env, p, ctx))
 
+  # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
+  # takes de Bruijn index 0 in the body's frame.
+  defp lower(env, {:lam, _dom, body}, ctx) do
+    var = :"Fn#{length(ctx)}"
+    clause = {:clause, @line, [{:var, @line, var}], [], [lower(env, body, [var | ctx])]}
+    {:fun, @line, {:clauses, [clause]}}
+  end
+
   defp lower(env, {:app, _, _} = app, ctx) do
     {head, args} = spine(app, [])
 
     case head do
+      # A saturated named function is one multi-argument BEAM call.
       {:global, name} ->
         {:call, @line, {:atom, @line, name}, Enum.map(args, &lower(env, &1, ctx))}
 
-      other ->
-        raise ArgumentError, "cannot emit application of #{inspect(other)}"
+      # Applying a closure value (a lambda or a function-typed binder) is curried:
+      # apply one argument at a time to the BEAM fun.
+      _ ->
+        Enum.reduce(args, lower(env, head, ctx), fn arg, acc ->
+          {:call, @line, acc, [lower(env, arg, ctx)]}
+        end)
     end
   end
 
-  defp lower(_env, {:global, name}, _ctx), do: {:call, @line, {:atom, @line, name}, []}
+  # A bare global: a nullary definition is called (`name()`); a definition with
+  # present parameters used as a *value* (passed to a higher-order function)
+  # becomes a function reference `fun name/arity`.
+  defp lower(env, {:global, name}, _ctx) do
+    case present_arity(env, name) do
+      0 -> {:call, @line, {:atom, @line, name}, []}
+      n -> {:fun, @line, {:function, name, n}}
+    end
+  end
+
+  defp present_arity(env, name) do
+    case Env.get_def(env, name) do
+      %{quantities: qs} when is_list(qs) -> Enum.count(qs, &(&1 == :present))
+      _ -> 0
+    end
+  end
 
   # A discharged (impossible) case branch. Never executed at runtime; emit an
   # unreachable stub so codegen doesn't hit the raising catch-all (spec §5).

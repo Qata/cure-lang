@@ -162,6 +162,13 @@ defmodule Cure.Elab.Declarations do
     Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
 
+  # A lambda body has untyped parameters, so it must be *checked* against the
+  # declared return type (a Π) rather than inferred — `fn(y) -> …` returning a
+  # function type. Other bodies stay on the inference path below.
+  defp elaborate_body({:lambda, _meta, _} = expr, return_core, scope, ctx, env, _params) do
+    Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+  end
+
   defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}
@@ -430,27 +437,54 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp idx_to_core({:function_call, fmeta, args}, scope, fam, env) do
-    atom = fmeta |> Keyword.fetch!(:name) |> String.to_atom()
+    if Keyword.get(fmeta, :function_type) do
+      arrow_to_pi(args, scope, fam, env)
+    else
+      atom = fmeta |> Keyword.fetch!(:name) |> String.to_atom()
 
-    with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env) do
-      cond do
-        atom == :Eq and length(core_args) == 3 ->
-          [ty, a, b] = core_args
-          {:ok, {:eq, ty, a, b}}
+      with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env) do
+        cond do
+          atom == :Eq and length(core_args) == 3 ->
+            [ty, a, b] = core_args
+            {:ok, {:eq, ty, a, b}}
 
-        atom == fam or Inductive.family?(env, atom) ->
-          # Split the applied arguments into the family's parameters (prefix) and
-          # indices (suffix); the kernel checks each slot against its own
-          # telescope. param_count is 0 for parameter-free families (all indices).
-          {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
-          {:ok, {:data, atom, params, indices}}
+          atom == fam or Inductive.family?(env, atom) ->
+            # Split the applied arguments into the family's parameters (prefix) and
+            # indices (suffix); the kernel checks each slot against its own
+            # telescope. param_count is 0 for parameter-free families (all indices).
+            {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+            {:ok, {:data, atom, params, indices}}
 
-        Inductive.get_ctor(env, atom) ->
-          {:ok, {:ctor, atom, core_args}}
+          Inductive.get_ctor(env, atom) ->
+            {:ok, {:ctor, atom, core_args}}
 
-        true ->
-          {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+          true ->
+            {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+        end
       end
+    end
+  end
+
+  # `(D1, …, Dn) -> R` (surface `Function(D1,…,Dn,R)`, tagged `function_type`)
+  # becomes the non-dependent Π `Π(_:D1). … Π(_:Dn). R` — the native Core arrow the
+  # kernel applies (`f(x)`) and checks lambdas against. Each type is elaborated in
+  # the outer scope, then shifted past the arrow binders standing above it in the
+  # nest (those binders are anonymous and unreferenced, so the shift only relocates
+  # genuine outer-scope de Bruijn references).
+  defp arrow_to_pi(args, scope, fam, env) do
+    {domains, [ret]} = Enum.split(args, length(args) - 1)
+
+    with {:ok, dom_cores} <- map_idx_to_core(domains, scope, fam, env),
+         {:ok, ret_core} <- idx_to_core(ret, scope, fam, env) do
+      pi =
+        dom_cores
+        |> Enum.with_index()
+        |> Enum.reverse()
+        |> Enum.reduce(Cure.Core.Term.shift(ret_core, length(dom_cores), 0), fn {dom, i}, acc ->
+          {:pi, Cure.Core.Term.shift(dom, i, 0), acc}
+        end)
+
+      {:ok, pi}
     end
   end
 
