@@ -5,7 +5,7 @@ defmodule Antigen.Generators.Mutation do
   construction-guaranteed-wrong subterm — so `Kernel.infer` rejects it at that
   enclosing check (never a bare wrong-headed term, which would infer fine). The
   well-typed filler parts are drawn from the lazy `Term.gen_term`, keeping mutants
-  deep and realistic. StreamData-free: built only via `Antigen.Gen`.
+  deep and realistic. Backend-free: built only via the `Antigen.Gen` DSL.
   """
   alias Antigen.Challenge
   alias Antigen.Gen
