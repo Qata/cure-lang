@@ -7,8 +7,10 @@ defmodule Antigen.Generators.Mutation do
   well-typed filler parts are drawn from the lazy `Term.gen_term`, keeping mutants
   deep and realistic. StreamData-free: built only via `Antigen.Gen`.
   """
+  alias Antigen.Challenge
   alias Antigen.Gen
-  alias Antigen.Generators.Term
+  alias Antigen.Generators.Context, as: CtxGen
+  alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Core.Context
 
   @operators [:head_swap, :ctor_arg, :index_mismatch, :app_domain,
@@ -85,4 +87,48 @@ defmodule Antigen.Generators.Mutation do
 
   defp nat_numeral(0), do: z()
   defp nat_numeral(k), do: s(nat_numeral(k - 1))
+
+  def assay_id, do: "mutation/rejection"
+
+  @doc "A `Gen` of a `:mutant_term` challenge."
+  @spec mutant() :: Gen.t()
+  def mutant do
+    env = SigMenu.env_of(:v1)
+
+    Gen.bind(CtxGen.gen(env), fn ctx_types ->
+      ctx = SigMenu.rebuild_context(env, ctx_types)
+
+      Gen.bind(select(), fn kind ->
+        {term_gen, fault} = build(ctx, kind)
+
+        Gen.bind(term_gen, fn term ->
+          Gen.return(
+            Challenge.new(
+              kind: :mutant_term,
+              assay: assay_id(),
+              label: :ill_typed,
+              payload: %{sig: :v1, ctx: ctx_types, type: goal_of(fault), term: term, fault: fault}
+            )
+          )
+        end)
+      end)
+    end)
+  end
+
+  @spec default_gen() :: Gen.t()
+  def default_gen, do: mutant()
+
+  # Uniform weighted choice over all 7 operators (each is self-contained, so all
+  # are applicable at every draw — spec §5's "applicable set" is the full set once
+  # operators own their checked scaffolds). Equal weights keep the diversity floor
+  # (Task 7) comfortably reachable.
+  defp select, do: Gen.frequency(Enum.map(@operators, fn k -> {1, Gen.return(k)} end))
+
+  # The challenge-level `type` field is documentation-only (spec §4/§6.1): a
+  # nominal goal describing the fault site, never a proven property of the mutant.
+  defp goal_of(%{kind: :universe}), do: {:type, 0}
+  defp goal_of(%{kind: :index_mismatch}), do: vec(z())
+  defp goal_of(%{expected_head: :Sigma}), do: {:sigma, nat_t(), nat_t()}
+  defp goal_of(%{expected_head: :Nat}), do: nat_t()
+  defp goal_of(_), do: nat_t()
 end

@@ -44,4 +44,21 @@ defmodule Antigen.Generators.MutationTest do
       end
     end
   end
+
+  test "mutant/0 emits a well-formed :mutant_term challenge that the kernel rejects" do
+    alias Antigen.Challenge
+    for c <- sample(Mutation.mutant(), 60) do
+      assert %Challenge{kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed, payload: p} = c
+      assert p.sig == :v1
+      assert p.fault.kind in Mutation.operators()
+      env = SigMenu.env_of(:v1)
+      ctx = SigMenu.rebuild_context(env, p.ctx)
+      assert {:error, _} = Kernel.infer(ctx, p.term)   # generation totality + rejection
+    end
+  end
+
+  test "a large sample draws at least 5 distinct fault kinds (diversity is reachable)" do
+    kinds = sample(Mutation.mutant(), 200) |> Enum.map(& &1.payload.fault.kind) |> Enum.uniq()
+    assert length(kinds) >= 5
+  end
 end
