@@ -27,6 +27,9 @@ defmodule Antigen.Coverage do
   def terms_of(%Challenge{kind: :typed_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 
+  def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
+    do: [type, term | ctx]
+
   def terms_of(%Challenge{kind: :def_group, payload: %{defs: defs}}),
     do: Enum.flat_map(defs, fn d -> [d.type, d.body] end)
 
