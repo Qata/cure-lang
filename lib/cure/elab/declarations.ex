@@ -573,6 +573,20 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A pair/Σ field type `MkW(Sigma(a: T, U))`. Field telescopes here are
+  # non-dependent (each field is elaborated without the earlier fields in scope),
+  # so the Σ codomain carries no reference to the bound component — `U` has no free
+  # de Bruijn index and needs no shift. A genuinely dependent Σ field (`U`
+  # mentioning `a`) would map `a` to a spurious family name and be rejected by
+  # `Kernel.check_family`; it is not admitted here. The assembled `{:sigma, …}`
+  # goes into the constructor telescope and is validated by the kernel.
+  defp type_to_core({:sigma_type, [binder: _bname], [dom_ast, body_ast]}) do
+    with {:ok, dom} <- type_to_core(dom_ast),
+         {:ok, body} <- type_to_core(body_ast) do
+      {:ok, {:sigma, dom, body}}
+    end
+  end
+
   defp type_to_core(other), do: {:error, {:unsupported_field_type, other}}
 
   defp map_type_to_core(asts) do
