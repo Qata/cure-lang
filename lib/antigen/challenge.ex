@@ -51,7 +51,11 @@ defmodule Antigen.Challenge do
     :head, :index, :level, :scope, :Sigma,
     # fault-map KEY atoms (must be interned: the fault map rides through
     # binary_to_term [:safe] in the scaffold field — keys count, not just values)
-    :kind, :witness, :expected_head, :injected_head
+    :kind, :witness, :expected_head, :injected_head,
+    # deep-propagation: wrapper kinds (values) + the two new fault-field keys.
+    # :pair doubles as a Core term tag but must be listed for the [:safe] decode.
+    # (:ctor_vec is NOT a wrapper here — dropped for Nat→Nat composability.)
+    :app_arg, :ctor_nat, :case_scrut, :case_branch, :pair, :depth, :wrap_path
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

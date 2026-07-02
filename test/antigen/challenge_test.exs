@@ -60,4 +60,19 @@ defmodule Antigen.ChallengeTest do
     assert c2.payload.ctx == c.payload.ctx
     assert c2.payload.type == c.payload.type
   end
+
+  # A deep-propagation fault map (7 keys incl. :depth/:wrap_path and wrapper-kind
+  # values :app_arg/:case_branch/:pair) serialized OUTSIDE this module, so those
+  # atoms appear ONLY in these opaque bytes — never as literals in the test source
+  # that would pre-intern them. `binary_to_term [:safe]` can therefore decode it
+  # only if Challenge.@known_atoms interns the new wrapper/field atoms. This is the
+  # genuine file-decode guard; an in-source round-trip test cannot be (its own
+  # literals defeat the red state — exactly the v1 key-atom false-green).
+  @deep_fault_blob "g3QAAAAHdwVzY29wZXcDbmlsdwVkZXB0aGEDdwRraW5kdwloZWFkX3N3YXB3B3dpdG5lc3N3BGhlYWR3DWV4cGVjdGVkX2hlYWR3A05hdHcNaW5qZWN0ZWRfaGVhZHcDVmVjdwl3cmFwX3BhdGhsAAAAA3cHYXBwX2FyZ3cLY2FzZV9icmFuY2h3BHBhaXJq"
+
+  test "deep-fault wrapper/field atoms are interned for [:safe] file decode" do
+    _ = Antigen.Challenge.__known_atoms__()
+    decoded = :erlang.binary_to_term(Base.decode64!(@deep_fault_blob), [:safe])
+    assert is_map(decoded) and map_size(decoded) == 7
+  end
 end
