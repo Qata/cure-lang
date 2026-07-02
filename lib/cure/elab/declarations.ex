@@ -38,7 +38,7 @@ defmodule Cure.Elab.Declarations do
          env1 = Env.add_def(env, name, pi, {:hole, "__pending__"}, quantities),
          ctx = build_context(env1, telescope),
          return_value = Eval.eval(return_core, Context.env(ctx)),
-         {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env1),
+         {:ok, body_term} <- elaborate_body(body_expr, return_core, scope, ctx, env1, params),
          :ok <- Kernel.check(ctx, body_term, return_value) do
       lambda = wrap_binders(:lam, telescope, body_term)
       final = Env.add_def(env1, name, pi, lambda, quantities)
@@ -109,7 +109,7 @@ defmodule Cure.Elab.Declarations do
 
   # A `match` body needs the declared return type to build its motive (checking
   # mode); every other body is elaborated in inference mode.
-  defp elaborate_body({:pattern_match, _meta, [scrut | arms]}, return_core, scope, ctx, env) do
+  defp elaborate_body({:pattern_match, _meta, [scrut | arms]}, return_core, scope, ctx, env, _params) do
     Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
   end
 
@@ -117,16 +117,16 @@ defmodule Cure.Elab.Declarations do
   # value-abstracts the scrutinee EXPRESSION out of the goal, so each branch's
   # goal is refined to the branch constructor's value (goal refinement plain
   # `match` cannot do). Checking mode — the declared return type is the goal.
-  defp elaborate_body({:with_abs, meta, [scrut | arms]}, return_core, scope, ctx, env) do
+  defp elaborate_body({:with_abs, meta, [scrut | arms]}, return_core, scope, ctx, env, params) do
     proof = Keyword.get(meta, :proof)
-    Elaborator.elaborate_with(scrut, arms, proof, return_core, scope, ctx, env)
+    Elaborator.elaborate_with(scrut, arms, proof, return_core, scope, ctx, env, params)
   end
 
-  defp elaborate_body({:rewrite_expr, _meta, _children} = expr, return_core, scope, ctx, env) do
+  defp elaborate_body({:rewrite_expr, _meta, _children} = expr, return_core, scope, ctx, env, _params) do
     Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
 
-  defp elaborate_body({:function_call, meta, _args} = expr, return_core, scope, ctx, env) do
+  defp elaborate_body({:function_call, meta, _args} = expr, return_core, scope, ctx, env, _params) do
     if Keyword.get(meta, :name) == "refl" do
       Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
     else
@@ -138,7 +138,7 @@ defmodule Cure.Elab.Declarations do
 
   # A pair `%[a, b]` is a dependent-pair introduction; the kernel checks it
   # against the declared Σ return type.
-  defp elaborate_body({:tuple, _meta, [a_ast, b_ast]}, _return_core, scope, ctx, env) do
+  defp elaborate_body({:tuple, _meta, [a_ast, b_ast]}, _return_core, scope, ctx, env, _params) do
     with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
          {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
       {:ok, {:pair, a_term, b_term}}
@@ -147,11 +147,11 @@ defmodule Cure.Elab.Declarations do
 
   # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
   # return type by the kernel; it blocks codegen until filled).
-  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, _env) do
+  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, _env, _params) do
     {:ok, {:hole, Keyword.get(meta, :name, "")}}
   end
 
-  defp elaborate_body(expr, _return_core, scope, ctx, env) do
+  defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}
     end

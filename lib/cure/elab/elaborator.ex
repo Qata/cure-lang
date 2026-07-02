@@ -502,9 +502,29 @@ defmodule Cure.Elab.Elaborator do
   Restricted to a non-indexed scrutinee family; this slice generalizes only
   siblings that form an independent set (see `collect_with_siblings`).
   """
-  @spec elaborate_with(term(), [tuple()], String.t() | nil, term(), [String.t()], Context.t(), Env.t()) ::
+  @spec elaborate_with(term(), [tuple()], String.t() | nil, term(), [String.t()], Context.t(), Env.t(), [tuple()]) ::
           {:ok, term()} | {:error, term()}
-  def elaborate_with(scrut_expr, arms, proof_name, result_type_term, names, ctx, env) do
+  def elaborate_with(scrut_expr, arms, proof_name, result_type_term, names, ctx, env, original_params \\ []) do
+    cond do
+      Enum.any?(arms, &with_rematch_arm?/1) ->
+        if Enum.all?(arms, &with_rematch_arm?/1) do
+          elaborate_with_rematch(scrut_expr, arms, original_params, result_type_term, names, ctx, env)
+        else
+          {:error, :with_mixed_rematch_arms}
+        end
+
+      true ->
+        elaborate_with_value(scrut_expr, arms, proof_name, result_type_term, names, ctx, env)
+    end
+  end
+
+  defp with_rematch_arm?({:with_rematch_arm, _, _}), do: true
+  defp with_rematch_arm?(_), do: false
+
+  # Capability A/B (no LHS re-match): value-abstracting motive + eq-arrow sibling
+  # transport, restricted to a NON-indexed scrutinee family. This is the original
+  # `elaborate_with` body, unchanged.
+  defp elaborate_with_value(scrut_expr, arms, proof_name, result_type_term, names, ctx, env) do
     with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
@@ -554,6 +574,172 @@ defmodule Cure.Elab.Elaborator do
           {:error, :with_scrutinee_not_data}
       end
     end
+  end
+
+  # -- LHS re-match over an indexed view (Idris-parity indexed views) ----------
+  #
+  # A with-clause that restates the parent LHS (`{:with_rematch_arm}`) is
+  # elaborated like an indexed `match` — NOT the value-abstracting capability-A
+  # path. The scrutinee (e.g. `view n : NV n`) is genuinely indexed; the goal is
+  # generalized over its index variables by `build_motive`, and each branch is
+  # refined by the kernel's index inversion (`branch_unify` yields `n := S(m)`).
+  # That SAME substitution refines the branch goal AND every index-mentioning
+  # sibling (e.g. `w : SNat n` ↦ `SNat (S m)`) via `specialize_branch_context`.
+  # The kernel independently re-checks the assembled `{:case,…}`, so the
+  # refinement is sound with no TCB change (the index equation comes from the
+  # case eliminator, not from an index-injectivity assumption). `match_parent_lhs`
+  # validates each restated LHS is constructor-refined (rejecting forced/
+  # arithmetic patterns — the deferred #5 case) before the arm is admitted.
+  defp elaborate_with_rematch(scrut_expr, arms, original_params, result_type_term, names, ctx, env) do
+    with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
+      case scrut_type do
+        {:vdata, dname, combined_vals} ->
+          family = Inductive.get_family(env, dname)
+          pc = Inductive.param_count(env, dname)
+          {param_vals, idx_vals} = Enum.split(combined_vals, pc)
+          depth = Context.length(ctx)
+          param_terms = Enum.map(param_vals, &Quote.reify(&1, depth))
+          idx_terms = Enum.map(idx_vals, &Quote.reify(&1, depth))
+
+          motive =
+            build_motive(dname, family.indices, param_terms, idx_terms, scrut_term, result_type_term)
+
+          with {:ok, arm_map} <- partition_rematch_arms(arms, original_params, ctx, env, dname),
+               {:ok, branches} <-
+                 elaborate_rematch_branches(
+                   arm_map, names, ctx, env, dname, idx_vals, param_vals, result_type_term
+                 ) do
+            {:ok, {:case, scrut_term, motive, branches}}
+          end
+
+        _ ->
+          {:error, :with_scrutinee_not_data}
+      end
+    end
+  end
+
+  # Build `cname => {:matched, with_pattern, body} | {:impossible_marked, ...}`,
+  # validating (a) the with-pattern names one of dname's OWN constructors (reused
+  # from `partition_arms` semantics), and (b) the restated parent patterns are a
+  # legal LHS re-match of `original_params` (`match_parent_lhs`) — the point at
+  # which a forced/arithmetic restated pattern (`k+k`) is rejected.
+  defp partition_rematch_arms(arms, original_params, ctx, env, dname) do
+    sig = Context.signature(ctx)
+
+    Enum.reduce_while(arms, {:ok, %{}}, fn {:with_rematch_arm, arm_meta, body}, {:ok, acc} ->
+      with_pattern = Keyword.fetch!(arm_meta, :pattern)
+      parent_patterns = Keyword.fetch!(arm_meta, :parent_patterns)
+
+      with {:ok, {cname, _vars}} <- constructor_pattern(with_pattern),
+           {:ok, _subst} <- match_parent_lhs(original_params, parent_patterns) do
+        cond do
+          Inductive.get_ctor(env, cname) == nil ->
+            {:halt, {:error, {:unknown_pattern_constructor, cname}}}
+
+          Inductive.ctor_family(sig, cname) != dname ->
+            {:halt, {:error, {:foreign_ctor, cname}}}
+
+          Map.has_key?(acc, cname) ->
+            {:halt, {:error, {:duplicate_branch, cname}}}
+
+          true ->
+            {:cont, {:ok, Map.put(acc, cname, {:matched, with_pattern, single_body(body)})}}
+        end
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  # One Core branch per declared constructor (coverage), mirroring
+  # `elaborate_branches`: an omitted/impossible constructor is discharged with
+  # `{:absurd}`; a matched constructor's body is elaborated under the kernel's
+  # index-refinement substitution.
+  defp elaborate_rematch_branches(arm_map, names, ctx, env, dname, idx_vals, param_vals, result_type_term) do
+    sig = Context.signature(ctx)
+
+    sig
+    |> Inductive.ctors_of(dname)
+    |> Enum.map(& &1.name)
+    |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
+      verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals)
+
+      case Map.get(arm_map, cname) do
+        {:matched, with_pattern, body_expr} ->
+          case elaborate_rematch_branch(
+                 verdict, cname, with_pattern, body_expr, names, ctx, env,
+                 param_vals, result_type_term
+               ) do
+            {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        nil ->
+          if verdict == :impossible do
+            {arity, _} = ctor_arity(env, cname)
+            {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+          else
+            {:halt, {:error, {:missing_branch, cname}}}
+          end
+      end
+    end)
+  end
+
+  defp elaborate_rematch_branch(verdict, cname, with_pattern, body_expr, names, ctx, env, param_vals, result_type_term) do
+    {:ok, {^cname, pattern_vars}} = constructor_pattern(with_pattern)
+    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    arity = length(telescope)
+    branch_names = branch_scope(quantities, pattern_vars) ++ names
+
+    case verdict do
+      :impossible ->
+        {:ok, {cname, arity, {:absurd}}}
+
+      _solved_or_trivial ->
+        subst =
+          case verdict do
+            {:solved, s} -> s
+            :trivial -> %{}
+          end
+
+        # The index inversion (`n := S(m)`) refines the branch goal AND every
+        # index-mentioning sibling in the context.
+        branch_ctx =
+          ctx
+          |> extend_context(telescope, param_vals)
+          |> specialize_branch_context_subst(subst)
+
+        branch_expected =
+          result_type_term
+          |> Subst.shift(arity, 0)
+          |> replace_branch_vars(subst)
+          |> then(&Kernel.normalize(branch_ctx, &1))
+
+        with {:ok, body_term} <-
+               elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
+          {:ok, {cname, arity, body_term}}
+        end
+    end
+  end
+
+  # Refine every context type by a branch substitution (kernel-frame de Bruijn
+  # keys), mirroring the kernel's `specialize_branch_context`: reify → replace →
+  # re-eval (the reify/eval round-trip repairs the flat-`{:vdata}` split).
+  defp specialize_branch_context_subst(ctx, subst) when map_size(subst) == 0, do: ctx
+
+  defp specialize_branch_context_subst(ctx, subst) do
+    depth = Context.length(ctx)
+    env = Context.env(ctx)
+
+    types =
+      Enum.map(ctx.types, fn type_value ->
+        type_value
+        |> Quote.reify(depth)
+        |> replace_branch_vars(subst)
+        |> Eval.eval(env)
+      end)
+
+    %{ctx | types: types}
   end
 
   # Eq-arrow motive `λ(w:T). Eq(T, e, w) -> G[e↦w]`. Under the `w`-binder, `e`/`T`
