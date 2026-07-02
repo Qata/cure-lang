@@ -139,9 +139,26 @@ new field keys (`:depth, :wrap_path`). These ride in the `fault` map through the
 scaffold `binary_to_term [:safe]` path, so — as the v1 key-atom fix showed — both
 keys and values must be interned.
 
+**Legacy banked records.** The 7 `:mutant_term` seeds already banked in
+`test/antigen/seeds.sexp` (from the v1 mutation-corpus spec) predate these two
+fields entirely — their decoded `fault` maps carry only the five v1 keys, with no
+`:depth`/`:wrap_path` present at all (not even defaulted). Any code that reads
+`fault.depth` / `fault.wrap_path` — the `mutation_metrics/1` extension (below in
+this section, and §8) and its static-replay meta-test over the banked corpus
+(§7.6) — MUST read
+them defensively (`Map.get(fault, :depth, 0)` / `Map.get(fault, :wrap_path, [])`),
+never by strict field/dot access, else replaying the pre-existing shallow seeds
+crashes the meta-test with a `KeyError`. This is the same class of hazard the v1
+key-atom fix guarded against, one level up: there the risk was an uninterned
+atom; here it is an absent key from a record shape written before the key
+existed.
+
 **Generation.** `mutant/0` draws a base kind (existing 7 → shallow fault via
-`build/2`), then draws `depth D ~ 0..@max_depth` and applies `deepen`. `@max_depth`
+`build/2`), then draws `depth D` **uniformly** from `0..@max_depth` (matching the
+per-layer wrapper-kind draw's uniformity above) and applies `deepen`. `@max_depth`
 is a small constant (≈8) bounded by per-term `infer` cost, not construction cost.
+Uniformity, not a shallow-skewed distribution, is what makes the `depth ≥
+@depth_floor` test (§7.2) reliably non-flaky at ordinary batch sizes.
 
 **Health gate (A-specific vacuity guards).** The v1 gate only checks `fault.kind`
 diversity. Add two metrics over the `:mutant_term` subset (a corpus of all
@@ -149,6 +166,16 @@ depth-0, or all-one-wrapper, mutants is vacuous *for A*):
 - **`max_depth`** — the deepest mutant generated; floor `≥ @depth_floor` (e.g. 4).
 - **`wrap_diversity`** — count of distinct wrapper kinds exercised across the
   subset; floor `≥ @wrap_floor` (e.g. 4 of 6).
+
+Unlike `reason_diversity` (scoped to *correctly-rejected* mutants only — §6.2 of
+the mutation-corpus spec), both new metrics are **generation-quality** signals and
+are computed over **every** `:mutant_term` challenge in the subset, regardless of
+its assay verdict: whether the generator produced deep, diverse mutants is a
+construction-time property, independent of whether the kernel happened to reject
+each one correctly. Scoping them to rejected-only (mirroring `reason_diversity`'s
+implementation shape by accident) would silently exclude any survivor's own
+depth/wrap_path from the count — exactly the corpus slice the gate most needs to
+see.
 
 Both fold into the existing health line and stamp:
 `antigen health[mutant_term]: reason_diversity=… max_depth=… wrap_diversity=… survivors=… → healthy|vacuous`.
@@ -158,6 +185,10 @@ stay a separately-surfaced infection, never folded into the stamp (v1 §6.2 rule
 ---
 
 ## 7. Testing (TDD; artifact is executable code)
+
+Red-green per plan step, matching the mutation-corpus spec's discipline: each
+behavior below gets a failing test written first, then only the implementation
+needed to turn it green.
 
 1. **Deep construction guarantee** — for each wrapper kind and a range of depths
    (0, 1, mid, `@max_depth`), sampled mutants `infer`-reject (`{:error, _}`). This
@@ -192,9 +223,9 @@ stay a separately-surfaced infection, never folded into the stamp (v1 §6.2 rule
   `wrap_diversity`; `mutation_stamp/1` and the health line include them.
 - **Modify** `test/antigen/seeds.sexp` — bank deep `:mutant_term` seeds (covering
   the wrapper kinds and a depth ≥ floor), coverage-deduped.
-- **Create/extend tests** — `test/antigen/generators/mutation_test.exs` (deep
-  construction/depth/wrap-path), `mutation_health_gate_test.exs` (new metrics),
-  `mutation_meta_test.exs` (static depth/wrap floors).
+- **Extend tests** (all three already exist from v1) — `test/antigen/generators/mutation_test.exs`
+  (deep construction/depth/wrap-path), `mutation_health_gate_test.exs` (new
+  metrics), `mutation_meta_test.exs` (static depth/wrap floors).
 
 Constraints (verbatim): construction-guaranteed ill-typedness; StreamData
 quarantine; ghost-authored commits (`Made In Heaven`, no `Co-Authored-By`); one
