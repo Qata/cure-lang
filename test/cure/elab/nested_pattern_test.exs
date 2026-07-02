@@ -88,8 +88,33 @@ defmodule Cure.Elab.NestedPatternTest do
     assert apply(mod, :h, [:Nil]) == :Z
   end
 
-  test "a top-level catch-all mixed with nesting is a clean error (boundary)" do
+  test "a top-level catch-all mixed with nesting is woven in as a fallback" do
+    # `_` completes the S(S(_)) hole (S(Z) and Z both fall through to Z()).
     src = @nat <> "  fn f(n: Nat) -> Nat = match n\n    S(S(m)) -> m\n    _ -> Z()\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.NestedOuterCatchallE2E", functions: [:f])
+
+    assert apply(mod, :f, [{:S, {:S, {:S, :Z}}}]) == {:S, :Z}
+    assert apply(mod, :f, [{:S, :Z}]) == :Z
+    assert apply(mod, :f, [:Z]) == :Z
+  end
+
+  test "a named catch-all binds the scrutinee across the nesting fallback" do
+    src = @nat <> "  fn f(n: Nat) -> Nat = match n\n    S(S(m)) -> m\n    other -> other\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.NestedNamedCatchallE2E", functions: [:f])
+
+    assert apply(mod, :f, [{:S, :Z}]) == {:S, :Z}
+    assert apply(mod, :f, [:Z]) == :Z
+  end
+
+  test "a NAMED catch-all with nesting over a non-variable scrutinee is a clean error (boundary)" do
+    # `S(n)` is not a variable, so the named catch-all has nothing to bind to.
+    src =
+      @nat <>
+        "  fn f(n: Nat) -> Nat = match S(n)\n    S(S(m)) -> m\n    other -> other\nend\n"
 
     assert {:error, {:unsupported_pattern, :catchall_with_nesting}} = Program.elaborate(src)
   end

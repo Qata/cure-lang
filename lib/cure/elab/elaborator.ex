@@ -500,7 +500,7 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
-    with {:ok, arms} <- desugar_nested_arms(arms0),
+    with {:ok, arms} <- desugar_nested_arms(arms0, scrut_expr),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
@@ -1264,20 +1264,75 @@ defmodule Cure.Elab.Elaborator do
   # columns are compiled by the standard pattern-matrix algorithm
   # (Augustsson/Maranget) — left-to-right column selection producing a tree of
   # single-scrutinee matches, so ANY number of nested columns is handled. A
-  # top-level catch-all mixed with nesting is still rejected cleanly (the outer
-  # column would need matrix treatment too — future work).
-  defp desugar_nested_arms(arms) do
+  # top-level catch-all (`_`/`x`) mixed with nesting is woven in as a fallback
+  # row for the sub-patterns each nested group leaves uncovered, and kept as the
+  # outer catch-all for wholly-unmatched constructors.
+  defp desugar_nested_arms(arms, scrut_expr) do
     cond do
       not Enum.any?(arms, &arm_has_nested?/1) ->
         {:ok, arms}
 
       Enum.any?(arms, &default_arm?/1) ->
-        {:error, {:unsupported_pattern, :catchall_with_nesting}}
+        desugar_with_default(arms, scrut_expr)
 
       true ->
         compile_nested_groups(arms)
     end
   end
+
+  # A nested match with a trailing top-level catch-all `… | x -> d`. Resolve the
+  # catch-all body (binding its name to the scrutinee), weave it as a wildcard
+  # fallback row into every nested group so uncovered sub-patterns fall through to
+  # it, then keep a top-level `_ -> d` for constructors with no arm at all.
+  defp desugar_with_default(arms, scrut_expr) do
+    {ctor_arms, defaults} = Enum.split_with(arms, &(not default_arm?(&1)))
+
+    with [{:match_arm, dmeta, dbody0}] <- defaults,
+         true <- default_arm?(List.last(arms)) or :not_last,
+         {:variable, _m, dvname} <- Keyword.fetch!(dmeta, :pattern),
+         {:ok, dbody} <- resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
+      with {:ok, compiled} <- compile_nested_groups(weave_default(ctor_arms, dbody)) do
+        {:ok, compiled ++ [{:match_arm, [pattern: {:variable, [], "_"}], dbody}]}
+      end
+    else
+      _ -> {:error, {:unsupported_pattern, :catchall_with_nesting}}
+    end
+  end
+
+  # `_` needs no binding; a named catch-all binds the whole scrutinee, so it is
+  # only supported over a variable scrutinee (substitute its name), never a
+  # complex scrutinee expression (nothing to bind to).
+  defp resolve_default_body("_", dbody, _scrut), do: {:ok, dbody}
+
+  defp resolve_default_body(dvname, dbody, {:variable, _m, sname}) do
+    if binds_any?(dbody, [dvname]),
+      do: {:error, :shadowed},
+      else: {:ok, subst_surface_var(dbody, dvname, {:variable, [], sname})}
+  end
+
+  defp resolve_default_body(_dvname, _dbody, _scrut), do: {:error, :nonvariable_scrutinee}
+
+  # Append a wildcard fallback arm (`C(_…) -> d`) to each group that has nesting,
+  # so the group's matrix falls back to the catch-all body for uncovered
+  # sub-patterns. Non-nested groups are already exhaustive and left untouched.
+  defp weave_default(ctor_arms, dbody) do
+    order = ctor_arms |> Enum.map(&arm_ctor_name/1) |> Enum.uniq()
+    grouped = Enum.group_by(ctor_arms, &arm_ctor_name/1)
+
+    Enum.flat_map(order, fn cname ->
+      group = Map.fetch!(grouped, cname)
+
+      if Enum.any?(group, &arm_has_nested?/1) do
+        {:function_call, fmeta, args0} = arm_pattern(hd(group))
+        wilds = for i <- 1..length(args0)//1, do: {:variable, [], "$fb" <> cname <> Integer.to_string(i)}
+        group ++ [{:match_arm, [pattern: {:function_call, fmeta, wilds}], dbody}]
+      else
+        group
+      end
+    end)
+  end
+
+  defp arm_pattern({:match_arm, meta, _body}), do: Keyword.fetch!(meta, :pattern)
 
   defp default_arm?({:match_arm, meta, _body}),
     do: match?({:variable, _m, _v}, Keyword.fetch!(meta, :pattern))
