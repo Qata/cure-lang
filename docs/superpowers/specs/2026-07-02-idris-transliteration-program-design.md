@@ -77,11 +77,11 @@ roadmap commit `dd76d22` and later).
    `agda/.../TypeChecking/With.hs`. All exist in the local clones the
    manifest points to; refreshing is a copy (P4 prerequisite, cheap to do in
    P0).
-6. **④ is landing on this branch, and it built P2/P3's seams.** The
+6. **④ has landed on this branch, and it built P2/P3's seams.** The
    `{:absurd}` discharged-branch leaf is in the kernel (`3b24829`), the
    parser recognizes `-> impossible` (`d770aa1`), and the elaborator's
-   coverage/discharge pass is in the working tree: `elaborate_branches` now
-   iterates *every* declared constructor of the scrutinee's family, consults
+   coverage/discharge pass is committed (`f068943`): `elaborate_branches`
+   now iterates *every* declared constructor of the scrutinee's family, consults
    `Cure.Core.Kernel.branch_unify/4` per constructor, discharges impossible
    omitted/marked branches to `{:absurd}`, and rejects `missing_branch`,
    `reachable_impossible`, `foreign_ctor`, and `duplicate_branch`. Two
@@ -189,7 +189,7 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
   occurrence matching up to conversion vs. syntactic-on-normal-forms,
   behavior under binders — fix what's real, with a red test per fix per the
   house TDD rule; (d) correct ledger rows #7 and #13 to reflect the tree,
-  and flip rows 2/8/16 if ④'s pieces (finding 6) have committed by then.
+  and flip rows 2/8/16 (④'s pieces are committed — finding 6).
 - **Gates:** oracle fixtures for the rewrite corpus banked; roadmap accurate;
   any fixes covered red-green.
 - **Why first:** calibrates the brief format and the oracle at near-zero port
@@ -239,9 +239,8 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
   `reachable_impossible`, `foreign_ctor`, `duplicate_branch`,
   `unsupported_pattern`) is the diagnostics contract to preserve and extend
   with nested-position paths.
-- **Dependencies:** ④ committed on this branch (its elaborator pass is
-  currently uncommitted working-tree state); `TTImp/Elab/Case.idr` vendored
-  (P0) for expression-level match lifting.
+- **Dependencies:** ④ committed on this branch (done — `f068943`);
+  `TTImp/Elab/Case.idr` vendored (P0) for expression-level match lifting.
 - **Gates:** existing single-level match corpus unchanged (refactor safety);
   nested-pattern oracle corpus; Antigen `indexed/case` antibodies extended to
   nested splits.
@@ -341,8 +340,8 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
 
 ## 9. Sequencing
 
-**P0 → pre-port banking run → P1 → (④ commits; already landing on this
-branch, finding 6) → P2 → P3 → P4 → P5.** The pre-port banking spec absorbs
+**P0 → pre-port banking run → P1 → P2 → P3 → P4 → P5** (④'s former gate on
+P2 is discharged — its pieces are committed, finding 6). The pre-port banking spec absorbs
 roadmap items A1–A4/A9 and must precede P1, whose gates consume its W1/W2
 stores; P0 and the banking run are otherwise independent and may swap or
 overlap. A8's term generator multiplies the value of every antibody the ports
