@@ -970,6 +970,114 @@ defmodule Cure.Elab.Elaborator do
   defp pattern_shape(p) when is_tuple(p) and tuple_size(p) > 0, do: elem(p, 0)
   defp pattern_shape(_), do: :unknown
 
+  @doc """
+  LHS re-match (ports Idris `TTImp.WithClause.getMatch`). Match the parent
+  function's original parameter patterns positionally against a with-clause's
+  RESTATED patterns, producing a substitution `%{parent_var_name => refined
+  surface pattern}`. This is the map that refines the branch goal and sibling
+  types by the index a with-clause restates (`n` ↦ `S(m)`).
+
+  Handled (the faithful first slice):
+    * variable ↦ variable    — an alias (`n` restated as `m`)
+    * variable ↦ constructor — the refinement (`n` restated as `S(m)`)
+    * constructor ↦ constructor — structural recursion into matching args
+
+  A restated pattern that is a non-constructor EXPRESSION (e.g. `k + k`) is
+  rejected with `{:with_rematch_non_constructor_pattern, …}` — that is the
+  deferred forced/dot-pattern case (ledger #5), not a crash.
+  """
+  @spec match_parent_lhs([term()], [term()]) :: {:ok, %{String.t() => term()}} | {:error, term()}
+  def match_parent_lhs(originals, restated) when length(originals) == length(restated) do
+    originals
+    |> Enum.zip(restated)
+    |> Enum.reduce_while({:ok, %{}}, fn {orig, pat}, {:ok, acc} ->
+      case match_one_lhs(orig, pat, acc) do
+        {:ok, acc2} -> {:cont, {:ok, acc2}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  def match_parent_lhs(originals, restated),
+    do: {:error, {:with_rematch_arity_mismatch, length(originals), length(restated)}}
+
+  # A parent variable (or `{:param,…}`) binds to its restated pattern, provided
+  # the pattern is a variable or a (possibly nested) constructor application.
+  defp match_one_lhs({:variable, _, name}, restated, acc), do: bind_var_lhs(name, restated, acc)
+  defp match_one_lhs({:param, _, name}, restated, acc), do: bind_var_lhs(name, restated, acc)
+
+  # Parent constructor vs restated constructor: names + arity must agree, then
+  # recurse into the arguments (the getMatch IApp case).
+  defp match_one_lhs({:function_call, m1, a1}, {:function_call, m2, a2}, acc) do
+    n1 = Keyword.get(m1, :name)
+    n2 = Keyword.get(m2, :name)
+
+    cond do
+      n1 != n2 ->
+        {:error, {:with_rematch_ctor_mismatch, n1, n2}}
+
+      length(a1) != length(a2) ->
+        {:error, {:with_rematch_arity_mismatch, length(a1), length(a2)}}
+
+      true ->
+        a1
+        |> Enum.zip(a2)
+        |> Enum.reduce_while({:ok, acc}, fn {o, p}, {:ok, a} ->
+          case match_one_lhs(o, p, a) do
+            {:ok, a2} -> {:cont, {:ok, a2}}
+            {:error, _} = err -> {:halt, err}
+          end
+        end)
+    end
+  end
+
+  defp match_one_lhs(orig, _restated, _acc),
+    do: {:error, {:with_rematch_unsupported_parent_pattern, pattern_shape(orig)}}
+
+  defp bind_var_lhs(name, restated, acc) do
+    if valid_restated_pattern?(restated) do
+      merge_lhs_match(acc, name, restated)
+    else
+      {:error, {:with_rematch_non_constructor_pattern, pattern_shape(restated)}}
+    end
+  end
+
+  # mergeMatches: a name may be restated more than once only if consistently.
+  defp merge_lhs_match(acc, name, pat) do
+    case Map.fetch(acc, name) do
+      :error -> {:ok, Map.put(acc, name, pat)}
+      {:ok, existing} ->
+        if strip_pattern_meta(existing) == strip_pattern_meta(pat),
+          do: {:ok, acc},
+          else: {:error, {:with_rematch_inconsistent_binding, name}}
+    end
+  end
+
+  # A restated pattern must be a variable or a constructor application whose
+  # every argument is itself such a pattern. Anything else (binary ops, literal
+  # arithmetic, …) is a non-constructor expression — the deferred forced case.
+  defp valid_restated_pattern?({:variable, _, _}), do: true
+
+  defp valid_restated_pattern?({:function_call, meta, args}) do
+    constructor_name?(Keyword.get(meta, :name)) and Enum.all?(args, &valid_restated_pattern?/1)
+  end
+
+  defp valid_restated_pattern?(_), do: false
+
+  # Cure constructors are capitalised; ordinary identifiers/operators are not.
+  defp constructor_name?(name) when is_binary(name) and name != "",
+    do: String.first(name) =~ ~r/[A-Z]/
+
+  defp constructor_name?(_), do: false
+
+  # Structural equality of surface patterns, ignoring meta.
+  defp strip_pattern_meta({:variable, _, n}), do: {:variable, n}
+
+  defp strip_pattern_meta({:function_call, meta, args}),
+    do: {:function_call, Keyword.get(meta, :name), Enum.map(args, &strip_pattern_meta/1)}
+
+  defp strip_pattern_meta(other), do: other
+
   # Names for the branch's telescope binders, most-recently-bound first: surface
   # pattern variables name the present (ω) positions in order; erased positions
   # are inaccessible, given a fresh placeholder.
