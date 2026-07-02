@@ -417,7 +417,26 @@ Predicted (unconfirmed) to need no new mechanism (another computed lattice index
   uninitialised-signal escape through `switch` reject/reject. `mix cure.oracle
   frp` all `same` (or sound written `cure_stricter`).
 
-### Task B5: End-to-end BEAM acceptance — the FRP types RUN, checked-erased (new)
+### Task B5: End-to-end BEAM acceptance — the FRP types RUN, checked-erased (new) — DONE
+
+`test/cure/e2e/frp_beam_test.exs`: a 2-signal FRP slice (Dec/SVDesc/SF with
+unit/prim/seq, `observe` matching SF → Dec, `step` packaging a Σ pair) ELABORATES,
+passes the {0,ω} relevance check, ERASES, EMITS, LOADS, and RUNS on the BEAM —
+`start/0` steps a net to `:Dcoupled`, the Σ projection `.1` executing as bytecode.
+Structural zero-footprint asserted: emitted `seq` = `{seq,L,R}` (5 erased indices
+dropped), `unit`/`prim` bare atoms. Integration seam fixed (E-only): checking-mode
+Σ-intro `%[a,b]` in match arms (`elaborate_expr_checked`), previously
+`:unsupported_expression`. Full suite 2390, zero regressions. **The founding spec
+§8 promise — "descriptors zero-footprint, SF survives as tagged tuples, step
+matches at runtime, drop licensed by {0,ω}" — is now demonstrated AND executed.**
+Scope-pinned: (a) `step` returns the scrutinee unchanged; a *reconstructed*
+refined-index continuation (`match s → seq(l,r):SF(as,bs,d)`) hits a dependent-match
+completeness gap; (b) the net uses concrete `unit` because free erased descriptors
+leave index metavars unsolved (real programs carry concrete descriptors); (c) the
+multi-line `let net = … ⏎ body` form failed to elaborate (inline used) — a
+separate parser/let-elab item.
+
+- [x] **Step 1: red.** The probe program: `SVDesc`/`Sig`/`Dec` descriptors;
 
 The founding spec §8 promises: descriptors have zero runtime footprint, `SF`'s
 value-relevant structure survives as tagged tuples, `step` pattern-matches it
