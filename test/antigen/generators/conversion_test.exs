@@ -65,6 +65,13 @@ defmodule Antigen.Generators.ConversionTest do
   defp nat({:ctor, :Z, []}), do: 0
   defp nat({:ctor, :S, [n]}), do: 1 + nat(n)
 
+  test "default_gen produces both conversion polarities" do
+    cs = sample(Mix.Tasks.Antigen.default_gen(), 800)
+    rej = Enum.filter(cs, fn c -> c.kind == :mutant_term and Map.get(c.payload.fault, :witness) == :conv end)
+    acc = Enum.filter(cs, fn c -> c.kind == :typed_term and match?({:ctor, :vcons, [{:app, {:app, {:global, :plus}, _}, _}, _, _]}, c.payload.term) end)
+    assert rej != [] and acc != []
+  end
+
   defp redex?(:conv_index, {:ctor, :vcons, [n, _, _]}), do: is_plus(n)
   defp redex?(:conv_motive, {:case, _, {:lam, _, {:data, :Vec, _, [idx]}}, _}), do: is_plus(idx)
   defp is_plus({:app, {:app, {:global, :plus}, _}, _}), do: true

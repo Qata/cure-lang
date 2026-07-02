@@ -68,8 +68,9 @@ defmodule Mix.Tasks.Antigen do
   end
 
   # Explorer default: Tier-A's three known-label generators + Tier-B's three
-  # typed-term/assay-id branches, weight 1 each (six branches).
-  defp default_gen do
+  # typed-term/assay-id branches + the mutation corpus + conversion-at-depth (both
+  # polarities), weight 1 each. Public so tests can sample the wired distribution.
+  def default_gen do
     Antigen.Gen.frequency([
       {1, Antigen.Generators.Totality.gen()},
       {1, Antigen.Generators.Positivity.gen()},
@@ -77,7 +78,11 @@ defmodule Mix.Tasks.Antigen do
       {1, Antigen.Generators.Term.typed_term("term/infer_check")},
       {1, Antigen.Generators.Term.typed_term("term/subject_reduction")},
       {1, Antigen.Generators.Term.typed_term("term/normalization")},
-      {1, Antigen.Generators.Mutation.mutant()}
+      {1, Antigen.Generators.Mutation.mutant()},
+      {1, Antigen.Generators.Conversion.conv_reject()},
+      {1, Antigen.Generators.Conversion.conv_accept("term/infer_check")},
+      {1, Antigen.Generators.Conversion.conv_accept("term/subject_reduction")},
+      {1, Antigen.Generators.Conversion.conv_accept("term/normalization")}
     ])
   end
 
