@@ -2450,6 +2450,17 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Pair introduction `%[a, b]` in the scope-based term builder (function
+  # arguments and other sub-terms). Emits the Core `{:pair, …}`; its Σ type is
+  # derived by `Kernel.infer` on the enclosing application, which checks the pair
+  # against the callee's domain (so a dependent Σ parameter is honoured too).
+  def elaborate_expr({:tuple, _meta, [a, b]}, scope, env) do
+    with {:ok, a_core} <- elaborate_expr(a, scope, env),
+         {:ok, b_core} <- elaborate_expr(b, scope, env) do
+      {:ok, {:pair, a_core, b_core}}
+    end
+  end
+
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
 
   # A free name is a nullary constructor, a global definition, or (fallback) a global ref.
