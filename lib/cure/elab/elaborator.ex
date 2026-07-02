@@ -169,6 +169,27 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Dependent-pair introduction `%[a, b]` in checking mode. The expected type must
+  # be a Σ; elaborate `a` against its domain, then `b` against the codomain
+  # instantiated at `a` (so a component like `prim()` gets its erased indices from
+  # the expected `SF(as, bs, d)`, not left as unsolved metavariables). The kernel
+  # re-checks the assembled `{:pair, …}`.
+  def elaborate_expr_checked({:tuple, _meta, [a_ast, b_ast]} = expr, expected_core, names, ctx, env) do
+    case Kernel.normalize(ctx, expected_core) do
+      {:sigma, dom, cod} ->
+        with {:ok, a_term} <- elaborate_expr_checked(a_ast, dom, names, ctx, env),
+             cod_inst = Subst.instantiate(cod, [a_term]),
+             {:ok, b_term} <- elaborate_expr_checked(b_ast, cod_inst, names, ctx, env),
+             term = {:pair, a_term, b_term},
+             :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+          {:ok, term}
+        end
+
+      _ ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+    end
+  end
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
 
@@ -1374,6 +1395,14 @@ defmodule Cure.Elab.Elaborator do
       with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
     end
   end
+
+  # A pair `%[a, b]` (dependent-pair introduction) as a branch body: a
+  # checking-mode expression against this branch's (index-refined) Σ type — the
+  # expected type pins the components' erased indices (an FRP `step`'s `prim()`
+  # continuation has no other way to solve its index metas). Without this a
+  # Σ-returning eliminator fails its arms with `:unsupported_expression`.
+  defp elaborate_branch_body({:tuple, _meta, [_a, _b]} = expr, expected, names, ctx, env),
+    do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
   defp elaborate_branch_body(expr, _expected, names, ctx, env) do
     with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
