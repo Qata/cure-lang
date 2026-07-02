@@ -216,18 +216,33 @@ metamorphic transforms; assay `run/1 :: :ok | {:violation, term}`).
 - [ ] **Step 4:** full Antigen suite once. Commit
   `feat(antigen): elab/erasure vertical — two-sided relevance-check pin`.
 
-### Task A5: Kernel trust-marker hardening (TCB; HARD-STOP gate) — IMPLEMENTED, verification in flight
+### Task A5: Kernel trust-marker hardening (TCB; HARD-STOP gate) — DONE, verified SOUND (operator review at merge)
 
-Implemented (committed as one reviewed unit, HEAD): `Term.closed?/1` (free-var
-scan mirroring `Term.shift`'s binder structure; holes/leaves closed) + unfold-site
-guard in `normalise.ex` (non-closed certified body → `:stuck`, robust vs.
-raw-struct forgery) + `Env.certify/2` raises on an open body. Prior art re-checked
-(Lean: no mutable cert marker; Idris: totality flags post-verification). Red-green
-in `certify_hardening_test.exs` (open body leaked `{:var,-4}` pre-fix); full suite
-2376, zero regressions. **PENDING:** independent adversarial verifier (dispatched,
-background — attacking `closed?` binder-completeness); Antigen antibody in the
-certificate family; operator review at merge. Do NOT seal until the verifier
-returns SOUND.
+Implemented: `Term.closed?/1` (free-var scan mirroring `Term.shift`'s binder
+structure; holes/leaves closed) + unfold-site guard in `normalise.ex` (non-closed
+certified body → `:stuck`, robust vs. raw-struct forgery) + `Env.certify/2` raises
+on an open body. Prior art re-checked from source (Lean `WHNF.lean`: no mutable
+cert marker, unfolds only env-checked decls; Idris `Termination.idr`/`setTotality`:
+totality flags post-verification) — Cure's invariant matches both and adds the
+unfold-site re-check as defense-in-depth.
+
+- Red-green in `certify_hardening_test.exs` (open body leaked `{:var,-4}` pre-fix).
+- Full suite 2376, zero regressions; Antigen 184.
+- Antibody `test/antigen/certify_hardening_antibody_test.exs` (forged/open-cert,
+  the marker itself — unreachable by `sig_menu`'s legit path).
+- **Independent adversarial verification: SOUND** (agent a6a8d2221b76f498c). Key
+  result: `has_free_var?` is binder-EXACT against both `shift/3` AND `eval/2` (the
+  real capture surface), clause-by-clause — no false-negative possible, so
+  `closed?(t) ⟹ eval(t,[])` yields no free-var neutral. Only one δ-eval-in-empty-
+  env site (guarded); forgery backstop confirmed end-to-end.
+- **Reach-pinned benign completeness nit (never unsound):** `has_free_var?` scans a
+  `:rewrite`'s proof/motive though `eval` DROPS them (eval.ex:63), so a body whose
+  only free var lives in a dropped proof/motive is deemed open → a missed δ-unfold.
+  Completeness-only; not fixed here (would re-open the TCB for an edge case). If a
+  real program ever hits it, align `closed?` with `eval` (skip rewrite proof/motive)
+  under its own TCB gate.
+
+HARD STOP for merge: operator reviews commits `fix(kernel)…` + antibody. Not merged.
 
 The two PRE-EXISTING exposures flagged out-of-scope by the Phase-4a adversarial
 verification (a9962257), now brought in scope:
@@ -306,11 +321,11 @@ plus capture/shadow/duplicate-name guards and erased-quantity interaction).
 - [x] **Step 3 — DONE.** Verdict sealed in the lean-shape plan's Phase 2½ section
   (final checkbox now `[x]`, SOUND) and here; docs committed.
 
-**Track A gate:** A1–A4 green (relevance check live, two-sided vertical
-healthy, seams pinned); A5's TCB gate fully green incl. independent
-verification; A6 dispositioned; full suite once, alone, zero regressions.
-After this gate the sentence "erasure is licensed by the `{0,ω}` check" in the
-founding spec §8 is TRUE for the first time.
+**Track A gate: PASSED ✅.** A1–A4 green (relevance check live, two-sided vertical
+healthy, seams pinned); A5's TCB gate fully green incl. independent verification
+(SOUND); A6 dispositioned (SOUND); full suite 2376 once, alone, zero regressions.
+The sentence "erasure is licensed by the `{0,ω}` check" in the founding spec §8 is
+now TRUE for the first time. **Track A complete — proceeding to Track B.**
 
 ---
 
