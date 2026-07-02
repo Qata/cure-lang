@@ -66,12 +66,17 @@ MUST satisfy both clauses:
 > goals. Never into a motive, a type-annotation-only slot, or any position the
 > typechecker does not force.
 >
-> **(b) Decidably non-convertible replacement.** The injected term's type must
-> differ from the expected type at the site by a *decidable* witness: either a
-> **distinct type-former head** (Nat / Vec / Bd / Pi / Sigma / Type are pairwise
-> non-convertible) or, within one family, a **distinct closed index** (expected
-> `Vec Z`, inject `Vec (S Z)` — non-convertible because `Z` and `S _` are distinct
-> constructors), or a **distinct universe level** (`Type₀ : Type₁ ≠ Type₀`).
+> **(b) Decidably non-convertible replacement — OR decidably out-of-scope.**
+> Either: the injected term's type must differ from the expected type at the
+> site by a *decidable* witness — a **distinct type-former head** (Nat / Vec /
+> Bd / Pi / Sigma / Type are pairwise non-convertible), or, within one family, a
+> **distinct closed index** (expected `Vec Z`, inject `Vec (S Z)` —
+> non-convertible because `Z` and `S _` are distinct constructors), or a
+> **distinct universe level** (`Type₀ : Type₁ ≠ Type₀`). Or (operator 5 only,
+> which has no expected/injected type to compare): the injected `{:var, k}`'s
+> index is **decidably out of scope** — `k ≥ |Γ|` at the site, checked purely
+> from the recorded context length. This is the fourth witness value in the
+> `fault.witness` enum (§4): `:scope`.
 
 **Why (a) is sound for Cure specifically.** Cure's typechecker checks *all* term
 positions — erasure is a runtime/compilation concern, not a typechecking one
@@ -80,17 +85,19 @@ regardless of whether the bound variable is used). So a fault in a genuine term
 position propagates to a top-level `infer`/`check` error in a correct kernel:
 "the kernel should reject this" is a theorem, not a hope.
 
-**Why (b) is sound.** All witnesses are *decidable syntactic* inequalities on
-normal forms (distinct head constructors / distinct closed index ctors / distinct
-levels), so no appeal to the kernel-under-test is needed to know the mutant is
-ill-typed. This rules out the failure mode where a "mutation" accidentally lands
-on a still-well-typed term and produces a **false** antibody.
+**Why (b) is sound.** The type-comparison witnesses are *decidable syntactic*
+inequalities on normal forms (distinct head constructors / distinct closed index
+ctors / distinct levels); the scope witness is a *decidable arithmetic* fact
+(`k ≥ |Γ|`, read off the recorded context length). Neither needs an appeal to the
+kernel-under-test to know the mutant is ill-typed. This rules out the failure
+mode where a "mutation" accidentally lands on a still-well-typed term and
+produces a **false** antibody.
 
 **Guard.** A meta-test (see §7) asserts the invariant reflexively for the
 generator: it re-derives, for every operator, that `expected_head ≠ injected_head`
-(or the index/level witness) using ONLY the recorded `fault` provenance and menu
-metadata — never by calling the kernel — so the "known ill-typed" label is proven
-independently of the thing under test.
+(or the index/level/scope witness) using ONLY the recorded `fault` provenance and
+menu metadata — never by calling the kernel — so the "known ill-typed" label is
+proven independently of the thing under test.
 
 ---
 
@@ -107,14 +114,30 @@ independently of the thing under test.
   %{
     sig: :v1,
     ctx: [type, ...],           # rebuilt via SigMenu.rebuild_context/2
-    type: goal_type,            # the goal at the injection site's ROOT term
+    type: goal_type,            # the CHALLENGE-level goal `gen_mutant` was asked to
+                                 # inhabit before injection (same convention as
+                                 # `:typed_term`'s `type` — NOT the local goal in force
+                                 # at the injection site, which may differ once the
+                                 # fault has replaced part of the tree). Unused by
+                                 # `Assays.Mutation.run/1` itself (§6.1); carried for
+                                 # `Coverage.terms_of` parity and debugging only.
     term: mutant_term,          # the ill-typed Core term
     fault: %{
       kind: :head_swap | :ctor_arg | :index_mismatch | :app_domain
           | :out_of_scope_var | :proj_non_pair | :universe,
-      expected_head: atom,      # e.g. :Nat / :Vec / :Sigma / {:type, 0}
-      injected_head: atom,      # e.g. :Vec / :Bd / :not_a_pair / {:type, 0}
-      witness: :head | :index | :level | :scope   # which invariant-(b) clause
+      expected_head: atom | nil, # e.g. :Nat / :Vec / :Sigma / {:type, 0}; `nil` for
+                                 # operator 5 (:out_of_scope_var), which has no
+                                 # expected/injected type to name — its witness is
+                                 # the scope arithmetic below, not a head/index/level
+      injected_head: atom | nil,# e.g. :Vec / :Bd / :not_a_pair / {:type, 0}; `nil`
+                                 # for operator 5, same reason
+      witness: :head | :index | :level | :scope,  # which invariant-(b) clause
+      scope: {non_neg_integer(), non_neg_integer()} | nil
+                                 # `{k, gamma_len}` at the site iff witness == :scope
+                                 # (a plain 2-tuple, deliberately not a keyed map — it
+                                 # carries no new atoms to intern); `nil` for the other
+                                 # 6 operators. The k >= gamma_len check the
+                                 # invariant-(b) meta-test (§7.2) re-derives.
     }
   }
   ```
@@ -142,7 +165,7 @@ is construction-guaranteed by §3.
 | 4 | `:app_domain` | `f a` where `f : Nat→Nat`, emit `a : Vec` | app sites | Π-domain mismatch |
 | 5 | `:out_of_scope_var` | `{:var, k}` with `k ≥ length(Γ)` | any site | `{:error, {:unbound_var, _}}` |
 | 6 | `:proj_non_pair` | `{:fst, e}` / `{:snd, e}` with `e : Nat` | any site (standalone) | `{:error, :not_a_sigma}` |
-| 7 | `:universe` | at a `{:type, 0}` goal, emit `{:type, j}` (j ≥ 0) → `Type₀ : Type₀` | sort goals | universe / stratification |
+| 7 | `:universe` | at a `{:type, 0}` goal, emit `{:type, j}` for `0 ≤ j < Universe.ceiling()` (currently `j ∈ {0, 1}`) → `Type_(j+1) ⋠ Type₀` | sort goals | universe / stratification |
 
 Notes:
 - **Operator 3** is the dependent-type fault surface — a kernel sloppy about index
@@ -154,16 +177,28 @@ Notes:
 - **Operator 7** fires only at sort goals, so `gen_mutant` adds `{:type, 0}` to its
   goal space (the well-typed generator deliberately omits it — see the Tier-B
   goal-space note). This exercises the actual universe rule rather than a generic
-  conv-mismatch.
-- **Applicability is site-dependent** (universe → sort goals; index-mismatch →
-  Vec goals; head-swap/out-of-scope/projection → any site). Operator selection
-  weights across the *applicable* set at the chosen site; weights are tuned so no
-  single operator dominates (enforced by the §6 diversity floor).
+  conv-mismatch. `j` is deliberately capped below `Universe.ceiling()` (2, per
+  `lib/cure/core/universe.ex`): for `j ≥ ceiling()`, `Universe.succ(j)` itself
+  errors (`{:error, :universe_ceiling}`) before any goal comparison runs, which
+  would still correctly reject the mutant but through the unrelated ceiling
+  check rather than the cumulativity/stratification check
+  (`Universe.le?/2`) this operator exists to probe.
+- **Applicability is site-dependent.** Four operators are conditionally
+  restricted: universe → sort goals only (needs the added `{:type, 0}` goal);
+  index-mismatch → Vec goals only; ctor-arg → vcons sites only (an S-indexed Vec
+  goal within budget); app-domain → app sites only (`app_rule` itself only fires
+  at a Nat goal, `lib/antigen/generators/term.ex`). The other three —
+  head-swap, out-of-scope-var, projection — apply at any site. Operator
+  selection weights across the *applicable* set at the chosen site; weights are
+  tuned so no single operator dominates (enforced by the §6 diversity floor).
 
 **Generation totality.** If no operator is applicable at the drawn site (or the
 draw would produce a degenerate mutant), `gen_mutant` re-draws a different site;
 bounded by a fixed attempt budget, after which it falls back to operator 5
-(out-of-scope var), which is applicable at any non-empty position. This guarantees
+(out-of-scope var), which is applicable at **any** position — including one whose
+local Γ is empty (`Context.lookup/2` is `Enum.at(ts, k)`, which safely returns
+`nil`, i.e. "unbound," for any out-of-range `k`; at depth 0, `{:var, 0}` is
+already out of scope, no non-empty precondition needed). This guarantees
 `gen_mutant` always yields a well-formed `:mutant_term` challenge.
 
 ---
@@ -181,11 +216,18 @@ run(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, term: term}}):
 ```
 
 Rationale: `infer` is the strongest gate (a term the kernel cannot even infer a
-type for is soundly rejected). We use `infer` rather than `check` because the
-mutant's root goal may itself be synthetic; `infer` needs no expected type and
-its `{:error, _}` is the unambiguous "rejected" signal. (A mutant that infers a
-type but that type is "wrong" is not possible under §3(b): a decidably
-non-convertible fault forces the inference itself to fail at the faulted node.)
+type for is soundly rejected). We use `infer` rather than `check(ctx, term,
+type)` because `type` (§4) is only generation's *directive* — the goal
+`gen_mutant` set out to inhabit before injecting a fault — never a proven
+property of the mutant (which by construction is ill-typed and, once faulted,
+provably does not have that type). Checking against it would frame a
+known-ill-typed term as if it were being tested against a claimed type, which is
+the wrong shape of question; `infer` needs no expected type at all and its
+`{:error, _}` is the unambiguous "rejected" signal on its own terms. (A mutant
+that infers a type but that type is "wrong" is not possible under §3(b): a
+decidably non-convertible or out-of-scope fault forces the inference itself to
+fail at the faulted node, and that failure propagates to the top-level `infer`
+call by §3(a)'s checked-position argument.)
 
 A **correct rejection returns `:ok`** — so under replay, banked mutants act as a
 regression guard that the kernel *stays* appropriately strict (catching a future
@@ -201,14 +243,22 @@ Tier-B health gate:
 - **Metric — `reason_diversity`:** the count of **distinct `fault.kind` values that
   were correctly rejected** over the `:mutant_term` subset. Bucketing on
   `fault.kind` (recorded provenance) rather than on the raw kernel `{:error,
-  reason}` tag is deliberate: operators 1–3 all bottom out in the kernel's
-  conversion-mismatch reason, so raw-tag bucketing would undercount them as one
-  path. `fault.kind` distinguishes the exercised rejection *surfaces* correctly.
-  (The raw kernel reason still rides along in the antibody for debugging.)
+  reason}` tag is deliberate: several operators can bottom out in the *same*
+  raw kernel reason even though they exercise different rejection surfaces —
+  e.g. any cross-family swap (operators 1, 2, 4: Nat↔Vec/Bd) whose witness is
+  constructor-headed hits `check/3`'s `{:ctor, cname, args}` clause
+  (`lib/cure/core/kernel.ex`), which reports `{:error, {:foreign_ctor, cname}}`
+  *before* any general conversion comparison runs — collapsing three distinct
+  fault sites onto one raw tag, distinct from operator 3's genuine
+  same-family index-conversion failure. Raw-tag bucketing would therefore
+  undercount real diversity (the exact collision depends on witness
+  construction and isn't pinned down further here); `fault.kind` distinguishes
+  the exercised rejection *surfaces* correctly regardless. (The raw kernel
+  reason still rides along in the antibody for debugging.)
 - **Floor:** `reason_diversity ≥ 5` (of the 7 operator kinds). Chosen below 7 so a
-  run that happens not to draw a couple of the site-restricted operators
-  (universe/index need specific goals) is not spuriously flagged, while still
-  forcing broad coverage.
+  run that happens not to draw one or two of the four site-restricted operators
+  (universe, index-mismatch, ctor-arg, app-domain — §5's applicability note) is
+  not spuriously flagged, while still forcing broad coverage.
 - **Also reported:** `survivors` (violation count; expected 0) and
   `mutants_total`. The **stamp measures vacuity only**, so it is a pure function
   of diversity: `:healthy` when `reason_diversity ≥ 5`, else `:vacuous`.
@@ -234,9 +284,12 @@ Red-green per plan step. The behavioral test families:
    would surface it as a genuine failure — which is the whole point; it is not
    masked.)
 2. **Invariant-(b) meta-test (kernel-independent)** — for every operator, assert
-   `expected_head ≠ injected_head` (or the index/level witness) using ONLY the
-   `fault` provenance + menu metadata, NEVER the kernel. Proves the "ill-typed"
-   label is warranted without trusting the thing under test (§3 guard).
+   the witness the `fault` record claims: `expected_head ≠ injected_head` for a
+   `:head` witness, the closed-index inequality for `:index`, the level
+   inequality for `:level`, or (operator 5 only) `k ≥ |Γ|` for `:scope` — using
+   ONLY the `fault` provenance + menu metadata, NEVER the kernel. Proves the
+   "ill-typed" label is warranted without trusting the thing under test (§3
+   guard).
 3. **Assay polarity** — `Assays.Mutation.run/1` returns `:ok` on a correctly
    rejected mutant and `{:violation, {:accepted_ill_typed, _, _}}` on a synthetic
    "kernel accepted" stub (inject a fake `{:ok, _}` via a seam) — proving the
@@ -270,9 +323,22 @@ New/changed files:
 - **Create** `lib/antigen/assays/mutation.ex` — `Antigen.Assays.Mutation` (§6.1),
   with the `:ok`-injection seam for test #3.
 - **Modify** `lib/antigen/challenge.ex` — `:mutant_term` in `@type kind`,
-  `@known_atoms` additions (`:mutant_term, :ill_typed, :head_swap, :ctor_arg,
-  :index_mismatch, :app_domain, :out_of_scope_var, :proj_non_pair, :universe,
-  :fst, :snd, :pair, :sigma`), `to_pieces`/`from_pieces` clauses.
+  `@known_atoms` additions, `to_pieces`/`from_pieces` clauses. The `fault` map
+  is non-`Term` metadata, so it rides in the `scaffold=` field (`decode_scaffold`
+  → `:erlang.binary_to_term(_, [:safe])`), which mints no new atoms — every atom
+  that can appear inside `fault` must already be interned. The atoms that
+  genuinely need adding: `:mutant_term` (new kind), `:head_swap, :ctor_arg,
+  :index_mismatch, :app_domain, :out_of_scope_var, :proj_non_pair, :universe`
+  (fault kinds), `:Sigma` (operator 6's `expected_head` — `:Nat`/`:Vec`/`:Bd` are
+  already interned via the `:typed_term` vertical, but `:Sigma` appears nowhere
+  else in the codebase today), and `:head, :index, :level, :scope` (the
+  `fault.witness` enum). `:ill_typed` needs **no** addition — it is already
+  present in `@known_atoms` (interned by the `:indexed_case` vertical). `:fst,
+  :snd, :pair, :sigma` need **no** addition either — `Cure.Core.Serialize`
+  hardcodes them as literal atoms in its own encoder/decoder
+  (`lib/cure/core/serialize.ex`), so they're already safely interned by the time
+  that module loads and are never reconstructed via `String.to_existing_atom`
+  in `Challenge`'s decode path.
 - **Modify** `lib/antigen/coverage.ex` — `terms_of(%Challenge{kind: :mutant_term})`.
 - **Modify** `lib/antigen/runner.ex` — assay registry
   (`mutation/rejection → Assays.Mutation`), the `mutant_term` diversity metric +
