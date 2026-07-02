@@ -61,11 +61,11 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 16 | Totality — coverage | Surface exhaustiveness diagnostics accounting for discharged/impossible branches | E | additive | 🔵 ④ |
 | 17 | Totality — coverage | Coverage over nested patterns | E | additive | ⬜ (needs #3) |
 | 18 | Positivity | Strict positivity checker + vertical | K/E, A | — | ✅ |
-| 19 | Positivity | Confirm + bank nested / through-constructor / negative-position (arrow-left) positivity | K/E, A | verify + additive | ⬜ |
+| 19 | Positivity | Confirm + bank nested / through-constructor / negative-position (arrow-left) positivity | K/E, A | verify + additive | ✅ (W4: audited, holes fixed, antibodies banked) |
 | 20 | Universes | Cumulative universes, no `Type:Type`, two-universe constructor-field rule | K | — | ✅ |
 | 21 | Assurance (meta) | Known-label regression net across all verticals | A | — | ✅ |
 | 22 | Assurance (meta) | **Term-generator metatheory engine** (StreamData-backed corpus, known-label totality) — turns the net into soundness *evidence* | A | additive | ⬜ (designed) |
-| 23 | Assurance (meta) | Missing per-rule antibodies: occurs-check/cycle and deletion rule | A | additive | ⬜ |
+| 23 | Assurance (meta) | Missing per-rule antibodies: occurs-check/cycle and deletion rule | A | additive | ✅ (W3: deletion antibody + occurs pin) |
 | 24 | Assurance (meta) | Wire a forced/dot-pattern (`forcing`) Antigen vertical once #5 exists | A | additive | ⬜ (needs #5) |
 | 25 | Assurance (meta) | Surface-level `.cure` regression corpus for the ④ features | A | additive | ⬜ (post-④) |
 
@@ -91,12 +91,13 @@ kernel is sound."
 | Vertical | Soundness property it proves | Challenges banked (well/ill) | Strength |
 |---|---|---|---|
 | `stub` | harness self-test (planted `{:global,:boom}`) | 1 planted infection | meta only |
-| `totality/terminating` | structural-recursive defs accepted | `structural_terminating` | partial |
+| `totality/terminating` | structural-recursive defs accepted | `structural_terminating` + W2 reach pins (reach.sexp, P1 targets) | partial |
 | `totality/diverging` | non-terminating defs rejected | `diverging_mutual_pair` + W1 adversarial set | solid (hole fixed `d13d718`; antibodies = permanent regression guards) |
 | `positivity` | strict positivity of datatypes | positivity gen challenges + W4 escape hatches (arrow-left, double-negation, sigma-hidden, through-constructor) | strong (deep walk; double-negation already rejected; sigma-hidden + through-constructor were live holes, found and fixed D4 red-green in `6148aff`) |
 | `reflexivity` (+`forcing` gen) | conversion/normalization halts (refl ≡ deep-norm; `Conv.conv_within?`, fixed 500-unfold fuel) | `forcing_pair` | solid |
 | `indexed/case` | dependent-case soundness | `branch_family`, `coverage`, `refinement`, `motive_wf`, `discharge`, `injectivity` | strong |
 | `rewrite/eq` | propositional equality | `eq_formation`, `refl_typing`, `rewrite_premise`, `transport_type` | strong |
+| `universes` | fixed hierarchy: no Type-in-Type, ceiling, cumulativity, two-universe ctor-field rule | `type_in_type`, `ceiling`, `cumulativity`, `stratification`, `ctor_field` | strong |
 
 Note: the `forcing` generator is **not** an unwired dot-pattern stub — it feeds
 the `reflexivity`-as-normalization assay. Row 24 (a *forced/dot-pattern*
@@ -107,14 +108,14 @@ vertical) is separate future work that reuses the name only loosely.
 | # | Expansion | Type | What it closes | Layer | Priority |
 |---|---|---|---|---|---|
 | A1 | Fix mutual-recursion termination so `diverging_mutual_pair` replays `:ok` | turn hole green | the one live soundness infection (ledger #13) | E + A | ✅ done (`d13d718`; antibody replays `:ok`) |
-| A2 | Bank occurs-check/cycle + deletion-rule antibodies in `indexed/case` | coverage fill | kernel has both rules, neither has a named antibody (ledger #23) | A | high (cheap) |
-| A3 | Bank nested / through-constructor / negative-position positivity antibodies | coverage fill | classic positivity escape hatches (ledger #19) | A | high (cheap) |
-| A4 | New `universes` vertical: reject `Type:Type`, prove cumulativity sound, reject two-universe ctor-field violation | new vertical | kernel enforces universes but nothing tests them (ledger #20 has zero Antigen coverage) | A | high |
+| A2 | Bank occurs-check/cycle + deletion-rule antibodies in `indexed/case` | coverage fill | kernel has both rules, neither has a named antibody (ledger #23) | A | ✅ done (deletion antibody + occurs pin banked; TCB gap in `Term` fixed en route, `360402b`) |
+| A3 | Bank nested / through-constructor / negative-position positivity antibodies | coverage fill | classic positivity escape hatches (ledger #19) | A | ✅ done (three escape hatches banked; sigma-hidden + through-constructor holes found+fixed per W4 audit, `6148aff`) |
+| A4 | New `universes` vertical: reject `Type:Type`, prove cumulativity sound, reject two-universe ctor-field violation | new vertical | kernel enforces universes but nothing tests them (ledger #20 has zero Antigen coverage) | A | ✅ done (universes vertical banked) |
 | A5 | New `conversion`/def-eq vertical: distinct normal forms never judged equal (β/η soundness), complementing `reflexivity`'s halting check | new vertical | NbE `Conv` soundness only half-covered | A | medium |
 | A6 | New `ctor-formation` vertical (or extend `indexed`): result-index shape, param uniformity, telescope well-formedness in `check_ctor` | new vertical | datatype *formation* rules under-tested | A | medium |
 | A7 | New surface `.cure` vertical: elaborate through `Cure.Elab.Program` to prove ④'s `missing_branch`/`reachable_impossible`/impossible-clause behavior | new vertical | ④ currently slated for a plain regression corpus, not Antigen (ledger #25) | A + E | medium (post-④) |
 | A8 | **Term-generator metatheory engine** — StreamData-backed generated corpus w/ known-label totality, swappable backend | architectural | turns every vertical from regression net into soundness *evidence* (ledger #22) | A | 🔵 biggest leverage (designed) |
-| A9 | Broaden mutual-recursion challenges beyond one pair (longer cycles, indirect, guarded vs unguarded) | coverage fill | depth behind A1 | A | low (after A1) |
+| A9 | Broaden mutual-recursion challenges beyond one pair (longer cycles, indirect, guarded vs unguarded) | coverage fill | depth behind A1 | A | ✅ done (subsumed by W1 adversarial set) |
 | A10 | Wire per-vertical generators into A8's generated stream once the engine lands | integration | makes A8 actually cover the verticals | A | follows A8 |
 
 ### 3.3 Shape of the Antigen work
