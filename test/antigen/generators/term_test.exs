@@ -42,4 +42,37 @@ defmodule Antigen.Generators.TermTest do
     assert Enum.all?(ts, &(&1 in [SigMenu.nat(), SigMenu.bd(), SigMenu.vec({:ctor, :Z, []})]))
     for t <- ts, do: assert {:ok, _} = Kernel.infer(ctx, t)
   end
+
+  test "generated terms exercise eliminations and firing redexes" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    ts = for goal <- SigMenu.goal_types(),
+             t <- sample(Term.gen_term(ctx, goal), 80), do: t
+
+    # every term still checks (soundness across the full rule set)
+    for t <- ts do
+      {:ok, ty} = Kernel.infer(ctx, t)
+      assert Kernel.check(ctx, t, ty) == :ok
+    end
+
+    # at least some terms contain an elimination and some fire a redex
+    assert Enum.any?(ts, &contains_tag?(&1, :app))
+    assert Enum.any?(ts, &contains_tag?(&1, :case))
+    assert Enum.any?(ts, fn t -> Kernel.normalize(ctx, t) != t end)
+  end
+
+  test "a stuck-indexed Vec goal is satisfied from the context (elimination path)" do
+    env = SigMenu.env_of(:v1)
+    ctx = SigMenu.rebuild_context(env, [SigMenu.vec({:var, 0}), SigMenu.nat()])
+    goal = SigMenu.vec({:var, 1})
+    for t <- sample(Term.gen_term(ctx, goal), 40) do
+      assert {:ok, _} = Kernel.infer(ctx, t)
+    end
+  end
+
+  defp contains_tag?(t, tag) when is_tuple(t) do
+    (elem(t, 0) == tag) or (t |> Tuple.to_list() |> tl() |> Enum.any?(&contains_tag?(&1, tag)))
+  end
+  defp contains_tag?(l, tag) when is_list(l), do: Enum.any?(l, &contains_tag?(&1, tag))
+  defp contains_tag?(_, _), do: false
 end

@@ -13,15 +13,27 @@ defmodule Antigen.Generators.Term do
   @gen_fuel 500
   def gen_fuel, do: @gen_fuel
 
+  # The `Antigen.Gen` DSL builds `frequency` branches EAGERLY, so `gen/3`
+  # constructs its whole generator tree before StreamData samples it — a tree
+  # whose size is exponential in the recursion depth. StreamData's `sized` feeds
+  # sizes up to the sample count (~80), which would make that eager tree
+  # astronomically large. Cap the effective size to a small constant: this keeps
+  # the v1 fragment small (spec §11 "small v1 fragment keeps shrink chains
+  # short") and bounds both tree construction and the per-node kernel calls in
+  # `accept_infer?`. Size 3 still lets `app`/`case`/INDIR (all gated on size > 1)
+  # fire with room for one further nested subgoal.
+  @max_size 3
+  def max_size, do: @max_size
+
   @spec gen_term(Context.t(), Cure.Core.Term.t()) :: Gen.t()
-  def gen_term(ctx, goal), do: Gen.sized(fn size -> gen(ctx, goal, size) end)
+  def gen_term(ctx, goal), do: Gen.sized(fn size -> gen(ctx, goal, min(size, @max_size)) end)
 
   # size 0 → canonical inhabitant (total, no search).
   defp gen(ctx, goal, 0), do: Gen.return(SigMenu.canon(ctx, goal))
 
   defp gen(ctx, goal, size) do
     wgoal = whnf(ctx, goal)
-    rules = intro_rules(ctx, goal, wgoal, size)
+    rules = intro_rules(ctx, goal, wgoal, size) ++ elim_rules(ctx, goal, size)
 
     case rules do
       [] -> Gen.return(SigMenu.canon(ctx, goal))
@@ -106,6 +118,174 @@ defmodule Antigen.Generators.Term do
       {2, Gen.bind(gen_nat(size - 1), fn n -> Gen.return({:ctor, :S, [n]}) end)}
     ])
   end
+
+  # -- infer-mode eliminations (available at every goal) ----------------------
+  # Each elimination builds a term whose inferred type must convert with `goal`
+  # under @gen_fuel; candidates that don't converge are simply not offered.
+  defp elim_rules(ctx, goal, size) do
+    var_rules(ctx, goal) ++
+      indir_rules(ctx, goal, size) ++
+      app_rule(ctx, goal, size) ++
+      case_rule(ctx, goal, size) ++
+      proj_rules(ctx, goal)
+  end
+
+  # Context variables whose type converts with the goal.
+  defp var_rules(ctx, goal) do
+    depth = Context.length(ctx)
+
+    for k <- (if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))),
+        accept_infer?(ctx, {:var, k}, goal) do
+      {3, Gen.return({:var, k})}
+    end
+  end
+
+  # INDIR: saturate a certified-def head into the goal. v1 heads: plus/2, dbl/1.
+  # We generate all arguments at their (dependent) domain types, then accept iff
+  # the saturated application's inferred type converges with the goal.
+  defp indir_rules(ctx, goal, size) when size > 1 do
+    Enum.flat_map([:plus, :dbl], fn head ->
+      saturate(ctx, {:global, head}, def_type(ctx, head), goal, size)
+    end)
+  end
+
+  defp indir_rules(_ctx, _goal, _size), do: []
+
+  # Plain application (manufactures β-redexes INDIR cannot): apply a freshly
+  # generated lambda. Only offered at Nat/Bd goals in v1 (non-dependent codomain).
+  defp app_rule(ctx, goal, size) when size > 1 do
+    case whnf(ctx, goal) do
+      {:data, fam, _, _} when fam in [:Nat, :Bd] ->
+        dom = SigMenu.nat()
+        body_ctx = Context.extend(ctx, Eval.eval(dom, Context.env(ctx)))
+        [{2,
+          Gen.bind(gen(body_ctx, shift_goal(goal), size - 1), fn body ->
+            Gen.bind(gen(ctx, dom, size - 1), fn arg ->
+              Gen.return({:app, {:lam, dom, body}, arg})
+            end)
+          end)}]
+      _ -> []
+    end
+  end
+  defp app_rule(_ctx, _goal, _size), do: []
+
+  # case on a menu family scrutinee (Nat or Bd), constant motive λ_. goal.
+  # Gated on the goal's (whnf'd) shape, mirroring `app_rule`: spec §6.1's
+  # `Type 0` row is deliberately narrower than the full elimination menu
+  # (var/INDIR only) — WITHOUT this guard, `case` would still typecheck at a
+  # `{:type, _}` goal, silently broadening the generator past what the rule
+  # table documents and making Task 3's Type-0-goal test unreliable.
+  defp case_rule(ctx, goal, size) when size > 1 do
+    case whnf(ctx, goal) do
+      {:type, _} ->
+        []
+
+      _ ->
+        Enum.flat_map([{:Nat, [:Z, :S]}, {:Bd, [:T, :F]}], fn {fam, _ctors} ->
+          scrut_ty = {:data, fam, [], []}
+          motive = {:lam, scrut_ty, shift_goal(goal)}
+          [{2,
+            Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
+              Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
+                Gen.return({:case, scrut, motive, brs})
+              end)
+            end)}]
+        end)
+    end
+  end
+  defp case_rule(_ctx, _goal, _size), do: []
+
+  # fst/snd of a Γ-variable of Sigma type whose relevant component meets the goal.
+  defp proj_rules(ctx, goal) do
+    depth = Context.length(ctx)
+
+    Enum.flat_map((if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))), fn k ->
+      case whnf(ctx, Normalise.quote(Context.lookup(ctx, k), depth)) do
+        {:sigma, _a, _b} ->
+          fst_r = if accept_infer?(ctx, {:fst, {:var, k}}, goal), do: [{2, Gen.return({:fst, {:var, k}})}], else: []
+          snd_r = if accept_infer?(ctx, {:snd, {:var, k}}, goal), do: [{2, Gen.return({:snd, {:var, k}})}], else: []
+          fst_r ++ snd_r
+        _ -> []
+      end
+    end)
+  end
+
+  # Saturate `head : head_ty` (a Π-telescope) with generated args, accepting only
+  # if the result's inferred type converges with `goal`. Args are generated at
+  # each domain with earlier args substituted (via the closure env) into later
+  # domains — the dependent-generation core (spec §6.2).
+  defp saturate(ctx, head_term, head_ty, goal, size) do
+    args_gen = gen_args(ctx, head_ty, size, [])
+
+    [{2,
+      Gen.bind(args_gen, fn args ->
+        term = Enum.reduce(args, head_term, fn a, acc -> {:app, acc, a} end)
+        if accept_infer?(ctx, term, goal), do: Gen.return(term), else: Gen.return(SigMenu.canon(ctx, goal))
+      end)}]
+  end
+
+  # Walk a Π-telescope, generating each domain argument.
+  defp gen_args(ctx, ty, size, acc) do
+    case whnf(ctx, ty) do
+      {:pi, dom, cod} ->
+        Gen.bind(gen(ctx, dom, size - 1), fn a ->
+          # substitute `a` into `cod` by evaluating cod's closure with a's value
+          cod_ctx_ty = subst_cod(cod, a, ctx)
+          gen_args(ctx, cod_ctx_ty, size, [a | acc])
+        end)
+      _ -> Gen.return(Enum.reverse(acc))
+    end
+  end
+
+  # cod is a Term with de Bruijn 0 = the just-bound arg; substitute `a` for it.
+  defp subst_cod(cod, a, ctx) do
+    env = Context.env(ctx)
+    Normalise.quote(Eval.eval(cod, [Eval.eval(a, env) | env]), Context.length(ctx))
+  end
+
+  # Branch bodies for a `case` on `fam` at (constant-motive) goal.
+  defp branches(ctx, :Nat, goal, size) do
+    Gen.bind(gen(ctx, goal, size), fn zbody ->
+      kctx = Context.extend(ctx, Eval.eval(SigMenu.nat(), Context.env(ctx)))
+      Gen.bind(gen(kctx, shift_goal(goal), size), fn sbody ->
+        Gen.return([{:Z, 0, zbody}, {:S, 1, sbody}])
+      end)
+    end)
+  end
+
+  defp branches(ctx, :Bd, goal, size) do
+    Gen.bind(gen(ctx, goal, size), fn tb ->
+      Gen.bind(gen(ctx, goal, size), fn fb ->
+        Gen.return([{:T, 0, tb}, {:F, 0, fb}])
+      end)
+    end)
+  end
+
+  # Accept an infer-mode candidate iff its inferred type converts with the goal
+  # under @gen_fuel (spec §6.1). Fuel exhaustion or false ⇒ not offered.
+  defp accept_infer?(ctx, term, goal) do
+    case Cure.Core.Kernel.infer(ctx, term) do
+      {:ok, inferred_val} ->
+        depth = Context.length(ctx)
+        inferred_term = Normalise.quote(inferred_val, depth)
+
+        case Cure.Core.Conv.conv_within?(inferred_term, goal, Context.env(ctx), depth,
+               Context.signature(ctx), @gen_fuel) do
+          {:ok, true} -> true
+          _ -> false
+        end
+
+      {:error, _} -> false
+    end
+  end
+
+  defp def_type(ctx, name) do
+    %{type: ty} = Cure.Core.Env.get_def(Context.signature(ctx), name)
+    ty
+  end
+
+  # A goal moved under one extra binder (its free de Bruijn indices shift by 1).
+  defp shift_goal(goal), do: Cure.Core.Term.shift(goal, 1, 0)
 
   # whnf that degrades to the input term on fuel exhaustion (never crashes gen).
   # Bounded by @gen_fuel, not the default :infinity — spec §6.3: the shape/
