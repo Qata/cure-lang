@@ -240,7 +240,7 @@ defmodule Cure.Core.Inductive do
   @spec positive?(Env.t(), family()) :: :ok | {:error, {:non_strictly_positive, atom()}}
   def positive?(env, %{name: fname}) do
     Enum.reduce_while(ctors_of(env, fname), :ok, fn %{name: cname, args: args}, :ok ->
-      if Enum.all?(args, fn {_n, ty} -> strictly_positive?(fname, ty) end) do
+      if Enum.all?(args, fn {_n, ty} -> strictly_positive?(env, fname, ty, MapSet.new()) end) do
         {:cont, :ok}
       else
         {:halt, {:error, {:non_strictly_positive, cname}}}
@@ -249,12 +249,69 @@ defmodule Cure.Core.Inductive do
   end
 
   # A field type is strictly positive in `fname` when, at every function arrow,
-  # `fname` does not occur in the domain; recursive/applied occurrences of the
-  # family itself (and occurrences in non-arrow positions) are fine.
-  defp strictly_positive?(fname, {:pi, dom, cod}),
-    do: not occurs?(fname, dom) and strictly_positive?(fname, cod)
+  # `fname` does not occur in the domain — not even hidden behind another
+  # declared family's constructor fields (the through-constructor rule) — and
+  # the codomain stays strictly positive. Σ is covariant in both components. A
+  # field headed by ANOTHER family is checked by expanding that family's
+  # constructor fields (`seen` breaks family cycles); `fname` occurring in
+  # another family's parameters/indices is conservatively rejected.
+  defp strictly_positive?(env, fname, {:pi, dom, cod}, seen),
+    do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
-  defp strictly_positive?(_fname, _other), do: true
+  defp strictly_positive?(env, fname, {:sigma, a, b}, seen),
+    do: strictly_positive?(env, fname, a, seen) and strictly_positive?(env, fname, b, seen)
+
+  defp strictly_positive?(_env, fname, {:data, fname, _ps, _is}, _seen), do: true
+
+  defp strictly_positive?(env, fname, {:data, other, ps, is}, seen) do
+    cond do
+      Enum.any?(ps ++ is, &occurs?(fname, &1)) ->
+        false
+
+      MapSet.member?(seen, other) ->
+        true
+
+      true ->
+        seen2 = MapSet.put(seen, other)
+
+        env
+        |> ctors_of(other)
+        |> Enum.all?(fn %{args: args} ->
+          Enum.all?(args, fn {_n, ty} -> strictly_positive?(env, fname, ty, seen2) end)
+        end)
+    end
+  end
+
+  defp strictly_positive?(_env, _fname, _other, _seen), do: true
+
+  # Does `fname` occur anywhere in `ty`, including inside the constructor fields
+  # of other families referenced by `ty`? Used for arrow DOMAINS, where any
+  # reachable occurrence is a negative position.
+  defp occurs_deep?(env, fname, ty, seen) do
+    occurs?(fname, ty) or
+      Enum.any?(data_heads(ty), fn other ->
+        other != fname and not MapSet.member?(seen, other) and
+          env
+          |> ctors_of(other)
+          |> Enum.any?(fn %{args: args} ->
+            Enum.any?(args, fn {_n, t} ->
+              occurs_deep?(env, fname, t, MapSet.put(seen, other))
+            end)
+          end)
+      end)
+  end
+
+  # Every family name appearing as a `{:data, …}` head anywhere in the term.
+  defp data_heads(term), do: term |> gather_data_heads(MapSet.new()) |> MapSet.to_list()
+
+  defp gather_data_heads({:data, n, ps, is}, acc),
+    do: Enum.reduce(ps ++ is, MapSet.put(acc, n), &gather_data_heads/2)
+
+  defp gather_data_heads(t, acc) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.reduce(acc, &gather_data_heads/2)
+
+  defp gather_data_heads(l, acc) when is_list(l), do: Enum.reduce(l, acc, &gather_data_heads/2)
+  defp gather_data_heads(_t, acc), do: acc
 
   # Does the family name `fname` occur anywhere in `term` (as an applied family)?
   defp occurs?(fname, {:data, fname, _ps, _is}), do: true
