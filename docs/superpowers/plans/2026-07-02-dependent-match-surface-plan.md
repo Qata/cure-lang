@@ -38,7 +38,7 @@ Design spec (hardened): `docs/superpowers/specs/2026-07-02-dependent-match-surfa
 
 ## Reference facts (verified against the tree at authoring time)
 
-- `Cure.Core.Context`: `Context.signature(ctx)` → `%Env{}`; `Context.length(ctx)` → depth; `Context.empty(sig)` builds a context; `Context.extend(ctx, type_value)` pushes a binder (`lib/cure/core/context.ex:33,46,29`).
+- `Cure.Core.Context`: `Context.signature(ctx)` → `%Env{}` (`context.ex:33`); `Context.length(ctx)` → depth (`context.ex:46`); `Context.empty(sig)` builds a context (`context.ex:29`); `Context.extend(ctx, type_value)` pushes a binder (`context.ex:37`).
 - `Cure.Core.Inductive`: `get_ctor(sig, cname)` → `%{args: telescope, result_indices: […], quantities: […]}` or `nil`; `ctor_family(sig, cname)` → family atom; `get_family`, `param_count`, `ctors_of` (`lib/cure/core/inductive.ex:157,161,153,211,225`).
 - Kernel private `unify_indices(ctx, result_indices, scrut_indices, arity)` returns `{:solved, subst} | :trivial | :impossible`; `scrut_indices` are **values** (it reifies them internally via `Quote.reify(outer_depth)` then `Term.shift(arity, 0)`) (`kernel.ex:714-723`).
 - Kernel `check_case_branches` already skips body checking on an `:impossible` verdict (`kernel.ex:676-678`); `check/3`'s `{:error,_}` path maps to `{:error, :branch_type}` (`kernel.ex:698-700`).
@@ -70,14 +70,15 @@ Each slice ends green + committed; the full suite runs once per slice. Slices 2 
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `test/cure/core/branch_unify_test.exs`. Build the `Ix`/`wrap`/`Dec` signature inline (same shape as `case_soundness_index_test.exs`). Three verdict cases plus the compound-solved case that stands in for spec §6 Slice 3(i):
+Create `test/cure/core/branch_unify_test.exs`. Build the `Ix`/`wrap`/`Dec` signature inline (same shape as `case_soundness_index_test.exs`). Three verdict cases, the compound-solved case that stands in for spec §6 Slice 3(i), and a wrapper-level misuse guard (cname/dname family mismatch):
 
 ```elixir
 defmodule Cure.Core.BranchUnifyTest do
   @moduledoc """
   Unit tests for the public branch_unify/4 wrapper (spec §3). It reuses the
-  private unify_indices/4; these pin the three verdicts and the compound-solved
-  case the elaborator consumes for constructor-headed refinement (§6 Slice 3(i)).
+  private unify_indices/4; these pin the three verdicts, the compound-solved
+  case the elaborator consumes for constructor-headed refinement (§6 Slice
+  3(i)), and the wrapper's own dname/cname family-mismatch guard.
   """
   use ExUnit.Case, async: true
   alias Cure.Core.{Context, Env, Inductive, Kernel, Eval}
@@ -114,6 +115,16 @@ defmodule Cure.Core.BranchUnifyTest do
     # The outer index var (shifted past wrap's 1 arg → key 1) is bound to Causal.
     assert subst == %{1 => {:ctor, :Causal, []}}
   end
+
+  test ":impossible when cname exists but does not belong to dname's family" do
+    # Dcoupled/Causal are Dec's own constructors, not Ix's — a caller passing the
+    # wrong dname for a real cname must not silently get a verdict computed
+    # against the wrong family's schema (the wrapper is new TCB code; its own
+    # doc comment already guards the "unknown constructor" case, so the
+    # "known constructor of a different family" case must be guarded too).
+    ctx = Context.empty(sig())
+    assert :impossible = Kernel.branch_unify(ctx, :Ix, :Causal, [causal_val()])
+  end
 end
 ```
 
@@ -134,21 +145,25 @@ scrutinee's actual index **values** `scrut_indices`, return the same verdict
 `unify_indices/4` produces: `{:solved, subst} | :trivial | :impossible`, where
 `subst` is in the branch de Bruijn frame `ctor-args ++ outer`. The elaborator
 delegates to this instead of carrying its own weaker index unification. Adds no
-unification logic — it reuses the private `unify_indices/4`. `nil` on an unknown
-constructor is impossible in practice (the elaborator validates the constructor
-against `dname` first), but we still guard rather than crash.
+unification logic — it reuses the private `unify_indices/4`. Guards two misuse
+shapes rather than trusting the caller: an unknown constructor (`nil` from
+`get_ctor`) and a constructor that exists but belongs to a different family
+than `dname` (`Inductive.ctor_family/2` mismatch) both verdict `:impossible`
+rather than proceeding against the wrong schema. Both are impossible in
+practice given the elaborator's own pre-validation, but this is new trusted-
+kernel code and `dname` is part of the signature precisely to be checked, not
+merely documented.
 """
 @spec branch_unify(Context.t(), atom(), atom(), [Cure.Core.Value.t()]) ::
         {:solved, map()} | :trivial | :impossible
-def branch_unify(ctx, _dname, cname, scrut_indices) do
+def branch_unify(ctx, dname, cname, scrut_indices) do
   sig = Context.signature(ctx)
 
-  case Inductive.get_ctor(sig, cname) do
-    %{args: tele, result_indices: result_indices} ->
-      unify_indices(ctx, result_indices, scrut_indices, length(tele))
-
-    nil ->
-      :impossible
+  with %{args: tele, result_indices: result_indices} <- Inductive.get_ctor(sig, cname),
+       ^dname <- Inductive.ctor_family(sig, cname) do
+    unify_indices(ctx, result_indices, scrut_indices, length(tele))
+  else
+    _ -> :impossible
   end
 end
 ```
@@ -156,12 +171,12 @@ end
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `mix test test/cure/core/branch_unify_test.exs`
-Expected: PASS (3 tests).
+Expected: PASS (4 tests).
 
 - [ ] **Step 5: Run the full suite once**
 
 Run: `mix test`
-Expected: baseline + 3 new = green, zero regressions.
+Expected: baseline + 4 new = green, zero regressions.
 
 - [ ] **Step 6: Commit**
 
@@ -203,12 +218,12 @@ defmodule Cure.Core.AbsurdLeafTest do
   end
 
   test "{:absurd} serializes and parses back to itself" do
-    assert {:ok, {:absurd}} = Serialize.parse(Serialize.to_string({:absurd}))
+    assert {:ok, {:absurd}} = Serialize.decode(Serialize.encode({:absurd}))
   end
 end
 ```
 
-Note: confirm the exact `Serialize` public function names first — read `lib/cure/core/serialize.ex` for the encode/parse entry points (they wrap `enc`/`build_node`). If they are named differently (e.g. `encode`/`decode`), use those names in the test; the round-trip property is what matters.
+Verified against the tree: the public entry points are `Serialize.encode/1` (`serialize.ex:19`, returns a bare `binary()`, delegates to `enc/1`) and `Serialize.decode/1` (`serialize.ex:68`, returns `{:ok, term} | {:error, term}`, delegates through `build_node/2`) — not `to_string`/`parse`. Use these exact names.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -359,7 +374,7 @@ In `lib/cure/compiler/parser.ex`, after `state = expect(state, :arrow)` and `sta
   defp impossible_body?(state) do
     case peek(state) do
       %Token{type: :identifier, value: "impossible"} ->
-        case peek(state, 1) do
+        case peek_at(state, 1) do
           %Token{type: type} when type in [:newline, :comma, :rbrace, :dedent, :eof] -> true
           nil -> true
           _ -> false
@@ -371,9 +386,7 @@ In `lib/cure/compiler/parser.ex`, after `state = expect(state, :arrow)` and `sta
   end
 ```
 
-Confirm two things against the current parser before finalizing:
-1. `peek/2` with a lookahead offset exists (the parser uses `peek(state)`; check whether a two-arg `peek(state, n)` or an equivalent lookahead helper is available — if only `peek/1` exists, add a minimal `defp peek(state, n)` or use the existing token-stream accessor).
-2. The identifier token shape is `%Token{type: :identifier, value: "impossible"}` (lexer emits `{:identifier, word}` at `lexer.ex:617`).
+Verified against the tree (no new helper needed): the parser already has a two-arg lookahead accessor, `defp peek_at(%{tokens: tokens, pos: pos}, offset)` (`parser.ex:4276`), distinct from the one-arg `peek/1` (`parser.ex:4270-4274`). `peek_at/2` returns `nil` past the end of the token stream (rather than `peek/1`'s synthesized `:eof` token), which is exactly what the `nil -> true` clause above already handles — use `peek_at/2` as written, no new function required. The identifier token shape is `%Token{type: :identifier, value: "impossible"}` (lexer emits `{:identifier, word}` at `lexer.ex:617`).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -660,7 +673,18 @@ git commit -m "feat(elab): coverage/discharge pass for impossible clauses (④ S
 - Consumes: `Kernel.branch_unify/4` subst.
 - Produces: `branch_expected_type` and `specialize_branch_context` use `branch_unify`'s bidirectional subst instead of the one-directional `branch_index_subst`. Same de Bruijn frame (`ctor-args ++ outer`), so downstream `replace_branch_vars` is unchanged.
 
-**Realization note (spec §6 Slice 3(i)).** The spec lists a standalone surface test for the "ctor-compound result index against a bare scrutinee index" case. Empirically (probed against the current tree) every full-coverage surface program exercising that path either already elaborates — motive generalization over the bare scrutinee index subsumes it (e.g. `reuse-h`, the identity vector with both branches) — or fails on unrelated implicit-argument inference (`{:unsolved_metavariables, :empty}` from a nullary `empty()` body). A dedicated red-for-the-right-reason surface fixture is therefore not reliably constructible. This plan realizes §6 Slice 3(i) as **Task 1's `{:solved, subst}` compound unit test** (proves `branch_unify` produces the bidirectional binding the elaborator now consumes) plus **Task 6's end-to-end verbatim program** (proves the elaborator feeds that subst through `branch_expected_type` correctly). This is a plan-level realization decision, surfaced here rather than left silent; the §2 acceptance property (constructor-headed index refinement works) is still machine-proven.
+**Realization note (spec §6 Slice 3(i)).** The spec lists a standalone surface test for the "ctor-compound result index against a bare scrutinee index" case (e.g. `Ix`/`wrap` from Task 1: scrutinee `xs : Ix(n)` with `n` a bare outer variable, `wrap : (p:Dec) -> Ix(Causal)`). Probed against the current tree with the concrete fixture
+
+```
+type Dec = Dcoupled | Causal
+type Ix indices (n: Dec)
+  wrap : (p: Dec) -> Ix(Causal)
+
+fn f({n: Dec}, xs: Ix(n)) -> Dec = match xs
+  wrap(p) -> Causal()
+```
+
+this already elaborates today (pre-Slice-5) — not because `branch_expected_type` computed the right thing (its one-directional `branch_index_subst` cannot solve `Causal := n`, per §1.2), but because `build_motive`'s *existing, unmodified* bare-var generalization already abstracts the bare scrutinee index `n` into the motive binder (`elaborator.ex:326-332`), and the **kernel's own `check_case_branches`** independently re-instantiates that motive per branch via its own complete `unify_indices` (`kernel.ex:690-705`) — the same mechanism Task 1 unit-tests directly. So for a body whose type is inferred (`Causal()`'s own type) rather than checked precisely against a `branch_expected` that needed the refined index, the kernel's independent recheck already accepts the branch regardless of what (possibly-too-weak) `branch_expected` the elaborator handed it. Probes that instead force the *elaborator's* `branch_expected` to matter (e.g. a nullary-constructor body needing implicit-argument inference against the refined type) fail on an unrelated, pre-existing bug (`{:unsolved_metavariables, :empty}`, `elaborator.ex:687`), not on the refinement gap this task closes. A dedicated red-for-the-right-reason surface fixture that isolates *only* the elaborator's delegation to `branch_unify` (as opposed to the kernel's independent backstop, which already covers this shape) is therefore not reliably constructible with the current surface's implicit-argument inference. This plan realizes §6 Slice 3(i) as **Task 1's `{:solved, subst}` compound unit test** (proves `branch_unify` produces the bidirectional binding the elaborator now consumes) plus **Task 6's end-to-end verbatim program** (proves the elaborator feeds that subst through `branch_expected_type` correctly for the case where it *is* load-bearing). This is a plan-level realization decision, surfaced here with the reproducing fixture rather than left as an unverifiable empirical claim; the §2 acceptance property (constructor-headed index refinement works) is still machine-proven — end-to-end at the kernel, and at the elaborator for the verbatim-reuse shape.
 
 - [ ] **Step 1: Confirm the current behavior is preserved by a full-coverage regression**
 
@@ -736,6 +760,20 @@ end
 ```
 
 Delete the now-unused `branch_index_subst/3` (line 559). Note: `branch_unify`'s subst is already in the `ctor-args ++ outer` frame with keys shifted by `arity` (the kernel's `unify_indices` does `Term.shift(arity, 0)` on the s-side), so no additional shifting is needed here — the same frame the old `branch_index_subst` produced via its own `Subst.shift(scrut_idx, arity, 0)`.
+
+**Dangling parameter (CI-only failure mode).** This rewrite removes the only remaining use of `elaborate_matched_branch`'s `scrut_indices` parameter (bound to `idx_terms` at its call site) — the `:solved`/`:trivial` arm now derives `subst` from `verdict` alone, and the `:impossible` arm never referenced it. An unused function parameter is only a *warning* under a bare `mix test`/`mix compile` (this repo's `mix.exs` does not set `elixirc_options: [warnings_as_errors: true]`), so the plan's own verification steps would stay green — but CI (`.github/workflows/ci.yml:66`, `mix compile --warnings-as-errors`) treats it as a build failure. In this step, also update the function head introduced in Task 4 Step 5 from
+
+```elixir
+defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
+```
+
+to
+
+```elixir
+defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, _scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
+```
+
+(the call site in `elaborate_branches` keeps passing `idx_terms` positionally unchanged — Elixir doesn't care about the callee's parameter name).
 
 - [ ] **Step 3: Run the regression + full suite once (end of Slice 3 depends on Task 6; run full suite there)**
 
@@ -842,7 +880,9 @@ Then rename the existing clauses `generalize({:var, i}, …)` … `generalize(le
 - change the `{:var, i}` clauses to read `rebind` out of the `gen` tuple: `defp generalize_struct({:var, i}, {_rebind, _targets}, _shift, depth) when i < depth, do: {:var, i}` and `defp generalize_struct({:var, i}, {rebind, _targets} = _gen, shift, depth) do … Map.fetch(rebind, orig) … end`;
 - in every recursive clause, pass the whole `gen` tuple through unchanged (e.g. `defp generalize_struct({:pi, d, c}, gen, s, depth), do: {:pi, generalize(d, gen, s, depth), generalize(c, gen, s, depth + 1)}` — note the recursive calls go back through `generalize/4`, not `generalize_struct/4`, so the target check runs at every node).
 
-Confirm `Subst.shift/3` accepts `(term, amount, cutoff)` — it does (`term.ex:88`, aliased as `Subst` in the elaborator via `alias Cure.Elab.{…, Subst, …}` at line 17; verify `Cure.Elab.Subst.shift/3` delegates to the same shifting — if the elaborator's `Subst` is a distinct module, use its `shift/3`).
+**Why this covers all 16 clauses, not just the `:pi` example above (completeness argument — verified against the current tree, `elaborator.ex:351-402` has exactly 16 clauses: `{:var,i}` when `i<depth`, `{:var,i}` general, `:pi`, `:lam`, `:sigma`, `:app`, `:pair`, `:fst`, `:snd`, `:data`, `:ctor`, `:case`, `:eq`, `:refl`, `:rewrite`, `:prim`, and the leaf catch-all).** Every clause other than the two `{:var, i}` ones only *forwards* its second parameter opaquely to recursive calls — it never inspects `rebind`'s contents. Elixir resolves a call by `name/arity`, not by which clause originally executed it, so mechanically: rename each `defp generalize(pattern, ...)` head to `defp generalize_struct(pattern, ...)` and leave every call *expression* inside the body exactly as `generalize(sub, gen_or_rb, s, depth[+n])` — do **not** also rewrite those inner call sites to say `generalize_struct(...)`. Since `generalize/4` now names the new check-before-recurse dispatcher, those untouched inner calls automatically re-enter it, so the target check fires at every node with zero additional per-clause editing beyond the head rename and the parameter name `rb`/`rebind` → `gen` (cosmetic only, since these clauses never destructure it). This includes the `:case` clause (`{:case, scr, m, brs}`, line 386), whose three recursive positions — `generalize(scr, gen, s, depth)`, `generalize(m, gen, s, depth)`, and each branch body at `generalize(b, gen, s, depth + ar)` (the per-branch arity-shifted depth) — need no special-case treatment beyond this same mechanical rename; the `depth + ar` shift is orthogonal to the `gen` tuple threading and is preserved verbatim.
+
+Confirm `Subst.shift/3` accepts `(term, amount, cutoff)` — it does. Verified: the elaborator's `alias Cure.Elab.{…, Subst, …}` (line 17) resolves `Subst` to `Cure.Elab.Subst`, which is a genuinely distinct module from the kernel's `Cure.Core.Term` — it does **not** delegate, but reimplements a full parallel set of structural-recursion `shift/3` clauses (plus an extra `{:meta, _}` passthrough clause `Term.shift` lacks), starting at `lib/cure/elab/subst.ex:91` (`def shift(term, 0, _cutoff), do: term`). Same signature shape as `Cure.Core.Term.shift/3` (`term.ex:88`), so `match_target`'s call to `Subst.shift(target, depth, 0)` resolves correctly to `Cure.Elab.Subst.shift/3` with no further change needed.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -874,8 +914,8 @@ git commit -m "feat(elab): whole-subterm motive generalization for verbatim inde
 - §7 testing: kernel unit (Task 1), surface positive+negative asserting exact atoms (Task 4/6), Antigen verticals stay green (full-suite runs), full suite once per slice (Tasks 1/4/6 step "run full suite once").
 - §8 invariants: TCB delta = wrapper + always-fails clause (Tasks 1/2). Kernel backstop unchanged (`check_coverage` untouched). Frame alignment pinned by Task 1 tests.
 
-**Placeholder scan:** No TBD/TODO. Every code step shows complete code. Two verification hooks are called out explicitly (parser `peek/2` availability in Task 3; elaborator `Subst` module identity in Task 6) — these are confirm-then-use, not placeholders.
+**Placeholder scan:** No TBD/TODO. Every code step shows complete code. Two items that were originally flagged as "confirm against the tree before finalizing" (Task 3's arm-terminator lookahead; Task 6's `Subst` module identity) have been resolved during hardening: Task 3 uses the tree's existing `peek_at/2` (not a nonexistent `peek/2`), and Task 6 cites `Cure.Elab.Subst.shift/3` (`subst.ex:91`) directly rather than the kernel's distinct `Cure.Core.Term.shift/3` (`term.ex:88`).
 
 **Type consistency:** `branch_unify/4` verdict shape `{:solved, map()} | :trivial | :impossible` is consistent across Tasks 1, 4, 5. `elaborate_matched_branch` produces `{cname, arity, body_term}` branch tuples matching the kernel's `{c, ar, b}` shape (`kernel.ex:660`). Error atoms `{:missing_branch,_}`, `{:reachable_impossible,_}`, `{:duplicate_branch,_}`, `{:foreign_ctor,_}`, `{:unsupported_pattern,_}` are used consistently in Task 4 code and asserted in Task 4 tests.
 
-**Known realization deviation from spec §6:** Slice 3(i) is realized as a unit test + end-to-end program rather than a standalone surface fixture — documented in Task 5's realization note with the empirical justification (probed).
+**Known realization deviation from spec §6:** Slice 3(i) is realized as a unit test + end-to-end program rather than a standalone surface fixture — documented in Task 5's realization note with a concrete reproducing `.cure` fixture and the structural reason (the kernel's own independent motive-based recheck already subsumes this shape), not a bare unreproducible empirical claim.
