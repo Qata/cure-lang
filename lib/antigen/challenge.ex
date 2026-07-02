@@ -316,7 +316,9 @@ defmodule Antigen.Challenge do
     "src" => :src,
     "transform" => :transform,
     "base_src" => :base_src,
-    "variant_src" => :variant_src
+    "variant_src" => :variant_src,
+    "expect" => :expect,
+    "relation" => :relation
   }
   def from_pieces(:elab_program, assay, label, seed, note, scaffold, _pieces) do
     payload =

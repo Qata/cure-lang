@@ -14,7 +14,14 @@ defmodule Antigen.Assays.Elab do
       an infection, evidence of a de Bruijn / binder-framing bug. This oracle is
       self-contained (no Idris): it compares the elaborator against itself.
 
-  Both consume an `:elab_program` challenge and return `:ok | {:violation, _}`.
+    * elab/erasure — a TWO-SIDED pin on the `{0,ω}` relevance check
+      (`Cure.Elab.Relevance`, M8.3). Catalog form: the actual accept/reject
+      verdict must equal the expected one (so both an under-strict and an
+      over-strict check infect). Metamorphic form: `:same` (frame perturbation —
+      verdicts agree) or `:flip` (relevance injection — an accepting base must
+      become a rejecting variant, proving the check is load-bearing).
+
+  All consume an `:elab_program` challenge and return `:ok | {:violation, _}`.
   """
   alias Antigen.Challenge
   alias Cure.Elab.Program
@@ -36,6 +43,39 @@ defmodule Antigen.Assays.Elab do
       :ok
     else
       {:violation, {:verdict_not_invariant, p.id, p.transform, %{base: base, variant: variant}}}
+    end
+  end
+
+  # elab/erasure — two-sided {0,ω} relevance-check pin. Catalog form: the actual
+  # verdict must match the expected one (an under-strict OR over-strict check both
+  # infect).
+  def run(%Challenge{kind: :elab_program, assay: "elab/erasure", payload: %{expect: expect} = p}) do
+    actual = verdict_bit(elaborate(p.src))
+
+    if actual == expect do
+      :ok
+    else
+      {:violation, {:erasure_verdict_wrong, p.id, %{expected: expect, actual: actual}}}
+    end
+  end
+
+  # elab/erasure — metamorphic form. `:same` = base and variant verdicts must
+  # agree (frame-preserving perturbation); `:flip` = an accepting base must become
+  # a rejecting variant (the relevance injection is load-bearing).
+  def run(%Challenge{kind: :elab_program, assay: "elab/erasure", payload: %{relation: rel} = p}) do
+    base = verdict_bit(elaborate(p.base_src))
+    variant = verdict_bit(elaborate(p.variant_src))
+
+    ok? =
+      case rel do
+        :same -> base == variant
+        :flip -> base == :accept and variant == :reject
+      end
+
+    if ok? do
+      :ok
+    else
+      {:violation, {:erasure_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
     end
   end
 
