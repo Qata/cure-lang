@@ -44,21 +44,21 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | # | Capability | Work item to reach parity | Layer | Kind | Status |
 |---|---|---|---|---|---|
 | 1 | Dependent case unifier | First-order unification: solution, deletion, injectivity, occurs-check, no-confusion, impossible-branch discharge | K | — | ✅ |
-| 2 | Dependent case surface | Impossible clauses (omit + verified `-> impossible`) + constructor-headed motive completeness (verbatim-reuse case) | E, P, C | additive | 🔵 ④ |
+| 2 | Dependent case surface | Impossible clauses (omit + verified `-> impossible`) + constructor-headed motive completeness (verbatim-reuse case) | E, P, C | additive | ✅ |
 | 3 | Pattern matching depth | Nested/deep patterns → decision-tree compiler (M8.4). Kernel case already nests, so this is a lowering pass, not a kernel change | E | additive (refactors match path) | ⬜ |
 | 4 | Pattern forms | Non-constructor patterns in dependent position (`_`, literal, as-patterns) handled, not merely rejected | E | additive | ⬜ |
 | 5 | Pattern matching | Forced/dot patterns + forced-argument erasure | E, C | additive | ⬜ |
 | 6 | Dependent matching | `with`-abstraction (match on an intermediate, refine the goal) — *borderline; core to Idris matching quality* | E, P | additive | ⬜ |
-| 7 | Propositional equality | Automatic `rewrite` motive inference (abstract LHS occurrences in the goal, à la Idris `rewrite … in`) | E | additive | ⬜ |
-| 8 | Equality / absurdity | `Void`/absurd elimination at the surface (`{:absurd}`) | K (leaf), E | additive | 🔵 ④ |
+| 7 | Propositional equality | Automatic `rewrite` motive inference (abstract LHS occurrences in the goal, à la Idris `rewrite … in`) — implemented in `rewrite_plan/5`, audited to parity with `elabRewrite` (P0); motive-under-`:case`-binder capture bug fixed. Residual *reach*: occurrence matching is syntactic-on-normal-forms, not up-to-conversion (oracle probe rw07, `cure_stricter`, P1) | E | additive | ✅ |
+| 8 | Equality / absurdity | `Void`/absurd elimination at the surface (`{:absurd}`) | K (leaf), E | additive | ✅ |
 | 9 | Inference unification | First-order metavariable engine: alloc, occurs-checked solve, zonk (`lib/cure/elab/unify.ex`) | E | — | ✅ |
 | 10 | Inference unification | Pattern (Miller) unification — solve `?m x y = t` | E | additive | ⬜ |
 | 11 | Inference unification | Postponed/suspended constraints (real flex-flex: constraint queue + retry-on-progress) | E | additive | ⬜ |
 | 12 | Totality — termination | Single-argument structural descent | E | — | ✅ |
-| 13 | Totality — termination | **Mutual recursion** (confirmed hole; antibody banked, checker must be fixed) | E | fix | 🔴 |
+| 13 | Totality — termination | **Mutual recursion**: soundness hole closed (`d13d718`; `diverging_mutual_pair` replays `:ok`). Remaining is *reach* — well-founded mutual / lexicographic descent is conservatively rejected, not unsoundly accepted (P1/#14) | K, E | reach | ⬜ |
 | 14 | Totality — termination | Multi-argument / lexicographic (size-change) descent | E | additive | ⬜ |
 | 15 | Totality — coverage | Kernel exhaustiveness (`declared ⊆ covered`) | K | — | ✅ |
-| 16 | Totality — coverage | Surface exhaustiveness diagnostics accounting for discharged/impossible branches | E | additive | 🔵 ④ |
+| 16 | Totality — coverage | Surface exhaustiveness diagnostics accounting for discharged/impossible branches | E | additive | ✅ |
 | 17 | Totality — coverage | Coverage over nested patterns | E | additive | ⬜ (needs #3) |
 | 18 | Positivity | Strict positivity checker + vertical | K/E, A | — | ✅ |
 | 19 | Positivity | Confirm + bank nested / through-constructor / negative-position (arrow-left) positivity | K/E, A | verify + additive | ⬜ |
@@ -72,17 +72,19 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 ### Already at parity — no work (bounds the scope)
 Rows **1, 9, 12, 15, 18, 20**: the kernel type checker, first-order index
 unifier, universes, structural termination, coverage, and positivity are at
-Idris quality for what they cover. **The TCB is essentially done** — every
-remaining row except #8's `{:absurd}` leaf, #13, and #19 lives in the untrusted
-elaborator / Antigen layers.
+Idris quality for what they cover. **The TCB is essentially done** — with #8's
+`{:absurd}` leaf landed and #13's mutual-recursion hole closed, every remaining
+row except #19 (nested positivity) lives in the untrusted elaborator / Antigen
+layers.
 
 ### The honest headline
-Of 25 rows: **6 at parity, 4 ride in on ④ (in flight), 15 remain.** Of the 15,
-**only two touch soundness** — #13 (mutual-recursion termination) and #19
-(nested positivity); the rest is ergonomics (#7, #10, #11), reach (#3–#6), or
-assurance strength (#22–#25). Highest-leverage single item: **#22** — without a
-term generator, Antigen proves "these specific holes stay closed," not "the
-kernel is sound."
+Of 25 rows: **11 at parity, 14 remain** (④'s rows 2/8/16 landed, and #7's
+`rewrite` motive inference is audited-complete). Of the 14, **only one touches
+soundness** — #19 (nested positivity); #13's mutual-recursion hole is closed
+(now a reach item). The rest is ergonomics (#10, #11), reach (#3–#6, #13, #14,
+#17), or assurance strength (#22–#25). Highest-leverage single item: **#22** —
+without a term generator, Antigen proves "these specific holes stay closed," not
+"the kernel is sound."
 
 ## 3. Antigen — coverage and capability expansion
 
