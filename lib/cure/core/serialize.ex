@@ -32,6 +32,7 @@ defmodule Cure.Core.Serialize do
   defp enc({:refl, a}), do: node("refl", [a])
   defp enc({:rewrite, pr, m, b}), do: node("rewrite", [pr, m, b])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
+  defp enc({:absurd}), do: "(absurd)"
   defp enc({:int_type}), do: "(int-type)"
   defp enc({:float_type}), do: "(float-type)"
   defp enc({:bool_type}), do: "(bool-type)"
@@ -150,6 +151,7 @@ defmodule Cure.Core.Serialize do
   defp build_node("bool", [{:atom, "true"}]), do: {:ok, {:bool_lit, true}}
   defp build_node("bool", [{:atom, "false"}]), do: {:ok, {:bool_lit, false}}
   defp build_node("hole", [{:str, s}]), do: {:ok, {:hole, s}}
+  defp build_node("absurd", []), do: {:ok, {:absurd}}
 
   defp build_node("pi", [d, c]), do: binary(:pi, d, c)
   defp build_node("lam", [d, b]), do: binary(:lam, d, b)

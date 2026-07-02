@@ -62,6 +62,12 @@ defmodule Cure.Core.Kernel do
   def infer(_ctx, {:float_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:float_lit, _f}), do: {:ok, {:vfloat_type}}
 
+  # {:absurd} is an elaborator-only marker sitting in a discharged (unreachable)
+  # case branch, which check_case_branches never checks. It has no positive typing
+  # rule; a reachable occurrence fails cleanly here rather than crashing the kernel
+  # with an unmatched-clause exception (spec §5/§8.1).
+  def infer(_ctx, {:absurd}), do: {:error, :absurd_in_reachable_position}
+
   def infer(ctx, {:prim, op, args}), do: infer_prim(ctx, op, args)
 
   def infer(ctx, {:pi, dom, cod}) do

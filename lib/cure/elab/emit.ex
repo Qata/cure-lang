@@ -167,6 +167,12 @@ defmodule Cure.Elab.Emit do
   end
 
   defp lower(_env, {:global, name}, _ctx), do: {:call, @line, {:atom, @line, name}, []}
+
+  # A discharged (impossible) case branch. Never executed at runtime; emit an
+  # unreachable stub so codegen doesn't hit the raising catch-all (spec §5).
+  defp lower(_env, {:absurd}, _ctx),
+    do: {:call, @line, {:atom, @line, :error}, [{:atom, @line, :absurd}]}
+
   defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
 
   defp element(n, tuple_form) do
