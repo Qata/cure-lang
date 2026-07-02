@@ -271,6 +271,18 @@ defmodule Cure.Compiler.Parser do
                 {variable(token), advance(state)}
             end
 
+          # Contextual keyword: `with e <arms>` is a with-abstraction only in
+          # expression-prefix position and only when what follows `with` can
+          # begin a scrutinee. The FSM/actor payload-binder `with` is consumed
+          # inside parse_fsm/parse_actor before it reaches here, so those uses
+          # (and any bare `with` operand) keep their identifier meaning.
+          "with" ->
+            if with_scrutinee_ahead?(state) do
+              parse_with_abs(state, token)
+            else
+              {variable(token), advance(state)}
+            end
+
           _ ->
             {variable(token), advance(state)}
         end
@@ -1387,6 +1399,66 @@ defmodule Cure.Compiler.Parser do
       _ ->
         ast = {:pattern_match, [line: token.line, col: token.col], [scrutinee]}
         {ast, state}
+    end
+  end
+
+  # -- With-abstraction (capability A) ---------------------------------------
+  #
+  # `with <expr>` matches on an intermediate expression and refines the GOAL by
+  # the scrutinee's VALUE (not just its type indices) — what plain `match`
+  # cannot do. Mirrors `parse_match/1` and reuses its arm parsers, producing a
+  # distinct `{:with_abs, meta, [scrut | arms]}` node the dependent elaborator
+  # dispatches on. Only capability A (single scrutinee, block/inline form) is
+  # parsed; the `proof` clause and multiple with-expressions are out of scope.
+  defp parse_with_abs(state, token) do
+    state = advance(state)
+
+    {scrutinee, state} = parse_expr(state, 0)
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :lbrace} ->
+        state = advance(state)
+        {arms, state} = parse_inline_match_arms(state)
+        state = expect(state, :rbrace)
+        {{:with_abs, [line: token.line, col: token.col], [scrutinee | arms]}, state}
+
+      %Token{type: :indent} ->
+        state = advance(state)
+        {arms, state} = parse_block_match_arms(state)
+        state = expect_dedent(state)
+        {{:with_abs, [line: token.line, col: token.col], [scrutinee | arms]}, state}
+
+      _ ->
+        {{:with_abs, [line: token.line, col: token.col], [scrutinee]}, state}
+    end
+  end
+
+  # True iff the token after `with` can begin a scrutinee expression. Keeps
+  # `with` an ordinary identifier when it is a bare operand (`with + 1`, a
+  # trailing `with`, etc.), so the contextual keyword never captures a value
+  # named `with`.
+  defp with_scrutinee_ahead?(state) do
+    case peek_at(state, 1) do
+      %Token{type: type}
+      when type in [
+             :identifier,
+             :integer,
+             :float,
+             :string,
+             :bool,
+             :atom,
+             :char,
+             :lparen,
+             :lbracket,
+             :tuple_open,
+             :map_open,
+             :binary_open
+           ] ->
+        true
+
+      _ ->
+        false
     end
   end
 

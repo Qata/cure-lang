@@ -422,6 +422,87 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  @doc """
+  Elaborate a surface `with <scrut> | C(pat…) -> body …` (capability A) into a
+  Core `:case`. Unlike `elaborate_match`, the motive is *value-abstracting*: the
+  scrutinee EXPRESSION is abstracted out of the goal (`motive_for`-style), so
+  each branch's expected type is the goal with the scrutinee replaced by that
+  branch's constructor value — goal refinement that plain `match` cannot do (its
+  `build_motive` only generalizes type INDICES). Restricted to a non-indexed
+  scrutinee family (capability A is value, not index, refinement); an indexed
+  scrutinee is deferred (`match` already handles index refinement).
+  """
+  @spec elaborate_with(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
+          {:ok, term()} | {:error, term()}
+  def elaborate_with(scrut_expr, arms, result_type_term, names, ctx, env) do
+    with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
+      case scrut_type do
+        {:vdata, dname, combined_vals} ->
+          family = Inductive.get_family(env, dname)
+
+          if family.indices == [] do
+            pc = Inductive.param_count(env, dname)
+            {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
+            scrut_type_term = Quote.reify(scrut_type, Context.length(ctx))
+
+            # Value-abstracting motive: λ(x : scrut_type). goal[scrut ↦ x].
+            motive = {:lam, scrut_type_term, abstract_term(result_type_term, scrut_term, 0)}
+
+            with {:ok, branches} <-
+                   elaborate_with_branches(arms, names, ctx, env, dname, param_vals, motive) do
+              {:ok, {:case, scrut_term, motive, branches}}
+            end
+          else
+            {:error, {:with_indexed_scrutinee_unsupported, dname}}
+          end
+
+        _ ->
+          {:error, :with_scrutinee_not_data}
+      end
+    end
+  end
+
+  # Emit one Core branch per surface arm, checked against the value-abstracting
+  # motive applied to the arm's constructor value. Reuses partition_arms (same
+  # validation as match: own-family ctors, no duplicates) and the shared
+  # branch-body checker. A `-> impossible` arm becomes an `{:absurd}` branch;
+  # coverage (a reachable omitted constructor) is enforced by the kernel's
+  # check_coverage when the assembled `:case` is checked.
+  defp elaborate_with_branches(arms, names, ctx, env, dname, param_vals, motive) do
+    with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
+      arm_map
+      |> Enum.reduce_while({:ok, []}, fn
+        {cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
+          {arity, _} = ctor_arity(env, cname)
+          {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+
+        {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->
+          case elaborate_with_branch(cname, pattern, body_expr, names, ctx, env, param_vals, motive) do
+            {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+            {:error, _} = err -> {:halt, err}
+          end
+      end)
+    end
+  end
+
+  defp elaborate_with_branch(cname, pattern, body_expr, names, ctx, env, param_vals, motive) do
+    {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
+    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    arity = length(telescope)
+    branch_names = branch_scope(quantities, pattern_vars) ++ names
+    branch_ctx = extend_context(ctx, telescope, param_vals)
+
+    # Expected branch type = motive (shifted under the ctor telescope) applied to
+    # this constructor's value, then normalized (β-reduces the application).
+    ctor_term = branch_constructor_term(cname, arity)
+    motive_shifted = Subst.shift(motive, arity, 0)
+    expected = Kernel.normalize(branch_ctx, {:app, motive_shifted, ctor_term})
+
+    with {:ok, body_term} <- elaborate_branch_body(body_expr, expected, branch_names, branch_ctx, env) do
+      {:ok, {cname, arity, body_term}}
+    end
+  end
+
   # motive = λ(j₀:T₀)…λ(jₙ:Tₙ).λ(x : D j̄). ResultType[scrutinee-indices ↦ j̄]
   #
   # The result type is *generalized* over the scrutinee's index arguments: where

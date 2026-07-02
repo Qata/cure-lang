@@ -113,6 +113,14 @@ defmodule Cure.Elab.Declarations do
     Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
   end
 
+  # A `with <expr>` body (capability A): like `match`, but its motive
+  # value-abstracts the scrutinee EXPRESSION out of the goal, so each branch's
+  # goal is refined to the branch constructor's value (goal refinement plain
+  # `match` cannot do). Checking mode — the declared return type is the goal.
+  defp elaborate_body({:with_abs, _meta, [scrut | arms]}, return_core, scope, ctx, env) do
+    Elaborator.elaborate_with(scrut, arms, return_core, scope, ctx, env)
+  end
+
   defp elaborate_body({:rewrite_expr, _meta, _children} = expr, return_core, scope, ctx, env) do
     Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
