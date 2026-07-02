@@ -15,4 +15,17 @@ defmodule Antigen.MutationMetaTest do
     m = Runner.mutation_metrics(banked)
     assert m.reason_diversity >= 5, "banked reason_diversity #{m.reason_diversity} below floor"
   end
+
+  test "banked :mutant_term corpus meets depth + wrapper-diversity floors (static replay)" do
+    banked =
+      Corpus.stream(@seeds_path)
+      |> Enum.flat_map(fn
+        {:ok, %Challenge{kind: :mutant_term} = c} -> [c]
+        _ -> []
+      end)
+
+    m = Runner.mutation_metrics(banked)
+    assert m.max_depth >= 4, "banked max_depth #{m.max_depth} below floor"
+    assert m.wrap_diversity >= 4, "banked wrap_diversity #{m.wrap_diversity} below floor"
+  end
 end
