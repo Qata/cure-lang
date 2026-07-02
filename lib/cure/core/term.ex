@@ -134,6 +134,38 @@ defmodule Cure.Core.Term do
   def shift({:prim, op, args}, a, c), do: {:prim, op, Enum.map(args, &shift(&1, a, c))}
 
   @doc """
+  Is `term` closed (no free de Bruijn variables)?
+
+  A closed term has no variable index that escapes its own binders. Only a
+  genuine free `{:var, k}` counts as open — non-variable leaves (`{:hole, _}`,
+  globals, types, literals) are closed. The binder structure mirrors `shift/3`
+  exactly (the trusted source of truth): `:lam`/`:pi`/`:sigma` bind one variable
+  in their body/codomain, and each `:case` branch binds `arity`; every other form
+  is traversed at the same depth. Kept in lockstep with `shift/3` — if a new
+  binding form is added there, add it here.
+  """
+  @spec closed?(t()) :: boolean()
+  def closed?(term), do: not has_free_var?(term, 0)
+
+  defp has_free_var?({:var, k}, depth), do: k >= depth
+  defp has_free_var?({:lam, d, b}, depth), do: has_free_var?(d, depth) or has_free_var?(b, depth + 1)
+  defp has_free_var?({:pi, d, c}, depth), do: has_free_var?(d, depth) or has_free_var?(c, depth + 1)
+  defp has_free_var?({:sigma, a, b}, depth), do: has_free_var?(a, depth) or has_free_var?(b, depth + 1)
+
+  defp has_free_var?({:case, s, m, brs}, depth) do
+    has_free_var?(s, depth) or has_free_var?(m, depth) or
+      Enum.any?(brs, fn {_c, ar, b} -> has_free_var?(b, depth + ar) end)
+  end
+
+  # Non-binding forms: recurse into every sub-term at the same depth. Covers
+  # :app/:pair/:fst/:snd/:ctor/:data/:eq/:refl/:rewrite/:prim and anything else.
+  defp has_free_var?(t, depth) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.any?(&has_free_var?(&1, depth))
+
+  defp has_free_var?(l, depth) when is_list(l), do: Enum.any?(l, &has_free_var?(&1, depth))
+  defp has_free_var?(_leaf, _depth), do: false
+
+  @doc """
   Substitute the de Bruijn index `j` with `replacement` everywhere it occurs.
 
   Descends under binders, incrementing the target index and shifting the

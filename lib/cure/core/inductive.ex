@@ -53,10 +53,32 @@ defmodule Cure.Core.Env do
   @spec get_def(t(), atom()) :: map() | nil
   def get_def(%__MODULE__{defs: defs}, name), do: Map.get(defs, name)
 
-  @doc "Mark a global as totality-certified (δ may unfold it). See M7.2."
+  @doc """
+  Mark a global as totality-certified (δ may unfold it). See M7.2.
+
+  Refuses a def whose body is not closed: δ evaluates a certified body in the
+  empty environment, so an open body's free variables would alias context
+  variables (a capture). Certification is only legitimately produced by the
+  kernel's `validate_certificate` on a checked (hence closed) body; this
+  assertion makes an open-bodied certificate impossible to create through the
+  public seam. (A5)
+  """
   @spec certify(t(), atom()) :: t()
-  def certify(%__MODULE__{certified: c} = env, name),
-    do: %{env | certified: MapSet.put(c, name)}
+  def certify(%__MODULE__{certified: c} = env, name) do
+    case get_def(env, name) do
+      %{body: body} ->
+        unless Cure.Core.Term.closed?(body) do
+          raise ArgumentError,
+                "cannot certify #{inspect(name)}: body has a free de Bruijn variable " <>
+                  "(open body). Certification requires a closed, kernel-validated body (M7.2 / A5)."
+        end
+
+      _ ->
+        :ok
+    end
+
+    %{env | certified: MapSet.put(c, name)}
+  end
 
   @doc "Is the global `name` certified total (δ-reducible)?"
   @spec certified?(t(), atom()) :: boolean()

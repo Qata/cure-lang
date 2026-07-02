@@ -206,11 +206,18 @@ defmodule Cure.Core.Normalise do
 
     case head do
       {:nglobal, name} ->
-        if Env.certified?(sig, name) do
-          %{body: body} = Env.get_def(sig, name)
+        # δ-unfold a certified global by evaluating its body in the EMPTY env.
+        # Guard: the body MUST be closed — an open body's free de Bruijn variables
+        # would surface as neutral `{:nvar, k}` and alias whatever the ambient
+        # context binds at level k (a capture). `Env.certify/2` already refuses
+        # open bodies, so this only fires against a forged marker; staying stuck is
+        # the safe answer (never unsound, at worst a missed unfold). (A5)
+        with true <- Env.certified?(sig, name),
+             %{body: body} <- Env.get_def(sig, name),
+             true <- Cure.Core.Term.closed?(body) do
           {:ok, reapply(args, spend_fuel(Eval.eval(body, [])))}
         else
-          :stuck
+          _ -> :stuck
         end
 
       # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
