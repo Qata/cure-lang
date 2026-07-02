@@ -291,7 +291,10 @@ defmodule Cure.Elab.Elaborator do
             build_motive(dname, family.indices, param_terms, idx_terms, scrut_term, result_type_term)
 
           with {:ok, branches} <-
-                 elaborate_branches(arms, names, ctx, env, idx_terms, param_vals, scrut_term, result_type_term) do
+                 elaborate_branches(
+                   arms, names, ctx, env, dname,
+                   idx_vals, idx_terms, param_vals, scrut_term, result_type_term
+                 ) do
             {:ok, {:case, scrut_term, motive, branches}}
           end
 
@@ -401,41 +404,115 @@ defmodule Cure.Elab.Elaborator do
 
   defp generalize(leaf, _rb, _s, _depth), do: leaf
 
-  defp elaborate_branches(arms, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
-    Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, arm_meta, body}, {:ok, acc} ->
+  # Coverage/discharge pass (spec §5). Partition the surface arms, then emit a
+  # branch for EVERY declared constructor of `dname` — matched arms elaborate
+  # their bodies; omitted or explicit-impossible constructors are discharged
+  # (verdict :impossible ⇒ {:absurd} placeholder body) or rejected. The kernel
+  # then re-checks and re-discharges the assembled {:case,…} independently.
+  # `idx_vals` are the scrutinee's index VALUES (for branch_unify); `idx_terms`
+  # are the reified index TERMS (for branch_expected/context).
+  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, idx_terms, param_vals, scrut_term, result_type_term) do
+    with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
+      sig = Context.signature(ctx)
+
+      sig
+      |> Inductive.ctors_of(dname)
+      |> Enum.map(& &1.name)
+      |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
+        verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals)
+
+        case Map.get(arm_map, cname) do
+          {:matched, pattern, body_expr} ->
+            case elaborate_matched_branch(
+                   verdict, pattern, body_expr, names, ctx, env,
+                   idx_terms, param_vals, scrut_term, result_type_term
+                 ) do
+              {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+              {:error, _} = err -> {:halt, err}
+            end
+
+          {:impossible_marked, pattern} ->
+            if verdict == :impossible do
+              {arity, _} = ctor_arity(env, pattern)
+              {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+            else
+              {:halt, {:error, {:reachable_impossible, cname}}}
+            end
+
+          nil ->
+            # omitted constructor
+            if verdict == :impossible do
+              {arity, _} = ctor_arity(env, cname)
+              {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+            else
+              {:halt, {:error, {:missing_branch, cname}}}
+            end
+        end
+      end)
+    end
+  end
+
+  # Build a map cname => {:matched, pattern, body} | {:impossible_marked, pattern}.
+  # Validates every arm names one of dname's OWN declared constructors (spec §5
+  # step 2 gap) and rejects duplicate arms.
+  defp partition_arms(arms, ctx, env, dname) do
+    sig = Context.signature(ctx)
+
+    Enum.reduce_while(arms, {:ok, %{}}, fn {:match_arm, arm_meta, body}, {:ok, acc} ->
       pattern = Keyword.fetch!(arm_meta, :pattern)
 
-      case elaborate_branch(
-             pattern,
-             single_body(body),
-             names,
-             ctx,
-             env,
-             scrut_indices,
-             scrut_param_vals,
-             scrut_term,
-             result_type_term
-           ) do
-        {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
-        {:error, _} = err -> {:halt, err}
+      case constructor_pattern(pattern) do
+        {:error, _} = err ->
+          {:halt, err}
+
+        {:ok, {cname, _vars}} ->
+          cond do
+            Inductive.get_ctor(env, cname) == nil ->
+              {:halt, {:error, {:unknown_pattern_constructor, cname}}}
+
+            Inductive.ctor_family(sig, cname) != dname ->
+              {:halt, {:error, {:foreign_ctor, cname}}}
+
+            Map.has_key?(acc, cname) ->
+              {:halt, {:error, {:duplicate_branch, cname}}}
+
+            Keyword.get(arm_meta, :impossible) == true ->
+              {:cont, {:ok, Map.put(acc, cname, {:impossible_marked, pattern})}}
+
+            true ->
+              {:cont, {:ok, Map.put(acc, cname, {:matched, pattern, single_body(body)})}}
+          end
       end
     end)
   end
 
-  defp elaborate_branch(pattern, body_expr, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
-    {cname, pattern_vars} = constructor_pattern(pattern)
+  # Arity of a constructor named directly or by a pattern (spec §5 steps 4/5).
+  defp ctor_arity(env, {:function_call, _, _} = pattern) do
+    {:ok, {cname, _}} = constructor_pattern(pattern)
+    ctor_arity(env, cname)
+  end
 
-    case Inductive.get_ctor(env, cname) do
-      nil ->
-        {:error, {:unknown_pattern_constructor, cname}}
+  defp ctor_arity(env, cname) when is_atom(cname) do
+    %{args: tele} = Inductive.get_ctor(env, cname)
+    {length(tele), cname}
+  end
 
-      %{args: telescope, quantities: quantities, result_indices: result_indices} ->
-        # The branch scope is the pattern telescope (indices 0..n-1) *followed by*
-        # the enclosing names, so a branch body can still reach outer bindings
-        # (function params, prior lets). extend_context shifts ctx the same way,
-        # keeping surface names and de Bruijn indices aligned.
-        branch_names = branch_scope(quantities, pattern_vars) ++ names
+  defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
+    {:ok, {cname, pattern_vars}} = constructor_pattern(pattern)
+    %{args: telescope, quantities: quantities, result_indices: result_indices} = Inductive.get_ctor(env, cname)
+    branch_names = branch_scope(quantities, pattern_vars) ++ names
 
+    case verdict do
+      :impossible ->
+        # Matched arm on a genuinely unreachable constructor the user did NOT mark
+        # impossible: elaborate the body unchecked (the kernel discharges it too).
+        branch_ctx = extend_context(ctx, telescope, scrut_param_vals)
+
+        with {:ok, body_term, _type} <- elaborate_expr_typed(body_expr, branch_names, branch_ctx, env) do
+          {:ok, {cname, length(telescope), body_term}}
+        end
+
+      _solved_or_trivial ->
         branch_ctx =
           ctx
           |> extend_context(telescope, scrut_param_vals)
@@ -470,8 +547,13 @@ defmodule Cure.Elab.Elaborator do
   defp constructor_pattern({:function_call, meta, args}) do
     cname = meta |> Keyword.fetch!(:name) |> String.to_atom()
     vars = Enum.map(args, fn {:variable, _meta, v} -> v end)
-    {cname, vars}
+    {:ok, {cname, vars}}
   end
+
+  defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
+
+  defp pattern_shape(p) when is_tuple(p) and tuple_size(p) > 0, do: elem(p, 0)
+  defp pattern_shape(_), do: :unknown
 
   # Names for the branch's telescope binders, most-recently-bound first: surface
   # pattern variables name the present (ω) positions in order; erased positions
