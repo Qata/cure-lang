@@ -500,7 +500,7 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
-    with {:ok, arms1} <- desugar_as_binds(arms0),
+    with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms} <- desugar_nested_arms(arms1, scrut_expr),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
@@ -1254,30 +1254,55 @@ defmodule Cure.Elab.Elaborator do
 
   # --- as-pattern desugaring (parity #4) -------------------------------------
   #
-  # `name @ <pattern> -> body` binds the whole matched value to `name` as well as
-  # destructuring it. Since a pattern and its value-reconstruction share the same
-  # `{:function_call}`/`{:variable}` surface shape, the pattern itself IS the
-  # expression rebuilding the value, so the arm lowers to `<pattern> -> body[name
-  # ↦ <pattern>]` — which then flows through nested-pattern lowering unchanged.
-  defp desugar_as_binds(arms) do
+  # `name @ <pattern>` binds the whole matched value to `name` as well as
+  # destructuring it. Inline `{:as_pattern, _, [name, sub]}` nodes may sit at the
+  # arm's top level OR nested inside constructor arguments (`Cons(h, t @ …)`).
+  # Strip them out of the pattern tree and, since a pattern and its
+  # value-reconstruction share the same surface shape, substitute each `name` by
+  # its (cleaned) sub-pattern in the body — the cleaned pattern then flows through
+  # nested-pattern lowering unchanged.
+  defp desugar_as_patterns(arms) do
     Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body} = arm, {:ok, acc} ->
-      case Keyword.get(meta, :as_bind) do
-        nil ->
+      pattern = Keyword.fetch!(meta, :pattern)
+      {clean, subs} = strip_as_patterns(pattern)
+
+      cond do
+        subs == [] ->
           {:cont, {:ok, acc ++ [arm]}}
 
-        name ->
-          pat = Keyword.fetch!(meta, :pattern)
-          b = single_body(body)
+        binds_any?(single_body(body), Enum.map(subs, &elem(&1, 0))) ->
+          {:halt, {:error, {:unsupported_pattern, :shadowed_as}}}
 
-          if binds_any?(b, [name]) do
-            {:halt, {:error, {:unsupported_pattern, :shadowed_as}}}
-          else
-            b2 = subst_surface_var(b, name, pat)
-            {:cont, {:ok, acc ++ [{:match_arm, Keyword.delete(meta, :as_bind), b2}]}}
-          end
+        true ->
+          b2 =
+            Enum.reduce(subs, single_body(body), fn {name, recon}, b ->
+              subst_surface_var(b, name, recon)
+            end)
+
+          {:cont, {:ok, acc ++ [{:match_arm, Keyword.put(meta, :pattern, clean), b2}]}}
       end
     end)
   end
+
+  # Strip inline as-patterns from a pattern tree → `{cleaned_pattern, [{name,
+  # reconstruction}]}`. The reconstruction is the cleaned sub-pattern (valid as an
+  # expression). Handles nesting: `w @ S(t @ Z())` yields `w ↦ S(Z())`, `t ↦ Z()`.
+  defp strip_as_patterns({:as_pattern, _m, [name, sub]}) do
+    {clean_sub, subs} = strip_as_patterns(sub)
+    {clean_sub, [{name, clean_sub} | subs]}
+  end
+
+  defp strip_as_patterns({:function_call, m, args}) do
+    {clean_args, subs} =
+      Enum.map_reduce(args, [], fn a, acc ->
+        {ca, s} = strip_as_patterns(a)
+        {ca, acc ++ s}
+      end)
+
+    {{:function_call, m, clean_args}, subs}
+  end
+
+  defp strip_as_patterns(other), do: {other, []}
 
   # --- nested-pattern desugaring (parity #3) ---------------------------------
   #

@@ -43,4 +43,18 @@ defmodule Cure.Elab.AsPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "a nested as-pattern inside a constructor argument binds the sub-value" do
+    src =
+      "mod M\n  type Nat = Z | S(Nat)\n  type Lst = Nil | Cons(Nat, Lst)\n" <>
+        "  fn f(xs: Lst) -> Lst = match xs\n    Cons(h, t@Cons(y, r)) -> t\n    Cons(h, r) -> r\n    Nil() -> Nil()\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.NestedAsE2E", functions: [:f])
+
+    # `t` is the entire tail Cons(...) sub-value.
+    assert apply(mod, :f, [{:Cons, :Z, {:Cons, {:S, :Z}, :Nil}}]) == {:Cons, {:S, :Z}, :Nil}
+    # Single-element list falls to the second arm.
+    assert apply(mod, :f, [{:Cons, :Z, :Nil}]) == :Nil
+  end
 end

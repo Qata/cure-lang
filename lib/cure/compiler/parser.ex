@@ -572,6 +572,7 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {first, state} = parse_expr(state, 0)
+        {first, state} = maybe_wrap_as(first, state)
         state = skip_newlines(state)
         {rest, state} = parse_more_args(state)
         state = skip_newlines(state)
@@ -586,6 +587,7 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         state = skip_newlines(state)
         {expr, state} = parse_expr(state, 0)
+        {expr, state} = maybe_wrap_as(expr, state)
         state = skip_newlines(state)
         {rest, state} = parse_more_args(state)
         {[expr | rest], state}
@@ -1604,27 +1606,35 @@ defmodule Cure.Compiler.Parser do
   defp parse_match_arm(state) do
     # Parse pattern
     {pattern, state} = parse_expr(state, 0)
+    {pattern, state} = maybe_wrap_as(pattern, state)
+    parse_match_arm_tail(pattern, state)
+  end
 
-    # As-pattern: `name @ <pattern>` binds the whole matched value to `name` in
-    # addition to destructuring it. `@` (`:at`) is a decorator prefix only at
-    # declaration position, so in pattern position it is unambiguously an
-    # as-binding.
-    case {pattern, peek(state)} do
-      {{:variable, _m, name}, %Token{type: :at}} ->
+  # As-pattern: `name @ <pattern>` binds the whole matched value to `name` in
+  # addition to destructuring it. `@` (`:at`) is a decorator prefix only at
+  # declaration position, so in value/pattern position it is unambiguously an
+  # as-binding. Used both at a match arm's top level and inside constructor
+  # arguments (`Cons(h, t @ Cons(x, y))`), so as-patterns nest.
+  defp maybe_wrap_as({:variable, vm, name}, state) do
+    case peek(state) do
+      %Token{type: :at} ->
         state = advance(state)
         {inner, state} = parse_expr(state, 0)
-        parse_match_arm_tail(inner, state, name)
+        {inner, state} = maybe_wrap_as(inner, state)
+        {{:as_pattern, vm, [name, inner]}, state}
 
       _ ->
-        parse_match_arm_tail(pattern, state)
+        {{:variable, vm, name}, state}
     end
   end
+
+  defp maybe_wrap_as(pattern, state), do: {pattern, state}
 
   # The tail of a match arm after its pattern has been parsed: optional `when`
   # guard, the `->`, and the body (or `impossible`). Factored out so with-clause
   # arms can fall through to it once they have decided they are NOT a rematch arm
   # (see `parse_with_clause_arm`).
-  defp parse_match_arm_tail(pattern, state, as_bind \\ nil) do
+  defp parse_match_arm_tail(pattern, state) do
     state = skip_newlines(state)
 
     # Optional guard: when expr
@@ -1643,18 +1653,16 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :arrow)
     state = skip_newlines(state)
 
-    extra =
-      [] |> then(&if(guard, do: &1 ++ [guard: guard], else: &1))
-         |> then(&if(as_bind, do: &1 ++ [as_bind: as_bind], else: &1))
-
     # `impossible` is a soft keyword recognized only as an entire arm body
     # (spec §4): `pat -> impossible`. Any other use stays an ordinary identifier.
     if impossible_body?(state) do
       state = advance(state)
-      {{:match_arm, [pattern: pattern] ++ extra ++ [impossible: true], [nil]}, state}
+      meta = if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
+      {{:match_arm, meta, [nil]}, state}
     else
       {body, state} = parse_expr_or_block(state)
-      {{:match_arm, [pattern: pattern] ++ extra, [body]}, state}
+      meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
+      {{:match_arm, meta, [body]}, state}
     end
   end
 
