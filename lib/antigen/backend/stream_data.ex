@@ -12,6 +12,12 @@ defmodule Antigen.Backend.StreamData do
   def interp({:resize, n, g}), do: StreamData.resize(interp(g), n)
   def interp({:tagged, _tag, g}), do: interp(g)
 
+  # Deferred construction: `fun.()` (which builds the sub-generator's reified AST)
+  # and its `interp` run only when generation descends here, so a recursive
+  # generator unfolds one sampled path at a time. `bind` over a constant is the
+  # StreamData idiom for "don't build this until asked".
+  def interp({:lazy, fun}), do: StreamData.bind(StreamData.constant(nil), fn _ -> interp(fun.()) end)
+
   @impl true
   def sample(native, count), do: Enum.take(native, count)
 end

@@ -76,6 +76,28 @@ defmodule Antigen.Generators.TermTest do
   defp contains_tag?(l, tag) when is_list(l), do: Enum.any?(l, &contains_tag?(&1, tag))
   defp contains_tag?(_, _), do: false
 
+  test "lazy generation lifts the depth ceiling (terms deeper than the old size-3 cap allowed)" do
+    # Under the eager size-3 cap the deepest term observed was structural depth 7.
+    # With lazy construction the effective size is much larger, so terms reach
+    # well past that — and sampling still completes (no eager-tree explosion),
+    # which is the whole point of the laziness change.
+    depths =
+      for id <- Term.assay_ids(),
+          c <- sample(Term.typed_term(id), 200),
+          do: term_depth(c.payload.term)
+
+    assert Enum.max(depths) > 10, "deepest term was only #{Enum.max(depths)} — cap not lifted"
+  end
+
+  defp term_depth(t) when is_tuple(t) do
+    case t |> Tuple.to_list() |> tl() |> Enum.filter(&(is_tuple(&1) or is_list(&1))) |> Enum.map(&term_depth/1) do
+      [] -> 0
+      xs -> 1 + Enum.max(xs)
+    end
+  end
+  defp term_depth(l) when is_list(l), do: Enum.max([0 | Enum.map(l, &term_depth/1)])
+  defp term_depth(_), do: 0
+
   test "typed_term/1 emits a well-typed :typed_term challenge for its assay id" do
     alias Antigen.Challenge
     for id <- ["term/infer_check", "term/subject_reduction", "term/normalization"] do

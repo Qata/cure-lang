@@ -15,16 +15,13 @@ defmodule Antigen.Generators.Term do
   @gen_fuel 500
   def gen_fuel, do: @gen_fuel
 
-  # The `Antigen.Gen` DSL builds `frequency` branches EAGERLY, so `gen/3`
-  # constructs its whole generator tree before the backend samples it — a tree
-  # whose size is exponential in the recursion depth. The backend's `sized` feeds
-  # sizes up to the sample count (~80), which would make that eager tree
-  # astronomically large. Cap the effective size to a small constant: this keeps
-  # the v1 fragment small (spec §11 "small v1 fragment keeps shrink chains
-  # short") and bounds both tree construction and the per-node kernel calls in
-  # `accept_infer?`. Size 3 still lets `app`/`case`/INDIR (all gated on size > 1)
-  # fire with room for one further nested subgoal.
-  @max_size 3
+  # Effective-size cap. `gen/3` now constructs lazily (see the `gen/3` seam
+  # below), so this is no longer bounding an exponential eager tree — it bounds
+  # the *typechecking cost* the assays pay per generated term (a depth-N term is
+  # O(N)+ to `infer`/`nf`/`conv`). Raised well past the former eager-era `3` now
+  # that construction is O(depth): the generator reaches genuinely deep terms
+  # while keeping per-term assay work bounded.
+  @max_size 12
   def max_size, do: @max_size
 
   @spec gen_term(Context.t(), Cure.Core.Term.t()) :: Gen.t()
@@ -80,10 +77,20 @@ defmodule Antigen.Generators.Term do
     Gen.frequency(Enum.map(@assay_ids, fn id -> {1, typed_term(id)} end))
   end
 
-  # size 0 → canonical inhabitant (total, no search).
-  defp gen(ctx, goal, 0), do: Gen.return(SigMenu.canon(ctx, goal))
+  # The lazy seam: every recursive descent goes through `gen/3`, which defers the
+  # actual rule construction (`gen_build/3`) behind `Gen.lazy`. So building one
+  # level yields only thin lazy thunks for its sub-goals; the backend forces a
+  # thunk only when sampling descends into that branch. Construction is therefore
+  # O(depth) along the sampled path, not O(branching^depth) — this is what lifts
+  # the depth ceiling that the eager reified AST imposed (the `@max_size 3`
+  # workaround). `gen_build/3` and all its helpers call `gen/3` (never
+  # `gen_build/3` directly), so laziness is pervasive with a single wrapper.
+  defp gen(ctx, goal, size), do: Gen.lazy(fn -> gen_build(ctx, goal, size) end)
 
-  defp gen(ctx, goal, size) do
+  # size 0 → canonical inhabitant (total, no search).
+  defp gen_build(ctx, goal, 0), do: Gen.return(SigMenu.canon(ctx, goal))
+
+  defp gen_build(ctx, goal, size) do
     wgoal = whnf(ctx, goal)
     rules = intro_rules(ctx, goal, wgoal, size) ++ elim_rules(ctx, goal, size)
 
