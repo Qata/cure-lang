@@ -74,11 +74,23 @@ defmodule Cure.Elab.NestedPatternTest do
     assert {:error, _} = Program.elaborate(src)
   end
 
-  test "multi-column nesting is a clean error (v1 limit)" do
+  test "multi-column nesting elaborates and runs (pattern-matrix compilation)" do
     src =
       @nat <>
-        "  type P = MkP(Nat, Nat)\n  fn h(p: P) -> Nat = match p\n    MkP(Z(), Z()) -> Z()\n    MkP(x, y) -> x\nend\n"
+        "  type P = MkP(Nat, Nat) | Nil\n  fn h(p: P) -> Nat = match p\n    MkP(Z(), Z()) -> Z()\n    MkP(Z(), S(b)) -> b\n    MkP(S(a), y) -> a\n    Nil() -> Z()\nend\n"
 
-    assert {:error, {:unsupported_pattern, :multi_column_nesting}} = Program.elaborate(src)
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.NestedMultiColE2E", functions: [:h])
+
+    assert apply(mod, :h, [{:MkP, :Z, :Z}]) == :Z
+    assert apply(mod, :h, [{:MkP, :Z, {:S, {:S, :Z}}}]) == {:S, :Z}
+    assert apply(mod, :h, [{:MkP, {:S, :Z}, :Z}]) == :Z
+    assert apply(mod, :h, [:Nil]) == :Z
+  end
+
+  test "a top-level catch-all mixed with nesting is a clean error (boundary)" do
+    src = @nat <> "  fn f(n: Nat) -> Nat = match n\n    S(S(m)) -> m\n    _ -> Z()\nend\n"
+
+    assert {:error, {:unsupported_pattern, :catchall_with_nesting}} = Program.elaborate(src)
   end
 end

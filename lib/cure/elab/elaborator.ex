@@ -1260,10 +1260,12 @@ defmodule Cure.Elab.Elaborator do
   # one level per `elaborate_match`; deeper nesting is lowered on re-entry when
   # the emitted inner match is elaborated.
   #
-  # Scope: arms grouped by their outer constructor; within a group at most ONE
-  # argument column may be nested (the others must be variables). Multi-column
-  # nesting and a top-level catch-all mixed with nesting are rejected cleanly
-  # (real multi-column compilation is future work).
+  # Scope: arms are grouped by their outer constructor; each group's argument
+  # columns are compiled by the standard pattern-matrix algorithm
+  # (Augustsson/Maranget) — left-to-right column selection producing a tree of
+  # single-scrutinee matches, so ANY number of nested columns is handled. A
+  # top-level catch-all mixed with nesting is still rejected cleanly (the outer
+  # column would need matrix treatment too — future work).
   defp desugar_nested_arms(arms) do
     cond do
       not Enum.any?(arms, &arm_has_nested?/1) ->
@@ -1295,7 +1297,7 @@ defmodule Cure.Elab.Elaborator do
 
     Enum.reduce_while(order, {:ok, []}, fn cname, {:ok, acc} ->
       case compile_ctor_group(cname, Map.fetch!(grouped, cname)) do
-        {:ok, arm} -> {:cont, {:ok, acc ++ [arm]}}
+        {:ok, group_arms} -> {:cont, {:ok, acc ++ group_arms}}
         {:error, _} = err -> {:halt, err}
       end
     end)
@@ -1306,77 +1308,155 @@ defmodule Cure.Elab.Elaborator do
     Keyword.fetch!(fmeta, :name)
   end
 
-  defp compile_ctor_group(_cname, [only] = arms) do
-    if arm_has_nested?(only), do: compile_group(arms), else: {:ok, only}
+  # A group with a nested arm is compiled by the matrix algorithm; a group with
+  # none is passed through unchanged (so a genuine duplicate constructor still
+  # reaches `partition_arms`' duplicate check).
+  defp compile_ctor_group(_cname, arms) do
+    if Enum.any?(arms, &arm_has_nested?/1), do: compile_group(arms), else: {:ok, arms}
   end
 
-  defp compile_ctor_group(_cname, arms), do: compile_group(arms)
-
-  # `arms` all share an outer constructor. Split off the single nested column and
-  # emit `C(v₁..v_k) -> match v_j <inner arms>`, substituting each other column's
-  # variable by its fresh binder in the arm body.
+  # `arms` all share an outer constructor `C/k`. Emit `C(v₁..v_k) -> <matrix>`,
+  # where `<matrix>` compiles the k argument columns (rows = each arm's sub-
+  # patterns → body) into a tree of single-scrutinee matches.
   defp compile_group([{:match_arm, meta0, _} | _] = arms) do
     {:function_call, fmeta, args0} = Keyword.fetch!(meta0, :pattern)
     cname = Keyword.fetch!(fmeta, :name)
     k = length(args0)
 
-    active =
-      for col <- 0..(k - 1)//1,
-          Enum.any?(arms, fn a -> not var_col?(a, col) end),
-          do: col
+    # Shadow guard: a naive surface substitution would capture if a body rebinds
+    # one of the pattern variables it substitutes. Reject rather than miscompile.
+    pvars =
+      arms
+      |> Enum.flat_map(fn {:match_arm, m, _} ->
+        {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
+        Enum.flat_map(as, &pattern_vars_deep/1)
+      end)
+      |> Enum.uniq()
 
-    case active do
-      [] ->
-        # No nesting after all (all-variable columns) — pass the first arm through.
-        {:ok, hd(arms)}
+    if Enum.any?(arms, fn {:match_arm, _m, b} -> binds_any?(single_body(b), pvars) end) do
+      {:error, {:unsupported_pattern, :shadowed_nested}}
+    else
+      fresh = for i <- 1..k//1, do: "$n" <> cname <> Integer.to_string(i)
 
-      [j] ->
-        fresh = for i <- 1..k//1, do: "$n" <> cname <> "_" <> Integer.to_string(i)
-        fresh_j = Enum.at(fresh, j)
+      rows =
+        Enum.map(arms, fn {:match_arm, m, b} ->
+          {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
+          {as, single_body(b)}
+        end)
 
-        with {:ok, inner_arms} <- build_inner_arms(arms, k, j, fresh) do
-          inner_match = {:pattern_match, [], [{:variable, [], fresh_j} | inner_arms]}
+      case compile_matrix(fresh, rows) do
+        {:ok, inner} ->
           outer_pat = {:function_call, fmeta, Enum.map(fresh, &{:variable, [], &1})}
-          {:ok, {:match_arm, [pattern: outer_pat], inner_match}}
-        end
+          {:ok, [{:match_arm, [pattern: outer_pat], inner}]}
 
-      _ ->
-        {:error, {:unsupported_pattern, :multi_column_nesting}}
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
-  defp var_col?({:match_arm, meta, _body}, col) do
-    {:function_call, _m, args} = Keyword.fetch!(meta, :pattern)
-    match?({:variable, _mm, _v}, Enum.at(args, col))
+  defp pattern_vars_deep({:variable, _m, v}), do: [v]
+  defp pattern_vars_deep({:function_call, _m, args}), do: Enum.flat_map(args, &pattern_vars_deep/1)
+  defp pattern_vars_deep(_), do: []
+
+  # Pattern-matrix compilation. `scruts` are fresh scrutinee variable NAMES; each
+  # row is `{[pattern…], body}` with one pattern per remaining scrutinee. Emits a
+  # tree of single-scrutinee `{:pattern_match}` nodes; every emitted match is
+  # single-level, so it re-uses the dependent elaborator per node.
+  defp compile_matrix([], [{[], body} | _]), do: {:ok, body}
+
+  defp compile_matrix([v | vs], rows) do
+    col = Enum.map(rows, fn {[p | _ps], _b} -> p end)
+
+    if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
+      # All-variable column: bind each row's variable to `v`, drop the column.
+      rows2 =
+        Enum.map(rows, fn {[{:variable, _m, x} | ps], body} ->
+          {ps, subst_surface_var(body, x, {:variable, [], v})}
+        end)
+
+      compile_matrix(vs, rows2)
+    else
+      compile_matrix_split(v, vs, rows, col)
+    end
   end
 
-  defp build_inner_arms(arms, k, j, fresh) do
-    Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body0}, {:ok, acc} ->
-      body = single_body(body0)
-      {:function_call, _m, args} = Keyword.fetch!(meta, :pattern)
-      col_pat = Enum.at(args, j)
+  # Column `v` has ≥1 constructor pattern: branch on each distinct constructor
+  # (first-appearance order), plus a catch-all if any row has a variable there.
+  defp compile_matrix_split(v, vs, rows, col) do
+    ctors =
+      col
+      |> Enum.flat_map(fn
+        {:function_call, m, _a} -> [Keyword.fetch!(m, :name)]
+        _ -> []
+      end)
+      |> Enum.uniq()
 
-      # Every non-j column must be a variable here (single active column); bind it
-      # to its fresh outer var by surface substitution in the body.
-      other_vars =
-        for col <- 0..(k - 1)//1, col != j do
-          {:variable, _mm, vname} = Enum.at(args, col)
-          {vname, Enum.at(fresh, col)}
+    has_var = Enum.any?(col, &match?({:variable, _m, _n}, &1))
+
+    with {:ok, ctor_arms} <- split_ctor_arms(ctors, v, vs, rows) do
+      arms =
+        if has_var do
+          {:ok, default_inner} = split_default(v, vs, rows)
+          ctor_arms ++ [{:match_arm, [pattern: {:variable, [], v <> "_d"}], default_inner}]
+        else
+          ctor_arms
         end
 
-      names_to_sub = Enum.map(other_vars, &elem(&1, 0))
+      {:ok, {:pattern_match, [], [{:variable, [], v} | arms]}}
+    end
+  end
 
-      if binds_any?(body, names_to_sub) do
-        {:halt, {:error, {:unsupported_pattern, :shadowed_nested}}}
-      else
-        new_body =
-          Enum.reduce(other_vars, body, fn {old, new}, b ->
-            subst_surface_var(b, old, {:variable, [], new})
-          end)
+  defp split_ctor_arms(ctors, v, vs, rows) do
+    Enum.reduce_while(ctors, {:ok, []}, fn cname, {:ok, acc} ->
+      arity = split_arity(cname, rows)
+      ws = for i <- 1..arity//1, do: v <> "_" <> cname <> Integer.to_string(i)
 
-        {:cont, {:ok, acc ++ [{:match_arm, [pattern: col_pat], new_body}]}}
+      sub_rows =
+        Enum.flat_map(rows, fn {[p | ps], body} ->
+          case p do
+            {:function_call, m, qs} ->
+              if Keyword.fetch!(m, :name) == cname, do: [{qs ++ ps, body}], else: []
+
+            {:variable, _m, x} ->
+              wilds = for w <- ws, do: {:variable, [], w <> "_x"}
+              [{wilds ++ ps, subst_surface_var(body, x, {:variable, [], v})}]
+          end
+        end)
+
+      case compile_matrix(ws ++ vs, sub_rows) do
+        {:ok, inner} ->
+          pat = {:function_call, [name: cname], Enum.map(ws, &{:variable, [], &1})}
+          {:cont, {:ok, acc ++ [{:match_arm, [pattern: pat], inner}]}}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
+  end
+
+  # Arity of `cname` from the first row that mentions it explicitly.
+  defp split_arity(cname, rows) do
+    Enum.find_value(rows, 0, fn {[p | _], _} ->
+      case p do
+        {:function_call, m, qs} -> if Keyword.fetch!(m, :name) == cname, do: length(qs)
+        _ -> nil
+      end
+    end)
+  end
+
+  # Catch-all sub-matrix for constructors not explicitly listed: only the
+  # variable rows survive (each binding its variable to `v`), column dropped.
+  defp split_default(v, vs, rows) do
+    default_rows =
+      Enum.flat_map(rows, fn {[p | ps], body} ->
+        case p do
+          {:variable, _m, x} -> [{ps, subst_surface_var(body, x, {:variable, [], v})}]
+          _ -> []
+        end
+      end)
+
+    compile_matrix(vs, default_rows)
   end
 
   # Build `{arm_map, default}` where arm_map is cname => {:matched, pattern, body}
