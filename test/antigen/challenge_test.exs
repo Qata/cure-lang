@@ -38,4 +38,26 @@ defmodule Antigen.ChallengeTest do
     assert back.payload.def_body == payload.def_body
     assert back.payload.families == [{fam, ctors}]
   end
+
+  test ":mutant_term round-trips through to_pieces/from_pieces incl the fault map" do
+    fault = %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma,
+              injected_head: :Nat, scope: nil}
+    c = Challenge.new(
+      kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+      payload: %{sig: :v1, ctx: [{:data, :Nat, [], []}],
+                 type: {:data, :Nat, [], []},
+                 term: {:fst, {:ctor, :Z, []}}, fault: fault}
+    )
+
+    {scaffold, pieces} = Challenge.to_pieces(c)
+    # simulate the corpus scaffold codec (term_to_binary → binary_to_term [:safe])
+    scaffold2 = Antigen.Corpus.decode_scaffold(Antigen.Corpus.encode_scaffold(scaffold))
+    c2 = Challenge.from_pieces(:mutant_term, c.assay, c.label, nil, nil, scaffold2, pieces)
+
+    assert c2.kind == :mutant_term
+    assert c2.payload.fault == fault
+    assert c2.payload.term == c.payload.term
+    assert c2.payload.ctx == c.payload.ctx
+    assert c2.payload.type == c.payload.type
+  end
 end

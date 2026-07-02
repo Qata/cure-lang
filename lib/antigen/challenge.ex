@@ -4,7 +4,7 @@ defmodule Antigen.Challenge do
   @enforce_keys [:kind, :assay, :label, :payload]
   defstruct [:kind, :assay, :label, :payload, :seed, :note]
 
-  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq | :typed_term
+  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq | :typed_term | :mutant_term
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -42,7 +42,13 @@ defmodule Antigen.Challenge do
     # universes vertical
     :u,
     # tier-B typed-term vertical: kind, family/ctor/def names, sig version
-    :typed_term, :v1, :Bd, :T, :F, :Vec, :vnil, :vcons, :plus, :dbl, :x, :xs
+    :typed_term, :v1, :Bd, :T, :F, :Vec, :vnil, :vcons, :plus, :dbl, :x, :xs,
+    # mutation corpus: kind, fault kinds, witness enum, extra type-former head
+    # (:ill_typed already above; :Z/:S/:Nat/:Vec already interned above)
+    :mutant_term,
+    :head_swap, :ctor_arg, :index_mismatch, :app_domain,
+    :out_of_scope_var, :proj_non_pair, :universe,
+    :head, :index, :level, :scope, :Sigma
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -126,6 +132,13 @@ defmodule Antigen.Challenge do
     %{sig: sig, ctx: ctx, type: type, term: term} = p
     ctx_pieces = ctx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"ctx#{i}", t} end)
     scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx)}
+    {scaffold, ctx_pieces ++ [{"type", type}, {"term", term}]}
+  end
+
+  def to_pieces(%__MODULE__{kind: :mutant_term, payload: p}) do
+    %{sig: sig, ctx: ctx, type: type, term: term, fault: fault} = p
+    ctx_pieces = ctx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"ctx#{i}", t} end)
+    scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx), "fault" => fault}
     {scaffold, ctx_pieces ++ [{"type", type}, {"term", term}]}
   end
 
@@ -244,6 +257,22 @@ defmodule Antigen.Challenge do
     }
 
     new(kind: :typed_term, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:mutant_term, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    len = scaffold["ctx_len"]
+    ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
+
+    payload = %{
+      sig: String.to_existing_atom(scaffold["sig"]),
+      ctx: ctx,
+      type: Map.fetch!(pmap, "type"),
+      term: Map.fetch!(pmap, "term"),
+      fault: scaffold["fault"]
+    }
+
+    new(kind: :mutant_term, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   # --- private helpers --------------------------------------------------------
