@@ -1,6 +1,9 @@
 defmodule Antigen.ShrinkTest do
   use ExUnit.Case, async: true
   alias Antigen.{Shrink, Challenge}
+  alias Antigen.Generators.{Term, SigMenu}
+  alias Antigen.Backend.StreamData, as: B
+  alias Cure.Core.{Context, Kernel}
 
   # a well-typed-ish artifact whose predicate is purely structural for these unit tests
   defp art(term, ctx \\ []) do
@@ -149,6 +152,39 @@ defmodule Antigen.ShrinkTest do
       {:data, :Nat, [], []}                       # old pos3, now pos2, content unchanged
     ]
     assert Antigen.Shrink.closed?(c)
+  end
+
+  test "shrinks a deep well-typed term to a minimal vcons-containing witness (§7.4)" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+
+    infer_ok? = fn ch ->
+      c = SigMenu.rebuild_context(env, ch.payload.ctx)
+      match?({:ok, _}, Kernel.infer(c, ch.payload.term))
+    end
+    pred = fn ch -> infer_ok?.(ch) and contains_vcons?(ch.payload.term) end
+
+    # find a generated well-typed term containing a vcons, then shrink
+    seed =
+      B.interp(Term.gen_term(ctx, {:data, :Vec, [], [{:ctor, :S, [{:ctor, :Z, []}]}]}))
+      |> Enum.take(50)
+      |> Enum.find(&contains_vcons?/1)
+
+    # Load-bearing, not vacuous: `assert seed` fails loudly (not silently skips)
+    # if no vcons-containing term is sampled (recursive-skeptical-review finding).
+    assert seed, "no vcons-containing term sampled in 50 draws"
+    a = art(seed)
+    assert pred.(a)
+    out = Shrink.minimize(a, pred, 5000)
+    assert pred.(out)
+    assert Shrink.size(out) <= Shrink.size(a)
+    # Exact global minimum (probe-verified stable across seeds): the smallest
+    # well-typed vcons-containing term is `vcons Z Z vnil : Vec (S Z)`, size 4.
+    # Asserting the exact witness (not a loose `<= 8` bound) makes this
+    # load-bearing — it verifies the greedy sweep reaches the true minimum, not
+    # merely "something small".
+    assert out.payload.term == {:ctor, :vcons, [{:ctor, :Z, []}, {:ctor, :Z, []}, {:ctor, :vnil, []}]}
+    assert Shrink.size(out) == 4
   end
 
   defp contains_vcons?({:ctor, :vcons, _}), do: true
