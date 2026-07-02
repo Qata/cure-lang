@@ -68,6 +68,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 23 | Assurance (meta) | Missing per-rule antibodies: occurs-check/cycle and deletion rule | A | additive | ✅ (W3: deletion antibody + occurs pin) |
 | 24 | Assurance (meta) | Wire a forced/dot-pattern (`forcing`) Antigen vertical once #5 exists | A | additive | ⬜ (needs #5) |
 | 25 | Assurance (meta) | Surface-level `.cure` regression corpus for the ④ features | A | additive | ⬜ (post-④) |
+| 26 | Dependent matching | Expression-level / inline `match` (Idris `Elab/Case.idr`). **Checking mode landed** (`fcdf5ce`): a `match` in nested expression position — as a `rewrite … in` body and as an arm body of another `match`, non-dependent and with a dependent goal that mentions the matched variable (motive refines per level); non-exhaustive nested matches now give the real `{:missing_branch,_}` coverage error. *Reach*: inference-position inline match (no expected type → needs Idris's auxiliary case-function lift) and let-blocks (`:block`/`:assignment`) in the dependent elaborator, so a `let r = match … in r` tail is still rejected (oracle probe mt05, `cure_stricter`) | E | additive | 🟡 (checked mode; reach: inference-pos + let-blocks) |
 
 ### Already at parity — no work (bounds the scope)
 Rows **1, 9, 12, 15, 18, 20**: the kernel type checker, first-order index
@@ -95,12 +96,14 @@ the full test suite. Until it lands, the bridge lemma is the sanctioned
 workaround and this row is the must-eventually-accept reach-pin.
 
 ### The honest headline
-Of 25 rows: **13 at parity, 12 remain, 0 live soundness holes** — the
+Of 26 rows: **13 at parity, 13 remain, 0 live soundness holes** — the
 transliteration-P0 audit landed ④'s rows 2/8/16 and #7's audited-complete
-`rewrite` motive inference, and the pre-port banking run closed #13's
-mutual-recursion hole (now a reach item), #19's nested positivity, and #23's
-missing antibodies. The remaining 12 are reach (#3–#6, #13, #14, #17),
-ergonomics/inference (#10, #11), or assurance strength (#22, #24, #25).
+`rewrite` motive inference (rw07 now closed via the elaborator bridge lemma),
+the pre-port banking run closed #13's mutual-recursion hole (now a reach item),
+#19's nested positivity, and #23's missing antibodies, and the post-merge port
+run landed checked-mode expression-level `match` (#26, `fcdf5ce`). The remaining
+13 are reach (#3–#6, #13, #14, #17, #26), ergonomics/inference (#10, #11), or
+assurance strength (#22, #24, #25).
 Highest-leverage single item: **#22** — without a term generator, Antigen
 proves "these specific holes stay closed," not "the kernel is sound."
 
