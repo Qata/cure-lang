@@ -72,4 +72,22 @@ defmodule Antigen.Generators.Conversion do
       end)
     end)
   end
+
+  # Accept dual: filler matches the reduced index, so the carrier is well-typed —
+  # but ONLY after the kernel reduces the `plus` redex (typed-term corpus).
+  @spec conv_accept(String.t()) :: Gen.t()
+  def conv_accept(assay) do
+    Gen.bind(carrier_gen(), fn carrier ->
+      Gen.bind(depth_split(), fn {d, a, b} ->
+        term = carrier_term(carrier, a, b, d)   # filler matches reduced index ⇒ accept
+
+        Gen.return(
+          Challenge.new(
+            kind: :typed_term, assay: assay, label: :well_typed,
+            payload: %{sig: :v1, ctx: [], type: accept_type(carrier, d), term: term}
+          )
+        )
+      end)
+    end)
+  end
 end
