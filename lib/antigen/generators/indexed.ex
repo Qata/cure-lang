@@ -10,6 +10,9 @@ defmodule Antigen.Generators.Indexed do
 
   @dec {:data, :Dec, [], []}
   @wr {:data, :Wr, [], []}
+  # SNat(s): an INDEXED family (one Dec index) — used as a Π DOMAIN inside a motive
+  # (the convoy encoding of `with` sibling refinement). `s` = the motive/def binder.
+  @snat_s {:data, :SNat, [], [{:var, 0}]}
 
   # -- shared families --------------------------------------------------------
   defp dec_family, do: {Inductive.family(:Dec, [], [], 0),
@@ -126,6 +129,56 @@ defmodule Antigen.Generators.Indexed do
             [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
     # def_type is irrelevant to the motive check; use @dec (check fails before it matters).
     challenge(:ill_typed, [dec_family()], :motive_wf, @dec, body, "over-applied motive → :bad_motive")
+  end
+
+  # -- 4.4b motive well-formedness: an INDEXED family as a Π DOMAIN -----------
+  defp snat_family, do: {Inductive.family(:SNat, [], [{:d, @dec}], 0),
+                         [Inductive.ctor(:snat0, [], [{:ctor, :Dcoupled, []}])]}
+
+  @doc """
+  Convoy-motive well-formedness: the motive body is a Π whose DOMAIN is an indexed
+  family `SNat s` (the encoding of `with` sibling refinement). `check_motive_wf`
+  used to reify the Π value and re-infer it, but `Quote.reify` collapses
+  `{:vdata,name,args}` → `{:data,name,args,[]}` (it has no inductive signature to
+  recover the param/index split), so an indexed-family domain re-inferred with
+  `:arg_arity` and the motive was wrongly `:bad_motive` — a false negative.
+
+    * `:well_typed` — `λs. Π(SNat s). Dec`. Now accepted (value-recursion classifies
+      the `{:vdata,…}` domain by its family's declared level, no lossy round-trip).
+    * `:ill_typed` — NEGATIVE CONTROL: `λs. Π(Dcoupled). Dec`, whose Π domain is a
+      Dec VALUE (a constructor), NOT a type. The value-recursion must still reject
+      it (`:bad_motive`); this proves the fix removes false negatives WITHOUT
+      introducing false positives (accepting a non-type domain).
+  """
+  @spec motive_indexed_domain(:well_typed | :ill_typed) :: Challenge.t()
+  def motive_indexed_domain(:well_typed) do
+    motive = {:lam, @dec, {:pi, @snat_s, @dec}}
+    def_type = {:pi, @dec, {:pi, @snat_s, @dec}}
+
+    body =
+      {:lam, @dec,
+       {:case, {:var, 0}, motive,
+        [
+          {:Dcoupled, 0,
+           {:lam, {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}, {:ctor, :Dcoupled, []}}},
+          {:Causal, 0,
+           {:lam, {:data, :SNat, [], [{:ctor, :Causal, []}]}, {:ctor, :Dcoupled, []}}}
+        ]}}
+
+    challenge(:well_typed, [dec_family(), snat_family()], :motive_dom, def_type, body,
+      "convoy motive λs. Π(SNat s). Dec — indexed family as Π domain (was false :bad_motive)")
+  end
+
+  def motive_indexed_domain(:ill_typed) do
+    neg_motive = {:lam, @dec, {:pi, {:ctor, :Dcoupled, []}, @dec}}
+
+    body =
+      {:lam, @dec,
+       {:case, {:var, 0}, neg_motive,
+        [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]}}
+
+    challenge(:ill_typed, [dec_family(), snat_family()], :motive_dom, @dec, body,
+      "negative control: Π domain is a Dec value (Dcoupled), not a type → :bad_motive")
   end
 
   # -- 4.5 impossible-branch discharge (no-confusion) -------------------------

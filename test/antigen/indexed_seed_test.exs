@@ -28,11 +28,20 @@ defmodule Antigen.IndexedSeedTest do
   # The kernel must reject it; if deletion ever degrades to :impossible (or
   # skips the body check) it would be {:wrongly_accepted, _} — a soundness
   # regression (W3, roadmap A2/#23).
+  # motive_indexed_domain: the convoy motive `λs. Π(SNat s). Dec` (indexed family
+  # as a Π domain). The :well_typed record is a permanent guard that the
+  # completeness fix (value-recursion in infer_type_value_sort) is not reverted —
+  # if it regresses it replays {:wrongly_rejected, {_, :bad_motive}}. The :ill_typed
+  # record is the mandatory NEGATIVE CONTROL: a Π domain that is a Dec VALUE
+  # (Dcoupled), not a type; if the value-recursion ever starts accepting a non-type
+  # domain (a false positive / soundness bug) it replays {:wrongly_accepted, _}.
   @antibodies [
     Indexed.branch_family(:ill_typed),
     Indexed.discharge(:ill_typed),
     Indexed.injectivity(:ill_typed),
-    Indexed.deletion(:ill_typed)
+    Indexed.deletion(:ill_typed),
+    Indexed.motive_indexed_domain(:well_typed),
+    Indexed.motive_indexed_domain(:ill_typed)
   ]
 
   # Known-good-behavior seeds: every indexed/case challenge the kernel handles
