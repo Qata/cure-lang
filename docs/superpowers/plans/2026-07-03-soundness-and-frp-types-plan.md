@@ -65,7 +65,10 @@ track closes, plus the two kernel trust-marker exposures flagged (pre-existing)
 by the Phase-4a adversarial verification, plus whatever the in-flight 8019e67
 verification returns.
 
-### Task A1: Characterize the erased-implicit relevant-use hole (red probes)
+### Task A1: Characterize the erased-implicit relevant-use hole (red probes) — DONE (071b5e5)
+
+Red probes committed; (a)/(b)/(c) elaborated `{:ok}` (the hole), controls (d)/(e)
+accepted. Idris 0/ω slice grounded in the test moduledoc.
 
 **Files:** Create `test/cure/elab/erasure_relevance_test.exs`. No lib changes.
 **Interfaces:** Consumes `Cure.Elab.Program.elaborate/1` and (for the
@@ -105,7 +108,20 @@ already use rather than inventing one.
   A2 deletes it).
 - [ ] **Step 5: commit** `test(elab): red — erased implicits usable relevantly ({0,ω} check missing, M8.3)`.
 
-### Task A2: Implement the `{0,ω}` relevance check (the LinearCheck 0/ω slice)
+### Task A2: Implement the `{0,ω}` relevance check (the LinearCheck 0/ω slice) — DONE (67395a2)
+
+**Operator-ratified design decision (locked).** The relevance criterion is spec
+§2 ("no computationally-relevant use of an erased binder": returned / present-arg
+/ scrutinised / applied — all rejected), NOT the §8 shorthand "scrutinised."
+Rationale: returning or passing an erased binder is equally unsound; only "make
+the param present" preserves Cure's zero-footprint guarantee (vs. Idris-style
+auto-promotion, which would silently retain index data and hide runtime cost).
+Consequence: the §6 conformance program's `forget_dec` takes `d` as an explicit
+PRESENT parameter (it materialises `d` into a runtime Σ for `recover`/`step` to
+inspect — `d` genuinely has runtime footprint). Fixture + `sigma_surface` +
+`with_rematch` corrected; spec §8 wording aligned to §2. Oracle `erasure` cluster:
+er01/er02 `cure_stricter` (Idris keeps runtime-used implicits at ω), er03 `same`.
+Full suite 2359 passed, zero regressions.
 
 **Files:** Create `lib/cure/elab/relevance.ex`; modify
 `lib/cure/elab/declarations.ex` (call site: after `Kernel.check` succeeds,
