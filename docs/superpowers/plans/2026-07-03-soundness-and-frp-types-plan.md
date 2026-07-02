@@ -158,7 +158,13 @@ checker's conversion).
 - [ ] **Step 6: full suite once, alone.** Then commit
   `feat(elab): checked {0,ω} erasure — relevance check (LinearCheck 0/ω slice, M8.3 completed)`.
 
-### Task A3: Erasure-seam consistency audit (the other three seams)
+### Task A3: Erasure-seam consistency audit (the other three seams) — DONE (30c04a2)
+
+Three seam pins in `erasure_relevance_test.exs`: (1) erased ctor-field
+unnameability (naming it → `{:error, :unknown_global}`, present field nameable);
+(2) emitted head/call-site arity consistency (`compose/2`, `compose3/3` run on the
+BEAM, nested call agrees); (3) proof irrelevance (two rewrite proofs erase
+identically; refl/Eq → placeholders). 10 tests green.
 
 **Files:** Extend `test/cure/elab/erasure_relevance_test.exs` (new describe
 block) + `test/cure/elab/erase_test.exs` if a seam test naturally lives there.
@@ -178,7 +184,13 @@ block) + `test/cure/elab/erase_test.exs` if a seam test naturally lives there.
   swapped for another valid proof (proof-irrelevance smoke test on BEAM).
 - [ ] **Step 4:** commit `test(elab): pin erasure seams — ctor-field unnameability, arity consistency, proof irrelevance`.
 
-### Task A4: Antigen `elab/erasure` vertical (generative pin)
+### Task A4: Antigen `elab/erasure` vertical (generative pin) — DONE (unhashed)
+
+Two-sided vertical: `lib/antigen/generators/elab_erasure.ex` (catalog labelled
+accept/reject by use-position) + `elab/erasure` assay (verdict-match, and `:same`/
+`:flip` metamorphic relations) + runner registry + challenge round-trip keys.
+`relevance_injection` (:flip) proves the check is load-bearing. Vertical test 8
+green; full Antigen 175. Committed with A4 code.
 
 **Files:** Create `lib/antigen/generators/elab_erasure.ex`,
 extend `lib/antigen/assays/elab.ex` (new assay id `elab/erasure`),
