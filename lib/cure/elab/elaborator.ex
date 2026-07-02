@@ -878,10 +878,21 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr({:function_call, meta, args}, scope, env) do
     name = Keyword.fetch!(meta, :name)
+    atom = String.to_atom(name)
 
-    with {:ok, head} <- elaborate_expr({:variable, [], name}, scope, env),
-         {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
-      {:ok, Enum.reduce(core_args, head, fn arg, acc -> {:app, acc, arg} end)}
+    with {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
+      if Inductive.get_ctor(env, atom) do
+        # A constructor head applied to arguments is a saturated constructor, not
+        # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:
+        # `resolve_free` only ever yields the NULLARY `{:ctor, atom, []}`, so
+        # folding args on with `{:app, …}` would apply a nullary ctor to an
+        # argument and the kernel would reject it (`:ctor_arity`).
+        {:ok, {:ctor, atom, core_args}}
+      else
+        with {:ok, head} <- elaborate_expr({:variable, [], name}, scope, env) do
+          {:ok, Enum.reduce(core_args, head, fn arg, acc -> {:app, acc, arg} end)}
+        end
+      end
     end
   end
 
