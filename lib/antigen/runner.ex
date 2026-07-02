@@ -46,6 +46,15 @@ defmodule Antigen.Runner do
         "fuel_exhausted=#{metrics.fuel_exhausted_count} discard=#{Float.round(discard_rate, 2)} → #{stamp}"
     )
 
+    mm = mutation_metrics(challenges)
+
+    if mm.mutants_total > 0 do
+      IO.puts(
+        "antigen health[mutant_term]: reason_diversity=#{mm.reason_diversity} " <>
+          "survivors=#{mm.survivors} → #{mutation_stamp(mm)}"
+      )
+    end
+
     %{
       infections: final.infections,
       seeds_banked: final.seeds_banked,
@@ -99,6 +108,27 @@ defmodule Antigen.Runner do
        do: :healthy,
        else: :vacuous
   end
+
+  @mutation_diversity_floor 5
+
+  @doc "Vacuity metrics over the :mutant_term subset (spec §6.2): fault-kind diversity."
+  def mutation_metrics(challenges) do
+    ms = Enum.filter(challenges, &match?(%Challenge{kind: :mutant_term}, &1))
+
+    {rejected_kinds, survivors} =
+      Enum.reduce(ms, {MapSet.new(), 0}, fn c, {kinds, surv} ->
+        case Antigen.Assays.Mutation.run(c) do
+          :ok -> {MapSet.put(kinds, c.payload.fault.kind), surv}
+          {:violation, _} -> {kinds, surv + 1}
+        end
+      end)
+
+    %{reason_diversity: MapSet.size(rejected_kinds), survivors: survivors, mutants_total: length(ms)}
+  end
+
+  @doc "Vacuity stamp (spec §6.2): diversity-only; survivors are surfaced separately."
+  def mutation_stamp(%{reason_diversity: d}),
+    do: if(d >= @mutation_diversity_floor, do: :healthy, else: :vacuous)
 
   # Count binders (lam / case-branch) and how many bind a variable that occurs.
   defp binder_stats(t), do: binder_stats(t, {0, 0})
@@ -192,6 +222,7 @@ defmodule Antigen.Runner do
   defp assay_module("term/infer_check"), do: Antigen.Assays.Term
   defp assay_module("term/subject_reduction"), do: Antigen.Assays.Term
   defp assay_module("term/normalization"), do: Antigen.Assays.Term
+  defp assay_module("mutation/rejection"), do: Antigen.Assays.Mutation
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)
