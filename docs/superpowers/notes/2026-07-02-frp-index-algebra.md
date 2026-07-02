@@ -88,8 +88,25 @@ indices in constructor ARGUMENT positions**, neither a TCB matter:
    function's domain telescope. Red-green in
    `test/cure/elab/computed_index_arg_test.exs`. This unblocks frp03/frp04.
 
-2. **Composed-loop `loop(seq(a,b))` — a computed index in argument position — is
-   a TWO-LAYER reach; the second layer is a TCB gap (SCOPE-PINNED, not fixed).**
+2. **Composed-loop `loop(seq(a,b))` — CLOSED (2026-07-03), entirely in the
+   elaborator, NO kernel change.** The original diagnosis below called the second
+   layer a TCB/kernel gap; that was WRONG. Re-derived against real normal forms:
+   `conv_values?(dmeet(DDec,DDec), DDec, sig)` is already `true` (the kernel's
+   δ-capable conversion reduces the computed index fine — `seq(a,b)` checks
+   against a `DDec` return type unaided). The reach was TWO **elaborator** bugs:
+   (a) `Unify` was purely syntactic, so `DDec` vs the redex `dmeet(DDec,DDec)`
+   gave `:cannot_unify` — fixed by a δ-convertibility fallback through the trusted
+   `Conv` on closed meta-free terms (`Unify.unify/4`); and (b) `finish_ctor_app`
+   evaluated a ctor's computed result type under `[]`, mis-levelling caller-frame
+   index variables, which corrupted meta-solving when that type fed the outer
+   `loop` application — fixed by evaluating under the caller's env. Oracle
+   `frp05_computed_index_arg` + `frp06_composed_loop` both `same`. The TCB was NOT
+   expanded: per the "prove no untrusted term works first" rule, the untrusted
+   elaborator fix was found, so the kernel stays untouched. Original (now
+   superseded) diagnosis retained below for the record:
+
+   **[SUPERSEDED] Composed-loop `loop(seq(a,b))` — was believed a TWO-LAYER reach
+   with a TCB second layer.**
    The probe: a loop whose body is a composition, so `seq`'s result Dec index is
    `dmeet(DDec, DDec)` fed to `loop`'s `DDec` slot. Idris reduces it and accepts;
    Cure rejects (a genuine `cure=reject / idris=accept` reach — verified live,
