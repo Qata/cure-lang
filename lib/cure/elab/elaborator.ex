@@ -126,15 +126,33 @@ defmodule Cure.Elab.Elaborator do
   """
   @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
-  def elaborate_expr_checked({:function_call, meta, [arg]} = expr, expected_core, names, ctx, env) do
-    if Keyword.get(meta, :name) == "refl" do
-      with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
-           term = {:refl, arg_term},
-           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-        {:ok, term}
-      end
-    else
-      elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+  def elaborate_expr_checked({:function_call, meta, args} = expr, expected_core, names, ctx, env) do
+    name = Keyword.fetch!(meta, :name)
+    atom = String.to_atom(name)
+
+    cond do
+      name == "refl" and length(args) == 1 ->
+        [arg] = args
+
+        with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
+             term = {:refl, arg_term},
+             :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+          {:ok, term}
+        end
+
+      Inductive.get_ctor(env, atom) ->
+        # Checking-mode constructor: pin erased indices from the expected type (a
+        # reconstructed dependent-match branch body like `prim()`/`seq(l,r)` whose
+        # indices no present argument determines), then let the kernel re-check the
+        # assembled constructor against the goal.
+        with {:ok, present} <- map_present_args(args, names, ctx, env),
+             {:ok, term, _type} <- elaborate_ctor_app(env, atom, present, ctx, expected_core),
+             :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+          {:ok, term}
+        end
+
+      true ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
     end
   end
 
@@ -1399,10 +1417,28 @@ defmodule Cure.Elab.Elaborator do
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
   defp elaborate_branch_body({:function_call, meta, _args} = expr, expected, names, ctx, env) do
-    if Keyword.get(meta, :name) == "refl" do
-      elaborate_expr_checked(expr, expected, names, ctx, env)
-    else
-      with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
+    name = Keyword.get(meta, :name)
+
+    cond do
+      name == "refl" ->
+        elaborate_expr_checked(expr, expected, names, ctx, env)
+
+      is_binary(name) and Inductive.get_ctor(env, String.to_atom(name)) != nil ->
+        # A constructor branch body. Infer FIRST — this preserves every case that
+        # already worked, including a reconstruction whose indices the present
+        # arguments determine and the carried-index-Eq transport (which wraps an
+        # inferred body). ONLY when inference cannot pin the erased indices —
+        # `prim()`/`seq(l,r)` reconstructed at a refined index with no present
+        # argument to solve `av`/`bv` from (`:unsolved_metavariables`) — retry in
+        # checking mode, letting the branch's expected type pin them.
+        case elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, term, _type} -> {:ok, term}
+          {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+          {:error, _} = err -> err
+        end
+
+      true ->
+        with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
     end
   end
 
@@ -1758,7 +1794,7 @@ defmodule Cure.Elab.Elaborator do
   """
   @spec elaborate_ctor_app(Env.t(), atom(), [{term(), term()}], Context.t() | nil) ::
           {:ok, term(), Cure.Core.Value.t()} | {:error, term()}
-  def elaborate_ctor_app(env, cname, present_args, ctx \\ nil) do
+  def elaborate_ctor_app(env, cname, present_args, ctx \\ nil, expected_core \\ nil) do
     ctor = Inductive.get_ctor(env, cname)
     family = Inductive.ctor_family(env, cname)
 
@@ -1774,13 +1810,40 @@ defmodule Cure.Elab.Elaborator do
       param_tele = Inductive.param_telescope(env, family) || []
       param_slots = Enum.map(param_tele, fn entry -> {entry, :erased} end)
       telescope = param_slots ++ Enum.zip(ctor.args, ctor.quantities)
+      pc = length(param_tele)
       init = {:ok, MetaCtx.new(), [], present_args}
 
       telescope
       |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
-      |> finish_ctor_app(cname, family, ctor, length(param_tele), ctx)
+      |> pin_ctor_result(expected_core, family, ctor, pc, env)
+      |> finish_ctor_app(cname, family, ctor, pc, ctx)
     end
   end
+
+  # Checking-mode index inference: unify the constructor's RESULT type (built with
+  # the erased-index metavariables still open) against the expected type, pinning
+  # indices the present arguments could not. A nullary constructor whose indices
+  # are all erased — `prim : SF(av, bv, DCau)` reconstructed in a dependent-match
+  # branch expecting `SF(as, bs, DCau)` — has NO present argument to solve `av`/`bv`
+  # from; the expected type is their only source. In inference mode (`expected_core
+  # == nil`) this is a no-op, so ordinary constructor applications are unchanged.
+  defp pin_ctor_result({:ok, mctx, chosen, []} = ok, expected_core, family, ctor, pc, env)
+       when expected_core != nil do
+    {param_vals, args} = Enum.split(chosen, pc)
+    seed = param_vals ++ args
+    params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed))
+    indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed))
+    result_term = {:data, family, params, indices}
+
+    case Unify.unify(result_term, expected_core, mctx, env) do
+      {:ok, mctx2} -> {:ok, mctx2, chosen, []}
+      # Leave the mismatch to `finish_ctor_app` (unsolved metas) or the kernel's
+      # own re-check — never silently accept.
+      {:error, _} -> ok
+    end
+  end
+
+  defp pin_ctor_result(acc, _expected_core, _family, _ctor, _pc, _env), do: acc
 
   # One telescope slot: erased → fresh meta; present → unify expected vs actual.
   # `env` is threaded as the conversion signature so a present argument whose type
