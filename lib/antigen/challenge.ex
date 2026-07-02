@@ -48,7 +48,10 @@ defmodule Antigen.Challenge do
     :mutant_term,
     :head_swap, :ctor_arg, :index_mismatch, :app_domain,
     :out_of_scope_var, :proj_non_pair, :universe,
-    :head, :index, :level, :scope, :Sigma
+    :head, :index, :level, :scope, :Sigma,
+    # fault-map KEY atoms (must be interned: the fault map rides through
+    # binary_to_term [:safe] in the scaffold field — keys count, not just values)
+    :kind, :witness, :expected_head, :injected_head
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
