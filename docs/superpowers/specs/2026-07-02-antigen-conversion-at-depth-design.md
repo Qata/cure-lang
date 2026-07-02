@@ -33,9 +33,10 @@ New module `Antigen.Generators.Conversion` emitting **both** challenge kinds:
   entry per existing `term/*` assay).
 
 **No new assay module** either polarity. **No `Cure.Core.Term` seam** — carriers are
-closed forms with the filler at a **binder-free** hole (spec §9 of the A design
-guessed a seam would be needed; probing showed it is not). Reuses A's menu
-(`SigMenu` v1: Nat/Bd/Vec, `plus`).
+closed forms with the filler at a **binder-free** hole (the A design's decomposition
+intro guessed a seam would be needed — "Needs a `Term` seam", the line preceding its
+`## 1. Scope` — probing showed it is not). Reuses A's menu (`SigMenu` v1: Nat/Bd/Vec,
+`plus`).
 
 **Non-goals (deferred):** eta / functions-as-values conversion; conversion under
 binders (all holes are binder-free here — see §4); global-def unfolding beyond
@@ -84,6 +85,18 @@ of the reduced discriminating index, drawn uniformly in `0..@max_depth` (≈6, b
 by `plus` reduction cost, not construction cost). Deeper ⇒ more reduction steps and a
 deeper structural index comparison.
 
+**Draw order (uniformity, not independence).** `a` and `b` are each an operand of
+`plus`, so it is tempting to draw them independently and let `conv_depth = a + b`
+fall out — but two independent uniform draws over `0..k` sum to a **triangular**
+distribution (thin at 0 and `2k`, peaked in the middle), not a uniform one. A's spec
+(`2026-07-02-antigen-deep-propagation-design.md` §6) explicitly credits genuine
+uniformity for keeping its `depth ≥ @depth_floor` test non-flaky at ordinary batch
+sizes; B's §7.5 depends on the same property. So the draw must go the other way:
+**draw `conv_depth` uniformly in `0..@max_depth` first, then draw `a` uniformly in
+`0..conv_depth` and set `b = conv_depth - a`** — this makes `conv_depth` itself
+uniform by construction, with `a`/`b` as a (non-uniform, and that's fine —
+`fault.depth` is what the floor test reads) split of it.
+
 **Carrier set (2 — one per distinct reduction site):**
 
 | `carrier` | reduction site | reject filler | accept filler |
@@ -126,9 +139,27 @@ construction; no kernel call.
   `Vec (S^{a+b+1} Z)`; `conv_motive`: `Vec (S^{a+b} Z)`). The reduction stress is in
   `infer`/`check` of the **term itself**: the term carries the `plus` redex in the
   `vcons` index (or motive body), and the kernel must reduce it to type-check the
-  filler against the same-headed `Vec` family. (Note `infer` returns an already-
-  normalized `Value`, so the stress is in checking the redex-bearing term, not in
-  the assay's later `converges?` against the redex-free claimed type.)
+  filler against the same-headed `Vec` family.
+
+> **Where the reduction actually happens (probed against the live kernel; an
+> earlier draft of this spec claimed `infer` returns an already-normalized `Value`
+> and is wrong).** `infer` does **not** return an already-normalized `Value`.
+> `Eval.eval({:global, name}, _env)` (`lib/cure/core/eval.ex`) unconditionally
+> yields an opaque neutral `{:vneutral, {:nglobal, name}}` — it never δ-unfolds,
+> certified or not. The `Value` `infer` hands back for a `plus`-indexed `Vec` still
+> carries the raw, un-reduced neutral (confirmed by probe: the index slot is
+> literally `vneutral: {:napp, {:napp, {:nglobal, :plus}, …}, …}`); δ-unfolding
+> happens lazily, later, wherever `Normalise.whnf_value`/`Cure.Core.Conv` are
+> actually invoked. So the reduction stress lands in **two** places, not one:
+> (1) inside the initial `infer(ctx, term)` call itself, in `check_ctor_app_rec`'s
+> (or `check_case_branches`'s) nested `check(...)` → `Conv.conv_values?` step — this
+> is what actually decides the accept/reject verdict, and (2) **again**,
+> independently, in the accept-dual assay's later `converges?`/`check(term,
+> inferred)` steps (`Antigen.Assays.Term`), since the quoted `inferred_term` fed to
+> `converges?` still contains the un-reduced `plus` redex and only converges with
+> the reduced `payload.type` because `Conv.conv_within?` forces the δ-unfold at
+> comparison time. Both sites genuinely exercise conversion-at-depth; neither is a
+> no-op.
 
 > **Binder-free holes (no `Term.shift`).** `:conv_index` places the filler in the
 > `vcons` 3rd argument (not under a λ); `:conv_motive` uses **arity-0** `Bd` branches.
@@ -167,6 +198,16 @@ covers conversion mutants). `wrap_path` stays `[]` for conversion mutants (no A
 wrappers). The §7.2 witness meta-test extends the existing kernel-independent check:
 for `:conv`, assert `actual_index != expected_index` (reject) — decidable, no kernel.
 
+The full `:mutant_term` payload is `%{sig: :v1, ctx: ctx_types, type: goal, term:
+mutant_term, fault: fault}` (same shape v1/A use — `Challenge.to_pieces/1`'s
+`:mutant_term` clause requires a genuine `Cure.Core.Term.t()` in `type`). As with
+v1/A, this `type` is documentation-only — never a proven property of the mutant,
+unused by `Assays.Mutation.run/1` (§6.1 of the mutation-corpus spec) — but it must
+still be *some* well-formed menu term. Set it to `Vec (S^{expected_index} Z)` (the
+site's own reduced-expected-index type, i.e. the same value named `expected_index`
+above), mirroring `Antigen.Generators.Mutation.goal_of/1`'s existing per-kind
+convention rather than inventing a new one.
+
 **Accept** reuses `:typed_term` with `payload = %{sig, ctx, type, term}` (the claimed
 `type` is the reduced whole-term type, §4). No fault field on `:typed_term`; accept
 provenance rides only in the term shape. Wire one `conv_accept` entry per `term/*`
@@ -187,8 +228,38 @@ polarities), surfaced in the run summary and gated in the static meta-test:
 - **`conv_both_polarities`** — at least one reject **and** one accept conversion
   challenge generated; a corpus with only one polarity is vacuous *for B*.
 
+**Identifying the reject-side conversion subset** is direct: `fault.carrier` (or
+`fault.kind`) tags every `:conv_reject`-produced `:mutant_term` challenge, same as
+any other fault kind. **Identifying the accept-side conversion subset is not** — by
+design (above), a `conv_accept` challenge is an ordinary `:typed_term` with no fault
+field, indistinguishable by payload shape from one `Antigen.Generators.Term.
+typed_term/1` produced. `conv_carrier_diversity`/`conv_both_polarities` must
+therefore recognize accept challenges **structurally**: a `:typed_term` challenge
+counts as a `:conv_index` accept iff its `term` is a `{:ctor, :vcons, [n, _, _]}`
+whose `n` is headed by `{:app, {:app, {:global, :plus}, _}, _}`; as a `:conv_motive`
+accept iff its `term` is a `{:case, _, {:lam, _, {:data, :Vec, _, [idx]}}, _}` whose
+motive-body index `idx` is headed the same way. This shape check is safe in v1:
+the ordinary `Term` generator's own Vec goals are always drawn from
+`SigMenu.goal_types()`/context-variable types, which carry only closed numeral
+indices (never a `plus` application), so it cannot accidentally misclassify an
+ordinary typed-term challenge as a conversion carrier.
+
 Neither folds a survivor into a stamp (survivors/false-violations stay separately
 surfaced infections, per the v1 §6.2 rule).
+
+**Masking caveat.** Because `reason_diversity` and `max_depth` are shared, whole-
+subset metrics, folding B's contributions into them means a *regression that
+collapses v1/A's own kind- or depth-diversity generation* could go undetected: B's
+independently-drawn `conv_index`/`conv_motive` kinds and `conv_depth` draws can, on
+their own, push `reason_diversity` up to its floor of 5 (2 new kinds plus as few as
+3 surviving v1/A kinds) or `max_depth` up to its floor of 4, even if v1/A's own
+generation were badly broken. This risk did not exist when those floors were
+calibrated (A's spec), since only v1/A fed the pool then. This is an accepted
+tradeoff for v1 of B — the two new conversion-specific signals above catch B's own
+vacuity, and a wholesale v1/A regression is expected to also surface via the
+existing per-vertical tests (§7.1–7.4 of the v1/A specs) — but it is a known gap in
+`reason_diversity`/`max_depth`'s value as an *isolated* v1/A signal once B lands,
+not a claim that folding is harmless.
 
 ---
 
@@ -220,7 +291,10 @@ Red-green per plan step. Behaviors:
 7. **Health + seeds** — `conv_carrier_diversity` / `conv_both_polarities` reported and
    gated; bank reject **and** accept conversion seeds; a static-replay meta-test
    enforces both polarities replay correctly (rejects reject, accepts accept) and the
-   floors hold.
+   floors hold. Also asserts the accept-side structural detector (§6) is not a false
+   positive: a batch of ordinary `Antigen.Generators.Term.typed_term/1` challenges
+   (no `plus` anywhere in the term) contributes **zero** to `conv_carrier_diversity`/
+   `conv_both_polarities`' accept count.
 8. **Backward compatibility** — the v1/A mutation and Tier-B typed-term suites and
    banked seeds stay green; conversion challenges are additive.
 
