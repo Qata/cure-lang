@@ -1441,6 +1441,14 @@ defmodule Antigen.UniversesSeedTest do
   Banks the W5 universes vertical (pre-port banking spec §4 W5; roadmap A4 —
   first Antigen coverage of the universe rules). Ill-typed probes are antibodies
   (corpus.sexp); well-typed probes are known-good seeds (seeds.sexp). Idempotent.
+
+  Store deltas: corpus +3 antibodies, seeds +2 (NOT +3). `stratification(:well_typed)`
+  and `ctor_field(:well_typed)` are coverage-equivalent under the plateauing seed
+  key (`ctors=[type]|depth=b0_2|flags=[]|label=well_typed`), so only the first
+  banks as a seed — by design, one seed per coverage cell (the coverage key IS the
+  seed store's identity; making it finer would orphan every stored key).
+  `ctor_field(:well_typed)`'s acceptance remains guarded on every run by the assay
+  test in `universes_test.exs`.
   """
   use ExUnit.Case, async: false
   alias Antigen.{Corpus, Runner, Assays}
@@ -1475,7 +1483,9 @@ defmodule Antigen.UniversesSeedTest do
         match?(%Antigen.Challenge{assay: "universes"}, r.entry)
       end)
 
-    assert length(uni) >= 6
+    # 3 antibodies + 2 seeds: stratification(:well_typed) and ctor_field(:well_typed)
+    # share one coverage cell (see moduledoc), so the seed store holds one of them.
+    assert length(uni) >= 5
 
     assert Enum.all?(uni, &(&1.verdict == :ok)),
            inspect(uni |> Enum.reject(&(&1.verdict == :ok)) |> Enum.map(& &1.verdict))
@@ -1483,7 +1493,9 @@ defmodule Antigen.UniversesSeedTest do
 end
 ```
 
-Run twice (bank + idempotence): `mix test test/antigen/universes_seed_test.exs`. If a `Coverage.key/1` clause error surfaces on the `:family`-kind seed (coverage keys are computed on banking), inspect `lib/antigen/coverage.ex` — the positivity vertical already banks `:family` seeds, so the path exists; match its usage.
+Run twice (bank + idempotence): `mix test test/antigen/universes_seed_test.exs`. Expected store deltas on the first run: `corpus.sexp` +3 lines, `seeds.sexp` +2 lines (byte-stable on the second run). If a `Coverage.key/1` clause error surfaces on the `:family`-kind seed (coverage keys are computed on banking), inspect `lib/antigen/coverage.ex` — the positivity vertical already banks `:family` seeds, so the path exists; match its usage.
+
+> **Execution-time correction (sanctioned by the Global Constraints immutability carve-out — a wrong predicted literal corrected to first-observed truth before the entry is committed):** the plan originally predicted seeds +3 and asserted `length(uni) >= 6`. First red run showed seeds +2: `stratification(:well_typed)` and `ctor_field(:well_typed)` collide on the coverage-plateau seed dedup key (`ctors=[type]|depth=b0_2|flags=[]|label=well_typed`). This is the seed store's *intended* semantics (one seed per coverage cell; the persisted key string is each record's identity, so a finer key would orphan every stored key and break dedup for all existing seed tests). Resolution: correct the count literal to `>= 5` and document the collision — do NOT touch the generators or `Coverage` to defeat dedup. Apparatus-design observation, not a kernel finding; the W5 audit itself was fully green (no holes, no D4 reroute — A4 closes unconditionally).
 
 - [ ] **Step 8: Full suite and commit**
 
