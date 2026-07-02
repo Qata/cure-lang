@@ -557,34 +557,40 @@ defmodule Cure.Elab.Elaborator do
             scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
 
             with {:ok, siblings} <- collect_with_siblings(scrut_term, names, ctx, env) do
-              g_abs = abstract_term(result_type_term, scrut_term, 0)
               # An Eq-arrow is needed when the user asked for a proof OR when a
               # sibling must be transported (both consume `prf : Eq(T,e,pat)`).
               need_eq = proof_name != nil or siblings != []
 
-              motive =
-                if need_eq,
-                  do: eq_arrow_motive(scrut_type_term, scrut_term, g_abs),
-                  else: {:lam, scrut_type_term, g_abs}
+              if need_eq do
+                # Capability B (proof / sibling transport) — the Eq-arrow motive.
+                g_abs = abstract_term(result_type_term, scrut_term, 0)
+                motive = eq_arrow_motive(scrut_type_term, scrut_term, g_abs)
 
-              cfg = %{
-                names: names,
-                ctx: ctx,
-                env: env,
-                dname: dname,
-                param_vals: param_vals,
-                motive: motive,
-                need_eq: need_eq,
-                siblings: siblings,
-                prf_name: proof_name || "$with_prf",
-                scrut_term: scrut_term,
-                scrut_type_term: scrut_type_term
-              }
+                cfg = %{
+                  names: names,
+                  ctx: ctx,
+                  env: env,
+                  dname: dname,
+                  param_vals: param_vals,
+                  motive: motive,
+                  need_eq: true,
+                  siblings: siblings,
+                  prf_name: proof_name || "$with_prf",
+                  scrut_term: scrut_term,
+                  scrut_type_term: scrut_type_term
+                }
 
-              with {:ok, branches} <- elaborate_with_branches(arms, cfg) do
-                case_term = {:case, scrut_term, motive, branches}
-                result = if need_eq, do: {:app, case_term, {:refl, scrut_term}}, else: case_term
-                {:ok, result}
+                with {:ok, branches} <- elaborate_with_branches(arms, cfg) do
+                  case_term = {:case, scrut_term, motive, branches}
+                  {:ok, {:app, case_term, {:refl, scrut_term}}}
+                end
+              else
+                # Capability A (bare value-abstraction) is SUBSUMED by the unified
+                # match front-end: since Phase 2½ plain `match` value-refines the
+                # goal per branch (the same refinement A's `{:lam, T, g_abs}` motive
+                # provided), so `with <e>` with no proof and no sibling is exactly a
+                # plain `match <e>`. (Task 3.2; the arms are already `{:match_arm}`.)
+                elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env)
               end
             end
           else
