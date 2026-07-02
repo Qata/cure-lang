@@ -93,7 +93,7 @@ kernel is sound."
 | `stub` | harness self-test (planted `{:global,:boom}`) | 1 planted infection | meta only |
 | `totality/terminating` | structural-recursive defs accepted | `structural_terminating` | partial |
 | `totality/diverging` | non-terminating defs rejected | `diverging_mutual_pair` + W1 adversarial set | solid (hole fixed `d13d718`; antibodies = permanent regression guards) |
-| `positivity` | strict positivity of datatypes | positivity gen challenges | partial |
+| `positivity` | strict positivity of datatypes | positivity gen challenges + W4 escape hatches (arrow-left, double-negation, sigma-hidden, through-constructor) | strong (deep walk; double-negation already rejected; sigma-hidden + through-constructor were live holes, found and fixed D4 red-green in `6148aff`) |
 | `reflexivity` (+`forcing` gen) | conversion/normalization halts (refl ≡ deep-norm; `Conv.conv_within?`, fixed 500-unfold fuel) | `forcing_pair` | solid |
 | `indexed/case` | dependent-case soundness | `branch_family`, `coverage`, `refinement`, `motive_wf`, `discharge`, `injectivity` | strong |
 | `rewrite/eq` | propositional equality | `eq_formation`, `refl_typing`, `rewrite_premise`, `transport_type` | strong |
