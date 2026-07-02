@@ -44,4 +44,21 @@ defmodule Cure.Elab.DependentConstructionTest do
                  "  fn bad() -> Vector(Nat, S(Z)) = prepend(Z(), prepend(Z(), empty()))\nend\n"
              )
   end
+
+  test "a dependent pair packs a vector with its length and projects" do
+    # `Sigma(n: Nat, Vector(Nat, n))`: the second component `prepend(Z(),
+    # prepend(S(Z()), empty()))` is checked against `Vector(Nat, S(S(Z)))` — the
+    # codomain instantiated at the first component. `elaborate_body` routes the
+    # tuple through checking mode so the dependent codomain reaches the second
+    # component. Oracle `dep/dep03_dependent_pair`.
+    src =
+      @vec <>
+        "  fn twoVec() -> Sigma(n: Nat, Vector(Nat, n)) = %[S(S(Z)), prepend(Z(), prepend(S(Z()), empty()))]\n" <>
+        "  fn theLen() -> Nat = twoVec().1\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.DepPair", functions: [:twoVec, :theLen])
+
+    assert apply(mod, :theLen, []) == {:S, {:S, :Z}}
+  end
 end

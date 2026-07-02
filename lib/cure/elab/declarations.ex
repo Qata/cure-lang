@@ -301,10 +301,22 @@ defmodule Cure.Elab.Declarations do
 
   # A pair `%[a, b]` is a dependent-pair introduction; the kernel checks it
   # against the declared Σ return type.
-  defp elaborate_body({:tuple, _meta, [a_ast, b_ast]}, _return_core, scope, ctx, env, _params) do
-    with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
-         {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
-      {:ok, {:pair, a_term, b_term}}
+  defp elaborate_body({:tuple, _meta, [a_ast, b_ast]} = expr, return_core, scope, ctx, env, _params) do
+    # Check the pair against the declared return type first, so a *dependent* pair
+    # (`Sigma(n: Nat, Vector(a, n))`) elaborates its second component against the
+    # codomain instantiated at the first — otherwise a component like
+    # `prepend(x, empty())` is inferred and its underdetermined parts are left as
+    # unsolved metavariables. Fall back to inferring both components when the
+    # return type is not a Σ the checker can use (preserving the prior behaviour).
+    case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
+      {:ok, term} ->
+        {:ok, term}
+
+      {:error, _} ->
+        with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
+             {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
+          {:ok, {:pair, a_term, b_term}}
+        end
     end
   end
 
