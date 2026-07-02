@@ -382,6 +382,16 @@ defmodule Cure.Elab.Elaborator do
 
   defp free_indices(_term, _depth), do: MapSet.new()
 
+  # Largest free de Bruijn index occurring anywhere in `terms` (−1 if none). Used
+  # to pick sentinel variables for computed-index abstraction that are guaranteed
+  # not to alias any existing variable.
+  defp max_free_ref(terms) do
+    terms
+    |> Enum.reduce(MapSet.new(), fn t, acc -> MapSet.union(acc, free_indices(t, 0)) end)
+    |> MapSet.to_list()
+    |> Enum.max(fn -> -1 end)
+  end
+
   # `Quote.reify` collapses a `{:vdata, name, params ++ indices}` value into
   # `{:data, name, all_args, []}` (the value rep does not track the param/index
   # split). Restore the split for every data application in `term` using the
@@ -920,14 +930,33 @@ defmodule Cure.Elab.Elaborator do
     param_terms_shifted = Enum.map(param_terms, &Subst.shift(&1, k, 0))
     scrut_type = {:data, dname, param_terms_shifted, Enum.map((k - 1)..0//-1, &{:var, &1})}
 
-    # Map each scrutinee index *variable* (in the current frame) to the de Bruijn
-    # index of its motive binder jₖ (which sits at depth k-pos above the body).
-    rebind =
+    # Map each scrutinee index to the de Bruijn index of its motive binder jₖ
+    # (which sits at depth k-pos above the body). A *variable* index position
+    # rebinds directly by its de Bruijn name. A *computed* index position — e.g.
+    # `app(p, q)`, whose result index is not a single variable — cannot be named
+    # that way, so we abstract the whole index *term* out of the result type:
+    # every occurrence of that computed index is replaced by a fresh sentinel
+    # variable that then rebinds to the position's motive binder. This is the
+    # standard casesOn/kabstract motive extended to computed result indices
+    # (Lean `inductive.cpp:643-646` reads each ctor's result-index *terms* — which
+    # may be arbitrary computed terms — and applies the motive to them): each
+    # branch's goal refines to the constructor's own index (`F(app as bs)`,
+    # `F(SNil)`), sound with no carried equation because the kernel checks every
+    # branch at `motive @ ctor_indices` while the use site recovers the original
+    # goal via `motive @ scrutinee_indices`. Sentinels are chosen above every free
+    # de Bruijn index in play so they cannot alias a real variable or each other.
+    sentinel_base = 1 + max_free_ref([result_type_term, scrut_term | idx_terms])
+
+    {result_type_term, rebind} =
       idx_terms
       |> Enum.with_index()
-      |> Enum.reduce(%{}, fn
-        {{:var, orig}, pos}, acc -> Map.put(acc, orig, k - pos)
-        {_non_var, _pos}, acc -> acc
+      |> Enum.reduce({result_type_term, %{}}, fn
+        {{:var, orig}, pos}, {rt, acc} ->
+          {rt, Map.put(acc, orig, k - pos)}
+
+        {computed, pos}, {rt, acc} ->
+          sentinel = sentinel_base + pos
+          {replace_term(rt, computed, {:var, sentinel}), Map.put(acc, sentinel, k - pos)}
       end)
 
     rebind =
