@@ -31,11 +31,12 @@ defmodule Cure.Elab.CarriedIndexSiblingTest do
     type F indices (xs: SList)
       leaf : F(SNil())
       mk : F(as) -> F(bs) -> F(app(as, bs))
+    type G indices (xs: SList)
+      gwrap : G(cs)
   """
 
   defp mod(body), do: "mod P\n  type Nat = Z | S(Nat)\n" <> @preamble <> body <> "end\n"
 
-  @tag :skip
   test "returning a sibling in a refined branch needs the carried index eq (3b)" do
     # `w : F(app(p,q))` is a sibling, not the scrutinee. In the `leaf` branch the
     # 3a-refined goal is `F(SNil())`; `w : F(app(p,q))` type-checks there only if
@@ -52,11 +53,27 @@ defmodule Cure.Elab.CarriedIndexSiblingTest do
     assert {:ok, _env} = Program.elaborate(src)
   end
 
-  @tag :skip
-  test "carried sibling eq does not admit a wrong-index sibling (soundness control)" do
-    # `u : F(q)` has an unrelated index. Transporting it into a branch whose goal
-    # is `F(SNil())` / `F(app(as,bs))` would require `app(p,q) = q` etc., which
-    # does not hold. Must stay rejected even once 3b lands.
+  test "carried sibling eq does not admit a wrong-family sibling (soundness control)" do
+    # `u : G(app(p,q))` DOES mention the carried index, so 3b transports it — in
+    # the `leaf` branch to `G(SNil())`. But the goal there is `F(SNil())`, and
+    # `G(SNil()) ≢ F(SNil())`: the transport fires yet the kernel still rejects on
+    # the family mismatch. This exercises the transport path (not the 3a fallback)
+    # and proves it does not launder an ill-typed result.
+    src =
+      mod("""
+        fn bad({p: SList}, {q: SList}, v: F(app(p, q)), u: G(app(p, q))) -> F(app(p, q)) =
+          match v
+            leaf() -> u
+            mk(l, r) -> u
+      """)
+
+    assert {:error, _} = Program.elaborate(src)
+  end
+
+  test "an unrelated-index sibling is not transported and stays rejected" do
+    # `u : F(q)` does not mention `app(p,q)`, so 3b does not fire for it; the plain
+    # 3a-refined goal (`F(SNil())` in `leaf`) rejects `u : F(q)`. Guards the
+    # detection: a sibling on a different index must not be spuriously refined.
     src =
       mod("""
         fn bad({p: SList}, {q: SList}, v: F(app(p, q)), u: F(q)) -> F(app(p, q)) =

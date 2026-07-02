@@ -463,15 +463,26 @@ defmodule Cure.Elab.Elaborator do
           param_terms = Enum.map(param_vals, &Quote.reify(&1, Context.length(ctx)))
           idx_terms = Enum.map(idx_vals, &Quote.reify(&1, Context.length(ctx)))
 
-          motive =
+          motive0 =
             build_motive(dname, family.indices, param_terms, idx_terms, scrut_term, result_type_term)
+
+          # Step 3b: a *sibling* whose type mentions the scrutinee's stuck computed
+          # index (`w : F(app(p,q))`) is not refined by 3a's motive (that only
+          # generalizes the scrutinee's own goal). Carry `Eq(T, app(p,q), jₚₒₛ)`
+          # into the motive and transport each such sibling in the branch body —
+          # the same kernel-checked Eq-arrow + `rewrite` vehicle as capability B,
+          # lifted from the scrutinee VALUE to its computed INDEX term.
+          carried = detect_carried_index(family.indices, idx_terms, scrut_term, names, ctx, env)
+          k = length(family.indices)
+          motive = if carried, do: wrap_motive_carried_eq(motive0, k, carried), else: motive0
 
           with {:ok, branches} <-
                  elaborate_branches(
                    arms, names, ctx, env, dname,
-                   idx_vals, idx_terms, param_vals, scrut_term, result_type_term
+                   idx_vals, idx_terms, param_vals, scrut_term, result_type_term, carried
                  ) do
-            {:ok, {:case, scrut_term, motive, branches}}
+            case_term = {:case, scrut_term, motive, branches}
+            {:ok, if(carried, do: {:app, case_term, {:refl, carried.idx_term}}, else: case_term)}
           end
 
         _ ->
@@ -972,6 +983,78 @@ defmodule Cure.Elab.Elaborator do
     |> Enum.reduce(body, fn type, acc -> {:lam, type, acc} end)
   end
 
+  # Step 3b detection. Return `nil` unless the scrutinee has EXACTLY ONE computed
+  # (non-variable) index position whose term is mentioned by at least one sibling
+  # in scope (a context variable other than the scrutinee). In that case return
+  # `%{pos, idx_term, idx_type_term, siblings}` describing the equation to carry.
+  # Restricted to a single computed index with a closed index type (SList, Dec —
+  # the FRP carriers); anything else falls back to the plain 3a motive (the kernel
+  # then rejects an un-transportable sibling, never mis-accepts it).
+  defp detect_carried_index(index_tele, idx_terms, scrut_term, names, ctx, env) do
+    computed =
+      idx_terms
+      |> Enum.with_index()
+      |> Enum.reject(fn {t, _pos} -> match?({:var, _}, t) end)
+
+    with [{idx_term, pos}] <- computed,
+         {_name, idx_type_term} <- Enum.at(index_tele, pos),
+         true <- MapSet.size(free_indices(idx_type_term, 0)) == 0,
+         [_ | _] = siblings <- collect_index_siblings(scrut_term, idx_term, names, ctx, env) do
+      %{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings}
+    else
+      _ -> nil
+    end
+  end
+
+  # Siblings whose (reified) type mentions the computed index term `idx_term`,
+  # EXCLUDING the scrutinee itself (its own type mentions the index but it is the
+  # thing being eliminated, not transported). Innermost-first, like
+  # `collect_with_siblings`. Interdependent siblings are not pre-screened here; a
+  # transport that would be ill-typed is caught by the kernel's re-check.
+  defp collect_index_siblings(scrut_term, idx_term, names, ctx, env) do
+    depth = Context.length(ctx)
+    scrut_idx = case scrut_term do
+      {:var, i} -> i
+      _ -> -1
+    end
+
+    names
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {name, i} ->
+      if is_binary(name) and i != scrut_idx do
+        type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
+
+        if contains_term?(type_term, idx_term),
+          do: [%{name: name, index: i, type_term: type_term}],
+          else: []
+      else
+        []
+      end
+    end)
+    |> Enum.sort_by(& &1.index, :desc)
+  end
+
+  # Inject the carried index equation into a 3a motive `λj̄. λx. G'`, yielding
+  # `λj̄. λx. Eq(T, idx, jₚₒₛ) -> G'`. Under the k+1 motive binders (indices j̄
+  # then scrutinee x), `jₚₒₛ` sits at de Bruijn `k - pos`; `idx`/`T` are shifted
+  # from the outer frame past all k+1 binders; `G'` shifts +1 past the new Eq
+  # binder.
+  defp wrap_motive_carried_eq(motive, k, %{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term}) do
+    {binder_types, body} = peel_lams(motive, k + 1, [])
+
+    eq_dom =
+      {:eq, Subst.shift(idx_type_term, k + 1, 0), Subst.shift(idx_term, k + 1, 0), {:var, k - pos}}
+
+    new_body = {:pi, eq_dom, Subst.shift(body, 1, 0)}
+
+    Enum.reduce(binder_types, new_body, fn type, acc -> {:lam, type, acc} end)
+  end
+
+  # Peel `n` leading `{:lam, dom, body}` binders, returning `{doms_outermost_first,
+  # inner_body}`.
+  defp peel_lams(body, 0, acc), do: {Enum.reverse(acc), body}
+  defp peel_lams({:lam, dom, body}, n, acc), do: peel_lams(body, n - 1, [dom | acc])
+
   # Rewrite the free variables of `term` for placement under the motive's k+1
   # binders (`depth` counts binders entered *within* term): a free variable that
   # names a scrutinee index becomes its motive binder (`rebind`); every other
@@ -1036,7 +1119,7 @@ defmodule Cure.Elab.Elaborator do
   # then re-checks and re-discharges the assembled {:case,…} independently.
   # `idx_vals` are the scrutinee's index VALUES (for branch_unify); `idx_terms`
   # are the reified index TERMS (for branch_expected/context).
-  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, idx_terms, param_vals, scrut_term, result_type_term) do
+  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, idx_terms, param_vals, scrut_term, result_type_term, carried) do
     with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
       sig = Context.signature(ctx)
 
@@ -1050,7 +1133,7 @@ defmodule Cure.Elab.Elaborator do
           {:matched, pattern, body_expr} ->
             case elaborate_matched_branch(
                    verdict, pattern, body_expr, names, ctx, env,
-                   idx_terms, param_vals, scrut_term, result_type_term
+                   idx_terms, param_vals, scrut_term, result_type_term, carried
                  ) do
               {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
               {:error, _} = err -> {:halt, err}
@@ -1122,7 +1205,7 @@ defmodule Cure.Elab.Elaborator do
     {length(tele), cname}
   end
 
-  defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term) do
+  defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term, carried) do
     {:ok, {cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities, result_indices: result_indices} = Inductive.get_ctor(env, cname)
     branch_names = branch_scope(quantities, pattern_vars) ++ names
@@ -1136,6 +1219,12 @@ defmodule Cure.Elab.Elaborator do
         with {:ok, body_term, _type} <- elaborate_expr_typed(body_expr, branch_names, branch_ctx, env) do
           {:ok, {cname, length(telescope), body_term}}
         end
+
+      _solved_or_trivial when carried != nil ->
+        elaborate_carried_eq_branch(
+          cname, telescope, result_indices, body_expr, branch_names,
+          ctx, env, scrut_param_vals, result_type_term, carried
+        )
 
       _solved_or_trivial ->
         branch_ctx =
@@ -1153,6 +1242,71 @@ defmodule Cure.Elab.Elaborator do
         end
     end
   end
+
+  # Step 3b branch. The motive (see `wrap_motive_carried_eq`) makes this branch's
+  # expected type `Π(prf : Eq(T, idx, ctor_idx)). G'[jₚₒₛ↦ctor_idx]`, where
+  # `ctor_idx` is this constructor's result index at the carried position. Bind
+  # `prf`, transport each index-mentioning sibling `h : H[idx]` to `H[ctor_idx]`
+  # via `rewrite prf (λz. H[idx↦z]) h`, and emit `λprf. (λh'. body) transport`.
+  # Mirrors capability-B's `elaborate_with_eq_branch`, keyed on the index term.
+  defp elaborate_carried_eq_branch(cname, telescope, result_indices, body_expr, branch_names, ctx, env, scrut_param_vals, result_type_term, carried) do
+    %{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings} = carried
+    arity = length(telescope)
+    branch_ctx0 = extend_context(ctx, telescope, scrut_param_vals)
+
+    # `ctor_idx` — this constructor's result index at the carried position, in the
+    # branch_ctx0 frame (telescope bound). `Eq(T, idx, ctor_idx)` is the proof the
+    # motive hands each branch (kernel checks the branch at `motive @ ctor_idx`).
+    ctor_idx = Enum.at(result_indices, pos)
+    eq_dom_term = {:eq, Subst.shift(idx_type_term, arity, 0), Subst.shift(idx_term, arity, 0), ctor_idx}
+    branch_ctx1 = Context.extend(branch_ctx0, Eval.eval(eq_dom_term, Context.env(branch_ctx0)))
+
+    # Constants in branch_ctx1 (ctx + telescope + prf). `sc` shifts a ctx-frame
+    # term past the telescope and the prf binder; `pat_b1` is `ctor_idx` past prf.
+    sc = arity + 1
+    idx_b1 = Subst.shift(idx_term, sc, 0)
+    t_b1 = Subst.shift(idx_type_term, sc, 0)
+    pat_b1 = Subst.shift(ctor_idx, 1, 0)
+
+    sib_data =
+      Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
+        h_b1 = Subst.shift(h_ctx, sc, 0)
+        motive_j = {:lam, t_b1, abstract_term(h_b1, idx_b1, 0)}
+        transport = {:rewrite, {:var, 0}, motive_j, {:var, idx + sc}}
+        %{name: sname, dom: replace_term(h_b1, idx_b1, pat_b1), transport: transport}
+      end)
+
+    m = length(sib_data)
+
+    branch_ctx_full =
+      Enum.reduce(sib_data, branch_ctx1, fn %{dom: d}, c ->
+        Context.extend(c, Eval.eval(d, Context.env(c)))
+      end)
+
+    body_names = Enum.reduce(sib_data, [carried_prf_name() | branch_names], fn %{name: s}, acc -> [s | acc] end)
+
+    # Refined goal for this branch (`result_type[idx ↦ ctor_idx]`) in the full
+    # frame (ctx + telescope + prf + siblings), for checking-mode body forms.
+    over = sc + m
+    cod_expected =
+      Subst.shift(result_type_term, over, 0)
+      |> replace_term(Subst.shift(idx_term, over, 0), Subst.shift(ctor_idx, 1 + m, 0))
+      |> then(&Kernel.normalize(branch_ctx_full, &1))
+
+    with {:ok, inner} <- elaborate_branch_body(body_expr, cod_expected, body_names, branch_ctx_full, env) do
+      wrapped =
+        sib_data
+        |> Enum.with_index()
+        |> Enum.reverse()
+        |> Enum.reduce(inner, fn {%{dom: d, transport: t}, i}, acc ->
+          {:app, {:lam, Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
+        end)
+
+      {:ok, {cname, arity, {:lam, eq_dom_term, wrapped}}}
+    end
+  end
+
+  defp carried_prf_name, do: "$carried_idx_prf"
 
   defp elaborate_branch_body({:rewrite_expr, _meta, _children} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
