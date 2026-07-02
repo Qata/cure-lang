@@ -23,7 +23,8 @@
 - `Antigen.Coverage.terms_of(challenge)` returns `[type, term | ctx]` — each ctx entry is a **bare type-term** (not `{name, term}`), so drop/shift acts on it directly.
 - `Runner.occurs?/2` (`runner.ex:240-256`, private) is the crosses-binders free-occurrence check — reimplement in `Shrink` (don't reach into Runner's privates).
 - `Runner.well_formed?/1` (`runner.ex:328-332`, private) = `Coverage.terms_of(c) |> Enum.all?(&Term.term?/1)` rescue false — **reimplement** the same one-liner in `Shrink` to avoid a Runner↔Shrink cycle (spec §8 said "expose if private"; reimplementing via the same primitives is equivalent and cleaner — a deliberate, documented refinement).
-- `Runner.explore/1` infection branch is `runner.ex:24-32`; assay dispatch is `apply(opts[:assay] || assay_module(c.assay), :run, [c])`.
+- `Runner.explore/1` infection branch is `runner.ex:24-32`; assay dispatch is `apply(opts[:assay] || assay_module(c.assay), :run, [c])`. The infection branch is shared by **every** `Challenge` kind (`:stub`, `:family`, `:def_group`, `:forcing_pair`, `:indexed_case`, `:rewrite_eq`, `:typed_term`, `:mutant_term`) via the assay registry (`runner.ex:291-302`) — `Shrink` only understands the `:typed_term`/`:mutant_term` payload shape (`type`/`term`/`ctx` keys), so Task 4's integration must gate the `minimize` call on `c.kind`, not apply it unconditionally.
+- `Runner.explore/1` has **no** `challenges:` opt today (`runner.ex:13-14`: `challenges = draw(opts[:gen], count)`, unconditional). Task 4 must add it as part of the implementation, not treat it as possibly-already-present.
 
 ---
 
@@ -78,10 +79,20 @@ defmodule Antigen.ShrinkTest do
   end
 
   test "lam-body unwrap shifts free vars and is rejected when body uses its own param" do
-    keep = fn _ -> true end
+    # NOT `fn _ -> true end`: rule 1 is tried before rule 4 ("here" order is
+    # rule1 ++ rule2 ++ rule4) and fires on ANY node with node_count > 1 — the
+    # top-level lam here has node_count 3 (lam + Nat-dom + var), so a fully
+    # permissive predicate would let rule 1 replace the WHOLE lam with its
+    # first minimal-atom menu item ({:ctor,:Z,[]}) before rule 4's lam-unwrap
+    # is ever tried, and the test would observe `{:ctor,:Z,[]}`, not
+    # `{:var,0}` (confirmed by hand-trace + probe against the plan's own
+    # `size`/`node_count` helpers). The predicate must exclude the minimal
+    # atoms so only a `:var`/`:lam`-shaped result is accepted, isolating rule
+    # 4's behavior.
+    keep_var_or_lam = fn ch -> match?({:var, _}, ch.payload.term) or match?({:lam, _, _}, ch.payload.term) end
     # λx:Nat. (var 1)  — body does NOT use var 0 ⇒ unwrap to (var 0) after shift
     a = art({:lam, {:data, :Nat, [], []}, {:var, 1}}, [{:data, :Nat, [], []}])
-    out = Shrink.minimize(a, keep, 1000)
+    out = Shrink.minimize(a, keep_var_or_lam, 1000)
     assert out.payload.term == {:var, 0}           # shifted down by 1
   end
 
@@ -96,10 +107,42 @@ defmodule Antigen.ShrinkTest do
   end
 
   test "budget bounds the number of accepted edits" do
+    # Same rule-1-dominates hazard as the lam test above: `fn _ -> true end`
+    # would let rule 1 collapse `num(5)` straight to `{:ctor,:Z,[]}` in the
+    # single accepted edit (size 11 -> 1, not size(a) - 1 = 10). Pin the
+    # predicate to ":S-headed" so only rule 2's single-S-peel edits are ever
+    # accepted, and assert *bounded progress* (behavioral: budget=1 makes
+    # strictly less progress than a full minimize, never a hardcoded size
+    # delta, since a single accepted edit generally changes `size` by more
+    # than 1 — a peel changes both `node_count` and `numeral_magnitude`).
     a = art(num(5))
-    pred = fn _ -> true end                         # everything shrinks
-    out = Shrink.minimize(a, pred, 1)
-    assert Shrink.size(out) == Shrink.size(a) - 1   # exactly one edit
+    pred = fn ch -> match?({:ctor, :S, _}, ch.payload.term) end
+    out1 = Shrink.minimize(a, pred, 1)
+    out_full = Shrink.minimize(a, pred, 1000)
+    assert Shrink.size(out1) < Shrink.size(a)              # budget=1 makes some progress
+    assert Shrink.size(out1) > Shrink.size(out_full)       # ...but strictly less than full minimization
+    assert out_full.payload.term == s(num(0))              # fixpoint: S Z (matches the numeral-shrink test above)
+  end
+
+  test "a predicate that raises is safely treated as reject (LOCKED: pred crashes are rescued)" do
+    # Global Constraints locks "pred crashes are rescued -> reject", implemented
+    # by `safe_pred/2`, but no test anywhere exercised a raising predicate
+    # before this — a real gap, since `well_formed?` is shape-only (doesn't
+    # check de-Bruijn closedness), so a real assay could plausibly raise on an
+    # out-of-scope candidate `pred` builds from. Here `pred` raises
+    # specifically on `Z`, so the sweep must safely skip over it (not crash)
+    # and settle at the last candidate where `pred` holds without raising.
+    a = art(s(s(num(0))))   # S(S(Z))
+    pred = fn ch ->
+      case ch.payload.term do
+        {:ctor, :S, _} -> true
+        {:ctor, :Z, []} -> raise "boom"
+        _ -> false
+      end
+    end
+    out = Shrink.minimize(a, pred, 1000)   # must not raise
+    assert out.payload.term == s(num(0))   # settles at S Z: Z is reachable but pred raises there
+    assert pred.(out)
   end
 
   defp contains_vcons?({:ctor, :vcons, _}), do: true
@@ -226,6 +269,15 @@ defmodule Antigen.Shrink do
     [{&{:eq, &1, a, b}, ty}, {&{:eq, ty, &1, b}, a}, {&{:eq, ty, a, &1}, b}]
   end
   defp child_slots({:refl, a}), do: [{&{:refl, &1}, a}]
+  # :rewrite/:prim are real Core formers (Cure.Core.Term's node taxonomy) that
+  # `Term.gen_term`/`Antigen.Generators.Mutation` never construct today, so
+  # this clause is presently unreached — included anyway so term_candidates
+  # doesn't silently stop descending if either ever appears (no binder in
+  # either, matching Term.shift's own :rewrite/:prim clauses — no cutoff bump).
+  defp child_slots({:rewrite, p, m, b}) do
+    [{&{:rewrite, &1, m, b}, p}, {&{:rewrite, p, &1, b}, m}, {&{:rewrite, p, m, &1}, b}]
+  end
+  defp child_slots({:prim, op, args}), do: slot_list(args, &{:prim, op, &1})
   defp child_slots(_leaf), do: []
 
   defp slot_list(elems, rebuild_list) do
@@ -317,6 +369,32 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
       assert Antigen.Shrink.closed?(c), "candidate not closed: #{inspect(c.payload)}"
     end
   end
+
+  test "context drop shifts cross-referencing sibling entries correctly (dependent ctx, §7.3)" do
+    # An all-`Nat` ctx (no entry ever references another) can pass `closed?`
+    # trivially even if the sibling-shift cutoff (`Term.shift(e, -1, d - pos)`)
+    # were wrong, because every shift on such a ctx is a no-op — it never
+    # exercises spec §4 rule 3's "asymmetric before/after-drop-position
+    # handling". This ctx is genuinely dependent: pos0 references BOTH pos1
+    # and pos3, straddling the sole droppable position (pos2), so a wrong
+    # cutoff would produce a wrong (but still shape-`closed?`) index. Hand
+    # (and mechanically probe-)verified expected output before writing this
+    # assertion.
+    ctx = [
+      {:eq, {:type, 0}, {:var, 0}, {:var, 2}},   # pos0: local 0 -> abs 1 (pos1); local 2 -> abs 3 (pos3)
+      {:data, :Vec, [], [{:var, 1}]},             # pos1: local 1 -> abs 3 (pos3)
+      {:data, :Nat, [], []},                      # pos2: unreferenced — the sole droppable entry
+      {:data, :Nat, [], []}                       # pos3
+    ]
+    a = art({:var, 0}, ctx)
+    assert [c] = Antigen.Shrink.candidates_for_test(a)   # only pos2 is unreferenced
+    assert c.payload.ctx == [
+      {:eq, {:type, 0}, {:var, 0}, {:var, 1}},    # pos0: local 2 -> local 1 (target abs shifted 3 -> 2)
+      {:data, :Vec, [], [{:var, 0}]},             # pos1: local 1 -> local 0 (target abs shifted 3 -> 2)
+      {:data, :Nat, [], []}                       # old pos3, now pos2, content unchanged
+    ]
+    assert Antigen.Shrink.closed?(c)
+  end
 ```
 
 - [ ] **Step 2: Run — expect FAIL** (`ctx` never shrinks; `closed?`/`candidates_for_test` undefined).
@@ -328,9 +406,23 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
   end
 
   # rule 3: drop each unreferenced absolute ctx position d (index 0 = innermost/list head)
+  #
+  # NOTE the explicit `//1` step: `0..(n - 1)` WITHOUT a step is an Elixir
+  # footgun — when n=0 this is `0..-1`, and Elixir's *implicit* step defaults
+  # to -1 whenever last < first, so the "empty" range actually enumerates
+  # `[0, -1]` (two elements), not `[]`. Confirmed live: `elixir -e
+  # 'IO.inspect(Enum.to_list(0..(0-1)))'` prints `[0, -1]` with a compiler
+  # warning. For an empty ctx (the DEFAULT in every test fixture's `art/2`
+  # helper) that bug would make `drop_candidate` fabricate two phantom
+  # "drop position 0 / -1" candidates whose payload is byte-identical to the
+  # input for any var-free term/type (both shifts degrade to no-ops) — and
+  # since ctx-candidates are enumerated FIRST, `first_accepted` would accept
+  # that no-op every sweep (it trivially passes `well_formed?` and `pred`,
+  # nothing changed), burning the whole budget on phantom edits and returning
+  # the unmodified input. `//1` makes `n=0` correctly yield an empty range.
   defp ctx_candidates(%Challenge{payload: p} = ch) do
     n = length(p.ctx)
-    0..(n - 1)
+    0..(n - 1)//1
     |> Enum.map(fn d -> drop_candidate(ch, d) end)
     |> Enum.reject(&is_nil/1)
   end
@@ -429,16 +521,19 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
       |> Enum.take(50)
       |> Enum.find(&contains_vcons?/1)
 
-    if seed do
-      a = art(seed)
-      assert pred.(a)
-      out = Shrink.minimize(a, pred, 5000)
-      assert pred.(out)
-      assert Shrink.size(out) <= Shrink.size(a)
-      # minimal witness: a lone vcons whose args are minimal atoms
-      assert match?({:ctor, :vcons, [_, _, _]}, out.payload.term)
-      assert Shrink.size(out) <= 8
-    end
+    # Load-bearing, not vacuous: `assert seed` fails loudly (not silently skips)
+    # if no vcons-containing term is sampled — mirrors Task 4's `assert deep, "..."`
+    # guard rather than an `if seed do ... end` that would pass with zero
+    # assertions run on a bad draw (recursive-skeptical-review finding).
+    assert seed, "no vcons-containing term sampled in 50 draws"
+    a = art(seed)
+    assert pred.(a)
+    out = Shrink.minimize(a, pred, 5000)
+    assert pred.(out)
+    assert Shrink.size(out) <= Shrink.size(a)
+    # minimal witness: a lone vcons whose args are minimal atoms
+    assert match?({:ctor, :vcons, [_, _, _]}, out.payload.term)
+    assert Shrink.size(out) <= 8
   end
 ```
 
@@ -460,7 +555,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(an
 
 **Files:** Modify `lib/antigen/runner.ex`, `test/antigen/shrink_test.exs`.
 
-**Interfaces:** Produces: `Runner.explore/1` minimizes any infection before banking; `same_shape?/2` (tag comparator), `@shrink_budget`/`shrink_budget/1`. Consumes: `Shrink.minimize/3`.
+**Interfaces:** Produces: `Runner.explore/1` accepts an `opts[:challenges]` override (falls back to the existing generator path) and minimizes any `:typed_term`/`:mutant_term` infection before banking (other kinds bank unminimized, unchanged from today); `same_shape?/2` (tag comparator), `@shrink_budget`/`shrink_budget/1`. Consumes: `Shrink.minimize/3`.
 
 - [ ] **Step 1: Write the failing test** (buggy-infer end-to-end via `opts[:assay]`)
 ```elixir
@@ -502,16 +597,40 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(an
 
     banked = Antigen.Corpus.stream(corpus) |> Enum.flat_map(fn {:ok, c} -> [c]; _ -> [] end)
     assert [ab] = banked
-    # term is structurally bare: strictly smaller than the deep original, still trips the bug
+    # NOTE on what this does/doesn't prove: `Antigen.Assays.Mutation.run/2`
+    # (unmodified, existing module) treats ANY `{:ok, _}` from `infer_fun` as
+    # a violation, regardless of why inference succeeded — and this wrapper's
+    # `{:error, _} -> {:ok, ...}; ok -> ok` makes `infer_fun` return `{:ok,_}`
+    # unconditionally, for ANY term (including one that's genuinely
+    # well-typed on its own merits, e.g. bare `Z`). So `pred` here is
+    # unconditionally true for any well-formed candidate — rule 1
+    # (subterm->minimal-atom, tried before rule 4) will very likely collapse
+    # `deep` straight to an unrelated minimal atom (e.g. `{:ctor,:Z,[]}`) on
+    # the first accepted edit, not progressively peel the `deepen` wrappers
+    # down to a `head_swap`-specific witness. That's expected, not a bug in
+    # this plan: spec §2 already flags that a same-shape `pred` is
+    # "automatically as strict as a bare `{:violation, _}` match" for
+    # `Assays.Mutation`, i.e. no additional protection for this assay. What
+    # this test actually proves is narrower than "the minimal head_swap
+    # witness": that `explore/1` wires minimize-before-bank correctly, that
+    # `minimize` makes real progress, and that the banked artifact still
+    # trips whatever assay is configured — not that shrink preserves the
+    # ORIGINAL fault's specific shape for `:mutant_term` challenges.
     assert Antigen.Shrink.size(ab) < Antigen.Shrink.size(deep)
     assert match?({:violation, {:accepted_ill_typed, _, _}}, BuggyMutationAssay.run(ab))
   end
 ```
-(Confirm `explore/1` accepts a `challenges:` override for the batch; if it derives challenges from a generator instead, pass the generator that yields exactly `[deep]`, or add a thin `challenges:` opt — the minimal seam so the test drives one known artifact.)
+**Confirmed (probed against `lib/antigen/runner.ex:12-14`), not conditional:** `explore/1` does **not** accept `challenges:` today — it unconditionally runs `challenges = draw(opts[:gen], count)`. `draw(nil, count)` calls `Antigen.Backend.StreamData.interp(nil)`, which has no matching clause (`lib/antigen/backend/stream_data.ex`) and raises `FunctionClauseError`. So on the *unmodified* Runner, the Step 1 test above fails with that crash, not with the "banks the raw `deep`" story below — Step 3 below adds the `challenges:` opt as a required, not optional, part of this task.
 
-- [ ] **Step 2: Run — expect FAIL** (Runner banks the raw `deep`, not a minimized one; `size(ab) == size(deep)`).
+- [ ] **Step 2: Run — expect FAIL** — `FunctionClauseError` in `Antigen.Backend.StreamData.interp/1` (from `draw(opts[:gen] = nil, count)`), because `explore/1` has no `challenges:` opt yet. This is the correct red state for this test — it fails because the seam doesn't exist, not yet because shrinking doesn't happen.
 
-- [ ] **Step 3: Implement** — edit the infection branch in `lib/antigen/runner.ex` (§6):
+- [ ] **Step 3: Implement** — first add the `challenges:` seam at the top of `explore/1` (`lib/antigen/runner.ex:12-14`), keeping the existing generator path as the default:
+```elixir
+  def explore(opts) do
+    count = Keyword.get(opts, :count, 200)
+    challenges = opts[:challenges] || draw(opts[:gen], count)
+```
+Then edit the infection branch (§6). **Scope the shrink to the challenge kinds `Shrink` actually understands** — `Shrink.candidates/1`/`size/1` dereference `payload.type`/`payload.term`/`payload.ctx` directly (`p.type` etc. raise `KeyError` if absent, not `nil`), which only `:typed_term`/`:mutant_term` payloads have; every other kind this same branch also serves (`:stub`, `:family`, `:def_group`, `:forcing_pair`, `:indexed_case`, `:rewrite_eq` — see `Antigen.Coverage.terms_of/1`'s per-kind clauses) has a different payload shape and would crash `Shrink.minimize` outright. Without this guard, an infection on any non-typed_term/mutant_term assay (e.g. `Totality`, `Positivity`, `Reflexivity`, `Indexed`, `Rewrite`, `Universes`, `Stub`) turns a normal "report + bank" infection into a hard crash of the whole `explore/1` run — a regression versus current behavior, and not hypothetical (this branch has banked real antibodies for other verticals per the git history):
 ```elixir
             {:violation, orig_detail} = v ->
               assay = opts[:assay] || assay_module(c.assay)
@@ -522,7 +641,11 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(an
                 end
               end
 
-              c_min = Antigen.Shrink.minimize(c, pred, shrink_budget(opts))
+              c_min =
+                if c.kind in [:typed_term, :mutant_term],
+                  do: Antigen.Shrink.minimize(c, pred, shrink_budget(opts)),
+                  else: c
+
               {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, summarize(acc, count))
               IO.puts(Report.breadcrumb(c_min, path))
               Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
@@ -536,7 +659,6 @@ Add near the other private helpers:
   defp same_shape?(d1, d2) when is_tuple(d1) and is_tuple(d2), do: elem(d1, 0) == elem(d2, 0)
   defp same_shape?(d1, d2), do: d1 == d2
 ```
-If `explore/1` does not already accept an explicit `challenges:` batch, add that opt at the top of `explore/1` (`challenges = opts[:challenges] || default_batch(opts)`) — the smallest seam that lets the test drive one artifact; keep the existing generator path as the default.
 
 - [ ] **Step 4: Run — expect PASS** `mix test test/antigen/shrink_test.exs`
 
@@ -563,8 +685,18 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
 
 **Spec coverage:** §2 predicate-only-gate → Task 4's `same_shape?` + Task 1's `well_formed?`+`safe_pred`. §3 interface/seed-recompute → Task 1 `minimize/3`+`reseed`. §4 rules 1/2/4 → Task 1; rule 3 → Task 2; search discipline (ctx→type→term, pre-order, rules 1→2→4, greedy restart, budget) → Task 1 `candidates`/`term_candidates`/`sweep` + Task 2 `ctx_candidates` prepend. §5 size/monotone/idempotent/deterministic → Task 1 tests + `size/1`. §6 Runner integration → Task 4. §7 tests 1–2 Task 1; 3 Tasks 1/2 (`closed?`); 4 Task 3; 5 Task 4; 6 Task 1 budget test; 7 Task 5. §8 files/occurs?/well_formed? reimpl → Tasks 1/4. §9 non-goals respected (fault kept verbatim; no ChoiceSeq; no provenance path).
 
-**Placeholder scan:** none. Task 3/4 note conditional impl (only if a rule gap / `challenges:` seam is needed) with concrete fallbacks — not placeholders.
+**Placeholder scan:** none. Task 3's rule-gap fallback stays conditional (implement only if a real gap surfaces); Task 4's `challenges:` seam is now a committed, non-conditional part of Step 3 (see Deviations below) — not a placeholder either way.
 
 **Type consistency:** `minimize/3`, `size/1`, `occurs?/2`, `closed?/1`, `candidates_for_test/1` defined Task 1/2, used in later tasks. `same_shape?/2`, `shrink_budget/1`, `@shrink_budget` Task 4. `child_slots`/`term_candidates`/`drop_candidate` internal, consistent across Tasks 1–2.
 
-**Deviation flagged:** `well_formed?` is reimplemented in `Shrink` (not exposed from Runner) to avoid a Runner↔Shrink cycle — equivalent one-liner over the same primitives (Global Constraints).
+**Deviations recorded (recursive-skeptical-review pass):**
+- `well_formed?` is reimplemented in `Shrink` (not exposed from Runner) to avoid a Runner↔Shrink cycle — equivalent one-liner over the same primitives (Global Constraints).
+- Task 2's `ctx_candidates` originally used `0..(n - 1)` (no explicit step). Elixir's implicit-step range defaults to step `-1` whenever `last < first`, so at `n=0` (the default ctx in every test fixture's `art/2` helper) this enumerated `[0, -1]` instead of `[]` — verified live (`elixir -e 'IO.inspect(Enum.to_list(0..(0-1)))'` prints `[0, -1]` with a compiler warning). Traced through `drop_candidate`, this fabricated a phantom no-op "drop" candidate that `first_accepted` would greedily accept every sweep (content-identical to the input, so it trivially passes `well_formed?`/`pred`), burning the entire budget on no-op edits and returning the artifact unshrunk — breaking essentially every Task 1/2/3 test that relies on the default empty ctx. Fixed to `0..(n - 1)//1`.
+- Task 4's Runner integration originally applied `Shrink.minimize` unconditionally in the shared infection branch. Since that branch serves every `Challenge` kind (via the assay registry) but `Shrink` only understands the `:typed_term`/`:mutant_term` payload shape, an infection on any other assay (`Totality`/`Positivity`/`Reflexivity`/`Indexed`/`Rewrite`/`Universes`/`Stub`) would have crashed the whole `explore/1` run instead of reporting+banking it. Fixed by gating the `minimize` call on `c.kind in [:typed_term, :mutant_term]`.
+- Task 4's `challenges:` opt was originally described as possibly-already-present ("confirm... or add a thin seam"), and its red test's expected failure was described as a size mismatch. Probed and confirmed `explore/1` has no `challenges:` opt today and would instead crash with `FunctionClauseError` (`draw(nil, count)` → `Backend.StreamData.interp(nil)`, no matching clause). Fixed by making the `challenges:` opt a required, explicit part of Step 3, and correcting Step 2's expected-failure description to match.
+- Task 3's `if seed do ... end` could pass with zero assertions run if no vcons-containing term were sampled in 50 draws. Fixed to `assert seed, "..."` (unconditional body after), matching Task 4's own `assert deep, "..."` pattern for the same class of risk.
+- Task 1's `child_slots/1` had no clause for the `:rewrite`/`:prim` Core formers (present in `Cure.Core.Term`'s node taxonomy), so `term_candidates` would silently stop descending into either if they ever appeared. Confirmed currently unreachable (`Term.gen_term`/`Antigen.Generators.Mutation` never construct either node), but added the two clauses for structural completeness against the full Core taxonomy.
+- Task 4's `BuggyMutationAssay` wrapper, combined with `Antigen.Assays.Mutation.run/2`'s existing (unmodified) "any `{:ok,_}` on a `:mutant_term` payload is a violation" contract, makes `infer_fun` return `{:ok,_}` unconditionally for every term — so the test's `pred` is effectively permissive for any well-formed candidate, and rule 1 will very likely collapse `deep` to an unrelated minimal atom rather than a `head_swap`-specific witness. Confirmed by direct code inspection, not a plan bug (spec §2 already flags this exact weak-guard characteristic for `Assays.Mutation`), but the test's inline comment overclaimed what's demonstrated. Added a comment clarifying the narrower, accurate claim (pipeline wiring + progress + still-trips-the-assay) without changing the assertions or the underlying (spec-locked) behavior.
+- Task 2's §7.3 regression-guard test used a ctx of three bare `Nat` entries — none reference each other, so every sibling-entry shift in that test degrades to a no-op and the test could pass even if `Term.shift(e, -1, d - pos)`'s cutoff were wrong, contrary to spec §7.3's explicit requirement to test "the asymmetric before/after-drop-position handling". Added a second test with a genuinely dependent ctx (one entry referencing two different sibling positions straddling the sole droppable one) and exact expected post-drop ctx values, hand-derived and mechanically probe-verified against a standalone reimplementation of `Term.shift`/`occurs?`/`drop_candidate` before writing the assertion — confirms the plan's rule-3 arithmetic is correct, and gives the regression guard a case it can actually fail on.
+- Global Constraints locks "`pred` crashes are rescued → reject" (implemented by `safe_pred/2`), but no test anywhere exercised a raising predicate. Real gap, not cosmetic: `well_formed?` is shape-only and doesn't check de-Bruijn closedness, so a real assay's `pred` could plausibly raise on an out-of-scope candidate. Added a Task 1 test with a predicate that raises on a specific reachable term, asserting `minimize` doesn't crash and settles at the last non-raising accepted state.
+- Task 1's "lam-body unwrap" and "budget bounds the number of accepted edits" tests both originally used a fully permissive predicate (`fn _ -> true end`/`keep`). Hand-traced (and mechanically double-checked with a probe reusing the plan's own `node_count`/`numeral_magnitude`/`size` definitions) against the plan's own rule-priority order (`here = rule1 ++ rule2 ++ rule4`, first accepted candidate wins): rule 1 (subterm→minimal-atom) fires on *any* node with `node_count > 1` and, under a permissive predicate, always wins immediately over rule 4/rule 2 since it's tried first and offers the largest single jump ("cheapest/highest-impact first" per spec §4). Concretely: the lam test's `node_count(lam) = 3 > 1`, so a permissive predicate would let rule 1 collapse the whole lambda straight to `{:ctor,:Z,[]}` in one accepted edit, never reaching rule 4's lam-unwrap — the test's asserted `{:var, 0}` would not be observed. Similarly the budget test's `num(5)` (`size = 11`) would collapse to `{:ctor,:Z,[]}` (`size = 1`) in the single accepted edit, not `size(a) - 1 = 10`. Fixed the lam test's predicate to `match?({:var,_},...) or match?({:lam,_,_},...)` (excludes the minimal atoms, isolating rule 4's behavior) and rewrote the budget test to pin the predicate to `:S`-headed terms and assert bounded-progress behaviorally (`size(out1) < size(a)` and `size(out1) > size(out_full)`) rather than a hardcoded `size(a) - 1`, since a single accepted rule-2 edit changes `size` by 2 (both `node_count` and `numeral_magnitude` drop by 1), not 1.
