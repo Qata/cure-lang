@@ -78,24 +78,29 @@ Idris quality for what they cover. **The TCB is essentially done** — with #8's
 nested-positivity gaps audited + banked, every remaining row lives in the
 untrusted elaborator / Antigen layers.
 
-**Two known K-layer *reaches* (soundness-safe incompleteness), each scheduled as
-its own reviewed TCB run.**
+**Two known K-layer *reaches* (soundness-safe incompleteness): (1) is now
+CLOSED via a reviewed TCB run; (2) remains scheduled.**
 
-*(1) Stuck-eliminator normalization.* The normalizer preserves stuck eliminators without
-δ-reducing their targets: a stuck `case` never re-reduces its scrutinee
-(`normalise.ex` `nf_neutral`), and `spine/2` only unwraps `napp`, so `nfst`/
-`nsnd` frames over a certified-global spine freeze the same way — e.g.
-`nf(plus(plus(Z,n),Z))` and `fst(g(x))` stay stuck even at top level. This is
-*incompleteness, not unsoundness* (it rejects/leaves-stuck; it never equates
-distinct normal forms), and rw07 (#7) is currently dodged in the elaborator by
-the bridge lemma. The prescribed fix is **one clause at the `unfold_head`
-seam** — whnf the `ncase` scrutinee and the `nfst`/`nsnd` targets, resume ι if a
-constructor emerges — repairing whnf+nf+conv at a single trusted point rather
-than patching `nf_neutral` and `conv_neutral?` separately. **Gate for that
-run (HARD-STOP review):** red-green, a new Antigen antibody proving the clause
-terminates and equates no distinct normal forms, the full Antigen suite, and
-the full test suite. Until it lands, the bridge lemma is the sanctioned
-workaround and this row is the must-eventually-accept reach-pin.
+*(1) Stuck-eliminator normalization — ✅ CLOSED (`d37721f`, reviewed TCB run).*
+The normalizer used to preserve stuck eliminators without δ-reducing their
+targets: a stuck `case` never re-reduced its scrutinee, and `spine/2` only
+unwrapped `napp`, so `nfst`/`nsnd` frames over a certified-global spine froze —
+`nf(plus(plus(Z,n),Z))` and `fst(g(x))` stayed stuck even at top level. Fixed by
+a single seam clause in `unfold_certified_head` (`normalise.ex`): when the spine
+head is a stuck `ncase`/`nfst`/`nsnd`, whnf its target (threading `opts`, so
+`delta: :none`/fuel honored) and, if a ctor/pair emerges, apply the same ι-rule
+`eval` trusts, then re-apply the spine args. Conversion inherited the fix via
+`conv_val?`'s existing `whnf_value` routing (`conv.ex` untouched). Gate met:
+red-green kernel tests, the new `StuckElimDelta` Antigen antibody (termination +
+soundness, with a banked negative control that must stay distinct), full Antigen
+suite (106), full test suite (2256, 0 regressions). **Correction to the earlier
+plan:** this does NOT retire rw07's bridge lemma. The seam reduces
+`plus(plus(Z,n),Z)` to `plus(n,Z)` (inner stuck `plus(Z,n)→n`), but `plus(n,Z) ≡
+n` is *genuinely not definitional* (needs induction / `plus_n_Z`), so
+`conv?(plus(plus(Z,n),Z), n)` is correctly still `false` and the bridge remains
+necessary for that rewrite. What the seam fixes is the real reduction gap
+(stuck-δ-scrutinee `case` + `fst`/`snd` over certified-global spines), not any
+equality requiring induction.
 
 *(2) `Quote.reify` param/index collapse.* The value representation `{:vdata,
 name, args}` does not track the family's param/index split, so `reify` emits
