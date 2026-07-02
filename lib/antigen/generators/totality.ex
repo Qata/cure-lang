@@ -74,6 +74,156 @@ defmodule Antigen.Generators.Totality do
     )
   end
 
+  # -- W1: adversarial diverging set (pre-port banking spec §4 W1) ------------
+  # Each is diverging BY CONSTRUCTION (argument in @doc). All are rejected by
+  # today's conservative certifier (mutual cycles rejected wholesale; the
+  # self-call variants fail the fixed-position structural guard) — and must
+  # STAY rejected forever, including after the P1 size-change port.
+
+  @doc """
+  Diverging 3-cycle `f → g → h → f` over `Dec → Dec`. No body references its own
+  name; only signature-level cycle detection sees it (generalizes the banked
+  2-cycle). Diverges on every input: `f x → g x → h x → f x → …`. Label `:diverging`.
+  """
+  @spec diverging_three_cycle() :: Challenge.t()
+  def diverging_three_cycle do
+    ty = {:pi, @dec, @dec}
+    bf = {:lam, @dec, {:app, {:global, :g}, {:var, 0}}}
+    bg = {:lam, @dec, {:app, {:global, :h}, {:var, 0}}}
+    bh = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{
+        defs: [
+          %{name: :f, type: ty, body: bf},
+          %{name: :g, type: ty, body: bg},
+          %{name: :h, type: ty, body: bh}
+        ],
+        focus: [:f, :g, :h]
+      },
+      note: "W1 3-cycle f->g->h->f; every body self-call-free"
+    )
+  end
+
+  @doc """
+  Diverging cycle whose every direct callee looks innocent: `f = λx. total_id (g x)`,
+  `g = λx. f x`, with `total_id = λx. x` genuinely total. The cycle f→g→f exists but
+  is interleaved with a plain subroutine call. `total_id` is deliberately NOT in
+  `focus` — it must keep certifying (asserted separately). Diverges on every input.
+  Label `:diverging`.
+  """
+  @spec diverging_mediated_cycle() :: Challenge.t()
+  def diverging_mediated_cycle do
+    ty = {:pi, @dec, @dec}
+    b_id = {:lam, @dec, {:var, 0}}
+    bf = {:lam, @dec, {:app, {:global, :total_id}, {:app, {:global, :g}, {:var, 0}}}}
+    bg = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{
+        defs: [
+          %{name: :total_id, type: ty, body: b_id},
+          %{name: :f, type: ty, body: bf},
+          %{name: :g, type: ty, body: bg}
+        ],
+        focus: [:f, :g]
+      },
+      note: "W1 cycle f->g->f mediated by a total helper (total_id excluded from focus)"
+    )
+  end
+
+  @doc """
+  Argument-permuting, size-preserving mutual pair over `Dec → Dec → Dec`:
+  `f x y = g y x`, `g x y = f x y`. Every argument-to-argument flow is `≤`, none
+  is `<` — the classic size-change discriminator: a naive "some argument shrinks
+  somewhere" analysis wrongly certifies it, LJB composition does not. Diverges on
+  every input pair. Label `:diverging`.
+  """
+  @spec diverging_permuting_pair() :: Challenge.t()
+  def diverging_permuting_pair do
+    ty = {:pi, @dec, {:pi, @dec, @dec}}
+    # inner frame: y = var 0, x = var 1
+    bf = {:lam, @dec, {:lam, @dec, {:app, {:app, {:global, :g}, {:var, 0}}, {:var, 1}}}}
+    bg = {:lam, @dec, {:lam, @dec, {:app, {:app, {:global, :f}, {:var, 1}}, {:var, 0}}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{
+        defs: [%{name: :f, type: ty, body: bf}, %{name: :g, type: ty, body: bg}],
+        focus: [:f, :g]
+      },
+      note: "W1 permuting pair f x y = g y x; g x y = f x y — all flows ≤, none <"
+    )
+  end
+
+  @doc """
+  Constructor-regrowing self-call: `h = λn. case n of {Z -> Z; S y -> h (S y)}`
+  over `Nat → Nat`. The self-call re-wraps the just-unpacked field, so descent is
+  claimed by shape and refuted by size: `h (S m) → h (S m) → …` diverges on every
+  `S`-input. Label `:diverging`.
+  """
+  @spec diverging_regrowing_self() :: Challenge.t()
+  def diverging_regrowing_self do
+    motive = {:lam, @nat, @nat}
+
+    body =
+      {:lam, @nat,
+       {:case, {:var, 0}, motive,
+        [
+          {:Z, 0, {:ctor, :Z, []}},
+          {:S, 1, {:app, {:global, :h}, {:ctor, :S, [{:var, 0}]}}}
+        ]}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
+      note: "W1 regrowing self-call h (S y) — diverges on every S input"
+    )
+  end
+
+  @doc """
+  One-leg-decreasing mutual pair: `f = λn. case n of {Z -> Z; S y -> g y}` and
+  `g = λn. f (S n)` over `Nat → Nat`. The f→g call strictly decreases; the g→f
+  call regrows; the COMPOSED cycle is non-decreasing: `f (S m) → g m → f (S m) → …`.
+  LJB's motivating case — certification must consider cycle composition, not
+  individual calls. Label `:diverging`.
+  """
+  @spec diverging_one_leg_pair() :: Challenge.t()
+  def diverging_one_leg_pair do
+    motive = {:lam, @nat, @nat}
+
+    bf =
+      {:lam, @nat,
+       {:case, {:var, 0}, motive,
+        [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :g}, {:var, 0}}}]}}
+
+    bg = {:lam, @nat, {:app, {:global, :f}, {:ctor, :S, [{:var, 0}]}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{
+        defs: [
+          %{name: :f, type: {:pi, @nat, @nat}, body: bf},
+          %{name: :g, type: {:pi, @nat, @nat}, body: bg}
+        ],
+        focus: [:f, :g]
+      },
+      note: "W1 one-leg pair: f decreases, g regrows; composed cycle non-decreasing"
+    )
+  end
+
   @doc "Rebuild the def-group's `Env` by folding `Env.add_def/4` over the payload."
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{payload: %{defs: defs}}) do
