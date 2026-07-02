@@ -151,14 +151,20 @@ defmodule Antigen.Generators.Mutation do
         {term_gen, fault} = build(ctx, kind)
 
         Gen.bind(term_gen, fn term ->
-          Gen.return(
-            Challenge.new(
-              kind: :mutant_term,
-              assay: assay_id(),
-              label: :ill_typed,
-              payload: %{sig: :v1, ctx: ctx_types, type: goal_of(fault), term: term, fault: fault}
-            )
-          )
+          Gen.bind(Gen.int(0, max_depth()), fn d ->
+            Gen.bind(deepen(ctx, term, d), fn {deep_term, wrap_path} ->
+              fault = Map.merge(fault, %{depth: d, wrap_path: wrap_path})
+
+              Gen.return(
+                Challenge.new(
+                  kind: :mutant_term,
+                  assay: assay_id(),
+                  label: :ill_typed,
+                  payload: %{sig: :v1, ctx: ctx_types, type: goal_of(fault), term: deep_term, fault: fault}
+                )
+              )
+            end)
+          end)
         end)
       end)
     end)

@@ -94,4 +94,20 @@ defmodule Antigen.Generators.MutationTest do
       for {_deep, [k]} <- sample(Mutation.deepen(ctx, fault, 1), 300), do: k
     assert Enum.uniq(seen) |> length() >= 4   # ≥4 of the 5 kinds appear
   end
+
+  test "mutant/0 emits deep mutants: depth/wrap_path recorded, still rejected, depth reached" do
+    depths =
+      for c <- sample(Mutation.mutant(), 300) do
+        p = c.payload
+        assert length(p.fault.wrap_path) == p.fault.depth
+        assert p.fault.depth >= 0 and p.fault.depth <= Mutation.max_depth()
+        assert Enum.all?(p.fault.wrap_path, &(&1 in Mutation.wrappers()))
+        env = SigMenu.env_of(:v1)
+        ctx = SigMenu.rebuild_context(env, p.ctx)
+        assert {:error, _} = Kernel.infer(ctx, p.term)
+        p.fault.depth
+      end
+
+    assert Enum.max(depths) >= 4   # deep mutants actually generated
+  end
 end
