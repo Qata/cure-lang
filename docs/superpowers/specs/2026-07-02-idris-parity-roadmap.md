@@ -78,8 +78,8 @@ Idris quality for what they cover. **The TCB is essentially done** — with #8's
 nested-positivity gaps audited + banked, every remaining row lives in the
 untrusted elaborator / Antigen layers.
 
-**Two known K-layer *reaches* (soundness-safe incompleteness): (1) is now
-CLOSED via a reviewed TCB run; (2) remains scheduled.**
+**Two known K-layer *reaches* (soundness-safe incompleteness): BOTH now CLOSED
+via reviewed TCB runs.**
 
 *(1) Stuck-eliminator normalization — ✅ CLOSED (`d37721f`, reviewed TCB run).*
 The normalizer used to preserve stuck eliminators without δ-reducing their
@@ -102,22 +102,24 @@ necessary for that rewrite. What the seam fixes is the real reduction gap
 (stuck-δ-scrutinee `case` + `fst`/`snd` over certified-global spines), not any
 equality requiring induction.
 
-*(2) `Quote.reify` param/index collapse.* The value representation `{:vdata,
-name, args}` does not track the family's param/index split, so `reify` emits
-`{:data, name, args, []}` — all args in the params slot. This is invisible for
-most checks, but `check_motive_wf` infers a motive body's sort by reifying it,
-and an **indexed family as a `:case` motive Π-domain** then fails re-inference
-with `:arg_arity` (`:bad_motive`) — e.g. the *convoy* encoding of `with` sibling
-refinement (`λw. Π(SNat(w)). …`). Discovered during #6 sibling refinement, which
-therefore ships via the sound **proof-carrying transport** dodge instead (the
-`:rewrite` rule uses `Eval.apply`, never reifies a Π-domain). Again
-*incompleteness, not unsoundness* (it rejects; never equates distinct normal
-forms). Prescribed fix: make `reify`/the value rep preserve the split (carry the
-family param count, or split at `Inductive.param_count`), or have
-`infer_type_value_sort({:vpi,…})` check domain/codomain sorts without a lossy
-full reify. **Same HARD-STOP gate** (red-green + Antigen must-eventually-accept
-pinning the convoy path + full suites). Until it lands, transport is the
-sanctioned workaround.
+*(2) `check_motive_wf` reify-collapse — ✅ CLOSED (`defc6cb`, reviewed TCB run).*
+`Quote.reify` collapses `{:vdata, name, args}` → `{:data, name, args, []}` (no
+inductive sig to recover the param/index split). This was invisible except in
+`infer_type_value_sort`, which inferred a Π/Σ/Eq motive body's sort by reifying +
+re-inferring — so an **indexed family as a Π domain** (the *convoy* encoding of
+`with` sibling refinement, `λw. Π(SNat(w)). …`) re-inferred with `:arg_arity` and
+was wrongly rejected `:bad_motive`. **Fixed without touching `reify`** (approach
+b, the smaller/safer of the two — `reify` feeds 11+ callers): the `{:vpi}`/
+`{:vsigma}`/`{:veq}` clauses of `infer_type_value_sort` now recurse on the
+sub-*values* directly, mirroring `infer/2`'s type-formation rules and bottoming
+out in the existing direct `{:vdata,…}` clause — so acceptance equals a non-lossy
+reify+infer, and a non-type domain still falls to `:not_a_type_value` (rejected;
+proven by a banked negative control). `reify`/`conv`/`normalise`/elaborator
+untouched. Gate met: red-green kernel test (positive accepted + negative control
+rejected), Antigen `indexed/case` antibodies (both banked), full Antigen (106),
+full suite (2258, 0 regressions). This unblocks the clean **convoy** encoding and
+is a prerequisite for indexed-scrutinee `with` / views. The elaborator's
+`resplit_data` workaround is now redundant-but-harmless (leave for a follow-up).
 
 ### The honest headline
 Of 26 rows: **13 at parity, 13 remain, 0 live soundness holes** — the
