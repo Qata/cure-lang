@@ -15,6 +15,7 @@
 - **Ghost-authored commits:** `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, no `Co-Authored-By`.
 - **One full build/test run at a time** (a past concurrent full-suite run caused a kernel panic).
 - **Legacy banked records:** the 7 v1 `:mutant_term` seeds in `test/antigen/seeds.sexp` have `fault` maps with NO `:depth`/`:wrap_path` keys. All reads of those fields MUST be defensive — `Map.get(fault, :depth, 0)` / `Map.get(fault, :wrap_path, [])` — never dot/strict access, or replaying them crashes with `KeyError` (spec §6 "Legacy banked records").
+- **Tests are immutable once green:** each task's Step 1 red test, once passing at Step 4, is never weakened, skipped, or deleted to reach green — a step is made to pass only by changing the Step 3 implementation. The sole exception is a test proven to encode incorrect behavior itself, and that exception requires stating in the commit/PR *why* the test was wrong before touching it — "it's faster to edit the test" is never sufficient justification.
 
 ### DEVIATION from spec §3 — wrapper set is 5, not 6 (drop `:ctor_vec`)
 
