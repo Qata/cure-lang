@@ -191,26 +191,62 @@ defmodule Cure.Core.Normalise do
     if opts[:delta] == :none do
       :stuck
     else
-      unfold_certified_head(neutral, sig)
+      unfold_certified_head(neutral, sig, opts)
     end
   end
 
-  defp unfold_certified_head(neutral, sig) do
+  # δ-reduce a neutral's spine head when that head is either a certified-total
+  # global OR a *stuck eliminator* (`ncase`/`nfst`/`nsnd`) whose target itself
+  # δ-reduces to a constructor/pair. In the eliminator case we whnf the target
+  # (threading the caller's `opts`, so `delta: :none` and fuel/mode are honored)
+  # and, when a value emerges, apply the SAME ι-rule `eval` trusts, then re-apply
+  # the spine `args`. Each ι-reduction spends fuel so termination stays bounded.
+  defp unfold_certified_head(neutral, sig, opts) do
     {head, args} = spine(neutral, [])
 
     case head do
       {:nglobal, name} ->
         if Env.certified?(sig, name) do
           %{body: body} = Env.get_def(sig, name)
-          {:ok, Enum.reduce(args, spend_fuel(Eval.eval(body, [])), fn arg, acc -> Eval.apply(acc, arg) end)}
+          {:ok, reapply(args, spend_fuel(Eval.eval(body, [])))}
         else
           :stuck
+        end
+
+      # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
+      # matching branch body in `reverse(cargs) ++ env`.
+      {:ncase, scrut, _motive, branches} ->
+        case whnf_value({:vneutral, scrut}, sig, opts) do
+          {:vctor, cname, cargs} ->
+            {_c, _ar, {:closure, env, body}} =
+              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+
+            reduced = spend_fuel(Eval.eval(body, Enum.reverse(cargs) ++ env))
+            {:ok, reapply(args, reduced)}
+
+          _ ->
+            :stuck
+        end
+
+      # ι on projections: mirrors `vfst`/`vsnd` — the pair's first/second field.
+      {:nfst, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
+          _ -> :stuck
+        end
+
+      {:nsnd, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
+          _ -> :stuck
         end
 
       _ ->
         :stuck
     end
   end
+
+  defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
 
   defp spend_fuel(reduced) do
     case Process.get(@fuel_key) do

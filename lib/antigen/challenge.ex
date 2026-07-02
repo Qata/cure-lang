@@ -4,7 +4,7 @@ defmodule Antigen.Challenge do
   @enforce_keys [:kind, :assay, :label, :payload]
   defstruct [:kind, :assay, :label, :payload, :seed, :note]
 
-  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq
+  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq | :stuck_elim
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -25,11 +25,11 @@ defmodule Antigen.Challenge do
   # in sync with the generator modules' fixed, literal name sets.
   @known_atoms [
     # kinds
-    :stub, :def_group, :family, :forcing_pair,
+    :stub, :def_group, :family, :forcing_pair, :stuck_elim,
     # labels
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
-    :f, :g, :h, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
+    :f, :g, :h, :plus, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
     :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
@@ -63,7 +63,8 @@ defmodule Antigen.Challenge do
   def to_pieces(%__MODULE__{kind: :def_group, payload: %{defs: defs, focus: focus}}),
     do: def_group_pieces(defs, focus)
 
-  def to_pieces(%__MODULE__{kind: :forcing_pair, payload: %{defs: defs, focus: focus, t: t, tprime: tp}}) do
+  def to_pieces(%__MODULE__{kind: kind, payload: %{defs: defs, focus: focus, t: t, tprime: tp}})
+      when kind in [:forcing_pair, :stuck_elim] do
     {scaffold, pieces} = def_group_pieces(defs, focus)
     {scaffold, pieces ++ [{"t", t}, {"tprime", tp}]}
   end
@@ -169,11 +170,12 @@ defmodule Antigen.Challenge do
     new(kind: :def_group, assay: assay, label: label, payload: %{defs: defs, focus: focus}, seed: seed, note: note)
   end
 
-  def from_pieces(:forcing_pair, assay, label, seed, note, scaffold, pieces) do
+  def from_pieces(kind, assay, label, seed, note, scaffold, pieces)
+      when kind in [:forcing_pair, :stuck_elim] do
     pmap = Map.new(pieces)
     {defs, focus} = rebuild_defs(scaffold, pmap)
     payload = %{defs: defs, focus: focus, t: Map.fetch!(pmap, "t"), tprime: Map.fetch!(pmap, "tprime")}
-    new(kind: :forcing_pair, assay: assay, label: label, payload: payload, seed: seed, note: note)
+    new(kind: kind, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:family, assay, label, seed, note, scaffold, pieces) do

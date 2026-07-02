@@ -26,7 +26,8 @@ defmodule Antigen.CorpusReplayTest do
     "reflexivity" => Assays.Reflexivity,
     "indexed/case" => Assays.Indexed,
     "rewrite/eq" => Assays.Rewrite,
-    "universes" => Assays.Universes
+    "universes" => Assays.Universes,
+    "stuck_elim_delta" => Assays.StuckElimDelta
   }
 
   test "both committed corpora decode without error (structural integrity)" do
