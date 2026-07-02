@@ -49,7 +49,9 @@ defmodule Cure.E2E.FrpBeamTest do
     prim() -> Causal()
     seq(l, r) -> Dcoupled()
   fn step({as: SVDesc}, {bs: SVDesc}, {d: Dec}, s: SF(as, bs, d)) -> Sigma(o: Dec, SF(as, bs, d)) = %[observe(s), s]
-  fn start() -> Dec = step(seq(unit(), unit())).1
+  fn start() -> Dec =
+    let net = seq(unit(), unit())
+    step(net).1
   """
 
   test "the FRP slice elaborates + passes the {0,ω} relevance check" do

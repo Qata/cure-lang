@@ -433,8 +433,9 @@ Scope-pinned: (a) `step` returns the scrutinee unchanged; a *reconstructed*
 refined-index continuation (`match s → seq(l,r):SF(as,bs,d)`) hits a dependent-match
 completeness gap; (b) the net uses concrete `unit` because free erased descriptors
 leave index metavars unsolved (real programs carry concrete descriptors); (c) the
-multi-line `let net = … ⏎ body` form failed to elaborate (inline used) — a
-separate parser/let-elab item.
+multi-line `let net = … ⏎ body` form — FIXED (dependent-elaborator let-block
+support, closed the `match/mt05_let_tail_reach` parity reach); `start/0` now uses
+`let`, exercising it end-to-end on BEAM.
 
 - [x] **Step 1: red.** The probe program: `SVDesc`/`Sig`/`Dec` descriptors;
 
