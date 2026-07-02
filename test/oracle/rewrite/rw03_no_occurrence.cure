@@ -1,0 +1,4 @@
+mod Rw03
+  type Nat = Z | S(Nat)
+  fn no_occurrence(p: Eq(Nat, Z, Z), m: Nat) -> Eq(Nat, m, m) = rewrite p in refl(m)
+end
