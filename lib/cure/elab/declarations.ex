@@ -337,24 +337,56 @@ defmodule Cure.Elab.Declarations do
       end
 
     acc =
-      if index_types do
-        args
-        |> Enum.drop(app_param_count)
-        |> Enum.with_index()
-        |> Enum.reduce(acc, fn {arg, pos}, a ->
-          case arg do
-            {:variable, _, vname} -> maybe_add_implicit(a, vname, Enum.at(index_types, pos), fam, env)
-            _ -> a
-          end
-        end)
-      else
-        acc
+      cond do
+        index_types ->
+          args
+          |> Enum.drop(app_param_count)
+          |> Enum.with_index()
+          |> Enum.reduce(acc, fn {arg, pos}, a ->
+            case arg do
+              {:variable, _, vname} -> maybe_add_implicit(a, vname, Enum.at(index_types, pos), fam, env)
+              _ -> a
+            end
+          end)
+
+        # A COMPUTED index expression: a non-family global function (`app`,
+        # `dmeet`, `∧`, …) used inside an index. An index variable that appears
+        # ONLY here (e.g. the fed-back `cv` in `app(av, cv)` inside a `loop`
+        # constructor's ARGUMENT type) must still be inferred as an implicit,
+        # typed by the function's domain telescope. Non-dependent domains only
+        # (our index functions are non-dependent); a mistyped binder would fail
+        # the kernel check, never silently mis-accept.
+        dom = global_domain_types(name, env) ->
+          args
+          |> Enum.with_index()
+          |> Enum.reduce(acc, fn {arg, pos}, a ->
+            case arg do
+              {:variable, _, vname} -> maybe_add_implicit(a, vname, Enum.at(dom, pos), fam, env)
+              _ -> a
+            end
+          end)
+
+        true ->
+          acc
       end
 
     Enum.reduce(args, acc, fn a, ac -> collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac) end)
   end
 
   defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
+
+  # Domain (argument) types of a defined global function, peeled from its Pi
+  # type, or nil if `name` is not a defined global. Used to type index variables
+  # occurring inside a computed index expression (see `collect_implicit_vars`).
+  defp global_domain_types(name, env) do
+    case Env.get_def(env, name) do
+      %{type: ty} -> pi_domains(ty)
+      _ -> nil
+    end
+  end
+
+  defp pi_domains({:pi, dom, cod}), do: [dom | pi_domains(cod)]
+  defp pi_domains(_), do: []
 
   # The positional index types of family `name` (self or already registered).
   defp family_index_types(name, fam, index_tele, env) do
