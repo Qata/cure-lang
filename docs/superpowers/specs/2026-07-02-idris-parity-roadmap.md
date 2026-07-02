@@ -48,7 +48,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 3 | Pattern matching depth | Nested/deep patterns → decision-tree compiler (M8.4). Kernel case already nests, so this is a lowering pass, not a kernel change | E | additive (refactors match path) | ⬜ |
 | 4 | Pattern forms | Non-constructor patterns in dependent position (`_`, literal, as-patterns) handled, not merely rejected | E | additive | ⬜ |
 | 5 | Pattern matching | Forced/dot patterns + forced-argument erasure | E, C | additive | ⬜ |
-| 6 | Dependent matching | `with`-abstraction (match on an intermediate, refine the goal) — *borderline; core to Idris matching quality*. **Capabilities A + B landed** (`58037d6`, `8487c51`): block/inline `with <single-expr> [proof <name>]` over a **non-indexed** scrutinee. **A** refines the GOAL by the scrutinee's *value* via a value-abstracting motive `{:lam, ty, abstract_term(goal, e, 0)}` (the `motive_for` pattern, not index-refinement), in place as `{:case,…}`; strictly beyond `match` (oracle wi01: plain `match` on the same goal is rejected). **B** (`proof`) binds `<name> : Eq(T,e,pat)` per branch via an **Eq-arrow motive** `λw. Eq(T,e,w) → G[e↦w]` with each branch a `λ(pf).body` and the `:case` discharged by `refl(e)` (oracle wi04, load-bearing; reuses rw07's Eq/refl). Kernel accepted both motives unchanged (no TCB). *Reach*: sibling/other-argument refinement (M), multiple with-exprs, LHS re-matching of parent patterns, views (C), codegen/runtime lowering (type-checks only today); indexed scrutinee explicitly rejected (`{:with_indexed_scrutinee_unsupported,_}`) — `match`'s domain | E, P | additive | 🟡 (A + B; reach: sibling/views/codegen) |
+| 6 | Dependent matching | `with`-abstraction (match on an intermediate, refine the goal) — *borderline; core to Idris matching quality*. **Capabilities A + B + sibling refinement landed** (`58037d6`, `8487c51`, `dbf874e`): block/inline `with <single-expr> [proof <name>]` over a **non-indexed** scrutinee. **A** refines the GOAL by the scrutinee's *value* via a value-abstracting motive `{:lam, ty, abstract_term(goal, e, 0)}` (the `motive_for` pattern, not index-refinement), in place as `{:case,…}`; strictly beyond `match` (oracle wi01: plain `match` on the same goal is rejected). **B** (`proof`) binds `<name> : Eq(T,e,pat)` per branch via an **Eq-arrow motive** `λw. Eq(T,e,w) → G[e↦w]`, branch `λ(pf).body`, `:case` discharged by `refl(e)` (oracle wi04, load-bearing). **Sibling refinement** (oracle wi05/wi06): in-scope params whose type mentions `e` are refined per branch by **proof-carrying transport** `{:rewrite, prf, λx.H_j[e↦x], h_j} : H_j[e↦pat]` (reuses the `:rewrite` primitive, whose checking is `Eval.apply`, not `reify`) and re-bound under the original name — composes with `proof`. Independent-sibling set only (`{:with_sibling_dependency_unsupported,_}` otherwise). Kernel accepted all three unchanged (no TCB). *Reach*: multiple with-exprs, LHS re-matching of parent patterns, views (C), codegen/runtime lowering (type-checks only today); indexed scrutinee explicitly rejected (`{:with_indexed_scrutinee_unsupported,_}`). The cleaner **convoy** encoding of sibling refinement is blocked by the K-layer `Quote.reify` split-collapse (see TCB note) — transport is the sound elaborator-side path until that lands | E, P | additive | 🟡 (A + B + sibling; reach: multi/views/codegen) |
 | 7 | Propositional equality | Automatic `rewrite` motive inference (abstract LHS occurrences in the goal, à la Idris `rewrite … in`) — implemented in `rewrite_plan/6`, audited to parity with `elabRewrite` (P0); motive-under-`:case`-binder capture bug fixed. Conversion-occurrence rewriting (oracle probe rw07) now **parity** (`same`) via an elaborator bridge-lemma step (`2ac4add`): a refl-bodied bridge checked at the asymmetric endpoint through a constant motive, so the kernel only ever decides a top-level conversion. Underlying **K-layer reach** tracked in the TCB note below (multi-occurrence / deep up-to-conversion still uncovered by the single-occurrence bridge) | E | additive | ✅ |
 | 8 | Equality / absurdity | `Void`/absurd elimination at the surface (`{:absurd}`) | K (leaf), E | additive | ✅ |
 | 9 | Inference unification | First-order metavariable engine: alloc, occurs-checked solve, zonk (`lib/cure/elab/unify.ex`) | E | — | ✅ |
@@ -78,8 +78,10 @@ Idris quality for what they cover. **The TCB is essentially done** — with #8's
 nested-positivity gaps audited + banked, every remaining row lives in the
 untrusted elaborator / Antigen layers.
 
-**One known K-layer *reach* (soundness-safe incompleteness), scheduled as its
-own reviewed TCB run.** The normalizer preserves stuck eliminators without
+**Two known K-layer *reaches* (soundness-safe incompleteness), each scheduled as
+its own reviewed TCB run.**
+
+*(1) Stuck-eliminator normalization.* The normalizer preserves stuck eliminators without
 δ-reducing their targets: a stuck `case` never re-reduces its scrutinee
 (`normalise.ex` `nf_neutral`), and `spine/2` only unwraps `napp`, so `nfst`/
 `nsnd` frames over a certified-global spine freeze the same way — e.g.
@@ -95,6 +97,23 @@ terminates and equates no distinct normal forms, the full Antigen suite, and
 the full test suite. Until it lands, the bridge lemma is the sanctioned
 workaround and this row is the must-eventually-accept reach-pin.
 
+*(2) `Quote.reify` param/index collapse.* The value representation `{:vdata,
+name, args}` does not track the family's param/index split, so `reify` emits
+`{:data, name, args, []}` — all args in the params slot. This is invisible for
+most checks, but `check_motive_wf` infers a motive body's sort by reifying it,
+and an **indexed family as a `:case` motive Π-domain** then fails re-inference
+with `:arg_arity` (`:bad_motive`) — e.g. the *convoy* encoding of `with` sibling
+refinement (`λw. Π(SNat(w)). …`). Discovered during #6 sibling refinement, which
+therefore ships via the sound **proof-carrying transport** dodge instead (the
+`:rewrite` rule uses `Eval.apply`, never reifies a Π-domain). Again
+*incompleteness, not unsoundness* (it rejects; never equates distinct normal
+forms). Prescribed fix: make `reify`/the value rep preserve the split (carry the
+family param count, or split at `Inductive.param_count`), or have
+`infer_type_value_sort({:vpi,…})` check domain/codomain sorts without a lossy
+full reify. **Same HARD-STOP gate** (red-green + Antigen must-eventually-accept
+pinning the convoy path + full suites). Until it lands, transport is the
+sanctioned workaround.
+
 ### The honest headline
 Of 26 rows: **13 at parity, 13 remain, 0 live soundness holes** — the
 transliteration-P0 audit landed ④'s rows 2/8/16 and #7's audited-complete
@@ -102,10 +121,10 @@ transliteration-P0 audit landed ④'s rows 2/8/16 and #7's audited-complete
 the pre-port banking run closed #13's mutual-recursion hole (now a reach item),
 #19's nested positivity, and #23's missing antibodies, and the post-merge port
 run landed checked-mode expression-level `match` (#26, `fcdf5ce`) and
-`with`-abstraction capabilities A + B (#6, `58037d6`, `8487c51`). The remaining
-13 are reach (#3–#6, #13, #14, #17, #26 — several now *partially* landed: #6
-capabilities A + B, #26 checked mode), ergonomics/inference (#10, #11), or
-assurance strength (#22, #24, #25).
+`with`-abstraction capabilities A + B + sibling refinement (#6, `58037d6`,
+`8487c51`, `dbf874e`). The remaining 13 are reach (#3–#6, #13, #14, #17, #26 —
+several now *partially* landed: #6 capabilities A + B + sibling, #26 checked
+mode), ergonomics/inference (#10, #11), or assurance strength (#22, #24, #25).
 Highest-leverage single item: **#22** — without a term generator, Antigen
 proves "these specific holes stay closed," not "the kernel is sound."
 
