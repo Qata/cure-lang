@@ -628,7 +628,7 @@ defmodule Cure.Elab.Elaborator do
           with {:ok, arm_map} <- partition_rematch_arms(arms, original_params, ctx, env, dname),
                {:ok, branches} <-
                  elaborate_rematch_branches(
-                   arm_map, names, ctx, env, dname, idx_vals, param_vals, result_type_term
+                   arm_map, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term
                  ) do
             {:ok, {:case, scrut_term, motive, branches}}
           end
@@ -676,7 +676,7 @@ defmodule Cure.Elab.Elaborator do
   # `elaborate_branches`: an omitted/impossible constructor is discharged with
   # `{:absurd}`; a matched constructor's body is elaborated under the kernel's
   # index-refinement substitution.
-  defp elaborate_rematch_branches(arm_map, names, ctx, env, dname, idx_vals, param_vals, result_type_term) do
+  defp elaborate_rematch_branches(arm_map, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term) do
     sig = Context.signature(ctx)
 
     sig
@@ -689,7 +689,7 @@ defmodule Cure.Elab.Elaborator do
         {:matched, with_pattern, body_expr} ->
           case elaborate_rematch_branch(
                  verdict, cname, with_pattern, body_expr, names, ctx, env,
-                 param_vals, result_type_term
+                 param_vals, scrut_term, result_type_term
                ) do
             {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
             {:error, _} = err -> {:halt, err}
@@ -706,7 +706,7 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
-  defp elaborate_rematch_branch(verdict, cname, with_pattern, body_expr, names, ctx, env, param_vals, result_type_term) do
+  defp elaborate_rematch_branch(verdict, cname, with_pattern, body_expr, names, ctx, env, param_vals, scrut_term, result_type_term) do
     {:ok, {^cname, pattern_vars}} = constructor_pattern(with_pattern)
     %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
@@ -730,11 +730,35 @@ defmodule Cure.Elab.Elaborator do
           |> extend_context(telescope, param_vals)
           |> specialize_branch_context_subst(subst)
 
+        # Compose (1b) value-refinement with (1a) index inversion — identical to
+        # `elaborate_matched_branch`. The rematch path already abstracts the
+        # computed scrutinee in the MOTIVE (shared `build_motive`), but its branch
+        # goal previously refined only the index; a goal that names the scrutinee
+        # VALUE (`Eq(NV(n), view(n), view(n))`) needs the scrutinee replaced by this
+        # branch's constructor too. A variable scrutinee is keyed into the subst; a
+        # computed one has its occurrences replaced as a whole term.
+        ctor_term = branch_constructor_term(cname, arity)
+
+        subst_with_scrut =
+          case scrut_term do
+            {:var, i} -> Map.put(subst, i + arity, ctor_term)
+            _other -> subst
+          end
+
+        shifted_goal = Subst.shift(result_type_term, arity, 0)
+
+        shifted_goal =
+          case scrut_term do
+            {:var, _} -> shifted_goal
+            computed -> replace_term(shifted_goal, Subst.shift(computed, arity, 0), ctor_term)
+          end
+
         branch_expected =
-          result_type_term
-          |> Subst.shift(arity, 0)
-          |> replace_branch_vars(subst)
+          shifted_goal
+          |> replace_branch_vars(subst_with_scrut)
           |> then(&Kernel.normalize(branch_ctx, &1))
+
+        body_expr = refine_scrutinee_in_body(body_expr, scrut_term, with_pattern, pattern_vars, names)
 
         with {:ok, body_term} <-
                elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
