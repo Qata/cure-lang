@@ -63,8 +63,7 @@ defmodule Cure.Elab.ParameterizedTypeTest do
     # `None()` / `Nil()` have no argument to infer their type parameter from; the
     # declared return type is the only source, so the body is elaborated in
     # checking mode. (A nested underdetermined constructor — `Cons(Z(), Nil())` in
-    # return position — still needs bidirectional argument checking and is not
-    # covered here.)
+    # return position — is covered by the next test.)
     src =
       @nat <>
         "  type Opt(a) = None | Some(a)\n  fn empty() -> Opt(Nat) = None()\n" <>
@@ -75,6 +74,34 @@ defmodule Cure.Elab.ParameterizedTypeTest do
 
     assert apply(mod, :empty, []) == :None
     assert apply(mod, :g, []) == :Z
+  end
+
+  test "an underdetermined nested constructor in return position checks against the goal" do
+    # `Cons(Z(), Nil())` at `-> Lst(Nat)`: the inner `Nil()` cannot be inferred, so
+    # the inference path fails and the bidirectional fallback pins the parameter
+    # `a = Nat` from the expected type, then checks each argument against its field
+    # type (`Z()` against `Nat`, `Nil()` against `Lst(Nat)`). Nesting recurses.
+    src =
+      @nat <>
+        "  type Lst(a) = Nil | Cons(a, Lst(a))\n" <>
+        "  fn two() -> Lst(Nat) = Cons(Z(), Cons(S(Z()), Nil()))\n" <>
+        "  fn hd(d: Nat, l: Lst(Nat)) -> Nat = match l\n    Cons(x, xs) -> x\n    Nil() -> d\n" <>
+        "  fn g() -> Nat = hd(S(S(Z())), two())\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.PNested", functions: [:two, :hd, :g])
+
+    # head of [Z, S(Z)] is Z.
+    assert apply(mod, :g, []) == :Z
+  end
+
+  test "a nested constructor with a wrong element type is rejected" do
+    assert {:error, _} =
+             Program.elaborate(
+               @nat <>
+                 "  type Lst(a) = Nil | Cons(a, Lst(a))\n" <>
+                 "  fn bad() -> Lst(Lst(Nat)) = Cons(Z(), Nil())\nend\n"
+             )
   end
 
   test "a polymorphic list's Nil constructs at an annotated return type" do

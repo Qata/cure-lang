@@ -364,8 +364,38 @@ defmodule Cure.Elab.Elaborator do
         # reconstructed dependent-match branch body like `prim()`/`seq(l,r)` whose
         # indices no present argument determines), then let the kernel re-check the
         # assembled constructor against the goal.
-        with {:ok, present} <- map_present_args(args, names, ctx, env),
-             {:ok, term, _type} <- elaborate_ctor_app(env, atom, present, ctx, expected_core),
+        #
+        # The normal path infers each present argument first (`map_present_args`),
+        # which fails for an *underdetermined nested constructor* — `Cons(Z(),
+        # Nil())` at `-> List(Nat)`, whose inner `Nil()` has no argument to fix its
+        # type parameter. When inference fails, fall back to a bidirectional pass
+        # (`elaborate_ctor_app_bidirectional`) that solves the parameters from the
+        # expected type first, then *checks* each argument against its field type.
+        # The fallback is reached only when the inference path already errored, so a
+        # working constructor is untouched; either way the kernel re-checks below.
+        result =
+          with {:ok, present} <- map_present_args(args, names, ctx, env),
+               {:ok, term, _type} <- elaborate_ctor_app(env, atom, present, ctx, expected_core) do
+            {:ok, term}
+          end
+
+        result =
+          case result do
+            {:ok, _} = ok ->
+              ok
+
+            {:error, _} = orig ->
+              # Try the bidirectional fallback, but only let it *win when it
+              # succeeds*: if it also fails, surface the original inference error
+              # (e.g. a GADT `seq`'s genuine `:index_mismatch`), so the fallback is
+              # strictly additive and never masks a real diagnostic.
+              case elaborate_ctor_app_bidirectional(env, atom, args, names, ctx, expected_core) do
+                {:ok, _} = ok -> ok
+                {:error, _} -> orig
+              end
+          end
+
+        with {:ok, term} <- result,
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -2693,6 +2723,78 @@ defmodule Cure.Elab.Elaborator do
       caller_env = if ctx, do: Context.env(ctx), else: []
       result_type = Eval.eval({:data, family, params, indices}, caller_env)
       {:ok, {:ctor, cname, args}, result_type}
+    end
+  end
+
+  # Bidirectional checking-mode constructor elaboration, used only as a fallback
+  # when the inference path fails (an underdetermined nested constructor like
+  # `Cons(Z(), Nil())` at `-> List(Nat)`). Rather than infer each argument, it
+  # solves the family parameters from the *expected* type — the constructor's
+  # result applied to fresh metavariables, unified against `expected_core` — and
+  # then *checks* each present argument against its field type instantiated with
+  # the solved parameters (and the arguments checked so far, mirroring
+  # `solve_arg`'s frame). The assembled constructor is still kernel-re-checked by
+  # the caller, so this can only ever accept a term the kernel independently
+  # accepts. Restricted to all-present constructors (List/Maybe/tree shapes); an
+  # erased field bails so the caller reports the original inference error.
+  defp elaborate_ctor_app_bidirectional(env, cname, arg_asts, names, ctx, expected_core)
+       when expected_core != nil do
+    ctor = Inductive.get_ctor(env, cname)
+    family = Inductive.ctor_family(env, cname)
+    param_tele = Inductive.param_telescope(env, family) || []
+    pc = length(param_tele)
+
+    cond do
+      is_nil(ctor) or is_nil(family) ->
+        {:error, {:unknown_constructor, cname}}
+
+      Enum.any?(ctor.quantities, &(&1 == :erased)) ->
+        {:error, {:bidirectional_erased_field, cname}}
+
+      length(ctor.args) != length(arg_asts) ->
+        {:error, {:constructor_arity_mismatch, cname}}
+
+      true ->
+        # Fresh metas for the params ++ every argument, so the constructor's
+        # result type (which references that whole frame) can be built and pinned
+        # against the goal before any argument is known.
+        {mctx, seed} =
+          Enum.reduce(1..(pc + length(ctor.args)), {MetaCtx.new(), []}, fn _, {m, acc} ->
+            {m, id} = MetaCtx.fresh(m)
+            {m, acc ++ [{:meta, id}]}
+          end)
+
+        params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed))
+        indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed))
+
+        case Unify.unify({:data, family, params, indices}, expected_core, mctx, env) do
+          {:error, _} ->
+            {:error, {:constructor_result_mismatch, cname}}
+
+          {:ok, mctx} ->
+            solved_params = seed |> Enum.take(pc) |> Enum.map(&Unify.zonk(&1, mctx))
+
+            if Enum.any?(solved_params, &has_meta?/1) do
+              {:error, {:unsolved_parameters, cname}}
+            else
+              check_ctor_args(ctor.args, arg_asts, solved_params, [], names, ctx, env, cname)
+            end
+        end
+    end
+  end
+
+  # Check each present constructor argument against its field type, instantiated
+  # with the solved parameters and the arguments already checked (the same frame
+  # `solve_arg` uses). Returns the assembled `{:ctor, …}` term.
+  defp check_ctor_args([], [], _params, acc, _names, _ctx, _env, cname),
+    do: {:ok, {:ctor, cname, Enum.reverse(acc)}}
+
+  defp check_ctor_args([{_fname, ftype} | fields], [arg | args], params, acc, names, ctx, env, cname) do
+    ftype_inst = Subst.instantiate(ftype, params ++ Enum.reverse(acc))
+
+    case elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
+      {:ok, term} -> check_ctor_args(fields, args, params, [term | acc], names, ctx, env, cname)
+      {:error, _} = err -> err
     end
   end
 
