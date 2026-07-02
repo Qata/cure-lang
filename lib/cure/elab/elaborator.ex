@@ -499,8 +499,9 @@ defmodule Cure.Elab.Elaborator do
   """
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
-  def elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env) do
-    with {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
+  def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
+    with {:ok, arms} <- desugar_nested_arms(arms0),
+         {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
@@ -1248,6 +1249,134 @@ defmodule Cure.Elab.Elaborator do
         end
       end)
     end
+  end
+
+  # --- nested-pattern desugaring (parity #3) ---------------------------------
+  #
+  # Lower nested constructor sub-patterns (`S(S(m))`, `MkPair(Z(), y)`) into
+  # nested *single-level* matches, so the existing dependent match machinery
+  # (motives, index refinement, catch-all) handles every level unchanged — the
+  # kernel `:case` already nests, so this is purely a surface lowering pass. Runs
+  # one level per `elaborate_match`; deeper nesting is lowered on re-entry when
+  # the emitted inner match is elaborated.
+  #
+  # Scope: arms grouped by their outer constructor; within a group at most ONE
+  # argument column may be nested (the others must be variables). Multi-column
+  # nesting and a top-level catch-all mixed with nesting are rejected cleanly
+  # (real multi-column compilation is future work).
+  defp desugar_nested_arms(arms) do
+    cond do
+      not Enum.any?(arms, &arm_has_nested?/1) ->
+        {:ok, arms}
+
+      Enum.any?(arms, &default_arm?/1) ->
+        {:error, {:unsupported_pattern, :catchall_with_nesting}}
+
+      true ->
+        compile_nested_groups(arms)
+    end
+  end
+
+  defp default_arm?({:match_arm, meta, _body}),
+    do: match?({:variable, _m, _v}, Keyword.fetch!(meta, :pattern))
+
+  defp arm_has_nested?({:match_arm, meta, _body}) do
+    case Keyword.fetch!(meta, :pattern) do
+      {:function_call, _m, args} -> Enum.any?(args, &(not match?({:variable, _mm, _v}, &1)))
+      _ -> false
+    end
+  end
+
+  # Group arms by outer constructor (first-appearance order, within-group order
+  # preserved for first-match), then compile each group to one single-level arm.
+  defp compile_nested_groups(arms) do
+    order = arms |> Enum.map(&arm_ctor_name/1) |> Enum.uniq()
+    grouped = Enum.group_by(arms, &arm_ctor_name/1)
+
+    Enum.reduce_while(order, {:ok, []}, fn cname, {:ok, acc} ->
+      case compile_ctor_group(cname, Map.fetch!(grouped, cname)) do
+        {:ok, arm} -> {:cont, {:ok, acc ++ [arm]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp arm_ctor_name({:match_arm, meta, _body}) do
+    {:function_call, fmeta, _args} = Keyword.fetch!(meta, :pattern)
+    Keyword.fetch!(fmeta, :name)
+  end
+
+  defp compile_ctor_group(_cname, [only] = arms) do
+    if arm_has_nested?(only), do: compile_group(arms), else: {:ok, only}
+  end
+
+  defp compile_ctor_group(_cname, arms), do: compile_group(arms)
+
+  # `arms` all share an outer constructor. Split off the single nested column and
+  # emit `C(v₁..v_k) -> match v_j <inner arms>`, substituting each other column's
+  # variable by its fresh binder in the arm body.
+  defp compile_group([{:match_arm, meta0, _} | _] = arms) do
+    {:function_call, fmeta, args0} = Keyword.fetch!(meta0, :pattern)
+    cname = Keyword.fetch!(fmeta, :name)
+    k = length(args0)
+
+    active =
+      for col <- 0..(k - 1)//1,
+          Enum.any?(arms, fn a -> not var_col?(a, col) end),
+          do: col
+
+    case active do
+      [] ->
+        # No nesting after all (all-variable columns) — pass the first arm through.
+        {:ok, hd(arms)}
+
+      [j] ->
+        fresh = for i <- 1..k//1, do: "$n" <> cname <> "_" <> Integer.to_string(i)
+        fresh_j = Enum.at(fresh, j)
+
+        with {:ok, inner_arms} <- build_inner_arms(arms, k, j, fresh) do
+          inner_match = {:pattern_match, [], [{:variable, [], fresh_j} | inner_arms]}
+          outer_pat = {:function_call, fmeta, Enum.map(fresh, &{:variable, [], &1})}
+          {:ok, {:match_arm, [pattern: outer_pat], inner_match}}
+        end
+
+      _ ->
+        {:error, {:unsupported_pattern, :multi_column_nesting}}
+    end
+  end
+
+  defp var_col?({:match_arm, meta, _body}, col) do
+    {:function_call, _m, args} = Keyword.fetch!(meta, :pattern)
+    match?({:variable, _mm, _v}, Enum.at(args, col))
+  end
+
+  defp build_inner_arms(arms, k, j, fresh) do
+    Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body0}, {:ok, acc} ->
+      body = single_body(body0)
+      {:function_call, _m, args} = Keyword.fetch!(meta, :pattern)
+      col_pat = Enum.at(args, j)
+
+      # Every non-j column must be a variable here (single active column); bind it
+      # to its fresh outer var by surface substitution in the body.
+      other_vars =
+        for col <- 0..(k - 1)//1, col != j do
+          {:variable, _mm, vname} = Enum.at(args, col)
+          {vname, Enum.at(fresh, col)}
+        end
+
+      names_to_sub = Enum.map(other_vars, &elem(&1, 0))
+
+      if binds_any?(body, names_to_sub) do
+        {:halt, {:error, {:unsupported_pattern, :shadowed_nested}}}
+      else
+        new_body =
+          Enum.reduce(other_vars, body, fn {old, new}, b ->
+            subst_surface_var(b, old, {:variable, [], new})
+          end)
+
+        {:cont, {:ok, acc ++ [{:match_arm, [pattern: col_pat], new_body}]}}
+      end
+    end)
   end
 
   # Build `{arm_map, default}` where arm_map is cname => {:matched, pattern, body}

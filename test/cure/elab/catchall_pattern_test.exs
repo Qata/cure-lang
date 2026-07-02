@@ -73,14 +73,4 @@ defmodule Cure.Elab.CatchallPatternTest do
     assert apply(mod, :tag, [:Green]) == {:S, :Z}
     assert apply(mod, :tag, [:Blue]) == {:S, :Z}
   end
-
-  # Boundary for parity #3 (nested/deep patterns → decision-tree lowering, not
-  # yet implemented): a nested constructor sub-pattern must yield a CLEAN error,
-  # never crash `constructor_pattern` with a raw no-clause exception.
-  test "a nested constructor sub-pattern is a clean error, not a crash" do
-    src =
-      "mod M\n  type Nat = Z | S(Nat)\n  fn f(n: Nat) -> Nat = match n\n    S(S(m)) -> m\n    S(Z()) -> Z()\n    Z() -> Z()\nend\n"
-
-    assert {:error, {:unsupported_pattern, :nested_constructor_arg}} = Program.elaborate(src)
-  end
 end
