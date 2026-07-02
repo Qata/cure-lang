@@ -1450,13 +1450,33 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :arrow)
     state = skip_newlines(state)
 
-    # Parse body
-    {body, state} = parse_expr_or_block(state)
+    # `impossible` is a soft keyword recognized only as an entire arm body
+    # (spec §4): `pat -> impossible`. Any other use stays an ordinary identifier.
+    if impossible_body?(state) do
+      state = advance(state)
+      meta = if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
+      {{:match_arm, meta, [nil]}, state}
+    else
+      {body, state} = parse_expr_or_block(state)
+      meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
+      {{:match_arm, meta, [body]}, state}
+    end
+  end
 
-    meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
+  # True iff the next token is the identifier `impossible` AND the token after it
+  # ends the arm — so `impossible` alone is the body, but `impossible + 1` is not.
+  defp impossible_body?(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "impossible"} ->
+        case peek_at(state, 1) do
+          %Token{type: type} when type in [:newline, :comma, :rbrace, :dedent, :eof] -> true
+          nil -> true
+          _ -> false
+        end
 
-    {:match_arm, meta, [body]}
-    |> then(&{&1, state})
+      _ ->
+        false
+    end
   end
 
   # -- Pickup Expression -----------------------------------------------------

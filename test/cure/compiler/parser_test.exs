@@ -234,6 +234,20 @@ defmodule Cure.Compiler.ParserTest do
       assert {:match_arm, meta, [{:literal, _, 1}]} = arm
       assert {:literal, _, 0} = Keyword.get(meta, :pattern)
     end
+
+    test "a `-> impossible` arm body is marked impossible in arm meta" do
+      ast = parse!("match x { bar() -> impossible }")
+      assert {:pattern_match, _, [_, arm]} = ast
+      assert {:match_arm, meta, _body} = arm
+      assert Keyword.get(meta, :impossible) == true
+    end
+
+    test "`impossible` is still usable as a normal identifier in an arm body" do
+      ast = parse!("match x { bar() -> impossible + 1 }")
+      assert {:pattern_match, _, [_, arm]} = ast
+      assert {:match_arm, meta, _body} = arm
+      refute Keyword.get(meta, :impossible) == true
+    end
   end
 
   # ── Collections ──────────────────────────────────────────────────────
