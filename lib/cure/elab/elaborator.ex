@@ -167,8 +167,27 @@ defmodule Cure.Elab.Elaborator do
         end
 
       Inductive.get_ctor(env, atom) ->
-        with {:ok, present} <- map_present_args(args, names, ctx, env) do
-          elaborate_ctor_app(env, atom, present, ctx)
+        result =
+          with {:ok, present} <- map_present_args(args, names, ctx, env) do
+            elaborate_ctor_app(env, atom, present, ctx)
+          end
+
+        # A nested underdetermined constructor in *inference* position —
+        # `Cons(Z(), Nil())` as a bare argument, whose inner `Nil()` cannot be
+        # inferred — fails up-front inference. Retry left-to-right: solve the
+        # constructor's parameters from the arguments that do infer (`Z() : Nat`
+        # fixes `a`), then *check* the rest (`Nil()` against `Lst(Nat)`). Additive:
+        # reached only after inference already failed, original error surfaced
+        # otherwise.
+        case result do
+          {:ok, _, _} = ok ->
+            ok
+
+          {:error, _} = orig ->
+            case elaborate_ctor_app_infer_bidirectional(env, atom, args, names, ctx) do
+              {:ok, _, _} = ok -> ok
+              {:error, _} -> orig
+            end
         end
 
       # A global whose telescope carries erased (implicit) parameters: insert
@@ -2884,6 +2903,80 @@ defmodule Cure.Elab.Elaborator do
     case elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
       {:ok, term} -> check_ctor_args(fields, args, params, [term | acc], names, ctx, env, cname)
       {:error, _} = err -> err
+    end
+  end
+
+  # Inference-mode counterpart of `elaborate_ctor_app_bidirectional`, used only as
+  # a fallback when up-front inference of a constructor's arguments fails (a nested
+  # underdetermined constructor as a bare argument, `Cons(Z(), Nil())`, whose inner
+  # `Nil()` no expected type reaches). Elaborates the arguments left to right,
+  # solving the family parameters from the ones that infer (`Z() : Nat` fixes `a`)
+  # and *checking* those that do not against their now-concrete field type
+  # (`Nil()` against `Lst(Nat)`). The resulting argument/type pairs feed the
+  # ordinary `elaborate_ctor_app`, which re-derives parameters and result type, so
+  # nothing new is trusted. Restricted to all-present constructors.
+  defp elaborate_ctor_app_infer_bidirectional(env, cname, arg_asts, names, ctx) do
+    ctor = Inductive.get_ctor(env, cname)
+    family = Inductive.ctor_family(env, cname)
+    param_tele = Inductive.param_telescope(env, family) || []
+    pc = length(param_tele)
+
+    cond do
+      is_nil(ctor) or is_nil(family) ->
+        {:error, {:unknown_constructor, cname}}
+
+      Enum.any?(ctor.quantities, &(&1 == :erased)) ->
+        {:error, {:bidirectional_erased_field, cname}}
+
+      length(ctor.args) != length(arg_asts) ->
+        {:error, {:constructor_arity_mismatch, cname}}
+
+      true ->
+        {mctx, param_metas} =
+          Enum.reduce(1..pc//1, {MetaCtx.new(), []}, fn _, {m, acc} ->
+            {m, id} = MetaCtx.fresh(m)
+            {m, acc ++ [{:meta, id}]}
+          end)
+
+        case infer_ctor_args(ctor.args, arg_asts, param_metas, [], mctx, names, ctx, env) do
+          {:ok, present} -> elaborate_ctor_app(env, cname, present, ctx)
+          {:error, _} = err -> err
+        end
+    end
+  end
+
+  # Elaborate each constructor argument, threading the (scratch) parameter
+  # metavariables: instantiate the field type with the parameters and the argument
+  # terms chosen so far and zonk it; if it is metavariable-free the argument is
+  # *checked* against it, otherwise it is *inferred* and its type unified against
+  # the field type to solve parameters. Returns `[{term, type_term}]` for
+  # `elaborate_ctor_app`.
+  defp infer_ctor_args([], [], _params, acc, _mctx, _names, _ctx, _env),
+    do: {:ok, Enum.reverse(acc)}
+
+  defp infer_ctor_args([{_fname, ftype} | fields], [arg | args], params, acc, mctx, names, ctx, env) do
+    frame = params ++ (acc |> Enum.reverse() |> Enum.map(&elem(&1, 0)))
+    ftype_inst = ftype |> Subst.instantiate(frame) |> Unify.zonk(mctx)
+
+    step =
+      if has_meta?(ftype_inst) do
+        with {:ok, term, ty} <- elaborate_expr_typed(arg, names, ctx, env),
+             ty_term = Quote.reify(ty, Context.length(ctx)),
+             {:ok, mctx} <- Unify.unify(ftype_inst, ty_term, mctx, env) do
+          {:ok, term, ty_term, mctx}
+        end
+      else
+        with {:ok, term} <- elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
+          {:ok, term, ftype_inst, mctx}
+        end
+      end
+
+    case step do
+      {:ok, term, ty_term, mctx} ->
+        infer_ctor_args(fields, args, params, [{term, ty_term} | acc], mctx, names, ctx, env)
+
+      {:error, _} = err ->
+        err
     end
   end
 

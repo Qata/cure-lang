@@ -104,6 +104,26 @@ defmodule Cure.Elab.ParameterizedTypeTest do
              )
   end
 
+  test "a nested constructor infers standalone as an argument to a polymorphic call" do
+    # `app(Cons(Z(), Nil()), …)`: the first argument must itself pin `app`'s
+    # implicit `a` (no earlier argument does), so `Cons(Z(), Nil())` has to infer
+    # standalone in inference position — `Z() : Nat` fixes the parameter, then
+    # `Nil()` checks against `Lst(Nat)`. Oracle `poly/pl09_append_nested_args`.
+    src =
+      @nat <>
+        "  type Lst(a) = Nil | Cons(a, Lst(a))\n" <>
+        "  fn app({a}, xs: Lst(a), ys: Lst(a)) -> Lst(a) = match xs\n" <>
+        "    Nil() -> ys\n    Cons(x, r) -> Cons(x, app(r, ys))\n" <>
+        "  fn hd(d: Nat, l: Lst(Nat)) -> Nat = match l\n    Cons(x, xs) -> x\n    Nil() -> d\n" <>
+        "  fn g() -> Nat = hd(Z(), app(Cons(S(Z()), Nil()), Cons(Z(), Nil())))\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.AppNested", functions: [:app, :hd, :g])
+
+    # head of app([S(Z)], [Z]) = head of [S(Z), Z] = S(Z)
+    assert apply(mod, :g, []) == {:S, :Z}
+  end
+
   test "a polymorphic list's Nil constructs at an annotated return type" do
     src =
       @nat <>
