@@ -25,9 +25,15 @@ defmodule Cure.Elab.Declarations do
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate({:function_def, meta, body}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    params = Keyword.get(meta, :params, [])
+    params0 = Keyword.get(meta, :params, [])
     return_expr = Keyword.fetch!(meta, :return_type)
     body_expr = single_body(body)
+
+    # Idris-style auto-generalization: a free lowercase type variable in the
+    # signature (`fn id(x: a) -> a`) is bound as a leading implicit `{a: Type}`
+    # (erased), in order of first appearance. Restricted to occurrences provably of
+    # kind Type, so an index variable (`Vec(_, n)`, `n : Nat`) is NOT mis-bound.
+    params = auto_generalize(params0, return_expr, env) ++ params0
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env),
@@ -238,6 +244,70 @@ defmodule Cure.Elab.Declarations do
   # Convert the parameter list into a Core telescope + {0,ω} quantities, with each
   # parameter type elaborated in the scope of the preceding parameters. Implicit
   # (`{name}`) parameters are erased. Returns the scope (names, most-recent first).
+  # Collect the signature's free type variables (lowercase, unbound, not a known
+  # family) that occur in a kind-`Type` position, and return them as leading
+  # implicit parameters in order of first appearance.
+  defp auto_generalize(params, return_expr, env) do
+    bound = params |> Enum.map(fn {:param, _m, n} -> n end) |> MapSet.new()
+
+    type_asts =
+      Enum.map(params, fn {:param, m, _n} -> Keyword.get(m, :type) end) ++ [return_expr]
+
+    {ordered, _seen} =
+      type_asts
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reduce({[], MapSet.new()}, fn ast, acc -> collect_type_vars(ast, bound, env, acc) end)
+
+    Enum.map(ordered, fn n -> {:param, [implicit: true], n} end)
+  end
+
+  # A type variable occurs here at kind `Type`: collect it if lowercase, unbound,
+  # not `Type`, and not a known family.
+  defp collect_type_vars({:variable, _m, name}, bound, env, {ordered, seen} = acc) do
+    cond do
+      not type_var_name?(name) -> acc
+      name == "Type" -> acc
+      MapSet.member?(bound, name) -> acc
+      MapSet.member?(seen, name) -> acc
+      Inductive.family?(env, String.to_atom(name)) -> acc
+      true -> {ordered ++ [name], MapSet.put(seen, name)}
+    end
+  end
+
+  # A function type `(A) -> B`: every domain and the codomain is a type (kind Type).
+  # A family/type application `F(args)`: only the leading parameter slots whose kind
+  # is `Type` are kind-`Type` positions; index slots (e.g. `Vec(a, n)`'s `n : Nat`)
+  # are not, so they are skipped and their variables are left to normal resolution.
+  defp collect_type_vars({:function_call, meta, args}, bound, env, acc) do
+    if Keyword.get(meta, :function_type) do
+      Enum.reduce(args, acc, &collect_type_vars(&1, bound, env, &2))
+    else
+      fam = String.to_atom(Keyword.get(meta, :name, ""))
+
+      {pc, ptele} =
+        if Inductive.family?(env, fam),
+          do: {Inductive.param_count(env, fam), Inductive.param_telescope(env, fam) || []},
+          else: {0, []}
+
+      args
+      |> Enum.with_index()
+      |> Enum.reduce(acc, fn {arg, i}, acc2 ->
+        if i < pc and match?({:type, _}, elem(Enum.at(ptele, i, {nil, nil}), 1)),
+          do: collect_type_vars(arg, bound, env, acc2),
+          else: acc2
+      end)
+    end
+  end
+
+  defp collect_type_vars({:sigma_type, _m, children}, bound, env, acc) when is_list(children) do
+    Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
+  end
+
+  defp collect_type_vars(_other, _bound, _env, acc), do: acc
+
+  defp type_var_name?(<<c, _::binary>>) when c in ?a..?z, do: true
+  defp type_var_name?(_), do: false
+
   defp elaborate_param_telescope(params, env) do
     params
     |> Enum.reduce_while({:ok, [], [], []}, fn {:param, pmeta, pname}, {:ok, tele, quants, scope} ->
