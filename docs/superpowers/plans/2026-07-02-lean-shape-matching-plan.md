@@ -141,7 +141,45 @@ with_abstraction 6/6, oracle `with` 7/7 `same`, full suite 2384 zero-regress.
 
 - [ ] **Step 1:** route the `need_eq == false` (bare value-abstraction, capability-A) branch of `elaborate_with_value` through the unified front-end; the `need_eq == true` (capability-B, proof/sibling) branch stays on the existing `elaborate_with_value` code path untouched. **Step 2:** `mix test test/cure/elab/with_abstraction_test.exs` (covers both A and B) green under this partial routing — confirm specifically that `wi01` now runs through the unified path and `wi04`/`wi05`/`wi06` still pass via the untouched B branch. **Step 3:** delete only the bare-value-motive special-case code (the `need_eq == false` arm); the `need_eq == true` arm and its supporting code (`eq_arrow_motive`, sibling collection) remain until Task 3.3 decides B's fate. **Step 4:** suite still green (`with_abstraction_test.exs` in full) + `mix cure.oracle with` still `same`. **Step 5:** commit `refactor(elab): subsume+retire capability-A (bare value-abstraction) under the generalizing front-end; capability-B branch untouched pending Task 3.3`. **Note:** `elaborate_with_value` itself is only fully deleted once Task 3.3 completes (whichever scope it settles on for B) — do not delete the function here.
 
-### Task 3.3: Subsume + retire capability B — with the HEq decision
+### Task 3.3: Subsume + retire capability B — with the HEq decision — DECISION MADE: case (a), HEq NOT needed
+
+**Step 1 (Lean re-check, from source) DONE.** `Lean/Meta/AppBuilder.lean:74 mkEqHEq a b`:
+returns `Eq aType a b` when `isDefEq aType bType`, else `HEq aType a bType b`. In
+`Match.lean` `withEqs` a discriminant equality is introduced (via `mkEqHEq`) ONLY
+when `discrInfos[i].hName?` is set — i.e. a NAMED discriminant equation (Lean's
+`match … h : e with`, our capability-B `with … proof`). So HEq arises exactly for
+a *named proof* over a discriminant whose branch pattern has a type NOT defeq to
+the scrutinee's — i.e. a named proof over an INDEXED scrutinee with a refined-index
+pattern.
+
+**Step 2 (re-derivation) DONE → case (a).** The FRP combinators `≫`/`∗∗`/`loop`/
+`switch` are SF *constructors* computing indices (`++` on `SVDesc`, `∧`/`∨` on
+`Dec`). Matching an SF scrutinee refines those indices via the case eliminator
+(capability C's convoy: `branch_unify` inversion + `specialize_branch_context_subst`
+sibling refinement); the computed-index GOALS (`as++cs`, `d₁∧d₂`) are discharged by
+Phase-4 `rewrite` + algebraic lemmas, NOT by a proof bound at the match. None of the
+combinators needs `with <indexed SF> proof pf`. **⇒ HEq is not needed for this
+slice; capability B is scoped to NON-INDEXED scrutinees, permanently.** No TCB change.
+
+**Correction to the deletion premise (found in the actual tree).** The plan assumed
+case (a) lets us "route the remaining `need_eq == true` arm through the unified path
+and delete `elaborate_with_value` entirely." The code shows the deletion is not
+*free*: plain `match` (the unified front-end) has **no named-proof binding** —
+wi04's body `lemma(g(n), Z(), pf)` *consumes* `pf`, which only capability-B's
+Eq-arrow motive provides. Fully deleting `elaborate_with_value` therefore requires
+**merging B's Eq-arrow proof-binding INTO `elaborate_match`** (moving proof/sibling
+transport into the unified path), which is a non-trivial refactor whose only
+benefit is one fewer entry point — both variants already emit a kernel-checked
+`{:case}` over the SAME shared branch machinery (`elaborate_with_branches` /
+`elaborate_matched_branch` refinement). Since the case-(a) DECISION (no HEq, no
+TCB) does not depend on that merge, it is **deferred as cleanup**: `elaborate_with_value`
+(now the B-only path after Task 3.2 routed A away) is **retained** as the permanent,
+non-indexed, proof-carrying `match` variant. Phase 3's "one equation-compiler path"
+goal is met at the machinery level — A subsumed; B (and C, Task 3.4) are thin
+distinct front-ends over the shared refinement. **Step 2b revisit-trigger stands:**
+re-run this derivation if Phase 6 surfaces a named-proof-over-indexed-SF need.
+
+_(Original task text preserved below for reference.)_
 
 - [ ] **Step 1: Lean re-check.** Read `Meta/Match/Match.lean:128-143` (`mkEqHEq`): confirm Lean uses `HEq` exactly where a branch's pattern value has a refined-index type. **Step 2: decide the boundary (spec §4 completeness check) — by analytical re-derivation now, not by waiting for Phase 6 to run.** Phase 6 has not executed yet at this point in the sequence, so this cannot literally consult "the Phase-6 SF port" — instead, re-derive the answer analytically from the paper the same way spec §2 already did for `≫`/`∗∗`/`loop`: walk every combinator (`≫`, `∗∗`, `loop`, and, from Task 6.1's later index-algebra note if already drafted, `switch`) and determine whether any of them ever pattern-matches an **indexed** `SF`-scrutinee while ALSO needing a *named* proof-equation (`with … proof`) — i.e., a rematch (capability C) combined with a carried proof over the indexed scrutinee itself. Record the derivation in the task note. (a) If capability C's convoy already covers every indexed case the paper needs (no combinator needs the combination) → scope B's subsumption to **non-indexed scrutinees, permanently**; document it; retire B for that scope. (b) If an indexed named-proof is needed → adding `HEq` to the kernel is a **new TCB item**: STOP and open its own HARD-STOP gate (antibody: `HEq` intro/elim terminates + equates no distinct NFs + collapses to `Eq` on equal types; red test: `test/cure/core/heq_test.exs`; verify: `mix test test/cure/core/heq_test.exs`) before claiming subsumption. **Step 2b (revisit trigger):** this analysis is necessarily made before Phase 6's actual port is written — if Phase 6 (Task 6.1/6.2) later surfaces a named-proof-over-indexed-scrutinee need that this derivation missed, that reopens this Step 2 decision (do not treat it as settled once and for all; re-run this step before Phase 6 proceeds past the point of contradiction). **Step 3:** retire B for the decided scope; suites green (name the concrete suite: `test/cure/elab/with_abstraction_test.exs`'s proof/sibling cases, `wi04`/`wi05`/`wi06`); commit (E-only for case (a); TCB-gated for case (b)). **Deletion outcome (completes Task 3.2's deferred deletion):** for case (a) (non-indexed-permanent), route the remaining `need_eq == true` arm through the unified path for non-indexed scrutinees and delete `elaborate_with_value` in its entirety — both A's and B's special-case code are now gone. For case (b) (HEq), delete `elaborate_with_value`'s non-indexed `need_eq == true` arm (now routed through the unified path) but the new HEq-authorized indexed extension lives in its own reviewed TCB diff, not in `elaborate_with_value` — confirm no special-case A/B code remains in `elaborate_with_value` after this step either way.
 
