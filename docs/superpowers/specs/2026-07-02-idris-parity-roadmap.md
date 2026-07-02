@@ -59,7 +59,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 14 | Totality — termination | Multi-argument / lexicographic (size-change) descent | E | additive | ⬜ |
 | 15 | Totality — coverage | Kernel exhaustiveness (`declared ⊆ covered`) | K | — | ✅ |
 | 16 | Totality — coverage | Surface exhaustiveness diagnostics accounting for discharged/impossible branches | E | additive | ✅ |
-| 17 | Totality — coverage | Coverage over nested patterns | E | additive | ⬜ (needs #3) |
+| 17 | Totality — coverage | Coverage over nested patterns | E | additive | ✅ (via #3: nested patterns lower to nested single-level matches, each coverage-checked by the kernel, so an uncovered sub-case surfaces as a genuine `{:missing_branch, ctor}` at any depth — oracle `match/mt10_nested_nonexhaustive` reject/reject, exhaustive `match/mt07` accept/accept) |
 | 18 | Positivity | Strict positivity checker + vertical | K/E, A | — | ✅ |
 | 19 | Positivity | Confirm + bank nested / through-constructor / negative-position (arrow-left) positivity | K/E, A | verify + additive | ✅ (W4: audited, holes fixed, antibodies banked) |
 | 20 | Universes | Cumulative universes, no `Type:Type`, two-universe constructor-field rule | K | — | ✅ |
@@ -131,7 +131,7 @@ prior art). The indexed with-rematch convoy (`elaborate_with_rematch`) is a soun
 non-TCB *workaround* that never routes through this path, not the repair.
 
 ### The honest headline
-Of 26 rows: **15 at parity, 11 remain, 0 live soundness holes** — the
+Of 26 rows: **16 at parity, 10 remain, 0 live soundness holes** — the
 transliteration-P0 audit landed ④'s rows 2/8/16 and #7's audited-complete
 `rewrite` motive inference (rw07 now closed via the elaborator bridge lemma),
 the pre-port banking run closed #13's mutual-recursion hole (now a reach item),
@@ -143,14 +143,16 @@ dependent term generator plus the three differential self-consistency assays and
 the health gate (acceptance run: 0 infections over the generated stream, `→
 healthy`), and the parity-porting runs landed **#3** — full pattern-matrix
 nested-pattern compilation (`acb22a4`/`3bd309e` + outer-catch-all weaving) — and
-**#4**'s variable/wildcard catch-all (`648e852`). The remaining 11 are reach
-(#4 literals/as-patterns, #5, #6, #13, #14, #17, #26 — several now *partially*
-landed: #4 var/wildcard catch-all, #6 capabilities A + B + sibling, #26 checked
-mode), ergonomics/inference (#10, #11), or assurance strength (#24, #25, plus
-A10's still-open wiring of the *existing* verticals onto the generated stream).
-With #3 + #22 landed, the next-highest-leverage items are the inference-
-unification depth (#10 Miller patterns, #11 postponed constraints), coverage over
-nested patterns (#17, now unblocked by #3), and #4 literals / #5 forced patterns.
+**#4**'s variable/wildcard catch-all (`648e852`), and — via #3 — **#17**
+coverage over nested patterns (kernel-checked per lowered level). The remaining
+10 are reach (#4 literals/as-patterns, #5, #6, #13, #14, #26 — several now
+*partially* landed: #4 var/wildcard catch-all, #6 capabilities A + B + sibling,
+#26 checked mode), ergonomics/inference (#10, #11), or assurance strength (#24,
+#25, plus A10's still-open wiring of the *existing* verticals onto the generated
+stream). With #3 + #17 + #22 landed, the next-highest-leverage items are the
+inference-unification depth (#10 Miller patterns, #11 postponed constraints) and
+#4 literals / #5 forced patterns (both need parser/grammar work — as-patterns
+`x@p` and dot-patterns `.e` currently do not parse).
 
 ## 3. Antigen — coverage and capability expansion
 
