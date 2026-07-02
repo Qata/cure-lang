@@ -224,6 +224,20 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:sigma, a, b}, target, depth),
     do: {:sigma, abstract_term(a, target, depth), abstract_term(b, target, depth + 1)}
 
+  # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
+  # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
+  # abstract the scrutinee and motive at `depth`, but each branch body at
+  # `depth + arity`, so branch-bound variables in `[depth, depth+arity)` are not
+  # spuriously shifted by the `{:var, i} when i >= depth` clause. Without this,
+  # the generic tuple clause below recurses into branch bodies at the wrong
+  # depth and corrupts the motive (P0 Task 5, rewrite goals with a stuck `case`).
+  defp abstract_term({:case, scrut, motive, branches}, target, depth) do
+    {:case, abstract_term(scrut, target, depth), abstract_term(motive, target, depth),
+     Enum.map(branches, fn {ctor, arity, body} ->
+       {ctor, arity, abstract_term(body, target, depth + arity)}
+     end)}
+  end
+
   defp abstract_term(term, target, depth) when is_tuple(term),
     do: rebuild(term, Enum.map(children(term), &abstract_term(&1, target, depth)))
 
