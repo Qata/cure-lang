@@ -479,7 +479,7 @@ defmodule Cure.Elab.Elaborator do
           with {:ok, branches} <-
                  elaborate_branches(
                    arms, names, ctx, env, dname,
-                   idx_vals, idx_terms, param_vals, scrut_term, result_type_term, carried
+                   idx_vals, param_vals, scrut_term, result_type_term, carried
                  ) do
             case_term = {:case, scrut_term, motive, branches}
             {:ok, if(carried, do: {:app, case_term, {:refl, carried.idx_term}}, else: case_term)}
@@ -970,10 +970,23 @@ defmodule Cure.Elab.Elaborator do
           {replace_term(rt, computed, {:var, sentinel}), Map.put(acc, sentinel, k - pos)}
       end)
 
-    rebind =
+    # The scrutinee VALUE rebinds to the motive's last binder `x`. A variable
+    # scrutinee rebinds by name; a *computed* scrutinee (e.g. `view(n)`) is
+    # abstracted out of the result type the same sentinel way as a computed
+    # index — this is Lean's `kabstract result.matchType discr`
+    # (`Elab/Match.lean:137`), which abstracts occurrences of the discriminant
+    # TERM whether or not it is a variable. Without it a goal like
+    # `Eq(NV(n), view(n), view(n))` keeps `view(n)` opaque per branch, and
+    # `vs(toS(m)) ≢ vs(s)` — no amount of index refinement can recover it.
+    {result_type_term, rebind} =
       case scrut_term do
-        {:var, orig} -> Map.put(rebind, orig, 0)
-        _other -> rebind
+        {:var, orig} ->
+          {result_type_term, Map.put(rebind, orig, 0)}
+
+        computed ->
+          sentinel = sentinel_base + k
+          {replace_term(result_type_term, computed, {:var, sentinel}),
+           Map.put(rebind, sentinel, 0)}
       end
 
     body = generalize(result_type_term, rebind, k + 1, 0)
@@ -1117,9 +1130,10 @@ defmodule Cure.Elab.Elaborator do
   # their bodies; omitted or explicit-impossible constructors are discharged
   # (verdict :impossible ⇒ {:absurd} placeholder body) or rejected. The kernel
   # then re-checks and re-discharges the assembled {:case,…} independently.
-  # `idx_vals` are the scrutinee's index VALUES (for branch_unify); `idx_terms`
-  # are the reified index TERMS (for branch_expected/context).
-  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, idx_terms, param_vals, scrut_term, result_type_term, carried) do
+  # `idx_vals` are the scrutinee's index VALUES (for branch_unify); each
+  # branch's expected type comes from the kernel's branch_unify verdict subst
+  # plus the scrutinee-value refinement (see elaborate_matched_branch).
+  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term, carried) do
     with {:ok, arm_map} <- partition_arms(arms, ctx, env, dname) do
       sig = Context.signature(ctx)
 
@@ -1133,7 +1147,7 @@ defmodule Cure.Elab.Elaborator do
           {:matched, pattern, body_expr} ->
             case elaborate_matched_branch(
                    verdict, pattern, body_expr, names, ctx, env,
-                   idx_terms, param_vals, scrut_term, result_type_term, carried
+                   param_vals, scrut_term, result_type_term, carried
                  ) do
               {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
               {:error, _} = err -> {:halt, err}
@@ -1205,7 +1219,7 @@ defmodule Cure.Elab.Elaborator do
     {length(tele), cname}
   end
 
-  defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, scrut_indices, scrut_param_vals, scrut_term, result_type_term, carried) do
+  defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, scrut_param_vals, scrut_term, result_type_term, carried) do
     {:ok, {cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities, result_indices: result_indices} = Inductive.get_ctor(env, cname)
     branch_names = branch_scope(quantities, pattern_vars) ++ names
@@ -1227,18 +1241,68 @@ defmodule Cure.Elab.Elaborator do
         )
 
       _solved_or_trivial ->
+        arity = length(telescope)
+
+        # The kernel's `branch_unify` verdict is the COMPLETE index inversion for
+        # this branch — both `ctor-arg := scrut-index` (Vec-style) AND
+        # `scrut-index-var := ctor-result` (e.g. `n := Z` for `v : NV(n)` matched
+        # by `vz : NV(Z)`). The with-rematch path already uses it; the plain path
+        # previously reimplemented a strictly weaker subset (`branch_index_subst`)
+        # that missed the second direction, so a goal mentioning the scrutinee's
+        # index in a nested position (`Eq(NV(n), …)`) never refined per branch.
+        subst =
+          case verdict do
+            {:solved, s} -> s
+            :trivial -> %{}
+          end
+
         branch_ctx =
           ctx
           |> extend_context(telescope, scrut_param_vals)
-          |> specialize_branch_context(result_indices, scrut_indices, length(telescope))
+          |> specialize_branch_context_subst(subst)
+
+        # Merge in the scrutinee VALUE substitution (`v ↦ ctor`) so a goal that
+        # mentions the scrutinee value itself (`Eq(T, v, v)`) refines to the
+        # branch constructor alongside the index inversion. Frame: the verdict
+        # subst and this key both live past the `arity`-shift of the goal. A
+        # *computed* scrutinee has no variable to key on, so its occurrences
+        # are replaced as a whole term (matching build_motive's kabstract-style
+        # abstraction — the kernel checks this branch at `motive @ ctor`, where
+        # the abstracted occurrences are the constructor).
+        ctor_term = branch_constructor_term(cname, arity)
+
+        subst_with_scrut =
+          case scrut_term do
+            {:var, i} -> Map.put(subst, i + arity, ctor_term)
+            _other -> subst
+          end
+
+        shifted_goal = Subst.shift(result_type_term, arity, 0)
+
+        shifted_goal =
+          case scrut_term do
+            {:var, _} -> shifted_goal
+            computed -> replace_term(shifted_goal, Subst.shift(computed, arity, 0), ctor_term)
+          end
 
         branch_expected =
-          result_type_term
-          |> branch_expected_type(scrut_term, cname, length(telescope), result_indices, scrut_indices)
+          shifted_goal
+          |> replace_branch_vars(subst_with_scrut)
           |> then(&Kernel.normalize(branch_ctx, &1))
 
+        # Lean substitutes a variable major premise by `ctor fields` in the
+        # entire subgoal — context AND everything elaborated inside it
+        # (`Meta/Tactic/Cases.lean:219-227`, the `subst.insert majorFVarId
+        # ctorApp`). Cure's surface analog: free occurrences of the scrutinee
+        # NAME in the branch body become the branch pattern expression, whose
+        # vars are already bound in branch scope and elaborate to exactly the
+        # `ctor_term` the kernel's branch goal expects. Without this, a body
+        # like `refl(v)` keeps `v` opaque (`v ≢ vz`) even though the goal
+        # correctly refined to `Eq(NV(Z), vz, vz)`.
+        body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
+
         with {:ok, body_term} <- elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
-          {:ok, {cname, length(telescope), body_term}}
+          {:ok, {cname, arity, body_term}}
         end
     end
   end
@@ -1327,6 +1391,57 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_branch_body(expr, _expected, names, ctx, env) do
     with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
   end
+
+  # Surface-level scrutinee refinement (Lean `Cases.lean:219-227`): in a branch,
+  # a VARIABLE scrutinee *is* the pattern, so free occurrences of its name in
+  # the branch body are replaced by the pattern expression. Bails out — leaving
+  # today's behavior, which the kernel re-check keeps sound — when the name does
+  # not uniquely resolve to the scrutinee (an inner binding shadows it), when
+  # the pattern itself rebinds the name, or when a nested match arm binds a name
+  # that would shadow the scrutinee or capture a pattern var.
+  defp refine_scrutinee_in_body(body_expr, {:var, i}, pattern, pattern_vars, names) do
+    scrut_name = Enum.at(names, i)
+
+    if is_binary(scrut_name) and
+         Enum.find_index(names, &(&1 == scrut_name)) == i and
+         scrut_name not in pattern_vars and
+         not binds_any?(body_expr, [scrut_name | pattern_vars]) do
+      subst_surface_var(body_expr, scrut_name, pattern)
+    else
+      body_expr
+    end
+  end
+
+  defp refine_scrutinee_in_body(body_expr, _scrut_term, _pattern, _pattern_vars, _names),
+    do: body_expr
+
+  defp subst_surface_var({:variable, _meta, name}, name, replacement), do: replacement
+
+  defp subst_surface_var({tag, meta, children}, name, replacement) when is_list(children),
+    do: {tag, meta, Enum.map(children, &subst_surface_var(&1, name, replacement))}
+
+  defp subst_surface_var(other, _name, _replacement), do: other
+
+  # Does any nested match arm bind one of `avoid`? (Arm patterns live in the
+  # arm's meta, not its children, so the generic subst walk never rewrites a
+  # binder position — this predicate only guards shadowing/capture in bodies.)
+  defp binds_any?({:match_arm, meta, body}, avoid) do
+    vars =
+      case Keyword.get(meta, :pattern) do
+        {:function_call, _pmeta, args} -> for {:variable, _vmeta, v} <- args, do: v
+        _ -> []
+      end
+
+    Enum.any?(vars, &(&1 in avoid)) or binds_any?(body, avoid)
+  end
+
+  defp binds_any?({_tag, _meta, children}, avoid) when is_list(children),
+    do: Enum.any?(children, &binds_any?(&1, avoid))
+
+  defp binds_any?(list, avoid) when is_list(list),
+    do: Enum.any?(list, &binds_any?(&1, avoid))
+
+  defp binds_any?(_other, _avoid), do: false
 
   defp constructor_pattern({:function_call, meta, args}) do
     cname = meta |> Keyword.fetch!(:name) |> String.to_atom()
@@ -1460,19 +1575,6 @@ defmodule Cure.Elab.Elaborator do
     Enum.reverse(names_in_order)
   end
 
-  defp branch_expected_type(result_type_term, scrut_term, cname, arity, result_indices, scrut_indices) do
-    shifted = Subst.shift(result_type_term, arity, 0)
-    subst = branch_index_subst(result_indices, scrut_indices, arity)
-
-    subst =
-      case scrut_term do
-        {:var, i} -> Map.put(subst, i + arity, branch_constructor_term(cname, arity))
-        _other -> subst
-      end
-
-    replace_branch_vars(shifted, subst)
-  end
-
   defp branch_constructor_term(cname, 0), do: {:ctor, cname, []}
 
   defp branch_constructor_term(cname, arity) do
@@ -1498,48 +1600,6 @@ defmodule Cure.Elab.Elaborator do
       end)
 
     ctx_final
-  end
-
-  # Matching `xs : D i...` against a constructor whose result indices include a
-  # direct telescope variable teaches the branch that this constructor variable
-  # aliases the scrutinee's index. For Vec, `vcons : ... -> Vec(a, S(n))` in a
-  # branch of `xs : Vec(a0, m)` gives `a := a0`; the `S(n) := m` refinement is
-  # not invertible in this minimal pass, but the direct alias is enough for
-  # `append(rest, ys)`.
-  defp specialize_branch_context(ctx, result_indices, scrut_indices, arity) do
-    subst = branch_index_subst(result_indices, scrut_indices, arity)
-
-    if map_size(subst) == 0 do
-      ctx
-    else
-      depth = Context.length(ctx)
-      env = Context.env(ctx)
-
-      types =
-        Enum.map(ctx.types, fn type_value ->
-          type_value
-          |> Quote.reify(depth)
-          |> replace_branch_vars(subst)
-          |> Eval.eval(env)
-        end)
-
-      %{ctx | types: types}
-    end
-  end
-
-  # Both `result_indices` (Task 6: ctor result stripped of its parameter prefix)
-  # and `scrut_indices` (elaborate_match passes the index-only slice) are
-  # index-only and equal-arity post param/index split, so they align head-to-head.
-  defp branch_index_subst(result_indices, scrut_indices, arity) do
-    result_indices
-    |> Enum.zip(scrut_indices)
-    |> Enum.reduce(%{}, fn
-      {{:var, i}, scrut_idx}, acc ->
-        Map.put(acc, i, Subst.shift(scrut_idx, arity, 0))
-
-      {_other, _scrut_idx}, acc ->
-        acc
-    end)
   end
 
   defp replace_branch_vars({:var, i}, subst), do: Map.get(subst, i, {:var, i})

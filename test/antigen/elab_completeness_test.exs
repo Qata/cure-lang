@@ -24,9 +24,13 @@ defmodule Antigen.ElabCompletenessTest do
     end
 
     test "completeness assay reports an infection on a rejected well-typed program" do
-      # A construction-guaranteed well-typed program the elaborator wrongly
-      # rejects is an infection: {:rejected_well_typed, id, _}. (This asserts the
-      # assay FIRES on a reject — independent of which shape currently triggers.)
+      # The assay trusts the :well_typed label — its job is only to turn a
+      # REJECT into {:rejected_well_typed, id, _}. So any program the elaborator
+      # rejects proves the assay fires. (The original fixture here was the
+      # value-in-goal refl(ctor) shape, which the scrutinee-refinement fix made
+      # ACCEPT — the assay caught exactly what it was built for. This fixture
+      # returns the wrong constructor in the vz branch, which the kernel must
+      # always reject.)
       bad_src = """
       mod P
         type Nat = Z | S(Nat)
@@ -35,7 +39,7 @@ defmodule Antigen.ElabCompletenessTest do
           vs : NV(n) -> NV(S(n))
         fn f({n: Nat}, v: NV(n)) -> Eq(NV(n), v, v) =
           match v
-            vz() -> refl(vz())
+            vz() -> refl(vs(vz()))
             vs(s) -> refl(vs(s))
       end
       """
@@ -100,6 +104,11 @@ defmodule Antigen.ElabCompletenessTest do
       # And the computed-INDEX (3a) shape must stay accepted: it isolates that the
       # blast radius is scrutinee-VALUE-in-goal, not computed indices per se.
       assert {"computed_idx/rebuild", :ok} in results
+
+      # Since the scrutinee-refinement fix (Lean Cases.lean:219-227 body subst +
+      # Match.lean:137 computed-discriminant kabstract), the WHOLE catalog is
+      # accepted. This is now a gate: any reappearing infection is a regression.
+      assert infections == []
     end
   end
 

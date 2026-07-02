@@ -122,12 +122,17 @@ defmodule Cure.Elab.WithAbstractionTest do
     assert {:error, _} = Program.elaborate(src)
   end
 
-  test "(differential) plain `match g(n)` for the SAME goal is REJECTED" do
-    # `match` cannot refine the goal by the scrutinee's value: `g(n)` is not an
-    # index variable, so the motive stays the constant `SNat(g(n))` and each
-    # branch body (e.g. `szero() : SNat(Z)`) fails to convert. This is the
-    # capability `with` adds; it must NOT be an oracle probe (Idris `case` would
-    # refine it and muddy the differential).
+  test "(graduated) plain `match g(n)` for the SAME goal now ACCEPTS" do
+    # Historically rejected: the plain-`match` motive never abstracted a
+    # computed scrutinee, so the goal stayed the constant `SNat(g(n))` and
+    # `szero() : SNat(Z)` failed to convert — the capability gap that motivated
+    # `with` (capability A). Since the scrutinee-refinement fix, `build_motive`
+    # kabstracts the discriminant term exactly like Lean (`Elab/Match.lean:137`)
+    # — the motive is `λx. SNat(x)`, each branch checks at the constructor, and
+    # the use site recovers `SNat(g(n))`. Idris `case` accepts this too, so
+    # plain `match` now agrees with both. The differential that remains `with`-
+    # only is SIBLING refinement (previous test): `match` still refines only
+    # the goal, not other hypotheses.
     src =
       @preamble <>
         """
@@ -137,6 +142,6 @@ defmodule Cure.Elab.WithAbstractionTest do
             S(k) -> ssuc(toS(k))
         """
 
-    assert {:error, _} = Program.elaborate(src)
+    assert {:ok, _env} = Program.elaborate(src)
   end
 end
