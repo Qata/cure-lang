@@ -25,10 +25,12 @@ defmodule Antigen.Generators.Totality do
   end
 
   @doc """
-  The confirmed hole: `f = λx. g x`, `g = λx. f x` over `Dec → Dec`. Neither body
-  references its own name, so `Certificate.calls?/2` misses the cycle and each is
-  wrongly certified total — while the pair genuinely diverges under δ. Label
-  `:diverging`.
+  The banked 2-cycle: `f = λx. g x`, `g = λx. f x` over `Dec → Dec`. Neither body
+  references its own name, so single-body analysis alone cannot witness the cycle;
+  `Cure.Core.Certificate` detects it through the signature (mutual-cycle detection,
+  the fix for the once-live hole — see `d13d718`) and certifies neither. The pair
+  genuinely diverges under δ. Label `:diverging`. Kept forever as the permanent
+  regression guard for that fix.
   """
   @spec diverging_mutual_pair() :: Challenge.t()
   def diverging_mutual_pair do
@@ -44,7 +46,7 @@ defmodule Antigen.Generators.Totality do
         defs: [%{name: :f, type: ty, body: bf}, %{name: :g, type: ty, body: bg}],
         focus: [:f, :g]
       },
-      note: "mutual cycle f->g->f (confirmed hole)"
+      note: "mutual cycle f->g->f (hole fixed d13d718; permanent regression guard)"
     )
   end
 

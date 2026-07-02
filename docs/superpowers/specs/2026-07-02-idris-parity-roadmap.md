@@ -55,7 +55,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 10 | Inference unification | Pattern (Miller) unification — solve `?m x y = t` | E | additive | ⬜ |
 | 11 | Inference unification | Postponed/suspended constraints (real flex-flex: constraint queue + retry-on-progress) | E | additive | ⬜ |
 | 12 | Totality — termination | Single-argument structural descent | E | — | ✅ |
-| 13 | Totality — termination | **Mutual recursion** (confirmed hole; antibody banked, checker must be fixed) | E | fix | 🔴 |
+| 13 | Totality — termination | **Mutual recursion** (hole fixed `d13d718`; antibody banked as permanent regression guard) | E | fix | ✅ |
 | 14 | Totality — termination | Multi-argument / lexicographic (size-change) descent | E | additive | ⬜ |
 | 15 | Totality — coverage | Kernel exhaustiveness (`declared ⊆ covered`) | K | — | ✅ |
 | 16 | Totality — coverage | Surface exhaustiveness diagnostics accounting for discharged/impossible branches | E | additive | 🔵 ④ |
@@ -92,7 +92,7 @@ kernel is sound."
 |---|---|---|---|
 | `stub` | harness self-test (planted `{:global,:boom}`) | 1 planted infection | meta only |
 | `totality/terminating` | structural-recursive defs accepted | `structural_terminating` | partial |
-| `totality/diverging` | non-terminating defs rejected | `diverging_mutual_pair` | 🔴 checker fails it — confirmed hole |
+| `totality/diverging` | non-terminating defs rejected | `diverging_mutual_pair` + W1 adversarial set | solid (hole fixed `d13d718`; antibodies = permanent regression guards) |
 | `positivity` | strict positivity of datatypes | positivity gen challenges | partial |
 | `reflexivity` (+`forcing` gen) | conversion/normalization halts (refl ≡ deep-norm; `Conv.conv_within?`, fixed 500-unfold fuel) | `forcing_pair` | solid |
 | `indexed/case` | dependent-case soundness | `branch_family`, `coverage`, `refinement`, `motive_wf`, `discharge`, `injectivity` | strong |
@@ -106,7 +106,7 @@ vertical) is separate future work that reuses the name only loosely.
 
 | # | Expansion | Type | What it closes | Layer | Priority |
 |---|---|---|---|---|---|
-| A1 | Fix mutual-recursion termination so `diverging_mutual_pair` replays `:ok` | turn hole green | the one live soundness infection (ledger #13) | E + A | 🔴 highest |
+| A1 | Fix mutual-recursion termination so `diverging_mutual_pair` replays `:ok` | turn hole green | the one live soundness infection (ledger #13) | E + A | ✅ done (`d13d718`; antibody replays `:ok`) |
 | A2 | Bank occurs-check/cycle + deletion-rule antibodies in `indexed/case` | coverage fill | kernel has both rules, neither has a named antibody (ledger #23) | A | high (cheap) |
 | A3 | Bank nested / through-constructor / negative-position positivity antibodies | coverage fill | classic positivity escape hatches (ledger #19) | A | high (cheap) |
 | A4 | New `universes` vertical: reject `Type:Type`, prove cumulativity sound, reject two-universe ctor-field violation | new vertical | kernel enforces universes but nothing tests them (ledger #20 has zero Antigen coverage) | A | high |
@@ -118,8 +118,7 @@ vertical) is separate future work that reuses the name only loosely.
 | A10 | Wire per-vertical generators into A8's generated stream once the engine lands | integration | makes A8 actually cover the verticals | A | follows A8 |
 
 ### 3.3 Shape of the Antigen work
-- **A1 is the only red item** — a known hole whose antibody is already banked,
-  waiting on the checker fix.
+- **A1 is closed** (`d13d718`): the checker conservatively rejects every mutual cycle and the banked antibody replays `:ok`. What remains of mutual recursion is *reach* (accepting well-founded groups — transliteration program P1), not soundness.
 - **A2–A4 are cheap, high-value** — the kernel already enforces these rules; we
   bank antibodies that prove they stay enforced. A4 tests an entire kernel
   subsystem (universes) with *zero* current Antigen coverage.
