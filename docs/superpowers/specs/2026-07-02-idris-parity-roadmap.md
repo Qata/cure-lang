@@ -49,7 +49,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 4 | Pattern forms | Non-constructor patterns in dependent position (`_`, literal, as-patterns) handled, not merely rejected | E | additive | ⬜ |
 | 5 | Pattern matching | Forced/dot patterns + forced-argument erasure | E, C | additive | ⬜ |
 | 6 | Dependent matching | `with`-abstraction (match on an intermediate, refine the goal) — *borderline; core to Idris matching quality* | E, P | additive | ⬜ |
-| 7 | Propositional equality | Automatic `rewrite` motive inference (abstract LHS occurrences in the goal, à la Idris `rewrite … in`) — implemented in `rewrite_plan/5`, audited to parity with `elabRewrite` (P0); motive-under-`:case`-binder capture bug fixed. Residual *reach*: occurrence matching is syntactic-on-normal-forms, not up-to-conversion (oracle probe rw07, `cure_stricter`, P1) | E | additive | ✅ |
+| 7 | Propositional equality | Automatic `rewrite` motive inference (abstract LHS occurrences in the goal, à la Idris `rewrite … in`) — implemented in `rewrite_plan/6`, audited to parity with `elabRewrite` (P0); motive-under-`:case`-binder capture bug fixed. Conversion-occurrence rewriting (oracle probe rw07) now **parity** (`same`) via an elaborator bridge-lemma step (`2ac4add`): a refl-bodied bridge checked at the asymmetric endpoint through a constant motive, so the kernel only ever decides a top-level conversion. Underlying **K-layer reach** tracked in the TCB note below (multi-occurrence / deep up-to-conversion still uncovered by the single-occurrence bridge) | E | additive | ✅ |
 | 8 | Equality / absurdity | `Void`/absurd elimination at the surface (`{:absurd}`) | K (leaf), E | additive | ✅ |
 | 9 | Inference unification | First-order metavariable engine: alloc, occurs-checked solve, zonk (`lib/cure/elab/unify.ex`) | E | — | ✅ |
 | 10 | Inference unification | Pattern (Miller) unification — solve `?m x y = t` | E | additive | ⬜ |
@@ -76,6 +76,23 @@ Idris quality for what they cover. **The TCB is essentially done** — with #8's
 `{:absurd}` leaf landed, #13's mutual-recursion hole closed, and #19's
 nested-positivity gaps audited + banked, every remaining row lives in the
 untrusted elaborator / Antigen layers.
+
+**One known K-layer *reach* (soundness-safe incompleteness), scheduled as its
+own reviewed TCB run.** The normalizer preserves stuck eliminators without
+δ-reducing their targets: a stuck `case` never re-reduces its scrutinee
+(`normalise.ex` `nf_neutral`), and `spine/2` only unwraps `napp`, so `nfst`/
+`nsnd` frames over a certified-global spine freeze the same way — e.g.
+`nf(plus(plus(Z,n),Z))` and `fst(g(x))` stay stuck even at top level. This is
+*incompleteness, not unsoundness* (it rejects/leaves-stuck; it never equates
+distinct normal forms), and rw07 (#7) is currently dodged in the elaborator by
+the bridge lemma. The prescribed fix is **one clause at the `unfold_head`
+seam** — whnf the `ncase` scrutinee and the `nfst`/`nsnd` targets, resume ι if a
+constructor emerges — repairing whnf+nf+conv at a single trusted point rather
+than patching `nf_neutral` and `conv_neutral?` separately. **Gate for that
+run (HARD-STOP review):** red-green, a new Antigen antibody proving the clause
+terminates and equates no distinct normal forms, the full Antigen suite, and
+the full test suite. Until it lands, the bridge lemma is the sanctioned
+workaround and this row is the must-eventually-accept reach-pin.
 
 ### The honest headline
 Of 25 rows: **13 at parity, 12 remain, 0 live soundness holes** — the
