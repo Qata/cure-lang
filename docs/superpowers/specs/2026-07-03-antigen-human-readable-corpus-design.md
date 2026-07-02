@@ -84,7 +84,53 @@ Non-mutant records have **no** `fault=` field.
 is a dedup identity, not human-facing), and the **non-fault** `scaffold`
 (stays Base64 `term_to_binary`, per scope).
 
-## 3. `Antigen.SExpr` — the term codec
+## 3.0 Planning-stage revision — reuse `Cure.Core.Serialize` (SUPERSEDES the new-module design below)
+
+**Discovery (Stage 2, grounded against source):** `Cure.Core.Serialize`
+(`lib/cure/core/serialize.ex`) is *already* exactly this tagged s-expression
+codec — byte-identical to §3.1's grammar. Live proof:
+
+```
+Serialize.encode({:ctor,:vcons,[{:app,{:app,{:global,:plus},{:ctor,:S,[{:ctor,:Z,[]}]}},{:ctor,:Z,[]}},{:ctor,:Z,[]},{:ctor,:vnil,[]}]})
+#=> "(ctor vcons (app (app (global plus) (ctor S (ctor Z))) (ctor Z)) (ctor Z) (ctor vnil))"
+Serialize.encode({:case, …, [{:T,0,…},{:F,1,{:var,0}}]})
+#=> "(case … (branch T 0 …) (branch F 1 (var 0)))"
+Serialize.encode({:type, 0}) #=> "(type 0)"
+```
+
+It is the design spec's **C2 re-validation format** and already has its own
+round-trip test suite. Therefore:
+
+- **No new `Antigen.SExpr` module.** Readable pieces are `Serialize.encode(t)`
+  with the `Base64` wrapper removed; decode is `Serialize.decode/1`
+  (`:: {:ok, term} | {:error, _}`). The prose grammar in §3.1–§3.3 below is
+  retained only as documentation of the format Serialize implements.
+- **Atom-safety (§3.3) is MOOT — not a regression.** `Serialize.decode` uses
+  `String.to_atom` (verified: `serialize.ex:145/176/180/185/217`), i.e. it
+  mints. But the corpus term path **already** goes through `Serialize.decode`
+  today (`Corpus.decode_pieces` does `Serialize.decode(Base.decode64!(b64))`),
+  so reusing it un-Base64'd preserves the *exact* current posture. The
+  `:boom` / `@known_atoms` gap the Stage-1 review flagged only bites a *new*
+  `to_existing_atom` decoder; reusing Serialize means it never arises. **No
+  generator audit, no `@known_atoms` change, no `:boom` fix is needed.**
+  - *Known limitation (documented, accepted):* a hand-edited corpus typo like
+    `(global pluss)` mints `:pluss` rather than erroring — identical to today's
+    behavior. A safe (`to_existing_atom`) decode is a trivial future follow-up
+    if hand-edit typo-catching is ever wanted; out of scope here (YAGNI).
+- **§7 test 1 (former round-trip)** is already covered by Serialize's own tests;
+  this feature does not re-test it. The load-bearing new tests are the
+  **corpus-record** round-trips (§7 test 3), the **fault codec** (§3.4), the
+  **dual-read** (§7 test 4), and **migration** (§7 test 5). §7 test 2
+  (atom-safety) is **removed** (moot).
+- **§8 Files:** `lib/antigen/sexpr.ex` / `test/antigen/sexpr_test.exs` are **not
+  created**. The only genuinely new codec is the small **fault** encoder/decoder
+  (§3.4), which lives in `lib/antigen/corpus.ex` (private helpers) and reuses
+  `Serialize.encode/decode` for any Core-term–valued fault entry.
+
+Everything below (§3.1–§3.3) stands as the format's documentation; §3.4 (fault
+codec) and §4–§9 are unaffected in intent, with "SExpr" read as "Serialize".
+
+## 3. `Antigen.SExpr` — the term codec (SUPERSEDED by §3.0 — reuse `Serialize`)
 
 New module `lib/antigen/sexpr.ex`. Pure, dependency-free (no backend, no
 generator). Two public functions:
