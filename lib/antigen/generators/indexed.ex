@@ -127,6 +127,34 @@ defmodule Antigen.Generators.Indexed do
     challenge(:ill_typed, [dec_family()], :motive_wf, @dec, body, "over-applied motive → :bad_motive")
   end
 
+  # -- 4.5 impossible-branch discharge (no-confusion) -------------------------
+  @doc """
+  Impossible-branch discharge obligation. `wrap` builds `Ix Causal`; on an
+  `Ix Dcoupled` scrutinee the branch is unreachable and its deliberately
+  ill-typed body (`{:type,0}` where `Dec` is expected) must NOT be checked
+  (`:well_typed`, discharged). The `:ill_typed` variant makes the SAME branch
+  REACHABLE (scrutinee `Ix Causal`), so its body must be checked and rejected —
+  the antibody that goes red if discharge ever over-fires on a live branch.
+  """
+  @spec discharge(:well_typed | :ill_typed) :: Challenge.t()
+  def discharge(:well_typed) do
+    ix_dcoupled = {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}
+    motive = {:lam, @dec, {:lam, {:data, :Ix, [], [{:var, 0}]}, @dec}}
+    def_type = {:pi, ix_dcoupled, @dec}
+    body = {:lam, ix_dcoupled, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
+    challenge(:well_typed, [dec_family(), ix_family()], :discharge, def_type, body,
+      "impossible wrap branch (scrutinee Ix Dcoupled) discharged, body not checked")
+  end
+
+  def discharge(:ill_typed) do
+    ix_causal = {:data, :Ix, [], [{:ctor, :Causal, []}]}
+    motive = {:lam, @dec, {:lam, {:data, :Ix, [], [{:var, 0}]}, @dec}}
+    def_type = {:pi, ix_causal, @dec}
+    body = {:lam, ix_causal, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
+    challenge(:ill_typed, [dec_family(), ix_family()], :discharge, def_type, body,
+      "ill-typed: wrap branch REACHABLE (scrutinee Ix Causal), {:type,0} body must be rejected")
+  end
+
   defp challenge(label, families, name, def_type, def_body, note) do
     Challenge.new(
       kind: :indexed_case,

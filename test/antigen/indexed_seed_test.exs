@@ -16,7 +16,10 @@ defmodule Antigen.IndexedSeedTest do
   # Confirmed 4.1 regression guard: a Dec case with a foreign `MkFoo` (Foo) branch.
   # Post-fix the kernel rejects it, so it replays :ok; if the family-scoping fix
   # regresses, it replays {:wrongly_accepted, _} and the invariant test goes red.
-  @antibodies [Indexed.branch_family(:ill_typed)]
+  # discharge(:ill_typed): a REACHABLE wrap branch with an ill-typed body. The
+  # kernel must reject it; if impossible-branch discharge ever over-fires on a
+  # live branch it would be {:wrongly_accepted, _} — a soundness regression.
+  @antibodies [Indexed.branch_family(:ill_typed), Indexed.discharge(:ill_typed)]
 
   # Known-good-behavior seeds: every indexed/case challenge the kernel handles
   # correctly. `refinement(:well_typed)` is now included — the 4.3 incompleteness
@@ -29,7 +32,8 @@ defmodule Antigen.IndexedSeedTest do
     Indexed.refinement(:well_typed),
     Indexed.refinement(:ill_typed),
     Indexed.motive_wf(:well_typed),
-    Indexed.motive_wf(:ill_typed)
+    Indexed.motive_wf(:ill_typed),
+    Indexed.discharge(:well_typed)
   ]
 
   test "indexed/case antibodies + seeds are banked and every one replays :ok" do

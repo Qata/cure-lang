@@ -40,4 +40,17 @@ defmodule Antigen.Assays.IndexedTest do
   test "4.4 over-applied (malformed) motive must be rejected" do
     assert :ok == A.run(G.motive_wf(:ill_typed))
   end
+
+  test "4.5 impossible wrap-branch (scrutinee Ix Dcoupled) is discharged and accepted" do
+    # The wrap ctor builds Ix Causal, so on an Ix Dcoupled scrutinee its branch is
+    # unreachable; its deliberately ill-typed body is not checked. Completeness.
+    assert :ok == A.run(G.discharge(:well_typed))
+  end
+
+  test "4.5 SOUNDNESS: the SAME ill-typed body in a REACHABLE branch must be rejected" do
+    # Scrutinee Ix Causal ⇒ wrap IS reachable ⇒ the {:type,0} body must be checked
+    # and rejected. If the kernel ever over-fires discharge on a reachable branch,
+    # this replays {:wrongly_accepted, _} — the antibody goes red.
+    assert :ok == A.run(G.discharge(:ill_typed))
+  end
 end
