@@ -599,10 +599,7 @@ defmodule Cure.Elab.Declarations do
           |> Enum.drop(app_param_count)
           |> Enum.with_index()
           |> Enum.reduce(acc, fn {arg, pos}, a ->
-            case arg do
-              {:variable, _, vname} -> maybe_add_implicit(a, vname, Enum.at(index_types, pos), fam, env)
-              _ -> a
-            end
+            collect_index_expr_vars(a, arg, Enum.at(index_types, pos), fam, env)
           end)
 
         # A COMPUTED index expression: a non-family global function (`app`,
@@ -630,6 +627,35 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
+
+  # Collect free variables from an index EXPRESSION typed by `type`, recursing into
+  # constructor applications so a variable that appears only *inside* a constructor
+  # in the result index — `m` in `fz : Fin(S(m))` / `FZ : Fin (S n)` — is inferred
+  # as an implicit, typed by the enclosing constructor's field type. Idris binds
+  # these automatically; without it the variable is unbound (`:index_mismatch`). A
+  # bare variable is added directly (the pre-existing behaviour).
+  defp collect_index_expr_vars(acc, {:variable, _, vname}, type, fam, env),
+    do: maybe_add_implicit(acc, vname, type, fam, env)
+
+  defp collect_index_expr_vars(acc, {:function_call, cmeta, cargs}, _type, fam, env) do
+    cname = cmeta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    case Inductive.get_ctor(env, cname) do
+      %{args: fields} ->
+        field_types = Enum.map(fields, fn {_n, t} -> t end)
+
+        cargs
+        |> Enum.with_index()
+        |> Enum.reduce(acc, fn {carg, i}, a ->
+          collect_index_expr_vars(a, carg, Enum.at(field_types, i), fam, env)
+        end)
+
+      _ ->
+        acc
+    end
+  end
+
+  defp collect_index_expr_vars(acc, _other, _type, _fam, _env), do: acc
 
   # Domain (argument) types of a defined global function, peeled from its Pi
   # type, or nil if `name` is not a defined global. Used to type index variables
