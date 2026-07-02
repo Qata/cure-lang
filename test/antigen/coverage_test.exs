@@ -54,4 +54,17 @@ defmodule Antigen.CoverageTest do
     assert {:var, 0} in terms     # ctor result index
     assert body in terms          # def body
   end
+
+  test "terms_of extracts type, term and ctx for :mutant_term" do
+    c = Antigen.Challenge.new(
+      kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+      payload: %{sig: :v1, ctx: [{:data, :Nat, [], []}],
+                 type: {:data, :Nat, [], []}, term: {:fst, {:ctor, :Z, []}},
+                 fault: %{kind: :proj_non_pair, witness: :head,
+                          expected_head: :Sigma, injected_head: :Nat, scope: nil}}
+    )
+    ts = Antigen.Coverage.terms_of(c)
+    assert {:fst, {:ctor, :Z, []}} in ts
+    assert {:data, :Nat, [], []} in ts
+  end
 end

@@ -43,6 +43,54 @@ defmodule Mix.Tasks.AntigenTest do
     refute File.exists?(Path.join(@tmp, "latest.txt"))
   end
 
+  test "the wired-in default_gen draws :typed_term challenges (Tier B is live)" do
+    seeds_path = Path.join(@tmp, "seeds_tier_b.sexp")
+
+    Mix.Tasks.Antigen.run([
+      "generate",
+      "--count",
+      "300",
+      "--seeds",
+      seeds_path,
+      "--report-dir",
+      @tmp
+    ])
+
+    kinds =
+      Antigen.Corpus.stream(seeds_path)
+      |> Enum.flat_map(fn
+        {:ok, c} -> [c.kind]
+        _ -> []
+      end)
+      |> MapSet.new()
+
+    assert :typed_term in kinds
+  end
+
+  test "the wired-in default_gen draws :mutant_term challenges" do
+    seeds_path = Path.join(@tmp, "seeds_mutant.sexp")
+
+    Mix.Tasks.Antigen.run([
+      "generate",
+      "--count",
+      "300",
+      "--seeds",
+      seeds_path,
+      "--report-dir",
+      @tmp
+    ])
+
+    kinds =
+      Antigen.Corpus.stream(seeds_path)
+      |> Enum.flat_map(fn
+        {:ok, c} -> [c.kind]
+        _ -> []
+      end)
+      |> MapSet.new()
+
+    assert :mutant_term in kinds
+  end
+
   test "budget_to_count converts minutes to a round count via the fixed rounds-per-minute constant" do
     one_minute = Mix.Tasks.Antigen.budget_to_count("1m")
     assert one_minute > 0

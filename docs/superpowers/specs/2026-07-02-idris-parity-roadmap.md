@@ -64,7 +64,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 19 | Positivity | Confirm + bank nested / through-constructor / negative-position (arrow-left) positivity | K/E, A | verify + additive | ✅ (W4: audited, holes fixed, antibodies banked) |
 | 20 | Universes | Cumulative universes, no `Type:Type`, two-universe constructor-field rule | K | — | ✅ |
 | 21 | Assurance (meta) | Known-label regression net across all verticals | A | — | ✅ |
-| 22 | Assurance (meta) | **Term-generator metatheory engine** (StreamData-backed corpus, known-label totality) — turns the net into soundness *evidence* | A | additive | ⬜ (designed) |
+| 22 | Assurance (meta) | **Term-generator metatheory engine** (StreamData-backed corpus, known-label totality) — turns the net into soundness *evidence*. **Tier B landed** (`2026-07-02-antigen-tier-b-term-generator` spec+plan): mode-directed dependent `gen_term(Γ,T)` over a versioned signature menu + dependent context generator, three differential self-consistency assays (`term/infer_check`, `term/subject_reduction`, `term/normalization`), and a binder-usage/reduction-activity health gate. Acceptance run: 0 infections over the generated stream, `→ healthy`. *Reach still open*: `conversion_termination`/`erasure_preservation` assays, ill-typed mutation corpus, `ChoiceSeq` backend, and a richer menu (Pi/Sigma goals, type parameters) — all deferred to a follow-up spec | A | additive | ✅ |
 | 23 | Assurance (meta) | Missing per-rule antibodies: occurs-check/cycle and deletion rule | A | additive | ✅ (W3: deletion antibody + occurs pin) |
 | 24 | Assurance (meta) | Wire a forced/dot-pattern (`forcing`) Antigen vertical once #5 exists | A | additive | ⬜ (needs #5) |
 | 25 | Assurance (meta) | Surface-level `.cure` regression corpus for the ④ features | A | additive | ⬜ (post-④) |
@@ -131,18 +131,23 @@ prior art). The indexed with-rematch convoy (`elaborate_with_rematch`) is a soun
 non-TCB *workaround* that never routes through this path, not the repair.
 
 ### The honest headline
-Of 26 rows: **13 at parity, 13 remain, 0 live soundness holes** — the
+Of 26 rows: **14 at parity, 12 remain, 0 live soundness holes** — the
 transliteration-P0 audit landed ④'s rows 2/8/16 and #7's audited-complete
 `rewrite` motive inference (rw07 now closed via the elaborator bridge lemma),
 the pre-port banking run closed #13's mutual-recursion hole (now a reach item),
-#19's nested positivity, and #23's missing antibodies, and the post-merge port
+#19's nested positivity, and #23's missing antibodies, the post-merge port
 run landed checked-mode expression-level `match` (#26, `fcdf5ce`) and
 `with`-abstraction capabilities A + B + sibling refinement (#6, `58037d6`,
-`8487c51`, `dbf874e`). The remaining 13 are reach (#3–#6, #13, #14, #17, #26 —
-several now *partially* landed: #6 capabilities A + B + sibling, #26 checked
-mode), ergonomics/inference (#10, #11), or assurance strength (#22, #24, #25).
-Highest-leverage single item: **#22** — without a term generator, Antigen
-proves "these specific holes stay closed," not "the kernel is sound."
+`8487c51`, `dbf874e`), and the Antigen Tier-B run landed **#22 / A8** — the
+dependent term generator plus the three differential self-consistency assays and
+the health gate (acceptance run: 0 infections over the generated stream, `→
+healthy`). The remaining 12 are reach (#3–#6, #13, #14, #17, #26 — several now
+*partially* landed: #6 capabilities A + B + sibling, #26 checked mode),
+ergonomics/inference (#10, #11), or assurance strength (#24, #25, plus A10's
+still-open wiring of the *existing* verticals onto the generated stream).
+With #22 landed, the next-highest-leverage items are the inference-unification
+depth (#10 Miller patterns, #11 postponed constraints) and the pattern-matching
+reach chain (#3 → #17, #4, #5).
 
 ## 3. Antigen — coverage and capability expansion
 
@@ -174,9 +179,9 @@ vertical) is separate future work that reuses the name only loosely.
 | A5 | New `conversion`/def-eq vertical: distinct normal forms never judged equal (β/η soundness), complementing `reflexivity`'s halting check | new vertical | NbE `Conv` soundness only half-covered | A | medium |
 | A6 | New `ctor-formation` vertical (or extend `indexed`): result-index shape, param uniformity, telescope well-formedness in `check_ctor` | new vertical | datatype *formation* rules under-tested | A | medium |
 | A7 | New surface `.cure` vertical: elaborate through `Cure.Elab.Program` to prove ④'s `missing_branch`/`reachable_impossible`/impossible-clause behavior | new vertical | ④ currently slated for a plain regression corpus, not Antigen (ledger #25) | A + E | medium (post-④) |
-| A8 | **Term-generator metatheory engine** — StreamData-backed generated corpus w/ known-label totality, swappable backend | architectural | turns every vertical from regression net into soundness *evidence* (ledger #22) | A | 🔵 biggest leverage (designed) |
+| A8 | **Term-generator metatheory engine** — StreamData-backed generated corpus w/ known-label totality, swappable backend | architectural | turns every vertical from regression net into soundness *evidence* (ledger #22) | A | ✅ done (Tier B: `gen_term` + 3 differential assays + health gate; `2026-07-02-antigen-tier-b-term-generator` plan) |
 | A9 | Broaden mutual-recursion challenges beyond one pair (longer cycles, indirect, guarded vs unguarded) | coverage fill | depth behind A1 | A | ✅ done (subsumed by W1 adversarial set) |
-| A10 | Wire per-vertical generators into A8's generated stream once the engine lands | integration | makes A8 actually cover the verticals | A | follows A8 |
+| A10 | Wire per-vertical generators into A8's generated stream once the engine lands | integration | makes A8 actually cover the verticals | A | 🟡 partial — the `:typed_term` stream feeds the three Tier-B differential assays (`term/*`); feeding the *existing* known-label verticals (totality/positivity/universes) from a generated stream remains open |
 
 ### 3.3 Shape of the Antigen work
 - **A1 is closed** (`d13d718`): the checker conservatively rejects every mutual cycle and the banked antibody replays `:ok`. What remains of mutual recursion is *reach* (accepting well-founded groups — transliteration program P1), not soundness.

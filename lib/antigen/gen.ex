@@ -9,6 +9,7 @@ defmodule Antigen.Gen do
           | {:sized, (non_neg_integer() -> t())}
           | {:resize, non_neg_integer(), t()}
           | {:tagged, :unsized | :size_monotonic, t()}
+          | {:lazy, (-> t())}
 
   def return(x), do: {:return, x}
   def member_of(list) when is_list(list), do: {:member_of, list}
@@ -20,6 +21,16 @@ defmodule Antigen.Gen do
   def tag(g, t) when t in [:unsized, :size_monotonic], do: {:tagged, t, g}
   def int(lo, hi) when lo <= hi, do: member_of(Enum.to_list(lo..hi))
 
+  @doc """
+  Defer construction of a sub-generator until it is actually sampled. The backend
+  interprets this without forcing `fun` until generation descends into it, so a
+  recursively-built generator (e.g. `Generators.Term.gen/3`) materializes only
+  along the sampled path — O(depth), not the O(branching^depth) that eager
+  construction of the reified AST would cost. Like `bind`/`sized`, the thunk is
+  opaque to `support/1` (it reports `:over_approx`).
+  """
+  def lazy(fun) when is_function(fun, 0), do: {:lazy, fun}
+
   @doc "Structural support over-approximation (spec §6). `bind`'s continuation is opaque."
   @spec support(t()) :: {:finite, MapSet.t()} | :over_approx
   def support({:return, x}), do: {:finite, MapSet.new([x])}
@@ -30,6 +41,7 @@ defmodule Antigen.Gen do
   def support({:tagged, _t, g}), do: support(g)
   def support({:sized, _f}), do: :over_approx
   def support({:bind, _g, _f}), do: :over_approx
+  def support({:lazy, _f}), do: :over_approx
 
   defp union_support(gs) do
     Enum.reduce_while(gs, {:finite, MapSet.new()}, fn g, {:finite, acc} ->

@@ -27,7 +27,11 @@ defmodule Antigen.CorpusReplayTest do
     "indexed/case" => Assays.Indexed,
     "rewrite/eq" => Assays.Rewrite,
     "universes" => Assays.Universes,
-    "stuck_elim_delta" => Assays.StuckElimDelta
+    "stuck_elim_delta" => Assays.StuckElimDelta,
+    "term/infer_check" => Assays.Term,
+    "term/subject_reduction" => Assays.Term,
+    "term/normalization" => Assays.Term,
+    "mutation/rejection" => Assays.Mutation
   }
 
   test "both committed corpora decode without error (structural integrity)" do
@@ -55,5 +59,12 @@ defmodule Antigen.CorpusReplayTest do
            "#{length(failing)} committed entr(y/ies) fail their invariant — the " <>
              "mutual-recursion hole may have regressed: " <>
              inspect(Enum.map(failing, & &1.verdict))
+  end
+
+  test "banked :mutant_term seeds replay as correct rejections" do
+    seeds = Antigen.Corpus.stream(@seeds) |> Enum.map(fn {:ok, c} -> c end)
+    mutants = Enum.filter(seeds, &(&1.kind == :mutant_term))
+    assert mutants != [], "no :mutant_term seeds banked yet"
+    for c <- mutants, do: assert Antigen.Assays.Mutation.run(c) == :ok
   end
 end
