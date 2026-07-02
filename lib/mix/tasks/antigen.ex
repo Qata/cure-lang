@@ -76,7 +76,8 @@ defmodule Mix.Tasks.Antigen do
       {1, Antigen.Generators.Forcing.gen()},
       {1, Antigen.Generators.Term.typed_term("term/infer_check")},
       {1, Antigen.Generators.Term.typed_term("term/subject_reduction")},
-      {1, Antigen.Generators.Term.typed_term("term/normalization")}
+      {1, Antigen.Generators.Term.typed_term("term/normalization")},
+      {1, Antigen.Generators.Mutation.mutant()}
     ])
   end
 
