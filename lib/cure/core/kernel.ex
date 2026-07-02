@@ -705,6 +705,35 @@ defmodule Cure.Core.Kernel do
     end)
   end
 
+  @doc """
+  Public branch-refinement query (spec §3). Given the caller's `ctx`, the
+  scrutinee's family `dname` and a branch constructor `cname`, plus the
+  scrutinee's actual index **values** `scrut_indices`, return the same verdict
+  `unify_indices/4` produces: `{:solved, subst} | :trivial | :impossible`, where
+  `subst` is in the branch de Bruijn frame `ctor-args ++ outer`. The elaborator
+  delegates to this instead of carrying its own weaker index unification. Adds no
+  unification logic — it reuses the private `unify_indices/4`. Guards two misuse
+  shapes rather than trusting the caller: an unknown constructor (`nil` from
+  `get_ctor`) and a constructor that exists but belongs to a different family
+  than `dname` (`Inductive.ctor_family/2` mismatch) both verdict `:impossible`
+  rather than proceeding against the wrong schema. Both are impossible in
+  practice given the elaborator's own pre-validation, but this is new trusted-
+  kernel code and `dname` is part of the signature precisely to be checked, not
+  merely documented.
+  """
+  @spec branch_unify(Context.t(), atom(), atom(), [Cure.Core.Value.t()]) ::
+          {:solved, map()} | :trivial | :impossible
+  def branch_unify(ctx, dname, cname, scrut_indices) do
+    sig = Context.signature(ctx)
+
+    with %{args: tele, result_indices: result_indices} <- Inductive.get_ctor(sig, cname),
+         ^dname <- Inductive.ctor_family(sig, cname) do
+      unify_indices(ctx, result_indices, scrut_indices, length(tele))
+    else
+      _ -> :impossible
+    end
+  end
+
   # Bidirectional first-order unification of a constructor's result-index vector
   # (`result_indices`, terms over the ctor telescope — vars < arity) against the
   # scrutinee's index vector (`scrut_indices`, outer-context values) in ctx_branch's
