@@ -346,9 +346,18 @@ duplicated here per DRY). This plan governs sequencing and adds B5. Execution
 notes discovered since it was written are repeated here so B1 does not start on
 a stale premise.
 
-### Task B1: Generalizing match front-end + retire A/B/C (= lean-shape Phase 3)
+### Task B1: Generalizing match front-end + retire A/B/C (= lean-shape Phase 3) — DONE
 
-- [ ] Execute lean-shape Tasks 3.1–3.4 exactly as written there, with the
+Tasks 3.1–3.4 complete: 3.1 generalizing motive composition (index-inversion +
+value-refinement in with-rematch); 3.2 capability-A subsumed by unified `match`;
+3.3 DECISION case (a) — HEq NOT needed (Lean-grounded + FRP-combinator
+re-derivation), B retained as permanent non-indexed proof variant, no TCB; 3.4
+branch refinement unified into `refine_branch_goal/6`. Gate met: A subsumed, B/C
+thin front-ends over shared machinery, `mix cure.oracle with` 7/7 `same`, full
+suite 2384. B1 did NOT hit the indexed-Eq-endpoint wall → B3 pull-forward trigger
+did not fire.
+
+- [x] Execute lean-shape Tasks 3.1–3.4 exactly as written there, with the
   Phase-2½ amendment: **capability-A GOAL refinement is already subsumed by
   plain `match`** (commit 8019e67 — computed-scrutinee kabstract + body
   scrutinee substitution). Task 3.1's red test must therefore be re-verified
@@ -357,11 +366,11 @@ a stale premise.
   through plain match, the task reduces to deleting the special case (still
   red-green: the deletion's test is "with_abstraction suite green + oracle
   `with` cluster all `same` post-deletion").
-- [ ] Task 3.3's HEq decision stays the analytical derivation as written
-  (case (b) opens a TCB HARD-STOP gate).
-- [ ] **Gate** (unchanged from lean-shape): A/B/C special-case code deleted or
-  B explicitly scoped; `with_*`/`dependent_match_surface`/`match` suites green;
-  `mix cure.oracle with` all `same`; full suite once.
+- [x] Task 3.3's HEq decision stays the analytical derivation as written —
+  resolved **case (a)** (HEq NOT needed), so no TCB HARD-STOP gate opened.
+- [x] **Gate** (unchanged from lean-shape): B explicitly scoped (non-indexed
+  permanent); `with_*`/`dependent_match_surface`/`match` suites green;
+  `mix cure.oracle with` all `same`; full suite once (2384).
 
 ### Task B2: Demand-driven lemma stock + multi-occurrence decision (= Phase 4, post-4a shape)
 
