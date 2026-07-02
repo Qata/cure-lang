@@ -1,1 +1,1 @@
-{"frp01_par_assoc":{"cure":"reject","idris":"accept","reason":"reach: stuck ++-index rewrite (the Phase-4 acceptance target); flips to same when the lemma stock + rewrite composition land","relation":"cure_stricter"},"frp02_seq_meet":{"cure":"accept","idris":"accept","reason":"","relation":"same"}}
+{"frp01_par_assoc":{"cure":"accept","idris":"accept","reason":"","relation":"same"},"frp02_seq_meet":{"cure":"accept","idris":"accept","reason":"","relation":"same"}}
