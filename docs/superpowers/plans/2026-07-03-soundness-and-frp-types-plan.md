@@ -429,9 +429,13 @@ dropped), `unit`/`prim` bare atoms. Integration seam fixed (E-only): checking-mo
 `:unsupported_expression`. Full suite 2390, zero regressions. **The founding spec
 §8 promise — "descriptors zero-footprint, SF survives as tagged tuples, step
 matches at runtime, drop licensed by {0,ω}" — is now demonstrated AND executed.**
-Scope-pinned: (a) `step` returns the scrutinee unchanged; a *reconstructed*
-refined-index continuation (`match s → seq(l,r):SF(as,bs,d)`) hits a dependent-match
-completeness gap; (b) the net uses concrete `unit` because free erased descriptors
+Scope-pinned: (a) `step`'s continuation is a GENUINE reconstructed refined-index
+continuation — FIXED (`recon` rebuilds each constructor via `match s | seq(l,r) ->
+seq(l,r) : SF(as,bs,d)`, the dependent-match rebuild pinned at parity by oracle
+`frp/frp07`; the capstone asserts `recon` rebuilds `seq` on the BEAM). Residual:
+inlining `recon` into the `Σ`-pair *inside* a match branch hits a further Σ-intro ×
+motive-refinement composition gap, so reconstruction is factored into `recon` and
+applied in a direct Σ-intro; (b) the net uses concrete `unit` because free erased descriptors
 leave index metavars unsolved (real programs carry concrete descriptors); (c) the
 multi-line `let net = … ⏎ body` form — FIXED (dependent-elaborator let-block
 support, closed the `match/mt05_let_tail_reach` parity reach); `start/0` now uses

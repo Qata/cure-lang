@@ -21,13 +21,20 @@ defmodule Cure.E2E.FrpBeamTest do
   (observation via `apply/3` stands in for printing; the BEAM runs the emitted
   bytecode, including the `Σ` projection `.1`).
 
-  (Scope notes, recorded honestly: (1) `step` returns the scrutinee unchanged as
-  its continuation — a genuine *reconstructed* refined-index continuation
-  (`match s → seq(l,r) : SF(as,bs,d)`) hits a separate dependent-match
-  completeness gap, scope-pinned in the plan. (2) The net uses the concrete
-  `unit` primitive because constructing `prim()`/`seq(…)` with free erased index
-  descriptors leaves those metavariables unsolved — real programs always carry
-  concrete descriptors, so this is not a limitation of the runtime slice.)
+  `step`'s continuation is a GENUINE reconstructed refined-index continuation:
+  `recon` pattern-matches `s` and rebuilds each constructor at the branch-refined
+  index (`match s | seq(l,r) -> seq(l,r) : SF(as,bs,d)`), exercising the
+  dependent-match rebuild that oracle `frp/frp07` pins at parity — no longer the
+  identity workaround. The test asserts `recon` actually rebuilds `seq` on the
+  BEAM.
+
+  (Scope note, recorded honestly: the net uses the concrete `unit` primitive
+  because constructing `prim()`/`seq(…)` with free erased index descriptors leaves
+  those metavariables unsolved — real programs always carry concrete descriptors,
+  so this is not a limitation of the runtime slice. Inlining `recon` directly into
+  the `Σ`-pair inside a match branch — `match s → %[observe(s), seq(l,r)]` — hits a
+  further Σ-intro × motive-refinement composition gap, so the reconstruction is
+  factored into `recon` and applied in a direct Σ-intro.)
   """
   use ExUnit.Case, async: false
 
@@ -48,7 +55,11 @@ defmodule Cure.E2E.FrpBeamTest do
     unit() -> Causal()
     prim() -> Causal()
     seq(l, r) -> Dcoupled()
-  fn step({as: SVDesc}, {bs: SVDesc}, {d: Dec}, s: SF(as, bs, d)) -> Sigma(o: Dec, SF(as, bs, d)) = %[observe(s), s]
+  fn recon({as: SVDesc}, {bs: SVDesc}, {d: Dec}, s: SF(as, bs, d)) -> SF(as, bs, d) = match s
+    unit() -> unit()
+    prim() -> prim()
+    seq(l, r) -> seq(l, r)
+  fn step({as: SVDesc}, {bs: SVDesc}, {d: Dec}, s: SF(as, bs, d)) -> Sigma(o: Dec, SF(as, bs, d)) = %[observe(s), recon(s)]
   fn start() -> Dec =
     let net = seq(unit(), unit())
     step(net).1
@@ -66,7 +77,10 @@ defmodule Cure.E2E.FrpBeamTest do
     {:ok, env} = Program.elaborate(@src)
 
     {:ok, mod} =
-      Emit.compile_and_load(env, module: :"Cure.FrpBeamE2E", functions: [:start, :step, :observe])
+      Emit.compile_and_load(env,
+        module: :"Cure.FrpBeamE2E",
+        functions: [:start, :step, :observe, :recon]
+      )
 
     # start/0 builds `seq(unit(), unit())` and steps it once. `seq` matches the
     # seq branch of observe → Dcoupled; step packages it → Σ pair; `.1` projects
@@ -76,6 +90,12 @@ defmodule Cure.E2E.FrpBeamTest do
     # observe run directly on both a primitive and a composed net.
     assert apply(mod, :observe, [:unit]) == :Causal
     assert apply(mod, :observe, [{:seq, :unit, :unit}]) == :Dcoupled
+
+    # recon GENUINELY reconstructs the continuation constructor at its refined
+    # index (the dependent-match rebuild, oracle frp07) — the seq branch rebuilds
+    # `{seq, unit, unit}`, not an identity passthrough dodging the type.
+    assert apply(mod, :recon, [{:seq, :unit, :unit}]) == {:seq, :unit, :unit}
+    assert apply(mod, :recon, [:unit]) == :unit
   end
 
   test "descriptor zero-footprint: emitted SF constructors carry no index args" do
