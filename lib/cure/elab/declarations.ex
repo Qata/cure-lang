@@ -231,7 +231,15 @@ defmodule Cure.Elab.Declarations do
     |> Enum.reduce_while({:ok, [], [], []}, fn {:param, pmeta, pname}, {:ok, tele, quants, scope} ->
       case Keyword.get(pmeta, :type) do
         nil ->
-          {:halt, {:error, {:untyped_parameter, pname}}}
+          if Keyword.get(pmeta, :implicit) do
+            # A bare implicit parameter `{a}` (no kind) is a type variable ranging
+            # over `Type`; it is erased, exactly like `{a: Type}`.
+            {:cont,
+             {:ok, tele ++ [{String.to_atom(pname), {:type, 0}}], quants ++ [:erased],
+              [pname | scope]}}
+          else
+            {:halt, {:error, {:untyped_parameter, pname}}}
+          end
 
         type_expr ->
           case idx_to_core(type_expr, scope, nil, env) do
