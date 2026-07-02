@@ -111,6 +111,28 @@ defmodule Cure.Elab.RecordTest do
     assert apply(mod, :g, []) == {:S, {:S, :Z}}
   end
 
+  test "record update overrides one field and preserves the rest" do
+    src =
+      @pt <>
+        "  fn getx(p: Point) -> Nat = p.x\n  fn gety(p: Point) -> Nat = p.y\n" <>
+        "  fn bump(p: Point) -> Point = Point{p | x: S(Z())}\n" <>
+        "  fn newx() -> Nat = getx(bump(Point{x: Z(), y: S(S(Z()))}))\n" <>
+        "  fn kepty() -> Nat = gety(bump(Point{x: Z(), y: S(S(Z()))}))\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+
+    {:ok, mod} =
+      Emit.compile_and_load(env, module: :"Cure.RecUpdate", functions: [:getx, :gety, :bump, :newx, :kepty])
+
+    assert apply(mod, :newx, []) == {:S, :Z}
+    assert apply(mod, :kepty, []) == {:S, {:S, :Z}}
+  end
+
+  test "updating a non-field is rejected" do
+    assert {:error, {:record_field_mismatch, :Point}} =
+             Program.elaborate(@pt <> "  fn f(p: Point) -> Point = Point{p | z: Z()}\nend\n")
+  end
+
   test "a missing record field is rejected" do
     assert {:error, {:record_field_mismatch, :Point}} =
              Program.elaborate(@pt <> "  fn g() -> Point = Point{x: S(Z())}\nend\n")

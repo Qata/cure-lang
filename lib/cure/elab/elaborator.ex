@@ -88,6 +88,12 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
+    with {:ok, positional} <- desugar_record_update(meta, children, env) do
+      elaborate_expr_typed(positional, names, ctx, env)
+    end
+  end
+
   # Desugar record construction `Point{x: .., y: ..}` (a `record: true` call whose
   # arguments are `field: value` pairs) into the positional constructor application
   # `Point(.., ..)`, ordering the values by the record constructor's field telescope
@@ -108,6 +114,38 @@ defmodule Cure.Elab.Elaborator do
         if map_size(provided) == length(order) and
              Enum.all?(order, &Map.has_key?(provided, &1)) do
           {:ok, {:function_call, [name: name], Enum.map(order, &Map.fetch!(provided, &1))}}
+        else
+          {:error, {:record_field_mismatch, atom}}
+        end
+    end
+  end
+
+  # Desugar record update `Point{base | x: .., …}` into the positional constructor
+  # `Point(.., ..)`: each overridden field takes its new value, every other field is
+  # projected from the base (`base.field`), reusing construction and projection. An
+  # override that names a non-field is rejected.
+  defp desugar_record_update(meta, [base | field_pairs], env) do
+    name = Keyword.fetch!(meta, :name)
+    atom = String.to_atom(name)
+
+    case Inductive.get_ctor(env, atom) do
+      nil ->
+        {:error, {:unknown_record, atom}}
+
+      ctor ->
+        order = Enum.map(ctor.args, fn {n, _t} -> n end)
+        overrides = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
+
+        if Enum.all?(Map.keys(overrides), &(&1 in order)) do
+          values =
+            Enum.map(order, fn f ->
+              case Map.fetch(overrides, f) do
+                {:ok, val} -> val
+                :error -> {:attribute_access, [attribute: Atom.to_string(f)], [base]}
+              end
+            end)
+
+          {:ok, {:function_call, [name: name], values}}
         else
           {:error, {:record_field_mismatch, atom}}
         end
@@ -296,6 +334,12 @@ defmodule Cure.Elab.Elaborator do
   """
   @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
+  def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
+    with {:ok, positional} <- desugar_record_update(meta, children, env) do
+      elaborate_expr_checked(positional, expected_core, names, ctx, env)
+    end
+  end
+
   def elaborate_expr_checked({:function_call, meta, args} = expr, expected_core, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
@@ -2741,6 +2785,12 @@ defmodule Cure.Elab.Elaborator do
       end
     else
       elaborate_named_call_scoped(meta, args, scope, env)
+    end
+  end
+
+  def elaborate_expr({:record_update, meta, children}, scope, env) do
+    with {:ok, positional} <- desugar_record_update(meta, children, env) do
+      elaborate_expr(positional, scope, env)
     end
   end
 
