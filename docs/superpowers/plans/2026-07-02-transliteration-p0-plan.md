@@ -14,14 +14,15 @@
 - **Explicit staging only.** A concurrent session works in this same worktree. NEVER `git add -A` / `git add .`. Stage each file by exact path (`git add -- <path>`), and commit with an explicit pathspec (`git commit -- <path>…`) so another agent's pre-staged files are never swept into our commit.
 - **One build/test run at a time.** Never launch concurrent `mix` suites — a past concurrent full-suite run caused a kernel panic. Serialize every `mix test` / `mix compile`.
 - **writing-plans format.** Checkbox steps, complete code in every code step, no placeholders, exact commands with expected output.
-- **Repo split.** Task 1's commit lands in the **esp32-beam** repo (`~/Develop/esp32-beam`), because `reference/` lives there and only `MANIFEST.md` is tracked (sources are gitignored). **Every other task commits in the cure-lang worktree** (`~/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification`, branch `autopilot/case-index-unification`).
+- **Repo split.** Task 1's commit lands in the **esp32-beam** repo (`~/Develop/esp32-beam`), because `reference/` lives there and only `MANIFEST.md` is tracked (sources are gitignored). **Every other task commits in the cure-lang worktree** (`~/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0`, branch `autopilot/transliteration-p0`).
 - **Compile Cure with OTP 26–28.** Entry point convention is `start/0`, not `main/0` (not exercised here, but the house rule).
 - **Audit-first (charter D5).** Verify each ledger claim against the tree before writing code; update the ledger after.
 - **Red-green TDD (`~/agent_docs/testing.md`).** Every behavioral delta gets a failing test first, then the fix.
+- **Tests are immutable once green.** Once a test written under this plan (Tasks 3/4/5's unit, replay, and audit tests) correctly encodes the intended behavior and passes, make it green only by changing implementation code — never by deleting, skipping, or weakening the test's assertions to fit whatever the code currently does. The sole exception: the test itself is proven wrong (it encodes an incorrect expectation) — in that case state explicitly why before touching it.
 - **Oracle triage rule.** Never hand-edit a generated verdict. A new divergence defaults to relation `same` so replay fails loudly and forces triage. `Cure-rejects-where-Idris-accepts` routes into Task 5's audit; it is not silenced with a `cure_stricter` label unless the audit confirms the divergence is a deliberate, documented Cure restriction.
 
 **Absolute paths used throughout:**
-- Worktree (cure-lang): `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification` — henceforth `$WT`.
+- Worktree (cure-lang): `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0` — henceforth `$WT`.
 - esp32-beam repo root: `/Users/ch/Develop/esp32-beam` — henceforth `$BEAM`.
 - Reference tree: `$BEAM/reference`. Idris2 clone: `/Users/ch/Develop/Idris2`. Agda clone: `/Users/ch/Develop/agda`.
 
@@ -257,7 +258,7 @@ end
 
 - [ ] **Step 2: Run it and confirm it fails (module undefined)**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/cure/oracle_test.exs`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/cure/oracle_test.exs`
 Expected: FAIL — `Cure.Oracle.__info__/1 is undefined (module Cure.Oracle is not available)`.
 
 - [ ] **Step 3: Implement `Cure.Oracle`**
@@ -370,7 +371,7 @@ end
 
 - [ ] **Step 4: Run the unit test — expect green**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/cure/oracle_test.exs`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/cure/oracle_test.exs`
 Expected: PASS (all `Cure.OracleTest` tests). If `JSON` is undefined, the Elixir version is < 1.20 — STOP and report (the plan assumes the bundled `JSON`; do not add a dep without escalation).
 
 - [ ] **Step 5: Implement the `mix cure.oracle` live-regen driver**
@@ -439,14 +440,14 @@ end
 
 - [ ] **Step 6: Verify the task compiles and is discoverable**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix compile 2>&1 | tail -5 && mix help cure.oracle`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix compile 2>&1 | tail -5 && mix help cure.oracle`
 Expected: clean compile; `mix help cure.oracle` prints the moduledoc. (Do not run `mix cure.oracle` yet — no corpus exists; that is Task 4.)
 
 - [ ] **Step 7: Commit (explicit pathspec, ghost author)**
 
 Run:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 git add -- lib/cure/oracle.ex lib/mix/tasks/cure.oracle.ex test/cure/oracle_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "test(oracle): differential-oracle harness (discovery, verdicts, relation contract, live regen)" \
@@ -515,7 +516,7 @@ end
 
 - [ ] **Step 2: Run it and confirm it fails (no corpus)**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/oracle_replay_test.exs`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/oracle_replay_test.exs`
 Expected: FAIL on `there is at least one oracle cluster to replay` (no `test/oracle/` yet).
 
 - [ ] **Step 3: rw01 — plus_zero_right (expected accept/accept)**
@@ -657,9 +658,11 @@ nonEqProof : (n : N) -> (m : N) -> m = m
 nonEqProof n m = rewrite n in Refl
 ```
 
-- [ ] **Step 8: rw06 — wrong result body (expected reject) and rw07 — conversion-occurrence probe**
+- [ ] **Step 8: rw06 — restated zero-right via an extra rewrite layer (expected accept/accept) and rw07 — conversion-occurrence probe**
 
-Create `$WT/test/oracle/rewrite/rw06_wrong_result.cure`:
+`rw06` deliberately does *not* pair a wrong Cure proof against a correct Idris one: a `.cure`/`.idr` pair with different proof bodies for the same signature would not be a faithful transliteration, and its divergence would tell Task 5's audit nothing about `rewrite_plan/5` vs `elabRewrite` (it would just be a probe-authoring bug being triaged as if it were a language gap). Instead `rw06` restates `plus_zero_right` through an extra `rewrite`, so the rewritten goal is `n = n` on both sides — a same/same accept regression pair, matching Idris' `restatedZeroRight n = rewrite plusZeroRight n in Refl` (`Refl`'s implicit argument unifies with the rewritten goal, `n`, exactly as Cure's `refl(n)` does).
+
+Create `$WT/test/oracle/rewrite/rw06_restated_zero_right.cure`:
 ```
 mod Rw06
   type Nat = Z | S(Nat)
@@ -669,10 +672,10 @@ mod Rw06
   fn plus_zero_right(n: Nat) -> Eq(Nat, plus(n, Z), n) = match n
     Z() -> refl(Z)
     S(k) -> rewrite plus_zero_right(k) in refl(S(k))
-  fn wrong_result(n: Nat) -> Eq(Nat, plus(n, Z), n) = rewrite plus_zero_right(n) in refl(Z)
+  fn restated_zero_right(n: Nat) -> Eq(Nat, plus(n, Z), n) = rewrite plus_zero_right(n) in refl(n)
 end
 ```
-Create `$WT/test/oracle/rewrite/rw06_wrong_result.idr`:
+Create `$WT/test/oracle/rewrite/rw06_restated_zero_right.idr`:
 ```idris
 %default total
 
@@ -686,10 +689,9 @@ plusZeroRight : (n : N) -> plus n Z = n
 plusZeroRight Z = Refl
 plusZeroRight (S k) = rewrite plusZeroRight k in Refl
 
-wrongResult : (n : N) -> plus n Z = n
-wrongResult n = rewrite plusZeroRight n in Refl
+restatedZeroRight : (n : N) -> plus n Z = n
+restatedZeroRight n = rewrite plusZeroRight n in Refl
 ```
-(The `.idr` `wrongResult` is the *correct* proof; the `.cure` `wrong_result` deliberately uses `refl(Z)` as the body, which does not have the rewritten goal type. This pair's interest is the Cure-reject vs Idris-accept relation — a prime Task 5 triage input.)
 
 Create `$WT/test/oracle/rewrite/rw07_conv_occurrence.cure`:
 ```
@@ -724,7 +726,7 @@ convOccurrence n = rewrite plusZeroRight n in Refl
 
 - [ ] **Step 9: Run live regen (needs idris2 from Task 2), then triage**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix cure.oracle rewrite`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix cure.oracle rewrite`
 Expected: one `cure=… idris=…` line per probe and a `wrote test/oracle/rewrite/verdicts.json`. Any line ending `<-- TRIAGE` is a divergence the harness will not silently bless.
 
 Triage each `<-- TRIAGE` line, per the global triage rule:
@@ -734,14 +736,14 @@ Triage each `<-- TRIAGE` line, per the global triage rule:
 
 - [ ] **Step 10: Run the replay test — green for all non-Task-5 pairs**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/oracle_replay_test.exs`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/oracle_replay_test.exs`
 Expected: PASS for every pair whose relation is settled. If a pair is deferred to Task 5, its `relation: "same"` + divergent verdicts keep that one assertion red **by design** — record which pair(s) are red-pending-Task-5 in the task note, finish Task 5, then return here for green. Do NOT commit a red replay suite as "done": Step 11 commits only once replay is green (either all agree, or divergences are documented `cure_stricter` after Task 5).
 
 - [ ] **Step 11: Commit the corpus + fixtures + replay test**
 
 Run:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 git add -- test/oracle/rewrite test/oracle_replay_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "test(oracle): seven-probe rewrite corpus + committed verdicts + offline replay" \
@@ -760,23 +762,23 @@ Diff Cure's `Cure.Elab.Elaborator.rewrite_plan/5` (`lib/cure/elab/elaborator.ex:
 - Test: `$WT/test/cure/elab/rewrite_plan_audit_test.exs` (create for each confirmed delta)
 
 **Interfaces:**
-- Consumes: Task 4's triaged corpus (rw04/rw07/rw06 outcomes drive which candidates are real).
+- Consumes: Task 4's triaged corpus (rw04/rw07 outcomes drive which candidates are real; rw06 is a same/same regression pair, not a triage input — see Task 4 Step 8).
 
 **Candidate deltas (from the source diff):**
 1. **Error vocabulary** — Idris distinguishes `NotRewriteRule` (proof is not an equality; `getRewriteTerms` throws it) from `RewriteNoChange` (the rewritten type converts with the original; `elabRewrite` line 98–99). Cure already has two codes: `:rewrite_proof_not_equality` (from `eq_parts/1`, `elaborator.ex:169`) ≈ `NotRewriteRule`, and `:rewrite_no_match` (from `rewrite_plan/5`'s `true ->` branch, `elaborator.ex:187`) ≈ `RewriteNoChange`. **Likely already at parity** — confirm via rw05 (→ `:rewrite_proof_not_equality`) and rw03 (→ `:rewrite_no_match`); if both fire the right code, record "no delta".
-2. **Occurrence up to conversion vs. syntactic-on-normal-forms** — Idris calls `replace` on the NF (matches up to conversion). Cure normalizes the goal AND both endpoints first (`elaborator.ex:147–149`) then matches with structural `contains_term?`/`replace_term` (`==` on normal forms). rw07 probes whether normal-form syntactic matching diverges from Idris' conversion matching. If rw07 diverges (Cure rejects, Idris accepts), the delta is real; if both accept, record "no delta (pre-normalization subsumes the conversion match for this corpus)".
-3. **Motive abstraction under binders** — Idris uses `refsToLocals`/proper weakening. Cure's `abstract_term/3` (`elaborator.ex:214–233`) increments `depth` for `:pi`/`:lam`/`:sigma` but its generic tuple clause (`elaborator.ex:227`) recurses into children **without** incrementing depth. If a Core binder form other than pi/lam/sigma can appear in a rewrite goal (e.g. a `:case` motive `:lam` is covered, but any future binder tuple is not), a captured de Bruijn index results. rw04's nested-goal bodies are the stress input. If no capture is observed and no other binder form reaches `abstract_term`, record "no delta"; if a delta is real, the fix adds the missing binder clause with `depth + 1`.
+2. **Occurrence up to conversion vs. syntactic-on-normal-forms** — Idris calls `replace` on the NF (matches up to conversion — confirmed in the vendored clone: `Core/Normalise.idr`'s `replace'` tests `convert defs env lhs tm` at every subterm of the congruence traversal, not raw equality). Cure normalizes the goal AND both endpoints first (`elaborator.ex:145–147`) then matches with structural `contains_term?`/`replace_term` (`==` on normal forms). rw07 probes whether normal-form syntactic matching diverges from Idris' conversion matching. If rw07 diverges (Cure rejects, Idris accepts), the delta is real; if both accept, record "no delta (pre-normalization subsumes the conversion match for this corpus)".
+3. **Motive abstraction under binders** — Idris uses `refsToLocals`/proper weakening. Cure's `abstract_term/3` (`elaborator.ex:214–233`) increments `depth` for `:pi`/`:lam`/`:sigma` but its generic tuple clause (`elaborator.ex:227`) recurses into children **without** incrementing depth. This is not merely a hypothetical future gap: `Cure.Core.Term` (`term.ex:80–84`) documents a second, existing binder form — a `:case` branch `{ctor, arity, body}` binds `arity` variables directly in `body` — and `Kernel.normalize`'s "preserve stuck case" δ-gate (`kernel.ex:27–30`) means a certified-total recursive call applied to a bound (neutral) argument normalizes to exactly such a live `:case` term, not an opaque application spine. So the open question is empirical, not "could a future form exist": does any goal in this corpus actually reify a stuck `:case` after normalization, and if so does `abstract_term`'s generic clause corrupt the branch bodies' indices? rw04's nested-goal bodies (recursive calls applied to the induction variable) are the stress input most likely to surface this. If no capture is observed, record "no delta"; if a delta is real, the fix adds an explicit `:case` clause to `abstract_term` that increments `depth` by each branch's `arity` before recursing into that branch's body.
 
 - [ ] **Step 1: Confirm which candidates are real from Task 4's triage**
 
 Run:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 cat test/oracle/rewrite/verdicts.json
 ```
 For each `<-- TRIAGE` pair recorded in Task 4, map it to a candidate above. Also directly probe the error codes for the reject cases (candidate 1) with a throwaway `iex` check:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 mix run -e 'IO.inspect(Cure.Elab.Program.elaborate(File.read!("test/oracle/rewrite/rw05_non_eq_proof.cure")))'
 mix run -e 'IO.inspect(Cure.Elab.Program.elaborate(File.read!("test/oracle/rewrite/rw03_no_occurrence.cure")))'
 ```
@@ -809,33 +811,42 @@ defmodule Cure.Elab.RewritePlanAuditTest do
     refute error_tag(e1) == error_tag(e2), "NotRewriteRule and RewriteNoChange must be distinct codes"
   end
 
-  defp error_tag(err), do: err |> :erlang.term_to_binary() |> then(fn _ -> err end)
+  # Extracts the leading classification atom from a tagged error term, e.g.
+  # `:rewrite_proof_not_equality` stays as-is, `{:rewrite_no_match, a, b, exp}`
+  # -> `:rewrite_no_match`. This is the actual comparison the test needs: the
+  # raw error terms carry different payload shapes/arities regardless of
+  # whether their *codes* differ, so comparing raw terms would not prove the
+  # families are distinct. If Step 1 shows the error arrives wrapped in an
+  # outer context tuple (e.g. a function/location wrapper), adjust this to
+  # unwrap to the inner rewrite-specific reason first, then take its tag.
+  defp error_tag(err) when is_atom(err), do: err
+  defp error_tag(err) when is_tuple(err), do: elem(err, 0)
 end
 ```
 If Step 1 shows **no** real delta for every candidate, create no test; instead write a short `docs/superpowers/ports/p0-rewrite-audit.md` note stating each candidate was checked and found at parity, citing the source lines. (This satisfies the audit-first gate's "ledger claims verified" without a spurious test.)
 
 - [ ] **Step 3: Run the failing test(s)**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/cure/elab/rewrite_plan_audit_test.exs`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/cure/elab/rewrite_plan_audit_test.exs`
 Expected: FAIL for each confirmed delta (documents the gap before the fix).
 
 - [ ] **Step 4: Fix `rewrite_plan/5` minimally to close each confirmed delta**
 
 Edit only the confirmed region of `lib/cure/elab/elaborator.ex`. Keep the change minimal and elaborator-local (no kernel edit — charter D2). Re-run until green:
-`cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/cure/elab/rewrite_plan_audit_test.exs`
+`cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/cure/elab/rewrite_plan_audit_test.exs`
 Expected: PASS.
 
 - [ ] **Step 5: Re-run the oracle for any pair deferred from Task 4**
 
 If a pair was left red-pending in Task 4 Step 10 because the audit resolves it, either (a) the fix makes Cure agree with Idris — re-run `mix cure.oracle rewrite`, verdicts now agree, `relation: "same"` is consistent; or (b) the divergence is a confirmed deliberate restriction — set that pair's `relation`/`reason` in `verdicts.json` to `cure_stricter` + a one-line reason and re-run `mix cure.oracle rewrite` to confirm preservation. Then:
-`cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/oracle_replay_test.exs`
+`cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/oracle_replay_test.exs`
 Expected: PASS (replay fully green).
 
 - [ ] **Step 6: Commit (explicit pathspec, ghost author)**
 
 Stage only the files this task actually changed (the audit test and/or the doc note, `elaborator.ex` if edited, and `verdicts.json` if a relation/reason was settled):
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 # adjust the pathspec to exactly what changed:
 git add -- test/cure/elab/rewrite_plan_audit_test.exs lib/cure/elab/elaborator.ex test/oracle/rewrite/verdicts.json
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
@@ -854,14 +865,14 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 ### Task 6: Ledger §2 corrections (cure-lang worktree)
 
-Correct the parity roadmap's **§2 ledger only** to match the tree (charter D5, findings 2/3/6). §3 is reserved for the banking plan so the two parallel worktrees never edit the same section — do NOT touch §3.
+Correct the parity roadmap's **§2 ledger only** to match the tree (charter D5, findings 2/3/4/6). §3 is reserved for the banking plan so the two parallel worktrees never edit the same section — do NOT touch §3.
 
 **Files:**
 - Modify: `$WT/docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§2 table + the two prose paragraphs after it; §1, §3, §4, §5 untouched)
 
 **Edits (finding-by-finding):**
 - Row **#7** (Propositional equality / rewrite motive inference): status is stale `⬜`. Per finding 2, `rewrite_plan/5` substantially implements `elabRewrite`; P0's audit (Task 5) closes any residual delta. Change the work-item wording to reflect *reach* (what remains), and set status to `✅` if Task 5 confirmed parity, else `🔵` with a note. Default: `✅` (audit-complete).
-- Row **#13** (Mutual recursion): status is stale `🔴`. Per finding 3, the hole is closed on this branch (`d13d718`); `diverging_mutual_pair` replays `:ok`. Reword from "confirmed hole; checker must be fixed" to reach wording ("well-founded mutual / lexicographic descent currently rejected, not unsoundly accepted — P1 reach"), and change `🔴` → the not-a-hole state. Since the *reach* remains open, use `⬜` with the reach wording (NOT `✅` — multi-arg/lexicographic descent is still rejected).
+- Row **#13** (Mutual recursion): status is stale `🔴`. Per finding 3, the hole is closed on this branch (`d13d718`); `diverging_mutual_pair` replays `:ok`. Reword from "confirmed hole; checker must be fixed" to reach wording ("well-founded mutual / lexicographic descent currently rejected, not unsoundly accepted — P1 reach"), and change `🔴` → the not-a-hole state. Since the *reach* remains open, use `⬜` with the reach wording (NOT `✅` — multi-arg/lexicographic descent is still rejected). Per finding 4, the row's `Layer` column is also stale: it reads `E`, but the descent check the row actually describes is `Cure.Core.Certificate.terminating?/3` (K) — `Cure.Elab.TotalityClosure` (E) only decides which globals need certification. Change `Layer` from `E` to `K, E` (this is a ledger-accuracy fix, independent of P1; it does not imply any code change here).
 - Rows **#2, #8, #16** (④ pieces): currently `🔵 ④` (in flight). Per finding 6, ④'s pieces are committed (`3b24829`, `d770aa1`, `f068943`). Change each `🔵 ④` → `✅`.
 - **Headline recount** (the "The honest headline" paragraph and the "Already at parity" list): recompute. Before: "6 at parity, 4 ride in on ④ (in flight), 15 remain." After flipping #2/#8/#16 → ✅ (that is 3 of the 4 ④ rows; #7 also → ✅), recount so the totals are internally consistent with the new markers. Compute the new counts from the actual table after edits — do not guess.
 
@@ -869,15 +880,17 @@ Correct the parity roadmap's **§2 ledger only** to match the tree (charter D5, 
 
 Run:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 git log --oneline | grep -E "d13d718|3b24829|d770aa1|f068943|decc93f" || true
 mix test test/antigen/assays/totality_test.exs 2>&1 | tail -3
+grep -n "def terminating?" lib/cure/core/certificate.ex
+grep -n "TotalityClosure" lib/cure/elab/totality_closure.ex | head -3
 ```
-Expected: the commits are present in history; the totality assay (with `diverging_mutual_pair`) is green. This confirms findings 2/3/6 before touching the ledger.
+Expected: the commits are present in history; the totality assay (with `diverging_mutual_pair`) is green; `terminating?` is defined in `lib/cure/core/certificate.ex` (K); `TotalityClosure` is defined in `lib/cure/elab/totality_closure.ex` (E). This confirms findings 2/3/4/6 before touching the ledger.
 
 - [ ] **Step 2: Edit the §2 table rows**
 
-In `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, change these four table rows. Row #2:
+In `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, change these five table rows. Row #2:
 ```
 | 2 | Dependent case surface | Impossible clauses (omit + verified `-> impossible`) + constructor-headed motive completeness (verbatim-reuse case) | E, P, C | additive | ✅ |
 ```
@@ -891,7 +904,7 @@ Row #8:
 ```
 Row #13:
 ```
-| 13 | Totality — termination | **Mutual recursion**: soundness hole closed (`d13d718`; `diverging_mutual_pair` replays `:ok`). Remaining is *reach* — well-founded mutual / lexicographic descent is conservatively rejected, not unsoundly accepted (P1/#14) | E | reach | ⬜ |
+| 13 | Totality — termination | **Mutual recursion**: soundness hole closed (`d13d718`; `diverging_mutual_pair` replays `:ok`). Remaining is *reach* — well-founded mutual / lexicographic descent is conservatively rejected, not unsoundly accepted (P1/#14) | K, E | reach | ⬜ |
 ```
 Row #16:
 ```
@@ -906,7 +919,7 @@ The legend line (§1 end) may keep `🔴 live soundness hole` as a legend entry,
 
 Run:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 grep -nE "^\| (2|7|8|13|16) \|" docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
 grep -c "🔴" docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
 ```
@@ -916,7 +929,7 @@ Expected: rows 2/7/8/16 show `✅`, row 13 shows `⬜` with reach wording; the `
 
 Run:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 git add -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs(roadmap): §2 ledger to tree — #2/#8/#16 ✅, #7 ✅ (audited), #13 hole closed→reach" \
@@ -932,12 +945,12 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 - [ ] **Step 1: Run the full suite ONCE (serialized — no other build running)**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test`
 Expected: green (the pre-P0 baseline was 2185 passing = 2182 tests + 3 doctests; P0 adds the oracle unit tests, the replay tests, and any audit test — the new total must be ≥ baseline with zero failures). If any pre-existing `--warnings-as-errors` warnings surface, note them in the report as pre-existing branch-hygiene debt (out of P0 scope), do not fix them here.
 
 - [ ] **Step 2: Confirm oracle replay is green standalone**
 
-Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification && mix test test/oracle_replay_test.exs`
+Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0 && mix test test/oracle_replay_test.exs`
 Expected: PASS.
 
 - [ ] **Step 3: Write the closing report**
@@ -948,7 +961,7 @@ Create `$WT/docs/superpowers/reports/2026-07-02-transliteration-p0-report.md` su
 
 Run:
 ```bash
-cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/case-index-unification
+cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
 git add -- docs/superpowers/reports/2026-07-02-transliteration-p0-report.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs(report): transliteration P0 closing report" \
