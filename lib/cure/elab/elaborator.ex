@@ -1415,7 +1415,7 @@ defmodule Cure.Elab.Elaborator do
     computed =
       idx_terms
       |> Enum.with_index()
-      |> Enum.reject(fn {t, _pos} -> match?({:var, _}, t) end)
+      |> Enum.reject(fn {t, _pos} -> invertible_index?(t) end)
 
     with [{idx_term, pos}] <- computed,
          {_name, idx_type_term} <- Enum.at(index_tele, pos),
@@ -1426,6 +1426,21 @@ defmodule Cure.Elab.Elaborator do
       _ -> nil
     end
   end
+
+  # A computed index that is a constructor spine over variables (`S(m)`,
+  # `Cons(h, t)`) is INVERTIBLE by ordinary index refinement — matching unifies the
+  # scrutinee's constructor index with each branch constructor's index directly
+  # (Idris's `yr : Vect m a` in the `(::)` branch). It needs no carried equation:
+  # the plain 3a motive handles it, and forcing the carried-eq transport onto a
+  # sibling with a fresh-variable constructor index (e.g. `S(n')` for a bound tail
+  # length) spuriously fails `:branch_type` even when the branch body never uses
+  # that sibling. Only a NON-invertible computed index — a defined-function
+  # application like `app(p, q)`, whose head is not a constructor and cannot be
+  # inverted — genuinely needs the carried equation (see `carried_index_sibling_test`).
+  # A bare variable is trivially invertible (and was already excluded before).
+  defp invertible_index?({:ctor, _name, args}), do: Enum.all?(args, &invertible_index?/1)
+  defp invertible_index?({:var, _}), do: true
+  defp invertible_index?(_), do: false
 
   # Siblings whose (reified) type mentions the computed index term `idx_term`,
   # EXCLUDING the scrutinee itself (its own type mentions the index but it is the
