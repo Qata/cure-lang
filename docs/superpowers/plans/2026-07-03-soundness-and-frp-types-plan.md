@@ -236,16 +236,36 @@ scrutinee-refinement fix is in flight (highest-value attack:
 `replace_term`'s syntactic replacement has no shift adjustment under binders;
 plus capture/shadow/duplicate-name guards and erased-quantity interaction).
 
-- [ ] **Step 1:** when it returns: any **CONFIRMED unsound accept** → immediate
-  red-green fix as its own task (E-layer expected; the kernel backstop makes
-  unsound-accept unlikely but the verifier was told to hunt exactly that),
-  re-verified by a fresh subagent before sealing.
-- [ ] **Step 2:** any **completeness bail** it identifies (guard-triggered
-  no-substitution corners, replace_term-under-binder misses) → reach-pin each
-  as an Antigen must-eventually-accept (the `reach_reify_split.sexp` pattern),
-  NOT silently absorbed.
-- [ ] **Step 3:** record the verdict in the lean-shape plan's Phase 2½ section
-  (seal on SOUND) and in this plan's task note; commit docs.
+- [x] **Step 1 — DONE. Verdict: SOUND (SOUND-WITH-NOTES).** No CONFIRMED unsound
+  accept; none was constructible or is statically reachable. The `replace_term`/
+  `replace_branch_vars` binder-shift gap is confirmed **latent, not live**:
+  kernel recomputes each branch goal from motive-at-ctor (`check_case_branches`,
+  kernel.ex:702-746) and re-checks the whole term (declarations.ex:43), and every
+  Pi-in-goal shape is rejected at `check_motive_wf` (`:bad_motive`) on the parent
+  commit too — so the non-binder-aware helpers are unreachable via plain match.
+  **No red-green fix needed.** (Standing note carried to B1: when the Pi-in-goal
+  motive gap is fixed in Phase 3, `replace_term`/`replace_branch_vars` must gain
+  de Bruijn shift in the SAME change — the backstop keeps it sound but it will
+  emit confusing spurious rejects otherwise. Recorded as a B1 precondition.)
+- [x] **Step 2 — DONE. Five completeness corners reach-pinned** (all pre-existing,
+  no regressions; each an Antigen must-eventually-accept, Idris accepts each):
+  1. **Nested match on a telescope var** (chained two-level refinement) →
+     `:index_mismatch`/`:branch_type`. Squarely a Phase 3 (B1) target.
+  2. **Scrutinee occurrence nested inside another application in the goal**
+     (`Eq(Wrap(n), wk(v), wk(v))`) rejects even for a VAR scrutinee; only flat
+     occurrences (`Eq(NV(n), v, v)`) land. B1 generalizing-motive target.
+  3. **Goal index is a ctor application over the scrutinee's index**
+     (`-> NV(S(m))` matching `u : SNat(m)`) → `:branch_type`; basic view shape.
+     B1 target.
+  4. **Any Pi/arrow-containing goal under plain match** → `:bad_motive`. This is
+     also what currently shields the latent binder-shift gap (Step 1) — the B1
+     precondition binds them together.
+  5. **`binds_any?` knows only `{:match_arm}`** — `{:with_rematch_arm}` / `proof
+     <name>` binders in meta would be missed; currently unreachable (nested
+     `with` rejected, P9), a tripwire for when nested `with`/`let`/lambda enter
+     the elaborator surface fragment. Guard-hardening pin, revisit at B2/B3.
+- [x] **Step 3 — DONE.** Verdict sealed in the lean-shape plan's Phase 2½ section
+  (final checkbox now `[x]`, SOUND) and here; docs committed.
 
 **Track A gate:** A1–A4 green (relevance check live, two-sided vertical
 healthy, seams pinned); A5's TCB gate fully green incl. independent
