@@ -55,7 +55,10 @@ defmodule Antigen.Challenge do
     # deep-propagation: wrapper kinds (values) + the two new fault-field keys.
     # :pair doubles as a Core term tag but must be listed for the [:safe] decode.
     # (:ctor_vec is NOT a wrapper here — dropped for Nat→Nat composability.)
-    :app_arg, :ctor_nat, :case_scrut, :case_branch, :pair, :depth, :wrap_path
+    :app_arg, :ctor_nat, :case_scrut, :case_branch, :pair, :depth, :wrap_path,
+    # conversion-at-depth: carrier kinds + witness + field keys/values
+    :conv_index, :conv_motive, :conv, :expected_index, :actual_index,
+    :reduction, :required, :carrier
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

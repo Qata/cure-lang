@@ -75,4 +75,16 @@ defmodule Antigen.ChallengeTest do
     decoded = :erlang.binary_to_term(Base.decode64!(@deep_fault_blob), [:safe])
     assert is_map(decoded) and map_size(decoded) == 7
   end
+
+  # Conversion-at-depth (sub-project B) fault map (7 keys incl :expected_index/
+  # :actual_index/:carrier and values :conv_index/:conv), serialized OUTSIDE this
+  # module so those atoms live only in the opaque bytes — the [:safe] decode can
+  # succeed only if Challenge.@known_atoms interns them (same guard as A's).
+  @conv_fault_blob "g3QAAAAHdwVkZXB0aGEDdwRraW5kdwpjb252X2luZGV4dwd3aXRuZXNzdwRjb252dw5leHBlY3RlZF9pbmRleGEDdwxhY3R1YWxfaW5kZXhhBHcJcmVkdWN0aW9udwhyZXF1aXJlZHcHY2FycmllcncKY29udl9pbmRleA=="
+
+  test "conversion fault atoms are interned for [:safe] file decode" do
+    _ = Antigen.Challenge.__known_atoms__()
+    decoded = :erlang.binary_to_term(Base.decode64!(@conv_fault_blob), [:safe])
+    assert is_map(decoded) and map_size(decoded) == 7
+  end
 end
