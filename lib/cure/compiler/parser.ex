@@ -1432,13 +1432,88 @@ defmodule Cure.Compiler.Parser do
 
       %Token{type: :indent} ->
         state = advance(state)
-        {arms, state} = parse_block_match_arms(state)
+        {arms, state} = parse_with_block_arms(state)
         state = expect_dedent(state)
         {{:with_abs, meta, [scrutinee | arms]}, state}
 
       _ ->
         {{:with_abs, meta, [scrutinee]}, state}
     end
+  end
+
+  # Block-form with-clause arms. Distinct from `parse_block_match_arms` (used by
+  # plain `match`) because a with-clause arm may RESTATE the parent LHS patterns
+  # before the with-pattern — the Idris-parity LHS re-match form. Each arm is
+  # either the ordinary `{:match_arm, …}` (no `… |` prefix) or the new
+  # `{:with_rematch_arm, …}` (parent patterns `|` with-pattern).
+  defp parse_with_block_arms(state) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {[], state}
+
+      _ ->
+        {arm, state} = parse_with_clause_arm(state)
+        state = skip_newlines(state)
+        {rest, state} = parse_with_block_arms(state)
+        {[arm | rest], state}
+    end
+  end
+
+  # A single with-clause arm. Parse the first pattern, then disambiguate by the
+  # following token (only in this with-clause-LHS position):
+  #   - `|`      → rematch arm restating one parent pattern
+  #   - `,` … `|`→ rematch arm restating several (comma-separated) parent patterns
+  #   - anything → ordinary `{:match_arm}` (the existing no-rematch form)
+  # A top-level `,` before `->` never occurs in a plain arm pattern (tuples are
+  # parenthesised), so it unambiguously signals a multi-pattern rematch here.
+  defp parse_with_clause_arm(state) do
+    {first, state} = parse_expr(state, 0)
+
+    case peek(state) do
+      %Token{type: :bar} ->
+        finish_with_rematch_arm([first], state)
+
+      %Token{type: :comma} ->
+        {parent_patterns, state} = parse_more_parent_patterns([first], state)
+        finish_with_rematch_arm(parent_patterns, state)
+
+      _ ->
+        parse_match_arm_tail(first, state)
+    end
+  end
+
+  # Collect the remaining comma-separated parent patterns (the first is already
+  # parsed). Stops at the `|` separator (consumed by `finish_with_rematch_arm`).
+  defp parse_more_parent_patterns(acc, state) do
+    case peek(state) do
+      %Token{type: :comma} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {pat, state} = parse_expr(state, 0)
+        parse_more_parent_patterns(acc ++ [pat], state)
+
+      _ ->
+        {acc, state}
+    end
+  end
+
+  # After the parent patterns: consume `|`, parse the with-pattern, then the
+  # `->` body. Guards and `impossible` in rematch arms are deferred (out of the
+  # faithful first slice). Produces `{:with_rematch_arm, meta, [body]}` with the
+  # restated `:parent_patterns` and the with-`:pattern` in meta.
+  defp finish_with_rematch_arm(parent_patterns, state) do
+    state = expect(state, :bar)
+    state = skip_newlines(state)
+    {with_pattern, state} = parse_expr(state, 0)
+    state = skip_newlines(state)
+    state = expect(state, :arrow)
+    state = skip_newlines(state)
+    {body, state} = parse_expr_or_block(state)
+
+    meta = [parent_patterns: parent_patterns, pattern: with_pattern]
+    {{:with_rematch_arm, meta, [body]}, state}
   end
 
   # `proof <ident>` after a with-scrutinee. Returns `{name, state}` (name a
@@ -1529,6 +1604,14 @@ defmodule Cure.Compiler.Parser do
   defp parse_match_arm(state) do
     # Parse pattern
     {pattern, state} = parse_expr(state, 0)
+    parse_match_arm_tail(pattern, state)
+  end
+
+  # The tail of a match arm after its pattern has been parsed: optional `when`
+  # guard, the `->`, and the body (or `impossible`). Factored out so with-clause
+  # arms can fall through to it once they have decided they are NOT a rematch arm
+  # (see `parse_with_clause_arm`).
+  defp parse_match_arm_tail(pattern, state) do
     state = skip_newlines(state)
 
     # Optional guard: when expr
