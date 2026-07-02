@@ -75,4 +75,18 @@ defmodule Antigen.Generators.TermTest do
   end
   defp contains_tag?(l, tag) when is_list(l), do: Enum.any?(l, &contains_tag?(&1, tag))
   defp contains_tag?(_, _), do: false
+
+  test "typed_term/1 emits a well-typed :typed_term challenge for its assay id" do
+    alias Antigen.Challenge
+    for id <- ["term/infer_check", "term/subject_reduction", "term/normalization"] do
+      for c <- sample(Term.typed_term(id), 20) do
+        assert %Challenge{kind: :typed_term, assay: ^id, label: :well_typed, payload: p} = c
+        assert p.sig == :v1
+        # the claimed term checks in its rebuilt context
+        env = SigMenu.env_of(:v1)
+        ctx = SigMenu.rebuild_context(env, p.ctx)
+        assert {:ok, _} = Kernel.infer(ctx, p.term)
+      end
+    end
+  end
 end

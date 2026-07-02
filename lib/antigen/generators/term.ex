@@ -7,7 +7,9 @@ defmodule Antigen.Generators.Term do
   option set the generator emits the canonical term (spec §6.4).
   """
   alias Antigen.Gen
+  alias Antigen.Challenge
   alias Antigen.Generators.SigMenu
+  alias Antigen.Generators.Context, as: CtxGen
   alias Cure.Core.{Context, Eval, Normalise}
 
   @gen_fuel 500
@@ -27,6 +29,56 @@ defmodule Antigen.Generators.Term do
 
   @spec gen_term(Context.t(), Cure.Core.Term.t()) :: Gen.t()
   def gen_term(ctx, goal), do: Gen.sized(fn size -> gen(ctx, goal, min(size, @max_size)) end)
+
+  @assay_ids ["term/infer_check", "term/subject_reduction", "term/normalization"]
+  def assay_ids, do: @assay_ids
+
+  @doc "A `Gen` of a `:typed_term` challenge tagged for `assay_id`."
+  @spec typed_term(String.t()) :: Gen.t()
+  def typed_term(assay_id) when assay_id in @assay_ids do
+    env = SigMenu.env_of(:v1)
+
+    Gen.bind(CtxGen.gen(env), fn ctx_types ->
+      ctx = SigMenu.rebuild_context(env, ctx_types)
+
+      Gen.bind(goal_gen(ctx), fn goal ->
+        Gen.bind(gen_term(ctx, goal), fn term ->
+          Gen.return(
+            Challenge.new(
+              kind: :typed_term,
+              assay: assay_id,
+              label: :well_typed,
+              payload: %{sig: :v1, ctx: ctx_types, type: goal, term: term}
+            )
+          )
+        end)
+      end)
+    end)
+  end
+
+  # A goal over the current context: a closed menu goal, or the (possibly
+  # stuck-indexed) Vec type of a Vec-typed context variable. Offering the *exact*
+  # type of an existing variable guarantees the goal is inhabitable (that var
+  # inhabits it), so `canon`'s stuck-Vec fallback always finds a witness — never
+  # `nil`. This is what drives stuck-index generation (spec §6.3/§6.4).
+  defp goal_gen(ctx) do
+    base = Enum.map(SigMenu.goal_types(), fn g -> {1, Gen.return(g)} end)
+
+    depth = Context.length(ctx)
+
+    vec_var_goals =
+      for k <- (if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))),
+          ty = Normalise.quote(Context.lookup(ctx, k), depth),
+          match?({:data, :Vec, _, _}, ty),
+          do: {1, Gen.return(ty)}
+
+    Gen.frequency(base ++ vec_var_goals)
+  end
+
+  @spec default_gen() :: Gen.t()
+  def default_gen do
+    Gen.frequency(Enum.map(@assay_ids, fn id -> {1, typed_term(id)} end))
+  end
 
   # size 0 → canonical inhabitant (total, no search).
   defp gen(ctx, goal, 0), do: Gen.return(SigMenu.canon(ctx, goal))
