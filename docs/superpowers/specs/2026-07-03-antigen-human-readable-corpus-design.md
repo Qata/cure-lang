@@ -38,20 +38,43 @@ appears inside an s-expression (names are atoms; structure is parens/spaces).
 
 Today: `Base64(note)` or `-` for nil. New: the note verbatim, with a minimal
 escaping so it cannot break the tab-separated / newline-terminated record:
-percent-encode `%`→`%25`, tab→`%09`, newline→`%0A`. `nil` still encodes as the
-bare sentinel `-`; a genuine note equal to `"-"` is escaped to `%2D` so it never
+percent-encode `%`→`%25`, tab→`%09`, newline→`%0A`, **applied in that order
+(`%` first)** — encoding tab/newline before `%` would double-escape the `%`
+those substitutions introduce (`%09`/`%0A` contain a literal `%`), corrupting
+the round-trip. A single-pass scan (matching one of `%`/tab/newline per step,
+never rescanning already-substituted output) is equally correct and avoids the
+ordering question entirely; a naive sequence of independent whole-string
+`String.replace/3` calls MUST run `%` first. `nil` still encodes as the bare
+sentinel `-`; a genuine note equal to `"-"` is escaped to `%2D` so it never
 collides with the sentinel (§6.1).
 
 ### 2.3 `fault` — readable provenance field (mutants only)
 
 Today: the fault map rides inside the Base64 `scaffold`. New: a dedicated
 `fault=` field holding a readable assoc-list s-expression, and the fault is
-**removed from the Base64 scaffold**. The fault map is flat with atom / integer
-/ `nil` / list-of-atom values, e.g.:
+**removed from the Base64 scaffold**. The fault map is flat, but its values are
+**not** uniformly atom/integer/nil/list-of-atom — verified against every
+fault-producing call site (`Generators.Mutation.build/2`,
+`Generators.Conversion.conv_reject/0`), the value universe is: atom / integer /
+`nil` / list-of-atom / **integer-pair** / **nested Core-term**. The common case
+(5 of 7 mutation operators, plus both conversion carriers) is atom/integer/nil,
+e.g.:
 
 ```
-fault=((kind head_swap) (witness head) (expected_head Nat) (injected_head Vec) (scope nil) (depth 3) (wrap_path (app_arg case_branch)))
+fault=((depth 3) (expected_head Nat) (injected_head Vec) (kind head_swap) (scope nil) (witness head) (wrap_path (app_arg case_branch)))
 ```
+
+(keys shown alphabetically — `depth, expected_head, injected_head, kind, scope, witness, wrap_path` — matching §3.4's "fixed key order (sorted by key atom)" rule, not the generator's map-literal insertion order.)
+
+but two operators need the wider value grammar (§3.4 gives the exact printed
+form for each):
+
+- `:out_of_scope_var`'s `scope` is a 2-tuple of integers `{lo, hi}`
+  (`Generators.Mutation.build(ctx, :out_of_scope_var)`), not `nil` or an atom.
+- `:universe`'s `expected_head`/`injected_head` are Core-term tuples
+  (`{:type, 0}` / `{:type, 1}`, `Generators.Mutation.build(ctx, :universe)`),
+  not atom head-names — even though those same two keys hold atom head-names
+  (`Nat`, `Vec`, `Z`, `S`, `Sigma`) for every other operator.
 
 Non-mutant records have **no** `fault=` field.
 
@@ -126,11 +149,28 @@ Tokenizer → recursive-descent reader.
   **name**, interned with `String.to_existing_atom/1`.
 - **Atom safety:** names use `String.to_existing_atom/1` — a name not already
   interned yields `{:error, {:unknown_atom, s}}` (rescued from the raised
-  `ArgumentError`), never minting. This is safe: every name a v1 corpus can
-  contain is a menu constructor/global/data/op name already interned via
-  `Challenge.@known_atoms` (the corpus decode path already force-interns them —
-  see `Corpus.decode_record`). Decode MUST force `Challenge.__known_atoms__()`
-  before parsing, exactly as `decode_record` does today.
+  `ArgumentError`), never minting. This is safe **only if** every name a v1
+  corpus can contain is already interned via `Challenge.@known_atoms` (the
+  corpus decode path already force-interns them — see `Corpus.decode_record`).
+  Decode MUST force `Challenge.__known_atoms__()` before parsing, exactly as
+  `decode_record` does today.
+
+  > **Verified gap, must be closed before Stage 4:** this safety property does
+  > **not** currently hold. `Generators.Stub` (`lib/antigen/generators/stub.ex`)
+  > produces a challenge whose term piece is `{:global, :boom}`, and
+  > `test/antigen/runner_test.exs:44-49` round-trips exactly this challenge
+  > through `Corpus.append`/`Runner.replay` (i.e. through `decode_record`).
+  > `:boom` is absent from `@known_atoms`. Today this is harmless because
+  > `Cure.Core.Serialize.decode/1` mints atoms via `String.to_atom/1` (no
+  > existing-only constraint); switching pieces to `SExpr.decode`'s
+  > `String.to_existing_atom/1` turns this into a live regression — that
+  > `runner_test.exs` test would start failing to decode `(global boom)` in a
+  > process that hasn't otherwise loaded `Generators.Stub`. Stage 2 must add
+  > `:boom` to `@known_atoms` and re-audit **every** generator module (not just
+  > the ones already reflected in the comment's "vertical" list) for atom
+  > literals reachable inside a `Term` piece, since this class of gap was
+  > silent under the old minting decoder and only becomes fatal under the new
+  > safe decoder.
 - **Errors:** unbalanced parens, unexpected EOF, a head tag not in §3.1, or an
   arity mismatch (e.g. `(app f)` with one child) → `{:error, reason}`. Never
   raise out of `decode/1`; wrap in `{:error, _}`.
@@ -145,6 +185,35 @@ inverts it; keys and atom values via `String.to_existing_atom/1`; `nil`→`nil`;
 a parenthesized group → list. Fault keys (`kind`, `witness`, `expected_head`,
 `injected_head`, `scope`, `depth`, `wrap_path`, plus the deep/conv fields
 `wrap_path`/`carrier`/`reduction`/…) are all in `@known_atoms` already.
+
+**Two value shapes beyond the above (verified against
+`Generators.Mutation.build/2` — not hypothetical, these are live):**
+
+- **`scope` for `:out_of_scope_var`** is a 2-tuple of integers, not `nil`/atom.
+  Print as a nested paren-pair of bare integers: `(scope (5 5))`. This is the
+  one **key-specific** decode rule the fault codec needs: `decode_fault` must
+  know that a parenthesized group of exactly two integer tokens under the key
+  `scope` decodes to a 2-tuple `{5, 5}`, not the 2-element list `[5, 5]` that
+  the generic list-of-atom rule would otherwise produce for a bare paren group
+  (no other fault key currently emits a bare list of integers, so this
+  key→shape binding is unambiguous today but is a schema fact, not something
+  `decode_fault` can infer from the printed form alone).
+- **`expected_head`/`injected_head` for `:universe`** hold a Core-term tuple
+  (`{:type, 0}` / `{:type, 1}`), not an atom head-name. Print by recursing into
+  the **term** grammar (§3.1) instead of the atom-name rule:
+  `(expected_head (type 0))`, `(injected_head (type 1))`. Because these same
+  two keys hold plain atom head-names (`Nat`, `Vec`, `Z`, `S`, `Sigma`) for
+  every other mutation operator, `encode_fault`/`decode_fault` must dispatch
+  **per value**, not per key: an atom value prints/parses as a bare name: a
+  tuple value prints/parses as a nested term node. This mirrors how the outer
+  `SExpr` codec already distinguishes leaves from nodes — no new ambiguity is
+  introduced, since a bare name token and a parenthesized term node are always
+  syntactically distinct.
+
+§7 test 3 must exercise both shapes explicitly (not just "a mutant_term"):
+at minimum one banked `:out_of_scope_var` mutant and one banked `:universe`
+mutant, asserting their `fault=` field round-trips the tuple/term values
+exactly.
 
 > **Value-type ambiguity note:** `nil` as an atom value vs. a name literally
 > spelled `nil` — the fault schema never uses a name `nil` except as the
@@ -202,8 +271,17 @@ blast radius and keeps the per-kind reconstruction logic in one place.
 
 ## 6. Migration
 
-A one-time migration rewrites the committed `test/antigen/seeds.sexp` from the
-old Base64 form to the new readable form.
+A one-time migration rewrites **every** committed banked-record file from the
+old Base64 form to the new readable form: `test/antigen/seeds.sexp`,
+`test/antigen/corpus.sexp`, and `test/antigen/reach.sexp` (verified via
+`git ls-files | grep '\.sexp$'` — these are the only three; all three are in
+the identical `antigen-record` format and are exercised by static replay tests
+— `corpus_replay_test.exs`, `indexed_seed_test.exs`, `positivity_seed_test.exs`,
+`totality_seed_test.exs`, `universes_seed_test.exs`, `reach_pin_test.exs`).
+Dual-read (§4.2) would keep `corpus.sexp`/`reach.sexp` decodable if left
+un-migrated, but the spec's own motivation — the operator reading/debugging
+terms by hand — is unmet for whichever files stay in Base64 form, so all three
+migrate together in Stage 4.
 
 - **Mechanism:** stream the existing file through `Corpus.decode_record`
   (reads legacy Base64), then re-serialize each challenge through the new
@@ -241,9 +319,13 @@ data — but it keeps the codec total.)
    still raises afterwards). Malformed input (`"(app f"`, `"()"`, `"(bogus 1)"`)
    → `{:error, _}`, never raises.
 3. **Corpus record round-trip (new format):** `encode_record |> decode_record ==
-   {:ok, challenge}` for a `typed_term`, a `mutant_term` (asserts the
-   `fault=` field is present and the fault map survives), and a non-term kind
-   (`family`/positivity — pieces round-trip, no `fault=`).
+   {:ok, challenge}` for a `typed_term`; a `mutant_term` for **each** of the 7
+   `Generators.Mutation` operators, not just one — in particular
+   `:out_of_scope_var` (asserts `fault["scope"]` round-trips as the 2-tuple
+   `{lo, hi}`, §3.4) and `:universe` (asserts `fault["expected_head"]`/
+   `["injected_head"]` round-trip as `{:type, _}` term tuples, §3.4) — plus the
+   5 atom/integer-only operators; and a non-term kind (e.g. `:family`, as
+   produced by the `positivity` assay — pieces round-trip, no `fault=`).
 4. **Dual-read legacy:** a **hand-written legacy record** (Base64 pieces +
    fault-in-scaffold, Base64 note) still `decode_record`s to the correct
    challenge, incl. the fault. Guards backward compatibility.
@@ -257,8 +339,8 @@ data — but it keeps the codec total.)
    values match a "looks-like-Base64" pattern.
 7. **Full suite once** (Stage 5): all green, including the existing
    `architecture_test` quarantine (SExpr is outside `generators/`/`assays/`, so
-   no `StreamData` literal concern) and the static replay meta-tests against the
-   migrated `seeds.sexp`.
+   no `StreamData` literal concern) and the static replay meta-tests against all
+   three migrated files (`seeds.sexp`, `corpus.sexp`, `reach.sexp`, §6).
 
 ## 8. Files
 
@@ -266,7 +348,8 @@ data — but it keeps the codec total.)
 - **Modify:** `lib/antigen/corpus.ex` (pieces/note/fault encode+decode, dual-read),
   `test/antigen/corpus_test.exs` (or the existing corpus test file — Stage 2
   locates it) for record-level tests.
-- **Migrate + commit:** `test/antigen/seeds.sexp`.
+- **Migrate + commit:** `test/antigen/seeds.sexp`, `test/antigen/corpus.sexp`,
+  `test/antigen/reach.sexp` (§6 — all three committed `.sexp` files).
 - **Migration harness:** `lib/mix/tasks/antigen.migrate.ex` **or**
   `test/support/seeds_migrate.exs` (Stage 2 picks; a Mix task is preferred so
   it is rerunnable and discoverable).
@@ -290,6 +373,13 @@ data — but it keeps the codec total.)
   raises at generation/bank time. Mitigation: §7 test 1 enumerates the former
   set from the source of truth; a missed former fails the round-trip test in
   RED, not in production.
+- **Missed fault-value shape:** the fault map is not uniformly
+  atom/integer/nil/list-of-atom — `:out_of_scope_var` (2-tuple `scope`) and
+  `:universe` (Core-term `expected_head`/`injected_head`) need the extended
+  value grammar in §3.4. Mitigated by naming both operators explicitly in §3.4
+  and §7 test 3, rather than trusting one generic "a mutant_term" fixture to
+  incidentally cover them (equal-weight operator selection means either could
+  be absent from a small fixture by chance).
 - **Atom minting via the parser:** mitigated by `String.to_existing_atom` +
   the forced `__known_atoms__()` intern (§3.3), tested in §7 test 2.
 - **Migration divergence:** mitigated by dedup-key stability (§4.3) + §7 test 5
