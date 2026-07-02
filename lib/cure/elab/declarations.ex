@@ -180,12 +180,24 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp elaborate_body({:function_call, meta, _args} = expr, return_core, scope, ctx, env, _params) do
-    if Keyword.get(meta, :name) == "refl" do
-      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
-    else
-      with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-        {:ok, term}
-      end
+    name = Keyword.get(meta, :name)
+    atom = if is_binary(name), do: String.to_atom(name)
+
+    cond do
+      name == "refl" ->
+        Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+      atom && Inductive.get_ctor(env, atom) ->
+        # A constructor body is checked against the declared return type, so a
+        # nullary or otherwise underdetermined constructor (`Nil()` at
+        # `-> List(Nat)`) can pin its implicit parameters from the goal rather than
+        # failing with unsolved metavariables under pure inference.
+        Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+      true ->
+        with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+          {:ok, term}
+        end
     end
   end
 

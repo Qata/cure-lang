@@ -59,6 +59,35 @@ defmodule Cure.Elab.ParameterizedTypeTest do
     assert apply(mod, :g, []) == {:S, :Z}
   end
 
+  test "a nullary polymorphic constructor in return position solves its parameter from the goal" do
+    # `None()` / `Nil()` have no argument to infer their type parameter from; the
+    # declared return type is the only source, so the body is elaborated in
+    # checking mode. (A nested underdetermined constructor — `Cons(Z(), Nil())` in
+    # return position — still needs bidirectional argument checking and is not
+    # covered here.)
+    src =
+      @nat <>
+        "  type Opt(a) = None | Some(a)\n  fn empty() -> Opt(Nat) = None()\n" <>
+        "  fn g() -> Nat = match empty()\n    Some(x) -> x\n    None() -> Z()\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.PEmpty", functions: [:empty, :g])
+
+    assert apply(mod, :empty, []) == :None
+    assert apply(mod, :g, []) == :Z
+  end
+
+  test "a polymorphic list's Nil constructs at an annotated return type" do
+    src =
+      @nat <>
+        "  type Lst(a) = Nil | Cons(a, Lst(a))\n  fn empty_list() -> Lst(Nat) = Nil()\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.PNil", functions: [:empty_list])
+
+    assert apply(mod, :empty_list, []) == :Nil
+  end
+
   test "a bare-parameter GADT (Vec) no longer crashes the elaborator" do
     # Regression guard for the Keyword.fetch!(:type) crash on `{:param, [], \"a\"}`.
     src =
