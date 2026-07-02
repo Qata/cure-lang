@@ -88,6 +88,55 @@ defmodule Antigen.Generators.Mutation do
   defp nat_numeral(0), do: z()
   defp nat_numeral(k), do: s(nat_numeral(k - 1))
 
+  # ── Deep propagation (sub-project A) ──────────────────────────────────────────
+  # Bury a fault under `depth` nested well-typed CHECKED contexts so `infer` must
+  # thread its rejection up `depth` distinct error-propagation paths. Every wrapper
+  # is Nat→Nat (hole expects Nat, term produces Nat), so any composition is
+  # well-typed EXCEPT at the innermost hole — the rejection is provably fault-driven,
+  # not a wrapper-internal type error (see the uncontaminated-control test).
+  @wrappers [:app_arg, :ctor_nat, :case_scrut, :case_branch, :pair]
+  def wrappers, do: @wrappers
+
+  @max_depth 8
+  def max_depth, do: @max_depth
+
+  defp sig, do: {:sigma, nat_t(), nat_t()}
+  defp motive, do: {:lam, nat_t(), nat_t()}
+  defp nat_branches(zbody), do: [{:Z, 0, zbody}, {:S, 1, {:var, 0}}]
+
+  @doc """
+  Wrap `term` in `depth` Nat→Nat checked layers. `Gen` of `{deep_term, wrap_path}`
+  where `wrap_path` (length == depth) lists the wrapper kinds innermost-first.
+  """
+  @spec deepen(Context.t(), term(), non_neg_integer()) :: Gen.t()
+  def deepen(_ctx, term, 0), do: Gen.return({term, []})
+
+  def deepen(ctx, term, depth) when depth > 0 do
+    Gen.bind(Gen.frequency(Enum.map(@wrappers, fn k -> {1, Gen.return(k)} end)), fn kind ->
+      Gen.bind(apply_wrapper(ctx, term, kind), fn wrapped ->
+        Gen.bind(deepen(ctx, wrapped, depth - 1), fn {outer, path} ->
+          Gen.return({outer, [kind | path]})
+        end)
+      end)
+    end)
+  end
+
+  # Each wrapper places `inner` at a Nat-checked hole; filler is a well-typed Nat.
+  defp apply_wrapper(ctx, inner, :app_arg),
+    do: Gen.bind(gnat(ctx), fn f -> Gen.return({:app, {:app, {:global, :plus}, inner}, f}) end)
+
+  defp apply_wrapper(_ctx, inner, :ctor_nat),
+    do: Gen.return({:ctor, :S, [inner]})
+
+  defp apply_wrapper(_ctx, inner, :case_scrut),
+    do: Gen.return({:case, inner, motive(), nat_branches(z())})
+
+  defp apply_wrapper(ctx, inner, :case_branch),
+    do: Gen.bind(gnat(ctx), fn scrut -> Gen.return({:case, scrut, motive(), nat_branches(inner)}) end)
+
+  defp apply_wrapper(ctx, inner, :pair),
+    do: Gen.bind(gnat(ctx), fn f -> Gen.return({:app, {:lam, sig(), z()}, {:pair, inner, f}}) end)
+
   def assay_id, do: "mutation/rejection"
 
   @doc "A `Gen` of a `:mutant_term` challenge."
