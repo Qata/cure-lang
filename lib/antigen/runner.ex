@@ -51,6 +51,7 @@ defmodule Antigen.Runner do
     if mm.mutants_total > 0 do
       IO.puts(
         "antigen health[mutant_term]: reason_diversity=#{mm.reason_diversity} " <>
+          "max_depth=#{mm.max_depth} wrap_diversity=#{mm.wrap_diversity} " <>
           "survivors=#{mm.survivors} → #{mutation_stamp(mm)}"
       )
     end
@@ -110,8 +111,18 @@ defmodule Antigen.Runner do
   end
 
   @mutation_diversity_floor 5
+  @depth_floor 4
+  @wrap_floor 4
 
-  @doc "Vacuity metrics over the :mutant_term subset (spec §6.2): fault-kind diversity."
+  @doc """
+  Vacuity metrics over the :mutant_term subset: fault-kind diversity (spec §6.2),
+  plus deep-propagation generation-quality signals `max_depth` / `wrap_diversity`.
+
+  `reason_diversity` is scoped to correctly-REJECTED mutants; `max_depth` and
+  `wrap_diversity` are generation-time properties computed over EVERY mutant
+  (survivors included — excluding them would hide exactly the slice the gate needs).
+  Legacy v1 seeds predate `:depth`/`:wrap_path`, so both are read defensively.
+  """
   def mutation_metrics(challenges) do
     ms = Enum.filter(challenges, &match?(%Challenge{kind: :mutant_term}, &1))
 
@@ -123,12 +134,28 @@ defmodule Antigen.Runner do
         end
       end)
 
-    %{reason_diversity: MapSet.size(rejected_kinds), survivors: survivors, mutants_total: length(ms)}
+    depths = Enum.map(ms, fn c -> Map.get(c.payload.fault, :depth, 0) end)
+    wraps = ms |> Enum.flat_map(fn c -> Map.get(c.payload.fault, :wrap_path, []) end) |> MapSet.new()
+
+    %{
+      reason_diversity: MapSet.size(rejected_kinds),
+      survivors: survivors,
+      mutants_total: length(ms),
+      max_depth: Enum.max([0 | depths]),
+      wrap_diversity: MapSet.size(wraps)
+    }
   end
 
-  @doc "Vacuity stamp (spec §6.2): diversity-only; survivors are surfaced separately."
-  def mutation_stamp(%{reason_diversity: d}),
-    do: if(d >= @mutation_diversity_floor, do: :healthy, else: :vacuous)
+  @doc """
+  Vacuity stamp: diversity + depth + wrapper-diversity floors. Survivors are an
+  infection, surfaced separately, never folded into the stamp (spec §6.2 rule).
+  """
+  def mutation_stamp(%{reason_diversity: d, max_depth: md, wrap_diversity: wd}),
+    do:
+      if(d >= @mutation_diversity_floor and md >= @depth_floor and wd >= @wrap_floor,
+        do: :healthy,
+        else: :vacuous
+      )
 
   # Count binders (lam / case-branch) and how many bind a variable that occurs.
   defp binder_stats(t), do: binder_stats(t, {0, 0})

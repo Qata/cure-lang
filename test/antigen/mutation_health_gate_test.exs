@@ -26,4 +26,25 @@ defmodule Antigen.MutationHealthGateTest do
     assert hm.reduction_activity == 1.0
     assert hm.fuel_exhausted_count == 0
   end
+
+  test "mutation_metrics reports max_depth + wrap_diversity over the whole subset" do
+    cs = sample(Mutation.mutant(), 300)
+    m = Runner.mutation_metrics(cs)
+    assert m.max_depth >= 4
+    assert m.wrap_diversity >= 4
+    assert Runner.mutation_stamp(m) == :healthy
+  end
+
+  test "mutation_metrics reads legacy faults (no depth/wrap_path) without crashing" do
+    legacy =
+      Antigen.Challenge.new(
+        kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+        payload: %{sig: :v1, ctx: [], type: {:data, :Nat, [], []}, term: {:fst, {:ctor, :Z, []}},
+                   fault: %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma,
+                            injected_head: :Nat, scope: nil}}   # no :depth / :wrap_path keys
+      )
+
+    m = Runner.mutation_metrics([legacy])
+    assert m.max_depth == 0 and m.wrap_diversity == 0
+  end
 end
