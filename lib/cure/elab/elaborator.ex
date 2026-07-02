@@ -82,7 +82,7 @@ defmodule Cure.Elab.Elaborator do
 
       Inductive.get_ctor(env, atom) ->
         with {:ok, present} <- map_present_args(args, names, ctx, env) do
-          elaborate_ctor_app(env, atom, present)
+          elaborate_ctor_app(env, atom, present, ctx)
         end
 
       # A global whose telescope carries erased (implicit) parameters: insert
@@ -1756,9 +1756,9 @@ defmodule Cure.Elab.Elaborator do
   `present_args` is `[{core_term, type_term}]` — each ω argument with its type
   already reified as a term in the caller's de Bruijn frame.
   """
-  @spec elaborate_ctor_app(Env.t(), atom(), [{term(), term()}]) ::
+  @spec elaborate_ctor_app(Env.t(), atom(), [{term(), term()}], Context.t() | nil) ::
           {:ok, term(), Cure.Core.Value.t()} | {:error, term()}
-  def elaborate_ctor_app(env, cname, present_args) do
+  def elaborate_ctor_app(env, cname, present_args, ctx \\ nil) do
     ctor = Inductive.get_ctor(env, cname)
     family = Inductive.ctor_family(env, cname)
 
@@ -1778,7 +1778,7 @@ defmodule Cure.Elab.Elaborator do
 
       telescope
       |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
-      |> finish_ctor_app(cname, family, ctor, length(param_tele))
+      |> finish_ctor_app(cname, family, ctor, length(param_tele), ctx)
     end
   end
 
@@ -1809,12 +1809,12 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp finish_ctor_app({:error, _} = err, _cname, _family, _ctor, _pc), do: err
+  defp finish_ctor_app({:error, _} = err, _cname, _family, _ctor, _pc, _ctx), do: err
 
-  defp finish_ctor_app({:ok, _mctx, _chosen, [_ | _]}, _cname, _family, _ctor, _pc),
+  defp finish_ctor_app({:ok, _mctx, _chosen, [_ | _]}, _cname, _family, _ctor, _pc, _ctx),
     do: {:error, :too_many_arguments}
 
-  defp finish_ctor_app({:ok, mctx, chosen, []}, cname, family, ctor, pc) do
+  defp finish_ctor_app({:ok, mctx, chosen, []}, cname, family, ctor, pc, ctx) do
     all = Enum.map(chosen, &Unify.zonk(&1, mctx))
 
     if Enum.any?(all, &has_meta?/1) do
@@ -1828,7 +1828,18 @@ defmodule Cure.Elab.Elaborator do
       seed = param_vals ++ args
       params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed))
       indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed))
-      result_type = Eval.eval({:data, family, params, indices}, [])
+
+      # The result type's computed indices reference the CALLER's context vars
+      # (e.g. `seq`'s result `SF(app(av,cv), …)`). Evaluate under the caller's
+      # environment so those free de Bruijn variables get the correct neutral
+      # levels — evaluating under `[]` mis-levels them, which is invisible when a
+      # ctor is checked directly (the kernel re-infers) but CORRUPTS meta-solving
+      # when this inferred type feeds further elaboration (a computed-index ctor
+      # applied as another ctor's argument, e.g. `loop(seq(a,b))`). Mirrors
+      # `finish_global_app`. With no caller context (isolated unit calls), fall
+      # back to `[]` — those terms are closed, so the frame is immaterial.
+      caller_env = if ctx, do: Context.env(ctx), else: []
+      result_type = Eval.eval({:data, family, params, indices}, caller_env)
       {:ok, {:ctor, cname, args}, result_type}
     end
   end
