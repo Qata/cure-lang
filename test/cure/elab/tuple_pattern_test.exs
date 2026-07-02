@@ -40,6 +40,34 @@ defmodule Cure.Elab.TuplePatternTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "a lone catch-all arm works on a pair scrutinee (any scrutinee type)" do
+    # `_` ignores the scrutinee's structure, so a Σ scrutinee needs no vdata
+    # dispatch; the scrutinee is still elaborated for well-typedness.
+    src = @nat <> "  fn f(p: Sigma(a: Nat, Nat)) -> Nat = match p\n    _ -> Z()\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.PairCatchallE2E", functions: [:f])
+
+    assert apply(mod, :f, [{:S, :Z}]) == :Z
+  end
+
+  test "a named catch-all binds the whole pair scrutinee" do
+    src =
+      @nat <>
+        "  fn f(p: Sigma(a: Nat, Nat)) -> Sigma(a: Nat, Nat) = match p\n    w -> w\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.PairNamedCatchallE2E", functions: [:f])
+
+    assert apply(mod, :f, [{:S, :Z}]) == {:S, :Z}
+  end
+
+  test "an ill-typed scrutinee under a catch-all is still rejected" do
+    src = @nat <> "  fn f(n: Nat) -> Nat = match undefined_thing\n    _ -> Z()\nend\n"
+
+    assert {:error, _} = Program.elaborate(src)
+  end
+
   test "a plain constructor match is unaffected by the tuple path" do
     src = @nat <> "  fn f(n: Nat) -> Nat = match n\n    S(m) -> m\n    Z() -> Z()\nend\n"
 

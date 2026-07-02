@@ -516,7 +516,9 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms} <- desugar_nested_arms(arms1, scrut_expr),
          :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
-         {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
+         {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env),
+         :not_applicable <-
+           try_trivial_match(scrut_expr, arms, result_type_term, names, ctx, env) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
@@ -1346,6 +1348,35 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  # A single variable/wildcard arm ignores the scrutinee's structure — an
+  # irrefutable bind valid at ANY scrutinee type (Σ, primitive, data), not just
+  # `{:vdata}`. The scrutinee is already elaborated (so it is well-typed) before
+  # this runs; `_` discards it and a name binds the whole value. This lets a
+  # pair/primitive scrutinee carry a lone catch-all without the vdata dispatch
+  # rejecting it as `:match_scrutinee_not_data`.
+  defp try_trivial_match(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env) do
+    case Keyword.fetch!(meta, :pattern) do
+      {:variable, _m, "_"} ->
+        elaborate_expr_checked(single_body(body), expected, names, ctx, env)
+
+      {:variable, _m, name} ->
+        b = single_body(body)
+
+        cond do
+          # A complex scrutinee would be duplicated by substitution; leave those to
+          # the ordinary path (which binds via the case machinery).
+          not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
+          binds_any?(b, [name]) -> {:error, {:unsupported_pattern, :shadowed_catchall}}
+          true -> elaborate_expr_checked(subst_surface_var(b, name, scrut_expr), expected, names, ctx, env)
+        end
+
+      _ ->
+        :not_applicable
+    end
+  end
+
+  defp try_trivial_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
 
   # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
   # `e1 = base.1`, `e2 = base.2.1`, …, `en = base.2.….2` (the final tail). Each
