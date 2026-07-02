@@ -155,6 +155,20 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A `match` in nested expression position, in checking mode: the expected type
+  # IS the result type its motive needs, so hand it straight to `elaborate_match`
+  # (which builds the motive, refines indices per branch, and enforces coverage),
+  # then let the kernel re-check the assembled `:case` — mirroring `:rewrite_expr`
+  # above. Reached from `rewrite … in match …` (line ~151) and from nested arm
+  # bodies (`elaborate_branch_body`). Inference-position inline match (no expected
+  # type) and let-blocks stay unimplemented (a separate aux-function lift).
+  def elaborate_expr_checked({:pattern_match, _meta, [scrut | arms]}, expected_core, names, ctx, env) do
+    with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
 
@@ -634,6 +648,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_branch_body({:rewrite_expr, _meta, _children} = expr, expected, names, ctx, env),
+    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+
+  # A nested `match` arm body is a checking-mode expression: `expected` is the
+  # (index-refined) result type for this branch, exactly what its motive needs.
+  defp elaborate_branch_body({:pattern_match, _meta, _children} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
   defp elaborate_branch_body({:function_call, meta, _args} = expr, expected, names, ctx, env) do
