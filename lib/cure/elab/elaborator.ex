@@ -2852,20 +2852,21 @@ defmodule Cure.Elab.Elaborator do
     param_tele = Inductive.param_telescope(env, family) || []
     pc = length(param_tele)
 
+    present_count = Enum.count(ctor.quantities, &(&1 == :present))
+
     cond do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      Enum.any?(ctor.quantities, &(&1 == :erased)) ->
-        {:error, {:bidirectional_erased_field, cname}}
-
-      length(ctor.args) != length(arg_asts) ->
+      present_count != length(arg_asts) ->
         {:error, {:constructor_arity_mismatch, cname}}
 
       true ->
-        # Fresh metas for the params ++ every argument, so the constructor's
-        # result type (which references that whole frame) can be built and pinned
-        # against the goal before any argument is known.
+        # Fresh metas for the params ++ every argument (including erased index
+        # fields), so the constructor's result type — which references that whole
+        # frame — can be built and pinned against the goal before any argument is
+        # known. Pinning solves the parameters and the erased indices; the present
+        # fields are then checked against their now-concrete types.
         {mctx, seed} =
           Enum.reduce(1..(pc + length(ctor.args)), {MetaCtx.new(), []}, fn _, {m, acc} ->
             {m, id} = MetaCtx.fresh(m)
@@ -2885,24 +2886,51 @@ defmodule Cure.Elab.Elaborator do
             if Enum.any?(solved_params, &has_meta?/1) do
               {:error, {:unsolved_parameters, cname}}
             else
-              check_ctor_args(ctor.args, arg_asts, solved_params, [], names, ctx, env, cname)
+              slots =
+                ctor.args
+                |> Enum.zip(ctor.quantities)
+                |> Enum.with_index()
+                |> Enum.map(fn {{{_fn, ftype}, q}, i} -> {i, ftype, q} end)
+
+              check_ctor_args(slots, arg_asts, seed, pc, solved_params, [], mctx, names, ctx, env, cname)
             end
         end
     end
   end
 
-  # Check each present constructor argument against its field type, instantiated
-  # with the solved parameters and the arguments already checked (the same frame
-  # `solve_arg` uses). Returns the assembled `{:ctor, …}` term.
-  defp check_ctor_args([], [], _params, acc, _names, _ctx, _env, cname),
+  # Assemble a constructor's argument list against the solved parameters and the
+  # binder-solved erased indices. Walks every field: an erased field takes its
+  # value from the pinned metavariable (an index the expected type determined); a
+  # present field is checked against its field type instantiated with the
+  # parameters and every earlier field value (the same `params ++ fields` frame the
+  # de Bruijn layout uses). The erased field values are kept in the assembled
+  # `{:ctor, …}`, matching `finish_ctor_app`.
+  defp check_ctor_args([], [], _seed, _pc, _params, acc, _mctx, _names, _ctx, _env, cname),
     do: {:ok, {:ctor, cname, Enum.reverse(acc)}}
 
-  defp check_ctor_args([{_fname, ftype} | fields], [arg | args], params, acc, names, ctx, env, cname) do
-    ftype_inst = Subst.instantiate(ftype, params ++ Enum.reverse(acc))
+  defp check_ctor_args([{idx, _ftype, :erased} | slots], asts, seed, pc, params, acc, mctx, names, ctx, env, cname) do
+    val = seed |> Enum.at(pc + idx) |> Unify.zonk(mctx)
 
-    case elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
-      {:ok, term} -> check_ctor_args(fields, args, params, [term | acc], names, ctx, env, cname)
-      {:error, _} = err -> err
+    if has_meta?(val) do
+      {:error, {:unsolved_index, cname}}
+    else
+      check_ctor_args(slots, asts, seed, pc, params, [val | acc], mctx, names, ctx, env, cname)
+    end
+  end
+
+  defp check_ctor_args([{_idx, ftype, :present} | slots], [arg | asts], seed, pc, params, acc, mctx, names, ctx, env, cname) do
+    ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
+
+    if has_meta?(ftype_inst) do
+      {:error, {:unsolved_field_type, cname}}
+    else
+      case elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
+        {:ok, term} ->
+          check_ctor_args(slots, asts, seed, pc, params, [term | acc], mctx, names, ctx, env, cname)
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
