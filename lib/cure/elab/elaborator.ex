@@ -201,14 +201,10 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:attribute_access, meta, [inner]}, names, ctx, env) do
-    with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
-      term =
-        case Keyword.fetch!(meta, :attribute) do
-          "1" -> {:fst, inner_term}
-          "2" -> {:snd, inner_term}
-        end
-
-      with {:ok, type} <- Kernel.infer(ctx, term), do: {:ok, term, type}
+    case Keyword.fetch!(meta, :attribute) do
+      "1" -> sigma_projection(:fst, inner, names, ctx, env)
+      "2" -> sigma_projection(:snd, inner, names, ctx, env)
+      field -> record_projection(inner, field, names, ctx, env)
     end
   end
 
@@ -216,6 +212,71 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, :rewrite_requires_expected_type}
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp sigma_projection(which, inner, names, ctx, env) do
+    with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
+      term = {which, inner_term}
+      with {:ok, type} <- Kernel.infer(ctx, term), do: {:ok, term, type}
+    end
+  end
+
+  # Record field projection `obj.field`. The object's type identifies its record
+  # family; the field name is looked up in the (single) constructor's telescope —
+  # whose argument names ARE the field names — and the projection is elaborated as a
+  # one-branch `match obj | Rec(f0, …, fn) -> f_i` in checking mode, the field's own
+  # type as the goal. The field type must be closed (a non-parameterized,
+  # non-dependent record); a field type that references parameters or earlier fields
+  # is left for a later step.
+  defp record_projection(inner, field, names, ctx, env) do
+    with {:ok, _obj_term, obj_type} <- elaborate_expr_typed(inner, names, ctx, env) do
+      case Quote.reify(obj_type, Context.length(ctx)) do
+        {:data, rec, _params, _indices} ->
+          ctor = Inductive.get_ctor(env, rec)
+
+          cond do
+            is_nil(ctor) or ctor.name != rec ->
+              {:error, {:projection_not_a_record, rec}}
+
+            true ->
+              fields = ctor.args
+              idx = Enum.find_index(fields, fn {n, _t} -> Atom.to_string(n) == field end)
+
+              cond do
+                is_nil(idx) ->
+                  {:error, {:unknown_field, rec, field}}
+
+                not closed_term?(elem(Enum.at(fields, idx), 1)) ->
+                  {:error, {:dependent_record_projection, rec, field}}
+
+                true ->
+                  {_fname, ftype} = Enum.at(fields, idx)
+                  binders = for i <- 0..(length(fields) - 1), do: {:variable, [scope: :local], "$proj#{i}"}
+                  arm = {:match_arm, [pattern: {:function_call, [name: Atom.to_string(rec)], binders}], [Enum.at(binders, idx)]}
+
+                  with {:ok, term} <- elaborate_match(inner, [arm], ftype, names, ctx, env) do
+                    {:ok, term, Eval.eval(ftype, Context.env(ctx))}
+                  end
+              end
+          end
+
+        _ ->
+          {:error, {:projection_non_record, field}}
+      end
+    end
+  end
+
+  # A Core term with no free de Bruijn variables (closed in the current frame).
+  defp closed_term?(term), do: closed_term?(term, 0)
+  defp closed_term?({:var, k}, depth), do: k < depth
+  defp closed_term?({:lam, d, b}, depth), do: closed_term?(d, depth) and closed_term?(b, depth + 1)
+  defp closed_term?({:pi, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
+  defp closed_term?({:sigma, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
+
+  defp closed_term?(tuple, depth) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.all?(&closed_term?(&1, depth))
+
+  defp closed_term?(list, depth) when is_list(list), do: Enum.all?(list, &closed_term?(&1, depth))
+  defp closed_term?(_other, _depth), do: true
 
   @doc """
   Checking-mode elaboration for proof forms whose Core term depends on the
@@ -2671,6 +2732,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Pair introduction `%[a, b]` in the scope-based term builder (function
+  # arguments and other sub-terms). Emits the Core `{:pair, …}`; its Σ type is
+  # derived by `Kernel.infer` on the enclosing application, which checks the pair
+  # against the callee's domain (so a dependent Σ parameter is honoured too).
+  def elaborate_expr({:tuple, _meta, [a, b]}, scope, env) do
+    with {:ok, a_core} <- elaborate_expr(a, scope, env),
+         {:ok, b_core} <- elaborate_expr(b, scope, env) do
+      {:ok, {:pair, a_core, b_core}}
+    end
+  end
+
+  def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
+
   defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
@@ -2690,19 +2764,6 @@ defmodule Cure.Elab.Elaborator do
       end
     end
   end
-
-  # Pair introduction `%[a, b]` in the scope-based term builder (function
-  # arguments and other sub-terms). Emits the Core `{:pair, …}`; its Σ type is
-  # derived by `Kernel.infer` on the enclosing application, which checks the pair
-  # against the callee's domain (so a dependent Σ parameter is honoured too).
-  def elaborate_expr({:tuple, _meta, [a, b]}, scope, env) do
-    with {:ok, a_core} <- elaborate_expr(a, scope, env),
-         {:ok, b_core} <- elaborate_expr(b, scope, env) do
-      {:ok, {:pair, a_core, b_core}}
-    end
-  end
-
-  def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
 
   # A free name is a nullary constructor, a global definition, or (fallback) a global ref.
   defp resolve_free(name, env) do

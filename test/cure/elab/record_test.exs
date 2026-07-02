@@ -59,6 +59,33 @@ defmodule Cure.Elab.RecordTest do
     assert apply(mod, :g, []) == {:S, :Z}
   end
 
+  test "field projection p.x reads the first field" do
+    src =
+      @pt <>
+        "  fn getx(p: Point) -> Nat = p.x\n  fn g() -> Nat = getx(Point{x: S(Z()), y: Z()})\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.RecProjX", functions: [:getx, :g])
+
+    assert apply(mod, :g, []) == {:S, :Z}
+  end
+
+  test "field projection p.y reads a later field" do
+    src =
+      @pt <>
+        "  fn gety(p: Point) -> Nat = p.y\n  fn g() -> Nat = gety(Point{x: Z(), y: S(S(Z()))})\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.RecProjY", functions: [:gety, :g])
+
+    assert apply(mod, :g, []) == {:S, {:S, :Z}}
+  end
+
+  test "projecting an unknown field is rejected" do
+    assert {:error, {:unknown_field, :Point, "z"}} =
+             Program.elaborate(@pt <> "  fn f(p: Point) -> Nat = p.z\nend\n")
+  end
+
   test "a missing record field is rejected" do
     assert {:error, {:record_field_mismatch, :Point}} =
              Program.elaborate(@pt <> "  fn g() -> Point = Point{x: S(Z())}\nend\n")
