@@ -402,14 +402,24 @@ did not fire.
 
 ### Task B3: Signature-aware `Quote.reify` (= Phase 5; TCB; HARD-STOP gate)
 
-- [ ] Execute lean-shape Task 5.1 as written: recover the params/indices split
-  from the family signature (Lean `inductive_val.get_nparams`; Agda
-  `getNumberOfParameters`), migrating the reach-pinned
-  `reach_reify_split.sexp` red→green-forcing. Full TCB gate + independent
-  adversarial verification; operator reviews the kernel diff.
-- [ ] **Pull-forward trigger** (unchanged): if B1 hits the indexed-Eq-endpoint
-  wall (`infer_type_value_sort` Eq-endpoint false-rejection), B3 runs before
-  B1 completes.
+- [x] Executed. `Quote.reify` gains an optional `sig` (default `nil` = flat
+  read-back, unchanged for all 44 external call sites); when the signature is
+  passed, the `{:vdata}` clause recovers the param/index split from the family's
+  parameter-telescope length (Lean `inductive_val.get_nparams` / Agda
+  `getNumberOfParameters`). The ONLY caller passing `sig` is
+  `infer_type_value_sort`'s `{:veq}` clause (motive well-formedness), which
+  reifies the Eq endpoints signature-aware before `check`ing them — so an
+  indexed-family Eq motive (`λs. Eq(Type, SNat(s), SNat(s))`) is no longer
+  false-rejected `:bad_motive`. Conversion is untouched (still flat). TCB gate:
+  red→green `motive_wf_indexed_eq_endpoint_test` (positive accept + negative
+  control still rejects), reach pin `reach_reify_split.sexp` migrated
+  byte-identically into `corpus.sexp` and the pin deleted (same commit, per its
+  migration contract), full Antigen (192), full suite (2569), independent
+  adversarial verification. Authorized under the standing "TCB changes aligning
+  with Agda/Lean are pre-approved" rule.
+- [x] **Pull-forward trigger discharged**: the indexed-Eq-endpoint wall
+  (`infer_type_value_sort` Eq-endpoint false-rejection) that would have blocked
+  B1 is now removed, so B1 no longer needs B3 pulled forward.
 
 ### Task B4: FRP capstone probes (= Phase 6) — SAFETY PROPERTY DEMONSTRATED on the specified core; switch/Init scoped out on source
 

@@ -669,15 +669,18 @@ defmodule Cure.Core.Kernel do
   # Eq's type-formation rule (mirrors `infer/2`'s `{:eq, ty, a, b}` clause): its
   # sort is the sort of the carrier `ty`, and both endpoints must inhabit `ty`.
   # `ty`'s sort is inferred by value-recursion (robust to an indexed carrier); the
-  # endpoints are checked exactly as `infer/2` does — reifying them and calling
-  # `check/3` against `ty` (the same reified endpoint terms a full reify would
-  # produce, so endpoint acceptance is unchanged).
+  # endpoints are reified and `check`ed against `ty`. Read-back is
+  # SIGNATURE-AWARE (`Context.signature(ctx)`) so an endpoint that is an
+  # indexed-family type value (e.g. `SNat(s)`) recovers its param/index split and
+  # `check` sees the correct arity — without the signature the split collapses and
+  # a well-formed indexed-family Eq motive is false-rejected `:bad_motive`.
   defp infer_type_value_sort(ctx, {:veq, ty, a, b}) do
     with {:ok, level} <- infer_type_value_sort(ctx, ty) do
       depth = Context.length(ctx)
+      sig = Context.signature(ctx)
 
-      with :ok <- check(ctx, Quote.reify(a, depth), ty),
-           :ok <- check(ctx, Quote.reify(b, depth), ty) do
+      with :ok <- check(ctx, Quote.reify(a, depth, sig), ty),
+           :ok <- check(ctx, Quote.reify(b, depth, sig), ty) do
         {:ok, level}
       end
     end
