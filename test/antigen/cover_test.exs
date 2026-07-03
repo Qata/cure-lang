@@ -66,4 +66,32 @@ defmodule Antigen.CoverTest do
     refute 0 in cov.cold
     refute 0 in cov.covered
   end
+
+  test "run_report produces a per-module kernel coverage map and writes a report" do
+    tmp = Path.join(System.tmp_dir!(), "antigen_cov_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(tmp)
+    out = Path.join(tmp, "kcov.md")
+
+    opts = [
+      gen: Mix.Tasks.Antigen.default_gen(),
+      count: 30,
+      corpus_path: Path.join(tmp, "corpus.sexp"),
+      seeds_path: Path.join(tmp, "seeds.sexp"),
+      report_dir: tmp,
+      out: out
+    ]
+
+    {coverage, report} = Antigen.Cover.run_report(opts)
+
+    # every kernel module in @cover_modules gets a coverage entry
+    for m <- Antigen.Cover.cover_modules(), do: assert Map.has_key?(coverage, m)
+    # a real campaign exercises the normalizer
+    assert coverage[Cure.Core.Normalise].total > 0
+    assert length(coverage[Cure.Core.Normalise].covered) > 0
+    assert File.exists?(out)
+    assert report =~ "Kernel Coverage"
+    # cover cleaned up after the report run
+    assert :cover.modules() == []
+    File.rm_rf!(tmp)
+  end
 end

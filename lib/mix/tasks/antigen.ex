@@ -35,13 +35,20 @@ defmodule Mix.Tasks.Antigen do
   @default_count 20_000
   @rounds_per_minute 2000
 
-  @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string, report_dir: :string]
+  @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string,
+             report_dir: :string, out: :string, guided: :boolean, precise: :boolean,
+             edge_corpus: :string]
 
   @impl Mix.Task
   def run(argv) do
     {opts, rest, _} = OptionParser.parse(argv, strict: @switches)
 
-    mode = if match?(["generate" | _], rest), do: :generate, else: :explore
+    mode =
+      cond do
+        match?(["cover" | _], rest) -> :cover
+        match?(["generate" | _], rest) -> :generate
+        true -> :explore
+      end
     count = resolve_count(opts)
 
     seeds_path = opts[:seeds] || "test/antigen/seeds.sexp"
@@ -70,6 +77,14 @@ defmodule Mix.Tasks.Antigen do
         install_sigterm_trap()
         r = Antigen.Runner.generate(runner_opts)
         IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked")
+
+      :cover ->
+        {coverage, _report} = Antigen.Cover.run_report(Keyword.put(runner_opts, :out, opts[:out]))
+        covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
+        total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
+        pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
+        dest = if opts[:out], do: " → #{opts[:out]}", else: ""
+        IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
     end
   end
 

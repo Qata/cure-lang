@@ -77,4 +77,24 @@ defmodule Antigen.Cover do
 
     %{covered: Enum.sort(cov), cold: Enum.sort(cold), total: length(cov) + length(cold)}
   end
+
+  @doc """
+  Runs an Antigen campaign (`Runner.explore/1` with `opts`) with all
+  `@cover_modules` cover-compiled, then returns `{coverage_map, report}` where
+  `coverage_map` is `%{module => line_coverage/1}` and `report` is the rendered
+  markdown (also written to `opts[:out]` if given). The campaign runs inside
+  `with_cover/2`, so instrumentation is always torn down afterward.
+  """
+  def run_report(opts) do
+    coverage =
+      with_cover(@cover_modules, fn ->
+        _ = Antigen.Runner.explore(opts)
+        Map.new(@cover_modules, fn m -> {m, line_coverage(m)} end)
+      end)
+
+    fn_indexes = Map.new(@cover_modules, fn m -> {m, Antigen.CoverReport.function_index(m)} end)
+    report = Antigen.CoverReport.render(coverage, fn_indexes)
+    if out = opts[:out], do: File.write!(out, report)
+    {coverage, report}
+  end
 end
