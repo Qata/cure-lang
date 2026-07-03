@@ -10,7 +10,7 @@ diagnose the kernel bug. Today's triage is partial:
 
 - `Antigen.Shrink.minimize/3` is a solid value-level greedy shrinker (term
   rewrites + de Bruijn ctx-drop), but `Runner.explore/1` wires it up **only** for
-  `:typed_term` / `:mutant_term`. Every other infection kind (`:family`,
+  `:typed_term` / `:mutant_term`. Every other infection kind (`:stub`, `:family`,
   `:indexed_case`, `:rewrite_eq`, `:forcing_pair`, `:stuck_elim`, `:def_group`,
   `:elab_program`) is banked **un-minimized** — the operator triages a bloated
   artifact by hand.
@@ -145,7 +145,8 @@ index order). A drop candidate:
    edits the `{scaffold, pieces}` pair, so no kind-specific payload handling
    leaks in);
 4. is **accepted** iff the rebuilt challenge is `well_formed?` **and** the
-   predicate holds (same violation shape).
+   predicate (called through the same `safe_pred` wrapper Shrink uses — a
+   raise/throw counts as `false`) holds (same violation shape).
 
 On acceptance, restart the sweep on the smaller challenge (greedy); on a full
 pass with no acceptance, that list is 1-minimal. Budget counts predicate calls,
@@ -153,17 +154,26 @@ shared with shrink.
 
 **Safety is the predicate, not static analysis.** Dropping a def that another
 surviving def references by `{:global, name}` yields either a malformed
-challenge (rejected by `well_formed?`) or a different violation (rejected by the
-same-shape predicate). No dependency/reachability analysis is written — the
-oracle decides. This mirrors how shrink already trusts the predicate.
+challenge (rejected by `well_formed?`), a crash in the assay itself (e.g. δ-unfolding
+a now-missing global — caught by `safe_pred`, rejected), or a different violation
+(rejected by the same-shape predicate). No dependency/reachability analysis is
+written — the oracle decides. This mirrors how shrink already trusts the predicate.
 
 ### 6.3 Focus cleanup (the one structural obligation)
 
 `:def_group` / `:forcing_pair` / `:stuck_elim` carry a `focus :: [atom]` naming
 the certified-total members. Dropping def `d` MUST also drop `d`'s name from
-`focus` in the same candidate — otherwise `from_pieces`'s `rebuild_defs` (which
-looks up `focus` names against the surviving defs) would reference an absent
-member. The drop helper removes the name from both `defs` and `focus` atomically.
+`focus` in the same candidate — otherwise the assay/generator code that
+consumes `focus` against the rebuilt `Env` (built only from `defs`) breaks:
+`Antigen.Assays.Totality.certifies?/2`, `Antigen.Assays.StuckElimDelta.certified_env_of/1`,
+and `Antigen.Generators.Forcing.certified_env_of/1` all call `Env.get_def(env, name)`
+for each `focus` name, which returns `nil` for a name no longer in `defs` and
+crashes on the following field access. (`from_pieces`'s `rebuild_defs` itself
+does no such lookup — it decodes `focus` names independently of `defs` — so the
+crash is not there; it is in the predicate's assay call, caught by `safe_pred`
+and turned into a rejection. Without cleanup, every attempt to drop a focused
+def would therefore be silently rejected as if unsafe, even when it is not.)
+The drop helper removes the name from both `defs` and `focus` atomically.
 
 ### 6.4 What bisect does NOT reindex
 
@@ -199,6 +209,22 @@ Bisect is tried first each round (structural cuts shrink the term set that
 shrink then walks). Determinism, monotonicity (§7.2), `safe_pred`, and
 `well_formed?` are inherited unchanged.
 
+**Interleaving is one accepted step at a time, not two nested fixpoints.**
+`Shrink.minimize/3` runs shrink to its *own* local fixpoint before returning —
+calling it wholesale from inside Triage's loop would let shrink fully converge
+before bisect ever got a second try, breaking the "bisect first each round"
+order above. `Triage.minimize/3` therefore does not call `Shrink.minimize/3`;
+it drives a single shared `first_accepted`-style step over
+`bisect_candidates(ch) ++ shrink_candidates(ch)` (bisect's candidates first,
+matching Component 2 §6.2; shrink's candidates via the same enumeration
+`Shrink.candidates/1` already produces), accepting the first well-formed,
+`safe_pred`-guarded, predicate-satisfying candidate and restarting from the
+top of the combined list on every acceptance. `Shrink`'s existing
+reseed-after-accept convention (`seed: :erlang.phash2({kind, payload})`,
+currently private to `Shrink.sweep/3`) is reused on every Triage-accepted step
+too — bisect drops included — so `c_min.seed` reflects the minimized payload
+the same way it does for today's `:typed_term`/`:mutant_term` shrink-only path.
+
 ### 7.2 Generalized `size/1` (the monotonicity gate)
 
 `Shrink.size/1` today reads `payload.term`/`payload.ctx` — kind-specific. Triage
@@ -211,7 +237,12 @@ size(ch) = Σ_pieces (node_count(term) + numeral_magnitude(term))
 ```
 
 `node_count`/`numeral_magnitude` already exist in `Shrink`. `list_elements`
-counts the scaffold's list-structured components. Every shrink rewrite strictly
+counts the scaffold's list-structured components **that exist for that kind**
+— `ctx`/`defs`/`ctors`/`families`/`focus` are read defensively (absent ⇒ 0
+contribution), since no kind carries all five (e.g. `:family` has `ctors` but
+no `defs`/`focus`/`ctx`, and `:elab_program` has none of the five — its
+`list_elements` is always 0, consistent with the shrink/bisect no-op). Every
+shrink rewrite strictly
 lowers the first sum; every bisect drop strictly lowers `list_elements`. A
 candidate is accepted only if `size(candidate) < size(current)`, so the joint
 process is monotone and terminates independent of the budget. The generalized
@@ -267,7 +298,10 @@ Both are siblings of `lib/antigen/shrink.ex`, **outside** the
 **Modified**
 - `lib/antigen/shrink.ex` — `candidates/1` re-seated on `to_pieces`/`from_pieces`
   (per-piece rewrites); ctx-drop retained for de-Bruijn kinds; `term_candidates`
-  and the rewrite rules unchanged.
+  and the rewrite rules unchanged. `candidates/1` and `reseed/1` (currently
+  `defp`) become module-visible (`@doc false` or similar, not part of the
+  public step-fixpoint API) so `Antigen.Triage` can drive its own one-step-at-a-time
+  loop over them per §7.1, instead of calling the fixpoint-running `minimize/3`.
 - `lib/antigen/runner.ex` — infection branch calls `Triage.minimize/3` for all
   kinds; merges `:triage` stats into the health map.
 - `lib/antigen/report.ex` — `render/3` emits the optional `triage:` line.
@@ -286,7 +320,11 @@ Both are siblings of `lib/antigen/shrink.ex`, **outside** the
 Each behavior gets a failing test first. Predicates in tests are **synthetic**
 same-violation-shape closures (a small property the bloated artifact satisfies
 and the minimal one still satisfies), so tests exercise the reduction machinery
-deterministically without needing a real kernel bug. Representative rows:
+deterministically without needing a real kernel bug. Tests are **immutable**
+once written: green is reached by changing `Triage`/`Bisect`/`Shrink` code,
+never by weakening, skipping, or deleting a test — the sole exception is a
+test proven to encode incorrect behavior, and that must be argued explicitly
+before the test itself is touched. Representative rows:
 
 - **Shrink-all-kinds:** a `:family` whose infection is carried by one bloated
   ctor arg minimizes (arg rewritten to a minimal atom) while the family stays
