@@ -50,6 +50,20 @@ defmodule Antigen.Assays.SmtLint do
     end
   end
 
+  def run(%Challenge{kind: :smt_query, assay: "smt/unsat", payload: %{constraint: constraint, var: var}}, k) do
+    case k.check_sat.(constraint, %{var => :int}) do
+      :unsat ->
+        case Enum.find(@domain, fn x -> eval_pred(constraint, x) end) do
+          nil -> :ok
+          x -> {:violation, {:false_unsat, %{x: x, constraint: constraint}}}
+        end
+
+      _ ->
+        # :sat / :unknown — the lint did not claim unsat
+        :ok
+    end
+  end
+
   # --- bounded oracle: independent evaluator over the MetaAST predicate format ---
   # Mirrors Translator.translate_op/1 semantics exactly (single free variable = x).
   defp eval_pred({:literal, _meta, n}, _x), do: n

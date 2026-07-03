@@ -45,4 +45,29 @@ defmodule Antigen.Assays.SmtLintTest do
       assert {:violation, {:false_discharge, _}} = SmtLint.run(impl_ch(gt(0), gt(5)), k)
     end
   end
+
+  describe "smt/unsat (V6b)" do
+    # x > 0 ∧ x < 0  — unsatisfiable
+    defp conj(a, b), do: bop(:and, a, b)
+    defp lt(n), do: bop(:<, xvar(), lit(n))
+
+    defp sat_ch(constraint) do
+      Challenge.new(kind: :smt_query, assay: "smt/unsat", label: :positive,
+        payload: %{constraint: constraint, var: "x"}, seed: 1)
+    end
+
+    test "unsat baseline: x > 0 ∧ x < 0 is unsat, no bounded witness → :ok" do
+      assert SmtLint.run(sat_ch(conj(gt(0), lt(0)))) == :ok
+    end
+
+    test "sat baseline: x > 0 is sat (lint returns :sat not :unsat) → :ok" do
+      assert SmtLint.run(sat_ch(gt(0))) == :ok
+    end
+
+    test "negative control: a check_sat stub returning :unsat on the satisfiable x > 0" do
+      k = %{SmtLint.__real__() | check_sat: fn _ast, _vt -> :unsat end}
+      assert {:violation, {:false_unsat, %{x: x}}} = SmtLint.run(sat_ch(gt(0)), k)
+      assert x > 0
+    end
+  end
 end
