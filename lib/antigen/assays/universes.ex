@@ -9,10 +9,17 @@ defmodule Antigen.Assays.Universes do
   alias Antigen.{Challenge, Generators}
   alias Cure.Core.{Env, Inductive, Kernel}
 
+  # Real kernel op, the byte-identical default for the `:indexed_case` `run/1`
+  # clause (the def-shaped path checked by `Kernel.check_def`).
+  @real_kernel %{check_def: &Kernel.check_def/2}
+
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
-  def run(%Challenge{kind: :indexed_case, label: label, payload: %{def_name: dn}} = c) do
+  def run(%Challenge{kind: :indexed_case} = c), do: run(c, @real_kernel)
+
+  @doc "Same as the `:indexed_case` `run/1` clause but with an injectable kernel-op map (sensitivity test seam)."
+  def run(%Challenge{kind: :indexed_case, label: label, payload: %{def_name: dn}} = c, k) do
     env = Generators.Universes.env_of(c)
-    judge(label, Kernel.check_def(env, dn), dn)
+    judge(label, k.check_def.(env, dn), dn)
   end
 
   def run(%Challenge{kind: :family, label: label, payload: %{family: fam, ctors: ctors}}) do

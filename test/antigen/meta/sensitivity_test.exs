@@ -41,4 +41,13 @@ defmodule Antigen.Meta.SensitivityTest do
     assert {:violation, {:wrongly_accepted, :Bad}} =
              Antigen.Assays.Positivity.run(ch, WeakKernel.weaken(:positive_accepts_all))
   end
+
+  # -- Row 5: Universes -------------------------------------------------------
+  test "row 5 — universe_accepts_all is CAUGHT by universes (Type-in-Type ill_typed def)" do
+    ch = Antigen.Generators.Universes.type_in_type(:ill_typed)
+    assert :ok = Antigen.Assays.Universes.run(ch, WeakKernel.real())
+
+    assert {:violation, {:wrongly_accepted, :u}} =
+             Antigen.Assays.Universes.run(ch, WeakKernel.weaken(:universe_accepts_all))
+  end
 end
