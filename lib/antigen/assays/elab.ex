@@ -126,8 +126,9 @@ defmodule Antigen.Assays.Elab do
       if Erase.has_hole?(body) do
         nil                                                # skip incomplete def
       else
-        case check_one(k, ctx, name, ty, body) do
+        case Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> check_one(k, ctx, name, ty, body) end) do
           :ok -> nil
+          :fuel_exhausted -> {:violation, {:fuel_exhausted, name}}
           {:violation, _} = v -> v
         end
       end

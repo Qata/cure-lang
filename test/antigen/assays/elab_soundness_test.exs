@@ -106,4 +106,47 @@ defmodule Antigen.Assays.ElabSoundnessTest do
                Elab.run(prog("ignored"), kernel_with_env(env))
     end
   end
+
+  describe "fuel bound" do
+    # A certified, non-normalizing global (`loop`'s body is a bare self-reference
+    # `{:global, :loop}` — NOT an application). We certify it directly (bypassing
+    # the totality checker that would normally block it) — the assay must NOT
+    # assume elaboration prevents a non-normalizing emitted def.
+    #
+    # `loop`'s OWN check_one pass is deliberately clean (infer only ever reads a
+    # global's DECLARED type — `infer(ctx,{:global,:loop})` = eval(@nat) = Nat,
+    # matching its own declared `@nat`, no δ needed — so `:loop` itself is not
+    # what infects). A second def, `probe`, is what forces δ: its declared type
+    # is `Eq(Nat, loop, Z)` (an endpoint IS `loop`), and its body is `refl(Z)`.
+    # Checking `probe` compares `inferred = Eq(Nat, Z, Z)` against `declared =
+    # Eq(Nat, loop, Z)`; the middle endpoints (`Z` vs `loop`) are not both
+    # neutral, so Conv falls to the general path, which `Normalise.whnf_value`s
+    # BOTH sides — forcing the `{:nglobal, :loop}` neutral to δ-unfold.
+    #
+    # Verified by hand-tracing `Normalise.unfold_certified_head`: unfolding a
+    # BARE self-reference (`Eval.eval({:global, :loop}, []) == {:vneutral,
+    # {:nglobal, :loop}}}` — i.e. δ reproduces the IDENTICAL neutral each step,
+    # no spine growth) makes every iteration O(1) (`spend_fuel` decrements once,
+    # `spine` traverses a constant-depth term), so total work across the fuel
+    # budget is O(fuel), not O(fuel²) — this is why the body is a bare global
+    # reference and not a self-application: `{:app, {:global, :loop}, {:ctor,
+    # :Z, []}}` would (a) make `loop`'s OWN check_one infer fail structurally
+    # with `:not_a_function` BEFORE any δ (its declared type `@nat` isn't a Π,
+    # so applying it is ill-typed — this never reaches δ/fuel at all, the
+    # original bug in this test), and (b) even redirected through `probe`,
+    # would re-grow the neutral's `:napp` spine by one layer per δ-step, making
+    # `spine/2`'s per-step traversal O(step), i.e. O(fuel²) total — likely
+    # multiple minutes at fuel = 500_000, blowing the 30s `Task.await` budget.
+    test "non-normalizing emitted def reports :fuel_exhausted, does not hang" do
+      env =
+        seeded()
+        |> Env.add_def(:loop, @nat, {:global, :loop})
+        |> Env.certify(:loop)
+        |> Env.add_def(:probe, {:eq, @nat, {:global, :loop}, {:ctor, :Z, []}},
+                        {:refl, {:ctor, :Z, []}})
+
+      task = Task.async(fn -> Elab.run(prog("ignored"), kernel_with_env(env)) end)
+      assert {:violation, {:fuel_exhausted, :probe}} = Task.await(task, 30_000)
+    end
+  end
 end
