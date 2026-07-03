@@ -212,6 +212,50 @@ not have, and are excluded from this roadmap by construction:
   ledger #3 only because the kernel already nests — it is a reach item for our
   existing single-level matching, not a new domain.
 
+### 4.1 Future / someday — deferred from the guard-coverage work
+
+These came out of the constructor-`when` + guard-exhaustiveness design (see the
+locked decision below). Recorded so they are not re-litigated; none is committed.
+
+- **SMTCoq-style proof reconstruction** — the *only* sound way to let SMT results
+  underpin dependent-checker decisions: have Z3 emit a proof and reconstruct it as
+  a Core term the kernel re-checks, so the solver is a search oracle and the kernel
+  stays the sole arbiter (trust nothing). Large, research-grade. The path to take
+  *if* SMT-in-proofs ever becomes a goal — **not** trusting Z3's verdict directly.
+
+- **LOCKED DECISION — do NOT wire Z3 as a *trusted* elaborator surface.** Z3 must
+  never be an oracle whose "yes" the kernel relies on instead of re-deriving:
+  that puts Z3 + its translator + its response parser + the subprocess into the
+  soundness TCB, and unsound *dependent-coverage* (unlike a local refinement error)
+  lets you inhabit `False` and collapses the whole proof theory. Refinement-tier
+  Z3 trust (`lib/cure/types`) is a separate, weaker tier and does not license
+  extending it into the dependent kernel. Z3 in the dependent checker is only ever
+  an **untrusted lint** (can reject, never unsoundly accept) — see the guard-
+  coverage work, which stays total-by-construction regardless of the solver.
+
+- **Real `Ordering` view (`LT | EQ | GT`) + `compare : a -> a -> Ordering`** — the
+  zero-trust route to "trichotomy needs no catch-all": recognize a trichotomy guard
+  group and desugar to a structural `match compare(x, p)`, whose 3-constructor
+  coverage the kernel checks itself (no Z3). This is how Idris earns the same
+  (`with (compare x y)`). Narrower than the Z3 lint (only recognized partitions) but
+  gives *kernel-real* coverage with no solver dependency. `Std.Ord.compare` today
+  returns a bare `Atom` (`:lt`/`:eq`/`:gt`), so this needs the inductive `Ordering`
+  first. Candidate to sit *alongside* the Z3 lint (lint for the general case, view
+  for the common trichotomy).
+
+- **Make `Bool` a real inductive (`false | true`) instead of a primitive** — worth
+  investigating; *likely* net-positive. Payoff: the bespoke `bool_elim` primitive
+  eliminator (added across ~6 core modules) collapses into the general `:case` on a
+  2-constructor family the kernel already handles — smaller TCB, one eliminator not
+  two, `if`/guards/`pickup` all desugar to ordinary `:case`, and the branch-
+  comparison soundness care `bool_elim` needed is subsumed by `:case`'s tested path.
+  Cost: `{:prim}` ops (`:eq`/`:lt`/…) must then *produce* the designated `Bool`
+  inductive, so the kernel needs a builtin-binding tying primitive results to a
+  standard inductive declaration (à la Lean/Agda builtin pragmas) — itself a TCB
+  refactor. Does **not** help guard exhaustiveness. Decision rule (per operator):
+  do it only if the builtin-binding cost is acceptable for the TCB-minimality win;
+  do not do it for its own sake.
+
 ## 5. Suggested sequencing (dependency-ordered, post-④)
 
 1. **④ merges** (rows 2, 8, 16 land; unblocks A7/#25).
