@@ -12,9 +12,11 @@
 
 - **Ghost-authored commits:** `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, no `Co-Authored-By` trailer.
 - **Test env:** `MIX_ENV=test mix test …` (dev env crashes). macOS has no `timeout`; `elixir` doesn't read stdin via `-` (use a script file). One build/test run at a time.
-- **Reuse, don't re-derive:** the hazard set (Part 2) is precisely defined in spec §3.1 — scaffold-carried *value* strings that `from_pieces`/`decode_record` pass to `String.to_existing_atom` (kind, label, sig, def_name, family/ctor `name`/`arg_names`/`quantities`, def_group `names`/`focus`) — **not** Term-piece atoms (minted by `Serialize.decode`), **not** `assay` (never atom-converted), **not** the readable `fault=` field (minted by `decode_fault`). The membership check pulls **map VALUES only** (never keys) from the decoded scaffold, which — probe-verified — yields exactly the atomized names.
+- **Reuse, don't re-derive:** the hazard set (Part 2) is precisely defined in spec §3.1 — scaffold-carried *value* strings that `from_pieces`/`decode_record` pass to `String.to_existing_atom` (kind, label, sig, def_name, family/ctor `name`/`arg_names`/`quantities`, def_group `names`/`focus`) — **not** Term-piece atoms (minted by `Serialize.decode`), **not** `assay` (never atom-converted), **not** the readable `fault=` field (minted by `decode_fault`). The membership check pulls **map VALUES only** (never keys) from the decoded scaffold, which — probe-verified — yields exactly the atomized names **for the four record kinds actually present in the four corpora today** (`def_group`, `family`, `forcing_pair`, `indexed_case`, `rewrite_eq`, `stuck_elim`, `typed_term`, `mutant_term`).
+- **Known non-goal, not silently assumed away:** `Challenge.to_pieces/1`'s `:elab_program` clause (`challenge.ex:172-175`) stringifies scaffold *keys* only (`Atom.to_string(k)`), not values — so its atom-valued payload fields (`expect: :accept`/`:reject`, `relation: :same`/`:flip`, from `Generators.ElabErasure`) ride into the scaffold's `:erlang.term_to_binary/1` blob as **raw atoms**, not strings, and are invisible to `scaffold_value_strings`'s binary-only walk. That is a *different* decode hazard than the `String.to_existing_atom` mechanism above — a `binary_to_term(_, [:safe])` on an un-interned atom raises regardless of `@known_atoms`. Confirmed (probe): no committed record in any of the four corpora has `kind=elab_program`, so this is not exercised today and Task 1's guard does not need to (and does not) cover it. If `elab_program` challenges are ever banked to a corpus file, this gap must be re-audited (`:accept`/`:reject`/`:same`/`:flip` are not currently in `@known_atoms` either) — out of scope for this plan, flagged here so it isn't mistaken for "already handled."
 - **Construction guarantees already hold** (spec §2.1, §4a: 5,000/3,000/600-draw probes, zero violations). Items 1, 2, 3, 5 of spec §5 are regression-locks expected to pass on first run; only item 4 (atoms) and item 6 (migrate the 4th corpus) are genuinely red. Do not manufacture a red state that doesn't exist; if a "pass-first" test unexpectedly fails, that's a real new finding, not something to weaken.
 - **Do not touch** `lib/antigen/corpus.ex`, the migrate task's code, or `seeds.sexp`/`corpus.sexp`/`reach.sexp` (already migrated).
+- **Tests are immutable once written.** Across all four tasks, once a test in this plan (or the existing suite) correctly encodes the intended behavior, make it green by changing implementation code only — never by deleting, skipping, loosening an assertion, or rewriting the test to match whatever the code currently does. The sole exception: the test itself is wrong (a bug in the test's own logic, or a concrete input that doesn't actually distinguish the cases it claims to). In that case, state explicitly *why* the test is wrong and what the correct behavior is before editing it — "the test is failing and editing it is the fastest path to green" is never sufficient justification on its own.
 
 ---
 
@@ -228,7 +230,11 @@ Replace the existing `"deepen wraps a fault … UNCONTAMINATED …"` test (curre
     kinds = Enum.map(Mutation.operators(), fn op -> elem(Mutation.build(ctx, op), 1).kind end)
     assert Enum.sort(kinds) == Enum.sort(Mutation.operators())
     # each wrapper kind applies without error and yields a distinct well-formed term
-    terms = Enum.map(Mutation.wrappers(), fn k -> Mutation.wrap({:ctor, :Z, []}, k, {:ctor, :Z, []}) end)
+    # (inner != filler: :case_scrut's branch body ignores the filler and :case_branch's
+    # scrutinee ignores the inner, so inner == filler would make those two wrapper
+    # outputs byte-identical and collapse the uniq count to 4 — verified by direct
+    # run with inner = filler = {:ctor,:Z,[]})
+    terms = Enum.map(Mutation.wrappers(), fn k -> Mutation.wrap({:ctor, :Z, []}, k, {:ctor, :S, [{:ctor, :Z, []}]}) end)
     assert length(Enum.uniq(terms)) == length(Mutation.wrappers())
     assert Enum.all?(terms, &Cure.Core.Term.term?/1)
   end
@@ -236,10 +242,12 @@ Replace the existing `"deepen wraps a fault … UNCONTAMINATED …"` test (curre
 
 Leave the `"every operator produces a term the kernel REJECTS"` test (~`:9-21`) and the witness-invariant test (~`:23-46`) as-is: the former is construction-safe (0/600 no-op, filler-independent per spec §2.1) and the latter is already deterministic; neither is a seed-flake surface.
 
-- [ ] **Step 2: Run — expect FAIL (compile error)**
+> **Deliberate, narrower scope than spec §2.2/§5-item-2 (recorded, not silently dropped):** §2.2's second bullet and §5 item 2 also call for rewriting `:9-21` itself to a single deterministic construction-guaranteed draw per operator (dropping the `sample(gen, 20)` StreamData call entirely). This plan does **not** do that: per §2.1's own 600-draw-zero-violations probe, `:9-21`'s sampling can never flake (rejection is proven filler-independent by construction), so rewriting it would buy stylistic uniformity with §2.2's wording, not any additional flake-safety against this plan's own stated top-line goal ("kill any latent seed-flake in the mutation-generator tests," line 5). This is a conscious scope narrowing, not an oversight; the Self-Review below states it explicitly rather than silently claiming full §2.2 coverage. (If full spec-§2.2 conformance is wanted regardless of the flake-safety argument, that is a legitimate one-line follow-up — the fixed-filler pattern from `build/2`'s `head_swap` clause generalizes directly — but it is out of scope for *this* plan's stated goal.)
+
+- [ ] **Step 2: Run — expect FAIL**
 
 Run: `MIX_ENV=test mix test test/antigen/generators/mutation_test.exs`
-Expected: FAIL — `Mutation.wrap/3` is undefined.
+Expected: FAIL — the module still compiles (with a `Mutation.wrap/3 is undefined or private` compiler *warning*, since Elixir resolves remote calls dynamically), then the first new test raises `UndefinedFunctionError: function Antigen.Generators.Mutation.wrap/3 is undefined or private` at runtime (verified: not a hard compile abort — `mix test` proceeds and reports 6/7 passed, 1 failed with that error).
 
 - [ ] **Step 3: Implement — factor `wrap/3` out of `apply_wrapper`**
 
@@ -331,7 +339,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(an
 
 ## Self-Review
 
-**Spec coverage:** §2.1 construction guarantees → Task 3 (`wrap/3` refactor documents/locks non-contamination; the invariant already holds so no generator fix — §2.1). §2.2 deterministic tests → Task 3 (uncontaminated → per-wrapper fixed-filler; diversity/reachability → construction-based). §3.1 atom audit → Task 1 (adds `:data_split`/`:reify_distinct`/`:reify_eq`). §3.2 membership guard → Task 1 (values-only scaffold walk + kind/label, the probe-verified precise set). §4a fault-schema lock → Task 4. §4c corpora-readable + migrate 4th corpus → Task 2. §5 red/green split honored (Tasks 1,2 red; Tasks 3,4 pass-first regression locks). §6 files match. §7 non-goals respected (no re-banking; only `reach_reify_split.sexp` data change; `corpus.ex` untouched).
+**Spec coverage:** §2.1 construction guarantees → Task 3 (`wrap/3` refactor documents/locks non-contamination; the invariant already holds so no generator fix — §2.1). §2.2 deterministic tests → Task 3 covers 2 of its 3 sub-items (uncontaminated → per-wrapper fixed-filler; diversity/reachability → construction-based); the third (rewriting `:9-21`'s per-operator-rejection check to a single deterministic draw) is **deliberately not done** — see the scope note under Task 3 Step 1 for why (construction-safe by §2.1, so no flake-safety is gained). §3.1 atom audit → Task 1 (adds `:data_split`/`:reify_distinct`/`:reify_eq`); the audit's `String.to_existing_atom` hazard mechanism is exhaustive for the record kinds present in the four corpora today — it does **not** cover `:elab_program`'s raw-atom-valued scaffold fields (`expect`/`relation`), a different (`[:safe]` binary_to_term) hazard mechanism that is currently unexercised (no committed `elab_program` record) — see the Global Constraints caveat. §3.2 membership guard → Task 1 (values-only scaffold walk + kind/label, the probe-verified precise set, scoped as above). §4a fault-schema lock → Task 4. §4c corpora-readable + migrate 4th corpus → Task 2. §5 red/green split honored (Tasks 1,2 red; Tasks 3,4 pass-first regression locks). §6 files match. §7 non-goals respected (no re-banking; only `reach_reify_split.sexp` data change; `corpus.ex` untouched).
 
 **Placeholder scan:** none — every step has concrete code/commands.
 
