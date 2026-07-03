@@ -212,4 +212,29 @@ defmodule Antigen.CorpusTest do
   defp corpus_keys(path) do
     path |> File.stream!() |> Enum.map(&Corpus.raw_key/1) |> Enum.sort()
   end
+
+  @looks_base64 ~r/\A[A-Za-z0-9+\/]{16,}={0,2}\z/
+
+  test "a banked mutant record in seeds.sexp is fully human-readable" do
+    seeds = "test/antigen/seeds.sexp"
+    line =
+      seeds
+      |> File.stream!()
+      |> Enum.find(fn l -> String.contains?(l, "kind=mutant_term") end)
+
+    assert line, "expected at least one mutant_term in #{seeds}"
+    # drop the leading "antigen-record" marker (no `=`) before building the map —
+    # `Map.new`/`:maps.from_list` cannot mix its 1-tuple with the other fields' 2-tuples
+    fields = line |> String.trim_trailing("\n") |> String.split("\t") |> tl()
+    m = Map.new(fields, fn f -> List.to_tuple(String.split(f, "=", parts: 2)) end)
+
+    # readable, not Base64, in the three human-facing fields
+    assert m["pieces"] =~ "(", "pieces must be s-expr"
+    refute Regex.match?(@looks_base64, m["note"] || "-")
+    assert m["fault"] =~ "((", "mutant must carry a readable fault field"
+    refute Regex.match?(@looks_base64, m["fault"])
+    # and it still decodes
+    assert {:ok, c} = Corpus.decode_record(line)
+    assert c.kind == :mutant_term
+  end
 end
