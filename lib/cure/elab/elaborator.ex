@@ -3057,8 +3057,8 @@ defmodule Cure.Elab.Elaborator do
   # the expected `DDec` — closing the composed-computed-index reach (Idris parity)
   # without any kernel change (`Unify` uses the trusted `Conv`; the kernel still
   # re-checks the assembled ctor). See `Unify.unify/4`.
-  defp solve_arg({{_name, _type_term}, :erased}, {:ok, mctx, chosen, present}, _env) do
-    {mctx, id} = MetaCtx.fresh(mctx)
+  defp solve_arg({{_name, type_term}, :erased}, {:ok, mctx, chosen, present}, _env) do
+    {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(type_term, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
@@ -3138,8 +3138,8 @@ defmodule Cure.Elab.Elaborator do
     |> finish_global_app(name, codomain, ctx)
   end
 
-  defp bidir_app_slot({_dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
-    {mctx, id} = MetaCtx.fresh(mctx)
+  defp bidir_app_slot({dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
+    {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(dom, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 

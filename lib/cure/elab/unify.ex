@@ -9,18 +9,34 @@ defmodule Cure.Elab.MetaCtx do
   away); an unsolved metavariable at that point is an elaboration error.
   """
 
-  defstruct next: 0, solutions: %{}
+  defstruct next: 0, solutions: %{}, types: %{}
 
   @type id :: non_neg_integer()
-  @type t :: %__MODULE__{next: non_neg_integer(), solutions: %{id() => Cure.Core.Term.t()}}
+  @type t :: %__MODULE__{
+          next: non_neg_integer(),
+          solutions: %{id() => Cure.Core.Term.t()},
+          types: %{id() => Cure.Core.Term.t()}
+        }
 
   @doc "A fresh, empty metavariable context."
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
-  @doc "Allocate a fresh metavariable, returning `{ctx, id}`."
-  @spec fresh(t()) :: {t(), id()}
-  def fresh(%__MODULE__{next: n} = ctx), do: {%{ctx | next: n + 1}, n}
+  @doc """
+  Allocate a fresh metavariable, returning `{ctx, id}`. An optional `type` (the
+  metavariable's expected type as a Core term, in the ambient frame) is recorded
+  so higher-order (Miller) unification can recover the abstraction-lambda domains
+  when solving `?m x̄ := λx̄. t`.
+  """
+  @spec fresh(t(), Cure.Core.Term.t() | nil) :: {t(), id()}
+  def fresh(ctx, type \\ nil)
+
+  def fresh(%__MODULE__{next: n, types: ts} = ctx, type),
+    do: {%{ctx | next: n + 1, types: Map.put(ts, n, type)}, n}
+
+  @doc "The recorded type for `id`, or nil if unknown."
+  @spec meta_type(t(), id()) :: Cure.Core.Term.t() | nil
+  def meta_type(%__MODULE__{types: ts}, id), do: Map.get(ts, id)
 
   @doc "The solution term for `id`, or nil if unsolved."
   @spec solution(t(), id()) :: Cure.Core.Term.t() | nil
@@ -109,41 +125,152 @@ defmodule Cure.Elab.Unify do
 
   defp force(t, _ctx), do: t
 
-  defp do_unify({:meta, id}, {:meta, id}, ctx, _sig, _depth), do: {:ok, ctx}
-  defp do_unify({:meta, id}, t, ctx, _sig, depth), do: solve(id, t, ctx, depth)
-  defp do_unify(t, {:meta, id}, ctx, _sig, depth), do: solve(id, t, ctx, depth)
+  # Try higher-order (Miller) pattern unification before the first-order rules:
+  # when one side is a metavariable applied to a spine of DISTINCT bound variables
+  # (`?m x̄`) and the other is rigid, solve `?m := λx̄. t` by abstracting `t` over
+  # `x̄`, taking the abstraction-lambda domains from `?m`'s recorded type. Any
+  # condition unmet → `:fallthrough` to the structural rules, so this is never
+  # worse than the prior first-order behaviour. The kernel independently re-checks
+  # the zonked solution, so no soundness rests on this (a wrong solve is caught
+  # downstream). Idris/Agda pattern-unification parity (ledger #10).
+  defp do_unify(t1, t2, ctx, sig, depth) do
+    case {miller_pattern(t1), miller_pattern(t2)} do
+      {{id, vars}, _} -> miller_or(miller_solve(id, vars, t2, ctx, depth), t1, t2, ctx, sig, depth)
+      {_, {id, vars}} -> miller_or(miller_solve(id, vars, t1, ctx, depth), t1, t2, ctx, sig, depth)
+      _ -> do_unify_struct(t1, t2, ctx, sig, depth)
+    end
+  end
 
-  defp do_unify({:type, l}, {:type, l}, ctx, _sig, _depth), do: {:ok, ctx}
-  defp do_unify({:var, i}, {:var, i}, ctx, _sig, _depth), do: {:ok, ctx}
-  defp do_unify({:global, g}, {:global, g}, ctx, _sig, _depth), do: {:ok, ctx}
+  defp miller_or({:ok, ctx2}, _t1, _t2, _ctx, _sig, _depth), do: {:ok, ctx2}
+  defp miller_or(:fallthrough, t1, t2, ctx, sig, depth), do: do_unify_struct(t1, t2, ctx, sig, depth)
 
-  defp do_unify({:data, f, ps1, is1}, {:data, f, ps2, is2}, ctx, sig, depth),
+  # A spine `?id a_1 … a_n` (n ≥ 1) where every `a_k` is a variable →
+  # `{id, [a_1, …, a_n]}` (application order); `nil` otherwise.
+  defp miller_pattern(t), do: mpat(t, [])
+  defp mpat({:app, f, {:var, i}}, acc), do: mpat(f, [i | acc])
+  defp mpat({:app, _f, _x}, _acc), do: nil
+  defp mpat({:meta, id}, acc) when acc != [], do: {id, acc}
+  defp mpat(_t, _acc), do: nil
+
+  # Solve `?id x̄ := λx̄. abstract(rhs)`. `:fallthrough` when the pattern side
+  # conditions are unmet (non-distinct vars, a var that is not a crossed binder,
+  # unknown/insufficient metavariable type, a non-pattern free var in `rhs`, or an
+  # occurs-check failure) — the caller then uses the first-order rules.
+  defp miller_solve(id, vars, rhs, ctx, depth) do
+    n = length(vars)
+
+    with true <- vars_ok?(vars, depth),
+         mtype when not is_nil(mtype) <- MetaCtx.meta_type(ctx, id),
+         {:ok, doms} <- peel_pi_domains(mtype, n),
+         {:ok, body} <- miller_abstract(rhs, depth, vars, n),
+         false <- occurs?(id, body, ctx) do
+      {:ok, MetaCtx.put_solution(ctx, id, wrap_lams(doms, body))}
+    else
+      _ -> :fallthrough
+    end
+  end
+
+  # Pattern args must be DISTINCT and each a variable crossed by one of the
+  # `depth` binders (so it can be abstracted into a lambda of the solution).
+  defp vars_ok?(vars, depth),
+    do: Enum.all?(vars, &(&1 >= 0 and &1 < depth)) and length(Enum.uniq(vars)) == length(vars)
+
+  defp peel_pi_domains(_type, 0), do: {:ok, []}
+
+  defp peel_pi_domains({:pi, d, c}, n) when n > 0 do
+    with {:ok, rest} <- peel_pi_domains(c, n - 1), do: {:ok, [d | rest]}
+  end
+
+  defp peel_pi_domains(_type, _n), do: :error
+
+  defp wrap_lams([], body), do: body
+  defp wrap_lams([d | ds], body), do: {:lam, d, wrap_lams(ds, body)}
+
+  # Abstract `rhs` (at binder `depth`) over the pattern vars: a pattern var `x_k`
+  # becomes the k-th solution-lambda binder; an ambient var is shifted up by `n`
+  # (removing the `depth` crossed binders, adding `n` lambdas); a crossed binder
+  # that is NOT a pattern var escapes (no pattern solution). `local` tracks
+  # binders internal to `rhs`.
+  defp miller_abstract(rhs, depth, vars, n) do
+    {:ok, mabs(rhs, depth, vars, n, 0)}
+  catch
+    :throw, :miller_escape -> :error
+  end
+
+  defp mabs({:var, v}, depth, vars, n, local) do
+    cond do
+      v < local -> {:var, v}
+      v - local >= depth -> {:var, n + v - depth}
+      true ->
+        case Enum.find_index(vars, &(&1 == v - local)) do
+          nil -> throw(:miller_escape)
+          k0 -> {:var, local + n - 1 - k0}
+        end
+    end
+  end
+
+  defp mabs({:pi, d, c}, dep, vs, n, l), do: {:pi, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
+  defp mabs({:lam, d, b}, dep, vs, n, l), do: {:lam, mabs(d, dep, vs, n, l), mabs(b, dep, vs, n, l + 1)}
+  defp mabs({:sigma, d, c}, dep, vs, n, l), do: {:sigma, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
+  defp mabs({:app, f, x}, dep, vs, n, l), do: {:app, mabs(f, dep, vs, n, l), mabs(x, dep, vs, n, l)}
+  defp mabs({:pair, a, b}, dep, vs, n, l), do: {:pair, mabs(a, dep, vs, n, l), mabs(b, dep, vs, n, l)}
+  defp mabs({:fst, p}, dep, vs, n, l), do: {:fst, mabs(p, dep, vs, n, l)}
+  defp mabs({:snd, p}, dep, vs, n, l), do: {:snd, mabs(p, dep, vs, n, l)}
+
+  defp mabs({:eq, ty, a, b}, dep, vs, n, l),
+    do: {:eq, mabs(ty, dep, vs, n, l), mabs(a, dep, vs, n, l), mabs(b, dep, vs, n, l)}
+
+  defp mabs({:refl, a}, dep, vs, n, l), do: {:refl, mabs(a, dep, vs, n, l)}
+
+  defp mabs({:data, nm, ps, is}, dep, vs, n, l),
+    do: {:data, nm, Enum.map(ps, &mabs(&1, dep, vs, n, l)), Enum.map(is, &mabs(&1, dep, vs, n, l))}
+
+  defp mabs({:ctor, c, args}, dep, vs, n, l), do: {:ctor, c, Enum.map(args, &mabs(&1, dep, vs, n, l))}
+  defp mabs({:prim, op, args}, dep, vs, n, l), do: {:prim, op, Enum.map(args, &mabs(&1, dep, vs, n, l))}
+
+  defp mabs({:case, s, m, brs}, dep, vs, n, l) do
+    {:case, mabs(s, dep, vs, n, l), mabs(m, dep, vs, n, l),
+     Enum.map(brs, fn {cn, ar, b} -> {cn, ar, mabs(b, dep, vs, n, l + ar)} end)}
+  end
+
+  defp mabs({:meta, _} = m, _dep, _vs, _n, _l), do: m
+  defp mabs(leaf, _dep, _vs, _n, _l), do: leaf
+
+  defp do_unify_struct({:meta, id}, {:meta, id}, ctx, _sig, _depth), do: {:ok, ctx}
+  defp do_unify_struct({:meta, id}, t, ctx, _sig, depth), do: solve(id, t, ctx, depth)
+  defp do_unify_struct(t, {:meta, id}, ctx, _sig, depth), do: solve(id, t, ctx, depth)
+
+  defp do_unify_struct({:type, l}, {:type, l}, ctx, _sig, _depth), do: {:ok, ctx}
+  defp do_unify_struct({:var, i}, {:var, i}, ctx, _sig, _depth), do: {:ok, ctx}
+  defp do_unify_struct({:global, g}, {:global, g}, ctx, _sig, _depth), do: {:ok, ctx}
+
+  defp do_unify_struct({:data, f, ps1, is1}, {:data, f, ps2, is2}, ctx, sig, depth),
     do: unify_lists(ps1 ++ is1, ps2 ++ is2, ctx, sig, depth)
 
-  defp do_unify({:ctor, c, a1}, {:ctor, c, a2}, ctx, sig, depth),
+  defp do_unify_struct({:ctor, c, a1}, {:ctor, c, a2}, ctx, sig, depth),
     do: unify_lists(a1, a2, ctx, sig, depth)
 
-  defp do_unify({:app, f1, x1}, {:app, f2, x2}, ctx, sig, depth) do
+  defp do_unify_struct({:app, f1, x1}, {:app, f2, x2}, ctx, sig, depth) do
     with {:ok, ctx} <- unify_d(f1, f2, ctx, sig, depth), do: unify_d(x1, x2, ctx, sig, depth)
   end
 
-  defp do_unify({:pi, d1, c1}, {:pi, d2, c2}, ctx, sig, depth) do
+  defp do_unify_struct({:pi, d1, c1}, {:pi, d2, c2}, ctx, sig, depth) do
     with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
          do: unify_d(c1, c2, ctx, sig, depth + 1)
   end
 
-  defp do_unify({:lam, d1, b1}, {:lam, d2, b2}, ctx, sig, depth) do
+  defp do_unify_struct({:lam, d1, b1}, {:lam, d2, b2}, ctx, sig, depth) do
     with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
          do: unify_d(b1, b2, ctx, sig, depth + 1)
   end
 
-  defp do_unify({:sigma, d1, c1}, {:sigma, d2, c2}, ctx, sig, depth) do
+  defp do_unify_struct({:sigma, d1, c1}, {:sigma, d2, c2}, ctx, sig, depth) do
     with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
          do: unify_d(c1, c2, ctx, sig, depth + 1)
   end
 
   # Structurally identical (literals, atoms, etc.).
-  defp do_unify(t, t, ctx, _sig, _depth), do: {:ok, ctx}
+  defp do_unify_struct(t, t, ctx, _sig, _depth), do: {:ok, ctx}
 
   # Last resort: two terms that are not syntactically unifiable may still be
   # DEFINITIONALLY equal via δ (e.g. `DDec` vs the redex `dmeet(DDec, DDec)`).
@@ -152,7 +279,7 @@ defmodule Cure.Elab.Unify do
   # convertibility check is exactly the right question, and `env=[] depth=0` is
   # sound (no free de Bruijn vars). Open neutral spines (e.g. `app(av, cv)`) unify
   # syntactically and never reach here.
-  defp do_unify(t1, t2, ctx, sig, _depth) do
+  defp do_unify_struct(t1, t2, ctx, sig, _depth) do
     if delta_convertible?(t1, t2, ctx, sig) do
       {:ok, ctx}
     else
