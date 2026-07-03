@@ -66,6 +66,15 @@ defmodule Antigen.Assays.Erasure do
     if kept == expected, do: :ok, else: {:violation, {:wrong_positions_kept, name}}
   end
 
+  def run(%Challenge{kind: :erasure_term, assay: "erasure/wellformed", payload: %{env: env, term: t}}, k) do
+    # only meaningful on inputs that are themselves well-formed
+    if k.term?.(t) and not k.term?.(k.erase.(env, t)) do
+      {:violation, {:erase_ill_formed, t}}
+    else
+      :ok
+    end
+  end
+
   defp present_args(args, qs) do
     args |> Enum.zip(qs) |> Enum.filter(fn {_a, q} -> q == :present end) |> Enum.map(fn {a, _q} -> a end)
   end

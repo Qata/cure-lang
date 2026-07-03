@@ -103,4 +103,22 @@ defmodule Antigen.Assays.ErasureTest do
       assert {:violation, {:wrong_positions_kept, :f}} = Erasure.run(sel_ch(env, app2({:global, :f}, il(1), il(2)), :app), k)
     end
   end
+
+  describe "erasure/wellformed (V4a)" do
+    defp wf_ch(env, t) do
+      Challenge.new(kind: :erasure_term, assay: "erasure/wellformed", label: :positive,
+        payload: %{env: env, term: t}, seed: 1)
+    end
+
+    test "baseline: term?(t) => term?(erase t)" do
+      env = ctor_env()
+      assert Erasure.run(wf_ch(env, {:ctor, :MkQ, [il(1), il(2)]})) == :ok
+    end
+
+    test "negative control: an erase stub returning a malformed term" do
+      env = ctor_env()
+      k = %{Erasure.__real__() | erase: fn _e, _t -> {:not_a_node, :garbage, 999} end}
+      assert {:violation, {:erase_ill_formed, _}} = Erasure.run(wf_ch(env, {:ctor, :MkQ, [il(1), il(2)]}), k)
+    end
+  end
 end
