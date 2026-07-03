@@ -6,6 +6,7 @@ mod Std.Nat
 
   fn __group__() -> Atom = :core
 
+  @builtin(:nat)
   type Nat = Z | S(Nat)
 
   fn plus(m: Nat, n: Nat) -> Nat =
