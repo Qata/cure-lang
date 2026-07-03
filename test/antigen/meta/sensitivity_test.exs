@@ -32,4 +32,13 @@ defmodule Antigen.Meta.SensitivityTest do
     # where :ok is the RIGHT answer — so an accept-all `check` is invisible to it.
     assert :ok = Antigen.Assays.Term.run(ch, WeakKernel.weaken(:check_accepts_all))
   end
+
+  # -- Row 4: Positivity ------------------------------------------------------
+  test "row 4 — positive_accepts_all is CAUGHT by positivity (negative-label family)" do
+    ch = Antigen.Generators.Positivity.negative_family()
+    assert :ok = Antigen.Assays.Positivity.run(ch, WeakKernel.real())
+
+    assert {:violation, {:wrongly_accepted, :Bad}} =
+             Antigen.Assays.Positivity.run(ch, WeakKernel.weaken(:positive_accepts_all))
+  end
 end
