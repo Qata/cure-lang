@@ -37,7 +37,7 @@
 
 - `Cure.Elab.Program.elaborate(src :: String.t()) :: {:ok, Env.t()} | {:error, term()}` (may raise).
 - `Cure.Core.Env` (defined in `lib/cure/core/inductive.ex`): `empty/0`, `add_def(env, name, type_term, body_term) :: Env.t()` (arity-4; arity-5 adds quantities), `certify(env, name) :: Env.t()`, `get_def(env, name)`, `%Env{defs: %{name => %{type: Term, body: Term}}}`.
-- `Cure.Core.Builtins.seed(env, declared_type_names :: [atom]) :: Env.t()` — seeds `Bool`/`Nat` inductive families.
+- `Cure.Core.Builtins.seed(env, exclude :: MapSet.t()) :: Env.t()` (2nd arg defaults to `MapSet.new()`) — seeds `Bool`/`Nat` inductive families, skipping any family whose name is in `exclude`. **Not** `[atom]` — passing a plain list crashes `MapSet.member?/2` with `FunctionClauseError` (verified: `MapSet.member?([], :x)` raises). Test helpers must call `Builtins.seed(Env.empty())` (bare, using the default) or `Builtins.seed(Env.empty(), MapSet.new())` — never `Builtins.seed(Env.empty(), [])`.
 - `Cure.Core.Context.empty(env :: Env.t()) :: Context.t()`; `Context.length(ctx) :: non_neg_integer()`.
 - `Cure.Core.Kernel.infer(ctx, term) :: {:ok, value} | {:error, term()}`; a parameter-bearing `{:ctor, name, args}` returns `{:error, {:ctor_requires_checking_mode, family}}`.
 - `Cure.Core.Kernel.check(ctx, term, expected_value) :: :ok | {:error, term()}`.
@@ -78,7 +78,12 @@ defmodule Antigen.Assays.ElabSoundnessTest do
                        label: :well_typed, payload: %{id: 1, src: src}, seed: 1)
 
   # A seeded env (Bool/Nat families present) so infer/eval resolve @bool/@nat.
-  defp seeded, do: Builtins.seed(Env.empty(), [])
+  # NOTE: `Builtins.seed/2`'s 2nd arg is a MapSet (families to SKIP seeding),
+  # not a list — `seed(Env.empty(), [])` crashes `MapSet.member?/2` with
+  # FunctionClauseError (verified). Call the 1-arity form (uses the `MapSet.new()`
+  # default) so every test below actually reaches the assay instead of crashing
+  # in the fixture.
+  defp seeded, do: Builtins.seed(Env.empty())
 
   # An op-map identical to @real_kernel EXCEPT `elaborate`, which returns a
   # synthetic env — the only way to feed the decision procedure a chosen env.defs.
@@ -253,9 +258,27 @@ describe "constructor bodies (checking-mode fallback)" do
   # Build the family + a sound and an unsound def directly in a seeded env.
   defp option_env do
     # A minimal parameter-bearing family F(a: Type) with ctor Mk(x: a) : F(a).
+    #
+    # Two details are load-bearing, verified against Kernel.check's `{:ctor,...}`
+    # clause (which re-derives `actual = {:vdata, family, actual_params ++
+    # actual_indices}` from `result_params`/`result_indices` and Conv-compares it
+    # to the expected `{:vdata,...}}`):
+    #   1. `declare/3`'s 3rd arg is `[ctor()]` (a LIST) — `declare(fam, ctor)`
+    #      (bare map) makes `Enum.reduce` inside `declare/3` iterate the ctor
+    #      MAP's `{key, value}` pairs instead of the ctor itself, crashing with
+    #      MatchError on `%{name: cname} = c`.
+    #   2. `result_params` must be `[{:var, 1}]` (mirrors Kernel's own
+    #      `check_uniform_params/5` formula `{:var, num_args + (num_params - 1 -
+    #      p)}` for Mk's 1 arg / F's 1 param), NOT `[]`. With `[]`, `check/3`
+    #      re-derives `actual = {:vdata, :F, []}` (param dropped) instead of
+    #      `{:vdata, :F, [Nat]}`, so `Conv.conv_values?`'s spine-length check
+    #      fails `conv_spine?` even for the intentionally-SOUND `ok_mk` case
+    #      below (0-length actual spine vs 1-length expected) — the "sound"
+    #      test would falsely report a `{:core_ill_typed, ...}}` violation
+    #      instead of `:ok`.
     fam = Cure.Core.Inductive.family(:F, [{:a, {:type, 0}}], [], 0)
-    ctor = Cure.Core.Inductive.ctor(:Mk, [{:x, {:var, 0}}], [], [:present], [])
-    seeded() |> Cure.Core.Inductive.declare(fam, ctor)
+    ctor = Cure.Core.Inductive.ctor(:Mk, [{:x, {:var, 0}}], [], [:present], [{:var, 1}])
+    seeded() |> Cure.Core.Inductive.declare(fam, [ctor])
   end
 
   test "sound parameter-bearing constructor body re-checks :ok (uses check, not infer)" do
@@ -340,17 +363,45 @@ Append:
 
 ```elixir
 describe "fuel bound" do
-  # A certified self-referential def whose δ-unfolding never converges. We certify
-  # it directly (bypassing the totality checker that would normally block it) — the
-  # assay must NOT assume elaboration prevents a non-normalizing emitted def.
+  # A certified, non-normalizing global (`loop`'s body is a bare self-reference
+  # `{:global, :loop}` — NOT an application). We certify it directly (bypassing
+  # the totality checker that would normally block it) — the assay must NOT
+  # assume elaboration prevents a non-normalizing emitted def.
+  #
+  # `loop`'s OWN check_one pass is deliberately clean (infer only ever reads a
+  # global's DECLARED type — `infer(ctx,{:global,:loop})` = eval(@nat) = Nat,
+  # matching its own declared `@nat`, no δ needed — so `:loop` itself is not
+  # what infects). A second def, `probe`, is what forces δ: its declared type
+  # is `Eq(Nat, loop, Z)` (an endpoint IS `loop`), and its body is `refl(Z)`.
+  # Checking `probe` compares `inferred = Eq(Nat, Z, Z)` against `declared =
+  # Eq(Nat, loop, Z)`; the middle endpoints (`Z` vs `loop`) are not both
+  # neutral, so Conv falls to the general path, which `Normalise.whnf_value`s
+  # BOTH sides — forcing the `{:nglobal, :loop}` neutral to δ-unfold.
+  #
+  # Verified by hand-tracing `Normalise.unfold_certified_head`: unfolding a
+  # BARE self-reference (`Eval.eval({:global, :loop}, []) == {:vneutral,
+  # {:nglobal, :loop}}}` — i.e. δ reproduces the IDENTICAL neutral each step,
+  # no spine growth) makes every iteration O(1) (`spend_fuel` decrements once,
+  # `spine` traverses a constant-depth term), so total work across the fuel
+  # budget is O(fuel), not O(fuel²) — this is why the body is a bare global
+  # reference and not a self-application: `{:app, {:global, :loop}, {:ctor,
+  # :Z, []}}` would (a) make `loop`'s OWN check_one infer fail structurally
+  # with `:not_a_function` BEFORE any δ (its declared type `@nat` isn't a Π,
+  # so applying it is ill-typed — this never reaches δ/fuel at all, the
+  # original bug in this test), and (b) even redirected through `probe`,
+  # would re-grow the neutral's `:napp` spine by one layer per δ-step, making
+  # `spine/2`'s per-step traversal O(step), i.e. O(fuel²) total — likely
+  # multiple minutes at fuel = 500_000, blowing the 30s `Task.await` budget.
   test "non-normalizing emitted def reports :fuel_exhausted, does not hang" do
     env =
       seeded()
-      |> Env.add_def(:loop, @nat, {:app, {:global, :loop}, {:ctor, :Z, []}})
+      |> Env.add_def(:loop, @nat, {:global, :loop})
       |> Env.certify(:loop)
+      |> Env.add_def(:probe, {:eq, @nat, {:global, :loop}, {:ctor, :Z, []}},
+                      {:refl, {:ctor, :Z, []}})
 
     task = Task.async(fn -> Elab.run(prog("ignored"), kernel_with_env(env)) end)
-    assert {:violation, {:fuel_exhausted, :loop}} = Task.await(task, 30_000)
+    assert {:violation, {:fuel_exhausted, :probe}} = Task.await(task, 30_000)
   end
 end
 ```
@@ -358,9 +409,7 @@ end
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `MIX_ENV=test mix test test/antigen/assays/elab_soundness_test.exs`
-Expected: FAIL — without the fuel wrap, `infer`/`Conv` δ-unfold `loop` under unbounded fuel and the test times out at 30s (Task.await raises), or returns a non-`:fuel_exhausted` result.
-
-> If `Kernel.infer` on `{:app, {:global, :loop}, …}` does not itself δ-unfold (so it returns quickly without looping), adjust the body to one that forces normalization during the `Conv` step (e.g. declared type `@nat`, body a `loop`-headed term whose inferred type must be Conv-compared), so the non-termination occurs inside the fuel-wrapped region. The invariant under test is unchanged: a non-normalizing emitted def must yield `:fuel_exhausted`, not a hang.
+Expected: FAIL — without the fuel wrap, `Conv.conv_values?` δ-unfolds `loop` under unbounded fuel while comparing `probe`'s inferred vs. declared type, and the test times out at 30s (Task.await raises).
 
 - [ ] **Step 3: Implement the fuel wrap**
 
@@ -500,7 +549,7 @@ Run: `git status --short`; if `test/antigen/seeds.sexp` shows modified, `git che
 
 **Spec coverage:** §2 decision procedure (infer→Conv, ctor check-fallback, fuel, hole-skip) → Tasks 1–3; §3.1 assay clause + §3.2 `run/2` seam (incl. `elaborate`) → Task 1; §3.3 generator + wiring → Task 4 (reconciled to the fixed-catalog pattern); §5 tests #1–#9 distributed: #1 baseline (T1), #2 ill-typed core (T1), #3 ctor controls (T2), #4 reject (T1), #5 crash (T1), #6 hole-skip (T1), #7 fuel (T3), #8 runner wiring (T4), #9 determinism/regression (T1 `__real_kernel__` test + T5 full suite). §6 invariants pinned across tasks; §8 non-goals respected (no elaborator fix, no default_gen change, no new generator logic).
 
-**Placeholder scan:** none — every step has concrete code/commands/expected output. The two "verify the exact accessor during red-green" notes (`Context.signature` vs `Context.env`, and the fuel-test body shape) are explicit, bounded implementer checks with a named fallback, not open-ended TODOs.
+**Placeholder scan:** none — every step has concrete code/commands/expected output. The one remaining "verify during red-green" note (`Context.signature/1` vs `Context.env/1` for the δ-unfolding `sig` argument) is an explicit, bounded implementer check with a named fallback, not an open-ended TODO — and has been confirmed correct as written: `Context.signature/1` exists exactly as documented in Interfaces (`lib/cure/core/context.ex`), so the fallback path is not expected to trigger. The fuel-test body shape is no longer a "verify during red-green" placeholder — Task 3's construction (`loop`/`probe` two-def shape) is fully concrete and hand-verified against `Kernel.infer`, `Eval.eval`, `Normalise.unfold_certified_head`, and `Conv.conv_val?` (see the test's inline commentary), including the O(fuel) vs. O(fuel²) performance argument for why the body is a bare self-reference rather than a self-application.
 
 **Type consistency:** `run/2` op-map keys `elaborate/infer/check/conv/eval` identical in `@real_kernel`, `kernel_with_env/1`, and the crash test across Tasks 1–4. Infection tags `{:core_ill_typed, name, e}`, `{:type_annotation_wrong, name, %{inferred, declared}}`, `{:elaborator_raised, id, e}`, `{:fuel_exhausted, name}` consistent between spec §2/§3, the code, and the tests. `soundness_challenges/0` produced in Task 4, consumed by its own tests.
 
