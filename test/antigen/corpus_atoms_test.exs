@@ -50,4 +50,28 @@ defmodule Antigen.CorpusAtomsTest do
 
     assert missing == [], "hazard-strings absent from @known_atoms: #{inspect(Enum.sort(missing))}"
   end
+
+  alias Antigen.Corpus
+
+  test "every committed corpus is in the readable format and fully decodes" do
+    for path <- @corpora, File.exists?(path), line <- File.stream!(path) do
+      trimmed = String.trim_trailing(line, "\n")
+
+      pieces_field =
+        trimmed |> String.split("\t") |> Enum.find_value(fn f ->
+          case String.split(f, "=", parts: 2) do
+            ["pieces", v] -> v
+            _ -> nil
+          end
+        end)
+
+      for piece <- String.split(pieces_field || "", ";;", trim: true) do
+        [_id, body] = String.split(piece, "::", parts: 2)
+        assert String.starts_with?(body, "("),
+               "#{Path.basename(path)}: non-readable (Base64) piece: #{String.slice(body, 0, 24)}…"
+      end
+
+      assert {:ok, _} = Corpus.decode_record(trimmed), "#{Path.basename(path)}: record failed to decode"
+    end
+  end
 end
