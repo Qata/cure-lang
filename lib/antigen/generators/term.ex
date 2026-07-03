@@ -32,7 +32,7 @@ defmodule Antigen.Generators.Term do
 
   @doc "A `Gen` of a `:typed_term` challenge tagged for `assay_id`."
   @spec typed_term(String.t()) :: Gen.t()
-  def typed_term(assay_id) when assay_id in @assay_ids do
+  def typed_term(assay_id) when is_binary(assay_id) do
     env = SigMenu.env_of(:v1)
 
     Gen.bind(CtxGen.gen(env), fn ctx_types ->

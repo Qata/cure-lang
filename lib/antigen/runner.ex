@@ -345,6 +345,9 @@ defmodule Antigen.Runner do
   defp assay_module("term/subject_reduction"), do: Antigen.Assays.Term
   defp assay_module("term/normalization"), do: Antigen.Assays.Term
   defp assay_module("mutation/rejection"), do: Antigen.Assays.Mutation
+  defp assay_module("kernel/shift_subst"), do: Antigen.Assays.KernelLaw
+  defp assay_module("kernel/weakening"), do: Antigen.Assays.KernelLaw
+  defp assay_module("kernel/confluence"), do: Antigen.Assays.KernelLaw
   defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
   defp assay_module("elab/erasure"), do: Antigen.Assays.Elab
