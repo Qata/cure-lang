@@ -304,6 +304,26 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
+  def elaborate_expr_typed({:literal, meta, value}, _names, _ctx, _env) when is_boolean(value) do
+    case Keyword.get(meta, :subtype) do
+      :boolean -> {:ok, {:bool_lit, value}, {:vbool_type}}
+      _ -> {:error, {:unsupported_expression, {:literal, meta, value}}}
+    end
+  end
+
+  # `if c then t else e` — the dependent Boolean eliminator (bool_elim). In
+  # inference mode we infer the `then` branch's type T, check `else` against T,
+  # and use the constant motive `λ_:Bool. T` (both branches share the type T).
+  def elaborate_expr_typed({:conditional, _meta, [c, t, e]}, names, ctx, env) do
+    with {:ok, c_core} <- elaborate_expr_checked(c, {:bool_type}, names, ctx, env),
+         {:ok, t_core, t_type} <- elaborate_expr_typed(t, names, ctx, env),
+         t_type_core = Quote.reify(t_type, Context.length(ctx)),
+         {:ok, e_core} <- elaborate_expr_checked(e, t_type_core, names, ctx, env) do
+      motive = {:lam, {:bool_type}, Cure.Core.Term.shift(t_type_core, 1, 0)}
+      {:ok, {:bool_elim, c_core, motive, t_core, e_core}, t_type}
+    end
+  end
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
   defp sigma_projection(which, inner, names, ctx, env) do
@@ -534,6 +554,19 @@ defmodule Cure.Elab.Elaborator do
            elaborate_lambda(Keyword.fetch!(meta, :params), body_expr, expected_core, names, ctx, env),
          :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
       {:ok, term}
+    end
+  end
+
+  # `if c then t else e` checked against the expected type: both branches are
+  # checked at `expected_core` under a constant motive `λ_:Bool. expected_core`
+  # (shifted past the fresh Bool binder). The kernel re-checks the assembled
+  # bool_elim, so nothing here is trusted.
+  def elaborate_expr_checked({:conditional, _meta, [c, t, e]}, expected_core, names, ctx, env) do
+    with {:ok, c_core} <- elaborate_expr_checked(c, {:bool_type}, names, ctx, env),
+         {:ok, t_core} <- elaborate_expr_checked(t, expected_core, names, ctx, env),
+         {:ok, e_core} <- elaborate_expr_checked(e, expected_core, names, ctx, env) do
+      motive = {:lam, {:bool_type}, Cure.Core.Term.shift(expected_core, 1, 0)}
+      {:ok, {:bool_elim, c_core, motive, t_core, e_core}}
     end
   end
 
@@ -3178,6 +3211,13 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, a_core} <- elaborate_expr(a, scope, env),
          {:ok, b_core} <- elaborate_expr(b, scope, env) do
       {:ok, {:pair, a_core, b_core}}
+    end
+  end
+
+  def elaborate_expr({:literal, meta, value}, _scope, _env) when is_boolean(value) do
+    case Keyword.get(meta, :subtype) do
+      :boolean -> {:ok, {:bool_lit, value}}
+      _ -> {:error, {:unsupported_expression, {:literal, meta, value}}}
     end
   end
 

@@ -332,6 +332,12 @@ defmodule Cure.Elab.Declarations do
     Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
 
+  # `if …` as a function body: check it against the declared return type so both
+  # branches inherit the expected type (a constant-motive bool_elim).
+  defp elaborate_body({:conditional, _meta, _} = expr, return_core, scope, ctx, env, _params) do
+    Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+  end
+
   # A lambda body has untyped parameters, so it must be *checked* against the
   # declared return type (a Π) rather than inferred — `fn(y) -> …` returning a
   # function type. Other bodies stay on the inference path below.
@@ -797,11 +803,18 @@ defmodule Cure.Elab.Declarations do
     # — resolves to the family. A name that is only a constructor (a nullary value
     # like `Z` used as an index argument) still resolves to the constructor.
     cond do
+      primitive_type(name) != nil -> primitive_type(name)
       Inductive.family?(env, atom) -> {:data, atom, [], []}
       Inductive.get_ctor(env, atom) -> {:ctor, atom, []}
       true -> {:global, atom}
     end
   end
+
+  # The built-in primitive types that map to Core type-constants (not opaque
+  # globals). `Bool` is the one the Boolean eliminator (`if`/guards/literal
+  # patterns) needs; `Int`/`Float` join when literal patterns land.
+  defp primitive_type("Bool"), do: {:bool_type}
+  defp primitive_type(_), do: nil
 
   defp map_idx_to_core(exprs, scope, fam, env) do
     Enum.reduce_while(exprs, {:ok, []}, fn e, {:ok, acc} ->
@@ -875,7 +888,13 @@ defmodule Cure.Elab.Declarations do
   # -- surface type expr → Core type term -------------------------------------
 
   defp type_to_core({:variable, _meta, "Type"}), do: {:ok, {:type, 0}}
-  defp type_to_core({:variable, _meta, name}), do: {:ok, {:data, String.to_atom(name), [], []}}
+
+  defp type_to_core({:variable, _meta, name}) do
+    case primitive_type(name) do
+      nil -> {:ok, {:data, String.to_atom(name), [], []}}
+      prim -> {:ok, prim}
+    end
+  end
 
   defp type_to_core({:function_call, meta, params}) do
     cond do

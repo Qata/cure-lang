@@ -147,6 +147,18 @@ defmodule Cure.Elab.Emit do
     {:case, @line, lower(env, scrut, ctx), Enum.map(branches, &branch_clause(env, &1, ctx))}
   end
 
+  # Dependent Boolean elimination lowers to a BEAM `case` on the boolean atom; the
+  # motive is type-level and erased. Branches bind nothing.
+  defp lower(env, {:bool_elim, scrut, _motive, tt, ff}, ctx) do
+    {:case, @line, lower(env, scrut, ctx),
+     [
+       {:clause, @line, [{:atom, @line, true}], [], [lower(env, tt, ctx)]},
+       {:clause, @line, [{:atom, @line, false}], [], [lower(env, ff, ctx)]}
+     ]}
+  end
+
+  defp lower(_env, {:bool_lit, b}, _ctx), do: {:atom, @line, b}
+
   defp lower(env, {:pair, a, b}, ctx) do
     {:tuple, @line, [lower(env, a, ctx), lower(env, b, ctx)]}
   end
