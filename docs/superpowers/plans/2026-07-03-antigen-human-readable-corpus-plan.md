@@ -17,6 +17,7 @@
 - **`Challenge` is not modified.** All format work is in `lib/antigen/corpus.ex`.
 - **Backward-compatible:** a record is wholly-legacy (Base64 pieces + Base64 note + fault-in-scaffold) or wholly-new (s-expr pieces + plaintext note + `fault=` field). Decode infers the record's format from its **pieces** (`(`-prefix ⇒ new; else legacy) and reads note/fault to match. Base64's alphabet (`A–Za–z0–9+/=`) never starts with `(`, and every `Serialize.encode` output starts with `(`, so this is unambiguous.
 - **Dedup-key stability:** `dedup_key(_, :antibody)` uses `Serialize.encode` (binary) and the `key=` field stores it Base64 — both independent of display format. Migration preserves the byte-exact stored key. Do not change `dedup_key/2`, `seen?/2`, or `extract_key/1`.
+- **Tests are set in stone.** Once a Step-1 red test is committed to the test file, the only legitimate way to make it green is to change `lib/antigen/corpus.ex` / `lib/mix/tasks/antigen.migrate.ex` — never weaken, skip, or delete the test to force a pass. The sole exception is a test that is itself proven wrong (state why before touching it); "the test is failing and editing it is the fastest path to green" is never a valid reason.
 
 ---
 
@@ -528,6 +529,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
 
 **Files:**
 - Create: `lib/mix/tasks/antigen.migrate.ex`
+- Modify: `lib/antigen/corpus.ex` (add public `raw_key/1`; `extract_key/1` becomes a one-line delegate to it)
 - Migrate + commit: `test/antigen/seeds.sexp`, `test/antigen/corpus.sexp`, `test/antigen/reach.sexp`
 - Test: `test/antigen/corpus_test.exs`
 
@@ -699,7 +701,9 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
       |> Enum.find(fn l -> String.contains?(l, "kind=mutant_term") end)
 
     assert line, "expected at least one mutant_term in #{seeds}"
-    fields = line |> String.trim_trailing("\n") |> String.split("\t")
+    # drop the leading "antigen-record" marker (no `=`) before building the map —
+    # `Map.new`/`:maps.from_list` cannot mix its 1-tuple with the other fields' 2-tuples
+    fields = line |> String.trim_trailing("\n") |> String.split("\t") |> tl()
     m = Map.new(fields, fn f -> List.to_tuple(String.split(f, "=", parts: 2)) end)
 
     # readable, not Base64, in the three human-facing fields
@@ -747,3 +751,5 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(an
 **Type consistency:** `legacy_record?/1` (Task 2) is reused conceptually by Task 3's fault path only through the shared record; fault decoding is gated by the presence of the `fault=` field (`m["fault"]`), not `legacy_record?` — consistent because a new-format mutant always has `fault=` and a legacy mutant never does. `raw_key/1` (Task 4) is public; `extract_key/1` delegates to it. `encode_record/2`, `decode_record/1`, `encode_scaffold/1`, `dedup_key/2`, `raw_key/1` are the only public `Corpus` functions touched; `encode_scaffold/1` is already public (used by Task 3's legacy test).
 
 **Deviation from spec (recorded):** the spec's original §3 (new `Antigen.SExpr` module with `to_existing_atom`) is superseded by §3.0 (reuse `Serialize`, which mints). This removes the `:boom`/`@known_atoms` audit the Stage-1 review demanded — that finding only applied to a new safe decoder and is moot under Serialize reuse. The known limitation (hand-edit typos mint rather than error) is documented in §3.0 and will be surfaced in the completion report.
+
+A second, smaller deviation (not previously recorded): spec §3.4 specifies a **key-specific** decode rule for `:out_of_scope_var`'s `scope` — print as a bare paren-pair `(scope (5 5))`, decoded only because `decode_fault` is hard-coded to know the `scope` key holds a 2-tuple. Task 3's `encode_fault`/`decode_fault` instead dispatch by **value shape**: any 2-tuple of integers (regardless of key) encodes as `(pair N N)` and decodes back to a 2-tuple via the `["pair", a, b]` token pattern — no key-specific knowledge needed. This is a deliberate improvement (removes the exact fragility spec §3.4 calls out — "a schema fact, not something `decode_fault` can infer from the printed form alone" — by making the value shape self-describing instead), verified round-trip-correct for the `:out_of_scope_var` fixture (`scope: {2, 2}` → `(scope (pair 2 2))` → `{2, 2}`). It is accepted as an intentional deviation, not a defect; the printed form differs cosmetically from the spec's example but the round-trip contract (§7 test 3) is unaffected.
