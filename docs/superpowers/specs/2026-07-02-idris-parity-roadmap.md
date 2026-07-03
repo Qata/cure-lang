@@ -256,6 +256,25 @@ locked decision below). Recorded so they are not re-litigated; none is committed
   do it only if the builtin-binding cost is acceptable for the TCB-minimality win;
   do not do it for its own sake.
 
+### 4.2 Current focus + explicit deferral (2026-07-03)
+
+**Now building: the builtin-inductive foundation** (own spec, gated TCB effort) —
+a registry letting the kernel/erasure know a canonical inductive, with **Bool as
+an inductive** (retiring the `bool_elim` primitive) as first client and **Nat→Int
+runtime erasure** (the Idris "Nat hack"; today `Nat` erases to unary nested tuples,
+fatal on ESP32) as second. Buys Lean/Agda-class type-level TCB minimality *and*
+device-viable native runtime representations — the mechanism does double duty.
+
+**DEFERRED to work on the above — committed as the immediate follow-on:**
+**match-embedded `when` (general)** — guards on *constructor* patterns woven into
+the pattern-matrix compiler with correct fall-through, plus **Z3 as an untrusted
+coverage lint** (exhaustive trichotomy drops the catch-all; non-exhaustive errors;
+shadowed guard warns). The variable-pattern guard subset already landed (`92d11d5`).
+This is next up once the builtin-inductive foundation lands, and it should be
+*re-expressed* on whatever Bool ends up being (inductive `:case`, not `bool_elim`)
+— so doing the foundation first avoids building more surface on the soon-retired
+primitive. See [[smt-trust-boundary-decision]] (Z3 stays an untrusted lint).
+
 ## 5. Suggested sequencing (dependency-ordered, post-④)
 
 1. **④ merges** (rows 2, 8, 16 land; unblocks A7/#25).
