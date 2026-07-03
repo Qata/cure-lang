@@ -74,7 +74,7 @@ defmodule Cure.Core.NormaliseTest do
     assert :fuel_exhausted == Normalise.whnf(Context.empty(env), {:global, :f}, fuel: 5)
   end
 
-  test "recursive certified definitions under neutral scrutinees stay stuck in whnf" do
+  defp step_env do
     body =
       {:lam, @dec,
        {:case, {:var, 0}, @dec_motive,
@@ -83,17 +83,33 @@ defmodule Cure.Core.NormaliseTest do
           {:Causal, 0, {:app, {:global, :step}, {:var, 0}}}
         ]}}
 
-    env =
-      base()
-      |> Env.add_def(:step, {:pi, @dec, @dec}, body)
-      |> Env.certify(:step)
+    base()
+    |> Env.add_def(:step, {:pi, @dec, @dec}, body)
+    |> Env.certify(:step)
+  end
 
-    ctx = Context.extend(Context.empty(env), {:vdata, :Dec, []})
+  test "recursive certified definitions under neutral scrutinees stay FOLDED (lazy unfolding)" do
+    # Reference-faithful (Idris/Lean/Agda): unfolding a pattern-matching
+    # definition whose scrutinee is a neutral only exposes a matcher that is
+    # itself stuck — so the definition is kept FOLDED (opaque application),
+    # NOT eagerly expanded into its internal `case`. This keeps normal forms
+    # canonical (a stuck recursive call has ONE shape everywhere) and keeps
+    # conversion terminating on open terms.
+    ctx = Context.extend(Context.empty(step_env()), {:vdata, :Dec, []})
     term = {:app, {:global, :step}, {:var, 0}}
 
-    assert {:case, {:var, 0}, _motive, branches} = Normalise.whnf(ctx, term, fuel: 5)
-    assert [{:Dcoupled, 0, @dcoupled}, {:Causal, 0, {:app, {:global, :step}, {:var, 0}}}] == branches
-    assert {:case, {:var, 0}, _motive, ^branches} = Normalise.nf(ctx, term, fuel: 5)
+    assert {:app, {:global, :step}, {:var, 0}} == Normalise.whnf(ctx, term, fuel: 5)
+    assert {:app, {:global, :step}, {:var, 0}} == Normalise.nf(ctx, term, fuel: 5)
+  end
+
+  test "certified recursive globals still ι-reduce under constructor scrutinees" do
+    # Guard against over-freezing: lazy unfolding must still fire when the
+    # scrutinee IS a constructor. step(Dcoupled) selects the Dcoupled branch.
+    ctx = Context.empty(step_env())
+    term = {:app, {:global, :step}, @dcoupled}
+
+    assert @dcoupled == Normalise.nf(ctx, term, fuel: 5)
+    assert @dcoupled == Normalise.whnf(ctx, term, fuel: 5)
   end
 
   test "Kernel.normalize delegates to the shared normalizer" do

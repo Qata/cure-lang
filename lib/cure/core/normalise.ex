@@ -183,10 +183,6 @@ defmodule Cure.Core.Normalise do
     {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
   end
 
-  defp nf_neutral({:nbool_elim, neutral, motive, tt, ff}, sig, depth, opts) do
-    {:nbool_elim, nf_neutral(neutral, sig, depth, opts), motive, tt, ff}
-  end
-
   defp nf_neutral(neutral, _sig, _depth, _opts), do: neutral
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth)
@@ -216,10 +212,21 @@ defmodule Cure.Core.Normalise do
         # context binds at level k (a capture). `Env.certify/2` already refuses
         # open bodies, so this only fires against a forged marker; staying stuck is
         # the safe answer (never unsound, at worst a missed unfold). (A5)
+        #
+        # Lazy unfolding (Idris/Lean/Agda): if unfolding a pattern-matching
+        # definition only re-exposes an eliminator that is itself STUCK on a
+        # neutral (no ι-progress possible), keep the application FOLDED. Eagerly
+        # expanding `f x` into its internal `case x {…}` when `x` is neutral
+        # yields a non-canonical normal form (the same stuck recursive call then
+        # has two shapes — folded in one spine, expanded in another), which both
+        # breaks syntactic occurrence-matching in the elaborator and can make
+        # conversion δ-loop on open terms. Freezing is always sound: it only
+        # makes normal forms MORE distinct, never collapses two of them, and
+        # `conv?` still δ-unfolds on demand when it must compare. (A6)
         with true <- Env.certified?(sig, name),
              %{body: body} <- Env.get_def(sig, name),
              true <- Cure.Core.Term.closed?(body) do
-          {:ok, reapply(args, spend_fuel(Eval.eval(body, [])))}
+          reduce_unfolded(reapply(args, spend_fuel(Eval.eval(body, []))), sig, opts)
         else
           _ -> :stuck
         end
@@ -239,16 +246,6 @@ defmodule Cure.Core.Normalise do
             :stuck
         end
 
-      # ι on bool_elim: mirrors `eval({:bool_elim,…})` — whnf the scrutinee and,
-      # when it is a concrete boolean, fire the matching branch (which binds
-      # nothing, so its closure evaluates directly in its captured env).
-      {:nbool_elim, scrut, _motive, {:closure, tenv, tbody}, {:closure, fenv, fbody}} ->
-        case whnf_value({:vneutral, scrut}, sig, opts) do
-          {:vbool, true} -> {:ok, reapply(args, spend_fuel(Eval.eval(tbody, tenv)))}
-          {:vbool, false} -> {:ok, reapply(args, spend_fuel(Eval.eval(fbody, fenv)))}
-          _ -> :stuck
-        end
-
       # ι on projections: mirrors `vfst`/`vsnd` — the pair's first/second field.
       {:nfst, target} ->
         case whnf_value({:vneutral, target}, sig, opts) do
@@ -266,6 +263,57 @@ defmodule Cure.Core.Normalise do
         :stuck
     end
   end
+
+  # Decide, in ONE whnf of the eliminated target, whether a certified global's
+  # δ-unfold made progress. If the unfold only re-exposed a stuck eliminator
+  # (`ncase`/`nfst`/`nsnd`) — the lazy-unfolding case — this both decides
+  # productiveness AND fires ι, so the two never re-force the same scrutinee.
+  #
+  # Threading the FORCED target through `spend_fuel(Eval.eval(...))`/`vfst`/`vsnd`
+  # (rather than returning the raw stuck eliminator for the outer `whnf_value`
+  # loop to re-force) is what keeps normalization LINEAR: a naive check that
+  # whnf's the scrutinee to test productiveness and then lets the loop whnf it a
+  # second time to reduce is Θ(2ᵈ) on total definitions whose recursive scrutinee
+  # reduces to a constructor (e.g. `f n = case n {Z→Z; S k→case (f k) {…}}`).
+  #
+  #   * ctor/pair target → ι fires here, result returned reduced (productive);
+  #   * stuck target     → `:stuck`, so `whnf_value` keeps the global FOLDED;
+  #   * anything else (ctor, λ, or a neutral not headed by an eliminator) →
+  #     `{:ok, value}`, i.e. genuine progress the outer loop continues from.
+  defp reduce_unfolded({:vneutral, neutral} = value, sig, opts) do
+    {head, args} = spine(neutral, [])
+
+    case head do
+      {:ncase, scrut, _motive, branches} ->
+        case whnf_value({:vneutral, scrut}, sig, opts) do
+          {:vctor, cname, cargs} ->
+            {_c, _ar, {:closure, env, body}} =
+              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+
+            {:ok, reapply(args, spend_fuel(Eval.eval(body, Enum.reverse(cargs) ++ env)))}
+
+          _ ->
+            :stuck
+        end
+
+      {:nfst, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
+          _ -> :stuck
+        end
+
+      {:nsnd, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
+          _ -> :stuck
+        end
+
+      _ ->
+        {:ok, value}
+    end
+  end
+
+  defp reduce_unfolded(value, _sig, _opts), do: {:ok, value}
 
   defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
 

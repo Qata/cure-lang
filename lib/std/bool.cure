@@ -1,0 +1,13 @@
+mod Std.Bool
+  ## Booleans as a real inductive type.
+  ##
+  ## `Bool` is `False | True`. The `@builtin(:bool)` decorator marks this as the
+  ## canonical Bool the kernel constructs for primitive comparison/connective
+  ## results and the general `:case` recursor eliminates (retiring the bespoke
+  ## `bool_elim` primitive). Erasure lowers its constructors to native BEAM
+  ## atoms `false`/`true`.
+
+  fn __group__() -> Atom = :core
+
+  @builtin(:bool)
+  type Bool = False | True

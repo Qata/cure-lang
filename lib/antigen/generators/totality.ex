@@ -75,16 +75,16 @@ defmodule Antigen.Generators.Totality do
   end
 
   @doc """
-  A non-total def whose non-decreasing self-call is hidden inside a `bool_elim`
-  branch: `f = λn:Int. bool_elim (n == 0) (λ_.Int) 0 (f n)`. Diverges for every
-  `n ≠ 0` (`f n → f n → …`). The self-call passes `n` unchanged, so it is not
+  A non-total def whose non-decreasing self-call is hidden inside a `:case`-on-Bool
+  branch: `f = λn:Int. case (n == 0) of {True -> 0; False -> f n}`. Diverges for
+  every `n ≠ 0` (`f n → f n → …`). The self-call passes `n` unchanged, so it is not
   structurally decreasing. Label `:diverging`.
 
-  This is the permanent regression guard for the `bool_elim` totality hole: the
-  structural certifier's `calls?`/`guarded_node?` traversals *must* descend into
-  both `bool_elim` branches. Before those clauses were added, `calls?` returned
-  the catch-all `false` — the self-call was invisible, `terminating?` reported a
-  spurious `true`, and this loop would have been certified total (a soundness
+  This is the permanent regression guard for the Bool-eliminator totality hole (now
+  a `:case` on the inductive Bool, retiring `bool_elim`): the structural certifier's
+  `calls?`/`guarded_node?` traversals *must* descend into every `:case` branch. If
+  they returned the catch-all `false`, the self-call would be invisible, `terminating?`
+  would report a spurious `true`, and this loop would be certified total (a soundness
   infection). Kept forever.
   """
   @spec diverging_bool_elim_branch() :: Challenge.t()
@@ -93,34 +93,34 @@ defmodule Antigen.Generators.Totality do
 
     body =
       {:lam, {:int_type},
-       {:bool_elim, {:prim, :eq, [{:var, 0}, {:int_lit, 0}]}, {:lam, {:bool_type}, {:int_type}},
-        {:int_lit, 0}, {:app, {:global, :f}, {:var, 0}}}}
+       {:case, {:prim, :eq, [{:var, 0}, {:int_lit, 0}]}, {:lam, {:data, :Bool, [], []}, {:int_type}},
+        [{:True, 0, {:int_lit, 0}}, {:False, 0, {:app, {:global, :f}, {:var, 0}}}]}}
 
     Challenge.new(
       kind: :def_group,
       assay: "totality/diverging",
       label: :diverging,
       payload: %{defs: [%{name: :f, type: ty, body: body}], focus: [:f]},
-      note: "self-call hidden in a bool_elim branch (bool_elim totality-hole guard)"
+      note: "self-call hidden in a :case-on-Bool branch (Bool-eliminator totality-hole guard)"
     )
   end
 
   @doc """
   A genuinely total structural recursion whose decreasing self-call sits *inside*
-  a `bool_elim` branch: `h = λn:Nat. case n of {Z -> Z; S y -> bool_elim true
-  (λ_.Nat) (h y) (h y)}`. Each self-call passes `y`, the `S`-branch-bound subterm,
-  so it is structurally smaller. Label `:terminating`.
+  a `:case`-on-Bool branch: `h = λn:Nat. case n of {Z -> Z; S y -> case True of
+  {True -> h y; False -> h y}}`. Each self-call passes `y`, the `S`-branch-bound
+  subterm, so it is structurally smaller. Label `:terminating`.
 
   Companion to `diverging_bool_elim_branch/0`: it guards against the certifier
-  *over*-correcting — the new `guarded_node?` clause for `bool_elim` must *recurse*
-  into the branches carrying the current `root`/`smaller`, not blanket-reject (or
-  blanket-accept) a term that contains one.
+  *over*-correcting — `guarded_node?`'s `:case` clause must *recurse* into the
+  branches carrying the current `root`/`smaller` (for Bool's arity-0 ctors,
+  unchanged), not blanket-reject (or blanket-accept) a term that contains one.
   """
   @spec terminating_bool_elim_branch() :: Challenge.t()
   def terminating_bool_elim_branch do
     inner =
-      {:bool_elim, {:bool_lit, true}, {:lam, {:bool_type}, @nat},
-       {:app, {:global, :h}, {:var, 0}}, {:app, {:global, :h}, {:var, 0}}}
+      {:case, {:ctor, :True, []}, {:lam, {:data, :Bool, [], []}, @nat},
+       [{:True, 0, {:app, {:global, :h}, {:var, 0}}}, {:False, 0, {:app, {:global, :h}, {:var, 0}}}]}
 
     body =
       {:lam, @nat,

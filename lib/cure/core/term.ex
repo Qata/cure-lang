@@ -22,17 +22,14 @@ defmodule Cure.Core.Term do
     * `{:ctor, name, args}`                  data constructor application
     * `{:case, scrut, motive, branches}`     dependent eliminator;
                                              `branches :: [{ctor_name, arity, body}]`
-    * `{:bool_elim, scrut, motive, tt, ff}`  dependent Boolean eliminator
-                                             (Bool.rec); `motive :: Bool → Type`,
-                                             `tt`/`ff` bind nothing
     * `{:global, name}`                      reference to a global def
     * `{:eq, ty, a, b}`                      propositional equality type
     * `{:refl, a}`                           reflexivity proof
     * `{:rewrite, proof, motive, body}`      transport / subst
     * `{:prim, op, args}`                    primitive operation
     * `{:int_type}` / `{:int_lit, n}`        integer type / literal
-    * `{:bool_type}` / `{:bool_lit, b}`      boolean type / literal
     * `{:float_type}` / `{:float_lit, f}`    float type / literal
+    (Bool is a real inductive family, not a primitive term form.)
   """
 
   @ceiling 2
@@ -70,9 +67,6 @@ defmodule Cure.Core.Term do
   def term?({:case, scrut, motive, branches}),
     do: term?(scrut) and term?(motive) and branches?(branches)
 
-  def term?({:bool_elim, scrut, motive, tt, ff}),
-    do: term?(scrut) and term?(motive) and term?(tt) and term?(ff)
-
   def term?({:global, name}), do: is_atom(name)
   def term?({:eq, ty, a, b}), do: term?(ty) and term?(a) and term?(b)
   def term?({:refl, a}), do: term?(a)
@@ -84,8 +78,6 @@ defmodule Cure.Core.Term do
 
   def term?({:int_type}), do: true
   def term?({:int_lit, n}), do: is_integer(n)
-  def term?({:bool_type}), do: true
-  def term?({:bool_lit, b}), do: is_boolean(b)
   def term?({:float_type}), do: true
   def term?({:float_lit, f}), do: is_float(f)
 
@@ -111,8 +103,6 @@ defmodule Cure.Core.Term do
   # Literals / type constants bind nothing and contain no variables: identity.
   def shift({:int_type} = t, _amount, _cutoff), do: t
   def shift({:int_lit, _} = t, _amount, _cutoff), do: t
-  def shift({:bool_type} = t, _amount, _cutoff), do: t
-  def shift({:bool_lit, _} = t, _amount, _cutoff), do: t
   def shift({:float_type} = t, _amount, _cutoff), do: t
   def shift({:float_lit, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
@@ -130,11 +120,6 @@ defmodule Cure.Core.Term do
 
   def shift({:case, s, m, brs}, a, c),
     do: {:case, shift(s, a, c), shift(m, a, c), Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, a, c + ar)} end)}
-
-  # bool_elim binds nothing: the motive is itself a λ (its binder is the inner
-  # :lam node), and tt/ff bind no variables — every sub-term is at the same depth.
-  def shift({:bool_elim, s, m, tt, ff}, a, c),
-    do: {:bool_elim, shift(s, a, c), shift(m, a, c), shift(tt, a, c), shift(ff, a, c)}
 
   def shift({:eq, ty, x, y}, a, c), do: {:eq, shift(ty, a, c), shift(x, a, c), shift(y, a, c)}
   def shift({:refl, x}, a, c), do: {:refl, shift(x, a, c)}
@@ -192,8 +177,6 @@ defmodule Cure.Core.Term do
   # Literals / type constants bind nothing and contain no variables: identity.
   def subst({:int_type} = t, _j, _r), do: t
   def subst({:int_lit, _} = t, _j, _r), do: t
-  def subst({:bool_type} = t, _j, _r), do: t
-  def subst({:bool_lit, _} = t, _j, _r), do: t
   def subst({:float_type} = t, _j, _r), do: t
   def subst({:float_lit, _} = t, _j, _r), do: t
 
@@ -220,9 +203,6 @@ defmodule Cure.Core.Term do
     do:
       {:case, subst(s, j, r), subst(m, j, r),
        Enum.map(brs, fn {cn, ar, b} -> {cn, ar, subst(b, j + ar, shift(r, ar, 0))} end)}
-
-  def subst({:bool_elim, s, m, tt, ff}, j, r),
-    do: {:bool_elim, subst(s, j, r), subst(m, j, r), subst(tt, j, r), subst(ff, j, r)}
 
   def subst({:eq, ty, x, y}, j, r),
     do: {:eq, subst(ty, j, r), subst(x, j, r), subst(y, j, r)}
@@ -283,15 +263,6 @@ defmodule Cure.Core.Term do
         end)
     }
 
-  def to_external({:bool_elim, s, m, tt, ff}),
-    do: %{
-      "node" => "bool_elim",
-      "scrut" => to_external(s),
-      "motive" => to_external(m),
-      "tt" => to_external(tt),
-      "ff" => to_external(ff)
-    }
-
   def to_external({:global, n}), do: %{"node" => "global", "name" => Atom.to_string(n)}
 
   def to_external({:eq, ty, a, b}),
@@ -312,8 +283,6 @@ defmodule Cure.Core.Term do
 
   def to_external({:int_type}), do: %{"node" => "int_type"}
   def to_external({:int_lit, n}), do: %{"node" => "int_lit", "value" => n}
-  def to_external({:bool_type}), do: %{"node" => "bool_type"}
-  def to_external({:bool_lit, b}), do: %{"node" => "bool_lit", "value" => b}
   def to_external({:float_type}), do: %{"node" => "float_type"}
   def to_external({:float_lit, f}), do: %{"node" => "float_lit", "value" => f}
 
@@ -353,9 +322,6 @@ defmodule Cure.Core.Term do
          {String.to_atom(cn), ar, from_external(b)}
        end)}
 
-  def from_external(%{"node" => "bool_elim", "scrut" => s, "motive" => m, "tt" => tt, "ff" => ff}),
-    do: {:bool_elim, from_external(s), from_external(m), from_external(tt), from_external(ff)}
-
   def from_external(%{"node" => "global", "name" => n}), do: {:global, String.to_atom(n)}
 
   def from_external(%{"node" => "eq", "type" => ty, "lhs" => a, "rhs" => b}),
@@ -371,8 +337,6 @@ defmodule Cure.Core.Term do
 
   def from_external(%{"node" => "int_type"}), do: {:int_type}
   def from_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}
-  def from_external(%{"node" => "bool_type"}), do: {:bool_type}
-  def from_external(%{"node" => "bool_lit", "value" => b}), do: {:bool_lit, b}
   def from_external(%{"node" => "float_type"}), do: {:float_type}
   def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
 

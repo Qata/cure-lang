@@ -42,7 +42,8 @@ defmodule Cure.Types.CoreBridge do
   @spec to_core(term()) :: {:ok, Cure.Core.Term.t()} | :error
   def to_core({:literal, _meta, n}) when is_integer(n), do: {:ok, {:int_lit, n}}
   def to_core({:literal, _meta, f}) when is_float(f), do: {:ok, {:float_lit, f}}
-  def to_core({:literal, _meta, b}) when is_boolean(b), do: {:ok, {:bool_lit, b}}
+  def to_core({:literal, _meta, b}) when is_boolean(b),
+    do: {:ok, {:ctor, if(b, do: :True, else: :False), []}}
 
   def to_core({:variable, _meta, name}) when is_binary(name),
     do: {:ok, {:global, String.to_atom(name)}}
@@ -111,7 +112,8 @@ defmodule Cure.Types.CoreBridge do
   @spec from_core(Cure.Core.Term.t()) :: term()
   def from_core({:int_lit, n}), do: {:literal, [subtype: :integer], n}
   def from_core({:float_lit, f}), do: {:literal, [subtype: :float], f}
-  def from_core({:bool_lit, b}), do: {:literal, [subtype: :boolean], b}
+  def from_core({:ctor, :True, []}), do: {:literal, [subtype: :boolean], true}
+  def from_core({:ctor, :False, []}), do: {:literal, [subtype: :boolean], false}
   def from_core({:global, name}), do: {:variable, [], Atom.to_string(name)}
   def from_core({:pair, a, b}), do: {:tuple, [], [from_core(a), from_core(b)]}
   def from_core({:fst, p}), do: {:function_call, [name: "fst"], [from_core(p)]}

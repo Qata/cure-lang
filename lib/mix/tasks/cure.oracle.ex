@@ -32,20 +32,39 @@ defmodule Mix.Tasks.Cure.Oracle do
     for cluster <- clusters do
       prior = Oracle.read_fixture(cluster)
 
+      # Fan out: one task per probe, and inside each the Cure and Idris checks
+      # run concurrently. Every check is bound by a timeout, so a non-terminating
+      # elaboration surfaces as `timeout` (with its wall-clock) instead of
+      # wedging the run. Join all probes at the end.
+      results =
+        Oracle.pairs(cluster)
+        |> Enum.map(fn %{name: name, cure_path: cp, idr_path: ip} ->
+          task =
+            Task.async(fn ->
+              cure = Task.async(fn -> Oracle.cure_verdict_timed(cp) end)
+              idris = Task.async(fn -> Oracle.idris_verdict_timed(bin, ip) end)
+              {Task.await(cure, :infinity), Task.await(idris, :infinity)}
+            end)
+
+          {name, task}
+        end)
+        |> Enum.map(fn {name, task} -> {name, Task.await(task, :infinity)} end)
+
       fixture =
-        for %{name: name, cure_path: cp, idr_path: ip} <- Oracle.pairs(cluster), into: %{} do
+        for {name, {{cure_v, cure_ms}, {idris_v, idris_ms}}} <- results, into: %{} do
           base = Map.get(prior, name, %{"relation" => "same", "reason" => ""})
 
           entry = %{
-            "cure" => Atom.to_string(Oracle.cure_verdict(cp)),
-            "idris" => Atom.to_string(Oracle.idris_verdict(bin, ip)),
+            "cure" => Atom.to_string(cure_v),
+            "idris" => Atom.to_string(idris_v),
             "relation" => Map.get(base, "relation", "same"),
             "reason" => Map.get(base, "reason", "")
           }
 
           Mix.shell().info(
-            "#{cluster}/#{name}: cure=#{entry["cure"]} idris=#{entry["idris"]} " <>
-              "rel=#{entry["relation"]}#{if Oracle.consistent(entry) == :ok, do: "", else: "  <-- TRIAGE"}"
+            "#{cluster}/#{name}: cure=#{entry["cure"]} (#{cure_ms}ms) " <>
+              "idris=#{entry["idris"]} (#{idris_ms}ms) rel=#{entry["relation"]}" <>
+              if(Oracle.consistent(entry) == :ok, do: "", else: "  <-- TRIAGE")
           )
 
           {name, entry}

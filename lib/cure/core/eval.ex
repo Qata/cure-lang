@@ -46,8 +46,6 @@ defmodule Cure.Core.Eval do
   # (`n + 1`) read back and compare structurally.
   def eval({:int_type}, _env), do: {:vint_type}
   def eval({:int_lit, n}, _env), do: {:vint, n}
-  def eval({:bool_type}, _env), do: {:vbool_type}
-  def eval({:bool_lit, b}, _env), do: {:vbool, b}
   def eval({:float_type}, _env), do: {:vfloat_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
   def eval({:prim, op, args}, env), do: prim(op, Enum.map(args, &eval(&1, env)))
@@ -74,24 +72,6 @@ defmodule Cure.Core.Eval do
         motive_closure = {:closure, env, motive}
         branch_closures = Enum.map(branches, fn {c, ar, b} -> {c, ar, {:closure, env, b}} end)
         {:vneutral, {:ncase, neutral, motive_closure, branch_closures}}
-    end
-  end
-
-  # Dependent Boolean elimination (Bool.rec). The ι-rule fires on a concrete
-  # `{:vbool, _}`; a neutral scrutinee freezes into `{:nbool_elim, …}`, capturing
-  # the motive and both branch bodies (which bind nothing) as env-closures so a
-  # later whnf can fire the rule once the scrutinee reduces to a boolean.
-  def eval({:bool_elim, scrut, motive, tt, ff}, env) do
-    case eval(scrut, env) do
-      {:vbool, true} ->
-        eval(tt, env)
-
-      {:vbool, false} ->
-        eval(ff, env)
-
-      {:vneutral, neutral} ->
-        {:vneutral,
-         {:nbool_elim, neutral, {:closure, env, motive}, {:closure, env, tt}, {:closure, env, ff}}}
     end
   end
 
@@ -137,28 +117,60 @@ defmodule Cure.Core.Eval do
   defp fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
   defp fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
 
-  defp fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a == b}}
-  defp fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a == b}}
-  defp fold(:eq, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a == b}}
-  defp fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a != b}}
-  defp fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a != b}}
-  defp fold(:ne, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a != b}}
-  defp fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a < b}}
-  defp fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a < b}}
-  defp fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a <= b}}
-  defp fold(:le, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a <= b}}
-  defp fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a > b}}
-  defp fold(:gt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a > b}}
-  defp fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, {:vbool, a >= b}}
-  defp fold(:ge, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vbool, a >= b}}
+  # Bool-producing folds now yield the `True`/`False` **constructor values** of the
+  # canonical Bool inductive (the True/False ctor values). `:True`/`:False` are
+  # hardcoded here (fold has no `sig` on its path — a deliberate plumbing decision;
+  # the Task-10 antibody enforces agreement with Builtins.@schemas / seed/1).
+  defp fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a == b)}
+  defp fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a == b)}
+  defp fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a != b)}
+  defp fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a != b)}
+  defp fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a < b)}
+  defp fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a < b)}
+  defp fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a <= b)}
+  defp fold(:le, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a <= b)}
+  defp fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a > b)}
+  defp fold(:gt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a > b)}
+  defp fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a >= b)}
+  defp fold(:ge, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a >= b)}
 
-  defp fold(:and, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a and b}}
-  defp fold(:or, [{:vbool, a}, {:vbool, b}]), do: {:ok, {:vbool, a or b}}
-  defp fold(:not, [{:vbool, a}]), do: {:ok, {:vbool, not a}}
   defp fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
   defp fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
 
+  # Connectives and Bool-operand equality take constructor-value operands now
+  # (constructor values). `as_bool/1` maps a True/False ctor value back to an
+  # Elixir boolean; a neutral operand → :stuck → prim/2's neutral path.
+  defp fold(:and, [a, b]) do
+    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x and y)}
+  end
+
+  defp fold(:or, [a, b]) do
+    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x or y)}
+  end
+
+  defp fold(:not, [a]) do
+    with {:ok, x} <- as_bool(a), do: {:ok, vbool(not x)}
+  end
+
+  # Bool-operand equality (`a == b` where a, b : Bool). MUST come after the
+  # numeric :eq/:ne clauses above — `[a, b]` matches any 2-tuple list and would
+  # otherwise shadow them.
+  defp fold(:eq, [a, b]) do
+    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x == y)}
+  end
+
+  defp fold(:ne, [a, b]) do
+    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x != y)}
+  end
+
   defp fold(_op, _args), do: :stuck
+
+  defp vbool(true), do: {:vctor, :True, []}
+  defp vbool(false), do: {:vctor, :False, []}
+
+  defp as_bool({:vctor, :True, []}), do: {:ok, true}
+  defp as_bool({:vctor, :False, []}), do: {:ok, false}
+  defp as_bool(_other), do: :stuck
 
   defp vfst({:vpair, a, _b}), do: a
   defp vfst({:vneutral, n}), do: {:vneutral, {:nfst, n}}

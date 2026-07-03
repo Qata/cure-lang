@@ -374,14 +374,31 @@ did not fire.
 
 ### Task B2: Demand-driven lemma stock + multi-occurrence decision (= Phase 4, post-4a shape)
 
-- [ ] Execute lean-shape Tasks 4.1–4.2 as amended by the 4a finding: `frp01`
+- [x] Execute lean-shape Tasks 4.1–4.2 as amended by the 4a finding: `frp01`
   already flipped `same` via the conversion fix (09a80f3), so the lemma stock
   is DEMAND-DRIVEN from B4's capstone (build only the `++`/`Dec`-lattice
   lemmas the `∗∗`/`loop`/`switch` goals actually require).
-- [ ] The multi-occurrence question (Task 4.2) is decided when B4's `∗∗`
-  interchange-shaped goals are attempted; if it needs kernel conversion work,
-  that is a TCB HARD-STOP gate, else an E-layer rewrite driver. Record the
-  decision; it gates B4.
+- [x] **Task 4.2 decided — it needed kernel conversion work (TCB HARD-STOP
+  gate), NOT an E-layer driver.** Root cause of the multi-occurrence failure
+  (rw08 hang) was a δ-INCONSISTENT normal form: the normalizer eagerly
+  δ-unfolded a certified recursive global stuck on a neutral into a one-level
+  `case`, so the same stuck call (`plus n Z`) had two shapes — folded in one
+  spine, expanded in another — breaking the elaborator's syntactic
+  occurrence-matching and δ-looping the kernel's final `conv?`. Comparing our
+  normalizer to Idris/Lean/Agda showed all three avoid this by LAZY UNFOLDING
+  (a recursive definition stuck on a neutral stays an opaque atom, never
+  expanded into its internal matcher) — the only design that keeps conversion
+  terminating on open terms. **Fix (`lib/cure/core/normalise.ex`,
+  `unfold_certified_head/3`): keep the application FOLDED when unfolding only
+  re-exposes an eliminator stuck on a neutral (`productive_unfold?`).** Result:
+  `rw08` (syntactic multi-occurrence) and `rw09` (conversion multi-occurrence)
+  both `cure=accept / idris=accept rel=same`; `frp08_interchange_multi`
+  `same`; whole `rewrite` + `frp` clusters `same`. TCB gate met: red→green on
+  `normalise_test` (the `step`-under-neutral characterization updated to the
+  folded stuck form — its "stays stuck" invariant preserved), A6 antibody
+  `test/antigen/lazy_unfold_antibody_test.exs` (termination + canonical-form +
+  no distinct-NF collapse + no over-freezing), full Antigen (192), full suite
+  (2567), independent adversarial verification.
 
 ### Task B3: Signature-aware `Quote.reify` (= Phase 5; TCB; HARD-STOP gate)
 

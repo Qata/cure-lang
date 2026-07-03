@@ -137,14 +137,33 @@ defmodule Cure.Elab.Emit do
   end
 
   defp lower(env, {:ctor, name, args}, ctx) do
-    case Enum.map(args, &lower(env, &1, ctx)) do
-      [] -> {:atom, @line, name}
-      forms -> {:tuple, @line, [{:atom, @line, name} | forms]}
+    cond do
+      args == [] and bool_ctor?(env, name) ->
+        {:atom, @line, bool_atom(name)}
+
+      true ->
+        case Enum.map(args, &lower(env, &1, ctx)) do
+          [] -> {:atom, @line, name}
+          forms -> {:tuple, @line, [{:atom, @line, name} | forms]}
+        end
     end
   end
 
   defp lower(env, {:case, scrut, _motive, branches}, ctx) do
     {:case, @line, lower(env, scrut, ctx), Enum.map(branches, &branch_clause(env, &1, ctx))}
+  end
+
+  defp lower(_env, {:int_lit, n}, _ctx), do: {:integer, @line, n}
+  defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
+
+  # Primitive operations lower to the corresponding BEAM operator.
+  defp lower(env, {:prim, op, [a, b]}, ctx)
+       when op in [:add, :sub, :mul, :div, :rem, :eq, :ne, :lt, :le, :gt, :ge, :and, :or] do
+    {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
+  end
+
+  defp lower(env, {:prim, op, [a]}, ctx) when op in [:not, :neg] do
+    {:op, @line, erl_unop(op), lower(env, a, ctx)}
   end
 
   defp lower(env, {:pair, a, b}, ctx) do
@@ -206,6 +225,23 @@ defmodule Cure.Elab.Emit do
 
   defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
 
+  defp erl_binop(:add), do: :+
+  defp erl_binop(:sub), do: :-
+  defp erl_binop(:mul), do: :*
+  defp erl_binop(:div), do: :div
+  defp erl_binop(:rem), do: :rem
+  defp erl_binop(:eq), do: :==
+  defp erl_binop(:ne), do: :"/="
+  defp erl_binop(:lt), do: :<
+  defp erl_binop(:le), do: :"=<"
+  defp erl_binop(:gt), do: :>
+  defp erl_binop(:ge), do: :">="
+  defp erl_binop(:and), do: :and
+  defp erl_binop(:or), do: :or
+
+  defp erl_unop(:not), do: :not
+  defp erl_unop(:neg), do: :-
+
   defp element(n, tuple_form) do
     {:call, @line, {:atom, @line, :element}, [{:integer, @line, n}, tuple_form]}
   end
@@ -230,7 +266,7 @@ defmodule Cure.Elab.Emit do
 
     pattern =
       case present do
-        [] -> {:atom, @line, cname}
+        [] -> {:atom, @line, bool_atom_or_self(env, cname)}
         _ -> {:tuple, @line, [{:atom, @line, cname} | present]}
       end
 
@@ -241,4 +277,17 @@ defmodule Cure.Elab.Emit do
 
   defp indices(0), do: []
   defp indices(arity), do: Enum.to_list(0..(arity - 1))
+
+  # The canonical Bool inductive erases to native BEAM booleans: its nullary
+  # constructors `True`/`False` lower to the atoms `true`/`false` (matching what
+  # `{:prim}` comparisons already return at runtime), and a `:case` on Bool tests
+  # those same lowercase atoms.
+  defp bool_ctor?(env, name), do: Inductive.builtin(env, :bool) == Inductive.ctor_family(env, name)
+
+  defp bool_atom(:True), do: true
+  defp bool_atom(:False), do: false
+
+  defp bool_atom_or_self(env, name) do
+    if bool_ctor?(env, name), do: bool_atom(name), else: name
+  end
 end

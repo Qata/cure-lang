@@ -4197,6 +4197,17 @@ defmodule Cure.Compiler.Parser do
         rec_ast = attach_decorator(rec_ast, dec_name, args)
         {rec_ast, state}
 
+      # `@builtin(:key) type Name = ...` attaches the decorator to the type
+      # container (an enum ADT → {:container, container_type: :enum, ...}, which
+      # attach_decorator/3's generic clause threads into :decorator meta). A
+      # @builtin on an indexed/GADT ({:indexed_type}) or alias ({:type_annotation})
+      # form is silently dropped — those have no attach_decorator clause today;
+      # out of scope here (Bool/Nat are both simple enums).
+      %Token{type: :keyword, value: :type} ->
+        {type_ast, state} = parse_type_def(state)
+        type_ast = attach_decorator(type_ast, dec_name, args)
+        {type_ast, state}
+
       _ ->
         # Standalone decorator or property
         if args != [] do

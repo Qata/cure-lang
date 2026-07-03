@@ -1,44 +1,42 @@
 defmodule Cure.Core.BoolPrimTest do
   @moduledoc """
-  Primitive `Bool`, comparisons, and boolean connectives in the kernel — the rest
-  of the arithmetic/logic surface the `Cure.Types.Reduce` fold covered, now owned
-  by `Cure.Core` so refinement predicates evaluate inside the kernel.
+  Comparisons and boolean connectives in the kernel. `Bool` is now a real
+  inductive family (retiring the primitive `{:bool_type}`/`{:bool_lit}`/`bool_elim`
+  forms): comparisons/connectives infer to the `Bool` inductive type value and
+  `eval` folds them to the `True`/`False` constructor values.
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Context, Conv, Eval, Kernel, Quote}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Eval, Kernel}
 
-  test "eval folds integer comparisons to booleans" do
-    assert Eval.eval({:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]}, []) == {:vbool, true}
-    assert Eval.eval({:prim, :eq, [{:int_lit, 4}, {:int_lit, 4}]}, []) == {:vbool, true}
-    assert Eval.eval({:prim, :ge, [{:int_lit, 2}, {:int_lit, 9}]}, []) == {:vbool, false}
+  defp ctx, do: Context.empty(Builtins.seed(Env.empty()))
+  defp vtrue, do: Eval.eval({:ctor, :True, []}, [])
+  defp vfalse, do: Eval.eval({:ctor, :False, []}, [])
+
+  test "eval folds integer comparisons to Bool constructor values" do
+    assert Eval.eval({:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]}, []) == vtrue()
+    assert Eval.eval({:prim, :eq, [{:int_lit, 4}, {:int_lit, 4}]}, []) == vtrue()
+    assert Eval.eval({:prim, :ge, [{:int_lit, 2}, {:int_lit, 9}]}, []) == vfalse()
   end
 
-  test "eval folds boolean connectives" do
-    assert Eval.eval({:prim, :and, [{:bool_lit, true}, {:bool_lit, false}]}, []) == {:vbool, false}
-    assert Eval.eval({:prim, :or, [{:bool_lit, true}, {:bool_lit, false}]}, []) == {:vbool, true}
-    assert Eval.eval({:prim, :not, [{:bool_lit, false}]}, []) == {:vbool, true}
-  end
-
-  test "reify round-trips Bool type and literals" do
-    assert Quote.reify({:vbool_type}) == {:bool_type}
-    assert Quote.reify({:vbool, true}) == {:bool_lit, true}
+  test "eval folds boolean connectives over constructor-value operands" do
+    assert Eval.eval({:prim, :and, [{:ctor, :True, []}, {:ctor, :False, []}]}, []) == vfalse()
+    assert Eval.eval({:prim, :or, [{:ctor, :True, []}, {:ctor, :False, []}]}, []) == vtrue()
+    assert Eval.eval({:prim, :not, [{:ctor, :False, []}]}, []) == vtrue()
   end
 
   test "definitional equality across comparisons" do
-    assert Conv.conv?({:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]}, {:bool_lit, true}, [], 0)
-    refute Conv.conv?({:bool_lit, true}, {:bool_lit, false}, [], 0)
+    assert Conv.conv?({:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]}, {:ctor, :True, []}, [], 0)
+    refute Conv.conv?({:ctor, :True, []}, {:ctor, :False, []}, [], 0)
   end
 
-  test "kernel types Bool, comparisons, and connectives" do
-    ctx = Context.empty()
-    assert {:ok, {:vtype, 0}} = Kernel.infer(ctx, {:bool_type})
-    assert {:ok, {:vbool_type}} = Kernel.infer(ctx, {:bool_lit, true})
-    assert {:ok, {:vbool_type}} = Kernel.infer(ctx, {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]})
+  test "kernel types comparisons and connectives at the Bool inductive" do
+    bool = {:vdata, :Bool, []}
+    assert {:ok, ^bool} = Kernel.infer(ctx(), {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]})
 
-    assert {:ok, {:vbool_type}} =
-             Kernel.infer(ctx, {:prim, :and, [{:bool_lit, true}, {:bool_lit, false}]})
+    assert {:ok, ^bool} =
+             Kernel.infer(ctx(), {:prim, :and, [{:ctor, :True, []}, {:ctor, :False, []}]})
 
-    assert {:error, _} = Kernel.infer(ctx, {:prim, :and, [{:int_lit, 1}, {:int_lit, 2}]})
-    assert {:error, _} = Kernel.infer(ctx, {:prim, :lt, [{:bool_lit, true}, {:int_lit, 2}]})
+    assert {:error, _} = Kernel.infer(ctx(), {:prim, :and, [{:int_lit, 1}, {:int_lit, 2}]})
+    assert {:error, _} = Kernel.infer(ctx(), {:prim, :lt, [{:ctor, :True, []}, {:int_lit, 2}]})
   end
 end

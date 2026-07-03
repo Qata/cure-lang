@@ -27,11 +27,40 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast) do
-    with {:ok, env0} <- import_env(imports(ast), MapSet.new()),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
+    with {:ok, imported} <- import_env(imports(ast), MapSet.new()),
+         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         env0 = merge_env(seeded, imported),
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
       TotalityClosure.certify_type_level(env)
     end
   end
+
+  # Family/type names the module declares itself. A builtin (Bool/Nat) is NOT
+  # seeded into env0 when the module declares its own same-named type — the local
+  # declaration is canonical, and seeding a look-alike would pollute its ctor set.
+  defp declared_type_names(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(fn
+      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
+        case Keyword.get(meta, :name) do
+          n when is_binary(n) -> [String.to_atom(n)]
+          n when is_atom(n) and not is_nil(n) -> [n]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+    |> MapSet.new()
+  end
+
+  # A source is a designated prelude source iff its own declared module name is
+  # a key of the stdlib module registry. Only such sources may register a
+  # `@builtin(:key)`; ordinary user code declaring the same decorator is ignored
+  # (spec §1 single-registration invariant).
+  defp prelude_source?(ast),
+    do: Map.has_key?(Cure.Stdlib.Preload.module_groups(), module_atom(ast))
 
   @doc """
   Elaborate a module and return the definitions declared directly by that
@@ -266,7 +295,8 @@ defmodule Cure.Elab.Program do
       ctors: Map.merge(left.ctors, right.ctors),
       ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
       defs: Map.merge(left.defs, right.defs),
-      certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new())
+      certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
+      builtins: Map.merge(left.builtins, right.builtins)
     }
   end
 
@@ -275,13 +305,13 @@ defmodule Cure.Elab.Program do
   # then every function *body* is elaborated against the fully-populated
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
-  defp elaborate_declarations(items, env) do
-    with {:ok, env1, fn_decls} <- register_pass(items, env) do
+  defp elaborate_declarations(items, env, prelude? \\ false) do
+    with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?) do
       body_pass(fn_decls, env1)
     end
   end
 
-  defp register_pass(items, env) do
+  defp register_pass(items, env, prelude?) do
     Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
       case decl do
         {:function_def, _meta, _body} ->
@@ -292,8 +322,14 @@ defmodule Cure.Elab.Program do
 
         _ ->
           case Declarations.elaborate(decl, acc) do
-            {:ok, acc2} -> {:cont, {:ok, acc2, fns}}
-            {:error, _} = err -> {:halt, err}
+            {:ok, acc2} ->
+              case maybe_register_builtin(decl, acc2, prelude?) do
+                {:ok, acc3} -> {:cont, {:ok, acc3, fns}}
+                {:error, _} = err -> {:halt, err}
+              end
+
+            {:error, _} = err ->
+              {:halt, err}
           end
       end
     end)
@@ -302,6 +338,27 @@ defmodule Cure.Elab.Program do
       {:error, _} = err -> err
     end
   end
+
+  # In a designated prelude source, a `@builtin(:key) type Name = ...` container
+  # registers the canonical builtin family (schema-validated). Non-prelude
+  # sources (or non-`@builtin` decls) pass through unchanged.
+  defp maybe_register_builtin({:container, meta, _body}, env, true) do
+    case Keyword.get(meta, :decorator) do
+      {:builtin, args} ->
+        key = builtin_key(args)
+        fid = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        :ok = Cure.Core.Builtins.validate!(env, key, fid)
+        {:ok, Cure.Core.Inductive.register_builtin(env, key, fid)}
+
+      _ ->
+        {:ok, env}
+    end
+  end
+
+  defp maybe_register_builtin(_decl, env, _prelude?), do: {:ok, env}
+
+  defp builtin_key([{:literal, _meta, key}]) when is_atom(key), do: key
+  defp builtin_key([key]) when is_atom(key), do: key
 
   defp body_pass(fn_decls, env) do
     Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->

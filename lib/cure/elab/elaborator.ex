@@ -304,7 +304,74 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
+  def elaborate_expr_typed({:literal, meta, value} = expr, _names, ctx, _env) do
+    case Keyword.get(meta, :subtype) do
+      :boolean when is_boolean(value) ->
+        ctor = if value, do: :True, else: :False
+        {:ok, {:ctor, ctor, []}, Kernel.bool_type_value(Context.signature(ctx))}
+
+      :integer when is_integer(value) ->
+        {:ok, {:int_lit, value}, {:vint_type}}
+
+      :float when is_float(value) ->
+        {:ok, {:float_lit, value}, {:vfloat_type}}
+
+      _ ->
+        {:error, {:unsupported_expression, expr}}
+    end
+  end
+
+  # `if c then t else e` — lowered to a `:case` on the inductive `Bool`. In
+  # inference mode we infer the `then` branch's type T, check `else` against T,
+  # and use the constant motive `λ_:Bool. T` (both branches share the type T).
+  def elaborate_expr_typed({:conditional, _meta, [c, t, e]}, names, ctx, env) do
+    with {:ok, c_core} <- elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env),
+         {:ok, t_core, t_type} <- elaborate_expr_typed(t, names, ctx, env),
+         t_type_core = Quote.reify(t_type, Context.length(ctx)),
+         {:ok, e_core} <- elaborate_expr_checked(e, t_type_core, names, ctx, env) do
+      {:ok, bool_case(c_core, t_type_core, t_core, e_core, ctx), t_type}
+    end
+  end
+
+  # A surface binary operator lowers to the kernel primitive `{:prim, op, args}`,
+  # whose typing rules (`infer_prim`) already fix the result: arithmetic returns
+  # the shared numeric type, comparisons/equality/connectives return Bool. We
+  # elaborate both operands in inference mode, assemble the prim, and let the
+  # kernel infer the result type — no duplicated type rules here.
+  def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
+    case prim_op(Keyword.fetch!(meta, :operator)) do
+      {:ok, op} ->
+        with {:ok, l_core, _lt} <- elaborate_expr_typed(l, names, ctx, env),
+             {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+             term = {:prim, op, [l_core, r_core]},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
+      :error ->
+        {:error, {:unsupported_expression, expr}}
+    end
+  end
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the kernel's
+  # primitive opcodes. Only the ops the kernel actually types are mapped; `<>`
+  # (string concat), `..`, and the like are left unsupported here.
+  defp prim_op(:+), do: {:ok, :add}
+  defp prim_op(:-), do: {:ok, :sub}
+  defp prim_op(:*), do: {:ok, :mul}
+  defp prim_op(:/), do: {:ok, :div}
+  defp prim_op(:rem), do: {:ok, :rem}
+  defp prim_op(:==), do: {:ok, :eq}
+  defp prim_op(:!=), do: {:ok, :ne}
+  defp prim_op(:<), do: {:ok, :lt}
+  defp prim_op(:>), do: {:ok, :gt}
+  defp prim_op(:<=), do: {:ok, :le}
+  defp prim_op(:>=), do: {:ok, :ge}
+  defp prim_op(:and), do: {:ok, :and}
+  defp prim_op(:or), do: {:ok, :or}
+  defp prim_op(_), do: :error
 
   defp sigma_projection(which, inner, names, ctx, env) do
     with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
@@ -537,6 +604,18 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # `if c then t else e` checked against the expected type: both branches are
+  # checked at `expected_core` under a constant motive `λ_:Bool. expected_core`
+  # (shifted past the fresh Bool binder). The kernel re-checks the assembled
+  # `:case`, so nothing here is trusted.
+  def elaborate_expr_checked({:conditional, _meta, [c, t, e]}, expected_core, names, ctx, env) do
+    with {:ok, c_core} <- elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env),
+         {:ok, t_core} <- elaborate_expr_checked(t, expected_core, names, ctx, env),
+         {:ok, e_core} <- elaborate_expr_checked(e, expected_core, names, ctx, env) do
+      {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
+    end
+  end
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
 
@@ -569,6 +648,16 @@ defmodule Cure.Elab.Elaborator do
   defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
   defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
 
+  # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
+  # default so ordinary elaboration is untouched; used to diagnose non-termination
+  # / mis-planning in the `rewrite_plan`/`find_bridge`/`bridge_step` recursion.
+  defp rwlog(fun) do
+    if System.get_env("CURE_REWRITE_LOG"), do: IO.puts(:stderr, "[rw] " <> fun.())
+    :ok
+  end
+
+  defp rw_ins(t), do: t |> inspect(limit: 14, printable_limit: 240) |> String.slice(0, 300)
+
   # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
   # goal `expected`. Returns `{:ok, build, body_expected}`: `body_expected` is
   # the goal the surface body `t` must satisfy, and `build.(body_core)` assembles
@@ -580,6 +669,11 @@ defmodule Cure.Elab.Elaborator do
   # checks `t` under the rewritten goal and returns the original goal, so when
   # the expected type contains the proof's left endpoint we synthesize symmetry.
   defp rewrite_plan(ctx, proof, ty, a, b, expected) do
+    rwlog(fn ->
+      "plan a=#{rw_ins(a)} b=#{rw_ins(b)} | contains_a=#{contains_term?(expected, a)} " <>
+        "contains_b=#{contains_term?(expected, b)} expected=#{rw_ins(expected)}"
+    end)
+
     cond do
       contains_term?(expected, a) ->
         with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
@@ -626,17 +720,22 @@ defmodule Cure.Elab.Elaborator do
   # proof endpoint. It does NOT implement fully general up-to-conversion
   # occurrence matching.
   defp find_bridge(ctx, expected, a) do
-    expected
-    |> reducible_subterms()
-    |> Enum.find_value(fn s ->
+    subs = reducible_subterms(expected)
+    rwlog(fn -> "find_bridge: #{length(subs)} reducible subterms, seeking a=#{rw_ins(a)}" end)
+
+    Enum.find_value(subs, fn s ->
       s_nf = Kernel.normalize(ctx, s)
+
       if s_nf != s and contains_term?(replace_term(expected, s, s_nf), a) do
+        rwlog(fn -> "  bridge candidate s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)}" end)
         {s, s_nf}
       end
     end)
   end
 
   defp bridge_step(ctx, proof, ty, a, b, expected, {s, s_nf}) do
+    rwlog(fn -> "bridge_step s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)} (recurse on residual)" end)
+
     with {:ok, ty_s} <- infer_type_term(ctx, s),
          residual = replace_term(expected, s, s_nf),
          {:ok, inner_build, body_expected} <- rewrite_plan(ctx, proof, ty, a, b, residual) do
@@ -841,10 +940,20 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms1b} <- desugar_tuple_args(arms1),
          {:ok, arms} <- desugar_nested_arms(arms1b, scrut_expr),
+         # A `when` guard is orthogonal to the pattern's shape, so it is resolved
+         # before the shape-dispatching paths (each of which would silently drop
+         # the guard). Claims EVERY guarded match: handles the tractable subset,
+         # errors on the rest — so no path below ever ignores a guard.
+         :not_applicable <-
+           try_guard_match(scrut_expr, arms, result_type_term, names, ctx, env),
          :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env),
          :not_applicable <-
-           try_trivial_match(scrut_expr, arms, result_type_term, names, ctx, env) do
+           try_trivial_match(scrut_expr, arms, result_type_term, names, ctx, env),
+         :not_applicable <-
+           try_literal_match(
+             scrut_expr, arms, scrut_term, scrut_type, result_type_term, names, ctx, env
+           ) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
@@ -1775,6 +1884,205 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp try_trivial_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  # A `when` guard on a variable/catch-all pattern desugars to a `bool_elim`
+  # chain: `match n | x when g -> a | x -> b` becomes `bool_elim g[x↦n] a[x↦n] b`,
+  # each guarded arm testing its guard and falling through (the `ff` branch) to
+  # the remaining arms. The chain must end in an *unguarded* catch-all — that is
+  # the fall-through when every guard is false; a still-guarded final arm is
+  # non-exhaustive and rejected. Restricted to a variable scrutinee so the
+  # substituted `n` is not duplicated-with-effects; richer patterns error rather
+  # than silently drop the guard. Built on the committed `bool_elim`; no kernel
+  # change. Returns `:not_applicable` only when NO arm is guarded.
+  defp try_guard_match(scrut_expr, arms, expected, names, ctx, env) do
+    if Enum.any?(arms, &guarded_arm?/1) do
+      guard_chain(scrut_expr, arms, expected, names, ctx, env)
+    else
+      :not_applicable
+    end
+  end
+
+  defp guarded_arm?({:match_arm, meta, _body}), do: Keyword.has_key?(meta, :guard)
+
+  # The final arm closes the chain: it must be an unguarded catch-all.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env) do
+    if Keyword.has_key?(meta, :guard) do
+      {:error, {:unsupported_guard, :non_exhaustive}}
+    else
+      bind_catchall_body(scrut_expr, Keyword.fetch!(meta, :pattern), single_body(body), expected, names, ctx, env)
+    end
+  end
+
+  # A guarded arm becomes a `bool_elim` on its guard; an unguarded catch-all
+  # before the end shadows every later arm and closes the chain early.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body} | rest], expected, names, ctx, env) do
+    pat = Keyword.fetch!(meta, :pattern)
+
+    case Keyword.get(meta, :guard) do
+      nil ->
+        bind_catchall_body(scrut_expr, pat, single_body(body), expected, names, ctx, env)
+
+      guard ->
+        with {:ok, guard_expr} <- guard_bind(scrut_expr, pat, guard),
+             {:ok, body_expr} <- guard_bind(scrut_expr, pat, single_body(body)),
+             {:ok, test} <-
+               elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env),
+             {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
+             {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env) do
+          {:ok, bool_case(test, expected, tt, ff, ctx)}
+        end
+    end
+  end
+
+  # Bind a catch-all pattern's variable to the scrutinee and check the body: `_`
+  # discards, a name substitutes the (variable) scrutinee expression. A non-
+  # variable pattern under a guarded match is out of this slice's scope.
+  defp bind_catchall_body(_scrut, {:variable, _m, "_"}, body, expected, names, ctx, env),
+    do: elaborate_expr_checked(body, expected, names, ctx, env)
+
+  defp bind_catchall_body(scrut_expr, {:variable, _m, name}, body, expected, names, ctx, env) do
+    cond do
+      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
+      binds_any?(body, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      true -> elaborate_expr_checked(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
+    end
+  end
+
+  defp bind_catchall_body(_scrut, _pat, _body, _expected, _names, _ctx, _env),
+    do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+
+  # Substitute the pattern variable with the (variable) scrutinee in a guard or
+  # body expression, guarding against complex scrutinees and shadow-capture.
+  defp guard_bind(_scrut, {:variable, _m, "_"}, expr), do: {:ok, expr}
+
+  defp guard_bind(scrut_expr, {:variable, _m, name}, expr) do
+    cond do
+      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
+      binds_any?(expr, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      true -> {:ok, subst_surface_var(expr, name, scrut_expr)}
+    end
+  end
+
+  defp guard_bind(_scrut, _pat, _expr), do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+
+  # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
+  # of Boolean eliminations — there is no `:vdata` to dispatch on. `match n | 0 ->
+  # a | _ -> b` becomes `bool_elim (n == 0) a b`; `match b | true -> t | false ->
+  # f` becomes `bool_elim b t f`. The already-elaborated Core scrutinee is reused
+  # in each equality test (no surface duplication), and the kernel re-checks the
+  # assembled chain. Returns `:not_applicable` for a non-primitive scrutinee or
+  # arms that are not a clean literal/catch-all list (the ordinary path handles it).
+  defp try_literal_match(scrut_expr, arms, scrut_term, scrut_type, expected, names, ctx, env) do
+    case primitive_scrut_kind(scrut_type, Context.signature(ctx)) do
+      {:ok, prim} ->
+        pats = Enum.map(arms, fn {:match_arm, m, b} -> {Keyword.fetch!(m, :pattern), single_body(b)} end)
+
+        cond do
+          prim == :bool and bool_exhaustive?(pats) ->
+            {tb, fb} = bool_bodies(pats)
+
+            with {:ok, t_core} <- elaborate_expr_checked(tb, expected, names, ctx, env),
+                 {:ok, f_core} <- elaborate_expr_checked(fb, expected, names, ctx, env) do
+              {:ok, bool_case(scrut_term, expected, t_core, f_core, ctx)}
+            end
+
+          literal_chain?(pats, prim) ->
+            literal_chain(scrut_expr, scrut_term, prim, pats, expected, names, ctx, env)
+
+          true ->
+            :not_applicable
+        end
+
+      :error ->
+        :not_applicable
+    end
+  end
+
+  # The Core **term** for the canonical Bool inductive (the term-level counterpart
+  # of Kernel.bool_type_value/1); `eval(bool_type_term(sig), _) == bool_type_value(sig)`.
+  defp bool_type_term(sig) do
+    fid = Inductive.builtin(sig, :bool) || raise "builtin :bool not seeded (bootstrap/load-order bug)"
+    {:data, fid, [], []}
+  end
+
+  # Lower a two-way Bool decision to a `:case` on the inductive Bool, with the
+  # constant motive `λ_:Bool. motive_body_type` (both branches share the type).
+  # The kernel re-checks the assembled `:case`, so nothing built here is trusted.
+  defp bool_case(scrut_term, motive_body_type, tt, ff, ctx) do
+    bool_ty = bool_type_term(Context.signature(ctx))
+    motive = {:lam, bool_ty, Cure.Core.Term.shift(motive_body_type, 1, 0)}
+    {:case, scrut_term, motive, [{:True, 0, tt}, {:False, 0, ff}]}
+  end
+
+  # A Bool scrutinee is now the inductive family (`{:vdata, :Bool, []}`), resolved
+  # via the registry; Int/Float stay primitive type-values.
+  defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
+  defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
+
+  defp primitive_scrut_kind({:vdata, fid, []}, sig) do
+    if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error
+  end
+
+  defp primitive_scrut_kind(_type, _sig), do: :error
+
+  defp bool_exhaustive?([{p1, _}, {p2, _}]),
+    do: Enum.sort([bool_pat_value(p1), bool_pat_value(p2)]) == [false, true]
+
+  defp bool_exhaustive?(_), do: false
+
+  defp bool_pat_value({:literal, _m, v}) when is_boolean(v), do: v
+  defp bool_pat_value(_), do: nil
+
+  defp bool_bodies([{p1, b1}, {_p2, b2}]),
+    do: if(bool_pat_value(p1) == true, do: {b1, b2}, else: {b2, b1})
+
+  # A literal chain is zero or more literal arms of the scrutinee's primitive type
+  # followed by a single variable/wildcard catch-all.
+  defp literal_chain?(pats, prim) when length(pats) >= 1 do
+    {lits, [{last_pat, _}]} = Enum.split(pats, length(pats) - 1)
+    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) end) and catchall_pat?(last_pat)
+  end
+
+  defp literal_chain?(_pats, _prim), do: false
+
+  defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
+  defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
+  defp literal_of?({:literal, _m, v}, :bool), do: is_boolean(v)
+  defp literal_of?(_p, _prim), do: false
+
+  defp catchall_pat?({:variable, _m, _name}), do: true
+  defp catchall_pat?(_p), do: false
+
+  defp lit_core(v, :int), do: {:int_lit, v}
+  defp lit_core(v, :float), do: {:float_lit, v}
+  defp lit_core(v, :bool), do: {:ctor, if(v, do: :True, else: :False), []}
+
+  # The final (catch-all) arm: the chain's innermost default branch.
+  defp literal_chain(scrut_expr, _scrut_term, _prim, [{pat, body}], expected, names, ctx, env) do
+    case pat do
+      {:variable, _m, "_"} ->
+        elaborate_expr_checked(body, expected, names, ctx, env)
+
+      {:variable, _m, name} ->
+        cond do
+          not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
+          binds_any?(body, [name]) -> {:error, {:unsupported_pattern, :shadowed_literal_catchall}}
+          true -> elaborate_expr_checked(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
+        end
+    end
+  end
+
+  # A literal arm: test the scrutinee against the literal (a `:prim :eq` yielding
+  # the inductive Bool), take this body if equal, else recurse on the rest — the
+  # test scrutinised by a `:case` on Bool.
+  defp literal_chain(scrut_expr, scrut_term, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
+    with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
+         {:ok, rest_core} <-
+           literal_chain(scrut_expr, scrut_term, prim, rest, expected, names, ctx, env) do
+      test = {:prim, :eq, [scrut_term, lit_core(v, prim)]}
+      {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
+    end
+  end
 
   # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
   # `e1 = base.1`, `e2 = base.2.1`, …, `en = base.2.….2` (the final tail). Each
@@ -3178,6 +3486,15 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, a_core} <- elaborate_expr(a, scope, env),
          {:ok, b_core} <- elaborate_expr(b, scope, env) do
       {:ok, {:pair, a_core, b_core}}
+    end
+  end
+
+  def elaborate_expr({:literal, meta, value} = expr, _scope, _env) do
+    case Keyword.get(meta, :subtype) do
+      :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
+      :integer when is_integer(value) -> {:ok, {:int_lit, value}}
+      :float when is_float(value) -> {:ok, {:float_lit, value}}
+      _ -> {:error, {:unsupported_expression, expr}}
     end
   end
 
