@@ -24,8 +24,23 @@ defmodule Antigen.Generators.Mutation do
   defp nat_t, do: {:data, :Nat, [], []}
   defp vec(i), do: {:data, :Vec, [], [i]}
 
-  # well-typed filler generators
-  defp gnat(ctx), do: Term.gen_term(ctx, nat_t())
+  # well-typed filler generators. `gnat` occasionally reuses a banked closed Nat
+  # (crossover, spec §3) when a seed pool is installed in the process dictionary;
+  # with no pool installed (all existing tests), it is byte-identical to today.
+  defp gnat(ctx) do
+    fresh = Term.gen_term(ctx, nat_t())
+
+    case Process.get(:antigen_seed_pool) do
+      %{} = pool ->
+        case Antigen.Generators.SeedPool.pool_gen(pool, nat_t()) do
+          :none -> fresh
+          g -> Gen.frequency([{4, fresh}, {1, g}])
+        end
+
+      _ ->
+        fresh
+    end
+  end
   defp gvec0(ctx), do: Term.gen_term(ctx, vec(z()))       # : Vec Z
   defp gvec_sz(ctx), do: Term.gen_term(ctx, vec(s(z())))  # : Vec (S Z)
 
