@@ -43,6 +43,8 @@ defmodule Antigen.Challenge do
     :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
+    # reify / data-split verticals (lean-shape-matching): indexed-case def names
+    :data_split, :reify_distinct, :reify_eq,
     :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
     :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge, :inject,
     :motive_dom, :SNat, :snat0,
