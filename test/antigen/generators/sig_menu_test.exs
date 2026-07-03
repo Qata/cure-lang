@@ -1,7 +1,7 @@
 defmodule Antigen.Generators.SigMenuTest do
   use ExUnit.Case, async: true
   alias Antigen.Generators.SigMenu
-  alias Cure.Core.{Env, Inductive, Context, Kernel}
+  alias Cure.Core.{Env, Inductive, Context, Kernel, Eval}
 
   test "env_of(:v1) certifies plus and dbl through the real certifier" do
     env = SigMenu.env_of(:v1)
@@ -20,9 +20,12 @@ defmodule Antigen.Generators.SigMenuTest do
     for goal <- SigMenu.goal_types() do
       assert SigMenu.inhabitable?(ctx, goal)
       term = SigMenu.canon(ctx, goal)
-      {:ok, ty} = Kernel.infer(ctx, term)
-      # inferred value must convert with the goal at top level
-      assert Kernel.check(ctx, term, ty) == :ok
+      # canon's contract is "a term that CHECKS at the goal" — use check-mode
+      # directly rather than infer-then-check, since check-mode-only inhabitants
+      # (a bare param-bearing `Nil`/`Cons`, a bare `:pair`) have no infer path.
+      # `check/3`'s type argument is a VALUE, so evaluate the goal term first.
+      goal_val = Eval.eval(goal, Context.env(ctx))
+      assert Kernel.check(ctx, term, goal_val) == :ok
     end
   end
 
@@ -66,5 +69,38 @@ defmodule Antigen.Generators.SigMenuTest do
                     {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
     assert {:ok, _} = Kernel.infer(ctx, nil_wrapped)
     assert {:ok, _} = Kernel.infer(ctx, cons_wrapped)
+  end
+
+  # -- Task 2: List introduction rule + goal seeds ----------------------------
+
+  test "gen_term over List(Nat) produces a List constructor" do
+    alias Antigen.Generators.Term
+    alias Antigen.Backend.StreamData, as: SD
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    gen = Term.gen_term(ctx, {:data, :List, [SigMenu.nat()], []})
+    terms = SD.sample(SD.interp(gen), 20)
+    # the List intro rule now fires — Nil/Cons appear in the sample (the generator
+    # also legitimately reaches List goals via case/var eliminations, so `any?`,
+    # not `all?`).
+    assert Enum.any?(terms, fn t -> match?({:ctor, :Nil, []}, t) or match?({:ctor, :Cons, _}, t) end)
+  end
+
+  test "typed_term challenges over List goals are infer-viable at the top level" do
+    alias Antigen.Generators.Term
+    alias Antigen.Backend.StreamData, as: SD
+
+    for id <- Term.assay_ids() do
+      samples = SD.interp(Term.typed_term(id)) |> Enum.take(80)
+      list_samples = Enum.filter(samples, &match?({:data, :List, _, _}, &1.payload.type))
+      assert list_samples != [], "no List sample drawn in 80 tries for #{id}"
+
+      for c <- list_samples do
+        env = SigMenu.env_of(:v1)
+        ctx = SigMenu.rebuild_context(env, c.payload.ctx)
+        assert {:ok, _} = Kernel.infer(ctx, c.payload.term),
+               "top-level List challenge term not infer-viable: #{inspect(c.payload.term)}"
+      end
+    end
   end
 end

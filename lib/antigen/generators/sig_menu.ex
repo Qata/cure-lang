@@ -17,7 +17,8 @@ defmodule Antigen.Generators.SigMenu do
   defp s(n), do: {:ctor, :S, [n]}
 
   @doc "The fixed closed goal-type seeds (all inhabitable in the empty context)."
-  def goal_types, do: [nat(), bd(), vec(z()), vec(s(z()))]
+  def goal_types, do: [nat(), bd(), vec(z()), vec(s(z())),
+                       {:data, :List, [nat()], []}, {:data, :List, [bd()], []}]
 
   # -- the v1 environment -----------------------------------------------------
   @doc "Declare families, add plus/dbl, and certify them through the kernel."
