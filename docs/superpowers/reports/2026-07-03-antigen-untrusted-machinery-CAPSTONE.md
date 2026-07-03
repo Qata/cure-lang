@@ -108,6 +108,19 @@ blanket-TCB-approval standing order). In rough value order:
 3. **SMTCoq / proof-reconstruction** — explicitly the deferred "someday" from the locked
    SMT trust-boundary decision; only relevant if Z3 ever needs to move toward the TCB.
 
+## Pre-merge audit (read-only, done 2026-07-03)
+
+A cross-vertical audit of the initiative's own code confirms merge-cleanliness:
+- **Contract:** every assay is `run/1`→`run/2` returning only `:ok | {:violation, _}`;
+  every generator assay id has a matching `Runner.assay_module/1` clause; all six new
+  `Challenge` kinds (`surface_expr`, `unify_problem`, `elab_program`, `closure_env`,
+  `erasure_term`, `smt_query`) are in the `@type kind` union.
+- **Hygiene:** no `TODO`/`FIXME`/`IO.inspect`/`dbg` in any of the six new assay/generator
+  files; StreamData quarantine intact (`architecture_test` green).
+- **Warnings:** `mix compile --warnings-as-errors` surfaces only **pre-existing**
+  warnings (older verticals `positivity.ex`/`universes.ex`; `Cure.*` machinery) — **zero
+  from the files this initiative added.** Not regressions.
+
 ## Merge
 
 **Do NOT auto-merge.** `autopilot/antigen-tier-b` holds the whole initiative (six
