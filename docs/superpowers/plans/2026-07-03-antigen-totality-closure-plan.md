@@ -48,11 +48,21 @@
 4. **Fixed catalog + new `:closure_env` kind** (spec §8-4). The `:def_group`
    payload (`%{focus: …}` + `Generators.Totality.env_of`) cannot carry a full
    pre-built `%Env{}`, so add a `:closure_env` kind (typespec-only). Every atom the
-   generator names (`:loop`, `:total_id`, `:Vessel`, `:Wrap`, callee names) is added
-   to `Challenge.@known_atoms` (spec §8-5); no `to_pieces`/`from_pieces` clause is
-   added (the catalog is replayed from the generator function, not banked — same as
+   generator names (`:loop`, `:total_id`, `:callee`, `:Vessel`, `:Wrap`, `:i`) must
+   be a member of `Challenge.@known_atoms` (spec §8-5) — verified against source
+   (`lib/antigen/challenge.ex`): `:total_id` (already listed, line 44) and `:i`
+   (already listed, line 54) are **already interned**; only `:loop`, `:callee`,
+   `:Vessel`, `:Wrap` are actually new additions. (Re-adding `:total_id`/`:i` would
+   not be a compile error — Elixir tolerates a duplicate atom literal in a list —
+   but Task 3 Step 3 should add only the 4 genuinely-new atoms, not all 6, to keep
+   the list accurate.) No `to_pieces`/`from_pieces` clause is added (the catalog is
+   replayed from the generator function, not banked — same as
    `surface_expr`/`unify_problem`), so no `String.to_existing_atom` decode path is
-   introduced.
+   introduced — confirmed via `test/antigen/corpus_atoms_test.exs`, which only
+   scans the *committed corpus files* (`seeds.sexp`/`corpus.sexp`/`reach.sexp`/
+   `reach_reify_split.sexp`) for hazard-strings; since `:closure_env` challenges are
+   never `Corpus.append`ed, this addition is genuinely belt-and-suspenders, not
+   load-bearing for any existing test.
 
 ## File structure
 
@@ -135,8 +145,31 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
     k = %{TotalityClosureAssay.__real__() | certify: fn e -> {:ok, e} end}
     assert {:violation, {:diverging_certified, _}} = TotalityClosureAssay.run(snd_ch(env, :reject), k)
   end
+
+  test "negative control: a certify stub that errors on the all-total env is caught (:accept branch)" do
+    # Every violation branch needs a negative control (V2 plan-review lesson).
+    # :total_env_not_certified's `other` case is reachable under REAL ops — it is
+    # exactly what a malformed accept-control env (spec §8-2(a)) or a driver
+    # false-rejection would produce — unlike :unexpected_certify_result (see the
+    # note after Step 3), so it gets its own dedicated stub here rather than being
+    # exercised only implicitly by the accept-control test passing.
+    env = Env.empty() |> total_def() |> with_family_index(:Vessel, :total_id)
+    k = %{TotalityClosureAssay.__real__() | certify: fn _e -> {:error, {:totality_required, :total_id}} end}
+    assert TotalityClosureAssay.run(snd_ch(env, :accept), k) ==
+             {:violation, {:total_env_not_certified, {:error, {:totality_required, :total_id}}}}
+  end
 end
 ```
+
+**Note on `:unexpected_certify_result` (no dedicated test):** this branch fires only
+when `k.certify.(env)` returns something other than `{:ok, _}` or
+`{:error, {:totality_required, _}}` — outside `certify_type_level/1`'s documented
+`@spec` (verified: `lib/cure/elab/totality_closure.ex`), so it is structurally
+unreachable under real ops for any input; only a custom, contract-violating stub
+could trigger it. This matches existing codebase precedent — the analogous
+`other -> {:error, {:unexpected, other}}` catch-alls in `lib/antigen/assays/elab.ex`
+(lines 111, 172) are likewise untested. No new test is added for it; the branch
+stays as defensive dead code under the real op-map, consistent with V1–V3.
 
 - [ ] **Step 2: RED** — `MIX_ENV=test mix test test/antigen/assays/totality_closure_assay_test.exs` → FAIL (module undefined).
 
@@ -188,7 +221,7 @@ defmodule Antigen.Assays.TotalityClosureAssay do
 end
 ```
 
-- [ ] **Step 4: GREEN** — `MIX_ENV=test mix test test/antigen/assays/totality_closure_assay_test.exs` → PASS (4). If a `:reject` baseline does NOT return `:ok`, trace `certify_type_level(env)` and `Kernel.validate_certificate(env, :loop)` manually (spec §8-2): confirm `check_def` returns `:ok` first and the rejection is `Certificate.terminating?` → `false`, not an unrelated `{:unknown_family, …}`. If the closure genuinely fails to reject a real diverger, STOP — that is a V5a soundness finding to report.
+- [ ] **Step 4: GREEN** — `MIX_ENV=test mix test test/antigen/assays/totality_closure_assay_test.exs` → PASS (5). If a `:reject` baseline does NOT return `:ok`, trace `certify_type_level(env)` and `Kernel.validate_certificate(env, :loop)` manually (spec §8-2): confirm `check_def` returns `:ok` first and the rejection is `Certificate.terminating?` → `false`, not an unrelated `{:unknown_family, …}`. If the closure genuinely fails to reject a real diverger, STOP — that is a V5a soundness finding to report.
 
 - [ ] **Step 5: Commit** — `feat(antigen): totality_closure/soundness assay — diverging-in-type-position rejection`
 
@@ -340,7 +373,7 @@ end
 
 Create `lib/antigen/generators/closure_env.ex` with the env helpers (from "Shared env helpers", as private defs) and two catalog functions: `soundness_challenges/0` returns the family-index reject env, the ctor-index reject env, and the all-total accept env (each `Challenge.new(kind: :closure_env, assay: "totality_closure/soundness", payload: %{env: env, expect: …}, …)`); `completeness_challenges/0` returns the direct and transitive-callee envs (`payload: %{env: env}`).
 
-In `lib/antigen/runner.ex` add `assay_module("totality_closure/soundness")` and `assay_module("totality_closure/completeness")` → `Antigen.Assays.TotalityClosureAssay`. In `lib/antigen/challenge.ex` add `| :closure_env` to `@type kind`, and add `:loop`, `:total_id`, `:callee`, `:Vessel`, `:Wrap`, `:i` to `@known_atoms` (spec §8-5 — every literal name the generator produces).
+In `lib/antigen/runner.ex` add `assay_module("totality_closure/soundness")` and `assay_module("totality_closure/completeness")` → `Antigen.Assays.TotalityClosureAssay`. In `lib/antigen/challenge.ex` add `| :closure_env` to `@type kind`, and add `:loop`, `:callee`, `:Vessel`, `:Wrap` to `@known_atoms` (spec §8-5 — every literal name the generator produces; `:total_id` and `:i` are already interned, verified against source — do not re-add).
 
 - [ ] **Step 4: GREEN.** If a catalog entry fails under real ops, that is a REAL V5 finding — STOP and report (do not weaken the test).
 
@@ -357,7 +390,9 @@ In `lib/antigen/runner.ex` add `assay_module("totality_closure/soundness")` and 
 
 ## Self-review
 
-**Spec coverage:** §3 V5a soundness (reject + accept control) → Task 1; §3 V5b completeness → Task 2; §4 op-map seam → Task 1 `@real`; §4 negative controls → each task's control tests; §5 catalogs + §8-1 env construction → Task 3 (+ shared helpers); §6 invariants pinned (no engine edits, no StreamData token, `:ok|{:violation}` only, whole-catalog-clean STOP rule); §7 non-goals respected (no fix, no `totality/*` duplication, no `validate_certificate` test, no SMT); §8-2 masking guard (Task 1 Step 4 trace note); §8-3 full-taxonomy walk incl. `:prim` (Task 2 + isolated unit test); §8-4/§8-5 `:closure_env` kind + `@known_atoms` → Task 3; §9 tests 1-9 distributed across Tasks 1-3.
+**Spec coverage:** §3 V5a soundness (reject + accept control) → Task 1; §3 V5b completeness → Task 2; §4 op-map seam → Task 1 `@real`; §4 negative controls → each task's control tests, including the two violation-branch checks (`:diverging_certified`, `:total_env_not_certified`) added in Task 1 — every `run/2` violation branch reachable under real ops now has a dedicated negative control, except the structurally-unreachable `:unexpected_certify_result` (justified inline after Task 1 Step 1, matching existing `elab.ex` precedent); §5 catalogs + §8-1 env construction → Task 3 (+ shared helpers); §6 invariants pinned (no engine edits, no StreamData token, `:ok|{:violation}` only, whole-catalog-clean STOP rule); §7 non-goals respected (no fix, no `totality/*` duplication, no `validate_certificate` test, no SMT); §8-2 masking guard (Task 1 Step 4 trace note); §8-3 full-taxonomy walk incl. `:prim` (Task 2 + isolated unit test); §8-4/§8-5 `:closure_env` kind + `@known_atoms` → Task 3 (only the 4 genuinely-new atoms — `:total_id`/`:i` already interned, verified against source).
+
+**Test count reconciliation (corrects an undercount in the spec's §9 catalog, which lists 9 items):** Task 1 has 5 tests (V5a baselines ×2, accept control, `:diverging_certified` negative control, `:total_env_not_certified` negative control — one more than spec §9 items 1-4, per the fix above). Task 2 has 5 tests (V5b baselines ×2, `:closure_missed` negative controls ×2, plus the `:prim`-isolated `__reachable__/1` unit test that spec §5/§8-3 requires but §9 does not itemize separately). Task 3 has 2 tests (catalog shape, runner dispatch + whole-catalog-clean). Total: 12 tests across the three tasks.
 
 **Placeholder scan:** none — concrete code/commands throughout. The one execution risk (real certify rejecting the diverger for the right reason) is a named Task-1-Step-4 trace with an explicit STOP-and-report fallback.
 
