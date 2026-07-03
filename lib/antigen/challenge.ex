@@ -66,7 +66,8 @@ defmodule Antigen.Challenge do
     :mutant_term,
     :head_swap, :ctor_arg, :index_mismatch, :app_domain,
     :out_of_scope_var, :proj_non_pair, :universe,
-    :head, :index, :level, :scope, :Sigma,
+    :pair_component, :app_result, :type_param_mismatch,
+    :head, :index, :level, :scope, :Sigma, :Bd,
     # fault-map KEY atoms (must be interned: the fault map rides through
     # binary_to_term [:safe] in the scaffold field — keys count, not just values)
     :kind, :witness, :expected_head, :injected_head,

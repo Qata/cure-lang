@@ -14,8 +14,18 @@ defmodule Antigen.Generators.Mutation do
   alias Cure.Core.Context
 
   @operators [:head_swap, :ctor_arg, :index_mismatch, :app_domain,
-              :out_of_scope_var, :proj_non_pair, :universe]
+              :out_of_scope_var, :proj_non_pair, :universe,
+              :pair_component, :app_result, :type_param_mismatch]
   def operators, do: @operators
+
+  # Self-wrapped operators for the new type formers (Σ/Π/List): each already
+  # embeds its fault in an identity-application against the target type (so a bare
+  # :pair / param-bearing :ctor never reaches Kernel.infer without a checking
+  # frame). Their pre-wrap is NOT Nat-typed, so they must NOT be run through
+  # `deepen` (whose Nat->Nat layers would type-error at the wrapper boundary and
+  # contaminate the fault). `mutant/0` forces depth 0 for these (spec §5).
+  @self_wrapped [:pair_component, :app_result, :type_param_mismatch]
+  def self_wrapped, do: @self_wrapped
 
   # menu term helpers (kernel term literals; do not use SigMenu privates)
   defp z, do: {:ctor, :Z, []}
@@ -100,6 +110,38 @@ defmodule Antigen.Generators.Mutation do
           injected_head: {:type, 1}, scope: nil}}
   end
 
+  # ── Tier-B new-type-former operators (self-wrapped, spec §5) ──────────────────
+  # Each embeds its fault in an identity application against the target type so
+  # Kernel.infer reaches it in CHECK mode (a bare :pair / param-bearing :ctor has
+  # no infer path). They are listed in @self_wrapped and bypass `deepen`.
+
+  def build(_ctx, :pair_component) do
+    # Σ Nat. Nat expects both components Nat; a Bd (T) in the first slot violates
+    # it. The identity-app forces Kernel.infer to CHECK the pair against Σ Nat.Nat.
+    bad_pair = {:pair, {:ctor, :T, []}, z()}   # T : Bd, not Nat
+    g = Gen.return({:app, {:lam, sig(), {:var, 0}}, bad_pair})
+    {g, %{kind: :pair_component, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
+  end
+
+  def build(_ctx, :app_result) do
+    # (λ x:Nat. T) has body T : Bd, violating the declared codomain Nat. Applied
+    # through an identity-Pi wrapper so `check` compares the Bd body against Nat
+    # (distinct fault class from app_domain, which breaks the domain).
+    bad_fun = {:lam, nat_t(), {:ctor, :T, []}}       # body T : Bd, not Nat
+    pi_t = {:pi, nat_t(), nat_t()}
+    g = Gen.return({:app, {:lam, pi_t, {:app, {:var, 0}, z()}}, bad_fun})
+    {g, %{kind: :app_result, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
+  end
+
+  def build(_ctx, :type_param_mismatch) do
+    # Cons (T:Bd) Nil : List(Nat) — the element T : Bd violates the List(Nat)
+    # parameter. Check-embedded (a bare param-ctor → :ctor_requires_checking_mode).
+    list_nat = {:data, :List, [nat_t()], []}
+    bad_cons = {:ctor, :Cons, [{:ctor, :T, []}, {:ctor, :Nil, []}]}
+    g = Gen.return({:app, {:lam, list_nat, {:var, 0}}, bad_cons})
+    {g, %{kind: :type_param_mismatch, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
+  end
+
   defp nat_numeral(0), do: z()
   defp nat_numeral(k), do: s(nat_numeral(k - 1))
 
@@ -165,7 +207,7 @@ defmodule Antigen.Generators.Mutation do
         {term_gen, fault} = build(ctx, kind)
 
         Gen.bind(term_gen, fn term ->
-          Gen.bind(Gen.int(0, max_depth()), fn d ->
+          Gen.bind(depth_gen(kind), fn d ->
             Gen.bind(deepen(ctx, term, d), fn {deep_term, wrap_path} ->
               fault = Map.merge(fault, %{depth: d, wrap_path: wrap_path})
 
@@ -192,6 +234,12 @@ defmodule Antigen.Generators.Mutation do
   # operators own their checked scaffolds). Equal weights keep the diversity floor
   # (Task 7) comfortably reachable.
   defp select, do: Gen.frequency(Enum.map(@operators, fn k -> {1, Gen.return(k)} end))
+
+  # Self-wrapped operators submit their fault pre-wrapped (non-Nat-typed) and must
+  # not be deepened; every other operator deepens uniformly over [0, max_depth].
+  defp depth_gen(kind) do
+    if kind in @self_wrapped, do: Gen.return(0), else: Gen.int(0, max_depth())
+  end
 
   # The challenge-level `type` field is documentation-only (spec §4/§6.1): a
   # nominal goal describing the fault site, never a proven property of the mutant.

@@ -111,4 +111,66 @@ defmodule Antigen.Generators.MutationTest do
 
     assert Enum.max(depths) >= 4   # deep mutants actually generated
   end
+
+  # -- Tier-B reach expansion: new-type-former mutation operators --------------
+  # Each is self-wrapped (no `deepen` — its non-Nat-typed pre-wrap would
+  # contaminate the Nat->Nat deepen layers), and each has a load-bearing
+  # analog-accepted test proving the fault is genuinely introduced, not a
+  # wrapper artifact.
+
+  test "pair_component builds a check-embedded ill-typed pair the kernel rejects" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    {gen, fault} = Mutation.build(ctx, :pair_component)
+    assert fault.kind == :pair_component
+    for mutant <- sample(gen, 5) do
+      refute match?({:pair, _, _}, mutant)   # never a bare :pair (would crash Kernel.infer)
+      assert {:error, _} = Kernel.infer(ctx, mutant)
+    end
+  end
+
+  test "pair_component's well-typed analog is accepted (operator genuinely ill-types)" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    good = {:app, {:lam, {:sigma, {:data, :Nat, [], []}, {:data, :Nat, [], []}}, {:var, 0}},
+            {:pair, {:ctor, :Z, []}, {:ctor, :Z, []}}}
+    assert {:ok, _} = Kernel.infer(ctx, good)
+  end
+
+  test "app_result builds a function whose result violates its declared codomain, rejected" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    {gen, fault} = Mutation.build(ctx, :app_result)
+    assert fault.kind == :app_result
+    for mutant <- sample(gen, 5), do: assert {:error, _} = Kernel.infer(ctx, mutant)
+  end
+
+  test "app_result's well-typed analog is accepted (operator genuinely ill-types)" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    good_fun = {:lam, {:data, :Nat, [], []}, {:ctor, :Z, []}}
+    pi_t = {:pi, {:data, :Nat, [], []}, {:data, :Nat, [], []}}
+    good = {:app, {:lam, pi_t, {:app, {:var, 0}, {:ctor, :Z, []}}}, good_fun}
+    assert {:ok, _} = Kernel.infer(ctx, good)
+  end
+
+  test "type_param_mismatch: Cons of a wrong-param element into List(Nat), rejected" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    {gen, fault} = Mutation.build(ctx, :type_param_mismatch)
+    assert fault.kind == :type_param_mismatch
+    for mutant <- sample(gen, 5) do
+      refute match?({:ctor, :Cons, _}, mutant)   # never bare (→ :ctor_requires_checking_mode)
+      assert {:error, _} = Kernel.infer(ctx, mutant)
+    end
+  end
+
+  test "type_param_mismatch's well-typed analog is accepted (List check-mode accepts a correct Cons)" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    list_nat = {:data, :List, [{:data, :Nat, [], []}], []}
+    good = {:app, {:lam, list_nat, {:var, 0}},
+            {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
+    assert {:ok, _} = Kernel.infer(ctx, good)
+  end
 end
