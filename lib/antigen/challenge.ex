@@ -19,6 +19,7 @@ defmodule Antigen.Challenge do
           | :unify_problem
           | :closure_env
           | :erasure_term
+          | :smt_query
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -83,7 +84,10 @@ defmodule Antigen.Challenge do
     :closure_env, :loop, :callee, :Vessel, :Wrap,
     # erasure/relevance vertical (V4): kind + generator ctor/arg names
     # (:f, :g, :d, :b, :P already interned above)
-    :erasure_term, :MkQ, :MkP, :a
+    :erasure_term, :MkQ, :MkP, :a,
+    # SMT-lint vertical (V6): kind (MetaAST predicate payloads use string keys/var
+    # names, not atoms, so no extra generator atoms beyond the kind itself)
+    :smt_query
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

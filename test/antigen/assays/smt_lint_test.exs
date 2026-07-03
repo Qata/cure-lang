@@ -129,4 +129,26 @@ defmodule Antigen.Assays.SmtLintTest do
       assert {:violation, {:unusable_model, _}} = SmtLint.run(ch)
     end
   end
+
+  describe "generator + runner wiring" do
+    alias Antigen.Generators.SmtQuery
+    alias Antigen.Runner
+
+    test "each catalog is non-empty and correctly tagged" do
+      assert SmtQuery.implication_challenges() != []
+      assert SmtQuery.unsat_challenges() != []
+      assert SmtQuery.witness_challenges() != []
+      assert Enum.all?(SmtQuery.implication_challenges(), & &1.assay == "smt/implication")
+      assert Enum.all?(SmtQuery.unsat_challenges(), & &1.assay == "smt/unsat")
+      assert Enum.all?(SmtQuery.witness_challenges(), & &1.assay == "smt/witness")
+    end
+
+    test "runner dispatches all three ids and the whole clean catalog is :ok" do
+      all =
+        SmtQuery.implication_challenges() ++
+          SmtQuery.unsat_challenges() ++ SmtQuery.witness_challenges()
+
+      assert Enum.all?(all, fn c -> Runner.replay_one(c) == :ok end)
+    end
+  end
 end
