@@ -184,4 +184,32 @@ defmodule Antigen.CorpusTest do
     assert {:ok, c} = Corpus.decode_record(legacy)
     assert c.payload.fault == fault
   end
+
+  test "migration is lossless and idempotent (keys, challenges, bytes)" do
+    path = Path.join(@tmp, "mig.sexp")
+    challenges = [
+      Challenge.new(kind: :stub, assay: "stub", label: :none,
+                    payload: %{term: {:ctor, :S, [{:ctor, :Z, []}]}}, seed: 1, note: "one"),
+      mutant(%{kind: :out_of_scope_var, witness: :scope, expected_head: nil,
+               injected_head: nil, scope: {1, 1}, depth: 0, wrap_path: []})
+    ]
+
+    for c <- challenges, do: Corpus.append(path, c, Corpus.dedup_key(c, :antibody))
+    before_bytes = File.read!(path)
+    keys_before = corpus_keys(path)
+
+    Mix.Tasks.Antigen.Migrate.run([path])
+
+    after_bytes = File.read!(path)
+    assert after_bytes == before_bytes, "already-new-format file must migrate byte-identically (idempotent)"
+    assert corpus_keys(path) == keys_before, "dedup keys must be identical after migration"
+
+    decoded = Corpus.stream(path) |> Enum.map(fn {:ok, c} -> c end)
+    assert length(decoded) == length(challenges)
+    assert Enum.at(decoded, 1).payload.fault.scope == {1, 1}
+  end
+
+  defp corpus_keys(path) do
+    path |> File.stream!() |> Enum.map(&Corpus.raw_key/1) |> Enum.sort()
+  end
 end

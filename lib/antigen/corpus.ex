@@ -129,7 +129,9 @@ defmodule Antigen.Corpus do
       (path |> File.stream!() |> Enum.any?(fn line -> extract_key(line) == key end))
   end
 
-  defp extract_key(line) do
+  @doc "The Base64-decoded stored dedup key of one record line, or nil if absent."
+  @spec raw_key(String.t()) :: binary() | nil
+  def raw_key(line) do
     line
     |> String.split("\t")
     |> Enum.find_value(fn f ->
@@ -141,6 +143,8 @@ defmodule Antigen.Corpus do
   rescue
     _ -> nil
   end
+
+  defp extract_key(line), do: raw_key(line)
 
   defp decode_pieces(nil), do: {:error, :no_pieces}
   defp decode_pieces(""), do: {:ok, []}
