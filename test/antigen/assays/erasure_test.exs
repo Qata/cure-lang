@@ -121,4 +121,58 @@ defmodule Antigen.Assays.ErasureTest do
       assert {:violation, {:erase_ill_formed, _}} = Erasure.run(wf_ch(env, {:ctor, :MkQ, [il(1), il(2)]}), k)
     end
   end
+
+  describe "relevance/soundness (V4b)" do
+    # quantities = [:erased] — binder 0 is erased; a body using {:var, 0} relevantly must be rejected.
+    defp rel_ch(env, body, site) do
+      Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :negative,
+        payload: %{env: env, name: :d, quantities: [:erased], body: body, site: site}, seed: 1)
+    end
+
+    test "returned site: erased binder is the body result — rejected" do
+      assert Erasure.run(rel_ch(Env.empty(), {:var, 0}, :returned)) == :ok
+    end
+
+    test "applied site: erased binder applied as a function head — rejected" do
+      assert Erasure.run(rel_ch(Env.empty(), {:app, {:var, 0}, {:int_lit, 0}}, :applied)) == :ok
+    end
+
+    test "scrutinee site: erased binder matched in a case — rejected" do
+      assert Erasure.run(rel_ch(Env.empty(), {:case, {:var, 0}, {:int_lit, 0}, []}, :scrutinee)) == :ok
+    end
+
+    test "present_arg site: erased binder passed in a :present ctor position — rejected" do
+      env = ctor_env()
+      # MkQ position 0 is :present; putting {:var,0} there is a relevant use of an erased binder
+      assert Erasure.run(rel_ch(env, {:ctor, :MkQ, [{:var, 0}, {:int_lit, 0}]}, :present_arg)) == :ok
+    end
+
+    test "clean-body control: erased binder unused is accepted" do
+      ch = Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :positive,
+        payload: %{env: Env.empty(), name: :d, quantities: [:erased], body: {:int_lit, 7}, site: nil}, seed: 1)
+      assert Erasure.run(ch) == :ok
+    end
+
+    test "negative control: a relevance_check stub that accepts a relevant body" do
+      k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b -> :ok end}
+      assert {:violation, {:relevance_unsound, :returned}} = Erasure.run(rel_ch(Env.empty(), {:var, 0}, :returned), k)
+    end
+
+    test "clean-body negative control: a relevance_check stub that rejects a clean body" do
+      ch = Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :positive,
+        payload: %{env: Env.empty(), name: :d, quantities: [:erased], body: {:int_lit, 7}, site: nil}, seed: 1)
+      k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b ->
+        {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :returned}}}
+      end}
+      assert {:violation, {:clean_body_rejected, :d}} = Erasure.run(ch, k)
+    end
+
+    test "wrong-site negative control: a relevance_check stub reporting a mismatched site" do
+      k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b ->
+        {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :applied}}}
+      end}
+      assert {:violation, {:relevance_wrong_site, :returned, :applied}} =
+               Erasure.run(rel_ch(Env.empty(), {:var, 0}, :returned), k)
+    end
+  end
 end

@@ -75,6 +75,21 @@ defmodule Antigen.Assays.Erasure do
     end
   end
 
+  def run(%Challenge{kind: :erasure_term, assay: "relevance/soundness", payload: %{env: env, name: n, quantities: qs, body: body, site: nil}}, k) do
+    case k.relevance_check.(env, n, qs, body) do
+      :ok -> :ok
+      {:error, _} -> {:violation, {:clean_body_rejected, n}}
+    end
+  end
+
+  def run(%Challenge{kind: :erasure_term, assay: "relevance/soundness", payload: %{env: env, name: n, quantities: qs, body: body, site: site}}, k) do
+    case k.relevance_check.(env, n, qs, body) do
+      {:error, {:erased_used_relevantly, %{site: ^site}}} -> :ok
+      {:error, {:erased_used_relevantly, %{site: other}}} -> {:violation, {:relevance_wrong_site, site, other}}
+      :ok -> {:violation, {:relevance_unsound, site}}
+    end
+  end
+
   defp present_args(args, qs) do
     args |> Enum.zip(qs) |> Enum.filter(fn {_a, q} -> q == :present end) |> Enum.map(fn {a, _q} -> a end)
   end
