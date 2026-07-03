@@ -91,4 +91,61 @@ defmodule Cure.Core.UnifyIndicesTest do
     forced = subst |> Map.to_list() |> Enum.filter(fn {k, _v} -> k >= 1 end)
     assert forced == []
   end
+
+  # --- (e) multi-key cycle regression (TCB gate falsifier, spec §4.1) ---
+  #
+  # `c : T(a, a, b, b)` matched against T(i, j, j, i) induces both `j := i` and
+  # `i := j`. Before the union-find `resolve_index_var` guard, this produced the
+  # cyclic substitution {i↦j, j↦i} — which `replace_branch_vars` applies as a
+  # variable SWAP instead of collapsing `i ≡ j`, a real correctness defect in a
+  # TCB path. The verdict must be a SOLVED, ACYCLIC substitution (i and j collapse
+  # to a single representative), never a cycle.
+  @cycle_src "mod C\n  type Nat = Z | S(Nat)\n  type T indices (i0: Nat, i1: Nat, i2: Nat, i3: Nat)\n    c : T(a, a, b, b)\nend\n"
+  defp cycle_sig, do: (fn -> {:ok, s} = Program.elaborate(@cycle_src); s end).()
+
+  # A substitution is cyclic iff chasing var-edges from some key revisits a key.
+  defp acyclic?(subst) do
+    not Enum.any?(Map.keys(subst), fn start -> chase_cycle?(start, subst, MapSet.new()) end)
+  end
+
+  defp chase_cycle?(k, subst, seen) do
+    if MapSet.member?(seen, k) do
+      true
+    else
+      case Map.get(subst, k) do
+        {:var, k2} -> chase_cycle?(k2, subst, MapSet.put(seen, k))
+        _ -> false
+      end
+    end
+  end
+
+  # Resolve a key through the substitution to its representative.
+  defp rep(k, subst) do
+    case Map.get(subst, k) do
+      {:var, k2} -> rep(k2, subst)
+      _ -> k
+    end
+  end
+
+  test "(e) multi-key cycle: `c : T(a,a,b,b)` vs T(i,j,j,i) collapses i≡j WITHOUT a cyclic subst" do
+    s = cycle_sig()
+
+    ctx =
+      Context.empty(s)
+      |> Context.extend({:vdata, :Nat, []})
+      |> Context.extend({:vdata, :Nat, []})
+
+    i = {:vneutral, {:nvar, 0}}
+    j = {:vneutral, {:nvar, 1}}
+
+    assert {:solved, subst} = Kernel.branch_unify(ctx, :T, :c, [i, j, j, i])
+    # The soundness obligation: no cyclic substitution.
+    assert acyclic?(subst), "expected acyclic subst, got #{inspect(subst)}"
+    # And the collapse is real: every OUTER key (>= arity 2) resolves to one
+    # representative — i and j are genuinely unified, not swapped.
+    outer_keys = subst |> Map.keys() |> Enum.filter(&(&1 >= 2))
+    assert outer_keys != []
+    reps = outer_keys |> Enum.map(&rep(&1, subst)) |> Enum.uniq()
+    assert length(reps) == 1, "expected i,j to collapse to one rep, got reps #{inspect(reps)} in #{inspect(subst)}"
+  end
 end
