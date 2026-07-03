@@ -15,11 +15,17 @@ defmodule Antigen.Assays.Reflexivity do
   # a handful of unfolds; this margin only ever trips on non-normalization.
   @fuel 500
 
+  # Real kernel op, the byte-identical default for `run/1`.
+  @real_kernel %{conv_within: &Conv.conv_within?/6}
+
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
-  def run(%Challenge{kind: :forcing_pair, payload: %{t: t, tprime: tprime}} = c) do
+  def run(%Challenge{kind: :forcing_pair} = c), do: run(c, @real_kernel)
+
+  @doc "Same as `run/1` but with an injectable kernel-op map (sensitivity test seam)."
+  def run(%Challenge{kind: :forcing_pair, payload: %{t: t, tprime: tprime}} = c, k) do
     env = Generators.Forcing.certified_env_of(c)
 
-    case Conv.conv_within?(t, tprime, [], 0, env, @fuel) do
+    case k.conv_within.(t, tprime, [], 0, env, @fuel) do
       :fuel_exhausted -> {:violation, {:non_normalizing, :conv_exceeded_fuel}}
       {:ok, _} -> :ok
     end

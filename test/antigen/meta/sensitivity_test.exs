@@ -50,4 +50,21 @@ defmodule Antigen.Meta.SensitivityTest do
     assert {:violation, {:wrongly_accepted, :u}} =
              Antigen.Assays.Universes.run(ch, WeakKernel.weaken(:universe_accepts_all))
   end
+
+  # -- Rows 7 & 8: Reflexivity ------------------------------------------------
+  test "row 7 — conv_always_true SLIPS past reflexivity (verdict-blind by design)" do
+    ch = Antigen.Generators.Forcing.forcing_pair()
+    assert :ok = Antigen.Assays.Reflexivity.run(ch, WeakKernel.real())
+    # reflexivity is a non-termination detector: `{:ok, _} -> :ok`. A wrong
+    # *verdict* is out of its contract (that is stuck_elim_delta's job, row 6).
+    assert :ok = Antigen.Assays.Reflexivity.run(ch, WeakKernel.weaken(:conv_always_true))
+  end
+
+  test "row 8 — conv_exhausts_fuel is CAUGHT by reflexivity (its actual contract: halting)" do
+    ch = Antigen.Generators.Forcing.forcing_pair()
+    assert :ok = Antigen.Assays.Reflexivity.run(ch, WeakKernel.real())
+
+    assert {:violation, {:non_normalizing, _}} =
+             Antigen.Assays.Reflexivity.run(ch, WeakKernel.weaken(:conv_exhausts_fuel))
+  end
 end
