@@ -9,14 +9,15 @@ defmodule Cure.Core.Env do
   closures — only Core terms and metadata — so it stays serializable.
   """
 
-  defstruct families: %{}, ctors: %{}, ctor_to_family: %{}, defs: %{}, certified: nil
+  defstruct families: %{}, ctors: %{}, ctor_to_family: %{}, defs: %{}, certified: nil, builtins: %{}
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
           ctors: %{atom() => map()},
           ctor_to_family: %{atom() => atom()},
           defs: %{atom() => map()},
-          certified: MapSet.t() | nil
+          certified: MapSet.t() | nil,
+          builtins: %{atom() => atom()}
         }
 
   @doc "An empty signature."
@@ -113,6 +114,20 @@ defmodule Cure.Core.Inductive do
           result_params: [Cure.Core.Term.t()],
           quantities: [quantity()]
         }
+
+  @doc "Bind a builtin key to a family-id. Hard error on re-registration (single-registration invariant)."
+  @spec register_builtin(Env.t(), atom(), atom()) :: Env.t()
+  def register_builtin(%Env{builtins: b}, key, _family_id) when is_map_key(b, key) do
+    raise ArgumentError, "builtin key #{inspect(key)} already bound to #{inspect(Map.fetch!(b, key))}"
+  end
+
+  def register_builtin(%Env{} = env, key, family_id) do
+    %{env | builtins: Map.put(env.builtins, key, family_id)}
+  end
+
+  @doc "Resolve a builtin key to its family-id, or nil."
+  @spec builtin(Env.t(), atom()) :: atom() | nil
+  def builtin(%Env{builtins: b}, key), do: Map.get(b, key)
 
   @doc "Build a family signature (no registration; see `declare/3`)."
   @spec family(atom(), telescope(), telescope(), non_neg_integer()) :: family()
