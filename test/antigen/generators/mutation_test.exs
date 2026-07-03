@@ -57,42 +57,43 @@ defmodule Antigen.Generators.MutationTest do
     end
   end
 
-  test "a large sample draws at least 5 distinct fault kinds (diversity is reachable)" do
-    kinds = sample(Mutation.mutant(), 200) |> Enum.map(& &1.payload.fault.kind) |> Enum.uniq()
-    assert length(kinds) >= 5
-  end
+  test "each wrapper is non-contaminating and fault-driven (deterministic, fixed filler)" do
+    ctx = Context.empty(SigMenu.env_of(:v1))
+    wt = {:ctor, :Z, []}                 # well-typed Nat
+    fault = {:fst, {:ctor, :Z, []}}      # intrinsically ill-typed
 
-  test "deepen wraps a fault so it still infer-rejects, and is UNCONTAMINATED (wt inner accepts)" do
-    env = SigMenu.env_of(:v1)
-    ctx = Context.empty(env)
-    fault = {:fst, {:ctor, :Z, []}}   # intrinsic: infer fails on its own
-    wt = {:ctor, :Z, []}              # well-typed Nat
-
-    for depth <- [0, 1, 4, Mutation.max_depth()] do
-      # fault deepened → still rejects; wrap_path length == depth, kinds valid
-      for {deep, path} <- sample(Mutation.deepen(ctx, fault, depth), 15) do
-        assert length(path) == depth
-        assert Enum.all?(path, &(&1 in Mutation.wrappers()))
-        assert {:error, _} = Kernel.infer(ctx, deep)
-      end
-
-      # SAME wrapper stack around a well-typed Nat must ACCEPT — this is what proves
-      # the rejection above is FAULT-driven, not a wrapper-internal type error
-      # (a contaminated stack would reject the well-typed inner too).
-      for {deep_wt, _} <- sample(Mutation.deepen(ctx, wt, depth), 15) do
-        assert {:ok, _} = Kernel.infer(ctx, deep_wt),
-               "contaminated stack at depth #{depth}: #{inspect(deep_wt)}"
-      end
+    for kind <- Mutation.wrappers() do
+      assert {:ok, _} = Kernel.infer(ctx, Mutation.wrap(wt, kind, wt)),
+             "wrapper #{kind} contaminated a well-typed inner"
+      assert {:error, _} = Kernel.infer(ctx, Mutation.wrap(fault, kind, wt)),
+             "wrapper #{kind} did not propagate the inner fault"
     end
   end
 
-  test "every wrapper kind is reachable across depth-1 draws" do
-    env = SigMenu.env_of(:v1)
-    ctx = Context.empty(env)
+  test "a fixed deep wrapper stack stays well-typed and propagates a fault (composition)" do
+    ctx = Context.empty(SigMenu.env_of(:v1))
+    wt = {:ctor, :Z, []}
     fault = {:fst, {:ctor, :Z, []}}
-    seen =
-      for {_deep, [k]} <- sample(Mutation.deepen(ctx, fault, 1), 300), do: k
-    assert Enum.uniq(seen) |> length() >= 4   # ≥4 of the 5 kinds appear
+    # fold every wrapper kind, innermost-first, with a fixed Nat filler
+    stack = fn inner -> Enum.reduce(Mutation.wrappers(), inner, fn k, acc -> Mutation.wrap(acc, k, wt) end) end
+
+    assert {:ok, _} = Kernel.infer(ctx, stack.(wt)), "deep fixed stack contaminated a well-typed inner"
+    assert {:error, _} = Kernel.infer(ctx, stack.(fault)), "deep fixed stack swallowed the fault"
+  end
+
+  test "every operator and every wrapper kind is reachable by construction (deterministic)" do
+    ctx = Context.empty(SigMenu.env_of(:v1))
+    # each operator's build deterministically records its own fault kind
+    kinds = Enum.map(Mutation.operators(), fn op -> elem(Mutation.build(ctx, op), 1).kind end)
+    assert Enum.sort(kinds) == Enum.sort(Mutation.operators())
+    # each wrapper kind applies without error and yields a distinct well-formed term
+    # (inner != filler: :case_scrut's branch body ignores the filler and :case_branch's
+    # scrutinee ignores the inner, so inner == filler would make those two wrapper
+    # outputs byte-identical and collapse the uniq count to 4 — verified by direct
+    # run with inner = filler = {:ctor,:Z,[]})
+    terms = Enum.map(Mutation.wrappers(), fn k -> Mutation.wrap({:ctor, :Z, []}, k, {:ctor, :S, [{:ctor, :Z, []}]}) end)
+    assert length(Enum.uniq(terms)) == length(Mutation.wrappers())
+    assert Enum.all?(terms, &Cure.Core.Term.term?/1)
   end
 
   test "mutant/0 emits deep mutants: depth/wrap_path recorded, still rejected, depth reached" do

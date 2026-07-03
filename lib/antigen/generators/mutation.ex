@@ -121,21 +121,20 @@ defmodule Antigen.Generators.Mutation do
     end)
   end
 
+  @doc "Pure application of one Nat→Nat wrapper with an explicit Nat `filler`."
+  def wrap(inner, :app_arg, filler), do: {:app, {:app, {:global, :plus}, inner}, filler}
+  def wrap(inner, :ctor_nat, _filler), do: {:ctor, :S, [inner]}
+  def wrap(inner, :case_scrut, _filler), do: {:case, inner, motive(), nat_branches(z())}
+  def wrap(inner, :case_branch, filler), do: {:case, filler, motive(), nat_branches(inner)}
+  def wrap(inner, :pair, filler), do: {:app, {:lam, sig(), z()}, {:pair, inner, filler}}
+
   # Each wrapper places `inner` at a Nat-checked hole; filler is a well-typed Nat.
-  defp apply_wrapper(ctx, inner, :app_arg),
-    do: Gen.bind(gnat(ctx), fn f -> Gen.return({:app, {:app, {:global, :plus}, inner}, f}) end)
+  # :app_arg/:case_branch/:pair draw a well-typed Nat filler; :ctor_nat/:case_scrut ignore it.
+  defp apply_wrapper(ctx, inner, kind) when kind in [:app_arg, :case_branch, :pair],
+    do: Gen.bind(gnat(ctx), fn f -> Gen.return(wrap(inner, kind, f)) end)
 
-  defp apply_wrapper(_ctx, inner, :ctor_nat),
-    do: Gen.return({:ctor, :S, [inner]})
-
-  defp apply_wrapper(_ctx, inner, :case_scrut),
-    do: Gen.return({:case, inner, motive(), nat_branches(z())})
-
-  defp apply_wrapper(ctx, inner, :case_branch),
-    do: Gen.bind(gnat(ctx), fn scrut -> Gen.return({:case, scrut, motive(), nat_branches(inner)}) end)
-
-  defp apply_wrapper(ctx, inner, :pair),
-    do: Gen.bind(gnat(ctx), fn f -> Gen.return({:app, {:lam, sig(), z()}, {:pair, inner, f}}) end)
+  defp apply_wrapper(_ctx, inner, kind),
+    do: Gen.return(wrap(inner, kind, z()))
 
   def assay_id, do: "mutation/rejection"
 
