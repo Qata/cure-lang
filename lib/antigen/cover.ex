@@ -137,4 +137,34 @@ defmodule Antigen.Cover do
       {ch, MapSet.difference(covered_set(modules), prev_set)}
     end)
   end
+
+  @edge_shrink_budget 200
+
+  @doc """
+  Bank an interesting `challenge` (one that hit `new_lines`) into the edge corpus
+  at `edge_corpus_path`, keyed for dedup by its covered-line set.
+
+  Two dedup layers: the in-memory `seen_sets` MapSet gates on the covered-line
+  set (`MapSet.new(new_lines)`) so a second input with identical new coverage is
+  skipped before any work; `Corpus.append/3` then dedups on disk by the
+  `:antibody` content key (matching `Runner.explore`). Before banking, the
+  challenge is `Triage.minimize/3`-shrunk under `pred` — the guided loop supplies
+  a predicate that re-runs the challenge under cover and checks it still hits ≥1
+  of `new_lines`; the shrink keeps the smallest input that preserves the edge.
+
+  Returns `{status, banked_challenge | nil, updated_seen_sets}` where `status` is
+  `:appended | :duplicate | :skipped`.
+  """
+  def bank_interesting(challenge, new_lines, edge_corpus_path, seen_sets, pred,
+        budget \\ @edge_shrink_budget) do
+    key = MapSet.new(new_lines)
+
+    if MapSet.member?(seen_sets, key) do
+      {:skipped, nil, seen_sets}
+    else
+      {c_min, _stats} = Antigen.Triage.minimize(challenge, pred, budget)
+      status = Antigen.Corpus.append(edge_corpus_path, c_min, Antigen.Corpus.dedup_key(c_min, :antibody))
+      {status, c_min, MapSet.put(seen_sets, key)}
+    end
+  end
 end

@@ -1,6 +1,22 @@
 defmodule Antigen.CoverGuidedTest do
   use ExUnit.Case, async: false   # :cover (+ :cover.reset) is node-wide global
-  alias Antigen.Cover
+  alias Antigen.{Cover, Triage, Challenge, Corpus}
+
+  @nat {:data, :Nat, [], []}
+  defp d(name, body), do: %{name: name, type: {:pi, @nat, @nat}, body: body}
+
+  # Reducible in both dimensions: droppable defs (g, h) + an S-tower body to shrink.
+  defp both_dims_ch do
+    tower = {:ctor, :S, [{:ctor, :S, [{:ctor, :S, [{:ctor, :Z, []}]}]}]}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{defs: [d(:f, tower), d(:g, {:ctor, :Z, []}), d(:h, {:ctor, :Z, []})], focus: [:f]},
+      seed: 1
+    )
+  end
 
   test "delta/2 reports newly-covered lines and is empty when nothing new is hit" do
     Cover.with_cover([Antigen.CoverFixture], fn ->
@@ -39,5 +55,26 @@ defmodule Antigen.CoverGuidedTest do
       [{-1, neg_novel}, {5, pos_novel}] = attributed
       refute MapSet.equal?(neg_novel, pos_novel)
     end)
+  end
+
+  test "bank_interesting minimizes, banks to the edge corpus, and dedups by covered-line set" do
+    ch = both_dims_ch()
+    path = Path.join(System.tmp_dir!(), "edge_#{System.unique_integer([:positive])}.sexp")
+    on_exit(fn -> File.rm_rf!(path) end)
+
+    lines = MapSet.new([{Cure.Core.Eval, 107}, {Cure.Core.Eval, 108}])
+    pred = fn _c -> true end   # always interesting → Triage shrinks maximally
+
+    {status1, banked, seen1} = Cover.bank_interesting(ch, lines, path, MapSet.new(), pred, 500)
+    assert status1 == :appended
+    assert Triage.size(banked) < Triage.size(ch)      # actually minimized
+    assert Enum.count(Corpus.stream(path)) == 1
+
+    # a second, different challenge carrying the SAME covered-line set is NOT
+    # re-banked — the in-memory seen_sets gate (not the on-disk key) enforces this.
+    ch2 = %{ch | seed: 2}
+    {status2, _b2, _seen2} = Cover.bank_interesting(ch2, lines, path, seen1, pred, 500)
+    assert status2 == :skipped
+    assert Enum.count(Corpus.stream(path)) == 1
   end
 end
