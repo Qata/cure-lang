@@ -237,4 +237,30 @@ defmodule Antigen.CorpusTest do
     assert {:ok, c} = Corpus.decode_record(line)
     assert c.kind == :mutant_term
   end
+
+  alias Antigen.Generators.{Mutation, SigMenu}
+  alias Antigen.Backend.StreamData, as: B
+  alias Cure.Core.Context, as: CoreCtx
+
+  test "fault codec round-trips every fault shape the generators actually emit (§4a lock)" do
+    ctx = CoreCtx.empty(SigMenu.env_of(:v1))
+
+    # one static fault per operator (build/2's fault map is deterministic)
+    op_faults = Enum.map(Mutation.operators(), fn op -> elem(Mutation.build(ctx, op), 1) end)
+
+    # a deepened fault (adds :depth + :wrap_path list) — take one concrete draw
+    {_deep, path} = B.interp(Mutation.deepen(ctx, {:fst, {:ctor, :Z, []}}, 3)) |> Enum.at(0)
+    deep_fault = Map.merge(hd(op_faults), %{depth: 3, wrap_path: path})
+
+    # a conversion carrier fault (:expected_index/:actual_index/:carrier/:reduction ints+atoms)
+    conv = B.interp(Antigen.Generators.Conversion.conv_reject()) |> Enum.at(0)
+    conv_fault = conv.payload.fault
+
+    for fault <- [deep_fault, conv_fault | op_faults] do
+      c = Challenge.new(kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+                        payload: %{sig: :v1, ctx: [], type: {:type, 0}, term: {:ctor, :Z, []}, fault: fault})
+      assert {:ok, c2} = Corpus.decode_record(Corpus.encode_record(c))
+      assert c2.payload.fault == fault, "fault codec lost a generator-emitted shape: #{inspect(fault)}"
+    end
+  end
 end
