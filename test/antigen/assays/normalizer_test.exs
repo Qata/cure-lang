@@ -46,4 +46,25 @@ defmodule Antigen.Assays.NormalizerTest do
     assert {:violation, {:normalize_disagrees_with_kernel, _, {:untranslatable_result, _}}} =
              Normalizer.run(ch, k)
   end
+
+  describe "normalizer/equal (V1b soundness)" do
+    defp eq_ch(a, ca, b, cb, label) do
+      Challenge.new(kind: :surface_expr, assay: "normalizer/equal", label: label,
+        payload: %{a: a, b: b, bindings: %{}, core_a: ca, core_b: cb}, seed: 1)
+    end
+
+    # Same `:add`-not-`:+` note as Task 1 applies to every hand-built core_a/core_b here.
+    test "baseline: equal?(3+5, 8)=true and kernel agrees; equal?(3+5, 9)=false and kernel agrees" do
+      t = eq_ch(add(lit(3), lit(5)), {:prim, :add, [{:int_lit,3},{:int_lit,5}]}, lit(8), {:int_lit, 8}, :kernel_equal)
+      f = eq_ch(add(lit(3), lit(5)), {:prim, :add, [{:int_lit,3},{:int_lit,5}]}, lit(9), {:int_lit, 9}, :kernel_unequal)
+      assert Normalizer.run(t) == :ok
+      assert Normalizer.run(f) == :ok
+    end
+
+    test "unsound negative control: equal? returns true for a kernel-unequal pair infects" do
+      f = eq_ch(add(lit(3), lit(5)), {:prim, :add, [{:int_lit,3},{:int_lit,5}]}, lit(9), {:int_lit, 9}, :kernel_unequal)
+      k = %{Normalizer.__real__() | equal: fn _a, _b, _bnd -> true end}  # unsound: claims 8 == 9
+      assert {:violation, {:equal_unsound, _, _}} = Normalizer.run(f, k)
+    end
+  end
 end

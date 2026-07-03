@@ -48,4 +48,21 @@ defmodule Antigen.Assays.Normalizer do
       :error -> {:violation, {:normalize_disagrees_with_kernel, p.ast, {:untranslatable_result, actual}}}
     end
   end
+
+  def run(%Challenge{kind: :surface_expr, assay: "normalizer/equal", payload: p}, k) do
+    surface_eq = k.equal.(p.a, p.b, p.bindings)
+    kernel_eq = Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> k.conv.(p.core_a, p.core_b, [], 0, nil) end)
+
+    # Soundness direction ONLY (V1b, per the moduledoc): `equal?` must never claim
+    # `true` when the kernel disagrees. The converse ("surface says false, kernel
+    # says true") is a completeness/reach-gap question, out of scope here — and
+    # MUST NOT be surfaced as a third outcome kind: `Runner.explore/1`'s dispatch
+    # `case` recognizes only `:ok` and `{:violation, _}` with no catch-all, and the
+    # `@spec` is `:ok | {:violation, term()}`.
+    if surface_eq and kernel_eq != true do
+      {:violation, {:equal_unsound, p.a, p.b}}
+    else
+      :ok
+    end
+  end
 end
