@@ -41,11 +41,32 @@ defmodule Antigen.Shrink do
     _, _ -> false
   end
 
-  defp reseed(%Challenge{} = ch), do: %{ch | seed: :erlang.phash2({ch.kind, ch.payload})}
+  @doc false
+  def reseed(%Challenge{} = ch), do: %{ch | seed: :erlang.phash2({ch.kind, ch.payload})}
 
   # ── candidate enumeration (pinned order: ctx → type → term) ──────────────────
-  defp candidates(%Challenge{payload: p} = ch) do
+  @doc false
+  def candidates(%Challenge{kind: k, payload: p} = ch) when k in [:typed_term, :mutant_term] do
+    # EXACT existing behavior for the de-Bruijn-ctx kinds (ctx-drop + type/term rewrites)
     ctx_candidates(ch) ++ field_cands(ch, :type, p.type) ++ field_cands(ch, :term, p.term)
+  end
+
+  def candidates(%Challenge{kind: :elab_program}), do: []   # no Term pieces (spec §3/§5.3)
+
+  def candidates(%Challenge{} = ch), do: piece_candidates(ch)
+
+  # Per-piece term rewrites via the corpus bridge, for every non-de-Bruijn kind.
+  defp piece_candidates(%Challenge{kind: k, assay: a, label: l, seed: s, note: n} = ch) do
+    {scaffold, pieces} = Challenge.to_pieces(ch)
+
+    pieces
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {{pid, term}, i} ->
+      Enum.map(term_candidates(term), fn term2 ->
+        new_pieces = List.replace_at(pieces, i, {pid, term2})
+        Challenge.from_pieces(k, a, l, s, n, scaffold, new_pieces)
+      end)
+    end)
   end
 
   # rule 3: drop each unreferenced absolute ctx position d (index 0 = innermost/list head)
@@ -201,7 +222,8 @@ defmodule Antigen.Shrink do
   def occurs?(_leaf, _k), do: false
 
   # shape-only well-formedness (reimplements Runner.well_formed?/1 to avoid a cycle)
-  defp well_formed?(c) do
+  @doc false
+  def well_formed?(c) do
     c |> Coverage.terms_of() |> Enum.all?(&Term.term?/1)
   rescue
     _ -> false

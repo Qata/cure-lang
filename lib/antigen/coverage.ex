@@ -39,8 +39,9 @@ defmodule Antigen.Coverage do
     fam_terms ++ ctor_terms
   end
 
-  def terms_of(%Challenge{kind: :forcing_pair, payload: %{defs: defs, t: t, tprime: tp}}),
-    do: Enum.flat_map(defs, fn d -> [d.type, d.body] end) ++ [t, tp]
+  def terms_of(%Challenge{kind: k, payload: %{defs: defs, t: t, tprime: tp}})
+      when k in [:forcing_pair, :stuck_elim],
+      do: Enum.flat_map(defs, fn d -> [d.type, d.body] end) ++ [t, tp]
 
   def terms_of(%Challenge{kind: k, payload: p}) when k in [:indexed_case, :rewrite_eq] do
     fam_terms =

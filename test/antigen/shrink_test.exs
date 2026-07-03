@@ -241,4 +241,65 @@ defmodule Antigen.ShrinkTest do
   defp contains_vcons?(t) when is_tuple(t), do: t |> Tuple.to_list() |> tl() |> Enum.any?(&contains_vcons?/1)
   defp contains_vcons?(l) when is_list(l), do: Enum.any?(l, &contains_vcons?/1)
   defp contains_vcons?(_), do: false
+
+  describe "shrink-all-kinds (pieces bridge)" do
+    alias Antigen.{Challenge, Shrink}
+
+    @nat {:data, :Nat, [], []}
+    # a family whose single ctor has one deliberately bloated arg type
+    defp bloated_family_ch do
+      bloated = {:app, {:app, {:global, :plus}, {:ctor, :S, [{:ctor, :Z, []}]}}, {:ctor, :Z, []}}
+      fam = Cure.Core.Inductive.family(:F, [], [], 0)
+      ctor = Cure.Core.Inductive.ctor(:MkF, [{:x, bloated}], [], [:present], [])
+      Challenge.new(kind: :family, assay: "positivity", label: :well_typed,
+                    payload: %{family: fam, ctors: [ctor]}, seed: 1)
+    end
+
+    test "a family's bloated ctor-arg term is shrunk (all-kinds via pieces)" do
+      ch = bloated_family_ch()
+      # predicate: the challenge still has a ctor whose arg term is non-atomic
+      #   (satisfied by the bloated original AND by any smaller-but-nonatomic form),
+      #   plus stays well-formed — a synthetic same-shape closure.
+      pred = fn c ->
+        match?(%Challenge{kind: :family, payload: %{ctors: [_ | _]}}, c)
+      end
+      out = Shrink.minimize(ch, pred, 500)
+      # candidates are produced for a :family now (was []/unsupported before)
+      assert Shrink.candidates(ch) != []
+      # minimized artifact is still a well-formed family satisfying the predicate
+      assert pred.(out)
+      assert Shrink.well_formed?(out)
+    end
+
+    test "typed_term candidate set is unchanged by the generalization" do
+      # a representative typed_term; candidates/1 must still include ctx-drop + type/term rewrites
+      ch = Challenge.new(kind: :typed_term, assay: "term/infer_check", label: :well_typed,
+             payload: %{sig: :v1, ctx: [], type: @nat, term: {:ctor, :S, [{:ctor, :Z, []}]}}, seed: 1)
+      cands = Shrink.candidates(ch)
+      # S(Z) → Z is rule2; must still be offered on the typed_term term field
+      assert Enum.any?(cands, fn c -> c.payload.term == {:ctor, :Z, []} end)
+    end
+
+    test "well_formed?/1 recognizes a :stuck_elim challenge (shares :forcing_pair's payload shape)" do
+      # :stuck_elim's payload is %{defs:, focus:, t:, tprime:} — identical to :forcing_pair's
+      # (Challenge.to_pieces/1 shares one clause for both kinds via `kind in [...]`). Today
+      # Coverage.terms_of/1 only has a LITERAL `kind: :forcing_pair` clause, so this legitimately
+      # well-formed :stuck_elim challenge crashes Coverage.terms_of/1 (FunctionClauseError),
+      # rescued by well_formed?/1 to `false` — wrongly reporting it as malformed. Once every
+      # kind routes through Triage (Task 4), that false negative makes :stuck_elim a silent,
+      # permanent no-op (every Bisect/Shrink candidate rejected by the well-formed? pre-filter).
+      # body is S(Z), not the bare atom Z — an atomic {:ctor, :Z, []} everywhere would make
+      # every piece already-minimal (node_count == 1, no rule1/rule2/rule4/child_slots
+      # candidates), which would fail `candidates(ch) != []` below for an unrelated reason.
+      # label :positive matches Antigen.Assays.StuckElimDelta's real semantics for this
+      # kind (t/tprime committed as convertible); irrelevant to well_formed?/candidates
+      # (neither reads `label`), but kept realistic rather than borrowing :def_group's
+      # :terminating label.
+      ch = Challenge.new(kind: :stuck_elim, assay: "stuck_elim_delta", label: :positive,
+             payload: %{defs: [%{name: :f, type: @nat, body: {:ctor, :S, [{:ctor, :Z, []}]}}],
+                        focus: [:f], t: {:ctor, :Z, []}, tprime: {:ctor, :Z, []}}, seed: 1)
+      assert Shrink.well_formed?(ch)
+      assert Shrink.candidates(ch) != []
+    end
+  end
 end
