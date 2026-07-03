@@ -16,6 +16,7 @@ defmodule Antigen.Challenge do
           | :mutant_term
           | :elab_program
           | :surface_expr
+          | :unify_problem
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),

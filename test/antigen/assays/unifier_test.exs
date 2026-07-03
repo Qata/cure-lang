@@ -130,4 +130,28 @@ defmodule Antigen.Assays.UnifierTest do
       assert {:violation, {:apply_not_idempotent, _}} = Unifier.run(ch, k)
     end
   end
+
+  describe "generator + runner wiring" do
+    alias Antigen.Runner
+
+    test "each catalog is non-empty and correctly tagged" do
+      # non-emptiness asserted for all four explicitly: `Enum.all?/2` on `[]` is
+      # vacuously true, so the tagging asserts below would silently pass even if a
+      # catalog function returned no entries at all
+      assert UnifyProblem.elab_soundness_challenges() != []
+      assert UnifyProblem.elab_intrinsic_challenges() != []
+      assert UnifyProblem.types_fixpoint_challenges() != []
+      assert UnifyProblem.types_intrinsic_challenges() != []
+      assert Enum.all?(UnifyProblem.elab_soundness_challenges(), & &1.assay == "unify/soundness")
+      assert Enum.all?(UnifyProblem.elab_intrinsic_challenges(), & &1.assay == "unify/intrinsic")
+      assert Enum.all?(UnifyProblem.types_fixpoint_challenges(), & &1.assay == "unify_types/fixpoint")
+      assert Enum.all?(UnifyProblem.types_intrinsic_challenges(), & &1.assay == "unify_types/intrinsic")
+    end
+
+    test "runner dispatches every unify*/ id and the whole clean catalog is :ok under real ops" do
+      all = UnifyProblem.elab_soundness_challenges() ++ UnifyProblem.elab_intrinsic_challenges() ++
+            UnifyProblem.types_fixpoint_challenges() ++ UnifyProblem.types_intrinsic_challenges()
+      assert Enum.all?(all, fn c -> Runner.replay_one(c) == :ok end)
+    end
+  end
 end

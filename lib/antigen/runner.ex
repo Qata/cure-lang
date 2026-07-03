@@ -351,6 +351,10 @@ defmodule Antigen.Runner do
   defp assay_module("normalizer/differential"), do: Antigen.Assays.Normalizer
   defp assay_module("normalizer/equal"), do: Antigen.Assays.Normalizer
   defp assay_module("normalizer/intrinsic"), do: Antigen.Assays.Normalizer
+  defp assay_module("unify/soundness"), do: Antigen.Assays.Unifier
+  defp assay_module("unify/intrinsic"), do: Antigen.Assays.Unifier
+  defp assay_module("unify_types/fixpoint"), do: Antigen.Assays.Unifier
+  defp assay_module("unify_types/intrinsic"), do: Antigen.Assays.Unifier
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)
