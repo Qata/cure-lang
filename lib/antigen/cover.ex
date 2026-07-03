@@ -58,4 +58,23 @@ defmodule Antigen.Cover do
 
   defp normalize_compile({{:error, reason}, m}, m),
     do: raise("cover.compile_beam failed for #{inspect(m)}: #{inspect(reason)}")
+
+  @doc """
+  Line-level coverage for a cover-compiled `module`. MUST be called inside a
+  `with_cover/2` block (before `:cover.stop`). Returns
+  `%{covered: [line], cold: [line], total: n}`, excluding the `{{Mod, 0}, {0, 1}}`
+  module-level pseudo-entry that `:cover.analyse` always emits.
+  """
+  def line_coverage(module) do
+    {:ok, pairs} = :cover.analyse(module, :coverage, :line)
+
+    {cov, cold} =
+      pairs
+      |> Enum.reject(fn {{_m, line}, _} -> line == 0 end)
+      |> Enum.reduce({[], []}, fn {{_m, line}, {c, _n}}, {yes, no} ->
+        if c > 0, do: {[line | yes], no}, else: {yes, [line | no]}
+      end)
+
+    %{covered: Enum.sort(cov), cold: Enum.sort(cold), total: length(cov) + length(cold)}
+  end
 end

@@ -49,4 +49,21 @@ defmodule Antigen.CoverTest do
       :code.delete(:antigen_no_debug_fixture)
     end
   end
+
+  test "line_coverage reports covered and cold lines, excluding the line-0 pseudo-entry" do
+    cov =
+      Cover.with_cover([Antigen.CoverFixture], fn ->
+        Antigen.CoverFixture.classify(5)   # hits :pos only
+        Cover.line_coverage(Antigen.CoverFixture)
+      end)
+
+    assert cov.total > 0
+    assert cov.cold != []                  # :neg / :zero never executed
+    assert Enum.all?(cov.covered ++ cov.cold, &is_integer/1)
+    assert length(cov.covered) + length(cov.cold) == cov.total
+    # :cover.analyse(mod, :coverage, :line) emits a {{Mod, 0}, {0, 1}}
+    # pseudo-entry that must be filtered (it maps to no real source line).
+    refute 0 in cov.cold
+    refute 0 in cov.covered
+  end
 end
