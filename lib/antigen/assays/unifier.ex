@@ -57,6 +57,50 @@ defmodule Antigen.Assays.Unifier do
     end
   end
 
+  def run(%Challenge{kind: :unify_problem, assay: "unify/intrinsic", payload: p}, k) do
+    case k.eu_unify.(p.t1, p.t2, p.ctx, p.sig) do
+      {:error, _} ->
+        :ok
+
+      {:ok, ctx2} ->
+        z1 = k.eu_zonk.(p.t1, ctx2)
+        z2 = k.eu_zonk.(p.t2, ctx2)
+
+        cond do
+          Enum.any?(p.meta_ids, fn id -> cyclic_solution?(id, ctx2, k) end) ->
+            {:violation, {:occurs, p.meta_ids}}
+
+          k.eu_zonk.(z1, ctx2) != z1 or k.eu_zonk.(z2, ctx2) != z2 ->
+            {:violation, {:zonk_not_idempotent, p.t1}}
+
+          not (meta_free?(z1) and meta_free?(z2)) ->
+            {:violation, {:meta_not_eliminated, p.t1}}
+
+          true ->
+            :ok
+        end
+    end
+  end
+
+  # Read the solution for `id` ONCE through the op-map, then check structurally
+  # whether {:meta, id} occurs in it — WITHOUT following further solutions (a cyclic
+  # eu_solution stub would otherwise loop forever). nil solution = unsolved = clean.
+  defp cyclic_solution?(id, ctx, k) do
+    case k.eu_solution.(ctx, id) do
+      nil -> false
+      sol -> occurs_raw?(id, sol)
+    end
+  end
+
+  defp occurs_raw?(id, {:meta, id}), do: true
+  defp occurs_raw?(_id, {:meta, _}), do: false
+  defp occurs_raw?(id, {:ctor, _c, args}), do: Enum.any?(args, &occurs_raw?(id, &1))
+  defp occurs_raw?(id, {:data, _f, ps, is}), do: Enum.any?(ps ++ is, &occurs_raw?(id, &1))
+  defp occurs_raw?(id, {:app, f, x}), do: occurs_raw?(id, f) or occurs_raw?(id, x)
+  defp occurs_raw?(id, {:pi, d, c}), do: occurs_raw?(id, d) or occurs_raw?(id, c)
+  defp occurs_raw?(id, {:lam, d, b}), do: occurs_raw?(id, d) or occurs_raw?(id, b)
+  defp occurs_raw?(_id, _), do: false
+
   # local, independent of Elab.Unify's private meta_free?/1
   defp meta_free?({:meta, _}), do: false
   defp meta_free?({:data, _f, ps, is}), do: Enum.all?(ps ++ is, &meta_free?/1)
