@@ -71,4 +71,31 @@ defmodule Antigen.Assays.UnifierTest do
       assert {:violation, {:meta_not_eliminated, _}} = Unifier.run(ch, k)
     end
   end
+
+  describe "unify_types/fixpoint (V2b)" do
+    defp tv(n), do: {:type_var, n}
+    defp fix_ch(t1, t2) do
+      Challenge.new(kind: :unify_problem, assay: "unify_types/fixpoint", label: :translatable,
+        payload: %{t1: t1, t2: t2}, seed: 1)
+    end
+
+    test "baseline: substituted sides re-unify with no new bindings" do
+      assert Unifier.run(fix_ch(tv("T"), :int)) == :ok
+      assert Unifier.run(fix_ch({:list, tv("T")}, {:list, :int})) == :ok
+      assert Unifier.run(fix_ch(:int, :float)) == :ok  # widening; note the (:int,:float) direction
+      assert Unifier.run(fix_ch({:named, "foo"}, {:record, :foo, []})) == :ok
+    end
+
+    test "negative control: a tu_unify solve that drops a needed binding infects (real re-check catches it)" do
+      ch = fix_ch(tv("T"), :int)
+      # solve stub deletes T; the REAL tu_reunify rediscovers T:=int, so s' != s
+      k = %{Unifier.__real__() | tu_unify: fn t1, t2, s ->
+        case Cure.Types.Unify.unify(t1, t2, s) do
+          {:ok, sub, tr} -> {:ok, Map.delete(sub, "T"), tr}
+          other -> other
+        end
+      end}
+      assert {:violation, {:solution_unstable, _, _}} = Unifier.run(ch, k)
+    end
+  end
 end

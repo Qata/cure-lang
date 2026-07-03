@@ -82,6 +82,22 @@ defmodule Antigen.Assays.Unifier do
     end
   end
 
+  def run(%Challenge{kind: :unify_problem, assay: "unify_types/fixpoint", payload: p}, k) do
+    case k.tu_unify.(p.t1, p.t2, %{}) do
+      {:error, _, _} ->
+        :ok
+
+      {:ok, s, _} ->
+        a = k.tu_apply.(p.t1, s)
+        b = k.tu_apply.(p.t2, s)
+
+        case k.tu_reunify.(a, b, s) do
+          {:ok, s2, _} when s2 == s -> :ok
+          _ -> {:violation, {:solution_unstable, p.t1, p.t2}}
+        end
+    end
+  end
+
   # Read the solution for `id` ONCE through the op-map, then check structurally
   # whether {:meta, id} occurs in it — WITHOUT following further solutions (a cyclic
   # eu_solution stub would otherwise loop forever). nil solution = unsolved = clean.
