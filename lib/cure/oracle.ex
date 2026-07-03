@@ -49,6 +49,47 @@ defmodule Cure.Oracle do
   end
 
   @doc """
+  `cure_verdict/1` with wall-clock timing and a hard timeout guard. Returns
+  `{verdict, elapsed_ms}` where `verdict` is `:accept | :reject | :timeout`.
+  A non-terminating elaboration (e.g. a rewrite-bridge loop) is `:brutal_kill`-ed
+  at `timeout` and reported as `:timeout` rather than hanging the whole run.
+  """
+  @spec cure_verdict_timed(String.t(), timeout()) ::
+          {:accept | :reject | :timeout, non_neg_integer()}
+  def cure_verdict_timed(cure_path, timeout \\ cure_timeout()),
+    do: timed(timeout, fn -> cure_verdict(cure_path) end)
+
+  @doc "`idris_verdict/2` with wall-clock timing and a timeout guard. See `cure_verdict_timed/2`."
+  @spec idris_verdict_timed(String.t(), String.t(), timeout()) ::
+          {:accept | :reject | :timeout, non_neg_integer()}
+  def idris_verdict_timed(bin, idr_path, timeout \\ idris_timeout()),
+    do: timed(timeout, fn -> idris_verdict(bin, idr_path) end)
+
+  # Run `fun` in a task, bound by `timeout`; return `{result_or_:timeout, elapsed_ms}`.
+  defp timed(timeout, fun) do
+    start = System.monotonic_time(:millisecond)
+    task = Task.async(fun)
+
+    verdict =
+      case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+        {:ok, v} -> v
+        _ -> :timeout
+      end
+
+    {verdict, System.monotonic_time(:millisecond) - start}
+  end
+
+  defp cure_timeout, do: env_int("ORACLE_CURE_TIMEOUT_MS", 30_000)
+  defp idris_timeout, do: env_int("ORACLE_IDRIS_TIMEOUT_MS", 180_000)
+
+  defp env_int(var, default) do
+    case System.get_env(var) do
+      nil -> default
+      s -> String.to_integer(s)
+    end
+  end
+
+  @doc """
   Idris' verdict via `idris2 --check`. The `.idr` is copied into a fresh
   throwaway directory and checked from there, so Idris' `build/` artifacts
   (which it writes into the current working directory) never pollute the repo.

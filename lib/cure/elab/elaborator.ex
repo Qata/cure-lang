@@ -648,6 +648,16 @@ defmodule Cure.Elab.Elaborator do
   defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
   defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
 
+  # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
+  # default so ordinary elaboration is untouched; used to diagnose non-termination
+  # / mis-planning in the `rewrite_plan`/`find_bridge`/`bridge_step` recursion.
+  defp rwlog(fun) do
+    if System.get_env("CURE_REWRITE_LOG"), do: IO.puts(:stderr, "[rw] " <> fun.())
+    :ok
+  end
+
+  defp rw_ins(t), do: t |> inspect(limit: 14, printable_limit: 240) |> String.slice(0, 300)
+
   # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
   # goal `expected`. Returns `{:ok, build, body_expected}`: `body_expected` is
   # the goal the surface body `t` must satisfy, and `build.(body_core)` assembles
@@ -659,6 +669,11 @@ defmodule Cure.Elab.Elaborator do
   # checks `t` under the rewritten goal and returns the original goal, so when
   # the expected type contains the proof's left endpoint we synthesize symmetry.
   defp rewrite_plan(ctx, proof, ty, a, b, expected) do
+    rwlog(fn ->
+      "plan a=#{rw_ins(a)} b=#{rw_ins(b)} | contains_a=#{contains_term?(expected, a)} " <>
+        "contains_b=#{contains_term?(expected, b)} expected=#{rw_ins(expected)}"
+    end)
+
     cond do
       contains_term?(expected, a) ->
         with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
@@ -705,17 +720,22 @@ defmodule Cure.Elab.Elaborator do
   # proof endpoint. It does NOT implement fully general up-to-conversion
   # occurrence matching.
   defp find_bridge(ctx, expected, a) do
-    expected
-    |> reducible_subterms()
-    |> Enum.find_value(fn s ->
+    subs = reducible_subterms(expected)
+    rwlog(fn -> "find_bridge: #{length(subs)} reducible subterms, seeking a=#{rw_ins(a)}" end)
+
+    Enum.find_value(subs, fn s ->
       s_nf = Kernel.normalize(ctx, s)
+
       if s_nf != s and contains_term?(replace_term(expected, s, s_nf), a) do
+        rwlog(fn -> "  bridge candidate s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)}" end)
         {s, s_nf}
       end
     end)
   end
 
   defp bridge_step(ctx, proof, ty, a, b, expected, {s, s_nf}) do
+    rwlog(fn -> "bridge_step s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)} (recurse on residual)" end)
+
     with {:ok, ty_s} <- infer_type_term(ctx, s),
          residual = replace_term(expected, s, s_nf),
          {:ok, inner_build, body_expected} <- rewrite_plan(ctx, proof, ty, a, b, residual) do
