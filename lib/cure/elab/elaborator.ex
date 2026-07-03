@@ -560,10 +560,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # A `let x = e ⏎ body` block, in checking mode. There is no `:let` in Core, so
-  # each binding desugars to a β-redex `(λ x:T. body) e`: infer the rhs, extend
-  # the context with `x : T`, check the remainder against the expected type
-  # shifted under the new binder, and wrap. The kernel re-checks the assembled
-  # redex against the expected type.
+  # each binding is eliminated by *surface substitution* (`elaborate_let_block`):
+  # every free `x` in the remaining statements is replaced by the rhs expression
+  # `e`, then the substituted body is checked against the expected type. NOTE:
+  # this INLINES `e` at each use (it does not build a `(λ x:T. body) e` redex), so
+  # it does not bind-once — a caller wanting to avoid duplicating/re-evaluating a
+  # complex `e` (e.g. a guarded match's scrutinee) cannot get that by routing
+  # through here; it would need a real Core binder built directly. A rebinding of
+  # `x` in a later statement is refused (would capture).
   def elaborate_expr_checked({:block, _meta, stmts}, expected_core, names, ctx, env) do
     elaborate_let_block(stmts, expected_core, names, ctx, env)
   end
