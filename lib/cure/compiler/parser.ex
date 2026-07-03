@@ -337,6 +337,23 @@ defmodule Cure.Compiler.Parser do
         {inner, state} = parse_forced_inner(advance(state))
         {{:forced_pattern, [line: token.line, col: token.col], inner}, state}
 
+      # Named-implicit dot pattern `{ name = <expr> }` in a constructor-argument
+      # position — annotates an erased implicit index by name (Lean/Idris-style),
+      # e.g. `vcons({k = .m}, h, r)`. Only the `{ IDENT = … }` shape is a
+      # named-implicit; every other leading `{` in prefix position keeps its
+      # previous unexpected-token error (records use the postfix `Name{…}` form,
+      # maps use `#{…}`, blocks use indentation — none reach this clause).
+      :lbrace ->
+        case {peek_at(state, 1), peek_at(state, 2)} do
+          {%Token{type: :identifier}, %Token{type: :assign}} ->
+            parse_named_implicit_pat(state, token)
+
+          _ ->
+            error = {:unexpected_token, token.type, token.line, token.col}
+            state = add_error(state, error)
+            {error_node(token), advance(state)}
+        end
+
       # Indent starts a block
       :indent ->
         parse_block(state)
@@ -412,6 +429,25 @@ defmodule Cure.Compiler.Parser do
       :lparen -> parse_grouped(state)
       _ -> parse_prefix(state)
     end
+  end
+
+  # -- Named-implicit dot pattern --------------------------------------------
+  #
+  # `{ name = <expr> }` annotates a constructor's erased implicit index `name`
+  # with a forced value in a pattern-argument position. Valid only as a
+  # constructor-pattern argument; ordinary expression elaboration rejects it
+  # (`{:named_implicit_not_in_pattern, …}`). The inner expression is parsed with
+  # the full expression grammar, so a leading `.` yields a `{:forced_pattern,…}`.
+  defp parse_named_implicit_pat(state, brace_token) do
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = expect(state, :assign)
+    {inner, state} = parse_expr(state, 0)
+    state = expect(state, :rbrace)
+    meta = [line: brace_token.line, col: brace_token.col]
+    {{:named_implicit_pat, meta, name, inner}, state}
   end
 
   # -- Literals --------------------------------------------------------------

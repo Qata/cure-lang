@@ -75,6 +75,13 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:forced_pattern, meta, _expr}, _names, _ctx, _env),
     do: {:error, {:forced_pattern_not_in_pattern, meta}}
 
+  # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
+  # constructor-argument PATTERN position (annotating an erased index by name).
+  # Reaching ordinary expression elaboration means it was used outside a pattern
+  # — reject it with a precise error (mirrors the forced-pattern guard above).
+  def elaborate_expr_typed({:named_implicit_pat, meta, _name, _inner}, _names, _ctx, _env),
+    do: {:error, {:named_implicit_not_in_pattern, meta}}
+
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
       # Record construction `Point{x: .., y: ..}` desugars to the positional
@@ -2363,10 +2370,16 @@ defmodule Cure.Elab.Elaborator do
 
   defp arm_has_nested?({:match_arm, meta, _body}) do
     case Keyword.fetch!(meta, :pattern) do
-      {:function_call, _m, args} -> Enum.any?(args, &(not match?({:variable, _mm, _v}, &1)))
+      {:function_call, _m, args} -> Enum.any?(args, &(not pat_arg_leaf?(&1)))
       _ -> false
     end
   end
+
+  # A constructor-pattern argument is a LEAF (not a nested sub-pattern needing
+  # matrix lowering) if it is a bare variable or a named-implicit annotation.
+  defp pat_arg_leaf?({:variable, _m, _v}), do: true
+  defp pat_arg_leaf?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp pat_arg_leaf?(_), do: false
 
   # Group arms by outer constructor (first-appearance order, within-group order
   # preserved for first-match), then compile each group to one single-level arm.
@@ -2728,11 +2741,77 @@ defmodule Cure.Elab.Elaborator do
         # correctly refined to `Eq(NV(Z), vz, vz)`.
         body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
 
-        with {:ok, body_term} <- elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
+        with :ok <-
+               check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env),
+             {:ok, body_term} <-
+               elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
           {:ok, {cname, arity, body_term}}
         end
     end
   end
+
+  # Named-implicit annotations `{k = <expr>}` on this branch's constructor
+  # pattern are check-and-discard: for each, resolve the named erased index to
+  # its telescope position `p`, read the forced value `d` the kernel's index
+  # inversion pinned at that position (`subst[arity-1-p]`), elaborate the user's
+  # forced inner expression to a term `t` in the branch frame, and require `t`
+  # convertible with `d`. The annotation binds nothing and produces no runtime
+  # term, so on success we simply continue; on mismatch the branch is rejected.
+  defp check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env) do
+    pattern
+    |> constructor_named_implicits()
+    |> Enum.reduce_while(:ok, fn {name, inner}, :ok ->
+      case named_implicit_forced_value(name, subst, arity, telescope) do
+        {:ok, d} ->
+          expr = forced_inner_expr(inner)
+
+          case elaborate_expr_typed(expr, branch_names, branch_ctx, env) do
+            {:ok, t_term, _ty} ->
+              if Cure.Core.Conv.conv?(
+                   t_term,
+                   d,
+                   Context.env(branch_ctx),
+                   Context.length(branch_ctx),
+                   Context.signature(branch_ctx)
+                 ) do
+                {:cont, :ok}
+              else
+                {:halt, {:error, {:forced_pattern_mismatch, t_term, d}}}
+              end
+
+            {:error, _} = err ->
+              {:halt, err}
+          end
+
+        :error ->
+          {:halt, {:error, {:named_implicit_unforced, name}}}
+      end
+    end)
+  end
+
+  # Position of the erased index named `name` in the constructor telescope, then
+  # the forced value the branch-unify substitution pinned there. de Bruijn: the
+  # telescope binds left-to-right, so position `p` is variable `arity-1-p`.
+  defp named_implicit_forced_value(name, subst, arity, telescope) do
+    key = String.to_atom(name)
+
+    case Enum.find_index(telescope, fn {n, _t} -> n == key end) do
+      nil ->
+        :error
+
+      p ->
+        case Map.get(subst, arity - 1 - p) do
+          nil -> :error
+          d -> {:ok, d}
+        end
+    end
+  end
+
+  # The forced inner of a named-implicit is normally a dot pattern `.<expr>`; peel
+  # the forced wrapper (it is not valid in ordinary expression elaboration) and
+  # elaborate the underlying expression. A non-dot inner is elaborated as-is.
+  defp forced_inner_expr({:forced_pattern, _m, inner}), do: inner
+  defp forced_inner_expr(other), do: other
 
   # Step 3b branch. The motive (see `wrap_motive_carried_eq`) makes this branch's
   # expected type `Π(prf : Eq(T, idx, ctor_idx)). G'[jₚₒₛ↦ctor_idx]`, where
@@ -2935,12 +3014,17 @@ defmodule Cure.Elab.Elaborator do
   defp constructor_pattern({:function_call, meta, args}) do
     cname = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-    # A surface constructor pattern binds only variables in its argument
-    # positions. A NESTED constructor/literal sub-pattern (`S(S(m))`, `C(Z(),y)`)
-    # needs decision-tree lowering (parity #3), not yet implemented — report a
-    # clean error rather than crashing on the non-variable arg.
-    if Enum.all?(args, &match?({:variable, _m, _v}, &1)) do
-      vars = Enum.map(args, fn {:variable, _meta, v} -> v end)
+    # A named-implicit dot pattern `{k = …}` annotates an erased index by name; it
+    # binds nothing at runtime and is check-and-discarded in the branch path, so
+    # it is partitioned out here. What REMAINS are the positional (present-arg)
+    # sub-patterns, which — as today — must each be a bare variable. A NESTED
+    # constructor/literal sub-pattern (`S(S(m))`, `C(Z(),y)`) still needs decision-
+    # tree lowering (parity #3), so report a clean error on any non-variable
+    # positional arg.
+    positional = Enum.reject(args, &named_implicit_arg?/1)
+
+    if Enum.all?(positional, &match?({:variable, _m, _v}, &1)) do
+      vars = Enum.map(positional, fn {:variable, _meta, v} -> v end)
       {:ok, {cname, vars}}
     else
       {:error, {:unsupported_pattern, :nested_constructor_arg}}
@@ -2948,6 +3032,17 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
+
+  defp named_implicit_arg?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp named_implicit_arg?(_), do: false
+
+  # The named-implicit annotations of a constructor pattern, as `{name, inner}`
+  # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
+  # to run the forced-index convertibility check.
+  defp constructor_named_implicits({:function_call, _meta, args}),
+    do: for({:named_implicit_pat, _m, name, inner} <- args, do: {name, inner})
+
+  defp constructor_named_implicits(_), do: []
 
   defp pattern_shape(p) when is_tuple(p) and tuple_size(p) > 0, do: elem(p, 0)
   defp pattern_shape(_), do: :unknown
