@@ -52,7 +52,7 @@
 
 ## File structure
 
-- **New** `lib/antigen/assays/erasure.ex` — `Antigen.Assays.Erasure`; `run/1`+`run/2` for the 4 ids; `@real` op-map; local `present_positions/1`.
+- **New** `lib/antigen/assays/erasure.ex` — `Antigen.Assays.Erasure`; `run/1`+`run/2` for the 4 ids; `@real` op-map; local `present_args/2` + `app_spine/2`.
 - **New** `lib/antigen/generators/erasure_term.ex` — `erase_challenges/0`, `relevance_challenges/0`; mixed-quantity env builders.
 - **Modify** `lib/antigen/runner.ex` — 4 `assay_module/1` clauses.
 - **Modify** `lib/antigen/challenge.ex` — add `:erasure_term` to `@type kind`; add new atoms to `@known_atoms`.
@@ -119,6 +119,17 @@ defmodule Antigen.Assays.ErasureTest do
       payload: %{env: env, term: t}, seed: 1)
   end
 
+  # app-head defs: f present-first (clean), g erased-first (the finding). Defined
+  # once here at module level (NOT re-declared by Task 2's describe block) so both
+  # this task's app-head known-finding test and Task 2's selective tests share it.
+  defp app_env(env) do
+    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
+    env
+    |> Env.add_def(:f, ty, {:int_lit, 0}, [:present, :erased])
+    |> Env.add_def(:g, ty, {:int_lit, 0}, [:erased, :present])
+  end
+  defp app2(head, x0, x1), do: {:app, {:app, head, x0}, x1}
+
   test "idempotent baseline: present-first ctor erases idempotently" do
     env = ctor_env()
     assert Erasure.run(idem_ch(env, {:ctor, :MkQ, [il(1), il(2)]})) == :ok
@@ -148,6 +159,20 @@ defmodule Antigen.Assays.ErasureTest do
     test "ctor erased-before-present ordering: real erase is non-idempotent (TRUE POSITIVE)" do
       env = ctor_env()
       assert {:violation, {:erase_not_idempotent, _}} = Erasure.run(idem_ch(env, {:ctor, :MkP, [il(1), il(2)]}))
+    end
+
+    # Second surface (spec §3/§9-item-3): the app-head clause has the identical
+    # zip-realignment hazard as the :ctor clause. `g`'s quantities are
+    # [:erased, :present]; once = erase(env, app2(g,1,2)) = {:app,{:global,g},il(2)}
+    # (arg 0 dropped, arg 1 kept); twice re-erases from a 1-arg spine against the
+    # SAME full 2-element quantity vector, re-zipping the survivor to qs[0] =
+    # :erased and dropping it -> {:global, g} (bare head, no args). This is the
+    # app-head counterpart to the ctor finding above — NOT a member of
+    # erase_challenges/0 (Task 5), for the same reason.
+    test "app-head erased-before-present ordering: real erase is non-idempotent (TRUE POSITIVE)" do
+      env = app_env(ctor_env())
+      assert {:violation, {:erase_not_idempotent, _}} =
+               Erasure.run(idem_ch(env, app2({:global, :g}, il(1), il(2))))
     end
   end
 end
@@ -202,9 +227,9 @@ defmodule Antigen.Assays.Erasure do
 end
 ```
 
-- [ ] **Step 4: GREEN** — `MIX_ENV=test mix test test/antigen/assays/erasure_test.exs` → PASS (5). The known-finding test passes because the assay correctly returns `{:violation, {:erase_not_idempotent, _}}` on the real non-idempotent erase. If the present-first baseline instead fails, trace `Inductive.ctor_quantities(env, :MkQ)` and the erase output — the clean ordering must be genuinely idempotent.
+- [ ] **Step 4: GREEN** — `MIX_ENV=test mix test test/antigen/assays/erasure_test.exs` → PASS (6). Both known-finding tests (ctor `:MkP`, app-head `:g`) pass because the assay correctly returns `{:violation, {:erase_not_idempotent, _}}` on the real non-idempotent erase for each surface. If either present-first baseline instead fails, trace `Inductive.ctor_quantities(env, :MkQ)` / `Env.get_def(env, :f)` and the erase output — the clean ordering must be genuinely idempotent on both surfaces.
 
-- [ ] **Step 5: Commit** — `feat(antigen): erasure/idempotent assay — erase idempotence + hole preservation (finds erase/2 non-idempotence)`
+- [ ] **Step 5: Commit** — `feat(antigen): erasure/idempotent assay — erase idempotence + hole preservation (finds erase/2 non-idempotence, ctor + app-head)`
 
 ---
 
@@ -216,11 +241,11 @@ end
 
 ```elixir
 describe "erasure/selective (V4a)" do
-  defp app_env(env) do
-    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
-    env |> Env.add_def(:f, ty, {:int_lit, 0}, [:present, :erased])
-  end
-  defp app2(head, x0, x1), do: {:app, {:app, head, x0}, x1}
+  # `app_env/1` and `app2/3` are already defined at module level by Task 1 (it
+  # needs the fuller version — both `:f` and `:g` — for its app-head
+  # known-finding test); reused here as-is. Do NOT redeclare them in this
+  # `describe` block — a second `defp app_env(env)`/`defp app2(h,x0,x1)` clause
+  # with the same head shape would just add an unreachable duplicate clause.
   defp sel_ch(env, t, surface) do
     Challenge.new(kind: :erasure_term, assay: "erasure/selective", label: :positive,
       payload: %{env: env, term: t, surface: surface}, seed: 1)
@@ -381,6 +406,23 @@ describe "relevance/soundness (V4b)" do
     k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b -> :ok end}
     assert {:violation, {:relevance_unsound, :returned}} = Erasure.run(rel_ch(Env.empty(), {:var, 0}, :returned), k)
   end
+
+  test "clean-body negative control: a relevance_check stub that rejects a clean body" do
+    ch = Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :positive,
+      payload: %{env: Env.empty(), name: :d, quantities: [:erased], body: {:int_lit, 7}, site: nil}, seed: 1)
+    k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b ->
+      {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :returned}}}
+    end}
+    assert {:violation, {:clean_body_rejected, :d}} = Erasure.run(ch, k)
+  end
+
+  test "wrong-site negative control: a relevance_check stub reporting a mismatched site" do
+    k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b ->
+      {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :applied}}}
+    end}
+    assert {:violation, {:relevance_wrong_site, :returned, :applied}} =
+             Erasure.run(rel_ch(Env.empty(), {:var, 0}, :returned), k)
+  end
 end
 ```
 
@@ -440,8 +482,8 @@ end
 
 - [ ] **Step 3: Implement** —
 
-Create `lib/antigen/generators/erasure_term.ex` with the env builders (`ctor_env`, `app_env`) and:
-- `erase_challenges/0` — ONLY entries expected `:ok` under real ops (reconciliation #1): present-first ctor idempotent + hole; present-first app-head idempotent; ctor + app-head selective (leaf args); a `term?` wellformed entry. **NOT** the erased-first `:MkP`/`:g` terms (those are dedicated known-finding test fixtures in Task 1, not catalog members).
+Create `lib/antigen/generators/erasure_term.ex` with the env builders (`ctor_env`, `app_env` — the fuller version registering both `:f` and `:g`, matching Task 1) and:
+- `erase_challenges/0` — ONLY entries expected `:ok` under real ops (reconciliation #1): present-first ctor idempotent + hole; present-first app-head idempotent; ctor + app-head selective (leaf args); a `term?` wellformed entry. **NOT** the erased-first `:MkP`/`:g` terms (those are dedicated known-finding test fixtures in Task 1 — §"known erase/2 non-idempotence finding", which now covers both the ctor and app-head surfaces — not catalog members).
 - `relevance_challenges/0` — the four per-site rejected bodies (§8-2 constructions) + the clean control.
 
 In `lib/antigen/runner.ex` add four `assay_module/1` clauses → `Antigen.Assays.Erasure`. In `lib/antigen/challenge.ex` add `| :erasure_term` to `@type kind` and add `:erasure_term, :P, :MkQ, :MkP, :f, :g, :d, :a, :b, :Wrap` to `@known_atoms` (skip any already present — verify against the current list).
@@ -461,7 +503,7 @@ In `lib/antigen/runner.ex` add four `assay_module/1` clauses → `Antigen.Assays
 
 ## Self-review
 
-**Spec coverage:** §3 V4a idempotence+hole → Task 1 (+ known-finding block); selective (ctor+app-head) → Task 2; wellformed → Task 3; §3 V4b four sites+clean → Task 4; §4 op-map seam → Task 1 `@real`; §4 negative controls → each task; §5 catalogs + mixed-quantity registration → Task 5 (+ shared helpers); §6 invariants (no engine edits/fix, no StreamData token, `:ok|{:violation}` only, known-finding handling per reconciliation #1); §7 non-goals (no fix, no elab/erasure dup, no kernel-accept differential, no {0,ω} change); §8-1/§8-2/§8-3/§8-4 resolved (Inductive.ctor/4 + add_def/5; per-site constructions; term?/1; :erasure_term kind + assay_module clauses); §9 tests 1-15 distributed across Tasks 1-5.
+**Spec coverage:** §3 V4a idempotence+hole → Task 1 (+ known-finding block, BOTH ctor `:MkP` and app-head `:g` surfaces per §9 item 3); selective (ctor+app-head) → Task 2; wellformed → Task 3; §3 V4b four sites+clean → Task 4 (+ `:relevance_wrong_site`/`:clean_body_rejected` negative controls); §4 op-map seam → Task 1 `@real`; §4 negative controls → each task, every violation branch has a dedicated negative control (`:erase_not_idempotent`, `:hole_introduced`, `:wrong_positions_kept` ×2 surfaces, `:erase_ill_formed`, `:relevance_unsound`, `:relevance_wrong_site`, `:clean_body_rejected`); §5 catalogs + mixed-quantity registration → Task 5 (+ shared helpers); §6 invariants (no engine edits/fix, no StreamData token, `:ok|{:violation}` only, known-finding handling per reconciliation #1); §7 non-goals (no fix, no elab/erasure dup, no kernel-accept differential, no {0,ω} change); §8-1/§8-2/§8-3/§8-4 resolved (Inductive.ctor/4 + add_def/5; per-site constructions; term?/1; :erasure_term kind + assay_module clauses); §9 tests 1-15 distributed across Tasks 1-5, including item 3's app-head erased-first sub-case (Task 1).
 
 **Placeholder scan:** none — concrete code/commands throughout. Two GREEN-time contingencies named with explicit fallbacks (Term.term? on unknown tags → use a level-overflow shape; a site-classification mismatch → correct the catalog's `site` label, not the property).
 
