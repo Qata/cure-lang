@@ -3161,14 +3161,24 @@ defmodule Cure.Elab.Elaborator do
           end
 
         {:error, _} ->
-          # An underdetermined argument at a still-unsolved domain — e.g. `fz()` at
-          # `Fin(?n)`, whose index only a *later* argument (the vector) determines.
-          # It cannot infer standalone, so defer it: a placeholder metavariable holds
-          # its position in `chosen` (keeping later domains' de Bruijn frames aligned),
-          # and `resolve_deferred_slots` checks it against the now-solved domain and
-          # back-patches the placeholder once the later arguments have run.
-          {mctx, ph} = MetaCtx.fresh(mctx)
-          {:cont, {:ok, mctx, chosen ++ [{:meta, ph}], rest, deferred ++ [{ph, arg, dom, length(chosen)}]}}
+          # A lambda argument whose Π domain still bears a metavariable in its
+          # CODOMAIN (`(n:N) -> ?F(n)`) cannot infer standalone; try solving the
+          # codomain metavariable under the binder first (higher-order/Miller,
+          # ledger #10). Only if that does not apply do we defer.
+          case try_lambda_meta_pi(arg, dom_inst, mctx, names, ctx, env) do
+            {:ok, mctx, lam_term} ->
+              {:cont, {:ok, mctx, chosen ++ [lam_term], rest, deferred}}
+
+            :fallthrough ->
+              # An underdetermined argument at a still-unsolved domain — e.g. `fz()` at
+              # `Fin(?n)`, whose index only a *later* argument (the vector) determines.
+              # It cannot infer standalone, so defer it: a placeholder metavariable holds
+              # its position in `chosen` (keeping later domains' de Bruijn frames aligned),
+              # and `resolve_deferred_slots` checks it against the now-solved domain and
+              # back-patches the placeholder once the later arguments have run.
+              {mctx, ph} = MetaCtx.fresh(mctx)
+              {:cont, {:ok, mctx, chosen ++ [{:meta, ph}], rest, deferred ++ [{ph, arg, dom, length(chosen)}]}}
+          end
       end
     else
       # Domain fully known — check the argument against it (reaches checking mode).
@@ -3178,6 +3188,47 @@ defmodule Cure.Elab.Elaborator do
       end
     end
   end
+
+  # A lambda argument at a Π domain whose CODOMAIN still bears a metavariable
+  # (`(n:N) -> ?F(n)`) cannot be inferred standalone, and the general checking
+  # judgement (`elaborate_expr_checked`) does not thread `mctx`, so it would
+  # reject the unsolved codomain. Here `mctx` IS in scope, so we solve it: bind
+  # the parameter, INFER the body, and unify the reconstructed Π against the
+  # expected one — the codomain metavariable is then solved *under the binder*
+  # (the Miller pattern `?F(n) := λn. body_ty`, ledger #10). Single-parameter
+  # lambda over a literal Π with a meta-free domain; any other shape falls through
+  # to the deferral path. Additive/fallback-only: reached only after inference has
+  # already failed, and the assembled call is kernel-re-checked by
+  # `finish_global_app`, so nothing unsound rests on the solve.
+  defp try_lambda_meta_pi({:lambda, meta, [body_expr]}, {:pi, dom_term, cod_term}, mctx, names, ctx, env) do
+    case Keyword.fetch!(meta, :params) do
+      [{:param, _pm, pname}] ->
+        if has_meta?(dom_term) do
+          :fallthrough
+        else
+          dom_value = Eval.eval(dom_term, Context.env(ctx))
+          ctx1 = Context.extend(ctx, dom_value)
+
+          case elaborate_expr_typed(body_expr, [pname | names], ctx1, env) do
+            {:ok, body_term, body_ty} ->
+              body_ty_term = Quote.reify(body_ty, Context.length(ctx1))
+
+              case Unify.unify({:pi, dom_term, cod_term}, {:pi, dom_term, body_ty_term}, mctx, env) do
+                {:ok, mctx} -> {:ok, mctx, {:lam, dom_term, body_term}}
+                {:error, _} -> :fallthrough
+              end
+
+            {:error, _} ->
+              :fallthrough
+          end
+        end
+
+      _ ->
+        :fallthrough
+    end
+  end
+
+  defp try_lambda_meta_pi(_arg, _dom_inst, _mctx, _names, _ctx, _env), do: :fallthrough
 
   # Second pass over the arguments deferred by `bidir_app_slot` (each an
   # underdetermined argument whose domain metavariables a later argument solves).

@@ -727,10 +727,20 @@ defmodule Cure.Elab.Declarations do
     if Keyword.get(fmeta, :function_type) do
       arrow_to_pi(args, scope, fam, env)
     else
-      atom = fmeta |> Keyword.fetch!(:name) |> String.to_atom()
+      name = Keyword.fetch!(fmeta, :name)
+      atom = String.to_atom(name)
 
       with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env) do
         cond do
+          # An applied BOUND variable — e.g. a higher-order parameter used as
+          # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+          # the head against the de Bruijn scope; a local binder shadows a global,
+          # so this is checked first. Without it `F(n)` became a dangling
+          # `{:global, :F}`, and the call site's implicit substitution could never
+          # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+          idx = Enum.find_index(scope, &(&1 == name)) ->
+            {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
+
           atom == :Eq and length(core_args) == 3 ->
             [ty, a, b] = core_args
             {:ok, {:eq, ty, a, b}}
