@@ -19,6 +19,26 @@
 - **Unconditional:** never gate on `Solver.available?/0`; no `@tag :skip`.
 - **New generator atoms** added to `Challenge.@known_atoms`.
 - Stay on branch `autopilot/antigen-tier-b` — no new worktree.
+- **Tests are immutable once written (strict TDD):** each task's Step 1 tests are
+  written first and pass only by editing implementation code (Step 3) — never by
+  weakening, deleting, or rewriting a test to match whatever the code currently does.
+  The ONE pre-authorized exception is Task 3's known-finding test (Step 4 note): if the
+  real Z3/Parser no longer reproduce the negative-witness bug, the test's premise is
+  empirically wrong, and the plan explicitly says to flip the assertion to `:ok` and
+  report non-reproduction — that is not "editing a test for convenience," it's the
+  skill's standard "prove the test itself is wrong first" exception, spelled out in
+  advance because the reproduction depends on live Z3 behavior outside the plan's
+  control. No other test in this plan may be weakened under any circumstance.
+- **A real infection is a finding, not a bug in the plan (spec §7):** if any CLEAN
+  baseline test (i.e. every test in Tasks 1–4 except the Task 3 known-finding fixture)
+  unexpectedly fails against the REAL Solver at a GREEN step — meaning the real Z3 lint
+  itself produced a false discharge / false unsat / bogus counterexample / false
+  proven for one of the catalog's deliberately simple, decidable predicates — that is
+  itself a genuine soundness finding. STOP, do not alter the predicate or weaken the
+  assertion to make it pass, and report it with the same weight as the `parse_model`
+  finding. This is the same "prove the test is wrong first" discipline as above, applied
+  to the solver instead of the parser: a surprising failure here means the SOLVER's
+  behavior is suspect, not the test.
 
 ## File structure
 
@@ -54,10 +74,27 @@
    unhandled operator raises, which is correct: a catalog entry using one is a plan bug).
 3. **Predicate builders live in the generator** (`Antigen.Generators.SmtQuery`), but
    Tasks 1–3 write assay tests BEFORE Task 4 creates that module. So Tasks 1–3 define
-   their own tiny inline builders in the test file (`lit/1`, `xvar/0`, `bop/3`, `uop/2`);
-   Task 4's generator re-defines the same builders module-privately. This duplication
-   is intentional and small (four one-liners) — do NOT try to share them across the
-   test/lib boundary mid-plan.
+   their own tiny inline builders in the test file (`lit/1`, `xvar/0`, `bop/3`); Task 4's
+   generator re-defines the same builders module-privately. This duplication is
+   intentional and small (three one-liners) — do NOT try to share them across the
+   test/lib boundary mid-plan. The catalog's non-goals (§8) exclude unary operators
+   (`:not`/unary `:-`), so no `uop/2` builder is needed anywhere in this plan — don't
+   add one; an unused `defp` triggers a compiler warning for no benefit.
+4. **V6c also directly checks `{:proven, nil}` soundness** (tightens spec §4's V6c
+   text). The spec states "`{:proven, nil}` is checked by V6a's discharge property" —
+   but `prove_implication` (V6a) and `prove_with_counterexample` (V6c) are genuinely
+   different code paths: `prove_implication` translates via `generate_subtype_query`
+   under `QF_UFLIA` (translator.ex:81-100); `prove_with_counterexample` builds its own
+   hand-rolled `QF_LIA` query string directly in `solver.ex:115-120`. A bug unique to
+   the latter's query-building or result path (e.g. a false `{:proven, nil}` on an
+   invalid implication) would NOT be caught by V6a's stubbed-`prove_implication`
+   control, which never touches `prove_with_counterexample` at all. Since "never
+   claim a stronger answer than the truth" is the vertical's entire premise (§1) and
+   `prove_with_counterexample` is an explicit Target (§2), leaving its own proven-claim
+   unchecked is a real coverage gap, not a deliberate non-goal. Task 3 therefore adds
+   a bounded-domain check to the `{:proven, nil}` branch (mirroring V6a exactly) and a
+   `{:false_proven, ...}` negative control — this is what makes the plan's original
+   test-count arithmetic (13 after Task 3, 15 after Task 4) actually add up.
 
 ---
 
@@ -86,7 +123,6 @@ defmodule Antigen.Assays.SmtLintTest do
   defp lit(n), do: {:literal, [subtype: :integer], n}
   defp xvar, do: {:variable, [], "x"}
   defp bop(op, a, b), do: {:binary_op, [operator: op], [a, b]}
-  defp uop(op, a), do: {:unary_op, [operator: op], [a]}
   # x > n
   defp gt(n), do: bop(:>, xvar(), lit(n))
 
@@ -98,7 +134,9 @@ defmodule Antigen.Assays.SmtLintTest do
   describe "eval_pred/2 (via public run behavior is enough, but sanity-check the oracle)" do
     # eval_pred is private; exercise it indirectly through a negative control whose
     # correctness depends on eval_pred computing the right truth values (Step-3 impl).
-    test "oracle drives the false_discharge control (x=3 witnesses x>0 ∧ not x>5)" do
+    test "oracle drives the false_discharge control (finds a witness in x>0 ∧ not x>5)" do
+      # Enum.find walks @domain -32..32 ascending, so the witness it reports is
+      # whichever is smallest in {1..5} (x=1) — assert the property, not a specific x.
       k = %{SmtLint.__real__() | prove_implication: fn _p1, _p2, _v, _b -> true end}
       assert {:violation, {:false_discharge, %{x: x}}} =
                SmtLint.run(impl_ch(gt(0), gt(5)), k)
@@ -143,7 +181,8 @@ defmodule Antigen.Assays.SmtLint do
 
     * smt/implication — `prove_implication == true` ⟹ no bounded counterexample (V6a).
     * smt/unsat       — `check_sat == :unsat` ⟹ no bounded satisfying witness (V6b).
-    * smt/witness     — `prove_with_counterexample`'s `{:failed, model}` genuinely refutes (V6c).
+    * smt/witness     — `prove_with_counterexample`'s `{:failed, model}` genuinely
+      refutes, and a `{:proven, nil}` claim has no bounded counterexample (V6c).
 
   The oracle is an Antigen-owned bounded evaluator `eval_pred/2` over the MetaAST
   predicate format, decided over a fixed integer domain (`@domain`). This is a
@@ -349,6 +388,17 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
       assert SmtLint.run(witness_ch(gt(5), gt(0)), k1) == :ok
       assert SmtLint.run(witness_ch(gt(0), gt(5)), k2) == :ok
     end
+
+    test "negative control: a prove_with_counterexample stub returning {:proven, nil} on the invalid implication" do
+      # x > 0 ⇒ x > 5 is invalid (x=1 refutes it). A stub falsely claiming :proven is a
+      # false-proven soundness violation — symmetric to V6a's false_discharge, but this
+      # exercises prove_with_counterexample's OWN proven-claim path (a different code
+      # path/query from prove_implication; reconciliation #4 explains why V6a's control
+      # does not already cover this).
+      k = %{SmtLint.__real__() | prove_with_counterexample: fn _p1, _p2, _v, _b -> {:proven, nil} end}
+      assert {:violation, {:false_proven, %{x: x}}} = SmtLint.run(witness_ch(gt(0), gt(5)), k)
+      assert x > 0 and not (x > 5)
+    end
   end
 
   describe "parse_model negative-witness finding (real Solver + real Parser)" do
@@ -393,8 +443,15 @@ Expected: FAIL — no `run/2` clause for `"smt/witness"`.
         end
 
       {:proven, nil} ->
-        # "no counterexample" — the discharge property (V6a) covers proven-true soundness
-        :ok
+        # A claimed proof must itself be sound: no bounded x may witness p1 ∧ ¬p2
+        # (mirrors V6a's discharge check exactly). NOT redundant with V6a: that assay
+        # stubs/exercises prove_implication, a separate query/code path from
+        # prove_with_counterexample (reconciliation #4) — this is the only place that
+        # checks THIS function's own proven-claim.
+        case Enum.find(@domain, fn x -> eval_pred(p1, x) and not eval_pred(p2, x) end) do
+          nil -> :ok
+          x -> {:violation, {:false_proven, %{x: x, p1: p1, p2: p2}}}
+        end
 
       {:unknown, nil} ->
         :ok
@@ -414,7 +471,10 @@ Expected: FAIL — no `run/2` clause for `"smt/witness"`.
 - [ ] **Step 4: Run to verify GREEN**
 
 Run: `MIX_ENV=test mix test test/antigen/assays/smt_lint_test.exs`
-Expected: PASS (13). **The parse_model known-finding test passing confirms the real
+Expected: PASS (13) — 7 carried over from Tasks 1–2, plus 6 new in this task (witness
+baseline, bogus-counterexample control, unusable-model control, proven/unknown-legal,
+false-proven control, parse_model known-finding). **The parse_model known-finding test
+passing confirms the real
 `Cure.SMT.Parser.parse_model/1` negative-value truncation empirically** (via the real
 Z3 subprocess). If that ONE test instead comes back `:ok`, it means Z3-in-this-env
 returned the negative witness in a form the parser handled — record that in the report
@@ -616,13 +676,12 @@ confirm nothing unexpected is dirty).
 
 - **Spec §4 three families** → Tasks 1 (V6a), 2 (V6b), 3 (V6c). ✓
 - **Spec §5 op-map seam + three ids + `@domain -32..32`** → Task 1 Step 3 (`@real`, `run/1`→`run/2`), all clauses use `@domain`. ✓
-- **Spec §5 three negative controls** → Task 1 (false_discharge), Task 2 (false_unsat), Task 3 (bogus_counterexample). Plus the extra `unusable_model` + proven/unknown-legal controls. ✓
+- **Spec §5 three negative controls** → Task 1 (false_discharge), Task 2 (false_unsat), Task 3 (bogus_counterexample). Plus the extra `unusable_model`, `false_proven` (reconciliation #4 — tightens spec §4's V6c text), and proven/unknown-legal controls. ✓
 - **Spec §6 unconditional / `:unknown` legal / no PGO hints / async:false** → `run/2` folds `false`/`:unknown`/`:sat` to `:ok`; `check_sat/2` + default `prove_implication/4` used (no hint arg); test module `async: false`. ✓
 - **Spec §7 invariants** → no `Cure.*` edits (op-map only); no `StreamData` (Task 5 Step 1); `:ok | {:violation,_}` only; clean catalog `:ok` (Task 4 Step 6); atoms added (Task 4 Step 5). ✓
 - **Spec §9-item-1 operator coverage** → `eval_pred/2` covers `:+,:-,:*,:>,:<,:>=,:<=,:==,:!=,:and,:or,:not` (unary `:-`,`:not`), matching `translate_op/1`. ✓
 - **Spec §9-item-2 parse_model bug** → Reconciliation #1: clean catalog non-negative, known-finding fixture asserts `{:unusable_model,_}`, `is_integer` discriminator, no `Cure.SMT.*` re-parse. ✓
 - **Spec §9-item-4 kind + atoms + 3 assay_module clauses (no catch-all)** → Task 4 Steps 4–5. ✓
-- **Spec §10 catalog items 1–9** → items 1–2 (Task 1 baselines), 3 (Task 1 control), 4–5 (Task 2 baselines), 6 (Task 2 control), 7 (Task 3 baseline), 8 (Task 3 control), 9 (Task 4 wiring). ✓
+- **Spec §10 catalog items 1–9** → items 1–2 (Task 1 baselines), 3 (Task 1 control), 4–5 (Task 2 baselines), 6 (Task 2 control), 7 (Task 3 baseline), 8 (Task 3 control), 8b — `false_proven` control, beyond the literal §10 list per reconciliation #4 (Task 3 control), 9 (Task 4 wiring). ✓
 - **Type consistency:** `run/1,2`, `__real__/0`, `@domain`, `eval_pred/2`, `model_value/2` names consistent across tasks; generator fns `implication_challenges/0`/`unsat_challenges/0`/`witness_challenges/0` match Task 4 tests. ✓
 - **No placeholders:** every code step shows full code. ✓
-```
