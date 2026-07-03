@@ -35,10 +35,8 @@ defmodule Cure.Core.Serialize do
   defp enc({:absurd}), do: "(absurd)"
   defp enc({:int_type}), do: "(int-type)"
   defp enc({:float_type}), do: "(float-type)"
-  defp enc({:bool_type}), do: "(bool-type)"
   defp enc({:int_lit, n}), do: ["(int ", Integer.to_string(n), ")"]
   defp enc({:float_lit, f}), do: ["(float ", Float.to_string(f), ")"]
-  defp enc({:bool_lit, b}), do: ["(bool ", Atom.to_string(b), ")"]
   defp enc({:prim, op, args}), do: ["(prim ", sym(op), args_iodata(args), ")"]
   defp enc({:ctor, name, args}), do: ["(ctor ", sym(name), args_iodata(args), ")"]
 
@@ -145,11 +143,8 @@ defmodule Cure.Core.Serialize do
   defp build_node("global", [{:atom, n}]), do: {:ok, {:global, String.to_atom(n)}}
   defp build_node("int-type", []), do: {:ok, {:int_type}}
   defp build_node("float-type", []), do: {:ok, {:float_type}}
-  defp build_node("bool-type", []), do: {:ok, {:bool_type}}
   defp build_node("int", [{:int, n}]), do: {:ok, {:int_lit, n}}
   defp build_node("float", [{:float, f}]), do: {:ok, {:float_lit, f}}
-  defp build_node("bool", [{:atom, "true"}]), do: {:ok, {:bool_lit, true}}
-  defp build_node("bool", [{:atom, "false"}]), do: {:ok, {:bool_lit, false}}
   defp build_node("hole", [{:str, s}]), do: {:ok, {:hole, s}}
   defp build_node("absurd", []), do: {:ok, {:absurd}}
 

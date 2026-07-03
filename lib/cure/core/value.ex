@@ -51,8 +51,6 @@ defmodule Cure.Core.Value do
   def value?({:vrefl, a}), do: value?(a)
   def value?({:vint_type}), do: true
   def value?({:vint, n}), do: is_integer(n)
-  def value?({:vbool_type}), do: true
-  def value?({:vbool, b}), do: is_boolean(b)
   def value?({:vfloat_type}), do: true
   def value?({:vfloat, f}), do: is_float(f)
   def value?(_), do: false
@@ -68,9 +66,6 @@ defmodule Cure.Core.Value do
 
   def neutral?({:ncase, n, motive_cl, branches}),
     do: neutral?(n) and closure?(motive_cl) and branch_closures?(branches)
-
-  def neutral?({:nbool_elim, n, motive_cl, tt_cl, ff_cl}),
-    do: neutral?(n) and closure?(motive_cl) and closure?(tt_cl) and closure?(ff_cl)
 
   def neutral?(_), do: false
 

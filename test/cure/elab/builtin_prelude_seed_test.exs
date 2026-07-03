@@ -18,9 +18,13 @@ defmodule Cure.Elab.BuiltinPreludeSeedTest do
     assert from_prelude == from_seed
   end
 
-  test "a @builtin decorator on a non-prelude module is ignored for registration" do
+  test "a @builtin decorator on a non-prelude module cannot hijack the key" do
+    # env0 is auto-seeded (Task 4.5), so :bool is always bound to the canonical
+    # seeded :Bool. A user module tagging its own `Coin` @builtin(:bool) does NOT
+    # capture the key — the register pass only honors @builtin in prelude sources.
     src = "mod M\n  @builtin(:bool)\n  type Coin = Heads | Tails\n"
     {:ok, env} = Cure.Elab.Program.elaborate(src)
-    assert Inductive.builtin(env, :bool) == nil
+    assert Inductive.builtin(env, :bool) == :Bool
+    refute Inductive.builtin(env, :bool) == :Coin
   end
 end

@@ -6,7 +6,7 @@ defmodule Cure.Core.ConformanceTest do
   `Cure.Core.Kernel` — exactly the artifacts an independent kernel would re-check.
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Context, Kernel, Quote, Serialize}
+  alias Cure.Core.{Builtins, Context, Env, Kernel, Quote, Serialize}
 
   @corpus Path.join([__DIR__, "..", "..", "fixtures", "core_conformance.txt"])
 
@@ -24,7 +24,7 @@ defmodule Cure.Core.ConformanceTest do
   end
 
   test "the kernel agrees with every verdict in the conformance corpus" do
-    ctx = Context.empty()
+    ctx = Context.empty(Builtins.seed(Env.empty()))
 
     for {verdict, term_sexp, type_sexp} <- entries() do
       {:ok, term} = Serialize.decode(term_sexp)

@@ -304,25 +304,32 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
-  def elaborate_expr_typed({:literal, meta, value} = expr, _names, _ctx, _env) do
+  def elaborate_expr_typed({:literal, meta, value} = expr, _names, ctx, _env) do
     case Keyword.get(meta, :subtype) do
-      :boolean when is_boolean(value) -> {:ok, {:bool_lit, value}, {:vbool_type}}
-      :integer when is_integer(value) -> {:ok, {:int_lit, value}, {:vint_type}}
-      :float when is_float(value) -> {:ok, {:float_lit, value}, {:vfloat_type}}
-      _ -> {:error, {:unsupported_expression, expr}}
+      :boolean when is_boolean(value) ->
+        ctor = if value, do: :True, else: :False
+        {:ok, {:ctor, ctor, []}, Kernel.bool_type_value(Context.signature(ctx))}
+
+      :integer when is_integer(value) ->
+        {:ok, {:int_lit, value}, {:vint_type}}
+
+      :float when is_float(value) ->
+        {:ok, {:float_lit, value}, {:vfloat_type}}
+
+      _ ->
+        {:error, {:unsupported_expression, expr}}
     end
   end
 
-  # `if c then t else e` — the dependent Boolean eliminator (bool_elim). In
+  # `if c then t else e` — lowered to a `:case` on the inductive `Bool`. In
   # inference mode we infer the `then` branch's type T, check `else` against T,
   # and use the constant motive `λ_:Bool. T` (both branches share the type T).
   def elaborate_expr_typed({:conditional, _meta, [c, t, e]}, names, ctx, env) do
-    with {:ok, c_core} <- elaborate_expr_checked(c, {:bool_type}, names, ctx, env),
+    with {:ok, c_core} <- elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env),
          {:ok, t_core, t_type} <- elaborate_expr_typed(t, names, ctx, env),
          t_type_core = Quote.reify(t_type, Context.length(ctx)),
          {:ok, e_core} <- elaborate_expr_checked(e, t_type_core, names, ctx, env) do
-      motive = {:lam, {:bool_type}, Cure.Core.Term.shift(t_type_core, 1, 0)}
-      {:ok, {:bool_elim, c_core, motive, t_core, e_core}, t_type}
+      {:ok, bool_case(c_core, t_type_core, t_core, e_core, ctx), t_type}
     end
   end
 
@@ -600,13 +607,12 @@ defmodule Cure.Elab.Elaborator do
   # `if c then t else e` checked against the expected type: both branches are
   # checked at `expected_core` under a constant motive `λ_:Bool. expected_core`
   # (shifted past the fresh Bool binder). The kernel re-checks the assembled
-  # bool_elim, so nothing here is trusted.
+  # `:case`, so nothing here is trusted.
   def elaborate_expr_checked({:conditional, _meta, [c, t, e]}, expected_core, names, ctx, env) do
-    with {:ok, c_core} <- elaborate_expr_checked(c, {:bool_type}, names, ctx, env),
+    with {:ok, c_core} <- elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env),
          {:ok, t_core} <- elaborate_expr_checked(t, expected_core, names, ctx, env),
          {:ok, e_core} <- elaborate_expr_checked(e, expected_core, names, ctx, env) do
-      motive = {:lam, {:bool_type}, Cure.Core.Term.shift(expected_core, 1, 0)}
-      {:ok, {:bool_elim, c_core, motive, t_core, e_core}}
+      {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
     end
   end
 
@@ -1899,11 +1905,11 @@ defmodule Cure.Elab.Elaborator do
       guard ->
         with {:ok, guard_expr} <- guard_bind(scrut_expr, pat, guard),
              {:ok, body_expr} <- guard_bind(scrut_expr, pat, single_body(body)),
-             {:ok, test} <- elaborate_expr_checked(guard_expr, {:bool_type}, names, ctx, env),
+             {:ok, test} <-
+               elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env),
              {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
              {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env) do
-          motive = {:lam, {:bool_type}, Cure.Core.Term.shift(expected, 1, 0)}
-          {:ok, {:bool_elim, test, motive, tt, ff}}
+          {:ok, bool_case(test, expected, tt, ff, ctx)}
         end
     end
   end
@@ -1947,9 +1953,8 @@ defmodule Cure.Elab.Elaborator do
   # assembled chain. Returns `:not_applicable` for a non-primitive scrutinee or
   # arms that are not a clean literal/catch-all list (the ordinary path handles it).
   defp try_literal_match(scrut_expr, arms, scrut_term, scrut_type, expected, names, ctx, env) do
-    case primitive_scrut_kind(scrut_type) do
+    case primitive_scrut_kind(scrut_type, Context.signature(ctx)) do
       {:ok, prim} ->
-        motive = {:lam, {:bool_type}, Cure.Core.Term.shift(expected, 1, 0)}
         pats = Enum.map(arms, fn {:match_arm, m, b} -> {Keyword.fetch!(m, :pattern), single_body(b)} end)
 
         cond do
@@ -1958,11 +1963,11 @@ defmodule Cure.Elab.Elaborator do
 
             with {:ok, t_core} <- elaborate_expr_checked(tb, expected, names, ctx, env),
                  {:ok, f_core} <- elaborate_expr_checked(fb, expected, names, ctx, env) do
-              {:ok, {:bool_elim, scrut_term, motive, t_core, f_core}}
+              {:ok, bool_case(scrut_term, expected, t_core, f_core, ctx)}
             end
 
           literal_chain?(pats, prim) ->
-            literal_chain(scrut_expr, scrut_term, prim, motive, pats, expected, names, ctx, env)
+            literal_chain(scrut_expr, scrut_term, prim, pats, expected, names, ctx, env)
 
           true ->
             :not_applicable
@@ -1973,10 +1978,32 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp primitive_scrut_kind({:vbool_type}), do: {:ok, :bool}
-  defp primitive_scrut_kind({:vint_type}), do: {:ok, :int}
-  defp primitive_scrut_kind({:vfloat_type}), do: {:ok, :float}
-  defp primitive_scrut_kind(_), do: :error
+  # The Core **term** for the canonical Bool inductive (the term-level counterpart
+  # of Kernel.bool_type_value/1); `eval(bool_type_term(sig), _) == bool_type_value(sig)`.
+  defp bool_type_term(sig) do
+    fid = Inductive.builtin(sig, :bool) || raise "builtin :bool not seeded (bootstrap/load-order bug)"
+    {:data, fid, [], []}
+  end
+
+  # Lower a two-way Bool decision to a `:case` on the inductive Bool, with the
+  # constant motive `λ_:Bool. motive_body_type` (both branches share the type).
+  # The kernel re-checks the assembled `:case`, so nothing built here is trusted.
+  defp bool_case(scrut_term, motive_body_type, tt, ff, ctx) do
+    bool_ty = bool_type_term(Context.signature(ctx))
+    motive = {:lam, bool_ty, Cure.Core.Term.shift(motive_body_type, 1, 0)}
+    {:case, scrut_term, motive, [{:True, 0, tt}, {:False, 0, ff}]}
+  end
+
+  # A Bool scrutinee is now the inductive family (`{:vdata, :Bool, []}`), resolved
+  # via the registry; Int/Float stay primitive type-values.
+  defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
+  defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
+
+  defp primitive_scrut_kind({:vdata, fid, []}, sig) do
+    if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error
+  end
+
+  defp primitive_scrut_kind(_type, _sig), do: :error
 
   defp bool_exhaustive?([{p1, _}, {p2, _}]),
     do: Enum.sort([bool_pat_value(p1), bool_pat_value(p2)]) == [false, true]
@@ -2008,10 +2035,10 @@ defmodule Cure.Elab.Elaborator do
 
   defp lit_core(v, :int), do: {:int_lit, v}
   defp lit_core(v, :float), do: {:float_lit, v}
-  defp lit_core(v, :bool), do: {:bool_lit, v}
+  defp lit_core(v, :bool), do: {:ctor, if(v, do: :True, else: :False), []}
 
   # The final (catch-all) arm: the chain's innermost default branch.
-  defp literal_chain(scrut_expr, _scrut_term, _prim, _motive, [{pat, body}], expected, names, ctx, env) do
+  defp literal_chain(scrut_expr, _scrut_term, _prim, [{pat, body}], expected, names, ctx, env) do
     case pat do
       {:variable, _m, "_"} ->
         elaborate_expr_checked(body, expected, names, ctx, env)
@@ -2025,14 +2052,15 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A literal arm: test the scrutinee against the literal, take this body if equal,
-  # else recurse on the remaining arms.
-  defp literal_chain(scrut_expr, scrut_term, prim, motive, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
+  # A literal arm: test the scrutinee against the literal (a `:prim :eq` yielding
+  # the inductive Bool), take this body if equal, else recurse on the rest — the
+  # test scrutinised by a `:case` on Bool.
+  defp literal_chain(scrut_expr, scrut_term, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
-           literal_chain(scrut_expr, scrut_term, prim, motive, rest, expected, names, ctx, env) do
+           literal_chain(scrut_expr, scrut_term, prim, rest, expected, names, ctx, env) do
       test = {:prim, :eq, [scrut_term, lit_core(v, prim)]}
-      {:ok, {:bool_elim, test, motive, body_core, rest_core}}
+      {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
   end
 
@@ -3443,7 +3471,7 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr({:literal, meta, value} = expr, _scope, _env) do
     case Keyword.get(meta, :subtype) do
-      :boolean when is_boolean(value) -> {:ok, {:bool_lit, value}}
+      :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
       :integer when is_integer(value) -> {:ok, {:int_lit, value}}
       :float when is_float(value) -> {:ok, {:float_lit, value}}
       _ -> {:error, {:unsupported_expression, expr}}

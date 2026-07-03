@@ -811,9 +811,10 @@ defmodule Cure.Elab.Declarations do
   end
 
   # The built-in primitive types that map to Core type-constants (not opaque
-  # globals), so a primitive scrutinee (`match n : Int`) and literal patterns
-  # can be eliminated via `bool_elim` + `{:prim}`.
-  defp primitive_type("Bool"), do: {:bool_type}
+  # globals). `Int`/`Float` stay irreducibly primitive (BEAM machine types).
+  # `Bool` is NO LONGER here: it is a real inductive family (Std.Bool, seeded
+  # into every env0), so a `Bool` annotation falls through to the ordinary
+  # family lookup `{:data, :Bool, [], []}` — exactly as `Nat` always has.
   defp primitive_type("Int"), do: {:int_type}
   defp primitive_type("Float"), do: {:float_type}
   defp primitive_type(_), do: nil

@@ -183,10 +183,6 @@ defmodule Cure.Core.Normalise do
     {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
   end
 
-  defp nf_neutral({:nbool_elim, neutral, motive, tt, ff}, sig, depth, opts) do
-    {:nbool_elim, nf_neutral(neutral, sig, depth, opts), motive, tt, ff}
-  end
-
   defp nf_neutral(neutral, _sig, _depth, _opts), do: neutral
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth)
@@ -237,16 +233,6 @@ defmodule Cure.Core.Normalise do
 
           _ ->
             :stuck
-        end
-
-      # ι on bool_elim: mirrors `eval({:bool_elim,…})` — whnf the scrutinee and,
-      # when it is a concrete boolean, fire the matching branch (which binds
-      # nothing, so its closure evaluates directly in its captured env).
-      {:nbool_elim, scrut, _motive, {:closure, tenv, tbody}, {:closure, fenv, fbody}} ->
-        case whnf_value({:vneutral, scrut}, sig, opts) do
-          {:vbool, true} -> {:ok, reapply(args, spend_fuel(Eval.eval(tbody, tenv)))}
-          {:vbool, false} -> {:ok, reapply(args, spend_fuel(Eval.eval(fbody, fenv)))}
-          _ -> :stuck
         end
 
       # ι on projections: mirrors `vfst`/`vsnd` — the pair's first/second field.

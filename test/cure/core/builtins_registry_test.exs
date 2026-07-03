@@ -11,10 +11,16 @@ defmodule Cure.Core.BuiltinsRegistryTest do
     assert Inductive.builtin(Env.empty(), :bool) == nil
   end
 
-  test "a second registration of the same key is a hard error" do
+  test "re-registering the same key to a DIFFERENT family is a hard error" do
     env = Inductive.register_builtin(Env.empty(), :bool, :Bool)
+
     assert_raise ArgumentError, ~r/already bound/, fn ->
       Inductive.register_builtin(env, :bool, :OtherBool)
     end
+  end
+
+  test "re-registering the same key to the SAME family is an idempotent no-op" do
+    env = Inductive.register_builtin(Env.empty(), :bool, :Bool)
+    assert Inductive.register_builtin(env, :bool, :Bool) == env
   end
 end

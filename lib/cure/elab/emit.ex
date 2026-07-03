@@ -137,9 +137,15 @@ defmodule Cure.Elab.Emit do
   end
 
   defp lower(env, {:ctor, name, args}, ctx) do
-    case Enum.map(args, &lower(env, &1, ctx)) do
-      [] -> {:atom, @line, name}
-      forms -> {:tuple, @line, [{:atom, @line, name} | forms]}
+    cond do
+      args == [] and bool_ctor?(env, name) ->
+        {:atom, @line, bool_atom(name)}
+
+      true ->
+        case Enum.map(args, &lower(env, &1, ctx)) do
+          [] -> {:atom, @line, name}
+          forms -> {:tuple, @line, [{:atom, @line, name} | forms]}
+        end
     end
   end
 
@@ -147,17 +153,6 @@ defmodule Cure.Elab.Emit do
     {:case, @line, lower(env, scrut, ctx), Enum.map(branches, &branch_clause(env, &1, ctx))}
   end
 
-  # Dependent Boolean elimination lowers to a BEAM `case` on the boolean atom; the
-  # motive is type-level and erased. Branches bind nothing.
-  defp lower(env, {:bool_elim, scrut, _motive, tt, ff}, ctx) do
-    {:case, @line, lower(env, scrut, ctx),
-     [
-       {:clause, @line, [{:atom, @line, true}], [], [lower(env, tt, ctx)]},
-       {:clause, @line, [{:atom, @line, false}], [], [lower(env, ff, ctx)]}
-     ]}
-  end
-
-  defp lower(_env, {:bool_lit, b}, _ctx), do: {:atom, @line, b}
   defp lower(_env, {:int_lit, n}, _ctx), do: {:integer, @line, n}
   defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
 
@@ -271,7 +266,7 @@ defmodule Cure.Elab.Emit do
 
     pattern =
       case present do
-        [] -> {:atom, @line, cname}
+        [] -> {:atom, @line, bool_atom_or_self(env, cname)}
         _ -> {:tuple, @line, [{:atom, @line, cname} | present]}
       end
 
@@ -282,4 +277,17 @@ defmodule Cure.Elab.Emit do
 
   defp indices(0), do: []
   defp indices(arity), do: Enum.to_list(0..(arity - 1))
+
+  # The canonical Bool inductive erases to native BEAM booleans: its nullary
+  # constructors `True`/`False` lower to the atoms `true`/`false` (matching what
+  # `{:prim}` comparisons already return at runtime), and a `:case` on Bool tests
+  # those same lowercase atoms.
+  defp bool_ctor?(env, name), do: Inductive.builtin(env, :bool) == Inductive.ctor_family(env, name)
+
+  defp bool_atom(:True), do: true
+  defp bool_atom(:False), do: false
+
+  defp bool_atom_or_self(env, name) do
+    if bool_ctor?(env, name), do: bool_atom(name), else: name
+  end
 end

@@ -50,11 +50,23 @@ defmodule Cure.Core.Builtins do
   (the prelude compile obtains the same families via its `@builtin` declarations;
   Task 4 pins the two representations equal).
   """
-  @spec seed(Env.t()) :: Env.t()
-  def seed(%Env{} = env) do
+  @spec seed(Env.t(), MapSet.t()) :: Env.t()
+  def seed(%Env{} = env, exclude \\ MapSet.new()) do
     env
-    |> declare_and_register(:bool, bool_family(), bool_ctors())
-    |> declare_and_register(:nat, nat_family(), nat_ctors())
+    |> maybe_seed(:bool, bool_family(), bool_ctors(), exclude)
+    |> maybe_seed(:nat, nat_family(), nat_ctors(), exclude)
+  end
+
+  # A builtin whose bare family name is locally declared by the compiled module
+  # is NOT seeded: the module's own declaration is the canonical family, and
+  # pre-seeding a same-named family would leave the seed's constructors in
+  # `ctor_to_family` (so a `match` on the local family reads as non-exhaustive).
+  defp maybe_seed(env, key, family, ctors, exclude) do
+    if MapSet.member?(exclude, family.name) do
+      env
+    else
+      declare_and_register(env, key, family, ctors)
+    end
   end
 
   defp declare_and_register(env, key, family, ctors) do

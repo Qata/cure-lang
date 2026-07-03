@@ -115,10 +115,23 @@ defmodule Cure.Core.Inductive do
           quantities: [quantity()]
         }
 
-  @doc "Bind a builtin key to a family-id. Hard error on re-registration (single-registration invariant)."
+  @doc """
+  Bind a builtin key to a family-id. Re-binding the key to the SAME family-id is
+  an idempotent no-op (the auto-seed + a prelude source's own self-registration
+  both target the same canonical family); re-binding to a DIFFERENT family-id is
+  a hard error (the single-registration invariant that stops a user module from
+  hijacking a builtin key).
+  """
   @spec register_builtin(Env.t(), atom(), atom()) :: Env.t()
-  def register_builtin(%Env{builtins: b}, key, _family_id) when is_map_key(b, key) do
-    raise ArgumentError, "builtin key #{inspect(key)} already bound to #{inspect(Map.fetch!(b, key))}"
+  def register_builtin(%Env{builtins: b} = env, key, family_id) when is_map_key(b, key) do
+    case Map.fetch!(b, key) do
+      ^family_id ->
+        env
+
+      other ->
+        raise ArgumentError,
+              "builtin key #{inspect(key)} already bound to #{inspect(other)} (cannot rebind to #{inspect(family_id)})"
+    end
   end
 
   def register_builtin(%Env{} = env, key, family_id) do

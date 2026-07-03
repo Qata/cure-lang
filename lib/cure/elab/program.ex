@@ -27,10 +27,32 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast) do
-    with {:ok, env0} <- import_env(imports(ast), MapSet.new()),
+    with {:ok, imported} <- import_env(imports(ast), MapSet.new()),
+         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         env0 = merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
       TotalityClosure.certify_type_level(env)
     end
+  end
+
+  # Family/type names the module declares itself. A builtin (Bool/Nat) is NOT
+  # seeded into env0 when the module declares its own same-named type — the local
+  # declaration is canonical, and seeding a look-alike would pollute its ctor set.
+  defp declared_type_names(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(fn
+      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
+        case Keyword.get(meta, :name) do
+          n when is_binary(n) -> [String.to_atom(n)]
+          n when is_atom(n) and not is_nil(n) -> [n]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+    |> MapSet.new()
   end
 
   # A source is a designated prelude source iff its own declared module name is
@@ -273,7 +295,8 @@ defmodule Cure.Elab.Program do
       ctors: Map.merge(left.ctors, right.ctors),
       ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
       defs: Map.merge(left.defs, right.defs),
-      certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new())
+      certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
+      builtins: Map.merge(left.builtins, right.builtins)
     }
   end
 

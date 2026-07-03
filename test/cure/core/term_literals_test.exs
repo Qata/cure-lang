@@ -23,9 +23,6 @@ defmodule Cure.Core.TermLiteralsTest do
     {:int_type},
     {:int_lit, 3},
     {:int_lit, -7},
-    {:bool_type},
-    {:bool_lit, true},
-    {:bool_lit, false},
     {:float_type},
     {:float_lit, 1.5}
   ]
@@ -46,8 +43,8 @@ defmodule Cure.Core.TermLiteralsTest do
   test "shift/3 and subst/3 traverse literals nested inside compound terms" do
     nested = {:ctor, :wrapn, [{:int_lit, 3}, {:var, 0}]}
     assert Term.shift(nested, 2, 0) == {:ctor, :wrapn, [{:int_lit, 3}, {:var, 2}]}
-    assert Term.subst(nested, 0, {:bool_lit, true}) ==
-             {:ctor, :wrapn, [{:int_lit, 3}, {:bool_lit, true}]}
+    assert Term.subst(nested, 0, {:int_lit, 5}) ==
+             {:ctor, :wrapn, [{:int_lit, 3}, {:int_lit, 5}]}
   end
 
   test "term?/1 accepts every literal/type-constant form (well-typed payloads)" do
@@ -57,7 +54,6 @@ defmodule Cure.Core.TermLiteralsTest do
 
     # shape discipline: wrong payload types are still rejected
     refute Term.term?({:int_lit, :not_an_int})
-    refute Term.term?({:bool_lit, 1})
     refute Term.term?({:float_lit, 2})
   end
 

@@ -57,8 +57,6 @@ defmodule Cure.Core.Kernel do
   # numeric-polymorphic over Int or Float; connectives are on Bool).
   def infer(_ctx, {:int_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:int_lit, _n}), do: {:ok, {:vint_type}}
-  def infer(_ctx, {:bool_type}), do: {:ok, {:vtype, 0}}
-  def infer(_ctx, {:bool_lit, _b}), do: {:ok, {:vbool_type}}
   def infer(_ctx, {:float_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:float_lit, _f}), do: {:ok, {:vfloat_type}}
 
@@ -241,26 +239,6 @@ defmodule Cure.Core.Kernel do
 
       {:error, _} = err ->
         err
-    end
-  end
-
-  # Dependent Boolean elimination (Bool.rec, §minimal-primitive-eliminator).
-  # `motive : Bool → Type`; the branches are checked at the motive applied to the
-  # respective literal, and the result type is the motive at the scrutinee value.
-  # Total by construction: both branches are mandatory, so no coverage rule is
-  # needed. The result mirrors `:case` — `motive @ scrut` — so when the scrutinee
-  # is neutral the type is a well-formed stuck application.
-  def infer(ctx, {:bool_elim, scrut, motive, tt, ff}) do
-    with :ok <- check(ctx, scrut, {:vbool_type}),
-         {:ok, motive_value} <- check_bool_motive_wf(ctx, motive) do
-      exp_tt = Eval.apply(motive_value, {:vbool, true})
-      exp_ff = Eval.apply(motive_value, {:vbool, false})
-
-      with :ok <- check(ctx, tt, exp_tt),
-           :ok <- check(ctx, ff, exp_ff) do
-        scrut_value = Eval.eval(scrut, Context.env(ctx))
-        {:ok, Eval.apply(motive_value, scrut_value)}
-      end
     end
   end
 
@@ -629,33 +607,6 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # Well-formedness for a `bool_elim` motive: it must be a function `Bool → Type`.
-  # We infer the motive term's type and demand it be a Π whose domain converts to
-  # Bool and whose codomain (at a fresh argument) is a sort. Returns the evaluated
-  # motive value for the caller to apply at `true`/`false`/the scrutinee.
-  defp check_bool_motive_wf(ctx, motive) do
-    case infer(ctx, motive) do
-      {:ok, {:vpi, dom, cod_closure}} ->
-        sig = Context.signature(ctx)
-        depth = Context.length(ctx)
-
-        if Conv.conv_values?(dom, {:vbool_type}, depth, sig) do
-          case Eval.apply_closure(cod_closure, {:vneutral, {:nvar, depth}}) do
-            {:vtype, _} -> {:ok, Eval.eval(motive, Context.env(ctx))}
-            _ -> {:error, :bool_motive_not_type_valued}
-          end
-        else
-          {:error, :bool_motive_domain_not_bool}
-        end
-
-      {:ok, _} ->
-        {:error, :bool_motive_not_function}
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
   defp infer_type_value_sort(_ctx, {:vtype, level}), do: Universe.succ(level)
 
   # A neutral is a valid type of sort `sublevel` iff its own declared type in
@@ -673,7 +624,6 @@ defmodule Cure.Core.Kernel do
   end
 
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
-  defp infer_type_value_sort(_ctx, {:vbool_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
 
   defp infer_type_value_sort(ctx, {:vdata, name, _args}) do
@@ -911,10 +861,8 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:pi, _, _}), do: true
   defp rigid_index?({:sigma, _, _}), do: true
   defp rigid_index?({:int_type}), do: true
-  defp rigid_index?({:bool_type}), do: true
   defp rigid_index?({:float_type}), do: true
   defp rigid_index?({:int_lit, _}), do: true
-  defp rigid_index?({:bool_lit, _}), do: true
   defp rigid_index?({:float_lit, _}), do: true
   defp rigid_index?(_), do: false
 
@@ -1038,20 +986,33 @@ defmodule Cure.Core.Kernel do
   end
 
   # Ordered comparison: numeric operands, boolean result.
+  @doc """
+  The type **value** denoting the canonical `Bool` inductive (`{:vdata, :Bool, []}`).
+  Bool has no params/indices, so this is exactly what `infer({:ctor, :True/:False, []})`
+  and `eval({:data, :Bool, [], []})` both produce. Public: the elaborator's
+  literal/`:case` lowering shares this single closed form (no drift surface).
+  """
+  @spec bool_type_value(Env.t()) :: Cure.Core.Value.t()
+  def bool_type_value(sig) do
+    fid = Inductive.builtin(sig, :bool) || raise "builtin :bool not seeded (bootstrap/load-order bug)"
+    {:vdata, fid, []}
+  end
+
   defp infer_prim(ctx, op, [a, b]) when op in [:lt, :le, :gt, :ge] do
     with {:ok, ta} <- infer(ctx, a),
          true <- numeric_type?(ta),
          :ok <- check(ctx, b, ta) do
-      {:ok, {:vbool_type}}
+      {:ok, bool_type_value(Context.signature(ctx))}
     else
       _ -> {:error, {:prim_type, op}}
     end
   end
 
-  # Equality: any shared type, boolean result.
+  # Equality: any shared type, boolean result. (Accepts two Bool-typed operands
+  # too — see Eval.fold's Bool-operand equality clause.)
   defp infer_prim(ctx, op, [a, b]) when op in [:eq, :ne] do
     with {:ok, ta} <- infer(ctx, a), :ok <- check(ctx, b, ta) do
-      {:ok, {:vbool_type}}
+      {:ok, bool_type_value(Context.signature(ctx))}
     else
       _ -> {:error, {:prim_type, op}}
     end
@@ -1059,16 +1020,20 @@ defmodule Cure.Core.Kernel do
 
   # Boolean connectives.
   defp infer_prim(ctx, op, [a, b]) when op in [:and, :or] do
-    with :ok <- check(ctx, a, {:vbool_type}), :ok <- check(ctx, b, {:vbool_type}) do
-      {:ok, {:vbool_type}}
+    bool = bool_type_value(Context.signature(ctx))
+
+    with :ok <- check(ctx, a, bool), :ok <- check(ctx, b, bool) do
+      {:ok, bool}
     else
       _ -> {:error, {:prim_type, op}}
     end
   end
 
   defp infer_prim(ctx, :not, [a]) do
-    with :ok <- check(ctx, a, {:vbool_type}) do
-      {:ok, {:vbool_type}}
+    bool = bool_type_value(Context.signature(ctx))
+
+    with :ok <- check(ctx, a, bool) do
+      {:ok, bool}
     else
       _ -> {:error, {:prim_type, :not}}
     end

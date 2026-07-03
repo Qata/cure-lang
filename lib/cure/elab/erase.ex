@@ -76,9 +76,6 @@ defmodule Cure.Elab.Erase do
     {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
   end
 
-  def erase(env, {:bool_elim, s, m, tt, ff}),
-    do: {:bool_elim, erase(env, s), erase(env, m), erase(env, tt), erase(env, ff)}
-
   def erase(_env, term), do: term
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
@@ -102,9 +99,6 @@ defmodule Cure.Elab.Erase do
 
   def has_hole?({:case, s, m, branches}),
     do: has_hole?(s) or has_hole?(m) or Enum.any?(branches, fn {_c, _ar, b} -> has_hole?(b) end)
-
-  def has_hole?({:bool_elim, s, m, tt, ff}),
-    do: has_hole?(s) or has_hole?(m) or has_hole?(tt) or has_hole?(ff)
 
   def has_hole?(_term), do: false
 end

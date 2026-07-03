@@ -73,8 +73,6 @@ defmodule Cure.Core.Conv do
 
   defp conv_struct?({:vint_type}, {:vint_type}, _depth, _sig), do: true
   defp conv_struct?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
-  defp conv_struct?({:vbool_type}, {:vbool_type}, _depth, _sig), do: true
-  defp conv_struct?({:vbool, a}, {:vbool, b}, _depth, _sig), do: a == b
   defp conv_struct?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp conv_struct?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 
@@ -149,20 +147,6 @@ defmodule Cure.Core.Conv do
       conv_branches?(brs1, brs2, depth, sig)
   end
 
-  # Stuck Boolean elimination: scrutinee up to conversion (like the case scrutinee
-  # above), then the motive and both branch bodies pairwise. The motive is a genuine
-  # `Bool → _` λ, so it compares via `conv_closure?` exactly as `:ncase`'s motive
-  # does. `tt`/`ff` bind NOTHING, so they must be compared with NO fresh binder —
-  # `conv_closure?`'s prepend would drop env index 0 (masking a captured variable to
-  # the fresh var on both sides) and equate distinct branch values. We reuse the
-  # arity-0 path `:ncase` uses for nullary branches (`conv_branch_bodies?/5`, whose
-  # `fresh` list is empty at arity 0), which prepends nothing and compares at `depth`.
-  defp conv_neutral?({:nbool_elim, n1, m1, t1, f1}, {:nbool_elim, n2, m2, t2, f2}, depth, sig) do
-    conv_val?({:vneutral, n1}, {:vneutral, n2}, depth, sig) and
-      conv_closure?(m1, m2, depth, sig) and conv_branch_bodies?(0, t1, t2, depth, sig) and
-      conv_branch_bodies?(0, f1, f2, depth, sig)
-  end
-
   defp conv_neutral?(_, _, _, _), do: false
 
   defp conv_branches?(brs1, brs2, depth, sig) do
@@ -203,8 +187,6 @@ defmodule Cure.Core.Conv do
   defp same_value_no_delta?({:vtype, l1}, {:vtype, l2}, _depth), do: l1 == l2
   defp same_value_no_delta?({:vint_type}, {:vint_type}, _depth), do: true
   defp same_value_no_delta?({:vint, a}, {:vint, b}, _depth), do: a == b
-  defp same_value_no_delta?({:vbool_type}, {:vbool_type}, _depth), do: true
-  defp same_value_no_delta?({:vbool, a}, {:vbool, b}, _depth), do: a == b
   defp same_value_no_delta?({:vfloat_type}, {:vfloat_type}, _depth), do: true
   defp same_value_no_delta?({:vfloat, a}, {:vfloat, b}, _depth), do: a == b
 
