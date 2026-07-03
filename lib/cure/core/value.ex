@@ -69,6 +69,9 @@ defmodule Cure.Core.Value do
   def neutral?({:ncase, n, motive_cl, branches}),
     do: neutral?(n) and closure?(motive_cl) and branch_closures?(branches)
 
+  def neutral?({:nbool_elim, n, motive_cl, tt_cl, ff_cl}),
+    do: neutral?(n) and closure?(motive_cl) and closure?(tt_cl) and closure?(ff_cl)
+
   def neutral?(_), do: false
 
   @doc "True when `closure` is `{:closure, env, term}` with an env of values and a body term."

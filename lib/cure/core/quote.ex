@@ -73,6 +73,11 @@ defmodule Cure.Core.Quote do
   defp reify_neutral({:nprim, op, args}, depth),
     do: {:prim, op, Enum.map(args, &reify(&1, depth))}
 
+  defp reify_neutral({:nbool_elim, neutral, motive_cl, tt_cl, ff_cl}, depth) do
+    {:bool_elim, reify_neutral(neutral, depth), reify(instantiate(motive_cl), depth),
+     reify(instantiate(tt_cl), depth), reify(instantiate(ff_cl), depth)}
+  end
+
   defp reify_neutral({:ncase, neutral, motive_cl, branch_cls}, depth) do
     scrut = reify_neutral(neutral, depth)
     motive = reify(instantiate(motive_cl), depth)

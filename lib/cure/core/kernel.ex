@@ -244,6 +244,26 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # Dependent Boolean elimination (Bool.rec, §minimal-primitive-eliminator).
+  # `motive : Bool → Type`; the branches are checked at the motive applied to the
+  # respective literal, and the result type is the motive at the scrutinee value.
+  # Total by construction: both branches are mandatory, so no coverage rule is
+  # needed. The result mirrors `:case` — `motive @ scrut` — so when the scrutinee
+  # is neutral the type is a well-formed stuck application.
+  def infer(ctx, {:bool_elim, scrut, motive, tt, ff}) do
+    with :ok <- check(ctx, scrut, {:vbool_type}),
+         {:ok, motive_value} <- check_bool_motive_wf(ctx, motive) do
+      exp_tt = Eval.apply(motive_value, {:vbool, true})
+      exp_ff = Eval.apply(motive_value, {:vbool, false})
+
+      with :ok <- check(ctx, tt, exp_tt),
+           :ok <- check(ctx, ff, exp_ff) do
+        scrut_value = Eval.eval(scrut, Context.env(ctx))
+        {:ok, Eval.apply(motive_value, scrut_value)}
+      end
+    end
+  end
+
   @doc "Check `term` against the expected type value in `ctx`."
   @spec check(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) :: :ok | {:error, term()}
   # Bidirectional rule: a lambda is checked against a Π, propagating the expected
@@ -606,6 +626,33 @@ defmodule Cure.Core.Kernel do
     case infer_type_value_sort(ctx_motive, body_value) do
       {:ok, _level} -> :ok
       _ -> {:error, :bad_motive}
+    end
+  end
+
+  # Well-formedness for a `bool_elim` motive: it must be a function `Bool → Type`.
+  # We infer the motive term's type and demand it be a Π whose domain converts to
+  # Bool and whose codomain (at a fresh argument) is a sort. Returns the evaluated
+  # motive value for the caller to apply at `true`/`false`/the scrutinee.
+  defp check_bool_motive_wf(ctx, motive) do
+    case infer(ctx, motive) do
+      {:ok, {:vpi, dom, cod_closure}} ->
+        sig = Context.signature(ctx)
+        depth = Context.length(ctx)
+
+        if Conv.conv_values?(dom, {:vbool_type}, depth, sig) do
+          case Eval.apply_closure(cod_closure, {:vneutral, {:nvar, depth}}) do
+            {:vtype, _} -> {:ok, Eval.eval(motive, Context.env(ctx))}
+            _ -> {:error, :bool_motive_not_type_valued}
+          end
+        else
+          {:error, :bool_motive_domain_not_bool}
+        end
+
+      {:ok, _} ->
+        {:error, :bool_motive_not_function}
+
+      {:error, _} = err ->
+        err
     end
   end
 

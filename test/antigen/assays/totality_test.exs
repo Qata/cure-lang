@@ -15,6 +15,16 @@ defmodule Antigen.Assays.TotalityTest do
     assert :ok == A.run(G.structural_terminating())
   end
 
+  test "bool_elim totality-hole guard: a self-call hidden in a branch is NOT certified" do
+    # Before certificate.ex's :bool_elim clauses, `calls?` missed the branch
+    # self-call and this loop was wrongly certified total (soundness infection).
+    assert :ok == A.run(G.diverging_bool_elim_branch())
+  end
+
+  test "bool_elim anti-over-correction: a decreasing self-call inside a branch still certifies" do
+    assert :ok == A.run(G.terminating_bool_elim_branch())
+  end
+
   # -- W1: the adversarial diverging set (pre-port banking spec §4 W1) --------
   # Every one must replay :ok — i.e. the certifier certifies NO focus member.
   # These are the Lee–Jones–Ben-Amram discriminators, banked BEFORE the P1

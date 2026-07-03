@@ -74,6 +74,68 @@ defmodule Antigen.Generators.Totality do
     )
   end
 
+  @doc """
+  A non-total def whose non-decreasing self-call is hidden inside a `bool_elim`
+  branch: `f = λn:Int. bool_elim (n == 0) (λ_.Int) 0 (f n)`. Diverges for every
+  `n ≠ 0` (`f n → f n → …`). The self-call passes `n` unchanged, so it is not
+  structurally decreasing. Label `:diverging`.
+
+  This is the permanent regression guard for the `bool_elim` totality hole: the
+  structural certifier's `calls?`/`guarded_node?` traversals *must* descend into
+  both `bool_elim` branches. Before those clauses were added, `calls?` returned
+  the catch-all `false` — the self-call was invisible, `terminating?` reported a
+  spurious `true`, and this loop would have been certified total (a soundness
+  infection). Kept forever.
+  """
+  @spec diverging_bool_elim_branch() :: Challenge.t()
+  def diverging_bool_elim_branch do
+    ty = {:pi, {:int_type}, {:int_type}}
+
+    body =
+      {:lam, {:int_type},
+       {:bool_elim, {:prim, :eq, [{:var, 0}, {:int_lit, 0}]}, {:lam, {:bool_type}, {:int_type}},
+        {:int_lit, 0}, {:app, {:global, :f}, {:var, 0}}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{defs: [%{name: :f, type: ty, body: body}], focus: [:f]},
+      note: "self-call hidden in a bool_elim branch (bool_elim totality-hole guard)"
+    )
+  end
+
+  @doc """
+  A genuinely total structural recursion whose decreasing self-call sits *inside*
+  a `bool_elim` branch: `h = λn:Nat. case n of {Z -> Z; S y -> bool_elim true
+  (λ_.Nat) (h y) (h y)}`. Each self-call passes `y`, the `S`-branch-bound subterm,
+  so it is structurally smaller. Label `:terminating`.
+
+  Companion to `diverging_bool_elim_branch/0`: it guards against the certifier
+  *over*-correcting — the new `guarded_node?` clause for `bool_elim` must *recurse*
+  into the branches carrying the current `root`/`smaller`, not blanket-reject (or
+  blanket-accept) a term that contains one.
+  """
+  @spec terminating_bool_elim_branch() :: Challenge.t()
+  def terminating_bool_elim_branch do
+    inner =
+      {:bool_elim, {:bool_lit, true}, {:lam, {:bool_type}, @nat},
+       {:app, {:global, :h}, {:var, 0}}, {:app, {:global, :h}, {:var, 0}}}
+
+    body =
+      {:lam, @nat,
+       {:case, {:var, 0}, {:lam, @nat, @nat},
+        [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, inner}]}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
+      note: "structural recursion with the decreasing self-call inside a bool_elim branch"
+    )
+  end
+
   # -- W1: adversarial diverging set (pre-port banking spec §4 W1) ------------
   # Each is diverging BY CONSTRUCTION (argument in @doc). All are rejected by
   # today's conservative certifier (mutual cycles rejected wholesale; the
