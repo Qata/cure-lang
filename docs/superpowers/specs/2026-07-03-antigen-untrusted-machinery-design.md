@@ -167,7 +167,17 @@ the existing `Totality` assay + `Normalise` halting.
 **Target:** `Cure.SMT.Solver.check_sat/2,3`, `prove_implication/4`,
 `check_refinement_subtype/4`. **Framed by the locked decision that Z3 is OUT of
 the TCB — the SMT layer is an untrusted lint, never a proof.** So the property is
-*lint soundness*, not completeness:
+*lint soundness*, not completeness.
+
+**Z3 is a guaranteed part of the toolchain** (it ships with the language, not an
+optional test-env dependency), so this vertical is **unconditional** — never
+skipped/gated on solver availability. The only implementation concern is solver
+*nondeterminism* (timeouts → `:unknown`): the assay treats `:unknown`/timeout as
+a legal, non-infecting answer and pins determinism with a fixed solver config
+and a committed fuel/timeout budget, exactly as the other assays fix their
+kernel fuel constants — so a banked antibody replays identically.
+
+Properties:
 
 - **Never discharge a false obligation (soundness):** `prove_implication(p, q, …)`
   returning `true` (or `check_sat` returning `:unsat` for a negated goal) must
@@ -252,9 +262,11 @@ oracle, so they are a documented follow-on, not a Phase-1 infection source).
    bridge-translatable ast fragment. Acceptable, or should we also add an
    intrinsic-law-only assay over the *untranslatable* fragment (idempotence /
    monotone-size hold there too, with no oracle)?
-3. **SMT vertical inclusion.** V6 depends on Z3 being available in the test
-   environment (it is an optional lint). Keep V6 in the roadmap gated on Z3
-   presence, or drop it entirely as environment-fragile?
+3. **SMT vertical inclusion.** ✅ **RESOLVED — keep V6, unconditional.** Z3 is a
+   guaranteed part of the language toolchain (always present), so V6 is *not*
+   gated on solver availability. Solver nondeterminism (timeouts) is absorbed by
+   treating `:unknown` as legal and pinning a fixed solver config + committed
+   timeout budget (see V6).
 4. **Second unifier.** `Types.Unify` (surface) vs `Elab.Unify` (core+metas) are
    distinct engines. V2 targets `Elab.Unify` first (it feeds elaboration);
    confirm `Types.Unify` is a later add, not folded in.
@@ -268,4 +280,4 @@ oracle, so they are a documented follow-on, not a Phase-1 infection source).
 | 3 | V2 unifier | Core terms + metavars | `Conv` | medium |
 | 4 | V5 totality closure | reuse `totality/*` | `Normalise` halting | low |
 | 5 | V4 erasure/relevance | reuse typed-term + relevance | `Kernel.check`/`Relevance` | low |
-| 6 | V6 SMT lint | refinement-predicate asts | kernel decidable overlap | high (Z3-gated) |
+| 6 | V6 SMT lint | refinement-predicate asts | kernel decidable overlap | high (Z3 always present; determinism-pinned) |
