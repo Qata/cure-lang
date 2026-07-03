@@ -252,32 +252,34 @@ oracle, so they are a documented follow-on, not a Phase-1 infection source).
 
 ## 6. Open questions (for operator review)
 
-1. **Phase-1 vertical.** Confirm V1 (normalizer) first, honoring the explicit
-   ask — vs leading with V3 (elaborator-soundness re-check), which is the
-   single highest-value gap (the elaborator emits core the kernel never
-   independently re-checks today) and the cheapest (new assay over *existing*
-   generators, no new generator surface). Recommended: V1 as asked, with V3 as
-   the immediate Phase 2.
-2. **`Types.Reduce` differential reach.** Phase 1 restricts to the
-   bridge-translatable ast fragment. Acceptable, or should we also add an
-   intrinsic-law-only assay over the *untranslatable* fragment (idempotence /
-   monotone-size hold there too, with no oracle)?
+1. **Phase-1 vertical.** ✅ **RESOLVED — lead with V3 (elaborator-soundness
+   re-check)** (operator, 2026-07-03). It is the single highest-value gap: the
+   untrusted elaborator emits core the trusted kernel never independently
+   re-checks today, and it is the cheapest vertical (a new assay over *existing*
+   `elab_complete` generators, no new generator surface). V1 (normalizer)
+   follows as Phase 2.
+2. **`Types.Reduce` differential reach.** ✅ **RESOLVED — include the
+   intrinsic-law-only assay over the *untranslatable* fragment** (operator,
+   2026-07-03), in addition to the bridge-translatable differential. Idempotence
+   / monotone-size hold there with no oracle, so the untranslatable fragment is
+   not left uncovered. (Applies to V1, Phase 2.)
 3. **SMT vertical inclusion.** ✅ **RESOLVED — keep V6, unconditional.** Z3 is a
    guaranteed part of the language toolchain (always present), so V6 is *not*
    gated on solver availability. Solver nondeterminism (timeouts) is absorbed by
    treating `:unknown` as legal and pinning a fixed solver config + committed
    timeout budget (see V6).
-4. **Second unifier.** `Types.Unify` (surface) vs `Elab.Unify` (core+metas) are
-   distinct engines. V2 targets `Elab.Unify` first (it feeds elaboration);
-   confirm `Types.Unify` is a later add, not folded in.
+4. **Second unifier.** ✅ **RESOLVED — V2 covers BOTH `Elab.Unify` (core+metas)
+   and `Types.Unify` (surface)** (operator, 2026-07-03). They are distinct
+   engines but folded into one vertical: `Elab.Unify` first (it feeds
+   elaboration), `Types.Unify` in the same phase, not deferred.
 
 ## 7. Roadmap (phased, each phase its own spec→plan→autopilot run)
 
 | phase | vertical | new generator surface | oracle | cost |
 |---|---|---|---|---|
-| 1 | V1 normalizer | Core-term (reuse) + translatable surface-ast | `Normalise`/`Conv`/`CoreBridge` | medium |
-| 2 | V3 elaborator soundness | none (reuse `elab_complete`) | `Kernel.check` | low |
-| 3 | V2 unifier | Core terms + metavars | `Conv` | medium |
+| 1 | V3 elaborator soundness | none (reuse `elab_complete`) | `Kernel.check` | low |
+| 2 | V1 normalizer (+ intrinsic-law assay over the untranslatable fragment) | Core-term (reuse) + translatable surface-ast | `Normalise`/`Conv`/`CoreBridge` | medium |
+| 3 | V2 unifier (`Elab.Unify` + `Types.Unify`) | Core terms + metavars; surface types | `Conv` | medium |
 | 4 | V5 totality closure | reuse `totality/*` | `Normalise` halting | low |
 | 5 | V4 erasure/relevance | reuse typed-term + relevance | `Kernel.check`/`Relevance` | low |
 | 6 | V6 SMT lint | refinement-predicate asts | kernel decidable overlap | high (Z3 always present; determinism-pinned) |
