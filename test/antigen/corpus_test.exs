@@ -93,4 +93,38 @@ defmodule Antigen.CorpusTest do
     assert {:ok, c} = Corpus.decode_record(legacy)
     assert c.payload.term == term
   end
+
+  test "note is stored as readable plaintext and round-trips special chars" do
+    for note <- ["negative occurrence: Bad left of an arrow", "has\ttab and % and\nnewline", "-", "plain", nil] do
+      c = Challenge.new(kind: :stub, assay: "stub", label: :none,
+                        payload: %{term: {:type, 0}}, seed: 1, note: note)
+      line = Corpus.encode_record(c)
+      refute String.contains?(line, "\n"), "record must stay one line for note=#{inspect(note)}"
+      assert {:ok, c2} = Corpus.decode_record(line)
+      assert c2.note == note
+    end
+  end
+
+  test "a real (non-nil) note is human-readable in the line (not Base64)" do
+    c = Challenge.new(kind: :stub, assay: "stub", label: :none,
+                      payload: %{term: {:type, 0}}, seed: 1, note: "negative occurrence")
+    line = Corpus.encode_record(c)
+    assert line =~ "note=negative occurrence"
+    refute line =~ "note=" <> Base.encode64("negative occurrence")
+  end
+
+  test "legacy Base64 note decodes to the original text (format inferred from Base64 pieces)" do
+    term = {:type, 0}
+    legacy =
+      Enum.join(
+        ["antigen-record", "kind=stub", "assay=stub", "label=none", "seed=1",
+         "note=" <> Base.encode64("hello world"), "scaffold=-", "key=" <> Base.encode64("k"),
+         "pieces=term::" <> Base.encode64(Serialize.encode(term))],
+        "\t"
+      )
+
+    assert {:ok, c} = Corpus.decode_record(legacy)
+    assert c.note == "hello world"
+    assert c.payload.term == term
+  end
 end

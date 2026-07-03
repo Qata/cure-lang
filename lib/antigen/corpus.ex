@@ -31,7 +31,7 @@ defmodule Antigen.Corpus do
         "assay=#{c.assay}",
         "label=#{c.label}",
         "seed=#{c.seed || "-"}",
-        "note=#{enc_opt(c.note)}",
+        "note=#{enc_note(c.note)}",
         "scaffold=#{encode_scaffold(scaffold)}",
         "key=#{Base.encode64(key)}",
         "pieces=#{piece_str}"
@@ -56,7 +56,8 @@ defmodule Antigen.Corpus do
       label = String.to_existing_atom(m["label"])
       seed = if m["seed"] == "-", do: nil, else: String.to_integer(m["seed"])
       scaffold = decode_scaffold(m["scaffold"] || "-")
-      {:ok, Challenge.from_pieces(kind, m["assay"], label, seed, dec_opt(m["note"]), scaffold, pieces)}
+      note = if legacy_record?(m["pieces"]), do: dec_opt(m["note"]), else: dec_note(m["note"])
+      {:ok, Challenge.from_pieces(kind, m["assay"], label, seed, note, scaffold, pieces)}
     else
       other -> {:error, {:bad_record, other}}
     end
@@ -159,8 +160,44 @@ defmodule Antigen.Corpus do
     end
   end
 
-  defp enc_opt(nil), do: "-"
-  defp enc_opt(s), do: Base.encode64(s)
+  # dec_opt: legacy Base64 note decode (still used by the legacy-record branch).
   defp dec_opt("-"), do: nil
   defp dec_opt(b64), do: Base.decode64!(b64)
+
+  # A record is legacy iff its (first) piece body is Base64, i.e. does not start
+  # with "(" — every Serialize.encode output starts with "(", Base64 never does.
+  # Empty/absent pieces ⇒ treat as new-format (plaintext note); real records
+  # always carry ≥1 term piece, so this default is not exercised by live data.
+  defp legacy_record?(nil), do: false
+  defp legacy_record?(""), do: false
+  defp legacy_record?(pieces_str) do
+    case String.split(pieces_str, ";;", parts: 2) do
+      [first | _] ->
+        case String.split(first, "::", parts: 2) do
+          [_id, "(" <> _] -> false
+          [_id, _body] -> true
+          _ -> false
+        end
+    end
+  end
+
+  # note: nil -> "-"; a literal "-" -> "%2D"; else percent-escape %/tab/newline.
+  # `%` MUST be escaped first (its own escape introduces further `%`).
+  defp enc_note(nil), do: "-"
+  defp enc_note("-"), do: "%2D"
+  defp enc_note(s) do
+    s
+    |> String.replace("%", "%25")
+    |> String.replace("\t", "%09")
+    |> String.replace("\n", "%0A")
+  end
+
+  defp dec_note("-"), do: nil
+  defp dec_note(s) do
+    s
+    |> String.replace("%2D", "-")
+    |> String.replace("%09", "\t")
+    |> String.replace("%0A", "\n")
+    |> String.replace("%25", "%")
+  end
 end
