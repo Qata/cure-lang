@@ -100,4 +100,20 @@ defmodule Antigen.Assays.NormalizerTest do
       assert {:violation, {:size_increased, _, _}} = Normalizer.run(intr_ch(untranslatable(lit(1))), k)
     end
   end
+
+  describe "generator + runner wiring" do
+    alias Antigen.Runner
+
+    test "each catalog is non-empty and correctly tagged" do
+      assert SurfaceExpr.differential_challenges() != []
+      assert Enum.all?(SurfaceExpr.differential_challenges(), & &1.assay == "normalizer/differential")
+      assert Enum.all?(SurfaceExpr.equal_challenges(), & &1.assay == "normalizer/equal")
+      assert Enum.all?(SurfaceExpr.intrinsic_challenges(), & &1.assay == "normalizer/intrinsic")
+    end
+
+    test "runner dispatches each normalizer/* id and every catalog entry is clean under the real kernel" do
+      all = SurfaceExpr.differential_challenges() ++ SurfaceExpr.equal_challenges() ++ SurfaceExpr.intrinsic_challenges()
+      assert Enum.all?(all, fn c -> Runner.replay_one(c) == :ok end)
+    end
+  end
 end
