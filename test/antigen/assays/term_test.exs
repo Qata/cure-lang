@@ -19,6 +19,10 @@ defmodule Antigen.Assays.TermTest do
     for c <- samples("term/normalization", 60), do: assert A.run(c) == :ok
   end
 
+  test "erasure_preservation assay is green on generated well-typed terms" do
+    for c <- samples("term/erasure_preservation", 60), do: assert A.run(c) == :ok
+  end
+
   # -- BANKED FINDING: Normalise non-idempotence on context-closing lambdas ----
   #
   # A frozen Pi-goal challenge (captured from the generator, ctx depth 4) on which

@@ -27,7 +27,8 @@ defmodule Antigen.Generators.Term do
   @spec gen_term(Context.t(), Cure.Core.Term.t()) :: Gen.t()
   def gen_term(ctx, goal), do: Gen.sized(fn size -> gen(ctx, goal, min(size, @max_size)) end)
 
-  @assay_ids ["term/infer_check", "term/subject_reduction", "term/normalization"]
+  @assay_ids ["term/infer_check", "term/subject_reduction", "term/normalization",
+              "term/erasure_preservation"]
   def assay_ids, do: @assay_ids
 
   @doc "A `Gen` of a `:typed_term` challenge tagged for `assay_id`."

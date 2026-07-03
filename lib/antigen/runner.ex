@@ -340,6 +340,7 @@ defmodule Antigen.Runner do
   defp assay_module("term/infer_check"), do: Antigen.Assays.Term
   defp assay_module("term/subject_reduction"), do: Antigen.Assays.Term
   defp assay_module("term/normalization"), do: Antigen.Assays.Term
+  defp assay_module("term/erasure_preservation"), do: Antigen.Assays.Term
   defp assay_module("mutation/rejection"), do: Antigen.Assays.Mutation
   defp assay_module("kernel/shift_subst"), do: Antigen.Assays.KernelLaw
   defp assay_module("kernel/weakening"), do: Antigen.Assays.KernelLaw
