@@ -67,4 +67,27 @@ defmodule Antigen.Meta.SensitivityTest do
     assert {:violation, {:non_normalizing, _}} =
              Antigen.Assays.Reflexivity.run(ch, WeakKernel.weaken(:conv_exhausts_fuel))
   end
+
+  # -- Row 6: StuckElimDelta --------------------------------------------------
+  # A minimal negative :stuck_elim control — two DISTINCT closed normal forms
+  # (Z ≠ S(Z)) the kernel must not equate. The sensitivity target is the assay's
+  # verdict-vs-committed-label decision (a permissive conv breaks it regardless of
+  # whether the δ-of-stuck-eliminator seam fires), so an empty env + already-normal
+  # pair exercises that decision deterministically.
+  defp neg_stuck_elim_ch,
+    do:
+      Challenge.new(
+        kind: :stuck_elim,
+        assay: "stuck_elim_delta",
+        label: :negative,
+        payload: %{defs: [], focus: [], t: @z, tprime: @sz}
+      )
+
+  test "row 6 — conv_always_true is CAUGHT by stuck_elim_delta (negative control)" do
+    ch = neg_stuck_elim_ch()
+    assert :ok = Antigen.Assays.StuckElimDelta.run(ch, WeakKernel.real())
+
+    assert {:violation, {:unsound_verdict, %{expected: false, got: true}}} =
+             Antigen.Assays.StuckElimDelta.run(ch, WeakKernel.weaken(:conv_always_true))
+  end
 end

@@ -29,12 +29,18 @@ defmodule Antigen.Assays.StuckElimDelta do
   # unfolds; this margin only ever trips on non-normalization.
   @fuel 500
 
+  # Real kernel op, the byte-identical default for `run/1`.
+  @real_kernel %{conv_within: &Conv.conv_within?/6}
+
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
-  def run(%Challenge{kind: :stuck_elim, label: label, payload: %{t: t, tprime: tprime} = p}) do
+  def run(%Challenge{kind: :stuck_elim} = c), do: run(c, @real_kernel)
+
+  @doc "Same as `run/1` but with an injectable kernel-op map (sensitivity test seam)."
+  def run(%Challenge{kind: :stuck_elim, label: label, payload: %{t: t, tprime: tprime} = p}, k) do
     env = certified_env_of(p)
     expected = label == :positive
 
-    case Conv.conv_within?(t, tprime, [], 0, env, @fuel) do
+    case k.conv_within.(t, tprime, [], 0, env, @fuel) do
       :fuel_exhausted ->
         {:violation, {:non_normalizing, :conv_exceeded_fuel}}
 
