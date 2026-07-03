@@ -113,20 +113,20 @@ defmodule Antigen.Assays.SmtLintTest do
     end
   end
 
-  describe "parse_model negative-witness finding (real Solver + real Parser)" do
-    # x > -100 ⇒ x >= 0 : counterexample space x ∈ {-99..-1} — STRICTLY negative.
-    # Z3 must return a negative witness, which Cure.SMT.Parser.parse_model/1
-    # truncates to a malformed string "(- N" (confirmed bug, spec §9-item-2).
-    # The assay surfaces this as {:unusable_model, _} — a TRUE POSITIVE, documented,
-    # kept OUT of the clean generator catalog.
+  describe "parse_model negative-witness — FIXED, now a regression guard (real Solver + real Parser)" do
+    # x > -100 ⇒ x >= 0 : counterexample space x ∈ {-99..-1} — STRICTLY negative,
+    # so Z3 must return a negative witness. This once surfaced the real
+    # Cure.SMT.Parser.parse_model/1 bug (negative `(- N)` truncated to the malformed
+    # string "(- N"), which the assay reported as {:unusable_model, _}. The parser's
+    # value-capture regex is now fixed, so the negative witness parses to a genuine
+    # integer that refutes the implication → the assay returns :ok. Kept as a
+    # regression guard: it goes red again if the truncation is reintroduced.
     defp ge(n), do: bop(:>=, xvar(), lit(n))
 
-    test "real prove_with_counterexample on a negative-witness implication yields an unusable model (TRUE POSITIVE)" do
+    test "real prove_with_counterexample on a negative-witness implication now yields a usable, refuting model (regression guard)" do
       ch = Challenge.new(kind: :smt_query, assay: "smt/witness", label: :negative,
         payload: %{p1: gt(-100), p2: ge(0), var: "x"}, seed: 99)
-      # If Z3/Parser ever start returning a clean negative integer, this flips to :ok
-      # and the finding is fixed — treat that as a signal, not a test failure to force.
-      assert {:violation, {:unusable_model, _}} = SmtLint.run(ch)
+      assert SmtLint.run(ch) == :ok
     end
   end
 
