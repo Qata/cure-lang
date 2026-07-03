@@ -58,20 +58,60 @@ drives a two-family split:
 
 ### V2a — `Elab.Unify` (differential, oracle = `Conv`)
 
-- **`unify/soundness` (the master property):** if
-  `unify(t1, t2, ctx, sig) = {:ok, ctx')`, then `zonk(t1, ctx')` and
+- **`unify/soundness` (the master property):** for **closed** `t1, t2` (no free
+  `{:var,_}` — metavariables are fine, dangling de Bruijn references are not), if
+  `unify(t1, t2, ctx, sig) = {:ok, ctx'}`, then `zonk(t1, ctx')` and
   `zonk(t2, ctx')` are `Conv`-convertible:
   `Conv.conv?(zonk(t1,ctx'), zonk(t2,ctx'), [], 0, sig) == true`. A `{:ok, …}`
   whose zonked sides are **not** convertible is `{:violation, {:unify_unsound,…}}`.
   This is the honest soundness question the δ-fallback's moduledoc waves at
-  ("a wrong accept here is caught downstream") — V2a checks it *here*.
-- **`unify/intrinsic` (no oracle):**
+  ("a wrong accept here is caught downstream") — V2a checks it *here*. The
+  closedness precondition is not optional bookkeeping: `Conv.conv?(_,_,[],0,_)`
+  compares under an **empty** value environment, so a free `{:var,i}` has no
+  binding to resolve against and the comparison is meaningless (possibly
+  crashing) rather than merely imprecise. The real code enforces exactly this
+  before ever making this call — `delta_convertible?` (unify.ex:165-172) gates on
+  `Cure.Core.Term.closed?(z1) and Cure.Core.Term.closed?(z2)`. The §5 catalog's
+  `t1`/`t2` payloads for `unify/soundness` and `unify/intrinsic` MUST therefore be
+  closed terms end-to-end (no catalog entry may contain a `{:var,_}` node) — a
+  requirement the plan should state explicitly, not leave implicit.
+- **`unify/intrinsic` (no oracle, same closedness precondition as above):**
   - *occurs-check:* no returned solution is cyclic — for every solved `?id`,
-    `id` does not occur in `force`-resolved `solution(ctx', id)`.
-  - *idempotent zonk:* `zonk(zonk(t, ctx'), ctx') == zonk(t, ctx')`.
-  - *well-scoped / meta-closed:* if `unify` succeeded on meta-free inputs, the
-    zonked sides are meta-free (no `{:meta,_}` survives — the `escapes?`/
-    `strengthen` scope machinery held).
+    `id` does not occur in `force`-resolved `solution(ctx', id)`. `Unify.occurs?/3`
+    is **private** (`defp`), so — exactly as with meta-closed below and open item
+    #5 — the assay needs its own independent occurs-check helper built on the
+    op-map (`eu_solution`), not a call into `Elab.Unify`'s copy.
+  - *idempotent zonk:* `zonk(zonk(t, ctx'), ctx') == zonk(t, ctx')` (checked for
+    both `t1` and `t2`).
+  - *well-scoped / meta-closed:* for catalog entries where every metavariable in
+    `t1`/`t2` is unified against a genuinely different term — **never** a meta
+    unified reflexively against an occurrence of itself, since
+    `do_unify({:meta,id}, {:meta,id}, ctx, _sig, _depth)` returns `{:ok, ctx}`
+    **unchanged** without ever calling `solve/4`, so such a meta legitimately
+    stays unsolved and is not a counterexample — if `unify` succeeds, every such
+    metavariable is solved: `zonk(t1, ctx')` and `zonk(t2, ctx')` contain no
+    `{:meta,_}` node. (Scoping this to meta-**free** inputs, as an earlier draft
+    did, makes the check vacuous instead: `solve`/`escapes?`/`strengthen` only
+    ever run when a meta is actually being solved, so a meta-free-input version
+    of this property never exercises that scope machinery at all. The catalog's
+    proposed entries — bare metavar solve, structural ctor/data match, binder
+    case — all unify a metavariable against a non-metavariable structure, so none
+    of them hits the reflexive-meta exclusion above; no catalog change is needed,
+    only this property-text caveat.)
+
+    **Naming note vs. the umbrella sketch:** the umbrella
+    (`2026-07-03-antigen-untrusted-machinery-design.md` §V2) describes
+    "well-scoped" as *"a solution for `?m` mentions no variable out of `?m`'s
+    context"* — a direct scoping check on the raw stored solution, distinct from
+    the meta-elimination check above. That raw-scoping property is enforced
+    internally by `solve/4`'s `escapes?` gate *before* a solution is ever stored
+    (a successful store already implies it held), so a black-box assay can't
+    observe a violation directly without re-implementing `escapes?`; a broken
+    `escapes?` that let a mis-scoped solution through would instead surface as a
+    `unify/soundness` (§3 first bullet) violation once the resulting term is
+    zonked and compared — that master differential is what actually covers the
+    umbrella's intent here. This bullet is the narrower, directly-observable
+    meta-elimination check; it is not a restatement of the umbrella's wording.
 
 ### V2b — `Types.Unify` (intrinsic + fixpoint, no external oracle)
 
@@ -139,16 +179,46 @@ elab/normalizer reconciliation — no corpus/Coverage surgery; a new lightweight
 dedicated test):
 
 - `elab_soundness_challenges/0` / `elab_intrinsic_challenges/0` — payload
-  `%{t1, t2, ctx, sig}` over Core terms. Catalog covers: a bare metavar solve
-  (`{:meta,0}` vs `{:ctor, :S, [{:global, :z}]}`), a structural ctor/data match
-  driving nested solves, a binder case (`{:pi, d, {:meta,0}}` vs `{:pi, d, c}`),
-  and a no-metavar reflexive pair. `ctx` seeded via `MetaCtx.new/0` +`fresh/1`;
-  `sig` is `nil` for the syntactic cases (a δ-fallback case may pass a small env).
+  `%{t1, t2, ctx, sig}` over Core terms. Every entry's `t1`/`t2` MUST be closed
+  (no free `{:var,_}` — see §3's closedness precondition); in particular the
+  binder case's domain/codomain terms must be picked closed (e.g. ctor/global
+  terms), not variable references, or the entry falls outside what
+  `Conv.conv?(_,_,[],0,_)` can validly compare. Catalog covers: a bare metavar
+  solve (`{:meta,0}` vs `{:ctor, :S, [{:global, :z}]}`), a structural ctor/data
+  match driving nested solves, a binder case (`{:pi, d, {:meta,0}}` vs
+  `{:pi, d, c}`, `d`/`c` closed), and a no-metavar reflexive pair. `ctx` seeded
+  via `MetaCtx.new/0` with literal `{:meta, N}` ids (see open item #2 — no
+  `fresh/1` threading needed); `sig` is `nil` for the syntactic cases (a
+  δ-fallback case may pass a small env).
+
+  **Accepted scope limit on the binder case:** forcing `d`/`c` closed (required
+  by the closedness precondition above) also forces `strengthen`'s shift to be
+  the identity — for a closed whole term, any variable surviving `strengthen`
+  would have to be free relative to the *entire* term, which a closed term
+  cannot have. So this catalog entry exercises `do_unify`'s Π-codomain recursion
+  and `escapes?`'s no-false-positive path, but **not** genuine free-variable
+  re-leveling under a solved meta (the `{:var,4}` vs `{:var,5}` mis-levelling
+  regression `test/cure/elab/higher_order_unify_test.exs` guards at the
+  elaborator level) — that scenario needs an *open* term under an ambient
+  context, which `Conv.conv?(_,_,[],0,_)` cannot validly compare (§3). This is
+  an accepted first-cut gap of the closed-term differential, not something to
+  work around by relaxing closedness — don't "improve" the binder case with an
+  open codomain to chase that coverage; it would silently break the property
+  (§3's closedness precondition), not extend it.
 - `types_challenges/0` — payload `%{t1, t2}` over surface types. Catalog covers:
   `{:type_var,"T"}` vs `:int`; `{:list,{:type_var,"T"}}` vs `{:list, :int}`;
   `{:tuple,[{:type_var,"A"},{:type_var,"B"}]}` vs `{:tuple,[:int,:string]}`; a
-  refinement-stripped case; an `:any`-widening case; and (for the occurs control)
-  a hand-built cyclic pair used only in the negative test, never the clean catalog.
+  refinement-stripped case; an `:any`-widening case; an int/float-widening case
+  (`unify(:int, :float, …)` — note the direction: `do_unify` only implements
+  `(:int, :float)`, there is **no** `(:float, :int)` clause in
+  `lib/cure/types/unify.ex`, so the reverse pair errors instead of widening); a
+  named-vs-record/adt matching case (e.g. `{:named, "foo"}` vs
+  `{:record, :foo, fields}`); and (for the occurs control) a hand-built cyclic
+  pair used only in the negative test, never the clean catalog. The int/float and
+  named/record-adt cases are not optional flourishes — §2 names both as reasons
+  "no external structural oracle exists" for `Types.Unify`, so the fixpoint
+  catalog must actually exercise them, not just the type-var-binding and
+  refinement-stripping paths.
 
 ## 6. Invariants (what must never regress)
 
@@ -175,34 +245,70 @@ dedicated test):
 - No surface-type external oracle invented for `Types.Unify` — V2b stays intrinsic
   + fixpoint by design (§1).
 - No SMT (that is V6).
+- No dedicated **determinism** property, despite the umbrella sketch
+  (`2026-07-03-antigen-untrusted-machinery-design.md` §V2) listing it: both
+  `Cure.Elab.Unify.unify/4` and `Cure.Types.Unify.unify/2,3` are pure functions
+  over explicitly-threaded state (`MetaCtx`/`subst`) with no hidden
+  non-deterministic source found on inspection (no `:rand`, no
+  `System.unique_integer/system_time`, no `Process`/`:ets` reads) — a
+  same-inputs-twice check would be a tautology for the current implementation
+  and add no bug-catching value. Revisit only if either engine grows a genuine
+  non-deterministic dependency.
 
 ## 8. Open items (for the plan / review to pin)
 
-1. **`Conv.conv?` arg shape for zonked Core terms** — confirm `conv?(z1, z2, [],
-   0, sig)` is the right call for closed first-order terms (the `Elab.Unify`
-   δ-fallback itself calls exactly `Conv.conv?(z1, z2, [], 0, sig)`, so this is
-   grounded — the plan should cite that call site).
-2. **`MetaCtx` construction in the generator** — the catalog must allocate metas
-   via `fresh/1` so ids line up with the terms that mention them; the plan pins
-   the exact `{ctx, id}` threading for each multi-meta entry.
-3. **`tu_unify` arity** — `Types.Unify.unify/3` (with starting subst `%{}`) is the
-   seam so a negative control can inject a starting subst; the fixpoint property
-   re-invokes with `s`. Confirm `unify/2` vs `unify/3` default at the call site.
-4. **Fixpoint equality of substitutions** — `s' == s` is a plain map compare;
-   confirm `apply_subst` produces canonical terms so no spurious inequality
-   (e.g. no ordering/whitespace artifacts — maps compare by content, so fine).
-5. **Meta-closed check for V2a** — "zonked sides meta-free" uses a local
-   `meta_free?/1` in the assay (the engine's is private); the plan supplies it,
-   independent of `Elab.Unify`'s copy.
+1. **`Conv.conv?` arg shape for zonked Core terms** — `conv?(z1, z2, [], 0, sig)`
+   is the right call for closed first-order terms (the `Elab.Unify` δ-fallback
+   itself calls exactly `Conv.conv?(z1, z2, [], 0, sig)`, so this is grounded —
+   the plan should cite that call site — unify.ex:171). This is closedness-gated
+   in the real code (`Term.closed?(z1) and Term.closed?(z2)`, unify.ex:170); §3
+   now states that gate as a hard precondition on the property, not an
+   implementation nicety, so the plan must enforce it on every `unify/soundness`
+   and `unify/intrinsic` catalog entry (§5), not merely note it here.
+2. **`MetaCtx` construction in the generator** — tracing `MetaCtx`/`Unify` shows
+   `fresh/1` is never called internally by `unify`/`zonk`/`solve`/`occurs?` (they
+   only read and write metavariables by the literal id already present in the
+   term); nothing threads or allocates new ids during a run. So the simplest
+   correct approach — and the one the plan should pin — is literal `{:meta, N}`
+   terms in the catalog (`N` hand-picked distinct per multi-meta entry) paired
+   with `ctx = MetaCtx.new()`; `fresh/1` threading is unnecessary machinery for a
+   static catalog with no further meta allocation during the assay run.
+3. **`tu_unify` arity** — resolved: `unify/2(t1, t2)` is exactly
+   `do_unify(t1, t2, %{}, [])` and `unify/3(t1, t2, subst)` is exactly
+   `do_unify(t1, t2, subst, [])` — identical when `subst = %{}`. So the assay
+   uses `unify/3` uniformly via `tu_unify` in the op-map: the baseline call
+   passes `%{}` explicitly, and the fixpoint re-unify call passes the real `s`.
+   No separate call to `unify/2` is needed anywhere.
+4. **Fixpoint equality of substitutions** — resolved by direct trace: `s' == s`
+   (a plain map compare) holds across every non-syntactic accept clause —
+   type-var bind, `:any` widening, `:int`/`:float` widening, refinement-strip,
+   named-vs-record/adt match, and the list/tuple/fun/adt/map structural
+   recursions — because `apply_subst` either leaves an already-ground/matched
+   pair untouched or fully resolves a bound var to its (already-final) value
+   before re-unify sees it, so the re-unify call retraces the identical clause
+   and returns the same map. No spurious inequality risk found; no further plan
+   pinning needed here.
+5. **Meta-closed / occurs-check independence for V2a** — both the meta-closed
+   check ("zonked sides meta-free") and the occurs-check use engine internals
+   that are `defp`-private (`meta_free?/1` and `occurs?/3` respectively, both in
+   `lib/cure/elab/unify.ex`); the plan supplies independent local
+   implementations for **both**, not just meta-closed. The occurs-check helper
+   must read solutions through the op-map's `eu_solution` (not
+   `MetaCtx.solution/2` directly) so the negative control (a cyclic
+   `eu_solution` stub) is actually observed by it.
 
 ## 9. Test catalog (for the plan — §5 of the plan will expand each)
 
-1. V2a soundness baseline (`?0` vs `S z`) → `:ok`.
-2. V2a soundness structural (nested ctor solve) → `:ok`.
+1. V2a soundness baseline (`?0` vs `S z`, closed) → `:ok`.
+2. V2a soundness structural (nested ctor solve, closed) → `:ok`.
 3. V2a soundness negative control (identity `eu_unify` stub) → `{:unify_unsound,…}`.
-4. V2a intrinsic baseline (occurs + idempotent zonk + meta-closed) → `:ok`.
-5. V2a intrinsic occurs negative control (cyclic `eu_solution`) → `{:occurs,…}`.
-6. V2b fixpoint baseline (`T` vs `int`; `list(T)` vs `list(int)`) → `:ok`.
+4. V2a intrinsic baseline: occurs + idempotent zonk (both `t1`, `t2`) + meta-closed
+   on a metavariable-**bearing** entry (not the no-metavar reflexive pair — that
+   would leave meta-closed vacuous) → `:ok`.
+5. V2a intrinsic occurs negative control (cyclic `eu_solution`, via the
+   independent occurs-check helper reading through `eu_solution`) → `{:occurs,…}`.
+6. V2b fixpoint baseline (`T` vs `int`; `list(T)` vs `list(int)`; `unify(:int,
+   :float, …)` widening in that order; a named-vs-record/adt match) → `:ok`.
 7. V2b fixpoint negative control (unstable `tu_unify` stub) → `{:solution_unstable,…}`.
 8. V2b intrinsic baseline (occurs rejects cyclic; idempotent apply; var-elim) → `:ok`.
 9. V2b intrinsic var-elim negative control (leaky `tu_apply` stub) → `{:var_not_eliminated,…}`.
