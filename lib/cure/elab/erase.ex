@@ -20,13 +20,21 @@ defmodule Cure.Elab.Erase do
   def erase(env, {:ctor, cname, args}) do
     quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, length(args))
 
-    kept =
-      args
-      |> Enum.zip(quantities)
-      |> Enum.filter(fn {_arg, q} -> q == :present end)
-      |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
+    if length(args) == length(quantities) do
+      kept =
+        args
+        |> Enum.zip(quantities)
+        |> Enum.filter(fn {_arg, q} -> q == :present end)
+        |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
 
-    {:ctor, cname, kept}
+      {:ctor, cname, kept}
+    else
+      # Fewer (or more) args than the ctor's full arity means the term is already
+      # erased — re-zipping the full quantity vector against the shrunk arg list
+      # would realign survivors onto leading positions and drop them. Keep every
+      # arg and only recurse, so erase(erase(t)) == erase(t).
+      {:ctor, cname, Enum.map(args, &erase(env, &1))}
+    end
   end
 
   def erase(env, {:lam, dom, body}), do: {:lam, erase(env, dom), erase(env, body)}
@@ -42,16 +50,25 @@ defmodule Cure.Elab.Erase do
             _ -> List.duplicate(:present, length(args))
           end
 
-        # Arguments beyond the callee's own parameters apply to the *result* it
-        # returns (`mk()(z)`), and are always present — pad so `zip` keeps them
-        # rather than truncating to the shorter quantity list.
-        padded = quantities ++ List.duplicate(:present, max(0, length(args) - length(quantities)))
+        if length(args) >= length(quantities) do
+          # Full or over-application: filter the callee's own parameters by their
+          # quantity, and keep every argument beyond them (those apply to the
+          # *result* `mk()(z)` and are always present).
+          padded = quantities ++ List.duplicate(:present, length(args) - length(quantities))
 
-        args
-        |> Enum.zip(padded)
-        |> Enum.filter(fn {_arg, q} -> q == :present end)
-        |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
-        |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)
+          args
+          |> Enum.zip(padded)
+          |> Enum.filter(fn {_arg, q} -> q == :present end)
+          |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
+          |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)
+        else
+          # Fewer args than the callee's parameters means the erased ones were
+          # already dropped by a prior pass; re-filtering would realign the full
+          # quantity vector and drop a present arg. Keep all, recurse — idempotent.
+          args
+          |> Enum.map(&erase(env, &1))
+          |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)
+        end
 
       _ ->
         args

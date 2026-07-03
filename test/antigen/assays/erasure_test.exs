@@ -51,27 +51,22 @@ defmodule Antigen.Assays.ErasureTest do
     assert {:violation, {:hole_introduced, _}} = Erasure.run(idem_ch(env, {:ctor, :MkQ, [il(1), il(2)]}), k)
   end
 
-  describe "known erase/2 non-idempotence finding (spec §3, §9-2/§9-3)" do
-    # These terms are NOT in erase_challenges/0 (reconciliation #1). The assay is
-    # CORRECT — it reports the real erase's non-idempotence as a violation. This
-    # documents a genuine, spec-review-traced, currently-dormant erase/2 defect.
-    test "ctor erased-before-present ordering: real erase is non-idempotent (TRUE POSITIVE)" do
+  describe "erase/2 non-idempotence — FIXED, now a regression guard (spec §3, §9-2/§9-3)" do
+    # These terms are NOT in erase_challenges/0 (reconciliation #1). They once
+    # surfaced a genuine erase/2 defect (the :ctor/:app-head clauses re-filtered
+    # already-shrunk args by re-zipping the full quantity vector). The fix added an
+    # arity guard to Cure.Elab.Erase (only filter full-form args); these two cases —
+    # the erased-before-present `:MkP` ctor and `g` def — are now idempotent, so the
+    # assay reports :ok. They stay here as regression guards: they go red again if
+    # the arity guard is removed and the zip-realignment hazard returns.
+    test "ctor erased-before-present ordering is now idempotent (regression guard)" do
       env = ctor_env()
-      assert {:violation, {:erase_not_idempotent, _}} = Erasure.run(idem_ch(env, {:ctor, :MkP, [il(1), il(2)]}))
+      assert Erasure.run(idem_ch(env, {:ctor, :MkP, [il(1), il(2)]})) == :ok
     end
 
-    # Second surface (spec §3/§9-item-3): the app-head clause has the identical
-    # zip-realignment hazard as the :ctor clause. `g`'s quantities are
-    # [:erased, :present]; once = erase(env, app2(g,1,2)) = {:app,{:global,g},il(2)}
-    # (arg 0 dropped, arg 1 kept); twice re-erases from a 1-arg spine against the
-    # SAME full 2-element quantity vector, re-zipping the survivor to qs[0] =
-    # :erased and dropping it -> {:global, g} (bare head, no args). This is the
-    # app-head counterpart to the ctor finding above — NOT a member of
-    # erase_challenges/0 (Task 5), for the same reason.
-    test "app-head erased-before-present ordering: real erase is non-idempotent (TRUE POSITIVE)" do
+    test "app-head erased-before-present ordering is now idempotent (regression guard)" do
       env = app_env(ctor_env())
-      assert {:violation, {:erase_not_idempotent, _}} =
-               Erasure.run(idem_ch(env, app2({:global, :g}, il(1), il(2))))
+      assert Erasure.run(idem_ch(env, app2({:global, :g}, il(1), il(2)))) == :ok
     end
   end
 

@@ -55,6 +55,27 @@ defmodule Cure.Elab.EraseTest do
              {:ctor, :seq, [{:ctor, :prim, []}, {:ctor, :prim, []}]}
   end
 
+  test "erase is idempotent: re-erasing an already-erased seq is a no-op" do
+    env = build_env()
+    nil_ = {:ctor, :SVNil, []}
+    causal = {:ctor, :Causal, []}
+    seq = {:ctor, :seq, [nil_, nil_, causal, nil_, causal, {:global, :l}, {:global, :r}]}
+
+    once = Erase.erase(env, seq)
+    assert Erase.erase(env, once) == once
+  end
+
+  test "erase is idempotent on an application-spine with an erased-before-present def" do
+    # g : (@0 Int) -> Int -> Int  (param 0 erased, param 1 present)
+    env =
+      Env.add_def(Env.empty(), :g, {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}},
+        {:int_lit, 0}, [:erased, :present])
+
+    app = {:app, {:app, {:global, :g}, {:int_lit, 1}}, {:int_lit, 2}}
+    once = Erase.erase(env, app)
+    assert Erase.erase(env, once) == once
+  end
+
   test "detects holes in a term" do
     assert Erase.has_hole?({:lam, {:type, 0}, {:hole, "body"}})
     assert Erase.has_hole?({:ctor, :seq, [{:hole, "x"}]})
