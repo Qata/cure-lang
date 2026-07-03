@@ -412,4 +412,93 @@ defmodule Cure.Elab.Unify do
       other -> other
     end
   end
+
+  @meta_placeholder_prefix "$meta$"
+
+  @doc false
+  # Meta-aware weak-head normalisation (ledger #11, whnf-before-compare). Reduce
+  # `term` to whnf while treating each unsolved metavariable as an opaque neutral:
+  # it BLOCKS a match/case whose scrutinee is the metavariable (`plus(?m, Z)` stays
+  # stuck) but PASSES THROUGH any non-scrutinee position (`plus(Z, ?m)` reduces to
+  # `?m`). Mechanism: zonk, substitute each remaining `{:meta, id}` with a reserved
+  # opaque global `{:global, :"$meta$id"}` (no signature entry → `unfold_head`
+  # returns `:stuck`, exactly like an unsolved metavariable), reduce with the
+  # TRUSTED `Normalise` reduction reused via its constituents (`Eval.eval` →
+  # `Normalise.whnf_value` → `Quote.reify`, the trio `Normalise.whnf/3` itself
+  # composes — bypassing `whnf/3`'s `Core.Context.t()` requirement), then map the
+  # placeholders back. E-layer only: the kernel re-checks the assembled term, so a
+  # wrong reduction is caught downstream. On `:fuel_exhausted` (or `sig == nil`),
+  # returns the (zonked) input unchanged — strictly additive, never crashes.
+  @spec whnf_meta_aware(uterm(), MetaCtx.t(), Cure.Core.Env.t() | nil, non_neg_integer(), keyword()) ::
+          uterm()
+  def whnf_meta_aware(term, ctx, sig, depth \\ 0, opts \\ [])
+
+  def whnf_meta_aware(term, ctx, nil, _depth, _opts), do: zonk(term, ctx)
+
+  def whnf_meta_aware(term, ctx, sig, depth, opts) do
+    z = zonk(term, ctx)
+    subst = metas_to_placeholders(z)
+    fuel = Keyword.get(opts, :fuel, :infinity)
+
+    reduced =
+      Cure.Core.Normalise.with_fuel(fuel, fn ->
+        env = for level <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, level}}
+
+        subst
+        |> Cure.Core.Eval.eval(env)
+        |> Cure.Core.Normalise.whnf_value(sig, delta: :certified, stuck_cases: :preserve)
+        |> Cure.Core.Quote.reify(depth)
+      end)
+
+    case reduced do
+      :fuel_exhausted -> z
+      other -> placeholders_to_metas(other)
+    end
+  end
+
+  # Replace each unsolved `{:meta, id}` with its reserved opaque-global placeholder.
+  # Generic tuple/list walk (mirrors `zonk/2`) so a metavariable buried in ANY Core
+  # shape is substituted.
+  defp metas_to_placeholders({:meta, id}), do: {:global, :"#{@meta_placeholder_prefix}#{id}"}
+
+  defp metas_to_placeholders(tup) when is_tuple(tup),
+    do: tup |> Tuple.to_list() |> Enum.map(&metas_to_placeholders/1) |> List.to_tuple()
+
+  defp metas_to_placeholders(list) when is_list(list),
+    do: Enum.map(list, &metas_to_placeholders/1)
+
+  defp metas_to_placeholders(leaf), do: leaf
+
+  # Inverse of `metas_to_placeholders/1`: map each placeholder global back to its
+  # metavariable. A `{:global, :"$meta$…"}` cannot arise from real source (the
+  # prefix is not a legal identifier), so this is unambiguous.
+  defp placeholders_to_metas({:global, name} = t) do
+    case placeholder_id(name) do
+      {:ok, id} -> {:meta, id}
+      :error -> t
+    end
+  end
+
+  defp placeholders_to_metas(tup) when is_tuple(tup),
+    do: tup |> Tuple.to_list() |> Enum.map(&placeholders_to_metas/1) |> List.to_tuple()
+
+  defp placeholders_to_metas(list) when is_list(list),
+    do: Enum.map(list, &placeholders_to_metas/1)
+
+  defp placeholders_to_metas(leaf), do: leaf
+
+  defp placeholder_id(name) when is_atom(name) do
+    case Atom.to_string(name) do
+      @meta_placeholder_prefix <> rest ->
+        case Integer.parse(rest) do
+          {id, ""} -> {:ok, id}
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp placeholder_id(_), do: :error
 end
