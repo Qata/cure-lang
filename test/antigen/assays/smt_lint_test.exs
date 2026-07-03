@@ -70,4 +70,63 @@ defmodule Antigen.Assays.SmtLintTest do
       assert x > 0
     end
   end
+
+  describe "smt/witness (V6c)" do
+    defp witness_ch(p1, p2) do
+      Challenge.new(kind: :smt_query, assay: "smt/witness", label: :positive,
+        payload: %{p1: p1, p2: p2, var: "x"}, seed: 1)
+    end
+
+    test "witness baseline: invalid x > 0 ⇒ x > 5 yields a genuine (non-negative) counterexample → :ok" do
+      # counterexample space x ∈ {1..5} — strictly non-negative, so the real
+      # Parser returns a clean integer (dodges the negative-value parser bug).
+      assert SmtLint.run(witness_ch(gt(0), gt(5))) == :ok
+    end
+
+    test "negative control: a prove_with_counterexample stub returning a non-refuting integer model" do
+      # x=99 satisfies BOTH x>0 and x>5, so it is NOT a counterexample to x>0 ⇒ x>5.
+      k = %{SmtLint.__real__() | prove_with_counterexample: fn _p1, _p2, _v, _b -> {:failed, %{"x" => 99}} end}
+      assert {:violation, {:bogus_counterexample, _}} = SmtLint.run(witness_ch(gt(0), gt(5)), k)
+    end
+
+    test "unusable-model control: a stub returning a non-integer (malformed) model value" do
+      k = %{SmtLint.__real__() | prove_with_counterexample: fn _p1, _p2, _v, _b -> {:failed, %{"x" => "(- 7"}} end}
+      assert {:violation, {:unusable_model, _}} = SmtLint.run(witness_ch(gt(0), gt(5)), k)
+    end
+
+    test "proven/unknown are legal: a stub returning {:proven, nil} or {:unknown, nil} → :ok" do
+      k1 = %{SmtLint.__real__() | prove_with_counterexample: fn _p1, _p2, _v, _b -> {:proven, nil} end}
+      k2 = %{SmtLint.__real__() | prove_with_counterexample: fn _p1, _p2, _v, _b -> {:unknown, nil} end}
+      assert SmtLint.run(witness_ch(gt(5), gt(0)), k1) == :ok
+      assert SmtLint.run(witness_ch(gt(0), gt(5)), k2) == :ok
+    end
+
+    test "negative control: a prove_with_counterexample stub returning {:proven, nil} on the invalid implication" do
+      # x > 0 ⇒ x > 5 is invalid (x=1 refutes it). A stub falsely claiming :proven is a
+      # false-proven soundness violation — symmetric to V6a's false_discharge, but this
+      # exercises prove_with_counterexample's OWN proven-claim path (a different code
+      # path/query from prove_implication; reconciliation #4 explains why V6a's control
+      # does not already cover this).
+      k = %{SmtLint.__real__() | prove_with_counterexample: fn _p1, _p2, _v, _b -> {:proven, nil} end}
+      assert {:violation, {:false_proven, %{x: x}}} = SmtLint.run(witness_ch(gt(0), gt(5)), k)
+      assert x > 0 and not (x > 5)
+    end
+  end
+
+  describe "parse_model negative-witness finding (real Solver + real Parser)" do
+    # x > -100 ⇒ x >= 0 : counterexample space x ∈ {-99..-1} — STRICTLY negative.
+    # Z3 must return a negative witness, which Cure.SMT.Parser.parse_model/1
+    # truncates to a malformed string "(- N" (confirmed bug, spec §9-item-2).
+    # The assay surfaces this as {:unusable_model, _} — a TRUE POSITIVE, documented,
+    # kept OUT of the clean generator catalog.
+    defp ge(n), do: bop(:>=, xvar(), lit(n))
+
+    test "real prove_with_counterexample on a negative-witness implication yields an unusable model (TRUE POSITIVE)" do
+      ch = Challenge.new(kind: :smt_query, assay: "smt/witness", label: :negative,
+        payload: %{p1: gt(-100), p2: ge(0), var: "x"}, seed: 99)
+      # If Z3/Parser ever start returning a clean negative integer, this flips to :ok
+      # and the finding is fixed — treat that as a signal, not a test failure to force.
+      assert {:violation, {:unusable_model, _}} = SmtLint.run(ch)
+    end
+  end
 end

@@ -64,6 +64,46 @@ defmodule Antigen.Assays.SmtLint do
     end
   end
 
+  def run(%Challenge{kind: :smt_query, assay: "smt/witness", payload: %{p1: p1, p2: p2, var: var}}, k) do
+    case k.prove_with_counterexample.(p1, p2, var, :int) do
+      {:failed, model} ->
+        case model_value(model, var) do
+          {:ok, xv} ->
+            if eval_pred(p1, xv) and not eval_pred(p2, xv),
+              do: :ok,
+              else: {:violation, {:bogus_counterexample, model}}
+
+          :error ->
+            # non-integer / malformed witness — the lint promised a counterexample but
+            # delivered an unusable value (e.g. Parser.parse_model negative-value bug)
+            {:violation, {:unusable_model, model}}
+        end
+
+      {:proven, nil} ->
+        # A claimed proof must itself be sound: no bounded x may witness p1 ∧ ¬p2
+        # (mirrors V6a's discharge check exactly). NOT redundant with V6a: that assay
+        # stubs/exercises prove_implication, a separate query/code path from
+        # prove_with_counterexample (reconciliation #4) — this is the only place that
+        # checks THIS function's own proven-claim.
+        case Enum.find(@domain, fn x -> eval_pred(p1, x) and not eval_pred(p2, x) end) do
+          nil -> :ok
+          x -> {:violation, {:false_proven, %{x: x, p1: p1, p2: p2}}}
+        end
+
+      {:unknown, nil} ->
+        :ok
+    end
+  end
+
+  defp model_value(model, var) when is_map(model) do
+    case Map.get(model, var) do
+      v when is_integer(v) -> {:ok, v}
+      _ -> :error
+    end
+  end
+
+  defp model_value(_model, _var), do: :error
+
   # --- bounded oracle: independent evaluator over the MetaAST predicate format ---
   # Mirrors Translator.translate_op/1 semantics exactly (single free variable = x).
   defp eval_pred({:literal, _meta, n}, _x), do: n
