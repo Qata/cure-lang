@@ -52,7 +52,7 @@ Status legend: ✅ at parity · 🔵 in flight (sub-project ④) · ⬜ not star
 | 7 | Propositional equality | Automatic `rewrite` motive inference (abstract LHS occurrences in the goal, à la Idris `rewrite … in`) — implemented in `rewrite_plan/6`, audited to parity with `elabRewrite` (P0); motive-under-`:case`-binder capture bug fixed. Conversion-occurrence rewriting (oracle probe rw07) now **parity** (`same`) via an elaborator bridge-lemma step (`2ac4add`): a refl-bodied bridge checked at the asymmetric endpoint through a constant motive, so the kernel only ever decides a top-level conversion. **Multi-occurrence rewriting now parity** (oracle `rw08` syntactic-multi + `rw09` conversion-multi, both `same`; `frp08_interchange_multi` `same`) via the LAZY-UNFOLDING TCB fix in TCB note (3) below: a stuck recursive call now has ONE canonical (folded) shape everywhere, so the single-pass syntactic occurrence-abstraction in `rewrite_plan/6` finds all occurrences uniformly — no elaborator change needed | E | additive | ✅ |
 | 8 | Equality / absurdity | `Void`/absurd elimination at the surface (`{:absurd}`) | K (leaf), E | additive | ✅ |
 | 9 | Inference unification | First-order metavariable engine: alloc, occurs-checked solve, zonk (`lib/cure/elab/unify.ex`) | E | — | ✅ |
-| 10 | Inference unification | Pattern (Miller) unification — solve `?m x y = t` | E | additive | ⬜ |
+| 10 | Inference unification | Pattern (Miller) unification — solve `?m x y = t`. **Landed** (oracle `dep/dep07_higher_order_family` accept/accept, adversarial neg `dep/dep09_higher_order_family_neg` reject/reject): inferring an implicit type family `{F: (N) -> Type}` from a lambda argument's type (`the2(fn(n)->n, m)`). Four additive E-layer links, no TCB: (1) the **Miller solver** `Unify.miller_solve` (`e419f09`) solves `?m x̄ := λx̄. t` when a metavariable is applied to distinct bound variables and the other side is rigid — `t` abstracted over `x̄` (de Bruijn: pattern var → solution-lambda binder, ambient var shifted, non-pattern crossed binder escapes), domains from the metavariable's recorded type (`MetaCtx.fresh/2` now stores types, threaded at the implicit-creation sites); conservative — any condition unmet falls through to first-order. (2) **Dependent function-type syntax** `(x: A) -> B(x)` (`ff314ad`, P + E): parser captures an optional `name:` binder per parenthesised domain, emitting `{:pi_type, …}` when any domain is named (else the existing non-dependent `Function` verbatim); `idx_to_core` builds the Core Π threading each binder into scope, mirroring the `sigma_type` clause (oracle `dep/dep08_dependent_arrow_param` accept/accept, isolates the parser feature). (3) **Scoped applied head** (`idx_to_core`): an applied name resolves against the de Bruijn scope before the family/ctor/global fallback, so `F(n)` (F an implicit param in scope) becomes `{:app, {:var,i}, …}` not a dangling `{:global, :F}` — the real first blocker, since as a global the call-site implicit substitution could never make `F` a solvable metavariable. (4) **Lambda-at-meta-Π solve** (`try_lambda_meta_pi`): a lambda arg at `(n:N) -> ?F(n)` binds the parameter, infers the body, and unifies the reconstructed Π against the expected one so the codomain metavariable solves under the binder — additive/fallback-only, reached only after inference failed, kernel re-checked. *Reach*: the ambient-variable Miller case via a non-lambda argument (`subst(e, v)`) is a separate path, still cleanly rejected (no-crash test green) | E, P | additive | ✅ |
 | 11 | Inference unification | Postponed/suspended constraints (real flex-flex: constraint queue + retry-on-progress) | E | additive | ⬜ |
 | 12 | Totality — termination | Single-argument structural descent | E | — | ✅ |
 | 13 | Totality — termination | **Mutual recursion**: soundness hole closed (`d13d718`; `diverging_mutual_pair` replays `:ok`, antibody banked as a permanent regression guard). Remaining is *reach* — well-founded mutual / lexicographic descent is conservatively rejected, not unsoundly accepted (P1/#14) | K, E | reach | ⬜ |
@@ -169,7 +169,9 @@ independent adversarial verification. Closes the "K-layer reach" that note (1)
 and row #7 had tracked as still-open for multi-occurrence.
 
 ### The honest headline
-Of 26 rows: **16 at parity, 10 remain, 0 live soundness holes** — the
+Of 26 rows: **17 at parity, 9 remain, 0 live soundness holes** (row #10 Miller
+pattern unification landed — higher-order implicit inference + dependent
+function-type syntax, oracle dep07/dep08/dep09) — the
 transliteration-P0 audit landed ④'s rows 2/8/16 and #7's audited-complete
 `rewrite` motive inference (rw07 now closed via the elaborator bridge lemma),
 the pre-port banking run closed #13's mutual-recursion hole (now a reach item),
@@ -187,10 +189,11 @@ coverage over nested patterns (kernel-checked per lowered level). The remaining
 *partially* landed: #4 var/wildcard catch-all, #6 capabilities A + B + sibling,
 #26 checked mode), ergonomics/inference (#10, #11), or assurance strength (#24,
 #25, plus A10's still-open wiring of the *existing* verticals onto the generated
-stream). With #3 + #17 + #22 landed, the next-highest-leverage items are the
-inference-unification depth (#10 Miller patterns, #11 postponed constraints) and
-#4 literals / #5 forced patterns (both need parser/grammar work — as-patterns
-`x@p` and dot-patterns `.e` currently do not parse).
+stream). With #3 + #17 + #22 + **#10** landed, the next-highest-leverage items are
+the remaining inference-unification depth (#11 postponed constraints; #10 Miller
+patterns is now at parity, incl. the dependent-arrow parser gap it surfaced) and
+#5 forced patterns (dot-patterns `.e` still need parser/grammar work; as-patterns
+`x@p` already landed under #4).
 
 ## 3. Antigen — coverage and capability expansion
 
@@ -320,5 +323,5 @@ primitive. See [[smt-trust-boundary-decision]] (Z3 stays an untrusted lint).
 4. **#7** — automatic `rewrite` motive inference (largest ergonomic gap in equality).
 5. **A8 / #22** — the term-generator metatheory engine (assurance jump), then A10.
 6. **#3 → #17, #4, #5 → A24** — pattern-matching reach (compiler pass, then forms, then forcing + its vertical).
-7. **#10, #11** — inference-unification depth (Miller patterns, postponed constraints).
+7. **#11** — postponed/suspended constraints (#10 Miller patterns landed).
 8. **#14, #6, A5, A6, A9** — remaining depth/ergonomics as capacity allows.
