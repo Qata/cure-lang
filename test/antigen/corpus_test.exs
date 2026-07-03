@@ -127,4 +127,61 @@ defmodule Antigen.CorpusTest do
     assert c.note == "hello world"
     assert c.payload.term == term
   end
+
+  defp mutant(fault, term \\ {:ctor, :Z, []}) do
+    Challenge.new(
+      kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+      payload: %{sig: :v1, ctx: [], type: {:type, 0}, term: term, fault: fault}
+    )
+  end
+
+  test "mutant fault round-trips every value shape and is readable in the line" do
+    faults = [
+      # atom/integer/nil/list (head_swap + deepen)
+      %{kind: :head_swap, witness: :head, expected_head: :Nat, injected_head: :Vec,
+        scope: nil, depth: 3, wrap_path: [:app_arg, :case_branch]},
+      # integer-pair scope (out_of_scope_var)
+      %{kind: :out_of_scope_var, witness: :scope, expected_head: nil,
+        injected_head: nil, scope: {2, 2}, depth: 0, wrap_path: []},
+      # Core-term head values (universe)
+      %{kind: :universe, witness: :level, expected_head: {:type, 0},
+        injected_head: {:type, 1}, scope: nil, depth: 1, wrap_path: [:pair]},
+      # conversion carrier fault (integers + atoms)
+      %{kind: :conv_index, witness: :conv, expected_index: 2, actual_index: 3,
+        reduction: :required, depth: 2, carrier: :conv_index}
+    ]
+
+    for f <- faults do
+      line = Corpus.encode_record(mutant(f))
+      refute String.contains?(line, "\n")
+      assert line =~ "fault=((", "fault must be an inline assoc-sexpr for #{inspect(f)}"
+      assert {:ok, c2} = Corpus.decode_record(line)
+      assert c2.payload.fault == f, "fault mismatch for #{inspect(f)}"
+    end
+  end
+
+  test "non-mutant records carry no fault= field" do
+    c = Challenge.new(kind: :stub, assay: "stub", label: :none,
+                      payload: %{term: {:type, 0}}, seed: 1, note: "n")
+    refute Corpus.encode_record(c) =~ "\tfault="
+  end
+
+  test "legacy fault-in-scaffold still decodes (dual-read)" do
+    # a legacy mutant: Base64 pieces + fault inside the Base64 scaffold, no fault= field
+    fault = %{kind: :head_swap, witness: :head, expected_head: :Nat,
+              injected_head: :Vec, scope: nil, depth: 0, wrap_path: []}
+    scaffold = %{"sig" => "v1", "ctx_len" => 0, "fault" => fault}
+    legacy =
+      Enum.join(
+        ["antigen-record", "kind=mutant_term", "assay=mutation/rejection", "label=ill_typed",
+         "seed=1", "note=-", "scaffold=" <> Corpus.encode_scaffold(scaffold),
+         "key=" <> Base.encode64("k"),
+         "pieces=type::" <> Base.encode64(Serialize.encode({:type, 0})) <>
+           ";;term::" <> Base.encode64(Serialize.encode({:ctor, :Z, []}))],
+        "\t"
+      )
+
+    assert {:ok, c} = Corpus.decode_record(legacy)
+    assert c.payload.fault == fault
+  end
 end

@@ -24,6 +24,10 @@ defmodule Antigen.Corpus do
       |> Enum.map(fn {id, t} -> "#{id}::#{Serialize.encode(t)}" end)
       |> Enum.join(";;")
 
+    {fault, scaffold_rest} = Map.pop(scaffold, "fault")
+
+    fault_field = if is_map(fault), do: ["fault=#{encode_fault(fault)}"], else: []
+
     Enum.join(
       [
         @marker,
@@ -32,7 +36,8 @@ defmodule Antigen.Corpus do
         "label=#{c.label}",
         "seed=#{c.seed || "-"}",
         "note=#{enc_note(c.note)}",
-        "scaffold=#{encode_scaffold(scaffold)}",
+        "scaffold=#{encode_scaffold(scaffold_rest)}"
+      ] ++ fault_field ++ [
         "key=#{Base.encode64(key)}",
         "pieces=#{piece_str}"
       ],
@@ -55,7 +60,14 @@ defmodule Antigen.Corpus do
       kind = String.to_existing_atom(m["kind"])
       label = String.to_existing_atom(m["label"])
       seed = if m["seed"] == "-", do: nil, else: String.to_integer(m["seed"])
-      scaffold = decode_scaffold(m["scaffold"] || "-")
+      base_scaffold = decode_scaffold(m["scaffold"] || "-")
+
+      scaffold =
+        case m["fault"] do
+          nil -> base_scaffold                            # legacy: fault (if any) already in scaffold
+          f_str -> Map.put(base_scaffold, "fault", decode_fault(f_str))
+        end
+
       note = if legacy_record?(m["pieces"]), do: dec_opt(m["note"]), else: dec_note(m["note"])
       {:ok, Challenge.from_pieces(kind, m["assay"], label, seed, note, scaffold, pieces)}
     else
@@ -163,6 +175,84 @@ defmodule Antigen.Corpus do
   # dec_opt: legacy Base64 note decode (still used by the legacy-record branch).
   defp dec_opt("-"), do: nil
   defp dec_opt(b64), do: Base.decode64!(b64)
+
+  # ── fault provenance codec (readable assoc-sexpr) ────────────────────────────
+  # Encodes a flat fault map as `((key val)…)`, keys sorted for determinism.
+  # Values: atom->name, int->digits, nil->"nil", {i,i}->"(pair i i)",
+  # [atoms]->"(list a b …)", Core-term tuple->"(term <serialize>)".
+  defp encode_fault(map) do
+    body =
+      map
+      |> Enum.sort_by(fn {k, _} -> Atom.to_string(k) end)
+      |> Enum.map(fn {k, v} -> "(#{k} #{enc_fault_val(v)})" end)
+      |> Enum.join(" ")
+
+    "(" <> body <> ")"
+  end
+
+  defp enc_fault_val(nil), do: "nil"
+  defp enc_fault_val(v) when is_integer(v), do: Integer.to_string(v)
+  defp enc_fault_val({a, b}) when is_integer(a) and is_integer(b), do: "(pair #{a} #{b})"
+  defp enc_fault_val(v) when is_atom(v), do: Atom.to_string(v)
+  defp enc_fault_val(v) when is_list(v),
+    do: "(list " <> Enum.map_join(v, " ", &Atom.to_string/1) <> ")"
+
+  defp enc_fault_val(v) when is_tuple(v) do
+    if Cure.Core.Term.term?(v),
+      do: "(term " <> Serialize.encode(v) <> ")",
+      else: raise(ArgumentError, "unencodable fault value: #{inspect(v)}")
+  end
+
+  # decode_fault: parse the assoc-sexpr back into the flat map.
+  defp decode_fault(str) do
+    {sexp, _rest} = read_sexp(str)  # sexp = list of [key | value-tokens] groups
+
+    sexp
+    |> Enum.map(fn [k | vtoks] -> {String.to_atom(k), dec_fault_val(vtoks)} end)
+    |> Map.new()
+  end
+
+  # a value is a single token (atom/int/"nil") or a nested group [tag | rest]
+  defp dec_fault_val(["nil"]), do: nil
+  defp dec_fault_val([tok]) when is_binary(tok) do
+    case Integer.parse(tok) do
+      {n, ""} -> n
+      _ -> String.to_atom(tok)
+    end
+  end
+  defp dec_fault_val([["pair", a, b]]), do: {String.to_integer(a), String.to_integer(b)}
+  defp dec_fault_val([["list" | elems]]), do: Enum.map(elems, &String.to_atom/1)
+  # a "(term X)" group parses to ["term", X] where X is the single nested term
+  # s-expr (itself a token list). Re-serialize X (NOT the wrapping list) so
+  # Serialize.decode rebuilds it.
+  defp dec_fault_val([["term", term_sexp]]) do
+    {:ok, t} = Serialize.decode(reassemble_tok(term_sexp))
+    t
+  end
+
+  # ── minimal s-expr reader: string -> {[group|token], rest} ───────────────────
+  # tokens are bare words (binaries); a "(" opens a nested list. Returns the
+  # top-level list's children. Used only for the small, trusted fault field.
+  defp read_sexp("(" <> rest), do: read_list(String.trim_leading(rest), [])
+  defp read_list(")" <> rest, acc), do: {Enum.reverse(acc), rest}
+  defp read_list("(" <> _ = s, acc) do
+    {child, rest} = read_sexp(s)
+    read_list(String.trim_leading(rest), [child | acc])
+  end
+  defp read_list(s, acc) do
+    {word, rest} = read_word(s, [])
+    read_list(String.trim_leading(rest), [word | acc])
+  end
+
+  defp read_word(<<c, _::binary>> = s, acc) when c in [?\s, ?(, ?)],
+    do: {acc |> Enum.reverse() |> List.to_string(), s}
+  defp read_word(<<>>, acc), do: {acc |> Enum.reverse() |> List.to_string(), <<>>}
+  defp read_word(<<c, rest::binary>>, acc), do: read_word(rest, [c | acc])
+
+  # Re-serialize an already-parsed token tree back to a flat Serialize string.
+  defp reassemble_tok(tok) when is_binary(tok), do: tok
+  defp reassemble_tok(list) when is_list(list),
+    do: "(" <> Enum.map_join(list, " ", &reassemble_tok/1) <> ")"
 
   # A record is legacy iff its (first) piece body is Base64, i.e. does not start
   # with "(" — every Serialize.encode output starts with "(", Base64 never does.
