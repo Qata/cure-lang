@@ -357,6 +357,10 @@ defmodule Antigen.Runner do
   defp assay_module("unify_types/intrinsic"), do: Antigen.Assays.Unifier
   defp assay_module("totality_closure/soundness"), do: Antigen.Assays.TotalityClosureAssay
   defp assay_module("totality_closure/completeness"), do: Antigen.Assays.TotalityClosureAssay
+  defp assay_module("erasure/idempotent"), do: Antigen.Assays.Erasure
+  defp assay_module("erasure/selective"), do: Antigen.Assays.Erasure
+  defp assay_module("erasure/wellformed"), do: Antigen.Assays.Erasure
+  defp assay_module("relevance/soundness"), do: Antigen.Assays.Erasure
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)

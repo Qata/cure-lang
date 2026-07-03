@@ -175,4 +175,21 @@ defmodule Antigen.Assays.ErasureTest do
                Erasure.run(rel_ch(Env.empty(), {:var, 0}, :returned), k)
     end
   end
+
+  describe "generator + runner wiring" do
+    alias Antigen.Runner
+
+    test "each catalog is non-empty and correctly tagged" do
+      assert ErasureTerm.erase_challenges() != []
+      assert ErasureTerm.relevance_challenges() != []
+      ids = MapSet.new(ErasureTerm.erase_challenges(), & &1.assay)
+      assert "erasure/idempotent" in ids and "erasure/selective" in ids and "erasure/wellformed" in ids
+      assert Enum.all?(ErasureTerm.relevance_challenges(), & &1.assay == "relevance/soundness")
+    end
+
+    test "runner dispatches all four ids and the whole clean catalog is :ok" do
+      all = ErasureTerm.erase_challenges() ++ ErasureTerm.relevance_challenges()
+      assert Enum.all?(all, fn c -> Runner.replay_one(c) == :ok end)
+    end
+  end
 end

@@ -18,6 +18,7 @@ defmodule Antigen.Challenge do
           | :surface_expr
           | :unify_problem
           | :closure_env
+          | :erasure_term
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -79,7 +80,10 @@ defmodule Antigen.Challenge do
     :elab_program, :well_typed,
     # totality-closure vertical (V5): kind + generator-produced env names
     # (:total_id, :i, :positive, :diverging already interned above)
-    :closure_env, :loop, :callee, :Vessel, :Wrap
+    :closure_env, :loop, :callee, :Vessel, :Wrap,
+    # erasure/relevance vertical (V4): kind + generator ctor/arg names
+    # (:f, :g, :d, :b, :P already interned above)
+    :erasure_term, :MkQ, :MkP, :a
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
