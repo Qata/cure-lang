@@ -37,7 +37,11 @@ budget so a banked antibody replays identically (§6).
 
 **Predicate AST format (the MetaAST 3-tuple, verified: `translator.ex:5-8,127-151`)** —
 the SAME surface format V1's normalizer consumed:
-- `{:binary_op, [operator: op], [left, right]}` — `op ∈ {:+,:-,:*,:>,:<,:>=,:<=,:==,:!=,:and,:or}`
+- `{:binary_op, [operator: op], [left, right]}` — `op ∈ {:+,:-,:*,:/,:%,:>,:<,:>=,:<=,:==,:!=,:and,:or}`
+  (`translate_op/1`, translator.ex:225-239, ALSO accepts `:/` → `div` and `:%` →
+  `mod`; the catalog stays inside the non-goals' linear/one-variable scope and does
+  not need to exercise them, but the enumeration above is the translator's full
+  accepted set, not a subset)
 - `{:unary_op, [operator: op], [operand]}` — `op ∈ {:not, :-}`
 - `{:literal, [subtype: :integer], n}` / `{:variable, _, name}` (single free var, string name).
 
@@ -160,7 +164,23 @@ Negative controls prove each assay load-bearing:
   to be incomplete).
 - No differential outside decidable linear integer arithmetic / boolean — nonlinear
   (`x*x`), quantifiers, uninterpreted functions (`byte_size`) are out of scope; the
-  catalog stays inside `QF_LIA` over one variable.
+  catalog stays inside `QF_LIA` over one variable. This restriction is load-bearing
+  for soundness, not just decidability: `Translator.do_translate/1`'s catch-all
+  clause (translator.ex:210-221) approximates any AST node it doesn't recognize as
+  the literal `true` (logging a warning) rather than failing the query. Confirmed
+  traceable unsoundness OUTSIDE the catalog's scope: if such a node stood in for the
+  WHOLE of `pred2` in `generate_subtype_query`'s `(and P1 (not P2))` encoding, `(not
+  true)` is `false`, collapsing the conjunction to `unsat` regardless of `P1` —
+  `prove_implication` would return `true` (proven) for an implication that may not
+  actually hold, a false discharge caused purely by a translation gap, not a real
+  proof. The MetaAST forms this vertical's catalog is restricted to
+  (`:binary_op`/`:unary_op`/`:literal`/`:variable`, all of §2's operator set) are all
+  fully translatable, so the clean catalog does not trigger this path and V6's
+  "clean catalog is `:ok`" premise (§7) holds. This is documented here as a known,
+  real soundness gap in `Cure.SMT.Translator` that stays out of V6's scope by
+  construction — analogous to why the `:cold` PGO remap (§6) must also be avoided —
+  not a hypothetical, and any future vertical widening the catalog past primitive
+  arithmetic/boolean forms must re-litigate this non-goal.
 - No SMTCoq / proof-reconstruction (that is the someday the locked decision defers).
 - No random query fuzzer — a curated fixed catalog (elab pattern).
 
@@ -171,19 +191,52 @@ Negative controls prove each assay load-bearing:
    `Translator.do_translate/1`'s semantics EXACTLY (e.g. `:==` is equality, `:!=`
    is disequality, `:-` is both binary subtraction and unary negation — the arity
    disambiguates). Integer semantics only (base_type `:int`); the catalog uses no
-   floats.
-2. **`prove_with_counterexample` model shape.** Confirm `Cure.SMT.Parser.parse_model/1`
-   returns `%{var_name => value}` and the value's type (integer? string needing
-   `String.to_integer`?) so V6c can `eval_pred(p, xv)` at the model's value. Pin the
-   extraction (`model[var_name]` → integer).
-3. **Z3 availability + test async.** Confirm Z3 is actually invocable in this
-   worktree's test env (if not, the fallback runs — still sound, so the clean
-   catalog should still be `:ok`, but confirm no crash). Decide `async: true|false`
-   for the SMT test module (subprocess contention). Neither gates the vertical.
+   floats. `:/` and `:%` are in the translator's accepted set (§2) but out of the
+   catalog's scope per §8 non-goals — `eval_pred/2` need not implement them.
+2. **`prove_with_counterexample` model shape — confirmed parser bug on negative
+   witnesses.** `Cure.SMT.Parser.parse_model/1` returns `%{var_name => value}`; for
+   a NON-negative integer value it already returns a native Elixir integer (no
+   parsing needed — confirmed: `parse_model` on `"...Int 3)"` yields `%{"x" => 3}`).
+   But for a NEGATIVE value it is broken: Z3's real `get-model` output represents
+   negative integers as `(- N)` (confirmed via live `z3 -smt2 -in`, e.g.
+   `(define-fun x () Int\n    (- 99))`), and the outer regex's `[^\)]+` capture
+   truncates at the FIRST `)` — the one closing `(- N)` itself — before reaching the
+   `\)` the regex expects to close `define-fun`. The captured value string is then
+   `"(- 99"` (missing its closing paren), which fails `parse_value`'s own
+   `^\(-\s*\d+\)$` negative-literal pattern (that pattern requires the trailing `)`
+   that was already stripped) and falls through to the raw-string catch-all —
+   `parse_model` returns `%{"x" => "(- 99"}`, not `%{"x" => -99}`. Verified directly:
+   `Cure.SMT.Parser.parse_model/1` on synthetic Z3-shaped multi-line output for a
+   negative define-fun returns the malformed string, not an integer. This is NOT
+   hypothetical for V6c: a plausible baseline predicate like `x > -100 ⇒ x > 0`
+   makes Z3 pick a negative witness (confirmed live: `x = -99`) for exactly this
+   shape. Since V6c evaluates `eval_pred` at the model's actual value (unbounded,
+   spans negatives) this bug is squarely in V6c's path, not a corner the catalog can
+   dodge by construction alone. The plan must pin ONE of: (a) the V6c assay's model
+   extraction defensively re-parses the `"(- N"`-shaped malformed string itself
+   (working around the untrusted `Parser`'s bug without touching
+   `Cure.SMT.*`, consistent with §7's read-only invariant) before calling
+   `eval_pred(p, xv)`; or (b) the catalog's V6c baseline entries are chosen/verified
+   (by running them, not by assumption) to only ever produce non-negative witnesses.
+   Do not assume `model[var_name]` is always a ready-to-use integer.
+3. **Z3 availability + test async.** Confirmed during spec review: `z3` IS installed
+   and invocable in this worktree (`/opt/homebrew/bin/z3`, verified live via
+   `z3 -smt2 -in` producing real `sat`/`unsat`/model output for §9-item-2's checks
+   above) — the clean catalog will exercise the real Z3 path, not the
+   `:unknown`-only conservative fallback (`Process.z3_available?/0` → `false` branch
+   in `Solver.run_query/2`). The plan should still verify this holds in CI (not just
+   this worktree) and confirm the fallback path (if ever hit) doesn't crash — still
+   sound, so the clean catalog stays `:ok` either way. Decide `async: true|false` for
+   the SMT test module (subprocess contention). Neither gates the vertical.
 4. **Challenge kind + atoms.** Add a `:smt_query` kind (typespec-only — the MetaAST
    predicate + var + mode payload doesn't fit an existing kind); add the var name
-   atom(s) and any literal names to `@known_atoms`; add four... three
-   `assay_module/1` clauses (Runner has no catch-all).
+   atom(s) and any literal names to `@known_atoms`; add three `assay_module/1`
+   clauses, one per assay id in §5's table (Runner has no catch-all). Precedent
+   (verified): `:closure_env` (V5) also has no `Challenge.to_pieces/from_pieces`
+   clause — kinds that never go through `explore/1`'s corpus-banking path don't need
+   serialization support, only the `@type kind ::` union entry and `@known_atoms`
+   (V5 added both defensively even without a `to_pieces` clause) — `:smt_query`
+   follows the same shape.
 
 ## 10. Test catalog (for the plan — §5 of the plan will expand each)
 
