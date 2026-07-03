@@ -50,4 +50,46 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
     assert TotalityClosureAssay.run(snd_ch(env, :accept), k) ==
              {:violation, {:total_env_not_certified, {:error, {:totality_required, :total_id}}}}
   end
+
+  describe "totality_closure/completeness (V5b)" do
+    defp cmp_ch(env) do
+      Challenge.new(kind: :closure_env, assay: "totality_closure/completeness", label: :positive,
+        payload: %{env: env}, seed: 1)
+    end
+
+    # direct: :loop in a family index. transitive: :loop's body calls :callee, both must be reached.
+    defp callee_def(env), do: Env.add_def(env, :callee, int_arrow(), {:lam, {:int_type}, {:var, 0}})
+    defp loop_calls_callee(env),
+      do: Env.add_def(env, :loop, int_arrow(), {:lam, {:int_type}, {:app, {:global, :callee}, {:var, 0}}})
+
+    test "baseline: direct type-position global is in type_level_fns" do
+      env = Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop)
+      assert TotalityClosureAssay.run(cmp_ch(env)) == :ok
+    end
+
+    test "baseline: transitive-callee global is in type_level_fns" do
+      env = Env.empty() |> callee_def() |> loop_calls_callee() |> with_family_index(:Vessel, :loop)
+      assert TotalityClosureAssay.run(cmp_ch(env)) == :ok
+    end
+
+    test "negative control: an empty type_level_fns stub misses everything" do
+      env = Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop)
+      k = %{TotalityClosureAssay.__real__() | type_level_fns: fn _e -> MapSet.new() end}
+      assert {:violation, {:closure_missed, _}} = TotalityClosureAssay.run(cmp_ch(env), k)
+    end
+
+    test "negative control: a type_level_fns stub dropping the transitive callee" do
+      env = Env.empty() |> callee_def() |> loop_calls_callee() |> with_family_index(:Vessel, :loop)
+      k = %{TotalityClosureAssay.__real__() | type_level_fns: fn _e -> MapSet.new([:loop]) end}  # drops :callee
+      assert {:violation, {:closure_missed, missing}} = TotalityClosureAssay.run(cmp_ch(env), k)
+      assert :callee in missing
+    end
+
+    test "independent walk recurses into :prim args (the clause collect/1 lacks)" do
+      # a global nested in a :prim's args must be found by the independent walk;
+      # this exercises reconciliation #2 in isolation, without the real closure.
+      env = %{Env.empty() | families: %{P: %{name: :P, params: [], indices: [{:i, {:prim, :eq, [{:global, :buried}, {:int_lit, 0}]}}], level: 0}}}
+      assert :buried in TotalityClosureAssay.__reachable__(env)
+    end
+  end
 end
