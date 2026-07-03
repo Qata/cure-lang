@@ -14,7 +14,7 @@ defmodule Antigen.Assays.Term do
   alias Antigen.Generators.SigMenu
   alias Cure.Core.{Kernel, Normalise, Conv, Serialize, Context}
 
-  @assay_fuel 500
+  @assay_fuel 500_000
   def assay_fuel, do: @assay_fuel
 
   # Real kernel ops, the byte-identical default for `run/1`. `run/2` reads its

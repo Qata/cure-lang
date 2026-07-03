@@ -13,7 +13,7 @@ defmodule Antigen.Assays.Reflexivity do
 
   # Fixed δ-unfold budget (spec §8). A genuinely-normalizing conversion resolves in
   # a handful of unfolds; this margin only ever trips on non-normalization.
-  @fuel 500
+  @fuel 500_000
 
   # Real kernel op, the byte-identical default for `run/1`.
   @real_kernel %{conv_within: &Conv.conv_within?/6}

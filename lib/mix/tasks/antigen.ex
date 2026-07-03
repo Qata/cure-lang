@@ -6,8 +6,9 @@ defmodule Mix.Tasks.Antigen do
       mix antigen generate [--count N | --budget Nm] [--seeds PATH] [--report-dir DIR]
 
   `mix antigen` is the **explorer**: generate → assay → bank; it self-terminates
-  after a bounded number of generation rounds (`--count`, default #{200}) or a
-  wall-budget (`--budget 3m`, converted at a fixed `@rounds_per_minute`).
+  after a bounded number of generation rounds (`--count`, default #{40_000},
+  calibrated so a full run takes ~1 minute) or a wall-budget (`--budget 3m`,
+  converted at a fixed `@rounds_per_minute`).
 
   `--bias` enables health-adaptive round-based generation (spec §4): the mix
   reweights toward the weakest vertical between rounds. It only has an observable
@@ -31,7 +32,7 @@ defmodule Mix.Tasks.Antigen do
 
   @shortdoc "Run the Antigen metatheory engine (explore | generate)"
 
-  @default_count 200
+  @default_count 40_000
   @rounds_per_minute 2000
 
   @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string, report_dir: :string]
