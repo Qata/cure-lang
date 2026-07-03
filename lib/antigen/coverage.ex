@@ -62,8 +62,50 @@ defmodule Antigen.Coverage do
     base = for {c, flag} <- @elim_flags, MapSet.member?(ctors, c), into: MapSet.new(), do: flag
     base = if kind in [:def_group, :forcing_pair], do: MapSet.put(base, :has_mutual_group), else: base
     base = if Enum.any?(terms, &has_shadowing?/1), do: MapSet.put(base, :has_shadowing), else: base
-    base
+    base = MapSet.union(base, former_flags(terms))
+    MapSet.put(base, binder_depth_flag(terms))
   end
+
+  # Former-histogram signal (spec §2): a bounded per-class count bucket for each
+  # Core former, folded into `flags` so `key/1` stays a 4-tuple. Reuses the
+  # existing `fold/3` + `tag/1` (fold only ever passes tuple nodes to its callback).
+  @former_classes [:lam, :pi, :app, :case, :ctor, :data, :eq, :rewrite, :prim]
+  defp former_flags(terms) do
+    counts =
+      Enum.reduce(terms, %{}, fn t, acc ->
+        fold(t, acc, fn node, a ->
+          case tag(node) do
+            cls when cls in @former_classes -> Map.update(a, cls, 1, &(&1 + 1))
+            _ -> a
+          end
+        end)
+      end)
+
+    for cls <- @former_classes, into: MapSet.new() do
+      :"former_#{cls}_#{count_bucket(Map.get(counts, cls, 0))}"
+    end
+  end
+
+  defp count_bucket(0), do: :n0
+  defp count_bucket(1), do: :n1
+  defp count_bucket(_), do: :nm
+
+  # Binder-depth signal (spec §2): max binder nesting, bucketed (distinct from the
+  # overall term-depth bucket already in the tuple).
+  defp binder_depth_flag(terms) do
+    d = terms |> Enum.map(&binder_depth/1) |> Enum.max(fn -> 0 end)
+    :"binder_depth_#{bucket(d)}"
+  end
+
+  defp binder_depth({t, _dom, body}) when t in [:lam, :pi, :sigma], do: 1 + binder_depth(body)
+  defp binder_depth({:case, s, m, brs}) do
+    Enum.max([binder_depth(s), binder_depth(m) |
+              Enum.map(brs, fn {_c, ar, b} -> (if ar > 0, do: 1, else: 0) + binder_depth(b) end)])
+  end
+  defp binder_depth(t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> tl() |> Enum.map(&binder_depth/1) |> Enum.max(fn -> 0 end)
+  defp binder_depth(l) when is_list(l), do: l |> Enum.map(&binder_depth/1) |> Enum.max(fn -> 0 end)
+  defp binder_depth(_), do: 0
 
   # `:has_shadowing` (spec §7.2): a coarse approximation — any `:lam`/`:pi`/`:sigma`
   # binder nested underneath another such binder. A single top-level binder does
