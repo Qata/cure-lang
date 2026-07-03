@@ -2854,6 +2854,50 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # Like `parse_type_param_list`, but each element may carry an optional binder
+  # name (`x: A`). Used only for a standalone parenthesised type that may become a
+  # dependent function type `(x: A) -> …`. Returns `{binder | nil, type_ast}`
+  # pairs so the caller can build a dependent Π (binders present) or the existing
+  # non-dependent arrow (all binders nil).
+  defp parse_paren_type_list(state) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :rparen} ->
+        {[], state}
+
+      _ ->
+        {binder, state} = parse_optional_binder(state)
+        {t, state} = parse_type_expr(state)
+        state = skip_newlines(state)
+
+        case peek(state) do
+          %Token{type: :comma} ->
+            state = advance(state)
+            state = skip_newlines(state)
+            {rest, state} = parse_paren_type_list(state)
+            {[{binder, t} | rest], state}
+
+          _ ->
+            {[{binder, t}], state}
+        end
+    end
+  end
+
+  # An optional `name :` binder prefix inside a parenthesised arrow domain. Only
+  # consumes when an identifier is immediately followed by `:` — so `(N)` stays a
+  # plain domain while `(n: N)` binds `n`. (A type element in this position is
+  # never otherwise followed by `:`.)
+  defp parse_optional_binder(state) do
+    case {peek(state), peek(advance(state))} do
+      {%Token{type: :identifier, value: v}, %Token{type: :colon}} ->
+        {to_string(v), advance(advance(state))}
+
+      _ ->
+        {nil, state}
+    end
+  end
+
   defp parse_refinement_type(state) do
     # {x: BaseType | predicate}
     state = advance(state)
@@ -3798,23 +3842,37 @@ defmodule Cure.Compiler.Parser do
 
     case token.type do
       :lparen ->
-        # Tuple type or function type: (A, B) -> C
+        # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
+        # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
+        # codomain (and later domains) may mention `x`.
         state = advance(state)
-        {inner, state} = parse_type_param_list(state)
+        {inner, state} = parse_paren_type_list(state)
         state = expect(state, :rparen)
 
         case peek(state) do
           %Token{type: :arrow} ->
             state = advance(state)
             {ret, state} = parse_type_expr(state)
-            ast = {:function_call, [name: "Function", function_type: true], inner ++ [ret]}
+            binders = Enum.map(inner, &elem(&1, 0))
+            doms = Enum.map(inner, &elem(&1, 1))
+
+            ast =
+              if Enum.all?(binders, &is_nil/1) do
+                # No named domain — the existing non-dependent arrow, unchanged.
+                {:function_call, [name: "Function", function_type: true], doms ++ [ret]}
+              else
+                # At least one named domain — a dependent Π; carry the binder names
+                # (nil for anonymous domains) for the elaborator to scope.
+                {:pi_type, [binders: binders], doms ++ [ret]}
+              end
+
             {ast, state}
 
           _ ->
-            # Just a grouped type or tuple type
-            case inner do
+            # Grouped type or tuple type — binders (if any) are not meaningful here.
+            case Enum.map(inner, &elem(&1, 1)) do
               [single] -> {single, state}
-              _ -> {{:tuple, [], inner}, state}
+              many -> {{:tuple, [], many}, state}
             end
         end
 

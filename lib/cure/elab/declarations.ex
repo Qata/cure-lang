@@ -782,6 +782,30 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A dependent function type `(x1: D1, …, xn: Dn) -> R` becomes the Π
+  # `Π(x1:D1). … Π(xn:Dn). R`. Each domain is elaborated with the earlier binders
+  # in scope, and the codomain with all of them, so `(n: N) -> P(n)` resolves the
+  # `n` in `P(n)` as the Π-bound variable (de Bruijn `{:var, 0}`). Direct analog of
+  # the `sigma_type` binder threading above; `nil` binders (anonymous domains, from
+  # a mixed `(a, x: B) -> …`) push a placeholder so indices stay aligned.
+  defp idx_to_core({:pi_type, [binders: names], asts}, scope, fam, env) do
+    {domains, [ret_ast]} = Enum.split(asts, length(asts) - 1)
+
+    folded =
+      Enum.zip(names, domains)
+      |> Enum.reduce_while({:ok, [], scope}, fn {name, dom_ast}, {:ok, rev, sc} ->
+        case idx_to_core(dom_ast, sc, fam, env) do
+          {:ok, dom} -> {:cont, {:ok, [dom | rev], [(name || :_) | sc]}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+
+    with {:ok, rev_doms, inner_scope} <- folded,
+         {:ok, ret} <- idx_to_core(ret_ast, inner_scope, fam, env) do
+      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, dom, acc} end)}
+    end
+  end
+
   # A projection `p.1` / `p.2` used in a type position (e.g. `SF(as, bs, p.1)`).
   defp idx_to_core({:attribute_access, meta, [inner_ast]}, scope, fam, env) do
     with {:ok, inner} <- idx_to_core(inner_ast, scope, fam, env) do
