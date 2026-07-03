@@ -966,6 +966,14 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
+    # A tuple SCRUTINEE (`match %[xs, ys] | %[C(…), D(…)] -> …`) is lowered to a
+    # nested single-scrutinee match (`match xs | C(…) -> match ys | D(…) -> …`),
+    # so the existing dependent single-scrutinee machinery handles it — absurd
+    # cross-constructor cases (a `Vector`'s shared index rules them out) fall out
+    # of the inner index-refined match's coverage, exactly as the hand-written
+    # nested form already does. Non-tuple scrutinees are returned unchanged.
+    {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
+
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms1b} <- desugar_tuple_args(arms1),
          # A guard on a *nested* constructor pattern is threaded through the
@@ -1867,6 +1875,105 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp strip_tuple_args_in_ctor(other), do: {:ok, other, []}
+
+  # --- tuple-scrutinee matching (parity #6) ----------------------------------
+  #
+  # `match %[e₀, e₁, …] | %[p₀, p₁, …] -> body` (simultaneous / Idris'
+  # `case (e₀, e₁) of`) is desugared, ONE column at a time, into a nested
+  # single-scrutinee match `match e₀ | p₀ -> match %[e₁, …] | %[p₁, …] -> body`.
+  # The remaining columns re-enter this same path (their scrutinee is a smaller
+  # tuple, or the bare element when only one column is left), so the whole tree
+  # is built by re-entry. Each first-column constructor keeps its argument
+  # patterns inline, so `desugar_nested_arms` still lowers any nested args, and
+  # the inner match on an index-refined scrutinee elides the impossible sibling
+  # constructors (e.g. two `Vector`s that share index `n` cannot be `empty`/
+  # `prepend`), exactly as the hand-written nested form relies on.
+  #
+  # Fires only for a tuple scrutinee (≥2 elems) whose arms are ALL guardless
+  # tuple patterns of matching arity, with DISTINCT constructor heads in the
+  # first column. Anything else (non-tuple scrutinee, a variable/wildcard or a
+  # repeated head in the first column) is returned UNCHANGED, so ordinary
+  # matches are untouched and still-unsupported shapes reach their existing
+  # clean rejection rather than being miscompiled.
+  defp desugar_tuple_scrutinee({:tuple, _meta, elems} = scrut, arms)
+       when length(elems) >= 2 do
+    with {:ok, rows} <- tuple_scrutinee_rows(elems, arms),
+         {:ok, new_scrut, new_arms} <- split_first_tuple_column(elems, rows) do
+      {new_scrut, new_arms}
+    else
+      _ -> {scrut, arms}
+    end
+  end
+
+  defp desugar_tuple_scrutinee(scrut, arms), do: {scrut, arms}
+
+  # Validate every arm is a guardless tuple pattern of the scrutinee's arity;
+  # return the rows as `{[col-patterns], body-expr}`.
+  defp tuple_scrutinee_rows(elems, arms) do
+    n = length(elems)
+
+    Enum.reduce_while(arms, {:ok, []}, fn
+      {:match_arm, meta, body}, {:ok, acc} ->
+        case Keyword.fetch!(meta, :pattern) do
+          {:tuple, _tm, pats} when length(pats) == n ->
+            if Keyword.has_key?(meta, :guard) do
+              {:halt, :not_applicable}
+            else
+              {:cont, {:ok, acc ++ [{pats, single_body(body)}]}}
+            end
+
+          _ ->
+            {:halt, :not_applicable}
+        end
+
+      _other, _acc ->
+        {:halt, :not_applicable}
+    end)
+  end
+
+  # Split the first column: outer scrutinee `e₀`, one outer arm per row keeping
+  # its first-column pattern, whose body matches the remaining columns. Requires
+  # all first-column patterns to be constructors with distinct heads (disjoint,
+  # so first-match order is preserved and no row is shadowed).
+  defp split_first_tuple_column([e0 | erest], rows) do
+    col0 = Enum.map(rows, fn {[p0 | _], _} -> p0 end)
+
+    heads =
+      Enum.map(col0, fn
+        {:function_call, fm, _} -> {:ok, Keyword.fetch!(fm, :name)}
+        _ -> :error
+      end)
+
+    cond do
+      not Enum.all?(heads, &match?({:ok, _}, &1)) ->
+        :not_applicable
+
+      not distinct?(Enum.map(heads, fn {:ok, h} -> h end)) ->
+        :not_applicable
+
+      true ->
+        arms =
+          Enum.map(rows, fn {[p0 | prest], body} ->
+            {:match_arm, [pattern: p0], [build_inner_tuple_match(erest, prest, body)]}
+          end)
+
+        {:ok, e0, arms}
+    end
+  end
+
+  # The remaining columns become the inner match. A single remaining column is a
+  # bare single-scrutinee match; two or more re-enter `desugar_tuple_scrutinee`
+  # as a smaller tuple scrutinee.
+  defp build_inner_tuple_match([e1], [p1], body) do
+    {:pattern_match, [], [e1, {:match_arm, [pattern: p1], [body]}]}
+  end
+
+  defp build_inner_tuple_match(erest, prest, body) when length(erest) >= 2 do
+    {:pattern_match, [],
+     [{:tuple, [], erest}, {:match_arm, [pattern: {:tuple, [], prest}], [body]}]}
+  end
+
+  defp distinct?(list), do: length(Enum.uniq(list)) == length(list)
 
   # --- tuple-pattern matching (parity #4) ------------------------------------
   #
