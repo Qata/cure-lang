@@ -326,7 +326,45 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A surface binary operator lowers to the kernel primitive `{:prim, op, args}`,
+  # whose typing rules (`infer_prim`) already fix the result: arithmetic returns
+  # the shared numeric type, comparisons/equality/connectives return Bool. We
+  # elaborate both operands in inference mode, assemble the prim, and let the
+  # kernel infer the result type — no duplicated type rules here.
+  def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
+    case prim_op(Keyword.fetch!(meta, :operator)) do
+      {:ok, op} ->
+        with {:ok, l_core, _lt} <- elaborate_expr_typed(l, names, ctx, env),
+             {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+             term = {:prim, op, [l_core, r_core]},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
+      :error ->
+        {:error, {:unsupported_expression, expr}}
+    end
+  end
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the kernel's
+  # primitive opcodes. Only the ops the kernel actually types are mapped; `<>`
+  # (string concat), `..`, and the like are left unsupported here.
+  defp prim_op(:+), do: {:ok, :add}
+  defp prim_op(:-), do: {:ok, :sub}
+  defp prim_op(:*), do: {:ok, :mul}
+  defp prim_op(:/), do: {:ok, :div}
+  defp prim_op(:rem), do: {:ok, :rem}
+  defp prim_op(:==), do: {:ok, :eq}
+  defp prim_op(:!=), do: {:ok, :ne}
+  defp prim_op(:<), do: {:ok, :lt}
+  defp prim_op(:>), do: {:ok, :gt}
+  defp prim_op(:<=), do: {:ok, :le}
+  defp prim_op(:>=), do: {:ok, :ge}
+  defp prim_op(:and), do: {:ok, :and}
+  defp prim_op(:or), do: {:ok, :or}
+  defp prim_op(_), do: :error
 
   defp sigma_projection(which, inner, names, ctx, env) do
     with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
@@ -876,6 +914,12 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms1b} <- desugar_tuple_args(arms1),
          {:ok, arms} <- desugar_nested_arms(arms1b, scrut_expr),
+         # A `when` guard is orthogonal to the pattern's shape, so it is resolved
+         # before the shape-dispatching paths (each of which would silently drop
+         # the guard). Claims EVERY guarded match: handles the tractable subset,
+         # errors on the rest — so no path below ever ignores a guard.
+         :not_applicable <-
+           try_guard_match(scrut_expr, arms, result_type_term, names, ctx, env),
          :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env),
          :not_applicable <-
@@ -1814,6 +1858,86 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp try_trivial_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  # A `when` guard on a variable/catch-all pattern desugars to a `bool_elim`
+  # chain: `match n | x when g -> a | x -> b` becomes `bool_elim g[x↦n] a[x↦n] b`,
+  # each guarded arm testing its guard and falling through (the `ff` branch) to
+  # the remaining arms. The chain must end in an *unguarded* catch-all — that is
+  # the fall-through when every guard is false; a still-guarded final arm is
+  # non-exhaustive and rejected. Restricted to a variable scrutinee so the
+  # substituted `n` is not duplicated-with-effects; richer patterns error rather
+  # than silently drop the guard. Built on the committed `bool_elim`; no kernel
+  # change. Returns `:not_applicable` only when NO arm is guarded.
+  defp try_guard_match(scrut_expr, arms, expected, names, ctx, env) do
+    if Enum.any?(arms, &guarded_arm?/1) do
+      guard_chain(scrut_expr, arms, expected, names, ctx, env)
+    else
+      :not_applicable
+    end
+  end
+
+  defp guarded_arm?({:match_arm, meta, _body}), do: Keyword.has_key?(meta, :guard)
+
+  # The final arm closes the chain: it must be an unguarded catch-all.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env) do
+    if Keyword.has_key?(meta, :guard) do
+      {:error, {:unsupported_guard, :non_exhaustive}}
+    else
+      bind_catchall_body(scrut_expr, Keyword.fetch!(meta, :pattern), single_body(body), expected, names, ctx, env)
+    end
+  end
+
+  # A guarded arm becomes a `bool_elim` on its guard; an unguarded catch-all
+  # before the end shadows every later arm and closes the chain early.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body} | rest], expected, names, ctx, env) do
+    pat = Keyword.fetch!(meta, :pattern)
+
+    case Keyword.get(meta, :guard) do
+      nil ->
+        bind_catchall_body(scrut_expr, pat, single_body(body), expected, names, ctx, env)
+
+      guard ->
+        with {:ok, guard_expr} <- guard_bind(scrut_expr, pat, guard),
+             {:ok, body_expr} <- guard_bind(scrut_expr, pat, single_body(body)),
+             {:ok, test} <- elaborate_expr_checked(guard_expr, {:bool_type}, names, ctx, env),
+             {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
+             {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env) do
+          motive = {:lam, {:bool_type}, Cure.Core.Term.shift(expected, 1, 0)}
+          {:ok, {:bool_elim, test, motive, tt, ff}}
+        end
+    end
+  end
+
+  # Bind a catch-all pattern's variable to the scrutinee and check the body: `_`
+  # discards, a name substitutes the (variable) scrutinee expression. A non-
+  # variable pattern under a guarded match is out of this slice's scope.
+  defp bind_catchall_body(_scrut, {:variable, _m, "_"}, body, expected, names, ctx, env),
+    do: elaborate_expr_checked(body, expected, names, ctx, env)
+
+  defp bind_catchall_body(scrut_expr, {:variable, _m, name}, body, expected, names, ctx, env) do
+    cond do
+      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
+      binds_any?(body, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      true -> elaborate_expr_checked(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
+    end
+  end
+
+  defp bind_catchall_body(_scrut, _pat, _body, _expected, _names, _ctx, _env),
+    do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+
+  # Substitute the pattern variable with the (variable) scrutinee in a guard or
+  # body expression, guarding against complex scrutinees and shadow-capture.
+  defp guard_bind(_scrut, {:variable, _m, "_"}, expr), do: {:ok, expr}
+
+  defp guard_bind(scrut_expr, {:variable, _m, name}, expr) do
+    cond do
+      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
+      binds_any?(expr, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      true -> {:ok, subst_surface_var(expr, name, scrut_expr)}
+    end
+  end
+
+  defp guard_bind(_scrut, _pat, _expr), do: {:error, {:unsupported_guard, :non_catchall_pattern}}
 
   # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
   # of Boolean eliminations — there is no `:vdata` to dispatch on. `match n | 0 ->
