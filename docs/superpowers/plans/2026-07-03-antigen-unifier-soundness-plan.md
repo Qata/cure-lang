@@ -44,6 +44,26 @@
    only (never `to_pieces`/`Coverage`), so a lightweight `:unify_problem` kind
    (typespec entry only) runs as a fixed catalog via a dedicated test. Not added
    to `default_gen`; no `to_pieces`/`Coverage`/corpus-banking clauses.
+4. **Every violation branch gets its own negative control, not just one per
+   assay** (found in plan review). The spec's §4 negative-control list gives one
+   representative stub per assay, but several `run/2` clauses branch into more
+   than one distinct violation tag: Task 1's soundness clause produces both
+   `{:meta_survived,…}` and the general `{:unify_unsound,…}`; Task 2's intrinsic
+   clause produces `:occurs`, `:zonk_not_idempotent`, and `:meta_not_eliminated`;
+   Task 4's intrinsic general clause produces `:apply_not_idempotent` and
+   `:var_not_eliminated`. A branch no stub ever reaches is unverified dead
+   code — an inverted condition or wrong tag there would go undetected, which is
+   exactly the failure mode this whole op-map-seam architecture exists to catch.
+   The plan adds one negative control per previously-untested branch: Task 1
+   gains a no-op `eu_unify` stub (`{:ok, ctx}` returned unchanged — claims
+   success without solving, so `zonk(t1)` is still the bare `{:meta,_}`) proving
+   `{:meta_survived,…}`; Task 2 gains an `eu_zonk` stub that composes an
+   `:ExtraWrap` ctor around the real zonk (so re-zonking a zonked term is never a
+   fixed point) proving `:zonk_not_idempotent`, and an identity `eu_zonk` stub
+   (trivially idempotent, never substitutes the solved meta away) proving
+   `:meta_not_eliminated`; Task 4 gains a `tu_apply` stub that composes a
+   `:tuple` wrapper around the real substitution (never a fixed point) proving
+   `:apply_not_idempotent`.
 
 ## File structure
 
@@ -107,6 +127,14 @@ defmodule Antigen.Assays.UnifierTest do
     # claims success but solves ?0 := Z, not S Z -> zonked sides Z vs S Z, not Conv-equal
     k = %{Unifier.__real__() | eu_unify: fn _t1, _t2, ctx, _sig -> {:ok, MetaCtx.put_solution(ctx, 0, z0())} end}
     assert {:violation, {:unify_unsound, _, _}} = Unifier.run(ch, k)
+  end
+
+  test "V2a soundness negative control: an eu_unify stub that claims success without solving anything leaves a meta behind" do
+    ch = sound_ch(m(0), s(z0()), [0])
+    # claims success but stores no solution at all -> zonk(?0) is still {:meta,0},
+    # not meta-free -> distinct branch from the wrong-ctor control above
+    k = %{Unifier.__real__() | eu_unify: fn _t1, _t2, ctx, _sig -> {:ok, ctx} end}
+    assert {:violation, {:unify_unsound, {:meta_survived, _}, _}} = Unifier.run(ch, k)
   end
 end
 ```
@@ -187,7 +215,7 @@ defmodule Antigen.Assays.Unifier do
 end
 ```
 
-- [ ] **Step 4: GREEN** — `MIX_ENV=test mix test test/antigen/assays/unifier_test.exs` → PASS (3).
+- [ ] **Step 4: GREEN** — `MIX_ENV=test mix test test/antigen/assays/unifier_test.exs` → PASS (4).
 
 - [ ] **Step 5: Commit** — `feat(antigen): unify/soundness assay — Elab.Unify differential vs kernel Conv`
 
@@ -216,6 +244,22 @@ describe "unify/intrinsic (V2a)" do
     # id 0's 'solution' contains {:meta, 0} -> cyclic
     k = %{Unifier.__real__() | eu_solution: fn _ctx, 0 -> s(m(0)); _ctx, _ -> nil end}
     assert {:violation, {:occurs, _}} = Unifier.run(ch, k)
+  end
+
+  test "zonk-idempotence negative control: an eu_zonk stub that re-wraps its output each call infects" do
+    ch = intr_ch(m(0), s(z0()), [0])
+    # always adds another ExtraWrap layer on top of the real zonk -> re-zonking a
+    # zonked term is never a fixed point
+    k = %{Unifier.__real__() | eu_zonk: fn t, ctx -> {:ctor, :ExtraWrap, [Cure.Elab.Unify.zonk(t, ctx)]} end}
+    assert {:violation, {:zonk_not_idempotent, _}} = Unifier.run(ch, k)
+  end
+
+  test "meta-closed negative control: an identity eu_zonk stub that never substitutes solutions away infects" do
+    ch = intr_ch(m(0), s(z0()), [0])
+    # identity is trivially idempotent (passes the zonk-idempotence check above)
+    # but leaves the solved metavariable ?0 in place -> not meta-free
+    k = %{Unifier.__real__() | eu_zonk: fn t, _ctx -> t end}
+    assert {:violation, {:meta_not_eliminated, _}} = Unifier.run(ch, k)
   end
 end
 ```
@@ -270,7 +314,12 @@ defp occurs_raw?(id, {:lam, d, b}), do: occurs_raw?(id, d) or occurs_raw?(id, b)
 defp occurs_raw?(_id, _), do: false
 ```
 
-> `occurs_raw?(id, {:meta, id})` uses a bound-variable pin on the SECOND clause head — write it as `defp occurs_raw?(id, {:meta, mid}) when mid == id, do: true` if the literal-repeat head does not compile (Elixir treats a repeated var in a head as a match only inside a single pattern; two separate arg patterns need the `when`). Prefer the `when` form to be safe.
+> `occurs_raw?(id, {:meta, id})` repeats `id` across the two arguments of one
+> clause head — empirically confirmed to compile and match correctly in Elixir
+> (a repeated variable is scoped over the whole head, not just one argument, so
+> this enforces equality exactly like `def eq(x, x), do: true`). The equivalent
+> `defp occurs_raw?(id, {:meta, mid}) when mid == id, do: true` form is also
+> valid and slightly more explicit if preferred; either is fine to implement.
 
 - [ ] **Step 4: GREEN.** **Step 5: Commit** — `feat(antigen): unify/intrinsic assay — occurs / idempotent-zonk / meta-closed`
 
@@ -367,6 +416,13 @@ describe "unify_types/intrinsic (V2b)" do
     k = %{Unifier.__real__() | tu_apply: fn type, _s -> type end}  # identity: never substitutes
     assert {:violation, {:var_not_eliminated, _}} = Unifier.run(ch, k)
   end
+
+  test "apply-idempotence negative control: a tu_apply stub that re-wraps its output each call infects" do
+    ch = itc(tv("T"), :int, :ok)
+    # always adds another tuple layer on top of the real substitution -> never a fixed point
+    k = %{Unifier.__real__() | tu_apply: fn type, s -> {:tuple, [Cure.Types.Unify.apply_subst(type, s)]} end}
+    assert {:violation, {:apply_not_idempotent, _}} = Unifier.run(ch, k)
+  end
 end
 ```
 
@@ -426,7 +482,13 @@ describe "generator + runner wiring" do
   alias Antigen.Runner
 
   test "each catalog is non-empty and correctly tagged" do
+    # non-emptiness asserted for all four explicitly: `Enum.all?/2` on `[]` is
+    # vacuously true, so the tagging asserts below would silently pass even if a
+    # catalog function returned no entries at all
     assert UnifyProblem.elab_soundness_challenges() != []
+    assert UnifyProblem.elab_intrinsic_challenges() != []
+    assert UnifyProblem.types_fixpoint_challenges() != []
+    assert UnifyProblem.types_intrinsic_challenges() != []
     assert Enum.all?(UnifyProblem.elab_soundness_challenges(), & &1.assay == "unify/soundness")
     assert Enum.all?(UnifyProblem.elab_intrinsic_challenges(), & &1.assay == "unify/intrinsic")
     assert Enum.all?(UnifyProblem.types_fixpoint_challenges(), & &1.assay == "unify_types/fixpoint")
@@ -466,6 +528,6 @@ In `lib/antigen/runner.ex` add four `assay_module/1` clauses → `Antigen.Assays
 
 **Spec coverage:** §3 V2a soundness → Task 1; V2a intrinsic (occurs/idempotent-zonk/meta-closed) → Task 2; §3 V2b fixpoint → Task 3; V2b intrinsic (occurs/idempotent-apply/var-elim) → Task 4; §4 op-map seam → Task 1 `@real` (reconciled: split `tu_reunify`); §4 negative controls → each task's control test; §5 catalogs → Task 5 (fixed-catalog reconciliation); §6 invariants pinned (no engine edits, no StreamData token, `:ok|{:violation}` only, closed V2a terms); §7 non-goals respected (no fixes, no HOU, no determinism assay, no SMT); §9 tests 1-10 distributed across Tasks 1-5.
 
-**Placeholder scan:** none — concrete code/commands throughout. Two compile-risk notes flagged with fallbacks (the `occurs_raw?` repeated-var head → `when` form; the `%{expect: :error}` clause ordering).
+**Placeholder scan:** none — concrete code/commands throughout. One clause-ordering note flagged (`%{expect: :error}` must precede the general `payload: p` clause); the `occurs_raw?` repeated-var head was checked empirically and compiles as written, no fallback needed.
 
 **Type consistency:** op-map keys `eu_unify/eu_zonk/eu_solution/conv/tu_unify/tu_reunify/tu_apply` identical in `@real` and every negative control. Infection tags `{:unify_unsound,…}`, `{:occurs,…}`, `{:zonk_not_idempotent,…}`, `{:meta_not_eliminated,…}`, `{:solution_unstable,…}`, `{:occurs_not_detected,…}`, `{:apply_not_idempotent,…}`, `{:var_not_eliminated,…}` consistent code↔tests. Payload shapes: elab `%{t1,t2,ctx,sig,meta_ids}`, types-fixpoint `%{t1,t2}`, types-intrinsic `%{t1,t2,expect}` — each produced by its catalog and consumed by its `run` clause.
