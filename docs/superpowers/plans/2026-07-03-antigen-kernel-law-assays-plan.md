@@ -48,7 +48,7 @@ defmodule Antigen.Assays.KernelLawTest do
 end
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (`MIX_ENV=test mix test test/antigen/assays/kernel_law_test.exs`) — first test raises `FunctionClauseError` (guard rejects the new id); second returns `nil`/raises (no registry row).
+- [ ] **Step 2: Run — expect FAIL** (`MIX_ENV=test mix test test/antigen/assays/kernel_law_test.exs`) — both tests raise `FunctionClauseError`: the first because the widened-guard-less `typed_term/1` still rejects the new id; the second because `assay_module/1` has no catch-all clause (confirmed: every existing clause is a literal-string match with no fallback), so an unregistered id falls through and raises rather than returning `nil`.
 
 - [ ] **Step 3: Implement** —
   (a) In `lib/antigen/generators/term.ex`, widen the guard on the public `typed_term/1` clause from `when assay_id in @assay_ids` to `when is_binary(assay_id)`. The body is unchanged (it only stores `assay_id` in the challenge's `assay:` field; it never branches on it). Leave `@assay_ids` and `Term.default_gen/0` untouched.
@@ -60,7 +60,7 @@ end
   defp assay_module("kernel/confluence"), do: Antigen.Assays.KernelLaw
 ```
 
-- [ ] **Step 4: Run — expect PASS** for the registry test; the guard test also passes. (The `KernelLaw` module doesn't exist yet, but these two tests don't call it — they only reference the atom via `assay_module_for`, which returns the module name without loading it.) If a compile error arises from the atom reference, proceed to Task 2 which defines the module, then re-run.
+- [ ] **Step 4: Run — expect PASS** for both tests in this file. `Antigen.Assays.KernelLaw` doesn't exist yet, but neither test calls it — the registry test only compares the bare atom returned by `assay_module_for/1` (a private-registry delegate; no `Code.ensure_loaded`, no `apply`, no struct construction), so referencing an as-yet-undefined module name compiles and runs cleanly (confirmed empirically: a probe registry function returning an atom for an undefined module compiles, runs, and `Code.ensure_loaded?/1` correctly reports `false` for it). No hedge needed — this step is a hard PASS, not a "proceed to Task 2 if it errors" fallback.
 
 - [ ] **Step 5: Commit**
 ```bash
@@ -94,16 +94,26 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
     assert :ok = KernelLaw.run(ch("kernel/shift_subst", {:lam, {:data, :Nat, [], []}, {:ctor, :S, [{:var, 0}]}}))
   end
 
-  test "shift_subst: the checker is not tautological (independently re-derive law 3)" do
-    # guard against the assay always returning :ok — recompute commutation here and
-    # confirm both sides genuinely agree for this term (if the assay ignored its
-    # input it would still pass, so we also check a term where the two sides are
-    # non-trivially equal, i.e. the subst actually fires).
+  test "shift_subst: the checker is not tautological (independently re-derive laws 2 and 3)" do
+    # guard against the assay always returning :ok — recompute the two most
+    # error-prone laws (composition and commutation) here and confirm both
+    # sides genuinely agree for this term AND that the computation is
+    # non-trivial (if the assay ignored its input it would still pass, so we
+    # also check that shifting/substituting actually changed something).
     t = {:ctor, :S, [{:var, 0}]}
-    lhs = Cure.Core.Term.shift(Cure.Core.Term.subst(t, 0, @sz), 1, 0)
-    rhs = Cure.Core.Term.subst(Cure.Core.Term.shift(t, 1, 0), 1, Cure.Core.Term.shift(@sz, 1, 0))
-    assert lhs == rhs
-    assert lhs != Cure.Core.Term.shift(t, 1, 0)   # subst actually changed something
+
+    # law 2 (shift composition): shift(shift(t,a,c),b,c) == shift(t,a+b,c)
+    law2_lhs = Cure.Core.Term.shift(Cure.Core.Term.shift(t, 1, 0), 1, 0)
+    law2_rhs = Cure.Core.Term.shift(t, 2, 0)
+    assert law2_lhs == law2_rhs
+    assert law2_lhs != t   # shift actually changed something
+
+    # law 3 (shift/subst commutation): shift(subst(t,j,r),a,c) == subst(shift(t,a,c),j+a,shift(r,a,c))
+    law3_lhs = Cure.Core.Term.shift(Cure.Core.Term.subst(t, 0, @sz), 1, 0)
+    law3_rhs = Cure.Core.Term.subst(Cure.Core.Term.shift(t, 1, 0), 1, Cure.Core.Term.shift(@sz, 1, 0))
+    assert law3_lhs == law3_rhs
+    assert law3_lhs != Cure.Core.Term.shift(t, 1, 0)   # subst actually changed something
+
     assert :ok = KernelLaw.run(ch("kernel/shift_subst", t))
   end
 
@@ -118,6 +128,23 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
 
   test "confluence: a redex normalizes identically via nf and whnf→nf" do
     assert :ok = KernelLaw.run(ch("kernel/confluence", {:app, {:lam, {:data, :Nat, [], []}, {:var, 0}}, @sz}))
+  end
+
+  # spec §4 item 3 calls for both a positive AND a vacuous (fuel-exhausted)
+  # confluence fixture — the assay fuel is fixed (`Assays.Term.assay_fuel/0`,
+  # 500), not caller-supplied, so the only way to exercise the vacuous branch
+  # through the public `KernelLaw.run/1` API is a term that genuinely needs
+  # >500 reduction steps. `plus` (sig :v1) is structurally recursive on its
+  # first argument (spec §2's wiring reuses the same v1 env as the other
+  # assays), so `plus(deep_s(700), Z)` unfolds 700 times — confirmed
+  # empirically: depth 500 is already enough to exhaust `nf`'s fuel=500
+  # budget (depth 400 is not), so depth 700 gives comfortable headroom.
+  defp deep_s(0), do: @z
+  defp deep_s(n), do: {:ctor, :S, [deep_s(n - 1)]}
+
+  test "confluence: a genuinely fuel-exhausting term is vacuously :ok" do
+    t = {:app, {:app, {:global, :plus}, deep_s(700)}, @z}
+    assert :ok = KernelLaw.run(ch("kernel/confluence", t))
   end
 ```
 
@@ -287,7 +314,7 @@ Also add an integration test proving the three verticals run clean on the sound 
   end
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (`MIX_ENV=test mix test test/antigen/runner_test.exs`) — guard test fails (still 11 branches / old table); integration test may error (default_gen not yet emitting the new branches is fine — the integration test drives `typed_term(id)` directly, so it actually needs Task 1+2 done, which they are — it should pass once the assays exist, but the guard test drives Task 3's change).
+- [ ] **Step 2: Run — expect the guard test RED, the integration test already GREEN** (`MIX_ENV=test mix test test/antigen/runner_test.exs`). The guard test fails (`length(ws) == 14` against the still-11-branch `default_gen`/old `@group_table` — this is the red test Step 3 makes green). The integration test is **not** red at this checkpoint and that is expected, not a gap: it drives `Antigen.Generators.Term.typed_term(id)` directly rather than through `default_gen`, so it depends only on Task 1 (guard widening) + Task 2 (`KernelLaw`), both already done — it exercises Runner.explore end-to-end as an integration/regression check on that wiring, not as a red test for Task 3's own change (default_gen/group-table wiring). Confirmed empirically: with only this step's test edits applied and Task 3's Step 3 changes withheld, the suite reports exactly 1 failure (the guard test) and the integration test passes.
 
 - [ ] **Step 3: Implement** —
   (a) In `lib/mix/tasks/antigen.ex`, append three branches to `default_gen/0`'s `Antigen.Gen.frequency([...])` list (after the existing 11, positions 12–14):
