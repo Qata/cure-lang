@@ -35,4 +35,36 @@ defmodule Antigen.Generators.SigMenuTest do
     term = SigMenu.canon(ctx, goal)
     assert {:ok, _} = Kernel.infer(ctx, term)
   end
+
+  # -- Tier-B reach expansion: List(A) parametric family (Task 1) --------------
+
+  test "env_of(:v1) registers the List(A) family with Nil/Cons" do
+    env = SigMenu.env_of(:v1)
+    assert Inductive.param_count(env, :List) == 1
+    assert Inductive.ctor_quantities(env, :Nil) != nil
+    assert Inductive.ctor_quantities(env, :Cons) != nil
+  end
+
+  test "List(Nat) is inhabitable and canon gives Nil" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    list_nat = {:data, :List, [SigMenu.nat()], []}
+    assert SigMenu.inhabitable?(ctx, list_nat)
+    assert SigMenu.canon(ctx, list_nat) == {:ctor, :Nil, []}
+  end
+
+  # The only Task-1 test that exercises the kernel on a param-bearing checking-mode
+  # term — the one that catches a missing/wrong `result_params`. List is check-mode-
+  # only at the top level (a bare param-ctor never infers — kernel.ex), so wrap in
+  # an identity application (same trick Task 6/8 use).
+  test "Cons/Nil check-mode-accept against List(Nat) (result_params correctness)" do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+    list_nat = {:data, :List, [SigMenu.nat()], []}
+    nil_wrapped = {:app, {:lam, list_nat, {:var, 0}}, {:ctor, :Nil, []}}
+    cons_wrapped = {:app, {:lam, list_nat, {:var, 0}},
+                    {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
+    assert {:ok, _} = Kernel.infer(ctx, nil_wrapped)
+    assert {:ok, _} = Kernel.infer(ctx, cons_wrapped)
+  end
 end

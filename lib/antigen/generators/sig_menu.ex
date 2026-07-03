@@ -37,6 +37,21 @@ defmodule Antigen.Generators.SigMenu do
           #   in the result index S(n), n is index 2.
           Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})])
         ])
+      |> Inductive.declare(Inductive.family(:List, [{:A, {:type, 0}}], [], 0),
+        [
+          # Nil : List(A). result_params = [{:var,0}]: with 0 ctor args bound, the
+          # family param A sits at var 0 in the checking frame — required so
+          # Kernel.check's {:ctor,...} clause re-derives {:vdata,:List,[A]} (not
+          # {:vdata,:List,[]}) and converts against the expected List(A).
+          Inductive.ctor(:Nil, [], [], [], [{:var, 0}]),
+          # Cons : (A) => A -> List(A) -> List(A). In hd's type A is {:var,0} (no
+          # ctor args bound yet); in tl's type List(A), A is {:var,1} (hd bound,
+          # shifting A down one). result_params = [{:var,2}]: with both args bound
+          # (hd, tl), A sits at var 2. Convention confirmed against
+          # elab_soundness_test's F(a)/Mk(x:a) and check_uniform_params.
+          Inductive.ctor(:Cons, [{:hd, {:var, 0}}, {:tl, {:data, :List, [{:var, 1}], []}}], [],
+            [:present, :present], [{:var, 2}])
+        ])
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}
@@ -80,6 +95,7 @@ defmodule Antigen.Generators.SigMenu do
       {:data, :Vec, p, idx} ->
         i = vec_index(p, idx)
         closed_numeral?(whnf(ctx, i)) or has_var_of_type?(ctx, vec(i))
+      {:data, :List, [a], _} -> inhabitable?(ctx, a)
       _ -> false
     end
   end
@@ -102,6 +118,7 @@ defmodule Antigen.Generators.SigMenu do
           {:ctor, :S, [j]} -> {:ctor, :vcons, [j, z(), canon(ctx, vec(j))]}
           _ -> var_of_type(ctx, vec(i))   # stuck index: a Γ-var by the invariant
         end
+      {:data, :List, [_a], _} -> {:ctor, :Nil, []}
     end
   end
 

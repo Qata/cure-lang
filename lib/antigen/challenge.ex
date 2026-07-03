@@ -87,7 +87,9 @@ defmodule Antigen.Challenge do
     :erasure_term, :MkQ, :MkP, :a,
     # SMT-lint vertical (V6): kind (MetaAST predicate payloads use string keys/var
     # names, not atoms, so no extra generator atoms beyond the kind itself)
-    :smt_query
+    :smt_query,
+    # Tier-B reach expansion: List parametric family + param binder name
+    :List, :Nil, :Cons, :A
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
