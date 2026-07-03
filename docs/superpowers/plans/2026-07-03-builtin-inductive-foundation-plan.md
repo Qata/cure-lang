@@ -1285,6 +1285,8 @@ Extend `emit.ex`'s `lower/3` constructor `cond` (from Task 10):
 
 with `defp nat_family?(env, name), do: Inductive.builtin(env, :nat) == Inductive.ctor_family(env, name)`.
 
+> **Forward-looking note (post-foundation extensibility — do NOT expand scope in this plan).** A future stdlib addition (`Std.Bounded`, the renamed `Fin`) is confirmed to take this exact same native-integer erasure (`First ↦ 0`, `Next(b) ↦ b + 1`, `match ↦ integer test/decrement`) — it is a bounded `Nat`, structurally unary, and would otherwise erase to RAM-fatal nested tuples on ESP32. To let it slot in by registration alone rather than a second copy of this lowering, prefer a general predicate — `native_int_builtin?(env, name)` that returns true when `name`'s family is registered under **any** native-int builtin key (today just `:nat`; later `:bounded`) — over hardcoding `:nat`. Keep the *set of keys* minimal and explicit (a small module-attribute list in `emit.ex`, e.g. `@native_int_builtins [:nat]`), so adding `:bounded` later is a one-line change with no new lowering logic. This is a naming/shape choice for THIS task's helper, not new behavior: for the foundation's scope the set is exactly `[:nat]`. Recorded in the `stdlib-dependent-expansion` project memory.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `mix test test/cure/elab/nat_erasure_construction_test.exs`
