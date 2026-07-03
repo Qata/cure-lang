@@ -99,7 +99,43 @@ defmodule Cure.Elab.Unify do
   # Together they keep `(a) -> b` vs `(?a) -> ?b` — and the endomorphism `(a) -> a`,
   # whose variable recurs on both sides of the binder — correctly levelled.
   defp unify_d(t1, t2, ctx, sig, depth) do
-    do_unify(force_d(t1, ctx, depth), force_d(t2, ctx, depth), ctx, sig, depth)
+    f1 = force_d(t1, ctx, depth)
+    f2 = force_d(t2, ctx, depth)
+    do_unify(whnf_pre(f1, ctx, sig, depth), whnf_pre(f2, ctx, sig, depth), ctx, sig, depth)
+  end
+
+  # Weak-head-normalise a forced term BEFORE structural comparison (Idris `nf`,
+  # Agda `reduceB`, Lean `whnfCoreAtDefEq` — ledger #11), reusing the meta-aware
+  # whnf (unsolved metavariables stay opaque neutrals). This lets a reducible redex
+  # like `plus(Z, ?m)` (which δι-reduces to `?m`) unify with `S(Z)` by solving
+  # `?m := S(Z)`, instead of failing a naive `{:app,…}` vs `{:ctor,…}` comparison.
+  #
+  # whnf is applied EXACTLY ONCE per `unify_d` step — `do_unify`'s structural
+  # descent re-enters `unify_d` on subterms, which whnf them in turn, so there is
+  # NO recurse-on-change loop (an earlier version re-fed the reduced pair to
+  # `unify_d`, which diverged whenever whnf's fold/unfold shape oscillated). Gated
+  # to:
+  #   * `sig != nil` — whnf needs the signature to δ-unfold globals; sig-less
+  #     callers keep the prior purely-syntactic behaviour; and
+  #   * `depth == 0` (the ambient frame) — where `zonk` (inside `whnf_meta_aware`)
+  #     and the binder-shifting `force_d` coincide, so a solved metavariable's
+  #     ambient-framed solution needs no shift. Under binders (`depth > 0`) fall
+  #     through unchanged; reducing there is a documented future extension.
+  defp whnf_pre(t, _ctx, nil, _depth), do: t
+  defp whnf_pre(t, _ctx, _sig, depth) when depth != 0, do: t
+
+  defp whnf_pre(t, ctx, sig, depth) do
+    r = whnf_meta_aware(t, ctx, sig, depth)
+
+    # A reduction that turns a NON-lambda into a lambda is an under-applied
+    # function being β-expanded to its arity — e.g. a partial spine `app(xs)`
+    # (`app` given 1 of its 2 arguments) reduces to `λys. case xs {…}`. That
+    # destroys the neutral/syntactic spine the first-order unifier relies on to
+    # solve `app(xs) =? app(?a)` (and there is no `:case` unify clause to fall back
+    # on), so KEEP the original there. Every ι-reduction WIN this feature targets
+    # (`plus(Z, ?m)` → `?m`, `plus(Z, S(Z))` → `S(Z)`) produces a ctor/meta/neutral,
+    # never a lambda, so this guard preserves them all.
+    if match?({:lam, _, _}, r) and not match?({:lam, _, _}, t), do: t, else: r
   end
 
   # Resolve a metavariable's solution and lift it from the ambient frame into the
@@ -440,6 +476,21 @@ defmodule Cure.Elab.Unify do
     subst = metas_to_placeholders(z)
     fuel = Keyword.get(opts, :fuel, :infinity)
 
+    # Only reduce a CLOSED term. `unify_d`'s `depth` counts binders crossed *within*
+    # the unification, but the terms may still carry FREE de Bruijn variables from
+    # the ambient elaboration context (function parameters). Evaluating those under
+    # the empty env would mis-level them into out-of-range `{:var, _}` (negative
+    # indices). A closed term is context-independent, so `env = []` / read-back at
+    # `depth` is sound; the computed-index unifications this feature targets
+    # (`plus(Z, ?m) =? S(Z)`) are closed once metavariables become placeholders.
+    if Cure.Core.Term.closed?(subst) do
+      reduce_closed(z, subst, sig, depth, fuel)
+    else
+      z
+    end
+  end
+
+  defp reduce_closed(z, subst, sig, depth, fuel) do
     reduced =
       Cure.Core.Normalise.with_fuel(fuel, fn ->
         env = for level <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, level}}
