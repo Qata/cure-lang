@@ -326,6 +326,17 @@ defmodule Cure.Compiler.Parser do
       :caret ->
         parse_pin(state)
 
+      # Forced (dot) pattern: a leading `.` in prefix position introduces a
+      # forced-equation pattern (`.x`, `.(S(k))`). The inner term is a value the
+      # match must be convertible with rather than a fresh binder. Parsing
+      # succeeds in any position by design; using a forced pattern outside a
+      # pattern is rejected later, at elaboration. Infix `.` (module paths like
+      # `Std.String`) is a different grammar position (handle_infix_op :dot) and
+      # never reaches this prefix clause.
+      :dot ->
+        {inner, state} = parse_forced_inner(advance(state))
+        {{:forced_pattern, [line: token.line, col: token.col], inner}, state}
+
       # Indent starts a block
       :indent ->
         parse_block(state)
@@ -388,6 +399,18 @@ defmodule Cure.Compiler.Parser do
         {inner, state} = parse_prefix(state)
         ast = {:pin, [line: token.line, col: token.col], [inner]}
         {ast, state}
+    end
+  end
+
+  # -- Forced (dot) pattern inner --------------------------------------------
+  #
+  # After a leading `.`, read the forced term. `.(expr)` parses a full
+  # parenthesised expression (a compound forced pattern like `.(S(k))`); a bare
+  # `.x` reads a single primary (identifier / literal) as the forced value.
+  defp parse_forced_inner(state) do
+    case peek(state).type do
+      :lparen -> parse_grouped(state)
+      _ -> parse_prefix(state)
     end
   end
 

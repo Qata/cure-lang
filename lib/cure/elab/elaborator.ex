@@ -66,6 +66,15 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A forced (dot) pattern `{:forced_pattern, …}` is only meaningful in a
+  # constructor-argument PATTERN position (handled by the pattern path in a later
+  # task). Reaching ordinary expression elaboration means a dot was used outside
+  # a pattern (a `let` RHS, a function argument/body, …) — reject it. Placed
+  # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
+  # is reported.
+  def elaborate_expr_typed({:forced_pattern, meta, _expr}, _names, _ctx, _env),
+    do: {:error, {:forced_pattern_not_in_pattern, meta}}
+
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
       # Record construction `Point{x: .., y: ..}` desugars to the positional
