@@ -74,4 +74,33 @@ defmodule Antigen.Assays.ErasureTest do
                Erasure.run(idem_ch(env, app2({:global, :g}, il(1), il(2))))
     end
   end
+
+  describe "erasure/selective (V4a)" do
+    defp sel_ch(env, t, surface) do
+      Challenge.new(kind: :erasure_term, assay: "erasure/selective", label: :positive,
+        payload: %{env: env, term: t, surface: surface}, seed: 1)
+    end
+
+    test "ctor selective baseline: keeps exactly the :present positions (leaf args)" do
+      env = ctor_env()
+      assert Erasure.run(sel_ch(env, {:ctor, :MkQ, [il(1), il(2)]}, :ctor)) == :ok
+    end
+
+    test "app-head selective baseline: keeps exactly the :present def positions (leaf args)" do
+      env = app_env(ctor_env())
+      assert Erasure.run(sel_ch(env, app2({:global, :f}, il(1), il(2)), :app)) == :ok
+    end
+
+    test "ctor selective negative control: an erase stub dropping the :present position" do
+      env = ctor_env()
+      k = %{Erasure.__real__() | erase: fn _e, {:ctor, c, _args} -> {:ctor, c, []} end}
+      assert {:violation, {:wrong_positions_kept, :MkQ}} = Erasure.run(sel_ch(env, {:ctor, :MkQ, [il(1), il(2)]}, :ctor), k)
+    end
+
+    test "app-head selective negative control: an erase stub dropping a :present arg" do
+      env = app_env(ctor_env())
+      k = %{Erasure.__real__() | erase: fn _e, _t -> {:global, :f} end}  # drops all args
+      assert {:violation, {:wrong_positions_kept, :f}} = Erasure.run(sel_ch(env, app2({:global, :f}, il(1), il(2)), :app), k)
+    end
+  end
 end

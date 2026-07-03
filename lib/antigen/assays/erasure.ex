@@ -39,4 +39,38 @@ defmodule Antigen.Assays.Erasure do
       true -> :ok
     end
   end
+
+  def run(%Challenge{kind: :erasure_term, assay: "erasure/selective", payload: %{env: env, term: {:ctor, c, args} = t, surface: :ctor}}, k) do
+    qs = k.ctor_quantities.(env, c) || List.duplicate(:present, length(args))
+    expected = present_args(args, qs)
+
+    case k.erase.(env, t) do
+      {:ctor, ^c, kept} when kept == expected -> :ok
+      _ -> {:violation, {:wrong_positions_kept, c}}
+    end
+  end
+
+  def run(%Challenge{kind: :erasure_term, assay: "erasure/selective", payload: %{env: env, term: t, surface: :app}}, k) do
+    {head, args} = app_spine(t, [])
+    {:global, name} = head
+
+    qs =
+      case k.get_def.(env, name) do
+        %{quantities: q} when is_list(q) -> q
+        _ -> List.duplicate(:present, length(args))
+      end
+
+    padded = qs ++ List.duplicate(:present, max(0, length(args) - length(qs)))
+    expected = present_args(args, padded)
+    {_h, kept} = app_spine(k.erase.(env, t), [])
+    if kept == expected, do: :ok, else: {:violation, {:wrong_positions_kept, name}}
+  end
+
+  defp present_args(args, qs) do
+    args |> Enum.zip(qs) |> Enum.filter(fn {_a, q} -> q == :present end) |> Enum.map(fn {a, _q} -> a end)
+  end
+
+  # collect an application spine head + args (left-to-right), mirroring Erase.spine/2
+  defp app_spine({:app, f, x}, acc), do: app_spine(f, [x | acc])
+  defp app_spine(head, acc), do: {head, acc}
 end
