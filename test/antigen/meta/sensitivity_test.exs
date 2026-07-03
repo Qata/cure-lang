@@ -90,4 +90,50 @@ defmodule Antigen.Meta.SensitivityTest do
     assert {:violation, {:unsound_verdict, %{expected: false, got: true}}} =
              Antigen.Assays.StuckElimDelta.run(ch, WeakKernel.weaken(:conv_always_true))
   end
+
+  # -- Row 1: Mutation (existing bare-fn run/2 seam; no new lib code) ----------
+  defp mutant_ch,
+    do:
+      Challenge.new(
+        kind: :mutant_term,
+        assay: "mutation/rejection",
+        label: :ill_typed,
+        payload: %{
+          sig: :v1,
+          ctx: [],
+          type: @nat,
+          term: {:app, @z, @z},
+          fault: %{kind: :app_domain, witness: :head, expected_head: :Nat, injected_head: :Nat}
+        }
+      )
+
+  test "row 1 — infer_accepts_all is CAUGHT by mutation/rejection" do
+    ch = mutant_ch()
+    assert :ok = Antigen.Assays.Mutation.run(ch)
+
+    assert {:violation, {:accepted_ill_typed, _, _}} =
+             Antigen.Assays.Mutation.run(ch, WeakKernel.weaken(:infer_accepts_all).infer)
+  end
+
+  # Completeness roster: the 8 rows this file asserts, as a single source of truth
+  # for the Stage-5 matrix. A CAUGHT row means the weakened assay returned a
+  # violation; a SLIP row means it stayed :ok. This test fails loudly if a row is
+  # dropped, keeping the committed matrix honest.
+  @roster [
+    {1, :infer_accepts_all, "mutation/rejection", :caught},
+    {2, :infer_wrong_type, "term/infer_check", :caught},
+    {3, :check_accepts_all, "term/infer_check", :slip},
+    {4, :positive_accepts_all, "positivity", :caught},
+    {5, :universe_accepts_all, "universes", :caught},
+    {6, :conv_always_true, "stuck_elim_delta", :caught},
+    {7, :conv_always_true, "reflexivity", :slip},
+    {8, :conv_exhausts_fuel, "reflexivity", :caught}
+  ]
+
+  test "matrix roster covers all 8 rows with 6 CAUGHT / 2 SLIP" do
+    assert length(@roster) == 8
+    assert Enum.count(@roster, fn {_, _, _, c} -> c == :caught end) == 6
+    assert Enum.count(@roster, fn {_, _, _, c} -> c == :slip end) == 2
+    assert Enum.map(@roster, fn {n, _, _, _} -> n end) == Enum.to_list(1..8)
+  end
 end
