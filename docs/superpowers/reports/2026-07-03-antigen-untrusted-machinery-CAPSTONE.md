@@ -36,7 +36,15 @@ auto-merge. Roadmap order run: V3 → V1 → V2 → V5 → V4 → V6.
 - **Two genuine defects surfaced**, both in untrusted (non-TCB) code.
 - Every commit ghost-authored (`Made In Heaven`), no `Co-Authored-By`.
 
-## The two findings (both reported, NOT patched — awaiting your authorization)
+## The two findings — both now FIXED (2026-07-04, operator-authorized)
+
+Both were surfaced by the audit, reported not-patched per the initiative's
+find-don't-fix discipline, then fixed red-green as a separate authorized effort. Each
+fix flipped its banked known-finding test from asserting the violation to asserting
+`:ok`, so those tests now stand as regression guards. Full suite green at **2732** after
+both fixes (0 failures). Fix commits: `06014ca` (erase), `748f949` (parse_model).
+
+### Detail (as originally surfaced)
 
 ### 🔴 Finding 1 — `Cure.Elab.Erase.erase/2` is non-idempotent (V4)
 
@@ -49,10 +57,13 @@ dropped. The production `seq` ctor (`[:erased×5, :present×2]`) collapses to
 - **Severity:** dormant — `erase/2` is called exactly once per body (verified at both
   `emit.ex` sites), so no live path double-erases; and it's untrusted (a wrong erasure
   is a wrong runtime value, not an unsound type).
-- **Fix (one change, separately authorized):** drop args by original position, or shrink
-  the quantity vector in lockstep with the args.
+- **Fixed (`06014ca`):** arity guard on both the `:ctor` and `:app`-head clauses — only
+  apply the quantity filter to full-form terms; an already-erased term (fewer args than
+  the full arity) keeps all args and recurses. Single-erase behavior unchanged (the
+  four existing `erase_test` cases stay green).
 - **Regression guard:** V4's two `erasure/idempotent` known-finding tests (ctor `:MkP`,
-  app-head `:g`) assert the violation today and flip to `:ok` once fixed.
+  app-head `:g`), now asserting `:ok`, plus two new direct idempotence tests in
+  `erase_test.exs`.
 - Report: `2026-07-03-antigen-erasure-relevance-report.md`.
 
 ### 🔴 Finding 2 — `Cure.SMT.Parser.parse_model/1` truncates negative witnesses (V6)
@@ -64,10 +75,12 @@ hands back a "witness" that isn't a usable value.
 - **Severity:** real but narrow — the `:sat`/`:unsat` *verdict* is unaffected (Z3 still
   decides correctly); only model *extraction* corrupts, and only for negative witnesses
   consumed as diagnostics. Untrusted (SMT is a lint outside the TCB).
-- **Fix (one-line regex, separately authorized):** capture the full `(- N)` group before
-  the `define-fun` close paren.
-- **Regression guard:** V6's `unusable_model` known-finding test (real Z3 on
-  `x > -100 ⇒ x >= 0`) asserts the violation today and flips to `:ok` once fixed.
+- **Fixed (`748f949`):** widened the `define-fun` value-capture regex from `[^\)]+` to
+  `(?:\([^\)]*\)|[^\)])+` so a parenthesised `(- N)` group is captured whole and parsed
+  to `-N` (bare tokens still parse as before).
+- **Regression guard:** V6's negative-witness known-finding test (real Z3 on
+  `x > -100 ⇒ x >= 0`), now asserting `:ok` (the witness parses and genuinely refutes),
+  plus two new direct `parse_model` tests in `smt_test.exs`.
 - Report: `2026-07-03-antigen-smt-lint-report.md`.
 
 Both were **confirmed empirically at execution**, not merely traced — V4's via direct
@@ -98,8 +111,8 @@ direction; the autopilot design gates new sub-initiatives on your design approva
 the two fixes need explicit authorization (they're untrusted code, so outside the
 blanket-TCB-approval standing order). In rough value order:
 
-1. **Authorize the two fixes.** Both are small, both have a banked regression guard
-   already in place, both close a real (if narrow) defect. Cheapest high-value move.
+1. ~~**Authorize the two fixes.**~~ ✅ **Done** (2026-07-04, `06014ca` + `748f949`) —
+   both fixed red-green, banked guards flipped to `:ok`, full suite green at 2732.
 2. **Generator-expansion** (the umbrella's named follow-on). Today each vertical uses a
    small *curated fixed catalog* — it can only probe cases we thought of. Routing the
    catalogs through the `Antigen.Gen` reified-AST backend would let each assay find bugs
