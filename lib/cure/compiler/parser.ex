@@ -1302,8 +1302,25 @@ defmodule Cure.Compiler.Parser do
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
 
-    ast = {:assignment, meta, [pattern, value]}
-    {ast, state}
+    assignment = {:assignment, meta, [pattern, value]}
+
+    # Optional ML-style `let <pat> = <value> in <body>`: an expression-position
+    # binder. Desugar to the same two-statement `{:block, …}` node a block-form
+    # `let` followed by a trailing expression produces, which the elaborator
+    # already lowers to a β-redex `(λ x:T. body) value`. Without `in`, `let`
+    # stays a block statement (the enclosing block collects the following
+    # statements), exactly as before.
+    case peek(state) do
+      %Token{type: :keyword, value: :in} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {body, state} = parse_expr_or_block(state)
+        block = {:block, [line: token.line, col: token.col], [assignment, body]}
+        {block, state}
+
+      _ ->
+        {assignment, state}
+    end
   end
 
   # -- If / Elif / Else
