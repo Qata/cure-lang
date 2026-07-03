@@ -4,7 +4,37 @@
 **Surfaced by:** Antigen Tier-B reach expansion, Task 3 (Π/Σ goal seeds)
 **Assay:** `term/normalization` (differential trio, `lib/antigen/assays/term.ex`)
 **Severity:** HIGH — non-idempotence / non-confluence in the **trusted kernel** (TCB)
-**Status:** BANKED (fixture + violation-asserting test). Fix DEFERRED — needs an operator decision + its own red-green cycle.
+**Status:** ✅ **RESOLVED** (2026-07-04). Root-caused, fixed, verified — see "Resolution" below. Fixed under the standing Agda/Lean-alignment TCB approval; full suite (2751) green, Pi seeds re-enabled.
+
+---
+
+## Resolution (2026-07-04)
+
+**Root cause — `nf_struct` stored binder bodies under an empty environment.**
+`Normalise.nf_struct`'s `:vpi`/`:vlam`/`:vsigma` clauses deep-normalize under a
+binder by reifying the body to a `depth+1` de Bruijn term (`quote_nf`) and storing
+it in a closure with an **empty value env `[]`**. The outer `Quote.reify` then
+re-evaluates that already-reified term in a truncated singleton env `[fresh]`, so
+any free (context) variable `{:var, k≥1}` falls off the env, becomes a spurious
+free neutral, and reads back **reflected** to `{:var, n+1−k}`. Two nf passes
+reflect twice = identity → the period-2 oscillation. The bound var (`k=0`)
+survived, which masked the bug until a binder appeared over a non-empty context
+(Π goals). The `ncase`/`plus`/`dbl` machinery in the original repro was a **red
+herring** — minimization reduced it to a plain depth-3 context + `{:lam, Nat,
+{:var, 1}}`, with `Quote.reify` alone giving the *correct* answer and only the
+full `nf` pipeline corrupting it.
+
+**Fix (one line, in `nf_struct`):** store the reified body under the identity env
+`[{:nvar,depth-1} … {:nvar,0}]` instead of `[]`, so the outer reify's re-eval is a
+provable identity and free vars read back unchanged. Aligns `nf` with standard NbE
+idempotence (Agda/Lean).
+
+**Verification:** a kernel idempotence regression test (`normalise_test.exs`); the
+banked fixture flipped from asserting the violation to asserting `:ok`; the Pi
+seeds were re-enabled and confirmed clean at scale (1000 samples/assay, ~190 Π
+each, **0** non-`:ok` across all three differential assays — was ~5.4%); full
+suite **2751** green. Commits: `fix(kernel): make nf idempotent …` and
+`feat(antigen): re-enable Pi goal seeds …`.
 
 ---
 
