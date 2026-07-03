@@ -17,9 +17,14 @@ metavariable now or fails (`{:ok, ctx} | {:error, reason}`). Two situations that
 Idris/Agda *postpone and later solve* are today hard-rejected:
 
 1. **Flex-flex** — both sides are metavariable-headed and neither is a Miller
-   pattern (`?a =? ?b`, or `?a x =? ?b y` off-pattern). The correct solution may
-   become determined once some *other* constraint pins one side; eager failure
-   loses that input.
+   pattern (e.g. `?a x =? ?b y` where `x`/`y` are distinct bound variables that
+   escape each other's pattern abstraction — verified today to fall through
+   Miller solving on both sides and hard-fail; see §3.2's verification note on
+   exactly how that failure currently arises). **Not** an example: two *bare*
+   metavariables `?a =? ?b` already solve eagerly today (`do_unify_struct`'s
+   `{:meta, id}, t` clause, unify.ex:240) — that case needs no postponement. The
+   correct solution to a genuine flex-flex may become determined once some
+   *other* constraint pins one side; eager failure loses that input.
 2. **Weakly-rigid occurs** — a metavariable occurs in its own candidate solution,
    but only under another metavariable application or an eliminable position
    (`?a =? f(?a)` where `f` may cancel, `?a =? fst(?a, c)`). Such a constraint is
@@ -109,6 +114,26 @@ paths. In every case the trigger **appends a constraint and returns `{:ok, ctx}`
    :flex_flex)` instead of the structural mismatch error. Guard: at least one side
    must be genuinely a metavariable head (a solved meta is `force`d away first, so
    this only fires on *unsolved* metas).
+
+   **Verification needed (plan task, same caveat as §3.3's shape mapping):**
+   `do_unify_struct`'s existing `{:app, f1, x1}, {:app, f2, x2}` clause
+   (unify.ex:253–255) recurses one argument layer at a time with **no spine-length
+   reconciliation** — it does not first check "is the ultimate head of this whole
+   spine a metavariable" before peeling an argument. For **equal-arity** spines
+   (`?a x =? ?b y`) this recursion bottoms out at a bare-`{:meta,_}`-vs-bare-
+   `{:meta,_}` sub-call, which `do_unify_struct`'s clause 2 (unify.ex:240–241)
+   already solves eagerly and unconditionally (`?a := ?b`) — genuinely correct
+   today, and **not** a flex-flex case needing postponement. For **unequal-arity**
+   spines (the case that actually motivates this feature, e.g. a partial
+   application on one side), the layer-by-layer recursion instead produces a
+   sub-problem comparing a partially-applied meta against a shorter/bare one,
+   which may spuriously solve or fail for reasons unrelated to the original
+   two terms. The plan must locate (or add) a spine-head helper that walks the
+   *whole* spine on both sides before this recursion begins, so the "both sides
+   metavariable-headed" check in this bullet is a real, single decision point
+   rather than an emergent side-effect of per-argument recursion; until verified,
+   treat the exact trigger location as unconfirmed, and route Task 1's probe
+   construction (§2) through the actually-implemented path.
 2. **Weakly-rigid occurs.** `occurs?/3` (unify.ex:382) is refined into
    `occurs_rigidity/3 → :strong | :weak | :none` (§3.3). The two callers change:
    - `miller_solve` (unify.ex:159, occurs at :166): `:none` → solve as today;
@@ -120,7 +145,30 @@ paths. In every case the trigger **appends a constraint and returns `{:ok, ctx}`
 
    A **flex-rigid weak occurrence** (metavar vs rigid term where the metavar
    occurs weakly-rigidly in the rigid side) is postponed, not solved: it may
-   become solvable after the interfering metavar resolves.
+   become solvable after the interfering metavar resolves. **Same verification
+   gap as bullet 1's note applies here too:** `solve_strengthened` (where the
+   `:weak` → `postpone` branch actually lives, per the second sub-bullet above)
+   is reached today only via `do_unify_struct`'s bare-`{:meta,id}`-vs-`t` clause
+   (unify.ex:240–241) — i.e. when the metavariable side of the equation is
+   *unapplied*. When `miller_solve` falls through on a genuine multi-argument
+   Miller-pattern spine (`?a x1…xn`) whose *only* problem is a weak occurrence,
+   the fallthrough lands in `do_unify_struct` with `t1` still spine-shaped, not
+   bare — which, absent the same spine-head helper called for in bullet 1, will
+   generally miss `solve_strengthened` entirely and hit the delta-convertible
+   last-resort clause (unify.ex:282–288) instead, hard-failing rather than
+   postponing. The plan's spine-head helper must route both this path and
+   bullet 1's flex-flex path, or this paragraph's "postponed, not solved" claim
+   only holds for **bare (unapplied)** metavariables, not for multi-argument
+   patterns. This is narrower than bullet 1's gap, though: unlike flex-flex
+   (which, per §1, is unreachable with bare metavariables — those already solve
+   eagerly today), a genuine weakly-rigid occurrence is fully expressible with a
+   **bare** metavariable (`?a =? f(?a)`, §1 example 2) and routes through the
+   existing `{:meta,id}, t` → `solve` → `solve_strengthened` clauses without
+   needing the spine-head helper at all. `postpone02_weak_rigid_occurs` (§5.2)
+   should therefore be authored against the bare-metavariable case first; the
+   multi-argument-pattern variant of weak-rigid occurs is real but not required
+   for this probe, and can be deferred alongside pruning (§8) if it turns out to
+   need the same spine-head work as bullet 1.
 
 ### 3.3 Occurs-check rigidity classification (`occurs_rigidity/3`)
 
@@ -189,26 +237,71 @@ drain(ctx):
 
 ### 3.5 Integration point — the per-definition boundary
 
-`drain_constraints/1` runs **once per top-level definition, after all its
+**Verified prerequisite gap (must be resolved by the plan before this section's
+call sites are actionable).** `MetaCtx` is **not currently threaded across a
+whole top-level definition**. Every existing call site allocates its own
+short-lived `MetaCtx.new()`, scoped to a single constructor/function
+application's argument telescope, and discards it once that one application is
+zonked/checked: `lib/cure/elab/elaborator.ex:3205,3321,3482,3575,3632` are the
+five `MetaCtx.new()` sites, each consumed within one `Enum.reduce_while`/`reduce`
+over one argument list and finalized by `finish_ctor_app`/`finish_global_app`
+before returning plain Core terms (no `mctx` leaves that call). Neither
+candidate call site below currently has an `mctx` in scope to drain:
+- `lib/cure/elab/elaborator.ex:651` sits inside the private
+  `elaborate_expr_checked_fallback/5` (defined at elaborator.ex:645, no `@spec`
+  of its own), called from the public `elaborate_expr_checked/5`'s `@spec`
+  (elaborator.ex:457: `term(), term(), [String.t()], Context.t(), Env.t()`) —
+  no `MetaCtx.t()` parameter anywhere in that call chain. Confirmed by the
+  codebase's own comment at elaborator.ex:3379: *"the general checking
+  judgement (`elaborate_expr_checked`) does not thread `mctx`."*
+- `lib/cure/elab/program.ex` and `lib/cure/elab/declarations.ex` never reference
+  `MetaCtx` or `Unify` at all (zero hits) — `elaborate_function_body`
+  (declarations.ex:45) calls `elaborate_body` then `Kernel.check` directly, with
+  no `mctx` threaded through either.
+
+Consequently, **"drain once per top-level definition" requires a new plumbing
+step not yet accounted for**: threading a single `MetaCtx` through the whole
+per-definition call graph (`elaborate_function_body` → `elaborate_body` →
+`elaborate_expr_checked` → the argument-slot helpers that today call
+`MetaCtx.new()` locally). This must be an explicit, early plan task (before
+`drain_constraints/1` itself is wired in) — or, if that threading is judged too
+large for this feature's scope, the plan must instead scope postponement/retry
+to the granularity that's ALREADY threaded today (within one application's
+argument telescope, i.e. inside a single `MetaCtx.new()` lifetime), and revise
+the "later use" framing of `postpone01_flex_flex` (§5.1) and the
+"solved by a unification arising later in the same definition" claim below to
+match whichever granularity is actually implemented. Either resolution is
+acceptable; leaving the mismatch unresolved is not — Task 1's probe (§2) should
+be constructed to exercise whichever granularity the plan commits to, so the
+risk gate measures the real, buildable design rather than the aspirational one.
+
+Once that prerequisite is resolved, `drain_constraints/1` runs **once per
+[definition | application-telescope — per the resolution above], after all its
 unifications, immediately before the terminal `zonk`/`has_meta?` kernel-handoff
-gate**. Candidate call sites (exact one pinned in the plan by tracing where a
-definition's elaborated body is finalized):
+gate**. Candidate call sites (exact one pinned in the plan by tracing where the
+chosen scope's elaborated term is finalized):
 - `lib/cure/elab/elaborator.ex:651` (`if Unify.has_meta?(expected_core)` — the
-  checked-expression gate), and/or
+  checked-expression gate) **only if** it is first given an `mctx` parameter, or
 - the per-declaration finalize in `lib/cure/elab/program.ex` /
-  `lib/cure/elab/declarations.ex` where each function's Core term is zonked before
-  kernel check.
+  `lib/cure/elab/declarations.ex` **only if** a definition-scoped `mctx` is
+  first threaded into `elaborate_function_body`, or
+- `finish_ctor_app`/`finish_global_app` (elaborator.ex, the existing
+  `MetaCtx.new()` consumers) if the plan instead scopes to the
+  already-threaded application-telescope granularity.
 
 Requirement: after `drain_constraints/1` returns `{:ok, ctx}`, the existing
 `has_meta?` gate still runs (a metavar with no constraint but never solved is
 still an error, exactly as today). `drain` only converts "suspended constraints"
 into either solutions (which `zonk` then substitutes) or a clean rejection. If
-`drain` returns `{:error, …}`, that becomes the definition's elaboration error.
+`drain` returns `{:error, …}`, that becomes the elaboration error for the chosen
+scope.
 
 **Idempotence/order:** draining before `zonk` guarantees `zonk` sees a queue-free
-ctx; `zonk` itself is unchanged. Nested/local unify calls within one definition do
-**not** drain — only the definition boundary does — so a constraint suspended
-early can be solved by a unification arising later in the same definition.
+ctx; `zonk` itself is unchanged. Nested/local unify calls within the chosen scope
+do **not** drain — only its boundary does — so a constraint suspended early can
+be solved by a unification arising later **within that same scope** (whole
+definition, once threaded — or, absent that threading, the same application's
+argument telescope only; see the prerequisite above).
 
 ---
 
@@ -220,8 +313,11 @@ early can be solved by a unification arising later in the same definition.
 - New internal surface: `MetaCtx.{postpone,constraints,clear_constraints,
   put_constraints}` + `Unify.occurs_rigidity/3` (replacing `occurs?/3`) +
   `Unify.drain_constraints/1`.
-- One elaborator call site gains a `drain_constraints/1` step before the
-  definition's `has_meta?` gate.
+- One (or, if the plan keeps today's per-application `MetaCtx` scoping rather
+  than adding the threading prerequisite in §3.5, several) elaborator call
+  site(s) gain a `drain_constraints/1` step before the relevant `has_meta?`
+  gate. The exact count and location are pinned by the plan per §3.5's
+  prerequisite resolution, not fixed here.
 
 ---
 
@@ -308,6 +404,21 @@ occurs refinement, together (they are coupled — §1: B flips no verdict withou
 **Out of scope (deferred, on-demand):**
 - (C) Σ-flattening / projection elimination (`?m (fst y) (snd y)` → pattern form).
   Do when a projection-inference oracle probe actually fails.
+- **Pruning** (Abel & Pientka §3.4, Fig 5; the roadmap's technique (B) bundles
+  this with the occurs-check refinement — `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md:56`:
+  *"pruning … is what makes postponed/flex-rigid constraints actually solvable;
+  and the occurs-check refinement fixes a latent completeness gap"*). This spec
+  adopts only the occurs-check half of (B) and defers pruning: removing bound-variable
+  dependencies from a metavariable's scope that provably cannot appear in any
+  solution is a distinct mechanism from postponement/retry and from the
+  weak/strong-rigid split, and none of the four probes in §5 require it (each is
+  solved by retry-on-progress alone once the interfering metavariable is pinned).
+  If Task 1 (§2) or later probing finds a postponed constraint that drains
+  cleanly only with pruning (a bound variable that must be eliminated from a
+  metavariable's dependency set, not just have its *value* pinned by another
+  constraint), that is a **new oracle-measured gap**, not silently in scope here
+  — add it as its own probe/task rather than folding it into this feature's
+  "definition of done."
 - Blocker-keyed selective wakeup (Agda). Add only if profiling shows O(n²)
   re-solving at realistic scale.
 - Contextual-metavariable representation (`u[σ]` closures). Skipped per roadmap
@@ -315,6 +426,11 @@ occurs refinement, together (they are coupled — §1: B flips no verdict withou
 
 ## 9. Definition of done
 
+- §3.5's `MetaCtx`-scoping prerequisite is resolved **in the plan, before Task
+  1's probe is authored**: either the per-definition threading is added, or the
+  feature is explicitly rescoped to the already-threaded per-application-
+  telescope granularity — and `postpone01_flex_flex` (§5.1) is written to match
+  whichever was chosen, not the aspirational "later use" framing verbatim.
 - Risk gate (§2) passed: `postpone01` reproduced pre-fix divergence.
 - All four oracle probes at intended verdicts; frozen; replay green.
 - Unit tests (occurs_rigidity, queue helpers, drain incl. termination) green.
