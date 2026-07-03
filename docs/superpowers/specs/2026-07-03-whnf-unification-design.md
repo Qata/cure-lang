@@ -94,23 +94,30 @@ structural clauses (so all current behavior is preserved on already-whnf terms).
 
 The kernel evaluator is meta-free (`Eval.eval` has no `{:meta,_}` clause; a
 meta-bearing term would crash it). To reduce a term that still contains unsolved
-metavariables **without any kernel change**, wrap the existing trusted
-`Normalise.whnf`:
+metavariables **without any kernel change**, reuse `Normalise`'s reduction
+semantics directly through its public constituent functions — `Eval.eval/2`,
+`Normalise.whnf_value/3`, `Quote.reify/2` — the same three functions `whnf/3`
+itself composes (normalise.ex:26-33), rather than `whnf/3`'s own wrapper (see
+§3.3 for why: `whnf/3` needs a `Core.Context.t()` the unifier cannot cleanly
+build):
 
 1. **Zonk-then-substitute-placeholders.** Zonk the term (apply known meta
    solutions). For each *remaining* unsolved `{:meta, id}`, substitute a reserved
    **opaque global** placeholder `{:global, meta_placeholder_name(id)}` where
    `meta_placeholder_name(id)` is a fresh reserved atom (e.g. `:"$meta$#{id}"`)
    guaranteed absent from the signature.
-2. **Reduce.** Run `Normalise.whnf(ctx_core, subst_term, delta: :certified,
-   stuck_cases: :preserve)`. An opaque global has no signature entry, so
-   `unfold_head` returns `:stuck` (normalise.ex:59-62) and it stays a neutral —
-   exactly how an unsolved metavariable behaves: it **blocks** a match/case whose
-   scrutinee is the placeholder, and **passes through** in any non-scrutinee
-   position. Thus `whnf(plus(Z, $meta$0))` → `$meta$0` (plus's Z-branch returns
-   its second argument untouched), and `whnf(plus($meta$0, Z))` → stuck
-   `plus($meta$0, Z)` (blocked on the placeholder scrutinee — the genuinely-stuck
-   case, correctly left alone).
+2. **Reduce.** Evaluate with `Eval.eval/2` under a hand-built env (mirroring
+   `Context.env/1`'s recipe from just `depth`), then reduce to whnf with
+   `Normalise.whnf_value(value, sig, delta: :certified, stuck_cases: :preserve)`,
+   then read back with `Quote.reify(value, depth)` (§3.3 has the exact call
+   sequence). An opaque global has no signature entry, so `unfold_head` returns
+   `:stuck` (normalise.ex:59-62) and it stays a neutral — exactly how an unsolved
+   metavariable behaves: it **blocks** a match/case whose scrutinee is the
+   placeholder, and **passes through** in any non-scrutinee position. Thus
+   `whnf(plus(Z, $meta$0))` → `$meta$0` (plus's Z-branch returns its second
+   argument untouched), and `whnf(plus($meta$0, Z))` → stuck `plus($meta$0, Z)`
+   (blocked on the placeholder scrutinee — the genuinely-stuck case, correctly
+   left alone).
 3. **Reverse-map.** Walk the reduced term mapping each `{:global,
    meta_placeholder_name(id)}` back to `{:meta, id}`.
 
@@ -119,25 +126,55 @@ recognizable (a fixed prefix) so reverse-mapping is total and unambiguous. A
 `{:global, "$meta$…"}` can never arise from real Cure source (the prefix is not a
 legal identifier), so there is no collision with a user global.
 
-**Fuel / failure.** `Normalise.whnf` may return `:fuel_exhausted`. On that (or any
-placeholder round-trip anomaly), the whnf step **falls back to the un-reduced
-term** (i.e. behaves exactly as today — structural comparison on the original),
-never crashing and never fabricating a reduction. So the change is strictly
-additive: it can only turn some current `cannot_unify` failures into successes,
-never the reverse (a fallback preserves the old path).
+**Fuel / failure.** Step 2's reduction, wrapped in `Normalise.with_fuel/2`
+(normalise.ex:68-81 — the same fuel mechanism `whnf/3` uses internally, since
+fuel is tracked via the process dictionary and consulted deep inside
+`unfold_certified_head`/`reduce_unfolded` regardless of which entry point
+drives the reduction), may report `:fuel_exhausted`. On that (or any placeholder
+round-trip anomaly), the whnf step **falls back to the un-reduced term** (i.e.
+behaves exactly as today — structural comparison on the original), never
+crashing and never fabricating a reduction. So the change is strictly additive:
+it can only turn some current `cannot_unify` failures into successes, never the
+reverse (a fallback preserves the old path).
 
 ### 3.3 Interaction with the Core `Context` the reuse needs
 
 `Normalise.whnf/3` takes a `Cure.Core.Context.t()` (for signature + de Bruijn
 length + env), while `Unify.unify/4` currently threads only a `sig` (passed to
-`Conv.conv?` in `delta_convertible?`) and a de Bruijn `depth`. The plan pins
-exactly how the unifier obtains/constructs the `Context` (or calls the
-lower-level `eval_in`/`whnf_value`/`Quote.reify` directly with `sig` + `depth`,
-as `whnf/3`'s own body does — normalise.ex:26-33). Whichever path: the whnf must
-run at the **same de Bruijn depth** the two terms were forced at (the `depth`
-argument already threaded through `unify_d`), so bound-variable levels line up.
-This is a plan-level detail to verify against `Normalise`/`Quote` signatures, not
-a design choice.
+`Conv.conv?` in `delta_convertible?`) and a de Bruijn `depth`. `Context.t()`
+also carries a `types :: [Value.t()]` field (one semantic type value per bound
+variable) that the unifier simply does not have — its `depth` is a bare
+counter, not a typed telescope. Every existing `Normalise.whnf`/`nf` call site
+in the codebase (`lib/cure/core/kernel.ex`, `lib/antigen/*`, `test/cure/core/*`)
+builds its `Context` via `Context.empty(env) |> Context.extend(real_type_value)`
+using genuine type values from an active typechecking context — there is no
+call site, and no public `Context` constructor, for "a context of a given
+length with unknown types." Fabricating one from the unifier (a `Context.extend`
+loop with placeholder type values, or a direct `%Context{}` struct literal) is
+therefore either impossible via the public API or a bypass of it.
+
+The resolving fact: `types` is **read by nothing** on the `whnf` path.
+`Normalise.whnf/3`'s body (normalise.ex:26-33) calls `Context.signature/1`
+directly, `Context.length/1` directly (passed to `Quote.reify`), and
+`Context.env/1` indirectly (via its own private `eval_in/2`, which is just
+`Eval.eval(term, Context.env(ctx))`) — never `Context.lookup/2`, the only
+consumer of `.types`. So the unifier does **not** need to construct a
+`Context.t()` at all: it calls the same public functions `whnf/3`'s body calls,
+directly, with a hand-built env in place of `Context.env(ctx)`:
+
+1. `env = for level <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, level}}`
+   (exactly `Context.env/1`'s recipe, needing only `depth`, not a `Context`).
+2. `value = Eval.eval(subst_term, env)` (the public function `Normalise`'s
+   private `eval_in/2` merely wraps — `eval_in` is `defp` and NOT reachable
+   from `Unify`).
+3. `reduced_value = Normalise.whnf_value(value, sig, delta: :certified,
+   stuck_cases: :preserve)`.
+4. `reduced_term = Quote.reify(reduced_value, depth)`.
+
+This is the ONLY path the plan should pin: it needs no `Context.t()`, uses only
+public functions, and runs at the **same de Bruijn depth** the two terms were
+forced at (the `depth` argument already threaded through `unify_d`), so
+bound-variable levels line up.
 
 ### 3.4 What this fixes and does not
 
@@ -156,9 +193,12 @@ a design choice.
 ## 4. Data & control-flow summary
 
 - `unify/4` public contract **unchanged**: `{:ok, ctx} | {:error, reason}`.
-- New internal surface in `Cure.Elab.Unify`: `whnf_meta_aware/…` (the placeholder
-  wrap around `Normalise.whnf`) and a reduction step in `unify_d` (or a new
-  `reduce_then_unify`) that whnfs both sides and recurses on change.
+- New internal surface in `Cure.Elab.Unify`: `whnf_meta_aware(term, meta_ctx,
+  sig, depth \\ 0, opts \\ [])` (`@doc false`/public, not `defp` — see §3.3; the
+  placeholder wrap around `Eval.eval`/`Normalise.whnf_value`/`Quote.reify`, the
+  same reduction semantics `Normalise.whnf/3` composes) and a reduction step in
+  `unify_d` (or a new `reduce_then_unify`) that whnfs both sides and recurses on
+  change.
 - No new `MetaCtx` field, no constraint queue, no `occurs?` change. `occurs?`
   stays exactly as today (the occurs cases are not reachable-to-flip — §7).
 - No elaborator call-site change beyond `unify.ex` internals (the fix is entirely
