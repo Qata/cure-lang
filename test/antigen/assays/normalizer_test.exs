@@ -67,4 +67,37 @@ defmodule Antigen.Assays.NormalizerTest do
       assert {:violation, {:equal_unsound, _, _}} = Normalizer.run(f, k)
     end
   end
+
+  describe "normalizer/intrinsic (V1c)" do
+    # {:refinement, ...} is outside CoreBridge's grammar (to_core -> :error).
+    defp intr_ch(ast) do
+      Challenge.new(kind: :surface_expr, assay: "normalizer/intrinsic", label: :untranslatable,
+        payload: %{ast: ast}, seed: 1)
+    end
+    defp untranslatable(inner), do: {:refinement, [], [inner]}
+
+    test "baseline: normalize is a fixpoint and does not grow the term" do
+      assert Normalizer.run(intr_ch(untranslatable(add(lit(3), lit(5))))) == :ok
+    end
+
+    test "not-idempotent negative control" do
+      # Must NOT also grow the term, or it trips :size_increased first (the
+      # implementation checks size before idempotence — see Step 3's note). This
+      # stub retags {:refinement,...} <-> {:not_fixed,...} with the SAME child
+      # count each call (term_size is tag-blind), so the size guard passes and
+      # the oscillation exposes genuine non-idempotence: once != p.ast's shape,
+      # twice flips back, so twice != once.
+      k = %{Normalizer.__real__() | normalize: fn
+        {:refinement, m, [inner]}, _b -> {:not_fixed, m, [inner]}
+        {:not_fixed, m, [inner]}, _b -> {:refinement, m, [inner]}
+        ast, _b -> ast
+      end}
+      assert {:violation, {:not_idempotent, _, _}} = Normalizer.run(intr_ch(untranslatable(lit(1))), k)
+    end
+
+    test "size-increase negative control" do
+      k = %{Normalizer.__real__() | normalize: fn ast, _b -> {:dup, [], [ast, ast]} end}  # strictly larger
+      assert {:violation, {:size_increased, _, _}} = Normalizer.run(intr_ch(untranslatable(lit(1))), k)
+    end
+  end
 end

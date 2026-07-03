@@ -65,4 +65,30 @@ defmodule Antigen.Assays.Normalizer do
       :ok
     end
   end
+
+  def run(%Challenge{kind: :surface_expr, assay: "normalizer/intrinsic", payload: p}, k) do
+    once = k.normalize.(p.ast, %{})
+    twice = k.normalize.(once, %{})
+
+    # Size guard FIRST: a stub that both grows and is non-idempotent reports
+    # :size_increased deterministically.
+    cond do
+      term_size(once) > term_size(p.ast) ->
+        {:violation, {:size_increased, p.ast, %{in: term_size(p.ast), out: term_size(once)}}}
+
+      twice != once ->
+        {:violation, {:not_idempotent, p.ast, %{once: once, twice: twice}}}
+
+      true ->
+        :ok
+    end
+  end
+
+  # node count over the {tag, meta, children} grammar; meta excluded, scalar leaves
+  # count 1. A scalar-payload node like {:literal, meta, 3} has a non-list third
+  # element, so it falls to the leaf clause (size 1), not the composite one.
+  defp term_size({_tag, _meta, children}) when is_list(children),
+    do: 1 + Enum.sum(Enum.map(children, &term_size/1))
+
+  defp term_size(_leaf), do: 1
 end
