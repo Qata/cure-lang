@@ -948,15 +948,18 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms1b} <- desugar_tuple_args(arms1),
-         # A guard on a *nested* constructor pattern would be silently dropped by
-         # the nested-pattern matrix compiler (below), so reject it up front.
-         :ok <- reject_nested_guards(arms1b),
+         # A guard on a *nested* constructor pattern is threaded through the
+         # pattern-matrix compiler here: rows carry their guard, and each matrix
+         # leaf folds the reached rows into a `bool_elim` `if`-chain whose tail is
+         # the next row (the Wadler/Augustsson `match … default` continuation,
+         # à la Idris' `CaseBuilder` errorCase — but over surface names, so no
+         # de-Bruijn weakening is needed).
          {:ok, arms1c} <- desugar_nested_arms(arms1b, scrut_expr),
-         # A guard on a *constructor* pattern is folded into a guardless arm whose
-         # body is a `bool_elim` `if`-chain over the constructor group's rows
-         # (same-constructor fall-through), so it flows through the ordinary
-         # `:vdata` path below. A guard on a *variable/catch-all* pattern is left
-         # for `try_guard_match`.
+         # A guard on a *single-level* constructor pattern (which never reaches the
+         # matrix) is folded into a guardless arm whose body is a `bool_elim`
+         # `if`-chain over the constructor group's rows (same-constructor
+         # fall-through), so it flows through the ordinary `:vdata` path below. A
+         # guard on a *variable/catch-all* pattern is left for `try_guard_match`.
          {:ok, arms} <- desugar_ctor_guards(arms1c, scrut_expr),
          # A `when` guard is orthogonal to the pattern's shape, so it is resolved
          # before the shape-dispatching paths (each of which would silently drop
@@ -2148,12 +2151,6 @@ defmodule Cure.Elab.Elaborator do
   # plain guardless match the ordinary `:vdata` path compiles; the `if`s lower to
   # the committed `bool_elim`. No matrix-compiler or kernel change.
 
-  defp reject_nested_guards(arms) do
-    if Enum.any?(arms, fn a -> ctor_guarded_arm?(a) and arm_has_nested?(a) end),
-      do: {:error, {:unsupported_guard, :nested_ctor_guard}},
-      else: :ok
-  end
-
   defp ctor_guarded_arm?({:match_arm, meta, _body}) do
     Keyword.has_key?(meta, :guard) and
       match?({:function_call, _m, _args}, Keyword.get(meta, :pattern))
@@ -2402,7 +2399,10 @@ defmodule Cure.Elab.Elaborator do
       end)
       |> Enum.uniq()
 
-    if Enum.any?(arms, fn {:match_arm, _m, b} -> binds_any?(single_body(b), pvars) end) do
+    if Enum.any?(arms, fn {:match_arm, m, b} ->
+         binds_any?(single_body(b), pvars) or
+           (Keyword.get(m, :guard) && binds_any?(Keyword.get(m, :guard), pvars))
+       end) do
       {:error, {:unsupported_pattern, :shadowed_nested}}
     else
       fresh = for i <- 1..k//1, do: "$n" <> cname <> Integer.to_string(i)
@@ -2410,7 +2410,7 @@ defmodule Cure.Elab.Elaborator do
       rows =
         Enum.map(arms, fn {:match_arm, m, b} ->
           {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
-          {as, single_body(b)}
+          {as, Keyword.get(m, :guard), single_body(b)}
         end)
 
       case compile_matrix(fresh, rows) do
@@ -2429,19 +2429,25 @@ defmodule Cure.Elab.Elaborator do
   defp pattern_vars_deep(_), do: []
 
   # Pattern-matrix compilation. `scruts` are fresh scrutinee variable NAMES; each
-  # row is `{[pattern…], body}` with one pattern per remaining scrutinee. Emits a
-  # tree of single-scrutinee `{:pattern_match}` nodes; every emitted match is
-  # single-level, so it re-uses the dependent elaborator per node.
-  defp compile_matrix([], [{[], body} | _]), do: {:ok, body}
+  # row is `{[pattern…], guard, body}` (guard is `nil` or a surface expr) with one
+  # pattern per remaining scrutinee. Emits a tree of single-scrutinee
+  # `{:pattern_match}` nodes; every emitted match is single-level, so it re-uses
+  # the dependent elaborator per node. At a leaf (no columns left), the reached
+  # rows are folded into a `bool_elim` `if`-chain: a guarded row tests its guard
+  # and falls through to the next reached row, an unguarded row terminates the
+  # chain (later rows shadowed), à la the Wadler/Augustsson `match … default`
+  # continuation. All still over surface names, so no de-Bruijn weakening.
+  defp compile_matrix([], rows), do: fold_leaf_rows(rows)
 
   defp compile_matrix([v | vs], rows) do
-    col = Enum.map(rows, fn {[p | _ps], _b} -> p end)
+    col = Enum.map(rows, fn {[p | _ps], _g, _b} -> p end)
 
     if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
       # All-variable column: bind each row's variable to `v`, drop the column.
       rows2 =
-        Enum.map(rows, fn {[{:variable, _m, x} | ps], body} ->
-          {ps, subst_surface_var(body, x, {:variable, [], v})}
+        Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
+          repl = {:variable, [], v}
+          {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
         end)
 
       compile_matrix(vs, rows2)
@@ -2449,6 +2455,23 @@ defmodule Cure.Elab.Elaborator do
       compile_matrix_split(v, vs, rows, col)
     end
   end
+
+  # Fold the rows reaching a matrix leaf into an `if`-chain. An unguarded row is
+  # an unconditional match: it terminates the chain (identical to the previous
+  # first-match behaviour when no row is guarded). A guarded final row with no
+  # unguarded successor is non-exhaustive.
+  defp fold_leaf_rows([{[], nil, body} | _]), do: {:ok, body}
+
+  defp fold_leaf_rows([{[], guard, body} | rest]) do
+    with {:ok, else_} <- fold_leaf_rows(rest) do
+      {:ok, {:conditional, [], [guard, body, else_]}}
+    end
+  end
+
+  defp fold_leaf_rows([]), do: {:error, {:unsupported_guard, :non_exhaustive}}
+
+  defp subst_guard(nil, _name, _repl), do: nil
+  defp subst_guard(guard, name, repl), do: subst_surface_var(guard, name, repl)
 
   # Column `v` has ≥1 constructor pattern: branch on each distinct constructor
   # (first-appearance order), plus a catch-all if any row has a variable there.
@@ -2482,14 +2505,15 @@ defmodule Cure.Elab.Elaborator do
       ws = for i <- 1..arity//1, do: v <> "_" <> cname <> Integer.to_string(i)
 
       sub_rows =
-        Enum.flat_map(rows, fn {[p | ps], body} ->
+        Enum.flat_map(rows, fn {[p | ps], g, body} ->
           case p do
             {:function_call, m, qs} ->
-              if Keyword.fetch!(m, :name) == cname, do: [{qs ++ ps, body}], else: []
+              if Keyword.fetch!(m, :name) == cname, do: [{qs ++ ps, g, body}], else: []
 
             {:variable, _m, x} ->
               wilds = for w <- ws, do: {:variable, [], w <> "_x"}
-              [{wilds ++ ps, subst_surface_var(body, x, {:variable, [], v})}]
+              repl = {:variable, [], v}
+              [{wilds ++ ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
           end
         end)
 
@@ -2506,7 +2530,7 @@ defmodule Cure.Elab.Elaborator do
 
   # Arity of `cname` from the first row that mentions it explicitly.
   defp split_arity(cname, rows) do
-    Enum.find_value(rows, 0, fn {[p | _], _} ->
+    Enum.find_value(rows, 0, fn {[p | _], _g, _b} ->
       case p do
         {:function_call, m, qs} -> if Keyword.fetch!(m, :name) == cname, do: length(qs)
         _ -> nil
@@ -2518,10 +2542,14 @@ defmodule Cure.Elab.Elaborator do
   # variable rows survive (each binding its variable to `v`), column dropped.
   defp split_default(v, vs, rows) do
     default_rows =
-      Enum.flat_map(rows, fn {[p | ps], body} ->
+      Enum.flat_map(rows, fn {[p | ps], g, body} ->
         case p do
-          {:variable, _m, x} -> [{ps, subst_surface_var(body, x, {:variable, [], v})}]
-          _ -> []
+          {:variable, _m, x} ->
+            repl = {:variable, [], v}
+            [{ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
+
+          _ ->
+            []
         end
       end)
 
