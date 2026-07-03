@@ -132,7 +132,14 @@ openly, not silently dropped.
   is used directly for row 1 (and is the precedent the whole design generalizes).
 - **Create** `test/antigen/meta/sensitivity_test.exs` — the 8-row matrix, each row
   a baseline + weakened assertion pair, plus a regression note that the existing
-  per-assay test files must still pass unchanged.
+  test suite must still pass unchanged. Concretely: dedicated per-assay files
+  (`test/antigen/assays/{term,positivity,universes,reflexivity,mutation}_test.exs`)
+  for four of the five touched modules, plus `test/antigen/corpus_replay_test.exs`
+  for `stuck_elim_delta.ex` — the fifth touched module has no dedicated
+  `test/antigen/assays/stuck_elim_delta_test.exs`; its `run/1` regression coverage
+  comes only from corpus replay of the banked `:stuck_elim` records (the file
+  named similarly, `test/cure/core/stuck_elim_delta_test.exs`, tests the kernel's
+  δ-unfold behavior directly, not `Antigen.Assays.StuckElimDelta`).
 - **Report** the rendered matrix into the Stage-5 completion report
   `docs/superpowers/reports/2026-07-03-antigen-sensitivity-meta-testing-report.md`.
 
