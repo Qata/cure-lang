@@ -94,7 +94,10 @@ defmodule Mix.Tasks.Antigen do
       {1, Antigen.Generators.Conversion.conv_reject()},
       {1, Antigen.Generators.Conversion.conv_accept("term/infer_check")},
       {1, Antigen.Generators.Conversion.conv_accept("term/subject_reduction")},
-      {1, Antigen.Generators.Conversion.conv_accept("term/normalization")}
+      {1, Antigen.Generators.Conversion.conv_accept("term/normalization")},
+      {1, Antigen.Generators.Term.typed_term("kernel/shift_subst")},
+      {1, Antigen.Generators.Term.typed_term("kernel/weakening")},
+      {1, Antigen.Generators.Term.typed_term("kernel/confluence")}
     ])
   end
 

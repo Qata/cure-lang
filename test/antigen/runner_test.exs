@@ -74,11 +74,22 @@ defmodule Antigen.RunnerTest do
     assert r.infections >= 1
   end
 
-  test "default_gen has exactly 11 branches in the documented group order (guard)" do
+  test "default_gen has exactly 14 branches in the documented group order (guard)" do
     {:frequency, ws} = Mix.Tasks.Antigen.default_gen()
-    assert length(ws) == 11
+    assert length(ws) == 14
     assert Antigen.Runner.gen_group_table() ==
-             %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11], m: [7, 8]}
+             %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14], m: [7, 8]}
+  end
+
+  test "kernel-law verticals run to completion with 0 infections on the sound kernel" do
+    for id <- ~w(kernel/shift_subst kernel/weakening kernel/confluence) do
+      opts = [gen: Antigen.Generators.Term.typed_term(id), count: 40,
+              corpus_path: tmp("kl_c_#{String.replace(id, "/", "_")}.sexp"),
+              seeds_path: tmp("kl_s_#{String.replace(id, "/", "_")}.sexp"),
+              report_dir: tmp("kl_r_#{String.replace(id, "/", "_")}")]
+      r = Antigen.Runner.explore(opts)
+      assert r.infections == 0, "#{id} false-positived on the sound kernel"
+    end
   end
 
   test "bias:true bumps the vacuous group's total weight, floors hold, Group F unchanged" do
