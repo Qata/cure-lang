@@ -25,6 +25,7 @@
 - **New** `lib/antigen/triage.ex` — orchestrator: `minimize/3`, `size/1`, one-step fixpoint.
 - **New** `lib/antigen/bisect.ex` — `candidates/1` (payload-direct element drops + focus cleanup).
 - **Modify** `lib/antigen/shrink.ex` — generalize `candidates/1` to the pieces bridge for non-typed kinds; expose `candidates/1`, `reseed/1`, `well_formed?/1` (`@doc false`) for `Triage`.
+- **Modify** `lib/antigen/coverage.ex` — widen `terms_of/1`'s `:forcing_pair` clause to also match `:stuck_elim` (identical payload shape; today's literal-`:forcing_pair`-only clause makes `Shrink.well_formed?/1` crash-then-rescue-to-`false` for every `:stuck_elim` candidate, silently defeating `Triage`/`Bisect` for that kind — see Task 1).
 - **Modify** `lib/antigen/runner.ex` — infection branch calls `Triage.minimize/3` for all kinds; merge `:triage` stats into the health map.
 - **Modify** `lib/antigen/report.ex` — `render/3` emits optional `triage:` line.
 - **New tests** `test/antigen/bisect_test.exs`, `test/antigen/triage_test.exs`; **extend** `test/antigen/shrink_test.exs`.
@@ -46,13 +47,15 @@
 
 **Files:**
 - Modify: `lib/antigen/shrink.ex`
+- Modify: `lib/antigen/coverage.ex`
 - Test: `test/antigen/shrink_test.exs`
 
 **Interfaces:**
 - Produces: public `Shrink.candidates/1`, `Shrink.reseed/1`, `Shrink.well_formed?/1`; `candidates/1` now returns term-rewrite candidates for `:family`/`:indexed_case`/`:rewrite_eq`/`:forcing_pair`/`:stuck_elim`/`:def_group`/`:stub` via the pieces bridge, `[]` for `:elab_program`, and the exact existing candidate set for `:typed_term`/`:mutant_term`.
 - Consumes: `Challenge.to_pieces/1`, `Challenge.from_pieces/7`.
+- **Fixes a real, `Triage`-blocking well-formedness gap:** `Coverage.terms_of/1` (which `well_formed?/1` calls) today has a *literal* `kind: :forcing_pair` clause but no clause for `:stuck_elim`, even though `:stuck_elim` shares `:forcing_pair`'s exact payload shape (`%{defs:, focus:, t:, tprime:}` — confirmed by `Challenge.to_pieces/1`'s own shared `kind in [:forcing_pair, :stuck_elim]` guard). Because `well_formed?/1` rescues any crash to `false`, every `:stuck_elim` candidate is silently treated as malformed today — harmless while only `:typed_term`/`:mutant_term` route through `Shrink`, but the moment Task 4 routes *every* kind through `Triage.minimize/3`, this makes `:stuck_elim` a silent permanent no-op (indistinguishable from `:elab_program`'s *legitimate* no-op), contradicting the design's §5.3/§6.1 kind-coverage tables and this task's own `candidates/1` claim above. Widen the `:forcing_pair` clause in `lib/antigen/coverage.ex` to `k in [:forcing_pair, :stuck_elim]` (Step 3 below) and pin it with a red test (Step 1).
 
-- [ ] **Step 1: Write the failing test** — a `:family` infection carried by one bloated constructor arg shrinks via `Shrink.minimize/3`; a `:typed_term` still shrinks exactly as before (regression pin).
+- [ ] **Step 1: Write the failing test** — a `:family` infection carried by one bloated constructor arg shrinks via `Shrink.minimize/3`; a `:typed_term` still shrinks exactly as before (regression pin); a `:stuck_elim` challenge is correctly recognized as well-formed (today it is wrongly rejected — see above).
 
 Append to `test/antigen/shrink_test.exs` (inside the existing test module):
 
@@ -94,13 +97,35 @@ describe "shrink-all-kinds (pieces bridge)" do
     # S(Z) → Z is rule2; must still be offered on the typed_term term field
     assert Enum.any?(cands, fn c -> c.payload.term == {:ctor, :Z, []} end)
   end
+
+  test "well_formed?/1 recognizes a :stuck_elim challenge (shares :forcing_pair's payload shape)" do
+    # :stuck_elim's payload is %{defs:, focus:, t:, tprime:} — identical to :forcing_pair's
+    # (Challenge.to_pieces/1 shares one clause for both kinds via `kind in [...]`). Today
+    # Coverage.terms_of/1 only has a LITERAL `kind: :forcing_pair` clause, so this legitimately
+    # well-formed :stuck_elim challenge crashes Coverage.terms_of/1 (FunctionClauseError),
+    # rescued by well_formed?/1 to `false` — wrongly reporting it as malformed. Once every
+    # kind routes through Triage (Task 4), that false negative makes :stuck_elim a silent,
+    # permanent no-op (every Bisect/Shrink candidate rejected by the well-formed? pre-filter).
+    # body is S(Z), not the bare atom Z — an atomic {:ctor, :Z, []} everywhere would make
+    # every piece already-minimal (node_count == 1, no rule1/rule2/rule4/child_slots
+    # candidates), which would fail `candidates(ch) != []` below for an unrelated reason.
+    # label :positive matches Antigen.Assays.StuckElimDelta's real semantics for this
+    # kind (t/tprime committed as convertible); irrelevant to well_formed?/candidates
+    # (neither reads `label`), but kept realistic rather than borrowing :def_group's
+    # :terminating label.
+    ch = Challenge.new(kind: :stuck_elim, assay: "stuck_elim_delta", label: :positive,
+           payload: %{defs: [%{name: :f, type: @nat, body: {:ctor, :S, [{:ctor, :Z, []}]}}],
+                      focus: [:f], t: {:ctor, :Z, []}, tprime: {:ctor, :Z, []}}, seed: 1)
+    assert Shrink.well_formed?(ch)
+    assert Shrink.candidates(ch) != []
+  end
 end
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `MIX_ENV=test mix test test/antigen/shrink_test.exs`
-Expected: FAIL — `Shrink.candidates/1` is private (UndefinedFunctionError) and/or returns `[]`/crashes for `:family` (today `candidates/1` dereferences `payload.type`/`payload.term`, absent on a `:family`).
+Expected: FAIL — `Shrink.candidates/1` is private (UndefinedFunctionError) and/or returns `[]`/crashes for `:family` (today `candidates/1` dereferences `payload.type`/`payload.term`, absent on a `:family`); AND `Shrink.well_formed?(ch)` for the `:stuck_elim` case is `false` (should be `true`) because `Coverage.terms_of/1` has no `:stuck_elim` clause and raises `FunctionClauseError`, rescued to `false`.
 
 - [ ] **Step 3: Implement the generalization**
 
@@ -153,6 +178,16 @@ def candidates_for_test(ch), do: candidates(ch)
 
 Guard `ctx_candidates/1` so it is only ever reached by the typed/mutant clause (it already is — no other clause calls it), so its `p.ctx` deref stays safe.
 
+In `lib/antigen/coverage.ex`, widen the `:forcing_pair`-only clause to also cover `:stuck_elim` (identical payload shape — mirrors `Challenge.to_pieces/1`'s own shared guard):
+
+```elixir
+# was: def terms_of(%Challenge{kind: :forcing_pair, payload: %{defs: defs, t: t, tprime: tp}}),
+#        do: Enum.flat_map(defs, fn d -> [d.type, d.body] end) ++ [t, tp]
+def terms_of(%Challenge{kind: k, payload: %{defs: defs, t: t, tprime: tp}})
+    when k in [:forcing_pair, :stuck_elim],
+    do: Enum.flat_map(defs, fn d -> [d.type, d.body] end) ++ [t, tp]
+```
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `MIX_ENV=test mix test test/antigen/shrink_test.exs`
@@ -161,7 +196,7 @@ Expected: PASS (new rows + all pre-existing shrink rows still green).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/antigen/shrink.ex test/antigen/shrink_test.exs
+git add lib/antigen/shrink.ex lib/antigen/coverage.ex test/antigen/shrink_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(antigen): generalize Shrink.candidates to all kinds via the pieces bridge"
 ```
 
@@ -707,6 +742,8 @@ If `test/antigen/seeds.sexp` shows modified (a known test-run artifact), run `gi
 ## Self-review
 
 **Spec coverage:** §5 shrink-all-kinds → Task 1; §6 bisect + focus cleanup + no-reindex → Task 2; §7.1 combined fixpoint + §7.2 size + safe_pred + budget + determinism + elab no-op → Task 3; §7.3 runner wiring + `:triage` merge → Task 4; §7.4 report line → Task 5; §9 testing strategy rows distributed across Tasks 1–5; §10 invariants pinned by Task 3 tests + Task 6 full suite. Non-goals (§3) respected: no git-bisect, no elab string shrink (`:elab_program` no-op tested in Task 3), no granularity ladder (greedy 1-minimal in Task 2).
+
+**Well-formedness gap closed (found during hardening review):** `Coverage.terms_of/1` had a literal `kind: :forcing_pair` clause only, with no `:stuck_elim` clause, despite `:stuck_elim` sharing `:forcing_pair`'s exact payload shape. Since `Shrink.well_formed?/1` rescues any crash to `false`, this made `:stuck_elim` silently fail every well-formedness check — invisible today (only `:typed_term`/`:mutant_term` route through `Shrink`), but would have made `:stuck_elim` a silent, permanent, unminimized no-op once Task 4 routes every kind through `Triage.minimize/3`, contradicting §5.3/§6.1's coverage tables. Fixed in Task 1 by widening the `Coverage.terms_of/1` clause to `k in [:forcing_pair, :stuck_elim]`, pinned by a red test.
 
 **Placeholder scan:** none — every step has concrete code/commands/expected output. The two "create file only if absent" test files (Tasks 4, 5) and the runner assay-seam note are explicit implementer instructions, not placeholders.
 
