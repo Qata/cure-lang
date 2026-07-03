@@ -161,6 +161,13 @@ defmodule Cure.Core.Certificate do
   defp guarded_node?(name, p, {:sigma, a, b}, root, smaller),
     do: guarded?(name, p, a, root, smaller) and guarded?(name, p, b, root + 1, shift(smaller, 1))
 
+  # bool_elim binds nothing, so every sub-term stays at the same root/smaller —
+  # a recursive call inside either branch is still checked for structural descent.
+  defp guarded_node?(name, p, {:bool_elim, s, m, tt, ff}, root, smaller),
+    do:
+      guarded?(name, p, s, root, smaller) and guarded?(name, p, m, root, smaller) and
+        guarded?(name, p, tt, root, smaller) and guarded?(name, p, ff, root, smaller)
+
   defp guarded_node?(name, p, {:pair, a, b}, root, smaller),
     do: guarded?(name, p, a, root, smaller) and guarded?(name, p, b, root, smaller)
 
@@ -243,6 +250,11 @@ defmodule Cure.Core.Certificate do
     do:
       calls?(name, s) or calls?(name, m) or
         Enum.any?(brs, fn {_c, _ar, b} -> calls?(name, b) end)
+
+  # SOUNDNESS: a self-call hidden in either bool_elim branch must be visible, or
+  # a non-terminating def would be certified total (the catch-all returns false).
+  defp calls?(name, {:bool_elim, s, m, tt, ff}),
+    do: calls?(name, s) or calls?(name, m) or calls?(name, tt) or calls?(name, ff)
 
   defp calls?(name, {:eq, t, a, b}), do: calls?(name, t) or calls?(name, a) or calls?(name, b)
   defp calls?(name, {:refl, a}), do: calls?(name, a)

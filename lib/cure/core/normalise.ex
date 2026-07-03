@@ -183,6 +183,10 @@ defmodule Cure.Core.Normalise do
     {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
   end
 
+  defp nf_neutral({:nbool_elim, neutral, motive, tt, ff}, sig, depth, opts) do
+    {:nbool_elim, nf_neutral(neutral, sig, depth, opts), motive, tt, ff}
+  end
+
   defp nf_neutral(neutral, _sig, _depth, _opts), do: neutral
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth)
@@ -191,26 +195,79 @@ defmodule Cure.Core.Normalise do
     if opts[:delta] == :none do
       :stuck
     else
-      unfold_certified_head(neutral, sig)
+      unfold_certified_head(neutral, sig, opts)
     end
   end
 
-  defp unfold_certified_head(neutral, sig) do
+  # δ-reduce a neutral's spine head when that head is either a certified-total
+  # global OR a *stuck eliminator* (`ncase`/`nfst`/`nsnd`) whose target itself
+  # δ-reduces to a constructor/pair. In the eliminator case we whnf the target
+  # (threading the caller's `opts`, so `delta: :none` and fuel/mode are honored)
+  # and, when a value emerges, apply the SAME ι-rule `eval` trusts, then re-apply
+  # the spine `args`. Each ι-reduction spends fuel so termination stays bounded.
+  defp unfold_certified_head(neutral, sig, opts) do
     {head, args} = spine(neutral, [])
 
     case head do
       {:nglobal, name} ->
-        if Env.certified?(sig, name) do
-          %{body: body} = Env.get_def(sig, name)
-          {:ok, Enum.reduce(args, spend_fuel(Eval.eval(body, [])), fn arg, acc -> Eval.apply(acc, arg) end)}
+        # δ-unfold a certified global by evaluating its body in the EMPTY env.
+        # Guard: the body MUST be closed — an open body's free de Bruijn variables
+        # would surface as neutral `{:nvar, k}` and alias whatever the ambient
+        # context binds at level k (a capture). `Env.certify/2` already refuses
+        # open bodies, so this only fires against a forged marker; staying stuck is
+        # the safe answer (never unsound, at worst a missed unfold). (A5)
+        with true <- Env.certified?(sig, name),
+             %{body: body} <- Env.get_def(sig, name),
+             true <- Cure.Core.Term.closed?(body) do
+          {:ok, reapply(args, spend_fuel(Eval.eval(body, [])))}
         else
-          :stuck
+          _ -> :stuck
+        end
+
+      # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
+      # matching branch body in `reverse(cargs) ++ env`.
+      {:ncase, scrut, _motive, branches} ->
+        case whnf_value({:vneutral, scrut}, sig, opts) do
+          {:vctor, cname, cargs} ->
+            {_c, _ar, {:closure, env, body}} =
+              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+
+            reduced = spend_fuel(Eval.eval(body, Enum.reverse(cargs) ++ env))
+            {:ok, reapply(args, reduced)}
+
+          _ ->
+            :stuck
+        end
+
+      # ι on bool_elim: mirrors `eval({:bool_elim,…})` — whnf the scrutinee and,
+      # when it is a concrete boolean, fire the matching branch (which binds
+      # nothing, so its closure evaluates directly in its captured env).
+      {:nbool_elim, scrut, _motive, {:closure, tenv, tbody}, {:closure, fenv, fbody}} ->
+        case whnf_value({:vneutral, scrut}, sig, opts) do
+          {:vbool, true} -> {:ok, reapply(args, spend_fuel(Eval.eval(tbody, tenv)))}
+          {:vbool, false} -> {:ok, reapply(args, spend_fuel(Eval.eval(fbody, fenv)))}
+          _ -> :stuck
+        end
+
+      # ι on projections: mirrors `vfst`/`vsnd` — the pair's first/second field.
+      {:nfst, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
+          _ -> :stuck
+        end
+
+      {:nsnd, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
+          _ -> :stuck
         end
 
       _ ->
         :stuck
     end
   end
+
+  defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
 
   defp spend_fuel(reduced) do
     case Process.get(@fuel_key) do

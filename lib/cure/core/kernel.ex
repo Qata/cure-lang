@@ -244,6 +244,26 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # Dependent Boolean elimination (Bool.rec, §minimal-primitive-eliminator).
+  # `motive : Bool → Type`; the branches are checked at the motive applied to the
+  # respective literal, and the result type is the motive at the scrutinee value.
+  # Total by construction: both branches are mandatory, so no coverage rule is
+  # needed. The result mirrors `:case` — `motive @ scrut` — so when the scrutinee
+  # is neutral the type is a well-formed stuck application.
+  def infer(ctx, {:bool_elim, scrut, motive, tt, ff}) do
+    with :ok <- check(ctx, scrut, {:vbool_type}),
+         {:ok, motive_value} <- check_bool_motive_wf(ctx, motive) do
+      exp_tt = Eval.apply(motive_value, {:vbool, true})
+      exp_ff = Eval.apply(motive_value, {:vbool, false})
+
+      with :ok <- check(ctx, tt, exp_tt),
+           :ok <- check(ctx, ff, exp_ff) do
+        scrut_value = Eval.eval(scrut, Context.env(ctx))
+        {:ok, Eval.apply(motive_value, scrut_value)}
+      end
+    end
+  end
+
   @doc "Check `term` against the expected type value in `ctx`."
   @spec check(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) :: :ok | {:error, term()}
   # Bidirectional rule: a lambda is checked against a Π, propagating the expected
@@ -609,6 +629,33 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # Well-formedness for a `bool_elim` motive: it must be a function `Bool → Type`.
+  # We infer the motive term's type and demand it be a Π whose domain converts to
+  # Bool and whose codomain (at a fresh argument) is a sort. Returns the evaluated
+  # motive value for the caller to apply at `true`/`false`/the scrutinee.
+  defp check_bool_motive_wf(ctx, motive) do
+    case infer(ctx, motive) do
+      {:ok, {:vpi, dom, cod_closure}} ->
+        sig = Context.signature(ctx)
+        depth = Context.length(ctx)
+
+        if Conv.conv_values?(dom, {:vbool_type}, depth, sig) do
+          case Eval.apply_closure(cod_closure, {:vneutral, {:nvar, depth}}) do
+            {:vtype, _} -> {:ok, Eval.eval(motive, Context.env(ctx))}
+            _ -> {:error, :bool_motive_not_type_valued}
+          end
+        else
+          {:error, :bool_motive_domain_not_bool}
+        end
+
+      {:ok, _} ->
+        {:error, :bool_motive_not_function}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   defp infer_type_value_sort(_ctx, {:vtype, level}), do: Universe.succ(level)
 
   # A neutral is a valid type of sort `sublevel` iff its own declared type in
@@ -636,16 +683,54 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  defp infer_type_value_sort(ctx, {:vpi, _dom, _cod} = value) do
-    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
+  # Π/Σ/Eq value clauses recurse on the sub-VALUES directly, mirroring `infer/2`'s
+  # type-formation rules for the corresponding terms, instead of reifying and
+  # re-inferring. `Quote.reify` collapses `{:vdata, name, args}` → `{:data, name,
+  # args, []}` (it has no inductive signature to recover the param/index split), so
+  # reifying a Π/Σ/Eq whose domain (or Eq carrier) is an INDEXED family loses the
+  # split and re-inference fails with `:arg_arity` — a false `:bad_motive`. The
+  # value-recursion is a faithful mirror: it bottoms out in the same
+  # `infer_type_value_sort` clauses (including the direct `{:vdata,…}` clause that
+  # already classifies bare indexed-family motive RESULTS), so acceptance is
+  # exactly what a non-lossy reify+infer would decide, and a non-type domain still
+  # falls through to `:not_a_type_value` (rejected, no false positives).
+  defp infer_type_value_sort(ctx, {:vpi, dom, cod_closure}) do
+    with {:ok, l1} <- infer_type_value_sort(ctx, dom) do
+      fresh = {:vneutral, {:nvar, Context.length(ctx)}}
+      cod_value = Eval.apply_closure(cod_closure, fresh)
+
+      with {:ok, l2} <- infer_type_value_sort(Context.extend(ctx, dom), cod_value) do
+        {:ok, Universe.max(l1, l2)}
+      end
+    end
   end
 
-  defp infer_type_value_sort(ctx, {:vsigma, _dom, _cod} = value) do
-    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
+  defp infer_type_value_sort(ctx, {:vsigma, dom, cod_closure}) do
+    with {:ok, l1} <- infer_type_value_sort(ctx, dom) do
+      fresh = {:vneutral, {:nvar, Context.length(ctx)}}
+      cod_value = Eval.apply_closure(cod_closure, fresh)
+
+      with {:ok, l2} <- infer_type_value_sort(Context.extend(ctx, dom), cod_value) do
+        {:ok, Universe.max(l1, l2)}
+      end
+    end
   end
 
-  defp infer_type_value_sort(ctx, {:veq, _ty, _a, _b} = value) do
-    infer_sort(ctx, Quote.reify(value, Context.length(ctx)))
+  # Eq's type-formation rule (mirrors `infer/2`'s `{:eq, ty, a, b}` clause): its
+  # sort is the sort of the carrier `ty`, and both endpoints must inhabit `ty`.
+  # `ty`'s sort is inferred by value-recursion (robust to an indexed carrier); the
+  # endpoints are checked exactly as `infer/2` does — reifying them and calling
+  # `check/3` against `ty` (the same reified endpoint terms a full reify would
+  # produce, so endpoint acceptance is unchanged).
+  defp infer_type_value_sort(ctx, {:veq, ty, a, b}) do
+    with {:ok, level} <- infer_type_value_sort(ctx, ty) do
+      depth = Context.length(ctx)
+
+      with :ok <- check(ctx, Quote.reify(a, depth), ty),
+           :ok <- check(ctx, Quote.reify(b, depth), ty) do
+        {:ok, level}
+      end
+    end
   end
 
   defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}

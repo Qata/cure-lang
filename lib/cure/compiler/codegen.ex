@@ -746,6 +746,12 @@ defmodule Cure.Compiler.Codegen do
       {:pattern_match, meta, [scrutinee | arms]} ->
         compile_pattern_match(meta, scrutinee, arms, state)
 
+      # With-abstraction (dependent capabilities A/B/sibling). The value-level
+      # refinement is type-level and erases; at runtime `with e … arms` IS
+      # `case e … arms`. Lower to the same Erlang `case` as `pattern_match`.
+      {:with_abs, meta, [scrutinee | arms]} ->
+        compile_with_abs(meta, scrutinee, arms, state)
+
       # Pickup -- predicate dispatch (docs/PICKUP.md)
       {:pickup, meta, clauses} ->
         compile_pickup(meta, clauses, state)
@@ -1448,6 +1454,42 @@ defmodule Cure.Compiler.Codegen do
 
     form = {:case, line, scrutinee_form, clauses}
     {form, state}
+  end
+
+  # -- With-abstraction --------------------------------------------------------
+  #
+  # A value-level `with e … arms` erases to the same runtime `case` as the
+  # equivalent `match e … arms` (the refinement is a compile-time, type-level
+  # story and carries no runtime residue; sibling refinement leaves the
+  # matched values unchanged, so it needs no codegen action).
+  #
+  # Capability B adds a `proof <name>` binder. Proof terms are erased and have
+  # no codegen anywhere, so at runtime the proof name is bound to a placeholder
+  # atom in each arm's scope. This keeps a well-typed value-level `with` running
+  # while a *use* of the proof term at runtime remains the pre-existing
+  # proof-erasure gap (proof terms do not lower).
+  defp compile_with_abs(meta, scrutinee, arms, state) do
+    case Keyword.get(meta, :proof) do
+      nil ->
+        compile_pattern_match(meta, scrutinee, arms, state)
+
+      proof_name when is_binary(proof_name) ->
+        arms = Enum.map(arms, &bind_proof_in_arm(&1, proof_name))
+        compile_pattern_match(meta, scrutinee, arms, state)
+    end
+  end
+
+  # Wrap an arm body so the (erased) proof name resolves to a placeholder atom
+  # before the body runs: `<body>` becomes `begin p = :cure_erased_proof; <body> end`.
+  defp bind_proof_in_arm({:match_arm, arm_meta, [body]}, proof_name) do
+    binder =
+      {:assignment, arm_meta,
+       [
+         {:variable, arm_meta, proof_name},
+         {:literal, [subtype: :symbol], :cure_erased_proof}
+       ]}
+
+    {:match_arm, arm_meta, [{:block, arm_meta, [binder, body]}]}
   end
 
   # -- Block -------------------------------------------------------------------

@@ -312,10 +312,14 @@ defmodule Antigen.Runner do
   defp assay_module("indexed/case"), do: Antigen.Assays.Indexed
   defp assay_module("rewrite/eq"), do: Antigen.Assays.Rewrite
   defp assay_module("universes"), do: Antigen.Assays.Universes
+  defp assay_module("stuck_elim_delta"), do: Antigen.Assays.StuckElimDelta
   defp assay_module("term/infer_check"), do: Antigen.Assays.Term
   defp assay_module("term/subject_reduction"), do: Antigen.Assays.Term
   defp assay_module("term/normalization"), do: Antigen.Assays.Term
   defp assay_module("mutation/rejection"), do: Antigen.Assays.Mutation
+  defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
+  defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
+  defp assay_module("elab/erasure"), do: Antigen.Assays.Elab
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)

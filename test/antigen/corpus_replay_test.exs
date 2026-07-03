@@ -27,6 +27,7 @@ defmodule Antigen.CorpusReplayTest do
     "indexed/case" => Assays.Indexed,
     "rewrite/eq" => Assays.Rewrite,
     "universes" => Assays.Universes,
+    "stuck_elim_delta" => Assays.StuckElimDelta,
     "term/infer_check" => Assays.Term,
     "term/subject_reduction" => Assays.Term,
     "term/normalization" => Assays.Term,

@@ -77,6 +77,24 @@ defmodule Cure.Core.Eval do
     end
   end
 
+  # Dependent Boolean elimination (Bool.rec). The ι-rule fires on a concrete
+  # `{:vbool, _}`; a neutral scrutinee freezes into `{:nbool_elim, …}`, capturing
+  # the motive and both branch bodies (which bind nothing) as env-closures so a
+  # later whnf can fire the rule once the scrutinee reduces to a boolean.
+  def eval({:bool_elim, scrut, motive, tt, ff}, env) do
+    case eval(scrut, env) do
+      {:vbool, true} ->
+        eval(tt, env)
+
+      {:vbool, false} ->
+        eval(ff, env)
+
+      {:vneutral, neutral} ->
+        {:vneutral,
+         {:nbool_elim, neutral, {:closure, env, motive}, {:closure, env, tt}, {:closure, env, ff}}}
+    end
+  end
+
   @doc """
   Apply a function value to an argument value, performing β-reduction.
 

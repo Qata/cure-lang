@@ -261,8 +261,14 @@ fn step(dt, sf, input) -> ... = match sf
   prim(...)   -> ...
   seq(l, r)   -> ...   # SEQ rule; indices refined per branch
 
-# dependent pair (Σ): existentially package the decoupledness index, then project
-fn forget_dec({as}, {bs}, {d}, sf: SF(as, bs, d)) -> Sigma(x: Dec, SF(as, bs, x)) =
+# dependent pair (Σ): existentially package the decoupledness index, then project.
+# `d` is EXPLICIT (present), not an erased implicit `{d}`: it is materialised into
+# the runtime-relevant first component of the Σ, which the {0,ω} relevance check
+# (§8, criterion §2 — no computationally-relevant use of an erased binder) forbids
+# for an erased binder. Making it present is the honest signature: `forget_dec`
+# exists precisely so `recover`/`step` can inspect `d` at runtime, so `d` cannot
+# have zero runtime footprint here.
+fn forget_dec({as}, {bs}, d: Dec, sf: SF(as, bs, d)) -> Sigma(x: Dec, SF(as, bs, x)) =
   (d, sf)
 fn recover({as}, {bs}, p: Sigma(x: Dec, SF(as, bs, x))) -> SF(as, bs, p.1) = p.2
 
@@ -289,7 +295,7 @@ The elaborator computes the **type-level closure**: every function reachable fro
 
 ## 8. Erasure → codegen
 
-After `kernel.check` succeeds, Core is erased to the existing runtime AST: implicit args, type-level data, universe levels, and `Eq` proofs are dropped; indexed-family constructors become ordinary tagged tuples (identical to today's ADT lowering); `case` trees become ordinary BEAM `case`. Purely type-level functions vanish; functions used at both levels are kept. Erasure is *licensed* by the `{0,ω}` check (§3): a `0`-marked binder is verified during elaboration never to be scrutinised at runtime, so dropping it is sound rather than a positional guess. Net effect: the **descriptors** (`SVDesc`, `Sig`, and the `as/bs/cs/d` *index arguments* of `SF`) have **zero runtime footprint** — matching the paper's "descriptors exist only at the type level." `SF` itself is *not* fully erased: its value-relevant structure (constructor tags plus the embedded transition functions/continuations) survives as tagged tuples so that `step` can pattern-match on it at runtime (§6); only its erased type indices are dropped. `codegen.ex` is reused essentially unchanged.
+After `kernel.check` succeeds, Core is erased to the existing runtime AST: implicit args, type-level data, universe levels, and `Eq` proofs are dropped; indexed-family constructors become ordinary tagged tuples (identical to today's ADT lowering); `case` trees become ordinary BEAM `case`. Purely type-level functions vanish; functions used at both levels are kept. Erasure is *licensed* by the `{0,ω}` check (§3, `lib/cure/elab/relevance.ex`, M8.3): a `0`-marked binder is verified during elaboration never to be used in a **computationally-relevant position** at runtime — returned as the value, passed in a `present` argument position, scrutinised as a `case` discriminant, or applied as a function head (type/index positions, erased argument positions, and `Eq`/proof positions are exempt) — so dropping it is sound rather than a positional guess. (The criterion is §2's "computationally-relevant position"; the earlier shorthand "scrutinised" understated it — returning or passing an erased binder is equally unsound, which is why the §6 `forget_dec` takes its decoupledness `d` as an explicit *present* parameter.) Net effect: the **descriptors** (`SVDesc`, `Sig`, and the `as/bs/cs/d` *index arguments* of `SF`) have **zero runtime footprint** — matching the paper's "descriptors exist only at the type level." `SF` itself is *not* fully erased: its value-relevant structure (constructor tags plus the embedded transition functions/continuations) survives as tagged tuples so that `step` can pattern-match on it at runtime (§6); only its erased type indices are dropped. `codegen.ex` is reused essentially unchanged.
 
 ## 9. Kernel-trust strategy (three phases)
 

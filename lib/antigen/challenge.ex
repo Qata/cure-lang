@@ -4,7 +4,17 @@ defmodule Antigen.Challenge do
   @enforce_keys [:kind, :assay, :label, :payload]
   defstruct [:kind, :assay, :label, :payload, :seed, :note]
 
-  @type kind :: :stub | :def_group | :family | :forcing_pair | :indexed_case | :rewrite_eq | :typed_term | :mutant_term
+  @type kind ::
+          :stub
+          | :def_group
+          | :family
+          | :forcing_pair
+          | :indexed_case
+          | :rewrite_eq
+          | :stuck_elim
+          | :typed_term
+          | :mutant_term
+          | :elab_program
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -25,16 +35,17 @@ defmodule Antigen.Challenge do
   # in sync with the generator modules' fixed, literal name sets.
   @known_atoms [
     # kinds
-    :stub, :def_group, :family, :forcing_pair,
+    :stub, :def_group, :family, :forcing_pair, :stuck_elim,
     # labels
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
-    :f, :g, :h, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
+    :f, :g, :h, :plus, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
     :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
     :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
     :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge, :inject,
+    :motive_dom, :SNat, :snat0,
     :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
     :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,
     # rewrite/eq vertical: kind, def-names, motive family name
@@ -58,7 +69,9 @@ defmodule Antigen.Challenge do
     :app_arg, :ctor_nat, :case_scrut, :case_branch, :pair, :depth, :wrap_path,
     # conversion-at-depth: carrier kinds + witness + field keys/values
     :conv_index, :conv_motive, :conv, :expected_index, :actual_index,
-    :reduction, :required, :carrier
+    :reduction, :required, :carrier,
+    # elaborator completeness/metamorphic vertical: kind + label
+    :elab_program, :well_typed
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -81,7 +94,8 @@ defmodule Antigen.Challenge do
   def to_pieces(%__MODULE__{kind: :def_group, payload: %{defs: defs, focus: focus}}),
     do: def_group_pieces(defs, focus)
 
-  def to_pieces(%__MODULE__{kind: :forcing_pair, payload: %{defs: defs, focus: focus, t: t, tprime: tp}}) do
+  def to_pieces(%__MODULE__{kind: kind, payload: %{defs: defs, focus: focus, t: t, tprime: tp}})
+      when kind in [:forcing_pair, :stuck_elim] do
     {scaffold, pieces} = def_group_pieces(defs, focus)
     {scaffold, pieces ++ [{"t", t}, {"tprime", tp}]}
   end
@@ -152,6 +166,14 @@ defmodule Antigen.Challenge do
     {scaffold, ctx_pieces ++ [{"type", type}, {"term", term}]}
   end
 
+  # The elaborator vertical carries only surface-program STRINGS, no Core Terms —
+  # the entire payload rides in the scaffold (string keys → string values). The
+  # `payload` map's atom keys are stringified here and restored in from_pieces.
+  def to_pieces(%__MODULE__{kind: :elab_program, payload: p}) do
+    scaffold = Map.new(p, fn {k, v} -> {Atom.to_string(k), v} end)
+    {scaffold, []}
+  end
+
   # One family's scaffold + Term pieces, keyed under `prefix` (e.g. "fam:0").
   defp family_pieces(fam, ctors, prefix) do
     param_pieces = fam.params |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"#{prefix}:param:#{k}", t} end)
@@ -201,11 +223,12 @@ defmodule Antigen.Challenge do
     new(kind: :def_group, assay: assay, label: label, payload: %{defs: defs, focus: focus}, seed: seed, note: note)
   end
 
-  def from_pieces(:forcing_pair, assay, label, seed, note, scaffold, pieces) do
+  def from_pieces(kind, assay, label, seed, note, scaffold, pieces)
+      when kind in [:forcing_pair, :stuck_elim] do
     pmap = Map.new(pieces)
     {defs, focus} = rebuild_defs(scaffold, pmap)
     payload = %{defs: defs, focus: focus, t: Map.fetch!(pmap, "t"), tprime: Map.fetch!(pmap, "tprime")}
-    new(kind: :forcing_pair, assay: assay, label: label, payload: payload, seed: seed, note: note)
+    new(kind: kind, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:family, assay, label, seed, note, scaffold, pieces) do
@@ -283,6 +306,27 @@ defmodule Antigen.Challenge do
     }
 
     new(kind: :mutant_term, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  # Restore the string-keyed scaffold to an atom-keyed payload. The key set is
+  # fixed and closed (the two elab assays' payloads), so keys map through an
+  # explicit whitelist — never `String.to_atom` on decoded data.
+  @elab_keys %{
+    "id" => :id,
+    "src" => :src,
+    "transform" => :transform,
+    "base_src" => :base_src,
+    "variant_src" => :variant_src,
+    "expect" => :expect,
+    "relation" => :relation
+  }
+  def from_pieces(:elab_program, assay, label, seed, note, scaffold, _pieces) do
+    payload =
+      Map.new(scaffold, fn {k, v} ->
+        {Map.get(@elab_keys, k) || raise(ArgumentError, "unknown elab payload key #{inspect(k)}"), v}
+      end)
+
+    new(kind: :elab_program, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   # --- private helpers --------------------------------------------------------

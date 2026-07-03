@@ -10,6 +10,9 @@ defmodule Antigen.Generators.Indexed do
 
   @dec {:data, :Dec, [], []}
   @wr {:data, :Wr, [], []}
+  # SNat(s): an INDEXED family (one Dec index) — used as a Π DOMAIN inside a motive
+  # (the convoy encoding of `with` sibling refinement). `s` = the motive/def binder.
+  @snat_s {:data, :SNat, [], [{:var, 0}]}
 
   # -- shared families --------------------------------------------------------
   defp dec_family, do: {Inductive.family(:Dec, [], [], 0),
@@ -126,6 +129,149 @@ defmodule Antigen.Generators.Indexed do
             [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
     # def_type is irrelevant to the motive check; use @dec (check fails before it matters).
     challenge(:ill_typed, [dec_family()], :motive_wf, @dec, body, "over-applied motive → :bad_motive")
+  end
+
+  # -- 4.4b motive well-formedness: an INDEXED family as a Π DOMAIN -----------
+  defp snat_family, do: {Inductive.family(:SNat, [], [{:d, @dec}], 0),
+                         [Inductive.ctor(:snat0, [], [{:ctor, :Dcoupled, []}])]}
+
+  @doc """
+  Convoy-motive well-formedness: the motive body is a Π whose DOMAIN is an indexed
+  family `SNat s` (the encoding of `with` sibling refinement). `check_motive_wf`
+  used to reify the Π value and re-infer it, but `Quote.reify` collapses
+  `{:vdata,name,args}` → `{:data,name,args,[]}` (it has no inductive signature to
+  recover the param/index split), so an indexed-family domain re-inferred with
+  `:arg_arity` and the motive was wrongly `:bad_motive` — a false negative.
+
+    * `:well_typed` — `λs. Π(SNat s). Dec`. Now accepted (value-recursion classifies
+      the `{:vdata,…}` domain by its family's declared level, no lossy round-trip).
+    * `:ill_typed` — NEGATIVE CONTROL: `λs. Π(Dcoupled). Dec`, whose Π domain is a
+      Dec VALUE (a constructor), NOT a type. The value-recursion must still reject
+      it (`:bad_motive`); this proves the fix removes false negatives WITHOUT
+      introducing false positives (accepting a non-type domain).
+  """
+  @spec motive_indexed_domain(:well_typed | :ill_typed) :: Challenge.t()
+  def motive_indexed_domain(:well_typed) do
+    motive = {:lam, @dec, {:pi, @snat_s, @dec}}
+    def_type = {:pi, @dec, {:pi, @snat_s, @dec}}
+
+    body =
+      {:lam, @dec,
+       {:case, {:var, 0}, motive,
+        [
+          {:Dcoupled, 0,
+           {:lam, {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}, {:ctor, :Dcoupled, []}}},
+          {:Causal, 0,
+           {:lam, {:data, :SNat, [], [{:ctor, :Causal, []}]}, {:ctor, :Dcoupled, []}}}
+        ]}}
+
+    challenge(:well_typed, [dec_family(), snat_family()], :motive_dom, def_type, body,
+      "convoy motive λs. Π(SNat s). Dec — indexed family as Π domain (was false :bad_motive)")
+  end
+
+  def motive_indexed_domain(:ill_typed) do
+    neg_motive = {:lam, @dec, {:pi, {:ctor, :Dcoupled, []}, @dec}}
+
+    body =
+      {:lam, @dec,
+       {:case, {:var, 0}, neg_motive,
+        [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]}}
+
+    challenge(:ill_typed, [dec_family(), snat_family()], :motive_dom, @dec, body,
+      "negative control: Π domain is a Dec value (Dcoupled), not a type → :bad_motive")
+  end
+
+  # -- convoy soundness invariants (indexed with-clause LHS re-match) ----------
+  #
+  # The elaborator's convoy (indexed `with` LHS re-match, `elaborate_with_rematch`)
+  # is a non-TCB fix that LEANS on two kernel properties. These antibodies are the
+  # standing guards that they hold — a soundness gate the convoy requires even
+  # though it edits no TCB code (`Quote.reify`'s `{:vdata}` split-collapse is
+  # incompleteness, repaired only by re-eval / value-directed conv; the principled
+  # repair is signature-aware reify, reach-pinned separately).
+
+  @doc """
+  SPLIT VALIDATION: the kernel checks a `{:data, name, params, indices}`
+  application's slots against the family's param/index telescopes from the
+  SIGNATURE (`check_spine`) — it does NOT trust a caller's split. `SNat` has 0
+  params + 1 index.
+
+    * `:well_typed` — correct split `{:data,:SNat,[],[Dcoupled]}` as a Π domain: accepted.
+    * `:ill_typed`  — an index shoved into the PARAMS slot (`{:data,:SNat,[Dcoupled],[]}`):
+      `check_def`'s `infer_sort` must reject it (`:arg_arity`). If the kernel ever
+      trusted an (untrusted) caller's split blindly this replays `{:wrongly_accepted, _}`.
+  """
+  @spec data_split_validation(:well_typed | :ill_typed) :: Challenge.t()
+  def data_split_validation(:well_typed) do
+    dom = {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}
+
+    challenge(:well_typed, [dec_family(), snat_family()], :data_split,
+      {:pi, dom, @dec}, {:lam, dom, {:ctor, :Dcoupled, []}},
+      "correct SNat split (0 params, 1 index) as a Π domain — accepted")
+  end
+
+  def data_split_validation(:ill_typed) do
+    bad = {:data, :SNat, [{:ctor, :Dcoupled, []}], []}
+
+    challenge(:ill_typed, [dec_family(), snat_family()], :data_split,
+      {:pi, bad, @dec}, {:lam, bad, {:ctor, :Dcoupled, []}},
+      "index in the PARAMS slot of a 0-param family — kernel must reject (:arg_arity)")
+  end
+
+  @doc """
+  REIFY-COLLAPSE INJECTIVITY: `Quote.reify` collapses `{:vdata,name,args}` →
+  `{:data,name,args,[]}`, but that is INCOMPLETENESS, not unsoundness — `conv?` is
+  value-directed and never equates two DISTINCT indexed types (even of the same
+  arg-vector shape). `snat0 : SNat(Dcoupled)`.
+
+    * `:well_typed` — `snat0` against `SNat(Dcoupled)`: accepted.
+    * `:ill_typed`  — `snat0` against the DISTINCT (same-shape) `SNat(Causal)`:
+      must be rejected. If the collapse ever let `conv?` equate distinct indexed
+      types this replays `{:wrongly_accepted, _}`.
+  """
+  @spec reify_collapse_distinct(:well_typed | :ill_typed) :: Challenge.t()
+  def reify_collapse_distinct(:well_typed) do
+    challenge(:well_typed, [dec_family(), snat_family()], :reify_distinct,
+      {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}, {:ctor, :snat0, []},
+      "snat0 : SNat(Dcoupled) against SNat(Dcoupled) — accepted")
+  end
+
+  def reify_collapse_distinct(:ill_typed) do
+    challenge(:ill_typed, [dec_family(), snat_family()], :reify_distinct,
+      {:data, :SNat, [], [{:ctor, :Causal, []}]}, {:ctor, :snat0, []},
+      "snat0 : SNat(Dcoupled) against distinct SNat(Causal) — must reject")
+  end
+
+  @doc """
+  REACH PIN (must-eventually-accept): the `Quote.reify` `{:vdata}` signature-gap.
+  A `:case` whose motive body is the reflexive `Eq(Type, SNat(x), SNat(x))` — a
+  WELL-FORMED, refl-inhabited proposition (ground truth `:well_typed`). Cure
+  currently REJECTS it (`:bad_motive`): `check_motive_wf`'s `infer_type_value_sort`
+  reifies the `{:vdata}` Eq-endpoints, and the split-collapse
+  (`{:vdata,:SNat,[x]}`→`{:data,:SNat,[x],[]}`) re-checks with `:arg_arity`. The
+  value-recursion fix (defc6cb) closed the Π/Σ DOMAIN path; the Eq-ENDPOINT path
+  still reifies (kernel.ex `infer_type_value_sort({:veq,…})`). The principled
+  repair is signature-aware `Quote.reify` — a TCB change. Until then this pins the
+  debt: it replays to its documented `{:wrongly_rejected, …}` and goes red (forcing
+  migration to a seed) the moment signature-aware reify lands.
+  """
+  @spec reify_eq_indexed_reach(:well_typed) :: Challenge.t()
+  def reify_eq_indexed_reach(:well_typed) do
+    snx = {:data, :SNat, [], [{:var, 0}]}
+    motive = {:lam, @dec, {:eq, {:type, 0}, snx, snx}}
+
+    body =
+      {:lam, @dec,
+       {:case, {:var, 0}, motive,
+        [
+          {:Dcoupled, 0, {:refl, {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}}},
+          {:Causal, 0, {:refl, {:data, :SNat, [], [{:ctor, :Causal, []}]}}}
+        ]}}
+
+    def_type = {:pi, @dec, {:eq, {:type, 0}, snx, snx}}
+
+    challenge(:well_typed, [dec_family(), snat_family()], :reify_eq, def_type, body,
+      "reach: reflexive Eq(Type, SNat(x), SNat(x)) motive — false :bad_motive from reify {:vdata} collapse")
   end
 
   # -- 4.5 impossible-branch discharge (no-confusion) -------------------------

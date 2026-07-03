@@ -21,8 +21,12 @@ fn run({as: SVDesc}, {bs: SVDesc}, {d: Dec}, s: SF(as, bs, d)) -> Dec = match s
   prim() -> Causal
   seq(l, r) -> Dcoupled
 
-# Dependent pair (Sigma): package then project the decoupledness index.
-fn forget_dec({as: SVDesc}, {bs: SVDesc}, {d: Dec}, sf: SF(as, bs, d)) -> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]
+# Dependent pair (Sigma): package then project the decoupledness index. `d` is
+# an EXPLICIT (present) parameter: `forget_dec` materialises it into the runtime
+# Sigma so `recover`/`step` can inspect it later, so it cannot be an erased
+# implicit (the {0,ω} check, spec §2, rejects using an erased binder in a
+# computationally-relevant position — here the Sigma's runtime-relevant fst).
+fn forget_dec({as: SVDesc}, {bs: SVDesc}, d: Dec, sf: SF(as, bs, d)) -> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]
 fn recover({as: SVDesc}, {bs: SVDesc}, p: Sigma(x: Dec, SF(as, bs, x))) -> SF(as, bs, p.1) = p.2
 
 # Hole: typechecks, reports its goal, and blocks codegen until filled.

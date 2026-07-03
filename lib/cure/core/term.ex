@@ -22,6 +22,9 @@ defmodule Cure.Core.Term do
     * `{:ctor, name, args}`                  data constructor application
     * `{:case, scrut, motive, branches}`     dependent eliminator;
                                              `branches :: [{ctor_name, arity, body}]`
+    * `{:bool_elim, scrut, motive, tt, ff}`  dependent Boolean eliminator
+                                             (Bool.rec); `motive :: Bool → Type`,
+                                             `tt`/`ff` bind nothing
     * `{:global, name}`                      reference to a global def
     * `{:eq, ty, a, b}`                      propositional equality type
     * `{:refl, a}`                           reflexivity proof
@@ -66,6 +69,9 @@ defmodule Cure.Core.Term do
 
   def term?({:case, scrut, motive, branches}),
     do: term?(scrut) and term?(motive) and branches?(branches)
+
+  def term?({:bool_elim, scrut, motive, tt, ff}),
+    do: term?(scrut) and term?(motive) and term?(tt) and term?(ff)
 
   def term?({:global, name}), do: is_atom(name)
   def term?({:eq, ty, a, b}), do: term?(ty) and term?(a) and term?(b)
@@ -125,6 +131,11 @@ defmodule Cure.Core.Term do
   def shift({:case, s, m, brs}, a, c),
     do: {:case, shift(s, a, c), shift(m, a, c), Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, a, c + ar)} end)}
 
+  # bool_elim binds nothing: the motive is itself a λ (its binder is the inner
+  # :lam node), and tt/ff bind no variables — every sub-term is at the same depth.
+  def shift({:bool_elim, s, m, tt, ff}, a, c),
+    do: {:bool_elim, shift(s, a, c), shift(m, a, c), shift(tt, a, c), shift(ff, a, c)}
+
   def shift({:eq, ty, x, y}, a, c), do: {:eq, shift(ty, a, c), shift(x, a, c), shift(y, a, c)}
   def shift({:refl, x}, a, c), do: {:refl, shift(x, a, c)}
 
@@ -132,6 +143,38 @@ defmodule Cure.Core.Term do
     do: {:rewrite, shift(p, a, c), shift(m, a, c), shift(b, a, c)}
 
   def shift({:prim, op, args}, a, c), do: {:prim, op, Enum.map(args, &shift(&1, a, c))}
+
+  @doc """
+  Is `term` closed (no free de Bruijn variables)?
+
+  A closed term has no variable index that escapes its own binders. Only a
+  genuine free `{:var, k}` counts as open — non-variable leaves (`{:hole, _}`,
+  globals, types, literals) are closed. The binder structure mirrors `shift/3`
+  exactly (the trusted source of truth): `:lam`/`:pi`/`:sigma` bind one variable
+  in their body/codomain, and each `:case` branch binds `arity`; every other form
+  is traversed at the same depth. Kept in lockstep with `shift/3` — if a new
+  binding form is added there, add it here.
+  """
+  @spec closed?(t()) :: boolean()
+  def closed?(term), do: not has_free_var?(term, 0)
+
+  defp has_free_var?({:var, k}, depth), do: k >= depth
+  defp has_free_var?({:lam, d, b}, depth), do: has_free_var?(d, depth) or has_free_var?(b, depth + 1)
+  defp has_free_var?({:pi, d, c}, depth), do: has_free_var?(d, depth) or has_free_var?(c, depth + 1)
+  defp has_free_var?({:sigma, a, b}, depth), do: has_free_var?(a, depth) or has_free_var?(b, depth + 1)
+
+  defp has_free_var?({:case, s, m, brs}, depth) do
+    has_free_var?(s, depth) or has_free_var?(m, depth) or
+      Enum.any?(brs, fn {_c, ar, b} -> has_free_var?(b, depth + ar) end)
+  end
+
+  # Non-binding forms: recurse into every sub-term at the same depth. Covers
+  # :app/:pair/:fst/:snd/:ctor/:data/:eq/:refl/:rewrite/:prim and anything else.
+  defp has_free_var?(t, depth) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.any?(&has_free_var?(&1, depth))
+
+  defp has_free_var?(l, depth) when is_list(l), do: Enum.any?(l, &has_free_var?(&1, depth))
+  defp has_free_var?(_leaf, _depth), do: false
 
   @doc """
   Substitute the de Bruijn index `j` with `replacement` everywhere it occurs.
@@ -177,6 +220,9 @@ defmodule Cure.Core.Term do
     do:
       {:case, subst(s, j, r), subst(m, j, r),
        Enum.map(brs, fn {cn, ar, b} -> {cn, ar, subst(b, j + ar, shift(r, ar, 0))} end)}
+
+  def subst({:bool_elim, s, m, tt, ff}, j, r),
+    do: {:bool_elim, subst(s, j, r), subst(m, j, r), subst(tt, j, r), subst(ff, j, r)}
 
   def subst({:eq, ty, x, y}, j, r),
     do: {:eq, subst(ty, j, r), subst(x, j, r), subst(y, j, r)}
@@ -237,6 +283,15 @@ defmodule Cure.Core.Term do
         end)
     }
 
+  def to_external({:bool_elim, s, m, tt, ff}),
+    do: %{
+      "node" => "bool_elim",
+      "scrut" => to_external(s),
+      "motive" => to_external(m),
+      "tt" => to_external(tt),
+      "ff" => to_external(ff)
+    }
+
   def to_external({:global, n}), do: %{"node" => "global", "name" => Atom.to_string(n)}
 
   def to_external({:eq, ty, a, b}),
@@ -251,6 +306,16 @@ defmodule Cure.Core.Term do
       "motive" => to_external(m),
       "body" => to_external(b)
     }
+
+  def to_external({:prim, op, args}),
+    do: %{"node" => "prim", "op" => Atom.to_string(op), "args" => Enum.map(args, &to_external/1)}
+
+  def to_external({:int_type}), do: %{"node" => "int_type"}
+  def to_external({:int_lit, n}), do: %{"node" => "int_lit", "value" => n}
+  def to_external({:bool_type}), do: %{"node" => "bool_type"}
+  def to_external({:bool_lit, b}), do: %{"node" => "bool_lit", "value" => b}
+  def to_external({:float_type}), do: %{"node" => "float_type"}
+  def to_external({:float_lit, f}), do: %{"node" => "float_lit", "value" => f}
 
   @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
   @spec from_external(map()) :: t()
@@ -288,6 +353,9 @@ defmodule Cure.Core.Term do
          {String.to_atom(cn), ar, from_external(b)}
        end)}
 
+  def from_external(%{"node" => "bool_elim", "scrut" => s, "motive" => m, "tt" => tt, "ff" => ff}),
+    do: {:bool_elim, from_external(s), from_external(m), from_external(tt), from_external(ff)}
+
   def from_external(%{"node" => "global", "name" => n}), do: {:global, String.to_atom(n)}
 
   def from_external(%{"node" => "eq", "type" => ty, "lhs" => a, "rhs" => b}),
@@ -297,6 +365,16 @@ defmodule Cure.Core.Term do
 
   def from_external(%{"node" => "rewrite", "proof" => p, "motive" => m, "body" => b}),
     do: {:rewrite, from_external(p), from_external(m), from_external(b)}
+
+  def from_external(%{"node" => "prim", "op" => op, "args" => args}),
+    do: {:prim, String.to_atom(op), Enum.map(args, &from_external/1)}
+
+  def from_external(%{"node" => "int_type"}), do: {:int_type}
+  def from_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}
+  def from_external(%{"node" => "bool_type"}), do: {:bool_type}
+  def from_external(%{"node" => "bool_lit", "value" => b}), do: {:bool_lit, b}
+  def from_external(%{"node" => "float_type"}), do: {:float_type}
+  def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
 
   # -- helpers ----------------------------------------------------------------
 

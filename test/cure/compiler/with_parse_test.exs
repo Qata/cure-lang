@@ -87,6 +87,90 @@ defmodule Cure.Compiler.WithParseTest do
     assert Keyword.get(meta, :proof) == nil
   end
 
+  # -- LHS re-matching (Idris-parity indexed views) --------------------------
+  #
+  # A with-clause may RESTATE the parent function's LHS patterns (refined) before
+  # the with-pattern, separated by `|`:  `<parent-pat…> | <with-pat> -> body`.
+  # Such an arm parses to a distinct `{:with_rematch_arm, meta, [body]}` node
+  # carrying `:parent_patterns` and `:pattern` in meta. A clause WITHOUT the
+  # `… |` prefix stays the ordinary no-rematch `{:match_arm}`.
+  test "block-form `with` clause restating a single parent pattern parses to :with_rematch_arm" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      type NV = VZ | VS(Nat)
+      fn foo(n: Nat) -> Nat =
+        with view(n)
+          S(m) | VS(m) -> S(m)
+          Z() | VZ() -> Z()
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    node =
+      collect(ast, [])
+      |> Enum.find(fn t -> match?({:with_abs, _, [_ | _]}, t) end)
+
+    assert {:with_abs, _meta, [scrut | arms]} = node
+    assert {:function_call, _, _} = scrut
+    assert length(arms) == 2
+    assert Enum.all?(arms, &match?({:with_rematch_arm, _, [_]}, &1))
+
+    [{:with_rematch_arm, m1, [_body1]} | _] = arms
+    # First arm: parent pattern `S(m)`, with-pattern `VS(m)`.
+    assert [{:function_call, pm, _}] = Keyword.fetch!(m1, :parent_patterns)
+    assert Keyword.get(pm, :name) == "S"
+    assert {:function_call, wm, _} = Keyword.fetch!(m1, :pattern)
+    assert Keyword.get(wm, :name) == "VS"
+  end
+
+  test "block-form `with` clause restating multiple (comma-sep) parent patterns" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      type NV = VZ | VS(Nat)
+      fn foo(n: Nat, w: Nat) -> Nat =
+        with view(n)
+          S(m), w | VS(m) -> S(m)
+          Z(), w | VZ() -> w
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    node =
+      collect(ast, [])
+      |> Enum.find(fn t -> match?({:with_abs, _, [_ | _]}, t) end)
+
+    assert {:with_abs, _meta, [_scrut | arms]} = node
+    assert length(arms) == 2
+    [{:with_rematch_arm, m1, _} | _] = arms
+    pps = Keyword.fetch!(m1, :parent_patterns)
+    assert length(pps) == 2
+    assert [{:function_call, pm, _}, {:variable, _, "w"}] = pps
+    assert Keyword.get(pm, :name) == "S"
+  end
+
+  test "no-rematch `with` clause (no `|` prefix) stays a :match_arm" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn foo(n: Nat) -> Nat =
+        with n
+          Z() -> Z()
+          S(k) -> S(k)
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    node =
+      collect(ast, [])
+      |> Enum.find(fn t -> match?({:with_abs, _, [_ | _]}, t) end)
+
+    assert {:with_abs, _meta, [_scrut | arms]} = node
+    assert Enum.all?(arms, &match?({:match_arm, _, [_]}, &1))
+    refute Enum.any?(arms, &match?({:with_rematch_arm, _, _}, &1))
+  end
+
   # Regression: `with` is still the FSM/actor payload-binder identifier.
   test "`actor Name with Payload` still parses (with-abstraction is contextual)" do
     src = """
