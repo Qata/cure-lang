@@ -122,6 +122,13 @@ defmodule Antigen.Generators.SigMenuTest do
     end
   end
 
+  # -- Task 4: mark vcons's length witness n as :erased -----------------------
+
+  test "vcons declares its length witness n as :erased (so erase is not identity)" do
+    env = SigMenu.env_of(:v1)
+    assert Inductive.ctor_quantities(env, :vcons) == [:erased, :present, :present]
+  end
+
   # The Pi *intro rule* still works and stays — only the top-level Pi menu seed
   # is withheld. Generated over an EXPLICIT Pi goal in the empty context (no
   # context variables to close over), Pi generation is clean.

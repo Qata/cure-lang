@@ -53,7 +53,12 @@ defmodule Antigen.Generators.SigMenu do
           # vcons : (n:Nat) -> Nat -> Vec(n) -> Vec(S(n))
           #   arg telescope [n, x, xs]; in xs's type Vec(n), n is index 1;
           #   in the result index S(n), n is index 2.
-          Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})])
+          # n is marked :erased — the length witness is forced by xs's type, so
+          # it carries no runtime content. This is what makes {0,ω} erasure
+          # non-vacuous on the v1 menu (the erasure_preservation assay, Task 5),
+          # and the paradigmatic forced-argument case. Arity/types are unchanged.
+          Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})],
+            [:erased, :present, :present])
         ])
       |> Inductive.declare(Inductive.family(:List, [{:A, {:type, 0}}], [], 0),
         [
