@@ -55,7 +55,7 @@
 
 - `Cure.Types.Reduce.normalize(ast, bindings :: map) :: ast` — under test.
 - `Cure.Types.Reduce.equal?(a, b, bindings :: map) :: boolean` — under test.
-- `Cure.Types.CoreBridge.to_core(ast) :: {:ok, Cure.Core.Term.t()} | :error`; `from_core(core) :: ast`. Grammar (verified): `{:literal, _, int} → {:int_lit, n}`; `{:literal, _, bool} → {:ctor, :True|:False, []}`; `{:variable, _, name} → {:global, atom}`; `{:binary_op, [operator: op], [l, r]} → {:prim, op, [l', r']}`; `{:tuple, _, [a, b]} → {:pair, …}`; else `:error`.
+- `Cure.Types.CoreBridge.to_core(ast) :: {:ok, Cure.Core.Term.t()} | :error`; `from_core(core) :: ast`. Grammar (verified): `{:literal, _, int} → {:int_lit, n}`; `{:literal, _, bool} → {:ctor, :True|:False, []}`; `{:variable, _, name} → {:global, atom}`; `{:binary_op, [operator: op], [l, r]} → {:prim, core_op, [l', r']}` where `core_op` is **`op` translated through `CoreBridge`'s private `@binops` table**, NOT `op` itself: `+→:add, -→:sub, *→:mul, /→:div, %→:rem, ==→:eq, !=→:ne, <→:lt, <=→:le, >→:gt, >=→:ge` (`and`/`or` pass through unchanged as `:and`/`:or`); `{:tuple, _, [a, b]} → {:pair, …}`; else `:error`. **This distinction is load-bearing**: `Cure.Core.Eval.fold/2` (the kernel's arithmetic folder) has clauses keyed on the CORE names (`:add`, `:sub`, …) — it has no clause for the surface symbol `:+` itself, so `eval({:prim, :+, [...]})` never folds and stays a stuck neutral. Every hand-built `core_expected`/`core_a`/`core_b` term below (and the independent encoder) MUST use the translated core-op atom, never the raw surface operator.
 - `Cure.Core.Eval.eval(term, env :: list) :: value`.
 - `Cure.Core.Quote.reify(value, depth \\ 0) :: term`.
 - `Cure.Core.Conv.conv?(t1, t2, env :: list, depth :: non_neg_integer, sig \\ nil) :: boolean` — takes **terms**, evaluates internally. For this fragment (no `{:var,k}`, no certified global): `env = []`, `depth = 0`, `sig = nil`.
@@ -68,6 +68,18 @@
 ```elixir
 # generator-owned; mirrors CoreBridge's grammar but is separate code so a
 # CoreBridge/do_substitute bug shows up as a real mismatch, not a mirrored one.
+#
+# `@ops` is this module's OWN copy of the surface->core operator-name table —
+# separate data from `CoreBridge`'s private `@binops`, so the two stay
+# independent code paths, but it MUST carry the same surface->core mapping
+# (verified against `Cure.Types.CoreBridge`'s `@binops` and required because
+# `Cure.Core.Eval.fold/2` folds on the CORE names, not the surface symbols —
+# `{:prim, :+, [...]}` never reduces; `{:prim, :add, [...]}` does).
+@ops %{
+  +: :add, -: :sub, *: :mul, /: :div, %: :rem,
+  ==: :eq, !=: :ne, <: :lt, <=: :le, >: :gt, >=: :ge,
+  and: :and, or: :or
+}
 def encode({:variable, _m, name}, b) do
   case Map.fetch(b, name) do
     {:ok, bound} -> encode(bound, b)          # substitution folded at encode time
@@ -77,7 +89,7 @@ end
 def encode({:literal, _m, n}, _b) when is_integer(n), do: {:int_lit, n}
 def encode({:literal, _m, x}, _b) when is_boolean(x), do: {:ctor, (if x, do: :True, else: :False), []}
 def encode({:binary_op, meta, [l, r]}, b),
-  do: {:prim, Keyword.fetch!(meta, :operator), [encode(l, b), encode(r, b)]}
+  do: {:prim, Map.fetch!(@ops, Keyword.fetch!(meta, :operator)), [encode(l, b), encode(r, b)]}
 def encode({:tuple, _m, [a, c]}, b), do: {:pair, encode(a, b), encode(c, b)}
 ```
 
@@ -100,6 +112,9 @@ defmodule Antigen.Assays.NormalizerTest do
   alias Antigen.Generators.SurfaceExpr
 
   # {:binary_op, [operator: :+], [3, 5]} and its independent core encoding.
+  # NOTE: the core-side op atom is `:add`, NOT the surface `:+` — `CoreBridge.to_core`
+  # translates through its `@binops` table, and `Eval.fold/2` only has clauses for
+  # the translated core names. `{:prim, :+, [...]}` would never fold (see Interfaces).
   defp lit(n), do: {:literal, [subtype: :integer], n}
   defp add(a, b), do: {:binary_op, [operator: :+], [a, b]}
 
@@ -109,12 +124,12 @@ defmodule Antigen.Assays.NormalizerTest do
   end
 
   test "V1a baseline: normalize(3+5) agrees with the kernel norm of the independent encoding" do
-    ch = diff_ch(add(lit(3), lit(5)), %{}, {:prim, :+, [{:int_lit, 3}, {:int_lit, 5}]})
+    ch = diff_ch(add(lit(3), lit(5)), %{}, {:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]})
     assert Normalizer.run(ch) == :ok
   end
 
   test "V1a from_core-style negative control: a normalize stub with a corrupted result infects" do
-    ch = diff_ch(add(lit(3), lit(5)), %{}, {:prim, :+, [{:int_lit, 3}, {:int_lit, 5}]})
+    ch = diff_ch(add(lit(3), lit(5)), %{}, {:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]})
     k = %{Normalizer.__real__() | normalize: fn _ast, _b -> lit(7) end}  # wrong: says 7, not 8
     assert {:violation, {:normalize_disagrees_with_kernel, _, _}} = Normalizer.run(ch, k)
   end
@@ -124,9 +139,20 @@ defmodule Antigen.Assays.NormalizerTest do
     # unsubstituted returns `n + 1` (a {:variable} survives) -> to_core gives a
     # {:global,:n} the kernel norm of core_expected (5) is not convertible to.
     ast = add({:variable, [], "n"}, lit(1))
-    ch = diff_ch(ast, %{"n" => lit(4)}, {:prim, :+, [{:int_lit, 4}, {:int_lit, 1}]})
+    ch = diff_ch(ast, %{"n" => lit(4)}, {:prim, :add, [{:int_lit, 4}, {:int_lit, 1}]})
     k = %{Normalizer.__real__() | normalize: fn a, _b -> a end}  # identity: never substitutes
     assert {:violation, {:normalize_disagrees_with_kernel, _, _}} = Normalizer.run(ch, k)
+  end
+
+  test "V1a untranslatable-result negative control: a normalize stub returning an untranslatable AST infects" do
+    # {:refinement, ...} is outside CoreBridge.to_core's grammar (to_core -> :error),
+    # so this exercises the `with ... else :error -> ...` branch that no other test
+    # here reaches (Reduce.normalize itself always stays inside the translatable
+    # fragment for a translatable input; only a broken stub can violate that).
+    ch = diff_ch(add(lit(3), lit(5)), %{}, {:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]})
+    k = %{Normalizer.__real__() | normalize: fn _ast, _b -> {:refinement, [], [lit(8)]} end}
+    assert {:violation, {:normalize_disagrees_with_kernel, _, {:untranslatable_result, _}}} =
+             Normalizer.run(ch, k)
   end
 end
 ```
@@ -196,7 +222,7 @@ end
 
 > Note: `with_fuel` returns the fun's value (`true`/`false`) or `:fuel_exhausted`; the `== true` guard treats both `false` and `:fuel_exhausted` as non-agreement (the latter is defensive — this fragment is structurally terminating). If a distinct `:fuel_exhausted` tag is wanted, the plan-reviewer may split it; not required for V1a's translatable fragment.
 
-- [ ] **Step 4: Run to verify GREEN** — `MIX_ENV=test mix test test/antigen/assays/normalizer_test.exs` → PASS (3).
+- [ ] **Step 4: Run to verify GREEN** — `MIX_ENV=test mix test test/antigen/assays/normalizer_test.exs` → PASS (4).
 
 - [ ] **Step 5: Commit** — `feat(antigen): normalizer/differential assay — Reduce.normalize vs independent kernel encoding`
 
@@ -215,15 +241,16 @@ describe "normalizer/equal (V1b soundness)" do
       payload: %{a: a, b: b, bindings: %{}, core_a: ca, core_b: cb}, seed: 1)
   end
 
+  # Same `:add`-not-`:+` note as Task 1 applies to every hand-built core_a/core_b here.
   test "baseline: equal?(3+5, 8)=true and kernel agrees; equal?(3+5, 9)=false and kernel agrees" do
-    t = eq_ch(add(lit(3), lit(5)), {:prim, :+, [{:int_lit,3},{:int_lit,5}]}, lit(8), {:int_lit, 8}, :kernel_equal)
-    f = eq_ch(add(lit(3), lit(5)), {:prim, :+, [{:int_lit,3},{:int_lit,5}]}, lit(9), {:int_lit, 9}, :kernel_unequal)
+    t = eq_ch(add(lit(3), lit(5)), {:prim, :add, [{:int_lit,3},{:int_lit,5}]}, lit(8), {:int_lit, 8}, :kernel_equal)
+    f = eq_ch(add(lit(3), lit(5)), {:prim, :add, [{:int_lit,3},{:int_lit,5}]}, lit(9), {:int_lit, 9}, :kernel_unequal)
     assert Normalizer.run(t) == :ok
     assert Normalizer.run(f) == :ok
   end
 
   test "unsound negative control: equal? returns true for a kernel-unequal pair infects" do
-    f = eq_ch(add(lit(3), lit(5)), {:prim, :+, [{:int_lit,3},{:int_lit,5}]}, lit(9), {:int_lit, 9}, :kernel_unequal)
+    f = eq_ch(add(lit(3), lit(5)), {:prim, :add, [{:int_lit,3},{:int_lit,5}]}, lit(9), {:int_lit, 9}, :kernel_unequal)
     k = %{Normalizer.__real__() | equal: fn _a, _b, _bnd -> true end}  # unsound: claims 8 == 9
     assert {:violation, {:equal_unsound, _, _}} = Normalizer.run(f, k)
   end
@@ -239,15 +266,23 @@ def run(%Challenge{kind: :surface_expr, assay: "normalizer/equal", payload: p}, 
   surface_eq = k.equal.(p.a, p.b, p.bindings)
   kernel_eq = Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> k.conv.(p.core_a, p.core_b, [], 0, nil) end)
 
-  cond do
-    surface_eq and kernel_eq != true -> {:violation, {:equal_unsound, p.a, p.b}}     # false TRUE = unsound
-    not surface_eq and kernel_eq == true -> {:incomplete, {:equal_reach_gap, p.a, p.b}}  # weaker signal
-    true -> :ok
+  # Soundness direction ONLY (V1b, per the moduledoc): `equal?` must never claim
+  # `true` when the kernel disagrees. The converse ("surface says false, kernel
+  # says true") is a completeness/reach-gap question, out of scope here — and
+  # MUST NOT be surfaced as a third outcome kind: `Runner.replay_one/1` passes
+  # the return straight through with no case-match (verified against
+  # `lib/antigen/runner.ex`, so it wouldn't crash there), but `Runner.explore/1`'s
+  # dispatch `case` recognizes only `:ok` and `{:violation, _}` with NO catch-all
+  # clause — any third shape raises `CaseClauseError` if this assay is ever run
+  # through `explore/1`. The declared `@spec` above is also `:ok | {:violation,
+  # term()}`; introducing `{:incomplete, _}` would violate it. So: :ok.
+  if surface_eq and kernel_eq != true do
+    {:violation, {:equal_unsound, p.a, p.b}}
+  else
+    :ok
   end
 end
 ```
-
-> `{:incomplete, _}` is a non-infecting outcome (a reach gap, per spec §2 — reported but not a hard infection). Confirm the runner treats a non-`:violation`, non-`:ok` return as non-infecting; if the runner only recognizes `:ok`/`{:violation,_}`, map the incomplete case to `:ok` and surface the gap via a log/note instead (plan-reviewer pins this against `runner.ex`).
 
 - [ ] **Step 4: GREEN.**  **Step 5: Commit** — `feat(antigen): normalizer/equal assay — equal? soundness vs kernel Conv`
 
@@ -273,7 +308,17 @@ describe "normalizer/intrinsic (V1c)" do
   end
 
   test "not-idempotent negative control" do
-    k = %{Normalizer.__real__() | normalize: fn ast, _b -> {:wrap, [], [ast]} end}  # grows each call, never fixes
+    # Must NOT also grow the term, or it trips :size_increased first (the
+    # implementation checks size before idempotence — see Step 3's note). This
+    # stub retags {:refinement,...} <-> {:not_fixed,...} with the SAME child
+    # count each call (term_size is tag-blind), so the size guard passes and
+    # the oscillation exposes genuine non-idempotence: once != p.ast's shape,
+    # twice flips back, so twice != once.
+    k = %{Normalizer.__real__() | normalize: fn
+      {:refinement, m, [inner]}, _b -> {:not_fixed, m, [inner]}
+      {:not_fixed, m, [inner]}, _b -> {:refinement, m, [inner]}
+      ast, _b -> ast
+    end}
     assert {:violation, {:not_idempotent, _, _}} = Normalizer.run(intr_ch(untranslatable(lit(1))), k)
   end
 
@@ -338,7 +383,7 @@ end
 
 - [ ] **Step 2: RED** — `SurfaceExpr` undefined; `assay_module("normalizer/*")` has no clause.
 
-- [ ] **Step 3: Implement** — Create `lib/antigen/generators/surface_expr.ex` with `encode/2` (from the "independent encoder" section above), a small fixed catalog per family (each entry built as `{ast, bindings, encode(ast, bindings)}` for differential; a should-be-equal and should-be-unequal pair for equal; untranslatable-headed terms for intrinsic), and `differential_challenges/0`/`equal_challenges/0`/`intrinsic_challenges/0` returning `Challenge.new(kind: :surface_expr, …)` lists. In `lib/antigen/runner.ex` add three `assay_module/1` clauses → `Antigen.Assays.Normalizer`. In `lib/antigen/challenge.ex` add `| :surface_expr` to the `@type kind` union.
+- [ ] **Step 3: Implement** — Create `lib/antigen/generators/surface_expr.ex` with `encode/2` (from the "independent encoder" section above), a small fixed catalog per family (each entry built as `{ast, bindings, encode(ast, bindings)}` for differential; a should-be-equal and should-be-unequal pair for equal, with `core_a`/`core_b` likewise computed via `encode(ast, bindings)` — NEVER hand-written `{:prim, surface_op, …}` literals, the exact mistake Task 1/2's tests had to fix, since `encode/2` is the only place that correctly applies the `@ops` surface→core translation; untranslatable-headed terms for intrinsic), and `differential_challenges/0`/`equal_challenges/0`/`intrinsic_challenges/0` returning `Challenge.new(kind: :surface_expr, …)` lists. In `lib/antigen/runner.ex` add three `assay_module/1` clauses → `Antigen.Assays.Normalizer`. In `lib/antigen/challenge.ex` add `| :surface_expr` to the `@type kind` union.
 
 - [ ] **Step 4: GREEN.** If a catalog entry legitimately fails, that is a REAL infection in `Types.Reduce` — STOP and report (do not weaken the test).
 
@@ -357,6 +402,6 @@ end
 
 **Spec coverage:** §2 independence (independent `encode/2`) → Task 4's encoder consumed by Task 1's substitution control; V1a → Task 1; V1b soundness → Task 2; V1c laws → Task 3; §3 generator → Task 4 (reconciled to fixed catalog); §4 op-map seam → Task 1's `@real`/`run/2` (reconciled to `normalize`/`equal` code-under-test injection); §5 tests #1-9 distributed; §6 invariants pinned; §8 non-goals respected (no `Cure.Types`/`Cure.Core` edit, no fix, no SMT).
 
-**Placeholder scan:** none — concrete code/commands throughout. The three plan-reviewer notes (fuel-tag split, `:incomplete` runner handling, `term_size` leaf shape) are explicit bounded checks with named fallbacks.
+**Placeholder scan:** none — concrete code/commands throughout. The remaining plan-reviewer notes (fuel-tag split, `term_size` leaf shape) are explicit bounded checks with named fallbacks; the `:incomplete` runner-handling question raised in an earlier draft is resolved (Task 2 now returns only `:ok | {:violation, _}}`, matching its `@spec` and both `Runner.replay_one/1` and `Runner.explore/1`).
 
 **Type consistency:** op-map keys `normalize/equal/to_core/eval/reify/conv` identical in `@real` and every negative control. Infection tags `{:normalize_disagrees_with_kernel,…}`, `{:equal_unsound,…}`, `{:not_idempotent,…}`, `{:size_increased,…}` consistent spec↔code↔tests. `:surface_expr` payload shapes: differential `%{ast, bindings, core_expected}`, equal `%{a, b, bindings, core_a, core_b}`, intrinsic `%{ast}` — each produced by its catalog and consumed by its `run` clause.
