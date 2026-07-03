@@ -1,0 +1,1 @@
+{"ni01_named_dot_ok":{"cure":"reject","idris":"accept","reason":"named-implicit dot-pattern syntax `{k = .m}` not yet parsed (unexpected_token :lbrace); to be implemented (P+E, no kernel/erasure)","relation":"cure_stricter"},"ni02_named_dot_mismatch_neg":{"cure":"reject","idris":"reject","reason":"","relation":"same"}}
