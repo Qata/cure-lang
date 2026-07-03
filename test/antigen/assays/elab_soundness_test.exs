@@ -149,4 +149,30 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       assert {:violation, {:fuel_exhausted, :probe}} = Task.await(task, 30_000)
     end
   end
+
+  describe "generator + runner wiring" do
+    alias Antigen.Generators.ElabComplete
+    alias Antigen.Runner
+
+    test "soundness_challenges re-tags the completeness catalog" do
+      cs = ElabComplete.soundness_challenges()
+      assert cs != []
+      assert Enum.all?(cs, fn c -> c.kind == :elab_program and c.assay == "elab/soundness" end)
+      # same programs as completeness (same ids), only the assay tag differs
+      assert Enum.map(cs, & &1.payload.id) ==
+               Enum.map(ElabComplete.completeness_challenges(), & &1.payload.id)
+    end
+
+    test "runner dispatches elab/soundness to the Elab assay (replay_one)" do
+      [c | _] = ElabComplete.soundness_challenges()
+      # every catalog program is construction-guaranteed well-typed -> sound
+      assert Runner.replay_one(c) == :ok
+    end
+
+    test "the whole soundness catalog re-checks clean under the real kernel" do
+      assert Enum.all?(ElabComplete.soundness_challenges(), fn c ->
+               Runner.replay_one(c) == :ok
+             end)
+    end
+  end
 end

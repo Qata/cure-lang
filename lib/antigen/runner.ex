@@ -347,6 +347,7 @@ defmodule Antigen.Runner do
   defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
   defp assay_module("elab/erasure"), do: Antigen.Assays.Elab
+  defp assay_module("elab/soundness"), do: Antigen.Assays.Elab
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)
