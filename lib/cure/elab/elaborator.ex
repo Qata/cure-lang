@@ -639,9 +639,18 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
-    with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),
-         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-      {:ok, term}
+    # An unsolved metavariable in the expected type (e.g. a higher-order implicit
+    # `{P : Nat -> Type}` that first-order unification could not solve) must not be
+    # handed to the trusted `Eval.eval` — it has no `{:meta, _}` clause and would
+    # crash the kernel. Reject cleanly instead; higher-order pattern unification
+    # (ledger #10) is what would let it be solved rather than rejected.
+    if Unify.has_meta?(expected_core) do
+      {:error, {:unsolved_metavariable_in_type, expected_core}}
+    else
+      with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
     end
   end
 

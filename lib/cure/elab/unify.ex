@@ -171,12 +171,15 @@ defmodule Cure.Elab.Unify do
       Cure.Core.Conv.conv?(z1, z2, [], 0, sig)
   end
 
+  # Structurally complete: walk EVERY subterm-bearing shape so a metavariable
+  # buried anywhere (`{:eq}`/`{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}`/`{:refl}`/
+  # `{:prim}`/`{:case}`/…) is detected. A missed shape here would let a
+  # `{:meta, _}`-bearing term pass the `delta_convertible?` guard and reach the
+  # TRUSTED `Eval.eval`, which has no `{:meta, _}` clause — an elaborator crash of
+  # the kernel. Tag atoms and ids are non-tuple/non-list leaves → `true`.
   defp meta_free?({:meta, _}), do: false
-  defp meta_free?({:data, _f, ps, is}), do: Enum.all?(ps ++ is, &meta_free?/1)
-  defp meta_free?({:ctor, _c, args}), do: Enum.all?(args, &meta_free?/1)
-  defp meta_free?({:app, f, x}), do: meta_free?(f) and meta_free?(x)
-  defp meta_free?({:pi, d, c}), do: meta_free?(d) and meta_free?(c)
-  defp meta_free?({:lam, d, b}), do: meta_free?(d) and meta_free?(b)
+  defp meta_free?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.all?(&meta_free?/1)
+  defp meta_free?(l) when is_list(l), do: Enum.all?(l, &meta_free?/1)
   defp meta_free?(_), do: true
 
   defp unify_lists([], [], ctx, _sig, _depth), do: {:ok, ctx}
@@ -234,36 +237,51 @@ defmodule Cure.Elab.Unify do
   defp escapes?({:fst, p}, depth, local), do: escapes?(p, depth, local)
   defp escapes?({:snd, p}, depth, local), do: escapes?(p, depth, local)
 
+  defp escapes?({:eq, ty, a, b}, depth, local),
+    do: escapes?(ty, depth, local) or escapes?(a, depth, local) or escapes?(b, depth, local)
+
+  defp escapes?({:refl, a}, depth, local), do: escapes?(a, depth, local)
+  defp escapes?({:prim, _op, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
+
   defp escapes?({:data, _f, ps, is}, depth, local),
     do: Enum.any?(ps ++ is, &escapes?(&1, depth, local))
 
   defp escapes?({:ctor, _c, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
   defp escapes?(_other, _depth, _local), do: false
 
-  # Does metavariable `id` occur in `t` (following solutions)?
+  # Does metavariable `id` occur in `t` (following solutions)? Structurally
+  # complete (generic tuple/list walk) so an occurrence buried in ANY shape is
+  # caught — an under-approximation would admit a cyclic solution.
   defp occurs?(id, t, ctx) do
     case force(t, ctx) do
       {:meta, ^id} -> true
       {:meta, _other} -> false
-      {:data, _f, ps, is} -> Enum.any?(ps ++ is, &occurs?(id, &1, ctx))
-      {:ctor, _c, args} -> Enum.any?(args, &occurs?(id, &1, ctx))
-      {:app, f, x} -> occurs?(id, f, ctx) or occurs?(id, x, ctx)
-      {:pi, d, c} -> occurs?(id, d, ctx) or occurs?(id, c, ctx)
-      {:lam, d, b} -> occurs?(id, d, ctx) or occurs?(id, b, ctx)
+      tup when is_tuple(tup) -> tup |> Tuple.to_list() |> Enum.any?(&occurs?(id, &1, ctx))
+      lst when is_list(lst) -> Enum.any?(lst, &occurs?(id, &1, ctx))
       _ -> false
     end
   end
 
-  @doc "Finalise a term by substituting every metavariable solution away."
+  @doc """
+  True iff `t` still contains a metavariable syntactically. Use at a kernel
+  boundary (after `zonk`) to reject cleanly rather than hand a `{:meta, _}`-bearing
+  term to the trusted evaluator, which has no `{:meta, _}` clause and would crash.
+  """
+  @spec has_meta?(uterm()) :: boolean()
+  def has_meta?(t), do: not meta_free?(t)
+
+  @doc """
+  Finalise a term by substituting every metavariable solution away. Structurally
+  complete (generic tuple/list walk) so a solution buried in ANY shape is
+  substituted — a missed shape would leave a `{:meta, _}` in a term handed to the
+  kernel.
+  """
   @spec zonk(uterm(), MetaCtx.t()) :: uterm()
   def zonk(t, ctx) do
     case force(t, ctx) do
       {:meta, _id} = m -> m
-      {:data, f, ps, is} -> {:data, f, Enum.map(ps, &zonk(&1, ctx)), Enum.map(is, &zonk(&1, ctx))}
-      {:ctor, c, args} -> {:ctor, c, Enum.map(args, &zonk(&1, ctx))}
-      {:app, f, x} -> {:app, zonk(f, ctx), zonk(x, ctx)}
-      {:pi, d, c} -> {:pi, zonk(d, ctx), zonk(c, ctx)}
-      {:lam, d, b} -> {:lam, zonk(d, ctx), zonk(b, ctx)}
+      tup when is_tuple(tup) -> tup |> Tuple.to_list() |> Enum.map(&zonk(&1, ctx)) |> List.to_tuple()
+      lst when is_list(lst) -> Enum.map(lst, &zonk(&1, ctx))
       other -> other
     end
   end
