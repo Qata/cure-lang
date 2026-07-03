@@ -811,9 +811,11 @@ defmodule Cure.Elab.Declarations do
   end
 
   # The built-in primitive types that map to Core type-constants (not opaque
-  # globals). `Bool` is the one the Boolean eliminator (`if`/guards/literal
-  # patterns) needs; `Int`/`Float` join when literal patterns land.
+  # globals), so a primitive scrutinee (`match n : Int`) and literal patterns
+  # can be eliminated via `bool_elim` + `{:prim}`.
   defp primitive_type("Bool"), do: {:bool_type}
+  defp primitive_type("Int"), do: {:int_type}
+  defp primitive_type("Float"), do: {:float_type}
   defp primitive_type(_), do: nil
 
   defp map_idx_to_core(exprs, scope, fam, env) do

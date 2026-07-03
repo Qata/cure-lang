@@ -304,10 +304,12 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
-  def elaborate_expr_typed({:literal, meta, value}, _names, _ctx, _env) when is_boolean(value) do
+  def elaborate_expr_typed({:literal, meta, value} = expr, _names, _ctx, _env) do
     case Keyword.get(meta, :subtype) do
-      :boolean -> {:ok, {:bool_lit, value}, {:vbool_type}}
-      _ -> {:error, {:unsupported_expression, {:literal, meta, value}}}
+      :boolean when is_boolean(value) -> {:ok, {:bool_lit, value}, {:vbool_type}}
+      :integer when is_integer(value) -> {:ok, {:int_lit, value}, {:vint_type}}
+      :float when is_float(value) -> {:ok, {:float_lit, value}, {:vfloat_type}}
+      _ -> {:error, {:unsupported_expression, expr}}
     end
   end
 
@@ -877,7 +879,11 @@ defmodule Cure.Elab.Elaborator do
          :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env),
          :not_applicable <-
-           try_trivial_match(scrut_expr, arms, result_type_term, names, ctx, env) do
+           try_trivial_match(scrut_expr, arms, result_type_term, names, ctx, env),
+         :not_applicable <-
+           try_literal_match(
+             scrut_expr, arms, scrut_term, scrut_type, result_type_term, names, ctx, env
+           ) do
       case scrut_type do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
@@ -1808,6 +1814,103 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp try_trivial_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
+  # of Boolean eliminations — there is no `:vdata` to dispatch on. `match n | 0 ->
+  # a | _ -> b` becomes `bool_elim (n == 0) a b`; `match b | true -> t | false ->
+  # f` becomes `bool_elim b t f`. The already-elaborated Core scrutinee is reused
+  # in each equality test (no surface duplication), and the kernel re-checks the
+  # assembled chain. Returns `:not_applicable` for a non-primitive scrutinee or
+  # arms that are not a clean literal/catch-all list (the ordinary path handles it).
+  defp try_literal_match(scrut_expr, arms, scrut_term, scrut_type, expected, names, ctx, env) do
+    case primitive_scrut_kind(scrut_type) do
+      {:ok, prim} ->
+        motive = {:lam, {:bool_type}, Cure.Core.Term.shift(expected, 1, 0)}
+        pats = Enum.map(arms, fn {:match_arm, m, b} -> {Keyword.fetch!(m, :pattern), single_body(b)} end)
+
+        cond do
+          prim == :bool and bool_exhaustive?(pats) ->
+            {tb, fb} = bool_bodies(pats)
+
+            with {:ok, t_core} <- elaborate_expr_checked(tb, expected, names, ctx, env),
+                 {:ok, f_core} <- elaborate_expr_checked(fb, expected, names, ctx, env) do
+              {:ok, {:bool_elim, scrut_term, motive, t_core, f_core}}
+            end
+
+          literal_chain?(pats, prim) ->
+            literal_chain(scrut_expr, scrut_term, prim, motive, pats, expected, names, ctx, env)
+
+          true ->
+            :not_applicable
+        end
+
+      :error ->
+        :not_applicable
+    end
+  end
+
+  defp primitive_scrut_kind({:vbool_type}), do: {:ok, :bool}
+  defp primitive_scrut_kind({:vint_type}), do: {:ok, :int}
+  defp primitive_scrut_kind({:vfloat_type}), do: {:ok, :float}
+  defp primitive_scrut_kind(_), do: :error
+
+  defp bool_exhaustive?([{p1, _}, {p2, _}]),
+    do: Enum.sort([bool_pat_value(p1), bool_pat_value(p2)]) == [false, true]
+
+  defp bool_exhaustive?(_), do: false
+
+  defp bool_pat_value({:literal, _m, v}) when is_boolean(v), do: v
+  defp bool_pat_value(_), do: nil
+
+  defp bool_bodies([{p1, b1}, {_p2, b2}]),
+    do: if(bool_pat_value(p1) == true, do: {b1, b2}, else: {b2, b1})
+
+  # A literal chain is zero or more literal arms of the scrutinee's primitive type
+  # followed by a single variable/wildcard catch-all.
+  defp literal_chain?(pats, prim) when length(pats) >= 1 do
+    {lits, [{last_pat, _}]} = Enum.split(pats, length(pats) - 1)
+    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) end) and catchall_pat?(last_pat)
+  end
+
+  defp literal_chain?(_pats, _prim), do: false
+
+  defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
+  defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
+  defp literal_of?({:literal, _m, v}, :bool), do: is_boolean(v)
+  defp literal_of?(_p, _prim), do: false
+
+  defp catchall_pat?({:variable, _m, _name}), do: true
+  defp catchall_pat?(_p), do: false
+
+  defp lit_core(v, :int), do: {:int_lit, v}
+  defp lit_core(v, :float), do: {:float_lit, v}
+  defp lit_core(v, :bool), do: {:bool_lit, v}
+
+  # The final (catch-all) arm: the chain's innermost default branch.
+  defp literal_chain(scrut_expr, _scrut_term, _prim, _motive, [{pat, body}], expected, names, ctx, env) do
+    case pat do
+      {:variable, _m, "_"} ->
+        elaborate_expr_checked(body, expected, names, ctx, env)
+
+      {:variable, _m, name} ->
+        cond do
+          not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
+          binds_any?(body, [name]) -> {:error, {:unsupported_pattern, :shadowed_literal_catchall}}
+          true -> elaborate_expr_checked(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
+        end
+    end
+  end
+
+  # A literal arm: test the scrutinee against the literal, take this body if equal,
+  # else recurse on the remaining arms.
+  defp literal_chain(scrut_expr, scrut_term, prim, motive, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
+    with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
+         {:ok, rest_core} <-
+           literal_chain(scrut_expr, scrut_term, prim, motive, rest, expected, names, ctx, env) do
+      test = {:prim, :eq, [scrut_term, lit_core(v, prim)]}
+      {:ok, {:bool_elim, test, motive, body_core, rest_core}}
+    end
+  end
 
   # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
   # `e1 = base.1`, `e2 = base.2.1`, …, `en = base.2.….2` (the final tail). Each
@@ -3214,10 +3317,12 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr({:literal, meta, value}, _scope, _env) when is_boolean(value) do
+  def elaborate_expr({:literal, meta, value} = expr, _scope, _env) do
     case Keyword.get(meta, :subtype) do
-      :boolean -> {:ok, {:bool_lit, value}}
-      _ -> {:error, {:unsupported_expression, {:literal, meta, value}}}
+      :boolean when is_boolean(value) -> {:ok, {:bool_lit, value}}
+      :integer when is_integer(value) -> {:ok, {:int_lit, value}}
+      :float when is_float(value) -> {:ok, {:float_lit, value}}
+      _ -> {:error, {:unsupported_expression, expr}}
     end
   end
 
