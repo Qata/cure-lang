@@ -102,6 +102,22 @@ defmodule Antigen.RunnerTest do
     assert Enum.all?(w_t, &(&1 >= 1))
   end
 
+  test "reweight_by_edges bumps each group proportionally to its new-edge yield" do
+    base = %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11], m: [7, 8]}
+    w0 = List.duplicate(1, 11)
+    # t group yielded the most new edges, m some, f none
+    out = Antigen.Runner.reweight_by_edges(w0, base, %{f: 0, t: 5, m: 1})
+
+    t_w = Enum.at(out, hd(base.t) - 1)
+    m_w = Enum.at(out, hd(base.m) - 1)
+    f_w = Enum.at(out, hd(base.f) - 1)
+
+    assert t_w > m_w                       # more edges → more weight
+    assert m_w > f_w
+    assert Enum.all?(base.f, fn i -> Enum.at(out, i - 1) == 1 end)  # zero-yield floors at 1
+    assert Enum.all?(out, &(&1 >= 1))
+  end
+
   test "explore(bias: true) runs the round loop end-to-end through the real default_gen mix" do
     # integration test for draw_biased/3 (round-splitting, per-round stamping, gen
     # rebuild) against the real {:frequency, ws} shape. count 12 / round_size 5

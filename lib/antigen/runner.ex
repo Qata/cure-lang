@@ -30,6 +30,25 @@ defmodule Antigen.Runner do
   defp maybe_bump(acc, _positions, false), do: acc
   defp maybe_bump(acc, positions, true), do: acc ++ positions
 
+  @doc """
+  Coverage-guided reweighting (guided mode only): bump every generator position
+  by its group's new-edge yield, so groups that discovered more new code get
+  proportionally more draw weight next round. Floor 1 on every weight. Additive
+  and opt-in — the default `explore`/`draw_biased` path uses `reweight/3` and is
+  untouched. `edge_yields` is `%{group => new_edge_count}` (missing group ⇒ 0).
+  """
+  def reweight_by_edges(weights, table \\ @group_table, edge_yields) do
+    bump_by_pos =
+      Enum.reduce(table, %{}, fn {group, positions}, acc ->
+        yield = Map.get(edge_yields, group, 0)
+        Enum.reduce(positions, acc, fn pos, a -> Map.put(a, pos, yield) end)
+      end)
+
+    weights
+    |> Enum.with_index(1)
+    |> Enum.map(fn {w, i} -> max(w, 1) + Map.get(bump_by_pos, i, 0) end)
+  end
+
   def explore(opts) do
     count = Keyword.get(opts, :count, 200)
 
