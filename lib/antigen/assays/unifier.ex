@@ -98,6 +98,39 @@ defmodule Antigen.Assays.Unifier do
     end
   end
 
+  def run(%Challenge{kind: :unify_problem, assay: "unify_types/intrinsic", payload: %{expect: :error} = p}, k) do
+    case k.tu_unify.(p.t1, p.t2, %{}) do
+      {:error, _, _} -> :ok
+      {:ok, _, _} -> {:violation, {:occurs_not_detected, p.t1, p.t2}}
+    end
+  end
+
+  def run(%Challenge{kind: :unify_problem, assay: "unify_types/intrinsic", payload: p}, k) do
+    case k.tu_unify.(p.t1, p.t2, %{}) do
+      {:error, _, _} ->
+        :ok
+
+      {:ok, s, _} ->
+        a = k.tu_apply.(p.t1, s)
+        keys = Map.keys(s)
+
+        cond do
+          k.tu_apply.(a, s) != a -> {:violation, {:apply_not_idempotent, p.t1}}
+          has_solved_var?(a, keys) -> {:violation, {:var_not_eliminated, p.t1}}
+          true -> :ok
+        end
+    end
+  end
+
+  defp has_solved_var?({:type_var, n}, keys), do: n in keys
+  defp has_solved_var?({:list, a}, keys), do: has_solved_var?(a, keys)
+  defp has_solved_var?({:tuple, ts}, keys), do: Enum.any?(ts, &has_solved_var?(&1, keys))
+  defp has_solved_var?({:fun, ps, r}, keys), do: Enum.any?(ps, &has_solved_var?(&1, keys)) or has_solved_var?(r, keys)
+  defp has_solved_var?({:adt, _n, ps}, keys), do: Enum.any?(ps, &has_solved_var?(&1, keys))
+  defp has_solved_var?({:map, kk, v}, keys), do: has_solved_var?(kk, keys) or has_solved_var?(v, keys)
+  defp has_solved_var?({:refinement, base, _, _}, keys), do: has_solved_var?(base, keys)
+  defp has_solved_var?(_, _keys), do: false
+
   # Read the solution for `id` ONCE through the op-map, then check structurally
   # whether {:meta, id} occurs in it — WITHOUT following further solutions (a cyclic
   # eu_solution stub would otherwise loop forever). nil solution = unsolved = clean.

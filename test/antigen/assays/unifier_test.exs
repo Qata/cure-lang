@@ -98,4 +98,36 @@ defmodule Antigen.Assays.UnifierTest do
       assert {:violation, {:solution_unstable, _, _}} = Unifier.run(ch, k)
     end
   end
+
+  describe "unify_types/intrinsic (V2b)" do
+    defp itc(t1, t2, expect) do
+      Challenge.new(kind: :unify_problem, assay: "unify_types/intrinsic", label: :translatable,
+        payload: %{t1: t1, t2: t2, expect: expect}, seed: 1)
+    end
+
+    test "baseline: occurs rejects cyclic; apply idempotent; solved var eliminated" do
+      assert Unifier.run(itc(tv("T"), :int, :ok)) == :ok
+      assert Unifier.run(itc({:list, tv("T")}, {:list, :int}, :ok)) == :ok
+      assert Unifier.run(itc(tv("a"), {:list, tv("a")}, :error)) == :ok  # occurs -> engine errors
+    end
+
+    test "occurs negative control: a tu_unify stub that ACCEPTS a cyclic constraint infects" do
+      ch = itc(tv("a"), {:list, tv("a")}, :error)
+      k = %{Unifier.__real__() | tu_unify: fn _t1, _t2, s -> {:ok, s, []} end}  # wrongly accepts
+      assert {:violation, {:occurs_not_detected, _, _}} = Unifier.run(ch, k)
+    end
+
+    test "var-elim negative control: a leaky tu_apply stub leaves a solved var in place" do
+      ch = itc(tv("T"), :int, :ok)
+      k = %{Unifier.__real__() | tu_apply: fn type, _s -> type end}  # identity: never substitutes
+      assert {:violation, {:var_not_eliminated, _}} = Unifier.run(ch, k)
+    end
+
+    test "apply-idempotence negative control: a tu_apply stub that re-wraps its output each call infects" do
+      ch = itc(tv("T"), :int, :ok)
+      # always adds another tuple layer on top of the real substitution -> never a fixed point
+      k = %{Unifier.__real__() | tu_apply: fn type, s -> {:tuple, [Cure.Types.Unify.apply_subst(type, s)]} end}
+      assert {:violation, {:apply_not_idempotent, _}} = Unifier.run(ch, k)
+    end
+  end
 end
