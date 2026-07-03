@@ -948,7 +948,16 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms1b} <- desugar_tuple_args(arms1),
-         {:ok, arms} <- desugar_nested_arms(arms1b, scrut_expr),
+         # A guard on a *nested* constructor pattern would be silently dropped by
+         # the nested-pattern matrix compiler (below), so reject it up front.
+         :ok <- reject_nested_guards(arms1b),
+         {:ok, arms1c} <- desugar_nested_arms(arms1b, scrut_expr),
+         # A guard on a *constructor* pattern is folded into a guardless arm whose
+         # body is a `bool_elim` `if`-chain over the constructor group's rows
+         # (same-constructor fall-through), so it flows through the ordinary
+         # `:vdata` path below. A guard on a *variable/catch-all* pattern is left
+         # for `try_guard_match`.
+         {:ok, arms} <- desugar_ctor_guards(arms1c, scrut_expr),
          # A `when` guard is orthogonal to the pattern's shape, so it is resolved
          # before the shape-dispatching paths (each of which would silently drop
          # the guard). Claims EVERY guarded match: handles the tractable subset,
@@ -2128,6 +2137,150 @@ defmodule Cure.Elab.Elaborator do
   # top-level catch-all (`_`/`x`) mixed with nesting is woven in as a fallback
   # row for the sub-patterns each nested group leaves uncovered, and kept as the
   # outer catch-all for wholly-unmatched constructors.
+  # ── Guards on constructor patterns ──────────────────────────────────────────
+  # `match n | S(k) when g -> a | S(k) -> b | Z() -> c` — a guard on a
+  # constructor pattern. Idris has no pattern guards; it collapses such an arm
+  # into an `if` inside that constructor's case branch, falling through to the
+  # next same-constructor arm when the guard is false. We reproduce exactly that:
+  # fold each constructor group that carries a guard into ONE guardless arm
+  # `C(w…) -> if g₁ then a else if g₂ then … else <closer>`, where the closer is
+  # the group's trailing unguarded arm or the match's catch-all. The result is a
+  # plain guardless match the ordinary `:vdata` path compiles; the `if`s lower to
+  # the committed `bool_elim`. No matrix-compiler or kernel change.
+
+  defp reject_nested_guards(arms) do
+    if Enum.any?(arms, fn a -> ctor_guarded_arm?(a) and arm_has_nested?(a) end),
+      do: {:error, {:unsupported_guard, :nested_ctor_guard}},
+      else: :ok
+  end
+
+  defp ctor_guarded_arm?({:match_arm, meta, _body}) do
+    Keyword.has_key?(meta, :guard) and
+      match?({:function_call, _m, _args}, Keyword.get(meta, :pattern))
+  end
+
+  defp desugar_ctor_guards(arms, scrut_expr) do
+    if Enum.any?(arms, &ctor_guarded_arm?/1),
+      do: fold_ctor_guard_groups(arms, scrut_expr),
+      else: {:ok, arms}
+  end
+
+  defp fold_ctor_guard_groups(arms, scrut_expr) do
+    {ctor_arms, defaults} = Enum.split_with(arms, &(not default_arm?(&1)))
+
+    with {:ok, closer} <- default_closer(defaults, scrut_expr) do
+      order = ctor_arms |> Enum.map(&arm_ctor_name/1) |> Enum.uniq()
+      grouped = Enum.group_by(ctor_arms, &arm_ctor_name/1)
+
+      folded =
+        Enum.reduce_while(order, {:ok, []}, fn cname, {:ok, acc} ->
+          group = Map.fetch!(grouped, cname)
+
+          # Only groups carrying a guard are folded; a plain group passes through
+          # unchanged so a genuine duplicate constructor still reaches the
+          # downstream duplicate check rather than being silently collapsed.
+          if Enum.any?(group, &guarded_arm?/1) do
+            case fold_ctor_group(group, closer) do
+              {:ok, arm} -> {:cont, {:ok, acc ++ [arm]}}
+              {:error, _} = e -> {:halt, e}
+            end
+          else
+            {:cont, {:ok, acc ++ group}}
+          end
+        end)
+
+      with {:ok, folded_arms} <- folded, do: {:ok, folded_arms ++ defaults}
+    end
+  end
+
+  # The match's trailing catch-all is the fall-through for a group whose last arm
+  # is still guarded. `:none` = no catch-all (a still-guarded last arm is then
+  # non-exhaustive). More than one default is out of scope.
+  defp default_closer([], _scrut), do: {:ok, :none}
+
+  defp default_closer([{:match_arm, dmeta, dbody0}], scrut_expr) do
+    {:variable, _m, dvname} = Keyword.fetch!(dmeta, :pattern)
+
+    case resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
+      {:ok, db} -> {:ok, {:some, db}}
+      {:error, reason} -> {:error, {:unsupported_guard, reason}}
+    end
+  end
+
+  defp default_closer(_multi, _scrut), do: {:error, {:unsupported_guard, :multiple_defaults}}
+
+  # Fold one constructor group's rows (each `C(v…) [when g] -> body`, all single
+  # level and sharing arity k) into a single `C(w₁..w_k) -> <if-chain>`.
+  defp fold_ctor_group([{:match_arm, meta0, _} | _] = group, closer) do
+    {:function_call, fmeta, args0} = Keyword.fetch!(meta0, :pattern)
+    cname = Keyword.fetch!(fmeta, :name)
+    k = length(args0)
+    wilds = for i <- 1..k//1, do: {:variable, [], "$g" <> cname <> Integer.to_string(i)}
+    wnames = Enum.map(wilds, fn {:variable, _m, n} -> n end)
+
+    with {:ok, chain} <- build_guard_chain(group, wnames, closer) do
+      {:ok, {:match_arm, [pattern: {:function_call, fmeta, wilds}], [chain]}}
+    end
+  end
+
+  # An unguarded row terminates the chain (its body; later rows shadowed). A
+  # guarded last row falls through to the catch-all, or is non-exhaustive if
+  # there is none.
+  defp build_guard_chain([{:match_arm, meta, body}], wnames, closer) do
+    with {:ok, subs} <- guard_row_renaming(meta, wnames, body) do
+      case Keyword.get(meta, :guard) do
+        nil ->
+          {:ok, rename_all(single_body(body), subs)}
+
+        guard ->
+          case closer do
+            {:some, db} ->
+              {:ok, mk_if(rename_all(guard, subs), rename_all(single_body(body), subs), db)}
+
+            :none ->
+              {:error, {:unsupported_guard, :non_exhaustive}}
+          end
+      end
+    end
+  end
+
+  defp build_guard_chain([{:match_arm, meta, body} | rest], wnames, closer) do
+    with {:ok, subs} <- guard_row_renaming(meta, wnames, body) do
+      case Keyword.get(meta, :guard) do
+        nil ->
+          {:ok, rename_all(single_body(body), subs)}
+
+        guard ->
+          with {:ok, else_} <- build_guard_chain(rest, wnames, closer) do
+            {:ok, mk_if(rename_all(guard, subs), rename_all(single_body(body), subs), else_)}
+          end
+      end
+    end
+  end
+
+  defp mk_if(cond, then_, else_), do: {:conditional, [], [cond, then_, else_]}
+
+  # Map a row's constructor-argument variable names onto the shared fresh binders
+  # `w₁..w_k`. Rejects (shadow) if the row's body/guard rebinds a source name, to
+  # keep the surface substitution capture-free (mirrors `compile_group`).
+  defp guard_row_renaming(meta, wnames, body) do
+    {:function_call, _fm, argpats} = Keyword.fetch!(meta, :pattern)
+    oldnames = Enum.map(argpats, fn {:variable, _m, n} -> n end)
+    subs = Enum.zip(oldnames, wnames)
+    guard = Keyword.get(meta, :guard)
+    exprs = [single_body(body) | if(guard, do: [guard], else: [])]
+
+    if Enum.any?(exprs, fn e -> binds_any?(e, oldnames) end),
+      do: {:error, {:unsupported_guard, :shadowed}},
+      else: {:ok, subs}
+  end
+
+  defp rename_all(expr, subs) do
+    Enum.reduce(subs, expr, fn {old, new}, e ->
+      subst_surface_var(e, old, {:variable, [], new})
+    end)
+  end
+
   defp desugar_nested_arms(arms, scrut_expr) do
     cond do
       not Enum.any?(arms, &arm_has_nested?/1) ->
