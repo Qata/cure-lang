@@ -34,19 +34,21 @@ defmodule Antigen.Assays.TermTest do
   # fixed; when the normalizer is corrected, THIS ASSERTION FLIPS to `:ok` — the
   # red-green target for the fix (same banking pattern as the erase/parse_model
   # findings). Report: docs/superpowers/reports/2026-07-04-antigen-nf-nonidempotence-finding.md
-  test "banked finding: Normalise non-idempotence on a frozen Pi challenge (flips to :ok when kernel fixed)" do
+  # Regression guard for the Normalise index-reflection fix. This frozen Pi
+  # challenge (ctx depth 4) once made `nf` oscillate with period 2 (nf(nf t) ≠
+  # nf(t), transposing two context de Bruijn indices) because nf_struct stored a
+  # reified binder body under an empty closure env. After the fix (identity env),
+  # nf is idempotent and the assay is green. See
+  # docs/superpowers/reports/2026-07-04-antigen-nf-nonidempotence-finding.md.
+  test "regression: the once-oscillating Pi challenge now normalizes idempotently" do
     {payload, _} = Code.eval_file("test/antigen/fixtures/nf_oscillation_pi.exs")
     c = Challenge.new(kind: :typed_term, assay: "term/normalization", label: :well_typed, payload: payload)
-    assert {:violation, {:not_idempotent, nf1, nf2}} = A.run(c)
-    assert nf1 != nf2
-    # confirm it is a genuine oscillation (period 2), not a one-shot divergence:
-    # the original term IS well-typed (infer accepts it), so a sound normalizer
-    # would be idempotent here.
+    assert A.run(c) == :ok
     env = SigMenu.env_of(:v1)
     ctx = SigMenu.rebuild_context(env, payload.ctx)
     assert {:ok, _} = Cure.Core.Kernel.infer(ctx, payload.term)
-    nf3 = Cure.Core.Normalise.nf(ctx, nf2, fuel: 500_000)
-    assert nf3 == nf1, "expected period-2 oscillation (nf3 == nf1)"
+    nf1 = Cure.Core.Normalise.nf(ctx, payload.term, fuel: 500_000)
+    assert Cure.Core.Normalise.nf(ctx, nf1, fuel: 500_000) == nf1, "nf must be a fixpoint now"
   end
 
   test "a deliberately ill-typed :typed_term is caught (mechanism check)" do

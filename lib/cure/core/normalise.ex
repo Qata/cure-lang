@@ -130,25 +130,34 @@ defmodule Cure.Core.Normalise do
     |> nf_struct(sig, depth, opts)
   end
 
+  # The identity value-environment for `depth` binders: the neutral vars
+  # [{:nvar,depth-1}, …, {:nvar,0}]. `nf_struct`'s binder clauses reify the body
+  # to a `depth+1` de Bruijn term via `quote_nf`; storing it in a closure with
+  # this env (rather than `[]`) makes the OUTER `Quote.reify` re-eval a provable
+  # identity, so free (context) variables read back unchanged instead of being
+  # reflected by re-evaluation in a truncated env. (depth 0 → []).
+  defp id_env(0), do: []
+  defp id_env(depth), do: for(l <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, l}})
+
   defp nf_struct({:vpi, dom, {:closure, env, cod}}, sig, depth, opts) do
     fresh = {:vneutral, {:nvar, depth}}
 
     {:vpi, nf_value(dom, sig, depth, opts),
-     {:closure, [], quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
+     {:closure, id_env(depth), quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
   end
 
   defp nf_struct({:vlam, dom, {:closure, env, body}}, sig, depth, opts) do
     fresh = {:vneutral, {:nvar, depth}}
 
     {:vlam, nf_value(dom, sig, depth, opts),
-     {:closure, [], quote_nf(Eval.eval(body, [fresh | env]), sig, depth + 1, opts)}}
+     {:closure, id_env(depth), quote_nf(Eval.eval(body, [fresh | env]), sig, depth + 1, opts)}}
   end
 
   defp nf_struct({:vsigma, dom, {:closure, env, cod}}, sig, depth, opts) do
     fresh = {:vneutral, {:nvar, depth}}
 
     {:vsigma, nf_value(dom, sig, depth, opts),
-     {:closure, [], quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
+     {:closure, id_env(depth), quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
   end
 
   defp nf_struct({:vpair, a, b}, sig, depth, opts),
