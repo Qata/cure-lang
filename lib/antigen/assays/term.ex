@@ -17,25 +17,33 @@ defmodule Antigen.Assays.Term do
   @assay_fuel 500
   def assay_fuel, do: @assay_fuel
 
+  # Real kernel ops, the byte-identical default for `run/1`. `run/2` reads its
+  # kernel calls from an injected map (Run C sensitivity seam); the other calls
+  # (`Normalise`, `Conv`, `Serialize`) stay direct.
+  @real_kernel %{infer: &Kernel.infer/2, check: &Kernel.check/3}
+
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
-  def run(%Challenge{kind: :typed_term, assay: assay, payload: p}) do
+  def run(%Challenge{kind: :typed_term} = c), do: run(c, @real_kernel)
+
+  @doc "Same as `run/1` but with an injectable kernel-op map (sensitivity test seam)."
+  def run(%Challenge{kind: :typed_term, assay: assay, payload: p}, k) do
     env = SigMenu.env_of(p.sig)
     ctx = SigMenu.rebuild_context(env, p.ctx)
 
-    case Kernel.infer(ctx, p.term) do
-      {:ok, inferred} -> dispatch(assay, ctx, p, inferred)
+    case k.infer.(ctx, p.term) do
+      {:ok, inferred} -> dispatch(assay, ctx, p, inferred, k)
       {:error, e} -> {:violation, {:infer_failed, e}}
     end
   end
 
   # --- term/infer_check ------------------------------------------------------
-  defp dispatch("term/infer_check", ctx, p, inferred) do
+  defp dispatch("term/infer_check", ctx, p, inferred, k) do
     depth = Context.length(ctx)
     inferred_term = Normalise.quote(inferred, depth)
 
     cond do
-      Kernel.check(ctx, p.term, inferred) != :ok ->
-        {:violation, {:check_disagrees, Kernel.check(ctx, p.term, inferred)}}
+      k.check.(ctx, p.term, inferred) != :ok ->
+        {:violation, {:check_disagrees, k.check.(ctx, p.term, inferred)}}
 
       not converges?(inferred_term, p.type, ctx) ->
         {:violation, {:inferred_type_mismatch, inferred_term, p.type}}
@@ -50,11 +58,11 @@ defmodule Antigen.Assays.Term do
   # below permanently unreachable — silently defeating locked decision #6
   # ("fixed committed fuel decides verdicts") and this module's own moduledoc
   # claim that fuel exhaustion is its own violation class.
-  defp dispatch("term/subject_reduction", ctx, p, inferred) do
+  defp dispatch("term/subject_reduction", ctx, p, inferred, k) do
     case Normalise.nf(ctx, p.term, fuel: @assay_fuel) do
       :fuel_exhausted -> {:violation, {:fuel_exhausted, :nf}}
       nf ->
-        case Kernel.check(ctx, nf, inferred) do
+        case k.check.(ctx, nf, inferred) do
           :ok -> :ok
           err -> {:violation, {:nf_ill_typed, err}}
         end
@@ -62,12 +70,12 @@ defmodule Antigen.Assays.Term do
   end
 
   # --- term/normalization ----------------------------------------------------
-  defp dispatch("term/normalization", ctx, p, inferred) do
+  defp dispatch("term/normalization", ctx, p, inferred, k) do
     with nf when nf != :fuel_exhausted <- Normalise.nf(ctx, p.term, fuel: @assay_fuel),
          nf2 when nf2 != :fuel_exhausted <- Normalise.nf(ctx, nf, fuel: @assay_fuel) do
       cond do
         nf2 != nf -> {:violation, {:not_idempotent, nf, nf2}}
-        Kernel.check(ctx, nf, inferred) != :ok -> {:violation, {:nf_ill_typed, nf}}
+        k.check.(ctx, nf, inferred) != :ok -> {:violation, {:nf_ill_typed, nf}}
         not round_trips?(nf) -> {:violation, {:c2_round_trip, nf}}
         true -> :ok
       end
