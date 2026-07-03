@@ -97,4 +97,44 @@ defmodule Antigen.Cover do
     if out = opts[:out], do: File.write!(out, report)
     {coverage, report}
   end
+
+  # -- Phase 2: coverage-guided feedback --------------------------------------
+
+  @doc """
+  The set of currently-covered `{module, line}` pairs across `modules`, read
+  from live cover state. MUST be called inside a `with_cover/2` block. Cover
+  accumulates, so this set grows monotonically until `:cover.reset/0`.
+  """
+  def covered_set(modules) do
+    Enum.reduce(modules, MapSet.new(), fn m, acc ->
+      Enum.reduce(line_coverage(m).covered, acc, fn line, a -> MapSet.put(a, {m, line}) end)
+    end)
+  end
+
+  @doc """
+  Batch-gate: `{module, line}` pairs covered now but not in `prev_set`. One
+  `:cover.analyse` per module — cheap enough to run every round to decide
+  whether a round is interesting before paying for precise attribution.
+  """
+  def delta(prev_set, modules) do
+    MapSet.difference(covered_set(modules), prev_set)
+  end
+
+  @doc """
+  Precise re-attribution: for each challenge, `:cover.reset/0` then `run_fun.(ch)`
+  and measure the `{module, line}` pairs it covers beyond `prev_set`. Returns
+  `[{challenge, novel_set}]`.
+
+  `:cover.reset/0` clears counters node-wide, so this is only valid inside a
+  `with_cover/2` block and destroys the accumulated coverage — the caller must
+  re-establish its baseline afterward. Reserve it for rounds the batch-gate
+  already flagged as interesting.
+  """
+  def attribute(prev_set, challenges, run_fun, modules) do
+    Enum.map(challenges, fn ch ->
+      :cover.reset()
+      run_fun.(ch)
+      {ch, MapSet.difference(covered_set(modules), prev_set)}
+    end)
+  end
 end
