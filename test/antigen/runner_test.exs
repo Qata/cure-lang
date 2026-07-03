@@ -112,3 +112,44 @@ defmodule Antigen.RunnerTest do
     assert %{infections: _, seeds_banked: _, health: _, health_metrics: _, stamp: _} = r
   end
 end
+
+defmodule Antigen.RunnerTest.TriageWiring do
+  use ExUnit.Case, async: false
+  alias Antigen.{Runner, Challenge}
+
+  @nat {:data, :Nat, [], []}
+  defp d(name, body), do: %{name: name, type: {:pi, @nat, @nat}, body: body}
+
+  # A module-shaped assay (runner calls `apply(mod, :run, [c])`) that infects iff a
+  # def named :f survives — so bisect may drop the redundant :g but NOT :f, giving a
+  # deterministic minimized target of exactly [:f].
+  defmodule KeepsF do
+    def run(%Challenge{payload: %{defs: defs}}) do
+      if Enum.any?(defs, &(&1.name == :f)), do: {:violation, :boom}, else: :ok
+    end
+
+    def run(_), do: :ok
+  end
+
+  test "a non-typed_term infection is banked minimized (bisect drops a redundant def)" do
+    tmp = Path.join(System.tmp_dir!(), "antigen-triage-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    ch = Challenge.new(kind: :def_group, assay: "totality/terminating", label: :terminating,
+           payload: %{defs: [d(:f, {:ctor, :Z, []}), d(:g, {:ctor, :Z, []})], focus: [:f]}, seed: 7)
+
+    # `opts[:assay]` is the runner's existing assay-module override (runner.ex:52),
+    # used both for the initial verdict and inside the shrink/bisect predicate.
+    res = Runner.explore(challenges: [ch], assay: KeepsF,
+            report_dir: tmp, corpus_path: Path.join(tmp, "c.sexp"),
+            seeds_path: Path.join(tmp, "s.sexp"))
+
+    assert res.infections == 1
+    banked = tmp |> Path.join("c.sexp") |> Antigen.Corpus.stream() |> Enum.to_list()
+    assert [{:ok, min}] = banked
+    # bisect dropped the redundant :g; :f is load-bearing to the predicate, so it stays
+    assert Enum.map(min.payload.defs, & &1.name) == [:f]
+    assert min.payload.focus == [:f]
+  end
+end

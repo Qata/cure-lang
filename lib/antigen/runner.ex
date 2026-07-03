@@ -63,14 +63,10 @@ defmodule Antigen.Runner do
                 end
               end
 
-              # only :typed_term/:mutant_term payloads carry the type/term/ctx keys
-              # Shrink dereferences; other kinds this shared branch serves bank as-is.
-              c_min =
-                if c.kind in [:typed_term, :mutant_term],
-                  do: Antigen.Shrink.minimize(c, pred, shrink_budget(opts)),
-                  else: c
+              {c_min, triage} = Antigen.Triage.minimize(c, pred, shrink_budget(opts))
 
-              {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, summarize(acc, count))
+              {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v,
+                              Map.put(summarize(acc, count), :triage, triage))
               IO.puts(Report.breadcrumb(c_min, path))
               Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
               %{acc | infections: acc.infections + 1}
