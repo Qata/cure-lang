@@ -809,10 +809,10 @@ defmodule Cure.Core.Kernel do
   # r-side vars are always < arity (ctor telescope); s-side vars always >= arity
   # (outer). Disjoint ranges ⇒ the solve direction is unambiguous.
   defp unify_one({:var, i}, s, arity, subst) when i < arity,
-    do: bind_index(i, s, subst)                         # ctor arg := scrutinee term (Box case / prior behavior)
+    do: bind_index(i, s, arity, subst)                  # ctor arg := scrutinee term (Box case / prior behavior)
 
   defp unify_one(r, {:var, j}, arity, subst) when j >= arity,
-    do: bind_index(j, r, subst)                         # outer index var := ctor result index (4.3)
+    do: bind_index(j, r, arity, subst)                  # outer index var := ctor result index (4.3)
 
   defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
     do: unify_spine(as, bs, arity, subst)
@@ -842,8 +842,8 @@ defmodule Cure.Core.Kernel do
   end
   defp unify_spine(_, _, _arity, subst), do: {:ok, subst}
 
-  # Add {key => term} after an occurs-check; on a same-key clash keep conservative.
-  defp bind_index(key, term, subst) do
+  # Add {key => term} after an occurs-check; on a same-key clash, resolve-before-bind.
+  defp bind_index(key, term, arity, subst) do
     cond do
       occurs_index?(key, term) -> :undecided            # cyclic ⇒ degrade (spec §5.3)
       Map.has_key?(subst, key) ->
@@ -852,7 +852,12 @@ defmodule Cure.Core.Kernel do
           old == term -> {:ok, subst}                   # consistent
           rigid_index?(old) and rigid_index?(term) and head_key(old) != head_key(term) ->
             :impossible                                 # same-key merge conflict ⇒ impossible
-          true -> :undecided
+          true ->
+            # Resolve-before-bind (Agda Solution step): the key is already pinned to
+            # `old`, so this pair really asserts `old =? term`. Re-unify them; for two
+            # distinct scrutinee vars this routes through unify_one clause 2 and binds
+            # the outer var (a forced equation). Terminates: see Task 4 measure (b).
+            unify_one(old, term, arity, subst)
         end
       true -> {:ok, Map.put(subst, key, term)}
     end
