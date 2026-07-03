@@ -167,4 +167,27 @@ defmodule Antigen.Cover do
       {status, c_min, MapSet.put(seen_sets, key)}
     end
   end
+
+  @doc """
+  Merge the edge corpus's seeds into the live `:antigen_seed_pool` process-dict
+  entry so `Mutation.gnat`'s crossover can draw banked interesting inputs within
+  the same run (the pool is otherwise loaded once at startup). Merges rather than
+  replaces, preserving the startup seed pool.
+
+  Only closed `:typed_term` bankings with `ctx: []` reach the pool —
+  `SeedPool.load/1` drops every other challenge kind by design; for those, the
+  interesting input is still durably banked to the edge corpus (Task 7), it just
+  does not feed crossover. Returns the merged pool.
+  """
+  def refresh_seed_pool!(edge_corpus_path) do
+    edge_pool = Antigen.Generators.SeedPool.load(edge_corpus_path)
+
+    merged =
+      Map.merge(Process.get(:antigen_seed_pool, %{}), edge_pool, fn _type, a, b ->
+        Enum.uniq(a ++ b)
+      end)
+
+    Process.put(:antigen_seed_pool, merged)
+    merged
+  end
 end

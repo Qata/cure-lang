@@ -77,4 +77,39 @@ defmodule Antigen.CoverGuidedTest do
     assert status2 == :skipped
     assert Enum.count(Corpus.stream(path)) == 1
   end
+
+  test "refresh_seed_pool! merges a banked closed typed_term into the live crossover pool" do
+    # A real closed :typed_term seed from the tracked corpus is guaranteed to
+    # round-trip through Corpus encode/decode and pass SeedPool.load's closed?
+    # filter — the only challenge shape this feedback path picks up.
+    ch =
+      Corpus.stream("test/antigen/seeds.sexp")
+      |> Enum.find_value(fn
+        {:ok, %Challenge{kind: :typed_term, payload: %{ctx: [], term: t}} = c} ->
+          if Cure.Core.Term.closed?(t), do: c, else: nil
+
+        _ ->
+          nil
+      end)
+
+    assert ch, "fixture needs a closed :typed_term seed in test/antigen/seeds.sexp"
+    type = ch.payload.type
+
+    path = Path.join(System.tmp_dir!(), "edgepool_#{System.unique_integer([:positive])}.sexp")
+    on_exit(fn -> File.rm_rf!(path) end)
+
+    # pool BEFORE the bank does not know this type
+    Process.put(:antigen_seed_pool, %{})
+    refute Map.has_key?(Process.get(:antigen_seed_pool), type)
+
+    # budget 0 = no shrink, so the banked challenge's recorded type is preserved
+    {_st, _min, _seen} =
+      Cover.bank_interesting(ch, [{Cure.Core.Eval, 99}], path, MapSet.new(), fn _ -> true end, 0)
+
+    Cover.refresh_seed_pool!(path)
+
+    pool = Process.get(:antigen_seed_pool)
+    assert Map.has_key?(pool, type)   # crossover can now draw this type mid-run
+    assert Antigen.Generators.SeedPool.pool_gen(pool, type) != :none
+  end
 end
