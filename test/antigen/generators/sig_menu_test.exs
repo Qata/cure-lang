@@ -104,16 +104,14 @@ defmodule Antigen.Generators.SigMenuTest do
     end
   end
 
-  # -- Task 3: Sigma goal seed (Pi seeds WITHHELD — see goal_types/0 note) -----
+  # -- Task 3: Pi/Sigma goal seeds (Pi re-enabled after the nf idempotence fix) --
 
-  test "goal_types includes a Sigma seed; all seeds inhabitable + canon total" do
+  test "goal_types includes Pi and Sigma seeds; all seeds inhabitable + canon total" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
     seeds = SigMenu.goal_types()
     assert Enum.any?(seeds, &match?({:sigma, _, _}, &1))
-    # Pi seeds are deliberately absent (they surfaced a real Normalise
-    # non-idempotence bug — banked in assays/term_test.exs).
-    refute Enum.any?(seeds, &match?({:pi, _, _}, &1))
+    assert Enum.any?(seeds, &match?({:pi, _, _}, &1))
 
     for g <- seeds do
       assert SigMenu.inhabitable?(ctx, g), "non-inhabitable seed: #{inspect(g)}"
@@ -129,9 +127,6 @@ defmodule Antigen.Generators.SigMenuTest do
     assert Inductive.ctor_quantities(env, :vcons) == [:erased, :present, :present]
   end
 
-  # The Pi *intro rule* still works and stays — only the top-level Pi menu seed
-  # is withheld. Generated over an EXPLICIT Pi goal in the empty context (no
-  # context variables to close over), Pi generation is clean.
   test "gen_term over a Pi goal produces a lambda" do
     alias Antigen.Generators.Term
     alias Antigen.Backend.StreamData, as: SD

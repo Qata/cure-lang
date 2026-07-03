@@ -19,22 +19,16 @@ defmodule Antigen.Generators.SigMenu do
   @doc """
   The fixed closed goal-type seeds (all inhabitable in the empty context).
 
-  NOTE: Pi seeds (`{:pi, nat(), nat()}` etc.) are deliberately WITHHELD from the
-  menu. Feeding top-level Pi goals to the differential trio surfaced a REAL
-  non-idempotence bug in the trusted `Cure.Core.Normalise`: on ~5% of Pi
-  challenges (a lambda closing over context variables through `plus`/`dbl`
-  unfolding), `nf(nf t) ≠ nf(t)` — the normal form oscillates with period 2,
-  transposing two context de Bruijn indices on each renormalization. The finding
-  is banked as a frozen violation-asserting fixture
-  (`test/antigen/fixtures/nf_oscillation_pi.exs`, asserted in
-  `assays/term_test.exs`) and reported in
-  `docs/superpowers/reports/2026-07-04-antigen-nf-nonidempotence-finding.md`.
-  Re-add the Pi seeds here once the normalizer is fixed (the fixture flips to
-  `:ok`). List(A) and Sigma seeds are proven clean (0 oscillations in 290/160
-  samples) and stay.
+  Pi seeds surfaced a real non-idempotence bug in `Cure.Core.Normalise` (period-2
+  nf oscillation on context-closing lambdas) and were briefly withheld; that
+  kernel bug is now FIXED (nf_struct identity-env fix — see
+  `docs/superpowers/reports/2026-07-04-antigen-nf-nonidempotence-finding.md`), so
+  the Pi seeds are re-enabled and the differential trio is green over them at
+  scale.
   """
   def goal_types, do: [nat(), bd(), vec(z()), vec(s(z())),
                        {:data, :List, [nat()], []}, {:data, :List, [bd()], []},
+                       {:pi, nat(), nat()}, {:pi, nat(), bd()},
                        {:sigma, nat(), nat()}]
 
   # -- the v1 environment -----------------------------------------------------
