@@ -61,4 +61,49 @@ defmodule Antigen.Assays.ElabSoundnessTest do
     c = prog("mod P\nfn id(x: Nat) -> Nat = x\nend")
     assert Elab.run(c) == Elab.run(c, Elab.__real_kernel__())
   end
+
+  describe "constructor bodies (checking-mode fallback)" do
+    # `Option(T)` is parameter-bearing; `Some(v)` bodies are inferable only in
+    # checking mode. Kernel.infer returns {:error, {:ctor_requires_checking_mode, _}}.
+    # Build the family + a sound and an unsound def directly in a seeded env.
+    defp option_env do
+      # A minimal parameter-bearing family F(a: Type) with ctor Mk(x: a) : F(a).
+      #
+      # Two details are load-bearing, verified against Kernel.check's `{:ctor,...}`
+      # clause (which re-derives `actual = {:vdata, family, actual_params ++
+      # actual_indices}` from `result_params`/`result_indices` and Conv-compares it
+      # to the expected `{:vdata,...}}`):
+      #   1. `declare/3`'s 3rd arg is `[ctor()]` (a LIST) — `declare(fam, ctor)`
+      #      (bare map) makes `Enum.reduce` inside `declare/3` iterate the ctor
+      #      MAP's `{key, value}` pairs instead of the ctor itself, crashing with
+      #      MatchError on `%{name: cname} = c`.
+      #   2. `result_params` must be `[{:var, 1}]` (mirrors Kernel's own
+      #      `check_uniform_params/5` formula `{:var, num_args + (num_params - 1 -
+      #      p)}` for Mk's 1 arg / F's 1 param), NOT `[]`. With `[]`, `check/3`
+      #      re-derives `actual = {:vdata, :F, []}` (param dropped) instead of
+      #      `{:vdata, :F, [Nat]}`, so `Conv.conv_values?`'s spine-length check
+      #      fails `conv_spine?` even for the intentionally-SOUND `ok_mk` case
+      #      below (0-length actual spine vs 1-length expected) — the "sound"
+      #      test would falsely report a `{:core_ill_typed, ...}}` violation
+      #      instead of `:ok`.
+      fam = Cure.Core.Inductive.family(:F, [{:a, {:type, 0}}], [], 0)
+      ctor = Cure.Core.Inductive.ctor(:Mk, [{:x, {:var, 0}}], [], [:present], [{:var, 1}])
+      seeded() |> Cure.Core.Inductive.declare(fam, [ctor])
+    end
+
+    test "sound parameter-bearing constructor body re-checks :ok (uses check, not infer)" do
+      # def ok_mk : F(Nat) = Mk(Z)   — well typed; infer alone would misreport it.
+      env = option_env()
+            |> Env.add_def(:ok_mk, {:data, :F, [@nat], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
+    end
+
+    test "mismatched constructor body still infects" do
+      # def bad_mk : F(Bool) = Mk(Z)  — Z:Nat, but F(Bool) expects x:Bool -> reject.
+      env = option_env()
+            |> Env.add_def(:bad_mk, {:data, :F, [@bool], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      assert {:violation, {:core_ill_typed, :bad_mk, _}} =
+               Elab.run(prog("ignored"), kernel_with_env(env))
+    end
+  end
 end

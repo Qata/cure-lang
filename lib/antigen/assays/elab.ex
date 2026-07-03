@@ -138,6 +138,16 @@ defmodule Antigen.Assays.Elab do
   # parameter-bearing constructor bodies the kernel refuses to infer).
   defp check_one(k, ctx, name, ty, body) do
     case k.infer.(ctx, body) do
+      {:error, {:ctor_requires_checking_mode, _}} ->
+        # Introduction form the kernel only checks (parameter-bearing ctor, etc.):
+        # check against the declared type. `check` re-derives the constructor's
+        # actual family/args and Conv-compares internally, so a wrong annotation
+        # is still caught.
+        case k.check.(ctx, body, k.eval.(ty, [])) do
+          :ok -> :ok
+          {:error, e} -> {:violation, {:core_ill_typed, name, e}}
+        end
+
       {:error, e} ->
         {:violation, {:core_ill_typed, name, e}}
 
