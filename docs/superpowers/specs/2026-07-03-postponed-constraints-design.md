@@ -1,3 +1,8 @@
+> **SUPERSEDED (2026-07-03)** by `2026-07-03-whnf-unification-design.md`. The
+> Task-1 risk gate + a language cross-read showed the reachable gap is missing
+> weak-head normalization before unification, not postponement (which flips no
+> reachable verdict). Kept for history. Do not implement from this file.
+
 # Postponed/Suspended Unification Constraints (#11) — Design Spec
 
 **Date:** 2026-07-03

@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-07-03)** by `2026-07-03-whnf-unification-plan.md`. See the
+> superseded banner on `2026-07-03-postponed-constraints-design.md`. Kept for
+> history. Do not implement from this file.
+
 # Postponed/Suspended Constraints (#11) — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
