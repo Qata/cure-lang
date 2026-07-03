@@ -355,6 +355,8 @@ defmodule Antigen.Runner do
   defp assay_module("unify/intrinsic"), do: Antigen.Assays.Unifier
   defp assay_module("unify_types/fixpoint"), do: Antigen.Assays.Unifier
   defp assay_module("unify_types/intrinsic"), do: Antigen.Assays.Unifier
+  defp assay_module("totality_closure/soundness"), do: Antigen.Assays.TotalityClosureAssay
+  defp assay_module("totality_closure/completeness"), do: Antigen.Assays.TotalityClosureAssay
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)

@@ -92,4 +92,20 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
       assert :buried in TotalityClosureAssay.__reachable__(env)
     end
   end
+
+  describe "generator + runner wiring" do
+    alias Antigen.Runner
+
+    test "each catalog is non-empty and correctly tagged" do
+      assert ClosureEnv.soundness_challenges() != []
+      assert ClosureEnv.completeness_challenges() != []
+      assert Enum.all?(ClosureEnv.soundness_challenges(), & &1.assay == "totality_closure/soundness")
+      assert Enum.all?(ClosureEnv.completeness_challenges(), & &1.assay == "totality_closure/completeness")
+    end
+
+    test "runner dispatches both totality_closure/ ids and the whole clean catalog is :ok" do
+      all = ClosureEnv.soundness_challenges() ++ ClosureEnv.completeness_challenges()
+      assert Enum.all?(all, fn c -> Runner.replay_one(c) == :ok end)
+    end
+  end
 end

@@ -17,6 +17,7 @@ defmodule Antigen.Challenge do
           | :elab_program
           | :surface_expr
           | :unify_problem
+          | :closure_env
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -75,7 +76,10 @@ defmodule Antigen.Challenge do
     :conv_index, :conv_motive, :conv, :expected_index, :actual_index,
     :reduction, :required, :carrier,
     # elaborator completeness/metamorphic vertical: kind + label
-    :elab_program, :well_typed
+    :elab_program, :well_typed,
+    # totality-closure vertical (V5): kind + generator-produced env names
+    # (:total_id, :i, :positive, :diverging already interned above)
+    :closure_env, :loop, :callee, :Vessel, :Wrap
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
