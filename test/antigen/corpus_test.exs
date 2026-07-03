@@ -58,4 +58,39 @@ defmodule Antigen.CorpusTest do
     assert Corpus.encode_scaffold(%{}) == "-"
     assert Corpus.decode_scaffold("-") == %{}
   end
+
+  alias Cure.Core.Serialize
+
+  test "term pieces are stored as readable s-expressions, not Base64" do
+    c =
+      Challenge.new(
+        kind: :stub, assay: "stub", label: :none,
+        payload: %{term: {:ctor, :vcons, [{:ctor, :Z, []}, {:ctor, :Z, []}, {:ctor, :vnil, []}]}},
+        seed: 7, note: "n"
+      )
+
+    line = Corpus.encode_record(c)
+    # the piece is the literal Serialize s-expr, inline in the line
+    assert line =~ "term::(ctor vcons (ctor Z) (ctor Z) (ctor vnil))"
+    refute line =~ "term::" <> Base.encode64(Serialize.encode(c.payload.term))
+    assert {:ok, c2} = Corpus.decode_record(line)
+    assert c2.payload.term == c.payload.term
+  end
+
+  test "decode_record still reads a legacy Base64 piece (dual-read)" do
+    term = {:app, {:lam, {:type, 0}, {:var, 0}}, {:type, 0}}
+    # hand-build a legacy record: pieces = id::Base64(Serialize.encode(term))
+    legacy =
+      Enum.join(
+        [
+          "antigen-record", "kind=stub", "assay=stub", "label=none", "seed=1",
+          "note=aGk=", "scaffold=-", "key=" <> Base.encode64("k"),
+          "pieces=term::" <> Base.encode64(Serialize.encode(term))
+        ],
+        "\t"
+      )
+
+    assert {:ok, c} = Corpus.decode_record(legacy)
+    assert c.payload.term == term
+  end
 end

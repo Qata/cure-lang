@@ -21,7 +21,7 @@ defmodule Antigen.Corpus do
 
     piece_str =
       pieces
-      |> Enum.map(fn {id, t} -> "#{id}::#{Base.encode64(Serialize.encode(t))}" end)
+      |> Enum.map(fn {id, t} -> "#{id}::#{Serialize.encode(t)}" end)
       |> Enum.join(";;")
 
     Enum.join(
@@ -137,8 +137,14 @@ defmodule Antigen.Corpus do
     |> String.split(";;")
     |> Enum.reduce_while({:ok, []}, fn piece, {:ok, acc} ->
       case String.split(piece, "::", parts: 2) do
-        [id, b64] ->
-          case Serialize.decode(Base.decode64!(b64)) do
+        [id, body] ->
+          decoded =
+            case body do
+              "(" <> _ -> Serialize.decode(body)                       # new: inline s-expr
+              _ -> Serialize.decode(Base.decode64!(body))              # legacy: Base64-wrapped
+            end
+
+          case decoded do
             {:ok, t} -> {:cont, {:ok, [{id, t} | acc]}}
             err -> {:halt, err}
           end
