@@ -31,7 +31,14 @@ defmodule Antigen.CorpusReplayTest do
     "term/infer_check" => Assays.Term,
     "term/subject_reduction" => Assays.Term,
     "term/normalization" => Assays.Term,
-    "mutation/rejection" => Assays.Mutation
+    "mutation/rejection" => Assays.Mutation,
+    "kernel/shift_subst" => Assays.KernelLaw,
+    "kernel/weakening" => Assays.KernelLaw,
+    "kernel/confluence" => Assays.KernelLaw,
+    "elab/completeness" => Assays.Elab,
+    "elab/metamorphic" => Assays.Elab,
+    "elab/erasure" => Assays.Elab,
+    "elab/soundness" => Assays.Elab
   }
 
   test "both committed corpora decode without error (structural integrity)" do

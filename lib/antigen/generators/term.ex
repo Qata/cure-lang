@@ -10,7 +10,7 @@ defmodule Antigen.Generators.Term do
   alias Antigen.Challenge
   alias Antigen.Generators.SigMenu
   alias Antigen.Generators.Context, as: CtxGen
-  alias Cure.Core.{Context, Eval, Normalise}
+  alias Cure.Core.{Context, Eval, Inductive, Normalise}
 
   @gen_fuel 500
   def gen_fuel, do: @gen_fuel
@@ -27,12 +27,13 @@ defmodule Antigen.Generators.Term do
   @spec gen_term(Context.t(), Cure.Core.Term.t()) :: Gen.t()
   def gen_term(ctx, goal), do: Gen.sized(fn size -> gen(ctx, goal, min(size, @max_size)) end)
 
-  @assay_ids ["term/infer_check", "term/subject_reduction", "term/normalization"]
+  @assay_ids ["term/infer_check", "term/subject_reduction", "term/normalization",
+              "term/erasure_preservation"]
   def assay_ids, do: @assay_ids
 
   @doc "A `Gen` of a `:typed_term` challenge tagged for `assay_id`."
   @spec typed_term(String.t()) :: Gen.t()
-  def typed_term(assay_id) when assay_id in @assay_ids do
+  def typed_term(assay_id) when is_binary(assay_id) do
     env = SigMenu.env_of(:v1)
 
     Gen.bind(CtxGen.gen(env), fn ctx_types ->
@@ -45,13 +46,38 @@ defmodule Antigen.Generators.Term do
               kind: :typed_term,
               assay: assay_id,
               label: :well_typed,
-              payload: %{sig: :v1, ctx: ctx_types, type: goal, term: term}
+              payload: %{sig: :v1, ctx: ctx_types, type: goal, term: top_level_term(ctx, goal, term)}
             )
           )
         end)
       end)
     end)
   end
+
+  # Route a check-mode-only top-level term through an identity-application wrap so
+  # Assays.Term.run/2's unconditional `k.infer.(ctx, p.term)` never hits a shape
+  # with no infer path (a bare `:pair` has no infer clause; a bare param-bearing
+  # `:ctor` errors `:ctor_requires_checking_mode`). `infer` on `{:app, {:lam, goal,
+  # {:var,0}}, term}` infers the identity lambda's `goal -> goal`, then CHECKS
+  # `term` against the domain `goal` — the check-mode path these shapes need — and
+  # the overall type reduces back to `goal`, so downstream use of `inferred` is
+  # unaffected. Every other v1 top-level shape already has a working infer path.
+  defp top_level_term(ctx, goal, term) do
+    if check_mode_only?(ctx, term), do: {:app, {:lam, goal, {:var, 0}}, term}, else: term
+  end
+
+  defp check_mode_only?(_ctx, {:pair, _, _}), do: true
+
+  defp check_mode_only?(ctx, {:ctor, cname, _args}) do
+    sig = Context.signature(ctx)
+
+    case Inductive.ctor_family(sig, cname) do
+      nil -> false
+      fam -> Inductive.param_count(sig, fam) > 0
+    end
+  end
+
+  defp check_mode_only?(_ctx, _other), do: false
 
   # A goal over the current context: a closed menu goal, or the (possibly
   # stuck-indexed) Vec type of a Vec-typed context variable. Offering the *exact*
@@ -142,6 +168,24 @@ defmodule Antigen.Generators.Term do
 
   defp intro_rules(_ctx, _goal, {:type, _}, _size) do
     [{2, Gen.member_of([SigMenu.nat(), SigMenu.bd(), SigMenu.vec({:ctor, :Z, []})])}]
+  end
+
+  defp intro_rules(ctx, _goal, {:data, :List, [a], _}, size) do
+    nil_rule = {2, Gen.return({:ctor, :Nil, []})}
+
+    cons_rules =
+      if SigMenu.inhabitable?(ctx, a) do
+        [{2,
+          Gen.bind(gen(ctx, a, size - 1), fn hd ->
+            Gen.bind(gen(ctx, {:data, :List, [a], []}, size - 1), fn tl ->
+              Gen.return({:ctor, :Cons, [hd, tl]})
+            end)
+          end)}]
+      else
+        []
+      end
+
+    [nil_rule | cons_rules]
   end
 
   defp intro_rules(_ctx, _goal, _other, _size), do: []

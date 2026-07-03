@@ -2,7 +2,7 @@ defmodule Antigen.Generators.TermTest do
   use ExUnit.Case, async: true
   alias Antigen.Generators.{Term, SigMenu}
   alias Antigen.Backend.StreamData, as: B
-  alias Cure.Core.{Context, Kernel}
+  alias Cure.Core.{Context, Kernel, Eval}
 
   @doc false
   def sample(gen, n), do: B.interp(gen) |> Enum.take(n)
@@ -12,9 +12,12 @@ defmodule Antigen.Generators.TermTest do
     ctx = Context.empty(env)
 
     for goal <- SigMenu.goal_types() do
+      # gen_term's contract is check-at-goal (mode-directed inversion) — a
+      # check-mode-only inhabitant (bare param-bearing `Nil`/`Cons` at a List
+      # goal) is sound but has no infer path, so assert `check` at the goal value.
+      goal_val = Eval.eval(goal, Context.env(ctx))
       for t <- sample(Term.gen_term(ctx, goal), 40) do
-        {:ok, ty} = Kernel.infer(ctx, t)
-        assert Kernel.check(ctx, t, ty) == :ok
+        assert Kernel.check(ctx, t, goal_val) == :ok
       end
     end
   end
@@ -46,13 +49,14 @@ defmodule Antigen.Generators.TermTest do
   test "generated terms exercise eliminations and firing redexes" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
-    ts = for goal <- SigMenu.goal_types(),
-             t <- sample(Term.gen_term(ctx, goal), 80), do: t
+    pairs = for goal <- SigMenu.goal_types(),
+                t <- sample(Term.gen_term(ctx, goal), 80), do: {goal, t}
+    ts = Enum.map(pairs, fn {_g, t} -> t end)
 
-    # every term still checks (soundness across the full rule set)
-    for t <- ts do
-      {:ok, ty} = Kernel.infer(ctx, t)
-      assert Kernel.check(ctx, t, ty) == :ok
+    # every term still checks at its goal (soundness across the full rule set);
+    # check-at-goal, not infer, since List goals yield check-mode-only inhabitants.
+    for {goal, t} <- pairs do
+      assert Kernel.check(ctx, t, Eval.eval(goal, Context.env(ctx))) == :ok
     end
 
     # at least some terms contain an elimination and some fire a redex

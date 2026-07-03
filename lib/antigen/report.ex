@@ -24,7 +24,7 @@ defmodule Antigen.Report do
     label:      #{c.label}  (ground truth)
     seed:       #{c.seed}
     detail:     #{inspect(detail)}
-    health:     #{inspect(health)}
+    health:     #{inspect(health)}#{triage_line(health)}
     note:       #{c.note}
 
     -- antigen (C2 record, generator-independent repro) --
@@ -34,6 +34,11 @@ defmodule Antigen.Report do
     decode the record above and run Antigen.Runner.replay_one/1
     """
   end
+
+  defp triage_line(%{triage: %{orig_size: o, min_size: m, bisect_drops: b, shrink_rewrites: s}}),
+    do: "\ntriage:     size #{o}→#{m} · bisect −#{b} elems · shrink −#{s} rewrites"
+
+  defp triage_line(_), do: ""
 
   defp slug(assay), do: String.replace(assay, ~r/[^a-zA-Z0-9]+/, "_")
 

@@ -9,9 +9,37 @@ defmodule Antigen.Runner do
   @reduction_activity_floor 0.25
   @discard_floor 0.10
 
+  # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
+  # three challenge-KIND groups; only Group T / Group M are ever reweighted.
+  @round_size 200
+  @group_table %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14], m: [7, 8]}
+  def gen_group_table, do: @group_table
+
+  # Bump every position in the low-health group(s); floor 1; Group F never bumped.
+  def reweight(weights, table \\ @group_table, stamps) do
+    bumps =
+      []
+      |> maybe_bump(table.t, stamps[:health_stamp] == :vacuous or stamps[:conv_accept_count] == 0)
+      |> maybe_bump(table.m, stamps[:mutation_stamp] == :vacuous or stamps[:conv_reject_count] == 0)
+
+    weights
+    |> Enum.with_index(1)
+    |> Enum.map(fn {w, i} -> if i in bumps, do: w + 2, else: max(w, 1) end)
+  end
+
+  defp maybe_bump(acc, _positions, false), do: acc
+  defp maybe_bump(acc, positions, true), do: acc ++ positions
+
   def explore(opts) do
     count = Keyword.get(opts, :count, 200)
-    challenges = draw(opts[:gen], count)
+
+    challenges =
+      cond do
+        opts[:challenges] -> opts[:challenges]
+        opts[:bias] -> draw_biased(opts[:gen], count, Keyword.get(opts, :round_size, @round_size))
+        # exactly one undivided draw when unbiased (spec §4 — take is not composable)
+        true -> draw(opts[:gen], count)
+      end
 
     final =
       Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
@@ -25,10 +53,22 @@ defmodule Antigen.Runner do
             :ok ->
               acc
 
-            {:violation, _detail} = v ->
-              {:ok, path} = Report.write_infection(opts[:report_dir], c, v, summarize(acc, count))
-              IO.puts(Report.breadcrumb(c, path))
-              Corpus.append(opts[:corpus_path], c, Corpus.dedup_key(c, :antibody))
+            {:violation, orig_detail} = v ->
+              assay = opts[:assay] || assay_module(c.assay)
+
+              pred = fn ch ->
+                case apply(assay, :run, [ch]) do
+                  {:violation, detail} -> same_shape?(detail, orig_detail)
+                  _ -> false
+                end
+              end
+
+              {c_min, triage} = Antigen.Triage.minimize(c, pred, shrink_budget(opts))
+
+              {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v,
+                              Map.put(summarize(acc, count), :triage, triage))
+              IO.puts(Report.breadcrumb(c_min, path))
+              Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
               %{acc | infections: acc.infections + 1}
           end
         else
@@ -300,10 +340,31 @@ defmodule Antigen.Runner do
   defp assay_module("term/infer_check"), do: Antigen.Assays.Term
   defp assay_module("term/subject_reduction"), do: Antigen.Assays.Term
   defp assay_module("term/normalization"), do: Antigen.Assays.Term
+  defp assay_module("term/erasure_preservation"), do: Antigen.Assays.Term
   defp assay_module("mutation/rejection"), do: Antigen.Assays.Mutation
+  defp assay_module("kernel/shift_subst"), do: Antigen.Assays.KernelLaw
+  defp assay_module("kernel/weakening"), do: Antigen.Assays.KernelLaw
+  defp assay_module("kernel/confluence"), do: Antigen.Assays.KernelLaw
   defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
   defp assay_module("elab/erasure"), do: Antigen.Assays.Elab
+  defp assay_module("elab/soundness"), do: Antigen.Assays.Elab
+  defp assay_module("normalizer/differential"), do: Antigen.Assays.Normalizer
+  defp assay_module("normalizer/equal"), do: Antigen.Assays.Normalizer
+  defp assay_module("normalizer/intrinsic"), do: Antigen.Assays.Normalizer
+  defp assay_module("unify/soundness"), do: Antigen.Assays.Unifier
+  defp assay_module("unify/intrinsic"), do: Antigen.Assays.Unifier
+  defp assay_module("unify_types/fixpoint"), do: Antigen.Assays.Unifier
+  defp assay_module("unify_types/intrinsic"), do: Antigen.Assays.Unifier
+  defp assay_module("totality_closure/soundness"), do: Antigen.Assays.TotalityClosureAssay
+  defp assay_module("totality_closure/completeness"), do: Antigen.Assays.TotalityClosureAssay
+  defp assay_module("erasure/idempotent"), do: Antigen.Assays.Erasure
+  defp assay_module("erasure/selective"), do: Antigen.Assays.Erasure
+  defp assay_module("erasure/wellformed"), do: Antigen.Assays.Erasure
+  defp assay_module("relevance/soundness"), do: Antigen.Assays.Erasure
+  defp assay_module("smt/implication"), do: Antigen.Assays.SmtLint
+  defp assay_module("smt/unsat"), do: Antigen.Assays.SmtLint
+  defp assay_module("smt/witness"), do: Antigen.Assays.SmtLint
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)
@@ -316,7 +377,53 @@ defmodule Antigen.Runner do
   end
 
   defp draw(gen, count), do: Backend.StreamData.interp(gen) |> Enum.take(count)
+
+  # `bias: true` draw (spec §4): draw `round_size` at a time, stamp the accumulated
+  # batch's per-group health, reweight the mix, continue. Precondition: `gen` is the
+  # reweightable `{:frequency, ws}` shape (`Mix.Tasks.Antigen.default_gen/0`) — an
+  # ad-hoc non-frequency gen hits this match and crashes clearly rather than
+  # silently misbehaving (bias:true is a CLI-only feature this run, §7 non-goals).
+  defp draw_biased(gen, count, round_size) do
+    {:frequency, ws0} = gen
+    # `round_size <= 0` would stall `draw_rounds/4` (n never decreases) — floor it,
+    # since `opts[:round_size]` is caller-suppliable with no CLI validation.
+    draw_rounds(ws0, count, max(round_size, 1), [])
+  end
+
+  defp draw_rounds(_ws, 0, _round_size, acc), do: acc |> Enum.reverse() |> List.flatten()
+
+  defp draw_rounds(ws, remaining, round_size, acc) do
+    n = min(round_size, remaining)
+    batch = draw({:frequency, ws}, n)
+    stamps = round_stamps(List.flatten([batch | acc]))
+    new_weights = reweight(Enum.map(ws, fn {w, _g} -> w end), gen_group_table(), stamps)
+    ws2 = Enum.zip(new_weights, ws) |> Enum.map(fn {w, {_old_w, g}} -> {w, g} end)
+    draw_rounds(ws2, remaining - n, round_size, [batch | acc])
+  end
+
+  # `discard_rate` isn't knowable during the draw phase (discards are decided later,
+  # in explore/1's reduce), so pass 0.0 — the mid-run bias stamp is driven by
+  # binder_usage/reduction_activity; the run's real discard rate is still reported.
+  defp round_stamps(challenges) do
+    cm = conversion_metrics(challenges)
+
+    %{
+      health_stamp: health_stamp(health_metrics(challenges), 0.0),
+      mutation_stamp: mutation_stamp(mutation_metrics(challenges)),
+      conv_reject_count: cm.conv_reject_count,
+      conv_accept_count: cm.conv_accept_count
+    }
+  end
   defp seed_of(c), do: c.seed || :erlang.phash2({c.kind, c.payload})
+
+  @shrink_budget 2000
+  defp shrink_budget(opts), do: opts[:shrink_budget] || @shrink_budget
+
+  # compare only the violation TAG (leading atom of the detail tuple), never the
+  # payload — which shrinks with the artifact. Fallback for non-tuple details
+  # (e.g. Assays.Stub's bare :boom) avoids an elem/2 crash.
+  defp same_shape?(d1, d2) when is_tuple(d1) and is_tuple(d2), do: elem(d1, 0) == elem(d2, 0)
+  defp same_shape?(d1, d2), do: d1 == d2
 
   # Health gate (spec §9): discard rate (malformed candidates) + coverage buckets
   # (the binder-shape flags actually hit). Reported, never hard-failed.

@@ -144,6 +144,11 @@ defmodule Antigen.Generators.ElabComplete do
     end)
   end
 
+  @spec soundness_challenges() :: [Challenge.t()]
+  def soundness_challenges do
+    Enum.map(completeness_challenges(), fn c -> %{c | assay: "elab/soundness"} end)
+  end
+
   @doc "The catalog ids (blast-radius coordinates)."
   @spec catalog_ids() :: [String.t()]
   def catalog_ids, do: Enum.map(@catalog, &elem(&1, 0))

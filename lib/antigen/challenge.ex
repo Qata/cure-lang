@@ -15,6 +15,11 @@ defmodule Antigen.Challenge do
           | :typed_term
           | :mutant_term
           | :elab_program
+          | :surface_expr
+          | :unify_problem
+          | :closure_env
+          | :erasure_term
+          | :smt_query
   @type label :: :terminating | :diverging | :positive | :negative | :none | :well_typed | :ill_typed
   @type t :: %__MODULE__{
           kind: kind(),
@@ -43,6 +48,8 @@ defmodule Antigen.Challenge do
     :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
+    # reify / data-split verticals (lean-shape-matching): indexed-case def names
+    :data_split, :reify_distinct, :reify_eq,
     :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
     :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge, :inject,
     :motive_dom, :SNat, :snat0,
@@ -59,7 +66,8 @@ defmodule Antigen.Challenge do
     :mutant_term,
     :head_swap, :ctor_arg, :index_mismatch, :app_domain,
     :out_of_scope_var, :proj_non_pair, :universe,
-    :head, :index, :level, :scope, :Sigma,
+    :pair_component, :app_result, :type_param_mismatch,
+    :head, :index, :level, :scope, :Sigma, :Bd,
     # fault-map KEY atoms (must be interned: the fault map rides through
     # binary_to_term [:safe] in the scaffold field — keys count, not just values)
     :kind, :witness, :expected_head, :injected_head,
@@ -71,7 +79,18 @@ defmodule Antigen.Challenge do
     :conv_index, :conv_motive, :conv, :expected_index, :actual_index,
     :reduction, :required, :carrier,
     # elaborator completeness/metamorphic vertical: kind + label
-    :elab_program, :well_typed
+    :elab_program, :well_typed,
+    # totality-closure vertical (V5): kind + generator-produced env names
+    # (:total_id, :i, :positive, :diverging already interned above)
+    :closure_env, :loop, :callee, :Vessel, :Wrap,
+    # erasure/relevance vertical (V4): kind + generator ctor/arg names
+    # (:f, :g, :d, :b, :P already interned above)
+    :erasure_term, :MkQ, :MkP, :a,
+    # SMT-lint vertical (V6): kind (MetaAST predicate payloads use string keys/var
+    # names, not atoms, so no extra generator atoms beyond the kind itself)
+    :smt_query,
+    # Tier-B reach expansion: List parametric family + param binder name
+    :List, :Nil, :Cons, :A
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

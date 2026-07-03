@@ -16,8 +16,20 @@ defmodule Antigen.Generators.SigMenu do
   defp z, do: {:ctor, :Z, []}
   defp s(n), do: {:ctor, :S, [n]}
 
-  @doc "The fixed closed goal-type seeds (all inhabitable in the empty context)."
-  def goal_types, do: [nat(), bd(), vec(z()), vec(s(z()))]
+  @doc """
+  The fixed closed goal-type seeds (all inhabitable in the empty context).
+
+  Pi seeds surfaced a real non-idempotence bug in `Cure.Core.Normalise` (period-2
+  nf oscillation on context-closing lambdas) and were briefly withheld; that
+  kernel bug is now FIXED (nf_struct identity-env fix — see
+  `docs/superpowers/reports/2026-07-04-antigen-nf-nonidempotence-finding.md`), so
+  the Pi seeds are re-enabled and the differential trio is green over them at
+  scale.
+  """
+  def goal_types, do: [nat(), bd(), vec(z()), vec(s(z())),
+                       {:data, :List, [nat()], []}, {:data, :List, [bd()], []},
+                       {:pi, nat(), nat()}, {:pi, nat(), bd()},
+                       {:sigma, nat(), nat()}]
 
   # -- the v1 environment -----------------------------------------------------
   @doc "Declare families, add plus/dbl, and certify them through the kernel."
@@ -35,7 +47,27 @@ defmodule Antigen.Generators.SigMenu do
           # vcons : (n:Nat) -> Nat -> Vec(n) -> Vec(S(n))
           #   arg telescope [n, x, xs]; in xs's type Vec(n), n is index 1;
           #   in the result index S(n), n is index 2.
-          Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})])
+          # n is marked :erased — the length witness is forced by xs's type, so
+          # it carries no runtime content. This is what makes {0,ω} erasure
+          # non-vacuous on the v1 menu (the erasure_preservation assay, Task 5),
+          # and the paradigmatic forced-argument case. Arity/types are unchanged.
+          Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})],
+            [:erased, :present, :present])
+        ])
+      |> Inductive.declare(Inductive.family(:List, [{:A, {:type, 0}}], [], 0),
+        [
+          # Nil : List(A). result_params = [{:var,0}]: with 0 ctor args bound, the
+          # family param A sits at var 0 in the checking frame — required so
+          # Kernel.check's {:ctor,...} clause re-derives {:vdata,:List,[A]} (not
+          # {:vdata,:List,[]}) and converts against the expected List(A).
+          Inductive.ctor(:Nil, [], [], [], [{:var, 0}]),
+          # Cons : (A) => A -> List(A) -> List(A). In hd's type A is {:var,0} (no
+          # ctor args bound yet); in tl's type List(A), A is {:var,1} (hd bound,
+          # shifting A down one). result_params = [{:var,2}]: with both args bound
+          # (hd, tl), A sits at var 2. Convention confirmed against
+          # elab_soundness_test's F(a)/Mk(x:a) and check_uniform_params.
+          Inductive.ctor(:Cons, [{:hd, {:var, 0}}, {:tl, {:data, :List, [{:var, 1}], []}}], [],
+            [:present, :present], [{:var, 2}])
         ])
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
@@ -80,6 +112,7 @@ defmodule Antigen.Generators.SigMenu do
       {:data, :Vec, p, idx} ->
         i = vec_index(p, idx)
         closed_numeral?(whnf(ctx, i)) or has_var_of_type?(ctx, vec(i))
+      {:data, :List, [a], _} -> inhabitable?(ctx, a)
       _ -> false
     end
   end
@@ -102,6 +135,7 @@ defmodule Antigen.Generators.SigMenu do
           {:ctor, :S, [j]} -> {:ctor, :vcons, [j, z(), canon(ctx, vec(j))]}
           _ -> var_of_type(ctx, vec(i))   # stuck index: a Γ-var by the invariant
         end
+      {:data, :List, [_a], _} -> {:ctor, :Nil, []}
     end
   end
 

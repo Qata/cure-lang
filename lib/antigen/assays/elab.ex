@@ -24,7 +24,19 @@ defmodule Antigen.Assays.Elab do
   All consume an `:elab_program` challenge and return `:ok | {:violation, _}`.
   """
   alias Antigen.Challenge
-  alias Cure.Elab.Program
+  alias Cure.Elab.{Program, Erase}
+  alias Cure.Core.{Kernel, Conv, Eval, Context}
+
+  @assay_fuel 500_000
+  @real_kernel %{
+    elaborate: &Cure.Elab.Program.elaborate/1,
+    infer: &Kernel.infer/2,
+    check: &Kernel.check/3,
+    conv: &Conv.conv_values?/4,
+    eval: &Eval.eval/2
+  }
+  @doc false
+  def __real_kernel__, do: @real_kernel
 
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
   def run(%Challenge{kind: :elab_program, assay: "elab/completeness", payload: p}) do
@@ -76,6 +88,77 @@ defmodule Antigen.Assays.Elab do
       :ok
     else
       {:violation, {:erasure_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
+    end
+  end
+
+  # elab/soundness — the emitted core is independently re-checked by the trusted
+  # kernel: every def the elaborator produced must type-check at its emitted type.
+  def run(%Challenge{kind: :elab_program, assay: "elab/soundness"} = c),
+    do: run(c, @real_kernel)
+
+  def run(%Challenge{kind: :elab_program, assay: "elab/soundness", payload: p}, k) do
+    case safe_elaborate(k, p.src) do
+      {:ok, env} -> check_all_defs(env, k)
+      {:error, _} -> :ok                                   # reject -> elab/completeness' job
+      {:raise, e} -> {:violation, {:elaborator_raised, p.id, e}}
+    end
+  end
+
+  defp safe_elaborate(k, src) do
+    case k.elaborate.(src) do
+      {:ok, env} -> {:ok, env}
+      {:error, e} -> {:error, e}
+      other -> {:error, {:unexpected, other}}
+    end
+  rescue
+    ex -> {:raise, Exception.message(ex)}
+  catch
+    kind, reason -> {:raise, {kind, reason}}
+  end
+
+  # Fold env.defs in a fixed key order; first infection wins (deterministic).
+  defp check_all_defs(env, k) do
+    ctx = Context.empty(env)
+
+    env.defs
+    |> Enum.sort_by(fn {name, _} -> name end)
+    |> Enum.find_value(:ok, fn {name, %{type: ty, body: body}} ->
+      if Erase.has_hole?(body) do
+        nil                                                # skip incomplete def
+      else
+        case Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> check_one(k, ctx, name, ty, body) end) do
+          :ok -> nil
+          :fuel_exhausted -> {:violation, {:fuel_exhausted, name}}
+          {:violation, _} = v -> v
+        end
+      end
+    end)
+  end
+
+  # infer -> Conv (with a check-fallback for checking-mode-only forms, e.g.
+  # parameter-bearing constructor bodies the kernel refuses to infer).
+  defp check_one(k, ctx, name, ty, body) do
+    case k.infer.(ctx, body) do
+      {:error, {:ctor_requires_checking_mode, _}} ->
+        # Introduction form the kernel only checks (parameter-bearing ctor, etc.):
+        # check against the declared type. `check` re-derives the constructor's
+        # actual family/args and Conv-compares internally, so a wrong annotation
+        # is still caught.
+        case k.check.(ctx, body, k.eval.(ty, [])) do
+          :ok -> :ok
+          {:error, e} -> {:violation, {:core_ill_typed, name, e}}
+        end
+
+      {:error, e} ->
+        {:violation, {:core_ill_typed, name, e}}
+
+      {:ok, inferred} ->
+        ty_v = k.eval.(ty, [])
+        if k.conv.(inferred, ty_v, Context.length(ctx), Context.signature(ctx)) do
+          :ok
+        else
+          {:violation, {:type_annotation_wrong, name, %{inferred: inferred, declared: ty}}}
+        end
     end
   end
 

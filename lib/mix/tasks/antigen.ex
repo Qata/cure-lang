@@ -2,12 +2,18 @@ defmodule Mix.Tasks.Antigen do
   @moduledoc """
   Run the Antigen property-based metatheory engine (spec §8).
 
-      mix antigen [--count N | --budget Nm] [--corpus PATH] [--seeds PATH] [--report-dir DIR]
+      mix antigen [--count N | --budget Nm] [--bias] [--corpus PATH] [--seeds PATH] [--report-dir DIR]
       mix antigen generate [--count N | --budget Nm] [--seeds PATH] [--report-dir DIR]
 
   `mix antigen` is the **explorer**: generate → assay → bank; it self-terminates
-  after a bounded number of generation rounds (`--count`, default #{200}) or a
-  wall-budget (`--budget 3m`, converted at a fixed `@rounds_per_minute`).
+  after a bounded number of generation rounds (`--count`, default #{20_000},
+  a full run of ~30 seconds) or a wall-budget (`--budget 3m`, converted at a
+  fixed `@rounds_per_minute`).
+
+  `--bias` enables health-adaptive round-based generation (spec §4): the mix
+  reweights toward the weakest vertical between rounds. It only has an observable
+  effect when `--count` exceeds the 200 round size (otherwise the single round has
+  no "next round" to reweight and it behaves like an unbiased run).
 
   `mix antigen generate` is **harvest-only**: it produces well-formed antigens,
   coverage-dedups, appends them to the seed store, and skips the assays entirely.
@@ -26,10 +32,10 @@ defmodule Mix.Tasks.Antigen do
 
   @shortdoc "Run the Antigen metatheory engine (explore | generate)"
 
-  @default_count 200
+  @default_count 20_000
   @rounds_per_minute 2000
 
-  @switches [count: :integer, budget: :string, corpus: :string, seeds: :string, report_dir: :string]
+  @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string, report_dir: :string]
 
   @impl Mix.Task
   def run(argv) do
@@ -38,15 +44,22 @@ defmodule Mix.Tasks.Antigen do
     mode = if match?(["generate" | _], rest), do: :generate, else: :explore
     count = resolve_count(opts)
 
+    seeds_path = opts[:seeds] || "test/antigen/seeds.sexp"
+
     runner_opts = [
       # The three schema-directed generators; explore dispatches each challenge to
       # its assay via the runner's registry (no fixed `:assay` module).
       gen: default_gen(),
       corpus_path: opts[:corpus] || "test/antigen/corpus.sexp",
-      seeds_path: opts[:seeds] || "test/antigen/seeds.sexp",
+      seeds_path: seeds_path,
       report_dir: opts[:report_dir] || "tmp/antigen",
-      count: count
+      count: count,
+      bias: opts[:bias]
     ]
+
+    # Install the corpus-backed filler pool (spec §3) once, before dispatch, so both
+    # explore and generate share the pooled `gnat`. Inert if the seeds file is absent.
+    Process.put(:antigen_seed_pool, Antigen.Generators.SeedPool.load(seeds_path))
 
     case mode do
       :explore ->
@@ -82,7 +95,10 @@ defmodule Mix.Tasks.Antigen do
       {1, Antigen.Generators.Conversion.conv_reject()},
       {1, Antigen.Generators.Conversion.conv_accept("term/infer_check")},
       {1, Antigen.Generators.Conversion.conv_accept("term/subject_reduction")},
-      {1, Antigen.Generators.Conversion.conv_accept("term/normalization")}
+      {1, Antigen.Generators.Conversion.conv_accept("term/normalization")},
+      {1, Antigen.Generators.Term.typed_term("kernel/shift_subst")},
+      {1, Antigen.Generators.Term.typed_term("kernel/weakening")},
+      {1, Antigen.Generators.Term.typed_term("kernel/confluence")}
     ])
   end
 

@@ -21,9 +21,12 @@ defmodule Cure.SMT.Parser do
   """
   @spec parse_model(String.t()) :: {:ok, map()} | {:error, term()}
   def parse_model(output) do
-    # Extract define-fun entries
+    # Extract define-fun entries. The value capture allows a parenthesised group
+    # (e.g. a negative literal `(- 99)`) as well as a bare token — a plain
+    # `[^\)]+` stops at the first `)`, truncating `(- 99)` to `(- 99` and losing
+    # the sign (Antigen V6 finding).
     entries =
-      Regex.scan(~r/\(define-fun\s+(\w+)\s+\(\)\s+\w+\s+([^\)]+)\)/, output)
+      Regex.scan(~r/\(define-fun\s+(\w+)\s+\(\)\s+\w+\s+((?:\([^\)]*\)|[^\)])+)\)/, output)
       |> Enum.map(fn [_full, name, value_str] ->
         {name, parse_value(String.trim(value_str))}
       end)

@@ -116,4 +116,22 @@ defmodule Cure.Core.NormaliseTest do
     term = {:app, {:lam, {:type, 1}, {:var, 0}}, {:type, 0}}
     assert Normalise.nf(Context.empty(), term) == Kernel.normalize(Context.empty(), term)
   end
+
+  test "nf is idempotent on a lambda over a free context variable (index-reflection regression)" do
+    # A plain depth-3 context; nf of this pure lambda depends only on the value
+    # env + depth (not the types). Before the fix, nf_struct stored the reified
+    # body in a closure with an EMPTY env, so the outer reify re-evaluated it in a
+    # truncated env and REFLECTED the free var's de Bruijn index ({:var,1} ->
+    # {:var,3}), oscillating with period 2. A well-typed normal form must be a
+    # fixpoint of nf.
+    ctx =
+      Enum.reduce(1..3, Context.empty(base()), fn _, c ->
+        Context.extend(c, {:vtype, 0})
+      end)
+
+    t = {:lam, {:type, 0}, {:var, 1}}
+    nf1 = Normalise.nf(ctx, t)
+    assert nf1 == t, "nf reflected the free var: #{inspect(nf1)}"
+    assert Normalise.nf(ctx, nf1) == nf1, "nf is not idempotent (oscillation)"
+  end
 end

@@ -67,4 +67,27 @@ defmodule Antigen.CoverageTest do
     assert {:fst, {:ctor, :Z, []}} in ts
     assert {:data, :Nat, [], []} in ts
   end
+
+  defp tt(term), do: Challenge.new(kind: :typed_term, assay: "term/infer_check", label: :well_typed,
+                                   payload: %{sig: :v1, ctx: [], type: {:data, :Nat, [], []}, term: term})
+
+  test "coverage key distinguishes terms that collide under the coarse key" do
+    # `Coverage.constructors/1` folds `tag(node) = elem(node, 0)` over EVERY subterm,
+    # so `ctors` is the set of former-tags present, not literal data-ctor names. Two
+    # terms built from the SAME former-tag set (only :app/:global/:var), differing
+    # only in :app *count*, collide today (same ctors, same :b0_2 bucket, same
+    # {:app_present} flags, same label) but differ after the former-histogram enrichment.
+    a = tt({:app, {:global, :plus}, {:var, 0}})                              # one :app
+    b = tt({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 0}})           # two :app
+    refute Coverage.key(a) == Coverage.key(b)
+    assert Coverage.key_string(Coverage.key(b)) =~ "former_app_nm"
+  end
+
+  test "enriched key still plateaus (bounded distinct keys over many terms)" do
+    terms = for d <- 0..40 do
+      Enum.reduce(0..rem(d, 6), {:ctor, :Z, []}, fn _, acc -> {:ctor, :S, [acc]} end)
+    end
+    keys = terms |> Enum.map(&Coverage.key(tt(&1))) |> Enum.uniq()
+    assert length(keys) <= 12, "key space must saturate, got #{length(keys)}"
+  end
 end
