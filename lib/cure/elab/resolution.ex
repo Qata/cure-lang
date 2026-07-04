@@ -213,6 +213,28 @@ defmodule Cure.Elab.Resolution do
     end
   end
 
+  @doc """
+  If a bare constructor/family name was shadowed (re-keyed off the bare atom),
+  find the re-keyed variant `:"Mod#bare"` still present in the env and report
+  its origin module + re-keyed atom. Returns `:error` if no shadowed variant
+  exists (the name is genuinely unknown, not shadowed).
+  """
+  @spec shadowed_origin(Env.t(), atom()) :: {:ok, String.t(), atom()} | :error
+  def shadowed_origin(%Env{ctors: ctors, families: families}, bare) do
+    suffix = "#" <> Atom.to_string(bare)
+
+    match =
+      Enum.find_value(Map.keys(ctors) ++ Map.keys(families), fn k ->
+        s = Atom.to_string(k)
+        if String.ends_with?(s, suffix), do: {String.trim_trailing(s, suffix), k}, else: nil
+      end)
+
+    case match do
+      {mod_id, key} -> {:ok, mod_id, key}
+      nil -> :error
+    end
+  end
+
   defp try_keys(env, keys, slot) do
     present? =
       case slot do

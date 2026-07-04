@@ -204,6 +204,30 @@ defmodule Cure.Elab.Elaborator do
 
   defp rekey_pattern_name(pattern, _cname), do: pattern
 
+  # A constructor pattern whose (resolved) ctor belongs to a different family than
+  # the scrutinee. If the ORIGINAL bare name was shadowed off the registry (now
+  # only reachable as a re-keyed `:"Mod#name"` variant, which uniform resolution
+  # just bound `cname` to), report the targeted R5 `:shadowed_ctor` with a
+  # qualified-escape-hatch hint; otherwise it is a genuine cross-family
+  # `:foreign_ctor` (existing behavior, unchanged).
+  defp shadowed_or_foreign_ctor(env, sig, cname0, cname, dname) do
+    case Cure.Elab.Resolution.shadowed_origin(env, cname0) do
+      {:ok, mod_id, _key} ->
+        {:error,
+         {:shadowed_ctor,
+          [
+            ctor: cname0,
+            shadowed_module: mod_id,
+            local_family: dname,
+            local_ctors: Enum.map(Inductive.ctors_of(sig, dname), & &1.name),
+            hint: mod_id <> "." <> Atom.to_string(cname0)
+          ]}}
+
+      :error ->
+        {:error, {:foreign_ctor, cname}}
+    end
+  end
+
   defp elaborate_named_call(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
@@ -1329,7 +1353,7 @@ defmodule Cure.Elab.Elaborator do
             {:halt, {:error, {:unknown_pattern_constructor, cname}}}
 
           Inductive.ctor_family(sig, cname) != dname ->
-            {:halt, {:error, {:foreign_ctor, cname}}}
+            {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
 
           Map.has_key?(acc, cname) ->
             {:halt, {:error, {:duplicate_branch, cname}}}
@@ -2843,7 +2867,7 @@ defmodule Cure.Elab.Elaborator do
                   {:halt, {:error, {:unknown_pattern_constructor, cname}}}
 
                 Inductive.ctor_family(sig, cname) != dname ->
-                  {:halt, {:error, {:foreign_ctor, cname}}}
+                  {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
 
                 Map.has_key?(acc, cname) ->
                   {:halt, {:error, {:duplicate_branch, cname}}}

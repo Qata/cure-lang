@@ -129,6 +129,24 @@ defmodule Cure.Elab.TypeShadowingTest do
     assert {:ok, _env} = elaborate(src)
   end
 
+  test "R5: using a shadowed bare ctor on the local family yields a targeted :shadowed_ctor error" do
+    src = """
+    mod WrongCtor
+      use Std.Nat
+      type Nat = Zero | Suc(Nat)
+      fn bad(n: Nat) -> Nat = match n
+        Z() -> Zero()
+        S(m) -> Suc(m)
+    end
+    """
+
+    assert {:error, {:shadowed_ctor, info}} = elaborate(src)
+    assert info[:ctor] == :Z
+    assert info[:shadowed_module] == "Std.Nat"
+    assert info[:hint] == "Std.Nat.Z"
+    assert info[:local_family] == :Nat
+  end
+
   test "R4: `Std.Nat` in a type slot resolves to the imported type (module==typename collapse)" do
     src = """
     mod Collapse

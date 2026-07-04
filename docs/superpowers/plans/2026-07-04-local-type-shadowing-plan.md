@@ -1366,6 +1366,21 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 ### Task 9: R5 — `:shadowed_ctor` targeted diagnostic
 
+> **Amendment (R5 re-anchor — consequence of Task 8's uniform bare-name resolution).**
+> The original plan intercepted at the `get_ctor == nil` gate (bare `Z` was absent
+> after re-keying). With uniform resolution (Task 8 amendment), the pattern path's
+> `resolve_ctor_key` now resolves bare `Z` on a local-`Nat` scrutinee to the present
+> re-keyed `:"Std.Nat#Z"`, so it PASSES the nil gate and instead hits the
+> family-mismatch gate `ctor_family(sig, cname) != dname`. R5 is therefore intercepted
+> THERE: a shared `shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)` helper
+> checks `Resolution.shadowed_origin(env, cname0)` on the ORIGINAL bare name — if it
+> was shadowed off the registry, emit `{:shadowed_ctor, ctor: cname0, shadowed_module,
+> local_family: dname, local_ctors, hint: "Mod.ctor"}`; otherwise the existing
+> `{:foreign_ctor, cname}` (a genuine cross-family match) is unchanged. The nil gate
+> keeps returning `:unknown_pattern_constructor` for a genuinely-unknown bare ctor
+> (`resolve_bare_shadowed` → `:none`, so it stays bare and absent). Applied at both
+> `partition_arms` and `partition_rematch_arms`. `shadow06` stays reject/reject (`same`).
+
 **Files:**
 - Modify: `lib/cure/elab/resolution.ex` — add `shadowed_origin/2`.
 - Modify: `lib/cure/elab/elaborator.ex` — intercept the `{:unknown_pattern_constructor, cname}` raise in `partition_arms` and `partition_rematch_arms`.
