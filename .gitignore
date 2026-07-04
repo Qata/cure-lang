@@ -47,3 +47,7 @@ cure-*.tar
 
 # The main executable escript
 /cure
+
+# Artefacts
+.DS_Store
+.refact/
