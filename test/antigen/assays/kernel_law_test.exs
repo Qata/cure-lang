@@ -3,15 +3,17 @@ defmodule Antigen.Assays.KernelLawTest do
   alias Antigen.Generators.Term, as: TermGen
   alias Antigen.Runner
 
-  test "typed_term/1 accepts the new kernel-law assay-ids (guard widened)" do
-    for id <- ~w(kernel/shift_subst kernel/weakening kernel/confluence) do
+  @law_ids ~w(kernel/shift_subst kernel/weakening kernel/confluence kernel/beta_subst elab/shift_agrees)
+
+  test "typed_term/1 accepts every kernel-law assay-id (guard widened)" do
+    for id <- @law_ids do
       # returns a Gen.t() (a tagged tuple), not raising FunctionClauseError
       assert is_tuple(TermGen.typed_term(id))
     end
   end
 
-  test "runner registry routes the three kernel-law ids to KernelLaw" do
-    for id <- ~w(kernel/shift_subst kernel/weakening kernel/confluence) do
+  test "runner registry routes every kernel-law id to KernelLaw" do
+    for id <- @law_ids do
       assert Runner.assay_module_for(id) == Antigen.Assays.KernelLaw
     end
   end
@@ -81,5 +83,35 @@ defmodule Antigen.Assays.KernelLawTest do
   test "confluence: a genuinely fuel-exhausting term is vacuously :ok" do
     t = {:app, {:app, {:global, :plus}, deep_s(700)}, @z}
     assert :ok = KernelLaw.run(ch("kernel/confluence", t))
+  end
+
+  # ── beta_subst + shift_agrees ─────────────────────────────────────────────
+  @nat {:data, :Nat, [], []}
+
+  test "beta_subst: a capture-trap redex — β lands on the same nf as subst" do
+    # (λx:Nat. λ_:Nat. x) {:var,0} over a one-Nat context; x sits under the inner
+    # λ, so the substituted var-0 must shift by 1.
+    redex = {:app, {:lam, @nat, {:lam, @nat, {:var, 1}}}, {:var, 0}}
+    assert :ok = KernelLaw.run(ch("kernel/beta_subst", redex, [@nat]))
+  end
+
+  test "beta_subst: a non-redex term is flagged distinctly (wiring guard)" do
+    assert {:violation, {:beta_subst_not_a_redex, _}} =
+             KernelLaw.run(ch("kernel/beta_subst", @sz, []))
+  end
+
+  test "shift_agrees: elaborator Subst.shift matches kernel Term.shift" do
+    assert :ok = KernelLaw.run(ch("elab/shift_agrees", {:lam, @nat, {:app, {:var, 0}, {:var, 1}}}))
+  end
+
+  test "shift_agrees: the check is not tautological — a cutoff-blind shift WOULD disagree" do
+    # If Subst.shift ever regressed to NOT bumping the cutoff under a binder, the
+    # identity lambda's bound var would be wrongly shifted. Prove the kernel's own
+    # shift distinguishes that mutant, so the agreement law has teeth.
+    t = {:lam, @nat, {:var, 0}}
+    correct = Cure.Core.Term.shift(t, 1, 0)
+    mutant = {:lam, @nat, Cure.Core.Term.shift({:var, 0}, 1, 0)}  # forgot cutoff+1 under λ
+    assert correct != mutant
+    assert :ok = KernelLaw.run(ch("elab/shift_agrees", t))
   end
 end

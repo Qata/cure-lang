@@ -200,7 +200,11 @@ defmodule Mix.Tasks.Antigen do
       # Capture-avoiding β (kernel/beta_subst) — redexes with capture traps; the
       # kernel-level proof that β agrees with the elaborator's shifting substitution
       # (validates the bind-once β-redex the guard/let elaboration emits, #4/#26).
-      {2, Antigen.Generators.BetaSubst.gen()}
+      {2, Antigen.Generators.BetaSubst.gen()},
+      # Elaborator/kernel shift agreement — over generated meta-free terms, the
+      # elaborator's Subst.shift must equal the kernel's Term.shift (the shift-half
+      # of the beta_subst cross-check; a TCB-boundary capture guard).
+      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")}
     ])
   end
 

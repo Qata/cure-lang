@@ -9,7 +9,9 @@ defmodule Antigen.Assays.KernelLaw do
   `kernel/beta_subst` additionally calls `Cure.Elab.Subst.instantiate/2` — the
   *elaborator's* (untrusted, non-TCB) substitution — as the property's right-hand
   side: it is precisely the machinery whose capture-safety this law cross-checks
-  against the trusted kernel's β-reduction (ledger #4/#26).
+  against the trusted kernel's β-reduction (ledger #4/#26). `elab/shift_agrees`
+  is the shift-half of that cross-check: the elaborator's `Subst.shift` must equal
+  the kernel's `Term.shift` on every meta-free term.
   """
   alias Antigen.Challenge
   alias Antigen.Generators.SigMenu
@@ -26,6 +28,7 @@ defmodule Antigen.Assays.KernelLaw do
   def run(%Challenge{assay: "kernel/weakening", payload: p}), do: weakening(p)
   def run(%Challenge{assay: "kernel/confluence", payload: p}), do: confluence(p)
   def run(%Challenge{assay: "kernel/beta_subst", payload: p}), do: beta_subst(p)
+  def run(%Challenge{assay: "elab/shift_agrees", payload: p}), do: shift_agrees(p.term)
 
   defp ctx_of(p), do: SigMenu.rebuild_context(SigMenu.env_of(p.sig), p.ctx)
 
@@ -98,6 +101,26 @@ defmodule Antigen.Assays.KernelLaw do
             q2 = Normalise.quote(v2, Context.length(ctx2))
             if q2 == Term.shift(q, 1, 0), do: :ok, else: {:violation, {:weakening_type_mismatch, q, q2}}
         end
+    end
+  end
+
+  # ── 3e. elaborator/kernel shift agreement ──────────────────────────────────
+  # The untrusted elaborator carries its OWN de Bruijn shift (Cure.Elab.Subst.shift)
+  # because it must also shift meta-bearing terms the trusted Core.Term.shift refuses
+  # (subst.ex moduledoc). On the meta-FREE terms this generator emits the two MUST
+  # coincide: if they ever diverge, the elaborator would relocate free variables
+  # differently from the kernel — a capture bug at the TCB boundary that the
+  # bind-once β-redex fix (which shifts `expected` via Subst.shift) would inherit.
+  defp shift_agrees(t) do
+    combos = for a <- [1, 2, 3], c <- [0, 1, 2], do: {a, c}
+
+    case Enum.find_value(combos, fn {a, c} ->
+           lhs = Subst.shift(t, a, c)
+           rhs = Term.shift(t, a, c)
+           if lhs != rhs, do: {a, c, lhs, rhs}, else: nil
+         end) do
+      nil -> :ok
+      f -> {:violation, {:elab_shift_disagrees, f}}
     end
   end
 
