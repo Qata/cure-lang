@@ -176,7 +176,10 @@ defmodule Mix.Tasks.Antigen do
       # Serialization roundtrip (metamorphic) — decode ∘ encode = id over every
       # serialisable shape; the lever for Serialize's DECODE path (tokenize/parse/
       # build/build_node) which the banking-only campaign never replays.
-      {2, Antigen.Generators.Serialization.gen()}
+      {2, Antigen.Generators.Serialization.gen()},
+      # Serialization decode robustness — raw S-expr strings straight to decode;
+      # the lever for the bare-leaf / string / parse-error decode edges.
+      {2, Antigen.Generators.DecodeProbe.gen()}
     ])
   end
 

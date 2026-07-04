@@ -74,15 +74,15 @@ defmodule Antigen.RunnerTest do
     assert r.infections >= 1
   end
 
-  test "default_gen has exactly 21 branches in the documented group order (guard)" do
+  test "default_gen has exactly 22 branches in the documented group order (guard)" do
     {:frequency, ws} = Mix.Tasks.Antigen.default_gen()
-    assert length(ws) == 21
+    assert length(ws) == 22
     # positions 15-18 are the structure-directed Primitive + Equality + TypeFormer
     # + DepMatch generators (:typed_term producers → group `t`); position 19 is the
-    # family-shaped IndexedDecl declaration probe → group `f`; positions 20-21 are
-    # the Malformed negative + Serialization roundtrip verticals (term-shaped) → `t`.
+    # family-shaped IndexedDecl declaration probe → group `f`; positions 20-22 are
+    # the Malformed negative + Serialization roundtrip + decode-robustness verticals → `t`.
     assert Antigen.Runner.gen_group_table() ==
-             %{f: [1, 2, 3, 19], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21], m: [7, 8]}
+             %{f: [1, 2, 3, 19], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22], m: [7, 8]}
   end
 
   test "kernel-law verticals run to completion with 0 infections on the sound kernel" do

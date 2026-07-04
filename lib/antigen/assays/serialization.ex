@@ -19,4 +19,14 @@ defmodule Antigen.Assays.Serialization do
       {:error, reason} -> {:violation, {:decode_failed, t, reason}}
     end
   end
+
+  # Decode robustness: `decode` must be total — well-formed input decodes,
+  # malformed input errors cleanly (never crashes/loops).
+  def run(%Challenge{kind: :decode_probe, label: label, payload: %{input: s}}) do
+    case {label, Serialize.decode(s)} do
+      {:valid_sexp, {:ok, _}} -> :ok
+      {:invalid_sexp, {:error, _}} -> :ok
+      {_, got} -> {:violation, {:decode_probe, label, s, got}}
+    end
+  end
 end

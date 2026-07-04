@@ -31,6 +31,8 @@ defmodule Antigen.Coverage do
     do: [term | ctx]
 
   def terms_of(%Challenge{kind: :serialize, payload: %{term: term}}), do: [term]
+  # decode probes carry a raw string, not a Core term → no terms to well-form-check
+  def terms_of(%Challenge{kind: :decode_probe}), do: []
 
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]

@@ -112,7 +112,9 @@ defmodule Antigen.Challenge do
     # Malformed negative vertical: kind + undeclared names the kernel must reject
     :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef,
     # Serialization roundtrip vertical: kind + label
-    :serialize, :lossless
+    :serialize, :lossless,
+    # Serialization decode-robustness vertical: kind + labels
+    :decode_probe, :valid_sexp, :invalid_sexp
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -201,6 +203,9 @@ defmodule Antigen.Challenge do
   end
 
   def to_pieces(%__MODULE__{kind: :serialize, payload: %{term: t}}), do: {%{}, [{"term", t}]}
+
+  # decode probe: the raw input string rides in the scaffold (no Core-term pieces).
+  def to_pieces(%__MODULE__{kind: :decode_probe, payload: %{input: s}}), do: {%{"input" => s}, []}
 
   def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
     %{sig: sig, ctx: ctx, term: term} = p
@@ -344,6 +349,9 @@ defmodule Antigen.Challenge do
 
   def from_pieces(:serialize, assay, label, seed, note, _scaffold, [{"term", t}]),
     do: new(kind: :serialize, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
+
+  def from_pieces(:decode_probe, assay, label, seed, note, scaffold, _pieces),
+    do: new(kind: :decode_probe, assay: assay, label: label, payload: %{input: scaffold["input"]}, seed: seed, note: note)
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)
