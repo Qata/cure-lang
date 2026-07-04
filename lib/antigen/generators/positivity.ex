@@ -38,12 +38,19 @@ defmodule Antigen.Generators.Positivity do
       # is `Π <dom>. Nat` with <dom> exercising one occurs?/2 term-shape clause
       # (the arrow domain is scanned by occurs_deep? → occurs?). The subject never
       # occurs in <dom>, so the label stays :positive (correct by construction).
-      {3, occurs_family()}
+      {3, occurs_family()},
+      # NEGATIVE: subject in a data type's INDEX position → strictly_positive?'s
+      # occurs-in-params/indices branch (318 → 319) fires → not strictly positive.
+      {2, Gen.return(occurs_in_index_family())}
     ])
   end
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
+  # Subject family — defined here (module top) so every generator below reads it;
+  # module attributes resolve at the textual point of use, so a definition further
+  # down would read nil in the occurs?/2 generators.
+  @pgen {:data, :Pgen, [], []}
 
   # Arrow domains, one per occurs?/2 recursion clause (lam/sigma/pair/app/fst/snd/
   # ctor/eq/refl/rewrite/case + a non-term leaf for the fallback). None mention
@@ -62,6 +69,18 @@ defmodule Antigen.Generators.Positivity do
     {:case, @z, @z, [{:PC0, 0, @z}]},
     {:app, {:int_lit, 0}, {:int_lit, 0}}
   ]
+
+  # A non-strictly-positive :Pgen family whose ctor field is `Vec Pgen` — the
+  # subject sits in an index position of another data type, so strictly_positive?'s
+  # data-other branch takes its occurs-in-params/indices path (318 → 319 false).
+  # Correct label :negative (positive? rejects), cross-checked in the test.
+  defp occurs_in_index_family do
+    parametric_challenge(
+      [[{:data, :Vec, [], [@pgen]}]],
+      :negative,
+      "occurs?/2 in a data index: subject in an index position (strictly_positive? 318)"
+    )
+  end
 
   # Strictly-positive :Pgen families packing SIX arrow-domain shapes each (2 ctors
   # × 3 `Π <dom>. <cod>` fields), split into two groups so every occurs?/2 clause
@@ -94,8 +113,8 @@ defmodule Antigen.Generators.Positivity do
   # -- parametric family generation (correct-by-construction labels) ----------
 
   # Fixed name pool (finite → the atoms stay in Challenge.@known_atoms for :safe
-  # replay). One subject family `:Pgen`, ≤2 ctors, ≤3 arg binders per ctor.
-  @pgen {:data, :Pgen, [], []}
+  # replay). One subject family `:Pgen` (defined at module top), ≤2 ctors, ≤3 arg
+  # binders per ctor.
   @bases [{:data, :Nat, [], []}, {:data, :Bd, [], []}]
   @ctor_names {:PC0, :PC1}
   @binder_names {:pq0, :pq1, :pq2}
