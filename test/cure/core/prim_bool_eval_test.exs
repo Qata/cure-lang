@@ -13,18 +13,17 @@ defmodule Cure.Core.PrimBoolEvalTest do
     assert v == Eval.eval({:ctor, :False, []}, [])
   end
 
-  test "eval folds a connective over constructor-value operands" do
-    tt = Eval.eval({:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]}, [])
-    ff = Eval.eval({:prim, :lt, [{:int_lit, 2}, {:int_lit, 1}]}, [])
-    assert Eval.eval({:prim, :and, [{:ctor, :True, []}, {:ctor, :True, []}]}, []) == tt
-    assert Eval.eval({:prim, :and, [{:ctor, :True, []}, {:ctor, :False, []}]}, []) == ff
-    assert Eval.eval({:prim, :not, [{:ctor, :False, []}]}, []) == tt
+  test "the connective primitives are retired: a residual connective prim is stuck" do
+    # `and`/`or`/`not` are now Std.Bool case-defs, not primitives; a residual prim
+    # no longer folds (it stays a stuck neutral).
+    assert match?({:vneutral, _}, Eval.eval({:prim, :and, [{:ctor, :True, []}, {:ctor, :True, []}]}, []))
+    assert match?({:vneutral, _}, Eval.eval({:prim, :not, [{:ctor, :False, []}]}, []))
   end
 
-  test "eval folds Bool-operand equality" do
-    tt = Eval.eval({:ctor, :True, []}, [])
-    assert Eval.eval({:prim, :eq, [{:ctor, :True, []}, {:ctor, :True, []}]}, []) == tt
-    assert Eval.eval({:prim, :eq, [{:ctor, :True, []}, {:ctor, :False, []}]}, []) ==
-             Eval.eval({:ctor, :False, []}, [])
+  test "Bool-operand equality is retired: only numeric :eq folds" do
+    # `==` on Bool is now the Std.Bool def `booleq`; the Bool-operand `:eq` prim is
+    # gone, so a residual one is stuck. Numeric `:eq` still folds.
+    assert match?({:vneutral, _}, Eval.eval({:prim, :eq, [{:ctor, :True, []}, {:ctor, :False, []}]}, []))
+    assert Eval.eval({:prim, :eq, [{:int_lit, 3}, {:int_lit, 3}]}, []) == Eval.eval({:ctor, :True, []}, [])
   end
 end

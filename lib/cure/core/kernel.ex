@@ -1052,26 +1052,11 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # Boolean connectives.
-  defp infer_prim(ctx, op, [a, b]) when op in [:and, :or] do
-    bool = bool_type_value(Context.signature(ctx))
-
-    with :ok <- check(ctx, a, bool), :ok <- check(ctx, b, bool) do
-      {:ok, bool}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
-
-  defp infer_prim(ctx, :not, [a]) do
-    bool = bool_type_value(Context.signature(ctx))
-
-    with :ok <- check(ctx, a, bool) do
-      {:ok, bool}
-    else
-      _ -> {:error, {:prim_type, :not}}
-    end
-  end
+  # The Boolean connectives (`and`/`or`/`not`) are no longer primitives — they are
+  # Std.Bool functions (booland/boolor/boolnot) that `case`-eliminate the inductive
+  # Bool. A residual `{:prim, :and/:or/:not}` therefore falls through to the
+  # `{:unknown_prim, op}` clause below (the desired rejection). `bool_type_value/1`
+  # stays: the numeric comparisons above still return the inductive Bool through it.
 
   # Numeric negation: numeric operand, same result type.
   defp infer_prim(ctx, :neg, [a]) do
