@@ -33,8 +33,62 @@ defmodule Antigen.Generators.Positivity do
       # forced into an arrow domain for `:negative`. Genuine sampling over an
       # unbounded (Π/Σ-nested) family-shape space, cross-checked against the real
       # `Inductive.positive?` oracle in the generator soundness test.
-      {4, parametric_family()}
+      {4, parametric_family()},
+      # occurs?/2 recursion coverage: strictly-positive families whose ctor field
+      # is `Π <dom>. Nat` with <dom> exercising one occurs?/2 term-shape clause
+      # (the arrow domain is scanned by occurs_deep? → occurs?). The subject never
+      # occurs in <dom>, so the label stays :positive (correct by construction).
+      {3, occurs_family()}
     ])
+  end
+
+  @nat {:data, :Nat, [], []}
+  @z {:ctor, :Z, []}
+
+  # Arrow domains, one per occurs?/2 recursion clause (lam/sigma/pair/app/fst/snd/
+  # ctor/eq/refl/rewrite/case + a non-term leaf for the fallback). None mention
+  # :Pgen, so every family that carries them stays strictly positive.
+  @occurs_domains [
+    {:lam, @nat, @z},
+    {:sigma, @z, @z},
+    {:pair, @z, @z},
+    {:app, @z, @z},
+    {:fst, @z},
+    {:snd, @z},
+    {:ctor, :S, [@z]},
+    {:eq, @nat, @z, @z},
+    {:refl, @z},
+    {:rewrite, @z, @z, @z},
+    {:case, @z, @z, [{:PC0, 0, @z}]},
+    {:app, {:int_lit, 0}, {:int_lit, 0}}
+  ]
+
+  # Strictly-positive :Pgen families packing SIX arrow-domain shapes each (2 ctors
+  # × 3 `Π <dom>. <cod>` fields), split into two groups so every occurs?/2 clause
+  # is reliably hit each run despite the generator mix diluting single draws. The
+  # codomain alternates Nat / Int, covering strictly_positive?'s data-other index
+  # scan (318, Nat cod) and its non-Π/Σ/data fallback (335, Int cod). Positive by
+  # construction (the subject never occurs in a domain), cross-checked in the test.
+  defp occurs_family do
+    groups = [Enum.take(@occurs_domains, 6), Enum.drop(@occurs_domains, 6)]
+
+    Gen.bind(Gen.member_of(groups), fn group ->
+      fields =
+        group
+        |> Enum.with_index()
+        |> Enum.map(fn {dom, i} ->
+          cod = if rem(i, 2) == 0, do: @nat, else: {:int_type}
+          {:pi, dom, cod}
+        end)
+
+      Gen.return(
+        parametric_challenge(
+          Enum.chunk_every(fields, 3),
+          :positive,
+          "occurs?/2 coverage (packed): 6 arrow-domain shapes"
+        )
+      )
+    end)
   end
 
   # -- parametric family generation (correct-by-construction labels) ----------
