@@ -718,6 +718,17 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A `with <expr>` in checking-mode expression position — a nested with-clause
+  # appearing as another with/match arm body. Mirrors the top-level with-body
+  # (`declarations.ex` `elaborate_body`): `expected_core` is this position's
+  # (already-refined) goal, so each nested level refines on top of the enclosing
+  # branch's goal and with-abstractions compose. No original params are threaded
+  # (LHS re-match is a top-level-only form), so `original_params` is empty.
+  def elaborate_expr_checked({:with_abs, meta, [scrut | arms]}, expected_core, names, ctx, env) do
+    proof = Keyword.get(meta, :proof)
+    elaborate_with(scrut, arms, proof, expected_core, names, ctx, env, [])
+  end
+
   # A `let x = e ⏎ body` block, in checking mode. There is no `:let` in Core, so
   # each binding is eliminated by *surface substitution* (`elaborate_let_block`):
   # every free `x` in the remaining statements is replaced by the rhs expression
@@ -3140,6 +3151,12 @@ defmodule Cure.Elab.Elaborator do
   # A nested `match` arm body is a checking-mode expression: `expected` is the
   # (index-refined) result type for this branch, exactly what its motive needs.
   defp elaborate_branch_body({:pattern_match, _meta, _children} = expr, expected, names, ctx, env),
+    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+
+  # A nested `with` arm body: like a nested `match` body, a checking-mode
+  # expression whose `expected` is this branch's (index/value-refined) goal —
+  # route to the checked dispatcher so with-abstractions nest and compose.
+  defp elaborate_branch_body({:with_abs, _meta, _children} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
   defp elaborate_branch_body({:function_call, meta, _args} = expr, expected, names, ctx, env) do
