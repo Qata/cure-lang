@@ -1168,7 +1168,8 @@ defmodule Cure.Compiler.Codegen do
           # instead of a tagged tuple. Codegen never sees the elaborator's
           # internal `Mod#Name`-keyed atoms (no dependency on Cure.Core/Cure.Elab),
           # so the bare name it needs is just the last segment of the dotted path.
-          String.contains?(name, ".") and constructor?(qualified_ctor_tail(name)) ->
+          String.contains?(name, ".") and constructor?(qualified_ctor_tail(name)) and
+              cure_qualified_module?(name) ->
             compile_constructor_call(qualified_ctor_tail(name), arg_forms, line)
 
           # Qualified call: Mod.fun(args) -- must come before constructor check
@@ -1236,6 +1237,23 @@ defmodule Cure.Compiler.Codegen do
   # Used only to decide/extract a qualified CONSTRUCTOR reference; codegen has no
   # Env, so this is a pure string operation (the runtime tag stays bare per §3.5).
   defp qualified_ctor_tail(name), do: name |> String.split(".") |> List.last()
+
+  # True when the module prefix of a dotted name resolves to a Cure module
+  # (`Cure.*`), NOT a special BEAM/FFI module like `Erlang` (`:erlang`). A
+  # qualified CONSTRUCTOR escape hatch (`Std.Nat.Z`) always lives in a Cure
+  # module; a remote FFI call whose function is PascalCase in Cure source
+  # (`Erlang.Length` -> `erlang:length`) does not — it must stay a remote call,
+  # never be hijacked into a `{:length, …}` tuple by the PascalCase heuristic.
+  defp cure_qualified_module?(name) do
+    parts = String.split(name, ".")
+    {mod_parts, [_tail]} = Enum.split(parts, -1)
+
+    mod_parts
+    |> Enum.join(".")
+    |> cure_module_to_atom()
+    |> Atom.to_string()
+    |> String.starts_with?("Cure.")
+  end
 
   # -- Record Update Compilation -----------------------------------------------
 

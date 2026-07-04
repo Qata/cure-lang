@@ -23,6 +23,11 @@ defmodule Cure.Compiler.ShadowCodegenTest do
     assert {:call, _line, {:remote, _, {:atom, _, _mod}, {:atom, _, :plus}}, []} = form
   end
 
+  test "an FFI call with a PascalCase tail (Erlang.Length) stays a remote call, NOT a tuple" do
+    {:ok, form} = Codegen.compile_expr({:function_call, [name: "Erlang.Length"], [{:literal, [], []}]})
+    assert {:call, _line, {:remote, _, {:atom, _, :erlang}, {:atom, _, :length}}, _} = form
+  end
+
   test "a program using Std.Nat.Z compiles to a module with a bare :z tag, not a dotted/remote artifact" do
     src = """
     mod EscapeCodegen

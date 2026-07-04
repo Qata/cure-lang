@@ -1676,6 +1676,17 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 ### Task 11: Codegen — recognize a qualified constructor call BEFORE the generic qualified-call dispatch
 
+> **Amendment (Erlang.Length hazard — found by the full-suite gate).** The plan's
+> `String.contains?(name, ".") and constructor?(tail)` guard is NOT sufficient: a
+> qualified FFI call whose function is PascalCase in Cure source — `Erlang.Length(x)`
+> (→ `erlang:length`, exercised by `Cure.Types.ProtocolTest`) — has a PascalCase tail
+> too, so the bare guard hijacked it into a bogus `{:length, …}` tuple, failing the
+> full suite. Fix: also require `cure_qualified_module?(name)` — the module prefix must
+> resolve (via `cure_module_to_atom/1`) to a `Cure.*` module, NOT a special BEAM module
+> like `Erlang` (`:erlang`). A qualified constructor escape hatch (`Std.Nat.Z`) always
+> lives in a Cure module; a BEAM-FFI remote call does not, so it stays a remote call.
+> Regression pinned by a `Erlang.Length` codegen test.
+
 **Corrected mechanism (supersedes an earlier "strip `Mod#` prefix in `constructor_tag/1`" draft — verified wrong against the source, see below).** `lib/cure/compiler/codegen.ex` has **zero** references to `Cure.Core`/`Cure.Elab` anywhere in the file — it never sees the elaborator's internal `Mod#Name`-rekeyed `Env` atoms at all; it compiles directly off the raw parser AST using purely syntactic string heuristics (`constructor?/1` is itself just a PascalCase check on a string). So a `Mod#Ctor`-shaped atom never reaches codegen, and the originally-planned `constructor_tag/1` "#"-stripping fix targets data that cannot occur.
 
 The REAL problem is upstream of `constructor_tag/1` entirely: `compile_function_call/3` (codegen.ex ~1126) has this dispatch —
