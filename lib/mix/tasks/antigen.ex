@@ -193,7 +193,10 @@ defmodule Mix.Tasks.Antigen do
       {2, Antigen.Generators.DotForcing.gen()},
       # Check-mode — direct Kernel.check/3 verdicts; the lever for checking-mode-only
       # forms (parameter-bearing ctors, holes, Σ-introduction) inference can't reach.
-      {2, Antigen.Generators.CheckMode.gen()}
+      {2, Antigen.Generators.CheckMode.gen()},
+      # Delta-reduction — δ-unfolding of certified globals under Normalise.nf; the
+      # only lever for unfold_certified_head + its ι-follow-through (definitional eq).
+      {2, Antigen.Generators.DeltaReduce.gen()}
     ])
   end
 

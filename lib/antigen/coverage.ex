@@ -44,6 +44,8 @@ defmodule Antigen.Coverage do
   # (which Term.term? rejects) and the assay self-validates via Kernel.check.
   def terms_of(%Challenge{kind: :check_mode}), do: []
 
+  def terms_of(%Challenge{kind: :delta_reduce, payload: %{term: t, expected: e}}), do: [t, e]
+
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 

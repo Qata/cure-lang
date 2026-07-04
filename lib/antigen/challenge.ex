@@ -125,7 +125,9 @@ defmodule Antigen.Challenge do
     # Dot-forcing vertical (#24): kind + verdict labels
     :dot_forcing, :accept, :reject, :unforced,
     # Check-mode vertical: kind + the Bd ctor T used in a reject case
-    :check_mode, :T
+    :check_mode, :T,
+    # Delta-reduction vertical: kind + label + the certified global names
+    :delta_reduce, :reduces, :idnat, :kpair
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -247,6 +249,9 @@ defmodule Antigen.Challenge do
 
   def to_pieces(%__MODULE__{kind: :check_mode, payload: %{ctx_vars: n, term: term, type: ty}}),
     do: {%{"ctx_vars" => n}, [{"term", term}, {"type", ty}]}
+
+  def to_pieces(%__MODULE__{kind: :delta_reduce, payload: %{term: term, expected: exp}}),
+    do: {%{}, [{"term", term}, {"expected", exp}]}
 
   def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
     %{sig: sig, ctx: ctx, term: term} = p
@@ -444,6 +449,12 @@ defmodule Antigen.Challenge do
     pmap = Map.new(pieces)
     payload = %{ctx_vars: scaffold["ctx_vars"], term: Map.fetch!(pmap, "term"), type: Map.fetch!(pmap, "type")}
     new(kind: :check_mode, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:delta_reduce, assay, label, seed, note, _scaffold, pieces) do
+    pmap = Map.new(pieces)
+    payload = %{term: Map.fetch!(pmap, "term"), expected: Map.fetch!(pmap, "expected")}
+    new(kind: :delta_reduce, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
