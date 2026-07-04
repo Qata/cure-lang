@@ -94,4 +94,43 @@ defmodule Cure.Elab.ResolutionTest do
       assert Map.has_key?(out.ctors, :True)
     end
   end
+
+  describe "classify/2" do
+    test "local declaration shadows a single imported owner: that import is a loser" do
+      owners = %{Nat: MapSet.new(["Std.Nat"])}
+      out = Cure.Elab.Resolution.classify(owners, MapSet.new([:Nat]))
+      assert out.losers == %{"Std.Nat" => MapSet.new([:Nat])}
+      assert out.ambiguous == MapSet.new()
+    end
+
+    test "one import owner, no local: NOT a collision (no re-key)" do
+      owners = %{Nat: MapSet.new(["Std.Nat"])}
+      out = Cure.Elab.Resolution.classify(owners, MapSet.new())
+      assert out.losers == %{}
+      assert out.ambiguous == MapSet.new()
+    end
+
+    test "same module owning a name (diamond dedup already applied): still ONE owner, no collision" do
+      # Std.Vector's transitive Nat is attributed to Std.Nat by the AST scan, so
+      # owners(Nat) = {Std.Nat} — a single owner even though reached two ways.
+      owners = %{Nat: MapSet.new(["Std.Nat"]), Vector: MapSet.new(["Std.Vector"])}
+      out = Cure.Elab.Resolution.classify(owners, MapSet.new())
+      assert out.losers == %{}
+      assert out.ambiguous == MapSet.new()
+    end
+
+    test "two distinct import owners, no local: ambiguous, both losers" do
+      owners = %{Nat: MapSet.new(["Std.Foo", "Std.Bar"])}
+      out = Cure.Elab.Resolution.classify(owners, MapSet.new())
+      assert out.ambiguous == MapSet.new([:Nat])
+      assert out.losers == %{"Std.Foo" => MapSet.new([:Nat]), "Std.Bar" => MapSet.new([:Nat])}
+    end
+
+    test "two distinct import owners WITH a local: local wins, both imports lose, not ambiguous" do
+      owners = %{Nat: MapSet.new(["Std.Foo", "Std.Bar"])}
+      out = Cure.Elab.Resolution.classify(owners, MapSet.new([:Nat]))
+      assert out.ambiguous == MapSet.new()
+      assert out.losers == %{"Std.Foo" => MapSet.new([:Nat]), "Std.Bar" => MapSet.new([:Nat])}
+    end
+  end
 end

@@ -117,4 +117,39 @@ defmodule Cure.Elab.Resolution do
   end
 
   defp rekey_tele(tele, amap), do: Enum.map(tele, fn {n, t} -> {n, rekey_term(t, amap)} end)
+
+  @doc """
+  Classify family-name collisions. A family name `N` collides when its set of
+  sources — the distinct import modules that OWN it (declare it in their own
+  AST) plus the local module if it declares `N` — has size ≥ 2. In every
+  collision the winner of the unqualified name is the LOCAL module if present
+  (only the local module can win); therefore every import owner of a colliding
+  name is a loser. When no local declares a colliding name, the name is
+  additionally `ambiguous` (unqualified use is an error, §3.4) — but its
+  owners are still re-keyed so both stay reachable qualified.
+  """
+  @spec classify(%{atom() => MapSet.t(String.t())}, MapSet.t(atom())) :: %{
+          losers: %{String.t() => MapSet.t(atom())},
+          ambiguous: MapSet.t(atom())
+        }
+  def classify(family_owners, local_families) do
+    Enum.reduce(family_owners, %{losers: %{}, ambiguous: MapSet.new()}, fn {name, owners}, acc ->
+      local? = MapSet.member?(local_families, name)
+      n_sources = MapSet.size(owners) + if local?, do: 1, else: 0
+
+      cond do
+        n_sources < 2 ->
+          acc
+
+        true ->
+          losers =
+            Enum.reduce(owners, acc.losers, fn mod, ls ->
+              Map.update(ls, mod, MapSet.new([name]), &MapSet.put(&1, name))
+            end)
+
+          ambiguous = if local?, do: acc.ambiguous, else: MapSet.put(acc.ambiguous, name)
+          %{losers: losers, ambiguous: ambiguous}
+      end
+    end)
+  end
 end
