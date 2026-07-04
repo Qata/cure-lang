@@ -47,4 +47,74 @@ defmodule Cure.Elab.Resolution do
 
   # Leaves: :var, :type, :global, :int_type, :int_lit, :float_type, :float_lit.
   def rekey_term(leaf, _m), do: leaf
+
+  @doc """
+  Re-key every family named in `owned_family_names` (and each of its
+  constructors) within `env`'s slice to `:"<module_id>#<name>"`. Renames the
+  `families`/`ctors`/`ctor_to_family` map keys, updates each record's `:name`
+  field, and rewrites every embedded Core term (family/ctor telescopes,
+  ctor result indices/params, and ALL def bodies+types in the slice) via
+  `rekey_term/2`. Families/ctors NOT owned are left untouched. Functions keep
+  their bare `defs` keys (only embedded family/ctor references are rewritten).
+  """
+  @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom())) :: Env.t()
+  def rekey_module_env(%Env{} = env, module_id, owned_family_names) do
+    # Owned ctor names: ctors whose family is an owned family name.
+    owned_ctor_names =
+      for {cname, fname} <- env.ctor_to_family, MapSet.member?(owned_family_names, fname), into: MapSet.new(), do: cname
+
+    # bare -> rekeyed atom map covering both owned families and their ctors.
+    amap =
+      Enum.reduce(owned_family_names, %{}, fn f, acc -> Map.put(acc, f, rekey_atom(module_id, f)) end)
+
+    amap =
+      Enum.reduce(owned_ctor_names, amap, fn c, acc -> Map.put(acc, c, rekey_atom(module_id, c)) end)
+
+    %Env{
+      env
+      | families: rekey_families(env.families, owned_family_names, amap),
+        ctors: rekey_ctors(env.ctors, owned_ctor_names, amap),
+        ctor_to_family: rekey_c2f(env.ctor_to_family, amap),
+        defs: rekey_defs(env.defs, amap)
+    }
+  end
+
+  defp rekey_atom(module_id, bare), do: String.to_atom(module_id <> "#" <> Atom.to_string(bare))
+
+  defp rekey_families(families, owned, amap) do
+    Map.new(families, fn {k, fam} ->
+      if MapSet.member?(owned, k) do
+        {Map.fetch!(amap, k),
+         %{fam | name: Map.fetch!(amap, k),
+                 params: rekey_tele(fam.params, amap), indices: rekey_tele(fam.indices, amap)}}
+      else
+        {k, %{fam | params: rekey_tele(fam.params, amap), indices: rekey_tele(fam.indices, amap)}}
+      end
+    end)
+  end
+
+  defp rekey_ctors(ctors, owned_ctor_names, amap) do
+    Map.new(ctors, fn {k, c} ->
+      c2 = %{c |
+        name: Map.get(amap, c.name, c.name),
+        args: rekey_tele(c.args, amap),
+        result_indices: Enum.map(c.result_indices, &rekey_term(&1, amap)),
+        result_params: Enum.map(c.result_params, &rekey_term(&1, amap))
+      }
+
+      if MapSet.member?(owned_ctor_names, k), do: {Map.fetch!(amap, k), c2}, else: {k, c2}
+    end)
+  end
+
+  defp rekey_c2f(c2f, amap) do
+    Map.new(c2f, fn {c, f} -> {Map.get(amap, c, c), Map.get(amap, f, f)} end)
+  end
+
+  defp rekey_defs(defs, amap) do
+    Map.new(defs, fn {k, d} ->
+      {k, %{d | type: rekey_term(d.type, amap), body: rekey_term(d.body, amap)}}
+    end)
+  end
+
+  defp rekey_tele(tele, amap), do: Enum.map(tele, fn {n, t} -> {n, rekey_term(t, amap)} end)
 end
