@@ -405,9 +405,14 @@ defmodule Antigen.Runner do
 
           {c_min, triage} = Antigen.Triage.minimize(c, pred, shrink_budget(opts))
 
+          # A violation tagged `{:expected, _}` is a DELIBERATELY-injected one
+          # (test scaffolding) — the immune system working, not a defect; render
+          # it calmly so a normal test run's output does not read as a real bug.
+          kind = if match?({:expected, _}, orig_detail), do: :immune_response, else: :infection
+
           health = summarize(acc, count) |> Map.put(:triage, triage) |> Map.merge(health_extra(opts))
-          {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, health)
-          IO.puts(Report.breadcrumb(c_min, path))
+          {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, health, kind)
+          IO.puts(Report.breadcrumb(c_min, path, kind))
           Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
           %{acc | infections: acc.infections + 1}
       end

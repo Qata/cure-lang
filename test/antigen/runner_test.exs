@@ -145,8 +145,10 @@ defmodule Antigen.RunnerTest.TriageWiring do
   # def named :f survives — so bisect may drop the redundant :g but NOT :f, giving a
   # deterministic minimized target of exactly [:f].
   defmodule KeepsF do
+    # `{:expected, _}`-tagged: a deliberate machinery-test violation, so the Runner
+    # renders it as a calm immune response instead of an "ANTIGEN INFECTION".
     def run(%Challenge{payload: %{defs: defs}}) do
-      if Enum.any?(defs, &(&1.name == :f)), do: {:violation, :boom}, else: :ok
+      if Enum.any?(defs, &(&1.name == :f)), do: {:violation, {:expected, :boom}}, else: :ok
     end
 
     def run(_), do: :ok
