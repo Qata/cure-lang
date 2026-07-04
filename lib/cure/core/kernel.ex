@@ -827,11 +827,23 @@ defmodule Cure.Core.Kernel do
   defp unify_one(r, s, _arity, subst) when r == s, do: {:ok, subst}   # syntactically equal → consistent
 
   defp unify_one(r, s, _arity, _subst) do
-    # Definite rigid head clash ⇒ impossible; anything else ⇒ conservative undecided.
-    if rigid_index?(r) and rigid_index?(s) and head_key(r) != head_key(s),
-      do: :impossible,
-      else: :undecided
+    cond do
+      # Agda Cycle rule (Rules/LHS/Unify.hs 43-44, `ifOccursStronglyRigid`): the
+      # equation `x =?= v` is absurd when the datatype variable `x` occurs STRONGLY
+      # RIGID in `v` (reachable through ctor/data spines only), by acyclicity of the
+      # inductive. Both directions, mirroring Agda's symmetric Var/Var dispatch.
+      var_cycle?(r, s) -> :impossible
+      var_cycle?(s, r) -> :impossible
+      # Definite rigid head clash ⇒ impossible (Conflict rule); else conservative.
+      rigid_index?(r) and rigid_index?(s) and head_key(r) != head_key(s) -> :impossible
+      true -> :undecided
+    end
   end
+
+  # `v` (a datatype/index variable) occurs strongly rigid in `t` ⇒ `v =?= t` is a
+  # cyclic, hence absurd, equation. False for a non-var LHS.
+  defp var_cycle?({:var, k}, t), do: strongly_rigid_occurs?(k, t)
+  defp var_cycle?(_, _), do: false
 
   defp unify_spine([], [], _arity, subst), do: {:ok, subst}
   defp unify_spine([a | as], [b | bs], arity, subst) do
@@ -860,7 +872,8 @@ defmodule Cure.Core.Kernel do
 
     cond do
       rterm == {:var, key} -> {:ok, subst}              # already same class ⇒ no-op (breaks cycles)
-      occurs_index?(key, rterm) -> :undecided           # cyclic ⇒ degrade (spec §5.3)
+      strongly_rigid_occurs?(key, rterm) -> :impossible # Agda Cycle rule: absurd (acyclicity)
+      occurs_index?(key, rterm) -> :undecided           # weakly-rigid cycle ⇒ conservative degrade
       Map.has_key?(subst, key) ->
         old = Map.get(subst, key)
         cond do
@@ -913,6 +926,27 @@ defmodule Cure.Core.Kernel do
   defp occurs_index?(key, t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&occurs_index?(key, &1))
   defp occurs_index?(key, l) when is_list(l), do: Enum.any?(l, &occurs_index?(key, &1))
   defp occurs_index?(_key, _), do: false
+
+  # Agda Cycle rule (Rules/LHS/Unify.hs `ifOccursStronglyRigid` / `flexRigOccurrenceIn`):
+  # does {:var, key} occur STRONGLY RIGID in `term` — an occurrence reachable through
+  # constructor/data spines ONLY, never a defined-function application or other neutral?
+  # If so, `key =?= term` is unsolvable by acyclicity of the inductive, so the branch is
+  # :impossible. The soundness of firing here (vs a conservative :undecided) rests
+  # entirely on the ctor/data-only descent: `x = S(x)` is absurd, but `x = f(x)` for a
+  # DEFINED `f` is NOT — `f` might be the identity — and an `:app`/neutral head stops the
+  # search, so the latter never fires. The top of `term` must itself be a rigid ctor/data
+  # head: a bare-var top is an ordinary solve (`x =?= x` handled upstream), not a cycle.
+  defp strongly_rigid_occurs?(key, {:ctor, _n, args}), do: Enum.any?(args, &rigid_path_occurs?(key, &1))
+  defp strongly_rigid_occurs?(key, {:data, _n, ps, is}), do: Enum.any?(ps ++ is, &rigid_path_occurs?(key, &1))
+  defp strongly_rigid_occurs?(_key, _), do: false
+
+  # Occurs along a purely rigid (ctor/data) path: a var matches; descent continues
+  # solely through ctor/data spines; ANY other node (:app, neutral, meta, …) breaks
+  # strong rigidity and halts the search on that sub-branch (⇒ conservative).
+  defp rigid_path_occurs?(key, {:var, k}), do: k == key
+  defp rigid_path_occurs?(key, {:ctor, _n, args}), do: Enum.any?(args, &rigid_path_occurs?(key, &1))
+  defp rigid_path_occurs?(key, {:data, _n, ps, is}), do: Enum.any?(ps ++ is, &rigid_path_occurs?(key, &1))
+  defp rigid_path_occurs?(_key, _), do: false
 
   defp specialize_branch_context(ctx, subst) when map_size(subst) == 0, do: ctx
 

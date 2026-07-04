@@ -47,19 +47,20 @@ defmodule Cure.Core.UnifyIndicesTest do
   defp occurs?(key, l) when is_list(l), do: Enum.any?(l, &occurs?(key, &1))
   defp occurs?(_key, _), do: false
 
-  test "(a) occurs/cycle: `same : SameLen(k,k)` vs SameLen(a, S(a)) never binds a cyclic key" do
+  # (a) Cycle rule (Agda Rules/LHS/Unify.hs): `SameLen(a, S(a))` matched against
+  # `same : SameLen(k, k)` forces a = k = S(a), i.e. the strongly-rigid cyclic
+  # equation `a = S(a)`. By acyclicity of Nat this is ABSURD, so the branch is
+  # discharged :impossible (Idris/Agda-faithful) — the precise verdict that fixes
+  # oracle cyc01. This SUPERSEDES the earlier conservative pin, which degraded the
+  # cycle to a non-cyclic solve; the soundness obligation that pin guarded (never
+  # FABRICATE a cyclic substitution) is preserved a fortiori — :impossible binds
+  # nothing. See `Cure.Core.CycleRuleTest` and kernel `strongly_rigid_occurs?`.
+  test "(a) cycle rule: `same : SameLen(k,k)` vs SameLen(a, S(a)) is :impossible (a = S(a) absurd)" do
     s = sig()
     # Single outer var `a`; second scrutinee index is the ctor value `S(a)`.
     ctx = one_var_ctx(s)
     scrut = [{:vneutral, {:nvar, 0}}, {:vctor, :S, [{:vneutral, {:nvar, 0}}]}]
-    verdict = Kernel.branch_unify(ctx, :SameLen, :same, scrut)
-    # Verdict may be {:solved,_} (conservative) or :undecided-driven :trivial/solved,
-    # but must NEVER be :impossible-by-cycle and must NEVER bind a cyclic key.
-    case verdict do
-      {:solved, subst} -> refute cyclic?(subst)
-      :trivial -> :ok
-      other -> flunk("unexpected verdict for occurs case: #{inspect(other)}")
-    end
+    assert :impossible = Kernel.branch_unify(ctx, :SameLen, :same, scrut)
   end
 
   test "(b) injectivity: `vs : Vone(S(k))` vs Vone(S(a)) decomposes to k := a" do
