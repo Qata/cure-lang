@@ -102,7 +102,9 @@ defmodule Antigen.Challenge do
     # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
     :Sq, :mksq, :j,
     # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors
-    :Ty, :tnat, :tbd, :tint, :tflt, :tpi, :tsig, :tvec
+    :Ty, :tnat, :tbd, :tint, :tflt, :tpi, :tsig, :tvec,
+    # IdxI: Int-indexed family (check_result_indices declaration-check driver)
+    :IdxI, :mki, :mkb
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
