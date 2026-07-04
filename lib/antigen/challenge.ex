@@ -120,8 +120,8 @@ defmodule Antigen.Challenge do
     :decode_probe, :valid_sexp, :invalid_sexp,
     # Conversion-decision vertical: kind + labels
     :conv_pair, :convertible, :distinct,
-    # Branch-unification vertical: kind + verdict labels
-    :branch_unify, :solved, :impossible, :trivial
+    # Branch-unification vertical: kind + verdict labels + crossing-family names
+    :branch_unify, :solved, :impossible, :trivial, :Cyc4, :mkcyc
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

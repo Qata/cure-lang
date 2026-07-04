@@ -8,13 +8,27 @@ defmodule Antigen.Assays.BranchUnify do
   index-unification soundness/completeness infection.
   """
   alias Antigen.{Challenge, Generators}
-  alias Cure.Core.{Context, Eval, Kernel}
+  alias Cure.Core.{Context, Eval, Inductive, Kernel}
 
   @nat_type {:vdata, :Nat, []}
+  @nat {:data, :Nat, [], []}
+
+  # v1 menu extended with a crossing 4-index family `Cyc4` whose constructor
+  # `mkcyc : (a b : Nat) -> Cyc4 a a b b` induces a multi-key unification cycle
+  # (`i := j`, later `j := i`) when matched against a crossing scrutinee
+  # `Cyc4 i j j i` — the spec §4.1 resolve-before-bind obligation. Not in the shared
+  # v1 menu (no other generator needs it), so it is declared here.
+  defp env do
+    Generators.SigMenu.env_of(:v1)
+    |> Inductive.declare(
+      Inductive.family(:Cyc4, [], [{:i, @nat}, {:j, @nat}, {:k, @nat}, {:l, @nat}], 0),
+      [Inductive.ctor(:mkcyc, [{:a, @nat}, {:b, @nat}], [{:var, 1}, {:var, 1}, {:var, 0}, {:var, 0}])]
+    )
+  end
 
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
   def run(%Challenge{kind: :branch_unify, label: expected, payload: p}) do
-    env = Generators.SigMenu.env_of(:v1)
+    env = env()
 
     ctx =
       Enum.reduce(1..p.ctx_vars//1, Context.empty(env), fn _, c ->

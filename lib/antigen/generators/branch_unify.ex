@@ -26,7 +26,11 @@ defmodule Antigen.Generators.BranchUnify do
     {2, :Sq, :mksq, [{:var, 0}, {:var, 1}], :solved, "Sq mksq [var0,var1] — forced equation (Solution step)"},
     {0, :Ty, :tnat, [{:type, 0}], :impossible, "Ty tnat [Type0] — rigid data/Type clash"},
     {0, :Tg, :tg0, [{:int_lit, 0}], :trivial, "Tg tg0 [0] — int-literal match"},
-    {0, :Tg, :tg0, [{:int_lit, 1}], :trivial, "Tg tg0 [1] — int-literal heads agree (undecided)"}
+    {0, :Tg, :tg0, [{:int_lit, 1}], :trivial, "Tg tg0 [1] — int-literal heads agree (undecided)"},
+    # crossing 4-index family: mkcyc : Cyc4 a a b b matched against Cyc4 i j j i
+    # induces the multi-key cycle (i:=j then j:=i) → resolve-before-bind collapse.
+    {2, :Cyc4, :mkcyc, [{:var, 0}, {:var, 1}, {:var, 1}, {:var, 0}], :solved, "Cyc4 crossing — multi-key cycle collapse"},
+    {4, :Cyc4, :mkcyc, [{:var, 0}, {:var, 1}, {:var, 2}, {:var, 3}], :solved, "Cyc4 distinct — 4-index spine solve"}
   ]
 
   @spec gen(keyword()) :: Gen.t()
