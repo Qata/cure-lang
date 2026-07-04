@@ -416,6 +416,37 @@ defmodule Antigen.Generators.Totality do
     )
   end
 
+  @doc """
+  Single-function, multi-argument diverging control over `Nat → Nat → Nat`:
+  `loop a b = loop (S a) (S b)`. Both parameters are UNMATCHED (no `case`), so
+  the size-change analysis has no smaller-set and no matched-pattern form to
+  reconstruct against — every call-arc is `:unknown`, the sole idempotent loop
+  has no `:smaller` diagonal, and the def is (soundly) rejected. This is the
+  single-function multi-arg twin of W1's mutual `diverging_permuting_pair`, and
+  the direct falsifier for the #14 reconstruct-equal machinery: reconstruct-equal
+  must NOT fire on unmatched parameters (`S a` / `S b` are regrown constructors,
+  not reconstructions of any matched form). Label `:diverging`.
+  """
+  @spec diverging_size_change_control() :: Challenge.t()
+  def diverging_size_change_control do
+    # frame under λa. λb.: a = var 1, b = var 0
+    body =
+      {:lam, @nat,
+       {:lam, @nat,
+        {:app, {:app, {:global, :loop}, {:ctor, :S, [{:var, 1}]}}, {:ctor, :S, [{:var, 0}]}}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{
+        defs: [%{name: :loop, type: {:pi, @nat, {:pi, @nat, @nat}}, body: body}],
+        focus: [:loop]
+      },
+      note: "size-change control: loop a b = loop (S a) (S b) — unmatched params, all-unknown loop"
+    )
+  end
+
   @doc "Rebuild the def-group's `Env` by folding `Env.add_def/4` over the payload."
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{payload: %{defs: defs}}) do

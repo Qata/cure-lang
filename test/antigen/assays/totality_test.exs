@@ -63,17 +63,22 @@ defmodule Antigen.Assays.TotalityTest do
 
   # -- W2: reach pins (pre-port banking spec §4 W2, D2/D3) --------------------
   # Labels state mathematical truth (:terminating — each IS well-founded); the
-  # assertions pin today's CONSERVATIVE REJECTION. P1 (size-change) flips these
-  # to :ok by migrating the banked records from reach.sexp into corpus.sexp —
-  # at which point these assertions are updated to assert :ok in the same commit.
+  # assertions pin CONSERVATIVE REJECTION. P1 (size-change, #14) flips these to
+  # :ok by migrating the banked records from reach.sexp into corpus.sexp — at
+  # which point the assertion is updated to assert :ok in the same commit.
+  #
+  # ACHIEVED by #14: Ackermann (single-function, lexicographic) now certifies via
+  # the size-change matrix closure + reconstruct-equal — migrated to corpus.sexp.
+  # The two MUTUAL pins (even/odd, permuted f/g) stay conservatively rejected:
+  # cross-function size-change is out of scope (#13), so they remain here.
 
   test "W2 reach pin: even/odd structural mutual pair is conservatively rejected today" do
     assert {:violation, {:wrongly_rejected, [:even, :odd]}} ==
              A.run(G.wellfounded_even_odd())
   end
 
-  test "W2 reach pin: Ackermann (lexicographic two-argument descent) is conservatively rejected today" do
-    assert {:violation, {:wrongly_rejected, [:ack]}} == A.run(G.wellfounded_ackermann())
+  test "W2 ACHIEVED (#14): Ackermann (lexicographic two-argument descent) now certifies total" do
+    assert :ok == A.run(G.wellfounded_ackermann())
   end
 
   test "W2 reach pin: permuted well-founded pair is conservatively rejected today" do
