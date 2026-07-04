@@ -12,7 +12,7 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15], m: [7, 8]}
+  @group_table %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16], m: [7, 8]}
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.

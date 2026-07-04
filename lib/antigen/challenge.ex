@@ -90,7 +90,13 @@ defmodule Antigen.Challenge do
     # names, not atoms, so no extra generator atoms beyond the kind itself)
     :smt_query,
     # Tier-B reach expansion: List parametric family + param binder name
-    :List, :Nil, :Cons, :A
+    :List, :Nil, :Cons, :A,
+    # Structure-directed levers (coverage campaign): Bool builtin ctors (Primitive
+    # generator) + the through-constructor-positive subject ctor (Positivity).
+    # Node tags (:prim/:eq/:refl/:rewrite/:int_lit/:float_lit) are fixed Serialize
+    # dispatch atoms, already interned by the code; only dynamic ctor/family names
+    # need listing here.
+    :Bool, :True, :False, :MkT
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

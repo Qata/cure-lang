@@ -74,13 +74,13 @@ defmodule Antigen.RunnerTest do
     assert r.infections >= 1
   end
 
-  test "default_gen has exactly 15 branches in the documented group order (guard)" do
+  test "default_gen has exactly 16 branches in the documented group order (guard)" do
     {:frequency, ws} = Mix.Tasks.Antigen.default_gen()
-    assert length(ws) == 15
-    # position 15 is the structure-directed Primitive generator — a :typed_term
-    # producer, so it joins the term-vertical group `t` for edge reweighting.
+    assert length(ws) == 16
+    # positions 15/16 are the structure-directed Primitive + Equality generators —
+    # both :typed_term producers, so they join the term-vertical group `t`.
     assert Antigen.Runner.gen_group_table() ==
-             %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15], m: [7, 8]}
+             %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16], m: [7, 8]}
   end
 
   test "kernel-law verticals run to completion with 0 infections on the sound kernel" do

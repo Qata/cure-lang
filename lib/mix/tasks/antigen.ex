@@ -155,7 +155,10 @@ defmodule Mix.Tasks.Antigen do
       # Structure-directed primitive arithmetic — the reachability lever for
       # Eval.fold / Kernel.infer_prim / numeric_type? (the Int/Float paths the
       # mode-directed term generator never emits).
-      {3, Antigen.Generators.Primitive.gen()}
+      {3, Antigen.Generators.Primitive.gen()},
+      # Propositional-equality fragment — refl / Eq-type / rewrite; the lever for
+      # the kernel's eq/refl/rewrite infer+eval+serialize+quote paths.
+      {3, Antigen.Generators.Equality.gen()}
     ])
   end
 
