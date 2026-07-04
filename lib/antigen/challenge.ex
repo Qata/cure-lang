@@ -108,7 +108,9 @@ defmodule Antigen.Challenge do
     # P/pc: parameterized indexed family (check_uniform_params / check_ctor_args)
     :P, :pc, :x,
     # Tg/Tgf: Int/Float-value-indexed families (rigid_index? int_lit/float_lit)
-    :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1
+    :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1,
+    # Malformed negative vertical: kind + undeclared names the kernel must reject
+    :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -194,6 +196,13 @@ defmodule Antigen.Challenge do
     ctx_pieces = ctx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"ctx#{i}", t} end)
     scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx)}
     {scaffold, ctx_pieces ++ [{"type", type}, {"term", term}]}
+  end
+
+  def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
+    %{sig: sig, ctx: ctx, term: term} = p
+    ctx_pieces = ctx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"ctx#{i}", t} end)
+    scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx)}
+    {scaffold, ctx_pieces ++ [{"term", term}]}
   end
 
   def to_pieces(%__MODULE__{kind: :mutant_term, payload: p}) do
@@ -327,6 +336,15 @@ defmodule Antigen.Challenge do
     }
 
     new(kind: :typed_term, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    len = scaffold["ctx_len"]
+    ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
+
+    payload = %{sig: String.to_existing_atom(scaffold["sig"]), ctx: ctx, term: Map.fetch!(pmap, "term")}
+    new(kind: :malformed, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:mutant_term, assay, label, seed, note, scaffold, pieces) do

@@ -168,7 +168,11 @@ defmodule Mix.Tasks.Antigen do
       {3, Antigen.Generators.DepMatch.gen()},
       # Indexed-family DECLARATION checking — the check_ctor → check_result_indices
       # path (result-index count/type validation); a family-shaped probe, group f.
-      {2, Antigen.Generators.IndexedDecl.gen()}
+      {2, Antigen.Generators.IndexedDecl.gen()},
+      # Malformed terms (NEGATIVE vertical) — the kernel must REJECT; the lever for
+      # infer's defensive rejection clauses (absurd/unknown_global/family/ctor,
+      # case-scrutinee-not-data, ensure_pi/ensure_eq guards).
+      {2, Antigen.Generators.Malformed.gen()}
     ])
   end
 
