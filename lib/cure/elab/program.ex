@@ -9,7 +9,7 @@ defmodule Cure.Elab.Program do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Core.Env
-  alias Cure.Elab.{Declarations, Erase, TotalityClosure}
+  alias Cure.Elab.{Declarations, Erase, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -27,7 +27,7 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast) do
-    with {:ok, imported} <- import_env(auto_prelude_imports(ast) ++ imports(ast), MapSet.new()),
+    with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
          env0 = merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
@@ -277,6 +277,135 @@ defmodule Cure.Elab.Program do
         {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  # Distinct {module_id, path} for every DIRECT import source, deduped by
+  # module_id. Used for the merged-slice list (§3.2 re-keying/merging operates
+  # only at this granularity — nested imports are pulled in automatically by
+  # each direct module's own recursive `module_slice_env`).
+  defp distinct_import_modules(sources) do
+    sources
+    |> Enum.map(&import_source_path/1)
+    |> Enum.flat_map(fn
+      {:ok, module_name, path} -> [{to_string(module_name), path}]
+      _ -> []
+    end)
+    |> Enum.uniq_by(fn {mod_id, _path} -> mod_id end)
+  end
+
+  # Every module reachable via the import graph (direct AND transitive),
+  # deduped by module_id, cycle-safe (BFS with a `seen` set). Collision
+  # DETECTION (family_owners, below) must scan this closure, not just the
+  # direct list: a family declared in a module reached only transitively
+  # (e.g. Std.Nat, pulled in solely because `priv/std/vector.cure` itself
+  # does `use Std.Nat`) still needs to be attributed to its owning module, or
+  # a local declaration of the same name is never classified as a collision
+  # and the disowning never happens for that family.
+  defp transitive_import_modules(sources), do: bfs_import_modules(sources, MapSet.new(), [])
+
+  defp bfs_import_modules([], _seen, acc), do: Enum.reverse(acc)
+
+  defp bfs_import_modules([source | rest], seen, acc) do
+    case import_source_path(source) do
+      {:ok, module_name, path} ->
+        mod_id = to_string(module_name)
+
+        if MapSet.member?(seen, mod_id) do
+          bfs_import_modules(rest, seen, acc)
+        else
+          nested =
+            with {:ok, src} <- File.read(path),
+                 {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+                 {:ok, nested_ast} <- Parser.parse(tokens, emit_events: false) do
+              imports(nested_ast)
+            else
+              _ -> []
+            end
+
+          bfs_import_modules(nested ++ rest, MapSet.put(seen, mod_id), [{mod_id, path} | acc])
+        end
+
+      _ ->
+        bfs_import_modules(rest, seen, acc)
+    end
+  end
+
+  # Family names DECLARED in a module's own source (transitive imports excluded).
+  defp owned_family_names(path) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+      declared_type_names(ast)
+    else
+      _ -> MapSet.new()
+    end
+  end
+
+  # Build ONE module's flat env slice (own decls + its own imports), as today.
+  defp module_slice_env(path) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         {:ok, env0} <- import_env(imports(ast), MapSet.new()),
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
+      TotalityClosure.certify_type_level(env)
+    end
+  end
+
+  # Delete residual bare keys for a colliding family name left by transitive copies.
+  defp drop_bare_family(%Env{} = env, name) do
+    ctors = for {c, f} <- env.ctor_to_family, f == name, into: [], do: c
+
+    %Env{
+      env
+      | families: Map.delete(env.families, name),
+        ctors: Map.drop(env.ctors, ctors),
+        ctor_to_family: Map.drop(env.ctor_to_family, [name | ctors])
+    }
+  end
+
+  # The full shadow-aware imported-env builder.
+  defp shadow_resolved_imports(ast) do
+    sources = auto_prelude_imports(ast) ++ imports(ast)
+    modules = distinct_import_modules(sources)
+
+    # Ownership scans the FULL transitive closure (not `modules`, which is
+    # direct-only) — see the Design note + `transitive_import_modules/1` doc.
+    family_owners =
+      sources
+      |> transitive_import_modules()
+      |> Enum.reduce(%{}, fn {mod_id, path}, acc ->
+        Enum.reduce(owned_family_names(path), acc, fn name, a ->
+          Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
+        end)
+      end)
+
+    local = declared_type_names(ast)
+    %{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
+
+    collisions =
+      losers |> Map.values() |> Enum.reduce(MapSet.new(), &MapSet.union/2)
+
+    with {:ok, merged} <-
+           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {mod_id, path}, {:ok, acc} ->
+             case module_slice_env(path) do
+               {:ok, slice} ->
+                 slice =
+                   case Map.get(losers, mod_id) do
+                     nil -> slice
+                     owned_losers -> Resolution.rekey_module_env(slice, mod_id, owned_losers)
+                   end
+
+                 {:cont, {:ok, merge_env(acc, slice)}}
+
+               {:error, _} = err ->
+                 {:halt, err}
+             end
+           end) do
+      # Drop residual bare copies of every collision name (transitive leftovers).
+      cleaned = Enum.reduce(collisions, merged, fn name, e -> drop_bare_family(e, name) end)
+      {:ok, cleaned, ambiguous}
+    end
   end
 
   defp import_source_env(:not_stdlib, _seen), do: {:ok, Env.empty()}

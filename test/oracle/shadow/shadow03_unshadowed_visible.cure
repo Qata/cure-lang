@@ -1,0 +1,5 @@
+mod PartialShadow
+  use Std.Nat
+  type Nat = Zero | Suc(Nat)
+  fn local_one() -> Nat = Suc(Zero())
+end

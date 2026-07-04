@@ -1,0 +1,1 @@
+{"shadow01_explicit_use_local_shadow":{"cure":"accept","idris":"accept","reason":"","relation":"same"},"shadow02_full_shadow":{"cure":"accept","idris":"accept","reason":"","relation":"same"},"shadow03_unshadowed_visible":{"cure":"accept","idris":"accept","reason":"","relation":"same"},"shadow08_transitive_shadow":{"cure":"accept","idris":"accept","reason":"","relation":"same"}}

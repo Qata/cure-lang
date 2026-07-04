@@ -23,4 +23,48 @@ defmodule Cure.Elab.TypeShadowingTest do
 
     assert {:ok, _env} = elaborate(src)
   end
+
+  test "R1 full: local `Nat = Z|S` fully shadows same-named imported ctors" do
+    src = """
+    mod FullShadow
+      use Std.Nat
+      type Nat = Z | S(Nat)
+      fn two() -> Nat = S(S(Z()))
+      fn pred(n: Nat) -> Nat = match n
+        Z() -> Z()
+        S(m) -> m
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
+
+  # R2 local half — the `imported_one`/`Std.Nat`-return half is restored in Task 8
+  # (it needs qualified type-slot resolution).
+  test "R2 (local half): local Zero/Suc still elaborate under `use Std.Nat`" do
+    src = """
+    mod PartialShadow
+      use Std.Nat
+      type Nat = Zero | Suc(Nat)
+      fn local_one() -> Nat = Suc(Zero())
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
+
+  test "R1 via transitive import: local `Nat` collides with a family reached only through `use Std.Vector` (no explicit `use Std.Nat`)" do
+    src = """
+    mod TransitiveShadow
+      use Std.Vector
+      type Nat = Zero | Suc(Nat)
+      fn two() -> Nat = Suc(Suc(Zero()))
+      fn pred(n: Nat) -> Nat = match n
+        Zero() -> Zero()
+        Suc(m) -> m
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
 end
