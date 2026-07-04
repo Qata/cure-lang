@@ -254,9 +254,20 @@ defmodule Cure.Elab.Elaborator do
       name == "refl" and length(args) == 1 ->
         [arg] = args
 
-        with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
-             term = {:refl, arg_term},
-             {:ok, type} <- Kernel.infer(ctx, term) do
+        # Surface `refl(x)` supplies the (erased, forced) witness explicitly; build
+        # the inductive ctor `refl : {w:a} -> Eq(a,w,w)` with `x` in the erased slot
+        # (dropped at runtime by erasure). Matching is the ordinary `refl()` ctor
+        # pattern. Retires the primitive `{:refl, x}` (spec 2026-07-04).
+        #
+        # A bare data ctor has no inference rule (`:ctor_requires_checking_mode`),
+        # so we synthesize refl's ONLY possible type — the reflexive `Eq(a, x, x)`
+        # over the witness's type/value — and have the kernel `check` the ctor
+        # against it (validating that `x` inhabits `a` and the indices unify).
+        with {:ok, arg_term, arg_type} <- elaborate_expr_typed(arg, names, ctx, env),
+             term = {:ctor, :refl, [arg_term]},
+             arg_val = Eval.eval(arg_term, Context.env(ctx)),
+             type = {:vdata, :Eq, [arg_type, arg_val, arg_val]},
+             :ok <- Kernel.check(ctx, term, type) do
           {:ok, term, type}
         end
 
@@ -736,8 +747,10 @@ defmodule Cure.Elab.Elaborator do
       name == "refl" and length(args) == 1 ->
         [arg] = args
 
+        # Checking-mode `refl(x)` — see the infer-mode note above. Build the
+        # inductive ctor and let the kernel check it against the expected `Eq`.
         with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
-             term = {:refl, arg_term},
+             term = {:ctor, :refl, [arg_term]},
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -984,8 +997,24 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A `rewrite` proof's type. The inductive identity type `Eq(a,x,y)` (spec
+  # 2026-07-04) infers to `{:vdata, :Eq, [a, x, y]}` (1 param + 2 indices); its
+  # `ty`/endpoints are that param and the two indices. The primitive `{:veq}` form
+  # is still produced by the internal transport machinery (retired later), so both
+  # are accepted.
   defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
+  defp eq_parts({:vdata, :Eq, [ty, a, b]}), do: {:ok, ty, a, b}
   defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
+
+  # Build the inductive identity type `Eq(ty, a, b)` and its `refl(x)` proof (spec
+  # 2026-07-04). The elaborator's transport/motive machinery constructs these —
+  # not the retiring primitive `{:eq}`/`{:refl}` — so that every Eq/refl which can
+  # reach user code (a `with … proof pf` binder, a returned equality) shares the
+  # single inductive representation user signatures elaborate to. The `{:rewrite}`
+  # eliminator node is still emitted as the internal transport mechanism; its
+  # kernel typing accepts either representation via `ensure_eq`.
+  defp mk_eq(ty, a, b), do: {:data, :Eq, [ty], [a, b]}
+  defp mk_refl(x), do: {:ctor, :refl, [x]}
 
   # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
   # default so ordinary elaboration is untouched; used to diagnose non-termination
@@ -1085,9 +1114,17 @@ defmodule Cure.Elab.Elaborator do
       # position would only *infer* the symmetric `Eq(ty_s, s', s')`.)
       const_motive =
         {:lam, ty_s,
-         {:eq, Subst.shift(ty_s, 1, 0), Subst.shift(s_nf, 1, 0), Subst.shift(s, 1, 0)}}
+         mk_eq(Subst.shift(ty_s, 1, 0), Subst.shift(s_nf, 1, 0), Subst.shift(s, 1, 0))}
 
-      bridge_proof = {:rewrite, {:refl, s_nf}, const_motive, {:refl, s_nf}}
+      # PROOF position: the outer `rewrite` INFERS this inner proof (kernel
+      # `infer({:rewrite,…})`), and a bare inductive `refl` ctor has no inference
+      # rule (`:ctor_requires_checking_mode`) — so the proof stays the PRIMITIVE
+      # `{:refl}` (infers `Eq(ty_s, s', s')`). The BODY is *checked* against the
+      # inductive `const_motive`, so it is the inductive `refl`; the inner rewrite's
+      # inferred result is an inductive `Eq(ty_s, s', s)` which the OUTER rewrite's
+      # widened `ensure_eq` consumes. (Bridge is internal transport; only the outer
+      # motive — abstracted from the user goal — is user-facing.)
+      bridge_proof = {:rewrite, {:refl, s_nf}, const_motive, mk_refl(s_nf)}
       {:ok, outer_motive} = motive_for(expected, s, ty_s)
 
       build = fn body ->
@@ -1118,9 +1155,9 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp symmetry_proof(proof, ty, a, _b) do
-    motive_body = {:eq, Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0)}
+    motive_body = mk_eq(Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0))
     motive = {:lam, ty, motive_body}
-    {:ok, {:rewrite, proof, motive, {:refl, a}}}
+    {:ok, {:rewrite, proof, motive, mk_refl(a)}}
   end
 
   defp motive_for(expected, target, ty), do: {:ok, {:lam, ty, abstract_term(expected, target, 0)}}
@@ -1343,7 +1380,7 @@ defmodule Cure.Elab.Elaborator do
                    idx_vals, param_vals, scrut_term, result_type_term, carried
                  ) do
             case_term = {:case, scrut_term, motive, branches}
-            {:ok, if(carried, do: {:app, case_term, {:refl, carried.idx_term}}, else: case_term)}
+            {:ok, if(carried, do: {:app, case_term, mk_refl(carried.idx_term)}, else: case_term)}
           end
 
         _ ->
@@ -1456,7 +1493,7 @@ defmodule Cure.Elab.Elaborator do
 
                 with {:ok, branches} <- elaborate_with_branches(arms, cfg) do
                   case_term = {:case, scrut_term, motive, branches}
-                  {:ok, {:app, case_term, {:refl, scrut_term}}}
+                  {:ok, {:app, case_term, mk_refl(scrut_term)}}
                 end
 
               true ->
@@ -1647,7 +1684,7 @@ defmodule Cure.Elab.Elaborator do
   # clear the extra Eq-arrow (proof) binder.
   defp eq_arrow_motive(scrut_type_term, scrut_term, g_abs) do
     eq_ty_w =
-      {:eq, Subst.shift(scrut_type_term, 1, 0), Subst.shift(scrut_term, 1, 0), {:var, 0}}
+      mk_eq(Subst.shift(scrut_type_term, 1, 0), Subst.shift(scrut_term, 1, 0), {:var, 0})
 
     {:lam, scrut_type_term, {:pi, eq_ty_w, Subst.shift(g_abs, 1, 0)}}
   end
@@ -1956,7 +1993,7 @@ defmodule Cure.Elab.Elaborator do
     {binder_types, body} = peel_lams(motive, k + 1, [])
 
     eq_dom =
-      {:eq, Subst.shift(idx_type_term, k + 1, 0), Subst.shift(idx_term, k + 1, 0), {:var, k - pos}}
+      mk_eq(Subst.shift(idx_type_term, k + 1, 0), Subst.shift(idx_term, k + 1, 0), {:var, k - pos})
 
     new_body = {:pi, eq_dom, Subst.shift(body, 1, 0)}
 
@@ -3342,7 +3379,7 @@ defmodule Cure.Elab.Elaborator do
     # branch_ctx0 frame (telescope bound). `Eq(T, idx, ctor_idx)` is the proof the
     # motive hands each branch (kernel checks the branch at `motive @ ctor_idx`).
     ctor_idx = Enum.at(result_indices, pos)
-    eq_dom_term = {:eq, Subst.shift(idx_type_term, arity, 0), Subst.shift(idx_term, arity, 0), ctor_idx}
+    eq_dom_term = mk_eq(Subst.shift(idx_type_term, arity, 0), Subst.shift(idx_term, arity, 0), ctor_idx)
     branch_ctx1 = Context.extend(branch_ctx0, Eval.eval(eq_dom_term, Context.env(branch_ctx0)))
 
     # Constants in branch_ctx1 (ctx + telescope + prf). `sc` shifts a ctx-frame
@@ -4035,10 +4072,20 @@ defmodule Cure.Elab.Elaborator do
 
           case elaborate_expr_typed(body_expr, [pname | names], ctx1, env) do
             {:ok, body_term, body_ty} ->
+              # `body_ty_term` may carry a flat `{:data, name, params ++ indices, []}`
+              # for an indexed family (`Quote.reify` without a sig cannot split a
+              # `{:vdata}`). That is fine here: `Unify.unify` whnf-normalises the pair
+              # at depth 0 through `whnf_meta_aware`, whose `Quote.reify(depth, sig)`
+              # re-splits any indexed-family value before the Miller solve — so the
+              # codomain metavariable (`?P := λn. Eq(Nat,n,n)`, ledger #10) is stored
+              # correctly split and the later `P(Zero)` check does not trip
+              # `check_spine`'s `:arg_arity`.
               body_ty_term = Quote.reify(body_ty, Context.length(ctx1))
 
               case Unify.unify({:pi, dom_term, cod_term}, {:pi, dom_term, body_ty_term}, mctx, env) do
-                {:ok, mctx} -> {:ok, mctx, {:lam, dom_term, body_term}}
+                {:ok, mctx} ->
+                  {:ok, mctx, {:lam, dom_term, body_term}}
+
                 {:error, _} -> :fallthrough
               end
 

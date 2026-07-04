@@ -808,10 +808,6 @@ defmodule Cure.Elab.Declarations do
           idx = Enum.find_index(scope, &(&1 == name)) ->
             {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
 
-          atom == :Eq and length(core_args) == 3 ->
-            [ty, a, b] = core_args
-            {:ok, {:eq, ty, a, b}}
-
           atom == fam or Inductive.family?(env, atom) ->
             # Split the applied arguments into the family's parameters (prefix) and
             # indices (suffix); the kernel checks each slot against its own

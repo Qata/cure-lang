@@ -11,7 +11,10 @@ defmodule Cure.Compiler.DependentProofSurfaceTest do
 
     assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
     assert mod == :"Cure.ProofReflOnly"
-    assert apply(mod, :zero_refl, []) == :cure_refl
+    # `refl` is now a genuine inductive constructor with an ERASED witness, so it
+    # lowers to the canonical nullary ctor tag `:refl` (retiring the faking-era
+    # `:cure_refl` sentinel — spec 2026-07-04-identity-type-as-inductive).
+    assert apply(mod, :zero_refl, []) == :refl
   end
 
   test "surface rewrite proves plus right identity for Nat" do
@@ -29,8 +32,9 @@ defmodule Cure.Compiler.DependentProofSurfaceTest do
 
     assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
     assert mod == :"Cure.ProofPlusZero"
-    assert apply(mod, :plus_zero_right, [:Z]) == :cure_refl
-    assert apply(mod, :plus_zero_right, [{:S, :Z}]) == :cure_refl
+    # Both branches reduce to the erased inductive `refl` ctor tag (see note above).
+    assert apply(mod, :plus_zero_right, [:Z]) == :refl
+    assert apply(mod, :plus_zero_right, [{:S, :Z}]) == :refl
   end
 
   test "refl is rejected when equality endpoints are not definitionally equal" do
