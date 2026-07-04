@@ -81,6 +81,12 @@ R5. **Shadow-aware diagnostics.** Using a shadowed constructor where the in-scop
 R6. **No regression.** Every currently-green program elaborates unchanged; the
     non-collision path is byte-for-byte identical. The 2843/0 suite and the oracle
     replay stay green.
+R7. **Import-vs-import ambiguity is a hard error, not silent clobber.** When ≥2
+    *distinct* imported modules provide the same family name and no local
+    declaration shadows it, unqualified use of that name is a compile error
+    listing the qualified alternatives (§3.4); both remain reachable qualified.
+    "Distinct" excludes the same module reached twice (see R6/§3.1) — that is
+    not ambiguity, it is a no-op re-import.
 
 ## 3. Approach B — resolution layer over bare atoms
 
@@ -96,6 +102,27 @@ known (both available in `program.ex check_ast/1` before/at
 (a) each imported module and (b) the local module. A **collision** is any family
 name provided by ≥2 distinct sources. Detection covers **both** local-vs-import
 **and** import-vs-import.
+
+**"Distinct sources" means distinct resolved module identities (canonical dotted
+path), deduplicated *before* counting — not raw entries in the import list and
+not per-transitively-reached copy.** This dedup is required, not optional,
+because the ubiquitous case already exercises it today: `program.ex
+auto_prelude_imports/1` excludes a prelude module only for self-reference or a
+*local* same-named type declaration — it does **not** check whether the module
+also appears in the explicit `use` list. So any module with no local `Nat` that
+writes `use Std.Nat` already has `"Std.Nat"` in `auto_prelude_imports(ast) ++
+imports(ast)` twice (auto-prelude + explicit), and `import_env`'s `seen`
+MapSet is not threaded across sibling top-level imports, so both copies are
+independently resolved. Separately, `priv/std/vector.cure` itself does `use
+Std.Nat`, so a program combining `use Std.Vector` + `use Std.Nat` reaches
+family `Nat` via two import paths — a real diamond dependency in the stdlib
+today, not a hypothetical. Both cases already elaborate cleanly under today's
+idempotent `merge_env` (Map.merge of identical content is a no-op). Collision
+detection MUST recognize "same resolved module, reached N times" as **one**
+source contributing `N`'s family once — never triggering re-keying or the
+R7 ambiguity error — or it regresses R6 on the single most common import
+pattern in the suite. Only genuinely distinct modules (different canonical
+dotted path) providing the same family name count toward a collision.
 
 **Interaction with the auto-prelude skip.** `program.ex auto_prelude_imports/1`
 today *skips* auto-importing `Std.Bool`/`Std.Nat` when the module declares a
@@ -123,9 +150,16 @@ For each colliding family name `N`:
   - `ctors`: move each `:C` → `:"<Module>#C"` (ctor record's `name` field updated
     — see §3.5 for the runtime-tag caveat).
   - `ctor_to_family`: repoint each re-keyed ctor to the re-keyed family.
-  - `defs`: rewrite the imported module's Core terms so every `{:data, :N, …}`,
-    `{:ctor, :C, …}`, and any embedded family/ctor atom is substituted to its
-    re-keyed atom (a pure atom-substitution walk over the term forms).
+  - `defs`: rewrite the imported module's Core terms so every occurrence of a
+    re-keyed atom is substituted, across **all three** bare-atom positions
+    `lib/cure/core/term.ex` defines (a literal walk must hit each): `{:data, :N,
+    params, indices}`, `{:ctor, :C, args}`, **and** a `:case` branch tag —
+    `:case` branches are `{cname, arity, body}` tuples where `cname` is a bare
+    constructor atom, *not* wrapped in `{:ctor, …}` (see `term.ex` `shift/3`,
+    `subst/3`). Missing the branch-tag position would silently leave a
+    re-keyed module's own pattern matches tagged with the old bare name,
+    reintroducing the exact coverage bug this spec fixes, only inside the
+    losing import instead of the local module.
 - **Constructor-name collisions within a re-keyed family are harmless**: local `Z`
   and re-keyed `:"Std.Nat#Z"` are distinct keys; both may exist.
 
@@ -145,7 +179,19 @@ mapping from qualified surface paths to registry keys:
 - `"Std.Nat.Nat"` → same as `"Std.Nat"` (both spellings accepted).
 
 The table also retains **shadowed-but-present** names (which bare surface name is
-now only reachable qualified, and from which module) to power R5's diagnostics.
+now only reachable qualified, and from which module) to power R5's diagnostics,
+and, separately, **ambiguous** names (a bare name provided by ≥2 distinct
+non-winning imports with no local declaration, plus the list of candidate
+modules) to power R7's diagnostic (§3.4). Both sets must be consulted by the
+*ordinary* bare-name resolution path — `resolve_index_name` for types
+(`declarations.ex`), and the bare-`{:variable,…}`/`constructor_pattern`
+lookups for values/patterns (`elaborator.ex`) — **before** it falls through to
+today's plain lookup. Without this, an ambiguous `N` (re-keyed off the bare
+atom on both sides, since neither import is a winner) would simply be
+*absent* from `families`/`ctors` and fall through to the existing
+unbound-global/unknown-constructor path, producing a generic "not found"
+error instead of `{:ambiguous_name,…}` — the same anchor-point mistake §5
+identifies and fixes for the shadowed-constructor case.
 
 The table is threaded into elaboration. It lives in the E-layer (NOT in the core
 `Env` struct) — e.g. carried on the elaboration context/`names` environment or a
@@ -174,21 +220,83 @@ enforced entirely at compile time, and BEAM ADTs routinely share tags across typ
 
 ### 3.6 Qualified reference resolution in the elaborator
 
-Qualified references parse as nested `{:attribute_access, [attribute: seg], [base]}`
-chains (`Std.Nat.Z` → `attribute_access("Z", attribute_access("Nat", var "Std"))`).
-The dependent elaborator currently handles `attribute_access` only for tuple
-projection. Extend it so that, **when the flattened dotted path resolves in the
-resolution table** to a type or constructor key:
-- In a **type slot** (`idx_to_core` / type-expression elaboration,
-  `declarations.ex`): `Std.Nat` / `Std.Nat.Nat` → `{:data, <key>, params, indices}`.
-- In an **expression / pattern position** (`elaborator.ex`): `Std.Nat.Z` →
-  the constructor reference/pattern for `<ctor key>`.
-- A dotted path that does **not** resolve to a type/ctor falls through to the
-  existing tuple-projection / attribute behavior unchanged (no regression).
+**Two distinct AST shapes carry a qualified name, and both must be
+intercepted — they are not interchangeable.**
 
-Path flattening reuses the parser's dotted-path handling shape
-(`extract_dotted_path`); the leading segment(s) form the module path, the last
-segment the type/ctor name.
+**(a) No-call reference** (`Std.Nat` alone, no parens — the shape a
+*nullary* type reference takes in a type slot, e.g. R4's own example; `Nat`
+itself has no parameters) parses as nested `{:attribute_access, [attribute:
+seg], [base]}` chains (`Std.Nat` → `attribute_access("Nat", var "Std")`). The
+dependent elaborator currently handles `attribute_access` for σ-tuple
+projection (`p.1`/`p.2`) and, in `elaborator.ex`'s expression/pattern path
+only (`record_projection/5`), single-constructor record field access
+(`obj.field`); `declarations.ex`'s type-slot path (`idx_to_core`) handles only
+`.1`/`.2` and errors `{:bad_projection, _}` on anything else — there is
+currently no type-slot handling of a dotted module/type path at all. Note a
+qualified reference to a *parameterized/indexed* family (e.g.
+`Std.Vector(Nat)`, mirroring the existing `Vector(a: Type) indices (n: Nat)`
+declaration in `priv/std/vector.cure`) is **not** this shape — like a
+constructor application, it is parsed as a call, so it falls under (b)
+instead (see the third call site there, `idx_to_core`'s own `function_call`
+clause). A type-slot qualified reference is shape (a) only when the
+referenced family is nullary.
+
+**(b) Call-syntax reference** (`Std.Nat.Z(x)` or `Std.Nat.Z()` — and every
+constructor in this codebase and in this spec's own examples is written with
+explicit call parens, including nullary ones: `Zero()`, `None()`, `Z()`) is
+**flattened by the parser itself, before elaboration ever sees it**: `parse_call`
+in `lib/cure/compiler/parser.ex` calls `extract_call_name/1` (line ~658),
+which for an `attribute_access`-shaped callee calls `extract_dotted_path/1`
+(line ~674) and joins the segments with `.` into a single **string**, so
+`Std.Nat.Z(x)` parses directly as `{:function_call, [name: "Std.Nat.Z"], [x]}`
+— **no `attribute_access` node survives**. Consequently:
+- `constructor_pattern/1` (`elaborator.ex` ~3174), which does `cname =
+  meta |> Keyword.fetch!(:name) |> String.to_atom()`, would turn a qualified
+  pattern into the atom `:"Std.Nat.Z"` (dot-separated, from the parser) —
+  which matches neither the bare key `:Z` nor the re-keyed registry key
+  `:"Std.Nat#Z"` (hash-separated, from §3.2). Looked up as-is, it is simply
+  unknown.
+- `elaborate_named_call/5` (`elaborator.ex` line 171), which does the same
+  `String.to_atom(name)` before `Inductive.get_ctor(env, atom)`, has the
+  identical problem for a qualified constructor used as an *expression*
+  (`Std.Nat.Z(x)` on the right of `=`, in a call, etc.).
+- `idx_to_core`'s own `{:function_call, fmeta, args}` clause (`declarations.ex`
+  line ~726), which does `name = Keyword.fetch!(fmeta, :name); atom =
+  String.to_atom(name)`, has the identical problem for a qualified
+  *parameterized* type reference in a type slot (`Std.Vector(Nat)`, mirroring
+  the existing `Vector(a: Type) indices (n: Nat)` declaration in
+  `priv/std/vector.cure`) — this is the one type-slot case that is call
+  syntax, not shape (a).
+- All three call sites above must, **before** falling back to a plain-atom
+  registry lookup, check whether `name` contains a `.` and — if so — look it
+  up **directly** (as the full dotted string, e.g. `"Std.Nat.Z"`) in the
+  resolution table (§3.3), which is already keyed by exactly these
+  full dotted-path strings — no further splitting is needed, the table does
+  that bookkeeping once at collision-detection time (§3.1/§3.2). Only a
+  resolution-table miss falls back to `String.to_atom(name)`/
+  `Inductive.get_ctor`. This is the primary implementation site for R3's
+  escape hatch and for R5's pattern diagnostics (§5) — **not** the
+  `attribute_access` extension in (a), which only ever fires for the
+  no-parens (nullary-reference) case.
+
+For all three call sites, **when the flattened dotted path resolves in the
+resolution table** to a type or constructor key:
+- In a **type slot** (`declarations.ex`): a nullary reference (shape (a),
+  `idx_to_core`'s `attribute_access` clause) `Std.Nat` / `Std.Nat.Nat` →
+  `{:data, <key>, [], []}`; a parameterized reference (shape (b),
+  `idx_to_core`'s `function_call` clause) `Std.Vector(Nat)` → `{:data, <key>,
+  params, indices}` built from the call's own args exactly as the existing
+  bare-name case already does.
+- In an **expression / pattern position** (`elaborator.ex`, shape (b) via
+  `constructor_pattern`/`elaborate_named_call`, or shape (a) for a bare
+  parenless value reference if the grammar permits one): `Std.Nat.Z` → the
+  constructor reference/pattern for `<ctor key>`.
+- A dotted path that does **not** resolve to a type/ctor falls through to the
+  existing behavior unchanged for its call site — the `attribute_access`
+  clauses fall through to tuple-projection/attribute/`{:bad_projection,_}`
+  behavior; the three `function_call`-shaped clauses fall through to their
+  existing plain-atom `Inductive.get_ctor`/global lookup (no regression
+  either way).
 
 ## 4. Worked examples
 
@@ -197,28 +305,44 @@ segment the type/ctor name.
 | `use Std.Nat` (Z\|S) + local `Nat = Zero\|Suc` | `Nat`,`Zero`,`Suc` → local; `Z`,`S` → imported (R2) | `Std.Nat` → imported type; `Std.Nat.Z` → imported ctor |
 | `use Std.Nat` (Z\|S) + local `Nat = Z\|S` | `Nat`,`Z`,`S` → local (imported fully shadowed, R1) | `Std.Nat.Z` → imported ctor (still reachable, R3) |
 | `use Std.Nat` only, no local `Nat` | `Nat`,`Z`,`S` → imported (unchanged) | `Std.Nat.Z` also works |
-| `use A` + `use B`, both define `Nat`, no local | bare `Nat` → `{:ambiguous_name,…}` (R3.4) | `A.Nat` / `B.Nat` each resolve |
+| `use A` + `use B`, both define `Nat`, no local | bare `Nat` → `{:ambiguous_name,…}` (R7, mechanism §3.4) | `A.Nat` / `B.Nat` each resolve |
 
 ## 5. Diagnostics (R5)
 
 The resolver retains, per bare surface name, whether it is *shadowed* (present in
 an import but not the unqualified winner) and its origin module + sibling ctor set.
-Two shadow-aware errors replace the generic ones **only when a shadow is in play**:
 
-- **Wrong shadowed constructor in a pattern/coverage context.** Matching `Z()` on a
-  scrutinee whose in-scope family is the local `Nat = Zero | Suc`:
-  `{:shadowed_ctor, ctor: :Z, shadowed_module: "Std.Nat", local_family: :Nat,
-    local_ctors: [:Zero, :Suc], hint: "Std.Nat.Z"}`
-  rendered as: *"`Z` is a constructor of `Std.Nat`, which is shadowed here by the
-  local `Nat` (constructors `Zero`, `Suc`). Write `Std.Nat.Z` to use the shadowed
-  constructor."*
-- **Missing branch that is actually a shadow artifact** — if coverage would report
-  `{:missing_branch, C}` for a constructor `C` that belongs to a *shadowed* family
-  rather than the scrutinee's family, emit the `:shadowed_ctor`-style hint instead
-  of the bare `:missing_branch`.
+**Anchor point.** After re-keying (§3.2), a shadowed constructor's bare atom
+(`:Z`) is *moved off* the registry entirely — it is not merely misfiled to the
+wrong family. So a bare pattern `Z()` on a scrutinee of the local `Nat = Zero |
+Suc` does **not** reach `Inductive.ctor_family(sig, cname) != dname`
+(`{:foreign_ctor,_}`); it fails the *earlier* gate, `Inductive.get_ctor(env,
+cname) == nil`, in both `partition_arms` (`elaborator.ex` ~2778) and
+`partition_rematch_arms` (~1267), which today produces
+`{:unknown_pattern_constructor, cname}`. **This is the error the shadow-aware
+diagnostic must intercept** — not `{:foreign_ctor,_}`. Concretely, right
+before raising `{:unknown_pattern_constructor, cname}`, check the resolution
+table's shadowed-but-present list for `cname`; if present, raise instead:
 
-When no shadow is in play, the existing `{:foreign_ctor,_}` / `{:missing_branch,_}`
-errors are unchanged (R6).
+`{:shadowed_ctor, ctor: :Z, shadowed_module: "Std.Nat", local_family: :Nat,
+  local_ctors: [:Zero, :Suc], hint: "Std.Nat.Z"}`
+rendered as: *"`Z` is a constructor of `Std.Nat`, which is shadowed here by the
+local `Nat` (constructors `Zero`, `Suc`). Write `Std.Nat.Z` to use the shadowed
+constructor."*
+
+A constructor that is genuinely unknown (never declared, anywhere) still
+raises the unchanged `{:unknown_pattern_constructor,_}` (R6). `{:foreign_ctor,
+cname}` also stays reachable and unchanged: it now fires when `cname` exists
+in the registry (under its own bare or re-keyed name, found via the table) but
+names a *different, non-shadowed* family than the scrutinee's — the ordinary
+cross-family mismatch this error already covers.
+
+Note there is deliberately no separate "missing branch that is actually a
+shadow artifact" case: `ctors_of(dname)` (the source of `{:missing_branch,_}`)
+only ever enumerates `dname`'s own, already-disowned constructor set (§3.2) —
+a shadowed constructor cannot appear there post-re-key, so it cannot surface
+as a `{:missing_branch,_}`. Every shadow-related diagnostic is caught earlier,
+at the unknown-constructor gate above.
 
 ## 6. Test strategy (TDD, differential oracle)
 
@@ -236,15 +360,31 @@ Oracle cluster `shadow` (new), probes:
   still refers to imported `Std.Nat`. Target `same` (both accept, both resolve to
   imported).
 - **shadow04** — R3 escape hatch: after a local shadow, `Std.Nat.Z` /
-  `Std.Nat` used explicitly. Target `same`.
+  `Std.Nat` used explicitly. `Nat` is nullary, so this probe exercises two of
+  the three call sites in §3.6 — `constructor_pattern` and
+  `elaborate_named_call` (§3.6(b); the parameterized-type `idx_to_core`
+  `function_call` site is not reachable via `Nat` and is not this probe's
+  concern) — plus the nullary type-slot site (§3.6(a), `idx_to_core`'s
+  `attribute_access` clause). Assert all three, separately:
+  `Std.Nat.Z()` in **pattern** position (`constructor_pattern`); building a
+  value with `Std.Nat.S(Std.Nat.Z())` in **expression** position
+  (`elaborate_named_call`); and `Std.Nat` / `Std.Nat.Nat` in a **type slot**.
+  A probe that exercises only one path could pass while another is still
+  broken. Target `same` for each.
 - **shadow05** — R4 collapse: `Std.Nat` in a type slot (no `.Nat`). Target `same`.
 - **shadow06** — R5 diagnostic: match a shadowed ctor on the wrong family; assert
   the specific `:shadowed_ctor` error (Cure-only unit assertion; Idris side is a
   parallel type error — relation `cure_stricter`/documented, or an idris probe that
   also errors → `same` on *reject*, with the reason pinned to the message).
-- **shadow07** — R3.4 ambiguity: two imports both defining `Nat`, no local, bare
-  use → `{:ambiguous_name,…}`. (Constructed with a scratch second stdlib-style
-  module if none exists; relation documents the deliberate reject.)
+- **shadow07** — R7 ambiguity (mechanism §3.4): two *distinct* imports both
+  defining `Nat`, no local, bare use → `{:ambiguous_name,…}`. Must use two
+  genuinely distinct modules (e.g. scratch stdlib-shaped sources `Std.Foo` /
+  `Std.Bar` each declaring `type Nat`) — not the same module reached twice via
+  auto-prelude + explicit `use`, or via a diamond such as `use Std.Vector` +
+  `use Std.Nat` (`priv/std/vector.cure` itself does `use Std.Nat`), both of
+  which are the same source deduplicated per §3.1 and must NOT trigger this
+  error. (Constructed with a scratch second stdlib-style module since none
+  exists today; relation documents the deliberate reject.)
 
 Unit tests (behavioral, immutable once green):
 - `test/cure/elab/type_shadowing_test.exs` — the R1–R5 cases at
@@ -283,9 +423,36 @@ Gate (run once, alone — never concurrent suites):
   entirely before the kernel sees a term.
 - **Contained C touch** (`lib/cure/compiler/codegen.ex`) — strip `Mod#` prefix for
   runtime tags; escape-hatch path only.
-- **Chief risk:** a missed collision silently reverting to clobber. Mitigated by
-  detecting *all* family-name collisions (import-vs-import included) with a simple
-  set-comparison, and by shadow07/shadow0x probes. The re-key term-rewrite is a
-  bounded pure atom substitution over one module's `defs`, unit-tested directly.
+- **Chief risks (two, opposite directions):**
+  1. *Under-detection* — a missed collision silently reverting to clobber.
+     Mitigated by detecting *all* family-name collisions (import-vs-import
+     included) with a simple set-comparison, and by shadow07/shadow0x probes.
+  2. *Over-detection* — flagging the same module reached twice (auto-prelude +
+     explicit `use`, or a diamond like `use Std.Vector` + `use Std.Nat`) as a
+     false collision. This is the higher-probability risk in practice, since
+     it hits the single most common import pattern rather than an edge case
+     (§3.1). Mitigated by deduplicating on resolved module identity *before*
+     counting sources.
+  3. *Wrong intercept point* — routing qualified-name resolution only through
+     `attribute_access` would silently no-op for every constructor written
+     with call syntax (the universal convention here) and for any qualified
+     *parameterized* type reference, since the parser flattens
+     `Mod.Sub.Name(...)` into a plain dotted-string function-call name before
+     `attribute_access` ever exists (§3.6). Mitigated by wiring the
+     resolution-table lookup into all three affected call sites directly —
+     `constructor_pattern`, `elaborate_named_call`, and `idx_to_core`'s
+     `function_call` clause — not only into `attribute_access`.
+  4. *Diagnostics never firing* — both R5's `:shadowed_ctor` and R7's
+     `:ambiguous_name` describe a name that, post-re-keying, is simply
+     *absent* from the bare-atom registry. If the ordinary bare-name lookup
+     paths (pattern/expression/type-slot) aren't each explicitly taught to
+     check the resolution table's shadowed/ambiguous sets *before* falling
+     through to their existing not-found error, both diagnostics silently
+     degrade to a generic `{:unknown_pattern_constructor,_}` / unbound-global
+     error instead of firing. Mitigated by the anchor-point call-site list in
+     §5 (R5) and §3.3 (R7).
+  The re-key term-rewrite is a bounded pure atom substitution over one
+  module's `defs` — including `:case` branch tags, a bare-atom position
+  distinct from `{:ctor,…}` (§3.2) — unit-tested directly.
 - **Regression guard:** non-collision path is a no-op; R6 asserted by the full
   suite + replay.
