@@ -172,7 +172,11 @@ defmodule Mix.Tasks.Antigen do
       # Malformed terms (NEGATIVE vertical) — the kernel must REJECT; the lever for
       # infer's defensive rejection clauses (absurd/unknown_global/family/ctor,
       # case-scrutinee-not-data, ensure_pi/ensure_eq guards).
-      {2, Antigen.Generators.Malformed.gen()}
+      {2, Antigen.Generators.Malformed.gen()},
+      # Serialization roundtrip (metamorphic) — decode ∘ encode = id over every
+      # serialisable shape; the lever for Serialize's DECODE path (tokenize/parse/
+      # build/build_node) which the banking-only campaign never replays.
+      {2, Antigen.Generators.Serialization.gen()}
     ])
   end
 

@@ -110,7 +110,9 @@ defmodule Antigen.Challenge do
     # Tg/Tgf: Int/Float-value-indexed families (rigid_index? int_lit/float_lit)
     :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1,
     # Malformed negative vertical: kind + undeclared names the kernel must reject
-    :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef
+    :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef,
+    # Serialization roundtrip vertical: kind + label
+    :serialize, :lossless
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -197,6 +199,8 @@ defmodule Antigen.Challenge do
     scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx)}
     {scaffold, ctx_pieces ++ [{"type", type}, {"term", term}]}
   end
+
+  def to_pieces(%__MODULE__{kind: :serialize, payload: %{term: t}}), do: {%{}, [{"term", t}]}
 
   def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
     %{sig: sig, ctx: ctx, term: term} = p
@@ -337,6 +341,9 @@ defmodule Antigen.Challenge do
 
     new(kind: :typed_term, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
+
+  def from_pieces(:serialize, assay, label, seed, note, _scaffold, [{"term", t}]),
+    do: new(kind: :serialize, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)

@@ -30,6 +30,8 @@ defmodule Antigen.Coverage do
   def terms_of(%Challenge{kind: :malformed, payload: %{ctx: ctx, term: term}}),
     do: [term | ctx]
 
+  def terms_of(%Challenge{kind: :serialize, payload: %{term: term}}), do: [term]
+
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 
