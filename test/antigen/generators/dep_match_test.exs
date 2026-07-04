@@ -42,5 +42,11 @@ defmodule Antigen.Generators.DepMatchTest do
 
     # a variable-index scrutinee (ctx carries a Nat binder) → both branches reachable
     assert Enum.any?(sample, fn c -> match?({:data, :Vec, _, [{:var, _}]}, hd(c.payload.ctx)) end)
+
+    # a two-index diagonal Sq scrutinee with DISTINCT index vars → forces a ≡ b
+    # (the bind_index merge / unify_spine tail).
+    assert Enum.any?(sample, fn c ->
+             match?({:data, :Sq, _, [{:var, _}, {:var, _}]}, hd(c.payload.ctx))
+           end)
   end
 end

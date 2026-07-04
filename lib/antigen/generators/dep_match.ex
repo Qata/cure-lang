@@ -67,9 +67,35 @@ defmodule Antigen.Generators.DepMatch do
       # replace_branch_vars over Eq / Σ / Π type shapes.
       {2, var_index_extra({:eq, @nat, {:var, 1}, {:var, 1}})},
       {2, var_index_extra({:sigma, @nat, vec({:var, 2})})},
-      {2, var_index_extra({:pi, @nat, vec({:var, 2})})}
+      {2, var_index_extra({:pi, @nat, vec({:var, 2})})},
+      # TWO-index diagonal family Sq — matching forces a ≡ b, the only v1 shape
+      # that reaches unify_spine (2-index spine) + bind_index's merge path.
+      {3, sq_diag()},
+      {2, sq_closed(@z, @z)},
+      {2, sq_closed(@z, {:ctor, :S, [@z]})}
     ])
   end
+
+  # Γ = [ s : Sq a b (idx 0), b : Nat (idx 1), a : Nat (idx 2) ]; matching mksq
+  # unifies the diagonal result index against both a and b → forces a ≡ b.
+  defp sq_diag do
+    Gen.bind(numeral(), fn body ->
+      term = mk_case({:var, 0}, sq_motive(), [{:mksq, 1, body}])
+      Gen.return({[sq({:var, 1}, {:var, 0}), @nat, @nat], term, @nat})
+    end)
+  end
+
+  # Closed Sq indices: Sq Z Z (mksq trivial) / Sq Z (S Z) (mksq :impossible).
+  defp sq_closed(i, j) do
+    Gen.bind(numeral(), fn body ->
+      term = mk_case({:var, 0}, sq_motive(), [{:mksq, 1, body}])
+      Gen.return({[sq(i, j)], term, @nat})
+    end)
+  end
+
+  defp sq(i, j), do: {:data, :Sq, [], [i, j]}
+  # λi.λj.λv:Sq i j. Nat  (v's frame: i = var 2, j = var 1)
+  defp sq_motive, do: {:lam, @nat, {:lam, @nat, {:lam, sq({:var, 2}, {:var, 1}), @nat}}}
 
   # Γ = [ p : extra_ty (idx 0), xs : Vec n (idx 1), n : Nat (idx 2) ] where
   # extra_ty mentions n (var 1 from p's frame). Scrutinee is xs (var 1). When a

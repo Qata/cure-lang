@@ -98,7 +98,9 @@ defmodule Antigen.Challenge do
     # need listing here.
     :Bool, :True, :False, :MkT,
     # parametric positivity generator: subject family + ctor/binder name pools
-    :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2
+    :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2,
+    # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
+    :Sq, :mksq, :j
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

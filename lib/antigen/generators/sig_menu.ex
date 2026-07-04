@@ -80,6 +80,15 @@ defmodule Antigen.Generators.SigMenu do
       |> Inductive.declare(Inductive.family(:Bool, [], [], 0),
         [Inductive.ctor(:False, [], []), Inductive.ctor(:True, [], [])])
       |> Inductive.register_builtin(:bool, :Bool)
+      # Sq : (i:Nat)(j:Nat) -> Type0, ctor mksq : (n:Nat) -> Sq n n. A TWO-index
+      # family with a DIAGONAL constructor — matching `s : Sq a b` on mksq unifies
+      # both result indices `n` against `a` and `b`, pinning `n` twice, so it forces
+      # `a ≡ b`. This is the only v1 shape that reaches the kernel's multi-index
+      # unification tail: `unify_spine` (2-index spine), `bind_index`'s merge/
+      # resolve-before-bind path, and `head_key` (index refinement, not just Vec's
+      # single Nat index). Consumed by Generators.DepMatch's Sq variant.
+      |> Inductive.declare(Inductive.family(:Sq, [], [{:i, nat()}, {:j, nat()}], 0),
+        [Inductive.ctor(:mksq, [{:n, nat()}], [{:var, 0}, {:var, 0}])])
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}
