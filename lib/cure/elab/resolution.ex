@@ -152,4 +152,50 @@ defmodule Cure.Elab.Resolution do
       end
     end)
   end
+
+  @doc """
+  Resolve a flattened dotted surface path (`"Std.Nat.Z"`) to a registry key,
+  trying the qualified `:"Mod#Name"` key FIRST and a bare-atom key second (the
+  ordering is load-bearing: under a local shadow the loser is only reachable at
+  its qualified key, and a bare fallback must never grab the local winner —
+  which is safe precisely because a shadowed import is always re-keyed, so its
+  bare key is absent). `slot` selects type vs value candidate shapes.
+  """
+  @spec resolve_qualified(Env.t(), String.t(), :type | :value) :: {:ok, atom()} | :error
+  def resolve_qualified(%Env{} = env, dotted, :value) do
+    segs = String.split(dotted, ".")
+    {mod_segs, [last]} = Enum.split(segs, length(segs) - 1)
+    mod = Enum.join(mod_segs, ".")
+    try_keys(env, [rekey_atom(mod, String.to_atom(last)), String.to_atom(last)], :value)
+  end
+
+  def resolve_qualified(%Env{} = env, dotted, :type) do
+    segs = String.split(dotted, ".")
+    last = List.last(segs)
+    {mod_segs, [explicit_last]} = Enum.split(segs, length(segs) - 1)
+
+    candidates = [
+      # module==typename collapse: whole path is the module, name repeats the tail.
+      rekey_atom(dotted, String.to_atom(last)),
+      # explicit Mod.Type spelling.
+      rekey_atom(Enum.join(mod_segs, "."), String.to_atom(explicit_last)),
+      # unshadowed bare fallback.
+      String.to_atom(last)
+    ]
+
+    try_keys(env, candidates, :type)
+  end
+
+  defp try_keys(env, keys, slot) do
+    present? =
+      case slot do
+        :type -> fn k -> Inductive.family?(env, k) end
+        :value -> fn k -> not is_nil(Inductive.get_ctor(env, k)) end
+      end
+
+    case Enum.find(keys, present?) do
+      nil -> :error
+      key -> {:ok, key}
+    end
+  end
 end

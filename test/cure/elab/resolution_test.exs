@@ -133,4 +133,40 @@ defmodule Cure.Elab.ResolutionTest do
       assert out.losers == %{"Std.Foo" => MapSet.new([:Nat]), "Std.Bar" => MapSet.new([:Nat])}
     end
   end
+
+  describe "resolve_qualified/3" do
+    setup do
+      # env where Std.Nat has been re-keyed (loser), and an unshadowed Std.Bool.
+      env =
+        %Cure.Core.Env{}
+        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:"Std.Nat#Nat", [], [], 0),
+             [Cure.Core.Inductive.ctor(:"Std.Nat#Z", [], []),
+              Cure.Core.Inductive.ctor(:"Std.Nat#S", [{:n, {:data, :"Std.Nat#Nat", [], []}}], [])])
+        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:Bool, [], [], 0),
+             [Cure.Core.Inductive.ctor(:True, [], []), Cure.Core.Inductive.ctor(:False, [], [])])
+
+      %{env: env}
+    end
+
+    test "value path resolves a re-keyed ctor", %{env: env} do
+      assert Cure.Elab.Resolution.resolve_qualified(env, "Std.Nat.Z", :value) == {:ok, :"Std.Nat#Z"}
+    end
+
+    test "type path resolves via module==typename collapse", %{env: env} do
+      assert Cure.Elab.Resolution.resolve_qualified(env, "Std.Nat", :type) == {:ok, :"Std.Nat#Nat"}
+    end
+
+    test "type path resolves the explicit .Nat spelling identically", %{env: env} do
+      assert Cure.Elab.Resolution.resolve_qualified(env, "Std.Nat.Nat", :type) == {:ok, :"Std.Nat#Nat"}
+    end
+
+    test "falls back to a bare key for an unshadowed module", %{env: env} do
+      assert Cure.Elab.Resolution.resolve_qualified(env, "Std.Bool.True", :value) == {:ok, :True}
+      assert Cure.Elab.Resolution.resolve_qualified(env, "Std.Bool", :type) == {:ok, :Bool}
+    end
+
+    test "returns :error for an unresolvable path", %{env: env} do
+      assert Cure.Elab.Resolution.resolve_qualified(env, "Std.Nope.Gone", :value) == :error
+    end
+  end
 end
