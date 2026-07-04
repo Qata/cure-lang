@@ -18,11 +18,15 @@ defmodule Antigen.Generators.Positivity do
     Gen.frequency([
       {2, Gen.return(positive_family())},
       {2, Gen.return(negative_family())},
-      # Richer single-family negatives — drive the deep strict-positivity paths
-      # (Σ traversal + `{:data, other, …}` through-family branch + occurs_deep?)
-      # that the two simple shapes never reach. Defined shapes, now wired live.
+      # Richer single-family negatives — Σ traversal + nested arrows.
       {1, Gen.return(double_negation_family())},
-      {1, Gen.return(sigma_negative_family())}
+      {1, Gen.return(sigma_negative_family())},
+      # Multi-family through-constructor shapes — the only inputs that reach the
+      # deep positivity branches (strictly_positive? through-family 316-335,
+      # occurs_deep? 342-348, data_heads/gather_data_heads). Both polarities.
+      {1, Gen.return(through_constructor_positive())},
+      {1, Gen.return(through_constructor_negative())},
+      {1, Gen.return(deep_negative_family())}
     ])
   end
 
@@ -133,7 +137,63 @@ defmodule Antigen.Generators.Positivity do
     )
   end
 
-  @doc "Rebuild the family's `Env` by declaring it."
+  @doc """
+  Through-constructor POSITIVE: `MkT : Wrap -> T`, and `wrap : T -> Wrap`, so `T`
+  occurs strictly-positively one family layer down. Accepting requires expanding
+  `Wrap`'s constructor fields during `T`'s check and confirming the occurrence is
+  positive — the accept-path twin of `through_constructor_negative` (verified
+  `:ok` by `Inductive.positive?`). Multi-family (`:indexed_case`). Label `:positive`.
+  """
+  @spec through_constructor_positive() :: Challenge.t()
+  def through_constructor_positive do
+    wrap = {Inductive.family(:Wrap, [], [], 0),
+            [Inductive.ctor(:wrap, [{:x, {:data, :T, [], []}}], [])]}
+
+    t = {Inductive.family(:T, [], [], 0),
+         [Inductive.ctor(:MkT, [{:b, {:data, :Wrap, [], []}}], [])]}
+
+    Challenge.new(
+      kind: :indexed_case,
+      assay: "positivity",
+      label: :positive,
+      payload: %{families: [wrap, t], def_name: :probe, def_type: {:type, 0}, def_body: {:data, :T, [], []}},
+      note: "through-constructor positive: T strictly-positive inside Wrap's ctor; subject = T (last family)"
+    )
+  end
+
+  @doc """
+  Through-constructor DEEP negative: `MkBad : (Wrap -> Dec) -> Bad`, and
+  `wrap : Bad -> Wrap`. `Bad` is NOT in the arrow domain directly (`Wrap` is) —
+  it is reachable only *through* `Wrap`'s constructor field, so rejecting exercises
+  `occurs_deep?`'s through-family loop (and `data_heads`/`gather_data_heads`),
+  which the direct-occurrence negatives never reach. Verified `{:error, …}` by
+  `Inductive.positive?`. Multi-family (`:indexed_case`). Label `:negative`.
+  """
+  @spec deep_negative_family() :: Challenge.t()
+  def deep_negative_family do
+    dec = {Inductive.family(:Dec, [], [], 0),
+           [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]}
+
+    wrap = {Inductive.family(:Wrap, [], [], 0),
+            [Inductive.ctor(:wrap, [{:x, {:data, :Bad, [], []}}], [])]}
+
+    bad = {Inductive.family(:Bad, [], [], 0),
+           [Inductive.ctor(:MkBad, [{:f, {:pi, {:data, :Wrap, [], []}, {:data, :Dec, [], []}}}], [])]}
+
+    Challenge.new(
+      kind: :indexed_case,
+      assay: "positivity",
+      label: :negative,
+      payload: %{families: [dec, wrap, bad], def_name: :probe, def_type: {:type, 0}, def_body: {:data, :Dec, [], []}},
+      note: "through-constructor deep negative: Bad reachable only via Wrap's ctor in an arrow domain (occurs_deep?); subject = Bad (last family)"
+    )
+  end
+
+  @doc "Rebuild the family's `Env` by declaring it (single-family or multi-family payload)."
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{payload: %{family: fam, ctors: ctors}}), do: Inductive.declare(Env.empty(), fam, ctors)
+
+  def env_of(%Challenge{payload: %{families: families}}) do
+    Enum.reduce(families, Env.empty(), fn {fam, ctors}, e -> Inductive.declare(e, fam, ctors) end)
+  end
 end

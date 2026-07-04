@@ -4,6 +4,12 @@ defmodule Antigen.Generators.PositivityTest do
   alias Antigen.Corpus
   alias Cure.Core.Inductive
 
+  defp verdict(%{kind: :indexed_case, payload: %{families: fams}} = c) do
+    env = Positivity.env_of(c)
+    {%{name: subject}, _ctors} = List.last(fams)
+    Inductive.positive?(env, Inductive.get_family(env, subject))
+  end
+
   defp verdict(c) do
     env = Positivity.env_of(c)
     Inductive.positive?(env, Inductive.get_family(env, c.payload.family.name))
@@ -34,6 +40,16 @@ defmodule Antigen.Generators.PositivityTest do
       assert c.label == :negative
       assert {:error, {:non_strictly_positive, _}} = verdict(c),
              "checker should reject #{c.note}"
+    end
+  end
+
+  test "the multi-family through-constructor shapes are label-correct (deep positivity)" do
+    assert :ok == verdict(Positivity.through_constructor_positive())
+    assert Positivity.through_constructor_positive().label == :positive
+
+    for c <- [Positivity.through_constructor_negative(), Positivity.deep_negative_family()] do
+      assert c.label == :negative
+      assert {:error, {:non_strictly_positive, _}} = verdict(c), "checker should reject #{c.note}"
     end
   end
 

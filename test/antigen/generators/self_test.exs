@@ -71,6 +71,15 @@ defmodule Antigen.Generators.SelfTest do
     assert %Env{} = Positivity.env_of(c)
   end
 
+  # Multi-family positivity shapes (through-constructor) ride the :indexed_case
+  # record; Positivity.env_of declares every family in the payload.
+  defp assert_well_formed(%Challenge{kind: :indexed_case, payload: %{families: fams}} = c) do
+    assert %Env{} = Positivity.env_of(c)
+    assert Enum.all?(fams, fn {_fam, ctors} ->
+             Enum.all?(ctors, fn %{args: args} -> Enum.all?(args, fn {_n, ty} -> Term.term?(ty) end) end)
+           end)
+  end
+
   defp assert_well_formed(%Challenge{kind: :forcing_pair} = c) do
     assert %Env{} = Forcing.certified_env_of(c)
     assert Term.term?(c.payload.t) and Term.term?(c.payload.tprime)
