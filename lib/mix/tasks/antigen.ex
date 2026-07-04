@@ -165,7 +165,10 @@ defmodule Mix.Tasks.Antigen do
       # Dependent matching — indexed Vec `case` with index refinement + dependent
       # motive; the lever for check_motive_wf/check_case_branches/unify_indices/
       # bind_index/specialize_branch_context/replace_branch_vars.
-      {3, Antigen.Generators.DepMatch.gen()}
+      {3, Antigen.Generators.DepMatch.gen()},
+      # Indexed-family DECLARATION checking — the check_ctor → check_result_indices
+      # path (result-index count/type validation); a family-shaped probe, group f.
+      {2, Antigen.Generators.IndexedDecl.gen()}
     ])
   end
 
