@@ -417,7 +417,8 @@ defmodule Cure.Core.Kernel do
          :ok <- check_field_levels(field_levels, fam_level),
          :ok <-
            check_uniform_params(fname, ctor.name, result_params, length(params), length(args)),
-         :ok <- check_result_indices(ctx_full, result_indices, index_tele) do
+         :ok <-
+           check_result_indices(ctx_full, Context.env(ctx_params), result_indices, index_tele) do
       :ok
     end
   end
@@ -987,9 +988,15 @@ defmodule Cure.Core.Kernel do
     Map.new(subst, fn {k, v} -> {k + amount, Term.shift(v, amount, 0)} end)
   end
 
-  defp check_result_indices(ctx_full, result_indices, index_tele) do
+  # `param_vals` (most-recent-first = Context.env(ctx_params)) seeds the local
+  # evaluation environment so an index-telescope type that references a family
+  # PARAMETER (e.g. MyEq's `x : a`, `y : a`) resolves to the real parameter rather
+  # than a bogus out-of-range neutral — the same seeding `check_ctor_app` performs
+  # for the ctor-application path. Without it, a parameter reference in the second-
+  # or-later index position mis-levels (`{:conversion_failure, {:var,1}, {:var,0}}`).
+  defp check_result_indices(ctx_full, param_vals, result_indices, index_tele) do
     if length(result_indices) == length(index_tele) do
-      case do_spine(ctx_full, Enum.zip(result_indices, index_tele), []) do
+      case do_spine(ctx_full, Enum.zip(result_indices, index_tele), param_vals) do
         {:ok, _vals} -> :ok
         err -> err
       end
