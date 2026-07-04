@@ -190,4 +190,119 @@ defmodule Antigen.Cover do
     Process.put(:antigen_seed_pool, merged)
     merged
   end
+
+  @guided_round 50
+  @guided_plateau 2
+  @default_edge_corpus "test/antigen/edge_corpus.sexp"
+
+  @doc """
+  Coverage-guided fuzzing loop. Draws challenges in rounds with the kernel
+  cover-compiled; after each challenge measures its new-line coverage delta and,
+  when it hit new lines, banks it to the edge corpus (Task 7), live-refreshes the
+  seed pool so crossover can reuse it (Task 8), and credits its generator group's
+  edge yield. At each round boundary the generator is reweighted toward the
+  highest-yield groups (Task 9). Terminates when `plateau` consecutive rounds add
+  no new edge, or the `count` budget is spent.
+
+  Jackpots (a challenge that both hits a new edge and violates) produce a SINGLE
+  infection report whose `health` map carries a `:coverage_delta` field, threaded
+  through `Runner.run_challenge`'s `:health_extra` hook — never a second report.
+
+  Coverage is attributed per-challenge (precise). Banked inputs are stored as-is
+  (`budget: 0`): coverage-exact shrink would need `:cover.reset`, which destroys
+  the loop's accumulated baseline, so it is deferred to an offline edge-corpus
+  post-pass. Returns a summary map.
+  """
+  def guided_loop(opts) do
+    modules = cover_modules()
+    edge_path = opts[:edge_corpus] || @default_edge_corpus
+    count = Keyword.get(opts, :count, 200)
+    round_size = Keyword.get(opts, :guided_round, @guided_round)
+    plateau_limit = Keyword.get(opts, :plateau, @guided_plateau)
+
+    with_cover(modules, fn ->
+      init = %{
+        acc: %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()},
+        covered: covered_set(modules),
+        seen_sets: MapSet.new(),
+        gen: opts[:gen],
+        rounds: 0,
+        plateau: 0,
+        banked: 0
+      }
+
+      st = guided_rounds(opts, modules, edge_path, count, round_size, plateau_limit, init)
+
+      %{
+        infections: st.acc.infections,
+        rounds: st.rounds,
+        banked: st.banked,
+        covered_lines: MapSet.size(st.covered)
+      }
+    end)
+  end
+
+  defp guided_rounds(opts, modules, edge_path, count, round_size, plateau_limit, st) do
+    cond do
+      st.plateau >= plateau_limit -> st
+      st.rounds * round_size >= count -> st
+      true ->
+        round_start = st.covered
+        challenges = Antigen.Runner.draw_n(st.gen, round_size)
+
+        {st2, yields} =
+          Enum.reduce(challenges, {st, %{f: 0, t: 0, m: 0}}, fn c, {s, ys} ->
+            prev = s.covered
+
+            # jackpot hook: the infection report (if any) records THIS challenge's
+            # coverage delta, measured after its assay ran inside run_challenge.
+            opts_c =
+              Keyword.put(opts, :health_extra, fn ->
+                %{coverage_delta: MapSet.size(MapSet.difference(covered_set(modules), prev))}
+              end)
+
+            acc2 = Antigen.Runner.run_challenge(c, opts_c, s.acc, count)
+            new_lines = MapSet.difference(covered_set(modules), prev)
+            s = %{s | acc: acc2, covered: MapSet.union(prev, new_lines)}
+
+            if MapSet.size(new_lines) > 0 do
+              {_status, _min, seen2} =
+                bank_interesting(c, new_lines, edge_path, s.seen_sets, fn _ -> true end, 0)
+
+              refresh_seed_pool!(edge_path)
+              grp = challenge_group(c)
+              n = MapSet.size(new_lines)
+              {%{s | seen_sets: seen2, banked: s.banked + 1}, Map.update(ys, grp, n, &(&1 + n))}
+            else
+              {s, ys}
+            end
+          end)
+
+        round_new = MapSet.difference(st2.covered, round_start)
+        plateau = if MapSet.size(round_new) == 0, do: st.plateau + 1, else: 0
+
+        guided_rounds(opts, modules, edge_path, count, round_size, plateau_limit, %{
+          st2
+          | gen: reweight_gen(st2.gen, yields),
+            rounds: st.rounds + 1,
+            plateau: plateau
+        })
+    end
+  end
+
+  # Map a challenge to its generator group (parallels Runner's @group_table).
+  defp challenge_group(%{kind: :mutant_term}), do: :m
+  defp challenge_group(%{kind: :typed_term}), do: :t
+  defp challenge_group(_), do: :f
+
+  # Rebuild a reweightable {:frequency, ws} generator biased by per-group edge
+  # yield; any other generator shape is drawn unchanged (parallels draw_biased).
+  defp reweight_gen({:frequency, ws}, yields) do
+    weights = Enum.map(ws, fn {w, _g} -> w end)
+    gens = Enum.map(ws, fn {_w, g} -> g end)
+    new_weights = Antigen.Runner.reweight_by_edges(weights, Antigen.Runner.gen_group_table(), yields)
+    {:frequency, Enum.zip(new_weights, gens)}
+  end
+
+  defp reweight_gen(gen, _yields), do: gen
 end

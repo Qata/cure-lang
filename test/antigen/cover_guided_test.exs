@@ -1,3 +1,23 @@
+defmodule Antigen.CoverGuidedTest.CoverThenViolate do
+  @moduledoc false
+  # Runs the challenge's REAL assay first (so the cover-compiled kernel actually
+  # executes and coverage accumulates), then forces a violation so the guided
+  # loop always has a jackpot to report. A pure {:violation} stub would never
+  # touch the kernel and thus never generate coverage.
+  def run(%Antigen.Challenge{assay: assay} = c) do
+    _ =
+      try do
+        apply(Antigen.Runner.assay_module_for(assay), :run, [c])
+      rescue
+        _ -> :ok
+      catch
+        _, _ -> :ok
+      end
+
+    {:violation, :forced}
+  end
+end
+
 defmodule Antigen.CoverGuidedTest do
   use ExUnit.Case, async: false   # :cover (+ :cover.reset) is node-wide global
   alias Antigen.{Cover, Triage, Challenge, Corpus}
@@ -111,5 +131,44 @@ defmodule Antigen.CoverGuidedTest do
     pool = Process.get(:antigen_seed_pool)
     assert Map.has_key?(pool, type)   # crossover can now draw this type mid-run
     assert Antigen.Generators.SeedPool.pool_gen(pool, type) != :none
+  end
+
+  test "guided_loop terminates, grows the edge corpus, and tags jackpots with coverage_delta" do
+    tmp = Path.join(System.tmp_dir!(), "guided_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+    edge_path = Path.join(tmp, "edge.sexp")
+    report_dir = Path.join(tmp, "reports")
+
+    opts = [
+      gen: Mix.Tasks.Antigen.default_gen(),
+      assay: Antigen.CoverGuidedTest.CoverThenViolate,
+      count: 30,
+      guided_round: 10,
+      plateau: 2,
+      edge_corpus: edge_path,
+      corpus_path: Path.join(tmp, "corpus.sexp"),
+      seeds_path: Path.join(tmp, "seeds.sexp"),
+      report_dir: report_dir
+    ]
+
+    result = Cover.guided_loop(opts)
+
+    # (a) terminated with a summary (plateau or budget)
+    assert is_map(result)
+    assert result.rounds >= 1
+
+    # (b) the edge corpus grew — the cold-start round hits new kernel lines
+    assert File.exists?(edge_path)
+    assert Enum.count(Corpus.stream(edge_path)) >= 1
+
+    # (c) a single infection report per jackpot carries coverage_delta in its
+    # health map (not a second report)
+    reports = Path.wildcard(Path.join(report_dir, "failure-*.txt"))
+    assert reports != []
+    assert Enum.any?(reports, fn p -> File.read!(p) =~ "coverage_delta" end)
+
+    # cover torn down node-wide
+    assert :cover.modules() == []
   end
 end
