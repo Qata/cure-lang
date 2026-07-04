@@ -4,12 +4,12 @@
 |---|---:|---:|---:|
 | Cure.Core.Certificate | 58 | 84 | 69.0 |
 | Cure.Core.Conv | 27 | 66 | 40.9 |
-| Cure.Core.Eval | 63 | 73 | 86.3 |
-| Cure.Core.Inductive | 23 | 79 | 29.1 |
+| Cure.Core.Eval | 62 | 73 | 84.9 |
+| Cure.Core.Inductive | 39 | 79 | 49.4 |
 | Cure.Core.Kernel | 174 | 336 | 51.8 |
 | Cure.Core.Normalise | 73 | 103 | 70.9 |
 | Cure.Core.Quote | 27 | 32 | 84.4 |
-| Cure.Core.Serialize | 64 | 108 | 59.3 |
+| Cure.Core.Serialize | 65 | 108 | 60.2 |
 
 ## Cold lines
 
@@ -36,6 +36,7 @@
 
 ## Cure.Core.Eval cold lines
 
+  - as_bool/1: 173
   - eval/2: 26, 36, 37, 56, 57, 61
   - vfst/1: 175, 176
   - vsnd/1: 178, 179
@@ -46,15 +47,13 @@
   - ctor_quantities/2: 234, 235, 236, 237
   - ctor_result_indices/2: 216, 217, 218
   - ctor_result_params/2: 266, 267, 268, 269
-  - data_heads/1: 355
   - family?/2: 199
-  - gather_data_heads/2: 358, 361, 363, 364
+  - gather_data_heads/2: 361, 363, 364
   - index_telescope/2: 244, 245, 246
-  - occurs?/2: 370, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 384, 388, 389, 391
-  - occurs_deep?/4: 342, 343, 346, 347, 348
+  - occurs?/2: 373, 374, 375, 376, 377, 378, 379, 380, 381, 384, 388, 389, 391
   - param_telescope/2: 254
   - register_builtin/3: 127, 129, 132
-  - strictly_positive?/4: 312, 317, 318, 321, 324, 325, 329, 330, 335
+  - strictly_positive?/4: 318, 335
 
 ## Cure.Core.Kernel cold lines
 
@@ -119,9 +118,9 @@
   - build/1: 133, 134, 135, 136, 139
   - build_all/1: 203
   - build_branches/1: 213, 216
-  - build_node/2: 141, 144, 145, 148, 149, 156, 157, 158, 161, 166, 191
+  - build_node/2: 141, 144, 145, 148, 149, 154, 156, 157, 158, 161, 166, 191
   - decode/1: 75, 76
-  - enc/1: 21, 29, 30, 31, 32, 33, 34, 35, 36, 37
+  - enc/1: 29, 30, 32, 33, 34, 35, 36, 37
   - parse/1: 122, 123
   - parse_list/2: 126
   - str/1: 63
