@@ -37,7 +37,7 @@ defmodule Mix.Tasks.Antigen do
 
   @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string,
              report_dir: :string, out: :string, guided: :boolean, precise: :boolean,
-             edge_corpus: :string]
+             edge_corpus: :string, plateau: :integer, guided_round: :integer]
 
   @impl Mix.Task
   def run(argv) do
@@ -114,10 +114,17 @@ defmodule Mix.Tasks.Antigen do
       |> Keyword.put(:out, opts[:out])
       |> Keyword.put(:edge_corpus, opts[:edge_corpus])
       |> Keyword.put(:precise, opts[:precise] || false)
+      # only thread loop-tuning flags when present — an explicit nil would defeat
+      # guided_loop's Keyword.get defaults
+      |> maybe_put(:plateau, opts[:plateau])
+      |> maybe_put(:guided_round, opts[:guided_round])
 
     mode = if opts[:guided], do: :guided, else: :report
     {mode, merged}
   end
+
+  defp maybe_put(kw, _key, nil), do: kw
+  defp maybe_put(kw, key, val), do: Keyword.put(kw, key, val)
 
   @doc "Convert a `\"Nm\"` wall-budget to a round count via the fixed `@rounds_per_minute`."
   @spec budget_to_count(String.t()) :: pos_integer()

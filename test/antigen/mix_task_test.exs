@@ -29,6 +29,14 @@ defmodule Mix.Tasks.AntigenTest do
     assert mode2 == :report
     assert merged2[:precise] == false
     assert merged2[:edge_corpus] == nil
+    # loop-tuning flags are only threaded when present, so guided_loop's own
+    # defaults apply otherwise (Keyword.get default would break on an explicit nil)
+    refute Keyword.has_key?(merged2, :plateau)
+    refute Keyword.has_key?(merged2, :guided_round)
+
+    {_m3, merged3} = Mix.Tasks.Antigen.cover_dispatch([guided: true, plateau: 9, guided_round: 25], runner_opts)
+    assert merged3[:plateau] == 9
+    assert merged3[:guided_round] == 25
   end
 
   test "mix antigen --count runs the explorer and prints a summary" do
