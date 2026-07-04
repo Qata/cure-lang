@@ -125,18 +125,36 @@ defmodule Antigen.Assays.KernelLaw do
   end
 
   # ── 3d. capture-avoiding β: β-reduction agrees with substitution ───────────
-  # For a redex (λx:T. body) e, the kernel's β must land on the SAME normal form
-  # as substituting e for x via the elaborator's capture-avoiding `instantiate`.
-  # `instantiate(body, [e])` replaces x (de Bruijn 0) with e, shifting e under
-  # every binder body crosses — so a disagreement is a shift/capture bug in one of
-  # the two paths. Both sides are normalized under the same fuel so a divergent
-  # (fuel-exhausting) case abstains rather than false-positives.
+  # For a redex (λx:T. body) e the law has TWO obligations, both of which must hold:
+  #
+  #   (a) reduction — the kernel's β lands on the same normal form as substituting
+  #       e for x via the elaborator's capture-avoiding `instantiate`;
+  #   (b) typing (the substitution lemma) — the redex and its substituted body are
+  #       both well-typed and at the SAME type.
+  #
+  # `instantiate(body, [e])` replaces x (de Bruijn 0) with e, shifting e under every
+  # binder body crosses. A shift/capture bug shows up in (a) as a normal-form
+  # disagreement AND in (b) as a mis-scoped `subst_term` that infers to no type or a
+  # different one — the typing-level teeth the nf comparison alone cannot see.
   defp beta_subst(%{term: {:app, {:lam, _t, body}, e}} = p) do
     ctx = ctx_of(p)
-    fuel = TermAssay.assay_fuel()
     redex = p.term
     subst_term = Subst.instantiate(body, [e])
 
+    with :ok <- beta_nf_agrees(ctx, redex, subst_term),
+         :ok <- beta_type_agrees(ctx, redex, subst_term) do
+      :ok
+    end
+  end
+
+  # The generator only ever emits redexes; a non-redex term is a wiring bug, not a
+  # kernel finding — surface it distinctly.
+  defp beta_subst(%{term: other}), do: {:violation, {:beta_subst_not_a_redex, other}}
+
+  # (a) β-reduction ≡ substitution. Normalized under the same fuel so a divergent
+  # (fuel-exhausting) case abstains rather than false-positives.
+  defp beta_nf_agrees(ctx, redex, subst_term) do
+    fuel = TermAssay.assay_fuel()
     lhs = Normalise.nf(ctx, redex, fuel: fuel)
     rhs = Normalise.nf(ctx, subst_term, fuel: fuel)
 
@@ -149,9 +167,26 @@ defmodule Antigen.Assays.KernelLaw do
     end
   end
 
-  # The generator only ever emits redexes; a non-redex term is a wiring bug, not a
-  # kernel finding — surface it distinctly.
-  defp beta_subst(%{term: other}), do: {:violation, {:beta_subst_not_a_redex, other}}
+  # (b) the substitution lemma: Γ,x:A ⊢ body:B and Γ ⊢ e:A ⟹ Γ ⊢ body[e]:B[e].
+  # Both the redex and its substituted body must infer, to the same type (compared
+  # by their quoted normal forms, as `weakening` does). A `subst_term` that fails to
+  # infer, or infers a different type, is a capture/shift bug in `instantiate`.
+  defp beta_type_agrees(ctx, redex, subst_term) do
+    depth = Context.length(ctx)
+
+    case {Kernel.infer(ctx, redex), Kernel.infer(ctx, subst_term)} do
+      {{:ok, vr}, {:ok, vs}} ->
+        qr = Normalise.quote(vr, depth)
+        qs = Normalise.quote(vs, depth)
+        if qr == qs, do: :ok, else: {:violation, {:beta_subst_type_mismatch, %{redex_type: qr, subst_type: qs}}}
+
+      {{:error, er}, _} ->
+        {:violation, {:beta_subst_redex_ill_typed, er}}
+
+      {{:ok, _}, {:error, es}} ->
+        {:violation, {:beta_subst_result_ill_typed, es}}
+    end
+  end
 
   # ── 3c. reduction order-independence ───────────────────────────────────────
   defp confluence(p) do

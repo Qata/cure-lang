@@ -5,6 +5,7 @@ defmodule Antigen.Generators.BetaSubstTest do
   alias Antigen.{Challenge, Assays, Corpus}
   alias Antigen.Generators.SigMenu
   alias Cure.Core.{Normalise, Kernel}
+  alias Cure.Elab.Subst
 
   @sample 200
 
@@ -45,7 +46,7 @@ defmodule Antigen.Generators.BetaSubstTest do
   # RED anchor: without the shift, every trap's naive substitution normalizes to a
   # DIFFERENT term than the kernel's β — so a shift/capture regression WOULD be
   # caught. (The correct assay above is the GREEN side.)
-  test "each capture trap detects an unshifted substitution (teeth)" do
+  test "each capture trap detects an unshifted substitution (reduction teeth)" do
     for {ctx_types, _type, t, e, body, note} <- BetaSubst.cases() do
       ctx = ctx_of(ctx_types)
       beta_nf = Normalise.nf(ctx, {:app, {:lam, t, body}, e})
@@ -53,6 +54,46 @@ defmodule Antigen.Generators.BetaSubstTest do
       assert beta_nf != broken_nf,
              "capture trap #{note} does NOT distinguish an unshifted subst — no teeth"
     end
+  end
+
+  # The typing half validates the SUBSTITUTION LEMMA (Γ,x:A⊢b:B, Γ⊢e:A ⟹
+  # Γ⊢b[e]:B[e]) — a property distinct from nf-agreement. Its capture teeth are
+  # partial: a same-typed capture (var0 vs var1 both Nat, the `lam` traps) is
+  # type-INVISIBLE and only the reduction half sees it; a type-relevant capture
+  # (the Π/Σ traps, where an unshifted subst drops a Nat where a type is required)
+  # is ill-typed and the typing half catches it. Assert both facts honestly.
+  defp redex_type(ctx, t, e, body) do
+    depth = Cure.Core.Context.length(ctx)
+    {:ok, v} = Kernel.infer(ctx, {:app, {:lam, t, body}, e})
+    Normalise.quote(v, depth)
+  end
+
+  defp broken_type(ctx, e, body) do
+    depth = Cure.Core.Context.length(ctx)
+
+    case Kernel.infer(ctx, broke(body, e, 0)) do
+      {:ok, v} -> Normalise.quote(v, depth)
+      {:error, _} -> :ill_typed
+    end
+  end
+
+  test "the substitution lemma holds for every case (typing soundness)" do
+    for {ctx_types, _type, t, e, body, note} <- BetaSubst.cases() do
+      ctx = ctx_of(ctx_types)
+      depth = Cure.Core.Context.length(ctx)
+      {:ok, vr} = Kernel.infer(ctx, {:app, {:lam, t, body}, e})
+      {:ok, vs} = Kernel.infer(ctx, Subst.instantiate(body, [e]))
+      assert Normalise.quote(vr, depth) == Normalise.quote(vs, depth),
+             "substitution lemma failed on #{note}"
+    end
+  end
+
+  test "the typing half is non-vacuous: some trap's unshifted subst mis-types" do
+    assert Enum.any?(BetaSubst.cases(), fn {ctx_types, _type, t, e, body, _note} ->
+             ctx = ctx_of(ctx_types)
+             broken_type(ctx, e, body) != redex_type(ctx, t, e, body)
+           end),
+           "no case exercises a type-relevant capture — the typing check is vacuous"
   end
 
   test "the menu spans lam depths 1–3, a Π/Σ codomain, and a case branch" do
