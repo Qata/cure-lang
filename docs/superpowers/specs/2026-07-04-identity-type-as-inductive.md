@@ -109,6 +109,44 @@ sugar. Cure's primitives are exactly backwards.
   (row 7 parity — `rw01`‑`rw09`, `frp08` — must stay green).
 - No auto‑generated recursors for other inductives.
 
+## Implementation findings (2026‑07‑04, discovered during execution)
+
+Three facts surfaced once seeding began; they revise the phasing below.
+
+1. **Phases A and B are coupled — the `Eq` type former and `rewrite` must move
+   together.** The kernel `{:rewrite}` node types its proof with `ensure_eq`,
+   which demands a `{:veq}` *value* (`kernel.ex:118`). The instant surface `Eq`
+   elaborates to `{:data, :Eq, …}`, every `rewrite p in …` proof is a data value
+   `ensure_eq` rejects. So retargeting the `Eq` *type former* (Phase A) forces
+   `rewrite`→`:case` (Phase B) in the **same** coordinated change. The spec's
+   original "Gate A leaves the rewrite cluster on the primitive `{:rewrite}`" is
+   not achievable; A and B merge into one kernel step (primitives kept as dead
+   code until C).
+
+2. **`refl`'s witness is erased, mirroring `mrefl` exactly; the surface keeps the
+   explicit `refl(x)` construction.** ~20 green, immutable probes
+   (`rewrite/*`, `frp/*`, `match/mt02,mt03`, `refl/rf01,rf02`) *construct*
+   `refl(x)` with an explicit witness but *pattern‑match* `refl()` nullary. So
+   the ctor is `refl : {w:a} → Eq(a,w,w)` with `w` **erased** (quantity 0) — a
+   byte‑for‑byte mirror of `mrefl`, which makes the nullary `refl()` pattern and
+   its index refinement work for free (identical to `dp01`). The surface
+   construction special‑case (`elaborator.ex:254/736`) is retained but now builds
+   the inductive ctor `{:ctor, :refl, [x]}` (witness supplied explicitly, erased
+   at runtime) instead of the primitive `{:refl, x}`.
+
+3. **Stdlib fakery to retire (operator‑requested 2026‑07‑04).** `Std.Equal`
+   (`lib/std/equal.cure`) defines `refl/sym/trans/cong` that all return the atom
+   `:cure_refl` with an `Atom` return type — faking‑era placeholder tokens, not
+   proofs. `Std.Proof` (`lib/std/proof.cure`) declares law‑shaped stubs
+   (`plus_zero`, `zero_plus`, `plus_comm : Eq(Int,a,a)`, `append_nil`, `map_id`)
+   that all return `:cure_refl`. With genuine inductive `Eq`/`refl`, these become
+   real proofs where structurally provable (reflexivity‑at‑reducing‑type like
+   `rf01`; `sym`/`trans`/`cong` like `rf03`‑`rf05`) and are removed where they
+   were unsound stubs (a `plus_comm` over the non‑inductive `Int` erasure target
+   cannot be proven by induction — retire rather than fake). Mirror any change in
+   `priv/std/` copies. This is a new phase **B′** (stdlib), gated after the
+   kernel retarget lands and before/with Phase C.
+
 ## Approach — phased, TCB‑gated (mirrors the Bool retirement #39‑43/#74)
 
 ### Phase A — additive: seed inductive `Eq`, route surface onto it (TCB)
