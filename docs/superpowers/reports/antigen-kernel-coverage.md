@@ -7,7 +7,7 @@
 | Cure.Core.Eval | 65 | 65 | 100.0 |
 | Cure.Core.Inductive | 57 | 79 | 72.2 |
 | Cure.Core.Kernel | 330 | 340 | 97.1 |
-| Cure.Core.Normalise | 87 | 103 | 84.5 |
+| Cure.Core.Normalise | 92 | 103 | 89.3 |
 | Cure.Core.Quote | 34 | 37 | 91.9 |
 | Cure.Core.Serialize | 108 | 108 | 100.0 |
 
@@ -54,11 +54,9 @@
 ## Cure.Core.Normalise cold lines
 
   - fuel_key/0: 85
-  - nf/2: 37
   - normalize_opts/1: 108, 112, 116, 122
-  - reduce_unfolded/3: 309, 310, 311, 315, 316, 317
+  - reduce_unfolded/3: 311, 315, 316, 317
   - spend_fuel/1: 335
-  - unfold_certified_head/3: 261, 267
   - with_fuel/2: 77
 
 ## Cure.Core.Quote cold lines
