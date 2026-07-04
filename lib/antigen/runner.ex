@@ -12,7 +12,7 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3, 19, 24], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23], m: [7, 8]}
+  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.
@@ -330,6 +330,9 @@ defmodule Antigen.Runner do
   defp assay_module("serialize/decode"), do: Antigen.Assays.Serialization
   defp assay_module("conv/decision"), do: Antigen.Assays.Conv
   defp assay_module("branchunify/verdict"), do: Antigen.Assays.BranchUnify
+  defp assay_module("forcing/dot"), do: Antigen.Assays.DotForcing
+  defp assay_module("check/verdict"), do: Antigen.Assays.CheckMode
+  defp assay_module("delta/nf"), do: Antigen.Assays.DeltaReduce
   defp assay_module("stuck_elim_delta"), do: Antigen.Assays.StuckElimDelta
   defp assay_module("term/infer_check"), do: Antigen.Assays.Term
   defp assay_module("term/subject_reduction"), do: Antigen.Assays.Term
@@ -339,6 +342,8 @@ defmodule Antigen.Runner do
   defp assay_module("kernel/shift_subst"), do: Antigen.Assays.KernelLaw
   defp assay_module("kernel/weakening"), do: Antigen.Assays.KernelLaw
   defp assay_module("kernel/confluence"), do: Antigen.Assays.KernelLaw
+  defp assay_module("kernel/beta_subst"), do: Antigen.Assays.KernelLaw
+  defp assay_module("elab/shift_agrees"), do: Antigen.Assays.KernelLaw
   defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
   defp assay_module("elab/erasure"), do: Antigen.Assays.Elab
@@ -404,9 +409,14 @@ defmodule Antigen.Runner do
 
           {c_min, triage} = Antigen.Triage.minimize(c, pred, shrink_budget(opts))
 
+          # A violation tagged `{:expected, _}` is a DELIBERATELY-injected one
+          # (test scaffolding) — the immune system working, not a defect; render
+          # it calmly so a normal test run's output does not read as a real bug.
+          kind = if match?({:expected, _}, orig_detail), do: :immune_response, else: :infection
+
           health = summarize(acc, count) |> Map.put(:triage, triage) |> Map.merge(health_extra(opts))
-          {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, health)
-          IO.puts(Report.breadcrumb(c_min, path))
+          {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, health, kind)
+          IO.puts(Report.breadcrumb(c_min, path, kind))
           Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
           %{acc | infections: acc.infections + 1}
       end

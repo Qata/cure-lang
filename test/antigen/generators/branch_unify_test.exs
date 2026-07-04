@@ -20,7 +20,7 @@ defmodule Antigen.Generators.BranchUnifyTest do
     assert MapSet.equal?(labels, MapSet.new([:trivial, :solved, :impossible]))
 
     notes = BranchUnify.cases() |> Enum.map(fn t -> elem(t, 5) end)
-    for frag <- ["merge conflict", "forced equation", "rigid data/Type", "outer index var"] do
+    for frag <- ["merge conflict", "forced equation", "rigid data/Type", "outer index var", "multi-key cycle"] do
       assert Enum.any?(notes, &String.contains?(&1, frag)), "missing arm: #{frag}"
     end
   end

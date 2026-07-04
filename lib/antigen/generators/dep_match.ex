@@ -90,6 +90,30 @@ defmodule Antigen.Generators.DepMatch do
       {2, var_index_extra({:eq, @nat, {:var, 1}, {:var, 1}})},
       {2, var_index_extra({:sigma, @nat, vec({:var, 2})})},
       {2, var_index_extra({:pi, @nat, vec({:var, 2})})},
+      # extra context types carrying stuck value-level subterms (λ / pair / refl)
+      # so specialize_branch_context's replace_branch_vars descends those arms.
+      {2, var_index_extra({:eq, {:pi, @nat, @nat}, {:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}})},
+      {2, var_index_extra({:eq, {:sigma, @nat, @nat}, {:pair, {:var, 1}, {:var, 1}}, {:pair, {:var, 1}, {:var, 1}}})},
+      {2, var_index_extra({:eq, {:eq, @nat, {:var, 1}, {:var, 1}}, {:refl, {:var, 1}}, {:refl, {:var, 1}}})},
+      # two-var frame: a helper context var lets extra_ty carry a STUCK app /
+      # projection / prim — replace_branch_vars' app/fst/snd/prim arms.
+      {2, var_index_extra2({:pi, @nat, @nat}, {:eq, @nat, {:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}})},
+      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:fst, {:var, 1}}, {:fst, {:var, 1}}})},
+      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:snd, {:var, 1}}, {:snd, {:var, 1}}})},
+      {2, var_index_extra2({:int_type}, {:eq, {:int_type}, {:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}})},
+      # a STUCK case over a Bool helper var in an index position — the case arm of
+      # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.
+      {2, var_index_extra2(stuck_case_helper(), {:eq, @nat, stuck_case(), stuck_case()})},
+      # POLYMORPHIC motive: Γ = [n:Nat, x:a, a:Type0]; case n of Z→x | S→x with
+      # motive λv:Nat. a — the result type is the Type-parameter VARIABLE a, so
+      # check_motive_wf's infer_type_value_sort takes its neutral-var (nvar) clause
+      # (a bound-at-a-universe motive result), distinct from the data/Π/Σ/Eq arms.
+      {2, tyvar_motive_case()},
+      # motive returns Eq Type0 (List Nat) (List Nat) — a propositional equality
+      # between PARAMETER-BEARING family TYPES. check_motive_wf's veq clause reifies
+      # the endpoints signature-aware, so Quote.split_data_args splits List's param
+      # off the (empty) index list — the dependent param/index read-back split.
+      {2, eqtype_motive_case()},
       # TWO-index diagonal family Sq — matching forces a ≡ b, the only v1 shape
       # that reaches unify_spine (2-index spine) + bind_index's merge path.
       {3, sq_diag()},
@@ -199,6 +223,50 @@ defmodule Antigen.Generators.DepMatch do
       Gen.bind(numeral(), fn sbody ->
         term = mk_case({:var, 1}, motive(@nat), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
         Gen.return({[extra_ty, vec({:var, 0}), @nat], term, @nat})
+      end)
+    end)
+  end
+
+  # Like var_index_extra but with an extra HELPER context var (a function / Σ /
+  # Int) so `extra_ty` can carry a value-level subterm that stays STUCK through
+  # evaluation — `helper n` (app), `fst/snd helper` (projections), `prim add
+  # [helper,helper]` — driving replace_branch_vars' app/fst/snd/prim arms when a
+  # branch refines the index. Frame: Γ = [extra_ty, helper_ty, Vec n, n:Nat]; the
+  # scrutinee is var 2, the helper var 1, and `n` var 3 inside extra_ty.
+  # helper for the case-in-index variant: a Bool-typed helper var, and a stuck
+  # `case helper of False -> Z; True -> Z` (helper is var 1 in the two-var frame).
+  defp stuck_case_helper, do: {:data, :Bool, [], []}
+
+  defp stuck_case,
+    do: {:case, {:var, 1}, {:lam, {:data, :Bool, [], []}, @nat}, [{:False, 0, @z}, {:True, 0, @z}]}
+
+  # Γ = [n:Nat (idx0), x:a (idx1), a:Type0 (idx2)]; case n of Z→x | S→x with a
+  # constant motive λv:Nat. a. Result type is the Type-var a (var 2). Fixed shape.
+  defp tyvar_motive_case do
+    Gen.return(
+      {[@nat, {:var, 0}, {:type, 0}],
+       {:case, {:var, 0}, {:lam, @nat, {:var, 3}}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]},
+       {:var, 2}}
+    )
+  end
+
+  # case Z of Z→refl(List Nat) | S→refl(List Nat) with motive λv:Nat. Eq Type0
+  # (List Nat) (List Nat). Closed; result type is that Eq. Drives signature-aware
+  # read-back of the param-bearing family type `List Nat`.
+  @list_nat {:data, :List, [{:data, :Nat, [], []}], []}
+  defp eqtype_motive_case do
+    eqty = {:eq, {:type, 0}, @list_nat, @list_nat}
+    refl_ln = {:refl, @list_nat}
+    Gen.return(
+      {[], {:case, @z, {:lam, @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty}
+    )
+  end
+
+  defp var_index_extra2(helper_ty, extra_ty) do
+    Gen.bind(numeral(), fn zbody ->
+      Gen.bind(numeral(), fn sbody ->
+        term = mk_case({:var, 2}, motive(@nat), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
+        Gen.return({[extra_ty, helper_ty, vec({:var, 0}), @nat], term, @nat})
       end)
     end)
   end

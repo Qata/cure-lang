@@ -192,12 +192,18 @@ defmodule Antigen.ShrinkTest do
     alias Cure.Core.Kernel
 
     def run(%{payload: %{fault: %{kind: :head_swap}}} = c) do
-      Antigen.Assays.Mutation.run(c, fn ctx, t ->
-        case Kernel.infer(ctx, t) do
-          {:error, _} -> {:ok, {:type, 0}}   # pretend it type-checks ⇒ wrongly accepted
-          ok -> ok
-        end
-      end)
+      # `{:expected, _}`-tag the (deliberately-simulated) violation so the Runner
+      # renders it as a calm immune response, not an alarming "ANTIGEN INFECTION"
+      # — this assay fakes a buggy kernel purely to exercise the shrink machinery.
+      case Antigen.Assays.Mutation.run(c, fn ctx, t ->
+             case Kernel.infer(ctx, t) do
+               {:error, _} -> {:ok, {:type, 0}}   # pretend it type-checks ⇒ wrongly accepted
+               ok -> ok
+             end
+           end) do
+        {:violation, detail} -> {:violation, {:expected, detail}}
+        other -> other
+      end
     end
 
     def run(c), do: Antigen.Assays.Mutation.run(c)
@@ -234,7 +240,7 @@ defmodule Antigen.ShrinkTest do
     # `explore/1` wires minimize-before-bank correctly, that `minimize` makes
     # real progress, and that the banked artifact still trips the configured assay.
     assert Antigen.Shrink.size(ab) < Antigen.Shrink.size(deep)
-    assert match?({:violation, {:accepted_ill_typed, _, _}}, BuggyMutationAssay.run(ab))
+    assert match?({:violation, {:expected, {:accepted_ill_typed, _, _}}}, BuggyMutationAssay.run(ab))
   end
 
   defp contains_vcons?({:ctor, :vcons, _}), do: true

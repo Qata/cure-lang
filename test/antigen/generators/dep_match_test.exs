@@ -34,19 +34,19 @@ defmodule Antigen.Generators.DepMatchTest do
              match?({:lam, _, {:lam, _, {:data, :Vec, _, _}}}, motive)
            end)
 
-    # a closed-index scrutinee (Vec Z or Vec (S Z)) → forces an :impossible branch
+    # a closed-index scrutinee (Vec Z or Vec (S Z)) → forces an :impossible branch.
+    # (list-head `match?` is empty-ctx-safe: some closed cases carry no ctx binder.)
     assert Enum.any?(sample, fn c ->
-             [ty | _] = c.payload.ctx
-             match?({:data, :Vec, _, [{:ctor, _, _}]}, ty)
+             match?([{:data, :Vec, _, [{:ctor, _, _}]} | _], c.payload.ctx)
            end)
 
     # a variable-index scrutinee (ctx carries a Nat binder) → both branches reachable
-    assert Enum.any?(sample, fn c -> match?({:data, :Vec, _, [{:var, _}]}, hd(c.payload.ctx)) end)
+    assert Enum.any?(sample, fn c -> match?([{:data, :Vec, _, [{:var, _}]} | _], c.payload.ctx) end)
 
     # a two-index diagonal Sq scrutinee with DISTINCT index vars → forces a ≡ b
     # (the bind_index merge / unify_spine tail).
     assert Enum.any?(sample, fn c ->
-             match?({:data, :Sq, _, [{:var, _}, {:var, _}]}, hd(c.payload.ctx))
+             match?([{:data, :Sq, _, [{:var, _}, {:var, _}]} | _], c.payload.ctx)
            end)
   end
 end

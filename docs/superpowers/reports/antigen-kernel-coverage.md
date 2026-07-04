@@ -6,9 +6,9 @@
 | Cure.Core.Conv | 66 | 66 | 100.0 |
 | Cure.Core.Eval | 65 | 65 | 100.0 |
 | Cure.Core.Inductive | 57 | 79 | 72.2 |
-| Cure.Core.Kernel | 303 | 340 | 89.1 |
-| Cure.Core.Normalise | 87 | 103 | 84.5 |
-| Cure.Core.Quote | 34 | 37 | 91.9 |
+| Cure.Core.Kernel | 330 | 340 | 97.1 |
+| Cure.Core.Normalise | 94 | 103 | 91.3 |
+| Cure.Core.Quote | 36 | 37 | 97.3 |
 | Cure.Core.Serialize | 108 | 108 | 100.0 |
 
 ## Cold lines
@@ -42,35 +42,26 @@
 ## Cure.Core.Kernel cold lines
 
   - bind_index/4: 862
-  - branch_unify/4: 772, 774, 775, 776
-  - check/3: 289, 296, 312
-  - check_case_branches/7: 707, 712
   - check_def/2: 358
-  - check_motive_wf/4: 607
   - head_key/1: 907
   - infer/2: 67
-  - infer_type_value_sort/2: 619, 621, 622, 623, 632, 690
   - normalize/2: 34
   - normalize/3: 38
   - remap_index_error/2: 558
-  - replace_branch_vars/2: 949, 955, 958, 960, 961, 971, 972, 977, 980, 983
-  - resolve_index_var/3: 887
-  - rigid_index?/1: 895
+  - replace_branch_vars/2: 980
   - unify_spine/4: 841, 844
 
 ## Cure.Core.Normalise cold lines
 
   - fuel_key/0: 85
-  - nf/2: 37
   - normalize_opts/1: 108, 112, 116, 122
-  - reduce_unfolded/3: 309, 310, 311, 315, 316, 317
+  - reduce_unfolded/3: 311, 317
   - spend_fuel/1: 335
-  - unfold_certified_head/3: 261, 267
   - with_fuel/2: 77
 
 ## Cure.Core.Quote cold lines
 
-  - split_data_args/3: 93, 94, 95
+  - split_data_args/3: 95
 
 ## Cure.Core.Serialize cold lines
 

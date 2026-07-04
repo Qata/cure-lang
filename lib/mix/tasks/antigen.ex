@@ -186,7 +186,25 @@ defmodule Mix.Tasks.Antigen do
       # Branch unification — direct branch_unify/4 calls with known verdicts; the
       # lever for the kernel's index unifier (unify_one/bind_index/unify_spine/
       # rigid_index?/head_key) past what a well-typed case reaches.
-      {2, Antigen.Generators.BranchUnify.gen()}
+      {2, Antigen.Generators.BranchUnify.gen()},
+      # Dot-forcing (#24) — forced/dot-pattern soundness: {name=.e} check-and-discard
+      # annotation; the lever for the elaborator's named-implicit forced-value
+      # resolution + the :unforced gate + Conv.conv? accept/reject decision.
+      {2, Antigen.Generators.DotForcing.gen()},
+      # Check-mode — direct Kernel.check/3 verdicts; the lever for checking-mode-only
+      # forms (parameter-bearing ctors, holes, Σ-introduction) inference can't reach.
+      {2, Antigen.Generators.CheckMode.gen()},
+      # Delta-reduction — δ-unfolding of certified globals under Normalise.nf; the
+      # only lever for unfold_certified_head + its ι-follow-through (definitional eq).
+      {2, Antigen.Generators.DeltaReduce.gen()},
+      # Capture-avoiding β (kernel/beta_subst) — redexes with capture traps; the
+      # kernel-level proof that β agrees with the elaborator's shifting substitution
+      # (validates the bind-once β-redex the guard/let elaboration emits, #4/#26).
+      {2, Antigen.Generators.BetaSubst.gen()},
+      # Elaborator/kernel shift agreement — over generated meta-free terms, the
+      # elaborator's Subst.shift must equal the kernel's Term.shift (the shift-half
+      # of the beta_subst cross-check; a TCB-boundary capture guard).
+      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")}
     ])
   end
 

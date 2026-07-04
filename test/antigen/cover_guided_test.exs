@@ -3,7 +3,9 @@ defmodule Antigen.CoverGuidedTest.CoverThenViolate do
   # Runs the challenge's REAL assay first (so the cover-compiled kernel actually
   # executes and coverage accumulates), then forces a violation so the guided
   # loop always has a jackpot to report. A pure {:violation} stub would never
-  # touch the kernel and thus never generate coverage.
+  # touch the kernel and thus never generate coverage. The violation is tagged
+  # `{:expected, _}` so the Runner renders it as a (calm) immune response rather
+  # than an alarming "ANTIGEN INFECTION" — it is deliberate scaffolding.
   def run(%Antigen.Challenge{assay: assay} = c) do
     _ =
       try do
@@ -14,7 +16,7 @@ defmodule Antigen.CoverGuidedTest.CoverThenViolate do
         _, _ -> :ok
       end
 
-    {:violation, :forced}
+    {:violation, {:expected, :forced}}
   end
 end
 

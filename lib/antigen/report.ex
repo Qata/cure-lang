@@ -2,24 +2,50 @@ defmodule Antigen.Report do
   @moduledoc "Ephemeral full failure reports; never lose a failure to a filtered pipe (spec §10, umbrella §8.1)."
   alias Antigen.{Challenge, Corpus}
 
-  @spec write_infection(String.t(), Challenge.t(), term(), map()) :: {:ok, String.t()}
-  def write_infection(dir, %Challenge{} = c, detail, health) do
+  @spec write_infection(String.t(), Challenge.t(), term(), map(), :infection | :immune_response) ::
+          {:ok, String.t()}
+  def write_infection(dir, c, detail, health, kind \\ :infection)
+
+  def write_infection(dir, %Challenge{} = c, detail, health, kind) do
     File.mkdir_p!(dir)
     slug = slug(c.assay)
     n = next_index(dir, c.seed, slug)
     path = Path.join(dir, "failure-#{c.seed}-#{slug}-#{n}.txt")
-    File.write!(path, render(c, detail, health))
+    File.write!(path, render(c, detail, health, kind))
     File.write!(Path.join(dir, "latest.txt"), Path.basename(path))
     {:ok, path}
   end
 
-  @spec breadcrumb(Challenge.t(), String.t()) :: String.t()
-  def breadcrumb(%Challenge{} = c, path),
+  @doc """
+  One-line stdout marker. `:infection` (default) is a REAL soundness violation
+  the assay caught in the system under test — the engine's whole point, and it
+  should read alarmingly. `:immune_response` is a DELIBERATELY-injected violation
+  (test scaffolding such as a forced-violation assay): the immune system working
+  as designed, so it reads calmly and must NOT be mistaken for a defect.
+  """
+  @spec breadcrumb(Challenge.t(), String.t(), :infection | :immune_response) :: String.t()
+  def breadcrumb(c, path, kind \\ :infection)
+
+  def breadcrumb(%Challenge{} = c, path, :infection),
     do: "ANTIGEN INFECTION [#{c.assay}] seed=#{c.seed} → #{path}"
 
-  defp render(c, detail, health) do
+  def breadcrumb(%Challenge{} = c, path, :immune_response),
+    do: "antigen immune response — expected, deliberately injected (not a defect) [#{c.assay}] seed=#{c.seed} → #{path}"
+
+  defp render(c, detail, health, :immune_response) do
     """
-    ANTIGEN INFECTION
+    ANTIGEN IMMUNE RESPONSE (expected)
+    This violation was DELIBERATELY injected — test scaffolding exercising the
+    detection/shrink/banking machinery. It is NOT a defect in the system under test.
+    """ <> render_body(c, detail, health)
+  end
+
+  defp render(c, detail, health, :infection) do
+    "ANTIGEN INFECTION\n" <> render_body(c, detail, health)
+  end
+
+  defp render_body(c, detail, health) do
+    """
     assay:      #{c.assay}
     label:      #{c.label}  (ground truth)
     seed:       #{c.seed}

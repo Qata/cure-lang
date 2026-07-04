@@ -3274,6 +3274,59 @@ defmodule Cure.Elab.Elaborator do
   defp forced_inner_expr({:forced_pattern, _m, inner}), do: inner
   defp forced_inner_expr(other), do: other
 
+  @doc """
+  Public soundness-probe shim for the forced-annotation check of ONE named
+  implicit `{name = .t}` on constructor `cname`, exposed for the Antigen
+  `forcing/dot` metatheory vertical (#24). It rebuilds the branch frame exactly
+  as `elaborate_matched_branch/10` does — `extend_context(ctx, telescope,
+  scrut_param_vals) |> specialize_branch_context_subst(subst)` — and DELEGATES to
+  the same `named_implicit_forced_value/4` (telescope-position → pinned forced
+  value) and `Cure.Core.Conv.conv?/5` the real `check_named_implicits/7` uses.
+
+  The caller supplies the ALREADY-ELABORATED written value `t_term` (the vertical
+  builds it correct-by-construction), so this omits only the surface
+  `elaborate_expr_typed` step; the forced-value resolution, the `:unforced` gate,
+  and the convertibility decision are the production code paths verbatim. Returns
+  `:ok` | `{:forced_pattern_mismatch, t_term, d}` | `{:named_implicit_unforced,
+  name}`, matching `check_named_implicits/7`'s three outcomes.
+  """
+  @spec forced_check_probe(
+          Env.t(),
+          Context.t(),
+          atom(),
+          [term()],
+          %{optional(integer()) => term()},
+          String.t(),
+          term()
+        ) :: :ok | {:forced_pattern_mismatch, term(), term()} | {:named_implicit_unforced, String.t()}
+  def forced_check_probe(env, ctx, cname, scrut_param_vals, subst, name, t_term) do
+    %{args: telescope} = Inductive.get_ctor(env, cname)
+    arity = length(telescope)
+
+    branch_ctx =
+      ctx
+      |> extend_context(telescope, scrut_param_vals)
+      |> specialize_branch_context_subst(subst)
+
+    case named_implicit_forced_value(name, subst, arity, telescope) do
+      {:ok, d} ->
+        if Cure.Core.Conv.conv?(
+             t_term,
+             d,
+             Context.env(branch_ctx),
+             Context.length(branch_ctx),
+             Context.signature(branch_ctx)
+           ) do
+          :ok
+        else
+          {:forced_pattern_mismatch, t_term, d}
+        end
+
+      :error ->
+        {:named_implicit_unforced, name}
+    end
+  end
+
   # Step 3b branch. The motive (see `wrap_motive_carried_eq`) makes this branch's
   # expected type `Π(prf : Eq(T, idx, ctor_idx)). G'[jₚₒₛ↦ctor_idx]`, where
   # `ctor_idx` is this constructor's result index at the carried position. Bind

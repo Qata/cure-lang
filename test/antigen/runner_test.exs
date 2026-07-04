@@ -74,16 +74,16 @@ defmodule Antigen.RunnerTest do
     assert r.infections >= 1
   end
 
-  test "default_gen has exactly 24 branches in the documented group order (guard)" do
+  test "default_gen has exactly 29 branches in the documented group order (guard)" do
     {:frequency, ws} = Mix.Tasks.Antigen.default_gen()
-    assert length(ws) == 24
+    assert length(ws) == 29
     # positions 15-18 are the structure-directed Primitive + Equality + TypeFormer
-    # + DepMatch generators (:typed_term producers → group `t`); positions 19 & 24
-    # are the family/index-shaped IndexedDecl + BranchUnify probes → group `f`;
-    # positions 20-23 are the Malformed negative + Serialization roundtrip +
-    # decode-robustness + conv-decision verticals → group `t`.
+    # + DepMatch generators (:typed_term producers → group `t`); positions 19, 24-28
+    # are the family/index/fixed-menu IndexedDecl + BranchUnify + DotForcing +
+    # CheckMode + DeltaReduce + BetaSubst probes → group `f`; positions 20-23 & 29 are
+    # the Malformed + Serialization + decode + conv + elab/shift_agrees (typed_term) → `t`.
     assert Antigen.Runner.gen_group_table() ==
-             %{f: [1, 2, 3, 19, 24], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23], m: [7, 8]}
+             %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
   end
 
   test "kernel-law verticals run to completion with 0 infections on the sound kernel" do
@@ -145,8 +145,10 @@ defmodule Antigen.RunnerTest.TriageWiring do
   # def named :f survives — so bisect may drop the redundant :g but NOT :f, giving a
   # deterministic minimized target of exactly [:f].
   defmodule KeepsF do
+    # `{:expected, _}`-tagged: a deliberate machinery-test violation, so the Runner
+    # renders it as a calm immune response instead of an "ANTIGEN INFECTION".
     def run(%Challenge{payload: %{defs: defs}}) do
-      if Enum.any?(defs, &(&1.name == :f)), do: {:violation, :boom}, else: :ok
+      if Enum.any?(defs, &(&1.name == :f)), do: {:violation, {:expected, :boom}}, else: :ok
     end
 
     def run(_), do: :ok
