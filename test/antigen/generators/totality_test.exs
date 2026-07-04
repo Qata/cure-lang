@@ -19,6 +19,25 @@ defmodule Antigen.Generators.TotalityTest do
     assert c.label == :terminating
   end
 
+  test "every live certifier-driver's known label agrees with the real certifier" do
+    drivers = [
+      Totality.enriched_terminating(),
+      Totality.nonvar_scrutinee_terminating(),
+      Totality.reconstruct_equal_diverging(),
+      Totality.unknown_arg_diverging(),
+      Totality.two_arg_terminating(),
+      Totality.terminating_mutual_pair(),
+      Totality.swap_terminating(),
+      Totality.nullary_self_loop(),
+      Totality.nullary_mutual_loop()
+    ]
+
+    for c <- drivers do
+      assert Antigen.Assays.Totality.run(c) == :ok,
+             "certifier disagreed with the #{c.label} label on: #{c.note}"
+    end
+  end
+
   test "a :def_group challenge's focus list survives a corpus encode/decode round trip" do
     c = Totality.diverging_mutual_pair()
     line = Corpus.encode_record(c)

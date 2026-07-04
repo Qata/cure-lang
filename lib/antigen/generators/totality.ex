@@ -20,7 +20,20 @@ defmodule Antigen.Generators.Totality do
   def gen(_opts \\ []) do
     Gen.frequency([
       {1, Gen.return(diverging_mutual_pair())},
-      {1, Gen.return(structural_terminating())}
+      {1, Gen.return(structural_terminating())},
+      # richer certifier drivers — cover Certificate.walk_node's per-former arms,
+      # non-var scrutinee refinement, arg_relation's ctor/catch-all arms, and the
+      # mixed change-matrix closure (see each constructor's @doc).
+      {1, Gen.return(enriched_terminating())},
+      {1, Gen.return(nonvar_scrutinee_terminating())},
+      {1, Gen.return(reconstruct_equal_diverging())},
+      {1, Gen.return(unknown_arg_diverging())},
+      {1, Gen.return(two_arg_terminating())},
+      # mutual-group accept path + matrix-closure / empty-dimension edges
+      {1, Gen.return(terminating_mutual_pair())},
+      {1, Gen.return(swap_terminating())},
+      {1, Gen.return(nullary_self_loop())},
+      {1, Gen.return(nullary_mutual_loop())}
     ])
   end
 
@@ -71,6 +84,218 @@ defmodule Antigen.Generators.Totality do
       label: :terminating,
       payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
       note: "structural recursion h(S y) = h y"
+    )
+  end
+
+  @nat_mot {:lam, @nat, @nat}
+
+  defp h_def(body, label, note) do
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/#{label}",
+      label: String.to_atom(label),
+      payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
+      note: note
+    )
+  end
+
+  @doc """
+  Structural recursion whose base (`Z`) branch carries a rich, call-free subterm —
+  every non-application Core former the size-change walker descends through:
+  `pair`/`fst`/`snd`, `eq`/`refl`/`rewrite`, `pi`/`sigma`, and a variable-headed
+  application. The lone self-call `h y` stays structural, so the def is certified;
+  the enrichment exists purely to exercise `Certificate.walk_node`'s per-former arms.
+  Label `:terminating`.
+  """
+  @spec enriched_terminating() :: Challenge.t()
+  def enriched_terminating do
+    base =
+      {:pair, {:fst, {:var, 0}},
+       {:pair, {:snd, {:var, 0}},
+        {:pair, {:eq, {:var, 0}, {:var, 0}, {:var, 0}},
+         {:pair, {:refl, {:var, 0}},
+          {:pair, {:rewrite, {:refl, {:var, 0}}, {:lam, @nat, {:var, 0}}, {:var, 0}},
+           {:pair, {:pi, @nat, @nat},
+            {:pair, {:sigma, @nat, @nat}, {:app, {:var, 0}, {:var, 0}}}}}}}}}
+
+    body =
+      {:lam, @nat,
+       {:case, {:var, 0}, @nat_mot, [{:Z, 0, base}, {:S, 1, {:app, {:global, :h}, {:var, 0}}}]}}
+
+    h_def(body, "terminating", "structural recursion with a rich call-free base branch")
+  end
+
+  @doc """
+  Structural recursion certified through an inner `:case` on a NON-variable
+  scrutinee (`fst (pair y y)`), so `scrut_index` returns `nil` (no refinement from
+  that match) yet the outer `S`-branch already exposed `y < n`, keeping `h y`
+  structural. Label `:terminating`.
+  """
+  @spec nonvar_scrutinee_terminating() :: Challenge.t()
+  def nonvar_scrutinee_terminating do
+    inner =
+      {:case, {:fst, {:pair, {:var, 0}, {:var, 0}}}, @nat_mot,
+       [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:var, 1}}}]}
+
+    body =
+      {:lam, @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, inner}]}}
+
+    h_def(body, "terminating", "certified through an inner case on a non-var scrutinee")
+  end
+
+  @doc """
+  `h(S y) = h(S y)` — the self-call argument is syntactically the reconstruction of
+  the matched scrutinee (`ctor(S, [y])`), so `arg_relation` yields `:equal`, never
+  `:smaller`. Genuinely diverges (`h n → h n`). Label `:diverging` — exercises the
+  ctor reconstruct-equal arm.
+  """
+  @spec reconstruct_equal_diverging() :: Challenge.t()
+  def reconstruct_equal_diverging do
+    body =
+      {:lam, @nat,
+       {:case, {:var, 0}, @nat_mot,
+        [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:ctor, :S, [{:var, 0}]}}}]}}
+
+    h_def(body, "diverging", "self-call arg is the scrutinee reconstruction (arg_relation :equal)")
+  end
+
+  @doc """
+  `h(S y) = h(fst (pair n n))` — the self-call argument is a projection (neither a
+  variable nor a constructor), so `arg_relation` falls through to `:unknown`. The
+  argument is definitionally `n`, so it genuinely diverges. Label `:diverging` —
+  exercises `arg_relation`'s catch-all arm.
+  """
+  @spec unknown_arg_diverging() :: Challenge.t()
+  def unknown_arg_diverging do
+    # in the S-branch the original scrutinee n sits at de Bruijn 1 (shifted past y)
+    body =
+      {:lam, @nat,
+       {:case, {:var, 0}, @nat_mot,
+        [{:Z, 0, {:ctor, :Z, []}},
+         {:S, 1, {:app, {:global, :h}, {:fst, {:pair, {:var, 1}, {:var, 1}}}}}]}}
+
+    h_def(body, "diverging", "self-call arg is a projection → arg_relation :unknown")
+  end
+
+  @doc """
+  Curried two-argument structural recursion `f a b = case b of {Z → Z; S y → f a y}`:
+  the first parameter is preserved (`:equal`) while the second decreases
+  (`:smaller`), so the change-matrix carries mixed relations and its transitive
+  closure composes `:equal`·`:smaller` entries. Label `:terminating`.
+  """
+  @spec two_arg_terminating() :: Challenge.t()
+  def two_arg_terminating do
+    ty = {:pi, @nat, {:pi, @nat, @nat}}
+
+    body =
+      {:lam, @nat,
+       {:lam, @nat,
+        {:case, {:var, 0}, @nat_mot,
+         [{:Z, 0, {:ctor, :Z, []}},
+          {:S, 1, {:app, {:app, {:global, :f}, {:var, 2}}, {:var, 0}}}]}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{defs: [%{name: :f, type: ty, body: body}], focus: [:f]},
+      note: "curried 2-arg structural recursion f a (S y) = f a y (mixed change matrix)"
+    )
+  end
+
+  @doc """
+  A genuinely-total MUTUAL pair `f(S y) = g y`, `g(S y) = f y` (both `Nat → Nat`,
+  `Z` base) with `f`'s base branch calling an out-of-SCC total leaf `h = λx.x`.
+  Each cross-call decreases, so the `{f, g}` group certifies — the counterpart to
+  `diverging_mutual_pair` on the ACCEPT side, exercising the cross-function edge
+  build + group closure (`function_edges` incl. its out-of-group emit arm,
+  `mutual_group_total?`, `reaches?`, `callees_env`). Label `:terminating`.
+  """
+  @spec terminating_mutual_pair() :: Challenge.t()
+  def terminating_mutual_pair do
+    ty = {:pi, @nat, @nat}
+    # f's Z-branch calls the out-of-group leaf h (identity) — an intra-body call to
+    # a global NOT in the {f,g} SCC, so function_edges' emit takes its nil arm.
+    bf = {:lam, @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:app, {:global, :h}, {:ctor, :Z, []}}}, {:S, 1, {:app, {:global, :g}, {:var, 0}}}]}}
+    bg = {:lam, @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :f}, {:var, 0}}}]}}
+    bh = {:lam, @nat, {:var, 0}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{
+        defs: [
+          %{name: :f, type: ty, body: bf},
+          %{name: :g, type: ty, body: bg},
+          %{name: :h, type: ty, body: bh}
+        ],
+        focus: [:f, :g]
+      },
+      note: "terminating mutual pair f(S y)=g y, g(S y)=f y; f base calls out-of-SCC leaf h"
+    )
+  end
+
+  @doc """
+  Argument-swapping structural recursion `f a b = case a of {Z → Z; S y → f b y}`:
+  a call-arg relates `:equal` to one column and `:smaller` to another, so the
+  change-matrix's transitive closure composes an `:equal`·`:smaller` product
+  (`pathmul(:equal, :smaller)`). Terminating (both descend over two steps). Label
+  `:terminating`.
+  """
+  @spec swap_terminating() :: Challenge.t()
+  def swap_terminating do
+    ty = {:pi, @nat, {:pi, @nat, @nat}}
+
+    body =
+      {:lam, @nat,
+       {:lam, @nat,
+        {:case, {:var, 1}, @nat_mot,
+         [{:Z, 0, {:ctor, :Z, []}},
+          {:S, 1, {:app, {:app, {:global, :f}, {:var, 1}}, {:var, 0}}}]}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/terminating",
+      label: :terminating,
+      payload: %{defs: [%{name: :f, type: ty, body: body}], focus: [:f]},
+      note: "arg-swapping recursion f a b = f b y (equal·smaller matrix closure)"
+    )
+  end
+
+  @doc """
+  Nullary self-loop `f = f` (arity 0, body is the bare global): the change matrix
+  is `0×0`, so the matrix builder's empty-dimension arm (`rows n<=0 → []`) fires.
+  Genuinely diverges. Label `:diverging`.
+  """
+  @spec nullary_self_loop() :: Challenge.t()
+  def nullary_self_loop do
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{defs: [%{name: :f, type: @nat, body: {:global, :f}}], focus: [:f]},
+      note: "nullary self-loop f = f (0×0 change matrix)"
+    )
+  end
+
+  @doc """
+  Nullary MUTUAL loop `f = g`, `g = f` (both arity 0): the cross-function edges are
+  `0×0`, so their composition in the group closure exercises the empty-row matrix
+  path (`row_len [] → 0`, `mat_compose` over empty rows). Genuinely diverges (the
+  once-live mutual-cycle hole at nullary arity). Label `:diverging`.
+  """
+  @spec nullary_mutual_loop() :: Challenge.t()
+  def nullary_mutual_loop do
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{
+        defs: [%{name: :f, type: @nat, body: {:global, :g}}, %{name: :g, type: @nat, body: {:global, :f}}],
+        focus: [:f, :g]
+      },
+      note: "nullary mutual loop f = g, g = f (0×0 cross-function edges)"
     )
   end
 
