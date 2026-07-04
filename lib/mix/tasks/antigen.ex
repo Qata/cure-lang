@@ -186,7 +186,11 @@ defmodule Mix.Tasks.Antigen do
       # Branch unification — direct branch_unify/4 calls with known verdicts; the
       # lever for the kernel's index unifier (unify_one/bind_index/unify_spine/
       # rigid_index?/head_key) past what a well-typed case reaches.
-      {2, Antigen.Generators.BranchUnify.gen()}
+      {2, Antigen.Generators.BranchUnify.gen()},
+      # Dot-forcing (#24) — forced/dot-pattern soundness: {name=.e} check-and-discard
+      # annotation; the lever for the elaborator's named-implicit forced-value
+      # resolution + the :unforced gate + Conv.conv? accept/reject decision.
+      {2, Antigen.Generators.DotForcing.gen()}
     ])
   end
 

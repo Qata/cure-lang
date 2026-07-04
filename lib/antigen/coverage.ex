@@ -38,6 +38,8 @@ defmodule Antigen.Coverage do
 
   def terms_of(%Challenge{kind: :branch_unify, payload: %{indices: idx}}), do: idx
 
+  def terms_of(%Challenge{kind: :dot_forcing, payload: %{indices: idx, written: w}}), do: idx ++ [w]
+
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 

@@ -121,7 +121,9 @@ defmodule Antigen.Challenge do
     # Conversion-decision vertical: kind + labels
     :conv_pair, :convertible, :distinct,
     # Branch-unification vertical: kind + verdict labels + crossing-family names
-    :branch_unify, :solved, :impossible, :trivial, :Cyc4, :mkcyc
+    :branch_unify, :solved, :impossible, :trivial, :Cyc4, :mkcyc,
+    # Dot-forcing vertical (#24): kind + verdict labels
+    :dot_forcing, :accept, :reject, :unforced
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -222,6 +224,23 @@ defmodule Antigen.Challenge do
   def to_pieces(%__MODULE__{kind: :branch_unify, payload: %{ctx_vars: n, dname: d, cname: c, indices: idx}}) do
     scaffold = %{"ctx_vars" => n, "dname" => Atom.to_string(d), "cname" => Atom.to_string(c)}
     {scaffold, idx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"idx:#{i}", t} end)}
+  end
+
+  def to_pieces(%__MODULE__{
+        kind: :dot_forcing,
+        payload: %{ctx_vars: n, family: f, cname: c, indices: idx, name: name, written: w}
+      }) do
+    scaffold = %{
+      "ctx_vars" => n,
+      "family" => Atom.to_string(f),
+      "cname" => Atom.to_string(c),
+      "name" => name
+    }
+
+    pieces =
+      (idx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"idx:#{i}", t} end)) ++ [{"written", w}]
+
+    {scaffold, pieces}
   end
 
   def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
@@ -396,6 +415,24 @@ defmodule Antigen.Challenge do
     }
 
     new(kind: :branch_unify, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:dot_forcing, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    written = Map.fetch!(pmap, "written")
+    idx_n = pieces |> Enum.count(fn {k, _} -> String.starts_with?(k, "idx:") end)
+    indices = if idx_n == 0, do: [], else: for(i <- 0..(idx_n - 1)//1, do: Map.fetch!(pmap, "idx:#{i}"))
+
+    payload = %{
+      ctx_vars: scaffold["ctx_vars"],
+      family: String.to_existing_atom(scaffold["family"]),
+      cname: String.to_existing_atom(scaffold["cname"]),
+      indices: indices,
+      name: scaffold["name"],
+      written: written
+    }
+
+    new(kind: :dot_forcing, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
