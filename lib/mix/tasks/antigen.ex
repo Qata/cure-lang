@@ -79,13 +79,44 @@ defmodule Mix.Tasks.Antigen do
         IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked")
 
       :cover ->
-        {coverage, _report} = Antigen.Cover.run_report(Keyword.put(runner_opts, :out, opts[:out]))
-        covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
-        total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
-        pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
-        dest = if opts[:out], do: " → #{opts[:out]}", else: ""
-        IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
+        {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)
+
+        case cover_mode do
+          :guided ->
+            r = Antigen.Cover.guided_loop(cover_opts)
+
+            IO.puts(
+              "antigen cover --guided: #{r.covered_lines} kernel lines covered, " <>
+                "#{r.banked} edge(s) banked, #{r.infections} infection(s) over #{r.rounds} round(s)"
+            )
+
+          :report ->
+            {coverage, _report} = Antigen.Cover.run_report(cover_opts)
+            covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
+            total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
+            pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
+            dest = if opts[:out], do: " → #{opts[:out]}", else: ""
+            IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
+        end
     end
+  end
+
+  @doc """
+  Decide the `cover` sub-mode and build the opts passed to `Antigen.Cover`.
+  `--guided` selects `:guided` (the coverage-guided loop); otherwise `:report`
+  (the one-shot measurement). `--out`, `--edge-corpus`, and `--precise` are
+  threaded onto the runner opts. Pure + public so the routing is unit-tested
+  without running a campaign.
+  """
+  def cover_dispatch(opts, runner_opts) do
+    merged =
+      runner_opts
+      |> Keyword.put(:out, opts[:out])
+      |> Keyword.put(:edge_corpus, opts[:edge_corpus])
+      |> Keyword.put(:precise, opts[:precise] || false)
+
+    mode = if opts[:guided], do: :guided, else: :report
+    {mode, merged}
   end
 
   @doc "Convert a `\"Nm\"` wall-budget to a round count via the fixed `@rounds_per_minute`."

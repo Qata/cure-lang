@@ -10,6 +10,27 @@ defmodule Mix.Tasks.AntigenTest do
     :ok
   end
 
+  test "cover_dispatch routes --guided to :guided and threads precise/edge_corpus/out" do
+    runner_opts = [gen: :g, count: 10, corpus_path: "c.sexp"]
+
+    {mode, merged} =
+      Mix.Tasks.Antigen.cover_dispatch(
+        [guided: true, precise: true, edge_corpus: "e.sexp", out: "o.md"],
+        runner_opts
+      )
+
+    assert mode == :guided
+    assert merged[:precise] == true
+    assert merged[:edge_corpus] == "e.sexp"
+    assert merged[:out] == "o.md"
+    assert merged[:corpus_path] == "c.sexp"   # runner_opts preserved
+
+    {mode2, merged2} = Mix.Tasks.Antigen.cover_dispatch([], runner_opts)
+    assert mode2 == :report
+    assert merged2[:precise] == false
+    assert merged2[:edge_corpus] == nil
+  end
+
   test "mix antigen --count runs the explorer and prints a summary" do
     out =
       capture_io(fn ->
