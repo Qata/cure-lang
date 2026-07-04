@@ -1507,6 +1507,21 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 ### Task 10: R7 — `:ambiguous_name` for distinct import-vs-import collisions
 
+> **Amendment (shadow07 unit-only; wiring interaction with uniform resolution).**
+> `import_source_path/1` resolves only `Std.*` modules from the single stdlib source
+> dir, so two GENUINELY-distinct modules both declaring `type Nat` cannot be loaded
+> without mutating the shared stdlib dir (unsafe under the concurrent-agent
+> constraint), and the real stdlib has no such pair. Per Step 7's own fallback,
+> **shadow07 is unit-covered only** — `ambiguous_modules/2`'s ExUnit tests
+> (`resolution_test.exs`) pin the mechanism; no oracle probe is added. Wiring stands
+> as planned: `resolve_index_name` (type) emits `{:ambiguous_name, atom, mods}` before
+> `{:global, atom}` and its `{:variable,…}` caller turns it into `{:error, …}`;
+> `elaborate_named_call` (value) checks `ambiguous_modules/2 >= 2` right after the ctor
+> branch, before `implicit_def?`. Note the uniform-resolution helper
+> `resolve_bare_shadowed/2` already returns `{:ambiguous, mods}` for ≥2 variants and is
+> consulted first — so an ambiguous name never mis-resolves to a single variant; it
+> falls through to this R7 branch.
+
 **Files:**
 - Modify: `lib/cure/elab/resolution.ex` — add `ambiguous_modules/2`.
 - Modify: `lib/cure/elab/declarations.ex` — `resolve_index_name/2` checks ambiguity before falling to `{:global, atom}`.

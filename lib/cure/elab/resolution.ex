@@ -235,6 +235,28 @@ defmodule Cure.Elab.Resolution do
     end
   end
 
+  @doc """
+  All origin modules that provide family `bare` under a re-keyed `:"Mod#bare"`
+  family key. ≥2 ⇒ the unqualified name is ambiguous (no local winner claimed
+  the bare key). Returns [] when the bare key is present (a winner exists) or
+  the name is unknown.
+  """
+  @spec ambiguous_modules(Env.t(), atom()) :: [String.t()]
+  def ambiguous_modules(%Env{families: families}, bare) do
+    if Map.has_key?(families, bare) do
+      []
+    else
+      suffix = "#" <> Atom.to_string(bare)
+
+      families
+      |> Map.keys()
+      |> Enum.flat_map(fn k ->
+        s = Atom.to_string(k)
+        if String.ends_with?(s, suffix), do: [String.trim_trailing(s, suffix)], else: []
+      end)
+    end
+  end
+
   defp try_keys(env, keys, slot) do
     present? =
       case slot do

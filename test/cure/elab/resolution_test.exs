@@ -169,4 +169,27 @@ defmodule Cure.Elab.ResolutionTest do
       assert Cure.Elab.Resolution.resolve_qualified(env, "Std.Nope.Gone", :value) == :error
     end
   end
+
+  describe "ambiguous_modules/2" do
+    test "reports ≥2 origins for a name re-keyed off the bare atom" do
+      env =
+        %Cure.Core.Env{}
+        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:"Std.Foo#Nat", [], [], 0),
+             [Cure.Core.Inductive.ctor(:"Std.Foo#FZero", [], [])])
+        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:"Std.Bar#Nat", [], [], 0),
+             [Cure.Core.Inductive.ctor(:"Std.Bar#BZero", [], [])])
+
+      mods = Cure.Elab.Resolution.ambiguous_modules(env, :Nat)
+      assert Enum.sort(mods) == ["Std.Bar", "Std.Foo"]
+    end
+
+    test "returns [] when a bare winner key is present" do
+      env =
+        %Cure.Core.Env{}
+        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:Nat, [], [], 0), [])
+        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:"Std.Bar#Nat", [], [], 0), [])
+
+      assert Cure.Elab.Resolution.ambiguous_modules(env, :Nat) == []
+    end
+  end
 end

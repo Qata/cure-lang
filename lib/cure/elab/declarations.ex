@@ -718,8 +718,14 @@ defmodule Cure.Elab.Declarations do
 
   defp idx_to_core({:variable, _meta, name}, scope, _fam, env) do
     case Enum.find_index(scope, &(&1 == name)) do
-      nil -> {:ok, resolve_index_name(name, env)}
-      index -> {:ok, {:var, index}}
+      nil ->
+        case resolve_index_name(name, env) do
+          {:ambiguous_name, atom, mods} -> {:error, {:ambiguous_name, atom, mods}}
+          node -> {:ok, node}
+        end
+
+      index ->
+        {:ok, {:var, index}}
     end
   end
 
@@ -872,6 +878,11 @@ defmodule Cure.Elab.Declarations do
       match?({:ok, _}, Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)) ->
         {:ok, key} = Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)
         if Inductive.family?(env, key), do: {:data, key, [], []}, else: {:ctor, key, []}
+
+      # ≥2 distinct re-keyed origins, no local/unshadowed winner: unqualified use
+      # is ambiguous (R7). The caller turns this marker into an error.
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}
 
       true -> {:global, atom}
     end

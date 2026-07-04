@@ -284,6 +284,14 @@ defmodule Cure.Elab.Elaborator do
             end
         end
 
+      # A bare name provided by ≥2 distinct re-keyed imports with no local/
+      # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
+      # generic paths so an ambiguous name surfaces `:ambiguous_name`, not a
+      # confusing downstream "not found". (`resolved == atom` here: an ambiguous
+      # name has no dot and no unique variant.)
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
+
       # A global whose telescope carries erased (implicit) parameters: insert
       # fresh metavariables for them and solve from the present arguments, the
       # same way constructor indices are inferred (§5.2). Without this, the
