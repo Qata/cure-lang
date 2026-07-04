@@ -101,6 +101,9 @@ defmodule Antigen.Generators.DepMatch do
       {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:fst, {:var, 1}}, {:fst, {:var, 1}}})},
       {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:snd, {:var, 1}}, {:snd, {:var, 1}}})},
       {2, var_index_extra2({:int_type}, {:eq, {:int_type}, {:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}})},
+      # a STUCK case over a Bool helper var in an index position — the case arm of
+      # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.
+      {2, var_index_extra2(stuck_case_helper(), {:eq, @nat, stuck_case(), stuck_case()})},
       # TWO-index diagonal family Sq — matching forces a ≡ b, the only v1 shape
       # that reaches unify_spine (2-index spine) + bind_index's merge path.
       {3, sq_diag()},
@@ -220,6 +223,13 @@ defmodule Antigen.Generators.DepMatch do
   # [helper,helper]` — driving replace_branch_vars' app/fst/snd/prim arms when a
   # branch refines the index. Frame: Γ = [extra_ty, helper_ty, Vec n, n:Nat]; the
   # scrutinee is var 2, the helper var 1, and `n` var 3 inside extra_ty.
+  # helper for the case-in-index variant: a Bool-typed helper var, and a stuck
+  # `case helper of False -> Z; True -> Z` (helper is var 1 in the two-var frame).
+  defp stuck_case_helper, do: {:data, :Bool, [], []}
+
+  defp stuck_case,
+    do: {:case, {:var, 1}, {:lam, {:data, :Bool, [], []}, @nat}, [{:False, 0, @z}, {:True, 0, @z}]}
+
   defp var_index_extra2(helper_ty, extra_ty) do
     Gen.bind(numeral(), fn zbody ->
       Gen.bind(numeral(), fn sbody ->
