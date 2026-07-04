@@ -100,7 +100,9 @@ defmodule Antigen.Challenge do
     # parametric positivity generator: subject family + ctor/binder name pools
     :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2,
     # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
-    :Sq, :mksq, :j
+    :Sq, :mksq, :j,
+    # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors
+    :Ty, :tnat, :tbd, :tint, :tflt, :tpi, :tsig, :tvec
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

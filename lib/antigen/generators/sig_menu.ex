@@ -89,6 +89,23 @@ defmodule Antigen.Generators.SigMenu do
       # single Nat index). Consumed by Generators.DepMatch's Sq variant.
       |> Inductive.declare(Inductive.family(:Sq, [], [{:i, nat()}, {:j, nat()}], 0),
         [Inductive.ctor(:mksq, [{:n, nat()}], [{:var, 0}, {:var, 0}])])
+      # Ty : (a:Type0) -> Type0 — a family indexed BY A TYPE, with constructors
+      # pinned at concrete type indices (Nat / Bd / Int / Float / Π / Σ / Vec Z).
+      # Matching a closed scrutinee `x : Ty T` unifies T against each ctor's rigid
+      # type index, so this is the only v1 shape whose index unification compares
+      # NON-Nat rigid heads — the lever for rigid_index?'s data/type-former/int/
+      # float clauses, head_key's :data clause, and unify_one's data-spine /
+      # syntactic-equal clauses. Consumed by Generators.DepMatch's Ty variant.
+      |> Inductive.declare(Inductive.family(:Ty, [], [{:a, {:type, 0}}], 0),
+        [
+          Inductive.ctor(:tnat, [], [nat()]),
+          Inductive.ctor(:tbd, [], [bd()]),
+          Inductive.ctor(:tint, [], [{:int_type}]),
+          Inductive.ctor(:tflt, [], [{:float_type}]),
+          Inductive.ctor(:tpi, [], [{:pi, nat(), nat()}]),
+          Inductive.ctor(:tsig, [], [{:sigma, nat(), nat()}]),
+          Inductive.ctor(:tvec, [], [{:data, :Vec, [{:ctor, :Z, []}], []}])
+        ])
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}

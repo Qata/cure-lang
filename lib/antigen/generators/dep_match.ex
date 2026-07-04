@@ -72,9 +72,60 @@ defmodule Antigen.Generators.DepMatch do
       # that reaches unify_spine (2-index spine) + bind_index's merge path.
       {3, sq_diag()},
       {2, sq_closed(@z, @z)},
-      {2, sq_closed(@z, {:ctor, :S, [@z]})}
+      {2, sq_closed(@z, {:ctor, :S, [@z]})},
+      # Type0-indexed family Ty — a closed type index unified against each ctor's
+      # rigid type index (rigid_index? data/int/float/Π/Σ, head_key :data,
+      # unify_one data-spine / syntactic-equal). Random concrete index + a var index.
+      {4, ty_closed()},
+      {2, ty_var()}
     ])
   end
+
+  # Ty's constructor index terms (in declaration order).
+  @ty_indices [
+    @nat,
+    @bd,
+    {:int_type},
+    {:float_type},
+    {:pi, @nat, @nat},
+    {:sigma, @nat, @nat},
+    {:data, :Vec, [@z], []}
+  ]
+  @ty_branches [
+    {:tnat, 0, @z},
+    {:tbd, 0, @z},
+    {:tint, 0, @z},
+    {:tflt, 0, @z},
+    {:tpi, 0, @z},
+    {:tsig, 0, @z},
+    {:tvec, 0, @z}
+  ]
+
+  # Closed scrutinee x : Ty T for a random concrete type index T. The matching ctor
+  # is trivial/solved; the rest unify T against a differing rigid head (:impossible
+  # or :undecided) — the rigid_index?/head_key comparison lever.
+  defp ty_closed do
+    Gen.bind(Gen.member_of(@ty_indices), fn idx ->
+      Gen.bind(numeral(), fn body ->
+        term = mk_case({:var, 0}, ty_motive(), replace_first_body(@ty_branches, body))
+        Gen.return({[ty(idx)], term, @nat})
+      end)
+    end)
+  end
+
+  # Variable index x : Ty a (a : Type0) — every ctor's rigid type index is bound to a.
+  defp ty_var do
+    Gen.bind(numeral(), fn body ->
+      term = mk_case({:var, 0}, ty_motive(), replace_first_body(@ty_branches, body))
+      Gen.return({[ty({:var, 0}), {:type, 0}], term, @nat})
+    end)
+  end
+
+  defp ty(a), do: {:data, :Ty, [], [a]}
+  # λa. λv:Ty a. Nat
+  defp ty_motive, do: {:lam, {:type, 0}, {:lam, ty({:var, 0}), @nat}}
+  # vary the reachable-branch body without disturbing the fixed ctor set
+  defp replace_first_body([{c, ar, _} | rest], body), do: [{c, ar, body} | rest]
 
   # Γ = [ s : Sq a b (idx 0), b : Nat (idx 1), a : Nat (idx 2) ]; matching mksq
   # unifies the diagonal result index against both a and b → forces a ≡ b.
