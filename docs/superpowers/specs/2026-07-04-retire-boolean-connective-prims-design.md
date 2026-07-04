@@ -166,8 +166,14 @@ explicitly since it is an observable evaluation-order change.
 1. **Certifier:** the five prelude defs certify (total, well-typed).
 2. **Definitional equalities (new, must hold by `refl`):** `not True ≡ False`,
    `not False ≡ True`, `and True b ≡ b`, `and False b ≡ False`,
-   `or True b ≡ True`, `or False b ≡ b`, `not (not b) ≡ b` for a *variable* `b`
+   `or True b ≡ True`, `or False b ≡ b` for a *variable* `b`
    (the open-term win — impossible with the old prims).
+   **Correction (verified 2026-07-04, `1b5e510`):** `not (not b) ≡ b` is NOT
+   definitional — for a neutral `b` it reduces to a stuck `case`-of-`case` and is
+   only *propositionally* equal, exactly as in Agda/Lean. Only the four one-step
+   equations above are definitional wins. `test/cure/core/bool_connective_defeq_test.exs`
+   asserts the four and `refute`s the double-negation (and `refute`s all four
+   without the defs, proving the equality comes from δ-unfolding, not vacuity).
 3. **Native-op lowering fidelity:** compiled `and/or/not` still emit a BEAM
    boolean op; add a codegen/round-trip test. If switching to
    `:andalso`/`:orelse`, assert the short-circuit evaluation order.
