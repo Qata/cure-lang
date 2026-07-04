@@ -1160,6 +1160,17 @@ defmodule Cure.Compiler.Codegen do
 
       form =
         cond do
+          # A qualified CONSTRUCTOR reference (escape hatch, e.g. `Std.Nat.Z()`):
+          # the last dotted segment is PascalCase, i.e. a constructor by the same
+          # bare-name heuristic `constructor?/1` uses everywhere else. Checked
+          # BEFORE the generic qualified-call branch, or a qualified constructor
+          # call compiles to a bogus remote call to a non-existent function
+          # instead of a tagged tuple. Codegen never sees the elaborator's
+          # internal `Mod#Name`-keyed atoms (no dependency on Cure.Core/Cure.Elab),
+          # so the bare name it needs is just the last segment of the dotted path.
+          String.contains?(name, ".") and constructor?(qualified_ctor_tail(name)) ->
+            compile_constructor_call(qualified_ctor_tail(name), arg_forms, line)
+
           # Qualified call: Mod.fun(args) -- must come before constructor check
           String.contains?(name, ".") ->
             compile_qualified_call(name, arg_forms, line)
@@ -1220,6 +1231,11 @@ defmodule Cure.Compiler.Codegen do
     tag = constructor_tag(name)
     {:tuple, line, [{:atom, line, tag} | arg_forms]}
   end
+
+  # The final dotted segment of a qualified surface name, e.g. "Std.Nat.Z" -> "Z".
+  # Used only to decide/extract a qualified CONSTRUCTOR reference; codegen has no
+  # Env, so this is a pure string operation (the runtime tag stays bare per §3.5).
+  defp qualified_ctor_tail(name), do: name |> String.split(".") |> List.last()
 
   # -- Record Update Compilation -----------------------------------------------
 
