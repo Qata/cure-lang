@@ -168,9 +168,44 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Normalize a constructor atom that may be a flattened dotted path
+  # (`:"Std.Nat.Z"`) to a registry key via the resolution layer; a bare atom
+  # with no "." is returned unchanged.
+  defp resolve_ctor_key(env, cname) do
+    s = Atom.to_string(cname)
+
+    if String.contains?(s, ".") do
+      case Cure.Elab.Resolution.resolve_qualified(env, s, :value) do
+        {:ok, key} -> key
+        :error -> cname
+      end
+    else
+      cname
+    end
+  end
+
+  # Rewrite a constructor pattern's surface `:name` to the resolved registry key
+  # so downstream re-derivation (`constructor_pattern/1` in `elaborate_matched_branch`
+  # / `elaborate_rematch_branch`) yields the resolved atom, not the stale dotted
+  # one. A bare (non-dotted) name maps to itself, so this is a no-op there.
+  defp rekey_pattern_name({:function_call, pmeta, pargs}, cname),
+    do: {:function_call, Keyword.put(pmeta, :name, Atom.to_string(cname)), pargs}
+
+  defp rekey_pattern_name(pattern, _cname), do: pattern
+
   defp elaborate_named_call(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
+
+    resolved =
+      if String.contains?(name, ".") do
+        case Cure.Elab.Resolution.resolve_qualified(env, name, :value) do
+          {:ok, key} -> key
+          :error -> atom
+        end
+      else
+        atom
+      end
 
     cond do
       name == "refl" and length(args) == 1 ->
@@ -182,10 +217,10 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
-      Inductive.get_ctor(env, atom) ->
+      Inductive.get_ctor(env, resolved) ->
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_ctor_app(env, atom, present, ctx)
+            elaborate_ctor_app(env, resolved, present, ctx)
           end
 
         # A nested underdetermined constructor in *inference* position —
@@ -200,7 +235,7 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_ctor_app_infer_bidirectional(env, atom, args, names, ctx) do
+            case elaborate_ctor_app_infer_bidirectional(env, resolved, args, names, ctx) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> orig
             end
@@ -1261,8 +1296,11 @@ defmodule Cure.Elab.Elaborator do
       with_pattern = Keyword.fetch!(arm_meta, :pattern)
       parent_patterns = Keyword.fetch!(arm_meta, :parent_patterns)
 
-      with {:ok, {cname, _vars}} <- constructor_pattern(with_pattern),
+      with {:ok, {cname0, _vars}} <- constructor_pattern(with_pattern),
            {:ok, _subst} <- match_parent_lhs(original_params, parent_patterns) do
+        cname = resolve_ctor_key(env, cname0)
+        with_pattern = rekey_pattern_name(with_pattern, cname)
+
         cond do
           Inductive.get_ctor(env, cname) == nil ->
             {:halt, {:error, {:unknown_pattern_constructor, cname}}}
@@ -2773,7 +2811,10 @@ defmodule Cure.Elab.Elaborator do
             {:error, _} = err ->
               {:halt, err}
 
-            {:ok, {cname, _vars}} ->
+            {:ok, {cname0, _vars}} ->
+              cname = resolve_ctor_key(env, cname0)
+              pattern = rekey_pattern_name(pattern, cname)
+
               cond do
                 Inductive.get_ctor(env, cname) == nil ->
                   {:halt, {:error, {:unknown_pattern_constructor, cname}}}

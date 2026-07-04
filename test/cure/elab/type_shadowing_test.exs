@@ -67,4 +67,23 @@ defmodule Cure.Elab.TypeShadowingTest do
 
     assert {:ok, _env} = elaborate(src)
   end
+
+  # Task 7 (value + pattern positions), isolated from the qualified TYPE slot
+  # (Task 8): no local shadow, so `Nat`/`Std.Nat.Z`/`Std.Nat.S` resolve to the
+  # imported family, exercising `elaborate_named_call` (expr) and `partition_arms`
+  # (pattern) qualified-ctor resolution via bare-fallback. Full R3 (with `Std.Nat`
+  # type slots + a local shadow) is added in Task 8.
+  test "R3 (isolated): qualified ctor resolves in expression and pattern position" do
+    src = """
+    mod IsolatedEscape
+      use Std.Nat
+      fn two() -> Nat = Std.Nat.S(Std.Nat.Z())
+      fn is_zero(n: Nat) -> Nat = match n
+        Std.Nat.Z() -> Std.Nat.Z()
+        Std.Nat.S(k) -> Std.Nat.S(Std.Nat.Z())
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
 end
