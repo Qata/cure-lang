@@ -44,5 +44,16 @@ defmodule Antigen.Generators.IndexedDeclTest do
     # including a non-uniform (ill_typed) instance
     assert Enum.any?(sample, fn c -> c.payload.family.params != [] end)
     assert Enum.any?(sample, fn c -> c.payload.family.params != [] and c.label == :ill_typed end)
+
+    # the dependent-index family: a Type param AND ≥2 index positions whose types
+    # reference that param → check_result_indices' parameter-seeding path (the
+    # dp01/dp02 datatype shape). Every such challenge is :well_typed (the self-
+    # consistency test above already asserts the kernel accepts it).
+    assert Enum.any?(sample, fn c ->
+             c.payload.family.name == :MyEqK and
+               length(c.payload.family.indices) >= 2 and
+               Enum.all?(c.payload.family.indices, fn {_n, t} -> match?({:var, _}, t) end) and
+               c.label == :well_typed
+           end)
   end
 end

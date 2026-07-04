@@ -107,6 +107,9 @@ defmodule Antigen.Challenge do
     :IdxI, :mki, :mkb,
     # P/pc: parameterized indexed family (check_uniform_params / check_ctor_args)
     :P, :pc, :x,
+    # MyEqK/mreflK: Type-param family, generalized field repeated across ≥2 indices
+    # (check_result_indices parameter-seeding path — the dp01/dp02 datatype)
+    :MyEqK, :mreflK,
     # Tg/Tgf: Int/Float-value-indexed families (rigid_index? int_lit/float_lit)
     :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1,
     # Malformed negative vertical: kind + undeclared names the kernel must reject

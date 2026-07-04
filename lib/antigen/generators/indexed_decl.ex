@@ -50,8 +50,26 @@ defmodule Antigen.Generators.IndexedDecl do
       {2, arg_bearing(kind)},
       {2, param(kind, :uniform)},
       {1, param(kind, :non_uniform)},
-      {1, param(kind, :arity)}
+      {1, param(kind, :arity)},
+      {2, dependent_eq()}
     ])
+  end
+
+  # MyEqK : (a:Type0) -> (x0:a) -> ... -> (x_{k-1}:a) -> Type0 with a ctor
+  # mreflK : (w:a) -> MyEqK a w ... w — the single generalized field w:a written
+  # into every result-index position. Each index-telescope TYPE references the
+  # parameter (index i has type a = {:var, i}, the param shifted past i preceding
+  # indices), so `check_result_indices` must seed do_spine with the parameter
+  # value. With a Type param AND the var repeated across ≥2 indices this is the
+  # exact shape that tripped the de Bruijn seeding bug (the dp01/dp02 datatype).
+  # Correct label :well_typed; cross-checked against the kernel in the gen test.
+  defp dependent_eq do
+    Gen.bind(Gen.member_of([2, 3]), fn k ->
+      indices = for i <- 0..(k - 1), do: {:n, {:var, i}}
+      fam = Inductive.family(:MyEqK, [{:a, {:type, 0}}], indices, 0)
+      ctor = Inductive.ctor(:mreflK, [{:w, {:var, 0}}], List.duplicate({:var, 0}, k), [:many], [{:var, 1}])
+      Gen.return({fam, :well_typed, [ctor], "dependent #{k}-index family, generalized var repeated (Type param)"})
+    end)
   end
 
   # IdxI : (n:T) -> Type0 with a nullary ctor, result-index checking only.
