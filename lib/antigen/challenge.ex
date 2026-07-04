@@ -113,7 +113,7 @@ defmodule Antigen.Challenge do
     # Tg/Tgf: Int/Float-value-indexed families (rigid_index? int_lit/float_lit)
     :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1,
     # Malformed negative vertical: kind + undeclared names the kernel must reject
-    :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef,
+    :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef, :nosuchop,
     # Serialization roundtrip vertical: kind + label
     :serialize, :lossless,
     # Serialization decode-robustness vertical: kind + labels

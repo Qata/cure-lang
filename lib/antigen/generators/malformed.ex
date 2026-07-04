@@ -48,7 +48,12 @@ defmodule Antigen.Generators.Malformed do
       {2, app_non_function()},
       {2, rewrite_bad_proof()},
       {2, rewrite_premise()},
-      {1, tagged({:type, 2}, "universe ceiling (Type 2 has no sort)")}
+      {1, tagged({:type, 2}, "universe ceiling (Type 2 has no sort)")},
+      # {:prim, <unknown op>, …} → infer_prim's unknown-op fallback
+      {1, tagged({:prim, :nosuchop, [@z]}, "unknown primitive op")},
+      # {:prim, :add, [Type0, Type0]} → operands are not a numeric type
+      # (numeric_type?'s catch-all) → :prim_type
+      {1, tagged({:prim, :add, [{:type, 0}, {:type, 0}]}, "prim on non-numeric operands")}
     ])
   end
 
