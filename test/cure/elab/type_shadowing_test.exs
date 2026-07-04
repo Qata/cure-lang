@@ -86,4 +86,31 @@ defmodule Cure.Elab.TypeShadowingTest do
 
     assert {:ok, _env} = elaborate(src)
   end
+
+  test "R3: shadowed ctor reachable qualified in expression and pattern position" do
+    src = """
+    mod EscapeHatch
+      use Std.Nat
+      type Nat = Zero | Suc(Nat)
+      fn imported_two() -> Std.Nat = Std.Nat.S(Std.Nat.Z())
+      fn is_zero(n: Std.Nat) -> Nat = match n
+        Std.Nat.Z() -> Zero()
+        Std.Nat.S(k) -> Suc(Zero())
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
+
+  test "R4: `Std.Nat` in a type slot resolves to the imported type (module==typename collapse)" do
+    src = """
+    mod Collapse
+      use Std.Nat
+      type Nat = Zero | Suc(Nat)
+      fn imported_zero() -> Std.Nat = Std.Nat.Z()
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
 end

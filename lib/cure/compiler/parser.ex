@@ -684,6 +684,9 @@ defmodule Cure.Compiler.Parser do
 
   defp extract_dotted_path(_), do: nil
 
+  @doc "Reconstruct a dotted path string from an attribute_access/variable node, or nil."
+  def dotted_path_of(node), do: extract_dotted_path(node)
+
   # -- Record Construction / Update  Name{fields}  or  Name{base | overrides} --
 
   defp parse_record_construction(state, name_ast) do
