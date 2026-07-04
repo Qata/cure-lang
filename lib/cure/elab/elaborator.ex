@@ -349,23 +349,42 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A surface binary operator lowers to the kernel primitive `{:prim, op, args}`,
-  # whose typing rules (`infer_prim`) already fix the result: arithmetic returns
-  # the shared numeric type, comparisons/equality/connectives return Bool. We
-  # elaborate both operands in inference mode, assemble the prim, and let the
-  # kernel infer the result type — no duplicated type rules here.
-  def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
-    case prim_op(Keyword.fetch!(meta, :operator)) do
-      {:ok, op} ->
-        with {:ok, l_core, _lt} <- elaborate_expr_typed(l, names, ctx, env),
-             {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
-             term = {:prim, op, [l_core, r_core]},
+  # A surface unary operator. `not` is retired as a kernel primitive: it lowers to
+  # an application of the `Std.Bool` prelude def `boolnot` (a `case`-eliminating
+  # function over the inductive Bool). The kernel checks the operand against Bool
+  # and infers the result. Any other unary operator is unsupported here.
+  def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
+    case Keyword.fetch!(meta, :operator) do
+      :not ->
+        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+             term = {:app, {:global, :boolnot}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
 
-      :error ->
+      _ ->
         {:error, {:unsupported_expression, expr}}
+    end
+  end
+
+  # A surface binary operator. Arithmetic and numeric comparisons still lower to
+  # the kernel primitive `{:prim, op, args}`. The Boolean CONNECTIVES `and`/`or`
+  # are retired as primitives: they lower to applications of the `Std.Bool`
+  # prelude defs `booland`/`boolor`. Equality `==`/`!=` is operand-type-directed:
+  # numeric (Int/Float) operands keep the native `{:prim, :eq/:ne}` compare, while
+  # Bool operands lower to the `booleq`/`boolne` defs (so `case`-elimination, not a
+  # primitive, decides Boolean equality). We elaborate both operands in inference
+  # mode, assemble the term, and let the kernel infer the result type.
+  def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
+    with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
+         {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+         {:ok, term} <-
+           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, Context.signature(ctx)),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    else
+      :unsupported_op -> {:error, {:unsupported_expression, expr}}
+      other -> other
     end
   end
 
@@ -385,9 +404,43 @@ defmodule Cure.Elab.Elaborator do
   defp prim_op(:>), do: {:ok, :gt}
   defp prim_op(:<=), do: {:ok, :le}
   defp prim_op(:>=), do: {:ok, :ge}
-  defp prim_op(:and), do: {:ok, :and}
-  defp prim_op(:or), do: {:ok, :or}
   defp prim_op(_), do: :error
+
+  # Assemble the Core term for a surface binary operator. The connectives and
+  # Bool-operand equality become applications of the Std.Bool prelude defs (the
+  # `:and`/`:or`/Bool-`:eq`/`:ne` primitives are retired); everything else — and
+  # numeric `==`/`!=` — stays a native `{:prim, op, args}`.
+  defp build_binop(:and, l, r, _l_type, _sig), do: {:ok, app2(:booland, l, r)}
+  defp build_binop(:or, l, r, _l_type, _sig), do: {:ok, app2(:boolor, l, r)}
+
+  defp build_binop(:==, l, r, l_type, sig) do
+    if bool_operand?(l_type, sig),
+      do: {:ok, app2(:booleq, l, r)},
+      else: {:ok, {:prim, :eq, [l, r]}}
+  end
+
+  defp build_binop(:!=, l, r, l_type, sig) do
+    if bool_operand?(l_type, sig),
+      do: {:ok, app2(:boolne, l, r)},
+      else: {:ok, {:prim, :ne, [l, r]}}
+  end
+
+  defp build_binop(op_sym, l, r, _l_type, _sig) do
+    case prim_op(op_sym) do
+      {:ok, op} -> {:ok, {:prim, op, [l, r]}}
+      :error -> :unsupported_op
+    end
+  end
+
+  # A saturated `f(a)(b)` application of a global by name, most-recently-applied
+  # argument outermost — the shape the kernel + emit expect for a curried def.
+  defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
+
+  # The operand type resolves to the canonical `:bool` builtin family. Only a
+  # type that is *definitely* Bool diverts `==`/`!=` to the case-defs; anything
+  # else (Int/Float, a type variable, a neutral) keeps the native prim — so the
+  # change is a no-op for every non-Bool operand.
+  defp bool_operand?(l_type, sig), do: primitive_scrut_kind(l_type, sig) == {:ok, :bool}
 
   defp sigma_projection(which, inner, names, ctx, env) do
     with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
