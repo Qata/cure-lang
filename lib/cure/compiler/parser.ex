@@ -3095,7 +3095,7 @@ defmodule Cure.Compiler.Parser do
   # parser keeps each application intact and yields `{:arrow_chain, [atoms]}`
   # with the last atom as the result type.
   defp parse_ctor_signature(state) do
-    {first, state} = parse_type_atom(state)
+    {first, state} = parse_ctor_dom(state)
     collect_arrow_chain(state, [first])
   end
 
@@ -3103,11 +3103,36 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {atom, state} = parse_type_atom(state)
+        {atom, state} = parse_ctor_dom(state)
         collect_arrow_chain(state, [atom | acc])
 
       _ ->
         {{:arrow_chain, Enum.reverse(acc)}, state}
+    end
+  end
+
+  # A single element of a constructor's arrow chain. Ordinarily a bare type
+  # application (`SNat(k)`), but a DOMAIN position may carry a NAMED dependent
+  # binder `(name: Type)` — needed when a later argument type or the result
+  # index depends on this explicit argument (`(k: Nat) -> SNat(k) -> NVv(S(k))`).
+  # The named form yields `{:named_dom, name, inner_type_atom}`; everything else
+  # falls through to `parse_type_atom` byte-for-byte (unnamed args unchanged).
+  defp parse_ctor_dom(state) do
+    la2 = peek_at(state, 2)
+
+    case {peek(state), la2} do
+      {%Token{type: :lparen}, %Token{type: :colon}} ->
+        state = advance(state)
+        name_token = peek(state)
+        name = to_string(name_token.value)
+        state = advance(state)
+        state = expect(state, :colon)
+        {inner, state} = parse_type_atom(state)
+        state = expect(state, :rparen)
+        {{:named_dom, name, inner}, state}
+
+      _ ->
+        parse_type_atom(state)
     end
   end
 

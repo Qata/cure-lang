@@ -66,4 +66,58 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
     {:ok, ast} = parse_decl(src)
     refute match?({:indexed_type, _, _}, find_type(ast, "Option"))
   end
+
+  # The chain of a constructor signature: the list of type atoms inside its
+  # `{:arrow_chain, atoms}`, keyed by constructor name.
+  defp ctor_chain(ast, ctor_name) do
+    collect(ast, [])
+    |> Enum.find_value(fn
+      {:gadt_ctor, meta, {:arrow_chain, atoms}} ->
+        if Keyword.get(meta, :name) == ctor_name, do: atoms, else: nil
+
+      _ ->
+        nil
+    end)
+  end
+
+  test "named dependent ctor arg `(k: Nat)` retains its binder in the arrow chain" do
+    src = """
+    mod M
+      type NVv indices (n: Nat)
+        vz : NVv(Z)
+        vc : (k: Nat) -> SNat(k) -> NVv(S(k))
+    """
+
+    {:ok, ast} = parse_decl(src)
+    chain = ctor_chain(ast, "vc")
+
+    # First atom is the NAMED binder `(k: Nat)`; its name is retained and its
+    # type is the ordinary `Nat` type atom.
+    assert [first, second, result] = chain
+    assert {:named_dom, "k", {:variable, [scope: :local], "Nat"}} = first
+
+    # A later argument type resolves the bound `k` as a plain variable, and the
+    # result index `NVv(S(k))` likewise references it — proving the binder is in
+    # scope for subsequent atoms.
+    assert {:function_call, [name: "SNat"], [{:variable, [scope: :local], "k"}]} = second
+
+    assert {:function_call, [name: "NVv"],
+            [{:function_call, [name: "S"], [{:variable, [scope: :local], "k"}]}]} = result
+  end
+
+  test "unnamed ctor arg types are unchanged (no :named_dom wrapper)" do
+    src = """
+    mod M
+      type SNat indices (n: Nat)
+        szero : SNat(Z)
+        ssuc : SNat(n) -> SNat(S(n))
+    """
+
+    {:ok, ast} = parse_decl(src)
+    chain = ctor_chain(ast, "ssuc")
+
+    # Both atoms are bare type applications — the pre-existing shape, byte-for-byte.
+    assert [{:function_call, [name: "SNat"], _}, {:function_call, [name: "SNat"], _}] = chain
+    refute Enum.any?(chain, &match?({:named_dom, _, _}, &1))
+  end
 end

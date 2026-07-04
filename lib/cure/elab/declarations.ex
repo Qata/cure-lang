@@ -521,7 +521,20 @@ defmodule Cure.Elab.Declarations do
       # the signature (domains + the result), positionally typed by the family's
       # index telescope. Ordered by first appearance → the leading telescope.
       # Parameters are NOT inference candidates (see infer_implicits' skip).
-      implicits = infer_implicits(dom_exprs ++ [result_expr], fam, index_tele, env, param_count)
+      # Names bound explicitly by a NAMED dependent domain `(k: Nat)`. Such a
+      # binder is a runtime argument, not an inferred index variable, so it must
+      # be excluded from implicit inference even though it appears in later
+      # domain types / the result index (`SNat(k)`, `NVv(S(k))`).
+      explicit_names =
+        for {:named_dom, name, _inner} <- dom_exprs, into: MapSet.new(), do: name
+
+      infer_exprs = Enum.map(dom_exprs, &strip_named_dom/1) ++ [result_expr]
+
+      implicits =
+        infer_exprs
+        |> infer_implicits(fam, index_tele, env, param_count)
+        |> Enum.reject(fn {n, _t} -> MapSet.member?(explicit_names, n) end)
+
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
       case build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
@@ -550,6 +563,11 @@ defmodule Cure.Elab.Declarations do
 
   defp split_last(list), do: {Enum.slice(list, 0..-2//1), List.last(list)}
 
+  # For implicit-variable inference we scan a named binder `(k: Nat)` by its
+  # inner type (`Nat`); the binder name itself is handled as an explicit arg.
+  defp strip_named_dom({:named_dom, _name, inner}), do: inner
+  defp strip_named_dom(other), do: other
+
   defp family_index_args({:function_call, fmeta, args}, fam) do
     if String.to_atom(Keyword.fetch!(fmeta, :name)) == fam,
       do: {:ok, args},
@@ -570,9 +588,18 @@ defmodule Cure.Elab.Declarations do
     dom_exprs
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, []}, fn {dom, i}, {:ok, tele, scope, names} ->
-      case idx_to_core(dom, scope, fam, env) do
+      # A NAMED dependent binder `(k: Nat)` uses its declared name (so later
+      # domains and the result index can reference it); an unnamed arg keeps its
+      # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
+      # the next domain's de Bruijn indices resolve this binder.
+      {argname, type_expr} =
+        case dom do
+          {:named_dom, name, inner} -> {name, inner}
+          _ -> {"_a#{i}", dom}
+        end
+
+      case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
-          argname = "_a#{i}"
           {:cont, {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname]}}
 
         {:error, _} = err ->

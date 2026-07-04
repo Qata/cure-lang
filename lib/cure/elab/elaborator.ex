@@ -1358,18 +1358,31 @@ defmodule Cure.Elab.Elaborator do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
 
-          if family.indices == [] do
-            pc = Inductive.param_count(env, dname)
-            {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
-            scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
+          with {:ok, siblings} <- collect_with_siblings(scrut_term, names, ctx, env) do
+            # An Eq-arrow is needed when the user asked for a proof OR when a
+            # sibling must be transported (both consume `prf : Eq(T,e,pat)`).
+            need_eq = proof_name != nil or siblings != []
 
-            with {:ok, siblings} <- collect_with_siblings(scrut_term, names, ctx, env) do
-              # An Eq-arrow is needed when the user asked for a proof OR when a
-              # sibling must be transported (both consume `prf : Eq(T,e,pat)`).
-              need_eq = proof_name != nil or siblings != []
+            cond do
+              # Capability A (bare value-abstraction) is SUBSUMED by the unified
+              # match front-end: since Phase 2½ plain `match` value-refines the
+              # goal per branch (the same refinement A's `{:lam, T, g_abs}` motive
+              # provided), so `with <e>` with no proof and no sibling is exactly a
+              # plain `match <e>`. (Task 3.2; the arms are already `{:match_arm}`.)
+              # elaborate_match handles indexed AND non-indexed families, so the
+              # no-eq path is index-agnostic — a bare `with` over an indexed-family
+              # scrutinee (`with v` for `v : NVv(n)`) refines the same as `match v`.
+              not need_eq ->
+                elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env)
 
-              if need_eq do
-                # Capability B (proof / sibling transport) — the Eq-arrow motive.
+              # Capability B (proof / sibling transport) — the Eq-arrow motive.
+              # This slice's eq-arrow motive is built for a NON-indexed scrutinee
+              # family; an indexed scrutinee that also needs transport must use the
+              # multi-column LHS-rematch form (`elaborate_with_rematch`) instead.
+              family.indices == [] ->
+                pc = Inductive.param_count(env, dname)
+                {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
+                scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
                 g_abs = abstract_term(result_type_term, scrut_term, 0)
                 motive = eq_arrow_motive(scrut_type_term, scrut_term, g_abs)
 
@@ -1391,17 +1404,10 @@ defmodule Cure.Elab.Elaborator do
                   case_term = {:case, scrut_term, motive, branches}
                   {:ok, {:app, case_term, {:refl, scrut_term}}}
                 end
-              else
-                # Capability A (bare value-abstraction) is SUBSUMED by the unified
-                # match front-end: since Phase 2½ plain `match` value-refines the
-                # goal per branch (the same refinement A's `{:lam, T, g_abs}` motive
-                # provided), so `with <e>` with no proof and no sibling is exactly a
-                # plain `match <e>`. (Task 3.2; the arms are already `{:match_arm}`.)
-                elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env)
-              end
+
+              true ->
+                {:error, {:with_indexed_scrutinee_unsupported, dname}}
             end
-          else
-            {:error, {:with_indexed_scrutinee_unsupported, dname}}
           end
 
         _ ->
