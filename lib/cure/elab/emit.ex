@@ -184,6 +184,38 @@ defmodule Cure.Elab.Emit do
   defp lower(env, {:app, _, _} = app, ctx) do
     {head, args} = spine(app, [])
 
+    case connective_inline(head, args, env, ctx) do
+      {:ok, form} ->
+        form
+
+      :no ->
+        lower_app_spine(env, head, args, ctx)
+    end
+  end
+
+  # A SATURATED application of a `Std.Bool` connective def inlines to the native
+  # BEAM boolean op — byte-for-byte the retired primitive's codegen (strict
+  # `:and`/`:or`/`:not`; `:==`/`:"/="` for Bool equality). An UNSATURATED use
+  # (wrong arg count) returns `:no` and falls through to an ordinary call to the
+  # def. Recognised by exact def name (the connectives are the canonical Std.Bool
+  # prelude functions).
+  defp connective_inline({:global, name}, [a, b], env, ctx)
+       when name in [:booland, :boolor, :booleq, :boolne] do
+    {:ok, {:op, @line, connective_binop(name), lower(env, a, ctx), lower(env, b, ctx)}}
+  end
+
+  defp connective_inline({:global, :boolnot}, [a], env, ctx) do
+    {:ok, {:op, @line, :not, lower(env, a, ctx)}}
+  end
+
+  defp connective_inline(_head, _args, _env, _ctx), do: :no
+
+  defp connective_binop(:booland), do: :and
+  defp connective_binop(:boolor), do: :or
+  defp connective_binop(:booleq), do: :==
+  defp connective_binop(:boolne), do: :"/="
+
+  defp lower_app_spine(env, head, args, ctx) do
     case head do
       # A named function takes its declared arity in one BEAM call; any further
       # arguments apply (curried) to the function it returns — `mk()(z)`.
