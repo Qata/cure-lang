@@ -16,8 +16,13 @@ defmodule Antigen.Generators.Positivity do
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
     Gen.frequency([
-      {1, Gen.return(positive_family())},
-      {1, Gen.return(negative_family())}
+      {2, Gen.return(positive_family())},
+      {2, Gen.return(negative_family())},
+      # Richer single-family negatives — drive the deep strict-positivity paths
+      # (Σ traversal + `{:data, other, …}` through-family branch + occurs_deep?)
+      # that the two simple shapes never reach. Defined shapes, now wired live.
+      {1, Gen.return(double_negation_family())},
+      {1, Gen.return(sigma_negative_family())}
     ])
   end
 
