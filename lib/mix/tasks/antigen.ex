@@ -161,7 +161,11 @@ defmodule Mix.Tasks.Antigen do
       {3, Antigen.Generators.Equality.gen()},
       # Type-formers (universes / Π / Σ / Vec types) — the lever for the kernel's
       # type-formation sort inference (infer_type_value_sort).
-      {2, Antigen.Generators.TypeFormer.gen()}
+      {2, Antigen.Generators.TypeFormer.gen()},
+      # Dependent matching — indexed Vec `case` with index refinement + dependent
+      # motive; the lever for check_motive_wf/check_case_branches/unify_indices/
+      # bind_index/specialize_branch_context/replace_branch_vars.
+      {3, Antigen.Generators.DepMatch.gen()}
     ])
   end
 
