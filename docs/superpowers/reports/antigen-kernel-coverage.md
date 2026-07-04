@@ -3,13 +3,13 @@
 | Module | Covered | Total | % |
 |---|---:|---:|---:|
 | Cure.Core.Certificate | 58 | 84 | 69.0 |
-| Cure.Core.Conv | 32 | 66 | 48.5 |
-| Cure.Core.Eval | 65 | 73 | 89.0 |
+| Cure.Core.Conv | 50 | 66 | 75.8 |
+| Cure.Core.Eval | 70 | 73 | 95.9 |
 | Cure.Core.Inductive | 39 | 79 | 49.4 |
-| Cure.Core.Kernel | 192 | 336 | 57.1 |
-| Cure.Core.Normalise | 75 | 103 | 72.8 |
-| Cure.Core.Quote | 29 | 32 | 90.6 |
-| Cure.Core.Serialize | 76 | 108 | 70.4 |
+| Cure.Core.Kernel | 196 | 336 | 58.3 |
+| Cure.Core.Normalise | 81 | 103 | 78.6 |
+| Cure.Core.Quote | 31 | 32 | 96.9 |
+| Cure.Core.Serialize | 78 | 108 | 72.2 |
 
 ## Cold lines
 
@@ -24,22 +24,17 @@
 
 ## Cure.Core.Conv cold lines
 
-  - apply_eq?/4: 112, 113
   - conv?/4: 49
-  - conv_branch_bodies?/5: 161, 162, 163
-  - conv_branches?/4: 153, 155, 156
-  - conv_neutral?/4: 135, 136, 139, 146, 147, 150
-  - conv_struct?/4: 69, 70, 83, 102
-  - eta_eq?/4: 107, 108, 109
-  - same_neutral_no_delta?/3: 176, 177, 180, 182
-  - same_value_no_delta?/3: 185, 187, 188, 189, 190, 191, 194, 199
+  - conv_neutral?/4: 135, 136, 139, 150
+  - conv_struct?/4: 70, 83, 102
+  - eta_eq?/4: 108, 109
+  - same_value_no_delta?/3: 187, 188, 190, 191, 194, 199
 
 ## Cure.Core.Eval cold lines
 
-  - as_bool/1: 173
-  - eval/2: 26, 36, 37
-  - vfst/1: 175, 176
-  - vsnd/1: 178, 179
+  - eval/2: 26
+  - vfst/1: 175
+  - vsnd/1: 178
 
 ## Cure.Core.Inductive cold lines
 
@@ -72,9 +67,8 @@
   - check_uniform_params/5: 432, 433, 436, 439, 440, 442
   - ensure_eq/1: 474
   - ensure_pi/1: 466
-  - ensure_sigma/1: 469
   - head_key/1: 869, 870, 871, 872
-  - infer/2: 44, 67, 95, 125, 147, 148, 150, 166, 181, 237
+  - infer/2: 44, 67, 95, 125, 166, 181, 237
   - infer_prim/3: 1051
   - infer_sort/2: 459
   - infer_type_value_sort/2: 610, 618, 620, 621, 622, 626, 627, 631, 676, 677, 679, 680, 686
@@ -98,28 +92,26 @@
   - fuel_key/0: 85
   - id_env/1: 139
   - nf/2: 37
-  - nf_neutral/4: 185, 186
   - nf_struct/4: 143, 145, 157, 159
   - normalize_opts/1: 108, 112, 116, 122
   - reduce_unfolded/3: 309, 310, 311, 315, 316, 317
   - spend_fuel/1: 335
-  - unfold_certified_head/3: 260, 261, 262, 266, 267, 268
+  - unfold_certified_head/3: 261, 267
   - whnf_value/3: 54
   - with_fuel/2: 77
 
 ## Cure.Core.Quote cold lines
 
   - reify/1: 21
-  - reify_neutral/2: 68, 69
 
 ## Cure.Core.Serialize cold lines
 
   - build/1: 133, 134, 135, 136, 139
   - build_all/1: 203
   - build_branches/1: 213, 216
-  - build_node/2: 141, 148, 149, 156, 157, 166, 191
+  - build_node/2: 141, 148, 149, 154, 166, 191
   - decode/1: 75, 76
-  - enc/1: 30, 34, 35
+  - enc/1: 34, 35
   - parse/1: 122, 123
   - parse_list/2: 126
   - str/1: 63
