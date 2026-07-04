@@ -90,6 +90,11 @@ defmodule Antigen.Generators.DepMatch do
       {2, var_index_extra({:eq, @nat, {:var, 1}, {:var, 1}})},
       {2, var_index_extra({:sigma, @nat, vec({:var, 2})})},
       {2, var_index_extra({:pi, @nat, vec({:var, 2})})},
+      # extra context types carrying stuck value-level subterms (λ / pair / refl)
+      # so specialize_branch_context's replace_branch_vars descends those arms.
+      {2, var_index_extra({:eq, {:pi, @nat, @nat}, {:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}})},
+      {2, var_index_extra({:eq, {:sigma, @nat, @nat}, {:pair, {:var, 1}, {:var, 1}}, {:pair, {:var, 1}, {:var, 1}}})},
+      {2, var_index_extra({:eq, {:eq, @nat, {:var, 1}, {:var, 1}}, {:refl, {:var, 1}}, {:refl, {:var, 1}}})},
       # TWO-index diagonal family Sq — matching forces a ≡ b, the only v1 shape
       # that reaches unify_spine (2-index spine) + bind_index's merge path.
       {3, sq_diag()},
