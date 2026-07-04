@@ -179,7 +179,10 @@ defmodule Mix.Tasks.Antigen do
       {2, Antigen.Generators.Serialization.gen()},
       # Serialization decode robustness — raw S-expr strings straight to decode;
       # the lever for the bare-leaf / string / parse-error decode edges.
-      {2, Antigen.Generators.DecodeProbe.gen()}
+      {2, Antigen.Generators.DecodeProbe.gen()},
+      # Conversion decision — term pairs with a known convertibility verdict over a
+      # neutral context; the lever for Conv's stuck-neutral / η / no-δ clauses.
+      {2, Antigen.Generators.ConvPair.gen()}
     ])
   end
 

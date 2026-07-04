@@ -34,6 +34,8 @@ defmodule Antigen.Coverage do
   # decode probes carry a raw string, not a Core term → no terms to well-form-check
   def terms_of(%Challenge{kind: :decode_probe}), do: []
 
+  def terms_of(%Challenge{kind: :conv_pair, payload: %{t1: t1, t2: t2}}), do: [t1, t2]
+
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 
