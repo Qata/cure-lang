@@ -90,7 +90,38 @@ defmodule Antigen.Challenge do
     # names, not atoms, so no extra generator atoms beyond the kind itself)
     :smt_query,
     # Tier-B reach expansion: List parametric family + param binder name
-    :List, :Nil, :Cons, :A
+    :List, :Nil, :Cons, :A,
+    # Structure-directed levers (coverage campaign): Bool builtin ctors (Primitive
+    # generator) + the through-constructor-positive subject ctor (Positivity).
+    # Node tags (:prim/:eq/:refl/:rewrite/:int_lit/:float_lit) are fixed Serialize
+    # dispatch atoms, already interned by the code; only dynamic ctor/family names
+    # need listing here.
+    :Bool, :True, :False, :MkT,
+    # parametric positivity generator: subject family + ctor/binder name pools
+    :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2,
+    # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
+    :Sq, :mksq, :j,
+    # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors
+    :Ty, :tnat, :tbd, :tint, :tflt, :tpi, :tsig, :tvec,
+    # IdxI: Int-indexed family (check_result_indices declaration-check driver)
+    :IdxI, :mki, :mkb,
+    # P/pc: parameterized indexed family (check_uniform_params / check_ctor_args)
+    :P, :pc, :x,
+    # MyEqK/mreflK: Type-param family, generalized field repeated across ≥2 indices
+    # (check_result_indices parameter-seeding path — the dp01/dp02 datatype)
+    :MyEqK, :mreflK,
+    # Tg/Tgf: Int/Float-value-indexed families (rigid_index? int_lit/float_lit)
+    :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1,
+    # Malformed negative vertical: kind + undeclared names the kernel must reject
+    :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef, :nosuchop,
+    # Serialization roundtrip vertical: kind + label
+    :serialize, :lossless,
+    # Serialization decode-robustness vertical: kind + labels
+    :decode_probe, :valid_sexp, :invalid_sexp,
+    # Conversion-decision vertical: kind + labels
+    :conv_pair, :convertible, :distinct,
+    # Branch-unification vertical: kind + verdict labels
+    :branch_unify, :solved, :impossible, :trivial
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -176,6 +207,28 @@ defmodule Antigen.Challenge do
     ctx_pieces = ctx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"ctx#{i}", t} end)
     scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx)}
     {scaffold, ctx_pieces ++ [{"type", type}, {"term", term}]}
+  end
+
+  def to_pieces(%__MODULE__{kind: :serialize, payload: %{term: t}}), do: {%{}, [{"term", t}]}
+
+  # decode probe: the raw input string rides in the scaffold (no Core-term pieces).
+  def to_pieces(%__MODULE__{kind: :decode_probe, payload: %{input: s}}), do: {%{"input" => s}, []}
+
+  # conv pair: two terms as pieces; context size + expected verdict in the scaffold.
+  def to_pieces(%__MODULE__{kind: :conv_pair, payload: %{t1: t1, t2: t2, ctx: n, expect: e}}),
+    do: {%{"ctx" => n, "expect" => e}, [{"t1", t1}, {"t2", t2}]}
+
+  # branch-unify: family/ctor/ctx-size in the scaffold; scrutinee index terms as pieces.
+  def to_pieces(%__MODULE__{kind: :branch_unify, payload: %{ctx_vars: n, dname: d, cname: c, indices: idx}}) do
+    scaffold = %{"ctx_vars" => n, "dname" => Atom.to_string(d), "cname" => Atom.to_string(c)}
+    {scaffold, idx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"idx:#{i}", t} end)}
+  end
+
+  def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
+    %{sig: sig, ctx: ctx, term: term} = p
+    ctx_pieces = ctx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"ctx#{i}", t} end)
+    scaffold = %{"sig" => Atom.to_string(sig), "ctx_len" => length(ctx)}
+    {scaffold, ctx_pieces ++ [{"term", term}]}
   end
 
   def to_pieces(%__MODULE__{kind: :mutant_term, payload: p}) do
@@ -309,6 +362,49 @@ defmodule Antigen.Challenge do
     }
 
     new(kind: :typed_term, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:serialize, assay, label, seed, note, _scaffold, [{"term", t}]),
+    do: new(kind: :serialize, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
+
+  def from_pieces(:decode_probe, assay, label, seed, note, scaffold, _pieces),
+    do: new(kind: :decode_probe, assay: assay, label: label, payload: %{input: scaffold["input"]}, seed: seed, note: note)
+
+  def from_pieces(:conv_pair, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+
+    payload = %{
+      t1: Map.fetch!(pmap, "t1"),
+      t2: Map.fetch!(pmap, "t2"),
+      ctx: scaffold["ctx"],
+      expect: scaffold["expect"]
+    }
+
+    new(kind: :conv_pair, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:branch_unify, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    n = length(pieces)
+    indices = if n == 0, do: [], else: for(i <- 0..(n - 1)//1, do: Map.fetch!(pmap, "idx:#{i}"))
+
+    payload = %{
+      ctx_vars: scaffold["ctx_vars"],
+      dname: String.to_existing_atom(scaffold["dname"]),
+      cname: String.to_existing_atom(scaffold["cname"]),
+      indices: indices
+    }
+
+    new(kind: :branch_unify, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    len = scaffold["ctx_len"]
+    ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
+
+    payload = %{sig: String.to_existing_atom(scaffold["sig"]), ctx: ctx, term: Map.fetch!(pmap, "term")}
+    new(kind: :malformed, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:mutant_term, assay, label, seed, note, scaffold, pieces) do

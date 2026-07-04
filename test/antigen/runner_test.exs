@@ -74,11 +74,16 @@ defmodule Antigen.RunnerTest do
     assert r.infections >= 1
   end
 
-  test "default_gen has exactly 14 branches in the documented group order (guard)" do
+  test "default_gen has exactly 24 branches in the documented group order (guard)" do
     {:frequency, ws} = Mix.Tasks.Antigen.default_gen()
-    assert length(ws) == 14
+    assert length(ws) == 24
+    # positions 15-18 are the structure-directed Primitive + Equality + TypeFormer
+    # + DepMatch generators (:typed_term producers → group `t`); positions 19 & 24
+    # are the family/index-shaped IndexedDecl + BranchUnify probes → group `f`;
+    # positions 20-23 are the Malformed negative + Serialization roundtrip +
+    # decode-robustness + conv-decision verticals → group `t`.
     assert Antigen.Runner.gen_group_table() ==
-             %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14], m: [7, 8]}
+             %{f: [1, 2, 3, 19, 24], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23], m: [7, 8]}
   end
 
   test "kernel-law verticals run to completion with 0 infections on the sound kernel" do
@@ -100,6 +105,22 @@ defmodule Antigen.RunnerTest do
     assert Enum.all?(base.t, fn i -> Enum.at(w_t, i - 1) > 1 end)
     assert Enum.all?(base.f, fn i -> Enum.at(w_t, i - 1) == 1 end)
     assert Enum.all?(w_t, &(&1 >= 1))
+  end
+
+  test "reweight_by_edges bumps each group proportionally to its new-edge yield" do
+    base = %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11], m: [7, 8]}
+    w0 = List.duplicate(1, 11)
+    # t group yielded the most new edges, m some, f none
+    out = Antigen.Runner.reweight_by_edges(w0, base, %{f: 0, t: 5, m: 1})
+
+    t_w = Enum.at(out, hd(base.t) - 1)
+    m_w = Enum.at(out, hd(base.m) - 1)
+    f_w = Enum.at(out, hd(base.f) - 1)
+
+    assert t_w > m_w                       # more edges → more weight
+    assert m_w > f_w
+    assert Enum.all?(base.f, fn i -> Enum.at(out, i - 1) == 1 end)  # zero-yield floors at 1
+    assert Enum.all?(out, &(&1 >= 1))
   end
 
   test "explore(bias: true) runs the round loop end-to-end through the real default_gen mix" do

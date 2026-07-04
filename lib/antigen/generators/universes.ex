@@ -73,6 +73,35 @@ defmodule Antigen.Generators.Universes do
     )
   end
 
+  @doc """
+  Indexed-constructor result-index check (`Kernel.check_ctor` → `check_result_indices`).
+  `IdxI : (n:Int) -> Type0` is indexed by the builtin Int (so the single-family
+  challenge needs no extra declarations). `mki : IdxI 7` is well-formed — its result
+  index `7` is checked against the Int telescope through the result-index spine.
+  The `:ill_typed` twin `mkb : IdxI 1.5` pins a Float result index against the Int
+  telescope, which must reject (`conversion_failure`). This is the only family-shaped
+  probe whose constructor carries a result index, so it is the sole driver of the
+  `check_result_indices` success path.
+  """
+  @spec indexed_ctor(:well_typed | :ill_typed) :: Challenge.t()
+  def indexed_ctor(label) do
+    fam = Inductive.family(:IdxI, [], [{:n, {:int_type}}], 0)
+
+    ctors =
+      case label do
+        :well_typed -> [Inductive.ctor(:mki, [], [{:int_lit, 7}])]
+        :ill_typed -> [Inductive.ctor(:mkb, [], [{:float_lit, 1.5}])]
+      end
+
+    Challenge.new(
+      kind: :family,
+      assay: "universes",
+      label: label,
+      payload: %{family: fam, ctors: ctors},
+      note: "indexed ctor result-index check: IdxI (n:Int), #{label}"
+    )
+  end
+
   @doc "Rebuild the Env for a def-shaped universes challenge."
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{kind: :indexed_case, payload: %{families: families, def_name: dn, def_type: dt, def_body: db}}) do

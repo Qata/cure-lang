@@ -10,6 +10,35 @@ defmodule Mix.Tasks.AntigenTest do
     :ok
   end
 
+  test "cover_dispatch routes --guided to :guided and threads precise/edge_corpus/out" do
+    runner_opts = [gen: :g, count: 10, corpus_path: "c.sexp"]
+
+    {mode, merged} =
+      Mix.Tasks.Antigen.cover_dispatch(
+        [guided: true, precise: true, edge_corpus: "e.sexp", out: "o.md"],
+        runner_opts
+      )
+
+    assert mode == :guided
+    assert merged[:precise] == true
+    assert merged[:edge_corpus] == "e.sexp"
+    assert merged[:out] == "o.md"
+    assert merged[:corpus_path] == "c.sexp"   # runner_opts preserved
+
+    {mode2, merged2} = Mix.Tasks.Antigen.cover_dispatch([], runner_opts)
+    assert mode2 == :report
+    assert merged2[:precise] == false
+    assert merged2[:edge_corpus] == nil
+    # loop-tuning flags are only threaded when present, so guided_loop's own
+    # defaults apply otherwise (Keyword.get default would break on an explicit nil)
+    refute Keyword.has_key?(merged2, :plateau)
+    refute Keyword.has_key?(merged2, :guided_round)
+
+    {_m3, merged3} = Mix.Tasks.Antigen.cover_dispatch([guided: true, plateau: 9, guided_round: 25], runner_opts)
+    assert merged3[:plateau] == 9
+    assert merged3[:guided_round] == 25
+  end
+
   test "mix antigen --count runs the explorer and prints a summary" do
     out =
       capture_io(fn ->

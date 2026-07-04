@@ -12,7 +12,7 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3], t: [4, 5, 6, 9, 10, 11, 12, 13, 14], m: [7, 8]}
+  @group_table %{f: [1, 2, 3, 19, 24], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23], m: [7, 8]}
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.
@@ -30,6 +30,25 @@ defmodule Antigen.Runner do
   defp maybe_bump(acc, _positions, false), do: acc
   defp maybe_bump(acc, positions, true), do: acc ++ positions
 
+  @doc """
+  Coverage-guided reweighting (guided mode only): bump every generator position
+  by its group's new-edge yield, so groups that discovered more new code get
+  proportionally more draw weight next round. Floor 1 on every weight. Additive
+  and opt-in — the default `explore`/`draw_biased` path uses `reweight/3` and is
+  untouched. `edge_yields` is `%{group => new_edge_count}` (missing group ⇒ 0).
+  """
+  def reweight_by_edges(weights, table \\ @group_table, edge_yields) do
+    bump_by_pos =
+      Enum.reduce(table, %{}, fn {group, positions}, acc ->
+        yield = Map.get(edge_yields, group, 0)
+        Enum.reduce(positions, acc, fn pos, a -> Map.put(a, pos, yield) end)
+      end)
+
+    weights
+    |> Enum.with_index(1)
+    |> Enum.map(fn {w, i} -> max(w, 1) + Map.get(bump_by_pos, i, 0) end)
+  end
+
   def explore(opts) do
     count = Keyword.get(opts, :count, 200)
 
@@ -43,37 +62,7 @@ defmodule Antigen.Runner do
 
     final =
       Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
-        c = %{c | seed: seed_of(c)}
-
-        if well_formed?(c) do
-          acc = %{acc | coverage: MapSet.union(acc.coverage, coverage_flags(c))}
-          acc = bank_seed(c, opts, acc)
-
-          case apply(opts[:assay] || assay_module(c.assay), :run, [c]) do
-            :ok ->
-              acc
-
-            {:violation, orig_detail} = v ->
-              assay = opts[:assay] || assay_module(c.assay)
-
-              pred = fn ch ->
-                case apply(assay, :run, [ch]) do
-                  {:violation, detail} -> same_shape?(detail, orig_detail)
-                  _ -> false
-                end
-              end
-
-              {c_min, triage} = Antigen.Triage.minimize(c, pred, shrink_budget(opts))
-
-              {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v,
-                              Map.put(summarize(acc, count), :triage, triage))
-              IO.puts(Report.breadcrumb(c_min, path))
-              Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
-              %{acc | infections: acc.infections + 1}
-          end
-        else
-          %{acc | discards: acc.discards + 1}
-        end
+        run_challenge(c, opts, acc, count)
       end)
 
     metrics = health_metrics(challenges)
@@ -336,6 +325,11 @@ defmodule Antigen.Runner do
   defp assay_module("indexed/case"), do: Antigen.Assays.Indexed
   defp assay_module("rewrite/eq"), do: Antigen.Assays.Rewrite
   defp assay_module("universes"), do: Antigen.Assays.Universes
+  defp assay_module("term/rejection"), do: Antigen.Assays.Malformed
+  defp assay_module("serialize/roundtrip"), do: Antigen.Assays.Serialization
+  defp assay_module("serialize/decode"), do: Antigen.Assays.Serialization
+  defp assay_module("conv/decision"), do: Antigen.Assays.Conv
+  defp assay_module("branchunify/verdict"), do: Antigen.Assays.BranchUnify
   defp assay_module("stuck_elim_delta"), do: Antigen.Assays.StuckElimDelta
   defp assay_module("term/infer_check"), do: Antigen.Assays.Term
   defp assay_module("term/subject_reduction"), do: Antigen.Assays.Term
@@ -375,6 +369,62 @@ defmodule Antigen.Runner do
       :duplicate -> acc
     end
   end
+
+  @doc """
+  Process one challenge: bank its seed, run the assay, and on a violation
+  minimize + write the infection report. Extracted verbatim from `explore/1`'s
+  per-challenge reduce so the coverage-guided loop (`Antigen.Cover.guided_loop/1`)
+  reuses the exact same dispatch.
+
+  `opts[:health_extra]` (a 0-arg fun or a map; absent by default) is merged into
+  the infection report's `health` map — the guided loop uses it to stamp the
+  jackpot's coverage delta. The plain `explore` path passes nothing, merging
+  `%{}`, so its behavior is byte-identical to before extraction.
+  """
+  def run_challenge(c, opts, acc, count) do
+    c = %{c | seed: seed_of(c)}
+
+    if well_formed?(c) do
+      acc = %{acc | coverage: MapSet.union(acc.coverage, coverage_flags(c))}
+      acc = bank_seed(c, opts, acc)
+
+      case apply(opts[:assay] || assay_module(c.assay), :run, [c]) do
+        :ok ->
+          acc
+
+        {:violation, orig_detail} = v ->
+          assay = opts[:assay] || assay_module(c.assay)
+
+          pred = fn ch ->
+            case apply(assay, :run, [ch]) do
+              {:violation, detail} -> same_shape?(detail, orig_detail)
+              _ -> false
+            end
+          end
+
+          {c_min, triage} = Antigen.Triage.minimize(c, pred, shrink_budget(opts))
+
+          health = summarize(acc, count) |> Map.put(:triage, triage) |> Map.merge(health_extra(opts))
+          {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, health)
+          IO.puts(Report.breadcrumb(c_min, path))
+          Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
+          %{acc | infections: acc.infections + 1}
+      end
+    else
+      %{acc | discards: acc.discards + 1}
+    end
+  end
+
+  defp health_extra(opts) do
+    case opts[:health_extra] do
+      nil -> %{}
+      f when is_function(f, 0) -> f.()
+      m when is_map(m) -> m
+    end
+  end
+
+  @doc "Public single-batch draw (wraps the private `draw/2`) for the guided loop."
+  def draw_n(gen, count), do: draw(gen, count)
 
   defp draw(gen, count), do: Backend.StreamData.interp(gen) |> Enum.take(count)
 

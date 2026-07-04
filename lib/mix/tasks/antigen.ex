@@ -35,13 +35,20 @@ defmodule Mix.Tasks.Antigen do
   @default_count 20_000
   @rounds_per_minute 2000
 
-  @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string, report_dir: :string]
+  @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string,
+             report_dir: :string, out: :string, guided: :boolean, precise: :boolean,
+             edge_corpus: :string, plateau: :integer, guided_round: :integer]
 
   @impl Mix.Task
   def run(argv) do
     {opts, rest, _} = OptionParser.parse(argv, strict: @switches)
 
-    mode = if match?(["generate" | _], rest), do: :generate, else: :explore
+    mode =
+      cond do
+        match?(["cover" | _], rest) -> :cover
+        match?(["generate" | _], rest) -> :generate
+        true -> :explore
+      end
     count = resolve_count(opts)
 
     seeds_path = opts[:seeds] || "test/antigen/seeds.sexp"
@@ -70,8 +77,54 @@ defmodule Mix.Tasks.Antigen do
         install_sigterm_trap()
         r = Antigen.Runner.generate(runner_opts)
         IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked")
+
+      :cover ->
+        {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)
+
+        case cover_mode do
+          :guided ->
+            r = Antigen.Cover.guided_loop(cover_opts)
+
+            IO.puts(
+              "antigen cover --guided: #{r.covered_lines} kernel lines covered, " <>
+                "#{r.banked} edge(s) banked, #{r.infections} infection(s) over #{r.rounds} round(s)"
+            )
+
+          :report ->
+            {coverage, _report} = Antigen.Cover.run_report(cover_opts)
+            covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
+            total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
+            pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
+            dest = if opts[:out], do: " → #{opts[:out]}", else: ""
+            IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
+        end
     end
   end
+
+  @doc """
+  Decide the `cover` sub-mode and build the opts passed to `Antigen.Cover`.
+  `--guided` selects `:guided` (the coverage-guided loop); otherwise `:report`
+  (the one-shot measurement). `--out`, `--edge-corpus`, and `--precise` are
+  threaded onto the runner opts. Pure + public so the routing is unit-tested
+  without running a campaign.
+  """
+  def cover_dispatch(opts, runner_opts) do
+    merged =
+      runner_opts
+      |> Keyword.put(:out, opts[:out])
+      |> Keyword.put(:edge_corpus, opts[:edge_corpus])
+      |> Keyword.put(:precise, opts[:precise] || false)
+      # only thread loop-tuning flags when present — an explicit nil would defeat
+      # guided_loop's Keyword.get defaults
+      |> maybe_put(:plateau, opts[:plateau])
+      |> maybe_put(:guided_round, opts[:guided_round])
+
+    mode = if opts[:guided], do: :guided, else: :report
+    {mode, merged}
+  end
+
+  defp maybe_put(kw, _key, nil), do: kw
+  defp maybe_put(kw, key, val), do: Keyword.put(kw, key, val)
 
   @doc "Convert a `\"Nm\"` wall-budget to a round count via the fixed `@rounds_per_minute`."
   @spec budget_to_count(String.t()) :: pos_integer()
@@ -98,7 +151,42 @@ defmodule Mix.Tasks.Antigen do
       {1, Antigen.Generators.Conversion.conv_accept("term/normalization")},
       {1, Antigen.Generators.Term.typed_term("kernel/shift_subst")},
       {1, Antigen.Generators.Term.typed_term("kernel/weakening")},
-      {1, Antigen.Generators.Term.typed_term("kernel/confluence")}
+      {1, Antigen.Generators.Term.typed_term("kernel/confluence")},
+      # Structure-directed primitive arithmetic — the reachability lever for
+      # Eval.fold / Kernel.infer_prim / numeric_type? (the Int/Float paths the
+      # mode-directed term generator never emits).
+      {3, Antigen.Generators.Primitive.gen()},
+      # Propositional-equality fragment — refl / Eq-type / rewrite; the lever for
+      # the kernel's eq/refl/rewrite infer+eval+serialize+quote paths.
+      {3, Antigen.Generators.Equality.gen()},
+      # Type-formers (universes / Π / Σ / Vec types) — the lever for the kernel's
+      # type-formation sort inference (infer_type_value_sort).
+      {2, Antigen.Generators.TypeFormer.gen()},
+      # Dependent matching — indexed Vec `case` with index refinement + dependent
+      # motive; the lever for check_motive_wf/check_case_branches/unify_indices/
+      # bind_index/specialize_branch_context/replace_branch_vars.
+      {3, Antigen.Generators.DepMatch.gen()},
+      # Indexed-family DECLARATION checking — the check_ctor → check_result_indices
+      # path (result-index count/type validation); a family-shaped probe, group f.
+      {2, Antigen.Generators.IndexedDecl.gen()},
+      # Malformed terms (NEGATIVE vertical) — the kernel must REJECT; the lever for
+      # infer's defensive rejection clauses (absurd/unknown_global/family/ctor,
+      # case-scrutinee-not-data, ensure_pi/ensure_eq guards).
+      {2, Antigen.Generators.Malformed.gen()},
+      # Serialization roundtrip (metamorphic) — decode ∘ encode = id over every
+      # serialisable shape; the lever for Serialize's DECODE path (tokenize/parse/
+      # build/build_node) which the banking-only campaign never replays.
+      {2, Antigen.Generators.Serialization.gen()},
+      # Serialization decode robustness — raw S-expr strings straight to decode;
+      # the lever for the bare-leaf / string / parse-error decode edges.
+      {2, Antigen.Generators.DecodeProbe.gen()},
+      # Conversion decision — term pairs with a known convertibility verdict over a
+      # neutral context; the lever for Conv's stuck-neutral / η / no-δ clauses.
+      {2, Antigen.Generators.ConvPair.gen()},
+      # Branch unification — direct branch_unify/4 calls with known verdicts; the
+      # lever for the kernel's index unifier (unify_one/bind_index/unify_spine/
+      # rigid_index?/head_key) past what a well-typed case reaches.
+      {2, Antigen.Generators.BranchUnify.gen()}
     ])
   end
 

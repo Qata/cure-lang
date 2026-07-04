@@ -69,6 +69,51 @@ defmodule Antigen.Generators.SigMenu do
           Inductive.ctor(:Cons, [{:hd, {:var, 0}}, {:tl, {:data, :List, [{:var, 1}], []}}], [],
             [:present, :present], [{:var, 2}])
         ])
+      # Bool + the :bool builtin binding — the SAME canonical family real Cure
+      # seeds via `Cure.Core.Builtins.seed/2` (ctor order `False | True`), which
+      # the v1 menu was previously missing. Required so prim comparisons/
+      # connectives typecheck: `Kernel.infer_prim` resolves their result type via
+      # `bool_type_value` (reads the :bool builtin) and `Eval.fold` folds them to
+      # the canonical `:True`/`:False` ctor values. The prims are the elaborator's
+      # native-BEAM-op lowering target (emit.ex), not migration debris — Bool's
+      # *type* is inductive; the decidable *operations* producing it stay prim.
+      |> Inductive.declare(Inductive.family(:Bool, [], [], 0),
+        [Inductive.ctor(:False, [], []), Inductive.ctor(:True, [], [])])
+      |> Inductive.register_builtin(:bool, :Bool)
+      # Sq : (i:Nat)(j:Nat) -> Type0, ctor mksq : (n:Nat) -> Sq n n. A TWO-index
+      # family with a DIAGONAL constructor — matching `s : Sq a b` on mksq unifies
+      # both result indices `n` against `a` and `b`, pinning `n` twice, so it forces
+      # `a ≡ b`. This is the only v1 shape that reaches the kernel's multi-index
+      # unification tail: `unify_spine` (2-index spine), `bind_index`'s merge/
+      # resolve-before-bind path, and `head_key` (index refinement, not just Vec's
+      # single Nat index). Consumed by Generators.DepMatch's Sq variant.
+      |> Inductive.declare(Inductive.family(:Sq, [], [{:i, nat()}, {:j, nat()}], 0),
+        [Inductive.ctor(:mksq, [{:n, nat()}], [{:var, 0}, {:var, 0}])])
+      # Ty : (a:Type0) -> Type0 — a family indexed BY A TYPE, with constructors
+      # pinned at concrete type indices (Nat / Bd / Int / Float / Π / Σ / Vec Z).
+      # Matching a closed scrutinee `x : Ty T` unifies T against each ctor's rigid
+      # type index, so this is the only v1 shape whose index unification compares
+      # NON-Nat rigid heads — the lever for rigid_index?'s data/type-former/int/
+      # float clauses, head_key's :data clause, and unify_one's data-spine /
+      # syntactic-equal clauses. Consumed by Generators.DepMatch's Ty variant.
+      |> Inductive.declare(Inductive.family(:Ty, [], [{:a, {:type, 0}}], 0),
+        [
+          Inductive.ctor(:tnat, [], [nat()]),
+          Inductive.ctor(:tbd, [], [bd()]),
+          Inductive.ctor(:tint, [], [{:int_type}]),
+          Inductive.ctor(:tflt, [], [{:float_type}]),
+          Inductive.ctor(:tpi, [], [{:pi, nat(), nat()}]),
+          Inductive.ctor(:tsig, [], [{:sigma, nat(), nat()}]),
+          Inductive.ctor(:tvec, [], [{:data, :Vec, [{:ctor, :Z, []}], []}])
+        ])
+      # Tg : (i:Int) -> Type0 / Tgf : (i:Float) -> Type0 — families indexed by a
+      # builtin VALUE type, with constructors at literal indices. Matching unifies
+      # literal indices, the only v1 shape reaching rigid_index?'s int_lit/float_lit
+      # clauses. Consumed by Generators.DepMatch's tg/tgf variants.
+      |> Inductive.declare(Inductive.family(:Tg, [], [{:i, {:int_type}}], 0),
+        [Inductive.ctor(:tg0, [], [{:int_lit, 0}]), Inductive.ctor(:tg1, [], [{:int_lit, 1}])])
+      |> Inductive.declare(Inductive.family(:Tgf, [], [{:i, {:float_type}}], 0),
+        [Inductive.ctor(:tgf0, [], [{:float_lit, 0.0}]), Inductive.ctor(:tgf1, [], [{:float_lit, 1.5}])])
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}

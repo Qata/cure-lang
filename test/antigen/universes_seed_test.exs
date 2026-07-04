@@ -22,13 +22,15 @@ defmodule Antigen.UniversesSeedTest do
   @antibodies [
     Universes.type_in_type(:ill_typed),
     Universes.ceiling(:ill_typed),
-    Universes.ctor_field(:ill_typed)
+    Universes.ctor_field(:ill_typed),
+    Universes.indexed_ctor(:ill_typed)
   ]
 
   @seed_candidates [
     Universes.cumulativity(:well_typed),
     Universes.stratification(:well_typed),
-    Universes.ctor_field(:well_typed)
+    Universes.ctor_field(:well_typed),
+    Universes.indexed_ctor(:well_typed)
   ]
 
   test "universes antibodies + seeds are banked and every one replays :ok" do
@@ -45,9 +47,10 @@ defmodule Antigen.UniversesSeedTest do
         match?(%Antigen.Challenge{assay: "universes"}, r.entry)
       end)
 
-    # 3 antibodies + 2 seeds: stratification(:well_typed) and ctor_field(:well_typed)
-    # share one coverage cell (see moduledoc), so the seed store holds one of them.
-    assert length(uni) >= 5
+    # 4 antibodies + 3 seeds: stratification(:well_typed) and ctor_field(:well_typed)
+    # share one coverage cell (see moduledoc), so the seed store holds one of them;
+    # indexed_ctor(:well_typed) banks a distinct cell (Int-indexed result index).
+    assert length(uni) >= 6
 
     assert Enum.all?(uni, &(&1.verdict == :ok)),
            inspect(uni |> Enum.reject(&(&1.verdict == :ok)) |> Enum.map(& &1.verdict))
