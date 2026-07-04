@@ -109,6 +109,11 @@ defmodule Antigen.Generators.DepMatch do
       # check_motive_wf's infer_type_value_sort takes its neutral-var (nvar) clause
       # (a bound-at-a-universe motive result), distinct from the data/Π/Σ/Eq arms.
       {2, tyvar_motive_case()},
+      # motive returns Eq Type0 (List Nat) (List Nat) — a propositional equality
+      # between PARAMETER-BEARING family TYPES. check_motive_wf's veq clause reifies
+      # the endpoints signature-aware, so Quote.split_data_args splits List's param
+      # off the (empty) index list — the dependent param/index read-back split.
+      {2, eqtype_motive_case()},
       # TWO-index diagonal family Sq — matching forces a ≡ b, the only v1 shape
       # that reaches unify_spine (2-index spine) + bind_index's merge path.
       {3, sq_diag()},
@@ -242,6 +247,18 @@ defmodule Antigen.Generators.DepMatch do
       {[@nat, {:var, 0}, {:type, 0}],
        {:case, {:var, 0}, {:lam, @nat, {:var, 3}}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]},
        {:var, 2}}
+    )
+  end
+
+  # case Z of Z→refl(List Nat) | S→refl(List Nat) with motive λv:Nat. Eq Type0
+  # (List Nat) (List Nat). Closed; result type is that Eq. Drives signature-aware
+  # read-back of the param-bearing family type `List Nat`.
+  @list_nat {:data, :List, [{:data, :Nat, [], []}], []}
+  defp eqtype_motive_case do
+    eqty = {:eq, {:type, 0}, @list_nat, @list_nat}
+    refl_ln = {:refl, @list_nat}
+    Gen.return(
+      {[], {:case, @z, {:lam, @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty}
     )
   end
 
