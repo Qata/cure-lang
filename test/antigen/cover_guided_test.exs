@@ -178,4 +178,33 @@ defmodule Antigen.CoverGuidedTest do
     # cover torn down node-wide
     assert :cover.modules() == []
   end
+
+  test "guided_loop --precise attributes coverage per-challenge and still banks + terminates" do
+    tmp = Path.join(System.tmp_dir!(), "guided_p_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+    edge_path = Path.join(tmp, "edge.sexp")
+
+    opts = [
+      gen: Mix.Tasks.Antigen.default_gen(),
+      assay: Antigen.CoverGuidedTest.CoverThenViolate,
+      precise: true,
+      count: 20,
+      guided_round: 10,
+      plateau: 2,
+      edge_corpus: edge_path,
+      corpus_path: Path.join(tmp, "corpus.sexp"),
+      seeds_path: Path.join(tmp, "seeds.sexp"),
+      report_dir: Path.join(tmp, "reports")
+    ]
+
+    result = Cover.guided_loop(opts)
+
+    assert result.rounds >= 1
+    assert File.exists?(edge_path)
+    # precise mode banks per-input (not one-per-round), so with distinct new-line
+    # sets it can bank more than one edge from the cold-start round
+    assert Enum.count(Corpus.stream(edge_path)) >= 1
+    assert :cover.modules() == []
+  end
 end

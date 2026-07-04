@@ -265,32 +265,9 @@ defmodule Antigen.Cover do
         challenges = Antigen.Runner.draw_n(st.gen, round_size)
 
         {st2, yields} =
-          Enum.reduce(challenges, {st, %{f: 0, t: 0, m: 0}}, fn c, {s, ys} ->
-            prev = s.covered
-
-            # jackpot hook: the infection report (if any) records THIS challenge's
-            # coverage delta, measured after its assay ran inside run_challenge.
-            opts_c =
-              Keyword.put(opts, :health_extra, fn ->
-                %{coverage_delta: MapSet.size(MapSet.difference(covered_set(modules), prev))}
-              end)
-
-            acc2 = Antigen.Runner.run_challenge(c, opts_c, s.acc, count)
-            new_lines = MapSet.difference(covered_set(modules), prev)
-            s = %{s | acc: acc2, covered: MapSet.union(prev, new_lines)}
-
-            if MapSet.size(new_lines) > 0 do
-              {_status, _min, seen2} =
-                bank_interesting(c, new_lines, edge_path, s.seen_sets, fn _ -> true end, 0)
-
-              refresh_seed_pool!(edge_path)
-              grp = challenge_group(c)
-              n = MapSet.size(new_lines)
-              {%{s | seen_sets: seen2, banked: s.banked + 1}, Map.update(ys, grp, n, &(&1 + n))}
-            else
-              {s, ys}
-            end
-          end)
+          if opts[:precise],
+            do: run_round_precise(challenges, opts, modules, edge_path, count, st),
+            else: run_round_batch(challenges, opts, modules, edge_path, count, st)
 
         round_new = MapSet.difference(st2.covered, round_start)
         plateau = if MapSet.size(round_new) == 0, do: st.plateau + 1, else: 0
@@ -301,6 +278,77 @@ defmodule Antigen.Cover do
             rounds: st.rounds + 1,
             plateau: plateau
         })
+    end
+  end
+
+  # Precise: measure coverage after EVERY challenge, attribute + bank per input.
+  # Accurate per-input deltas at the cost of one analyse-set per challenge.
+  defp run_round_precise(challenges, opts, modules, edge_path, count, st) do
+    Enum.reduce(challenges, {st, %{f: 0, t: 0, m: 0}}, fn c, {s, ys} ->
+      prev = s.covered
+
+      opts_c =
+        Keyword.put(opts, :health_extra, fn ->
+          %{coverage_delta: MapSet.size(MapSet.difference(covered_set(modules), prev))}
+        end)
+
+      acc2 = Antigen.Runner.run_challenge(c, opts_c, s.acc, count)
+      new_lines = MapSet.difference(covered_set(modules), prev)
+      s = %{s | acc: acc2, covered: MapSet.union(prev, new_lines)}
+
+      if MapSet.size(new_lines) > 0 do
+        {_status, _min, seen2} =
+          bank_interesting(c, new_lines, edge_path, s.seen_sets, fn _ -> true end, 0)
+
+        refresh_seed_pool!(edge_path)
+        grp = challenge_group(c)
+        n = MapSet.size(new_lines)
+        {%{s | seen_sets: seen2, banked: s.banked + 1}, Map.update(ys, grp, n, &(&1 + n))}
+      else
+        {s, ys}
+      end
+    end)
+  end
+
+  # Batch (default): measure coverage only at round boundaries — one analyse-set
+  # per round instead of per challenge (the cheap gate; spec Risk #2). Banks one
+  # representative per interesting round (seen_sets dedups on the round's new-line
+  # set). Jackpot coverage_delta is round-level. No :cover.reset — the round delta
+  # is an accumulating-set difference, so the loop's baseline is never destroyed.
+  defp run_round_batch(challenges, opts, modules, edge_path, count, st) do
+    round_prev = st.covered
+
+    opts_r =
+      Keyword.put(opts, :health_extra, fn ->
+        %{coverage_delta: MapSet.size(MapSet.difference(covered_set(modules), round_prev))}
+      end)
+
+    acc2 =
+      Enum.reduce(challenges, st.acc, fn c, acc ->
+        Antigen.Runner.run_challenge(c, opts_r, acc, count)
+      end)
+
+    round_new = MapSet.difference(covered_set(modules), round_prev)
+    s = %{st | acc: acc2, covered: MapSet.union(round_prev, round_new)}
+
+    if MapSet.size(round_new) > 0 do
+      Enum.reduce(challenges, {s, %{f: 0, t: 0, m: 0}}, fn c, {ss, ys} ->
+        {status, _min, seen2} =
+          bank_interesting(c, round_new, edge_path, ss.seen_sets, fn _ -> true end, 0)
+
+        ss = %{ss | seen_sets: seen2}
+
+        if status == :appended do
+          refresh_seed_pool!(edge_path)
+          grp = challenge_group(c)
+          n = MapSet.size(round_new)
+          {%{ss | banked: ss.banked + 1}, Map.update(ys, grp, n, &(&1 + n))}
+        else
+          {ss, ys}
+        end
+      end)
+    else
+      {s, %{f: 0, t: 0, m: 0}}
     end
   end
 
