@@ -49,33 +49,44 @@ defmodule Antigen.Generators.DepMatch do
 
   defp case_challenge do
     Gen.frequency([
-      # variable index, both branches reachable — three motive flavours
-      {3, var_index(:nat)},
-      {2, var_index(:bd)},
+      # variable index, both branches reachable — constant-motive flavours whose
+      # result type drives a distinct infer_type_value_sort clause via check_motive_wf
+      {3, var_const(@nat, numeral())},
+      {2, var_const(@bd, bd_lit())},
+      {2, var_const({:type, 0}, small_type())},
+      {2, var_const({:int_type}, int_lit())},
+      {2, var_const({:float_type}, float_lit())},
+      # dependent motives: Vec m (type-former) and Eq Nat m m (propositional)
       {3, var_index(:vec)},
+      {2, var_index(:eq)},
       # closed indices — force an :impossible branch (constant Nat motive)
       {2, closed_index(@z)},
       {2, closed_index({:ctor, :S, [@z]})}
     ])
   end
 
-  # Γ = [ xs : Vec n (idx 0), n : Nat (idx 1) ]; case xs of vnil | vcons.
-  defp var_index(:nat) do
-    Gen.bind(numeral(), fn zbody ->
-      Gen.bind(numeral(), fn sbody ->
-        term = mk_case({:var, 0}, motive(@nat), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
-        Gen.return({[vec({:var, 0}), @nat], term, @nat})
+  # Γ = [ xs : Vec n (idx 0), n : Nat (idx 1) ]; case xs of vnil | vcons, with a
+  # CONSTANT motive λm.λv. result_ty — both branch bodies inhabit result_ty. The
+  # motive body's shape (universe / Int / Float / data) selects the
+  # infer_type_value_sort clause exercised.
+  defp var_const(result_ty, body_gen) do
+    Gen.bind(body_gen, fn zbody ->
+      Gen.bind(body_gen, fn sbody ->
+        term = mk_case({:var, 0}, motive(result_ty), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
+        Gen.return({[vec({:var, 0}), @nat], term, result_ty})
       end)
     end)
   end
 
-  defp var_index(:bd) do
-    Gen.bind(bd_lit(), fn zbody ->
-      Gen.bind(bd_lit(), fn sbody ->
-        term = mk_case({:var, 0}, motive(@bd), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
-        Gen.return({[vec({:var, 0}), @nat], term, @bd})
-      end)
-    end)
+  # Dependent motive λm.λv. Eq Nat m m — branch bodies are refl at the refined
+  # index (vnil : Eq Nat Z Z → refl Z; vcons : Eq Nat (S n) (S n) → refl (S n)).
+  defp var_index(:eq) do
+    eq_ty = fn m -> {:eq, @nat, m, m} end
+    motive_eq = {:lam, @nat, {:lam, vec({:var, 0}), eq_ty.({:var, 1})}}
+    nil_body = {:refl, @z}
+    cons_body = {:refl, {:ctor, :S, [{:var, 2}]}}
+    term = mk_case({:var, 0}, motive_eq, [{:vnil, 0, nil_body}, {:vcons, 3, cons_body}])
+    Gen.return({[vec({:var, 0}), @nat], term, eq_ty.({:var, 1})})
   end
 
   # Dependent motive λm.λv. Vec m — branch bodies must inhabit Vec at the refined
@@ -113,4 +124,9 @@ defmodule Antigen.Generators.DepMatch do
   end
 
   defp bd_lit, do: Gen.member_of([{:ctor, :T, []}, {:ctor, :F, []}])
+
+  # A closed type inhabiting Type 0 (for a λm.λv.Type0 motive's branch bodies).
+  defp small_type, do: Gen.member_of([@nat, @bd, {:int_type}, {:float_type}])
+  defp int_lit, do: Gen.bind(Gen.int(-9, 9), fn n -> Gen.return({:int_lit, n}) end)
+  defp float_lit, do: Gen.bind(Gen.int(-9, 9), fn n -> Gen.return({:float_lit, n / 2}) end)
 end
