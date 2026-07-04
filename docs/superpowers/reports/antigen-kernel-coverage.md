@@ -6,10 +6,10 @@
 | Cure.Core.Conv | 50 | 66 | 75.8 |
 | Cure.Core.Eval | 62 | 65 | 95.4 |
 | Cure.Core.Inductive | 40 | 79 | 50.6 |
-| Cure.Core.Kernel | 293 | 340 | 86.2 |
+| Cure.Core.Kernel | 301 | 340 | 88.5 |
 | Cure.Core.Normalise | 86 | 103 | 83.5 |
 | Cure.Core.Quote | 34 | 37 | 91.9 |
-| Cure.Core.Serialize | 78 | 108 | 72.2 |
+| Cure.Core.Serialize | 79 | 108 | 73.1 |
 
 ## Cold lines
 
@@ -67,10 +67,8 @@
   - check_case_branches/7: 706, 711
   - check_def/2: 358
   - check_motive_wf/4: 606
-  - ensure_eq/1: 474
-  - ensure_pi/1: 466
   - head_key/1: 906
-  - infer/2: 44, 67, 95, 125, 166, 181, 237
+  - infer/2: 67
   - infer_prim/3: 1070
   - infer_type_value_sort/2: 618, 620, 621, 622, 631, 689
   - normalize/2: 34
@@ -102,7 +100,7 @@
   - build/1: 133, 134, 135, 136, 139
   - build_all/1: 203
   - build_branches/1: 213, 216
-  - build_node/2: 148, 149, 151, 154, 166, 191
+  - build_node/2: 148, 149, 154, 166, 191
   - decode/1: 75, 76
   - enc/1: 34, 35
   - parse/1: 122, 123
