@@ -474,7 +474,109 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A `match` in INFERENCE position (no expected type) — reached when a match
+  # must have its type SYNTHESISED rather than checked: as the scrutinee of an
+  # outer match, or (via `let`'s surface substitution, `elaborate_let_block`)
+  # `let b = match n … ⏎ match b …`, which inlines the inner match into the outer
+  # scrutinee slot. NON-DEPENDENT synthesis, faithful to Idris' case-function
+  # lift: infer the scrutinee's data family, synthesise a candidate result type
+  # `T` from the FIRST constructor arm's body (inferred in that arm's branch
+  # context), verify `T` does NOT mention the arm's constructor-bound variables
+  # (else the match is genuinely dependent and — exactly as in Idris — needs an
+  # annotation, so we reject with `:cannot_infer_dependent_match`), strengthen it
+  # out of the branch frame, then hand `T` to the CHECKED path (`elaborate_match`)
+  # so every arm is checked against the one synthesised type. That reuses all the
+  # coverage/motive/index machinery and, since `T` is non-scrutinee-dependent, the
+  # motive it builds is effectively constant — correct for inference position.
+  def elaborate_expr_typed({:pattern_match, _meta, [scrut | arms]} = expr, names, ctx, env) do
+    with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
+           elaborate_expr_typed(scrut, names, ctx, env),
+         {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
+         %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
+         arity = length(telescope),
+         pc = Inductive.param_count(env, dname),
+         {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
+         branch_names = branch_scope(quantities, pattern_vars) ++ names,
+         branch_ctx = extend_context(ctx, telescope, param_vals),
+         {:ok, _b_term, t_branch_val} <-
+           elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
+         t_branch = Quote.reify(t_branch_val, Context.length(branch_ctx)),
+         {:ok, result_type_term} <- strengthen_inferred_type(t_branch, arity),
+         {:ok, term} <- elaborate_match(scrut, arms, result_type_term, names, ctx, env),
+         result_type_val = Eval.eval(result_type_term, Context.env(ctx)),
+         :ok <- Kernel.check(ctx, term, result_type_val) do
+      {:ok, term, result_type_val}
+    else
+      {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
+      {:error, _} = err -> err
+    end
+  end
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # The first arm whose pattern is a constructor application, as
+  # `{resolved_ctor, pattern_vars, body}` — the arm used to synthesise an
+  # inference-position match's result type. Variable/wildcard (default) arms are
+  # skipped; if no constructor arm exists the match cannot be synthesised here.
+  defp first_constructor_arm(arms, env) do
+    Enum.find_value(arms, {:error, {:cannot_infer_match_type, :no_constructor_arm}}, fn
+      {:match_arm, arm_meta, body} ->
+        case constructor_pattern(Keyword.fetch!(arm_meta, :pattern)) do
+          {:ok, {cname0, pattern_vars}} ->
+            cname = resolve_ctor_key(env, cname0)
+            if Inductive.get_ctor(env, cname),
+              do: {:ok, {cname, pattern_vars, single_body(body)}},
+              else: false
+
+          {:error, _} ->
+            false
+        end
+
+      _other ->
+        false
+    end)
+  end
+
+  # Strengthen a branch-body type out of the constructor's `arity` bound vars (de
+  # Bruijn 0..arity-1, most-recently bound). If any of those occur the type is
+  # genuinely dependent — reject (needs an annotation); otherwise shift the free
+  # outer variables down by `arity` (the inverse of `Subst.shift(_, arity, 0)`).
+  defp strengthen_inferred_type(t_branch, 0), do: {:ok, t_branch}
+
+  defp strengthen_inferred_type(t_branch, arity) do
+    if occurs_below?(t_branch, arity, 0),
+      do: {:error, {:cannot_infer_dependent_match, t_branch}},
+      else: {:ok, Subst.shift(t_branch, -arity, 0)}
+  end
+
+  # Does any de Bruijn variable in the window `[depth, depth + arity)` occur in
+  # `term`? Binder cutoffs are tracked EXACTLY as `Subst.shift` does (pi/lam/sigma
+  # add one, each `:case` branch adds its own arity), so a positive answer means
+  # strengthening by `-arity` at cutoff 0 would capture/underflow — i.e. the type
+  # depends on the constructor-bound variables.
+  defp occurs_below?({:var, k}, arity, depth), do: k >= depth and k < depth + arity
+
+  defp occurs_below?({:pi, d, c}, arity, depth),
+    do: occurs_below?(d, arity, depth) or occurs_below?(c, arity, depth + 1)
+
+  defp occurs_below?({:lam, d, b}, arity, depth),
+    do: occurs_below?(d, arity, depth) or occurs_below?(b, arity, depth + 1)
+
+  defp occurs_below?({:sigma, a, b}, arity, depth),
+    do: occurs_below?(a, arity, depth) or occurs_below?(b, arity, depth + 1)
+
+  defp occurs_below?({:case, s, m, brs}, arity, depth) do
+    occurs_below?(s, arity, depth) or occurs_below?(m, arity, depth) or
+      Enum.any?(brs, fn {_cn, ar, b} -> occurs_below?(b, arity, depth + ar) end)
+  end
+
+  defp occurs_below?(t, arity, depth) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.any?(&occurs_below?(&1, arity, depth))
+
+  defp occurs_below?(l, arity, depth) when is_list(l),
+    do: Enum.any?(l, &occurs_below?(&1, arity, depth))
+
+  defp occurs_below?(_other, _arity, _depth), do: false
 
   # Surface operator symbols (from `Precedence.operator_symbol/1`) to the kernel's
   # primitive opcodes. Only the ops the kernel actually types are mapped; `<>`
