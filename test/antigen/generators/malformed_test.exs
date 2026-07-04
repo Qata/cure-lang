@@ -20,7 +20,7 @@ defmodule Antigen.Generators.MalformedTest do
     sample = B.interp(Malformed.gen()) |> Enum.take(@sample)
     heads = MapSet.new(sample, fn c -> elem(c.payload.term, 0) end)
 
-    for h <- [:absurd, :global, :data, :ctor, :case, :app, :rewrite] do
+    for h <- [:absurd, :global, :data, :ctor, :case, :app, :rewrite, :type] do
       assert h in heads, "missing malformation family: #{h}"
     end
   end

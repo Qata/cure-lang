@@ -20,6 +20,7 @@ defmodule Antigen.Generators.Malformed do
   alias Antigen.{Gen, Challenge}
 
   @nat {:data, :Nat, [], []}
+  @bd {:data, :Bd, [], []}
   @z {:ctor, :Z, []}
 
   @spec gen(keyword()) :: Gen.t()
@@ -39,15 +40,41 @@ defmodule Antigen.Generators.Malformed do
 
   defp malformation do
     Gen.frequency([
-      {2, tagged({:absurd}, "absurd in reachable position")},
+      {1, tagged({:absurd}, "absurd in reachable position")},
       {2, tagged({:global, :nosuchdef}, "unknown global")},
       {2, tagged({:data, :NoSuchFamily, [], []}, "unknown family")},
       {2, ctor_bad()},
       {3, case_non_data()},
       {2, app_non_function()},
-      {2, rewrite_bad_proof()}
+      {2, rewrite_bad_proof()},
+      {2, rewrite_premise()},
+      {1, tagged({:type, 2}, "universe ceiling (Type 2 has no sort)")}
     ])
   end
+
+  # rewrite with a VALID Eq proof but a body that does not inhabit the motive at
+  # the proof's endpoint → the `check(body, expected)` failure branch
+  # (`:rewrite_premise`), distinct from the ensure_eq guard above.
+  defp rewrite_premise do
+    Gen.one_of([
+      # proof refl Z : Eq Nat Z Z; motive λx:Nat.Nat ⇒ expected Nat; body is a Bd
+      Gen.bind(bd_ctor(), fn b ->
+        tagged({:rewrite, {:refl, @z}, {:lam, @nat, @nat}, b}, "rewrite body ill-typed (Nat motive, Bd body)")
+      end),
+      # proof refl T : Eq Bd T T; motive λx:Bd.Bd ⇒ expected Bd; body is a Nat
+      Gen.bind(numeral(), fn n ->
+        tagged({:rewrite, {:refl, {:ctor, :T, []}}, {:lam, @bd, @bd}, n}, "rewrite body ill-typed (Bd motive, Nat body)")
+      end)
+    ])
+  end
+
+# NOTE: the `{:absurd}` family is exercised by this generator's assay test (which
+  # covers `infer`'s `:absurd_in_reachable_position` clause), but NOT by the live
+  # `mix antigen cover` campaign: the runner's `well_formed?` gate calls
+  # `Cure.Core.Term.term?/1`, which does not recognise `{:absurd}` (a shape `infer`
+  # handles but the Term recogniser rejects), so every absurd challenge is discarded
+  # before its assay runs. Left in for the unit-test coverage + as documentation of
+  # that recogniser gap.
 
   # {:ctor, <undeclared>, args} with a random (well-formed) argument list.
   defp ctor_bad do
@@ -107,6 +134,14 @@ defmodule Antigen.Generators.Malformed do
       {1, Gen.return([@z])},
       {1, Gen.return([@z, @z])}
     ])
+  end
+
+  defp bd_ctor, do: Gen.member_of([{:ctor, :T, []}, {:ctor, :F, []}])
+
+  defp numeral do
+    Gen.bind(Gen.int(0, 4), fn n ->
+      Gen.return(Enum.reduce(1..n//1, @z, fn _, acc -> {:ctor, :S, [acc]} end))
+    end)
   end
 
   defp tagged(term, note), do: Gen.return({term, note})
