@@ -3962,6 +3962,24 @@ defmodule Cure.Elab.Elaborator do
     Enum.reduce_while(deferred, {:ok, mctx}, fn {ph, arg, dom, k}, {:ok, mctx} ->
       dom_inst = dom |> Subst.instantiate(Enum.take(chosen, k)) |> Unify.zonk(mctx)
 
+      # If a later sibling argument did not fully determine this deferred domain,
+      # the deferred argument may still determine it FROM ITS OWN constructor
+      # result type — `empty : Vector(a', Z)` unified against the domain
+      # `Vector(Nat, ?n)` solves `?n := Z` (and `a' := Nat`). Attempt that solve in
+      # the CALLER's `mctx` so the freshly-solved domain metavariable propagates to
+      # the rest of the call (e.g. `prepend`'s result index). Only a genuinely
+      # ambiguous domain — one no argument, including the deferred one, determines —
+      # survives with a metavariable and is reported as unsolved. The assembled call
+      # is kernel-re-checked by `finish_global_app`, so this inference-order change
+      # rests on nothing unsound.
+      {mctx, dom_inst} =
+        if has_meta?(dom_inst) do
+          mctx = solve_deferred_domain(arg, dom_inst, mctx, names, ctx, env)
+          {mctx, Unify.zonk(dom_inst, mctx)}
+        else
+          {mctx, dom_inst}
+        end
+
       if has_meta?(dom_inst) do
         {:halt, {:error, {:unsolved_metavariables, :deferred_argument}}}
       else
@@ -3974,6 +3992,134 @@ defmodule Cure.Elab.Elaborator do
     |> case do
       {:ok, mctx} -> {:ok, mctx, chosen, args}
       {:error, _} = err -> err
+    end
+  end
+
+  # Solve a deferred argument's remaining domain metavariables from the argument's
+  # OWN constructor, threading `mctx`. When `arg` is a constructor application whose
+  # family matches `dom_inst`'s, build the constructor's result-type template over
+  # fresh metavariables (mirroring `finish_ctor_app`'s `params ++ args` seed) and
+  # unify it against `dom_inst` — this LINKS the template's parameter/index
+  # metavariables to whatever `dom_inst` already fixes (and vice versa). The
+  # template alone rarely settles everything (`prepend`'s result index is `S(n)`,
+  # with `n` still open), so we then process each PRESENT field to solve the rest:
+  # infer the field argument and unify its type against the field's expected type
+  # (`x : a` fixes the parameter), and when a field cannot infer standalone recurse
+  # on it (`xs = empty()` fixes the length index from `empty`'s own `Z`). The result
+  # is meta-solving only — `mctx` is mutated in place and the caller re-zonks
+  # `dom_inst`; the actual argument term is still built by the ordinary
+  # checking-mode elaboration once the domain is concrete, and the whole call is
+  # kernel-re-checked by `finish_global_app`, so nothing unsound rests on this.
+  # Additive and best-effort: a non-constructor argument, a foreign family, or a
+  # unification failure (a genuine index mismatch like `empty : …Z` at `…S(n)`)
+  # leaves `mctx` untouched, so a genuinely ambiguous domain still rejects.
+  defp solve_deferred_domain({:function_call, meta, cargs}, dom_inst, mctx, names, ctx, env) do
+    with name when is_binary(name) <- Keyword.get(meta, :name),
+         cname = resolve_ctor_key(env, String.to_atom(name)),
+         ctor when not is_nil(ctor) <- Inductive.get_ctor(env, cname),
+         family when not is_nil(family) <- Inductive.ctor_family(env, cname),
+         pc = length(Inductive.param_telescope(env, family) || []),
+         {mctx_try, seed} <- fresh_seed(mctx, pc + length(ctor.args)),
+         params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed)),
+         indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed)),
+         {:ok, mctx_try} <- Unify.unify({:data, family, params, indices}, dom_inst, mctx_try, env) do
+      solve_ctor_present_fields(ctor, cargs, seed, pc, mctx_try, names, ctx, env)
+    else
+      _ -> mctx
+    end
+  end
+
+  defp solve_deferred_domain(_arg, _dom_inst, mctx, _names, _ctx, _env), do: mctx
+
+  # Allocate `n` fresh metavariables from `mctx`, returning the updated context and
+  # the `[{:meta, id}]` seed frame.
+  defp fresh_seed(mctx, n) do
+    Enum.reduce(1..n//1, {mctx, []}, fn _, {m, acc} ->
+      {m, id} = MetaCtx.fresh(m)
+      {m, acc ++ [{:meta, id}]}
+    end)
+  end
+
+  # Walk a constructor's fields, solving the seed's remaining metavariables from the
+  # PRESENT field arguments. Mirrors `check_ctor_args`' framing exactly: each field
+  # type is instantiated over `params ++ (field values so far)` — a growing frame
+  # whose LENGTH the de Bruijn indices depend on, so the seed value of every field
+  # (the pinned metavariable for an erased index, the elaborated term for a present
+  # one) is threaded through `acc`. Erased fields carry no surface argument (their
+  # value is a seed metavariable a present field determines); a present field whose
+  # instantiated type still bears a metavariable is solved from its argument
+  # (inferred and unified, or recursively solved when it cannot infer standalone —
+  # `xs = empty()` fixing the length index from `empty`'s own `Z`). Best-effort:
+  # any failure returns the `mctx` reached so far, which the caller re-zonks and
+  # gates, so a genuinely ambiguous domain still rejects.
+  defp solve_ctor_present_fields(ctor, arg_asts, seed, pc, mctx, names, ctx, env) do
+    params = Enum.take(seed, pc)
+    slots = Enum.zip(ctor.args, ctor.quantities)
+    solve_fields(slots, arg_asts, seed, pc, params, [], mctx, names, ctx, env)
+  end
+
+  defp solve_fields([], _asts, _seed, _pc, _params, _acc, mctx, _names, _ctx, _env), do: mctx
+
+  defp solve_fields([{{_fn, _ft}, :erased} | slots], asts, seed, pc, params, acc, mctx, names, ctx, env) do
+    val = seed |> Enum.at(pc + length(acc)) |> Unify.zonk(mctx)
+    solve_fields(slots, asts, seed, pc, params, [val | acc], mctx, names, ctx, env)
+  end
+
+  defp solve_fields([{{_fn, _ft}, :present} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
+    do: mctx
+
+  defp solve_fields([{{_fn, ftype}, :present} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
+    ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
+
+    {mctx, val} = solve_field(arg, ftype_inst, mctx, names, ctx, env)
+    solve_fields(slots, rest, seed, pc, params, [val | acc], mctx, names, ctx, env)
+  end
+
+  # Solve a present field's expected type from its argument and return an updated
+  # `mctx` and a value term for the frame. When the type is concrete, check the
+  # argument; when it still bears a metavariable, infer the argument and unify its
+  # type against the expected type (or, if it cannot infer standalone, recursively
+  # solve it from its own constructor and then check against the now-concrete type).
+  # A field that cannot be elaborated contributes the expected type's own shape as an
+  # opaque placeholder value — enough to keep later fields' frames aligned; the
+  # caller's re-zonk and the kernel re-check gate correctness regardless.
+  defp solve_field(arg, ftype_inst, mctx, names, ctx, env) do
+    cond do
+      not has_meta?(ftype_inst) ->
+        term =
+          case elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
+            {:ok, term} -> term
+            {:error, _} -> ftype_inst
+          end
+
+        {mctx, term}
+
+      true ->
+        case elaborate_expr_typed(arg, names, ctx, env) do
+          {:ok, term, ty} ->
+            ty_term = Quote.reify(ty, Context.length(ctx))
+
+            case Unify.unify(ftype_inst, ty_term, mctx, env) do
+              {:ok, mctx} -> {mctx, term}
+              {:error, _} -> {mctx, term}
+            end
+
+          {:error, _} ->
+            mctx = solve_deferred_domain(arg, ftype_inst, mctx, names, ctx, env)
+            concrete = Unify.zonk(ftype_inst, mctx)
+
+            term =
+              if has_meta?(concrete) do
+                concrete
+              else
+                case elaborate_expr_checked(arg, concrete, names, ctx, env) do
+                  {:ok, term} -> term
+                  {:error, _} -> concrete
+                end
+              end
+
+            {mctx, term}
+        end
     end
   end
 
