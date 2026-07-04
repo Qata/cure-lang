@@ -104,6 +104,11 @@ defmodule Antigen.Generators.DepMatch do
       # a STUCK case over a Bool helper var in an index position — the case arm of
       # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.
       {2, var_index_extra2(stuck_case_helper(), {:eq, @nat, stuck_case(), stuck_case()})},
+      # POLYMORPHIC motive: Γ = [n:Nat, x:a, a:Type0]; case n of Z→x | S→x with
+      # motive λv:Nat. a — the result type is the Type-parameter VARIABLE a, so
+      # check_motive_wf's infer_type_value_sort takes its neutral-var (nvar) clause
+      # (a bound-at-a-universe motive result), distinct from the data/Π/Σ/Eq arms.
+      {2, tyvar_motive_case()},
       # TWO-index diagonal family Sq — matching forces a ≡ b, the only v1 shape
       # that reaches unify_spine (2-index spine) + bind_index's merge path.
       {3, sq_diag()},
@@ -229,6 +234,16 @@ defmodule Antigen.Generators.DepMatch do
 
   defp stuck_case,
     do: {:case, {:var, 1}, {:lam, {:data, :Bool, [], []}, @nat}, [{:False, 0, @z}, {:True, 0, @z}]}
+
+  # Γ = [n:Nat (idx0), x:a (idx1), a:Type0 (idx2)]; case n of Z→x | S→x with a
+  # constant motive λv:Nat. a. Result type is the Type-var a (var 2). Fixed shape.
+  defp tyvar_motive_case do
+    Gen.return(
+      {[@nat, {:var, 0}, {:type, 0}],
+       {:case, {:var, 0}, {:lam, @nat, {:var, 3}}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]},
+       {:var, 2}}
+    )
+  end
 
   defp var_index_extra2(helper_ty, extra_ty) do
     Gen.bind(numeral(), fn zbody ->

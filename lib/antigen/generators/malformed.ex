@@ -58,8 +58,20 @@ defmodule Antigen.Generators.Malformed do
       # check_case_branches reaches the bad branch: an unknown ctor (:unknown_ctor)
       # or a ctor of another family (:foreign_ctor, vnil belongs to Vec).
       {1, tagged(case_extra_branch(:nosuchctor), "case with unknown-ctor branch")},
-      {1, tagged(case_extra_branch(:vnil), "case with foreign-ctor branch")}
+      {1, tagged(case_extra_branch(:vnil), "case with foreign-ctor branch")},
+      # a case whose MOTIVE result is not a well-formed type → check_motive_wf's
+      # :bad_motive via infer_type_value_sort: a bound non-type var (λv.v), an
+      # unknown family (λv.NoSuchFamily), or a bare value (λv.Z).
+      {1, tagged(case_bad_motive({:lam, @nat, {:var, 0}}), "case motive returns a non-type var")},
+      {1, tagged(case_bad_motive({:lam, @nat, {:data, :NoSuchFamily, [], []}}), "case motive returns an unknown family")},
+      {1, tagged(case_bad_motive({:lam, @nat, @z}), "case motive returns a bare value")}
     ])
+  end
+
+  # `case Z of {Z→Z; S→Z}` with a supplied (ill-formed) motive — the scrutinee and
+  # branches are fine; only the motive's result type is not a valid type.
+  defp case_bad_motive(motive) do
+    {:case, @z, motive, [{:Z, 0, @z}, {:S, 1, @z}]}
   end
 
   # `case Z of {Z→Z; S→Z; <bad>→Z}` — the full Nat ctor set (coverage passes) plus
