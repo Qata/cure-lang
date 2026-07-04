@@ -104,7 +104,9 @@ defmodule Antigen.Challenge do
     # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors
     :Ty, :tnat, :tbd, :tint, :tflt, :tpi, :tsig, :tvec,
     # IdxI: Int-indexed family (check_result_indices declaration-check driver)
-    :IdxI, :mki, :mkb
+    :IdxI, :mki, :mkb,
+    # P/pc: parameterized indexed family (check_uniform_params / check_ctor_args)
+    :P, :pc, :x
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

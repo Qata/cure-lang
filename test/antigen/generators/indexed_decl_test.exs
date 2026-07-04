@@ -36,5 +36,13 @@ defmodule Antigen.Generators.IndexedDeclTest do
     # both index-type families appear
     assert Enum.any?(sample, fn c -> hd(c.payload.family.indices) == {:n, {:int_type}} end)
     assert Enum.any?(sample, fn c -> hd(c.payload.family.indices) == {:n, {:float_type}} end)
+
+    # an arg-bearing ctor (non-empty field telescope) → check_ctor_args
+    assert Enum.any?(sample, fn c -> hd(c.payload.ctors).args != [] end)
+
+    # a parameterized family (non-empty param telescope) → check_uniform_params,
+    # including a non-uniform (ill_typed) instance
+    assert Enum.any?(sample, fn c -> c.payload.family.params != [] end)
+    assert Enum.any?(sample, fn c -> c.payload.family.params != [] and c.label == :ill_typed end)
   end
 end
