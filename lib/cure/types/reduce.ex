@@ -47,6 +47,9 @@ defmodule Cure.Types.Reduce do
   feel "smart" without dragging in a full SMT call for trivial cases.
   """
 
+  alias Cure.Core.{Eval, Quote}
+  alias Cure.Types.CoreBridge
+
   @type ast :: tuple() | atom() | number() | binary()
   @type bindings :: %{optional(String.t()) => ast()}
 
@@ -60,8 +63,61 @@ defmodule Cure.Types.Reduce do
   """
   @spec normalize(ast(), bindings()) :: ast()
   def normalize(ast, bindings \\ %{}) do
-    do_normalize(ast, bindings)
+    ast |> do_substitute(bindings) |> kernel_normalize()
   end
+
+  # The Boolean connectives `and`/`or`/`not` are no longer `Cure.Core` primitives
+  # (they were retired to Std.Bool `case`-defs). `Cure.Core.Eval` therefore no
+  # longer folds them, so this non-dependent type-level reducer folds Boolean
+  # LITERAL connectives itself — reproducing the deleted primitive fold exactly
+  # (strict: folds only when both operands are concrete booleans; otherwise the
+  # node is rebuilt with normalized children). Arithmetic and numeric comparisons
+  # still fold in the kernel via `Cure.Core.Eval`.
+  defp kernel_normalize({:binary_op, meta, [l, r]} = ast) do
+    case Keyword.get(meta, :operator) do
+      op when op in [:and, :or] -> fold_bool_binop(op, kernel_normalize(l), kernel_normalize(r), ast)
+      _ -> kernel_normalize_via_core(ast)
+    end
+  end
+
+  defp kernel_normalize({:unary_op, meta, [operand]} = ast) do
+    case Keyword.get(meta, :operator) do
+      :not -> fold_bool_not(kernel_normalize(operand), ast)
+      _ -> kernel_normalize_via_core(ast)
+    end
+  end
+
+  defp kernel_normalize(ast), do: kernel_normalize_via_core(ast)
+
+  # Every other reduction happens in the trusted kernel (normalization-by-
+  # evaluation). A node inside the dependent-index grammar is translated,
+  # evaluated, and read back; an irreducible type former (named ref, refinement,
+  # n-ary tuple) has no kernel reduction, so we keep its shape and normalize each
+  # child through the kernel in turn. No arithmetic is folded outside `Cure.Core`.
+  defp kernel_normalize_via_core(ast) do
+    case CoreBridge.to_core(ast) do
+      {:ok, core} -> core |> Eval.eval([]) |> Quote.reify() |> CoreBridge.from_core()
+      :error -> structural_congruence(ast)
+    end
+  end
+
+  defp fold_bool_binop(:and, {:literal, m, a}, {:literal, _, b}, _ast)
+       when is_boolean(a) and is_boolean(b),
+       do: {:literal, m, a and b}
+
+  defp fold_bool_binop(:or, {:literal, m, a}, {:literal, _, b}, _ast)
+       when is_boolean(a) and is_boolean(b),
+       do: {:literal, m, a or b}
+
+  defp fold_bool_binop(_op, l, r, {tag, meta, _}), do: {tag, meta, [l, r]}
+
+  defp fold_bool_not({:literal, m, a}, _ast) when is_boolean(a), do: {:literal, m, not a}
+  defp fold_bool_not(operand, {tag, meta, _}), do: {tag, meta, [operand]}
+
+  defp structural_congruence({tag, meta, children}) when is_list(children),
+    do: {tag, meta, Enum.map(children, &kernel_normalize/1)}
+
+  defp structural_congruence(other), do: other
 
   @doc """
   True when two type-level expressions reduce to the same normal form.
@@ -84,74 +140,6 @@ defmodule Cure.Types.Reduce do
     do_substitute(ast, bindings)
   end
 
-  # -- Reduction Engine --------------------------------------------------------
-
-  defp do_normalize({:variable, _meta, name} = ast, bindings) when is_binary(name) do
-    case Map.get(bindings, name) do
-      nil -> ast
-      replacement -> do_normalize(replacement, bindings)
-    end
-  end
-
-  defp do_normalize({:literal, _meta, _value} = lit, _bindings), do: lit
-
-  defp do_normalize({:binary_op, meta, [left, right]}, bindings) do
-    operator = Keyword.get(meta, :operator)
-    l = do_normalize(left, bindings)
-    r = do_normalize(right, bindings)
-
-    case fold_binary(operator, l, r) do
-      {:ok, value} -> literal_for(operator, value, meta)
-      :no_fold -> {:binary_op, meta, [l, r]}
-    end
-  end
-
-  defp do_normalize({:unary_op, meta, [operand]}, bindings) do
-    operator = Keyword.get(meta, :operator)
-    o = do_normalize(operand, bindings)
-
-    case fold_unary(operator, o) do
-      {:ok, value} -> literal_for(operator, value, meta)
-      :no_fold -> {:unary_op, meta, [o]}
-    end
-  end
-
-  defp do_normalize({:tuple, meta, elements}, bindings) when is_list(elements) do
-    {:tuple, meta, Enum.map(elements, &do_normalize(&1, bindings))}
-  end
-
-  defp do_normalize({:list, meta, elements}, bindings) when is_list(elements) do
-    {:list, meta, Enum.map(elements, &do_normalize(&1, bindings))}
-  end
-
-  defp do_normalize({:function_call, meta, args}, bindings) do
-    name = Keyword.get(meta, :name, "")
-    new_args = Enum.map(args, &do_normalize(&1, bindings))
-
-    cond do
-      name == "fst" and length(new_args) == 1 ->
-        case hd(new_args) do
-          {:tuple, _, [a, _b]} -> a
-          _ -> {:function_call, meta, new_args}
-        end
-
-      name == "snd" and length(new_args) == 1 ->
-        case hd(new_args) do
-          {:tuple, _, [_a, b]} -> b
-          _ -> {:function_call, meta, new_args}
-        end
-
-      true ->
-        {:function_call, meta, new_args}
-    end
-  end
-
-  defp do_normalize({tag, meta, children}, bindings) when is_list(children) do
-    {tag, meta, Enum.map(children, &do_normalize(&1, bindings))}
-  end
-
-  defp do_normalize(other, _bindings), do: other
-
   # -- Substitution (no folding) -----------------------------------------------
 
   defp do_substitute({:variable, _meta, name} = ast, bindings) when is_binary(name) do
@@ -164,78 +152,4 @@ defmodule Cure.Types.Reduce do
 
   defp do_substitute(other, _bindings), do: other
 
-  # -- Folding -----------------------------------------------------------------
-
-  defp fold_binary(op, {:literal, _, a}, {:literal, _, b})
-       when is_integer(a) and is_integer(b) do
-    case op do
-      :+ -> {:ok, a + b}
-      :- -> {:ok, a - b}
-      :* -> {:ok, a * b}
-      :/ when b != 0 -> {:ok, div(a, b)}
-      :% when b != 0 -> {:ok, rem(a, b)}
-      :== -> {:ok, a == b}
-      :!= -> {:ok, a != b}
-      :< -> {:ok, a < b}
-      :<= -> {:ok, a <= b}
-      :> -> {:ok, a > b}
-      :>= -> {:ok, a >= b}
-      _ -> :no_fold
-    end
-  end
-
-  defp fold_binary(op, {:literal, _, a}, {:literal, _, b})
-       when is_number(a) and is_number(b) do
-    case op do
-      :+ -> {:ok, a + b}
-      :- -> {:ok, a - b}
-      :* -> {:ok, a * b}
-      :/ when b != 0 -> {:ok, a / b}
-      :== -> {:ok, a == b}
-      :!= -> {:ok, a != b}
-      :< -> {:ok, a < b}
-      :<= -> {:ok, a <= b}
-      :> -> {:ok, a > b}
-      :>= -> {:ok, a >= b}
-      _ -> :no_fold
-    end
-  end
-
-  defp fold_binary(op, {:literal, _, a}, {:literal, _, b})
-       when is_boolean(a) and is_boolean(b) do
-    case op do
-      :and -> {:ok, a and b}
-      :or -> {:ok, a or b}
-      :== -> {:ok, a == b}
-      :!= -> {:ok, a != b}
-      _ -> :no_fold
-    end
-  end
-
-  defp fold_binary(_, _, _), do: :no_fold
-
-  defp fold_unary(:-, {:literal, _, n}) when is_number(n), do: {:ok, -n}
-  defp fold_unary(:not, {:literal, _, b}) when is_boolean(b), do: {:ok, not b}
-  defp fold_unary(_, _), do: :no_fold
-
-  # -- Result construction -----------------------------------------------------
-
-  defp literal_for(_op, value, meta) when is_integer(value) do
-    {:literal, Keyword.put(meta, :subtype, :integer), value}
-    |> drop_op_meta()
-  end
-
-  defp literal_for(_op, value, meta) when is_float(value) do
-    {:literal, Keyword.put(meta, :subtype, :float), value}
-    |> drop_op_meta()
-  end
-
-  defp literal_for(_op, value, meta) when is_boolean(value) do
-    {:literal, Keyword.put(meta, :subtype, :boolean), value}
-    |> drop_op_meta()
-  end
-
-  defp drop_op_meta({:literal, meta, value}) do
-    {:literal, Keyword.delete(meta, :operator), value}
-  end
 end

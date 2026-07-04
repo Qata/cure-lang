@@ -1,7 +1,7 @@
 defmodule Cure.SMT.SmtTest do
   use ExUnit.Case, async: false
 
-  alias Cure.SMT.{Process, Translator, Solver}
+  alias Cure.SMT.{Process, Translator, Solver, Parser}
   alias Cure.Types.Refinement
 
   # Helper: build MetaAST nodes for predicates
@@ -296,6 +296,19 @@ defmodule Cure.SMT.SmtTest do
       result = Translator.translate(cond_ast)
       assert result =~ "ite"
       assert result =~ "(> x 0)"
+    end
+  end
+
+  describe "Cure.SMT.Parser.parse_model/1" do
+    test "parses a non-negative integer model value" do
+      out = "(\n  (define-fun x () Int 7)\n)"
+      assert {:ok, %{"x" => 7}} = Parser.parse_model(out)
+    end
+
+    test "parses a negative integer model value in (- N) form (Antigen V6 finding)" do
+      # Z3's get-model renders negative integers as the s-expression `(- 99)`.
+      out = "(\n  (define-fun x () Int\n    (- 99))\n)"
+      assert {:ok, %{"x" => -99}} = Parser.parse_model(out)
     end
   end
 end

@@ -249,14 +249,15 @@ expression with `Cure.Types.Reduce` before comparing.
 refl(x) : Eq(T, x, x)
 ```
 
-`Eq(T, a, b)` is the type of proofs that `a == b` at type `T`.
-`refl(x)` is the only constructor; `rewrite eq in expr` is the only
-eliminator. All Eq values are erased at runtime.
+`Eq(T, a, b)`, `refl`, and `rewrite` are part of the dependent-kernel
+design and Core has internal equality/rewrite support. The public Cure
+surface is not fully wired through the trusted dependent compiler yet;
+`Std.Equal` remains an `Atom`-returning compatibility module.
 
 ### Implicit arguments
 
 ```cure
-fn id({T}, x: T) -> T = x
+fn id({T: Type}, x: T) -> T = x
 ```
 
 Parameters in `{...}` braces are inferred from explicit-argument types

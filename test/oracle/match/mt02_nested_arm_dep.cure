@@ -1,0 +1,8 @@
+mod Mt02
+  type Nat = Z | S(Nat)
+  fn refl_id(n: Nat) -> Eq(Nat, n, n) = match n
+    Z() -> refl(Z)
+    S(k) -> match k
+      Z() -> refl(S(Z))
+      S(j) -> refl(S(S(j)))
+end

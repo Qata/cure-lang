@@ -176,18 +176,19 @@ See `DEPENDENT_TYPES.md` for the full guide. Brief summary:
 - **Pi types** -- `{:pi, [{name, type, mode}], ret_ast}` -- dependent
   function types. Return types may reference parameter names; the
   checker substitutes and normalises at every call site.
-- **Equality types** -- `{:eq, T, a, b}` -- proofs that `a == b` at
-  type `T`. Constructor `refl(x)`, eliminator `rewrite eq in expr`.
-  Erased at runtime.
+- **Equality types** -- Core has `{:eq, T, a, b}`, `refl`, and
+  `rewrite` support, but the public Cure source surface is not fully
+  wired through the trusted dependent compiler yet. `Std.Equal`
+  remains a runtime-token compatibility API.
 - **Holes** -- `?name` and `??` placeholders. The checker emits a
   `:hole_goal` event with the goal type and local context.
 - **Totality** -- `Cure.Types.Totality.classify/1` returns `:total`,
   `:partial`, or `:unknown`. The `@total true` decorator upgrades the
   classification to a hard requirement.
-- **Type-level reduction** -- `Cure.Types.Reduce.normalize/2` folds
-  arithmetic, boolean, and projection operations on closed type-level
-  expressions; this gives definitional equality before the checker
-  falls back to SMT.
+- **Type-level reduction** -- `Cure.Types.Reduce.normalize/2`
+  delegates supported expression fragments to Core normalization,
+  covering arithmetic, boolean, comparison, and literal projection
+  operations before legacy callers fall back to their existing checks.
 - **Unification** -- `Cure.Types.Unify` solves implicit arguments via
   first-order unification with an occurs check; failures emit a
   `:unification_trace` event.

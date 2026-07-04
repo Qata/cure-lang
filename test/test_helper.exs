@@ -13,12 +13,14 @@
 #
 # Running the compile task here pays the cost once per suite, guarantees
 # the beams are present, and keeps the dependency explicit.
-stdlib_ebin = Path.expand("../_build/cure/ebin", __DIR__)
-stdlib_sentinel = Path.join(stdlib_ebin, "Cure.Std.Iter.beam")
-
-unless File.exists?(stdlib_sentinel) do
-  IO.puts("test_helper: compiling Cure stdlib (one-time)")
-  Mix.Task.run("cure.compile_stdlib")
-end
+#
+# We compile UNCONDITIONALLY rather than gating on the presence of a single
+# sentinel beam. A presence check cannot notice that a stdlib source changed
+# since its beam was built, so an edited module (e.g. `lib/std/vector.cure`)
+# would leave a stale `_build/cure/ebin/*.beam` in place and produce ordering-
+# dependent test flakes. A full recompile once per suite is a few seconds and
+# is always correct.
+IO.puts("test_helper: compiling Cure stdlib")
+Mix.Task.run("cure.compile_stdlib")
 
 ExUnit.start()

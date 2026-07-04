@@ -1,0 +1,5 @@
+mod Rf03
+  type Nat = Z | S(Nat)
+  fn sym({a: Type}, {x: a}, {y: a}, p: Eq(a, x, y)) -> Eq(a, y, x) = match p
+    refl() -> refl(x)
+end

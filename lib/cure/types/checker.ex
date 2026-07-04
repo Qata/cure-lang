@@ -76,6 +76,30 @@ defmodule Cure.Types.Checker do
       |> Stdlib.install_qualified()
       |> Stdlib.install_qualified_types()
 
+    cond do
+      Cure.Elab.Program.dependent?(ast) ->
+        check_dependent_module(ast)
+
+      true ->
+        check_module_dispatch(ast, env, emit?, file)
+    end
+  end
+
+  # A module that uses dependent constructs (currently: an `indexed type` GADT) is
+  # checked by the `Cure.Core` kernel via `Cure.Elab.Program`, surfacing the
+  # kernel's judgement through the checker's error channel. Non-dependent modules
+  # stay on the legacy path unchanged.
+  defp check_dependent_module(ast) do
+    case Cure.Elab.Program.check_ast(ast) do
+      {:ok, _env} ->
+        {:ok, ast}
+
+      {:error, reason} ->
+        {:error, [{:dependent_type_error, "dependent type checking failed: #{inspect(reason)}", [line: 0]}]}
+    end
+  end
+
+  defp check_module_dispatch(ast, env, emit?, file) do
     case ast do
       {:container, meta, body} when is_list(meta) ->
         case Keyword.get(meta, :container_type) do
@@ -1176,6 +1200,9 @@ defmodule Cure.Types.Checker do
             err ->
               err
           end
+
+        {:ok, value_type} when args == [] ->
+          {:ok, value_type, env}
 
         {:ok, _other} ->
           {_, env} = infer_args(env, args)
@@ -2440,6 +2467,13 @@ defmodule Cure.Types.Checker do
   # aliases brought in by `use Std.Mod` -- and user-defined enum types
   # registered earlier in the same module -- become visible at every
   # signature/check site without any further plumbing.
+  defp resolve_with_env(env, {:variable, _meta, name}) when is_binary(name) do
+    case Env.lookup_type(env, name) do
+      {:ok, type} -> type
+      :error -> Env.deref(env, Type.resolve({:variable, [], name}))
+    end
+  end
+
   defp resolve_with_env(env, type_ast) do
     Env.deref(env, Type.resolve(type_ast))
   end

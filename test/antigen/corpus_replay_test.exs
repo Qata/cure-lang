@@ -1,0 +1,77 @@
+defmodule Antigen.CorpusReplayTest do
+  @moduledoc """
+  The permanent regression harness (spec §7, §8 replayer). Decodes the two
+  committed, never-pruned stores and re-runs each entry's assay **through the
+  kernel** — read-only, non-fail-fast, never mutating the files (so `mix test`
+  stays git-clean).
+
+  The mutual-recursion hole has since been **fixed** in `Cure.Core.Certificate`
+  (mutual-cycle detection), so every committed entry now satisfies its invariant
+  and the invariant-check test below is GREEN. The two antibodies remain in the
+  corpus as **permanent regression guards** (never pruned, spec §7.1): if the hole
+  is ever reintroduced, `totality/diverging` and `reflexivity` replay to a
+  violation again and this test goes red.
+  """
+  use ExUnit.Case, async: true
+  alias Antigen.{Runner, Assays}
+
+  @corpus "test/antigen/corpus.sexp"
+  @seeds "test/antigen/seeds.sexp"
+
+  @registry %{
+    "stub" => Assays.Stub,
+    "totality/diverging" => Assays.Totality,
+    "totality/terminating" => Assays.Totality,
+    "positivity" => Assays.Positivity,
+    "reflexivity" => Assays.Reflexivity,
+    "indexed/case" => Assays.Indexed,
+    "rewrite/eq" => Assays.Rewrite,
+    "universes" => Assays.Universes,
+    "stuck_elim_delta" => Assays.StuckElimDelta,
+    "term/infer_check" => Assays.Term,
+    "term/subject_reduction" => Assays.Term,
+    "term/normalization" => Assays.Term,
+    "mutation/rejection" => Assays.Mutation,
+    "kernel/shift_subst" => Assays.KernelLaw,
+    "kernel/weakening" => Assays.KernelLaw,
+    "kernel/confluence" => Assays.KernelLaw,
+    "elab/completeness" => Assays.Elab,
+    "elab/metamorphic" => Assays.Elab,
+    "elab/erasure" => Assays.Elab,
+    "elab/soundness" => Assays.Elab
+  }
+
+  test "both committed corpora decode without error (structural integrity)" do
+    for path <- [@corpus, @seeds], File.exists?(path) do
+      results = Runner.replay([path], @registry)
+      refute results == []
+      assert Enum.all?(results, fn r -> not match?({:decode_error, _, _}, r.verdict) end)
+    end
+  end
+
+  test "replay does not mutate the committed corpora (git-clean for CI)" do
+    for path <- [@corpus, @seeds], File.exists?(path) do
+      before = File.read!(path)
+      Runner.replay([path], @registry)
+      assert File.read!(path) == before
+    end
+  end
+
+  test "every committed entry satisfies its assay invariant (regression guard)" do
+    failing =
+      Runner.replay([@corpus, @seeds], @registry)
+      |> Enum.reject(fn r -> r.verdict == :ok end)
+
+    assert failing == [],
+           "#{length(failing)} committed entr(y/ies) fail their invariant — the " <>
+             "mutual-recursion hole may have regressed: " <>
+             inspect(Enum.map(failing, & &1.verdict))
+  end
+
+  test "banked :mutant_term seeds replay as correct rejections" do
+    seeds = Antigen.Corpus.stream(@seeds) |> Enum.map(fn {:ok, c} -> c end)
+    mutants = Enum.filter(seeds, &(&1.kind == :mutant_term))
+    assert mutants != [], "no :mutant_term seeds banked yet"
+    for c <- mutants, do: assert Antigen.Assays.Mutation.run(c) == :ok
+  end
+end

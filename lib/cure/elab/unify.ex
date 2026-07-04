@@ -1,0 +1,560 @@
+defmodule Cure.Elab.MetaCtx do
+  @moduledoc """
+  The elaborator's metavariable context (design spec §5.3): fresh unknowns
+  created during elaboration (e.g. a constructor's erased index arguments) and
+  their solutions once unification determines them.
+
+  Metavariables live only in the untrusted elaborator. A term reaching the
+  trusted kernel must be fully solved (`Unify.zonk/2` substitutes every solution
+  away); an unsolved metavariable at that point is an elaboration error.
+  """
+
+  defstruct next: 0, solutions: %{}, types: %{}
+
+  @type id :: non_neg_integer()
+  @type t :: %__MODULE__{
+          next: non_neg_integer(),
+          solutions: %{id() => Cure.Core.Term.t()},
+          types: %{id() => Cure.Core.Term.t()}
+        }
+
+  @doc "A fresh, empty metavariable context."
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @doc """
+  Allocate a fresh metavariable, returning `{ctx, id}`. An optional `type` (the
+  metavariable's expected type as a Core term, in the ambient frame) is recorded
+  so higher-order (Miller) unification can recover the abstraction-lambda domains
+  when solving `?m x̄ := λx̄. t`.
+  """
+  @spec fresh(t(), Cure.Core.Term.t() | nil) :: {t(), id()}
+  def fresh(ctx, type \\ nil)
+
+  def fresh(%__MODULE__{next: n, types: ts} = ctx, type),
+    do: {%{ctx | next: n + 1, types: Map.put(ts, n, type)}, n}
+
+  @doc "The recorded type for `id`, or nil if unknown."
+  @spec meta_type(t(), id()) :: Cure.Core.Term.t() | nil
+  def meta_type(%__MODULE__{types: ts}, id), do: Map.get(ts, id)
+
+  @doc "The solution term for `id`, or nil if unsolved."
+  @spec solution(t(), id()) :: Cure.Core.Term.t() | nil
+  def solution(%__MODULE__{solutions: s}, id), do: Map.get(s, id)
+
+  @doc "Is `id` solved?"
+  @spec solved?(t(), id()) :: boolean()
+  def solved?(%__MODULE__{solutions: s}, id), do: Map.has_key?(s, id)
+
+  @doc false
+  def put_solution(%__MODULE__{solutions: s} = ctx, id, term),
+    do: %{ctx | solutions: Map.put(s, id, term)}
+end
+
+defmodule Cure.Elab.Unify do
+  @moduledoc """
+  First-order unification of Core terms with metavariables (design spec §5.3).
+
+  Slice 1's index terms are first-order — constructor/data applications over
+  `{:ctor, …}`, `{:data, …}`, and applied globals like `andd(d1, d2)` — so
+  syntactic unification with occurs-checked metavariable solving is complete for
+  them. (Higher-order Miller-pattern unification is a documented extension point
+  for indices that apply a metavariable to bound variables.)
+
+  A metavariable is the elaboration-only term `{:meta, id}`. `unify/3` follows
+  existing solutions (`force`), solves unsolved metavariables against the other
+  side, and otherwise recurses structurally. `zonk/2` finalises a term by
+  substituting every solution away.
+  """
+
+  alias Cure.Elab.MetaCtx
+
+  @type uterm :: Cure.Core.Term.t() | {:meta, MetaCtx.id()}
+
+  @doc """
+  Unify two (possibly metavariable-bearing) terms, refining the context.
+
+  When `sig` (a `Cure.Core.Env` signature) is supplied, a syntactic failure on
+  two CLOSED, metavariable-free terms falls back to the trusted δ-capable
+  conversion (`Cure.Core.Conv`) — so a computed index like `dmeet(DDec, DDec)`
+  unifies with its normal form `DDec` (Idris parity for composed computed
+  indices). This is a COMPLETENESS improvement only: it uses the same conversion
+  the kernel uses, and the kernel independently re-checks the assembled term, so
+  no soundness rests on this fallback (a wrong accept here is caught downstream).
+  Without `sig` the behaviour is exactly the prior purely-syntactic unification.
+  """
+  @spec unify(uterm(), uterm(), MetaCtx.t(), Cure.Core.Env.t() | nil) ::
+          {:ok, MetaCtx.t()} | {:error, term()}
+  def unify(t1, t2, ctx, sig \\ nil) do
+    unify_d(t1, t2, ctx, sig, 0)
+  end
+
+  # Depth-tracked unification: `depth` counts the binders crossed so far (Π/λ/Σ
+  # codomains). A metavariable is allocated in the *ambient* context (depth 0), so
+  # its solution is stored in that frame. The two directions are duals:
+  #   * on *solve* (`?m := t` under `depth` binders) the term is strengthened back
+  #     to the ambient frame (`solve/4`), and
+  #   * on *force* (reading `?m`'s solution under `depth` binders) the ambient
+  #     solution is shifted *up* by `depth` into the current scope (`force_d/3`).
+  # Together they keep `(a) -> b` vs `(?a) -> ?b` — and the endomorphism `(a) -> a`,
+  # whose variable recurs on both sides of the binder — correctly levelled.
+  defp unify_d(t1, t2, ctx, sig, depth) do
+    f1 = force_d(t1, ctx, depth)
+    f2 = force_d(t2, ctx, depth)
+    do_unify(whnf_pre(f1, ctx, sig, depth), whnf_pre(f2, ctx, sig, depth), ctx, sig, depth)
+  end
+
+  # Weak-head-normalise a forced term BEFORE structural comparison (Idris `nf`,
+  # Agda `reduceB`, Lean `whnfCoreAtDefEq` — ledger #11), reusing the meta-aware
+  # whnf (unsolved metavariables stay opaque neutrals). This lets a reducible redex
+  # like `plus(Z, ?m)` (which δι-reduces to `?m`) unify with `S(Z)` by solving
+  # `?m := S(Z)`, instead of failing a naive `{:app,…}` vs `{:ctor,…}` comparison.
+  #
+  # whnf is applied EXACTLY ONCE per `unify_d` step — `do_unify`'s structural
+  # descent re-enters `unify_d` on subterms, which whnf them in turn, so there is
+  # NO recurse-on-change loop (an earlier version re-fed the reduced pair to
+  # `unify_d`, which diverged whenever whnf's fold/unfold shape oscillated). Gated
+  # to:
+  #   * `sig != nil` — whnf needs the signature to δ-unfold globals; sig-less
+  #     callers keep the prior purely-syntactic behaviour; and
+  #   * `depth == 0` (the ambient frame) — where `zonk` (inside `whnf_meta_aware`)
+  #     and the binder-shifting `force_d` coincide, so a solved metavariable's
+  #     ambient-framed solution needs no shift. Under binders (`depth > 0`) fall
+  #     through unchanged; reducing there is a documented future extension.
+  defp whnf_pre(t, _ctx, nil, _depth), do: t
+  defp whnf_pre(t, _ctx, _sig, depth) when depth != 0, do: t
+
+  defp whnf_pre(t, ctx, sig, depth) do
+    r = whnf_meta_aware(t, ctx, sig, depth)
+
+    # A reduction that turns a NON-lambda into a lambda is an under-applied
+    # function being β-expanded to its arity — e.g. a partial spine `app(xs)`
+    # (`app` given 1 of its 2 arguments) reduces to `λys. case xs {…}`. That
+    # destroys the neutral/syntactic spine the first-order unifier relies on to
+    # solve `app(xs) =? app(?a)` (and there is no `:case` unify clause to fall back
+    # on), so KEEP the original there. Every ι-reduction WIN this feature targets
+    # (`plus(Z, ?m)` → `?m`, `plus(Z, S(Z))` → `S(Z)`) produces a ctor/meta/neutral,
+    # never a lambda, so this guard preserves them all.
+    if match?({:lam, _, _}, r) and not match?({:lam, _, _}, t), do: t, else: r
+  end
+
+  # Resolve a metavariable's solution and lift it from the ambient frame into the
+  # current binder `depth`. A non-metavariable head is already in the current
+  # scope, so it is returned unshifted.
+  defp force_d({:meta, id} = t, ctx, depth) do
+    case MetaCtx.solution(ctx, id) do
+      nil -> t
+      sol -> force_d(Cure.Elab.Subst.shift(sol, depth, 0), ctx, depth)
+    end
+  end
+
+  defp force_d(t, _ctx, _depth), do: t
+
+  # Follow the chain of solutions until the head is not a solved metavariable
+  # (depth-agnostic; used by `occurs?`/`zonk` where no binder lifting applies).
+  defp force({:meta, id} = t, ctx) do
+    case MetaCtx.solution(ctx, id) do
+      nil -> t
+      sol -> force(sol, ctx)
+    end
+  end
+
+  defp force(t, _ctx), do: t
+
+  # Try higher-order (Miller) pattern unification before the first-order rules:
+  # when one side is a metavariable applied to a spine of DISTINCT bound variables
+  # (`?m x̄`) and the other is rigid, solve `?m := λx̄. t` by abstracting `t` over
+  # `x̄`, taking the abstraction-lambda domains from `?m`'s recorded type. Any
+  # condition unmet → `:fallthrough` to the structural rules, so this is never
+  # worse than the prior first-order behaviour. The kernel independently re-checks
+  # the zonked solution, so no soundness rests on this (a wrong solve is caught
+  # downstream). Idris/Agda pattern-unification parity (ledger #10).
+  defp do_unify(t1, t2, ctx, sig, depth) do
+    case {miller_pattern(t1), miller_pattern(t2)} do
+      {{id, vars}, _} -> miller_or(miller_solve(id, vars, t2, ctx, depth), t1, t2, ctx, sig, depth)
+      {_, {id, vars}} -> miller_or(miller_solve(id, vars, t1, ctx, depth), t1, t2, ctx, sig, depth)
+      _ -> do_unify_struct(t1, t2, ctx, sig, depth)
+    end
+  end
+
+  defp miller_or({:ok, ctx2}, _t1, _t2, _ctx, _sig, _depth), do: {:ok, ctx2}
+  defp miller_or(:fallthrough, t1, t2, ctx, sig, depth), do: do_unify_struct(t1, t2, ctx, sig, depth)
+
+  # A spine `?id a_1 … a_n` (n ≥ 1) where every `a_k` is a variable →
+  # `{id, [a_1, …, a_n]}` (application order); `nil` otherwise.
+  defp miller_pattern(t), do: mpat(t, [])
+  defp mpat({:app, f, {:var, i}}, acc), do: mpat(f, [i | acc])
+  defp mpat({:app, _f, _x}, _acc), do: nil
+  defp mpat({:meta, id}, acc) when acc != [], do: {id, acc}
+  defp mpat(_t, _acc), do: nil
+
+  # Solve `?id x̄ := λx̄. abstract(rhs)`. `:fallthrough` when the pattern side
+  # conditions are unmet (non-distinct vars, a var that is not a crossed binder,
+  # unknown/insufficient metavariable type, a non-pattern free var in `rhs`, or an
+  # occurs-check failure) — the caller then uses the first-order rules.
+  defp miller_solve(id, vars, rhs, ctx, depth) do
+    n = length(vars)
+
+    with true <- vars_ok?(vars, depth),
+         mtype when not is_nil(mtype) <- MetaCtx.meta_type(ctx, id),
+         {:ok, doms} <- peel_pi_domains(mtype, n),
+         {:ok, body} <- miller_abstract(rhs, depth, vars, n),
+         false <- occurs?(id, body, ctx) do
+      {:ok, MetaCtx.put_solution(ctx, id, wrap_lams(doms, body))}
+    else
+      _ -> :fallthrough
+    end
+  end
+
+  # Pattern args must be DISTINCT and each a variable crossed by one of the
+  # `depth` binders (so it can be abstracted into a lambda of the solution).
+  defp vars_ok?(vars, depth),
+    do: Enum.all?(vars, &(&1 >= 0 and &1 < depth)) and length(Enum.uniq(vars)) == length(vars)
+
+  defp peel_pi_domains(_type, 0), do: {:ok, []}
+
+  defp peel_pi_domains({:pi, d, c}, n) when n > 0 do
+    with {:ok, rest} <- peel_pi_domains(c, n - 1), do: {:ok, [d | rest]}
+  end
+
+  defp peel_pi_domains(_type, _n), do: :error
+
+  defp wrap_lams([], body), do: body
+  defp wrap_lams([d | ds], body), do: {:lam, d, wrap_lams(ds, body)}
+
+  # Abstract `rhs` (at binder `depth`) over the pattern vars: a pattern var `x_k`
+  # becomes the k-th solution-lambda binder; an ambient var is shifted up by `n`
+  # (removing the `depth` crossed binders, adding `n` lambdas); a crossed binder
+  # that is NOT a pattern var escapes (no pattern solution). `local` tracks
+  # binders internal to `rhs`.
+  defp miller_abstract(rhs, depth, vars, n) do
+    {:ok, mabs(rhs, depth, vars, n, 0)}
+  catch
+    :throw, :miller_escape -> :error
+  end
+
+  defp mabs({:var, v}, depth, vars, n, local) do
+    cond do
+      v < local -> {:var, v}
+      v - local >= depth -> {:var, n + v - depth}
+      true ->
+        case Enum.find_index(vars, &(&1 == v - local)) do
+          nil -> throw(:miller_escape)
+          k0 -> {:var, local + n - 1 - k0}
+        end
+    end
+  end
+
+  defp mabs({:pi, d, c}, dep, vs, n, l), do: {:pi, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
+  defp mabs({:lam, d, b}, dep, vs, n, l), do: {:lam, mabs(d, dep, vs, n, l), mabs(b, dep, vs, n, l + 1)}
+  defp mabs({:sigma, d, c}, dep, vs, n, l), do: {:sigma, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
+  defp mabs({:app, f, x}, dep, vs, n, l), do: {:app, mabs(f, dep, vs, n, l), mabs(x, dep, vs, n, l)}
+  defp mabs({:pair, a, b}, dep, vs, n, l), do: {:pair, mabs(a, dep, vs, n, l), mabs(b, dep, vs, n, l)}
+  defp mabs({:fst, p}, dep, vs, n, l), do: {:fst, mabs(p, dep, vs, n, l)}
+  defp mabs({:snd, p}, dep, vs, n, l), do: {:snd, mabs(p, dep, vs, n, l)}
+
+  defp mabs({:eq, ty, a, b}, dep, vs, n, l),
+    do: {:eq, mabs(ty, dep, vs, n, l), mabs(a, dep, vs, n, l), mabs(b, dep, vs, n, l)}
+
+  defp mabs({:refl, a}, dep, vs, n, l), do: {:refl, mabs(a, dep, vs, n, l)}
+
+  defp mabs({:data, nm, ps, is}, dep, vs, n, l),
+    do: {:data, nm, Enum.map(ps, &mabs(&1, dep, vs, n, l)), Enum.map(is, &mabs(&1, dep, vs, n, l))}
+
+  defp mabs({:ctor, c, args}, dep, vs, n, l), do: {:ctor, c, Enum.map(args, &mabs(&1, dep, vs, n, l))}
+  defp mabs({:prim, op, args}, dep, vs, n, l), do: {:prim, op, Enum.map(args, &mabs(&1, dep, vs, n, l))}
+
+  defp mabs({:case, s, m, brs}, dep, vs, n, l) do
+    {:case, mabs(s, dep, vs, n, l), mabs(m, dep, vs, n, l),
+     Enum.map(brs, fn {cn, ar, b} -> {cn, ar, mabs(b, dep, vs, n, l + ar)} end)}
+  end
+
+  defp mabs({:meta, _} = m, _dep, _vs, _n, _l), do: m
+  defp mabs(leaf, _dep, _vs, _n, _l), do: leaf
+
+  defp do_unify_struct({:meta, id}, {:meta, id}, ctx, _sig, _depth), do: {:ok, ctx}
+  defp do_unify_struct({:meta, id}, t, ctx, _sig, depth), do: solve(id, t, ctx, depth)
+  defp do_unify_struct(t, {:meta, id}, ctx, _sig, depth), do: solve(id, t, ctx, depth)
+
+  defp do_unify_struct({:type, l}, {:type, l}, ctx, _sig, _depth), do: {:ok, ctx}
+  defp do_unify_struct({:var, i}, {:var, i}, ctx, _sig, _depth), do: {:ok, ctx}
+  defp do_unify_struct({:global, g}, {:global, g}, ctx, _sig, _depth), do: {:ok, ctx}
+
+  defp do_unify_struct({:data, f, ps1, is1}, {:data, f, ps2, is2}, ctx, sig, depth),
+    do: unify_lists(ps1 ++ is1, ps2 ++ is2, ctx, sig, depth)
+
+  defp do_unify_struct({:ctor, c, a1}, {:ctor, c, a2}, ctx, sig, depth),
+    do: unify_lists(a1, a2, ctx, sig, depth)
+
+  defp do_unify_struct({:app, f1, x1}, {:app, f2, x2}, ctx, sig, depth) do
+    with {:ok, ctx} <- unify_d(f1, f2, ctx, sig, depth), do: unify_d(x1, x2, ctx, sig, depth)
+  end
+
+  defp do_unify_struct({:pi, d1, c1}, {:pi, d2, c2}, ctx, sig, depth) do
+    with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
+         do: unify_d(c1, c2, ctx, sig, depth + 1)
+  end
+
+  defp do_unify_struct({:lam, d1, b1}, {:lam, d2, b2}, ctx, sig, depth) do
+    with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
+         do: unify_d(b1, b2, ctx, sig, depth + 1)
+  end
+
+  defp do_unify_struct({:sigma, d1, c1}, {:sigma, d2, c2}, ctx, sig, depth) do
+    with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
+         do: unify_d(c1, c2, ctx, sig, depth + 1)
+  end
+
+  # Structurally identical (literals, atoms, etc.).
+  defp do_unify_struct(t, t, ctx, _sig, _depth), do: {:ok, ctx}
+
+  # Last resort: two terms that are not syntactically unifiable may still be
+  # DEFINITIONALLY equal via δ (e.g. `DDec` vs the redex `dmeet(DDec, DDec)`).
+  # Only attempt this when a signature is available and both sides are closed and
+  # metavariable-free — then they carry no unification variables to solve, so a
+  # convertibility check is exactly the right question, and `env=[] depth=0` is
+  # sound (no free de Bruijn vars). Open neutral spines (e.g. `app(av, cv)`) unify
+  # syntactically and never reach here.
+  defp do_unify_struct(t1, t2, ctx, sig, _depth) do
+    if delta_convertible?(t1, t2, ctx, sig) do
+      {:ok, ctx}
+    else
+      {:error, {:cannot_unify, t1, t2}}
+    end
+  end
+
+  defp delta_convertible?(_t1, _t2, _ctx, nil), do: false
+
+  defp delta_convertible?(t1, t2, ctx, sig) do
+    z1 = zonk(t1, ctx)
+    z2 = zonk(t2, ctx)
+
+    meta_free?(z1) and meta_free?(z2) and
+      Cure.Core.Term.closed?(z1) and Cure.Core.Term.closed?(z2) and
+      Cure.Core.Conv.conv?(z1, z2, [], 0, sig)
+  end
+
+  # Structurally complete: walk EVERY subterm-bearing shape so a metavariable
+  # buried anywhere (`{:eq}`/`{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}`/`{:refl}`/
+  # `{:prim}`/`{:case}`/…) is detected. A missed shape here would let a
+  # `{:meta, _}`-bearing term pass the `delta_convertible?` guard and reach the
+  # TRUSTED `Eval.eval`, which has no `{:meta, _}` clause — an elaborator crash of
+  # the kernel. Tag atoms and ids are non-tuple/non-list leaves → `true`.
+  defp meta_free?({:meta, _}), do: false
+  defp meta_free?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.all?(&meta_free?/1)
+  defp meta_free?(l) when is_list(l), do: Enum.all?(l, &meta_free?/1)
+  defp meta_free?(_), do: true
+
+  defp unify_lists([], [], ctx, _sig, _depth), do: {:ok, ctx}
+
+  defp unify_lists([x | xs], [y | ys], ctx, sig, depth) do
+    with {:ok, ctx} <- unify_d(x, y, ctx, sig, depth), do: unify_lists(xs, ys, ctx, sig, depth)
+  end
+
+  defp unify_lists(l1, l2, _ctx, _sig, _depth),
+    do: {:error, {:arity_mismatch, length(l1), length(l2)}}
+
+  # Solve `?id := t`, first strengthening `t` from the current binder `depth` back
+  # to the ambient frame the metavariable lives in. A free variable that points
+  # *into* those `depth` local binders would escape its scope, so the solve fails
+  # (not a first-order solution — a higher-order/Miller case we do not attempt).
+  # At depth 0 this is the identity, so every existing (top-level) unification is
+  # unchanged.
+  defp solve(id, t, ctx, depth) do
+    case strengthen(t, depth) do
+      :escape -> {:error, {:escaping_variable, id}}
+      {:ok, t2} -> solve_strengthened(id, t2, ctx)
+    end
+  end
+
+  defp solve_strengthened(id, t, ctx) do
+    if occurs?(id, t, ctx) do
+      {:error, {:occurs_check, id, t}}
+    else
+      {:ok, MetaCtx.put_solution(ctx, id, t)}
+    end
+  end
+
+  # Strengthen `t` by `depth`: subtract `depth` from every variable free in `t`
+  # (accounting for `t`'s own binders), returning `:escape` if any free variable
+  # points into the `depth` binders being removed. `depth == 0` is the identity.
+  defp strengthen(t, 0), do: {:ok, t}
+
+  defp strengthen(t, depth) do
+    if escapes?(t, depth, 0), do: :escape, else: {:ok, Cure.Elab.Subst.shift(t, -depth, 0)}
+  end
+
+  # Does `t` reference (freely) any of the outermost `depth` binders? `local`
+  # counts binders internal to `t`; a variable `i >= local` is free, at free index
+  # `i - local`, and escapes iff that index is `< depth`.
+  defp escapes?({:var, i}, depth, local), do: i >= local and i - local < depth
+  defp escapes?({:meta, _}, _depth, _local), do: false
+  defp escapes?({:pi, d, c}, depth, local), do: escapes?(d, depth, local) or escapes?(c, depth, local + 1)
+  defp escapes?({:lam, d, b}, depth, local), do: escapes?(d, depth, local) or escapes?(b, depth, local + 1)
+
+  defp escapes?({:sigma, d, c}, depth, local),
+    do: escapes?(d, depth, local) or escapes?(c, depth, local + 1)
+
+  defp escapes?({:app, f, x}, depth, local), do: escapes?(f, depth, local) or escapes?(x, depth, local)
+  defp escapes?({:pair, a, b}, depth, local), do: escapes?(a, depth, local) or escapes?(b, depth, local)
+  defp escapes?({:fst, p}, depth, local), do: escapes?(p, depth, local)
+  defp escapes?({:snd, p}, depth, local), do: escapes?(p, depth, local)
+
+  defp escapes?({:eq, ty, a, b}, depth, local),
+    do: escapes?(ty, depth, local) or escapes?(a, depth, local) or escapes?(b, depth, local)
+
+  defp escapes?({:refl, a}, depth, local), do: escapes?(a, depth, local)
+  defp escapes?({:prim, _op, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
+
+  defp escapes?({:data, _f, ps, is}, depth, local),
+    do: Enum.any?(ps ++ is, &escapes?(&1, depth, local))
+
+  defp escapes?({:ctor, _c, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
+  defp escapes?(_other, _depth, _local), do: false
+
+  # Does metavariable `id` occur in `t` (following solutions)? Structurally
+  # complete (generic tuple/list walk) so an occurrence buried in ANY shape is
+  # caught — an under-approximation would admit a cyclic solution.
+  defp occurs?(id, t, ctx) do
+    case force(t, ctx) do
+      {:meta, ^id} -> true
+      {:meta, _other} -> false
+      tup when is_tuple(tup) -> tup |> Tuple.to_list() |> Enum.any?(&occurs?(id, &1, ctx))
+      lst when is_list(lst) -> Enum.any?(lst, &occurs?(id, &1, ctx))
+      _ -> false
+    end
+  end
+
+  @doc """
+  True iff `t` still contains a metavariable syntactically. Use at a kernel
+  boundary (after `zonk`) to reject cleanly rather than hand a `{:meta, _}`-bearing
+  term to the trusted evaluator, which has no `{:meta, _}` clause and would crash.
+  """
+  @spec has_meta?(uterm()) :: boolean()
+  def has_meta?(t), do: not meta_free?(t)
+
+  @doc """
+  Finalise a term by substituting every metavariable solution away. Structurally
+  complete (generic tuple/list walk) so a solution buried in ANY shape is
+  substituted — a missed shape would leave a `{:meta, _}` in a term handed to the
+  kernel.
+  """
+  @spec zonk(uterm(), MetaCtx.t()) :: uterm()
+  def zonk(t, ctx) do
+    case force(t, ctx) do
+      {:meta, _id} = m -> m
+      tup when is_tuple(tup) -> tup |> Tuple.to_list() |> Enum.map(&zonk(&1, ctx)) |> List.to_tuple()
+      lst when is_list(lst) -> Enum.map(lst, &zonk(&1, ctx))
+      other -> other
+    end
+  end
+
+  @meta_placeholder_prefix "$meta$"
+
+  @doc false
+  # Meta-aware weak-head normalisation (ledger #11, whnf-before-compare). Reduce
+  # `term` to whnf while treating each unsolved metavariable as an opaque neutral:
+  # it BLOCKS a match/case whose scrutinee is the metavariable (`plus(?m, Z)` stays
+  # stuck) but PASSES THROUGH any non-scrutinee position (`plus(Z, ?m)` reduces to
+  # `?m`). Mechanism: zonk, substitute each remaining `{:meta, id}` with a reserved
+  # opaque global `{:global, :"$meta$id"}` (no signature entry → `unfold_head`
+  # returns `:stuck`, exactly like an unsolved metavariable), reduce with the
+  # TRUSTED `Normalise` reduction reused via its constituents (`Eval.eval` →
+  # `Normalise.whnf_value` → `Quote.reify`, the trio `Normalise.whnf/3` itself
+  # composes — bypassing `whnf/3`'s `Core.Context.t()` requirement), then map the
+  # placeholders back. E-layer only: the kernel re-checks the assembled term, so a
+  # wrong reduction is caught downstream. On `:fuel_exhausted` (or `sig == nil`),
+  # returns the (zonked) input unchanged — strictly additive, never crashes.
+  @spec whnf_meta_aware(uterm(), MetaCtx.t(), Cure.Core.Env.t() | nil, non_neg_integer(), keyword()) ::
+          uterm()
+  def whnf_meta_aware(term, ctx, sig, depth \\ 0, opts \\ [])
+
+  def whnf_meta_aware(term, ctx, nil, _depth, _opts), do: zonk(term, ctx)
+
+  def whnf_meta_aware(term, ctx, sig, depth, opts) do
+    z = zonk(term, ctx)
+    subst = metas_to_placeholders(z)
+    fuel = Keyword.get(opts, :fuel, :infinity)
+
+    # Only reduce a CLOSED term. `unify_d`'s `depth` counts binders crossed *within*
+    # the unification, but the terms may still carry FREE de Bruijn variables from
+    # the ambient elaboration context (function parameters). Evaluating those under
+    # the empty env would mis-level them into out-of-range `{:var, _}` (negative
+    # indices). A closed term is context-independent, so `env = []` / read-back at
+    # `depth` is sound; the computed-index unifications this feature targets
+    # (`plus(Z, ?m) =? S(Z)`) are closed once metavariables become placeholders.
+    if Cure.Core.Term.closed?(subst) do
+      reduce_closed(z, subst, sig, depth, fuel)
+    else
+      z
+    end
+  end
+
+  defp reduce_closed(z, subst, sig, depth, fuel) do
+    reduced =
+      Cure.Core.Normalise.with_fuel(fuel, fn ->
+        env = for level <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, level}}
+
+        subst
+        |> Cure.Core.Eval.eval(env)
+        |> Cure.Core.Normalise.whnf_value(sig, delta: :certified, stuck_cases: :preserve)
+        # Pass `sig` so an indexed-family value (`{:vdata, :Eq, params ++ indices}`)
+        # reifies back to the correctly-split `{:data, :Eq, params, indices}` rather
+        # than the flat `{:data, :Eq, all, []}`. Without it, a codomain metavariable
+        # solved through this whnf (`?P := λn. Eq(Nat,n,n)`, ledger #10) stores a
+        # flat body, and the later `P(Zero)` check trips `check_spine`'s `:arg_arity`.
+        |> Cure.Core.Quote.reify(depth, sig)
+      end)
+
+    case reduced do
+      :fuel_exhausted -> z
+      other -> placeholders_to_metas(other)
+    end
+  end
+
+  # Replace each unsolved `{:meta, id}` with its reserved opaque-global placeholder.
+  # Generic tuple/list walk (mirrors `zonk/2`) so a metavariable buried in ANY Core
+  # shape is substituted.
+  defp metas_to_placeholders({:meta, id}), do: {:global, :"#{@meta_placeholder_prefix}#{id}"}
+
+  defp metas_to_placeholders(tup) when is_tuple(tup),
+    do: tup |> Tuple.to_list() |> Enum.map(&metas_to_placeholders/1) |> List.to_tuple()
+
+  defp metas_to_placeholders(list) when is_list(list),
+    do: Enum.map(list, &metas_to_placeholders/1)
+
+  defp metas_to_placeholders(leaf), do: leaf
+
+  # Inverse of `metas_to_placeholders/1`: map each placeholder global back to its
+  # metavariable. A `{:global, :"$meta$…"}` cannot arise from real source (the
+  # prefix is not a legal identifier), so this is unambiguous.
+  defp placeholders_to_metas({:global, name} = t) do
+    case placeholder_id(name) do
+      {:ok, id} -> {:meta, id}
+      :error -> t
+    end
+  end
+
+  defp placeholders_to_metas(tup) when is_tuple(tup),
+    do: tup |> Tuple.to_list() |> Enum.map(&placeholders_to_metas/1) |> List.to_tuple()
+
+  defp placeholders_to_metas(list) when is_list(list),
+    do: Enum.map(list, &placeholders_to_metas/1)
+
+  defp placeholders_to_metas(leaf), do: leaf
+
+  defp placeholder_id(name) when is_atom(name) do
+    case Atom.to_string(name) do
+      @meta_placeholder_prefix <> rest ->
+        case Integer.parse(rest) do
+          {id, ""} -> {:ok, id}
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp placeholder_id(_), do: :error
+end

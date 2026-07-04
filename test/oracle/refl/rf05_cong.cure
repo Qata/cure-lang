@@ -1,0 +1,5 @@
+mod Rf05
+  type Nat = Z | S(Nat)
+  fn cong({a: Type}, {x: a}, {y: a}, f: (a) -> Nat, p: Eq(a, x, y)) -> Eq(Nat, f(x), f(y)) = match p
+    refl() -> refl(f(x))
+end

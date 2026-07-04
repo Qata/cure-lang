@@ -1,0 +1,182 @@
+defmodule Cure.Elab.Relevance do
+  @moduledoc """
+  The `{0,ω}` relevance check (M8.3) — the elaborator-side pass that makes
+  erasure SOUND. It is the exact dual of `Cure.Elab.Erase`: erasure drops every
+  `:erased` argument position, and this check guarantees no `:erased` binder is
+  ever *used* in a position erasure would drop it from — so the runtime term
+  `Erase.erase` produces never references a binding that no longer exists.
+
+  This lives in the untrusted elaborator (E-layer), NOT the kernel — exactly like
+  Idris, where `Core/LinearCheck.idr` runs outside the core conversion checker.
+  The kernel stays quantity-blind; `declarations.ex` calls this after
+  `Kernel.check` succeeds and before the def is registered/erased.
+
+  ## Idris grounding (Core/LinearCheck.idr, 0/ω slice)
+
+  `lcheck rig erase env term` threads a usage count; a `Rig0` (our `:erased`)
+  binder must have usage 0 in every RELEVANT position. The multiplier is
+  `checkRig = rigf |*| rig` (App case) with `erased |*| _ = erased`, so a binder
+  counts only where the ambient `rig` is not erased:
+
+    * RELEVANT (a `0` binder here is a violation):
+      - returned as the value (`:returned`);
+      - passed in a `:present` argument position of a call/constructor
+        (`:present_arg`);
+      - scrutinised as a `case` discriminant (`:scrutinee`);
+      - applied as a function head (`:applied`).
+    * EXEMPT (checked at `erased`, does not count): type/index positions
+      (`{:pi}`/`{:sigma}`/`{:data}`/`{:eq}` — Pi & Sigma domains, the `case`
+      motive), erased argument positions, and proof positions
+      (`{:refl}` argument, `{:rewrite}` proof + motive).
+
+  Only the 0/ω slice is ported (per the reference manifest caveat: read Idris
+  core as ω-except-erased; the linear `1` multiplicity is out of scope).
+
+  ## de Bruijn convention
+
+  `check/4` receives the RAW body term (before `wrap_binders(:lam, …)`), so the
+  `P = length(quantities)` parameters are its outermost free variables: parameter
+  `p` (0-based, telescope order) occurs at de Bruijn index `P-1-p`. Walking with
+  an initial `depth = P` makes `level = depth-1-i` recover the parameter index
+  directly, and inner binders (`:lam` bodies, `case` branch patterns) simply
+  increment `depth` — a free occurrence of parameter `p` at extra depth `d` is
+  index `P-1-p+d`, still `level = p`. Levels `>= P` are inner binders, never
+  parameters, so never flagged.
+  """
+
+  alias Cure.Core.{Env, Inductive}
+
+  @type site :: :returned | :present_arg | :scrutinee | :applied
+
+  @doc """
+  Verify that no `:erased` parameter of `name` is used relevantly in `body`
+  (the raw, pre-lambda-wrapped body term). `quantities` is the per-parameter
+  `{0,ω}` list (`nil` = all runtime-relevant). Returns `:ok`, or the first
+  violation as `{:error, {:erased_used_relevantly, %{def:, binder:, site:}}}`
+  where `binder` is the 0-based parameter index.
+  """
+  @spec check(Env.t(), atom(), [atom()] | nil, Cure.Core.Term.t()) ::
+          :ok | {:error, {:erased_used_relevantly, %{def: atom(), binder: non_neg_integer(), site: site()}}}
+  def check(_env, _name, quantities, _body) when not is_list(quantities), do: :ok
+
+  def check(env, name, quantities, body) do
+    erased =
+      quantities
+      |> Enum.with_index()
+      |> Enum.filter(fn {q, _idx} -> q == :erased end)
+      |> Enum.map(fn {_q, idx} -> idx end)
+      |> MapSet.new()
+
+    if MapSet.size(erased) == 0 do
+      :ok
+    else
+      st = %{env: env, name: name, erased: erased}
+      walk(body, length(quantities), :returned, st)
+    end
+  end
+
+  # --- relevant positions: an erased-parameter occurrence here is a violation --
+
+  defp walk({:var, i}, depth, site, st) do
+    level = depth - 1 - i
+
+    if level >= 0 and MapSet.member?(st.erased, level) do
+      {:error, {:erased_used_relevantly, %{def: st.name, binder: level, site: site}}}
+    else
+      :ok
+    end
+  end
+
+  # A closure value being returned: its domain is a type position (exempt); its
+  # body is relevant. Descending binds one more variable.
+  defp walk({:lam, _dom, body}, depth, _site, st), do: walk(body, depth + 1, :returned, st)
+
+  # Application spine: the head is `:applied`; each argument is relevant iff the
+  # callee's quantity for that position is `:present` (erased positions exempt —
+  # the dual of `Erase.erase`'s `{:app, …}` filtering).
+  defp walk({:app, _f, _x} = app, depth, _site, st) do
+    {head, args} = spine(app, [])
+    quantities = callee_quantities(head, length(args), st.env)
+
+    with :ok <- walk(head, depth, :applied, st) do
+      args
+      |> Enum.zip(quantities)
+      |> each(fn {arg, q} ->
+        if q == :present, do: walk(arg, depth, :present_arg, st), else: :ok
+      end)
+    end
+  end
+
+  # Constructor: same present/erased split, via the family's ctor quantities.
+  defp walk({:ctor, cname, args}, depth, _site, st) do
+    quantities = Inductive.ctor_quantities(st.env, cname) || List.duplicate(:present, length(args))
+
+    args
+    |> Enum.zip(quantities)
+    |> each(fn {arg, q} ->
+      if q == :present, do: walk(arg, depth, :present_arg, st), else: :ok
+    end)
+  end
+
+  # Sigma intro/elim: components carry the runtime value (relevant).
+  defp walk({:pair, a, b}, depth, _site, st) do
+    with :ok <- walk(a, depth, :returned, st), do: walk(b, depth, :returned, st)
+  end
+
+  defp walk({:fst, p}, depth, _site, st), do: walk(p, depth, :returned, st)
+  defp walk({:snd, p}, depth, _site, st), do: walk(p, depth, :returned, st)
+
+  # `rewrite proof motive body ⇝ body` at eval; proof + motive are exempt, the
+  # transported body is relevant.
+  defp walk({:rewrite, _proof, _motive, body}, depth, _site, st),
+    do: walk(body, depth, :returned, st)
+
+  # `case`: the discriminant is scrutinised (relevant); the motive is a type
+  # position (exempt); each branch body runs under `arity` fresh pattern binders.
+  defp walk({:case, scrut, _motive, branches}, depth, _site, st) do
+    with :ok <- walk(scrut, depth, :scrutinee, st) do
+      each(branches, fn {_cname, arity, body} -> walk(body, depth + arity, :returned, st) end)
+    end
+  end
+
+  # --- exempt positions: type formers and proof terms carry no runtime value ---
+  defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
+  defp walk({:sigma, _a, _b}, _depth, _site, _st), do: :ok
+  defp walk({:data, _n, _ps, _is}, _depth, _site, _st), do: :ok
+  defp walk({:eq, _ty, _a, _b}, _depth, _site, _st), do: :ok
+  defp walk({:refl, _a}, _depth, _site, _st), do: :ok
+
+  # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no
+  # erased-parameter occurrence to account for. Mirrors `Erase`'s leaf clause.
+  defp walk(_leaf, _depth, _site, _st), do: :ok
+
+  defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
+  defp spine(head, acc), do: {head, acc}
+
+  defp callee_quantities({:global, name}, arity, env) do
+    case Env.get_def(env, name) do
+      %{quantities: qs} when is_list(qs) -> pad(qs, arity)
+      _ -> List.duplicate(:present, arity)
+    end
+  end
+
+  defp callee_quantities({:ctor, cname, _args}, arity, env) do
+    (Inductive.ctor_quantities(env, cname) || List.duplicate(:present, arity)) |> pad(arity)
+  end
+
+  defp callee_quantities(_other, arity, _env), do: List.duplicate(:present, arity)
+
+  # Conservative padding: an argument position with no declared quantity is
+  # treated as `:present` (relevant), never silently exempted.
+  defp pad(qs, n) when length(qs) >= n, do: Enum.take(qs, n)
+  defp pad(qs, n), do: qs ++ List.duplicate(:present, n - length(qs))
+
+  defp each(list, fun) do
+    Enum.reduce_while(list, :ok, fn item, :ok ->
+      case fun.(item) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+end

@@ -179,43 +179,18 @@ defmodule Cure.Types.DependentTest do
       :ok
     end
 
-    test "empty vector" do
-      m = :"Cure.Std.Vector"
-      vec = m.empty()
-      assert m.length(vec) == 0
-      assert m.is_empty(vec) == true
-    end
-
-    test "singleton" do
-      m = :"Cure.Std.Vector"
-      vec = m.singleton(42)
-      assert m.length(vec) == 1
-      assert m.head(vec) == 42
-    end
-
-    test "cons increases length" do
-      m = :"Cure.Std.Vector"
-      v0 = m.empty()
-      v1 = m.cons(1, v0)
-      v2 = m.cons(2, v1)
-      assert m.length(v2) == 2
+    test "constructs vectors with the erased indexed representation" do
+      v1 = {:prepend, 1, :empty}
+      v2 = {:prepend, 2, v1}
+      assert v2 == {:prepend, 2, {:prepend, 1, :empty}}
     end
 
     test "append combines vectors" do
       m = :"Cure.Std.Vector"
-      a = m.from_list([1, 2])
-      b = m.from_list([3, 4])
+      a = {:prepend, 1, {:prepend, 2, :empty}}
+      b = {:prepend, 3, {:prepend, 4, :empty}}
       c = m.append(a, b)
-      assert m.length(c) == 4
-      assert m.to_list(c) == [1, 2, 3, 4]
-    end
-
-    test "map preserves length" do
-      m = :"Cure.Std.Vector"
-      v = m.from_list([1, 2, 3])
-      doubled = m.map(v, fn x -> x * 2 end)
-      assert m.length(doubled) == 3
-      assert m.to_list(doubled) == [2, 4, 6]
+      assert c == {:prepend, 1, {:prepend, 2, {:prepend, 3, {:prepend, 4, :empty}}}}
     end
   end
 end

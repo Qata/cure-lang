@@ -1,0 +1,345 @@
+defmodule Cure.Core.Normalise do
+  @moduledoc """
+  Trusted normalization service for Core terms.
+
+  Evaluation and read-back remain split across `Cure.Core.Eval` and
+  `Cure.Core.Quote`; this module is the trusted owner of the policy between
+  them: certified δ-unfolding, weak-head reduction, full normal forms, and the
+  deterministic δ fuel counter used by conversion.
+  """
+
+  alias Cure.Core.{Context, Env, Eval, Quote}
+
+  @fuel_key {__MODULE__, :fuel}
+
+  @type delta_mode :: :certified | :none
+  @type fuel :: pos_integer() | :infinity
+  @type opts :: [
+          delta: delta_mode(),
+          mode: :whnf | :nf,
+          fuel: fuel(),
+          stuck_cases: :preserve
+        ]
+
+  @doc "Reduce `term` to weak-head normal form in `ctx` and read it back."
+  @spec whnf(Context.t(), Cure.Core.Term.t(), opts()) :: Cure.Core.Term.t() | :fuel_exhausted
+  def whnf(ctx, term, opts \\ []) do
+    run_with_fuel(Keyword.put(opts, :mode, :whnf), fn opts ->
+      ctx
+      |> eval_in(term)
+      |> whnf_value(Context.signature(ctx), opts)
+      |> Quote.reify(Context.length(ctx))
+    end)
+  end
+
+  @doc "Reduce `term` to normal form in `ctx` and read it back."
+  @spec nf(Context.t(), Cure.Core.Term.t(), opts()) :: Cure.Core.Term.t() | :fuel_exhausted
+  def nf(ctx, term, opts \\ []) do
+    run_with_fuel(Keyword.put(opts, :mode, :nf), fn opts ->
+      ctx
+      |> eval_in(term)
+      |> nf_value(Context.signature(ctx), Context.length(ctx), opts)
+      |> Quote.reify(Context.length(ctx))
+    end)
+  end
+
+  @doc "Read a semantic value back to a Core term."
+  @spec quote(Cure.Core.Value.t(), non_neg_integer(), opts()) :: Cure.Core.Term.t()
+  def quote(value, depth, _opts \\ []), do: Quote.reify(value, depth)
+
+  @doc false
+  @spec whnf_value(Cure.Core.Value.t(), Env.t() | nil, opts()) :: Cure.Core.Value.t()
+  def whnf_value(value, sig, opts \\ [])
+
+  def whnf_value(value, nil, _opts), do: value
+
+  def whnf_value({:vneutral, neutral} = value, sig, opts) do
+    opts = normalize_opts(opts)
+
+    case unfold_head(neutral, sig, opts) do
+      {:ok, reduced} -> whnf_value(reduced, sig, opts)
+      :stuck -> value
+    end
+  end
+
+  def whnf_value(value, _sig, _opts), do: value
+
+  @doc false
+  @spec with_fuel(fuel(), (-> term())) :: term() | :fuel_exhausted
+  def with_fuel(:infinity, fun), do: fun.()
+
+  def with_fuel(fuel, fun) when is_integer(fuel) and fuel > 0 do
+    Process.put(@fuel_key, fuel)
+
+    try do
+      fun.()
+    catch
+      :throw, {@fuel_key, :exhausted} -> :fuel_exhausted
+    after
+      Process.delete(@fuel_key)
+    end
+  end
+
+  @doc false
+  @spec fuel_key() :: term()
+  def fuel_key, do: @fuel_key
+
+  defp eval_in(ctx, term), do: Eval.eval(term, Context.env(ctx))
+
+  defp run_with_fuel(opts, fun) do
+    opts = normalize_opts(opts)
+    with_fuel(opts[:fuel], fn -> fun.(opts) end)
+  end
+
+  defp normalize_opts(opts) do
+    opts =
+      opts
+      |> Keyword.put_new(:delta, :certified)
+      |> Keyword.put_new(:mode, :nf)
+      |> Keyword.put_new(:fuel, :infinity)
+      |> Keyword.put_new(:stuck_cases, :preserve)
+
+    delta = Keyword.fetch!(opts, :delta)
+    mode = Keyword.fetch!(opts, :mode)
+    fuel = Keyword.fetch!(opts, :fuel)
+    :preserve = Keyword.fetch!(opts, :stuck_cases)
+
+    unless delta in [:certified, :none] do
+      raise ArgumentError, "expected :delta to be :certified or :none, got: #{inspect(delta)}"
+    end
+
+    unless mode in [:whnf, :nf] do
+      raise ArgumentError, "expected :mode to be :whnf or :nf, got: #{inspect(mode)}"
+    end
+
+    unless fuel == :infinity or (is_integer(fuel) and fuel > 0) do
+      raise ArgumentError, "expected :fuel to be a positive integer or :infinity, got: #{inspect(fuel)}"
+    end
+
+    opts
+  rescue
+    MatchError ->
+      raise ArgumentError,
+            "expected normalization options delta: :certified | :none, mode: :whnf | :nf, " <>
+              "fuel: pos_integer() | :infinity, stuck_cases: :preserve"
+  end
+
+  defp nf_value(value, sig, depth, opts) do
+    value
+    |> whnf_value(sig, opts)
+    |> nf_struct(sig, depth, opts)
+  end
+
+  # The identity value-environment for `depth` binders: the neutral vars
+  # [{:nvar,depth-1}, …, {:nvar,0}]. `nf_struct`'s binder clauses reify the body
+  # to a `depth+1` de Bruijn term via `quote_nf`; storing it in a closure with
+  # this env (rather than `[]`) makes the OUTER `Quote.reify` re-eval a provable
+  # identity, so free (context) variables read back unchanged instead of being
+  # reflected by re-evaluation in a truncated env. (depth 0 → []).
+  defp id_env(0), do: []
+  defp id_env(depth), do: for(l <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, l}})
+
+  defp nf_struct({:vpi, dom, {:closure, env, cod}}, sig, depth, opts) do
+    fresh = {:vneutral, {:nvar, depth}}
+
+    {:vpi, nf_value(dom, sig, depth, opts),
+     {:closure, id_env(depth), quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
+  end
+
+  defp nf_struct({:vlam, dom, {:closure, env, body}}, sig, depth, opts) do
+    fresh = {:vneutral, {:nvar, depth}}
+
+    {:vlam, nf_value(dom, sig, depth, opts),
+     {:closure, id_env(depth), quote_nf(Eval.eval(body, [fresh | env]), sig, depth + 1, opts)}}
+  end
+
+  defp nf_struct({:vsigma, dom, {:closure, env, cod}}, sig, depth, opts) do
+    fresh = {:vneutral, {:nvar, depth}}
+
+    {:vsigma, nf_value(dom, sig, depth, opts),
+     {:closure, id_env(depth), quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
+  end
+
+  defp nf_struct({:vpair, a, b}, sig, depth, opts),
+    do: {:vpair, nf_value(a, sig, depth, opts), nf_value(b, sig, depth, opts)}
+
+  defp nf_struct({:vdata, name, args}, sig, depth, opts),
+    do: {:vdata, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
+
+  defp nf_struct({:vctor, name, args}, sig, depth, opts),
+    do: {:vctor, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
+
+  defp nf_struct({:veq, ty, a, b}, sig, depth, opts),
+    do: {:veq, nf_value(ty, sig, depth, opts), nf_value(a, sig, depth, opts), nf_value(b, sig, depth, opts)}
+
+  defp nf_struct({:vrefl, a}, sig, depth, opts), do: {:vrefl, nf_value(a, sig, depth, opts)}
+
+  defp nf_struct({:vneutral, neutral}, sig, depth, opts),
+    do: {:vneutral, nf_neutral(neutral, sig, depth, opts)}
+
+  defp nf_struct(value, _sig, _depth, _opts), do: value
+
+  defp nf_neutral({:napp, neutral, arg}, sig, depth, opts),
+    do: {:napp, nf_neutral(neutral, sig, depth, opts), nf_value(arg, sig, depth, opts)}
+
+  defp nf_neutral({:nfst, neutral}, sig, depth, opts), do: {:nfst, nf_neutral(neutral, sig, depth, opts)}
+  defp nf_neutral({:nsnd, neutral}, sig, depth, opts), do: {:nsnd, nf_neutral(neutral, sig, depth, opts)}
+
+  defp nf_neutral({:nprim, op, args}, sig, depth, opts),
+    do: {:nprim, op, Enum.map(args, &nf_value(&1, sig, depth, opts))}
+
+  defp nf_neutral({:ncase, neutral, motive, branches}, sig, depth, opts) do
+    {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
+  end
+
+  defp nf_neutral(neutral, _sig, _depth, _opts), do: neutral
+
+  defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth)
+
+  defp unfold_head(neutral, sig, opts) do
+    if opts[:delta] == :none do
+      :stuck
+    else
+      unfold_certified_head(neutral, sig, opts)
+    end
+  end
+
+  # δ-reduce a neutral's spine head when that head is either a certified-total
+  # global OR a *stuck eliminator* (`ncase`/`nfst`/`nsnd`) whose target itself
+  # δ-reduces to a constructor/pair. In the eliminator case we whnf the target
+  # (threading the caller's `opts`, so `delta: :none` and fuel/mode are honored)
+  # and, when a value emerges, apply the SAME ι-rule `eval` trusts, then re-apply
+  # the spine `args`. Each ι-reduction spends fuel so termination stays bounded.
+  defp unfold_certified_head(neutral, sig, opts) do
+    {head, args} = spine(neutral, [])
+
+    case head do
+      {:nglobal, name} ->
+        # δ-unfold a certified global by evaluating its body in the EMPTY env.
+        # Guard: the body MUST be closed — an open body's free de Bruijn variables
+        # would surface as neutral `{:nvar, k}` and alias whatever the ambient
+        # context binds at level k (a capture). `Env.certify/2` already refuses
+        # open bodies, so this only fires against a forged marker; staying stuck is
+        # the safe answer (never unsound, at worst a missed unfold). (A5)
+        #
+        # Lazy unfolding (Idris/Lean/Agda): if unfolding a pattern-matching
+        # definition only re-exposes an eliminator that is itself STUCK on a
+        # neutral (no ι-progress possible), keep the application FOLDED. Eagerly
+        # expanding `f x` into its internal `case x {…}` when `x` is neutral
+        # yields a non-canonical normal form (the same stuck recursive call then
+        # has two shapes — folded in one spine, expanded in another), which both
+        # breaks syntactic occurrence-matching in the elaborator and can make
+        # conversion δ-loop on open terms. Freezing is always sound: it only
+        # makes normal forms MORE distinct, never collapses two of them, and
+        # `conv?` still δ-unfolds on demand when it must compare. (A6)
+        with true <- Env.certified?(sig, name),
+             %{body: body} <- Env.get_def(sig, name),
+             true <- Cure.Core.Term.closed?(body) do
+          reduce_unfolded(reapply(args, spend_fuel(Eval.eval(body, []))), sig, opts)
+        else
+          _ -> :stuck
+        end
+
+      # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
+      # matching branch body in `reverse(cargs) ++ env`.
+      {:ncase, scrut, _motive, branches} ->
+        case whnf_value({:vneutral, scrut}, sig, opts) do
+          {:vctor, cname, cargs} ->
+            {_c, _ar, {:closure, env, body}} =
+              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+
+            reduced = spend_fuel(Eval.eval(body, Enum.reverse(cargs) ++ env))
+            {:ok, reapply(args, reduced)}
+
+          _ ->
+            :stuck
+        end
+
+      # ι on projections: mirrors `vfst`/`vsnd` — the pair's first/second field.
+      {:nfst, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
+          _ -> :stuck
+        end
+
+      {:nsnd, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
+          _ -> :stuck
+        end
+
+      _ ->
+        :stuck
+    end
+  end
+
+  # Decide, in ONE whnf of the eliminated target, whether a certified global's
+  # δ-unfold made progress. If the unfold only re-exposed a stuck eliminator
+  # (`ncase`/`nfst`/`nsnd`) — the lazy-unfolding case — this both decides
+  # productiveness AND fires ι, so the two never re-force the same scrutinee.
+  #
+  # Threading the FORCED target through `spend_fuel(Eval.eval(...))`/`vfst`/`vsnd`
+  # (rather than returning the raw stuck eliminator for the outer `whnf_value`
+  # loop to re-force) is what keeps normalization LINEAR: a naive check that
+  # whnf's the scrutinee to test productiveness and then lets the loop whnf it a
+  # second time to reduce is Θ(2ᵈ) on total definitions whose recursive scrutinee
+  # reduces to a constructor (e.g. `f n = case n {Z→Z; S k→case (f k) {…}}`).
+  #
+  #   * ctor/pair target → ι fires here, result returned reduced (productive);
+  #   * stuck target     → `:stuck`, so `whnf_value` keeps the global FOLDED;
+  #   * anything else (ctor, λ, or a neutral not headed by an eliminator) →
+  #     `{:ok, value}`, i.e. genuine progress the outer loop continues from.
+  defp reduce_unfolded({:vneutral, neutral} = value, sig, opts) do
+    {head, args} = spine(neutral, [])
+
+    case head do
+      {:ncase, scrut, _motive, branches} ->
+        case whnf_value({:vneutral, scrut}, sig, opts) do
+          {:vctor, cname, cargs} ->
+            {_c, _ar, {:closure, env, body}} =
+              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+
+            {:ok, reapply(args, spend_fuel(Eval.eval(body, Enum.reverse(cargs) ++ env)))}
+
+          _ ->
+            :stuck
+        end
+
+      {:nfst, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
+          _ -> :stuck
+        end
+
+      {:nsnd, target} ->
+        case whnf_value({:vneutral, target}, sig, opts) do
+          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
+          _ -> :stuck
+        end
+
+      _ ->
+        {:ok, value}
+    end
+  end
+
+  defp reduce_unfolded(value, _sig, _opts), do: {:ok, value}
+
+  defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
+
+  defp spend_fuel(reduced) do
+    case Process.get(@fuel_key) do
+      nil ->
+        reduced
+
+      0 ->
+        throw({@fuel_key, :exhausted})
+
+      n ->
+        Process.put(@fuel_key, n - 1)
+        reduced
+    end
+  end
+
+  defp spine({:napp, n, arg}, acc), do: spine(n, [arg | acc])
+  defp spine(head, acc), do: {head, acc}
+end

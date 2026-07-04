@@ -29,6 +29,7 @@ defmodule Cure.Types.Dependent do
   """
 
   alias Cure.SMT.Solver
+  alias Cure.Types.Reduce
 
   @type t :: {:dependent, String.t(), [term()], [term()], [term()]}
 
@@ -146,16 +147,10 @@ defmodule Cure.Types.Dependent do
   @doc false
   def substitute_expr_public(ast, bindings), do: substitute_expr(ast, bindings)
 
-  defp substitute_expr({:variable, _meta, name} = ast, bindings) do
-    case Map.get(bindings, name) do
-      nil -> ast
-      replacement -> replacement
-    end
-  end
-
-  defp substitute_expr({:binary_op, meta, [left, right]}, bindings) do
-    {:binary_op, meta, [substitute_expr(left, bindings), substitute_expr(right, bindings)]}
-  end
-
-  defp substitute_expr(ast, _bindings), do: ast
+  # Substitution is delegated to the (kernel-backed) `Reduce` module, which walks
+  # every node — unlike the original, which only handled variables and binary
+  # ops. Verification conditions keep their proposition shape (`5 > 0` stays a
+  # comparison for the SMT solver); arithmetic folding of type indices is done by
+  # `Reduce.normalize` at the sites that compute return types.
+  defp substitute_expr(ast, bindings), do: Reduce.substitute(ast, bindings)
 end

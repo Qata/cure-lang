@@ -746,6 +746,12 @@ defmodule Cure.Compiler.Codegen do
       {:pattern_match, meta, [scrutinee | arms]} ->
         compile_pattern_match(meta, scrutinee, arms, state)
 
+      # With-abstraction (dependent capabilities A/B/sibling). The value-level
+      # refinement is type-level and erases; at runtime `with e … arms` IS
+      # `case e … arms`. Lower to the same Erlang `case` as `pattern_match`.
+      {:with_abs, meta, [scrutinee | arms]} ->
+        compile_with_abs(meta, scrutinee, arms, state)
+
       # Pickup -- predicate dispatch (docs/PICKUP.md)
       {:pickup, meta, clauses} ->
         compile_pickup(meta, clauses, state)
@@ -1154,6 +1160,18 @@ defmodule Cure.Compiler.Codegen do
 
       form =
         cond do
+          # A qualified CONSTRUCTOR reference (escape hatch, e.g. `Std.Nat.Z()`):
+          # the last dotted segment is PascalCase, i.e. a constructor by the same
+          # bare-name heuristic `constructor?/1` uses everywhere else. Checked
+          # BEFORE the generic qualified-call branch, or a qualified constructor
+          # call compiles to a bogus remote call to a non-existent function
+          # instead of a tagged tuple. Codegen never sees the elaborator's
+          # internal `Mod#Name`-keyed atoms (no dependency on Cure.Core/Cure.Elab),
+          # so the bare name it needs is just the last segment of the dotted path.
+          String.contains?(name, ".") and constructor?(qualified_ctor_tail(name)) and
+              cure_qualified_module?(name) ->
+            compile_constructor_call(qualified_ctor_tail(name), arg_forms, line)
+
           # Qualified call: Mod.fun(args) -- must come before constructor check
           String.contains?(name, ".") ->
             compile_qualified_call(name, arg_forms, line)
@@ -1213,6 +1231,28 @@ defmodule Cure.Compiler.Codegen do
   defp compile_constructor_call(name, arg_forms, line) do
     tag = constructor_tag(name)
     {:tuple, line, [{:atom, line, tag} | arg_forms]}
+  end
+
+  # The final dotted segment of a qualified surface name, e.g. "Std.Nat.Z" -> "Z".
+  # Used only to decide/extract a qualified CONSTRUCTOR reference; codegen has no
+  # Env, so this is a pure string operation (the runtime tag stays bare per §3.5).
+  defp qualified_ctor_tail(name), do: name |> String.split(".") |> List.last()
+
+  # True when the module prefix of a dotted name resolves to a Cure module
+  # (`Cure.*`), NOT a special BEAM/FFI module like `Erlang` (`:erlang`). A
+  # qualified CONSTRUCTOR escape hatch (`Std.Nat.Z`) always lives in a Cure
+  # module; a remote FFI call whose function is PascalCase in Cure source
+  # (`Erlang.Length` -> `erlang:length`) does not — it must stay a remote call,
+  # never be hijacked into a `{:length, …}` tuple by the PascalCase heuristic.
+  defp cure_qualified_module?(name) do
+    parts = String.split(name, ".")
+    {mod_parts, [_tail]} = Enum.split(parts, -1)
+
+    mod_parts
+    |> Enum.join(".")
+    |> cure_module_to_atom()
+    |> Atom.to_string()
+    |> String.starts_with?("Cure.")
   end
 
   # -- Record Update Compilation -----------------------------------------------
@@ -1448,6 +1488,42 @@ defmodule Cure.Compiler.Codegen do
 
     form = {:case, line, scrutinee_form, clauses}
     {form, state}
+  end
+
+  # -- With-abstraction --------------------------------------------------------
+  #
+  # A value-level `with e … arms` erases to the same runtime `case` as the
+  # equivalent `match e … arms` (the refinement is a compile-time, type-level
+  # story and carries no runtime residue; sibling refinement leaves the
+  # matched values unchanged, so it needs no codegen action).
+  #
+  # Capability B adds a `proof <name>` binder. Proof terms are erased and have
+  # no codegen anywhere, so at runtime the proof name is bound to a placeholder
+  # atom in each arm's scope. This keeps a well-typed value-level `with` running
+  # while a *use* of the proof term at runtime remains the pre-existing
+  # proof-erasure gap (proof terms do not lower).
+  defp compile_with_abs(meta, scrutinee, arms, state) do
+    case Keyword.get(meta, :proof) do
+      nil ->
+        compile_pattern_match(meta, scrutinee, arms, state)
+
+      proof_name when is_binary(proof_name) ->
+        arms = Enum.map(arms, &bind_proof_in_arm(&1, proof_name))
+        compile_pattern_match(meta, scrutinee, arms, state)
+    end
+  end
+
+  # Wrap an arm body so the (erased) proof name resolves to a placeholder atom
+  # before the body runs: `<body>` becomes `begin p = :cure_erased_proof; <body> end`.
+  defp bind_proof_in_arm({:match_arm, arm_meta, [body]}, proof_name) do
+    binder =
+      {:assignment, arm_meta,
+       [
+         {:variable, arm_meta, proof_name},
+         {:literal, [subtype: :symbol], :cure_erased_proof}
+       ]}
+
+    {:match_arm, arm_meta, [{:block, arm_meta, [binder, body]}]}
   end
 
   # -- Block -------------------------------------------------------------------

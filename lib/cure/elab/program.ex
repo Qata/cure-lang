@@ -1,0 +1,530 @@
+defmodule Cure.Elab.Program do
+  @moduledoc """
+  Whole-program elaboration (design spec §5, M9.2 wiring): lex + parse a source
+  string, elaborate every declaration into the `Cure.Core` signature, then run
+  the type-level totality closure so that any function reduced by the type
+  checker is kernel-certified total (§7). Returns the fully-elaborated,
+  totality-certified signature.
+  """
+
+  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Core.Env
+  alias Cure.Elab.{Declarations, Erase, Resolution, TotalityClosure}
+  alias Cure.Stdlib.Paths
+
+  @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
+  def elaborate(source) when is_binary(source) do
+    with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+      check_ast(ast)
+    end
+  end
+
+  @doc """
+  Elaborate + totality-certify an already-parsed module/declaration AST. Unwraps
+  a `mod ... end` container to its body. This is the entry the real compiler's
+  type checker calls for dependent modules.
+  """
+  @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
+  def check_ast(ast) do
+    with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
+         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         env0 = merge_env(seeded, imported),
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
+      TotalityClosure.certify_type_level(env)
+    end
+  end
+
+  # Family/type names the module declares itself. A builtin (Bool/Nat) is NOT
+  # seeded into env0 when the module declares its own same-named type — the local
+  # declaration is canonical, and seeding a look-alike would pollute its ctor set.
+  defp declared_type_names(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(fn
+      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
+        case Keyword.get(meta, :name) do
+          n when is_binary(n) -> [String.to_atom(n)]
+          n when is_atom(n) and not is_nil(n) -> [n]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+    |> MapSet.new()
+  end
+
+  # A source is a designated prelude source iff its own declared module name is
+  # a key of the stdlib module registry. Only such sources may register a
+  # `@builtin(:key)`; ordinary user code declaring the same decorator is ignored
+  # (spec §1 single-registration invariant).
+  defp prelude_source?(ast),
+    do: Map.has_key?(Cure.Stdlib.Preload.module_groups(), module_atom(ast))
+
+  # The core-prelude subset auto-loaded into EVERY module (no `use` needed). Scope
+  # is bounded by what the DEPENDENT elaborator can currently import: only modules
+  # that fully dependent-elaborate qualify, because `import_source_env` dependent-
+  # checks each imported module. Std.Bool and Std.Nat qualify today. Excluded, why:
+  #   Std.Core   -- legacy bool_not/bool_and use `pickup` (:unsupported_expression)
+  #   Std.Equal  -- uses a :cure_refl symbol literal the elaborator rejects
+  #   Std.Refine -- refinement predicates not yet dependent-clean
+  #   Eq/Ord/Show/Functor protocols -- would couple instance resolution globally
+  # Each can join once ported to dependent-clean syntax (ongoing parity work). The
+  # listed modules are self-excluded (they stay self-contained on the seeded
+  # builtins), which also breaks any bootstrap cycle. Each source is idempotent
+  # under `merge_env`, so an explicit `use` is harmless and a local definition of
+  # the same name shadows the import.
+  @auto_prelude ~w(Std.Bool Std.Nat)
+
+  # The canonical type each auto-prelude module provides. If a module locally
+  # declares a same-named type (e.g. its own `type Nat = Zero | Suc`), that prelude
+  # is NOT auto-imported — the local declaration is canonical and importing the
+  # look-alike would collide (mirrors `declared_type_names`' builtin-seed skip).
+  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat}
+
+  defp auto_prelude_imports(ast) do
+    self = find_module_name(ast)
+    declared = declared_type_names(ast)
+
+    Enum.reject(@auto_prelude, fn src ->
+      src == self or MapSet.member?(declared, Map.get(@auto_prelude_types, src))
+    end)
+  end
+
+  @doc """
+  Elaborate a module and return the definitions declared directly by that
+  module. Imported stdlib definitions remain in the env for type checking and
+  conversion, but codegen should emit only `local_defs`.
+  """
+  @spec check_ast_with_locals(tuple() | list()) :: {:ok, Env.t(), [atom()]} | {:error, term()}
+  def check_ast_with_locals(ast) do
+    local_defs = local_def_names(ast)
+
+    with {:ok, env} <- check_ast(ast) do
+      {:ok, env, local_defs}
+    end
+  end
+
+  @doc """
+  Does a parsed program/AST use dependent constructs the kernel must check?
+
+  This is intentionally a surface-feature router, not a semantic checker. Forms
+  that already have a trusted Core elaboration must take the dependent compiler
+  path even when a module does not declare an indexed family. Legacy proof
+  containers are not routed here until proof containers elaborate into Core.
+  """
+  @spec dependent?(term()) :: boolean()
+  def dependent?({:indexed_type, _meta, _body}), do: true
+  def dependent?({:sigma_type, _meta, _body}), do: true
+  def dependent?({:rewrite_expr, _meta, _body}), do: true
+
+  def dependent?({:function_call, meta, children}) when is_list(meta) do
+    Keyword.get(meta, :name) in ["Eq", "refl"] or Enum.any?(children, &dependent?/1)
+  end
+
+  def dependent?({:container, meta, body}) when is_list(meta) do
+    case Keyword.get(meta, :container_type) do
+      :proof -> false
+      _other -> dependent?(body)
+    end
+  end
+
+  def dependent?({:attribute_access, meta, children}) when is_list(meta) do
+    Keyword.get(meta, :attribute) in ["1", "2"] or Enum.any?(children, &dependent?/1)
+  end
+
+  def dependent?({:function_def, meta, body}) when is_list(meta) do
+    dependent_params?(Keyword.get(meta, :params, [])) or
+      dependent?(Keyword.get(meta, :return_type)) or
+      dependent?(body)
+  end
+
+  def dependent?({:param, meta, _name}) when is_list(meta) do
+    Keyword.get(meta, :implicit) == true or dependent?(Keyword.get(meta, :type))
+  end
+
+  def dependent?({_tag, _meta, children}) when is_list(children),
+    do: Enum.any?(children, &dependent?/1)
+
+  def dependent?(list) when is_list(list), do: Enum.any?(list, &dependent?/1)
+  def dependent?(_other), do: false
+
+  defp dependent_params?(params) when is_list(params), do: Enum.any?(params, &dependent?/1)
+  defp dependent_params?(_other), do: false
+
+  @doc """
+  Extract the `Cure.<Name>` module atom from a parsed `mod … end` program,
+  defaulting to `Cure.Main` when no module container is present.
+  """
+  @spec module_atom(term()) :: module()
+  def module_atom(ast), do: String.to_atom("Cure." <> (find_module_name(ast) || "Main"))
+
+  defp find_module_name({:container, meta, _body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :module, do: Keyword.get(meta, :name)
+  end
+
+  defp find_module_name({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &find_module_name/1)
+
+  defp find_module_name(list) when is_list(list), do: Enum.find_value(list, &find_module_name/1)
+  defp find_module_name(_other), do: nil
+
+  @doc """
+  Hole goal reports (design spec §10/§11): for every definition whose body still
+  carries a hole, report the hole's **goal type** (the definition's return type)
+  and its **local context** (the parameter types in scope). This is the
+  `:hole_goal` diagnostic — a hole typechecks, reports what must fill it, and
+  blocks codegen until filled.
+  """
+  @spec hole_goals(Env.t()) :: [%{function: atom(), goal: term(), context: [term()]}]
+  def hole_goals(%Env{defs: defs}) do
+    for {name, %{type: type, body: body}} <- defs, Erase.has_hole?(body) do
+      {context, goal} = split_pi(type, [])
+      %{function: name, goal: goal, context: context}
+    end
+  end
+
+  defp split_pi({:pi, dom, cod}, acc), do: split_pi(cod, [dom | acc])
+  defp split_pi(goal, acc), do: {Enum.reverse(acc), goal}
+
+  @doc """
+  Codegen gate (§6 negative #5): a program with an unfilled hole typechecks but
+  must not be emitted. Returns `{:error, {:unfilled_hole, name}}` for the first
+  definition that still carries a hole.
+  """
+  @spec check_codegen_ready(Env.t()) :: :ok | {:error, {:unfilled_hole, atom()}}
+  def check_codegen_ready(%Env{defs: defs}) do
+    case Enum.find(defs, fn {_name, %{body: body}} -> Erase.has_hole?(body) end) do
+      nil -> :ok
+      {name, _def} -> {:error, {:unfilled_hole, name}}
+    end
+  end
+
+  # Flatten a parsed program into a flat list of top-level declarations,
+  # unwrapping `{:block, …}` groupings and `mod … end` module containers while
+  # leaving ADT/GADT/function declarations intact. Stray sibling nodes the parser
+  # can place next to a module container (e.g. a bare `{:variable, …}`) are
+  # dropped, mirroring how codegen locates the container and ignores siblings.
+  defp declarations({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &declarations/1)
+
+  defp declarations({:container, meta, body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :module do
+      body |> List.wrap() |> Enum.flat_map(&declarations/1)
+    else
+      [{:container, meta, body}]
+    end
+  end
+
+  defp declarations({:function_def, meta, body}) when is_list(meta) do
+    if Keyword.get(meta, :name) == "__group__", do: [], else: [{:function_def, meta, body}]
+  end
+
+  defp declarations({tag, _meta, _body} = node) when tag in [:container, :indexed_type], do: [node]
+
+  # A top-level type alias `type Name = RHS` (named, non-refinement). Inline
+  # refinement/annotation `:type_annotation` nodes are not declarations.
+  defp declarations({:type_annotation, meta, _} = node) when is_list(meta) do
+    if Keyword.has_key?(meta, :name) and not Keyword.get(meta, :refinement, false),
+      do: [node],
+      else: []
+  end
+
+  defp declarations(_other), do: []
+
+  defp local_def_names(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(fn
+      {:function_def, meta, _body} ->
+        case Keyword.get(meta, :name) do
+          "__group__" -> []
+          name when is_binary(name) -> [String.to_atom(name)]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+  end
+
+  defp imports({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &imports/1)
+
+  defp imports({:container, meta, body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :module do
+      body |> List.wrap() |> Enum.flat_map(&imports/1)
+    else
+      []
+    end
+  end
+
+  defp imports({:import, meta, _}) when is_list(meta), do: [Keyword.fetch!(meta, :source)]
+
+  defp imports({_tag, _meta, children}) when is_list(children),
+    do: Enum.flat_map(children, &imports/1)
+
+  defp imports(list) when is_list(list), do: Enum.flat_map(list, &imports/1)
+  defp imports(_other), do: []
+
+  defp import_env([], _seen), do: {:ok, Env.empty()}
+
+  defp import_env(imports, seen) do
+    Enum.reduce_while(imports, {:ok, Env.empty()}, fn source, {:ok, acc} ->
+      case source |> import_source_path() |> import_source_env(seen) do
+        {:ok, imported} -> {:cont, {:ok, merge_env(acc, imported)}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  # Distinct {module_id, path} for every DIRECT import source, deduped by
+  # module_id. Used for the merged-slice list (§3.2 re-keying/merging operates
+  # only at this granularity — nested imports are pulled in automatically by
+  # each direct module's own recursive `module_slice_env`).
+  defp distinct_import_modules(sources) do
+    sources
+    |> Enum.map(&import_source_path/1)
+    |> Enum.flat_map(fn
+      {:ok, module_name, path} -> [{to_string(module_name), path}]
+      _ -> []
+    end)
+    |> Enum.uniq_by(fn {mod_id, _path} -> mod_id end)
+  end
+
+  # Every module reachable via the import graph (direct AND transitive),
+  # deduped by module_id, cycle-safe (BFS with a `seen` set). Collision
+  # DETECTION (family_owners, below) must scan this closure, not just the
+  # direct list: a family declared in a module reached only transitively
+  # (e.g. Std.Nat, pulled in solely because `priv/std/vector.cure` itself
+  # does `use Std.Nat`) still needs to be attributed to its owning module, or
+  # a local declaration of the same name is never classified as a collision
+  # and the disowning never happens for that family.
+  defp transitive_import_modules(sources), do: bfs_import_modules(sources, MapSet.new(), [])
+
+  defp bfs_import_modules([], _seen, acc), do: Enum.reverse(acc)
+
+  defp bfs_import_modules([source | rest], seen, acc) do
+    case import_source_path(source) do
+      {:ok, module_name, path} ->
+        mod_id = to_string(module_name)
+
+        if MapSet.member?(seen, mod_id) do
+          bfs_import_modules(rest, seen, acc)
+        else
+          nested =
+            with {:ok, src} <- File.read(path),
+                 {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+                 {:ok, nested_ast} <- Parser.parse(tokens, emit_events: false) do
+              imports(nested_ast)
+            else
+              _ -> []
+            end
+
+          bfs_import_modules(nested ++ rest, MapSet.put(seen, mod_id), [{mod_id, path} | acc])
+        end
+
+      _ ->
+        bfs_import_modules(rest, seen, acc)
+    end
+  end
+
+  # Family names DECLARED in a module's own source (transitive imports excluded).
+  defp owned_family_names(path) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+      declared_type_names(ast)
+    else
+      _ -> MapSet.new()
+    end
+  end
+
+  # Build ONE module's flat env slice (own decls + its own imports), as today.
+  defp module_slice_env(path) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         {:ok, env0} <- import_env(imports(ast), MapSet.new()),
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
+      TotalityClosure.certify_type_level(env)
+    end
+  end
+
+  # Delete residual bare keys for a colliding family name left by transitive copies.
+  defp drop_bare_family(%Env{} = env, name) do
+    ctors = for {c, f} <- env.ctor_to_family, f == name, into: [], do: c
+
+    %Env{
+      env
+      | families: Map.delete(env.families, name),
+        ctors: Map.drop(env.ctors, ctors),
+        ctor_to_family: Map.drop(env.ctor_to_family, [name | ctors])
+    }
+  end
+
+  # The full shadow-aware imported-env builder.
+  defp shadow_resolved_imports(ast) do
+    sources = auto_prelude_imports(ast) ++ imports(ast)
+    modules = distinct_import_modules(sources)
+
+    # Ownership scans the FULL transitive closure (not `modules`, which is
+    # direct-only) — see the Design note + `transitive_import_modules/1` doc.
+    family_owners =
+      sources
+      |> transitive_import_modules()
+      |> Enum.reduce(%{}, fn {mod_id, path}, acc ->
+        Enum.reduce(owned_family_names(path), acc, fn name, a ->
+          Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
+        end)
+      end)
+
+    local = declared_type_names(ast)
+    %{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
+
+    collisions =
+      losers |> Map.values() |> Enum.reduce(MapSet.new(), &MapSet.union/2)
+
+    with {:ok, merged} <-
+           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {mod_id, path}, {:ok, acc} ->
+             case module_slice_env(path) do
+               {:ok, slice} ->
+                 slice =
+                   case Map.get(losers, mod_id) do
+                     nil -> slice
+                     owned_losers -> Resolution.rekey_module_env(slice, mod_id, owned_losers)
+                   end
+
+                 {:cont, {:ok, merge_env(acc, slice)}}
+
+               {:error, _} = err ->
+                 {:halt, err}
+             end
+           end) do
+      # Drop residual bare copies of every collision name (transitive leftovers).
+      cleaned = Enum.reduce(collisions, merged, fn name, e -> drop_bare_family(e, name) end)
+      {:ok, cleaned, ambiguous}
+    end
+  end
+
+  defp import_source_env(:not_stdlib, _seen), do: {:ok, Env.empty()}
+
+  defp import_source_env({:ok, module_name, path}, seen) do
+    if MapSet.member?(seen, module_name) do
+      {:ok, Env.empty()}
+    else
+      with {:ok, source} <- File.read(path),
+           {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+           {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+           {:ok, env0} <- import_env(imports(ast), MapSet.put(seen, module_name)),
+           {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
+        TotalityClosure.certify_type_level(env)
+      else
+        {:error, reason} -> {:error, {:dependent_import_failed, module_name, reason}}
+      end
+    end
+  end
+
+  defp import_source_path(source) do
+    case String.split(source, ".") do
+      ["Std", name] ->
+        case Paths.source_dir() do
+          nil ->
+            {:error, {:missing_stdlib_source_dir, source}}
+
+          dir ->
+            path = Path.join(dir, String.downcase(name) <> ".cure")
+
+            if File.exists?(path) do
+              {:ok, source, path}
+            else
+              {:error, {:missing_stdlib_source, source, path}}
+            end
+        end
+
+      _ ->
+        :not_stdlib
+    end
+  end
+
+  defp merge_env(%Env{} = left, %Env{} = right) do
+    %Env{
+      families: Map.merge(left.families, right.families),
+      ctors: Map.merge(left.ctors, right.ctors),
+      ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
+      defs: Map.merge(left.defs, right.defs),
+      certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
+      builtins: Map.merge(left.builtins, right.builtins)
+    }
+  end
+
+  # Two passes so that forward references and mutual recursion resolve: first
+  # every type/record is elaborated and every function *signature* is registered;
+  # then every function *body* is elaborated against the fully-populated
+  # environment. Non-function declarations are elaborated in source order in pass
+  # one (a function signature may reference any type declared before it).
+  defp elaborate_declarations(items, env, prelude? \\ false) do
+    with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?) do
+      body_pass(fn_decls, env1)
+    end
+  end
+
+  defp register_pass(items, env, prelude?) do
+    Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
+      case decl do
+        {:function_def, _meta, _body} ->
+          case Declarations.register_signature(decl, acc) do
+            {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl]}}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        _ ->
+          case Declarations.elaborate(decl, acc) do
+            {:ok, acc2} ->
+              case maybe_register_builtin(decl, acc2, prelude?) do
+                {:ok, acc3} -> {:cont, {:ok, acc3, fns}}
+                {:error, _} = err -> {:halt, err}
+              end
+
+            {:error, _} = err ->
+              {:halt, err}
+          end
+      end
+    end)
+    |> case do
+      {:ok, _env, _fns} = ok -> ok
+      {:error, _} = err -> err
+    end
+  end
+
+  # In a designated prelude source, a `@builtin(:key) type Name = ...` container
+  # registers the canonical builtin family (schema-validated). Non-prelude
+  # sources (or non-`@builtin` decls) pass through unchanged.
+  defp maybe_register_builtin({:container, meta, _body}, env, true) do
+    case Keyword.get(meta, :decorator) do
+      {:builtin, args} ->
+        key = builtin_key(args)
+        fid = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        :ok = Cure.Core.Builtins.validate!(env, key, fid)
+        {:ok, Cure.Core.Inductive.register_builtin(env, key, fid)}
+
+      _ ->
+        {:ok, env}
+    end
+  end
+
+  defp maybe_register_builtin(_decl, env, _prelude?), do: {:ok, env}
+
+  defp builtin_key([{:literal, _meta, key}]) when is_atom(key), do: key
+  defp builtin_key([key]) when is_atom(key), do: key
+
+  defp body_pass(fn_decls, env) do
+    Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
+      case Declarations.elaborate_function_body(decl, acc) do
+        {:ok, acc2} -> {:cont, {:ok, acc2}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+end

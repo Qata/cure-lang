@@ -8,9 +8,11 @@ mod Std.CRDT
   ##   2. `merge(a, merge(b, c)) == merge(merge(a, b), c)` (associative)
   ##   3. `merge(a, a) == a`                (idempotent)
   ##
-  ## The laws are asserted in the companion `Std.Proof` obligations
-  ## emitted by `lib/std/crdt.cure` when re-checked; the runtime
-  ## implementation in `:cure_std_crdt` is hand-verified against them.
+  ## The runtime implementation in `:cure_std_crdt` is intended to
+  ## satisfy those laws, but Cure does not yet emit trusted Core proof
+  ## obligations for CRDTs. For genuine kernel-checked equality proofs,
+  ## see `Std.Proof` (arithmetic laws over `Std.Nat`) and `Std.Equal`
+  ## (the propositional-equality combinators).
   ##
   ## Types included:
   ##

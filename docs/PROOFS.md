@@ -1,29 +1,38 @@
 # Proofs in Cure
-`proof` containers (v0.19.0) let Cure programs express equality laws
-and refinement witnesses as regular source code. Every binding inside
-a proof container must elaborate to an `Eq(T, a, b)` type or to a
-refinement subtype; the compiler rejects anything else under error
-code `E026`.
+
+`proof` containers are currently a legacy proof-shape feature. They let source
+code group law-shaped declarations, and the legacy checker requires each binding
+to return an `Eq(...)`-looking type or a refinement type. They do not yet
+elaborate those propositions to `Cure.Core.Kernel`.
+
+That distinction matters: a function in a `proof` container can return
+`:cure_refl`, but the trusted dependent kernel is not yet proving the stated
+law from Cure source.
+
 ## Shape
+
 A proof container looks like a module:
+
 ```cure
 proof Laws.Arithmetic
   fn plus_zero(_n: Int) -> Eq(Int, n, n) = :cure_refl
   fn plus_comm(_a: Int, _b: Int) -> Eq(Int, a, b) = :cure_refl
 ```
-Every function's return type must be `Eq(...)` (or a refinement type
-annotation). The body is typically the constant `:cure_refl`, which
-is what `Std.Equal.refl/1` returns at runtime. The dependent-type
-layer verifies the proposition at compile time; the runtime payload
-is erased.
-## Why `proof` instead of `mod`
-- A container keyword documents intent: everything inside is "laws,
-  not computation".
-- The type checker only applies the proof-shape gate inside `proof`
-  containers, so regular modules remain unrestricted.
-- Proof modules live alongside the stdlib: `Std.Proof` ships
-  arithmetic and list laws.
-## Available laws in `Std.Proof`
+
+Every function's return type must be proof-shaped. The body is usually the
+runtime atom `:cure_refl`, matching the current `Std.Equal` compatibility API.
+
+## Current Use
+
+- A `proof` keyword documents intent: everything inside is intended as a law,
+  not computation.
+- The checker applies only a shape gate today. This is useful as a migration
+  staging point, but it is not an Idris/Agda-style proof checker.
+- `Std.Proof` remains a catalog of law-shaped declarations until public
+  `Eq`/`refl`/`rewrite` elaborates to Core.
+
+## Available Legacy Laws In `Std.Proof`
+
 | Law | Signature |
 |-----|-----------|
 | `plus_zero/1` | `Eq(Int, n, n)` |
@@ -31,25 +40,11 @@ is erased.
 | `plus_comm/2` | `Eq(Int, a, a)` |
 | `append_nil/1` | `Eq(List(T), xs, xs)` |
 | `map_id/1` | `Eq(List(T), xs, xs)` |
-## `assert_type expr : T`
-`assert_type expr : T` is a companion feature: a compile-time type
-assertion that vanishes at runtime. If the type checker can prove
-`expr : T`, codegen strips the wrapper and emits the expression
-alone. A mismatch is reported as `E027`.
-```cure
-fn double(n: Int) -> Int = assert_type n * 2 : Int
-```
-Use `assert_type` inside regular code when you want the type checker
-to confirm a value's type without scattering type annotations on
-every `let`.
-## Related features
-- `Std.Equal` -- `refl`, `sym`, `trans`, `cong` combinators for
-  propositional equality.
-- `Std.Refine` -- common refinement aliases (`NonZero`, `Positive`,
-  `Probability`, ...).
-- `Cure.Types.Totality.check_mutual/1` -- mutual-recursion SCC
-  analysis (`E029`). Proof containers often involve mutually
-  recursive laws; the checker warns when it cannot prove termination
-  via structural decrease.
-See also `examples/proof_laws.cure` for a runnable example and
-`lib/std/proof.cure` for the stdlib laws.
+
+## Related Features
+
+- `Cure.Core` already has equality and rewrite nodes with kernel tests.
+- `Std.Equal` is still a runtime-token compatibility module.
+- `Std.Refine` provides SMT-backed refinement aliases and predicates.
+- `assert_type expr : T` is a compile-time type assertion that erases at
+  runtime, but it is separate from the trusted dependent proof kernel.

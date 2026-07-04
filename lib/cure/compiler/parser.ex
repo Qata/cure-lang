@@ -229,6 +229,10 @@ defmodule Cure.Compiler.Parser do
       :char ->
         {literal(:char, token), advance(state)}
 
+      # A hole `?name` / `??` — a deferred term (design spec §6 / M8.5).
+      :hole ->
+        {{:hole, [name: token.value, line: token.line, col: token.col], []}, advance(state)}
+
       :string_interpolation ->
         parse_string_interpolation(state)
 
@@ -237,6 +241,9 @@ defmodule Cure.Compiler.Parser do
         case token.value do
           "assert_type" ->
             parse_assert_type(state, token)
+
+          "rewrite" ->
+            parse_rewrite(state, token)
 
           # Soft keyword: `sup Name ...` at statement-prefix position is
           # the supervisor container. When `sup` is followed by anything
@@ -262,6 +269,18 @@ defmodule Cure.Compiler.Parser do
 
               _ ->
                 {variable(token), advance(state)}
+            end
+
+          # Contextual keyword: `with e <arms>` is a with-abstraction only in
+          # expression-prefix position and only when what follows `with` can
+          # begin a scrutinee. The FSM/actor payload-binder `with` is consumed
+          # inside parse_fsm/parse_actor before it reaches here, so those uses
+          # (and any bare `with` operand) keep their identifier meaning.
+          "with" ->
+            if with_scrutinee_ahead?(state) do
+              parse_with_abs(state, token)
+            else
+              {variable(token), advance(state)}
             end
 
           _ ->
@@ -307,6 +326,34 @@ defmodule Cure.Compiler.Parser do
       :caret ->
         parse_pin(state)
 
+      # Forced (dot) pattern: a leading `.` in prefix position introduces a
+      # forced-equation pattern (`.x`, `.(S(k))`). The inner term is a value the
+      # match must be convertible with rather than a fresh binder. Parsing
+      # succeeds in any position by design; using a forced pattern outside a
+      # pattern is rejected later, at elaboration. Infix `.` (module paths like
+      # `Std.String`) is a different grammar position (handle_infix_op :dot) and
+      # never reaches this prefix clause.
+      :dot ->
+        {inner, state} = parse_forced_inner(advance(state))
+        {{:forced_pattern, [line: token.line, col: token.col], inner}, state}
+
+      # Named-implicit dot pattern `{ name = <expr> }` in a constructor-argument
+      # position — annotates an erased implicit index by name (Lean/Idris-style),
+      # e.g. `vcons({k = .m}, h, r)`. Only the `{ IDENT = … }` shape is a
+      # named-implicit; every other leading `{` in prefix position keeps its
+      # previous unexpected-token error (records use the postfix `Name{…}` form,
+      # maps use `#{…}`, blocks use indentation — none reach this clause).
+      :lbrace ->
+        case {peek_at(state, 1), peek_at(state, 2)} do
+          {%Token{type: :identifier}, %Token{type: :assign}} ->
+            parse_named_implicit_pat(state, token)
+
+          _ ->
+            error = {:unexpected_token, token.type, token.line, token.col}
+            state = add_error(state, error)
+            {error_node(token), advance(state)}
+        end
+
       # Indent starts a block
       :indent ->
         parse_block(state)
@@ -335,6 +382,20 @@ defmodule Cure.Compiler.Parser do
     {ast, state}
   end
 
+  # -- Propositional equality rewrite ---------------------------------------
+  #
+  # `rewrite proof in body` elaborates to a Core rewrite with an explicit motive
+  # synthesized by `Cure.Elab`. `rewrite` remains a soft keyword so existing
+  # values named `rewrite` only switch forms when used in expression-prefix
+  # position.
+  defp parse_rewrite(state, token) do
+    state = advance(state)
+    {proof, state} = parse_expr(state, 0)
+    state = expect_keyword(state, :in)
+    {body, state} = parse_expr(state, 0)
+    {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
+  end
+
   # -- Pin Operator (pattern position) ---------------------------------------
 
   defp parse_pin(state) do
@@ -356,6 +417,37 @@ defmodule Cure.Compiler.Parser do
         ast = {:pin, [line: token.line, col: token.col], [inner]}
         {ast, state}
     end
+  end
+
+  # -- Forced (dot) pattern inner --------------------------------------------
+  #
+  # After a leading `.`, read the forced term. `.(expr)` parses a full
+  # parenthesised expression (a compound forced pattern like `.(S(k))`); a bare
+  # `.x` reads a single primary (identifier / literal) as the forced value.
+  defp parse_forced_inner(state) do
+    case peek(state).type do
+      :lparen -> parse_grouped(state)
+      _ -> parse_prefix(state)
+    end
+  end
+
+  # -- Named-implicit dot pattern --------------------------------------------
+  #
+  # `{ name = <expr> }` annotates a constructor's erased implicit index `name`
+  # with a forced value in a pattern-argument position. Valid only as a
+  # constructor-pattern argument; ordinary expression elaboration rejects it
+  # (`{:named_implicit_not_in_pattern, …}`). The inner expression is parsed with
+  # the full expression grammar, so a leading `.` yields a `{:forced_pattern,…}`.
+  defp parse_named_implicit_pat(state, brace_token) do
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = expect(state, :assign)
+    {inner, state} = parse_expr(state, 0)
+    state = expect(state, :rbrace)
+    meta = [line: brace_token.line, col: brace_token.col]
+    {{:named_implicit_pat, meta, name, inner}, state}
   end
 
   # -- Literals --------------------------------------------------------------
@@ -539,6 +631,7 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {first, state} = parse_expr(state, 0)
+        {first, state} = maybe_wrap_as(first, state)
         state = skip_newlines(state)
         {rest, state} = parse_more_args(state)
         state = skip_newlines(state)
@@ -553,6 +646,7 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         state = skip_newlines(state)
         {expr, state} = parse_expr(state, 0)
+        {expr, state} = maybe_wrap_as(expr, state)
         state = skip_newlines(state)
         {rest, state} = parse_more_args(state)
         {[expr | rest], state}
@@ -589,6 +683,9 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp extract_dotted_path(_), do: nil
+
+  @doc "Reconstruct a dotted path string from an attribute_access/variable node, or nil."
+  def dotted_path_of(node), do: extract_dotted_path(node)
 
   # -- Record Construction / Update  Name{fields}  or  Name{base | overrides} --
 
@@ -1267,8 +1364,25 @@ defmodule Cure.Compiler.Parser do
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
 
-    ast = {:assignment, meta, [pattern, value]}
-    {ast, state}
+    assignment = {:assignment, meta, [pattern, value]}
+
+    # Optional ML-style `let <pat> = <value> in <body>`: an expression-position
+    # binder. Desugar to the same two-statement `{:block, …}` node a block-form
+    # `let` followed by a trailing expression produces, which the elaborator
+    # already lowers to a β-redex `(λ x:T. body) value`. Without `in`, `let`
+    # stays a block statement (the enclosing block collects the following
+    # statements), exactly as before.
+    case peek(state) do
+      %Token{type: :keyword, value: :in} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {body, state} = parse_expr_or_block(state)
+        block = {:block, [line: token.line, col: token.col], [assignment, body]}
+        {block, state}
+
+      _ ->
+        {assignment, state}
+    end
   end
 
   # -- If / Elif / Else
@@ -1369,6 +1483,465 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # -- With-abstraction (capability A) ---------------------------------------
+  #
+  # `with <expr>` matches on an intermediate expression and refines the GOAL by
+  # the scrutinee's VALUE (not just its type indices) — what plain `match`
+  # cannot do. Mirrors `parse_match/1` and reuses its arm parsers, producing a
+  # distinct `{:with_abs, meta, [scrut | arms]}` node the dependent elaborator
+  # dispatches on. Only capability A (single scrutinee, block/inline form) is
+  # parsed; the `proof` clause and multiple with-expressions are out of scope.
+  defp parse_with_abs(state, token) do
+    state = advance(state)
+
+    {scrutinee, state} = parse_expr(state, 0)
+    # Multiple with-scrutinees (Idris `foo a b with (g a) | (g b)`) are written
+    # space-separated in Cure surface syntax: `with g(a) g(b)`. Juxtaposition is
+    # not application here (`g(a) g(b)` parses as two exprs because `parse_expr`
+    # stops at the second callee), so we simply keep pulling scrutinees while the
+    # next token can begin one. A single scrutinee leaves `scruts == [scrutinee]`
+    # and the legacy path below is taken byte-for-byte unchanged.
+    {scruts, state} = collect_with_scrutinees([scrutinee], state)
+    # Optional `proof <ident>` (capability B): binds the scrutinee equation
+    # `Eq(T, e, pat)` in each branch. `proof` is a soft keyword recognised only
+    # in this slot; elsewhere it stays an ordinary identifier.
+    {proof, state} = parse_optional_with_proof(state)
+    state = skip_newlines(state)
+
+    base_meta = [line: token.line, col: token.col]
+    meta = if proof, do: Keyword.put(base_meta, :proof, proof), else: base_meta
+
+    case scruts do
+      [single] ->
+        case peek(state) do
+          %Token{type: :lbrace} ->
+            state = advance(state)
+            {arms, state} = parse_inline_match_arms(state)
+            state = expect(state, :rbrace)
+            {{:with_abs, meta, [single | arms]}, state}
+
+          %Token{type: :indent} ->
+            state = advance(state)
+            {arms, state} = parse_with_block_arms(state)
+            state = expect_dedent(state)
+            {{:with_abs, meta, [single | arms]}, state}
+
+          _ ->
+            {{:with_abs, meta, [single]}, state}
+        end
+
+      _ ->
+        parse_multi_with_abs(scruts, proof, base_meta, state)
+    end
+  end
+
+  # Pull the second and subsequent space-separated with-scrutinees. Each call
+  # peeks the current token: if it can start an expression we parse one more
+  # scrutinee and recurse; otherwise we stop. `proof`/`:newline`/`:indent`/
+  # `:lbrace` are not expression starters, so they terminate the scrutinee list.
+  defp collect_with_scrutinees(acc, state) do
+    if with_scrutinee_start?(peek(state)) do
+      {expr, state} = parse_expr(state, 0)
+      collect_with_scrutinees(acc ++ [expr], state)
+    else
+      {acc, state}
+    end
+  end
+
+  defp with_scrutinee_start?(%Token{type: type})
+       when type in [
+              :identifier,
+              :integer,
+              :float,
+              :string,
+              :bool,
+              :atom,
+              :char,
+              :lparen,
+              :lbracket,
+              :tuple_open,
+              :map_open,
+              :binary_open
+            ],
+       do: true
+
+  defp with_scrutinee_start?(_), do: false
+
+  # Multiple-with surface sugar. `with e1 e2 … eN` with arms
+  # `p1, p2, …, pN -> body` desugars to nested single-scrutinee `:with_abs`
+  # nodes so the dependent elaborator's existing (single-scrutinee) handling
+  # covers it unchanged — this parser produces exactly the `{:with_abs, meta,
+  # [scrut | arms]}` shape it already dispatches on. Combining an LHS re-match
+  # (`| pat`) or a `proof` binding with multiple scrutinees is out of scope in
+  # this first slice and is reported as a clean parse error.
+  defp parse_multi_with_abs(scruts, proof, base_meta, state) do
+    n = length(scruts)
+
+    {arms, state} =
+      case peek(state) do
+        %Token{type: :lbrace} ->
+          state = advance(state)
+          {arms, state} = parse_multi_with_inline_arms(state, n)
+          state = expect(state, :rbrace)
+          {arms, state}
+
+        %Token{type: :indent} ->
+          state = advance(state)
+          {arms, state} = parse_multi_with_block_arms(state, n)
+          state = expect_dedent(state)
+          {arms, state}
+
+        _ ->
+          {[], state}
+      end
+
+    cond do
+      proof != nil ->
+        state =
+          add_error(
+            state,
+            {:with_multi_proof_unsupported,
+             "`proof` binding is not supported together with multiple with-scrutinees",
+             base_meta}
+          )
+
+        {{:with_abs, base_meta, [hd(scruts)]}, state}
+
+      arms == [] ->
+        state =
+          add_error(
+            state,
+            {:with_multi_no_arms, "with-abstraction over multiple scrutinees requires at least one arm",
+             base_meta}
+          )
+
+        {{:with_abs, base_meta, [hd(scruts)]}, state}
+
+      true ->
+        build_multi_with(scruts, arms, base_meta, state)
+    end
+  end
+
+  # Block-form arms for a multiple-with. Each arm is a list of `n` comma-
+  # separated patterns and a body; results are `{patterns, body}` tuples that
+  # `build_multi_with/4` later desugars.
+  defp parse_multi_with_block_arms(state, n) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {[], state}
+
+      _ ->
+        {arm, state} = parse_multi_with_arm(state, n)
+        state = skip_newlines(state)
+        {rest, state} = parse_multi_with_block_arms(state, n)
+        {[arm | rest], state}
+    end
+  end
+
+  # Inline (`{ … }`) form. Arms are separated by `,`; the pattern commas within
+  # an arm are consumed by `parse_comma_pattern_list/1`, which stops at the `->`.
+  defp parse_multi_with_inline_arms(state, n) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :rbrace} ->
+        {[], state}
+
+      _ ->
+        {arm, state} = parse_multi_with_arm(state, n)
+        state = skip_newlines(state)
+
+        case peek(state) do
+          %Token{type: :comma} ->
+            state = advance(state)
+            state = skip_newlines(state)
+            {rest, state} = parse_multi_with_inline_arms(state, n)
+            {[arm | rest], state}
+
+          _ ->
+            {[arm], state}
+        end
+    end
+  end
+
+  # A single multiple-with arm: `p1, …, pk -> body`. A trailing `| pat` marks the
+  # rematch form, which is out of scope combined with multiple-with; a pattern
+  # count other than `n` is an arity error. Both are reported but recovery still
+  # consumes through the body so parsing continues.
+  defp parse_multi_with_arm(state, n) do
+    {patterns, state} = parse_comma_pattern_list(state)
+
+    {patterns, state} =
+      case peek(state) do
+        %Token{type: :bar} ->
+          state =
+            add_error(
+              state,
+              {:with_multi_rematch_unsupported,
+               "LHS re-match (`| pat`) combined with multiple with-scrutinees is not supported", []}
+            )
+
+          # Recover: consume the `| with-pattern` remainder before the body.
+          state = advance(state)
+          state = skip_newlines(state)
+          {_wp, state} = parse_expr(state, 0)
+          {patterns, state}
+
+        _ ->
+          {patterns, state}
+      end
+
+    state =
+      if length(patterns) != n do
+        add_error(
+          state,
+          {:with_multi_arity_mismatch,
+           "with-arm has #{length(patterns)} pattern(s) but there are #{n} with-scrutinees", []}
+        )
+      else
+        state
+      end
+
+    state = skip_newlines(state)
+    state = expect(state, :arrow)
+    state = skip_newlines(state)
+    {body, state} = parse_expr_or_block(state)
+    {{patterns, body}, state}
+  end
+
+  # Comma-separated pattern list for one multiple-with arm. A top-level `,` never
+  # occurs inside a single pattern (tuples are parenthesised), so it reliably
+  # separates the per-scrutinee patterns; parsing stops at the first non-comma
+  # (the `->`, or a `|` handled by the caller).
+  defp parse_comma_pattern_list(state) do
+    {first, state} = parse_expr(state, 0)
+    {first, state} = maybe_wrap_as(first, state)
+    parse_comma_pattern_list([first], state)
+  end
+
+  defp parse_comma_pattern_list(acc, state) do
+    case peek(state) do
+      %Token{type: :comma} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {pat, state} = parse_expr(state, 0)
+        {pat, state} = maybe_wrap_as(pat, state)
+        parse_comma_pattern_list(acc ++ [pat], state)
+
+      _ ->
+        {acc, state}
+    end
+  end
+
+  # Desugar `n` scrutinees + `{patterns, body}` arms into nested single-scrutinee
+  # `:with_abs` nodes. Base case (one scrutinee left): a flat `:with_abs` whose
+  # arms are ordinary `{:match_arm, [pattern: p], [body]}`. Recursive case: group
+  # arms by their FIRST pattern (structural equality, first-appearance order) and
+  # emit one outer `{:match_arm, [pattern: p1], [inner]}` per group, where `inner`
+  # is the desugar of the remaining scrutinees over that group's arms with their
+  # first pattern stripped.
+  defp build_multi_with([last], arms, meta, state) do
+    match_arms =
+      Enum.map(arms, fn {[p], body} -> {:match_arm, [pattern: p], [body]} end)
+
+    {{:with_abs, meta, [last | match_arms]}, state}
+  end
+
+  defp build_multi_with([s | rest], arms, meta, state) do
+    groups = group_arms_by_first(arms)
+    state = check_group_head_consistency(groups, meta, state)
+
+    {outer_arms, state} =
+      Enum.map_reduce(groups, state, fn {p1, sub_arms}, st ->
+        {inner, st} = build_multi_with(rest, sub_arms, meta, st)
+        {{:match_arm, [pattern: p1], [inner]}, st}
+      end)
+
+    {{:with_abs, meta, [s | outer_arms]}, state}
+  end
+
+  # Group arms by their first pattern using structural equality that ignores
+  # positional metadata (line/col), so e.g. two `S(j)` arms on different lines
+  # share one outer branch. Preserves first-appearance order. Each group's
+  # sub-arms have the grouped-on first pattern removed.
+  defp group_arms_by_first(arms) do
+    Enum.reduce(arms, [], fn {[p1 | rest_pats], body}, groups ->
+      key = strip_meta(p1)
+
+      case Enum.find_index(groups, fn {gp, _} -> strip_meta(gp) == key end) do
+        nil ->
+          groups ++ [{p1, [{rest_pats, body}]}]
+
+        idx ->
+          {gp, subs} = Enum.at(groups, idx)
+          List.replace_at(groups, idx, {gp, subs ++ [{rest_pats, body}]})
+      end
+    end)
+  end
+
+  # First-slice consistency guard. Because groups are keyed by structural
+  # equality, two distinct groups sharing one constructor head can only differ in
+  # their sub-patterns/variable names — sharing an outer branch would require
+  # renaming, which this slice does not do. Reject rather than risk mis-binding.
+  defp check_group_head_consistency(groups, meta, state) do
+    ctor_heads =
+      groups
+      |> Enum.map(fn {p1, _} -> pattern_ctor_head(p1) end)
+      |> Enum.filter(&match?({:ctor, _}, &1))
+
+    if length(Enum.uniq(ctor_heads)) == length(ctor_heads) do
+      state
+    else
+      add_error(
+        state,
+        {:with_multi_inconsistent_pattern,
+         "multiple-with arms share a constructor head with differing sub-patterns; this first " <>
+           "slice requires structurally identical outer patterns (rename to a common form)", meta}
+      )
+    end
+  end
+
+  defp pattern_ctor_head({:function_call, meta, _args}), do: {:ctor, Keyword.get(meta, :name)}
+  defp pattern_ctor_head(_), do: :other
+
+  # Structural-equality normaliser for pattern ASTs: drop the metadata slot of
+  # every `{tag, meta, payload}` node so patterns compare on constructor head and
+  # argument structure (including variable names) only.
+  defp strip_meta({tag, meta, payload}) when is_atom(tag) and is_list(meta) do
+    {tag, strip_meta(payload)}
+  end
+
+  defp strip_meta(list) when is_list(list), do: Enum.map(list, &strip_meta/1)
+
+  defp strip_meta(tuple) when is_tuple(tuple) do
+    tuple |> Tuple.to_list() |> Enum.map(&strip_meta/1) |> List.to_tuple()
+  end
+
+  defp strip_meta(other), do: other
+
+  # Block-form with-clause arms. Distinct from `parse_block_match_arms` (used by
+  # plain `match`) because a with-clause arm may RESTATE the parent LHS patterns
+  # before the with-pattern — the Idris-parity LHS re-match form. Each arm is
+  # either the ordinary `{:match_arm, …}` (no `… |` prefix) or the new
+  # `{:with_rematch_arm, …}` (parent patterns `|` with-pattern).
+  defp parse_with_block_arms(state) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {[], state}
+
+      _ ->
+        {arm, state} = parse_with_clause_arm(state)
+        state = skip_newlines(state)
+        {rest, state} = parse_with_block_arms(state)
+        {[arm | rest], state}
+    end
+  end
+
+  # A single with-clause arm. Parse the first pattern, then disambiguate by the
+  # following token (only in this with-clause-LHS position):
+  #   - `|`      → rematch arm restating one parent pattern
+  #   - `,` … `|`→ rematch arm restating several (comma-separated) parent patterns
+  #   - anything → ordinary `{:match_arm}` (the existing no-rematch form)
+  # A top-level `,` before `->` never occurs in a plain arm pattern (tuples are
+  # parenthesised), so it unambiguously signals a multi-pattern rematch here.
+  defp parse_with_clause_arm(state) do
+    {first, state} = parse_expr(state, 0)
+
+    case peek(state) do
+      %Token{type: :bar} ->
+        finish_with_rematch_arm([first], state)
+
+      %Token{type: :comma} ->
+        {parent_patterns, state} = parse_more_parent_patterns([first], state)
+        finish_with_rematch_arm(parent_patterns, state)
+
+      _ ->
+        parse_match_arm_tail(first, state)
+    end
+  end
+
+  # Collect the remaining comma-separated parent patterns (the first is already
+  # parsed). Stops at the `|` separator (consumed by `finish_with_rematch_arm`).
+  defp parse_more_parent_patterns(acc, state) do
+    case peek(state) do
+      %Token{type: :comma} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {pat, state} = parse_expr(state, 0)
+        parse_more_parent_patterns(acc ++ [pat], state)
+
+      _ ->
+        {acc, state}
+    end
+  end
+
+  # After the parent patterns: consume `|`, parse the with-pattern, then the
+  # `->` body. Guards and `impossible` in rematch arms are deferred (out of the
+  # faithful first slice). Produces `{:with_rematch_arm, meta, [body]}` with the
+  # restated `:parent_patterns` and the with-`:pattern` in meta.
+  defp finish_with_rematch_arm(parent_patterns, state) do
+    state = expect(state, :bar)
+    state = skip_newlines(state)
+    {with_pattern, state} = parse_expr(state, 0)
+    state = skip_newlines(state)
+    state = expect(state, :arrow)
+    state = skip_newlines(state)
+    {body, state} = parse_expr_or_block(state)
+
+    meta = [parent_patterns: parent_patterns, pattern: with_pattern]
+    {{:with_rematch_arm, meta, [body]}, state}
+  end
+
+  # `proof <ident>` after a with-scrutinee. Returns `{name, state}` (name a
+  # string) when present, else `{nil, state}` leaving the stream untouched.
+  defp parse_optional_with_proof(state) do
+    case peek(state) do
+      %Token{type: :keyword, value: :proof} ->
+        case peek_at(state, 1) do
+          %Token{type: :identifier, value: name} ->
+            {name, state |> advance() |> advance()}
+
+          _ ->
+            {nil, state}
+        end
+
+      _ ->
+        {nil, state}
+    end
+  end
+
+  # True iff the token after `with` can begin a scrutinee expression. Keeps
+  # `with` an ordinary identifier when it is a bare operand (`with + 1`, a
+  # trailing `with`, etc.), so the contextual keyword never captures a value
+  # named `with`.
+  defp with_scrutinee_ahead?(state) do
+    case peek_at(state, 1) do
+      %Token{type: type}
+      when type in [
+             :identifier,
+             :integer,
+             :float,
+             :string,
+             :bool,
+             :atom,
+             :char,
+             :lparen,
+             :lbracket,
+             :tuple_open,
+             :map_open,
+             :binary_open
+           ] ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
   defp parse_inline_match_arms(state) do
     state = skip_newlines(state)
 
@@ -1411,6 +1984,35 @@ defmodule Cure.Compiler.Parser do
   defp parse_match_arm(state) do
     # Parse pattern
     {pattern, state} = parse_expr(state, 0)
+    {pattern, state} = maybe_wrap_as(pattern, state)
+    parse_match_arm_tail(pattern, state)
+  end
+
+  # As-pattern: `name @ <pattern>` binds the whole matched value to `name` in
+  # addition to destructuring it. `@` (`:at`) is a decorator prefix only at
+  # declaration position, so in value/pattern position it is unambiguously an
+  # as-binding. Used both at a match arm's top level and inside constructor
+  # arguments (`Cons(h, t @ Cons(x, y))`), so as-patterns nest.
+  defp maybe_wrap_as({:variable, vm, name}, state) do
+    case peek(state) do
+      %Token{type: :at} ->
+        state = advance(state)
+        {inner, state} = parse_expr(state, 0)
+        {inner, state} = maybe_wrap_as(inner, state)
+        {{:as_pattern, vm, [name, inner]}, state}
+
+      _ ->
+        {{:variable, vm, name}, state}
+    end
+  end
+
+  defp maybe_wrap_as(pattern, state), do: {pattern, state}
+
+  # The tail of a match arm after its pattern has been parsed: optional `when`
+  # guard, the `->`, and the body (or `impossible`). Factored out so with-clause
+  # arms can fall through to it once they have decided they are NOT a rematch arm
+  # (see `parse_with_clause_arm`).
+  defp parse_match_arm_tail(pattern, state) do
     state = skip_newlines(state)
 
     # Optional guard: when expr
@@ -1429,13 +2031,33 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :arrow)
     state = skip_newlines(state)
 
-    # Parse body
-    {body, state} = parse_expr_or_block(state)
+    # `impossible` is a soft keyword recognized only as an entire arm body
+    # (spec §4): `pat -> impossible`. Any other use stays an ordinary identifier.
+    if impossible_body?(state) do
+      state = advance(state)
+      meta = if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
+      {{:match_arm, meta, [nil]}, state}
+    else
+      {body, state} = parse_expr_or_block(state)
+      meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
+      {{:match_arm, meta, [body]}, state}
+    end
+  end
 
-    meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
+  # True iff the next token is the identifier `impossible` AND the token after it
+  # ends the arm — so `impossible` alone is the body, but `impossible + 1` is not.
+  defp impossible_body?(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "impossible"} ->
+        case peek_at(state, 1) do
+          %Token{type: type} when type in [:newline, :comma, :rbrace, :dedent, :eof] -> true
+          nil -> true
+          _ -> false
+        end
 
-    {:match_arm, meta, [body]}
-    |> then(&{&1, state})
+      _ ->
+        false
+    end
   end
 
   # -- Pickup Expression -----------------------------------------------------
@@ -1864,6 +2486,35 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp parse_single_typed_param(state) do
+    case peek(state) do
+      %Token{type: :lbrace} -> parse_implicit_param(state)
+      _ -> parse_explicit_param(state)
+    end
+  end
+
+  # `{name}` or `{name: Type}` — an implicit, erased argument (design spec §6).
+  # Its type may be omitted and inferred by the elaborator from later parameter
+  # types / the return type.
+  defp parse_implicit_param(state) do
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    {type_ast, state} =
+      case peek(state) do
+        %Token{type: :colon} -> parse_type_expr(advance(state))
+        _ -> {nil, state}
+      end
+
+    state = expect(state, :rbrace)
+
+    meta = [implicit: true]
+    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
+    {{:param, meta, name}, state}
+  end
+
+  defp parse_explicit_param(state) do
     # Check for variadic: *name or **name
     {kind, state} =
       case peek(state) do
@@ -2274,12 +2925,14 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    # Optional type params
-    {type_params, state} =
+    # Optional head params, parsed permissively (typed `a: Type` or bare `a`).
+    # The ordinary-ADT path projects out just the names; the indexed-family path
+    # (`type NAME(params) indices (idx)`) keeps the full typed telescope.
+    {head_params, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {tp, state} = parse_name_list(state, :rparen)
+          {tp, state} = parse_typed_params(state)
           state = expect(state, :rparen)
           {tp, state}
 
@@ -2287,6 +2940,47 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
+    case peek(state) do
+      %Token{type: :keyword, value: :indices} ->
+        parse_indexed_family(state, name, head_params, token)
+
+      _ ->
+        type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
+        parse_type_def_adt(state, name, type_params, token)
+    end
+  end
+
+  # Indexed (GADT) family: `type NAME(params) indices (idx)` followed by an
+  # indentation-delimited block of constructor signatures. Head-paren args are
+  # parameters (uniform, never matched); the `indices (…)` clause are indices.
+  defp parse_indexed_family(state, name, params, token) do
+    state = advance(state)
+    state = expect(state, :lparen)
+    {idx_tele, state} = parse_typed_params(state)
+    state = expect(state, :rparen)
+    state = skip_newlines(state)
+
+    {opened_block, state} =
+      case peek(state) do
+        %Token{type: :indent} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
+    {ctors, state} = parse_gadt_ctors(state, [])
+
+    state =
+      if opened_block do
+        state |> skip_newlines() |> expect_dedent()
+      else
+        state
+      end
+
+    meta = [name: name, params: params, indices: idx_tele, line: token.line, col: token.col]
+    {{:indexed_type, meta, ctors}, state}
+  end
+
+  # Ordinary ADT / alias / refinement body: `type NAME(type_params) = …`.
+  defp parse_type_def_adt(state, name, type_params, token) do
     state = expect(state, :assign)
     state = skip_newlines(state)
 
@@ -2308,6 +3002,15 @@ defmodule Cure.Compiler.Parser do
           meta = [name: name, refinement: true, line: token.line, col: token.col]
           meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
           {{:type_annotation, meta, refinement}, state}
+
+        %Token{type: :lparen} ->
+          # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
+          # The full type-expression parser handles the arrow; the result is a plain
+          # type alias (`:type_annotation`).
+          {rhs, state} = parse_type_expr(state)
+          meta = [name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+          {{:type_annotation, meta, [rhs]}, state}
 
         _ ->
           # v0.21.0: accept an optional leading `|` before the first variant.
@@ -2335,10 +3038,20 @@ defmodule Cure.Compiler.Parser do
               {{:container, meta, variants}, state}
 
             _ ->
-              # Type alias: type Name = ExistingType
-              meta = [name: name, line: token.line, col: token.col]
-              meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-              {{:type_annotation, meta, [first_variant]}, state}
+              if variant_ctor?(first_variant) do
+                # Single-constructor ADT: `type Box = MkBox(Nat)` is a one-ctor
+                # inductive family, not a type alias. (A constructor variant carries
+                # `variant: true`; a genuine alias RHS — `type Celsius = Int` — is a
+                # plain type expression and stays a `:type_annotation`.)
+                meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+                meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                {{:container, meta, [first_variant]}, state}
+              else
+                # Type alias: type Name = ExistingType
+                meta = [name: name, line: token.line, col: token.col]
+                meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                {{:type_annotation, meta, [first_variant]}, state}
+              end
           end
       end
 
@@ -2355,6 +3068,131 @@ defmodule Cure.Compiler.Parser do
 
     {ast, state}
   end
+
+  defp parse_gadt_ctors(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        cname_token = peek(state)
+        cname = to_string(cname_token.value)
+        state = advance(state)
+        state = expect(state, :colon)
+        {sig, state} = parse_ctor_signature(state)
+        meta = [name: cname, line: cname_token.line, col: cname_token.col]
+        parse_gadt_ctors(state, [{:gadt_ctor, meta, sig} | acc])
+    end
+  end
+
+  # A constructor signature is an arrow chain `Dom -> Dom -> ... -> Result`
+  # where each element is a full type application (`SF(as, bs, d1)`). The
+  # general `parse_type_expr` is unusable here: its `maybe_parse_function_type`
+  # splices a domain application's *arguments* into the arrow's parameter list
+  # and discards the head (so `SF(as, bs, d1) -> …` loses `SF`). This dedicated
+  # parser keeps each application intact and yields `{:arrow_chain, [atoms]}`
+  # with the last atom as the result type.
+  defp parse_ctor_signature(state) do
+    {first, state} = parse_ctor_dom(state)
+    collect_arrow_chain(state, [first])
+  end
+
+  defp collect_arrow_chain(state, acc) do
+    case peek(state) do
+      %Token{type: :arrow} ->
+        state = advance(state)
+        {atom, state} = parse_ctor_dom(state)
+        collect_arrow_chain(state, [atom | acc])
+
+      _ ->
+        {{:arrow_chain, Enum.reverse(acc)}, state}
+    end
+  end
+
+  # A single element of a constructor's arrow chain. Ordinarily a bare type
+  # application (`SNat(k)`), but a DOMAIN position may carry a NAMED dependent
+  # binder `(name: Type)` — needed when a later argument type or the result
+  # index depends on this explicit argument (`(k: Nat) -> SNat(k) -> NVv(S(k))`).
+  # The named form yields `{:named_dom, name, inner_type_atom}`; everything else
+  # falls through to `parse_type_atom` byte-for-byte (unnamed args unchanged).
+  defp parse_ctor_dom(state) do
+    la2 = peek_at(state, 2)
+
+    case {peek(state), la2} do
+      {%Token{type: :lparen}, %Token{type: :colon}} ->
+        state = advance(state)
+        name_token = peek(state)
+        name = to_string(name_token.value)
+        state = advance(state)
+        state = expect(state, :colon)
+        {inner, state} = parse_type_atom(state)
+        state = expect(state, :rparen)
+        {{:named_dom, name, inner}, state}
+
+      _ ->
+        parse_type_atom(state)
+    end
+  end
+
+  # A single type application: `Name`, `Name(arg, ...)`, or `(atom)`.
+  defp parse_type_atom(state) do
+    token = peek(state)
+
+    case token.type do
+      :lparen ->
+        state = advance(state)
+        {inner, state} = parse_type_atom(state)
+        state = expect(state, :rparen)
+        {inner, state}
+
+      _ ->
+        name = to_string(token.value)
+        state = advance(state)
+
+        case peek(state) do
+          %Token{type: :lparen} ->
+            state = advance(state)
+            {args, state} = parse_type_atom_args(state)
+            state = expect(state, :rparen)
+            {{:function_call, [name: name], args}, state}
+
+          _ ->
+            {{:variable, [scope: :local], name}, state}
+        end
+    end
+  end
+
+  defp parse_type_atom_args(state) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :rparen} -> {[], state}
+      _ -> parse_type_atom_args_list(state)
+    end
+  end
+
+  defp parse_type_atom_args_list(state) do
+    {arg, state} = parse_type_atom(state)
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :comma} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {rest, state} = parse_type_atom_args_list(state)
+        {[arg | rest], state}
+
+      _ ->
+        {[arg], state}
+    end
+  end
+
+  # A parsed type-body variant that is genuinely a constructor (has fields, so it
+  # carries `variant: true`) rather than a type-alias RHS.
+  defp variant_ctor?({:function_def, meta, _}), do: Keyword.get(meta, :variant, false)
+  defp variant_ctor?(_), do: false
 
   defp parse_type_variant(state) do
     name_token = peek(state)
@@ -2416,6 +3254,50 @@ defmodule Cure.Compiler.Parser do
           _ ->
             {[t], state}
         end
+    end
+  end
+
+  # Like `parse_type_param_list`, but each element may carry an optional binder
+  # name (`x: A`). Used only for a standalone parenthesised type that may become a
+  # dependent function type `(x: A) -> …`. Returns `{binder | nil, type_ast}`
+  # pairs so the caller can build a dependent Π (binders present) or the existing
+  # non-dependent arrow (all binders nil).
+  defp parse_paren_type_list(state) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :rparen} ->
+        {[], state}
+
+      _ ->
+        {binder, state} = parse_optional_binder(state)
+        {t, state} = parse_type_expr(state)
+        state = skip_newlines(state)
+
+        case peek(state) do
+          %Token{type: :comma} ->
+            state = advance(state)
+            state = skip_newlines(state)
+            {rest, state} = parse_paren_type_list(state)
+            {[{binder, t} | rest], state}
+
+          _ ->
+            {[{binder, t}], state}
+        end
+    end
+  end
+
+  # An optional `name :` binder prefix inside a parenthesised arrow domain. Only
+  # consumes when an identifier is immediately followed by `:` — so `(N)` stays a
+  # plain domain while `(n: N)` binds `n`. (A type element in this position is
+  # never otherwise followed by `:`.)
+  defp parse_optional_binder(state) do
+    case {peek(state), peek(advance(state))} do
+      {%Token{type: :identifier, value: v}, %Token{type: :colon}} ->
+        {to_string(v), advance(advance(state))}
+
+      _ ->
+        {nil, state}
     end
   end
 
@@ -3363,23 +4245,37 @@ defmodule Cure.Compiler.Parser do
 
     case token.type do
       :lparen ->
-        # Tuple type or function type: (A, B) -> C
+        # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
+        # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
+        # codomain (and later domains) may mention `x`.
         state = advance(state)
-        {inner, state} = parse_type_param_list(state)
+        {inner, state} = parse_paren_type_list(state)
         state = expect(state, :rparen)
 
         case peek(state) do
           %Token{type: :arrow} ->
             state = advance(state)
             {ret, state} = parse_type_expr(state)
-            ast = {:function_call, [name: "Function", function_type: true], inner ++ [ret]}
+            binders = Enum.map(inner, &elem(&1, 0))
+            doms = Enum.map(inner, &elem(&1, 1))
+
+            ast =
+              if Enum.all?(binders, &is_nil/1) do
+                # No named domain — the existing non-dependent arrow, unchanged.
+                {:function_call, [name: "Function", function_type: true], doms ++ [ret]}
+              else
+                # At least one named domain — a dependent Π; carry the binder names
+                # (nil for anonymous domains) for the elaborator to scope.
+                {:pi_type, [binders: binders], doms ++ [ret]}
+              end
+
             {ast, state}
 
           _ ->
-            # Just a grouped type or tuple type
-            case inner do
+            # Grouped type or tuple type — binders (if any) are not meaningful here.
+            case Enum.map(inner, &elem(&1, 1)) do
               [single] -> {single, state}
-              _ -> {{:tuple, [], inner}, state}
+              many -> {{:tuple, [], many}, state}
             end
         end
 
@@ -3393,15 +4289,18 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         base_name = to_string(token.value)
 
-        case peek(state) do
-          %Token{type: :lparen} ->
+        cond do
+          base_name == "Sigma" and match?(%Token{type: :lparen}, peek(state)) ->
+            parse_sigma_type(state)
+
+          match?(%Token{type: :lparen}, peek(state)) ->
             state = advance(state)
             {params, state} = parse_type_param_list(state)
             state = expect(state, :rparen)
             ast = {:function_call, [name: base_name], params}
             maybe_parse_function_type(state, ast)
 
-          %Token{type: :arrow} ->
+          match?(%Token{type: :arrow}, peek(state)) ->
             # A -> B  (unary function type)
             state = advance(state)
             {ret, state} = parse_type_expr(state)
@@ -3409,11 +4308,43 @@ defmodule Cure.Compiler.Parser do
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
 
-          _ ->
+          true ->
             base = {:variable, [scope: :local], base_name}
-            {base, state}
+            maybe_parse_type_projection(base, state)
         end
     end
+  end
+
+  # A type-position projection `p.1` / `p.2` (used in dependent index positions,
+  # e.g. `SF(as, bs, p.1)`).
+  defp maybe_parse_type_projection(inner, state) do
+    case peek(state) do
+      %Token{type: :dot} ->
+        state = advance(state)
+        attr_token = peek(state)
+        attr = to_string(attr_token.value)
+        state = advance(state)
+        node = {:attribute_access, [attribute: attr], [inner]}
+        maybe_parse_type_projection(node, state)
+
+      _ ->
+        {inner, state}
+    end
+  end
+
+  # Sigma(x: DomType, BodyType) — a dependent-pair type (design spec §4.7). The
+  # body type may mention the binder `x`.
+  defp parse_sigma_type(state) do
+    state = advance(state)
+    name_token = peek(state)
+    binder = to_string(name_token.value)
+    state = advance(state)
+    state = expect(state, :colon)
+    {dom_type, state} = parse_type_expr(state)
+    state = expect(state, :comma)
+    {body_type, state} = parse_type_expr(state)
+    state = expect(state, :rparen)
+    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
   end
 
   defp maybe_parse_function_type(state, left) do
@@ -3726,6 +4657,17 @@ defmodule Cure.Compiler.Parser do
         {rec_ast, state} = parse_expr(state, 0)
         rec_ast = attach_decorator(rec_ast, dec_name, args)
         {rec_ast, state}
+
+      # `@builtin(:key) type Name = ...` attaches the decorator to the type
+      # container (an enum ADT → {:container, container_type: :enum, ...}, which
+      # attach_decorator/3's generic clause threads into :decorator meta). A
+      # @builtin on an indexed/GADT ({:indexed_type}) or alias ({:type_annotation})
+      # form is silently dropped — those have no attach_decorator clause today;
+      # out of scope here (Bool/Nat are both simple enums).
+      %Token{type: :keyword, value: :type} ->
+        {type_ast, state} = parse_type_def(state)
+        type_ast = attach_decorator(type_ast, dec_name, args)
+        {type_ast, state}
 
       _ ->
         # Standalone decorator or property
@@ -4077,6 +5019,17 @@ defmodule Cure.Compiler.Parser do
       advance(state)
     else
       error = {:expected, expected_type, :got, token.type, token.line, token.col}
+      add_error(state, error)
+    end
+  end
+
+  defp expect_keyword(state, expected_value) do
+    token = peek(state)
+
+    if token.type == :keyword and token.value == expected_value do
+      advance(state)
+    else
+      error = {:expected, expected_value, :got, token.type, token.line, token.col}
       add_error(state, error)
     end
   end
