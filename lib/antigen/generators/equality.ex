@@ -28,13 +28,13 @@ defmodule Antigen.Generators.Equality do
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
     Gen.bind(Gen.member_of(@assays), fn assay ->
-      Gen.bind(eq_term(), fn {term, type} ->
+      Gen.bind(eq_term(), fn {term, type, ctx} ->
         Gen.return(
           Challenge.new(
             kind: :typed_term,
             assay: assay,
             label: :well_typed,
-            payload: %{sig: :v1, ctx: [], type: type, term: term},
+            payload: %{sig: :v1, ctx: ctx, type: type, term: term},
             note: "propositional equality"
           )
         )
@@ -42,25 +42,30 @@ defmodule Antigen.Generators.Equality do
     end)
   end
 
-  # -- term + its inferred type ----------------------------------------------
+  # -- term + its inferred type + the context it lives in ---------------------
+  # Closed shapes carry ctx []; the neutral-refl shapes carry a one-binder ctx so
+  # the subject reduces to a NEUTRAL, which is what drives Conv's neutral paths
+  # (same_neutral_no_delta? / conv_neutral? / conv_branches?) when `check` compares
+  # the two sides of `Eq T a a`.
   defp eq_term do
     Gen.frequency([
       {3, refl_term()},
       {3, eq_type_term()},
-      {2, rewrite_term()}
+      {2, rewrite_term()},
+      {3, neutral_refl_term()}
     ])
   end
 
   # refl a : Eq ty a a
   defp refl_term do
-    Gen.bind(inhabitant(), fn {a, ty} -> Gen.return({{:refl, a}, {:eq, ty, a, a}}) end)
+    Gen.bind(inhabitant(), fn {a, ty} -> Gen.return({{:refl, a}, {:eq, ty, a, a}, []}) end)
   end
 
   # Eq ty a b : Type 0  (a, b share the same type ty — a well-typed proposition,
   # true or false)
   defp eq_type_term do
     Gen.bind(typed_pair(), fn {a, b, ty} ->
-      Gen.return({{:eq, ty, a, b}, {:type, 0}})
+      Gen.return({{:eq, ty, a, b}, {:type, 0}, []})
     end)
   end
 
@@ -68,8 +73,41 @@ defmodule Antigen.Generators.Equality do
   defp rewrite_term do
     Gen.bind(inhabitant(), fn {a, ty} ->
       Gen.bind(nat_numeral(), fn n ->
-        {{:rewrite, {:refl, a}, {:lam, ty, @nat}, n}, @nat}
+        {{:rewrite, {:refl, a}, {:lam, ty, @nat}, n}, @nat, []}
         |> Gen.return()
+      end)
+    end)
+  end
+
+  # refl over a NEUTRAL subject (a prim / projection / stuck-case of a context
+  # variable). `check`ing `Eq T s s` compares `s` with itself via `conv?`, so a
+  # neutral `s` exercises Conv's neutral machinery. One-binder context.
+  @int {:int_type}
+  @sig_nat {:sigma, @nat, @nat}
+
+  defp neutral_refl_term do
+    Gen.frequency([
+      # prim over an Int variable → conv_neutral? / same_*_no_delta? :nprim spine
+      {2,
+       Gen.bind(Gen.member_of([:add, :sub, :mul]), fn op ->
+         Gen.bind(int_lit(), fn lit -> neutral_refl({:prim, op, [{:var, 0}, lit]}, @int, [@int]) end)
+       end)},
+      {1, neutral_refl({:prim, :neg, [{:var, 0}]}, @int, [@int])},
+      # projections of a Σ variable → :nfst / :nsnd
+      {1, neutral_refl({:fst, {:var, 0}}, @nat, [@sig_nat])},
+      {1, neutral_refl({:snd, {:var, 0}}, @nat, [@sig_nat])},
+      # stuck case over a Bd variable → :ncase + conv_branches? + conv_branch_bodies?
+      {2, neutral_case_refl()}
+    ])
+  end
+
+  defp neutral_refl(subject, ty, ctx), do: Gen.return({{:refl, subject}, {:eq, ty, subject, subject}, ctx})
+
+  defp neutral_case_refl do
+    Gen.bind(nat_numeral(), fn a ->
+      Gen.bind(nat_numeral(), fn b ->
+        cse = {:case, {:var, 0}, {:lam, @bd, @nat}, [{:T, 0, a}, {:F, 0, b}]}
+        neutral_refl(cse, @nat, [@bd])
       end)
     end)
   end
