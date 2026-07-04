@@ -53,8 +53,19 @@ defmodule Antigen.Generators.Malformed do
       {1, tagged({:prim, :nosuchop, [@z]}, "unknown primitive op")},
       # {:prim, :add, [Type0, Type0]} → operands are not a numeric type
       # (numeric_type?'s catch-all) → :prim_type
-      {1, tagged({:prim, :add, [{:type, 0}, {:type, 0}]}, "prim on non-numeric operands")}
+      {1, tagged({:prim, :add, [{:type, 0}, {:type, 0}]}, "prim on non-numeric operands")},
+      # a case covering Nat's ctors PLUS a spurious branch — coverage passes, so
+      # check_case_branches reaches the bad branch: an unknown ctor (:unknown_ctor)
+      # or a ctor of another family (:foreign_ctor, vnil belongs to Vec).
+      {1, tagged(case_extra_branch(:nosuchctor), "case with unknown-ctor branch")},
+      {1, tagged(case_extra_branch(:vnil), "case with foreign-ctor branch")}
     ])
+  end
+
+  # `case Z of {Z→Z; S→Z; <bad>→Z}` — the full Nat ctor set (coverage passes) plus
+  # a spurious final branch the kernel rejects in check_case_branches.
+  defp case_extra_branch(bad_ctor) do
+    {:case, @z, {:lam, @nat, @nat}, [{:Z, 0, @z}, {:S, 1, @z}, {bad_ctor, 0, @z}]}
   end
 
   # rewrite with a VALID Eq proof but a body that does not inhabit the motive at
