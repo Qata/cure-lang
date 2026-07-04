@@ -178,10 +178,19 @@ sugar. Cure's primitives are exactly backwards.
 - **Scope.** ~33 kernel sites. Mitigation: the three‑phase additive→subtractive
   order keeps the suite green throughout; no phase both adds and removes a form.
 
-## Open question for the operator
+## Open question for the operator — RESOLVED
 
 Decision 5 (adopt K, reject `--without-K`) is the only genuinely
 soundness‑flavoured fork. Recorded here with justification; flagged for explicit
 sign‑off before Phase C, since it is the one choice a future HoTT‑direction could
 regret. Everything else follows from "align with the real systems + reuse Cure's
 existing inductive machinery."
+
+**Operator sign‑off obtained 2026‑07‑04: "Yes, with K/UIP."** After reviewing
+the with/without‑K contrast (distinct‑endpoint `sym`/`trans`/`cong` identical
+either way; only reflexive‑endpoint matches like `kAxiom`/`uip` differ — accepted
+under K, requiring an explicit `J`‑motive detour without it), the operator
+adopted K/UIP. Phase C is unblocked. This is consistent with the already‑K
+behaviour of user‑level inductives (`MyEq`/`mrefl`, `dp01`) and Cure's existing
+deletion rule (ledger #23); seeding builtin `Eq` extends, not introduces, the
+K stance.
