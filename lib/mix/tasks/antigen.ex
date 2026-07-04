@@ -182,7 +182,11 @@ defmodule Mix.Tasks.Antigen do
       {2, Antigen.Generators.DecodeProbe.gen()},
       # Conversion decision — term pairs with a known convertibility verdict over a
       # neutral context; the lever for Conv's stuck-neutral / η / no-δ clauses.
-      {2, Antigen.Generators.ConvPair.gen()}
+      {2, Antigen.Generators.ConvPair.gen()},
+      # Branch unification — direct branch_unify/4 calls with known verdicts; the
+      # lever for the kernel's index unifier (unify_one/bind_index/unify_spine/
+      # rigid_index?/head_key) past what a well-typed case reaches.
+      {2, Antigen.Generators.BranchUnify.gen()}
     ])
   end
 

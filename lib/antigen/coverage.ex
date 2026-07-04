@@ -36,6 +36,8 @@ defmodule Antigen.Coverage do
 
   def terms_of(%Challenge{kind: :conv_pair, payload: %{t1: t1, t2: t2}}), do: [t1, t2]
 
+  def terms_of(%Challenge{kind: :branch_unify, payload: %{indices: idx}}), do: idx
+
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 

@@ -119,7 +119,9 @@ defmodule Antigen.Challenge do
     # Serialization decode-robustness vertical: kind + labels
     :decode_probe, :valid_sexp, :invalid_sexp,
     # Conversion-decision vertical: kind + labels
-    :conv_pair, :convertible, :distinct
+    :conv_pair, :convertible, :distinct,
+    # Branch-unification vertical: kind + verdict labels
+    :branch_unify, :solved, :impossible, :trivial
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -215,6 +217,12 @@ defmodule Antigen.Challenge do
   # conv pair: two terms as pieces; context size + expected verdict in the scaffold.
   def to_pieces(%__MODULE__{kind: :conv_pair, payload: %{t1: t1, t2: t2, ctx: n, expect: e}}),
     do: {%{"ctx" => n, "expect" => e}, [{"t1", t1}, {"t2", t2}]}
+
+  # branch-unify: family/ctor/ctx-size in the scaffold; scrutinee index terms as pieces.
+  def to_pieces(%__MODULE__{kind: :branch_unify, payload: %{ctx_vars: n, dname: d, cname: c, indices: idx}}) do
+    scaffold = %{"ctx_vars" => n, "dname" => Atom.to_string(d), "cname" => Atom.to_string(c)}
+    {scaffold, idx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"idx:#{i}", t} end)}
+  end
 
   def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
     %{sig: sig, ctx: ctx, term: term} = p
@@ -373,6 +381,21 @@ defmodule Antigen.Challenge do
     }
 
     new(kind: :conv_pair, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:branch_unify, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    n = length(pieces)
+    indices = if n == 0, do: [], else: for(i <- 0..(n - 1)//1, do: Map.fetch!(pmap, "idx:#{i}"))
+
+    payload = %{
+      ctx_vars: scaffold["ctx_vars"],
+      dname: String.to_existing_atom(scaffold["dname"]),
+      cname: String.to_existing_atom(scaffold["cname"]),
+      indices: indices
+    }
+
+    new(kind: :branch_unify, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
