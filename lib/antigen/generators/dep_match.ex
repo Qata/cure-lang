@@ -95,6 +95,12 @@ defmodule Antigen.Generators.DepMatch do
       {2, var_index_extra({:eq, {:pi, @nat, @nat}, {:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}})},
       {2, var_index_extra({:eq, {:sigma, @nat, @nat}, {:pair, {:var, 1}, {:var, 1}}, {:pair, {:var, 1}, {:var, 1}}})},
       {2, var_index_extra({:eq, {:eq, @nat, {:var, 1}, {:var, 1}}, {:refl, {:var, 1}}, {:refl, {:var, 1}}})},
+      # two-var frame: a helper context var lets extra_ty carry a STUCK app /
+      # projection / prim — replace_branch_vars' app/fst/snd/prim arms.
+      {2, var_index_extra2({:pi, @nat, @nat}, {:eq, @nat, {:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}})},
+      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:fst, {:var, 1}}, {:fst, {:var, 1}}})},
+      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:snd, {:var, 1}}, {:snd, {:var, 1}}})},
+      {2, var_index_extra2({:int_type}, {:eq, {:int_type}, {:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}})},
       # TWO-index diagonal family Sq — matching forces a ≡ b, the only v1 shape
       # that reaches unify_spine (2-index spine) + bind_index's merge path.
       {3, sq_diag()},
@@ -204,6 +210,21 @@ defmodule Antigen.Generators.DepMatch do
       Gen.bind(numeral(), fn sbody ->
         term = mk_case({:var, 1}, motive(@nat), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
         Gen.return({[extra_ty, vec({:var, 0}), @nat], term, @nat})
+      end)
+    end)
+  end
+
+  # Like var_index_extra but with an extra HELPER context var (a function / Σ /
+  # Int) so `extra_ty` can carry a value-level subterm that stays STUCK through
+  # evaluation — `helper n` (app), `fst/snd helper` (projections), `prim add
+  # [helper,helper]` — driving replace_branch_vars' app/fst/snd/prim arms when a
+  # branch refines the index. Frame: Γ = [extra_ty, helper_ty, Vec n, n:Nat]; the
+  # scrutinee is var 2, the helper var 1, and `n` var 3 inside extra_ty.
+  defp var_index_extra2(helper_ty, extra_ty) do
+    Gen.bind(numeral(), fn zbody ->
+      Gen.bind(numeral(), fn sbody ->
+        term = mk_case({:var, 2}, motive(@nat), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
+        Gen.return({[extra_ty, helper_ty, vec({:var, 0}), @nat], term, @nat})
       end)
     end)
   end
