@@ -718,8 +718,14 @@ defmodule Cure.Elab.Declarations do
 
   defp idx_to_core({:variable, _meta, name}, scope, _fam, env) do
     case Enum.find_index(scope, &(&1 == name)) do
-      nil -> {:ok, resolve_index_name(name, env)}
-      index -> {:ok, {:var, index}}
+      nil ->
+        case resolve_index_name(name, env) do
+          {:ambiguous_name, atom, mods} -> {:error, {:ambiguous_name, atom, mods}}
+          node -> {:ok, node}
+        end
+
+      index ->
+        {:ok, {:var, index}}
     end
   end
 
@@ -731,7 +737,19 @@ defmodule Cure.Elab.Declarations do
       atom = String.to_atom(name)
 
       with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env) do
+        qualified =
+          if String.contains?(name, ".") do
+            Cure.Elab.Resolution.resolve_qualified(env, name, :type)
+          else
+            :error
+          end
+
         cond do
+          match?({:ok, _}, qualified) ->
+            {:ok, key} = qualified
+            {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
+            {:ok, {:data, key, params, indices}}
+
           # An applied BOUND variable — e.g. a higher-order parameter used as
           # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
           # the head against the de Bruijn scope; a local binder shadows a global,
@@ -816,14 +834,28 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  # A projection `p.1` / `p.2` used in a type position (e.g. `SF(as, bs, p.1)`).
-  defp idx_to_core({:attribute_access, meta, [inner_ast]}, scope, fam, env) do
-    with {:ok, inner} <- idx_to_core(inner_ast, scope, fam, env) do
-      case Keyword.fetch!(meta, :attribute) do
-        "1" -> {:ok, {:fst, inner}}
-        "2" -> {:ok, {:snd, inner}}
-        other -> {:error, {:bad_projection, other}}
-      end
+  # A qualified TYPE reference (`Std.Nat` / `Std.Nat.Nat`, no call parens) OR a
+  # projection `p.1` / `p.2` used in a type position (e.g. `SF(as, bs, p.1)`).
+  defp idx_to_core({:attribute_access, meta, [inner_ast]} = node, scope, fam, env) do
+    attr = Keyword.fetch!(meta, :attribute)
+    dotted = Cure.Compiler.Parser.dotted_path_of(node)
+
+    cond do
+      # A qualified TYPE reference like Std.Nat / Std.Nat.Nat (no call parens).
+      is_binary(dotted) and match?({:ok, _}, Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)
+        {:ok, {:data, key, [], []}}
+
+      attr in ["1", "2"] ->
+        with {:ok, inner} <- idx_to_core(inner_ast, scope, fam, env) do
+          case attr do
+            "1" -> {:ok, {:fst, inner}}
+            "2" -> {:ok, {:snd, inner}}
+          end
+        end
+
+      true ->
+        {:error, {:bad_projection, attr}}
     end
   end
 
@@ -840,6 +872,18 @@ defmodule Cure.Elab.Declarations do
       primitive_type(name) != nil -> primitive_type(name)
       Inductive.family?(env, atom) -> {:data, atom, [], []}
       Inductive.get_ctor(env, atom) -> {:ctor, atom, []}
+      # A bare name reachable only under a single re-keyed `:"Mod#name"` variant
+      # (shadowed-but-present, spec §3.3). Exactly-one resolves; ≥2 (ambiguous)
+      # falls through to `{:global, atom}` here and is caught by R7 (Task 10).
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)
+        if Inductive.family?(env, key), do: {:data, key, [], []}, else: {:ctor, key, []}
+
+      # ≥2 distinct re-keyed origins, no local/unshadowed winner: unqualified use
+      # is ambiguous (R7). The caller turns this marker into an error.
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}
+
       true -> {:global, atom}
     end
   end

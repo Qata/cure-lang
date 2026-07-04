@@ -168,9 +168,87 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Normalize a constructor atom to a registry key via the resolution layer:
+  # a flattened dotted path (`:"Std.Nat.Z"`) via qualified resolution; a bare atom
+  # that is absent from the registry but present under exactly one re-keyed
+  # `:"Mod#Z"` variant (a shadowed-but-present import, spec §3.3) to that variant.
+  # A bare atom still present under its bare key (local winner / unshadowed import)
+  # is returned unchanged — so a redeclared ctor keeps winning (R1).
+  defp resolve_ctor_key(env, cname) do
+    s = Atom.to_string(cname)
+
+    cond do
+      String.contains?(s, ".") ->
+        case Cure.Elab.Resolution.resolve_qualified(env, s, :value) do
+          {:ok, key} -> key
+          :error -> cname
+        end
+
+      Inductive.get_ctor(env, cname) != nil ->
+        cname
+
+      true ->
+        case Cure.Elab.Resolution.resolve_bare_shadowed(env, cname) do
+          {:ok, key} -> key
+          _ -> cname
+        end
+    end
+  end
+
+  # Rewrite a constructor pattern's surface `:name` to the resolved registry key
+  # so downstream re-derivation (`constructor_pattern/1` in `elaborate_matched_branch`
+  # / `elaborate_rematch_branch`) yields the resolved atom, not the stale dotted
+  # one. A bare (non-dotted) name maps to itself, so this is a no-op there.
+  defp rekey_pattern_name({:function_call, pmeta, pargs}, cname),
+    do: {:function_call, Keyword.put(pmeta, :name, Atom.to_string(cname)), pargs}
+
+  defp rekey_pattern_name(pattern, _cname), do: pattern
+
+  # A constructor pattern whose (resolved) ctor belongs to a different family than
+  # the scrutinee. If the ORIGINAL bare name was shadowed off the registry (now
+  # only reachable as a re-keyed `:"Mod#name"` variant, which uniform resolution
+  # just bound `cname` to), report the targeted R5 `:shadowed_ctor` with a
+  # qualified-escape-hatch hint; otherwise it is a genuine cross-family
+  # `:foreign_ctor` (existing behavior, unchanged).
+  defp shadowed_or_foreign_ctor(env, sig, cname0, cname, dname) do
+    case Cure.Elab.Resolution.shadowed_origin(env, cname0) do
+      {:ok, mod_id, _key} ->
+        {:error,
+         {:shadowed_ctor,
+          [
+            ctor: cname0,
+            shadowed_module: mod_id,
+            local_family: dname,
+            local_ctors: Enum.map(Inductive.ctors_of(sig, dname), & &1.name),
+            hint: mod_id <> "." <> Atom.to_string(cname0)
+          ]}}
+
+      :error ->
+        {:error, {:foreign_ctor, cname}}
+    end
+  end
+
   defp elaborate_named_call(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
+
+    resolved =
+      cond do
+        String.contains?(name, ".") ->
+          case Cure.Elab.Resolution.resolve_qualified(env, name, :value) do
+            {:ok, key} -> key
+            :error -> atom
+          end
+
+        Inductive.get_ctor(env, atom) != nil ->
+          atom
+
+        true ->
+          case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+            {:ok, key} -> key
+            _ -> atom
+          end
+      end
 
     cond do
       name == "refl" and length(args) == 1 ->
@@ -182,10 +260,10 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
-      Inductive.get_ctor(env, atom) ->
+      Inductive.get_ctor(env, resolved) ->
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_ctor_app(env, atom, present, ctx)
+            elaborate_ctor_app(env, resolved, present, ctx)
           end
 
         # A nested underdetermined constructor in *inference* position —
@@ -200,11 +278,19 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_ctor_app_infer_bidirectional(env, atom, args, names, ctx) do
+            case elaborate_ctor_app_infer_bidirectional(env, resolved, args, names, ctx) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> orig
             end
         end
+
+      # A bare name provided by ≥2 distinct re-keyed imports with no local/
+      # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
+      # generic paths so an ambiguous name surfaces `:ambiguous_name`, not a
+      # confusing downstream "not found". (`resolved == atom` here: an ambiguous
+      # name has no dot and no unique variant.)
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
 
       # A global whose telescope carries erased (implicit) parameters: insert
       # fresh metavariables for them and solve from the present arguments, the
@@ -534,6 +620,10 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:function_call, meta, args} = expr, expected_core, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
+    # Resolve a qualified (`Std.Nat.S`) or bare-shadowed (`S` under a local `Nat`
+    # shadow, present only as `:"Std.Nat#S"`) constructor to its registry key
+    # (spec §3.3); a non-dotted, registry-present name maps to itself.
+    cres = resolve_ctor_key(env, atom)
 
     cond do
       Keyword.get(meta, :record) ->
@@ -550,7 +640,7 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term}
         end
 
-      Inductive.get_ctor(env, atom) ->
+      Inductive.get_ctor(env, cres) ->
         # Checking-mode constructor: pin erased indices from the expected type (a
         # reconstructed dependent-match branch body like `prim()`/`seq(l,r)` whose
         # indices no present argument determines), then let the kernel re-check the
@@ -566,7 +656,7 @@ defmodule Cure.Elab.Elaborator do
         # working constructor is untouched; either way the kernel re-checks below.
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env),
-               {:ok, term, _type} <- elaborate_ctor_app(env, atom, present, ctx, expected_core) do
+               {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
             {:ok, term}
           end
 
@@ -580,7 +670,7 @@ defmodule Cure.Elab.Elaborator do
               # succeeds*: if it also fails, surface the original inference error
               # (e.g. a GADT `seq`'s genuine `:index_mismatch`), so the fallback is
               # strictly additive and never masks a real diagnostic.
-              case elaborate_ctor_app_bidirectional(env, atom, args, names, ctx, expected_core) do
+              case elaborate_ctor_app_bidirectional(env, cres, args, names, ctx, expected_core) do
                 {:ok, _} = ok -> ok
                 {:error, _} -> orig
               end
@@ -1261,14 +1351,17 @@ defmodule Cure.Elab.Elaborator do
       with_pattern = Keyword.fetch!(arm_meta, :pattern)
       parent_patterns = Keyword.fetch!(arm_meta, :parent_patterns)
 
-      with {:ok, {cname, _vars}} <- constructor_pattern(with_pattern),
+      with {:ok, {cname0, _vars}} <- constructor_pattern(with_pattern),
            {:ok, _subst} <- match_parent_lhs(original_params, parent_patterns) do
+        cname = resolve_ctor_key(env, cname0)
+        with_pattern = rekey_pattern_name(with_pattern, cname)
+
         cond do
           Inductive.get_ctor(env, cname) == nil ->
             {:halt, {:error, {:unknown_pattern_constructor, cname}}}
 
           Inductive.ctor_family(sig, cname) != dname ->
-            {:halt, {:error, {:foreign_ctor, cname}}}
+            {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
 
           Map.has_key?(acc, cname) ->
             {:halt, {:error, {:duplicate_branch, cname}}}
@@ -2773,13 +2866,16 @@ defmodule Cure.Elab.Elaborator do
             {:error, _} = err ->
               {:halt, err}
 
-            {:ok, {cname, _vars}} ->
+            {:ok, {cname0, _vars}} ->
+              cname = resolve_ctor_key(env, cname0)
+              pattern = rekey_pattern_name(pattern, cname)
+
               cond do
                 Inductive.get_ctor(env, cname) == nil ->
                   {:halt, {:error, {:unknown_pattern_constructor, cname}}}
 
                 Inductive.ctor_family(sig, cname) != dname ->
-                  {:halt, {:error, {:foreign_ctor, cname}}}
+                  {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
 
                 Map.has_key?(acc, cname) ->
                   {:halt, {:error, {:duplicate_branch, cname}}}
