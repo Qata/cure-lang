@@ -3359,9 +3359,24 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:unsupported_block_statement, meta}}
 
       Enum.any?(rest, &binds_any?(&1, [name])) ->
-        # A later statement rebinds `name` (shadowing) — surface substitution
-        # would capture it; refuse rather than silently mis-inline.
-        {:error, {:let_shadowed_binder, name}}
+        # A later statement rebinds `name` (shadowing): surface substitution would
+        # capture, so bind `rhs` ONCE under a real λ (a de-Bruijn binder that a
+        # deeper pattern binder correctly shadows) and elaborate the rest against
+        # the goal shifted under it — `(λ name:T. <rest>) rhs`. The outer goal never
+        # mentions `name`, so the β-redex checks back against `expected_core`
+        # exactly, and `rhs` is evaluated once. (The non-shadowing path keeps
+        # surface substitution, which handles a dependent `let` whose later type
+        # needs `name`'s concrete value.)
+        with {:ok, rhs_core, rhs_type} <- elaborate_expr_typed(rhs, names, ctx, env) do
+          dom = Quote.reify(rhs_type, Context.length(ctx))
+          ctx1 = Context.extend(ctx, rhs_type)
+          names1 = [name | names]
+          expected1 = Subst.shift(expected_core, 1, 0)
+
+          with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
+            {:ok, {:app, {:lam, dom, body_core}, rhs_core}}
+          end
+        end
 
       true ->
         rest
