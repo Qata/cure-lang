@@ -29,7 +29,12 @@ defmodule Antigen.Generators.DeltaReduce do
     {{:snd, {:global, :kpair}}, {:ctor, :S, [@z]},
      "δ+ι: snd kpair → S Z (project second — nsnd)"},
     {{:app, {:global, :idnat}, {:fst, {:global, :kpair}}}, @z,
-     "nested: idnat (fst kpair) → Z (two unfolds + a projection)"}
+     "nested: idnat (fst kpair) → Z (two unfolds + a projection)"},
+    # idnat's δ-unfold exposes a `snd kpair` under reduce_unfolded (not the direct
+    # unfold_certified_head path the bare `snd kpair` case takes) — the nsnd arm of
+    # reduce_unfolded's post-unfold ι follow-through.
+    {{:app, {:global, :idnat}, {:snd, {:global, :kpair}}}, {:ctor, :S, [@z]},
+     "nested nsnd: idnat (snd kpair) → S Z (unfold exposes snd, reduce_unfolded)"}
   ]
 
   @spec gen(keyword()) :: Gen.t()
