@@ -158,7 +158,10 @@ defmodule Mix.Tasks.Antigen do
       {3, Antigen.Generators.Primitive.gen()},
       # Propositional-equality fragment — refl / Eq-type / rewrite; the lever for
       # the kernel's eq/refl/rewrite infer+eval+serialize+quote paths.
-      {3, Antigen.Generators.Equality.gen()}
+      {3, Antigen.Generators.Equality.gen()},
+      # Type-formers (universes / Π / Σ / Vec types) — the lever for the kernel's
+      # type-formation sort inference (infer_type_value_sort).
+      {2, Antigen.Generators.TypeFormer.gen()}
     ])
   end
 
