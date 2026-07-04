@@ -4,7 +4,7 @@
 
 **Goal:** Make a module's local `type Nat = Zero | Suc` fully shadow an imported/auto-imported namesake — including its constructors — so `match` coverage no longer demands the imported ctors (`{:missing_branch, :S}`), while keeping the imported family reachable via a qualified escape hatch (`Std.Nat.Z`).
 
-**Architecture:** A new **E-layer resolution module** (`lib/cure/elab/resolution.ex`) sits over the bare-atom registry. Collision detection runs in `program.ex` before elaboration, driven by an **AST-own-declaration provenance scan** (each distinct module's *own* declared family names, so transitively-reached families are not phantom sources). Colliding imported families are **re-keyed** per-slice (`:Nat` → `:"Std.Nat#Nat"`, `:Z` → `:"Std.Nat#Z"`) *before* the import merge, and residual bare copies are dropped before the local module merges on top — so `Inductive.ctors_of/2` naturally returns the disowned set with zero kernel change. Qualified references and shadow diagnostics are **derived from the already-re-keyed env** (no new parameter threading, no core `Env` field). The only C-layer touch strips the `Mod#` prefix from a runtime constructor tag.
+**Architecture:** A new **E-layer resolution module** (`lib/cure/elab/resolution.ex`) sits over the bare-atom registry. Collision detection runs in `program.ex` before elaboration, driven by an **AST-own-declaration provenance scan over the full transitive import closure** (each reachable module's *own* declared family names — not just direct imports — so a family owned by a module reached only transitively is still correctly attributed, while transitively-reached DUPLICATE copies of the same module are not phantom sources). Colliding imported families are **re-keyed** per-slice (`:Nat` → `:"Std.Nat#Nat"`, `:Z` → `:"Std.Nat#Z"`) *before* the import merge, and residual bare copies are dropped (by family name, across the whole merged env, regardless of which slice contributed them) before the local module merges on top — so `Inductive.ctors_of/2` naturally returns the disowned set with zero kernel change. Qualified references and shadow diagnostics are **derived from the already-re-keyed env** (no new parameter threading, no core `Env` field). The only C-layer touch teaches codegen's purely-syntactic call dispatch to recognize a qualified constructor reference (`Std.Nat.Z()`) BEFORE its generic qualified-call (remote-function-call) branch — codegen never sees the elaborator's re-keyed atoms at all, so no runtime-tag stripping logic is needed once the dispatch is corrected.
 
 **Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/*`) + kernel registry (`lib/cure/core/*`, read-only for term shapes); differential oracle (`mix cure.oracle`, `idris2`); ExUnit.
 
@@ -14,7 +14,7 @@
 - **No core `Env` struct field added.** The resolution info is either baked into the re-keyed env's existing maps or derived from them on demand. `lib/cure/core/env.ex` (`inductive.ex`'s `Cure.Core.Env`) is untouched.
 - **R6 non-regression is byte-for-byte on the non-collision path.** Every currently-green program must elaborate identically. Baseline: `mix test` at 2843/0 (or higher), `mix test test/oracle_replay_test.exs` green.
 - **Auto-prelude skip is RETAINED (lowest-risk choice per spec §3.1).** `auto_prelude_imports/1` keeps skipping `Std.Bool`/`Std.Nat` when the module declares a same-named type. Re-keying is validated against **explicit `use`**. Existing `test/cure/elab/auto_prelude_test.exs` must stay green.
-- **Runtime constructor tags stay bare** (AtomVM value invariant): codegen emits `Z` for a re-keyed `:"Std.Nat#Z"`.
+- **Runtime constructor tags stay bare** (AtomVM value invariant): codegen emits the same bare `:z` tag for `Std.Nat.Z()` (qualified/escape-hatch) as it does for a plain unqualified `Z()` — achieved by recognizing the qualified constructor call syntactically before codegen's generic qualified-call (remote-call) dispatch, not by stripping a registry-internal separator codegen never sees (see Task 11).
 - **Ghost-writer commits:** `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, NO `Co-Authored-By`, no Claude signature.
 - **Explicit-pathspec staging only:** `git add -- <path>` (never `-A`/`.`). A concurrent agent may share the worktree.
 - **One build at a time.** Never run two `mix` suites concurrently. Prefer scoped `mix test <file>`; run the full suite once, alone, at the gate.
@@ -24,14 +24,14 @@
 
 ## File Structure
 
-- **Create** `lib/cure/elab/resolution.ex` — `Cure.Elab.Resolution`: the whole resolution layer. Pure functions over `Cure.Core.Env`. Responsibilities: (1) `rekey_term/2` Core-term atom substitution; (2) `rekey_module_env/3` re-key one module's owned families/ctors/defs; (3) `classify/2` collision detection over AST provenance; (4) `resolve_qualified/3` dotted-path → registry key; (5) `shadowed_origin/2` + `ambiguous?/2` diagnostic helpers.
+- **Create** `lib/cure/elab/resolution.ex` — `Cure.Elab.Resolution`: the whole resolution layer. Pure functions over `Cure.Core.Env`. Responsibilities: (1) `rekey_term/2` Core-term atom substitution; (2) `rekey_module_env/3` re-key one module's owned families/ctors/defs; (3) `classify/2` collision detection over AST provenance; (4) `resolve_qualified/3` dotted-path → registry key; (5) `shadowed_origin/2` + `ambiguous_modules/2` diagnostic helpers.
 - **Modify** `lib/cure/elab/program.ex` — `check_ast/1` and the import pipeline: build distinct per-module slices, classify, re-key losers, drop residual bare keys, merge local on top.
 - **Modify** `lib/cure/elab/elaborator.ex` — resolve qualified ctor keys at `constructor_pattern` callers (`partition_arms`, `partition_rematch_arms`) and `elaborate_named_call`; the R5 `:shadowed_ctor` diagnostic at the unknown-constructor gate; R7 `:ambiguous_name` on bare value lookup.
 - **Modify** `lib/cure/elab/declarations.ex` — `idx_to_core` `{:function_call,…}` and `{:attribute_access,…}` clauses + `resolve_index_name` for qualified type-slot references and R7 on bare type lookup.
-- **Modify** `lib/cure/compiler/codegen.ex` — `constructor_tag/1` strips a `Mod#` prefix.
+- **Modify** `lib/cure/compiler/codegen.ex` — `compile_function_call/3` gains a dispatch clause recognizing a qualified constructor call (e.g. `Std.Nat.Z()`) before its generic qualified/remote-call branch; `constructor_tag/1` itself is unmodified.
 - **Create** `test/cure/elab/resolution_test.exs` — unit tests for the `Resolution` module (rekey_term, rekey_module_env, classify, resolve_qualified).
 - **Create** `test/cure/elab/type_shadowing_test.exs` — end-to-end `Program.elaborate/1` behavioral tests (R1–R5, R7).
-- **Create** `test/oracle/shadow/` — oracle cluster: `shadow01`–`shadow07` `.cure`/`.idr` pairs + generated `verdicts.json`.
+- **Create** `test/oracle/shadow/` — oracle cluster: `shadow01`–`shadow08` `.cure`/`.idr` pairs (shadow07 is import-vs-import ambiguity, added last in Task 10; shadow08 is the transitive-import case, added in Task 5) + generated `verdicts.json`.
 
 ---
 
@@ -558,11 +558,11 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 - Produces: a re-keyed merged env from `check_ast/1`. After this task, `Inductive.ctors_of(sig, :Nat)` on a shadowing module returns only the local ctors.
 
 **Design (per spec §3.1/§3.2, robust to transitive imports):**
-1. Resolve `auto_prelude_imports(ast) ++ imports(ast)` to distinct `{module_id, path}` (dedup by `module_id`).
-2. For each distinct module, `owned_family_names(path)` = family names declared in *that module's own AST* (reuse the `declared_type_names` scan on the imported source). Build `family_owners`.
+1. Resolve `auto_prelude_imports(ast) ++ imports(ast)` to distinct `{module_id, path}` (dedup by `module_id`) — this is `distinct_import_modules/1`, used for the SLICE list (step 4 below).
+2. **Ownership must be computed over the full transitive import closure, not just the direct list.** A module reached only *transitively* — e.g. `Std.Nat`, never `use`d directly but pulled in because `priv/std/vector.cure` itself does `use Std.Nat` — still OWNS the family it declares (`Nat`), and a local `type Nat` must collide with it exactly as if the program had written `use Std.Nat` itself. If ownership were scanned only over `distinct_import_modules/1`'s direct list, a program with `use Std.Vector` (no explicit `use Std.Nat`) plus a local `type Nat` would never see `Nat` as a key of `family_owners` at all (Vector's own AST doesn't declare `Nat`) — no collision, no re-key, and `Inductive.ctors_of(:Nat)` would still return the imported `Z`/`S` alongside the local ctors, reproducing the exact `{:missing_branch,_}` bug this task exists to fix. So: walk the **full transitive module closure** (`transitive_import_modules/1`, a BFS over each visited module's own `imports/1`, deduped by `module_id`, cycle-safe) and scan `owned_family_names(path)` (family names declared in *that module's own AST*) for every module in the closure — not just the direct ones. Build `family_owners` from that.
 3. `classify(family_owners, declared_type_names(ast))`.
-4. Build each distinct module's per-module env slice; re-key that slice's owned loser families via `rekey_module_env/3`; merge all slices.
-5. **Drop residual bare collision keys** from the merged-imports env (transitive copies that survived re-keying): for every colliding family name, delete any leftover bare family key + bare ctors pointing to it. This guarantees the local module merges clean.
+4. Build each **directly-imported** module's per-module env slice (`distinct_import_modules/1` — nested/transitive modules are pulled in automatically as part of their parent's own recursive `module_slice_env`, exactly as today); re-key that slice's owned loser families via `rekey_module_env/3`; merge all slices.
+5. **Drop residual bare collision keys** from the merged-imports env (transitive copies that survived re-keying): for every colliding family name, delete any leftover bare family key + bare ctors pointing to it. This guarantees the local module merges clean. Because this step operates on the *merged* env by family **name**, not by which slice contributed the bare copy, it correctly cleans up a transitively-carried bare `Nat`/`Z`/`S` that arrived via `Std.Vector`'s own slice even though `Std.Vector` itself was never re-keyed — as long as step 2 correctly put `Nat` in `family_owners` (which is exactly what the transitive-closure scan buys).
 6. Merge `seeded` (builtins) + local declarations on top, exactly as today.
 
 - [ ] **Step 1: Add the shadow02 + shadow03 behavioral tests (red)**
@@ -596,19 +596,43 @@ Add to `test/cure/elab/type_shadowing_test.exs`:
 
     assert {:ok, _env} = elaborate(src)
   end
+
+  test "R1 via transitive import: local `Nat` collides with a family reached only through `use Std.Vector` (no explicit `use Std.Nat`)" do
+    # priv/std/vector.cure itself does `use Std.Nat` (confirmed by reading the
+    # source) — Nat is reached here purely transitively. Collision detection
+    # must attribute `Nat` to its OWNING module (Std.Nat) even though Std.Nat
+    # is never a direct import of this program, or this local shadow silently
+    # fails to disown the imported Z/S (the exact bug this plan fixes, one
+    # import-hop removed).
+    src = """
+    mod TransitiveShadow
+      use Std.Vector
+      type Nat = Zero | Suc(Nat)
+      fn two() -> Nat = Suc(Suc(Zero()))
+      fn pred(n: Nat) -> Nat = match n
+        Zero() -> Zero()
+        Suc(m) -> m
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
 ```
 (The `R2` test's `Std.Nat` return type + unqualified `S`/`Z` referring to the imported family will fully pass only after Tasks 7–8; here it asserts the *coverage*/registry side is unblocked. If it still errors on the qualified `Std.Nat` return type at this task, split it: keep only the `local_one` half green now and move the `imported_one` half to Task 8. Run first and see which applies before committing.)
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `mix test test/cure/elab/type_shadowing_test.exs`
-Expected: FAIL — R1a/R1-full still `{:missing_branch, _}`.
+Expected: FAIL — R1a/R1-full/the transitive-import case still `{:missing_branch, _}` (the transitive case fails even after a naive direct-only `family_owners` scan — that is precisely the gap step 3 below must close).
 
 - [ ] **Step 3: Add helpers + rewrite the import pipeline in `program.ex`**
 
-Add these private helpers to `lib/cure/elab/program.ex` (near `import_env/2`). `resolve_module_id/1` derives the canonical dotted id + path from an import source; reuse the existing `import_source_path/1` for path resolution.
+Add these private helpers to `lib/cure/elab/program.ex` (near `import_env/2`). Both `distinct_import_modules/1` and `transitive_import_modules/1` reuse the existing `import_source_path/1` for canonical-id + path resolution.
 ```elixir
-  # Distinct {module_id, path} for every import source, deduped by module_id.
+  # Distinct {module_id, path} for every DIRECT import source, deduped by
+  # module_id. Used for the merged-slice list (§3.2 re-keying/merging operates
+  # only at this granularity — nested imports are pulled in automatically by
+  # each direct module's own recursive `module_slice_env`).
   defp distinct_import_modules(sources) do
     sources
     |> Enum.map(&import_source_path/1)
@@ -617,6 +641,45 @@ Add these private helpers to `lib/cure/elab/program.ex` (near `import_env/2`). `
       :not_stdlib -> []
     end)
     |> Enum.uniq_by(fn {mod_id, _path} -> mod_id end)
+  end
+
+  # Every module reachable via the import graph (direct AND transitive),
+  # deduped by module_id, cycle-safe (BFS with a `seen` set). Collision
+  # DETECTION (family_owners, below) must scan this closure, not just the
+  # direct list: a family declared in a module reached only transitively
+  # (e.g. Std.Nat, pulled in solely because `priv/std/vector.cure` itself
+  # does `use Std.Nat`) still needs to be attributed to its owning module, or
+  # a local declaration of the same name is never classified as a collision
+  # and the disowning never happens for that family — see the Design note
+  # above. `distinct_import_modules/1` remains the right list for slice-
+  # building/re-keying/merging; only ownership-scanning needs the closure.
+  defp transitive_import_modules(sources), do: bfs_import_modules(sources, MapSet.new(), [])
+
+  defp bfs_import_modules([], _seen, acc), do: Enum.reverse(acc)
+
+  defp bfs_import_modules([source | rest], seen, acc) do
+    case import_source_path(source) do
+      {:ok, module_name, path} ->
+        mod_id = to_string(module_name)
+
+        if MapSet.member?(seen, mod_id) do
+          bfs_import_modules(rest, seen, acc)
+        else
+          nested =
+            with {:ok, src} <- File.read(path),
+                 {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+                 {:ok, nested_ast} <- Parser.parse(tokens, emit_events: false) do
+              imports(nested_ast)
+            else
+              _ -> []
+            end
+
+          bfs_import_modules(nested ++ rest, MapSet.put(seen, mod_id), [{mod_id, path} | acc])
+        end
+
+      :not_stdlib ->
+        bfs_import_modules(rest, seen, acc)
+    end
   end
 
   # Family names DECLARED in a module's own source (transitive imports excluded).
@@ -658,8 +721,12 @@ Add these private helpers to `lib/cure/elab/program.ex` (near `import_env/2`). `
     sources = auto_prelude_imports(ast) ++ imports(ast)
     modules = distinct_import_modules(sources)
 
+    # Ownership scans the FULL transitive closure (not `modules`, which is
+    # direct-only) — see the Design note + `transitive_import_modules/1` doc.
     family_owners =
-      Enum.reduce(modules, %{}, fn {mod_id, path}, acc ->
+      sources
+      |> transitive_import_modules()
+      |> Enum.reduce(%{}, fn {mod_id, path}, acc ->
         Enum.reduce(owned_family_names(path), acc, fn name, a ->
           Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
         end)
@@ -712,14 +779,14 @@ Replace `check_ast/1` (`lib/cure/elab/program.ex:29-36`):
 - [ ] **Step 5: Run the shadow tests**
 
 Run: `mix test test/cure/elab/type_shadowing_test.exs`
-Expected: PASS for R1a and R1-full (shadow01/shadow02). R2 per the Step-1 note (fully green after Task 8; keep the `local_one` half green now).
+Expected: PASS for R1a, R1-full (shadow01/shadow02), and the transitive-import case. R2 per the Step-1 note (fully green after Task 8; keep the `local_one` half green now).
 
 - [ ] **Step 6: Run the auto-prelude + oracle-replay regression guard (R6)**
 
 Run: `mix test test/cure/elab/auto_prelude_test.exs test/oracle_replay_test.exs`
 Expected: PASS (auto-prelude skip retained; no probe regressed). If any diamond/auto+explicit case regresses, the dedup or residual-drop is wrong — fix before committing.
 
-- [ ] **Step 7: Add the shadow02 + shadow03 oracle probes**
+- [ ] **Step 7: Add the shadow02 + shadow03 + shadow08 oracle probes**
 
 `test/oracle/shadow/shadow02_full_shadow.cure`:
 ```
@@ -764,15 +831,41 @@ localOne : Nat'
 localOne = Suc Zero
 ```
 
+`test/oracle/shadow/shadow08_transitive_shadow.cure` (the transitive-import case — the real `Std.Vector`/`Std.Nat` stdlib, no scratch modules needed):
+```
+mod TransitiveShadow
+  use Std.Vector
+  type Nat = Zero | Suc(Nat)
+  fn two() -> Nat = Suc(Suc(Zero()))
+  fn pred(n: Nat) -> Nat = match n
+    Zero() -> Zero()
+    Suc(m) -> m
+end
+```
+`test/oracle/shadow/shadow08_transitive_shadow.idr`:
+```idris
+%default total
+
+data Nat' = Zero | Suc Nat'
+
+two : Nat'
+two = Suc (Suc Zero)
+
+pred' : Nat' -> Nat'
+pred' Zero = Zero
+pred' (Suc m) = m
+```
+(Idris has no notion of "transitively imported" here — its own prelude `Nat` is simply always in scope, same as shadow01/02's modeling; the point under test is Cure-side only: the local shadow must disown the imported family even though it is reached solely via `Std.Vector`'s own `use Std.Nat`, not a direct `use Std.Nat` of this module.)
+
 - [ ] **Step 8: Regenerate verdicts and confirm `same`**
 
 Run: `mix cure.oracle shadow`
-Expected: `verdicts.json` written with `shadow01`/`shadow02`/`shadow03` = `{"cure":"accept","idris":"accept","relation":"same"}`.
+Expected: `verdicts.json` written with `shadow01`/`shadow02`/`shadow03`/`shadow08` = `{"cure":"accept","idris":"accept","relation":"same"}`.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add -- lib/cure/elab/program.ex test/cure/elab/type_shadowing_test.exs test/oracle/shadow/shadow02_full_shadow.cure test/oracle/shadow/shadow02_full_shadow.idr test/oracle/shadow/shadow03_unshadowed_visible.cure test/oracle/shadow/shadow03_unshadowed_visible.idr test/oracle/shadow/verdicts.json
+git add -- lib/cure/elab/program.ex test/cure/elab/type_shadowing_test.exs test/oracle/shadow/shadow02_full_shadow.cure test/oracle/shadow/shadow02_full_shadow.idr test/oracle/shadow/shadow03_unshadowed_visible.cure test/oracle/shadow/shadow03_unshadowed_visible.idr test/oracle/shadow/shadow08_transitive_shadow.cure test/oracle/shadow/shadow08_transitive_shadow.idr test/oracle/shadow/verdicts.json
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(elab): re-key shadowed imports on collision — fixes missing_branch (R1/R2)"
 ```
 
@@ -1000,9 +1093,60 @@ In `lib/cure/elab/elaborator.ex:171`, after `atom = String.to_atom(name)`, add a
           with {:ok, present} <- map_present_args(args, names, ctx, env) do
             elaborate_ctor_app(env, resolved, present, ctx)
           end
+
+        case result do
+          {:ok, _, _} = ok ->
+            ok
+
+          {:error, _} = orig ->
+            case elaborate_ctor_app_infer_bidirectional(env, resolved, args, names, ctx) do
+              {:ok, _, _} = ok -> ok
+              {:error, _} -> orig
+            end
+        end
         ...
 ```
-(Change ONLY the `Inductive.get_ctor(env, atom)` guard and the `elaborate_ctor_app(env, atom, …)` call in that ctor branch to use `resolved`. Every other use of `atom` — the global-def path, error messages — stays `atom` so a non-dotted name is byte-for-byte unchanged: `resolved == atom` when `name` has no dot.)
+(Change the `Inductive.get_ctor(env, atom)` guard, the `elaborate_ctor_app(env, atom, …)` call, **and** the `elaborate_ctor_app_infer_bidirectional(env, atom, args, names, ctx)` retry call in that ctor branch to use `resolved` — all three, not just the first two. The retry is reached whenever the primary `elaborate_ctor_app` fails because a nested argument is underdetermined until an implicit parameter is solved (the existing `Cons(Z(), Nil())`-style case, e.g. a qualified `Std.Vector.prepend(x, Std.Vector.prepend(y, Std.Vector.empty()))` where the length index is erased/inferred); passing the stale, still-dotted `atom` there would silently break qualified resolution for exactly this shape. Every other use of `atom` — the global-def path, error messages — stays `atom` so a non-dotted name is byte-for-byte unchanged: `resolved == atom` when `name` has no dot.)
+
+- [ ] **Step 4b: Add a targeted test for the bidirectional-retry path**
+
+`elaborate_ctor_app_infer_bidirectional/5` (`elaborator.ex:3821`) is reached only
+when a constructor call's own `map_present_args`/`elaborate_ctor_app` fails on
+up-front inference — its own doc comment names the trigger precisely: "a nested
+underdetermined constructor as a bare argument, `Cons(Z(), Nil())`, whose inner
+`Nil()` no expected type reaches," and it applies **only to a parametric
+family** (a non-parametric family like `Std.Nat`'s `Zero|Suc` never needs it —
+there is no family parameter to solve, so its constructors never take this
+path). `Std.Vector(a, n)` is the only parametric family in the stdlib, so this
+scenario can only be exercised through it. Do not hand-copy an unverified
+`.cure` program here — construct it empirically:
+1. Start from the exact known-working nested-constructor shape already proven
+   to hit this class of issue in `test/cure/elab/dependent_construction_test.exs`
+   (its `@vec` fixture + `prepend(Z(), prepend(S(Z()), empty()))`) and
+   `test/cure/elab/cross_arg_implicit_test.exs`.
+2. Re-derive a variant where the OUTER constructor call under test is written
+   **qualified** (`Std.Vector.prepend(...)`/`Std.Vector.empty()`, after `use
+   Std.Vector`, optionally combined with a local `type Nat` shadow to also
+   exercise R1+R3 together) and appears in a position that is elaborated by
+   *inference*, not by checking against an annotated return type (the checking
+   path routes through the sibling `elaborate_ctor_app_bidirectional` instead,
+   which this task does not touch and does not need `resolved` threaded into,
+   since that path already receives whatever key `constructor_pattern`/its own
+   caller resolved).
+3. Run it. If it does not yet fail before the fix, that means this exact
+   invocation doesn't reach the retry branch — adjust (nest one level deeper,
+   or move the call into an argument position of another call) until it does.
+4. Add the resulting program as a red test asserting `{:ok, _env} =
+   elaborate(src)` in `test/cure/elab/type_shadowing_test.exs`.
+5. Confirm it is red for the RIGHT reason: temporarily revert only the
+   `elaborate_ctor_app_infer_bidirectional(env, resolved, …)` argument back to
+   `atom` and re-run — the test must fail specifically then (proving it
+   exercises the retry call, not some unrelated path), then re-apply the fix
+   and confirm green.
+This is the same "verify against the actual code, adjust the specifics"
+discipline already used in Task 7 Step 2 and Task 11 Step 5 — the mechanism
+and verification method are exact; the literal source text is intentionally
+left for empirical construction rather than asserted here unverified.
 
 - [ ] **Step 5: Run the value/pattern half green**
 
@@ -1027,7 +1171,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 **Interfaces:**
 - Consumes: `Resolution.resolve_qualified/3`.
-- Produces: qualified type-slot resolution for both the nullary (shape (a), `attribute_access`) and parameterized (shape (b), `function_call`) cases.
+- Produces: qualified type-slot resolution for the nullary (shape (a), `attribute_access`) case, exercised end-to-end by shadow04/shadow05. The `function_call` clause patch also covers a qualified *parameterized* type reference (shape (b), e.g. `Std.Vector(Nat)`) in principle, but **this sub-case is unverified against the actual grammar and no test in this plan exercises it** — tracing `parse_type_expr` (parser.ex ~3961) suggests a qualified parameterized type reference does not actually parse as a `function_call` today (its `Name(A,B)` branch only fires when `(` follows the single identifier just consumed, not after a full dotted chain), so this patch may be inert dead code for that shape. Do not treat it as delivering R3/R4 for parameterized qualified types — only the nullary case is claimed as covered by this task's own tests.
 
 - [ ] **Step 1: Write the shadow05 behavioral test (red)**
 
@@ -1411,16 +1555,47 @@ Add to `test/cure/elab/type_shadowing_test.exs` (using the real stdlib is cleane
     end
   end
 ```
-Then, wherever `resolve_index_name/2`'s result is consumed (the `{:variable, …}` clause of `idx_to_core`), add a clause that turns `{:ambiguous_name, …}` into `{:error, {:ambiguous_name, name, mods}}`. Locate the caller (search `resolve_index_name(` in `declarations.ex`) and thread the error through its `with`/`case`.
+`resolve_index_name/2`'s only caller is the `{:variable, _meta, name}` clause of `idx_to_core` (`declarations.ex:719-724`):
+```elixir
+  defp idx_to_core({:variable, _meta, name}, scope, _fam, env) do
+    case Enum.find_index(scope, &(&1 == name)) do
+      nil -> {:ok, resolve_index_name(name, env)}
+      index -> {:ok, {:var, index}}
+    end
+  end
+```
+Change the `nil ->` branch to detect the ambiguous case before wrapping in `{:ok, _}`:
+```elixir
+  defp idx_to_core({:variable, _meta, name}, scope, _fam, env) do
+    case Enum.find_index(scope, &(&1 == name)) do
+      nil ->
+        case resolve_index_name(name, env) do
+          {:ambiguous_name, atom, mods} -> {:error, {:ambiguous_name, atom, mods}}
+          node -> {:ok, node}
+        end
+
+      index ->
+        {:ok, {:var, index}}
+    end
+  end
+```
+(A local-scope hit — `index -> {:ok, {:var, index}}` — is unaffected, so a bound variable named the same as an ambiguous global still shadows it correctly, unchanged from today.)
 
 - [ ] **Step 5: Teach `elaborate_named_call/5` to raise ambiguity (value slot)**
 
-In `elaborate_named_call/5`, before the global-def fallback (the branch that treats `atom` as an unknown global / raises `:unknown_global`), add:
+`elaborate_named_call/5`'s `cond` (post-Task-7) has no single labeled "unknown global" branch to insert before — its actual final shape is `refl` → `Inductive.get_ctor(env, resolved)` (Task 7) → `implicit_def?(env, atom)` → a lambda-argument bidirectional branch → a catch-all `true ->` that always attempts generic elaboration (with its own bidirectional retry on failure; `elaborator.ex:242-267`). None of those later branches is a clean insertion point — the ambiguity check must run *before all of them*, right after the ctor branch, so an ambiguous bare name is caught before it falls through to `implicit_def?`/the generic path and produces an unrelated, confusing error instead of `:ambiguous_name`. Add the new clause immediately after the (Task-7-patched) `Inductive.get_ctor(env, resolved) -> ...` branch and its retry, using the ORIGINAL unresolved `atom` (an ambiguous name has no dot — it is a plain bare name with ≥2 re-keyed origins and no winner, so `resolved == atom` here always; `ambiguous_modules/2` is keyed on the bare atom regardless):
 ```elixir
+      Inductive.get_ctor(env, resolved) ->
+        ...
+        # (Task 7's ctor branch + retry, unchanged)
+
       length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
         {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
+
+      implicit_def?(env, atom) ->
+        ...
 ```
-(Insert as a `cond` clause after the ctor branch, before the global fallback.)
+(Inserted as a new `cond` clause between the ctor branch and `implicit_def?(env, atom)`.)
 
 - [ ] **Step 6: Run the unit + behavioral tests**
 
@@ -1445,17 +1620,34 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 ---
 
-### Task 11: Codegen — strip `Mod#` prefix from runtime constructor tags
+### Task 11: Codegen — recognize a qualified constructor call BEFORE the generic qualified-call dispatch
+
+**Corrected mechanism (supersedes an earlier "strip `Mod#` prefix in `constructor_tag/1`" draft — verified wrong against the source, see below).** `lib/cure/compiler/codegen.ex` has **zero** references to `Cure.Core`/`Cure.Elab` anywhere in the file — it never sees the elaborator's internal `Mod#Name`-rekeyed `Env` atoms at all; it compiles directly off the raw parser AST using purely syntactic string heuristics (`constructor?/1` is itself just a PascalCase check on a string). So a `Mod#Ctor`-shaped atom never reaches codegen, and the originally-planned `constructor_tag/1` "#"-stripping fix targets data that cannot occur.
+
+The REAL problem is upstream of `constructor_tag/1` entirely: `compile_function_call/3` (codegen.ex ~1126) has this dispatch —
+```elixir
+      form =
+        cond do
+          # Qualified call: Mod.fun(args) -- must come before constructor check
+          String.contains?(name, ".") ->
+            compile_qualified_call(name, arg_forms, line)
+
+          # ADT constructor: PascalCase name -> tagged tuple
+          constructor?(name) ->
+            compile_constructor_call(name, arg_forms, line)
+          ...
+```
+— any dotted call `name` (e.g. the parser-flattened `"Std.Nat.Z"` from `Std.Nat.Z()`, per §3.6(b)) is routed to `compile_qualified_call/3` **before** the constructor check ever runs. `compile_qualified_call/3` unconditionally treats it as a remote function call (`'Cure.Std.Nat':z(...)`, splitting the LAST segment off as a function name via `mangle_fn_name/1`) — never as a tagged tuple. So `Std.Nat.Z()`, written anywhere in a Cure program today (and unchanged by the originally-planned patch), compiles to a call to a non-existent remote function, not `{z}`. `constructor_tag/1` is never even reached for a qualified constructor call.
 
 **Files:**
-- Modify: `lib/cure/compiler/codegen.ex:1972-1976` (`constructor_tag/1`).
+- Modify: `lib/cure/compiler/codegen.ex` — `compile_function_call/3`'s `cond` (~1161-1169), add one clause before the `String.contains?(name, ".")` branch. `constructor_tag/1` itself is **unmodified** (once the dispatch is fixed, it only ever receives a bare segment, exactly like today's unqualified case).
 - Create: `test/cure/compiler/shadow_codegen_test.exs`
 
 **Interfaces:**
-- Consumes: a re-keyed ctor atom `:"Std.Nat#Z"` reaching codegen on the escape-hatch path.
-- Produces: a bare runtime tag `:z` (the underscored bare name), identical to what an unshadowed `Z` produces.
+- Consumes: `Cure.Compiler.Codegen.compile_expr/1` (existing public entry, the simplest way to reach `compile_function_call/3` in isolation — no `Env`/elaboration needed, since the whole fix is syntactic) and `compile_module/2` (existing public entry — NOT `compile/1`, which does not exist).
+- Produces: a bare tagged-tuple form `{:tuple, _, [{:atom, _, :z}]}` for a qualified nullary constructor call `Std.Nat.Z()`, matching what the unqualified `Z()` already produces.
 
-**Invariant (spec §3.5):** the BEAM value tag must be bare so AtomVM's value format is unchanged and a re-keyed ctor is runtime-indistinguishable from its bare form.
+**Invariant (spec §3.5):** the BEAM value tag must be bare so AtomVM's value format is unchanged and a qualified/escape-hatch constructor reference is runtime-indistinguishable from its bare form.
 
 - [ ] **Step 1: Write the failing codegen unit test**
 
@@ -1464,53 +1656,82 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 defmodule Cure.Compiler.ShadowCodegenTest do
   use ExUnit.Case, async: true
 
-  test "constructor_tag strips a Mod# prefix so the runtime tag is bare" do
-    # A re-keyed ctor atom must produce the SAME tag as its bare form.
-    assert Cure.Compiler.Codegen.constructor_tag(:"Std.Nat#Z") ==
-             Cure.Compiler.Codegen.constructor_tag(:Z)
+  alias Cure.Compiler.Codegen
+
+  test "a qualified nullary constructor call compiles to the same tagged tuple as its bare form" do
+    {:ok, qualified_form} = Codegen.compile_expr({:function_call, [name: "Std.Nat.Z"], []})
+    {:ok, bare_form} = Codegen.compile_expr({:function_call, [name: "Z"], []})
+
+    assert qualified_form == bare_form
+    assert {:tuple, _line, [{:atom, _, :z}]} = qualified_form
+  end
+
+  test "a qualified constructor call with args compiles to a tagged tuple, not a remote call" do
+    {:ok, form} =
+      Codegen.compile_expr({:function_call, [name: "Std.Nat.S"], [{:function_call, [name: "Std.Nat.Z"], []}]})
+
+    assert {:tuple, _line, [{:atom, _, :s}, {:tuple, _, [{:atom, _, :z}]}]} = form
+  end
+
+  test "a qualified NON-constructor call (lowercase tail) is still a remote call, unchanged" do
+    {:ok, form} = Codegen.compile_expr({:function_call, [name: "Std.Nat.plus"], []})
+    assert {:call, _line, {:remote, _, {:atom, _, _mod}, {:atom, _, :plus}}, []} = form
   end
 end
 ```
-(If `constructor_tag/1` is private, either make it public with `@doc false` for the test, or assert through a higher-level emit function that produces the tuple form. Prefer exposing `constructor_tag/1` as `@doc false` public — minimal surface, directly tests the invariant.)
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `mix test test/cure/compiler/shadow_codegen_test.exs`
-Expected: FAIL — `:"Std.Nat#Z"` underscores to `:"std/nat#z"`-ish, not `:z`; the two tags differ (and/or the function is private).
+Expected: FAIL — the first two tests currently produce a `{:call, _, {:remote, ...}, ...}` form (a bogus remote call to a non-existent `z`/`s` function), not a tagged tuple; they do not match `bare_form`/the expected tuple shape.
 
-- [ ] **Step 3: Strip the prefix in `constructor_tag/1`**
+- [ ] **Step 3: Add the qualified-constructor dispatch clause**
 
-`lib/cure/compiler/codegen.ex:1972`:
+`lib/cure/compiler/codegen.ex`, in `compile_function_call/3`'s `cond` (~1161):
 ```elixir
-  @doc false
-  def constructor_tag(name) do
-    name
-    |> Atom.to_string()
-    |> strip_module_prefix()
-    |> Macro.underscore()
-    |> String.to_atom()
-  end
+      form =
+        cond do
+          # A qualified CONSTRUCTOR reference (escape hatch, e.g. `Std.Nat.Z()`):
+          # the last dotted segment is PascalCase, i.e. a constructor by the
+          # same bare-name heuristic `constructor?/1` already uses everywhere
+          # else in this module. Checked BEFORE the generic qualified-call
+          # branch below, or a qualified constructor call compiles to a bogus
+          # remote call to a non-existent function instead of a tagged tuple.
+          # Codegen never sees the elaborator's internal `Mod#Name`-keyed Env
+          # atoms (this module has no dependency on `Cure.Core`/`Cure.Elab` at
+          # all — verified) — it works purely off the surface AST string, so
+          # the bare name it needs is just the last segment of the dotted path.
+          String.contains?(name, ".") and constructor?(qualified_ctor_tail(name)) ->
+            compile_constructor_call(qualified_ctor_tail(name), arg_forms, line)
 
-  # A re-keyed ctor atom is "<Module>#<Ctor>"; the runtime tag uses only <Ctor>
-  # so the BEAM/AtomVM value format is identical to the unshadowed constructor.
-  defp strip_module_prefix(s) do
-    case String.split(s, "#", parts: 2) do
-      [_mod, ctor] -> ctor
-      [bare] -> bare
-    end
-  end
+          # Qualified call: Mod.fun(args) -- must come before constructor check
+          String.contains?(name, ".") ->
+            compile_qualified_call(name, arg_forms, line)
+
+          # ADT constructor: PascalCase name -> tagged tuple
+          constructor?(name) ->
+            compile_constructor_call(name, arg_forms, line)
+          ...
 ```
+Add the helper near `compile_constructor_call/3`:
+```elixir
+  # The final dotted segment of a qualified surface name, e.g.
+  # "Std.Nat.Z" -> "Z". Used only to decide/extract a qualified CONSTRUCTOR
+  # reference; codegen has no Env, so this is a pure string operation.
+  defp qualified_ctor_tail(name), do: name |> String.split(".") |> List.last()
+```
+(`constructor_tag/1` is untouched — it now only ever receives a bare segment like `"Z"`, exactly as it does for an unqualified constructor today, so no separator-stripping logic is needed there at all.)
 
 - [ ] **Step 4: Run to verify pass**
 
 Run: `mix test test/cure/compiler/shadow_codegen_test.exs`
-Expected: PASS.
+Expected: PASS (all three tests, including the "still a remote call" regression check).
 
 - [ ] **Step 5: Host codegen sanity for the escape-hatch path (gate item 4)**
 
-Add a test that compiles the shadow04 program to Erlang forms and asserts the emitted tag for the imported constructor is bare. Add to `test/cure/compiler/shadow_codegen_test.exs`:
+Compile the shadow04 program end-to-end through the real `compile_module/2` entry point and assert the module assembles with no error and no leftover dotted/qualified atom in the emitted forms. Add to `test/cure/compiler/shadow_codegen_test.exs`:
 ```elixir
-  test "a program using Std.Nat.Z emits a bare :z tag" do
+  test "a program using Std.Nat.Z compiles to a module with a bare :z tag, not a dotted/remote artifact" do
     src = """
     mod EscapeCodegen
       use Std.Nat
@@ -1521,16 +1742,15 @@ Add a test that compiles the shadow04 program to Erlang forms and asserts the em
 
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-    {:ok, forms} = Cure.Compiler.Codegen.compile(ast)
+    {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
 
-    # The emitted forms contain the bare atom :z somewhere (imported ctor tag),
-    # and never the qualified :"std/nat#z"-style atom.
-    flat = :erlang.term_to_binary(forms)
-    refute String.contains?(inspect(forms), "#")
-    assert flat != <<>>
+    dump = inspect(forms)
+    refute String.contains?(dump, "Std.Nat.Z")
+    refute String.contains?(dump, "#")
+    assert String.contains?(dump, ":z}")
   end
 ```
-(Adjust `Codegen.compile/1` to the actual entry point name if different — search `def compile` in `codegen.ex`. The essential assertion is: no `#`-bearing atom survives into the emitted forms.)
+(This is a stronger assertion than "no # present" — it positively confirms the bare `:z` tag actually appears, not merely that no `#`/dotted artifact survives, which the pre-fix broken remote-call form would also satisfy vacuously.)
 
 - [ ] **Step 6: Run to verify pass**
 
@@ -1541,7 +1761,7 @@ Expected: PASS.
 
 ```bash
 git add -- lib/cure/compiler/codegen.ex test/cure/compiler/shadow_codegen_test.exs
-git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(codegen): strip Mod# prefix — re-keyed ctors keep bare runtime tags"
+git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(codegen): recognize qualified constructor calls before the remote-call dispatch"
 ```
 
 ---
@@ -1558,7 +1778,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(co
 - [ ] **Step 1: Regenerate + freeze the shadow cluster verdicts**
 
 Run: `mix cure.oracle shadow`
-Expected: `shadow01`–`shadow06` present with their intended relations (shadow07 present or documented unit-only per Task 10). Review `test/oracle/shadow/verdicts.json` for any unintended `cure_stricter` — each must have a written reason.
+Expected: `shadow01`–`shadow06` and `shadow08` present with their intended relations (shadow07 present or documented unit-only per Task 10). Review `test/oracle/shadow/verdicts.json` for any unintended `cure_stricter` — each must have a written reason.
 
 - [ ] **Step 2: Oracle replay (no other probe regressed)**
 
@@ -1596,7 +1816,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "docs(pa
 ## Self-Review
 
 **1. Spec coverage:**
-- R1 (per-name type+ctor shadowing) → Tasks 5 (re-key) + shadow01/02. ✓
+- R1 (per-name type+ctor shadowing) → Tasks 5 (re-key) + shadow01/02/08 (08 = transitive-import case). ✓
 - R2 (non-shadowed imports stay visible) → Task 5 (residual-drop keeps only losers re-keyed) + Task 8 (`Std.Nat` return) + shadow03. ✓
 - R3 (qualified escape hatch) → Tasks 7 (value/pattern) + 8 (type slot) + shadow04. ✓
 - R4 (module==typename collapse) → Task 8 (`resolve_qualified` type-slot collapse candidate) + shadow05. ✓
@@ -1604,12 +1824,12 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "docs(pa
 - R6 (no regression) → residual-drop (Task 5) + Tasks 5/8/12 auto-prelude + replay + full-suite guards; every new cond clause is a no-op for non-dotted/non-collision inputs. ✓
 - R7 (import-vs-import ambiguity) → Tasks 4 (classify) + 10 (`:ambiguous_name`) + shadow07. ✓
 - §3.2 `:case` branch-tag rewrite → Task 2 (explicit test) + Task 3 (def-body rewrite). ✓
-- §3.1 dedup/over-detection (diamond + auto+explicit) → Task 4 (classify tests) + Task 5 (distinct_import_modules + AST-own provenance). ✓
-- §3.5 bare runtime tags → Task 11. ✓
-- §3.6 all three call sites → Tasks 7 (2 sites) + 8 (idx_to_core function_call + attribute_access). ✓
+- §3.1 dedup/over-detection (diamond + auto+explicit) → Task 4 (classify tests) + Task 5 (distinct_import_modules + AST-own provenance for over-detection; transitive_import_modules for under-detection of a family reached only transitively, pinned by the transitive-import red test). ✓
+- §3.5 bare runtime tags → Task 11 (corrected mechanism: codegen call-dispatch fix, not `constructor_tag/1` prefix-stripping — codegen never sees re-keyed Env atoms). ✓
+- §3.6 all three call sites → Tasks 7 (`constructor_pattern`, `elaborate_named_call` — 2 sites) fully covered; Task 8's `idx_to_core` covers the nullary `attribute_access` shape (a) fully, but the THIRD site — `idx_to_core`'s `function_call` clause, for a qualified *parameterized* type reference like `Std.Vector(Nat)` — is **unverified and likely unreachable under today's grammar**: tracing `parse_type_expr` (parser.ex ~3961) shows its `Name(A,B)` call-argument branch only fires when `(` immediately follows the single identifier just consumed ("Std"), not after a full dotted chain, so `Std.Vector(Nat)` in a type slot falls into `maybe_parse_type_projection` instead, which does not resume call-argument parsing — leaving `(Nat)` unconsumed (likely a parse error upstream, before `idx_to_core` is ever reached). No task's oracle probe or unit test exercises this shape (the plan itself notes, at shadow04, that the parameterized case is "not this probe's concern"), so this does not block any claimed-green test — but the coverage claim for this specific sub-case is downgraded from ✓ to **unverified/likely moot**; Task 8's own patch to `idx_to_core`'s `function_call` clause remains harmless dead code for it either way (a plain-atom, non-dotted qualified type reference is unaffected).
 
-**2. Placeholder scan:** Every code step shows real code grounded in the verbatim anchors. Two deliberate "verify which error applies / adjust entry-point name" notes (Task 7 Step 2, Task 11 Step 5) are read-the-actual-code instructions, not placeholders — they name the exact search target.
+**2. Placeholder scan:** Every code step shows real code grounded in the verbatim anchors. Three deliberate "verify which error applies / adjust entry-point name / construct empirically" notes (Task 7 Step 2, Task 7 Step 4b, Task 11 Step 5) are read-the-actual-code instructions, not placeholders — they name the exact search target and verification method.
 
 **3. Type consistency:** `rekey_atom/2`, `rekey_term/2`, `resolve_qualified/3`, `shadowed_origin/2`, `ambiguous_modules/2`, `classify/2`, `rekey_module_env/3` names + arities are consistent across Tasks 2–11 and match the Interfaces block. Registry key form `:"<module_id>#<bare>"` and surface form `"<module_id>.<bare>"` are used consistently; the `.`→`#` bridge lives only in `resolve_qualified/3` (Task 6) and `rekey_atom/2` (Task 3).
 
-**Residual scope note (mirrors the spec's own caveats):** the exotic *diamond + local shadow* case (`use Std.Vector` + `use Std.Nat` + a local `Nat`) is handled by the residual-bare-drop (Task 5 Step 3, `drop_bare_family`), but is pinned only by the full-suite/replay guard, not a dedicated probe (the stdlib has no such program today). If Stage-4 execution surfaces it, add a `shadow08` probe rather than widening scope silently.
+**Residual scope note (mirrors the spec's own caveats):** the *diamond + local shadow* case (`use Std.Vector` + `use Std.Nat` + a local `Nat`, both imports explicit) and the *transitive-only + local shadow* case (`use Std.Vector` alone + a local `Nat`, no explicit `use Std.Nat`) are both handled by the combination of the transitive-closure ownership scan (`transitive_import_modules/1`) and the residual-bare-drop (`drop_bare_family`) — Task 5. The transitive-only case is now pinned by BOTH a dedicated behavioral red test (Task 5 Step 1, "R1 via transitive import") AND a paired oracle probe (`shadow08`, Task 5 Step 7); the explicit-diamond case remains guarded only by the full-suite/replay run, not a dedicated probe (the stdlib has no such combined program today). If Stage-4 execution surfaces a gap in the explicit-diamond case, add a `shadow09` probe rather than widening scope silently.
