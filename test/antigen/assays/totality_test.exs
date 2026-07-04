@@ -69,20 +69,20 @@ defmodule Antigen.Assays.TotalityTest do
   #
   # ACHIEVED by #14: Ackermann (single-function, lexicographic) now certifies via
   # the size-change matrix closure + reconstruct-equal — migrated to corpus.sexp.
-  # The two MUTUAL pins (even/odd, permuted f/g) stay conservatively rejected:
-  # cross-function size-change is out of scope (#13), so they remain here.
+  # ACHIEVED by #13: the two MUTUAL pins (even/odd, permuted f/g) now certify via
+  # cross-function size-change (the SCC's composed `f→…→f` change matrix has a
+  # `:smaller` diagonal). Assertions flipped to `:ok` in the #13 commit, as the
+  # reach-pin protocol prescribes.
 
-  test "W2 reach pin: even/odd structural mutual pair is conservatively rejected today" do
-    assert {:violation, {:wrongly_rejected, [:even, :odd]}} ==
-             A.run(G.wellfounded_even_odd())
+  test "W2 ACHIEVED (#13): even/odd structural mutual pair now certifies total" do
+    assert :ok == A.run(G.wellfounded_even_odd())
   end
 
   test "W2 ACHIEVED (#14): Ackermann (lexicographic two-argument descent) now certifies total" do
     assert :ok == A.run(G.wellfounded_ackermann())
   end
 
-  test "W2 reach pin: permuted well-founded pair is conservatively rejected today" do
-    assert {:violation, {:wrongly_rejected, [:f, :g]}} ==
-             A.run(G.wellfounded_permuted_pair())
+  test "W2 ACHIEVED (#13): permuted well-founded pair now certifies total" do
+    assert :ok == A.run(G.wellfounded_permuted_pair())
   end
 end

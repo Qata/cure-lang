@@ -53,4 +53,48 @@ defmodule Antigen.SizeChangeAntibodyTest do
     %{body: body} = Env.get_def(env, :loop)
     refute Certificate.terminating?(:loop, body, env)
   end
+
+  # -- Cross-function / mutual size-change (#13) ------------------------------
+  #
+  # Generalises the LJB principle from self-calls to intra-SCC calls. Same two
+  # sides of the criterion, now across the call boundary.
+
+  test "MUTUAL REACH: well-founded even/odd pair now certifies total (#13)" do
+    challenge = Totality.wellfounded_even_odd()
+    assert challenge.label == :terminating
+    # :ok ⇒ the certifier certifies every focus def — the cross-function reach flipped.
+    assert :ok == Assay.run(challenge),
+           "even/odd must certify total under cross-function size-change"
+  end
+
+  test "MUTUAL REACH: permuted pair (descent only across the swap) now certifies total (#13)" do
+    challenge = Totality.wellfounded_permuted_pair()
+    assert challenge.label == :terminating
+
+    assert :ok == Assay.run(challenge),
+           "the permuted well-founded pair must certify total under cross-function size-change"
+  end
+
+  test "MUTUAL CONTROL (d13d718 antibody): diverging f→g→f pair stays rejected (#13)" do
+    # The permanent regression guard for the once-live mutual-recursion hole. It
+    # is now rejected by the size-change criterion ITSELF, not a blanket
+    # short-circuit: the composed f→g→f change matrix is the all-`:equal`
+    # identity — an idempotent endo-edge with no `:smaller` diagonal.
+    challenge = Totality.diverging_mutual_pair()
+    assert challenge.label == :diverging
+    # :ok ⇒ the certifier certifies NONE of the focus defs (soundness preserved).
+    assert :ok == Assay.run(challenge),
+           "the diverging mutual pair must NOT be certified (d13d718 must stay green)"
+  end
+
+  test "MUTUAL CONTROL: one-leg pair stays rejected — composition, not per-call, decides (#13)" do
+    # f decreases (f→g on the S-predecessor), g regrows (g→f on `S n`); the
+    # COMPOSED f→g→f cycle is non-decreasing (`:unknown` diagonal). LJB's
+    # motivating case: certification must consider cycle composition.
+    challenge = Totality.diverging_one_leg_pair()
+    assert challenge.label == :diverging
+
+    assert :ok == Assay.run(challenge),
+           "the one-leg mutual pair must NOT be certified (composed cycle non-decreasing)"
+  end
 end

@@ -1,0 +1,185 @@
+defmodule Cure.Core.MutualSizeChangeTest do
+  @moduledoc """
+  Cross-function / mutual size-change termination (#13) in the TCB certificate
+  (`Cure.Core.Certificate.terminating?/3`).
+
+  Generalises the #14 single-function size-change from self-calls to calls to any
+  global in the mutual group (the SCC of globals mutually reachable with `name`).
+  A well-founded mutual pair whose shared argument decreases through the cycle now
+  certifies total (the composed `f→…→f` change matrix has a `:smaller` diagonal);
+  a divergent cycle with no descent is rejected by the size-change criterion
+  itself (its idempotent `f→f` endo-edge has no `:smaller` diagonal), NOT by a
+  blanket short-circuit.
+
+  Nat = Z | S(Nat). After one leading lambda, param 0 is de Bruijn `var 0`; a
+  `{:case, scrut, motive, branches}` S-branch binds the predecessor at index 0.
+  Shapes mirror the banked Antigen totality generators (even/odd, permuted pair,
+  one-leg, three-cycle) and the #14 Ackermann body.
+  """
+  use ExUnit.Case, async: true
+  alias Cure.Core.{Certificate, Env, Inductive}
+
+  @nat {:data, :Nat, [], []}
+  @nat_motive {:lam, @nat, @nat}
+
+  defp z, do: {:ctor, :Z, []}
+  defp s(t), do: {:ctor, :S, [t]}
+  defp v(i), do: {:var, i}
+  defp call1(name, a), do: {:app, {:global, name}, a}
+  defp call2(name, a, b), do: {:app, {:app, {:global, name}, a}, b}
+
+  # {:case scrut motive [{:S,1,s_body},{:Z,0,z_body}]}
+  defp ncase(scrut, s_body, z_body),
+    do: {:case, scrut, @nat_motive, [{:S, 1, s_body}, {:Z, 0, z_body}]}
+
+  defp base_env do
+    Env.empty()
+    |> Inductive.declare(Inductive.family(:Nat, [], [], 0), [
+      Inductive.ctor(:Z, [], []),
+      Inductive.ctor(:S, [{:data, :Nat, [], []}], [])
+    ])
+  end
+
+  defp with_defs(defs) do
+    Enum.reduce(defs, base_env(), fn {name, body}, env ->
+      Env.add_def(env, name, nat_arrow(body), body)
+    end)
+  end
+
+  # A permissive type (unused by the structural certifier, which reads only bodies
+  # + the call graph); arity is read from leading lambdas.
+  defp nat_arrow(_body), do: {:pi, @nat, @nat}
+
+  defp terminating?(env, name) do
+    %{body: body} = Env.get_def(env, name)
+    Certificate.terminating?(name, body, env)
+  end
+
+  # -- Bodies -----------------------------------------------------------------
+
+  # even n = case n {Z -> Z; S y -> odd y};  odd n = case n {Z -> S Z; S y -> even y}
+  defp even_body, do: {:lam, @nat, ncase(v(0), call1(:odd, v(0)), z())}
+  defp odd_body, do: {:lam, @nat, ncase(v(0), call1(:even, v(0)), s(z()))}
+
+  # ping/pong: structurally-descending mutual pair (Z -> Z on both legs).
+  defp ping_body, do: {:lam, @nat, ncase(v(0), call1(:pong, v(0)), z())}
+  defp pong_body, do: {:lam, @nat, ncase(v(0), call1(:ping, v(0)), z())}
+
+  # diverging f→g→f with no descent: f n = g n; g n = f n.
+  defp dv_f_body, do: {:lam, @nat, call1(:g, v(0))}
+  defp dv_g_body, do: {:lam, @nat, call1(:f, v(0))}
+
+  # one-leg: f n = case n {Z -> Z; S y -> g y};  g n = f (S n).  Composed cycle
+  # f (S m) → g m → f (S m) is non-decreasing → must be rejected.
+  defp ol_f_body, do: {:lam, @nat, ncase(v(0), call1(:g, v(0)), z())}
+  defp ol_g_body, do: {:lam, @nat, call1(:f, s(v(0)))}
+
+  # three-cycle f→g→h→f, each passes its arg unchanged (:equal) → rejected.
+  defp tc_f_body, do: {:lam, @nat, call1(:g, v(0))}
+  defp tc_g_body, do: {:lam, @nat, call1(:h, v(0))}
+  defp tc_h_body, do: {:lam, @nat, call1(:f, v(0))}
+
+  # Permuted pair (descent visible only across the argument swap), 2-arg:
+  #   f n m = case n {Z -> m; S y -> g n m};  g a b = f b a
+  # (matches Antigen.Generators.Totality.wellfounded_permuted_pair/0).
+  defp perm_f_body do
+    {:lam, @nat,
+     {:lam, @nat,
+      {:case, v(1), @nat_motive,
+       [{:Z, 0, v(0)}, {:S, 1, call2(:g, v(1), v(0))}]}}}
+  end
+
+  defp perm_g_body, do: {:lam, @nat, {:lam, @nat, call2(:f, v(0), v(1))}}
+
+  # Ackermann (single-function, lexicographic) — #14 no-regression control.
+  defp ack_body do
+    inner =
+      ncase(
+        v(1),
+        call2(:ack, v(1), call2(:ack, s(v(1)), v(0))),
+        call2(:ack, v(0), s(z()))
+      )
+
+    {:lam, @nat, {:lam, @nat, ncase(v(1), inner, s(v(0)))}}
+  end
+
+  # -- Positive: well-founded mutual groups must certify total ----------------
+
+  test "even/odd mutual pair certifies total (shared arg decreases through the cycle)" do
+    env = with_defs(even: even_body(), odd: odd_body())
+    assert terminating?(env, :even)
+    assert terminating?(env, :odd)
+  end
+
+  test "ping/pong structural mutual pair certifies total" do
+    env = with_defs(ping: ping_body(), pong: pong_body())
+    assert terminating?(env, :ping)
+    assert terminating?(env, :pong)
+  end
+
+  test "permuted pair (descent only across the swap) certifies total" do
+    env = with_defs(f: perm_f_body(), g: perm_g_body())
+    assert terminating?(env, :f)
+    assert terminating?(env, :g)
+  end
+
+  # -- Negative: divergent cycles must be rejected by the criterion itself ------
+
+  test "diverging f→g→f with no descent is rejected (idempotent endo, no :smaller diagonal)" do
+    env = with_defs(f: dv_f_body(), g: dv_g_body())
+    refute terminating?(env, :f)
+    refute terminating?(env, :g)
+  end
+
+  test "one-leg pair (composed cycle non-decreasing) is rejected" do
+    env = with_defs(f: ol_f_body(), g: ol_g_body())
+    refute terminating?(env, :f)
+    refute terminating?(env, :g)
+  end
+
+  test "three-cycle f→g→h→f with no descent is rejected" do
+    env = with_defs(f: tc_f_body(), g: tc_g_body(), h: tc_h_body())
+    refute terminating?(env, :f)
+    refute terminating?(env, :g)
+    refute terminating?(env, :h)
+  end
+
+  test "arity-0 CAF cycle f = g; g = f is rejected (empty endo-edge, no descent)" do
+    # No parameters ⇒ 0×0 endo-edges. These are idempotent with no :smaller
+    # diagonal, so the group must be rejected (the loop genuinely diverges). The
+    # criterion must NOT treat an empty endo-edge as a benign non-loop.
+    env =
+      base_env()
+      |> Env.add_def(:cf, @nat, {:global, :cg})
+      |> Env.add_def(:cg, @nat, {:global, :cf})
+
+    refute terminating?(env, :cf)
+    refute terminating?(env, :cg)
+  end
+
+  # -- #14 no-regression: single-function group delegates unchanged -----------
+
+  test "Ackermann (single-function lexicographic) still certifies total (no #14 regression)" do
+    env = Env.add_def(base_env(), :ack, {:pi, @nat, {:pi, @nat, @nat}}, ack_body())
+    assert terminating?(env, :ack)
+  end
+
+  test "a non-cyclic helper call does not pull the helper into the group" do
+    # h calls plus (a plain subroutine that does NOT call back); h's own recursion
+    # is structural. Group of h is {h} alone → #14 delegate certifies.
+    plus =
+      {:lam, @nat, {:lam, @nat, ncase(v(1), s(call2(:plus, v(0), v(1))), v(0))}}
+
+    h =
+      {:lam, @nat,
+       ncase(v(0), call1(:h, v(0)), call2(:plus, z(), z()))}
+
+    env =
+      base_env()
+      |> Env.add_def(:plus, {:pi, @nat, {:pi, @nat, @nat}}, plus)
+      |> Env.add_def(:h, {:pi, @nat, @nat}, h)
+
+    assert terminating?(env, :h)
+    assert terminating?(env, :plus)
+  end
+end
