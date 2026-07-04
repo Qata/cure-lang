@@ -151,7 +151,11 @@ defmodule Mix.Tasks.Antigen do
       {1, Antigen.Generators.Conversion.conv_accept("term/normalization")},
       {1, Antigen.Generators.Term.typed_term("kernel/shift_subst")},
       {1, Antigen.Generators.Term.typed_term("kernel/weakening")},
-      {1, Antigen.Generators.Term.typed_term("kernel/confluence")}
+      {1, Antigen.Generators.Term.typed_term("kernel/confluence")},
+      # Structure-directed primitive arithmetic — the reachability lever for
+      # Eval.fold / Kernel.infer_prim / numeric_type? (the Int/Float paths the
+      # mode-directed term generator never emits).
+      {3, Antigen.Generators.Primitive.gen()}
     ])
   end
 
