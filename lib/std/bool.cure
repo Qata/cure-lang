@@ -11,3 +11,35 @@ mod Std.Bool
 
   @builtin(:bool)
   type Bool = False | True
+
+  ## Boolean connectives, defined by `case`-elimination on the inductive `Bool`
+  ## (retiring the kernel `:and`/`:or`/`:not` primitives). On open terms they
+  ## reduce definitionally (e.g. `booland(True(), b) ≡ b`); a *saturated*
+  ## application still lowers to the native BEAM boolean op at codegen. The
+  ## surface `and`/`or`/`not` are lexer keywords, so these use `bool`-prefixed
+  ## identifiers (matching `booleq`/`boolne`).
+
+  fn boolnot(a: Bool) -> Bool =
+    match a
+      True() -> False()
+      False() -> True()
+
+  fn booland(a: Bool, b: Bool) -> Bool =
+    match a
+      True() -> b
+      False() -> False()
+
+  fn boolor(a: Bool, b: Bool) -> Bool =
+    match a
+      True() -> True()
+      False() -> b
+
+  fn booleq(a: Bool, b: Bool) -> Bool =
+    match a
+      True() -> b
+      False() -> boolnot(b)
+
+  fn boolne(a: Bool, b: Bool) -> Bool =
+    match a
+      True() -> boolnot(b)
+      False() -> b
