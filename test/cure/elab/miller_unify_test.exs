@@ -10,6 +10,17 @@ defmodule Cure.Elab.MillerUnifyTest do
   @nat {:data, :Nat, [], []}
   # ?m : (Nat) -> Type
   defp fam_ctx, do: MetaCtx.fresh(MetaCtx.new(), {:pi, @nat, {:type, 0}})
+  # ?m : (Nat) -> Nat — for solutions that are Nat *values* (index inference)
+  defp fam_ctx_nn, do: MetaCtx.fresh(MetaCtx.new(), {:pi, @nat, @nat})
+
+  # `Vec (?m n) =? Vec <rhs>` under a binder: the index arg forces `?m(n) =? rhs`,
+  # so mabs abstracts a Nat-VALUED rhs — the dependent index-inference path.
+  defp solve_index(m_ctx, m, rhs) do
+    t1 = {:pi, @nat, {:data, :Vec, [], [{:app, {:meta, m}, {:var, 0}}]}}
+    t2 = {:pi, @nat, {:data, :Vec, [], [rhs]}}
+    {:ok, ctx2} = Unify.unify(t1, t2, m_ctx, nil)
+    Unify.zonk({:meta, m}, ctx2)
+  end
 
   test "constant solution: ?m(n) =? Nat  ⇒  ?m := λ_:Nat. Nat" do
     {ctx, m} = fam_ctx()
@@ -90,5 +101,25 @@ defmodule Cure.Elab.MillerUnifyTest do
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
     assert {:lam, @nat, {:data, :Vec, [], [{:var, 0}]}} == Unify.zonk({:meta, m}, ctx2)
+  end
+
+  test "ctor-valued index: Vec(?m n) =? Vec(S n)  ⇒  ?m := λn. S n" do
+    {ctx, m} = fam_ctx_nn()
+    assert {:lam, @nat, {:ctor, :S, [{:var, 0}]}} ==
+             solve_index(ctx, m, {:ctor, :S, [{:var, 0}]})
+  end
+
+  test "prim-valued index: Vec(?m n) =? Vec(add n n)  ⇒  ?m := λn. add n n" do
+    {ctx, m} = fam_ctx_nn()
+    assert {:lam, @nat, {:prim, :add, [{:var, 0}, {:var, 0}]}} ==
+             solve_index(ctx, m, {:prim, :add, [{:var, 0}, {:var, 0}]})
+  end
+
+  test "case-valued index: Vec(?m n) =? Vec(case n {Z→Z; S k→k})  ⇒  ?m := λn. case n {…}" do
+    # The scrutinee is the pattern var n; mabs's :case clause must abstract it and
+    # descend into each branch body at depth + ctor-arity (the S branch adds 1).
+    rhs = {:case, {:var, 0}, {:lam, @nat, @nat}, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:var, 0}}]}
+    {ctx, m} = fam_ctx_nn()
+    assert solve_index(ctx, m, rhs) == {:lam, @nat, rhs}
   end
 end
