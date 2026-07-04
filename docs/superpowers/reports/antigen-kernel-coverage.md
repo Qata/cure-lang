@@ -6,7 +6,7 @@
 | Cure.Core.Conv | 66 | 66 | 100.0 |
 | Cure.Core.Eval | 65 | 65 | 100.0 |
 | Cure.Core.Inductive | 57 | 79 | 72.2 |
-| Cure.Core.Kernel | 320 | 340 | 94.1 |
+| Cure.Core.Kernel | 330 | 340 | 97.1 |
 | Cure.Core.Normalise | 87 | 103 | 84.5 |
 | Cure.Core.Quote | 34 | 37 | 91.9 |
 | Cure.Core.Serialize | 108 | 108 | 100.0 |
@@ -42,12 +42,9 @@
 ## Cure.Core.Kernel cold lines
 
   - bind_index/4: 862
-  - check/3: 289, 296, 312
   - check_def/2: 358
-  - check_motive_wf/4: 607
   - head_key/1: 907
   - infer/2: 67
-  - infer_type_value_sort/2: 619, 621, 622, 623, 632, 690
   - normalize/2: 34
   - normalize/3: 38
   - remap_index_error/2: 558
