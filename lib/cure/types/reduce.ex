@@ -66,17 +66,53 @@ defmodule Cure.Types.Reduce do
     ast |> do_substitute(bindings) |> kernel_normalize()
   end
 
-  # Every reduction happens in the trusted kernel (normalization-by-evaluation).
-  # A node inside the dependent-index grammar is translated, evaluated, and read
-  # back; an irreducible type former (named ref, refinement, n-ary tuple) has no
-  # kernel reduction, so we keep its shape and normalize each child through the
-  # kernel in turn. No arithmetic is folded outside `Cure.Core`.
-  defp kernel_normalize(ast) do
+  # The Boolean connectives `and`/`or`/`not` are no longer `Cure.Core` primitives
+  # (they were retired to Std.Bool `case`-defs). `Cure.Core.Eval` therefore no
+  # longer folds them, so this non-dependent type-level reducer folds Boolean
+  # LITERAL connectives itself — reproducing the deleted primitive fold exactly
+  # (strict: folds only when both operands are concrete booleans; otherwise the
+  # node is rebuilt with normalized children). Arithmetic and numeric comparisons
+  # still fold in the kernel via `Cure.Core.Eval`.
+  defp kernel_normalize({:binary_op, meta, [l, r]} = ast) do
+    case Keyword.get(meta, :operator) do
+      op when op in [:and, :or] -> fold_bool_binop(op, kernel_normalize(l), kernel_normalize(r), ast)
+      _ -> kernel_normalize_via_core(ast)
+    end
+  end
+
+  defp kernel_normalize({:unary_op, meta, [operand]} = ast) do
+    case Keyword.get(meta, :operator) do
+      :not -> fold_bool_not(kernel_normalize(operand), ast)
+      _ -> kernel_normalize_via_core(ast)
+    end
+  end
+
+  defp kernel_normalize(ast), do: kernel_normalize_via_core(ast)
+
+  # Every other reduction happens in the trusted kernel (normalization-by-
+  # evaluation). A node inside the dependent-index grammar is translated,
+  # evaluated, and read back; an irreducible type former (named ref, refinement,
+  # n-ary tuple) has no kernel reduction, so we keep its shape and normalize each
+  # child through the kernel in turn. No arithmetic is folded outside `Cure.Core`.
+  defp kernel_normalize_via_core(ast) do
     case CoreBridge.to_core(ast) do
       {:ok, core} -> core |> Eval.eval([]) |> Quote.reify() |> CoreBridge.from_core()
       :error -> structural_congruence(ast)
     end
   end
+
+  defp fold_bool_binop(:and, {:literal, m, a}, {:literal, _, b}, _ast)
+       when is_boolean(a) and is_boolean(b),
+       do: {:literal, m, a and b}
+
+  defp fold_bool_binop(:or, {:literal, m, a}, {:literal, _, b}, _ast)
+       when is_boolean(a) and is_boolean(b),
+       do: {:literal, m, a or b}
+
+  defp fold_bool_binop(_op, l, r, {tag, meta, _}), do: {tag, meta, [l, r]}
+
+  defp fold_bool_not({:literal, m, a}, _ast) when is_boolean(a), do: {:literal, m, not a}
+  defp fold_bool_not(operand, {tag, meta, _}), do: {tag, meta, [operand]}
 
   defp structural_congruence({tag, meta, children}) when is_list(children),
     do: {tag, meta, Enum.map(children, &kernel_normalize/1)}
