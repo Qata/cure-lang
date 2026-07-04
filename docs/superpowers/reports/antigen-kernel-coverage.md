@@ -6,10 +6,10 @@
 | Cure.Core.Conv | 50 | 66 | 75.8 |
 | Cure.Core.Eval | 62 | 65 | 95.4 |
 | Cure.Core.Inductive | 40 | 79 | 50.6 |
-| Cure.Core.Kernel | 192 | 340 | 56.5 |
-| Cure.Core.Normalise | 81 | 103 | 78.6 |
+| Cure.Core.Kernel | 237 | 340 | 69.7 |
+| Cure.Core.Normalise | 86 | 103 | 83.5 |
 | Cure.Core.Quote | 34 | 37 | 91.9 |
-| Cure.Core.Serialize | 79 | 108 | 73.1 |
+| Cure.Core.Serialize | 80 | 108 | 74.1 |
 
 ## Cold lines
 
@@ -61,10 +61,10 @@
 
 ## Cure.Core.Kernel cold lines
 
-  - bind_index/4: 858, 860, 861, 862, 863, 864, 865, 866, 867, 869, 874, 876
+  - bind_index/4: 861, 864, 865, 866, 867, 869, 874
   - branch_unify/4: 771, 773, 774, 775
   - check/3: 289, 296, 312
-  - check_case_branches/7: 706, 711, 721, 727
+  - check_case_branches/7: 706, 711
   - check_ctor/3: 412, 413, 415, 416, 417, 418, 419, 420
   - check_ctor_args/2: 510, 511, 513, 516
   - check_def/2: 358
@@ -76,33 +76,27 @@
   - check_uniform_params/5: 432, 433, 436, 439, 440, 442
   - ensure_eq/1: 474
   - ensure_pi/1: 466
-  - head_key/1: 903, 904, 905, 906
+  - head_key/1: 904, 905, 906
   - infer/2: 44, 67, 95, 125, 166, 181, 237
   - infer_prim/3: 1070
   - infer_sort/2: 459
-  - infer_type_value_sort/2: 610, 618, 620, 621, 622, 626, 627, 631, 678, 679, 680, 682, 683, 689
+  - infer_type_value_sort/2: 618, 620, 621, 622, 631, 689
   - normalize/2: 34
   - normalize/3: 38
   - numeric_type?/1: 1074
-  - occurs_index?/2: 911, 912, 913, 914
-  - reduce_index_pairs/3: 802, 803, 804, 805
+  - reduce_index_pairs/3: 805
   - remap_index_error/2: 557
-  - replace_branch_vars/2: 942, 945, 948, 951, 954, 957, 959, 960, 963, 966, 970, 971, 974, 976, 979, 982, 984
-  - resolve_index_var/3: 884, 885, 886, 890
-  - rigid_index?/1: 892, 893, 894, 895, 896, 897, 898, 899, 900, 901
+  - replace_branch_vars/2: 945, 948, 951, 954, 957, 959, 960, 970, 971, 976, 979, 982
+  - resolve_index_var/3: 884, 885, 886
+  - rigid_index?/1: 893, 894, 895, 896, 897, 898, 899, 900, 901
   - shift_subst/2: 987
-  - specialize_branch_context/2: 919, 920, 922, 923, 927, 930
-  - specialize_branch_value/3: 939
-  - unify_indices/4: 792
-  - unify_one/4: 812, 815, 818, 824, 826, 830
-  - unify_spine/4: 835, 837, 838, 839, 840, 843
+  - unify_one/4: 824, 826
+  - unify_spine/4: 838, 840, 843
 
 ## Cure.Core.Normalise cold lines
 
   - fuel_key/0: 85
-  - id_env/1: 139
   - nf/2: 37
-  - nf_struct/4: 143, 145, 157, 159
   - normalize_opts/1: 108, 112, 116, 122
   - reduce_unfolded/3: 309, 310, 311, 315, 316, 317
   - spend_fuel/1: 335
@@ -119,7 +113,7 @@
   - build/1: 133, 134, 135, 136, 139
   - build_all/1: 203
   - build_branches/1: 213, 216
-  - build_node/2: 141, 148, 149, 166, 191
+  - build_node/2: 148, 149, 166, 191
   - decode/1: 75, 76
   - enc/1: 34, 35
   - parse/1: 122, 123
