@@ -220,26 +220,40 @@ defmodule Antigen.Cover do
     round_size = Keyword.get(opts, :guided_round, @guided_round)
     plateau_limit = Keyword.get(opts, :plateau, @guided_plateau)
 
-    with_cover(modules, fn ->
-      init = %{
-        acc: %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()},
-        covered: covered_set(modules),
-        seen_sets: MapSet.new(),
-        gen: opts[:gen],
-        rounds: 0,
-        plateau: 0,
-        banked: 0
-      }
+    # line_coverage/1 must run INSIDE with_cover (live cover state); function_index/1
+    # must run OUTSIDE (it reads the real .beam via :code.which, which returns the
+    # `cover_compiled.beam` sentinel while a module is instrumented). Split exactly
+    # as run_report/1 does: harvest coverage inside, render + write after teardown.
+    {summary, coverage} =
+      with_cover(modules, fn ->
+        init = %{
+          acc: %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()},
+          covered: covered_set(modules),
+          seen_sets: MapSet.new(),
+          gen: opts[:gen],
+          rounds: 0,
+          plateau: 0,
+          banked: 0
+        }
 
-      st = guided_rounds(opts, modules, edge_path, count, round_size, plateau_limit, init)
+        st = guided_rounds(opts, modules, edge_path, count, round_size, plateau_limit, init)
 
-      %{
-        infections: st.acc.infections,
-        rounds: st.rounds,
-        banked: st.banked,
-        covered_lines: MapSet.size(st.covered)
-      }
-    end)
+        cov = if opts[:out], do: Map.new(modules, fn m -> {m, line_coverage(m)} end), else: nil
+
+        {%{
+           infections: st.acc.infections,
+           rounds: st.rounds,
+           banked: st.banked,
+           covered_lines: MapSet.size(st.covered)
+         }, cov}
+      end)
+
+    if coverage do
+      fn_indexes = Map.new(modules, fn m -> {m, Antigen.CoverReport.function_index(m)} end)
+      File.write!(opts[:out], Antigen.CoverReport.render(coverage, fn_indexes))
+    end
+
+    summary
   end
 
   defp guided_rounds(opts, modules, edge_path, count, round_size, plateau_limit, st) do

@@ -139,6 +139,7 @@ defmodule Antigen.CoverGuidedTest do
     on_exit(fn -> File.rm_rf!(tmp) end)
     edge_path = Path.join(tmp, "edge.sexp")
     report_dir = Path.join(tmp, "reports")
+    out = Path.join(tmp, "guided_kcov.md")
 
     opts = [
       gen: Mix.Tasks.Antigen.default_gen(),
@@ -149,7 +150,8 @@ defmodule Antigen.CoverGuidedTest do
       edge_corpus: edge_path,
       corpus_path: Path.join(tmp, "corpus.sexp"),
       seeds_path: Path.join(tmp, "seeds.sexp"),
-      report_dir: report_dir
+      report_dir: report_dir,
+      out: out
     ]
 
     result = Cover.guided_loop(opts)
@@ -157,6 +159,11 @@ defmodule Antigen.CoverGuidedTest do
     # (a) terminated with a summary (plateau or budget)
     assert is_map(result)
     assert result.rounds >= 1
+
+    # a coverage report is written to --out (same format as the one-shot mode),
+    # so guided and unguided runs are directly comparable
+    assert File.exists?(out)
+    assert File.read!(out) =~ "Kernel Coverage"
 
     # (b) the edge corpus grew — the cold-start round hits new kernel lines
     assert File.exists?(edge_path)
