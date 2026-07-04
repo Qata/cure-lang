@@ -44,6 +44,23 @@ defmodule Antigen.Generators.PrimitiveTest do
     assert {:float_type} in types
   end
 
+  test "the sample exercises Bool-returning prims (comparisons, connectives, bool-eq)" do
+    sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
+
+    ops = sample |> Enum.map(fn c -> elem(c.payload.term, 1) end) |> MapSet.new()
+    for op <- [:lt, :le, :gt, :ge, :and, :or, :not], do: assert(op in ops, "op #{op} never generated")
+
+    # at least one challenge claims the Bool type
+    assert Enum.any?(sample, fn c -> c.payload.type == {:data, :Bool, [], []} end)
+
+    # a connective over Bool literals is present (drives Eval.fold's :and/:or/:not + as_bool)
+    assert Enum.any?(sample, fn c ->
+             match?({:prim, op, [{:ctor, b1, []}, {:ctor, b2, []}]}
+                    when op in [:and, :or] and b1 in [:True, :False] and b2 in [:True, :False],
+                    c.payload.term)
+           end)
+  end
+
   test "the sample includes at least one stuck (zero-divisor) prim" do
     sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
 

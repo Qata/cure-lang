@@ -13,6 +13,17 @@ defmodule Antigen.Generators.SigMenuTest do
     assert Inductive.get_family(env, :Vec)
   end
 
+  test "env_of(:v1) seeds the Bool builtin (True/False) for prim comparison/connective typing" do
+    env = SigMenu.env_of(:v1)
+    assert Inductive.get_family(env, :Bool)
+    # the :bool builtin key resolves to the Bool family — bool_type_value needs this
+    assert Inductive.builtin(env, :bool) == :Bool
+    ctx = Context.empty(env)
+    # a comparison prim now types at Bool and normalizes to a True/False ctor
+    assert {:ok, _} = Kernel.infer(ctx, {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]})
+    assert {:ctor, :True, []} = Cure.Core.Normalise.nf(ctx, {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]}, fuel: 500_000)
+  end
+
   test "canon builds a well-typed inhabitant for each closed goal type" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)

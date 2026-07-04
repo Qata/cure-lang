@@ -69,6 +69,17 @@ defmodule Antigen.Generators.SigMenu do
           Inductive.ctor(:Cons, [{:hd, {:var, 0}}, {:tl, {:data, :List, [{:var, 1}], []}}], [],
             [:present, :present], [{:var, 2}])
         ])
+      # Bool + the :bool builtin binding — the SAME canonical family real Cure
+      # seeds via `Cure.Core.Builtins.seed/2` (ctor order `False | True`), which
+      # the v1 menu was previously missing. Required so prim comparisons/
+      # connectives typecheck: `Kernel.infer_prim` resolves their result type via
+      # `bool_type_value` (reads the :bool builtin) and `Eval.fold` folds them to
+      # the canonical `:True`/`:False` ctor values. The prims are the elaborator's
+      # native-BEAM-op lowering target (emit.ex), not migration debris — Bool's
+      # *type* is inductive; the decidable *operations* producing it stay prim.
+      |> Inductive.declare(Inductive.family(:Bool, [], [], 0),
+        [Inductive.ctor(:False, [], []), Inductive.ctor(:True, [], [])])
+      |> Inductive.register_builtin(:bool, :Bool)
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}
