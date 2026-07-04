@@ -186,6 +186,33 @@ defmodule Cure.Elab.Resolution do
     try_keys(env, candidates, :type)
   end
 
+  @doc """
+  Uniform shadowed-but-present resolution (spec §3.3, per-name scoping as in
+  Idris/Agda): a BARE name that is absent from the registry but present under
+  exactly ONE re-keyed `:"Mod#name"` variant resolves to that variant. Exactly-one
+  is required — `{:ambiguous, mods}` for ≥2 (the R7 path), `:none` for 0. Callers
+  must apply this only AFTER confirming the bare name has no local winner and no
+  unshadowed-import binding, so a redeclared ctor (still present under its bare
+  key) never reaches this fallback (preserving R1).
+  """
+  @spec resolve_bare_shadowed(Env.t(), atom()) :: {:ok, atom()} | :none | {:ambiguous, [String.t()]}
+  def resolve_bare_shadowed(%Env{families: families, ctors: ctors}, bare) do
+    suffix = "#" <> Atom.to_string(bare)
+
+    matches =
+      (Map.keys(ctors) ++ Map.keys(families))
+      |> Enum.flat_map(fn k ->
+        s = Atom.to_string(k)
+        if String.ends_with?(s, suffix), do: [{String.trim_trailing(s, suffix), k}], else: []
+      end)
+
+    case matches do
+      [{_mod, key}] -> {:ok, key}
+      [] -> :none
+      many -> {:ambiguous, Enum.map(many, fn {mod, _k} -> mod end)}
+    end
+  end
+
   defp try_keys(env, keys, slot) do
     present? =
       case slot do

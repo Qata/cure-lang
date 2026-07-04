@@ -87,6 +87,33 @@ defmodule Cure.Elab.TypeShadowingTest do
     assert {:ok, _env} = elaborate(src)
   end
 
+  test "R2 full: unshadowed imported ctors Z/S resolve bare via uniform shadowed resolution" do
+    src = """
+    mod PartialShadowFull
+      use Std.Nat
+      type Nat = Zero | Suc(Nat)
+      fn imported_one() -> Std.Nat = S(Z())
+      fn local_one() -> Nat = Suc(Zero())
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
+
+  test "R2 pattern: bare Z/S patterns on an imported Std.Nat scrutinee under a local Nat shadow" do
+    src = """
+    mod BarePatternImported
+      use Std.Nat
+      type Nat = Zero | Suc(Nat)
+      fn is_zero(n: Std.Nat) -> Nat = match n
+        Z() -> Zero()
+        S(k) -> Suc(Zero())
+    end
+    """
+
+    assert {:ok, _env} = elaborate(src)
+  end
+
   test "R3: shadowed ctor reachable qualified in expression and pattern position" do
     src = """
     mod EscapeHatch

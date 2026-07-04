@@ -1,6 +1,9 @@
 %default total
 
-data Nat' = Zero | Suc Nat'
+data Local = Zero | Suc Local
 
-localOne : Nat'
+importedOne : Nat
+importedOne = S Z
+
+localOne : Local
 localOne = Suc Zero

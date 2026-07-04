@@ -1164,6 +1164,30 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 ### Task 8: Wire qualified resolution into the type-slot call sites (R4 + finish R3)
 
+> **Amendment (uniform bare-name resolution — added during execution, operator-approved).**
+> The plan as originally written was internally contradictory: R2-full asserts bare
+> `S(Z())` resolves under a local `Nat = Zero|Suc` shadow, but Task 8 Step 5 declined to
+> resolve shadowed bare names (calling "absent" acceptable), and the re-key removes the
+> bare `:Z`/`:S` keys — so R2-full could not pass, contradicting spec §3.3 / line 305 /
+> spec-shadow03 ("unqualified `Z`/`S` still refers to imported `Std.Nat`"). Resolution
+> (operator directive: align with Idris/Agda per-name scoping): add ONE shared helper
+> `Resolution.resolve_bare_shadowed(env, bare) :: {:ok, atom} | :none | {:ambiguous, [mod]}`
+> — a bare name ABSENT from the registry but present under EXACTLY ONE re-keyed
+> `:"Mod#Name"` variant resolves to that variant (≥2 ⇒ ambiguous/R7; 0 ⇒ none). It is
+> consulted at ALL FOUR bare-name sites, only AFTER the bare key is confirmed absent:
+> `elaborate_named_call` (value/infer), `elaborate_expr_checked` ctor branch (value/check,
+> via `cres`), `resolve_index_name` (type slot; exactly-one resolves, ambiguous → R7),
+> and the pattern path (`resolve_ctor_key`, used by `partition_arms` +
+> `partition_rematch_arms`) BEFORE the `get_ctor == nil` gate. Sound (pure name
+> resolution; the kernel re-checks the assembled term; oracle guards parity), R6-safe
+> (fires only when a re-keyed variant exists, i.e. only in shadowing programs, so no
+> currently-passing program changes). R1 still holds: when the local redeclares `Z`
+> (`Nat = Z|S`), bare `:Z` is present → the "absent" precondition fails → local wins.
+> Consequence: R5 re-anchors to the family-mismatch gate (see Task 9 amendment). The
+> plan's watered-down shadow03 is restored to its full bare-`Z`/`S` form; `shadow09`
+> (bare `Z()`/`S(k)` patterns on an imported `Std.Nat` scrutinee) is the faithfulness
+> proof (accept/accept). shadow03/09 verdicts committed with the uniform-resolution work.
+
 **Files:**
 - Modify: `lib/cure/elab/declarations.ex` — `idx_to_core` `{:function_call,…}` clause (~726) and `{:attribute_access,…}` clause (~820); `resolve_index_name/2` (~832).
 - Modify: `test/cure/elab/type_shadowing_test.exs`

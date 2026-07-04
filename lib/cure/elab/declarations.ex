@@ -866,6 +866,13 @@ defmodule Cure.Elab.Declarations do
       primitive_type(name) != nil -> primitive_type(name)
       Inductive.family?(env, atom) -> {:data, atom, [], []}
       Inductive.get_ctor(env, atom) -> {:ctor, atom, []}
+      # A bare name reachable only under a single re-keyed `:"Mod#name"` variant
+      # (shadowed-but-present, spec §3.3). Exactly-one resolves; ≥2 (ambiguous)
+      # falls through to `{:global, atom}` here and is caught by R7 (Task 10).
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)
+        if Inductive.family?(env, key), do: {:data, key, [], []}, else: {:ctor, key, []}
+
       true -> {:global, atom}
     end
   end

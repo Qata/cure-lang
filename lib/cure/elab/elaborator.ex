@@ -168,19 +168,30 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Normalize a constructor atom that may be a flattened dotted path
-  # (`:"Std.Nat.Z"`) to a registry key via the resolution layer; a bare atom
-  # with no "." is returned unchanged.
+  # Normalize a constructor atom to a registry key via the resolution layer:
+  # a flattened dotted path (`:"Std.Nat.Z"`) via qualified resolution; a bare atom
+  # that is absent from the registry but present under exactly one re-keyed
+  # `:"Mod#Z"` variant (a shadowed-but-present import, spec §3.3) to that variant.
+  # A bare atom still present under its bare key (local winner / unshadowed import)
+  # is returned unchanged — so a redeclared ctor keeps winning (R1).
   defp resolve_ctor_key(env, cname) do
     s = Atom.to_string(cname)
 
-    if String.contains?(s, ".") do
-      case Cure.Elab.Resolution.resolve_qualified(env, s, :value) do
-        {:ok, key} -> key
-        :error -> cname
-      end
-    else
-      cname
+    cond do
+      String.contains?(s, ".") ->
+        case Cure.Elab.Resolution.resolve_qualified(env, s, :value) do
+          {:ok, key} -> key
+          :error -> cname
+        end
+
+      Inductive.get_ctor(env, cname) != nil ->
+        cname
+
+      true ->
+        case Cure.Elab.Resolution.resolve_bare_shadowed(env, cname) do
+          {:ok, key} -> key
+          _ -> cname
+        end
     end
   end
 
@@ -198,13 +209,21 @@ defmodule Cure.Elab.Elaborator do
     atom = String.to_atom(name)
 
     resolved =
-      if String.contains?(name, ".") do
-        case Cure.Elab.Resolution.resolve_qualified(env, name, :value) do
-          {:ok, key} -> key
-          :error -> atom
-        end
-      else
-        atom
+      cond do
+        String.contains?(name, ".") ->
+          case Cure.Elab.Resolution.resolve_qualified(env, name, :value) do
+            {:ok, key} -> key
+            :error -> atom
+          end
+
+        Inductive.get_ctor(env, atom) != nil ->
+          atom
+
+        true ->
+          case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+            {:ok, key} -> key
+            _ -> atom
+          end
       end
 
     cond do
@@ -569,6 +588,10 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:function_call, meta, args} = expr, expected_core, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
+    # Resolve a qualified (`Std.Nat.S`) or bare-shadowed (`S` under a local `Nat`
+    # shadow, present only as `:"Std.Nat#S"`) constructor to its registry key
+    # (spec §3.3); a non-dotted, registry-present name maps to itself.
+    cres = resolve_ctor_key(env, atom)
 
     cond do
       Keyword.get(meta, :record) ->
@@ -585,7 +608,7 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term}
         end
 
-      Inductive.get_ctor(env, atom) ->
+      Inductive.get_ctor(env, cres) ->
         # Checking-mode constructor: pin erased indices from the expected type (a
         # reconstructed dependent-match branch body like `prim()`/`seq(l,r)` whose
         # indices no present argument determines), then let the kernel re-check the
@@ -601,7 +624,7 @@ defmodule Cure.Elab.Elaborator do
         # working constructor is untouched; either way the kernel re-checks below.
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env),
-               {:ok, term, _type} <- elaborate_ctor_app(env, atom, present, ctx, expected_core) do
+               {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
             {:ok, term}
           end
 
@@ -615,7 +638,7 @@ defmodule Cure.Elab.Elaborator do
               # succeeds*: if it also fails, surface the original inference error
               # (e.g. a GADT `seq`'s genuine `:index_mismatch`), so the fallback is
               # strictly additive and never masks a real diagnostic.
-              case elaborate_ctor_app_bidirectional(env, atom, args, names, ctx, expected_core) do
+              case elaborate_ctor_app_bidirectional(env, cres, args, names, ctx, expected_core) do
                 {:ok, _} = ok -> ok
                 {:error, _} -> orig
               end
