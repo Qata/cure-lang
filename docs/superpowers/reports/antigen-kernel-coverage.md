@@ -5,11 +5,11 @@
 | Cure.Core.Certificate | 153 | 192 | 79.7 |
 | Cure.Core.Conv | 50 | 66 | 75.8 |
 | Cure.Core.Eval | 62 | 65 | 95.4 |
-| Cure.Core.Inductive | 40 | 79 | 50.6 |
+| Cure.Core.Inductive | 56 | 79 | 70.9 |
 | Cure.Core.Kernel | 301 | 340 | 88.5 |
 | Cure.Core.Normalise | 86 | 103 | 83.5 |
 | Cure.Core.Quote | 34 | 37 | 91.9 |
-| Cure.Core.Serialize | 79 | 108 | 73.1 |
+| Cure.Core.Serialize | 78 | 108 | 72.2 |
 
 ## Cold lines
 
@@ -52,12 +52,10 @@
   - ctor_result_indices/2: 216, 217, 218
   - ctor_result_params/2: 266, 267, 268, 269
   - family?/2: 199
-  - gather_data_heads/2: 361, 363, 364
   - index_telescope/2: 244, 245, 246
-  - occurs?/2: 373, 375, 376, 377, 378, 379, 380, 381, 384, 388, 389, 391
   - param_telescope/2: 254
   - register_builtin/3: 127, 129, 132
-  - strictly_positive?/4: 318, 335
+  - strictly_positive?/4: 318
 
 ## Cure.Core.Kernel cold lines
 
@@ -100,7 +98,7 @@
   - build/1: 133, 134, 135, 136, 139
   - build_all/1: 203
   - build_branches/1: 213, 216
-  - build_node/2: 148, 149, 154, 166, 191
+  - build_node/2: 148, 149, 151, 154, 166, 191
   - decode/1: 75, 76
   - enc/1: 34, 35
   - parse/1: 122, 123
