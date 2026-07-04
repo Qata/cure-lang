@@ -35,8 +35,6 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     "assert_type_demo" => "42",
     "dependent_types" => "6",
     "doctest_demo" => "25",
-    "equality_laws" => ":cure_refl",
-    "equality_proofs" => ":cure_refl",
     "fenced_docs" => "240",
     "ffi" => "42",
     "fsm_pipeline" => :compile_only,

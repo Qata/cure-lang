@@ -1,38 +1,48 @@
-proof Std.Proof
-  ## Legacy law-shaped declarations.
+mod Std.Proof
+  ## Genuine propositional-equality proofs over the inductive `Std.Nat`
+  ## (spec 2026-07-04-identity-type-as-inductive).
   ##
-  ## Every function in this container has an `Eq(...)`-looking return
-  ## type and returns the `:cure_refl` atom. The current legacy checker
-  ## enforces the proof shape, but these propositions are not yet
-  ## elaborated to `Cure.Core.Kernel` from Cure source.
+  ## These are NOT runtime tokens. Each law is checked by the dependent
+  ## kernel: the proofs proceed by induction (`match` on the `Nat` index)
+  ## and close each case with `refl` or `rewrite`, exactly the technique
+  ## Agda's `Data.Nat.Properties` uses. `plus` is `Std.Nat.plus`, whose
+  ## definition the kernel unfolds during conversion, so `plus(Z, Z)`
+  ## reduces to `Z` and the reflexive cases type-check.
+  ##
+  ## The previous version of this module returned the `:cure_refl` atom
+  ## from `Eq(...)`-shaped signatures whose propositions were either
+  ## vacuous (`Eq(Int, n, n)`) or unstated (a "commutativity" law with
+  ## return type `Eq(Int, a, a)`). Those tokens carried no propositional
+  ## content; the laws below actually prove what they claim.
   ##
   ## ## Examples
   ##
   ## ```cure
-  ## # These are compatibility proof tokens, not trusted Core proofs yet.
-  ## plus_zero(42)                           # : Eq(Int, 42, 42)
-  ## append_nil([1, 2, 3])                   # : Eq(List(Int), [1,2,3], [1,2,3])
-  ## ```
+  ## use Std.Proof
   ##
-  ## Group: `:core` (inherited from the `Cure.Stdlib.Preload` default;
-  ## `proof` containers only allow proof-shaped returns, so no explicit
-  ## `__group__/0` can live here).
+  ## plus_zero_right(n)        # : Eq(Nat, plus(n, Z), n)
+  ## plus_comm(m, n)          # : Eq(Nat, plus(m, n), plus(n, m))
+  ## ```
 
-  # -- Reflexivity and basic arithmetic laws ---------------------------------
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
+  fn __group__() -> Atom = :core
 
-  ## `n + 0` equals `n` for every `n : Int`.
-  fn plus_zero(_n: Int) -> Eq(Int, n, n) = :cure_refl
+  ## `n + 0 = n`. Induction on `n`: the `Z` case is reflexive, and the
+  ## `S` case rewrites by the inductive hypothesis before closing on
+  ## `refl(S(k))`.
+  fn plus_zero_right(n: Nat) -> Eq(Nat, plus(n, Z), n) = match n
+    Z() -> refl(Z)
+    S(k) -> rewrite plus_zero_right(k) in refl(S(k))
 
-  ## `0 + n` equals `n` for every `n : Int`.
-  fn zero_plus(_n: Int) -> Eq(Int, n, n) = :cure_refl
+  ## `m + S(n) = S(m + n)`. Induction on `m`; the successor case pushes
+  ## the `S` outward via the inductive hypothesis.
+  fn plus_succ_right(m: Nat, n: Nat) -> Eq(Nat, plus(m, S(n)), S(plus(m, n))) = match m
+    Z() -> refl(S(n))
+    S(k) -> rewrite plus_succ_right(k, n) in refl(S(S(plus(k, n))))
 
-  ## Legacy commutativity-shaped token.
-  fn plus_comm(_a: Int, _b: Int) -> Eq(Int, a, a) = :cure_refl
-
-  # -- List laws --------------------------------------------------------------
-
-  ## Appending the empty list on the right is the identity.
-  fn append_nil(_xs: List(T)) -> Eq(List(T), xs, xs) = :cure_refl
-
-  ## `map` with the identity function is the identity on lists.
-  fn map_id(_xs: List(T)) -> Eq(List(T), xs, xs) = :cure_refl
+  ## Commutativity of addition, `m + n = n + m`. Induction on `m`, using
+  ## `plus_zero_right` for the base case and `plus_succ_right` together
+  ## with the inductive hypothesis for the successor case.
+  fn plus_comm(m: Nat, n: Nat) -> Eq(Nat, plus(m, n), plus(n, m)) = match m
+    Z() -> rewrite plus_zero_right(n) in refl(n)
+    S(k) -> rewrite plus_succ_right(n, k) in rewrite plus_comm(k, n) in refl(S(plus(n, k)))

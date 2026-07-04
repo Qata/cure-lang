@@ -10,8 +10,9 @@ mod Std.CRDT
   ##
   ## The runtime implementation in `:cure_std_crdt` is intended to
   ## satisfy those laws, but Cure does not yet emit trusted Core proof
-  ## obligations for CRDTs. `Std.Proof` remains a legacy law-shaped
-  ## compatibility module.
+  ## obligations for CRDTs. For genuine kernel-checked equality proofs,
+  ## see `Std.Proof` (arithmetic laws over `Std.Nat`) and `Std.Equal`
+  ## (the propositional-equality combinators).
   ##
   ## Types included:
   ##

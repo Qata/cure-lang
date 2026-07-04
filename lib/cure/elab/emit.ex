@@ -110,8 +110,13 @@ defmodule Cure.Elab.Emit do
     {param_names, inner} = peel_params(Erase.erase(env, body), qs, 0, [])
 
     ctx = Enum.reverse(param_names)
-    params = for {n, :present} <- Enum.zip(param_names, qs), do: {:var, @line, n}
-    clause = {:clause, @line, params, [], [lower(env, inner, ctx)]}
+    body_form = lower(env, inner, ctx)
+
+    params =
+      for {n, :present} <- Enum.zip(param_names, qs),
+          do: underscore_if_unused({:var, @line, n}, body_form)
+
+    clause = {:clause, @line, params, [], [body_form]}
     {:function, @line, name, length(params), [clause]}
   end
 
@@ -294,7 +299,13 @@ defmodule Cure.Elab.Emit do
         if q == :present, do: {:present, :"V#{base + i}"}, else: {:erased, :"_f#{base + i}"}
       end
 
-    present = for {:present, n} <- fields, do: {:var, @line, n}
+    field_names = Enum.map(fields, fn {_q, n} -> n end)
+    new_ctx = Enum.reverse(field_names) ++ ctx
+    body_form = lower(env, body, new_ctx)
+
+    present =
+      for {:present, n} <- fields,
+          do: underscore_if_unused({:var, @line, n}, body_form)
 
     pattern =
       case present do
@@ -302,10 +313,29 @@ defmodule Cure.Elab.Emit do
         _ -> {:tuple, @line, [{:atom, @line, cname} | present]}
       end
 
-    field_names = Enum.map(fields, fn {_q, n} -> n end)
-    new_ctx = Enum.reverse(field_names) ++ ctx
-    {:clause, @line, [pattern], [], [lower(env, body, new_ctx)]}
+    {:clause, @line, [pattern], [], [body_form]}
   end
+
+  # `erl_lint` flags a bound-but-unused variable (`unused_var`). An erased proof
+  # discards its parameters — an equality proof erases to the runtime-irrelevant
+  # `:refl`, so a *present* function parameter or matched ctor field can go
+  # unreferenced. Rename such a binder to a `_`-prefixed name: still a real,
+  # referenceable variable, but exempt from the warning. Binder names are
+  # depth-unique (`V<ctx-depth>`), so a plain occurrence check over the lowered
+  # body is a sound "is it used?" test (no shadowing to confuse it).
+  defp underscore_if_unused({:var, l, name} = v, body_form) do
+    if used_var?(name, body_form), do: v, else: {:var, l, :"_#{name}"}
+  end
+
+  defp used_var?(name, {:var, _, name}), do: true
+
+  defp used_var?(name, form) when is_tuple(form),
+    do: Enum.any?(Tuple.to_list(form), &used_var?(name, &1))
+
+  defp used_var?(name, form) when is_list(form),
+    do: Enum.any?(form, &used_var?(name, &1))
+
+  defp used_var?(_name, _other), do: false
 
   defp indices(0), do: []
   defp indices(arity), do: Enum.to_list(0..(arity - 1))
