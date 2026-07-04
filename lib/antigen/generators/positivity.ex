@@ -26,8 +26,123 @@ defmodule Antigen.Generators.Positivity do
       # occurs_deep? 342-348, data_heads/gather_data_heads). Both polarities.
       {1, Gen.return(through_constructor_positive())},
       {1, Gen.return(through_constructor_negative())},
-      {1, Gen.return(deep_negative_family())}
+      {1, Gen.return(deep_negative_family())},
+      # PARAMETRIC single-family generation (not curated): a random family whose
+      # strict-positivity LABEL is correct by construction — every ctor-arg type
+      # is drawn from a positivity-safe grammar for `:positive`, or one arg is
+      # forced into an arrow domain for `:negative`. Genuine sampling over an
+      # unbounded (Π/Σ-nested) family-shape space, cross-checked against the real
+      # `Inductive.positive?` oracle in the generator soundness test.
+      {4, parametric_family()}
     ])
+  end
+
+  # -- parametric family generation (correct-by-construction labels) ----------
+
+  # Fixed name pool (finite → the atoms stay in Challenge.@known_atoms for :safe
+  # replay). One subject family `:Pgen`, ≤2 ctors, ≤3 arg binders per ctor.
+  @pgen {:data, :Pgen, [], []}
+  @bases [{:data, :Nat, [], []}, {:data, :Bd, [], []}]
+  @ctor_names {:PC0, :PC1}
+  @binder_names {:pq0, :pq1, :pq2}
+  @gen_depth 2
+
+  @doc "A random family with a correct-by-construction strict-positivity label."
+  @spec parametric_family() :: Gen.t()
+  def parametric_family do
+    Gen.frequency([{1, positive_parametric()}, {1, negative_parametric()}])
+  end
+
+  # POSITIVE: every ctor arg is positivity-safe (subject never left of an arrow),
+  # so `Inductive.positive?` accepts by construction.
+  defp positive_parametric do
+    Gen.bind(Gen.int(1, 2), fn n_ctors ->
+      Gen.bind(gen_list_n(n_ctors, gen_safe_args(@gen_depth)), fn arg_lists ->
+        Gen.return(parametric_challenge(arg_lists, :positive, "parametric strictly-positive family"))
+      end)
+    end)
+  end
+
+  # NEGATIVE: identical skeleton, but one extra arg on the first ctor places the
+  # subject in an arrow domain → `positive?` rejects by construction.
+  defp negative_parametric do
+    Gen.bind(Gen.int(1, 2), fn n_ctors ->
+      Gen.bind(gen_list_n(n_ctors, gen_safe_args(@gen_depth)), fn arg_lists ->
+        Gen.bind(negative_arg(@gen_depth), fn neg ->
+          [first | rest] = arg_lists
+          Gen.return(parametric_challenge([first ++ [neg] | rest], :negative,
+            "parametric non-strictly-positive family (subject left of an arrow)"))
+        end)
+      end)
+    end)
+  end
+
+  defp parametric_challenge(arg_type_lists, label, note) do
+    ctors =
+      arg_type_lists
+      |> Enum.with_index()
+      |> Enum.map(fn {arg_types, ci} ->
+        args =
+          arg_types
+          |> Enum.with_index()
+          |> Enum.map(fn {ty, ai} -> {elem(@binder_names, ai), ty} end)
+
+        Inductive.ctor(elem(@ctor_names, ci), args, [])
+      end)
+
+    Challenge.new(
+      kind: :family,
+      assay: "positivity",
+      label: label,
+      payload: %{family: Inductive.family(:Pgen, [], [], 0), ctors: ctors},
+      note: note
+    )
+  end
+
+  # A ctor's argument telescope: 0-2 positivity-safe types.
+  defp gen_safe_args(depth) do
+    Gen.frequency([
+      {1, Gen.return([])},
+      {2, gen_list_n(1, positive_safe(depth))},
+      {2, gen_list_n(2, positive_safe(depth))}
+    ])
+  end
+
+  # A positivity-SAFE type: the subject `:Pgen` may appear only strictly
+  # positively — directly, in a Σ component, or in an arrow CODOMAIN; never in an
+  # arrow domain (which is F-free: a base type).
+  defp positive_safe(0), do: Gen.frequency([{2, Gen.member_of(@bases)}, {1, Gen.return(@pgen)}])
+
+  defp positive_safe(depth) do
+    Gen.frequency([
+      {3, Gen.member_of(@bases)},
+      {2, Gen.return(@pgen)},
+      {1, Gen.bind(Gen.member_of(@bases), fn dom ->
+            Gen.bind(positive_safe(depth - 1), fn cod -> Gen.return({:pi, dom, cod}) end)
+          end)},
+      {1, Gen.bind(positive_safe(depth - 1), fn a ->
+            Gen.bind(positive_safe(depth - 1), fn b -> Gen.return({:sigma, a, b}) end)
+          end)}
+    ])
+  end
+
+  # A NEGATIVE-position arg: the subject appears somewhere in an arrow DOMAIN,
+  # which strict positivity always rejects (every option is provably negative).
+  defp negative_arg(depth) do
+    Gen.frequency([
+      {2, Gen.bind(positive_safe(depth), fn cod -> Gen.return({:pi, @pgen, cod}) end)},
+      {1, Gen.bind(positive_safe(depth), fn cod ->
+            Gen.return({:pi, {:sigma, @pgen, hd(@bases)}, cod})
+          end)},
+      {1, Gen.return({:pi, {:pi, hd(@bases), @pgen}, hd(@bases)})}
+    ])
+  end
+
+  # Sequence `n` independent draws of `g` into a list.
+  defp gen_list_n(0, _g), do: Gen.return([])
+
+  defp gen_list_n(n, g) do
+    Gen.bind(g, fn x -> Gen.bind(gen_list_n(n - 1, g), fn rest -> Gen.return([x | rest]) end) end)
   end
 
   @doc "A strictly-positive Nat-like family: the recursive occurrence in `Sp` is a direct argument (positive position)."

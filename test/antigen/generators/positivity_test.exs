@@ -43,6 +43,31 @@ defmodule Antigen.Generators.PositivityTest do
     end
   end
 
+  test "parametric_family generates label-correct families the real oracle agrees with" do
+    sample = Antigen.Backend.StreamData.interp(Positivity.parametric_family()) |> Enum.take(500)
+
+    # both polarities are actually produced
+    labels = sample |> Enum.map(& &1.label) |> MapSet.new()
+    assert :positive in labels and :negative in labels
+
+    # every generated family's declared label matches Inductive.positive? — the
+    # correct-by-construction claim, verified against the real oracle
+    for c <- sample do
+      expected = if c.label == :positive, do: :ok, else: :error
+      actual = case verdict(c) do
+        :ok -> :ok
+        {:error, _} -> :error
+      end
+      assert actual == expected,
+             "parametric label #{c.label} disagrees with oracle for ctors #{inspect(c.payload.ctors)}"
+    end
+
+    # it is genuinely parametric — the sample contains many distinct family shapes,
+    # not a handful of fixed ones
+    distinct = sample |> Enum.map(& &1.payload.ctors) |> MapSet.new() |> MapSet.size()
+    assert distinct >= 20, "only #{distinct} distinct shapes — not meaningfully parametric"
+  end
+
   test "the multi-family through-constructor shapes are label-correct (deep positivity)" do
     assert :ok == verdict(Positivity.through_constructor_positive())
     assert Positivity.through_constructor_positive().label == :positive

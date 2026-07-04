@@ -96,7 +96,9 @@ defmodule Antigen.Challenge do
     # Node tags (:prim/:eq/:refl/:rewrite/:int_lit/:float_lit) are fixed Serialize
     # dispatch atoms, already interned by the code; only dynamic ctor/family names
     # need listing here.
-    :Bool, :True, :False, :MkT
+    :Bool, :True, :False, :MkT,
+    # parametric positivity generator: subject family + ctor/binder name pools
+    :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
