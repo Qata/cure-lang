@@ -61,8 +61,27 @@ defmodule Antigen.Generators.DepMatch do
       {2, var_index(:eq)},
       # closed indices — force an :impossible branch (constant Nat motive)
       {2, closed_index(@z)},
-      {2, closed_index({:ctor, :S, [@z]})}
+      {2, closed_index({:ctor, :S, [@z]})},
+      # extra context variable whose TYPE mentions the scrutinee index — branch
+      # refinement specializes it via specialize_branch_context, driving
+      # replace_branch_vars over Eq / Σ / Π type shapes.
+      {2, var_index_extra({:eq, @nat, {:var, 1}, {:var, 1}})},
+      {2, var_index_extra({:sigma, @nat, vec({:var, 2})})},
+      {2, var_index_extra({:pi, @nat, vec({:var, 2})})}
     ])
+  end
+
+  # Γ = [ p : extra_ty (idx 0), xs : Vec n (idx 1), n : Nat (idx 2) ] where
+  # extra_ty mentions n (var 1 from p's frame). Scrutinee is xs (var 1). When a
+  # branch refines n, `specialize_branch_context` rewrites p's type — exercising
+  # `replace_branch_vars` over extra_ty's shape.
+  defp var_index_extra(extra_ty) do
+    Gen.bind(numeral(), fn zbody ->
+      Gen.bind(numeral(), fn sbody ->
+        term = mk_case({:var, 1}, motive(@nat), [{:vnil, 0, zbody}, {:vcons, 3, sbody}])
+        Gen.return({[extra_ty, vec({:var, 0}), @nat], term, @nat})
+      end)
+    end)
   end
 
   # Γ = [ xs : Vec n (idx 0), n : Nat (idx 1) ]; case xs of vnil | vcons, with a
