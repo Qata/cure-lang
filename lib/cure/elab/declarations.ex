@@ -297,8 +297,26 @@ defmodule Cure.Elab.Declarations do
         Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
       true ->
-        with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-          {:ok, term}
+        # A non-constructor call body is inferred, then (mirroring the constructor
+        # branch above) retried in *checking* mode when inference fails only because
+        # an implicit stayed unsolved. This lets an implicit determined by NEITHER
+        # argument — only by the declared return type (`mk(Z()) : Const(Nat, Bool)`,
+        # whose phantom `{b}` no argument fixes) — be solved from the goal. Additive:
+        # the checked retry runs only after inference errored with
+        # `:unsolved_metavariables`, and the original error is surfaced if it too
+        # fails, so every currently-accepted or -rejected body is unchanged.
+        case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+          {:ok, term, _type} ->
+            {:ok, term}
+
+          {:error, {:unsolved_metavariables, _}} = orig ->
+            case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
+              {:ok, term} -> {:ok, term}
+              {:error, _} -> orig
+            end
+
+          {:error, _} = orig ->
+            orig
         end
     end
   end

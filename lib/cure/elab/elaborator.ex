@@ -784,7 +784,38 @@ defmodule Cure.Elab.Elaborator do
         end
 
       true ->
-        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+        # Non-constructor call in checking mode. Try the ordinary path first (infer
+        # then re-check against the goal). When that fails specifically because a
+        # call's implicit stayed unsolved AND we have a concrete expected type,
+        # retry the application threading the expected return type in, so an
+        # implicit determined by NEITHER argument — only by the return type — gets
+        # solved (`mk : {a} -> {b} -> a -> Const(a, b)` at `-> Const(Nat, Bool)`
+        # solves `b` from the goal). Additive: reached only after the ordinary path
+        # errored with `:unsolved_metavariables`, and the retry surfaces that
+        # original error if it too fails, so inference-position behaviour (no
+        # expected type) is byte-for-byte unchanged.
+        case elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+          {:ok, _} = ok ->
+            ok
+
+          {:error, {:unsolved_metavariables, _}} = orig ->
+            if implicit_def?(env, atom) and not Unify.has_meta?(expected_core) do
+              case elaborate_global_app_expected(env, atom, args, names, ctx, expected_core) do
+                {:ok, term, _type} ->
+                  with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+                    {:ok, term}
+                  end
+
+                {:error, _} ->
+                  orig
+              end
+            else
+              orig
+            end
+
+          {:error, _} = orig ->
+            orig
+        end
     end
   end
 
@@ -927,6 +958,29 @@ defmodule Cure.Elab.Elaborator do
            :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
         {:ok, term}
       end
+    end
+  end
+
+  # Elaborate a saturated global call in checking mode, threading the expected
+  # return type into the application so a return-type-only implicit can be solved.
+  # Mirrors the inference dispatch (`implicit_def?` branch): try up-front argument
+  # inference first, fall back to left-to-right bidirectional application, both
+  # carrying `expected`. The caller re-checks the assembled term against the goal.
+  defp elaborate_global_app_expected(env, atom, args, names, ctx, expected) do
+    result =
+      with {:ok, present} <- map_present_args(args, names, ctx, env) do
+        elaborate_global_app(env, atom, present, ctx, expected)
+      end
+
+    case result do
+      {:ok, _, _} = ok ->
+        ok
+
+      {:error, _} = orig ->
+        case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected) do
+          {:ok, _, _} = ok -> ok
+          {:error, _} -> orig
+        end
     end
   end
 
@@ -3844,7 +3898,7 @@ defmodule Cure.Elab.Elaborator do
   # *inferred* and its type unified against the domain to solve the metavariables.
   # `finish_global_app` assembles and the caller's kernel re-check gates the result,
   # so nothing unsound rests on the inference order.
-  defp elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx) do
+  defp elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected \\ nil) do
     %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
@@ -3852,7 +3906,7 @@ defmodule Cure.Elab.Elaborator do
     |> Enum.zip(quantities)
     |> Enum.reduce_while({:ok, MetaCtx.new(), [], arg_asts, []}, &bidir_app_slot(&1, &2, names, ctx, env))
     |> resolve_deferred_slots(names, ctx, env)
-    |> finish_global_app(name, codomain, ctx)
+    |> finish_global_app(name, codomain, ctx, env, expected)
   end
 
   defp bidir_app_slot({dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
@@ -4302,7 +4356,7 @@ defmodule Cure.Elab.Elaborator do
   # runs the shared `solve_arg` loop: erased slots become fresh metavariables,
   # present slots unify against the supplied arguments. Returns the applied term
   # and its result type (the codomain instantiated with the solved arguments).
-  defp elaborate_global_app(env, name, present_args, ctx) do
+  defp elaborate_global_app(env, name, present_args, ctx, expected \\ nil) do
     %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
@@ -4311,7 +4365,7 @@ defmodule Cure.Elab.Elaborator do
 
     telescope
     |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
-    |> finish_global_app(name, codomain, ctx)
+    |> finish_global_app(name, codomain, ctx, env, expected)
   end
 
   defp peel_pi(type, 0), do: {[], type}
@@ -4321,12 +4375,34 @@ defmodule Cure.Elab.Elaborator do
     {[d | ds], co}
   end
 
-  defp finish_global_app({:error, _} = err, _name, _cod, _ctx), do: err
+  defp finish_global_app(result, name, codomain, ctx, env \\ nil, expected \\ nil)
 
-  defp finish_global_app({:ok, _mctx, _chosen, [_ | _]}, _name, _cod, _ctx),
+  defp finish_global_app({:error, _} = err, _name, _cod, _ctx, _env, _expected), do: err
+
+  defp finish_global_app({:ok, _mctx, _chosen, [_ | _]}, _name, _cod, _ctx, _env, _expected),
     do: {:error, :too_many_arguments}
 
-  defp finish_global_app({:ok, mctx, chosen, []}, name, codomain, ctx) do
+  defp finish_global_app({:ok, mctx, chosen, []}, name, codomain, ctx, env, expected) do
+    # When an expected result type is threaded in from checking mode, unify the
+    # instantiated codomain against it BEFORE the `has_meta?` rejection below. This
+    # lets an implicit determined by NEITHER argument — only by the expected return
+    # type (a phantom parameter, `mk : {a} -> {b} -> a -> Const(a, b)` at
+    # `-> Const(Nat, Bool)`) — get solved. The instantiated codomain lives in the
+    # caller's frame, the same frame as `expected`, so they unify directly (no
+    # shift). A unify failure is swallowed (keep the old mctx) so the honest
+    # `:unsolved_metavariables` error is still produced below; the caller's kernel
+    # re-check independently gates the assembled term, so this only SOLVES
+    # metavariables and cannot cause an unsound accept.
+    mctx =
+      if expected != nil do
+        case Unify.unify(Subst.instantiate(codomain, chosen), expected, mctx, env) do
+          {:ok, mctx2} -> mctx2
+          {:error, _} -> mctx
+        end
+      else
+        mctx
+      end
+
     args = Enum.map(chosen, &Unify.zonk(&1, mctx))
 
     if Enum.any?(args, &has_meta?/1) do
