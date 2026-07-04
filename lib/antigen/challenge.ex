@@ -123,7 +123,9 @@ defmodule Antigen.Challenge do
     # Branch-unification vertical: kind + verdict labels + crossing-family names
     :branch_unify, :solved, :impossible, :trivial, :Cyc4, :mkcyc,
     # Dot-forcing vertical (#24): kind + verdict labels
-    :dot_forcing, :accept, :reject, :unforced
+    :dot_forcing, :accept, :reject, :unforced,
+    # Check-mode vertical: kind + the Bd ctor T used in a reject case
+    :check_mode, :T
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -242,6 +244,9 @@ defmodule Antigen.Challenge do
 
     {scaffold, pieces}
   end
+
+  def to_pieces(%__MODULE__{kind: :check_mode, payload: %{ctx_vars: n, term: term, type: ty}}),
+    do: {%{"ctx_vars" => n}, [{"term", term}, {"type", ty}]}
 
   def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
     %{sig: sig, ctx: ctx, term: term} = p
@@ -433,6 +438,12 @@ defmodule Antigen.Challenge do
     }
 
     new(kind: :dot_forcing, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:check_mode, assay, label, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+    payload = %{ctx_vars: scaffold["ctx_vars"], term: Map.fetch!(pmap, "term"), type: Map.fetch!(pmap, "type")}
+    new(kind: :check_mode, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do

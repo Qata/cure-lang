@@ -40,6 +40,10 @@ defmodule Antigen.Coverage do
 
   def terms_of(%Challenge{kind: :dot_forcing, payload: %{indices: idx, written: w}}), do: idx ++ [w]
 
+  # `[]` bypasses the well_formed? gate: a check-mode term may be a {:hole, _}
+  # (which Term.term? rejects) and the assay self-validates via Kernel.check.
+  def terms_of(%Challenge{kind: :check_mode}), do: []
+
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 

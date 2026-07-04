@@ -190,7 +190,10 @@ defmodule Mix.Tasks.Antigen do
       # Dot-forcing (#24) — forced/dot-pattern soundness: {name=.e} check-and-discard
       # annotation; the lever for the elaborator's named-implicit forced-value
       # resolution + the :unforced gate + Conv.conv? accept/reject decision.
-      {2, Antigen.Generators.DotForcing.gen()}
+      {2, Antigen.Generators.DotForcing.gen()},
+      # Check-mode — direct Kernel.check/3 verdicts; the lever for checking-mode-only
+      # forms (parameter-bearing ctors, holes, Σ-introduction) inference can't reach.
+      {2, Antigen.Generators.CheckMode.gen()}
     ])
   end
 
