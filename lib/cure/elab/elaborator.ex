@@ -2308,10 +2308,42 @@ defmodule Cure.Elab.Elaborator do
   # than silently drop the guard. Built on the committed `bool_elim`; no kernel
   # change. Returns `:not_applicable` only when NO arm is guarded.
   defp try_guard_match(scrut_expr, arms, expected, names, ctx, env) do
-    if Enum.any?(arms, &guarded_arm?/1) do
-      guard_chain(scrut_expr, arms, expected, names, ctx, env)
-    else
-      :not_applicable
+    cond do
+      not Enum.any?(arms, &guarded_arm?/1) ->
+        :not_applicable
+
+      # A variable scrutinee is substituted into the guard chain as-is: only a
+      # variable is duplicated (no recomputation), so the surface path is safe.
+      match?({:variable, _, _}, scrut_expr) ->
+        guard_chain(scrut_expr, arms, expected, names, ctx, env)
+
+      # A non-variable scrutinee would be DUPLICATED (and recomputed) by surface
+      # substitution across the `bool_elim` chain. Bind it ONCE under a fresh Core
+      # λ and run the chain over the binder VARIABLE, so every substitution is of a
+      # variable — a real `(λ s:T. <chain over s>) e` β-redex the kernel reduces
+      # with `e` evaluated once. Closes the `:complex_scrutinee` reach gap.
+      true ->
+        bind_once_guard(scrut_expr, arms, expected, names, ctx, env)
+    end
+  end
+
+  # Bind `scrut_expr` once under a fresh λ, then elaborate the guard chain with the
+  # fresh binder as a (variable) scrutinee. The outer goal `expected` never mentions
+  # the fresh binder, so it is shifted under the binder and the β-redex checks back
+  # against `expected` exactly. The fresh name is depth-unique (`$gscrut<n>`) so a
+  # nested non-variable guarded match binds a distinct name.
+  defp bind_once_guard(scrut_expr, arms, expected, names, ctx, env) do
+    with {:ok, scrut_core, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
+      fresh = "$gscrut" <> Integer.to_string(Context.length(ctx))
+      dom = Quote.reify(scrut_type, Context.length(ctx))
+      ctx1 = Context.extend(ctx, scrut_type)
+      names1 = [fresh | names]
+      expected1 = Subst.shift(expected, 1, 0)
+
+      with {:ok, chain} <-
+             guard_chain({:variable, [], fresh}, arms, expected1, names1, ctx1, env) do
+        {:ok, {:app, {:lam, dom, chain}, scrut_core}}
+      end
     end
   end
 
