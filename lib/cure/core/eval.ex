@@ -137,40 +137,18 @@ defmodule Cure.Core.Eval do
   defp fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
   defp fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
 
-  # Connectives and Bool-operand equality take constructor-value operands now
-  # (constructor values). `as_bool/1` maps a True/False ctor value back to an
-  # Elixir boolean; a neutral operand → :stuck → prim/2's neutral path.
-  defp fold(:and, [a, b]) do
-    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x and y)}
-  end
-
-  defp fold(:or, [a, b]) do
-    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x or y)}
-  end
-
-  defp fold(:not, [a]) do
-    with {:ok, x} <- as_bool(a), do: {:ok, vbool(not x)}
-  end
-
-  # Bool-operand equality (`a == b` where a, b : Bool). MUST come after the
-  # numeric :eq/:ne clauses above — `[a, b]` matches any 2-tuple list and would
-  # otherwise shadow them.
-  defp fold(:eq, [a, b]) do
-    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x == y)}
-  end
-
-  defp fold(:ne, [a, b]) do
-    with {:ok, x} <- as_bool(a), {:ok, y} <- as_bool(b), do: {:ok, vbool(x != y)}
-  end
-
+  # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality
+  # (`eq`/`ne` on Bool) are NO LONGER primitives: they are ordinary Cure
+  # functions in Std.Bool that `case`-eliminate the inductive Bool
+  # (booland/boolor/boolnot/booleq/boolne). A residual `{:prim, :and/:or/:not}`
+  # or Bool-operand `{:prim, :eq/:ne}` — which a well-typed term can no longer
+  # contain — falls through to the `:stuck` catch-all below and is rejected by
+  # `Kernel.infer` (`{:unknown_prim, _}`). The numeric `:eq`/`:ne` clauses above
+  # (on Int/Float) are untouched.
   defp fold(_op, _args), do: :stuck
 
   defp vbool(true), do: {:vctor, :True, []}
   defp vbool(false), do: {:vctor, :False, []}
-
-  defp as_bool({:vctor, :True, []}), do: {:ok, true}
-  defp as_bool({:vctor, :False, []}), do: {:ok, false}
-  defp as_bool(_other), do: :stuck
 
   defp vfst({:vpair, a, _b}), do: a
   defp vfst({:vneutral, n}), do: {:vneutral, {:nfst, n}}

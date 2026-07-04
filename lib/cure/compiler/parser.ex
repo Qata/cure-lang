@@ -326,6 +326,34 @@ defmodule Cure.Compiler.Parser do
       :caret ->
         parse_pin(state)
 
+      # Forced (dot) pattern: a leading `.` in prefix position introduces a
+      # forced-equation pattern (`.x`, `.(S(k))`). The inner term is a value the
+      # match must be convertible with rather than a fresh binder. Parsing
+      # succeeds in any position by design; using a forced pattern outside a
+      # pattern is rejected later, at elaboration. Infix `.` (module paths like
+      # `Std.String`) is a different grammar position (handle_infix_op :dot) and
+      # never reaches this prefix clause.
+      :dot ->
+        {inner, state} = parse_forced_inner(advance(state))
+        {{:forced_pattern, [line: token.line, col: token.col], inner}, state}
+
+      # Named-implicit dot pattern `{ name = <expr> }` in a constructor-argument
+      # position — annotates an erased implicit index by name (Lean/Idris-style),
+      # e.g. `vcons({k = .m}, h, r)`. Only the `{ IDENT = … }` shape is a
+      # named-implicit; every other leading `{` in prefix position keeps its
+      # previous unexpected-token error (records use the postfix `Name{…}` form,
+      # maps use `#{…}`, blocks use indentation — none reach this clause).
+      :lbrace ->
+        case {peek_at(state, 1), peek_at(state, 2)} do
+          {%Token{type: :identifier}, %Token{type: :assign}} ->
+            parse_named_implicit_pat(state, token)
+
+          _ ->
+            error = {:unexpected_token, token.type, token.line, token.col}
+            state = add_error(state, error)
+            {error_node(token), advance(state)}
+        end
+
       # Indent starts a block
       :indent ->
         parse_block(state)
@@ -389,6 +417,37 @@ defmodule Cure.Compiler.Parser do
         ast = {:pin, [line: token.line, col: token.col], [inner]}
         {ast, state}
     end
+  end
+
+  # -- Forced (dot) pattern inner --------------------------------------------
+  #
+  # After a leading `.`, read the forced term. `.(expr)` parses a full
+  # parenthesised expression (a compound forced pattern like `.(S(k))`); a bare
+  # `.x` reads a single primary (identifier / literal) as the forced value.
+  defp parse_forced_inner(state) do
+    case peek(state).type do
+      :lparen -> parse_grouped(state)
+      _ -> parse_prefix(state)
+    end
+  end
+
+  # -- Named-implicit dot pattern --------------------------------------------
+  #
+  # `{ name = <expr> }` annotates a constructor's erased implicit index `name`
+  # with a forced value in a pattern-argument position. Valid only as a
+  # constructor-pattern argument; ordinary expression elaboration rejects it
+  # (`{:named_implicit_not_in_pattern, …}`). The inner expression is parsed with
+  # the full expression grammar, so a leading `.` yields a `{:forced_pattern,…}`.
+  defp parse_named_implicit_pat(state, brace_token) do
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = expect(state, :assign)
+    {inner, state} = parse_expr(state, 0)
+    state = expect(state, :rbrace)
+    meta = [line: brace_token.line, col: brace_token.col]
+    {{:named_implicit_pat, meta, name, inner}, state}
   end
 
   # -- Literals --------------------------------------------------------------
@@ -1302,8 +1361,25 @@ defmodule Cure.Compiler.Parser do
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
 
-    ast = {:assignment, meta, [pattern, value]}
-    {ast, state}
+    assignment = {:assignment, meta, [pattern, value]}
+
+    # Optional ML-style `let <pat> = <value> in <body>`: an expression-position
+    # binder. Desugar to the same two-statement `{:block, …}` node a block-form
+    # `let` followed by a trailing expression produces, which the elaborator
+    # already lowers to a β-redex `(λ x:T. body) value`. Without `in`, `let`
+    # stays a block statement (the enclosing block collects the following
+    # statements), exactly as before.
+    case peek(state) do
+      %Token{type: :keyword, value: :in} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {body, state} = parse_expr_or_block(state)
+        block = {:block, [line: token.line, col: token.col], [assignment, body]}
+        {block, state}
+
+      _ ->
+        {assignment, state}
+    end
   end
 
   # -- If / Elif / Else
@@ -2854,6 +2930,50 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # Like `parse_type_param_list`, but each element may carry an optional binder
+  # name (`x: A`). Used only for a standalone parenthesised type that may become a
+  # dependent function type `(x: A) -> …`. Returns `{binder | nil, type_ast}`
+  # pairs so the caller can build a dependent Π (binders present) or the existing
+  # non-dependent arrow (all binders nil).
+  defp parse_paren_type_list(state) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :rparen} ->
+        {[], state}
+
+      _ ->
+        {binder, state} = parse_optional_binder(state)
+        {t, state} = parse_type_expr(state)
+        state = skip_newlines(state)
+
+        case peek(state) do
+          %Token{type: :comma} ->
+            state = advance(state)
+            state = skip_newlines(state)
+            {rest, state} = parse_paren_type_list(state)
+            {[{binder, t} | rest], state}
+
+          _ ->
+            {[{binder, t}], state}
+        end
+    end
+  end
+
+  # An optional `name :` binder prefix inside a parenthesised arrow domain. Only
+  # consumes when an identifier is immediately followed by `:` — so `(N)` stays a
+  # plain domain while `(n: N)` binds `n`. (A type element in this position is
+  # never otherwise followed by `:`.)
+  defp parse_optional_binder(state) do
+    case {peek(state), peek(advance(state))} do
+      {%Token{type: :identifier, value: v}, %Token{type: :colon}} ->
+        {to_string(v), advance(advance(state))}
+
+      _ ->
+        {nil, state}
+    end
+  end
+
   defp parse_refinement_type(state) do
     # {x: BaseType | predicate}
     state = advance(state)
@@ -3798,23 +3918,37 @@ defmodule Cure.Compiler.Parser do
 
     case token.type do
       :lparen ->
-        # Tuple type or function type: (A, B) -> C
+        # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
+        # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
+        # codomain (and later domains) may mention `x`.
         state = advance(state)
-        {inner, state} = parse_type_param_list(state)
+        {inner, state} = parse_paren_type_list(state)
         state = expect(state, :rparen)
 
         case peek(state) do
           %Token{type: :arrow} ->
             state = advance(state)
             {ret, state} = parse_type_expr(state)
-            ast = {:function_call, [name: "Function", function_type: true], inner ++ [ret]}
+            binders = Enum.map(inner, &elem(&1, 0))
+            doms = Enum.map(inner, &elem(&1, 1))
+
+            ast =
+              if Enum.all?(binders, &is_nil/1) do
+                # No named domain — the existing non-dependent arrow, unchanged.
+                {:function_call, [name: "Function", function_type: true], doms ++ [ret]}
+              else
+                # At least one named domain — a dependent Π; carry the binder names
+                # (nil for anonymous domains) for the elaborator to scope.
+                {:pi_type, [binders: binders], doms ++ [ret]}
+              end
+
             {ast, state}
 
           _ ->
-            # Just a grouped type or tuple type
-            case inner do
+            # Grouped type or tuple type — binders (if any) are not meaningful here.
+            case Enum.map(inner, &elem(&1, 1)) do
               [single] -> {single, state}
-              _ -> {{:tuple, [], inner}, state}
+              many -> {{:tuple, [], many}, state}
             end
         end
 

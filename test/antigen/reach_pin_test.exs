@@ -10,30 +10,33 @@ defmodule Antigen.ReachPinTest do
   initial entries) appends the byte-identical record line to corpus.sexp, removes
   it here, and deletes the matching pin below — in the same commit. Records are
   never edited in place.
+
+  ALL initial reach pins have now been ACHIEVED and migrated to corpus.sexp:
+  `wellfounded_ackermann` by #14 (single-function size-change + reconstruct-equal),
+  and the two MUTUAL pins (`wellfounded_even_odd`, `wellfounded_permuted_pair`) by
+  #13 (cross-function / mutual size-change). `reach.sexp` is therefore empty and
+  `@pins` is `[]`; new reach pins (checker not-yet-achieving a labelled truth) get
+  added here, banked to `reach.sexp`, and pinned to their current violation.
   """
   use ExUnit.Case, async: false
   alias Antigen.{Corpus, Assays}
-  alias Antigen.Generators.Totality
 
   @reach "test/antigen/reach.sexp"
 
-  @pins [
-    Totality.wellfounded_even_odd(),
-    Totality.wellfounded_ackermann(),
-    Totality.wellfounded_permuted_pair()
-  ]
+  # No outstanding reach pins (all migrated to corpus.sexp — see moduledoc).
+  @pins []
 
   # keyed by focus — the pinned CURRENT verdict for each banked entry
-  @expected %{
-    [:even, :odd] => {:violation, {:wrongly_rejected, [:even, :odd]}},
-    [:ack] => {:violation, {:wrongly_rejected, [:ack]}},
-    [:f, :g] => {:violation, {:wrongly_rejected, [:f, :g]}}
-  }
+  @expected %{}
 
   test "reach pins are banked and replay to their documented conservative rejection" do
     for c <- @pins, do: Corpus.append(@reach, c, Corpus.dedup_key(c, :antibody))
 
-    decoded = @reach |> Corpus.stream() |> Enum.map(fn {:ok, c} -> c end)
+    decoded =
+      if File.exists?(@reach),
+        do: @reach |> Corpus.stream() |> Enum.map(fn {:ok, c} -> c end),
+        else: []
+
     assert length(decoded) == map_size(@expected)
 
     for c <- decoded do

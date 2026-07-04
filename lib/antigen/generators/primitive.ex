@@ -14,11 +14,13 @@ defmodule Antigen.Generators.Primitive do
   (`{:vneutral, {:nprim, ...}}`) — this is what exercises fold's `:stuck` /
   guarded-fold clauses.
 
-  Both **numeric** prims (result `Int`/`Float`) and **Bool** prims (comparisons
-  `lt/le/gt/ge/eq/ne`, connectives `and/or/not`, and Bool-operand `eq/ne`) are
-  emitted; the latter type at `Bool` via the `:bool` builtin now seeded in the v1
-  menu, and fold to the canonical `True`/`False` ctor values (exercising fold's
-  comparison/connective clauses and `vbool`/`as_bool`).
+  Emits **numeric** prims (result `Int`/`Float`: `add/sub/mul/div/rem/neg`) and
+  **numeric comparisons** (`lt/le/gt/ge/eq/ne` over Int/Float operands, result
+  `Bool` via the `:bool` builtin). The Boolean **connectives** (`and/or/not`) and
+  Bool-operand `eq/ne` are deliberately NOT emitted: the connectives were retired
+  from the kernel to Std.Bool `case`-defs (they now fail `infer_prim` with
+  `{:unknown_prim, op}`), and Bool-operand `eq/ne` infers but no longer folds
+  (stuck). Both are covered instead through the elaborator's Std.Bool lowering.
 
   Tagged for the three infer+normalize assays (`infer_check`, `subject_reduction`,
   `normalization`); `normalization` is the one that drives `nf` — hence `eval` —
@@ -106,34 +108,17 @@ defmodule Antigen.Generators.Primitive do
 
   defp float_zero, do: Gen.return({:float_lit, 0.0})
 
-  # -- Bool prims -------------------------------------------------------------
-  # Comparisons over numeric operands (Int or Float), boolean connectives over
-  # Bool operands, and Bool-operand equality — all result at Bool.
+  # -- Bool-returning prims ---------------------------------------------------
+  # Numeric comparisons (Int or Float operands), result Bool. Connectives and
+  # Bool-operand eq/ne are intentionally excluded (retired / non-folding) — see
+  # the moduledoc.
   defp bool_prim(depth) do
-    numeric_cmp =
+    Gen.frequency(
       Enum.flat_map(@cmp_ops, fn op ->
         [{1, binop(op, &int_operand/1, depth)}, {1, binop(op, &float_operand/1, depth)}]
       end)
-
-    connectives = [
-      {2, binop(:and, &bool_operand/1, depth)},
-      {2, binop(:or, &bool_operand/1, depth)},
-      {2, unop(:not, &bool_operand/1, depth)},
-      # Bool-operand eq/ne (Eval.fold's post-numeric :eq/:ne clauses).
-      {2, binop(:eq, &bool_operand/1, depth)},
-      {2, binop(:ne, &bool_operand/1, depth)}
-    ]
-
-    Gen.frequency(numeric_cmp ++ connectives)
+    )
   end
-
-  defp bool_operand(0), do: bool_lit()
-
-  defp bool_operand(depth) do
-    Gen.frequency([{4, bool_lit()}, {1, bool_prim(depth - 1)}])
-  end
-
-  defp bool_lit, do: Gen.member_of([{:ctor, :True, []}, {:ctor, :False, []}])
 
   # -- op shapes --------------------------------------------------------------
   defp binop(op, operand, depth) do

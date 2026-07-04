@@ -727,10 +727,20 @@ defmodule Cure.Elab.Declarations do
     if Keyword.get(fmeta, :function_type) do
       arrow_to_pi(args, scope, fam, env)
     else
-      atom = fmeta |> Keyword.fetch!(:name) |> String.to_atom()
+      name = Keyword.fetch!(fmeta, :name)
+      atom = String.to_atom(name)
 
       with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env) do
         cond do
+          # An applied BOUND variable — e.g. a higher-order parameter used as
+          # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+          # the head against the de Bruijn scope; a local binder shadows a global,
+          # so this is checked first. Without it `F(n)` became a dangling
+          # `{:global, :F}`, and the call site's implicit substitution could never
+          # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+          idx = Enum.find_index(scope, &(&1 == name)) ->
+            {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
+
           atom == :Eq and length(core_args) == 3 ->
             [ty, a, b] = core_args
             {:ok, {:eq, ty, a, b}}
@@ -779,6 +789,30 @@ defmodule Cure.Elab.Declarations do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
       {:ok, {:sigma, dom, body}}
+    end
+  end
+
+  # A dependent function type `(x1: D1, …, xn: Dn) -> R` becomes the Π
+  # `Π(x1:D1). … Π(xn:Dn). R`. Each domain is elaborated with the earlier binders
+  # in scope, and the codomain with all of them, so `(n: N) -> P(n)` resolves the
+  # `n` in `P(n)` as the Π-bound variable (de Bruijn `{:var, 0}`). Direct analog of
+  # the `sigma_type` binder threading above; `nil` binders (anonymous domains, from
+  # a mixed `(a, x: B) -> …`) push a placeholder so indices stay aligned.
+  defp idx_to_core({:pi_type, [binders: names], asts}, scope, fam, env) do
+    {domains, [ret_ast]} = Enum.split(asts, length(asts) - 1)
+
+    folded =
+      Enum.zip(names, domains)
+      |> Enum.reduce_while({:ok, [], scope}, fn {name, dom_ast}, {:ok, rev, sc} ->
+        case idx_to_core(dom_ast, sc, fam, env) do
+          {:ok, dom} -> {:cont, {:ok, [dom | rev], [(name || :_) | sc]}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+
+    with {:ok, rev_doms, inner_scope} <- folded,
+         {:ok, ret} <- idx_to_core(ret_ast, inner_scope, fam, env) do
+      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, dom, acc} end)}
     end
   end
 

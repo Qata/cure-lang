@@ -669,15 +669,18 @@ defmodule Cure.Core.Kernel do
   # Eq's type-formation rule (mirrors `infer/2`'s `{:eq, ty, a, b}` clause): its
   # sort is the sort of the carrier `ty`, and both endpoints must inhabit `ty`.
   # `ty`'s sort is inferred by value-recursion (robust to an indexed carrier); the
-  # endpoints are checked exactly as `infer/2` does — reifying them and calling
-  # `check/3` against `ty` (the same reified endpoint terms a full reify would
-  # produce, so endpoint acceptance is unchanged).
+  # endpoints are reified and `check`ed against `ty`. Read-back is
+  # SIGNATURE-AWARE (`Context.signature(ctx)`) so an endpoint that is an
+  # indexed-family type value (e.g. `SNat(s)`) recovers its param/index split and
+  # `check` sees the correct arity — without the signature the split collapses and
+  # a well-formed indexed-family Eq motive is false-rejected `:bad_motive`.
   defp infer_type_value_sort(ctx, {:veq, ty, a, b}) do
     with {:ok, level} <- infer_type_value_sort(ctx, ty) do
       depth = Context.length(ctx)
+      sig = Context.signature(ctx)
 
-      with :ok <- check(ctx, Quote.reify(a, depth), ty),
-           :ok <- check(ctx, Quote.reify(b, depth), ty) do
+      with :ok <- check(ctx, Quote.reify(a, depth, sig), ty),
+           :ok <- check(ctx, Quote.reify(b, depth, sig), ty) do
         {:ok, level}
       end
     end
@@ -806,10 +809,10 @@ defmodule Cure.Core.Kernel do
   # r-side vars are always < arity (ctor telescope); s-side vars always >= arity
   # (outer). Disjoint ranges ⇒ the solve direction is unambiguous.
   defp unify_one({:var, i}, s, arity, subst) when i < arity,
-    do: bind_index(i, s, subst)                         # ctor arg := scrutinee term (Box case / prior behavior)
+    do: bind_index(i, s, arity, subst)                  # ctor arg := scrutinee term (Box case / prior behavior)
 
   defp unify_one(r, {:var, j}, arity, subst) when j >= arity,
-    do: bind_index(j, r, subst)                         # outer index var := ctor result index (4.3)
+    do: bind_index(j, r, arity, subst)                  # outer index var := ctor result index (4.3)
 
   defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
     do: unify_spine(as, bs, arity, subst)
@@ -839,21 +842,52 @@ defmodule Cure.Core.Kernel do
   end
   defp unify_spine(_, _, _arity, subst), do: {:ok, subst}
 
-  # Add {key => term} after an occurs-check; on a same-key clash keep conservative.
-  defp bind_index(key, term, subst) do
+  # Add {key => term} after an occurs-check; on a same-key clash, resolve-before-bind.
+  #
+  # `term` is first CHASED through the current substitution to its representative
+  # (`resolve_index_var`). This keeps `subst` a union-find forest — each key points
+  # toward a representative, never into a cycle. In particular, when a second forced
+  # equation would close a loop (`c : T(a,a,b,b)` matched against `T(i,j,j,i)` induces
+  # both `j := i` and, later, `i := j`), the resolved `term` collapses to the same
+  # representative as `key`, so the second edge becomes the no-op `key == rterm`
+  # clause below instead of a cyclic `i↦j`/`j↦i` pair. Without this the per-key
+  # `occurs_index?` guard (which only inspects a key against its OWN value) cannot see
+  # the cross-key cycle, and `replace_branch_vars` would apply it as a variable SWAP
+  # rather than collapsing `i ≡ j` (spec §4.1 multi-key-cycle obligation).
+  defp bind_index(key, term, arity, subst) do
+    rterm = resolve_index_var(term, subst, 0)
+
     cond do
-      occurs_index?(key, term) -> :undecided            # cyclic ⇒ degrade (spec §5.3)
+      rterm == {:var, key} -> {:ok, subst}              # already same class ⇒ no-op (breaks cycles)
+      occurs_index?(key, rterm) -> :undecided           # cyclic ⇒ degrade (spec §5.3)
       Map.has_key?(subst, key) ->
         old = Map.get(subst, key)
         cond do
-          old == term -> {:ok, subst}                   # consistent
-          rigid_index?(old) and rigid_index?(term) and head_key(old) != head_key(term) ->
+          old == rterm -> {:ok, subst}                  # consistent
+          rigid_index?(old) and rigid_index?(rterm) and head_key(old) != head_key(rterm) ->
             :impossible                                 # same-key merge conflict ⇒ impossible
-          true -> :undecided
+          true ->
+            # Resolve-before-bind (Agda Solution step): the key is already pinned to
+            # `old`, so this pair really asserts `old =? rterm`. Re-unify them; for two
+            # distinct scrutinee vars this routes through unify_one clause 2 and binds
+            # the outer var (a forced equation).
+            unify_one(old, rterm, arity, subst)
         end
-      true -> {:ok, Map.put(subst, key, term)}
+      true -> {:ok, Map.put(subst, key, rterm)}
     end
   end
+
+  # Chase a `{:var, k}` through `subst` to its representative (a non-var term or an
+  # unbound var). Depth-bounded purely as a defensive backstop — the forest invariant
+  # maintained by `bind_index` means a real cycle never forms, so the bound is never hit.
+  defp resolve_index_var({:var, k} = v, subst, depth) when depth < 100_000 do
+    case Map.get(subst, k) do
+      nil -> v
+      next -> resolve_index_var(next, subst, depth + 1)
+    end
+  end
+
+  defp resolve_index_var(t, _subst, _depth), do: t
 
   defp rigid_index?({:ctor, _, _}), do: true
   defp rigid_index?({:data, _, _, _}), do: true
@@ -1018,26 +1052,11 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # Boolean connectives.
-  defp infer_prim(ctx, op, [a, b]) when op in [:and, :or] do
-    bool = bool_type_value(Context.signature(ctx))
-
-    with :ok <- check(ctx, a, bool), :ok <- check(ctx, b, bool) do
-      {:ok, bool}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
-
-  defp infer_prim(ctx, :not, [a]) do
-    bool = bool_type_value(Context.signature(ctx))
-
-    with :ok <- check(ctx, a, bool) do
-      {:ok, bool}
-    else
-      _ -> {:error, {:prim_type, :not}}
-    end
-  end
+  # The Boolean connectives (`and`/`or`/`not`) are no longer primitives — they are
+  # Std.Bool functions (booland/boolor/boolnot) that `case`-eliminate the inductive
+  # Bool. A residual `{:prim, :and/:or/:not}` therefore falls through to the
+  # `{:unknown_prim, op}` clause below (the desired rejection). `bool_type_value/1`
+  # stays: the numeric comparisons above still return the inductive Bool through it.
 
   # Numeric negation: numeric operand, same result type.
   defp infer_prim(ctx, :neg, [a]) do

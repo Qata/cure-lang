@@ -66,6 +66,22 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A forced (dot) pattern `{:forced_pattern, …}` is only meaningful in a
+  # constructor-argument PATTERN position (handled by the pattern path in a later
+  # task). Reaching ordinary expression elaboration means a dot was used outside
+  # a pattern (a `let` RHS, a function argument/body, …) — reject it. Placed
+  # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
+  # is reported.
+  def elaborate_expr_typed({:forced_pattern, meta, _expr}, _names, _ctx, _env),
+    do: {:error, {:forced_pattern_not_in_pattern, meta}}
+
+  # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
+  # constructor-argument PATTERN position (annotating an erased index by name).
+  # Reaching ordinary expression elaboration means it was used outside a pattern
+  # — reject it with a precise error (mirrors the forced-pattern guard above).
+  def elaborate_expr_typed({:named_implicit_pat, meta, _name, _inner}, _names, _ctx, _env),
+    do: {:error, {:named_implicit_not_in_pattern, meta}}
+
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
       # Record construction `Point{x: .., y: ..}` desugars to the positional
@@ -333,23 +349,42 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A surface binary operator lowers to the kernel primitive `{:prim, op, args}`,
-  # whose typing rules (`infer_prim`) already fix the result: arithmetic returns
-  # the shared numeric type, comparisons/equality/connectives return Bool. We
-  # elaborate both operands in inference mode, assemble the prim, and let the
-  # kernel infer the result type — no duplicated type rules here.
-  def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
-    case prim_op(Keyword.fetch!(meta, :operator)) do
-      {:ok, op} ->
-        with {:ok, l_core, _lt} <- elaborate_expr_typed(l, names, ctx, env),
-             {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
-             term = {:prim, op, [l_core, r_core]},
+  # A surface unary operator. `not` is retired as a kernel primitive: it lowers to
+  # an application of the `Std.Bool` prelude def `boolnot` (a `case`-eliminating
+  # function over the inductive Bool). The kernel checks the operand against Bool
+  # and infers the result. Any other unary operator is unsupported here.
+  def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
+    case Keyword.fetch!(meta, :operator) do
+      :not ->
+        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+             term = {:app, {:global, :boolnot}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
 
-      :error ->
+      _ ->
         {:error, {:unsupported_expression, expr}}
+    end
+  end
+
+  # A surface binary operator. Arithmetic and numeric comparisons still lower to
+  # the kernel primitive `{:prim, op, args}`. The Boolean CONNECTIVES `and`/`or`
+  # are retired as primitives: they lower to applications of the `Std.Bool`
+  # prelude defs `booland`/`boolor`. Equality `==`/`!=` is operand-type-directed:
+  # numeric (Int/Float) operands keep the native `{:prim, :eq/:ne}` compare, while
+  # Bool operands lower to the `booleq`/`boolne` defs (so `case`-elimination, not a
+  # primitive, decides Boolean equality). We elaborate both operands in inference
+  # mode, assemble the term, and let the kernel infer the result type.
+  def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
+    with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
+         {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+         {:ok, term} <-
+           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, Context.signature(ctx)),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    else
+      :unsupported_op -> {:error, {:unsupported_expression, expr}}
+      other -> other
     end
   end
 
@@ -369,9 +404,43 @@ defmodule Cure.Elab.Elaborator do
   defp prim_op(:>), do: {:ok, :gt}
   defp prim_op(:<=), do: {:ok, :le}
   defp prim_op(:>=), do: {:ok, :ge}
-  defp prim_op(:and), do: {:ok, :and}
-  defp prim_op(:or), do: {:ok, :or}
   defp prim_op(_), do: :error
+
+  # Assemble the Core term for a surface binary operator. The connectives and
+  # Bool-operand equality become applications of the Std.Bool prelude defs (the
+  # `:and`/`:or`/Bool-`:eq`/`:ne` primitives are retired); everything else — and
+  # numeric `==`/`!=` — stays a native `{:prim, op, args}`.
+  defp build_binop(:and, l, r, _l_type, _sig), do: {:ok, app2(:booland, l, r)}
+  defp build_binop(:or, l, r, _l_type, _sig), do: {:ok, app2(:boolor, l, r)}
+
+  defp build_binop(:==, l, r, l_type, sig) do
+    if bool_operand?(l_type, sig),
+      do: {:ok, app2(:booleq, l, r)},
+      else: {:ok, {:prim, :eq, [l, r]}}
+  end
+
+  defp build_binop(:!=, l, r, l_type, sig) do
+    if bool_operand?(l_type, sig),
+      do: {:ok, app2(:boolne, l, r)},
+      else: {:ok, {:prim, :ne, [l, r]}}
+  end
+
+  defp build_binop(op_sym, l, r, _l_type, _sig) do
+    case prim_op(op_sym) do
+      {:ok, op} -> {:ok, {:prim, op, [l, r]}}
+      :error -> :unsupported_op
+    end
+  end
+
+  # A saturated `f(a)(b)` application of a global by name, most-recently-applied
+  # argument outermost — the shape the kernel + emit expect for a curried def.
+  defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
+
+  # The operand type resolves to the canonical `:bool` builtin family. Only a
+  # type that is *definitely* Bool diverts `==`/`!=` to the case-defs; anything
+  # else (Int/Float, a type variable, a neutral) keeps the native prim — so the
+  # change is a no-op for every non-Bool operand.
+  defp bool_operand?(l_type, sig), do: primitive_scrut_kind(l_type, sig) == {:ok, :bool}
 
   defp sigma_projection(which, inner, names, ctx, env) do
     with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
@@ -560,10 +629,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # A `let x = e ⏎ body` block, in checking mode. There is no `:let` in Core, so
-  # each binding desugars to a β-redex `(λ x:T. body) e`: infer the rhs, extend
-  # the context with `x : T`, check the remainder against the expected type
-  # shifted under the new binder, and wrap. The kernel re-checks the assembled
-  # redex against the expected type.
+  # each binding is eliminated by *surface substitution* (`elaborate_let_block`):
+  # every free `x` in the remaining statements is replaced by the rhs expression
+  # `e`, then the substituted body is checked against the expected type. NOTE:
+  # this INLINES `e` at each use (it does not build a `(λ x:T. body) e` redex), so
+  # it does not bind-once — a caller wanting to avoid duplicating/re-evaluating a
+  # complex `e` (e.g. a guarded match's scrutinee) cannot get that by routing
+  # through here; it would need a real Core binder built directly. A rebinding of
+  # `x` in a later statement is refused (would capture).
   def elaborate_expr_checked({:block, _meta, stmts}, expected_core, names, ctx, env) do
     elaborate_let_block(stmts, expected_core, names, ctx, env)
   end
@@ -639,9 +712,18 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
-    with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),
-         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-      {:ok, term}
+    # An unsolved metavariable in the expected type (e.g. a higher-order implicit
+    # `{P : Nat -> Type}` that first-order unification could not solve) must not be
+    # handed to the trusted `Eval.eval` — it has no `{:meta, _}` clause and would
+    # crash the kernel. Reject cleanly instead; higher-order pattern unification
+    # (ledger #10) is what would let it be solved rather than rejected.
+    if Unify.has_meta?(expected_core) do
+      {:error, {:unsolved_metavariable_in_type, expected_core}}
+    else
+      with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
     end
   end
 
@@ -937,9 +1019,29 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
+    # A tuple SCRUTINEE (`match %[xs, ys] | %[C(…), D(…)] -> …`) is lowered to a
+    # nested single-scrutinee match (`match xs | C(…) -> match ys | D(…) -> …`),
+    # so the existing dependent single-scrutinee machinery handles it — absurd
+    # cross-constructor cases (a `Vector`'s shared index rules them out) fall out
+    # of the inner index-refined match's coverage, exactly as the hand-written
+    # nested form already does. Non-tuple scrutinees are returned unchanged.
+    {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
+
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms1b} <- desugar_tuple_args(arms1),
-         {:ok, arms} <- desugar_nested_arms(arms1b, scrut_expr),
+         # A guard on a *nested* constructor pattern is threaded through the
+         # pattern-matrix compiler here: rows carry their guard, and each matrix
+         # leaf folds the reached rows into a `bool_elim` `if`-chain whose tail is
+         # the next row (the Wadler/Augustsson `match … default` continuation,
+         # à la Idris' `CaseBuilder` errorCase — but over surface names, so no
+         # de-Bruijn weakening is needed).
+         {:ok, arms1c} <- desugar_nested_arms(arms1b, scrut_expr),
+         # A guard on a *single-level* constructor pattern (which never reaches the
+         # matrix) is folded into a guardless arm whose body is a `bool_elim`
+         # `if`-chain over the constructor group's rows (same-constructor
+         # fall-through), so it flows through the ordinary `:vdata` path below. A
+         # guard on a *variable/catch-all* pattern is left for `try_guard_match`.
+         {:ok, arms} <- desugar_ctor_guards(arms1c, scrut_expr),
          # A `when` guard is orthogonal to the pattern's shape, so it is resolved
          # before the shape-dispatching paths (each of which would silently drop
          # the guard). Claims EVERY guarded match: handles the tractable subset,
@@ -1827,6 +1929,105 @@ defmodule Cure.Elab.Elaborator do
 
   defp strip_tuple_args_in_ctor(other), do: {:ok, other, []}
 
+  # --- tuple-scrutinee matching (parity #6) ----------------------------------
+  #
+  # `match %[e₀, e₁, …] | %[p₀, p₁, …] -> body` (simultaneous / Idris'
+  # `case (e₀, e₁) of`) is desugared, ONE column at a time, into a nested
+  # single-scrutinee match `match e₀ | p₀ -> match %[e₁, …] | %[p₁, …] -> body`.
+  # The remaining columns re-enter this same path (their scrutinee is a smaller
+  # tuple, or the bare element when only one column is left), so the whole tree
+  # is built by re-entry. Each first-column constructor keeps its argument
+  # patterns inline, so `desugar_nested_arms` still lowers any nested args, and
+  # the inner match on an index-refined scrutinee elides the impossible sibling
+  # constructors (e.g. two `Vector`s that share index `n` cannot be `empty`/
+  # `prepend`), exactly as the hand-written nested form relies on.
+  #
+  # Fires only for a tuple scrutinee (≥2 elems) whose arms are ALL guardless
+  # tuple patterns of matching arity, with DISTINCT constructor heads in the
+  # first column. Anything else (non-tuple scrutinee, a variable/wildcard or a
+  # repeated head in the first column) is returned UNCHANGED, so ordinary
+  # matches are untouched and still-unsupported shapes reach their existing
+  # clean rejection rather than being miscompiled.
+  defp desugar_tuple_scrutinee({:tuple, _meta, elems} = scrut, arms)
+       when length(elems) >= 2 do
+    with {:ok, rows} <- tuple_scrutinee_rows(elems, arms),
+         {:ok, new_scrut, new_arms} <- split_first_tuple_column(elems, rows) do
+      {new_scrut, new_arms}
+    else
+      _ -> {scrut, arms}
+    end
+  end
+
+  defp desugar_tuple_scrutinee(scrut, arms), do: {scrut, arms}
+
+  # Validate every arm is a guardless tuple pattern of the scrutinee's arity;
+  # return the rows as `{[col-patterns], body-expr}`.
+  defp tuple_scrutinee_rows(elems, arms) do
+    n = length(elems)
+
+    Enum.reduce_while(arms, {:ok, []}, fn
+      {:match_arm, meta, body}, {:ok, acc} ->
+        case Keyword.fetch!(meta, :pattern) do
+          {:tuple, _tm, pats} when length(pats) == n ->
+            if Keyword.has_key?(meta, :guard) do
+              {:halt, :not_applicable}
+            else
+              {:cont, {:ok, acc ++ [{pats, single_body(body)}]}}
+            end
+
+          _ ->
+            {:halt, :not_applicable}
+        end
+
+      _other, _acc ->
+        {:halt, :not_applicable}
+    end)
+  end
+
+  # Split the first column: outer scrutinee `e₀`, one outer arm per row keeping
+  # its first-column pattern, whose body matches the remaining columns. Requires
+  # all first-column patterns to be constructors with distinct heads (disjoint,
+  # so first-match order is preserved and no row is shadowed).
+  defp split_first_tuple_column([e0 | erest], rows) do
+    col0 = Enum.map(rows, fn {[p0 | _], _} -> p0 end)
+
+    heads =
+      Enum.map(col0, fn
+        {:function_call, fm, _} -> {:ok, Keyword.fetch!(fm, :name)}
+        _ -> :error
+      end)
+
+    cond do
+      not Enum.all?(heads, &match?({:ok, _}, &1)) ->
+        :not_applicable
+
+      not distinct?(Enum.map(heads, fn {:ok, h} -> h end)) ->
+        :not_applicable
+
+      true ->
+        arms =
+          Enum.map(rows, fn {[p0 | prest], body} ->
+            {:match_arm, [pattern: p0], [build_inner_tuple_match(erest, prest, body)]}
+          end)
+
+        {:ok, e0, arms}
+    end
+  end
+
+  # The remaining columns become the inner match. A single remaining column is a
+  # bare single-scrutinee match; two or more re-enter `desugar_tuple_scrutinee`
+  # as a smaller tuple scrutinee.
+  defp build_inner_tuple_match([e1], [p1], body) do
+    {:pattern_match, [], [e1, {:match_arm, [pattern: p1], [body]}]}
+  end
+
+  defp build_inner_tuple_match(erest, prest, body) when length(erest) >= 2 do
+    {:pattern_match, [],
+     [{:tuple, [], erest}, {:match_arm, [pattern: {:tuple, [], prest}], [body]}]}
+  end
+
+  defp distinct?(list), do: length(Enum.uniq(list)) == length(list)
+
   # --- tuple-pattern matching (parity #4) ------------------------------------
   #
   # A Σ/pair is irrefutable — a single tuple-pattern arm `%[x, y] -> body` just
@@ -2119,6 +2320,144 @@ defmodule Cure.Elab.Elaborator do
   # top-level catch-all (`_`/`x`) mixed with nesting is woven in as a fallback
   # row for the sub-patterns each nested group leaves uncovered, and kept as the
   # outer catch-all for wholly-unmatched constructors.
+  # ── Guards on constructor patterns ──────────────────────────────────────────
+  # `match n | S(k) when g -> a | S(k) -> b | Z() -> c` — a guard on a
+  # constructor pattern. Idris has no pattern guards; it collapses such an arm
+  # into an `if` inside that constructor's case branch, falling through to the
+  # next same-constructor arm when the guard is false. We reproduce exactly that:
+  # fold each constructor group that carries a guard into ONE guardless arm
+  # `C(w…) -> if g₁ then a else if g₂ then … else <closer>`, where the closer is
+  # the group's trailing unguarded arm or the match's catch-all. The result is a
+  # plain guardless match the ordinary `:vdata` path compiles; the `if`s lower to
+  # the committed `bool_elim`. No matrix-compiler or kernel change.
+
+  defp ctor_guarded_arm?({:match_arm, meta, _body}) do
+    Keyword.has_key?(meta, :guard) and
+      match?({:function_call, _m, _args}, Keyword.get(meta, :pattern))
+  end
+
+  defp desugar_ctor_guards(arms, scrut_expr) do
+    if Enum.any?(arms, &ctor_guarded_arm?/1),
+      do: fold_ctor_guard_groups(arms, scrut_expr),
+      else: {:ok, arms}
+  end
+
+  defp fold_ctor_guard_groups(arms, scrut_expr) do
+    {ctor_arms, defaults} = Enum.split_with(arms, &(not default_arm?(&1)))
+
+    with {:ok, closer} <- default_closer(defaults, scrut_expr) do
+      order = ctor_arms |> Enum.map(&arm_ctor_name/1) |> Enum.uniq()
+      grouped = Enum.group_by(ctor_arms, &arm_ctor_name/1)
+
+      folded =
+        Enum.reduce_while(order, {:ok, []}, fn cname, {:ok, acc} ->
+          group = Map.fetch!(grouped, cname)
+
+          # Only groups carrying a guard are folded; a plain group passes through
+          # unchanged so a genuine duplicate constructor still reaches the
+          # downstream duplicate check rather than being silently collapsed.
+          if Enum.any?(group, &guarded_arm?/1) do
+            case fold_ctor_group(group, closer) do
+              {:ok, arm} -> {:cont, {:ok, acc ++ [arm]}}
+              {:error, _} = e -> {:halt, e}
+            end
+          else
+            {:cont, {:ok, acc ++ group}}
+          end
+        end)
+
+      with {:ok, folded_arms} <- folded, do: {:ok, folded_arms ++ defaults}
+    end
+  end
+
+  # The match's trailing catch-all is the fall-through for a group whose last arm
+  # is still guarded. `:none` = no catch-all (a still-guarded last arm is then
+  # non-exhaustive). More than one default is out of scope.
+  defp default_closer([], _scrut), do: {:ok, :none}
+
+  defp default_closer([{:match_arm, dmeta, dbody0}], scrut_expr) do
+    {:variable, _m, dvname} = Keyword.fetch!(dmeta, :pattern)
+
+    case resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
+      {:ok, db} -> {:ok, {:some, db}}
+      {:error, reason} -> {:error, {:unsupported_guard, reason}}
+    end
+  end
+
+  defp default_closer(_multi, _scrut), do: {:error, {:unsupported_guard, :multiple_defaults}}
+
+  # Fold one constructor group's rows (each `C(v…) [when g] -> body`, all single
+  # level and sharing arity k) into a single `C(w₁..w_k) -> <if-chain>`.
+  defp fold_ctor_group([{:match_arm, meta0, _} | _] = group, closer) do
+    {:function_call, fmeta, args0} = Keyword.fetch!(meta0, :pattern)
+    cname = Keyword.fetch!(fmeta, :name)
+    k = length(args0)
+    wilds = for i <- 1..k//1, do: {:variable, [], "$g" <> cname <> Integer.to_string(i)}
+    wnames = Enum.map(wilds, fn {:variable, _m, n} -> n end)
+
+    with {:ok, chain} <- build_guard_chain(group, wnames, closer) do
+      {:ok, {:match_arm, [pattern: {:function_call, fmeta, wilds}], [chain]}}
+    end
+  end
+
+  # An unguarded row terminates the chain (its body; later rows shadowed). A
+  # guarded last row falls through to the catch-all, or is non-exhaustive if
+  # there is none.
+  defp build_guard_chain([{:match_arm, meta, body}], wnames, closer) do
+    with {:ok, subs} <- guard_row_renaming(meta, wnames, body) do
+      case Keyword.get(meta, :guard) do
+        nil ->
+          {:ok, rename_all(single_body(body), subs)}
+
+        guard ->
+          case closer do
+            {:some, db} ->
+              {:ok, mk_if(rename_all(guard, subs), rename_all(single_body(body), subs), db)}
+
+            :none ->
+              {:error, {:unsupported_guard, :non_exhaustive}}
+          end
+      end
+    end
+  end
+
+  defp build_guard_chain([{:match_arm, meta, body} | rest], wnames, closer) do
+    with {:ok, subs} <- guard_row_renaming(meta, wnames, body) do
+      case Keyword.get(meta, :guard) do
+        nil ->
+          {:ok, rename_all(single_body(body), subs)}
+
+        guard ->
+          with {:ok, else_} <- build_guard_chain(rest, wnames, closer) do
+            {:ok, mk_if(rename_all(guard, subs), rename_all(single_body(body), subs), else_)}
+          end
+      end
+    end
+  end
+
+  defp mk_if(cond, then_, else_), do: {:conditional, [], [cond, then_, else_]}
+
+  # Map a row's constructor-argument variable names onto the shared fresh binders
+  # `w₁..w_k`. Rejects (shadow) if the row's body/guard rebinds a source name, to
+  # keep the surface substitution capture-free (mirrors `compile_group`).
+  defp guard_row_renaming(meta, wnames, body) do
+    {:function_call, _fm, argpats} = Keyword.fetch!(meta, :pattern)
+    oldnames = Enum.map(argpats, fn {:variable, _m, n} -> n end)
+    subs = Enum.zip(oldnames, wnames)
+    guard = Keyword.get(meta, :guard)
+    exprs = [single_body(body) | if(guard, do: [guard], else: [])]
+
+    if Enum.any?(exprs, fn e -> binds_any?(e, oldnames) end),
+      do: {:error, {:unsupported_guard, :shadowed}},
+      else: {:ok, subs}
+  end
+
+  defp rename_all(expr, subs) do
+    Enum.reduce(subs, expr, fn {old, new}, e ->
+      subst_surface_var(e, old, {:variable, [], new})
+    end)
+  end
+
   defp desugar_nested_arms(arms, scrut_expr) do
     cond do
       not Enum.any?(arms, &arm_has_nested?/1) ->
@@ -2191,10 +2530,16 @@ defmodule Cure.Elab.Elaborator do
 
   defp arm_has_nested?({:match_arm, meta, _body}) do
     case Keyword.fetch!(meta, :pattern) do
-      {:function_call, _m, args} -> Enum.any?(args, &(not match?({:variable, _mm, _v}, &1)))
+      {:function_call, _m, args} -> Enum.any?(args, &(not pat_arg_leaf?(&1)))
       _ -> false
     end
   end
+
+  # A constructor-pattern argument is a LEAF (not a nested sub-pattern needing
+  # matrix lowering) if it is a bare variable or a named-implicit annotation.
+  defp pat_arg_leaf?({:variable, _m, _v}), do: true
+  defp pat_arg_leaf?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp pat_arg_leaf?(_), do: false
 
   # Group arms by outer constructor (first-appearance order, within-group order
   # preserved for first-match), then compile each group to one single-level arm.
@@ -2240,7 +2585,10 @@ defmodule Cure.Elab.Elaborator do
       end)
       |> Enum.uniq()
 
-    if Enum.any?(arms, fn {:match_arm, _m, b} -> binds_any?(single_body(b), pvars) end) do
+    if Enum.any?(arms, fn {:match_arm, m, b} ->
+         binds_any?(single_body(b), pvars) or
+           (Keyword.get(m, :guard) && binds_any?(Keyword.get(m, :guard), pvars))
+       end) do
       {:error, {:unsupported_pattern, :shadowed_nested}}
     else
       fresh = for i <- 1..k//1, do: "$n" <> cname <> Integer.to_string(i)
@@ -2248,7 +2596,7 @@ defmodule Cure.Elab.Elaborator do
       rows =
         Enum.map(arms, fn {:match_arm, m, b} ->
           {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
-          {as, single_body(b)}
+          {as, Keyword.get(m, :guard), single_body(b)}
         end)
 
       case compile_matrix(fresh, rows) do
@@ -2267,19 +2615,25 @@ defmodule Cure.Elab.Elaborator do
   defp pattern_vars_deep(_), do: []
 
   # Pattern-matrix compilation. `scruts` are fresh scrutinee variable NAMES; each
-  # row is `{[pattern…], body}` with one pattern per remaining scrutinee. Emits a
-  # tree of single-scrutinee `{:pattern_match}` nodes; every emitted match is
-  # single-level, so it re-uses the dependent elaborator per node.
-  defp compile_matrix([], [{[], body} | _]), do: {:ok, body}
+  # row is `{[pattern…], guard, body}` (guard is `nil` or a surface expr) with one
+  # pattern per remaining scrutinee. Emits a tree of single-scrutinee
+  # `{:pattern_match}` nodes; every emitted match is single-level, so it re-uses
+  # the dependent elaborator per node. At a leaf (no columns left), the reached
+  # rows are folded into a `bool_elim` `if`-chain: a guarded row tests its guard
+  # and falls through to the next reached row, an unguarded row terminates the
+  # chain (later rows shadowed), à la the Wadler/Augustsson `match … default`
+  # continuation. All still over surface names, so no de-Bruijn weakening.
+  defp compile_matrix([], rows), do: fold_leaf_rows(rows)
 
   defp compile_matrix([v | vs], rows) do
-    col = Enum.map(rows, fn {[p | _ps], _b} -> p end)
+    col = Enum.map(rows, fn {[p | _ps], _g, _b} -> p end)
 
     if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
       # All-variable column: bind each row's variable to `v`, drop the column.
       rows2 =
-        Enum.map(rows, fn {[{:variable, _m, x} | ps], body} ->
-          {ps, subst_surface_var(body, x, {:variable, [], v})}
+        Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
+          repl = {:variable, [], v}
+          {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
         end)
 
       compile_matrix(vs, rows2)
@@ -2287,6 +2641,23 @@ defmodule Cure.Elab.Elaborator do
       compile_matrix_split(v, vs, rows, col)
     end
   end
+
+  # Fold the rows reaching a matrix leaf into an `if`-chain. An unguarded row is
+  # an unconditional match: it terminates the chain (identical to the previous
+  # first-match behaviour when no row is guarded). A guarded final row with no
+  # unguarded successor is non-exhaustive.
+  defp fold_leaf_rows([{[], nil, body} | _]), do: {:ok, body}
+
+  defp fold_leaf_rows([{[], guard, body} | rest]) do
+    with {:ok, else_} <- fold_leaf_rows(rest) do
+      {:ok, {:conditional, [], [guard, body, else_]}}
+    end
+  end
+
+  defp fold_leaf_rows([]), do: {:error, {:unsupported_guard, :non_exhaustive}}
+
+  defp subst_guard(nil, _name, _repl), do: nil
+  defp subst_guard(guard, name, repl), do: subst_surface_var(guard, name, repl)
 
   # Column `v` has ≥1 constructor pattern: branch on each distinct constructor
   # (first-appearance order), plus a catch-all if any row has a variable there.
@@ -2320,14 +2691,15 @@ defmodule Cure.Elab.Elaborator do
       ws = for i <- 1..arity//1, do: v <> "_" <> cname <> Integer.to_string(i)
 
       sub_rows =
-        Enum.flat_map(rows, fn {[p | ps], body} ->
+        Enum.flat_map(rows, fn {[p | ps], g, body} ->
           case p do
             {:function_call, m, qs} ->
-              if Keyword.fetch!(m, :name) == cname, do: [{qs ++ ps, body}], else: []
+              if Keyword.fetch!(m, :name) == cname, do: [{qs ++ ps, g, body}], else: []
 
             {:variable, _m, x} ->
               wilds = for w <- ws, do: {:variable, [], w <> "_x"}
-              [{wilds ++ ps, subst_surface_var(body, x, {:variable, [], v})}]
+              repl = {:variable, [], v}
+              [{wilds ++ ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
           end
         end)
 
@@ -2344,7 +2716,7 @@ defmodule Cure.Elab.Elaborator do
 
   # Arity of `cname` from the first row that mentions it explicitly.
   defp split_arity(cname, rows) do
-    Enum.find_value(rows, 0, fn {[p | _], _} ->
+    Enum.find_value(rows, 0, fn {[p | _], _g, _b} ->
       case p do
         {:function_call, m, qs} -> if Keyword.fetch!(m, :name) == cname, do: length(qs)
         _ -> nil
@@ -2356,10 +2728,14 @@ defmodule Cure.Elab.Elaborator do
   # variable rows survive (each binding its variable to `v`), column dropped.
   defp split_default(v, vs, rows) do
     default_rows =
-      Enum.flat_map(rows, fn {[p | ps], body} ->
+      Enum.flat_map(rows, fn {[p | ps], g, body} ->
         case p do
-          {:variable, _m, x} -> [{ps, subst_surface_var(body, x, {:variable, [], v})}]
-          _ -> []
+          {:variable, _m, x} ->
+            repl = {:variable, [], v}
+            [{ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
+
+          _ ->
+            []
         end
       end)
 
@@ -2525,11 +2901,77 @@ defmodule Cure.Elab.Elaborator do
         # correctly refined to `Eq(NV(Z), vz, vz)`.
         body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
 
-        with {:ok, body_term} <- elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
+        with :ok <-
+               check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env),
+             {:ok, body_term} <-
+               elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
           {:ok, {cname, arity, body_term}}
         end
     end
   end
+
+  # Named-implicit annotations `{k = <expr>}` on this branch's constructor
+  # pattern are check-and-discard: for each, resolve the named erased index to
+  # its telescope position `p`, read the forced value `d` the kernel's index
+  # inversion pinned at that position (`subst[arity-1-p]`), elaborate the user's
+  # forced inner expression to a term `t` in the branch frame, and require `t`
+  # convertible with `d`. The annotation binds nothing and produces no runtime
+  # term, so on success we simply continue; on mismatch the branch is rejected.
+  defp check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env) do
+    pattern
+    |> constructor_named_implicits()
+    |> Enum.reduce_while(:ok, fn {name, inner}, :ok ->
+      case named_implicit_forced_value(name, subst, arity, telescope) do
+        {:ok, d} ->
+          expr = forced_inner_expr(inner)
+
+          case elaborate_expr_typed(expr, branch_names, branch_ctx, env) do
+            {:ok, t_term, _ty} ->
+              if Cure.Core.Conv.conv?(
+                   t_term,
+                   d,
+                   Context.env(branch_ctx),
+                   Context.length(branch_ctx),
+                   Context.signature(branch_ctx)
+                 ) do
+                {:cont, :ok}
+              else
+                {:halt, {:error, {:forced_pattern_mismatch, t_term, d}}}
+              end
+
+            {:error, _} = err ->
+              {:halt, err}
+          end
+
+        :error ->
+          {:halt, {:error, {:named_implicit_unforced, name}}}
+      end
+    end)
+  end
+
+  # Position of the erased index named `name` in the constructor telescope, then
+  # the forced value the branch-unify substitution pinned there. de Bruijn: the
+  # telescope binds left-to-right, so position `p` is variable `arity-1-p`.
+  defp named_implicit_forced_value(name, subst, arity, telescope) do
+    key = String.to_atom(name)
+
+    case Enum.find_index(telescope, fn {n, _t} -> n == key end) do
+      nil ->
+        :error
+
+      p ->
+        case Map.get(subst, arity - 1 - p) do
+          nil -> :error
+          d -> {:ok, d}
+        end
+    end
+  end
+
+  # The forced inner of a named-implicit is normally a dot pattern `.<expr>`; peel
+  # the forced wrapper (it is not valid in ordinary expression elaboration) and
+  # elaborate the underlying expression. A non-dot inner is elaborated as-is.
+  defp forced_inner_expr({:forced_pattern, _m, inner}), do: inner
+  defp forced_inner_expr(other), do: other
 
   # Step 3b branch. The motive (see `wrap_motive_carried_eq`) makes this branch's
   # expected type `Π(prf : Eq(T, idx, ctor_idx)). G'[jₚₒₛ↦ctor_idx]`, where
@@ -2732,12 +3174,17 @@ defmodule Cure.Elab.Elaborator do
   defp constructor_pattern({:function_call, meta, args}) do
     cname = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-    # A surface constructor pattern binds only variables in its argument
-    # positions. A NESTED constructor/literal sub-pattern (`S(S(m))`, `C(Z(),y)`)
-    # needs decision-tree lowering (parity #3), not yet implemented — report a
-    # clean error rather than crashing on the non-variable arg.
-    if Enum.all?(args, &match?({:variable, _m, _v}, &1)) do
-      vars = Enum.map(args, fn {:variable, _meta, v} -> v end)
+    # A named-implicit dot pattern `{k = …}` annotates an erased index by name; it
+    # binds nothing at runtime and is check-and-discarded in the branch path, so
+    # it is partitioned out here. What REMAINS are the positional (present-arg)
+    # sub-patterns, which — as today — must each be a bare variable. A NESTED
+    # constructor/literal sub-pattern (`S(S(m))`, `C(Z(),y)`) still needs decision-
+    # tree lowering (parity #3), so report a clean error on any non-variable
+    # positional arg.
+    positional = Enum.reject(args, &named_implicit_arg?/1)
+
+    if Enum.all?(positional, &match?({:variable, _m, _v}, &1)) do
+      vars = Enum.map(positional, fn {:variable, _meta, v} -> v end)
       {:ok, {cname, vars}}
     else
       {:error, {:unsupported_pattern, :nested_constructor_arg}}
@@ -2745,6 +3192,17 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
+
+  defp named_implicit_arg?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp named_implicit_arg?(_), do: false
+
+  # The named-implicit annotations of a constructor pattern, as `{name, inner}`
+  # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
+  # to run the forced-index convertibility check.
+  defp constructor_named_implicits({:function_call, _meta, args}),
+    do: for({:named_implicit_pat, _m, name, inner} <- args, do: {name, inner})
+
+  defp constructor_named_implicits(_), do: []
 
   defp pattern_shape(p) when is_tuple(p) and tuple_size(p) > 0, do: elem(p, 0)
   defp pattern_shape(_), do: :unknown
@@ -3048,8 +3506,8 @@ defmodule Cure.Elab.Elaborator do
   # the expected `DDec` — closing the composed-computed-index reach (Idris parity)
   # without any kernel change (`Unify` uses the trusted `Conv`; the kernel still
   # re-checks the assembled ctor). See `Unify.unify/4`.
-  defp solve_arg({{_name, _type_term}, :erased}, {:ok, mctx, chosen, present}, _env) do
-    {mctx, id} = MetaCtx.fresh(mctx)
+  defp solve_arg({{_name, type_term}, :erased}, {:ok, mctx, chosen, present}, _env) do
+    {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(type_term, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
@@ -3129,8 +3587,8 @@ defmodule Cure.Elab.Elaborator do
     |> finish_global_app(name, codomain, ctx)
   end
 
-  defp bidir_app_slot({_dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
-    {mctx, id} = MetaCtx.fresh(mctx)
+  defp bidir_app_slot({dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
+    {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(dom, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 
@@ -3152,14 +3610,24 @@ defmodule Cure.Elab.Elaborator do
           end
 
         {:error, _} ->
-          # An underdetermined argument at a still-unsolved domain — e.g. `fz()` at
-          # `Fin(?n)`, whose index only a *later* argument (the vector) determines.
-          # It cannot infer standalone, so defer it: a placeholder metavariable holds
-          # its position in `chosen` (keeping later domains' de Bruijn frames aligned),
-          # and `resolve_deferred_slots` checks it against the now-solved domain and
-          # back-patches the placeholder once the later arguments have run.
-          {mctx, ph} = MetaCtx.fresh(mctx)
-          {:cont, {:ok, mctx, chosen ++ [{:meta, ph}], rest, deferred ++ [{ph, arg, dom, length(chosen)}]}}
+          # A lambda argument whose Π domain still bears a metavariable in its
+          # CODOMAIN (`(n:N) -> ?F(n)`) cannot infer standalone; try solving the
+          # codomain metavariable under the binder first (higher-order/Miller,
+          # ledger #10). Only if that does not apply do we defer.
+          case try_lambda_meta_pi(arg, dom_inst, mctx, names, ctx, env) do
+            {:ok, mctx, lam_term} ->
+              {:cont, {:ok, mctx, chosen ++ [lam_term], rest, deferred}}
+
+            :fallthrough ->
+              # An underdetermined argument at a still-unsolved domain — e.g. `fz()` at
+              # `Fin(?n)`, whose index only a *later* argument (the vector) determines.
+              # It cannot infer standalone, so defer it: a placeholder metavariable holds
+              # its position in `chosen` (keeping later domains' de Bruijn frames aligned),
+              # and `resolve_deferred_slots` checks it against the now-solved domain and
+              # back-patches the placeholder once the later arguments have run.
+              {mctx, ph} = MetaCtx.fresh(mctx)
+              {:cont, {:ok, mctx, chosen ++ [{:meta, ph}], rest, deferred ++ [{ph, arg, dom, length(chosen)}]}}
+          end
       end
     else
       # Domain fully known — check the argument against it (reaches checking mode).
@@ -3169,6 +3637,47 @@ defmodule Cure.Elab.Elaborator do
       end
     end
   end
+
+  # A lambda argument at a Π domain whose CODOMAIN still bears a metavariable
+  # (`(n:N) -> ?F(n)`) cannot be inferred standalone, and the general checking
+  # judgement (`elaborate_expr_checked`) does not thread `mctx`, so it would
+  # reject the unsolved codomain. Here `mctx` IS in scope, so we solve it: bind
+  # the parameter, INFER the body, and unify the reconstructed Π against the
+  # expected one — the codomain metavariable is then solved *under the binder*
+  # (the Miller pattern `?F(n) := λn. body_ty`, ledger #10). Single-parameter
+  # lambda over a literal Π with a meta-free domain; any other shape falls through
+  # to the deferral path. Additive/fallback-only: reached only after inference has
+  # already failed, and the assembled call is kernel-re-checked by
+  # `finish_global_app`, so nothing unsound rests on the solve.
+  defp try_lambda_meta_pi({:lambda, meta, [body_expr]}, {:pi, dom_term, cod_term}, mctx, names, ctx, env) do
+    case Keyword.fetch!(meta, :params) do
+      [{:param, _pm, pname}] ->
+        if has_meta?(dom_term) do
+          :fallthrough
+        else
+          dom_value = Eval.eval(dom_term, Context.env(ctx))
+          ctx1 = Context.extend(ctx, dom_value)
+
+          case elaborate_expr_typed(body_expr, [pname | names], ctx1, env) do
+            {:ok, body_term, body_ty} ->
+              body_ty_term = Quote.reify(body_ty, Context.length(ctx1))
+
+              case Unify.unify({:pi, dom_term, cod_term}, {:pi, dom_term, body_ty_term}, mctx, env) do
+                {:ok, mctx} -> {:ok, mctx, {:lam, dom_term, body_term}}
+                {:error, _} -> :fallthrough
+              end
+
+            {:error, _} ->
+              :fallthrough
+          end
+        end
+
+      _ ->
+        :fallthrough
+    end
+  end
+
+  defp try_lambda_meta_pi(_arg, _dom_inst, _mctx, _names, _ctx, _env), do: :fallthrough
 
   # Second pass over the arguments deferred by `bidir_app_slot` (each an
   # underdetermined argument whose domain metavariables a later argument solves).
