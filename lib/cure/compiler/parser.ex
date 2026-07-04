@@ -1495,6 +1495,13 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     {scrutinee, state} = parse_expr(state, 0)
+    # Multiple with-scrutinees (Idris `foo a b with (g a) | (g b)`) are written
+    # space-separated in Cure surface syntax: `with g(a) g(b)`. Juxtaposition is
+    # not application here (`g(a) g(b)` parses as two exprs because `parse_expr`
+    # stops at the second callee), so we simply keep pulling scrutinees while the
+    # next token can begin one. A single scrutinee leaves `scruts == [scrutinee]`
+    # and the legacy path below is taken byte-for-byte unchanged.
+    {scruts, state} = collect_with_scrutinees([scrutinee], state)
     # Optional `proof <ident>` (capability B): binds the scrutinee equation
     # `Eq(T, e, pat)` in each branch. `proof` is a soft keyword recognised only
     # in this slot; elsewhere it stays an ordinary identifier.
@@ -1504,23 +1511,315 @@ defmodule Cure.Compiler.Parser do
     base_meta = [line: token.line, col: token.col]
     meta = if proof, do: Keyword.put(base_meta, :proof, proof), else: base_meta
 
-    case peek(state) do
-      %Token{type: :lbrace} ->
-        state = advance(state)
-        {arms, state} = parse_inline_match_arms(state)
-        state = expect(state, :rbrace)
-        {{:with_abs, meta, [scrutinee | arms]}, state}
+    case scruts do
+      [single] ->
+        case peek(state) do
+          %Token{type: :lbrace} ->
+            state = advance(state)
+            {arms, state} = parse_inline_match_arms(state)
+            state = expect(state, :rbrace)
+            {{:with_abs, meta, [single | arms]}, state}
 
-      %Token{type: :indent} ->
-        state = advance(state)
-        {arms, state} = parse_with_block_arms(state)
-        state = expect_dedent(state)
-        {{:with_abs, meta, [scrutinee | arms]}, state}
+          %Token{type: :indent} ->
+            state = advance(state)
+            {arms, state} = parse_with_block_arms(state)
+            state = expect_dedent(state)
+            {{:with_abs, meta, [single | arms]}, state}
+
+          _ ->
+            {{:with_abs, meta, [single]}, state}
+        end
 
       _ ->
-        {{:with_abs, meta, [scrutinee]}, state}
+        parse_multi_with_abs(scruts, proof, base_meta, state)
     end
   end
+
+  # Pull the second and subsequent space-separated with-scrutinees. Each call
+  # peeks the current token: if it can start an expression we parse one more
+  # scrutinee and recurse; otherwise we stop. `proof`/`:newline`/`:indent`/
+  # `:lbrace` are not expression starters, so they terminate the scrutinee list.
+  defp collect_with_scrutinees(acc, state) do
+    if with_scrutinee_start?(peek(state)) do
+      {expr, state} = parse_expr(state, 0)
+      collect_with_scrutinees(acc ++ [expr], state)
+    else
+      {acc, state}
+    end
+  end
+
+  defp with_scrutinee_start?(%Token{type: type})
+       when type in [
+              :identifier,
+              :integer,
+              :float,
+              :string,
+              :bool,
+              :atom,
+              :char,
+              :lparen,
+              :lbracket,
+              :tuple_open,
+              :map_open,
+              :binary_open
+            ],
+       do: true
+
+  defp with_scrutinee_start?(_), do: false
+
+  # Multiple-with surface sugar. `with e1 e2 … eN` with arms
+  # `p1, p2, …, pN -> body` desugars to nested single-scrutinee `:with_abs`
+  # nodes so the dependent elaborator's existing (single-scrutinee) handling
+  # covers it unchanged — this parser produces exactly the `{:with_abs, meta,
+  # [scrut | arms]}` shape it already dispatches on. Combining an LHS re-match
+  # (`| pat`) or a `proof` binding with multiple scrutinees is out of scope in
+  # this first slice and is reported as a clean parse error.
+  defp parse_multi_with_abs(scruts, proof, base_meta, state) do
+    n = length(scruts)
+
+    {arms, state} =
+      case peek(state) do
+        %Token{type: :lbrace} ->
+          state = advance(state)
+          {arms, state} = parse_multi_with_inline_arms(state, n)
+          state = expect(state, :rbrace)
+          {arms, state}
+
+        %Token{type: :indent} ->
+          state = advance(state)
+          {arms, state} = parse_multi_with_block_arms(state, n)
+          state = expect_dedent(state)
+          {arms, state}
+
+        _ ->
+          {[], state}
+      end
+
+    cond do
+      proof != nil ->
+        state =
+          add_error(
+            state,
+            {:with_multi_proof_unsupported,
+             "`proof` binding is not supported together with multiple with-scrutinees",
+             base_meta}
+          )
+
+        {{:with_abs, base_meta, [hd(scruts)]}, state}
+
+      arms == [] ->
+        state =
+          add_error(
+            state,
+            {:with_multi_no_arms, "with-abstraction over multiple scrutinees requires at least one arm",
+             base_meta}
+          )
+
+        {{:with_abs, base_meta, [hd(scruts)]}, state}
+
+      true ->
+        build_multi_with(scruts, arms, base_meta, state)
+    end
+  end
+
+  # Block-form arms for a multiple-with. Each arm is a list of `n` comma-
+  # separated patterns and a body; results are `{patterns, body}` tuples that
+  # `build_multi_with/4` later desugars.
+  defp parse_multi_with_block_arms(state, n) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {[], state}
+
+      _ ->
+        {arm, state} = parse_multi_with_arm(state, n)
+        state = skip_newlines(state)
+        {rest, state} = parse_multi_with_block_arms(state, n)
+        {[arm | rest], state}
+    end
+  end
+
+  # Inline (`{ … }`) form. Arms are separated by `,`; the pattern commas within
+  # an arm are consumed by `parse_comma_pattern_list/1`, which stops at the `->`.
+  defp parse_multi_with_inline_arms(state, n) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :rbrace} ->
+        {[], state}
+
+      _ ->
+        {arm, state} = parse_multi_with_arm(state, n)
+        state = skip_newlines(state)
+
+        case peek(state) do
+          %Token{type: :comma} ->
+            state = advance(state)
+            state = skip_newlines(state)
+            {rest, state} = parse_multi_with_inline_arms(state, n)
+            {[arm | rest], state}
+
+          _ ->
+            {[arm], state}
+        end
+    end
+  end
+
+  # A single multiple-with arm: `p1, …, pk -> body`. A trailing `| pat` marks the
+  # rematch form, which is out of scope combined with multiple-with; a pattern
+  # count other than `n` is an arity error. Both are reported but recovery still
+  # consumes through the body so parsing continues.
+  defp parse_multi_with_arm(state, n) do
+    {patterns, state} = parse_comma_pattern_list(state)
+
+    {patterns, state} =
+      case peek(state) do
+        %Token{type: :bar} ->
+          state =
+            add_error(
+              state,
+              {:with_multi_rematch_unsupported,
+               "LHS re-match (`| pat`) combined with multiple with-scrutinees is not supported", []}
+            )
+
+          # Recover: consume the `| with-pattern` remainder before the body.
+          state = advance(state)
+          state = skip_newlines(state)
+          {_wp, state} = parse_expr(state, 0)
+          {patterns, state}
+
+        _ ->
+          {patterns, state}
+      end
+
+    state =
+      if length(patterns) != n do
+        add_error(
+          state,
+          {:with_multi_arity_mismatch,
+           "with-arm has #{length(patterns)} pattern(s) but there are #{n} with-scrutinees", []}
+        )
+      else
+        state
+      end
+
+    state = skip_newlines(state)
+    state = expect(state, :arrow)
+    state = skip_newlines(state)
+    {body, state} = parse_expr_or_block(state)
+    {{patterns, body}, state}
+  end
+
+  # Comma-separated pattern list for one multiple-with arm. A top-level `,` never
+  # occurs inside a single pattern (tuples are parenthesised), so it reliably
+  # separates the per-scrutinee patterns; parsing stops at the first non-comma
+  # (the `->`, or a `|` handled by the caller).
+  defp parse_comma_pattern_list(state) do
+    {first, state} = parse_expr(state, 0)
+    {first, state} = maybe_wrap_as(first, state)
+    parse_comma_pattern_list([first], state)
+  end
+
+  defp parse_comma_pattern_list(acc, state) do
+    case peek(state) do
+      %Token{type: :comma} ->
+        state = advance(state)
+        state = skip_newlines(state)
+        {pat, state} = parse_expr(state, 0)
+        {pat, state} = maybe_wrap_as(pat, state)
+        parse_comma_pattern_list(acc ++ [pat], state)
+
+      _ ->
+        {acc, state}
+    end
+  end
+
+  # Desugar `n` scrutinees + `{patterns, body}` arms into nested single-scrutinee
+  # `:with_abs` nodes. Base case (one scrutinee left): a flat `:with_abs` whose
+  # arms are ordinary `{:match_arm, [pattern: p], [body]}`. Recursive case: group
+  # arms by their FIRST pattern (structural equality, first-appearance order) and
+  # emit one outer `{:match_arm, [pattern: p1], [inner]}` per group, where `inner`
+  # is the desugar of the remaining scrutinees over that group's arms with their
+  # first pattern stripped.
+  defp build_multi_with([last], arms, meta, state) do
+    match_arms =
+      Enum.map(arms, fn {[p], body} -> {:match_arm, [pattern: p], [body]} end)
+
+    {{:with_abs, meta, [last | match_arms]}, state}
+  end
+
+  defp build_multi_with([s | rest], arms, meta, state) do
+    groups = group_arms_by_first(arms)
+    state = check_group_head_consistency(groups, meta, state)
+
+    {outer_arms, state} =
+      Enum.map_reduce(groups, state, fn {p1, sub_arms}, st ->
+        {inner, st} = build_multi_with(rest, sub_arms, meta, st)
+        {{:match_arm, [pattern: p1], [inner]}, st}
+      end)
+
+    {{:with_abs, meta, [s | outer_arms]}, state}
+  end
+
+  # Group arms by their first pattern using structural equality that ignores
+  # positional metadata (line/col), so e.g. two `S(j)` arms on different lines
+  # share one outer branch. Preserves first-appearance order. Each group's
+  # sub-arms have the grouped-on first pattern removed.
+  defp group_arms_by_first(arms) do
+    Enum.reduce(arms, [], fn {[p1 | rest_pats], body}, groups ->
+      key = strip_meta(p1)
+
+      case Enum.find_index(groups, fn {gp, _} -> strip_meta(gp) == key end) do
+        nil ->
+          groups ++ [{p1, [{rest_pats, body}]}]
+
+        idx ->
+          {gp, subs} = Enum.at(groups, idx)
+          List.replace_at(groups, idx, {gp, subs ++ [{rest_pats, body}]})
+      end
+    end)
+  end
+
+  # First-slice consistency guard. Because groups are keyed by structural
+  # equality, two distinct groups sharing one constructor head can only differ in
+  # their sub-patterns/variable names — sharing an outer branch would require
+  # renaming, which this slice does not do. Reject rather than risk mis-binding.
+  defp check_group_head_consistency(groups, meta, state) do
+    ctor_heads =
+      groups
+      |> Enum.map(fn {p1, _} -> pattern_ctor_head(p1) end)
+      |> Enum.filter(&match?({:ctor, _}, &1))
+
+    if length(Enum.uniq(ctor_heads)) == length(ctor_heads) do
+      state
+    else
+      add_error(
+        state,
+        {:with_multi_inconsistent_pattern,
+         "multiple-with arms share a constructor head with differing sub-patterns; this first " <>
+           "slice requires structurally identical outer patterns (rename to a common form)", meta}
+      )
+    end
+  end
+
+  defp pattern_ctor_head({:function_call, meta, _args}), do: {:ctor, Keyword.get(meta, :name)}
+  defp pattern_ctor_head(_), do: :other
+
+  # Structural-equality normaliser for pattern ASTs: drop the metadata slot of
+  # every `{tag, meta, payload}` node so patterns compare on constructor head and
+  # argument structure (including variable names) only.
+  defp strip_meta({tag, meta, payload}) when is_atom(tag) and is_list(meta) do
+    {tag, strip_meta(payload)}
+  end
+
+  defp strip_meta(list) when is_list(list), do: Enum.map(list, &strip_meta/1)
+
+  defp strip_meta(tuple) when is_tuple(tuple) do
+    tuple |> Tuple.to_list() |> Enum.map(&strip_meta/1) |> List.to_tuple()
+  end
+
+  defp strip_meta(other), do: other
 
   # Block-form with-clause arms. Distinct from `parse_block_match_arms` (used by
   # plain `match`) because a with-clause arm may RESTATE the parent LHS patterns

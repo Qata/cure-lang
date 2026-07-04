@@ -191,4 +191,88 @@ defmodule Cure.Compiler.WithParseTest do
     assert {:literal, lit_meta, 0} = Keyword.get(meta, :init)
     assert Keyword.get(lit_meta, :subtype) == :integer
   end
+
+  # ---- Multiple-with surface sugar -----------------------------------------
+
+  # `with e1 e2 <arms>` (space-separated scrutinees, comma-separated arm
+  # patterns) is SUGAR for nested single-scrutinee `:with_abs`. This test pins
+  # the desugared AST shape so it is verified independently of elaboration.
+  test "multi-scrutinee `with e1 e2` desugars to nested :with_abs" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn foo(a: Nat, b: Nat) -> Nat =
+        with g(a) g(b)
+          Z(), Z() -> Z()
+          Z(), S(k) -> S(k)
+          S(j), Z() -> S(j)
+          S(j), S(k) -> S(k)
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    # Outermost with_abs: the one whose scrutinee is `g(a)`.
+    outer =
+      collect(ast, [])
+      |> Enum.find(fn
+        {:with_abs, _, [{:function_call, m, [{:variable, _, "a"}]} | _]} ->
+          Keyword.get(m, :name) == "g"
+
+        _ ->
+          false
+      end)
+
+    assert {:with_abs, _meta, [outer_scrut | outer_arms]} = outer
+    assert {:function_call, gm, [{:variable, _, "a"}]} = outer_scrut
+    assert Keyword.get(gm, :name) == "g"
+
+    # Two distinct first patterns Z() and S(j) → two grouped outer arms.
+    assert length(outer_arms) == 2
+
+    assert [{:match_arm, m0, [inner0]}, {:match_arm, m1, [inner1]}] = outer_arms
+    assert {:function_call, p0m, []} = Keyword.get(m0, :pattern)
+    assert Keyword.get(p0m, :name) == "Z"
+    assert {:function_call, p1m, [{:variable, _, "j"}]} = Keyword.get(m1, :pattern)
+    assert Keyword.get(p1m, :name) == "S"
+
+    # Each outer arm body is an inner with_abs over `g(b)` with two arms.
+    for inner <- [inner0, inner1] do
+      assert {:with_abs, _, [{:function_call, bm, [{:variable, _, "b"}]} | inner_arms]} = inner
+      assert Keyword.get(bm, :name) == "g"
+      assert length(inner_arms) == 2
+      assert Enum.all?(inner_arms, &match?({:match_arm, _, [_]}, &1))
+    end
+  end
+
+  # Multiple-with combined with an LHS re-match (`| pat`) is out of scope in the
+  # first slice and must be a clean parse error, not a silent mis-parse.
+  test "multi-scrutinee with-arm + LHS rematch is rejected" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn foo(a: Nat, b: Nat) -> Nat =
+        with g(a) g(b)
+          Z(), Z() | Z() -> Z()
+    """
+
+    assert {:error, errors} = parse(src)
+    assert Enum.any?(errors, &match?({:with_multi_rematch_unsupported, _, _}, &1))
+  end
+
+  # Two arms whose first pattern shares a constructor head but differs in
+  # sub-structure (`S(j)` vs `S(m)`) would need variable renaming to share an
+  # outer branch; the first slice rejects this rather than mis-bind.
+  test "multi-scrutinee inconsistent shared-head first patterns are rejected" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn foo(a: Nat, b: Nat) -> Nat =
+        with g(a) g(b)
+          S(j), Z() -> S(j)
+          S(m), S(k) -> S(k)
+    """
+
+    assert {:error, errors} = parse(src)
+    assert Enum.any?(errors, &match?({:with_multi_inconsistent_pattern, _, _}, &1))
+  end
 end
