@@ -2,48 +2,31 @@
 
 | Module | Covered | Total | % |
 |---|---:|---:|---:|
-| Cure.Core.Certificate | 153 | 192 | 79.7 |
-| Cure.Core.Conv | 50 | 66 | 75.8 |
-| Cure.Core.Eval | 62 | 65 | 95.4 |
-| Cure.Core.Inductive | 56 | 79 | 70.9 |
-| Cure.Core.Kernel | 301 | 340 | 88.5 |
-| Cure.Core.Normalise | 86 | 103 | 83.5 |
+| Cure.Core.Certificate | 186 | 192 | 96.9 |
+| Cure.Core.Conv | 66 | 66 | 100.0 |
+| Cure.Core.Eval | 65 | 65 | 100.0 |
+| Cure.Core.Inductive | 57 | 79 | 72.2 |
+| Cure.Core.Kernel | 303 | 340 | 89.1 |
+| Cure.Core.Normalise | 87 | 103 | 84.5 |
 | Cure.Core.Quote | 34 | 37 | 91.9 |
-| Cure.Core.Serialize | 78 | 108 | 72.2 |
+| Cure.Core.Serialize | 108 | 108 | 100.0 |
 
 ## Cold lines
 
 ## Cure.Core.Certificate cold lines
 
-  - add_rel/2: 323
-  - arg_relation/2: 295, 306, 309
+  - arg_relation/2: 295
   - arity_of/1: 443
   - callees_env/2: 409
-  - calls?/2: 591, 593, 595, 596, 597, 609, 610, 613
-  - function_edges/3: 450, 458
-  - mutual_group_total?/4: 436
-  - pathmul/2: 317
+  - function_edges/3: 450
   - reaches?/4: 536
-  - row_len/1: 494
-  - rows/2: 284
-  - scrut_index/1: 252
-  - shift_term/2: 573, 574, 575
-  - walk/4: 161, 162
-  - walk_node/4: 187, 190, 193, 195, 196, 207, 208, 209, 212, 215, 216, 217
+  - shift_term/2: 575
 
 ## Cure.Core.Conv cold lines
 
-  - conv?/4: 49
-  - conv_neutral?/4: 135, 136, 139, 150
-  - conv_struct?/4: 70, 83, 102
-  - eta_eq?/4: 108, 109
-  - same_value_no_delta?/3: 187, 188, 190, 191, 194, 199
 
 ## Cure.Core.Eval cold lines
 
-  - eval/2: 26
-  - vfst/1: 153
-  - vsnd/1: 156
 
 ## Cure.Core.Inductive cold lines
 
@@ -55,28 +38,25 @@
   - index_telescope/2: 244, 245, 246
   - param_telescope/2: 254
   - register_builtin/3: 127, 129, 132
-  - strictly_positive?/4: 318
 
 ## Cure.Core.Kernel cold lines
 
-  - bind_index/4: 861
-  - branch_unify/4: 771, 773, 774, 775
+  - bind_index/4: 862
+  - branch_unify/4: 772, 774, 775, 776
   - check/3: 289, 296, 312
-  - check_case_branches/7: 706, 711
+  - check_case_branches/7: 707, 712
   - check_def/2: 358
-  - check_motive_wf/4: 606
-  - head_key/1: 906
+  - check_motive_wf/4: 607
+  - head_key/1: 907
   - infer/2: 67
-  - infer_prim/3: 1070
-  - infer_type_value_sort/2: 618, 620, 621, 622, 631, 689
+  - infer_type_value_sort/2: 619, 621, 622, 623, 632, 690
   - normalize/2: 34
   - normalize/3: 38
-  - numeric_type?/1: 1074
-  - remap_index_error/2: 557
-  - replace_branch_vars/2: 948, 954, 957, 959, 960, 970, 971, 976, 979, 982
-  - resolve_index_var/3: 886
-  - rigid_index?/1: 894
-  - unify_spine/4: 840, 843
+  - remap_index_error/2: 558
+  - replace_branch_vars/2: 949, 955, 958, 960, 961, 971, 972, 977, 980, 983
+  - resolve_index_var/3: 887
+  - rigid_index?/1: 895
+  - unify_spine/4: 841, 844
 
 ## Cure.Core.Normalise cold lines
 
@@ -86,7 +66,6 @@
   - reduce_unfolded/3: 309, 310, 311, 315, 316, 317
   - spend_fuel/1: 335
   - unfold_certified_head/3: 261, 267
-  - whnf_value/3: 54
   - with_fuel/2: 77
 
 ## Cure.Core.Quote cold lines
@@ -95,15 +74,3 @@
 
 ## Cure.Core.Serialize cold lines
 
-  - build/1: 133, 134, 135, 136, 139
-  - build_all/1: 203
-  - build_branches/1: 213, 216
-  - build_node/2: 148, 149, 151, 154, 166, 191
-  - decode/1: 75, 76
-  - enc/1: 34, 35
-  - parse/1: 122, 123
-  - parse_list/2: 126
-  - str/1: 63
-  - take_atom/2: 106
-  - take_string/2: 98, 99, 100, 101
-  - tokenize/2: 87, 88, 89
