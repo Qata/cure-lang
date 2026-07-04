@@ -106,6 +106,14 @@ defmodule Antigen.Generators.SigMenu do
           Inductive.ctor(:tsig, [], [{:sigma, nat(), nat()}]),
           Inductive.ctor(:tvec, [], [{:data, :Vec, [{:ctor, :Z, []}], []}])
         ])
+      # Tg : (i:Int) -> Type0 / Tgf : (i:Float) -> Type0 — families indexed by a
+      # builtin VALUE type, with constructors at literal indices. Matching unifies
+      # literal indices, the only v1 shape reaching rigid_index?'s int_lit/float_lit
+      # clauses. Consumed by Generators.DepMatch's tg/tgf variants.
+      |> Inductive.declare(Inductive.family(:Tg, [], [{:i, {:int_type}}], 0),
+        [Inductive.ctor(:tg0, [], [{:int_lit, 0}]), Inductive.ctor(:tg1, [], [{:int_lit, 1}])])
+      |> Inductive.declare(Inductive.family(:Tgf, [], [{:i, {:float_type}}], 0),
+        [Inductive.ctor(:tgf0, [], [{:float_lit, 0.0}]), Inductive.ctor(:tgf1, [], [{:float_lit, 1.5}])])
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}

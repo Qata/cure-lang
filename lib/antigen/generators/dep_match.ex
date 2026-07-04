@@ -28,6 +28,28 @@ defmodule Antigen.Generators.DepMatch do
   @z {:ctor, :Z, []}
   @assays ["term/infer_check", "term/subject_reduction", "term/normalization"]
 
+  # Ty's constructor index terms + matching branches (declaration order). Defined
+  # at module top so every generator below reads them (module attributes resolve at
+  # the textual point of use, so a later assignment would read nil).
+  @ty_indices [
+    @nat,
+    @bd,
+    {:int_type},
+    {:float_type},
+    {:pi, @nat, @nat},
+    {:sigma, @nat, @nat},
+    {:data, :Vec, [@z], []}
+  ]
+  @ty_branches [
+    {:tnat, 0, @z},
+    {:tbd, 0, @z},
+    {:tint, 0, @z},
+    {:tflt, 0, @z},
+    {:tpi, 0, @z},
+    {:tsig, 0, @z},
+    {:tvec, 0, @z}
+  ]
+
   defp vec(i), do: {:data, :Vec, [], [i]}
 
   @spec gen(keyword()) :: Gen.t()
@@ -77,29 +99,49 @@ defmodule Antigen.Generators.DepMatch do
       # rigid type index (rigid_index? data/int/float/Π/Σ, head_key :data,
       # unify_one data-spine / syntactic-equal). Random concrete index + a var index.
       {4, ty_closed()},
-      {2, ty_var()}
+      {2, ty_var()},
+      # Ty with a Vec (S Z) index that matches NO ctor — unifying against tvec's
+      # Vec Z index drives unify_spine to :impossible on a differing element.
+      {1, ty_scrutinee({:data, :Vec, [{:ctor, :S, [@z]}], []})},
+      # Int/Float-value-indexed families Tg/Tgf — literal indices unified at match
+      # time (rigid_index? int_lit/float_lit).
+      {2, tg_closed(:int)},
+      {2, tg_closed(:float)}
     ])
   end
 
-  # Ty's constructor index terms (in declaration order).
-  @ty_indices [
-    @nat,
-    @bd,
-    {:int_type},
-    {:float_type},
-    {:pi, @nat, @nat},
-    {:sigma, @nat, @nat},
-    {:data, :Vec, [@z], []}
-  ]
-  @ty_branches [
-    {:tnat, 0, @z},
-    {:tbd, 0, @z},
-    {:tint, 0, @z},
-    {:tflt, 0, @z},
-    {:tpi, 0, @z},
-    {:tsig, 0, @z},
-    {:tvec, 0, @z}
-  ]
+  # Closed scrutinee x : Ty T for an ARBITRARY closed type index (possibly matching
+  # no ctor — all branches then unify T against a differing rigid index).
+  defp ty_scrutinee(idx) do
+    Gen.bind(numeral(), fn body ->
+      term = mk_case({:var, 0}, ty_motive(), replace_first_body(@ty_branches, body))
+      Gen.return({[ty(idx)], term, @nat})
+    end)
+  end
+
+  @tg %{
+    int: {:Tg, [{:tg0, 0, @z}, {:tg1, 0, @z}], [{:int_lit, 0}, {:int_lit, 1}, {:int_lit, 5}]},
+    float: {:Tgf, [{:tgf0, 0, @z}, {:tgf1, 0, @z}], [{:float_lit, 0.0}, {:float_lit, 1.5}, {:float_lit, 2.5}]}
+  }
+
+  # Closed scrutinee x : Tg <lit> (Int/Float-indexed) — matching unifies the closed
+  # literal index against each ctor's literal result index.
+  defp tg_closed(kind) do
+    {fname, branches, indices} = @tg[kind]
+
+    Gen.bind(Gen.member_of(indices), fn idx ->
+      Gen.bind(numeral(), fn body ->
+        brs = replace_first_body(branches, body)
+        term = mk_case({:var, 0}, tg_motive(fname, kind), brs)
+        Gen.return({[{:data, fname, [], [idx]}], term, @nat})
+      end)
+    end)
+  end
+
+  defp tg_motive(fname, kind) do
+    ity = if kind == :int, do: {:int_type}, else: {:float_type}
+    {:lam, ity, {:lam, {:data, fname, [], [{:var, 0}]}, @nat}}
+  end
 
   # Closed scrutinee x : Ty T for a random concrete type index T. The matching ctor
   # is trivial/solved; the rest unify T against a differing rigid head (:impossible

@@ -106,7 +106,9 @@ defmodule Antigen.Challenge do
     # IdxI: Int-indexed family (check_result_indices declaration-check driver)
     :IdxI, :mki, :mkb,
     # P/pc: parameterized indexed family (check_uniform_params / check_ctor_args)
-    :P, :pc, :x
+    :P, :pc, :x,
+    # Tg/Tgf: Int/Float-value-indexed families (rigid_index? int_lit/float_lit)
+    :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
