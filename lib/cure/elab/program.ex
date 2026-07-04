@@ -27,7 +27,7 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast) do
-    with {:ok, imported} <- import_env(imports(ast), MapSet.new()),
+    with {:ok, imported} <- import_env(auto_prelude_imports(ast) ++ imports(ast), MapSet.new()),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
          env0 = merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
@@ -61,6 +61,36 @@ defmodule Cure.Elab.Program do
   # (spec §1 single-registration invariant).
   defp prelude_source?(ast),
     do: Map.has_key?(Cure.Stdlib.Preload.module_groups(), module_atom(ast))
+
+  # The core-prelude subset auto-loaded into EVERY module (no `use` needed). Scope
+  # is bounded by what the DEPENDENT elaborator can currently import: only modules
+  # that fully dependent-elaborate qualify, because `import_source_env` dependent-
+  # checks each imported module. Std.Bool and Std.Nat qualify today. Excluded, why:
+  #   Std.Core   -- legacy bool_not/bool_and use `pickup` (:unsupported_expression)
+  #   Std.Equal  -- uses a :cure_refl symbol literal the elaborator rejects
+  #   Std.Refine -- refinement predicates not yet dependent-clean
+  #   Eq/Ord/Show/Functor protocols -- would couple instance resolution globally
+  # Each can join once ported to dependent-clean syntax (ongoing parity work). The
+  # listed modules are self-excluded (they stay self-contained on the seeded
+  # builtins), which also breaks any bootstrap cycle. Each source is idempotent
+  # under `merge_env`, so an explicit `use` is harmless and a local definition of
+  # the same name shadows the import.
+  @auto_prelude ~w(Std.Bool Std.Nat)
+
+  # The canonical type each auto-prelude module provides. If a module locally
+  # declares a same-named type (e.g. its own `type Nat = Zero | Suc`), that prelude
+  # is NOT auto-imported — the local declaration is canonical and importing the
+  # look-alike would collide (mirrors `declared_type_names`' builtin-seed skip).
+  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat}
+
+  defp auto_prelude_imports(ast) do
+    self = find_module_name(ast)
+    declared = declared_type_names(ast)
+
+    Enum.reject(@auto_prelude, fn src ->
+      src == self or MapSet.member?(declared, Map.get(@auto_prelude_types, src))
+    end)
+  end
 
   @doc """
   Elaborate a module and return the definitions declared directly by that
