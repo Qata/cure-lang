@@ -1,14 +1,21 @@
 defmodule Antigen.Assays.KernelLaw do
   @moduledoc """
-  Relational kernel-law assays (spec §3), all via the public `Cure.Core.*` API
-  (no TCB edits): de Bruijn σ-algebra (`kernel/shift_subst`), weakening under an
-  unused binder (`kernel/weakening`), and reduction order-independence
-  (`kernel/confluence`). Each is a `:typed_term` challenge dispatched by assay-id.
+  Relational kernel-law assays (spec §3), via the public `Cure.Core.*` API (no
+  TCB edits): de Bruijn σ-algebra (`kernel/shift_subst`), weakening under an
+  unused binder (`kernel/weakening`), reduction order-independence
+  (`kernel/confluence`), and capture-avoiding β (`kernel/beta_subst`). Each is a
+  `:typed_term` challenge dispatched by assay-id.
+
+  `kernel/beta_subst` additionally calls `Cure.Elab.Subst.instantiate/2` — the
+  *elaborator's* (untrusted, non-TCB) substitution — as the property's right-hand
+  side: it is precisely the machinery whose capture-safety this law cross-checks
+  against the trusted kernel's β-reduction (ledger #4/#26).
   """
   alias Antigen.Challenge
   alias Antigen.Generators.SigMenu
   alias Antigen.Assays.Term, as: TermAssay
   alias Cure.Core.{Term, Context, Eval, Normalise, Kernel}
+  alias Cure.Elab.Subst
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
@@ -18,6 +25,7 @@ defmodule Antigen.Assays.KernelLaw do
   def run(%Challenge{assay: "kernel/shift_subst", payload: p}), do: shift_subst(p.term)
   def run(%Challenge{assay: "kernel/weakening", payload: p}), do: weakening(p)
   def run(%Challenge{assay: "kernel/confluence", payload: p}), do: confluence(p)
+  def run(%Challenge{assay: "kernel/beta_subst", payload: p}), do: beta_subst(p)
 
   defp ctx_of(p), do: SigMenu.rebuild_context(SigMenu.env_of(p.sig), p.ctx)
 
@@ -92,6 +100,35 @@ defmodule Antigen.Assays.KernelLaw do
         end
     end
   end
+
+  # ── 3d. capture-avoiding β: β-reduction agrees with substitution ───────────
+  # For a redex (λx:T. body) e, the kernel's β must land on the SAME normal form
+  # as substituting e for x via the elaborator's capture-avoiding `instantiate`.
+  # `instantiate(body, [e])` replaces x (de Bruijn 0) with e, shifting e under
+  # every binder body crosses — so a disagreement is a shift/capture bug in one of
+  # the two paths. Both sides are normalized under the same fuel so a divergent
+  # (fuel-exhausting) case abstains rather than false-positives.
+  defp beta_subst(%{term: {:app, {:lam, _t, body}, e}} = p) do
+    ctx = ctx_of(p)
+    fuel = TermAssay.assay_fuel()
+    redex = p.term
+    subst_term = Subst.instantiate(body, [e])
+
+    lhs = Normalise.nf(ctx, redex, fuel: fuel)
+    rhs = Normalise.nf(ctx, subst_term, fuel: fuel)
+
+    cond do
+      lhs == :fuel_exhausted or rhs == :fuel_exhausted -> :ok
+      lhs == rhs -> :ok
+      true ->
+        {:violation,
+         {:beta_subst_mismatch, %{redex: redex, subst: subst_term, beta_nf: lhs, subst_nf: rhs}}}
+    end
+  end
+
+  # The generator only ever emits redexes; a non-redex term is a wiring bug, not a
+  # kernel finding — surface it distinctly.
+  defp beta_subst(%{term: other}), do: {:violation, {:beta_subst_not_a_redex, other}}
 
   # ── 3c. reduction order-independence ───────────────────────────────────────
   defp confluence(p) do

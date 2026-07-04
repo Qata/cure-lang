@@ -196,7 +196,11 @@ defmodule Mix.Tasks.Antigen do
       {2, Antigen.Generators.CheckMode.gen()},
       # Delta-reduction — δ-unfolding of certified globals under Normalise.nf; the
       # only lever for unfold_certified_head + its ι-follow-through (definitional eq).
-      {2, Antigen.Generators.DeltaReduce.gen()}
+      {2, Antigen.Generators.DeltaReduce.gen()},
+      # Capture-avoiding β (kernel/beta_subst) — redexes with capture traps; the
+      # kernel-level proof that β agrees with the elaborator's shifting substitution
+      # (validates the bind-once β-redex the guard/let elaboration emits, #4/#26).
+      {2, Antigen.Generators.BetaSubst.gen()}
     ])
   end
 
