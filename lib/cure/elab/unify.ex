@@ -123,6 +123,9 @@ defmodule Cure.Elab.Unify do
   #     through unchanged; reducing there is a documented future extension.
   defp whnf_pre(t, _ctx, nil, _depth), do: t
   defp whnf_pre(t, _ctx, _sig, depth) when depth != 0, do: t
+  defp whnf_pre({:pi, _, _} = t, _ctx, _sig, _depth), do: t
+  defp whnf_pre({:lam, _, _} = t, _ctx, _sig, _depth), do: t
+  defp whnf_pre({:sigma, _, _} = t, _ctx, _sig, _depth), do: t
 
   defp whnf_pre(t, ctx, sig, depth) do
     r = whnf_meta_aware(t, ctx, sig, depth)
@@ -135,7 +138,7 @@ defmodule Cure.Elab.Unify do
     # on), so KEEP the original there. Every ι-reduction WIN this feature targets
     # (`plus(Z, ?m)` → `?m`, `plus(Z, S(Z))` → `S(Z)`) produces a ctor/meta/neutral,
     # never a lambda, so this guard preserves them all.
-    if match?({:lam, _, _}, r) and not match?({:lam, _, _}, t), do: t, else: r
+    if match?({:lam, _, _}, r), do: t, else: r
   end
 
   # Resolve a metavariable's solution and lift it from the ambient frame into the

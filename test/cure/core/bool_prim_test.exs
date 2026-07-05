@@ -21,8 +21,8 @@ defmodule Cure.Core.BoolPrimTest do
   end
 
   test "the boolean-connective primitives are retired: a residual prim is stuck" do
-    # `and`/`or`/`not` are no longer kernel primitives (they are Std.Bool case-defs
-    # booland/boolor/boolnot). A hand-built residual prim no longer folds.
+    # `and`/`or`/`not` are no longer kernel primitives. A hand-built residual prim
+    # no longer folds.
     assert match?({:vneutral, _}, Eval.eval({:prim, :and, [{:ctor, :True, []}, {:ctor, :False, []}]}, []))
     assert match?({:vneutral, _}, Eval.eval({:prim, :or, [{:ctor, :True, []}, {:ctor, :False, []}]}, []))
     assert match?({:vneutral, _}, Eval.eval({:prim, :not, [{:ctor, :False, []}]}, []))

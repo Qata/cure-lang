@@ -38,6 +38,26 @@ defmodule Cure.Elab.TupleScrutineeMatchTest do
     assert apply(mod, :g, []) == {:prepend, {:S, {:S, :Z}}, {:prepend, :Z, :empty}}
   end
 
+  test "heterogeneous generic zip_with over a 2-tuple scrutinee elaborates" do
+    src =
+      @vec <>
+        "  fn zip_with({a: Type},{b: Type},{c: Type},{n: Nat}, xs: Vector(a, n), ys: Vector(b, n), f: a -> b -> c) -> Vector(c, n) = match %[xs, ys]\n" <>
+        "    %[empty(), empty()] -> empty()\n" <>
+        "    %[prepend(x, xr), prepend(y, yr)] -> prepend(f(x)(y), zip_with(xr, yr, f))\nend\n"
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "generic same-type zip_with over a 2-tuple scrutinee elaborates" do
+    src =
+      @vec <>
+        "  fn zip_same({a: Type},{n: Nat}, xs: Vector(a, n), ys: Vector(a, n), f: a -> a -> a) -> Vector(a, n) = match %[xs, ys]\n" <>
+        "    %[empty(), empty()] -> empty()\n" <>
+        "    %[prepend(x, xr), prepend(y, yr)] -> prepend(f(x)(y), zip_same(xr, yr, f))\nend\n"
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
   test "a non-tuple scrutinee is untouched by the desugaring" do
     src =
       @vec <>

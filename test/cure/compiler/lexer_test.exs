@@ -76,6 +76,13 @@ defmodule Cure.Compiler.LexerTest do
       assert [%Token{type: :identifier, value: "x1"}, _] = lex!("x1")
       assert [%Token{type: :identifier, value: "vec3d"}, _] = lex!("vec3d")
     end
+
+    test "backticked identifiers can be keywords, spaced, unicode, or escaped" do
+      assert [%Token{type: :identifier, value: "not"}, _] = lex!("`not`")
+      assert [%Token{type: :identifier, value: "has spaces"}, _] = lex!("`has spaces`")
+      assert [%Token{type: :identifier, value: "λ snow ☃"}, _] = lex!("`λ snow ☃`")
+      assert [%Token{type: :identifier, value: "tick`name"}, _] = lex!("`tick\\`name`")
+    end
   end
 
   # ── Number Literals ──────────────────────────────────────────────────

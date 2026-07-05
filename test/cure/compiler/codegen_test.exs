@@ -70,6 +70,20 @@ defmodule Cure.Compiler.CodegenTest do
     end
   end
 
+  describe "quoted identifiers" do
+    test "backticked function names can contain spaces and unicode" do
+      source = """
+      mod QuotedNamesCodegen
+        fn `has spaces`(x: Int) -> Int = x + 1
+        fn `λ snow ☃`() -> Int = `has spaces`(41)
+      end
+      """
+
+      assert {:ok, mod} = Cure.Compiler.compile_and_load(source, emit_events: false)
+      assert apply(mod, :"λ snow ☃", []) == 42
+    end
+  end
+
   # ============================================================================
   # Binary Operators
   # ============================================================================

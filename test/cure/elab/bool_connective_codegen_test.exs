@@ -2,10 +2,10 @@ defmodule Cure.Elab.BoolConnectiveCodegenTest do
   @moduledoc """
   Phase 3 of retiring the Boolean-connective primitives: even though the surface
   connectives now elaborate to APPLICATIONS of the `Std.Bool` prelude defs
-  (`booland`/`boolor`/`boolnot`/`booleq`/`boolne`), a SATURATED application must
+  (`and`/`or`/`not`/`eq`/`ne`), a SATURATED application must
   still lower to the native BEAM boolean op — byte-for-byte the primitive's old
   codegen (strict `:and`/`:or`/`:not`; `:==`/`:"/="` for Bool equality). The
-  telltale sign of inlining: the compiled module needs no `booland/2` etc. clause
+  telltale sign of inlining: the compiled module needs no connective def call
   and still runs.
   """
   use ExUnit.Case, async: false
@@ -46,9 +46,9 @@ defmodule Cure.Elab.BoolConnectiveCodegenTest do
     assert :and in ops
     assert :not in ops
     assert :== in ops
-    refute calls_global?(forms, :booland)
-    refute calls_global?(forms, :boolnot)
-    refute calls_global?(forms, :booleq)
+    refute calls_global?(forms, :and)
+    refute calls_global?(forms, :not)
+    refute calls_global?(forms, :eq)
   end
 
   defp collect_ops(form) when is_tuple(form) do

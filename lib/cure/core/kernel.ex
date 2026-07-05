@@ -979,7 +979,7 @@ defmodule Cure.Core.Kernel do
     |> Eval.eval(Context.env(ctx))
   end
 
-  defp replace_branch_vars({:var, i}, subst), do: Map.get(subst, i, {:var, i})
+  defp replace_branch_vars({:var, i}, subst), do: replace_branch_var(i, subst, 0)
 
   defp replace_branch_vars({:pi, d, c}, subst),
     do: {:pi, replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
@@ -1026,6 +1026,17 @@ defmodule Cure.Core.Kernel do
   defp shift_subst(subst, amount) do
     Map.new(subst, fn {k, v} -> {k + amount, Term.shift(v, amount, 0)} end)
   end
+
+  defp replace_branch_var(i, subst, depth) when depth < 100_000 do
+    case Map.get(subst, i) do
+      nil -> {:var, i}
+      {:var, ^i} -> {:var, i}
+      {:var, j} -> replace_branch_var(j, subst, depth + 1)
+      term -> replace_branch_vars(term, subst)
+    end
+  end
+
+  defp replace_branch_var(i, _subst, _depth), do: {:var, i}
 
   # `param_vals` (most-recent-first = Context.env(ctx_params)) seeds the local
   # evaluation environment so an index-telescope type that references a family
@@ -1099,7 +1110,7 @@ defmodule Cure.Core.Kernel do
   end
 
   # The Boolean connectives (`and`/`or`/`not`) are no longer primitives — they are
-  # Std.Bool functions (booland/boolor/boolnot) that `case`-eliminate the inductive
+  # Std.Bool functions (`and`/`or`/`not`) that `case`-eliminate the inductive
   # Bool. A residual `{:prim, :and/:or/:not}` therefore falls through to the
   # `{:unknown_prim, op}` clause below (the desired rejection). `bool_type_value/1`
   # stays: the numeric comparisons above still return the inductive Bool through it.

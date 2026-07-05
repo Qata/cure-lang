@@ -49,33 +49,55 @@ defmodule Cure.Elab.Resolution do
   def rekey_term(leaf, _m), do: leaf
 
   @doc """
-  Re-key every family named in `owned_family_names` (and each of its
-  constructors) within `env`'s slice to `:"<module_id>#<name>"`. Renames the
-  `families`/`ctors`/`ctor_to_family` map keys, updates each record's `:name`
-  field, and rewrites every embedded Core term (family/ctor telescopes,
-  ctor result indices/params, and ALL def bodies+types in the slice) via
-  `rekey_term/2`. Families/ctors NOT owned are left untouched. Functions keep
-  their bare `defs` keys (only embedded family/ctor references are rewritten).
+  Re-key every family named in `owned_family_names` within `env`'s slice to
+  `:"<module_id>#<name>"`. Constructor *ownership* and constructor *names* are
+  separate: a type-name collision re-keys the family id and every constructor's
+  family pointer, but a constructor keeps its bare key unless its own name is in
+  `shadowed_ctor_names`. This preserves Cure's rule that `type Nat = Zero | Suc`
+  shadows the type name `Nat`, while bare `Z`/`S` may still refer to `Std.Nat`
+  unless those constructor names are also redeclared locally.
+
+  Rewrites every embedded Core term (family/ctor telescopes, ctor result
+  indices/params, and ALL def bodies+types in the slice) via `rekey_term/2`.
+  Functions keep their bare `defs` keys.
   """
   @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom())) :: Env.t()
-  def rekey_module_env(%Env{} = env, module_id, owned_family_names) do
+  def rekey_module_env(env, module_id, owned_family_names),
+    do:
+      rekey_module_env(
+        env,
+        module_id,
+        owned_family_names,
+        owned_family_names
+        |> Enum.flat_map(fn fname ->
+          for {cname, ^fname} <- env.ctor_to_family, do: cname
+        end)
+        |> MapSet.new()
+      )
+
+  @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom()), MapSet.t(atom())) :: Env.t()
+  def rekey_module_env(%Env{} = env, module_id, owned_family_names, shadowed_ctor_names) do
     # Owned ctor names: ctors whose family is an owned family name.
     owned_ctor_names =
       for {cname, fname} <- env.ctor_to_family, MapSet.member?(owned_family_names, fname), into: MapSet.new(), do: cname
 
-    # bare -> rekeyed atom map covering both owned families and their ctors.
+    rekeyed_ctor_names = MapSet.intersection(owned_ctor_names, shadowed_ctor_names)
+
+    # bare -> rekeyed atom map covering owned families and only constructor names
+    # that are shadowed as constructors.
     amap =
       Enum.reduce(owned_family_names, %{}, fn f, acc -> Map.put(acc, f, rekey_atom(module_id, f)) end)
 
     amap =
-      Enum.reduce(owned_ctor_names, amap, fn c, acc -> Map.put(acc, c, rekey_atom(module_id, c)) end)
+      Enum.reduce(rekeyed_ctor_names, amap, fn c, acc -> Map.put(acc, c, rekey_atom(module_id, c)) end)
 
     %Env{
       env
       | families: rekey_families(env.families, owned_family_names, amap),
-        ctors: rekey_ctors(env.ctors, owned_ctor_names, amap),
+        ctors: rekey_ctors(env.ctors, rekeyed_ctor_names, amap),
         ctor_to_family: rekey_c2f(env.ctor_to_family, amap),
-        defs: rekey_defs(env.defs, amap)
+        defs: rekey_defs(env.defs, amap),
+        builtins: rekey_builtins(env.builtins, amap)
     }
   end
 
@@ -117,6 +139,9 @@ defmodule Cure.Elab.Resolution do
   end
 
   defp rekey_tele(tele, amap), do: Enum.map(tele, fn {n, t} -> {n, rekey_term(t, amap)} end)
+
+  defp rekey_builtins(builtins, amap),
+    do: Map.new(builtins, fn {k, fid} -> {k, Map.get(amap, fid, fid)} end)
 
   @doc """
   Classify family-name collisions. A family name `N` collides when its set of
@@ -220,7 +245,7 @@ defmodule Cure.Elab.Resolution do
   exists (the name is genuinely unknown, not shadowed).
   """
   @spec shadowed_origin(Env.t(), atom()) :: {:ok, String.t(), atom()} | :error
-  def shadowed_origin(%Env{ctors: ctors, families: families}, bare) do
+  def shadowed_origin(%Env{ctors: ctors, families: families, ctor_to_family: c2f}, bare) do
     suffix = "#" <> Atom.to_string(bare)
 
     match =
@@ -231,7 +256,23 @@ defmodule Cure.Elab.Resolution do
 
     case match do
       {mod_id, key} -> {:ok, mod_id, key}
-      nil -> :error
+      nil -> shadowed_origin_from_family(c2f, bare)
+    end
+  end
+
+  defp shadowed_origin_from_family(c2f, bare) do
+    case Map.get(c2f, bare) do
+      fam when is_atom(fam) ->
+        fam
+        |> Atom.to_string()
+        |> String.split("#", parts: 2)
+        |> case do
+          [mod_id, _family] -> {:ok, mod_id, bare}
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 

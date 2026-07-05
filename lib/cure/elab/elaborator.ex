@@ -447,14 +447,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # A surface unary operator. `not` is retired as a kernel primitive: it lowers to
-  # an application of the `Std.Bool` prelude def `boolnot` (a `case`-eliminating
+  # an application of the `Std.Bool` prelude def `not` (a `case`-eliminating
   # function over the inductive Bool). The kernel checks the operand against Bool
   # and infers the result. Any other unary operator is unsupported here.
   def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
     case Keyword.fetch!(meta, :operator) do
       :not ->
         with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-             term = {:app, {:global, :boolnot}, o_core},
+             term = {:app, {:global, :not}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
@@ -467,9 +467,9 @@ defmodule Cure.Elab.Elaborator do
   # A surface binary operator. Arithmetic and numeric comparisons still lower to
   # the kernel primitive `{:prim, op, args}`. The Boolean CONNECTIVES `and`/`or`
   # are retired as primitives: they lower to applications of the `Std.Bool`
-  # prelude defs `booland`/`boolor`. Equality `==`/`!=` is operand-type-directed:
+  # prelude defs `and`/`or`. Equality `==`/`!=` is operand-type-directed:
   # numeric (Int/Float) operands keep the native `{:prim, :eq/:ne}` compare, while
-  # Bool operands lower to the `booleq`/`boolne` defs (so `case`-elimination, not a
+  # Bool operands lower to the `eq`/`ne` defs (so `case`-elimination, not a
   # primitive, decides Boolean equality). We elaborate both operands in inference
   # mode, assemble the term, and let the kernel infer the result type.
   def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
@@ -609,18 +609,18 @@ defmodule Cure.Elab.Elaborator do
   # Bool-operand equality become applications of the Std.Bool prelude defs (the
   # `:and`/`:or`/Bool-`:eq`/`:ne` primitives are retired); everything else — and
   # numeric `==`/`!=` — stays a native `{:prim, op, args}`.
-  defp build_binop(:and, l, r, _l_type, _sig), do: {:ok, app2(:booland, l, r)}
-  defp build_binop(:or, l, r, _l_type, _sig), do: {:ok, app2(:boolor, l, r)}
+  defp build_binop(:and, l, r, _l_type, _sig), do: {:ok, app2(:and, l, r)}
+  defp build_binop(:or, l, r, _l_type, _sig), do: {:ok, app2(:or, l, r)}
 
   defp build_binop(:==, l, r, l_type, sig) do
     if bool_operand?(l_type, sig),
-      do: {:ok, app2(:booleq, l, r)},
+      do: {:ok, app2(:eq, l, r)},
       else: {:ok, {:prim, :eq, [l, r]}}
   end
 
   defp build_binop(:!=, l, r, l_type, sig) do
     if bool_operand?(l_type, sig),
-      do: {:ok, app2(:boolne, l, r)},
+      do: {:ok, app2(:ne, l, r)},
       else: {:ok, {:prim, :ne, [l, r]}}
   end
 
@@ -3796,7 +3796,7 @@ defmodule Cure.Elab.Elaborator do
     ctx_final
   end
 
-  defp replace_branch_vars({:var, i}, subst), do: Map.get(subst, i, {:var, i})
+  defp replace_branch_vars({:var, i}, subst), do: replace_branch_var(i, subst, 0)
 
   defp replace_branch_vars({:pi, d, c}, subst),
     do: {:pi, replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
@@ -3843,6 +3843,17 @@ defmodule Cure.Elab.Elaborator do
   defp shift_subst(subst, amount) do
     Map.new(subst, fn {k, v} -> {k + amount, Subst.shift(v, amount, 0)} end)
   end
+
+  defp replace_branch_var(i, subst, depth) when depth < 100_000 do
+    case Map.get(subst, i) do
+      nil -> {:var, i}
+      {:var, ^i} -> {:var, i}
+      {:var, j} -> replace_branch_var(j, subst, depth + 1)
+      term -> replace_branch_vars(term, subst)
+    end
+  end
+
+  defp replace_branch_var(i, _subst, _depth), do: {:var, i}
 
   @doc """
   Elaborate a constructor application `C(a₁, …, aₙ)`, inferring the erased index
@@ -4072,15 +4083,12 @@ defmodule Cure.Elab.Elaborator do
 
           case elaborate_expr_typed(body_expr, [pname | names], ctx1, env) do
             {:ok, body_term, body_ty} ->
-              # `body_ty_term` may carry a flat `{:data, name, params ++ indices, []}`
-              # for an indexed family (`Quote.reify` without a sig cannot split a
-              # `{:vdata}`). That is fine here: `Unify.unify` whnf-normalises the pair
-              # at depth 0 through `whnf_meta_aware`, whose `Quote.reify(depth, sig)`
-              # re-splits any indexed-family value before the Miller solve — so the
-              # codomain metavariable (`?P := λn. Eq(Nat,n,n)`, ledger #10) is stored
-              # correctly split and the later `P(Zero)` check does not trip
-              # `check_spine`'s `:arg_arity`.
-              body_ty_term = Quote.reify(body_ty, Context.length(ctx1))
+              # Pass the signature so an indexed-family body type like
+              # `Eq(Nat,n,n)` is read back as params+indices instead of the flat
+              # `{:data, :Eq, all, []}` shape. This term may become the solution
+              # for a codomain metavariable (`?P := λn. Eq(Nat,n,n)`), and the
+              # later `P(Zero)` kernel check expects the split form.
+              body_ty_term = Quote.reify(body_ty, Context.length(ctx1), env)
 
               case Unify.unify({:pi, dom_term, cod_term}, {:pi, dom_term, body_ty_term}, mctx, env) do
                 {:ok, mctx} ->

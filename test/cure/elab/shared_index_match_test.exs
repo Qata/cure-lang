@@ -59,6 +59,16 @@ defmodule Cure.Elab.SharedIndexMatchTest do
     assert apply(mod, :g, []) == {:prepend, {:S, {:S, :Z}}, {:prepend, :Z, :empty}}
   end
 
+  test "generic zipWith over two equal-length vectors elaborates" do
+    src =
+      @vec <>
+        "  fn zipSame({a: Type},{n: Nat}, xs: Vector(a, n), ys: Vector(a, n), f: a -> a -> a) -> Vector(a, n) = match xs\n" <>
+        "    empty() -> empty()\n" <>
+        "    prepend(x, xr) -> match ys\n      prepend(y, yr) -> prepend(f(x)(y), zipSame(xr, yr, f))\nend\n"
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
   test "two vectors with DISTINCT index variables still elaborate (no false coupling)" do
     src =
       @vec <>

@@ -17,7 +17,7 @@ defmodule Cure.Core.BoolConnectiveDefeqTest do
 
   alias Cure.Core.{Builtins, Context, Conv, Env, Eval, Kernel}
 
-  # An env carrying the certified Std.Bool connective defs (booland/boolnot/...).
+  # An env carrying the certified Std.Bool connective defs (`and`/`or`/`not`/...).
   defp bool_env do
     {:ok, env} =
       Cure.Elab.Program.elaborate("mod M\n  use Std.Bool\n  fn __use(a: Bool) -> Bool = a\nend\n")
@@ -33,9 +33,9 @@ defmodule Cure.Core.BoolConnectiveDefeqTest do
   @depth 1
   @b {:var, 0}
 
-  defp band(a, b), do: {:app, {:app, {:global, :booland}, a}, b}
-  defp bor(a, b), do: {:app, {:app, {:global, :boolor}, a}, b}
-  defp bnot(a), do: {:app, {:global, :boolnot}, a}
+  defp band(a, b), do: {:app, {:app, {:global, :and}, a}, b}
+  defp bor(a, b), do: {:app, {:app, {:global, :or}, a}, b}
+  defp bnot(a), do: {:app, {:global, :not}, a}
 
   test "closed equations hold by conversion: not True ≡ False, not False ≡ True" do
     env = bool_env()

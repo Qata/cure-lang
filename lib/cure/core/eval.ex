@@ -140,7 +140,7 @@ defmodule Cure.Core.Eval do
   # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality
   # (`eq`/`ne` on Bool) are NO LONGER primitives: they are ordinary Cure
   # functions in Std.Bool that `case`-eliminate the inductive Bool
-  # (booland/boolor/boolnot/booleq/boolne). A residual `{:prim, :and/:or/:not}`
+  # (`and`/`or`/`not`/`eq`/`ne`). A residual `{:prim, :and/:or/:not}`
   # or Bool-operand `{:prim, :eq/:ne}` — which a well-typed term can no longer
   # contain — falls through to the `:stuck` catch-all below and is rejected by
   # `Kernel.infer` (`{:unknown_prim, _}`). The numeric `:eq`/`:ne` clauses above

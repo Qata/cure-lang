@@ -5,7 +5,7 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
   `Std.Bool` prelude defs instead of `{:prim, :and/:or/:not/:eq/:ne}` nodes.
 
   `==`/`!=` are operand-type-directed: numeric (Int/Float) operands keep lowering
-  to the native `{:prim, :eq/:ne}` compare; Bool operands lower to `booleq`/`boolne`.
+  to the native `{:prim, :eq/:ne}` compare; Bool operands lower to `eq`/`ne`.
   """
   use ExUnit.Case, async: true
 
@@ -20,19 +20,19 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
   @tt {:ctor, :True, []}
   @ff {:ctor, :False, []}
 
-  test "`and` lowers to a booland application, not a :and prim" do
+  test "`and` lowers to an `and` application, not a :and prim" do
     assert body("  fn t() -> Bool = true and false\n", :t) ==
-             {:app, {:app, {:global, :booland}, @tt}, @ff}
+             {:app, {:app, {:global, :and}, @tt}, @ff}
   end
 
-  test "`or` lowers to a boolor application" do
+  test "`or` lowers to an `or` application" do
     assert body("  fn t() -> Bool = true or false\n", :t) ==
-             {:app, {:app, {:global, :boolor}, @tt}, @ff}
+             {:app, {:app, {:global, :or}, @tt}, @ff}
   end
 
-  test "`not` lowers to a boolnot application (previously unsupported)" do
+  test "`not` lowers to a `not` application" do
     assert body("  fn t() -> Bool = not true\n", :t) ==
-             {:app, {:global, :boolnot}, @tt}
+             {:app, {:global, :not}, @tt}
   end
 
   test "Int `==` stays a native :eq prim" do
@@ -50,14 +50,14 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
              {:prim, :ne, [{:int_lit, 1}, {:int_lit, 2}]}
   end
 
-  test "Bool `==` lowers to a booleq application" do
+  test "Bool `==` lowers to an `eq` application" do
     assert body("  fn t() -> Bool = true == false\n", :t) ==
-             {:app, {:app, {:global, :booleq}, @tt}, @ff}
+             {:app, {:app, {:global, :eq}, @tt}, @ff}
   end
 
-  test "Bool `!=` lowers to a boolne application" do
+  test "Bool `!=` lowers to a `ne` application" do
     assert body("  fn t() -> Bool = true != false\n", :t) ==
-             {:app, {:app, {:global, :boolne}, @tt}, @ff}
+             {:app, {:app, {:global, :ne}, @tt}, @ff}
   end
 
   test "a mixed Int/Bool `==` is rejected" do

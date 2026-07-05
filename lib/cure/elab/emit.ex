@@ -205,20 +205,20 @@ defmodule Cure.Elab.Emit do
   # def. Recognised by exact def name (the connectives are the canonical Std.Bool
   # prelude functions).
   defp connective_inline({:global, name}, [a, b], env, ctx)
-       when name in [:booland, :boolor, :booleq, :boolne] do
+       when name in [:and, :or, :eq, :ne] do
     {:ok, {:op, @line, connective_binop(name), lower(env, a, ctx), lower(env, b, ctx)}}
   end
 
-  defp connective_inline({:global, :boolnot}, [a], env, ctx) do
+  defp connective_inline({:global, :not}, [a], env, ctx) do
     {:ok, {:op, @line, :not, lower(env, a, ctx)}}
   end
 
   defp connective_inline(_head, _args, _env, _ctx), do: :no
 
-  defp connective_binop(:booland), do: :and
-  defp connective_binop(:boolor), do: :or
-  defp connective_binop(:booleq), do: :==
-  defp connective_binop(:boolne), do: :"/="
+  defp connective_binop(:and), do: :and
+  defp connective_binop(:or), do: :or
+  defp connective_binop(:eq), do: :==
+  defp connective_binop(:ne), do: :"/="
 
   defp lower_app_spine(env, head, args, ctx) do
     case head do

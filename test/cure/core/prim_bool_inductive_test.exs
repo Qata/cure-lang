@@ -18,7 +18,7 @@ defmodule Cure.Core.PrimBoolInductiveTest do
 
   test "the connective primitives are retired: a residual :and prim is rejected", %{ctx: ctx} do
     tt = {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]}
-    # `and` is now the Std.Bool case-def `booland`, not a primitive.
+    # `and` is now the Std.Bool case-def `and`, not a primitive.
     assert {:error, {:unknown_prim, :and}} = Kernel.infer(ctx, {:prim, :and, [tt, tt]})
   end
 end

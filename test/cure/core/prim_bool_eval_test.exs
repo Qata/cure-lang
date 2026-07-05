@@ -21,7 +21,7 @@ defmodule Cure.Core.PrimBoolEvalTest do
   end
 
   test "Bool-operand equality is retired: only numeric :eq folds" do
-    # `==` on Bool is now the Std.Bool def `booleq`; the Bool-operand `:eq` prim is
+    # `==` on Bool is now the Std.Bool def `eq`; the Bool-operand `:eq` prim is
     # gone, so a residual one is stuck. Numeric `:eq` still folds.
     assert match?({:vneutral, _}, Eval.eval({:prim, :eq, [{:ctor, :True, []}, {:ctor, :False, []}]}, []))
     assert Eval.eval({:prim, :eq, [{:int_lit, 3}, {:int_lit, 3}]}, []) == Eval.eval({:ctor, :True, []}, [])

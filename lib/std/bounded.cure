@@ -1,0 +1,14 @@
+mod Std.Bounded
+  ## Bounded natural indices.
+  ##
+  ## `Bounded(n)` is inhabited by values strictly less than `n`. It is the
+  ## stdlib replacement for the traditional `Fin(n)` name and is used for
+  ## length-safe indexing into `Std.Vector`.
+
+  use Std.Nat
+
+  fn __group__() -> Atom = :core
+
+  type Bounded indices (n: Nat)
+    First : Bounded(S(m))
+    Next : Bounded(m) -> Bounded(S(m))

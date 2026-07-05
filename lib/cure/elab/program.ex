@@ -55,6 +55,35 @@ defmodule Cure.Elab.Program do
     |> MapSet.new()
   end
 
+  # Constructor names declared directly by the module. Type-name shadowing does
+  # not shadow constructors; constructor-name shadowing is decided independently.
+  defp declared_ctor_names(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(&ctor_names/1)
+    |> MapSet.new()
+  end
+
+  defp ctor_names({:container, meta, variants}) when is_list(meta) do
+    case Keyword.get(meta, :container_type) do
+      :enum -> Enum.flat_map(variants, &variant_ctor_names/1)
+      :struct -> [meta |> Keyword.fetch!(:name) |> String.to_atom()]
+      _ -> []
+    end
+  end
+
+  defp ctor_names({:indexed_type, _meta, ctor_sigs}), do: Enum.flat_map(ctor_sigs, &gadt_ctor_names/1)
+  defp ctor_names(_decl), do: []
+
+  defp variant_ctor_names({:variable, _meta, name}) when is_binary(name), do: [String.to_atom(name)]
+  defp variant_ctor_names({:function_def, meta, _body}), do: [meta |> Keyword.fetch!(:name) |> String.to_atom()]
+  defp variant_ctor_names(_variant), do: []
+
+  defp gadt_ctor_names({:gadt_ctor, meta, _body}) when is_list(meta),
+    do: [meta |> Keyword.fetch!(:name) |> String.to_atom()]
+
+  defp gadt_ctor_names(_sig), do: []
+
   # A source is a designated prelude source iff its own declared module name is
   # a key of the stdlib module registry. Only such sources may register a
   # `@builtin(:key)`; ordinary user code declaring the same decorator is ignored
@@ -346,8 +375,10 @@ defmodule Cure.Elab.Program do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
-         {:ok, env0} <- import_env(imports(ast), MapSet.new()),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
+         {:ok, imported} <- import_env(imports(ast), MapSet.new()),
+         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         env0 = merge_env(seeded, imported),
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
       TotalityClosure.certify_type_level(env)
     end
   end
@@ -360,7 +391,11 @@ defmodule Cure.Elab.Program do
       env
       | families: Map.delete(env.families, name),
         ctors: Map.drop(env.ctors, ctors),
-        ctor_to_family: Map.drop(env.ctor_to_family, [name | ctors])
+        ctor_to_family: Map.drop(env.ctor_to_family, [name | ctors]),
+        builtins:
+          env.builtins
+          |> Enum.reject(fn {_key, fid} -> fid == name end)
+          |> Map.new()
     }
   end
 
@@ -381,6 +416,7 @@ defmodule Cure.Elab.Program do
       end)
 
     local = declared_type_names(ast)
+    local_ctors = declared_ctor_names(ast)
     %{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
 
     collisions =
@@ -390,11 +426,20 @@ defmodule Cure.Elab.Program do
            Enum.reduce_while(modules, {:ok, Env.empty()}, fn {mod_id, path}, {:ok, acc} ->
              case module_slice_env(path) do
                {:ok, slice} ->
+                 reachable =
+                   [mod_id]
+                   |> transitive_import_modules()
+                   |> Enum.map(fn {owner, _path} -> owner end)
+                   |> MapSet.new()
+
                  slice =
-                   case Map.get(losers, mod_id) do
-                     nil -> slice
-                     owned_losers -> Resolution.rekey_module_env(slice, mod_id, owned_losers)
-                   end
+                   Enum.reduce(losers, slice, fn {owner_mod, owned_losers}, s ->
+                     if MapSet.member?(reachable, owner_mod) do
+                       Resolution.rekey_module_env(s, owner_mod, owned_losers, local_ctors)
+                     else
+                       s
+                     end
+                   end)
 
                  {:cont, {:ok, merge_env(acc, slice)}}
 
@@ -402,8 +447,15 @@ defmodule Cure.Elab.Program do
                  {:halt, err}
              end
            end) do
-      # Drop residual bare copies of every collision name (transitive leftovers).
-      cleaned = Enum.reduce(collisions, merged, fn name, e -> drop_bare_family(e, name) end)
+      # Drop residual bare copies of every collision name (transitive leftovers)
+      # plus local family names supplied only by imported slices as seeded helper
+      # builtins. Real imported owners have already been re-keyed above, preserving
+      # their non-shadowed constructors under their own family id.
+      cleaned =
+        collisions
+        |> MapSet.union(local)
+        |> Enum.reduce(merged, fn name, e -> drop_bare_family(e, name) end)
+
       {:ok, cleaned, ambiguous}
     end
   end

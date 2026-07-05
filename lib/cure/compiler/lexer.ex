@@ -156,6 +156,8 @@ defmodule Cure.Compiler.Lexer do
       ?# -> lex_comment_or_operator(state)
       # String
       ?" -> lex_string(state)
+      # Quoted identifier
+      ?` -> lex_quoted_identifier(state)
       # Char literal
       ?' -> lex_char(state)
       # Atom (symbol)
@@ -558,6 +560,44 @@ defmodule Cure.Compiler.Lexer do
   end
 
   # -- Identifiers & keywords -----------------------------------------------
+
+  defp lex_quoted_identifier(state) do
+    start_col = state.col
+    state = advance(state, 1)
+
+    case consume_quoted_identifier(state, []) do
+      {:ok, name, state} ->
+        token = Token.new(:identifier, name, state.line, start_col)
+        maybe_emit_event(state, token)
+        {:ok, %{state | tokens: [token | state.tokens]}}
+
+      {:error, state} ->
+        {:error, {:unterminated_quoted_identifier, state.line, start_col}, state}
+    end
+  end
+
+  defp consume_quoted_identifier(state, acc) do
+    case peek(state) do
+      nil ->
+        {:error, state}
+
+      ?` ->
+        state = advance(state, 1)
+        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary(), state}
+
+      ?\\ ->
+        case peek_at(state, 1) do
+          nil ->
+            {:error, state}
+
+          c ->
+            consume_quoted_identifier(advance(state, 2), [<<c>> | acc])
+        end
+
+      c ->
+        consume_quoted_identifier(advance(state, 1), [<<c>> | acc])
+    end
+  end
 
   defp lex_identifier(state) do
     start_col = state.col

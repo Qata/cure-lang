@@ -24,8 +24,8 @@ The documentation below is organised by topic:
 - [Core utilities](#core-utilities)  -- `Std.Core`, `Std.Io`, `Std.Show`,
   `Std.System`, `Std.Test`.
 - [Containers and data](#containers-and-data)  -- `Std.List`, `Std.Map`,
-  `Std.Set`, `Std.Vector`, `Std.Pair`, `Std.Option`, `Std.Result`,
-  `Std.Match`, `Std.Access`.
+  `Std.Set`, `Std.Bounded`, `Std.Vector`, `Std.Pair`, `Std.Option`,
+  `Std.Result`, `Std.Match`, `Std.Access`.
 - [Protocols](#protocols)  -- `Std.Eq`, `Std.Ord`, `Std.Functor`.
 - [Value-shaped modules](#value-shaped-modules)  -- `Std.String`,
   `Std.Math`, `Std.Regex`, `Std.Json`, `Std.Http`, `Std.Time`.
@@ -66,8 +66,8 @@ and test fixtures can then ask for a subset of the library via
 Known groups and their current membership (also the source of truth
 for `Cure.Stdlib.Preload.known_groups/0`):
 
-- `:core` -- `Std.Core`, `Std.Equal`, `Std.Eq`, `Std.Ord`, `Std.Show`,
-  `Std.Functor`, `Std.Refine`, `Std.Proof`. `Std.Proof` is the one
+- `:core` -- `Std.Core`, `Std.Bounded`, `Std.Equal`, `Std.Eq`, `Std.Ord`,
+  `Std.Show`, `Std.Functor`, `Std.Refine`, `Std.Proof`. `Std.Proof` is the one
   module that relies on the compile-time default (`:core`); `proof`
   containers only admit legacy proof-shaped returns, so no explicit
   `__group__/0` lives in its source.
@@ -240,14 +240,35 @@ Unary natural numbers for type-level indices.
 - `Nat = Z | S(Nat)`.
 - `plus(m, n) -> Nat` -- total Peano addition, usable in dependent result
   types.
+### Std.Bounded
+Bounded natural indices for length-safe access.
+- `Bounded(n)` -- values strictly less than `n`.
+- `First() -> Bounded(S(m))` -- the first valid index into a non-empty
+  structure.
+- `Next(i: Bounded(m)) -> Bounded(S(m))` -- successor index, preserving
+  the upper bound.
 ### Std.Vector
 Length-indexed vectors checked by the dependent kernel.
 Representation after erasure: `:empty` or `{:prepend, head, tail}`.
 - `Vector(a, n)` -- indexed family over element type `a` and length `n: Nat`.
 - `empty() -> Vector(a, Z)` at compile time; runtime value `:empty`.
 - `prepend(x, xs) -> Vector(a, S(n))` at runtime, with `a` and `n` erased.
+- `singleton(x) -> Vector(a, S(Z))`.
+- `replicate(n, x) -> Vector(a, n)`.
+- `is_empty(xs) -> Bool`.
+- `head(xs) -> a` and `tail(xs) -> Vector(a, n)` for non-empty vectors.
+- `lookup(xs, index: Std.Bounded.Bounded(n)) -> a` -- total indexing.
+- `update(xs, index, f) -> Vector(a, n)` and
+  `set(xs, index, value) -> Vector(a, n)` -- length-preserving replacement.
+- `map(xs, f) -> Vector(b, n)` -- length-preserving map.
+- `zip_with(xs, ys, f) -> Vector(c, n)` -- length-preserving zip over
+  equal-length vectors.
 - `append(xs, ys) -> Vector(a, Std.Nat.plus(m, n))` at runtime, with `a`,
   `m`, and `n` erased.
+- `foldl(xs, acc, f)` and `foldr(xs, acc, f)` -- total folds over the
+  vector spine.
+- `count(xs) -> Nat` and `length(xs) -> Nat` -- runtime Peano length.
+- `any(xs, pred) -> Bool` and `all(xs, pred) -> Bool`.
 The old tuple-backed `%[:vector, len, list]` API has been retired.
 ### Std.Pair
 Two-tuple helpers. Internally delegates to `:erlang.element/2`.
@@ -623,10 +644,9 @@ fn port() -> Int  = Std.App.get_env(:my_app, :port, 4000)
 ### Std.Iter
 Lazy iterators -- the lazy half of the collections story. Where
 `Std.List` materialises every step into a fresh cons cell, `Std.Iter`
-defers work until a terminal consumer demands it. An iterator is a
-zero-argument lambda (typed `Atom -> Any`) returning either
-`Some(%[element, next_iter])` or `None()` -- close to Elixir's
-`Stream` shape.
+defers work until a terminal consumer demands it. An iterator is a typed
+`Iter(T)` value; each step returns either `Some(Yield(element, next_iter))`
+or `None()`.
 #### The `lazy` idiom
 `lazy/1` is the documented entry point for a lazy pipeline. It is an
 alias for `from_list/1`; the alternate name signals at the call site
@@ -646,48 +666,48 @@ Nothing materialises until the terminal consumer (`take/2`, `to_list/1`,
 `fold/3`, `count/2`, `any/2`, `all/2`, `find/3`, or `each/2`). Wrap an
 open-ended chain with `take/2` or `take_while/2` before forcing.
 #### Constructors
-- `empty() -> Atom -> Any`  -- iterator that is immediately exhausted.
-- `from_list(list) -> Atom -> Any`  -- walks a list left-to-right.
-- `lazy(list) -> Atom -> Any`  -- alias for `from_list/1` that
+- `empty() -> Iter(T)`  -- iterator that is immediately exhausted.
+- `from_list(list: List(T)) -> Iter(T)`  -- walks a list left-to-right.
+- `lazy(list: List(T)) -> Iter(T)`  -- alias for `from_list/1` that
   documents intent at the call site.
-- `range(lo, hi) -> Atom -> Any`  -- inclusive integer range.
-- `iterate(x0, f) -> Atom -> Any`  -- infinite stream
+- `range(lo: Int, hi: Int) -> Iter(Int)`  -- inclusive integer range.
+- `iterate(x0: T, f: T -> T) -> Iter(T)`  -- infinite stream
   `x0, f(x0), f(f(x0)), ...`. Always pair with a slicer.
-- `unfold(seed, f) -> Atom -> Any`  -- stream-style unfold;
-  `f(seed)` returns `Some(%[value, next_seed])` or `None()`.
-- `repeat(x) -> Atom -> Any`  -- infinite stream of `x`.
-- `cycle(list) -> Atom -> Any`  -- walk `list` repeatedly; an empty
+- `unfold(seed: S, f: S -> Option(UnfoldStep(T, S))) -> Iter(T)`  --
+  stream-style unfold; `f(seed)` returns `Some(Emit(value, next_seed))`
+  or `None()`.
+- `repeat(x: T) -> Iter(T)`  -- infinite stream of `x`.
+- `cycle(list: List(T)) -> Iter(T)`  -- walk `list` repeatedly; an empty
   input collapses to `empty/0`.
 #### Transformers (lazy in, lazy out)
-- `map(it, f) -> Atom -> Any`  -- apply `f` on demand.
-- `filter(it, pred) -> Atom -> Any`  -- keep passing elements.
-- `flat_map(it, f) -> Atom -> Any`  -- map and flatten one level;
+- `map(it: Iter(T), f: T -> U) -> Iter(U)`  -- apply `f` on demand.
+- `filter(it: Iter(T), pred: T -> Bool) -> Iter(T)`  -- keep passing elements.
+- `flat_map(it: Iter(T), f: T -> Iter(U)) -> Iter(U)`  -- map and flatten one level;
   `f` returns an iterator per element.
-- `concat(a, b) -> Atom -> Any`  -- yield from `a`, then from `b`.
-- `zip_with(a, b, f) -> Atom -> Any`  -- element-wise combination
+- `concat(a: Iter(T), b: Iter(T)) -> Iter(T)`  -- yield from `a`, then from `b`.
+- `zip_with(a: Iter(T), b: Iter(U), f: T -> U -> V) -> Iter(V)`  -- element-wise combination
   with a curried `f`. Stops at the shorter side.
-- `intersperse(it, sep) -> Atom -> Any`  -- insert `sep` between
+- `intersperse(it: Iter(T), sep: T) -> Iter(T)`  -- insert `sep` between
   consecutive elements.
 #### Slicers (lazy in, lazy out)
-- `take_while(it, pred) -> Atom -> Any`  -- keep elements while
+- `take_while(it: Iter(T), pred: T -> Bool) -> Iter(T)`  -- keep elements while
   `pred` holds.
-- `drop(it, n) -> Atom -> Any`  -- skip the first `n` elements.
+- `drop(it: Iter(T), n: Int) -> Iter(T)`  -- skip the first `n` elements.
   Non-positive `n` is a no-op.
-- `drop_while(it, pred) -> Atom -> Any`  -- skip the leading prefix
+- `drop_while(it: Iter(T), pred: T -> Bool) -> Iter(T)`  -- skip the leading prefix
   satisfying `pred`.
 #### Consumers (terminal)
-- `fold(it, acc, f) -> T`  -- left fold; `f` is curried
+- `fold(it: Iter(T), acc: U, f: T -> U -> U) -> U`  -- left fold; `f` is curried
   (`elem -> acc -> acc`).
-- `take(it, n) -> List(Any)`  -- take at most `n` elements as a
+- `take(it: Iter(T), n: Int) -> List(T)`  -- take at most `n` elements as a
   plain list. Safe on infinite iterators.
-- `to_list(it) -> List(Any)`  -- eagerly materialise; guard
+- `to_list(it: Iter(T)) -> List(T)`  -- eagerly materialise; guard
   infinite iterators with `take/2` or `take_while/2`.
-- `each(it, f) -> Atom`  -- apply `f` for side effects; returns
-  `:ok` once the iterator is exhausted.
-- `count(it, pred) -> Int`  -- count elements satisfying `pred`.
-- `any(it, pred) -> Bool`  -- short-circuits at the first hit.
-- `all(it, pred) -> Bool`  -- short-circuits at the first miss.
-- `find(it, pred, default) -> T`  -- first matching element, or
+- `each(it: Iter(T), f: T -> U) -> EachDone`  -- apply `f` for side effects.
+- `count(it: Iter(T), pred: T -> Bool) -> Int`  -- count elements satisfying `pred`.
+- `any(it: Iter(T), pred: T -> Bool) -> Bool`  -- short-circuits at the first hit.
+- `all(it: Iter(T), pred: T -> Bool) -> Bool`  -- short-circuits at the first miss.
+- `find(it: Iter(T), pred: T -> Bool, default: T) -> T`  -- first matching element, or
   `default` when nothing matches.
 ### Std.Gen (v0.19.0)
 Tiny stateless generator API used by `Std.Test`. Generators are
