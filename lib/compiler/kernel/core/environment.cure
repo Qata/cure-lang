@@ -1,0 +1,436 @@
+mod Compiler.Kernel.Core.Environment
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Expr
+  use Compiler.Kernel.Core.Declaration
+  use Compiler.Kernel.Core.Exception
+  use Compiler.Kernel.Core.LocalContext
+  
+  type Diagnostics
+    = Diagnostics(Bool, List(DiagnosticUnfold))
+  
+  type DiagnosticUnfold
+    = DiagnosticUnfold(Name, Int)
+  
+  type Environment
+    = Environment(List(ConstantInfo), Bool, Diagnostics)
+  
+  @extern(:erlang, :error, 1)
+  local fn raise_environment_error(reason: Atom) -> ConstantInfo
+  
+  fn empty_environment() -> Environment
+    = Environment([], false, Diagnostics(false, []))
+  
+  fn environment_get_diagnostics(env: Environment) -> Diagnostics
+    = match env
+        Environment(_, _, diagnostics) -> diagnostics
+  
+  fn environment_set_diagnostics(env: Environment, diagnostics: Diagnostics) -> Environment
+    = match env
+        Environment(constants, quot_init, _) -> Environment(constants, quot_init, diagnostics)
+  
+  fn environment_is_quot_initialized(env: Environment) -> Bool
+    = match env
+        Environment(_, quot_init, _) -> quot_init
+  
+  fn environment_find(env: Environment, name: Name) -> Option(ConstantInfo)
+    = match env
+        Environment(constants, _, _) -> environment_find_in(constants, name)
+  
+  fn environment_get(env: Environment, name: Name) -> ConstantInfo
+    = match environment_find(env, name)
+        Some(info) -> info
+        None() -> raise_environment_error(:unknown_constant)
+  
+  fn environment_add(env: Environment, decl: Declaration, check: Bool) -> Result(Environment, KernelException)
+    = match first_declared_name(env, declaration_names(decl))
+        Some(name) -> Error(AlreadyDeclared(env, name))
+        None() ->
+          pickup
+            check -> environment_add_checked(env, decl)
+            else -> Ok(environment_add_unchecked(env, decl, check))
+  
+  fn environment_for_each_constant(env: Environment) -> List(ConstantInfo)
+    = match env
+        Environment(constants, _, _) -> constants
+  
+  fn environment_is_structure_like(env: Environment, name: Name) -> Bool
+    = match environment_find(env, name)
+        Some(InductiveInfo(InductiveVal(_, _, num_indices, _, ctors, _, is_rec, _, _))) ->
+          pickup
+            is_rec -> false
+            num_indices == 0 -> Std.List.length(ctors) == 1
+            else -> false
+        _ -> false
+  
+  local fn environment_find_in(constants: List(ConstantInfo), name: Name) -> Option(ConstantInfo)
+    = match constants
+        [] -> None()
+        [info | rest] ->
+          pickup
+            name_eq(constant_info_name(info), name) -> Some(info)
+            else -> environment_find_in(rest, name)
+  
+  local fn first_declared_name(env: Environment, names: List(Name)) -> Option(Name)
+    = match names
+        [] -> None()
+        [name | rest] ->
+          match environment_find(env, name)
+            Some(_) -> Some(name)
+            None() -> first_declared_name(env, rest)
+  
+  local fn environment_add_unchecked(env: Environment, decl: Declaration, check: Bool) -> Environment
+    = match env
+        Environment(constants, quot_init, diagnostics) ->
+          match decl
+            QuotDecl() -> Environment(Std.List.append(declaration_constant_infos(decl), constants), true, diagnostics)
+            _ -> Environment(Std.List.append(declaration_constant_infos(decl), constants), quot_init, diagnostics)
+  
+  local fn declaration_constant_infos(decl: Declaration) -> List(ConstantInfo)
+    = match decl
+        MutualDefinitionDecl(defs) -> definition_infos(defs)
+        InductiveDecl(level_params, num_params, types, is_unsafe) ->
+          inductive_infos(level_params, num_params, types, inductive_type_names(types), constructor_count_for_all(types), is_unsafe)
+        QuotDecl() -> quot_infos()
+        _ -> [declaration_to_constant_info(decl)]
+  
+  local fn definition_infos(defs: List(DefinitionVal)) -> List(ConstantInfo)
+    = match defs
+        [] -> []
+        [definition | rest] -> [DefinitionInfo(definition) | definition_infos(rest)]
+  
+  local fn inductive_infos(level_params: List(Name), num_params: Int, types: List(InductiveType), all_names: List(Name), num_minors: Int, is_unsafe: Bool) -> List(ConstantInfo)
+    = match types
+        [] -> []
+        [InductiveType(name, type_expr, ctors) | rest] ->
+          let num_indices = inductive_num_indices(type_expr, num_params)
+          let info = InductiveInfo(InductiveVal(ConstantVal(name, level_params, type_expr), num_params, num_indices, all_names, constructor_names(ctors), 0, inductive_is_recursive(all_names, ctors), is_unsafe, inductive_is_reflexive(all_names, ctors)))
+          let ctor_infos = constructor_infos(level_params, name, 0, num_params, ctors, is_unsafe)
+          let rec_infos = recursor_info(level_params, name, type_expr, num_params, num_indices, all_names, num_minors, is_unsafe, rest)
+          [info | Std.List.append(ctor_infos, rec_infos)]
+  
+  local fn constructor_infos(level_params: List(Name), inductive_name: Name, cidx: Int, num_params: Int, ctors: List(Constructor), is_unsafe: Bool) -> List(ConstantInfo)
+    = match ctors
+        [] -> []
+        [Constructor(name, type_expr) | rest] ->
+          [ConstructorInfo(ConstructorVal(ConstantVal(name, level_params, type_expr), inductive_name, cidx, num_params, constructor_num_fields(type_expr, num_params), is_unsafe)) | constructor_infos(level_params, inductive_name, cidx + 1, num_params, rest, is_unsafe)]
+  
+  local fn recursor_info(level_params: List(Name), name: Name, type_expr: Expr, num_params: Int, num_indices: Int, all_names: List(Name), num_minors: Int, is_unsafe: Bool, rest: List(InductiveType)) -> List(ConstantInfo)
+    = [RecursorInfo(RecursorVal(ConstantVal(name_append_core(name, mk_simple("rec")), level_params, type_expr), all_names, num_params, num_indices, 1, num_minors, [], false, is_unsafe)) | inductive_infos(level_params, num_params, rest, all_names, num_minors, is_unsafe)]
+  
+  local fn constructor_num_fields(type_expr: Expr, num_params: Int) -> Int
+    = subtract_nonnegative(pi_arity(type_expr), num_params)
+  
+  local fn inductive_num_indices(type_expr: Expr, num_params: Int) -> Int
+    = subtract_nonnegative(pi_arity(type_expr), num_params)
+  
+  local fn pi_arity(expr: Expr) -> Int
+    = match expr
+        Pi(_, _, _, body) -> 1 + pi_arity(body)
+        _ -> 0
+  
+  local fn subtract_nonnegative(lhs: Int, rhs: Int) -> Int
+    = pickup
+        lhs >= rhs -> lhs - rhs
+        else -> 0
+  
+  local fn constructor_count_for_all(types: List(InductiveType)) -> Int
+    = match types
+        [] -> 0
+        [InductiveType(_, _, ctors) | rest] -> Std.List.length(ctors) + constructor_count_for_all(rest)
+  
+  local fn inductive_is_recursive(all_names: List(Name), ctors: List(Constructor)) -> Bool
+    = match ctors
+        [] -> false
+        [Constructor(_, type_expr) | rest] ->
+          pickup
+            expr_mentions_any_const(type_expr, all_names) -> true
+            else -> inductive_is_recursive(all_names, rest)
+  
+  local fn inductive_is_reflexive(all_names: List(Name), ctors: List(Constructor)) -> Bool
+    = match ctors
+        [] -> false
+        [Constructor(_, type_expr) | rest] ->
+          pickup
+            constructor_has_reflexive_domain(all_names, type_expr) -> true
+            else -> inductive_is_reflexive(all_names, rest)
+  
+  local fn constructor_has_reflexive_domain(all_names: List(Name), type_expr: Expr) -> Bool
+    = match type_expr
+        Pi(_, _, domain, body) ->
+          pickup
+            expr_mentions_any_const(domain, all_names) -> true
+            else -> constructor_has_reflexive_domain(all_names, body)
+        _ -> false
+  
+  local fn expr_mentions_any_const(expr: Expr, names: List(Name)) -> Bool
+    = match expr
+        Const(name, _) -> name_in_list(name, names)
+        App(fn_expr, arg) ->
+          pickup
+            expr_mentions_any_const(fn_expr, names) -> true
+            else -> expr_mentions_any_const(arg, names)
+        Lambda(_, _, domain, body) ->
+          pickup
+            expr_mentions_any_const(domain, names) -> true
+            else -> expr_mentions_any_const(body, names)
+        Pi(_, _, domain, body) ->
+          pickup
+            expr_mentions_any_const(domain, names) -> true
+            else -> expr_mentions_any_const(body, names)
+        Let(_, type_expr, value, body, _) ->
+          pickup
+            expr_mentions_any_const(type_expr, names) -> true
+            expr_mentions_any_const(value, names) -> true
+            else -> expr_mentions_any_const(body, names)
+        MData(_, inner) -> expr_mentions_any_const(inner, names)
+        Proj(_, _, inner) -> expr_mentions_any_const(inner, names)
+        _ -> false
+  
+  local fn inductive_type_names(types: List(InductiveType)) -> List(Name)
+    = match types
+        [] -> []
+        [InductiveType(name, _, _) | rest] -> [name | inductive_type_names(rest)]
+  
+  local fn constructor_names(ctors: List(Constructor)) -> List(Name)
+    = match ctors
+        [] -> []
+        [Constructor(name, _) | rest] -> [name | constructor_names(rest)]
+  
+  local fn quot_infos() -> List(ConstantInfo)
+    = let quot = QuotInfo(QuotVal(ConstantVal(mk_simple("Quot"), [], Sort(LevelZero())), QuotType()))
+      let quot_mk = QuotInfo(QuotVal(ConstantVal(str(mk_simple("Quot"), "mk"), [], Sort(LevelZero())), QuotCtor()))
+      let quot_lift = QuotInfo(QuotVal(ConstantVal(str(mk_simple("Quot"), "lift"), [], Sort(LevelZero())), QuotLift()))
+      let quot_ind = QuotInfo(QuotVal(ConstantVal(str(mk_simple("Quot"), "ind"), [], Sort(LevelZero())), QuotInd()))
+      [quot | [quot_mk | [quot_lift | [quot_ind]]]]
+  
+  local fn environment_add_checked(env: Environment, decl: Declaration) -> Result(Environment, KernelException)
+    = match decl
+        AxiomDecl(AxiomVal(value, _)) -> check_constant_header(env, value, decl)
+        DefinitionDecl(DefinitionVal(value, body, _, safety, _)) -> check_definition_decl(env, value, body, safety, decl)
+        TheoremDecl(TheoremVal(value, body, _)) ->
+          match check_value_decl(env, value, body, DefinitionSafe(), decl)
+            Error(error) -> Error(error)
+            Ok(new_env) ->
+              match is_decl_prop(env, value)
+                Ok(true) -> Ok(new_env)
+                Ok(false) -> Error(TheoremTypeIsNotProp(env, constant_val_name(value), constant_val_type(value)))
+                Error(error) -> Error(error)
+        OpaqueDecl(OpaqueVal(value, body, is_unsafe, _)) ->
+          pickup
+            is_unsafe -> check_value_decl(env, value, body, DefinitionUnsafe(), decl)
+            else -> check_value_decl(env, value, body, DefinitionSafe(), decl)
+        QuotDecl() -> check_quot_decl(env, decl)
+        InductiveDecl(level_params, num_params, types, is_unsafe) -> check_inductive_decl(env, level_params, num_params, types, is_unsafe, decl)
+        _ -> Error(OtherKernelException("checked environment_add for this declaration form requires the Lean kernel declaration checker"))
+  
+  local fn check_inductive_decl(env: Environment, level_params: List(Name), num_params: Int, types: List(InductiveType), is_unsafe: Bool, decl: Declaration) -> Result(Environment, KernelException)
+    = match check_duplicated_universe_params(level_params)
+        Error(error) -> Error(error)
+        Ok(_) ->
+          match check_nonnegative_num_params(num_params)
+            Error(error) -> Error(error)
+            Ok(_) ->
+              match check_unique_decl_names(declaration_names(decl))
+                Error(error) -> Error(error)
+                Ok(_) ->
+                  match check_inductive_type_headers(env, level_params, types)
+                    Error(error) -> Error(error)
+                    Ok(_) ->
+                      let env_with_decl = environment_add_unchecked(env, decl, false)
+                      match check_constructor_type_headers(env_with_decl, level_params, types)
+                        Error(error) -> Error(error)
+                        Ok(_) -> Ok(env_with_decl)
+  
+  local fn check_nonnegative_num_params(num_params: Int) -> Result(Atom, KernelException)
+    = pickup
+        num_params < 0 -> Error(OtherKernelException("inductive declaration has negative parameter count"))
+        else -> Ok(:ok)
+  
+  local fn check_inductive_type_headers(env: Environment, level_params: List(Name), types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(name, type_expr, _) | rest] ->
+          match check_constant_header_only(env, ConstantVal(name, level_params, type_expr))
+            Error(error) -> Error(error)
+            Ok(_) -> check_inductive_type_headers(env, level_params, rest)
+  
+  local fn check_constructor_type_headers(env: Environment, level_params: List(Name), types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(_, _, ctors) | rest] ->
+          match check_constructor_list_headers(env, level_params, ctors)
+            Error(error) -> Error(error)
+            Ok(_) -> check_constructor_type_headers(env, level_params, rest)
+  
+  local fn check_constructor_list_headers(env: Environment, level_params: List(Name), ctors: List(Constructor)) -> Result(Atom, KernelException)
+    = match ctors
+        [] -> Ok(:ok)
+        [Constructor(name, type_expr) | rest] ->
+          match check_constant_header_only(env, ConstantVal(name, level_params, type_expr))
+            Error(error) -> Error(error)
+            Ok(_) -> check_constructor_list_headers(env, level_params, rest)
+  
+  local fn check_constant_header_only(env: Environment, value: ConstantVal) -> Result(Atom, KernelException)
+    = match check_constant_name(env, value)
+        Error(error) -> Error(error)
+        Ok(_) ->
+          match check_constant_type(env, value)
+            Error(error) -> Error(error)
+            Ok(_) -> Ok(:ok)
+  
+  local fn check_unique_decl_names(names: List(Name)) -> Result(Atom, KernelException)
+    = match names
+        [] -> Ok(:ok)
+        [name | rest] ->
+          pickup
+            name_in_list(name, rest) -> Error(OtherKernelException("declaration contains duplicate names"))
+            else -> check_unique_decl_names(rest)
+  
+  local fn check_constant_header(env: Environment, value: ConstantVal, decl: Declaration) -> Result(Environment, KernelException)
+    = match check_constant_name(env, value)
+        Error(error) -> Error(error)
+        Ok(_) -> check_constant_header_named(env, value, decl)
+  
+  local fn check_constant_header_named(env: Environment, value: ConstantVal, decl: Declaration) -> Result(Environment, KernelException)
+    = match check_constant_type(env, value)
+        Error(error) -> Error(error)
+        Ok(_) -> Ok(environment_add_unchecked(env, decl, false))
+  
+  local fn check_value_decl(env: Environment, value: ConstantVal, body: Expr, safety: DefinitionSafety, decl: Declaration) -> Result(Environment, KernelException)
+    = match check_constant_name(env, value)
+        Error(error) -> Error(error)
+        Ok(_) -> check_value_decl_named(env, value, body, safety, decl)
+  
+  local fn check_value_decl_named(env: Environment, value: ConstantVal, body: Expr, safety: DefinitionSafety, decl: Declaration) -> Result(Environment, KernelException)
+    = match check_constant_type(env, value)
+        Error(error) -> Error(error)
+        Ok(_) ->
+          match check_no_mvars_or_fvars(env, constant_val_name(value), body)
+            Error(error) -> Error(error)
+            Ok(_) ->
+              let type_checker = Compiler.Kernel.Core.TypeChecker.mk_type_checker_with_level_params(env, empty_local_context(), safety, constant_val_level_params(value))
+              match Compiler.Kernel.Core.TypeChecker.check(type_checker, body, constant_val_level_params(value))
+                Error(error) -> Error(error)
+                Ok(body_type) ->
+                  match Compiler.Kernel.Core.TypeChecker.is_def_eq(type_checker, body_type, constant_val_type(value))
+                    Error(error) -> Error(error)
+                    Ok(true) -> Ok(environment_add_unchecked(env, decl, false))
+                    Ok(false) -> Error(DeclarationTypeMismatch(env, decl, body_type))
+  
+  local fn check_definition_decl(env: Environment, value: ConstantVal, body: Expr, safety: DefinitionSafety, decl: Declaration) -> Result(Environment, KernelException)
+    = pickup
+        safety == DefinitionUnsafe() -> check_unsafe_definition_decl(env, value, body, safety, decl)
+        else -> check_value_decl(env, value, body, safety, decl)
+  
+  local fn check_unsafe_definition_decl(env: Environment, value: ConstantVal, body: Expr, safety: DefinitionSafety, decl: Declaration) -> Result(Environment, KernelException)
+    = match check_constant_name(env, value)
+        Error(error) -> Error(error)
+        Ok(_) -> check_unsafe_definition_decl_named(env, value, body, safety, decl)
+  
+  local fn check_unsafe_definition_decl_named(env: Environment, value: ConstantVal, body: Expr, safety: DefinitionSafety, decl: Declaration) -> Result(Environment, KernelException)
+    = match check_constant_type(env, value)
+        Error(error) -> Error(error)
+        Ok(_) ->
+          let env_with_decl = environment_add_unchecked(env, decl, false)
+          match check_no_mvars_or_fvars(env_with_decl, constant_val_name(value), body)
+            Error(error) -> Error(error)
+            Ok(_) ->
+              let type_checker = Compiler.Kernel.Core.TypeChecker.mk_type_checker_with_level_params(env_with_decl, empty_local_context(), safety, constant_val_level_params(value))
+              match Compiler.Kernel.Core.TypeChecker.check(type_checker, body, constant_val_level_params(value))
+                Error(error) -> Error(error)
+                Ok(body_type) ->
+                  match Compiler.Kernel.Core.TypeChecker.is_def_eq(type_checker, body_type, constant_val_type(value))
+                    Error(error) -> Error(error)
+                    Ok(true) -> Ok(env_with_decl)
+                    Ok(false) -> Error(DeclarationTypeMismatch(env_with_decl, decl, body_type))
+  
+  local fn check_quot_decl(env: Environment, decl: Declaration) -> Result(Environment, KernelException)
+    = match environment_find(env, mk_simple("Eq"))
+        Some(InductiveInfo(InductiveVal(ConstantVal(_, level_params, _), _, _, _, ctors, _, _, _, _))) ->
+          pickup
+            Std.List.length(level_params) == 1 ->
+              pickup
+                Std.List.length(ctors) == 1 -> Ok(environment_add_unchecked(env, decl, false))
+                else -> Error(OtherKernelException("failed to initialize quotient module, unexpected number of constructors for Eq"))
+            else -> Error(OtherKernelException("failed to initialize quotient module, unexpected number of universe params at Eq"))
+        _ -> Error(OtherKernelException("failed to initialize quotient module, environment does not have Eq type"))
+  
+  local fn check_constant_type(env: Environment, value: ConstantVal) -> Result(Expr, KernelException)
+    = match check_duplicated_universe_params(constant_val_level_params(value))
+        Error(error) -> Error(error)
+        Ok(_) -> check_constant_type_no_duplicate(env, value)
+  
+  local fn check_constant_name(env: Environment, value: ConstantVal) -> Result(Atom, KernelException)
+    = pickup
+        primitive_name(constant_val_name(value)) -> Error(OtherKernelException("unexpected use of primitive name"))
+        else -> Ok(:ok)
+  
+  local fn primitive_name(name: Name) -> Bool
+    = pickup
+        name_eq(name, mk_simple("Bool")) -> true
+        name_eq(name, str(mk_simple("Bool"), "false")) -> true
+        name_eq(name, str(mk_simple("Bool"), "true")) -> true
+        name_eq(name, mk_simple("Nat")) -> true
+        name_eq(name, str(mk_simple("Nat"), "zero")) -> true
+        name_eq(name, str(mk_simple("Nat"), "succ")) -> true
+        name_eq(name, str(mk_simple("Nat"), "add")) -> true
+        name_eq(name, str(mk_simple("Nat"), "pred")) -> true
+        name_eq(name, str(mk_simple("Nat"), "sub")) -> true
+        name_eq(name, str(mk_simple("Nat"), "mul")) -> true
+        name_eq(name, str(mk_simple("Nat"), "pow")) -> true
+        name_eq(name, str(mk_simple("Nat"), "gcd")) -> true
+        name_eq(name, str(mk_simple("Nat"), "mod")) -> true
+        name_eq(name, str(mk_simple("Nat"), "div")) -> true
+        name_eq(name, str(mk_simple("Nat"), "beq")) -> true
+        name_eq(name, str(mk_simple("Nat"), "ble")) -> true
+        name_eq(name, str(mk_simple("Nat"), "bitwise")) -> true
+        name_eq(name, str(mk_simple("Nat"), "land")) -> true
+        name_eq(name, str(mk_simple("Nat"), "lor")) -> true
+        name_eq(name, str(mk_simple("Nat"), "xor")) -> true
+        name_eq(name, str(mk_simple("Nat"), "shiftLeft")) -> true
+        name_eq(name, str(mk_simple("Nat"), "shiftRight")) -> true
+        name_eq(name, str(mk_simple("String"), "ofList")) -> true
+        name_eq(name, str(mk_simple("Char"), "ofNat")) -> true
+        else -> false
+  
+  local fn check_constant_type_no_duplicate(env: Environment, value: ConstantVal) -> Result(Expr, KernelException)
+    = match check_no_mvars_or_fvars(env, constant_val_name(value), constant_val_type(value))
+        Error(error) -> Error(error)
+        Ok(_) -> Compiler.Kernel.Core.TypeChecker.check(Compiler.Kernel.Core.TypeChecker.mk_type_checker_with_level_params(env, empty_local_context(), DefinitionSafe(), constant_val_level_params(value)), constant_val_type(value), constant_val_level_params(value))
+  
+  local fn check_no_mvars_or_fvars(env: Environment, name: Name, expr: Expr) -> Result(Atom, KernelException)
+    = pickup
+        expr_has_mvar(expr) -> Error(DeclarationHasMVars(env, name, expr))
+        expr_has_fvar(expr) -> Error(DeclarationHasFVars(env, name, expr))
+        else -> Ok(:ok)
+  
+  local fn is_decl_prop(env: Environment, value: ConstantVal) -> Result(Bool, KernelException)
+    = Compiler.Kernel.Core.TypeChecker.is_prop(Compiler.Kernel.Core.TypeChecker.mk_type_checker_with_level_params(env, empty_local_context(), DefinitionSafe(), constant_val_level_params(value)), constant_val_type(value))
+  
+  local fn constant_val_name(value: ConstantVal) -> Name
+    = match value
+        ConstantVal(name, _, _) -> name
+  
+  local fn constant_val_level_params(value: ConstantVal) -> List(Name)
+    = match value
+        ConstantVal(_, level_params, _) -> level_params
+  
+  local fn constant_val_type(value: ConstantVal) -> Expr
+    = match value
+        ConstantVal(_, _, type_expr) -> type_expr
+  
+  local fn check_duplicated_universe_params(params: List(Name)) -> Result(Atom, KernelException)
+    = match params
+        [] -> Ok(:ok)
+        [param | rest] ->
+          pickup
+            name_in_list(param, rest) -> Error(OtherKernelException("duplicated universe level parameter"))
+            else -> check_duplicated_universe_params(rest)
+  
+  local fn name_in_list(name: Name, names: List(Name)) -> Bool
+    = match names
+        [] -> false
+        [head | rest] ->
+          pickup
+            name_eq(name, head) -> true
+            else -> name_in_list(name, rest)

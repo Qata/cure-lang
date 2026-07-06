@@ -1,0 +1,25 @@
+mod Compiler.Kernel.Core.Exception
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Expr
+  use Compiler.Kernel.Core.LocalContext
+  use Compiler.Kernel.Core.Declaration
+  use Compiler.Kernel.Core.Environment
+  
+  type KernelException
+    = UnknownConstant(Environment, Name)
+    | AlreadyDeclared(Environment, Name)
+    | DeclarationTypeMismatch(Environment, Declaration, Expr)
+    | DeclarationHasMVars(Environment, Name, Expr)
+    | DeclarationHasFVars(Environment, Name, Expr)
+    | FunctionExpected(Environment, LocalContext, Expr)
+    | TypeExpected(Environment, LocalContext, Expr)
+    | LetTypeMismatch(Environment, LocalContext, Name, Expr, Expr)
+    | ExprTypeMismatch(Environment, LocalContext, Expr, Expr)
+    | AppTypeMismatch(Environment, LocalContext, Expr, Expr, Expr)
+    | InvalidProj(Environment, LocalContext, Expr)
+    | TheoremTypeIsNotProp(Environment, Name, Expr)
+    | OtherKernelException(String)
+    | DeterministicTimeout
+    | ExcessiveMemory
+    | DeepRecursion
+    | Interrupted

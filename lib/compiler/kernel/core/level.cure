@@ -1,0 +1,344 @@
+mod Compiler.Kernel.Core.Level
+  use Compiler.Kernel.Core.Name
+  
+  ## Lean Level:
+  ## zero | succ | max | imax | param | mvar
+  
+  type Level
+    = LevelZero
+    | LevelSucc(Level)
+    | LevelMax(Level, Level)
+    | LevelIMax(Level, Level)
+    | LevelParam(Name)
+    | LevelMVar(Name)
+  
+  fn mk_level_zero() -> Level
+    = LevelZero()
+  
+  fn mk_level_one() -> Level
+    = LevelSucc(LevelZero())
+  
+  fn mk_succ(level: Level) -> Level
+    = LevelSucc(level)
+  
+  fn mk_max(lhs: Level, rhs: Level) -> Level
+    = mk_max_normalized(lhs, rhs)
+  
+  fn mk_imax(lhs: Level, rhs: Level) -> Level
+    = pickup
+        level_is_not_zero(rhs) -> mk_max(lhs, rhs)
+        level_is_zero(rhs) -> rhs
+        level_is_zero(lhs) -> rhs
+        level_is_one(lhs) -> rhs
+        level_eq(lhs, rhs) -> lhs
+        else -> LevelIMax(lhs, rhs)
+  
+  fn mk_univ_param(name: Name) -> Level
+    = LevelParam(name)
+  
+  fn mk_univ_mvar(name: Name) -> Level
+    = LevelMVar(name)
+  
+  fn level_eq(lhs: Level, rhs: Level) -> Bool
+    = match lhs
+        LevelZero() ->
+          match rhs
+            LevelZero() -> true
+            _ -> false
+        LevelSucc(lhs_arg) ->
+          match rhs
+            LevelSucc(rhs_arg) -> level_eq(lhs_arg, rhs_arg)
+            _ -> false
+        LevelMax(lhs_left, lhs_right) ->
+          match rhs
+            LevelMax(rhs_left, rhs_right) ->
+              pickup
+                level_eq(lhs_left, rhs_left) -> level_eq(lhs_right, rhs_right)
+                else -> false
+            _ -> false
+        LevelIMax(lhs_left, lhs_right) ->
+          match rhs
+            LevelIMax(rhs_left, rhs_right) ->
+              pickup
+                level_eq(lhs_left, rhs_left) -> level_eq(lhs_right, rhs_right)
+                else -> false
+            _ -> false
+        LevelParam(lhs_name) ->
+          match rhs
+            LevelParam(rhs_name) -> name_eq(lhs_name, rhs_name)
+            _ -> false
+        LevelMVar(lhs_name) ->
+          match rhs
+            LevelMVar(rhs_name) -> name_eq(lhs_name, rhs_name)
+            _ -> false
+  
+  fn level_has_mvar(level: Level) -> Bool
+    = match level
+        LevelZero() -> false
+        LevelSucc(arg) -> level_has_mvar(arg)
+        LevelMax(lhs, rhs) ->
+          pickup
+            level_has_mvar(lhs) -> true
+            else -> level_has_mvar(rhs)
+        LevelIMax(lhs, rhs) ->
+          pickup
+            level_has_mvar(lhs) -> true
+            else -> level_has_mvar(rhs)
+        LevelParam(_) -> false
+        LevelMVar(_) -> true
+  
+  fn level_has_param(level: Level) -> Bool
+    = match level
+        LevelZero() -> false
+        LevelSucc(arg) -> level_has_param(arg)
+        LevelMax(lhs, rhs) ->
+          pickup
+            level_has_param(lhs) -> true
+            else -> level_has_param(rhs)
+        LevelIMax(lhs, rhs) ->
+          pickup
+            level_has_param(lhs) -> true
+            else -> level_has_param(rhs)
+        LevelParam(_) -> true
+        LevelMVar(_) -> false
+  
+  fn level_normalize(level: Level) -> Level
+    = normalize_with_offset(level)
+  
+  fn level_is_equivalent(lhs: Level, rhs: Level) -> Bool
+    = pickup
+        level_eq(lhs, rhs) -> true
+        else -> level_eq(level_normalize(lhs), level_normalize(rhs))
+  
+  fn level_is_geq(lhs: Level, rhs: Level) -> Bool
+    = level_is_geq_core(level_normalize(lhs), level_normalize(rhs))
+  
+  fn instantiate_level(level: Level, params: List(Name), levels: List(Level)) -> Level
+    = match level
+        LevelZero() -> level
+        LevelSucc(arg) -> mk_succ(instantiate_level(arg, params, levels))
+        LevelMax(lhs, rhs) -> mk_max(instantiate_level(lhs, params, levels), instantiate_level(rhs, params, levels))
+        LevelIMax(lhs, rhs) -> mk_imax(instantiate_level(lhs, params, levels), instantiate_level(rhs, params, levels))
+        LevelParam(name) -> instantiate_param(name, params, levels, level)
+        LevelMVar(_) -> level
+  
+  local fn mk_max_normalized(lhs: Level, rhs: Level) -> Level
+    = pickup
+        levels_are_explicit(lhs, rhs) -> max_explicit(lhs, rhs)
+        level_eq(lhs, rhs) -> lhs
+        level_is_zero(lhs) -> rhs
+        level_is_zero(rhs) -> lhs
+        max_contains(rhs, lhs) -> rhs
+        max_contains(lhs, rhs) -> lhs
+        same_offset_base(lhs, rhs) -> max_offset(lhs, rhs)
+        else -> LevelMax(lhs, rhs)
+  
+  local fn level_is_zero(level: Level) -> Bool
+    = match level
+        LevelZero() -> true
+        _ -> false
+  
+  local fn level_is_one(level: Level) -> Bool
+    = level_eq(level, mk_level_one())
+  
+  local fn level_is_not_zero(level: Level) -> Bool
+    = match level
+        LevelZero() -> false
+        LevelParam(_) -> false
+        LevelMVar(_) -> false
+        LevelSucc(_) -> true
+        LevelMax(lhs, rhs) ->
+          pickup
+            level_is_not_zero(lhs) -> true
+            else -> level_is_not_zero(rhs)
+        LevelIMax(_, rhs) -> level_is_not_zero(rhs)
+  
+  local fn level_is_explicit(level: Level) -> Bool
+    = match level
+        LevelZero() -> true
+        LevelSucc(arg) -> level_is_explicit(arg)
+        _ -> false
+  
+  local fn levels_are_explicit(lhs: Level, rhs: Level) -> Bool
+    = pickup
+        level_is_explicit(lhs) -> level_is_explicit(rhs)
+        else -> false
+  
+  local fn explicit_depth(level: Level) -> Int
+    = match level
+        LevelZero() -> 0
+        LevelSucc(arg) -> explicit_depth(arg) + 1
+        _ -> 0
+  
+  local fn max_explicit(lhs: Level, rhs: Level) -> Level
+    = pickup
+        explicit_depth(lhs) >= explicit_depth(rhs) -> lhs
+        else -> rhs
+  
+  local fn max_contains(container: Level, needle: Level) -> Bool
+    = match container
+        LevelMax(lhs, rhs) ->
+          pickup
+            level_eq(lhs, needle) -> true
+            level_eq(rhs, needle) -> true
+            else -> false
+        _ -> false
+  
+  local fn offset_base(level: Level) -> Level
+    = match level
+        LevelSucc(arg) -> offset_base(arg)
+        _ -> level
+  
+  local fn offset_amount(level: Level) -> Int
+    = match level
+        LevelSucc(arg) -> offset_amount(arg) + 1
+        _ -> 0
+  
+  local fn same_offset_base(lhs: Level, rhs: Level) -> Bool
+    = level_eq(offset_base(lhs), offset_base(rhs))
+  
+  local fn max_offset(lhs: Level, rhs: Level) -> Level
+    = pickup
+        offset_amount(lhs) >= offset_amount(rhs) -> lhs
+        else -> rhs
+  
+  local fn level_is_geq_core(lhs: Level, rhs: Level) -> Bool
+    = pickup
+        level_eq(lhs, rhs) -> true
+        level_is_zero(rhs) -> true
+        else -> level_is_geq_split(lhs, rhs)
+  
+  local fn level_is_geq_split(lhs: Level, rhs: Level) -> Bool
+    = match rhs
+        LevelMax(rhs_left, rhs_right) ->
+          pickup
+            level_is_geq(lhs, rhs_left) -> level_is_geq(lhs, rhs_right)
+            else -> false
+        LevelIMax(rhs_left, rhs_right) ->
+          pickup
+            level_is_geq(lhs, rhs_left) -> level_is_geq(lhs, rhs_right)
+            else -> false
+        _ -> level_is_geq_lhs(lhs, rhs)
+  
+  local fn level_is_geq_lhs(lhs: Level, rhs: Level) -> Bool
+    = match lhs
+        LevelMax(lhs_left, lhs_right) ->
+          pickup
+            level_is_geq(lhs_left, rhs) -> true
+            else -> level_is_geq(lhs_right, rhs)
+        LevelIMax(_, lhs_right) -> level_is_geq(lhs_right, rhs)
+        _ -> level_is_geq_offset(lhs, rhs)
+  
+  local fn level_is_geq_offset(lhs: Level, rhs: Level) -> Bool
+    = pickup
+        same_offset_base(lhs, rhs) -> offset_amount(lhs) >= offset_amount(rhs)
+        level_is_zero(offset_base(rhs)) -> offset_amount(lhs) >= offset_amount(rhs)
+        same_positive_offset(lhs, rhs) -> level_is_geq(offset_base(lhs), offset_base(rhs))
+        else -> false
+  
+  local fn same_positive_offset(lhs: Level, rhs: Level) -> Bool
+    = pickup
+        offset_amount(lhs) == offset_amount(rhs) -> offset_amount(lhs) > 0
+        else -> false
+  
+  local fn instantiate_param(name: Name, params: List(Name), levels: List(Level), fallback: Level) -> Level
+    = match params
+        [] -> fallback
+        [param | rest_params] ->
+          match levels
+            [] -> fallback
+            [level | rest_levels] ->
+              pickup
+                name_eq(name, param) -> level
+                else -> instantiate_param(name, rest_params, rest_levels, fallback)
+  
+  local fn normalize_with_offset(level: Level) -> Level
+    = match offset_base(level)
+        LevelZero() -> level
+        LevelParam(_) -> level
+        LevelMVar(_) -> level
+        LevelIMax(lhs, rhs) -> mk_succ_repeat(mk_imax(level_normalize(lhs), level_normalize(rhs)), offset_amount(level))
+        LevelMax(_, _) -> mk_succ_repeat(normalize_max_args(sort_levels(max_args(level, []))), offset_amount(level))
+        LevelSucc(_) -> level
+  
+  local fn max_args(level: Level, acc: List(Level)) -> List(Level)
+    = match offset_base(level)
+        LevelMax(lhs, rhs) -> max_args(lhs, max_args(rhs, acc))
+        other -> [level_normalize(other) | acc]
+  
+  local fn normalize_max_args(args: List(Level)) -> Level
+    = match reduce_max_args(args, [])
+        [] -> LevelZero()
+        [level] -> level
+        [level | rest] -> mk_max_from_list(level, rest)
+  
+  local fn mk_max_from_list(head: Level, rest: List(Level)) -> Level
+    = match rest
+        [] -> head
+        [next | tail] -> mk_max(head, mk_max_from_list(next, tail))
+  
+  local fn reduce_max_args(args: List(Level), acc: List(Level)) -> List(Level)
+    = match args
+        [] -> acc
+        [level | rest] -> reduce_max_args(rest, insert_max_arg(level, acc))
+  
+  local fn insert_max_arg(level: Level, acc: List(Level)) -> List(Level)
+    = match acc
+        [] -> [level]
+        [head | tail] ->
+          pickup
+            level_subsumes(head, level) -> acc
+            level_subsumes(level, head) -> [level | tail]
+            else -> [head | insert_max_arg(level, tail)]
+  
+  local fn level_subsumes(lhs: Level, rhs: Level) -> Bool
+    = pickup
+        level_eq(offset_base(lhs), offset_base(rhs)) -> offset_amount(lhs) >= offset_amount(rhs)
+        level_is_explicit(lhs) ->
+          pickup
+            level_is_explicit(rhs) -> explicit_depth(lhs) >= explicit_depth(rhs)
+            else -> false
+        else -> false
+  
+  local fn sort_levels(levels: List(Level)) -> List(Level)
+    = match levels
+        [] -> []
+        [level | rest] -> insert_sorted_level(level, sort_levels(rest))
+  
+  local fn insert_sorted_level(level: Level, levels: List(Level)) -> List(Level)
+    = match levels
+        [] -> [level]
+        [head | tail] ->
+          pickup
+            level_norm_lt(level, head) -> [level | levels]
+            else -> [head | insert_sorted_level(level, tail)]
+  
+  local fn level_norm_lt(lhs: Level, rhs: Level) -> Bool
+    = pickup
+        level_kind_rank(offset_base(lhs)) < level_kind_rank(offset_base(rhs)) -> true
+        level_kind_rank(offset_base(lhs)) > level_kind_rank(offset_base(rhs)) -> false
+        same_offset_base(lhs, rhs) -> offset_amount(lhs) < offset_amount(rhs)
+        else -> name_key(offset_base(lhs)) < name_key(offset_base(rhs))
+  
+  local fn level_kind_rank(level: Level) -> Int
+    = match level
+        LevelZero() -> 0
+        LevelSucc(_) -> 1
+        LevelMax(_, _) -> 2
+        LevelIMax(_, _) -> 3
+        LevelParam(_) -> 4
+        LevelMVar(_) -> 5
+  
+  local fn name_key(level: Level) -> String
+    = match level
+        LevelParam(name) -> name_to_string(name)
+        LevelMVar(name) -> name_to_string(name)
+        LevelMax(lhs, rhs) -> name_key(lhs) <> "." <> name_key(rhs)
+        LevelIMax(lhs, rhs) -> name_key(lhs) <> "." <> name_key(rhs)
+        LevelSucc(arg) -> name_key(arg)
+        LevelZero() -> ""
+  
+  local fn mk_succ_repeat(level: Level, amount: Int) -> Level
+    = pickup
+        amount <= 0 -> level
+        else -> mk_succ_repeat(LevelSucc(level), amount - 1)

@@ -1,0 +1,25 @@
+mod Compiler.Kernel.Tests.Core.EnvironmentTest
+  use Std.Test
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Level
+  use Compiler.Kernel.Core.Expr
+  use Compiler.Kernel.Core.Declaration
+  use Compiler.Kernel.Core.Environment
+  
+  fn test_quot_adds_all_constants() -> Atom =
+    match environment_add(empty_environment(), QuotDecl(), false)
+      Ok(env) ->
+        assert(
+          Std.List.length(environment_for_each_constant(env)) == 4
+        )
+      Error(_) -> assert(false)
+  
+  fn test_duplicate_rejected() -> Atom =
+    let name = mk_simple("A")
+    let decl = AxiomDecl(AxiomVal(ConstantVal(name, [], Sort(LevelZero())), false))
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_add(env, decl, false)
+          Error(_) -> :ok
+          Ok(_) -> assert(false)
+      Error(_) -> assert(false)

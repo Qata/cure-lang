@@ -1,0 +1,111 @@
+mod Compiler.Kernel.Core.Syntax
+  use Compiler.Kernel.Core.Name
+  
+  ## Lean String.Pos.Raw stores a byte offset into a String.
+  
+  type StringPosRaw
+    = StringPosRaw(Int)
+  
+  ## Lean Substring.Raw stores source text and raw start/stop byte positions.
+  
+  type SubstringRaw
+    = SubstringRaw(String, StringPosRaw, StringPosRaw)
+  
+  ## Lean SourceInfo:
+  ## original(leading, pos, trailing, endPos)
+  ## synthetic(pos, endPos, canonical)
+  ## none
+  
+  type SourceInfo
+    = SourceOriginal(SubstringRaw, StringPosRaw, SubstringRaw, StringPosRaw)
+    | SourceSynthetic(StringPosRaw, StringPosRaw, Bool)
+    | SourceNone
+  
+  type SyntaxNodeKind
+    = SyntaxNodeKind(Name)
+  
+  type SyntaxPreresolved
+    = PreresolvedNamespace(Name)
+    | PreresolvedDecl(Name, List(String))
+  
+  ## Lean Syntax:
+  ## missing | node(info, kind, args) | atom(info, value) |
+  ## ident(info, rawVal, val, preresolved)
+  
+  type Syntax
+    = SyntaxMissing
+    | SyntaxNode(SourceInfo, SyntaxNodeKind, List(Syntax))
+    | SyntaxAtom(SourceInfo, String)
+    | SyntaxIdent(SourceInfo, SubstringRaw, Name, List(SyntaxPreresolved))
+  
+  type SyntaxNodeKinds
+    = SyntaxNodeKinds(List(SyntaxNodeKind))
+  
+  type TSyntax
+    = TSyntax(SyntaxNodeKinds, Syntax)
+  
+  fn syntax_missing() -> Syntax
+    = SyntaxMissing()
+  
+  fn syntax_node(info: SourceInfo, kind: SyntaxNodeKind, args: List(Syntax)) -> Syntax
+    = SyntaxNode(info, kind, args)
+  
+  fn syntax_atom(info: SourceInfo, value: String) -> Syntax
+    = SyntaxAtom(info, value)
+  
+  fn syntax_ident(info: SourceInfo, raw_value: SubstringRaw, value: Name, preresolved: List(SyntaxPreresolved)) -> Syntax
+    = SyntaxIdent(info, raw_value, value, preresolved)
+  
+  fn syntax_kind(syntax: Syntax) -> SyntaxNodeKind
+    = match syntax
+        SyntaxMissing() -> SyntaxNodeKind(anonymous())
+        SyntaxNode(_, kind, _) -> kind
+        SyntaxAtom(_, _) -> SyntaxNodeKind(mk_simple("atom"))
+        SyntaxIdent(_, _, _, _) -> SyntaxNodeKind(mk_simple("ident"))
+  
+  fn syntax_get_arg(syntax: Syntax, index: Int) -> Syntax
+    = match syntax
+        SyntaxNode(_, _, args) -> Std.List.nth(args, index, SyntaxMissing())
+        _ -> SyntaxMissing()
+  
+  fn syntax_get_pos(syntax: Syntax, canonical_only: Bool) -> Option(StringPosRaw)
+    = match syntax
+        SyntaxMissing() -> None()
+        SyntaxNode(info, _, _) -> source_info_get_pos(info, canonical_only)
+        SyntaxAtom(info, _) -> source_info_get_pos(info, canonical_only)
+        SyntaxIdent(info, _, _, _) -> source_info_get_pos(info, canonical_only)
+  
+  fn syntax_get_tail_pos(syntax: Syntax, canonical_only: Bool) -> Option(StringPosRaw)
+    = match syntax
+        SyntaxMissing() -> None()
+        SyntaxNode(info, _, _) -> source_info_get_tail_pos(info, canonical_only)
+        SyntaxAtom(info, _) -> source_info_get_tail_pos(info, canonical_only)
+        SyntaxIdent(info, _, _, _) -> source_info_get_tail_pos(info, canonical_only)
+  
+  fn source_info_get_pos(info: SourceInfo, canonical_only: Bool) -> Option(StringPosRaw)
+    = match info
+        SourceOriginal(_, pos, _, _) -> Some(pos)
+        SourceSynthetic(pos, _, canonical) ->
+          pickup
+            canonical_only -> source_info_get_canonical_pos(pos, canonical)
+            else -> Some(pos)
+        SourceNone() -> None()
+  
+  fn source_info_get_tail_pos(info: SourceInfo, canonical_only: Bool) -> Option(StringPosRaw)
+    = match info
+        SourceOriginal(_, _, _, tail_pos) -> Some(tail_pos)
+        SourceSynthetic(_, tail_pos, canonical) ->
+          pickup
+            canonical_only -> source_info_get_canonical_pos(tail_pos, canonical)
+            else -> Some(tail_pos)
+        SourceNone() -> None()
+  
+  fn source_info_get_trailing(info: SourceInfo) -> Option(SubstringRaw)
+    = match info
+        SourceOriginal(_, _, trailing, _) -> Some(trailing)
+        _ -> None()
+  
+  local fn source_info_get_canonical_pos(pos: StringPosRaw, canonical: Bool) -> Option(StringPosRaw)
+    = pickup
+        canonical -> Some(pos)
+        else -> None()

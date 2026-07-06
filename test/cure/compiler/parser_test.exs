@@ -77,6 +77,28 @@ defmodule Cure.Compiler.ParserTest do
     end
   end
 
+  describe "type definitions" do
+    test "accepts newline between ADT name and assign" do
+      ast =
+        parse!("""
+        type Literal
+          = LInt(Int)
+          | LFloat(Float)
+          | LString(String)
+        """)
+
+      assert {:container, meta, variants} = ast
+      assert meta[:container_type] == :enum
+      assert meta[:name] == "Literal"
+
+      assert Enum.map(variants, fn {:function_def, meta, []} -> meta[:name] end) == [
+               "LInt",
+               "LFloat",
+               "LString"
+             ]
+    end
+  end
+
   # ── Binary Operators ──────────────────────────────────────────────────
 
   describe "binary operators" do

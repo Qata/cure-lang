@@ -9,6 +9,7 @@ defmodule Cure.Types.Env do
 
   defstruct scopes: [%{}],
             types: %{},
+            constructors: %{},
             used: MapSet.new(),
             refinement_assumptions: [],
             refinement_var_types: %{}
@@ -16,6 +17,7 @@ defmodule Cure.Types.Env do
   @type t :: %__MODULE__{
           scopes: [map()],
           types: map(),
+          constructors: map(),
           used: MapSet.t(String.t()),
           refinement_assumptions: [tuple()],
           refinement_var_types: %{String.t() => atom()}
@@ -120,6 +122,24 @@ defmodule Cure.Types.Env do
   @spec extend_type(t(), String.t(), term()) :: t()
   def extend_type(%__MODULE__{types: types} = env, name, type) do
     %{env | types: Map.put(types, name, type)}
+  end
+
+  @doc "Register an ADT constructor's field types for pattern binding."
+  @spec extend_constructor(t(), String.t(), term()) :: t()
+  def extend_constructor(%__MODULE__{constructors: constructors} = env, name, signature) do
+    updated =
+      Map.update(constructors, name, [signature], fn
+        signatures when is_list(signatures) -> [signature | signatures]
+        old_signature -> [signature, old_signature]
+      end)
+
+    %{env | constructors: updated}
+  end
+
+  @doc "Look up an ADT constructor's field types."
+  @spec lookup_constructor(t(), String.t()) :: {:ok, [term()]} | :error
+  def lookup_constructor(%__MODULE__{constructors: constructors}, name) do
+    Map.fetch(constructors, name)
   end
 
   @doc "Look up a named type. Returns `{:ok, type}` or `:error`."

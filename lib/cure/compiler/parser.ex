@@ -1600,8 +1600,7 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:with_multi_proof_unsupported,
-             "`proof` binding is not supported together with multiple with-scrutinees",
+            {:with_multi_proof_unsupported, "`proof` binding is not supported together with multiple with-scrutinees",
              base_meta}
           )
 
@@ -1611,8 +1610,7 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:with_multi_no_arms, "with-abstraction over multiple scrutinees requires at least one arm",
-             base_meta}
+            {:with_multi_no_arms, "with-abstraction over multiple scrutinees requires at least one arm", base_meta}
           )
 
         {{:with_abs, base_meta, [hd(scruts)]}, state}
@@ -1697,8 +1695,8 @@ defmodule Cure.Compiler.Parser do
       if length(patterns) != n do
         add_error(
           state,
-          {:with_multi_arity_mismatch,
-           "with-arm has #{length(patterns)} pattern(s) but there are #{n} with-scrutinees", []}
+          {:with_multi_arity_mismatch, "with-arm has #{length(patterns)} pattern(s) but there are #{n} with-scrutinees",
+           []}
         )
       else
         state
@@ -2035,7 +2033,10 @@ defmodule Cure.Compiler.Parser do
     # (spec §4): `pat -> impossible`. Any other use stays an ordinary identifier.
     if impossible_body?(state) do
       state = advance(state)
-      meta = if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
+
+      meta =
+        if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
+
       {{:match_arm, meta, [nil]}, state}
     else
       {body, state} = parse_expr_or_block(state)
@@ -2356,15 +2357,34 @@ defmodule Cure.Compiler.Parser do
         {ast, state}
 
       %Token{type: :indent} ->
-        # Could be multi-clause: indented | pattern -> body lines
         state = advance(state)
-        {clauses, state} = parse_fn_clauses(state)
-        state = expect_dedent(state)
 
-        meta = build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
-        meta = Keyword.put(meta, :clauses, clauses)
-        ast = {:function_def, meta, []}
-        {ast, state}
+        case peek(skip_newlines(state)) do
+          %Token{type: :assign} ->
+            state = skip_newlines(state)
+            state = advance(state)
+            state = skip_newlines(state)
+            {body, state} = parse_expr_or_block(state)
+            state = expect_dedent(state)
+
+            meta =
+              build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+
+            ast = {:function_def, meta, [body]}
+            {ast, state}
+
+          _ ->
+            # Could be multi-clause: indented | pattern -> body lines
+            {clauses, state} = parse_fn_clauses(state)
+            state = expect_dedent(state)
+
+            meta =
+              build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+
+            meta = Keyword.put(meta, :clauses, clauses)
+            ast = {:function_def, meta, []}
+            {ast, state}
+        end
 
       _ ->
         # Function signature only (no body, e.g. in protocol)
@@ -2981,6 +3001,14 @@ defmodule Cure.Compiler.Parser do
 
   # Ordinary ADT / alias / refinement body: `type NAME(type_params) = …`.
   defp parse_type_def_adt(state, name, type_params, token) do
+    state = skip_newlines(state)
+
+    {pre_assign_block, state} =
+      case peek(state) do
+        %Token{type: :indent} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
     state = expect(state, :assign)
     state = skip_newlines(state)
 
@@ -3059,14 +3087,19 @@ defmodule Cure.Compiler.Parser do
     # Surrounding newlines are skipped for us by the caller's own
     # `skip_newlines` but we also tolerate any trailing newline inside the
     # block.
+    close_count = layout_block_count(opened_block, pre_assign_block)
+
     state =
-      if opened_block do
-        state |> skip_newlines() |> expect_dedent()
-      else
-        state
-      end
+      Enum.reduce(1..close_count//1, state, fn
+        _, acc when close_count > 0 -> acc |> skip_newlines() |> expect_dedent()
+        _, acc -> acc
+      end)
 
     {ast, state}
+  end
+
+  defp layout_block_count(opened_block, pre_assign_block) do
+    Enum.count([opened_block, pre_assign_block], & &1)
   end
 
   defp parse_gadt_ctors(state, acc) do
@@ -4553,8 +4586,9 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :indent} ->
+        token = peek(state)
         state = advance(state)
-        {stmts, state} = parse_block_body(state)
+        {stmts, state} = parse_block_body(state, token.value)
         state = expect_dedent(state)
 
         stmts = prepend_line_comments(stmts, leading_comments)
@@ -4884,7 +4918,7 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :indent} ->
         token = peek(state)
         state = advance(state)
-        {exprs, state} = parse_block_body(state)
+        {exprs, state} = parse_block_body(state, token.value)
         state = expect_dedent(state)
 
         case exprs do
@@ -4898,20 +4932,27 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_block_body(state) do
+  defp parse_block_body(state, indent) do
     state = skip_newlines(state)
-    parse_block_body(state, [])
+    parse_block_body(state, [], indent)
   end
 
-  defp parse_block_body(state, acc) do
+  defp parse_block_body(state, acc, indent) do
     case peek(state) do
+      %Token{type: :dedent, value: value}
+      when is_integer(indent) and is_integer(value) and value > indent ->
+        state
+        |> advance()
+        |> skip_newlines()
+        |> parse_block_body(acc, indent)
+
       %Token{type: type} when type in [:dedent, :eof] ->
         {Enum.reverse(acc), state}
 
       %Token{type: :line_comment} ->
         {node, state} = consume_line_comment(state)
         state = skip_newlines(state)
-        parse_block_body(state, [node | acc])
+        parse_block_body(state, [node | acc], indent)
 
       %Token{type: :doc_comment} ->
         # Collect consecutive doc comment blocks -- including ones
@@ -4939,7 +4980,7 @@ defmodule Cure.Compiler.Parser do
                 else: state
 
             state = skip_newlines(state)
-            parse_block_body(state, [expr | acc])
+            parse_block_body(state, [expr | acc], indent)
         end
 
       _ ->
@@ -4954,7 +4995,7 @@ defmodule Cure.Compiler.Parser do
             else: state
 
         state = skip_newlines(state)
-        parse_block_body(state, [expr | acc])
+        parse_block_body(state, [expr | acc], indent)
     end
   end
 

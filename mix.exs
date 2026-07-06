@@ -100,7 +100,8 @@ defmodule Cure.MixProject do
       ],
       # `mix check` runs the Cure stdlib and example regression
       # suites. Invoke alongside `mix test` (CI does both).
-      check: ["cure.compile_stdlib", "cure.check"],
+      check: ["cure.compile_stdlib", "cure.compile_stage1", "cure.check"],
+      stage1: ["cure.compile_stage1"],
       # Stage stdlib `.cure` sources under `priv/std/` before every
       # compile so host applications (notably the Cure REPL embedded
       # in `:cure_site`) can locate them via `:code.priv_dir(:cure)`
@@ -112,7 +113,14 @@ defmodule Cure.MixProject do
       # into `priv/ebin/`. That directory rides along with every OTP
       # release so the embedded REPL can call into the stdlib at runtime
       # without relying on the build-time `_build/cure/ebin` artefact.
-      compile: ["compile", "cure.bundle_stdlib", "cure.compile_stdlib", "cure.bundle_stdlib_beams", "cure.escript"]
+      compile: [
+        "compile",
+        "cure.bundle_stdlib",
+        "cure.compile_stdlib",
+        "cure.compile_stage1",
+        "cure.bundle_stdlib_beams",
+        "cure.escript"
+      ]
     ]
   end
 

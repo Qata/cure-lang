@@ -1,0 +1,411 @@
+mod Compiler.Kernel.Core.Expr
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Level
+  use Compiler.Kernel.Core.Literal
+  use Compiler.Kernel.Core.Syntax
+  
+  ## Lean BinderInfo:
+  ## default | implicit | strictImplicit | instImplicit | rec
+  
+  type BinderInfo
+    = BinderDefault
+    | BinderImplicit
+    | BinderStrictImplicit
+    | BinderInstImplicit
+    | BinderRec
+  
+  ## Lean MData is KVMap. KVMap stores a list of Name/DataValue entries.
+  
+  type DataValue
+    = DataString(String)
+    | DataBool(Bool)
+    | DataName(Name)
+    | DataNat(Int)
+    | DataInt(Int)
+    | DataSyntax(Syntax)
+  
+  type KVMapEntry
+    = KVMapEntry(Name, DataValue)
+  
+  type KVMap
+    = KVMap(List(KVMapEntry))
+  
+  type MData
+    = MData(KVMap)
+  
+  ## Lean Expr:
+  ## bvar | fvar | mvar | sort | const | app | lam | forallE | letE | lit
+  ## | mdata | proj
+  
+  type Expr
+    = BVar(Int)
+    | FVar(Name)
+    | MVar(Name)
+    | Sort(Level)
+    | Const(Name, List(Level))
+    | App(Expr, Expr)
+    | Lambda(Name, BinderInfo, Expr, Expr)
+    | Pi(Name, BinderInfo, Expr, Expr)
+    | Let(Name, Expr, Expr, Expr, Bool)
+    | Lit(Literal)
+    | MData(MData, Expr)
+    | Proj(Name, Int, Expr)
+  
+  fn mk_bvar(index: Int) -> Expr
+    = BVar(index)
+  
+  fn mk_fvar(name: Name) -> Expr
+    = FVar(name)
+  
+  fn mk_mvar(name: Name) -> Expr
+    = MVar(name)
+  
+  fn mk_sort(level: Level) -> Expr
+    = Sort(level)
+  
+  fn mk_const(name: Name, levels: List(Level)) -> Expr
+    = Const(name, levels)
+  
+  fn mk_app(fn_expr: Expr, arg: Expr) -> Expr
+    = App(fn_expr, arg)
+  
+  fn mk_lambda(name: Name, binder_info: BinderInfo, domain: Expr, body: Expr) -> Expr
+    = Lambda(name, binder_info, domain, body)
+  
+  fn mk_pi(name: Name, binder_info: BinderInfo, domain: Expr, body: Expr) -> Expr
+    = Pi(name, binder_info, domain, body)
+  
+  fn mk_let(name: Name, type_expr: Expr, value: Expr, body: Expr, nondep: Bool) -> Expr
+    = Let(name, type_expr, value, body, nondep)
+  
+  fn mk_lit(literal: Literal) -> Expr
+    = Lit(literal)
+  
+  fn mk_mdata(data: MData, expr: Expr) -> Expr
+    = MData(data, expr)
+  
+  fn mk_proj(struct_name: Name, index: Int, expr: Expr) -> Expr
+    = Proj(struct_name, index, expr)
+  
+  fn expr_eq(lhs: Expr, rhs: Expr) -> Bool
+    = match lhs
+        BVar(lhs_index) ->
+          match rhs
+            BVar(rhs_index) -> lhs_index == rhs_index
+            _ -> false
+        FVar(lhs_name) ->
+          match rhs
+            FVar(rhs_name) -> name_eq(lhs_name, rhs_name)
+            _ -> false
+        MVar(lhs_name) ->
+          match rhs
+            MVar(rhs_name) -> name_eq(lhs_name, rhs_name)
+            _ -> false
+        Sort(lhs_level) ->
+          match rhs
+            Sort(rhs_level) -> level_eq(lhs_level, rhs_level)
+            _ -> false
+        Const(lhs_name, lhs_levels) ->
+          match rhs
+            Const(rhs_name, rhs_levels) ->
+              pickup
+                name_eq(lhs_name, rhs_name) -> levels_eq(lhs_levels, rhs_levels)
+                else -> false
+            _ -> false
+        App(lhs_fn, lhs_arg) ->
+          match rhs
+            App(rhs_fn, rhs_arg) ->
+              pickup
+                expr_eq(lhs_fn, rhs_fn) -> expr_eq(lhs_arg, rhs_arg)
+                else -> false
+            _ -> false
+        Lambda(lhs_name, lhs_binder, lhs_domain, lhs_body) ->
+          match rhs
+            Lambda(rhs_name, rhs_binder, rhs_domain, rhs_body) ->
+              binding_eq(lhs_name, lhs_binder, lhs_domain, lhs_body, rhs_name, rhs_binder, rhs_domain, rhs_body)
+            _ -> false
+        Pi(lhs_name, lhs_binder, lhs_domain, lhs_body) ->
+          match rhs
+            Pi(rhs_name, rhs_binder, rhs_domain, rhs_body) ->
+              binding_eq(lhs_name, lhs_binder, lhs_domain, lhs_body, rhs_name, rhs_binder, rhs_domain, rhs_body)
+            _ -> false
+        Let(lhs_name, lhs_type, lhs_value, lhs_body, lhs_nondep) ->
+          match rhs
+            Let(rhs_name, rhs_type, rhs_value, rhs_body, rhs_nondep) ->
+              let_eq(lhs_name, lhs_type, lhs_value, lhs_body, lhs_nondep, rhs_name, rhs_type, rhs_value, rhs_body, rhs_nondep)
+            _ -> false
+        Lit(lhs_lit) ->
+          match rhs
+            Lit(rhs_lit) -> literal_eq(lhs_lit, rhs_lit)
+            _ -> false
+        MData(lhs_data, lhs_expr) ->
+          match rhs
+            MData(rhs_data, rhs_expr) ->
+              pickup
+                mdata_eq(lhs_data, rhs_data) -> expr_eq(lhs_expr, rhs_expr)
+                else -> false
+            _ -> false
+        Proj(lhs_struct, lhs_index, lhs_expr) ->
+          match rhs
+            Proj(rhs_struct, rhs_index, rhs_expr) ->
+              pickup
+                name_eq(lhs_struct, rhs_struct) ->
+                  pickup
+                    lhs_index == rhs_index -> expr_eq(lhs_expr, rhs_expr)
+                    else -> false
+                else -> false
+            _ -> false
+  
+  fn expr_has_expr_mvar(expr: Expr) -> Bool
+    = match expr
+        MVar(_) -> true
+        App(fn_expr, arg) -> expr_any2_mvar(fn_expr, arg)
+        Lambda(_, _, domain, body) -> expr_any2_mvar(domain, body)
+        Pi(_, _, domain, body) -> expr_any2_mvar(domain, body)
+        Let(_, type_expr, value, body, _) ->
+          pickup
+            expr_has_expr_mvar(type_expr) -> true
+            expr_has_expr_mvar(value) -> true
+            else -> expr_has_expr_mvar(body)
+        MData(_, inner) -> expr_has_expr_mvar(inner)
+        Proj(_, _, inner) -> expr_has_expr_mvar(inner)
+        _ -> false
+  
+  fn expr_has_univ_mvar(expr: Expr) -> Bool
+    = match expr
+        Sort(level) -> level_has_mvar(level)
+        Const(_, levels) -> levels_have_mvar(levels)
+        App(fn_expr, arg) -> expr_any2_univ_mvar(fn_expr, arg)
+        Lambda(_, _, domain, body) -> expr_any2_univ_mvar(domain, body)
+        Pi(_, _, domain, body) -> expr_any2_univ_mvar(domain, body)
+        Let(_, type_expr, value, body, _) ->
+          pickup
+            expr_has_univ_mvar(type_expr) -> true
+            expr_has_univ_mvar(value) -> true
+            else -> expr_has_univ_mvar(body)
+        MData(_, inner) -> expr_has_univ_mvar(inner)
+        Proj(_, _, inner) -> expr_has_univ_mvar(inner)
+        _ -> false
+  
+  fn expr_has_mvar(expr: Expr) -> Bool
+    = pickup
+        expr_has_expr_mvar(expr) -> true
+        else -> expr_has_univ_mvar(expr)
+  
+  fn expr_has_fvar(expr: Expr) -> Bool
+    = match expr
+        FVar(_) -> true
+        App(fn_expr, arg) -> expr_any2_fvar(fn_expr, arg)
+        Lambda(_, _, domain, body) -> expr_any2_fvar(domain, body)
+        Pi(_, _, domain, body) -> expr_any2_fvar(domain, body)
+        Let(_, type_expr, value, body, _) ->
+          pickup
+            expr_has_fvar(type_expr) -> true
+            expr_has_fvar(value) -> true
+            else -> expr_has_fvar(body)
+        MData(_, inner) -> expr_has_fvar(inner)
+        Proj(_, _, inner) -> expr_has_fvar(inner)
+        _ -> false
+  
+  fn expr_loose_bvar_range(expr: Expr) -> Int
+    = loose_bvar_range(expr, 0)
+  
+  fn kvmap_empty() -> KVMap
+    = KVMap([])
+  
+  fn kvmap_find(map: KVMap, name: Name) -> Option(DataValue)
+    = match map
+        KVMap(entries) -> kvmap_find_entries(entries, name)
+  
+  fn kvmap_insert(map: KVMap, name: Name, value: DataValue) -> KVMap
+    = match map
+        KVMap(entries) -> KVMap(kvmap_insert_entries(entries, name, value))
+  
+  fn kvmap_contains(map: KVMap, name: Name) -> Bool
+    = match kvmap_find(map, name)
+        Some(_) -> true
+        None() -> false
+  
+  local fn levels_eq(lhs: List(Level), rhs: List(Level)) -> Bool
+    = match lhs
+        [] ->
+          match rhs
+            [] -> true
+            _ -> false
+        [lhs_head | lhs_tail] ->
+          match rhs
+            [rhs_head | rhs_tail] ->
+              pickup
+                level_eq(lhs_head, rhs_head) -> levels_eq(lhs_tail, rhs_tail)
+                else -> false
+            _ -> false
+  
+  local fn binding_eq(
+    lhs_name: Name,
+    lhs_binder: BinderInfo,
+    lhs_domain: Expr,
+    lhs_body: Expr,
+    rhs_name: Name,
+    rhs_binder: BinderInfo,
+    rhs_domain: Expr,
+    rhs_body: Expr
+  ) -> Bool
+    = pickup
+        name_eq(lhs_name, rhs_name) ->
+          pickup
+            lhs_binder == rhs_binder ->
+              pickup
+                expr_eq(lhs_domain, rhs_domain) -> expr_eq(lhs_body, rhs_body)
+                else -> false
+            else -> false
+        else -> false
+  
+  local fn let_eq(
+    lhs_name: Name,
+    lhs_type: Expr,
+    lhs_value: Expr,
+    lhs_body: Expr,
+    lhs_nondep: Bool,
+    rhs_name: Name,
+    rhs_type: Expr,
+    rhs_value: Expr,
+    rhs_body: Expr,
+    rhs_nondep: Bool
+  ) -> Bool
+    = pickup
+        name_eq(lhs_name, rhs_name) ->
+          pickup
+            lhs_nondep == rhs_nondep ->
+              pickup
+                expr_eq(lhs_type, rhs_type) ->
+                  pickup
+                    expr_eq(lhs_value, rhs_value) -> expr_eq(lhs_body, rhs_body)
+                    else -> false
+                else -> false
+            else -> false
+        else -> false
+  
+  local fn mdata_eq(lhs: MData, rhs: MData) -> Bool
+    = match lhs
+        MData(lhs_map) ->
+          match rhs
+            MData(rhs_map) -> kvmap_eq(lhs_map, rhs_map)
+  
+  local fn kvmap_eq(lhs: KVMap, rhs: KVMap) -> Bool
+    = match lhs
+        KVMap(lhs_entries) ->
+          match rhs
+            KVMap(rhs_entries) -> kvmap_entries_eq(lhs_entries, rhs_entries)
+  
+  local fn kvmap_entries_eq(lhs: List(KVMapEntry), rhs: List(KVMapEntry)) -> Bool
+    = match lhs
+        [] ->
+          match rhs
+            [] -> true
+            _ -> false
+        [lhs_entry | lhs_tail] ->
+          match rhs
+            [rhs_entry | rhs_tail] ->
+              pickup
+                kvmap_entry_eq(lhs_entry, rhs_entry) -> kvmap_entries_eq(lhs_tail, rhs_tail)
+                else -> false
+            _ -> false
+  
+  local fn kvmap_entry_eq(lhs: KVMapEntry, rhs: KVMapEntry) -> Bool
+    = match lhs
+        KVMapEntry(lhs_name, lhs_value) ->
+          match rhs
+            KVMapEntry(rhs_name, rhs_value) ->
+              pickup
+                name_eq(lhs_name, rhs_name) -> data_value_eq(lhs_value, rhs_value)
+                else -> false
+  
+  local fn data_value_eq(lhs: DataValue, rhs: DataValue) -> Bool
+    = match lhs
+        DataString(lhs_value) ->
+          match rhs
+            DataString(rhs_value) -> lhs_value == rhs_value
+            _ -> false
+        DataBool(lhs_value) ->
+          match rhs
+            DataBool(rhs_value) -> lhs_value == rhs_value
+            _ -> false
+        DataName(lhs_value) ->
+          match rhs
+            DataName(rhs_value) -> name_eq(lhs_value, rhs_value)
+            _ -> false
+        DataNat(lhs_value) ->
+          match rhs
+            DataNat(rhs_value) -> lhs_value == rhs_value
+            _ -> false
+        DataInt(lhs_value) ->
+          match rhs
+            DataInt(rhs_value) -> lhs_value == rhs_value
+            _ -> false
+        DataSyntax(lhs_value) ->
+          match rhs
+            DataSyntax(rhs_value) -> lhs_value == rhs_value
+            _ -> false
+  
+  local fn expr_any2_mvar(lhs: Expr, rhs: Expr) -> Bool
+    = pickup
+        expr_has_expr_mvar(lhs) -> true
+        else -> expr_has_expr_mvar(rhs)
+  
+  local fn expr_any2_univ_mvar(lhs: Expr, rhs: Expr) -> Bool
+    = pickup
+        expr_has_univ_mvar(lhs) -> true
+        else -> expr_has_univ_mvar(rhs)
+  
+  local fn expr_any2_fvar(lhs: Expr, rhs: Expr) -> Bool
+    = pickup
+        expr_has_fvar(lhs) -> true
+        else -> expr_has_fvar(rhs)
+  
+  local fn levels_have_mvar(levels: List(Level)) -> Bool
+    = match levels
+        [] -> false
+        [level | rest] ->
+          pickup
+            level_has_mvar(level) -> true
+            else -> levels_have_mvar(rest)
+  
+  local fn loose_bvar_range(expr: Expr, depth: Int) -> Int
+    = match expr
+        BVar(index) ->
+          pickup
+            index >= depth -> index - depth + 1
+            else -> 0
+        App(fn_expr, arg) -> int_max(loose_bvar_range(fn_expr, depth), loose_bvar_range(arg, depth))
+        Lambda(_, _, domain, body) -> int_max(loose_bvar_range(domain, depth), loose_bvar_range(body, depth + 1))
+        Pi(_, _, domain, body) -> int_max(loose_bvar_range(domain, depth), loose_bvar_range(body, depth + 1))
+        Let(_, type_expr, value, body, _) ->
+          int_max(loose_bvar_range(type_expr, depth), int_max(loose_bvar_range(value, depth), loose_bvar_range(body, depth + 1)))
+        MData(_, inner) -> loose_bvar_range(inner, depth)
+        Proj(_, _, inner) -> loose_bvar_range(inner, depth)
+        _ -> 0
+  
+  local fn int_max(lhs: Int, rhs: Int) -> Int
+    = pickup
+        lhs >= rhs -> lhs
+        else -> rhs
+  
+  local fn kvmap_find_entries(entries: List(KVMapEntry), name: Name) -> Option(DataValue)
+    = match entries
+        [] -> None()
+        [entry | rest] ->
+          match entry
+            KVMapEntry(entry_name, value) ->
+              pickup
+                name_eq(name, entry_name) -> Some(value)
+                else -> kvmap_find_entries(rest, name)
+  
+  local fn kvmap_insert_entries(entries: List(KVMapEntry), name: Name, value: DataValue) -> List(KVMapEntry)
+    = match entries
+        [] -> [KVMapEntry(name, value)]
+        [entry | rest] ->
+          match entry
+            KVMapEntry(entry_name, _) ->
+              pickup
+                name_eq(name, entry_name) -> [KVMapEntry(name, value) | rest]
+                else -> [entry | kvmap_insert_entries(rest, name, value)]

@@ -1,0 +1,16 @@
+mod Compiler.Kernel.Tests.Core.DeclarationTest
+  use Std.Test
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Level
+  use Compiler.Kernel.Core.Expr
+  use Compiler.Kernel.Core.Declaration
+  
+  fn test_quot_names() -> Atom =
+    assert_eq(declaration_names(QuotDecl()), [mk_simple("Quot"), str(mk_simple("Quot"), "mk"), str(mk_simple("Quot"), "lift"), str(mk_simple("Quot"), "ind")])
+  
+  fn test_inductive_names_include_recursor_and_ctors() -> Atom =
+    let nat = mk_simple("Nat")
+    let zero = str(nat, "zero")
+    let succ = str(nat, "succ")
+    let decl = InductiveDecl([], 0, [InductiveType(nat, Sort(LevelZero()), [Constructor(zero, Const(nat, [])), Constructor(succ, Const(nat, []))])], false)
+    assert_eq(declaration_names(decl), [nat, name_append_core(nat, mk_simple("rec")), zero, succ])

@@ -773,6 +773,26 @@ defmodule Cure.Types.CheckerTest do
       assert {:ok, _} = Checker.check_module(ast, emit_events: false)
     end
 
+    test "parameterised constructor patterns bind payload variables with declared field types" do
+      src = """
+      mod EnumPatternPayloadMod
+        type Term = BVar(Int) | Unit
+
+        fn loose(t: Term, depth: Int) -> Int
+          = match t
+              BVar(index) ->
+                pickup
+                  index >= depth -> index - depth + 1
+                  else -> 0
+              Unit() -> 0
+      """
+
+      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
+      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+
+      assert {:ok, _} = Checker.check_module(ast, emit_events: false)
+    end
+
     test "local refinement aliases declared with `type` are visible to function signatures" do
       # Regression for the gap left at the end of Phase 1: only stdlib
       # type aliases were being lifted into `env.types`. User-defined

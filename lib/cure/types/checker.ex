@@ -506,10 +506,12 @@ defmodule Cure.Types.Checker do
   end
 
   defp register_adt_container(name, type_params, body, env) do
+    type_param_names = Enum.map(type_params, &to_string/1)
+    type_atom = if is_binary(name), do: String.to_atom(String.downcase(name)), else: nil
+
     env =
       if is_binary(name) do
-        type_atom = String.to_atom(String.downcase(name))
-        param_vars = Enum.map(type_params, fn p -> {:type_var, to_string(p)} end)
+        param_vars = Enum.map(type_param_names, fn p -> {:type_var, p} end)
         Env.extend_type(env, name, {:adt, type_atom, param_vars})
       else
         env
@@ -528,20 +530,20 @@ defmodule Cure.Types.Checker do
 
       # Parameterised variant: `Some(T)` is parsed as a function-def-shaped
       # node carrying `variant: true` and a list of type-expression ASTs.
-      # We register the constructor with `:any` for each parameter type:
-      # the *return* type (the declared ADT) is the load-bearing fact for
-      # the fix, and keeping arg types permissive preserves the historical
-      # behaviour where, for example, calling `Note(pitch, vel)` with
-      # arguments whose declared types are refinement aliases of `Int`
-      # type-checks without forcing the user to unwrap them.
+      # Constructor calls keep their historical permissive value-level
+      # signature, but pattern binders use the precise field types recorded
+      # in `env.constructors`.
       {:function_def, vmeta, _}, e when is_list(vmeta) ->
         if Keyword.get(vmeta, :variant, false) do
           vname = Keyword.get(vmeta, :name)
           raw_params = Keyword.get(vmeta, :params, [])
+          field_types = Enum.map(raw_params, &variant_param_type(e, &1, type_param_names))
           param_types = List.duplicate(:any, length(raw_params))
 
           if is_binary(vname) do
-            Env.extend(e, vname, {:fun, param_types, named_self})
+            e
+            |> Env.extend(vname, {:fun, param_types, named_self})
+            |> Env.extend_constructor(vname, {type_atom, type_param_names, field_types})
           else
             e
           end
@@ -553,6 +555,59 @@ defmodule Cure.Types.Checker do
         e
     end)
   end
+
+  defp variant_param_type(env, {:param, meta, _name}, type_params) when is_list(meta) do
+    meta
+    |> Keyword.get(:type)
+    |> resolve_variant_type(env, type_params)
+  end
+
+  defp variant_param_type(env, ast, type_params), do: resolve_variant_type(ast, env, type_params)
+
+  defp resolve_variant_type({:variable, _meta, name}, env, type_params) when is_binary(name) do
+    if name in type_params do
+      {:type_var, name}
+    else
+      resolve_with_env(env, {:variable, [], name})
+    end
+  end
+
+  defp resolve_variant_type({:function_call, meta, params}, env, type_params) do
+    name = Keyword.get(meta, :name, "")
+    resolved_params = Enum.map(params, &resolve_variant_type(&1, env, type_params))
+
+    cond do
+      Keyword.get(meta, :function_type, false) ->
+        {param_types, [ret_type]} = Enum.split(resolved_params, -1)
+        {:fun, param_types, ret_type}
+
+      name == "List" and length(resolved_params) == 1 ->
+        {:list, hd(resolved_params)}
+
+      name == "Map" and length(resolved_params) == 2 ->
+        [k, v] = resolved_params
+        {:map, k, v}
+
+      name == "Set" and length(resolved_params) == 1 ->
+        {:list, hd(resolved_params)}
+
+      name == "Pid" and length(resolved_params) == 1 ->
+        {:pid, hd(resolved_params)}
+
+      name == "Eq" and length(params) == 3 ->
+        [t_ast, a_ast, b_ast] = params
+        {:eq, resolve_variant_type(t_ast, env, type_params), a_ast, b_ast}
+
+      true ->
+        {:adt, String.to_atom(String.downcase(name)), resolved_params}
+    end
+  end
+
+  defp resolve_variant_type({:tuple, _meta, elems}, env, type_params) do
+    {:tuple, Enum.map(elems, &resolve_variant_type(&1, env, type_params))}
+  end
+
+  defp resolve_variant_type(ast, env, _type_params), do: resolve_with_env(env, ast)
 
   defp register_fn_signature(meta, env) do
     name = Keyword.get(meta, :name, "unknown")
@@ -2384,12 +2439,103 @@ defmodule Cure.Types.Checker do
     end)
   end
 
-  defp bind_constructor_pattern(env, {:function_call, _meta, args}, _type) do
-    # Without a resolved ADT variant registry we cannot narrow each argument's
-    # type, so fall back to `:any`. The compiler still benefits from binding
-    # the variable names.
-    Enum.reduce(args, env, &bind_pattern_vars(&2, &1, :any))
+  defp bind_constructor_pattern(env, {:function_call, meta, args}, scrutinee_type) do
+    name = Keyword.get(meta, :name)
+
+    arg_types =
+      case Env.lookup_constructor(env, name) do
+        {:ok, signatures} -> constructor_pattern_field_types(signatures, scrutinee_type, length(args))
+        :error -> List.duplicate(:any, length(args))
+      end
+
+    args
+    |> Enum.zip(arg_types)
+    |> Enum.reduce(env, fn {arg, type}, e -> bind_pattern_vars(e, arg, type) end)
   end
+
+  defp constructor_pattern_field_types(signatures, scrutinee_type, arity) when is_list(signatures) do
+    signatures
+    |> Enum.find(&constructor_signature_matches?(&1, scrutinee_type, arity))
+    |> case do
+      nil ->
+        signatures
+        |> Enum.find(&constructor_signature_arity?(&1, arity))
+        |> case do
+          nil -> List.duplicate(:any, arity)
+          signature -> instantiate_constructor_field_types(signature, scrutinee_type)
+        end
+
+      signature ->
+        instantiate_constructor_field_types(signature, scrutinee_type)
+    end
+  end
+
+  defp constructor_pattern_field_types(signature, scrutinee_type, arity) do
+    if constructor_signature_arity?(signature, arity) do
+      instantiate_constructor_field_types(signature, scrutinee_type)
+    else
+      List.duplicate(:any, arity)
+    end
+  end
+
+  defp constructor_signature_matches?({owner, params, fields}, {:adt, owner, args}, arity)
+       when is_list(params) and is_list(args) and is_list(fields) do
+    length(params) == length(args) and length(fields) == arity
+  end
+
+  defp constructor_signature_matches?(signature, _scrutinee_type, arity) do
+    constructor_signature_arity?(signature, arity)
+  end
+
+  defp constructor_signature_arity?({_owner, _params, fields}, arity) when is_list(fields) do
+    length(fields) == arity
+  end
+
+  defp constructor_signature_arity?(fields, arity) when is_list(fields), do: length(fields) == arity
+  defp constructor_signature_arity?(_signature, _arity), do: false
+
+  defp instantiate_constructor_field_types({owner, params, fields}, {:adt, owner, args})
+       when is_list(params) and is_list(args) and length(params) == length(args) do
+    subst = Map.new(Enum.zip(params, args))
+    Enum.map(fields, &substitute_type_vars(&1, subst))
+  end
+
+  defp instantiate_constructor_field_types({_owner, _params, fields}, _scrutinee_type), do: fields
+  defp instantiate_constructor_field_types(fields, _scrutinee_type) when is_list(fields), do: fields
+
+  defp substitute_type_vars({:type_var, name} = type, subst) do
+    Map.get(subst, name, type)
+  end
+
+  defp substitute_type_vars({:fun, params, ret}, subst) do
+    {:fun, Enum.map(params, &substitute_type_vars(&1, subst)), substitute_type_vars(ret, subst)}
+  end
+
+  defp substitute_type_vars({:list, type}, subst), do: {:list, substitute_type_vars(type, subst)}
+
+  defp substitute_type_vars({:map, key, value}, subst) do
+    {:map, substitute_type_vars(key, subst), substitute_type_vars(value, subst)}
+  end
+
+  defp substitute_type_vars({:tuple, types}, subst) do
+    {:tuple, Enum.map(types, &substitute_type_vars(&1, subst))}
+  end
+
+  defp substitute_type_vars({:adt, name, params}, subst) do
+    {:adt, name, Enum.map(params, &substitute_type_vars(&1, subst))}
+  end
+
+  defp substitute_type_vars({:pid, type}, subst), do: {:pid, substitute_type_vars(type, subst)}
+
+  defp substitute_type_vars({:refinement, base, var, pred}, subst) do
+    {:refinement, substitute_type_vars(base, subst), var, pred}
+  end
+
+  defp substitute_type_vars({:union, types}, subst) do
+    {:union, Enum.map(types, &substitute_type_vars(&1, subst))}
+  end
+
+  defp substitute_type_vars(other, _subst), do: other
 
   defp emit_record_warning(env, rec_name, field, known_field_names, line) do
     if Map.get(env, :emit_events, false) do

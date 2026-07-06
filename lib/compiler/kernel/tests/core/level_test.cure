@@ -1,0 +1,13 @@
+mod Compiler.Kernel.Tests.Core.LevelTest
+  use Std.Test
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Level
+  
+  fn test_max_commutes_after_normalize() -> Atom =
+    let u = mk_univ_param(mk_simple("u"))
+    let v = mk_univ_param(mk_simple("v"))
+    assert(level_is_equivalent(mk_max(u, v), mk_max(v, u)))
+  
+  fn test_max_removes_same_base_offset() -> Atom =
+    let u = mk_univ_param(mk_simple("u"))
+    assert(level_is_equivalent(mk_max(u, mk_succ(u)), mk_succ(u)))

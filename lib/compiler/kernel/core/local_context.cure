@@ -1,0 +1,133 @@
+mod Compiler.Kernel.Core.LocalContext
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Expr
+  use Compiler.Kernel.Core.Level
+  
+  ## Lean LocalDecl:
+  ## cdecl(index, name, userName, type, binderInfo)
+  ## ldecl(index, name, userName, type, value)
+  
+  type LocalDecl
+    = LocalConstDecl(Int, Name, Name, Expr, BinderInfo)
+    | LocalLetDecl(Int, Name, Name, Expr, Expr)
+  
+  type LocalContext
+    = LocalContext(List(LocalDecl))
+  
+  @extern(:erlang, :error, 1)
+  local fn raise_local_context_error(reason: Atom) -> LocalDecl
+  
+  @extern(:erlang, :error, 1)
+  local fn raise_local_context_type_error(reason: Atom) -> Expr
+  
+  fn empty_local_context() -> LocalContext
+    = LocalContext([])
+  
+  fn local_context_empty(context: LocalContext) -> Bool
+    = match context
+        LocalContext(decls) -> decls == []
+  
+  fn mk_local_const_decl(
+    context: LocalContext,
+    name: Name,
+    user_name: Name,
+    type_expr: Expr,
+    binder_info: BinderInfo
+  ) -> LocalDecl
+    = LocalConstDecl(next_local_index(context), name, user_name, type_expr, binder_info)
+  
+  fn mk_local_let_decl(
+    context: LocalContext,
+    name: Name,
+    user_name: Name,
+    type_expr: Expr,
+    value: Expr
+  ) -> LocalDecl
+    = LocalLetDecl(next_local_index(context), name, user_name, type_expr, value)
+  
+  fn local_context_find(context: LocalContext, name: Name) -> Option(LocalDecl)
+    = match context
+        LocalContext(decls) -> local_context_find_in(decls, name)
+  
+  fn local_context_get(context: LocalContext, name: Name) -> LocalDecl
+    = match local_context_find(context, name)
+        Some(decl) -> decl
+        None() -> raise_local_context_error(:unknown_local)
+  
+  fn local_decl_mk_ref(decl: LocalDecl) -> Expr
+    = match decl
+        LocalConstDecl(_, name, _, _, _) -> FVar(name)
+        LocalLetDecl(_, name, _, _, _) -> FVar(name)
+  
+  fn local_context_get_type(context: LocalContext, fvar: Expr) -> Expr
+    = match fvar
+        FVar(name) -> local_decl_type(local_context_get(context, name))
+        _ -> raise_local_context_type_error(:free_variable_expected)
+  
+  fn local_context_get_local(context: LocalContext, name: Name) -> Expr
+    = local_decl_mk_ref(local_context_get(context, name))
+  
+  fn local_context_clear(context: LocalContext, decl: LocalDecl) -> LocalContext
+    = match context
+        LocalContext(decls) -> LocalContext(local_context_clear_in(decls, local_decl_name(decl)))
+  
+  fn local_context_mk_lambda(context: LocalContext, fvars: List(Expr), body: Expr, remove_dead_let: Bool) -> Expr
+    = match fvars
+        [] -> body
+        [fvar | rest] ->
+          match fvar
+            FVar(name) -> local_decl_wrap_lambda(local_context_get(context, name), local_context_mk_lambda(context, rest, body, remove_dead_let))
+            _ -> local_context_mk_lambda(context, rest, body, remove_dead_let)
+  
+  fn local_context_mk_pi(context: LocalContext, fvars: List(Expr), body: Expr, remove_dead_let: Bool) -> Expr
+    = match fvars
+        [] -> body
+        [fvar | rest] ->
+          match fvar
+            FVar(name) -> local_decl_wrap_pi(local_context_get(context, name), local_context_mk_pi(context, rest, body, remove_dead_let))
+            _ -> local_context_mk_pi(context, rest, body, remove_dead_let)
+  
+  local fn next_local_index(context: LocalContext) -> Int
+    = match context
+        LocalContext(decls) -> Std.List.length(decls)
+  
+  local fn local_context_find_in(decls: List(LocalDecl), name: Name) -> Option(LocalDecl)
+    = match decls
+        [] -> None()
+        [decl | rest] ->
+          pickup
+            name_eq(local_decl_name(decl), name) -> Some(decl)
+            else -> local_context_find_in(rest, name)
+  
+  local fn local_decl_name(decl: LocalDecl) -> Name
+    = match decl
+        LocalConstDecl(_, name, _, _, _) -> name
+        LocalLetDecl(_, name, _, _, _) -> name
+  
+  local fn local_decl_user_name(decl: LocalDecl) -> Name
+    = match decl
+        LocalConstDecl(_, _, user_name, _, _) -> user_name
+        LocalLetDecl(_, _, user_name, _, _) -> user_name
+  
+  local fn local_decl_type(decl: LocalDecl) -> Expr
+    = match decl
+        LocalConstDecl(_, _, _, type_expr, _) -> type_expr
+        LocalLetDecl(_, _, _, type_expr, _) -> type_expr
+  
+  local fn local_context_clear_in(decls: List(LocalDecl), name: Name) -> List(LocalDecl)
+    = match decls
+        [] -> []
+        [decl | rest] ->
+          pickup
+            name_eq(local_decl_name(decl), name) -> rest
+            else -> [decl | local_context_clear_in(rest, name)]
+  
+  local fn local_decl_wrap_lambda(decl: LocalDecl, body: Expr) -> Expr
+    = match decl
+        LocalConstDecl(_, name, user_name, type_expr, binder_info) -> Lambda(user_name, binder_info, type_expr, body)
+        LocalLetDecl(_, name, user_name, type_expr, value) -> Let(user_name, type_expr, value, body, false)
+  
+  local fn local_decl_wrap_pi(decl: LocalDecl, body: Expr) -> Expr
+    = match decl
+        LocalConstDecl(_, name, user_name, type_expr, binder_info) -> Pi(user_name, binder_info, type_expr, body)
+        LocalLetDecl(_, name, user_name, type_expr, value) -> Let(user_name, type_expr, value, body, false)

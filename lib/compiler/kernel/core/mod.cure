@@ -1,0 +1,11 @@
+mod Compiler.Kernel.Core.Mod
+  use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Level
+  use Compiler.Kernel.Core.Literal
+  use Compiler.Kernel.Core.Syntax
+  use Compiler.Kernel.Core.Expr
+  use Compiler.Kernel.Core.LocalContext
+  use Compiler.Kernel.Core.Declaration
+  use Compiler.Kernel.Core.Environment
+  use Compiler.Kernel.Core.Exception
+  use Compiler.Kernel.Core.TypeChecker
