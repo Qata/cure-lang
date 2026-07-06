@@ -180,7 +180,15 @@ mod Compiler.Kernel.Core.TypeChecker
         Ok(type_expr) -> ensure_sort(type_checker, type_expr, expr)
   
   fn eta_expand(type_checker: TypeChecker, expr: Expr) -> Result(Expr, KernelException)
-    = Ok(expr)
+    = match infer(type_checker, expr)
+        Error(_) -> Ok(expr)
+        Ok(expr_type) ->
+          match whnf(type_checker, expr_type)
+            Error(_) -> Ok(expr)
+            Ok(type_whnf) ->
+              match expand_structure_eta_by_type(type_checker, type_whnf, expr)
+                Some(expanded) -> Ok(expanded)
+                None() -> Ok(expr)
   
   fn unfold_definition(type_checker: TypeChecker, expr: Expr) -> Result(Option(Expr), KernelException)
     = match type_checker
@@ -313,10 +321,9 @@ mod Compiler.Kernel.Core.TypeChecker
           let major_index = num_params + num_motives + num_minors + num_indices
           match expr_arg_at(expr, major_index)
             Some(major) ->
-              match whnf_core(type_checker, major, cheap_rec, cheap_proj)
+              match recursor_major_for_reduction(type_checker, value, major, cheap_rec, cheap_proj)
                 Error(error) -> Error(error)
-                Ok(major_whnf) ->
-                  let normalized_major = normalize_major_constructor(major_whnf)
+                Ok(normalized_major) ->
                   match recursor_rule_for(rules, normalized_major)
                     Some(RecursorRule(_, nfields, rhs)) ->
                       pickup
@@ -330,6 +337,121 @@ mod Compiler.Kernel.Core.TypeChecker
                         else -> Ok(None())
                     None() -> Ok(None())
             None() -> Ok(None())
+  
+  local fn recursor_major_for_reduction(type_checker: TypeChecker, value: RecursorVal, major: Expr, cheap_rec: Bool, cheap_proj: Bool) -> Result(Expr, KernelException)
+    = match recursor_major_when_k(type_checker, value, major)
+        Error(error) -> Error(error)
+        Ok(k_major) ->
+          match whnf_core(type_checker, k_major, cheap_rec, cheap_proj)
+            Error(error) -> Error(error)
+            Ok(major_whnf) ->
+              let normalized_major = normalize_major_constructor(major_whnf)
+              Ok(recursor_major_when_structure(type_checker, value, normalized_major))
+  
+  local fn recursor_major_when_k(type_checker: TypeChecker, value: RecursorVal, major: Expr) -> Result(Expr, KernelException)
+    = match value
+        RecursorVal(_, _, num_params, _, _, _, _, k, _) ->
+          pickup
+            k -> recursor_major_to_nullary_ctor(type_checker, value, major, num_params)
+            else -> Ok(major)
+  
+  local fn recursor_major_to_nullary_ctor(type_checker: TypeChecker, value: RecursorVal, major: Expr, num_params: Int) -> Result(Expr, KernelException)
+    = match infer(type_checker, major)
+        Error(error) -> Error(error)
+        Ok(major_type) ->
+          match whnf(type_checker, major_type)
+            Error(error) -> Error(error)
+            Ok(major_type_whnf) ->
+              match app_head(major_type_whnf)
+                Const(type_name, _) ->
+                  match recursor_major_induct(value)
+                    Some(major_induct) ->
+                      pickup
+                        name_eq(type_name, major_induct) ->
+                          pickup
+                            exprs_have_mvar(drop_args(app_args(major_type_whnf), num_params)) -> Ok(major)
+                            else -> recursor_major_to_nullary_ctor_checked(type_checker, major, major_type_whnf, num_params)
+                        else -> Ok(major)
+                    None() -> Ok(major)
+                _ -> Ok(major)
+  
+  local fn recursor_major_to_nullary_ctor_checked(type_checker: TypeChecker, major: Expr, major_type: Expr, num_params: Int) -> Result(Expr, KernelException)
+    = match mk_nullary_ctor(type_checker, major_type, num_params)
+        Some(ctor_expr) ->
+          match infer(type_checker, ctor_expr)
+            Error(_) -> Ok(major)
+            Ok(ctor_type) ->
+              match is_def_eq(type_checker, major_type, ctor_type)
+                Error(_) -> Ok(major)
+                Ok(true) -> Ok(ctor_expr)
+                Ok(false) -> Ok(major)
+        None() -> Ok(major)
+  
+  local fn mk_nullary_ctor(type_checker: TypeChecker, type_expr: Expr, num_params: Int) -> Option(Expr)
+    = match type_checker
+        TypeChecker(env, _, _, _) ->
+          match app_head(type_expr)
+            Const(type_name, levels) ->
+              match environment_find(env, type_name)
+                Some(InductiveInfo(InductiveVal(_, _, _, _, ctors, _, _, _, _))) ->
+                  match ctors
+                    [ctor_name | _] -> Some(mk_apps(Const(ctor_name, levels), take_args(app_args(type_expr), num_params)))
+                    [] -> None()
+                _ -> None()
+            _ -> None()
+  
+  local fn recursor_major_when_structure(type_checker: TypeChecker, value: RecursorVal, major: Expr) -> Expr
+    = pickup
+        expr_is_constructor_app(type_checker, major) -> major
+        else ->
+          match recursor_major_induct(value)
+            Some(induct_name) ->
+              match infer(type_checker, major)
+                Error(_) -> major
+                Ok(major_type) ->
+                  match whnf(type_checker, major_type)
+                    Error(_) -> major
+                    Ok(major_type_whnf) ->
+                      match app_head(major_type_whnf)
+                        Const(type_name, _) ->
+                          pickup
+                            name_eq(type_name, induct_name) ->
+                              match expand_structure_eta_by_type(type_checker, major_type_whnf, major)
+                                Some(expanded) -> expanded
+                                None() -> major
+                            else -> major
+                        _ -> major
+            None() -> major
+  
+  local fn recursor_major_induct(value: RecursorVal) -> Option(Name)
+    = match value
+        RecursorVal(ConstantVal(rec_name, _, _), all, _, _, _, _, _, _, _) -> recursor_major_induct_named(rec_name, all)
+  
+  local fn recursor_major_induct_named(rec_name: Name, names: List(Name)) -> Option(Name)
+    = match names
+        [] -> None()
+        [name | rest] ->
+          pickup
+            name_eq(name_append_core(name, mk_simple("rec")), rec_name) -> Some(name)
+            else -> recursor_major_induct_named(rec_name, rest)
+  
+  local fn expr_is_constructor_app(type_checker: TypeChecker, expr: Expr) -> Bool
+    = match type_checker
+        TypeChecker(env, _, _, _) ->
+          match app_head(expr)
+            Const(name, _) ->
+              match environment_find(env, name)
+                Some(ConstructorInfo(_)) -> true
+                _ -> false
+            _ -> false
+  
+  local fn exprs_have_mvar(exprs: List(Expr)) -> Bool
+    = match exprs
+        [] -> false
+        [expr | rest] ->
+          pickup
+            expr_has_mvar(expr) -> true
+            else -> exprs_have_mvar(rest)
   
   local fn normalize_major_constructor(expr: Expr) -> Expr
     = match expr
@@ -693,18 +815,29 @@ mod Compiler.Kernel.Core.TypeChecker
         Ok(expr_type) ->
           match whnf(type_checker, expr_type)
             Error(_) -> None()
-            Ok(type_whnf) ->
-              match app_head(type_whnf)
-                Const(type_name, levels) ->
-                  pickup
-                    name_eq(type_name, induct_name) ->
-                      match first_constructor_name(type_checker, induct_name)
-                        Some(ctor_name) ->
-                          let ctor = mk_apps(Const(ctor_name, levels), take_args(app_args(type_whnf), num_params))
-                          Some(add_structure_projections(ctor, induct_name, expr, 0, num_fields))
-                        None() -> None()
-                    else -> None()
-                _ -> None()
+            Ok(type_whnf) -> expand_structure_eta_by_type_with_shape(type_checker, type_whnf, expr, induct_name, num_params, num_fields)
+  
+  local fn expand_structure_eta_by_type(type_checker: TypeChecker, type_whnf: Expr, expr: Expr) -> Option(Expr)
+    = match app_head(type_whnf)
+        Const(induct_name, _) ->
+          match first_constructor_info(type_checker, induct_name)
+            Some(ConstructorVal(_, _, _, num_params, num_fields, _)) ->
+              expand_structure_eta_by_type_with_shape(type_checker, type_whnf, expr, induct_name, num_params, num_fields)
+            None() -> None()
+        _ -> None()
+  
+  local fn expand_structure_eta_by_type_with_shape(type_checker: TypeChecker, type_whnf: Expr, expr: Expr, induct_name: Name, num_params: Int, num_fields: Int) -> Option(Expr)
+    = match app_head(type_whnf)
+        Const(type_name, levels) ->
+          pickup
+            name_eq(type_name, induct_name) ->
+              match first_constructor_name(type_checker, induct_name)
+                Some(ctor_name) ->
+                  let ctor = mk_apps(Const(ctor_name, levels), take_args(app_args(type_whnf), num_params))
+                  Some(add_structure_projections(ctor, induct_name, expr, 0, num_fields))
+                None() -> None()
+            else -> None()
+        _ -> None()
   
   local fn first_constructor_name(type_checker: TypeChecker, induct_name: Name) -> Option(Name)
     = match type_checker
@@ -715,6 +848,19 @@ mod Compiler.Kernel.Core.TypeChecker
                 [ctor | _] -> Some(ctor)
                 [] -> None()
             _ -> None()
+  
+  local fn first_constructor_info(type_checker: TypeChecker, induct_name: Name) -> Option(ConstructorVal)
+    = match type_checker
+        TypeChecker(env, _, _, _) ->
+          match first_constructor_name(type_checker, induct_name)
+            Some(ctor_name) ->
+              match environment_find(env, ctor_name)
+                Some(ConstructorInfo(info)) ->
+                  pickup
+                    environment_is_structure_like(env, induct_name) -> Some(info)
+                    else -> None()
+                _ -> None()
+            None() -> None()
   
   local fn add_structure_projections(ctor: Expr, induct_name: Name, expr: Expr, index: Int, num_fields: Int) -> Expr
     = pickup
