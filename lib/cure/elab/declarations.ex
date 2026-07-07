@@ -456,6 +456,27 @@ defmodule Cure.Elab.Declarations do
   defp type_var_name?(_), do: false
 
   defp elaborate_param_telescope(params, env) do
+    # A telescope must not bind the same parameter name twice: a later parameter's
+    # type (and the body) can refer to an earlier binder by name, so a duplicate
+    # silently shadows the first and makes the reference ambiguous. Idris/Agda/Lean
+    # reject repeated binder names in a telescope.
+    # The bare wildcard `_` binds nothing, so it is exempt — several ignored
+    # arguments may all be `_`.
+    pnames =
+      params
+      |> Enum.map(fn {:param, _m, n} -> n end)
+      |> Enum.reject(&(&1 == "_"))
+
+    case pnames -- Enum.uniq(pnames) do
+      [dup | _] ->
+        {:error, {:duplicate_parameter, String.to_atom(dup)}}
+
+      [] ->
+        elaborate_param_telescope_rec(params, env)
+    end
+  end
+
+  defp elaborate_param_telescope_rec(params, env) do
     params
     |> Enum.reduce_while({:ok, [], [], []}, fn {:param, pmeta, pname}, {:ok, tele, quants, scope} ->
       case Keyword.get(pmeta, :type) do

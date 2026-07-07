@@ -37,4 +37,14 @@ defmodule Cure.Elab.DeclHygieneTest do
     src = "mod OKdecl\n  type Foo = A | B\n  type Bar = C | D\nend\n"
     assert {:ok, _} = elaborate(src)
   end
+
+  test "duplicate parameter name in a function is rejected" do
+    src = "mod DupParam\n  fn f(x: Int, x: Int) -> Int = x\nend\n"
+    assert {:error, {:duplicate_parameter, :x}} = elaborate(src)
+  end
+
+  test "distinct parameter names still elaborate" do
+    src = "mod OKParam\n  fn g(x: Int, y: Int) -> Int = x\nend\n"
+    assert {:ok, _} = elaborate(src)
+  end
 end
