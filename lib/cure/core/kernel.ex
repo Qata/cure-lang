@@ -845,6 +845,15 @@ defmodule Cure.Core.Kernel do
     case unify_one(r, s, arity, subst) do
       :impossible -> :impossible
       {:ok, subst2} -> reduce_index_pairs(rest, subst2, arity)
+      # Dropping an :undecided pair (skip it, keep `subst`) is SOUND, not a bug
+      # (K5a #575, proven, do NOT "fix" into propagation): the trusted case-checker
+      # skips a branch body ONLY on :impossible. Dropping :undecided never yields a
+      # spurious :impossible (that verdict comes solely from a rigid clash in some
+      # pair), so no live branch is skipped. And the retained `subst` holds only the
+      # DECIDED equations — a subset of the truth — so the branch's `expected` type is
+      # specialized LESS (more general), making body-checking STRICTER. The only
+      # possible effect is a false REJECTION, never a false acceptance. Propagating
+      # :undecided instead would drop these valid refinements and reject MORE.
       :undecided -> reduce_index_pairs(rest, subst, arity)
     end
   end
@@ -892,10 +901,16 @@ defmodule Cure.Core.Kernel do
     case unify_one(a, b, arity, subst) do
       :impossible -> :impossible
       {:ok, subst2} -> unify_spine(as, bs, arity, subst2)
+      # :undecided dropped for the same proven-sound reason as reduce_index_pairs.
       :undecided -> unify_spine(as, bs, arity, subst)
     end
   end
-  defp unify_spine(_, _, _arity, subst), do: {:ok, subst}
+
+  # A spine length mismatch is a definite non-unification, NOT success (K5a #574).
+  # Unreachable today — both callers (unify_one's :ctor/:data clauses) guard equal
+  # length and the recursion above stays in lockstep — but a catch-all returning
+  # `{:ok, subst}` (success) is a soundness landmine for any future direct caller.
+  defp unify_spine(_, _, _arity, _subst), do: :impossible
 
   # Add {key => term} after an occurs-check; on a same-key clash, resolve-before-bind.
   #
