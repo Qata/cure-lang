@@ -8,7 +8,7 @@ defmodule Cure.Elab.Program do
   """
 
   alias Cure.Compiler.{Lexer, Parser}
-  alias Cure.Core.Env
+  alias Cure.Core.{Env, Validator}
   alias Cure.Elab.{Declarations, Erase, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
@@ -264,9 +264,21 @@ defmodule Cure.Elab.Program do
   """
   @spec check_codegen_ready(Env.t()) :: :ok | {:error, {:unfilled_hole, atom()}}
   def check_codegen_ready(%Env{defs: defs}) do
-    case Enum.find(defs, fn {_name, %{body: body}} -> Erase.has_hole?(body) end) do
+    # Route through the single Final-Core enforcement point (K3): the validator
+    # descends into every node (prim args, rewrite proof/motive, eq/refl args)
+    # where the hand-rolled `has_hole?` walker had gaps.
+    finding =
+      Enum.find_value(defs, fn {name, %{body: body}} ->
+        case Validator.validate(body, Validator.release_config()) do
+          {:ok, _warnings} -> nil
+          {:error, rejections} ->
+            if Enum.any?(rejections, &(&1.clause == :no_hole)), do: {name, rejections}
+        end
+      end)
+
+    case finding do
       nil -> :ok
-      {name, _def} -> {:error, {:unfilled_hole, name}}
+      {name, _rejections} -> {:error, {:unfilled_hole, name}}
     end
   end
 
