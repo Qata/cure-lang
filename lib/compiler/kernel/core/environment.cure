@@ -129,7 +129,7 @@ mod Compiler.Kernel.Core.Environment
 
   local fn recursor_type_for_simple_inductive(elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, ctors: List(Constructor), is_rec: Bool) -> Expr
     = pickup
-        num_indices != 0 -> type_expr
+        num_indices != 0 -> recursor_type_for_indexed_inductive(elim_level, name, type_expr, num_params, num_indices, num_motives, num_minors, ctors, is_rec)
         num_motives != 1 -> type_expr
         num_minors != Std.List.length(ctors) -> type_expr
         else ->
@@ -139,6 +139,46 @@ mod Compiler.Kernel.Core.Environment
           let major_type = inductive_app_for_bvars(name, num_motives + num_minors, num_params)
           let body = App(BVar(num_minors + 1), BVar(0))
           wrap_pi_domains(Std.List.append(param_domains, Std.List.append([motive_type], Std.List.append(minor_types, [major_type]))), body, mk_simple("_rec_arg"))
+
+  local fn recursor_type_for_indexed_inductive(elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, ctors: List(Constructor), is_rec: Bool) -> Expr
+    = pickup
+        is_rec -> type_expr
+        num_motives != 1 -> type_expr
+        num_minors != Std.List.length(ctors) -> type_expr
+        else ->
+          let param_domains = first_pi_domains(type_expr, num_params)
+          let index_domains = pi_domains_after(type_expr, num_params, num_indices)
+          let shifted_index_domains = shift_constructor_domains(index_domains, num_motives + num_minors, 0)
+          let motive_type = indexed_motive_type(elim_level, name, type_expr, num_params, num_indices)
+          let minor_types = indexed_recursor_minor_types(name, num_params, num_indices, num_motives, ctors, 0)
+          let major_type = inductive_app_for_params_and_indices(name, num_indices + num_minors + num_motives, 0, num_params, num_indices)
+          let body = mk_apps(BVar(num_indices + num_minors + 1), Std.List.append(bvar_refs_from(1, num_indices), [BVar(0)]))
+          wrap_pi_domains(Std.List.append(param_domains, Std.List.append([motive_type], Std.List.append(minor_types, Std.List.append(shifted_index_domains, [major_type])))), body, mk_simple("_rec_arg"))
+
+  local fn indexed_motive_type(elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int) -> Expr
+    = let index_domains = pi_domains_after(type_expr, num_params, num_indices)
+      let major_type = inductive_app_for_params_and_indices(name, num_indices, 0, num_params, num_indices)
+      wrap_pi_domains(Std.List.append(index_domains, [major_type]), Sort(elim_level), mk_simple("_motive_arg"))
+
+  local fn indexed_recursor_minor_types(inductive_name: Name, num_params: Int, num_indices: Int, num_motives: Int, ctors: List(Constructor), minor_index: Int) -> List(Expr)
+    = match ctors
+        [] -> []
+        [Constructor(ctor_name, type_expr) | rest] ->
+          let nfields = constructor_num_fields(type_expr, num_params)
+          let domains = constructor_field_domains_for_recursor(type_expr, num_params, num_motives + minor_index)
+          let idx_args = constructor_result_indices_for_recursor(type_expr, num_params, nfields, num_motives + minor_index)
+          let minor_type = indexed_recursor_minor_type(ctor_name, num_params, num_indices, num_motives, minor_index, nfields, domains, idx_args)
+          [minor_type | indexed_recursor_minor_types(inductive_name, num_params, num_indices, num_motives, rest, minor_index + 1)]
+
+  local fn indexed_recursor_minor_type(ctor_name: Name, num_params: Int, num_indices: Int, num_motives: Int, minor_index: Int, nfields: Int, domains: List(Expr), idx_args: List(Expr)) -> Expr
+    = let body = indexed_recursor_minor_body(ctor_name, num_params, num_indices, num_motives, minor_index, nfields, idx_args)
+      wrap_pi_domains(domains, body, mk_simple("_field"))
+
+  local fn indexed_recursor_minor_body(ctor_name: Name, num_params: Int, num_indices: Int, num_motives: Int, minor_index: Int, nfields: Int, idx_args: List(Expr)) -> Expr
+    = let motive = BVar(nfields + minor_index + num_motives - 1)
+      let params = bvar_refs_from(nfields + minor_index + num_motives, num_params)
+      let ctor = mk_apps(Const(ctor_name, []), Std.List.append(params, bvar_refs_from(0, nfields)))
+      mk_apps(motive, Std.List.append(take_args(idx_args, num_indices), [ctor]))
 
   local fn recursor_minor_types_for_simple_inductive(inductive_name: Name, num_params: Int, num_motives: Int, ctors: List(Constructor), is_rec: Bool, minor_index: Int) -> List(Expr)
     = match ctors
@@ -190,8 +230,19 @@ mod Compiler.Kernel.Core.Environment
   local fn inductive_app_for_bvars(name: Name, offset: Int, num_params: Int) -> Expr
     = mk_apps(Const(name, []), bvar_refs_from(offset, num_params))
 
+  local fn inductive_app_for_params_and_indices(name: Name, param_start: Int, index_start: Int, num_params: Int, num_indices: Int) -> Expr
+    = mk_apps(Const(name, []), Std.List.append(bvar_refs_from(param_start, num_params), bvar_refs_from(index_start, num_indices)))
+
   local fn constructor_field_domains_for_recursor(type_expr: Expr, num_params: Int, shift: Int) -> List(Expr)
     = shift_constructor_domains(constructor_field_domains(type_expr, num_params), shift, 0)
+
+  local fn constructor_result_indices_for_recursor(type_expr: Expr, num_params: Int, nfields: Int, shift: Int) -> List(Expr)
+    = shift_exprs_at_cutoff(drop_args(app_args(constructor_result_type(type_expr)), num_params), shift, nfields)
+
+  local fn shift_exprs_at_cutoff(exprs: List(Expr), shift: Int, cutoff: Int) -> List(Expr)
+    = match exprs
+        [] -> []
+        [expr | rest] -> [expr_lift_at_cutoff(expr, shift, cutoff) | shift_exprs_at_cutoff(rest, shift, cutoff)]
 
   local fn shift_constructor_domains(domains: List(Expr), shift: Int, field_index: Int) -> List(Expr)
     = match domains
@@ -214,7 +265,10 @@ mod Compiler.Kernel.Core.Environment
 
   local fn recursor_rules_for_simple_inductive(elim_level: Level, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, minor_offset: Int, is_rec: Bool, all_names: List(Name), ctors: List(Constructor)) -> List(RecursorRule)
     = pickup
-        num_indices != 0 -> []
+        num_indices != 0 ->
+          pickup
+            is_rec -> []
+            else -> recursor_rules_for_simple_ctors(num_params, num_motives, num_minors, minor_offset, ctors, 0)
         is_rec -> recursor_rules_for_simple_recursive_ctors(elim_level, num_params, num_motives, num_minors, minor_offset, all_names, ctors, 0)
         else -> recursor_rules_for_simple_ctors(num_params, num_motives, num_minors, minor_offset, ctors, 0)
 
@@ -854,6 +908,22 @@ mod Compiler.Kernel.Core.Environment
           match type_expr
             Pi(_, _, domain, body) -> [domain | first_pi_domains(body, count - 1)]
             _ -> []
+
+  local fn pi_domains_after(type_expr: Expr, skip: Int, count: Int) -> List(Expr)
+    = pickup
+        skip <= 0 -> first_pi_domains(type_expr, count)
+        else ->
+          match type_expr
+            Pi(_, _, _, body) -> pi_domains_after(body, skip - 1, count)
+            _ -> []
+
+  local fn take_args(args: List(Expr), count: Int) -> List(Expr)
+    = pickup
+        count <= 0 -> []
+        else ->
+          match args
+            [] -> []
+            [arg | rest] -> [arg | take_args(rest, count - 1)]
 
   local fn expr_list_eq(lhs: List(Expr), rhs: List(Expr)) -> Bool
     = match lhs

@@ -273,6 +273,63 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
           Ok(result) -> assert(expr_eq(result, field))
           Error(_) -> assert(false)
       Error(_) -> assert(false)
+
+  fn test_indexed_recursor_type_checks() -> Atom =
+    let bool_name = mk_simple("IdxBool")
+    let true_name = str(bool_name, "true")
+    let family_name = mk_simple("IsTrue")
+    let ctor_name = str(family_name, "intro")
+    let rec_name = name_append_core(family_name, mk_simple("rec"))
+    let env0 = empty_environment()
+    let bool_decl = AxiomDecl(AxiomVal(ConstantVal(bool_name, [], Sort(LevelSucc(LevelZero()))), false))
+    let true_decl = AxiomDecl(AxiomVal(ConstantVal(true_name, [], Const(bool_name, [])), false))
+    let family_type = Pi(mk_simple("b"), BinderDefault(), Const(bool_name, []), Sort(LevelZero()))
+    let ctor_type = App(Const(family_name, []), Const(true_name, []))
+    let family_decl = InductiveDecl([], 0, [InductiveType(family_name, family_type, [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(env0, bool_decl, false)
+      Ok(env1) ->
+        match environment_add(env1, true_decl, false)
+          Ok(env2) ->
+            match environment_add(env2, family_decl, false)
+              Ok(env3) ->
+                match environment_find(env3, rec_name)
+                  Some(RecursorInfo(RecursorVal(ConstantVal(_, level_params, type_expr), _, _, num_indices, _, _, _, _, _))) ->
+                    assert(num_indices == 1)
+                    match check(mk_type_checker(env3, empty_local_context(), DefinitionSafe()), type_expr, level_params)
+                      Ok(_) -> :ok
+                      Error(_) -> assert(false)
+                  _ -> assert(false)
+              Error(_) -> assert(false)
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
+
+  fn test_indexed_recursor_iota_reduces() -> Atom =
+    let bool_name = mk_simple("IdxBoolIota")
+    let true_name = str(bool_name, "true")
+    let family_name = mk_simple("IsTrueIota")
+    let ctor_name = str(family_name, "intro")
+    let rec_name = name_append_core(family_name, mk_simple("rec"))
+    let bool_decl = AxiomDecl(AxiomVal(ConstantVal(bool_name, [], Sort(LevelSucc(LevelZero()))), false))
+    let true_decl = AxiomDecl(AxiomVal(ConstantVal(true_name, [], Const(bool_name, [])), false))
+    let family_type = Pi(mk_simple("b"), BinderDefault(), Const(bool_name, []), Sort(LevelZero()))
+    let ctor_type = App(Const(family_name, []), Const(true_name, []))
+    let family_decl = InductiveDecl([], 0, [InductiveType(family_name, family_type, [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(empty_environment(), bool_decl, false)
+      Ok(env1) ->
+        match environment_add(env1, true_decl, false)
+          Ok(env2) ->
+            match environment_add(env2, family_decl, false)
+              Ok(env3) ->
+                let motive = Lambda(mk_simple("b"), BinderDefault(), Const(bool_name, []), Lambda(mk_simple("h"), BinderDefault(), App(Const(family_name, []), BVar(0)), Sort(LevelZero())))
+                let branch = Sort(LevelSucc(LevelZero()))
+                let major = Const(ctor_name, [])
+                let rec_app = App(App(App(App(Const(rec_name, [LevelZero()]), motive), branch), Const(true_name, [])), major)
+                match whnf(mk_type_checker(env3, empty_local_context(), DefinitionSafe()), rec_app)
+                  Ok(result) -> assert(expr_eq(result, branch))
+                  Error(_) -> assert(false)
+              Error(_) -> assert(false)
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
   
   fn test_recursive_recursor_iota_passes_induction_hypothesis() -> Atom =
     let nat_name = mk_simple("Natish")
