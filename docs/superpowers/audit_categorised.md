@@ -199,22 +199,25 @@ checking mode and repeated re-splitting.
   (case repeatedly splits flattened data), **598** (ctor values lack
   family/param identity), **599** (kernel rejects parameterized-ctor inference),
   **600** (result params/indices computed by eval, opaque rep).
-- **ASSESSED — resolved-by-design + representation change DEFERRED (grade-coupled).**
+- **545/599 LANDED (b355753 + f3b0e73). Rest resolved-by-design; grade-coupled polish deferred.**
   Per spec §E.1 the flat spine `{:ctor, sym, args}` split-by-signature IS the
   target (Lean's kernel form); 544/597/600 are explicitly accepted costs, and
   598's "lost identity" is recovered via the ctor name→signature lookup (fully via
-  `sym`/K12). The one actionable item — 545/599, param-bearing ctors rejected in
-  inference (`kernel.ex:194` `:ctor_requires_checking_mode`) — is SOUND, not a
-  hole: the kernel cannot infer implicit params from a bare `{:ctor}` (e.g. `empty`
-  has no field determining `a`), so it forces checking mode, which works. §E.1's
-  fix (params RIDE THE SPINE **at grade 0**, self-identifying) needs (a) the grade
-  machinery — "params at grade 0" per §J `ctor_signature` — which is not landed,
-  and (b) `sym`/K12. It is a COMPLETENESS enhancement, not a soundness/boundary
-  tightening, so per the analysis discipline it is DEFERRED to land coherently with
-  the grade work (+ K12) rather than built now on a quantities-as-grade proxy that
-  would be reworked. Current sound behavior already pinned:
-  `test/cure/core/param_index_split_test.exs:101`. `ctor_signature` validator
-  clause stays `:off` until grades. No code change this pass.
+  `sym`/K12). **545/599 — param-bearing ctors were rejected in inference
+  (`:ctor_requires_checking_mode`) — is now FIXED (b355753):** §E.1's form landed —
+  when the P params RIDE THE SPINE ahead of the fields (`length(args) == pc + arity`),
+  `infer({:ctor})` reads + re-checks them from the family's param telescope (no TCB
+  metavar inference) and synthesizes the vdata; the fields-only spine still forces
+  checking mode (SOUND — a bare `{:ctor}` with no field determining an implicit
+  param genuinely can't be inferred). Additive/backward-compatible (arg-count
+  disambiguation), so no fixture churn. First consumer: the Eq `bridge_step`
+  inductive refl (f3b0e73). Pinned: `test/cure/core/k6_param_ctor_infer_test.exs`,
+  `test/cure/core/param_index_split_test.exs:101`. The `ctor_signature` validator
+  clause (params-at-grade-0 self-identification) stays `:off` — that final polish is
+  coupled to the grade-on-binders reshape (the erasure SEMANTICS already exist as
+  `:erased`/`:present` quantities; grade-on-binders is a 4-tuple representation
+  change, assessed separately). K6's soundness + inference-completeness content is
+  DONE.
 
 ## K7 — Universes / levels
 - Doc 1: **9** (remove fixed `Type 0..2` ceiling), **10** (universe-polymorphic
