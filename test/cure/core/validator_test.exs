@@ -188,10 +188,30 @@ defmodule Cure.Core.ValidatorTest do
       assert Enum.any?(rejections, &(&1.clause == :no_hole))
     end
 
-    test "still admits a hole-free term (eq/refl only warn, never block release)" do
+    test "still admits a hole-free, node-clean term" do
       assert {:ok, _warnings} = Validator.validate({:ctor, :ok, []}, Validator.release_config())
-      assert {:ok, ws} = Validator.validate({:refl, {:int_lit, 1}}, Validator.release_config())
-      assert Enum.all?(ws, &(&1.mode == :warn))
+    end
+
+    test "no_eq_node is :reject in release (K1a — primitive eq/refl retired from produced Core)" do
+      assert Validator.release_config()[:no_eq_node] == :reject
+      # primitive refl: dead-producer (bridge_step migrated to inductive refl,
+      # f3b0e73; surface refl + symmetry_proof already inductive) → rejected.
+      assert {:error, rj_refl} = Validator.validate({:refl, {:int_lit, 1}}, Validator.release_config())
+      assert Enum.any?(rj_refl, &(&1.clause == :no_eq_node))
+      # primitive :eq type-former: no producers (mk_eq builds inductive {:data,:Eq}) → rejected.
+      eq = {:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}}
+      assert {:error, rj_eq} = Validator.validate(eq, Validator.release_config())
+      assert Enum.any?(rj_eq, &(&1.clause == :no_eq_node))
+    end
+
+    test "primitive :rewrite only WARNS in release (Phase B pending — still the transport eliminator)" do
+      # Retiring {:rewrite} (rewrite→single-branch :case) is Phase B, a structural
+      # re-plumbing (the body scopes differently: outer-context for {:rewrite} vs
+      # under the refl branch binder for :case). Until it lands, {:rewrite} must
+      # NOT block release, else every rewrite-using program's final Core is rejected.
+      rw = {:rewrite, {:ctor, :refl, [{:int_type}, {:int_lit, 1}]}, {:type, 0}, {:ctor, :ok, []}}
+      assert {:ok, ws} = Validator.validate(rw, Validator.release_config())
+      assert Enum.any?(ws, &(&1.clause == :no_rewrite_node and &1.mode == :warn))
     end
   end
 end

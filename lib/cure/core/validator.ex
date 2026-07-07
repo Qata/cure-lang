@@ -28,6 +28,7 @@ defmodule Cure.Core.Validator do
     :grade_on_binders,
     :usage_relevance,
     :no_eq_node,
+    :no_rewrite_node,
     :no_prim_node,
     :no_hole,
     :qualified_syms,
@@ -42,6 +43,7 @@ defmodule Cure.Core.Validator do
     grade_on_binders: :off,
     usage_relevance: :off,
     no_eq_node: :warn,
+    no_rewrite_node: :warn,
     no_prim_node: :warn,
     no_hole: :warn,
     qualified_syms: :off,
@@ -69,7 +71,14 @@ defmodule Cure.Core.Validator do
   # K4 lands `no_absurd_node: :reject` — the `{:absurd}` node is deleted from final
   # Core; ex-falso is an empty-branch `case` over a provably-uninhabited scrutinee
   # (§H), so no `{:absurd}` term may survive.
-  @release_config @wave0_config |> Map.put(:no_hole, :reject) |> Map.put(:no_absurd_node, :reject)
+  # K1a lands `no_eq_node: :reject` — the primitive `{:eq}`/`{:refl}` identity nodes
+  # are dead-producers (inductive Eq/refl + ctor bridge_step, f3b0e73); no such term
+  # may escape into a released artifact. `no_rewrite_node` stays `:warn` until Phase
+  # B (rewrite→:case) retires the still-produced transport eliminator.
+  @release_config @wave0_config
+                  |> Map.put(:no_hole, :reject)
+                  |> Map.put(:no_absurd_node, :reject)
+                  |> Map.put(:no_eq_node, :reject)
 
   @doc "The strict Final-Core config enforced at the release/emit boundary (K3+)."
   @spec release_config() :: config()
@@ -137,9 +146,20 @@ defmodule Cure.Core.Validator do
 
   defp violation(:no_hole, {:hole, _}), do: "hole present in Core term (K3)"
 
+  # no_eq_node covers the two identity-type primitives that are now DEAD-PRODUCERS
+  # (K1a): the {:eq} type-former (mk_eq builds inductive {:data,:Eq}) and the
+  # {:refl} constructor (surface refl, symmetry_proof, and bridge_step f3b0e73 all
+  # build the inductive ctor). Both are :reject in release_config.
   defp violation(:no_eq_node, {:eq, _, _, _}), do: "primitive :eq node; use inductive Eq (K1)"
   defp violation(:no_eq_node, {:refl, _}), do: "primitive :refl node; use ctor refl (K1)"
-  defp violation(:no_eq_node, {:rewrite, _, _, _}), do: "primitive :rewrite node; use case-sugar (K1)"
+
+  # no_rewrite_node is split out because {:rewrite} is STILL PRODUCED as the
+  # transport eliminator (rewrite_plan/symmetry_proof/bridge_step). Retiring it
+  # (rewrite→single-branch :case, Phase B) is a structural re-plumbing, so it stays
+  # :warn until that lands — flipping it to :reject now would block every
+  # rewrite-using program's final Core.
+  defp violation(:no_rewrite_node, {:rewrite, _, _, _}),
+    do: "primitive :rewrite node; use case-sugar (K1 Phase B)"
 
   defp violation(:no_prim_node, {:prim, _, _}), do: "primitive :prim node; use delta-globals (K2)"
 
