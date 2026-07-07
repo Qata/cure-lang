@@ -37,47 +37,71 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  # Each top-level module is its own namespace — it compiles to its own BEAM module
+  # (`Cure.A`, `Cure.B`), so two SIBLING modules may legitimately share a type /
+  # constructor / function name (the stdlib has `map` in five modules). Cross-module
+  # collisions are resolved by the E-layer resolution/rekey machinery (LOCKED
+  # type-shadowing Approach B), not by rejection. The duplicate checks below
+  # therefore run PER MODULE: only a repeat WITHIN one module is the silent
+  # `Map.put` overwrite bug. `module_decl_groups/1` returns one declaration list per
+  # module (an AST with no module wrapper is a single namespace).
+  defp module_decl_groups(ast) do
+    case top_modules(ast) do
+      [] -> [declarations(ast)]
+      mods -> Enum.map(mods, &declarations/1)
+    end
+  end
+
+  defp top_modules({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &top_modules/1)
+
+  defp top_modules({:container, meta, _body} = node) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :module, do: [node], else: []
+  end
+
+  defp top_modules(_), do: []
+
+  # Runs `extract` over each module's declarations independently; the first
+  # within-module duplicate becomes {:error, {tag, norm.(name)}}.
+  defp first_dup_per_module(ast, extract, tag, norm) do
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn decls, :ok ->
+      names = Enum.flat_map(decls, extract)
+
+      case names -- Enum.uniq(names) do
+        [] -> {:cont, :ok}
+        [dup | _] -> {:halt, {:error, {tag, norm.(dup)}}}
+      end
+    end)
+  end
+
   # A module must not declare the same type name twice: `env.families` is a silent
-  # `Map.put`, so the second would overwrite the first. (Cross-module type shadowing
-  # is handled separately by the resolution/rekey machinery; this is the
-  # within-module case.)
+  # `Map.put`, so the second would overwrite the first.
   @spec check_no_duplicate_types(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_types(ast) do
-    names =
-      ast
-      |> declarations()
-      |> Enum.flat_map(fn
-        {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
-          case Keyword.get(meta, :name) do
-            n when is_binary(n) -> [String.to_atom(n)]
-            n when is_atom(n) and not is_nil(n) -> [n]
-            _ -> []
-          end
+    extract = fn
+      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
+        case Keyword.get(meta, :name) do
+          n when is_binary(n) -> [String.to_atom(n)]
+          n when is_atom(n) and not is_nil(n) -> [n]
+          _ -> []
+        end
 
-        _ ->
-          []
-      end)
+      _ ->
+        []
+    end
 
-    first_dup(names, :duplicate_type)
+    first_dup_per_module(ast, extract, :duplicate_type, & &1)
   end
 
   # A module must not bind the same constructor name twice — within one type
-  # (`A | A`) or across two types (`env.ctor_to_family` maps each ctor to ONE
-  # family, so a shared name silently loses one family, an unsound state since Cure
-  # has no type-directed constructor disambiguation).
+  # (`A | A`) or across two types in the same module (`env.ctor_to_family` maps each
+  # ctor to ONE family, so a shared name silently loses one family, an unsound state
+  # since Cure has no type-directed constructor disambiguation).
   @spec check_no_duplicate_ctors(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_ctors(ast) do
-    ast
-    |> declarations()
-    |> Enum.flat_map(&ctor_names/1)
-    |> first_dup(:duplicate_constructor)
-  end
-
-  defp first_dup(names, tag) do
-    case names -- Enum.uniq(names) do
-      [] -> :ok
-      [dup | _] -> {:error, {tag, dup}}
-    end
+    first_dup_per_module(ast, &ctor_names/1, :duplicate_constructor, & &1)
   end
 
   # A module must not bind the same top-level function name twice: `Env.add_def`
@@ -88,24 +112,18 @@ defmodule Cure.Elab.Program do
   # counting `:function_def` names has no sig+body / group false positives.
   @spec check_no_duplicate_defs(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_defs(ast) do
-    names =
-      ast
-      |> declarations()
-      |> Enum.flat_map(fn
-        {:function_def, meta, _body} ->
-          case Keyword.get(meta, :name) do
-            name when is_binary(name) and name != "__group__" -> [name]
-            _ -> []
-          end
+    extract = fn
+      {:function_def, meta, _body} ->
+        case Keyword.get(meta, :name) do
+          name when is_binary(name) and name != "__group__" -> [name]
+          _ -> []
+        end
 
-        _ ->
-          []
-      end)
-
-    case names -- Enum.uniq(names) do
-      [] -> :ok
-      [dup | _] -> {:error, {:duplicate_definition, String.to_atom(dup)}}
+      _ ->
+        []
     end
+
+    first_dup_per_module(ast, extract, :duplicate_definition, &String.to_atom/1)
   end
 
   @doc false

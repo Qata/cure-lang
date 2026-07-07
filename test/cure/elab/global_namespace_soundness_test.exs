@@ -5,10 +5,12 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
 
   Two distinct cases, deliberately treated differently:
 
-  1. **Same-name globals OVERWRITE (soundness) — REJECTED.** Two function
-     definitions (even across modules) sharing a name would silently overwrite one
+  1. **Same-name globals WITHIN A MODULE overwrite (soundness) — REJECTED.** Two
+     function definitions in one module sharing a name would silently overwrite one
      another in `env.defs`. `check_no_duplicate_defs` (program.ex) rejects this with
-     `{:duplicate_definition, name}` — a landed soundness fix this session.
+     `{:duplicate_definition, name}` — a landed soundness fix this session. (Two
+     SIBLING modules sharing a name is legitimate namespacing and is accepted — see
+     `Cure.Elab.CrossModuleNamesTest`.)
 
   2. **A function COEXISTING with a constructor / type of the same name — ACCEPTED,
      and DECLINED as a tightening (analysis discipline, faithfulness-without-
@@ -34,9 +36,9 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
     Program.check_ast(ast)
   end
 
-  test "same-named globals across modules are rejected (no silent overwrite)" do
+  test "same-named globals within one module are rejected (no silent overwrite)" do
     src =
-      "mod A\n  fn foo(x: Int) -> Int = x\nend\nmod B\n  fn foo(x: Bool) -> Bool = x\nend\n"
+      "mod A\n  fn foo(x: Int) -> Int = x\n  fn foo(y: Int) -> Int = y\nend\n"
 
     assert {:error, {:duplicate_definition, :foo}} = check(src)
   end
