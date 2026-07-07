@@ -63,14 +63,39 @@ eliminator/transport. **This is the single most-duplicated theme.**
   (0e75a13):** split `no_eq_node` — {:eq}+{:refl} flipped to `:reject` in
   `release_config` (enforced on every program's final Core, program.ex:272 ⇒ green
   suite PROVES no program emits them); {:rewrite} split to `no_rewrite_node` :warn.
-  **Remaining: Phase B** — retire the still-produced `{:rewrite}` transport
-  eliminator by desugaring to a single-branch `:case`. This is a STRUCTURAL
-  re-plumbing, not a node swap: `{:rewrite}` checks its body in the OUTER context
-  while `:case` binds the refl witness and checks the body UNDER that binder
-  (arity=1). Two approaches (surface-desugar through `elaborate_match`, or Core-level
-  desugar with body-shift + `build_motive` reuse); gate = rw01-09/frp08 differential
-  pin + Gate-C defeq antibody. Then Phase C removes the dead {:eq}/{:refl}/{:veq}
-  kernel clauses (K4-style: keep defensive handling where infer lacks a catch-all).
+  **Phase B (retire the `{:rewrite}` Core NODE → `:case`) — DECLINED per
+  analysis-discipline, with empirical proof (2026-07-08).** SURFACE rewrite
+  semantics are ALREADY Idris-faithful (via `rewrite_plan`: occurrence analysis,
+  direction/symmetry, no-match rejection, and the definitional-occurrence bridge).
+  Retiring the `{:rewrite}` node is pure Core-REPRESENTATION change: it buys no
+  soundness (the kernel types `{:rewrite}` transport correctly) and no surface
+  behaviour. TWO empirical attempts proved it also RISKS parity and needs
+  load-bearing analysis ported onto `:case`:
+  1. **Naive Core body-shift** (d44edb8→reverted c635e8c): shift the outer-context
+     body +1 into the refl branch. INCOMPLETE — only type-checks when the body's
+     endpoint refines to the branch witness (variable endpoints); drifted
+     `frp01_par_assoc` (computed endpoints) accept→reject.
+  2. **Surface match-desugar** (`rewrite p in t` ⟿ `match p {refl()->t}` through
+     `elaborate_match`, diagnostic-only, reverted): re-elaborates the body in-branch
+     (fixes computed endpoints) but (a) REGRESSES the bridge case —
+     `lib/std/proof.cure` `S(plus(n,Z))` vs `S(n)` definitional occurrence the
+     syntactic motive can't capture; (b) is MORE PERMISSIVE than Idris — drifts
+     `rw03_no_occurrence` (accepts a no-op rewrite `rewrite_plan`/Idris reject) and
+     changes the error taxonomy (`rewrite_plan_audit`). A hybrid (match primary +
+     `{:rewrite}` bridge fallback) still failed 3 tests for these reasons and would
+     leave a permanent two-path system without flipping the ratchet.
+  Per the design-fork-prose-preference ("if it's just semantics, prefer the
+  lower-risk option") — and this IS just semantics (identical surface behaviour
+  either way; only the Core node representing transport differs) — the LOWER-RISK
+  option (keep the sound `{:rewrite}` eliminator + `rewrite_plan`) is chosen.
+  `no_rewrite_node` stays `:warn` as an accepted, documented Core-representation
+  divergence from Idris TT. REVISIT only if a kernel-conversion improvement removes
+  the need for `bridge_step`, or if TCB-rule-count reduction becomes worth the
+  reimplementation risk. Phase C (removing dead `{:eq}/{:refl}/{:veq}` kernel
+  clauses) remains available independently but is low-value (K4-style defensive
+  handling stays regardless). **Net K1 state: soundness-clean — the faked
+  primitive equality nodes `{:eq}`/`{:refl}` are retired + ratcheted (K1a); the
+  sound `{:rewrite}` transport node is a deliberate, proven representation choice.**
 
 ## K2 — Primitive operations in Core; type them properly
 `{:prim, op, args}` should not be the operation model; ops need real typed
