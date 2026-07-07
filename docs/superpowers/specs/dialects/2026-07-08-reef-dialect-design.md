@@ -1,0 +1,382 @@
+# `reef` — Voted Multi-Sensor Aquarium Control (Shuttle-Grade Redundancy)
+
+**Date:** 2026-07-08
+**Status:** design (operator-requested flagship; backlog #99 promoted).
+Child of [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md);
+built as a `dialect` (§5). Heaviest consumer of
+[`fleet`](2026-07-08-fleet-dialect-design.md),
+[`driver`](2026-07-08-driver-dialect-design.md),
+[`units`](2026-07-08-units-dialect-design.md), and
+[`check`](2026-07-08-check-dialect-design.md).
+
+**Operator direction (verbatim intent):** NASA-level multi-sensor redundancy —
+whether the sensors live on one ESP or several — the way the Shuttle used
+multiple computers voting to decide things in case of fault. Especially for
+optical water level and salinity.
+
+---
+
+## 1. Prior art — and the gap this fills
+
+- **Reef-Pi** (open-source Raspberry Pi controller): the module taxonomy this
+  dialect inherits — equipment, ATO, temperature, pH, dosing, lighting,
+  timers, macros. Single sensor per function; no redundancy concept.
+  (reef-pi.github.io, github.com/reef-pi/reef-pi)
+- **Neptune Apex ATK** (the commercial reference for top-off): a four-layer
+  **hierarchical fallback ladder** — primary optical sensor → backup optical
+  sensor above it → "IQ-Fill" learned-volume timeout (won't add more than
+  double the learned amount, then alarms) → a **mechanical float valve** as
+  the final, electronics-independent backstop. Layers, not voting: each layer
+  acts only when the one below has already failed.
+- **Hydros Collective** (CoralVue): every controller is a "brain"; if one
+  fails, others take over its tasks automatically; power-supply fault
+  domains are managed by data-only cables between units. **Controller-level
+  failover** — no sensor-level voting, and no analysis of whether the
+  redundancy actually covers a fault.
+- **Space Shuttle DPS** (the operator's reference model): four GPCs in a
+  redundant set voting on outputs; a fifth running **dissimilar** software
+  (the BFS) against common-mode bugs; *analytic redundancy* (model-derived
+  estimates checking physical sensors); the **fail-operational / fail-safe**
+  criterion — first failure: keep flying; second: get safe.
+
+The gap, precisely: the industry has fallback *ladders* and controller
+*failover*, but *no one* has (a) declared sensor **quorums with voting
+semantics**, (b) **dissimilarity** as a first-class, checked property, or
+(c) **compile-time common-mode analysis** — proof that no single fault
+domain (node, bus, power rail, mounting point) can defeat a quorum. All
+three are exactly what a type-checked fleet language can do statically.
+That is this dialect.
+
+## 2. The hazard model (why voting, and why the operator's two callouts)
+
+Reef tanks die from control failures, not chemistry surprises:
+
+- **ATO runaway** — a fouled level sensor (the canonical failure: a snail or
+  algae film on the optical prism) drives fresh water in until **salinity
+  crashes** — or the floor floods. The operator's callout #1.
+- **Salinity misreading** — conductivity probes drift and foul; a single
+  trusted probe silently mis-reports while ATO/AWC "corrects" toward
+  disaster. Callout #2.
+- **Heater runaway** — the most common total-loss event in the hobby: a
+  welded relay cooks the tank. Stuck-off chills it (slower, survivable).
+- **Dosing runaway** — an alkalinity pump that doesn't stop.
+
+All four share the shape: **one lying sensor or one stuck actuator, trusted
+absolutely.** The fix is never a better sensor; it is arranging that no
+single device is ever believed alone — and *proving* the arrangement has no
+single point of belief.
+
+## 3. The redundancy model — Shuttle practice, typed
+
+| Shuttle | `reef` |
+|---|---|
+| Redundant set of GPCs voting | **Sensor quorums** — k-of-n voting per measured quantity |
+| Dissimilar BFS (different software) | **Dissimilar channels** — mixed sensor kinds + analytic channels; dissimilarity is tracked in types and requirable |
+| Analytic redundancy | **`derived` channels** — model-based estimates that vote alongside physical sensors (Apex's IQ-Fill, generalized) |
+| Force-fight / hardware voting at actuators | **Actuator interlocks** — max-runtime and limit sensors enforced *below* the control loop |
+| Fail-operational → fail-safe | **Degradation ladder** — declared per loop, coverage-checked |
+| A mechanical backup no computer can override | **Kept.** The float valve stays. Software voting never replaces the hardware backstop; the dialect *documents* it in the plan report. |
+
+## 4. Surface
+
+A complete two-node build (sump controller + display-side node + host
+dashboard):
+
+```cure
+reef Display90
+  fleet
+    node sump on :esp32c3
+      let opt_a  = OpticalLevel.on(pin.gpio4)     # driver dialect
+      let flt_a  = FloatSwitch.on(pin.gpio5)
+      let cond_1 = Conductivity.on(i2c0(0x64))
+      let tmp_1  = Ds18b20.on(pin.gpio6)
+      let ato    = gpio.out(pin.gpio12)
+      let heat   = gpio.out(pin.gpio13)
+    node rim on :esp32c3                          # display-side node
+      let opt_b  = OpticalLevel.on(pin.gpio4)
+      let cond_2 = Conductivity.on(i2c0(0x64))
+      let tmp_2  = Ds18b20.on(pin.gpio6)
+    node host on :unix                            # dashboard + alerts
+
+  quantity sump_level: Level
+    channel a = sump.opt_a   kind :optical, mount :sump_bracket
+    channel b = rim.opt_b    kind :optical, mount :rim_bracket
+    channel c = sump.flt_a   kind :float,   mount :sump_bracket
+    vote 2 of 3
+    require dissimilar kinds >= 2                 # optical alone can't decide
+    stale after 10s                               # a silent channel abstains
+
+  quantity salinity: Salinity                     # ppt, temp-compensated
+    channel p1 = sump.cond_1 with temp(tank_temp), calibrated within 30d
+    channel p2 = rim.cond_2  with temp(tank_temp), calibrated within 30d
+    channel vol = derived TopOffAccounting(ato, tank_volume: 340l)
+    vote 2 of 3, agree within 0.5ppt over 10min
+
+  quantity tank_temp: Celsius
+    channel t1 = sump.tmp_1
+    channel t2 = rim.tmp_2
+    vote 2 of 2, agree within 0.4c                # 2oo2: disagreement = degrade
+
+  actuator ato
+    fail_safe :off
+    interlock max_on 90s per 30min                # enforced below the loop
+  actuator heat
+    fail_safe :off
+    interlock cutoff when tank_temp.any_channel > 28.5c   # any single voter trips it
+
+  control TopOff
+    when sump_level == Low and salinity in 33ppt..36ppt -> ato.on
+    else -> ato.off
+    on degraded(sump_level) -> ato.off; alert(:level_quorum_degraded)
+    on lost(sump_level)     -> ato.off; alert(:level_quorum_lost)
+    on lost(salinity)       -> ato.off; alert(:salinity_unknown)
+
+  control Heat
+    hold tank_temp at 25.5c band 0.3c -> heat
+    on degraded(tank_temp) -> heat.off; alert(:temp_sensors_disagree)
+    on lost(tank_temp)     -> heat.off; alert(:temp_unknown)
+
+  mode feed for 10min  -> [return_pump.off, skimmer.off]   # auto-reverting
+  mode water_change    -> [ato.off, heat.off, return_pump.off]
+```
+
+Surface rules:
+
+- **`quantity`** declares one physical measurement with N **channels**.
+  Channels carry `kind`, `mount`, node (implicit from the binding), optional
+  calibration window, optional temperature compensation. The quorum
+  (`vote k of n`), agreement band, and staleness window are per-quantity.
+- **Control loops read only voted quantities** — there is no syntax for
+  reading a single channel inside a `control` block (correct-by-construction:
+  trusting one sensor is *inexpressible*). Interlocks (§7) are the one place
+  a single channel acts, and only in the safe direction.
+- **`on degraded(..)` / `on lost(..)` clauses are coverage-checked** — a
+  control loop touching a quantity must say what happens when its quorum
+  degrades or dies, exactly as `fleet` forces `NodeLost` handling. You
+  cannot write a reef controller that hasn't decided what to do when its
+  sensors disagree.
+
+## 5. Voting semantics
+
+- **Boolean quantities** (level reached): k-of-n majority over fresh,
+  eligible channels.
+- **Analog quantities** (salinity, temperature): the vote is the **median**
+  of eligible channels; a channel deviating from the median beyond the
+  declared `agree within` band for longer than the declared window is marked
+  **suspect** and removed from eligibility (it keeps reporting; it stops
+  counting). Suspicion is sticky until the channel re-agrees for the same
+  window, or is manually cleared.
+- **Abstention** — a channel does not vote if it is: **stale** (no sample
+  within its window — on cross-node channels this is fleet's
+  heartbeat/staleness machinery doing double duty), **uncalibrated/expired**
+  (§8), or **out of physical range** (self-test bounds from the driver's
+  declared measurement range — a conductivity probe reading 0.0 mS/cm is
+  broken, not reporting fresh water).
+- **Quorum states**, in the fail-op/fail-safe ladder: `Full` (all eligible)
+  → `Degraded` (≥ k eligible but < n — still operational, alarmed) →
+  `Lost` (< k eligible — the quantity has **no value**; reads of it don't
+  produce a number, they produce the `lost` branch). A `Lost` quantity is
+  not "last known value" — stale confidence is how tanks die; the type
+  system simply withdraws the number.
+- **Dependency propagation**: salinity channels compensated by `tank_temp`
+  inherit its degradation — if the temperature quorum is `Lost`, the
+  conductivity channels' compensation is unknown, so they abstain, and
+  salinity follows to `Lost`. Declared compensation edges make this
+  propagation automatic and visible in the report (§10).
+
+## 6. Common-mode analysis — the crown jewel
+
+Every channel has a computed **fault-domain vector** from declarations the
+system already has: `{node, bus, power_rail, mount, kind}` — node from the
+fleet block, bus from the board wiring, power rail from the boarddef, mount
+and kind declared on the channel. At compile time, for every quorum:
+
+> For each single fault domain D, remove all channels sharing D. If the
+> survivors cannot still reach k votes, that domain defeats the quorum —
+> **error or warning, naming the domain.**
+
+```
+warning[reef]: sump_level survives any single fault EXCEPT mount :sump_bracket
+  channels a (optical) and c (float) share mount :sump_bracket —
+  one fouling event (the snail) removes both, leaving 1 of 3 < quorum 2.
+  Move the float to the rim bracket, or add a fourth channel.
+
+error[reef]: salinity quorum is defeated by node :sump
+  channels p1 and vol both live on sump — a sump-node failure leaves only
+  p2, below quorum 2. Move the derived channel's evaluation to host
+  (`derived ... at host`) or add a channel on another node.
+```
+
+`require dissimilar kinds >= 2` is the same analysis over the `kind` axis —
+the typed answer to common-mode *sensor* failure (every optical sensor fails
+the same way to the same algae film; the Shuttle's BFS argument). The
+analysis is pure arithmetic over declared topology — static, solver-free,
+and printed in full by `cure reef report` (§10). **This is the feature no
+commercial controller has**: not redundancy, but *proof about the
+redundancy*.
+
+Single-ESP builds are first-class — quorums within one node are still worth
+having (sensor faults dwarf node faults) — but the analysis will say plainly
+that `node` is a defeating domain, so the honest ceiling of a one-ESP build
+is visible, not implied.
+
+## 7. Actuator interlocks — defense in depth below the vote
+
+Interlocks are enforced at the actuator driver layer, **beneath** the
+control loops, so no logic bug — not even a wrong vote — can override them:
+
+- **`max_on N per W`** (the ATO case): duty-cycle refinement; exceeding it
+  latches the actuator to `fail_safe` and alarms. This is Apex's learned-
+  volume timeout, made declarative and checked against the plan (the
+  compiler warns if the control loop's own duty expectation exceeds the
+  interlock — a plan that can't work is a compile error, not a 3am alarm).
+- **`cutoff when <single-channel predicate>`** (the heater case): interlocks
+  may read single channels — in the **safe direction only** (a false trip
+  costs comfort; a missed trip costs the tank). Any single temperature
+  voter above the cutoff kills the heater regardless of the quorum's
+  opinion. Asymmetric trust, declared.
+- **Latching + manual reset**: a tripped interlock does not auto-resume;
+  reset is an explicit operator action (Apex's AUTO/OFF slider convention).
+- **The mechanical layer is documented, not replaced**: the plan report
+  (§10) carries a `hardware backstops` section the user fills (float valve
+  on the ATO line, bimetal cutout on the heater) and nags — politely — when
+  the ATO plan has none. Software that believes software is the failure
+  mode; the spec is explicit that the last layer must not run Cure.
+
+## 8. Calibration typestate
+
+A conductivity/pH probe channel is **ineligible until calibrated** and
+becomes ineligible again when its declared window (`calibrated within 30d`)
+lapses — expiry demotes the channel to *advisory* (plotted, never voting).
+Calibration is a guided flow (two-point, temperature-noted) whose record —
+solutions used, date, slope — persists via `schema`; slope degradation
+across calibrations is surfaced as probe-aging advice. The typestate makes
+the classic failure — trusting a probe calibrated eleven months ago —
+inexpressible inside a control loop.
+
+## 9. Dosing safety (brief — same principles, smaller stakes)
+
+Dosing pumps get the same actuator treatment: `max_ml per day` refinements
+per supplement, minimum spacing between interacting supplements
+(`alkalinity` and `calcium` ≥ 30min apart — a scheduling constraint checked
+statically against declared dose schedules), reservoir-volume accounting
+(a doser whose reservoir math says empty abstains and alarms rather than
+running dry — the analytic-channel trick again).
+
+## 10. Tooling — the report and the drill
+
+- **`cure reef report`** — the whole safety case, printed: every quantity's
+  channels/kinds/mounts/nodes, quorum rules, the **full common-mode
+  matrix** (fault domain × quorum → survives/defeated), interlock table,
+  declared hardware backstops, alert routing. This is the document you'd
+  show another reefer — or an insurance adjuster.
+- **Fault drills in sim** — `cure run --sim` + `check` templates: stick any
+  channel high/low/frozen, foul any mount group, kill any node or bus,
+  freeze the clock — then assert the **single-fault criterion**:
+
+  ```cure
+  check Display90
+    prop single_fault_safe(f: SingleFault) =
+      sim(Display90) |> inject(f) |> run(48h)
+      |> always(fn(t) ->
+           t.salinity_true in 30ppt..38ppt and t.heater_duty <= safe_duty)
+  ```
+
+  `SingleFault` generates from the declared topology (every channel × every
+  failure mode × every fault domain), so the drill sweep is derived, not
+  hand-listed. Where the common-mode analysis already proves a fault
+  can't defeat a quorum, the prop reports **proved by construction**; the
+  dynamic runs cover the control-loop dynamics the static analysis can't.
+  This is the Shuttle's fail-op criterion as a `cure test` line.
+
+## 11. What the dependent types do invisibly
+
+- Reading a single channel in a control loop: no syntax for it (§4).
+- A `Lost` quantity has no value to read — the degraded/lost branches are
+  the only access path (coverage-checked).
+- Units: SG/ppt/mS-cm (temp-compensated conversions explicit), dKH, °C, ml,
+  litres — mixing salinity units without conversion is a type error.
+- Calibration/staleness eligibility are typestate on the channel.
+- The common-mode matrix is pure compile-time arithmetic over Fin-indexed
+  fleet topology; erasure ships none of it to the ESP32.
+- Interlock duty refinements are checked against declared schedules.
+
+## 12. Explainers
+
+Codes deferred to the error-explainer registry (new block; see ledger).
+Representative, in reefer vocabulary:
+
+```
+error[reef]: TopOff doesn't say what happens when sump_level's sensors disagree
+  Add: on degraded(sump_level) -> ato.off (recommended: top-off can wait;
+  wrong top-off cannot be undone).
+
+warning[reef]: ato interlock allows 90s/30min but the TopOff loop under
+  worst-case evaporation (declared 2.5l/day) needs at most 41s/30min —
+  consider tightening max_on toward the need; slack is runaway allowance.
+```
+
+## 13. Relations
+
+- **`fleet`** — nodes, channels-as-edges, staleness/NodeLost machinery,
+  hub-illusion control loops (a control loop is hub logic; the vote lands at
+  the actuator's node per fleet's ownership rule 4).
+- **`driver`** — every sensor/probe is a declared driver with measurement
+  ranges (feeding §5's self-test abstention) and generated mocks (feeding
+  §10's drills). Conductivity, DS18B20, optical/float, peristaltic, pH.
+- **`units`, `config`** (personal bands tighten only — dive's monotone-safety
+  rule), **`schema`** (calibration + emission logs), **`view`** (host
+  dashboard), **`check`** (drills), **`workflow`** (maintenance schedules —
+  water changes, media swaps — with `after 14d` timers).
+- **`home`/`grow`** (backlog) — the quantity/quorum/interlock core specced
+  here is domain-neutral; if a second domain adopts it, extract a shared
+  `quorum` sub-dialect (ledgered).
+
+## 14. Safety honesty
+
+This is livestock and property, not human life: the framing is honest
+engineering, not certification. The dialect's guarantees are about
+*declared* topology (it cannot know about the snail — only that you gave the
+snail two brackets to defeat); sensors it doesn't know about don't exist;
+and the last line of defense must remain mechanical and dumb (§7). The docs
+lead with the Apex comparison: same ladder philosophy, plus voting, plus a
+machine-checked safety case.
+
+## 15. Open decisions (ledger)
+
+1. **Quorum sub-dialect extraction** (§13) — decide when `home`/`grow` want
+   it; premature now.
+2. **Error-code block** — register a reef block (E2xx range) with the
+   explainer registry; also allocate blocks for the other promoted-twelve
+   dialects in the same pass.
+3. **Redundant actuators** — dual return pumps / dual heaters
+   (alternation, wear-leveling, failover): natural next step, design
+   deferred until the sensor side lands.
+4. **Commercial hardware interop** — driving Apex/Hydros modules vs. pure
+   DIY sensor set for v1 (recommend: DIY + published driver declarations;
+   interop invites reverse-engineering churn).
+5. **AWC (auto water change)** — coupled dual-pump volume accounting;
+   rides dosing + analytic channels; v1.5.
+6. **Leak sensors & power monitoring** — more fault domains (a leak rope is
+   just another boolean quantity; PSU voltage as an analytic health
+   channel); additive.
+7. **Anomaly detection beyond bands** (trend/ML) — advisory-only if ever;
+   the voting core stays arithmetic.
+8. **`derived` channel placement syntax** (`at host`) — confirm it reuses
+   fleet's `at` annotation verbatim.
+
+## 16. Non-goals
+
+- No certification claims of any kind.
+- No replacement of mechanical backstops (§7 — designed-in humility).
+- No cloud dependency: the tank must not care that the internet is down
+  (host node optional; alerts degrade to local buzzer/display).
+- No chemistry *management* advice (the dialect controls; reef chemistry
+  targets are the keeper's numbers, entered in `config`).
+
+## Sources (prior art reviewed 2026-07-08)
+
+- reef-pi: https://reef-pi.github.io/ and https://github.com/reef-pi/reef-pi
+- Neptune ATK layered failsafes: https://www.reef2reef.com/ams/neptune-apex-programming-tutorials-part-3-automatic-top-off-kit-atk.692/ and https://www.bulkreefsupply.com/atk-v2-auto-top-off-kit-neptune-systems.html
+- Neptune optical sensor practice: https://www.bulkreefsupply.com/content/post/brstv-product-spotlight-neptune-systems-os-1-v2-optical-sensor
+- Hydros Collective (multi-brain failover, power-domain cabling): https://www.coralvuehydros.com/product-support/hydros-control/hydros-collective-101/

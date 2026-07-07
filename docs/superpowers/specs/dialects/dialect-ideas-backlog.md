@@ -9,6 +9,13 @@ template. The premise throughout is the dialect facility
 work, zero compiler changes. The brief was to think across *all* the niche
 ways people interact with programming — not just MCUs.
 
+**Promoted to full specs (2026-07-08):** from batch 1 — #17 knit, #26 blocks,
+#33 synth, #35 dive, #37 checklist, #49 agenttools; from batch 2 — #52
+flightplan, #61 fold, #65 crossword, #78 a11y, #93 backtest, #95 gates; plus
+**#99 reef, promoted to flagship** (operator favourite; shuttle-grade voted
+sensor redundancy — see `2026-07-08-reef-dialect-design.md`). Each now has a
+`2026-07-08-<name>-dialect-design.md` in this directory.
+
 Legend for hooks: **R** refinements · **T** typestate/GADT index · **U** units
 · **C** coverage/totality · **F** flow/causality · **E** effects/IFC ·
 **K** check templates · **P** projection/purity.
@@ -202,7 +209,166 @@ Legend for hooks: **R** refinements · **T** typestate/GADT index · **U** units
 
 ---
 
-Recurring observation across all fifty: the pattern from the parent spec
+# Batch 2 (same day) — fifty more
+
+## Outdoors, vehicles & sky
+
+51. **`sail`** — passage planning: tide windows computed, draft-vs-charted-depth
+    clearance refinements, CPA rules; a plan that dries you out on a falling
+    tide is a compile error. R,U
+52. **`flightplan`** — VFR planning: weight & balance as a 2D envelope
+    refinement (CG computed from declared loading, checked at takeoff AND
+    landing weights), legal fuel reserves as bounds, density-altitude
+    performance vs. declared runway lengths. R,U
+53. **`astro`** — observation sessions: target altitude windows computed,
+    focal ratios/exposure math united, meridian flips scheduled. U,K
+54. **`ecu`** — engine tuning maps: AFR-under-boost safety refinements make
+    the lean-melt-a-piston map inexpressible; interpolation continuity
+    checked. R,U
+55. **`solar`** — off-grid sizing: panel/battery/load energy budget as
+    refinements; days-of-autonomy computed at compile time. R,U
+56. **`ev`** — EV charging schedules against tariffs + battery-health
+    constraints (depth-of-discharge windows as refinements). R,U
+
+## Body, food & health
+
+57. **`train`** — workout periodization: load-progression refinements (no
+    >10%/week jumps), mandatory deloads; kg/reps/RPE united. R,U
+58. **`dose`** — personal medication schedules: max-daily and interaction
+    refinements, timing constraints (a planning aid, not medical advice —
+    the honesty note is part of the design). R,U
+59. **`meal`** — nutrition plans: macro targets as refinements; recipe
+    scaling united; shopping lists computed. R,U
+
+## Craft, making & materials
+
+60. **`kiln`** — pottery firing schedules: ramp-rate refinements against
+    thermal-shock limits, cone targets, hold times — driving the controller
+    hardware directly. R,U,T
+61. **`fold`** — origami crease patterns where Maekawa (|M−V| = 2) and
+    Kawasaki (alternating angles sum to 180°) are checked at compile time —
+    actual theorems as refinements on declared geometry. R,K
+62. **`quilt`** — quilting blocks: piece geometry must sum to block
+    dimensions, blocks to quilt top; fabric yardage computed (knit's woven
+    cousin). R
+63. **`railway`** — model railroads: track geometry must close (loop
+    arithmetic as refinements), DCC block signaling as occupancy typestate;
+    two trains in one block is inexpressible. R,T
+64. **`chem`** — home-lab procedures: an incompatibility matrix makes
+    bleach-plus-ammonia inexpressible; quantities/concentrations united;
+    disposal steps required (coverage). R,U,C
+
+## Puzzles, games & invented worlds
+
+65. **`crossword`** — grid construction: symmetry refinements; fill by
+    solver, every fill *verified* against grid + dictionary (the
+    solver-generates/kernel-checks pattern as product); every slot clued
+    (coverage). R,K,C
+66. **`conlang`** — constructed languages: phonotactics as a `parse`
+    grammar, morphology paradigm tables total (no undeclined cell). C,K
+67. **`srs`** — spaced-repetition decks: card templates fully bound
+    (coverage), scheduling algebra explicit, leech detection declared. C,K
+68. **`console`** — fantasy consoles (PICO-8 register): opcode decode is
+    coverage-checked (no undefined instruction), memory map refinements;
+    the emulator and the docs generate from one declaration. C,R
+69. **`rom`** — ROM-hacking patch sets: offsets typed against the declared
+    memory map, checksums maintained by construction. R
+70. **`mud`** — text worlds: exit reciprocity and room-graph reachability
+    checked; darkness/lock typestate on movement. C,T
+71. **`escape`** — escape-room logic: puzzle dependency graph provably
+    solvable (liveness), hint coverage, reset procedure total. C
+72. **`tournament`** — brackets and Swiss pairings: no-rematch by
+    construction, bye fairness computed, schedule fits declared venue
+    slots. R,C
+
+## Civic, community & access
+
+73. **`vote`** — polls/elections for clubs and co-ops: ranked-choice tally
+    algorithms verified by `check`, quorum rules as refinements, ballot
+    validity total. K,R
+74. **`moderation`** — community-rule decision trees: every action has an
+    appeal path (coverage), escalation typestate, rule conflicts
+    detected. C,T
+75. **`conf`** — event scheduling: speaker double-booking inexpressible,
+    room capacity refinements, break coverage. R,C
+76. **`transit`** — community timetables (GTFS-shaped): transfer feasibility
+    checked against minimum connection times, headway consistency. R,U
+77. **`map`** — custom map styles: zoom-level rules total, required
+    attribution coverage, layer ordering typed. C
+78. **`a11y`** — accessibility as types: WCAG contrast ratios computed from
+    color literals as refinements, focus order total, alt-text coverage
+    (decorative is an explicit marker, not an omission). R,C
+
+## Media & writing
+
+79. **`subtitle`** — captions: time-monotonicity by construction,
+    reading-speed (chars/sec) refinements, collision-free tracks. R,U
+80. **`edit`** — video edit decision lists: no timeline gaps/overlaps unless
+    declared, timecode units, media references compile-checked. R,U
+81. **`podcast`** — episode assembly: loudness in LUFS units, chapter
+    monotonicity, ad-slot constraints. U,R
+82. **`timelapse`** — shooting plans: interval-vs-shutter refinement (no
+    overlap), storage/battery budgets computed from declared duration. R,U
+83. **`darkroom`** — film development: time/temperature units, push/pull
+    arithmetic checked, chemical exhaustion tracked. U,R
+84. **`book`** — manuscripts: every cross-reference resolves, figure/table
+    numbering total, front-matter completeness. C
+85. **`screen`** — screenplays: characters introduced before speaking
+    (typestate over the narrative), scene numbering stable across
+    revisions. T,C
+86. **`cite`** — bibliographies: every citation resolves, style rendering
+    total, retraction flags surfaced. C
+87. **`feed`** — RSS/newsletter pipelines: dedupe rules, schedule windows,
+    transforms typed end to end. F
+88. **`wiki`** — personal knowledge gardens: link integrity (no dangling,
+    orphans reported), transclusion cycles rejected. C
+89. **`genealogy`** — family trees with temporal-consistency refinements
+    (no one born after a parent's death); sources required per claim
+    (coverage). R,C
+
+## Money & law
+
+90. **`contract`** — agreement templates: defined terms used-after-defined,
+    every obligation has a party and a deadline (totality of obligations);
+    structure checking, not legal advice. C,T
+91. **`budget`** — grant/project budgets: category caps as refinements,
+    totals balance by construction (ledger's project-shaped cousin). R
+92. **`split`** — group expense splitting: shares sum to total by
+    construction; multi-currency via units. R,U
+93. **`backtest`** — trading-strategy backtests where look-ahead bias is a
+    *causality violation* — reading a future bar doesn't type-check (the
+    flow index again); mandatory declared costs; seeded, reproducible
+    runs. F,U,K
+94. **`fire`** — personal-finance projections: seeded scenario simulation,
+    withdrawal-rate refinements, currency/time units. U,K
+
+## Systems, logic & AI
+
+95. **`gates`** — digital logic for teaching and bench work: combinational
+    loops rejected (the causality index, third audience), truth-table
+    equivalence checked, and a generated ESP32 GPIO harness that verifies
+    the real 74xx chip on your bench against the compile-time truth
+    table. F,K,C
+96. **`ladder`** — PLC ladder logic: scan totality, interlock verification,
+    rung reachability (the industrial cousin of `gates`). C,T
+97. **`dataset`** — labeled-dataset curation: label schema checked,
+    train/test split hygiene by construction (leakage inexpressible),
+    provenance per example. R,C
+98. **`voice`** — offline voice intents: grammars via `parse`, slot types
+    refined ("set temperature to seventy" lands in a Celsius
+    refinement). R,C
+
+## Animals & water
+
+99. **`reef`** — aquarium automation: dosing interlocks, parameter-range
+    refinements (alk/Ca/Mg), ATO failsafe typestate. R,T,U
+100. **`flock`** — smallholding/beekeeping: treatment withdrawal periods as
+     refinements on harvest dates (food-safety arithmetic), inspection
+     schedules, genetics lines acyclic. R,C
+
+---
+
+Recurring observation across all hundred: the pattern from the parent spec
 holds in every niche — *users declare domain facts; the compiler
 manufactures types; errors speak the domain's vocabulary; every guarantee is
 marketed as the disaster it prevents* (a spindle crash, a missed

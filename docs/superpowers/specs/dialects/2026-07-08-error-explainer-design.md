@@ -155,6 +155,19 @@ without renumbering anything already written down:
 | E185–E189 | `reducer` |
 | E190–E194 | `sim` / `pattern` |
 | E195–E199 | `check` + the dialect facility itself |
+| E200–E204 | `reef` |
+| E205–E209 | `synth` |
+| E210–E219 | `dive` |
+| E220–E224 | `knit` |
+| E225–E229 | `agenttools` |
+| E230–E234 | `checklist` |
+| E235–E239 | `backtest` |
+| E240–E244 | `gates` |
+| E245–E249 | `crossword` |
+| E250–E254 | `fold` |
+| E255–E259 | `a11y` |
+| E260–E264 | `flightplan` |
+| E265–E269 | `blocks` |
 
 **Community dialects do not get bare E-codes** — they use a namespaced
 form, `greenhouse-dialect/E3`. The bare numeric space is first-party
