@@ -426,7 +426,7 @@ the reject *mechanism* is exercised by config-override, not by enabling any clau
 | `ctor_signature` | `:ctor` args check against resolved signature; params at grade 0 | K6 wave |
 | `case_coverage` | branch ctor set exactly covers the family; arities match signature | K5 wave (structural part) |
 | `level_expr` | `{:type, ℓ}` is a well-formed level-expression; globals carry level args; no ceiling | K7 wave |
-| `no_absurd_node` | no `{:absurd}`; ex-falso only via empty-`case` (structural absence of branches — coverage per §E.2/§H decides when that's valid) | K4 wave |
+| `no_absurd_node` | no `{:absurd}`; ex-falso only via empty-`case` (structural absence of branches — coverage per §E.2/§H decides when that's valid) | **K4 — LANDED**: `:reject` in `release_config` (16718f6). Kernel `check_coverage` accepts provably-`:impossible` omissions (35da361); elaborator omits impossible branches instead of `{:absurd}` bodies (34aecae). Node gone from grammar (`Term.term?`), producers, and final Core; kernel-infer/serialize keep *defensive* handling (infer has no catch-all ⇒ its clause is load-bearing for totality) |
 | `no_legacy_reducer` | normal forms produced by the clean reducer only | K10 wave |
 
 The validator checks **structural shape**, not typing. The soundness-critical

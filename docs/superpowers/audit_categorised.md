@@ -79,6 +79,17 @@ Allowed during elaboration; must never survive into final/trusted Core.
 ## K4 — The `absurd` marker lives in Core syntax
 Should be elaborator-only unreachable marker, not a Core term.
 - Doc 2: **566**, **571**.
+- **LANDED (35da361, 34aecae, 16718f6, 651821b).** §H empty-case ex-falso in 3
+  steps: (1) kernel `check_coverage` accepts a constructor OMITTED iff provably
+  `:impossible` at the scrutinee's indices (Agda/Idris index-contradiction; relies
+  on K5a-hardened `:impossible`); (2) elaborator OMITS impossible branches (all 5
+  sites) instead of `{cname,ar,{:absurd}}` bodies; (3) validator `no_absurd_node`
+  → `:reject` in `release_config`. `{:absurd}` is gone from the grammar
+  (`Term.term?` already excluded it), producers, and final Core. Full purge of the
+  residual DECLINED with proof (analysis discipline): `infer` has no catch-all, so
+  its `infer({:absurd})→:error` clause is load-bearing for kernel totality
+  (removal would crash, not tighten); serialize/emit handling likewise retained as
+  antibody-covered defense for the grammar-excluded shape.
 
 ## K5 — Index unification / branch-skipping / coverage (soundness-critical)
 The heart of dependent `match`; conservative and known-incomplete.
