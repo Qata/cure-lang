@@ -45,15 +45,23 @@ one question at a time and needs your answers), so it cannot run unattended.
    already enforced via the relevance check; what the grade wave adds is the
    per-binder grade *field* — a representation/faithfulness change, so this gap is a
    feature, not a soundness fix.)
-2. **Bucket B / C stdlib-dependent extensions** *(lowest-risk standalone start —
-   recommended first)*. `Bounded` (native-int `Fin`), flesh out `Vector`
-   (lookup/head/map/…), `Ordering`-as-inductive (memory `stdlib-dependent-expansion`).
-   Concrete, incremental, no kernel/grade-wave coupling — the cleanest way to
-   re-establish the design→plan→implement rhythm.
-3. **Safe FRP Types (ICFP'09).** Derive the Dec/Init index algebra + `switch` from
-   the paper PDF (Agda source is gone — memory `frp-source-unavailable-derive-from-paper`,
-   `reactive-runtime-design-bible`). Largest / most research-y; the Lean-shape
-   pattern-matching work was building toward enabling it.
+2. **Bucket B / C stdlib-dependent extensions — ✅ ALREADY DONE** *(codebase audit
+   2026-07-08; the `stdlib-dependent-expansion` memory was stale)*. `Std.Bounded`
+   (`type Bounded indices (n: Nat)` with `First`/`Next` = Fin's FZ/FS) is complete
+   and used by `Std.Vector` for length-safe indexing; `Std.Vector` is extensively
+   fleshed out (singleton/replicate/is_empty/head/tail/lookup/update/set/map/zip_with/
+   append/foldl/foldr/count/length/any/all); `Std.Ord` has `type Ordering = LessThan
+   | EqualTo | GreaterThan` (inductive) + `compare` + the `Ord(T)` protocol. **Not a
+   gap — no design needed.**
+3. **Safe FRP Types (ICFP'09)** *(type foundation landed; the reactive library/runtime
+   is the remaining feature)*. The **type-system foundation** — the Dec/Init index
+   algebra, `switch` typing, loop well-formedness — is landed and oracle-tested
+   (`test/oracle/frp/frp01–12`, "frp cluster 12/12"; memory
+   `frp-source-unavailable-derive-from-paper`). What remains is the **reactive
+   library + runtime**: no `Std.Signal`/`Std.Flow`/`Behavior`/`Event`/`switch`
+   modules exist in `lib/std` yet. That's a large, staged feature with an existing
+   design bible (`reactive-runtime-design-bible`, 0.34–0.37 roadmap) — the most
+   design-progressed remaining gap.
 
 ### Group B — declined/deferred K-features (optional, faithfulness/parity)
 4. **Canonical `Eq` transport (K1b / K5b).** Retire the `{:rewrite}` node → genuine
@@ -68,12 +76,21 @@ one question at a time and needs your answers), so it cannot run unattended.
 
 ## Recommended next step
 
-Start a `superpowers:brainstorming` session on **gap #2 (Bucket B/C stdlib
-extensions)** — it has no kernel or grade-wave coupling, so it converges fast and
-re-establishes the design→plan→implement rhythm on the lowest risk. Gap #1
-(unsafe-hole taxonomy) is better done once its grade-wave sequencing is decided; gap
-#3 (FRP) is the largest. Group B items are opt-in parity work with no soundness
-urgency.
+A codebase audit (2026-07-08) found **gap #2 already fully landed**, so the real
+remaining Group-A gaps are just **#1 (unsafe-hole taxonomy)** and **#3 (FRP reactive
+library/runtime)** — both substantial, neither a quick win:
 
-**To proceed:** reply with which gap to design first (default #2), and I'll run
-brainstorming to a design you approve before any code is written.
+- **#3 (FRP reactive runtime)** is the most design-progressed: its type foundation is
+  landed + oracle-tested and it has a staged design bible, so the next step is
+  designing the first runtime increment (e.g. `Std.Signal`/`Std.Flow` surface). This
+  is the strongest candidate if you want to build on existing momentum.
+- **#1 (unsafe-hole taxonomy)** is smaller but needs a grade-wave sequencing decision
+  first.
+
+Either is a real design conversation — which is why this stays gated on your input.
+Group B (canonical `Eq` transport, universe-level polymorphism, qualified `Sym`) is
+opt-in parity work with no soundness urgency.
+
+**To proceed:** reply with a gap to design — **#3 (FRP reactive runtime)** is the
+recommended default given its landed foundation and existing design bible — and I'll
+run brainstorming to a design you approve before any code is written.
