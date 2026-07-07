@@ -23,3 +23,48 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
           Error(_) -> :ok
           Ok(_) -> assert(false)
       Error(_) -> assert(false)
+  
+  fn test_mutual_inductive_rec_flag_is_shared() -> Atom =
+    let a = mk_simple("A")
+    let b = mk_simple("B")
+    let ctor_a = str(a, "mk")
+    let ctor_b = str(b, "mk")
+    let a_ctor_type = Pi(mk_simple("x"), BinderDefault(), Const(b, []), Const(a, []))
+    let b_ctor_type = Const(b, [])
+    let decl = InductiveDecl([], 0, [InductiveType(a, Sort(LevelZero()), [Constructor(ctor_a, a_ctor_type)]), InductiveType(b, Sort(LevelZero()), [Constructor(ctor_b, b_ctor_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, b)
+          Some(InductiveInfo(InductiveVal(_, _, _, _, _, _, is_rec, _, _))) -> assert(is_rec)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_checked_inductive_rejects_wrong_constructor_return() -> Atom =
+    let a = mk_simple("A")
+    let b = mk_simple("B")
+    let ctor_a = str(a, "mk")
+    let decl = InductiveDecl([], 0, [InductiveType(a, Sort(LevelZero()), [Constructor(ctor_a, Const(b, []))]), InductiveType(b, Sort(LevelZero()), [])], false)
+    match environment_add(empty_environment(), decl, true)
+      Error(_) -> :ok
+      Ok(_) -> assert(false)
+  
+  fn test_checked_inductive_rejects_negative_occurrence() -> Atom =
+    let bad = mk_simple("Bad")
+    let ctor = str(bad, "mk")
+    let negative_domain = Pi(mk_simple("x"), BinderDefault(), Const(bad, []), Const(bad, []))
+    let ctor_type = Pi(mk_simple("f"), BinderDefault(), negative_domain, Const(bad, []))
+    let decl = InductiveDecl([], 0, [InductiveType(bad, Sort(LevelZero()), [Constructor(ctor, ctor_type)])], false)
+    match environment_add(empty_environment(), decl, true)
+      Error(_) -> :ok
+      Ok(_) -> assert(false)
+  
+  fn test_prop_singleton_inductive_marks_k_recursor() -> Atom =
+    let proof_name = mk_simple("Proof")
+    let ctor = str(proof_name, "intro")
+    let decl = InductiveDecl([], 0, [InductiveType(proof_name, Sort(LevelZero()), [Constructor(ctor, Const(proof_name, []))])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, name_append_core(proof_name, mk_simple("rec")))
+          Some(RecursorInfo(RecursorVal(_, _, _, _, _, _, _, k, _))) -> assert(k)
+          _ -> assert(false)
+      Error(_) -> assert(false)

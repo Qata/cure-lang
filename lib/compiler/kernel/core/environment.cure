@@ -1,5 +1,6 @@
 mod Compiler.Kernel.Core.Environment
   use Compiler.Kernel.Core.Name
+  use Compiler.Kernel.Core.Level
   use Compiler.Kernel.Core.Expr
   use Compiler.Kernel.Core.Declaration
   use Compiler.Kernel.Core.Exception
@@ -89,7 +90,11 @@ mod Compiler.Kernel.Core.Environment
     = match decl
         MutualDefinitionDecl(defs) -> definition_infos(defs)
         InductiveDecl(level_params, num_params, types, is_unsafe) ->
-          inductive_infos(level_params, num_params, types, inductive_type_names(types), constructor_count_for_all(types), is_unsafe)
+          let all_names = inductive_type_names(types)
+          let is_rec = inductive_block_is_recursive(all_names, types)
+          let is_reflexive = inductive_block_is_reflexive(all_names, types)
+          let k = inductive_block_is_k_target(num_params, types)
+          inductive_infos(level_params, num_params, types, all_names, constructor_count_for_all(types), is_rec, is_reflexive, k, is_unsafe)
         QuotDecl() -> quot_infos()
         _ -> [declaration_to_constant_info(decl)]
   
@@ -98,14 +103,14 @@ mod Compiler.Kernel.Core.Environment
         [] -> []
         [definition | rest] -> [DefinitionInfo(definition) | definition_infos(rest)]
   
-  local fn inductive_infos(level_params: List(Name), num_params: Int, types: List(InductiveType), all_names: List(Name), num_minors: Int, is_unsafe: Bool) -> List(ConstantInfo)
+  local fn inductive_infos(level_params: List(Name), num_params: Int, types: List(InductiveType), all_names: List(Name), num_minors: Int, is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool) -> List(ConstantInfo)
     = match types
         [] -> []
         [InductiveType(name, type_expr, ctors) | rest] ->
           let num_indices = inductive_num_indices(type_expr, num_params)
-          let info = InductiveInfo(InductiveVal(ConstantVal(name, level_params, type_expr), num_params, num_indices, all_names, constructor_names(ctors), 0, inductive_is_recursive(all_names, ctors), is_unsafe, inductive_is_reflexive(all_names, ctors)))
+          let info = InductiveInfo(InductiveVal(ConstantVal(name, level_params, type_expr), num_params, num_indices, all_names, constructor_names(ctors), 0, is_rec, is_unsafe, is_reflexive))
           let ctor_infos = constructor_infos(level_params, name, 0, num_params, ctors, is_unsafe)
-          let rec_infos = recursor_info(level_params, name, type_expr, num_params, num_indices, all_names, num_minors, is_unsafe, rest)
+          let rec_infos = recursor_info(level_params, name, type_expr, num_params, num_indices, all_names, num_minors, is_rec, is_reflexive, k, is_unsafe, rest)
           [info | Std.List.append(ctor_infos, rec_infos)]
   
   local fn constructor_infos(level_params: List(Name), inductive_name: Name, cidx: Int, num_params: Int, ctors: List(Constructor), is_unsafe: Bool) -> List(ConstantInfo)
@@ -114,8 +119,8 @@ mod Compiler.Kernel.Core.Environment
         [Constructor(name, type_expr) | rest] ->
           [ConstructorInfo(ConstructorVal(ConstantVal(name, level_params, type_expr), inductive_name, cidx, num_params, constructor_num_fields(type_expr, num_params), is_unsafe)) | constructor_infos(level_params, inductive_name, cidx + 1, num_params, rest, is_unsafe)]
   
-  local fn recursor_info(level_params: List(Name), name: Name, type_expr: Expr, num_params: Int, num_indices: Int, all_names: List(Name), num_minors: Int, is_unsafe: Bool, rest: List(InductiveType)) -> List(ConstantInfo)
-    = [RecursorInfo(RecursorVal(ConstantVal(name_append_core(name, mk_simple("rec")), level_params, type_expr), all_names, num_params, num_indices, 1, num_minors, [], false, is_unsafe)) | inductive_infos(level_params, num_params, rest, all_names, num_minors, is_unsafe)]
+  local fn recursor_info(level_params: List(Name), name: Name, type_expr: Expr, num_params: Int, num_indices: Int, all_names: List(Name), num_minors: Int, is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool, rest: List(InductiveType)) -> List(ConstantInfo)
+    = [RecursorInfo(RecursorVal(ConstantVal(name_append_core(name, mk_simple("rec")), level_params, type_expr), all_names, num_params, num_indices, 1, num_minors, [], k, is_unsafe)) | inductive_infos(level_params, num_params, rest, all_names, num_minors, is_rec, is_reflexive, k, is_unsafe)]
   
   local fn constructor_num_fields(type_expr: Expr, num_params: Int) -> Int
     = subtract_nonnegative(pi_arity(type_expr), num_params)
@@ -138,6 +143,14 @@ mod Compiler.Kernel.Core.Environment
         [] -> 0
         [InductiveType(_, _, ctors) | rest] -> Std.List.length(ctors) + constructor_count_for_all(rest)
   
+  local fn inductive_block_is_recursive(all_names: List(Name), types: List(InductiveType)) -> Bool
+    = match types
+        [] -> false
+        [InductiveType(_, _, ctors) | rest] ->
+          pickup
+            inductive_is_recursive(all_names, ctors) -> true
+            else -> inductive_block_is_recursive(all_names, rest)
+  
   local fn inductive_is_recursive(all_names: List(Name), ctors: List(Constructor)) -> Bool
     = match ctors
         [] -> false
@@ -145,6 +158,14 @@ mod Compiler.Kernel.Core.Environment
           pickup
             expr_mentions_any_const(type_expr, all_names) -> true
             else -> inductive_is_recursive(all_names, rest)
+  
+  local fn inductive_block_is_reflexive(all_names: List(Name), types: List(InductiveType)) -> Bool
+    = match types
+        [] -> false
+        [InductiveType(_, _, ctors) | rest] ->
+          pickup
+            inductive_is_reflexive(all_names, ctors) -> true
+            else -> inductive_block_is_reflexive(all_names, rest)
   
   local fn inductive_is_reflexive(all_names: List(Name), ctors: List(Constructor)) -> Bool
     = match ctors
@@ -158,8 +179,30 @@ mod Compiler.Kernel.Core.Environment
     = match type_expr
         Pi(_, _, domain, body) ->
           pickup
-            expr_mentions_any_const(domain, all_names) -> true
+            expr_is_pi(domain) -> expr_mentions_any_const(domain, all_names)
             else -> constructor_has_reflexive_domain(all_names, body)
+        _ -> false
+  
+  local fn expr_is_pi(expr: Expr) -> Bool
+    = match expr
+        Pi(_, _, _, _) -> true
+        _ -> false
+  
+  local fn inductive_block_is_k_target(num_params: Int, types: List(InductiveType)) -> Bool
+    = match types
+        [InductiveType(_, type_expr, ctors)] ->
+          pickup
+            inductive_result_is_prop(type_expr) ->
+              match ctors
+                [Constructor(_, ctor_type)] -> pi_arity(ctor_type) == num_params
+                _ -> false
+            else -> false
+        _ -> false
+  
+  local fn inductive_result_is_prop(type_expr: Expr) -> Bool
+    = match type_expr
+        Pi(_, _, _, body) -> inductive_result_is_prop(body)
+        Sort(level) -> level_eq(level, LevelZero())
         _ -> false
   
   local fn expr_mentions_any_const(expr: Expr, names: List(Name)) -> Bool
@@ -230,21 +273,55 @@ mod Compiler.Kernel.Core.Environment
           match check_nonnegative_num_params(num_params)
             Error(error) -> Error(error)
             Ok(_) ->
-              match check_unique_decl_names(declaration_names(decl))
+              match check_nonempty_inductive_types(types)
                 Error(error) -> Error(error)
                 Ok(_) ->
-                  match check_inductive_type_headers(env, level_params, types)
+                  match check_inductive_param_prefixes(num_params, types)
                     Error(error) -> Error(error)
                     Ok(_) ->
-                      let env_with_decl = environment_add_unchecked(env, decl, false)
-                      match check_constructor_type_headers(env_with_decl, level_params, types)
+                      match check_unique_decl_names(declaration_names(decl))
                         Error(error) -> Error(error)
-                        Ok(_) -> Ok(env_with_decl)
+                        Ok(_) ->
+                          match check_inductive_type_headers(env, level_params, types)
+                            Error(error) -> Error(error)
+                            Ok(_) ->
+                              let env_with_decl = environment_add_unchecked(env, decl, false)
+                              match check_constructor_type_headers(env_with_decl, level_params, types)
+                                Error(error) -> Error(error)
+                                Ok(_) ->
+                                  match check_constructor_param_prefixes(num_params, types)
+                                    Error(error) -> Error(error)
+                                    Ok(_) ->
+                                      match check_constructor_return_shapes(num_params, types)
+                                        Error(error) -> Error(error)
+                                        Ok(_) ->
+                                          match check_constructor_positivity(num_params, types, is_unsafe)
+                                            Error(error) -> Error(error)
+                                            Ok(_) -> Ok(env_with_decl)
   
   local fn check_nonnegative_num_params(num_params: Int) -> Result(Atom, KernelException)
     = pickup
         num_params < 0 -> Error(OtherKernelException("inductive declaration has negative parameter count"))
         else -> Ok(:ok)
+  
+  local fn check_nonempty_inductive_types(types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Error(OtherKernelException("invalid empty mutual inductive datatype declaration"))
+        _ -> Ok(:ok)
+  
+  local fn check_inductive_param_prefixes(num_params: Int, types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(_, type_expr, _) | rest] ->
+          check_inductive_param_prefixes_against(num_params, first_pi_domains(type_expr, num_params), rest)
+  
+  local fn check_inductive_param_prefixes_against(num_params: Int, params: List(Expr), types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(_, type_expr, _) | rest] ->
+          pickup
+            expr_list_eq(params, first_pi_domains(type_expr, num_params)) -> check_inductive_param_prefixes_against(num_params, params, rest)
+            else -> Error(OtherKernelException("parameters of all inductive datatypes must match"))
   
   local fn check_inductive_type_headers(env: Environment, level_params: List(Name), types: List(InductiveType)) -> Result(Atom, KernelException)
     = match types
@@ -269,6 +346,181 @@ mod Compiler.Kernel.Core.Environment
           match check_constant_header_only(env, ConstantVal(name, level_params, type_expr))
             Error(error) -> Error(error)
             Ok(_) -> check_constructor_list_headers(env, level_params, rest)
+  
+  local fn check_constructor_param_prefixes(num_params: Int, types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(_, type_expr, ctors) | rest] ->
+          match check_constructor_param_prefixes_for_type(num_params, first_pi_domains(type_expr, num_params), ctors)
+            Error(error) -> Error(error)
+            Ok(_) -> check_constructor_param_prefixes(num_params, rest)
+  
+  local fn check_constructor_param_prefixes_for_type(num_params: Int, params: List(Expr), ctors: List(Constructor)) -> Result(Atom, KernelException)
+    = match ctors
+        [] -> Ok(:ok)
+        [Constructor(_, type_expr) | rest] ->
+          pickup
+            expr_list_eq(params, first_pi_domains(type_expr, num_params)) -> check_constructor_param_prefixes_for_type(num_params, params, rest)
+            else -> Error(OtherKernelException("constructor parameters do not match inductive datatype parameters"))
+  
+  local fn check_constructor_return_shapes(num_params: Int, types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(name, type_expr, ctors) | rest] ->
+          match check_constructor_return_shapes_for_type(name, num_params, inductive_num_indices(type_expr, num_params), ctors)
+            Error(error) -> Error(error)
+            Ok(_) -> check_constructor_return_shapes(num_params, rest)
+  
+  local fn check_constructor_return_shapes_for_type(inductive_name: Name, num_params: Int, num_indices: Int, ctors: List(Constructor)) -> Result(Atom, KernelException)
+    = match ctors
+        [] -> Ok(:ok)
+        [Constructor(_, type_expr) | rest] ->
+          pickup
+            constructor_returns_inductive(type_expr, inductive_name, num_params + num_indices) ->
+              check_constructor_return_shapes_for_type(inductive_name, num_params, num_indices, rest)
+            else -> Error(OtherKernelException("invalid constructor return type"))
+  
+  local fn check_constructor_positivity(num_params: Int, types: List(InductiveType), is_unsafe: Bool) -> Result(Atom, KernelException)
+    = pickup
+        is_unsafe -> Ok(:ok)
+        else -> check_constructor_positivity_types(num_params, types, inductive_type_names(types), types)
+  
+  local fn check_constructor_positivity_types(num_params: Int, all_types: List(InductiveType), all_names: List(Name), types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(_, _, ctors) | rest] ->
+          match check_constructor_positivity_ctors(num_params, all_types, all_names, ctors)
+            Error(error) -> Error(error)
+            Ok(_) -> check_constructor_positivity_types(num_params, all_types, all_names, rest)
+  
+  local fn check_constructor_positivity_ctors(num_params: Int, all_types: List(InductiveType), all_names: List(Name), ctors: List(Constructor)) -> Result(Atom, KernelException)
+    = match ctors
+        [] -> Ok(:ok)
+        [Constructor(_, type_expr) | rest] ->
+          match check_constructor_positivity_type(num_params, all_types, all_names, type_expr, 0)
+            Error(error) -> Error(error)
+            Ok(_) -> check_constructor_positivity_ctors(num_params, all_types, all_names, rest)
+  
+  local fn check_constructor_positivity_type(num_params: Int, all_types: List(InductiveType), all_names: List(Name), type_expr: Expr, index: Int) -> Result(Atom, KernelException)
+    = match type_expr
+        Pi(_, _, domain, body) ->
+          pickup
+            index < num_params -> check_constructor_positivity_type(num_params, all_types, all_names, body, index + 1)
+            else ->
+              match check_positive_occurrences(num_params, all_types, all_names, domain)
+                Error(error) -> Error(error)
+                Ok(_) -> check_constructor_positivity_type(num_params, all_types, all_names, body, index + 1)
+        _ -> Ok(:ok)
+  
+  local fn check_positive_occurrences(num_params: Int, all_types: List(InductiveType), all_names: List(Name), expr: Expr) -> Result(Atom, KernelException)
+    = pickup
+        expr_mentions_any_const(expr, all_names) ->
+          match expr
+            Pi(_, _, domain, body) ->
+              pickup
+                expr_mentions_any_const(domain, all_names) -> Error(OtherKernelException("constructor argument has a non-positive occurrence of the datatypes being declared"))
+                else -> check_positive_occurrences(num_params, all_types, all_names, body)
+            _ ->
+              pickup
+                valid_inductive_app(num_params, all_types, all_names, expr) -> Ok(:ok)
+                else -> Error(OtherKernelException("constructor argument has a non-valid occurrence of the datatypes being declared"))
+        else -> Ok(:ok)
+  
+  local fn valid_inductive_app(num_params: Int, all_types: List(InductiveType), all_names: List(Name), expr: Expr) -> Bool
+    = match app_head(expr)
+        Const(name, _) ->
+          pickup
+            name_in_list(name, all_names) ->
+              match find_inductive_type(name, all_types)
+                Some(InductiveType(_, type_expr, _)) ->
+                  pickup
+                    Std.List.length(app_args(expr)) == num_params + inductive_num_indices(type_expr, num_params) ->
+                      no_inductive_occurrences(app_args_after_params(expr, num_params), all_names)
+                    else -> false
+                None() -> false
+            else -> false
+        _ -> false
+  
+  local fn find_inductive_type(name: Name, types: List(InductiveType)) -> Option(InductiveType)
+    = match types
+        [] -> None()
+        [type_info | rest] ->
+          match type_info
+            InductiveType(type_name, _, _) ->
+              pickup
+                name_eq(name, type_name) -> Some(type_info)
+                else -> find_inductive_type(name, rest)
+  
+  local fn app_args_after_params(expr: Expr, num_params: Int) -> List(Expr)
+    = drop_args(app_args(expr), num_params)
+  
+  local fn drop_args(args: List(Expr), count: Int) -> List(Expr)
+    = match args
+        [] -> []
+        [_ | rest] ->
+          pickup
+            count <= 0 -> args
+            else -> drop_args(rest, count - 1)
+  
+  local fn no_inductive_occurrences(exprs: List(Expr), all_names: List(Name)) -> Bool
+    = match exprs
+        [] -> true
+        [expr | rest] ->
+          pickup
+            expr_mentions_any_const(expr, all_names) -> false
+            else -> no_inductive_occurrences(rest, all_names)
+  
+  local fn constructor_returns_inductive(type_expr: Expr, inductive_name: Name, arity: Int) -> Bool
+    = match constructor_result_type(type_expr)
+        Const(name, _) ->
+          pickup
+            name_eq(name, inductive_name) -> arity == 0
+            else -> false
+        App(_, _) ->
+          match app_head(constructor_result_type(type_expr))
+            Const(name, _) ->
+              pickup
+                name_eq(name, inductive_name) -> Std.List.length(app_args(constructor_result_type(type_expr))) == arity
+                else -> false
+            _ -> false
+        _ -> false
+  
+  local fn constructor_result_type(type_expr: Expr) -> Expr
+    = match type_expr
+        Pi(_, _, _, body) -> constructor_result_type(body)
+        _ -> type_expr
+  
+  local fn app_head(expr: Expr) -> Expr
+    = match expr
+        App(fn_expr, _) -> app_head(fn_expr)
+        _ -> expr
+  
+  local fn app_args(expr: Expr) -> List(Expr)
+    = match expr
+        App(fn_expr, arg) -> Std.List.append(app_args(fn_expr), [arg])
+        _ -> []
+  
+  local fn first_pi_domains(type_expr: Expr, count: Int) -> List(Expr)
+    = pickup
+        count <= 0 -> []
+        else ->
+          match type_expr
+            Pi(_, _, domain, body) -> [domain | first_pi_domains(body, count - 1)]
+            _ -> []
+  
+  local fn expr_list_eq(lhs: List(Expr), rhs: List(Expr)) -> Bool
+    = match lhs
+        [] ->
+          match rhs
+            [] -> true
+            _ -> false
+        [lhs_expr | lhs_rest] ->
+          match rhs
+            [rhs_expr | rhs_rest] ->
+              pickup
+                expr_eq(lhs_expr, rhs_expr) -> expr_list_eq(lhs_rest, rhs_rest)
+                else -> false
+            _ -> false
   
   local fn check_constant_header_only(env: Environment, value: ConstantVal) -> Result(Atom, KernelException)
     = match check_constant_name(env, value)
