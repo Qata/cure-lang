@@ -619,7 +619,8 @@ defmodule Cure.Elab.Declarations do
     param_count = length(param_tele)
     param_scope = param_tele |> Enum.map(fn {n, _t} -> Atom.to_string(n) end) |> Enum.reverse()
 
-    with {:ok, applied_exprs} <- family_index_args(result_expr, fam) do
+    with :ok <- ensure_linear_named_doms(dom_exprs),
+         {:ok, applied_exprs} <- family_index_args(result_expr, fam) do
       # Implicit index variables are inferred from every family application in
       # the signature (domains + the result), positionally typed by the family's
       # index telescope. Ordered by first appearance → the leading telescope.
@@ -669,6 +670,18 @@ defmodule Cure.Elab.Declarations do
   # inner type (`Nat`); the binder name itself is handled as an explicit arg.
   defp strip_named_dom({:named_dom, _name, inner}), do: inner
   defp strip_named_dom(other), do: other
+
+  # A constructor's named dependent domains must be linear: a repeated binder
+  # (`(x: Nat) -> (x: Nat) -> …`) shadows and makes later references ambiguous,
+  # exactly like a duplicate function parameter. The bare `_` binds nothing.
+  defp ensure_linear_named_doms(dom_exprs) do
+    named = for {:named_dom, n, _} <- dom_exprs, n != "_", do: n
+
+    case named -- Enum.uniq(named) do
+      [] -> :ok
+      [dup | _] -> {:error, {:duplicate_parameter, String.to_atom(dup)}}
+    end
+  end
 
   defp family_index_args({:function_call, fmeta, args}, fam) do
     if String.to_atom(Keyword.fetch!(fmeta, :name)) == fam,
