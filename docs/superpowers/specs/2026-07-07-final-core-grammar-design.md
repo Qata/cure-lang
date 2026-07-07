@@ -316,7 +316,45 @@ Delete `{:prim, op, args}`. Two categories replace it:
 primitive surface is exactly {int/float types + literals + the fixed delta-op
 globals}.
 
-## §H. Empty & absurd (K14)
+### G.1 The delta table is a named TCB member — two rules keep it sound
+
+The delta table is trusted because the **conversion checker computes with it**: to
+see `Vec A (2 + 3) ≡ Vec A 5` the normalizer must actually evaluate `2 + 3`. A
+wrong result there is a soundness hole. This is the standard, universally-accepted
+cost of native numbers (Coq `Int63`/`PrimFloat`, Agda built-in `Nat` via GMP,
+Lean `Nat`/`Int` literals all do exactly this). It is contained by keeping the
+table small, fixed, and **enumerated as an explicit TCB member under K11** (the
+trusted-boundary catalog) rather than an implicit one. Two rules:
+
+1. **Totality — partial ops must not reduce when undefined.** A delta rule may
+   never get stuck mid-normalization or raise. `Int.div`/`Int.mod` applied to a
+   **zero** divisor literal simply **do not fire** — the application stays a
+   neutral term and conversion compares it syntactically. Normalization stays
+   total, and the kernel never invents a value for `x / 0`. (Making `div` take a
+   `NonZero` proof is a *stdlib* choice layered on top; the table only needs the
+   non-reducing fallback for soundness.)
+
+2. **Model AtomVM's integer semantics — which are BEAM-faithful, so this is
+   easy.** AtomVM integers are tagged word-immediates (28-bit on the 32-bit ESP32,
+   60-bit on 64-bit hosts) that **promote on overflow, never wrap**: immediate →
+   boxed `int64` → multi-precision `IntN` (sign-magnitude, ≤256-bit), confirmed in
+   `term.h`/`intn.h`/`bif.c`. Therefore the table may compute with **Elixir's
+   native arbitrary-precision integers** and agree with the device exactly for
+   every value ≤ 2²⁵⁶ — i.e. every integer a type could realistically hold (vector
+   lengths, `Fin` bounds, dimensions never approach even 2⁶⁰). The sole divergence
+   is above AtomVM's `IntN` ceiling, where the device errors on overflow while the
+   kernel's Elixir ints continue; this is unreachable for type-level values and is
+   documented as such, not designed around. (Version footnote: the 256-bit `IntN`
+   is a ~0.7 feature; a 0.6.x device caps lower but is still promote-not-wrap —
+   same unreachable-ceiling footnote.) Floats follow the analogous rule: model
+   AtomVM/IEEE-754 double semantics, and leave `NaN`/division-by-zero non-reducing
+   rather than producing a value.
+
+The precise op set, their signatures, and the per-op reducers are pinned down in
+the K2 wave spec; this section fixes only the two soundness rules and the TCB
+registration.
+
+## §H. Empty & absurd (K4)
 
 `{:absurd}` is a current Core node (K4). Delete it. Ex-falso is instead the
 elimination of an **empty inductive** (`Empty`, a `:data` with no constructors) via
