@@ -1014,7 +1014,13 @@ defmodule Cure.Elab.Elaborator do
   # eliminator node is still emitted as the internal transport mechanism; its
   # kernel typing accepts either representation via `ensure_eq`.
   defp mk_eq(ty, a, b), do: {:data, :Eq, [ty], [a, b]}
+  # Checking-position refl: fields-only spine; the expected `Eq` type supplies the
+  # parameter (M8.3 checking mode).
   defp mk_refl(x), do: {:ctor, :refl, [x]}
+  # Inference-position refl (K6 §E.1): the family parameter `ty` rides the spine
+  # ahead of the witness `x`, so `Kernel.infer` reads it and yields `Eq(ty,x,x)`
+  # without metavariable inference. Used where refl sits in a proof/inferred slot.
+  defp mk_refl_infer(ty, x), do: {:ctor, :refl, [ty, x]}
 
   # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
   # default so ordinary elaboration is untouched; used to diagnose non-termination
@@ -1117,14 +1123,15 @@ defmodule Cure.Elab.Elaborator do
          mk_eq(Subst.shift(ty_s, 1, 0), Subst.shift(s_nf, 1, 0), Subst.shift(s, 1, 0))}
 
       # PROOF position: the outer `rewrite` INFERS this inner proof (kernel
-      # `infer({:rewrite,…})`), and a bare inductive `refl` ctor has no inference
-      # rule (`:ctor_requires_checking_mode`) — so the proof stays the PRIMITIVE
-      # `{:refl}` (infers `Eq(ty_s, s', s')`). The BODY is *checked* against the
-      # inductive `const_motive`, so it is the inductive `refl`; the inner rewrite's
-      # inferred result is an inductive `Eq(ty_s, s', s)` which the OUTER rewrite's
-      # widened `ensure_eq` consumes. (Bridge is internal transport; only the outer
-      # motive — abstracted from the user goal — is user-facing.)
-      bridge_proof = {:rewrite, {:refl, s_nf}, const_motive, mk_refl(s_nf)}
+      # `infer({:rewrite,…})`). Since K6 §E.1 (parameters ride the spine), the
+      # inductive `refl` is now inferable — built with the family parameter `ty_s`
+      # ahead of the witness `s_nf`, so `infer` reads the param from the spine and
+      # yields `Eq(ty_s, s_nf, s_nf)`, which the outer `ensure_eq` consumes. The
+      # BODY is *checked* against `const_motive` (the inductive `refl`). This
+      # retires the last producer of the primitive `{:refl}` node. (Bridge is
+      # internal transport; only the outer motive — from the user goal — is
+      # user-facing.)
+      bridge_proof = {:rewrite, mk_refl_infer(ty_s, s_nf), const_motive, mk_refl(s_nf)}
       {:ok, outer_motive} = motive_for(expected, s, ty_s)
 
       build = fn body ->
