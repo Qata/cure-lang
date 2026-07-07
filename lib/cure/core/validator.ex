@@ -86,4 +86,46 @@ defmodule Cure.Core.Validator do
   defp children({:rewrite, p, m, b}), do: [p, m, b]
   defp children({:prim, _op, args}), do: args
   defp children(_leaf), do: []
+
+  @doc "Validate `term` against the Wave-0 config."
+  @spec validate(tuple()) :: {:ok, [diagnostic()]} | {:error, [diagnostic()]}
+  def validate(term), do: validate(term, @wave0_config)
+
+  @doc """
+  Validate `term` against `config`. Returns `{:error, rejections}` if any
+  `:reject`-mode clause is violated, else `{:ok, warnings}`.
+  """
+  @spec validate(tuple(), config()) :: {:ok, [diagnostic()]} | {:error, [diagnostic()]}
+  def validate(term, config) do
+    diags =
+      for node <- nodes(term),
+          {clause, mode} <- config,
+          mode != :off,
+          msg = violation(clause, node),
+          msg != nil do
+        %{clause: clause, mode: mode, message: msg, node: node}
+      end
+
+    case Enum.filter(diags, &(&1.mode == :reject)) do
+      [] -> {:ok, Enum.filter(diags, &(&1.mode == :warn))}
+      rejections -> {:error, rejections}
+    end
+  end
+
+  # -- clause predicates: node -> nil (ok) | message (violation) --------------
+  # Wave-0-active (legacy-form detectors). Match exact node arities so a :case
+  # branch never collides with a 2-tuple :refl node.
+
+  defp violation(:no_hole, {:hole, _}), do: "hole present in Core term (K3)"
+
+  defp violation(:no_eq_node, {:eq, _, _, _}), do: "primitive :eq node; use inductive Eq (K1)"
+  defp violation(:no_eq_node, {:refl, _}), do: "primitive :refl node; use ctor refl (K1)"
+  defp violation(:no_eq_node, {:rewrite, _, _, _}), do: "primitive :rewrite node; use case-sugar (K1)"
+
+  defp violation(:no_prim_node, {:prim, _, _}), do: "primitive :prim node; use delta-globals (K2)"
+
+  defp violation(:no_absurd_node, {:absurd}), do: "absurd node; use empty case (K4)"
+
+  # non-firing fallback for every clause/node not matched above
+  defp violation(_clause, _node), do: nil
 end

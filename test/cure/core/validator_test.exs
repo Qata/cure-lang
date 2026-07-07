@@ -59,4 +59,31 @@ defmodule Cure.Core.ValidatorTest do
       assert {:int_lit, 2} in got
     end
   end
+
+  describe "validate/2 (Wave-0 active clauses)" do
+    test "a clean current-grammar term yields no diagnostics" do
+      assert {:ok, []} = Validator.validate({:lam, {:type, 0}, {:var, 0}})
+    end
+
+    test "a legacy :eq node warns under Wave-0 config" do
+      assert {:ok, [w]} = Validator.validate({:eq, {:type, 0}, {:var, 0}, {:var, 0}})
+      assert w.clause == :no_eq_node and w.mode == :warn
+    end
+
+    test "a hole warns under Wave-0 config (does not reject yet)" do
+      assert {:ok, [w]} = Validator.validate({:hole, :h0})
+      assert w.clause == :no_hole and w.mode == :warn
+    end
+
+    test "an :absurd node and a :prim node each warn" do
+      assert {:ok, [%{clause: :no_absurd_node}]} = Validator.validate({:absurd})
+      assert {:ok, [%{clause: :no_prim_node}]} = Validator.validate({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
+    end
+
+    test "config override to :reject flips admission (the per-wave flip mechanism)" do
+      cfg = Map.put(Validator.wave0_config(), :no_hole, :reject)
+      assert {:error, [r]} = Validator.validate({:hole, :h0}, cfg)
+      assert r.clause == :no_hole and r.mode == :reject
+    end
+  end
 end
