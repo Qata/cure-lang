@@ -95,7 +95,7 @@ mod Compiler.Kernel.Core.Environment
           let is_reflexive = inductive_block_is_reflexive(all_names, types)
           let k = inductive_block_is_k_target(num_params, types)
           let elim_level = inductive_elim_level(level_params, num_params, types)
-          inductive_infos(level_params, elim_level, num_params, types, all_names, constructor_count_for_all(types), 0, is_rec, is_reflexive, k, is_unsafe)
+          inductive_infos(level_params, elim_level, num_params, types, types, all_names, constructor_count_for_all(types), 0, 0, is_rec, is_reflexive, k, is_unsafe)
         QuotDecl() -> quot_infos()
         _ -> [declaration_to_constant_info(decl)]
 
@@ -104,14 +104,14 @@ mod Compiler.Kernel.Core.Environment
         [] -> []
         [definition | rest] -> [DefinitionInfo(definition) | definition_infos(rest)]
 
-  local fn inductive_infos(level_params: List(Name), elim_level: Level, num_params: Int, types: List(InductiveType), all_names: List(Name), num_minors: Int, minor_offset: Int, is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool) -> List(ConstantInfo)
+  local fn inductive_infos(level_params: List(Name), elim_level: Level, num_params: Int, all_types: List(InductiveType), types: List(InductiveType), all_names: List(Name), num_minors: Int, minor_offset: Int, type_index: Int, is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool) -> List(ConstantInfo)
     = match types
         [] -> []
         [InductiveType(name, type_expr, ctors) | rest] ->
           let num_indices = inductive_num_indices(type_expr, num_params)
           let info = InductiveInfo(InductiveVal(ConstantVal(name, level_params, type_expr), num_params, num_indices, all_names, constructor_names(ctors), 0, is_rec, is_unsafe, is_reflexive))
           let ctor_infos = constructor_infos(level_params, name, 0, num_params, ctors, is_unsafe)
-          let rec_infos = recursor_info(level_params, elim_level, name, type_expr, num_params, num_indices, all_names, num_minors, minor_offset, ctors, is_rec, is_reflexive, k, is_unsafe, rest)
+          let rec_infos = recursor_info(level_params, elim_level, name, type_expr, num_params, num_indices, all_types, all_names, num_minors, minor_offset, type_index, ctors, is_rec, is_reflexive, k, is_unsafe, rest)
           [info | Std.List.append(ctor_infos, rec_infos)]
 
   local fn constructor_infos(level_params: List(Name), inductive_name: Name, cidx: Int, num_params: Int, ctors: List(Constructor), is_unsafe: Bool) -> List(ConstantInfo)
@@ -120,17 +120,17 @@ mod Compiler.Kernel.Core.Environment
         [Constructor(name, type_expr) | rest] ->
           [ConstructorInfo(ConstructorVal(ConstantVal(name, level_params, type_expr), inductive_name, cidx, num_params, constructor_num_fields(type_expr, num_params), is_unsafe)) | constructor_infos(level_params, inductive_name, cidx + 1, num_params, rest, is_unsafe)]
 
-  local fn recursor_info(level_params: List(Name), elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, all_names: List(Name), num_minors: Int, minor_offset: Int, ctors: List(Constructor), is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool, rest: List(InductiveType)) -> List(ConstantInfo)
+  local fn recursor_info(level_params: List(Name), elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, all_types: List(InductiveType), all_names: List(Name), num_minors: Int, minor_offset: Int, type_index: Int, ctors: List(Constructor), is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool, rest: List(InductiveType)) -> List(ConstantInfo)
     = let num_motives = Std.List.length(all_names)
       let rec_level_params = recursor_level_params(level_params, elim_level)
       let rules = recursor_rules_for_simple_inductive(elim_level, num_params, num_indices, num_motives, num_minors, minor_offset, is_rec, all_names, ctors)
-      let rec_type = recursor_type_for_simple_inductive(elim_level, name, type_expr, num_params, num_indices, num_motives, num_minors, ctors, is_rec)
-      [RecursorInfo(RecursorVal(ConstantVal(name_append_core(name, mk_simple("rec")), rec_level_params, rec_type), all_names, num_params, num_indices, num_motives, num_minors, rules, k, is_unsafe)) | inductive_infos(level_params, elim_level, num_params, rest, all_names, num_minors, minor_offset + Std.List.length(ctors), is_rec, is_reflexive, k, is_unsafe)]
+      let rec_type = recursor_type_for_simple_inductive(elim_level, name, type_expr, num_params, num_indices, num_motives, num_minors, type_index, all_types, ctors, is_rec)
+      [RecursorInfo(RecursorVal(ConstantVal(name_append_core(name, mk_simple("rec")), rec_level_params, rec_type), all_names, num_params, num_indices, num_motives, num_minors, rules, k, is_unsafe)) | inductive_infos(level_params, elim_level, num_params, all_types, rest, all_names, num_minors, minor_offset + Std.List.length(ctors), type_index + 1, is_rec, is_reflexive, k, is_unsafe)]
 
-  local fn recursor_type_for_simple_inductive(elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, ctors: List(Constructor), is_rec: Bool) -> Expr
+  local fn recursor_type_for_simple_inductive(elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, type_index: Int, all_types: List(InductiveType), ctors: List(Constructor), is_rec: Bool) -> Expr
     = pickup
         num_indices != 0 -> recursor_type_for_indexed_inductive(elim_level, name, type_expr, num_params, num_indices, num_motives, num_minors, ctors, is_rec)
-        num_motives != 1 -> type_expr
+        num_motives != 1 -> recursor_type_for_mutual_inductive(elim_level, name, type_expr, num_params, num_indices, num_motives, num_minors, type_index, all_types, is_rec)
         num_minors != Std.List.length(ctors) -> type_expr
         else ->
           let param_domains = first_pi_domains(type_expr, num_params)
@@ -139,6 +139,51 @@ mod Compiler.Kernel.Core.Environment
           let major_type = inductive_app_for_bvars(name, num_motives + num_minors, num_params)
           let body = App(BVar(num_minors + 1), BVar(0))
           wrap_pi_domains(Std.List.append(param_domains, Std.List.append([motive_type], Std.List.append(minor_types, [major_type]))), body, mk_simple("_rec_arg"))
+
+  local fn recursor_type_for_mutual_inductive(elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, type_index: Int, all_types: List(InductiveType), is_rec: Bool) -> Expr
+    = pickup
+        is_rec -> type_expr
+        num_indices != 0 -> type_expr
+        num_minors != constructor_count_for_all(all_types) -> type_expr
+        else ->
+          let param_domains = first_pi_domains(type_expr, num_params)
+          let motive_types = mutual_motive_types(elim_level, all_types, num_params)
+          let minor_types = mutual_recursor_minor_types(num_params, num_motives, all_types, 0, 0)
+          let major_type = inductive_app_for_bvars(name, num_motives + num_minors, num_params)
+          let body = App(BVar(num_minors + 1 + num_motives - 1 - type_index), BVar(0))
+          wrap_pi_domains(Std.List.append(param_domains, Std.List.append(motive_types, Std.List.append(minor_types, [major_type]))), body, mk_simple("_rec_arg"))
+
+  local fn mutual_motive_types(elim_level: Level, types: List(InductiveType), num_params: Int) -> List(Expr)
+    = match types
+        [] -> []
+        [InductiveType(name, _, _) | rest] ->
+          let motive_type = Pi(mk_simple("_motive_arg"), BinderDefault(), inductive_app_for_bvars(name, 0, num_params), Sort(elim_level))
+          [motive_type | mutual_motive_types(elim_level, rest, num_params)]
+
+  local fn mutual_recursor_minor_types(num_params: Int, num_motives: Int, types: List(InductiveType), type_index: Int, minor_offset: Int) -> List(Expr)
+    = match types
+        [] -> []
+        [InductiveType(_, _, ctors) | rest] ->
+          Std.List.append(mutual_recursor_minor_types_for_ctors(num_params, num_motives, type_index, minor_offset, ctors, 0), mutual_recursor_minor_types(num_params, num_motives, rest, type_index + 1, minor_offset + Std.List.length(ctors)))
+
+  local fn mutual_recursor_minor_types_for_ctors(num_params: Int, num_motives: Int, type_index: Int, minor_offset: Int, ctors: List(Constructor), ctor_index: Int) -> List(Expr)
+    = match ctors
+        [] -> []
+        [Constructor(ctor_name, type_expr) | rest] ->
+          let nfields = constructor_num_fields(type_expr, num_params)
+          let domains = constructor_field_domains_for_recursor(type_expr, num_params, num_motives + minor_offset + ctor_index)
+          let minor_type = mutual_recursor_minor_type(ctor_name, num_params, num_motives, type_index, minor_offset + ctor_index, nfields, domains)
+          [minor_type | mutual_recursor_minor_types_for_ctors(num_params, num_motives, type_index, minor_offset, rest, ctor_index + 1)]
+
+  local fn mutual_recursor_minor_type(ctor_name: Name, num_params: Int, num_motives: Int, type_index: Int, minor_index: Int, nfields: Int, domains: List(Expr)) -> Expr
+    = let body = mutual_recursor_minor_body(ctor_name, num_params, num_motives, type_index, minor_index, nfields)
+      wrap_pi_domains(domains, body, mk_simple("_field"))
+
+  local fn mutual_recursor_minor_body(ctor_name: Name, num_params: Int, num_motives: Int, type_index: Int, minor_index: Int, nfields: Int) -> Expr
+    = let motive = BVar(nfields + minor_index + num_motives - 1 - type_index)
+      let params = bvar_refs_from(nfields + minor_index + num_motives, num_params)
+      let ctor = mk_apps(Const(ctor_name, []), Std.List.append(params, bvar_refs_from(0, nfields)))
+      App(motive, ctor)
 
   local fn recursor_type_for_indexed_inductive(elim_level: Level, name: Name, type_expr: Expr, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, ctors: List(Constructor), is_rec: Bool) -> Expr
     = pickup
@@ -485,6 +530,10 @@ mod Compiler.Kernel.Core.Environment
         [InductiveType(_, type_expr, ctors)] ->
           pickup
             inductive_result_is_prop(type_expr) -> prop_inductive_is_large_eliminator(num_params, ctors)
+            else -> true
+        [InductiveType(_, type_expr, _) | _] ->
+          pickup
+            inductive_result_is_prop(type_expr) -> false
             else -> true
         _ -> false
 

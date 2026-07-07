@@ -330,6 +330,55 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
               Error(_) -> assert(false)
           Error(_) -> assert(false)
       Error(_) -> assert(false)
+
+  fn test_mutual_recursor_type_checks() -> Atom =
+    let a_name = mk_simple("MutA")
+    let b_name = mk_simple("MutB")
+    let a_ctor = str(a_name, "mk")
+    let b_ctor = str(b_name, "mk")
+    let a_rec = name_append_core(a_name, mk_simple("rec"))
+    let b_rec = name_append_core(b_name, mk_simple("rec"))
+    let decl = InductiveDecl([], 0, [InductiveType(a_name, Sort(LevelSucc(LevelZero())), [Constructor(a_ctor, Const(a_name, []))]), InductiveType(b_name, Sort(LevelSucc(LevelZero())), [Constructor(b_ctor, Const(b_name, []))])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, a_rec)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, a_levels, a_type), _, _, _, a_motives, a_minors, _, _, _))) ->
+            assert(a_levels == [mk_simple("u")])
+            assert(a_motives == 2)
+            assert(a_minors == 2)
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), a_type, a_levels)
+              Ok(_) ->
+                match environment_find(env, b_rec)
+                  Some(RecursorInfo(RecursorVal(ConstantVal(_, b_levels, b_type), _, _, _, b_motives, b_minors, _, _, _))) ->
+                    assert(b_levels == [mk_simple("u")])
+                    assert(b_motives == 2)
+                    assert(b_minors == 2)
+                    match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), b_type, b_levels)
+                      Ok(_) -> :ok
+                      Error(_) -> assert(false)
+                  _ -> assert(false)
+              Error(_) -> assert(false)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+
+  fn test_mutual_recursor_iota_reduces_second_type() -> Atom =
+    let a_name = mk_simple("MutAIota")
+    let b_name = mk_simple("MutBIota")
+    let a_ctor = str(a_name, "mk")
+    let b_ctor = str(b_name, "mk")
+    let b_rec = name_append_core(b_name, mk_simple("rec"))
+    let decl = InductiveDecl([], 0, [InductiveType(a_name, Sort(LevelSucc(LevelZero())), [Constructor(a_ctor, Const(a_name, []))]), InductiveType(b_name, Sort(LevelSucc(LevelZero())), [Constructor(b_ctor, Const(b_name, []))])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        let a_motive = Lambda(mk_simple("a"), BinderDefault(), Const(a_name, []), Sort(LevelZero()))
+        let b_motive = Lambda(mk_simple("b"), BinderDefault(), Const(b_name, []), Sort(LevelZero()))
+        let a_minor = Sort(LevelZero())
+        let b_minor = Sort(LevelSucc(LevelZero()))
+        let rec_app = App(App(App(App(App(Const(b_rec, [LevelZero()]), a_motive), b_motive), a_minor), b_minor), Const(b_ctor, []))
+        match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
+          Ok(result) -> assert(expr_eq(result, b_minor))
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
   
   fn test_recursive_recursor_iota_passes_induction_hypothesis() -> Atom =
     let nat_name = mk_simple("Natish")
