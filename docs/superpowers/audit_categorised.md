@@ -232,10 +232,26 @@ already, but still referenced (esp. by Antigen oracles).
     `Sym` identity STRUCTURALLY prevents (§D). So collision-detect lands WITH the
     Sym migration, not as a dynamic stopgap. `register_builtin` already enforces
     the single-registration invariant for builtin keys.
-  - **Slice 4 (full structural `Sym`) — NOT STARTED.** Assess first whether
-    globals are already effectively qualified via the `Cure.` module-atom prefix:
-    if so, cross-module collision is not currently exercisable ⇒ the migration is
-    cleanliness (deferrable w/ proof), and slices 1–3 are the sound content.
+  - **Slice 4 (full structural `Sym`) — ASSESSED: TCB-part = cleanliness (defer);
+    one genuine E-LAYER gap flagged.** The kernel keys by bare atoms, but the
+    collision-freeness it relies on is delivered by the E-layer `Resolution`
+    module (Approach B, the LOCKED type-shadowing decision): family/ctor
+    collisions between modules are RE-KEYED to `:"Mod#Name"` and unqualified
+    ambiguous use errors. So for families/ctors the bare-atom keys reaching Core
+    are already collision-free ⇒ the full structural `Sym` migration is
+    **cleanliness for the TCB, not soundness** — deferred with proof. Slices 1–2
+    (decode-boundary DoS, both in `lib/cure/core/*`) are the sound Core content.
+    **Genuine finding (E-layer, out of Core-cleanup scope):** GLOBALS (function
+    defs) are NOT protected symmetrically — `Resolution.rekey_term` leaves
+    `:global` bare, `merge_env` (program.ex:544) silently `Map.merge`s `defs`
+    (right-wins), and the ambiguity machinery covers `families`/`ctors` only, not
+    `defs`. So two imported modules that both define `foo` silently overwrite, and
+    qualified `A.foo`/`B.foo` both collapse to bare `:foo` (resolve_qualified
+    tries `:"Mod#foo"` then bare, but defs are never under the re-keyed key). This
+    is a real fail-silent gap, but it is E-LAYER (`lib/cure/elab/*`), and closing
+    it extends the LOCKED Approach-B design to globals (re-key? def-ambiguity
+    error? qualified globals?) — a design choice FLAGGED for the operator, not
+    landed unilaterally under the Core-cleanup cron.
 
 ## K13 — Refinements / SMT trusted only as lint, not proof (dependent/final mode)
 - Doc 1: **7** (refinements + SMT are warning-only in final/static/dependent).
