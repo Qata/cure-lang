@@ -146,23 +146,25 @@ defmodule Cure.Elab.Declarations do
         # argument names as plain labels.
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        case Keyword.get(meta, :type_params, []) do
-          [] ->
-            # Route through the GADT-ctor machinery with NAMED field domains so a
-            # field's type may reference an EARLIER field (a dependent record):
-            # `elaborate_gadt_ctor`'s named-binder scope-threading binds each field
-            # name for subsequent field types. Non-dependent records are unaffected —
-            # the resulting ctor telescope is still named by the fields, which is what
-            # construction/projection read.
-            sig = struct_ctor_sig(name, [], variants)
-            working_env = Inductive.declare(env, Inductive.family(name, [], [], 0), [])
+        with :ok <- check_no_duplicate_fields(variants) do
+          case Keyword.get(meta, :type_params, []) do
+            [] ->
+              # Route through the GADT-ctor machinery with NAMED field domains so a
+              # field's type may reference an EARLIER field (a dependent record):
+              # `elaborate_gadt_ctor`'s named-binder scope-threading binds each field
+              # name for subsequent field types. Non-dependent records are unaffected —
+              # the resulting ctor telescope is still named by the fields, which is what
+              # construction/projection read.
+              sig = struct_ctor_sig(name, [], variants)
+              working_env = Inductive.declare(env, Inductive.family(name, [], [], 0), [])
 
-            with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
-              declare_at_min_level(env, name, [ctor], 0)
-            end
+              with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
+                declare_at_min_level(env, name, [ctor], 0)
+              end
 
-          type_params ->
-            declare_parameterized_struct(name, type_params, variants, env)
+            type_params ->
+              declare_parameterized_struct(name, type_params, variants, env)
+          end
         end
 
       other ->
@@ -454,6 +456,23 @@ defmodule Cure.Elab.Declarations do
 
   defp type_var_name?(<<c, _::binary>>) when c in ?a..?z, do: true
   defp type_var_name?(_), do: false
+
+  # A record must not declare the same field name twice: fields become the named
+  # constructor telescope (and records compile to BEAM maps keyed by field name), so
+  # a duplicate silently collapses one field. Idris/Agda/Lean reject duplicate record
+  # fields.
+  defp check_no_duplicate_fields(fields) do
+    names =
+      Enum.flat_map(fields, fn
+        {:param, _m, fname} -> [fname]
+        _ -> []
+      end)
+
+    case names -- Enum.uniq(names) do
+      [] -> :ok
+      [dup | _] -> {:error, {:duplicate_field, String.to_atom(dup)}}
+    end
+  end
 
   defp elaborate_param_telescope(params, env) do
     # A telescope must not bind the same parameter name twice: a later parameter's
