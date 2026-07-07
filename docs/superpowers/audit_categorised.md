@@ -312,6 +312,15 @@ Two deliberate deviations from the raw notes:
    recorded as comments at both drop sites so it is not regressed into propagation.
 5. **K13 — Reject unknown SMT/refinement obligations in final mode.** *§18 Phase 1
    #7; matches the locked "Z3 out of the TCB, lint-only" decision.*
+   **LANDED (228d71d):** the untrusted SMT lint rendered any untranslatable AST
+   node to a marker-`true`; today that accidentally breaks the query so Z3 returns
+   :unknown, but the safety was an artifact of Z3 rejecting a malformed comment.
+   Added `Translator.fully_translatable?/1` (shared markers) and guarded
+   `Solver.prove_implication` / `prove_with_counterexample` to fail closed to
+   :unknown BEFORE running any query — deterministic, Z3-independent. The
+   refinement checker already treats :unknown as first-class not-proven, so its
+   final/release policy applies (no separate mode flag needed; SMT-refinement is a
+   lint layer outside the dependent-Core TCB and outside Idris parity).
 6. **K14 — Ban `Any` in static/dependent/final mode.** *§18 Phase 2 #8; mostly
    enforced for free by the Wave-0 validator.*
 
