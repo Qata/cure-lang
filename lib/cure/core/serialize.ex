@@ -140,7 +140,9 @@ defmodule Cure.Core.Serialize do
 
   defp build_node("type", [{:int, n}]), do: {:ok, {:type, n}}
   defp build_node("var", [{:int, k}]), do: {:ok, {:var, k}}
-  defp build_node("global", [{:atom, n}]), do: {:ok, {:global, String.to_atom(n)}}
+  defp build_node("global", [{:atom, n}]) do
+    with {:ok, a} <- sym_atom(n), do: {:ok, {:global, a}}
+  end
   defp build_node("int-type", []), do: {:ok, {:int_type}}
   defp build_node("float-type", []), do: {:ok, {:float_type}}
   defp build_node("int", [{:int, n}]), do: {:ok, {:int_lit, n}}
@@ -168,16 +170,18 @@ defmodule Cure.Core.Serialize do
   end
 
   defp build_node("prim", [{:atom, op} | args]) do
-    with {:ok, cargs} <- build_all(args), do: {:ok, {:prim, String.to_atom(op), cargs}}
+    with {:ok, o} <- sym_atom(op), {:ok, cargs} <- build_all(args),
+         do: {:ok, {:prim, o, cargs}}
   end
 
   defp build_node("ctor", [{:atom, name} | args]) do
-    with {:ok, cargs} <- build_all(args), do: {:ok, {:ctor, String.to_atom(name), cargs}}
+    with {:ok, a} <- sym_atom(name), {:ok, cargs} <- build_all(args),
+         do: {:ok, {:ctor, a, cargs}}
   end
 
   defp build_node("data", [{:atom, name}, {:sexp, ps}, {:sexp, is}]) do
-    with {:ok, cps} <- build_all(ps), {:ok, cis} <- build_all(is),
-         do: {:ok, {:data, String.to_atom(name), cps, cis}}
+    with {:ok, a} <- sym_atom(name), {:ok, cps} <- build_all(ps), {:ok, cis} <- build_all(is),
+         do: {:ok, {:data, a, cps, cis}}
   end
 
   defp build_node("case", [scrut, motive | branches]) do
@@ -208,13 +212,25 @@ defmodule Cure.Core.Serialize do
   defp build_branches(branches) do
     Enum.reduce_while(branches, {:ok, []}, fn
       {:sexp, [{:atom, "branch"}, {:atom, ctor}, {:int, arity}, body]}, {:ok, acc} ->
-        case build(body) do
-          {:ok, b} -> {:cont, {:ok, acc ++ [{String.to_atom(ctor), arity, b}]}}
+        with {:ok, a} <- sym_atom(ctor), {:ok, b} <- build(body) do
+          {:cont, {:ok, acc ++ [{a, arity, b}]}}
+        else
           {:error, _} = err -> {:halt, err}
         end
 
       _other, _acc ->
         {:halt, {:error, :malformed_branch}}
     end)
+  end
+
+  # Bounded symbol interning (K12 / spec §D): decode names into EXISTING atoms
+  # only. Untrusted C2 input cannot then exhaust the atom table — an unknown
+  # symbol fails the decode cleanly (`:unknown_symbol`) instead of minting a new
+  # permanent atom. Every symbol in a real program is already interned by the
+  # compiler, so valid terms still round-trip.
+  defp sym_atom(s) do
+    {:ok, String.to_existing_atom(s)}
+  rescue
+    ArgumentError -> {:error, {:unknown_symbol, s}}
   end
 end
