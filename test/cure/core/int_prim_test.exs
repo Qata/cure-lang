@@ -25,6 +25,14 @@ defmodule Cure.Core.IntPrimTest do
     assert {:vneutral, {:nprim, :div, [{:vint, 1}, {:vint, 0}]}} = v
   end
 
+  test "remainder by zero stays stuck rather than crashing (K2 §G.1 rule 1)" do
+    # rem is partial like div: on a zero divisor it must not fire — it stays a
+    # neutral term so normalization is total and conversion compares it
+    # syntactically. Completes the partial-op soundness coverage alongside div.
+    v = Eval.eval({:prim, :rem, [{:int_lit, 7}, {:int_lit, 0}]}, [])
+    assert {:vneutral, {:nprim, :rem, [{:vint, 7}, {:vint, 0}]}} = v
+  end
+
   test "reify round-trips Int type, literals, and stuck prims" do
     assert Quote.reify({:vint_type}) == {:int_type}
     assert Quote.reify({:vint, 8}) == {:int_lit, 8}

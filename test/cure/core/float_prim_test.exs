@@ -13,6 +13,15 @@ defmodule Cure.Core.FloatPrimTest do
     assert Eval.eval({:prim, :div, [{:float_lit, 7.0}, {:float_lit, 2.0}]}, []) == {:vfloat, 3.5}
   end
 
+  test "float division by zero stays stuck rather than reducing (K2 §G.1 rule 1)" do
+    # A partial op must NOT fire when undefined: it stays a neutral term (compared
+    # syntactically by conversion), so normalization stays total and the kernel
+    # never invents a value for x / 0.0. Locks the soundness invariant against the
+    # eventual {:prim}->delta-global migration.
+    v = Eval.eval({:prim, :div, [{:float_lit, 7.0}, {:float_lit, 0.0}]}, [])
+    assert {:vneutral, {:nprim, :div, [{:vfloat, 7.0}, {:vfloat, 0.0}]}} = v
+  end
+
   test "eval folds float comparisons to Bool constructor values" do
     assert Eval.eval({:prim, :lt, [{:float_lit, 1.0}, {:float_lit, 2.0}]}, []) ==
              Eval.eval({:ctor, :True, []}, [])
