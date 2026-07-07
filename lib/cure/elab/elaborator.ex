@@ -1063,8 +1063,7 @@ defmodule Cure.Elab.Elaborator do
         bridge_step(ctx, proof, ty, a, b, expected, bridge)
 
       contains_term?(expected, b) ->
-        {:ok, motive} = motive_for(expected, b, ty)
-        {:ok, fn body -> {:rewrite, proof, motive, body} end, replace_term(expected, b, a)}
+        {:ok, rw_case_build(ctx, proof, ty, [a, b], expected), replace_term(expected, b, a)}
 
       true ->
         {:error, {:rewrite_no_match, a, b, expected}}
@@ -1159,6 +1158,20 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, ty_value} <- Kernel.infer(ctx, term) do
       {:ok, Quote.reify(ty_value, Context.length(ctx))}
     end
+  end
+
+  # Phase B (K1 rewrite→:case): emit transport as a single-branch dependent `:case`
+  # on the Eq proof against `refl`, reusing the tested `build_motive` (occurrence
+  # abstraction of the scrutinee indices) + the kernel's `:case` checker, instead of
+  # the primitive `{:rewrite}` eliminator. `endpoints` are the scrutinee's actual
+  # index terms `[a, b]`; `build_motive` guarantees `motive @ endpoints ++ [proof]`
+  # recovers `expected`. The body was checked against the outer-context goal, so it
+  # is shifted by 1 into the `refl` branch (which binds the erased witness `w`).
+  defp rw_case_build(ctx, proof, ty, endpoints, expected) do
+    sig = Context.signature(ctx)
+    index_tele = Inductive.get_family(sig, :Eq).indices
+    motive = build_motive(:Eq, index_tele, [ty], endpoints, proof, expected)
+    fn body -> {:case, proof, motive, [{:refl, 1, Subst.shift(body, 1, 0)}]} end
   end
 
   defp symmetry_proof(proof, ty, a, _b) do
