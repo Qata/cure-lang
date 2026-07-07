@@ -227,18 +227,33 @@ to the correct side of the fork.
 
 ### E.1 Constructor values (K6)
 
-`{:ctor, sym, args}` gains **family identity** from the qualified `sym` (§D),
-which resolves to the constructor's stored signature — the arity split into (data
-params, indices, fields). The kernel checks `args` against that signature. The
-**data parameters are carried at grade 0**: present for checking and for
-independent re-verification (§K), erased at runtime (zero footprint) — exactly the
-QTT treatment, and why this is an erasure win rather than a cost. This resolves
-K6's "flat args / lost constructor identity": `:data` already stores
-`params`/`indices` separately, and `:ctor` now has the identity to consult that
-split. (Representation sub-choice: keep `args` a flat spine split by the signature
-— the minimal-grammar default — or make the groups structural as
-`{:ctor, sym, params, fields}`. Flat-spine-plus-signature is the default; noted
-for review.)
+**Decision: flat spine `{:ctor, sym, args}`, split by the signature — Lean's
+kernel representation.** `sym` (§D) gives the constructor **family identity** and
+resolves to its stored signature (a graded telescope naming which leading
+arguments are the data **parameters** and which are the **fields**; the family's
+**indices** are *not* stored — they are computed from the field values via the
+constructor's return type). The kernel splits `args` using that signature. The
+data **parameters ride the spine at grade 0** — present so a constructor is
+checkable in inference position and re-checkable by the independent verifier (§K),
+erased at runtime (zero footprint). This is exactly how Lean's kernel stores
+constructor applications (params in the spine, `nparams`/`nfields` in the
+environment); Agda goes further and drops params from the value entirely — we keep
+Lean's form because it keeps synthesis signature-local and makes the Lean
+projection (§L) an identity on this node.
+
+Why flat over a structural `{:ctor, sym, params, fields}`: the signature is
+already the sole authority on per-argument grades and on the param/field boundary,
+and must be consulted to type the constructor at all. Storing the split *again* in
+the value would duplicate derivable data — a consistency invariant the validator
+would then have to police — and would re-tuple the node the moment a new argument
+category appears. A flat spine keeps the de Bruijn operations one-liners, keeps
+the trusted term minimal, and makes any future argument category a *signature*
+change rather than a *grammar* change (the reserve-fields-keep-the-rest-additive
+discipline). The one cost — iota-reduction consulting the signature to drop the
+params — is the cost Lean and Agda both accept, and the environment is always in
+hand during reduction. K6's "flat args / lost constructor identity" is resolved by
+the `sym` identity plus signature-driven checking, not by re-structuring the
+value.
 
 ### E.2 Index refinement & coverage (K5) — the soundness-critical eliminator rule
 
