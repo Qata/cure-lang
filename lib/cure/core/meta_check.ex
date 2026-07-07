@@ -22,4 +22,38 @@ defmodule Cure.Core.MetaCheck do
       _ -> false
     end
   end
+
+  @doc """
+  Progress (#639): a closed well-typed `term` normalizes (no fuel exhaustion) to a
+  term with a canonical/value head — never a stuck eliminator. False if ill-typed.
+  """
+  @spec progresses?(Context.t(), tuple()) :: boolean()
+  def progresses?(ctx, term) do
+    case Kernel.infer(ctx, term) do
+      {:ok, _ty} ->
+        case Kernel.normalize(ctx, term) do
+          :fuel_exhausted -> false
+          nf -> canonical_head?(nf)
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp canonical_head?({:lam, _, _}), do: true
+  defp canonical_head?({:lam, _, _, _}), do: true
+  defp canonical_head?({:pair, _, _}), do: true
+  defp canonical_head?({:ctor, _, _}), do: true
+  defp canonical_head?({:type, _}), do: true
+  defp canonical_head?({:pi, _, _}), do: true
+  defp canonical_head?({:pi, _, _, _}), do: true
+  defp canonical_head?({:sigma, _, _}), do: true
+  defp canonical_head?({:sigma, _, _, _}), do: true
+  defp canonical_head?({:data, _, _, _}), do: true
+  defp canonical_head?({:int_type}), do: true
+  defp canonical_head?({:int_lit, _}), do: true
+  defp canonical_head?({:float_type}), do: true
+  defp canonical_head?({:float_lit, _}), do: true
+  defp canonical_head?(_), do: false
 end
