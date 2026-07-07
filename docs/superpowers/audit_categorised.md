@@ -301,6 +301,15 @@ Two deliberate deviations from the raw notes:
    rewrite→primitive back-bridge; canonical transport is Wave 5.*
 4. **K5a — Acute index-unifier soundness fixes** (`unify_spine` mismatch→success
    #574, stop dropping `:undecided` #575, length-check #573). *§640 #3/#4.*
+   **LANDED (ea669e2, 3b04ec3):** #573 was the live bug — `unify_indices` zipped
+   the result/scrutinee index vectors with `Enum.zip`, silently truncating a
+   length mismatch to :trivial/:solved; now length-guarded → :impossible. #574:
+   `unify_spine` length-mismatch catch-all `{:ok}`→:impossible (defensive;
+   unreachable given caller length-guards). #575: analysed + DECLINED with proof —
+   dropping :undecided is conservative here (trusted case-checker skips a branch
+   body only on :impossible; a dropped/partial subst makes `expected` MORE general
+   ⇒ body-check STRICTER ⇒ only false rejection, never false acceptance). Proof
+   recorded as comments at both drop sites so it is not regressed into propagation.
 5. **K13 — Reject unknown SMT/refinement obligations in final mode.** *§18 Phase 1
    #7; matches the locked "Z3 out of the TCB, lint-only" decision.*
 6. **K14 — Ban `Any` in static/dependent/final mode.** *§18 Phase 2 #8; mostly
