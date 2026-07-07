@@ -60,6 +60,10 @@ defmodule Cure.Core.Validator do
   @spec wave0_config() :: config()
   def wave0_config, do: @wave0_config
 
+  @doc "Active config for kernel admission; Wave-0 by default, overridable in config/tests."
+  @spec check_def_config() :: config()
+  def check_def_config, do: Application.get_env(:cure, :final_core_config, @wave0_config)
+
   @doc "All Core sub-terms of `term`, pre-order (the term itself first)."
   @spec nodes(tuple()) :: [tuple()]
   def nodes(term), do: [term | Enum.flat_map(children(term), &nodes/1)]

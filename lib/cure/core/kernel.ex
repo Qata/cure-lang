@@ -361,9 +361,38 @@ defmodule Cure.Core.Kernel do
       %{type: type_term, body: body_term} ->
         ctx = Context.empty(env)
 
-        with {:ok, _level} <- infer_sort(ctx, type_term) do
-          check(ctx, body_term, Eval.eval(type_term, []))
+        with {:ok, _level} <- infer_sort(ctx, type_term),
+             :ok <- check(ctx, body_term, Eval.eval(type_term, [])),
+             :ok <- run_final_core_validator(type_term, body_term) do
+          :ok
         end
+    end
+  end
+
+  # Final-Core grammar-boundary instrumentation (K11a). Scans BOTH the declared
+  # type and the body — a legacy node in a signature is as much a checklist hit
+  # as one in the body. Emits warnings via the pipeline and rejects only clauses
+  # configured to :reject (none, by Wave-0 default); on a mixed verdict,
+  # rejections from either term are combined.
+  defp run_final_core_validator(type_term, body_term) do
+    cfg = Cure.Core.Validator.check_def_config()
+
+    case {Cure.Core.Validator.validate(type_term, cfg), Cure.Core.Validator.validate(body_term, cfg)} do
+      {{:ok, w1}, {:ok, w2}} ->
+        Enum.each(w1 ++ w2, fn d ->
+          Cure.Pipeline.Events.emit(
+            :kernel,
+            :final_core_violation,
+            %{clause: d.clause, message: d.message},
+            %{}
+          )
+        end)
+
+        :ok
+
+      {{:error, r1}, {:ok, _}} -> {:error, {:final_core_violation, r1}}
+      {{:ok, _}, {:error, r2}} -> {:error, {:final_core_violation, r2}}
+      {{:error, r1}, {:error, r2}} -> {:error, {:final_core_violation, r1 ++ r2}}
     end
   end
 

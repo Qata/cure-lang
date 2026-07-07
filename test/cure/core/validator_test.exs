@@ -116,4 +116,48 @@ defmodule Cure.Core.ValidatorTest do
       assert {:ok, []} = Validator.validate({:pi, {:type, 0}, {:global, :foo}})
     end
   end
+
+  describe "check_def_config/0 and kernel wiring" do
+    alias Cure.Core.{Validator, Env, Kernel}
+
+    test "check_def_config defaults to the Wave-0 config" do
+      assert Validator.check_def_config() == Validator.wave0_config()
+    end
+
+    test "a clean def still admits under the default (non-breaking)" do
+      # idty : Type 0 -> Type 0  ;  body = λx. x  (clean, admits)
+      env = Env.add_def(Env.empty(), :idty, {:pi, {:type, 0}, {:type, 0}}, {:lam, {:type, 0}, {:var, 0}})
+      assert :ok == Kernel.check_def(env, :idty)
+    end
+
+    test "with a reject-override config, a hole-bearing def fails admission" do
+      env = Env.add_def(Env.empty(), :withhole, {:pi, {:type, 0}, {:type, 0}}, {:lam, {:type, 0}, {:hole, :h}})
+
+      Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_hole, :reject))
+      on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)
+
+      assert {:error, {:final_core_violation, [%{clause: :no_hole}]}} = Kernel.check_def(env, :withhole)
+    end
+
+    test "a legacy node in the declared TYPE is caught too, not just the body" do
+      # helper : Eq(Int, 1, 1) ; body = refl(1) — a legacy `:eq` node used AS a
+      # definition's type (still typeable pre-K1). `eqty` reuses that same `:eq`
+      # type but its body is a clean `{:global, :helper}` reference, so the ONLY
+      # legacy node reachable from `eqty`'s own {type_term, body_term} pair is in
+      # its type_term. If the wiring only scanned body_term (the pre-fix shape),
+      # this def would wrongly admit even under a :reject override.
+      eq_ty = {:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}}
+
+      env =
+        Env.empty()
+        |> Env.add_def(:helper, eq_ty, {:refl, {:int_lit, 1}})
+        |> Env.add_def(:eqty, eq_ty, {:global, :helper})
+
+      Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_eq_node, :reject))
+      on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)
+
+      assert {:error, {:final_core_violation, rejections}} = Kernel.check_def(env, :eqty)
+      assert Enum.any?(rejections, &(&1.clause == :no_eq_node))
+    end
+  end
 end

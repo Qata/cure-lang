@@ -57,6 +57,9 @@ defmodule Cure.Pipeline.Events do
           | :registry
           | :synthesis
           | :doc_mermaid
+          # :kernel — the trusted Core kernel's Final-Core grammar-boundary
+          # instrumentation (K11a); every other stage maps to a compilation phase.
+          | :kernel
   @type event_type :: atom()
   @type metadata :: %{file: String.t(), line: pos_integer(), timestamp: integer()}
 
