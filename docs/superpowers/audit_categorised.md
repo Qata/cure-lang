@@ -55,6 +55,30 @@ eliminator/transport. **This is the single most-duplicated theme.**
 ## K2 — Primitive operations in Core; type them properly
 `{:prim, op, args}` should not be the operation model; ops need real typed
 signatures before entering Core. Includes Bool-as-hardcoded-atoms.
+- **ASSESSED — §G.1 soundness rules ALREADY MET + now fully pinned (b8668de);
+  `{:prim}`→delta-global migration is spec-deferred cleanliness, DECLINED (proof).**
+  The genuine soundness content of K2 is spec §G.1's two rules, and the kernel
+  already satisfies both: (1) *partial ops non-reducing when undefined* — a SINGLE
+  reducer (`Eval.fold`) returns `:stuck` for `div`/`rem`/float-`div` on a zero
+  divisor (→ neutral `{:nprim,…}`), a total catch-all never raises, and conv
+  (`conv_neutral?`, conv.ex:138) compares the stuck neutral SYNTACTICALLY;
+  (2) *BEAM-faithful ints* — folds compute with Elixir arbitrary-precision ints
+  (Erlang `div`/`rem` truncate-toward-zero = AtomVM), and Bool folds yield the
+  INDUCTIVE `{:vctor, :True/:False, []}` (so #55 "Erlang booleans" is not a kernel
+  issue). normalise/conv do NOT fold prims separately — no second unguarded
+  reducer. Completed the regression coverage (int div-by-zero was pinned; added
+  int rem + float div by zero). #607 (div typed total) and #608 (numeric eq/ne) are
+  NOT soundness holes — the spec keeps `div : Int→Int→Int` sound via the
+  non-reducing fallback (NonZero-proof div is an optional stdlib layer), and
+  numeric eq/ne are legitimate decidable-equality delta-ops (intentionally kept).
+  The `{:prim}`-node DELETION → typed delta-global constants is a REPRESENTATION
+  change that spec §G itself defers to "the K2 wave spec" (unwritten) and that buys
+  NO additional soundness (the node is already sound) — declined under the analysis
+  discipline; `no_prim_node` validator clause stays `:off` until that migration.
+  Bool-as-prim sub-cluster (546/579/627/631/55/559) is largely handled: connectives
+  retired to Std.Bool, kernel Bool folds are inductive ctor values; residual
+  `:True`/`:False` literals in fold are a plumbing choice guarded by the Task-10
+  antibody (agreement with Builtins schemas), not a soundness gap.
 - Doc 1: **13** (remove `{:prim,op,args}` as op model), **14** (proof-producing
   comparison APIs).
 - Doc 2: **527** (prim ops = separate node vs typed constants), **528** (partial
