@@ -33,14 +33,23 @@ one question at a time and needs your answers), so it cannot run unattended.
 ## The deferred gaps — pick one to design first
 
 ### Group A — the cron's named feature gaps
-1. **Unsafe-hole taxonomy** *(most design-ready — recommended first)*. The 3
-   position-kinds (type / proof / body) + an `unsafe` keyword, with a per-hole
-   safety flag. Design is already LOCKED (memory `holes-unsafe-taxonomy-decision`);
-   Wave-1 K3 shipped the firewall (`no_hole: :reject` at release) only. Brainstorming
-   here is mostly confirming the locked design and sequencing — lowest-risk start.
-2. **Bucket B / C stdlib-dependent extensions.** `Bounded` (native-int `Fin`), flesh
-   out `Vector` (lookup/head/map/…), `Ordering`-as-inductive (memory
-   `stdlib-dependent-expansion`). Concrete, incremental, low kernel risk.
+1. **Unsafe-hole taxonomy** *(grade-wave-coupled — NOT the quick win it first looks)*.
+   The 3 position-kinds (type / proof / body) + an `unsafe` keyword, with a per-hole
+   safety flag `{:hole, name, safety}`. The DECISION is locked (memory
+   `holes-unsafe-taxonomy-decision`) and Wave-1 K3 shipped the firewall
+   (`no_hole: :reject` at release, commits f7cfa6e→a2409a8). BUT the full taxonomy's
+   proof-vs-body split *is* erased-vs-relevant, so the locked note explicitly
+   sequences it **with the grade wave** and calls it "its OWN brainstorm/spec". So
+   this gap first needs a decision on grade-wave sequencing — a real design
+   conversation, not a rubber-stamp. (Note: the `{0,ω}` erasure *soundness* is
+   already enforced via the relevance check; what the grade wave adds is the
+   per-binder grade *field* — a representation/faithfulness change, so this gap is a
+   feature, not a soundness fix.)
+2. **Bucket B / C stdlib-dependent extensions** *(lowest-risk standalone start —
+   recommended first)*. `Bounded` (native-int `Fin`), flesh out `Vector`
+   (lookup/head/map/…), `Ordering`-as-inductive (memory `stdlib-dependent-expansion`).
+   Concrete, incremental, no kernel/grade-wave coupling — the cleanest way to
+   re-establish the design→plan→implement rhythm.
 3. **Safe FRP Types (ICFP'09).** Derive the Dec/Init index algebra + `switch` from
    the paper PDF (Agda source is gone — memory `frp-source-unavailable-derive-from-paper`,
    `reactive-runtime-design-bible`). Largest / most research-y; the Lean-shape
@@ -59,10 +68,12 @@ one question at a time and needs your answers), so it cannot run unattended.
 
 ## Recommended next step
 
-Start a `superpowers:brainstorming` session on **gap #1 (unsafe-hole taxonomy)** —
-its design is already locked, so it converges fast and re-establishes the
-design→plan→implement rhythm on low risk. Then tackle #2, then #3. Group B items are
-opt-in parity work with no soundness urgency.
+Start a `superpowers:brainstorming` session on **gap #2 (Bucket B/C stdlib
+extensions)** — it has no kernel or grade-wave coupling, so it converges fast and
+re-establishes the design→plan→implement rhythm on the lowest risk. Gap #1
+(unsafe-hole taxonomy) is better done once its grade-wave sequencing is decided; gap
+#3 (FRP) is the largest. Group B items are opt-in parity work with no soundness
+urgency.
 
-**To proceed:** reply with which gap to design first (default #1), and I'll run
+**To proceed:** reply with which gap to design first (default #2), and I'll run
 brainstorming to a design you approve before any code is written.
