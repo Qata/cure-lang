@@ -115,7 +115,8 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
     match environment_add(empty_environment(), decl, false)
       Ok(env) ->
         match environment_find(env, rec_name)
-          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, type_expr), _, _, _, _, _, _, _, _))) ->
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, level_params, type_expr), _, _, _, _, _, _, _, _))) ->
+            assert(level_params == [])
             match type_expr
               Pi(_, _, motive_type, Pi(_, _, false_minor_type, Pi(_, _, true_minor_type, Pi(_, _, major_type, body)))) ->
                 assert(expr_eq(motive_type, Pi(mk_simple("_motive_arg"), BinderDefault(), Const(bool_name, []), Sort(LevelZero()))))
@@ -136,8 +137,8 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
     match environment_add(empty_environment(), decl, false)
       Ok(env) ->
         match environment_find(env, rec_name)
-          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, type_expr), _, _, _, _, _, _, _, _))) ->
-            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), type_expr, [])
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, level_params, type_expr), _, _, _, _, _, _, _, _))) ->
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), type_expr, level_params)
               Ok(_) -> :ok
               Error(_) -> assert(false)
           _ -> assert(false)
@@ -153,11 +154,12 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
     match environment_add(empty_environment(), decl, false)
       Ok(env) ->
         match environment_find(env, rec_name)
-          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, rec_type), _, _, _, _, _, _, _, _))) ->
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, level_params, rec_type), _, _, _, _, _, _, _, _))) ->
+            assert(level_params == [mk_simple("u")])
             match rec_type
               Pi(_, _, param_type, Pi(_, _, motive_type, Pi(_, _, minor_type, Pi(_, _, major_type, body)))) ->
                 assert(expr_eq(param_type, Sort(LevelSucc(LevelZero()))))
-                assert(expr_eq(motive_type, Pi(mk_simple("_motive_arg"), BinderDefault(), App(Const(phantom_name, []), BVar(0)), Sort(LevelZero()))))
+                assert(expr_eq(motive_type, Pi(mk_simple("_motive_arg"), BinderDefault(), App(Const(phantom_name, []), BVar(0)), Sort(LevelParam(mk_simple("u"))))))
                 assert(expr_eq(minor_type, App(BVar(0), App(Const(ctor_name, []), BVar(1)))))
                 assert(expr_eq(major_type, App(Const(phantom_name, []), BVar(2))))
                 assert(expr_eq(body, App(BVar(2), BVar(0))))
@@ -175,8 +177,8 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
     match environment_add(empty_environment(), decl, false)
       Ok(env) ->
         match environment_find(env, rec_name)
-          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, rec_type), _, _, _, _, _, _, _, _))) ->
-            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_type, [])
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, level_params, rec_type), _, _, _, _, _, _, _, _))) ->
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_type, level_params)
               Ok(_) -> :ok
               Error(_) -> assert(false)
           _ -> assert(false)
@@ -195,7 +197,7 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
         let motive = Sort(LevelZero())
         let branch = Sort(LevelSucc(LevelZero()))
         let major = App(Const(ctor_name, []), param)
-        let rec_app = App(App(App(App(Const(rec_name, []), param), motive), branch), major)
+        let rec_app = App(App(App(App(Const(rec_name, [LevelZero()]), param), motive), branch), major)
         match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
           Ok(result) -> assert(expr_eq(result, branch))
           Error(_) -> assert(false)
@@ -212,7 +214,7 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
     match environment_add(empty_environment(), decl, false)
       Ok(env) ->
         match environment_find(env, rec_name)
-          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, rec_type), _, _, _, _, _, _, _, _))) ->
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, level_params, rec_type), _, _, _, _, _, _, _, _))) ->
             match rec_type
               Pi(_, _, _, Pi(_, _, _, Pi(_, _, minor_type, Pi(_, _, _, _)))) ->
                 match minor_type
@@ -221,7 +223,7 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
                     assert(expr_eq(result_type, App(BVar(1), App(App(Const(ctor_name, []), BVar(2)), BVar(0)))))
                   _ -> assert(false)
               _ -> assert(false)
-            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_type, [])
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_type, level_params)
               Ok(_) -> :ok
               Error(_) -> assert(false)
           _ -> assert(false)
@@ -246,7 +248,7 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
             let minor = Lambda(mk_simple("value"), BinderDefault(), param, BVar(0))
             let field = Const(witness, [])
             let major = App(App(Const(ctor_name, []), param), field)
-            let rec_app = App(App(App(App(Const(rec_name, []), param), motive), minor), major)
+            let rec_app = App(App(App(App(Const(rec_name, [LevelZero()]), param), motive), minor), major)
             match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
               Ok(result) -> assert(expr_eq(result, field))
               Error(_) -> assert(false)
@@ -266,7 +268,7 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
         let minor = Lambda(mk_simple("value"), BinderDefault(), field_type, BVar(0))
         let field = Sort(LevelSucc(LevelZero()))
         let major = App(Const(ctor_name, []), field)
-        let rec_app = App(App(App(Const(rec_name, []), motive), minor), major)
+        let rec_app = App(App(App(Const(rec_name, [LevelZero()]), motive), minor), major)
         match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
           Ok(result) -> assert(expr_eq(result, field))
           Error(_) -> assert(false)
@@ -324,8 +326,8 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
     match environment_add(empty_environment(), decl, false)
       Ok(env) ->
         match environment_find(env, rec_name)
-          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, type_expr), _, _, _, _, _, _, _, _))) ->
-            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), type_expr, [])
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, level_params, type_expr), _, _, _, _, _, _, _, _))) ->
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), type_expr, level_params)
               Ok(_) -> :ok
               Error(_) -> assert(false)
           _ -> assert(false)
