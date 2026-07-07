@@ -183,7 +183,7 @@ defmodule Cure.Elab.Declarations do
     params = Enum.map(type_params, fn p -> {:param, [], p} end)
     sig = struct_ctor_sig(name, type_params, fields)
 
-    with {:ok, param_tele} <- elaborate_index_telescope(params, name, env, []),
+    with {:ok, param_tele} <- elaborate_index_telescope(params, name, env, [], :duplicate_parameter),
          working_env = Inductive.declare(env, Inductive.family(name, param_tele, [], 0), []),
          {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, param_tele, [], working_env) do
       declare_indexed_at_min_level(env, name, param_tele, [], [ctor], 0)
@@ -253,7 +253,7 @@ defmodule Cure.Elab.Declarations do
     # the index telescope in the scope of the parameters (most-recent first).
     param_scope = params |> Enum.map(fn {:param, _m, n} -> n end) |> Enum.reverse()
 
-    with {:ok, param_tele} <- elaborate_index_telescope(params, name, env, []),
+    with {:ok, param_tele} <- elaborate_index_telescope(params, name, env, [], :duplicate_parameter),
          {:ok, index_tele} <- elaborate_index_telescope(index_params, name, env, param_scope),
          # Pre-register the family signature (empty ctors, tentative level) so
          # self-references in constructor signatures — e.g. `Vector(a, n)` as a
@@ -474,6 +474,24 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # The first repeated (non-wildcard) binder name in a `{:param, _, name}` list,
+  # or nil if the telescope is linear. Shared by every telescope builder — a
+  # repeated binder makes later types / bodies that reference it ambiguous.
+  defp duplicate_param_name(params) do
+    names =
+      params
+      |> Enum.flat_map(fn
+        {:param, _m, n} -> [n]
+        _ -> []
+      end)
+      |> Enum.reject(&(&1 == "_"))
+
+    case names -- Enum.uniq(names) do
+      [] -> nil
+      [dup | _] -> dup
+    end
+  end
+
   defp elaborate_param_telescope(params, env) do
     # A telescope must not bind the same parameter name twice: a later parameter's
     # type (and the body) can refer to an earlier binder by name, so a duplicate
@@ -549,7 +567,17 @@ defmodule Cure.Elab.Declarations do
 
   # The family's index telescope, converting each `i: T` in the scope of the
   # preceding index binders (most-recently-bound first).
-  defp elaborate_index_telescope(params, fam, env, init_scope \\ []) do
+  # `dup_tag` names the binder kind for the linearity error — this builder is shared
+  # by the family PARAMETER telescope (`:duplicate_parameter`) and the INDEX
+  # telescope (`:duplicate_index`).
+  defp elaborate_index_telescope(params, fam, env, init_scope, dup_tag \\ :duplicate_index) do
+    case duplicate_param_name(params) do
+      nil -> elaborate_index_telescope_rec(params, fam, env, init_scope)
+      dup -> {:error, {dup_tag, String.to_atom(dup)}}
+    end
+  end
+
+  defp elaborate_index_telescope_rec(params, fam, env, init_scope) do
     params
     |> Enum.reduce_while({:ok, [], init_scope}, fn {:param, pmeta, pname}, {:ok, tele, scope} ->
       # A bare type parameter (`type Box(a)` → `{:param, [], "a"}`) carries no
