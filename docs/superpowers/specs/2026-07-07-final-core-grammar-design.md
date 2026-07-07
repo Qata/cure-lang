@@ -57,7 +57,7 @@ another node; **new** = added node.
 | `{:fst, p}` / `{:snd, p}` | same | keep | — |
 | `{:data, sym, params, indices}` — `sym` is a **qualified id** | `{:data, name, params, indices}` (atom) | reshape (id) | K12 |
 | `{:ctor, sym, args}` — qualified id; params erased (§E) | `{:ctor, name, args}` (atom, flat) | reshape (id) | K6, K12 |
-| `{:case, scrut, motive, branches}` — sole eliminator | same shape; branch ctor names become qualified ids | reshape (id) | K12 |
+| `{:case, scrut, motive, branches}` — sole eliminator; sound index-refinement + coverage rule | same shape; branch ctor names become qualified ids | reshape (id) + checker rule | K5, K12 |
 | `{:global, sym, levels}` — qualified id + level args | `{:global, name}` (atom) | reshape (id, levels) | K7, K12 |
 | `{:int_type}` / `{:int_lit, n}` | same | keep | — |
 | `{:float_type}` / `{:float_lit, f}` | same | keep | — |
@@ -66,11 +66,11 @@ another node; **new** = added node.
 | `{:rewrite, proof, motive, body}` | present | **delete** → `case`-sugar (§F) | K1 |
 | `{:prim, op, args}` | present | **delete** → delta-reducible globals (§G) | K2 |
 | `{:hole, _}` | leaks in | **excluded** — never in Core (§I) | K3 |
-| absurd sentinel | present (reducer/checker) | **delete** → empty-`case` (§H) | K14 |
+| `{:absurd}` | present as a Core node | **delete** → empty-`case` (§H) | K4 |
 
-Net: **17 kept/reshaped nodes, 4 deleted term nodes, 1 excluded, 1 deleted
-sentinel.** No new node is added — every "new" capability rides a reshaped field
-or an existing node. The taxonomy *shrinks*.
+Net: **17 kept/reshaped nodes, 5 deleted nodes (`:eq`, `:refl`, `:rewrite`,
+`:prim`, `:absurd`), 1 excluded (`:hole`).** No new node is added — every "new"
+capability rides a reshaped field or an existing node. The taxonomy *shrinks*.
 
 ## §B. Grades — the reserved binder field
 
@@ -225,19 +225,46 @@ synthesizing them belongs in the translator (outside the TCB, decision 6), fed b
 the native `case` + definitional recursion. The work is not discarded; it moves
 to the correct side of the fork.
 
-Constructor checking (K6): a `{:ctor, sym, args}` value carries only its **field
-spine**; the data-family **parameters are erased** (grade-0, recovered from the
-expected type), matching Agda/Lean and turning the old "flat vs param/index"
-tension into an erasure win. The kernel checks `args` against the ctor's stored
-signature (arity split into params/indices/fields), resolved unambiguously via
-the qualified `sym` (§D). `:data` already splits `params`/`indices`; `:ctor` now
-gets the identity needed to consult that split.
+### E.1 Constructor values (K6)
+
+`{:ctor, sym, args}` gains **family identity** from the qualified `sym` (§D),
+which resolves to the constructor's stored signature — the arity split into (data
+params, indices, fields). The kernel checks `args` against that signature. The
+**data parameters are carried at grade 0**: present for checking and for
+independent re-verification (§K), erased at runtime (zero footprint) — exactly the
+QTT treatment, and why this is an erasure win rather than a cost. This resolves
+K6's "flat args / lost constructor identity": `:data` already stores
+`params`/`indices` separately, and `:ctor` now has the identity to consult that
+split. (Representation sub-choice: keep `args` a flat spine split by the signature
+— the minimal-grammar default — or make the groups structural as
+`{:ctor, sym, params, fields}`. Flat-spine-plus-signature is the default; noted
+for review.)
+
+### E.2 Index refinement & coverage (K5) — the soundness-critical eliminator rule
+
+`:case` stays structurally `{ctor, arity, body}` (**no new payload field**); the
+*checking rule* is strengthened to the sound dependent-match discipline. For each
+branch: instantiate the motive at the constructor's index expressions, **unify**
+those against the scrutinee's actual indices, and check the body under the
+resulting refinement (solved equations substituted into context and goal).
+Constructors whose indices fail to unify are **impossible** and rejected/omitted;
+every possible constructor must be **covered**. This closes the "branch-skipping
+index unifier" divergence — today's eliminator skips the refinement, which is
+unsound (it accepts branches under an unrefined context).
+
+K5 is a **kernel typing rule**, not a structural-shape clause, so it is enforced
+by the case-checker rather than the grammar validator (§J). It reuses the landed
+index-unification machinery (`unify_indices`, the Agda Cycle rule, size-change).
+The audit splits it K5a (acute unifier-soundness fixes) / K5b (canonical
+`Eq.rec`/transport, joined with K1b); this grammar treats both as the one sound
+`:case` rule.
 
 ## §F. Equality — inductive `Eq`, transport-as-sugar (K1)
 
 Delete `{:eq}`, `{:refl}`, `{:rewrite}`. Equality becomes an ordinary inductive
-family in the global environment (the identity-type-as-inductive thread, task
-#90):
+family in the global environment — **the inductive `Eq`/`refl` already exist in
+`builtins.ex`**, so K1 re-points to them rather than creating them (the
+identity-type-as-inductive thread, task #90):
 
 ```
 Eq   : (A : Type ℓ) → A → A → Type ℓ
@@ -276,12 +303,14 @@ globals}.
 
 ## §H. Empty & absurd (K14)
 
-No absurd sentinel. Ex-falso is the elimination of an **empty inductive**
-(`Empty`, a `:data` with no constructors) via `{:case, scrut, motive, []}` — a
-`case` with an empty branch list. The kernel accepts an empty branch list **only**
-when the scrutinee's type is a family with no constructors; otherwise it is a
-coverage error. This removes the sentinel and makes "impossible" a derived,
-checked fact rather than a trusted node.
+`{:absurd}` is a current Core node (K4). Delete it. Ex-falso is instead the
+elimination of an **empty inductive** (`Empty`, a `:data` with no constructors) via
+`{:case, scrut, motive, []}` — a `case` with an empty branch list. The kernel
+accepts an empty branch list **only** when the scrutinee's type is a family with
+no constructors; otherwise it is a coverage error (§E.2). This removes the node
+and makes "impossible" a derived, checked fact rather than a trusted marker. (The
+audit's K4 also allows an *elaborator-only* marker; we take the stricter line —
+absurd never appears in checked Core, only empty-`case` does.)
 
 ## §I. Explicitly excluded from Core (with where they live instead)
 
@@ -292,12 +321,12 @@ checked fact rather than a trusted node.
   (unchanged invariant).
 - **Effects** — a *surface* discipline erased before Core (the effect spec); Core
   never sees an effect. No arrow-effect slot (Fork closed: "no").
-- **`Any` as a universal subtype / implicit fallback** — banned (decision 3).
-  `Any` survives only as an explicit opaque dynamic type with a single checked-cast
-  elimination at a declared FFI boundary; that is a normal global type, not a
-  conversion hole.
-- **Deleted term nodes** `{:eq}` `{:refl}` `{:rewrite}` `{:prim}` and the absurd
-  sentinel — re-expressed per §F/§G/§H.
+- **`Any` as a universal subtype / implicit fallback** (K14) — banned (decision
+  3). `Any` survives only as an explicit opaque dynamic type with a single
+  checked-cast elimination at a declared FFI boundary; that is a normal global
+  type, not a conversion hole.
+- **Deleted term nodes** `{:eq}` `{:refl}` `{:rewrite}` `{:prim}` `{:absurd}` —
+  re-expressed per §F/§G/§H.
 
 ## §J. The Wave-0 validator — the executable checklist
 
@@ -320,10 +349,18 @@ still produces terms that pass them, with Antigen green + fixtures updated.
 | `no_prim_node` | no `{:prim}`; primitive ops are delta-globals | K2 wave |
 | `no_hole` | no `{:hole, _}` anywhere | K3 wave |
 | `qualified_syms` | `:global`/`:data`/`:ctor`/branch heads use `Sym`, not atoms | K12 wave |
-| `ctor_signature` | `:ctor` field spine checks against resolved signature; params erased | K6 wave |
+| `ctor_signature` | `:ctor` args check against resolved signature; params at grade 0 | K6 wave |
+| `case_coverage` | branch ctor set exactly covers the family; arities match signature | K5 wave (structural part) |
 | `level_expr` | `{:type, ℓ}` is a well-formed level-expression; globals carry level args; no ceiling | K7 wave |
-| `empty_case_absurd` | absurd only as empty-`case` over an empty family | K14 wave |
+| `no_absurd_node` | no `{:absurd}`; ex-falso only via empty-`case` over an empty family | K4 wave |
 | `no_legacy_reducer` | normal forms produced by the clean reducer only | K10 wave |
+
+The validator checks **structural shape**, not typing. The soundness-critical
+part of K5 — sound index unification and refinement per branch (§E.2) — is a
+*typing* rule enforced by the kernel's case-checker, not a validator clause;
+`case_coverage` above only checks the structural coverage/arity shape. Building
+this validator scaffold is itself the audit's **K11a** step (Final-Core grammar +
+validator), the first item in the tackle order.
 
 The validator is thus the single source of truth for "how far the cleanup has
 progressed": at any commit it names precisely which constructs remain in legacy
