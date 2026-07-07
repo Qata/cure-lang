@@ -1,8 +1,13 @@
 defmodule Cure.Core.AbsurdLeafTest do
   @moduledoc """
-  The {:absurd} leaf (spec §5): it only ever sits in a discharged branch. It has
-  NO positive typing rule — inferring it in a reachable position must return a
-  clean {:error, _}, never crash the kernel — and it must serialize round-trip.
+  The {:absurd} leaf is DELETED from produced/final Core (K4 §H): the elaborator
+  omits impossible branches, the validator release-rejects it, and Term.term?
+  excludes it. What remains — and what these pins guard — is the RETAINED
+  defensive handling of the grammar-excluded shape: `infer` has no catch-all, so
+  its {:absurd} clause is load-bearing for kernel totality (a hand-crafted
+  {:absurd} in a reachable position must return a clean {:error, _}, never crash);
+  and serialize must round-trip it for decode robustness. Removing either would
+  degrade robustness, not tighten — so they stay.
   """
   use ExUnit.Case, async: true
   alias Cure.Core.{Context, Env, Kernel, Serialize}

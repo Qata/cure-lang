@@ -269,8 +269,10 @@ defmodule Cure.Elab.Emit do
     end
   end
 
-  # A discharged (impossible) case branch. Never executed at runtime; emit an
-  # unreachable stub so codegen doesn't hit the raising catch-all (spec §5).
+  # {:absurd} is deleted from produced Core (K4 §H: the elaborator omits impossible
+  # branches; the validator release-rejects it; Term.term? excludes it). Retained
+  # only as a defensive stub — a hand-crafted {:absurd} reaching emit lowers to a
+  # crash rather than the raising catch-all. Not produced in practice.
   defp lower(_env, {:absurd}, _ctx),
     do: {:call, @line, {:atom, @line, :error}, [{:atom, @line, :absurd}]}
 
