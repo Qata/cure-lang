@@ -116,6 +116,22 @@ checking mode and repeated re-splitting.
   (case repeatedly splits flattened data), **598** (ctor values lack
   family/param identity), **599** (kernel rejects parameterized-ctor inference),
   **600** (result params/indices computed by eval, opaque rep).
+- **ASSESSED — resolved-by-design + representation change DEFERRED (grade-coupled).**
+  Per spec §E.1 the flat spine `{:ctor, sym, args}` split-by-signature IS the
+  target (Lean's kernel form); 544/597/600 are explicitly accepted costs, and
+  598's "lost identity" is recovered via the ctor name→signature lookup (fully via
+  `sym`/K12). The one actionable item — 545/599, param-bearing ctors rejected in
+  inference (`kernel.ex:194` `:ctor_requires_checking_mode`) — is SOUND, not a
+  hole: the kernel cannot infer implicit params from a bare `{:ctor}` (e.g. `empty`
+  has no field determining `a`), so it forces checking mode, which works. §E.1's
+  fix (params RIDE THE SPINE **at grade 0**, self-identifying) needs (a) the grade
+  machinery — "params at grade 0" per §J `ctor_signature` — which is not landed,
+  and (b) `sym`/K12. It is a COMPLETENESS enhancement, not a soundness/boundary
+  tightening, so per the analysis discipline it is DEFERRED to land coherently with
+  the grade work (+ K12) rather than built now on a quantities-as-grade proxy that
+  would be reworked. Current sound behavior already pinned:
+  `test/cure/core/param_index_split_test.exs:101`. `ctor_signature` validator
+  clause stays `:off` until grades. No code change this pass.
 
 ## K7 — Universes / levels
 - Doc 1: **9** (remove fixed `Type 0..2` ceiling), **10** (universe-polymorphic
