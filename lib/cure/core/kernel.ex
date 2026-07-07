@@ -218,7 +218,7 @@ defmodule Cure.Core.Kernel do
         motive_value = Eval.eval(motive, Context.env(ctx))
 
         with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
-             :ok <- check_coverage(sig, dname, branches),
+             :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx),
              :ok <-
                check_case_branches(
                  ctx,
@@ -723,11 +723,27 @@ defmodule Cure.Core.Kernel do
 
   defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}
 
-  # Every declared constructor of the family must have a branch (§7 coverage).
-  defp check_coverage(sig, dname, branches) do
-    declared = sig |> Inductive.ctors_of(dname) |> Enum.map(& &1.name) |> MapSet.new()
+  # Coverage (§7 / §E.2): every declared constructor must either HAVE a branch or
+  # be provably IMPOSSIBLE at the scrutinee's actual indices (index-unification
+  # failure). Omitting a constructor that could still match is a coverage error;
+  # omitting one the kernel certifies impossible is the Agda/Idris index-
+  # contradiction discipline — and is exactly what lets a provably-uninhabited
+  # scrutinee be eliminated by an empty branch list (ex-falso, K4/§H), with no
+  # `{:absurd}` term. Relies on `:impossible` being the certain non-unification
+  # verdict (K5a-hardened): a merely `:undecided` omission is NOT accepted.
+  defp check_coverage(ctx, sig, dname, branches, scrut_indices) do
     covered = branches |> Enum.map(fn {c, _ar, _b} -> c end) |> MapSet.new()
-    if MapSet.subset?(declared, covered), do: :ok, else: {:error, :coverage}
+
+    uncovered =
+      sig
+      |> Inductive.ctors_of(dname)
+      |> Enum.reject(fn c -> MapSet.member?(covered, c.name) end)
+
+    if Enum.all?(uncovered, fn c ->
+         unify_indices(ctx, c.result_indices, scrut_indices, length(c.args)) == :impossible
+       end),
+       do: :ok,
+       else: {:error, :coverage}
   end
 
   # Each branch body is checked under its constructor's telescope, against the

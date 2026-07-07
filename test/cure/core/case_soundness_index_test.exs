@@ -173,6 +173,32 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
     assert :ok == Kernel.check_def(env, :probe)   # mk2 can only build Foo(Causal,_) ⇒ discharged
   end
 
+  # K4 (§H) — ex-falso by empty branch list. A scrutinee whose family's every
+  # constructor is impossible at its actual indices may be eliminated by a `case`
+  # with NO branches; the case takes the motive's type though no branch produces
+  # a value. Mirrors Test 3 (Ix Dcoupled, wrap builds Ix Causal ⇒ impossible) but
+  # OMITS the dead wrap branch instead of giving it a placeholder body.
+  test "K4: an all-impossible family admits an empty-branch case (ex-falso)" do
+    ix_dcoupled = {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}
+    motive = {:lam, @dec, {:lam, @ix0, @dec}}
+    def_type = {:pi, ix_dcoupled, @dec}
+    body = {:lam, ix_dcoupled, {:case, {:var, 0}, motive, []}}
+    env = Env.add_def(base_env(), :probe, def_type, body)
+    assert :ok == Kernel.check_def(env, :probe)
+  end
+
+  # Soundness pin: omitting a constructor that could STILL match is a coverage
+  # error. Scrutinee Ix Causal ⇒ wrap IS reachable, so the empty branch list is
+  # invalid ex-falso and must be rejected (not a blanket "empty case is fine").
+  test "K4: an empty-branch case is rejected when a constructor is still reachable" do
+    ix_causal = {:data, :Ix, [], [{:ctor, :Causal, []}]}
+    motive = {:lam, @dec, {:lam, @ix0, @dec}}
+    def_type = {:pi, ix_causal, @dec}
+    body = {:lam, ix_causal, {:case, {:var, 0}, motive, []}}
+    env = Env.add_def(base_env(), :probe, def_type, body)
+    assert {:error, _} = Kernel.check_def(env, :probe)
+  end
+
   # Test 6 — Merge consistency (§5.5): mk:(p:Dec)->Foo(p,p) matched against
   # Foo(Causal, Dcoupled) gives p two candidate bindings (Causal, Dcoupled) that
   # are not equal ⇒ :impossible (discharge), NOT a silently-overwritten unsound
