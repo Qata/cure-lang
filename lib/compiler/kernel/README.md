@@ -2,6 +2,12 @@
 
 This directory is the trusted kernel boundary for the bootstrapped compiler.
 
+Migration note: this Cure-written Lean-shaped kernel is now reference/prototype
+code. Production dependent-module checking should route through
+`Cure.Kernel.Backend` and, once translation coverage exists, the Lean bridge.
+Keep fixes here limited to existing regression/reference tests unless the
+migration plan is explicitly revised.
+
 The kernel should be Lean-shaped unless a file README says otherwise. Lean is
 the primary reference because its kernel is intentionally small and centered on
 checking closed declarations before they enter the environment.

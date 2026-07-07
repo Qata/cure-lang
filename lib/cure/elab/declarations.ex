@@ -70,6 +70,22 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  @doc false
+  def elaborate_function_body_lean({:function_def, meta, body}, env) do
+    body_expr = single_body(body)
+
+    with {:ok, sig} <- function_signature(meta, env) do
+      ctx = build_context(env, sig.telescope)
+
+      with {:ok, body_term} <-
+             elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+           :ok <- Relevance.check(env, sig.name, sig.quantities, body_term) do
+        lambda = wrap_binders(:lam, sig.telescope, body_term)
+        {:ok, Env.add_def(env, sig.name, sig.pi, lambda, sig.quantities)}
+      end
+    end
+  end
+
   # Shared signature elaboration: auto-generalize free type variables, build the
   # parameter telescope and the Π type. Deterministic in the type environment, so
   # the signature computed in the registration pass and the body pass agree.
@@ -182,8 +198,7 @@ defmodule Cure.Elab.Declarations do
         {:named_dom, fname, Keyword.fetch!(m, :type)}
       end)
 
-    {:gadt_ctor, [name: Atom.to_string(name)],
-     {:arrow_chain, named_doms ++ [family_app(name, type_params)]}}
+    {:gadt_ctor, [name: Atom.to_string(name)], {:arrow_chain, named_doms ++ [family_app(name, type_params)]}}
   end
 
   # A positional enum variant, seen as a GADT constructor signature that returns
@@ -448,9 +463,7 @@ defmodule Cure.Elab.Declarations do
           if Keyword.get(pmeta, :implicit) do
             # A bare implicit parameter `{a}` (no kind) is a type variable ranging
             # over `Type`; it is erased, exactly like `{a: Type}`.
-            {:cont,
-             {:ok, tele ++ [{String.to_atom(pname), {:type, 0}}], quants ++ [:erased],
-              [pname | scope]}}
+            {:cont, {:ok, tele ++ [{String.to_atom(pname), {:type, 0}}], quants ++ [:erased], [pname | scope]}}
           else
             {:halt, {:error, {:untyped_parameter, pname}}}
           end
@@ -573,8 +586,7 @@ defmodule Cure.Elab.Declarations do
               List.duplicate(:erased, length(impl_tele)) ++
                 List.duplicate(:present, length(expl_tele))
 
-            {:ok,
-             Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
+            {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
           end
 
         {:error, _} = err ->
@@ -609,7 +621,8 @@ defmodule Cure.Elab.Declarations do
   defp build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, []}, fn {dom, i}, {:ok, tele, scope, names} ->
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, []}, fn {dom, i},
+                                                                                    {:ok, tele, scope, names} ->
       # A NAMED dependent binder `(k: Nat)` uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
@@ -868,7 +881,7 @@ defmodule Cure.Elab.Declarations do
       Enum.zip(names, domains)
       |> Enum.reduce_while({:ok, [], scope}, fn {name, dom_ast}, {:ok, rev, sc} ->
         case idx_to_core(dom_ast, sc, fam, env) do
-          {:ok, dom} -> {:cont, {:ok, [dom | rev], [(name || :_) | sc]}}
+          {:ok, dom} -> {:cont, {:ok, [dom | rev], [name || :_ | sc]}}
           {:error, _} = err -> {:halt, err}
         end
       end)
@@ -914,9 +927,15 @@ defmodule Cure.Elab.Declarations do
     # — resolves to the family. A name that is only a constructor (a nullary value
     # like `Z` used as an index argument) still resolves to the constructor.
     cond do
-      primitive_type(name) != nil -> primitive_type(name)
-      Inductive.family?(env, atom) -> {:data, atom, [], []}
-      Inductive.get_ctor(env, atom) -> {:ctor, atom, []}
+      primitive_type(name) != nil ->
+        primitive_type(name)
+
+      Inductive.family?(env, atom) ->
+        {:data, atom, [], []}
+
+      Inductive.get_ctor(env, atom) ->
+        {:ctor, atom, []}
+
       # A bare name reachable only under a single re-keyed `:"Mod#name"` variant
       # (shadowed-but-present, spec §3.3). Exactly-one resolves; ≥2 (ambiguous)
       # falls through to `{:global, atom}` here and is caught by R7 (Task 10).
@@ -929,7 +948,8 @@ defmodule Cure.Elab.Declarations do
       length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
         {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}
 
-      true -> {:global, atom}
+      true ->
+        {:global, atom}
     end
   end
 

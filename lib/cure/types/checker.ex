@@ -78,19 +78,19 @@ defmodule Cure.Types.Checker do
 
     cond do
       Cure.Elab.Program.dependent?(ast) ->
-        check_dependent_module(ast)
+        check_dependent_module(ast, opts)
 
       true ->
         check_module_dispatch(ast, env, emit?, file)
     end
   end
 
-  # A module that uses dependent constructs (currently: an `indexed type` GADT) is
-  # checked by the `Cure.Core` kernel via `Cure.Elab.Program`, surfacing the
-  # kernel's judgement through the checker's error channel. Non-dependent modules
-  # stay on the legacy path unchanged.
-  defp check_dependent_module(ast) do
-    case Cure.Elab.Program.check_ast(ast) do
+  # A module that uses dependent constructs is checked by the selected dependent
+  # kernel backend via `Cure.Elab.Program`, surfacing the backend judgement
+  # through the checker's error channel. Non-dependent modules stay on the legacy
+  # path unchanged.
+  defp check_dependent_module(ast, opts) do
+    case Cure.Elab.Program.check_ast(ast, opts) do
       {:ok, _env} ->
         {:ok, ast}
 
