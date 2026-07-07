@@ -14,6 +14,11 @@ defmodule Cure.SMT.Translator do
       # => "(> x 0)"
   """
 
+  # Markers the fallback clauses emit for AST nodes with no real SMT translation.
+  # `fully_translatable?/1` and the fallbacks share these so they never drift.
+  @untranslatable_marker "(; untranslatable:"
+  @unknown_call_marker "(; unknown:"
+
   # -- Public API --------------------------------------------------------------
 
   @doc """
@@ -21,6 +26,20 @@ defmodule Cure.SMT.Translator do
   """
   @spec translate(tuple()) :: String.t()
   def translate(ast), do: IO.iodata_to_binary(do_translate(ast))
+
+  @doc """
+  True iff every node in `ast` has a real SMT translation — no fallback marker.
+
+  K13: the SMT lint is untrusted (Z3 out of the TCB), so an obligation it cannot
+  even translate must never be reported as *proven*. Callers use this to fail
+  closed to `:unknown` BEFORE running a query, rather than depending on a
+  malformed-query parse error to keep them safe.
+  """
+  @spec fully_translatable?(tuple()) :: boolean()
+  def fully_translatable?(ast) do
+    smt = translate(ast)
+    not (String.contains?(smt, @untranslatable_marker) or String.contains?(smt, @unknown_call_marker))
+  end
 
   @doc """
   Generate a complete SMT-LIB2 query from a constraint AST.
@@ -198,7 +217,7 @@ defmodule Cure.SMT.Translator do
         end
 
       _ ->
-        ["(; unknown: #{name} ;)"]
+        ["#{@unknown_call_marker} #{name} ;)"]
     end
   end
 
@@ -207,7 +226,11 @@ defmodule Cure.SMT.Translator do
     ["(ite ", do_translate(cond_ast), " ", do_translate(then_ast), " ", do_translate(else_ast), ")"]
   end
 
-  # Fallback -- emit SMT comment and log warning; return "true" to keep query valid
+  # Fallback -- emit a detectable untranslatable marker. K13: this does NOT count
+  # as a discharged obligation; `fully_translatable?/1` finds the marker and
+  # callers fail closed to :unknown. The trailing `true` keeps the raw query
+  # syntactically plausible for callers that skip the translatability guard, but
+  # it must NOT be mistaken for a real translation.
   defp do_translate(ast) do
     tag =
       if is_tuple(ast) and tuple_size(ast) >= 1,
@@ -215,9 +238,9 @@ defmodule Cure.SMT.Translator do
         else: "unknown"
 
     require Logger
-    Logger.warning("SMT translator: untranslatable AST node '#{tag}', approximated as true")
+    Logger.warning("SMT translator: untranslatable AST node '#{tag}' — obligation cannot be verified by the SMT lint (unverified)")
 
-    ["(; untranslatable: #{tag} ;) true"]
+    ["#{@untranslatable_marker} #{tag} ;) true"]
   end
 
   # -- Operator Mapping --------------------------------------------------------

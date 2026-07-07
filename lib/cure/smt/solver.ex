@@ -67,14 +67,27 @@ defmodule Cure.SMT.Solver do
   """
   @spec prove_implication(tuple(), tuple(), String.t(), atom()) :: boolean() | :unknown
   def prove_implication(pred1, pred2, var_name, base_type) do
-    query = Translator.generate_subtype_query(pred1, pred2, var_name, base_type)
+    if translatable_obligation?(pred1, pred2) do
+      query = Translator.generate_subtype_query(pred1, pred2, var_name, base_type)
 
-    case run_query(query) do
-      :unsat -> true
-      :sat -> false
-      :unknown -> :unknown
+      case run_query(query) do
+        :unsat -> true
+        :sat -> false
+        :unknown -> :unknown
+      end
+    else
+      # K13: an obligation the untrusted SMT lint cannot fully translate must not
+      # be reported as proven. An untranslatable node renders to `true`, which
+      # would make `P1 ∧ ¬P2` spuriously unsat (a false 'proven'). Fail closed to
+      # :unknown deterministically — not by relying on Z3 to reject a malformed
+      # query. The caller's :unknown policy (reject in final/release mode) applies.
+      :unknown
     end
   end
+
+  # Both predicates must be fully translatable for an SMT verdict to be trusted.
+  defp translatable_obligation?(pred1, pred2),
+    do: Translator.fully_translatable?(pred1) and Translator.fully_translatable?(pred2)
 
   @doc """
   Check if a refinement subtype relationship holds.
@@ -105,6 +118,16 @@ defmodule Cure.SMT.Solver do
   @spec prove_with_counterexample(tuple(), tuple(), String.t(), atom()) ::
           {:proven, nil} | {:failed, map()} | {:unknown, nil}
   def prove_with_counterexample(pred1, pred2, var_name, base_type) do
+    if not translatable_obligation?(pred1, pred2) do
+      # K13: same fail-closed rule as prove_implication — an untranslatable
+      # obligation is never 'proven'.
+      {:unknown, nil}
+    else
+      prove_with_counterexample_translated(pred1, pred2, var_name, base_type)
+    end
+  end
+
+  defp prove_with_counterexample_translated(pred1, pred2, var_name, base_type) do
     smt_type =
       case base_type do
         :int -> "Int"
