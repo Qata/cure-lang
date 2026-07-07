@@ -270,6 +270,21 @@ already, but still referenced (esp. by Antigen oracles).
   fix must be targeted. The Antigen-oracle references to the legacy system are
   test-only. 69/70/629 (CoreBridge `String.to_atom`) mirror the K12 decode-DoS
   concern on the legacy path — same bounded-interning fix if that path is kept.
+- **#12 PROBED + RESOLVED — the misclassification is real but FAIL-SAFE (pin
+  041152f, `test/cure/k10_classifier_failsafe_test.exs`).** Confirmed `dependent?`
+  returns FALSE for a module that only calls a dependent fn (`head(empty())`), so
+  it IS misclassified to the legacy path. But the legacy checker rejects it —
+  `{:arity_mismatch, "function 'head' expects 3 arguments, got 1"}` — because it
+  does NOT insert implicit arguments, and dependent values/functions pervasively
+  carry implicit type/index params (`{a}`,`{n}`). So both consuming (`head …`) and
+  even *constructing* (`empty()` has implicit `{a}`) a dependent value in a
+  misclassified module hits an arity reject, never an unsound accept. The
+  soundness invariant — a misclassified unsafe dependent call is never ACCEPTED by
+  the legacy path — is pinned. Residual (contrived, un-weaponizable): a dependent
+  fn with ZERO implicits and concrete indices called with a likewise-implicit-free
+  arg — not constructible from real dependent APIs (all use implicit indices).
+  **CONCLUSION: no practical Core-soundness hole; the legacy system is
+  cleanliness-to-delete.**
 - Doc 1: **11** (legacy SMT-backed dependent system).
 - Doc 2: **548** (legacy dep system not comparable to Agda/Lean/Idris), **549**
   (Pi/Sigma = second calculus), **550** (`Types.Reduce` parallel), **551**
