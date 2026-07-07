@@ -30,8 +30,53 @@ defmodule Cure.Elab.Program do
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast, opts) do
-    with :ok <- check_no_duplicate_defs(ast) do
+    with :ok <- check_no_duplicate_defs(ast),
+         :ok <- check_no_duplicate_types(ast),
+         :ok <- check_no_duplicate_ctors(ast) do
       Cure.Kernel.Backend.check_ast(ast, opts)
+    end
+  end
+
+  # A module must not declare the same type name twice: `env.families` is a silent
+  # `Map.put`, so the second would overwrite the first. (Cross-module type shadowing
+  # is handled separately by the resolution/rekey machinery; this is the
+  # within-module case.)
+  @spec check_no_duplicate_types(tuple() | list()) :: :ok | {:error, term()}
+  defp check_no_duplicate_types(ast) do
+    names =
+      ast
+      |> declarations()
+      |> Enum.flat_map(fn
+        {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
+          case Keyword.get(meta, :name) do
+            n when is_binary(n) -> [String.to_atom(n)]
+            n when is_atom(n) and not is_nil(n) -> [n]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+
+    first_dup(names, :duplicate_type)
+  end
+
+  # A module must not bind the same constructor name twice — within one type
+  # (`A | A`) or across two types (`env.ctor_to_family` maps each ctor to ONE
+  # family, so a shared name silently loses one family, an unsound state since Cure
+  # has no type-directed constructor disambiguation).
+  @spec check_no_duplicate_ctors(tuple() | list()) :: :ok | {:error, term()}
+  defp check_no_duplicate_ctors(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(&ctor_names/1)
+    |> first_dup(:duplicate_constructor)
+  end
+
+  defp first_dup(names, tag) do
+    case names -- Enum.uniq(names) do
+      [] -> :ok
+      [dup | _] -> {:error, {tag, dup}}
     end
   end
 
