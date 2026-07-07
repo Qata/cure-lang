@@ -323,6 +323,18 @@ Two deliberate deviations from the raw notes:
    lint layer outside the dependent-Core TCB and outside Idris parity).
 6. **K14 — Ban `Any` in static/dependent/final mode.** *§18 Phase 2 #8; mostly
    enforced for free by the Wave-0 validator.*
+   **LANDED-by-construction (pin test only, no production change).** The gradual
+   `Any` (top type, universal subtyping) is a *semantic* escape living solely in
+   the old non-dependent `Cure.Types` checker (Tier-2 §T2). The dependent Core
+   cannot express it: no `Any` node in the term grammar, the builtin registry
+   holds only genuine inductives (bool/nat/eq), and the surface→Core index bridge
+   (`core_bridge.ex` `to_core(_other) -> :error`) fails closed. Manufacturing a
+   `no_any` validator clause would be WRONG — it would have to key on the name,
+   but Idris/Agda/Lean all permit a type named `Any`; the ban is on the gradual
+   top-type semantics, which Core structurally lacks. Pinned by
+   `test/cure/core/no_gradual_any_test.exs`. The pervasive `Any` gradual escapes
+   in the non-dependent checker remain Tier-2 §T2 — out of scope for the
+   dependent-Core-to-Idris-parity cleanup.
 
 ## Wave 2 — Bounded representation cleanups the kernel leans on
 7. **K4 — `absurd`: encode as checked empty-elimination / elaborator-only marker.**
