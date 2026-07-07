@@ -66,7 +66,10 @@ defmodule Cure.Core.Validator do
   # dev-time checking stays lenient. K3 lands `no_hole: :reject` — no unfilled
   # obligation may escape into a released artifact (holes in erased positions
   # included, since the validator descends where `Erase.erase` would drop them).
-  @release_config Map.put(@wave0_config, :no_hole, :reject)
+  # K4 lands `no_absurd_node: :reject` — the `{:absurd}` node is deleted from final
+  # Core; ex-falso is an empty-branch `case` over a provably-uninhabited scrutinee
+  # (§H), so no `{:absurd}` term may survive.
+  @release_config @wave0_config |> Map.put(:no_hole, :reject) |> Map.put(:no_absurd_node, :reject)
 
   @doc "The strict Final-Core config enforced at the release/emit boundary (K3+)."
   @spec release_config() :: config()

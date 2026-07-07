@@ -166,6 +166,12 @@ defmodule Cure.Core.ValidatorTest do
       assert Validator.release_config()[:no_hole] == :reject
     end
 
+    test "no_absurd_node is :reject in release mode (K4 — the node is gone from final Core)" do
+      assert Validator.release_config()[:no_absurd_node] == :reject
+      assert {:error, rejections} = Validator.validate({:absurd}, Validator.release_config())
+      assert Enum.any?(rejections, &(&1.clause == :no_absurd_node))
+    end
+
     test "every registered clause has a mode in release_config, and none is looser than Wave-0" do
       rel = Validator.release_config()
       assert MapSet.new(Map.keys(rel)) == MapSet.new(Validator.clauses())
