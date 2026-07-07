@@ -3594,7 +3594,17 @@ defmodule Cure.Elab.Elaborator do
 
     if Enum.all?(positional, &match?({:variable, _m, _v}, &1)) do
       vars = Enum.map(positional, fn {:variable, _meta, v} -> v end)
-      {:ok, {cname, vars}}
+
+      # Patterns must be linear: a repeated binder (`C(x, x)`) is not a valid
+      # pattern — the body's reference is ambiguous and equality between two
+      # positions must be witnessed by a proof, not a repeated name (Idris/Agda).
+      # The bare wildcard `_` binds nothing, so it may repeat.
+      non_wild = Enum.reject(vars, &(&1 == "_"))
+
+      case non_wild -- Enum.uniq(non_wild) do
+        [] -> {:ok, {cname, vars}}
+        [dup | _] -> {:error, {:nonlinear_pattern, String.to_atom(dup)}}
+      end
     else
       {:error, {:unsupported_pattern, :nested_constructor_arg}}
     end
