@@ -820,14 +820,22 @@ defmodule Cure.Core.Kernel do
   # :impossible fires on a definite rigid index-head clash or a same-key merge
   # conflict; uncertainty is always :undecided (never :impossible).
   defp unify_indices(ctx, result_indices, scrut_indices, arity) do
-    outer_depth = Context.length(ctx)
+    # Index-vector arity is fixed by the family, so a length mismatch is a
+    # definite non-unification — NOT something to silently truncate. `Enum.zip`
+    # drops the tail of the longer list, which would ignore a surplus/missing
+    # index and spuriously verdict :trivial/:solved (#573). Guard it first.
+    if length(result_indices) != length(scrut_indices) do
+      :impossible
+    else
+      outer_depth = Context.length(ctx)
 
-    result_indices
-    |> Enum.zip(scrut_indices)
-    |> Enum.map(fn {r, s_val} ->
-      {r, s_val |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
-    end)
-    |> reduce_index_pairs(%{}, arity)
+      result_indices
+      |> Enum.zip(scrut_indices)
+      |> Enum.map(fn {r, s_val} ->
+        {r, s_val |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
+      end)
+      |> reduce_index_pairs(%{}, arity)
+    end
   end
 
   defp reduce_index_pairs([], subst, _arity),

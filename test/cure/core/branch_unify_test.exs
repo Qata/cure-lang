@@ -41,6 +41,17 @@ defmodule Cure.Core.BranchUnifyTest do
     assert subst == %{1 => {:ctor, :Causal, []}}
   end
 
+  test ":impossible on an index-vector arity mismatch — Enum.zip must not truncate (#573)" do
+    # `wrap` has exactly ONE result index (Causal). Passing a scrutinee index
+    # vector of a different length is an arity mismatch. `Enum.zip` would
+    # silently truncate to the common prefix and verdict :trivial, ignoring the
+    # surplus/missing index — a soundness hole. A length mismatch is a definite
+    # non-unification: :impossible.
+    ctx = Context.empty(sig())
+    assert :impossible = Kernel.branch_unify(ctx, :Ix, :wrap, [causal_val(), causal_val()])
+    assert :impossible = Kernel.branch_unify(ctx, :Ix, :wrap, [])
+  end
+
   test ":impossible when cname exists but does not belong to dname's family" do
     # Dcoupled/Causal are Dec's own constructors, not Ix's — a caller passing the
     # wrong dname for a real cname must not silently get a verdict computed
