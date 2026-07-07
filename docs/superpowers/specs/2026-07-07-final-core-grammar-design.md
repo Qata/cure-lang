@@ -407,13 +407,17 @@ Each grammar commitment is a named clause with a mode:
 - `:warn` — legacy form detected; logged, not rejected.
 - `:reject` — hard error; the clause is enforced.
 
-A clause is authored at `:warn` in Wave 0 and **flipped to `:reject` as its wave
-lands** (decision 4). "Wave N done" ≡ its clauses are `:reject` and the kernel
-still produces terms that pass them, with Antigen green + fixtures updated.
+A clause is authored at `:warn` in Wave 0 — or `:off` where its target shape does
+not yet exist in the grammar, so its predicate would otherwise fire on every
+current node — and **flipped to `:reject` as its wave lands** (decision 4). "Wave N
+done" ≡ its clauses are `:reject` and the kernel still produces terms that pass
+them, with Antigen green + fixtures updated. No clause is `:reject` in Wave 0
+itself: K11a builds the scaffold and runs it as pure instrumentation (warn/off);
+the reject *mechanism* is exercised by config-override, not by enabling any clause.
 
 | Validator clause | Enforces | Flips at |
 |---|---|---|
-| `grade_on_binders` | every `:pi`/`:lam`/`:sigma` carries a well-formed `Grade` | Wave 0 (`:reject` immediately — new field) |
+| `grade_on_binders` | every `:pi`/`:lam`/`:sigma` carries a well-formed `Grade` | grade wave — when the binder grade field lands (`:off` in Wave 0: current binders carry no grade, so the predicate would fire on every node) |
 | `usage_relevance` | grade-0 binders absent from relevant positions; `{0,ω}` only | grade wave (affine/linear stay `:off`) |
 | `no_eq_node` | no `{:eq}`/`{:refl}`/`{:rewrite}`; `Eq` is `:data`/`:ctor` | K1a wave (structural part; K1b's canonical transport is a typing concern, not this clause) |
 | `no_prim_node` | no `{:prim}`; primitive ops are delta-globals | K2 wave |
