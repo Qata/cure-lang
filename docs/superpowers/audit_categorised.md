@@ -165,6 +165,25 @@ checking mode and repeated re-splitting.
   (field-level universe check too simple), **593** (`infer_sort` only exact
   `{:vtype}`), **611** (type formation doesn't reduce aliases before
   `infer_sort`), **612** (no cumulative coercion).
+- **ASSESSED — soundness already MET + pinned; the level-expression/polymorphism
+  reshape is a large PARITY FEATURE (not soundness), DEFERRED with proof.** The
+  current universe system (`Cure.Core.Universe` + kernel `infer_sort`) is SOUND:
+  predicative `Type ℓ : Type (ℓ+1)` (never `Type:Type`, so not Girard-inconsistent),
+  cumulative (`le?`, `l1<=l2` upward only), correct `lmax` for Π/Σ (`Universe.max`),
+  and the two-universe rule `check_field_levels` (every field-TYPE level
+  `<= fam_level`) is exactly the Girard-avoiding constraint — already PINNED
+  (`inductive_wf_test.exs:50` → `:universe_level`). #592 is therefore not a hole.
+  The remaining items are EXPRESSIVENESS, not soundness: #9 unbounded hierarchy
+  (the `@ceiling 2` is a conservative YAGNI cap — bounding is safe, never unsound;
+  removing it standalone is a half-measure the spec ties to the reshape), #10/#525
+  level polymorphism, #563 level metavars/unification, #612 cumulative coercion,
+  #593/#611 δ-whnf-before-`infer_sort` (completeness — conservative rejection is
+  sound). The spec §C target (level-expr `lzero/lsucc/lmax/lvar` + `{:global, sym,
+  levels}` polymorphism) is a large reshape COUPLED with K12's `Sym` work and
+  needing level-metavar unification — a parity FEATURE deserving its own
+  design/plan pass, not incremental cron surgery. Deferred per the analysis
+  discipline; `level_expr` validator clause stays `:off`. Same category as the
+  K6 ctor-rep and K12-Sym deferrals.
 
 ## K8 — Normalizer / conversion / defeq discipline
 - Doc 2: **529** (frozen stuck-case expansion is bespoke), **530**/**583**/**409**
