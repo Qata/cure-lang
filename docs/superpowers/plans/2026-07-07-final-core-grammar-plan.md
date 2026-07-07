@@ -4,7 +4,7 @@
 
 **Goal:** Build the `Cure.Core.Validator` grammar-boundary scaffold plus the subject-reduction (#638) and progress (#639) regression harnesses, so every later cleanup wave has an executable "which constructs are still legacy" checklist and a metatheory guardrail.
 
-**Architecture:** A new `Cure.Core.Validator` module walks a Core term and, for each named grammar **clause**, emits a diagnostic tagged with that clause's current **mode** (`:off | :warn | :reject`) drawn from a config map. The full clause set encodes the *entire* Final-Core target grammar (spec §A/§J); Wave-0 modes run it as pure instrumentation (legacy-detecting clauses `:warn`, not-yet-reshaped clauses `:off`, **no clause `:reject`**). It is wired into `Cure.Core.Kernel.check_def/2` to surface warnings via `Cure.Pipeline.Events` and to reject only when a clause is config-overridden to `:reject` (the flip mechanism, exercised in tests, enabled per-wave later). A separate `Cure.Core.MetaCheck` module holds two property predicates — `type_preserved?/2` (#638) and `progresses?/2` (#639) — driven over seed corpora by two harness test files.
+**Architecture:** A new `Cure.Core.Validator` module walks a Core term and, for each named grammar **clause**, emits a diagnostic tagged with that clause's current **mode** (`:off | :warn | :reject`) drawn from a config map. The full clause set encodes the *entire* Final-Core target grammar (spec §A/§J); Wave-0 modes run it as pure instrumentation (legacy-detecting clauses `:warn`, not-yet-reshaped clauses `:off`, **no clause `:reject`**). It is wired into `Cure.Core.Kernel.check_def/2` — scanning both the declared type and the body — to surface warnings via `Cure.Pipeline.Events` and to reject only when a clause is config-overridden to `:reject` (the flip mechanism, exercised in tests, enabled per-wave later). A separate `Cure.Core.MetaCheck` module holds two property predicates — `type_preserved?/2` (#638) and `progresses?/2` (#639) — driven over seed corpora by two harness test files.
 
 **Tech Stack:** Elixir, ExUnit (`mix test`), the existing `Cure.Core` kernel (`term.ex`, `kernel.ex`, `normalise.ex`, `conv.ex`, `value.ex`), `Cure.Pipeline.Events`.
 
@@ -17,6 +17,9 @@
 - **Only one build/test run at a time.** Never launch concurrent `mix test` invocations — a past concurrent full-suite run caused a kernel panic. Serialize all suites.
 - Git commits are single-author — do NOT add any `Co-Authored-By` / co-sign trailer.
 - Clause names are fixed identifiers reused across tasks; use them verbatim: `grade_on_binders`, `usage_relevance`, `no_eq_node`, `no_prim_node`, `no_hole`, `qualified_syms`, `ctor_signature`, `case_coverage`, `level_expr`, `no_absurd_node`, `no_legacy_reducer`.
+- **Strict TDD, every task:** write the failing test (red) → run it and confirm the failure reason matches (Step 2) → write the minimal implementation that makes it green (Step 3/4) → only then, if the new code introduces duplication or an awkward shape (e.g. the accumulating `violation/2` clauses across Tasks 3–4), refactor with the full `test/cure/core/validator_test.exs` suite kept green throughout. Never write implementation ahead of its test.
+- **Tests are immutable once green.** A test that starts failing after a later change is a signal the implementation regressed — fix the implementation, never the test. The only exception is a test proven to encode the wrong behavior (state the proof before touching it); "it's faster to edit the test" is never a valid reason. This applies to every test file this plan creates.
+- **Tests assert behavior through the public interface**, never private helpers: no test in this plan may call `children/1` or `violation/2` (both private) directly — only `Validator.clauses/0`, `wave0_config/0`, `nodes/1`, `validate/1,2`, `check_def_config/0`, `Kernel.check_def/2`, `MetaCheck.type_preserved?/2`, and `MetaCheck.progresses?/2`.
 
 ---
 
@@ -24,7 +27,8 @@
 
 - Create `lib/cure/core/validator.ex` — `Cure.Core.Validator`: clause registry, Wave-0 config, node walker, clause predicates, `validate/2`, `check_def_config/0`.
 - Create `lib/cure/core/meta_check.ex` — `Cure.Core.MetaCheck`: `type_preserved?/2` (#638), `progresses?/2` (#639).
-- Modify `lib/cure/core/kernel.ex` — wire the validator into `check_def/2`.
+- Modify `lib/cure/core/kernel.ex` — wire the validator into `check_def/2` (both the declared type and the body).
+- Modify `lib/cure/pipeline/events.ex` — register the new `:kernel` pipeline stage.
 - Create `test/cure/core/validator_test.exs` — validator clause + config + walker + validate tests.
 - Create `test/cure/core/subject_reduction_test.exs` — #638 harness over a seed corpus.
 - Create `test/cure/core/progress_test.exs` — #639 harness over a seed corpus.
@@ -61,7 +65,16 @@ Clause → Wave-0 mode (the default config, encoded in Task 1):
 ```elixir
 # test/cure/core/validator_test.exs
 defmodule Cure.Core.ValidatorTest do
-  use ExUnit.Case, async: true
+  # async: false — Task 5 adds a test that calls `Application.put_env(:cure,
+  # :final_core_config, …)`. That key is process-independent GLOBAL state read
+  # by `Kernel.check_def/2` (the shared TCB entry point every other `test/cure/core/`
+  # suite also calls). Running this file concurrently with another async suite
+  # while the override is live would risk a spurious cross-file rejection the
+  # moment any other suite's checked def contains a hole. Given this codebase's
+  # own history of kernel-related test-concurrency hazards (see Global
+  # Constraints), keep this whole file serial rather than relying on no other
+  # suite ever adding a hole-bearing `check_def` call.
+  use ExUnit.Case, async: false
   alias Cure.Core.Validator
 
   describe "clause registry and Wave-0 config" do
@@ -478,11 +491,12 @@ git commit -m "feat(core): Validator deferred checklist clauses (off, ready to f
 **Files:**
 - Modify: `lib/cure/core/validator.ex` (add `check_def_config/0`)
 - Modify: `lib/cure/core/kernel.ex` (`check_def/2`)
+- Modify: `lib/cure/pipeline/events.ex` (register the new `:kernel` stage atom)
 - Test: `test/cure/core/validator_test.exs`
 
 **Interfaces:**
 - Consumes: `Validator.validate/2`, `Validator.wave0_config/0`.
-- Produces: `Cure.Core.Validator.check_def_config/0 :: () -> config()` (defaults to `wave0_config/0`, overridable via `Application.get_env(:cure, :final_core_config, ...)`). `Kernel.check_def/2` unchanged signature `:ok | {:error, term()}`; now emits `{:final_core_violation, [diagnostic()]}` errors only when a clause is config-overridden to `:reject`.
+- Produces: `Cure.Core.Validator.check_def_config/0 :: () -> config()` (defaults to `wave0_config/0`, overridable via `Application.get_env(:cure, :final_core_config, ...)`). `Kernel.check_def/2` unchanged signature `:ok | {:error, term()}`; now emits `{:final_core_violation, [diagnostic()]}` errors only when a clause is config-overridden to `:reject`. The validator scans **both** the declared `type_term` and the `body_term` — a legacy node in a signature (e.g. a `:eq` node used as a definition's type) is just as much a grammar-boundary hit as one in the body, and the checklist's job is to name every legacy construct still reachable through a checked def, not just half of it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -509,6 +523,27 @@ git commit -m "feat(core): Validator deferred checklist clauses (off, ready to f
 
       assert {:error, {:final_core_violation, [%{clause: :no_hole}]}} = Kernel.check_def(env, :withhole)
     end
+
+    test "a legacy node in the declared TYPE is caught too, not just the body" do
+      # helper : Eq(Int, 1, 1) ; body = refl(1) — a legacy `:eq` node used AS a
+      # definition's type (still typeable pre-K1). `eqty` reuses that same `:eq`
+      # type but its body is a clean `{:global, :helper}` reference, so the ONLY
+      # legacy node reachable from `eqty`'s own {type_term, body_term} pair is in
+      # its type_term. If the wiring only scanned body_term (the pre-fix shape),
+      # this def would wrongly admit even under a :reject override.
+      eq_ty = {:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}}
+
+      env =
+        Env.empty()
+        |> Env.add_def(:helper, eq_ty, {:refl, {:int_lit, 1}})
+        |> Env.add_def(:eqty, eq_ty, {:global, :helper})
+
+      Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_eq_node, :reject))
+      on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)
+
+      assert {:error, {:final_core_violation, rejections}} = Kernel.check_def(env, :eqty)
+      assert Enum.any?(rejections, &(&1.clause == :no_eq_node))
+    end
   end
 ```
 
@@ -517,7 +552,7 @@ git commit -m "feat(core): Validator deferred checklist clauses (off, ready to f
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `mix test test/cure/core/validator_test.exs`
-Expected: FAIL — `check_def_config/0` undefined and `check_def` does not yet reject holes.
+Expected: FAIL — `check_def_config/0` undefined, `check_def` does not yet reject holes, and the type-term test fails (the def wrongly admits).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -528,25 +563,41 @@ Expected: FAIL — `check_def_config/0` undefined and `check_def` does not yet r
   def check_def_config, do: Application.get_env(:cure, :final_core_config, @wave0_config)
 ```
 
+`check_def/2`'s existing shape (unchanged except the marked line) is:
+
 ```elixir
-# lib/cure/core/kernel.ex — replace the body of check_def/2's matched clause
+  @spec check_def(Env.t(), atom()) :: :ok | {:error, term()}
+  def check_def(env, name) do
+    case Env.get_def(env, name) do
+      nil ->
+        {:error, :unknown_global}
+
       %{type: type_term, body: body_term} ->
         ctx = Context.empty(env)
 
         with {:ok, _level} <- infer_sort(ctx, type_term),
              :ok <- check(ctx, body_term, Eval.eval(type_term, [])),
-             :ok <- run_final_core_validator(body_term) do
+             :ok <- run_final_core_validator(type_term, body_term) do  # <-- changed line
           :ok
         end
     end
   end
+```
 
-  # Grammar-boundary instrumentation (K11a). Emits warnings via the pipeline and
-  # rejects only clauses configured to :reject (none, by Wave-0 default).
-  defp run_final_core_validator(body_term) do
-    case Cure.Core.Validator.validate(body_term, Cure.Core.Validator.check_def_config()) do
-      {:ok, warnings} ->
-        Enum.each(warnings, fn d ->
+The current file has no validator call at all — `check_def/2`'s `with` today ends at `check(ctx, body_term, Eval.eval(type_term, []))`. The only change is adding one new `with` step calling the new `run_final_core_validator/2` (defined below, scanning both `type_term` and `body_term`); the `nil ->` branch and every line above the marked one are copied verbatim from the current file. Add the new private helper below `check_def/2`:
+
+```elixir
+  # Grammar-boundary instrumentation (K11a). Scans BOTH the declared type and
+  # the body — a legacy node in a signature is as much a checklist hit as one
+  # in the body. Emits warnings via the pipeline and rejects only clauses
+  # configured to :reject (none, by Wave-0 default); on a mixed verdict,
+  # rejections from either term are combined.
+  defp run_final_core_validator(type_term, body_term) do
+    cfg = Cure.Core.Validator.check_def_config()
+
+    case {Cure.Core.Validator.validate(type_term, cfg), Cure.Core.Validator.validate(body_term, cfg)} do
+      {{:ok, w1}, {:ok, w2}} ->
+        Enum.each(w1 ++ w2, fn d ->
           Cure.Pipeline.Events.emit(
             :kernel,
             :final_core_violation,
@@ -557,8 +608,9 @@ Expected: FAIL — `check_def_config/0` undefined and `check_def` does not yet r
 
         :ok
 
-      {:error, rejections} ->
-        {:error, {:final_core_violation, rejections}}
+      {{:error, r1}, {:ok, _}} -> {:error, {:final_core_violation, r1}}
+      {{:ok, _}, {:error, r2}} -> {:error, {:final_core_violation, r2}}
+      {{:error, r1}, {:error, r2}} -> {:error, {:final_core_violation, r1 ++ r2}}
     end
   end
 ```
@@ -569,10 +621,39 @@ boots via `mod: {Cure.Application, []}`); dispatch on a registry with no
 subscribers simply returns `:ok`. Warnings are also only emitted when a body
 actually contains a legacy node, so clean defs never touch `emit`.
 
+`Cure.Pipeline.Events`'s `@type stage()` is a closed union (`:lexer | :parser |
+:type_checker | :codegen | :fsm_verifier | :sup_verifier | :app_verifier |
+:registry | :synthesis | :doc_mermaid`) that the module's own moduledoc/comment
+enumerates and keeps in sync with every new stage added over time; `emit/4`'s
+runtime guard only checks `is_atom(stage)` so passing the new `:kernel` atom
+works today, but leaving it out of that union is spec drift the next Dialyzer
+run (or the next person reading that enumeration) would trip over. Add it in
+the same small edit:
+
+```elixir
+# lib/cure/pipeline/events.ex — extend the stage union and its comment
+  # ... `:doc_mermaid` the Mermaid diagram emitter for `cure doc` (v0.27.0);
+  # `:kernel` covers the trusted Core kernel's Final-Core grammar-boundary
+  # instrumentation (K11a). Every other stage maps to one of the compilation
+  # pipeline phases.
+  @type stage ::
+          :lexer
+          | :parser
+          | :type_checker
+          | :codegen
+          | :fsm_verifier
+          | :sup_verifier
+          | :app_verifier
+          | :registry
+          | :synthesis
+          | :doc_mermaid
+          | :kernel
+```
+
 - [ ] **Step 4: Run the validator test, then the full core suite (serially)**
 
 Run: `mix test test/cure/core/validator_test.exs`
-Expected: PASS (18 tests total).
+Expected: PASS (19 tests total).
 
 Then, to confirm the wiring is non-breaking, run the whole kernel suite ONCE (no other suite running concurrently):
 
@@ -582,7 +663,7 @@ Expected: PASS — no regressions from the added `check_def` validator call.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/cure/core/validator.ex lib/cure/core/kernel.ex test/cure/core/validator_test.exs
+git add lib/cure/core/validator.ex lib/cure/core/kernel.ex lib/cure/pipeline/events.ex test/cure/core/validator_test.exs
 git commit -m "feat(core): run Final-Core validator in check_def (warn-only default) (K11a)"
 ```
 
@@ -658,13 +739,15 @@ defmodule Cure.Core.MetaCheck do
     with {:ok, ty1} <- Kernel.infer(ctx, term),
          nf when nf != :fuel_exhausted <- Kernel.normalize(ctx, term),
          {:ok, ty2} <- Kernel.infer(ctx, nf) do
-      Conv.conv_values?(ty1, ty2, 0, nil)
+      Conv.conv_values?(ty1, ty2, Context.length(ctx), Context.signature(ctx))
     else
       _ -> false
     end
   end
 end
 ```
+
+Use `Context.length(ctx)` and `Context.signature(ctx)` here, not hardcoded `0`/`nil`: the corpus today is closed terms under `Context.empty()` (depth 0, no certified globals) so the two are observationally identical right now, but the function's own type signature commits to an arbitrary `Context.t()`, and the moduledoc says the corpus "grows as later waves land" — a future non-empty context, or one with certified globals in its signature, would otherwise get silently wrong depth/δ-gating in the conversion check.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -784,7 +867,7 @@ git commit -m "feat(core): progress harness MetaCheck.progresses? (#639)"
 ## Done criteria
 
 - `Cure.Core.Validator` exists with the full 11-clause checklist, a Wave-0 config that is pure instrumentation (no `:reject`), a case-branch-safe node walker, active legacy-detecting predicates, and deferred predicates ready to flip.
-- The validator runs inside `Kernel.check_def/2`, warn-only by default (non-breaking), rejecting only under a `:reject` config override — the per-wave flip mechanism, proven by test.
+- The validator runs inside `Kernel.check_def/2` against both the declared type and the body, warn-only by default (non-breaking), rejecting only under a `:reject` config override — the per-wave flip mechanism, proven by test.
 - `Cure.Core.MetaCheck` provides `type_preserved?/2` (#638) and `progresses?/2` (#639), each with a working detection test and a passing seed corpus.
 - `mix test test/cure/core/` passes in a single serial run.
 
