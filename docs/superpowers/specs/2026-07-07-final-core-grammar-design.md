@@ -419,7 +419,8 @@ the reject *mechanism* is exercised by config-override, not by enabling any clau
 |---|---|---|
 | `grade_on_binders` | every `:pi`/`:lam`/`:sigma` carries a well-formed `Grade` | grade wave — when the binder grade field lands (`:off` in Wave 0: current binders carry no grade, so the predicate would fire on every node) |
 | `usage_relevance` | grade-0 binders absent from relevant positions; `{0,ω}` only | grade wave (affine/linear stay `:off`) |
-| `no_eq_node` | no `{:eq}`/`{:refl}`/`{:rewrite}`; `Eq` is `:data`/`:ctor` | K1a wave (structural part; K1b's canonical transport is a typing concern, not this clause) |
+| `no_eq_node` | no `{:eq}`/`{:refl}`; `Eq` is `:data`/`:ctor` | **K1a — LANDED**: `:reject` in `release_config` (0e75a13). Both are dead-producers (inductive Eq via `mk_eq`; inductive refl via surface refl + `symmetry_proof` + `bridge_step` f3b0e73, unblocked by K6 param-in-spine b355753). Enforced on every program's final Core (`program.ex:272`) ⇒ green suite proves absence. Kernel/serialize keep *defensive* handling (Phase C) |
+| `no_rewrite_node` | no `{:rewrite}`; transport is single-branch `:case` | K1a wave (split from `no_eq_node`): `:warn` pending **Phase B** — `{:rewrite}` is still the produced transport eliminator; retiring it (rewrite→`:case`) is a structural re-plumbing (body scopes in the outer context for `{:rewrite}` vs under the refl branch binder for `:case`) |
 | `no_prim_node` | no `{:prim}`; primitive ops are delta-globals | K2 wave |
 | `no_hole` | no `{:hole, _}` anywhere | **K3 — LANDED**: `:reject` in `release_config/0` (release/emit boundary); dev-time `check_def` stays `:warn` so deferred `?name` bodies still typecheck (Option B). Enforced at both release exits (`Emit.reject_holes`, `Program.check_codegen_ready`) on the *pre-erase* term |
 | `qualified_syms` | `:global`/`:data`/`:ctor`/branch heads use `Sym`, not atoms | K12 wave |
