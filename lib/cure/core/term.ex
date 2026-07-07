@@ -310,19 +310,19 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "snd", "pair" => p}), do: {:snd, from_external(p)}
 
   def from_external(%{"node" => "data", "name" => n, "params" => ps, "indices" => is}),
-    do: {:data, String.to_atom(n), Enum.map(ps, &from_external/1), Enum.map(is, &from_external/1)}
+    do: {:data, sym_atom(n), Enum.map(ps, &from_external/1), Enum.map(is, &from_external/1)}
 
   def from_external(%{"node" => "ctor", "name" => n, "args" => args}),
-    do: {:ctor, String.to_atom(n), Enum.map(args, &from_external/1)}
+    do: {:ctor, sym_atom(n), Enum.map(args, &from_external/1)}
 
   def from_external(%{"node" => "case", "scrut" => s, "motive" => m, "branches" => brs}),
     do:
       {:case, from_external(s), from_external(m),
        Enum.map(brs, fn %{"ctor" => cn, "arity" => ar, "body" => b} ->
-         {String.to_atom(cn), ar, from_external(b)}
+         {sym_atom(cn), ar, from_external(b)}
        end)}
 
-  def from_external(%{"node" => "global", "name" => n}), do: {:global, String.to_atom(n)}
+  def from_external(%{"node" => "global", "name" => n}), do: {:global, sym_atom(n)}
 
   def from_external(%{"node" => "eq", "type" => ty, "lhs" => a, "rhs" => b}),
     do: {:eq, from_external(ty), from_external(a), from_external(b)}
@@ -333,7 +333,7 @@ defmodule Cure.Core.Term do
     do: {:rewrite, from_external(p), from_external(m), from_external(b)}
 
   def from_external(%{"node" => "prim", "op" => op, "args" => args}),
-    do: {:prim, String.to_atom(op), Enum.map(args, &from_external/1)}
+    do: {:prim, sym_atom(op), Enum.map(args, &from_external/1)}
 
   def from_external(%{"node" => "int_type"}), do: {:int_type}
   def from_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}
@@ -341,6 +341,14 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
 
   # -- helpers ----------------------------------------------------------------
+
+  # Bounded symbol interning (K12 / spec §D): decode names into EXISTING atoms
+  # only, so untrusted JSON `from_external` input cannot exhaust the atom table
+  # (it never shrinks). An unknown symbol raises here — consistent with this
+  # function's already-partial contract (a malformed map hits no clause and
+  # raises too) — rather than minting a permanent atom. Every symbol in a real
+  # term is already interned by the compiler, so valid terms still decode.
+  defp sym_atom(n), do: String.to_existing_atom(n)
 
   defp terms?(list) when is_list(list), do: Enum.all?(list, &term?/1)
   defp terms?(_), do: false

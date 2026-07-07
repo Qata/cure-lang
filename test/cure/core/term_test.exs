@@ -63,4 +63,16 @@ defmodule Cure.Core.TermTest do
       assert t == Term.from_external(ext)
     end
   end
+
+  test "from_external interns only existing atoms — unknown symbol fails closed (K12 §D)" do
+    # Untrusted JSON decode must not mint permanent atoms (atom-table-exhaustion
+    # DoS — the table never shrinks). A name never interned in this VM fails
+    # rather than creating an atom; symbols in any real term already exist and
+    # still decode. NB: the "unseen" name must appear NOWHERE as an atom literal.
+    assert_raise ArgumentError, fn ->
+      Term.from_external(%{"node" => "global", "name" => "cure_k12_fe_unseen_qz"})
+    end
+
+    assert {:global, :and} == Term.from_external(%{"node" => "global", "name" => "and"})
+  end
 end
