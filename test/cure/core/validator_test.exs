@@ -31,4 +31,32 @@ defmodule Cure.Core.ValidatorTest do
       assert cfg.level_expr == :off
     end
   end
+
+  describe "nodes/1 walker" do
+    test "enumerates the term and all sub-terms pre-order" do
+      term = {:app, {:lam, {:type, 0}, {:var, 0}}, {:int_lit, 3}}
+      got = Cure.Core.Validator.nodes(term)
+      assert hd(got) == term
+      assert {:lam, {:type, 0}, {:var, 0}} in got
+      assert {:type, 0} in got
+      assert {:var, 0} in got
+      assert {:int_lit, 3} in got
+    end
+
+    test "descends into case scrut/motive/branch bodies without yielding branch tuples" do
+      # a branch for a constructor literally named :refl must NOT surface as a {:refl, _} node
+      term = {:case, {:var, 0}, {:type, 0}, [{:refl, 1, {:var, 0}}]}
+      got = Cure.Core.Validator.nodes(term)
+      assert {:var, 0} in got
+      assert {:type, 0} in got
+      refute Enum.any?(got, &match?({:refl, _}, &1))
+    end
+
+    test "descends into data params/indices and ctor args" do
+      term = {:data, :Vec, [{:int_type}], [{:int_lit, 2}]}
+      got = Cure.Core.Validator.nodes(term)
+      assert {:int_type} in got
+      assert {:int_lit, 2} in got
+    end
+  end
 end

@@ -59,4 +59,31 @@ defmodule Cure.Core.Validator do
   @doc "The Wave-0 default mode for every clause (pure instrumentation; no :reject)."
   @spec wave0_config() :: config()
   def wave0_config, do: @wave0_config
+
+  @doc "All Core sub-terms of `term`, pre-order (the term itself first)."
+  @spec nodes(tuple()) :: [tuple()]
+  def nodes(term), do: [term | Enum.flat_map(children(term), &nodes/1)]
+
+  # Immediate Core-term children (NOT the term itself). Both the current binder
+  # forms and the future graded 4-tuple forms are matched so the walker survives
+  # the later grade reshape. `:case` branches are descended structurally (body
+  # only) so a branch tuple is never treated as a node.
+  defp children({:pi, dom, cod}), do: [dom, cod]
+  defp children({:pi, _grade, dom, cod}), do: [dom, cod]
+  defp children({:lam, dom, body}), do: [dom, body]
+  defp children({:lam, _grade, dom, body}), do: [dom, body]
+  defp children({:sigma, a, b}), do: [a, b]
+  defp children({:sigma, _grade, a, b}), do: [a, b]
+  defp children({:app, f, a}), do: [f, a]
+  defp children({:pair, a, b}), do: [a, b]
+  defp children({:fst, p}), do: [p]
+  defp children({:snd, p}), do: [p]
+  defp children({:data, _n, ps, is}), do: ps ++ is
+  defp children({:ctor, _n, args}), do: args
+  defp children({:case, s, m, brs}), do: [s, m | Enum.map(brs, fn {_c, _ar, body} -> body end)]
+  defp children({:eq, ty, a, b}), do: [ty, a, b]
+  defp children({:refl, a}), do: [a]
+  defp children({:rewrite, p, m, b}), do: [p, m, b]
+  defp children({:prim, _op, args}), do: args
+  defp children(_leaf), do: []
 end
