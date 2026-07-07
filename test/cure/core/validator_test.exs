@@ -160,4 +160,32 @@ defmodule Cure.Core.ValidatorTest do
       assert Enum.any?(rejections, &(&1.clause == :no_eq_node))
     end
   end
+
+  describe "release_config/0 (the strict ratchet, K3)" do
+    test "no_hole is :reject in release mode" do
+      assert Validator.release_config()[:no_hole] == :reject
+    end
+
+    test "every registered clause has a mode in release_config, and none is looser than Wave-0" do
+      rel = Validator.release_config()
+      assert MapSet.new(Map.keys(rel)) == MapSet.new(Validator.clauses())
+      # release only tightens: a clause never becomes :off/:warn where Wave-0 was stricter
+      rank = %{off: 0, warn: 1, reject: 2}
+      w0 = Validator.wave0_config()
+      for c <- Validator.clauses(), do: assert(rank[rel[c]] >= rank[w0[c]], "clause #{c} loosened")
+    end
+
+    test "rejects a hole hidden in an erased (rewrite-proof) position — the #102 leak" do
+      # Erase would drop the rewrite proof, but the validator descends into it.
+      term = {:rewrite, {:hole, "p"}, {:type, 0}, {:ctor, :ok, []}}
+      assert {:error, rejections} = Validator.validate(term, Validator.release_config())
+      assert Enum.any?(rejections, &(&1.clause == :no_hole))
+    end
+
+    test "still admits a hole-free term (eq/refl only warn, never block release)" do
+      assert {:ok, _warnings} = Validator.validate({:ctor, :ok, []}, Validator.release_config())
+      assert {:ok, ws} = Validator.validate({:refl, {:int_lit, 1}}, Validator.release_config())
+      assert Enum.all?(ws, &(&1.mode == :warn))
+    end
+  end
 end

@@ -60,6 +60,18 @@ defmodule Cure.Core.Validator do
   @spec wave0_config() :: config()
   def wave0_config, do: @wave0_config
 
+  # The strict *release* grammar: the ratchet applied at the trust boundary
+  # (emit / certify / serialize / publish), distinct from the lenient dev-time
+  # `check_def_config`. Each landed wave flips its clause to `:reject` here while
+  # dev-time checking stays lenient. K3 lands `no_hole: :reject` — no unfilled
+  # obligation may escape into a released artifact (holes in erased positions
+  # included, since the validator descends where `Erase.erase` would drop them).
+  @release_config Map.put(@wave0_config, :no_hole, :reject)
+
+  @doc "The strict Final-Core config enforced at the release/emit boundary (K3+)."
+  @spec release_config() :: config()
+  def release_config, do: @release_config
+
   @doc "Active config for kernel admission; Wave-0 by default, overridable in config/tests."
   @spec check_def_config() :: config()
   def check_def_config, do: Application.get_env(:cure, :final_core_config, @wave0_config)
