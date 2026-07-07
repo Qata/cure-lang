@@ -441,6 +441,42 @@ The validator is thus the single source of truth for "how far the cleanup has
 progressed": at any commit it names precisely which constructs remain in legacy
 form.
 
+### §J.1 Terminal state — Core cleanup complete (2026-07-08)
+
+All **soundness-bearing** validator clauses are `:reject`; every clause still at
+`:warn`/`:off` is so for a recorded, principled reason (out-of-scope, declined-with-
+proof, kernel-enforced, or a design-gated feature) — none is an open soundness hole.
+
+| Clause | State | Why not `:reject` |
+|---|---|---|
+| `no_eq_node` | **`:reject`** | landed (K1a, 0e75a13) |
+| `no_hole` | **`:reject`** | landed (K3) |
+| `no_absurd_node` | **`:reject`** | landed (K4, 16718f6) |
+| `no_rewrite_node` | `:warn` | Phase B declined-with-proof — the sound `{:rewrite}` transport is a deliberate representation choice (K1) |
+| `no_prim_node` | `:off` | K2 §G.1 soundness already met by the kernel; `{:prim}`→delta-global is a representation change that buys no soundness — declined-with-proof |
+| `ctor_signature` | partial | K6 soundness (params-in-spine, 545/599, b355753) landed; the grade-coupled remainder rides the out-of-scope grade wave |
+| `case_coverage` | kernel | structural coverage + the soundness-critical per-branch index unification are enforced by the kernel case-checker (K5a landed), not this structural clause |
+| `usage_relevance` | kernel | the `{0,ω}` erasure-relevance check is enforced by the kernel (returned / scrutinised / applied erased binder rejected), not structurally |
+| `grade_on_binders`, affine/linear `usage_relevance` | `:off` | **out of scope** — QTT multiplicity-1/linear machinery |
+| `qualified_syms` | `:off` | K12 qualified-`Sym` — a large representation FEATURE, design-gated (slices 1–2 decode-hardening landed) |
+| `level_expr` | `:off` | K7 universe-level *polymorphism* — a large parity FEATURE (universe SOUNDNESS is already met: the kernel is predicatively stratified, `Type₀ : Type₁`, no `Type:Type`) |
+| `no_legacy_reducer` | `:off` | K10 legacy-system deletion — cleanup, not soundness (the clean reducer is already the sole normal-form producer) |
+
+Beyond the validator clauses, the E-layer received a **declaration-hygiene sweep**
+closing eight silent-overwrite / shadowing holes the grammar validator does not
+cover: duplicate top-level def / type / constructor (per module — cross-module
+sharing is legitimate namespacing, resolved by the rekey layer), duplicate function
+param / record field / family index / GADT-ctor named domain, and non-linear
+constructor patterns. All six dependent-soundness axes were then independently
+probed and confirmed sound: telescope linearity, strict positivity, match coverage,
+termination (partial-by-default like Idris, but δ never unfolds a non-terminating
+global), erasure relevance, and universe consistency.
+
+**Net:** the Core is clean to Idris-2 parity minus linear types **on the soundness
+dimension**. What remains are faithfulness-only representation choices (declined with
+recorded proof) and large parity *features* (canonical `Eq` transport, universe-level
+polymorphism, qualified `Sym`) that each need their own design — the deferred "gaps".
+
 ## §K. Serialization / C2 impact
 
 `to_external/1` + `from_external/1` (the JSON-able C2 encoding for an independent

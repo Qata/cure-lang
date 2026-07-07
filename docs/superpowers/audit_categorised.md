@@ -1,5 +1,15 @@
 # Raw Audit — Categorised
 
+> **FINAL STATE (2026-07-08) — Tier-1 Core cleanup COMPLETE on the soundness
+> dimension.** All K1–K14 are resolved: soundness content LANDED or kernel-enforced
+> (K1a, K2 §G.1, K3, K4, K5a, K6 545/599, K11a, K12 slices 1–2, K13, K14); the
+> remainder are faithfulness-only representation choices DECLINED-with-proof
+> (K1b/`{:rewrite}` Phase B, K2 `{:prim}`→delta migration) or large parity FEATURES
+> deferred to their own design (K7 universe-level polymorphism, K12 qualified `Sym`,
+> K5b canonical transport). A separate E-layer declaration-hygiene sweep closed eight
+> silent-overwrite/shadowing holes beyond the audit, and all six dependent-soundness
+> axes were probed sound. See spec §J.1 for the per-clause terminal-state table.
+
 Source: `docs/superpowers/raw_audit.txt` (~640 findings). This index groups the
 findings, flags the heavy cross-document duplication, and separates the
 **Tier 1** kernel cleanup (the "stuff only we have" — the near-term focus) from
