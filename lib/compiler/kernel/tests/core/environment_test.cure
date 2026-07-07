@@ -5,6 +5,8 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
   use Compiler.Kernel.Core.Expr
   use Compiler.Kernel.Core.Declaration
   use Compiler.Kernel.Core.Environment
+  use Compiler.Kernel.Core.LocalContext
+  use Compiler.Kernel.Core.TypeChecker
   
   fn test_quot_adds_all_constants() -> Atom =
     match environment_add(empty_environment(), QuotDecl(), false)
@@ -58,6 +60,24 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
       Error(_) -> :ok
       Ok(_) -> assert(false)
   
+  fn test_checked_inductive_rejects_missing_declared_parameter() -> Atom =
+    let family = mk_simple("Family")
+    let ctor = str(family, "mk")
+    let decl = InductiveDecl([], 1, [InductiveType(family, Sort(LevelZero()), [Constructor(ctor, Const(family, []))])], false)
+    match environment_add(empty_environment(), decl, true)
+      Error(_) -> :ok
+      Ok(_) -> assert(false)
+  
+  fn test_checked_mutual_inductives_reject_universe_mismatch() -> Atom =
+    let a = mk_simple("UniverseA")
+    let b = mk_simple("UniverseB")
+    let ctor_a = str(a, "mk")
+    let ctor_b = str(b, "mk")
+    let decl = InductiveDecl([], 0, [InductiveType(a, Sort(LevelZero()), [Constructor(ctor_a, Const(a, []))]), InductiveType(b, Sort(LevelSucc(LevelZero())), [Constructor(ctor_b, Const(b, []))])], false)
+    match environment_add(empty_environment(), decl, true)
+      Error(_) -> :ok
+      Ok(_) -> assert(false)
+  
   fn test_prop_singleton_inductive_marks_k_recursor() -> Atom =
     let proof_name = mk_simple("Proof")
     let ctor = str(proof_name, "intro")
@@ -66,5 +86,247 @@ mod Compiler.Kernel.Tests.Core.EnvironmentTest
       Ok(env) ->
         match environment_find(env, name_append_core(proof_name, mk_simple("rec")))
           Some(RecursorInfo(RecursorVal(_, _, _, _, _, _, _, k, _))) -> assert(k)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_simple_recursor_iota_reduces_to_matching_minor() -> Atom =
+    let bool_name = mk_simple("Boolish")
+    let false_name = str(bool_name, "false")
+    let true_name = str(bool_name, "true")
+    let rec_name = name_append_core(bool_name, mk_simple("rec"))
+    let decl = InductiveDecl([], 0, [InductiveType(bool_name, Sort(LevelZero()), [Constructor(false_name, Const(bool_name, [])), Constructor(true_name, Const(bool_name, []))])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        let motive = Sort(LevelZero())
+        let false_branch = Sort(LevelZero())
+        let true_branch = Sort(LevelSucc(LevelZero()))
+        let rec_app = App(App(App(App(Const(rec_name, []), motive), false_branch), true_branch), Const(true_name, []))
+        match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
+          Ok(result) -> assert(expr_eq(result, true_branch))
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_simple_recursor_type_matches_lean_shape() -> Atom =
+    let bool_name = mk_simple("BoolishTy")
+    let false_name = str(bool_name, "false")
+    let true_name = str(bool_name, "true")
+    let rec_name = name_append_core(bool_name, mk_simple("rec"))
+    let decl = InductiveDecl([], 0, [InductiveType(bool_name, Sort(LevelZero()), [Constructor(false_name, Const(bool_name, [])), Constructor(true_name, Const(bool_name, []))])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, rec_name)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, type_expr), _, _, _, _, _, _, _, _))) ->
+            match type_expr
+              Pi(_, _, motive_type, Pi(_, _, false_minor_type, Pi(_, _, true_minor_type, Pi(_, _, major_type, body)))) ->
+                assert(expr_eq(motive_type, Pi(mk_simple("_motive_arg"), BinderDefault(), Const(bool_name, []), Sort(LevelZero()))))
+                assert(expr_eq(false_minor_type, App(BVar(0), Const(false_name, []))))
+                assert(expr_eq(true_minor_type, App(BVar(1), Const(true_name, []))))
+                assert(expr_eq(major_type, Const(bool_name, [])))
+                assert(expr_eq(body, App(BVar(3), BVar(0))))
+              _ -> assert(false)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_simple_recursor_type_checks() -> Atom =
+    let bool_name = mk_simple("BoolishTypeChecks")
+    let false_name = str(bool_name, "false")
+    let true_name = str(bool_name, "true")
+    let rec_name = name_append_core(bool_name, mk_simple("rec"))
+    let decl = InductiveDecl([], 0, [InductiveType(bool_name, Sort(LevelZero()), [Constructor(false_name, Const(bool_name, [])), Constructor(true_name, Const(bool_name, []))])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, rec_name)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, type_expr), _, _, _, _, _, _, _, _))) ->
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), type_expr, [])
+              Ok(_) -> :ok
+              Error(_) -> assert(false)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_parameterized_recursor_type_matches_lean_shape() -> Atom =
+    let phantom_name = mk_simple("PhantomTy")
+    let ctor_name = str(phantom_name, "mk")
+    let rec_name = name_append_core(phantom_name, mk_simple("rec"))
+    let type_expr = Pi(mk_simple("A"), BinderDefault(), Sort(LevelSucc(LevelZero())), Sort(LevelSucc(LevelZero())))
+    let ctor_type = Pi(mk_simple("A"), BinderDefault(), Sort(LevelSucc(LevelZero())), App(Const(phantom_name, []), BVar(0)))
+    let decl = InductiveDecl([], 1, [InductiveType(phantom_name, type_expr, [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, rec_name)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, rec_type), _, _, _, _, _, _, _, _))) ->
+            match rec_type
+              Pi(_, _, param_type, Pi(_, _, motive_type, Pi(_, _, minor_type, Pi(_, _, major_type, body)))) ->
+                assert(expr_eq(param_type, Sort(LevelSucc(LevelZero()))))
+                assert(expr_eq(motive_type, Pi(mk_simple("_motive_arg"), BinderDefault(), App(Const(phantom_name, []), BVar(0)), Sort(LevelZero()))))
+                assert(expr_eq(minor_type, App(BVar(0), App(Const(ctor_name, []), BVar(1)))))
+                assert(expr_eq(major_type, App(Const(phantom_name, []), BVar(2))))
+                assert(expr_eq(body, App(BVar(2), BVar(0))))
+              _ -> assert(false)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_parameterized_recursor_type_checks() -> Atom =
+    let phantom_name = mk_simple("PhantomTypeChecks")
+    let ctor_name = str(phantom_name, "mk")
+    let rec_name = name_append_core(phantom_name, mk_simple("rec"))
+    let type_expr = Pi(mk_simple("A"), BinderDefault(), Sort(LevelSucc(LevelZero())), Sort(LevelSucc(LevelZero())))
+    let ctor_type = Pi(mk_simple("A"), BinderDefault(), Sort(LevelSucc(LevelZero())), App(Const(phantom_name, []), BVar(0)))
+    let decl = InductiveDecl([], 1, [InductiveType(phantom_name, type_expr, [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, rec_name)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, rec_type), _, _, _, _, _, _, _, _))) ->
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_type, [])
+              Ok(_) -> :ok
+              Error(_) -> assert(false)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_parameterized_recursor_iota_reduces_after_parameter() -> Atom =
+    let phantom_name = mk_simple("PhantomReduce")
+    let ctor_name = str(phantom_name, "mk")
+    let rec_name = name_append_core(phantom_name, mk_simple("rec"))
+    let type_expr = Pi(mk_simple("A"), BinderDefault(), Sort(LevelSucc(LevelZero())), Sort(LevelSucc(LevelZero())))
+    let ctor_type = Pi(mk_simple("A"), BinderDefault(), Sort(LevelSucc(LevelZero())), App(Const(phantom_name, []), BVar(0)))
+    let decl = InductiveDecl([], 1, [InductiveType(phantom_name, type_expr, [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        let param = Sort(LevelZero())
+        let motive = Sort(LevelZero())
+        let branch = Sort(LevelSucc(LevelZero()))
+        let major = App(Const(ctor_name, []), param)
+        let rec_app = App(App(App(App(Const(rec_name, []), param), motive), branch), major)
+        match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
+          Ok(result) -> assert(expr_eq(result, branch))
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_parameterized_field_recursor_type_checks() -> Atom =
+    let box_name = mk_simple("ParamBoxTypeChecks")
+    let ctor_name = str(box_name, "mk")
+    let rec_name = name_append_core(box_name, mk_simple("rec"))
+    let param_sort = Sort(LevelSucc(LevelZero()))
+    let type_expr = Pi(mk_simple("A"), BinderDefault(), param_sort, param_sort)
+    let ctor_type = Pi(mk_simple("A"), BinderDefault(), param_sort, Pi(mk_simple("value"), BinderDefault(), BVar(0), App(Const(box_name, []), BVar(1))))
+    let decl = InductiveDecl([], 1, [InductiveType(box_name, type_expr, [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, rec_name)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, rec_type), _, _, _, _, _, _, _, _))) ->
+            match rec_type
+              Pi(_, _, _, Pi(_, _, _, Pi(_, _, minor_type, Pi(_, _, _, _)))) ->
+                match minor_type
+                  Pi(_, _, field_type, result_type) ->
+                    assert(expr_eq(field_type, BVar(1)))
+                    assert(expr_eq(result_type, App(BVar(1), App(App(Const(ctor_name, []), BVar(2)), BVar(0)))))
+                  _ -> assert(false)
+              _ -> assert(false)
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_type, [])
+              Ok(_) -> :ok
+              Error(_) -> assert(false)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_parameterized_field_recursor_iota_passes_field() -> Atom =
+    let witness = mk_simple("boxWitness")
+    let box_name = mk_simple("ParamBoxReduce")
+    let ctor_name = str(box_name, "mk")
+    let rec_name = name_append_core(box_name, mk_simple("rec"))
+    let param_sort = Sort(LevelSucc(LevelZero()))
+    let type_expr = Pi(mk_simple("A"), BinderDefault(), param_sort, param_sort)
+    let ctor_type = Pi(mk_simple("A"), BinderDefault(), param_sort, Pi(mk_simple("value"), BinderDefault(), BVar(0), App(Const(box_name, []), BVar(1))))
+    let axiom = AxiomDecl(AxiomVal(ConstantVal(witness, [], Sort(LevelZero())), false))
+    let decl = InductiveDecl([], 1, [InductiveType(box_name, type_expr, [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(empty_environment(), axiom, false)
+      Ok(env_with_witness) ->
+        match environment_add(env_with_witness, decl, false)
+          Ok(env) ->
+            let param = Sort(LevelZero())
+            let motive = Sort(LevelZero())
+            let minor = Lambda(mk_simple("value"), BinderDefault(), param, BVar(0))
+            let field = Const(witness, [])
+            let major = App(App(Const(ctor_name, []), param), field)
+            let rec_app = App(App(App(App(Const(rec_name, []), param), motive), minor), major)
+            match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
+              Ok(result) -> assert(expr_eq(result, field))
+              Error(_) -> assert(false)
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_simple_recursor_iota_passes_constructor_fields() -> Atom =
+    let box_name = mk_simple("Boxish")
+    let ctor_name = str(box_name, "mk")
+    let rec_name = name_append_core(box_name, mk_simple("rec"))
+    let field_type = Sort(LevelZero())
+    let ctor_type = Pi(mk_simple("value"), BinderDefault(), field_type, Const(box_name, []))
+    let decl = InductiveDecl([], 0, [InductiveType(box_name, Sort(LevelZero()), [Constructor(ctor_name, ctor_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        let motive = Sort(LevelZero())
+        let minor = Lambda(mk_simple("value"), BinderDefault(), field_type, BVar(0))
+        let field = Sort(LevelSucc(LevelZero()))
+        let major = App(Const(ctor_name, []), field)
+        let rec_app = App(App(App(Const(rec_name, []), motive), minor), major)
+        match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
+          Ok(result) -> assert(expr_eq(result, field))
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_recursive_recursor_iota_passes_induction_hypothesis() -> Atom =
+    let nat_name = mk_simple("Natish")
+    let zero_name = str(nat_name, "zero")
+    let succ_name = str(nat_name, "succ")
+    let rec_name = name_append_core(nat_name, mk_simple("rec"))
+    let succ_type = Pi(mk_simple("n"), BinderDefault(), Const(nat_name, []), Const(nat_name, []))
+    let decl = InductiveDecl([], 0, [InductiveType(nat_name, Sort(LevelZero()), [Constructor(zero_name, Const(nat_name, [])), Constructor(succ_name, succ_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        let motive = Sort(LevelZero())
+        let zero_branch = Sort(LevelSucc(LevelZero()))
+        let succ_branch = Lambda(mk_simple("n"), BinderDefault(), Const(nat_name, []), Lambda(mk_simple("ih"), BinderDefault(), Sort(LevelZero()), BVar(0)))
+        let major = App(Const(succ_name, []), Const(zero_name, []))
+        let rec_app = App(App(App(App(Const(rec_name, []), motive), zero_branch), succ_branch), major)
+        match whnf(mk_type_checker(env, empty_local_context(), DefinitionSafe()), rec_app)
+          Ok(result) -> assert(expr_eq(result, zero_branch))
+          Error(_) -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_recursive_recursor_type_has_induction_hypothesis_minor() -> Atom =
+    let nat_name = mk_simple("NatishTy")
+    let zero_name = str(nat_name, "zero")
+    let succ_name = str(nat_name, "succ")
+    let rec_name = name_append_core(nat_name, mk_simple("rec"))
+    let succ_type = Pi(mk_simple("n"), BinderDefault(), Const(nat_name, []), Const(nat_name, []))
+    let decl = InductiveDecl([], 0, [InductiveType(nat_name, Sort(LevelZero()), [Constructor(zero_name, Const(nat_name, [])), Constructor(succ_name, succ_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, rec_name)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, type_expr), _, _, _, _, _, _, _, _))) ->
+            match type_expr
+              Pi(_, _, _, Pi(_, _, _, Pi(_, _, succ_minor_type, Pi(_, _, _, _)))) ->
+                match succ_minor_type
+                  Pi(_, _, field_type, Pi(_, _, ih_type, result_type)) ->
+                    assert(expr_eq(field_type, Const(nat_name, [])))
+                    assert(expr_eq(ih_type, App(BVar(2), BVar(0))))
+                    assert(expr_eq(result_type, App(BVar(3), App(Const(succ_name, []), BVar(1)))))
+                  _ -> assert(false)
+              _ -> assert(false)
+          _ -> assert(false)
+      Error(_) -> assert(false)
+  
+  fn test_recursive_recursor_type_checks() -> Atom =
+    let nat_name = mk_simple("NatishTypeChecks")
+    let zero_name = str(nat_name, "zero")
+    let succ_name = str(nat_name, "succ")
+    let rec_name = name_append_core(nat_name, mk_simple("rec"))
+    let succ_type = Pi(mk_simple("n"), BinderDefault(), Const(nat_name, []), Const(nat_name, []))
+    let decl = InductiveDecl([], 0, [InductiveType(nat_name, Sort(LevelZero()), [Constructor(zero_name, Const(nat_name, [])), Constructor(succ_name, succ_type)])], false)
+    match environment_add(empty_environment(), decl, false)
+      Ok(env) ->
+        match environment_find(env, rec_name)
+          Some(RecursorInfo(RecursorVal(ConstantVal(_, _, type_expr), _, _, _, _, _, _, _, _))) ->
+            match check(mk_type_checker(env, empty_local_context(), DefinitionSafe()), type_expr, [])
+              Ok(_) -> :ok
+              Error(_) -> assert(false)
           _ -> assert(false)
       Error(_) -> assert(false)

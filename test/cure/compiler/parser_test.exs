@@ -211,6 +211,18 @@ defmodule Cure.Compiler.ParserTest do
       assert {:assignment, meta, [{:variable, _, "x"}, {:literal, _, 42}]} = ast
       assert Keyword.has_key?(meta, :type_annotation)
     end
+
+    test "function expression body can start with let chain" do
+      ast =
+        parse!("""
+        fn f() -> Int = let x = 1
+          x
+        """)
+
+      assert {:function_def, _, [{:block, _, [assignment, {:variable, _, "x"}]}]} = ast
+      assert {:assignment, meta, [{:variable, _, "x"}, {:literal, _, 1}]} = assignment
+      assert Keyword.get(meta, :let)
+    end
   end
 
   # ── Augmented Assignment ─────────────────────────────────────────────

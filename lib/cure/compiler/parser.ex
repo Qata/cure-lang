@@ -2351,6 +2351,7 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
+        {body, state} = parse_expression_let_chain_body(body, state)
 
         meta = build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
         ast = {:function_def, meta, [body]}
@@ -2365,6 +2366,7 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             state = skip_newlines(state)
             {body, state} = parse_expr_or_block(state)
+            {body, state} = parse_expression_let_chain_body(body, state)
             state = expect_dedent(state)
 
             meta =
@@ -5004,6 +5006,56 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :indent} -> parse_block(state)
       _ -> parse_expr(state, 0)
+    end
+  end
+
+  defp parse_expression_let_chain_body({:assignment, meta, _} = assignment, state) do
+    if Keyword.get(meta, :let) do
+      parse_expression_let_chain_tail([assignment], state, meta)
+    else
+      {assignment, state}
+    end
+  end
+
+  defp parse_expression_let_chain_body(body, state), do: {body, state}
+
+  defp parse_expression_let_chain_tail(acc, state, meta) do
+    state = skip_newlines(state)
+
+    if expression_let_chain_tail?(state) do
+      {expr, state} = parse_expr_or_block(state)
+      acc = [expr | acc]
+
+      case expr do
+        {:assignment, expr_meta, _} ->
+          if Keyword.get(expr_meta, :let) do
+            parse_expression_let_chain_tail(acc, state, meta)
+          else
+            {{:block, [line: Keyword.get(meta, :line, 1), col: Keyword.get(meta, :col, 1)], Enum.reverse(acc)}, state}
+          end
+
+        _ ->
+          {{:block, [line: Keyword.get(meta, :line, 1), col: Keyword.get(meta, :col, 1)], Enum.reverse(acc)}, state}
+      end
+    else
+      case Enum.reverse(acc) do
+        [single] -> {single, state}
+        many -> {{:block, [line: Keyword.get(meta, :line, 1), col: Keyword.get(meta, :col, 1)], many}, state}
+      end
+    end
+  end
+
+  defp expression_let_chain_tail?(state) do
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof, :bar, :comma, :rparen, :rbracket, :rbrace] ->
+        false
+
+      %Token{type: :keyword, value: value}
+      when value in [:fn, :local, :type, :proto, :impl, :mod, :use, :actor, :fsm, :app, :supervisor] ->
+        false
+
+      _ ->
+        true
     end
   end
 

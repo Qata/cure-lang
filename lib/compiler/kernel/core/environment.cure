@@ -94,7 +94,7 @@ mod Compiler.Kernel.Core.Environment
           let is_rec = inductive_block_is_recursive(all_names, types)
           let is_reflexive = inductive_block_is_reflexive(all_names, types)
           let k = inductive_block_is_k_target(num_params, types)
-          inductive_infos(level_params, num_params, types, all_names, constructor_count_for_all(types), is_rec, is_reflexive, k, is_unsafe)
+          inductive_infos(level_params, num_params, types, all_names, constructor_count_for_all(types), 0, is_rec, is_reflexive, k, is_unsafe)
         QuotDecl() -> quot_infos()
         _ -> [declaration_to_constant_info(decl)]
   
@@ -103,14 +103,14 @@ mod Compiler.Kernel.Core.Environment
         [] -> []
         [definition | rest] -> [DefinitionInfo(definition) | definition_infos(rest)]
   
-  local fn inductive_infos(level_params: List(Name), num_params: Int, types: List(InductiveType), all_names: List(Name), num_minors: Int, is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool) -> List(ConstantInfo)
+  local fn inductive_infos(level_params: List(Name), num_params: Int, types: List(InductiveType), all_names: List(Name), num_minors: Int, minor_offset: Int, is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool) -> List(ConstantInfo)
     = match types
         [] -> []
         [InductiveType(name, type_expr, ctors) | rest] ->
           let num_indices = inductive_num_indices(type_expr, num_params)
           let info = InductiveInfo(InductiveVal(ConstantVal(name, level_params, type_expr), num_params, num_indices, all_names, constructor_names(ctors), 0, is_rec, is_unsafe, is_reflexive))
           let ctor_infos = constructor_infos(level_params, name, 0, num_params, ctors, is_unsafe)
-          let rec_infos = recursor_info(level_params, name, type_expr, num_params, num_indices, all_names, num_minors, is_rec, is_reflexive, k, is_unsafe, rest)
+          let rec_infos = recursor_info(level_params, name, type_expr, num_params, num_indices, all_names, num_minors, minor_offset, ctors, is_rec, is_reflexive, k, is_unsafe, rest)
           [info | Std.List.append(ctor_infos, rec_infos)]
   
   local fn constructor_infos(level_params: List(Name), inductive_name: Name, cidx: Int, num_params: Int, ctors: List(Constructor), is_unsafe: Bool) -> List(ConstantInfo)
@@ -119,11 +119,217 @@ mod Compiler.Kernel.Core.Environment
         [Constructor(name, type_expr) | rest] ->
           [ConstructorInfo(ConstructorVal(ConstantVal(name, level_params, type_expr), inductive_name, cidx, num_params, constructor_num_fields(type_expr, num_params), is_unsafe)) | constructor_infos(level_params, inductive_name, cidx + 1, num_params, rest, is_unsafe)]
   
-  local fn recursor_info(level_params: List(Name), name: Name, type_expr: Expr, num_params: Int, num_indices: Int, all_names: List(Name), num_minors: Int, is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool, rest: List(InductiveType)) -> List(ConstantInfo)
-    = [RecursorInfo(RecursorVal(ConstantVal(name_append_core(name, mk_simple("rec")), level_params, type_expr), all_names, num_params, num_indices, 1, num_minors, [], k, is_unsafe)) | inductive_infos(level_params, num_params, rest, all_names, num_minors, is_rec, is_reflexive, k, is_unsafe)]
+  local fn recursor_info(level_params: List(Name), name: Name, type_expr: Expr, num_params: Int, num_indices: Int, all_names: List(Name), num_minors: Int, minor_offset: Int, ctors: List(Constructor), is_rec: Bool, is_reflexive: Bool, k: Bool, is_unsafe: Bool, rest: List(InductiveType)) -> List(ConstantInfo)
+    = let num_motives = Std.List.length(all_names)
+      let rules = recursor_rules_for_simple_inductive(num_params, num_indices, num_motives, num_minors, minor_offset, is_rec, all_names, ctors)
+      let rec_type = recursor_type_for_simple_inductive(name, type_expr, num_params, num_indices, num_motives, num_minors, ctors, is_rec)
+      [RecursorInfo(RecursorVal(ConstantVal(name_append_core(name, mk_simple("rec")), level_params, rec_type), all_names, num_params, num_indices, num_motives, num_minors, rules, k, is_unsafe)) | inductive_infos(level_params, num_params, rest, all_names, num_minors, minor_offset + Std.List.length(ctors), is_rec, is_reflexive, k, is_unsafe)]
+  
+  local fn recursor_type_for_simple_inductive(name: Name, type_expr: Expr, num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, ctors: List(Constructor), is_rec: Bool) -> Expr
+    = pickup
+        num_indices != 0 -> type_expr
+        num_motives != 1 -> type_expr
+        num_minors != Std.List.length(ctors) -> type_expr
+        else ->
+          let param_domains = first_pi_domains(type_expr, num_params)
+          let motive_type = Pi(mk_simple("_motive_arg"), BinderDefault(), inductive_app_for_bvars(name, 0, num_params), Sort(LevelZero()))
+          let minor_types = recursor_minor_types_for_simple_inductive(name, num_params, num_motives, ctors, is_rec, 0)
+          let major_type = inductive_app_for_bvars(name, num_motives + num_minors, num_params)
+          let body = App(BVar(num_minors + 1), BVar(0))
+          wrap_pi_domains(Std.List.append(param_domains, Std.List.append([motive_type], Std.List.append(minor_types, [major_type]))), body, mk_simple("_rec_arg"))
+  
+  local fn recursor_minor_types_for_simple_inductive(inductive_name: Name, num_params: Int, num_motives: Int, ctors: List(Constructor), is_rec: Bool, minor_index: Int) -> List(Expr)
+    = match ctors
+        [] -> []
+        [Constructor(ctor_name, type_expr) | rest] ->
+          let nfields = constructor_num_fields(type_expr, num_params)
+          let domains = constructor_field_domains_for_recursor(type_expr, num_params, num_motives + minor_index)
+          let minor_type = recursor_minor_type(inductive_name, ctor_name, num_params, num_motives, minor_index, nfields, domains, is_rec)
+          [minor_type | recursor_minor_types_for_simple_inductive(inductive_name, num_params, num_motives, rest, is_rec, minor_index + 1)]
+  
+  local fn recursor_minor_type(inductive_name: Name, ctor_name: Name, num_params: Int, num_motives: Int, minor_index: Int, nfields: Int, domains: List(Expr), is_rec: Bool) -> Expr
+    = let with_ihs = recursor_minor_ih_domains(inductive_name, ctor_name, num_params, num_motives, minor_index, nfields, domains, is_rec, 0, 0)
+      wrap_pi_domains(domains, with_ihs, mk_simple("_field"))
+  
+  local fn recursor_minor_ih_domains(inductive_name: Name, ctor_name: Name, num_params: Int, num_motives: Int, minor_index: Int, nfields: Int, domains: List(Expr), is_rec: Bool, field_index: Int, ih_count: Int) -> Expr
+    = match domains
+        [] -> recursor_minor_body(ctor_name, num_params, num_motives, minor_index, nfields, ih_count)
+        [domain | rest] ->
+          pickup
+            recursor_should_add_ih(inductive_name, domain, is_rec) ->
+              let ih_domain = recursor_minor_ih_domain(num_motives, minor_index, nfields, field_index, ih_count)
+              Pi(mk_simple("_ih"), BinderDefault(), ih_domain, recursor_minor_ih_domains(inductive_name, ctor_name, num_params, num_motives, minor_index, nfields, rest, is_rec, field_index + 1, ih_count + 1))
+            else -> recursor_minor_ih_domains(inductive_name, ctor_name, num_params, num_motives, minor_index, nfields, rest, is_rec, field_index + 1, ih_count)
+  
+  local fn recursor_minor_ih_domain(num_motives: Int, minor_index: Int, nfields: Int, field_index: Int, ih_count: Int) -> Expr
+    = App(BVar(ih_count + nfields + minor_index + num_motives - 1), BVar(ih_count + nfields - 1 - field_index))
+  
+  local fn recursor_minor_body(ctor_name: Name, num_params: Int, num_motives: Int, minor_index: Int, nfields: Int, ih_count: Int) -> Expr
+    = let motive = BVar(ih_count + nfields + minor_index + num_motives - 1)
+      let params = bvar_refs_from(ih_count + nfields + minor_index + num_motives, num_params)
+      let ctor = mk_apps(Const(ctor_name, []), Std.List.append(params, bvar_refs_from(ih_count, nfields)))
+      App(motive, ctor)
+  
+  local fn recursor_should_add_ih(inductive_name: Name, domain: Expr, is_rec: Bool) -> Bool
+    = pickup
+        is_rec -> simple_recursive_domain_matches(inductive_name, domain)
+        else -> false
+  
+  local fn simple_recursive_domain_matches(inductive_name: Name, domain: Expr) -> Bool
+    = match app_head_expr(domain)
+        Const(name, _) -> name_eq(name, inductive_name)
+        _ -> false
+  
+  local fn wrap_pi_domains(domains: List(Expr), body: Expr, base_name: Name) -> Expr
+    = match domains
+        [] -> body
+        [domain | rest] -> Pi(base_name, BinderDefault(), domain, wrap_pi_domains(rest, body, str(base_name, "x")))
+  
+  local fn inductive_app_for_bvars(name: Name, offset: Int, num_params: Int) -> Expr
+    = mk_apps(Const(name, []), bvar_refs_from(offset, num_params))
+  
+  local fn constructor_field_domains_for_recursor(type_expr: Expr, num_params: Int, shift: Int) -> List(Expr)
+    = shift_constructor_domains(constructor_field_domains(type_expr, num_params), shift, 0)
+  
+  local fn shift_constructor_domains(domains: List(Expr), shift: Int, field_index: Int) -> List(Expr)
+    = match domains
+        [] -> []
+        [domain | rest] -> [expr_lift_at_cutoff(domain, shift, field_index) | shift_constructor_domains(rest, shift, field_index + 1)]
+  
+  local fn expr_lift_at_cutoff(expr: Expr, amount: Int, cutoff: Int) -> Expr
+    = match expr
+        BVar(index) ->
+          pickup
+            index >= cutoff -> BVar(index + amount)
+            else -> expr
+        App(fn_expr, arg) -> App(expr_lift_at_cutoff(fn_expr, amount, cutoff), expr_lift_at_cutoff(arg, amount, cutoff))
+        Lambda(name, binder_info, domain, body) -> Lambda(name, binder_info, expr_lift_at_cutoff(domain, amount, cutoff), expr_lift_at_cutoff(body, amount, cutoff + 1))
+        Pi(name, binder_info, domain, body) -> Pi(name, binder_info, expr_lift_at_cutoff(domain, amount, cutoff), expr_lift_at_cutoff(body, amount, cutoff + 1))
+        Let(name, type_expr, value, body, nondep) -> Let(name, expr_lift_at_cutoff(type_expr, amount, cutoff), expr_lift_at_cutoff(value, amount, cutoff), expr_lift_at_cutoff(body, amount, cutoff + 1), nondep)
+        MData(data, inner) -> MData(data, expr_lift_at_cutoff(inner, amount, cutoff))
+        Proj(struct_name, index, inner) -> Proj(struct_name, index, expr_lift_at_cutoff(inner, amount, cutoff))
+        _ -> expr
+  
+  local fn recursor_rules_for_simple_inductive(num_params: Int, num_indices: Int, num_motives: Int, num_minors: Int, minor_offset: Int, is_rec: Bool, all_names: List(Name), ctors: List(Constructor)) -> List(RecursorRule)
+    = pickup
+        num_indices != 0 -> []
+        is_rec -> recursor_rules_for_simple_recursive_ctors(num_params, num_motives, num_minors, minor_offset, all_names, ctors, 0)
+        else -> recursor_rules_for_simple_ctors(num_params, num_motives, num_minors, minor_offset, ctors, 0)
+  
+  local fn recursor_rules_for_simple_ctors(num_params: Int, num_motives: Int, num_minors: Int, minor_offset: Int, ctors: List(Constructor), index: Int) -> List(RecursorRule)
+    = match ctors
+        [] -> []
+        [Constructor(name, type_expr) | rest] ->
+          let nfields = constructor_num_fields(type_expr, num_params)
+          let rhs = simple_recursor_rule_rhs(num_params, num_motives, num_minors, nfields, minor_offset + index)
+          [RecursorRule(name, nfields, rhs) | recursor_rules_for_simple_ctors(num_params, num_motives, num_minors, minor_offset, rest, index + 1)]
+  
+  local fn recursor_rules_for_simple_recursive_ctors(num_params: Int, num_motives: Int, num_minors: Int, minor_offset: Int, all_names: List(Name), ctors: List(Constructor), index: Int) -> List(RecursorRule)
+    = match ctors
+        [] -> []
+        [Constructor(name, type_expr) | rest] ->
+          let nfields = constructor_num_fields(type_expr, num_params)
+          let domains = constructor_field_domains(type_expr, num_params)
+          let rhs = simple_recursive_recursor_rule_rhs(num_params, num_motives, num_minors, nfields, minor_offset + index, all_names, domains)
+          [RecursorRule(name, nfields, rhs) | recursor_rules_for_simple_recursive_ctors(num_params, num_motives, num_minors, minor_offset, all_names, rest, index + 1)]
+  
+  local fn simple_recursor_rule_rhs(num_params: Int, num_motives: Int, num_minors: Int, nfields: Int, minor_index: Int) -> Expr
+    = wrap_default_lambdas(num_params + num_motives + num_minors + nfields, mk_apps(simple_recursor_minor_ref(num_minors, nfields, minor_index), simple_recursor_field_refs(nfields)))
+  
+  local fn simple_recursive_recursor_rule_rhs(num_params: Int, num_motives: Int, num_minors: Int, nfields: Int, minor_index: Int, all_names: List(Name), domains: List(Expr)) -> Expr
+    = let field_refs = simple_recursor_field_refs(nfields)
+      let ih_refs = simple_recursive_ih_refs(num_params, num_motives, num_minors, nfields, all_names, domains, field_refs)
+      wrap_default_lambdas(num_params + num_motives + num_minors + nfields, mk_apps(simple_recursor_minor_ref(num_minors, nfields, minor_index), Std.List.append(field_refs, ih_refs)))
+  
+  local fn simple_recursor_minor_ref(num_minors: Int, nfields: Int, minor_index: Int) -> Expr
+    = BVar(nfields + subtract_nonnegative(num_minors - 1, minor_index))
+  
+  local fn simple_recursor_param_refs(num_params: Int, num_motives: Int, num_minors: Int, nfields: Int) -> List(Expr)
+    = bvar_refs_from(nfields + num_minors + num_motives, num_params)
+  
+  local fn simple_recursor_motive_refs(num_motives: Int, num_minors: Int, nfields: Int) -> List(Expr)
+    = bvar_refs_from(nfields + num_minors, num_motives)
+  
+  local fn simple_recursor_minor_refs(num_minors: Int, nfields: Int) -> List(Expr)
+    = bvar_refs_from(nfields, num_minors)
+  
+  local fn simple_recursor_field_refs(nfields: Int) -> List(Expr)
+    = simple_recursor_field_refs_from(nfields - 1)
+  
+  local fn simple_recursor_field_refs_from(index: Int) -> List(Expr)
+    = pickup
+        index < 0 -> []
+        else -> [BVar(index) | simple_recursor_field_refs_from(index - 1)]
+  
+  local fn bvar_refs_from(start: Int, count: Int) -> List(Expr)
+    = pickup
+        count <= 0 -> []
+        else -> [BVar(start + count - 1) | bvar_refs_from(start, count - 1)]
+  
+  local fn simple_recursive_ih_refs(num_params: Int, num_motives: Int, num_minors: Int, nfields: Int, all_names: List(Name), domains: List(Expr), fields: List(Expr)) -> List(Expr)
+    = match domains
+        [] -> []
+        [domain | rest_domains] ->
+          match fields
+            [] -> []
+            [field | rest_fields] ->
+              match simple_recursive_domain_index(all_names, domain)
+                Some(index) ->
+                  let inductive_name = name_at_or_anonymous(all_names, index)
+                  let rec_name = name_append_core(inductive_name, mk_simple("rec"))
+                  let rec_args = Std.List.append(simple_recursor_param_refs(num_params, num_motives, num_minors, nfields), Std.List.append(simple_recursor_motive_refs(num_motives, num_minors, nfields), simple_recursor_minor_refs(num_minors, nfields)))
+                  [mk_apps(mk_apps(Const(rec_name, []), rec_args), [field]) | simple_recursive_ih_refs(num_params, num_motives, num_minors, nfields, all_names, rest_domains, rest_fields)]
+                None() -> simple_recursive_ih_refs(num_params, num_motives, num_minors, nfields, all_names, rest_domains, rest_fields)
+  
+  local fn simple_recursive_domain_index(all_names: List(Name), domain: Expr) -> Option(Int)
+    = match app_head_expr(domain)
+        Const(name, _) -> name_index(all_names, name, 0)
+        _ -> None()
+  
+  local fn app_head_expr(expr: Expr) -> Expr
+    = match expr
+        App(fn_expr, _) -> app_head_expr(fn_expr)
+        _ -> expr
+  
+  local fn name_index(names: List(Name), target: Name, index: Int) -> Option(Int)
+    = match names
+        [] -> None()
+        [name | rest] ->
+          pickup
+            name_eq(name, target) -> Some(index)
+            else -> name_index(rest, target, index + 1)
+  
+  local fn name_at_or_anonymous(names: List(Name), index: Int) -> Name
+    = match names
+        [] -> Anonymous()
+        [name | rest] ->
+          pickup
+            index == 0 -> name
+            else -> name_at_or_anonymous(rest, index - 1)
+  
+  local fn wrap_default_lambdas(count: Int, body: Expr) -> Expr
+    = pickup
+        count <= 0 -> body
+        else -> Lambda(mk_simple("_x"), BinderDefault(), Sort(LevelZero()), wrap_default_lambdas(count - 1, body))
+  
+  local fn mk_apps(fn_expr: Expr, args: List(Expr)) -> Expr
+    = match args
+        [] -> fn_expr
+        [arg | rest] -> mk_apps(App(fn_expr, arg), rest)
   
   local fn constructor_num_fields(type_expr: Expr, num_params: Int) -> Int
     = subtract_nonnegative(pi_arity(type_expr), num_params)
+  
+  local fn constructor_field_domains(type_expr: Expr, num_params: Int) -> List(Expr)
+    = constructor_field_domains_loop(type_expr, num_params)
+  
+  local fn constructor_field_domains_loop(type_expr: Expr, params_left: Int) -> List(Expr)
+    = match type_expr
+        Pi(_, _, domain, body) ->
+          pickup
+            params_left > 0 -> constructor_field_domains_loop(body, params_left - 1)
+            else -> [domain | constructor_field_domains_loop(body, 0)]
+        _ -> []
   
   local fn inductive_num_indices(type_expr: Expr, num_params: Int) -> Int
     = subtract_nonnegative(pi_arity(type_expr), num_params)
@@ -156,8 +362,16 @@ mod Compiler.Kernel.Core.Environment
         [] -> false
         [Constructor(_, type_expr) | rest] ->
           pickup
-            expr_mentions_any_const(type_expr, all_names) -> true
+            constructor_has_recursive_domain(all_names, type_expr) -> true
             else -> inductive_is_recursive(all_names, rest)
+  
+  local fn constructor_has_recursive_domain(all_names: List(Name), type_expr: Expr) -> Bool
+    = match type_expr
+        Pi(_, _, domain, body) ->
+          pickup
+            expr_mentions_any_const(domain, all_names) -> true
+            else -> constructor_has_recursive_domain(all_names, body)
+        _ -> false
   
   local fn inductive_block_is_reflexive(all_names: List(Name), types: List(InductiveType)) -> Bool
     = match types
@@ -279,25 +493,28 @@ mod Compiler.Kernel.Core.Environment
                   match check_inductive_param_prefixes(num_params, types)
                     Error(error) -> Error(error)
                     Ok(_) ->
-                      match check_unique_decl_names(declaration_names(decl))
+                      match check_inductive_result_universes(num_params, types)
                         Error(error) -> Error(error)
                         Ok(_) ->
-                          match check_inductive_type_headers(env, level_params, types)
+                          match check_unique_decl_names(declaration_names(decl))
                             Error(error) -> Error(error)
                             Ok(_) ->
-                              let env_with_decl = environment_add_unchecked(env, decl, false)
-                              match check_constructor_type_headers(env_with_decl, level_params, types)
+                              match check_inductive_type_headers(env, level_params, types)
                                 Error(error) -> Error(error)
                                 Ok(_) ->
-                                  match check_constructor_param_prefixes(num_params, types)
+                                  let env_with_decl = environment_add_unchecked(env, decl, false)
+                                  match check_constructor_type_headers(env_with_decl, level_params, types)
                                     Error(error) -> Error(error)
                                     Ok(_) ->
-                                      match check_constructor_return_shapes(num_params, types)
+                                      match check_constructor_param_prefixes(num_params, types)
                                         Error(error) -> Error(error)
                                         Ok(_) ->
-                                          match check_constructor_positivity(num_params, types, is_unsafe)
+                                          match check_constructor_return_shapes(num_params, types)
                                             Error(error) -> Error(error)
-                                            Ok(_) -> Ok(env_with_decl)
+                                            Ok(_) ->
+                                              match check_constructor_positivity(num_params, types, is_unsafe)
+                                                Error(error) -> Error(error)
+                                                Ok(_) -> Ok(env_with_decl)
   
   local fn check_nonnegative_num_params(num_params: Int) -> Result(Atom, KernelException)
     = pickup
@@ -322,6 +539,46 @@ mod Compiler.Kernel.Core.Environment
           pickup
             expr_list_eq(params, first_pi_domains(type_expr, num_params)) -> check_inductive_param_prefixes_against(num_params, params, rest)
             else -> Error(OtherKernelException("parameters of all inductive datatypes must match"))
+  
+  local fn check_inductive_result_universes(num_params: Int, types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(_, type_expr, _) | rest] ->
+          match inductive_result_sort_level(num_params, type_expr)
+            Some(level) -> check_inductive_result_universes_against(num_params, level, rest)
+            None() -> Error(OtherKernelException("number of parameters mismatch in inductive datatype declaration"))
+  
+  local fn check_inductive_result_universes_against(num_params: Int, level: Level, types: List(InductiveType)) -> Result(Atom, KernelException)
+    = match types
+        [] -> Ok(:ok)
+        [InductiveType(_, type_expr, _) | rest] ->
+          match inductive_result_sort_level(num_params, type_expr)
+            Some(next_level) ->
+              pickup
+                level_is_equivalent(level, next_level) -> check_inductive_result_universes_against(num_params, level, rest)
+                else -> Error(OtherKernelException("mutually inductive types must live in the same universe"))
+            None() -> Error(OtherKernelException("number of parameters mismatch in inductive datatype declaration"))
+  
+  local fn inductive_result_sort_level(num_params: Int, type_expr: Expr) -> Option(Level)
+    = match drop_pi_domains(type_expr, num_params)
+        Some(result_type) ->
+          match final_pi_result(result_type)
+            Sort(level) -> Some(level)
+            _ -> None()
+        None() -> None()
+  
+  local fn drop_pi_domains(type_expr: Expr, count: Int) -> Option(Expr)
+    = pickup
+        count <= 0 -> Some(type_expr)
+        else ->
+          match type_expr
+            Pi(_, _, _, body) -> drop_pi_domains(body, count - 1)
+            _ -> None()
+  
+  local fn final_pi_result(type_expr: Expr) -> Expr
+    = match type_expr
+        Pi(_, _, _, body) -> final_pi_result(body)
+        _ -> type_expr
   
   local fn check_inductive_type_headers(env: Environment, level_params: List(Name), types: List(InductiveType)) -> Result(Atom, KernelException)
     = match types
