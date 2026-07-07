@@ -184,23 +184,42 @@ defmodule Cure.Core.Kernel do
       %{args: tele, result_indices: result_indices} = ctor_sig ->
         family_name = Inductive.ctor_family(sig, name)
         result_params = Map.get(ctor_sig, :result_params, [])
+        pc = Inductive.param_count(sig, family_name)
 
-        if Inductive.param_count(sig, family_name) > 0 do
-          # Parameters are implicit; nothing in a bare {:ctor,…} term carries
-          # them (only the untrusted elaborator's metavariable solver does, which
-          # the kernel does not trust). A param-bearing constructor must be
-          # type-CHECKED against an expected vdata that supplies the parameters —
-          # see the check/3 clause below.
-          {:error, {:ctor_requires_checking_mode, family_name}}
-        else
-          with {:ok, arg_env} <- check_ctor_app(ctx, [], args, tele) do
-            # The accumulated arg values (most-recent first) are exactly the env
-            # in which the result terms are written; compute them by NbE (so a
-            # computed index like `and(d1,d2)` reduces once δ is available, M7).
-            param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
-            index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-            {:ok, {:vdata, family_name, param_values ++ index_values}}
-          end
+        cond do
+          pc == 0 ->
+            with {:ok, arg_env} <- check_ctor_app(ctx, [], args, tele) do
+              # The accumulated arg values (most-recent first) are exactly the env
+              # in which the result terms are written; compute them by NbE (so a
+              # computed index like `and(d1,d2)` reduces once δ is available, M7).
+              param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
+              index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+              {:ok, {:vdata, family_name, param_values ++ index_values}}
+            end
+
+          # K6 / §E.1: the data parameters ride the spine at grade 0 (Lean's kernel
+          # form). When the P params are supplied ahead of the F fields, the kernel
+          # READS and re-checks them from the family's parameter telescope — no
+          # metavariable inference in the TCB — so a param-bearing constructor is
+          # checkable in INFERENCE position (closes #545/#599; unblocks the Eq
+          # `bridge_step`'s inductive refl). Checking `params ++ fields` against
+          # `ptele ++ tele` yields the SAME arg_env as the checking-mode path
+          # (fields-most-recent ++ params), so `result_*` de Bruijn indices resolve
+          # identically.
+          length(args) == pc + length(tele) ->
+            ptele = Inductive.param_telescope(sig, family_name) || []
+
+            with {:ok, arg_env} <- check_ctor_app(ctx, [], args, ptele ++ tele) do
+              param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
+              index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+              {:ok, {:vdata, family_name, param_values ++ index_values}}
+            end
+
+          # Params absent from a bare fields-only spine: nothing carries them, so
+          # the ctor must be type-CHECKED against an expected vdata that supplies
+          # them — see the check/3 clause below.
+          true ->
+            {:error, {:ctor_requires_checking_mode, family_name}}
         end
     end
   end
