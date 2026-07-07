@@ -232,3 +232,47 @@ adopted K/UIP. Phase C is unblocked. This is consistent with the already‑K
 behaviour of user‑level inductives (`MyEq`/`mrefl`, `dp01`) and Cure's existing
 deletion rule (ledger #23); seeding builtin `Eq` extends, not introduces, the
 K stance.
+
+## Current state & the K6 coupling that blocks Phase B/C (2026‑07‑08)
+
+**Phase A is LANDED and green.** Surface `Eq(ty,a,b)` elaborates to
+`{:data, :Eq, [ty], [a,b]}` (`declarations.ex:813`), `refl(x)` to
+`{:ctor, :refl, [x]}` (`elaborator.ex:254,747`), the inductive `Eq` family is
+seeded (`builtins.ex:110‑115`), and the kernel bridges both representations via
+`ensure_eq`/`eq_parts` (accept `{:veq}` *and* `{:vdata,:Eq}`). The **observable
+symptom is fixed**: `refl/rf03,rf04,rf05` (`sym`/`trans`/`cong`) are now
+`cure=accept / idris=accept / same`, `rf01`/`rf02` unchanged. This is the
+soundness‑relevant part — refl is now a matchable constructor driving the
+index unifier.
+
+**Phase B/C (retire primitive `{:eq}`/`{:refl}`/`{:veq}`/`{:rewrite}`) is
+DEFERRED — it is faithfulness, not soundness, AND it is blocked by K6.**
+
+1. *Not a soundness fix.* The kernel types the `{:rewrite}` transport correctly
+   (`kernel.ex:116`: `proof:Eq(ty,a,b)`, motive `λx.M[x]`, checks `body:M[a]`,
+   yields `M[b]`) — it is a sound internal transport mechanism, bridged to the
+   inductive representation. Retiring it in favour of a single‑branch `:case`
+   (Agda's `rewrite p ⟿ with p | refl`) is *faithfulness* (matching how the real
+   systems layer transport), buying no soundness. The `:case` translation is
+   constructible in principle — case‑motive `λ x y p. expected[b:=y]` over the two
+   `Eq` indices + scrutinee (`apply_motive(motive, indices ++ [scrut])`), refl
+   branch refines `a≡b` — but see (2).
+
+2. *Blocked by K6.* `bridge_step` (the rw07 reducible‑inner‑occurrence path,
+   green) constructs `bridge_proof = {:rewrite, {:refl, s_nf}, const_motive,
+   mk_refl(s_nf)}` (`elaborator.ex:1127`) using the **primitive** `{:refl}` in
+   *proof (inference) position* — precisely because "a bare inductive refl ctor
+   has no inference rule (`:ctor_requires_checking_mode`)" (its own comment,
+   :1119‑1122). That is the **K6 param‑constructor‑inference limitation**, whose
+   fix (params riding the ctor spine at grade 0) is grade‑coupled and deferred.
+   Until K6 lands, the inductive `refl` cannot be inferred in proof position, so
+   `{:rewrite}`/`{:refl}` cannot be fully retired. A *partial* migration (main
+   `rewrite_plan` paths → `:case`, bridge left on the primitive) buys no soundness,
+   cannot reach Phase C, and leaves TWO transport mechanisms — a net complexity
+   increase. Declined per the analysis discipline.
+
+**Conclusion:** the Eq cluster's soundness‑relevant content (Phase A) is done;
+the primitive retirement (Phase B/C, `no_eq_node` clause) is a faithfulness
+migration **gated on K6** (hence on the grade machinery). It joins K6/K12‑Sym/K7
+as the deferred grade+representation modernization — surfaced to the operator as
+the campaign‑state finding. `no_eq_node` stays `:off`.

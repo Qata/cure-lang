@@ -51,6 +51,24 @@ eliminator/transport. **This is the single most-duplicated theme.**
   structural subst), **261** (`:cure_refl` still exposed), **37** (runtime `Eq`
   protocol not segregated from propositional Eq), **442** (examples depend on
   `:cure_refl`).
+- **ASSESSED (2026-07-08) — Phase A LANDED + green; Phase B/C DEFERRED (faithfulness,
+  K6-blocked).** Full state + proof in spec `2026-07-04-identity-type-as-inductive.md`
+  §"Current state & the K6 coupling". Phase A (surface `Eq`/`refl` → genuine
+  inductive `{:data,:Eq}`/`{:ctor,:refl}`; `ensure_eq`/`eq_parts` bridge) is done —
+  the observable symptom is fixed: `refl/rf03,rf04,rf05` (`sym`/`trans`/`cong`) now
+  `accept/accept/same`, and refl is a matchable ctor driving the index unifier
+  (577's "accepts both" is the deliberate transitional bridge). Phase B/C —
+  retiring primitive `{:eq}/{:refl}/{:veq}/{:rewrite}` (522/523/568/589/590, the
+  `no_eq_node` clause) — is (1) NOT a soundness fix (the kernel types `{:rewrite}`
+  transport correctly; retiring it for a single-branch `:case` is faithfulness),
+  and (2) BLOCKED by K6: `bridge_step` (rw07, green) emits `{:rewrite,{:refl,s_nf},
+  …}` using the PRIMITIVE `{:refl}` in proof/inference position because the
+  inductive refl ctor has no inference rule (`:ctor_requires_checking_mode` — the
+  K6 param-ctor limitation, grade-coupled/deferred). A partial migration buys no
+  soundness, can't reach Phase C, and leaves two transport mechanisms — declined
+  per discipline. `no_eq_node` stays `:off` until K6 unblocks bridge_step's
+  inductive refl. Joins K6/K12-Sym/K7 as the deferred grade+representation
+  modernization (campaign-state finding).
 
 ## K2 — Primitive operations in Core; type them properly
 `{:prim, op, args}` should not be the operation model; ops need real typed
