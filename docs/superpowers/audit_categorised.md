@@ -208,6 +208,34 @@ already, but still referenced (esp. by Antigen oracles).
   pervasive; needs a compiler symbol table), **70** (CoreBridge interns names).
   *(The broad `String.to_atom` sweep is Tier-2 §T10; only the kernel-facing
   subset is here.)*
+- **IN PROGRESS — bounded slices landed; full Sym migration + collision-detect
+  deferred.** K12 is the largest representation change (qualified `Sym` for
+  `:global`/`:data`/`:ctor`/branch heads + bounded symbol table), so it is landing
+  in slices:
+  - **Slice 1 LANDED (7dbc71b)** — bounded interning at the serialize DECODE
+    boundary (`sym_atom/1` = `String.to_existing_atom`, fail-closed to
+    `:unknown_symbol`): kills the unbounded-`String.to_atom` atom-table-exhaustion
+    DoS on untrusted C2 s-expr input (spec §D "kill `String.to_atom` in decode").
+  - **Slice 2 LANDED (cd634b8)** — same hardening for `Term.from_external` (the
+    JSON-able interchange decode; `to_external` is the Lean encoder's output).
+    Unknown symbol raises, consistent with the fn's already-partial contract.
+  - **Slice 3 — #97 collision-detect ASSESSED, DEFERRED (proof).** The audit's
+    "Core env silently overwrites defs/families/ctors" is on inspection the
+    DELIBERATE two-pass forward-declaration mechanism: `register_signature`
+    (declarations.ex:38) installs a `{:hole,"__pending__"}` stub, then
+    `elaborate_function_body` (:61) overwrites it with the real lambda — the
+    self/mutual-recursion path; `declare` likewise registers empty-ctors
+    (forward-ref) then the full family. A blanket collision-reject BREAKS the
+    compiler. A nuanced stub-aware check (reject only real→real rebind) is a real
+    tightening but risks the `_lean`/type-synonym add_def paths and — decisively —
+    the collision it guards (two modules' same-named `foo`) is what qualified
+    `Sym` identity STRUCTURALLY prevents (§D). So collision-detect lands WITH the
+    Sym migration, not as a dynamic stopgap. `register_builtin` already enforces
+    the single-registration invariant for builtin keys.
+  - **Slice 4 (full structural `Sym`) — NOT STARTED.** Assess first whether
+    globals are already effectively qualified via the `Cure.` module-atom prefix:
+    if so, cross-module collision is not currently exercisable ⇒ the migration is
+    cleanliness (deferrable w/ proof), and slices 1–3 are the sound content.
 
 ## K13 — Refinements / SMT trusted only as lint, not proof (dependent/final mode)
 - Doc 1: **7** (refinements + SMT are warning-only in final/static/dependent).
