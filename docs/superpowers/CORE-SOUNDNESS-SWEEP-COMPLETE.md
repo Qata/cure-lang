@@ -2,6 +2,20 @@
 
 **Date:** 2026-07-08 (updated) · **Branch:** `feature/idris-parity` · **Gate:** `mix test` green (3083 passed)
 
+> **RECONCILIATION NOTE (2026-07-08, later).** The "Decision needed" section near the
+> end of this doc floated three options and defaulted to **option 1 — proceed with the
+> representation reshapes (grade wave, K6→Eq Phase B/C, K7, K12-Sym) as non-design-gated
+> Core cleanup.** That default was **NOT executed and is superseded.** On per-item
+> analysis (the cron's analysis discipline) each reshape's *soundness* content was
+> landed while its *representation/cleanliness* content was **declined with recorded
+> proof** — because the soundness those reshapes would nominally buy is already
+> delivered elsewhere: K12-Sym collision-freeness by the E-layer Resolution (LOCKED
+> Approach B; audit K12 slice 4), universe soundness by predicative stratification
+> (K7), {0,ω} erasure by the relevance check (grade wave). Eq Phase B was likewise
+> declined (empirical parity regressions). The authoritative terminal state is now
+> **spec §J.1** (per-clause table) and **GAP-DESIGN-GATE.md** (deferred features). Read
+> those, not the option list below, for current status.
+
 The unattended Core-cleanup cron has assessed **every** audit K-item AND, since the
 first sweep, landed the previously-blocked Eq/identity cluster. This is the updated
 consolidated status and the one direction call that needs you.
