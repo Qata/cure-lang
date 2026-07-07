@@ -6,6 +6,7 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
   """
   use ExUnit.Case, async: true
   alias Cure.Elab.Program
+  alias Cure.Core.{Env, Validator}
 
   @vec """
   type Nat = Z | S(Nat)
@@ -42,6 +43,24 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
       prepend(x, rest) -> impossible
     """
     assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  # K4 §H step 2: an impossible constructor is OMITTED from Core, not given an
+  # {:absurd} placeholder body. The kernel's partial-coverage (step 1) accepts the
+  # omission; no {:absurd} node should survive into the elaborated Core term.
+  test "(A) an impossible constructor is omitted from Core, not marked {:absurd}" do
+    src = @vec <> """
+    fn only_empty({a: Type}, xs: Vector(a, Z)) -> Nat = match xs
+      empty() -> Z()
+    """
+
+    assert {:ok, env} = Program.elaborate(src)
+    nodes = env |> Env.get_def(:only_empty) |> Map.fetch!(:body) |> Validator.nodes()
+    refute Enum.any?(nodes, &match?({:absurd}, &1)), "impossible branch must be omitted, not {:absurd}"
+
+    case_nodes = Enum.filter(nodes, &match?({:case, _, _, _}, &1))
+    assert Enum.any?(case_nodes, fn {:case, _, _, brs} -> Enum.map(brs, &elem(&1, 0)) == [:empty] end),
+           "the case should carry only the reachable :empty branch"
   end
 
   # Pre-impl: {:error, :unknown_global}. Post: {:error, {:reachable_impossible, :prepend}}.

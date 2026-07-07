@@ -1604,14 +1604,16 @@ defmodule Cure.Elab.Elaborator do
                  verdict, cname, with_pattern, body_expr, names, ctx, env,
                  param_vals, scrut_term, result_type_term
                ) do
+            :omit -> {:cont, {:ok, acc}}
             {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
             {:error, _} = err -> {:halt, err}
           end
 
         nil ->
           if verdict == :impossible do
-            {arity, _} = ctor_arity(env, cname)
-            {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+            # impossible constructor ⇒ OMIT it (K4 §H); the kernel's partial
+            # coverage accepts the omission. No {:absurd} placeholder body.
+            {:cont, {:ok, acc}}
           else
             {:halt, {:error, {:missing_branch, cname}}}
           end
@@ -1627,7 +1629,8 @@ defmodule Cure.Elab.Elaborator do
 
     case verdict do
       :impossible ->
-        {:ok, {cname, arity, {:absurd}}}
+        # impossible ⇒ signal omission to the caller (K4 §H); no {:absurd} body.
+        :omit
 
       _solved_or_trivial ->
         subst =
@@ -1743,9 +1746,9 @@ defmodule Cure.Elab.Elaborator do
          :ok <- reject_with_default(default) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
-        {cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
-          {arity, _} = ctor_arity(env, cname)
-          {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+        {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
+          # explicit `-> impossible` ⇒ OMIT (K4 §H); kernel coverage re-verifies.
+          {:cont, {:ok, acc}}
 
         {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->
           case elaborate_with_branch(cname, pattern, body_expr, cfg) do
@@ -2090,10 +2093,9 @@ defmodule Cure.Elab.Elaborator do
               {:error, _} = err -> {:halt, err}
             end
 
-          {:impossible_marked, pattern} ->
+          {:impossible_marked, _pattern} ->
             if verdict == :impossible do
-              {arity, _} = ctor_arity(env, pattern)
-              {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+              {:cont, {:ok, acc}}                       # omit (K4 §H)
             else
               {:halt, {:error, {:reachable_impossible, cname}}}
             end
@@ -2103,8 +2105,7 @@ defmodule Cure.Elab.Elaborator do
             # variable/wildcard catch-all (`x -> …`), else a genuine gap.
             cond do
               verdict == :impossible ->
-                {arity, _} = ctor_arity(env, cname)
-                {:cont, {:ok, acc ++ [{cname, arity, {:absurd}}]}}
+                {:cont, {:ok, acc}}                      # omit (K4 §H)
 
               default != nil ->
                 case elaborate_default_branch(
@@ -3166,17 +3167,6 @@ defmodule Cure.Elab.Elaborator do
   # pattern (`$<ctor>_<n>`); empty for a nullary constructor.
   defp default_pattern_vars(cname, arity) do
     for i <- 1..arity//1, do: "$" <> Atom.to_string(cname) <> "_" <> Integer.to_string(i)
-  end
-
-  # Arity of a constructor named directly or by a pattern (spec §5 steps 4/5).
-  defp ctor_arity(env, {:function_call, _, _} = pattern) do
-    {:ok, {cname, _}} = constructor_pattern(pattern)
-    ctor_arity(env, cname)
-  end
-
-  defp ctor_arity(env, cname) when is_atom(cname) do
-    %{args: tele} = Inductive.get_ctor(env, cname)
-    {length(tele), cname}
   end
 
   defp elaborate_matched_branch(verdict, pattern, body_expr, names, ctx, env, scrut_param_vals, scrut_term, result_type_term, carried) do
