@@ -53,15 +53,25 @@ one question at a time and needs your answers), so it cannot run unattended.
    append/foldl/foldr/count/length/any/all); `Std.Ord` has `type Ordering = LessThan
    | EqualTo | GreaterThan` (inductive) + `compare` + the `Ord(T)` protocol. **Not a
    gap — no design needed.**
-3. **Safe FRP Types (ICFP'09)** *(type foundation landed; the reactive library/runtime
-   is the remaining feature)*. The **type-system foundation** — the Dec/Init index
-   algebra, `switch` typing, loop well-formedness — is landed and oracle-tested
-   (`test/oracle/frp/frp01–12`, "frp cluster 12/12"; memory
-   `frp-source-unavailable-derive-from-paper`). What remains is the **reactive
-   library + runtime**: no `Std.Signal`/`Std.Flow`/`Behavior`/`Event`/`switch`
-   modules exist in `lib/std` yet. That's a large, staged feature with an existing
-   design bible (`reactive-runtime-design-bible`, 0.34–0.37 roadmap) — the most
-   design-progressed remaining gap.
+3. **FRP reactive runtime** *(already DESIGNED at scale; the gap is IMPLEMENTATION +
+   one architecture fork — needs your direction, not a fresh design)*. Two things
+   are already in place: (a) the **type-system foundation** — Dec/Init index algebra,
+   `switch` typing, loop well-formedness — landed and oracle-tested
+   (`test/oracle/frp/frp01–12`); (b) a **3314-line canonical design bible** (v12,
+   `docs/cure_reactive_runtime_design_bible_v12_release_hierarchical.md`; memory
+   `reactive-runtime-design-bible`) with a staged **0.34–0.37 roadmap** (0.34
+   Libraries + Flow DSL → 0.35 Resource → 0.36 Reactor → 0.37 Program), plus the
+   `2026-06-30-cure-dependent-types-frp-design.md` spec. What's missing is the
+   **implementation**: no `Std.Signal`/`Std.Flow`/`Std.Clock` modules or
+   `Cure.Compiler.FlowIR` exist in-tree yet. Because the design already exists, the
+   decisions you'd own are **(i) which 0.34 slice to implement first** (e.g. the
+   `Std.Signal`/`Signal.Event` core + operators, or `FlowIR` + flow lowering), and
+   **(ii) the architecture fork** the bible flags: keep 0.34's **runtime
+   validators**, or lift `FlowDesc`(Init/Dec/clock/type) into **static type indices**
+   (Sculthorpe–Nilsson) now so verification is compile-time and codegen can erase the
+   runtime graph — the "dependent-types marriage" (memory
+   `dependent-types-frp-initiative`). That fork is a real prose design conversation,
+   which is why it's gated on you.
 
 ### Group B — declined/deferred K-features (optional, faithfulness/parity)
 4. **Canonical `Eq` transport (K1b / K5b).** Retire the `{:rewrite}` node → genuine
@@ -91,6 +101,11 @@ Either is a real design conversation — which is why this stays gated on your i
 Group B (canonical `Eq` transport, universe-level polymorphism, qualified `Sym`) is
 opt-in parity work with no soundness urgency.
 
-**To proceed:** reply with a gap to design — **#3 (FRP reactive runtime)** is the
-recommended default given its landed foundation and existing design bible — and I'll
-run brainstorming to a design you approve before any code is written.
+**To proceed:** reply with a gap. For **#3 (FRP reactive runtime)** — the recommended
+default — the design already exists (bible v12), so I don't need to re-design it; I
+need two directions from you: **(i)** which 0.34 slice to implement first (suggest the
+`Std.Signal` + `Signal.Event` core + functional operators as the smallest standalone
+unit), and **(ii)** the runtime-validators-vs-static-type-indices fork. Give me those
+and I'll implement the slice with per-task red-green + full gate. For **#1
+(unsafe-hole taxonomy)** I'd first need the grade-wave sequencing decision. Either
+way, no code lands until you've signed off on the direction.
