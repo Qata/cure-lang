@@ -135,6 +135,20 @@ Should be elaborator-only unreachable marker, not a Core term.
 
 ## K5 — Index unification / branch-skipping / coverage (soundness-critical)
 The heart of dependent `match`; conservative and known-incomplete.
+- **ASSESSED (2026-07-08) — K5a LANDED; K5b rides the deferred Eq cluster;
+  residuals are hygiene/addressed/legacy.** K5a (acute unifier soundness) landed:
+  #573 length guard, #574 `unify_spine` mismatch→`:impossible`, #575 drop-
+  `:undecided` declined-with-proof. Coverage is now sound (K4 rewrite): the Core
+  `check_coverage` accepts an uncovered ctor IFF provably `:impossible` at the
+  scrutinee indices — so #636 (impossible-vs-missing) IS distinguished, and #543
+  (set-inclusion) is superseded. #635 (duplicate-branch) is harmless: the MapSet
+  dedups so a duplicate can't corrupt coverage; both bodies are still checked
+  against the same refined context (redundant, not unsound — a lint, not a hole).
+  #254-257 (exhaustiveness treats pin/unknown as wildcard; hardcoded
+  Option/Result/List/Bool) reference the LEGACY `lib/cure/types/pattern_checker.ex`
+  (K10 territory), not the Core kernel. **K5b = canonical `Eq.rec`/transport,
+  joined with K1b** (spec §E.2) → rides the Eq cluster, DEFERRED (faithfulness,
+  K6-blocked — see K1). No un-blocked Core-soundness work remains in K5.
 - Doc 1: **15** (keep practical indexed matching, don't chase full Agda).
 - Doc 2: **532** (skips "impossible" branch bodies), **533** (arity mismatch
   ignored), **534** (defeq ignored except syntactic), **572** (`check_case_branches`
@@ -232,6 +246,30 @@ checking mode and repeated re-splitting.
 ## K10 — Legacy parallel dependent systems (Pi/Sigma/Reduce/CoreBridge/legacy SMT)
 Second dependent calculus that shadows the real Core; mostly off the main path
 already, but still referenced (esp. by Antigen oracles).
+- **ASSESSED (2026-07-08) — legacy dependent machinery is DELEGATED away (sound);
+  the residual soundness question reduces to `dependent?/1` classifier
+  completeness (#12), flagged for a focused probe.** The compiler and
+  `Types.Checker.check_module` BOTH gate on `Cure.Elab.Program.dependent?(ast)`:
+  dependent modules route to `check_dependent_module` → `Cure.Elab.Program.check_ast`
+  (the sound Core kernel) for checking (checker.ex:92) and to `dependent_codegen`
+  → `check_ast_with_locals`/`Emit` for codegen (compiler.ex:229). The legacy
+  `Types.Dependent`/`Pi`/`Sigma`/`Reduce` calculus is NEVER invoked to CHECK a
+  dependent program — so its weaknesses (16 Sigma-admits-Any, 15 weak Pi subst,
+  632/633) are latent in a self-contained subsystem (`lib/cure/types/`, no
+  external refs to Pi/Sigma/Reduce/CoreBridge from the main path), i.e.
+  cleanliness-to-eventually-delete, not a live dependent-soundness hole. The one
+  genuine open question is #12: `dependent?/1` is a SYNTACTIC classifier — a
+  module that relies on a dependent SAFETY guarantee (e.g. `vhead : Vec(S n) -> A`
+  applied to a non-empty vector) but carries no local dependent syntax
+  (`indexed_type`/`sigma_type`/`rewrite`/implicit-param/`Eq`/`refl`/pair-proj)
+  could be misclassified as non-dependent and checked by the weaker legacy
+  simple-type path, bypassing the dependent guarantee. Whether such a program is
+  constructible-and-unsoundly-accepted is a concrete PROBE (next fire), not a
+  parity reshape. NOTE: making `dependent?` more inclusive is risky (Core does not
+  yet cover every non-dependent surface construct the legacy checker does), so any
+  fix must be targeted. The Antigen-oracle references to the legacy system are
+  test-only. 69/70/629 (CoreBridge `String.to_atom`) mirror the K12 decode-DoS
+  concern on the legacy path — same bounded-interning fix if that path is kept.
 - Doc 1: **11** (legacy SMT-backed dependent system).
 - Doc 2: **548** (legacy dep system not comparable to Agda/Lean/Idris), **549**
   (Pi/Sigma = second calculus), **550** (`Types.Reduce` parallel), **551**
