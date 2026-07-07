@@ -286,6 +286,15 @@ Two deliberate deviations from the raw notes:
 
 ## Wave 1 — Cheap, high-consensus trust-boundary removals (localized)
 2. **K3 — Holes out of final Core.** *§18 Phase 1 #1; one kernel clause + emit check.*
+   **LANDED (Option B):** `Validator.release_config/0` ratchet (`no_hole: :reject`)
+   enforced at both release exits (`Emit.reject_holes`, `Program.check_codegen_ready`)
+   over the *pre-erase* Core term — closing the #102 erased-position leak (a hole in
+   a rewrite-proof / eq / refl / prim arg that `Erase.erase` dropped). Dev-time
+   `check_def` stays lenient so `?name` sketches still typecheck + emit `:hole_goal`.
+   The `unsafe` keyword + 3-kind (type/proof/body) taxonomy + node reshape
+   `{:hole,name}`→`{:hole,name,safety}` are DEFERRED to their own spec, sequenced
+   with the grade wave (proof-vs-body = erased-vs-relevant) and the retirement of
+   the legacy `Types.Holes` 3-tuple (Doc-2 #20/#323) to avoid a 3-tuple alias.
 3. **K1a — Kill primitive `{:eq}/{:refl}/{:veq}/{:vrefl}`; temporarily reject
    surface `rewrite`.** *#2 in both §570/§640. Inductive `Eq` already exists
    (task #90). §18's temp-reject device (Phase 1 #3) resolves the

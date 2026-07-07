@@ -421,7 +421,7 @@ the reject *mechanism* is exercised by config-override, not by enabling any clau
 | `usage_relevance` | grade-0 binders absent from relevant positions; `{0,ω}` only | grade wave (affine/linear stay `:off`) |
 | `no_eq_node` | no `{:eq}`/`{:refl}`/`{:rewrite}`; `Eq` is `:data`/`:ctor` | K1a wave (structural part; K1b's canonical transport is a typing concern, not this clause) |
 | `no_prim_node` | no `{:prim}`; primitive ops are delta-globals | K2 wave |
-| `no_hole` | no `{:hole, _}` anywhere | K3 wave |
+| `no_hole` | no `{:hole, _}` anywhere | **K3 — LANDED**: `:reject` in `release_config/0` (release/emit boundary); dev-time `check_def` stays `:warn` so deferred `?name` bodies still typecheck (Option B). Enforced at both release exits (`Emit.reject_holes`, `Program.check_codegen_ready`) on the *pre-erase* term |
 | `qualified_syms` | `:global`/`:data`/`:ctor`/branch heads use `Sym`, not atoms | K12 wave |
 | `ctor_signature` | `:ctor` args check against resolved signature; params at grade 0 | K6 wave |
 | `case_coverage` | branch ctor set exactly covers the family; arities match signature | K5 wave (structural part) |
