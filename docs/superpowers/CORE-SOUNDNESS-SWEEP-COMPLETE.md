@@ -45,10 +45,28 @@ design pass rather than incremental cron surgery.
 
 ## The coupling
 
-Everything deferred traces to **two coupled foundations that aren't built yet**:
-the **QTT grade machinery** (0/ω, in-scope per "minus linear types" but *not* a
-numbered wave) and the **qualified-`Sym` representation**. K6 needs grades; Eq-B/C
-needs K6; K7 and K12-Sym are the same modernization. None buys soundness.
+Everything deferred traces to one **representation modernization**, coupled but
+**not a new-machinery build** (correction to an earlier framing in this doc's
+git history): the **0/ω erasure semantics already exist** — `quantity ::
+:erased | :present` on ctor args and def params, with erasure dropping `:erased`
+(inductive.ex:108, erase.ex:20; `relevance.ex:33`: "core as ω-except-erased; the
+linear `1` multiplicity is out of scope"). So the remaining items are **bounded
+representation refactors on existing semantics**, converging on the locked
+`2026-07-07-final-core-grammar` spec:
+
+- **K6** — constructor params ride the spine *at grade 0*, i.e. as existing
+  `:erased`-quantity args. Not blocked on new machinery; it's a rep change to
+  `{:ctor, sym, args}` + kernel infer/check + erasure (which already drops
+  `:erased`). Makes param-ctors inferable → **unblocks Eq Phase B/C**.
+- **grade_on_binders** — Pi/Lam/Sigma → graded 4-tuple (the validator already
+  descends both 3- and 4-tuple forms). Rep change, semantics exist.
+- **K12-Sym** — qualified symbol ids. Rep change; collision-freeness already
+  delivered by the E-layer.
+- **K7** — level-expressions + polymorphism. Rep change on a sound base.
+
+None buys soundness; all buy Idris parity of the *representation*. The work is
+sizeable but bounded — coordinated refactoring toward the locked spec, not
+research.
 
 ## Decision needed (I've paused — not auto-proceeding)
 
@@ -61,7 +79,16 @@ needs K6; K7 and K12-Sym are the same modernization. None buys soundness.
 3. **Accept the soundness-clean Core as-is** and proceed straight to the deferred
    gaps.
 
-I did **not** auto-start the gaps or the grade wave, because the strategy above is
-your call and the situation is more nuanced than the cron's linear
-"all-landed → start-gaps" assumption. Full rationale per item lives in
-`docs/superpowers/audit_categorised.md` (each K section) and the specs.
+**Default I'm taking (absent redirection):** given your standing directives
+(`autonomous-parity-grind`: "never ask; default = align with real languages",
+`tcb-change-blanket-approval` for kernel alignment, and the explicit "fully
+cleaned up + Idris parity" mandate) — and now that the remaining work is bounded
+representation refactoring toward the locked spec rather than new machinery — I'll
+**proceed with option 1** (the representation reshapes, starting with K6 → Eq
+Phase B/C, per-task red-green, full gate each step). This treats them as the
+"Core cleanup [that] did not need design approval," not as design-gated features.
+
+If you'd rather I do option 2 or 3 (fold into gaps / stop at the soundness-clean
+Core and go to gaps), say so and I'll switch. Otherwise I begin K6 on the next
+fire. Full rationale per item lives in `docs/superpowers/audit_categorised.md`
+(each K section) and the specs.
