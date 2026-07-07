@@ -75,8 +75,11 @@ capability rides a reshaped field or an existing node. The taxonomy *shrinks*.
 ## §B. Grades — the reserved binder field
 
 Every binding site (`:pi`, `:lam`, `:sigma`) carries one `Cure.Core.Grade`. This
-is the single invasive reservation that unlocks erasure now and linearity /
-affinity / security / cost later without a second re-thread.
+is the single invasive reservation that unlocks erasure now (enforced), carries
+linearity/affinity and security as already-present fields whose *enforcement*
+lands in later waves (§B.2, §B.3), and leaves room for cost/uniqueness/graded
+effects as future additive axes (§B.1) — all without a second re-thread of an
+existing node's arity.
 
 ### B.1 The grade record (extensible)
 
@@ -89,10 +92,12 @@ affinity / security / cost later without a second re-thread.
 
 It is a **struct, not a tuple**: adding a future axis (uniqueness, cost/WCET, a
 graded-effect axis) is a defaulted field addition — additive, no node-arity
-change. This is the hedge that keeps four Bucket-B features additive. A missing
-axis defaults to its most-permissive element (`usage: ω`, `security: ⊥`), so
-un-annotated surface code elaborates to the unrestricted grade and behaves as
-today.
+change. This is the hedge that keeps four **Bucket-B features** (this document's
+label for deferred features that ride an additive grammar change rather than a
+node-arity reshape: linearity/affinity, uniqueness, cost/WCET, graded effects)
+additive. A missing axis defaults to its most-permissive element (`usage: ω`,
+`security: ⊥`), so un-annotated surface code elaborates to the unrestricted
+grade and behaves as today.
 
 ### B.2 Usage — ordered semiring behind a module boundary
 
@@ -164,8 +169,9 @@ level ::= lzero
 
 - **Predicative & cumulative:** `Type ℓ : Type (lsucc ℓ)`; `lmax` for the
   universe of a `:pi`/`:sigma` (`Type (lmax ℓ₁ ℓ₂)`). **No `imax`, no
-  impredicative `Prop`** (decision 5; Bucket C decline). Irrelevance is
-  grade-0, not a `Prop` sort.
+  impredicative `Prop`** (decision 5; a **Bucket-C** decline — this document's
+  label for a feature considered and deliberately declined rather than
+  deferred). Irrelevance is grade-0, not a `Prop` sort.
 - **Level polymorphism:** globals and data families may bind universe
   parameters. `{:global, sym, levels}` carries the list of level-expression
   **arguments** instantiating those parameters at the use site; the binding
@@ -187,12 +193,16 @@ Cure.Core.Sym  ≈  %{module: [atom], name: atom}   # or an interned integer id 
   table-exhaustion + collision risk). Decode into `Sym` values, interned through a
   bounded symbol table.
 - Identity is structural on `Sym`, so two distinct modules' `foo` never collide,
-  and constructor/data resolution is unambiguous — the precondition for
-  signature-driven constructor checking in §E.
+  and constructor/data resolution is unambiguous — a property signature-driven
+  constructor checking in §E depends on for soundness in the final grammar.
+  (`audit_categorised.md`'s Wave-2 list happens to order K6 before K12; whether
+  that intra-wave ordering needs to flip, or K6 can land first with the interim
+  atom-collision risk accepted, is for the sequencing plan to resolve, not this
+  document.)
 - Serialization (§K) encodes `Sym` explicitly (module path + name), keeping the
   C2 external form total and collision-free.
 
-## §E. Eliminator & recursion — Fork 2 resolved
+## §E. Eliminator & recursion — the eliminator-form fork resolved
 
 **Decision: the sole native eliminator is the motive-carrying dependent
 `{:case, scrut, motive, branches}` (a single split, non-recursive). Recursion is
@@ -292,7 +302,7 @@ refl : (A : Type ℓ) (a : A) → Eq A a a
   producing a `{:case}` on the equality proof with the appropriate motive. No
   transport node survives in Core.
 - **K/UIP is adopted** (decision 5, task #90): case on `refl` may collapse the
-  index — this is what forecloses cubical/HoTT (Bucket C) and is the deliberate
+  index — this is what forecloses cubical/HoTT (Bucket-C) and is the deliberate
   trade for a simpler conversion. The `K`/`J` eliminators are the two
   derived-in-surface forms; both bottom out in `:case`.
 
@@ -357,13 +367,20 @@ registration.
 ## §H. Empty & absurd (K4)
 
 `{:absurd}` is a current Core node (K4). Delete it. Ex-falso is instead the
-elimination of an **empty inductive** (`Empty`, a `:data` with no constructors) via
-`{:case, scrut, motive, []}` — a `case` with an empty branch list. The kernel
-accepts an empty branch list **only** when the scrutinee's type is a family with
-no constructors; otherwise it is a coverage error (§E.2). This removes the node
-and makes "impossible" a derived, checked fact rather than a trusted marker. (The
-audit's K4 also allows an *elaborator-only* marker; we take the stricter line —
-absurd never appears in checked Core, only empty-`case` does.)
+elimination of a **provably-uninhabited scrutinee** via
+`{:case, scrut, motive, []}` — a `case` with an empty branch list. Per §E.2's
+coverage rule, the kernel accepts an empty branch list whenever every
+constructor of the scrutinee's family is either absent (a literally-empty family
+like `Empty`) **or** ruled impossible by index-unification failure at the
+scrutinee's actual indices — the standard Agda/Idris index-contradiction
+discipline (e.g. a proof of `Eq Bool true false`: `Eq` has one constructor,
+`refl`, but `refl`'s index requirement `x = y` can never unify with `true`/
+`false`, so the one constructor is impossible and the empty case is accepted
+even though the family is not literally empty). Otherwise an empty branch list
+is a coverage error (§E.2). This removes the node and makes "impossible" a
+derived, checked fact rather than a trusted marker. (The audit's K4 also allows
+an *elaborator-only* marker; we take the stricter line — absurd never appears in
+checked Core, only empty-`case` does.)
 
 ## §I. Explicitly excluded from Core (with where they live instead)
 
@@ -398,14 +415,14 @@ still produces terms that pass them, with Antigen green + fixtures updated.
 |---|---|---|
 | `grade_on_binders` | every `:pi`/`:lam`/`:sigma` carries a well-formed `Grade` | Wave 0 (`:reject` immediately — new field) |
 | `usage_relevance` | grade-0 binders absent from relevant positions; `{0,ω}` only | grade wave (affine/linear stay `:off`) |
-| `no_eq_node` | no `{:eq}`/`{:refl}`/`{:rewrite}`; `Eq` is `:data`/`:ctor` | K1 wave |
+| `no_eq_node` | no `{:eq}`/`{:refl}`/`{:rewrite}`; `Eq` is `:data`/`:ctor` | K1a wave (structural part; K1b's canonical transport is a typing concern, not this clause) |
 | `no_prim_node` | no `{:prim}`; primitive ops are delta-globals | K2 wave |
 | `no_hole` | no `{:hole, _}` anywhere | K3 wave |
 | `qualified_syms` | `:global`/`:data`/`:ctor`/branch heads use `Sym`, not atoms | K12 wave |
 | `ctor_signature` | `:ctor` args check against resolved signature; params at grade 0 | K6 wave |
 | `case_coverage` | branch ctor set exactly covers the family; arities match signature | K5 wave (structural part) |
 | `level_expr` | `{:type, ℓ}` is a well-formed level-expression; globals carry level args; no ceiling | K7 wave |
-| `no_absurd_node` | no `{:absurd}`; ex-falso only via empty-`case` over an empty family | K4 wave |
+| `no_absurd_node` | no `{:absurd}`; ex-falso only via empty-`case` (structural absence of branches — coverage per §E.2/§H decides when that's valid) | K4 wave |
 | `no_legacy_reducer` | normal forms produced by the clean reducer only | K10 wave |
 
 The validator checks **structural shape**, not typing. The soundness-critical
@@ -429,7 +446,9 @@ re-checker) grow in lockstep with §A:
 - `:global`/`:data`/`:ctor` emit `Sym` (module path + name), **replacing
   `String.to_atom`** with symbol-table interning on decode.
 - Deleted nodes lose their encodings; `Eq`/`refl`/absurd round-trip through the
-  `:data`/`:ctor`/`:case` encodings.
+  `:data`/`:ctor`/`:case` encodings, and former `:prim` operations round-trip
+  through the ordinary `:global` encoding (§G) — no new encoding case needed for
+  any of the four (`:rewrite` never reaches Core, so it needs none).
 
 The encoding stays total and reversible (no PIDs/refs/closures in Core), so the
 independent-checker contract holds across the reshape.
