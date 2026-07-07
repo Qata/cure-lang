@@ -1,17 +1,57 @@
-# Core soundness sweep complete — decision needed on the parity reshapes
+# Core soundness sweep complete — Eq cluster now settled; remaining items need a direction call
 
-**Date:** 2026-07-08 · **Branch:** `feature/idris-parity` · **Gate:** `mix test` green (3079 passed)
+**Date:** 2026-07-08 (updated) · **Branch:** `feature/idris-parity` · **Gate:** `mix test` green (3083 passed)
 
-The unattended Core-cleanup cron has assessed **every** audit K-item. This is the
-consolidated status and the one decision that needs you.
+The unattended Core-cleanup cron has assessed **every** audit K-item AND, since the
+first sweep, landed the previously-blocked Eq/identity cluster. This is the updated
+consolidated status and the one direction call that needs you.
 
 ## Bottom line
 
-**The Core is soundness-clean.** Every genuine soundness/boundary tightening the
-audit called for is landed and gated. What remains is **not** soundness work — it
-is one coherent **grade + representation modernization** that is faithfulness/parity,
-deeply coupled, and (by your own "features need design approval" rule) deserves a
-design pass rather than incremental cron surgery.
+**The Core is soundness-clean and the Eq/identity cluster is now resolved.** Every
+genuine soundness/boundary tightening the audit called for is landed and gated.
+Nothing landable-unattended remains: every open item is either **out of scope**
+(QTT multiplicities/linear), an **expressiveness feature** (needs design approval),
+or a **resolution-strategy design decision** you've reserved.
+
+## What landed since the first sweep (the Eq/identity cluster — was the main open item)
+
+| Item | Commit | What |
+|------|--------|------|
+| K6 545/599 | `b355753` | `infer({:ctor})` reads params riding the spine (§E.1) — param-bearing ctors inferable; additive, no fixture churn |
+| Eq bridge | `f3b0e73` | `bridge_step` builds inductive `refl` via param-in-spine — **last** primitive `{:refl}` producer retired |
+| K1a ratchet | `0e75a13` | split `no_eq_node`; primitive `{:eq}`/`{:refl}` → `:reject` in `release_config`, enforced on every program's final Core |
+| K1 Phase B | `07f36f6` | **declined with empirical proof** — retiring the sound `{:rewrite}` node for `:case` buys no soundness and *risks* parity (frp01 computed-endpoint drift; rw03 no-occurrence more-permissive; std/proof bridge regression). Surface rewrite is already Idris-faithful via `rewrite_plan` |
+
+## Remaining items — none unattended-landable (dispositions)
+
+- **grade_on_binders / ctor_signature** — the grade record's `usage` axis IS QTT
+  multiplicity; the `1`/`≤1` linear part is **explicitly out of scope** ("minus
+  linear types"), and the in-scope 0/ω erasure is already enforced by the Wave-0
+  relevance check. Out of scope, not a pending tightening.
+- **K7 universe polymorphism / level-expressions** — soundness already met
+  (predicative, cumulative); polymorphism is an **expressiveness feature** →
+  design-gated by your "features need design approval" rule.
+- **K12-Sym qualified symbols + global-def collision** — families/ctors are
+  collision-protected (rekey, per your locked type-shadowing decision); global
+  `defs` merge with silent overwrite (`program.ex:544`). The **resolution strategy
+  for defs** (error vs rekey vs qualify) is a design decision you reserved (you
+  locked rekey for *types*; defs were "flagged for operator"). Genuine but
+  design-gated; fail-closed-on-collision is the conservative default if you want it.
+- **K10 legacy dependent calculus deletion** — #12 misclassification proven
+  fail-safe (pinned `041152f`); the legacy Pi/Sigma/Reduce/CoreBridge is
+  cleanliness-to-delete BUT entangled with the live `Types.Checker` and the Antigen
+  engine (not dead code) — a large refactor with cleanliness-only payoff, deferred.
+- **K5b canonical transport** — rides the declined Phase B.
+
+**Net:** the soundness/boundary-tightening mandate is complete. Advancing further
+means a *direction* choice only you can make (approve reshapes/features as
+design-gated work, decide the def-collision resolution strategy, or accept the
+soundness-clean Core and move to the deferred gaps). The original three options
+below still stand.
+
+---
+_Original first-sweep write-up follows._
 
 ## Landed (real soundness/boundary tightenings)
 
