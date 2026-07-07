@@ -86,4 +86,34 @@ defmodule Cure.Core.ValidatorTest do
       assert r.clause == :no_hole and r.mode == :reject
     end
   end
+
+  describe "deferred clauses recognize legacy shape when flipped on" do
+    test "grade_on_binders fires on a current (ungraded) binder when set to :warn" do
+      cfg = Map.put(Validator.wave0_config(), :grade_on_binders, :warn)
+      assert {:ok, ws} = Validator.validate({:pi, {:type, 0}, {:var, 0}}, cfg)
+      assert Enum.any?(ws, &(&1.clause == :grade_on_binders))
+    end
+
+    test "grade_on_binders does NOT fire on a hypothetical graded binder" do
+      cfg = Map.put(Validator.wave0_config(), :grade_on_binders, :warn)
+      graded = {:pi, :omega, {:type, 0}, {:var, 0}}
+      assert {:ok, ws} = Validator.validate(graded, cfg)
+      refute Enum.any?(ws, &(&1.clause == :grade_on_binders))
+    end
+
+    test "qualified_syms fires on a bare-atom global; level_expr fires on an integer level" do
+      cfg =
+        Validator.wave0_config()
+        |> Map.put(:qualified_syms, :warn)
+        |> Map.put(:level_expr, :warn)
+
+      assert {:ok, ws} = Validator.validate({:app, {:global, :foo}, {:type, 2}}, cfg)
+      assert Enum.any?(ws, &(&1.clause == :qualified_syms))
+      assert Enum.any?(ws, &(&1.clause == :level_expr))
+    end
+
+    test "in Wave-0 config these deferred clauses stay silent (are :off)" do
+      assert {:ok, []} = Validator.validate({:pi, {:type, 0}, {:global, :foo}})
+    end
+  end
 end

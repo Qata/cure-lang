@@ -126,6 +126,32 @@ defmodule Cure.Core.Validator do
 
   defp violation(:no_absurd_node, {:absurd}), do: "absurd node; use empty case (K4)"
 
+  # -- deferred checklist clauses (`:off` in Wave 0, ready to flip) ------------
+
+  # grade_on_binders — current 3-tuple binders carry no grade; the future graded
+  # 4-tuple forms ({:pi, grade, dom, cod}) do NOT match and so pass.
+  defp violation(:grade_on_binders, {:pi, _, _}), do: "pi binder carries no grade"
+  defp violation(:grade_on_binders, {:lam, _, _}), do: "lam binder carries no grade"
+  defp violation(:grade_on_binders, {:sigma, _, _}), do: "sigma binder carries no grade"
+
+  # qualified_syms — bare-atom identity instead of a qualified Sym.
+  defp violation(:qualified_syms, {:global, n}) when is_atom(n),
+    do: "global uses a bare atom, not a qualified symbol (K12)"
+
+  defp violation(:qualified_syms, {:data, n, _, _}) when is_atom(n),
+    do: "data family uses a bare atom, not a qualified symbol (K12)"
+
+  defp violation(:qualified_syms, {:ctor, n, _}) when is_atom(n),
+    do: "constructor uses a bare atom, not a qualified symbol (K12)"
+
+  # level_expr — integer level instead of a level-expression.
+  defp violation(:level_expr, {:type, l}) when is_integer(l),
+    do: "universe level is an integer, not a level-expression (K7)"
+
+  # ctor_signature / case_coverage / usage_relevance / no_legacy_reducer are
+  # non-structural (need the env / typing / reduction) — enforced in the kernel
+  # when their wave lands, never here. They fall through to the catch-all.
+
   # non-firing fallback for every clause/node not matched above
   defp violation(_clause, _node), do: nil
 end
