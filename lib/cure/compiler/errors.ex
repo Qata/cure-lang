@@ -367,6 +367,18 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:ambiguous_name, name, modules}, file) do
+    format_diagnostic(
+      "error",
+      "ambiguous name (E089)",
+      file,
+      1,
+      "'#{name}' is provided by #{Enum.join(modules, " and ")}; qualify the " <>
+        "call (e.g. #{hd(modules)}.#{name}(...)) or define a local #{name} to " <>
+        "shadow them."
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
@@ -1586,6 +1598,26 @@ defmodule Cure.Compiler.Errors do
 
     Fix: rename one of the modules, or remove the redundant file if it
     was an accidental copy.
+    """,
+    "E089" => """
+    E089: Ambiguous Name
+
+    An unqualified reference names a global that two or more imported
+    modules provide, and the local module does not redeclare it to claim
+    the name. Approach B re-keys every colliding import to its qualified
+    key (`Mod#name`), so the bare name has no single owner -- resolving it
+    silently would pick whichever import merged last. This fires at BOTH
+    reference sites: a call (`name(...)`) and a bare value (`f(name)`).
+
+    Example:
+      mod P
+        use Std.CollA        # exports helper/1
+        use Std.CollB        # also exports helper/1
+        fn f() -> Nat = helper(Z())   # Error: 'helper' is ambiguous
+      end
+
+    Fix: qualify the reference (`Std.CollA.helper(...)`), or define a
+    local `helper` to shadow both imports.
     """,
     "W088" => """
     W088: Unresolved Import

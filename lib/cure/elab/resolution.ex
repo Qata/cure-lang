@@ -251,11 +251,11 @@ defmodule Cure.Elab.Resolution do
   key) never reaches this fallback (preserving R1).
   """
   @spec resolve_bare_shadowed(Env.t(), atom()) :: {:ok, atom()} | :none | {:ambiguous, [String.t()]}
-  def resolve_bare_shadowed(%Env{families: families, ctors: ctors}, bare) do
+  def resolve_bare_shadowed(%Env{families: families, ctors: ctors, defs: defs}, bare) do
     suffix = "#" <> Atom.to_string(bare)
 
     matches =
-      (Map.keys(ctors) ++ Map.keys(families))
+      (Map.keys(ctors) ++ Map.keys(families) ++ Map.keys(defs))
       |> Enum.flat_map(fn k ->
         s = Atom.to_string(k)
         if String.ends_with?(s, suffix), do: [{String.trim_trailing(s, suffix), k}], else: []
@@ -307,24 +307,28 @@ defmodule Cure.Elab.Resolution do
   end
 
   @doc """
-  All origin modules that provide family `bare` under a re-keyed `:"Mod#bare"`
-  family key. ≥2 ⇒ the unqualified name is ambiguous (no local winner claimed
-  the bare key). Returns [] when the bare key is present (a winner exists) or
-  the name is unknown.
+  All origin modules that provide `bare` under a re-keyed `:"Mod#bare"` key in
+  EITHER namespace — inductive families or plain global defs (Approach B re-keys
+  both on collision). ≥2 ⇒ the unqualified name is ambiguous (no local winner
+  claimed the bare key). Returns [] when the bare key is present in either map (a
+  winner exists) or the name is unknown. Families and defs are classified
+  independently, so a bare name reported here is ambiguous across whichever
+  namespaces re-keyed it; Cure's capitalized-type / lowercase-def convention
+  makes a cross-namespace spelling coincidence practically impossible (§3.4).
   """
   @spec ambiguous_modules(Env.t(), atom()) :: [String.t()]
-  def ambiguous_modules(%Env{families: families}, bare) do
-    if Map.has_key?(families, bare) do
+  def ambiguous_modules(%Env{families: families, defs: defs}, bare) do
+    if Map.has_key?(families, bare) or Map.has_key?(defs, bare) do
       []
     else
       suffix = "#" <> Atom.to_string(bare)
 
-      families
-      |> Map.keys()
+      (Map.keys(families) ++ Map.keys(defs))
       |> Enum.flat_map(fn k ->
         s = Atom.to_string(k)
         if String.ends_with?(s, suffix), do: [String.trim_trailing(s, suffix)], else: []
       end)
+      |> Enum.uniq()
     end
   end
 

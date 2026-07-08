@@ -4669,7 +4669,26 @@ defmodule Cure.Elab.Elaborator do
     cond do
       Inductive.get_ctor(env, atom) -> {:ok, {:ctor, atom, []}}
       Inductive.family?(env, atom) -> {:ok, {:data, atom, [], []}}
-      true -> {:ok, {:global, atom}}
+      # Bare VALUE position mirrors the call-position R7 trichotomy: a name
+      # provided by ≥2 re-keyed imports with no local/unshadowed winner is
+      # ambiguous (E089), same tuple shape as the call site.
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
+
+      # A bare def key present is the local winner (or a non-colliding import that
+      # kept its bare key): keep it. `resolve_bare_shadowed/2`'s contract requires
+      # this bare-absence check before the shadowed-import fallback, otherwise a
+      # re-keyed sibling (`Std.Nat#plus`) would override a local `plus`.
+      Map.has_key?(env.defs, atom) ->
+        {:ok, {:global, atom}}
+
+      # No local winner, no ambiguity: if exactly one re-keyed import provides
+      # the name, resolve to that qualified key; else keep the bare global.
+      true ->
+        case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+          {:ok, key} -> {:ok, {:global, key}}
+          _ -> {:ok, {:global, atom}}
+        end
     end
   end
 

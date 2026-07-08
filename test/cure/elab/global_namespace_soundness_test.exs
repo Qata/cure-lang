@@ -27,7 +27,7 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Errors, Lexer, Parser}
   alias Cure.Elab.Program
 
   defp check(src) do
@@ -169,6 +169,14 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
       refute Enum.any?(Map.keys(env.defs), fn k ->
                String.ends_with?(Atom.to_string(k), "#lonely_helper")
              end)
+    end
+
+    test "E089 formatter names the code, both modules, and the qualified-form hint" do
+      msg = Errors.format_error({:ambiguous_name, :helper, ["Std.CollA", "Std.CollB"]}, "x.cure")
+      assert msg =~ "E089"
+      assert msg =~ "Std.CollA"
+      assert msg =~ "Std.CollB"
+      assert msg =~ "Std.CollA.helper"
     end
   end
 end
