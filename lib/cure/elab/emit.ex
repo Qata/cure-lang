@@ -166,6 +166,9 @@ defmodule Cure.Elab.Emit do
           [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
         end
 
+      sigma_ctor?(env, name) ->
+        {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
+
       true ->
         case Enum.map(args, &lower(env, &1, ctx)) do
           [] -> {:atom, @line, name}
@@ -232,6 +235,16 @@ defmodule Cure.Elab.Emit do
   defp connective_inline({:global, :not}, [a], env, ctx) do
     {:ok, {:op, @line, :not, lower(env, a, ctx)}}
   end
+
+  # Saturated Sigma projection: `sigma_first(p)`/`sigma_second(p)` — after erasure
+  # of the `{a}`/`{b}` implicits leaves a single-argument spine — inline to
+  # `element(1|2, P)`, keeping `.1`/`.2` zero-cost and the bare-2-tuple ABI (spec
+  # §1.5 / §2.3). The bare global passed as a value (0 args) is untouched.
+  defp connective_inline({:global, :sigma_first}, [p], env, ctx),
+    do: {:ok, element(1, lower(env, p, ctx))}
+
+  defp connective_inline({:global, :sigma_second}, [p], env, ctx),
+    do: {:ok, element(2, lower(env, p, ctx))}
 
   defp connective_inline(_head, _args, _env, _ctx), do: :no
 
@@ -312,11 +325,25 @@ defmodule Cure.Elab.Emit do
   # the pattern binds only present fields; the body's de Bruijn frame still counts
   # every field (index 0 = last field), so erased fields keep a (dead) context slot.
   defp branch_clause(env, {cname, arity, body}, ctx) do
-    if nat_ctor?(env, cname) do
-      nat_branch_clause(env, {cname, arity, body}, ctx)
-    else
-      generic_branch_clause(env, {cname, arity, body}, ctx)
+    cond do
+      nat_ctor?(env, cname) -> nat_branch_clause(env, {cname, arity, body}, ctx)
+      sigma_ctor?(env, cname) -> sigma_branch_clause(env, {cname, arity, body}, ctx)
+      true -> generic_branch_clause(env, {cname, arity, body}, ctx)
     end
+  end
+
+  # case-on-Sigma (spec §2.3): `mk_pair(x, y)` matches a bare 2-tuple `{X, Y}` (both
+  # fields present), binding both into the de Bruijn frame exactly as the generic
+  # tagged form would — but without the leading ctor-name atom, so the value stays
+  # the untagged 2-tuple the ABI requires.
+  defp sigma_branch_clause(env, {_mk_pair, 2, body}, ctx) do
+    base = length(ctx)
+    vx = :"V#{base}"
+    vy = :"V#{base + 1}"
+    body_form = lower(env, body, [vy, vx | ctx])
+    px = underscore_if_unused({:var, @line, vx}, body_form)
+    py = underscore_if_unused({:var, @line, vy}, body_form)
+    {:clause, @line, [{:tuple, @line, [px, py]}], [], [body_form]}
   end
 
   # case-on-Nat (spec §2.2): the zero ctor's branch matches literal 0; the succ
@@ -403,6 +430,14 @@ defmodule Cure.Elab.Emit do
   # structural twin has a different family-id and keeps tuples.
   defp nat_ctor?(env, name) do
     fam = Inductive.builtin(env, :nat)
+    fam != nil and Inductive.ctor_family(env, name) == fam
+  end
+
+  # The canonical Sigma family (registry-keyed, nominal): its values are the bare
+  # BEAM 2-tuples the primitive pair always compiled to (spec 2026-07-09 D2 §1.5) —
+  # Std.Pair's element/2 interop and AtomVM depend on the untagged shape.
+  defp sigma_ctor?(env, name) do
+    fam = Inductive.builtin(env, :sigma)
     fam != nil and Inductive.ctor_family(env, name) == fam
   end
 
