@@ -95,20 +95,26 @@ defmodule Cure.Compiler.DepGraphTest do
       assert {:ok, [^a], []} = DepGraph.order(graph)
     end
 
-    test "stage1 parity: real lib/compiler tree — every cross-SCC use edge is respected" do
-      root = Path.expand("../../..", __DIR__)
-
-      files =
-        Path.wildcard(Path.join(root, "lib/compiler/**/*.cure"))
-        |> Enum.reject(fn p -> String.trim(File.read!(p)) == "" end)
+    # This test originally asserted the ordering property against the real
+    # stage1 Lean-bootstrap tree (lib/compiler/**), whose Environment <->
+    # Exception `use` cycle motivated the SCC policy. That tree was removed
+    # (operator directive, reverts of 5ef6d80..8f249d9), so the same
+    # property now runs against a fixture replicating its shape: a kernel
+    # mesh with a genuine 2-cycle and downstream dependents.
+    test "mesh with a cycle: every cross-SCC use edge is respected, intra-SCC exempt",
+         %{tmp_dir: dir} do
+      files = [
+        write!(dir, "name.cure", "mod MName\n  fn f() -> Int = 1\n"),
+        write!(dir, "expr.cure", "mod MExpr\n  use MName\n  fn f() -> Int = 1\n"),
+        write!(dir, "env.cure", "mod MEnv\n  use MName\n  use MExpr\n  use MExc\n  fn f() -> Int = 1\n"),
+        write!(dir, "exc.cure", "mod MExc\n  use MName\n  use MEnv\n  fn f() -> Int = 1\n"),
+        write!(dir, "tc.cure", "mod MTc\n  use MEnv\n  use MExc\n  use MExpr\n  fn f() -> Int = 1\n")
+      ]
 
       {:ok, graph} = DepGraph.scan(files)
       {:ok, order, cycles} = DepGraph.order(graph)
       index = order |> Enum.with_index() |> Map.new()
 
-      # The real tree contains a genuine use cycle (Environment <-> Exception,
-      # commit 5ef6d80 — spec §2 fact 6 as amended): it must be REPORTED, and
-      # edges inside one SCC are exempt from the ordering property.
       scc_of =
         for {cycle, i} <- Enum.with_index(cycles),
             hop <- cycle,
@@ -117,11 +123,9 @@ defmodule Cure.Compiler.DepGraphTest do
 
       assert Enum.any?(cycles, fn cycle ->
                mods = Enum.map(cycle, & &1.module)
-
-               "Compiler.Kernel.Core.Environment" in mods and
-                 "Compiler.Kernel.Core.Exception" in mods
+               "MEnv" in mods and "MExc" in mods
              end),
-             "expected the known Environment<->Exception cycle to be reported, got: #{inspect(cycles)}"
+             "expected the MEnv<->MExc cycle to be reported, got: #{inspect(cycles)}"
 
       for {path, node} <- graph.nodes,
           %{target: target} <- node.order_deps,

@@ -322,7 +322,7 @@ defmodule Cure.Compiler.DepGraph do
   # rebuilds the whole map each time (O(V) per removal, O(V^2) overall)
   # rather than batching the ready set or maintaining reverse-adjacency
   # for O(V+E). Compile sets here are tens to low hundreds of files
-  # (stdlib ~39, stage1 kernel ~15) -- this is not a hot path, and the
+  # (stdlib ~39) -- this is not a hot path, and the
   # simplicity keeps the alphabetical tie-break obviously correct.
   #
   # Returns {ordered_paths, stuck_groups}: when no node is ready (cycle

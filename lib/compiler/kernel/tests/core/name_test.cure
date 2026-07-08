@@ -1,9 +1,0 @@
-mod Compiler.Kernel.Tests.Core.NameTest
-  use Std.Test
-  use Compiler.Kernel.Core.Name
-  
-  fn test_name_append_core() -> Atom =
-    assert_eq(name_to_string(name_append_core(mk_simple("Nat"), mk_simple("rec"))), "Nat.rec")
-  
-  fn test_name_eq() -> Atom =
-    assert(name_eq(str(mk_simple("Quot"), "mk"), str(mk_simple("Quot"), "mk")))
