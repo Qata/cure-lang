@@ -112,3 +112,19 @@ T1 registry+stdlib → T2 elaborator re-point → T3 emit hooks → T4a validato
 4. BEAM representation of `%[a, b]` is a bare 2-tuple; `.1`/`.2` compile to `element/2`; `Std.Pair` untouched and green.
 5. Full Antigen + full `mix test` green; seeds/corpus replay green post-migration.
 6. Ghost authorship; explicit-pathspec staging; per-task commits.
+
+## §8 T5 adjudication (2026-07-09): `core_bridge.ex` is a Core-grammar consumer, not a decoy
+
+Execution STOPped at T5 on a coupling the scout inventory missed: `lib/cure/types/core_bridge.ex` — inside the classic pipeline this spec mandated zero-diff for — PRODUCES primitive `{:pair}`/`{:fst}`/`{:snd}` nodes (`to_core`, :69-76) and reads them back (`from_core`, :118-120), because `Cure.Types.Reduce` deliberately delegates all constant folding to the trusted kernel (`reduce.ex:98-99`, "No arithmetic is folded outside `Cure.Core`"). Stripping the kernel clauses breaks exactly 4 classic-pipeline tests (ReduceTest tuple/fst/snd folding, EqualityTest rewrite).
+
+**Ruling:** the zero-diff mandate is AMENDED with a single carve-out. The two-pipeline steer exists to keep dependent-type FEATURE work out of the wrong pipeline; `core_bridge.ex` is not that — it is a downstream consumer of the Core grammar, the same category as `serialize.ex` and the eq-retirement's Lean-bridge lesson (`ccbe2d0`). When the grammar changes, consumers track it.
+
+**Authorized change, tightly bounded:**
+- File: `lib/cure/types/core_bridge.ex` ONLY. `reduce.ex` and every other `lib/cure/types/*` / `lib/cure/compiler/*` file remain zero-diff.
+- `to_core` `{:tuple,…}` → `{:ctor, <mk_pair>, [ca, cb]}` (registry-consistent ctor atom); `to_core` `"fst"/"snd"` → the single-branch case encoding of the projection (a motive sufficient for eval's ι-rule; eval never motive-checks); `from_core` gains the inverse clauses (`{:ctor, <mk_pair>, [a,b]}` → surface tuple; the single-branch mk_pair case shape → surface `fst(x)`/`snd(x)` call) so the translation stays total on everything it can produce.
+- BEHAVIOR-PINNED: the 4 affected classic tests must pass with their existing assertions untouched (they assert surface shapes). If any of them asserts a Core shape, that flip is enumerated and justified like every other pin flip.
+- The primitive-node clauses in `from_core` are deleted with the strip (they become dead once `to_core` no longer produces the forms and the kernel grammar rejects them).
+
+§3.5's final-verification grep list gains `lib/cure/types/core_bridge.ex` as an explicitly-allowed diff (the ONLY types/compiler diff); everything else under those trees must remain empty. Acceptance criterion §6.1's "zero producers" scope extends to core_bridge.ex (post-change it produces only inductive forms).
+
+**Also ratified from the same execution report:** (a) T6's corpus PURGE (115 seed + 3 corpus records) follows the `11ea830` precedent — purge, not transform — and is the accepted mechanism; (b) the malformed "Nat-head napp reject" Antigen seed routes through the SURVIVING napp clause, not the deleted defensive pair clause, so keeping it is correct (the plan's presumption it exercised the defensive clause was wrong); (c) the pre-existing `Equivalent(int, x, y)` nf-idempotence "infection" in the coverage fuzzer reproduces on the clean pre-T6 tree — NOT a D2 regression; it is queued as a separate finding, not fixed in D2.
