@@ -240,12 +240,15 @@ surgery rewrite."* A fresh evidence probe (kernel-parity-batch branch) then
 found the section below OUTDATED in its central claim. Revised ground truth:
 
 1. **The K6‑blocks‑refl‑inference concern is DODGED AND LANDED.** The kernel
-   now infers a **params‑on‑spine saturated ctor** (commit `f3b0e73`,
-   `kernel.ex:200‑216`: when `length(args) == param_count + field_count`, it
-   re‑checks `params ++ fields` against the concatenated telescopes and
-   NbE‑derives the result indices — no metavariables, no grade tracking, a
-   small strictly‑sound kernel addition, NOT the deferred K6 grade machinery).
-   `mk_refl_infer(ty,x) = {:ctor, :reflexive, [ty, x]}` (`elaborator.ex:1026`)
+   now infers a **params‑on‑spine saturated ctor** (commit `b355753` — K6
+   task 1 — `kernel.ex:200‑216`: when `length(args) == param_count +
+   field_count`, it re‑checks `params ++ fields` against the concatenated
+   telescopes and NbE‑derives the result indices — no metavariables, no grade
+   tracking, a small strictly‑sound kernel addition, NOT the deferred K6 grade
+   machinery). Commit `f3b0e73` — K6 task 2 — is the elaborator‑side consumer:
+   it retargets `bridge_step` to build its inference‑position proof through
+   this new capability instead of the primitive `{:refl}`.
+   `mk_refl_infer(ty,x) = {:ctor, :reflexive, [ty, x]}` (`elaborator.ex:1051`)
    is inferable: probe evidence
    `infer {:ctor,:reflexive,[Nat,Z]} => {:ok, {:vdata,:Equivalent,[Nat,Z,Z]}}`
    (bare form still correctly rejects with `:ctor_requires_checking_mode`,
@@ -274,11 +277,22 @@ found the section below OUTDATED in its central claim. Revised ground truth:
 
 - **Phase B (the surgery's heart):** `rewrite p in body` → single‑branch
   inductive `:case` via in‑branch re‑elaboration (route through
-  `elaborate_match`/`build_motive`), replacing every `{:rewrite, …}` producer
-  (`elaborator.ex:1058, 1070, 1137, 1170, 1831, 3396`). Behavioural pin:
+  `elaborate_match`/`build_motive`), replacing every `{:rewrite, …}` producer —
+  **seven** literal‑construction sites, not six (the previous count missed the
+  `bridge_step` outer wrap): `elaborator.ex:1083` (`rewrite_plan`'s
+  `contains_a`/symmetry branch), `:1095` (`contains_b` branch), `:1162`
+  (`bridge_step`'s inner bridge proof), `:1166` (`bridge_step`'s outer wrap —
+  previously omitted), `:1195` (`symmetry_proof`), `:1856`
+  (`elaborate_with_eq_branch`'s sibling transport), and `:3421`
+  (`elaborate_carried_eq_branch`'s sibling transport). Behavioural pin:
   oracle `rewrite/rw01‑rw09`, `refl/rf01‑rf05`, and the **frp cluster with
   computed endpoints (`frp01_par_assoc` is the sentinel that killed the naive
-  attempt)** must keep byte‑identical verdicts.
+  attempt)** must keep byte‑identical verdicts. Because two of the seven
+  producer sites (`:1856`, `:3421`) are the `with`‑clause sibling‑transport
+  machinery, not the `rewrite` keyword, the pin must also cover `with/*`
+  (`wi05_sibling_refine` exercises exactly this transport) and `withmulti/*` —
+  a regression there would be invisible to the `rewrite`/`refl`/`frp`
+  clusters alone.
 - **Phase C (subtractive):** with producers gone, strip the dead
   `{:rewrite}`/`{:eq}`/`{:refl}`/`{:veq}` clauses across
   `term.ex`/`eval.ex`/`kernel.ex`/`quote.ex`/`certificate.ex`/`serialize.ex`
@@ -287,9 +301,24 @@ found the section below OUTDATED in its central claim. Revised ground truth:
   `test/antigen/eq_inductive_antibody_test.exs` extended per Gate C
   (equates‑no‑distinct‑normal‑forms obligation), full Antigen, full suite,
   oracle replay.
-- **Phase B′ (stdlib fakery retirement):** per finding 3 above —
-  `Std.Equal`/`Std.Proof` `:cure_refl` stubs become real proofs where
-  structurally provable, are retired where unsound; mirror in `priv/std/`.
+- **Phase B′ (stdlib fakery retirement) — ALREADY LANDED, not remaining
+  work.** Finding 3 above is stale: `48c68ab` (2026‑07‑04, before this batch)
+  rewrote `Std.Equal`/`Std.Proof`'s `:cure_refl` stubs into genuine inductive
+  proofs — `sym`/`trans`/`cong` now match `reflexive` for real (no runtime
+  token), and `Std.Proof` proves `plus_zero_right`/`plus_succ_right`/
+  `plus_comm` by induction on `Nat`, closing with `reflexive`/`rewrite`;
+  `plus_comm`'s old non‑inductive‑`Int` stub and the unprovable
+  `append_nil`/`map_id` stubs were dropped rather than faked. `ae02ba5` and
+  `b199a2a` (2026‑07‑08, earlier the same day — already on this branch, just
+  before this doc revision) renamed the module to
+  `Std.Equivalent`/`reflexive`. Both `lib/std/` and `priv/std/` carry the
+  current versions (`equivalent.cure`, `proof.cure`) — verified in this
+  review to contain no `:cure_refl` occurrences outside a doc‑comment
+  contrasting the old behaviour. Residual fakery (`:cure_refl`) survives only
+  in `examples/proof_laws.cure` and `vicure/test_syntax.cure`, which are demo/
+  fixture files outside finding 3's stated scope (`lib/std/equal.cure`,
+  `lib/std/proof.cure`) — not a Phase B′ blocker, and out of scope for this
+  batch unless the operator wants them swept too.
 
 The section below is retained verbatim as the historical record of the
 (now‑stale) 2026‑07‑08 morning assessment.
