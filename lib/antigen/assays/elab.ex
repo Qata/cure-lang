@@ -91,6 +91,54 @@ defmodule Antigen.Assays.Elab do
     end
   end
 
+  # elab/dot_forcing — catalog form (spec 2026-07-08-antigen-elab-dot-forcing):
+  # the actual verdict must match the expected one. Reject cells carrying
+  # `expect_error` also pin the error HEAD, so a fixture that rots into
+  # rejecting for an unrelated reason (parse error, unbound name) infects
+  # instead of passing silently.
+  def run(%Challenge{kind: :elab_program, assay: "elab/dot_forcing", payload: %{expect: expect} = p}) do
+    result = elaborate(p.src)
+    actual = verdict_bit(result)
+
+    cond do
+      actual != expect ->
+        {:violation, {:dot_forcing_verdict_wrong, p.id, %{expected: expect, actual: actual}}}
+
+      actual == :reject and Map.has_key?(p, :expect_error) ->
+        got = reject_head(result)
+
+        if got == p.expect_error do
+          :ok
+        else
+          {:violation, {:dot_forcing_wrong_reject_reason, p.id, got}}
+        end
+
+      true ->
+        :ok
+    end
+  end
+
+  # elab/dot_forcing — relation form: `:same` (verdict invariant under a
+  # typing-preserving perturbation) or `:flip` (an accepting base must reject
+  # after the targeted mutation — the call-site-wiring / load-bearing pin).
+  def run(%Challenge{kind: :elab_program, assay: "elab/dot_forcing", payload: %{relation: rel} = p}) do
+    base = verdict_bit(elaborate(p.base_src))
+    variant = verdict_bit(elaborate(p.variant_src))
+
+    ok? =
+      case rel do
+        :same -> base == variant
+        :flip -> base == :accept and variant == :reject
+      end
+
+    if ok? do
+      :ok
+    else
+      {:violation,
+       {:dot_forcing_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
+    end
+  end
+
   # elab/soundness — the emitted core is independently re-checked by the trusted
   # kernel: every def the elaborator produced must type-check at its emitted type.
   def run(%Challenge{kind: :elab_program, assay: "elab/soundness"} = c),
@@ -183,4 +231,12 @@ defmodule Antigen.Assays.Elab do
   # errors while agreeing on rejection).
   defp verdict_bit({:ok, _}), do: :accept
   defp verdict_bit(_), do: :reject
+
+  # Error head of a rejecting elaboration result. Non-tuple hardening (spec
+  # §2.3): parser grammar failures carry a LIST, and a normalized raise has no
+  # head — neither can ever match an `expect_error` atom, so both land in the
+  # wrong-reject-reason violation instead of crashing `elem/2`.
+  defp reject_head({:error, e}) when is_tuple(e) and tuple_size(e) > 0, do: elem(e, 0)
+  defp reject_head({:error, _non_tuple}), do: :non_tuple_error
+  defp reject_head({:raise, _}), do: :raised_error
 end

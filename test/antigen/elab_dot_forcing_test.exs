@@ -1,0 +1,107 @@
+defmodule Antigen.ElabDotForcingTest do
+  @moduledoc """
+  Tests for the source-level dot-forcing vertical (spec
+  2026-07-08-antigen-elab-dot-forcing-design): challenges entering at
+  Program.elaborate/1 so the named-implicit check's CALL-SITE WIRING (the C-a
+  defect class) is covered — the value-level forcing/dot oracle is structurally
+  blind to a caller that skips the check. These test the VERTICAL (assay
+  discrimination, catalog verdicts, metamorphic relations); the catalog gate
+  doubles as a regression gate on #12's C-a/C-c fixes.
+  """
+  use ExUnit.Case, async: true
+
+  alias Antigen.Assays.Elab
+  alias Antigen.Challenge
+  alias Antigen.Generators.ElabErasure
+
+  # Grammar-stage typo: lexes fine, fails in the PARSER, whose error payload is
+  # a LIST (parser.ex `{:error, Enum.reverse(errors)}`) — the §2.3 non-tuple
+  # guard's target shape.
+  @grammar_broken "mod P\n  fn\nend\n"
+
+  defp catalog_challenge(id, src, expect, extra \\ %{}) do
+    Challenge.new(
+      kind: :elab_program,
+      assay: "elab/dot_forcing",
+      label: expect,
+      payload: Map.merge(%{id: id, src: src, expect: expect}, extra)
+    )
+  end
+
+  describe "assay discrimination (red-green of the vertical itself)" do
+    test "catalog clause is :ok when the actual verdict matches the expected one" do
+      assert :ok = Elab.run(catalog_challenge("acc", ElabErasure.source("type_position"), :accept))
+      assert :ok = Elab.run(catalog_challenge("rej", ElabErasure.source("returned"), :reject))
+    end
+
+    test "catalog clause fires on a verdict contradiction, both directions" do
+      assert {:violation, {:dot_forcing_verdict_wrong, "w1", %{expected: :reject, actual: :accept}}} =
+               Elab.run(catalog_challenge("w1", ElabErasure.source("type_position"), :reject))
+
+      assert {:violation, {:dot_forcing_verdict_wrong, "w2", %{expected: :accept, actual: :reject}}} =
+               Elab.run(catalog_challenge("w2", ElabErasure.source("returned"), :accept))
+    end
+
+    test "expect_error head match passes; a mismatched head is wrong_reject_reason" do
+      # source("returned") rejects with head :erased_used_relevantly.
+      assert :ok =
+               Elab.run(
+                 catalog_challenge("h1", ElabErasure.source("returned"), :reject, %{
+                   expect_error: :erased_used_relevantly
+                 })
+               )
+
+      assert {:violation, {:dot_forcing_wrong_reject_reason, "h2", :erased_used_relevantly}} =
+               Elab.run(
+                 catalog_challenge("h2", ElabErasure.source("returned"), :reject, %{
+                   expect_error: :forced_pattern_mismatch
+                 })
+               )
+    end
+
+    test "non-tuple (parser-list) reject never matches a head and never crashes" do
+      assert {:violation, {:dot_forcing_wrong_reject_reason, "h3", :non_tuple_error}} =
+               Elab.run(
+                 catalog_challenge("h3", @grammar_broken, :reject, %{
+                   expect_error: :forced_pattern_mismatch
+                 })
+               )
+    end
+
+    test "relation clause: :flip with an identical variant fires" do
+      src = ElabErasure.source("type_position")
+
+      c =
+        Challenge.new(
+          kind: :elab_program,
+          assay: "elab/dot_forcing",
+          label: :none,
+          payload: %{id: "f1", transform: "identity", relation: :flip, base_src: src, variant_src: src}
+        )
+
+      assert {:violation,
+              {:dot_forcing_relation_wrong, "f1", "identity",
+               %{relation: :flip, base: :accept, variant: :accept}}} = Elab.run(c)
+    end
+
+    test "relation clause: :same with agreeing sources is :ok" do
+      src = ElabErasure.source("type_position")
+
+      c =
+        Challenge.new(
+          kind: :elab_program,
+          assay: "elab/dot_forcing",
+          label: :none,
+          payload: %{id: "s1", transform: "identity", relation: :same, base_src: src, variant_src: src}
+        )
+
+      assert :ok = Elab.run(c)
+    end
+  end
+
+  describe "registry wiring" do
+    test "the runner maps elab/dot_forcing to the Elab assay module" do
+      assert Antigen.Runner.assay_module_for("elab/dot_forcing") == Antigen.Assays.Elab
+    end
+  end
+end
