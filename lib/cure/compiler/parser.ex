@@ -49,6 +49,13 @@ defmodule Cure.Compiler.Parser do
   # skipping tokens after a parse error.
   @definition_keywords [:fn, :local, :mod, :rec, :type, :use, :sup, :app, :proto, :impl, :proof]
 
+  # Decorators that describe the *module*, not the declaration that follows.
+  # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
+  # it always parses as a standalone `{:decorator, ...}` node so downstream
+  # stages (codegen, preload) can read it as module metadata. `@group(:g)`
+  # replaces the historical `fn __group__() -> Atom = :g` marker.
+  @module_level_decorators ~w(group)
+
   @type t :: %__MODULE__{}
   @type ast :: {atom(), keyword(), term()}
   @type result :: {ast(), t()}
@@ -4706,6 +4713,19 @@ defmodule Cure.Compiler.Parser do
 
     state = skip_newlines(state)
 
+    # Module-level decorators (e.g. `@group(:core)`) describe the module, not
+    # the next declaration. They always stand alone, whatever follows.
+    if dec_name in @module_level_decorators do
+      ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+      {ast, state}
+    else
+      parse_at_attach(state, token, dec_name, args)
+    end
+  end
+
+  # Attach `@name(args)` to a following fn/rec/type declaration, or emit a
+  # standalone decorator/property node when nothing attachable follows.
+  defp parse_at_attach(state, token, dec_name, args) do
     # Check if the next thing is a function definition -- if so, attach decorator
     case peek(state) do
       %Token{type: :keyword, value: kw} when kw in [:fn, :local] ->

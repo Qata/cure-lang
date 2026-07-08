@@ -279,26 +279,72 @@ defmodule Cure.Compiler do
   end
 
   defp codegen(ast, file, emit?, output_dir, declared_phases) do
-    if Cure.Elab.Program.dependent?(ast) do
-      # The kernel-lowering path never produces codegen warnings.
-      case dependent_codegen(ast) do
-        {:ok, forms} -> {:ok, forms, []}
-        {:error, _} = err -> err
-      end
-    else
-      opts = [file: file, emit_events: emit?, output_dir: output_dir]
+    result =
+      if Cure.Elab.Program.dependent?(ast) do
+        # The kernel-lowering path never produces codegen warnings.
+        case dependent_codegen(ast) do
+          {:ok, forms} -> {:ok, forms, []}
+          {:error, _} = err -> err
+        end
+      else
+        opts = [file: file, emit_events: emit?, output_dir: output_dir]
 
-      opts =
-        if is_list(declared_phases),
-          do: Keyword.put(opts, :declared_phases, declared_phases),
-          else: opts
+        opts =
+          if is_list(declared_phases),
+            do: Keyword.put(opts, :declared_phases, declared_phases),
+            else: opts
 
-      case Codegen.compile_module(ast, opts) do
-        {:ok, forms, cg_warnings} -> {:ok, forms, cg_warnings}
-        {:error, reason} -> {:error, {:codegen_error, reason}}
+        case Codegen.compile_module(ast, opts) do
+          {:ok, forms, cg_warnings} -> {:ok, forms, cg_warnings}
+          {:error, reason} -> {:error, {:codegen_error, reason}}
+        end
       end
+
+    # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
+    # attribute. This runs once here so BOTH the classic and dependent
+    # pipelines get it from one mechanism. Container compilers that already
+    # emitted/loaded their module (fsm/actor/sup/app) return a marker tuple,
+    # not a forms list, so they pass through untouched.
+    case result do
+      {:ok, forms, warnings} when is_list(forms) ->
+        {:ok, inject_group_attribute(forms, ast), warnings}
+
+      other ->
+        other
     end
   end
+
+  # Walk the original AST for the first standalone `@group(:g)` decorator node
+  # and, if present, splice `{:attribute, 1, :group, [g]}` into `forms` right
+  # after the last leading module attribute (before any function form).
+  defp inject_group_attribute(forms, ast) do
+    case group_atom(ast) do
+      nil ->
+        forms
+
+      atom ->
+        {attrs, rest} = Enum.split_while(forms, &match?({:attribute, _, _, _}, &1))
+        attrs ++ [{:attribute, 1, :group, [atom]}] ++ rest
+    end
+  end
+
+  # First `{:decorator, [name: "group"...], [{:literal, _, atom}]}` node found
+  # anywhere in the parsed program, or nil. Mirrors the parser's standalone
+  # module-level decorator shape.
+  defp group_atom(node) do
+    node |> group_atoms() |> List.first()
+  end
+
+  defp group_atoms({:decorator, meta, [{:literal, _, atom}]})
+       when is_list(meta) and is_atom(atom) do
+    if Keyword.get(meta, :name) == "group", do: [atom], else: []
+  end
+
+  defp group_atoms({_tag, _meta, children}) when is_list(children),
+    do: Enum.flat_map(children, &group_atoms/1)
+
+  defp group_atoms(list) when is_list(list), do: Enum.flat_map(list, &group_atoms/1)
+  defp group_atoms(_other), do: []
 
   # A dependent module is lowered by the kernel: elaborate to `Cure.Core`, erase
   # its {0,ω} index arguments, and emit the erased residue as real BEAM forms.
