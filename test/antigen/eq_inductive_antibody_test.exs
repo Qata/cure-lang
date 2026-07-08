@@ -20,13 +20,15 @@ defmodule Antigen.EqInductiveAntibodyTest do
       of a FALSE equation be manufactured, and rewrite/transport along it would
       coerce between distinct normal forms — the classic identity-type unsoundness.
 
-    * ENSURE_EQ-IS-Eq-PRECISE — the widened consumer treats a value as an equality
-      **iff** it is genuinely the `Eq` family, and extracts its endpoints in the
-      right order (`a` then `b`). Pinned by transporting through a `{:rewrite}`
-      node with an ENDPOINT-DISTINGUISHING motive: the result type must be
-      `motive @ b`, never `motive @ a`. A same-shaped decoy family (`Fake`, 1
-      parameter + 2 indices) must be REJECTED — proving the clause keys on the
-      `:Equivalent` atom, not on the 3-element arity.
+    * TRANSPORT-IS-Eq-PRECISE — elimination treats a value as an equality
+      **iff** it is genuinely the `Eq` family, and reads its endpoints in the
+      right order (`a` then `b`). Pinned by the J/subst `:case` transport with
+      an ENDPOINT-DISTINGUISHING motive: the result type must be `motive @ b`,
+      never `motive @ a`. A same-shaped decoy family (`Fake`, 1 parameter + 2
+      indices) must be REJECTED (`:foreign_ctor`) — the family key, not the
+      3-element arity, decides. (The original `{:rewrite}`-node versions of
+      these tests were retired with the primitive form — group-A removal
+      commit — after their :case twins were cross-checked side by side.)
 
   Plus TERMINATION under a bounded Task harness. If any construction violates a
   SOUNDNESS assertion, the retarget is unsound: STOP — do not weaken the assertion.
@@ -101,62 +103,6 @@ defmodule Antigen.EqInductiveAntibodyTest do
                "endpoints convertible=#{convertible}. A refl proof must inhabit Equivalent(ty,x,y) " <>
                "iff x≡y — otherwise a false equation is provable and transport is unsound."
     end
-  end
-
-  # ---- ENSURE_EQ endpoint fidelity via an endpoint-distinguishing rewrite ----
-
-  test "rewrite over an inductive Equivalent(Nat,Z,S Z) hypothesis transports to motive @ b (not motive @ a)" do
-    sig = base_sig()
-
-    # Hypothesis h : Equivalent(Nat, Z, S Z) in context (a hypothetical, possibly-false
-    # equation — the kernel never needs it to be TRUE to type the transport, only
-    # to extract the correct endpoints).
-    ctx = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
-
-    # Endpoint-distinguishing motive:  λ x:Nat. Equivalent(Nat, x, Z)
-    #   motive @ Z    = Equivalent(Nat, Z,   Z)
-    #   motive @ S Z  = Equivalent(Nat, S Z, Z)
-    motive = {:lam, @nat, {:data, :Equivalent, [@nat], [{:var, 0}, z()]}}
-
-    # rewrite (h : Eq Nat Z (S Z))  at motive  in (refl Z : motive @ Z).
-    # body is checked at motive @ a = Equivalent(Nat,Z,Z); result must be motive @ b.
-    node = {:rewrite, {:var, 0}, motive, {:ctor, :reflexive, [z()]}}
-
-    result = Kernel.infer(ctx, node)
-
-    expected_b = eq_ty(sig, @nat, s(z()), z())
-    expected_a = eq_ty(sig, @nat, z(), z())
-
-    assert {:ok, ^expected_b} = result,
-           "ENDPOINT FIDELITY VIOLATION: rewrite result was #{inspect(result)}, expected " <>
-             "motive @ b = #{inspect(expected_b)}. If it were motive @ a = #{inspect(expected_a)}, " <>
-             "ensure_eq swapped the endpoints."
-
-    refute match?({:ok, ^expected_a}, result),
-           "rewrite transported to motive @ a — endpoints extracted in the wrong order"
-  end
-
-  # ---- ENSURE_EQ is :Equivalent-precise: a same-shaped decoy family is NOT an equality -
-
-  test "a rewrite whose proof has a same-shaped non-Eq family type is rejected" do
-    sig = fake_sig()
-
-    # h : Fake(Nat, Z, Z) — byte-shaped exactly like Equivalent(Nat,Z,Z) as a {:vdata,...}
-    # value, but a DIFFERENT family. ensure_eq/eq_parts must not treat it as an
-    # equality (they key on the :Equivalent atom, not the 3-element arity).
-    fake_val = Eval.eval({:data, :Fake, [@nat], [z(), z()]}, Context.env(Context.empty(sig)))
-    ctx = Context.extend(Context.empty(sig), fake_val)
-
-    node = {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}
-
-    assert {:error, _} = Kernel.infer(ctx, node),
-           "SOUNDNESS VIOLATION: rewrite accepted a proof of the non-Eq family Fake — " <>
-             "ensure_eq must recognise ONLY the genuine Eq family as an equality."
-
-    # Positive control on the SAME signature: a real Eq hypothesis IS accepted.
-    ctx_eq = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), z()))
-    assert {:ok, _} = Kernel.infer(ctx_eq, {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}),
-           "a genuine Eq hypothesis should transport"
   end
 
   # ---- :case-based twins of the {:rewrite}-node tests (Phase C Step 2) -------
@@ -245,15 +191,16 @@ defmodule Antigen.EqInductiveAntibodyTest do
 
   # ---- TERMINATION -----------------------------------------------------------
 
-  test "refl-check and rewrite-infer over inductive Eq halt (bounded)" do
+  # (Job 3 — a raw {:rewrite}-node inference — was retired with the primitive
+  # form in the group-A removal commit; its :case-transport twin above carries
+  # the same bounded-termination obligation. Jobs 1-2 are inductive and stay.)
+  test "refl-check over inductive Eq halts (bounded)" do
     sig = base_sig()
     ctx = Context.empty(sig)
-    ctx_h = Context.extend(ctx, eq_ty(sig, @nat, z(), z()))
 
     jobs = [
       fn -> Kernel.check(ctx, {:ctor, :reflexive, [nat_lit(3)]}, eq_ty(sig, @nat, nat_lit(3), nat_lit(3))) end,
-      fn -> Kernel.check(ctx, {:ctor, :reflexive, [z()]}, eq_ty(sig, @nat, z(), s(z()))) end,
-      fn -> Kernel.infer(ctx_h, {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}) end
+      fn -> Kernel.check(ctx, {:ctor, :reflexive, [z()]}, eq_ty(sig, @nat, z(), s(z()))) end
     ]
 
     for {job, i} <- Enum.with_index(jobs) do

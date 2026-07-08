@@ -25,7 +25,6 @@ defmodule Cure.Core.Term do
     * `{:global, name}`                      reference to a global def
     * `{:eq, ty, a, b}`                      propositional equality type
     * `{:refl, a}`                           reflexivity proof
-    * `{:rewrite, proof, motive, body}`      transport / subst
     * `{:prim, op, args}`                    primitive operation
     * `{:int_type}` / `{:int_lit, n}`        integer type / literal
     * `{:float_type}` / `{:float_lit, f}`    float type / literal
@@ -70,9 +69,6 @@ defmodule Cure.Core.Term do
   def term?({:global, name}), do: is_atom(name)
   def term?({:eq, ty, a, b}), do: term?(ty) and term?(a) and term?(b)
   def term?({:refl, a}), do: term?(a)
-
-  def term?({:rewrite, proof, motive, body}),
-    do: term?(proof) and term?(motive) and term?(body)
 
   def term?({:prim, op, args}), do: is_atom(op) and terms?(args)
 
@@ -123,9 +119,6 @@ defmodule Cure.Core.Term do
 
   def shift({:eq, ty, x, y}, a, c), do: {:eq, shift(ty, a, c), shift(x, a, c), shift(y, a, c)}
   def shift({:refl, x}, a, c), do: {:refl, shift(x, a, c)}
-
-  def shift({:rewrite, p, m, b}, a, c),
-    do: {:rewrite, shift(p, a, c), shift(m, a, c), shift(b, a, c)}
 
   def shift({:prim, op, args}, a, c), do: {:prim, op, Enum.map(args, &shift(&1, a, c))}
 
@@ -209,9 +202,6 @@ defmodule Cure.Core.Term do
 
   def subst({:refl, x}, j, r), do: {:refl, subst(x, j, r)}
 
-  def subst({:rewrite, p, m, b}, j, r),
-    do: {:rewrite, subst(p, j, r), subst(m, j, r), subst(b, j, r)}
-
   def subst({:prim, op, args}, j, r), do: {:prim, op, Enum.map(args, &subst(&1, j, r))}
 
   # -- serialization (commitment C2) ------------------------------------------
@@ -270,14 +260,6 @@ defmodule Cure.Core.Term do
 
   def to_external({:refl, a}), do: %{"node" => "refl", "value" => to_external(a)}
 
-  def to_external({:rewrite, p, m, b}),
-    do: %{
-      "node" => "rewrite",
-      "proof" => to_external(p),
-      "motive" => to_external(m),
-      "body" => to_external(b)
-    }
-
   def to_external({:prim, op, args}),
     do: %{"node" => "prim", "op" => Atom.to_string(op), "args" => Enum.map(args, &to_external/1)}
 
@@ -328,9 +310,6 @@ defmodule Cure.Core.Term do
     do: {:eq, from_external(ty), from_external(a), from_external(b)}
 
   def from_external(%{"node" => "refl", "value" => a}), do: {:refl, from_external(a)}
-
-  def from_external(%{"node" => "rewrite", "proof" => p, "motive" => m, "body" => b}),
-    do: {:rewrite, from_external(p), from_external(m), from_external(b)}
 
   def from_external(%{"node" => "prim", "op" => op, "args" => args}),
     do: {:prim, sym_atom(op), Enum.map(args, &from_external/1)}

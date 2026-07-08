@@ -203,19 +203,9 @@ defmodule Cure.Elab.ErasureRelevanceTest do
   end
 
   describe "seam: proofs are erased (proof irrelevance)" do
-    test "two different rewrite proofs erase to the same runtime term" do
-      env = Env.empty()
-      body = {:ctor, :Causal, []}
-      motive = {:lam, {:type, 0}, body}
-      r1 = {:rewrite, {:refl, {:ctor, :Dcoupled, []}}, motive, body}
-      r2 = {:rewrite, {:refl, {:ctor, :Causal, []}}, motive, body}
-
-      # `rewrite proof motive body ⇝ body` at erase (erase.ex): the proof is
-      # dropped, so swapping it changes nothing observable at runtime.
-      assert Erase.erase(env, r1) == Erase.erase(env, r2)
-      assert Erase.erase(env, r1) == Erase.erase(env, body)
-    end
-
+    # (The primitive `{:rewrite}`-node version of the proof-irrelevance pin was
+    # retired with the form itself — group-A removal commit; its :case-transport
+    # twin below was cross-checked side by side first.)
     test "refl and Eq values erase to nullary runtime placeholders" do
       env = Env.empty()
       assert Erase.erase(env, {:refl, {:ctor, :Dcoupled, []}}) == {:ctor, :cure_refl, []}

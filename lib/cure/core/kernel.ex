@@ -113,20 +113,6 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  def infer(ctx, {:rewrite, proof, motive, body}) do
-    with {:ok, proof_type} <- infer(ctx, proof),
-         {:ok, a_value, b_value} <- ensure_eq(proof_type) do
-      # motive (x.M): result transports M[a/x] (the body's type) to M[b/x].
-      motive_value = Eval.eval(motive, Context.env(ctx))
-      expected_body = Eval.apply(motive_value, a_value)
-
-      case check(ctx, body, expected_body) do
-        :ok -> {:ok, Eval.apply(motive_value, b_value)}
-        {:error, _} -> {:error, :rewrite_premise}
-      end
-    end
-  end
-
   def infer(ctx, {:sigma, a, b}) do
     with {:ok, l1} <- infer_sort(ctx, a),
          a_value = Eval.eval(a, Context.env(ctx)),
@@ -517,15 +503,6 @@ defmodule Cure.Core.Kernel do
   # Require a type value to be a Σ; return its domain value + codomain closure.
   defp ensure_sigma({:vsigma, dom, cod_closure}), do: {:ok, dom, cod_closure}
   defp ensure_sigma(_), do: {:error, :not_a_sigma}
-
-  # Require a type value to be an equality; return its two endpoint values.
-  # The inductive identity type `Equivalent(a, x, y)` (spec 2026-07-04) evaluates
-  # to a `{:vdata, :Equivalent, [a, x, y]}` value (1 parameter + 2 indices); its
-  # endpoints are the two indices. The primitive `{:veq}` form is still produced by
-  # the internal rewrite machinery (retired in a later phase), so both are accepted.
-  defp ensure_eq({:veq, _ty, a_value, b_value}), do: {:ok, a_value, b_value}
-  defp ensure_eq({:vdata, :Equivalent, [_ty, a_value, b_value]}), do: {:ok, a_value, b_value}
-  defp ensure_eq(_), do: {:error, :not_an_equality}
 
   # Check `args` against a dependent telescope, threading each evaluated arg so
   # later telescope types can depend on earlier args. Returns the arg values
@@ -1101,9 +1078,6 @@ defmodule Cure.Core.Kernel do
     do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:rewrite, p, m, b}, subst),
-    do: {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:prim, op, args}, subst),
     do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}

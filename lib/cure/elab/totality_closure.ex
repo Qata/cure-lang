@@ -95,6 +95,5 @@ defmodule Cure.Elab.TotalityClosure do
 
   defp collect({:eq, t, a, b}), do: collect(t) ++ collect(a) ++ collect(b)
   defp collect({:refl, a}), do: collect(a)
-  defp collect({:rewrite, p, m, b}), do: collect(p) ++ collect(m) ++ collect(b)
   defp collect(_), do: []
 end

@@ -30,7 +30,6 @@ defmodule Cure.Core.Serialize do
   defp enc({:snd, p}), do: node("snd", [p])
   defp enc({:eq, t, a, b}), do: node("eq", [t, a, b])
   defp enc({:refl, a}), do: node("refl", [a])
-  defp enc({:rewrite, pr, m, b}), do: node("rewrite", [pr, m, b])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
   defp enc({:int_type}), do: "(int-type)"
@@ -162,11 +161,6 @@ defmodule Cure.Core.Serialize do
   defp build_node("eq", [t, a, b]) do
     with {:ok, tt} <- build(t), {:ok, ta} <- build(a), {:ok, tb} <- build(b),
          do: {:ok, {:eq, tt, ta, tb}}
-  end
-
-  defp build_node("rewrite", [pr, m, b]) do
-    with {:ok, tp} <- build(pr), {:ok, tm} <- build(m), {:ok, tb} <- build(b),
-         do: {:ok, {:rewrite, tp, tm, tb}}
   end
 
   defp build_node("prim", [{:atom, op} | args]) do

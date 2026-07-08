@@ -211,12 +211,6 @@ defmodule Cure.Core.Certificate do
 
   defp walk_node(emit, {:refl, a}, st, acc), do: walk(emit, a, st, acc)
 
-  defp walk_node(emit, {:rewrite, pr, m, b}, st, acc) do
-    acc = walk(emit, pr, st, acc)
-    acc = walk(emit, m, st, acc)
-    walk(emit, b, st, acc)
-  end
-
   # Leaves (vars, literals, types, untracked globals): no call, no matrix.
   defp walk_node(_emit, _term, _st, acc), do: acc
 
@@ -608,9 +602,6 @@ defmodule Cure.Core.Certificate do
 
   defp calls?(name, {:eq, t, a, b}), do: calls?(name, t) or calls?(name, a) or calls?(name, b)
   defp calls?(name, {:refl, a}), do: calls?(name, a)
-
-  defp calls?(name, {:rewrite, p, m, b}),
-    do: calls?(name, p) or calls?(name, m) or calls?(name, b)
 
   defp calls?(_name, _term), do: false
 end

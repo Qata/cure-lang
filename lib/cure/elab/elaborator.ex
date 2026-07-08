@@ -2060,9 +2060,6 @@ defmodule Cure.Elab.Elaborator do
 
   defp generalize({:refl, a}, rb, s, depth), do: {:refl, generalize(a, rb, s, depth)}
 
-  defp generalize({:rewrite, p, m, b}, rb, s, depth),
-    do: {:rewrite, generalize(p, rb, s, depth), generalize(m, rb, s, depth), generalize(b, rb, s, depth)}
-
   defp generalize({:prim, op, args}, rb, s, depth),
     do: {:prim, op, Enum.map(args, &generalize(&1, rb, s, depth))}
 
@@ -3841,9 +3838,6 @@ defmodule Cure.Elab.Elaborator do
     do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:rewrite, p, m, b}, subst),
-    do: {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst), replace_branch_vars(b, subst)}
 
   defp replace_branch_vars({:prim, op, args}, subst),
     do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}

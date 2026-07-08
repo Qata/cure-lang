@@ -83,7 +83,6 @@ defmodule Cure.Elab.Erase do
   def erase(env, {:pi, d, c}), do: {:pi, erase(env, d), erase(env, c)}
   def erase(env, {:sigma, a, b}), do: {:sigma, erase(env, a), erase(env, b)}
   def erase(_env, {:refl, _a}), do: {:ctor, :cure_refl, []}
-  def erase(env, {:rewrite, _proof, _motive, body}), do: erase(env, body)
   def erase(_env, {:eq, _ty, _a, _b}), do: {:ctor, :cure_eq, []}
 
   def erase(env, {:data, n, ps, is}),
@@ -147,7 +146,6 @@ defmodule Cure.Elab.Erase do
   def has_hole?({:snd, p}), do: has_hole?(p)
   def has_hole?({:eq, ty, a, b}), do: has_hole?(ty) or has_hole?(a) or has_hole?(b)
   def has_hole?({:refl, a}), do: has_hole?(a)
-  def has_hole?({:rewrite, p, m, b}), do: has_hole?(p) or has_hole?(m) or has_hole?(b)
   def has_hole?({:ctor, _n, args}), do: Enum.any?(args, &has_hole?/1)
   def has_hole?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_hole?/1)
   def has_hole?({:prim, _op, args}), do: Enum.any?(args, &has_hole?/1)

@@ -46,14 +46,13 @@ defmodule Antigen.Generators.Serialization do
       {4, leaf()},
       {1, unary(:fst, d)},
       {1, unary(:snd, d)},
-      {1, unary(:refl, d)},
       {1, binary(:pi, d)},
       {1, binary(:lam, d)},
       {1, binary(:app, d)},
       {1, binary(:sigma, d)},
       {1, binary(:pair, d)},
-      {1, ternary(:eq, d)},
-      {1, ternary(:rewrite, d)},
+      # (:refl/:eq/:rewrite retired with the primitive identity forms, Phase C —
+      # the inductive spellings ride the :data/:ctor/:case arms below.)
       {1, data_term(d)},
       {1, ctor_term(d)},
       {1, prim_term(d)},

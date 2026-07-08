@@ -380,9 +380,6 @@ defmodule Cure.Core.Inductive do
   defp occurs?(fname, {:eq, t, a, b}), do: occurs?(fname, t) or occurs?(fname, a) or occurs?(fname, b)
   defp occurs?(fname, {:refl, a}), do: occurs?(fname, a)
 
-  defp occurs?(fname, {:rewrite, p, m, b}),
-    do: occurs?(fname, p) or occurs?(fname, m) or occurs?(fname, b)
-
   defp occurs?(fname, {:case, s, m, brs}),
     do:
       occurs?(fname, s) or occurs?(fname, m) or

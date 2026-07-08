@@ -126,11 +126,6 @@ defmodule Cure.Elab.Relevance do
   defp walk({:fst, p}, depth, _site, st), do: walk(p, depth, :returned, st)
   defp walk({:snd, p}, depth, _site, st), do: walk(p, depth, :returned, st)
 
-  # `rewrite proof motive body ⇝ body` at eval; proof + motive are exempt, the
-  # transported body is relevant.
-  defp walk({:rewrite, _proof, _motive, body}, depth, _site, st),
-    do: walk(body, depth, :returned, st)
-
   # `case`: the discriminant is scrutinised (relevant); the motive is a type
   # position (exempt); each branch body runs under `arity` fresh pattern binders.
   #

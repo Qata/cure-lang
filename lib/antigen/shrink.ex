@@ -174,14 +174,12 @@ defmodule Antigen.Shrink do
     [{&{:eq, &1, a, b}, ty}, {&{:eq, ty, &1, b}, a}, {&{:eq, ty, a, &1}, b}]
   end
   defp child_slots({:refl, a}), do: [{&{:refl, &1}, a}]
-  # :rewrite/:prim are real Core formers (Cure.Core.Term's node taxonomy) that
+  # :prim is a real Core former (Cure.Core.Term's node taxonomy) that
   # `Term.gen_term`/`Antigen.Generators.Mutation` never construct today, so
   # this clause is presently unreached — included anyway so term_candidates
-  # doesn't silently stop descending if either ever appears (no binder in
-  # either, matching Term.shift's own :rewrite/:prim clauses — no cutoff bump).
-  defp child_slots({:rewrite, p, m, b}) do
-    [{&{:rewrite, &1, m, b}, p}, {&{:rewrite, p, &1, b}, m}, {&{:rewrite, p, m, &1}, b}]
-  end
+  # doesn't silently stop descending if it ever appears (no binder — no
+  # cutoff bump). (The former :rewrite clause retired with the primitive
+  # identity forms, Phase C.)
   defp child_slots({:prim, op, args}), do: slot_list(args, &{:prim, op, &1})
   defp child_slots(_leaf), do: []
 

@@ -78,9 +78,6 @@ defmodule Cure.Elab.Subst do
 
   defp replace({:refl, a}, env, k, depth), do: {:refl, replace(a, env, k, depth)}
 
-  defp replace({:rewrite, p, m, b}, env, k, depth),
-    do: {:rewrite, replace(p, env, k, depth), replace(m, env, k, depth), replace(b, env, k, depth)}
-
   defp replace({:prim, op, args}, env, k, depth),
     do: {:prim, op, Enum.map(args, &replace(&1, env, k, depth))}
 
@@ -129,9 +126,6 @@ defmodule Cure.Elab.Subst do
     do: {:eq, shift(ty, amount, cutoff), shift(a, amount, cutoff), shift(b, amount, cutoff)}
 
   def shift({:refl, a}, amount, cutoff), do: {:refl, shift(a, amount, cutoff)}
-
-  def shift({:rewrite, p, m, b}, amount, cutoff),
-    do: {:rewrite, shift(p, amount, cutoff), shift(m, amount, cutoff), shift(b, amount, cutoff)}
 
   def shift({:prim, op, args}, amount, cutoff),
     do: {:prim, op, Enum.map(args, &shift(&1, amount, cutoff))}
