@@ -70,13 +70,15 @@ defmodule Cure.Elab.MillerUnifyTest do
     assert {:lam, @nat, {:pi, @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
   end
 
-  test "Sigma solution: ?m(n) =? (Σk:Nat. Nat)  ⇒  ?m := λn. Σk:Nat. Nat" do
+  test "Sigma solution: ?m(n) =? Sigma(Nat, λ_.Nat)  ⇒  ?m := λn. Sigma(Nat, λ_.Nat)" do
     {ctx, m} = fam_ctx()
+    # Inductive Sigma (D2): the non-dependent pair type is `Sigma(Nat, λ_.Nat)`.
+    sig = {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
     t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, {:sigma, @nat, @nat}}
+    t2 = {:pi, @nat, sig}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, {:sigma, @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, @nat, sig} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "Equivalent solution binding the pattern var: ?m(n) =? Eq Nat n n  ⇒  ?m := λn. Eq Nat n n" do

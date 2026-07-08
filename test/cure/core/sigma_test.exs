@@ -1,12 +1,22 @@
 defmodule Cure.Core.SigmaTest do
+  @moduledoc """
+  Kernel suite for the builtin inductive Sigma (D2). The primitive
+  `{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` Core forms are retired; the dependent pair
+  is now the seeded inductive family `Sigma(a, b)` with constructor `mk_pair` and
+  projection-by-`:case`. Exercised over the file's own `Dec`/`Box` payloads.
+  """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Inductive, Env, Kernel, Context, Eval, Conv}
+  alias Cure.Core.{Builtins, Inductive, Env, Kernel, Context, Eval, Normalise}
 
   @dec {:data, :Dec, [], []}
   @causal {:ctor, :Causal, []}
+  @box_d {:data, :Box, [], [{:var, 0}]}
+
+  # The dependent Σ(d:Dec). Box(d), as the inductive `Sigma(Dec, λd. Box(d))`.
+  @sigma {:data, :Sigma, [@dec, {:lam, @dec, @box_d}], []}
 
   defp build_env do
-    Env.empty()
+    Builtins.seed(Env.empty())
     |> Inductive.declare(Inductive.family(:Dec, [], [], 0), [
       Inductive.ctor(:Dcoupled, [], []),
       Inductive.ctor(:Causal, [], [])
@@ -16,44 +26,54 @@ defmodule Cure.Core.SigmaTest do
     ])
   end
 
-  # Σ(d:Dec). Box(d)
-  @sigma {:sigma, @dec, {:data, :Box, [], [{:var, 0}]}}
-
-  test "Sigma formation is a type at the max level" do
+  test "Sigma formation: the family application is a type at level 0" do
     assert {:ok, {:vtype, 0}} == Kernel.infer(Context.empty(build_env()), @sigma)
   end
 
-  test "checks a dependent pair against its Sigma type" do
+  test "mk_pair intro checks against its Sigma type" do
     e = build_env()
-    # ctx: bx : Box(Causal)
-    ctx = Context.extend(Context.empty(e), Eval.eval({:data, :Box, [], [@causal]}, []))
+    ctx = Context.empty(e)
     sigma_val = Eval.eval(@sigma, Context.env(ctx))
-    pair = {:pair, @causal, {:var, 0}}
+    # (Causal, mk(Causal)) : Σ(d:Dec). Box(d)
+    pair = {:ctor, :mk_pair, [@causal, {:ctor, :mk, [@causal]}]}
     assert :ok == Kernel.check(ctx, pair, sigma_val)
   end
 
-  test "snd substitutes (fst p) into the second component's type" do
-    e = build_env()
-    ctx = Context.extend(Context.empty(e), Eval.eval(@sigma, []))
-    # p = var 0 : Σ(d:Dec). Box(d). snd p : Box(fst p), fst p stuck (neutral).
-    assert {:ok, {:vdata, :Box, [{:vneutral, {:nfst, {:nvar, 0}}}]}} =
-             Kernel.infer(ctx, {:snd, {:var, 0}})
+  test "ι-reduction: projection cases on a concrete mk_pair reduce to the components" do
+    ctx = Context.empty(build_env())
+    pair = {:ctor, :mk_pair, [@causal, {:ctor, :mk, [@causal]}]}
 
-    assert {:ok, {:vdata, :Dec, []}} == Kernel.infer(ctx, {:fst, {:var, 0}})
+    fst = {:case, pair, {:lam, @sigma, @dec}, [{:mk_pair, 2, {:var, 1}}]}
+    snd = {:case, pair, {:lam, @sigma, {:data, :Box, [], [@causal]}}, [{:mk_pair, 2, {:var, 0}}]}
+
+    assert Normalise.nf(ctx, fst) == @causal
+    assert Normalise.nf(ctx, snd) == {:ctor, :mk, [@causal]}
   end
 
-  test "negative: a second component of the wrong type is a :sigma_mismatch" do
+  test "dependent second projection: snd's type is Box at the (stuck) first component" do
+    e = build_env()
+    # ctx: p : Σ(d:Dec). Box(d)
+    ctx = Context.extend(Context.empty(e), Eval.eval(@sigma, []))
+
+    # fst of a Σ-value, as a first-projection case. The scrutinee `{:var, 0}` is
+    # read in the enclosing frame (the context `p`) when used standalone below, and
+    # re-read as the motive-bound scrutinee when nested inside `snd_motive` — the
+    # same de Bruijn index 0, resolved per frame.
+    fst_case = {:case, {:var, 0}, {:lam, @sigma, @dec}, [{:mk_pair, 2, {:var, 1}}]}
+    # snd p : Box(fst p) — the dependent motive returns Box applied to fst p.
+    snd_motive = {:lam, @sigma, {:data, :Box, [], [fst_case]}}
+    snd_p = {:case, {:var, 0}, snd_motive, [{:mk_pair, 2, {:var, 0}}]}
+
+    assert {:ok, {:vdata, :Box, [_stuck_fst]}} = Kernel.infer(ctx, snd_p)
+    assert {:ok, {:vdata, :Dec, []}} == Kernel.infer(ctx, fst_case)
+  end
+
+  test "negative: a second component of the wrong type is rejected" do
     e = build_env()
     ctx = Context.empty(e)
     sigma_val = Eval.eval(@sigma, [])
-    # (Causal, Dcoupled): Dcoupled : Dec, but Box(Causal) is expected
-    pair = {:pair, @causal, {:ctor, :Dcoupled, []}}
-    assert {:error, :sigma_mismatch} = Kernel.check(ctx, pair, sigma_val)
-  end
-
-  test "iota: both projection rules hold definitionally" do
-    pair = {:pair, {:type, 0}, {:type, 1}}
-    assert Conv.conv?({:fst, pair}, {:type, 0}, [], 0)
-    assert Conv.conv?({:snd, pair}, {:type, 1}, [], 0)
+    # (Causal, Dcoupled): Dcoupled : Dec, but Box(Causal) is expected.
+    pair = {:ctor, :mk_pair, [@causal, {:ctor, :Dcoupled, []}]}
+    assert {:error, _} = Kernel.check(ctx, pair, sigma_val)
   end
 end

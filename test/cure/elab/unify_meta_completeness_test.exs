@@ -30,13 +30,23 @@ defmodule Cure.Elab.UnifyMetaCompletenessTest do
     assert {:eq, @z, @z, {:refl, @z}} == Unify.zonk(t, ctx)
   end
 
-  test "zonk substitutes a solution buried in Sigma / pair / fst / snd" do
+  test "zonk substitutes a solution buried in inductive Sigma / mk_pair / projections" do
     ctx = MetaCtx.put_solution(elem(MetaCtx.fresh(MetaCtx.new()), 0), 0, @z)
 
-    assert {:sigma, @z, @z} == Unify.zonk({:sigma, {:meta, 0}, {:meta, 0}}, ctx)
-    assert {:pair, @z, @z} == Unify.zonk({:pair, {:meta, 0}, {:meta, 0}}, ctx)
-    assert {:fst, @z} == Unify.zonk({:fst, {:meta, 0}}, ctx)
-    assert {:snd, @z} == Unify.zonk({:snd, {:meta, 0}}, ctx)
+    # Inductive Sigma (D2): the former is `{:data, :Sigma}`, intro `{:ctor,
+    # :mk_pair}`, projections the elaborator's `sigma_first`/`sigma_second` global
+    # spines — zonk recurses into each and substitutes the buried meta.
+    assert {:data, :Sigma, [@z, @z], []} ==
+             Unify.zonk({:data, :Sigma, [{:meta, 0}, {:meta, 0}], []}, ctx)
+
+    assert {:ctor, :mk_pair, [@z, @z]} ==
+             Unify.zonk({:ctor, :mk_pair, [{:meta, 0}, {:meta, 0}]}, ctx)
+
+    assert {:app, {:global, :sigma_first}, @z} ==
+             Unify.zonk({:app, {:global, :sigma_first}, {:meta, 0}}, ctx)
+
+    assert {:app, {:global, :sigma_second}, @z} ==
+             Unify.zonk({:app, {:global, :sigma_second}, {:meta, 0}}, ctx)
   end
 
   test "unify does not crash the kernel on a metavariable buried in a prim (delta fallback)" do

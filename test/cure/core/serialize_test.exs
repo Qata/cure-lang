@@ -25,10 +25,12 @@ defmodule Cure.Core.SerializeTest do
     {:pi, {:int_type}, {:type, 0}},
     {:lam, {:int_type}, {:var, 0}},
     {:app, {:global, :f}, {:int_lit, 3}},
-    {:sigma, {:int_type}, {:var, 0}},
-    {:pair, {:int_lit, 1}, {:ctor, :True, []}},
-    {:fst, {:var, 0}},
-    {:snd, {:var, 0}},
+    # Inductive Sigma (D2): the dependent pair round-trips as `{:data, :Sigma}` /
+    # `{:ctor, :mk_pair}` / projection-`:case` (covered by the data/ctor/case rows).
+    # Primitive sigma/pair/fst/snd nodes no longer encode; their *rejection* on
+    # decode is pinned as a negative test once the codec clauses are stripped.
+    {:data, :Sigma, [{:int_type}, {:lam, {:int_type}, {:type, 0}}], []},
+    {:ctor, :mk_pair, [{:int_lit, 1}, {:ctor, :True, []}]},
     {:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]},
     {:prim, :not, [{:ctor, :True, []}]},
     {:ctor, :seq, [{:global, :l}, {:global, :r}]},

@@ -89,8 +89,8 @@ defmodule Cure.Elab.TuplePatternTest do
 
   test "a pair literal is constructible as a function argument and matches end-to-end" do
     # Previously `%[…]` in inference position was `:unsupported_expression`; the
-    # pair now lowers to Core `{:pair, …}` and the kernel types the application by
-    # checking it against the callee's Σ domain.
+    # pair now lowers to the inductive Core `{:ctor, :mk_pair, …}` (D2) and the
+    # kernel types the application by checking it against the callee's Σ domain.
     src =
       @nat <>
         "  fn f(p: Sigma(a: Nat, Nat)) -> Nat = match p\n    %[x, y] -> y\n" <>

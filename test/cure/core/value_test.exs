@@ -7,9 +7,12 @@ defmodule Cure.Core.ValueTest do
     assert Value.value?({:vtype, 0})
     assert Value.value?({:vpi, {:vtype, 0}, cl})
     assert Value.value?({:vlam, {:vtype, 0}, cl})
-    assert Value.value?({:vsigma, {:vtype, 0}, cl})
-    assert Value.value?({:vpair, {:vtype, 0}, {:vtype, 1}})
     assert Value.value?({:vneutral, {:nvar, 0}})
+    # Inductive Sigma (D2): the dependent pair value is an ordinary `{:vdata,
+    # :Sigma}` former and `{:vctor, :mk_pair}` intro — the `{:vdata}`/`{:vctor}`
+    # rows below cover it; no `{:vsigma}`/`{:vpair}` value shapes remain.
+    assert Value.value?({:vdata, :Sigma, [{:vtype, 0}, {:vlam, {:vtype, 0}, cl}]})
+    assert Value.value?({:vctor, :mk_pair, [{:vtype, 0}, {:vtype, 1}]})
     assert Value.value?({:vdata, :SF, [{:vtype, 0}]})
     assert Value.value?({:vctor, :seq, [{:vtype, 0}]})
     refute Value.value?({:vtype, 3})
@@ -20,8 +23,8 @@ defmodule Cure.Core.ValueTest do
     assert Value.neutral?({:nvar, 0})
     assert Value.neutral?({:nglobal, :and})
     assert Value.neutral?({:napp, {:nvar, 0}, {:vtype, 0}})
-    assert Value.neutral?({:nfst, {:nvar, 0}})
-    assert Value.neutral?({:nsnd, {:nvar, 0}})
+    # Inductive Sigma (D2): a stuck projection is a stuck `{:ncase}` over the
+    # neutral pair (covered by the `{:ncase}` row below) — no `{:nfst}`/`{:nsnd}`.
 
     assert Value.neutral?(
              {:ncase, {:nvar, 0}, {:closure, [], {:type, 0}},

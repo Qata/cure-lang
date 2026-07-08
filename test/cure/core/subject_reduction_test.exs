@@ -4,9 +4,10 @@ defmodule Cure.Core.SubjectReductionTest do
 
   # Seed corpus of closed, well-typed, *inferable* terms, each exercising a
   # reduction (or already normal). Grows per wave. Every entry is closed and
-  # global-free so it needs no def env. NB: bare `{:pair, …}` is check-only (the
-  # kernel has no infer rule for it), so sigma terms are excluded until a later
-  # wave adds an inferable eliminator corpus.
+  # global-free so it needs no def env. NB: a bare `{:ctor, :mk_pair, …}` (the
+  # inductive Sigma intro, D2) is check-only like any parameterised constructor,
+  # so Sigma terms are excluded until a later wave adds an inferable eliminator
+  # corpus.
   @corpus [
     {:app, {:lam, {:type, 0}, {:var, 0}}, {:int_type}},        # beta -> {:int_type}
     {:app, {:lam, {:int_type}, {:var, 0}}, {:int_lit, 7}},     # beta -> {:int_lit, 7}

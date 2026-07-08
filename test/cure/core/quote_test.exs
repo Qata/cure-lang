@@ -20,7 +20,9 @@ defmodule Cure.Core.QuoteTest do
   test "round-trips Pi and Sigma binders" do
     pi = {:pi, {:type, 0}, {:var, 0}}
     assert pi == Quote.reify(Eval.eval(pi, []), 0)
-    sg = {:sigma, {:type, 0}, {:var, 0}}
+    # Inductive Sigma (D2): the family application round-trips (0 indices, so the
+    # sig-less reify splits all args as params correctly).
+    sg = {:data, :Sigma, [{:type, 0}, {:lam, {:type, 0}, {:var, 0}}], []}
     assert sg == Quote.reify(Eval.eval(sg, []), 0)
   end
 end
