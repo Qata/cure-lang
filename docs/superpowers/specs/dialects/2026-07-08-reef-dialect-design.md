@@ -342,7 +342,147 @@ and the last line of defense must remain mechanical and dumb (§7). The docs
 lead with the Apex comparison: same ladder philosophy, plus voting, plus a
 machine-checked safety case.
 
-## 15. Open decisions (ledger)
+## 15. Deployment profiles — `:home` / `:shop` (operator addition, same day)
+
+A reef controller in a **shop** lives in different physics: water leaves the
+system *on purpose*, all day — every livestock sale bags a litre of
+saltwater. A home-profile ATO reading that as evaporation and replacing it
+with RO water dilutes the system sale by sale; over a busy Saturday that is
+a salinity crash administered by the controller itself. `profile` makes the
+regime a declared, compiler-enforced property of the whole block:
+
+```cure
+reef ShopSystem
+  profile :shop            # :home is the default and matches §4's behavior
+```
+
+### 15.1 What `:shop` requires (profile-as-requirements)
+
+Profiles are not a settings toggle; they change what the compiler demands.
+Under `:shop`:
+
+- **Plain automatic ATO is a compile error.** `when depth == Low -> ato.on`
+  is rejected: *"shop profile: an automatic RO top-up needs a drop
+  classification — a sudden drop might be a sale."* The only path to a pump
+  is through the classifier (§15.3).
+- **Level must be quantitative** (a `Depth` in mm/litres, §15.2), not a
+  boolean threshold — you cannot classify a drop you cannot measure.
+- **A saltwater make-up reservoir must be declared**, with its own voted
+  `Salinity` quantity and volume accounting.
+
+`:home` keeps §4's semantics unchanged; the classifier is available but
+optional there.
+
+### 15.2 Quantitative level metrology — ladders and strips
+
+Two channel forms upgrade `Level` (boolean) to `Depth` (quantitative,
+united, via declared sump geometry `mm × footprint → litres`):
+
+```cure
+  quantity depth: Depth
+    channel strip = sump.kamoer_strip            kind :optical_strip,
+                                                 range 0mm..150mm, mount :sump_wall
+    channel stack = ladder [ sump.opt_lo  at 40mm,
+                             rim.opt_mid  at 70mm,
+                             sump.opt_hi  at 100mm ]  kind :optical, mounts :diagonal
+    vote 2 of 2, agree within 5mm
+    geometry footprint 30cm x 40cm               # depth ↔ volume conversion
+```
+
+- **`ladder`** — discrete sensors at declared heights, *diagonally offset*
+  (per the operator's design): resolution = spacing, drop magnitude = rungs
+  crossed, rate = rungs over time. The offset does double duty, and the
+  compiler sees both: it is the metrology (each rung reads a clean
+  air/water transition unobstructed by the sensor above) **and** it spreads
+  `mount` fault domains, so the §6 common-mode matrix credits the geometry
+  automatically — the layout that measures drops cleanly is the same layout
+  no single fouling event defeats.
+- **`kamoer_strip`** — a continuous long-optical channel (Kamoer-style, as
+  used in their KWC water changer): one declared range covering normal
+  band, drop, **and overflow** — the top-of-range reading is a first-class
+  `Overflow` event (return pump off + alarm, both profiles).
+
+Both are ordinary channels; the vote, agreement band, staleness, and
+common-mode analysis apply unchanged.
+
+### 15.3 Drop classification — dual-witness, or it doesn't act
+
+The classifier is a `derived` discriminator over two **dissimilar
+witnesses**, in the §3 sense:
+
+1. **Rate profile** (from `depth`): evaporation is slow and sustained
+   (≤ the declared rate, e.g. 3 l/day); a **sale is a step** (≥ 0.5 l inside
+   a minute, then stable); a **leak is sustained-fast** (a step that never
+   stabilizes).
+2. **Salinity trend** (the physics witness): evaporation removes water and
+   leaves the salt — salinity *rises*; a sale or leak removes *saltwater* —
+   salinity is *flat*. The trend is slower and noisier than the rate
+   profile, so it acts as a **confirming witness on a longer window**: it
+   ratifies or retroactively vetoes classifications rather than co-timing
+   them.
+
+```cure
+  classify drop_cause from depth, salinity
+    evaporation: rate <= 3l/day sustained    confirmed by salinity rising
+    removal:     step >= 0.5l within 60s, then stable
+                                             confirmed by salinity flat
+    leak:        rate >= 5l/hour sustained   confirmed by salinity flat
+    else -> :unknown
+```
+
+Static discipline: the declared bands must be **mutually exclusive**
+(overlap = compile error) and anything between them falls to `:unknown`
+(gaps are warned, never silently absorbed). `:unknown` is a coverage-checked
+branch like `degraded`/`lost` — a shop controller that hasn't decided what
+an unclassifiable drop means does not compile.
+
+### 15.4 Shop responses
+
+```cure
+  control ShopTopOff
+    on evaporation           -> ato_ro.on            # normal RO, §7 interlocks apply
+    on removal(v: Litres)
+      when reservoir_sal agrees tank_sal within 0.3ppt ->
+        ato_salt.dispense(v)                          # replace what left: saltwater
+    on removal(_)            -> alert(:reservoir_salinity_mismatch)   # no auto-dispense
+    on leak                  -> ato_ro.off; ato_salt.off; return_pump.off; alert(:leak)
+    on unknown               -> ato_ro.off; ato_salt.off; alert(:drop_unclassified)
+```
+
+- **Salinity-dependent saltwater top-up:** the dispensed volume is the
+  *measured* drop (rungs crossed / strip delta × footprint — units end to
+  end), and auto-dispense is **gated on reservoir-tank salinity agreement**;
+  a mismatched reservoir alarms instead of acting. `ato_salt` carries its
+  own §7 interlocks (max per event, max per day, reservoir volume
+  accounting — a doser whose arithmetic says the reservoir is empty
+  abstains).
+- **Retro-veto:** if the salinity trend later contradicts a classification
+  the controller already acted on (dispensed as `removal`, but salinity is
+  drifting), further auto-dispense is **suspended** and the discrepancy
+  alarmed — the trend witness is slow, so its authority is retrospective
+  and latching, per §5's sticky-suspicion rule.
+- Leak beats everything: it shares the sale's salinity signature and is
+  distinguished purely by time profile, so it is classified conservatively
+  (a `removal` that keeps falling *becomes* a leak) and its response is
+  everything-off-plus-alarm. In a shop, staff are present — alarms are
+  cheap; wrong water is not.
+
+### 15.5 What this adds to `cure test`
+
+```
+  ✓ classifier_bands_exclusive    proved by construction — no overlap, gap 3–5 l/hour → :unknown (warned)
+  ✓ dispense_bounded              proved by construction — ≤ 2l/event, ≤ 10l/day, ≤ reservoir accounting
+  ✓ shop_no_blind_ato             proved by construction — no pump reachable except via drop_cause
+  ✗ saturday_rush                 tested (seeded) — 40 sales + evaporation + one leak injected
+                                  over a simulated day: salinity 34.8→35.1ppt, leak caught in 4min
+```
+
+The `saturday_rush` template ships with the profile: a generated business
+day of interleaved sales, evaporation, and one fault, asserting salinity
+stays in band and the leak is isolated — the shop-mode single-fault
+criterion.
+
+## 16. Open decisions (ledger)
 
 1. **Quorum sub-dialect extraction** (§13) — decide when `home`/`grow` want
    it; premature now.
@@ -364,8 +504,17 @@ machine-checked safety case.
    the voting core stays arithmetic.
 8. **`derived` channel placement syntax** (`at host`) — confirm it reuses
    fleet's `at` annotation verbatim.
+9. **Corrective blending** (`:shop`) — make-up water salinity chosen to
+   nudge a drifted tank back to target, vs. v1's match-within-band gate;
+   defer until the plain gate has run in a real shop.
+10. **Multi-tank shop topologies** — a shop is many display tanks on shared
+    sumps: quantities per tank, shared reservoirs, per-tank classifiers;
+    fleet handles the nodes, but the quantity-sharing surface needs design.
+11. **Kamoer-strip driver declaration** — range/resolution/protocol of the
+    KWC-style long optical sensor as a shipped `driver`; plus ladder-channel
+    sugar (`ladder [...] at heights`) as dialect surface vs. plain channels.
 
-## 16. Non-goals
+## 17. Non-goals
 
 - No certification claims of any kind.
 - No replacement of mechanical backstops (§7 — designed-in humility).
