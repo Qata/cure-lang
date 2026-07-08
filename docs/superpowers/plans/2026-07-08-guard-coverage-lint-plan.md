@@ -150,7 +150,7 @@ defmodule Cure.Elab.GuardLintTest do
 end
 ```
 
-Note `async: false`: the warnings channel is process-dictionary state and the Z3 process spawns a port; keep this file serial.
+Note `async: false`: primarily because Task 2 appends integration tests to this same file that call `Emit.compile_and_load` (compiling `:"Cure.GuardLintTri"` et al.), which mutates GLOBAL VM code-server state — the established reason this codebase already uses for `async: false` alongside `compile_and_load` (`test/cure/elab/erasure_relevance_test.exs:43-44`: "load a BEAM module ..., which mutates global VM state, so this module must not run concurrently"). Secondarily, it also keeps this file's Z3 port-spawning serial, avoiding unnecessary concurrent OS processes. (The warnings channel itself is plain process-dictionary state, isolated per ExUnit test process regardless of `async`, so it does not by itself require `async: false`.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -311,7 +311,41 @@ defmodule Cure.Elab.GuardLint do
     query = Enum.join(decls ++ [assertion, "(check-sat)"], "\n")
 
     if Z3.z3_available?() do
-      case Z3.start_link(timeout: @timeout) do
+      run_isolated(fn -> Z3.start_link(timeout: @timeout) end, query)
+    else
+      :unknown
+    end
+  end
+
+  # `Cure.SMT.Process.start_link` LINKS the solver GenServer to US (the
+  # elaborator/test process). A Z3 binary crash/kill is captured as an ordinary
+  # `:exit_status` port message inside `Process`'s own `handle_call` and replied
+  # as `{:error, _}` — no crash. But a genuine bug INSIDE the `Process` GenServer
+  # (an unhandled message, an exception in its own receive loop) terminates that
+  # linked process abnormally, and the resulting EXIT SIGNAL is not something any
+  # `try/catch` in our code can intercept — with `trap_exit` at its default
+  # `false`, an unhandled linked EXIT kills the receiving process outright,
+  # bypassing ordinary exception handling entirely (this is a real per-`Cure.SMT.Process`
+  # gap: `Cure.SMT.Solver.run_with_z3` has the identical exposure and no extra
+  # guard against it either — but that pipeline is opt-in refinement checking,
+  # while this lint sits on every `Program.elaborate/1` call, where spec §3 make
+  # "must never crash an elaboration" an absolute, so we harden past parity with
+  # the existing caller rather than merely matching it). Toggling `trap_exit` for
+  # the duration of the query turns any such crash into an ordinary `{:EXIT, pid,
+  # reason}` message we explicitly drain and fold into `:unknown`, instead of
+  # letting it kill the caller. Residual, accepted trade-off: for the query's
+  # brief window (≤ `@timeout`), an UNRELATED linked process crashing also
+  # arrives as a mailbox message instead of killing us; we only drain the one
+  # tagged with our own `pid`, so an unrelated `{:EXIT, _, _}` is left queued as
+  # ordinary (harmless, since this call runs in an ordinary synchronous
+  # process, not a `handle_info` loop expecting none) rather than propagating —
+  # acceptable given the alternative (Z3 crashing the elaborator) is strictly
+  # worse and the window is short.
+  defp run_isolated(start_fun, query) do
+    prior = Process.flag(:trap_exit, true)
+
+    try do
+      case start_fun.() do
         {:ok, pid} ->
           try do
             case Z3.query(pid, query) do
@@ -320,7 +354,8 @@ defmodule Cure.Elab.GuardLint do
               _ -> :unknown
             end
           catch
-            # A dead port / call timeout degrades conservatively (§2.3, §3).
+            # A dead port / call timeout / trapped linked crash degrades
+            # conservatively (§2.3, §3).
             _, _ -> :unknown
           after
             try do
@@ -328,13 +363,22 @@ defmodule Cure.Elab.GuardLint do
             catch
               _, _ -> :ok
             end
+
+            # Drain the EXIT message `stop/1` (a normal GenServer.stop) or a
+            # crash may have queued, so it never leaks into the caller's own
+            # mailbox once trap_exit is restored below.
+            receive do
+              {:EXIT, ^pid, _} -> :ok
+            after
+              0 -> :ok
+            end
           end
 
         _ ->
           :unknown
       end
-    else
-      :unknown
+    after
+      Process.flag(:trap_exit, prior)
     end
   end
 end
@@ -916,20 +960,35 @@ defmodule Antigen.Generators.ElabGuardLint do
 
   # -- Metamorphic transforms (probe-fn BODY input only) ------------------------
 
-  # Remove the middle/closing guard of a proven-exhaustive set (exact-line
-  # match so the shadowed and control cells — whose arms differ — return nil
-  # and produce no flip).
+  # Remove the middle/closing guarded arm of a proven-exhaustive set. Matches on
+  # the arm's CONTENT only (no leading-whitespace/newline dependence) — mirrors
+  # ElabDotForcing's corrupt_dot/promote_use convention, which matches an
+  # unanchored substring rather than an exact indented line, so this stays
+  # correct regardless of how the `@catalog` heredocs happen to be indented
+  # (the shadowed and control cells — whose arms differ — return nil and
+  # produce no flip; a future rewording that removes the fragment entirely
+  # would surface as a missing flip in "drop_guard produces flips for exactly
+  # the two proven-exhaustive cells", not a silent no-op).
   defp drop_guard(body) do
     cond do
-      String.contains?(body, "    x when x == b -> S(Z())\n") ->
-        String.replace(body, "    x when x == b -> S(Z())\n", "")
+      String.contains?(body, "x when x == b -> S(Z())") ->
+        remove_line_containing(body, "x when x == b -> S(Z())")
 
-      String.contains?(body, "    x when x >= b -> S(Z())\n") ->
-        String.replace(body, "    x when x >= b -> S(Z())\n", "")
+      String.contains?(body, "x when x >= b -> S(Z())") ->
+        remove_line_containing(body, "x when x >= b -> S(Z())")
 
       true ->
         nil
     end
+  end
+
+  # Delete the one line containing `fragment` (indentation and all), leaving
+  # the surrounding lines correctly stitched together.
+  defp remove_line_containing(body, fragment) do
+    body
+    |> String.split("\n")
+    |> Enum.reject(&String.contains?(&1, fragment))
+    |> Enum.join("\n")
   end
 
   # Rename the guard-bound variable `x` consistently (alpha-equivalence);
@@ -938,7 +997,7 @@ defmodule Antigen.Generators.ElabGuardLint do
 end
 ```
 
-Label-correctness argument the executor should sanity-check before the gate (read, don't run): the two `drop_guard` variants leave a SINGLE guarded arm as the final arm (`x < b` alone) — not exhaustive, Z3 refutes, `guard_chain` rejects `:non_exhaustive` → `:flip` holds. `alpha_rename` on `untranslatable/user_fn` renames `x` in both `cls` arms and in nothing else (`pos`/`nonpos` use `i`) — verdict-preserving. The shadowed cell's drop_guard is `nil` by construction (its arms match neither replacement line).
+Label-correctness argument the executor should sanity-check before the gate (read, don't run): the two `drop_guard` variants leave a SINGLE guarded arm as the final arm (`x < b` alone) — not exhaustive, Z3 refutes, `guard_chain` rejects `:non_exhaustive` → `:flip` holds. `alpha_rename` on `untranslatable/user_fn` renames `x` in both `cls` arms and in nothing else (`pos`/`nonpos` use `i`) — verdict-preserving. The shadowed cell's drop_guard is `nil` by construction (its arms contain neither guard fragment).
 
 (b) `lib/antigen/assays/elab.ex` — insert after the `"elab/dot_forcing"` relation clause (after current line ~141), before the `elab/soundness` clauses, mirroring the dot_forcing pair exactly:
 
@@ -1025,16 +1084,18 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (row 4, one sentence)
 - Verified-no-change: `lib/std/bool.cure` (its `bool_elim` mention is historically accurate — "retiring the bespoke `bool_elim` primitive"), `lib/antigen/generators/totality.ex` (line 313 historically accurate; `diverging_bool_elim_branch`/`terminating_bool_elim_branch` are kept-forever test-pinned identifiers; `note:` strings are challenge DATA, not comments — leave all of it), `lib/cure/core/kernel.ex` (no `bool_elim` mention exists).
 
-- [ ] **Step 1: Rewrite the five stale elaborator comments**
+- [ ] **Step 1: Rewrite the eight stale elaborator comments**
 
-These are the current stale texts (re-grep `bool_elim` in `lib/cure/elab/` first; if line drift moved them, match on text). Reword each so it describes the `:case`-on-Bool lowering that exists (`bool_case/5`), keeping surrounding comment density and style. Required outcomes:
+These are the current stale texts (re-grep `bool_elim` in `lib/cure/elab/` first; if line drift moved them, match on text — plan-time verification ran `grep -n bool_elim lib/cure/elab/elaborator.ex` and found 11 matching lines grouping into the EIGHT distinct comment sections numbered below, not five/six as earlier spec drafts of this section counted; items 2 and 3 close that gap). Reword each so it describes the `:case`-on-Bool lowering that exists (`bool_case/5`), keeping surrounding comment density and style. Required outcomes:
 
 1. `try_guard_match` header comment (~2387, partially rewritten in Task 2's Step 3 — finish it if any `bool_elim` text remains): describe the chain as `:case`-on-Bool via `bool_case/5`, mention the lint recovery, keep the variable-scrutinee rationale.
-2. `bind_once_guard` comment (~2406-2410): "across the `bool_elim` chain" → "across the guard chain".
-3. The guarded-arm comment (~2447) — already replaced verbatim in Task 2 Step 3(b).
-4. `try_literal_match` comment (~2499-2505): "desugar to a chain of Boolean eliminations… becomes `bool_elim (n == 0) a b`" → "desugar to a chain of `:case`-on-Bool decisions (`bool_case/5`)… becomes `case (n == 0) of True -> a | False -> b`"; keep the no-`:vdata` rationale sentence.
-5. Ctor-guard section comment (~2660-2662): "the `if`s lower to the committed `bool_elim`" → "the `if`s lower to `:case` on the inductive Bool (through the general `:conditional` clause)".
-6. Matrix comment (~2952): "folded into a `bool_elim` `if`-chain" → "folded into a `:case`-on-Bool `if`-chain".
+2. `elaborate_match`'s nested-guard `with`-chain comment (~1321-1326, inside the `desugar_nested_arms` clause): "leaf folds the reached rows into a `bool_elim` `if`-chain whose tail is" → "leaf folds the reached rows into a `:case`-on-Bool `if`-chain whose tail is"; keep the rest of the sentence (Wadler/Augustsson `match … default` / Idris `CaseBuilder` errorCase framing) untouched.
+3. `elaborate_match`'s single-level ctor-guard comment (~1328-1331, inside the `desugar_ctor_guards` clause): "matrix) is folded into a guardless arm whose body is a `bool_elim`\n# `if`-chain over the constructor group's rows" → "matrix) is folded into a guardless arm whose body is a `:case`-on-Bool\n# `if`-chain over the constructor group's rows"; keep the rest of the sentence (same-constructor fall-through / `:vdata` path framing) untouched.
+4. `bind_once_guard` comment (~2406-2410): "across the `bool_elim` chain" → "across the guard chain".
+5. The guarded-arm comment (~2447) — already replaced verbatim in Task 2 Step 3(b).
+6. `try_literal_match` comment (~2499-2505): "desugar to a chain of Boolean eliminations… becomes `bool_elim (n == 0) a b`" → "desugar to a chain of `:case`-on-Bool decisions (`bool_case/5`)… becomes `case (n == 0) of True -> a | False -> b`"; keep the no-`:vdata` rationale sentence.
+7. Ctor-guard section comment (~2660-2662): "the `if`s lower to the committed `bool_elim`" → "the `if`s lower to `:case` on the inductive Bool (through the general `:conditional` clause)".
+8. Matrix comment (~2952): "folded into a `bool_elim` `if`-chain" → "folded into a `:case`-on-Bool `if`-chain".
 
 And `lib/cure/elab/declarations.ex:374-375`: "(a constant-motive bool_elim)" → "(a constant-motive `:case` on the inductive Bool)".
 
