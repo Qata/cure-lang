@@ -80,4 +80,26 @@ defmodule Cure.Elab.NatIntErasureTest do
     mod = run(src, :"Cure.NatIntLocal", [:two])
     assert apply(mod, :two, []) == {:S, {:S, :Z}}
   end
+
+  describe "rule 4: first-class constructors (resolve_free eta-expansion)" do
+    test "S passed to a HOF applies as the increment function" do
+      src =
+        "mod M\n" <>
+          "  fn ap(f: Nat -> Nat, n: Nat) -> Nat = f(n)\n" <>
+          "  fn t() -> Nat = ap(S, S(Z()))\nend\n"
+
+      mod = run(src, :"Cure.NatIntEta1", [:ap, :t])
+      assert apply(mod, :t, []) == 2
+    end
+
+    test "eta-expansion is general: a non-Nat positive-arity ctor works first-class" do
+      src =
+        "mod M\n  type Box = Mk(Int)\n" <>
+          "  fn ap(f: Int -> Box, i: Int) -> Box = f(i)\n" <>
+          "  fn t() -> Box = ap(Mk, 3)\nend\n"
+
+      mod = run(src, :"Cure.NatIntEta2", [:ap, :t])
+      assert apply(mod, :t, []) == {:Mk, 3}
+    end
+  end
 end

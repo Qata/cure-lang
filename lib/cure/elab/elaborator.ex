@@ -4729,9 +4729,10 @@ defmodule Cure.Elab.Elaborator do
       if Inductive.get_ctor(env, atom) do
         # A constructor head applied to arguments is a saturated constructor, not
         # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:
-        # `resolve_free` only ever yields the NULLARY `{:ctor, atom, []}`, so
-        # folding args on with `{:app, …}` would apply a nullary ctor to an
-        # argument and the kernel would reject it (`:ctor_arity`).
+        # this saturated-call clause builds the saturated ctor directly, while
+        # `resolve_free` eta-expands bare positive-arity ctors (all-present,
+        # unindexed) into lambdas and yields the nullary `{:ctor, atom, []}`
+        # form otherwise.
         {:ok, {:ctor, atom, core_args}}
       else
         with {:ok, head} <- elaborate_expr({:variable, [], name}, scope, env) do
@@ -4746,7 +4747,9 @@ defmodule Cure.Elab.Elaborator do
     atom = String.to_atom(name)
 
     cond do
-      Inductive.get_ctor(env, atom) -> {:ok, {:ctor, atom, []}}
+      Inductive.get_ctor(env, atom) ->
+        eta_expand_bare_ctor(env, atom)
+
       Inductive.family?(env, atom) -> {:ok, {:data, atom, [], []}}
       # Bare VALUE position mirrors the call-position R7 trichotomy: a name
       # provided by ≥2 re-keyed imports with no local/unshadowed winner is
@@ -4768,6 +4771,32 @@ defmodule Cure.Elab.Elaborator do
           {:ok, key} -> {:ok, {:global, key}}
           _ -> {:ok, {:global, atom}}
         end
+    end
+  end
+
+  # A bare positive-arity constructor reference eta-expands to nested lambdas
+  # (`S` becomes `λ n:Nat. S(n)`) so first-class ctor values elaborate instead
+  # of dying at the kernel's arity check (:ctor_arity) — the general gap behind
+  # spec 2026-07-08-nat-int-erasure rule 4 (Idris allows bare `S` everywhere).
+  # Scope: ctors whose args are all explicit/:present and whose result carries
+  # no params/indices. An implicit-carrying or indexed ctor keeps today's
+  # nullary resolution (and today's downstream error): a lambda-typed value
+  # cannot receive implicit insertion at its call sites, so eta-expanding it
+  # would produce an unusable value rather than a working one.
+  defp eta_expand_bare_ctor(env, atom) do
+    %{args: tele, quantities: qs, result_params: rp, result_indices: ri} =
+      Inductive.get_ctor(env, atom)
+
+    k = length(tele)
+
+    if k > 0 and Enum.all?(qs, &(&1 == :present)) and rp == [] and ri == [] do
+      body_args = for i <- (k - 1)..0//-1, do: {:var, i}
+      body = {:ctor, atom, body_args}
+
+      {:ok,
+       Enum.reduce(Enum.reverse(tele), body, fn {_name, dom}, acc -> {:lam, dom, acc} end)}
+    else
+      {:ok, {:ctor, atom, []}}
     end
   end
 
