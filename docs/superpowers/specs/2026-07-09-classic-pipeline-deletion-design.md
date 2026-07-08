@@ -9,9 +9,9 @@ subsystems have their own specs (§4).
 **deleted**, not kept alongside the dependent one. The dependent pathway
 (`Cure.Elab.Program`/`Elaborator` → `Cure.Core` → `Cure.Elab.Emit`) plus the
 macro facility becomes the one and only path from source to BEAM. Every
-construct the classic pipeline compiles by hand — fsm, actor, sup, app,
-**and** proto/impl — comes back as a user-level macro. "Replace literally
-every custom-compiled construct."
+construct the classic pipeline compiles by hand — fsm, actor, sup, app — comes
+back as a user-level macro, and `proto`/`impl` come back as a real elaborator
+typeclass feature (§4). "Replace literally every custom-compiled construct."
 
 ---
 
@@ -26,6 +26,14 @@ dependent world. Collapsing to one pipeline is what makes the macro facility's
 divergence bugs. The prerequisites that made this infeasible before are now
 either designed or landed (§4).
 
+**One correction to "every construct is a macro":** `proto`/`impl` are the
+exception. Macros are type-blind (upstream of the elaborator), so a macro can
+only emit *runtime* dispatch — not real, type-directed typeclasses. `proto`/
+`impl` therefore become an **elaborator feature** (dictionaries as Core records,
+resolution in the E-layer, erased by monomorphization), specified separately as
+the fifth enabler (§4). fsm/actor/sup/app remain macros; they are effectful code
+generators, which is exactly what the macro facility is for.
+
 ## 2. End state
 
 - **One entry path.** `compiler.ex` always elaborates through
@@ -38,8 +46,9 @@ either designed or landed (§4).
 - **One emission path.** `Elab.Emit` + `BeamWriter`; `lift module` for
   OTP-behaviour containers. The `dispatch_container` table and the bespoke
   compilers are gone.
-- **Containers and protocols are macros**, shipped with the language, not
-  compiler modules.
+- **Containers (fsm/actor/sup/app) are macros**, shipped with the language, not
+  compiler modules. **`proto`/`impl` are an elaborator typeclass feature** (§4),
+  not a macro.
 
 ## 3. Delete / absorb / keep — requires a per-module adjudication pass
 
@@ -58,7 +67,9 @@ must classify each module, not `rm -rf lib/cure/types`. Initial classification
 - Classic-only type machinery once nothing references it: `refinement.ex`,
   `path_refinement.ex`, `pattern_refinement.ex`, `guard_refinement.ex`,
   `effects.ex` (surface `!` inference — superseded by `Effect`), `synth.ex`,
-  `reduce.ex`, `protocol.ex`/`protocol_registry.ex` (protocols become a macro).
+  `reduce.ex`. (`protocol.ex`/`protocol_registry.ex` — the classic runtime-dispatch
+  protocol machinery — are deleted and *replaced* by the elaborator typeclass
+  feature, §4; not simply removed.)
 
 **Absorb / verify-still-needed (shared or Core-consumer):**
 - `core_bridge.ex` — Core-grammar consumer (already carved out by the Sigma
@@ -77,12 +88,13 @@ The adjudication pass is itself a deliverable (a table: module → verdict →
 who-references-it), produced before any deletion, because a wrong "delete"
 here breaks the build silently.
 
-## 4. The four enablers and their status
+## 4. The five enablers and their status
 
 | enabler | role | status | spec |
 |---|---|---|---|
 | `Effect` inert type former | sound effectful handler bodies | **spec'd** (this session) | `2026-07-09-effect-type-former-design.md` |
-| macro facility + `lift module` + §14 OTP ADTs | sole emission for all containers incl. proto/impl | **spec'd** | `macros/2026-07-08-macro-facility-design.md` §14 |
+| macro facility + `lift module` + §14 OTP ADTs | sole emission for fsm/actor/sup/app containers | **spec'd** | `macros/2026-07-08-macro-facility-design.md` §14 |
+| typeclasses as an elaborator feature | `proto`/`impl` done properly (dicts=records, E-layer resolution, monomorph erasure) | **spec'd** (this session) | `2026-07-09-typeclasses-elaborator-feature-design.md` |
 | single sound global registry (K12) | one collision-safe def/ctor/family table | **landed, unmerged** — commit `1d31446` on `autopilot/kernel-parity-batch` | `global-def-collision-gap` memory |
 | refinement posture | what replaces SMT refinements | **decided** (§5) | this doc |
 
@@ -144,17 +156,21 @@ scheduled.
 ## 6. Cutover sequencing
 
 Deletion is last, not first — you cannot delete a construct's compiler until
-its macro can emit the equivalent. Order:
+its replacement can emit the equivalent. Order:
 
 1. **Merge K12 forward** into `feature/idris-parity`.
 2. **Land `Effect`** (kernel nodes + elaborator door-closing + emit).
 3. **Land the macro facility core** + `lift module` + §14 OTP ADTs.
-4. **Reimplement constructs as macros, one at a time, behind the still-present
-   classic path**, validated on the generic-unix loop against the bespoke
-   output: `sup` first (near-pure config, no effects, no interesting indices —
-   proves the pipeline cheaply), then `app`, then `actor`, then `fsm`
-   (callback + simple mode), then `proto`/`impl` (dispatch = ordinary global
-   fns via `lift module`).
+4. **Reimplement the containers as macros, one at a time, behind the
+   still-present classic path**, validated on the generic-unix loop against the
+   bespoke output: `sup` first (near-pure config, no effects, no interesting
+   indices — proves the pipeline cheaply), then `app`, then `actor`, then `fsm`
+   (callback + simple mode).
+4b. **Land the elaborator typeclass feature** and reimplement `proto`/`impl`
+   through it (dicts as records → E-layer resolution → monomorph erasure),
+   behind the still-present classic runtime dispatch, validated against the
+   existing protocol examples. Independent of steps 2–4 (no `Effect`/`lift`
+   dependency); can proceed in parallel.
 5. **Stand up the proposition/lemma prelude** (§5.1) and migrate any stdlib /
    examples that relied on SMT refinements to computational/indexed/manual
    form; inventory and report what can't migrate.
