@@ -314,6 +314,54 @@ defmodule Cure.Compiler.Errors do
     format_diagnostic("error", "file error", path, 0, "cannot read file: #{:file.format_error(reason)}")
   end
 
+  # -- DepGraph / Build-Order Errors -------------------------------------------
+
+  def format_error({:import_cycle, hops}, file) do
+    chain =
+      hops
+      |> Enum.map(fn %{module: m, path: p, line: l} -> "#{m} (#{p}:#{l})" end)
+      |> Enum.join(" -> ")
+
+    format_diagnostic(
+      "warning",
+      "import cycle (W086)",
+      file,
+      hops |> List.first() |> Map.get(:line, 1),
+      "modules form a `use` cycle: #{chain}. " <>
+        "They compile together as one group in deterministic order. " <>
+        "Type-level mutual recursion across modules is fine; but if these " <>
+        "modules CALL each other's imported functions unqualified, resolution " <>
+        "inside the group is order-dependent (see W088). Consider qualifying " <>
+        "such calls, merging the modules, or dropping a redundant `use`."
+    )
+  end
+
+  def format_error({:duplicate_module, name, paths}, file) do
+    format_diagnostic(
+      "error",
+      "duplicate module (E087)",
+      file,
+      1,
+      "module '#{name}' is declared by more than one file in this compile set: " <>
+        Enum.join(paths, ", ")
+    )
+  end
+
+  def format_error({:unresolved_import, name, arity, imports, line}, file) do
+    probed = imports |> Enum.map(&Atom.to_string/1) |> Enum.join(", ")
+
+    format_diagnostic(
+      "warning",
+      "unresolved import (W088)",
+      file,
+      line,
+      "call to #{name}/#{arity} matches no export of the imported modules " <>
+        "(probed: #{probed}); emitting a local call. If #{name} lives in an " <>
+        "imported module, make sure that module is compiled and loaded before " <>
+        "this file, or qualify the call."
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
@@ -1498,6 +1546,62 @@ defmodule Cure.Compiler.Errors do
     timeout via `cure check --hot-smt`, or accept the warning when
     the obligation is true by hand and the cost of proving it
     machine-checked is too high.
+    """,
+    "W086" => """
+    W086: Import Cycle
+
+    Two or more modules in one compile set reference each other through
+    `use` declarations, forming a cycle. This is NOT an error: the cycle's
+    members compile together as a single group in deterministic
+    (alphabetical) order -- Cure's compile-set model matches Rust's
+    crate-internal modules, where module cycles are legal -- and the cycle
+    is reported as a closed walk (`A (a.cure:3) -> B (b.cure:2) -> A`).
+
+    A cycle is harmless when the modules only depend on each other's
+    types or qualified calls, which lower syntactically and impose no
+    order. It becomes actionable when the modules CALL each other's
+    imported functions UNQUALIFIED: resolution inside the group is
+    order-dependent, so an unqualified call may fall back to a local
+    reference and surface as W088.
+
+    Fix: qualify the cross-module calls (`Other.fn(...)`), merge the
+    mutually-recursive modules into one, or drop a redundant `use`.
+    """,
+    "E087" => """
+    E087: Duplicate Module
+
+    Two or more files in the same compile set declare a module with the
+    same name. The build driver scans every `.cure` source before
+    ordering and aborts here, because a duplicate name makes the
+    dependency graph -- and the emitted beam -- ambiguous.
+
+    Example:
+      one.cure:  mod Dup
+      two.cure:  mod Dup      # Error: 'Dup' declared twice
+
+    Fix: rename one of the modules, or remove the redundant file if it
+    was an accidental copy.
+    """,
+    "W088" => """
+    W088: Unresolved Import
+
+    An unqualified call matched no export of any `use`-imported module,
+    so codegen emitted a plain local call instead. This is the silent
+    fallback that classic codegen took without saying so; W088 makes it
+    visible.
+
+    It most often fires inside an import cycle (W086), where the callee
+    module has not been loaded yet when the caller is compiled, so its
+    exports are invisible to the beam-probing resolver.
+
+    Example:
+      mod UserB
+        use LibA
+        fn start() -> Int = ping()   # warning: ping/0 not found in LibA
+
+    Fix: make sure the imported module is compiled and loaded before
+    this file (DepGraph ordering normally guarantees this outside a
+    cycle), or qualify the call (`LibA.ping()`).
     """
   }
 
