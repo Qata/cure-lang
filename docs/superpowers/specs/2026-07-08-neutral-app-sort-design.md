@@ -153,8 +153,20 @@ directive: align with real languages).
    global's registered quantities contain an `:erased` slot, delegate the WHOLE
    application (surface arg ASTs, not pre-lowered args) to the term-position
    machinery via a narrow public wrapper over
-   `elaborate_implicit_app_bidirectional/6` (no `expected`), and return its term.
-3. Every other `idx_to_core` call site (ctor signatures, index telescopes) threads
+   `elaborate_implicit_app_bidirectional/6` (no `expected`), and return its term
+   (drop the returned result type).
+3. The ctx threads through the return-type lowering RECURSION — in particular
+   through `map_idx_to_core` and the applied-bound-var branch's arguments. This
+   is the probe's actual shape: in `b(first(p))` the head `b` is a BOUND VAR
+   (the `declarations.ex:902` branch); the implicit-carrying global `first` sits
+   one level down, in an argument position. Delegation triggers at ANY
+   function-call node in the recursion satisfying (a)-(c) of item 2.
+4. Crossing a binder-introducing type form (`pi_type`, `sigma_type`, the
+   `arrow_to_pi` nest) NULLs the threaded ctx for that sub-lowering: the scope
+   gains binders the kernel context does not have, and reusing the stale ctx
+   would mis-frame de Bruijn references. Under binders, behavior stays exactly
+   today's (see §7.5).
+5. Every other `idx_to_core` call site (ctor signatures, index telescopes) threads
    no ctx — byte-identical behavior. Globals with NO implicits keep the existing
    bare-spine path (today's working behavior, proven by the explicit-param probe).
 
@@ -178,8 +190,9 @@ insertion. If neither is available at signature time, STOP and report.
 ### §7.5 Residual gap (non-goal, documented)
 
 Implicit-carrying global applications in ctor-signature / index-telescope type
-positions (no ctx available there) keep today's bare spine. Follow-up candidate,
-out of D1 scope.
+positions (no ctx available there), and in return-type subexpressions UNDER a
+binder-introducing form (`pi_type`/`sigma_type`/arrow — ctx nulled per §7.3
+item 4), keep today's bare spine. Follow-up candidates, out of D1 scope.
 
 ### §7.6 Test-plan correction (executor-verified)
 
