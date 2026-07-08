@@ -348,16 +348,21 @@ Next to `elaborate_implicit_app_bidirectional/6` (~4116):
 ```elixir
   # A term-level global whose registered signature carries at least one erased
   # (implicit) parameter — the only shape the bare-spine lowering mis-handles.
-  # Families and constructors are not defs, so they return false here.
+  # Families and constructors are not defs, so they return false here. Mirrors
+  # the precedent `implicit_def?/2` (elaborator.ex:1278-1283) exactly, including
+  # its `is_list(q)` guard: `Env.add_def/4` (the 4-arg form used by some Antigen
+  # synthetic environments, e.g. `lib/antigen/generators/closure_env.ex`) defaults
+  # quantities to `nil`, and `:erased in nil` raises (`nil` is not Enumerable) —
+  # the guard is required for the same reason it is in the precedent function.
   defp implicit_global?(env, atom) do
     case Env.get_def(env, atom) do
-      %{quantities: quantities} -> :erased in quantities
+      %{quantities: q} when is_list(q) -> :erased in q
       _ -> false
     end
   end
 ```
 
-(Verify `Env.get_def/2`'s miss value in `lib/cure/core/env.ex` first; if it raises or returns something other than `nil` on a miss, wrap accordingly — the `_ ->` clause must cover the miss.)
+(Verified: `Env.get_def/2` (`lib/cure/core/inductive.ex:54-55` — `Cure.Core.Env` is defined there, NOT in a separate `env.ex`; no such file exists in this worktree) returns `nil` on a miss, never raises — the `_ ->` clause above covers both the miss and the `nil`-quantities case.)
 
 - [ ] **Step 4: Run to verify all green**
 

@@ -190,9 +190,15 @@ insertion. If neither is available at signature time, STOP and report.
 ### §7.5 Residual gap (non-goal, documented)
 
 Implicit-carrying global applications in ctor-signature / index-telescope type
-positions (no ctx available there), and in return-type subexpressions UNDER a
-binder-introducing form (`pi_type`/`sigma_type`/arrow — ctx nulled per §7.3
-item 4), keep today's bare spine. Follow-up candidates, out of D1 scope.
+positions (no ctx available there); in **parameter-type annotations**
+(`elaborate_param_telescope_rec`, `declarations.ex:530`, calls `idx_to_core/4` —
+the ctx is threaded into the return-type lowering ONLY, per §7.3 item 1, never
+into the param telescope, so a later param's type applying an implicit-carrying
+global — e.g. `q: b(first(p))` as a fourth parameter — keeps today's bare spine
+exactly like the return-type gap this spec fixes); and in return-type
+subexpressions UNDER a binder-introducing form (`pi_type`/`sigma_type`/arrow —
+ctx nulled per §7.3 item 4): all three keep today's bare spine. Follow-up
+candidates, out of D1 scope.
 
 ### §7.6 Test-plan correction (executor-verified)
 
