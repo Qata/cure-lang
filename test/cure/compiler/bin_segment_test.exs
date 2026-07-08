@@ -102,7 +102,7 @@ defmodule Cure.Compiler.BinSegmentTest do
   defp eval_module_main!(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
-    {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+    {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
     {:ok, module} = BeamWriter.compile_and_load(forms)
     apply(module, :main, [])
   end

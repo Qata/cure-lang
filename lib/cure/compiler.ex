@@ -103,7 +103,7 @@ defmodule Cure.Compiler do
          {:ok, ast} <- parse(tokens, file, emit?),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
-         {:ok, forms} <- codegen(ast, file, emit?, output_dir, declared_phases) do
+         {:ok, forms, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
       # Callback-mode FSMs, typed actors, supervisors, and
       # applications are already compiled, loaded, *and* persisted to
       # `<output_dir>/<mod>.beam` by the codegen step (the dispatcher
@@ -126,7 +126,7 @@ defmodule Cure.Compiler do
           {:ok, mod_atom, []}
 
         forms when is_list(forms) ->
-          write_beam_forms(forms, output_dir, emit?, file)
+          write_beam_forms(forms, output_dir, emit?, file, cg_warnings)
       end
     end
   end
@@ -137,13 +137,19 @@ defmodule Cure.Compiler do
   # `{:error, reason}` (2-tuple). Normalize the BEAM-writer failure here so
   # downstream consumers (CLI, `cure check`, `mix cure.check.examples`, test
   # suites) can rely on the 2-tuple shape without `CaseClauseError` crashes.
-  defp write_beam_forms(forms, output_dir, emit?, file) do
+  defp write_beam_forms(forms, output_dir, emit?, file, cg_warnings) do
     case BeamWriter.compile_forms(forms) do
       {:ok, module, binary, warnings} ->
         case BeamWriter.write_beam(module, binary, output_dir, emit_events: emit?, file: file) do
-          :ok -> {:ok, module, warnings}
+          :ok -> {:ok, module, cg_warnings ++ warnings}
           {:error, _} = err -> err
         end
+
+      # Codegen warnings (e.g. W088 unresolved imports) get carried onto the
+      # lint-error path in a 3-tuple *only* when there are any, so no other
+      # caller's 2-tuple `{:beam_lint_error, errors}` match is disturbed.
+      {:error, errors, _warnings} when cg_warnings != [] ->
+        {:error, {:beam_lint_error, errors, cg_warnings}}
 
       {:error, errors, _warnings} ->
         {:error, {:beam_lint_error, errors}}
@@ -209,7 +215,7 @@ defmodule Cure.Compiler do
          {:ok, ast} <- parse(tokens, file, emit?),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
-         {:ok, forms} <- codegen(ast, file, emit?, nil, declared_phases) do
+         {:ok, forms, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
       # compile_and_load/2 intentionally does NOT persist bytecode to
       # disk -- it only loads into the current VM -- so we pass `nil`
       # for `output_dir` and the container compilers skip their
@@ -274,7 +280,11 @@ defmodule Cure.Compiler do
 
   defp codegen(ast, file, emit?, output_dir, declared_phases) do
     if Cure.Elab.Program.dependent?(ast) do
-      dependent_codegen(ast)
+      # The kernel-lowering path never produces codegen warnings.
+      case dependent_codegen(ast) do
+        {:ok, forms} -> {:ok, forms, []}
+        {:error, _} = err -> err
+      end
     else
       opts = [file: file, emit_events: emit?, output_dir: output_dir]
 
@@ -284,7 +294,7 @@ defmodule Cure.Compiler do
           else: opts
 
       case Codegen.compile_module(ast, opts) do
-        {:ok, forms} -> {:ok, forms}
+        {:ok, forms, cg_warnings} -> {:ok, forms, cg_warnings}
         {:error, reason} -> {:error, {:codegen_error, reason}}
       end
     end

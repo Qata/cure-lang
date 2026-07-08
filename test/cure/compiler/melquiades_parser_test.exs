@@ -20,7 +20,7 @@ defmodule Cure.Compiler.MelquiadesParserTest do
   defp compile_and_load!(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
-    {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+    {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
     {:ok, mod} = BeamWriter.compile_and_load(forms)
     mod
   end

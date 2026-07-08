@@ -16,7 +16,7 @@ defmodule Cure.Actor.ActorTest do
   # GenServer module atom.
   defp compile_actor!(source) do
     ast = parse!(source)
-    {:ok, {:actor, mod_atom}} = Codegen.compile_module(ast, emit_events: false)
+    {:ok, {:actor, mod_atom}, _warnings} = Codegen.compile_module(ast, emit_events: false)
     mod_atom
   end
 

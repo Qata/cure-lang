@@ -16,7 +16,7 @@ defmodule Cure.Compiler.Codegen do
   ## Usage
 
       {:ok, ast} = Cure.Compiler.Parser.parse(tokens)
-      {:ok, forms} = Cure.Compiler.Codegen.compile_module(ast)
+      {:ok, forms, _warnings} = Cure.Compiler.Codegen.compile_module(ast)
   """
 
   alias Cure.Pipeline.Events
@@ -41,7 +41,10 @@ defmodule Cure.Compiler.Codegen do
     pattern_dup_counter: 0,
     # Per-module record registry (v0.19.0):
     # `%{"RecordName" => %{fields: ["x", ...], defaults: %{"x" => ast}}}`
-    records: %{}
+    records: %{},
+    # Codegen warnings accumulated during body compilation (reverse order);
+    # surfaced by `compile_module_container` as the 3rd return element.
+    warnings: []
   ]
 
   @type t :: %__MODULE__{}
@@ -83,11 +86,11 @@ defmodule Cure.Compiler.Codegen do
   plain modules.
   """
   @spec compile_module(tuple(), keyword()) ::
-          {:ok, list()}
-          | {:ok, {:callback_mode, module()}}
-          | {:ok, {:actor, module()}}
-          | {:ok, {:supervisor, module()}}
-          | {:ok, {:app, module()}}
+          {:ok, list(), [term()]}
+          | {:ok, {:callback_mode, module()}, [term()]}
+          | {:ok, {:actor, module()}, [term()]}
+          | {:ok, {:supervisor, module()}, [term()]}
+          | {:ok, {:app, module()}, [term()]}
           | {:error, term()}
   def compile_module(ast, opts \\ []) do
     emit? = Keyword.get(opts, :emit_events, true)
@@ -97,7 +100,7 @@ defmodule Cure.Compiler.Codegen do
 
     case ast do
       {:container, meta, body} when is_list(meta) ->
-        dispatch_container(meta, body, emit?, file, output_dir, declared_phases)
+        normalize_compile_result(dispatch_container(meta, body, emit?, file, output_dir, declared_phases))
 
       # If the AST is a block, find the first container (module/fsm) inside it
       # and merge any sibling definitions into its body (the parser may place
@@ -106,7 +109,8 @@ defmodule Cure.Compiler.Codegen do
         case find_container(children) do
           {:container, meta, body} ->
             merged_body = merge_sibling_defs(body, children)
-            dispatch_container(meta, merged_body, emit?, file, output_dir, declared_phases)
+
+            normalize_compile_result(dispatch_container(meta, merged_body, emit?, file, output_dir, declared_phases))
 
           nil ->
             {:error, {:expected_module, ast}}
@@ -116,6 +120,17 @@ defmodule Cure.Compiler.Codegen do
         {:error, {:expected_module, ast}}
     end
   end
+
+  # Normalize the several return shapes of `dispatch_container/6` into a
+  # uniform `{:ok, payload, warnings}` 3-tuple. Module/proof containers
+  # already carry warnings (3-tuple from `compile_module_container`); every
+  # other container compiler (`fsm`/`actor`/`sup`/`app`, and simple-mode
+  # FSM's plain forms list) returns a bare `{:ok, _}` and never produces
+  # codegen warnings, so an empty list is appended. A shape-only check keeps
+  # those four compilers ignorant that warnings exist.
+  defp normalize_compile_result({:ok, _payload, _warnings} = ok), do: ok
+  defp normalize_compile_result({:ok, other}), do: {:ok, other, []}
+  defp normalize_compile_result({:error, _} = err), do: err
 
   @doc """
   Compile a single expression MetaAST node into an Erlang abstract form.
@@ -239,7 +254,7 @@ defmodule Cure.Compiler.Codegen do
           Events.emit(:codegen, :module_assembled, forms, Events.meta(file, 1))
         end
 
-        {:ok, forms}
+        {:ok, forms, Enum.reverse(state.warnings)}
 
       {:error, _} = err ->
         err
@@ -618,11 +633,16 @@ defmodule Cure.Compiler.Codegen do
         state
       end
 
-    form =
+    # Each body-compilation helper returns `{form, warnings}` so that codegen
+    # warnings (e.g. W088 unresolved imports) accrued while lowering the
+    # function body bubble back up to the module-level state. Only `warnings`
+    # is adopted from the body compile -- vars/temp_counter/pattern_guards are
+    # function-local and must NOT leak into the module state.
+    {form, warnings} =
       cond do
         # @extern function: generate wrapper delegating to remote call
         extern != nil ->
-          compile_extern_function(fn_atom, params, extern, line, state)
+          {compile_extern_function(fn_atom, params, extern, line, state), state.warnings}
 
         # Multi-clause function
         clauses_meta != nil ->
@@ -633,6 +653,8 @@ defmodule Cure.Compiler.Codegen do
           guard_ast = Keyword.get(meta, :guards)
           compile_regular_function(fn_atom, params, body, guard_ast, line, state)
       end
+
+    state = %{state | warnings: warnings}
 
     if state.emit_events do
       Events.emit(:codegen, :form_generated, form, Events.meta(state.file, line))
@@ -648,22 +670,22 @@ defmodule Cure.Compiler.Codegen do
     # Compile guard if present
     guard_forms = compile_guard(guard_ast, fn_state)
 
-    # Compile body
-    body_forms =
+    # Compile body, carrying warnings accumulated while lowering it.
+    {body_forms, warnings} =
       case body do
         [single] ->
-          {form, _st} = do_compile_expr(single, fn_state)
-          [form]
+          {form, st} = do_compile_expr(single, fn_state)
+          {[form], st.warnings}
 
         [] ->
-          [{:atom, line, :ok}]
+          {[{:atom, line, :ok}], fn_state.warnings}
 
         multiple ->
           compile_body_exprs(multiple, fn_state)
       end
 
     clause = {:clause, line, param_forms, guard_forms, body_forms}
-    {:function, line, fn_atom, length(params), [clause]}
+    {{:function, line, fn_atom, length(params), [clause]}, warnings}
   end
 
   defp compile_extern_function(fn_atom, params, extern, line, state) do
@@ -683,10 +705,12 @@ defmodule Cure.Compiler.Codegen do
   end
 
   defp compile_multi_clause_function(fn_atom, arity, clauses, line, state) do
-    erl_clauses =
-      Enum.map(clauses, fn %{params: params, guard: guard, body: body_list} ->
+    # Thread warnings across clauses (each clause otherwise has its own fresh
+    # scope) so body-level codegen warnings from every clause are preserved.
+    {erl_clauses, warnings} =
+      Enum.map_reduce(clauses, state.warnings, fn %{params: params, guard: guard, body: body_list}, warns_acc ->
         # Each clause has its own scope
-        clause_state = %{state | vars: %{}, pattern_guards: []}
+        clause_state = %{state | vars: %{}, pattern_guards: [], warnings: warns_acc}
 
         {pattern_forms, clause_state} =
           Enum.map_reduce(params, clause_state, fn pat, st ->
@@ -698,12 +722,12 @@ defmodule Cure.Compiler.Codegen do
 
         guard_forms = compile_guard_with_extras(guard, extra_guards, clause_state)
 
-        body_forms = compile_body_exprs(body_list, clause_state)
+        {body_forms, warnings} = compile_body_exprs(body_list, clause_state)
 
-        {:clause, line, pattern_forms, guard_forms, body_forms}
+        {{:clause, line, pattern_forms, guard_forms, body_forms}, warnings}
       end)
 
-    {:function, line, fn_atom, arity, erl_clauses}
+    {{:function, line, fn_atom, arity, erl_clauses}, warnings}
   end
 
   # -- Expression Compilation --------------------------------------------------
@@ -1158,7 +1182,7 @@ defmodule Cure.Compiler.Codegen do
           do_compile_expr(arg, st)
         end)
 
-      form =
+      {form, state} =
         cond do
           # A qualified CONSTRUCTOR reference (escape hatch, e.g. `Std.Nat.Z()`):
           # the last dotted segment is PascalCase, i.e. a constructor by the same
@@ -1170,46 +1194,59 @@ defmodule Cure.Compiler.Codegen do
           # so the bare name it needs is just the last segment of the dotted path.
           String.contains?(name, ".") and constructor?(qualified_ctor_tail(name)) and
               cure_qualified_module?(name) ->
-            compile_constructor_call(qualified_ctor_tail(name), arg_forms, line)
+            {compile_constructor_call(qualified_ctor_tail(name), arg_forms, line), state}
 
           # Qualified call: Mod.fun(args) -- must come before constructor check
           String.contains?(name, ".") ->
-            compile_qualified_call(name, arg_forms, line)
+            {compile_qualified_call(name, arg_forms, line), state}
 
           # ADT constructor: PascalCase name -> tagged tuple
           constructor?(name) ->
-            compile_constructor_call(name, arg_forms, line)
+            {compile_constructor_call(name, arg_forms, line), state}
 
           # Variable call: if the name is a variable in scope, call it as a function value
           Map.has_key?(state.vars, name) ->
             var_atom = mangle_var(name)
-            {:call, line, {:var, line, var_atom}, arg_forms}
+            {{:call, line, {:var, line, var_atom}, arg_forms}, state}
 
           # Expression call: callee is an arbitrary expression (e.g. f(x)(y))
           Keyword.has_key?(meta, :callee) ->
             callee = Keyword.get(meta, :callee)
             {callee_form, _st} = do_compile_expr(callee, state)
-            {:call, line, callee_form, arg_forms}
+            {{:call, line, callee_form, arg_forms}, state}
 
           # Import resolution: check imports only if NOT a locally defined function
           true ->
             fn_atom = mangle_fn_name(name)
             arity = length(arg_forms)
             local_fns = Map.get(state, :local_fns, [])
-            is_local = Enum.any?(state.exports ++ local_fns, fn {n, a} -> n == fn_atom and a == arity end)
+
+            is_local =
+              Enum.any?(state.exports ++ local_fns, fn {n, a} -> n == fn_atom and a == arity end)
 
             if is_local or state.imports == [] do
-              {:call, line, {:atom, line, fn_atom}, arg_forms}
+              {{:call, line, {:atom, line, fn_atom}, arg_forms}, state}
             else
               case resolve_import(fn_atom, arity, state.imports) do
                 {:ok, mod_atom} ->
-                  {:call, line, {:remote, line, {:atom, line, mod_atom}, {:atom, line, fn_atom}}, arg_forms}
+                  {{:call, line, {:remote, line, {:atom, line, mod_atom}, {:atom, line, fn_atom}}, arg_forms}, state}
 
                 :not_found ->
                   # Last resort: check protocol registry for cross-module dispatch
                   case resolve_protocol_call(name, arity, line) do
-                    {:ok, form} -> form
-                    :not_found -> {:call, line, {:atom, line, fn_atom}, arg_forms}
+                    {:ok, form} ->
+                      {form, state}
+
+                    :not_found ->
+                      state = %{
+                        state
+                        | warnings: [
+                            {:unresolved_import, name, arity, state.imports, line}
+                            | state.warnings
+                          ]
+                      }
+
+                      {{:call, line, {:atom, line, fn_atom}, arg_forms}, state}
                   end
               end
             end
@@ -1529,7 +1566,8 @@ defmodule Cure.Compiler.Codegen do
   # -- Block -------------------------------------------------------------------
 
   defp compile_block(exprs, state) do
-    body_forms = compile_body_exprs(exprs, state)
+    {body_forms, warnings} = compile_body_exprs(exprs, state)
+    state = %{state | warnings: warnings}
 
     case body_forms do
       [single] ->
@@ -1554,15 +1592,18 @@ defmodule Cure.Compiler.Codegen do
         _ -> false
       end)
 
-    {forms, _st} =
+    {forms, final_st} =
       Enum.map_reduce(exprs, state, fn expr, st ->
         do_compile_expr(expr, st)
       end)
 
-    case forms do
-      [] -> [{:atom, state.line, :ok}]
-      _ -> forms
-    end
+    forms =
+      case forms do
+        [] -> [{:atom, state.line, :ok}]
+        _ -> forms
+      end
+
+    {forms, final_st.warnings}
   end
 
   # -- List Compilation --------------------------------------------------------

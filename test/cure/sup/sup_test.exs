@@ -190,7 +190,7 @@ defmodule Cure.Sup.SupTest do
             (:inc, n) -> n + 1
         """)
 
-      {:ok, {:actor, actor_mod}} = Codegen.compile_module(actor_ast, emit_events: false)
+      {:ok, {:actor, actor_mod}, _warnings} = Codegen.compile_module(actor_ast, emit_events: false)
       assert actor_mod == :"Cure.Actor.SupCounter"
 
       ast =

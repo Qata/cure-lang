@@ -119,6 +119,11 @@ defmodule Cure.Compiler.Errors do
     format_diagnostic("error", "codegen error", file, 0, inspect(reason))
   end
 
+  def format_error({:beam_lint_error, errors, warnings}, file) do
+    warned = Enum.map_join(warnings, "\n", &format_error(&1, file))
+    warned <> "\n" <> format_error({:beam_lint_error, errors}, file)
+  end
+
   def format_error({:beam_lint_error, errors}, file) do
     # erl_lint errors come as `[{file_info, [{line, module, payload}, ...]}]`.
     lines =

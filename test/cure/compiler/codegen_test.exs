@@ -487,7 +487,7 @@ defmodule Cure.Compiler.CodegenTest do
             ]}
          ]}
 
-      {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+      {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
 
       assert [
                {:attribute, _, :module, :"Cure.Math"},
@@ -506,7 +506,7 @@ defmodule Cure.Compiler.CodegenTest do
             [{:literal, [subtype: :integer], 2}]}
          ]}
 
-      {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+      {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
 
       # Only public_fn in exports
       {:attribute, _, :export, exports} = Enum.at(forms, 1)
@@ -539,7 +539,7 @@ defmodule Cure.Compiler.CodegenTest do
             ], []}
          ]}
 
-      {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+      {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
 
       fn_form =
         Enum.find(forms, fn
@@ -583,7 +583,7 @@ defmodule Cure.Compiler.CodegenTest do
             ], []}
          ]}
 
-      {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+      {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
 
       fn_form =
         Enum.find(forms, fn
@@ -697,7 +697,7 @@ defmodule Cure.Compiler.CodegenTest do
             [{:literal, [subtype: :integer], 42}]}
          ]}
 
-      {:ok, _forms} = Codegen.compile_module(ast, emit_events: true)
+      {:ok, _forms, _warnings} = Codegen.compile_module(ast, emit_events: true)
 
       assert_receive {Cure.Pipeline.Events, :codegen, :module_assembled, _forms, _meta}
     end
@@ -714,7 +714,7 @@ defmodule Cure.Compiler.CodegenTest do
             [{:literal, [subtype: :integer], 2}]}
          ]}
 
-      {:ok, _forms} = Codegen.compile_module(ast, emit_events: true)
+      {:ok, _forms, _warnings} = Codegen.compile_module(ast, emit_events: true)
 
       assert_receive {Cure.Pipeline.Events, :codegen, :form_generated, _, _}
       assert_receive {Cure.Pipeline.Events, :codegen, :form_generated, _, _}
@@ -730,7 +730,7 @@ defmodule Cure.Compiler.CodegenTest do
             [{:unknown_node, [line: 5], :something}]}
          ]}
 
-      {:ok, _forms} = Codegen.compile_module(ast, emit_events: true)
+      {:ok, _forms, _warnings} = Codegen.compile_module(ast, emit_events: true)
 
       assert_receive {Cure.Pipeline.Events, :codegen, :warning, {:unrecognized_node, msg, _}, _}
 

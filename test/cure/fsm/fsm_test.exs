@@ -214,7 +214,7 @@ defmodule Cure.FSM.FSMTest do
     test "FSM container compiles through Codegen dispatch" do
       ast = traffic_light_ast()
 
-      {:ok, forms} =
+      {:ok, forms, _warnings} =
         Cure.Compiler.Codegen.compile_module(ast, emit_events: false)
 
       {:ok, mod} = BeamWriter.compile_and_load(forms)

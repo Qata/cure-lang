@@ -39,7 +39,7 @@ defmodule Cure.Compiler.ShadowCodegenTest do
 
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-    {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+    {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
 
     dump = inspect(forms)
     refute String.contains?(dump, "Std.Nat.Z")

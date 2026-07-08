@@ -165,7 +165,7 @@ defmodule Cure.App.AppTest do
 
     test "returns {:app, module} when given a top-level app container" do
       ast = parse!("app Routed")
-      assert {:ok, {:app, mod}} = Codegen.compile_module(ast, emit_events: false)
+      assert {:ok, {:app, mod}, _warnings} = Codegen.compile_module(ast, emit_events: false)
       assert mod == :"Cure.App.Routed"
     end
 

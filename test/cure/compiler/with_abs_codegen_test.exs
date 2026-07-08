@@ -47,7 +47,7 @@ defmodule Cure.Compiler.WithAbsCodegenTest do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
     refute Cure.Elab.Program.dependent?(ast), "expected a non-dependent (surface) program"
-    {:ok, forms} = Codegen.compile_module(ast, emit_events: false)
+    {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
     forms
   end
 
