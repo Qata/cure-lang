@@ -79,16 +79,19 @@ defmodule Cure.Elab.MillerUnifyTest do
     assert {:lam, @nat, {:sigma, @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
   end
 
-  test "Eq solution binding the pattern var: ?m(n) =? Eq Nat n n  ⇒  ?m := λn. Eq Nat n n" do
-    # The bound var n appears INSIDE the Eq — mabs must abstract it (var 0 under the
-    # solution's λ), not leave it dangling or escape. A wrong depth yields the wrong
-    # endpoint.
+  test "Equivalent solution binding the pattern var: ?m(n) =? Eq Nat n n  ⇒  ?m := λn. Eq Nat n n" do
+    # The bound var n appears INSIDE the Equivalent's index positions — mabs's
+    # :data clause must abstract it (var 0 under the solution's λ), not leave it
+    # dangling or escape. A wrong depth yields the wrong endpoint. (Migrated
+    # from the primitive {:eq} spelling when the form retired, Phase C; the
+    # dedicated mabs {:eq} clause retired with it.)
     {ctx, m} = fam_ctx()
+    eqv = {:data, :Equivalent, [@nat], [{:var, 0}, {:var, 0}]}
     t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, {:eq, @nat, {:var, 0}, {:var, 0}}}
+    t2 = {:pi, @nat, eqv}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, {:eq, @nat, {:var, 0}, {:var, 0}}} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, @nat, eqv} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "indexed-family solution: ?m(n) =? Vec n  ⇒  ?m := λn. Vec n (index abstracted)" do

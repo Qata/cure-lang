@@ -94,8 +94,6 @@ defmodule Antigen.Assays.TotalityClosureAssay do
   defp globals({:data, _n, ps, is}), do: Enum.flat_map(ps, &globals/1) ++ Enum.flat_map(is, &globals/1)
   defp globals({:ctor, _n, args}), do: Enum.flat_map(args, &globals/1)
   defp globals({:case, s, m, brs}), do: globals(s) ++ globals(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> globals(b) end)
-  defp globals({:eq, t, a, b}), do: globals(t) ++ globals(a) ++ globals(b)
-  defp globals({:refl, a}), do: globals(a)
   defp globals({:prim, _op, args}), do: Enum.flat_map(args, &globals/1)
   defp globals(_), do: []
 end

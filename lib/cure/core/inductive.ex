@@ -377,8 +377,6 @@ defmodule Cure.Core.Inductive do
   defp occurs?(fname, {:fst, p}), do: occurs?(fname, p)
   defp occurs?(fname, {:snd, p}), do: occurs?(fname, p)
   defp occurs?(fname, {:ctor, _n, args}), do: Enum.any?(args, &occurs?(fname, &1))
-  defp occurs?(fname, {:eq, t, a, b}), do: occurs?(fname, t) or occurs?(fname, a) or occurs?(fname, b)
-  defp occurs?(fname, {:refl, a}), do: occurs?(fname, a)
 
   defp occurs?(fname, {:case, s, m, brs}),
     do:

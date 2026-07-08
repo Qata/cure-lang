@@ -94,12 +94,6 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth, sig),
     do: n1 == n2 and conv_spine?(vs1, vs2, depth, sig)
 
-  defp conv_struct?({:veq, t1, a1, b1}, {:veq, t2, a2, b2}, depth, sig),
-    do:
-      conv_val?(t1, t2, depth, sig) and conv_val?(a1, a2, depth, sig) and
-        conv_val?(b1, b2, depth, sig)
-
-  defp conv_struct?({:vrefl, a1}, {:vrefl, a2}, depth, sig), do: conv_val?(a1, a2, depth, sig)
   defp conv_struct?(_, _, _, _), do: false
 
   # -- η / β-under-binder -----------------------------------------------------

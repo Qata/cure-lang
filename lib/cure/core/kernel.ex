@@ -97,22 +97,6 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  def infer(ctx, {:eq, ty, a, b}) do
-    with {:ok, level} <- infer_sort(ctx, ty),
-         ty_value = Eval.eval(ty, Context.env(ctx)),
-         :ok <- check(ctx, a, ty_value),
-         :ok <- check(ctx, b, ty_value) do
-      {:ok, {:vtype, level}}
-    end
-  end
-
-  def infer(ctx, {:refl, a}) do
-    with {:ok, ty_value} <- infer(ctx, a) do
-      a_value = Eval.eval(a, Context.env(ctx))
-      {:ok, {:veq, ty_value, a_value, a_value}}
-    end
-  end
-
   def infer(ctx, {:sigma, a, b}) do
     with {:ok, l1} <- infer_sort(ctx, a),
          a_value = Eval.eval(a, Context.env(ctx)),
@@ -260,25 +244,6 @@ defmodule Cure.Core.Kernel do
       check(Context.extend(ctx, exp_dom), body, cod_value)
     else
       {:error, :domain_mismatch}
-    end
-  end
-
-  # The §4.6 soundness gate: `refl a` checks against `Eq ty a' b'` iff the
-  # endpoints are definitionally equal AND `a` is convertible to them. This is
-  # the fix for the audit's bug (the old checker accepted any atom as a proof).
-  def check(ctx, {:refl, a}, {:veq, ty_value, a_value, b_value}) do
-    with :ok <- check(ctx, a, ty_value) do
-      depth = Context.length(ctx)
-      a_refl = Eval.eval(a, Context.env(ctx))
-
-      sig = Context.signature(ctx)
-
-      if Conv.conv_values?(a_value, b_value, depth, sig) and
-           Conv.conv_values?(a_refl, a_value, depth, sig) do
-        :ok
-      else
-        {:error, :not_definitionally_equal}
-      end
     end
   end
 
@@ -697,26 +662,6 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # Eq's type-formation rule (mirrors `infer/2`'s `{:eq, ty, a, b}` clause): its
-  # sort is the sort of the carrier `ty`, and both endpoints must inhabit `ty`.
-  # `ty`'s sort is inferred by value-recursion (robust to an indexed carrier); the
-  # endpoints are reified and `check`ed against `ty`. Read-back is
-  # SIGNATURE-AWARE (`Context.signature(ctx)`) so an endpoint that is an
-  # indexed-family type value (e.g. `SNat(s)`) recovers its param/index split and
-  # `check` sees the correct arity — without the signature the split collapses and
-  # a well-formed indexed-family Eq motive is false-rejected `:bad_motive`.
-  defp infer_type_value_sort(ctx, {:veq, ty, a, b}) do
-    with {:ok, level} <- infer_type_value_sort(ctx, ty) do
-      depth = Context.length(ctx)
-      sig = Context.signature(ctx)
-
-      with :ok <- check(ctx, Quote.reify(a, depth, sig), ty),
-           :ok <- check(ctx, Quote.reify(b, depth, sig), ty) do
-        {:ok, level}
-      end
-    end
-  end
-
   defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}
 
   # Coverage (§7 / §E.2): every declared constructor must either HAVE a branch or
@@ -1073,11 +1018,6 @@ defmodule Cure.Core.Kernel do
     do:
       {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
-
-  defp replace_branch_vars({:eq, t, a, b}, subst),
-    do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
 
   defp replace_branch_vars({:prim, op, args}, subst),
     do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}

@@ -139,26 +139,12 @@ defmodule Cure.Core.ValidatorTest do
       assert {:error, {:final_core_violation, [%{clause: :no_hole}]}} = Kernel.check_def(env, :withhole)
     end
 
-    test "a legacy node in the declared TYPE is caught too, not just the body" do
-      # helper : Eq(Int, 1, 1) ; body = refl(1) — a legacy `:eq` node used AS a
-      # definition's type (still typeable pre-K1). `eqty` reuses that same `:eq`
-      # type but its body is a clean `{:global, :helper}` reference, so the ONLY
-      # legacy node reachable from `eqty`'s own {type_term, body_term} pair is in
-      # its type_term. If the wiring only scanned body_term (the pre-fix shape),
-      # this def would wrongly admit even under a :reject override.
-      eq_ty = {:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}}
-
-      env =
-        Env.empty()
-        |> Env.add_def(:helper, eq_ty, {:refl, {:int_lit, 1}})
-        |> Env.add_def(:eqty, eq_ty, {:global, :helper})
-
-      Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_eq_node, :reject))
-      on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)
-
-      assert {:error, {:final_core_violation, rejections}} = Kernel.check_def(env, :eqty)
-      assert Enum.any?(rejections, &(&1.clause == :no_eq_node))
-    end
+    # (The legacy-node-in-TYPE test — {:eq} type / {:refl} body through
+    # check_def — was retired in the group-B removal commit: the kernel now
+    # rejects those forms as unknown grammar BEFORE the validator scan can run.
+    # Its wiring property, "the final-core scan covers the declared TYPE", is
+    # carried by the post-retirement probe below, added + cross-checked in the
+    # Step-2 commit while the legacy forms still round-tripped.)
 
     test "a violating node in the declared TYPE is caught too — post-retirement probe" do
       # Phase C twin of the legacy-node test above (added FIRST, per the

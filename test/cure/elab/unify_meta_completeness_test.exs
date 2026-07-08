@@ -39,14 +39,16 @@ defmodule Cure.Elab.UnifyMetaCompletenessTest do
     assert {:snd, @z} == Unify.zonk({:snd, {:meta, 0}}, ctx)
   end
 
-  test "unify does not crash the kernel on a metavariable buried in an Eq (delta fallback)" do
-    # Two distinct `Eq` terms with no structural do_unify clause fall to the
-    # δ-convertibility fallback. One carries an UNSOLVED meta buried in the Eq;
+  test "unify does not crash the kernel on a metavariable buried in a prim (delta fallback)" do
+    # Two distinct `:prim` terms have no structural do_unify clause and fall to
+    # the δ-convertibility fallback. One carries an UNSOLVED meta buried inside;
     # `meta_free?` must detect it and refuse the fallback, returning a clean error
-    # instead of passing `{:meta, _}` to `Cure.Core.Eval.eval`.
+    # instead of passing `{:meta, _}` to `Cure.Core.Eval.eval`. (Migrated from
+    # the retired primitive `{:eq}` carrier, Phase C — `:prim` is the surviving
+    # structural-clause-free shape.)
     {ctx, m} = MetaCtx.fresh(MetaCtx.new())
-    t1 = {:eq, @nat, {:meta, m}, @z}
-    t2 = {:eq, @nat, {:ctor, :S, [@z]}, @z}
+    t1 = {:prim, :add, [{:meta, m}, {:int_lit, 0}]}
+    t2 = {:prim, :add, [{:int_lit, 1}, {:int_lit, 0}]}
 
     assert {:error, _} = Unify.unify(t1, t2, ctx, nat_sig())
   end

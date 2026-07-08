@@ -53,8 +53,6 @@ defmodule Cure.Core.Eval do
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
-  def eval({:eq, ty, a, b}, env), do: {:veq, eval(ty, env), eval(a, env), eval(b, env)}
-  def eval({:refl, a}, env), do: {:vrefl, eval(a, env)}
 
   # `rewrite e at (x.M) in t` is erased at runtime to `t` (the proof and motive
   # are computationally irrelevant — `rewrite e _ t ⇝ t`, §4.6).

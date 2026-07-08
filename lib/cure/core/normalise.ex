@@ -169,10 +169,6 @@ defmodule Cure.Core.Normalise do
   defp nf_struct({:vctor, name, args}, sig, depth, opts),
     do: {:vctor, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
 
-  defp nf_struct({:veq, ty, a, b}, sig, depth, opts),
-    do: {:veq, nf_value(ty, sig, depth, opts), nf_value(a, sig, depth, opts), nf_value(b, sig, depth, opts)}
-
-  defp nf_struct({:vrefl, a}, sig, depth, opts), do: {:vrefl, nf_value(a, sig, depth, opts)}
 
   defp nf_struct({:vneutral, neutral}, sig, depth, opts),
     do: {:vneutral, nf_neutral(neutral, sig, depth, opts)}

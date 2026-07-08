@@ -25,9 +25,9 @@ defmodule Cure.Elab.Relevance do
       - scrutinised as a `case` discriminant (`:scrutinee`);
       - applied as a function head (`:applied`).
     * EXEMPT (checked at `erased`, does not count): type/index positions
-      (`{:pi}`/`{:sigma}`/`{:data}`/`{:eq}` — Pi & Sigma domains, the `case`
-      motive), erased argument positions, and proof positions
-      (`{:refl}` argument, `{:rewrite}` proof + motive).
+      (`{:pi}`/`{:sigma}`/`{:data}` — Pi & Sigma domains, the `case`
+      motive), erased argument positions, and collapsible-family proof
+      elimination (the J/subst transport's scrutinee).
 
   Only the 0/ω slice is ported (per the reference manifest caveat: read Idris
   core as ω-except-erased; the linear `1` multiplicity is out of scope).
@@ -154,8 +154,6 @@ defmodule Cure.Elab.Relevance do
   defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
   defp walk({:sigma, _a, _b}, _depth, _site, _st), do: :ok
   defp walk({:data, _n, _ps, _is}, _depth, _site, _st), do: :ok
-  defp walk({:eq, _ty, _a, _b}, _depth, _site, _st), do: :ok
-  defp walk({:refl, _a}, _depth, _site, _st), do: :ok
 
   # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no
   # erased-parameter occurrence to account for. Mirrors `Erase`'s leaf clause.

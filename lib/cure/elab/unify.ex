@@ -256,11 +256,6 @@ defmodule Cure.Elab.Unify do
   defp mabs({:fst, p}, dep, vs, n, l), do: {:fst, mabs(p, dep, vs, n, l)}
   defp mabs({:snd, p}, dep, vs, n, l), do: {:snd, mabs(p, dep, vs, n, l)}
 
-  defp mabs({:eq, ty, a, b}, dep, vs, n, l),
-    do: {:eq, mabs(ty, dep, vs, n, l), mabs(a, dep, vs, n, l), mabs(b, dep, vs, n, l)}
-
-  defp mabs({:refl, a}, dep, vs, n, l), do: {:refl, mabs(a, dep, vs, n, l)}
-
   defp mabs({:data, nm, ps, is}, dep, vs, n, l),
     do: {:data, nm, Enum.map(ps, &mabs(&1, dep, vs, n, l)), Enum.map(is, &mabs(&1, dep, vs, n, l))}
 
@@ -403,10 +398,6 @@ defmodule Cure.Elab.Unify do
   defp escapes?({:fst, p}, depth, local), do: escapes?(p, depth, local)
   defp escapes?({:snd, p}, depth, local), do: escapes?(p, depth, local)
 
-  defp escapes?({:eq, ty, a, b}, depth, local),
-    do: escapes?(ty, depth, local) or escapes?(a, depth, local) or escapes?(b, depth, local)
-
-  defp escapes?({:refl, a}, depth, local), do: escapes?(a, depth, local)
   defp escapes?({:prim, _op, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
 
   defp escapes?({:data, _f, ps, is}, depth, local),

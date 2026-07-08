@@ -93,7 +93,5 @@ defmodule Cure.Elab.TotalityClosure do
   defp collect({:case, s, m, brs}),
     do: collect(s) ++ collect(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> collect(b) end)
 
-  defp collect({:eq, t, a, b}), do: collect(t) ++ collect(a) ++ collect(b)
-  defp collect({:refl, a}), do: collect(a)
   defp collect(_), do: []
 end

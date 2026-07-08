@@ -1028,7 +1028,6 @@ defmodule Cure.Elab.Elaborator do
   # its `ty`/endpoints are that param and the two indices. The primitive `{:veq}`
   # form is still produced by the internal transport machinery (retired later), so
   # both are accepted.
-  defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
   defp eq_parts({:vdata, :Equivalent, [ty, a, b]}), do: {:ok, ty, a, b}
   defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
 
@@ -2054,11 +2053,6 @@ defmodule Cure.Elab.Elaborator do
     do:
       {:case, generalize(scr, rb, s, depth), generalize(m, rb, s, depth),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, generalize(b, rb, s, depth + ar)} end)}
-
-  defp generalize({:eq, t, a, b}, rb, s, depth),
-    do: {:eq, generalize(t, rb, s, depth), generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
-
-  defp generalize({:refl, a}, rb, s, depth), do: {:refl, generalize(a, rb, s, depth)}
 
   defp generalize({:prim, op, args}, rb, s, depth),
     do: {:prim, op, Enum.map(args, &generalize(&1, rb, s, depth))}
@@ -3833,11 +3827,6 @@ defmodule Cure.Elab.Elaborator do
     do:
       {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
-
-  defp replace_branch_vars({:eq, t, a, b}, subst),
-    do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
 
   defp replace_branch_vars({:prim, op, args}, subst),
     do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}

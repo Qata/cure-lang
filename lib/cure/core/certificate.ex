@@ -203,14 +203,6 @@ defmodule Cure.Core.Certificate do
   defp walk_node(emit, {:ctor, _n, args}, st, acc),
     do: Enum.reduce(args, acc, fn a, ac -> walk(emit, a, st, ac) end)
 
-  defp walk_node(emit, {:eq, t, a, b}, st, acc) do
-    acc = walk(emit, t, st, acc)
-    acc = walk(emit, a, st, acc)
-    walk(emit, b, st, acc)
-  end
-
-  defp walk_node(emit, {:refl, a}, st, acc), do: walk(emit, a, st, acc)
-
   # Leaves (vars, literals, types, untracked globals): no call, no matrix.
   defp walk_node(_emit, _term, _st, acc), do: acc
 
@@ -600,8 +592,6 @@ defmodule Cure.Core.Certificate do
       calls?(name, s) or calls?(name, m) or
         Enum.any?(brs, fn {_c, _ar, b} -> calls?(name, b) end)
 
-  defp calls?(name, {:eq, t, a, b}), do: calls?(name, t) or calls?(name, a) or calls?(name, b)
-  defp calls?(name, {:refl, a}), do: calls?(name, a)
 
   defp calls?(_name, _term), do: false
 end

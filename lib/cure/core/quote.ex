@@ -68,11 +68,6 @@ defmodule Cure.Core.Quote do
 
   def reify({:vctor, name, vs}, depth, sig), do: {:ctor, name, Enum.map(vs, &reify(&1, depth, sig))}
 
-  def reify({:veq, ty, a, b}, depth, sig),
-    do: {:eq, reify(ty, depth, sig), reify(a, depth, sig), reify(b, depth, sig)}
-
-  def reify({:vrefl, a}, depth, sig), do: {:refl, reify(a, depth, sig)}
-
   def reify({:vint_type}, _depth, _sig), do: {:int_type}
   def reify({:vint, n}, _depth, _sig), do: {:int_lit, n}
   def reify({:vfloat_type}, _depth, _sig), do: {:float_type}

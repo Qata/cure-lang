@@ -51,8 +51,6 @@ defmodule Cure.Core.TermTest do
       {:case, {:var, 0}, {:lam, {:type, 0}, {:type, 0}},
        [{:prim, 0, {:type, 0}}, {:seq, 2, {:var, 1}}]},
       {:global, :and},
-      {:eq, {:type, 0}, {:var, 0}, {:var, 0}},
-      {:refl, {:var, 0}}
     ]
 
     for t <- terms do

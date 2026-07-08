@@ -170,10 +170,6 @@ defmodule Antigen.Shrink do
          {fn nb -> {:case, s, m, List.replace_at(brs, i, {c, ar, nb})} end, body}
        end))
   end
-  defp child_slots({:eq, ty, a, b}) do
-    [{&{:eq, &1, a, b}, ty}, {&{:eq, ty, &1, b}, a}, {&{:eq, ty, a, &1}, b}]
-  end
-  defp child_slots({:refl, a}), do: [{&{:refl, &1}, a}]
   # :prim is a real Core former (Cure.Core.Term's node taxonomy) that
   # `Term.gen_term`/`Antigen.Generators.Mutation` never construct today, so
   # this clause is presently unreached — included anyway so term_candidates

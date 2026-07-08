@@ -29,9 +29,10 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       - type / index positions — Pi & Sigma DOMAINS are checked `erased` when the
         binder is inspectable-only (`rig` local, :265-272); the motive likewise;
       - erased ARGUMENT positions (`rigf` erased → `checkRig` erased, :288);
-      - `Eq` / proof positions — `Refl`'s argument is `Rig0`; Cure erases
-        `{:refl, _}` to `{:ctor, :cure_refl, []}` (arg dropped, `erase.ex:63`),
-        so proof-position use is genuinely runtime-free.
+      - `Eq` / proof positions — `Refl`'s argument is `Rig0`; Cure's
+        `reflexive` carries an ERASED witness (nullary at runtime) and the
+        J/subst transport's proof scrutinee is dropped wholesale by the
+        collapsible-family erasure, so proof-position use is runtime-free.
 
   We port the 0/ω slice only (per the manifest caveat: read Idris core as
   ω-except-erased; the linear `1` multiplicity is deliberately out of scope).
@@ -115,9 +116,9 @@ defmodule Cure.Elab.ErasureRelevanceTest do
 
     test "(e) erased implicit used only inside an Eq/proof position" do
       # `n` occurs in the return TYPE `Equivalent(Nat, n, n)` (type position) and inside
-      # `reflexive(n)` (a proof term; `refl`'s argument is erased — `erase.ex:63`
-      # drops it to `cure_refl`). No relevant use, so it must accept before AND
-      # after the check.
+      # `reflexive(n)` (a proof term; reflexive's witness field is erased, so
+      # the runtime value is the nullary reflexive ctor). No relevant use, so
+      # it must accept before AND after the check.
       src =
         mod("""
           fn f({n: Nat}, v: NV(n)) -> Equivalent(Nat, n, n) = reflexive(n)
@@ -206,13 +207,10 @@ defmodule Cure.Elab.ErasureRelevanceTest do
     # (The primitive `{:rewrite}`-node version of the proof-irrelevance pin was
     # retired with the form itself — group-A removal commit; its :case-transport
     # twin below was cross-checked side by side first.)
-    test "refl and Eq values erase to nullary runtime placeholders" do
-      env = Env.empty()
-      assert Erase.erase(env, {:refl, {:ctor, :Dcoupled, []}}) == {:ctor, :cure_refl, []}
-
-      assert Erase.erase(env, {:eq, {:data, :Dec, [], []}, {:ctor, :Causal, []}, {:ctor, :Causal, []}}) ==
-               {:ctor, :cure_eq, []}
-    end
+    # (The {:refl}/{:eq}→cure_refl/cure_eq placeholder pins retired with the
+    # primitive forms — group-B removal commit; the inductive twins below were
+    # cross-checked side by side first: reflexive is nullary at runtime via its
+    # erased witness, no placeholder atom needed.)
 
     # Phase C twins (add-then-retire): the primitive proof forms retire; proof
     # irrelevance must survive on the inductive vehicle. `reflexive`'s witness

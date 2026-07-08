@@ -29,8 +29,6 @@ defmodule Cure.Core.SerializeTest do
     {:pair, {:int_lit, 1}, {:ctor, :True, []}},
     {:fst, {:var, 0}},
     {:snd, {:var, 0}},
-    {:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}},
-    {:refl, {:int_lit, 1}},
     {:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]},
     {:prim, :not, [{:ctor, :True, []}]},
     {:ctor, :seq, [{:global, :l}, {:global, :r}]},

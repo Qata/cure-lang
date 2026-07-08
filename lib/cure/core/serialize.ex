@@ -28,8 +28,6 @@ defmodule Cure.Core.Serialize do
   defp enc({:pair, a, b}), do: node("pair", [a, b])
   defp enc({:fst, p}), do: node("fst", [p])
   defp enc({:snd, p}), do: node("snd", [p])
-  defp enc({:eq, t, a, b}), do: node("eq", [t, a, b])
-  defp enc({:refl, a}), do: node("refl", [a])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
   defp enc({:int_type}), do: "(int-type)"
@@ -156,12 +154,6 @@ defmodule Cure.Core.Serialize do
   defp build_node("pair", [a, b]), do: binary(:pair, a, b)
   defp build_node("fst", [p]), do: unary(:fst, p)
   defp build_node("snd", [p]), do: unary(:snd, p)
-  defp build_node("refl", [a]), do: unary(:refl, a)
-
-  defp build_node("eq", [t, a, b]) do
-    with {:ok, tt} <- build(t), {:ok, ta} <- build(a), {:ok, tb} <- build(b),
-         do: {:ok, {:eq, tt, ta, tb}}
-  end
 
   defp build_node("prim", [{:atom, op} | args]) do
     with {:ok, o} <- sym_atom(op), {:ok, cargs} <- build_all(args),
