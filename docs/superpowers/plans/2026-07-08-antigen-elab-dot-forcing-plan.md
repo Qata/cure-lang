@@ -22,6 +22,7 @@
 
 - Modify: `lib/antigen/assays/elab.ex` — two `run/1` clauses + `reject_head/1` helper (insert after the `elab/erasure` relation clause, before `elab/soundness`).
 - Modify: `lib/antigen/runner.ex` — one `assay_module` line after the `"elab/erasure"` entry (`:349`; relocate by content, not number).
+- Modify: `lib/antigen/challenge.ex` — add `"expect_error" => :expect_error` to the `@elab_keys` whitelist (Task 4) so a dot-forcing reject-cell payload (which carries a key no existing `elab/*` family ever used) round-trips through `to_pieces`/`from_pieces` instead of raising.
 - Create: `lib/antigen/generators/elab_dot_forcing.ex`.
 - Create: `test/antigen/elab_dot_forcing_test.exs` (directly under `test/antigen/`, NOT `test/antigen/generators/` — spec §5).
 
@@ -234,7 +235,7 @@ In `lib/antigen/runner.ex`, directly after `defp assay_module("elab/erasure"), d
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `mix test test/antigen/elab_dot_forcing_test.exs`
-Expected: PASS (8 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 6: Regression on the shared assay module**
 
@@ -465,7 +466,7 @@ end
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `mix test test/antigen/elab_dot_forcing_test.exs`
-Expected: PASS (12 tests). The catalog-gate test failing here means an elaborator behavior contradicts a landed-fixture-derived label — that is the spec §4 STOP-and-report condition (with one narrow exception: if ONLY `"forced/plain/wrong"` fails — the single cell without a verbatim landed twin — first verify by hand that `Program.elaborate` on that source returns something other than `{:error, {:forced_pattern_mismatch, _, _}}`, and report what it returns instead of guessing).
+Expected: PASS (11 tests). The catalog-gate test failing here means an elaborator behavior contradicts a landed-fixture-derived label — that is the spec §4 STOP-and-report condition (with one narrow exception: if ONLY `"forced/plain/wrong"` fails — the single cell without a verbatim landed twin — first verify by hand that `Program.elaborate` on that source returns something other than `{:error, {:forced_pattern_mismatch, _, _}}`, and report what it returns instead of guessing).
 
 - [ ] **Step 5: Commit**
 
@@ -636,7 +637,7 @@ Append to `lib/antigen/generators/elab_dot_forcing.ex` (inside the module, after
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `mix test test/antigen/elab_dot_forcing_test.exs`
-Expected: PASS (15 tests). A `:same` violation here means a perturbation is NOT typing-preserving for these fixtures — inspect the variant source by hand (`IO.puts`), and if the transform itself is unsound for a body shape (not an elaborator bug), exclude that {transform, cell} pair with a comment stating why, mirroring `ElabComplete`'s documented exclusion of the `let`-wrap transform. A `:flip` violation is the spec §4 STOP-and-report (it is exactly the defect class this vertical exists to catch).
+Expected: PASS (14 tests). A `:same` violation here means a perturbation is NOT typing-preserving for these fixtures — inspect the variant source by hand (`IO.puts`), and if the transform itself is unsound for a body shape (not an elaborator bug), exclude that {transform, cell} pair with a comment stating why. This is a narrower version of the discipline `ElabComplete`'s moduledoc documents for its own metamorphic suite (it never implements a `let`-wrap transform at all, precisely because Cure's surface syntax requires the dependent match to be the `fn` body head, so wrapping it would itself be non-preserving — a blanket exclusion with a stated reason, not a per-cell one): the reasoning pattern is the same (prove non-preservation, state it, exclude with a comment), but here the exclusion is scoped to one {transform, cell} pair rather than dropping the transform outright, since the other cells are unaffected. A `:flip` violation is the spec §4 STOP-and-report (it is exactly the defect class this vertical exists to catch).
 
 - [ ] **Step 5: Commit**
 
@@ -650,20 +651,37 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(an
 ### Task 4: Corpus round-trip + gate
 
 **Files:**
+- Modify: `lib/antigen/challenge.ex`
 - Test: `test/antigen/elab_dot_forcing_test.exs` (extend)
 
 **Interfaces:**
 - Consumes: everything above; `Antigen.Challenge.to_pieces/1` / `from_pieces/7` (existing).
-- Produces: the finished vertical; task #16 closes.
+- Produces: the finished vertical; `lib/antigen/challenge.ex`'s `@elab_keys` whitelist gains an `"expect_error" => :expect_error` entry; task #16 closes.
 
-- [ ] **Step 1: Write the corpus round-trip test**
+**Known gap this task must close:** `@elab_keys` (`lib/antigen/challenge.ex`) today whitelists only `id`/`src`/`transform`/`base_src`/`variant_src`/`expect`/`relation` — every key the `elab/erasure` family ever produced. This catalog's reject cells introduce a NEW payload key, `expect_error`, that no existing `elab/*` family has. `from_pieces(:elab_program, ...)` maps every scaffold key through this whitelist and `raise`s `ArgumentError` on an unrecognized one, so round-tripping a reject-cell payload (e.g. `"forced/carried/wrong"`) crashes today. Picking only the catalog's first entry (`"forced/carried/right"`, an accept cell with no `expect_error` key) for the round-trip test — as a naive port of `elab_erasure_test.exs`'s single-entry pick would do — hides this gap entirely, since that one payload round-trips fine under the existing whitelist. Step 1 below therefore tests BOTH an accept cell (no `expect_error`) and a reject cell (`expect_error` present) so the gap is actually exercised.
 
-Append to `test/antigen/elab_dot_forcing_test.exs` (serialization parity, mirroring `elab_erasure_test.exs`; written before running — it is a gate, expected to pass because `Challenge` serialization is payload-generic):
+- [ ] **Step 1: Write the corpus round-trip tests**
+
+Append to `test/antigen/elab_dot_forcing_test.exs` (serialization parity, mirroring `elab_erasure_test.exs`'s single-entry test, but split into two cases — one per payload shape this family produces):
 
 ```elixir
   describe "corpus round-trip (serialization parity)" do
-    test "a dot-forcing :elab_program challenge survives to_pieces/from_pieces" do
-      [c | _] = Antigen.Generators.ElabDotForcing.dot_forcing_challenges()
+    test "an accept catalog challenge (no expect_error key) survives to_pieces/from_pieces" do
+      c =
+        Antigen.Generators.ElabDotForcing.dot_forcing_challenges()
+        |> Enum.find(&(&1.payload.id == "forced/carried/right"))
+
+      {scaffold, pieces} = Challenge.to_pieces(c)
+      back = Challenge.from_pieces(:elab_program, c.assay, c.label, c.seed, c.note, scaffold, pieces)
+      assert back.payload == c.payload
+      assert back.assay == c.assay
+    end
+
+    test "a reject catalog challenge carrying expect_error survives to_pieces/from_pieces" do
+      c =
+        Antigen.Generators.ElabDotForcing.dot_forcing_challenges()
+        |> Enum.find(&(&1.payload.id == "forced/carried/wrong"))
+
       {scaffold, pieces} = Challenge.to_pieces(c)
       back = Challenge.from_pieces(:elab_program, c.assay, c.label, c.seed, c.note, scaffold, pieces)
       assert back.payload == c.payload
@@ -672,25 +690,47 @@ Append to `test/antigen/elab_dot_forcing_test.exs` (serialization parity, mirror
   end
 ```
 
-- [ ] **Step 2: Run the file**
+- [ ] **Step 2: Run the file to see which case is actually red**
 
 Run: `mix test test/antigen/elab_dot_forcing_test.exs`
-Expected: PASS (16 tests). If the round-trip fails (e.g. `expect_error` atom lost in pieces), STOP and report — do not change the payload shape to dodge serialization.
+Expected: the FIRST test (no `expect_error`) PASSES immediately — every key in that payload (`id`/`src`/`expect`) is already in `@elab_keys`. The SECOND test (reject cell, `expect_error` present) FAILS, raising `ArgumentError` from `Antigen.Challenge.from_pieces/7` with message `"unknown elab payload key \"expect_error\""`. All 14 earlier tests still PASS.
 
-- [ ] **Step 3: Gate — full Antigen directory (alone)**
+- [ ] **Step 3: Add `expect_error` to the `@elab_keys` whitelist**
+
+In `lib/antigen/challenge.ex`, extend the existing map (do not introduce a second whitelist or a fallback `String.to_atom`):
+
+```elixir
+  @elab_keys %{
+    "id" => :id,
+    "src" => :src,
+    "transform" => :transform,
+    "base_src" => :base_src,
+    "variant_src" => :variant_src,
+    "expect" => :expect,
+    "relation" => :relation,
+    "expect_error" => :expect_error
+  }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `mix test test/antigen/elab_dot_forcing_test.exs`
+Expected: PASS (16 tests). If the round-trip still fails (e.g. `expect_error`'s VALUE, not just its key, is lost or mistyped), STOP and report — do not change the payload shape to dodge serialization.
+
+- [ ] **Step 5: Gate — full Antigen directory (alone)**
 
 Run: `mix test test/antigen/`
 Expected: PASS (existing 459 + the new 16; "immune response" console lines are expected injected violations, not failures).
 
-- [ ] **Step 4: Gate — full suite (alone)**
+- [ ] **Step 6: Gate — full suite (alone)**
 
 Run: `mix test`
 Expected: PASS, 0 failures (~3195 tests). A single Antigen-seed flake that vanishes on one re-run is the documented known-flaky seed; anything reproducible is a STOP.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add -- test/antigen/elab_dot_forcing_test.exs
+git add -- lib/antigen/challenge.ex test/antigen/elab_dot_forcing_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(antigen): elab dot-forcing corpus round-trip; vertical gate green"
 ```
 
