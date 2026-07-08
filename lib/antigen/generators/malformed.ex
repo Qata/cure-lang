@@ -64,7 +64,12 @@ defmodule Antigen.Generators.Malformed do
       # unknown family (λv.NoSuchFamily), or a bare value (λv.Z).
       {1, tagged(case_bad_motive({:lam, @nat, {:var, 0}}), "case motive returns a non-type var")},
       {1, tagged(case_bad_motive({:lam, @nat, {:data, :NoSuchFamily, [], []}}), "case motive returns an unknown family")},
-      {1, tagged(case_bad_motive({:lam, @nat, @z}), "case motive returns a bare value")}
+      {1, tagged(case_bad_motive({:lam, @nat, @z}), "case motive returns a bare value")},
+      {1,
+       tagged(
+         case_bad_motive({:lam, @nat, {:app, {:var, 0}, @z}}),
+         "case motive applies a non-function (Nat-typed) head — napp reject path"
+       )}
     ])
   end
 

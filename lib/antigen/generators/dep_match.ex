@@ -81,6 +81,8 @@ defmodule Antigen.Generators.DepMatch do
       # dependent motives: Vec m (type-former) and Eq Nat m m (propositional)
       {3, var_index(:vec)},
       {2, var_index(:eq)},
+      # D1 neutral-application motive λm.λv. b(m) — the napp sort clause
+      {2, neutral_app_motive_case()},
       # closed indices — force an :impossible branch (constant Nat motive)
       {2, closed_index(@z)},
       {2, closed_index({:ctor, :S, [@z]})},
@@ -315,6 +317,28 @@ defmodule Antigen.Generators.DepMatch do
     # infer normalizes Vec's sole argument into the PARAMS slot (empty indices) —
     # the claimed type must match that reified normal form (see Generators.Term).
     Gen.return({[vec({:var, 0}), @nat], term, {:data, :Vec, [{:var, 1}], []}})
+  end
+
+  # D1 neutral-application motive: λm. λv:Vec(m). b(m) — the NEW napp shape
+  # (b is a free context variable of type (Nat) -> Type; b(m) reifies to
+  # {:app, <b>, <m>} and must sort via the new infer_type_value_sort clause).
+  # Closed to Vec(Z) so the vcons branch is :impossible (unify S k ~ Z fails,
+  # mirroring closed_index/1) — only vnil needs a real inhabitant, supplied by
+  # context witness w : b(Z).
+  #
+  # ctx (list position = final var index, per rebuild_context's reversed-fold):
+  #   0 = xs : Vec(Z)         (scrutinee)
+  #   1 = w  : b(Z)           (witness; its own type references b as {:var,0},
+  #                             the only var already bound at that point)
+  #   2 = b  : (Nat) -> Type
+  defp neutral_app_motive_case do
+    b_ty = {:pi, @nat, {:type, 0}}
+    w_ty = {:app, {:var, 0}, @z}
+    # under the motive's 2 own binders (m, v), ambient var k reads as {:var, 2+k}:
+    # b is ambient index 2 -> {:var, 4}; m is the motive's own outer binder -> {:var, 1}.
+    motive_napp = {:lam, @nat, {:lam, vec({:var, 0}), {:app, {:var, 4}, {:var, 1}}}}
+    term = mk_case({:var, 0}, motive_napp, [{:vnil, 0, {:var, 1}}, {:vcons, 3, @z}])
+    Gen.return({[vec(@z), w_ty, b_ty], term, {:app, {:var, 2}, @z}})
   end
 
   # Γ = [ xs : Vec <idx> (idx 0) ] with a closed index → one branch is :impossible.
