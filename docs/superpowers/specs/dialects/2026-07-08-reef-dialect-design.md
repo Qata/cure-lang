@@ -531,29 +531,107 @@ criterion.
 - No chemistry *management* advice (the dialect controls; reef chemistry
   targets are the keeper's numbers, entered in `config`).
 
-## Appendix A — Salinity channel kinds (market survey, 2026-07-08)
+## Appendix A — Salinity channels: the full survey (2026-07-08)
 
 The dissimilarity requirement (§4) is only as good as the *buyable* kinds.
-Surveyed:
+This appendix is the market survey plus the design consequences it forced.
 
-| kind | Device class | Physics | Cost class | Notes |
-|---|---|---|---|---|
-| `:conductivity_contacting` | Any BNC K=1.0 cell (Neptune/GHL/lab) on an **Atlas Scientific EZO-EC** carrier | Electrode resistance under **AC excitation** (DC polarizes electrodes — this IS "the usual hobby probe," and the EZO-EC is the off-the-shelf driver board that provides the AC) | ~$60–120/channel | **Isolation is mandatory for multiples**: Atlas documents that conductivity excitation injects interference into the water and that isolation is 100% effective against it — hence the `excitation` fault domain (§6). Un-isolated cells must interleave excitation windows (driver-level schedule). |
-| `:conductivity_inductive` | Toroidal (electrodeless) cell, industrial/surplus | Transformer coupling through the water loop — no electrodes | ~$150–400 surplus | Immune to electrode fouling/polarization — genuinely dissimilar *failure modes* from contacting cells even though both read conductivity. |
-| `:density_hydrostatic` | Two MS5837-class pressure sensors at a declared vertical separation on a standpipe | Δp = ρ·g·Δh → density → salinity | ~$30 | Dissimilar *physics* (density, not conductivity): blind to conductivity confounders (temperature-compensation error, organics). Resolution is marginal per-sample (~2 Pa vs a ~16 Pa full-range span) but salinity is a slow quantity — minutes of averaging makes it an excellent *confirming* voter. |
-| `:refractive` | Inline process refractometer (Pyxis RT-50 class; Atago PRM, Anton Paar L-Rix, MISCO MVP, Vaisala Polaris up-market) | Critical-angle refractive index | ~$1.5k+, quote-priced | True optical dissimilarity — the electronic version of the hobbyist's handheld refractometer. Industrial-priced: not a `:home` recommendation, plausible for `:shop` (one per shop system, not per tank). Needs temperature compensation and a flow cell. |
-| `derived :volume_accounting` | none (analytic, §4) | Top-off ledger vs expected salinity motion | $0 | Already specced. |
+### A.1 Naming things: "the usual probe" IS the resistance-based probe
 
-**Recommended quorums.** `:home`: two contacting cells (isolated carriers,
-different nodes, different brackets) + one hydrostatic-density standpipe +
-the derived channel — 3-kind dissimilarity for ~$100 over the usual
-single-probe build, `vote 2 of 4`. `:shop`: add one inline refractometer as
-the premium fourth kind on the shared sump.
+The standard hobby salinity probe — Neptune, GHL, any BNC lab cell — is a
+**contacting conductivity cell**: two graphite or platinum electrodes
+reading the solution's resistance. It *must* be driven with **AC excitation**
+(bipolar square wave, kHz-range): DC polarizes the electrodes within
+seconds and electrolyzes the water, so "a driver board that provides AC" is
+not an optional nicety, it is how conductivity measurement works at all.
 
-Survey sources: atlas-scientific.com/embedded-solutions/ezo-conductivity-circuit/
-(EZO-EC + isolation guidance); pyxis-lab.com (RT-50/RT-100 inline
-refractometers); atago.net/en/products-prm-top.php; anton-paar.com (L-Rix);
-misco.com (MVP); vaisala.com (Polaris).
+The off-the-shelf answer is the **Atlas Scientific EZO-EC** carrier: AC
+excitation + measurement on one module, I²C/UART out (a clean `driver`
+regmap declaration), accepts any standard BNC K=1.0 cell — including the
+Neptune and GHL probes reefers already own. ~$60–120 per channel with an
+isolated carrier.
+
+### A.2 The four buyable kinds
+
+**`:conductivity_contacting`** — EZO-EC + BNC cell (above). The workhorse.
+Failure modes: electrode fouling, polarization drift, calibration decay —
+which is why two of these alone satisfy redundancy but not dissimilarity
+(`require dissimilar kinds >= 2` exists for exactly this).
+
+**`:conductivity_inductive`** — toroidal (electrodeless) cells: two coils
+transformer-coupled through a loop of the water itself. No electrodes ⇒ no
+polarization, no fouling drift. Industrial gear (surplus ~$150–400). Same
+measured quantity as contacting cells but **dissimilar failure modes** —
+the cheap seat between full physics-dissimilarity and mere duplication.
+
+**`:density_hydrostatic`** — the sleeper: two MS5837-class pressure sensors
+at a declared vertical separation on a standpipe. Δp = ρ·g·Δh → density →
+salinity, for **~$30**. Dissimilar *physics*: blind to everything that
+fools conductivity (temperature-compensation error, electrode state,
+organics). The honest resolution math: full reef salinity range (≈1.020 →
+1.028 SG) spans only ~16 Pa over a 20 cm column, against ~2 Pa RMS
+per-sample sensor noise — marginal per sample, **but salinity is a slow
+quantity**, and minutes of averaging make this an excellent *confirming*
+voter (§5's longer-window witness role, same as the shop profile's trend
+witness). Declare the separation and column geometry; the units machinery
+does the rest.
+
+**`:refractive`** — to the direct question: **yes, inline refractometer
+probes exist** — the electronic version of the hobbyist's handheld
+refractometer, measuring critical-angle refractive index continuously in a
+flow cell. They are industrial process instruments: **Pyxis RT-50** is the
+accessible end (~$1.5k class); Atago PRM, Anton Paar L-Rix, MISCO MVP, and
+Vaisala Polaris sit above it, quote-priced. Not a `:home` recommendation —
+but entirely plausible for **`:shop`**, where one premium optical channel
+on the shared sump serves the whole system. Needs temperature compensation
+and a flow cell; true optical dissimilarity from everything above.
+
+**`derived :volume_accounting`** — the $0 analytic channel already specced
+(§4): the top-off ledger's predicted salinity motion voting against the
+physical sensors.
+
+### A.3 The design consequence — excitation is a fault domain
+
+Atlas's own documentation states that conductivity excitation **injects
+electrical interference into the water**, that this matters critically with
+multiple probes in one water body, and that galvanic isolation is "100%
+effective" against it. For a quorum architecture that is not a shopping
+note — it is a **correlated-failure channel**: two un-isolated contacting
+cells voting in the same sump can corrupt *each other*, which is precisely
+the class of coupled failure the whole design exists to defeat.
+
+Hence (§6): the fault-domain vector carries an `excitation` axis. Isolated
+carriers clear it; un-isolated cells are treated as sharing a domain AND
+get compiler-scheduled **interleaved excitation windows** at the driver
+layer (never energized simultaneously). The common-mode matrix reports
+shared excitation like any other defeating domain, and `cure reef report`
+shows which carriers the plan assumes are isolated.
+
+### A.4 Recommended quorums
+
+- **`:home`** — two contacting cells (isolated carriers, different nodes,
+  different brackets) + one hydrostatic-density standpipe + the derived
+  channel: **three dissimilar kinds, `vote 2 of 4`, ~$100 over the usual
+  single-probe build.**
+- **`:shop`** — the same, plus one inline refractometer (Pyxis-class) on
+  the shared sump as the premium fourth kind; it also strengthens the shop
+  profile's salinity-trend witness (§15.3) with an instrument whose drift
+  is uncorrelated with every conductivity channel.
+
+Driver declarations for all four kinds, including the excitation-
+interleaving schedule, are ledgered (§16.11a).
+
+### A.5 Survey sources
+
+- Atlas Scientific EZO-EC (AC-excitation carrier + isolation guidance):
+  https://atlas-scientific.com/embedded-solutions/ezo-conductivity-circuit/
+  (datasheet: https://www.openhacks.com/uploadsproductos/ec_ezo_datasheet.pdf)
+- Pyxis RT-50 / RT-100 inline refractometers:
+  https://www.pyxis-lab.com/product/rt-50-prism-inline-refractometer/
+- Atago PRM inline series: https://www.atago.net/en/products-prm-top.php
+- Anton Paar L-Rix: https://www.anton-paar.com/us-en/products/details/l-rix/
+- MISCO MVP: https://www.misco.com/product/mvp-inline-process-refractometer-sensor/
+- Vaisala Polaris: https://www.vaisala.com/en/industrial-measurements/products/liquid-concentration
 
 ## Sources (prior art reviewed 2026-07-08)
 
