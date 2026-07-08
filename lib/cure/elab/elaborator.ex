@@ -14,7 +14,7 @@ defmodule Cure.Elab.Elaborator do
   """
 
   alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
-  alias Cure.Elab.{MetaCtx, Subst, Unify}
+  alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
 
   @doc """
   Elaborate a top-level function definition into `{:ok, core_lambda, type_value}`
@@ -2401,7 +2401,7 @@ defmodule Cure.Elab.Elaborator do
       # A variable scrutinee is substituted into the guard chain as-is: only a
       # variable is duplicated (no recomputation), so the surface path is safe.
       match?({:variable, _, _}, scrut_expr) ->
-        guard_chain(scrut_expr, arms, expected, names, ctx, env)
+        guard_chain(scrut_expr, arms, expected, names, ctx, env, [])
 
       # A non-variable scrutinee would be DUPLICATED (and recomputed) by surface
       # substitution across the `bool_elim` chain. Bind it ONCE under a fresh Core
@@ -2427,7 +2427,7 @@ defmodule Cure.Elab.Elaborator do
       expected1 = Subst.shift(expected, 1, 0)
 
       with {:ok, chain} <-
-             guard_chain({:variable, [], fresh}, arms, expected1, names1, ctx1, env) do
+             guard_chain({:variable, [], fresh}, arms, expected1, names1, ctx1, env, []) do
         {:ok, {:app, {:lam, dom, chain}, scrut_core}}
       end
     end
@@ -2435,18 +2435,56 @@ defmodule Cure.Elab.Elaborator do
 
   defp guarded_arm?({:match_arm, meta, _body}), do: Keyword.has_key?(meta, :guard)
 
-  # The final arm closes the chain: it must be an unguarded catch-all.
-  defp guard_chain(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env) do
-    if Keyword.has_key?(meta, :guard) do
-      {:error, {:unsupported_guard, :non_exhaustive}}
-    else
-      bind_catchall_body(scrut_expr, Keyword.fetch!(meta, :pattern), single_body(body), expected, names, ctx, env)
+  # The final arm closes the chain: it must be an unguarded catch-all — unless
+  # the untrusted Z3 lint proves the chain's guards exhaustive (spec
+  # 2026-07-08-guard-coverage-lint §2.3a), in which case the final guarded arm
+  # IS the catch-all: its provably-true test is elided and its body goes
+  # through the ordinary bind_catchall_body path, so the kernel re-checks
+  # exactly the term an unguarded catch-all would have produced. Every lint
+  # failure (unproven / untranslatable / Z3 unavailable) reproduces today's
+  # rejection byte-for-byte — including when the final guard itself fails to
+  # elaborate, which was never reached pre-lint.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env, acc) do
+    case Keyword.get(meta, :guard) do
+      nil ->
+        bind_catchall_body(
+          scrut_expr,
+          Keyword.fetch!(meta, :pattern),
+          single_body(body),
+          expected,
+          names,
+          ctx,
+          env
+        )
+
+      guard ->
+        pat = Keyword.fetch!(meta, :pattern)
+
+        elaborated =
+          with {:ok, guard_expr} <- guard_bind(scrut_expr, pat, guard) do
+            elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env)
+          end
+
+        case elaborated do
+          {:ok, test} ->
+            maybe_warn_shadowed(test, acc, ctx)
+
+            if GuardLint.prove_exhaustive(acc ++ [test], ctx) == :proven do
+              bind_catchall_body(scrut_expr, pat, single_body(body), expected, names, ctx, env)
+            else
+              {:error, {:unsupported_guard, :non_exhaustive}}
+            end
+
+          _error ->
+            {:error, {:unsupported_guard, :non_exhaustive}}
+        end
     end
   end
 
-  # A guarded arm becomes a `bool_elim` on its guard; an unguarded catch-all
-  # before the end shadows every later arm and closes the chain early.
-  defp guard_chain(scrut_expr, [{:match_arm, meta, body} | rest], expected, names, ctx, env) do
+  # A guarded arm becomes a `:case` on the inductive Bool (`bool_case/5`); an
+  # unguarded catch-all before the end shadows every later arm and closes the
+  # chain early.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body} | rest], expected, names, ctx, env, acc) do
     pat = Keyword.fetch!(meta, :pattern)
 
     case Keyword.get(meta, :guard) do
@@ -2459,10 +2497,23 @@ defmodule Cure.Elab.Elaborator do
              {:ok, test} <-
                elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env),
              {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
-             {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env) do
+             {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env, acc ++ [test]) do
+          maybe_warn_shadowed(test, acc, ctx)
           {:ok, bool_case(test, expected, tt, ff, ctx)}
         end
     end
+  end
+
+  # Dead-arm lint (§2.1): a guard implied by the disjunction of the guards
+  # before it can never fire. Warning only — elaboration is unaffected. The
+  # index is the guard's 0-based position among the chain's guarded arms.
+  defp maybe_warn_shadowed(_test, [], _ctx), do: :ok
+
+  defp maybe_warn_shadowed(test, acc, ctx) do
+    if GuardLint.shadowed?(test, acc, ctx),
+      do: GuardLint.record_warning({:guard_shadowed, length(acc)})
+
+    :ok
   end
 
   # Bind a catch-all pattern's variable to the scrutinee and check the body: `_`

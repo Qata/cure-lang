@@ -14,6 +14,8 @@ defmodule Cure.Elab.Program do
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(source) when is_binary(source) do
+    Cure.Elab.GuardLint.reset_warnings()
+
     with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
       check_ast(ast)

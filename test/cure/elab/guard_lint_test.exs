@@ -97,4 +97,89 @@ defmodule Cure.Elab.GuardLintTest do
       assert GuardLint.warnings() == []
     end
   end
+
+  describe "elaboration integration (§6): recovery + warnings through Program.elaborate/1" do
+    alias Cure.Elab.{Emit, Program}
+
+    @nat "mod M\n  type Nat = Z | S(Nat)\n"
+
+    test "trichotomy without a catch-all is accepted and runs correctly on all three regions" do
+      src =
+        @nat <>
+          "  fn cmp(a: Int, b: Int) -> Nat = match a\n" <>
+          "    x when x < b -> Z()\n" <>
+          "    x when x == b -> S(Z())\n" <>
+          "    x when x > b -> S(S(Z()))\n" <>
+          "  fn lo() -> Nat = cmp(1, 5)\n" <>
+          "  fn mid() -> Nat = cmp(5, 5)\n" <>
+          "  fn hi() -> Nat = cmp(9, 5)\nend\n"
+
+      {:ok, env} = Program.elaborate(src)
+
+      {:ok, mod} =
+        Emit.compile_and_load(env, module: :"Cure.GuardLintTri", functions: [:cmp, :lo, :mid, :hi])
+
+      assert apply(mod, :lo, []) == :Z
+      assert apply(mod, :mid, []) == {:S, :Z}
+      assert apply(mod, :hi, []) == {:S, {:S, :Z}}
+    end
+
+    test "a two-guard complement without a catch-all is accepted" do
+      src =
+        @nat <>
+          "  fn cmp(a: Int, b: Int) -> Nat = match a\n" <>
+          "    x when x < b -> Z()\n" <>
+          "    x when x >= b -> S(Z())\nend\n"
+
+      assert {:ok, _env} = Program.elaborate(src)
+    end
+
+    test "a genuine gap still rejects with the pinned error shape" do
+      src =
+        @nat <>
+          "  fn cmp(a: Int, b: Int) -> Nat = match a\n" <>
+          "    x when x < b -> Z()\n" <>
+          "    x when x > b -> S(Z())\nend\n"
+
+      assert {:error, {:unsupported_guard, :non_exhaustive}} = Program.elaborate(src)
+    end
+
+    test "semantically exhaustive but untranslatable guards still reject (K13 observable)" do
+      src =
+        @nat <>
+          "  fn pos(i: Int) -> Bool = i > 0\n" <>
+          "  fn nonpos(i: Int) -> Bool = i <= 0\n" <>
+          "  fn cls(n: Int) -> Nat = match n\n" <>
+          "    x when pos(x) -> Z()\n" <>
+          "    x when nonpos(x) -> S(Z())\nend\n"
+
+      assert {:error, {:unsupported_guard, :non_exhaustive}} = Program.elaborate(src)
+    end
+
+    test "a shadowed guard warns; the program still elaborates" do
+      src =
+        @nat <>
+          "  fn cls(n: Int, b: Int) -> Nat = match n\n" <>
+          "    x when x < b -> Z()\n" <>
+          "    x when x < b -> S(Z())\n" <>
+          "    x -> S(S(Z()))\nend\n"
+
+      assert {:ok, _env} = Program.elaborate(src)
+      assert [{:guard_shadowed, 1}] = GuardLint.warnings()
+    end
+
+    test "an unshadowed chain leaves no warnings (and elaborate/1 resets stale ones)" do
+      GuardLint.record_warning({:guard_shadowed, 99})
+
+      src =
+        @nat <>
+          "  fn cls(n: Int, b: Int) -> Nat = match n\n" <>
+          "    x when x < b -> Z()\n" <>
+          "    x when x > b -> S(Z())\n" <>
+          "    x -> S(S(Z()))\nend\n"
+
+      assert {:ok, _env} = Program.elaborate(src)
+      assert GuardLint.warnings() == []
+    end
+  end
 end
