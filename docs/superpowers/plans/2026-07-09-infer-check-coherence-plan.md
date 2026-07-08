@@ -24,7 +24,7 @@
 - `lib/cure/core/kernel.ex` — the restructure (Task 1).
 - `test/cure/core/infer_check_coherence_test.exs` — NEW red-green driver (Task 1).
 - `lib/antigen/generators/equality.ex`, `lib/antigen/generators/rewrite.ex` — widening + comment updates (Task 2).
-- `test/antigen/spine_ctor_coherence_test.exs` — NEW deterministic antibody pin (Task 2; name deliberately NOT `eq_inductive_antibody_test.exs`, which exists and is unrelated — spec §2 review note).
+- `test/antigen/spine_ctor_coherence_antibody_test.exs` — NEW deterministic antibody pin (Task 2; follows the `test/antigen/*_antibody_test.exs` naming convention shared by all six existing files there; name deliberately NOT `eq_inductive_antibody_test.exs`, which exists and is unrelated — spec §2 review note).
 - Parity-ledger roadmap spec §2 + memory — sibling-finding filing (Task 3).
 
 ---
@@ -33,7 +33,7 @@
 
 **Files:** Modify `lib/cure/core/kernel.ex` (ctor-check clause ~237-265; fallthrough clause ~267-278). Test: `test/cure/core/infer_check_coherence_test.exs` (NEW).
 
-- [ ] **Step 0: Pre-flight (read-only).** `git rev-parse HEAD` → `<pre-14-commit>`. Re-read kernel.ex:227-280 and :480-495 (anchors verified 2026-07-09 post-D2; re-locate by the quoted code if shifted). Confirm `Builtins.seed/2` gives a test env with `Equivalent` (the existing kernel tests' pattern — read `test/cure/core/k6_param_ctor_infer_test.exs` setup and reuse it).
+- [ ] **Step 0: Pre-flight (read-only).** `git rev-parse HEAD` → `<pre-14-commit>`. Re-read kernel.ex:227-280 and :480-495 (anchors verified 2026-07-09 post-D2; re-locate by the quoted code if shifted). Confirm `Builtins.seed/2` (env, exclude-set with default) gives a test env with `Equivalent` (the existing kernel tests' pattern — read `test/cure/core/k6_param_ctor_infer_test.exs` setup and reuse it VERBATIM: `Context.empty(Builtins.seed(Env.empty()))` — `Cure.Core.Env` (defined in `lib/cure/core/inductive.ex`) exposes `empty/0`, NOT `new/0`; `Env.new/0` is a different module, `Cure.Types.Env`, part of the decoy pipeline — do not confuse them).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -50,7 +50,7 @@ defmodule Cure.Core.InferCheckCoherenceTest do
 
   # Reuse k6_param_ctor_infer_test.exs's env/ctx construction verbatim.
   defp ctx do
-    env = Builtins.seed(Env.new())
+    env = Builtins.seed(Env.empty())
     Context.empty(env)
   end
 
@@ -167,14 +167,14 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 ### Task 2: Antigen widening + deterministic pin
 
-**Files:** Modify `lib/antigen/generators/equality.ex`, `lib/antigen/generators/rewrite.ex`; Create `test/antigen/spine_ctor_coherence_test.exs`.
+**Files:** Modify `lib/antigen/generators/equality.ex`, `lib/antigen/generators/rewrite.ex`; Create `test/antigen/spine_ctor_coherence_antibody_test.exs` (naming: ALL six existing files under `test/antigen/*_antibody_test.exs` — `certify_hardening_`, `unify_indices_`, `size_change_`, `eq_inductive_`, `cycle_rule_`, `lazy_unfold_` — use the `_antibody_test.exs` suffix and an `Antigen.<Name>AntibodyTest` module; spec §2 itself names the example `spine_ctor_coherence_antibody_test.exs` for exactly this reason — match the convention, do not drop the suffix).
 
 - [ ] **Step 1: Widen `equality.ex`.** Add to `eq_term/0`'s frequency list (~:57-64; iterate exact shapes against the existing `test/antigen/generators/equality_test.exs` property, which is immutable): (a) a top-level params-on-spine reflexive arm — challenge `{{:ctor, :reflexive, [ty, a]}, {:data, :Equivalent, [ty, a, a], []}, []}` using the generator's existing ty/a menu and the FLAT claimed-type spelling (the reify-flat note at ~:96-99 — copy its convention exactly); (b) a checking-position arm via the check-embedding idiom (`mutation.ex:141-148` precedent): `{:app, {:lam, <eq_ty_term>, {:var, 0}}, <spine_refl>}` claiming the same eq type. Reword the moduledoc policy lines (~:15-22): the coherent-fragment restriction is HISTORICAL as of this fix — spine reflexives now generate in both positions; keep the old text as a dated note. Update `rewrite.ex`'s comment (~:179): the spine form is now also checkable, not an inference-position-only artifact.
 - [ ] **Step 2: Run the generator property + assays.** `mix test test/antigen/generators/equality_test.exs` — green (iterate arm shapes if the claimed type disagrees with infer; the test is the oracle). Then `mix test test/antigen/` — FULL suite green; the `term/infer_check` and `term/subject_reduction` assays now sample the widened space (this is spec §4 item 2's property-level antibody).
-- [ ] **Step 3: The deterministic pin.** `test/antigen/spine_ctor_coherence_test.exs`:
+- [ ] **Step 3: The deterministic pin.** `test/antigen/spine_ctor_coherence_antibody_test.exs`:
 
 ```elixir
-defmodule Antigen.SpineCtorCoherenceTest do
+defmodule Antigen.SpineCtorCoherenceAntibodyTest do
   @moduledoc """
   Task #14 antibody: the exact historical counterexample (params-on-spine
   reflexive, K6 inference spelling) round-trips infer→check through the real
@@ -186,7 +186,7 @@ defmodule Antigen.SpineCtorCoherenceTest do
   alias Cure.Core.{Builtins, Context, Env, Kernel}
 
   test "infer→check round-trip on the spine reflexive" do
-    ctx = Context.empty(Builtins.seed(Env.new()))
+    ctx = Context.empty(Builtins.seed(Env.empty()))
     t = {:ctor, :reflexive, [{:int_type}, {:int_lit, 3}]}
     assert {:ok, ty} = Kernel.infer(ctx, t)
     assert :ok = Kernel.check(ctx, t, ty)
@@ -198,20 +198,22 @@ Run it scoped — green (pins Task 1's landed behavior; its red evidence is Task
 - [ ] **Step 4: Commit.**
 
 ```bash
-git add -- lib/antigen/generators/equality.ex lib/antigen/generators/rewrite.ex test/antigen/spine_ctor_coherence_test.exs
+git add -- lib/antigen/generators/equality.ex lib/antigen/generators/rewrite.ex test/antigen/spine_ctor_coherence_antibody_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "test(antigen): widen equality generator past the coherent fragment + spine-ctor coherence pin" \
-  -- lib/antigen/generators/equality.ex lib/antigen/generators/rewrite.ex test/antigen/spine_ctor_coherence_test.exs
+  -- lib/antigen/generators/equality.ex lib/antigen/generators/rewrite.ex test/antigen/spine_ctor_coherence_antibody_test.exs
 ```
 
 ---
 
 ### Task 3: file the sibling finding (docs-only)
 
-**Files:** the parity-ledger roadmap spec (locate `docs/superpowers/specs/*idris-parity-roadmap*.md`, §2) + the task-#14 spec already carries §3.
+**Files (in-repo, git-tracked):** the parity-ledger roadmap spec (locate `docs/superpowers/specs/*idris-parity-roadmap*.md` → `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, §2) + the task-#14 spec already carries §3.
+**Files (NOT in-repo, NOT git-tracked — do not pathspec these into any worktree commit):** a NEW memory-note file under the operator's Claude memory directory (`~/.claude/projects/-Users-ch-Develop-esp32-beam-cure-lang/memory/`) + its index entry in that directory's `MEMORY.md` (spec §4 item 6 requires "a parity-ledger row PLUS a memory note" — both, not either; completion is not claimed until both are checked off). That memory directory lives outside `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch` entirely — it is not part of this git repo, so it is edited directly (no `git add`/commit for it, no pathspec, no ghost-authorship concern).
 
-- [ ] **Step 1:** Add a ledger row/finding note: "value-level ctor-spelling dichotomy — spine vs fields-only vctors are NOT definitionally equal (conv.ex length-strict spine compare); case ι-reduction over a spine-form scrutinee mis-binds OPEN branch bodies (ambient de Bruijn refs shift by pc, eval.ex ι env); erase keeps spine params. Pre-existing, incidence raised by #14's coherence fix; resolution = canonical-spelling design fork (Lean params-always vs Agda fields-only) — OPERATOR decision, prose. Evidence anchors in spec 2026-07-09-infer-check-coherence §3." Also mark the #14 row done.
-- [ ] **Step 2:** Commit: `docs(ledger): #14 done; file ctor-spelling dichotomy as operator design fork`.
+- [ ] **Step 1:** Add a ledger row/finding note to the roadmap spec: "value-level ctor-spelling dichotomy — spine vs fields-only vctors are NOT definitionally equal (conv.ex length-strict spine compare); case ι-reduction over a spine-form scrutinee mis-binds OPEN branch bodies (ambient de Bruijn refs shift by pc, eval.ex ι env); erase keeps spine params. Pre-existing, incidence raised by #14's coherence fix; resolution = canonical-spelling design fork (Lean params-always vs Agda fields-only) — OPERATOR decision, prose. Evidence anchors in spec 2026-07-09-infer-check-coherence §3." Also mark the #14 row done.
+- [ ] **Step 2:** File a memory note OUTSIDE the repo, per the existing convention (one short topic file + one index line in `MEMORY.md`, mirroring e.g. `global-def-collision-gap.md`'s entry — also a "flagged for operator, not landed" finding): create a new file (e.g. `ctor-spelling-value-dichotomy.md`) in the memory directory above stating the finding, its evidence anchors (`eval.ex:38`, `eval.ex:56-62`; `conv.ex:88-89`, `conv.ex:183-186`; `erase.ex:20-36`), and that it is filed as an operator design fork (not fixed); add its one-line index entry to that directory's `MEMORY.md`. This step touches no file under the worktree and is not part of Step 3's commit.
+- [ ] **Step 3:** Commit (worktree-scoped, in-repo files only): `docs(ledger): #14 done; file ctor-spelling dichotomy as operator design fork` — explicit pathspec is the roadmap-spec file alone.
 
 ---
 
@@ -223,5 +225,5 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 ## Self-review notes
 
-- Spec §1 fix → Task 1 Step 3 (ordered cond, load-bearing order comment inline). §2 → Task 2 (both arms + comments + renamed pin file). §3/§7.6 → Task 3. §4 gate → Task 4 + Task 1 Step 4 pins. §5 pins → named in Task 1 Step 4. §6 non-goals — untouched.
+- Spec §1 fix → Task 1 Step 3 (ordered cond, load-bearing order comment inline). §2 → Task 2 (both arms + comments + renamed pin file). §3/§7.6 → Task 3 Step 1 (ledger row). §4 item 6 (ledger + memory note, both required) → Task 3 Steps 1-2 (ledger row in-repo, memory note out-of-repo — the two live in different places and are handled by separate steps). §4 items 1-5 gate → Task 4 + Task 1 Step 4 pins. §5 pins → named in Task 1 Step 4. §6 non-goals — untouched.
 - Latitude: test-value spellings in Task 1 Step 1 (crib from k6 test; assertions immutable), generator arm shapes in Task 2 Step 1 (iterate against immutable equality_test), gate recounts. All report-required.
