@@ -233,7 +233,68 @@ behaviour of user‑level inductives (`MyEq`/`mrefl`, `dp01`) and Cure's existin
 deletion rule (ledger #23); seeding builtin `Eq` extends, not introduces, the
 K stance.
 
-## Current state & the K6 coupling that blocks Phase B/C (2026‑07‑08)
+## Current state — REVISED 2026‑07‑08 (evening): the K6 gate is STALE; Phase B/C authorized and re‑scoped
+
+Operator approval obtained 2026‑07‑08: *"I approve the identity-type kernel
+surgery rewrite."* A fresh evidence probe (kernel-parity-batch branch) then
+found the section below OUTDATED in its central claim. Revised ground truth:
+
+1. **The K6‑blocks‑refl‑inference concern is DODGED AND LANDED.** The kernel
+   now infers a **params‑on‑spine saturated ctor** (commit `f3b0e73`,
+   `kernel.ex:200‑216`: when `length(args) == param_count + field_count`, it
+   re‑checks `params ++ fields` against the concatenated telescopes and
+   NbE‑derives the result indices — no metavariables, no grade tracking, a
+   small strictly‑sound kernel addition, NOT the deferred K6 grade machinery).
+   `mk_refl_infer(ty,x) = {:ctor, :reflexive, [ty, x]}` (`elaborator.ex:1026`)
+   is inferable: probe evidence
+   `infer {:ctor,:reflexive,[Nat,Z]} => {:ok, {:vdata,:Equivalent,[Nat,Z,Z]}}`
+   (bare form still correctly rejects with `:ctor_requires_checking_mode`,
+   which is a KERNEL atom — `kernel.ex:222` — not an elaborator one as the
+   stale section below claimed). `bridge_step` already uses the inductive
+   spine form; additionally it is currently DORMANT in the whole corpus
+   (normalizer improvements route rw07 through the `contains_a` syntactic
+   path — traced with `CURE_REWRITE_LOG=1`, no test reaches `bridge_step`).
+2. **Primitive `{:eq}`/`{:refl}` have NO producers left.** All surface paths
+   build `{:data, :Equivalent, …}` / `{:ctor, :reflexive, …}`; the remaining
+   `{:eq,}`/`{:refl,}` matches in `lib/cure/elab/*` are structural traversal
+   clauses only. `no_eq_node` is `:warn` in the default validator config and
+   `:reject` in `release_config` (`validator.ex:45,81`).
+3. **The REAL remaining blocker for Phase B is the computed‑endpoints
+   desugaring problem, not refl inference.** The first Phase‑B attempt
+   (`d44edb8`, `rw_case_build`) was REVERTED in `c635e8c` with the diagnosis:
+   shifting an already‑elaborated body +1 into the refl branch type‑checks
+   only for VARIABLE endpoints (where `unify_indices` substitutes the branch
+   witness); for COMPUTED endpoints it drifts verdicts (empirically:
+   `frp01_par_assoc` accept→reject). **The correct Phase B re‑elaborates the
+   body INSIDE the refl branch** — routing through `elaborate_match`'s branch
+   machinery, whose `build_motive` sentinels handle computed indices — rather
+   than shifting a pre‑built body. That revert message is the roadmap.
+
+**Re‑scoped remaining work (this batch, operator‑approved):**
+
+- **Phase B (the surgery's heart):** `rewrite p in body` → single‑branch
+  inductive `:case` via in‑branch re‑elaboration (route through
+  `elaborate_match`/`build_motive`), replacing every `{:rewrite, …}` producer
+  (`elaborator.ex:1058, 1070, 1137, 1170, 1831, 3396`). Behavioural pin:
+  oracle `rewrite/rw01‑rw09`, `refl/rf01‑rf05`, and the **frp cluster with
+  computed endpoints (`frp01_par_assoc` is the sentinel that killed the naive
+  attempt)** must keep byte‑identical verdicts.
+- **Phase C (subtractive):** with producers gone, strip the dead
+  `{:rewrite}`/`{:eq}`/`{:refl}`/`{:veq}` clauses across
+  `term.ex`/`eval.ex`/`kernel.ex`/`quote.ex`/`certificate.ex`/`serialize.ex`
+  and elab traversal helpers; flip `no_rewrite_node` (and default
+  `no_eq_node`) to `:reject`. Full TCB gate: the existing
+  `test/antigen/eq_inductive_antibody_test.exs` extended per Gate C
+  (equates‑no‑distinct‑normal‑forms obligation), full Antigen, full suite,
+  oracle replay.
+- **Phase B′ (stdlib fakery retirement):** per finding 3 above —
+  `Std.Equal`/`Std.Proof` `:cure_refl` stubs become real proofs where
+  structurally provable, are retired where unsound; mirror in `priv/std/`.
+
+The section below is retained verbatim as the historical record of the
+(now‑stale) 2026‑07‑08 morning assessment.
+
+## HISTORICAL (superseded): Current state & the K6 coupling that blocks Phase B/C (2026‑07‑08)
 
 **Phase A is LANDED and green.** Surface `Eq(ty,a,b)` elaborates to
 `{:data, :Eq, [ty], [a,b]}` (`declarations.ex:813`), `refl(x)` to
