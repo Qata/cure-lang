@@ -4,8 +4,9 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
   `and`/`or`/`not` and Bool-typed `==`/`!=` now elaborate to APPLICATIONS of the
   `Std.Bool` prelude defs instead of `{:prim, :and/:or/:not/:eq/:ne}` nodes.
 
-  `==`/`!=` are operand-type-directed: numeric (Int/Float) operands keep lowering
-  to the native `{:prim, :eq/:ne}` compare; Bool operands lower to `eq`/`ne`.
+  `==`/`!=` are operand-type-directed (K2 phase 2, spec 2026-07-09): numeric
+  (Int/Float) operands lower to the monomorphic builtin-op globals
+  `int_eq`/`int_ne`/`float_eq`/`float_ne` spines; Bool operands lower to `eq`/`ne`.
   """
   use ExUnit.Case, async: true
 
@@ -35,19 +36,19 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
              {:app, {:global, :not}, @tt}
   end
 
-  test "Int `==` stays a native :eq prim" do
+  test "Int `==` lowers to the int_eq builtin-op global" do
     assert body("  fn t() -> Bool = 1 == 2\n", :t) ==
-             {:prim, :eq, [{:int_lit, 1}, {:int_lit, 2}]}
+             {:app, {:app, {:global, :int_eq}, {:int_lit, 1}}, {:int_lit, 2}}
   end
 
-  test "Float `==` stays a native :eq prim" do
+  test "Float `==` lowers to the float_eq builtin-op global" do
     assert body("  fn t() -> Bool = 1.0 == 2.0\n", :t) ==
-             {:prim, :eq, [{:float_lit, 1.0}, {:float_lit, 2.0}]}
+             {:app, {:app, {:global, :float_eq}, {:float_lit, 1.0}}, {:float_lit, 2.0}}
   end
 
-  test "Int `!=` stays a native :ne prim" do
+  test "Int `!=` lowers to the int_ne builtin-op global" do
     assert body("  fn t() -> Bool = 1 != 2\n", :t) ==
-             {:prim, :ne, [{:int_lit, 1}, {:int_lit, 2}]}
+             {:app, {:app, {:global, :int_ne}, {:int_lit, 1}}, {:int_lit, 2}}
   end
 
   test "Bool `==` lowers to an `eq` application" do

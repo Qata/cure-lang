@@ -490,19 +490,21 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A surface binary operator. Arithmetic and numeric comparisons still lower to
-  # the kernel primitive `{:prim, op, args}`. The Boolean CONNECTIVES `and`/`or`
-  # are retired as primitives: they lower to applications of the `Std.Bool`
-  # prelude defs `and`/`or`. Equality `==`/`!=` is operand-type-directed:
-  # numeric (Int/Float) operands keep the native `{:prim, :eq/:ne}` compare, while
-  # Bool operands lower to the `eq`/`ne` defs (so `case`-elimination, not a
-  # primitive, decides Boolean equality). We elaborate both operands in inference
-  # mode, assemble the term, and let the kernel infer the result type.
+  # A surface binary operator (K2 phase 2 + Amendment A1). Arithmetic and
+  # comparisons lower to registry-keyed builtin-op GLOBAL spines, type-directed
+  # by the left operand: Int → int_*, Float → float_*. The Boolean CONNECTIVES
+  # `and`/`or` lower to the `Std.Bool` prelude defs. `==`/`!=` dispatch 4-way:
+  # Bool → `eq`/`ne` defs; Int/Float → `int_eq`/`float_eq` twins; any OTHER
+  # operand type (ADT, neutral, type variable) → the polymorphic structural
+  # `struct_eq`/`struct_ne` global applied to the READBACK of the operand type
+  # (A1 §1-A — today's runtime-structural semantics, verbatim). We elaborate
+  # both operands in inference mode, assemble the term, and let the kernel
+  # infer the result type.
   def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
     with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
          {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
          {:ok, term} <-
-           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, Context.signature(ctx)),
+           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, ctx),
          {:ok, type} <- Kernel.infer(ctx, term) do
       {:ok, term, type}
     else
@@ -628,29 +630,90 @@ defmodule Cure.Elab.Elaborator do
   defp prim_op(:>=), do: {:ok, :ge}
   defp prim_op(_), do: :error
 
-  # Assemble the Core term for a surface binary operator. The connectives and
-  # Bool-operand equality become applications of the Std.Bool prelude defs (the
-  # `:and`/`:or`/Bool-`:eq`/`:ne` primitives are retired); everything else — and
-  # numeric `==`/`!=` — stays a native `{:prim, op, args}`.
-  defp build_binop(:and, l, r, _l_type, _sig), do: {:ok, app2(:and, l, r)}
-  defp build_binop(:or, l, r, _l_type, _sig), do: {:ok, app2(:or, l, r)}
+  # Assemble the Core term for a surface binary operator (K2 phase 2 + A1).
+  # The connectives and Bool-operand equality become applications of the
+  # Std.Bool prelude defs; arithmetic/comparisons become type-directed
+  # builtin-op global spines (int_*/float_*); non-primitive-typed `==`/`!=`
+  # becomes the polymorphic structural `struct_eq`/`struct_ne` global applied
+  # to the quoted operand type. Maps are explicit literals (no dynamic atom
+  # construction). The float map has NO `rem` entry — `rem` on Float is
+  # `{:error, {:unsupported_operand_type, :rem}}` (enumerated R5 churn; today
+  # it dies as kernel `{:prim_type, :rem}`).
+  @int_binop_globals %{
+    add: :int_add,
+    sub: :int_sub,
+    mul: :int_mul,
+    div: :int_div,
+    rem: :int_rem,
+    lt: :int_lt,
+    le: :int_le,
+    gt: :int_gt,
+    ge: :int_ge
+  }
+  @float_binop_globals %{
+    add: :float_add,
+    sub: :float_sub,
+    mul: :float_mul,
+    div: :float_div,
+    lt: :float_lt,
+    le: :float_le,
+    gt: :float_gt,
+    ge: :float_ge
+  }
 
-  defp build_binop(:==, l, r, l_type, sig) do
-    if bool_operand?(l_type, sig),
-      do: {:ok, app2(:eq, l, r)},
-      else: {:ok, {:prim, :eq, [l, r]}}
+  defp build_binop(:and, l, r, _l_type, _ctx), do: {:ok, app2(:and, l, r)}
+  defp build_binop(:or, l, r, _l_type, _ctx), do: {:ok, app2(:or, l, r)}
+
+  defp build_binop(op_sym, l, r, l_type, ctx) when op_sym in [:==, :!=] do
+    case primitive_scrut_kind(l_type, Context.signature(ctx)) do
+      {:ok, :bool} ->
+        {:ok, app2(if(op_sym == :==, do: :eq, else: :ne), l, r)}
+
+      {:ok, :int} ->
+        {:ok, app2(if(op_sym == :==, do: :int_eq, else: :int_ne), l, r)}
+
+      {:ok, :float} ->
+        {:ok, app2(if(op_sym == :==, do: :float_eq, else: :float_ne), l, r)}
+
+      :error ->
+        # A1 §1-A: structural equality — struct_eq/struct_ne applied to the
+        # readback of the operand type. A meta-containing readback must never
+        # reach the kernel (R8b): reject defensively (corpus predicts none).
+        ty = Quote.reify(l_type, Context.length(ctx))
+
+        if Unify.has_meta?(ty) do
+          {:error, {:unsupported_operand_type, op_sym}}
+        else
+          g = if op_sym == :==, do: :struct_eq, else: :struct_ne
+          {:ok, {:app, app2(g, ty, l), r}}
+        end
+    end
   end
 
-  defp build_binop(:!=, l, r, l_type, sig) do
-    if bool_operand?(l_type, sig),
-      do: {:ok, app2(:ne, l, r)},
-      else: {:ok, {:prim, :ne, [l, r]}}
-  end
-
-  defp build_binop(op_sym, l, r, _l_type, _sig) do
+  defp build_binop(op_sym, l, r, l_type, ctx) do
     case prim_op(op_sym) do
-      {:ok, op} -> {:ok, {:prim, op, [l, r]}}
-      :error -> :unsupported_op
+      {:ok, op} ->
+        case primitive_scrut_kind(l_type, Context.signature(ctx)) do
+          {:ok, :int} ->
+            case Map.fetch(@int_binop_globals, op) do
+              {:ok, g} -> {:ok, app2(g, l, r)}
+              :error -> {:error, {:unsupported_operand_type, op_sym}}
+            end
+
+          {:ok, :float} ->
+            case Map.fetch(@float_binop_globals, op) do
+              {:ok, g} -> {:ok, app2(g, l, r)}
+              :error -> {:error, {:unsupported_operand_type, op_sym}}
+            end
+
+          # No Bool arithmetic; non-numeric operand types reject here
+          # (enumerated R5 churn — today these die as kernel {:prim_type, op}).
+          _ ->
+            {:error, {:unsupported_operand_type, op_sym}}
+        end
+
+      :error ->
+        :unsupported_op
     end
   end
 
@@ -2654,14 +2717,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A literal arm: test the scrutinee against the literal (a `:prim :eq` yielding
-  # the inductive Bool), take this body if equal, else recurse on the rest — the
-  # test scrutinised by a `:case` on Bool.
+  # A literal arm: test the scrutinee against the literal (a type-directed
+  # equality global spine yielding the inductive Bool — K2 phase 2), take this
+  # body if equal, else recurse on the rest — the test scrutinised by a `:case`
+  # on Bool. `prim` (the scrutinee's primitive kind, already in scope) picks the
+  # monomorphic twin; a Bool literal chain uses the Std.Bool `eq` case-def.
   defp literal_chain(scrut_expr, scrut_term, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, prim, rest, expected, names, ctx, env) do
-      test = {:prim, :eq, [scrut_term, lit_core(v, prim)]}
+      eq_global =
+        case prim do
+          :int -> :int_eq
+          :float -> :float_eq
+          :bool -> :eq
+        end
+
+      test = app2(eq_global, scrut_term, lit_core(v, prim))
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
   end

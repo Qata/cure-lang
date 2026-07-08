@@ -20,13 +20,21 @@ defmodule Antigen.Generators.SurfaceExpr do
   """
   alias Antigen.Challenge
 
-  # This module's OWN copy of the surface->core operator table — separate data
-  # from CoreBridge's private @binops, but MUST carry the same mapping, because
-  # Cure.Core.Eval.fold/2 folds on the CORE names, not the surface symbols.
-  @ops %{
-    +: :add, -: :sub, *: :mul, /: :div, %: :rem,
-    ==: :eq, !=: :ne, <: :lt, <=: :le, >: :gt, >=: :ge,
-    and: :and, or: :or
+  # This module's OWN copy of the surface->core operator tables — separate data
+  # from CoreBridge's private maps, but MUST carry the same mapping and the same
+  # SHAPE dispatch (either converted operand `{:float_lit,_}` → float_*, else
+  # int_* — K2 §1.4), because the certified-δ hook folds registry-keyed
+  # builtin-op GLOBAL spines, not surface symbols. `and`/`or` rows are DROPPED:
+  # CoreBridge.to_core no longer bridges them (`:error` — Reduce folds Boolean
+  # literal connectives surface-side) and no catalog row used them.
+  @int_ops %{
+    +: :int_add, -: :int_sub, *: :int_mul, /: :int_div, %: :int_rem,
+    ==: :int_eq, !=: :int_ne, <: :int_lt, <=: :int_le, >: :int_gt, >=: :int_ge
+  }
+
+  @float_ops %{
+    +: :float_add, -: :float_sub, *: :float_mul, /: :float_div, %: :int_rem,
+    ==: :float_eq, !=: :float_ne, <: :float_lt, <=: :float_le, >: :float_gt, >=: :float_ge
   }
 
   @doc "Independent surface->Core encoder (folds `bindings` in directly)."
@@ -40,8 +48,17 @@ defmodule Antigen.Generators.SurfaceExpr do
   def encode({:literal, _m, n}, _b) when is_integer(n), do: {:int_lit, n}
   def encode({:literal, _m, x}, _b) when is_boolean(x), do: {:ctor, (if x, do: :True, else: :False), []}
 
-  def encode({:binary_op, meta, [l, r]}, b),
-    do: {:prim, Map.fetch!(@ops, Keyword.fetch!(meta, :operator)), [encode(l, b), encode(r, b)]}
+  def encode({:binary_op, meta, [l, r]}, b) do
+    cl = encode(l, b)
+    cr = encode(r, b)
+
+    map =
+      if match?({:float_lit, _}, cl) or match?({:float_lit, _}, cr),
+        do: @float_ops,
+        else: @int_ops
+
+    {:app, {:app, {:global, Map.fetch!(map, Keyword.fetch!(meta, :operator))}, cl}, cr}
+  end
 
   def encode({:tuple, _m, [a, c]}, b), do: {:ctor, :mk_pair, [encode(a, b), encode(c, b)]}
 

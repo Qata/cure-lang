@@ -47,7 +47,7 @@ defmodule Cure.Types.Reduce do
   feel "smart" without dragging in a full SMT call for trivial cases.
   """
 
-  alias Cure.Core.{Eval, Quote}
+  alias Cure.Core.{Builtins, Context, Env, Normalise}
   alias Cure.Types.CoreBridge
 
   @type ast :: tuple() | atom() | number() | binary()
@@ -91,15 +91,27 @@ defmodule Cure.Types.Reduce do
 
   # Every other reduction happens in the trusted kernel (normalization-by-
   # evaluation). A node inside the dependent-index grammar is translated,
-  # evaluated, and read back; an irreducible type former (named ref, refinement,
-  # n-ary tuple) has no kernel reduction, so we keep its shape and normalize each
-  # child through the kernel in turn. No arithmetic is folded outside `Cure.Core`.
+  # normalized under the SIGNATURE-CARRYING kernel engine (K2 §1.4: builtin-op
+  # global spines fold only via the certified-δ hook, which needs the seeded op
+  # defs — bare `Eval.eval([])` leaves them stuck), and read back; an
+  # irreducible type former (named ref, refinement, n-ary tuple) has no kernel
+  # reduction, so we keep its shape and normalize each child through the kernel
+  # in turn. No arithmetic is folded outside `Cure.Core`.
   defp kernel_normalize_via_core(ast) do
     case CoreBridge.to_core(ast) do
-      {:ok, core} -> core |> Eval.eval([]) |> Quote.reify() |> CoreBridge.from_core()
-      :error -> structural_congruence(ast)
+      {:ok, core} ->
+        Context.empty(seeded_env())
+        |> Normalise.nf(core, delta: :certified)
+        |> CoreBridge.from_core()
+
+      :error ->
+        structural_congruence(ast)
     end
   end
+
+  # Recomputed per call: seeding is cheap map-building, a module attribute would
+  # add a Builtins compile-order coupling, and persistent_term is banned.
+  defp seeded_env, do: Builtins.seed(Env.empty())
 
   defp fold_bool_binop(:and, {:literal, m, a}, {:literal, _, b}, _ast)
        when is_boolean(a) and is_boolean(b),

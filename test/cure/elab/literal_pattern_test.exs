@@ -3,8 +3,9 @@ defmodule Cure.Elab.LiteralPatternTest do
   Literal patterns on a primitive scrutinee (Int/Bool/Float) desugar to a chain
   of `bool_elim` — there is no inductive `:vdata` to dispatch on. `match n | 0 ->
   a | _ -> b` becomes `bool_elim (n == 0) a b`; `match b | true -> t | false -> f`
-  becomes `bool_elim b t f`. Built on the committed `bool_elim` primitive + the
-  existing `{:prim, :eq}`; no kernel change.
+  becomes `bool_elim b t f`. Built on the committed `bool_elim` + the
+  type-directed equality globals (`int_eq`/`float_eq`, K2 spec 2026-07-09);
+  no kernel change.
   """
   use ExUnit.Case, async: true
 
