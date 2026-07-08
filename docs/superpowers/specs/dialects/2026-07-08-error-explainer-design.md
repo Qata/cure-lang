@@ -168,6 +168,7 @@ without renumbering anything already written down:
 | E255–E259 | `a11y` |
 | E260–E264 | `flightplan` |
 | E265–E269 | `blocks` |
+| E270–E279 | dialect-composition seam errors (cross-dialect; see `2026-07-08-dialect-composition-design.md` §6) |
 
 **Community dialects do not get bare E-codes** — they use a namespaced
 form, `greenhouse-dialect/E3`. The bare numeric space is first-party

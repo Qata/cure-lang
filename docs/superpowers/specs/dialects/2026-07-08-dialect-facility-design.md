@@ -140,6 +140,14 @@ work (§11.3) but the two-pass shape is decided.
   explicit (`$f:Packet.FieldDecl`) — this is how `protocol` embeds `packet`
   payload declarations without owning them.
 
+**Composition is a full mechanism of its own** — theorem signatures
+(`provides`/`requires` facts on the check-ladder trust rule), parameterized
+categories (outer-dialect values as inner-dialect indices), seam explainers,
+and composition templates — specified in
+[`2026-07-08-dialect-composition-design.md`](2026-07-08-dialect-composition-design.md)
+(operator-directed: stacked DSLs keep dependent types invisible while the
+proofs still compose).
+
 ## 8. The Tier-4 reflection API — smallest thing that passes the dogfood
 
 The one genuinely hard design. `reducer`'s `clause_to_arm` must build GADT
