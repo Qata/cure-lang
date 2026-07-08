@@ -43,7 +43,7 @@ progress persisted)*.
    already write `— 84 sts` at the end of shaping rows. That exact syntax
    is an *assertion the compiler verifies* — the convention knitters trust
    most becomes machine-checked without changing how it's written.
-2. **Measurement repeats are honest.** `rep last 2 rows until piece
+2. **Measurement repeats are honest.** `rep rows 5 and 6 until piece
    measures 150cm` is legal; the compiler bounds it via gauge (`~450 rows
    at gauge`) for yardage/chart purposes and prints the measurement
    instruction verbatim — the knitter's judgment stays authoritative, the
@@ -53,20 +53,23 @@ progress persisted)*.
    pattern.
 4. **Errors name rows, sizes, and stitches — never types** (per the parent
    hiding principles; examples throughout §3).
-5. **Repetition speaks knitter, not programmer** (operator feedback:
-   `rnds 1..2` reads wrong to a knitter). Canonical forms, all verbatim
-   pattern idiom: **named rounds** (`increase rnd:` … `rep last 2 rnds`),
-   the **frequency form** (`work increase rnd every other rnd 13 times
-   total`), and **repeat-until-count** (`rep last 2 rnds until 168 sts` —
-   the checker derives the iteration count from the round's delta and
+5. **Repetition speaks knitter, not programmer — in English** (operator
+   direction, twice refined: `rnds 1..2` reads wrong, and so does the
+   relative `rep last 2 rnds`; patterns reference rounds *by number, with
+   English connectives*). The connectives: **`and` joins two**
+   (`rep rnds 1 and 2`), **`to` is the range operator**
+   (`rows 1 to 4`, `rep rows 5 to 8`). Neither `..` nor dashes exist in
+   source (the PDF generator may typeset ranges per house style). Rounds
+   may carry an optional name for readability — `rnd 1 (increase):` — but
+   the number is the reference. The repeat forms that compose with this:
+   the **frequency form** (`work rnd 1 every other rnd 13 times total`)
+   and **repeat-until-count** (`rep rnds 1 and 2 until 168 sts` — the
+   checker derives the iteration count from the rounds' net delta and
    verifies the target is *reachable*: `until 170 sts` from 64 by +8 is a
-   compile error, "you'll pass 168 → 176"). Numbered ranges, where truly
-   needed, use the dash patterns print (`rnds 1–2`, hyphen accepted);
-   `..` does not exist on this surface. And bare `times` is REJECTED as
-   ambiguous — the dialect requires the disambiguating word patterns
-   already use (`12 more times` vs `13 times total`), because that
-   off-by-one is a classic errata source; the trailing stitch-count
-   callout then verifies the interpretation independently.
+   compile error, "you'll pass 168 → 176"). Bare `times` remains REJECTED
+   as ambiguous — `12 more times` or `13 times total`, the disambiguation
+   tech editors already enforce, independently verified by the trailing
+   callout.
 
 ## 3. Worked examples
 
@@ -79,12 +82,12 @@ knit EyeletScarf flat
   cast_on 42
 
   section border
-    rows 1..4: k to end                                # garter edge
+    rows 1 to 4: k to end                              # garter edge
 
   section lace
     row 5 (RS): k1, (yo, ssk) repeat to last st, k1    — 42 sts
     row 6 (WS): k1, p to last st, k1
-    rep last 2 rows until piece measures 150cm         # ~450 rows at gauge
+    rep rows 5 and 6 until piece measures 150cm        # ~450 rows at gauge
 
   section top_border
     rows: k to end * 4
@@ -143,9 +146,9 @@ knit TopDownRaglan in_the_round
       — 4 markers: sleeve 10 (11, 12, 13, 14), body 22 (23, 24, 25, 26)
 
   section yoke
-    increase rnd: (k to 1 before m, m1r, k1, sm, k1, m1l) * 4, k to end   — +8 sts
-    next rnd: k to end
-    rep last 2 rnds until 168 (188, 208, 228, 248) sts
+    rnd 1 (increase): (k to 1 before m, m1r, k1, sm, k1, m1l) * 4, k to end   — +8 sts
+    rnd 2: k to end
+    rep rnds 1 and 2 until 168 (188, 208, 228, 248) sts
 ```
 
 **Markers are tracked state, and placement is checked.** The round state is
@@ -176,7 +179,7 @@ all five sizes and verifies the arithmetic chain per size — including the
 ```
 knit TopDownRaglan
   ✓ all sizes balance         proved by construction — 5 instantiations
-                              (XS..XL), every round, every callout; 0 runs
+                              (XS to XL), every round, every callout; 0 runs
   ✓ schematic conformance     proved by construction — yoke depth 18 (19.5,
                               21, 22.5, 24)cm at gauge matches shape targets
   ✓ chart/text agreement      proved by construction — round-trip identical

@@ -40,16 +40,16 @@ knit WatchCap in_the_round
   cast_on 88 (96, 104)                  # published-pattern convention: S (M, L)
 
   section brim
-    rounds 1..10: (k2, p2) repeat to end
+    rounds 1 to 10: (k2, p2) repeat to end
 
   section body
-    rounds 11..40: k to end
+    rounds 11 to 40: k to end
 
   section crown
     shape 88 (96, 104) -> 11 (12, 13) over 16 rounds
     round 41: (k6, k2tog) repeat to end
     round 42: k to end
-    rounds 43..56: repeat rounds 41..42, one fewer k each decrease round
+    rounds 43 to 56: rep rounds 41 and 42, one fewer k each decrease round
 ```
 
 - **`in_the_round` vs `flat`** is declared up front. It changes the
@@ -59,7 +59,7 @@ knit WatchCap in_the_round
   always facing. Getting this wrong by hand is a classic charting error —
   here it is a declaration, not a discipline.
 - **Sections** are named subroutines (`brim`, `body`, `crown`). Ranges and
-  cross-references (`rows 5..12: repeat rows 3..4`) are the loop syntax
+  cross-references (`rows 5 to 12: rep rows 3 and 4`) are the loop syntax
   knitters already use.
 - **Per-size values** use the published `88 (96, 104)` convention, resolved
   against the `sizes` line positionally. One number means "all sizes".
@@ -125,13 +125,13 @@ Shaping declares its target, then the rows must actually achieve it:
   section sleeve_decrease
     shape 96 -> 72 over 24 rows
     row 1: k1, ssk, k to last 3 sts, k2tog, k1
-    rows 2..4: work even
-    rows 5..24: repeat rows 1..4
+    rows 2 to 4: work even
+    rows 5 to 24: rep rows 1 to 4
 ```
 
 The `shape` line is the schematic — the little line drawing with measurements
 at the edge of a published pattern. The checker sums the actual arity deltas
-across the section's rows and compares: rows 1..4 net −2, six repeats net
+across the section's rows and compares: rows 1 to 4 net −2, six repeats net
 −12... which is 84, not 72 — compile error. Schematic/instruction drift, the
 other classic pattern-errata category, becomes inexpressible to ship. (With
 gauge, `shape` also accepts measurements: `shape 48cm -> 36cm over 9cm` —
@@ -174,7 +174,7 @@ error[E220]: stitch counts don't balance between rows 47 and 48 (size M)
 error[E221]: repeat doesn't fit (size S)
   --> cowl.cure:9
    |
- 9 |   rounds 1..8: (k2, p2) repeat to end
+ 9 |   rounds 1 to 8: (k2, p2) repeat to end
    |
   repeat width 4 doesn't divide the 90 stitches remaining — 2 left over.
   Add a selvedge stitch each side, or adjust the cast-on to a multiple of 4
