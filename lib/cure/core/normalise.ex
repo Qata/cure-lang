@@ -299,7 +299,23 @@ defmodule Cure.Core.Normalise do
   # Anything else (open args, wrong arity/overapplication) stays stuck: never
   # unsound, at worst a missed unfold. `args` are already VALUES (spine/2);
   # whnf_value forces any residual certified-global redex among them.
-  defp builtin_op_fold(op, args, sig, opts) do
+  # Amendment A1 (spec §1-A): struct_eq/struct_ne take [tyval, l, r] and
+  # delegate to the SAME audited :eq/:ne fold over the two VALUE args — the type
+  # argument is not consulted (and not forced for literalness). Folds iff both
+  # value args whnf to int/float literals (late-instantiated polymorphic
+  # operands, same as today's prim); NEUTRAL otherwise — ADT equality never
+  # computes in the kernel (R8c).
+  defp builtin_op_fold(op, [_tyval, l, r], sig, opts) when op in [:struct_eq, :struct_ne] do
+    vals = Enum.map([l, r], &whnf_value(&1, sig, opts))
+
+    if Enum.all?(vals, &(match?({:vint, _}, &1) or match?({:vfloat, _}, &1))) do
+      Eval.fold(if(op == :struct_eq, do: :eq, else: :ne), vals)
+    else
+      :stuck
+    end
+  end
+
+  defp builtin_op_fold(op, args, sig, opts) when op not in [:struct_eq, :struct_ne] do
     arity = if op == :neg, do: 1, else: 2
 
     with true <- length(args) == arity,
@@ -310,6 +326,9 @@ defmodule Cure.Core.Normalise do
       _ -> :stuck
     end
   end
+
+  # A struct op at the wrong arity (unsaturated/overapplied): stuck, never unsound.
+  defp builtin_op_fold(_op, _args, _sig, _opts), do: :stuck
 
   defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
 

@@ -13,6 +13,7 @@ defmodule Cure.Core.BuiltinOpTest do
   defp ctx, do: Context.empty(env())
 
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
+  defp app3(g, ty, a, b), do: {:app, app2(g, ty, a), b}
 
   test "int_add types as an ordinary global Pi" do
     assert {:ok, {:vpi, _, _}} = Kernel.infer(ctx(), {:global, :int_add})
@@ -61,6 +62,46 @@ defmodule Cure.Core.BuiltinOpTest do
     ctx = Context.empty(env)
     t = Normalise.nf(ctx, app2(:int_add, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
     assert {:int_lit, 42} = t
+  end
+
+  # Amendment A1 (spec §1-A): polymorphic structural equality globals. Verbatim
+  # semantics of the retiring `{:prim, :eq/:ne}`: folds IFF both VALUE args whnf
+  # to int/float literals (late-instantiated polymorphic operands); NEUTRAL on
+  # everything else (ADT equality stays kernel-neutral — R8c). Type arg ignored.
+  describe "Amendment A1: struct_eq/struct_ne" do
+    test "struct_eq types as a global Pi" do
+      assert {:ok, {:vpi, _, _}} = Kernel.infer(ctx(), {:global, :struct_eq})
+    end
+
+    test "struct_eq folds on two int literals (polymorphic instantiation)" do
+      t =
+        Normalise.nf(ctx(), app3(:struct_eq, {:int_type}, {:int_lit, 3}, {:int_lit, 3}),
+          delta: :certified
+        )
+
+      assert {:ctor, :True, []} = t
+
+      t2 =
+        Normalise.nf(ctx(), app3(:struct_ne, {:int_type}, {:int_lit, 3}, {:int_lit, 4}),
+          delta: :certified
+        )
+
+      assert {:ctor, :True, []} = t2
+    end
+
+    test "struct_eq stays NEUTRAL on constructor args (ADT equality never computes in-kernel)" do
+      spine = app3(:struct_eq, {:data, :Nat, [], []}, {:ctor, :Z, []}, {:ctor, :Z, []})
+      assert spine == Normalise.nf(ctx(), spine, delta: :certified)
+    end
+
+    test "R1 pin: a user-registered struct_eq with its OWN body is never builtin-folded" do
+      ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
+      body = {:lam, {:int_type}, {:lam, {:int_type}, {:int_lit, 42}}}
+      env = Env.empty() |> Env.add_def(:struct_eq, ty, body) |> Env.certify(:struct_eq)
+      ctx = Context.empty(env)
+      t = Normalise.nf(ctx, app2(:struct_eq, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
+      assert {:int_lit, 42} = t
+    end
   end
 
   test "R4 guard: check_def/validate_certificate accept a builtin-op def without touching its nil body" do

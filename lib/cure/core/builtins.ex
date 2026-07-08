@@ -57,6 +57,15 @@ defmodule Cure.Core.Builtins do
   @int_unops [{:int_neg, :neg}]
   @float_unops [{:float_neg, :neg}]
 
+  # Amendment A1 (spec §1-A): polymorphic STRUCTURAL equality —
+  # struct_eq/struct_ne : Pi(a: Type0). a -> a -> Bool (explicit ω-present type
+  # argument; emit drops it). Transitional representation of the retiring
+  # {:prim, :eq/:ne} on non-int/float/bool operands: the hook folds only two
+  # literal VALUE args (late-instantiated polymorphic operands), stays NEUTRAL
+  # on ADTs (R8c). Distinct marker atoms so hook/emit/lint never conflate them
+  # with the monomorphic :eq/:ne. Op set is therefore 25, not 23.
+  @struct_ops [{:struct_eq, :struct_eq}, {:struct_ne, :struct_ne}]
+
   @doc "The expected schema descriptor for a builtin key. Raises for an unknown key."
   @spec schema(atom()) :: [{atom(), non_neg_integer()}]
   def schema(key), do: Map.fetch!(@schemas, key)
@@ -102,10 +111,11 @@ defmodule Cure.Core.Builtins do
   end
 
   @doc """
-  Seed the 23 monomorphic builtin-op globals (11 int binary + 10 float binary +
-  int_neg/float_neg) as body-less defs carrying a `builtin_op` marker. Public so
-  the Antigen generator envs (SigMenu v1, Generators.Totality) can reuse it. Run
-  AFTER the inductive seeds so the Bool codomain resolves through the registry.
+  Seed the 25 builtin-op globals (11 int binary + 10 float binary +
+  int_neg/float_neg + the A1 polymorphic struct_eq/struct_ne) as body-less defs
+  carrying a `builtin_op` marker. Public so the Antigen generator envs (SigMenu
+  v1, Generators.Totality) can reuse it. Run AFTER the inductive seeds so the
+  Bool codomain resolves through the registry.
   """
   @spec seed_ops(Env.t()) :: Env.t()
   def seed_ops(%Env{} = env) do
@@ -116,6 +126,19 @@ defmodule Cure.Core.Builtins do
     |> seed_binops(@float_binops, {:float_type}, bool_ty)
     |> seed_unops(@int_unops, {:int_type})
     |> seed_unops(@float_unops, {:float_type})
+    |> seed_struct_ops(bool_ty)
+  end
+
+  # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
+  # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
+  defp seed_struct_ops(env, bool_ty) do
+    ty = {:pi, {:type, 0}, {:pi, {:var, 0}, {:pi, {:var, 1}, bool_ty}}}
+
+    Enum.reduce(@struct_ops, env, fn {name, op_key}, acc ->
+      acc
+      |> Env.add_def(name, ty, nil)
+      |> Env.register_builtin_op(name, op_key)
+    end)
   end
 
   defp seed_binops(env, ops, dom, bool_ty) do
