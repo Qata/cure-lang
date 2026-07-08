@@ -3044,44 +3044,56 @@ defmodule Cure.Compiler.Parser do
 
         _ ->
           # v0.21.0: accept an optional leading `|` before the first variant.
-          state =
+          {had_leading_bar, state} =
             case peek(state) do
               %Token{type: :bar} ->
                 s = advance(state)
-                skip_newlines(s)
+                {true, skip_newlines(s)}
 
               _ ->
-                state
+                {false, state}
             end
 
-          # Parse as ADT variants (A(T) | B | C) or type alias
-          {first_variant, state} = parse_type_variant(state)
-          state = skip_newlines(state)
+          # `type Empty = |` declares an explicit CONSTRUCTOR-LESS (uninhabited)
+          # type. After the leading bar, end-of-declaration — a dedent/eof or the
+          # keyword/decorator that starts the next sibling declaration — means there
+          # are no variants at all. The leading bar is required so a bare
+          # `type Foo =` (a genuinely missing RHS) still errors rather than silently
+          # becoming an empty type.
+          if had_leading_bar and no_more_variants?(state) do
+            meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+            meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+            {{:container, meta, []}, state}
+          else
+            # Parse as ADT variants (A(T) | B | C) or type alias
+            {first_variant, state} = parse_type_variant(state)
+            state = skip_newlines(state)
 
-          case peek(state) do
-            %Token{type: :bar} ->
-              # ADT: multiple variants separated by |
-              {rest_variants, state} = parse_more_variants(state)
-              variants = [first_variant | rest_variants]
-              meta = [container_type: :enum, name: name, line: token.line, col: token.col]
-              meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-              {{:container, meta, variants}, state}
-
-            _ ->
-              if variant_ctor?(first_variant) do
-                # Single-constructor ADT: `type Box = MkBox(Nat)` is a one-ctor
-                # inductive family, not a type alias. (A constructor variant carries
-                # `variant: true`; a genuine alias RHS — `type Celsius = Int` — is a
-                # plain type expression and stays a `:type_annotation`.)
+            case peek(state) do
+              %Token{type: :bar} ->
+                # ADT: multiple variants separated by |
+                {rest_variants, state} = parse_more_variants(state)
+                variants = [first_variant | rest_variants]
                 meta = [container_type: :enum, name: name, line: token.line, col: token.col]
                 meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-                {{:container, meta, [first_variant]}, state}
-              else
-                # Type alias: type Name = ExistingType
-                meta = [name: name, line: token.line, col: token.col]
-                meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-                {{:type_annotation, meta, [first_variant]}, state}
-              end
+                {{:container, meta, variants}, state}
+
+              _ ->
+                if variant_ctor?(first_variant) do
+                  # Single-constructor ADT: `type Box = MkBox(Nat)` is a one-ctor
+                  # inductive family, not a type alias. (A constructor variant carries
+                  # `variant: true`; a genuine alias RHS — `type Celsius = Int` — is a
+                  # plain type expression and stays a `:type_annotation`.)
+                  meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+                  meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                  {{:container, meta, [first_variant]}, state}
+                else
+                  # Type alias: type Name = ExistingType
+                  meta = [name: name, line: token.line, col: token.col]
+                  meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                  {{:type_annotation, meta, [first_variant]}, state}
+                end
+            end
           end
       end
 
@@ -3228,6 +3240,20 @@ defmodule Cure.Compiler.Parser do
   # carries `variant: true`) rather than a type-alias RHS.
   defp variant_ctor?({:function_def, meta, _}), do: Keyword.get(meta, :variant, false)
   defp variant_ctor?(_), do: false
+
+  # True when the parser is positioned at end-of-declaration rather than at a
+  # constructor variant: a closing dedent/eof, the keyword/decorator that begins
+  # the next sibling declaration, or a comment (a doc/line comment can never
+  # start a variant — it belongs to the following declaration). Used to recognise
+  # the constructor-less `type Empty = |` form. Omitting the comment tokens here
+  # let a `## doc` on the *next* declaration be mis-parsed as a variant of the
+  # empty type, silently turning `type Empty = |` into `type Empty = <docword>`.
+  defp no_more_variants?(state) do
+    case peek(state) do
+      %Token{type: t} when t in [:dedent, :eof, :keyword, :at, :doc_comment, :line_comment] -> true
+      _ -> false
+    end
+  end
 
   defp parse_type_variant(state) do
     name_token = peek(state)
