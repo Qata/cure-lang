@@ -60,7 +60,7 @@ defmodule Cure.REPL.DocsTest do
       core = Docs.default_uses(:core)
 
       assert "Std.Core" in core
-      assert "Std.Eq" in core
+      assert "Std.Equatable" in core
       assert "Std.Ord" in core
       refute "Std.List" in core
       refute "Std.Http" in core

@@ -20,9 +20,9 @@ defmodule Cure.Types.ProtocolRegistryTest do
     end
 
     test "has_impl? returns true for registered type" do
-      ProtocolRegistry.register_impl("Eq", "eq", "Int", :std_eq)
-      assert ProtocolRegistry.has_impl?("Eq", "Int")
-      refute ProtocolRegistry.has_impl?("Eq", "Float")
+      ProtocolRegistry.register_impl("Equatable", "eq", "Int", :std_eq)
+      assert ProtocolRegistry.has_impl?("Equatable", "Int")
+      refute ProtocolRegistry.has_impl?("Equatable", "Float")
     end
 
     test "list_impls returns all implementations" do
@@ -77,16 +77,16 @@ defmodule Cure.Types.ProtocolRegistryTest do
       assert {:ok, :"Cure.Std.Show"} = ProtocolRegistry.lookup_impl("Show", "show", "String")
     end
 
-    test "Std.Eq registers in registry when compiled" do
+    test "Std.Equatable registers in registry when compiled" do
       ProtocolRegistry.clear()
 
       Cure.Compiler.compile_and_load(
-        File.read!("lib/std/eq.cure"),
-        file: "lib/std/eq.cure"
+        File.read!("lib/std/equatable.cure"),
+        file: "lib/std/equatable.cure"
       )
 
-      assert {:ok, :"Cure.Std.Eq"} = ProtocolRegistry.lookup_impl("Eq", "eq", "Int")
-      assert ProtocolRegistry.has_impl?("Eq", "String")
+      assert {:ok, :"Cure.Std.Equatable"} = ProtocolRegistry.lookup_impl("Equatable", "eq", "Int")
+      assert ProtocolRegistry.has_impl?("Equatable", "String")
     end
   end
 

@@ -1,14 +1,18 @@
-mod Std.Eq
+mod Std.Equatable
   ## Equality protocol for structural comparison of values.
   ##
-  ## The `Eq(T)` protocol mirrors the built-in `==` operator but can
-  ## be implemented for user-defined types so generic algorithms stay
+  ## The `Equatable(T)` protocol mirrors the built-in `==` operator but
+  ## can be implemented for user-defined types so generic algorithms stay
   ## polymorphic. `ne/2` is derived from `eq/2`.
+  ##
+  ## (This is the *comparison* protocol — "can these two values be checked
+  ## for equality?". It is unrelated to `Equivalent`, the identity type
+  ## whose values are *proofs* that two things are equal.)
   ##
   ## ## Examples
   ##
   ## ```cure
-  ## use Std.Eq
+  ## use Std.Equatable
   ##
   ## eq(1, 1)                                # => true
   ## ne("a", "b")                            # => true
@@ -19,33 +23,33 @@ mod Std.Eq
   fn __group__() -> Atom = :core
 
   ## Equality between two `T` values.
-  proto Eq(T)
+  proto Equatable(T)
     ## `true` when `a` equals `b`.
     fn eq(a: T, b: T) -> Bool
 
-  ## `Eq` impl for `Int`: primitive `==`.
-  impl Eq for Int
+  ## `Equatable` impl for `Int`: primitive `==`.
+  impl Equatable for Int
     ## Primitive integer equality.
     fn eq(a: Int, b: Int) -> Bool = a == b
 
-  ## `Eq` impl for `Float`: primitive `==`. IEEE-754 NaNs are not
+  ## `Equatable` impl for `Float`: primitive `==`. IEEE-754 NaNs are not
   ## equal to themselves.
-  impl Eq for Float
+  impl Equatable for Float
     ## Primitive float equality.
     fn eq(a: Float, b: Float) -> Bool = a == b
 
-  ## `Eq` impl for `String`: byte-wise equality.
-  impl Eq for String
+  ## `Equatable` impl for `String`: byte-wise equality.
+  impl Equatable for String
     ## Primitive string equality.
     fn eq(a: String, b: String) -> Bool = a == b
 
-  ## `Eq` impl for `Bool`.
-  impl Eq for Bool
+  ## `Equatable` impl for `Bool`.
+  impl Equatable for Bool
     ## Primitive boolean equality.
     fn eq(a: Bool, b: Bool) -> Bool = a == b
 
-  ## `Eq` impl for `Atom`.
-  impl Eq for Atom
+  ## `Equatable` impl for `Atom`.
+  impl Equatable for Atom
     ## Primitive atom equality.
     fn eq(a: Atom, b: Atom) -> Bool = a == b
 

@@ -26,7 +26,7 @@ The documentation below is organised by topic:
 - [Containers and data](#containers-and-data)  -- `Std.List`, `Std.Map`,
   `Std.Set`, `Std.Bounded`, `Std.Vector`, `Std.Pair`, `Std.Option`,
   `Std.Result`, `Std.Match`, `Std.Access`.
-- [Protocols](#protocols)  -- `Std.Eq`, `Std.Ord`, `Std.Functor`.
+- [Protocols](#protocols)  -- `Std.Equatable`, `Std.Ord`, `Std.Functor`.
 - [Value-shaped modules](#value-shaped-modules)  -- `Std.String`,
   `Std.Math`, `Std.Regex`, `Std.Json`, `Std.Http`, `Std.Time`.
 - [Types and proofs](#types-and-proofs)  -- `Std.Refine`, `Std.Equal`,
@@ -66,7 +66,7 @@ and test fixtures can then ask for a subset of the library via
 Known groups and their current membership (also the source of truth
 for `Cure.Stdlib.Preload.known_groups/0`):
 
-- `:core` -- `Std.Core`, `Std.Bounded`, `Std.Equal`, `Std.Eq`, `Std.Ord`,
+- `:core` -- `Std.Core`, `Std.Bounded`, `Std.Equal`, `Std.Equatable`, `Std.Ord`,
   `Std.Show`, `Std.Functor`, `Std.Refine`, `Std.Proof`. `Std.Proof` is the one
   module that relies on the compile-time default (`:core`); `proof`
   containers only admit legacy proof-shaped returns, so no explicit
@@ -376,9 +376,9 @@ update_in(data, [key(:langs), all(), key(:name)],
 ```
 
 ## Protocols
-### Std.Eq
+### Std.Equatable
 Structural equality with a default `ne/2`.
-- `proto Eq(T)` with `fn eq(a: T, b: T) -> Bool`.
+- `proto Equatable(T)` with `fn eq(a: T, b: T) -> Bool`.
 - Built-in impls for `Int`, `Float`, `String`, `Bool`, `Atom`.
 - `ne(a, b) -> Bool`  -- `!eq(a, b)`.
 ### Std.Ord

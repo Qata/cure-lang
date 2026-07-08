@@ -42,7 +42,7 @@ defmodule Cure.Types.Derive do
     derive_show(type_name, fields)
   end
 
-  def derive(:eq, type_name, fields) do
+  def derive(:equatable, type_name, fields) do
     derive_eq(type_name, fields)
   end
 
@@ -69,7 +69,7 @@ defmodule Cure.Types.Derive do
   """
   @spec can_derive?(atom()) :: boolean()
   def can_derive?(:show), do: true
-  def can_derive?(:eq), do: true
+  def can_derive?(:equatable), do: true
   def can_derive?(:ord), do: true
   def can_derive?(:functor), do: true
   def can_derive?(:monoid), do: true

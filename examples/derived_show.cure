@@ -1,11 +1,11 @@
 mod DerivedShow
-  ## @derive(Show, Eq, Ord) on records (v0.19.0).
+  ## @derive(Show, Equatable, Ord) on records (v0.19.0).
   ##
   ## The decorator synthesises a `show/1`, `eq/2`, and `compare/2`
   ## function per record, exported as regular module functions and
   ## plugged into the protocol registry.
 
-  @derive(Show, Eq, Ord)
+  @derive(Show, Equatable, Ord)
   rec Point
     x: Int
     y: Int

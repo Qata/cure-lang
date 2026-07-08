@@ -28,9 +28,9 @@ defmodule Cure.Types.DeriveTest do
     end
   end
 
-  describe "derive :eq" do
+  describe "derive :equatable" do
     test "generates structural equality" do
-      [{:function_def, meta, [body]}] = Derive.derive(:eq, "Point", [:x, :y])
+      [{:function_def, meta, [body]}] = Derive.derive(:equatable, "Point", [:x, :y])
       assert Keyword.get(meta, :name) == "eq"
       assert Keyword.get(meta, :arity) == 2
       assert {:binary_op, [operator: :==, category: :comparison], _} = body
@@ -49,7 +49,7 @@ defmodule Cure.Types.DeriveTest do
   describe "can_derive?" do
     test "supported typeclasses" do
       assert Derive.can_derive?(:show)
-      assert Derive.can_derive?(:eq)
+      assert Derive.can_derive?(:equatable)
       assert Derive.can_derive?(:ord)
     end
 

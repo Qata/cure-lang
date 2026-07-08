@@ -22,10 +22,10 @@ defmodule Cure.Types.DeriveIntegrationTest do
       assert {:show, 1} in exports
     end
 
-    test "@derive(Eq) gives a runnable eq/2" do
+    test "@derive(Equatable) gives a runnable eq/2" do
       source = """
       mod Derive.EqRun
-        @derive(Eq)
+        @derive(Equatable)
         rec Pair
           a: Int
           b: Int
@@ -53,10 +53,10 @@ defmodule Cure.Types.DeriveIntegrationTest do
       assert mod.compare(b, a) == :gt
     end
 
-    test "@derive(Show, Eq, Ord) synthesises all three" do
+    test "@derive(Show, Equatable, Ord) synthesises all three" do
       source = """
       mod Derive.AllThree
-        @derive(Show, Eq, Ord)
+        @derive(Show, Equatable, Ord)
         rec Vec
           x: Int
           y: Int
