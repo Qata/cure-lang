@@ -45,8 +45,8 @@ defmodule Cure.Lean.ModuleEncoder do
            :ok <- validate_term(body, [:def, defn.name, :body]) do
         encoded = %{
           "name" => Atom.to_string(defn.name),
-          "type" => Term.to_external(type),
-          "body" => Term.to_external(body),
+          "type" => ir_to_external(type),
+          "body" => ir_to_external(body),
           "quantities" => encode_quantities(Map.get(defn, :quantities))
         }
 
@@ -62,6 +62,19 @@ defmodule Cure.Lean.ModuleEncoder do
   end
 
   defp canonicalize_term({:ctor, :reflexive, [value]}), do: {:refl, canonicalize_term(value)}
+
+  # The J/subst transport — Cure Core's spelling of `rewrite` since Phase B/C
+  # retired the primitive `{:rewrite}` node — canonicalizes to the Lean-side
+  # rewrite IR. The single-endpoint motive `M` is recovered from the identity
+  # branch's domain annotation `M@l` (built as `shift(M,1)@shift(l,1)` in the
+  # 1-binder branch frame), strengthened back by one.
+  defp canonicalize_term(
+         {:app, {:case, proof, _arrow_motive, [{:reflexive, 1, {:lam, {:app, m, _l}, {:var, 0}}}]},
+          body}
+       ) do
+    {:rewrite, canonicalize_term(proof), canonicalize_term(Cure.Elab.Subst.shift(m, -1, 0)),
+     canonicalize_term(body)}
+  end
   defp canonicalize_term({:type, _} = term), do: term
   defp canonicalize_term({:var, _} = term), do: term
   defp canonicalize_term({:global, _} = term), do: term
@@ -78,6 +91,29 @@ defmodule Cure.Lean.ModuleEncoder do
 
   defp canonicalize_term(list) when is_list(list), do: Enum.map(list, &canonicalize_term/1)
   defp canonicalize_term(other), do: other
+
+  # Wire encoding for the Lean bridge. The bridge's canonical IR keeps
+  # dedicated eq/refl/rewrite nodes (Lean's own Eq/rfl/Eq.mpr are primitive on
+  # that side); Cure's `Term.to_external` dropped those clauses when the Core
+  # forms retired (Phase C), so the bridge carries its own encoding for its IR
+  # and delegates every ordinary Core node.
+  defp ir_to_external({:eq, ty, a, b}),
+    do: %{"node" => "eq", "type" => ir_to_external(ty), "lhs" => ir_to_external(a), "rhs" => ir_to_external(b)}
+
+  defp ir_to_external({:refl, a}), do: %{"node" => "refl", "value" => ir_to_external(a)}
+
+  defp ir_to_external({:rewrite, p, m, b}),
+    do: %{
+      "node" => "rewrite",
+      "proof" => ir_to_external(p),
+      "motive" => ir_to_external(m),
+      "body" => ir_to_external(b)
+    }
+
+  defp ir_to_external({:pi, d, c}), do: %{"node" => "pi", "dom" => ir_to_external(d), "cod" => ir_to_external(c)}
+  defp ir_to_external({:lam, d, b}), do: %{"node" => "lam", "dom" => ir_to_external(d), "body" => ir_to_external(b)}
+  defp ir_to_external({:app, f, a}), do: %{"node" => "app", "fun" => ir_to_external(f), "arg" => ir_to_external(a)}
+  defp ir_to_external(term), do: Term.to_external(term)
 
   defp validate_term({:type, level}, _path) when is_integer(level) and level >= 0, do: :ok
   defp validate_term({:var, index}, _path) when is_integer(index) and index >= 0, do: :ok

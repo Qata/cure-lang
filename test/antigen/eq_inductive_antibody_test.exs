@@ -209,4 +209,87 @@ defmodule Antigen.EqInductiveAntibodyTest do
              "job #{i} (inductive Eq refl/rewrite) did not return within budget"
     end
   end
+
+  # ---- GATE C EXTENSIONS (Phase C complete: primitives retired) --------------
+  #
+  # Three obligations from spec Gate C. (i) and (ii) are regression ANTIBODIES:
+  # they hold today and exist to go red under a future kernel mutation (they
+  # cannot be made red-first without breaking the kernel — Antigen's standing
+  # antibody pattern). (iii) re-asserts the C1 red tests' post-removal truth as
+  # a permanent antibody: the retired forms are unreachable grammar.
+
+  # (i) Refl-matching discharges/refines EXACTLY as the index unifier dictates,
+  # and equates NO distinct normal forms. The reflexive branch's fate on a
+  # scrutinee Equivalent(ty, x, y) is decided by unifying its result indices
+  # [w,w] against [x,y]: distinct rigid endpoints ⇒ :impossible (discharged,
+  # body skipped — matching a false equation proves nothing); convertible
+  # endpoints ⇒ the witness is pinned. And matching NEVER back-feeds x ≡ y into
+  # definitional equality: conversion on distinct normal forms still rejects
+  # after the whole retirement.
+  test "GATE C (i): reflexive-branch verdicts follow the index unifier; defeq does not collapse" do
+    sig = base_sig()
+    ctx = Context.empty(sig)
+
+    distinct_pairs = [
+      {@nat, z(), s(z())},
+      {@nat, s(z()), nat_lit(2)},
+      {@nat, nat_lit(2), nat_lit(3)},
+      {@bool, tru(), fls()}
+    ]
+
+    for {ty, x, y} <- distinct_pairs do
+      x_val = Eval.eval(x, Context.env(ctx))
+      y_val = Eval.eval(y, Context.env(ctx))
+
+      # discharge exactly per the unifier: distinct rigid indices ⇒ :impossible
+      assert :impossible ==
+               Kernel.branch_unify(ctx, :Equivalent, :reflexive, [x_val, y_val]),
+             "reflexive branch on Equivalent(#{inspect(ty)}, #{inspect(x)}, #{inspect(y)}) " <>
+               "must be discharged :impossible (distinct rigid endpoints)"
+
+      # defeq non-collapse: conversion still distinguishes the normal forms
+      refute match?({:ok, true}, Conv.conv_within?(x, y, [], 0, sig, @fuel)),
+             "DEFEQ COLLAPSE: #{inspect(x)} ≡ #{inspect(y)} after retirement — " <>
+               "refl-matching machinery must never equate distinct normal forms"
+    end
+
+    # refine exactly per the unifier: convertible endpoints pin the witness
+    z_val = Eval.eval(z(), Context.env(ctx))
+
+    assert Kernel.branch_unify(ctx, :Equivalent, :reflexive, [z_val, z_val]) != :impossible,
+           "a genuinely reflexive equation's branch must stay live"
+  end
+
+  # (ii) Termination unaffected by the retirement: transport over a
+  # hypothetical (uninhabited) distinct-endpoint equation still returns within
+  # budget — the discharged branch must not send inference into a loop.
+  test "GATE C (ii): transport over a distinct-endpoint hypothesis halts (bounded)" do
+    sig = base_sig()
+    ctx_h = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
+
+    job = fn ->
+      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()})
+    end
+
+    task = Task.async(job)
+
+    assert Task.yield(task, 5_000) || Task.shutdown(task),
+           "transport over an uninhabited equation did not return within budget"
+  end
+
+  # (iii) The retired nodes are unreachable grammar (permanent antibody form of
+  # the C1 retirement pins: rewrite_retirement_test / eq_refl_retirement_test).
+  test "GATE C (iii): the retired primitive nodes are unreachable" do
+    sig = base_sig()
+    ctx = Context.empty(sig)
+
+    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, {:eq, @nat, z(), z()}) end
+    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, {:refl, z()}) end
+
+    ctx_h = Context.extend(ctx, eq_ty(sig, @nat, z(), z()))
+
+    assert_raise FunctionClauseError, fn ->
+      Kernel.infer(ctx_h, {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()})
+    end
+  end
 end

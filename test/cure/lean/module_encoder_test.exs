@@ -4,24 +4,44 @@ defmodule Cure.Lean.ModuleEncoderTest do
   alias Cure.Core.Env
   alias Cure.Lean.ModuleEncoder
 
+  # single-endpoint motive M for the transport fixture: λx:Type1. Eq(Type1,x,x)
+  defp transport_motive,
+    do: {:lam, {:type, 1}, {:data, :Equivalent, [{:type, 1}], [{:var, 0}, {:var, 0}]}}
+
   test "encodes only the admitted Lean-core fragment" do
     env =
       Env.empty()
       |> Env.add_def(:id_type, {:pi, {:type, 0}, {:type, 0}}, {:lam, {:type, 0}, {:var, 0}}, [
         :present
       ])
-      |> Env.add_def(:type_refl, {:eq, {:type, 0}, {:type, 0}, {:type, 0}}, {:refl, {:type, 0}}, [])
       |> Env.add_def(
-        :local_refl,
-        {:pi, {:type, 0}, {:eq, {:type, 0}, {:var, 0}, {:var, 0}}},
-        {:lam, {:type, 0}, {:refl, {:var, 0}}},
+        :type_refl,
+        {:data, :Equivalent, [{:type, 1}], [{:type, 0}, {:type, 0}]},
+        {:ctor, :reflexive, [{:type, 0}]},
         []
       )
       |> Env.add_def(
+        :local_refl,
+        {:pi, {:type, 0}, {:data, :Equivalent, [{:type, 0}], [{:var, 0}, {:var, 0}]}},
+        {:lam, {:type, 0}, {:ctor, :reflexive, [{:var, 0}]}},
+        []
+      )
+      # The transport rides Cure Core's J/subst :case spelling (the primitive
+      # {:rewrite} node retired, Phase C); the encoder canonicalizes it back to
+      # the Lean-side rewrite IR.
+      |> Env.add_def(
         :rewrite_id,
         {:data, :Equivalent, [{:type, 1}], [{:type, 0}, {:type, 0}]},
-        {:rewrite, {:ctor, :reflexive, [{:type, 0}]}, {:lam, {:type, 1}, {:data, :Equivalent, [{:type, 1}], [{:var, 0}, {:var, 0}]}},
-         {:ctor, :reflexive, [{:type, 0}]}},
+        {:app,
+         {:case, {:ctor, :reflexive, [{:type, 0}]},
+          {:lam, {:type, 1},
+           {:lam, {:type, 1},
+            {:lam, {:data, :Equivalent, [{:type, 1}], [{:var, 1}, {:var, 0}]},
+             {:pi, {:app, transport_motive(), {:var, 2}}, {:app, transport_motive(), {:var, 2}}}}}},
+          [
+            {:reflexive, 1,
+             {:lam, {:app, Cure.Elab.Subst.shift(transport_motive(), 1, 0), {:type, 0}}, {:var, 0}}}
+          ]}, {:ctor, :reflexive, [{:type, 0}]}},
         []
       )
 
@@ -66,7 +86,7 @@ defmodule Cure.Lean.ModuleEncoderTest do
   end
 
   test "rejects unbound local values even though local-context translation is supported" do
-    env = Env.add_def(Env.empty(), :bad_refl, {:type, 0}, {:refl, {:var, 0}}, [])
+    env = Env.add_def(Env.empty(), :bad_refl, {:type, 0}, {:ctor, :reflexive, [{:var, 0}]}, [])
 
     assert {:ok, payload} = ModuleEncoder.from_env(env)
 
