@@ -18,6 +18,45 @@ defmodule Cure.Core.Builtins do
     sigma: [{:mk_pair, 2}]
   }
 
+  # Builtin arithmetic/comparison op globals (K2 wave, spec 2026-07-09). Each is
+  # a BODY-LESS def carrying a `builtin_op` marker; the certified-δ engine folds
+  # a saturated literal spine via the audited `Eval.fold` table (Lean reduce_nat
+  # / Idris Builtin-op analog). Monomorphic per-type (Lean-aligned): the
+  # elaborator type-directs `+`/`==`/… to the int_* or float_* twin. `{name,
+  # op_key}`. Comparisons (@cmp_ops) have a Bool codomain; arithmetic/neg return
+  # the operand type. int_rem is Int-only (no float_rem — matches infer_prim).
+  @cmp_ops [:lt, :le, :gt, :ge, :eq, :ne]
+
+  @int_binops [
+    {:int_add, :add},
+    {:int_sub, :sub},
+    {:int_mul, :mul},
+    {:int_div, :div},
+    {:int_rem, :rem},
+    {:int_lt, :lt},
+    {:int_le, :le},
+    {:int_gt, :gt},
+    {:int_ge, :ge},
+    {:int_eq, :eq},
+    {:int_ne, :ne}
+  ]
+
+  @float_binops [
+    {:float_add, :add},
+    {:float_sub, :sub},
+    {:float_mul, :mul},
+    {:float_div, :div},
+    {:float_lt, :lt},
+    {:float_le, :le},
+    {:float_gt, :gt},
+    {:float_ge, :ge},
+    {:float_eq, :eq},
+    {:float_ne, :ne}
+  ]
+
+  @int_unops [{:int_neg, :neg}]
+  @float_unops [{:float_neg, :neg}]
+
   @doc "The expected schema descriptor for a builtin key. Raises for an unknown key."
   @spec schema(atom()) :: [{atom(), non_neg_integer()}]
   def schema(key), do: Map.fetch!(@schemas, key)
@@ -59,6 +98,45 @@ defmodule Cure.Core.Builtins do
     |> maybe_seed(:nat, nat_family(), nat_ctors(), exclude)
     |> maybe_seed(:eq, eq_family(), eq_ctors(), exclude)
     |> maybe_seed(:sigma, sigma_family(), sigma_ctors(), exclude)
+    |> seed_ops()
+  end
+
+  @doc """
+  Seed the 23 monomorphic builtin-op globals (11 int binary + 10 float binary +
+  int_neg/float_neg) as body-less defs carrying a `builtin_op` marker. Public so
+  the Antigen generator envs (SigMenu v1, Generators.Totality) can reuse it. Run
+  AFTER the inductive seeds so the Bool codomain resolves through the registry.
+  """
+  @spec seed_ops(Env.t()) :: Env.t()
+  def seed_ops(%Env{} = env) do
+    bool_ty = {:data, Inductive.builtin(env, :bool), [], []}
+
+    env
+    |> seed_binops(@int_binops, {:int_type}, bool_ty)
+    |> seed_binops(@float_binops, {:float_type}, bool_ty)
+    |> seed_unops(@int_unops, {:int_type})
+    |> seed_unops(@float_unops, {:float_type})
+  end
+
+  defp seed_binops(env, ops, dom, bool_ty) do
+    Enum.reduce(ops, env, fn {name, op_key}, acc ->
+      cod = if op_key in @cmp_ops, do: bool_ty, else: dom
+      ty = {:pi, dom, {:pi, dom, cod}}
+
+      acc
+      |> Env.add_def(name, ty, nil)
+      |> Env.register_builtin_op(name, op_key)
+    end)
+  end
+
+  defp seed_unops(env, ops, dom) do
+    Enum.reduce(ops, env, fn {name, op_key}, acc ->
+      ty = {:pi, dom, dom}
+
+      acc
+      |> Env.add_def(name, ty, nil)
+      |> Env.register_builtin_op(name, op_key)
+    end)
   end
 
   # A builtin whose bare family name is locally declared by the compiled module

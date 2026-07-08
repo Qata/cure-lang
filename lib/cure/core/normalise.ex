@@ -215,12 +215,22 @@ defmodule Cure.Core.Normalise do
         # conversion δ-loop on open terms. Freezing is always sound: it only
         # makes normal forms MORE distinct, never collapses two of them, and
         # `conv?` still δ-unfolds on demand when it must compare. (A6)
-        with true <- Env.certified?(sig, name),
-             %{body: body} <- Env.get_def(sig, name),
-             true <- Cure.Core.Term.closed?(body) do
-          reduce_unfolded(reapply(args, spend_fuel(Eval.eval(body, []))), sig, opts)
-        else
-          _ -> :stuck
+        # K2 (spec 2026-07-09 §1.2): dispatch FIRST on the builtin-op marker so a
+        # body-less op def never reaches the generic `Eval.eval(body, [])` path
+        # (which would crash on the nil body). The certified-body path below is
+        # unchanged for ordinary defs.
+        case Env.get_def(sig, name) do
+          %{builtin_op: bop} when not is_nil(bop) ->
+            builtin_op_fold(bop, args, sig, opts)
+
+          _ ->
+            with true <- Env.certified?(sig, name),
+                 %{body: body} <- Env.get_def(sig, name),
+                 true <- Cure.Core.Term.closed?(body) do
+              reduce_unfolded(reapply(args, spend_fuel(Eval.eval(body, []))), sig, opts)
+            else
+              _ -> :stuck
+            end
         end
 
       # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
@@ -281,6 +291,25 @@ defmodule Cure.Core.Normalise do
   end
 
   defp reduce_unfolded(value, _sig, _opts), do: {:ok, value}
+
+  # Literal acceleration for builtin-op globals (spec 2026-07-09 §1.2; Lean
+  # reduce_nat / Idris Builtin-op analog). Fold ONLY a saturated spine whose
+  # arguments all whnf to literals — via the SAME audited table Eval uses
+  # (§G.1: div/rem by literal zero returns :stuck and the spine stays neutral).
+  # Anything else (open args, wrong arity/overapplication) stays stuck: never
+  # unsound, at worst a missed unfold. `args` are already VALUES (spine/2);
+  # whnf_value forces any residual certified-global redex among them.
+  defp builtin_op_fold(op, args, sig, opts) do
+    arity = if op == :neg, do: 1, else: 2
+
+    with true <- length(args) == arity,
+         vals = Enum.map(args, &whnf_value(&1, sig, opts)),
+         true <- Enum.all?(vals, &(match?({:vint, _}, &1) or match?({:vfloat, _}, &1))) do
+      Eval.fold(op, vals)
+    else
+      _ -> :stuck
+    end
+  end
 
   defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
 

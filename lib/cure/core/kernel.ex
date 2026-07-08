@@ -311,6 +311,15 @@ defmodule Cure.Core.Kernel do
       nil ->
         {:error, :unknown_global}
 
+      # Builtin-op def (K2, R4): body-less by design. Check its DECLARED TYPE
+      # only — the nil body must never reach `check`/`infer` (no nil clause →
+      # crash). Total by fiat (Lean/Idris treat primitive ops so). Reachable via
+      # TotalityClosure.certify_type_level once builtin-op spines occur in TYPE
+      # positions (dependent-index arithmetic). Ordering: BEFORE the generic
+      # %{type:, body:} clause, which these defs would also match.
+      %{builtin_op: op, type: type_term} when not is_nil(op) ->
+        with {:ok, _level} <- infer_sort(Context.empty(env), type_term), do: :ok
+
       %{type: type_term, body: body_term} ->
         ctx = Context.empty(env)
 
@@ -359,12 +368,20 @@ defmodule Cure.Core.Kernel do
   """
   @spec validate_certificate(Env.t(), atom()) :: {:ok, Env.t()} | {:error, term()}
   def validate_certificate(env, name) do
-    with :ok <- check_def(env, name) do
-      %{body: body} = Env.get_def(env, name)
+    case Env.get_def(env, name) do
+      # Builtin-op def (K2, R4): total by fiat, no body to submit to the
+      # termination checker. Type-check the declared type, then certify.
+      %{builtin_op: op} when not is_nil(op) ->
+        with :ok <- check_def(env, name), do: {:ok, Env.certify(env, name)}
 
-      if Certificate.terminating?(name, body, env),
-        do: {:ok, Env.certify(env, name)},
-        else: {:error, :not_total}
+      _ ->
+        with :ok <- check_def(env, name) do
+          %{body: body} = Env.get_def(env, name)
+
+          if Certificate.terminating?(name, body, env),
+            do: {:ok, Env.certify(env, name)},
+            else: {:error, :not_total}
+        end
     end
   end
 

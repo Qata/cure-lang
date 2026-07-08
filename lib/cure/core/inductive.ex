@@ -84,6 +84,33 @@ defmodule Cure.Core.Env do
   @doc "Is the global `name` certified total (δ-reducible)?"
   @spec certified?(t(), atom()) :: boolean()
   def certified?(%__MODULE__{certified: c}, name), do: MapSet.member?(c, name)
+
+  @doc """
+  Mark an already-registered global def as a builtin arithmetic/comparison op,
+  keyed by the stable op atom (`:add`, `:lt`, …). The marker lives ON the def
+  record; every consumer (the Normalise compute hook, emit inline, GuardLint's
+  Z3 translation) resolves through it, never through a bare global name — so a
+  user def named `int_add` (whose `add_def` overwrites the whole record and
+  carries NO marker) is never builtin-folded/inlined/translated (K2, R1).
+  Only `Builtins.seed_ops` produces this marker.
+  """
+  @spec register_builtin_op(t(), atom(), atom()) :: t()
+  def register_builtin_op(%__MODULE__{defs: defs} = env, name, op_key),
+    do: %{env | defs: Map.update!(defs, name, &Map.put(&1, :builtin_op, op_key))}
+
+  @doc """
+  The builtin-op key for `name` (`:add`, `:lt`, …), or nil. Tolerates a nil
+  signature (GuardLint may hold `Context.signature/1` = nil) — returns nil.
+  """
+  @spec builtin_op(t() | nil, atom()) :: atom() | nil
+  def builtin_op(nil, _name), do: nil
+
+  def builtin_op(%__MODULE__{} = env, name) do
+    case get_def(env, name) do
+      %{builtin_op: op} -> op
+      _ -> nil
+    end
+  end
 end
 
 defmodule Cure.Core.Inductive do

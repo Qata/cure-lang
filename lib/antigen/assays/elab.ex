@@ -252,8 +252,8 @@ defmodule Antigen.Assays.Elab do
     env.defs
     |> Enum.sort_by(fn {name, _} -> name end)
     |> Enum.find_value(:ok, fn {name, %{type: ty, body: body}} ->
-      if Erase.has_hole?(body) do
-        nil                                                # skip incomplete def
+      if is_nil(body) or Erase.has_hole?(body) do
+        nil                                                # skip body-less (builtin-op, K2) / incomplete def
       else
         case Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> check_one(k, ctx, name, ty, body) end) do
           :ok -> nil

@@ -97,38 +97,43 @@ defmodule Cure.Core.Eval do
     end
   end
 
-  defp fold(:add, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a + b}}
-  defp fold(:sub, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a - b}}
-  defp fold(:mul, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a * b}}
-  defp fold(:div, [{:vint, _}, {:vint, 0}]), do: :stuck
-  defp fold(:div, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, div(a, b)}}
-  defp fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
-  defp fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
+  # The audited δ fold table. Public (`@doc false`) so `Cure.Core.Normalise`'s
+  # builtin-op compute hook folds through the SAME table (K2, spec 2026-07-09).
+  # Returns `{:ok, value} | :stuck`; §G.1 rule 1 = div/rem by literal zero stays
+  # `:stuck` (the spine stays neutral, never crashes).
+  @doc false
+  def fold(:add, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a + b}}
+  def fold(:sub, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a - b}}
+  def fold(:mul, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a * b}}
+  def fold(:div, [{:vint, _}, {:vint, 0}]), do: :stuck
+  def fold(:div, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, div(a, b)}}
+  def fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
+  def fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
 
-  defp fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
-  defp fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
-  defp fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
-  defp fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
+  def fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
+  def fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
+  def fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
+  def fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
 
   # Bool-producing folds now yield the `True`/`False` **constructor values** of the
   # canonical Bool inductive (the True/False ctor values). `:True`/`:False` are
   # hardcoded here (fold has no `sig` on its path — a deliberate plumbing decision;
   # the Task-10 antibody enforces agreement with Builtins.@schemas / seed/1).
-  defp fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a == b)}
-  defp fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a == b)}
-  defp fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a != b)}
-  defp fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a != b)}
-  defp fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a < b)}
-  defp fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a < b)}
-  defp fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a <= b)}
-  defp fold(:le, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a <= b)}
-  defp fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a > b)}
-  defp fold(:gt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a > b)}
-  defp fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a >= b)}
-  defp fold(:ge, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a >= b)}
+  def fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a == b)}
+  def fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a == b)}
+  def fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a != b)}
+  def fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a != b)}
+  def fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a < b)}
+  def fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a < b)}
+  def fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a <= b)}
+  def fold(:le, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a <= b)}
+  def fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a > b)}
+  def fold(:gt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a > b)}
+  def fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a >= b)}
+  def fold(:ge, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a >= b)}
 
-  defp fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
-  defp fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
+  def fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
+  def fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
 
   # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality
   # (`eq`/`ne` on Bool) are NO LONGER primitives: they are ordinary Cure
@@ -138,7 +143,7 @@ defmodule Cure.Core.Eval do
   # contain — falls through to the `:stuck` catch-all below and is rejected by
   # `Kernel.infer` (`{:unknown_prim, _}`). The numeric `:eq`/`:ne` clauses above
   # (on Int/Float) are untouched.
-  defp fold(_op, _args), do: :stuck
+  def fold(_op, _args), do: :stuck
 
   defp vbool(true), do: {:vctor, :True, []}
   defp vbool(false), do: {:vctor, :False, []}
