@@ -140,13 +140,30 @@ defmodule Cure.Elab.Relevance do
   # SAME class (its `collapsible_ctor?/3` must stay in lockstep with
   # `collapsible_case?/2` here), so the exempted scrutinee never survives into
   # the runtime term.
+  #
+  # Each branch additionally folds its constructor's own erased-field positions
+  # into the tracked set — a named erased pattern binder (spec 2026-07-08 §2.3)
+  # is policed exactly like an erased top-level parameter.
   defp walk({:case, scrut, _motive, branches}, depth, _site, st) do
-    if collapsible_case?(st.env, branches) do
-      each(branches, fn {_cname, arity, body} -> walk(body, depth + arity, :returned, st) end)
-    else
-      with :ok <- walk(scrut, depth, :scrutinee, st) do
-        each(branches, fn {_cname, arity, body} -> walk(body, depth + arity, :returned, st) end)
-      end
+    scrut_check =
+      if collapsible_case?(st.env, branches),
+        do: :ok,
+        else: walk(scrut, depth, :scrutinee, st)
+
+    with :ok <- scrut_check do
+      each(branches, fn {cname, arity, body} ->
+        ctor_qs =
+          Inductive.ctor_quantities(st.env, cname) || List.duplicate(:present, arity)
+
+        branch_erased =
+          ctor_qs
+          |> Enum.with_index()
+          |> Enum.filter(fn {q, _p} -> q == :erased end)
+          |> Enum.map(fn {_q, p} -> depth + p end)
+
+        st2 = %{st | erased: Enum.into(branch_erased, st.erased)}
+        walk(body, depth + arity, :returned, st2)
+      end)
     end
   end
 
