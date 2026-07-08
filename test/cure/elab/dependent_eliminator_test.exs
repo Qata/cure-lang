@@ -1,13 +1,14 @@
 defmodule Cure.Elab.DependentEliminatorTest do
   @moduledoc """
   Spec 2026-07-08-neutral-app-sort (Sigma D1): motives applying a type-family
-  head — `b(first(p))` — sort via reify+infer (kernel.ex napp clause); adversarial
-  motives reject cleanly (defensive {:pair,…} infer clause). Surface probes drive
-  Program.elaborate; the §2.4 crash probe hand-builds Core against Kernel.infer.
+  head — `b(first(p))` — sort via reify+infer (kernel.ex napp clause); an
+  adversarial motive applying a non-function head rejects cleanly (:bad_motive).
+  Surface probes drive Program.elaborate. (The former §2.4 bare-`{:pair,…}` crash
+  probe retired with primitive Sigma in D2 — see the note in the describe block.)
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Core.{Context, Eval, Kernel}
+  alias Cure.Core.{Context, Kernel}
   alias Cure.Elab.Program
 
   @probe """
@@ -137,14 +138,11 @@ defmodule Cure.Elab.DependentEliminatorTest do
       assert {:error, :bad_motive} = Kernel.infer(ctx, bad_motive_case(motive))
     end
 
-    test "motive applying a function-typed head to a pair literal rejects :bad_motive (no FunctionClauseError)" do
-      env = nat_env()
-      nat = {:data, :Nat, [], []}
-      # ctx binder: b : (Nat) -> Type (same construction as the Task 2 accept
-      # pin). Under the motive's own lam binder, b reads as {:var, 1}.
-      ctx = Context.extend(Context.empty(env), Eval.eval({:pi, nat, {:type, 0}}, []))
-      motive = {:lam, nat, {:app, {:var, 1}, {:pair, {:ctor, :Z, []}, {:ctor, :Z, []}}}}
-      assert {:error, :bad_motive} = Kernel.infer(ctx, bad_motive_case(motive))
-    end
+    # NOTE (D2): the former "function-typed head applied to a bare `{:pair,…}`"
+    # probe pinned the defensive `infer(_ctx, {:pair,_,_})` clause
+    # (kernel.ex:125-128). Primitive Sigma is retired: `{:pair,…}` is no longer a
+    # Core node, so the adversarial term is inexpressible — a strictly stronger
+    # guarantee than the clean `:bad_motive` rejection that probe asserted. The
+    # probe was removed together with the clause it pinned (spec §1.3).
   end
 end

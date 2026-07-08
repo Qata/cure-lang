@@ -157,6 +157,5 @@ defmodule Antigen.Assays.Unifier do
   defp meta_free?({:app, f, x}), do: meta_free?(f) and meta_free?(x)
   defp meta_free?({:pi, d, c}), do: meta_free?(d) and meta_free?(c)
   defp meta_free?({:lam, d, b}), do: meta_free?(d) and meta_free?(b)
-  defp meta_free?({:sigma, d, c}), do: meta_free?(d) and meta_free?(c)
   defp meta_free?(_), do: true
 end

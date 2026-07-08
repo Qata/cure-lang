@@ -79,11 +79,7 @@ defmodule Cure.Elab.TotalityClosure do
   defp collect({:global, n}), do: [n]
   defp collect({:pi, d, c}), do: collect(d) ++ collect(c)
   defp collect({:lam, d, b}), do: collect(d) ++ collect(b)
-  defp collect({:sigma, a, b}), do: collect(a) ++ collect(b)
   defp collect({:app, f, a}), do: collect(f) ++ collect(a)
-  defp collect({:pair, a, b}), do: collect(a) ++ collect(b)
-  defp collect({:fst, p}), do: collect(p)
-  defp collect({:snd, p}), do: collect(p)
 
   defp collect({:data, _n, ps, is}),
     do: Enum.flat_map(ps, &collect/1) ++ Enum.flat_map(is, &collect/1)

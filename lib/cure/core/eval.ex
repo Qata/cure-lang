@@ -30,11 +30,7 @@ defmodule Cure.Core.Eval do
 
   def eval({:pi, dom, cod}, env), do: {:vpi, eval(dom, env), {:closure, env, cod}}
   def eval({:lam, dom, body}, env), do: {:vlam, eval(dom, env), {:closure, env, body}}
-  def eval({:sigma, a, b}, env), do: {:vsigma, eval(a, env), {:closure, env, b}}
   def eval({:app, f, a}, env), do: apply(eval(f, env), eval(a, env))
-  def eval({:pair, a, b}, env), do: {:vpair, eval(a, env), eval(b, env)}
-  def eval({:fst, p}, env), do: vfst(eval(p, env))
-  def eval({:snd, p}, env), do: vsnd(eval(p, env))
 
   def eval({:data, name, params, indices}, env),
     do: {:vdata, name, Enum.map(params ++ indices, &eval(&1, env))}
@@ -146,10 +142,4 @@ defmodule Cure.Core.Eval do
 
   defp vbool(true), do: {:vctor, :True, []}
   defp vbool(false), do: {:vctor, :False, []}
-
-  defp vfst({:vpair, a, _b}), do: a
-  defp vfst({:vneutral, n}), do: {:vneutral, {:nfst, n}}
-
-  defp vsnd({:vpair, _a, b}), do: b
-  defp vsnd({:vneutral, n}), do: {:vneutral, {:nsnd, n}}
 end

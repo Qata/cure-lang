@@ -46,7 +46,11 @@ defmodule Antigen.ChallengeTest do
       kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
       payload: %{sig: :v1, ctx: [{:data, :Nat, [], []}],
                  type: {:data, :Nat, [], []},
-                 term: {:fst, {:ctor, :Z, []}}, fault: fault}
+                 # "fst on a Nat" spelled inductively (D2): projection case over
+                 # mk_pair scrutinising a Nat — same :proj_non_pair fault.
+                 term: {:case, {:ctor, :Z, []},
+                        {:lam, {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
+                        [{:mk_pair, 2, {:var, 1}}]}, fault: fault}
     )
 
     {scaffold, pieces} = Challenge.to_pieces(c)

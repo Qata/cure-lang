@@ -308,9 +308,6 @@ defmodule Cure.Core.Inductive do
   defp strictly_positive?(env, fname, {:pi, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
-  defp strictly_positive?(env, fname, {:sigma, a, b}, seen),
-    do: strictly_positive?(env, fname, a, seen) and strictly_positive?(env, fname, b, seen)
-
   defp strictly_positive?(_env, fname, {:data, fname, _ps, _is}, _seen), do: true
 
   defp strictly_positive?(env, fname, {:data, other, ps, is}, seen) do
@@ -371,11 +368,7 @@ defmodule Cure.Core.Inductive do
 
   defp occurs?(fname, {:pi, d, c}), do: occurs?(fname, d) or occurs?(fname, c)
   defp occurs?(fname, {:lam, d, b}), do: occurs?(fname, d) or occurs?(fname, b)
-  defp occurs?(fname, {:sigma, a, b}), do: occurs?(fname, a) or occurs?(fname, b)
-  defp occurs?(fname, {:pair, a, b}), do: occurs?(fname, a) or occurs?(fname, b)
   defp occurs?(fname, {:app, f, a}), do: occurs?(fname, f) or occurs?(fname, a)
-  defp occurs?(fname, {:fst, p}), do: occurs?(fname, p)
-  defp occurs?(fname, {:snd, p}), do: occurs?(fname, p)
   defp occurs?(fname, {:ctor, _n, args}), do: Enum.any?(args, &occurs?(fname, &1))
 
   defp occurs?(fname, {:case, s, m, brs}),

@@ -125,7 +125,6 @@ defmodule Cure.Elab.Unify do
   defp whnf_pre(t, _ctx, _sig, depth) when depth != 0, do: t
   defp whnf_pre({:pi, _, _} = t, _ctx, _sig, _depth), do: t
   defp whnf_pre({:lam, _, _} = t, _ctx, _sig, _depth), do: t
-  defp whnf_pre({:sigma, _, _} = t, _ctx, _sig, _depth), do: t
 
   defp whnf_pre(t, ctx, sig, depth) do
     r = whnf_meta_aware(t, ctx, sig, depth)
@@ -250,11 +249,7 @@ defmodule Cure.Elab.Unify do
 
   defp mabs({:pi, d, c}, dep, vs, n, l), do: {:pi, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
   defp mabs({:lam, d, b}, dep, vs, n, l), do: {:lam, mabs(d, dep, vs, n, l), mabs(b, dep, vs, n, l + 1)}
-  defp mabs({:sigma, d, c}, dep, vs, n, l), do: {:sigma, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
   defp mabs({:app, f, x}, dep, vs, n, l), do: {:app, mabs(f, dep, vs, n, l), mabs(x, dep, vs, n, l)}
-  defp mabs({:pair, a, b}, dep, vs, n, l), do: {:pair, mabs(a, dep, vs, n, l), mabs(b, dep, vs, n, l)}
-  defp mabs({:fst, p}, dep, vs, n, l), do: {:fst, mabs(p, dep, vs, n, l)}
-  defp mabs({:snd, p}, dep, vs, n, l), do: {:snd, mabs(p, dep, vs, n, l)}
 
   defp mabs({:data, nm, ps, is}, dep, vs, n, l),
     do: {:data, nm, Enum.map(ps, &mabs(&1, dep, vs, n, l)), Enum.map(is, &mabs(&1, dep, vs, n, l))}
@@ -298,11 +293,6 @@ defmodule Cure.Elab.Unify do
          do: unify_d(b1, b2, ctx, sig, depth + 1)
   end
 
-  defp do_unify_struct({:sigma, d1, c1}, {:sigma, d2, c2}, ctx, sig, depth) do
-    with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
-         do: unify_d(c1, c2, ctx, sig, depth + 1)
-  end
-
   # Structurally identical (literals, atoms, etc.).
   defp do_unify_struct(t, t, ctx, _sig, _depth), do: {:ok, ctx}
 
@@ -333,7 +323,7 @@ defmodule Cure.Elab.Unify do
   end
 
   # Structurally complete: walk EVERY subterm-bearing shape so a metavariable
-  # buried anywhere (`{:eq}`/`{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}`/`{:refl}`/
+  # buried anywhere (`{:eq}`/`{:refl}`/
   # `{:prim}`/`{:case}`/…) is detected. A missed shape here would let a
   # `{:meta, _}`-bearing term pass the `delta_convertible?` guard and reach the
   # TRUSTED `Eval.eval`, which has no `{:meta, _}` clause — an elaborator crash of
@@ -390,13 +380,7 @@ defmodule Cure.Elab.Unify do
   defp escapes?({:pi, d, c}, depth, local), do: escapes?(d, depth, local) or escapes?(c, depth, local + 1)
   defp escapes?({:lam, d, b}, depth, local), do: escapes?(d, depth, local) or escapes?(b, depth, local + 1)
 
-  defp escapes?({:sigma, d, c}, depth, local),
-    do: escapes?(d, depth, local) or escapes?(c, depth, local + 1)
-
   defp escapes?({:app, f, x}, depth, local), do: escapes?(f, depth, local) or escapes?(x, depth, local)
-  defp escapes?({:pair, a, b}, depth, local), do: escapes?(a, depth, local) or escapes?(b, depth, local)
-  defp escapes?({:fst, p}, depth, local), do: escapes?(p, depth, local)
-  defp escapes?({:snd, p}, depth, local), do: escapes?(p, depth, local)
 
   defp escapes?({:prim, _op, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
 

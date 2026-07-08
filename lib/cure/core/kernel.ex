@@ -97,36 +97,6 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  def infer(ctx, {:sigma, a, b}) do
-    with {:ok, l1} <- infer_sort(ctx, a),
-         a_value = Eval.eval(a, Context.env(ctx)),
-         ctx2 = Context.extend(ctx, a_value),
-         {:ok, l2} <- infer_sort(ctx2, b) do
-      {:ok, {:vtype, Universe.max(l1, l2)}}
-    end
-  end
-
-  def infer(ctx, {:fst, p}) do
-    with {:ok, ptype} <- infer(ctx, p),
-         {:ok, dom, _cod} <- ensure_sigma(ptype) do
-      {:ok, dom}
-    end
-  end
-
-  def infer(ctx, {:snd, p}) do
-    with {:ok, ptype} <- infer(ctx, p),
-         {:ok, _dom, cod_closure} <- ensure_sigma(ptype) do
-      # Second component's type is B[fst p / x] (§4.7).
-      fst_value = Eval.eval({:fst, p}, Context.env(ctx))
-      {:ok, Eval.apply_closure(cod_closure, fst_value)}
-    end
-  end
-
-  # Pairs are check-only (see check/3 against {:vsigma,…}); an infer position can
-  # only be reached by an adversarial reified motive (spec 2026-07-08-neutral-app-
-  # sort §2.4) — reject explicitly instead of crashing on a missing clause.
-  def infer(_ctx, {:pair, _, _}), do: {:error, :pair_not_inferable}
-
   def infer(ctx, {:app, f, a}) do
     with {:ok, f_type} <- infer(ctx, f),
          {:ok, dom, cod_closure} <- ensure_pi(f_type),
@@ -249,20 +219,6 @@ defmodule Cure.Core.Kernel do
       check(Context.extend(ctx, exp_dom), body, cod_value)
     else
       {:error, :domain_mismatch}
-    end
-  end
-
-  # A dependent pair is checked against a Σ: first component against the domain,
-  # second against the domain-instantiated codomain B[a/x] (§4.7).
-  def check(ctx, {:pair, a, b}, {:vsigma, dom, cod_closure}) do
-    with :ok <- check(ctx, a, dom) do
-      a_value = Eval.eval(a, Context.env(ctx))
-      expected_b = Eval.apply_closure(cod_closure, a_value)
-
-      case check(ctx, b, expected_b) do
-        :ok -> :ok
-        {:error, _} -> {:error, :sigma_mismatch}
-      end
     end
   end
 
@@ -470,10 +426,6 @@ defmodule Cure.Core.Kernel do
   defp ensure_pi({:vpi, dom, cod_closure}), do: {:ok, dom, cod_closure}
   defp ensure_pi(_), do: {:error, :not_a_function}
 
-  # Require a type value to be a Σ; return its domain value + codomain closure.
-  defp ensure_sigma({:vsigma, dom, cod_closure}), do: {:ok, dom, cod_closure}
-  defp ensure_sigma(_), do: {:error, :not_a_sigma}
-
   # Check `args` against a dependent telescope, threading each evaluated arg so
   # later telescope types can depend on earlier args. Returns the arg values
   # (most-recent first) so a caller can continue (e.g. params then indices).
@@ -664,17 +616,6 @@ defmodule Cure.Core.Kernel do
   # exactly what a non-lossy reify+infer would decide, and a non-type domain still
   # falls through to `:not_a_type_value` (rejected, no false positives).
   defp infer_type_value_sort(ctx, {:vpi, dom, cod_closure}) do
-    with {:ok, l1} <- infer_type_value_sort(ctx, dom) do
-      fresh = {:vneutral, {:nvar, Context.length(ctx)}}
-      cod_value = Eval.apply_closure(cod_closure, fresh)
-
-      with {:ok, l2} <- infer_type_value_sort(Context.extend(ctx, dom), cod_value) do
-        {:ok, Universe.max(l1, l2)}
-      end
-    end
-  end
-
-  defp infer_type_value_sort(ctx, {:vsigma, dom, cod_closure}) do
     with {:ok, l1} <- infer_type_value_sort(ctx, dom) do
       fresh = {:vneutral, {:nvar, Context.length(ctx)}}
       cod_value = Eval.apply_closure(cod_closure, fresh)
@@ -944,7 +885,6 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:data, _, _, _}), do: true
   defp rigid_index?({:type, _}), do: true
   defp rigid_index?({:pi, _, _}), do: true
-  defp rigid_index?({:sigma, _, _}), do: true
   defp rigid_index?({:int_type}), do: true
   defp rigid_index?({:float_type}), do: true
   defp rigid_index?({:int_lit, _}), do: true
@@ -1019,17 +959,8 @@ defmodule Cure.Core.Kernel do
   defp replace_branch_vars({:lam, d, b}, subst),
     do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
 
-  defp replace_branch_vars({:sigma, a, b}, subst),
-    do: {:sigma, replace_branch_vars(a, subst), replace_branch_vars(b, shift_subst(subst, 1))}
-
   defp replace_branch_vars({:app, f, a}, subst),
     do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:pair, a, b}, subst),
-    do: {:pair, replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:fst, p}, subst), do: {:fst, replace_branch_vars(p, subst)}
-  defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
 
   defp replace_branch_vars({:data, n, ps, is}, subst),
     do: {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)), Enum.map(is, &replace_branch_vars(&1, subst))}

@@ -69,4 +69,17 @@ defmodule Cure.Core.SerializeTest do
     assert {:error, _} = Serialize.decode("(nonsense 1 2)")
     assert {:error, _} = Serialize.decode("")
   end
+
+  # D2: the primitive Sigma nodes are retired from the codec. Their wire tags no
+  # longer decode — a stronger guarantee than the former positive round-trip rows.
+  test "decode rejects the retired primitive Sigma tags" do
+    for wire <- [
+          "(sigma (int-type) (var 0))",
+          "(pair (int 1) (ctor True))",
+          "(fst (var 0))",
+          "(snd (var 0))"
+        ] do
+      assert {:error, :unknown_node} = Serialize.decode(wire)
+    end
+  end
 end

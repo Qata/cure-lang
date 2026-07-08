@@ -77,11 +77,7 @@ defmodule Cure.Elab.Erase do
     end
   end
 
-  def erase(env, {:pair, a, b}), do: {:pair, erase(env, a), erase(env, b)}
-  def erase(env, {:fst, p}), do: {:fst, erase(env, p)}
-  def erase(env, {:snd, p}), do: {:snd, erase(env, p)}
   def erase(env, {:pi, d, c}), do: {:pi, erase(env, d), erase(env, c)}
-  def erase(env, {:sigma, a, b}), do: {:sigma, erase(env, a), erase(env, b)}
 
   def erase(env, {:data, n, ps, is}),
     do: {:data, n, Enum.map(ps, &erase(env, &1)), Enum.map(is, &erase(env, &1))}
@@ -137,11 +133,7 @@ defmodule Cure.Elab.Erase do
   def has_hole?({:hole, _name}), do: true
   def has_hole?({:lam, d, b}), do: has_hole?(d) or has_hole?(b)
   def has_hole?({:pi, d, c}), do: has_hole?(d) or has_hole?(c)
-  def has_hole?({:sigma, a, b}), do: has_hole?(a) or has_hole?(b)
   def has_hole?({:app, f, x}), do: has_hole?(f) or has_hole?(x)
-  def has_hole?({:pair, a, b}), do: has_hole?(a) or has_hole?(b)
-  def has_hole?({:fst, p}), do: has_hole?(p)
-  def has_hole?({:snd, p}), do: has_hole?(p)
   def has_hole?({:ctor, _n, args}), do: Enum.any?(args, &has_hole?/1)
   def has_hole?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_hole?/1)
   def has_hole?({:prim, _op, args}), do: Enum.any?(args, &has_hole?/1)

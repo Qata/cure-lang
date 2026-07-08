@@ -25,7 +25,7 @@ defmodule Cure.Elab.Relevance do
       - scrutinised as a `case` discriminant (`:scrutinee`);
       - applied as a function head (`:applied`).
     * EXEMPT (checked at `erased`, does not count): type/index positions
-      (`{:pi}`/`{:sigma}`/`{:data}` — Pi & Sigma domains, the `case`
+      (`{:pi}`/`{:data}` — Pi domains, the `case`
       motive), erased argument positions, and collapsible-family proof
       elimination (the J/subst transport's scrutinee).
 
@@ -118,14 +118,6 @@ defmodule Cure.Elab.Relevance do
     end)
   end
 
-  # Sigma intro/elim: components carry the runtime value (relevant).
-  defp walk({:pair, a, b}, depth, _site, st) do
-    with :ok <- walk(a, depth, :returned, st), do: walk(b, depth, :returned, st)
-  end
-
-  defp walk({:fst, p}, depth, _site, st), do: walk(p, depth, :returned, st)
-  defp walk({:snd, p}, depth, _site, st), do: walk(p, depth, :returned, st)
-
   # `case`: the discriminant is scrutinised (relevant); the motive is a type
   # position (exempt); each branch body runs under `arity` fresh pattern binders.
   #
@@ -169,7 +161,6 @@ defmodule Cure.Elab.Relevance do
 
   # --- exempt positions: type formers and proof terms carry no runtime value ---
   defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
-  defp walk({:sigma, _a, _b}, _depth, _site, _st), do: :ok
   defp walk({:data, _n, _ps, _is}, _depth, _site, _st), do: :ok
 
   # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no

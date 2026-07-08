@@ -194,13 +194,6 @@ defmodule Cure.Elab.Emit do
     {:op, @line, erl_unop(op), lower(env, a, ctx)}
   end
 
-  defp lower(env, {:pair, a, b}, ctx) do
-    {:tuple, @line, [lower(env, a, ctx), lower(env, b, ctx)]}
-  end
-
-  defp lower(env, {:fst, p}, ctx), do: element(1, lower(env, p, ctx))
-  defp lower(env, {:snd, p}, ctx), do: element(2, lower(env, p, ctx))
-
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:lam, _dom, body}, ctx) do

@@ -44,14 +44,11 @@ defmodule Antigen.Generators.Serialization do
 
     Gen.frequency([
       {4, leaf()},
-      {1, unary(:fst, d)},
-      {1, unary(:snd, d)},
       {1, binary(:pi, d)},
       {1, binary(:lam, d)},
       {1, binary(:app, d)},
-      {1, binary(:sigma, d)},
-      {1, binary(:pair, d)},
-      # (:refl/:eq/:rewrite retired with the primitive identity forms, Phase C —
+      # (:refl/:eq/:rewrite retired with the primitive identity forms, Phase C;
+      # :sigma/:pair/:fst/:snd retired with the primitive Sigma, D2 —
       # the inductive spellings ride the :data/:ctor/:case arms below.)
       {1, data_term(d)},
       {1, ctor_term(d)},
@@ -71,8 +68,6 @@ defmodule Antigen.Generators.Serialization do
       Gen.bind(Gen.member_of(@globals), fn g -> Gen.return({:global, g}) end)
     ])
   end
-
-  defp unary(tag, d), do: Gen.bind(term(d), fn a -> Gen.return({tag, a}) end)
 
   defp binary(tag, d),
     do: Gen.bind(term(d), fn a -> Gen.bind(term(d), fn b -> Gen.return({tag, a, b}) end) end)

@@ -270,7 +270,6 @@ defmodule Antigen.Runner do
   defp occurs?({:var, _}, _k), do: false
   defp occurs?({:lam, dom, body}, k), do: occurs?(dom, k) or occurs?(body, k + 1)
   defp occurs?({:pi, dom, cod}, k), do: occurs?(dom, k) or occurs?(cod, k + 1)
-  defp occurs?({:sigma, a, b}, k), do: occurs?(a, k) or occurs?(b, k + 1)
 
   defp occurs?({:case, scrut, motive, branches}, k) do
     # `motive` is itself a `:lam`-headed term (spec §6.5's constant-motive

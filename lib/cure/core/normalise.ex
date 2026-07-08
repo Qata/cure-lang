@@ -153,16 +153,6 @@ defmodule Cure.Core.Normalise do
      {:closure, id_env(depth), quote_nf(Eval.eval(body, [fresh | env]), sig, depth + 1, opts)}}
   end
 
-  defp nf_struct({:vsigma, dom, {:closure, env, cod}}, sig, depth, opts) do
-    fresh = {:vneutral, {:nvar, depth}}
-
-    {:vsigma, nf_value(dom, sig, depth, opts),
-     {:closure, id_env(depth), quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
-  end
-
-  defp nf_struct({:vpair, a, b}, sig, depth, opts),
-    do: {:vpair, nf_value(a, sig, depth, opts), nf_value(b, sig, depth, opts)}
-
   defp nf_struct({:vdata, name, args}, sig, depth, opts),
     do: {:vdata, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
 
@@ -177,9 +167,6 @@ defmodule Cure.Core.Normalise do
 
   defp nf_neutral({:napp, neutral, arg}, sig, depth, opts),
     do: {:napp, nf_neutral(neutral, sig, depth, opts), nf_value(arg, sig, depth, opts)}
-
-  defp nf_neutral({:nfst, neutral}, sig, depth, opts), do: {:nfst, nf_neutral(neutral, sig, depth, opts)}
-  defp nf_neutral({:nsnd, neutral}, sig, depth, opts), do: {:nsnd, nf_neutral(neutral, sig, depth, opts)}
 
   defp nf_neutral({:nprim, op, args}, sig, depth, opts),
     do: {:nprim, op, Enum.map(args, &nf_value(&1, sig, depth, opts))}
@@ -251,19 +238,6 @@ defmodule Cure.Core.Normalise do
             :stuck
         end
 
-      # ι on projections: mirrors `vfst`/`vsnd` — the pair's first/second field.
-      {:nfst, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
-          _ -> :stuck
-        end
-
-      {:nsnd, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
-          _ -> :stuck
-        end
-
       _ ->
         :stuck
     end
@@ -271,17 +245,17 @@ defmodule Cure.Core.Normalise do
 
   # Decide, in ONE whnf of the eliminated target, whether a certified global's
   # δ-unfold made progress. If the unfold only re-exposed a stuck eliminator
-  # (`ncase`/`nfst`/`nsnd`) — the lazy-unfolding case — this both decides
-  # productiveness AND fires ι, so the two never re-force the same scrutinee.
+  # (`ncase`) — the lazy-unfolding case — this both decides productiveness AND
+  # fires ι, so the two never re-force the same scrutinee.
   #
-  # Threading the FORCED target through `spend_fuel(Eval.eval(...))`/`vfst`/`vsnd`
-  # (rather than returning the raw stuck eliminator for the outer `whnf_value`
+  # Threading the FORCED target through `spend_fuel(Eval.eval(...))` (rather than
+  # returning the raw stuck eliminator for the outer `whnf_value`
   # loop to re-force) is what keeps normalization LINEAR: a naive check that
   # whnf's the scrutinee to test productiveness and then lets the loop whnf it a
   # second time to reduce is Θ(2ᵈ) on total definitions whose recursive scrutinee
   # reduces to a constructor (e.g. `f n = case n {Z→Z; S k→case (f k) {…}}`).
   #
-  #   * ctor/pair target → ι fires here, result returned reduced (productive);
+  #   * ctor target      → ι fires here, result returned reduced (productive);
   #   * stuck target     → `:stuck`, so `whnf_value` keeps the global FOLDED;
   #   * anything else (ctor, λ, or a neutral not headed by an eliminator) →
   #     `{:ok, value}`, i.e. genuine progress the outer loop continues from.
@@ -299,18 +273,6 @@ defmodule Cure.Core.Normalise do
 
           _ ->
             :stuck
-        end
-
-      {:nfst, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
-          _ -> :stuck
-        end
-
-      {:nsnd, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
-          _ -> :stuck
         end
 
       _ ->

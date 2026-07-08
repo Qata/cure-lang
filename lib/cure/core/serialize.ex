@@ -24,10 +24,6 @@ defmodule Cure.Core.Serialize do
   defp enc({:pi, d, c}), do: node("pi", [d, c])
   defp enc({:lam, d, b}), do: node("lam", [d, b])
   defp enc({:app, f, a}), do: node("app", [f, a])
-  defp enc({:sigma, a, b}), do: node("sigma", [a, b])
-  defp enc({:pair, a, b}), do: node("pair", [a, b])
-  defp enc({:fst, p}), do: node("fst", [p])
-  defp enc({:snd, p}), do: node("snd", [p])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
   defp enc({:int_type}), do: "(int-type)"
@@ -150,10 +146,6 @@ defmodule Cure.Core.Serialize do
   defp build_node("pi", [d, c]), do: binary(:pi, d, c)
   defp build_node("lam", [d, b]), do: binary(:lam, d, b)
   defp build_node("app", [f, a]), do: binary(:app, f, a)
-  defp build_node("sigma", [a, b]), do: binary(:sigma, a, b)
-  defp build_node("pair", [a, b]), do: binary(:pair, a, b)
-  defp build_node("fst", [p]), do: unary(:fst, p)
-  defp build_node("snd", [p]), do: unary(:snd, p)
 
   defp build_node("prim", [{:atom, op} | args]) do
     with {:ok, o} <- sym_atom(op), {:ok, cargs} <- build_all(args),

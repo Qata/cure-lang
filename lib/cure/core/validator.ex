@@ -115,7 +115,6 @@ defmodule Cure.Core.Validator do
   defp children({:lam, dom, body}), do: [dom, body]
   defp children({:lam, _grade, dom, body}), do: [dom, body]
   defp children({:sigma, a, b}), do: [a, b]
-  defp children({:sigma, _grade, a, b}), do: [a, b]
   defp children({:app, f, a}), do: [f, a]
   defp children({:pair, a, b}), do: [a, b]
   defp children({:fst, p}), do: [p]
@@ -201,7 +200,6 @@ defmodule Cure.Core.Validator do
   # 4-tuple forms ({:pi, grade, dom, cod}) do NOT match and so pass.
   defp violation(:grade_on_binders, {:pi, _, _}), do: "pi binder carries no grade"
   defp violation(:grade_on_binders, {:lam, _, _}), do: "lam binder carries no grade"
-  defp violation(:grade_on_binders, {:sigma, _, _}), do: "sigma binder carries no grade"
 
   # qualified_syms — bare-atom identity instead of a qualified Sym.
   defp violation(:qualified_syms, {:global, n}) when is_atom(n),

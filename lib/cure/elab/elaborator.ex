@@ -599,9 +599,6 @@ defmodule Cure.Elab.Elaborator do
   defp occurs_below?({:lam, d, b}, arity, depth),
     do: occurs_below?(d, arity, depth) or occurs_below?(b, arity, depth + 1)
 
-  defp occurs_below?({:sigma, a, b}, arity, depth),
-    do: occurs_below?(a, arity, depth) or occurs_below?(b, arity, depth + 1)
-
   defp occurs_below?({:case, s, m, brs}, arity, depth) do
     occurs_below?(s, arity, depth) or occurs_below?(m, arity, depth) or
       Enum.any?(brs, fn {_cn, ar, b} -> occurs_below?(b, arity, depth + ar) end)
@@ -739,7 +736,6 @@ defmodule Cure.Elab.Elaborator do
   defp closed_term?({:var, k}, depth), do: k < depth
   defp closed_term?({:lam, d, b}, depth), do: closed_term?(d, depth) and closed_term?(b, depth + 1)
   defp closed_term?({:pi, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
-  defp closed_term?({:sigma, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
 
   defp closed_term?(tuple, depth) when is_tuple(tuple),
     do: tuple |> Tuple.to_list() |> Enum.all?(&closed_term?(&1, depth))
@@ -1197,9 +1193,6 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:lam, d, b}, target, depth),
     do: {:lam, abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
 
-  defp abstract_term({:sigma, a, b}, target, depth),
-    do: {:sigma, abstract_term(a, target, depth), abstract_term(b, target, depth + 1)}
-
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
   # abstract the scrutinee and motive at `depth`, but each branch body at
@@ -1237,9 +1230,6 @@ defmodule Cure.Elab.Elaborator do
 
   defp free_indices({:lam, d, b}, depth),
     do: MapSet.union(free_indices(d, depth), free_indices(b, depth + 1))
-
-  defp free_indices({:sigma, a, b}, depth),
-    do: MapSet.union(free_indices(a, depth), free_indices(b, depth + 1))
 
   defp free_indices({:case, s, m, brs}, depth) do
     base = MapSet.union(free_indices(s, depth), free_indices(m, depth))
@@ -2046,17 +2036,8 @@ defmodule Cure.Elab.Elaborator do
   defp generalize({:lam, d, b}, rb, s, depth),
     do: {:lam, generalize(d, rb, s, depth), generalize(b, rb, s, depth + 1)}
 
-  defp generalize({:sigma, a, b}, rb, s, depth),
-    do: {:sigma, generalize(a, rb, s, depth), generalize(b, rb, s, depth + 1)}
-
   defp generalize({:app, f, a}, rb, s, depth),
     do: {:app, generalize(f, rb, s, depth), generalize(a, rb, s, depth)}
-
-  defp generalize({:pair, a, b}, rb, s, depth),
-    do: {:pair, generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
-
-  defp generalize({:fst, p}, rb, s, depth), do: {:fst, generalize(p, rb, s, depth)}
-  defp generalize({:snd, p}, rb, s, depth), do: {:snd, generalize(p, rb, s, depth)}
 
   defp generalize({:data, n, ps, is}, rb, s, depth),
     do: {:data, n, Enum.map(ps, &generalize(&1, rb, s, depth)), Enum.map(is, &generalize(&1, rb, s, depth))}
@@ -3941,17 +3922,8 @@ defmodule Cure.Elab.Elaborator do
   defp replace_branch_vars({:lam, d, b}, subst),
     do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
 
-  defp replace_branch_vars({:sigma, a, b}, subst),
-    do: {:sigma, replace_branch_vars(a, subst), replace_branch_vars(b, shift_subst(subst, 1))}
-
   defp replace_branch_vars({:app, f, a}, subst),
     do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:pair, a, b}, subst),
-    do: {:pair, replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:fst, p}, subst), do: {:fst, replace_branch_vars(p, subst)}
-  defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
 
   defp replace_branch_vars({:data, n, ps, is}, subst),
     do: {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)), Enum.map(is, &replace_branch_vars(&1, subst))}
@@ -4677,10 +4649,6 @@ defmodule Cure.Elab.Elaborator do
   defp has_meta?({:app, f, x}), do: has_meta?(f) or has_meta?(x)
   defp has_meta?({:pi, d, c}), do: has_meta?(d) or has_meta?(c)
   defp has_meta?({:lam, d, b}), do: has_meta?(d) or has_meta?(b)
-  defp has_meta?({:sigma, d, c}), do: has_meta?(d) or has_meta?(c)
-  defp has_meta?({:pair, a, b}), do: has_meta?(a) or has_meta?(b)
-  defp has_meta?({:fst, p}), do: has_meta?(p)
-  defp has_meta?({:snd, p}), do: has_meta?(p)
   defp has_meta?(_), do: false
 
   # -- parameters / binders ---------------------------------------------------

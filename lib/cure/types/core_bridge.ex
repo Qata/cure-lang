@@ -9,7 +9,10 @@ defmodule Cure.Types.CoreBridge do
     * integer/float/boolean literals ↔ `{:int_lit,n}` / `{:float_lit,f}` / `{:bool_lit,b}`
     * free variables                 ↔ `{:global, name}` (stay neutral, read back by name)
     * unary/binary arithmetic, comparison, logic ↔ `{:prim, op, args}`
-    * binary tuples + `fst`/`snd`    ↔ `{:pair, a, b}` / `{:fst,_}` / `{:snd,_}`
+    * binary tuples + `fst`/`snd`    ↔ the inductive Sigma (D2, spec §8):
+      `{:ctor, :mk_pair, [a, b]}` / a single-branch projection `:case` over
+      `mk_pair` (eval's ι-rule reduces it; a stuck one reads back as the same
+      case shape, recognized by its branch — the motive is never inspected)
     * n-ary applications `f(a, b)`   ↔ neutral application spine over `{:global, f}`
 
   `to_core/1` returns `:error` only for nodes outside this grammar (named type
@@ -67,13 +70,13 @@ defmodule Cure.Types.CoreBridge do
   end
 
   def to_core({:tuple, _meta, [a, b]}) do
-    with {:ok, ca} <- to_core(a), {:ok, cb} <- to_core(b), do: {:ok, {:pair, ca, cb}}
+    with {:ok, ca} <- to_core(a), {:ok, cb} <- to_core(b), do: {:ok, {:ctor, :mk_pair, [ca, cb]}}
   end
 
   def to_core({:function_call, meta, [x]}) when is_list(meta) do
     case Keyword.get(meta, :name) do
-      "fst" -> with {:ok, c} <- to_core(x), do: {:ok, {:fst, c}}
-      "snd" -> with {:ok, c} <- to_core(x), do: {:ok, {:snd, c}}
+      "fst" -> with {:ok, c} <- to_core(x), do: {:ok, projection(c, 1)}
+      "snd" -> with {:ok, c} <- to_core(x), do: {:ok, projection(c, 0)}
       name -> application(name, [x])
     end
   end
@@ -97,6 +100,16 @@ defmodule Cure.Types.CoreBridge do
 
   defp application(_name, _args), do: :error
 
+  # A projection is a single-branch case over `mk_pair` (spec §8): under the
+  # branch's two binders the fields are x = var 1, y = var 0, so `fst` returns
+  # var 1 and `snd` var 0. Eval's ι-rule never inspects the motive, and this
+  # bridge feeds ONLY Eval (never Kernel.check), so a closed placeholder motive
+  # suffices; a stuck projection reads back as this same case shape and is
+  # recognized in `from_core` by its branch alone.
+  @proj_motive {:lam, {:int_type}, {:int_type}}
+  defp projection(p, field_var),
+    do: {:case, p, @proj_motive, [{:mk_pair, 2, {:var, field_var}}]}
+
   defp translate_all(asts) do
     Enum.reduce_while(asts, {:ok, []}, fn ast, {:ok, acc} ->
       case to_core(ast) do
@@ -115,9 +128,17 @@ defmodule Cure.Types.CoreBridge do
   def from_core({:ctor, :True, []}), do: {:literal, [subtype: :boolean], true}
   def from_core({:ctor, :False, []}), do: {:literal, [subtype: :boolean], false}
   def from_core({:global, name}), do: {:variable, [], Atom.to_string(name)}
-  def from_core({:pair, a, b}), do: {:tuple, [], [from_core(a), from_core(b)]}
-  def from_core({:fst, p}), do: {:function_call, [name: "fst"], [from_core(p)]}
-  def from_core({:snd, p}), do: {:function_call, [name: "snd"], [from_core(p)]}
+
+  # Inductive Sigma read-back (D2, spec §8): mk_pair is the surface tuple; a
+  # stuck projection case is recognized by its single mk_pair branch — var 1
+  # (field x) was `fst`, var 0 (field y) was `snd`. The motive is not inspected.
+  def from_core({:ctor, :mk_pair, [a, b]}), do: {:tuple, [], [from_core(a), from_core(b)]}
+
+  def from_core({:case, p, _motive, [{:mk_pair, 2, {:var, 1}}]}),
+    do: {:function_call, [name: "fst"], [from_core(p)]}
+
+  def from_core({:case, p, _motive, [{:mk_pair, 2, {:var, 0}}]}),
+    do: {:function_call, [name: "snd"], [from_core(p)]}
 
   def from_core({:prim, :neg, [x]}), do: {:unary_op, [operator: :-], [from_core(x)]}
   def from_core({:prim, :not, [x]}), do: {:unary_op, [operator: :not], [from_core(x)]}
