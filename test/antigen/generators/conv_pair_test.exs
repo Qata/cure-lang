@@ -25,7 +25,9 @@ defmodule Antigen.Generators.ConvPairTest do
     assert Enum.any?(sample, &(&1.label == :convertible))
     assert Enum.any?(sample, &(&1.label == :distinct))
 
-    for frag <- ["nfst", "nsnd", "nprim", "η", "pair", "refl", "app-arg vint", "app-arg vλ"] do
+    # Σ projections/pairs are now ι-on-`:case` / `mk_pair` (D2); the note wording
+    # tracks that (was nfst/nsnd/pair).
+    for frag <- ["first component", "second component", "nprim", "η", "mk_pair", "refl", "app-arg vint", "app-arg vλ"] do
       assert Enum.any?(notes, &String.contains?(&1, frag)), "missing shape: #{frag}"
     end
   end

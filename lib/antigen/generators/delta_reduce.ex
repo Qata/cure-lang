@@ -16,7 +16,18 @@ defmodule Antigen.Generators.DeltaReduce do
   alias Antigen.{Gen, Challenge}
 
   @z {:ctor, :Z, []}
+  @nat {:data, :Nat, [], []}
   defp s(t), do: {:ctor, :S, [t]}
+
+  # `kpair : Sigma(Nat, const-Nat) = mk_pair(Z, S Z)` (the inductive dependent pair,
+  # D2). Projections are single-branch `:case`s over `mk_pair` — the ncase form the
+  # δ+ι engine reduces now that the primitive `{:fst}`/`{:snd}` nodes are retired
+  # (`case (mk_pair x y) of mk_pair(x,y) -> x|y` ι-reduces exactly as nfst/nsnd did).
+  # Motive is the constant `Nat` (the pair is non-dependent); fields bind x=`{:var,1}`,
+  # y=`{:var,0}` in the branch frame.
+  @kpair_sigma {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+  @kfst {:case, {:global, :kpair}, {:lam, @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 1}}]}
+  @ksnd {:case, {:global, :kpair}, {:lam, @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 0}}]}
 
   # {term, expected_nf, note}
   @cases [
@@ -24,17 +35,17 @@ defmodule Antigen.Generators.DeltaReduce do
      "δ+β: idnat Z → Z (unfold certified global, then β)"},
     {{:app, {:global, :idnat}, {:ctor, :S, [@z]}}, {:ctor, :S, [@z]},
      "δ+β: idnat (S Z) → S Z"},
-    {{:fst, {:global, :kpair}}, @z,
-     "δ+ι: fst kpair → Z (unfold to a pair, project first — nfst)"},
-    {{:snd, {:global, :kpair}}, {:ctor, :S, [@z]},
-     "δ+ι: snd kpair → S Z (project second — nsnd)"},
-    {{:app, {:global, :idnat}, {:fst, {:global, :kpair}}}, @z,
+    {@kfst, @z,
+     "δ+ι: fst kpair → Z (unfold to a pair, project first via ι-on-case)"},
+    {@ksnd, {:ctor, :S, [@z]},
+     "δ+ι: snd kpair → S Z (project second via ι-on-case)"},
+    {{:app, {:global, :idnat}, @kfst}, @z,
      "nested: idnat (fst kpair) → Z (two unfolds + a projection)"},
-    # idnat's δ-unfold exposes a `snd kpair` under reduce_unfolded (not the direct
-    # unfold_certified_head path the bare `snd kpair` case takes) — the nsnd arm of
-    # reduce_unfolded's post-unfold ι follow-through.
-    {{:app, {:global, :idnat}, {:snd, {:global, :kpair}}}, {:ctor, :S, [@z]},
-     "nested nsnd: idnat (snd kpair) → S Z (unfold exposes snd, reduce_unfolded)"}
+    # idnat's δ-unfold exposes a `snd kpair` case under reduce_unfolded (not the
+    # direct unfold_certified_head path the bare case takes) — the post-unfold ι
+    # follow-through.
+    {{:app, {:global, :idnat}, @ksnd}, {:ctor, :S, [@z]},
+     "nested: idnat (snd kpair) → S Z (unfold exposes the case, reduce_unfolded)"}
   ]
 
   @spec gen(keyword()) :: Gen.t()

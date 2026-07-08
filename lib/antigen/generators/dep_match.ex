@@ -37,7 +37,7 @@ defmodule Antigen.Generators.DepMatch do
     {:int_type},
     {:float_type},
     {:pi, @nat, @nat},
-    {:sigma, @nat, @nat},
+    {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []},
     {:data, :Vec, [@z], []}
   ]
   @ty_branches [
@@ -90,18 +90,18 @@ defmodule Antigen.Generators.DepMatch do
       # refinement specializes it via specialize_branch_context, driving
       # replace_branch_vars over Equivalent-data / Σ / Π type shapes.
       {2, var_index_extra({:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]})},
-      {2, var_index_extra({:sigma, @nat, vec({:var, 2})})},
+      {2, var_index_extra({:data, :Sigma, [@nat, {:lam, @nat, vec({:var, 2})}], []})},
       {2, var_index_extra({:pi, @nat, vec({:var, 2})})},
       # extra context types carrying stuck value-level subterms (λ / pair / reflexive)
       # so specialize_branch_context's replace_branch_vars descends those arms.
       {2, var_index_extra({:data, :Equivalent, [{:pi, @nat, @nat}], [{:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}]})},
-      {2, var_index_extra({:data, :Equivalent, [{:sigma, @nat, @nat}], [{:pair, {:var, 1}, {:var, 1}}, {:pair, {:var, 1}, {:var, 1}}]})},
+      {2, var_index_extra({:data, :Equivalent, [{:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}], [{:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}]})},
       {2, var_index_extra({:data, :Equivalent, [{:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]}], [{:ctor, :reflexive, [{:var, 1}]}, {:ctor, :reflexive, [{:var, 1}]}]})},
       # two-var frame: a helper context var lets extra_ty carry a STUCK app /
       # projection / prim — replace_branch_vars' app/fst/snd/prim arms.
       {2, var_index_extra2({:pi, @nat, @nat}, {:data, :Equivalent, [@nat], [{:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}]})},
-      {2, var_index_extra2({:sigma, @nat, @nat}, {:data, :Equivalent, [@nat], [{:fst, {:var, 1}}, {:fst, {:var, 1}}]})},
-      {2, var_index_extra2({:sigma, @nat, @nat}, {:data, :Equivalent, [@nat], [{:snd, {:var, 1}}, {:snd, {:var, 1}}]})},
+      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}]})},
+      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}]})},
       {2, var_index_extra2({:int_type}, {:data, :Equivalent, [{:int_type}], [{:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}]})},
       # a STUCK case over a Bool helper var in an index position — the case arm of
       # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.

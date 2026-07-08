@@ -99,7 +99,9 @@ defmodule Antigen.Generators.Mutation do
   end
 
   def build(_ctx, :proj_non_pair) do
-    g = Gen.bind(Gen.int(0, 3), fn k -> Gen.return({:fst, nat_numeral(k)}) end)  # fst on a Nat
+    # fst on a Nat: a :case with a Sigma motive + mk_pair branch scrutinising a
+    # Nat is ill-typed (case on a non-Sigma) — the same proj-non-pair fault.
+    g = Gen.bind(Gen.int(0, 3), fn k -> Gen.return({:case, nat_numeral(k), {:lam, sig(), nat_t()}, [{:mk_pair, 2, {:var, 1}}]}) end)
     {g, %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma, injected_head: :Nat, scope: nil}}
   end
 
@@ -121,7 +123,7 @@ defmodule Antigen.Generators.Mutation do
   def build(_ctx, :pair_component) do
     # Σ Nat. Nat expects both components Nat; a Bd (T) in the first slot violates
     # it. The identity-app forces Kernel.infer to CHECK the pair against Σ Nat.Nat.
-    bad_pair = {:pair, {:ctor, :T, []}, z()}   # T : Bd, not Nat
+    bad_pair = {:ctor, :mk_pair, [{:ctor, :T, []}, z()]}   # T : Bd, not Nat
     g = Gen.return({:app, {:lam, sig(), {:var, 0}}, bad_pair})
     {g, %{kind: :pair_component, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
   end
@@ -160,7 +162,7 @@ defmodule Antigen.Generators.Mutation do
   @max_depth 8
   def max_depth, do: @max_depth
 
-  defp sig, do: {:sigma, nat_t(), nat_t()}
+  defp sig, do: {:data, :Sigma, [nat_t(), {:lam, nat_t(), nat_t()}], []}
   defp motive, do: {:lam, nat_t(), nat_t()}
   defp nat_branches(zbody), do: [{:Z, 0, zbody}, {:S, 1, {:var, 0}}]
 
@@ -186,7 +188,7 @@ defmodule Antigen.Generators.Mutation do
   def wrap(inner, :ctor_nat, _filler), do: {:ctor, :S, [inner]}
   def wrap(inner, :case_scrut, _filler), do: {:case, inner, motive(), nat_branches(z())}
   def wrap(inner, :case_branch, filler), do: {:case, filler, motive(), nat_branches(inner)}
-  def wrap(inner, :pair, filler), do: {:app, {:lam, sig(), z()}, {:pair, inner, filler}}
+  def wrap(inner, :pair, filler), do: {:app, {:lam, sig(), z()}, {:ctor, :mk_pair, [inner, filler]}}
 
   # Each wrapper places `inner` at a Nat-checked hole; filler is a well-typed Nat.
   # :app_arg/:case_branch/:pair draw a well-typed Nat filler; :ctor_nat/:case_scrut ignore it.
@@ -248,7 +250,7 @@ defmodule Antigen.Generators.Mutation do
   # nominal goal describing the fault site, never a proven property of the mutant.
   defp goal_of(%{kind: :universe}), do: {:type, 0}
   defp goal_of(%{kind: :index_mismatch}), do: vec(z())
-  defp goal_of(%{expected_head: :Sigma}), do: {:sigma, nat_t(), nat_t()}
+  defp goal_of(%{expected_head: :Sigma}), do: sig()
   defp goal_of(%{expected_head: :Nat}), do: nat_t()
   defp goal_of(_), do: nat_t()
 end

@@ -39,7 +39,7 @@ defmodule Antigen.Generators.BetaSubst do
      "lam depth 3: x under three λ — e shifts by 3"},
     {[@ty0], @ty0, @ty0, {:var, 0}, {:pi, @nat, {:var, 1}},
      "pi codomain: x under a Π binder — e shifts by 1"},
-    {[@ty0], @ty0, @ty0, {:var, 0}, {:sigma, @nat, {:var, 1}},
+    {[@ty0], @ty0, @ty0, {:var, 0}, {:data, :Sigma, [@nat, {:lam, @nat, {:var, 1}}], []},
      "sigma codomain: x under a Σ binder — e shifts by 1"},
     {[@nat], @nat, @nat, {:var, 0},
      {:case, {:var, 1}, {:lam, @nat, @nat}, [{:Z, 0, {:var, 0}}, {:S, 1, {:var, 1}}]},

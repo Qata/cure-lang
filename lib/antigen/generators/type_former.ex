@@ -2,7 +2,7 @@ defmodule Antigen.Generators.TypeFormer do
   @moduledoc """
   Structure-directed generator for **type-former** terms used in type position —
   universes `{:type, N}`, dependent function/pair types `{:pi, A, B}` /
-  `{:sigma, A, B}`, and indexed data types `Vec n`. The ordinary value-term
+  `{:data, :Sigma, [A, λ.B], []}`, and indexed data types `Vec n`. The ordinary value-term
   generators build INHABITANTS, not the type-formers themselves, so these
   exercise `infer`'s and (measured) `Normalise`'s type-former paths (nf of Π/Σ/
   data/universe terms).
@@ -47,7 +47,7 @@ defmodule Antigen.Generators.TypeFormer do
       {2, Gen.bind(Gen.int(0, 1), fn n -> Gen.return({{:type, n}, {:type, n + 1}}) end)},
       # Π/Σ over base types → Type 0
       {3, Gen.bind(small(), fn a -> Gen.bind(small(), fn b -> Gen.return({{:pi, a, b}, {:type, 0}}) end) end)},
-      {3, Gen.bind(small(), fn a -> Gen.bind(small(), fn b -> Gen.return({{:sigma, a, b}, {:type, 0}}) end) end)},
+      {3, Gen.bind(small(), fn a -> Gen.bind(small(), fn b -> Gen.return({{:data, :Sigma, [a, {:lam, a, b}], []}, {:type, 0}}) end) end)},
       # dependent Π with a universe codomain → Type 1
       {2, Gen.bind(small(), fn a -> Gen.return({{:pi, a, {:type, 0}}, {:type, 1}}) end)},
       # indexed data type Vec n → Type 0

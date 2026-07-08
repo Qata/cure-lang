@@ -52,19 +52,21 @@ defmodule Antigen.Generators.Positivity do
   # down would read nil in the occurs?/2 generators.
   @pgen {:data, :Pgen, [], []}
 
-  # Arrow domains, one per occurs?/2 recursion clause (lam/sigma/pair/app/fst/snd/
-  # ctor/data/case + a non-term leaf for the fallback). The former eq/refl/rewrite
-  # entries retired with the primitive identity forms (Phase C); their walker
-  # arms are covered by the inductive spellings below (Equivalent :data,
-  # reflexive :ctor, and the single-branch :case transport shape). None mention
-  # :Pgen, so every family that carries them stays strictly positive.
+  # Arrow domains, one per occurs?/2 recursion clause (lam/app/ctor/data/case +
+  # a non-term leaf for the fallback). Σ/pair/fst/snd are now the inductive
+  # shapes: Sigma :data, mk_pair :ctor, and single-branch ι-on-case projections.
+  # The former eq/refl/rewrite entries retired with the primitive identity forms
+  # (Phase C); their walker arms are covered by the inductive spellings below
+  # (Equivalent :data, reflexive :ctor, and the single-branch :case transport
+  # shape). None mention :Pgen, so every family that carries them stays strictly
+  # positive.
   @occurs_domains [
     {:lam, @nat, @z},
-    {:sigma, @z, @z},
-    {:pair, @z, @z},
+    {:data, :Sigma, [@z, {:lam, @z, @z}], []},
+    {:ctor, :mk_pair, [@z, @z]},
     {:app, @z, @z},
-    {:fst, @z},
-    {:snd, @z},
+    {:case, @z, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+    {:case, @z, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]},
     {:ctor, :S, [@z]},
     {:data, :Equivalent, [@nat], [@z, @z]},
     {:ctor, :reflexive, [@z]},
@@ -185,8 +187,12 @@ defmodule Antigen.Generators.Positivity do
   end
 
   # A positivity-SAFE type: the subject `:Pgen` may appear only strictly
-  # positively — directly, in a Σ component, or in an arrow CODOMAIN; never in an
-  # arrow domain (which is F-free: a base type).
+  # positively — directly or in an arrow CODOMAIN; never in an arrow domain (F-free:
+  # a base type). Since D2 retired the primitive `{:sigma}` (with its bespoke Σ
+  # covariance clause in `strictly_positive?`), the inductive `Sigma(a, b)` is an
+  # ORDINARY parameterized family: the subject occurring in a Σ PARAMETER is now
+  # conservatively rejected exactly as it is for `List`/`Vec` (occurs-in-params → not
+  # strictly positive). So a Σ used here carries only subject-free (base) components.
   defp positive_safe(0), do: Gen.frequency([{2, Gen.member_of(@bases)}, {1, Gen.return(@pgen)}])
 
   defp positive_safe(depth) do
@@ -196,8 +202,8 @@ defmodule Antigen.Generators.Positivity do
       {1, Gen.bind(Gen.member_of(@bases), fn dom ->
             Gen.bind(positive_safe(depth - 1), fn cod -> Gen.return({:pi, dom, cod}) end)
           end)},
-      {1, Gen.bind(positive_safe(depth - 1), fn a ->
-            Gen.bind(positive_safe(depth - 1), fn b -> Gen.return({:sigma, a, b}) end)
+      {1, Gen.bind(Gen.member_of(@bases), fn a ->
+            Gen.bind(Gen.member_of(@bases), fn b -> Gen.return({:data, :Sigma, [a, {:lam, a, b}], []}) end)
           end)}
     ])
   end
@@ -208,7 +214,7 @@ defmodule Antigen.Generators.Positivity do
     Gen.frequency([
       {2, Gen.bind(positive_safe(depth), fn cod -> Gen.return({:pi, @pgen, cod}) end)},
       {1, Gen.bind(positive_safe(depth), fn cod ->
-            Gen.return({:pi, {:sigma, @pgen, hd(@bases)}, cod})
+            Gen.return({:pi, {:data, :Sigma, [@pgen, {:lam, @pgen, hd(@bases)}], []}, cod})
           end)},
       {1, Gen.return({:pi, {:pi, hd(@bases), @pgen}, hd(@bases)})}
     ])
@@ -276,14 +282,16 @@ defmodule Antigen.Generators.Positivity do
 
   @doc """
   Negative occurrence hidden under a Σ: `MkBad : (Σ (Bad -> Dec). Dec) -> Bad`.
-  The arrow-left occurrence of `Bad` sits inside a sigma component. Strict
-  positivity must traverse Σ (covariant in both components) and reject. Label
-  `:negative`.
+  The subject `Bad` sits inside a Σ component (arrow-left of a component's function
+  type). Since D2, the inductive `Sigma` is an ordinary parameterized family, so the
+  checker rejects this via the same rule that rejects the subject in ANY family's
+  parameter (`occurs?` finds `Bad` in the Σ parameter → not strictly positive) — the
+  verdict is unchanged, only the reason. Label `:negative`.
   """
   @spec sigma_negative_family() :: Challenge.t()
   def sigma_negative_family do
     fam = Inductive.family(:Bad, [], [], 0)
-    field = {:sigma, {:pi, @bad, @decd}, @decd}
+    field = {:data, :Sigma, [{:pi, @bad, @decd}, {:lam, {:pi, @bad, @decd}, @decd}], []}
     ctors = [Inductive.ctor(:MkBad, [{:f, field}], [])]
 
     Challenge.new(

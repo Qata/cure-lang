@@ -106,7 +106,7 @@ defmodule Antigen.Generators.Equality do
   # conversion compares `s` with itself, driving Conv's neutral machinery
   # (same_neutral_no_delta? / conv_neutral? / conv_branches?). One-binder ctx.
   @int {:int_type}
-  @sig_nat {:sigma, @nat, @nat}
+  @sig_nat {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
 
   defp neutral_eq_prop_term do
     Gen.frequency([
@@ -116,9 +116,9 @@ defmodule Antigen.Generators.Equality do
          Gen.bind(int_lit(), fn lit -> neutral_eq_prop({:prim, op, [{:var, 0}, lit]}, @int, [@int]) end)
        end)},
       {1, neutral_eq_prop({:prim, :neg, [{:var, 0}]}, @int, [@int])},
-      # projections of a Σ variable → :nfst / :nsnd
-      {1, neutral_eq_prop({:fst, {:var, 0}}, @nat, [@sig_nat])},
-      {1, neutral_eq_prop({:snd, {:var, 0}}, @nat, [@sig_nat])},
+      # projections of a Σ variable, now single-branch ι-on-case over mk_pair
+      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, @sig_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]}, @nat, [@sig_nat])},
+      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, @sig_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]}, @nat, [@sig_nat])},
       # stuck case over a Bd variable → :ncase + conv_branches? + conv_branch_bodies?
       {2, neutral_case_eq_prop()}
     ])

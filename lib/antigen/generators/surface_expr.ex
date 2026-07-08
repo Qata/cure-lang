@@ -43,7 +43,7 @@ defmodule Antigen.Generators.SurfaceExpr do
   def encode({:binary_op, meta, [l, r]}, b),
     do: {:prim, Map.fetch!(@ops, Keyword.fetch!(meta, :operator)), [encode(l, b), encode(r, b)]}
 
-  def encode({:tuple, _m, [a, c]}, b), do: {:pair, encode(a, b), encode(c, b)}
+  def encode({:tuple, _m, [a, c]}, b), do: {:ctor, :mk_pair, [encode(a, b), encode(c, b)]}
 
   # -- surface AST helpers ------------------------------------------------------
   defp lit(n), do: {:literal, [subtype: :integer], n}

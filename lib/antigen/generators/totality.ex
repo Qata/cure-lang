@@ -102,25 +102,35 @@ defmodule Antigen.Generators.Totality do
   @doc """
   Structural recursion whose base (`Z`) branch carries a rich, call-free subterm —
   every non-application Core former the size-change walker descends through:
-  `pair`/`fst`/`snd`, the inductive `Equivalent`/`reflexive`/`:case`-transport
-  (which replaced the retired `eq`/`refl`/`rewrite`), `pi`/`sigma`, and a
+  the inductive `mk_pair` (`:ctor`) and ι-on-`:case` projections, the inductive
+  `Equivalent`/`reflexive`/`:case`-transport (which replaced the retired
+  `eq`/`refl`/`rewrite`), `pi`/`Sigma` (`:data`), and a
   variable-headed application. The lone self-call `h y` stays structural, so the def is certified;
   the enrichment exists purely to exercise `Certificate.walk_node`'s per-former arms.
   Label `:terminating`.
   """
   @spec enriched_terminating() :: Challenge.t()
   def enriched_terminating do
+    st = {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+
     base =
-      {:pair, {:fst, {:var, 0}},
-       {:pair, {:snd, {:var, 0}},
-        {:pair, {:data, :Equivalent, [{:var, 0}], [{:var, 0}, {:var, 0}]},
-         {:pair, {:ctor, :reflexive, [{:var, 0}]},
-          {:pair,
-           {:app,
-            {:case, {:ctor, :reflexive, [{:var, 0}]}, {:lam, @nat, {:var, 0}},
-             [{:reflexive, 1, {:lam, @nat, {:var, 0}}}]}, {:var, 0}},
-           {:pair, {:pi, @nat, @nat},
-            {:pair, {:sigma, @nat, @nat}, {:app, {:var, 0}, {:var, 0}}}}}}}}}
+      {:ctor, :mk_pair,
+       [{:case, {:var, 0}, {:lam, st, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+        {:ctor, :mk_pair,
+         [{:case, {:var, 0}, {:lam, st, @nat}, [{:mk_pair, 2, {:var, 0}}]},
+          {:ctor, :mk_pair,
+           [{:data, :Equivalent, [{:var, 0}], [{:var, 0}, {:var, 0}]},
+            {:ctor, :mk_pair,
+             [{:ctor, :reflexive, [{:var, 0}]},
+              {:ctor, :mk_pair,
+               [{:app,
+                 {:case, {:ctor, :reflexive, [{:var, 0}]}, {:lam, @nat, {:var, 0}},
+                  [{:reflexive, 1, {:lam, @nat, {:var, 0}}}]}, {:var, 0}},
+                {:ctor, :mk_pair,
+                 [{:pi, @nat, @nat},
+                  {:ctor, :mk_pair,
+                   [{:data, :Sigma, [@nat, {:lam, @nat, @nat}], []},
+                    {:app, {:var, 0}, {:var, 0}}]}]}]}]}]}]}]}
 
     body =
       {:lam, @nat,
@@ -138,7 +148,10 @@ defmodule Antigen.Generators.Totality do
   @spec nonvar_scrutinee_terminating() :: Challenge.t()
   def nonvar_scrutinee_terminating do
     inner =
-      {:case, {:fst, {:pair, {:var, 0}, {:var, 0}}}, @nat_mot,
+      {:case,
+       {:case, {:ctor, :mk_pair, [{:var, 0}, {:var, 0}]},
+        {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+       @nat_mot,
        [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:var, 1}}}]}
 
     body =
@@ -176,7 +189,11 @@ defmodule Antigen.Generators.Totality do
       {:lam, @nat,
        {:case, {:var, 0}, @nat_mot,
         [{:Z, 0, {:ctor, :Z, []}},
-         {:S, 1, {:app, {:global, :h}, {:fst, {:pair, {:var, 1}, {:var, 1}}}}}]}}
+         {:S, 1,
+          {:app, {:global, :h},
+           {:case, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]},
+            {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat},
+            [{:mk_pair, 2, {:var, 1}}]}}}]}}
 
     h_def(body, "diverging", "self-call arg is a projection → arg_relation :unknown")
   end

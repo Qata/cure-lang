@@ -121,7 +121,7 @@ defmodule Antigen.Generators.SigMenuTest do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
     seeds = SigMenu.goal_types()
-    assert Enum.any?(seeds, &match?({:sigma, _, _}, &1))
+    assert Enum.any?(seeds, &match?({:data, :Sigma, _, _}, &1))
     assert Enum.any?(seeds, &match?({:pi, _, _}, &1))
 
     for g <- seeds do
