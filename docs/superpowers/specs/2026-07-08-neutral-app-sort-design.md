@@ -104,3 +104,94 @@ This is a kernel change. The blanket approval applies (Agda/Lean-aligned per §2
 3. Antigen: new antibody green; FULL Antigen suite green.
 4. Oracle: `sg` cluster `same`/`same`; replay green.
 5. Full `mix test` green; `git diff` shows exactly two new clauses in `kernel.ex` — the `infer_type_value_sort` clause (§2) and the defensive `infer(_ctx, {:pair, _, _})` clause (§2.4) — plus tests/Antigen/oracle fixtures; no other `lib/cure/core/` change.
+
+## §7 D1b amendment (2026-07-09 adjudication): implicit insertion for global applications in return-type position
+
+Execution of §2 STOPped on a verified elaborator gap: with both kernel clauses in
+place, the canonical implicit-param probe STILL rejects `:bad_motive`, because the
+motive the elaborator hands the kernel is **malformed (under-applied)** — not
+because the kernel judgement is wrong.
+
+### §7.1 The finding (verified in-source, this worktree)
+
+- `function_signature` (`lib/cure/elab/declarations.ex:104`) lowers a fn's
+  return-type annotation via `idx_to_core`.
+- `idx_to_core`'s function-call fallthrough (`declarations.ex:915-916`) lowers an
+  application of a term-level global as a **bare explicit-args spine**
+  (`Enum.reduce(core_args, {:global, atom}, …)`) — NO implicit-argument insertion.
+- Term position inserts implicits (`elaborate_named_call` →
+  `elaborate_implicit_app_bidirectional/6` → `finish_global_app`,
+  `lib/cure/elab/elaborator.ex:4102-4125`): the SAME surface `first(p)` in a body
+  lowers to the full 3-arg spine.
+- Consequence: `second : (p: MySigma(a,b)) -> b(first(p))` with implicit `{a}{b}`
+  gets motive `{:lam, MySigma, {:app, {:var,2}, {:app, {:global,:first}, {:var,0}}}}`
+  — `first` applied to 1 of 3 binders. The napp clause faithfully reifies it and
+  `infer/2` correctly rejects (`:conversion_failure` checking the MySigma-typed
+  argument against `first`'s first domain `Type`). The kernel work is right; the
+  input is wrong.
+- Kernel-side proof retained from execution: the identical probe with **explicit**
+  type params (full spine in the annotation) elaborates `:ok`, and a hand-built
+  global-free `λv. b(v)` motive now passes motive-wf (fails later at
+  `:branch_type`, exactly the accept-pin behavior).
+
+### §7.2 Alignment
+
+In Idris/Agda/Lean, types ARE terms: one elaborator, implicit insertion in every
+position including signatures. Cure's separate type-position lowering silently
+lacking insertion is a parity defect. Fixing it is the faithful move (standing
+directive: align with real languages).
+
+### §7.3 Design (targeted delegation; lower-risk fork chosen)
+
+1. In `function_signature`, after `elaborate_param_telescope` succeeds, build the
+   kernel typing context for the params (`build_context(env, telescope)` — already
+   the body-pass pattern at `declarations.ex:78`) and thread `{scope, ctx}` into
+   the return-type lowering ONLY.
+2. In `idx_to_core`'s function-call fallthrough (the `true ->` bare-spine branch),
+   when (a) a ctx was threaded in, (b) the head resolves to a term-level global
+   (not a family, ctor, or bound var — i.e. exactly this branch), and (c) that
+   global's registered quantities contain an `:erased` slot, delegate the WHOLE
+   application (surface arg ASTs, not pre-lowered args) to the term-position
+   machinery via a narrow public wrapper over
+   `elaborate_implicit_app_bidirectional/6` (no `expected`), and return its term.
+3. Every other `idx_to_core` call site (ctor signatures, index telescopes) threads
+   no ctx — byte-identical behavior. Globals with NO implicits keep the existing
+   bare-spine path (today's working behavior, proven by the explicit-param probe).
+
+Blast radius: strictly failure→success. Today an implicit-carrying global applied
+in a return annotation ALWAYS yields an under-applied spine the kernel rejects, so
+no currently-working program routes through the new branch.
+
+Layer: **E only** (untrusted). The kernel re-checks the assembled Π and every
+motive; an insertion bug degrades to rejection, never unsoundness. No new
+`lib/cure/core/` change is part of D1b.
+
+### §7.4 Registration-pass caveat (verification step, not an assumption)
+
+`second`'s signature is lowered during the registration pass; the delegation
+consults the env for `first`'s type+quantities, which must already be registered
+(declaration order — `first` precedes `second`). If signature-only registration
+does not populate `Env.get_def/2` with `%{type, quantities}`, the implementer must
+locate what the registration pass DOES store and consult that — NOT silently skip
+insertion. If neither is available at signature time, STOP and report.
+
+### §7.5 Residual gap (non-goal, documented)
+
+Implicit-carrying global applications in ctor-signature / index-telescope type
+positions (no ctx available there) keep today's bare spine. Follow-up candidate,
+out of D1 scope.
+
+### §7.6 Test-plan correction (executor-verified)
+
+The §4 pair-literal negative MUST use a **function-typed** head applied to a pair
+(`b : (a) -> Type` applied to `pair(Z, Z)`), as §4 already states. A Nat-typed
+head (`{:var,0} : Nat` applied to a pair) fails `ensure_pi` BEFORE the pair is
+examined and never exercises the §2.4 crash — such a test passes identically with
+or without the defensive clause and proves nothing.
+
+### §7.7 Acceptance deltas
+
+§6 criteria stand unchanged, with §6.5 extended: the final diff additionally shows
+the D1b elaborator change confined to `lib/cure/elab/declarations.ex` plus a
+narrow public wrapper in `lib/cure/elab/elaborator.ex`; STILL exactly two new
+clauses in `kernel.ex` and no other `lib/cure/core/` change.
