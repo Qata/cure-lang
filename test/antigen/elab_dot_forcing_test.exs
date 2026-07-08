@@ -143,4 +143,35 @@ defmodule Antigen.ElabDotForcingTest do
       refute Map.has_key?(by_id["forced/carried/right"], :expect_error)
     end
   end
+
+  describe "metamorphic gates" do
+    alias Antigen.Generators.ElabDotForcing
+
+    test "every metamorphic relation holds (flips flip, sames stay)" do
+      violations =
+        ElabDotForcing.metamorphic_challenges()
+        |> Enum.map(fn c -> {c.payload.id, c.payload.transform, c.payload.relation, Elab.run(c)} end)
+        |> Enum.reject(fn {_id, _t, _r, v} -> v == :ok end)
+
+      assert violations == [],
+             "dot-forcing metamorphic relation broken:\n" <>
+               Enum.map_join(violations, "\n", &inspect/1)
+    end
+
+    test "the C-a causal pin exists: corrupt_dot flips BOTH dispatch paths" do
+      flips =
+        ElabDotForcing.metamorphic_challenges()
+        |> Enum.filter(fn c -> c.payload.transform == "corrupt_dot" end)
+        |> Enum.map(fn c -> c.payload.id end)
+        |> Enum.sort()
+
+      assert flips == ["forced/carried/right", "forced/plain/right"]
+    end
+
+    test "the C-c load-bearing pin exists: promote_use flips bind_erased" do
+      assert [%{payload: %{id: "unforced/bind_erased", relation: :flip}}] =
+               ElabDotForcing.metamorphic_challenges()
+               |> Enum.filter(fn c -> c.payload.transform == "promote_use" end)
+    end
+  end
 end

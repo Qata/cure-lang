@@ -140,4 +140,103 @@ defmodule Antigen.Generators.ElabDotForcing do
   end
 
   defp entry(id), do: Enum.find(@catalog, fn {i, _, _, _, _, _} -> i == id end)
+
+  # -- Metamorphic challenges --------------------------------------------------
+
+  @doc """
+  Metamorphic challenges.
+
+    * `corrupt_dot` (`:flip`) — on each forced-axis ACCEPTING base, corrupt only
+      the written dot value; the verdict must flip. Holding the program fixed
+      and varying only the checked value pins "the check runs and compares" on
+      that dispatch path (the carried instance is the C-a detector).
+    * `promote_use` (`:flip`) — on the bind_erased base, use the quantity-0
+      binding relevantly; must flip (the C-c gate is load-bearing).
+    * `alpha_rename` / `extra_unused_param` (`:same`) — typing-preserving frame
+      perturbations on EVERY base; the verdict must not change.
+
+  All transforms take the probe-fn BODY only (never `preamble <> body`), so the
+  first-match regexes can never collide with the preamble's helper `fn app`.
+  """
+  @spec metamorphic_challenges() :: [Challenge.t()]
+  def metamorphic_challenges do
+    Enum.flat_map(@catalog, fn {id, expect, _err, pre, _note, body} ->
+      base_src = module(pre, body)
+
+      invariance =
+        [{"alpha_rename", alpha_rename(body)}, {"extra_unused_param", prepend_unused_param(body)}]
+        |> Enum.filter(fn {_t, b} -> is_binary(b) and b != body end)
+        |> Enum.map(fn {t, vbody} -> challenge(id, t, :same, base_src, module(pre, vbody)) end)
+
+      flips =
+        case {id, expect} do
+          {_, :accept} ->
+            [{"corrupt_dot", corrupt_dot(body)}, {"promote_use", promote_use(body)}]
+            |> Enum.filter(fn {_t, b} -> is_binary(b) and b != body end)
+            |> Enum.map(fn {t, vbody} -> challenge(id, t, :flip, base_src, module(pre, vbody)) end)
+
+          _ ->
+            []
+        end
+
+      invariance ++ flips
+    end)
+  end
+
+  defp challenge(id, transform, relation, base_src, variant_src) do
+    Challenge.new(
+      kind: :elab_program,
+      assay: "elab/dot_forcing",
+      label: :none,
+      payload: %{
+        id: id,
+        transform: transform,
+        relation: relation,
+        base_src: base_src,
+        variant_src: variant_src
+      },
+      note: "#{id} #{relation} under #{transform}"
+    )
+  end
+
+  # -- Metamorphic transforms (probe-fn BODY input only) ------------------------
+
+  # Corrupt the written dot value on a forced right-dot base: the forced
+  # solution is `j` (carried, `{m = .j}`) or `k` (plain, `{n = .k}`); wrap it
+  # in one more S so it can no longer be convertible with the pinned value.
+  # nil on bodies with no right-dot to corrupt (unforced cells).
+  defp corrupt_dot(body) do
+    cond do
+      String.contains?(body, "{m = .j}") -> String.replace(body, "{m = .j}", "{m = .(S(j))}")
+      String.contains?(body, "{n = .k}") -> String.replace(body, "{n = .k}", "{n = .(S(k))}")
+      true -> nil
+    end
+  end
+
+  # Use the quantity-0 binding relevantly: bind_erased's arm `pk({m = mm}, v)
+  # -> Z()` becomes `-> mm` (the landed bind_relevant fixture's exact body
+  # motion). nil on bodies without the bound-and-discarded shape.
+  defp promote_use(body) do
+    if String.contains?(body, "pk({m = mm}, v) -> Z()") do
+      String.replace(body, "pk({m = mm}, v) -> Z()", "pk({m = mm}, v) -> mm")
+    else
+      nil
+    end
+  end
+
+  # Rename the bound value `v` consistently (α-equivalence); standalone `v`
+  # only, so type names and `vcons`/`vnil` are untouched.
+  defp alpha_rename(body), do: String.replace(body, ~r/\bv\b/, "vv0")
+
+  # Prepend an unused erased implicit to the probe `fn` (every catalog body's
+  # first fn IS the probe fn and starts with a `{…}` implicit list), shifting
+  # every de Bruijn index by one — a frame perturbation a correct elaborator
+  # absorbs. Mirrors ElabErasure.prepend_unused_param/1.
+  defp prepend_unused_param(body) do
+    if Regex.match?(~r/fn \w+\(\{/, body) do
+      String.replace(body, ~r/(fn \w+\()\{/, "\\1{z_unused: Nat}, {", global: false)
+    else
+      nil
+    end
+  end
 end
