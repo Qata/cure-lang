@@ -11,7 +11,7 @@
 ## Global Constraints (from the spec — every task implicitly includes these)
 
 - Working dir: `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`, branch `autopilot/kernel-parity-batch` (already checked out; no new branches/worktrees).
-- Files touched: `lib/cure/elab/emit.ex`, `lib/cure/elab/elaborator.ex` (Task 2 only: `resolve_free` + its stale comment), `lib/antigen/generators/elab_nat_rep.ex` (new), `lib/antigen/assays/elab.ex`, `lib/antigen/runner.ex`, `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (one status sentence), new test files. **NOTHING under `lib/cure/core/` changes.** No changes to `lib/cure/elab/erase.ex`, `lib/cure/types/*`, `lib/cure/compiler/*` (two-pipeline discipline: the latter two are the NON-dependent decoy pipeline).
+- Files touched: `lib/cure/elab/emit.ex`, `lib/cure/elab/elaborator.ex` (Task 2 only: `resolve_free` + its stale comment), `lib/antigen/generators/elab_nat_rep.ex` (new), `lib/antigen/assays/elab.ex`, `lib/antigen/runner.ex`, `lib/antigen/challenge.ex` (Task 3 only: one `@elab_keys` whitelist entry, confirmed required — see Task 3), `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (one status sentence), new test files. **NOTHING under `lib/cure/core/` changes.** No changes to `lib/cure/elab/erase.ex`, `lib/cure/types/*`, `lib/cure/compiler/*` (two-pipeline discipline: the latter two are the NON-dependent decoy pipeline).
 - **Nominal rule:** the Int rep fires ONLY for the family `Inductive.builtin(env, :nat)` (the auto-prelude `Std.Nat`). Every existing test fixture declaring a LOCAL `type Nat = Z | S(Nat)` (≈46 files under `test/cure/elab/`, plus `test/cure/compiler/dependent_vec_codegen_test.exs`) keeps tuples and must pass UNMODIFIED — they are the nominal-no-op regression pins. Spec §4 (review-verified): the flip bucket is EMPTY — no existing test combines canonical Std.Nat with a runtime-shape assertion; Task 1 re-verifies with a grep and STOPs if that changed.
 - Strict red-green TDD; tests behavioral and immutable once green. ONE mix command at a time, ever (past concurrent run caused a kernel panic); scoped `mix test <file>` per step; the full gate runs ONCE, alone, in Task 4.
 - Git: commit per task; EVERY commit `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`; NO Co-Authored-By/trailers; explicit-pathspec staging only.
@@ -26,6 +26,7 @@
 - `lib/antigen/generators/elab_nat_rep.ex` — NEW: fixed catalog + seeded corpus of closed canonical-Nat programs.
 - `lib/antigen/assays/elab.ex` — one `run/1` clause for `"elab/nat_rep"` + private oracle/decode helpers.
 - `lib/antigen/runner.ex` — one registry line.
+- `lib/antigen/challenge.ex` — one `@elab_keys` whitelist entry (`"functions" => :functions`).
 - `test/antigen/elab_nat_rep_test.exs` — NEW: discrimination + catalog gate + round-trip + wiring.
 
 ---
@@ -46,7 +47,7 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Note: `Std.Nat` AUTO-LOADS into every module (`test/cure/elab/auto_prelude_test.exs` pins this) — canonical-Nat programs need no `use` and must NOT declare a local `type Nat`. All arithmetic defs are written locally in the fixture (over the canonical Nat) so the emitted module is self-contained.
+Note: `Std.Nat` AUTO-LOADS into every module — `test/cure/elab/auto_prelude_test.exs` pins that a bare `Nat` type annotation and the `plus` def resolve without `use`, but that test does NOT exercise bare ctor construction. The evidence that bare `S(...)/Z()` also resolves is architectural, not that single pin: `Cure.Elab.Program`'s `auto_prelude_imports(ast) ++ imports(ast)` (`program.ex:545`) feeds BOTH auto-loaded and explicit `use` sources through the identical `shadow_resolved_imports`/`module_slice_env` merge pipeline — there is no separate, more restricted code path for auto-prelude sources. And `test/cure/elab/type_shadowing_test.exs:95` (`fn imported_one() -> Std.Nat = S(Z())`, mirrored by the `test/oracle/shadow/shadow03_unshadowed_visible.cure` fixture) proves that path DOES resolve bare `S`/`Z` to the imported canonical ctors when `use Std.Nat` supplies them and nothing local shadows the bare names. Since auto-prelude and `use` are the same mechanism, bare ctor construction is expected to resolve the same way with no `use` at all. Canonical-Nat programs need no `use` and must NOT declare a local `type Nat`. All arithmetic defs are written locally in the fixture (over the canonical Nat) so the emitted module is self-contained.
 
 ```elixir
 defmodule Cure.Elab.NatIntErasureTest do
@@ -139,7 +140,13 @@ Adjustment latitude: if the `swap` fixture's implicit-argument surface shape doe
 - [ ] **Step 2: Run to verify the right failures**
 
 Run: `mix test test/cure/elab/nat_int_erasure_test.exs`
-Expected: the nominal no-op test PASSES (today's behavior); every canonical-Nat test FAILS with assertion errors showing tuples/atoms (`assert apply(mod, :two, []) == 2` got `{:S, {:S, :Z}}`; `:zero` got `:Z`; etc.). If a fixture fails to ELABORATE (not just wrong shape), fix the fixture per Step 1's latitude before proceeding.
+Expected: the nominal no-op test PASSES (today's behavior, tuples); the other 5 FAIL with assertion errors showing today's tuple/atom representation, exactly:
+- rule 1: `apply(mod, :two, [])` expected `2`, got `{:S, {:S, :Z}}`; `apply(mod, :zero, [])` expected `0`, got `:Z`.
+- rule 2: `apply(mod, :t, [])` expected `1`, got `{:S, :Z}`; `apply(mod, :z, [])` expected `0`, got `:Z`.
+- rule 2 deep: `apply(mod, :t, [])` expected `1`, got `{:S, :Z}` (the `S(S(m))` match binds `m = {:S, :Z}`, i.e. today's tuple-1).
+- rule 3: `apply(mod, :t, [])` expected `5`, got `{:S, {:S, {:S, {:S, {:S, :Z}}}}}`.
+- generics: `apply(mod, :t, [])` expected `{:MkP, 2, 0}`, got `{:MkP, {:S, {:S, :Z}}, :Z}`.
+If a fixture fails to ELABORATE (not just wrong shape), fix the fixture per Step 1's latitude before proceeding.
 
 - [ ] **Step 3: Implement the emit hooks**
 
@@ -232,9 +239,9 @@ Expected: 6 tests, 0 failures.
 
 - [ ] **Step 5: Run the nominal/layering pin suites (one at a time)**
 
-- `mix test test/cure/elab/nested_pattern_test.exs test/cure/elab/first_class_function_test.exs test/cure/elab/polymorphic_function_test.exs test/cure/elab/guard_lint_test.exs` — all local-Nat fixtures: expected all pass unchanged.
+- `mix test test/cure/elab/` (the WHOLE directory, not a sample — Task 1's emit-hook change is exactly what could regress any of the ≈46 local-Nat fixture files the Global Constraints call out, and it must be isolated to Task 1 BEFORE Task 2's elaborator change lands, so a regression can't be misattributed to the wrong commit): expected all pass unchanged, local-Nat fixtures included.
 - `mix test test/cure/core/` — kernel pins: expected all pass unchanged.
-- `mix test test/cure/elab/global_namespace_soundness_test.exs test/cure/compiler/dependent_vec_codegen_test.exs test/cure/elab/auto_prelude_test.exs` — erased-Core-shape, local-Nat codegen, and prelude pins: expected all pass unchanged.
+- `mix test test/cure/compiler/dependent_vec_codegen_test.exs` — local-Nat codegen pin (outside `test/cure/elab/`, so not covered by the directory run above): expected pass unchanged.
 
 Any failure here → STOP and report (these are the spec's do-not-touch pins).
 
@@ -329,7 +336,7 @@ Add (near `resolve_free`):
   end
 ```
 
-(Telescope domains are already de Bruijn-scoped over the earlier args, so wrapping inner-to-outer lines the binders up; the first arg is `{:var, k-1}` under `k` binders. Verify `result_params`/`result_indices` are `[]` (not e.g. `nil`) for a plain ctor by inspecting one — `Inductive.get_ctor(env, :Mk)`-style — in a quick `iex -S mix` is NOT allowed (build slot discipline: it compiles); instead read the ctor-construction site in `lib/cure/core/inductive.ex` (the `ctors:` fold near line ~90-100 region) and adjust the guard to the actual empty value if it differs.)
+(Telescope domains are already de Bruijn-scoped over the earlier args, so wrapping inner-to-outer lines the binders up; the first arg is `{:var, k-1}` under `k` binders. `result_params`/`result_indices` ARE `[]` for a plain ctor, confirmed at review time: `lib/cure/core/inductive.ex`'s `ctor/3` (line ~155) and `ctor/4` (line ~160) both default through to `ctor/5` (line ~172, `%{... result_indices: result_indices, result_params: result_params, ...}`) with a literal `[]` for the omitted arguments — never `nil`. No `iex` needed to confirm this; it's read directly off the builder chain.)
 
 Also update the now-stale comment at ~elaborator.ex:4732 ("`resolve_free` only ever yields the NULLARY `{:ctor, atom, []}`") to say the saturated-call clause builds the saturated ctor directly while `resolve_free` eta-expands bare positive-arity ctors (all-present, unindexed) and yields the nullary form otherwise.
 
@@ -360,6 +367,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - Create: `lib/antigen/generators/elab_nat_rep.ex`
 - Modify: `lib/antigen/assays/elab.ex` (one `run/1` clause + private helpers, inserted after the `"elab/guard_lint"` relation clause, before `elab/soundness`)
 - Modify: `lib/antigen/runner.ex` (one line after `defp assay_module("elab/guard_lint")`)
+- Modify: `lib/antigen/challenge.ex` (`@elab_keys` whitelist: add `"functions" => :functions`) — CONFIRMED required, not a maybe: read at review time, the whitelist (`challenge.ex:491-500`) has no `functions` entry and `from_pieces(:elab_program, ...)` raises `ArgumentError, "unknown elab payload key functions"` for any key not in the map. The round-trip test's payload carries `functions: [...]`, so this fires deterministically once the generator exists (Step 4) — this is not conditional on what "the red run demands."
 - Test: `test/antigen/elab_nat_rep_test.exs`
 
 **Interfaces:**
@@ -419,14 +427,18 @@ defmodule Antigen.ElabNatRepTest do
 end
 ```
 
-(If `Challenge.to_pieces/from_pieces` rejects the `functions` payload key — an atom-list value — the fix is one `@elab_keys` whitelist entry in `lib/antigen/challenge.ex`, exactly as F's `"expect_error"` fix; if the piece codec can't carry an atom list, store `functions` as strings in the payload and `String.to_atom` in the assay. Choose whichever the red run demands and report it.)
+`Challenge.to_pieces/from_pieces` WILL reject the `functions` payload key: `lib/antigen/challenge.ex`'s `@elab_keys` whitelist (lines 491-500) has no `functions` entry, and `from_pieces(:elab_program, ...)` raises `ArgumentError, "unknown elab payload key functions"` for any key outside the whitelist. Confirmed at review time, not a hypothetical — see Step 3(d) below. (The atom-list VALUE itself is fine: `Corpus`'s actual wire format is `:erlang.term_to_binary/Base.encode64`, not JSON, so an atom list round-trips through the scaffold with no encoding change needed — only the key needs whitelisting.)
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `mix test test/antigen/elab_nat_rep_test.exs`
-Expected: `UndefinedFunctionError` on `Antigen.Generators.ElabNatRep` and `FunctionClauseError` in `Antigen.Assays.Elab.run/1` for the discrimination test (no `"elab/nat_rep"` clause).
+Expected, per test:
+- discrimination: `FunctionClauseError` in `Antigen.Assays.Elab.run/1` (no `"elab/nat_rep"` clause matches the challenge).
+- catalog gate: `UndefinedFunctionError` — `Antigen.Generators.ElabNatRep.nat_rep_challenges/0` is undefined.
+- corpus round-trip: `UndefinedFunctionError` on the same call (fails before `to_pieces`/`from_pieces` is ever reached).
+- runner registry: `UndefinedFunctionError` or a non-matching return from `Antigen.Runner.assay_module_for/1` (no `"elab/nat_rep"` registry line).
 
-- [ ] **Step 3: Implement generator, assay clause, registry line**
+- [ ] **Step 3: Implement generator, assay clause, registry line, and the `@elab_keys` whitelist entry**
 
 (a) `lib/antigen/generators/elab_nat_rep.ex`:
 
@@ -527,7 +539,7 @@ defmodule Antigen.Generators.ElabNatRep do
 end
 ```
 
-(b) Assay clause in `lib/antigen/assays/elab.ex` (after the `"elab/guard_lint"` relation clause):
+(b) Assay clause in `lib/antigen/assays/elab.ex` (after the `"elab/guard_lint"` relation clause). No new alias needed: `Context` is already aliased there (used unqualified, e.g. `Context.empty(env)` at `elab.ex:216`), but `Normalise` is NOT — the file's one existing `Normalise` call (`Cure.Core.Normalise.with_fuel/2`, `elab.ex:224`) is already written fully-qualified, so match that precedent rather than introducing a new alias for a module the file has deliberately kept qualified:
 
 ```elixir
   # elab/nat_rep — representation agreement (spec 2026-07-08-nat-int-erasure §3):
@@ -556,12 +568,16 @@ end
         end
 
       other ->
-        {:violation, {:nat_rep_program_rejected, p.id, verdict_bit(other)}}
+        # `other` cannot be `{:ok, _}` here (already matched above), so
+        # `verdict_bit(other)` would always be the tautological `:reject` —
+        # carry the actual rejection term instead, so a real corpus regression
+        # is debuggable rather than reporting a constant.
+        {:violation, {:nat_rep_program_rejected, p.id, other}}
     end
   end
 
   defp kernel_nat(env) do
-    ctx = Cure.Core.Context.empty(env)
+    ctx = Context.empty(env)
 
     case Cure.Core.Normalise.nf(ctx, {:global, :main}, delta: :certified, mode: :nf) do
       :fuel_exhausted -> {:stuck, :fuel_exhausted}
@@ -569,9 +585,17 @@ end
     end
   end
 
-  defp decode_nat({:ctor, z, []}) when z in [:Z, :"Std.Nat.Z"], do: {:nat, 0}
+  # Bare atoms only: none of this corpus's fixed/seeded programs declare a
+  # local `type Nat` (§2.4 nominal rule), so the canonical `:Z`/`:S` ctors
+  # never collide and are never re-keyed (verified: `Cure.Elab.Resolution`'s
+  # re-key path only fires when a LOCAL declaration shadows an import, and
+  # even then uses a `"Mod#name"` atom, e.g. `:"Std.Nat#Z"` — never the
+  # `"Std.Nat.Z"` dot-form). If a future corpus addition ever needs a
+  # colliding-import case, add the real `#`-separated guard then; don't
+  # speculate here.
+  defp decode_nat({:ctor, :Z, []}), do: {:nat, 0}
 
-  defp decode_nat({:ctor, s, [inner]}) when s in [:S, :"Std.Nat.S"] do
+  defp decode_nat({:ctor, :S, [inner]}) do
     case decode_nat(inner) do
       {:nat, n} -> {:nat, n + 1}
       other -> other
@@ -599,7 +623,7 @@ end
 ```
 
 Implementation notes:
-- The `decode_nat` name guards accept both bare and namespaced ctor atoms — verify at red time which form `Normalise.nf` returns for the auto-prelude Nat (the canonical ctors may be re-keyed) and prune the guard to the observed form rather than leaving speculative names; report which.
+- `decode_nat` matches only the bare `:Z`/`:S` atoms (confirmed the canonical form — see the comment above it). If a future red run somehow surfaces a different atom (e.g. this corpus grows a colliding-import fixture later), that is itself a finding to investigate, not a signal to silently widen the guard.
 - `kernel_nat` requires `Std.Nat`'s… actually the local `add/dbl/pred` defs to be certified for δ-unfolding — they are structurally recursive, exactly what `maybe_certify` certifies during ordinary elaboration. If `nf` returns a stuck `{:global, …}` head at red time, that's a `{:nat_rep_kernel_stuck, …}` violation to investigate, not to paper over.
 - If `Normalise.nf`'s option names differ (`mode: :nf` may be implicit/absent), read `lib/cure/core/normalise.ex:36-37,97-231` and use the real option set; the spec's requirement is `delta: :certified`.
 
@@ -607,6 +631,22 @@ Implementation notes:
 
 ```elixir
   defp assay_module("elab/nat_rep"), do: Antigen.Assays.Elab
+```
+
+(d) `lib/antigen/challenge.ex`'s `@elab_keys` whitelist (confirmed required — see the Files note above): add one entry so the payload's `functions` key survives `to_pieces`/`from_pieces`:
+
+```elixir
+  @elab_keys %{
+    "id" => :id,
+    "src" => :src,
+    "transform" => :transform,
+    "base_src" => :base_src,
+    "variant_src" => :variant_src,
+    "expect" => :expect,
+    "relation" => :relation,
+    "expect_error" => :expect_error,
+    "functions" => :functions
+  }
 ```
 
 - [ ] **Step 4: Run to verify green**
@@ -622,13 +662,11 @@ Expected: all pass (clause insertion must not disturb existing dispatch).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add -- lib/antigen/generators/elab_nat_rep.ex lib/antigen/assays/elab.ex lib/antigen/runner.ex test/antigen/elab_nat_rep_test.exs
+git add -- lib/antigen/generators/elab_nat_rep.ex lib/antigen/assays/elab.ex lib/antigen/runner.ex lib/antigen/challenge.ex test/antigen/elab_nat_rep_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(antigen): elab/nat_rep representation-agreement assay (kernel nf vs BEAM)" \
-  -- lib/antigen/generators/elab_nat_rep.ex lib/antigen/assays/elab.ex lib/antigen/runner.ex test/antigen/elab_nat_rep_test.exs
+  -- lib/antigen/generators/elab_nat_rep.ex lib/antigen/assays/elab.ex lib/antigen/runner.ex lib/antigen/challenge.ex test/antigen/elab_nat_rep_test.exs
 ```
-
-(If Step 1's whitelist contingency fired, include `lib/antigen/challenge.ex` in both the pathspec and the message: append `; challenge.ex functions-key whitelist`.)
 
 ---
 
@@ -639,7 +677,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 - [ ] **Step 1: Roadmap status sentence**
 
-In the roadmap's §4.2 "builtin-inductive foundation" status prose, append: "Phase 2 landed (spec 2026-07-08-nat-int-erasure): canonical Std.Nat erases to BEAM machine ints (Z→0, S→+1, case→zero-test/predecessor-bind), nominal-only (local Nat redeclarations keep tuples); bare positive-arity constructors now eta-expand (first-class `S`, general fix); representation agreement pinned by the Antigen elab/nat_rep assay (kernel certified-δ nf vs BEAM)."
+In `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, §4.2 "Current focus + explicit deferral (2026-07-03)", the first paragraph ends "...the mechanism does double duty." (confirmed at review time — this is the paragraph's last line). Append a new paragraph immediately after it (before the "**DEFERRED to work on the above...**" paragraph): "Phase 2 landed (spec 2026-07-08-nat-int-erasure): canonical Std.Nat erases to BEAM machine ints (Z→0, S→+1, case→zero-test/predecessor-bind), nominal-only (local Nat redeclarations keep tuples); bare positive-arity constructors now eta-expand (first-class `S`, general fix); representation agreement pinned by the Antigen elab/nat_rep assay (kernel certified-δ nf vs BEAM)."
 
 - [ ] **Step 2: Commit the doc**
 
