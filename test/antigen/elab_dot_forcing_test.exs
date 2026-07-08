@@ -174,4 +174,28 @@ defmodule Antigen.ElabDotForcingTest do
                |> Enum.filter(fn c -> c.payload.transform == "promote_use" end)
     end
   end
+
+  describe "corpus round-trip (serialization parity)" do
+    test "an accept catalog challenge (no expect_error key) survives to_pieces/from_pieces" do
+      c =
+        Antigen.Generators.ElabDotForcing.dot_forcing_challenges()
+        |> Enum.find(&(&1.payload.id == "forced/carried/right"))
+
+      {scaffold, pieces} = Challenge.to_pieces(c)
+      back = Challenge.from_pieces(:elab_program, c.assay, c.label, c.seed, c.note, scaffold, pieces)
+      assert back.payload == c.payload
+      assert back.assay == c.assay
+    end
+
+    test "a reject catalog challenge carrying expect_error survives to_pieces/from_pieces" do
+      c =
+        Antigen.Generators.ElabDotForcing.dot_forcing_challenges()
+        |> Enum.find(&(&1.payload.id == "forced/carried/wrong"))
+
+      {scaffold, pieces} = Challenge.to_pieces(c)
+      back = Challenge.from_pieces(:elab_program, c.assay, c.label, c.seed, c.note, scaffold, pieces)
+      assert back.payload == c.payload
+      assert back.assay == c.assay
+    end
+  end
 end
