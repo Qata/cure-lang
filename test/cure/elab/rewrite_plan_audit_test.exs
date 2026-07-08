@@ -45,8 +45,8 @@ defmodule Cure.Elab.RewritePlanAuditTest do
   # rewrite that changes nothing must classify as *different* error families,
   # exactly as Idris separates `NotRewriteRule` from `RewriteNoChange`.
   test "a non-equality rewrite proof is a distinct error family from a no-op rewrite" do
-    non_eq = "mod M\n  #{@nat}\n  fn f(n: Nat, m: Nat) -> Eq(Nat, m, m) = rewrite n in refl(m)\nend\n"
-    no_change = "mod M\n  #{@nat}\n  fn g(p: Eq(Nat, Z, Z), m: Nat) -> Eq(Nat, m, m) = rewrite p in refl(m)\nend\n"
+    non_eq = "mod M\n  #{@nat}\n  fn f(n: Nat, m: Nat) -> Equivalent(Nat, m, m) = rewrite n in reflexive(m)\nend\n"
+    no_change = "mod M\n  #{@nat}\n  fn g(p: Equivalent(Nat, Z, Z), m: Nat) -> Equivalent(Nat, m, m) = rewrite p in reflexive(m)\nend\n"
 
     assert {:error, e1} = Program.elaborate(non_eq)
     assert {:error, e2} = Program.elaborate(no_change)
@@ -66,18 +66,18 @@ defmodule Cure.Elab.RewritePlanAuditTest do
   test "motive abstraction descends correctly under a :case branch binder" do
     src =
       "mod M\n  #{@nat}\n#{@plus}\n" <>
-        "  fn plus_succ_right(m: Nat, n: Nat) -> Eq(Nat, plus(m, S(n)), S(plus(m, n))) = match m\n" <>
-        "    Z() -> refl(S(n))\n" <>
-        "    S(k) -> rewrite plus_succ_right(k, n) in refl(S(S(plus(k, n))))\n" <>
+        "  fn plus_succ_right(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, S(n)), S(plus(m, n))) = match m\n" <>
+        "    Z() -> reflexive(S(n))\n" <>
+        "    S(k) -> rewrite plus_succ_right(k, n) in reflexive(S(S(plus(k, n))))\n" <>
         "end\n"
 
     assert {:ok, _env} = Program.elaborate(src)
   end
 
   # Candidate 2 — bridge-lemma rewrite step (rw07, red-green). The proof
-  # `plus_zero_right(n) : Eq(Nat, plus(n, Z), n)` has left endpoint `plus(n, Z)`,
+  # `plus_zero_right(n) : Equivalent(Nat, plus(n, Z), n)` has left endpoint `plus(n, Z)`,
   # which does NOT appear syntactically in the goal
-  # `Eq(Nat, plus(plus(Z, n), Z), n)`: the trusted normalizer freezes the goal's
+  # `Equivalent(Nat, plus(plus(Z, n), Z), n)`: the trusted normalizer freezes the goal's
   # LHS as a stuck `case` whose scrutinee is the UNREDUCED `plus(Z, n)` (never
   # δ-reduced to `n`), so the syntactic occurrence match misses. Idris matches up
   # to conversion and accepts.
@@ -85,17 +85,17 @@ defmodule Cure.Elab.RewritePlanAuditTest do
   # Fix (elaborator only, no TCB change): the reducible sub-occurrence `plus(Z, n)`
   # normalizes to `n` at top level, and replacing it by `n` in the goal exposes
   # `plus(n, Z)`. Synthesize an inline refl-bodied bridge proof
-  # `Eq(Nat, n, plus(Z, n))` (checked, not the blocked scrutinee conversion) and
+  # `Equivalent(Nat, n, plus(Z, n))` (checked, not the blocked scrutinee conversion) and
   # emit it as an OUTER rewrite wrapping the original, whose residual goal
-  # `Eq(Nat, plus(n, Z), n)` is exactly the rw01 pattern. Every conversion the
+  # `Equivalent(Nat, plus(n, Z), n)` is exactly the rw01 pattern. Every conversion the
   # kernel then sees is either top-level-decidable or structurally identical.
   test "bridge-lemma rewrite closes a definitional (non-syntactic) occurrence (rw07)" do
     src =
       "mod M\n  #{@nat}\n#{@plus}\n" <>
-        "  fn plus_zero_right(n: Nat) -> Eq(Nat, plus(n, Z), n) = match n\n" <>
-        "    Z() -> refl(Z)\n" <>
-        "    S(k) -> rewrite plus_zero_right(k) in refl(S(k))\n" <>
-        "  fn conv_occurrence(n: Nat) -> Eq(Nat, plus(plus(Z, n), Z), n) = rewrite plus_zero_right(n) in refl(n)\n" <>
+        "  fn plus_zero_right(n: Nat) -> Equivalent(Nat, plus(n, Z), n) = match n\n" <>
+        "    Z() -> reflexive(Z)\n" <>
+        "    S(k) -> rewrite plus_zero_right(k) in reflexive(S(k))\n" <>
+        "  fn conv_occurrence(n: Nat) -> Equivalent(Nat, plus(plus(Z, n), Z), n) = rewrite plus_zero_right(n) in reflexive(n)\n" <>
         "end\n"
 
     assert {:ok, _env} = Program.elaborate(src)

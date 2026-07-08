@@ -228,10 +228,10 @@ defmodule Cure.Elab.Program do
   # is bounded by what the DEPENDENT elaborator can currently import: only modules
   # that fully dependent-elaborate qualify, because `import_source_env` dependent-
   # checks each imported module. Std.Bool and Std.Nat qualify today. Excluded, why:
-  #   Std.Core   -- legacy bool_not/bool_and use `pickup` (:unsupported_expression)
-  #   Std.Equal  -- uses a :cure_refl symbol literal the elaborator rejects
-  #   Std.Refine -- refinement predicates not yet dependent-clean
-  #   Eq/Ord/Show/Functor protocols -- would couple instance resolution globally
+  #   Std.Core       -- legacy bool_not/bool_and use `pickup` (:unsupported_expression)
+  #   Std.Equivalent -- uses a :cure_refl symbol literal the elaborator rejects
+  #   Std.Refine     -- refinement predicates not yet dependent-clean
+  #   Equatable/Ord/Show/Functor protocols -- would couple instance resolution globally
   # Each can join once ported to dependent-clean syntax (ongoing parity work). The
   # listed modules are self-excluded (they stay self-contained on the seeded
   # builtins), which also breaks any bootstrap cycle. Each source is idempotent
@@ -282,7 +282,7 @@ defmodule Cure.Elab.Program do
   def dependent?({:rewrite_expr, _meta, _body}), do: true
 
   def dependent?({:function_call, meta, children}) when is_list(meta) do
-    Keyword.get(meta, :name) in ["Eq", "refl"] or Enum.any?(children, &dependent?/1)
+    Keyword.get(meta, :name) in ["Equivalent", "reflexive"] or Enum.any?(children, &dependent?/1)
   end
 
   def dependent?({:container, meta, body}) when is_list(meta) do

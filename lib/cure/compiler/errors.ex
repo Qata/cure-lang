@@ -504,7 +504,7 @@ defmodule Cure.Compiler.Errors do
     not definitionally equal to `x`.
 
     Fix: if the equality is true but not definitional, prove it using
-    `Std.Equal.trans/2`, `Std.Equal.cong/2`, or a `rewrite` step.
+    `Std.Equivalent.trans/2`, `Std.Equivalent.cong/2`, or a `rewrite` step.
     """,
     "E018" => """
     E018: Path-sensitive Refinement Conflict

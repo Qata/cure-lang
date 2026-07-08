@@ -11,7 +11,7 @@ defmodule Cure.Types.ProofTest do
     test "compile as modules with proof-shaped functions" do
       source = """
       proof ProofTest.Basic
-        fn id_law(_n: Int) -> Eq(Int, n, n) = :cure_refl
+        fn id_law(_n: Int) -> Equivalent(Int, n, n) = :cure_refl
       """
 
       {:ok, mod} = compile(source)
@@ -21,8 +21,8 @@ defmodule Cure.Types.ProofTest do
     test "allow multiple propositions in one container" do
       source = """
       proof ProofTest.Several
-        fn plus_zero(_n: Int) -> Eq(Int, n, n) = :cure_refl
-        fn zero_plus(_n: Int) -> Eq(Int, n, n) = :cure_refl
+        fn plus_zero(_n: Int) -> Equivalent(Int, n, n) = :cure_refl
+        fn zero_plus(_n: Int) -> Equivalent(Int, n, n) = :cure_refl
       """
 
       {:ok, mod} = compile(source)

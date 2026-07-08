@@ -114,13 +114,13 @@ defmodule Cure.Elab.ErasureRelevanceTest do
     end
 
     test "(e) erased implicit used only inside an Eq/proof position" do
-      # `n` occurs in the return TYPE `Eq(Nat, n, n)` (type position) and inside
-      # `refl(n)` (a proof term; `refl`'s argument is erased — `erase.ex:63`
+      # `n` occurs in the return TYPE `Equivalent(Nat, n, n)` (type position) and inside
+      # `reflexive(n)` (a proof term; `refl`'s argument is erased — `erase.ex:63`
       # drops it to `cure_refl`). No relevant use, so it must accept before AND
       # after the check.
       src =
         mod("""
-          fn f({n: Nat}, v: NV(n)) -> Eq(Nat, n, n) = refl(n)
+          fn f({n: Nat}, v: NV(n)) -> Equivalent(Nat, n, n) = reflexive(n)
         """)
 
       assert {:ok, _} = Program.elaborate(src)

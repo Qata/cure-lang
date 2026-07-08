@@ -1,17 +1,17 @@
 defmodule Cure.Elab.ValueInGoalMatchTest do
   @moduledoc """
   A dependent `match` whose GOAL mentions the scrutinee VALUE (not just its
-  index) — e.g. `Eq(NV(n), v, v)`. In each branch the dependent match refines the
-  scrutinee to that branch's constructor, so the goal refines to `Eq(NV(Z), vz,
-  vz)` / `Eq(NV(S m), vs s, vs s)`, which `refl(ctor)` inhabits. Idris accepts all
+  index) — e.g. `Equivalent(NV(n), v, v)`. In each branch the dependent match refines the
+  scrutinee to that branch's constructor, so the goal refines to `Equivalent(NV(Z), vz,
+  vz)` / `Equivalent(NV(S m), vs s, vs s)`, which `reflexive(ctor)` inhabits. Idris accepts all
   of these (`idris2 --check`, zero errors).
 
   RED before the fix: the plain-`match` branch computed its checking-mode
   `branch_expected` via an ad-hoc `branch_index_subst` that only inverts when the
   CONSTRUCTOR result index is a variable. For `v : NV(n)` matched by `vz : NV(Z)`
   the pair is `{Z, n}` (Z is not a var), so the scrutinee's index var `n` was
-  never inverted to `Z`; the goal stayed `Eq(NV(n), vz, vz)` and the body
-  `refl(vz()) : Eq(NV(Z), …)` failed conversion `NV(Z) ≢ NV(n)`. The kernel's own
+  never inverted to `Z`; the goal stayed `Equivalent(NV(n), vz, vz)` and the body
+  `reflexive(vz()) : Equivalent(NV(Z), …)` failed conversion `NV(Z) ≢ NV(n)`. The kernel's own
   `branch_unify` verdict already carries `n := Z` (the `j >= arity` inverse
   clause), and the with-rematch path already uses it; this fix routes the plain
   path through the same verdict.
@@ -36,52 +36,52 @@ defmodule Cure.Elab.ValueInGoalMatchTest do
   """
   defp mod(b), do: "mod P\n" <> @preamble <> b <> "end\n"
 
-  test "goal Eq(NV(n), v, v), var scrutinee, refl(ctor) bodies" do
+  test "goal Equivalent(NV(n), v, v), var scrutinee, reflexive(ctor) bodies" do
     src =
       mod("""
-        fn f({n: Nat}, v: NV(n)) -> Eq(NV(n), v, v) =
+        fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
           match v
-            vz() -> refl(vz())
-            vs(s) -> refl(vs(s))
+            vz() -> reflexive(vz())
+            vs(s) -> reflexive(vs(s))
       """)
 
     assert {:ok, _} = Program.elaborate(src)
   end
 
-  test "goal Eq(NV(n), v, v), refl(v) bodies (value-occurrence in both positions)" do
+  test "goal Equivalent(NV(n), v, v), reflexive(v) bodies (value-occurrence in both positions)" do
     src =
       mod("""
-        fn f({n: Nat}, v: NV(n)) -> Eq(NV(n), v, v) =
+        fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
           match v
-            vz() -> refl(v)
-            vs(s) -> refl(v)
+            vz() -> reflexive(v)
+            vs(s) -> reflexive(v)
       """)
 
     assert {:ok, _} = Program.elaborate(src)
   end
 
-  test "goal Eq(NV(n), view(n), view(n)), computed scrutinee" do
+  test "goal Equivalent(NV(n), view(n), view(n)), computed scrutinee" do
     src =
       mod("""
-        fn f(n: Nat) -> Eq(NV(n), view(n), view(n)) =
+        fn f(n: Nat) -> Equivalent(NV(n), view(n), view(n)) =
           match view(n)
-            vz() -> refl(vz())
-            vs(s) -> refl(vs(s))
+            vz() -> reflexive(vz())
+            vs(s) -> reflexive(vs(s))
       """)
 
     assert {:ok, _} = Program.elaborate(src)
   end
 
   test "soundness control: an ill-typed body at the refined goal is rejected" do
-    # In the vz branch the goal refines to `Eq(NV(Z), vz, vz)`. Returning
-    # `refl(vs(...))` (: Eq(NV(S _), vs _, vs _)) must be rejected — the value
+    # In the vz branch the goal refines to `Equivalent(NV(Z), vz, vz)`. Returning
+    # `reflexive(vs(...))` (: Equivalent(NV(S _), vs _, vs _)) must be rejected — the value
     # refinement must not over-accept a mismatched constructor.
     src =
       mod("""
-        fn f({n: Nat}, v: NV(n)) -> Eq(NV(n), v, v) =
+        fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
           match v
-            vz() -> refl(vs(szero()))
-            vs(s) -> refl(vs(s))
+            vz() -> reflexive(vs(szero()))
+            vs(s) -> reflexive(vs(s))
       """)
 
     assert {:error, _} = Program.elaborate(src)

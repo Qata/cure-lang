@@ -21,7 +21,7 @@ defmodule Cure.Core.NoGradualAnyTest do
     # The whole builtin surface is real inductives with real constructors.
     assert Builtins.schema(:bool) == [{:False, 0}, {:True, 0}]
     assert Builtins.schema(:nat) == [{:Z, 0}, {:S, 1}]
-    assert Builtins.schema(:eq) == [{:refl, 1}]
+    assert Builtins.schema(:eq) == [{:reflexive, 1}]
     # No top-type builtin under any of its usual gradual spellings.
     for key <- [:any, :Any, :top, :dynamic, :unknown] do
       assert_raise KeyError, fn -> Builtins.schema(key) end

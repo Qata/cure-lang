@@ -23,15 +23,15 @@ defmodule Cure.Elab.Ledger10HofInferTest do
   end
   """
 
-  # Dependent codomain: body `refl(n) : Eq(Nat, n, n)` ⇒ P := λn. Eq(Nat, n, n).
+  # Dependent codomain: body `reflexive(n) : Equivalent(Nat, n, n)` ⇒ P := λn. Equivalent(Nat, n, n).
   # The pattern var n must be abstracted INSIDE the Eq — the mabs Eq clause,
   # exercised here through the full elaborator rather than a unit unify call.
   @dep_src """
   mod MDep
     type Nat = Zero | Suc(Nat)
     fn hof({P: (Nat) -> Type}, g: (n: Nat) -> P(n)) -> P(Zero) = g(Zero)
-    fn mk() -> Eq(Nat, Zero, Zero) = hof(fn (n) -> refl(n) end)
-    fn direct() -> Eq(Nat, Zero, Zero) = refl(Zero)
+    fn mk() -> Equivalent(Nat, Zero, Zero) = hof(fn (n) -> reflexive(n) end)
+    fn direct() -> Equivalent(Nat, Zero, Zero) = reflexive(Zero)
   end
   """
 
@@ -45,13 +45,13 @@ defmodule Cure.Elab.Ledger10HofInferTest do
     assert apply(mod, :mk, []) == apply(mod, :one, [])
   end
 
-  test "dependent codomain P := λn. Eq(Nat,n,n) is inferred, accepted, and runs" do
+  test "dependent codomain P := λn. Equivalent(Nat,n,n) is inferred, accepted, and runs" do
     assert {:ok, env} = Program.elaborate(@dep_src)
 
     {:ok, mod} =
       Emit.compile_and_load(env, module: :"Cure.Ledger10Dep", functions: [:mk, :direct, :hof])
 
-    # P := λn. Eq(Nat,n,n); return P(Zero) = Eq(Nat,Zero,Zero); g(Zero) = refl(Zero).
+    # P := λn. Equivalent(Nat,n,n); return P(Zero) = Equivalent(Nat,Zero,Zero); g(Zero) = reflexive(Zero).
     assert apply(mod, :mk, []) == apply(mod, :direct, [])
   end
 end

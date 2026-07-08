@@ -5,16 +5,16 @@ defmodule Antigen.EqInductiveAntibodyTest do
   kernel SOUND and TERMINATING.
 
   Guards the coordinated change that seeds `Eq : (a:Type) -> a -> a -> Type` with
-  the single erased-witness constructor `refl : {w:a} -> Eq(a,w,w)` as an ordinary
+  the single erased-witness constructor `refl : {w:a} -> Equivalent(a,w,w)` as an ordinary
   builtin inductive, retargets surface `Eq`/`refl`, and WIDENS the two rewrite
   transport consumers — `Cure.Core.Kernel.ensure_eq/1` and the elaborator's
-  `eq_parts/1` — to accept the inductive `{:vdata, :Eq, [ty, a, b]}` value
+  `eq_parts/1` — to accept the inductive `{:vdata, :Equivalent, [ty, a, b]}` value
   alongside the retiring primitive `{:veq, ty, a, b}`.
 
   Two load-bearing soundness properties, each pinned with an INDEPENDENT oracle
   that never consults the machinery under test:
 
-    * REFL-IS-REFLEXIVE — a `refl` proof inhabits `Eq(ty, x, y)` **iff** `x` and
+    * REFL-IS-REFLEXIVE — a `refl` proof inhabits `Equivalent(ty, x, y)` **iff** `x` and
       `y` are convertible. The independent oracle is `Cure.Core.Conv.conv_within?`
       (deep conversion, no refl-check involvement). A violation would let a proof
       of a FALSE equation be manufactured, and rewrite/transport along it would
@@ -26,7 +26,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
       node with an ENDPOINT-DISTINGUISHING motive: the result type must be
       `motive @ b`, never `motive @ a`. A same-shaped decoy family (`Fake`, 1
       parameter + 2 indices) must be REJECTED — proving the clause keys on the
-      `:Eq` atom, not on the 3-element arity.
+      `:Equivalent` atom, not on the 3-element arity.
 
   Plus TERMINATION under a bounded Task harness. If any construction violates a
   SOUNDNESS assertion, the retarget is unsound: STOP — do not weaken the assertion.
@@ -65,11 +65,11 @@ defmodule Antigen.EqInductiveAntibodyTest do
   defp tru, do: {:ctor, :True, []}
   defp fls, do: {:ctor, :False, []}
 
-  defp eq_ty(sig, ty, a, b), do: Eval.eval({:data, :Eq, [ty], [a, b]}, Context.env(Context.empty(sig)))
+  defp eq_ty(sig, ty, a, b), do: Eval.eval({:data, :Equivalent, [ty], [a, b]}, Context.env(Context.empty(sig)))
 
-  # ---- SOUNDNESS: refl inhabits Eq(ty,x,y) IFF conv?(x,y) --------------------
+  # ---- SOUNDNESS: refl inhabits Equivalent(ty,x,y) IFF conv?(x,y) --------------------
 
-  test "refl proves Eq(ty,x,y) iff x and y are genuinely convertible (independent Conv oracle)" do
+  test "refl proves Equivalent(ty,x,y) iff x and y are genuinely convertible (independent Conv oracle)" do
     sig = base_sig()
     ctx = Context.empty(sig)
 
@@ -90,7 +90,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
 
     for {label, ty, x, y} <- scenarios do
       # Kernel judgement: does `refl x` check at `Eq ty x y`?
-      accepts = Kernel.check(ctx, {:ctor, :refl, [x]}, eq_ty(sig, ty, x, y)) == :ok
+      accepts = Kernel.check(ctx, {:ctor, :reflexive, [x]}, eq_ty(sig, ty, x, y)) == :ok
 
       # Independent oracle: are the two endpoints convertible? (No refl involved.)
       # conv_within? takes Core terms and evaluates them itself.
@@ -98,29 +98,29 @@ defmodule Antigen.EqInductiveAntibodyTest do
 
       assert accepts == convertible,
              "REFL-IS-REFLEXIVE VIOLATION for #{label}: kernel accepts refl=#{accepts} but " <>
-               "endpoints convertible=#{convertible}. A refl proof must inhabit Eq(ty,x,y) " <>
+               "endpoints convertible=#{convertible}. A refl proof must inhabit Equivalent(ty,x,y) " <>
                "iff x≡y — otherwise a false equation is provable and transport is unsound."
     end
   end
 
   # ---- ENSURE_EQ endpoint fidelity via an endpoint-distinguishing rewrite ----
 
-  test "rewrite over an inductive Eq(Nat,Z,S Z) hypothesis transports to motive @ b (not motive @ a)" do
+  test "rewrite over an inductive Equivalent(Nat,Z,S Z) hypothesis transports to motive @ b (not motive @ a)" do
     sig = base_sig()
 
-    # Hypothesis h : Eq(Nat, Z, S Z) in context (a hypothetical, possibly-false
+    # Hypothesis h : Equivalent(Nat, Z, S Z) in context (a hypothetical, possibly-false
     # equation — the kernel never needs it to be TRUE to type the transport, only
     # to extract the correct endpoints).
     ctx = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
 
-    # Endpoint-distinguishing motive:  λ x:Nat. Eq(Nat, x, Z)
-    #   motive @ Z    = Eq(Nat, Z,   Z)
-    #   motive @ S Z  = Eq(Nat, S Z, Z)
-    motive = {:lam, @nat, {:data, :Eq, [@nat], [{:var, 0}, z()]}}
+    # Endpoint-distinguishing motive:  λ x:Nat. Equivalent(Nat, x, Z)
+    #   motive @ Z    = Equivalent(Nat, Z,   Z)
+    #   motive @ S Z  = Equivalent(Nat, S Z, Z)
+    motive = {:lam, @nat, {:data, :Equivalent, [@nat], [{:var, 0}, z()]}}
 
     # rewrite (h : Eq Nat Z (S Z))  at motive  in (refl Z : motive @ Z).
-    # body is checked at motive @ a = Eq(Nat,Z,Z); result must be motive @ b.
-    node = {:rewrite, {:var, 0}, motive, {:ctor, :refl, [z()]}}
+    # body is checked at motive @ a = Equivalent(Nat,Z,Z); result must be motive @ b.
+    node = {:rewrite, {:var, 0}, motive, {:ctor, :reflexive, [z()]}}
 
     result = Kernel.infer(ctx, node)
 
@@ -136,14 +136,14 @@ defmodule Antigen.EqInductiveAntibodyTest do
            "rewrite transported to motive @ a — endpoints extracted in the wrong order"
   end
 
-  # ---- ENSURE_EQ is :Eq-precise: a same-shaped decoy family is NOT an equality -
+  # ---- ENSURE_EQ is :Equivalent-precise: a same-shaped decoy family is NOT an equality -
 
   test "a rewrite whose proof has a same-shaped non-Eq family type is rejected" do
     sig = fake_sig()
 
-    # h : Fake(Nat, Z, Z) — byte-shaped exactly like Eq(Nat,Z,Z) as a {:vdata,...}
+    # h : Fake(Nat, Z, Z) — byte-shaped exactly like Equivalent(Nat,Z,Z) as a {:vdata,...}
     # value, but a DIFFERENT family. ensure_eq/eq_parts must not treat it as an
-    # equality (they key on the :Eq atom, not the 3-element arity).
+    # equality (they key on the :Equivalent atom, not the 3-element arity).
     fake_val = Eval.eval({:data, :Fake, [@nat], [z(), z()]}, Context.env(Context.empty(sig)))
     ctx = Context.extend(Context.empty(sig), fake_val)
 
@@ -167,8 +167,8 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_h = Context.extend(ctx, eq_ty(sig, @nat, z(), z()))
 
     jobs = [
-      fn -> Kernel.check(ctx, {:ctor, :refl, [nat_lit(3)]}, eq_ty(sig, @nat, nat_lit(3), nat_lit(3))) end,
-      fn -> Kernel.check(ctx, {:ctor, :refl, [z()]}, eq_ty(sig, @nat, z(), s(z()))) end,
+      fn -> Kernel.check(ctx, {:ctor, :reflexive, [nat_lit(3)]}, eq_ty(sig, @nat, nat_lit(3), nat_lit(3))) end,
+      fn -> Kernel.check(ctx, {:ctor, :reflexive, [z()]}, eq_ty(sig, @nat, z(), s(z()))) end,
       fn -> Kernel.infer(ctx_h, {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}) end
     ]
 

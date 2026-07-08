@@ -501,10 +501,10 @@ defmodule Cure.Elab.Unify do
         subst
         |> Cure.Core.Eval.eval(env)
         |> Cure.Core.Normalise.whnf_value(sig, delta: :certified, stuck_cases: :preserve)
-        # Pass `sig` so an indexed-family value (`{:vdata, :Eq, params ++ indices}`)
-        # reifies back to the correctly-split `{:data, :Eq, params, indices}` rather
-        # than the flat `{:data, :Eq, all, []}`. Without it, a codomain metavariable
-        # solved through this whnf (`?P := λn. Eq(Nat,n,n)`, ledger #10) stores a
+        # Pass `sig` so an indexed-family value (`{:vdata, :Equivalent, params ++ indices}`)
+        # reifies back to the correctly-split `{:data, :Equivalent, params, indices}` rather
+        # than the flat `{:data, :Equivalent, all, []}`. Without it, a codomain metavariable
+        # solved through this whnf (`?P := λn. Equivalent(Nat,n,n)`, ledger #10) stores a
         # flat body, and the later `P(Zero)` check trips `check_spine`'s `:arg_arity`.
         |> Cure.Core.Quote.reify(depth, sig)
       end)

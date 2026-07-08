@@ -356,8 +356,8 @@ defmodule Cure.Types.Type do
             sigma
         end
 
-      name == "Eq" and length(params) == 3 ->
-        # Propositional equality: Eq(T, a, b)
+      name == "Equivalent" and length(params) == 3 ->
+        # Propositional equality: Equivalent(T, a, b)
         [t_ast, a_ast, b_ast] = params
         {:eq, resolve(t_ast), a_ast, b_ast}
 

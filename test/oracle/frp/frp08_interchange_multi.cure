@@ -10,9 +10,9 @@ mod Frp08
   fn app(xs: SList, ys: SList) -> SList = match xs
     SNil() -> ys
     SCons(x, r) -> SCons(x, app(r, ys))
-  fn appAssoc(xs: SList, ys: SList, zs: SList) -> Eq(SList, app(xs, app(ys, zs)), app(app(xs, ys), zs)) = match xs
-    SNil() -> refl(app(ys, zs))
-    SCons(x, r) -> rewrite appAssoc(r, ys, zs) in refl(SCons(x, app(app(r, ys), zs)))
+  fn appAssoc(xs: SList, ys: SList, zs: SList) -> Equivalent(SList, app(xs, app(ys, zs)), app(app(xs, ys), zs)) = match xs
+    SNil() -> reflexive(app(ys, zs))
+    SCons(x, r) -> rewrite appAssoc(r, ys, zs) in reflexive(SCons(x, app(app(r, ys), zs)))
   type SF indices (i: SList, o: SList, dec: Dec)
     prim : SF(av, bv, DCau)
     seq : SF(av, bv, d1) -> SF(bv, cv, d2) -> SF(av, cv, dmeet(d1, d2))

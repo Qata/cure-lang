@@ -14,7 +14,7 @@ defmodule Cure.Core.Builtins do
   @schemas %{
     bool: [{:False, 0}, {:True, 0}],
     nat: [{:Z, 0}, {:S, 1}],
-    eq: [{:refl, 1}]
+    eq: [{:reflexive, 1}]
   }
 
   @doc "The expected schema descriptor for a builtin key. Raises for an unknown key."
@@ -96,22 +96,22 @@ defmodule Cure.Core.Builtins do
       Inductive.ctor(:S, [{:n, {:data, :Nat, [], []}}], [])
     ]
 
-  # Eq : (a : Type) -> a -> a -> Type   (1 parameter `a`, 2 indices `x y : a`)
-  #   refl : {w : a} -> Eq(a, w, w)     (single ctor, witness `w` erased/forced)
+  # Equivalent : (a : Type) -> a -> a -> Type   (1 param `a`, 2 indices `x y : a`)
+  #   reflexive : {w : a} -> Equivalent(a, w, w)  (single ctor, witness `w` erased)
   #
   # The genuine inductive identity type (spec 2026-07-04), retiring the primitive
-  # `{:eq}`/`{:refl}`/`{:rewrite}` Core forms. This is the byte-for-byte mirror of
-  # the user-level `type MyEq(a) indices (x,y)  mrefl : MyEq(a,w,w)` (oracle
-  # `dotpat/dp01`): the de Bruijn shapes below are exactly what that GADT lowers
-  # to, with names MyEq→Eq / mrefl→refl. `w` is erased (quantity 0) so it is
-  # forced by index unification when matching `refl` and dropped at runtime, while
-  # the surface still supplies it explicitly at construction (`refl(x)`). K/UIP is
+  # `{:eq}`/`{:refl}`/`{:rewrite}` Core forms. The user-facing source of truth is
+  # the `@builtin(:eq)` declaration in `Std.Equivalent` (lib/std/equivalent.cure);
+  # this programmatic seed is its byte-for-byte mirror and the two are pinned equal
+  # by the conformance harness. `w` is erased (quantity 0) so it is forced by index
+  # unification when matching `reflexive` and dropped at runtime, while the surface
+  # still supplies it explicitly at construction (`reflexive(x)`). K/UIP is
   # inherited from the existing index unifier — operator-signed-off 2026-07-04.
   defp eq_family,
-    do: Inductive.family(:Eq, [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0)
+    do: Inductive.family(:Equivalent, [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0)
 
   defp eq_ctors,
     do: [
-      Inductive.ctor(:refl, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])
+      Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])
     ]
 end

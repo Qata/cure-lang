@@ -519,12 +519,12 @@ defmodule Cure.Core.Kernel do
   defp ensure_sigma(_), do: {:error, :not_a_sigma}
 
   # Require a type value to be an equality; return its two endpoint values.
-  # The inductive identity type `Eq(a, x, y)` (spec 2026-07-04) evaluates to a
-  # `{:vdata, :Eq, [a, x, y]}` value (1 parameter + 2 indices); its endpoints are
-  # the two indices. The primitive `{:veq}` form is still produced by the internal
-  # rewrite machinery (retired in a later phase), so both are accepted here.
+  # The inductive identity type `Equivalent(a, x, y)` (spec 2026-07-04) evaluates
+  # to a `{:vdata, :Equivalent, [a, x, y]}` value (1 parameter + 2 indices); its
+  # endpoints are the two indices. The primitive `{:veq}` form is still produced by
+  # the internal rewrite machinery (retired in a later phase), so both are accepted.
   defp ensure_eq({:veq, _ty, a_value, b_value}), do: {:ok, a_value, b_value}
-  defp ensure_eq({:vdata, :Eq, [_ty, a_value, b_value]}), do: {:ok, a_value, b_value}
+  defp ensure_eq({:vdata, :Equivalent, [_ty, a_value, b_value]}), do: {:ok, a_value, b_value}
   defp ensure_eq(_), do: {:error, :not_an_equality}
 
   # Check `args` against a dependent telescope, threading each evaluated arg so

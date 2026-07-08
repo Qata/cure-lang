@@ -1,5 +1,5 @@
 mod Rf04
   type Nat = Z | S(Nat)
-  fn trans({a: Type}, {x: a}, {y: a}, {z: a}, p: Eq(a, x, y), q: Eq(a, y, z)) -> Eq(a, x, z) = match p
-    refl() -> q
+  fn trans({a: Type}, {x: a}, {y: a}, {z: a}, p: Equivalent(a, x, y), q: Equivalent(a, y, z)) -> Equivalent(a, x, z) = match p
+    reflexive() -> q
 end

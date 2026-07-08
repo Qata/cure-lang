@@ -57,11 +57,11 @@ defmodule Cure.Lean.ModuleEncoder do
     end)
   end
 
-  defp canonicalize_term({:data, :Eq, [type], [lhs, rhs]}) do
+  defp canonicalize_term({:data, :Equivalent, [type], [lhs, rhs]}) do
     {:eq, canonicalize_term(type), canonicalize_term(lhs), canonicalize_term(rhs)}
   end
 
-  defp canonicalize_term({:ctor, :refl, [value]}), do: {:refl, canonicalize_term(value)}
+  defp canonicalize_term({:ctor, :reflexive, [value]}), do: {:refl, canonicalize_term(value)}
   defp canonicalize_term({:type, _} = term), do: term
   defp canonicalize_term({:var, _} = term), do: term
   defp canonicalize_term({:global, _} = term), do: term

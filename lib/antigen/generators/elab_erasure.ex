@@ -51,7 +51,7 @@ defmodule Antigen.Generators.ElabErasure do
      """},
     {"eq_proof_position", :accept, "erased `n` used only inside an Eq/proof term",
      """
-       fn f({n: Nat}, v: NV(n)) -> Eq(Nat, n, n) = refl(n)
+       fn f({n: Nat}, v: NV(n)) -> Equivalent(Nat, n, n) = reflexive(n)
      """},
     {"returned", :reject, "erased `n` returned as the value",
      """

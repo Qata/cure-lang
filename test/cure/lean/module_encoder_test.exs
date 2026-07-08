@@ -19,9 +19,9 @@ defmodule Cure.Lean.ModuleEncoderTest do
       )
       |> Env.add_def(
         :rewrite_id,
-        {:data, :Eq, [{:type, 1}], [{:type, 0}, {:type, 0}]},
-        {:rewrite, {:ctor, :refl, [{:type, 0}]}, {:lam, {:type, 1}, {:data, :Eq, [{:type, 1}], [{:var, 0}, {:var, 0}]}},
-         {:ctor, :refl, [{:type, 0}]}},
+        {:data, :Equivalent, [{:type, 1}], [{:type, 0}, {:type, 0}]},
+        {:rewrite, {:ctor, :reflexive, [{:type, 0}]}, {:lam, {:type, 1}, {:data, :Equivalent, [{:type, 1}], [{:var, 0}, {:var, 0}]}},
+         {:ctor, :reflexive, [{:type, 0}]}},
         []
       )
 

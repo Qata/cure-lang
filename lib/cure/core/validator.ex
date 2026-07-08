@@ -147,11 +147,14 @@ defmodule Cure.Core.Validator do
   defp violation(:no_hole, {:hole, _}), do: "hole present in Core term (K3)"
 
   # no_eq_node covers the two identity-type primitives that are now DEAD-PRODUCERS
-  # (K1a): the {:eq} type-former (mk_eq builds inductive {:data,:Eq}) and the
-  # {:refl} constructor (surface refl, symmetry_proof, and bridge_step f3b0e73 all
-  # build the inductive ctor). Both are :reject in release_config.
-  defp violation(:no_eq_node, {:eq, _, _, _}), do: "primitive :eq node; use inductive Eq (K1)"
-  defp violation(:no_eq_node, {:refl, _}), do: "primitive :refl node; use ctor refl (K1)"
+  # (K1a): the {:eq} type-former (mk_eq builds inductive {:data,:Equivalent}) and the
+  # {:refl} constructor (surface reflexive, symmetry_proof, and bridge_step f3b0e73
+  # all build the inductive ctor). Both are :reject in release_config.
+  defp violation(:no_eq_node, {:eq, _, _, _}),
+    do: "primitive :eq node; use inductive Equivalent (K1)"
+
+  defp violation(:no_eq_node, {:refl, _}),
+    do: "primitive :refl node; use ctor reflexive (K1)"
 
   # no_rewrite_node is split out because {:rewrite} is STILL PRODUCED as the
   # transport eliminator (rewrite_plan/symmetry_proof/bridge_step). Retiring it

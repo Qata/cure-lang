@@ -303,7 +303,7 @@ defmodule Cure.Elab.Declarations do
     atom = if is_binary(name), do: String.to_atom(name)
 
     cond do
-      name == "refl" ->
+      name == "reflexive" ->
         Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
       atom && Inductive.get_ctor(env, atom) ->

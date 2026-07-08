@@ -251,22 +251,23 @@ defmodule Cure.Elab.Elaborator do
       end
 
     cond do
-      name == "refl" and length(args) == 1 ->
+      name == "reflexive" and length(args) == 1 ->
         [arg] = args
 
-        # Surface `refl(x)` supplies the (erased, forced) witness explicitly; build
-        # the inductive ctor `refl : {w:a} -> Eq(a,w,w)` with `x` in the erased slot
-        # (dropped at runtime by erasure). Matching is the ordinary `refl()` ctor
-        # pattern. Retires the primitive `{:refl, x}` (spec 2026-07-04).
+        # Surface `reflexive(x)` supplies the (erased, forced) witness explicitly;
+        # build the inductive ctor `reflexive : {w:a} -> Equivalent(a,w,w)` with `x`
+        # in the erased slot (dropped at runtime by erasure). Matching is the
+        # ordinary `reflexive()` ctor pattern. Retires the primitive `{:refl, x}`
+        # (spec 2026-07-04).
         #
         # A bare data ctor has no inference rule (`:ctor_requires_checking_mode`),
-        # so we synthesize refl's ONLY possible type — the reflexive `Eq(a, x, x)`
+        # so we synthesize reflexive's ONLY possible type — `Equivalent(a, x, x)`
         # over the witness's type/value — and have the kernel `check` the ctor
         # against it (validating that `x` inhabits `a` and the indices unify).
         with {:ok, arg_term, arg_type} <- elaborate_expr_typed(arg, names, ctx, env),
-             term = {:ctor, :refl, [arg_term]},
+             term = {:ctor, :reflexive, [arg_term]},
              arg_val = Eval.eval(arg_term, Context.env(ctx)),
-             type = {:vdata, :Eq, [arg_type, arg_val, arg_val]},
+             type = {:vdata, :Equivalent, [arg_type, arg_val, arg_val]},
              :ok <- Kernel.check(ctx, term, type) do
           {:ok, term, type}
         end
@@ -744,13 +745,13 @@ defmodule Cure.Elab.Elaborator do
           elaborate_expr_checked(positional, expected_core, names, ctx, env)
         end
 
-      name == "refl" and length(args) == 1 ->
+      name == "reflexive" and length(args) == 1 ->
         [arg] = args
 
-        # Checking-mode `refl(x)` — see the infer-mode note above. Build the
-        # inductive ctor and let the kernel check it against the expected `Eq`.
+        # Checking-mode `reflexive(x)` — see the infer-mode note above. Build the
+        # inductive ctor and let the kernel check it against the expected type.
         with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
-             term = {:ctor, :refl, [arg_term]},
+             term = {:ctor, :reflexive, [arg_term]},
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -997,30 +998,32 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A `rewrite` proof's type. The inductive identity type `Eq(a,x,y)` (spec
-  # 2026-07-04) infers to `{:vdata, :Eq, [a, x, y]}` (1 param + 2 indices); its
-  # `ty`/endpoints are that param and the two indices. The primitive `{:veq}` form
-  # is still produced by the internal transport machinery (retired later), so both
-  # are accepted.
+  # A `rewrite` proof's type. The inductive identity type `Equivalent(a,x,y)` (spec
+  # 2026-07-04) infers to `{:vdata, :Equivalent, [a, x, y]}` (1 param + 2 indices);
+  # its `ty`/endpoints are that param and the two indices. The primitive `{:veq}`
+  # form is still produced by the internal transport machinery (retired later), so
+  # both are accepted.
   defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
-  defp eq_parts({:vdata, :Eq, [ty, a, b]}), do: {:ok, ty, a, b}
+  defp eq_parts({:vdata, :Equivalent, [ty, a, b]}), do: {:ok, ty, a, b}
   defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
 
-  # Build the inductive identity type `Eq(ty, a, b)` and its `refl(x)` proof (spec
-  # 2026-07-04). The elaborator's transport/motive machinery constructs these —
-  # not the retiring primitive `{:eq}`/`{:refl}` — so that every Eq/refl which can
-  # reach user code (a `with … proof pf` binder, a returned equality) shares the
-  # single inductive representation user signatures elaborate to. The `{:rewrite}`
-  # eliminator node is still emitted as the internal transport mechanism; its
-  # kernel typing accepts either representation via `ensure_eq`.
-  defp mk_eq(ty, a, b), do: {:data, :Eq, [ty], [a, b]}
-  # Checking-position refl: fields-only spine; the expected `Eq` type supplies the
+  # Build the inductive identity type `Equivalent(ty, a, b)` and its `reflexive(x)`
+  # proof (spec 2026-07-04). The elaborator's transport/motive machinery constructs
+  # these — not the retiring primitive `{:eq}`/`{:refl}` — so that every
+  # Equivalent/reflexive which can reach user code (a `with … proof pf` binder, a
+  # returned equality) shares the single inductive representation user signatures
+  # elaborate to. The `{:rewrite}` eliminator node is still emitted as the internal
+  # transport mechanism; its kernel typing accepts either representation via
+  # `ensure_eq`.
+  defp mk_eq(ty, a, b), do: {:data, :Equivalent, [ty], [a, b]}
+  # Checking-position reflexive: fields-only spine; the expected type supplies the
   # parameter (M8.3 checking mode).
-  defp mk_refl(x), do: {:ctor, :refl, [x]}
-  # Inference-position refl (K6 §E.1): the family parameter `ty` rides the spine
-  # ahead of the witness `x`, so `Kernel.infer` reads it and yields `Eq(ty,x,x)`
-  # without metavariable inference. Used where refl sits in a proof/inferred slot.
-  defp mk_refl_infer(ty, x), do: {:ctor, :refl, [ty, x]}
+  defp mk_refl(x), do: {:ctor, :reflexive, [x]}
+  # Inference-position reflexive (K6 §E.1): the family parameter `ty` rides the
+  # spine ahead of the witness `x`, so `Kernel.infer` reads it and yields
+  # `Equivalent(ty,x,x)` without metavariable inference. Used where reflexive sits
+  # in a proof/inferred slot.
+  defp mk_refl_infer(ty, x), do: {:ctor, :reflexive, [ty, x]}
 
   # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
   # default so ordinary elaboration is untouched; used to diagnose non-termination
@@ -3444,7 +3447,7 @@ defmodule Cure.Elab.Elaborator do
     name = Keyword.get(meta, :name)
 
     cond do
-      name == "refl" ->
+      name == "reflexive" ->
         elaborate_expr_checked(expr, expected, names, ctx, env)
 
       is_binary(name) and Inductive.get_ctor(env, String.to_atom(name)) != nil ->
@@ -4091,10 +4094,10 @@ defmodule Cure.Elab.Elaborator do
           case elaborate_expr_typed(body_expr, [pname | names], ctx1, env) do
             {:ok, body_term, body_ty} ->
               # Pass the signature so an indexed-family body type like
-              # `Eq(Nat,n,n)` is read back as params+indices instead of the flat
-              # `{:data, :Eq, all, []}` shape. This term may become the solution
-              # for a codomain metavariable (`?P := λn. Eq(Nat,n,n)`), and the
-              # later `P(Zero)` kernel check expects the split form.
+              # `Equivalent(Nat,n,n)` is read back as params+indices instead of the
+              # flat `{:data, :Equivalent, all, []}` shape. This term may become the
+              # solution for a codomain metavariable (`?P := λn. Equivalent(Nat,n,n)`),
+              # and the later `P(Zero)` kernel check expects the split form.
               body_ty_term = Quote.reify(body_ty, Context.length(ctx1), env)
 
               case Unify.unify({:pi, dom_term, cod_term}, {:pi, dom_term, body_ty_term}, mctx, env) do

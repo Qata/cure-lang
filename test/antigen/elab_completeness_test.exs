@@ -27,7 +27,7 @@ defmodule Antigen.ElabCompletenessTest do
       # The assay trusts the :well_typed label — its job is only to turn a
       # REJECT into {:rejected_well_typed, id, _}. So any program the elaborator
       # rejects proves the assay fires. (The original fixture here was the
-      # value-in-goal refl(ctor) shape, which the scrutinee-refinement fix made
+      # value-in-goal reflexive(ctor) shape, which the scrutinee-refinement fix made
       # ACCEPT — the assay caught exactly what it was built for. This fixture
       # returns the wrong constructor in the vz branch, which the kernel must
       # always reject.)
@@ -37,10 +37,10 @@ defmodule Antigen.ElabCompletenessTest do
         type NV indices (n: Nat)
           vz : NV(Z)
           vs : NV(n) -> NV(S(n))
-        fn f({n: Nat}, v: NV(n)) -> Eq(NV(n), v, v) =
+        fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
           match v
-            vz() -> refl(vs(vz()))
-            vs(s) -> refl(vs(s))
+            vz() -> reflexive(vs(vz()))
+            vs(s) -> reflexive(vs(s))
       end
       """
 

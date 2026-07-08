@@ -3,5 +3,5 @@ mod Rf01
   fn plus(m: Nat, n: Nat) -> Nat = match m
     Z() -> n
     S(k) -> S(plus(k, n))
-  fn plus_zero_left(n: Nat) -> Eq(Nat, plus(Z, n), n) = refl(n)
+  fn plus_zero_left(n: Nat) -> Equivalent(Nat, plus(Z, n), n) = reflexive(n)
 end

@@ -42,12 +42,12 @@ defmodule Cure.OracleTest do
 
       File.write!(good, """
       type Nat = Z | S(Nat)
-      fn zero_refl() -> Eq(Nat, Z, Z) = refl(Z)
+      fn zero_refl() -> Equivalent(Nat, Z, Z) = reflexive(Z)
       """)
 
       File.write!(bad, """
       type Nat = Z | S(Nat)
-      fn bad() -> Eq(Nat, Z, S(Z)) = refl(Z)
+      fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)
       """)
 
       assert Oracle.cure_verdict(good) == :accept

@@ -178,11 +178,11 @@ defmodule Cure.Types.Checker do
     end
   end
 
-  # A return-type AST is proof-shaped when it mentions `Eq(...)` or is a
+  # A return-type AST is proof-shaped when it mentions `Equivalent(...)` or is a
   # refinement annotation. We stay permissive to avoid false positives on
   # newer dependent-type surface syntax.
   defp proof_shape?({:function_call, meta, _}) do
-    Keyword.get(meta, :name, "") == "Eq"
+    Keyword.get(meta, :name, "") == "Equivalent"
   end
 
   defp proof_shape?({:type_annotation, meta, _}) do
@@ -190,7 +190,7 @@ defmodule Cure.Types.Checker do
   end
 
   defp proof_shape?({:variable, _, name}) when is_binary(name) do
-    name in ["Eq", "Refl", "Proof"]
+    name in ["Equivalent", "Refl", "Proof"]
   end
 
   defp proof_shape?(_), do: false
@@ -594,7 +594,7 @@ defmodule Cure.Types.Checker do
       name == "Pid" and length(resolved_params) == 1 ->
         {:pid, hd(resolved_params)}
 
-      name == "Eq" and length(params) == 3 ->
+      name == "Equivalent" and length(params) == 3 ->
         [t_ast, a_ast, b_ast] = params
         {:eq, resolve_variant_type(t_ast, env, type_params), a_ast, b_ast}
 

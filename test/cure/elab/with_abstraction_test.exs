@@ -41,17 +41,17 @@ defmodule Cure.Elab.WithAbstractionTest do
   end
 
   # Capability B: `proof <name>` binds the scrutinee equation
-  # `Eq(Nat, g(n), pat)` in each branch. `lemma` demands exactly that equation,
+  # `Equivalent(Nat, g(n), pat)` in each branch. `lemma` demands exactly that equation,
   # so the body only type-checks with the bound proof — making it load-bearing.
   @proof_preamble """
   type Nat = Z | S(Nat)
   fn g(m: Nat) -> Nat = match m
     Z() -> Z()
     S(k) -> S(k)
-  fn lemma(a: Nat, b: Nat, eq: Eq(Nat, a, b)) -> Nat = b
+  fn lemma(a: Nat, b: Nat, eq: Equivalent(Nat, a, b)) -> Nat = b
   """
 
-  test "(wi04) `with g(n) proof pf` binds Eq(g(n), pat), consumed by a lemma" do
+  test "(wi04) `with g(n) proof pf` binds Equivalent(g(n), pat), consumed by a lemma" do
     src =
       @proof_preamble <>
         """
@@ -83,7 +83,7 @@ defmodule Cure.Elab.WithAbstractionTest do
 
   # Sibling / other-argument refinement (transport encoding): `with g(n)` refines
   # the in-scope parameter `pf : SNat(g(n))` per branch by TRANSPORTING it along
-  # the synthesized scrutinee equation `Eq(Nat, g(n), pat)` (a `:rewrite` term),
+  # the synthesized scrutinee equation `Equivalent(Nat, g(n), pat)` (a `:rewrite` term),
   # so `consume` — which demands `SNat(m)` at the branch constructor — accepts it.
   @sibling_preamble """
   type Nat = Z | S(Nat)

@@ -16,8 +16,8 @@ defmodule Antigen.Generators.ElabComplete do
   Each challenge is a self-contained surface module whose sole probe `fn` body is
   a dependent `match` that is **well-typed by construction**: in every branch the
   dependent match refines the scrutinee to that branch's constructor, so a goal
-  of the form `F(idx)` / `Eq(F(idx), scrut, scrut)` reduces to a goal the
-  branch's canonical inhabitant (`ctor` / `refl(ctor)`) provably satisfies. Idris
+  of the form `F(idx)` / `Equivalent(F(idx), scrut, scrut)` reduces to a goal the
+  branch's canonical inhabitant (`ctor` / `reflexive(ctor)`) provably satisfies. Idris
   accepts every one of these. The expected verdict is therefore ACCEPT; the
   `elab/completeness` assay reports an infection on any REJECT.
 
@@ -91,32 +91,32 @@ defmodule Antigen.Generators.ElabComplete do
      """},
 
     # goal is an Eq whose TYPE argument carries the index AND whose value
-    # endpoints are the scrutinee value; var scrutinee; refl(ctor) bodies.
-    {"eq_value/var/refl_ctor", :nat_nv, "goal Eq(NV(n), v, v), var scrutinee, refl(ctor)",
+    # endpoints are the scrutinee value; var scrutinee; reflexive(ctor) bodies.
+    {"eq_value/var/refl_ctor", :nat_nv, "goal Equivalent(NV(n), v, v), var scrutinee, reflexive(ctor)",
      """
-       fn f({n: Nat}, v: NV(n)) -> Eq(NV(n), v, v) =
+       fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
          match v
-           vz() -> refl(vz())
-           vs(s) -> refl(vs(s))
+           vz() -> reflexive(vz())
+           vs(s) -> reflexive(vs(s))
      """},
 
-    # same goal, but branch bodies return `refl(v)` (the scrutinee value) rather
+    # same goal, but branch bodies return `reflexive(v)` (the scrutinee value) rather
     # than rebuilding the constructor — isolates value-occurrence refinement.
-    {"eq_value/var/refl_scrut", :nat_nv, "goal Eq(NV(n), v, v), refl(v)",
+    {"eq_value/var/refl_scrut", :nat_nv, "goal Equivalent(NV(n), v, v), reflexive(v)",
      """
-       fn f({n: Nat}, v: NV(n)) -> Eq(NV(n), v, v) =
+       fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
          match v
-           vz() -> refl(v)
-           vs(s) -> refl(v)
+           vz() -> reflexive(v)
+           vs(s) -> reflexive(v)
      """},
 
     # the scrutinee is a COMPUTED view expression, not a variable.
-    {"eq_value/computed/refl_ctor", :nat_nv, "goal Eq(NV(n), view(n), view(n)), computed scrutinee",
+    {"eq_value/computed/refl_ctor", :nat_nv, "goal Equivalent(NV(n), view(n), view(n)), computed scrutinee",
      """
-       fn f(n: Nat) -> Eq(NV(n), view(n), view(n)) =
+       fn f(n: Nat) -> Equivalent(NV(n), view(n), view(n)) =
          match view(n)
-           vz() -> refl(vz())
-           vs(s) -> refl(vs(s))
+           vz() -> reflexive(vz())
+           vs(s) -> reflexive(vs(s))
      """},
 
     # computed-index family: goal mentions the scrutinee's stuck computed index

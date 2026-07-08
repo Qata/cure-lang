@@ -1,4 +1,4 @@
 mod Rw05
   type Nat = Z | S(Nat)
-  fn non_eq_proof(n: Nat, m: Nat) -> Eq(Nat, m, m) = rewrite n in refl(m)
+  fn non_eq_proof(n: Nat, m: Nat) -> Equivalent(Nat, m, m) = rewrite n in reflexive(m)
 end

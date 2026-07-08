@@ -11,8 +11,8 @@ defmodule Cure.Elab.GeneralizingMatchTest do
   The `with`-rematch path already shares `build_motive` (so the motive abstracts a
   computed scrutinee), but its BRANCH elaboration only applied the index inversion,
   not the value-refinement — so a rematch whose GOAL names the scrutinee value
-  (`Eq(NV(n), view(n), view(n))`) failed to refine per branch (`vz` branch goal
-  stayed `Eq(NV(n), …)` instead of `Eq(NV(Z), vz, vz)`). Idris `case` accepts the
+  (`Equivalent(NV(n), view(n), view(n))`) failed to refine per branch (`vz` branch goal
+  stayed `Equivalent(NV(n), …)` instead of `Equivalent(NV(Z), vz, vz)`). Idris `case` accepts the
   combined shape.
   """
   use ExUnit.Case, async: true
@@ -37,15 +37,15 @@ defmodule Cure.Elab.GeneralizingMatchTest do
 
   test "(gm01) with-rematch whose goal names the scrutinee value refines per branch" do
     # Capability C (with-rematch on the indexed NV via `view(n)`) AND capability A
-    # (goal `Eq(NV(n), view(n), view(n))` names the scrutinee value). Each branch
-    # must refine the goal to the branch constructor: vz → Eq(NV(Z), vz, vz);
-    # vs(s) → Eq(NV(S m), vs s, vs s), which refl(ctor) inhabits.
+    # (goal `Equivalent(NV(n), view(n), view(n))` names the scrutinee value). Each branch
+    # must refine the goal to the branch constructor: vz → Equivalent(NV(Z), vz, vz);
+    # vs(s) → Equivalent(NV(S m), vs s, vs s), which reflexive(ctor) inhabits.
     src =
       mod("""
-        fn foo(n: Nat, w: SNat(n)) -> Eq(NV(n), view(n), view(n)) =
+        fn foo(n: Nat, w: SNat(n)) -> Equivalent(NV(n), view(n), view(n)) =
           with view(n)
-            Z(), w | vz() -> refl(vz())
-            S(m), w | vs(s) -> refl(vs(s))
+            Z(), w | vz() -> reflexive(vz())
+            S(m), w | vs(s) -> reflexive(vs(s))
       """)
 
     assert {:ok, _env} = Program.elaborate(src)
@@ -66,15 +66,15 @@ defmodule Cure.Elab.GeneralizingMatchTest do
   end
 
   test "(gm03 soundness control) a mismatched-constructor body at the refined goal is rejected" do
-    # In the vz branch the goal refines to Eq(NV(Z), vz, vz). Returning
-    # refl(vs(szero())) (: Eq(NV(S _), …)) must be rejected — the value refinement
+    # In the vz branch the goal refines to Equivalent(NV(Z), vz, vz). Returning
+    # reflexive(vs(szero())) (: Equivalent(NV(S _), …)) must be rejected — the value refinement
     # must not over-accept.
     src =
       mod("""
-        fn foo(n: Nat, w: SNat(n)) -> Eq(NV(n), view(n), view(n)) =
+        fn foo(n: Nat, w: SNat(n)) -> Equivalent(NV(n), view(n), view(n)) =
           with view(n)
-            Z(), w | vz() -> refl(vs(szero()))
-            S(m), w | vs(s) -> refl(vs(s))
+            Z(), w | vz() -> reflexive(vs(szero()))
+            S(m), w | vs(s) -> reflexive(vs(s))
       """)
 
     assert {:error, _} = Program.elaborate(src)
