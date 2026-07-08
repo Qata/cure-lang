@@ -4,7 +4,7 @@
 
 **Goal:** Land the D1 kernel enabler — `check_motive_wf` accepts neutral type-valued applications (`b(first(p))`-shaped motives) via a reify+infer clause, plus the §2.4 defensive `{:pair,…}` infer clause — spec `docs/superpowers/specs/2026-07-08-neutral-app-sort-design.md` (hardened `fb68e84`).
 
-**Architecture:** Exactly two new clauses in `lib/cure/core/kernel.ex` (TCB — blanket-approved as Agda/Lean-aligned, FULL verification gate mandatory): an `infer_type_value_sort` clause that reifies the neutral application signature-aware and accepts only if the kernel's own term-level `infer/2` yields `{:vtype, l}`, and a one-line defensive `infer(_, {:pair,_,_})` rejection. Plus: unit tests, an Antigen antibody (accept pin + Malformed reject seed), and a new `sg` differential-oracle cluster.
+**Architecture:** Exactly two new clauses in `lib/cure/core/kernel.ex` (TCB — blanket-approved as Agda/Lean-aligned, FULL verification gate mandatory): an `infer_type_value_sort` clause that reifies the neutral application signature-aware and accepts only if the kernel's own term-level `infer/2` yields `{:vtype, l}`, and a one-line defensive `infer(_, {:pair,_,_})` rejection. Plus: unit tests, an Antigen antibody (a property-based `DepMatch` accepting variant + fixed accept/reject pins + a Malformed reject seed — see Task 2's gap note), and a new `sg` differential-oracle cluster.
 
 **Tech Stack:** Elixir, `Cure.Core.{Kernel,Quote,Context,Eval}`, ExUnit, Antigen, `mix cure.oracle` + idris2.
 
@@ -22,6 +22,7 @@
 
 - `lib/cure/core/kernel.ex` — the two clauses (Task 1).
 - `test/cure/elab/dependent_eliminator_test.exs` — NEW: surface probe + hand-built-Core negatives (Task 1).
+- `lib/antigen/generators/dep_match.ex` — one new `case_challenge/0` accepting arm, `neutral_app_motive_case/0` (Task 2).
 - `lib/antigen/generators/malformed.ex` — one new reject seed in `malformation/0` (Task 2).
 - `test/antigen/neutral_app_motive_test.exs` — NEW: accept/reject antibody pins through the real kernel (Task 2).
 - `test/oracle/sg/sg01_dependent_second.{cure,idr}` + generated `verdicts.json` — NEW (Task 3).
@@ -36,9 +37,10 @@
 
 - [ ] **Step 0: Pre-flight (read-only)**
 
-1. Confirm `kernel.ex` can reference `Quote` (grep `alias Cure.Core` in kernel.ex; if `Quote` is not in the alias list, use the fully-qualified `Cure.Core.Quote.reify/3` in the new clause instead of adding an alias line — keep the diff to the two clauses).
+1. `Quote` is already in `kernel.ex`'s alias list (`kernel.ex:19`: `alias Cure.Core.{Certificate, Context, Conv, Env, Eval, Inductive, Normalise, Quote, Term, Universe}` — settled by review, re-verify with `grep "alias Cure.Core" lib/cure/core/kernel.ex` in case a prior task edits it). Use the bare `Quote.reify/3` call in the new clause (no fully-qualified fallback needed, no new alias line — keeps the diff to the two clauses).
 2. Confirm `Quote.reify/3`'s public signature `reify(value, depth \\ 0, sig \\ nil)` (`lib/cure/core/quote.ex:40`) and that `{:vneutral, n}` dispatches to the private `reify_neutral/3` (quote.ex:76).
 3. Confirm `infer/2` has no `{:pair,_,_}` clause (grep `def infer` clause heads).
+4. Record the current `HEAD` commit hash (`git rev-parse HEAD`) as `<pre-batch-commit>` — Task 4's final-verification diffs need a stable reference point *before* Task 1's commit; note it down now rather than reconstructing it later from `git log`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -64,11 +66,35 @@ defmodule Cure.Elab.DependentEliminatorTest do
       mk_pair(x, y) -> x
     fn second({a: Type}, {b: (a) -> Type}, p: MySigma(a, b)) -> b(first(p)) = match p
       mk_pair(x, y) -> y
+    fn run_second() -> Nat = second(mk_pair(Z(), S(Z())))
   end
   """
 
   test "D1 probe: dependent second projection elaborates (b(first(p)) motive)" do
     assert {:ok, _env} = Program.elaborate(@probe)
+  end
+
+  test "D1 probe: second(mk_pair(x, y)) reduces/runs correctly on BEAM (spec §4 item 2)" do
+    # Monomorphic instance: a := Nat, b := (constant) Nat, x = Z(), y = S(Z()) — b's
+    # implicit is solved from the pair literal (b(x) =?= typeof(y) = Nat), the same
+    # higher-order/Miller-pattern inference already landed and exercised by
+    # `test/oracle/dep/dep07_higher_order_family.cure`'s `the2`. Also pins the
+    # `first(mk_pair(x,y)) -> x` ι-reduction inside branch checking (spec §4 item 2).
+    {:ok, env} = Program.elaborate(@probe)
+    # `functions:` must list every def actually called, not just the entry point —
+    # `run_second` calls `second`, which calls `first` — confirmed against
+    # `test/cure/elab/first_class_function_test.exs`'s multi-name `functions:` lists
+    # (e.g. `[:ap, :inc, :g]`); `module_forms/3` (emit.ex:80-89) emits forms only
+    # for the exact names given, no transitive-callee closure.
+    {:ok, mod} =
+      Cure.Elab.Emit.compile_and_load(env,
+        module: :"Cure.DependentEliminatorProbe",
+        functions: [:run_second, :second, :first]
+      )
+    # Runtime ctor encoding verified against test/cure/elab/auto_generalize_test.exs
+    # and conditional_test.exs: nullary ctors compile to bare atoms (Z -> :Z),
+    # ctors with args to tagged tuples (S(Z()) -> {:S, :Z}).
+    assert apply(mod, :run_second, []) == {:S, :Z}
   end
 
   test "negative: non-type-valued head in type position still rejects" do
@@ -133,12 +159,14 @@ defmodule Cure.Elab.DependentEliminatorTest do
 end
 ```
 
-Latitude (report every use): the two surface negatives pin *rejection*, not a specific tag — if a fixture fails to parse/elaborate for an incidental surface reason (e.g. the `?`-placeholder or implicit framing in the third test), adjust the FIXTURE to the nearest expressible form that still applies a wrong-domain / non-type head in type position; if no such surface form exists, replace that test with a hand-built-Core equivalent in the §2.4 describe block and note it. The probe test and both §2.4 tests are NOT adjustable. If the ctor atom for the hand-built cases is namespaced (`:"P.Z"`), resolve it the way `test/cure/elab/named_implicit_tail_test.exs`'s `ctor_atom/2` helper does.
+Latitude (report every use): the two surface negatives pin *rejection*, not a specific tag — if a fixture fails to parse/elaborate for an incidental surface reason (e.g. the `?`-placeholder or implicit framing in the third test), adjust the FIXTURE to the nearest expressible form that still applies a wrong-domain / non-type head in type position; if no such surface form exists, replace that test with a hand-built-Core equivalent in the §2.4 describe block and note it. The probe test and both §2.4 tests are NOT adjustable. If the ctor atom for the hand-built cases is namespaced (`:"P.Z"`), resolve it the way `test/cure/elab/named_implicit_tail_test.exs`'s `ctor_atom/2` helper does. The runtime-execution test's `run_second() -> Nat = second(mk_pair(Z(), S(Z())))` wrapper relies on `b`'s implicit being solved from the pair literal (Miller-pattern inference, landed and precedented by `test/oracle/dep/dep07_higher_order_family.cure`'s `the2`) — if this exact call needs an explicit type annotation or different argument shape to elaborate, adjust the wrapper (not the assertion on the returned runtime value) to the nearest form that still calls `second` on a genuine `mk_pair` instance; this test is NOT droppable (spec §4 item 2 / §6 criterion 1 require it) even if its exact surface needs adjustment.
+
+**Review-found gap:** spec §4 explicitly requires a distinct test — "`second(mk_pair(x, y))` reduces/runs correctly (BEAM execution of a monomorphic instance...)" — separate from mere elaboration success, and §6 acceptance criterion 1 says the probe must "elaborate AND RUN." The original plan draft only asserted `Program.elaborate(@probe)` succeeds, never compiling/running it — this is now fixed by the `@probe`'s added `run_second` wrapper and the new test above, using the `Cure.Elab.Emit.compile_and_load/2` + `apply/3` pattern (verified precedent: `test/cure/elab/bool_connective_codegen_test.exs`).
 
 - [ ] **Step 2: Run — capture the pre-change baseline**
 
 Run: `mix test test/cure/elab/dependent_eliminator_test.exs`
-Expected TODAY: the D1 probe FAILS (`{:error, :bad_motive}` where `{:ok, _}` expected); both surface negatives PASS (already reject); **both §2.4 tests PASS** (the napp value hits the fallthrough → `:bad_motive` — the crash path does not exist yet). Record all five outcomes.
+Expected TODAY: the D1 probe FAILS (`{:error, :bad_motive}` where `{:ok, _}` expected); the runtime-execution test ALSO FAILS (it pattern-matches `{:ok, env} = Program.elaborate(@probe)`, which today returns `{:error, :bad_motive}` — a `MatchError`, not a runtime-value mismatch); both surface negatives PASS (already reject); **both §2.4 tests PASS** (the napp value hits the fallthrough → `:bad_motive` — the crash path does not exist yet). Record all six outcomes.
 
 - [ ] **Step 3: Add ONLY the `infer_type_value_sort` napp clause**
 
@@ -164,12 +192,12 @@ Insert after the `{:vneutral, {:nvar, level}}` clause (~kernel.ex:613-620), exac
   end
 ```
 
-(Use `Cure.Core.Quote.reify` fully qualified if Step 0.1 found no alias.)
+(`Quote` is aliased per Step 0.1 — use the bare call as written above.)
 
 - [ ] **Step 4: Run — capture the mid-point crash (the §2.4 necessity proof)**
 
 Run: `mix test test/cure/elab/dependent_eliminator_test.exs`
-Expected NOW: the D1 probe PASSES; the non-function-head §2.4 test still passes (`ensure_pi` on a Nat head fails inside `infer` → `:not_a_type_value` → `:bad_motive`); **the pair-literal §2.4 test CRASHES with `FunctionClauseError` (no `infer/2` clause for `{:pair,…}`)**. Capture the exact exception — this is the red evidence that the defensive clause is load-bearing, not decorative.
+Expected NOW: the D1 probe PASSES; the runtime-execution test ALSO PASSES (nothing about `run_second` touches a pair-in-motive scenario, so the defensive clause added in Step 5 doesn't gate it); the non-function-head §2.4 test still passes (`ensure_pi` on a Nat head fails inside `infer` → `:not_a_type_value` → `:bad_motive`); **the pair-literal §2.4 test CRASHES with `FunctionClauseError` (no `infer/2` clause for `{:pair,…}`)**. Capture the exact exception — this is the red evidence that the defensive clause is load-bearing, not decorative.
 
 - [ ] **Step 5: Add the defensive `infer` clause**
 
@@ -184,8 +212,8 @@ Next to `infer/2`'s `{:fst,_}`/`{:snd,_}` clauses:
 
 - [ ] **Step 6: Run to verify all green, then the kernel neighborhood**
 
-Run: `mix test test/cure/elab/dependent_eliminator_test.exs` — expected 5 tests, 0 failures.
-Then (one at a time): `mix test test/cure/core/` — expected all pass (273+); `mix test test/cure/elab/` — expected all pass (440+, includes the new 5).
+Run: `mix test test/cure/elab/dependent_eliminator_test.exs` — expected 6 tests, 0 failures.
+Then (one at a time): `mix test test/cure/core/` — expected all pass (273+); `mix test test/cure/elab/` — expected all pass (440+, includes the new 6).
 
 - [ ] **Step 7: Commit**
 
@@ -200,11 +228,50 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 ### Task 2: Antigen antibody
 
-**Files:**
-- Modify: `lib/antigen/generators/malformed.ex` (one entry in the `malformation/0` frequency list, next to the existing `case_bad_motive` entries at ~line 65-67)
-- Test: `test/antigen/neutral_app_motive_test.exs` (new)
+**Gap found in review (spec §3 item 2, "Precedent to model both seeds on"):** the spec's explicit instruction for the ACCEPTING seed is to "add a D1 accepting variant [to `DepMatch`] (or as a sibling generator) rather than inventing new scaffolding" — precisely so item (iii)'s claim ("the existing conv/nf idempotence and substitution-law families exercise the new value shape via the enlarged accept set") is actually true. Verified against the worktree: `Antigen.Generators.DepMatch`'s `case_challenge/0` (`lib/antigen/generators/dep_match.ex:73-135`) currently has NO arm producing a neutral-application (`b(x)`-shaped) motive — every dependent-motive arm is `:data`-headed (`Vec m`, `Equivalent Nat m m`, `Ty`/`Sq`/`Tg` families) or the bare-nvar `tyvar_motive_case`. Without a new arm, `test/antigen/generators/dep_match_test.exs`'s existing property test (samples 500 challenges, calls `Kernel.infer` fresh on each via `SigMenu.rebuild_context`, and checks the claimed type + `Normalise.nf` non-exhaustion) NEVER exercises the new napp clause under property-based sampling — only Step 3's two fixed pins would, and those don't drive subject-reduction/normalization at all, just the error tag. So item (iii)'s gate obligation is unmet unless this is added. Step 1 below adds it; Steps 2-3 (the fixed pins) remain as a separate, complementary deterministic regression anchor at the exact `check_motive_wf` boundary — the two serve different purposes and neither substitutes for the other.
 
-- [ ] **Step 1: Write the failing antibody test**
+**Files:**
+- Modify: `lib/antigen/generators/dep_match.ex` (one new `case_challenge/0` arm — Step 1)
+- Modify: `lib/antigen/generators/malformed.ex` (one entry in the `malformation/0` frequency list, next to the existing `case_bad_motive` entries at ~line 65-67 — Step 4)
+- Test: `test/antigen/neutral_app_motive_test.exs` (new — Steps 2-3)
+
+- [ ] **Step 1: Add a D1-accepting variant to `DepMatch`**
+
+Add a new arm to `case_challenge/0`'s `Gen.frequency` list (`lib/antigen/generators/dep_match.ex`), mirroring `closed_index/1`'s "closed `Vec Z` forces the `vcons` branch `:impossible`" trick so only ONE branch needs a real inhabitant, but with a neutral-application motive `λm.λv:Vec(m). b(m)` instead of a constant/`:data`-headed one — `b` is a fresh context variable of type `(Nat) -> Type`, and a second context witness `w : b(Z)` supplies the one inhabitant the reachable (`vnil`) branch needs:
+
+```elixir
+      {2, neutral_app_motive_case()}
+```
+
+```elixir
+  # D1 neutral-application motive: λm. λv:Vec(m). b(m) — the NEW napp shape
+  # (b is a free context variable of type (Nat) -> Type; b(m) reifies to
+  # {:app, <b>, <m>} and must sort via the new infer_type_value_sort clause).
+  # Closed to Vec(Z) so the vcons branch is :impossible (unify S k ~ Z fails,
+  # mirroring closed_index/1) — only vnil needs a real inhabitant, supplied by
+  # context witness w : b(Z).
+  #
+  # ctx (list position = final var index, per rebuild_context's reversed-fold):
+  #   0 = xs : Vec(Z)         (scrutinee)
+  #   1 = w  : b(Z)           (witness; its own type references b as {:var,0},
+  #                             the only var already bound at that point)
+  #   2 = b  : (Nat) -> Type
+  defp neutral_app_motive_case do
+    b_ty = {:pi, @nat, {:type, 0}}
+    w_ty = {:app, {:var, 0}, @z}
+    # under the motive's 2 own binders (m, v), ambient var k reads as {:var, 2+k}:
+    # b is ambient index 2 -> {:var, 4}; m is the motive's own outer binder -> {:var, 1}.
+    motive_napp = {:lam, @nat, {:lam, vec({:var, 0}), {:app, {:var, 4}, {:var, 1}}}}
+    term = mk_case({:var, 0}, motive_napp, [{:vnil, 0, {:var, 1}}, {:vcons, 3, @z}])
+    Gen.return({[vec(@z), w_ty, b_ty], term, {:app, {:var, 2}, @z}})
+  end
+```
+
+This shape is derived by hand from `DepMatch`'s established conventions (list-position-equals-final-var-index, confirmed against `var_index_extra`'s reference pattern; the closed-index `:impossible`-branch trick, confirmed against `closed_index/1`) — but per this review's falsifiability rule (read-only, no `mix`/`iex`), it has not been executed. The correctness oracle is `dep_match_test.exs`'s EXISTING generic property test, unchanged: run `mix test test/antigen/generators/dep_match_test.exs` after adding the arm. If any index is off, `Kernel.infer` will either error or return a type that doesn't match the claimed type, and the test flunks with the exact term/error printed — iterate the ARM (not the test, which is immutable pre-existing behavioral coverage) until green. This is the strict TDD red-green loop applied to a property-based generator: "red" here is "the new arm isn't sampled/covered yet"; "green" is "the existing property test passes with the arm present," which itself constitutes the discharge of spec item (iii)'s obligation.
+
+Also confirm the existing `dep_match_test.exs` "sample includes ..." `Enum.any?` assertions (pinned shapes) still pass — they check for EXISTING shapes' continued presence at existing frequencies in a 500-sample draw; adding one more weighted arm at low weight (2, matching the existing `var_index` weights) does not remove any existing shape from the frequency list, so this is expected to remain safe, analogous to the Malformed frequency-list addition in Step 4 below.
+
+- [ ] **Step 2: Write the failing antibody test**
 
 ```elixir
 defmodule Antigen.NeutralAppMotiveTest do
@@ -261,12 +328,12 @@ end
 
 (The accept pin's discrimination logic — "fails, but NOT with `:bad_motive`" — is deliberate: a fully inhabitable neutral-app case needs a `b`-instance value, which is what the Task 1 surface probe covers end-to-end; this pin isolates the motive-wf boundary itself. If ctor atoms are namespaced, use the `ctor_atom` resolution pattern. If branch-body checking rejects with something surprising, record the actual tag in the assertion message — the pin is `!= :bad_motive`.)
 
-- [ ] **Step 2: Run to verify the red**
+- [ ] **Step 3: Run to verify the red**
 
-Run: `mix test test/antigen/neutral_app_motive_test.exs`
-Expected: with Task 1 landed, BOTH may already pass (the antibody pins the landed behavior — red-before-Task-1 is impossible since Task 1 precedes; the "red" evidence for this task is instead the generator step below). If the accept pin fails WITH `:bad_motive`, Task 1 is broken — STOP.
+Run: `mix test test/antigen/generators/dep_match_test.exs test/antigen/neutral_app_motive_test.exs`
+Expected: with Task 1 landed, all may already pass — the fixed-pin antibody pins the landed behavior (red-before-Task-1 is impossible since Task 1 precedes; the "red" evidence for the fixed pins is the generator step below), and the new `DepMatch` arm's "red" evidence is the iterate-until-green loop described in Step 1 (run this same command after any arm adjustment). If the accept pin fails WITH `:bad_motive`, or `dep_match_test.exs` flunks on the new arm's term, Task 1 is broken or the new arm's shape is wrong — STOP for the former, iterate the arm for the latter.
 
-- [ ] **Step 3: Add the Malformed generator seed**
+- [ ] **Step 4: Add the Malformed generator seed**
 
 In `lib/antigen/generators/malformed.ex`'s `malformation/0` frequency list, next to the existing `case_bad_motive` entries (~65-67):
 
@@ -278,17 +345,17 @@ In `lib/antigen/generators/malformed.ex`'s `malformation/0` frequency list, next
        )},
 ```
 
-- [ ] **Step 4: Run the Antigen suite (scoped, then whole)**
+- [ ] **Step 5: Run the Antigen suite (scoped, then whole)**
 
-Run: `mix test test/antigen/` — expected: all pass (490 + 2 new = 492; the Malformed seed feeds existing `"term/rejection"` assays — if the frequency-list addition changes any seeded-run expectations pinned elsewhere, that is a STOP, not an edit).
+Run: `mix test test/antigen/` — expected: all pass (490 + 2 new = 492; the `DepMatch` arm feeds its existing 2 tests, no count change; the Malformed seed feeds existing `"term/rejection"` assays — if either frequency-list addition changes any seeded-run expectations pinned elsewhere, that is a STOP, not an edit).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add -- lib/antigen/generators/malformed.ex test/antigen/neutral_app_motive_test.exs
+git add -- lib/antigen/generators/dep_match.ex lib/antigen/generators/malformed.ex test/antigen/neutral_app_motive_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
-  -m "test(antigen): neutral-app motive antibody — accept pin + malformed napp reject seed" \
-  -- lib/antigen/generators/malformed.ex test/antigen/neutral_app_motive_test.exs
+  -m "test(antigen): neutral-app motive antibody — DepMatch accept variant + fixed pins + malformed napp reject seed" \
+  -- lib/antigen/generators/dep_match.ex lib/antigen/generators/malformed.ex test/antigen/neutral_app_motive_test.exs
 ```
 
 ---
@@ -301,7 +368,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 - [ ] **Step 1: Author the pair**
 
-`sg01_dependent_second.cure` — mirror the framing of an existing accept fixture (read `test/oracle/guard/guard01_simple.cure` for the house format), content = the Task 1 probe module.
+`sg01_dependent_second.cure` — mirror the framing of `test/oracle/dpair/dpp01_poly_nested.cure` (the closest existing analog: a dependent-pair/Sigma probe with a GADT `indices (...)` family), not `guard01_simple.cure` — content = the Task 1 probe module. **No `start`/entry def is required or conventional**: `Oracle.cure_verdict/1` calls `Program.elaborate/1` directly and `idris_verdict/2` runs `idris2 --check` (both verified in `lib/cure/oracle.ex`) — neither executes the program, so a typecheck-only fixture is normal. Confirmed by precedent: `test/oracle/dpair/dpp01_poly_nested.{cure,idr}` and `test/oracle/dep/dep07_higher_order_family.{cure,idr}` have no `start` in either file and are committed `same`/`same` pairs. (`guard01_simple` has a `start` only because it happens to also double as a runnable demo — that's incidental to its cluster, not a house-format requirement.)
 
 `sg01_dependent_second.idr`:
 
@@ -344,18 +411,20 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - [ ] **Step 1: Full gates (ONE at a time, alone, in this order)**
 
 1. `mix test test/antigen/` — expected: 492, 0 failures.
-2. `mix test` — expected: ~3245 (3238 + 5 + 2, recount from actual red-step outputs; oracle replay included), 0 failures. One known non-reproducible Antigen-seed flake: exactly one Antigen seed failure → re-run once alone; if unreproduced, note honestly. Anything else = STOP.
+2. `mix test` — expected: ~3248 (3238 baseline + 6 Task-1 unit tests [includes the review-added runtime-execution test] + 2 Task-2 antibody tests + 2 Task-3 oracle-replay tests — `test/oracle_replay_test.exs` generates its `describe`/`test` pair PER CLUSTER via a compile-time `for cluster <- Cure.Oracle.clusters() do ... end` loop, so the new `sg` cluster adds exactly 2 tests to this file's count, not zero; recount all four terms from actual red-step outputs), 0 failures. One known non-reproducible Antigen-seed flake: exactly one Antigen seed failure → re-run once alone; if unreproduced, note honestly. Anything else = STOP.
 
 - [ ] **Step 2: Final verification**
 
-- `git diff <task1-commit>~1 HEAD -- lib/cure/core/` shows ONLY the two kernel.ex clauses (+ their comments) — nothing else under core.
-- `git diff --stat <task1-commit>~1 HEAD -- lib/cure/elab/ lib/cure/types/ lib/cure/compiler/` — empty except nothing at all (no elab change is expected in this initiative).
-- `git log --format='%an %ae' <task1-commit>~1..HEAD` — only `Made In Heaven madeinheaven@madeinheaven.com`.
+Use `<pre-batch-commit>` recorded in Task 1 Step 0.4 (the `HEAD` hash before any of this plan's commits) as the base of every diff below — do not use `<task1-commit>~1`, which requires re-deriving the same value less directly.
+
+- `git diff <pre-batch-commit> HEAD -- lib/cure/core/` shows ONLY the two kernel.ex clauses (+ their comments) — nothing else under core.
+- `git diff --stat <pre-batch-commit> HEAD -- lib/cure/elab/ lib/cure/types/ lib/cure/compiler/` — empty except nothing at all (no elab change is expected in this initiative).
+- `git log --format='%an %ae' <pre-batch-commit>..HEAD` — only `Made In Heaven madeinheaven@madeinheaven.com`.
 
 ---
 
 ## Self-review notes (spec-coverage map)
 
-- §2 clause → Task 1 Step 3 (verbatim, signature-aware reify per hardened §2.2). §2.4 defensive clause + demonstrable necessity → Task 1 Steps 4-5 (mid-point crash captured). §3.1 red-green → Task 1 Steps 2/4/6. §3.2 antibody (accept pin + Malformed reject seed, precedents DepMatch/Malformed per spec) → Task 2. §3.3 full suites → Tasks 2/4. §3.4 oracle → Task 3 (single-cluster discipline + divergence STOP). §4's five tests → Task 1 (probe + 2 surface negatives + 2 hand-built §2.4). §6.5 diff criterion → Task 4 Step 2.
-- Latitude is confined to: surface framing of the two adjustable negatives, ctor-atom namespacing, and recount of gate totals — all report-required.
+- §2 clause → Task 1 Step 3 (verbatim, signature-aware reify per hardened §2.2). §2.4 defensive clause + demonstrable necessity → Task 1 Steps 4-5 (mid-point crash captured). §3.1 red-green → Task 1 Steps 2/4/6. §3.2 antibody → Task 2: the ACCEPTING seed is the new `DepMatch` variant (Step 1, per spec's explicit "add a D1 accepting variant there" precedent — a review-found gap in the original plan draft, now fixed) plus fixed accept/reject pins (Steps 2-3) as a complementary deterministic anchor; the REJECTING seed is the Malformed frequency-list addition (Step 4, precedent `Malformed.case_bad_motive/1` per spec). §3.3 full suites → Tasks 2/4. §3.4 oracle → Task 3 (single-cluster discipline + divergence STOP; fixture template is `dpair`, not `guard`, per review — no `start` def needed). §4's five spec-mandated behaviors → Task 1's six unit tests (probe elaborates + probe runs on BEAM [review-added, was missing] + 2 surface negatives + 2 hand-built §2.4). §6.5 diff criterion → Task 4 Step 2 (using `<pre-batch-commit>` recorded in Task 1 Step 0.4).
+- Latitude is confined to: surface framing of the two adjustable negatives, ctor-atom namespacing, the exact de Bruijn indices in the new `DepMatch` arm (iterate against `dep_match_test.exs` until green, per Task 2 Step 1), and recount of gate totals — all report-required.
 - D2 (Sigma retirement) is the chained follow-up; its scout inventory must be re-swept in-worktree (spec §5 note).
