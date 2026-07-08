@@ -3179,9 +3179,15 @@ defmodule Cure.Elab.Elaborator do
         end
 
       _solved_or_trivial when carried != nil ->
+        subst =
+          case verdict do
+            {:solved, s} -> s
+            :trivial -> %{}
+          end
+
         elaborate_carried_eq_branch(
           cname, telescope, result_indices, body_expr, branch_names,
-          ctx, env, scrut_param_vals, result_type_term, carried
+          ctx, env, scrut_param_vals, result_type_term, carried, pattern, subst
         )
 
       _solved_or_trivial ->
@@ -3354,11 +3360,18 @@ defmodule Cure.Elab.Elaborator do
   # `prf`, transport each index-mentioning sibling `h : H[idx]` to `H[ctor_idx]`
   # via `rewrite prf (λz. H[idx↦z]) h`, and emit `λprf. (λh'. body) transport`.
   # Mirrors capability-B's `elaborate_with_eq_branch`, keyed on the index term.
-  defp elaborate_carried_eq_branch(cname, telescope, result_indices, body_expr, branch_names, ctx, env, scrut_param_vals, result_type_term, carried) do
+  defp elaborate_carried_eq_branch(cname, telescope, result_indices, body_expr, branch_names, ctx, env, scrut_param_vals, result_type_term, carried, pattern, subst) do
     %{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings} = carried
     arity = length(telescope)
     branch_ctx0 = extend_context(ctx, telescope, scrut_param_vals)
 
+    # C-a (spec 2026-07-08 §2.1): run the forced named-implicit check on this
+    # carried-eq branch too, in the same pre-proof frame the plain path uses
+    # (`branch_ctx0` specialized by the branch-unify subst) — otherwise a wrong
+    # dot on a carried branch is silently discarded.
+    check_ctx = specialize_branch_context_subst(branch_ctx0, subst)
+
+    with :ok <- check_named_implicits(pattern, subst, arity, telescope, check_ctx, branch_names, env) do
     # `ctor_idx` — this constructor's result index at the carried position, in the
     # branch_ctx0 frame (telescope bound). `Eq(T, idx, ctor_idx)` is the proof the
     # motive hands each branch (kernel checks the branch at `motive @ ctor_idx`).
@@ -3415,6 +3428,7 @@ defmodule Cure.Elab.Elaborator do
         end)
 
       {:ok, {cname, arity, {:lam, eq_dom_term, wrapped}}}
+    end
     end
   end
 
