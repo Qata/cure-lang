@@ -18,10 +18,11 @@ Cure's build entry points maintain module ordering by hand or by accident:
   it silently emits **local** calls (`codegen.ex:1204-1213`), producing broken
   beams that `:undef` at runtime.
 - `mix cure.compile_stdlib` compiles `lib/std/*.cure` alphabetically.
-- Multi-file user compiles (`Cure.CLI.cmd_compile`/`cmd_run`,
-  `Cure.Project.compile_project`) never load compiled beams between files, so a
-  user module that `use`s a sibling module and calls it unqualified is silently
-  miscompiled (local-call fallback) **regardless of argument order**.
+- Multi-file user compiles (`Cure.CLI.cmd_compile`, `Cure.Project.compile_project`)
+  never load compiled beams between files, so a user module that `use`s a
+  sibling module and calls it unqualified is silently miscompiled (local-call
+  fallback) **regardless of argument order**. (`Cure.CLI.cmd_run` is single-file
+  only — it has no multi-file variant of this problem; see §3.2 item 3.)
 - `Cure.Stdlib.Preload`'s source-JIT fallback (`compile_missing_from_sources/1`)
   iterates alphabetically; a classic (non-dependent) module with `use Std.X` can
   hard-fail (`missing_stdlib_module`, `codegen.ex:2020-2046`) if X is not yet
@@ -134,9 +135,12 @@ in identical order.
 
 **Cycle policy: hard error.** A `use` cycle among in-set modules is rejected
 with a new error code, listing the cycle as `A (a.cure:3) -> B (b.cure:2) ->
-A`, using the next free `E`-code in the `Cure.Compiler.Errors` registry
-(E091 expected; implementation verifies against the registry and takes the
-actual next free code). Rationale: OCaml, Haskell, and Rust reject module-level
+A`, using the next free `E`-code in the `Cure.Compiler.Errors` registry. Note
+the registry's `E`/`W`/`H` codes share one numeric sequence, not independent
+per-letter counters (e.g. `W081`/`W082`/`H083`/`H084` sit between `E080` and
+`E085`, and `W091` already follows `E090`) — as of this writing the lowest
+free number is 086, not 091; implementation verifies against the registry and
+takes the actual next free code. Rationale: OCaml, Haskell, and Rust reject module-level
 import cycles; both current Cure graphs are DAGs; runtime mutual recursion
 (Environment↔TypeChecker) does not require cyclic `use` since the `use`
 declarations themselves are acyclic today. If a genuine need appears, modules
@@ -155,28 +159,64 @@ can merge or the policy can be revisited — the error message says so.
    loop (mirroring stage1). Today this changes nothing observable (fact 2/6) —
    it makes the pass principled and future-proofs classic `use` inside the
    stdlib.
-3. **`Cure.CLI.cmd_compile` / `cmd_run` (multi-file) and
-   `Cure.Project.compile_project`**: order the file list via DepGraph and
-   **load each emitted beam immediately after compiling it** (the
+3. **`Cure.CLI.cmd_compile`** (`cli.ex:439`, the only CLI entry that is
+   actually multi-file — it accepts a list of file/directory paths) **and
+   `Cure.Project.compile_project`** (`project.ex:522`, used by
+   `Cure.Release`, `release.ex:88`, over `cure_files` derived from the
+   project's source paths): order the file list via DepGraph and **load
+   each emitted beam immediately after compiling it** (the
    `Preload.load_if_present/2` pattern — `:code.load_binary`, no global path
-   pollution). This makes user→user `use` + unqualified calls link correctly.
-   Single-file invocations are unaffected (a one-node graph).
+   pollution). This makes user→user `use` + unqualified calls link
+   correctly. Single-file invocations are unaffected (a one-node graph).
+   `cmd_compile` resolves multiple top-level `paths` arguments (each
+   independently directory-wildcarded, `cli.ex:488-497`); the compile set
+   for ordering purposes is the union of every file resolved from every
+   given path, not each path ordered in isolation — otherwise a dependency
+   spanning two path arguments (`cure compile b_dir a_dir` where a file in
+   `b_dir` `use`s one in `a_dir`) would not be caught.
+   **`Cure.CLI.cmd_run` is out of scope for this item**: despite the name
+   resemblance, `cmd_run` (`cli.ex:522`) takes exactly one file
+   (`["run" | [path]]`, `cli.ex:93-94`) and compiles it via
+   `Cure.Compiler.compile_and_load/2`, which loads straight into the VM and
+   never writes a `.beam` to disk — there is no file list to order and no
+   emitted beam to load. It already benefits transitively once stdlib
+   preload (§3.3) gains closure-awareness, and needs no direct change here.
 4. **`resolve_import` silent fallback → warning.** When a `use`-imported
    unqualified call resolves to no import and falls back to a local call
-   (`codegen.ex:1208-1213`), emit a compiler warning through the existing
-   per-file `warnings` channel naming the function and the modules probed.
-   Behavior is otherwise unchanged (no new hard error — existing workflows that
-   rely on late loading keep working, but silence is removed).
+   (`codegen.ex:1208-1213`), emit a compiler warning naming the function and
+   the modules probed. This is new plumbing, not reuse of an existing
+   channel: `%Cure.Compiler.Codegen{}` (`codegen.ex:29-45`) carries no
+   `:warnings` field today, `compile_module_container/4` returns bare
+   `{:ok, forms}`, and the `warnings` element of `compile_file`'s
+   `{:ok, module, warnings}` result currently comes only from
+   `BeamWriter.compile_forms/2` (the Erlang compiler's own diagnostics,
+   `lib/cure/compiler.ex:117-131`) — codegen itself has no warnings sink to
+   emit into (contrast the type checker's W081/W082 pickup warnings, which
+   are collected in `Cure.Types.Checker`, a separate pipeline phase). This
+   item therefore requires adding a warnings accumulator to codegen state,
+   threading it through `compile_module_container` and `compile_module`'s
+   return value, and merging it with `BeamWriter`'s warnings before
+   `compile_file` returns. Behavior is otherwise unchanged (no new hard
+   error — existing workflows that rely on late loading keep working, but
+   silence is removed).
 
 ### 3.3 `Cure.Stdlib.Preload` — closure-aware selection
 
 - Extend the existing compile-time scan (same `@external_resource` baking
-  pattern) to also bake `%{module => [closure_dep_module]}` using
-  `DepGraph`-equivalent extraction. Groups and `@mod_regex`/`@group_regex`
-  stay; the new map is additive. (The scan may reuse DepGraph's parser-based
-  extraction; if parsing at Elixir compile time is unacceptable there — e.g.
-  parser not yet compiled in the same pass — a documented regex fallback for
-  `use` + qualified-call heads is acceptable, since stdlib style is enforced
+  pattern) to bake **two** maps, keeping the order-edges/closure-edges
+  distinction from §3.1 rather than flattening it away:
+  `%{module => [order_dep_module]}` (`use`-only, mirroring `DepGraph.order/1`'s
+  edge set) and `%{module => [closure_dep_module]}` (the full superset —
+  `use` + qualified-call targets + auto-prelude — mirroring
+  `DepGraph.closure/2`). A single flattened map would not suffice: bullet
+  below needs the order-only subset specifically, because ordering by the
+  full closure could over-constrain or spuriously cycle on qualified-call
+  edges that are legitimately order-free (fact 2) and were never meant to
+  gate load sequencing. Groups and `@mod_regex`/`@group_regex` stay; the new
+  maps are additive. (The scan may reuse DepGraph's parser-based extraction;
+  if parsing at Elixir compile time is unacceptable there — e.g. parser not
+  yet compiled in the same pass — a documented regex fallback for `use` +
+  qualified-call heads is acceptable, since stdlib style is enforced
   in-repo. The implementation plan decides with evidence; behavior, not
   mechanism, is normative here.)
 - `preload(kind:)` expands the selected module set to its **closure** over the
@@ -185,7 +225,7 @@ can merge or the policy can be revisited — the error message says so.
   for) are unchanged; closure only adds modules needed for the selection to
   actually run.
 - `compile_missing_from_sources/1` (source-JIT) iterates its module list in
-  dependency order (closure map restricted to order-edges is sufficient;
+  dependency order using the baked **order-only** map (not the closure map;
   alphabetical tie-break).
 - **Unchanged and explicitly preserved**: `__group__` convention in sources,
   `known_groups/0`, the `kind` API and its validation in `Cure.REPL.Config`,
@@ -213,8 +253,14 @@ accidents; DepGraph replaces those.
 
 ## 5. Testing
 
-TDD throughout; every behavioral claim below is a red test before its
-implementation lands.
+TDD throughout: for each item below, write the test first, watch it fail for
+the stated reason, then write the minimal implementation to turn it green,
+then refactor with the suite staying green. Once a test correctly encodes the
+behavior below, it is immutable — a red test goes green by changing
+implementation code, never by weakening, skipping, or rewriting the test. The
+sole exception is a test later proven to be itself wrong (misencodes the
+intended behavior), and that must be argued explicitly before the test is
+touched, not asserted as the fast path to green.
 
 1. **DepGraph unit tests** (`test/cure/compiler/dep_graph_test.exs`): ordering
    respects order-edges; deterministic output (same input → same order, ready
