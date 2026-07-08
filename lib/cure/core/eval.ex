@@ -125,14 +125,11 @@ defmodule Cure.Core.Eval do
   def fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
   def fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
 
-  # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality
-  # (`eq`/`ne` on Bool) are NO LONGER primitives: they are ordinary Cure
-  # functions in Std.Bool that `case`-eliminate the inductive Bool
-  # (`and`/`or`/`not`/`eq`/`ne`). A residual `{:prim, :and/:or/:not}`
-  # or Bool-operand `{:prim, :eq/:ne}` — which a well-typed term can no longer
-  # contain — falls through to the `:stuck` catch-all below and is rejected by
-  # `Kernel.infer` (`{:unknown_prim, _}`). The numeric `:eq`/`:ne` clauses above
-  # (on Int/Float) are untouched.
+  # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality are
+  # Std.Bool `case`-defs, never entries in this table. The catch-all is §G.1
+  # rule 1's backstop: any op/argument pair with no clause above (zero divisor,
+  # non-literal value, Bool ctor operand) is `:stuck` — the builtin-op spine
+  # stays neutral, never unsound (K2, spec 2026-07-09).
   def fold(_op, _args), do: :stuck
 
   defp vbool(true), do: {:vctor, :True, []}
