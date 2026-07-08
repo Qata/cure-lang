@@ -14,12 +14,19 @@ defmodule Antigen.Generators.Equality do
 
   Every term is well-typed **by construction** over the v1 signature: operands
   are closed inhabitants of the numeric / menu-datatype menu, and the claimed
-  `type` is exactly what `infer` returns. All terms stay in the kernel's
-  COHERENT fragment (infer(t)=A ⟹ check(t,A)=:ok): a bare params-on-spine
-  reflexive is deliberately NOT generated at top level, because the kernel's
-  checking-mode `{:ctor}` clause rejects the spine arity (`:ctor_arity`) that
-  its inference mode accepts — a known infer/check asymmetry; spine reflexives
-  appear only in inference positions (case scrutinees).
+  `type` is exactly what `infer` returns.
+
+  HISTORICAL (pre task #14, spec 2026-07-09-infer-check-coherence): terms used
+  to stay inside the kernel's COHERENT fragment (infer(t)=A ⟹ check(t,A)=:ok)
+  by construction — a bare params-on-spine reflexive was deliberately NOT
+  generated at top level, because the checking-mode `{:ctor}` clause rejected
+  the spine arity (`:ctor_arity`) that inference mode accepts (a known
+  infer/check asymmetry; spine reflexives appeared only in inference positions,
+  i.e. case scrutinees). That asymmetry is now FIXED — `check` subsumes
+  `infer`+conv on the spine arity — so the spine reflexive now generates in
+  BOTH positions (a top-level bare spine reflexive AND a checking-position
+  embedding), and the `term/infer_check` + `term/subject_reduction` assays
+  patrol the widened, no-longer-artificially-coherent space.
 
     * `Equivalent ty a b`                                → `Type 0`
     * `transport (reflexive ty a) (λ_. Nat) @ n`         → `Nat`
@@ -59,8 +66,35 @@ defmodule Antigen.Generators.Equality do
       {3, eq_type_term()},
       {2, transport_nat_term()},
       {2, checked_refl_transport_term()},
+      {2, spine_refl_term()},
+      {2, checked_spine_refl_term()},
       {3, neutral_eq_prop_term()}
     ])
+  end
+
+  # Task #14: a bare params-on-spine reflexive at TOP level — the K6 inference
+  # spelling that used to sit outside the coherent fragment. `infer` yields the
+  # Equivalent vdata; the `term/infer_check` assay now round-trips it back
+  # through `check` (previously `:ctor_arity`, now `:ok`). The claimed type is
+  # the FLAT `params ++ indices` spelling (reify has no signature to split it;
+  # same convention as `checked_refl_transport_term`).
+  defp spine_refl_term do
+    Gen.bind(inhabitant(), fn {a, ty} ->
+      Gen.return({{:ctor, :reflexive, [ty, a]}, {:data, :Equivalent, [ty, a, a], []}, []})
+    end)
+  end
+
+  # Task #14: the spine reflexive in CHECKING position — embedded as the argument
+  # of an identity lambda whose domain is the Equivalent type (the check-embedding
+  # idiom, `mutation.ex:141-148` precedent). `infer` on the `:app` drives
+  # `check(spine_refl, vdata)` — the exact site the coherence fix repaired.
+  defp checked_spine_refl_term do
+    Gen.bind(inhabitant(), fn {a, ty} ->
+      spine_refl = {:ctor, :reflexive, [ty, a]}
+      eq_ty = {:data, :Equivalent, [ty], [a, a]}
+      eq_ty_flat = {:data, :Equivalent, [ty, a, a], []}
+      Gen.return({{:app, {:lam, eq_ty, {:var, 0}}, spine_refl}, eq_ty_flat, []})
+    end)
   end
 
   # Equivalent ty a b : Type 0  (a, b share the same type ty — a well-typed

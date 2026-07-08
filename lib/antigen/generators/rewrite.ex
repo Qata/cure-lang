@@ -176,7 +176,10 @@ defmodule Antigen.Generators.Rewrite do
   end
 
   # refl coherence: transport (reflexive Causal) (λx.P x) @ h : P Causal (b = a).
-  # The proof sits in inference position, so it rides the params-on-spine form.
+  # The proof sits in inference position (case scrutinee), so it rides the
+  # params-on-spine form here. NB (task #14): the spine form is no longer an
+  # inference-position-only artifact — `check` now subsumes infer+conv on the
+  # spine arity, so a params-on-spine reflexive is also checkable directly.
   def transport_type(:refl_coherence) do
     dt = {:pi, @p_causal, @p_causal}
     proof = {:ctor, :reflexive, [@dec, {:ctor, :Causal, []}]}
