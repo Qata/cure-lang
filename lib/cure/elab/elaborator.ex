@@ -1060,14 +1060,59 @@ defmodule Cure.Elab.Elaborator do
 
   defp rw_ins(t), do: t |> inspect(limit: 14, printable_limit: 240) |> String.slice(0, 300)
 
+  # Phase-B adopted encoding (spec "Phase-B encoding amendment", 2026-07-08): the
+  # standard J/subst transport, exactly how Agda/Lean derive `subst`/`Eq.mpr`
+  # from J. Given `proof : Equivalent(ty, l, r)` and a single-endpoint motive
+  # `M = {:lam, ty, …}`, build
+  #
+  #     {:case, proof,
+  #       λ(x:ty). λ(y:ty). λ(p : Equivalent(ty,x,y)). (M@x) -> (M@y),
+  #       [reflexive(w) -> λ(h : M@l). h]}
+  #
+  # whose kernel-inferred type at the use site is `(M@l) -> (M@r)` (the kernel
+  # applies the motive at the scrutinee's ACTUAL indices, kernel.ex
+  # `infer {:case,…}`), while the reflexive branch is checked at the ctor's own
+  # indices `[w,w]` with `w := l` bound by the index unifier, i.e. at
+  # `(M@l) -> (M@l)` — which the identity inhabits. Applying the case to a body
+  # elaborated OUTSIDE at `M@l` yields `M@r`: no de Bruijn body shift, and no
+  # in-branch endpoint collapse (the in-branch re-elaboration route was
+  # empirically disproven during B1 — `build_motive` abstracts BOTH endpoints,
+  # demanding `l ≡ r` definitionally in-branch, false exactly when a rewrite is
+  # needed).
+  #
+  # The identity branch's lam domain is annotated `M@l` (shifted into the
+  # 1-binder branch frame), NOT `M@w`: `Kernel.check(lam, vpi)` converts the
+  # annotation against the expected domain, and the branch's expected domain
+  # after `specialize_branch_value` is `M@l`, not the fresh witness neutral.
+  # Sound for every producer site here because each site's motive never
+  # mentions the proof's second endpoint (it is abstracted away by
+  # `motive_for`/`symmetry_proof`, or the motive is constant for the bridge),
+  # so the branch substitution cannot touch anything the annotation's
+  # evaluation sees.
+  defp transport_case(proof, ty, motive, l) do
+    # Motive binders outside-in: x (Equivalent's first index), y (second), then
+    # the scrutinee p. Under x,y the scrutinee annotation's param shifts by 2;
+    # under x,y,p the arrow domain sees x at de Bruijn 2; the (non-dependent)
+    # codomain sits under one more binder, so y is also at de Bruijn 2 there.
+    scrut_ty = {:data, :Equivalent, [Subst.shift(ty, 2, 0)], [{:var, 1}, {:var, 0}]}
+
+    arrow =
+      {:pi, {:app, Subst.shift(motive, 3, 0), {:var, 2}},
+       {:app, Subst.shift(motive, 4, 0), {:var, 2}}}
+
+    arrow_motive = {:lam, ty, {:lam, Subst.shift(ty, 1, 0), {:lam, scrut_ty, arrow}}}
+    id_dom = {:app, Subst.shift(motive, 1, 0), Subst.shift(l, 1, 0)}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, id_dom, {:var, 0}}}]}
+  end
+
   # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
   # goal `expected`. Returns `{:ok, build, body_expected}`: `body_expected` is
   # the goal the surface body `t` must satisfy, and `build.(body_core)` assembles
-  # the full Core `:rewrite` term(s) around the checked body. (A builder — rather
-  # than a fixed `proof`/`motive` pair — lets the bridge case below nest an outer
-  # rewrite around the original one.)
+  # the transport-`:case` application around the checked body. (A builder —
+  # rather than a fixed `proof`/`motive` pair — lets the bridge case below nest
+  # an outer transport around the original one.)
   #
-  # Core rewrite transports M[a] -> M[b]. Idris-style source `rewrite p in t`
+  # The transport takes M[a] -> M[b]. Idris-style source `rewrite p in t`
   # checks `t` under the rewritten goal and returns the original goal, so when
   # the expected type contains the proof's left endpoint we synthesize symmetry.
   defp rewrite_plan(ctx, proof, ty, a, b, expected) do
@@ -1080,7 +1125,10 @@ defmodule Cure.Elab.Elaborator do
       contains_term?(expected, a) ->
         with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
              {:ok, motive} <- motive_for(expected, a, ty) do
-          {:ok, fn body -> {:rewrite, sym_proof, motive, body} end, replace_term(expected, a, b)}
+          # sym_proof : Eq(ty, b, a), so the transport's left endpoint is `b`:
+          # (M@b) -> (M@a) applied to the body checked at M@b = expected[a↦b].
+          {:ok, fn body -> {:app, transport_case(sym_proof, ty, motive, b), body} end,
+           replace_term(expected, a, b)}
         end
 
       # Definitional-but-not-syntactic occurrence (P0, rw07): `a` is absent from
@@ -1092,7 +1140,10 @@ defmodule Cure.Elab.Elaborator do
 
       contains_term?(expected, b) ->
         {:ok, motive} = motive_for(expected, b, ty)
-        {:ok, fn body -> {:rewrite, proof, motive, body} end, replace_term(expected, b, a)}
+        # proof : Eq(ty, a, b): (M@a) -> (M@b) applied to the body checked at
+        # M@a = expected[b↦a].
+        {:ok, fn body -> {:app, transport_case(proof, ty, motive, a), body} end,
+         replace_term(expected, b, a)}
 
       true ->
         {:error, {:rewrite_no_match, a, b, expected}}
@@ -1151,15 +1202,18 @@ defmodule Cure.Elab.Elaborator do
          mk_eq(Subst.shift(ty_s, 1, 0), Subst.shift(s_nf, 1, 0), Subst.shift(s, 1, 0))}
 
       # PROOF position: the outer `rewrite` INFERS this inner proof (kernel
-      # `infer({:rewrite,…})`). Since K6 §E.1 (parameters ride the spine), the
-      # inductive `refl` is now inferable — built with the family parameter `ty_s`
-      # ahead of the witness `s_nf`, so `infer` reads the param from the spine and
-      # yields `Eq(ty_s, s_nf, s_nf)`, which the outer `ensure_eq` consumes. The
-      # BODY is *checked* against `const_motive` (the inductive `refl`). This
-      # retires the last producer of the primitive `{:refl}` node. (Bridge is
-      # internal transport; only the outer motive — from the user goal — is
-      # user-facing.)
-      bridge_proof = {:rewrite, mk_refl_infer(ty_s, s_nf), const_motive, mk_refl(s_nf)}
+      # `infer({:rewrite,…})` → `infer({:app,…})` → `infer({:case,…})`). Since
+      # K6 §E.1 (parameters ride the spine), the inductive `refl` scrutinee is
+      # inferable — built with the family parameter `ty_s` ahead of the witness
+      # `s_nf`, so `infer` yields `Eq(ty_s, s_nf, s_nf)`. The transport over the
+      # CONSTANT motive has type `Eq(ty_s,s_nf,s) -> Eq(ty_s,s_nf,s)`; its
+      # argument `refl s_nf` is *checked* against `Eq(ty_s, s_nf, s)` — the
+      # top-level conversion `s_nf ≡ s` the kernel decides, same premise as the
+      # retired `{:rewrite}` form. (Bridge is internal transport; only the outer
+      # motive — from the user goal — is user-facing.)
+      bridge_proof =
+        {:app, transport_case(mk_refl_infer(ty_s, s_nf), ty_s, const_motive, s_nf),
+         mk_refl(s_nf)}
       {:ok, outer_motive} = motive_for(expected, s, ty_s)
 
       build = fn body ->
@@ -1190,9 +1244,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp symmetry_proof(proof, ty, a, _b) do
+    # M = λz. Eq(ty, z, a); proof : Eq(ty, a, b). The transport is
+    # (M@a) -> (M@b) = Eq(ty,a,a) -> Eq(ty,b,a), applied to refl(a).
     motive_body = mk_eq(Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0))
     motive = {:lam, ty, motive_body}
-    {:ok, {:rewrite, proof, motive, mk_refl(a)}}
+    {:ok, {:app, transport_case(proof, ty, motive, a), mk_refl(a)}}
   end
 
   defp motive_for(expected, target, ty), do: {:ok, {:lam, ty, abstract_term(expected, target, 0)}}

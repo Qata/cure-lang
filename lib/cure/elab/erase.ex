@@ -89,6 +89,29 @@ defmodule Cure.Elab.Erase do
   def erase(env, {:data, n, ps, is}),
     do: {:data, n, Enum.map(ps, &erase(env, &1)), Enum.map(is, &erase(env, &1))}
 
+  # Collapsible-family elimination (Phase B, spec "Phase-B encoding amendment"):
+  # a case whose single branch names the sole constructor of its family, all of
+  # whose fields are erased (e.g. `Equivalent`'s `reflexive`), carries zero
+  # runtime information — the matched shape is forced, so the case erases to its
+  # branch body outright (Brady/McBride/McKinna collapsible families; this is
+  # what lets the J/subst transport's proof scrutinee vanish at runtime exactly
+  # as the retired `{:rewrite}` node's proof did). The branch's erased binders
+  # are instantiated with an inert placeholder: they can only occur in positions
+  # erasure drops anyway (all fields are `:erased`, and erased pattern binders
+  # are surface-inaccessible), so the placeholder never survives into runtime-
+  # relevant code. MUST stay in lockstep with `Relevance.collapsible_case?/2`,
+  # which exempts the scrutinee from the relevance check on the same class —
+  # keeping the case here would emit a scrutinee referencing dropped binders.
+  def erase(env, {:case, s, m, [{cname, arity, body}] = branches}) do
+    if collapsible_ctor?(env, cname, arity) do
+      body
+      |> Cure.Elab.Subst.instantiate(List.duplicate({:ctor, :cure_erased, []}, arity))
+      |> then(&erase(env, &1))
+    else
+      {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
+    end
+  end
+
   def erase(env, {:case, s, m, branches}) do
     {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
   end
@@ -97,6 +120,20 @@ defmodule Cure.Elab.Erase do
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
   defp spine(head, acc), do: {head, acc}
+
+  # The single branch's ctor is its family's ONLY constructor and every field is
+  # erased (nonempty — nullary single-ctor families like Unit keep the ordinary
+  # case; this rule targets proof-like carriers). Mirror of
+  # `Relevance.collapsible_case?/2` — keep in lockstep.
+  defp collapsible_ctor?(env, cname, arity) do
+    with dname when dname != nil <- Inductive.ctor_family(env, cname),
+         [_only] <- Inductive.ctors_of(env, dname),
+         qs when is_list(qs) <- Inductive.ctor_quantities(env, cname) do
+      arity == length(qs) and qs != [] and Enum.all?(qs, &(&1 == :erased))
+    else
+      _ -> false
+    end
+  end
 
   @doc "Does the term still contain an unfilled hole?"
   @spec has_hole?(Cure.Core.Term.t()) :: boolean()

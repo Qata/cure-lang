@@ -133,11 +133,42 @@ defmodule Cure.Elab.Relevance do
 
   # `case`: the discriminant is scrutinised (relevant); the motive is a type
   # position (exempt); each branch body runs under `arity` fresh pattern binders.
+  #
+  # EXCEPTION — collapsible-family elimination (Phase B, spec "Phase-B encoding
+  # amendment"): a case whose single branch names the sole constructor of its
+  # family, all of whose fields are erased (e.g. `Equivalent`'s `reflexive`),
+  # inspects nothing at runtime — the matched shape is forced. Such a scrutinee
+  # is a PROOF position, exempt like the retired `{:rewrite}` node's proof
+  # (Idris2 permits case on a 0-multiplicity value precisely when the match has
+  # a single uninformative alternative; Brady/McBride/McKinna's collapsible
+  # families). Sound only because `Erase.erase` drops the whole case for the
+  # SAME class (its `collapsible_ctor?/3` must stay in lockstep with
+  # `collapsible_case?/2` here), so the exempted scrutinee never survives into
+  # the runtime term.
   defp walk({:case, scrut, _motive, branches}, depth, _site, st) do
-    with :ok <- walk(scrut, depth, :scrutinee, st) do
+    if collapsible_case?(st.env, branches) do
       each(branches, fn {_cname, arity, body} -> walk(body, depth + arity, :returned, st) end)
+    else
+      with :ok <- walk(scrut, depth, :scrutinee, st) do
+        each(branches, fn {_cname, arity, body} -> walk(body, depth + arity, :returned, st) end)
+      end
     end
   end
+
+  # Exactly one branch, naming its family's ONLY constructor, whose fields are
+  # all erased (and nonempty — a nullary single-ctor family like Unit keeps
+  # today's relevant-scrutinee treatment; this rule targets proof-like carriers).
+  defp collapsible_case?(env, [{cname, arity, _body}]) do
+    with dname when dname != nil <- Inductive.ctor_family(env, cname),
+         [_only] <- Inductive.ctors_of(env, dname),
+         qs when is_list(qs) <- Inductive.ctor_quantities(env, cname) do
+      arity == length(qs) and qs != [] and Enum.all?(qs, &(&1 == :erased))
+    else
+      _ -> false
+    end
+  end
+
+  defp collapsible_case?(_env, _branches), do: false
 
   # --- exempt positions: type formers and proof terms carry no runtime value ---
   defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
