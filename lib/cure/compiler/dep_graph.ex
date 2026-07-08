@@ -113,6 +113,48 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
+  @doc "Roots plus transitive dependencies over `dep_map`, sorted. Missing keys contribute nothing."
+  @spec closure(%{k => [k]}, [k]) :: [k] when k: term()
+  def closure(dep_map, roots) do
+    do_closure(dep_map, roots, MapSet.new()) |> MapSet.to_list() |> Enum.sort()
+  end
+
+  defp do_closure(_map, [], seen), do: seen
+
+  defp do_closure(map, [root | rest], seen) do
+    if MapSet.member?(seen, root) do
+      do_closure(map, rest, seen)
+    else
+      do_closure(map, Map.get(map, root, []) ++ rest, MapSet.put(seen, root))
+    end
+  end
+
+  @doc """
+  Generic deterministic Kahn sort of `keys` using `dep_map` edges restricted
+  to `keys`. SCC-tolerant like `order/1`: cycle members are emitted as an
+  alphabetical group, so the result is always a complete ordering.
+  """
+  @spec toposort(%{k => [k]}, [k]) :: [k] when k: term()
+  def toposort(dep_map, keys) do
+    keyset = MapSet.new(keys)
+
+    edges =
+      Map.new(keys, fn k ->
+        {k, dep_map |> Map.get(k, []) |> Enum.filter(&(MapSet.member?(keyset, &1) and &1 != k))}
+      end)
+
+    {ordered, _sccs} = kahn(edges)
+    ordered
+  end
+
+  @doc "Per-module closure deps (in-universe filtered, sorted). Baking input for Preload."
+  @spec closure_deps_map(t()) :: %{String.t() => [String.t()]}
+  def closure_deps_map(%__MODULE__{nodes: nodes}) do
+    for {_path, %{module: m} = node} <- nodes, is_binary(m), into: %{} do
+      {m, node.closure_deps}
+    end
+  end
+
   # -- scanning ---------------------------------------------------------------
 
   defp duplicate_module(nodes) do
@@ -158,13 +200,25 @@ defmodule Cure.Compiler.DepGraph do
               uses = collect_uses(ast)
               qualified = collect_qualified_targets(ast)
 
-              %{
-                base
-                | module: module,
-                  line: line,
-                  order_deps: uses,
-                  closure_deps: Enum.map(uses, & &1.target) ++ qualified
-              }
+              declared_types =
+                walk(ast, MapSet.new(), fn
+                  {:container, m, _}, acc when is_list(m) ->
+                    if Keyword.get(m, :container_type) in [:enum, :struct],
+                      do: MapSet.put(acc, Keyword.get(m, :name)),
+                      else: acc
+
+                  _n, acc ->
+                    acc
+                end)
+
+              base
+              |> Map.put(:declared_types, declared_types)
+              |> Map.merge(%{
+                module: module,
+                line: line,
+                order_deps: uses,
+                closure_deps: Enum.map(uses, & &1.target) ++ qualified
+              })
           end
         end
     end

@@ -144,4 +144,63 @@ defmodule Cure.Compiler.DepGraphTest do
       assert DepGraph.order_deps_map(graph) == %{"MA" => [], "MB" => ["MA"]}
     end
   end
+
+  describe "closure edges" do
+    test "qualified-call targets become closure deps when in the known universe", %{tmp_dir: dir} do
+      lib = write!(dir, "libm.cure", "mod LibM\n  fn get(x: Int) -> Int = x\n")
+
+      user =
+        write!(dir, "userq.cure", "mod UserQ\n  fn f(x: Int) -> Int = LibM.get(x)\n")
+
+      {:ok, graph} = DepGraph.scan([lib, user])
+
+      assert "LibM" in graph.nodes[user].closure_deps
+      # qualified call is NOT an order edge (spec fact 2)
+      assert graph.nodes[user].order_deps == []
+    end
+
+    test "out-of-universe qualified targets are dropped", %{tmp_dir: dir} do
+      user = write!(dir, "u.cure", "mod U2\n  fn f(x: Int) -> Int = Nowhere.get(x)\n")
+      {:ok, graph} = DepGraph.scan([user])
+      refute "Nowhere" in graph.nodes[user].closure_deps
+    end
+
+    test "known_modules extends the universe (stdlib case)", %{tmp_dir: dir} do
+      user = write!(dir, "u.cure", "mod U3\n  fn f(x: Int) -> Int = Std.Map.get(x)\n")
+      {:ok, graph} = DepGraph.scan([user], known_modules: ["Std.Map", "Std.Bool", "Std.Nat"])
+      assert "Std.Map" in graph.nodes[user].closure_deps
+    end
+
+    test "auto-prelude Bool/Nat are closure deps unless self or shadowed", %{tmp_dir: dir} do
+      plain = write!(dir, "p.cure", "mod Plain\n  fn f() -> Int = 1\n")
+      shadow = write!(dir, "s.cure", "mod Shadow\n  type Bool = TT | FF\n  fn f() -> Int = 1\n")
+
+      {:ok, graph} =
+        DepGraph.scan([plain, shadow], known_modules: ["Std.Bool", "Std.Nat"])
+
+      assert "Std.Bool" in graph.nodes[plain].closure_deps
+      assert "Std.Nat" in graph.nodes[plain].closure_deps
+      refute "Std.Bool" in graph.nodes[shadow].closure_deps
+      assert "Std.Nat" in graph.nodes[shadow].closure_deps
+    end
+  end
+
+  describe "closure/2 and toposort/2" do
+    test "closure walks transitively and tolerates missing keys" do
+      map = %{"A" => ["B"], "B" => ["C"], "C" => [], "X" => ["Y"]}
+      assert DepGraph.closure(map, ["A"]) == ["A", "B", "C"]
+      assert DepGraph.closure(map, ["X"]) == ["X", "Y"]
+      assert DepGraph.closure(%{}, ["R"]) == ["R"]
+    end
+
+    test "toposort orders deps first, deterministic, SCC-tolerant on cycles" do
+      map = %{"A" => ["B"], "B" => [], "C" => []}
+      assert ["B", "A", "C"] = DepGraph.toposort(map, ["A", "B", "C"])
+      assert ["B", "C"] = DepGraph.toposort(map, ["C", "B"])
+
+      # cycle members come out as an alphabetical group, dependents after
+      cyc = %{"A" => ["B"], "B" => ["A"], "C" => ["A"]}
+      assert ["A", "B", "C"] = DepGraph.toposort(cyc, ["C", "B", "A"])
+    end
+  end
 end
