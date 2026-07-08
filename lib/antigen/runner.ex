@@ -348,6 +348,7 @@ defmodule Antigen.Runner do
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
   defp assay_module("elab/erasure"), do: Antigen.Assays.Elab
   defp assay_module("elab/dot_forcing"), do: Antigen.Assays.Elab
+  defp assay_module("elab/guard_lint"), do: Antigen.Assays.Elab
   defp assay_module("elab/soundness"), do: Antigen.Assays.Elab
   defp assay_module("normalizer/differential"), do: Antigen.Assays.Normalizer
   defp assay_module("normalizer/equal"), do: Antigen.Assays.Normalizer

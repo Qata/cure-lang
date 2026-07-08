@@ -139,6 +139,53 @@ defmodule Antigen.Assays.Elab do
     end
   end
 
+  # elab/guard_lint — catalog form (spec 2026-07-08-guard-coverage-lint §6):
+  # hand-verified exhaustive/non-exhaustive labels, two-sided; reject cells pin
+  # the error HEAD (:unsupported_guard) so a fixture that rots into rejecting
+  # for an unrelated reason (parse error, unbound name) infects.
+  def run(%Challenge{kind: :elab_program, assay: "elab/guard_lint", payload: %{expect: expect} = p}) do
+    result = elaborate(p.src)
+    actual = verdict_bit(result)
+
+    cond do
+      actual != expect ->
+        {:violation, {:guard_lint_verdict_wrong, p.id, %{expected: expect, actual: actual}}}
+
+      actual == :reject and Map.has_key?(p, :expect_error) ->
+        got = reject_head(result)
+
+        if got == p.expect_error do
+          :ok
+        else
+          {:violation, {:guard_lint_wrong_reject_reason, p.id, got}}
+        end
+
+      true ->
+        :ok
+    end
+  end
+
+  # elab/guard_lint — relation form: `:same` (verdict invariant under a
+  # typing-preserving perturbation) or `:flip` (dropping a guard from a
+  # proven-exhaustive set must flip accept -> reject — the never-over-prove pin).
+  def run(%Challenge{kind: :elab_program, assay: "elab/guard_lint", payload: %{relation: rel} = p}) do
+    base = verdict_bit(elaborate(p.base_src))
+    variant = verdict_bit(elaborate(p.variant_src))
+
+    ok? =
+      case rel do
+        :same -> base == variant
+        :flip -> base == :accept and variant == :reject
+      end
+
+    if ok? do
+      :ok
+    else
+      {:violation,
+       {:guard_lint_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
+    end
+  end
+
   # elab/soundness — the emitted core is independently re-checked by the trusted
   # kernel: every def the elaborator produced must type-check at its emitted type.
   def run(%Challenge{kind: :elab_program, assay: "elab/soundness"} = c),
