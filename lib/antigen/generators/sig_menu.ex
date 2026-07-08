@@ -41,6 +41,16 @@ defmodule Antigen.Generators.SigMenu do
         [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, nat()}], [])])
       |> Inductive.declare(Inductive.family(:Bd, [], [], 0),
         [Inductive.ctor(:T, [], []), Inductive.ctor(:F, [], [])])
+      # SList : Type0 — a snoc-free cons list of Nat, backing the carried-index
+      # forced-check seeds (dot-forcing vertical #24, spec 2026-07-08). Its
+      # `app` def (added below, mirroring `plus`) is the stuck function whose
+      # application forms `H`'s second, carried index.
+      |> Inductive.declare(Inductive.family(:SList, [], [], 0),
+        [
+          Inductive.ctor(:SNil, [], []),
+          Inductive.ctor(:SCons, [{:h, nat()}, {:t, {:data, :SList, [], []}}], [],
+            [:present, :present])
+        ])
       |> Inductive.declare(Inductive.family(:Vec, [], [{:n, nat()}], 0),
         [
           Inductive.ctor(:vnil, [], [z()]),
@@ -143,6 +153,45 @@ defmodule Antigen.Generators.SigMenu do
     {:ok, env} = Kernel.validate_certificate(env, :plus)
     env = Env.add_def(env, :dbl, dbl_type, dbl_body)
     {:ok, env} = Kernel.validate_certificate(env, :dbl)
+
+    # app xs ys = case xs of SNil -> ys | SCons(h, t) -> SCons(h, app(t, ys))
+    # (structural on arg 1) — the stuck function forming `H`'s carried index.
+    slist = {:data, :SList, [], []}
+    app_type = {:pi, slist, {:pi, slist, slist}}
+
+    app_body =
+      {:lam, slist,
+       {:lam, slist,
+        {:case, {:var, 1}, {:lam, slist, slist},
+         [
+           {:SNil, 0, {:var, 0}},
+           {:SCons, 2,
+            {:ctor, :SCons,
+             [{:var, 1}, {:app, {:app, {:global, :app}, {:var, 0}}, {:var, 2}}]}}
+         ]}}}
+
+    env = Env.add_def(env, :app, app_type, app_body)
+    {:ok, env} = Kernel.validate_certificate(env, :app)
+
+    # H : (n:Nat, xs:SList) -> Type0, ctor hmk : H(S(m), app(as, bs)) — a
+    # TWO-index family whose FIRST index is ctor-pinned/invertible (S(m) against
+    # S(j) forces m := j) while the SECOND is a STUCK function application
+    # (app(as, bs), never a rigid head), so its index pair reduces `:undecided`
+    # and is dropped, leaving branch_unify to still `:solved` the forced `m`.
+    # G mirrors Task 2's sibling family. Together they give the dot-forcing
+    # vertical a genuinely multi-index, carried-shaped subst the Vec/Sq cases
+    # don't cover. All of hmk's telescope (m, as, bs) is erased (index witnesses).
+    env =
+      env
+      |> Inductive.declare(Inductive.family(:H, [], [{:n, nat()}, {:xs, slist}], 0),
+        [
+          Inductive.ctor(:hmk, [{:m, nat()}, {:as, slist}, {:bs, slist}],
+            [s({:var, 2}), {:app, {:app, {:global, :app}, {:var, 1}}, {:var, 0}}],
+            [:erased, :erased, :erased])
+        ])
+      |> Inductive.declare(Inductive.family(:G, [], [{:cs, slist}], 0),
+        [Inductive.ctor(:gwrap, [{:cs, slist}], [{:var, 0}], [:erased])])
+
     env
   end
 

@@ -12,10 +12,16 @@ defmodule Antigen.Assays.DotForcing do
   Generality: this exercises the forced-value resolution
   (`named_implicit_forced_value`, telescope position `arity-1-p`), the `:unforced`
   gate, and the convertibility decision — the UNIQUE content of the named-implicit
-  check. It does NOT cover the surface dot-syntax parse (852742a) nor the
-  carried-eq motive branch, which skips the named-implicit check entirely per
-  5409184; and being discard-only is structural (the check adds no binding), not
-  asserted by this value oracle.
+  check. It does NOT cover the surface dot-syntax parse (852742a). The carried-eq
+  motive branch's OWN forced check (no longer skipped — C-a, spec 2026-07-08)
+  is exercised end-to-end by that spec's unit tests and the `nidot` ni03/ni07
+  oracle differential; this vertical additionally regression-guards the shared
+  forced-value/convertibility primitives under a carried-shaped (multi-index,
+  multi-sibling) subst (the H/hmk seeds), but — because `forced_check_probe`
+  reconstructs its frame directly from the supplied telescope/subst rather than
+  through `elaborate_matched_branch`/`elaborate_carried_eq_branch` — it does not
+  itself probe the dispatch wiring. Being discard-only is structural (the check
+  adds no binding), not asserted by this value oracle.
   """
   alias Antigen.{Challenge, Generators}
   alias Cure.Core.{Context, Eval, Kernel}

@@ -49,7 +49,17 @@ defmodule Antigen.Generators.DotForcing do
     {0, :Vec, :vcons, [{:ctor, :S, [{:ctor, :S, [@z]}]}], "n", {:ctor, :S, [@z]}, :accept,
      "Vec vcons {n=.(S Z)} vs forced S Z — non-trivial forced value"},
     {0, :Vec, :vcons, [{:ctor, :S, [{:ctor, :S, [@z]}]}], "n", @z, :reject,
-     "Vec vcons {n=.Z} vs forced S Z — reject on differing forced value"}
+     "Vec vcons {n=.Z} vs forced S Z — reject on differing forced value"},
+    # Carried-shaped subst (vertical #24, spec 2026-07-08): H's second index is
+    # the stuck `app(as, bs)`, dropped `:undecided` by branch_unify, so only the
+    # first (invertible) index pins `m`. Exercises the shared forced-value /
+    # convertibility PRIMITIVES under a multi-index carried shape the Vec/Sq
+    # cases don't reach — NOT the carried-eq dispatch wiring (forced_check_probe
+    # rebuilds its frame from the supplied telescope/subst directly).
+    {0, :H, :hmk, [{:ctor, :S, [@z]}, {:ctor, :SNil, []}], "m", @z, :accept,
+     "H hmk {m=.Z} under a multi-sibling carried-index subst — forced-check primitives, not the dispatch wiring"},
+    {0, :H, :hmk, [{:ctor, :S, [@z]}, {:ctor, :SNil, []}], "m", {:ctor, :S, [@z]}, :reject,
+     "H hmk {m=.(S Z)} under a multi-sibling carried-index subst — rigid clash on the forced-check primitives, not the dispatch wiring"}
   ]
 
   @spec gen(keyword()) :: Gen.t()
