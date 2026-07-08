@@ -122,6 +122,11 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # Pairs are check-only (see check/3 against {:vsigma,…}); an infer position can
+  # only be reached by an adversarial reified motive (spec 2026-07-08-neutral-app-
+  # sort §2.4) — reject explicitly instead of crashing on a missing clause.
+  def infer(_ctx, {:pair, _, _}), do: {:error, :pair_not_inferable}
+
   def infer(ctx, {:app, f, a}) do
     with {:ok, f_type} <- infer(ctx, f),
          {:ok, dom, cod_closure} <- ensure_pi(f_type),
@@ -615,6 +620,24 @@ defmodule Cure.Core.Kernel do
 
     case Context.lookup(ctx, idx) do
       {:vtype, sublevel} -> {:ok, sublevel}
+      _ -> {:error, :not_a_type_value}
+    end
+  end
+
+  # A neutral APPLICATION is a valid type iff the kernel's own term-level
+  # judgement says so: reify the spine back to a term (signature-aware, so a
+  # {:vdata,…} argument keeps its param/index split — quote.ex split_data_args)
+  # and infer it. infer/2's {:app, f, a} rule resolves the head's type (ctx var
+  # or signature global), CHECKS each argument against the instantiated Pi
+  # domain, and returns the codomain — full validation, nothing trusted from
+  # the (untrusted) elaborator that assembled the motive. Accept only a
+  # {:vtype, l} result: `b(first(p))` with `b : (a) -> Type` sorts at l; a
+  # non-type codomain stays :not_a_type_value.
+  defp infer_type_value_sort(ctx, {:vneutral, {:napp, _, _} = neutral}) do
+    term = Quote.reify({:vneutral, neutral}, Context.length(ctx), Context.signature(ctx))
+
+    case infer(ctx, term) do
+      {:ok, {:vtype, level}} -> {:ok, level}
       _ -> {:error, :not_a_type_value}
     end
   end

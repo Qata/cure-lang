@@ -4124,6 +4124,18 @@ defmodule Cure.Elab.Elaborator do
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
 
+  @doc """
+  Type-position entry for implicit insertion (spec 2026-07-08 §7): elaborate an
+  application of a global that carries implicit (erased) parameters, from its
+  SURFACE argument ASTs, in the caller's typing context. Used by the
+  return-type lowering in `Cure.Elab.Declarations` — term position reaches the
+  same machinery via `elaborate_named_call`. The kernel re-checks the assembled
+  signature, so nothing unsound rests on this path.
+  """
+  def elaborate_implicit_global_app(env, name, arg_asts, names, ctx) do
+    elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx)
+  end
+
   defp bidir_app_slot({dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
     {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(dom, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
