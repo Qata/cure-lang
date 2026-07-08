@@ -296,6 +296,31 @@ defmodule Cure.Elab.Elaborator do
             end
         end
 
+      # A QUALIFIED call to a plain (non-ctor) global def: `A.foo(x)`. The
+      # qualified branch above mapped the dotted `name` to the def's registry key
+      # (`resolved`, bare or re-keyed `Mod#foo`) via `resolve_qualified/3`; without
+      # a clause acting on it the call falls through to the catch-all, which
+      # re-elaborates from the raw dotted name and can never find a `.`-spelled
+      # key. `elaborate_global_app/4` (as the `implicit_def?` clause uses it) reaches
+      # both plain and implicit defs. Guarded on the dot so bare def calls keep
+      # their existing paths.
+      String.contains?(name, ".") and Map.has_key?(env.defs, resolved) ->
+        result =
+          with {:ok, present} <- map_present_args(args, names, ctx, env) do
+            elaborate_global_app(env, resolved, present, ctx)
+          end
+
+        case result do
+          {:ok, _, _} = ok ->
+            ok
+
+          {:error, _} = orig ->
+            case elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx) do
+              {:ok, _, _} = ok -> ok
+              {:error, _} -> orig
+            end
+        end
+
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
       # generic paths so an ambiguous name surfaces `:ambiguous_name`, not a

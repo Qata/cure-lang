@@ -496,6 +496,19 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  # Function names DECLARED in a module's own source (transitive imports
+  # excluded). Mirror of `owned_family_names/1`, reusing the public
+  # `local_def_names/1` scanner in place of `declared_type_names/1`.
+  defp owned_def_names(path) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+      MapSet.new(local_def_names(ast))
+    else
+      _ -> MapSet.new()
+    end
+  end
+
   # Build ONE module's flat env slice (own decls + its own imports), as today.
   defp module_slice_env(path) do
     with {:ok, source} <- File.read(path),
@@ -532,18 +545,32 @@ defmodule Cure.Elab.Program do
 
     # Ownership scans the FULL transitive closure (not `modules`, which is
     # direct-only) — see the Design note + `transitive_import_modules/1` doc.
-    family_owners =
+    # Family AND def ownership in ONE transitive walk (avoid re-walking): both are
+    # `%{name => MapSet.t(owner_mod)}` maps fed to the shape-generic `classify/2`.
+    {family_owners, def_owners} =
       sources
       |> transitive_import_modules()
-      |> Enum.reduce(%{}, fn {mod_id, path}, acc ->
-        Enum.reduce(owned_family_names(path), acc, fn name, a ->
-          Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
-        end)
+      |> Enum.reduce({%{}, %{}}, fn {mod_id, path}, {fam_acc, def_acc} ->
+        fam_acc =
+          Enum.reduce(owned_family_names(path), fam_acc, fn name, a ->
+            Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
+          end)
+
+        def_acc =
+          Enum.reduce(owned_def_names(path), def_acc, fn name, a ->
+            Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
+          end)
+
+        {fam_acc, def_acc}
       end)
 
     local = declared_type_names(ast)
     local_ctors = declared_ctor_names(ast)
+    local_defs = MapSet.new(local_def_names(ast))
     %{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
+    # Def ambiguity (no local winner) is enforced at resolution time (Task 3 via
+    # `ambiguous_modules/2`); here we only need the losers to re-key their keys.
+    %{losers: def_losers} = Resolution.classify(def_owners, local_defs)
 
     collisions =
       losers |> Map.values() |> Enum.reduce(MapSet.new(), &MapSet.union/2)
@@ -558,10 +585,19 @@ defmodule Cure.Elab.Program do
                    |> Enum.map(fn {owner, _path} -> owner end)
                    |> MapSet.new()
 
+                 owner_mods =
+                   MapSet.union(MapSet.new(Map.keys(losers)), MapSet.new(Map.keys(def_losers)))
+
                  slice =
-                   Enum.reduce(losers, slice, fn {owner_mod, owned_losers}, s ->
+                   Enum.reduce(owner_mods, slice, fn owner_mod, s ->
                      if MapSet.member?(reachable, owner_mod) do
-                       Resolution.rekey_module_env(s, owner_mod, owned_losers, local_ctors)
+                       Resolution.rekey_module_env(
+                         s,
+                         owner_mod,
+                         Map.get(losers, owner_mod, MapSet.new()),
+                         local_ctors,
+                         Map.get(def_losers, owner_mod, MapSet.new())
+                       )
                      else
                        s
                      end
