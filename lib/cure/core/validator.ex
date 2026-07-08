@@ -42,7 +42,11 @@ defmodule Cure.Core.Validator do
   @wave0_config %{
     grade_on_binders: :off,
     usage_relevance: :off,
-    no_eq_node: :warn,
+    # Phase C flipped `no_eq_node` to :reject even at dev time: the kernel has
+    # no `{:eq}`/`{:refl}` clauses left, so any such node in a checked def is a
+    # smuggled non-grammar term (firewall breach), not tolerable tech debt.
+    # `no_rewrite_node` stays :warn here (dev-time) and rejects at release.
+    no_eq_node: :reject,
     no_rewrite_node: :warn,
     no_prim_node: :warn,
     no_hole: :warn,
@@ -58,7 +62,7 @@ defmodule Cure.Core.Validator do
   @spec clauses() :: [clause()]
   def clauses, do: @clauses
 
-  @doc "The Wave-0 default mode for every clause (pure instrumentation; no :reject)."
+  @doc "The Wave-0 default mode for every clause (instrumentation, except the retired-primitive `no_eq_node` which rejects)."
   @spec wave0_config() :: config()
   def wave0_config, do: @wave0_config
 
@@ -72,13 +76,16 @@ defmodule Cure.Core.Validator do
   # Core; ex-falso is an empty-branch `case` over a provably-uninhabited scrutinee
   # (§H), so no `{:absurd}` term may survive.
   # K1a lands `no_eq_node: :reject` — the primitive `{:eq}`/`{:refl}` identity nodes
-  # are dead-producers (inductive Eq/refl + ctor bridge_step, f3b0e73); no such term
-  # may escape into a released artifact. `no_rewrite_node` stays `:warn` until Phase
-  # B (rewrite→:case) retires the still-produced transport eliminator.
+  # are dead-producers; no such term may escape into a released artifact (since
+  # Phase C this also holds at dev time — see @wave0_config).
+  # Phase B/C land `no_rewrite_node: :reject` — every `{:rewrite}` producer was
+  # retired (rewrite → J/subst single-branch `:case` transport) and the kernel
+  # clauses stripped, so a `{:rewrite}` node in final Core is smuggled grammar.
   @release_config @wave0_config
                   |> Map.put(:no_hole, :reject)
                   |> Map.put(:no_absurd_node, :reject)
                   |> Map.put(:no_eq_node, :reject)
+                  |> Map.put(:no_rewrite_node, :reject)
 
   @doc "The strict Final-Core config enforced at the release/emit boundary (K3+)."
   @spec release_config() :: config()
