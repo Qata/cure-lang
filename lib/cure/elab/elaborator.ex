@@ -2155,7 +2155,7 @@ defmodule Cure.Elab.Elaborator do
   # expression). Handles nesting: `w @ S(t @ Z())` yields `w ↦ S(Z())`, `t ↦ Z()`.
   defp strip_as_patterns({:as_pattern, _m, [name, sub]}) do
     {clean_sub, subs} = strip_as_patterns(sub)
-    {clean_sub, [{name, clean_sub} | subs]}
+    {clean_sub, [{name, strip_named_implicits(clean_sub)} | subs]}
   end
 
   defp strip_as_patterns({:function_call, m, args}) do
@@ -3537,7 +3537,7 @@ defmodule Cure.Elab.Elaborator do
          Enum.find_index(names, &(&1 == scrut_name)) == i and
          scrut_name not in pattern_vars and
          not binds_any?(body_expr, [scrut_name | pattern_vars]) do
-      subst_surface_var(body_expr, scrut_name, pattern)
+      subst_surface_var(body_expr, scrut_name, strip_named_implicits(pattern))
     else
       body_expr
     end
@@ -3608,6 +3608,23 @@ defmodule Cure.Elab.Elaborator do
 
   defp named_implicit_arg?({:named_implicit_pat, _m, _n, _i}), do: true
   defp named_implicit_arg?(_), do: false
+
+  # A pattern's value-reconstruction (spliced into a branch body by
+  # `desugar_as_patterns` and `refine_scrutinee_in_body`) must carry no
+  # `{:named_implicit_pat,…}` annotation nodes — they are pattern-only
+  # syntax, invalid in expression position (spec 2026-07-08 §2.2). The
+  # positional-only form is what Idris/Lean substitute for the scrutinee.
+  # Recursive: nested constructor sub-patterns are cleaned too.
+  defp strip_named_implicits({:function_call, m, args}) do
+    positional =
+      args
+      |> Enum.reject(&named_implicit_arg?/1)
+      |> Enum.map(&strip_named_implicits/1)
+
+    {:function_call, m, positional}
+  end
+
+  defp strip_named_implicits(other), do: other
 
   # The named-implicit annotations of a constructor pattern, as `{name, inner}`
   # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
