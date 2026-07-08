@@ -82,7 +82,7 @@ defmodule Cure.Compiler.DependentVecCodegenTest do
     assert apply(mod, :append, [:empty, ys]) == ys
     assert apply(mod, :append, [xs, ys]) == {:prepend, 1, {:prepend, 2, {:prepend, 3, :empty}}}
     assert apply(mod, :singleton, [9]) == {:prepend, 9, :empty}
-    assert apply(mod, :replicate, [{:S, {:S, :Z}}, 7]) == {:prepend, 7, {:prepend, 7, :empty}}
+    assert apply(mod, :replicate, [2, 7]) == {:prepend, 7, {:prepend, 7, :empty}}
     assert apply(mod, :is_empty, [:empty]) == true
     assert apply(mod, :is_empty, [xs]) == false
     assert apply(mod, :head, [xs]) == 1
@@ -95,8 +95,8 @@ defmodule Cure.Compiler.DependentVecCodegenTest do
     assert apply(mod, :map, [xs, fn x -> x * 10 end]) == {:prepend, 10, {:prepend, 20, :empty}}
     assert apply(mod, :zip_with, [xs, {:prepend, 10, {:prepend, 20, :empty}}, fn x -> fn y -> x + y end end]) ==
              {:prepend, 11, {:prepend, 22, :empty}}
-    assert apply(mod, :count, [xs]) == {:S, {:S, :Z}}
-    assert apply(mod, :length, [xs]) == {:S, {:S, :Z}}
+    assert apply(mod, :count, [xs]) == 2
+    assert apply(mod, :length, [xs]) == 2
     assert apply(mod, :any, [xs, fn x -> x == 2 end]) == true
     assert apply(mod, :all, [xs, fn x -> x > 0 end]) == true
   end

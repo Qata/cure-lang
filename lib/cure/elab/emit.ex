@@ -160,6 +160,12 @@ defmodule Cure.Elab.Emit do
       args == [] and bool_ctor?(env, name) ->
         {:atom, @line, bool_atom(name)}
 
+      nat_ctor?(env, name) ->
+        case args do
+          [] -> {:integer, @line, 0}
+          [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
+        end
+
       true ->
         case Enum.map(args, &lower(env, &1, ctx)) do
           [] -> {:atom, @line, name}
@@ -306,6 +312,36 @@ defmodule Cure.Elab.Emit do
   # the pattern binds only present fields; the body's de Bruijn frame still counts
   # every field (index 0 = last field), so erased fields keep a (dead) context slot.
   defp branch_clause(env, {cname, arity, body}, ctx) do
+    if nat_ctor?(env, cname) do
+      nat_branch_clause(env, {cname, arity, body}, ctx)
+    else
+      generic_branch_clause(env, {cname, arity, body}, ctx)
+    end
+  end
+
+  # case-on-Nat (spec §2.2): the zero ctor's branch matches literal 0; the succ
+  # ctor's branch matches a fresh N with guard `N > 0` (belt-and-braces: a rep
+  # bug crashes loudly instead of binding k = -1) and binds the predecessor as
+  # the body's first statement — Erlang patterns/guards cannot compute-and-bind,
+  # so `K = N - 1` must open the body, making it a two-form list. The body's
+  # de Bruijn frame still counts the field (index 0 = predecessor), exactly as
+  # the tuple form would have bound it.
+  defp nat_branch_clause(env, {_zero, 0, body}, ctx) do
+    {:clause, @line, [{:integer, @line, 0}], [], [lower(env, body, ctx)]}
+  end
+
+  defp nat_branch_clause(env, {_succ, 1, body}, ctx) do
+    base = length(ctx)
+    k = :"V#{base}"
+    n = :"N#{base}"
+    body_form = lower(env, body, [k | ctx])
+    k_var = underscore_if_unused({:var, @line, k}, body_form)
+    bind = {:match, @line, k_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
+    guard = [[{:op, @line, :>, {:var, @line, n}, {:integer, @line, 0}}]]
+    {:clause, @line, [{:var, @line, n}], guard, [bind, body_form]}
+  end
+
+  defp generic_branch_clause(env, {cname, arity, body}, ctx) do
     quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, arity)
     base = length(ctx)
 
@@ -361,6 +397,14 @@ defmodule Cure.Elab.Emit do
   # `{:prim}` comparisons already return at runtime), and a `:case` on Bool tests
   # those same lowercase atoms.
   defp bool_ctor?(env, name), do: Inductive.builtin(env, :bool) == Inductive.ctor_family(env, name)
+
+  # The canonical Std.Nat family (registry-keyed, nominal): its values are BEAM
+  # machine integers (spec 2026-07-08-nat-int-erasure). A locally-redeclared
+  # structural twin has a different family-id and keeps tuples.
+  defp nat_ctor?(env, name) do
+    fam = Inductive.builtin(env, :nat)
+    fam != nil and Inductive.ctor_family(env, name) == fam
+  end
 
   defp bool_atom(:True), do: true
   defp bool_atom(:False), do: false
