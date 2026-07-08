@@ -372,7 +372,7 @@ defmodule Cure.Elab.Declarations do
   end
 
   # `if …` as a function body: check it against the declared return type so both
-  # branches inherit the expected type (a constant-motive bool_elim).
+  # branches inherit the expected type (a constant-motive `:case` on the inductive Bool).
   defp elaborate_body({:conditional, _meta, _} = expr, return_core, scope, ctx, env, _params) do
     Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end

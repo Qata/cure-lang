@@ -13,9 +13,12 @@ defmodule Antigen.Assays.DotForcing do
   (`named_implicit_forced_value`, telescope position `arity-1-p`), the `:unforced`
   gate, and the convertibility decision — the UNIQUE content of the named-implicit
   check. It does NOT cover the surface dot-syntax parse (852742a). The carried-eq
-  motive branch's OWN forced check (no longer skipped — C-a, spec 2026-07-08)
-  is exercised end-to-end by that spec's unit tests and the `nidot` ni03/ni07
-  oracle differential; this vertical additionally regression-guards the shared
+  motive branch's OWN forced check (no longer skipped — C-a, spec 2026-07-08) is
+  exercised end-to-end by `test/cure/elab/named_implicit_tail_test.exs` and the
+  `Antigen.Generators.ElabDotForcing` catalog's carried cells; the `nidot`
+  ni03/ni07 oracle fixtures do NOT reach it — they landed as the simplified
+  directly-invertible two-index family (Idris cannot express the carried
+  differential without a `with` block). This vertical additionally regression-guards the shared
   forced-value/convertibility primitives under a carried-shaped (multi-index,
   multi-sibling) subst (the H/hmk seeds), but — because `forced_check_probe`
   reconstructs its frame directly from the supplied telescope/subst rather than

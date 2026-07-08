@@ -1320,13 +1320,13 @@ defmodule Cure.Elab.Elaborator do
          {:ok, arms1b} <- desugar_tuple_args(arms1),
          # A guard on a *nested* constructor pattern is threaded through the
          # pattern-matrix compiler here: rows carry their guard, and each matrix
-         # leaf folds the reached rows into a `bool_elim` `if`-chain whose tail is
+         # leaf folds the reached rows into a `:case`-on-Bool `if`-chain whose tail is
          # the next row (the Wadler/Augustsson `match … default` continuation,
          # à la Idris' `CaseBuilder` errorCase — but over surface names, so no
          # de-Bruijn weakening is needed).
          {:ok, arms1c} <- desugar_nested_arms(arms1b, scrut_expr),
          # A guard on a *single-level* constructor pattern (which never reaches the
-         # matrix) is folded into a guardless arm whose body is a `bool_elim`
+         # matrix) is folded into a guardless arm whose body is a `:case`-on-Bool
          # `if`-chain over the constructor group's rows (same-constructor
          # fall-through), so it flows through the ordinary `:vdata` path below. A
          # guard on a *variable/catch-all* pattern is left for `try_guard_match`.
@@ -2384,15 +2384,18 @@ defmodule Cure.Elab.Elaborator do
 
   defp try_trivial_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
 
-  # A `when` guard on a variable/catch-all pattern desugars to a `bool_elim`
-  # chain: `match n | x when g -> a | x -> b` becomes `bool_elim g[x↦n] a[x↦n] b`,
-  # each guarded arm testing its guard and falling through (the `ff` branch) to
-  # the remaining arms. The chain must end in an *unguarded* catch-all — that is
-  # the fall-through when every guard is false; a still-guarded final arm is
-  # non-exhaustive and rejected. Restricted to a variable scrutinee so the
-  # substituted `n` is not duplicated-with-effects; richer patterns error rather
-  # than silently drop the guard. Built on the committed `bool_elim`; no kernel
-  # change. Returns `:not_applicable` only when NO arm is guarded.
+  # A `when` guard on a variable/catch-all pattern desugars to a `:case`-on-Bool
+  # chain (`bool_case/5`): `match n | x when g -> a | x -> b` becomes
+  # `case g[x↦n] of True -> a[x↦n] | False -> b`, each guarded arm testing its
+  # guard and falling through (the `ff` branch) to the remaining arms. The chain
+  # must end in an *unguarded* catch-all — the fall-through when every guard is
+  # false — unless the untrusted Z3 lint proves the guards exhaustive, in which
+  # case the final guarded arm becomes that catch-all (§2.3a); otherwise a
+  # still-guarded final arm is non-exhaustive and rejected. Restricted to a
+  # variable scrutinee so the substituted `n` is not duplicated-with-effects;
+  # richer patterns error rather than silently drop the guard. Lowers through
+  # `bool_case/5`; no kernel change. Returns `:not_applicable` only when NO arm
+  # is guarded.
   defp try_guard_match(scrut_expr, arms, expected, names, ctx, env) do
     cond do
       not Enum.any?(arms, &guarded_arm?/1) ->
@@ -2404,7 +2407,7 @@ defmodule Cure.Elab.Elaborator do
         guard_chain(scrut_expr, arms, expected, names, ctx, env, [])
 
       # A non-variable scrutinee would be DUPLICATED (and recomputed) by surface
-      # substitution across the `bool_elim` chain. Bind it ONCE under a fresh Core
+      # substitution across the guard chain. Bind it ONCE under a fresh Core
       # λ and run the chain over the binder VARIABLE, so every substitution is of a
       # variable — a real `(λ s:T. <chain over s>) e` β-redex the kernel reduces
       # with `e` evaluated once. Closes the `:complex_scrutinee` reach gap.
@@ -2548,9 +2551,10 @@ defmodule Cure.Elab.Elaborator do
   defp guard_bind(_scrut, _pat, _expr), do: {:error, {:unsupported_guard, :non_catchall_pattern}}
 
   # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
-  # of Boolean eliminations — there is no `:vdata` to dispatch on. `match n | 0 ->
-  # a | _ -> b` becomes `bool_elim (n == 0) a b`; `match b | true -> t | false ->
-  # f` becomes `bool_elim b t f`. The already-elaborated Core scrutinee is reused
+  # of `:case`-on-Bool decisions (`bool_case/5`) — there is no `:vdata` to
+  # dispatch on. `match n | 0 -> a | _ -> b` becomes
+  # `case (n == 0) of True -> a | False -> b`; `match b | true -> t | false ->
+  # f` becomes `case b of True -> t | False -> f`. The already-elaborated Core scrutinee is reused
   # in each equality test (no surface duplication), and the kernel re-checks the
   # assembled chain. Returns `:not_applicable` for a non-primitive scrutinee or
   # arms that are not a clean literal/catch-all list (the ordinary path handles it).
@@ -2710,7 +2714,8 @@ defmodule Cure.Elab.Elaborator do
   # `C(w…) -> if g₁ then a else if g₂ then … else <closer>`, where the closer is
   # the group's trailing unguarded arm or the match's catch-all. The result is a
   # plain guardless match the ordinary `:vdata` path compiles; the `if`s lower to
-  # the committed `bool_elim`. No matrix-compiler or kernel change.
+  # `:case` on the inductive Bool (through the general `:conditional` clause). No
+  # matrix-compiler or kernel change.
 
   defp ctor_guarded_arm?({:match_arm, meta, _body}) do
     Keyword.has_key?(meta, :guard) and
@@ -3000,7 +3005,7 @@ defmodule Cure.Elab.Elaborator do
   # pattern per remaining scrutinee. Emits a tree of single-scrutinee
   # `{:pattern_match}` nodes; every emitted match is single-level, so it re-uses
   # the dependent elaborator per node. At a leaf (no columns left), the reached
-  # rows are folded into a `bool_elim` `if`-chain: a guarded row tests its guard
+  # rows are folded into a `:case`-on-Bool `if`-chain: a guarded row tests its guard
   # and falls through to the next reached row, an unguarded row terminates the
   # chain (later rows shadowed), à la the Wadler/Augustsson `match … default`
   # continuation. All still over surface names, so no de-Bruijn weakening.
