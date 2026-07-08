@@ -44,7 +44,9 @@ Dialects: [board](2026-07-08-board-dialect-design.md) ·
 [protocol](2026-07-08-protocol-dialect-design.md) ·
 [fleet](2026-07-08-fleet-dialect-design.md) ·
 [sim/pattern](2026-07-08-sim-pattern-dialect-design.md) (games scoped to
-tutorials there).
+tutorials there) ·
+[cad](2026-07-08-cad-dialect-design.md) (beyond-MCU §7: host-side solid
+modeling; the "no result builders" worked case).
 
 Error-code blocks are authoritative in the error-explainer spec §5
 (E100–E199, per-dialect); where an older informal code in THIS document
