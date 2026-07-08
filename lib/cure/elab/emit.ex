@@ -53,7 +53,11 @@ defmodule Cure.Elab.Emit do
   """
   @spec compile_forms(Env.t(), module()) :: {:ok, [tuple()]} | {:error, term()}
   def compile_forms(%Env{defs: defs} = env, module) do
-    names = Map.keys(defs)
+    # Builtin-op defs are body-less (K2): nothing to emit — saturated uses
+    # inline to BEAM operators and first-class uses become local wrappers.
+    # (`function_form` would crash on the nil body.) The live pipeline calls
+    # /3 with local_defs, so this all-defs entry filters defensively.
+    names = for {name, d} <- defs, is_nil(Map.get(d, :builtin_op)), do: name
 
     compile_forms(env, module, names)
   end
@@ -205,14 +209,87 @@ defmodule Cure.Elab.Emit do
   defp lower(env, {:app, _, _} = app, ctx) do
     {head, args} = spine(app, [])
 
-    case connective_inline(head, args, env, ctx) do
+    case builtin_op_form(head, args, env, ctx) do
       {:ok, form} ->
         form
 
       :no ->
-        lower_app_spine(env, head, args, ctx)
+        case connective_inline(head, args, env, ctx) do
+          {:ok, form} ->
+            form
+
+          :no ->
+            lower_app_spine(env, head, args, ctx)
+        end
     end
   end
+
+  # Builtin-op global spines (K2 spec 2026-07-09 §1.5 + A1 §1-A), keyed via the
+  # def-record registry (`Env.builtin_op/2`) — a user def named int_add carries
+  # no marker and takes the ordinary global path. Saturated → the SAME BEAM
+  # operator as the retired prim lowering (struct ops DROP the type argument).
+  # Partial (0 < n < arity) must NOT reach `lower_app_spine`'s generic global
+  # branch (present_arity reads nil quantities as 0 and would emit a call to a
+  # nonexistent `int_add()`): route as wrapper + curried applications, same as
+  # the closure branch. The function-value ABI is curried 1-arg funs (lambdas
+  # lower so; closures apply one arg at a time), so wrappers nest 1-arg funs.
+  defp builtin_op_form({:global, g}, args, env, ctx) do
+    case Env.builtin_op(env, g) do
+      nil -> :no
+      op -> {:ok, lower_builtin_op(op, args, env, ctx)}
+    end
+  end
+
+  defp builtin_op_form(_head, _args, _env, _ctx), do: :no
+
+  defp lower_builtin_op(op, args, env, ctx) when op in [:struct_eq, :struct_ne] do
+    case args do
+      [_ty, l, r] ->
+        erl = if op == :struct_eq, do: :==, else: :"/="
+        {:op, @line, erl, lower(env, l, ctx), lower(env, r, ctx)}
+
+      _ ->
+        curry_apply(builtin_op_wrapper(op), args, env, ctx)
+    end
+  end
+
+  defp lower_builtin_op(:neg, args, env, ctx) do
+    case args do
+      [a] -> {:op, @line, :-, lower(env, a, ctx)}
+      _ -> curry_apply(builtin_op_wrapper(:neg), args, env, ctx)
+    end
+  end
+
+  defp lower_builtin_op(op, args, env, ctx) do
+    case args do
+      [a, b] -> {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
+      _ -> curry_apply(builtin_op_wrapper(op), args, env, ctx)
+    end
+  end
+
+  defp curry_apply(base, args, env, ctx),
+    do: Enum.reduce(args, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
+
+  # A first-class/partial builtin-op use: a local curried fun computing the op.
+  # Param names use a dedicated prefix (ctx vars are V<pos>/Fn<n>/_e<pos>), so
+  # no shadowing. The struct wrapper accepts and ignores the type argument.
+  defp builtin_op_wrapper(op) when op in [:struct_eq, :struct_ne] do
+    erl = if op == :struct_eq, do: :==, else: :"/="
+    body = {:op, @line, erl, {:var, @line, :BopL}, {:var, @line, :BopR}}
+
+    fun1(:_BopT, fun1(:BopL, fun1(:BopR, body)))
+  end
+
+  defp builtin_op_wrapper(:neg),
+    do: fun1(:BopA, {:op, @line, :-, {:var, @line, :BopA}})
+
+  defp builtin_op_wrapper(op) do
+    body = {:op, @line, erl_binop(op), {:var, @line, :BopL}, {:var, @line, :BopR}}
+    fun1(:BopL, fun1(:BopR, body))
+  end
+
+  defp fun1(param, body),
+    do: {:fun, @line, {:clauses, [{:clause, @line, [{:var, @line, param}], [], [body]}]}}
 
   # A SATURATED application of a `Std.Bool` connective def inlines to the native
   # BEAM boolean op — byte-for-byte the retired primitive's codegen (strict
@@ -266,11 +343,20 @@ defmodule Cure.Elab.Emit do
 
   # A bare global: a nullary definition is called (`name()`); a definition with
   # present parameters used as a *value* (passed to a higher-order function)
-  # becomes a function reference `fun name/arity`.
+  # becomes a function reference `fun name/arity`. A BUILTIN-OP global has no
+  # compiled top-level function to reference (body-less; present_arity would
+  # read its nil quantities as 0 and emit a bogus `name()` call) — it becomes a
+  # local curried fun wrapper computing the op (K2 §1.5b).
   defp lower(env, {:global, name}, _ctx) do
-    case present_arity(env, name) do
-      0 -> {:call, @line, {:atom, @line, name}, []}
-      n -> {:fun, @line, {:function, name, n}}
+    case Env.builtin_op(env, name) do
+      nil ->
+        case present_arity(env, name) do
+          0 -> {:call, @line, {:atom, @line, name}, []}
+          n -> {:fun, @line, {:function, name, n}}
+        end
+
+      op ->
+        builtin_op_wrapper(op)
     end
   end
 

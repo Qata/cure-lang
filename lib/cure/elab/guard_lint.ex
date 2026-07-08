@@ -26,7 +26,7 @@ defmodule Cure.Elab.GuardLint do
   by `Cure.Elab.Program.elaborate/1` (§2.5) — not an `Env` field.
   """
 
-  alias Cure.Core.Context
+  alias Cure.Core.{Context, Env}
   alias Cure.SMT.Process, as: Z3
 
   @warnings_key :cure_guard_lint_warnings
@@ -92,6 +92,29 @@ defmodule Cure.Elab.GuardLint do
 
   @cmp %{lt: "<", le: "<=", gt: ">", ge: ">=", eq: "=", ne: "distinct"}
 
+  # Builtin-op global spine (K2, spec 2026-07-09 §1.6): registry-keyed via the
+  # def record — a user def named int_add carries no marker and falls to the
+  # sound uninterpreted fallback. `Env.builtin_op/2` returns the SAME op key
+  # for int_* and float_* twins; int_form's operand-type gate ({:vint_type}
+  # via Context.lookup) is what keeps float ops out — a float_* spine's
+  # operands fail it → :error → uninterpreted fallback. A1: struct_eq/
+  # struct_ne markers are NOT in @cmp, so structural-equality spines ALWAYS
+  # fall to the uninterpreted fallback (never-over-prove).
+  defp bool_form({:app, {:app, {:global, g}, a}, b}, ctx, st) do
+    case Env.builtin_op(Context.signature(ctx), g) do
+      op when is_map_key(@cmp, op) ->
+        with {:ok, sa, st} <- int_form(a, ctx, st),
+             {:ok, sb, st} <- int_form(b, ctx, st) do
+          {:ok, "(" <> Map.fetch!(@cmp, op) <> " " <> sa <> " " <> sb <> ")", st}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
   defp bool_form({:prim, op, [a, b]}, ctx, st) when is_map_key(@cmp, op) do
     with {:ok, sa, st} <- int_form(a, ctx, st),
          {:ok, sb, st} <- int_form(b, ctx, st) do
@@ -111,6 +134,28 @@ defmodule Cure.Elab.GuardLint do
     case Context.lookup(ctx, i) do
       {:vint_type} -> {:ok, var_name(i), %{st | ints: MapSet.put(st.ints, i)}}
       _ -> :error
+    end
+  end
+
+  # Builtin-op global spine twins of the prim arithmetic clauses (K2 §1.6).
+  # Same linearity rule: `mul` needs a literal multiplicand. Registry-keyed;
+  # int-only via the operand-type gate (float operands fail int_form's var/lit
+  # clauses → :error → the sound uninterpreted fallback).
+  defp int_form({:app, {:app, {:global, g}, a}, b}, ctx, st) do
+    case Env.builtin_op(Context.signature(ctx), g) do
+      :mul ->
+        if match?({:int_lit, _}, a) or match?({:int_lit, _}, b),
+          do: arith("*", a, b, ctx, st),
+          else: :error
+
+      :add ->
+        arith("+", a, b, ctx, st)
+
+      :sub ->
+        arith("-", a, b, ctx, st)
+
+      _ ->
+        :error
     end
   end
 
