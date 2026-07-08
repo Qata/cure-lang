@@ -14,7 +14,8 @@ defmodule Cure.Core.Builtins do
   @schemas %{
     bool: [{:False, 0}, {:True, 0}],
     nat: [{:Z, 0}, {:S, 1}],
-    eq: [{:reflexive, 1}]
+    eq: [{:reflexive, 1}],
+    sigma: [{:mk_pair, 2}]
   }
 
   @doc "The expected schema descriptor for a builtin key. Raises for an unknown key."
@@ -57,6 +58,7 @@ defmodule Cure.Core.Builtins do
     |> maybe_seed(:bool, bool_family(), bool_ctors(), exclude)
     |> maybe_seed(:nat, nat_family(), nat_ctors(), exclude)
     |> maybe_seed(:eq, eq_family(), eq_ctors(), exclude)
+    |> maybe_seed(:sigma, sigma_family(), sigma_ctors(), exclude)
   end
 
   # A builtin whose bare family name is locally declared by the compiled module
@@ -113,5 +115,27 @@ defmodule Cure.Core.Builtins do
   defp eq_ctors,
     do: [
       Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])
+    ]
+
+  # Sigma : (a : Type) -> (b : (a) -> Type) -> Type   (2 params, no indices)
+  #   mk_pair : (x : a) -> b(x) -> Sigma(a, b)
+  # The library dependent pair (spec 2026-07-09-sigma-retirement), replacing the
+  # primitive {:sigma}/{:pair}/{:fst}/{:snd} Core forms. Level-0 like Equivalent.
+  # Source of truth is the @builtin(:sigma) decl in Std.Sigma; this seed is its
+  # byte-for-byte mirror, pinned by the conformance drift test.
+  defp sigma_family,
+    do: Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, {:var, 0}, {:type, 0}}], [], 0)
+
+  defp sigma_ctors,
+    do: [
+      Inductive.ctor(
+        :mk_pair,
+        # Second field `b(x)` is anonymous in the surface ctor sig, so the
+        # elaborator auto-names it `_a1` (positional; the drift test pins this).
+        [x: {:var, 1}, _a1: {:app, {:var, 1}, {:var, 0}}],
+        [],
+        [:present, :present],
+        [{:var, 3}, {:var, 2}]
+      )
     ]
 end
