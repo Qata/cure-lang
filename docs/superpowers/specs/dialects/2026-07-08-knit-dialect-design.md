@@ -222,7 +222,10 @@ to write instead — in stitches and rows, never in types.
 1. **Crochet** — a genuinely different algebra (stitches build on chains and
    into arbitrary earlier stitches; turning chains; rounds that spiral).
    A separate dialect, explicitly **not** scope creep here — ledgered so
-   nobody bolts it onto the knit algebra.
+   nobody bolts it onto the knit algebra. **Promoted 2026-07-08:**
+   [`2026-07-08-crochet-dialect-design.md`](2026-07-08-crochet-dialect-design.md)
+   — position-vector state (`Vec(Position,_)`) generalizing this dialect's
+   `Nat` count; same checking discipline, floor identical to knit.
 2. **Colorwork** — probably v1.5, and the idea is worth preserving verbatim:
    **Fair Isle float lengths as refinements** — "no float longer than 5
    stitches" is `{run: Int | run <= 5}` over the color-run lengths of each
@@ -250,7 +253,8 @@ to write instead — in stitches and rows, never in types.
 
 ## 11. Non-goals
 
-- **No crochet** — separate algebra, separate dialect (§10.1).
+- **No crochet** — separate algebra, separate dialect (§10.1, now spec'd at
+  [`2026-07-08-crochet-dialect-design.md`](2026-07-08-crochet-dialect-design.md)).
 - **No garment *design* automation** — the dialect checks patterns; it does
   not grade, draft, or design them. "Given these measurements, generate a
   sweater" is a different product; `knit` is the tech editor, not the

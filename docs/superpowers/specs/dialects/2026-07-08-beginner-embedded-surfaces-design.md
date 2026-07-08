@@ -46,7 +46,9 @@ Dialects: [board](2026-07-08-board-dialect-design.md) ·
 [sim/pattern](2026-07-08-sim-pattern-dialect-design.md) (games scoped to
 tutorials there) ·
 [cad](2026-07-08-cad-dialect-design.md) (beyond-MCU §7: host-side solid
-modeling; the "no result builders" worked case).
+modeling; the "no result builders" worked case) ·
+[crochet](2026-07-08-crochet-dialect-design.md) (knit's sibling; position-
+vector state, the form-aware flat-circle law).
 
 Error-code blocks are authoritative in the error-explainer spec §5
 (E100–E199, per-dialect); where an older informal code in THIS document
