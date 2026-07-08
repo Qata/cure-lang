@@ -14,18 +14,35 @@ defmodule Cure.Elab.SigmaSurfaceTest do
     seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs, andd(d1, d2))
   """
 
+  # The dependent-pair surface now lowers onto the builtin inductive Sigma, so the
+  # base env must carry the seeded `:Sigma` family + `mk_pair` ctor AND the
+  # `sigma_first`/`sigma_second` projection globals that `.1`/`.2` lower to. An
+  # empty-module `Program.elaborate` gives exactly that (auto-seed + auto-prelude
+  # of Std.Sigma), replacing the former raw `Env.empty()` start.
+  defp base_env do
+    {:ok, env} = Cure.Elab.Program.elaborate("mod SigmaSurfaceBase\n")
+    env
+  end
+
   defp elaborate_all(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
     items = case ast do {:block, _, xs} -> xs; x -> [x] end
 
-    Enum.reduce_while(items, {:ok, Env.empty()}, fn decl, {:ok, env} ->
+    Enum.reduce_while(items, {:ok, base_env()}, fn decl, {:ok, env} ->
       case Declarations.elaborate(decl, env) do
         {:ok, env2} -> {:cont, {:ok, env2}}
         err -> {:halt, err}
       end
     end)
   end
+
+  # Does `term` mention a node headed by `tag` anywhere?
+  defp mentions?(term, tag) when is_tuple(term),
+    do: elem(term, 0) == tag or term |> Tuple.to_list() |> Enum.any?(&mentions?(&1, tag))
+
+  defp mentions?(list, tag) when is_list(list), do: Enum.any?(list, &mentions?(&1, tag))
+  defp mentions?(_other, _tag), do: false
 
   defp unwrap_lams({:lam, _dom, body}), do: unwrap_lams(body)
   defp unwrap_lams(term), do: term
@@ -37,7 +54,9 @@ defmodule Cure.Elab.SigmaSurfaceTest do
 
     assert {:ok, env} = elaborate_all(src)
     assert %{name: :forget_dec, type: type, body: body} = Env.get_def(env, :forget_dec)
-    assert {:pair, _d, _sf} = unwrap_lams(body)
+    # Core shape flipped (D2): the pair is the builtin Sigma ctor, not `{:pair,…}`.
+    assert {:ctor, :mk_pair, [_d, _sf]} = unwrap_lams(body)
+    refute mentions?(body, :pair)
     # Declared type ends in a dependent Σ.
     assert {:pi, _, _} = type
   end
@@ -49,7 +68,11 @@ defmodule Cure.Elab.SigmaSurfaceTest do
 
     assert {:ok, env} = elaborate_all(src)
     assert %{name: :recover, body: body} = Env.get_def(env, :recover)
-    assert {:snd, _p} = unwrap_lams(body)
+    # Core shape flipped (D2): `.2` lowers to the `sigma_second` projection global,
+    # not the primitive `{:snd,…}` node.
+    refute mentions?(body, :snd)
+    refute mentions?(body, :fst)
+    assert mentions?(unwrap_lams(body), :global)
   end
 
   test "rejects a pair whose second component's type mismatches B[a/x]" do

@@ -25,3 +25,15 @@ mod Std.Sigma
   @builtin(:sigma)
   type Sigma(a: Type, b: (a) -> Type) indices ()
     mk_pair : (x: a) -> b(x) -> Sigma(a, b)
+
+  ## First projection: the witness. Surface users write `p.1`; the compiler lowers
+  ## it to this global (inlined to `element(1, p)` at codegen, keeping the bare
+  ## 2-tuple ABI). `a`/`b` are erased at runtime. The parameter type is written with
+  ## the `Sigma(x: T, U)` surface (a plain `Sigma(a, b)` is reserved by the parser).
+  fn sigma_first({a: Type}, {b: (a) -> Type}, p: Sigma(x: a, b(x))) -> a = match p
+    mk_pair(x, y) -> x
+
+  ## Second projection: the dependent payload, at type `b(sigma_first(p))`. Surface
+  ## users write `p.2`; lowered to this global (inlined to `element(2, p)`).
+  fn sigma_second({a: Type}, {b: (a) -> Type}, p: Sigma(x: a, b(x))) -> b(sigma_first(p)) = match p
+    mk_pair(x, y) -> y

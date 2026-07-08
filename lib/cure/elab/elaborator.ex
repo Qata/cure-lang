@@ -667,11 +667,14 @@ defmodule Cure.Elab.Elaborator do
   # change is a no-op for every non-Bool operand.
   defp bool_operand?(l_type, sig), do: primitive_scrut_kind(l_type, sig) == {:ok, :bool}
 
+  # `.1`/`.2` lower to an application of the Std.Sigma projection global
+  # (`sigma_first`/`sigma_second`), with the erased implicits `{a}`/`{b}` solved
+  # from `inner`'s inferred `Sigma(a, b)` type by the implicit-insertion machinery.
+  # `inner` is the SURFACE AST (not the already-lowered term) so the wrapper infers
+  # it in the caller's context. Same `{:ok, term, result_type}` contract as before.
   defp sigma_projection(which, inner, names, ctx, env) do
-    with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
-      term = {which, inner_term}
-      with {:ok, type} <- Kernel.infer(ctx, term), do: {:ok, term, type}
-    end
+    gname = if which == :fst, do: :sigma_first, else: :sigma_second
+    elaborate_implicit_global_app(env, gname, [inner], names, ctx)
   end
 
   # Record field projection `obj.field`. The object's type identifies its record
@@ -915,17 +918,29 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # Dependent-pair introduction `%[a, b]` in checking mode. The expected type must
-  # be a Σ; elaborate `a` against its domain, then `b` against the codomain
-  # instantiated at `a` (so a component like `prim()` gets its erased indices from
-  # the expected `SF(as, bs, d)`, not left as unsolved metavariables). The kernel
-  # re-checks the assembled `{:pair, …}`.
+  # be the builtin inductive Sigma; elaborate `a` against its domain, then `b`
+  # against the codomain APPLIED to `a` (the second Σ param `b_fn` is an arbitrary
+  # term — lambda, global, or neutral — so the instantiated codomain is the
+  # application `b_fn(a)` handed to the normalizer, NOT a binder-body substitution;
+  # spec §2.2). Lowers to the ctor `mk_pair`; the kernel re-checks it. With no Sigma
+  # family registered (a raw-`Env.empty()` elaboration), falls through to the
+  # inference fallback, which builds the same `{:ctor, :mk_pair, …}`.
   def elaborate_expr_checked({:tuple, _meta, [a_ast, b_ast]} = expr, expected_core, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
     case Kernel.normalize(ctx, expected_core) do
-      {:sigma, dom, cod} ->
+      {:data, fam, [dom, b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
+        [%{name: mk_pair} | _] = Inductive.ctors_of(env, sigma_fam)
+
         with {:ok, a_term} <- elaborate_expr_checked(a_ast, dom, names, ctx, env),
-             cod_inst = Subst.instantiate(cod, [a_term]),
+             # The second Σ param `b_fn` is an arbitrary term, so the instantiated
+             # codomain is the application `b_fn(a)` — normalized (β-reduced) so a
+             # dependent component like `prepend(x, empty())` sees its concrete
+             # expected type (`Vector(a, Suc(Zero))`) and can solve its implicits,
+             # exactly as the former `Subst.instantiate` did.
+             cod_inst = Kernel.normalize(ctx, {:app, b_fn, a_term}),
              {:ok, b_term} <- elaborate_expr_checked(b_ast, cod_inst, names, ctx, env),
-             term = {:pair, a_term, b_term},
+             term = {:ctor, mk_pair, [a_term, b_term]},
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -4151,7 +4166,12 @@ defmodule Cure.Elab.Elaborator do
       # Domain still unsolved — infer the argument and unify to solve metavariables.
       case elaborate_expr_typed(arg, names, ctx, env) do
         {:ok, term, ty} ->
-          ty_term = Quote.reify(ty, Context.length(ctx))
+          # Recover the (params, indices) split that the sig-less `Quote.reify`
+          # collapses (elaborator.ex:1268 `resplit_data`), so an argument type that
+          # carries a NESTED indexed family — e.g. a Sigma projection's `p` whose
+          # type is `Sigma(x: Dec, SF(as, bs, x))` — does not reach the kernel with
+          # SF's indices smuggled into its param slot (a false `:arg_arity`).
+          ty_term = resplit_data(Quote.reify(ty, Context.length(ctx)), env)
 
           case Unify.unify(dom_inst, ty_term, mctx, env) do
             {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
@@ -4712,13 +4732,25 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # Pair introduction `%[a, b]` in the scope-based term builder (function
-  # arguments and other sub-terms). Emits the Core `{:pair, …}`; its Σ type is
-  # derived by `Kernel.infer` on the enclosing application, which checks the pair
-  # against the callee's domain (so a dependent Σ parameter is honoured too).
+  # arguments and other sub-terms). Emits the builtin Sigma ctor `mk_pair`; its Σ
+  # type is derived by `Kernel.infer` on the enclosing application, which checks the
+  # ctor against the callee's domain (so a dependent Σ parameter is honoured too).
   def elaborate_expr({:tuple, _meta, [a, b]}, scope, env) do
     with {:ok, a_core} <- elaborate_expr(a, scope, env),
          {:ok, b_core} <- elaborate_expr(b, scope, env) do
-      {:ok, {:pair, a_core, b_core}}
+      {:ok, {:ctor, sigma_ctor_name(env), [a_core, b_core]}}
+    end
+  end
+
+  # The registered Sigma constructor name (canonically `:mk_pair`), resolved via the
+  # builtin registry (§1.4) rather than hard-coded; defaults to `:mk_pair` when no
+  # Sigma family is registered (a raw `Env.empty()` elaboration).
+  defp sigma_ctor_name(env) do
+    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
+         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
+      n
+    else
+      _ -> :mk_pair
     end
   end
 

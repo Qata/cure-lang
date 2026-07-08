@@ -64,7 +64,10 @@ defmodule Cure.Elab.Slice1ConformanceTest do
     result =
       negative("-> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]", "-> Sigma(x: Dec, SF(as, bs, x)) = %[Dcoupled, sf]")
 
-    assert code(result) == :sigma_mismatch
+    # Rejection preserved. The primitive-Σ-specific `:sigma_mismatch` diagnostic is
+    # retired with the primitive (D2); the inductive `mk_pair` ctor check surfaces
+    # the underlying, more precise reason — the SF middle-index contradiction.
+    assert code(result) == :index_mismatch
   end
 
   test "negative #5: the program has an unfilled hole and is refused for codegen" do

@@ -237,13 +237,17 @@ defmodule Cure.Elab.Program do
   # builtins), which also breaks any bootstrap cycle. Each source is idempotent
   # under `merge_env`, so an explicit `use` is harmless and a local definition of
   # the same name shadows the import.
-  @auto_prelude ~w(Std.Bool Std.Nat)
+  #   Std.Sigma -- the dependent-pair projection globals `sigma_first`/`sigma_second`
+  #   that `.1`/`.2` lower to must resolve in EVERY module (the surface sugar is
+  #   usable without `use`, like %[..]); the Sigma family itself is seeded, and
+  #   Std.Sigma dependent-elaborates cleanly (D1-proven pattern), so it qualifies.
+  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma)
 
   # The canonical type each auto-prelude module provides. If a module locally
   # declares a same-named type (e.g. its own `type Nat = Zero | Suc`), that prelude
   # is NOT auto-imported — the local declaration is canonical and importing the
   # look-alike would collide (mirrors `declared_type_names`' builtin-seed skip).
-  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat}
+  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat, "Std.Sigma" => :Sigma}
 
   defp auto_prelude_imports(ast) do
     self = find_module_name(ast)

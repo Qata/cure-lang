@@ -355,8 +355,19 @@ defmodule Cure.Elab.Declarations do
       {:error, _} ->
         with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
              {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
-          {:ok, {:pair, a_term, b_term}}
+          {:ok, {:ctor, sigma_mk_pair(env), [a_term, b_term]}}
         end
+    end
+  end
+
+  # The registered Sigma constructor name (canonically `:mk_pair`), via the builtin
+  # registry; defaults to `:mk_pair` when no Sigma family is registered.
+  defp sigma_mk_pair(env) do
+    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
+         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
+      n
+    else
+      _ -> :mk_pair
     end
   end
 
@@ -970,11 +981,16 @@ defmodule Cure.Elab.Declarations do
   end
 
   # Binder-introducing forms (sigma/pi/arrow) sub-lower with the 4-arg form:
-  # the ctx is NULLed under their binders (spec §7.3 item 4).
+  # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
+  # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
+  # `bname` in scope, so it is already in the frame of one new lambda binder, and
+  # wrapping it under `{:lam, dom, body}` is exactly that frame. `:Sigma` is the
+  # canonical family name (only Std.Sigma registers `@builtin(:sigma)`), used as a
+  # literal so `Sigma(..)` lowers even in a raw-`Env.empty()` elaboration.
   defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
-      {:ok, {:sigma, dom, body}}
+      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
     end
   end
 
@@ -1004,7 +1020,13 @@ defmodule Cure.Elab.Declarations do
 
   # A qualified TYPE reference (`Std.Nat` / `Std.Nat.Nat`, no call parens) OR a
   # projection `p.1` / `p.2` used in a type position (e.g. `SF(as, bs, p.1)`).
-  defp idx_to_core({:attribute_access, meta, [inner_ast]} = node, scope, fam, env, _ctx) do
+  # For a projection, lower to the Std.Sigma projection global exactly as the
+  # term-position `sigma_projection` does — the ctx threaded from the return-type
+  # position (spec 2026-07-08 §7.3) is REQUIRED to solve the erased implicits, so
+  # `ctx` must not be discarded. A `.1`/`.2` reached with `ctx == nil` (a non-
+  # return-type index/telescope position that does not thread ctx) has no frame to
+  # solve the implicits and errors precisely — a spec §7.5-class residual.
+  defp idx_to_core({:attribute_access, meta, [inner_ast]} = node, scope, fam, env, ctx) do
     attr = Keyword.fetch!(meta, :attribute)
     dotted = Cure.Compiler.Parser.dotted_path_of(node)
 
@@ -1014,13 +1036,16 @@ defmodule Cure.Elab.Declarations do
         {:ok, key} = Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)
         {:ok, {:data, key, [], []}}
 
-      attr in ["1", "2"] ->
-        with {:ok, inner} <- idx_to_core(inner_ast, scope, fam, env) do
-          case attr do
-            "1" -> {:ok, {:fst, inner}}
-            "2" -> {:ok, {:snd, inner}}
-          end
+      attr in ["1", "2"] and not is_nil(ctx) ->
+        gname = if attr == "1", do: :sigma_first, else: :sigma_second
+
+        with {:ok, term, _type} <-
+               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, gname, [inner_ast], scope, ctx) do
+          {:ok, term}
         end
+
+      attr in ["1", "2"] ->
+        {:error, {:sigma_projection_needs_ctx, attr}}
 
       true ->
         {:error, {:bad_projection, attr}}
@@ -1190,12 +1215,15 @@ defmodule Cure.Elab.Declarations do
   # so the Σ codomain carries no reference to the bound component — `U` has no free
   # de Bruijn index and needs no shift. A genuinely dependent Σ field (`U`
   # mentioning `a`) would map `a` to a spurious family name and be rejected by
-  # `Kernel.check_family`; it is not admitted here. The assembled `{:sigma, …}`
-  # goes into the constructor telescope and is validated by the kernel.
+  # `Kernel.check_family`; it is not admitted here. Lowers to the builtin inductive
+  # `Sigma(D, λ_:D. U)`; because `U` is closed w.r.t. the binder, the wrapping
+  # lambda is trivially constant (it ignores its argument), which is still
+  # well-formed. The assembled `{:data, :Sigma, …}` goes into the constructor
+  # telescope and is validated by the kernel.
   defp type_to_core({:sigma_type, [binder: _bname], [dom_ast, body_ast]}) do
     with {:ok, dom} <- type_to_core(dom_ast),
          {:ok, body} <- type_to_core(body_ast) do
-      {:ok, {:sigma, dom, body}}
+      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
     end
   end
 
