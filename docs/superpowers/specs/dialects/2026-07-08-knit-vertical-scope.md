@@ -122,7 +122,11 @@ knit TopDownRaglan in_the_round
   gauge 18 sts, 24 rows per 10cm
   sizes XS (S, M, L, XL)
   cast_on 64 (68, 72, 76, 80)
-  place_markers raglan * 4                # 4 raglan markers, positions declared below
+
+  section setup
+    ## Divide for back, sleeves, front; markers are placed HERE.
+    rnd 0: (k10 (11, 12, 13, 14), pm, k22 (23, 24, 25, 26), pm) * 2
+      — 4 markers: sleeve 10 (11, 12, 13, 14), body 22 (23, 24, 25, 26)
 
   section yoke
     rnd 1: (k to 1 before m, m1r, k1, sm, k1, m1l) * 4, k to end   — +8 sts
@@ -130,6 +134,27 @@ knit TopDownRaglan in_the_round
     repeat rnds 1..2, 12 (14, 16, 18, 20) more times
       — 168 (188, 208, 228, 248) sts
 ```
+
+**Markers are tracked state, and placement is checked.** The round state is
+not just a stitch count — it carries the ordered marker positions, so
+`pm`/`sm`/`k to [1 before] m` are part of the algebra: `pm` inserts a marker
+at the cursor, `sm` requires the cursor to be *at* one, and `k to 1 before m`
+requires a next marker to exist. Referencing a marker before any `pm` is the
+compile error this example originally contained (caught by the operator, to
+the author's chagrin — the checker exists precisely because humans ship this):
+
+```
+error[E223]: rnd 1 knits "to 1 before m", but there are no markers yet
+  No pm has been worked before this round. Add a setup round that places
+  the raglan markers (and says where — that's the fit).
+```
+
+Marker tracking buys more than placement errors: the checker knows every
+inter-marker *segment* width, so the setup round's marker callout is verified
+(10+22+10+22 = 64 for XS ✓, per size), the yoke's `* 4` is checked against
+the actual marker count, and segment growth is auditable — each raglan round
+adds exactly 2 sts per segment, so the schematic's per-piece numbers
+(sleeve 10 → 36 at separation for XS) fall out of the same arithmetic.
 
 The per-size tuple convention does the grading; the compiler instantiates
 all five sizes and verifies the arithmetic chain per size — including the
