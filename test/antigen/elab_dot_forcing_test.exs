@@ -104,4 +104,43 @@ defmodule Antigen.ElabDotForcingTest do
       assert Antigen.Runner.assay_module_for("elab/dot_forcing") == Antigen.Assays.Elab
     end
   end
+
+  describe "catalog gate (all six cells hold on today's post-#12 elaborator)" do
+    alias Antigen.Generators.ElabDotForcing
+
+    test "the catalog has exactly the six specced cells" do
+      assert ElabDotForcing.catalog() |> Enum.map(&elem(&1, 0)) |> Enum.sort() == [
+               "forced/carried/right",
+               "forced/carried/wrong",
+               "forced/plain/right",
+               "forced/plain/wrong",
+               "unforced/bind_erased",
+               "unforced/bind_relevant"
+             ]
+    end
+
+    test "the catalog is genuinely two-sided" do
+      verdicts = ElabDotForcing.catalog() |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> Enum.sort()
+      assert verdicts == [:accept, :reject]
+    end
+
+    test "every catalog entry elaborates to its expected verdict (and error head)" do
+      violations =
+        ElabDotForcing.dot_forcing_challenges()
+        |> Enum.map(fn c -> {c.payload.id, Elab.run(c)} end)
+        |> Enum.reject(fn {_id, v} -> v == :ok end)
+
+      assert violations == [],
+             "dot-forcing catalog verdict wrong (call-site wiring or check regressed):\n" <>
+               Enum.map_join(violations, "\n", &inspect/1)
+    end
+
+    test "reject cells carry their expected error heads" do
+      by_id = Map.new(ElabDotForcing.dot_forcing_challenges(), &{&1.payload.id, &1.payload})
+      assert by_id["forced/carried/wrong"].expect_error == :forced_pattern_mismatch
+      assert by_id["forced/plain/wrong"].expect_error == :forced_pattern_mismatch
+      assert by_id["unforced/bind_relevant"].expect_error == :erased_used_relevantly
+      refute Map.has_key?(by_id["forced/carried/right"], :expect_error)
+    end
+  end
 end
