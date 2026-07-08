@@ -308,6 +308,12 @@ runtime erasure** (the Idris "Nat hack"; today `Nat` erases to unary nested tupl
 fatal on ESP32) as second. Buys Lean/Agda-class type-level TCB minimality *and*
 device-viable native runtime representations — the mechanism does double duty.
 
+Phase 2 landed (spec 2026-07-08-nat-int-erasure): canonical Std.Nat erases to
+BEAM machine ints (Z→0, S→+1, case→zero-test/predecessor-bind), nominal-only
+(local Nat redeclarations keep tuples); bare positive-arity constructors now
+eta-expand (first-class `S`, general fix); representation agreement pinned by
+the Antigen elab/nat_rep assay (kernel certified-δ nf vs BEAM).
+
 **DEFERRED to work on the above — committed as the immediate follow-on:**
 **match-embedded `when` (general)** — guards on *constructor* patterns woven into
 the pattern-matrix compiler with correct fall-through, plus **Z3 as an untrusted
