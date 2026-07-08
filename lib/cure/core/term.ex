@@ -20,7 +20,6 @@ defmodule Cure.Core.Term do
     * `{:case, scrut, motive, branches}`     dependent eliminator;
                                              `branches :: [{ctor_name, arity, body}]`
     * `{:global, name}`                      reference to a global def
-    * `{:prim, op, args}`                    primitive operation
     * `{:int_type}` / `{:int_lit, n}`        integer type / literal
     * `{:float_type}` / `{:float_lit, f}`    float type / literal
     (Bool is a real inductive family, not a primitive term form.)
@@ -58,8 +57,6 @@ defmodule Cure.Core.Term do
     do: term?(scrut) and term?(motive) and branches?(branches)
 
   def term?({:global, name}), do: is_atom(name)
-
-  def term?({:prim, op, args}), do: is_atom(op) and terms?(args)
 
   def term?({:int_type}), do: true
   def term?({:int_lit, n}), do: is_integer(n)
@@ -103,7 +100,6 @@ defmodule Cure.Core.Term do
     do: {:case, shift(s, a, c), shift(m, a, c), Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, a, c + ar)} end)}
 
 
-  def shift({:prim, op, args}, a, c), do: {:prim, op, Enum.map(args, &shift(&1, a, c))}
 
   @doc """
   Is `term` closed (no free de Bruijn variables)?
@@ -173,7 +169,6 @@ defmodule Cure.Core.Term do
       {:case, subst(s, j, r), subst(m, j, r),
        Enum.map(brs, fn {cn, ar, b} -> {cn, ar, subst(b, j + ar, shift(r, ar, 0))} end)}
 
-  def subst({:prim, op, args}, j, r), do: {:prim, op, Enum.map(args, &subst(&1, j, r))}
 
   # -- serialization (commitment C2) ------------------------------------------
   #
@@ -217,9 +212,6 @@ defmodule Cure.Core.Term do
 
   def to_external({:global, n}), do: %{"node" => "global", "name" => Atom.to_string(n)}
 
-  def to_external({:prim, op, args}),
-    do: %{"node" => "prim", "op" => Atom.to_string(op), "args" => Enum.map(args, &to_external/1)}
-
   def to_external({:int_type}), do: %{"node" => "int_type"}
   def to_external({:int_lit, n}), do: %{"node" => "int_lit", "value" => n}
   def to_external({:float_type}), do: %{"node" => "float_type"}
@@ -253,9 +245,6 @@ defmodule Cure.Core.Term do
        end)}
 
   def from_external(%{"node" => "global", "name" => n}), do: {:global, sym_atom(n)}
-
-  def from_external(%{"node" => "prim", "op" => op, "args" => args}),
-    do: {:prim, sym_atom(op), Enum.map(args, &from_external/1)}
 
   def from_external(%{"node" => "int_type"}), do: {:int_type}
   def from_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}

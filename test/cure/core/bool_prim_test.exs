@@ -1,46 +1,51 @@
 defmodule Cure.Core.BoolPrimTest do
   @moduledoc """
-  Numeric comparisons in the kernel. `Bool` is a real inductive family (retiring
-  the primitive `{:bool_type}`/`{:bool_lit}`/`bool_elim` forms): comparisons infer
-  to the `Bool` inductive type value and `eval` folds them to the `True`/`False`
-  constructor values. The boolean CONNECTIVES (`and`/`or`/`not`) and Bool-operand
-  equality are no longer primitives — they are Std.Bool `case`-defs — so a residual
-  connective prim is stuck in `eval` and `{:unknown_prim, _}` in `infer`.
+  Numeric comparisons in the kernel — now registry-keyed builtin-op GLOBALS
+  (K2, spec 2026-07-09). `Bool` is a real inductive family: comparison spines
+  infer to the `Bool` inductive type value and the certified-δ engine folds
+  literal spines to the `True`/`False` constructor values. The boolean
+  CONNECTIVES (`and`/`or`/`not`) and Bool-operand equality are Std.Bool
+  `case`-defs — an `and`-headed spine over a bare seeded env is an ordinary
+  unknown global (`:unknown_global` in infer, neutral in normalization).
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Builtins, Context, Conv, Env, Eval, Kernel}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Kernel, Normalise}
 
-  defp ctx, do: Context.empty(Builtins.seed(Env.empty()))
-  defp vtrue, do: Eval.eval({:ctor, :True, []}, [])
-  defp vfalse, do: Eval.eval({:ctor, :False, []}, [])
+  defp env, do: Builtins.seed(Env.empty())
+  defp ctx, do: Context.empty(env())
 
-  test "eval folds integer comparisons to Bool constructor values" do
-    assert Eval.eval({:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]}, []) == vtrue()
-    assert Eval.eval({:prim, :eq, [{:int_lit, 4}, {:int_lit, 4}]}, []) == vtrue()
-    assert Eval.eval({:prim, :ge, [{:int_lit, 2}, {:int_lit, 9}]}, []) == vfalse()
+  defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
+
+  test "certified delta folds integer comparisons to Bool constructor values" do
+    assert {:ctor, :True, []} = Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
+    assert {:ctor, :True, []} = Normalise.nf(ctx(), app2(:int_eq, {:int_lit, 4}, {:int_lit, 4}), delta: :certified)
+    assert {:ctor, :False, []} = Normalise.nf(ctx(), app2(:int_ge, {:int_lit, 2}, {:int_lit, 9}), delta: :certified)
   end
 
-  test "the boolean-connective primitives are retired: a residual prim is stuck" do
-    # `and`/`or`/`not` are no longer kernel primitives. A hand-built residual prim
-    # no longer folds.
-    assert match?({:vneutral, _}, Eval.eval({:prim, :and, [{:ctor, :True, []}, {:ctor, :False, []}]}, []))
-    assert match?({:vneutral, _}, Eval.eval({:prim, :or, [{:ctor, :True, []}, {:ctor, :False, []}]}, []))
-    assert match?({:vneutral, _}, Eval.eval({:prim, :not, [{:ctor, :False, []}]}, []))
+  test "the boolean connectives are NOT builtin ops: an and/or/not spine stays neutral" do
+    for t <- [
+          app2(:and, {:ctor, :True, []}, {:ctor, :False, []}),
+          app2(:or, {:ctor, :True, []}, {:ctor, :False, []}),
+          {:app, {:global, :not}, {:ctor, :False, []}}
+        ] do
+      assert t == Normalise.nf(ctx(), t, delta: :certified)
+    end
   end
 
   test "definitional equality across comparisons" do
-    assert Conv.conv?({:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]}, {:ctor, :True, []}, [], 0)
-    refute Conv.conv?({:ctor, :True, []}, {:ctor, :False, []}, [], 0)
+    assert Conv.conv?(app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), {:ctor, :True, []}, [], 0, env())
+    refute Conv.conv?({:ctor, :True, []}, {:ctor, :False, []}, [], 0, env())
   end
 
-  test "kernel types numeric comparisons at Bool and rejects retired connective prims" do
+  test "kernel types numeric comparison spines at Bool and rejects connective globals as unknown" do
     bool = {:vdata, :Bool, []}
-    assert {:ok, ^bool} = Kernel.infer(ctx(), {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]})
+    assert {:ok, ^bool} = Kernel.infer(ctx(), app2(:int_lt, {:int_lit, 1}, {:int_lit, 2}))
 
-    # The connectives are retired as primitives — a residual `:and` prim is rejected.
-    assert {:error, {:unknown_prim, :and}} =
-             Kernel.infer(ctx(), {:prim, :and, [{:ctor, :True, []}, {:ctor, :False, []}]})
+    # The connectives are Std.Bool defs, absent from the bare seeded env — an
+    # `and`-headed spine is an ordinary unknown global (was {:unknown_prim, :and}).
+    assert {:error, :unknown_global} =
+             Kernel.infer(ctx(), app2(:and, {:ctor, :True, []}, {:ctor, :False, []}))
 
-    assert {:error, _} = Kernel.infer(ctx(), {:prim, :lt, [{:ctor, :True, []}, {:int_lit, 2}]})
+    assert {:error, _} = Kernel.infer(ctx(), app2(:int_lt, {:ctor, :True, []}, {:int_lit, 2}))
   end
 end

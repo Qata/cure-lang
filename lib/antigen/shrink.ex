@@ -163,13 +163,10 @@ defmodule Antigen.Shrink do
          {fn nb -> {:case, s, m, List.replace_at(brs, i, {c, ar, nb})} end, body}
        end))
   end
-  # :prim is a real Core former (Cure.Core.Term's node taxonomy) that
-  # `Term.gen_term`/`Antigen.Generators.Mutation` never construct today, so
-  # this clause is presently unreached — included anyway so term_candidates
-  # doesn't silently stop descending if it ever appears (no binder — no
-  # cutoff bump). (The former :rewrite clause retired with the primitive
-  # identity forms, Phase C.)
-  defp child_slots({:prim, op, args}), do: slot_list(args, &{:prim, op, &1})
+  # (The former :prim child-slot clause retired with the {:prim} node, K2:
+  # builtin-op spines are ordinary :app chains, covered by the :app clause.
+  # The former :rewrite clause retired with the primitive identity forms,
+  # Phase C.)
   defp child_slots(_leaf), do: []
 
   defp slot_list(elems, rebuild_list) do

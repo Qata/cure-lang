@@ -54,7 +54,12 @@ defmodule Cure.Core.Validator do
     # tolerable tech debt — same rationale as Phase C's `no_eq_node`.
     no_sigma_node: :reject,
     no_rewrite_node: :warn,
-    no_prim_node: :warn,
+    # K2 flipped `no_prim_node` to :reject even at dev time: the kernel has no
+    # `{:prim}`/`{:nprim}` clauses left (arithmetic is registry-keyed builtin-op
+    # GLOBALS with certified-δ literal acceleration, spec 2026-07-09), so any
+    # such node in a checked def is smuggled non-grammar (firewall breach) —
+    # same rationale as Phase C's `no_eq_node` and D2's `no_sigma_node`.
+    no_prim_node: :reject,
     no_hole: :warn,
     qualified_syms: :off,
     ctor_signature: :off,
@@ -87,12 +92,18 @@ defmodule Cure.Core.Validator do
   # Phase B/C land `no_rewrite_node: :reject` — every `{:rewrite}` producer was
   # retired (rewrite → J/subst single-branch `:case` transport) and the kernel
   # clauses stripped, so a `{:rewrite}` node in final Core is smuggled grammar.
+  # K2 lands `no_prim_node: :reject` — `{:prim}`/`{:nprim}` are stripped from
+  # the kernel (builtin-op globals are canonical); explicit here even though
+  # wave0 already rejects, so the release ratchet is self-documenting (this was
+  # the recorded doc/code drift: §J said :off while wave0 had :warn and release
+  # never flipped it).
   @release_config @wave0_config
                   |> Map.put(:no_hole, :reject)
                   |> Map.put(:no_absurd_node, :reject)
                   |> Map.put(:no_eq_node, :reject)
                   |> Map.put(:no_sigma_node, :reject)
                   |> Map.put(:no_rewrite_node, :reject)
+                  |> Map.put(:no_prim_node, :reject)
 
   @doc "The strict Final-Core config enforced at the release/emit boundary (K3+)."
   @spec release_config() :: config()
@@ -125,7 +136,6 @@ defmodule Cure.Core.Validator do
   defp children({:eq, ty, a, b}), do: [ty, a, b]
   defp children({:refl, a}), do: [a]
   defp children({:rewrite, p, m, b}), do: [p, m, b]
-  defp children({:prim, _op, args}), do: args
   defp children(_leaf), do: []
 
   @doc "Validate `term` against the Wave-0 config."

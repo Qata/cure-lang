@@ -114,10 +114,12 @@ defmodule Cure.Elab.MillerUnifyTest do
              solve_index(ctx, m, {:ctor, :S, [{:var, 0}]})
   end
 
-  test "prim-valued index: Vec(?m n) =? Vec(add n n)  ⇒  ?m := λn. add n n" do
+  test "op-spine-valued index: Vec(?m n) =? Vec(int_add n n)  ⇒  ?m := λn. int_add n n" do
+    # K2 re-spell: computed index is a builtin-op global spine (mabs's generic
+    # {:app} clause abstracts it; same solution shape).
     {ctx, m} = fam_ctx_nn()
-    assert {:lam, @nat, {:prim, :add, [{:var, 0}, {:var, 0}]}} ==
-             solve_index(ctx, m, {:prim, :add, [{:var, 0}, {:var, 0}]})
+    spine = {:app, {:app, {:global, :int_add}, {:var, 0}}, {:var, 0}}
+    assert {:lam, @nat, spine} == solve_index(ctx, m, spine)
   end
 
   test "case-valued index: Vec(?m n) =? Vec(case n {Z→Z; S k→k})  ⇒  ?m := λn. case n {…}" do

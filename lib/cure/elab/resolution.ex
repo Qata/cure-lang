@@ -34,7 +34,6 @@ defmodule Cure.Elab.Resolution do
   def rekey_term({:lam, dom, body}, m), do: {:lam, rekey_term(dom, m), rekey_term(body, m)}
   def rekey_term({:app, f, a}, m), do: {:app, rekey_term(f, m), rekey_term(a, m)}
 
-  def rekey_term({:prim, op, args}, m), do: {:prim, op, Enum.map(args, &rekey_term(&1, m))}
 
   # Leaves: :var, :type, :global, :int_type, :int_lit, :float_type, :float_lit.
   def rekey_term(leaf, _m), do: leaf

@@ -120,9 +120,6 @@ defmodule Cure.Core.Conv do
   defp conv_neutral?({:napp, n1, v1}, {:napp, n2, v2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig) and conv_val?(v1, v2, depth, sig)
 
-  defp conv_neutral?({:nprim, op1, a1}, {:nprim, op2, a2}, depth, sig),
-    do: op1 == op2 and conv_spine?(a1, a2, depth, sig)
-
   # The scrutinee compares up to conversion (lifted to a value, so whnf can
   # force a redex scrutinee that δι-reduces past the stuck case) — a stuck
   # case's scrutinee is an argument position like any other, per Lean
@@ -157,9 +154,6 @@ defmodule Cure.Core.Conv do
 
   defp same_neutral_no_delta?({:napp, f1, a1}, {:napp, f2, a2}, depth),
     do: same_neutral_no_delta?(f1, f2, depth) and same_value_no_delta?(a1, a2, depth)
-
-  defp same_neutral_no_delta?({:nprim, op1, args1}, {:nprim, op2, args2}, depth),
-    do: op1 == op2 and same_spine_no_delta?(args1, args2, depth)
 
   defp same_neutral_no_delta?(_, _, _depth), do: false
 

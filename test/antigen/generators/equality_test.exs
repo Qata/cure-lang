@@ -59,7 +59,7 @@ defmodule Antigen.Generators.EqualityTest do
     neutral_props =
       Enum.filter(sample, fn c ->
         match?(
-          {:data, :Equivalent, _, [subj, _]} when elem(subj, 0) in [:prim, :case],
+          {:data, :Equivalent, _, [subj, _]} when elem(subj, 0) in [:app, :case],
           c.payload.term
         ) and c.payload.ctx != []
       end)
@@ -76,7 +76,8 @@ defmodule Antigen.Generators.EqualityTest do
       |> MapSet.new()
 
     # Σ projections are now single-branch ι-on-`:case` over mk_pair (D2), so the
-    # former `:fst`/`:snd` neutral subjects are `:case`-headed.
-    for s <- [:prim, :case], do: assert(s in subjects, "neutral subject #{s} never generated")
+    # former `:fst`/`:snd` neutral subjects are `:case`-headed; the former :prim
+    # subjects are builtin-op global spines, i.e. `:app`-headed (K2).
+    for s <- [:app, :case], do: assert(s in subjects, "neutral subject #{s} never generated")
   end
 end

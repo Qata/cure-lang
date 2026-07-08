@@ -1,43 +1,47 @@
 defmodule Antigen.Generators.Primitive do
   @moduledoc """
-  Structure-directed generator for **primitive arithmetic** Core terms
-  (`{:prim, op, args}`), the reachability lever for `Cure.Core.Eval.fold/2`,
-  `Kernel.infer_prim/3`, and `numeric_type?/1` — the kernel's Int/Float
-  evaluation and typing paths, which the mode-directed `Generators.Term`
-  machinery never emits (its goal menu has no Int/Float types, spec §5).
+  Structure-directed generator for **primitive arithmetic** Core terms — now
+  registry-keyed builtin-op GLOBAL spines (K2, spec 2026-07-09; the `{:prim}`
+  node is retired). The reachability lever for the certified-δ literal
+  acceleration (`Normalise.builtin_op_fold` → the audited `Eval.fold/2` table)
+  and the ordinary global-Pi typing path — Int/Float surfaces the mode-directed
+  `Generators.Term` machinery never emits (its goal menu has no Int/Float
+  types, spec §5).
 
   Every generated term is well-typed **by construction** over the v1 signature
-  in the empty context: operands are `:int_lit`/`:float_lit` literals (or shallow
-  nested prims of the same numeric type), and the claimed `type` is exactly the
-  op's result type (`{:int_type}` or `{:float_type}`). div/rem occasionally draw
-  a **zero divisor**, which the kernel types fine but `Eval.fold` leaves *stuck*
-  (`{:vneutral, {:nprim, ...}}`) — this is what exercises fold's `:stuck` /
-  guarded-fold clauses.
+  (which seeds the 25 ops) in the empty context: operands are
+  `:int_lit`/`:float_lit` literals (or shallow nested spines of the same
+  numeric type), and the claimed `type` is exactly the op's result type
+  (`{:int_type}`/`{:float_type}`, comparisons `Bool`). div/rem occasionally
+  draw a **zero divisor**, which the kernel types fine but the fold leaves
+  *stuck* (the spine stays a neutral `napp` chain) — this exercises the
+  §G.1 partial-op rule.
 
-  Emits **numeric** prims (result `Int`/`Float`: `add/sub/mul/div/rem/neg`) and
-  **numeric comparisons** (`lt/le/gt/ge/eq/ne` over Int/Float operands, result
-  `Bool` via the `:bool` builtin). The Boolean **connectives** (`and/or/not`) and
-  Bool-operand `eq/ne` are deliberately NOT emitted: the connectives were retired
-  from the kernel to Std.Bool `case`-defs (they now fail `infer_prim` with
-  `{:unknown_prim, op}`), and Bool-operand `eq/ne` infers but no longer folds
-  (stuck). Both are covered instead through the elaborator's Std.Bool lowering.
+  Emits **numeric** ops (monomorphic twins `int_add/…/int_rem`,
+  `float_add/…/float_div`, `int_neg`/`float_neg` — no `float_rem`, it does not
+  exist) and **numeric comparisons** (`int_lt/…/int_ne`, `float_lt/…/float_ne`,
+  result `Bool` via the `:bool` builtin). The Boolean **connectives**
+  (`and/or/not`) and Bool-operand `eq/ne` are deliberately NOT emitted: they
+  are Std.Bool `case`-defs, covered through the elaborator's lowering.
 
-  Tagged for the three infer+normalize assays (`infer_check`, `subject_reduction`,
-  `normalization`); `normalization` is the one that drives `nf` — hence `eval` —
-  hence `fold`.
+  Tagged for the three infer+normalize assays (`infer_check`,
+  `subject_reduction`, `normalization`); `normalization` is the one that
+  drives `nf` — hence the certified-δ hook — hence `fold`.
   """
   alias Antigen.{Gen, Challenge}
 
   # Numeric-result assays only — every one runs `infer` then `nf` on the term,
-  # which is the path through `Eval.fold`. (erasure_preservation is omitted: its
-  # value here is marginal and it is the one assay that does not add fold coverage.)
+  # which is the path through the builtin-op fold. (erasure_preservation is
+  # omitted: its value here is marginal and it is the one assay that does not
+  # add fold coverage.)
   @assays ["term/infer_check", "term/subject_reduction", "term/normalization"]
 
   @lit_range 20
   @max_depth 2
 
   @bool_type {:data, :Bool, [], []}
-  @cmp_ops [:lt, :le, :gt, :ge, :eq, :ne]
+  @int_cmp_ops [:int_lt, :int_le, :int_gt, :int_ge, :int_eq, :int_ne]
+  @float_cmp_ops [:float_lt, :float_le, :float_gt, :float_ge, :float_eq, :float_ne]
 
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
@@ -49,14 +53,14 @@ defmodule Antigen.Generators.Primitive do
             assay: assay,
             label: :well_typed,
             payload: %{sig: :v1, ctx: [], type: type, term: term},
-            note: "primitive arithmetic"
+            note: "primitive arithmetic (builtin-op global spines)"
           )
         )
       end)
     end)
   end
 
-  # -- prim term + its result type -------------------------------------------
+  # -- op spine + its result type ---------------------------------------------
   defp prim_gen do
     Gen.frequency([
       {5, Gen.bind(int_prim(@max_depth), fn t -> Gen.return({t, {:int_type}}) end)},
@@ -65,15 +69,15 @@ defmodule Antigen.Generators.Primitive do
     ])
   end
 
-  # -- Int prims --------------------------------------------------------------
+  # -- Int ops ------------------------------------------------------------------
   defp int_prim(depth) do
     Gen.frequency([
-      {2, binop(:add, &int_operand/1, depth)},
-      {2, binop(:sub, &int_operand/1, depth)},
-      {2, binop(:mul, &int_operand/1, depth)},
-      {2, divop(:div, &int_operand/1, int_zero(), depth)},
-      {2, divop(:rem, &int_operand/1, int_zero(), depth)},
-      {1, unop(:neg, &int_operand/1, depth)}
+      {2, binop(:int_add, &int_operand/1, depth)},
+      {2, binop(:int_sub, &int_operand/1, depth)},
+      {2, binop(:int_mul, &int_operand/1, depth)},
+      {2, divop(:int_div, &int_operand/1, int_zero(), depth)},
+      {2, divop(:int_rem, &int_operand/1, int_zero(), depth)},
+      {1, unop(:int_neg, &int_operand/1, depth)}
     ])
   end
 
@@ -86,14 +90,14 @@ defmodule Antigen.Generators.Primitive do
   defp int_lit, do: Gen.bind(Gen.int(-@lit_range, @lit_range), fn n -> Gen.return({:int_lit, n}) end)
   defp int_zero, do: Gen.return({:int_lit, 0})
 
-  # -- Float prims (no :rem — infer_prim forces Int operands for remainder) ---
+  # -- Float ops (no float_rem — remainder is Int-only) -------------------------
   defp float_prim(depth) do
     Gen.frequency([
-      {2, binop(:add, &float_operand/1, depth)},
-      {2, binop(:sub, &float_operand/1, depth)},
-      {2, binop(:mul, &float_operand/1, depth)},
-      {2, divop(:div, &float_operand/1, float_zero(), depth)},
-      {1, unop(:neg, &float_operand/1, depth)}
+      {2, binop(:float_add, &float_operand/1, depth)},
+      {2, binop(:float_sub, &float_operand/1, depth)},
+      {2, binop(:float_mul, &float_operand/1, depth)},
+      {2, divop(:float_div, &float_operand/1, float_zero(), depth)},
+      {1, unop(:float_neg, &float_operand/1, depth)}
     ])
   end
 
@@ -108,35 +112,36 @@ defmodule Antigen.Generators.Primitive do
 
   defp float_zero, do: Gen.return({:float_lit, 0.0})
 
-  # -- Bool-returning prims ---------------------------------------------------
-  # Numeric comparisons (Int or Float operands), result Bool. Connectives and
-  # Bool-operand eq/ne are intentionally excluded (retired / non-folding) — see
-  # the moduledoc.
+  # -- Bool-returning comparisons ----------------------------------------------
+  # Monomorphic numeric comparisons (int_* over Int operands, float_* over
+  # Float), result Bool. Connectives and Bool-operand eq/ne are intentionally
+  # excluded (Std.Bool case-defs) — see the moduledoc.
   defp bool_prim(depth) do
     Gen.frequency(
-      Enum.flat_map(@cmp_ops, fn op ->
-        [{1, binop(op, &int_operand/1, depth)}, {1, binop(op, &float_operand/1, depth)}]
-      end)
+      Enum.map(@int_cmp_ops, fn g -> {1, binop(g, &int_operand/1, depth)} end) ++
+        Enum.map(@float_cmp_ops, fn g -> {1, binop(g, &float_operand/1, depth)} end)
     )
   end
 
-  # -- op shapes --------------------------------------------------------------
-  defp binop(op, operand, depth) do
+  # -- op shapes (builtin-op global spines) --------------------------------------
+  defp binop(g, operand, depth) do
     Gen.bind(operand.(depth), fn a ->
-      Gen.bind(operand.(depth), fn b -> Gen.return({:prim, op, [a, b]}) end)
+      Gen.bind(operand.(depth), fn b ->
+        Gen.return({:app, {:app, {:global, g}, a}, b})
+      end)
     end)
   end
 
   # A binary op whose right operand is occasionally a zero literal (stuck fold).
-  defp divop(op, operand, zero_gen, depth) do
+  defp divop(g, operand, zero_gen, depth) do
     Gen.bind(operand.(depth), fn a ->
       Gen.bind(Gen.frequency([{6, operand.(depth)}, {1, zero_gen}]), fn b ->
-        Gen.return({:prim, op, [a, b]})
+        Gen.return({:app, {:app, {:global, g}, a}, b})
       end)
     end)
   end
 
-  defp unop(op, operand, depth) do
-    Gen.bind(operand.(depth), fn a -> Gen.return({:prim, op, [a]}) end)
+  defp unop(g, operand, depth) do
+    Gen.bind(operand.(depth), fn a -> Gen.return({:app, {:global, g}, a}) end)
   end
 end

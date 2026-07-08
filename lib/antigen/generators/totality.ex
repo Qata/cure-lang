@@ -339,7 +339,8 @@ defmodule Antigen.Generators.Totality do
 
     body =
       {:lam, {:int_type},
-       {:case, {:prim, :eq, [{:var, 0}, {:int_lit, 0}]}, {:lam, {:data, :Bool, [], []}, {:int_type}},
+       {:case, {:app, {:app, {:global, :int_eq}, {:var, 0}}, {:int_lit, 0}},
+        {:lam, {:data, :Bool, [], []}, {:int_type}},
         [{:True, 0, {:int_lit, 0}}, {:False, 0, {:app, {:global, :f}, {:var, 0}}}]}}
 
     Challenge.new(
@@ -693,9 +694,16 @@ defmodule Antigen.Generators.Totality do
     )
   end
 
-  @doc "Rebuild the def-group's `Env` by folding `Env.add_def/4` over the payload."
+  @doc """
+  Rebuild the def-group's `Env` by folding `Env.add_def/4` over the payload.
+  Seeded with the builtin-op globals first (K2, spec 2026-07-09): the catalog's
+  retargeted `int_eq` spine (diverging_bool_elim_branch) must not die
+  `:unknown_global` when a consumer resolves the group's globals.
+  """
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{payload: %{defs: defs}}) do
-    Enum.reduce(defs, Env.empty(), fn d, env -> Env.add_def(env, d.name, d.type, d.body) end)
+    Enum.reduce(defs, Cure.Core.Builtins.seed_ops(Env.empty()), fn d, env ->
+      Env.add_def(env, d.name, d.type, d.body)
+    end)
   end
 end

@@ -10,6 +10,9 @@ defmodule Cure.Core.TermTest do
     refute Term.term?({:type, 3})
     refute Term.term?({:var, -1})
     refute Term.term?(:not_a_term)
+    # {:prim} retired (K2, spec 2026-07-09): arithmetic is builtin-op global
+    # application spines — the bespoke node is out of the grammar.
+    refute Term.term?({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
   end
 
   test "shift lifts free vars at/above the cutoff, leaves bound vars" do

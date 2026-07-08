@@ -47,7 +47,13 @@ defmodule Antigen.Generators.ConvPair do
       {2, ret(pfst(v(0)), pfst(v(1)), false, "ι-on-case first component, distinct inner (135)")},
       {2, ret(psnd(v(0)), psnd(v(1)), false, "ι-on-case second component, distinct inner (136)")},
       {2, ret(pfst(v(0)), psnd(v(0)), false, "case first vs second component, branch-body mismatch (150)")},
-      {2, ret({:prim, :add, [v(0), v(1)]}, {:prim, :add, [v(0), v(2)]}, false, "nprim distinct arg (139)")},
+      {2,
+       ret(
+         {:app, {:app, {:global, :int_add}, v(0)}, v(1)},
+         {:app, {:app, {:global, :int_add}, v(0)}, v(2)},
+         false,
+         "builtin-op spine distinct arg (napp congruence, K2 §1.8)"
+       )},
       # -- η (conv_struct? RHS-λ + eta_eq?) --
       {2, ret(v(0), {:lam, {:type, 0}, {:app, v(1), v(0)}}, true, "η neutral-vs-λ (70,108)")},
       {2, ret({:lam, {:type, 0}, v(1)}, {:lam, {:type, 0}, v(1)}, true, "λ-vs-λ η (107)")},

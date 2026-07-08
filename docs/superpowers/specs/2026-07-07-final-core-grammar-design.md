@@ -453,7 +453,7 @@ proof, kernel-enforced, or a design-gated feature) — none is an open soundness
 | `no_hole` | **`:reject`** | landed (K3) |
 | `no_absurd_node` | **`:reject`** | landed (K4, 16718f6) |
 | `no_rewrite_node` | `:warn` | Phase B declined-with-proof — the sound `{:rewrite}` transport is a deliberate representation choice (K1) |
-| `no_prim_node` | `:off` | K2 §G.1 soundness already met by the kernel; `{:prim}`→delta-global is a representation change that buys no soundness — declined-with-proof |
+| `no_prim_node` | **`:reject`** | landed (K2, 2026-07-09 prim-delta-globals): `{:prim}`/`{:nprim}` stripped; arithmetic is registry-keyed builtin-op GLOBALS with certified-δ literal acceleration. (Historical note: this row previously read `:off` while validator.ex had `:warn` — a recorded doc/code drift, now moot. The earlier decline-with-proof was re-opened on the parity criterion — see `audit_categorised.md` §K2 pointer and spec `2026-07-09-prim-delta-globals-design.md` §0.) |
 | `ctor_signature` | partial | K6 soundness (params-in-spine, 545/599, b355753) landed; the grade-coupled remainder rides the out-of-scope grade wave |
 | `case_coverage` | kernel | structural coverage + the soundness-critical per-branch index unification are enforced by the kernel case-checker (K5a landed), not this structural clause |
 | `usage_relevance` | kernel | the `{0,ω}` erasure-relevance check is enforced by the kernel (returned / scrutinised / applied erased binder rejected), not structurally |

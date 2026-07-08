@@ -614,16 +614,15 @@ defmodule Cure.Elab.Elaborator do
 
   defp occurs_below?(_other, _arity, _depth), do: false
 
-  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the kernel's
-  # primitive opcodes. Only the ops the kernel actually types are mapped; `<>`
-  # (string concat), `..`, and the like are left unsupported here.
+  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the
+  # builtin-op key the type-directed dispatch maps onto a monomorphic global
+  # (K2). Only the ops with registered globals are mapped; `<>` (string
+  # concat), `..`, and the like are left unsupported here.
   defp prim_op(:+), do: {:ok, :add}
   defp prim_op(:-), do: {:ok, :sub}
   defp prim_op(:*), do: {:ok, :mul}
   defp prim_op(:/), do: {:ok, :div}
   defp prim_op(:rem), do: {:ok, :rem}
-  defp prim_op(:==), do: {:ok, :eq}
-  defp prim_op(:!=), do: {:ok, :ne}
   defp prim_op(:<), do: {:ok, :lt}
   defp prim_op(:>), do: {:ok, :gt}
   defp prim_op(:<=), do: {:ok, :le}
@@ -720,12 +719,6 @@ defmodule Cure.Elab.Elaborator do
   # A saturated `f(a)(b)` application of a global by name, most-recently-applied
   # argument outermost — the shape the kernel + emit expect for a curried def.
   defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
-
-  # The operand type resolves to the canonical `:bool` builtin family. Only a
-  # type that is *definitely* Bool diverts `==`/`!=` to the case-defs; anything
-  # else (Int/Float, a type variable, a neutral) keeps the native prim — so the
-  # change is a no-op for every non-Bool operand.
-  defp bool_operand?(l_type, sig), do: primitive_scrut_kind(l_type, sig) == {:ok, :bool}
 
   # `.1`/`.2` lower to an application of the Std.Sigma projection global
   # (`sigma_first`/`sigma_second`), with the erased implicits `{a}`/`{b}` solved
@@ -2112,9 +2105,6 @@ defmodule Cure.Elab.Elaborator do
     do:
       {:case, generalize(scr, rb, s, depth), generalize(m, rb, s, depth),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, generalize(b, rb, s, depth + ar)} end)}
-
-  defp generalize({:prim, op, args}, rb, s, depth),
-    do: {:prim, op, Enum.map(args, &generalize(&1, rb, s, depth))}
 
   defp generalize(leaf, _rb, _s, _depth), do: leaf
 
@@ -4007,9 +3997,6 @@ defmodule Cure.Elab.Elaborator do
     do:
       {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
-
-  defp replace_branch_vars({:prim, op, args}, subst),
-    do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}
 
   defp replace_branch_vars(other, _subst), do: other
 

@@ -136,7 +136,6 @@ defmodule Cure.Elab.Erase do
   def has_hole?({:app, f, x}), do: has_hole?(f) or has_hole?(x)
   def has_hole?({:ctor, _n, args}), do: Enum.any?(args, &has_hole?/1)
   def has_hole?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_hole?/1)
-  def has_hole?({:prim, _op, args}), do: Enum.any?(args, &has_hole?/1)
 
   def has_hole?({:case, s, m, branches}),
     do: has_hole?(s) or has_hole?(m) or Enum.any?(branches, fn {_c, _ar, b} -> has_hole?(b) end)

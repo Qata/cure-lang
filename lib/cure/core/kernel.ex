@@ -66,7 +66,6 @@ defmodule Cure.Core.Kernel do
   # with an unmatched-clause exception (spec §5/§8.1).
   def infer(_ctx, {:absurd}), do: {:error, :absurd_in_reachable_position}
 
-  def infer(ctx, {:prim, op, args}), do: infer_prim(ctx, op, args)
 
   def infer(ctx, {:pi, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
@@ -1012,9 +1011,6 @@ defmodule Cure.Core.Kernel do
       {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
 
-  defp replace_branch_vars({:prim, op, args}, subst),
-    do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}
-
   defp replace_branch_vars(other, _subst), do: other
 
   defp shift_subst(subst, amount) do
@@ -1050,27 +1046,12 @@ defmodule Cure.Core.Kernel do
   end
 
   # Cumulative subtyping: universe-level inclusion on sorts, conversion otherwise.
-  # Arithmetic: numeric-polymorphic (Int or Float), result matches the operands.
-  defp infer_prim(ctx, op, [a, b]) when op in [:add, :sub, :mul, :div] do
-    with {:ok, ta} <- infer(ctx, a),
-         true <- numeric_type?(ta),
-         :ok <- check(ctx, b, ta) do
-      {:ok, ta}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
 
-  # Integer remainder.
-  defp infer_prim(ctx, :rem, [a, b]) do
-    with :ok <- check(ctx, a, {:vint_type}), :ok <- check(ctx, b, {:vint_type}) do
-      {:ok, {:vint_type}}
-    else
-      _ -> {:error, {:prim_type, :rem}}
-    end
-  end
-
-  # Ordered comparison: numeric operands, boolean result.
+  # infer_prim retired (K2, spec 2026-07-09): arithmetic/comparison are
+  # registry-keyed builtin-op GLOBALS typed as ordinary Pi defs; the certified-δ
+  # engine folds saturated literal spines. `bool_type_value/1` stays — the
+  # elaborator's literal/`:case` lowering (and the seeded comparison codomains)
+  # still route through it.
   @doc """
   The type **value** denoting the canonical `Bool` inductive (`{:vdata, :Bool, []}`).
   Bool has no params/indices, so this is exactly what `infer({:ctor, :True/:False, []})`
@@ -1082,47 +1063,6 @@ defmodule Cure.Core.Kernel do
     fid = Inductive.builtin(sig, :bool) || raise "builtin :bool not seeded (bootstrap/load-order bug)"
     {:vdata, fid, []}
   end
-
-  defp infer_prim(ctx, op, [a, b]) when op in [:lt, :le, :gt, :ge] do
-    with {:ok, ta} <- infer(ctx, a),
-         true <- numeric_type?(ta),
-         :ok <- check(ctx, b, ta) do
-      {:ok, bool_type_value(Context.signature(ctx))}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
-
-  # Equality: any shared type, boolean result. (Accepts two Bool-typed operands
-  # too — see Eval.fold's Bool-operand equality clause.)
-  defp infer_prim(ctx, op, [a, b]) when op in [:eq, :ne] do
-    with {:ok, ta} <- infer(ctx, a), :ok <- check(ctx, b, ta) do
-      {:ok, bool_type_value(Context.signature(ctx))}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
-
-  # The Boolean connectives (`and`/`or`/`not`) are no longer primitives — they are
-  # Std.Bool functions (`and`/`or`/`not`) that `case`-eliminate the inductive
-  # Bool. A residual `{:prim, :and/:or/:not}` therefore falls through to the
-  # `{:unknown_prim, op}` clause below (the desired rejection). `bool_type_value/1`
-  # stays: the numeric comparisons above still return the inductive Bool through it.
-
-  # Numeric negation: numeric operand, same result type.
-  defp infer_prim(ctx, :neg, [a]) do
-    with {:ok, ta} <- infer(ctx, a), true <- numeric_type?(ta) do
-      {:ok, ta}
-    else
-      _ -> {:error, {:prim_type, :neg}}
-    end
-  end
-
-  defp infer_prim(_ctx, op, _args), do: {:error, {:unknown_prim, op}}
-
-  defp numeric_type?({:vint_type}), do: true
-  defp numeric_type?({:vfloat_type}), do: true
-  defp numeric_type?(_), do: false
 
   defp subtype?({:vtype, l1}, {:vtype, l2}, _ctx), do: Universe.le?(l1, l2)
 

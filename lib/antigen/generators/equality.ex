@@ -144,12 +144,16 @@ defmodule Antigen.Generators.Equality do
 
   defp neutral_eq_prop_term do
     Gen.frequency([
-      # prim over an Int variable → conv_neutral? / same_*_no_delta? :nprim spine
+      # builtin-op spine over an Int variable → conv_neutral? / same_*_no_delta?
+      # generic napp spine congruence (K2 §1.8 — same judgement strength as the
+      # retired :nprim clause)
       {2,
-       Gen.bind(Gen.member_of([:add, :sub, :mul]), fn op ->
-         Gen.bind(int_lit(), fn lit -> neutral_eq_prop({:prim, op, [{:var, 0}, lit]}, @int, [@int]) end)
+       Gen.bind(Gen.member_of([:int_add, :int_sub, :int_mul]), fn g ->
+         Gen.bind(int_lit(), fn lit ->
+           neutral_eq_prop({:app, {:app, {:global, g}, {:var, 0}}, lit}, @int, [@int])
+         end)
        end)},
-      {1, neutral_eq_prop({:prim, :neg, [{:var, 0}]}, @int, [@int])},
+      {1, neutral_eq_prop({:app, {:global, :int_neg}, {:var, 0}}, @int, [@int])},
       # projections of a Σ variable, now single-branch ι-on-case over mk_pair
       {1, neutral_eq_prop({:case, {:var, 0}, {:lam, @sig_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]}, @nat, [@sig_nat])},
       {1, neutral_eq_prop({:case, {:var, 0}, {:lam, @sig_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]}, @nat, [@sig_nat])},

@@ -19,9 +19,10 @@ defmodule Antigen.Generators.SigMenuTest do
     # the :bool builtin key resolves to the Bool family — bool_type_value needs this
     assert Inductive.builtin(env, :bool) == :Bool
     ctx = Context.empty(env)
-    # a comparison prim now types at Bool and normalizes to a True/False ctor
-    assert {:ok, _} = Kernel.infer(ctx, {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]})
-    assert {:ctor, :True, []} = Cure.Core.Normalise.nf(ctx, {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]}, fuel: 500_000)
+    # a comparison SPINE (K2) types at Bool and normalizes to a True/False ctor
+    lt = {:app, {:app, {:global, :int_lt}, {:int_lit, 1}}, {:int_lit, 2}}
+    assert {:ok, _} = Kernel.infer(ctx, lt)
+    assert {:ctor, :True, []} = Cure.Core.Normalise.nf(ctx, lt, fuel: 500_000, delta: :certified)
   end
 
   test "canon builds a well-typed inhabitant for each closed goal type" do

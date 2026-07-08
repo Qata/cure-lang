@@ -1,16 +1,15 @@
 defmodule Cure.Elab.ProgramCodegenGateTest do
   # The program-level codegen gate must share the ONE Final-Core enforcement
   # mechanism (Validator.release_config) with the emit gate — not a second,
-  # hand-maintained hole walker that can drift. `Erase.has_hole?` has no
-  # `{:prim, …}` clause, so a hole in a primitive-op argument slipped past it;
-  # the validator descends into prim args, so it catches the same leak the emit
-  # boundary now catches (K3, single trusted enforcement point).
+  # hand-maintained hole walker that can drift. (K2 re-spell: the carrier is a
+  # builtin-op global spine — the validator descends into app args, catching
+  # the same leak the emit boundary catches; K3 single enforcement point.)
   use ExUnit.Case, async: true
   alias Cure.Core.Env
   alias Cure.Elab.Program
 
-  test "codegen gate refuses a hole hidden in a primitive-op argument" do
-    body = {:prim, :add, [{:hole, "x"}, {:int_lit, 1}]}
+  test "codegen gate refuses a hole hidden in a builtin-op spine argument" do
+    body = {:app, {:app, {:global, :int_add}, {:hole, "x"}}, {:int_lit, 1}}
     env = Env.empty() |> Env.add_def(:tainted, {:type, 0}, body, [])
     assert {:error, {:unfilled_hole, :tainted}} = Program.check_codegen_ready(env)
   end

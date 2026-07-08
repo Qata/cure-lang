@@ -31,8 +31,9 @@ defmodule Cure.Core.SerializeTest do
     # decode is pinned as a negative test once the codec clauses are stripped.
     {:data, :Sigma, [{:int_type}, {:lam, {:int_type}, {:type, 0}}], []},
     {:ctor, :mk_pair, [{:int_lit, 1}, {:ctor, :True, []}]},
-    {:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]},
-    {:prim, :not, [{:ctor, :True, []}]},
+    # K2: arithmetic round-trips as builtin-op GLOBAL spines (ordinary app
+    # chains); the {:prim} wire tag no longer decodes (negative test below).
+    {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}},
     {:ctor, :seq, [{:global, :l}, {:global, :r}]},
     {:data, :SF, [{:global, :a}], [{:global, :b}, {:global, :c}]},
     {:case, {:var, 0}, {:lam, {:int_type}, {:type, 0}},
@@ -52,14 +53,14 @@ defmodule Cure.Core.SerializeTest do
   end
 
   test "a deserialized term earns the same kernel verdict as the original" do
-    ctx = Context.empty()
+    ctx = Context.empty(Cure.Core.Builtins.seed(Cure.Core.Env.empty()))
 
-    well_typed = {:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]}
+    well_typed = {:app, {:app, {:global, :int_add}, {:int_lit, 1}}, {:int_lit, 2}}
     {:ok, decoded} = Serialize.decode(Serialize.encode(well_typed))
     assert Kernel.infer(ctx, decoded) == Kernel.infer(ctx, well_typed)
     assert {:ok, {:vint_type}} = Kernel.infer(ctx, decoded)
 
-    ill_typed = {:prim, :add, [{:int_lit, 1}, {:type, 0}]}
+    ill_typed = {:app, {:app, {:global, :int_add}, {:int_lit, 1}}, {:type, 0}}
     {:ok, decoded_bad} = Serialize.decode(Serialize.encode(ill_typed))
     assert {:error, _} = Kernel.infer(ctx, decoded_bad)
   end
@@ -72,6 +73,13 @@ defmodule Cure.Core.SerializeTest do
 
   # D2: the primitive Sigma nodes are retired from the codec. Their wire tags no
   # longer decode — a stronger guarantee than the former positive round-trip rows.
+  # K2: the {:prim} node is retired from the codec — its wire tag no longer
+  # decodes (mirrors the D2 Sigma precedent below).
+  test "decode rejects the retired (prim ...) tag" do
+    assert {:error, :unknown_node} = Serialize.decode("(prim add (int 3) (int 5))")
+    assert {:error, :unknown_node} = Serialize.decode("(prim not (ctor True))")
+  end
+
   test "decode rejects the retired primitive Sigma tags" do
     for wire <- [
           "(sigma (int-type) (var 0))",

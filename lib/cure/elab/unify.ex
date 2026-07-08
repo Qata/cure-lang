@@ -255,7 +255,6 @@ defmodule Cure.Elab.Unify do
     do: {:data, nm, Enum.map(ps, &mabs(&1, dep, vs, n, l)), Enum.map(is, &mabs(&1, dep, vs, n, l))}
 
   defp mabs({:ctor, c, args}, dep, vs, n, l), do: {:ctor, c, Enum.map(args, &mabs(&1, dep, vs, n, l))}
-  defp mabs({:prim, op, args}, dep, vs, n, l), do: {:prim, op, Enum.map(args, &mabs(&1, dep, vs, n, l))}
 
   defp mabs({:case, s, m, brs}, dep, vs, n, l) do
     {:case, mabs(s, dep, vs, n, l), mabs(m, dep, vs, n, l),
@@ -382,7 +381,6 @@ defmodule Cure.Elab.Unify do
 
   defp escapes?({:app, f, x}, depth, local), do: escapes?(f, depth, local) or escapes?(x, depth, local)
 
-  defp escapes?({:prim, _op, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
 
   defp escapes?({:data, _f, ps, is}, depth, local),
     do: Enum.any?(ps ++ is, &escapes?(&1, depth, local))

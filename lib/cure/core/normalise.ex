@@ -168,9 +168,6 @@ defmodule Cure.Core.Normalise do
   defp nf_neutral({:napp, neutral, arg}, sig, depth, opts),
     do: {:napp, nf_neutral(neutral, sig, depth, opts), nf_value(arg, sig, depth, opts)}
 
-  defp nf_neutral({:nprim, op, args}, sig, depth, opts),
-    do: {:nprim, op, Enum.map(args, &nf_value(&1, sig, depth, opts))}
-
   defp nf_neutral({:ncase, neutral, motive, branches}, sig, depth, opts) do
     {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
   end

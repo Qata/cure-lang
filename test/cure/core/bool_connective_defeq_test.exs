@@ -9,9 +9,9 @@ defmodule Cure.Core.BoolConnectiveDefeqTest do
   `True`/`False`, so `and(True, b)` stayed a stuck neutral and never unfolded.
   Now `and(True, b) ≡ b`, `and(False, b) ≡ False`, `not(not b) ≡ b`, etc.
 
-  Also pins the retirement itself: a hand-built residual `{:prim, :and/:or/:not}`
-  is rejected by `infer` with `{:unknown_prim, _}`, and the numeric `:eq`/`:ne`
-  primitives are untouched.
+  Also pins the retirement itself (K2 update: `{:prim}` left the grammar
+  entirely — a connective SPINE over a bare seeded env is an ordinary unknown
+  global, and the numeric equality twins `int_eq`/`int_ne` fold/type as before).
   """
   use ExUnit.Case, async: true
 
@@ -77,22 +77,31 @@ defmodule Cure.Core.BoolConnectiveDefeqTest do
 
   defp ctx, do: Context.empty(Builtins.seed(Env.empty()))
 
-  test "a residual connective prim is rejected by infer as {:unknown_prim, _}" do
-    assert {:error, {:unknown_prim, :and}} = Kernel.infer(ctx(), {:prim, :and, [@tt, @ff]})
-    assert {:error, {:unknown_prim, :or}} = Kernel.infer(ctx(), {:prim, :or, [@tt, @ff]})
-    assert {:error, {:unknown_prim, :not}} = Kernel.infer(ctx(), {:prim, :not, [@tt]})
+  defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
+
+  test "a connective spine over the bare seeded env is an unknown global (was {:unknown_prim, _})" do
+    assert {:error, :unknown_global} = Kernel.infer(ctx(), app2(:and, @tt, @ff))
+    assert {:error, :unknown_global} = Kernel.infer(ctx(), app2(:or, @tt, @ff))
+    assert {:error, :unknown_global} = Kernel.infer(ctx(), {:app, {:global, :not}, @tt})
   end
 
-  test "a residual connective prim no longer folds in eval (stuck neutral)" do
-    v = Eval.eval({:prim, :and, [@tt, @ff]}, [])
+  test "a connective spine over the bare seeded env does not fold in eval (stuck neutral)" do
+    v = Eval.eval({:app, {:app, {:global, :and}, @tt}, @ff}, [])
     refute v == Eval.eval(@ff, [])
     assert match?({:vneutral, _}, v)
   end
 
-  test "numeric :eq/:ne primitives are untouched (still fold and type to Bool)" do
-    assert Eval.eval({:prim, :eq, [{:int_lit, 4}, {:int_lit, 4}]}, []) == Eval.eval(@tt, [])
-    assert Eval.eval({:prim, :ne, [{:int_lit, 4}, {:int_lit, 5}]}, []) == Eval.eval(@tt, [])
-    assert {:ok, {:vdata, :Bool, []}} = Kernel.infer(ctx(), {:prim, :eq, [{:int_lit, 1}, {:int_lit, 1}]})
-    assert {:ok, {:vdata, :Bool, []}} = Kernel.infer(ctx(), {:prim, :ne, [{:int_lit, 1}, {:int_lit, 2}]})
+  test "numeric equality twins int_eq/int_ne fold and type to Bool (K2 spines)" do
+    ctx = ctx()
+    alias Cure.Core.Normalise
+
+    assert {:ctor, :True, []} =
+             Normalise.nf(ctx, app2(:int_eq, {:int_lit, 4}, {:int_lit, 4}), delta: :certified)
+
+    assert {:ctor, :True, []} =
+             Normalise.nf(ctx, app2(:int_ne, {:int_lit, 4}, {:int_lit, 5}), delta: :certified)
+
+    assert {:ok, {:vdata, :Bool, []}} = Kernel.infer(ctx, app2(:int_eq, {:int_lit, 1}, {:int_lit, 1}))
+    assert {:ok, {:vdata, :Bool, []}} = Kernel.infer(ctx, app2(:int_ne, {:int_lit, 1}, {:int_lit, 2}))
   end
 end

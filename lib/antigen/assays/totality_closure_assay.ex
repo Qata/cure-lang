@@ -54,9 +54,11 @@ defmodule Antigen.Assays.TotalityClosureAssay do
   end
 
   @doc false
-  # Independent re-derivation of type-position reachability (spec §3 V5b), over the
-  # FULL Cure.Core.Term taxonomy — crucially INCLUDING {:prim, op, args}, which
-  # TotalityClosure.collect/1 omits (spec §8-3). Returns a MapSet of global names.
+  # Independent re-derivation of type-position reachability (spec §3 V5b), over
+  # the FULL Cure.Core.Term taxonomy. ({:prim} retired, K2: builtin-op spines
+  # are ordinary :app chains, and their op names — int_add, int_eq, … — appear
+  # in call graphs as terminal nodes with no body to close over.) Returns a
+  # MapSet of global names.
   def __reachable__(%Env{} = env) do
     seeds = reach_seeds(env)
     reach_close(env, MapSet.to_list(seeds), seeds)
@@ -90,6 +92,5 @@ defmodule Antigen.Assays.TotalityClosureAssay do
   defp globals({:data, _n, ps, is}), do: Enum.flat_map(ps, &globals/1) ++ Enum.flat_map(is, &globals/1)
   defp globals({:ctor, _n, args}), do: Enum.flat_map(args, &globals/1)
   defp globals({:case, s, m, brs}), do: globals(s) ++ globals(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> globals(b) end)
-  defp globals({:prim, _op, args}), do: Enum.flat_map(args, &globals/1)
   defp globals(_), do: []
 end

@@ -13,9 +13,9 @@ defmodule Cure.Elab.GuardLint do
     * `shadowed?/3` — is a guard implied by the disjunction of the guards
       before it (its arm dead)? Only ever produces a warning.
 
-  Translation fragment (§2.2): `{:prim, cmp, [a, b]}` over Int-typed operands
-  (vars checked against the Context, `{:int_lit, _}`, linear `add/sub/mul`),
-  plus literal `True`/`False`. Anything else falls back to an uninterpreted
+  Translation fragment (§2.2, K2): saturated builtin-op comparison SPINES over
+  Int-typed operands (vars checked against the Context, `{:int_lit, _}`,
+  linear `add/sub/mul` spines), plus literal `True`/`False`. Anything else falls back to an uninterpreted
   Bool constant interned BY TERM — identical untranslatable guards share a
   constant (so shadow detection catches a literal repeat), distinct ones do
   not, and an uninterpreted constant can never make a disjunction valid, so
@@ -115,15 +115,6 @@ defmodule Cure.Elab.GuardLint do
     end
   end
 
-  defp bool_form({:prim, op, [a, b]}, ctx, st) when is_map_key(@cmp, op) do
-    with {:ok, sa, st} <- int_form(a, ctx, st),
-         {:ok, sb, st} <- int_form(b, ctx, st) do
-      {:ok, "(" <> Map.fetch!(@cmp, op) <> " " <> sa <> " " <> sb <> ")", st}
-    else
-      _ -> :error
-    end
-  end
-
   defp bool_form({:ctor, :True, []}, _ctx, st), do: {:ok, "true", st}
   defp bool_form({:ctor, :False, []}, _ctx, st), do: {:ok, "false", st}
   defp bool_form(_other, _ctx, _st), do: :error
@@ -159,15 +150,6 @@ defmodule Cure.Elab.GuardLint do
     end
   end
 
-  # Keep the fragment linear: `mul` needs a literal multiplicand.
-  defp int_form({:prim, :mul, [a, b]}, ctx, st) do
-    if match?({:int_lit, _}, a) or match?({:int_lit, _}, b),
-      do: arith("*", a, b, ctx, st),
-      else: :error
-  end
-
-  defp int_form({:prim, :add, [a, b]}, ctx, st), do: arith("+", a, b, ctx, st)
-  defp int_form({:prim, :sub, [a, b]}, ctx, st), do: arith("-", a, b, ctx, st)
   defp int_form(_other, _ctx, _st), do: :error
 
   defp arith(sym, a, b, ctx, st) do

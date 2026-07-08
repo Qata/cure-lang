@@ -66,9 +66,6 @@ defmodule Cure.Elab.Subst do
      Enum.map(brs, fn {cn, ar, b} -> {cn, ar, replace(b, env, k, depth + ar)} end)}
   end
 
-  defp replace({:prim, op, args}, env, k, depth),
-    do: {:prim, op, Enum.map(args, &replace(&1, env, k, depth))}
-
   defp replace(other, _env, _k, _depth), do: other
 
   @doc "Shift free de Bruijn variables of a (meta-bearing) term above `cutoff` by `amount`."
@@ -102,9 +99,6 @@ defmodule Cure.Elab.Subst do
     {:case, shift(s, amount, cutoff), shift(m, amount, cutoff),
      Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, amount, cutoff + ar)} end)}
   end
-
-  def shift({:prim, op, args}, amount, cutoff),
-    do: {:prim, op, Enum.map(args, &shift(&1, amount, cutoff))}
 
   def shift(other, _amount, _cutoff), do: other
 end

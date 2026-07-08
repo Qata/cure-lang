@@ -8,7 +8,8 @@ defmodule Cure.Types.CoreBridge do
 
     * integer/float/boolean literals ↔ `{:int_lit,n}` / `{:float_lit,f}` / `{:bool_lit,b}`
     * free variables                 ↔ `{:global, name}` (stay neutral, read back by name)
-    * unary/binary arithmetic, comparison, logic ↔ `{:prim, op, args}`
+    * unary/binary arithmetic + comparison ↔ builtin-op GLOBAL spines
+      (`int_add`/`float_mul`/…, K2 spec 2026-07-09; logic stays surface-side)
     * binary tuples + `fst`/`snd`    ↔ the inductive Sigma (D2, spec §8):
       `{:ctor, :mk_pair, [a, b]}` / a single-branch projection `:case` over
       `mk_pair` (eval's ι-rule reduces it; a stuck one reads back as the same
@@ -64,24 +65,6 @@ defmodule Cure.Types.CoreBridge do
                 |> Map.merge(for {surface, core} <- @float_binops, into: %{}, do: {core, surface})
 
   @from_unop_builtin %{int_neg: :-, float_neg: :-}
-
-  # Legacy {:prim} reverse map — from_core keeps reading prim nodes back until
-  # the Phase-3 strip (coexistence).
-  @from_binop %{
-    add: :+,
-    sub: :-,
-    mul: :*,
-    div: :/,
-    rem: :%,
-    eq: :==,
-    ne: :!=,
-    lt: :<,
-    le: :<=,
-    gt: :>,
-    ge: :>=,
-    and: :and,
-    or: :or
-  }
 
   # -- surface → Core ---------------------------------------------------------
 
@@ -199,12 +182,6 @@ defmodule Cure.Types.CoreBridge do
 
   def from_core({:case, p, _motive, [{:mk_pair, 2, {:var, 0}}]}),
     do: {:function_call, [name: "snd"], [from_core(p)]}
-
-  def from_core({:prim, :neg, [x]}), do: {:unary_op, [operator: :-], [from_core(x)]}
-  def from_core({:prim, :not, [x]}), do: {:unary_op, [operator: :not], [from_core(x)]}
-
-  def from_core({:prim, op, [l, r]}),
-    do: {:binary_op, [operator: Map.fetch!(@from_binop, op)], [from_core(l), from_core(r)]}
 
   # Builtin-op spine read-back (K2 §1.4): a STUCK arithmetic/comparison spine
   # (e.g. an unbound `n + 1`) re-spells as the surface binary_op/unary_op node.

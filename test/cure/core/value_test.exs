@@ -33,6 +33,9 @@ defmodule Cure.Core.ValueTest do
 
     refute Value.neutral?({:nvar, -1})
     refute Value.neutral?(:nope)
+    # {:nprim} retired (K2, spec 2026-07-09): a stuck arithmetic op is a stuck
+    # `{:napp}` spine over the builtin-op global — no bespoke neutral remains.
+    refute Value.neutral?({:nprim, :add, [{:vint, 1}, {:vint, 2}]})
   end
 
   test "a closure carries an env (list of values) and a term" do

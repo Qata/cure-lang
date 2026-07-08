@@ -37,14 +37,13 @@ defmodule Cure.Core.Eval do
 
   def eval({:ctor, name, args}, env), do: {:vctor, name, Enum.map(args, &eval(&1, env))}
 
-  # Primitive Int: literals and arithmetic. `{:prim, op, args}` folds when every
-  # argument reduces to a literal; otherwise it stays neutral so open terms
-  # (`n + 1`) read back and compare structurally.
+  # Primitive Int/Float literals. Arithmetic is builtin-op GLOBALS (K2, spec
+  # 2026-07-09): Eval leaves every global neutral; the certified-δ engine
+  # (Normalise) folds saturated literal spines via `fold/2` below.
   def eval({:int_type}, _env), do: {:vint_type}
   def eval({:int_lit, n}, _env), do: {:vint, n}
   def eval({:float_type}, _env), do: {:vfloat_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
-  def eval({:prim, op, args}, env), do: prim(op, Enum.map(args, &eval(&1, env)))
 
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
@@ -87,15 +86,6 @@ defmodule Cure.Core.Eval do
   def apply_closure({:closure, env, body}, value), do: eval(body, [value | env])
 
   # -- projection ι -----------------------------------------------------------
-
-  # Fold a primitive when its arguments are concrete literals; a failed fold
-  # (e.g. division by zero) or a non-literal argument leaves the op stuck.
-  defp prim(op, args) do
-    case fold(op, args) do
-      {:ok, value} -> value
-      :stuck -> {:vneutral, {:nprim, op, args}}
-    end
-  end
 
   # The audited δ fold table. Public (`@doc false`) so `Cure.Core.Normalise`'s
   # builtin-op compute hook folds through the SAME table (K2, spec 2026-07-09).

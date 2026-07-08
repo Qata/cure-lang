@@ -53,7 +53,6 @@ defmodule Cure.Core.Value do
   def neutral?({:nvar, level}), do: is_integer(level) and level >= 0
   def neutral?({:nglobal, name}), do: is_atom(name)
   def neutral?({:napp, n, v}), do: neutral?(n) and value?(v)
-  def neutral?({:nprim, op, args}), do: is_atom(op) and values?(args)
 
   def neutral?({:ncase, n, motive_cl, branches}),
     do: neutral?(n) and closure?(motive_cl) and branch_closures?(branches)

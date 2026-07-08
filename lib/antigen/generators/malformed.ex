@@ -49,11 +49,16 @@ defmodule Antigen.Generators.Malformed do
       {2, rewrite_bad_proof()},
       {2, rewrite_premise()},
       {1, tagged({:type, 2}, "universe ceiling (Type 2 has no sort)")},
-      # {:prim, <unknown op>, …} → infer_prim's unknown-op fallback
-      {1, tagged({:prim, :nosuchop, [@z]}, "unknown primitive op")},
-      # {:prim, :add, [Type0, Type0]} → operands are not a numeric type
-      # (numeric_type?'s catch-all) → :prim_type
-      {1, tagged({:prim, :add, [{:type, 0}, {:type, 0}]}, "prim on non-numeric operands")},
+      # an UNREGISTERED op-named global spine → :unknown_global (K2: the
+      # {:prim,<unknown op>} seed re-encodes as a global-app error, R5-enumerated)
+      {1, tagged({:app, {:global, :nosuchop}, @z}, "unknown builtin-op global")},
+      # int_add on non-numeric operands → the app-argument check failure
+      # (check-against-{:vint_type} mismatch; was infer_prim's :prim_type)
+      {1,
+       tagged(
+         {:app, {:app, {:global, :int_add}, {:type, 0}}, {:type, 0}},
+         "builtin-op on non-numeric operands"
+       )},
       # a case covering Nat's ctors PLUS a spurious branch — coverage passes, so
       # check_case_branches reaches the bad branch: an unknown ctor (:unknown_ctor)
       # or a ctor of another family (:foreign_ctor, vnil belongs to Vec).

@@ -20,7 +20,7 @@ defmodule Antigen.Generators.Serialization do
   @data_names [:Nat, :Vec, :Bd]
   @ctor_names [:Z, :S, :vnil]
   @globals [:plus, :dbl]
-  @prim_ops [:add, :mul, :lt]
+  @op_globals [:int_add, :int_mul, :int_lt]
 
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
@@ -92,9 +92,13 @@ defmodule Antigen.Generators.Serialization do
     end)
   end
 
+  # Builtin-op global spines (K2: the {:prim} grammar rows re-spell as
+  # 2-arg application spines headed by a registered op global).
   defp prim_term(d) do
-    Gen.bind(Gen.member_of(@prim_ops), fn op ->
-      Gen.bind(term_list(d), fn args -> Gen.return({:prim, op, args}) end)
+    Gen.bind(Gen.member_of(@op_globals), fn g ->
+      Gen.bind(term(d), fn a ->
+        Gen.bind(term(d), fn b -> Gen.return({:app, {:app, {:global, g}, a}, b}) end)
+      end)
     end)
   end
 

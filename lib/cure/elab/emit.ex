@@ -188,16 +188,6 @@ defmodule Cure.Elab.Emit do
   defp lower(_env, {:int_lit, n}, _ctx), do: {:integer, @line, n}
   defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
 
-  # Primitive operations lower to the corresponding BEAM operator.
-  defp lower(env, {:prim, op, [a, b]}, ctx)
-       when op in [:add, :sub, :mul, :div, :rem, :eq, :ne, :lt, :le, :gt, :ge, :and, :or] do
-    {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
-  end
-
-  defp lower(env, {:prim, op, [a]}, ctx) when op in [:not, :neg] do
-    {:op, @line, erl_unop(op), lower(env, a, ctx)}
-  end
-
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:lam, _dom, body}, ctx) do
@@ -389,9 +379,6 @@ defmodule Cure.Elab.Emit do
   defp erl_binop(:ge), do: :">="
   defp erl_binop(:and), do: :and
   defp erl_binop(:or), do: :or
-
-  defp erl_unop(:not), do: :not
-  defp erl_unop(:neg), do: :-
 
   defp element(n, tuple_form) do
     {:call, @line, {:atom, @line, :element}, [{:integer, @line, n}, tuple_form]}

@@ -10,8 +10,8 @@ defmodule Cure.Core.Serialize do
   names are symbols, hole labels are quoted strings, and `case` branches are
   `(branch <ctor> <arity> <body>)`.
 
-      encode({:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]})
-      #=> "(prim add (int 3) (int 5))"
+      encode({:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}})
+      #=> "(app (app (global int_add) (int 3)) (int 5))"
   """
 
   @doc "Encode a Core term as a canonical S-expression string."
@@ -30,7 +30,6 @@ defmodule Cure.Core.Serialize do
   defp enc({:float_type}), do: "(float-type)"
   defp enc({:int_lit, n}), do: ["(int ", Integer.to_string(n), ")"]
   defp enc({:float_lit, f}), do: ["(float ", Float.to_string(f), ")"]
-  defp enc({:prim, op, args}), do: ["(prim ", sym(op), args_iodata(args), ")"]
   defp enc({:ctor, name, args}), do: ["(ctor ", sym(name), args_iodata(args), ")"]
 
   defp enc({:data, name, params, indices}),
@@ -146,11 +145,6 @@ defmodule Cure.Core.Serialize do
   defp build_node("pi", [d, c]), do: binary(:pi, d, c)
   defp build_node("lam", [d, b]), do: binary(:lam, d, b)
   defp build_node("app", [f, a]), do: binary(:app, f, a)
-
-  defp build_node("prim", [{:atom, op} | args]) do
-    with {:ok, o} <- sym_atom(op), {:ok, cargs} <- build_all(args),
-         do: {:ok, {:prim, o, cargs}}
-  end
 
   defp build_node("ctor", [{:atom, name} | args]) do
     with {:ok, a} <- sym_atom(name), {:ok, cargs} <- build_all(args),

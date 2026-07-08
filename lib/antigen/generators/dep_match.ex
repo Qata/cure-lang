@@ -98,11 +98,11 @@ defmodule Antigen.Generators.DepMatch do
       {2, var_index_extra({:data, :Equivalent, [{:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}], [{:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}]})},
       {2, var_index_extra({:data, :Equivalent, [{:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]}], [{:ctor, :reflexive, [{:var, 1}]}, {:ctor, :reflexive, [{:var, 1}]}]})},
       # two-var frame: a helper context var lets extra_ty carry a STUCK app /
-      # projection / prim — replace_branch_vars' app/fst/snd/prim arms.
+      # projection / builtin-op spine (K2) — replace_branch_vars' app/fst/snd arms.
       {2, var_index_extra2({:pi, @nat, @nat}, {:data, :Equivalent, [@nat], [{:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}]})},
       {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}]})},
       {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}]})},
-      {2, var_index_extra2({:int_type}, {:data, :Equivalent, [{:int_type}], [{:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}]})},
+      {2, var_index_extra2({:int_type}, {:data, :Equivalent, [{:int_type}], [{:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}}, {:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}}]})},
       # a STUCK case over a Bool helper var in an index position — the case arm of
       # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.
       {2, var_index_extra2(stuck_case_helper(), {:data, :Equivalent, [@nat], [stuck_case(), stuck_case()]})},

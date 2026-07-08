@@ -110,6 +110,16 @@ eliminator/transport. **This is the single most-duplicated theme.**
 ## K2 — Primitive operations in Core; type them properly
 `{:prim, op, args}` should not be the operation model; ops need real typed
 signatures before entering Core. Includes Bool-as-hardcoded-atoms.
+
+> **2026-07-09 UPDATE — the migration LANDED.** The decline below stands as
+> recorded (correct on the soundness criterion), but task #15 re-opened K2 on
+> the PARITY criterion (Lean reduce_nat / Idris Builtin-op) and landed the
+> `{:prim}`→builtin-op-globals migration: 25 registry-keyed op defs (incl. the
+> A1 `struct_eq`/`struct_ne` structural pair), certified-δ literal
+> acceleration, full node strip, `no_prim_node: :reject` in wave0 + release.
+> Decision record: `2026-07-09-prim-delta-globals-design.md` §0/§1-A. The
+> `no_prim_node stays :off` sentence below is superseded (it was also a
+> recorded doc/code drift — validator.ex had `:warn`).
 - **ASSESSED — §G.1 soundness rules ALREADY MET + now fully pinned (b8668de);
   `{:prim}`→delta-global migration is spec-deferred cleanliness, DECLINED (proof).**
   The genuine soundness content of K2 is spec §G.1's two rules, and the kernel

@@ -6,15 +6,21 @@ defmodule Cure.Elab.GuardLintTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cure.Core.Context
+  alias Cure.Core.{Builtins, Context, Env}
   alias Cure.Elab.GuardLint
 
-  # Context with two machine-Int vars: index 0 and index 1.
+  # Context with two machine-Int vars: index 0 and index 1, over a builtins-
+  # seeded signature (K2: the lint resolves comparison SPINES through the
+  # def-record registry, so the ctx must carry the op defs).
   defp int_ctx do
-    Context.empty() |> Context.extend({:vint_type}) |> Context.extend({:vint_type})
+    Context.empty(Builtins.seed(Env.empty()))
+    |> Context.extend({:vint_type})
+    |> Context.extend({:vint_type})
   end
 
-  defp p(op, a, b), do: {:prim, op, [a, b]}
+  # Builtin-op comparison spine (K2: was the {:prim, op, [a, b]} node).
+  @op_globals %{lt: :int_lt, le: :int_le, gt: :int_gt, ge: :int_ge, eq: :int_eq, ne: :int_ne}
+  defp p(op, a, b), do: {:app, {:app, {:global, Map.fetch!(@op_globals, op)}, a}, b}
   @x {:var, 0}
   @y {:var, 1}
 

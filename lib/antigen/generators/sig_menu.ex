@@ -211,7 +211,12 @@ defmodule Antigen.Generators.SigMenu do
       |> Inductive.declare(Inductive.family(:G, [], [{:cs, slist}], 0),
         [Inductive.ctor(:gwrap, [{:cs, slist}], [{:var, 0}], [:erased])])
 
-    env
+    # K2 (spec 2026-07-09): the 25 builtin-op globals (int_*/float_* twins +
+    # A1 struct_eq/struct_ne), seeded via the SAME public seeder real Cure uses.
+    # Required so retargeted builtin-op spines in the generator catalogs
+    # typecheck/fold instead of dying `:unknown_global`. Runs AFTER the Bool
+    # declaration above (comparison codomains resolve the :bool builtin).
+    Cure.Core.Builtins.seed_ops(env)
   end
 
   # -- context rebuild (spec §4.1) --------------------------------------------

@@ -85,10 +85,12 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
       assert :callee in missing
     end
 
-    test "independent walk recurses into :prim args (the clause collect/1 lacks)" do
-      # a global nested in a :prim's args must be found by the independent walk;
-      # this exercises reconciliation #2 in isolation, without the real closure.
-      env = %{Env.empty() | families: %{P: %{name: :P, params: [], indices: [{:i, {:prim, :eq, [{:global, :buried}, {:int_lit, 0}]}}], level: 0}}}
+    test "independent walk recurses into builtin-op spine args (K2: the app chain)" do
+      # a global nested in a builtin-op spine's args must be found by the
+      # independent walk; this exercises reconciliation #2 in isolation, without
+      # the real closure. (Re-spelled from the retired {:prim, :eq, …} row —
+      # int_eq is a terminal call-graph node, :buried the payload.)
+      env = %{Env.empty() | families: %{P: %{name: :P, params: [], indices: [{:i, {:app, {:app, {:global, :int_eq}, {:global, :buried}}, {:int_lit, 0}}}], level: 0}}}
       assert :buried in TotalityClosureAssay.__reachable__(env)
     end
   end

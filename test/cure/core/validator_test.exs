@@ -22,8 +22,10 @@ defmodule Cure.Core.ValidatorTest do
       # dev-time default (the kernel has no clauses for them, so any such node
       # is a firewall breach, not tech debt). D2 retired the primitive Sigma
       # the same way, so {:sigma}/{:pair}/{:fst}/{:snd} join the reject set.
+      # K2 completes the same ratchet for {:prim}: builtin-op globals replace
+      # the node, the kernel clauses are stripped, so no_prim_node joins the set.
       rejecting = for {c, :reject} <- Validator.wave0_config(), do: c
-      assert Enum.sort(rejecting) == [:no_eq_node, :no_sigma_node]
+      assert Enum.sort(rejecting) == [:no_eq_node, :no_prim_node, :no_sigma_node]
     end
 
     test "legacy-detecting clauses warn (retired-primitive clause rejects); not-yet-reshaped clauses are off" do
@@ -31,7 +33,7 @@ defmodule Cure.Core.ValidatorTest do
       assert cfg.no_hole == :warn
       assert cfg.no_eq_node == :reject
       assert cfg.no_rewrite_node == :warn
-      assert cfg.no_prim_node == :warn
+      assert cfg.no_prim_node == :reject
       assert cfg.no_absurd_node == :warn
       assert cfg.grade_on_binders == :off
       assert cfg.qualified_syms == :off
@@ -85,9 +87,17 @@ defmodule Cure.Core.ValidatorTest do
       assert w.clause == :no_hole and w.mode == :warn
     end
 
-    test "an :absurd node and a :prim node each warn" do
+    test "an :absurd node warns; a :prim node rejects (K2 ratchet complete)" do
       assert {:ok, [%{clause: :no_absurd_node}]} = Validator.validate({:absurd})
-      assert {:ok, [%{clause: :no_prim_node}]} = Validator.validate({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
+
+      assert {:error, [%{clause: :no_prim_node, mode: :reject}]} =
+               Validator.validate({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
+
+      assert {:error, [%{clause: :no_prim_node, mode: :reject}]} =
+               Validator.validate(
+                 {:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]},
+                 Validator.release_config()
+               )
     end
 
     # D2 T4b: the ratchet completed — Wave-0 now REJECTS the primitive Sigma
@@ -204,6 +214,11 @@ defmodule Cure.Core.ValidatorTest do
   describe "release_config/0 (the strict ratchet, K3)" do
     test "no_hole is :reject in release mode" do
       assert Validator.release_config()[:no_hole] == :reject
+    end
+
+    test "no_prim_node is :reject in wave0 AND release (K2 — {:prim} stripped, builtin-op globals canonical)" do
+      assert Validator.wave0_config()[:no_prim_node] == :reject
+      assert Validator.release_config()[:no_prim_node] == :reject
     end
 
     test "no_absurd_node is :reject in release mode (K4 — the node is gone from final Core)" do
