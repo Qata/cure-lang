@@ -1034,25 +1034,22 @@ defmodule Cure.Elab.Elaborator do
 
   # Build the inductive identity type `Equivalent(ty, a, b)` and its `reflexive(x)`
   # proof (spec 2026-07-04). The elaborator's transport/motive machinery constructs
-  # these — not the retiring primitive `{:eq}`/`{:refl}` — so that every
+  # these — not the retired primitive `{:eq}`/`{:refl}` — so that every
   # Equivalent/reflexive which can reach user code (a `with … proof pf` binder, a
   # returned equality) shares the single inductive representation user signatures
-  # elaborate to. The `{:rewrite}` eliminator node is still emitted as the internal
-  # transport mechanism; its kernel typing accepts either representation via
-  # `ensure_eq`.
+  # elaborate to. As of Phase B the `{:rewrite}` eliminator node has NO producers
+  # left: every transport is the J/subst `transport_case` below (the kernel's
+  # `{:rewrite}` rule and elab traversal clauses are stripped in Phase C).
   defp mk_eq(ty, a, b), do: {:data, :Equivalent, [ty], [a, b]}
   # Checking-position reflexive: fields-only spine; the expected type supplies the
-  # parameter (M8.3 checking mode).
+  # parameter (M8.3 checking mode). (The inference-position params-on-spine form
+  # `{:ctor, :reflexive, [ty, x]}` — K6 §E.1 — lost its last elaborator consumer
+  # when bridge_step was deleted (B2); the kernel capability remains.)
   defp mk_refl(x), do: {:ctor, :reflexive, [x]}
-  # Inference-position reflexive (K6 §E.1): the family parameter `ty` rides the
-  # spine ahead of the witness `x`, so `Kernel.infer` reads it and yields
-  # `Equivalent(ty,x,x)` without metavariable inference. Used where reflexive sits
-  # in a proof/inferred slot.
-  defp mk_refl_infer(ty, x), do: {:ctor, :reflexive, [ty, x]}
 
   # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
   # default so ordinary elaboration is untouched; used to diagnose non-termination
-  # / mis-planning in the `rewrite_plan`/`find_bridge`/`bridge_step` recursion.
+  # / mis-planning in the `rewrite_plan` occurrence matching.
   defp rwlog(fun) do
     if System.get_env("CURE_REWRITE_LOG"), do: IO.puts(:stderr, "[rw] " <> fun.())
     :ok
@@ -1131,13 +1128,14 @@ defmodule Cure.Elab.Elaborator do
            replace_term(expected, a, b)}
         end
 
-      # Definitional-but-not-syntactic occurrence (P0, rw07): `a` is absent from
-      # the goal syntactically, but a δ-reducible sub-occurrence of the goal
-      # normalizes at top level to a form that *exposes* `a`. Bridge it — see
-      # `bridge_step/7` — instead of falling through to the (wrong) `b` branch.
-      bridge = find_bridge(ctx, expected, a) ->
-        bridge_step(ctx, proof, ty, a, b, expected, bridge)
-
+      # NOTE (B2): the former `find_bridge`/`bridge_step` cond arm — the
+      # definitional-occurrence bridge built for rw07 (2ac4add) — was deleted as
+      # dead code, not migrated. `expected` is always normalized before entry,
+      # and since lazy δ-unfolding (ef3e958) + the nf idempotence fix, every
+      # subterm of a normal form re-normalizes to itself, so the bridge's firing
+      # condition (`normalize(s) != s` for a goal subterm `s`) is unsatisfiable.
+      # Evidence (corpus trace + structural argument) recorded in
+      # test/cure/elab/rewrite_as_case_test.exs, test (e).
       contains_term?(expected, b) ->
         {:ok, motive} = motive_for(expected, b, ty)
         # proof : Eq(ty, a, b): (M@a) -> (M@b) applied to the body checked at
@@ -1147,99 +1145,6 @@ defmodule Cure.Elab.Elaborator do
 
       true ->
         {:error, {:rewrite_no_match, a, b, expected}}
-    end
-  end
-
-  # Bridge-lemma rewrite step (P0 rw07, elaborator-only — no TCB change).
-  #
-  # The trusted normalizer preserves stuck `case`s and never δ-reduces the
-  # scrutinee, so a goal like `Eq(Nat, plus(plus(Z,n),Z), n)` freezes with the
-  # sub-term `plus(Z,n)` unreduced in scrutinee position; the proof's endpoint
-  # `plus(n,Z)` is therefore only *definitionally* (not syntactically) present
-  # and the syntactic occurrence match misses. The kernel cannot be asked to
-  # decide that conversion (its scrutinee stays stuck), but the *sub-occurrence*
-  # `plus(Z,n)` reduces to `n` at TOP level, a conversion the kernel does decide.
-  #
-  # We turn that top-level definitional step into an explicit propositional
-  # rewrite. The OUTER rewrite transports along an inline refl-bodied bridge
-  # proof of `Eq(ty_s, s', s)`; its residual goal is `expected` with `s` reduced
-  # to `s'`, which now contains `a` syntactically — so the ORIGINAL rewrite
-  # (recursively planned at that residual, the already-working `a`-branch) is
-  # nested as its body. Every conversion the kernel then sees is either
-  # top-level-decidable or between structurally identical terms.
-  #
-  # Scope (honest): this closes the reducible-inner-occurrence pattern rw07
-  # exercises — a single sub-occurrence whose top-level normal form exposes the
-  # proof endpoint. It does NOT implement fully general up-to-conversion
-  # occurrence matching.
-  defp find_bridge(ctx, expected, a) do
-    subs = reducible_subterms(expected)
-    rwlog(fn -> "find_bridge: #{length(subs)} reducible subterms, seeking a=#{rw_ins(a)}" end)
-
-    Enum.find_value(subs, fn s ->
-      s_nf = Kernel.normalize(ctx, s)
-
-      if s_nf != s and contains_term?(replace_term(expected, s, s_nf), a) do
-        rwlog(fn -> "  bridge candidate s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)}" end)
-        {s, s_nf}
-      end
-    end)
-  end
-
-  defp bridge_step(ctx, proof, ty, a, b, expected, {s, s_nf}) do
-    rwlog(fn -> "bridge_step s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)} (recurse on residual)" end)
-
-    with {:ok, ty_s} <- infer_type_term(ctx, s),
-         residual = replace_term(expected, s, s_nf),
-         {:ok, inner_build, body_expected} <- rewrite_plan(ctx, proof, ty, a, b, residual) do
-      # Inline bridge proof `Eq(ty_s, s', s)`: the outer `rewrite` (its proof)
-      # infers this asymmetric equality via a constant motive `λ_. Eq(ty_s, s', s)`
-      # whose `refl s'` premise is *checked* against `Eq(ty_s, s', s)` — the
-      # top-level conversion `s' ≡ s` the kernel decides. (A bare `refl` in proof
-      # position would only *infer* the symmetric `Eq(ty_s, s', s')`.)
-      const_motive =
-        {:lam, ty_s,
-         mk_eq(Subst.shift(ty_s, 1, 0), Subst.shift(s_nf, 1, 0), Subst.shift(s, 1, 0))}
-
-      # PROOF position: the outer `rewrite` INFERS this inner proof (kernel
-      # `infer({:rewrite,…})` → `infer({:app,…})` → `infer({:case,…})`). Since
-      # K6 §E.1 (parameters ride the spine), the inductive `refl` scrutinee is
-      # inferable — built with the family parameter `ty_s` ahead of the witness
-      # `s_nf`, so `infer` yields `Eq(ty_s, s_nf, s_nf)`. The transport over the
-      # CONSTANT motive has type `Eq(ty_s,s_nf,s) -> Eq(ty_s,s_nf,s)`; its
-      # argument `refl s_nf` is *checked* against `Eq(ty_s, s_nf, s)` — the
-      # top-level conversion `s_nf ≡ s` the kernel decides, same premise as the
-      # retired `{:rewrite}` form. (Bridge is internal transport; only the outer
-      # motive — from the user goal — is user-facing.)
-      bridge_proof =
-        {:app, transport_case(mk_refl_infer(ty_s, s_nf), ty_s, const_motive, s_nf),
-         mk_refl(s_nf)}
-      {:ok, outer_motive} = motive_for(expected, s, ty_s)
-
-      build = fn body ->
-        {:rewrite, bridge_proof, outer_motive, inner_build.(body)}
-      end
-
-      {:ok, build, body_expected}
-    end
-  end
-
-  # Global-headed applications occurring in `term` (outermost-first): the only
-  # sub-terms the trusted normalizer may δ-reduce, hence the bridge candidates.
-  defp reducible_subterms(term) do
-    here = if global_app?(term), do: [term], else: []
-    here ++ Enum.flat_map(children(term), &reducible_subterms/1)
-  end
-
-  defp global_app?({:app, f, _}), do: global_head?(f)
-  defp global_app?(_), do: false
-  defp global_head?({:global, _}), do: true
-  defp global_head?({:app, f, _}), do: global_head?(f)
-  defp global_head?(_), do: false
-
-  defp infer_type_term(ctx, term) do
-    with {:ok, ty_value} <- Kernel.infer(ctx, term) do
-      {:ok, Quote.reify(ty_value, Context.length(ctx))}
     end
   end
 
@@ -1909,7 +1814,14 @@ defmodule Cure.Elab.Elaborator do
       Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
         h_b1 = Subst.shift(h_ctx, sc, 0)
         motive_j = {:lam, t_b1, abstract_term(h_b1, e_b1, 0)}
-        transport = {:rewrite, {:var, 0}, motive_j, {:var, idx + sc}}
+        # J/subst transport (Phase B): prf {:var,0} : Eq(T, e, pat); the case's
+        # type is (M_j@e) -> (M_j@pat), applied to the original sibling h_j.
+        # Annotation-safety (transport_case doc): M_j abstracts e out of an
+        # OUTER-frame sibling type, so it mentions neither `pat` nor the ctor
+        # telescope vars pair-2 of the reflexive unify could bind.
+        transport =
+          {:app, transport_case({:var, 0}, t_b1, motive_j, e_b1), {:var, idx + sc}}
+
         %{name: sname, dom: replace_term(h_b1, e_b1, pat_b1), transport: transport}
       end)
 
@@ -3474,7 +3386,14 @@ defmodule Cure.Elab.Elaborator do
       Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
         h_b1 = Subst.shift(h_ctx, sc, 0)
         motive_j = {:lam, t_b1, abstract_term(h_b1, idx_b1, 0)}
-        transport = {:rewrite, {:var, 0}, motive_j, {:var, idx + sc}}
+        # J/subst transport (Phase B): prf {:var,0} : Eq(T, idx, ctor_idx); the
+        # case's type is (M_j@idx) -> (M_j@ctor_idx), applied to the sibling.
+        # Annotation-safety (transport_case doc): M_j abstracts the carried
+        # index out of an OUTER-frame sibling type, so it mentions neither
+        # `ctor_idx` nor the ctor telescope vars pair-2 could bind.
+        transport =
+          {:app, transport_case({:var, 0}, t_b1, motive_j, idx_b1), {:var, idx + sc}}
+
         %{name: sname, dom: replace_term(h_b1, idx_b1, pat_b1), transport: transport}
       end)
 

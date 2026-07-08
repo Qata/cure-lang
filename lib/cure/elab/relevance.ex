@@ -155,6 +155,17 @@ defmodule Cure.Elab.Relevance do
     end
   end
 
+  # --- exempt positions: type formers and proof terms carry no runtime value ---
+  defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
+  defp walk({:sigma, _a, _b}, _depth, _site, _st), do: :ok
+  defp walk({:data, _n, _ps, _is}, _depth, _site, _st), do: :ok
+  defp walk({:eq, _ty, _a, _b}, _depth, _site, _st), do: :ok
+  defp walk({:refl, _a}, _depth, _site, _st), do: :ok
+
+  # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no
+  # erased-parameter occurrence to account for. Mirrors `Erase`'s leaf clause.
+  defp walk(_leaf, _depth, _site, _st), do: :ok
+
   # Exactly one branch, naming its family's ONLY constructor, whose fields are
   # all erased (and nonempty — a nullary single-ctor family like Unit keeps
   # today's relevant-scrutinee treatment; this rule targets proof-like carriers).
@@ -169,17 +180,6 @@ defmodule Cure.Elab.Relevance do
   end
 
   defp collapsible_case?(_env, _branches), do: false
-
-  # --- exempt positions: type formers and proof terms carry no runtime value ---
-  defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
-  defp walk({:sigma, _a, _b}, _depth, _site, _st), do: :ok
-  defp walk({:data, _n, _ps, _is}, _depth, _site, _st), do: :ok
-  defp walk({:eq, _ty, _a, _b}, _depth, _site, _st), do: :ok
-  defp walk({:refl, _a}, _depth, _site, _st), do: :ok
-
-  # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no
-  # erased-parameter occurrence to account for. Mirrors `Erase`'s leaf clause.
-  defp walk(_leaf, _depth, _site, _st), do: :ok
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
   defp spine(head, acc), do: {head, acc}
