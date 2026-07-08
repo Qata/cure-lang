@@ -28,6 +28,7 @@ defmodule Cure.Core.Validator do
     :grade_on_binders,
     :usage_relevance,
     :no_eq_node,
+    :no_sigma_node,
     :no_rewrite_node,
     :no_prim_node,
     :no_hole,
@@ -47,6 +48,11 @@ defmodule Cure.Core.Validator do
     # smuggled non-grammar term (firewall breach), not tolerable tech debt.
     # `no_rewrite_node` stays :warn here (dev-time) and rejects at release.
     no_eq_node: :reject,
+    # no_sigma_node stays :warn while producers are re-pointed but the kernel still
+    # carries the primitive `{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` clauses and
+    # Antigen still builds them (D2 T4a); flips to :reject once the kernel strip
+    # (T5) lands — the two-stage ratchet (spec §2.4).
+    no_sigma_node: :warn,
     no_rewrite_node: :warn,
     no_prim_node: :warn,
     no_hole: :warn,
@@ -85,6 +91,7 @@ defmodule Cure.Core.Validator do
                   |> Map.put(:no_hole, :reject)
                   |> Map.put(:no_absurd_node, :reject)
                   |> Map.put(:no_eq_node, :reject)
+                  |> Map.put(:no_sigma_node, :reject)
                   |> Map.put(:no_rewrite_node, :reject)
 
   @doc "The strict Final-Core config enforced at the release/emit boundary (K3+)."
@@ -162,6 +169,19 @@ defmodule Cure.Core.Validator do
 
   defp violation(:no_eq_node, {:refl, _}),
     do: "primitive :refl node; use ctor reflexive (K1)"
+
+  # no_sigma_node covers the four dependent-pair primitives that are DEAD-PRODUCERS
+  # after D2 T2/T3 (%[..] builds the inductive ctor mk_pair, Sigma(..) is the
+  # inductive {:data,:Sigma}, .1/.2 are projection globals). :warn while the kernel
+  # still carries the clauses (T4a), :reject at release and once T5 strips them.
+  defp violation(:no_sigma_node, {:sigma, _, _}),
+    do: "primitive :sigma node; use inductive Sigma (D2)"
+
+  defp violation(:no_sigma_node, {:pair, _, _}),
+    do: "primitive :pair node; use ctor mk_pair (D2)"
+
+  defp violation(:no_sigma_node, {:fst, _}), do: "primitive :fst node; use projection (D2)"
+  defp violation(:no_sigma_node, {:snd, _}), do: "primitive :snd node; use projection (D2)"
 
   # no_rewrite_node is split out because {:rewrite} is STILL PRODUCED as the
   # transport eliminator (rewrite_plan/symmetry_proof/bridge_step). Retiring it

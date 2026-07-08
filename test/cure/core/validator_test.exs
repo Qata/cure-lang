@@ -89,6 +89,20 @@ defmodule Cure.Core.ValidatorTest do
       assert {:ok, [%{clause: :no_prim_node}]} = Validator.validate({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
     end
 
+    test "each primitive Sigma node warns under Wave-0 and rejects under release_config (D2 ratchet)" do
+      for node <- [
+            {:sigma, {:type, 0}, {:type, 0}},
+            {:pair, {:var, 0}, {:var, 0}},
+            {:fst, {:var, 0}},
+            {:snd, {:var, 0}}
+          ] do
+        assert {:ok, [%{clause: :no_sigma_node, mode: :warn}]} = Validator.validate(node)
+
+        assert {:error, [%{clause: :no_sigma_node, mode: :reject}]} =
+                 Validator.validate(node, Validator.release_config())
+      end
+    end
+
     test "config override to :reject flips admission (the per-wave flip mechanism)" do
       cfg = Map.put(Validator.wave0_config(), :no_hole, :reject)
       assert {:error, [r]} = Validator.validate({:hole, :h0}, cfg)
