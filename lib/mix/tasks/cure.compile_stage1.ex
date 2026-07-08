@@ -38,12 +38,27 @@ defmodule Mix.Tasks.Cure.CompileStage1 do
 
     Mix.Task.run("app.start", ["--no-deps-check"])
 
-    files =
+    candidates =
       @source_dir
       |> Path.join("**/*.cure")
       |> Path.wildcard()
-      |> Enum.sort_by(&stage1_sort_key/1)
       |> maybe_reject_tests(include_tests?)
+
+    files =
+      case Cure.Compiler.DepGraph.scan(candidates) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, @source_dir))
+          end)
+
+          ordered
+
+        {:error, reason} ->
+          Mix.shell().error(Cure.Compiler.Errors.format_error(reason, @source_dir))
+          exit({:shutdown, 1})
+      end
 
     result =
       cond do
@@ -96,26 +111,6 @@ defmodule Mix.Tasks.Cure.CompileStage1 do
       |> Enum.member?("tests")
     end)
   end
-
-  defp stage1_sort_key(path) do
-    relative = Path.relative_to_cwd(path)
-
-    {stage1_group(relative), relative}
-  end
-
-  defp stage1_group("lib/compiler/kernel/core/name.cure"), do: 0
-  defp stage1_group("lib/compiler/kernel/core/literal.cure"), do: 1
-  defp stage1_group("lib/compiler/kernel/core/level.cure"), do: 2
-  defp stage1_group("lib/compiler/kernel/core/syntax.cure"), do: 3
-  defp stage1_group("lib/compiler/kernel/core/expr.cure"), do: 4
-  defp stage1_group("lib/compiler/kernel/core/exception.cure"), do: 5
-  defp stage1_group("lib/compiler/kernel/core/declaration.cure"), do: 6
-  defp stage1_group("lib/compiler/kernel/core/local_context.cure"), do: 7
-  defp stage1_group("lib/compiler/kernel/core/environment.cure"), do: 8
-  defp stage1_group("lib/compiler/kernel/core/type_checker.cure"), do: 9
-  defp stage1_group("lib/compiler/kernel/core/mod.cure"), do: 10
-  defp stage1_group("lib/compiler/kernel/tests/" <> _), do: 90
-  defp stage1_group(_), do: 50
 
   defp compile_one(path, output_dir) do
     Mix.shell().info("  compile #{relative(path)}")
