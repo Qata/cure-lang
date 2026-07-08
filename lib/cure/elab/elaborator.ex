@@ -3178,18 +3178,6 @@ defmodule Cure.Elab.Elaborator do
           {:ok, {cname, length(telescope), body_term}}
         end
 
-      _solved_or_trivial when carried != nil ->
-        subst =
-          case verdict do
-            {:solved, s} -> s
-            :trivial -> %{}
-          end
-
-        elaborate_carried_eq_branch(
-          cname, telescope, result_indices, body_expr, branch_names,
-          ctx, env, scrut_param_vals, result_type_term, carried, pattern, subst
-        )
-
       _solved_or_trivial ->
         arity = length(telescope)
 
@@ -3206,34 +3194,58 @@ defmodule Cure.Elab.Elaborator do
             :trivial -> %{}
           end
 
-        branch_ctx =
-          ctx
-          |> extend_context(telescope, scrut_param_vals)
-          |> specialize_branch_context_subst(subst)
+        # C-c (spec 2026-07-08 §2.3): split the pattern's named implicits into
+        # BINDINGS (an unforced position written as a bare variable — binds the
+        # anonymized erased telescope slot at quantity 0, Relevance policing any
+        # relevant use) and CHECKS (forced positions, plus unforced dot/non-var
+        # forms that keep the `{:named_implicit_unforced,…}` reject). Compute the
+        # split and the renamed branch scope ONCE, before the carried/plain
+        # dispatch, so BOTH paths honor the binding.
+        {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
 
-        # Merge in the scrutinee VALUE substitution (`v ↦ ctor`) so a goal that
-        # mentions the scrutinee value itself (`Eq(T, v, v)`) refines to the
-        # branch constructor alongside the index inversion — the shared
-        # `refine_branch_goal` (Task 3.4), also used by the with-rematch path.
-        branch_expected =
-          refine_branch_goal(result_type_term, scrut_term, cname, arity, subst, branch_ctx)
+        tele_names =
+          Enum.reduce(bindings, branch_scope(quantities, pattern_vars), fn {name, {:variable, _, vname}}, acc ->
+            p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
+            List.replace_at(acc, arity - 1 - p, to_string(vname))
+          end)
 
-        # Lean substitutes a variable major premise by `ctor fields` in the
-        # entire subgoal — context AND everything elaborated inside it
-        # (`Meta/Tactic/Cases.lean:219-227`, the `subst.insert majorFVarId
-        # ctorApp`). Cure's surface analog: free occurrences of the scrutinee
-        # NAME in the branch body become the branch pattern expression, whose
-        # vars are already bound in branch scope and elaborate to exactly the
-        # `ctor_term` the kernel's branch goal expects. Without this, a body
-        # like `refl(v)` keeps `v` opaque (`v ≢ vz`) even though the goal
-        # correctly refined to `Eq(NV(Z), vz, vz)`.
-        body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
+        branch_names = tele_names ++ names
 
-        with :ok <-
-               check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env),
-             {:ok, body_term} <-
-               elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
-          {:ok, {cname, arity, body_term}}
+        if carried != nil do
+          elaborate_carried_eq_branch(
+            cname, telescope, result_indices, body_expr, branch_names,
+            ctx, env, scrut_param_vals, result_type_term, carried, checks, subst
+          )
+        else
+          branch_ctx =
+            ctx
+            |> extend_context(telescope, scrut_param_vals)
+            |> specialize_branch_context_subst(subst)
+
+          # Merge in the scrutinee VALUE substitution (`v ↦ ctor`) so a goal that
+          # mentions the scrutinee value itself (`Eq(T, v, v)`) refines to the
+          # branch constructor alongside the index inversion — the shared
+          # `refine_branch_goal` (Task 3.4), also used by the with-rematch path.
+          branch_expected =
+            refine_branch_goal(result_type_term, scrut_term, cname, arity, subst, branch_ctx)
+
+          # Lean substitutes a variable major premise by `ctor fields` in the
+          # entire subgoal — context AND everything elaborated inside it
+          # (`Meta/Tactic/Cases.lean:219-227`, the `subst.insert majorFVarId
+          # ctorApp`). Cure's surface analog: free occurrences of the scrutinee
+          # NAME in the branch body become the branch pattern expression, whose
+          # vars are already bound in branch scope and elaborate to exactly the
+          # `ctor_term` the kernel's branch goal expects. Without this, a body
+          # like `refl(v)` keeps `v` opaque (`v ≢ vz`) even though the goal
+          # correctly refined to `Eq(NV(Z), vz, vz)`.
+          body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
+
+          with :ok <-
+                 check_named_implicits(checks, subst, arity, telescope, branch_ctx, branch_names, env),
+               {:ok, body_term} <-
+                 elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
+            {:ok, {cname, arity, body_term}}
+          end
         end
     end
   end
@@ -3245,9 +3257,16 @@ defmodule Cure.Elab.Elaborator do
   # forced inner expression to a term `t` in the branch frame, and require `t`
   # convertible with `d`. The annotation binds nothing and produces no runtime
   # term, so on success we simply continue; on mismatch the branch is rejected.
-  defp check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env) do
-    pattern
-    |> constructor_named_implicits()
+  #
+  # The `checks` argument is the pre-split CHECK list from
+  # `split_named_implicits/4` (C-c, spec 2026-07-08 §2.3) — the bindings have
+  # already been peeled off and named in the branch scope. An unforced position
+  # written as a bare variable BINDS instead (split off there); reaching the
+  # `{:named_implicit_unforced,…}` error below with a dot/non-variable inner
+  # means nothing was pinned to check against — write a bare variable to bind
+  # the index instead.
+  defp check_named_implicits(checks, subst, arity, telescope, branch_ctx, branch_names, env) do
+    checks
     |> Enum.reduce_while(:ok, fn {name, inner}, :ok ->
       case named_implicit_forced_value(name, subst, arity, telescope) do
         {:ok, d} ->
@@ -3647,6 +3666,21 @@ defmodule Cure.Elab.Elaborator do
     do: for({:named_implicit_pat, _m, name, inner} <- args, do: {name, inner})
 
   defp constructor_named_implicits(_), do: []
+
+  # Split a pattern's named implicits per spec 2026-07-08 §2.3: an UNFORCED
+  # position written as a bare variable BINDS (Idris quantity-0 pattern
+  # variable — probe evidence in the spec); everything else stays on the
+  # check path (forced positions check convertibility; unforced dot/non-var
+  # forms keep the `{:named_implicit_unforced,…}` reject).
+  defp split_named_implicits(pattern, subst, arity, telescope) do
+    pattern
+    |> constructor_named_implicits()
+    |> Enum.split_with(fn {name, inner} ->
+      match?({:variable, _, _}, inner) and
+        named_implicit_forced_value(name, subst, arity, telescope) == :error and
+        Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end) != nil
+    end)
+  end
 
   defp pattern_shape(p) when is_tuple(p) and tuple_size(p) > 0, do: elem(p, 0)
   defp pattern_shape(_), do: :unknown

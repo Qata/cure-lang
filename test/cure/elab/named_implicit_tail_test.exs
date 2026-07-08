@@ -119,4 +119,47 @@ defmodule Cure.Elab.NamedImplicitTailTest do
       is_list(Cure.Core.Inductive.ctor_quantities(env, c))
     end)
   end
+
+  @exist_preamble """
+    type Nat = Z | S(Nat)
+    type Vec(a: Type) indices (n: Nat)
+      vnil : Vec(a, Z)
+      vcons : a -> Vec(a, n) -> Vec(a, S(n))
+    type Pack(a: Type) indices ()
+      pk : Vec(a, m) -> Pack(a)
+  """
+
+  defp emod(body), do: "mod P\n" <> @exist_preamble <> body <> "end\n"
+
+  describe "C-c: unforced bare-variable named implicits bind at quantity 0" do
+    test "binding accepted when used only erasedly" do
+      src =
+        emod("""
+          fn f({a: Type}, p: Pack(a)) -> Nat = match p
+            pk({m = mm}, v) -> Z()
+        """)
+
+      assert {:ok, _env} = Program.elaborate(src)
+    end
+
+    test "relevant use of the bound variable rejects via Relevance" do
+      src =
+        emod("""
+          fn g({a: Type}, p: Pack(a)) -> Nat = match p
+            pk({m = mm}, v) -> mm
+        """)
+
+      assert {:error, {:erased_used_relevantly, _}} = Program.elaborate(src)
+    end
+
+    test "dot form on an unforced position still errors" do
+      src =
+        emod("""
+          fn h({a: Type}, p: Pack(a)) -> Nat = match p
+            pk({m = .(S(Z()))}, v) -> Z()
+        """)
+
+      assert {:error, {:named_implicit_unforced, "m"}} = Program.elaborate(src)
+    end
+  end
 end
