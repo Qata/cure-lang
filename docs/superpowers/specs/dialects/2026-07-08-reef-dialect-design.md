@@ -187,7 +187,10 @@ Surface rules:
 ## 6. Common-mode analysis — the crown jewel
 
 Every channel has a computed **fault-domain vector** from declarations the
-system already has: `{node, bus, power_rail, mount, kind}` — node from the
+system already has: `{node, bus, power_rail, mount, kind, excitation}`
+(`excitation`: contacting conductivity cells inject AC into the water —
+un-isolated cells in one body of water cross-talk, so shared
+excitation/ground is itself a common-mode domain; see Appendix A) — node from the
 fleet block, bus from the board wiring, power rail from the boarddef, mount
 and kind declared on the channel. At compile time, for every quorum:
 
@@ -510,6 +513,11 @@ criterion.
 10. **Multi-tank shop topologies** — a shop is many display tanks on shared
     sumps: quantities per tank, shared reservoirs, per-tank classifiers;
     fleet handles the nodes, but the quantity-sharing surface needs design.
+11a. **Salinity channel driver declarations** — ship `driver`s for the
+    Appendix-A kinds: EZO-EC (isolated) contacting cell, toroidal inductive
+    cell, dual-MS5837 hydrostatic density standpipe, and an inline
+    refractometer (Pyxis RT-50-class) for `:shop`; excitation interleaving
+    schedule for un-isolated cells.
 11. **Kamoer-strip driver declaration** — range/resolution/protocol of the
     KWC-style long optical sensor as a shipped `driver`; plus ladder-channel
     sugar (`ladder [...] at heights`) as dialect surface vs. plain channels.
@@ -522,6 +530,30 @@ criterion.
   (host node optional; alerts degrade to local buzzer/display).
 - No chemistry *management* advice (the dialect controls; reef chemistry
   targets are the keeper's numbers, entered in `config`).
+
+## Appendix A — Salinity channel kinds (market survey, 2026-07-08)
+
+The dissimilarity requirement (§4) is only as good as the *buyable* kinds.
+Surveyed:
+
+| kind | Device class | Physics | Cost class | Notes |
+|---|---|---|---|---|
+| `:conductivity_contacting` | Any BNC K=1.0 cell (Neptune/GHL/lab) on an **Atlas Scientific EZO-EC** carrier | Electrode resistance under **AC excitation** (DC polarizes electrodes — this IS "the usual hobby probe," and the EZO-EC is the off-the-shelf driver board that provides the AC) | ~$60–120/channel | **Isolation is mandatory for multiples**: Atlas documents that conductivity excitation injects interference into the water and that isolation is 100% effective against it — hence the `excitation` fault domain (§6). Un-isolated cells must interleave excitation windows (driver-level schedule). |
+| `:conductivity_inductive` | Toroidal (electrodeless) cell, industrial/surplus | Transformer coupling through the water loop — no electrodes | ~$150–400 surplus | Immune to electrode fouling/polarization — genuinely dissimilar *failure modes* from contacting cells even though both read conductivity. |
+| `:density_hydrostatic` | Two MS5837-class pressure sensors at a declared vertical separation on a standpipe | Δp = ρ·g·Δh → density → salinity | ~$30 | Dissimilar *physics* (density, not conductivity): blind to conductivity confounders (temperature-compensation error, organics). Resolution is marginal per-sample (~2 Pa vs a ~16 Pa full-range span) but salinity is a slow quantity — minutes of averaging makes it an excellent *confirming* voter. |
+| `:refractive` | Inline process refractometer (Pyxis RT-50 class; Atago PRM, Anton Paar L-Rix, MISCO MVP, Vaisala Polaris up-market) | Critical-angle refractive index | ~$1.5k+, quote-priced | True optical dissimilarity — the electronic version of the hobbyist's handheld refractometer. Industrial-priced: not a `:home` recommendation, plausible for `:shop` (one per shop system, not per tank). Needs temperature compensation and a flow cell. |
+| `derived :volume_accounting` | none (analytic, §4) | Top-off ledger vs expected salinity motion | $0 | Already specced. |
+
+**Recommended quorums.** `:home`: two contacting cells (isolated carriers,
+different nodes, different brackets) + one hydrostatic-density standpipe +
+the derived channel — 3-kind dissimilarity for ~$100 over the usual
+single-probe build, `vote 2 of 4`. `:shop`: add one inline refractometer as
+the premium fourth kind on the shared sump.
+
+Survey sources: atlas-scientific.com/embedded-solutions/ezo-conductivity-circuit/
+(EZO-EC + isolation guidance); pyxis-lab.com (RT-50/RT-100 inline
+refractometers); atago.net/en/products-prm-top.php; anton-paar.com (L-Rix);
+misco.com (MVP); vaisala.com (Polaris).
 
 ## Sources (prior art reviewed 2026-07-08)
 
