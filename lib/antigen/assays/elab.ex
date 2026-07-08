@@ -186,6 +186,40 @@ defmodule Antigen.Assays.Elab do
     end
   end
 
+  # elab/nat_rep — representation agreement (spec 2026-07-08-nat-int-erasure §3):
+  # the kernel's certified-δ normalisation of `main` (inductive semantics; the
+  # trusted oracle) must decode to the same integer BEAM execution returns
+  # (Int-rep emit; the system under test). NOT Eval.eval/2 — that leaves
+  # `{:global, _}` heads as stuck neutrals and cannot reduce `add(...)`.
+  def run(%Challenge{kind: :elab_program, assay: "elab/nat_rep", payload: p}) do
+    case elaborate(p.src) do
+      {:ok, env} ->
+        kernel = kernel_nat(env)
+        beam = beam_nat(env, p)
+
+        cond do
+          match?({:stuck, _}, kernel) ->
+            {:violation, {:nat_rep_kernel_stuck, p.id, elem(kernel, 1)}}
+
+          match?({:failed, _}, beam) ->
+            {:violation, {:nat_rep_beam_failed, p.id, elem(beam, 1)}}
+
+          kernel != beam ->
+            {:violation, {:nat_rep_mismatch, p.id, %{kernel: kernel, beam: beam}}}
+
+          true ->
+            :ok
+        end
+
+      other ->
+        # `other` cannot be `{:ok, _}` here (already matched above), so
+        # `verdict_bit(other)` would always be the tautological `:reject` —
+        # carry the actual rejection term instead, so a real corpus regression
+        # is debuggable rather than reporting a constant.
+        {:violation, {:nat_rep_program_rejected, p.id, other}}
+    end
+  end
+
   # elab/soundness — the emitted core is independently re-checked by the trusted
   # kernel: every def the elaborator produced must type-check at its emitted type.
   def run(%Challenge{kind: :elab_program, assay: "elab/soundness"} = c),
@@ -286,4 +320,51 @@ defmodule Antigen.Assays.Elab do
   defp reject_head({:error, e}) when is_tuple(e) and tuple_size(e) > 0, do: elem(e, 0)
   defp reject_head({:error, _non_tuple}), do: :non_tuple_error
   defp reject_head({:raise, _}), do: :raised_error
+
+  # -- elab/nat_rep helpers ----------------------------------------------------
+
+  defp kernel_nat(env) do
+    ctx = Context.empty(env)
+
+    case Cure.Core.Normalise.nf(ctx, {:global, :main}, delta: :certified, mode: :nf) do
+      :fuel_exhausted -> {:stuck, :fuel_exhausted}
+      term -> decode_nat(term)
+    end
+  end
+
+  # Bare atoms only: none of this corpus's fixed/seeded programs declare a
+  # local `type Nat` (§2.4 nominal rule), so the canonical `:Z`/`:S` ctors
+  # never collide and are never re-keyed (verified: `Cure.Elab.Resolution`'s
+  # re-key path only fires when a LOCAL declaration shadows an import, and
+  # even then uses a `"Mod#name"` atom, e.g. `:"Std.Nat#Z"` — never the
+  # `"Std.Nat.Z"` dot-form). If a future corpus addition ever needs a
+  # colliding-import case, add the real `#`-separated guard then; don't
+  # speculate here.
+  defp decode_nat({:ctor, :Z, []}), do: {:nat, 0}
+
+  defp decode_nat({:ctor, :S, [inner]}) do
+    case decode_nat(inner) do
+      {:nat, n} -> {:nat, n + 1}
+      other -> other
+    end
+  end
+
+  defp decode_nat(other), do: {:stuck, other}
+
+  defp beam_nat(env, p) do
+    mod_name = :"Antigen.NatRep.#{:erlang.phash2(p.id)}"
+
+    case Cure.Elab.Emit.compile_and_load(env, module: mod_name, functions: p.functions) do
+      {:ok, mod} ->
+        case apply(mod, :main, []) do
+          n when is_integer(n) -> {:nat, n}
+          other -> {:failed, {:non_integer, other}}
+        end
+
+      err ->
+        {:failed, err}
+    end
+  rescue
+    e -> {:failed, {:raised, e}}
+  end
 end
