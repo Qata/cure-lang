@@ -72,11 +72,15 @@ not inferred from reading code:
    kernel-core mesh (TypeChecker→{Declaration,Environment,Expr,Level,
    LocalContext,Name}, Environment→{...,TypeChecker}, etc.) plus Std.{List,
    String,Test}.
-6. **Both current `use` graphs are DAGs.** Note Environment↔TypeChecker call
-   each other at **runtime** (beam import tables, fact 5) — mutual recursion is
-   fine at runtime — but their `use` declarations are acyclic, which is what
-   ordering needs. (Only 2 of 39 stdlib modules declare `use` at all;
-   stage1 kernel modules declare `use` comprehensively.)
+6. **The stdlib `use` graph is a DAG; the stage1 graph no longer is.** At the
+   time of the original experiments both graphs were acyclic. Commit `5ef6d80`
+   ("Bootstrap Lean-style stage1 kernel") later introduced a genuine `use`
+   cycle `Environment ↔ Exception` (`environment.cure:6` /
+   `exception.cure:6`) — type-level mutual recursion faithful to the Lean
+   kernel being ported, with no runtime calls across the edge. This drift is
+   what forced the §3.1 cycle-policy amendment from hard-error to
+   SCC-condensation-with-warning. (Only 2 of 39 stdlib modules declare `use`
+   at all; stage1 kernel modules declare `use` comprehensively.)
 7. **`__group__` is selection, not ordering.** It drives `preload(kind:)`
    filtering (`lib/cure/stdlib/preload.ex:309-320`); order within a selection is
    `Enum.sort()`. Live consumers of the kind API: `cure run`,
@@ -125,26 +129,42 @@ Pure Elixir module (no process state). Input: a list of `.cure` paths — a
 
 ```elixir
 @spec scan([Path.t()]) :: {:ok, graph} | {:error, reason}
-@spec order(graph) :: {:ok, [Path.t()]} | {:error, {:import_cycle, [module_info]}}
+@spec order(graph) :: {:ok, [Path.t()], [cycle]}   # cycle = closed hop walk of one multi-member SCC
 @spec closure(graph_or_baked_map, [module_atom]) :: [module_atom]
 ```
 
-`order/1`: Kahn/Tarjan topological sort over order-edges with **alphabetical
-tie-break** among ready nodes — fully deterministic, so repeated builds compile
-in identical order.
+`order/1`: SCC condensation ordering — compute strongly-connected components
+of the in-set order-edge graph (Tarjan), topologically sort the condensation
+with **alphabetical tie-break** (an SCC is keyed by its alphabetically
+smallest path), and expand each multi-member SCC in alphabetical path order.
+Fully deterministic, so repeated builds compile in identical order. Every
+multi-member SCC is additionally reported as a closed cycle walk
+(`A (a.cure:3) -> B (b.cure:2) -> A`) in the third tuple element.
 
-**Cycle policy: hard error.** A `use` cycle among in-set modules is rejected
-with a new error code, listing the cycle as `A (a.cure:3) -> B (b.cure:2) ->
-A`, using the next free `E`-code in the `Cure.Compiler.Errors` registry. Note
-the registry's `E`/`W`/`H` codes share one numeric sequence, not independent
-per-letter counters (e.g. `W081`/`W082`/`H083`/`H084` sit between `E080` and
-`E085`, and `W091` already follows `E090`) — as of this writing the lowest
-free number is 086, not 091; implementation verifies against the registry and
-takes the actual next free code. Rationale: OCaml, Haskell, and Rust reject module-level
-import cycles; both current Cure graphs are DAGs; runtime mutual recursion
-(Environment↔TypeChecker) does not require cyclic `use` since the `use`
-declarations themselves are acyclic today. If a genuine need appears, modules
-can merge or the policy can be revisited — the error message says so.
+**Cycle policy: warn and proceed (SCC condensation).** A `use` cycle among
+in-set modules is NOT an error: the members are compiled as a group in
+deterministic (alphabetical) order and a new **warning** code reports the
+cycle. Rationale — this policy was amended on 2026-07-08 during
+implementation, superseding the original hard-error policy, for two reasons:
+(a) *the DAG premise broke*: commit `5ef6d80` ("Bootstrap Lean-style stage1
+kernel", post-dating this spec's experiments) introduced a genuine
+`use` cycle `Compiler.Kernel.Core.Environment ↔ Compiler.Kernel.Core.Exception`
+— type-level mutual recursion faithful to the Lean kernel it ports
+(`KernelException` constructors carry `Environment`; `Environment` functions
+return `Result(Environment, KernelException)`), with zero runtime calls
+across the edge (verified via beam import tables); (b) *the operator's
+briefing explicitly mandated it*: "Cure supports mutual recursion;
+cross-module cycles likely exist … the agent needs a defined behavior
+(compile an SCC together / arbitrary intra-SCC order), not a crash." Cure's
+compile-set model matches Rust's crate-internal modules (cycles legal), not
+OCaml's compilation units. Cycles stay *observable* (the warning names the
+full walk), and any genuinely order-unsatisfiable unqualified call inside an
+SCC is caught by the separate unresolved-import warning (§3.2 item 4).
+Error/warning codes: the registry's `E`/`W`/`H` codes share one numeric
+sequence (e.g. `W081`/`W082`/`H083`/`H084` sit between `E080` and `E085`);
+as of this writing the lowest free number is 086 — the cycle warning takes
+**W086**, duplicate-module takes **E087**; implementation verifies against
+the registry and takes the actual next free numbers.
 
 ### 3.2 Build entry-point integration
 
@@ -245,7 +265,7 @@ accidents; DepGraph replaces those.
 
 | Condition | Behavior |
 |---|---|
-| `use` cycle within a compile set | Hard error, new E-code, cycle path with file:line |
+| `use` cycle within a compile set | Warn (W086) and proceed: SCC compiled as a group in deterministic order; warning lists the closed cycle path with file:line |
 | Duplicate module name in a compile set | Hard error naming both files |
 | In-set file fails to parse | Per-file error via existing channel; ordering proceeds for the rest (parse failure will also fail that file's own compile) |
 | `use` target not in set and not loadable (classic module) | Existing `missing_stdlib_module` for `Std.*` (unchanged); **new warning** for the silent local fallback on any import |
@@ -264,14 +284,18 @@ touched, not asserted as the fast path to green.
 
 1. **DepGraph unit tests** (`test/cure/compiler/dep_graph_test.exs`): ordering
    respects order-edges; deterministic output (same input → same order, ready
-   set tie-broken alphabetically); cycle → `{:error, {:import_cycle, ...}}`
-   with the full path; duplicate module error; out-of-set `use` ignored for
-   ordering; closure includes qualified-call targets (fixture mirroring
+   set tie-broken alphabetically); cycle → ordering still succeeds, SCC members
+   grouped deterministically, and the closed cycle walk is reported in
+   `order/1`'s third element; duplicate module error; out-of-set `use` ignored
+   for ordering; closure includes qualified-call targets (fixture mirroring
    Access→List/Map/Pair) and auto-prelude edges with the self-exclusions.
 2. **Stage1 parity** (red first): property test on the real `lib/compiler`
-   tree — for every in-set `use` edge A→B, `index(B) < index(A)` in
-   `DepGraph.order`; the hardcoded table is deleted only after this passes, and
-   `mix cure.compile_stage1` output stays `0 errors` with identical module set.
+   tree — for every in-set `use` edge A→B where A and B are in different
+   SCCs, `index(B) < index(A)` in `DepGraph.order` (intra-SCC edges are
+   exempt: the real tree contains the Environment↔Exception cycle, which must
+   be reported in the cycles element); the hardcoded table is deleted only
+   after this passes, and `mix cure.compile_stage1` output stays `0 errors`
+   with identical module set.
 3. **User multi-file linkage** (red first — fails today): two-file fixture
    where `b.cure` `use`s `A` and calls it unqualified; compile via the
    Project/CLI path into a fresh output dir; assert `b`'s beam import table

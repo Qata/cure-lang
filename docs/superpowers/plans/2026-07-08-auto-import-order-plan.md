@@ -4,7 +4,7 @@
 
 **Goal:** Replace manual/alphabetical module ordering in every Cure build entry point with automatic dependency-graph sorting (`Cure.Compiler.DepGraph`), plus closure-aware stdlib preload and a warning where codegen silently falls back today.
 
-**Architecture:** A pure Elixir module `Cure.Compiler.DepGraph` scans `.cure` files with the headless `Cure.Compiler.parse_source/2`, extracts declared module names, `use`-based order-edges, and (`use` + qualified-call + auto-prelude) closure-edges, and provides deterministic topological ordering with hard cycle/duplicate errors. Build entry points (`cure.compile_stage1`, `cure.compile_stdlib`, `Cure.CLI.cmd_compile`, `Cure.Project.compile_project`) feed files through it; multi-file builds load each emitted beam immediately after compiling it. `Cure.Stdlib.Preload` bakes order-only and closure dep maps at Elixir compile time and expands `kind:` selections to their closure.
+**Architecture:** A pure Elixir module `Cure.Compiler.DepGraph` scans `.cure` files with the headless `Cure.Compiler.parse_source/2`, extracts declared module names, `use`-based order-edges, and (`use` + qualified-call + auto-prelude) closure-edges, and provides deterministic SCC-condensation ordering — cycles compile as a deterministically-ordered group and surface as W086 warnings (spec §3.1 as amended 2026-07-08); duplicate module names remain a hard error. Build entry points (`cure.compile_stage1`, `cure.compile_stdlib`, `Cure.CLI.cmd_compile`, `Cure.Project.compile_project`) feed files through it; multi-file builds load each emitted beam immediately after compiling it. `Cure.Stdlib.Preload` bakes order-only and closure dep maps at Elixir compile time and expands `kind:` selections to their closure.
 
 **Tech Stack:** Elixir (~> 1.14 per mix.exs), ExUnit, `:beam_lib` for beam-import-table assertions. No new dependencies.
 
@@ -55,7 +55,7 @@
 - Produces (later tasks rely on these exact names):
   - `DepGraph.scan([Path.t()], keyword()) :: {:ok, %DepGraph{}} | {:error, {:duplicate_module, String.t(), [Path.t()]}}` — opts: `known_modules: [String.t()]` (default `[]`).
   - `%Cure.Compiler.DepGraph{nodes: %{Path.t() => node}, modules: %{String.t() => Path.t()}}` where `node = %{path: Path.t(), module: String.t() | nil, line: pos_integer() | nil, blank?: boolean(), parse_error: term() | nil, order_deps: [%{target: String.t(), line: pos_integer()}], closure_deps: [String.t()]}`
-  - `DepGraph.order(%DepGraph{}) :: {:ok, [Path.t()]} | {:error, {:import_cycle, [%{module: String.t(), path: Path.t(), line: pos_integer()}]}}`
+  - `DepGraph.order(%DepGraph{}) :: {:ok, [Path.t()], [cycle]}` where `cycle :: [%{module: String.t(), path: Path.t(), line: pos_integer()}]` is the CLOSED walk of one multi-member SCC (first hop repeated last, `A -> B -> A`). `order/1` NEVER fails on cycles (spec §3.1 as amended 2026-07-08, per the operator's briefing: SCCs compile as a group, not a crash); `cycles` is `[]` on a DAG, one entry per multi-member SCC otherwise.
   - `DepGraph.order_deps_map(%DepGraph{}) :: %{String.t() => [String.t()]}` (in-set targets only, values sorted)
 
 **Semantics to implement (from spec §3.1):**
@@ -63,7 +63,7 @@
 - Parse failure → node with `parse_error: reason`, no edges; participates in ordering as an isolated node (it will fail its own compile later through the existing per-file channel).
 - Unreadable file (File.read error) → treat like parse failure with `parse_error: {:file_error, posix}`.
 - Order-edges: only `use` targets that are declared by another file **in the set** (`modules` index). Self-edges (`use` of own module) are dropped.
-- `order/1` is Kahn's algorithm over in-set order-edges: at each step take the alphabetically-smallest (by path) ready node. On leftover nodes (cycle), reconstruct one cycle path for the error (walk unvisited nodes' in-set edges depth-first until a repeat; report each hop's `module`, `path`, and the `line` of the `use` that creates the edge).
+- `order/1` is Kahn's algorithm over in-set order-edges: at each step take the alphabetically-smallest (by path) ready node. When NO node is ready (a cycle blocks progress), break the deadlock deterministically instead of erroring: among the remaining nodes, find the SCC that has no dependencies on nodes OUTSIDE itself within the remaining subgraph (a source SCC of the condensation; if several, the one containing the alphabetically-smallest path), emit its members in alphabetical path order, record its closed cycle walk (each hop's `module`, `path`, and the `line` of the `use` creating the edge to the next hop; first hop repeated as last), delete its members from the working graph, and continue Kahn. Result: `{:ok, ordered_paths ++ blank_paths, cycles}`.
 - Duplicate non-nil module name across two files → `{:error, {:duplicate_module, name, [path_a, path_b]}}` from `scan/2` (paths sorted).
 
 - [ ] **Step 1: Write the failing tests**
@@ -90,7 +90,7 @@ defmodule Cure.Compiler.DepGraphTest do
       b = write!(dir, "aa_user.cure", "mod UserB\n  use LibA\n  fn start() -> Int = ping()\n")
 
       {:ok, graph} = DepGraph.scan([b, a])
-      {:ok, order} = DepGraph.order(graph)
+      {:ok, order, []} = DepGraph.order(graph)
 
       assert order == [a, b]
     end
@@ -104,18 +104,25 @@ defmodule Cure.Compiler.DepGraphTest do
       {:ok, g1} = DepGraph.scan(paths)
       {:ok, g2} = DepGraph.scan(Enum.reverse(paths))
       assert DepGraph.order(g1) == DepGraph.order(g2)
-      assert {:ok, Enum.sort(paths)} == DepGraph.order(g1)
+      assert {:ok, Enum.sort(paths), []} == DepGraph.order(g1)
     end
 
-    test "cycle is a hard error carrying the cycle path", %{tmp_dir: dir} do
+    test "cycle: ordering succeeds as an SCC group and reports the closed walk", %{tmp_dir: dir} do
       a = write!(dir, "a.cure", "mod CycA\n  use CycB\n  fn f() -> Int = 1\n")
       b = write!(dir, "b.cure", "mod CycB\n  use CycA\n  fn g() -> Int = 2\n")
+      c = write!(dir, "c.cure", "mod Down\n  use CycA\n  fn h() -> Int = 3\n")
 
-      {:ok, graph} = DepGraph.scan([a, b])
-      assert {:error, {:import_cycle, hops}} = DepGraph.order(graph)
+      {:ok, graph} = DepGraph.scan([a, b, c])
+      # SCC policy (spec §3.1 as amended): no crash — members compile as a
+      # group in alphabetical path order, dependents still AFTER the SCC,
+      # and the cycle is reported as one closed walk.
+      assert {:ok, order, [hops]} = DepGraph.order(graph)
+
+      assert order == [a, b, c]
 
       modules = Enum.map(hops, & &1.module)
       assert "CycA" in modules and "CycB" in modules
+      refute "Down" in modules
       assert Enum.all?(hops, &(is_binary(&1.path) and is_integer(&1.line)))
       # The hop list must be a CLOSED walk, not just "both modules appear
       # somewhere" -- assert it actually loops back to its own start, per
@@ -136,7 +143,7 @@ defmodule Cure.Compiler.DepGraphTest do
       a = write!(dir, "a.cure", "mod OnlyOne\n  use Std.List\n  use NotInSet\n  fn f() -> Int = 1\n")
 
       {:ok, graph} = DepGraph.scan([a])
-      assert {:ok, [^a]} = DepGraph.order(graph)
+      assert {:ok, [^a], []} = DepGraph.order(graph)
       assert graph.nodes[a].order_deps == [] or
                Enum.all?(graph.nodes[a].order_deps, &(&1.target in ["Std.List", "NotInSet"]))
     end
@@ -150,7 +157,7 @@ defmodule Cure.Compiler.DepGraphTest do
       assert graph.nodes[blank].blank?
       assert graph.nodes[bad].parse_error != nil
 
-      {:ok, order} = DepGraph.order(graph)
+      {:ok, order, []} = DepGraph.order(graph)
       assert List.last(order) == blank
       assert bad in order and good in order
     end
@@ -158,10 +165,10 @@ defmodule Cure.Compiler.DepGraphTest do
     test "self-use is ignored", %{tmp_dir: dir} do
       a = write!(dir, "selfy.cure", "mod Selfy\n  use Selfy\n  fn f() -> Int = 1\n")
       {:ok, graph} = DepGraph.scan([a])
-      assert {:ok, [^a]} = DepGraph.order(graph)
+      assert {:ok, [^a], []} = DepGraph.order(graph)
     end
 
-    test "stage1 parity: real lib/compiler tree — every in-set use edge is respected" do
+    test "stage1 parity: real lib/compiler tree — every cross-SCC use edge is respected" do
       root = Path.expand("../../..", __DIR__)
 
       files =
@@ -169,13 +176,32 @@ defmodule Cure.Compiler.DepGraphTest do
         |> Enum.reject(fn p -> String.trim(File.read!(p)) == "" end)
 
       {:ok, graph} = DepGraph.scan(files)
-      {:ok, order} = DepGraph.order(graph)
+      {:ok, order, cycles} = DepGraph.order(graph)
       index = order |> Enum.with_index() |> Map.new()
+
+      # The real tree contains a genuine use cycle (Environment <-> Exception,
+      # commit 5ef6d80 — spec §2 fact 6 as amended): it must be REPORTED, and
+      # edges inside one SCC are exempt from the ordering property.
+      scc_of =
+        for {cycle, i} <- Enum.with_index(cycles),
+            hop <- cycle,
+            into: %{},
+            do: {hop.path, i}
+
+      assert Enum.any?(cycles, fn cycle ->
+               mods = Enum.map(cycle, & &1.module)
+
+               "Compiler.Kernel.Core.Environment" in mods and
+                 "Compiler.Kernel.Core.Exception" in mods
+             end),
+             "expected the known Environment<->Exception cycle to be reported, got: #{inspect(cycles)}"
 
       for {path, node} <- graph.nodes,
           %{target: target} <- node.order_deps,
           dep_path = graph.modules[target],
-          dep_path != nil do
+          dep_path != nil,
+          # intra-SCC edges are exempt (no valid topological constraint exists)
+          scc_of[path] == nil or scc_of[path] != scc_of[dep_path] do
         assert index[dep_path] < index[path],
                "#{target} (#{dep_path}) must precede #{node.module} (#{path})"
       end
@@ -220,8 +246,12 @@ defmodule Cure.Compiler.DepGraph do
       lower syntactically and are order-free.
 
   Ordering is deterministic: Kahn's algorithm, alphabetical (path)
-  tie-break. Cycles among `use` declarations are a hard error, matching
-  OCaml/Haskell/Rust module-cycle rejection.
+  tie-break. Cycles among `use` declarations are NOT an error (spec §3.1
+  as amended 2026-07-08): a strongly-connected component compiles as a
+  group in alphabetical path order — Cure's compile-set model matches
+  Rust's crate-internal modules, where cycles are legal — and each
+  multi-member SCC is reported as a closed cycle walk so callers can
+  emit the W086 warning. Duplicate module names remain a hard error.
   """
 
   defstruct nodes: %{}, modules: %{}
@@ -270,9 +300,9 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
-  @spec order(t()) ::
-          {:ok, [Path.t()]}
-          | {:error, {:import_cycle, [%{module: String.t(), path: Path.t(), line: pos_integer()}]}}
+  @type cycle_hop :: %{module: String.t(), path: Path.t(), line: pos_integer()}
+
+  @spec order(t()) :: {:ok, [Path.t()], [[cycle_hop()]]}
   def order(%__MODULE__{nodes: nodes, modules: modules}) do
     {blank, real} = Enum.split_with(nodes, fn {_p, n} -> n.blank? end)
     blank_paths = blank |> Enum.map(&elem(&1, 0)) |> Enum.sort()
@@ -293,10 +323,9 @@ defmodule Cure.Compiler.DepGraph do
         {path, deps}
       end)
 
-    case kahn(edges) do
-      {:ok, ordered} -> {:ok, ordered ++ blank_paths}
-      {:error, stuck} -> {:error, {:import_cycle, cycle_info(stuck, real_map, modules)}}
-    end
+    {ordered, stuck_groups} = kahn(edges)
+    cycles = Enum.map(stuck_groups, &cycle_info(&1, real_map, modules))
+    {:ok, ordered ++ blank_paths, cycles}
   end
 
   @doc "In-set `use` deps by module name (values sorted). Baking input for Preload."
@@ -456,13 +485,17 @@ defmodule Cure.Compiler.DepGraph do
   # for O(V+E). Compile sets here are tens to low hundreds of files
   # (stdlib ~39, stage1 kernel ~15) -- this is not a hot path, and the
   # simplicity keeps the alphabetical tie-break obviously correct.
-  defp kahn(edges) do
-    do_kahn(edges, [])
-  end
+  #
+  # Returns {ordered_paths, stuck_groups}: when no node is ready (cycle
+  # deadlock), the source SCC of the remaining subgraph is emitted as a
+  # group (alphabetical within it) and its internal edge map is collected
+  # so order/1 can report the closed cycle walk. Never errors.
+  defp kahn(edges), do: do_kahn(edges, [], [])
 
-  defp do_kahn(edges, acc) when map_size(edges) == 0, do: {:ok, Enum.reverse(acc)}
+  defp do_kahn(edges, acc, sccs) when map_size(edges) == 0,
+    do: {Enum.reverse(acc), Enum.reverse(sccs)}
 
-  defp do_kahn(edges, acc) do
+  defp do_kahn(edges, acc, sccs) do
     ready =
       edges
       |> Enum.filter(fn {_path, deps} -> deps == [] end)
@@ -471,7 +504,17 @@ defmodule Cure.Compiler.DepGraph do
 
     case ready do
       [] ->
-        {:error, edges}
+        # Cycle deadlock: emit the source SCC of the condensation as a
+        # group. A source SCC at a deadlock is always multi-member (a
+        # ready singleton would have been picked above).
+        {members, scc_edges} = source_scc(edges)
+
+        edges =
+          edges
+          |> Map.drop(members)
+          |> Map.new(fn {p, deps} -> {p, deps -- members} end)
+
+        do_kahn(edges, Enum.reverse(members) ++ acc, [scc_edges | sccs])
 
       [next | _] ->
         edges =
@@ -483,10 +526,89 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
-  defp cycle_info(stuck_edges, nodes, modules) do
+  # The SCC of the remaining subgraph with no dependencies on OTHER
+  # remaining SCCs; among several sources, the one containing the
+  # alphabetically-smallest path. Returns {sorted_members, scc_edge_map}.
+  defp source_scc(edges) do
+    sccs = tarjan(edges)
+    scc_of = for {members, i} <- Enum.with_index(sccs), m <- members, into: %{}, do: {m, i}
+
+    members =
+      sccs
+      |> Enum.filter(fn scc_members ->
+        Enum.all?(scc_members, fn m ->
+          Enum.all?(edges[m], fn d -> scc_of[d] == scc_of[m] end)
+        end)
+      end)
+      |> Enum.min_by(fn scc_members -> Enum.min(scc_members) end)
+      |> Enum.sort()
+
+    member_set = MapSet.new(members)
+
+    scc_edges =
+      Map.new(members, fn m ->
+        {m, Enum.filter(edges[m], &MapSet.member?(member_set, &1))}
+      end)
+
+    {members, scc_edges}
+  end
+
+  # Standard Tarjan SCC over the (small) stuck subgraph; returns [[path]].
+  # Determinism: neighbors and roots visited in sorted order.
+  defp tarjan(edges) do
+    nodes = edges |> Map.keys() |> Enum.sort()
+
+    {_state, sccs} =
+      Enum.reduce(nodes, {%{index: %{}, low: %{}, stack: [], on: MapSet.new(), n: 0}, []}, fn v,
+                                                                                             {st,
+                                                                                              acc} ->
+        if Map.has_key?(st.index, v), do: {st, acc}, else: strongconnect(v, edges, st, acc)
+      end)
+
+    Enum.reverse(sccs)
+  end
+
+  defp strongconnect(v, edges, st, sccs) do
+    st = %{
+      st
+      | index: Map.put(st.index, v, st.n),
+        low: Map.put(st.low, v, st.n),
+        stack: [v | st.stack],
+        on: MapSet.put(st.on, v),
+        n: st.n + 1
+    }
+
+    {st, sccs} =
+      Enum.reduce(Enum.sort(edges[v] || []), {st, sccs}, fn w, {st, sccs} ->
+        cond do
+          not Map.has_key?(st.index, w) ->
+            {st, sccs} = strongconnect(w, edges, st, sccs)
+            {%{st | low: Map.update!(st.low, v, &min(&1, st.low[w]))}, sccs}
+
+          MapSet.member?(st.on, w) ->
+            {%{st | low: Map.update!(st.low, v, &min(&1, st.index[w]))}, sccs}
+
+          true ->
+            {st, sccs}
+        end
+      end)
+
+    if st.low[v] == st.index[v] do
+      {members, rest} = Enum.split_while(st.stack, &(&1 != v))
+      members = members ++ [v]
+      rest = tl(rest)
+
+      st = %{st | stack: rest, on: Enum.reduce(members, st.on, &MapSet.delete(&2, &1))}
+      {st, [Enum.sort(members) | sccs]}
+    else
+      {st, sccs}
+    end
+  end
+
+  defp cycle_info(scc_edges, nodes, modules) do
     path_to_module = for {m, p} <- modules, into: %{}, do: {p, m}
-    start = stuck_edges |> Map.keys() |> Enum.sort() |> hd()
-    hops = trace_cycle(start, stuck_edges, [])
+    start = scc_edges |> Map.keys() |> Enum.sort() |> hd()
+    hops = trace_cycle(start, scc_edges, [])
 
     Enum.map(hops, fn path ->
       node = nodes[path]
@@ -525,7 +647,7 @@ Note on `declared_type_names_of/1`: for Task 1 the auto-prelude exclusion set is
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `mix test test/cure/compiler/dep_graph_test.exs 2>&1 | tail -10`
-Expected: PASS (all tests, 0 failures). If the stage1-parity test fails, the FIX is in DepGraph (or reveals a genuine cycle — investigate before touching the test; spec says both real graphs are DAGs as of 2026-07-08).
+Expected: PASS (all tests, 0 failures). The stage1-parity test EXPECTS the known Environment↔Exception cycle (commit `5ef6d80`, spec §2 fact 6 as amended) to be reported in `order/1`'s cycles element; if a DIFFERENT cycle or ordering violation appears, the fix is in DepGraph — investigate before touching the test.
 
 - [ ] **Step 5: Commit**
 
@@ -545,7 +667,7 @@ git commit -m "feat(compiler): DepGraph — dependency scan + deterministic topo
 **Interfaces:**
 - Produces:
   - `DepGraph.closure(%{k => [k]}, [k]) :: [k]` — roots ∪ transitive deps over the map, sorted, missing keys tolerated (contribute nothing). Generic over key type (strings at scan level, atoms for Preload's baked maps).
-  - `DepGraph.toposort(%{k => [k]}, [k]) :: {:ok, [k]} | {:error, {:import_cycle, [k]}}` — generic Kahn over the given keys, edges restricted to the given keys, alphabetical (`Enum.sort/1`) tie-break.
+  - `DepGraph.toposort(%{k => [k]}, [k]) :: [k]` — generic Kahn over the given keys, edges restricted to the given keys, alphabetical (`Enum.sort/1`) tie-break; SCC-tolerant like `order/1` (cycle members emitted as an alphabetical group), so it always returns a full ordering and never errors.
   - `DepGraph.closure_deps_map(%DepGraph{}) :: %{String.t() => [String.t()]}` — per-module closure deps (in-universe filtered, sorted).
 
 - [ ] **Step 1: Write the failing tests** (append inside the outer `describe`-less module, new describes):
@@ -599,14 +721,14 @@ git commit -m "feat(compiler): DepGraph — dependency scan + deterministic topo
       assert DepGraph.closure(%{}, ["R"]) == ["R"]
     end
 
-    test "toposort orders deps first, deterministic, cycle error" do
+    test "toposort orders deps first, deterministic, SCC-tolerant on cycles" do
       map = %{"A" => ["B"], "B" => [], "C" => []}
-      assert {:ok, ["B", "A", "C"]} = DepGraph.toposort(map, ["A", "B", "C"])
-      assert {:ok, ["B", "C"]} = DepGraph.toposort(map, ["C", "B"])
+      assert ["B", "A", "C"] = DepGraph.toposort(map, ["A", "B", "C"])
+      assert ["B", "C"] = DepGraph.toposort(map, ["C", "B"])
 
-      cyc = %{"A" => ["B"], "B" => ["A"]}
-      assert {:error, {:import_cycle, members}} = DepGraph.toposort(cyc, ["A", "B"])
-      assert Enum.sort(members) == ["A", "B"]
+      # cycle members come out as an alphabetical group, dependents after
+      cyc = %{"A" => ["B"], "B" => ["A"], "C" => ["A"]}
+      assert ["A", "B", "C"] = DepGraph.toposort(cyc, ["C", "B", "A"])
     end
   end
 ```
@@ -664,8 +786,12 @@ Add the public functions:
     end
   end
 
-  @doc "Generic deterministic Kahn sort of `keys` using `dep_map` edges restricted to `keys`."
-  @spec toposort(%{k => [k]}, [k]) :: {:ok, [k]} | {:error, {:import_cycle, [k]}} when k: term()
+  @doc """
+  Generic deterministic Kahn sort of `keys` using `dep_map` edges restricted
+  to `keys`. SCC-tolerant like `order/1`: cycle members are emitted as an
+  alphabetical group, so the result is always a complete ordering.
+  """
+  @spec toposort(%{k => [k]}, [k]) :: [k] when k: term()
   def toposort(dep_map, keys) do
     keyset = MapSet.new(keys)
 
@@ -674,10 +800,8 @@ Add the public functions:
         {k, dep_map |> Map.get(k, []) |> Enum.filter(&(MapSet.member?(keyset, &1) and &1 != k))}
       end)
 
-    case kahn(edges) do
-      {:ok, ordered} -> {:ok, ordered}
-      {:error, stuck} -> {:error, {:import_cycle, stuck |> Map.keys() |> Enum.sort()}}
-    end
+    {ordered, _sccs} = kahn(edges)
+    ordered
   end
 
   @doc "Per-module closure deps (in-universe filtered, sorted). Baking input for Preload."
@@ -719,7 +843,7 @@ git commit -m "feat(compiler): DepGraph closure edges, closure/2, toposort/2"
 grep -rhoE "\b[EWH]0[0-9][0-9]\b" lib/cure/compiler/errors.ex lib | sort -u | tail -15
 ```
 
-Expected (as of spec writing): highest used is `W091`; `086`–`089` free. Use: **E086 = import cycle**, **E087 = duplicate module**, **W088 = unresolved import fallback**. If any of these numbers is taken by the time you run this, take the next free numbers in sequence and use them consistently across Tasks 3–7 (and say so in the commit message).
+Expected (as of spec writing): highest used is `W091`; `086`–`089` free. Use: **W086 = import cycle (warning — spec §3.1 as amended: cycles compile as an SCC group and warn, never error)**, **E087 = duplicate module (hard error)**, **W088 = unresolved import fallback (warning)**. If any of these numbers is taken by the time you run this, take the next free numbers in sequence and use them consistently across Tasks 3–7 (and say so in the commit message).
 
 - [ ] **Step 2: Write the failing test**
 
@@ -729,7 +853,7 @@ defmodule Cure.Compiler.DepGraphErrorsFormatTest do
 
   alias Cure.Compiler.Errors
 
-  test "import cycle formats with code, module chain and file:line hops" do
+  test "import cycle formats as a WARNING with code, module chain and file:line hops" do
     hops = [
       %{module: "CycA", path: "a.cure", line: 3},
       %{module: "CycB", path: "b.cure", line: 2},
@@ -738,7 +862,8 @@ defmodule Cure.Compiler.DepGraphErrorsFormatTest do
 
     out = Errors.format_error({:import_cycle, hops}, "a.cure")
 
-    assert out =~ "E086"
+    assert out =~ "W086"
+    assert out =~ "warning"
     assert out =~ "CycA"
     assert out =~ "CycB"
     assert out =~ "a.cure:3"
@@ -783,14 +908,16 @@ Expected: FAIL — either `FunctionClauseError`/fallthrough formatting without t
       |> Enum.join(" -> ")
 
     format_diagnostic(
-      "error",
-      "import cycle (E086)",
+      "warning",
+      "import cycle (W086)",
       file,
       hops |> List.first() |> Map.get(:line, 1),
       "modules form a `use` cycle: #{chain}. " <>
-        "Cure rejects module-level import cycles (as do OCaml, Haskell, and Rust); " <>
-        "merge the modules or break the cycle. Runtime mutual recursion does not " <>
-        "require cyclic `use` declarations."
+        "They compile together as one group in deterministic order. " <>
+        "Type-level mutual recursion across modules is fine; but if these " <>
+        "modules CALL each other's imported functions unqualified, resolution " <>
+        "inside the group is order-dependent (see W088). Consider qualifying " <>
+        "such calls, merging the modules, or dropping a redundant `use`."
     )
   end
 
@@ -821,14 +948,14 @@ Expected: FAIL — either `FunctionClauseError`/fallthrough formatting without t
   end
 ```
 
-Also register explanations in the long-form code table (the `"E030" => """..."""` map in the same file): add `"E086"`, `"E087"`, `"W088"` entries with a 3-6 line explanation + fix guidance each, in the same prose style as the neighbors.
+Also register explanations in the long-form code table (the `"E030" => """..."""` map in the same file): add `"W086"`, `"E087"`, `"W088"` entries with a 3-6 line explanation + fix guidance each, in the same prose style as the neighbors (W086's should state the SCC-group compile behavior and when a cycle is harmless vs. when W088 makes it actionable).
 
 - [ ] **Step 5: Run the test — PASS. Then commit**
 
 ```bash
 mix test test/cure/compiler/dep_graph_errors_format_test.exs 2>&1 | tail -5
 git add lib/cure/compiler/errors.ex test/cure/compiler/dep_graph_errors_format_test.exs
-git commit -m "feat(errors): E086 import cycle, E087 duplicate module, W088 unresolved import"
+git commit -m "feat(errors): W086 import cycle, E087 duplicate module, W088 unresolved import"
 ```
 
 ---
@@ -874,15 +1001,23 @@ with
       |> maybe_reject_tests(include_tests?)
 
     files =
-      with {:ok, graph} <- Cure.Compiler.DepGraph.scan(candidates),
-           {:ok, ordered} <- Cure.Compiler.DepGraph.order(graph) do
-        ordered
-      else
+      case Cure.Compiler.DepGraph.scan(candidates) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, @source_dir))
+          end)
+
+          ordered
+
         {:error, reason} ->
           Mix.shell().error(Cure.Compiler.Errors.format_error(reason, @source_dir))
           exit({:shutdown, 1})
       end
 ```
+
+Note: `order/1` cannot fail (SCC policy); only `scan/2` can (`duplicate_module`). The known Environment↔Exception kernel cycle will print one W086 warning per stage1 build — that is intended, honest output, not a defect.
 
 and delete `stage1_sort_key/1` and all `stage1_group/1` clauses entirely. Keep `maybe_reject_tests/2`, `blank_source?/1`, and everything else unchanged (DepGraph puts blank files last; the loop still prints `skip` for them).
 
@@ -927,16 +1062,23 @@ with
 
 ```elixir
     cure_files =
-      with candidates = Path.wildcard(Path.join(stdlib_dir, "*.cure")),
-           {:ok, graph} <- Cure.Compiler.DepGraph.scan(candidates),
-           {:ok, ordered} <- Cure.Compiler.DepGraph.order(graph) do
-        ordered
-      else
+      case Cure.Compiler.DepGraph.scan(Path.wildcard(Path.join(stdlib_dir, "*.cure"))) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, stdlib_dir))
+          end)
+
+          ordered
+
         {:error, reason} ->
           Mix.shell().error(Cure.Compiler.Errors.format_error(reason, stdlib_dir))
           exit({:shutdown, 1})
       end
 ```
+
+(The stdlib graph is currently a DAG, so no W086 prints today; the branch exists for when a cycle appears.)
 
 - [ ] **Step 2: Register the output dir on the code path BEFORE compiling.** Move this block (currently after the compile loop, `compile_stdlib.ex:71-77`):
 
@@ -1084,11 +1226,22 @@ with
       end)
 
     cure_files_result =
-      with {:ok, graph} <- Cure.Compiler.DepGraph.scan(discovered),
-           {:ok, ordered} <- Cure.Compiler.DepGraph.order(graph) do
-        {:ok, ordered}
+      case Cure.Compiler.DepGraph.scan(discovered) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            Logger.warning(Cure.Compiler.Errors.format_error({:import_cycle, walk}, project.root))
+          end)
+
+          {:ok, ordered}
+
+        {:error, _} = err ->
+          err
       end
 ```
+
+(`Cure.Project` already `require Logger`? Verify — if not, add `require Logger` at the top of the module; `Logger.warning/1` is the right channel for a library function, matching how the CLI layer prints and tests capture logs.)
 
 and thread it through the `with`:
 
@@ -1129,10 +1282,16 @@ In `compile_all_files/5` (`project.ex:650`), load each beam right after its succ
       |> Enum.uniq()
 
     ordered =
-      with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files),
-           {:ok, ordered} <- Cure.Compiler.DepGraph.order(graph) do
-        ordered
-      else
+      case Cure.Compiler.DepGraph.scan(files) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            warn(Cure.Compiler.Errors.format_error({:import_cycle, walk}, hd(paths)))
+          end)
+
+          ordered
+
         {:error, reason} ->
           diagnostic(Cure.Compiler.Errors.format_error(reason, hd(paths)))
           exit({:shutdown, 1})
@@ -1563,15 +1722,11 @@ and the public accessors + closure expansion:
 and in `compile_missing_from_sources/1` replace `Enum.each(stdlib_modules(kind), ...)` with `Enum.each(ordered_closure_modules(kind), ...)`, adding the shared helper:
 
 ```elixir
-  # Closure-expanded selection in dependency (use-edge) order; falls back
-  # to the closure list as-is if a cycle ever sneaks into the baked map.
+  # Closure-expanded selection in dependency (use-edge) order. toposort/2
+  # is SCC-tolerant, so this always yields a complete deterministic list
+  # even if a cycle ever appears in the baked map.
   defp ordered_closure_modules(kind) do
-    modules = closure_modules(kind)
-
-    case Cure.Compiler.DepGraph.toposort(@std_order_deps, modules) do
-      {:ok, ordered} -> ordered
-      {:error, _} -> modules
-    end
+    Cure.Compiler.DepGraph.toposort(@std_order_deps, closure_modules(kind))
   end
 ```
 
@@ -1639,4 +1794,5 @@ Expected: stdlib `0 errors`; stage1 `0 errors` with the Task 4 counts; check.exa
 - **Spec coverage:** §3.1 → Tasks 1–2; §3.2 items 1/2/3/4 → Tasks 4/5/6/7; §3.3 → Task 8; §4 table → Tasks 3/6/7/8; §5.1–5.6 → Tasks 1, 1(parity), 6, 7, 8, 9 respectively; §3.4 needs no code (documented in Task 8 Step 5).
 - **Known judgment call, resolved:** Task 7's fixture (erl_lint interaction) is settled — the warning rides the lint-error path via `{:beam_lint_error, errors, warnings}`, the green path via prepended warnings; the test asserts the error-path shape because that is the only reachable behavior for a genuinely-unresolved unqualified call. This was independently re-derived and confirmed during a `recursive-skeptical-review` pass (2026-07-08), which also found and fixed: a real cycle-reconstruction bug (`trace_cycle`'s trailing `Enum.uniq/1` silently opened the closed cycle walk the spec's `A -> B -> A` format requires), a factually wrong TOML table in Task 6's fixture (`source_paths` lives under `[project]`, verified against `project.ex:711-767`), an underspecified normalization point for Task 7's special-container 3-tuple wrapping (now pinned to `compile_module/2`'s two `dispatch_container` call sites, not the four container-compiler modules), an inaccurate blanket claim about `compile_and_load/2` threading warnings through `write_beam_forms` (it doesn't call that function at all), and an undercounted test blast-radius (9 pre-existing test files pattern-match `Codegen.compile_module/2`'s bare-tuple shape and must be migrated to the 3-tuple contract). See the task bodies for the fixes in place; this note is not asking a future reviewer to re-derive them.
 - **Type consistency:** warning tuple `{:unresolved_import, name, arity, imports, line}` identical in Tasks 3 and 7; `load_emitted/2` defined in Task 6 and consumed in Task 7's test; `closure/2`/`toposort/2` shapes match between Tasks 2 and 8.
-- **Determinism:** every map iteration that feeds output goes through `Enum.sort`/sorted paths (scan sorts inputs; kahn sorts ready set; baked maps sort values).
+- **Determinism:** every map iteration that feeds output goes through `Enum.sort`/sorted paths (scan sorts inputs; kahn sorts ready set; Tarjan visits nodes/neighbors sorted; SCC members emitted sorted; baked maps sort values).
+- **AMENDMENT 2026-07-08 (mid-execution, operator-briefing-driven):** the cycle policy changed from hard-error (E086) to SCC-condensation-with-warning (W086) after Task 1's first execution attempt discovered a genuine `use` cycle (`Compiler.Kernel.Core.Environment ↔ Exception`, commit `5ef6d80`, landed after the spec's ground-truth experiments). The operator's pre-run briefing explicitly required "a defined behavior (compile an SCC together / arbitrary intra-SCC order), not a crash" for cycles. Spec §2 fact 6 and §3.1 were amended in the same commit as this plan revision; `order/1` is now `{:ok, paths, cycles}` and never fails, `toposort/2` returns a plain list, and Tasks 1/2/3/4/5/6/8 were updated consistently. If any residual text in this plan still implies cycles are fatal, the amended spec §3.1 governs.
