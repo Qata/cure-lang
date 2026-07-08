@@ -104,23 +104,49 @@ defmodule Cure.Pipeline.Events do
   end
 
   def emit(stage, event_type, payload, %{} = metadata) when is_atom(stage) and is_atom(event_type) do
-    metadata =
-      metadata
-      |> Map.put_new(:file, "nofile")
-      |> Map.put_new(:line, 1)
-      |> Map.put_new(:timestamp, DateTime.utc_now() |> DateTime.to_unix(:millisecond))
+    if emission_enabled?() do
+      metadata =
+        metadata
+        |> Map.put_new(:file, "nofile")
+        |> Map.put_new(:line, 1)
+        |> Map.put_new(:timestamp, DateTime.utc_now() |> DateTime.to_unix(:millisecond))
 
-    message = {__MODULE__, stage, event_type, payload, metadata}
+      message = {__MODULE__, stage, event_type, payload, metadata}
 
-    Registry.dispatch(@registry, stage, fn entries ->
-      for {pid, filter} <- entries do
-        if filter == :all or filter == event_type do
-          send(pid, message)
+      Registry.dispatch(@registry, stage, fn entries ->
+        for {pid, filter} <- entries do
+          if filter == :all or filter == event_type do
+            send(pid, message)
+          end
         end
-      end
-    end)
+      end)
+    end
 
     :ok
+  end
+
+  @doc """
+  Whether pipeline event emission is currently active.
+
+  Emission is a no-op — and `emit/4` returns `:ok` without touching the
+  registry — when EITHER of the following holds:
+
+    * the application flag `config :cure, emit_events: false` is set, or
+    * the events `Registry` is not running.
+
+  The second condition is what lets the lexer and parser (which emit events)
+  run **headless** — under `mix run --no-compile --no-start`, a bare `elixir`
+  invocation, or any standalone script that never starts the `:cure`
+  application. This is the supported path for debugging tooling such as
+  `Cure.Compiler.parse_source/1`; event telemetry degrades gracefully rather
+  than crashing with `unknown registry: Cure.Pipeline.Events.Registry`.
+
+  Set `config :cure, emit_events: false` to force emission off even when the
+  application (and registry) are running — useful for quiet batch tooling.
+  """
+  @spec emission_enabled?() :: boolean()
+  def emission_enabled? do
+    Application.get_env(:cure, :emit_events, true) and Process.whereis(@registry) != nil
   end
 
   @doc """

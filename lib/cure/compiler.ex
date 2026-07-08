@@ -134,6 +134,37 @@ defmodule Cure.Compiler do
   end
 
   @doc """
+  Lex and parse a Cure source string into its raw parser AST.
+
+  Runs the front end only — no type checking, optimization, or codegen — and
+  with pipeline event emission disabled, so it works **headless**: under
+  `mix run --no-compile --no-start`, a bare `elixir` invocation, or any context
+  where the `:cure` application (and its events registry) is not started. This
+  is the supported entry point for debugging and tooling that needs to inspect
+  how a construct parses. See `Cure.Pipeline.Events.emission_enabled?/0`.
+
+  ## Options
+
+  - `:file` -- filename for error messages (default: `"nofile"`)
+
+  Returns `{:ok, ast}` or `{:error, {:lex_error | :parse_error, reason}}`.
+
+  ## Examples
+
+      iex> {:ok, ast} = Cure.Compiler.parse_source("mod X\\n  type T = A | B\\n")
+      iex> is_list(ast)
+      true
+  """
+  @spec parse_source(String.t(), keyword()) :: {:ok, list()} | {:error, term()}
+  def parse_source(source, opts \\ []) do
+    file = Keyword.get(opts, :file, "nofile")
+
+    with {:ok, tokens} <- lex(source, file, false) do
+      parse(tokens, file, false)
+    end
+  end
+
+  @doc """
   Compile a Cure source string and load the resulting module into the VM.
 
   Does not write a `.beam` file to disk. Useful for testing and REPL.
