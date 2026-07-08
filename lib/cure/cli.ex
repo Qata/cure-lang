@@ -485,16 +485,33 @@ defmodule Cure.CLI do
         base_compile_opts
       end
 
-    Enum.each(paths, fn path ->
-      if File.dir?(path) do
-        path
-        |> Path.join("**/*.cure")
-        |> Path.wildcard()
-        |> Enum.each(&compile_one(&1, compile_opts, verbose?))
-      else
-        compile_one(path, compile_opts, verbose?)
+    files =
+      Enum.flat_map(paths, fn path ->
+        if File.dir?(path) do
+          path |> Path.join("**/*.cure") |> Path.wildcard()
+        else
+          [path]
+        end
+      end)
+      |> Enum.uniq()
+
+    ordered =
+      case Cure.Compiler.DepGraph.scan(files) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            warn(Cure.Compiler.Errors.format_error({:import_cycle, walk}, hd(paths)))
+          end)
+
+          ordered
+
+        {:error, reason} ->
+          diagnostic(Cure.Compiler.Errors.format_error(reason, hd(paths)))
+          exit({:shutdown, 1})
       end
-    end)
+
+    Enum.each(ordered, &compile_one(&1, compile_opts, verbose?))
   end
 
   defp compile_one(path, opts, verbose?) do
@@ -503,6 +520,7 @@ defmodule Cure.CLI do
     case Cure.Compiler.compile_file(path, opts) do
       {:ok, module, warnings} ->
         Enum.each(warnings, fn w -> warn("  #{inspect(w)}") end)
+        _ = Cure.Compiler.load_emitted(module, Keyword.fetch!(opts, :output_dir))
         info("  -> #{module}")
 
       {:error, reason} ->

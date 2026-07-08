@@ -54,6 +54,23 @@ defmodule Cure.Compiler do
   end
 
   @doc """
+  Load a just-emitted `<output_dir>/<module>.beam` into the VM via
+  `:code.load_binary/3` — no code-path mutation. Used by multi-file
+  builds so later files' codegen can resolve imports of earlier ones.
+  """
+  @spec load_emitted(module(), Path.t()) :: :ok | {:error, term()}
+  def load_emitted(module, output_dir) when is_atom(module) and is_binary(output_dir) do
+    path = Path.join(output_dir, "#{module}.beam")
+
+    with {:ok, binary} <- File.read(path),
+         {:module, ^module} <- :code.load_binary(module, String.to_charlist(path), binary) do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Compile a Cure source string to BEAM bytecode and write to disk.
 
   ## Options

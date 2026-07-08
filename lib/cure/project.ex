@@ -43,6 +43,8 @@ defmodule Cure.Project do
   values, string arrays, and nested tables (`[application.env]`).
   """
 
+  require Logger
+
   defstruct [
     :name,
     :version,
@@ -544,14 +546,29 @@ defmodule Cure.Project do
 
     Cure.Stdlib.Preload.preload(preload_opts)
 
-    cure_files =
+    discovered =
       extra_paths
       |> Enum.flat_map(fn dir ->
         if File.dir?(dir), do: Path.wildcard(Path.join(dir, "**/*.cure")), else: []
       end)
-      |> Enum.sort()
 
-    with {:ok, app_info} <- detect_app(cure_files, project),
+    cure_files_result =
+      case Cure.Compiler.DepGraph.scan(discovered) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            Logger.warning(Cure.Compiler.Errors.format_error({:import_cycle, walk}, project.root))
+          end)
+
+          {:ok, ordered}
+
+        {:error, _} = err ->
+          err
+      end
+
+    with {:ok, cure_files} <- cure_files_result,
+         {:ok, app_info} <- detect_app(cure_files, project),
          :ok <- verify_app_name(app_info, project),
          {:ok, modules} <-
            compile_all_files(cure_files, output_dir, emit_events?, check?, declared_phases(project)),
@@ -662,8 +679,14 @@ defmodule Cure.Project do
     result =
       Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
         case Cure.Compiler.compile_file(file, opts) do
-          {:ok, module, _warnings} -> {:cont, {:ok, [module | acc]}}
-          {:error, _} = err -> {:halt, err}
+          {:ok, module, _warnings} ->
+            # Best-effort: callback-mode/actor/sup/app containers load
+            # themselves during codegen and may have no beam on disk.
+            _ = Cure.Compiler.load_emitted(module, output_dir)
+            {:cont, {:ok, [module | acc]}}
+
+          {:error, _} = err ->
+            {:halt, err}
         end
       end)
 
