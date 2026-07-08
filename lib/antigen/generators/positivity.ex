@@ -53,7 +53,10 @@ defmodule Antigen.Generators.Positivity do
   @pgen {:data, :Pgen, [], []}
 
   # Arrow domains, one per occurs?/2 recursion clause (lam/sigma/pair/app/fst/snd/
-  # ctor/eq/refl/rewrite/case + a non-term leaf for the fallback). None mention
+  # ctor/data/case + a non-term leaf for the fallback). The former eq/refl/rewrite
+  # entries retired with the primitive identity forms (Phase C); their walker
+  # arms are covered by the inductive spellings below (Equivalent :data,
+  # reflexive :ctor, and the single-branch :case transport shape). None mention
   # :Pgen, so every family that carries them stays strictly positive.
   @occurs_domains [
     {:lam, @nat, @z},
@@ -63,9 +66,9 @@ defmodule Antigen.Generators.Positivity do
     {:fst, @z},
     {:snd, @z},
     {:ctor, :S, [@z]},
-    {:eq, @nat, @z, @z},
-    {:refl, @z},
-    {:rewrite, @z, @z, @z},
+    {:data, :Equivalent, [@nat], [@z, @z]},
+    {:ctor, :reflexive, [@z]},
+    {:case, {:ctor, :reflexive, [@z]}, @z, [{:reflexive, 1, @z}]},
     {:case, @z, @z, [{:PC0, 0, @z}]},
     {:app, {:int_lit, 0}, {:int_lit, 0}}
   ]

@@ -105,7 +105,10 @@ defmodule Antigen.Generators.Mutation do
 
   def build(_ctx, :universe) do
     t0 = {:type, 0}
-    g = Gen.return({:eq, t0, t0, t0})  # Type₀ : Type₁ ⋠ Type₀
+    # Equivalent's param telescope demands a : Type₀; feeding Type₀ itself
+    # (whose sort is Type₁ ⋠ Type₀) is the universe fault, carried by the
+    # inductive identity former (the retired primitive {:eq} carried it before).
+    g = Gen.return({:data, :Equivalent, [t0], [t0, t0]})
     {g, %{kind: :universe, witness: :level, expected_head: {:type, 0},
           injected_head: {:type, 1}, scope: nil}}
   end

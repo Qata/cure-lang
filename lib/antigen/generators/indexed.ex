@@ -242,37 +242,23 @@ defmodule Antigen.Generators.Indexed do
       "snat0 : SNat(Dcoupled) against distinct SNat(Causal) — must reject")
   end
 
-  @doc """
-  REACH PIN (must-eventually-accept): the `Quote.reify` `{:vdata}` signature-gap.
-  A `:case` whose motive body is the reflexive `Eq(Type, SNat(x), SNat(x))` — a
-  WELL-FORMED, refl-inhabited proposition (ground truth `:well_typed`). Cure
-  currently REJECTS it (`:bad_motive`): `check_motive_wf`'s `infer_type_value_sort`
-  reifies the `{:vdata}` Eq-endpoints, and the split-collapse
-  (`{:vdata,:SNat,[x]}`→`{:data,:SNat,[x],[]}`) re-checks with `:arg_arity`. The
-  value-recursion fix (defc6cb) closed the Π/Σ DOMAIN path; the Eq-ENDPOINT path
-  still reifies (kernel.ex `infer_type_value_sort({:veq,…})`). The principled
-  repair is signature-aware `Quote.reify` — a TCB change. Until then this pins the
-  debt: it replays to its documented `{:wrongly_rejected, …}` and goes red (forcing
-  migration to a seed) the moment signature-aware reify lands.
-  """
-  @spec reify_eq_indexed_reach(:well_typed) :: Challenge.t()
-  def reify_eq_indexed_reach(:well_typed) do
-    snx = {:data, :SNat, [], [{:var, 0}]}
-    motive = {:lam, @dec, {:eq, {:type, 0}, snx, snx}}
-
-    body =
-      {:lam, @dec,
-       {:case, {:var, 0}, motive,
-        [
-          {:Dcoupled, 0, {:refl, {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}}},
-          {:Causal, 0, {:refl, {:data, :SNat, [], [{:ctor, :Causal, []}]}}}
-        ]}}
-
-    def_type = {:pi, @dec, {:eq, {:type, 0}, snx, snx}}
-
-    challenge(:well_typed, [dec_family(), snat_family()], :reify_eq, def_type, body,
-      "reach: reflexive Eq(Type, SNat(x), SNat(x)) motive — false :bad_motive from reify {:vdata} collapse")
-  end
+  # RETIRED (Phase C, primitive-identity retirement) — `reify_eq_indexed_reach`.
+  #
+  # This was the REACH PIN for the `Quote.reify` `{:vdata}` signature-gap on
+  # primitive-Eq ENDPOINTS: a motive body `Eq(Type, SNat(x), SNat(x))` whose
+  # `infer_type_value_sort({:veq,…})` clause reified the endpoints and
+  # false-rejected `:bad_motive`. The pinned debt DISSOLVED rather than being
+  # achieved: Phase C removed the `{:veq}` clause together with the primitive
+  # `{:eq}`/`{:refl}` forms, so the code path the pin covered no longer exists.
+  # The scenario itself (an equality of TYPES at carrier `Type 0`) is not
+  # expressible on the inductive `Equivalent`, whose parameter lives in
+  # `Type 0` — matching Idris/Agda, where type-level equations need universe
+  # polymorphism Cure does not have. Value-level Equivalent motives (the
+  # surviving analog) are exercised by `Generators.DepMatch.var_index(:eq)` and
+  # `eqtype_motive_case`. The banked record (`reach_reify_split.sexp`) was
+  # deleted in the same commit — its pieces encode grammar that no longer
+  # parses; per the reach-pin migration contract a dissolved pin is removed,
+  # never edited in place.
 
   # -- 4.5 impossible-branch discharge (no-confusion) -------------------------
   @doc """

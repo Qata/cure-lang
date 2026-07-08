@@ -159,6 +159,90 @@ defmodule Antigen.EqInductiveAntibodyTest do
            "a genuine Eq hypothesis should transport"
   end
 
+  # ---- :case-based twins of the {:rewrite}-node tests (Phase C Step 2) -------
+  #
+  # The three tests above that construct a raw `{:rewrite, …}` Core node probe
+  # properties of the TRANSPORT MECHANISM (endpoint fidelity, :Equivalent-
+  # precision, termination). Phase C retires that node; the elaborator now emits
+  # the J/subst transport — a single-branch `:case` on the proof with the arrow
+  # motive `λx y p. (M@x) -> (M@y)` and identity branch, applied to the body.
+  # Each twin below asserts the IDENTICAL soundness property through the :case
+  # vehicle. They run SIDE BY SIDE with the originals while `{:rewrite}` still
+  # round-trips (this commit) — the cross-check that licenses deleting the
+  # originals in the removal commit (they become unconstructable there).
+  #
+  # `transport/4` mirrors the elaborator's `transport_case/4` for CLOSED
+  # ty/motive/l (de Bruijn shifts of closed terms elided).
+  defp transport(proof, ty, motive, l) do
+    scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
+    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
+  end
+
+  test ":case transport over an inductive Equivalent(Nat,Z,S Z) hypothesis lands at motive @ b (not motive @ a)" do
+    sig = base_sig()
+    ctx = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
+
+    # Endpoint-distinguishing motive:  λ x:Nat. Equivalent(Nat, x, Z)
+    motive = {:lam, @nat, {:data, :Equivalent, [@nat], [{:var, 0}, z()]}}
+
+    # transport (h : Eq Nat Z (S Z)) : (motive @ Z) -> (motive @ S Z), applied
+    # to (refl Z : motive @ Z) — result must be motive @ b, never motive @ a.
+    node = {:app, transport({:var, 0}, @nat, motive, z()), {:ctor, :reflexive, [z()]}}
+
+    result = Kernel.infer(ctx, node)
+
+    expected_b = eq_ty(sig, @nat, s(z()), z())
+    expected_a = eq_ty(sig, @nat, z(), z())
+
+    assert {:ok, ^expected_b} = result,
+           "ENDPOINT FIDELITY VIOLATION (:case transport): result was #{inspect(result)}, " <>
+             "expected motive @ b = #{inspect(expected_b)}. If it were motive @ a = " <>
+             "#{inspect(expected_a)}, the case rule read the scrutinee indices in the wrong order."
+
+    refute match?({:ok, ^expected_a}, result),
+           ":case transport landed at motive @ a — endpoints read in the wrong order"
+  end
+
+  test "a :case transport whose proof has a same-shaped non-Eq family type is rejected" do
+    sig = fake_sig()
+
+    # h : Fake(Nat, Z, Z) — byte-shaped like Equivalent(Nat,Z,Z) but a different
+    # family. A `reflexive` branch cannot eliminate it: the kernel keys the
+    # branch constructor's FAMILY (:foreign_ctor), the :case analog of
+    # ensure_eq keying on the :Equivalent atom.
+    fake_val = Eval.eval({:data, :Fake, [@nat], [z(), z()]}, Context.env(Context.empty(sig)))
+    ctx = Context.extend(Context.empty(sig), fake_val)
+
+    node = {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()}
+
+    assert {:error, _} = Kernel.infer(ctx, node),
+           "SOUNDNESS VIOLATION: a reflexive-branch :case eliminated the non-Eq family Fake — " <>
+             "only the genuine Eq family may be eliminated as an equality."
+
+    # Positive control on the SAME signature: a real Eq hypothesis transports.
+    ctx_eq = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), z()))
+
+    assert {:ok, _} =
+             Kernel.infer(ctx_eq, {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()}),
+           "a genuine Eq hypothesis should transport through the :case vehicle"
+  end
+
+  test ":case-transport inference over inductive Eq halts (bounded)" do
+    sig = base_sig()
+    ctx_h = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), z()))
+
+    job = fn ->
+      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()})
+    end
+
+    task = Task.async(job)
+
+    assert Task.yield(task, 5_000) || Task.shutdown(task),
+           ":case transport inference did not return within budget"
+  end
+
   # ---- TERMINATION -----------------------------------------------------------
 
   test "refl-check and rewrite-infer over inductive Eq halt (bounded)" do

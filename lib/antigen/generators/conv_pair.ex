@@ -47,7 +47,7 @@ defmodule Antigen.Generators.ConvPair do
       {2, ret({:lam, {:type, 0}, v(1)}, {:type, 0}, false, "λ-vs-non-λ (109)")},
       # -- Σ-pair / refl (conv_struct?) --
       {2, ret({:pair, v(0), v(1)}, {:pair, v(0), v(1)}, true, "pair reflexive (83)")},
-      {2, ret({:refl, v(0)}, {:refl, v(0)}, true, "refl reflexive (102)")},
+      {2, ret({:ctor, :reflexive, [v(0)]}, {:ctor, :reflexive, [v(0)]}, true, "reflexive-ctor reflexive (102)")},
       # -- β for projections: fst/snd of an actual pair reduce (Eval vfst/vsnd) --
       {2, ret({:fst, {:pair, v(0), v(1)}}, v(0), true, "fst(pair a b) = a (vfst β)")},
       {2, ret({:snd, {:pair, v(0), v(1)}}, v(1), true, "snd(pair a b) = b (vsnd β)")},

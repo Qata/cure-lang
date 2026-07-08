@@ -86,24 +86,24 @@ defmodule Antigen.Generators.DepMatch do
       {2, closed_index({:ctor, :S, [@z]})},
       # extra context variable whose TYPE mentions the scrutinee index — branch
       # refinement specializes it via specialize_branch_context, driving
-      # replace_branch_vars over Eq / Σ / Π type shapes.
-      {2, var_index_extra({:eq, @nat, {:var, 1}, {:var, 1}})},
+      # replace_branch_vars over Equivalent-data / Σ / Π type shapes.
+      {2, var_index_extra({:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]})},
       {2, var_index_extra({:sigma, @nat, vec({:var, 2})})},
       {2, var_index_extra({:pi, @nat, vec({:var, 2})})},
-      # extra context types carrying stuck value-level subterms (λ / pair / refl)
+      # extra context types carrying stuck value-level subterms (λ / pair / reflexive)
       # so specialize_branch_context's replace_branch_vars descends those arms.
-      {2, var_index_extra({:eq, {:pi, @nat, @nat}, {:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}})},
-      {2, var_index_extra({:eq, {:sigma, @nat, @nat}, {:pair, {:var, 1}, {:var, 1}}, {:pair, {:var, 1}, {:var, 1}}})},
-      {2, var_index_extra({:eq, {:eq, @nat, {:var, 1}, {:var, 1}}, {:refl, {:var, 1}}, {:refl, {:var, 1}}})},
+      {2, var_index_extra({:data, :Equivalent, [{:pi, @nat, @nat}], [{:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}]})},
+      {2, var_index_extra({:data, :Equivalent, [{:sigma, @nat, @nat}], [{:pair, {:var, 1}, {:var, 1}}, {:pair, {:var, 1}, {:var, 1}}]})},
+      {2, var_index_extra({:data, :Equivalent, [{:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]}], [{:ctor, :reflexive, [{:var, 1}]}, {:ctor, :reflexive, [{:var, 1}]}]})},
       # two-var frame: a helper context var lets extra_ty carry a STUCK app /
       # projection / prim — replace_branch_vars' app/fst/snd/prim arms.
-      {2, var_index_extra2({:pi, @nat, @nat}, {:eq, @nat, {:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}})},
-      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:fst, {:var, 1}}, {:fst, {:var, 1}}})},
-      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:snd, {:var, 1}}, {:snd, {:var, 1}}})},
-      {2, var_index_extra2({:int_type}, {:eq, {:int_type}, {:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}})},
+      {2, var_index_extra2({:pi, @nat, @nat}, {:data, :Equivalent, [@nat], [{:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}]})},
+      {2, var_index_extra2({:sigma, @nat, @nat}, {:data, :Equivalent, [@nat], [{:fst, {:var, 1}}, {:fst, {:var, 1}}]})},
+      {2, var_index_extra2({:sigma, @nat, @nat}, {:data, :Equivalent, [@nat], [{:snd, {:var, 1}}, {:snd, {:var, 1}}]})},
+      {2, var_index_extra2({:int_type}, {:data, :Equivalent, [{:int_type}], [{:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}]})},
       # a STUCK case over a Bool helper var in an index position — the case arm of
       # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.
-      {2, var_index_extra2(stuck_case_helper(), {:eq, @nat, stuck_case(), stuck_case()})},
+      {2, var_index_extra2(stuck_case_helper(), {:data, :Equivalent, [@nat], [stuck_case(), stuck_case()]})},
       # POLYMORPHIC motive: Γ = [n:Nat, x:a, a:Type0]; case n of Z→x | S→x with
       # motive λv:Nat. a — the result type is the Type-parameter VARIABLE a, so
       # check_motive_wf's infer_type_value_sort takes its neutral-var (nvar) clause
@@ -250,15 +250,23 @@ defmodule Antigen.Generators.DepMatch do
     )
   end
 
-  # case Z of Z→refl(List Nat) | S→refl(List Nat) with motive λv:Nat. Eq Type0
-  # (List Nat) (List Nat). Closed; result type is that Eq. Drives signature-aware
-  # read-back of the param-bearing family type `List Nat`.
+  # case Z of Z→reflexive(Nil) | S→reflexive(Nil) with motive λv:Nat.
+  # Equivalent (List Nat) Nil Nil. Closed; result type is that Equivalent.
+  # (Phase C retarget: the old form equated the TYPE `List Nat` at carrier
+  # Type0 via the primitive {:eq} — inexpressible as the inductive Equivalent,
+  # whose param lives in Type0. The param-bearing family `List Nat` now rides
+  # as Equivalent's PARAM, still driving signature-aware handling of a
+  # param-bearing family type through motive-WF and branch-body checks.)
   @list_nat {:data, :List, [{:data, :Nat, [], []}], []}
+  @nil_ln {:ctor, :Nil, []}
   defp eqtype_motive_case do
-    eqty = {:eq, {:type, 0}, @list_nat, @list_nat}
-    refl_ln = {:refl, @list_nat}
+    eqty = {:data, :Equivalent, [@list_nat], [@nil_ln, @nil_ln]}
+    refl_ln = {:ctor, :reflexive, [@nil_ln]}
+    # claimed type in FLAT params++indices form (reify has no signature to
+    # recover the split, so the inferred type reads back flat)
+    eqty_flat = {:data, :Equivalent, [@list_nat, @nil_ln, @nil_ln], []}
     Gen.return(
-      {[], {:case, @z, {:lam, @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty}
+      {[], {:case, @z, {:lam, @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty_flat}
     )
   end
 
@@ -284,15 +292,18 @@ defmodule Antigen.Generators.DepMatch do
     end)
   end
 
-  # Dependent motive λm.λv. Eq Nat m m — branch bodies are refl at the refined
-  # index (vnil : Eq Nat Z Z → refl Z; vcons : Eq Nat (S n) (S n) → refl (S n)).
+  # Dependent motive λm.λv. Equivalent Nat m m — branch bodies are reflexive at
+  # the refined index (vnil : Equivalent Nat Z Z → reflexive Z; vcons :
+  # Equivalent Nat (S n) (S n) → reflexive (S n)).
   defp var_index(:eq) do
-    eq_ty = fn m -> {:eq, @nat, m, m} end
+    eq_ty = fn m -> {:data, :Equivalent, [@nat], [m, m]} end
+    # claimed type in FLAT params++indices form (reify reads back flat)
+    eq_ty_flat = fn m -> {:data, :Equivalent, [@nat, m, m], []} end
     motive_eq = {:lam, @nat, {:lam, vec({:var, 0}), eq_ty.({:var, 1})}}
-    nil_body = {:refl, @z}
-    cons_body = {:refl, {:ctor, :S, [{:var, 2}]}}
+    nil_body = {:ctor, :reflexive, [@z]}
+    cons_body = {:ctor, :reflexive, [{:ctor, :S, [{:var, 2}]}]}
     term = mk_case({:var, 0}, motive_eq, [{:vnil, 0, nil_body}, {:vcons, 3, cons_body}])
-    Gen.return({[vec({:var, 0}), @nat], term, eq_ty.({:var, 1})})
+    Gen.return({[vec({:var, 0}), @nat], term, eq_ty_flat.({:var, 1})})
   end
 
   # Dependent motive λm.λv. Vec m — branch bodies must inhabit Vec at the refined

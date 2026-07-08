@@ -139,7 +139,7 @@ defmodule Antigen.ShrinkTest do
     # (and mechanically probe-)verified expected output before writing this
     # assertion.
     ctx = [
-      {:eq, {:type, 0}, {:var, 0}, {:var, 2}},   # pos0: local 0 -> abs 1 (pos1); local 2 -> abs 3 (pos3)
+      {:data, :Equivalent, [{:type, 0}], [{:var, 0}, {:var, 2}]},   # pos0: local 0 -> abs 1 (pos1); local 2 -> abs 3 (pos3)
       {:data, :Vec, [], [{:var, 1}]},             # pos1: local 1 -> abs 3 (pos3)
       {:data, :Nat, [], []},                      # pos2: unreferenced — the sole droppable entry
       {:data, :Nat, [], []}                       # pos3
@@ -147,7 +147,7 @@ defmodule Antigen.ShrinkTest do
     a = art({:var, 0}, ctx)
     assert [c] = Antigen.Shrink.candidates_for_test(a)   # only pos2 is unreferenced
     assert c.payload.ctx == [
-      {:eq, {:type, 0}, {:var, 0}, {:var, 1}},    # pos0: local 2 -> local 1 (target abs shifted 3 -> 2)
+      {:data, :Equivalent, [{:type, 0}], [{:var, 0}, {:var, 1}]},    # pos0: local 2 -> local 1 (target abs shifted 3 -> 2)
       {:data, :Vec, [], [{:var, 0}]},             # pos1: local 1 -> local 0 (target abs shifted 3 -> 2)
       {:data, :Nat, [], []}                       # old pos3, now pos2, content unchanged
     ]

@@ -1,22 +1,33 @@
 defmodule Antigen.Generators.Equality do
   @moduledoc """
   Structure-directed generator for the **propositional-equality fragment** —
-  `{:refl, a}`, `{:eq, ty, a, b}` (the `Eq` type former as a `Type 0`
-  proposition), and `{:rewrite, proof, motive, body}`. This is the reachability
-  lever for the kernel's equality paths, which the mode-directed `Generators.Term`
-  never emits (its goal menu has no `Eq` type): `Kernel.infer`'s eq/refl/rewrite
-  clauses + `infer_type_value_sort` (Eq type-formation) + `ensure_eq`, `Eval`'s
-  eq/refl/rewrite evaluation, `Serialize`'s eq/refl/rewrite encode+decode, and
-  `Quote`'s `veq`/`vrefl` reification.
+  the inductive identity type `{:data, :Equivalent, [ty], [a, b]}`, its
+  constructor `{:ctor, :reflexive, …}` (fields-only in checking position,
+  params-on-spine `[ty, a]` in inference position, K6 §E.1), and the J/subst
+  `:case` transport (`{:app, {:case, proof, arrow-motive, [reflexive-branch]},
+  body}`) that replaced the retired primitive `{:refl}`/`{:eq}`/`{:rewrite}`
+  forms (spec 2026-07-04, Phase C). This is the reachability lever for the
+  kernel's equality paths, which the mode-directed `Generators.Term` never
+  emits: Equivalent formation via `infer({:data,…})`, spine-reflexive
+  inference, reflexive checking (`check_ctor_app` + endpoint conversion), and
+  case-transport elimination (`branch_unify` over the reflexive index pair).
 
-  Every term is well-typed **by construction** over the v1 signature in the empty
-  context: operands are closed inhabitants of the numeric / menu-datatype menu,
-  and the claimed `type` is exactly what `infer` returns (verified in the
-  generator's soundness test):
+  Every term is well-typed **by construction** over the v1 signature: operands
+  are closed inhabitants of the numeric / menu-datatype menu, and the claimed
+  `type` is exactly what `infer` returns. All terms stay in the kernel's
+  COHERENT fragment (infer(t)=A ⟹ check(t,A)=:ok): a bare params-on-spine
+  reflexive is deliberately NOT generated at top level, because the kernel's
+  checking-mode `{:ctor}` clause rejects the spine arity (`:ctor_arity`) that
+  its inference mode accepts — a known infer/check asymmetry; spine reflexives
+  appear only in inference positions (case scrutinees).
 
-    * `refl a`                → `Eq ty a a`
-    * `Eq ty a b`            → `Type 0`
-    * `rewrite (refl a) (λ_. Nat) n` → `Nat`  (constant motive, `n : Nat`)
+    * `Equivalent ty a b`                                → `Type 0`
+    * `transport (reflexive ty a) (λ_. Nat) @ n`         → `Nat`
+    * `transport (reflexive ty a) (λ_. Eq ty a a) @ (reflexive a)`
+                                                         → `Equivalent ty a a`
+    * `Equivalent ty s s` (neutral `s`, one-binder ctx)  → `Type 0`
+      (the claimed-vs-inferred conversion walks `s ≡ s` through Conv's
+      neutral paths: nprim / nfst / nsnd / ncase)
   """
   alias Antigen.{Gen, Challenge}
 
@@ -35,7 +46,7 @@ defmodule Antigen.Generators.Equality do
             assay: assay,
             label: :well_typed,
             payload: %{sig: :v1, ctx: ctx, type: type, term: term},
-            note: "propositional equality"
+            note: "propositional equality (inductive Equivalent)"
           )
         )
       end)
@@ -43,73 +54,95 @@ defmodule Antigen.Generators.Equality do
   end
 
   # -- term + its inferred type + the context it lives in ---------------------
-  # Closed shapes carry ctx []; the neutral-refl shapes carry a one-binder ctx so
-  # the subject reduces to a NEUTRAL, which is what drives Conv's neutral paths
-  # (same_neutral_no_delta? / conv_neutral? / conv_branches?) when `check` compares
-  # the two sides of `Eq T a a`.
   defp eq_term do
     Gen.frequency([
-      {3, refl_term()},
       {3, eq_type_term()},
-      {2, rewrite_term()},
-      {3, neutral_refl_term()}
+      {2, transport_nat_term()},
+      {2, checked_refl_transport_term()},
+      {3, neutral_eq_prop_term()}
     ])
   end
 
-  # refl a : Eq ty a a
-  defp refl_term do
-    Gen.bind(inhabitant(), fn {a, ty} -> Gen.return({{:refl, a}, {:eq, ty, a, a}, []}) end)
-  end
-
-  # Eq ty a b : Type 0  (a, b share the same type ty — a well-typed proposition,
-  # true or false)
+  # Equivalent ty a b : Type 0  (a, b share the same type ty — a well-typed
+  # proposition, true or false)
   defp eq_type_term do
     Gen.bind(typed_pair(), fn {a, b, ty} ->
-      Gen.return({{:eq, ty, a, b}, {:type, 0}, []})
+      Gen.return({{:data, :Equivalent, [ty], [a, b]}, {:type, 0}, []})
     end)
   end
 
-  # rewrite (refl a) at (λ_. Nat) in n : Nat  — constant motive, refl proof.
-  defp rewrite_term do
+  # J/subst transport with a constant Nat motive over a spine-reflexive proof:
+  # transport (reflexive ty a) (λ_:ty. Nat) @ n : Nat. Exercises spine-refl
+  # inference (case scrutinee), branch unification, and app elimination.
+  defp transport_nat_term do
     Gen.bind(inhabitant(), fn {a, ty} ->
       Gen.bind(nat_numeral(), fn n ->
-        {{:rewrite, {:refl, a}, {:lam, ty, @nat}, n}, @nat, []}
+        proof = {:ctor, :reflexive, [ty, a]}
+        {{:app, transport(proof, ty, {:lam, ty, @nat}, a), n}, @nat, []}
         |> Gen.return()
       end)
     end)
   end
 
-  # refl over a NEUTRAL subject (a prim / projection / stuck-case of a context
-  # variable). `check`ing `Eq T s s` compares `s` with itself via `conv?`, so a
-  # neutral `s` exercises Conv's neutral machinery. One-binder context.
+  # Same transport skeleton, but the motive's result is an Equivalent type and
+  # the transported body is a CHECKING-position fields-only reflexive:
+  # transport (reflexive ty a) (λ_. Eq ty a a) @ (reflexive a) : Eq ty a a.
+  defp checked_refl_transport_term do
+    Gen.bind(inhabitant(), fn {a, ty} ->
+      proof = {:ctor, :reflexive, [ty, a]}
+      eq_ty = {:data, :Equivalent, [ty], [a, a]}
+      motive = {:lam, ty, eq_ty}
+      body = {:ctor, :reflexive, [a]}
+      # The claimed type uses the FLAT `params ++ indices` spelling: reify
+      # (`Normalise.quote`) has no signature to recover the split, so the
+      # inferred type reads back flat and the claim must match that shape.
+      eq_ty_flat = {:data, :Equivalent, [ty, a, a], []}
+      Gen.return({{:app, transport(proof, ty, motive, a), body}, eq_ty_flat, []})
+    end)
+  end
+
+  # An Equivalent proposition over a NEUTRAL subject (a prim / projection /
+  # stuck-case of a context variable). The assay's claimed-vs-inferred
+  # conversion compares `s` with itself, driving Conv's neutral machinery
+  # (same_neutral_no_delta? / conv_neutral? / conv_branches?). One-binder ctx.
   @int {:int_type}
   @sig_nat {:sigma, @nat, @nat}
 
-  defp neutral_refl_term do
+  defp neutral_eq_prop_term do
     Gen.frequency([
       # prim over an Int variable → conv_neutral? / same_*_no_delta? :nprim spine
       {2,
        Gen.bind(Gen.member_of([:add, :sub, :mul]), fn op ->
-         Gen.bind(int_lit(), fn lit -> neutral_refl({:prim, op, [{:var, 0}, lit]}, @int, [@int]) end)
+         Gen.bind(int_lit(), fn lit -> neutral_eq_prop({:prim, op, [{:var, 0}, lit]}, @int, [@int]) end)
        end)},
-      {1, neutral_refl({:prim, :neg, [{:var, 0}]}, @int, [@int])},
+      {1, neutral_eq_prop({:prim, :neg, [{:var, 0}]}, @int, [@int])},
       # projections of a Σ variable → :nfst / :nsnd
-      {1, neutral_refl({:fst, {:var, 0}}, @nat, [@sig_nat])},
-      {1, neutral_refl({:snd, {:var, 0}}, @nat, [@sig_nat])},
+      {1, neutral_eq_prop({:fst, {:var, 0}}, @nat, [@sig_nat])},
+      {1, neutral_eq_prop({:snd, {:var, 0}}, @nat, [@sig_nat])},
       # stuck case over a Bd variable → :ncase + conv_branches? + conv_branch_bodies?
-      {2, neutral_case_refl()}
+      {2, neutral_case_eq_prop()}
     ])
   end
 
-  defp neutral_refl(subject, ty, ctx), do: Gen.return({{:refl, subject}, {:eq, ty, subject, subject}, ctx})
+  defp neutral_eq_prop(subject, ty, ctx),
+    do: Gen.return({{:data, :Equivalent, [ty], [subject, subject]}, {:type, 0}, ctx})
 
-  defp neutral_case_refl do
+  defp neutral_case_eq_prop do
     Gen.bind(nat_numeral(), fn a ->
       Gen.bind(nat_numeral(), fn b ->
         cse = {:case, {:var, 0}, {:lam, @bd, @nat}, [{:T, 0, a}, {:F, 0, b}]}
-        neutral_refl(cse, @nat, [@bd])
+        neutral_eq_prop(cse, @nat, [@bd])
       end)
     end)
+  end
+
+  # J/subst transport for CLOSED ty/motive/l (de Bruijn shifts of closed terms
+  # elided) — mirrors the elaborator's `transport_case/4`.
+  defp transport(proof, ty, motive, l) do
+    scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
+    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
   end
 
   # -- closed inhabitants paired with their type ------------------------------

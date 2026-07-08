@@ -85,15 +85,33 @@ defmodule Antigen.Generators.Malformed do
   # (`:rewrite_premise`), distinct from the ensure_eq guard above.
   defp rewrite_premise do
     Gen.one_of([
-      # proof refl Z : Eq Nat Z Z; motive λx:Nat.Nat ⇒ expected Nat; body is a Bd
+      # proof reflexive Nat Z : Equivalent Nat Z Z; motive λx:Nat.Nat ⇒ the
+      # transport expects a Nat body; body is a Bd
       Gen.bind(bd_ctor(), fn b ->
-        tagged({:rewrite, {:refl, @z}, {:lam, @nat, @nat}, b}, "rewrite body ill-typed (Nat motive, Bd body)")
+        tagged(
+          {:app, transport({:ctor, :reflexive, [@nat, @z]}, @nat, {:lam, @nat, @nat}, @z), b},
+          "transport body ill-typed (Nat motive, Bd body)"
+        )
       end),
-      # proof refl T : Eq Bd T T; motive λx:Bd.Bd ⇒ expected Bd; body is a Nat
+      # proof reflexive Bd T : Equivalent Bd T T; motive λx:Bd.Bd ⇒ Bd; body is a Nat
       Gen.bind(numeral(), fn n ->
-        tagged({:rewrite, {:refl, {:ctor, :T, []}}, {:lam, @bd, @bd}, n}, "rewrite body ill-typed (Bd motive, Nat body)")
+        tagged(
+          {:app,
+           transport({:ctor, :reflexive, [@bd, {:ctor, :T, []}]}, @bd, {:lam, @bd, @bd},
+             {:ctor, :T, []}), n},
+          "transport body ill-typed (Bd motive, Nat body)"
+        )
       end)
     ])
+  end
+
+  # J/subst transport for CLOSED ty/motive/l (shifts elided) — mirrors the
+  # elaborator's `transport_case/4`; replaced the retired `{:rewrite}` node.
+  defp transport(proof, ty, motive, l) do
+    scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
+    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
   end
 
 # NOTE: the `{:absurd}` family is exercised by this generator's assay test (which
@@ -121,10 +139,15 @@ defmodule Antigen.Generators.Malformed do
     Gen.bind(non_function(), fn f -> tagged({:app, f, @z}, "apply non-function") end)
   end
 
-  # rewrite whose proof does not infer to an equality type.
+  # transport whose proof does not infer to an Equivalent — the reflexive
+  # branch is foreign to the scrutinee's family (:foreign_ctor), the :case
+  # analog of the retired ensure_eq guard.
   defp rewrite_bad_proof do
     Gen.bind(non_eq_proof(), fn pr ->
-      tagged({:rewrite, pr, {:lam, @nat, @nat}, @z}, "rewrite proof not an equality")
+      tagged(
+        {:app, transport(pr, @nat, {:lam, @nat, @nat}, @z), @z},
+        "transport proof not an equality"
+      )
     end)
   end
 

@@ -159,6 +159,33 @@ defmodule Cure.Core.ValidatorTest do
       assert {:error, {:final_core_violation, rejections}} = Kernel.check_def(env, :eqty)
       assert Enum.any?(rejections, &(&1.clause == :no_eq_node))
     end
+
+    test "a violating node in the declared TYPE is caught too — post-retirement probe" do
+      # Phase C twin of the legacy-node test above (added FIRST, per the
+      # add-then-retire protocol): once the primitive `{:eq}`/`{:refl}` kernel
+      # clauses are removed, that fixture can no longer REACH the validator —
+      # `check_def` kernel-typechecks type and body BEFORE the final-Core scan,
+      # and a primitive node is then unknown grammar there. The wiring property
+      # it proved (the scan covers the declared TYPE, not just the body) is
+      # re-proved here with current-grammar nodes: `natalias`'s TYPE is a
+      # bare-atom `{:global, …}` reference (a `qualified_syms` violation), its
+      # body a hole (kernel-accepted at any goal; only a `no_hole` WARN under
+      # this config). Under a `qualified_syms: :reject` override the rejection
+      # can therefore only originate in the type_term scan.
+      {:ok, env0} = Cure.Elab.Program.elaborate("mod M\nend\n")
+
+      env =
+        env0
+        |> Env.add_def(:natty, {:type, 0}, {:data, :Nat, [], []})
+        |> Env.add_def(:natalias, {:global, :natty}, {:hole, "inhabit"})
+
+      cfg = Map.put(Validator.wave0_config(), :qualified_syms, :reject)
+      Application.put_env(:cure, :final_core_config, cfg)
+      on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)
+
+      assert {:error, {:final_core_violation, rejections}} = Kernel.check_def(env, :natalias)
+      assert Enum.any?(rejections, &(&1.clause == :qualified_syms))
+    end
   end
 
   describe "release_config/0 (the strict ratchet, K3)" do

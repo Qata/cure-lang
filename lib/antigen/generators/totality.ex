@@ -102,8 +102,9 @@ defmodule Antigen.Generators.Totality do
   @doc """
   Structural recursion whose base (`Z`) branch carries a rich, call-free subterm —
   every non-application Core former the size-change walker descends through:
-  `pair`/`fst`/`snd`, `eq`/`refl`/`rewrite`, `pi`/`sigma`, and a variable-headed
-  application. The lone self-call `h y` stays structural, so the def is certified;
+  `pair`/`fst`/`snd`, the inductive `Equivalent`/`reflexive`/`:case`-transport
+  (which replaced the retired `eq`/`refl`/`rewrite`), `pi`/`sigma`, and a
+  variable-headed application. The lone self-call `h y` stays structural, so the def is certified;
   the enrichment exists purely to exercise `Certificate.walk_node`'s per-former arms.
   Label `:terminating`.
   """
@@ -112,9 +113,12 @@ defmodule Antigen.Generators.Totality do
     base =
       {:pair, {:fst, {:var, 0}},
        {:pair, {:snd, {:var, 0}},
-        {:pair, {:eq, {:var, 0}, {:var, 0}, {:var, 0}},
-         {:pair, {:refl, {:var, 0}},
-          {:pair, {:rewrite, {:refl, {:var, 0}}, {:lam, @nat, {:var, 0}}, {:var, 0}},
+        {:pair, {:data, :Equivalent, [{:var, 0}], [{:var, 0}, {:var, 0}]},
+         {:pair, {:ctor, :reflexive, [{:var, 0}]},
+          {:pair,
+           {:app,
+            {:case, {:ctor, :reflexive, [{:var, 0}]}, {:lam, @nat, {:var, 0}},
+             [{:reflexive, 1, {:lam, @nat, {:var, 0}}}]}, {:var, 0}},
            {:pair, {:pi, @nat, @nat},
             {:pair, {:sigma, @nat, @nat}, {:app, {:var, 0}, {:var, 0}}}}}}}}}
 

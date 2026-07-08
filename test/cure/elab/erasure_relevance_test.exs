@@ -223,5 +223,30 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       assert Erase.erase(env, {:eq, {:data, :Dec, [], []}, {:ctor, :Causal, []}, {:ctor, :Causal, []}}) ==
                {:ctor, :cure_eq, []}
     end
+
+    # Phase C twins (add-then-retire): the primitive proof forms retire; proof
+    # irrelevance must survive on the inductive vehicle. `reflexive`'s witness
+    # is an erased field (nullary at runtime), and the J/subst `:case`
+    # transport is a collapsible-family elimination whose PROOF vanishes at
+    # erase — swapping proofs changes nothing observable.
+    test "two different :case-transport proofs erase to the same runtime term" do
+      env = Cure.Core.Builtins.seed(Env.empty(), MapSet.new())
+      body = {:ctor, :Causal, []}
+      motive = {:lam, {:type, 0}, body}
+      id_branch = {:reflexive, 1, {:lam, {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
+      t1 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}, motive, [id_branch]}, body}
+      t2 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Causal, []}]}, motive, [id_branch]}, body}
+
+      assert Erase.erase(env, t1) == Erase.erase(env, t2)
+      # The collapsible case is GONE from the runtime term (the proof with it);
+      # what remains is the identity redex over the erased body.
+      assert {:app, {:lam, _dom, {:var, 0}}, erased_body} = Erase.erase(env, t1)
+      assert erased_body == Erase.erase(env, body)
+    end
+
+    test "a reflexive proof value is runtime-free (erased witness => nullary ctor)" do
+      env = Cure.Core.Builtins.seed(Env.empty(), MapSet.new())
+      assert Erase.erase(env, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}) == {:ctor, :reflexive, []}
+    end
   end
 end

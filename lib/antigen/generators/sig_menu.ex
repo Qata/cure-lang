@@ -114,6 +114,18 @@ defmodule Antigen.Generators.SigMenu do
         [Inductive.ctor(:tg0, [], [{:int_lit, 0}]), Inductive.ctor(:tg1, [], [{:int_lit, 1}])])
       |> Inductive.declare(Inductive.family(:Tgf, [], [{:i, {:float_type}}], 0),
         [Inductive.ctor(:tgf0, [], [{:float_lit, 0.0}]), Inductive.ctor(:tgf1, [], [{:float_lit, 1.5}])])
+      # Equivalent : (a:Type) -> a -> a -> Type, sole ctor reflexive (erased
+      # witness) — the SAME canonical identity family real Cure seeds via
+      # `Cure.Core.Builtins.seed/2` (byte-mirror of core/builtins.ex's
+      # eq_family/eq_ctors). Required since the primitive `{:eq}`/`{:refl}`/
+      # `{:rewrite}` Core forms retired (Phase C): Generators.Equality now emits
+      # inductive Equivalent propositions and J/subst `:case` transports, which
+      # need the family in the menu signature.
+      |> Inductive.declare(
+        Inductive.family(:Equivalent, [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0),
+        [Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])]
+      )
+      |> Inductive.register_builtin(:eq, :Equivalent)
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}

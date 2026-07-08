@@ -30,4 +30,27 @@ defmodule Cure.Elab.EmitHoleFirewallTest do
     env = Env.empty() |> Env.add_def(:clean, {:type, 0}, {:int_lit, 42}, [])
     assert {:ok, _forms} = Emit.compile_forms(env, :M, [:clean])
   end
+
+  # Phase C twins (add-then-retire): the `{:rewrite}` node retires; the erased
+  # position a hole can hide in is now the PROOF SCRUTINEE of the J/subst
+  # `:case` transport — `Erase` drops the whole collapsible case (single
+  # all-erased-fields `reflexive` branch), so the pre-erase `has_hole?` gate is
+  # still all that stands between an unfilled proof obligation and a shipped
+  # binary. Same #102 property, new vehicle.
+  defp case_transport_with_hole_proof do
+    id_branch = {:reflexive, 1, {:lam, {:type, 0}, {:var, 0}}}
+    {:app, {:case, {:hole, "p"}, {:type, 0}, [id_branch]}, {:int_lit, 0}}
+  end
+
+  test "emit refuses a hole hiding in the erased proof scrutinee of a :case transport" do
+    env = Env.empty() |> Env.add_def(:tainted3, {:type, 0}, case_transport_with_hole_proof(), [])
+    assert {:error, {:unfilled_hole, :tainted3}} = Emit.compile_forms(env, :M3, [:tainted3])
+  end
+
+  test "compile_and_load refuses a :case-transport proof hole too (same gate)" do
+    env = Env.empty() |> Env.add_def(:tainted4, {:type, 0}, case_transport_with_hole_proof(), [])
+
+    assert {:error, {:unfilled_hole, :tainted4}} =
+             Emit.compile_and_load(env, module: :M4, functions: [:tainted4])
+  end
 end
