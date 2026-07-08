@@ -4,7 +4,7 @@ mod Std.Nat
   ## `Nat` is intentionally small: it exists so indexed stdlib types can use a
   ## trusted, total unary natural-number index.
 
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   @builtin(:nat)
   type Nat = Z | S(Nat)

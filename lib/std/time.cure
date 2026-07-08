@@ -38,7 +38,7 @@ mod Std.Time
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :system
+  @group(:system)
 
   ## A point in time, stored as Unix epoch microseconds.
   rec Instant

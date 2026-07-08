@@ -18,7 +18,7 @@ mod Std.Supervisor
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :concurrency
+  @group(:concurrency)
 
   ## Start a compiled Cure supervisor module. Returns the top-level
   ## supervisor pid on success.

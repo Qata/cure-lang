@@ -18,7 +18,7 @@ mod Std.App
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :system
+  @group(:system)
 
   ## Ensure the application and all of its dependencies are started.
   ## Returns `:ok` whether or not the application was already running.

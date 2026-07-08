@@ -41,12 +41,15 @@ All source line references point at `lib/std/<module>.cure`.
 
 ## Module groups and selective preload
 
-Every stdlib module carries a single nullary declaration near the top
+Every stdlib module carries a single module-level decorator near the top
 of its source that assigns it to a group:
 
 ```cure path=null start=null
-fn __group__() -> Atom = :collections
+@group(:collections)
 ```
+
+The compiler lowers `@group(:g)` to a `-group([:g]).` BEAM attribute, so
+the tag is inert metadata rather than an exported function.
 
 `Cure.Stdlib.Preload` scans `lib/std/*.cure` at Elixir compile time
 (tracked via `@external_resource`), builds a static
@@ -70,7 +73,7 @@ for `Cure.Stdlib.Preload.known_groups/0`):
   `Std.Show`, `Std.Functor`, `Std.Refine`, `Std.Proof`. `Std.Proof` is the one
   module that relies on the compile-time default (`:core`); `proof`
   containers only admit legacy proof-shaped returns, so no explicit
-  `__group__/0` lives in its source.
+  `@group` decorator lives in its source.
 - `:collections` -- `Std.List`, `Std.Map`, `Std.Set`, `Std.Vector`,
   `Std.Pair`, `Std.Match`, `Std.Access`, `Std.Iter`.
 - `:text` -- `Std.String`, `Std.Regex`, `Std.Json`.

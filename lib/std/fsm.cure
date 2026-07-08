@@ -29,7 +29,7 @@ mod Std.Fsm
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :concurrency
+  @group(:concurrency)
 
   ## Spawn an FSM instance from a compiled FSM module atom. The
   ## spawning process is recorded as the FSM's caller automatically;

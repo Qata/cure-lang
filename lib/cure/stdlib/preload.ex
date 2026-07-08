@@ -28,16 +28,17 @@ defmodule Cure.Stdlib.Preload do
 
   The set of stdlib modules is *not* hard-coded. At Elixir compile time
   this module walks `lib/std/*.cure`, extracts the declared `mod Std.X`
-  name, and the first `fn __group__() -> Atom = :<group>` declaration
-  in each source (see `docs/STDLIB.md`). Modules without a `__group__/0`
-  declaration are assigned to `:core` by default.
+  name, and the first `@group(:<group>)` module-level decorator in each
+  source (see `docs/STDLIB.md`). Modules without a `@group` decorator are
+  assigned to `:core` by default.
 
   The resulting `%{module => group}` map is baked into the module via
   `@external_resource` so any change to `lib/std/*.cure` invalidates the
   compile cache. When `lib/std/` is not available (e.g. a packaged
   release), `stdlib_modules/1` falls back to scanning
-  `_build/cure/ebin` for `Cure.Std.*.beam` files and calling the
-  exported `__group__/0` on each module.
+  `_build/cure/ebin` for `Cure.Std.*.beam` files and reading each one's
+  `-group([:g]).` BEAM attribute directly (no code loading), with a
+  legacy fall-back to an exported `__group__/0` on older packaged beams.
 
   ## Kinds
 
@@ -100,7 +101,7 @@ defmodule Cure.Stdlib.Preload do
   end
 
   @mod_regex ~r/^\s*(?:mod|proof|actor|fsm|sup|app)\s+([A-Za-z_][\w\.]*)/m
-  @group_regex ~r/^\s*fn\s+__group__\s*\(\s*\)\s*->\s*Atom\s*=\s*:([a-z_][a-z0-9_]*)/m
+  @group_regex ~r/^\s*@group\(\s*:([a-z_][a-z0-9_]*)\s*\)/m
 
   # Cure stdlib modules are emitted as plain Erlang-style atoms
   # (`:"Cure.Std.List"`), not as Elixir-prefixed atoms
@@ -258,7 +259,7 @@ defmodule Cure.Stdlib.Preload do
       iex> Cure.Stdlib.Preload.stdlib_modules(:none)
       []
 
-      # :core returns modules tagged :core in their `__group__/0`:
+      # :core returns modules tagged :core via `@group(:core)`:
       iex> :"Cure.Std.Core" in Cure.Stdlib.Preload.stdlib_modules(:core)
       true
   """
@@ -407,25 +408,46 @@ defmodule Cure.Stdlib.Preload do
           |> Path.basename(".beam")
           |> String.to_atom()
 
-        load_if_present(module, path)
-
-        group =
-          if function_exported?(module, :__group__, 0) do
-            try do
-              module.__group__()
-            rescue
-              _ -> :core
-            catch
-              _, _ -> :core
-            end
-          else
-            :core
-          end
-
-        {module, group}
+        {module, group_from_beam(module, path)}
       end)
     else
       []
+    end
+  end
+
+  # Read a module's group from its `-group([:g]).` BEAM attribute *without*
+  # loading the beam (the chunk is metadata, not code). Falls back to the
+  # legacy `__group__/0` export only for stale packaged beams that predate
+  # the `@group` decorator, and to `:core` as the final default.
+  defp group_from_beam(module, path) do
+    case :beam_lib.chunks(String.to_charlist(path), [:attributes]) do
+      {:ok, {_module, [attributes: attrs]}} ->
+        case Keyword.get(attrs, :group) do
+          [g] when is_atom(g) -> g
+          _ -> legacy_group_from_export(module, path)
+        end
+
+      _ ->
+        legacy_group_from_export(module, path)
+    end
+  end
+
+  # Legacy fallback for beams compiled before `@group` existed: load the
+  # module and call its exported `__group__/0`. A missing export or a raising
+  # call classifies as `:core`.
+  defp legacy_group_from_export(module, path) do
+    load_if_present(module, path)
+
+    if function_exported?(module, :__group__, 0) do
+      try do
+        module.__group__()
+      rescue
+        _ -> :core
+      catch
+        _, _ -> :core
+      end
+    else
+      :core
     end
   end
 

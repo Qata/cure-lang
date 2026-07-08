@@ -27,7 +27,7 @@ mod Std.Http
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :network
+  @group(:network)
 
   ## HTTP response: status code, response headers, and body.
   rec Response

@@ -25,7 +25,7 @@ mod Std.Proof
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## `n + 0 = n`. Induction on `n`: the `Z` case is reflexive, and the
   ## `S` case rewrites by the inductive hypothesis before closing on

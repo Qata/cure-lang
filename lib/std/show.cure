@@ -20,7 +20,7 @@ mod Std.Show
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## Convert a value of any `Show`-able type to its string representation.
   proto Show(T)

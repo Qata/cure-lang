@@ -21,7 +21,7 @@ mod Std.NonEmpty
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :collections
+  @group(:collections)
 
   ## A first element (`head`) and everything after it (`tail`, possibly empty).
   type NonEmpty(T) = NonEmpty(T, List(T))

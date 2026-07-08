@@ -37,7 +37,7 @@ mod Std.List
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :collections
+  @group(:collections)
 
   # -- Basic queries ----------------------------------------------------------
 

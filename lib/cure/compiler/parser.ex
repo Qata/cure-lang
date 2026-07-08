@@ -53,7 +53,7 @@ defmodule Cure.Compiler.Parser do
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
   # it always parses as a standalone `{:decorator, ...}` node so downstream
   # stages (codegen, preload) can read it as module metadata. `@group(:g)`
-  # replaces the historical `fn __group__() -> Atom = :g` marker.
+  # replaces the historical marker-function hack for stdlib preload groups.
   @module_level_decorators ~w(group)
 
   @type t :: %__MODULE__{}

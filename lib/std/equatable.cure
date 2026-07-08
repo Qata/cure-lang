@@ -20,7 +20,7 @@ mod Std.Equatable
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## Equality between two `T` values.
   proto Equatable(T)

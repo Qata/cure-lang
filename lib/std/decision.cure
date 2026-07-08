@@ -18,7 +18,7 @@ mod Std.Decision
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## The empty type: it has no constructors, so it has no values. That is exactly
   ## what makes it useful -- a function `P -> Empty` can only be written when `P`

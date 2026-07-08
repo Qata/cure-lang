@@ -7,7 +7,7 @@ mod Std.Bounded
 
   use Std.Nat
 
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   type Bounded indices (n: Nat)
     First : Bounded(S(m))

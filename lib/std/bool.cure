@@ -7,7 +7,7 @@ mod Std.Bool
   ## `bool_elim` primitive). Erasure lowers its constructors to native BEAM
   ## atoms `false`/`true`.
 
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   @builtin(:bool)
   type Bool = False | True

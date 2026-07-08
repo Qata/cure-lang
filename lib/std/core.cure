@@ -31,7 +31,7 @@ mod Std.Core
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   # -- Combinators ------------------------------------------------------------
 

@@ -21,7 +21,7 @@ mod Std.Refine
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## Non-zero integer (`Int` minus zero).
   type NonZero = {x: Int | x != 0}

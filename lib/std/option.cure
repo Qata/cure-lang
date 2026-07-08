@@ -26,7 +26,7 @@ mod Std.Option
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :option
+  @group(:option)
 
   ## Build a `Some(value)` Option.
   fn some(value: T) -> Option(T) = Some(value)

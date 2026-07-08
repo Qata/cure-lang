@@ -15,7 +15,7 @@ mod Std.Functor
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## `Functor(F)` lifts an arbitrary function `A -> B` to an
   ## endo-transformation on a container `F`.

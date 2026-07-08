@@ -26,7 +26,7 @@ mod Std.Actor
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :concurrency
+  @group(:concurrency)
 
   ## Spawn a new actor instance from a compiled actor module atom.
   ## The spawning process is recorded as the actor's caller

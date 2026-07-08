@@ -27,7 +27,7 @@ mod Std.String
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :text
+  @group(:text)
 
   # -- Basic operations -------------------------------------------------------
 

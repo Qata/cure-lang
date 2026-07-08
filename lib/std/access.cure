@@ -44,7 +44,7 @@ mod Std.Access
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :collections
+  @group(:collections)
 
   # -- FFI primitives --------------------------------------------------------
 

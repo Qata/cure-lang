@@ -107,15 +107,14 @@ defmodule Cure.Elab.Program do
   # A module must not bind the same top-level function name twice: `Env.add_def`
   # is a silent `Map.put` overwrite, so a duplicate would let a program typecheck
   # against one body and run another. Every real dependent language rejects this.
-  # Separate signatures parse as `:type_annotation` (not `:function_def`) and
-  # mutual-recursion `__group__` wrappers are dropped by `declarations/1`, so
-  # counting `:function_def` names has no sig+body / group false positives.
+  # Separate signatures parse as `:type_annotation` (not `:function_def`), so
+  # counting `:function_def` names has no sig+body false positives.
   @spec check_no_duplicate_defs(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_defs(ast) do
     extract = fn
       {:function_def, meta, _body} ->
         case Keyword.get(meta, :name) do
-          name when is_binary(name) and name != "__group__" -> [name]
+          name when is_binary(name) -> [name]
           _ -> []
         end
 
@@ -158,7 +157,6 @@ defmodule Cure.Elab.Program do
     |> Enum.flat_map(fn
       {:function_def, meta, _body} ->
         case Keyword.get(meta, :name) do
-          "__group__" -> []
           name when is_binary(name) -> [String.to_atom(name)]
           _ -> []
         end
@@ -391,9 +389,8 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp declarations({:function_def, meta, body}) when is_list(meta) do
-    if Keyword.get(meta, :name) == "__group__", do: [], else: [{:function_def, meta, body}]
-  end
+  defp declarations({:function_def, meta, body}) when is_list(meta),
+    do: [{:function_def, meta, body}]
 
   defp declarations({tag, _meta, _body} = node) when tag in [:container, :indexed_type], do: [node]
 

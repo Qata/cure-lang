@@ -2,7 +2,7 @@ defmodule Cure.Elab.BuiltinPreludeSeedTest do
   use ExUnit.Case, async: true
   alias Cure.Core.{Env, Inductive, Builtins}
 
-  @bool_src "mod Std.Bool\n  fn __group__() -> Atom = :core\n  @builtin(:bool)\n  type Bool = False | True\n"
+  @bool_src "mod Std.Bool\n  @group(:core)\n  @builtin(:bool)\n  type Bool = False | True\n"
 
   test "compiling Std.Bool's own prelude source registers :bool" do
     {:ok, env} = Cure.Elab.Program.elaborate(@bool_src)

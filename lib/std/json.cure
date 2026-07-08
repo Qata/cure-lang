@@ -23,7 +23,7 @@ mod Std.Json
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :text
+  @group(:text)
 
   ## Key/value pair inside a JSON object. Named rather than using a
   ## raw tuple type so the ADT surface stays simple.

@@ -52,7 +52,7 @@ mod Std.Iter
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :collections
+  @group(:collections)
 
   type StepToken = Step
   type Iter(a) = Iter(StepToken -> Option(IterStep(a)))

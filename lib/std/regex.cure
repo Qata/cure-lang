@@ -35,7 +35,7 @@ mod Std.Regex
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :text
+  @group(:text)
 
   ## Opaque compiled regex handle.
   rec Regex

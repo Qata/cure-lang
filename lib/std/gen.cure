@@ -23,7 +23,7 @@ mod Std.Gen
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :test
+  @group(:test)
 
   # -- Primitive randomness ---------------------------------------------------
 

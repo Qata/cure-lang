@@ -16,7 +16,7 @@ mod Std.Ord
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## Three-way ordering result.
   type Ordering = LessThan | EqualTo | GreaterThan

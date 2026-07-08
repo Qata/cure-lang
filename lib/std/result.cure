@@ -29,7 +29,7 @@ mod Std.Result
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :option
+  @group(:option)
 
   ## Build an `Ok(value)` Result.
   fn ok(value: T) -> Result(T, E) = Ok(value)

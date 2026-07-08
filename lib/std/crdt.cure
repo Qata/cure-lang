@@ -46,7 +46,7 @@ mod Std.CRDT
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :system
+  @group(:system)
 
   ## Grow-only counter. Per-replica counts are summed on read.
   rec GCounter

@@ -23,7 +23,7 @@ mod Std.Io
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :system
+  @group(:system)
 
   ## Print a string to stdout without a trailing newline.
   ## Wraps `:io.put_chars/1`.

@@ -186,7 +186,7 @@ Accepted `preload` values:
 See `Cure.Stdlib.Preload.known_groups/0` for the list of valid group
 atoms (`:core`, `:collections`, `:text`, `:numeric`, `:system`,
 `:concurrency`, `:option`, `:test`, `:network`). Every stdlib module
-carries a `fn __group__() -> Atom = :<group>` declaration that assigns
+carries a `@group(:<group>)` module-level decorator that assigns
 it to exactly one group; `docs/STDLIB.md` lists the current
 membership.
 

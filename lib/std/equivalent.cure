@@ -28,7 +28,7 @@ mod Std.Equivalent
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  fn __group__() -> Atom = :core
+  @group(:core)
 
   ## The identity type. The `@builtin(:eq)` decorator binds this declaration to
   ## the kernel's canonical identity family, so `Equivalent` and `reflexive` are

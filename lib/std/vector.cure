@@ -9,7 +9,7 @@ mod Std.Vector
   use Std.Nat
   use Std.Bounded
 
-  fn __group__() -> Atom = :collections
+  @group(:collections)
 
   type Vector(a: Type) indices (n: Nat)
     empty : Vector(a, Z)
