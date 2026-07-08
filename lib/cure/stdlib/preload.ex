@@ -122,6 +122,41 @@ defmodule Cure.Stdlib.Preload do
                         {module, group}
                       end)
 
+  # Dependency maps baked at compile time via DepGraph (design spec
+  # 2026-07-08-auto-import-order §3.3): order-only (`use` edges) and full
+  # closure (`use` + qualified-call + auto-prelude). Keys/values are
+  # runtime module atoms (:"Cure.Std.X"). Empty when lib/std was absent
+  # at compile time (packaged releases) — consumers degrade to plain
+  # selection in that case.
+  {order_map, closure_map} =
+    (fn ->
+       # No `known_modules:` needed here: the compile set IS the full
+       # stdlib (`@stdlib_sources` already lists every `lib/std/*.cure`
+       # file), so `DepGraph.scan/2`'s own AST-derived `modules` map
+       # already covers every stdlib module name -- there is nothing
+       # out-of-set left for `known_modules` to add. (Contrast a scan
+       # over a strict subset, or user files needing to recognize
+       # `Std.*` qualified calls as legitimate closure deps -- that's
+       # the scenario `known_modules` exists for; it isn't this one.)
+       case Cure.Compiler.DepGraph.scan(@stdlib_sources) do
+         {:ok, graph} ->
+           to_atoms = fn map ->
+             Map.new(map, fn {k, vs} ->
+               {String.to_atom("Cure." <> k), Enum.map(vs, &String.to_atom("Cure." <> &1))}
+             end)
+           end
+
+           {to_atoms.(Cure.Compiler.DepGraph.order_deps_map(graph)),
+            to_atoms.(Cure.Compiler.DepGraph.closure_deps_map(graph))}
+
+         {:error, _} ->
+           {%{}, %{}}
+       end
+     end).()
+
+  @std_order_deps order_map
+  @std_closure_deps closure_map
+
   # ---------------------------------------------------------------------------
   # Public API
   # ---------------------------------------------------------------------------
@@ -193,6 +228,25 @@ defmodule Cure.Stdlib.Preload do
   """
   @spec module_groups() :: %{module() => group()}
   def module_groups, do: @std_module_groups
+
+  @doc "Baked `use`-only dependency map (module atoms). Empty in beams-only deployments."
+  @spec module_order_deps() :: %{module() => [module()]}
+  def module_order_deps, do: @std_order_deps
+
+  @doc "Baked full closure dependency map (use + qualified calls + auto-prelude)."
+  @spec module_closure_deps() :: %{module() => [module()]}
+  def module_closure_deps, do: @std_closure_deps
+
+  @doc """
+  `stdlib_modules(kind)` expanded to its dependency closure over the baked
+  closure map. Selection semantics are unchanged — closure only adds the
+  modules the selection needs at runtime. Degrades to the plain selection
+  when the baked maps are empty (beams-only deployments).
+  """
+  @spec closure_modules(kind()) :: [module()]
+  def closure_modules(kind) do
+    Cure.Compiler.DepGraph.closure(@std_closure_deps, stdlib_modules(kind))
+  end
 
   @doc """
   Return the list of stdlib modules matching `kind`.
@@ -382,9 +436,16 @@ defmodule Cure.Stdlib.Preload do
   defp load_stdlib([], _kind), do: :ok
 
   defp load_stdlib(candidate_dirs, kind) do
-    Enum.each(stdlib_modules(kind), fn module ->
+    Enum.each(ordered_closure_modules(kind), fn module ->
       load_from_candidates(module, candidate_dirs)
     end)
+  end
+
+  # Closure-expanded selection in dependency (use-edge) order. toposort/2
+  # is SCC-tolerant, so this always yields a complete deterministic list
+  # even if a cycle ever appears in the baked map.
+  defp ordered_closure_modules(kind) do
+    Cure.Compiler.DepGraph.toposort(@std_order_deps, closure_modules(kind))
   end
 
   defp load_from_candidates(module, candidate_dirs) do
@@ -415,7 +476,7 @@ defmodule Cure.Stdlib.Preload do
 
       source_dir ->
         if compiler_available?() do
-          Enum.each(stdlib_modules(kind), fn module ->
+          Enum.each(ordered_closure_modules(kind), fn module ->
             unless module_loaded?(module) do
               jit_compile_module(module, source_dir)
             end

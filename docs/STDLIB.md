@@ -83,6 +83,15 @@ for `Cure.Stdlib.Preload.known_groups/0`):
 - `:test` -- `Std.Test`, `Std.Gen`.
 - `:network` -- `Std.Http`.
 
+Groups are **selection tags only** — they say *which* modules a `kind:`
+pulls in, never in what order. Compile order and load closure are automatic:
+the build derives them from the dependency graph (`Cure.Compiler.DepGraph`
+— `use` edges order compilation; `use` + qualified-call edges define the
+runtime closure), and `preload(kind:)` expands a selection to everything it
+needs at runtime, so e.g. selecting `:collections` also loads the `:core`
+modules its members call. See
+`docs/superpowers/specs/2026-07-08-auto-import-order-design.md`.
+
 The REPL reads a `.cure.repl.toml` file at startup (project-local
 wins over the home-wide fallback) and threads the resolved kind
 through `Cure.Stdlib.Preload.preload/1` and
