@@ -366,3 +366,31 @@ the primitive retirement (Phase B/C, `no_eq_node` clause) is a faithfulness
 migration **gated on K6** (hence on the grade machinery). It joins K6/K12‑Sym/K7
 as the deferred grade+representation modernization — surfaced to the operator as
 the campaign‑state finding. `no_eq_node` stays `:off`.
+
+## Phase-B encoding amendment (2026-07-08, post-B1 empirical STOP)
+
+The "re-elaborate the body inside the refl branch" prescription (from
+`c635e8c`'s diagnosis) is UNIMPLEMENTABLE for propositional rewrites, proven
+empirically during B1: `Equivalent`'s single ctor binds both index positions
+to one witness, so `build_motive` abstracts BOTH endpoints and the refl-branch
+goal demands `a ≡ b` definitionally in-branch — false precisely when a rewrite
+is needed (`plus_zero_right`: goal became `Equivalent(Nat, S(plus(n,Z)), S(n))`,
+a conversion failure; the endpoint is stuck-computed, so the index equation
+degrades to `:undecided` and no substitution occurs).
+
+**Adopted encoding — the standard J/subst transport** (canonical in
+Agda/Lean, where `subst`/`Eq.mpr` derive exactly this way from J):
+
+```
+transport = {:case, proof, λ(x y p). (motive@x) -> (motive@y), [reflexive(w) -> λh. h]}
+result    = {:app, transport, body}     # body elaborated OUTSIDE at motive@A, unchanged
+```
+
+Verdict-preserving by construction (the body is still checked at the identical
+`body_expected = motive@A`; only the eliminator node changes), no de Bruijn
+body-shift, dodges the indexed-motive reify gap (motive result only ever
+`Eval.apply`-ed). This is a faithful instantiation of locked Decision 3
+("single-branch dependent match on the proof carrying the motive
+`rewrite_plan` computes") — the branch body is the identity, and the motive is
+the arrow form. All seven producer sites reduce to one identity-transport
+helper.
