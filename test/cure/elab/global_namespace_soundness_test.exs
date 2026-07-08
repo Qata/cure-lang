@@ -75,16 +75,27 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
       File.cp_r!(real_src, tmp)
 
       # `import_source_path/1` lowercases the module tail: Std.CollA -> colla.cure.
+      # `dmeet` is a SECOND colliding name (also in collb.cure), a total, structural
+      # (certifiable) function on `Dec`. The certificate-survival test below reaches
+      # it QUALIFIED from the importing module's own GADT index, where a conversion
+      # must δ-reduce it.
       File.write!(Path.join(tmp, "colla.cure"), """
       mod Std.CollA
         fn helper(x: Nat) -> Nat = Z()
         fn lonely_helper(x: Nat) -> Nat = Z()
+        type Dec = DDec | DCau
+        fn dmeet(a: Dec, b: Dec) -> Dec = match a
+          DDec() -> match b
+            DDec() -> DDec()
+            DCau() -> DCau()
+          DCau() -> DCau()
       end
       """)
 
       File.write!(Path.join(tmp, "collb.cure"), """
       mod Std.CollB
         fn helper(x: Nat) -> Nat = S(Z())
+        fn dmeet(a: Nat, b: Nat) -> Nat = a
       end
       """)
 
@@ -133,6 +144,22 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
       "mod P\n  use Std.CollA\n  fn f() -> Nat = lonely_helper(Z())\nend\n"
     end
 
+    # `hsq(x, y) : H(dm(DDec, DDec))` must convert to `H(DDec)` for `hnd`. `dm` is a
+    # local total wrapper whose body calls the colliding `dmeet` by its QUALIFIED name
+    # `Std.CollA.dmeet` (bare `dmeet` is ambiguous — CollA + CollB — so qualified is the
+    # only way to reach it). The conversion `dm(DDec, DDec) ≡ DDec` succeeds only if δ
+    # can unfold through `dm` into the re-keyed `Std.CollA#dmeet` — i.e. that colliding
+    # def is still certified total under its qualified key.
+    defp fixture_certificate_survives do
+      "mod P\n  use Std.CollA\n  use Std.CollB\n" <>
+        "  fn dm(a: Dec, b: Dec) -> Dec = Std.CollA.dmeet(a, b)\n" <>
+        "  type H indices (d: Dec)\n" <>
+        "    hmk : H(DDec)\n" <>
+        "    hsq : H(d1) -> H(d2) -> H(dm(d1, d2))\n" <>
+        "    hnd : H(DDec) -> H(DCau)\n" <>
+        "  fn f(x: H(DDec), y: H(DDec)) -> H(DCau) = hnd(hsq(x, y))\nend\n"
+    end
+
     test "bare call of a doubly-imported name is an ambiguity error, not last-merge-wins" do
       # TODAY: silently binds the last-merged helper -> {:ok, _}
       # AFTER: {:error, {:ambiguous_name, :helper, mods}} with both modules listed
@@ -169,6 +196,16 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
       refute Enum.any?(Map.keys(env.defs), fn k ->
                String.ends_with?(Atom.to_string(k), "#lonely_helper")
              end)
+    end
+
+    test "a certified-total colliding def stays δ-reducible under its re-keyed qualified name" do
+      # `dmeet` is certified total in CollA (type-level via G's index) and collides
+      # with CollB's `dmeet`, so it is re-keyed to `Std.CollA#dmeet`. The importing
+      # module's `need(seqg(x, y))` type-checks ONLY if that certificate survives the
+      # re-key (δ must reduce `dmeet(DDec, DDec)` to `DDec`). Regression cover for
+      # Task 2's `rekey_certified`: reverting the `certified:` field in
+      # `rekey_module_env` makes this fail with a conversion error (verified).
+      assert {:ok, _env} = check(fixture_certificate_survives())
     end
 
     test "E089 formatter names the code, both modules, and the qualified-form hint" do
