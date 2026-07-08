@@ -38,7 +38,7 @@
  ]}
 ```
 
-- Top-level module-like containers carry `container_type:` one of `:module | :proof | :fsm | :actor | :supervisor` (and `:app`; grep `container_type: :app` in `lib/cure/compiler/parser.ex` to confirm the exact atom during Task 1 — `Cure.Project.detect_app` finds app containers, so the parser emits them) with `name:` and `line:` in meta. Nested `container_type: :enum | :struct | :protocol | :trait` are declarations, not modules.
+- Top-level module-like containers carry `container_type:` one of `:module | :proof | :fsm | :actor | :supervisor | :app` (confirmed: `parser.ex:4199` emits `container_type: :app` verbatim) with `name:` and `line:` in meta. Nested `container_type: :enum | :struct | :protocol | :trait` are declarations, not modules.
 - A `use` is `{:import, meta, []}` with `meta[:source]` = dotted module string, `meta[:line]`.
 - A qualified call is `{:function_call, meta, args}` where `meta[:name]` contains `"."`; module part = all segments but the last (mirrors `compile_qualified_call`, `lib/cure/compiler/codegen.ex:1222-1229`).
 
@@ -117,6 +117,11 @@ defmodule Cure.Compiler.DepGraphTest do
       modules = Enum.map(hops, & &1.module)
       assert "CycA" in modules and "CycB" in modules
       assert Enum.all?(hops, &(is_binary(&1.path) and is_integer(&1.line)))
+      # The hop list must be a CLOSED walk, not just "both modules appear
+      # somewhere" -- assert it actually loops back to its own start, per
+      # the spec's `A (a.cure:3) -> B (b.cure:2) -> A` format.
+      assert length(hops) == 3
+      assert List.first(hops).module == List.last(hops).module
     end
 
     test "duplicate module name across files is an error", %{tmp_dir: dir} do
@@ -271,13 +276,18 @@ defmodule Cure.Compiler.DepGraph do
   def order(%__MODULE__{nodes: nodes, modules: modules}) do
     {blank, real} = Enum.split_with(nodes, fn {_p, n} -> n.blank? end)
     blank_paths = blank |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+    # Computed once, not per-dependency-per-node: `real` doesn't change
+    # while building `edges`, so re-deriving this map inside the inner
+    # filter (once per candidate dep) is pure waste, not a correctness
+    # concern (the value is identical every time).
+    real_map = Map.new(real)
 
     edges =
       Map.new(real, fn {path, node} ->
         deps =
           node.order_deps
           |> Enum.map(&modules[&1.target])
-          |> Enum.filter(&(&1 != nil and &1 != path and Map.has_key?(Map.new(real), &1)))
+          |> Enum.filter(&(&1 != nil and &1 != path and Map.has_key?(real_map, &1)))
           |> Enum.uniq()
 
         {path, deps}
@@ -285,7 +295,7 @@ defmodule Cure.Compiler.DepGraph do
 
     case kahn(edges) do
       {:ok, ordered} -> {:ok, ordered ++ blank_paths}
-      {:error, stuck} -> {:error, {:import_cycle, cycle_info(stuck, Map.new(real), modules)}}
+      {:error, stuck} -> {:error, {:import_cycle, cycle_info(stuck, real_map, modules)}}
     end
   end
 
@@ -440,6 +450,12 @@ defmodule Cure.Compiler.DepGraph do
 
   # -- ordering ---------------------------------------------------------------
 
+  # Deliberately simple, not optimal: pops ONE ready node per round and
+  # rebuilds the whole map each time (O(V) per removal, O(V^2) overall)
+  # rather than batching the ready set or maintaining reverse-adjacency
+  # for O(V+E). Compile sets here are tens to low hundreds of files
+  # (stdlib ~39, stage1 kernel ~15) -- this is not a hot path, and the
+  # simplicity keeps the alphabetical tie-break obviously correct.
   defp kahn(edges) do
     do_kahn(edges, [])
   end
@@ -486,10 +502,14 @@ defmodule Cure.Compiler.DepGraph do
     end)
   end
 
+  # Do NOT `Enum.uniq/1` the final result: the whole point is to return a
+  # CLOSED walk (first hop == last hop, e.g. `[A, B, A]`), matching the
+  # spec's `A -> B -> A` format and the Task 3 formatter fixture. `uniq`
+  # would strip that closing repeat and silently turn a cycle report into
+  # an open chain that no longer shows it loops.
   defp trace_cycle(path, edges, seen) do
     if path in seen do
       Enum.reverse([path | Enum.take_while(seen, &(&1 != path))] ++ [path])
-      |> Enum.uniq()
     else
       case edges[path] do
         [next | _] -> trace_cycle(next, edges, [path | seen])
@@ -591,10 +611,11 @@ git commit -m "feat(compiler): DepGraph — dependency scan + deterministic topo
   end
 ```
 
-- [ ] **Step 2: Run to verify the new tests fail**
+- [ ] **Step 2: Run to verify the new tests fail — for the right subset of reasons**
 
 Run: `mix test test/cure/compiler/dep_graph_test.exs 2>&1 | tail -15`
-Expected: FAIL — `closure/2 undefined`, `toposort/2 undefined`, and the shadow-exclusion assertion failing (declared-types collection not implemented).
+
+Expected: FAIL, but not uniformly across every test just added. Task 1's `finalize_node/3` already computes `closure_deps` from qualified-call targets and already filters by `universe` (in-set modules ∪ `known_modules`) — so 3 of the 4 new "closure edges" tests ("qualified-call targets become closure deps", "out-of-universe qualified targets are dropped", "known_modules extends the universe") exercise behavior Task 1 already implements and are expected to PASS immediately; they are regression coverage for Task 1, not new red tests for Task 2. The genuinely red tests at this point are: "auto-prelude Bool/Nat are closure deps unless self or shadowed" (fails — `declared_types` collection doesn't exist yet, so the shadow exclusion never fires) and every test under "closure/2 and toposort/2" (fails — `UndefinedFunctionError`, those functions don't exist yet). Confirm the failures match this split before proceeding; if the 3 "already implemented" tests are somehow also failing, that's a Task 1 regression to fix first, not a Task 2 concern.
 
 - [ ] **Step 3: Implement**
 
@@ -995,8 +1016,6 @@ defmodule Cure.Project.MultiFileLinkTest do
     [project]
     name = "linktest"
     version = "0.1.0"
-
-    [compiler]
     source_paths = ["src"]
     """)
 
@@ -1016,7 +1035,7 @@ defmodule Cure.Project.MultiFileLinkTest do
 end
 ```
 
-NOTE on `Cure.Project.load/1` and the `[compiler] source_paths` key: verify the exact loader arity and TOML key names against `lib/cure/project.ex` before running (grep `def load` and the `parse_toml`/`source_paths` handling around `project.ex:645-720`). If `source_paths` lives under `[project]` or the loader takes `cd`-style opts, adjust the fixture — the TEST'S ASSERTION (remote call in the import table) is the immutable part, not the fixture plumbing.
+Verified (`lib/cure/project.ex:711-715, 749-767`): `source_paths` is parsed exclusively from the `[project]` table (`parsed.project`, via `apply_kv({:table, "project"}, ...)` special-casing the key through `parse_scalar/1` for its array form) — there is no `[compiler] source_paths`. The fixture above reflects this. `Cure.Project.load/1` takes a single directory arg (default `"."`) and returns `{:ok, %Cure.Project{}} | {:error, term()}`, matching the call above. If a future project.ex refactor moves this key, the fixture's TOML shape is the part to adjust — the test's assertion (remote call in the import table) is the immutable part.
 
 - [ ] **Step 2: Run to verify it fails for the right reason**
 
@@ -1151,7 +1170,7 @@ git commit -m "feat(build): ordered multi-file compiles with load-after-compile 
 
 **Files:**
 - Modify: `lib/cure/compiler/codegen.ex` (struct `:warnings`, function_call cond restructure, `compile_module_container` return, `compile_module` return)
-- Modify: `lib/cure/compiler.ex` (`codegen/5`, `write_beam_forms/4` merge)
+- Modify: `lib/cure/compiler.ex` (`codegen/5`, `write_beam_forms/4` → `/5` merge, `compile_and_load/2` binding)
 - Test: `test/cure/compiler/unresolved_import_warning_test.exs` (create)
 
 **Interfaces:**
@@ -1163,7 +1182,12 @@ git commit -m "feat(build): ordered multi-file compiles with load-after-compile 
 grep -rn "Codegen.compile_module\|Codegen\.compile_module(" lib test | grep -v "_build"
 ```
 
-Known caller: `lib/cure/compiler.ex` `codegen/5` (`compiler.ex:268`). Update every hit the grep finds the same way as Step 4 shows for `codegen/5`.
+This grep surfaces two different kinds of hits, with different treatment:
+
+- **The implementation caller**: `lib/cure/compiler.ex` `codegen/5` (`compiler.ex:268-272`) — update as Step 5 shows.
+- **Pre-existing test callers** that pattern-match `Codegen.compile_module/2`'s CURRENT bare-tuple contract directly (not `Cure.Compiler.compile_file/2` — that public contract is already 3-tuple and is untouched by this task): `test/cure/app/app_test.exs`, `test/cure/fsm/fsm_test.exs`, `test/cure/sup/sup_test.exs`, `test/cure/actor/actor_test.exs`, `test/cure/compiler/codegen_test.exs`, `test/cure/compiler/melquiades_parser_test.exs`, `test/cure/compiler/with_abs_codegen_test.exs`, `test/cure/compiler/shadow_codegen_test.exs`, `test/cure/compiler/bin_segment_test.exs`. These assert shapes like `{:ok, forms} = Codegen.compile_module(...)` or `{:ok, {:app, mod}} = Codegen.compile_module(...)`. Once Step 4 makes `compile_module/2` uniformly return 3-tuples, every one of these must have its pattern updated (e.g. `{:ok, forms, _warnings} = ...`, `{:ok, {:app, mod}, _warnings} = ...`).
+
+  **This is legitimate API-contract migration, not "weakening a red test"**: these are pre-existing tests asserting on an internal function's return arity, not red tests written during this plan's own TDD process, and the behavior they actually check (which forms/module get produced) is unchanged — only the wrapper arity grows by one element to carry warnings. Update them in the same commit as the implementation, and re-run the full suite (Step 6) to catch any caller this grep missed.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -1214,22 +1238,10 @@ end
 - [ ] **Step 3: Run to verify it fails for the right reason**
 
 Run: `mix test test/cure/compiler/unresolved_import_warning_test.exs 2>&1 | tail -10`
-Expected: FAIL on the `Enum.any?` assertion (compiles fine, but `warnings` contains only erl_lint entries — likely an `{:unused...}`/empty list — no `:unresolved_import` tuple). Note: erl_lint may also flag `phantom/0` undefined-local; if compilation FAILS outright on that lint, adjust the fixture so the local fallback survives lint (e.g. add `fn phantom() -> Int = 0` marked... NO — that would make it local and skip resolve_import). If lint hard-fails, the observed failure is still the test failing before the assertion; proceed to implement, and re-check: after implementation the warning must be emitted BEFORE lint, and the test's compile step may legitimately end `{:error, {:beam_lint_error, ...}}` — in that case assert the warning via the error path is NOT possible, so instead have `Ghost` export a DIFFERENT-ARITY `phantom/1` (`fn phantom(x: Int) -> Int = x`) and call `phantom()` — the local fallback then still lints clean? It does not (no local phantom/0 either). FINAL fixture rule, decided now to keep the test honest: make `GhostUser` also define `fn phantom() -> Int = 0` — WAIT, that makes `is_local` true and skips the import path entirely. Definitive resolution: erl_lint failure means BeamWriter returns `{:error, errors, warnings}` and `compile_file` returns `{:error, {:beam_lint_error, errors}}` (compiler.ex:117-134) — warnings lost. Therefore the WARNING must be attached where it survives: implement Step 5 so codegen warnings ride the ERROR path too, i.e. `write_beam_forms` failure returns `{:error, {:beam_lint_error, errors, codegen_warnings}}`? NO — that changes a public error contract consumed elsewhere. The clean cut that stays inside spec §3.2 item 4: the warning is emitted for the local-call fallback, and whether the fallback later lints clean depends on the module (a same-named local wrapper is exactly the case where lint passes yet the call was silently wrong before). So the fixture that BOTH exercises resolve_import and survives lint is: `GhostUser` defines a PRIVATE helper `fn phantom_helper() -> Int = 0` — irrelevant. Use THIS fixture instead, which is the real-world silent-wrong case and lints clean:
 
-```
-mod GhostUser
-  use Ghost
-  fn start() -> Int = deep()
-  fn deep() -> Int = 7
-```
+Expected: FAIL — `{:ok, :"Cure.GhostUser", warnings}` does not match. The fixture as written does NOT reach the `{:ok, ...}` path at all today: `phantom` is neither a local function of `GhostUser` nor an export of `Ghost`, so codegen's fallback emits a local call `{:atom, line, :phantom}` to a function nothing defines, and Erlang's `erl_lint` always rejects a local call to an undefined function — there is no fixture shape that is simultaneously (a) genuinely unresolved (exercises the fallback) and (b) lint-clean, because lint-clean requires the name to be defined *somewhere* in the module, which would make it `is_local` and skip the fallback entirely. So `compile_file(user, ...)` returns `{:error, {:beam_lint_error, errors}}` today (compiler.ex:117-134), not `{:ok, ...}` — this is the honest, permanent shape of this case, not a fixture bug to iterate away.
 
-...but `deep` IS local (`is_local` true) so resolve_import never runs. CONCLUSION: an unqualified call that is neither local nor resolvable ALWAYS produces an erl_lint undefined-function error today — the silent-miscompile case requires the name to exist SOMEWHERE later at runtime, which erl_lint cannot see... but erl_lint checks LOCAL function existence at compile time, so the local fallback for a truly-absent local NEVER survives to a beam. The warning's real value is therefore in the `{:error, {:beam_lint_error, ...}}` case — turning "cryptic undefined_function lint error" into an actionable W088. Amend the test to match that reality (this is the honest behavior, argued here per the test-immutability escape hatch BEFORE the test was ever green):
-
-```elixir
-    assert {:error, {:beam_lint_error, _errors}} = result_of_user_compile
-```
-
-is what happens today AND after — so the observable improvement must be surfaced differently: `compile_file` should return the codegen warnings alongside the lint error. To avoid breaking the 2-tuple error contract, thread warnings into the EXISTING reason term: `{:error, {:beam_lint_error, errors}}` becomes `{:error, {:beam_lint_error, errors, warnings}}` ONLY when codegen produced warnings — and `Errors.format_error({:beam_lint_error, ...})` gains a 3-element clause that prints the W088 warnings before the lint errors. Update the test to:
+This means the test above is wrong about *where* the warning surfaces, and must be corrected before it can ever go green — per the test-immutability rule's escape hatch (a test proven wrong before it was ever green may be fixed, with the reasoning stated up front, which is what the paragraph above is). The fix: thread codegen warnings onto the lint-error path too, since that's the path this case actually takes. Extend the existing 2-tuple error reason to a 3-tuple *only* when codegen produced warnings — `{:beam_lint_error, errors}` stays as today's shape when there are none, so no other caller's pattern match is disturbed. Replace the test's final assertions with:
 
 ```elixir
     assert {:error, {:beam_lint_error, _lint, warnings}} =
@@ -1245,7 +1257,9 @@ is what happens today AND after — so the observable improvement must be surfac
            end)
 ```
 
-(The green-path merge — codegen warnings prepended to BeamWriter warnings in `{:ok, module, warnings}` — is still implemented; it fires when the fallback target does exist locally under the same name, and future cases.)
+Re-run: still FAIL (now on the pattern match itself — `compile_file` returns the bare 2-tuple `{:error, {:beam_lint_error, errors}}` today, which doesn't match the 3-tuple pattern at all). This is the one fixture and the one pair of assertions to implement Steps 4-5 against.
+
+(The green-path merge — codegen warnings prepended to BeamWriter warnings in `{:ok, module, warnings}` — is implemented in Step 5 alongside this; it fires whenever the fallback target exists locally under the same name and the module lints clean, e.g. Task 6's linkage fixture.)
 
 - [ ] **Step 4: Implement in codegen.** In `lib/cure/compiler/codegen.ex`:
 
@@ -1294,7 +1308,15 @@ All other arms wrap their existing form expression as `{<form-expr>, state}` unc
 
 (c) In `compile_module_container/4`, include the collected warnings in the return: where it currently returns `{:ok, forms}` (after the events emit), return `{:ok, forms, Enum.reverse(state.warnings)}`. The `validate_stdlib_imports` error branch is unchanged.
 
-(d) In the public `compile_module/2` dispatcher, normalize: module containers pass the 3-tuple through; every non-module container branch that returns `{:ok, {:callback_mode, mod}}` etc. becomes `{:ok, {:callback_mode, mod}, []}` (same for `:actor`, `:supervisor`, `:app`).
+(d) The `:fsm`/`:actor`/`:supervisor`/`:app` branches of `dispatch_container/6` (codegen.ex:134-201) return whatever `Cure.FSM.Compiler.compile/2`, `Cure.Actor.Compiler.compile/2`, `Cure.Sup.Compiler.compile/2`, and `Cure.App.Compiler.compile/2` return, UNCHANGED — those are four separate modules, each with its own documented `{:ok, {:actor, module()}}`-shaped `@spec` and their own test coverage; do not touch them or their bare-tuple contract. `:fsm` in particular can ALSO return a plain forms list (`{:ok, list()}`, simple-mode FSM) — the same shape `compile_module_container` used to return before this task's edit — so a shape-only check ("is this a 3-tuple already?") is the correct place to normalize, not a per-container-type rewrite. Do the wrapping once, at `compile_module/2`'s own two call sites into `dispatch_container` (both the `{:container, ...}` clause and the `{:block, ...}` clause), with a small private helper:
+
+```elixir
+  defp normalize_compile_result({:ok, _forms, _warnings} = ok), do: ok
+  defp normalize_compile_result({:ok, other}), do: {:ok, other, []}
+  defp normalize_compile_result({:error, _} = err), do: err
+```
+
+and wrap both `dispatch_container(...)` calls in `compile_module/2` with `normalize_compile_result(...)`. This makes `compile_module/2` uniformly return a 3-tuple (module containers already 3-tuple straight from `compile_module_container`; every other shape gets `[]` appended) without any of the four container compilers ever knowing warnings exist. Update `compile_module/2`'s `@spec` (codegen.ex:85-91) to reflect the 3-tuple return in every branch.
 
 - [ ] **Step 5: Thread through `lib/cure/compiler.ex`.**
 
@@ -1307,9 +1329,41 @@ All other arms wrap their existing form expression as `{<form-expr>, state}` unc
       end
 ```
 
-and the dependent branch returns `{:ok, forms, []}` (wrap `dependent_codegen/1`'s `{:ok, forms}`).
+and the `if Cure.Elab.Program.dependent?(ast) do ... end` branch of `codegen/5` wraps `dependent_codegen/1`'s result the same way, since the kernel-lowering path never produces codegen warnings:
 
-(b) Every `codegen(...)`-consumer in `compile_string/compile_file/compile_and_load` `with`-chains: bind `{:ok, forms, cg_warnings} <- codegen(...)` and pass `cg_warnings` into `write_beam_forms/5`:
+```elixir
+    if Cure.Elab.Program.dependent?(ast) do
+      case dependent_codegen(ast) do
+        {:ok, forms} -> {:ok, forms, []}
+        {:error, _} = err -> err
+      end
+    else
+      ...
+    end
+```
+
+(b) `codegen/5` now always returns a 3-tuple on success, so every `with`-chain that binds its result must widen its pattern — but the THREE consumers do not all do the same thing with the extra element:
+
+- **`compile_string/2`** (and `compile_file/2`, which delegates to it): bind `{:ok, forms, cg_warnings} <- codegen(...)` and pass `cg_warnings` into `write_beam_forms/5` for the `forms when is_list(forms)` case (the `{:callback_mode, mod}`/`{:actor, mod}`/`{:supervisor, mod}`/`{:app, mod}` cases already return `{:ok, mod, []}` today and need no change).
+- **`compile_and_load/2`** does NOT call `write_beam_forms` at all — its `forms when is_list(forms)` case calls `BeamWriter.compile_and_load(forms)` directly, and its documented public contract is `{:ok, module()}` with no warnings element. Bind `{:ok, forms, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases)` and simply discard the third element — codegen warnings are not surfaced through this entry point (it exists for REPL/testing, and its return shape is intentionally unchanged):
+
+```elixir
+    with {:ok, tokens} <- lex(source, file, emit?),
+         {:ok, ast} <- parse(tokens, file, emit?),
+         {:ok, _} <- maybe_check(ast, file, emit?, check?),
+         {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
+         {:ok, forms, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
+      case forms do
+        {:callback_mode, mod_atom} -> {:ok, mod_atom}
+        {:actor, mod_atom} -> {:ok, mod_atom}
+        {:supervisor, mod_atom} -> {:ok, mod_atom}
+        {:app, mod_atom} -> {:ok, mod_atom}
+        forms when is_list(forms) -> BeamWriter.compile_and_load(forms)
+      end
+    end
+```
+
+For `compile_string/2`, thread `cg_warnings` into `write_beam_forms/5`:
 
 ```elixir
   defp write_beam_forms(forms, output_dir, emit?, file, cg_warnings) do
@@ -1329,7 +1383,7 @@ and the dependent branch returns `{:ok, forms, []}` (wrap `dependent_codegen/1`'
   end
 ```
 
-The special-container `{:ok, mod_atom, []}` returns (`compiler.ex:100-113`) stay as-is (append nothing). `compile_and_load/2`'s `forms` case handles the 3-tuple binding the same way.
+The special-container `{:ok, mod_atom, []}` returns in `compile_string/2` (`compiler.ex:98-110`) stay as-is (append nothing). `compile_and_load/2` is handled separately, per (b) above — it binds the 3-tuple and discards the warnings element rather than calling `write_beam_forms`.
 
 (c) Add to `lib/cure/compiler/errors.ex` a 3-element lint clause delegating per-warning to the W088 formatter:
 
@@ -1340,7 +1394,7 @@ The special-container `{:ok, mod_atom, []}` returns (`compiler.ex:100-113`) stay
   end
 ```
 
-(place it ABOVE the existing `{:beam_lint_error, errors}` clause so the 3-tuple matches first).
+(place it near the existing `{:beam_lint_error, errors}` clause, i.e. well above the file's catch-all `format_error(error, file)` clause at the bottom — that catch-all, not the 2-tuple clause, is the only thing that could otherwise swallow the 3-tuple match, since a 2-tuple and 3-tuple pattern never overlap regardless of order).
 
 - [ ] **Step 6: Run the warning test + neighbors**
 
@@ -1349,7 +1403,7 @@ mix test test/cure/compiler/unresolved_import_warning_test.exs 2>&1 | tail -8
 mix test test/cure/compiler/codegen_test.exs test/cure/compiler/dep_graph_test.exs test/cure/project/multi_file_link_test.exs 2>&1 | tail -8
 ```
 
-Expected: PASS. If `codegen_test.exs` (or the Step 1 grep's other callers) pattern-match `{:ok, forms}` from `compile_module`, update those call sites to the 3-tuple — implementation callers only; test files asserting on `compile_file`'s public 3-tuple contract are unaffected.
+Expected: PASS, given the Step 1 test-file updates (the 9 files listed there) are already applied. `test/cure/compiler/codegen_test.exs` and `test/cure/project/multi_file_link_test.exs` in particular exercise both the direct `Codegen.compile_module/2` 3-tuple and the public `Cure.Compiler.compile_file/2` contract (unchanged shape) — running them together is the cross-check that both were updated consistently. If any caller besides the 9 files Step 1 enumerated turns up here, update it the same way.
 
 - [ ] **Step 7: Commit**
 
@@ -1368,7 +1422,7 @@ git commit -m "feat(codegen): warn (W088) instead of silently local-falling-back
 - Test: `test/cure/stdlib/preload_closure_test.exs` (create)
 
 **Interfaces:**
-- Consumes: `DepGraph.scan/2` (`known_modules:` = stdlib module names), `order_deps_map/1`, `closure_deps_map/1`, `closure/2`, `toposort/2`.
+- Consumes: `DepGraph.scan/2` (no `known_modules:` needed — the scanned set IS the full stdlib), `order_deps_map/1`, `closure_deps_map/1`, `closure/2`, `toposort/2`.
 - Produces:
   - `Preload.module_order_deps() :: %{module() => [module()]}` (baked, `:"Cure.Std.X"` keys)
   - `Preload.module_closure_deps() :: %{module() => [module()]}` (baked)
@@ -1441,14 +1495,15 @@ Expected: FAIL — `module_order_deps/0` undefined.
   # selection in that case.
   {order_map, closure_map} =
     (fn ->
-       names =
-         for path <- @stdlib_sources,
-             {:ok, src} <- [File.read(path)],
-             m = Regex.run(@mod_regex, src),
-             m != nil,
-             do: Enum.at(m, 1)
-
-       case Cure.Compiler.DepGraph.scan(@stdlib_sources, known_modules: names) do
+       # No `known_modules:` needed here: the compile set IS the full
+       # stdlib (`@stdlib_sources` already lists every `lib/std/*.cure`
+       # file), so `DepGraph.scan/2`'s own AST-derived `modules` map
+       # already covers every stdlib module name -- there is nothing
+       # out-of-set left for `known_modules` to add. (Contrast a scan
+       # over a strict subset, or user files needing to recognize
+       # `Std.*` qualified calls as legitimate closure deps -- that's
+       # the scenario `known_modules` exists for; it isn't this one.)
+       case Cure.Compiler.DepGraph.scan(@stdlib_sources) do
          {:ok, graph} ->
            to_atoms = fn map ->
              Map.new(map, fn {k, vs} ->
@@ -1582,6 +1637,6 @@ Expected: stdlib `0 errors`; stage1 `0 errors` with the Task 4 counts; check.exa
 ## Self-review notes (executed at plan-writing time)
 
 - **Spec coverage:** §3.1 → Tasks 1–2; §3.2 items 1/2/3/4 → Tasks 4/5/6/7; §3.3 → Task 8; §4 table → Tasks 3/6/7/8; §5.1–5.6 → Tasks 1, 1(parity), 6, 7, 8, 9 respectively; §3.4 needs no code (documented in Task 8 Step 5).
-- **Known judgment call surfaced honestly:** Task 7's fixture analysis (erl_lint interaction) is resolved IN the plan — the warning rides the lint-error path via `{:beam_lint_error, errors, warnings}` and the green path via prepended warnings; the test asserts the error-path shape because that is the reachable behavior. The reviewer should scrutinize this reasoning specifically.
+- **Known judgment call, resolved:** Task 7's fixture (erl_lint interaction) is settled — the warning rides the lint-error path via `{:beam_lint_error, errors, warnings}`, the green path via prepended warnings; the test asserts the error-path shape because that is the only reachable behavior for a genuinely-unresolved unqualified call. This was independently re-derived and confirmed during a `recursive-skeptical-review` pass (2026-07-08), which also found and fixed: a real cycle-reconstruction bug (`trace_cycle`'s trailing `Enum.uniq/1` silently opened the closed cycle walk the spec's `A -> B -> A` format requires), a factually wrong TOML table in Task 6's fixture (`source_paths` lives under `[project]`, verified against `project.ex:711-767`), an underspecified normalization point for Task 7's special-container 3-tuple wrapping (now pinned to `compile_module/2`'s two `dispatch_container` call sites, not the four container-compiler modules), an inaccurate blanket claim about `compile_and_load/2` threading warnings through `write_beam_forms` (it doesn't call that function at all), and an undercounted test blast-radius (9 pre-existing test files pattern-match `Codegen.compile_module/2`'s bare-tuple shape and must be migrated to the 3-tuple contract). See the task bodies for the fixes in place; this note is not asking a future reviewer to re-derive them.
 - **Type consistency:** warning tuple `{:unresolved_import, name, arity, imports, line}` identical in Tasks 3 and 7; `load_emitted/2` defined in Task 6 and consumed in Task 7's test; `closure/2`/`toposort/2` shapes match between Tasks 2 and 8.
 - **Determinism:** every map iteration that feeds output goes through `Enum.sort`/sorted paths (scan sorts inputs; kahn sorts ready set; baked maps sort values).
