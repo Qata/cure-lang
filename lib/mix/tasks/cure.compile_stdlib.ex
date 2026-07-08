@@ -32,7 +32,22 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
     Mix.Task.run("app.start", ["--no-deps-check"])
 
     stdlib_dir = Path.join(["lib", "std"])
-    cure_files = Path.wildcard(Path.join(stdlib_dir, "*.cure")) |> Enum.sort()
+
+    cure_files =
+      case Cure.Compiler.DepGraph.scan(Path.wildcard(Path.join(stdlib_dir, "*.cure"))) do
+        {:ok, graph} ->
+          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
+
+          Enum.each(cycles, fn walk ->
+            Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, stdlib_dir))
+          end)
+
+          ordered
+
+        {:error, reason} ->
+          Mix.shell().error(Cure.Compiler.Errors.format_error(reason, stdlib_dir))
+          exit({:shutdown, 1})
+      end
 
     cond do
       not compiler_available?() ->
@@ -45,6 +60,14 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
 
       true ->
         Mix.shell().info("Compiling Cure standard library (#{length(cure_files)} modules)")
+
+        # Add to code path
+        File.mkdir_p!(output_dir)
+        abs_dir = Path.expand(output_dir)
+
+        unless abs_dir in :code.get_path() do
+          :code.add_patha(String.to_charlist(abs_dir))
+        end
 
         results =
           Enum.map(cure_files, fn path ->
@@ -65,14 +88,6 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
                 {:error, path}
             end
           end)
-
-        # Add to code path
-        File.mkdir_p!(output_dir)
-        abs_dir = Path.expand(output_dir)
-
-        unless abs_dir in :code.get_path() do
-          :code.add_patha(String.to_charlist(abs_dir))
-        end
 
         ok_count = Enum.count(results, &match?({:ok, _}, &1))
         err_count = Enum.count(results, &match?({:error, _}, &1))
