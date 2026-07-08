@@ -246,25 +246,47 @@ defmodule Cure.Core.Kernel do
       %{args: tele, result_indices: result_indices} = ctor_sig ->
         result_params = Map.get(ctor_sig, :result_params, [])
 
-        if Inductive.ctor_family(sig, cname) != family do
-          {:error, {:foreign_ctor, cname}}
-        else
-          with {:ok, arg_env} <- check_ctor_app(ctx, params, args, tele) do
-            actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
-            actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-            actual = {:vdata, family, actual_params ++ actual_indices}
+        cond do
+          Inductive.ctor_family(sig, cname) != family ->
+            {:error, {:foreign_ctor, cname}}
 
-            if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
-              :ok
-            else
-              {:error, {:conversion_failure, actual, expected}}
+          # Fields-only spelling — the existing specialized path, byte-identical.
+          # MUST be first: for a paramless family (pc == 0) the spine condition
+          # below collapses to this same predicate (spec §1 "order is load-bearing").
+          length(args) == length(tele) ->
+            with {:ok, arg_env} <- check_ctor_app(ctx, params, args, tele) do
+              actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
+              actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+              actual = {:vdata, family, actual_params ++ actual_indices}
+
+              if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
+                :ok
+              else
+                {:error, {:conversion_failure, actual, expected}}
+              end
             end
-          end
+
+          # Params-on-spine spelling (K6/§E.1, the inference form): the fields-only
+          # strategy cannot measure this arity. Coherence (spec 2026-07-09, Lean's
+          # check = infer + def-eq): route to the generic fallback — infer re-checks
+          # the spine params against the family telescope (the K6 arm), then the
+          # result converts against `expected`. Accepts nothing that is not already
+          # inferable-and-convertible.
+          pc > 0 and length(args) == pc + length(tele) ->
+            check_via_infer(ctx, {:ctor, cname, args}, expected)
+
+          true ->
+            {:error, :ctor_arity}
         end
     end
   end
 
-  def check(ctx, term, expected) do
+  def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
+
+  # The generic checking rule (moduledoc: "falling back to `infer` plus a
+  # cumulative conversion test") — shared by the fallthrough clause and the
+  # params-on-spine ctor branch above so the coherence logic exists exactly once.
+  defp check_via_infer(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
       if subtype?(inferred, expected, ctx) do
         :ok
