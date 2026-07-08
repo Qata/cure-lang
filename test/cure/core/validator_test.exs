@@ -16,13 +16,14 @@ defmodule Cure.Core.ValidatorTest do
       assert MapSet.new(Map.keys(Validator.wave0_config())) == MapSet.new(Validator.clauses())
     end
 
-    test "only the retired-primitive clause is :reject in Wave 0" do
+    test "only the retired-primitive clauses are :reject in Wave 0" do
       # Wave 0 was pure instrumentation until Phase C retired the primitive
       # identity forms; a smuggled {:eq}/{:refl} node now rejects even in the
       # dev-time default (the kernel has no clauses for them, so any such node
-      # is a firewall breach, not tech debt).
+      # is a firewall breach, not tech debt). D2 retired the primitive Sigma
+      # the same way, so {:sigma}/{:pair}/{:fst}/{:snd} join the reject set.
       rejecting = for {c, :reject} <- Validator.wave0_config(), do: c
-      assert Enum.sort(rejecting) == [:no_eq_node]
+      assert Enum.sort(rejecting) == [:no_eq_node, :no_sigma_node]
     end
 
     test "legacy-detecting clauses warn (retired-primitive clause rejects); not-yet-reshaped clauses are off" do
@@ -89,14 +90,17 @@ defmodule Cure.Core.ValidatorTest do
       assert {:ok, [%{clause: :no_prim_node}]} = Validator.validate({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
     end
 
-    test "each primitive Sigma node warns under Wave-0 and rejects under release_config (D2 ratchet)" do
+    # D2 T4b: the ratchet completed — Wave-0 now REJECTS the primitive Sigma
+    # nodes too (the kernel grammar no longer contains them; a node here is
+    # smuggled non-grammar, exactly like Phase C's no_eq_node endgame).
+    test "each primitive Sigma node rejects under Wave-0 AND release_config (D2 ratchet complete)" do
       for node <- [
             {:sigma, {:type, 0}, {:type, 0}},
             {:pair, {:var, 0}, {:var, 0}},
             {:fst, {:var, 0}},
             {:snd, {:var, 0}}
           ] do
-        assert {:ok, [%{clause: :no_sigma_node, mode: :warn}]} = Validator.validate(node)
+        assert {:error, [%{clause: :no_sigma_node, mode: :reject}]} = Validator.validate(node)
 
         assert {:error, [%{clause: :no_sigma_node, mode: :reject}]} =
                  Validator.validate(node, Validator.release_config())

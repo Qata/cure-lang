@@ -48,11 +48,11 @@ defmodule Cure.Core.Validator do
     # smuggled non-grammar term (firewall breach), not tolerable tech debt.
     # `no_rewrite_node` stays :warn here (dev-time) and rejects at release.
     no_eq_node: :reject,
-    # no_sigma_node stays :warn while producers are re-pointed but the kernel still
-    # carries the primitive `{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` clauses and
-    # Antigen still builds them (D2 T4a); flips to :reject once the kernel strip
-    # (T5) lands — the two-stage ratchet (spec §2.4).
-    no_sigma_node: :warn,
+    # D2 T4b flipped `no_sigma_node` to :reject even at dev time: the kernel has
+    # no `{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` clauses left (T5 strip), so any
+    # such node in a checked def is smuggled non-grammar (firewall breach), not
+    # tolerable tech debt — same rationale as Phase C's `no_eq_node`.
+    no_sigma_node: :reject,
     no_rewrite_node: :warn,
     no_prim_node: :warn,
     no_hole: :warn,
