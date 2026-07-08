@@ -4,24 +4,26 @@
 
 **Goal:** Land the D1 kernel enabler — `check_motive_wf` accepts neutral type-valued applications (`b(first(p))`-shaped motives) via a reify+infer clause, plus the §2.4 defensive `{:pair,…}` infer clause — spec `docs/superpowers/specs/2026-07-08-neutral-app-sort-design.md` (hardened `fb68e84`).
 
-**Architecture:** Exactly two new clauses in `lib/cure/core/kernel.ex` (TCB — blanket-approved as Agda/Lean-aligned, FULL verification gate mandatory): an `infer_type_value_sort` clause that reifies the neutral application signature-aware and accepts only if the kernel's own term-level `infer/2` yields `{:vtype, l}`, and a one-line defensive `infer(_, {:pair,_,_})` rejection. Plus: unit tests, an Antigen antibody (a property-based `DepMatch` accepting variant + fixed accept/reject pins + a Malformed reject seed — see Task 2's gap note), and a new `sg` differential-oracle cluster.
+**Architecture:** Exactly two new clauses in `lib/cure/core/kernel.ex` (TCB — blanket-approved as Agda/Lean-aligned, FULL verification gate mandatory): an `infer_type_value_sort` clause that reifies the neutral application signature-aware and accepts only if the kernel's own term-level `infer/2` yields `{:vtype, l}`, and a one-line defensive `infer(_, {:pair,_,_})` rejection. **[AMENDED 2026-07-09, spec §7]** Plus Task 1b, the E-layer enabler execution uncovered: type-position implicit insertion in the return-type lowering (`lib/cure/elab/declarations.ex` + one public wrapper in `elaborator.ex`) — without it the elaborator hands the kernel an under-applied motive and the probe can never elaborate. Plus: unit tests, an Antigen antibody (a property-based `DepMatch` accepting variant + fixed accept/reject pins + a Malformed reject seed — see Task 2's gap note), and a new `sg` differential-oracle cluster.
 
 **Tech Stack:** Elixir, `Cure.Core.{Kernel,Quote,Context,Eval}`, ExUnit, Antigen, `mix cure.oracle` + idris2.
 
 ## Global Constraints (every task implicitly includes these)
 
 - Working dir: `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`, branch `autopilot/kernel-parity-batch`. **Never read or edit files under the parent checkout `/Users/ch/Develop/esp32-beam/cure-lang/lib/…` — an earlier agent did and produced confidently wrong facts (spec §0's stale-scout warning).**
-- **TCB scope:** `lib/cure/core/kernel.ex` gains exactly the two spec'd clauses; NOTHING else under `lib/cure/core/` changes. No changes to `lib/cure/elab/*` (the feature is kernel-side; surface forms already exist), `lib/cure/types/*`, `lib/cure/compiler/*` (non-dependent decoy pipeline).
+- **TCB scope:** `lib/cure/core/kernel.ex` gains exactly the two spec'd clauses; NOTHING else under `lib/cure/core/` changes. **[AMENDED 2026-07-09, spec §7]** `lib/cure/elab/*` changes are authorized for Task 1b ONLY and confined to: `lib/cure/elab/declarations.ex` (`function_signature` ctx threading + `idx_to_core` delegation branch + `implicit_global?` helper) and `lib/cure/elab/elaborator.ex` (one narrow public wrapper). Still NO changes to `lib/cure/types/*`, `lib/cure/compiler/*` (non-dependent decoy pipeline).
 - Strict red-green TDD; tests behavioral and immutable once green. ONE mix command at a time, ever (past concurrent run caused a kernel panic). Full gates run ONCE, alone, in Task 4.
 - Git: commit per task; EVERY commit `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`; NO trailers; explicit-pathspec staging only.
 - **`mix cure.oracle` may be run exactly once, in Task 3, with the cluster argument `sg` only** (`mix cure.oracle sg`) — it regenerates only `test/oracle/sg/verdicts.json` (spec §3.4, review-verified). Never run it bare or with another cluster. If it unexpectedly modifies any OTHER cluster's verdicts.json (`git status` check after), `git checkout -- test/oracle/<other>/verdicts.json` and STOP-and-report.
 - Prereq: `~/Develop/Idris2/build/exec/idris2` must exist (the oracle shells out to it). If missing → STOP-and-report (do not skip the oracle task).
-- STOP-and-report: any oracle divergence on sg01 (either direction); any existing test failing at any point; any need to touch a third place in kernel.ex; the accept-probe still rejecting after both clauses land.
+- STOP-and-report: any oracle divergence on sg01 (either direction); any existing test failing at any point; any need to touch a third place in kernel.ex; any need to touch an elab file beyond the two named in Task 1b; the accept-probe still rejecting after Task 1b lands (kernel-only rejection after Task 1 is EXPECTED — spec §7.1).
 
 ## File Structure
 
 - `lib/cure/core/kernel.ex` — the two clauses (Task 1).
-- `test/cure/elab/dependent_eliminator_test.exs` — NEW: surface probe + hand-built-Core negatives (Task 1).
+- `lib/cure/elab/declarations.ex` — Task 1b [spec §7]: `function_signature` builds+threads a ctx into return-type lowering; `idx_to_core/5` delegation branch; `implicit_global?/2` helper.
+- `lib/cure/elab/elaborator.ex` — Task 1b [spec §7]: one narrow public wrapper `elaborate_implicit_global_app/5`.
+- `test/cure/elab/dependent_eliminator_test.exs` — NEW: surface probes + hand-built-Core negatives (Tasks 1 + 1b; single combined commit at end of 1b — see Task 1 Step 7).
 - `lib/antigen/generators/dep_match.ex` — one new `case_challenge/0` accepting arm, `neutral_app_motive_case/0` (Task 2).
 - `lib/antigen/generators/malformed.ex` — one new reject seed in `malformation/0` (Task 2).
 - `test/antigen/neutral_app_motive_test.exs` — NEW: accept/reject antibody pins through the real kernel (Task 2).
@@ -70,8 +72,31 @@ defmodule Cure.Elab.DependentEliminatorTest do
   end
   """
 
+  # RED THROUGH TASK 1 (expected — spec §7.1): the implicit-param probe needs
+  # Task 1b's type-position implicit insertion; kernel-only it still rejects
+  # :bad_motive on the under-applied motive. Goes green at Task 1b Step 4.
   test "D1 probe: dependent second projection elaborates (b(first(p)) motive)" do
     assert {:ok, _env} = Program.elaborate(@probe)
+  end
+
+  # Kernel-enabler pin (green at Task 1 Step 6, BEFORE Task 1b): the identical
+  # probe with EXPLICIT type params lowers `b(first(a, b, p))` to a full spine,
+  # so it isolates the napp kernel clause from the Task 1b elaborator fix —
+  # executor-verified accepted with the two clauses alone (spec §7.1).
+  @explicit_probe """
+  mod P
+    type Nat = Z | S(Nat)
+    type MySigma(a: Type, b: (a) -> Type) indices ()
+      mk_pair : (x: a) -> b(x) -> MySigma(a, b)
+    fn first(a: Type, b: (a) -> Type, p: MySigma(a, b)) -> a = match p
+      mk_pair(x, y) -> x
+    fn second(a: Type, b: (a) -> Type, p: MySigma(a, b)) -> b(first(a, b, p)) = match p
+      mk_pair(x, y) -> y
+  end
+  """
+
+  test "kernel-enabler pin: explicit-param dependent second projection elaborates" do
+    assert {:ok, _env} = Program.elaborate(@explicit_probe)
   end
 
   test "D1 probe: second(mk_pair(x, y)) reduces/runs correctly on BEAM (spec §4 item 2)" do
@@ -129,9 +154,12 @@ defmodule Cure.Elab.DependentEliminatorTest do
   end
 
   # §2.4 crash probe: hand-built Core, driven straight at Kernel.infer. The
-  # motive applies its own Nat-typed binder — head resolves, but for the PAIR
-  # variant the argument is a pair literal in a non-Σ domain, which (post-napp
-  # clause) routes check→infer on a bare {:pair,…}.
+  # non-function variant applies the motive's own Nat-typed binder (dies at
+  # ensure_pi). The PAIR variant MUST use a FUNCTION-typed head (spec §7.6,
+  # executor-verified): only then does infer get past ensure_pi and reach the
+  # pair argument — check against the non-Σ domain falls through to infer on a
+  # bare {:pair,…}, the exact §2.4 crash site. A Nat-typed head applied to a
+  # pair never reaches the pair and proves nothing about the defensive clause.
   describe "§2.4 adversarial motives reject cleanly (never crash)" do
     defp nat_env do
       {:ok, env} = Program.elaborate("mod P\n  type Nat = Z | S(Nat)\nend\n")
@@ -149,10 +177,13 @@ defmodule Cure.Elab.DependentEliminatorTest do
       assert {:error, :bad_motive} = Kernel.infer(ctx, bad_motive_case(motive))
     end
 
-    test "motive applying a head to a pair literal rejects :bad_motive (no FunctionClauseError)" do
-      ctx = Context.empty(nat_env())
+    test "motive applying a function-typed head to a pair literal rejects :bad_motive (no FunctionClauseError)" do
+      env = nat_env()
       nat = {:data, :Nat, [], []}
-      motive = {:lam, nat, {:app, {:var, 0}, {:pair, {:ctor, :Z, []}, {:ctor, :Z, []}}}}
+      # ctx binder: b : (Nat) -> Type (same construction as the Task 2 accept
+      # pin). Under the motive's own lam binder, b reads as {:var, 1}.
+      ctx = Context.extend(Context.empty(env), Eval.eval({:pi, nat, {:type, 0}}, []))
+      motive = {:lam, nat, {:app, {:var, 1}, {:pair, {:ctor, :Z, []}, {:ctor, :Z, []}}}}
       assert {:error, :bad_motive} = Kernel.infer(ctx, bad_motive_case(motive))
     end
   end
@@ -166,7 +197,7 @@ Latitude (report every use): the two surface negatives pin *rejection*, not a sp
 - [ ] **Step 2: Run — capture the pre-change baseline**
 
 Run: `mix test test/cure/elab/dependent_eliminator_test.exs`
-Expected TODAY: the D1 probe FAILS (`{:error, :bad_motive}` where `{:ok, _}` expected); the runtime-execution test ALSO FAILS (it pattern-matches `{:ok, env} = Program.elaborate(@probe)`, which today returns `{:error, :bad_motive}` — a `MatchError`, not a runtime-value mismatch); both surface negatives PASS (already reject); **both §2.4 tests PASS** (the napp value hits the fallthrough → `:bad_motive` — the crash path does not exist yet). Record all six outcomes.
+Expected TODAY (7 tests): the D1 probe FAILS (`{:error, :bad_motive}` where `{:ok, _}` expected); the runtime-execution test ALSO FAILS (it pattern-matches `{:ok, env} = Program.elaborate(@probe)`, which today returns `{:error, :bad_motive}` — a `MatchError`, not a runtime-value mismatch); the explicit-param kernel pin FAILS (`:bad_motive` — the napp clause doesn't exist yet); both surface negatives PASS (already reject); **both §2.4 tests PASS** (the napp value hits the fallthrough → `:bad_motive` — the crash path does not exist yet; the pair variant's function-typed head changes nothing at baseline because motive-wf never reifies+infers without the napp clause). 4 pass / 3 fail. Record all seven outcomes.
 
 - [ ] **Step 3: Add ONLY the `infer_type_value_sort` napp clause**
 
@@ -197,7 +228,7 @@ Insert after the `{:vneutral, {:nvar, level}}` clause (~kernel.ex:613-620), exac
 - [ ] **Step 4: Run — capture the mid-point crash (the §2.4 necessity proof)**
 
 Run: `mix test test/cure/elab/dependent_eliminator_test.exs`
-Expected NOW: the D1 probe PASSES; the runtime-execution test ALSO PASSES (nothing about `run_second` touches a pair-in-motive scenario, so the defensive clause added in Step 5 doesn't gate it); the non-function-head §2.4 test still passes (`ensure_pi` on a Nat head fails inside `infer` → `:not_a_type_value` → `:bad_motive`); **the pair-literal §2.4 test CRASHES with `FunctionClauseError` (no `infer/2` clause for `{:pair,…}`)**. Capture the exact exception — this is the red evidence that the defensive clause is load-bearing, not decorative.
+Expected NOW **[AMENDED 2026-07-09 — the original prediction that the probe passes here was WRONG; spec §7.1]**: the D1 probe and runtime-execution tests STILL FAIL with `:bad_motive` — the elaborator hands the kernel an under-applied motive (`first` applied to 1 of 3 binders); they go green only at Task 1b. The explicit-param kernel pin NOW PASSES (its full-spine motive sorts via the new clause — this is Task 1's honest green). The non-function-head §2.4 test still passes (`ensure_pi` on a Nat head fails inside `infer` → `:not_a_type_value` → `:bad_motive`). **The pair-literal §2.4 test (function-typed head, per the corrected Step 1 code) CRASHES with `FunctionClauseError` (no `infer/2` clause for `{:pair,…}`)**. Capture the exact exception — this is the red evidence that the defensive clause is load-bearing, not decorative.
 
 - [ ] **Step 5: Add the defensive `infer` clause**
 
@@ -210,18 +241,136 @@ Next to `infer/2`'s `{:fst,_}`/`{:snd,_}` clauses:
   def infer(_ctx, {:pair, _, _}), do: {:error, :pair_not_inferable}
 ```
 
-- [ ] **Step 6: Run to verify all green, then the kernel neighborhood**
+- [ ] **Step 6: Run to verify the kernel-provable set green**
 
-Run: `mix test test/cure/elab/dependent_eliminator_test.exs` — expected 6 tests, 0 failures.
-Then (one at a time): `mix test test/cure/core/` — expected all pass (273+); `mix test test/cure/elab/` — expected all pass (440+, includes the new 6).
+Run: `mix test test/cure/elab/dependent_eliminator_test.exs` — expected **5 of 7 pass**: explicit-param pin + both surface negatives + both §2.4 tests green; the implicit-param probe and runtime tests remain RED with `:bad_motive` (spec §7.1 — they are Task 1b's red baseline, captured here). Anything else failing, or the two reds failing with a DIFFERENT tag, = STOP.
+Then (one at a time): `mix test test/cure/core/` — expected all pass (273+); no elab-wide run yet (two in-file reds are expected until Task 1b).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: NO commit yet — proceed to Task 1b**
+
+**[AMENDED 2026-07-09]** The kernel clauses and the test file commit TOGETHER at the end of Task 1b (its Step 5): the probe/runtime tests live in the same file and are red until the elaborator fix lands, and committing a red test file violates red-green discipline. The staged evidence from Steps 2/4/6 must be preserved verbatim for the combined commit's report.
+
+---
+
+### Task 1b: type-position implicit insertion (spec §7 amendment, 2026-07-09)
+
+**Why:** with both kernel clauses in, the implicit-param probe still rejects because `function_signature` lowers the return annotation via `idx_to_core`, whose global-application fallthrough builds a bare explicit-args spine — no implicit insertion (spec §7.1, verified `declarations.ex:915-916`). The motive reaching the kernel is `{:app, {:var,2}, {:app, {:global,:first}, {:var,0}}}` — `first` applied to 1 of 3 binders. This task makes type-position lower the SAME spine term position does. E-layer only (untrusted; kernel re-checks everything).
+
+**Files:**
+- Modify: `lib/cure/elab/elaborator.ex` (one public wrapper next to `elaborate_implicit_app_bidirectional/6`, ~line 4116)
+- Modify: `lib/cure/elab/declarations.ex` (`function_signature` ~92-116; `idx_to_core` clauses ~860-1001; `map_idx_to_core`)
+- Test: `test/cure/elab/dependent_eliminator_test.exs` (no new tests — the probe + runtime tests written in Task 1 ARE this task's red, captured red at Task 1 Step 6)
+
+**Interfaces:**
+- Consumes: `elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected \\ nil)` (private, elaborator.ex:4116) → `{:ok, term, result_type} | {:error, _}`; `build_context(env, telescope)` (declarations.ex, body-pass precedent at :78); `Env.get_def(env, atom)` → `%{type: _, quantities: _} | nil`; quantities atoms are `:erased`/`:present` (solve_arg heads, elaborator.ex:4046-4051).
+- Produces: `Cure.Elab.Elaborator.elaborate_implicit_global_app(env, name, arg_asts, names, ctx)` (new public, thin delegate); `idx_to_core/5` (ctx as 5th arg, default `nil`).
+
+**Registration-pass fact (orchestrator-verified, spec §7.4 discharged):** `register_signature` (declarations.ex:36-40) runs `Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)` in declaration order (program.ex `register_pass`/`register_pass_lean`), so when `second`'s signature lowers, `Env.get_def(env, :first)` already returns its `%{type, quantities}`. `function_signature` runs again in the body pass with the same type environment — the delegation consults type+quantities only, so both passes compute the same `return_core`.
+
+- [ ] **Step 1: Confirm the red (no mix run needed — carried from Task 1 Step 6)**
+
+The probe and runtime tests fail with `:bad_motive`. If Task 1 Step 6 was not run immediately before this task, re-run `mix test test/cure/elab/dependent_eliminator_test.exs` once to re-capture: 5/7, the two reds `:bad_motive`.
+
+- [ ] **Step 2: Add the public wrapper in `elaborator.ex`**
+
+Next to `elaborate_implicit_app_bidirectional/6` (~4116):
+
+```elixir
+  @doc """
+  Type-position entry for implicit insertion (spec 2026-07-08 §7): elaborate an
+  application of a global that carries implicit (erased) parameters, from its
+  SURFACE argument ASTs, in the caller's typing context. Used by the
+  return-type lowering in `Cure.Elab.Declarations` — term position reaches the
+  same machinery via `elaborate_named_call`. The kernel re-checks the assembled
+  signature, so nothing unsound rests on this path.
+  """
+  def elaborate_implicit_global_app(env, name, arg_asts, names, ctx) do
+    elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx)
+  end
+```
+
+- [ ] **Step 3: Thread a ctx through the return-type lowering in `declarations.ex`**
+
+3a. `function_signature` — build the context and pass it (ONLY here; every other `idx_to_core` caller is untouched and gets `nil` via the default):
+
+```elixir
+    with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
+         ctx = build_context(env, telescope),
+         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env, ctx) do
+```
+
+3b. Give `idx_to_core` a 5th parameter with a default header (Elixir multi-clause default), converting every existing clause head to 5 args:
+
+```elixir
+  defp idx_to_core(ast, scope, fam, env, ctx \\ nil)
+```
+
+- The two `{:variable, …}` clauses and the fallback clause: add `_ctx`, bodies unchanged.
+- The `{:sigma_type, …}`, `{:pi_type, …}`, and `{:attribute_access, …}` clauses: add `_ctx`, bodies unchanged — their sub-lowerings keep calling the 4-arg form (ctx `nil`): crossing a binder-introducing form NULLs the ctx (spec §7.3 item 4 — the scope gains binders the kernel context lacks; a stale ctx would mis-frame de Bruijn). `arrow_to_pi` likewise stays 4-arg.
+- The `{:function_call, …}` clause: thread ctx into the argument lowering and add the delegation branch BEFORE args are lowered (the delegate elaborates surface ASTs itself):
+
+```elixir
+  defp idx_to_core({:function_call, fmeta, args}, scope, fam, env, ctx) do
+    if Keyword.get(fmeta, :function_type) do
+      arrow_to_pi(args, scope, fam, env)
+    else
+      name = Keyword.fetch!(fmeta, :name)
+      atom = String.to_atom(name)
+
+      # Type-position implicit insertion (spec §7): a term-level global whose
+      # signature carries erased (implicit) parameters cannot lower as a bare
+      # explicit-args spine — the kernel would see an under-applied application
+      # (the `b(first(p))` motive gap). With a typing context threaded in
+      # (return-type lowering only), delegate the whole application to the
+      # term-position machinery. A local binder of the same name shadows the
+      # global (mirrors the applied-bound-var cond branch below), and families/
+      # ctors never carry def quantities, so this misses them by construction.
+      if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
+           implicit_global?(env, atom) do
+        with {:ok, term, _result_type} <-
+               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+          {:ok, term}
+        end
+      else
+        with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+          # …existing cond (qualified / bound-var / family / ctor / bare spine)
+          # byte-for-byte unchanged…
+        end
+      end
+    end
+  end
+```
+
+3c. `map_idx_to_core` gains the same defaulted 5th param and threads it to `idx_to_core/5` — this is what routes the ctx to NESTED argument positions, the probe's actual shape (`b(first(p))`: head `b` is a bound var, the implicit-carrying global `first` is one level down; spec §7.3 item 3).
+
+3d. The helper:
+
+```elixir
+  # A term-level global whose registered signature carries at least one erased
+  # (implicit) parameter — the only shape the bare-spine lowering mis-handles.
+  # Families and constructors are not defs, so they return false here.
+  defp implicit_global?(env, atom) do
+    case Env.get_def(env, atom) do
+      %{quantities: quantities} -> :erased in quantities
+      _ -> false
+    end
+  end
+```
+
+(Verify `Env.get_def/2`'s miss value in `lib/cure/core/env.ex` first; if it raises or returns something other than `nil` on a miss, wrap accordingly — the `_ ->` clause must cover the miss.)
+
+- [ ] **Step 4: Run to verify all green**
+
+Run: `mix test test/cure/elab/dependent_eliminator_test.exs` — expected **7 tests, 0 failures** (the probe elaborates; `run_second()` returns `{:S, :Z}`).
+Then (one at a time): `mix test test/cure/elab/` — expected all pass (~440+, includes the new 7; any pre-existing elab test failing = STOP, this is the blast-radius gate for the threading change); `mix test test/cure/core/` — expected all pass.
+
+- [ ] **Step 5: Combined commit (Task 1 + Task 1b)**
 
 ```bash
-git add -- lib/cure/core/kernel.ex test/cure/elab/dependent_eliminator_test.exs
+git add -- lib/cure/core/kernel.ex lib/cure/elab/declarations.ex lib/cure/elab/elaborator.ex test/cure/elab/dependent_eliminator_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
-  -m "feat(kernel): sort neutral type-valued applications via reify+infer (Sigma D1 enabler; defensive pair infer clause)" \
-  -- lib/cure/core/kernel.ex test/cure/elab/dependent_eliminator_test.exs
+  -m "feat(kernel+elab): dependent second projection — napp motive sort via reify+infer + type-position implicit insertion (Sigma D1)" \
+  -- lib/cure/core/kernel.ex lib/cure/elab/declarations.ex lib/cure/elab/elaborator.ex test/cure/elab/dependent_eliminator_test.exs
 ```
 
 ---
@@ -411,14 +560,15 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - [ ] **Step 1: Full gates (ONE at a time, alone, in this order)**
 
 1. `mix test test/antigen/` — expected: 492, 0 failures.
-2. `mix test` — expected: ~3248 (3238 baseline + 6 Task-1 unit tests [includes the review-added runtime-execution test] + 2 Task-2 antibody tests + 2 Task-3 oracle-replay tests — `test/oracle_replay_test.exs` generates its `describe`/`test` pair PER CLUSTER via a compile-time `for cluster <- Cure.Oracle.clusters() do ... end` loop, so the new `sg` cluster adds exactly 2 tests to this file's count, not zero; recount all four terms from actual red-step outputs), 0 failures. One known non-reproducible Antigen-seed flake: exactly one Antigen seed failure → re-run once alone; if unreproduced, note honestly. Anything else = STOP.
+2. `mix test` — expected: ~3249 (3238 baseline + 7 Task-1/1b unit tests [includes the review-added runtime-execution test and the amendment-added explicit-param kernel pin] + 2 Task-2 antibody tests + 2 Task-3 oracle-replay tests — `test/oracle_replay_test.exs` generates its `describe`/`test` pair PER CLUSTER via a compile-time `for cluster <- Cure.Oracle.clusters() do ... end` loop, so the new `sg` cluster adds exactly 2 tests to this file's count, not zero; recount all four terms from actual red-step outputs), 0 failures. One known non-reproducible Antigen-seed flake: exactly one Antigen seed failure → re-run once alone; if unreproduced, note honestly. Anything else = STOP.
 
 - [ ] **Step 2: Final verification**
 
 Use `<pre-batch-commit>` recorded in Task 1 Step 0.4 (the `HEAD` hash before any of this plan's commits) as the base of every diff below — do not use `<task1-commit>~1`, which requires re-deriving the same value less directly.
 
 - `git diff <pre-batch-commit> HEAD -- lib/cure/core/` shows ONLY the two kernel.ex clauses (+ their comments) — nothing else under core.
-- `git diff --stat <pre-batch-commit> HEAD -- lib/cure/elab/ lib/cure/types/ lib/cure/compiler/` — empty except nothing at all (no elab change is expected in this initiative).
+- `git diff --stat <pre-batch-commit> HEAD -- lib/cure/elab/` — **[AMENDED 2026-07-09, spec §7.7]** exactly two files: `declarations.ex` (ctx threading + delegation + helper) and `elaborator.ex` (the one public wrapper). Anything else under elab = STOP.
+- `git diff --stat <pre-batch-commit> HEAD -- lib/cure/types/ lib/cure/compiler/` — empty (decoy pipeline untouched).
 - `git log --format='%an %ae' <pre-batch-commit>..HEAD` — only `Made In Heaven madeinheaven@madeinheaven.com`.
 
 ---
@@ -428,3 +578,4 @@ Use `<pre-batch-commit>` recorded in Task 1 Step 0.4 (the `HEAD` hash before any
 - §2 clause → Task 1 Step 3 (verbatim, signature-aware reify per hardened §2.2). §2.4 defensive clause + demonstrable necessity → Task 1 Steps 4-5 (mid-point crash captured). §3.1 red-green → Task 1 Steps 2/4/6. §3.2 antibody → Task 2: the ACCEPTING seed is the new `DepMatch` variant (Step 1, per spec's explicit "add a D1 accepting variant there" precedent — a review-found gap in the original plan draft, now fixed) plus fixed accept/reject pins (Steps 2-3) as a complementary deterministic anchor; the REJECTING seed is the Malformed frequency-list addition (Step 4, precedent `Malformed.case_bad_motive/1` per spec). §3.3 full suites → Tasks 2/4. §3.4 oracle → Task 3 (single-cluster discipline + divergence STOP; fixture template is `dpair`, not `guard`, per review — no `start` def needed). §4's five spec-mandated behaviors → Task 1's six unit tests (probe elaborates + probe runs on BEAM [review-added, was missing] + 2 surface negatives + 2 hand-built §2.4). §6.5 diff criterion → Task 4 Step 2 (using `<pre-batch-commit>` recorded in Task 1 Step 0.4).
 - Latitude is confined to: surface framing of the two adjustable negatives, ctor-atom namespacing, the exact de Bruijn indices in the new `DepMatch` arm (iterate against `dep_match_test.exs` until green, per Task 2 Step 1), and recount of gate totals — all report-required.
 - D2 (Sigma retirement) is the chained follow-up; its scout inventory must be re-swept in-worktree (spec §5 note).
+- **Amendment log (2026-07-09, spec §7):** execution STOPped at Task 1 Step 6 — kernel clauses correct, implicit-param probe still `:bad_motive` (elaborator return-type lowering has no implicit insertion, `declarations.ex:915-916`). Adjudicated per the standing align-with-real-languages directive: Task 1b added (E-layer type-position implicit insertion, spec §7.3 design); Task 1's §2.4 pair test corrected to a function-typed head (the executor proved the Nat-head version never reaches the crash, spec §7.6); explicit-param kernel pin added so Task 1 keeps an honest kernel-only green; Task 1/1b commit combined (red-test-file discipline); gate count 3248→3249; Task 4 elab diff expectation updated.
