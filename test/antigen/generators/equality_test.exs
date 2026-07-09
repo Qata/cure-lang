@@ -17,7 +17,7 @@ defmodule Antigen.Generators.EqualityTest do
 
       case Kernel.infer(cx, c.payload.term) do
         {:ok, inferred} ->
-          assert Normalise.quote(inferred, Context.length(cx)) == c.payload.type
+          assert Normalise.quote(inferred, Context.length(cx), Context.signature(cx)) == c.payload.type
           assert Normalise.nf(cx, c.payload.term, fuel: 500_000) != :fuel_exhausted
 
         other ->

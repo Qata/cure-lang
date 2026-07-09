@@ -22,9 +22,9 @@ mod Std.Ord
   type Ordering = LessThan | EqualTo | GreaterThan
 
   ## Total ordering over `T`.
-  proto Ord(T)
+  proto Ord(t)
     ## `LessThan` when `a < b`, `GreaterThan` when `a > b`, `EqualTo` otherwise.
-    fn compare(a: T, b: T) -> Ordering
+    fn compare(a: t, b: t) -> Ordering
 
   ## `Ord` impl for `Int`.
   impl Ord for Int
@@ -54,13 +54,13 @@ mod Std.Ord
         else  -> EqualTo()
 
   ## Strict less-than derived from `compare/2`.
-  fn lt(a: T, b: T) -> Bool = compare(a, b) == LessThan()
+  fn lt(a: t, b: t) -> Bool = compare(a, b) == LessThan()
 
   ## Less-than-or-equal derived from `compare/2`.
-  fn le(a: T, b: T) -> Bool = compare(a, b) != GreaterThan()
+  fn le(a: t, b: t) -> Bool = compare(a, b) != GreaterThan()
 
   ## Strict greater-than derived from `compare/2`.
-  fn gt(a: T, b: T) -> Bool = compare(a, b) == GreaterThan()
+  fn gt(a: t, b: t) -> Bool = compare(a, b) == GreaterThan()
 
   ## Greater-than-or-equal derived from `compare/2`.
-  fn ge(a: T, b: T) -> Bool = compare(a, b) != LessThan()
+  fn ge(a: t, b: t) -> Bool = compare(a, b) != LessThan()

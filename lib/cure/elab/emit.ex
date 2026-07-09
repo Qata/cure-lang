@@ -123,7 +123,23 @@ defmodule Cure.Elab.Emit do
   end
 
   defp function_form(env, name) do
-    %{body: body, quantities: quantities} = Env.get_def(env, name)
+    case Env.get_def(env, name) do
+      %{body: {:extern, {mod, fun, arity}}} -> extern_form(name, {mod, fun, arity})
+      def -> real_function_form(name, def, env)
+    end
+  end
+
+  # Wave-3: emit a direct Erlang remote call, mirroring codegen.ex:691-705 (NOT
+  # calling it). Params are synthesized from the arity — a bodyless extern has no
+  # {:lam,…} chain to peel, so peel_params/4 would yield zero params for arity>0.
+  # `0..(arity-1)//1` yields `[]` at arity 0 → `mod:fun()`, correct.
+  defp extern_form(fn_atom, {mod, fun, arity}) do
+    param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
+    remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
+    {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [remote]}]}
+  end
+
+  defp real_function_form(name, %{body: body, quantities: quantities}, env) do
     qs = quantities || []
     {param_names, inner} = peel_params(Erase.erase(env, body), qs, 0, [])
 
@@ -172,6 +188,12 @@ defmodule Cure.Elab.Emit do
 
       sigma_ctor?(env, name) ->
         {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
+
+      list_ctor?(env, name) ->
+        case {name, args} do
+          {:Nil, []} -> {nil, @line}
+          {:Cons, [h, t]} -> {:cons, @line, lower(env, h, ctx), lower(env, t, ctx)}
+        end
 
       true ->
         case Enum.map(args, &lower(env, &1, ctx)) do
@@ -402,6 +424,7 @@ defmodule Cure.Elab.Emit do
     cond do
       nat_ctor?(env, cname) -> nat_branch_clause(env, {cname, arity, body}, ctx)
       sigma_ctor?(env, cname) -> sigma_branch_clause(env, {cname, arity, body}, ctx)
+      list_ctor?(env, cname) -> list_branch_clause(env, {cname, arity, body}, ctx)
       true -> generic_branch_clause(env, {cname, arity, body}, ctx)
     end
   end
@@ -418,6 +441,25 @@ defmodule Cure.Elab.Emit do
     px = underscore_if_unused({:var, @line, vx}, body_form)
     py = underscore_if_unused({:var, @line, vy}, body_form)
     {:clause, @line, [{:tuple, @line, [px, py]}], [], [body_form]}
+  end
+
+  # case-on-List: Nil matches [], Cons(h,t) matches [H|T], binding both fields
+  # into the de Bruijn frame exactly as the generic tagged form would (index 0 =
+  # last field, so `[tail, head | ctx]`). A nested list pattern is lowered by the
+  # elaborator's matrix compiler into a chain of these single-level Cons/Nil
+  # branches, so native cons cells select correctly at every level.
+  defp list_branch_clause(env, {:Nil, 0, body}, ctx) do
+    {:clause, @line, [{nil, @line}], [], [lower(env, body, ctx)]}
+  end
+
+  defp list_branch_clause(env, {:Cons, 2, body}, ctx) do
+    base = length(ctx)
+    vh = :"V#{base}"
+    vt = :"V#{base + 1}"
+    body_form = lower(env, body, [vt, vh | ctx])
+    ph = underscore_if_unused({:var, @line, vh}, body_form)
+    pt = underscore_if_unused({:var, @line, vt}, body_form)
+    {:clause, @line, [{:cons, @line, ph, pt}], [], [body_form]}
   end
 
   # case-on-Nat (spec §2.2): the zero ctor's branch matches literal 0; the succ
@@ -512,6 +554,13 @@ defmodule Cure.Elab.Emit do
   # Std.Pair's element/2 interop and AtomVM depend on the untagged shape.
   defp sigma_ctor?(env, name) do
     fam = Inductive.builtin(env, :sigma)
+    fam != nil and Inductive.ctor_family(env, name) == fam
+  end
+
+  # The canonical Std.List family (registry-keyed, nominal): its values are native
+  # BEAM lists — Nil is [], Cons(h,t) is [H|T] — so Erlang/AtomVM list NIFs interop.
+  defp list_ctor?(env, name) do
+    fam = Inductive.builtin(env, :list)
     fam != nil and Inductive.ctor_family(env, name) == fam
   end
 

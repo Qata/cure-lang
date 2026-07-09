@@ -39,7 +39,7 @@ mod Std.Regex
 
   ## Opaque compiled regex handle.
   rec Regex
-    handle: T
+    handle: t
 
   ## Capture result for a successful run. `groups` carries the
   ## numbered captures from the first non-whole-match onward;

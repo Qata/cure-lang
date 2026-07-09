@@ -75,12 +75,12 @@ defmodule Antigen.Generators.Equality do
   # Task #14: a bare params-on-spine reflexive at TOP level — the K6 inference
   # spelling that used to sit outside the coherent fragment. `infer` yields the
   # Equivalent vdata; the `term/infer_check` assay now round-trips it back
-  # through `check` (previously `:ctor_arity`, now `:ok`). The claimed type is
-  # the FLAT `params ++ indices` spelling (reify has no signature to split it;
-  # same convention as `checked_refl_transport_term`).
+  # through `check` (previously `:ctor_arity`, now `:ok`). The claimed type uses
+  # the SPLIT `params`/`indices` spelling: since B1 (signature-aware readback),
+  # `Normalise.quote` recovers the 1-param/2-index split, so the claim must match.
   defp spine_refl_term do
     Gen.bind(inhabitant(), fn {a, ty} ->
-      Gen.return({{:ctor, :reflexive, [ty, a]}, {:data, :Equivalent, [ty, a, a], []}, []})
+      Gen.return({{:ctor, :reflexive, [ty, a]}, {:data, :Equivalent, [ty], [a, a]}, []})
     end)
   end
 
@@ -92,8 +92,7 @@ defmodule Antigen.Generators.Equality do
     Gen.bind(inhabitant(), fn {a, ty} ->
       spine_refl = {:ctor, :reflexive, [ty, a]}
       eq_ty = {:data, :Equivalent, [ty], [a, a]}
-      eq_ty_flat = {:data, :Equivalent, [ty, a, a], []}
-      Gen.return({{:app, {:lam, eq_ty, {:var, 0}}, spine_refl}, eq_ty_flat, []})
+      Gen.return({{:app, {:lam, eq_ty, {:var, 0}}, spine_refl}, eq_ty, []})
     end)
   end
 
@@ -127,11 +126,10 @@ defmodule Antigen.Generators.Equality do
       eq_ty = {:data, :Equivalent, [ty], [a, a]}
       motive = {:lam, ty, eq_ty}
       body = {:ctor, :reflexive, [a]}
-      # The claimed type uses the FLAT `params ++ indices` spelling: reify
-      # (`Normalise.quote`) has no signature to recover the split, so the
-      # inferred type reads back flat and the claim must match that shape.
-      eq_ty_flat = {:data, :Equivalent, [ty, a, a], []}
-      Gen.return({{:app, transport(proof, ty, motive, a), body}, eq_ty_flat, []})
+      # The claimed type uses the SPLIT `params`/`indices` spelling: since B1
+      # (signature-aware readback), `Normalise.quote` recovers the split, so the
+      # inferred type reads back split and the claim must match that shape.
+      Gen.return({{:app, transport(proof, ty, motive, a), body}, eq_ty, []})
     end)
   end
 

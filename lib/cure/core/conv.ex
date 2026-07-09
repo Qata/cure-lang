@@ -57,7 +57,7 @@ defmodule Cure.Core.Conv do
 
   # δ-whnf both sides (unfold certified-global heads), then compare structurally.
   defp conv_val?({:vneutral, n1} = v1, {:vneutral, n2} = v2, depth, sig) do
-    same_neutral_no_delta?(n1, n2, depth) or
+    same_neutral_no_delta?(n1, n2, depth, sig) or
       conv_struct?(Normalise.whnf_value(v1, sig), Normalise.whnf_value(v2, sig), depth, sig)
   end
 
@@ -86,7 +86,7 @@ defmodule Cure.Core.Conv do
     do: n1 == n2 and conv_spine?(vs1, vs2, depth, sig)
 
   defp conv_struct?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth, sig),
-    do: n1 == n2 and conv_spine?(vs1, vs2, depth, sig)
+    do: n1 == n2 and conv_spine?(coerce_fields(n1, vs1, sig), coerce_fields(n2, vs2, sig), depth, sig)
 
   defp conv_struct?(_, _, _, _), do: false
 
@@ -149,33 +149,50 @@ defmodule Cure.Core.Conv do
   # recursive globals from unfolding forever when conversion reaches the same
   # stuck recursive call on both sides (`plus(k, n)` vs `plus(k, n)`), while still
   # allowing δ when the two heads are not already identical.
-  defp same_neutral_no_delta?({:nvar, l1}, {:nvar, l2}, _depth), do: l1 == l2
-  defp same_neutral_no_delta?({:nglobal, a}, {:nglobal, b}, _depth), do: a == b
+  defp same_neutral_no_delta?({:nvar, l1}, {:nvar, l2}, _depth, _sig), do: l1 == l2
+  defp same_neutral_no_delta?({:nglobal, a}, {:nglobal, b}, _depth, _sig), do: a == b
 
-  defp same_neutral_no_delta?({:napp, f1, a1}, {:napp, f2, a2}, depth),
-    do: same_neutral_no_delta?(f1, f2, depth) and same_value_no_delta?(a1, a2, depth)
+  defp same_neutral_no_delta?({:napp, f1, a1}, {:napp, f2, a2}, depth, sig),
+    do: same_neutral_no_delta?(f1, f2, depth, sig) and same_value_no_delta?(a1, a2, depth, sig)
 
-  defp same_neutral_no_delta?(_, _, _depth), do: false
+  defp same_neutral_no_delta?(_, _, _depth, _sig), do: false
 
-  defp same_value_no_delta?({:vneutral, n1}, {:vneutral, n2}, depth),
-    do: same_neutral_no_delta?(n1, n2, depth)
+  defp same_value_no_delta?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
+    do: same_neutral_no_delta?(n1, n2, depth, sig)
 
-  defp same_value_no_delta?({:vtype, l1}, {:vtype, l2}, _depth), do: l1 == l2
-  defp same_value_no_delta?({:vint_type}, {:vint_type}, _depth), do: true
-  defp same_value_no_delta?({:vint, a}, {:vint, b}, _depth), do: a == b
-  defp same_value_no_delta?({:vfloat_type}, {:vfloat_type}, _depth), do: true
-  defp same_value_no_delta?({:vfloat, a}, {:vfloat, b}, _depth), do: a == b
+  defp same_value_no_delta?({:vtype, l1}, {:vtype, l2}, _depth, _sig), do: l1 == l2
+  defp same_value_no_delta?({:vint_type}, {:vint_type}, _depth, _sig), do: true
+  defp same_value_no_delta?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
+  defp same_value_no_delta?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
+  defp same_value_no_delta?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 
-  defp same_value_no_delta?({:vdata, n1, args1}, {:vdata, n2, args2}, depth),
-    do: n1 == n2 and same_spine_no_delta?(args1, args2, depth)
+  defp same_value_no_delta?({:vdata, n1, args1}, {:vdata, n2, args2}, depth, sig),
+    do: n1 == n2 and same_spine_no_delta?(args1, args2, depth, sig)
 
-  defp same_value_no_delta?({:vctor, n1, args1}, {:vctor, n2, args2}, depth),
-    do: n1 == n2 and same_spine_no_delta?(args1, args2, depth)
+  defp same_value_no_delta?({:vctor, n1, args1}, {:vctor, n2, args2}, depth, sig),
+    do:
+      n1 == n2 and
+        same_spine_no_delta?(coerce_fields(n1, args1, sig), coerce_fields(n2, args2, sig), depth, sig)
 
-  defp same_value_no_delta?(_a, _b, _depth), do: false
+  defp same_value_no_delta?(_a, _b, _depth, _sig), do: false
 
-  defp same_spine_no_delta?(args1, args2, depth) do
+  defp same_spine_no_delta?(args1, args2, depth, sig) do
     length(args1) == length(args2) and
-      Enum.zip(args1, args2) |> Enum.all?(fn {a, b} -> same_value_no_delta?(a, b, depth) end)
+      Enum.zip(args1, args2) |> Enum.all?(fn {a, b} -> same_value_no_delta?(a, b, depth, sig) end)
+  end
+
+  # Coerce a possibly-params-on-spine ctor value spine to fields-only (last F),
+  # F = the ctor's field count. Nil sig or unknown ctor ⇒ unchanged (falls back
+  # to today's length-strict compare — sound, at worst a false-reject).
+  defp coerce_fields(_cname, vs, nil), do: vs
+
+  defp coerce_fields(cname, vs, sig) do
+    case Cure.Core.Inductive.arg_telescope(sig, cname) do
+      tele when is_list(tele) and length(vs) > length(tele) ->
+        Enum.drop(vs, length(vs) - length(tele))
+
+      _ ->
+        vs
+    end
   end
 end

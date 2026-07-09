@@ -50,7 +50,7 @@ mod Std.CRDT
 
   ## Grow-only counter. Per-replica counts are summed on read.
   rec GCounter
-    counts: T
+    counts: t
 
   ## Positive/negative counter -- two `GCounter`s, one for increments
   ## and one for decrements. `pn_value` returns `sum(p) - sum(n)`.
@@ -62,19 +62,19 @@ mod Std.CRDT
   ## attributed to its addition; removals drop exactly the tags the
   ## remover has observed.
   rec ORSet
-    entries: T
+    entries: t
 
   ## Last-write-wins register. Merges pick the side with the higher
   ## timestamp; ties break on node id.
   rec LWWRegister
-    value: T
+    value: t
     stamp: Int
     node: Atom
 
   ## Multi-value register. When two writes are concurrent, both are
   ## retained so the caller can resolve the conflict.
   rec MVRegister
-    writes: T
+    writes: t
 
   # -- GCounter ---------------------------------------------------------------
 
@@ -125,16 +125,16 @@ mod Std.CRDT
   ## Add `elem` to the set on replica `node`; tags the addition with a
   ## fresh unique identifier so it survives a concurrent remove.
   @extern(:cure_std_crdt, :or_add, 3)
-  fn or_add(s: ORSet, node: Atom, elem: T) -> ORSet
+  fn or_add(s: ORSet, node: Atom, elem: t) -> ORSet
 
   ## Remove `elem` from the set; only removes tags this replica has
   ## observed, so concurrent re-adds from other replicas are retained.
   @extern(:cure_std_crdt, :or_remove, 2)
-  fn or_remove(s: ORSet, elem: T) -> ORSet
+  fn or_remove(s: ORSet, elem: t) -> ORSet
 
   ## List of current elements.
   @extern(:cure_std_crdt, :or_value, 1)
-  fn or_value(s: ORSet) -> List(T)
+  fn or_value(s: ORSet) -> List(t)
 
   ## Merge two `ORSet`s via tag union.
   @extern(:cure_std_crdt, :or_merge, 2)
@@ -148,11 +148,11 @@ mod Std.CRDT
 
   ## Write `value` with timestamp `stamp` from replica `node`.
   @extern(:cure_std_crdt, :lww_set, 4)
-  fn lww_set(r: LWWRegister, value: T, stamp: Int, node: Atom) -> LWWRegister
+  fn lww_set(r: LWWRegister, value: t, stamp: Int, node: Atom) -> LWWRegister
 
   ## Current value of the register.
   @extern(:cure_std_crdt, :lww_value, 1)
-  fn lww_value(r: LWWRegister) -> T
+  fn lww_value(r: LWWRegister) -> t
 
   ## Merge by selecting the side with the higher timestamp; ties
   ## break on node id.
@@ -168,11 +168,11 @@ mod Std.CRDT
   ## Write `value` on replica `node` with timestamp `stamp`; concurrent
   ## writes are retained.
   @extern(:cure_std_crdt, :mv_write, 4)
-  fn mv_write(r: MVRegister, value: T, stamp: Int, node: Atom) -> MVRegister
+  fn mv_write(r: MVRegister, value: t, stamp: Int, node: Atom) -> MVRegister
 
   ## List of currently-live values.
   @extern(:cure_std_crdt, :mv_values, 1)
-  fn mv_values(r: MVRegister) -> List(T)
+  fn mv_values(r: MVRegister) -> List(t)
 
   ## Merge by taking the union of non-dominated writes.
   @extern(:cure_std_crdt, :mv_merge, 2)

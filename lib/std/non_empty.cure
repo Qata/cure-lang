@@ -24,33 +24,33 @@ mod Std.NonEmpty
   @group(:collections)
 
   ## A first element (`head`) and everything after it (`tail`, possibly empty).
-  type NonEmpty(T) = NonEmpty(T, List(T))
+  type NonEmpty(t) = NonEmpty(t, List(t))
 
   ## A non-empty list of exactly one element.
-  fn singleton(x: T) -> NonEmpty(T) = NonEmpty(x, [])
+  fn singleton(x: t) -> NonEmpty(t) = NonEmpty(x, [])
 
   ## The guaranteed-present first element.
-  fn head(ne: NonEmpty(T)) -> T = match ne
+  fn head(ne: NonEmpty(t)) -> t = match ne
     NonEmpty(h, _) -> h
 
   ## Everything after the head (may be empty).
-  fn tail(ne: NonEmpty(T)) -> List(T) = match ne
+  fn tail(ne: NonEmpty(t)) -> List(t) = match ne
     NonEmpty(_, t) -> t
 
   ## Forget the non-emptiness guarantee: view as an ordinary `List(T)`.
-  fn to_list(ne: NonEmpty(T)) -> List(T) = match ne
+  fn to_list(ne: NonEmpty(t)) -> List(t) = match ne
     NonEmpty(h, t) -> [h | t]
 
   ## Prepend `x`, which becomes the new head.
-  fn push(x: T, ne: NonEmpty(T)) -> NonEmpty(T) = match ne
+  fn push(x: t, ne: NonEmpty(t)) -> NonEmpty(t) = match ne
     NonEmpty(h, t) -> NonEmpty(x, [h | t])
 
   ## Apply `f` to every element, preserving non-emptiness.
-  fn map(ne: NonEmpty(T), f: T -> U) -> NonEmpty(U) = match ne
+  fn map(ne: NonEmpty(t), f: t -> u) -> NonEmpty(u) = match ne
     NonEmpty(h, t) -> NonEmpty(f(h), Std.List.map(t, f))
 
   ## Build a `NonEmpty(T)` from an ordinary list — `Some` when it has a head,
   ## `None` when the list is empty.
-  fn from_list(xs: List(T)) -> Option(NonEmpty(T)) = match xs
+  fn from_list(xs: List(t)) -> Option(NonEmpty(t)) = match xs
     [] -> None()
     [h | t] -> Some(NonEmpty(h, t))

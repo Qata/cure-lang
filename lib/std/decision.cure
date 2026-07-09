@@ -56,11 +56,11 @@ mod Std.Decision
           False() -> Yes(reflexive(False()))
 
   ## `true` when the decision came out `Yes`.
-  fn is_yes(d: Decision(P)) -> Bool = match d
+  fn is_yes(d: Decision(p)) -> Bool = match d
     Yes(_) -> true
     No(_) -> false
 
   ## `true` when the decision came out `No`.
-  fn is_no(d: Decision(P)) -> Bool = match d
+  fn is_no(d: Decision(p)) -> Bool = match d
     Yes(_) -> false
     No(_) -> true

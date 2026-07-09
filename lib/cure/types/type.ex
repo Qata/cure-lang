@@ -394,6 +394,12 @@ defmodule Cure.Types.Type do
   # used by the Cure stdlib and user code; resolving them as `{:type_var, T}`
   # lets `subtype?/2` accept any concrete type at the call site.
   defp resolve_name(<<c>>) when c in ?A..?Z, do: {:type_var, <<c>>}
+  # A single lowercase letter is also an implicit type parameter. The dependent
+  # pipeline treats lowercase-initial names as type vars; the stdlib now spells
+  # its type vars lowercase to match, so the classic checker must accept them
+  # too. Purely additive — single uppercase letters above still work, and
+  # multi-letter lowercase names (`list`, `result`, ...) fall through to `:any`.
+  defp resolve_name(<<c>>) when c in ?a..?z, do: {:type_var, <<c>>}
   # Unknown uppercase name -> named type reference (user-defined record, ADT, etc.)
   defp resolve_name(name = <<c, _::binary>>) when c in ?A..?Z, do: {:named, name}
   defp resolve_name(_), do: :any
