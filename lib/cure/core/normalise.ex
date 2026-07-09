@@ -235,10 +235,11 @@ defmodule Cure.Core.Normalise do
       {:ncase, scrut, _motive, branches} ->
         case whnf_value({:vneutral, scrut}, sig, opts) do
           {:vctor, cname, cargs} ->
-            {_c, _ar, {:closure, env, body}} =
+            {_c, ar, {:closure, env, body}} =
               Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
 
-            reduced = spend_fuel(Eval.eval(body, Enum.reverse(cargs) ++ env))
+            fields = Eval.drop_leading_params(cargs, ar)
+            reduced = spend_fuel(Eval.eval(body, Enum.reverse(fields) ++ env))
             {:ok, reapply(args, reduced)}
 
           _ ->
@@ -273,10 +274,11 @@ defmodule Cure.Core.Normalise do
       {:ncase, scrut, _motive, branches} ->
         case whnf_value({:vneutral, scrut}, sig, opts) do
           {:vctor, cname, cargs} ->
-            {_c, _ar, {:closure, env, body}} =
+            {_c, ar, {:closure, env, body}} =
               Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
 
-            {:ok, reapply(args, spend_fuel(Eval.eval(body, Enum.reverse(cargs) ++ env)))}
+            fields = Eval.drop_leading_params(cargs, ar)
+            {:ok, reapply(args, spend_fuel(Eval.eval(body, Enum.reverse(fields) ++ env)))}
 
           _ ->
             :stuck

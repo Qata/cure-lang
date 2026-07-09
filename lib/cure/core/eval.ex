@@ -55,10 +55,13 @@ defmodule Cure.Core.Eval do
   def eval({:case, scrut, motive, branches}, env) do
     case eval(scrut, env) do
       {:vctor, cname, args} ->
-        {_cname, _arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
-        # The branch body binds the constructor's arguments; the last argument is
-        # de Bruijn index 0, so the body's environment is reverse(args) ++ env.
-        eval(body, Enum.reverse(args) ++ env)
+        {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+        # The branch body binds the constructor's FIELDS (arity of them); the last
+        # field is de Bruijn index 0, so the body's environment is
+        # reverse(fields) ++ env. A K6 params-on-spine ctor value carries family
+        # params ahead of its fields — `drop_leading_params` coerces to fields-only.
+        fields = drop_leading_params(args, arity)
+        eval(body, Enum.reverse(fields) ++ env)
 
       {:vneutral, neutral} ->
         motive_closure = {:closure, env, motive}
@@ -84,6 +87,19 @@ defmodule Cure.Core.Eval do
   @spec apply_closure({:closure, [Cure.Core.Value.t()], Cure.Core.Term.t()}, Cure.Core.Value.t()) ::
           Cure.Core.Value.t()
   def apply_closure({:closure, env, body}, value), do: eval(body, [value | env])
+
+  # -- fields-only ι ----------------------------------------------------------
+
+  # Fields-only canonicalization: a K6 params-on-spine ctor value carries its
+  # family params ahead of its fields; the ι-rule binds ONLY the fields (the
+  # branch's `arity`). length(args) == arity is the canonical zero-cost path.
+  # Public (`@doc false`) so `Cure.Core.Normalise`'s two ι sites call the SAME
+  # function (Step 1.3) — a single audited algorithm, not a duplicated twin.
+  @doc false
+  def drop_leading_params(args, arity) when length(args) > arity,
+    do: Enum.drop(args, length(args) - arity)
+
+  def drop_leading_params(args, _arity), do: args
 
   # -- projection ι -----------------------------------------------------------
 
