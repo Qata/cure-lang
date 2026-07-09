@@ -892,20 +892,50 @@ defmodule Cure.Elab.Declarations do
   # machinery instead of lowering as a bare explicit-args spine. Crossing a
   # binder-introducing form (pi/sigma/arrow) NULLs the ctx for that sub-lowering
   # (the scope gains binders the kernel context lacks — §7.3 item 4).
+  @doc """
+  The single canonical type→Core lowering, shared by the live signature path
+  (`register_signature`/`elaborate_param_telescope`) and the legacy
+  `Elaborator.elaborate_type/3`, which delegates here. `scope` names the binders
+  in de Bruijn order (most-recent first); there is no family-relative context, so
+  `fam`/`ctx` are `nil` (used only defensively for family self-reference and
+  return-type implicit insertion). Lowers a type expression — including a numeric
+  index like `Bounded(5)` → `{:nat_lit, 5}` — to a Core term.
+  """
+  @spec lower_type(tuple(), [String.t()], Env.t()) :: {:ok, tuple()} | {:error, term()}
+  def lower_type(ast, scope, env), do: idx_to_core(ast, scope, nil, env, nil)
+
+  # An all-digits binder name can only be a stringified integer token from the
+  # type parser (Cure identifiers never start with a digit), so it is a compact
+  # Nat literal, not a variable. Empty string and any non-digit char reject.
+  defp numeric_index_name?(name) when is_binary(name),
+    do: name != "" and String.match?(name, ~r/\A[0-9]+\z/)
+
+  defp numeric_index_name?(_), do: false
+
   defp idx_to_core(ast, scope, fam, env, ctx \\ nil)
 
   defp idx_to_core({:variable, _meta, "Type"}, _scope, _fam, _env, _ctx), do: {:ok, {:type, 0}}
 
   defp idx_to_core({:variable, _meta, name}, scope, _fam, env, _ctx) do
-    case Enum.find_index(scope, &(&1 == name)) do
-      nil ->
+    cond do
+      # A numeric literal in a dependent type index — the `5` in `Bounded(5)`, the
+      # `0x110000` Char bound in `Bounded(1114112)`. The lexer's integer token is
+      # stringified into a NAME node by the type parser, so it arrives here as an
+      # all-digits `name`. It can never be a binder (you cannot bind `5`), so it is
+      # unambiguously a compact `Nat` literal regardless of scope — the surface half
+      # of the compact-Nat kernel path (Lean/Agda: a numeral in index position is a
+      # `Nat`). Without this it fell through to a phantom `{:global, :"5"}`.
+      numeric_index_name?(name) ->
+        {:ok, {:nat_lit, String.to_integer(name)}}
+
+      (idx = Enum.find_index(scope, &(&1 == name))) != nil ->
+        {:ok, {:var, idx}}
+
+      true ->
         case resolve_index_name(name, env) do
           {:ambiguous_name, atom, mods} -> {:error, {:ambiguous_name, atom, mods}}
           node -> {:ok, node}
         end
-
-      index ->
-        {:ok, {:var, index}}
     end
   end
 
