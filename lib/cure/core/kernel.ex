@@ -136,9 +136,8 @@ defmodule Cure.Core.Kernel do
       nil ->
         {:error, {:unknown_ctor, name}}
 
-      %{args: tele, result_indices: result_indices} = ctor_sig ->
+      %{args: tele} = ctor_sig ->
         family_name = Inductive.ctor_family(sig, name)
-        result_params = Map.get(ctor_sig, :result_params, [])
         pc = Inductive.param_count(sig, family_name)
 
         cond do
@@ -147,9 +146,7 @@ defmodule Cure.Core.Kernel do
               # The accumulated arg values (most-recent first) are exactly the env
               # in which the result terms are written; compute them by NbE (so a
               # computed index like `and(d1,d2)` reduces once δ is available, M7).
-              param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
-              index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-              {:ok, {:vdata, family_name, param_values ++ index_values}}
+              {:ok, result_vdata(arg_env, family_name, ctor_sig)}
             end
 
           # K6 / §E.1: the data parameters ride the spine at grade 0 (Lean's kernel
@@ -165,9 +162,7 @@ defmodule Cure.Core.Kernel do
             ptele = Inductive.param_telescope(sig, family_name) || []
 
             with {:ok, arg_env, _fields} <- check_ctor_app(ctx, [], args, ptele ++ tele) do
-              param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
-              index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-              {:ok, {:vdata, family_name, param_values ++ index_values}}
+              {:ok, result_vdata(arg_env, family_name, ctor_sig)}
             end
 
           # Params absent from a bare fields-only spine: nothing carries them, so
@@ -268,9 +263,7 @@ defmodule Cure.Core.Kernel do
       nil ->
         {:error, {:unknown_ctor, cname}}
 
-      %{args: tele, result_indices: result_indices} = ctor_sig ->
-        result_params = Map.get(ctor_sig, :result_params, [])
-
+      %{args: tele} = ctor_sig ->
         cond do
           Inductive.ctor_family(sig, cname) != family ->
             {:error, {:foreign_ctor, cname}}
@@ -280,9 +273,7 @@ defmodule Cure.Core.Kernel do
           # below collapses to this same predicate (spec §1 "order is load-bearing").
           length(args) == length(tele) ->
             with {:ok, arg_env, field_vals} <- check_ctor_app(ctx, params, args, tele) do
-              actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
-              actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-              actual = {:vdata, family, actual_params ++ actual_indices}
+              actual = result_vdata(arg_env, family, ctor_sig)
 
               if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
                 {:ok, {:vctor, cname, field_vals}}
@@ -597,6 +588,19 @@ defmodule Cure.Core.Kernel do
   # user-facing :index_unification earlier — see plan M3.4/M8.4).
   defp remap_index_error(_err, {:vdata, _name, _args}), do: {:error, :index_mismatch}
   defp remap_index_error(err, _expected), do: err
+
+  # Assemble a constructor's RESULT type value by evaluating its result params and
+  # indices in the accumulated field/param environment (`arg_env`, most-recent
+  # first). The single owner of the `{:vdata, family, result_params ++
+  # result_indices}` shape shared by the inference-mode ctor rule and
+  # checking-mode `elaborate_ctor`; a computed index reduces once δ is available.
+  defp result_vdata(arg_env, family, ctor_sig) do
+    result_params = Map.get(ctor_sig, :result_params, [])
+    result_indices = Map.get(ctor_sig, :result_indices, [])
+    param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
+    index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+    {:vdata, family, param_values ++ index_values}
+  end
 
   # -- dependent case (§4.4) --------------------------------------------------
 
