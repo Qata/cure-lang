@@ -57,6 +57,13 @@ defmodule Cure.Core.Kernel do
   # numeric-polymorphic over Int or Float; connectives are on Bool).
   def infer(_ctx, {:int_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:int_lit, _n}), do: {:ok, {:vint_type}}
+
+  # A compact Nat literal inhabits the canonical `Nat` inductive family — its type
+  # is the family value `{:vdata, :Nat, []}`, exactly what `infer({:ctor, :Z, []})`
+  # and `eval({:data, :Nat, [], []})` produce, so a literal and the `S`-tower are
+  # interchangeable at the type level too (needs `ctx` to reach the signature).
+  def infer(ctx, {:nat_lit, n}) when is_integer(n) and n >= 0,
+    do: {:ok, nat_type_value(Context.signature(ctx))}
   def infer(_ctx, {:float_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:float_lit, _f}), do: {:ok, {:vfloat_type}}
 
@@ -966,6 +973,10 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:int_type}), do: true
   defp rigid_index?({:float_type}), do: true
   defp rigid_index?({:int_lit, _}), do: true
+  # A compact Nat literal is a closed canonical value (`2` ≡ `S(S(Z))`), so it is
+  # a rigid constructor-like head for index unification — same status the `S`/`Z`
+  # tower already has via the `{:ctor, _, _}` clause above.
+  defp rigid_index?({:nat_lit, _}), do: true
   defp rigid_index?({:float_lit, _}), do: true
   defp rigid_index?(_), do: false
 
@@ -1101,6 +1112,17 @@ defmodule Cure.Core.Kernel do
   @spec bool_type_value(Env.t()) :: Cure.Core.Value.t()
   def bool_type_value(sig) do
     fid = Inductive.builtin(sig, :bool) || raise "builtin :bool not seeded (bootstrap/load-order bug)"
+    {:vdata, fid, []}
+  end
+
+  @doc """
+  The type **value** denoting the canonical `Nat` inductive (`{:vdata, :Nat, []}`).
+  Shared by the `{:nat_lit, _}` typing rule and the elaborator's type-directed
+  literal lowering, mirroring `bool_type_value/1` (no drift surface).
+  """
+  @spec nat_type_value(Env.t()) :: Cure.Core.Value.t()
+  def nat_type_value(sig) do
+    fid = Inductive.builtin(sig, :nat) || raise "builtin :nat not seeded (bootstrap/load-order bug)"
     {:vdata, fid, []}
   end
 

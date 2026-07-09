@@ -42,6 +42,11 @@ defmodule Cure.Core.Eval do
   # (Normalise) folds saturated literal spines via `fold/2` below.
   def eval({:int_type}, _env), do: {:vint_type}
   def eval({:int_lit, n}, _env), do: {:vint, n}
+
+  # Compact Nat literal: a machine integer standing for the n-fold `S`-tower over
+  # `Z` (Lean kernel Nat / Agda BUILTIN NATURAL). It never materializes the tower;
+  # `nat_to_ctor/1` peels one layer on demand at each ι-site.
+  def eval({:nat_lit, n}, _env), do: {:vnat, n}
   def eval({:float_type}, _env), do: {:vfloat_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
 
@@ -60,6 +65,16 @@ defmodule Cure.Core.Eval do
         # field is de Bruijn index 0, so the body's environment is
         # reverse(fields) ++ env. A K6 params-on-spine ctor value carries family
         # params ahead of its fields — `drop_leading_params` coerces to fields-only.
+        fields = drop_leading_params(args, arity)
+        eval(body, Enum.reverse(fields) ++ env)
+
+      # A compact Nat scrutinee peels ONE layer to `Z`/`S(pred)` and reuses the
+      # ι-rule above (`Z` → the Z-branch in `env`; `S` → the S-branch binding the
+      # compact predecessor at index 0). The tail stays compact, so eliminating a
+      # depth-n literal is n reduction steps, never an n-node heap tower.
+      {:vnat, _} = nat ->
+        {:vctor, cname, args} = nat_to_ctor(nat)
+        {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
         fields = drop_leading_params(args, arity)
         eval(body, Enum.reverse(fields) ++ env)
 
@@ -100,6 +115,26 @@ defmodule Cure.Core.Eval do
     do: Enum.drop(args, length(args) - arity)
 
   def drop_leading_params(args, _arity), do: args
+
+  # -- compact Nat peeling ----------------------------------------------------
+
+  # Peel one layer of a compact Nat literal into its `Z`/`S` constructor value,
+  # leaving the predecessor COMPACT (`{:vnat, n-1}`). This is the single audited
+  # literal→constructor mapping (Lean's `toCtorIfLit` / Agda's `matchLitSuc`);
+  # every ι-site (`eval`'s `:case`, `Normalise`'s two `ncase` arms) routes a
+  # `{:vnat, _}` scrutinee through it so the peel logic exists exactly once.
+  # Public (`@doc false`) for the Normalise call-sites — same pattern as
+  # `drop_leading_params/2`.
+  @doc false
+  def nat_to_ctor({:vnat, 0}), do: {:vctor, :Z, []}
+  def nat_to_ctor({:vnat, n}) when is_integer(n) and n > 0, do: {:vctor, :S, [{:vnat, n - 1}]}
+
+  # Peel iff the value is a compact Nat; otherwise pass through unchanged. Lets a
+  # whnf-forced scrutinee be normalised to constructor form before the shared
+  # `{:vctor, cname, cargs}` ι-logic without a separate branch.
+  @doc false
+  def nat_to_ctor_if({:vnat, _} = nat), do: nat_to_ctor(nat)
+  def nat_to_ctor_if(value), do: value
 
   # -- projection ι -----------------------------------------------------------
 

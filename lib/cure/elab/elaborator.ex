@@ -1092,8 +1092,32 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env),
     do: elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
 
+  # Type-directed compact-Nat literal: a non-negative integer literal checked
+  # against the `Nat` family lowers to a compact `{:nat_lit, n}` — the surface
+  # payoff of the compact-Nat kernel path, so a numeric literal at `Nat` (and
+  # hence a `Bounded`/`Char` index) is one machine integer, not an `S`-tower. A
+  # bare literal still defaults to `Int` in inference mode; only a `Nat`-checked
+  # one becomes compact. Every other case defers to the ordinary checked path.
+  def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
+    if Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0 and
+         nat_expected?(expected_core, ctx) do
+      {:ok, {:nat_lit, value}}
+    else
+      elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+    end
+  end
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  # True iff the (meta-free) expected type evaluates to the canonical `Nat` family.
+  defp nat_expected?(expected_core, ctx) do
+    sig = Context.signature(ctx)
+    nat_fid = Cure.Core.Inductive.builtin(sig, :nat)
+
+    not is_nil(nat_fid) and not Unify.has_meta?(expected_core) and
+      match?({:vdata, ^nat_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
+  end
 
   defp elaborate_lambda([], body_expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)

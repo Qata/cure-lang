@@ -64,6 +64,7 @@ defmodule Antigen.Generators.Serialization do
       Gen.return({:int_type}),
       Gen.return({:float_type}),
       Gen.bind(Gen.int(-9, 9), fn n -> Gen.return({:int_lit, n}) end),
+      Gen.bind(Gen.int(0, 9), fn n -> Gen.return({:nat_lit, n}) end),
       Gen.bind(Gen.int(-9, 9), fn n -> Gen.return({:float_lit, n / 2}) end),
       Gen.bind(Gen.member_of(@globals), fn g -> Gen.return({:global, g}) end)
     ])

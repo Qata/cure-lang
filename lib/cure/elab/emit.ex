@@ -208,6 +208,10 @@ defmodule Cure.Elab.Emit do
   end
 
   defp lower(_env, {:int_lit, n}, _ctx), do: {:integer, @line, n}
+  # A compact Nat literal emits as a raw BEAM integer — identical to the existing
+  # Nat-ctor erasure (`Z` → 0, `S(n)` → n+1), so `{:nat_lit, 2}` and `S(S(Z))`
+  # compile to the same value `2` and interoperate with nat `case` clauses.
+  defp lower(_env, {:nat_lit, n}, _ctx), do: {:integer, @line, n}
   defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
 
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter

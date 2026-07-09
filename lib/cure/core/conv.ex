@@ -76,6 +76,22 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp conv_struct?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 
+  # Compact Nat literals. Same representation → O(1) bignum equality. Cross
+  # representation → peel the tower one `S`/`Z` layer to meet the literal (Lean's
+  # `toCtorIfLit` / Agda's suc-strictness): `lit n` and the n-fold `S`-tower are
+  # definitionally equal in BOTH directions, but the literal is never expanded —
+  # each step recurses on a compact predecessor, so this is O(#layers actually
+  # compared), never O(n) space. `S` has no params, so its field list is `[pred]`.
+  defp conv_struct?({:vnat, a}, {:vnat, b}, _depth, _sig), do: a == b
+  defp conv_struct?({:vnat, 0}, {:vctor, :Z, []}, _depth, _sig), do: true
+  defp conv_struct?({:vctor, :Z, []}, {:vnat, 0}, _depth, _sig), do: true
+
+  defp conv_struct?({:vnat, n}, {:vctor, :S, [pred]}, depth, sig) when n > 0,
+    do: conv_val?({:vnat, n - 1}, pred, depth, sig)
+
+  defp conv_struct?({:vctor, :S, [pred]}, {:vnat, n}, depth, sig) when n > 0,
+    do: conv_val?(pred, {:vnat, n - 1}, depth, sig)
+
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)
 
@@ -163,6 +179,9 @@ defmodule Cure.Core.Conv do
   defp same_value_no_delta?({:vtype, l1}, {:vtype, l2}, _depth, _sig), do: l1 == l2
   defp same_value_no_delta?({:vint_type}, {:vint_type}, _depth, _sig), do: true
   defp same_value_no_delta?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
+  # Same-representation fast-path; a cross-rep miss falls through to the real
+  # `conv_struct?` peel (this predicate only short-circuits obvious equalities).
+  defp same_value_no_delta?({:vnat, a}, {:vnat, b}, _depth, _sig), do: a == b
   defp same_value_no_delta?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp same_value_no_delta?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 

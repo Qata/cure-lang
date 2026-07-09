@@ -22,7 +22,13 @@ defmodule Cure.Core.Term do
     * `{:global, name}`                      reference to a global def
     * `{:int_type}` / `{:int_lit, n}`        integer type / literal
     * `{:float_type}` / `{:float_lit, f}`    float type / literal
-    (Bool is a real inductive family, not a primitive term form.)
+    * `{:nat_lit, n}`                        compact Nat literal (`n >= 0`),
+                                             definitionally equal to the n-fold
+                                             `S`-tower over `Z` (Lean kernel Nat /
+                                             Agda BUILTIN NATURAL — a compact
+                                             literal form for `Nat` values, not a
+                                             separate primitive type)
+    (Bool and Nat are real inductive families, not primitive term forms.)
   """
 
   @ceiling 2
@@ -60,6 +66,7 @@ defmodule Cure.Core.Term do
 
   def term?({:int_type}), do: true
   def term?({:int_lit, n}), do: is_integer(n)
+  def term?({:nat_lit, n}), do: is_integer(n) and n >= 0
   def term?({:float_type}), do: true
   def term?({:float_lit, f}), do: is_float(f)
 
@@ -85,6 +92,7 @@ defmodule Cure.Core.Term do
   # Literals / type constants bind nothing and contain no variables: identity.
   def shift({:int_type} = t, _amount, _cutoff), do: t
   def shift({:int_lit, _} = t, _amount, _cutoff), do: t
+  def shift({:nat_lit, _} = t, _amount, _cutoff), do: t
   def shift({:float_type} = t, _amount, _cutoff), do: t
   def shift({:float_lit, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
@@ -148,6 +156,7 @@ defmodule Cure.Core.Term do
   # Literals / type constants bind nothing and contain no variables: identity.
   def subst({:int_type} = t, _j, _r), do: t
   def subst({:int_lit, _} = t, _j, _r), do: t
+  def subst({:nat_lit, _} = t, _j, _r), do: t
   def subst({:float_type} = t, _j, _r), do: t
   def subst({:float_lit, _} = t, _j, _r), do: t
 
@@ -214,6 +223,7 @@ defmodule Cure.Core.Term do
 
   def to_external({:int_type}), do: %{"node" => "int_type"}
   def to_external({:int_lit, n}), do: %{"node" => "int_lit", "value" => n}
+  def to_external({:nat_lit, n}), do: %{"node" => "nat_lit", "value" => n}
   def to_external({:float_type}), do: %{"node" => "float_type"}
   def to_external({:float_lit, f}), do: %{"node" => "float_lit", "value" => f}
 
@@ -248,6 +258,7 @@ defmodule Cure.Core.Term do
 
   def from_external(%{"node" => "int_type"}), do: {:int_type}
   def from_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}
+  def from_external(%{"node" => "nat_lit", "value" => n}), do: {:nat_lit, n}
   def from_external(%{"node" => "float_type"}), do: {:float_type}
   def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
 

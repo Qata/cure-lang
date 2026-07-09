@@ -17,6 +17,8 @@ defmodule Cure.Core.Value do
     * `{:vneutral, neutral}`             stuck term
     * `{:vdata, name, [value]}`          fully-applied family (params ++ indices)
     * `{:vctor, name, [value]}`          fully-applied constructor
+    * `{:vnat, n}`                       compact Nat literal (`n >= 0`), defeq to
+                                         the n-fold `S`-tower over `Z`
 
   Neutral shapes (a head plus eliminator spine):
 
@@ -44,6 +46,8 @@ defmodule Cure.Core.Value do
   def value?({:vctor, name, vs}), do: is_atom(name) and values?(vs)
   def value?({:vint_type}), do: true
   def value?({:vint, n}), do: is_integer(n)
+  # Compact Nat literal value (defeq to the n-fold `S`-tower over `Z`).
+  def value?({:vnat, n}), do: is_integer(n) and n >= 0
   def value?({:vfloat_type}), do: true
   def value?({:vfloat, f}), do: is_float(f)
   def value?(_), do: false
