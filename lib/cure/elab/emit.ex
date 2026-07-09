@@ -301,13 +301,15 @@ defmodule Cure.Elab.Emit do
   defp builtin_op_form(_head, _args, _env, _ctx), do: :no
 
   defp lower_builtin_op(op, args, env, ctx) when op in [:struct_eq, :struct_ne] do
-    case args do
-      [_ty, l, r] ->
-        erl = if op == :struct_eq, do: :==, else: :"/="
-        {:op, @line, erl, lower(env, l, ctx), lower(env, r, ctx)}
+    # The type argument is erased, so a saturated call reaches emit as the two
+    # value operands `[l, r]`; the `[_ty, l, r]` form is kept only for a term that
+    # bypassed erasure (defensive). Anything else is a partial application.
+    erl = if op == :struct_eq, do: :==, else: :"/="
 
-      _ ->
-        curry_apply(builtin_op_wrapper(op), args, env, ctx)
+    case args do
+      [l, r] -> {:op, @line, erl, lower(env, l, ctx), lower(env, r, ctx)}
+      [_ty, l, r] -> {:op, @line, erl, lower(env, l, ctx), lower(env, r, ctx)}
+      _ -> curry_apply(builtin_op_wrapper(op), args, env, ctx)
     end
   end
 
@@ -330,12 +332,13 @@ defmodule Cure.Elab.Emit do
 
   # A first-class/partial builtin-op use: a local curried fun computing the op.
   # Param names use a dedicated prefix (ctx vars are V<pos>/Fn<n>/_e<pos>), so
-  # no shadowing. The struct wrapper accepts and ignores the type argument.
+  # no shadowing. The struct wrapper takes the two value operands — the erased
+  # type argument is dropped before emit, so it never reaches the wrapper.
   defp builtin_op_wrapper(op) when op in [:struct_eq, :struct_ne] do
     erl = if op == :struct_eq, do: :==, else: :"/="
     body = {:op, @line, erl, {:var, @line, :BopL}, {:var, @line, :BopR}}
 
-    fun1(:_BopT, fun1(:BopL, fun1(:BopR, body)))
+    fun1(:BopL, fun1(:BopR, body))
   end
 
   defp builtin_op_wrapper(:neg),

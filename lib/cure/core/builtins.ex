@@ -138,12 +138,16 @@ defmodule Cure.Core.Builtins do
 
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
+  # The type argument is computationally irrelevant (BEAM `==` is polymorphic and
+  # emit drops it), so it is ERASED: a caller may pass its own erased type
+  # parameter there without a relevance violation (#26). Erasure drops the type
+  # argument, so the emitted spine is the two value operands.
   defp seed_struct_ops(env, bool_ty) do
     ty = {:pi, {:type, 0}, {:pi, {:var, 0}, {:pi, {:var, 1}, bool_ty}}}
 
     Enum.reduce(@struct_ops, env, fn {name, op_key}, acc ->
       acc
-      |> Env.add_def(name, ty, nil)
+      |> Env.add_def(name, ty, nil, [:erased, :present, :present])
       |> Env.register_builtin_op(name, op_key)
     end)
   end
