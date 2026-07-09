@@ -106,6 +106,18 @@ defmodule Cure.Elab.CharLiteralTest do
       assert {:error, {:char_literal_out_of_range, -1}} =
                Elaborator.elaborate_expr(char_node(-1), [], sig)
     end
+
+    test "a char literal with no Bounded family registered errors cleanly, not a crash" do
+      # A genuinely bare Env (no `use Std.Bounded` processed) — unlike every
+      # other test above, which registers Bounded via `Program.elaborate` on
+      # source containing `use Std.Bounded`. `Env.empty()` has `builtins: %{}`,
+      # so `char_type_value/1`'s `:no_bounded` branch is reached for real.
+      env = Env.empty()
+      ctx = Context.empty(env)
+
+      assert {:error, {:char_literal_needs_bounded, 97}} =
+               Elaborator.elaborate_expr_typed(char_node(97), [], ctx, env)
+    end
   end
 end
 ```
@@ -113,7 +125,7 @@ end
 - [ ] **Step 2: Run it, watch it fail**
 
 Run: `mix test test/cure/elab/char_literal_test.exs`
-Expected: FAIL — the ASCII/emoji/plain-call cases error `{:unsupported_expression, {:literal, [subtype: :char], _}}`; the out-of-range cases return `{:unsupported_expression, ...}` instead of `{:char_literal_out_of_range, _}`.
+Expected: FAIL — the ASCII/emoji/plain-call cases error `{:unsupported_expression, {:literal, [subtype: :char], _}}`; the out-of-range and no-Bounded cases return `{:unsupported_expression, ...}` instead of `{:char_literal_out_of_range, _}` / `{:char_literal_needs_bounded, _}`.
 
 - [ ] **Step 3: Implement the infer clause (locus 1)**
 
@@ -162,7 +174,7 @@ The guard is required, not cosmetic: an unguarded negative `{:bounded_lit, k}` r
 - [ ] **Step 5: Run it green**
 
 Run: `mix test test/cure/elab/char_literal_test.exs`
-Expected: PASS (all 4 tests).
+Expected: PASS (all 5 tests).
 
 - [ ] **Step 6: Scoped regression check**
 
@@ -188,7 +200,7 @@ Implements spec §3.6. Enables non-ASCII char literals (`'😀'`) from real sour
 
 **Interfaces:**
 - Consumes: lexer state `%{source: binary, pos: integer, col: integer}`; `advance/2` (moves `pos`+`col` by n bytes); `Token.new(:char, value, line, col)`.
-- Produces: `'😀'` lexes to a `:char` token with value `128512`; a truncated/invalid multi-byte tail falls through to the existing `{:error, {:unterminated_char, _, _}}`.
+- Produces: `'😀'` lexes to a `:char` token with value `128512`; a truncated/invalid multi-byte tail, OR zero remaining bytes (e.g. a backslash at end-of-source), falls through to the existing `{:error, {:unterminated_char, _, _}}` — never a raised exception.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -228,13 +240,24 @@ defmodule Cure.Compiler.CharLexerTest do
     # Opening quote then a lone UTF-8 lead byte, no closing quote.
     assert {:error, {:unterminated_char, _, _}} = Lexer.tokenize(<<"fn f() = '", 0xF0>>)
   end
+
+  test "a backslash immediately at end-of-source is an unterminated-char error, not a crash" do
+    # Regression guard, not a newly-red case: today, `peek(state)` returning nil
+    # right after the backslash falls through to the escape-fallback catch-all
+    # harmlessly (it binds the loop variable to nil and just advances). The
+    # multi-byte-decode fix below must preserve that — `decode_char_at` must not
+    # call `:binary.at` past the end of source. This test already passes on the
+    # unfixed lexer (same status as the ASCII/escape cases above); it exists to
+    # catch a regression if the fix is implemented without the EOF guard.
+    assert {:error, {:unterminated_char, _, _}} = Lexer.tokenize("fn f() = '\\", emit_events: false)
+  end
 end
 ```
 
 - [ ] **Step 2: Run it, watch it fail**
 
 Run: `mix test test/cure/compiler/char_lexer_test.exs`
-Expected: FAIL — the emoji and `é` cases return `{:error, {:unterminated_char, _, _}}` (the lexer reads one byte then hits a continuation byte where it expects `'`), so `char_tokens` crashes on the `{:ok, toks}` match. ASCII/escape/truncated cases pass.
+Expected: FAIL — the emoji and `é` cases return `{:error, {:unterminated_char, _, _}}` (the lexer reads one byte then hits a continuation byte where it expects `'`), so `char_tokens` crashes on the `{:ok, toks}` match. ASCII/escape/truncated/backslash-at-EOF cases pass (pre-existing behavior; the last two are regression guards for the fix, not currently-broken cases).
 
 - [ ] **Step 3: Implement the decode helper**
 
@@ -246,6 +269,18 @@ In `lib/cure/compiler/lexer.ex`, add near `lex_char/1`:
   # single-byte path. A multi-byte sequence is decoded via String.next_codepoint/1
   # on the remaining source; a truncated/invalid tail yields :invalid so the caller
   # can surface the existing unterminated-char error rather than crash.
+  #
+  # The `pos >= byte_size(source)` clause is required, not defensive boilerplate:
+  # the escape-fallback call site (Step 4) reaches this function even when there
+  # is no byte left to read (a backslash at end-of-source) — `peek/1` returns nil
+  # there today and that nil falls through harmlessly to its catch-all. Without
+  # this guard, `:binary.at(source, pos)` raises `ArgumentError` on an
+  # out-of-range position, and `do_tokenize/1`'s `catch` clause does not rescue
+  # raised errors (only `throw`), so the lexer would crash instead of returning
+  # `{:unterminated_char, _, _}`. Mirrors the existing two-clause guard idiom
+  # already used by `peek/1` just below in this file.
+  defp decode_char_at(%{source: source, pos: pos}) when pos >= byte_size(source), do: :invalid
+
   defp decode_char_at(%{source: source, pos: pos} = state) do
     case :binary.at(source, pos) do
       byte when byte < 0x80 ->
@@ -303,7 +338,7 @@ Replace the non-escape branch (currently `c -> state = advance(state, 1); ...` a
 - [ ] **Step 5: Run it green**
 
 Run: `mix test test/cure/compiler/char_lexer_test.exs`
-Expected: PASS (all 5 tests).
+Expected: PASS (all 6 tests).
 
 - [ ] **Step 6: Switch the emoji tests to real source + add end-to-end**
 
