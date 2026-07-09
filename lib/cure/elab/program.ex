@@ -133,8 +133,12 @@ defmodule Cure.Elab.Program do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
          env0 = merge_env(seeded, imported),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
-      TotalityClosure.certify_type_level(env)
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
+         {:ok, certified} <- TotalityClosure.certify_type_level(env) do
+      # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
+      # defs so their intra-module uses keep inlining; any other module name
+      # is a no-op here (its hinted imports were marked slice-side).
+      {:ok, mark_inline_hints(certified, find_module_name(ast))}
     end
   end
 
@@ -509,8 +513,9 @@ defmodule Cure.Elab.Program do
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
          env0 = merge_env(seeded, imported),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
-      TotalityClosure.certify_type_level(env)
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
+         {:ok, certified} <- TotalityClosure.certify_type_level(env) do
+      {:ok, mark_inline_hints(certified, find_module_name(ast))}
     end
   end
 
@@ -625,10 +630,37 @@ defmodule Cure.Elab.Program do
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
            {:ok, env0} <- import_env(imports(ast), MapSet.put(seen, module_name)),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
-        TotalityClosure.certify_type_level(env)
+        with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
+          {:ok, mark_inline_hints(certified, module_name)}
+        end
       else
         {:error, reason} -> {:error, {:dependent_import_failed, module_name, reason}}
       end
+    end
+  end
+
+  # Emit-inline markers for the prelude defs whose saturated applications lower
+  # to native BEAM forms (connectives → boolean ops, Sigma projections →
+  # element/2). Set HERE, on the import path keyed by source module identity —
+  # never by bare global atom — so a local def shadowing `eq`/`sigma_first`/…
+  # owns an unmarked record and is emitted as an ordinary call (R1 discipline;
+  # see `Env.register_inline_hint/3`).
+  @inline_hints %{
+    "Std.Bool" => [and: :and, or: :or, not: :not, eq: :eq, ne: :ne],
+    "Std.Sigma" => [sigma_first: :sigma_first, sigma_second: :sigma_second]
+  }
+
+  defp mark_inline_hints(env, module_name) do
+    case Map.get(@inline_hints, module_name) do
+      nil ->
+        env
+
+      hints ->
+        # Skip a hinted name the module doesn't actually define (a user module
+        # merely NAMED Std.Bool must not crash marking).
+        Enum.reduce(hints, env, fn {name, key}, e ->
+          if Env.get_def(e, name), do: Env.register_inline_hint(e, name, key), else: e
+        end)
     end
   end
 

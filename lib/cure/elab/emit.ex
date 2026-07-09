@@ -283,30 +283,38 @@ defmodule Cure.Elab.Emit do
 
   # A SATURATED application of a `Std.Bool` connective def inlines to the native
   # BEAM boolean op — byte-for-byte the retired primitive's codegen (strict
-  # `:and`/`:or`/`:not`; `:==`/`:"/="` for Bool equality). An UNSATURATED use
-  # (wrong arg count) returns `:no` and falls through to an ordinary call to the
-  # def. Recognised by exact def name (the connectives are the canonical Std.Bool
-  # prelude functions).
-  defp connective_inline({:global, name}, [a, b], env, ctx)
-       when name in [:and, :or, :eq, :ne] do
-    {:ok, {:op, @line, connective_binop(name), lower(env, a, ctx), lower(env, b, ctx)}}
+  # `:and`/`:or`/`:not`; `:==`/`:"/="` for Bool equality) — and a saturated
+  # Sigma projection `sigma_first(p)`/`sigma_second(p)` (a single-argument
+  # spine after implicit erasure) inlines to `element(1|2, P)`, keeping
+  # `.1`/`.2` zero-cost on the bare-2-tuple ABI (spec §1.5 / §2.3). An
+  # UNSATURATED use (wrong arg count, or the bare global passed as a value)
+  # returns `:no` and falls through to an ordinary call/reference. Recognised
+  # via the `inline_hint` marker on the def RECORD (set only by the
+  # `Std.Bool`/`Std.Sigma` import path), never by bare global atom — a user
+  # def shadowing `eq`/`sigma_first`/… carries no marker and is never inlined
+  # (R1 discipline, same as the builtin-op registry).
+  defp connective_inline({:global, name}, args, env, ctx) do
+    case Env.inline_hint(env, name) do
+      nil -> :no
+      hint -> inline_hint_form(hint, args, env, ctx)
+    end
   end
-
-  defp connective_inline({:global, :not}, [a], env, ctx) do
-    {:ok, {:op, @line, :not, lower(env, a, ctx)}}
-  end
-
-  # Saturated Sigma projection: `sigma_first(p)`/`sigma_second(p)` — after erasure
-  # of the `{a}`/`{b}` implicits leaves a single-argument spine — inline to
-  # `element(1|2, P)`, keeping `.1`/`.2` zero-cost and the bare-2-tuple ABI (spec
-  # §1.5 / §2.3). The bare global passed as a value (0 args) is untouched.
-  defp connective_inline({:global, :sigma_first}, [p], env, ctx),
-    do: {:ok, element(1, lower(env, p, ctx))}
-
-  defp connective_inline({:global, :sigma_second}, [p], env, ctx),
-    do: {:ok, element(2, lower(env, p, ctx))}
 
   defp connective_inline(_head, _args, _env, _ctx), do: :no
+
+  defp inline_hint_form(hint, [a, b], env, ctx) when hint in [:and, :or, :eq, :ne],
+    do: {:ok, {:op, @line, connective_binop(hint), lower(env, a, ctx), lower(env, b, ctx)}}
+
+  defp inline_hint_form(:not, [a], env, ctx),
+    do: {:ok, {:op, @line, :not, lower(env, a, ctx)}}
+
+  defp inline_hint_form(:sigma_first, [p], env, ctx),
+    do: {:ok, element(1, lower(env, p, ctx))}
+
+  defp inline_hint_form(:sigma_second, [p], env, ctx),
+    do: {:ok, element(2, lower(env, p, ctx))}
+
+  defp inline_hint_form(_hint, _args, _env, _ctx), do: :no
 
   defp connective_binop(:and), do: :and
   defp connective_binop(:or), do: :or

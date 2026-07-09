@@ -111,6 +111,32 @@ defmodule Cure.Core.Env do
       _ -> nil
     end
   end
+
+  @doc """
+  Mark an already-registered global def as an emit-inline candidate (the
+  `Std.Bool` connectives and `Std.Sigma` projections), keyed by the stable
+  inline atom (`:and`, `:eq`, `:sigma_first`, …). Same R1 discipline as
+  `register_builtin_op/3`: the marker lives ON the def record, so a local def
+  shadowing the bare name carries no marker and is never inlined, while a
+  re-keyed `Mod#name` import keeps its marker and keeps inlining. Only the
+  `Std.Bool`/`Std.Sigma` import path produces this marker.
+  """
+  @spec register_inline_hint(t(), atom(), atom()) :: t()
+  def register_inline_hint(%__MODULE__{defs: defs} = env, name, key),
+    do: %{env | defs: Map.update!(defs, name, &Map.put(&1, :inline_hint, key))}
+
+  @doc """
+  The emit-inline key for `name` (`:and`, `:sigma_first`, …), or nil.
+  """
+  @spec inline_hint(t() | nil, atom()) :: atom() | nil
+  def inline_hint(nil, _name), do: nil
+
+  def inline_hint(%__MODULE__{} = env, name) do
+    case get_def(env, name) do
+      %{inline_hint: key} -> key
+      _ -> nil
+    end
+  end
 end
 
 defmodule Cure.Core.Inductive do
