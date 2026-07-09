@@ -116,18 +116,28 @@ exists.
 
 ## 6. Instance resolution details
 
-- **Search** is type-directed over the instance table, driven by the head
-  constructor of the target type (`Stringify` for `List(τ)` matches the
-  `impl Stringify for List(_)` and recurses on `τ`). Structural, terminating
-  when instance heads strictly decrease.
-- **Termination** guard: bound resolution depth / require decreasing instance
-  heads (Idris/Lean both do this) to keep search from diverging. Report an
-  unresolved constraint as a typed error, never loop.
-- **Coherence policy** (ledger §8.2): v1 = **one instance per `(class, type
-  head)`, no overlap** (the conservative, sound default). Orphan-instance and
-  overlap policy deferred.
-- **No solver.** This is syntactic type-directed search, entirely distinct from
-  the (dropped) SMT-refinement machinery — do not conflate the two.
+Instance resolution is the **instance profile** of the shared type-directed
+search engine — see
+[`2026-07-09-type-directed-search-design.md`](2026-07-09-type-directed-search-design.md).
+That engine (goal-directed search over hint databases, in the untrusted E-layer,
+with results kernel-checked) is the reusable component; resolution is its
+constrained, deterministic instantiation. This spec does not re-describe the
+search loop; it fixes the instance-specific policy:
+
+- **Database:** the `instances` set; a hint is a registered `dict_C_τ`.
+- **Goal:** a class-headed `Dict_C(τ)`, driven by the head constructor of `τ`
+  (`Stringify` for `List(τ)` matches `implementation Stringify for List(_)` and
+  recurses on `τ`).
+- **Determinism:** coherence (§8.2, one instance per `(class, type head)`, no
+  overlap in v1) guarantees ≤1 matching instance, so resolution needs no
+  backtracking — the predictability typeclass users expect. Nested constraints
+  (`C(T)` needs `D(T)`) resolve recursively through the same engine.
+- **Termination:** the engine's mandatory fuel bound, plus the instance-profile
+  requirement of decreasing instance heads (Idris/Lean), so resolution
+  terminates independently of fuel for well-formed instance sets. An
+  unresolved constraint is a typed error, never a loop.
+- **No solver.** Syntactic rule application, entirely distinct from the
+  (dropped) SMT-refinement machinery — do not conflate the two.
 
 ## 7. Migration from runtime dispatch
 
