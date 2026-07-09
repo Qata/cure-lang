@@ -281,6 +281,20 @@ defmodule Cure.Core.Inductive do
     end
   end
 
+  @doc """
+  A constructor's field count (the length of its argument telescope), or nil when
+  the constructor is unknown. This is the single authority for "how many of a
+  ctor value's spine slots are FIELDS" — the count both `Eval`'s ι-rule (via the
+  branch arity) and `Conv`'s params-on-spine coercion strip down to.
+  """
+  @spec field_count(Env.t(), atom()) :: non_neg_integer() | nil
+  def field_count(env, cname) do
+    case arg_telescope(env, cname) do
+      tele when is_list(tele) -> length(tele)
+      _ -> nil
+    end
+  end
+
   @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:present`)."
   @spec ctor_quantities(Env.t(), atom()) :: [quantity()] | nil
   def ctor_quantities(env, cname) do
@@ -361,7 +375,13 @@ defmodule Cure.Core.Inductive do
   defp strictly_positive?(env, fname, {:pi, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
-  defp strictly_positive?(_env, fname, {:data, fname, _ps, _is}, _seen), do: true
+  # A recursive occurrence of the family itself is strictly positive ONLY when
+  # `fname` does not also occur inside its own parameter/index arguments — the
+  # same guard the other-family clause below applies. Without it a negative
+  # occurrence buried in the family's own arguments (`Bad ((Bad Unit) -> Empty)`)
+  # would be admitted, breaking well-foundedness.
+  defp strictly_positive?(_env, fname, {:data, fname, ps, is}, _seen),
+    do: not Enum.any?(ps ++ is, &occurs?(fname, &1))
 
   defp strictly_positive?(env, fname, {:data, other, ps, is}, seen) do
     cond do

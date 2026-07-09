@@ -31,14 +31,16 @@ defmodule Cure.Core.Term do
     (Bool and Nat are real inductive families, not primitive term forms.)
   """
 
-  @ceiling 2
+  # Single source of truth for the universe ceiling is `Cure.Core.Universe`; this
+  # module only mirrors the value into its compile-time shape-check guards.
+  @ceiling Cure.Core.Universe.ceiling()
 
   @typedoc "A Core term (see the module doc for the node taxonomy)."
   @type t :: tuple()
 
   @doc "Highest universe level (inclusive). The fixed hierarchy is `Type 0 : Type 1 : Type 2`."
   @spec ceiling() :: non_neg_integer()
-  def ceiling, do: @ceiling
+  def ceiling, do: Cure.Core.Universe.ceiling()
 
   @doc """
   True when `term` is a structurally well-formed Core term.

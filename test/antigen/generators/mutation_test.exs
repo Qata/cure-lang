@@ -42,8 +42,10 @@ defmodule Antigen.Generators.MutationTest do
           assert f.expected_head != f.injected_head,
                  "#{kind}: heads must differ (#{inspect(f.expected_head)} vs #{inspect(f.injected_head)})"
         :index ->
-          # distinct closed index constructors ⇒ non-convertible, decided syntactically
-          assert f.expected_head != f.injected_head
+          # distinct closed index constructors ⇒ non-convertible, decided syntactically.
+          # Laundered through heads_differ?/2 so the 1.20 checker doesn't fold this
+          # (deliberately disjoint) comparison to a constant — the runtime check is real.
+          assert heads_differ?(f.expected_head, f.injected_head)
         :level ->
           {:type, req} = f.expected_head
           {:type, act} = f.injected_head
@@ -188,4 +190,8 @@ defmodule Antigen.Generators.MutationTest do
             {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
     assert {:ok, _} = Kernel.infer(ctx, good)
   end
+
+  # term()-typed inequality: erases the operands' narrowed types so the 1.20
+  # checker can't prove the comparison constant (see the :index witness case).
+  defp heads_differ?(a, b), do: a != b
 end

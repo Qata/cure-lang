@@ -11,6 +11,7 @@ defmodule Cure.MixProject do
       version: @version,
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
+      elixirc_options: elixirc_options(Mix.env()),
       start_permanent: Mix.env() == :prod,
       consolidate_protocols: Mix.env() not in [:dev, :test],
       deps: deps(),
@@ -20,6 +21,9 @@ defmodule Cure.MixProject do
       aliases: aliases(),
       package: package(),
       test_coverage: [tool: ExCoveralls],
+      # Fixtures under test/**/fixtures are loaded manually by tests, not run as
+      # test files — exclude them from the loader so 1.20 doesn't warn on them.
+      test_ignore_filters: [~r{/fixtures/}],
       dialyzer: [
         plt_file: {:no_warn, ".dialyzer/dialyzer.plt"},
         plt_add_deps: :app_tree,
@@ -36,6 +40,12 @@ defmodule Cure.MixProject do
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  # Under `mix test`, treat lib/support compile warnings as errors too. The
+  # `test` alias's --warnings-as-errors only covers test-file + test-run
+  # warnings; this catches warnings from compiling the project itself.
+  defp elixirc_options(:test), do: [warnings_as_errors: true]
+  defp elixirc_options(_), do: []
 
   def application do
     [
@@ -93,6 +103,10 @@ defmodule Cure.MixProject do
 
   defp aliases do
     [
+      # Warnings during `mix test` are failures — keeps the suite output clean
+      # and stops new compile warnings from slipping in. Covers lib AND test
+      # files (unlike elixirc_options, which misses test compilation).
+      test: "test --warnings-as-errors",
       quality: ["format", "credo --strict"],
       "quality.ci": [
         "format --check-formatted",

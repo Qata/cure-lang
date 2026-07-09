@@ -17,7 +17,6 @@ defmodule Antigen.Generators.DeltaReduce do
 
   @z {:ctor, :Z, []}
   @nat {:data, :Nat, [], []}
-  defp s(t), do: {:ctor, :S, [t]}
 
   # `kpair : Sigma(Nat, const-Nat) = mk_pair(Z, S Z)` (the inductive dependent pair,
   # D2). Projections are single-branch `:case`s over `mk_pair` — the ncase form the

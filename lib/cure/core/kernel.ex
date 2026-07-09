@@ -119,7 +119,11 @@ defmodule Cure.Core.Kernel do
 
   def infer(ctx, {:app, f, a}) do
     with {:ok, f_type} <- infer(ctx, f),
-         {:ok, dom, cod_closure} <- ensure_pi(f_type),
+         # whnf the head's type first: a function whose type is a certified global
+         # (or applied family) that δ-reduces to a Π must not be rejected as
+         # :not_a_function on its un-reduced syntactic form.
+         {:ok, dom, cod_closure} <-
+           ensure_pi(Normalise.whnf_value(f_type, Context.signature(ctx))),
          :ok <- check(ctx, a, dom) do
       a_value = Eval.eval(a, Context.env(ctx))
       {:ok, Eval.apply_closure(cod_closure, a_value)}
@@ -146,9 +150,8 @@ defmodule Cure.Core.Kernel do
       nil ->
         {:error, {:unknown_ctor, name}}
 
-      %{args: tele, result_indices: result_indices} = ctor_sig ->
+      %{args: tele} = ctor_sig ->
         family_name = Inductive.ctor_family(sig, name)
-        result_params = Map.get(ctor_sig, :result_params, [])
         pc = Inductive.param_count(sig, family_name)
 
         cond do
@@ -157,9 +160,7 @@ defmodule Cure.Core.Kernel do
               # The accumulated arg values (most-recent first) are exactly the env
               # in which the result terms are written; compute them by NbE (so a
               # computed index like `and(d1,d2)` reduces once δ is available, M7).
-              param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
-              index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-              {:ok, {:vdata, family_name, param_values ++ index_values}}
+              {:ok, result_vdata(arg_env, family_name, ctor_sig)}
             end
 
           # K6 / §E.1: the data parameters ride the spine at grade 0 (Lean's kernel
@@ -175,9 +176,7 @@ defmodule Cure.Core.Kernel do
             ptele = Inductive.param_telescope(sig, family_name) || []
 
             with {:ok, arg_env, _fields} <- check_ctor_app(ctx, [], args, ptele ++ tele) do
-              param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
-              index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-              {:ok, {:vdata, family_name, param_values ++ index_values}}
+              {:ok, result_vdata(arg_env, family_name, ctor_sig)}
             end
 
           # Params absent from a bare fields-only spine: nothing carries them, so
@@ -258,6 +257,33 @@ defmodule Cure.Core.Kernel do
     with {:ok, _value} <- elaborate_ctor(ctx, cname, args, expected), do: :ok
   end
 
+  # Checking a compact `Bounded` literal against a concrete declared bound. δ-whnf
+  # the expected type to expose the `Bounded` family and its bound index; the
+  # literal `k` inhabits `Bounded(n)` iff `0 <= k < n`. The kernel re-derives `n`
+  # itself — it never trusts the elaborator's bound check (this is the TCB gate).
+  # This is where `97 : Char` (= `Bounded(0x110000)`) is admitted, which the
+  # infer-then-convert fallback cannot do (inference only knows `Bounded(k+1)`).
+  # Placed before the generic catch-all so it is reachable (Elixir clause order).
+  def check(ctx, {:bounded_lit, k}, expected) when is_integer(k) and k >= 0 do
+    sig = Context.signature(ctx)
+    bounded_fid = Inductive.builtin(sig, :bounded)
+    depth = Context.length(ctx)
+
+    case Normalise.whnf_value(expected, sig) do
+      {:vdata, ^bounded_fid, [bound_val]} when not is_nil(bounded_fid) ->
+        case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
+          {:ok, n} when k < n -> :ok
+          {:ok, n} -> {:error, {:bounded_lit_out_of_range, k, n}}
+          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth)}}
+        end
+
+      other ->
+        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth)}}
+    end
+  end
+
+  def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
+
   # Shared checking-mode constructor elaboration. Checks the fields-only spine
   # against the ctor telescope, converts the computed result type against the
   # expected `vdata`, and RETURNS the constructor's own value — assembled from the
@@ -276,9 +302,7 @@ defmodule Cure.Core.Kernel do
       nil ->
         {:error, {:unknown_ctor, cname}}
 
-      %{args: tele, result_indices: result_indices} = ctor_sig ->
-        result_params = Map.get(ctor_sig, :result_params, [])
-
+      %{args: tele} = ctor_sig ->
         cond do
           Inductive.ctor_family(sig, cname) != family ->
             {:error, {:foreign_ctor, cname}}
@@ -288,9 +312,7 @@ defmodule Cure.Core.Kernel do
           # below collapses to this same predicate (spec §1 "order is load-bearing").
           length(args) == length(tele) ->
             with {:ok, arg_env, field_vals} <- check_ctor_app(ctx, params, args, tele) do
-              actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
-              actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-              actual = {:vdata, family, actual_params ++ actual_indices}
+              actual = result_vdata(arg_env, family, ctor_sig)
 
               if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
                 {:ok, {:vctor, cname, field_vals}}
@@ -316,32 +338,6 @@ defmodule Cure.Core.Kernel do
         end
     end
   end
-
-  # Checking a compact `Bounded` literal against a concrete declared bound. δ-whnf
-  # the expected type to expose the `Bounded` family and its bound index; the
-  # literal `k` inhabits `Bounded(n)` iff `0 <= k < n`. The kernel re-derives `n`
-  # itself — it never trusts the elaborator's bound check (this is the TCB gate).
-  # This is where `97 : Char` (= `Bounded(0x110000)`) is admitted, which the
-  # infer-then-convert fallback cannot do (inference only knows `Bounded(k+1)`).
-  def check(ctx, {:bounded_lit, k}, expected) when is_integer(k) and k >= 0 do
-    sig = Context.signature(ctx)
-    bounded_fid = Inductive.builtin(sig, :bounded)
-    depth = Context.length(ctx)
-
-    case Normalise.whnf_value(expected, sig) do
-      {:vdata, ^bounded_fid, [bound_val]} when not is_nil(bounded_fid) ->
-        case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
-          {:ok, n} when k < n -> :ok
-          {:ok, n} -> {:error, {:bounded_lit_out_of_range, k, n}}
-          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth)}}
-        end
-
-      other ->
-        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth)}}
-    end
-  end
-
-  def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
 
   # Peel a value to a concrete non-negative integer bound, spanning both Nat
   # representations: the compact `{:vnat, n}` and the `Z`/`S` tower (a bound may be
@@ -648,11 +644,39 @@ defmodule Cure.Core.Kernel do
   defp remap_index_error(_err, {:vdata, _name, _args}), do: {:error, :index_mismatch}
   defp remap_index_error(err, _expected), do: err
 
+  # Assemble a constructor's RESULT type value by evaluating its result params and
+  # indices in the accumulated field/param environment (`arg_env`, most-recent
+  # first). The single owner of the `{:vdata, family, result_params ++
+  # result_indices}` shape shared by the inference-mode ctor rule and
+  # checking-mode `elaborate_ctor`; a computed index reduces once δ is available.
+  defp result_vdata(arg_env, family, ctor_sig) do
+    result_params = Map.get(ctor_sig, :result_params, [])
+    result_indices = Map.get(ctor_sig, :result_indices, [])
+    param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
+    index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+    {:vdata, family, param_values ++ index_values}
+  end
+
   # -- dependent case (§4.4) --------------------------------------------------
 
-  # Apply a (curried) motive value to a list of argument values.
-  defp apply_motive(motive_value, args),
-    do: Enum.reduce(args, motive_value, fn arg, acc -> Eval.apply(acc, arg) end)
+  # Apply a (curried) motive value to a list of argument values. Callers below
+  # use this only AFTER `check_motive_wf` has validated the motive is a function
+  # of the right shape (`apply_motive_checked` is the validating gate).
+  defp apply_motive(motive_value, args), do: Eval.apply_spine(motive_value, args)
+
+  # Like `apply_motive`, but on the UNvalidated motive supplied by the (untrusted)
+  # elaborator: if some prefix reduces to a non-function while arguments remain,
+  # the motive is ill-formed — return `{:error, :bad_motive}` rather than crashing
+  # `Eval.apply` on a non-function value.
+  defp apply_motive_checked(motive_value, args) do
+    Enum.reduce_while(args, {:ok, motive_value}, fn arg, {:ok, acc} ->
+      case acc do
+        {:vlam, _, _} -> {:cont, {:ok, Eval.apply(acc, arg)}}
+        {:vneutral, _} -> {:cont, {:ok, Eval.apply(acc, arg)}}
+        _ -> {:halt, {:error, :bad_motive}}
+      end
+    end)
+  end
 
   # Extend `ctx` by a (dependent) telescope; return the new context and the fresh
   # neutral values bound for each telescope variable, in declaration order.
@@ -664,7 +688,7 @@ defmodule Cure.Core.Kernel do
   # list). `ctx` is extended in parallel purely to keep the ambient context's
   # depth/levels consistent for whatever uses the returned context afterward
   # (e.g. checking a branch body, which IS written relative to the ambient ctx).
-  defp extend_with_telescope(ctx, tele, param_vals \\ []) do
+  defp extend_with_telescope(ctx, tele, param_vals) do
     {ctx_final, _local_vals, fresh_vals} =
       Enum.reduce(tele, {ctx, Enum.reverse(param_vals), []}, fn {_name, type_term},
                                                                 {c, local_vals, fresh} ->
@@ -691,10 +715,10 @@ defmodule Cure.Core.Kernel do
     ctx_motive = Context.extend(ctx_indices, data_value)
     x_value = {:vneutral, {:nvar, scrut_level}}
 
-    body_value = apply_motive(motive_value, index_vals ++ [x_value])
-
-    case infer_type_value_sort(ctx_motive, body_value) do
-      {:ok, _level} -> :ok
+    with {:ok, body_value} <- apply_motive_checked(motive_value, index_vals ++ [x_value]),
+         {:ok, _level} <- infer_type_value_sort(ctx_motive, body_value) do
+      :ok
+    else
       _ -> {:error, :bad_motive}
     end
   end
@@ -825,8 +849,16 @@ defmodule Cure.Core.Kernel do
 
                   {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
                   ctx_branch = specialize_branch_context(ctx_branch, subst)
-                  # Result indices are written over the ctor's args (most-recent first).
-                  s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
+                  # Result indices are written over the ctor frame `params(outer) ++
+                  # args(inner)` (see check_uniform_params), so the eval env is
+                  # reverse(arg_vals) ++ reverse(scrut_params). Omitting the params
+                  # made a result index that references a family PARAMETER (e.g.
+                  # `MkBar : Bar n n`) resolve to a stray out-of-range neutral.
+                  s_values =
+                    Enum.map(
+                      result_indices,
+                      &Eval.eval(&1, Enum.reverse(arg_vals) ++ Enum.reverse(scrut_params))
+                    )
                   ctor_value = {:vctor, cname, arg_vals}
 
                   expected =
@@ -925,6 +957,24 @@ defmodule Cure.Core.Kernel do
 
   defp unify_one(r, {:var, j}, arity, subst) when j >= arity,
     do: bind_index(j, r, arity, subst)                  # outer index var := ctor result index (4.3)
+
+  # Compact Nat literal ↔ Z/S bridge (mirrors conv.ex's cross-representation
+  # arms): a `{:nat_lit, n}` index is a closed canonical Nat, definitionally
+  # equal to its `S`-tower, so it must unify with `Z`/`S` result indices exactly
+  # as the tower form does. Peel one layer and recurse. Without this the generic
+  # rigid-head clash rule below wrongly verdicts a literal index `:impossible`
+  # against `S`/`Z` — a coverage soundness hole (a `case` on `Vone(0)` could omit
+  # `vz`, its only inhabitant, and still pass coverage). The peel terminates: `n`
+  # strictly decreases and only fires against a `:ctor`/`:nat_lit` counterpart
+  # (var counterparts bind via the clauses above).
+  defp unify_one({:nat_lit, a}, {:nat_lit, b}, _arity, subst),
+    do: if(a == b, do: {:ok, subst}, else: :impossible)
+
+  defp unify_one({:nat_lit, n}, {:ctor, _, _} = s, arity, subst),
+    do: unify_one(nat_lit_ctor(n), s, arity, subst)
+
+  defp unify_one({:ctor, _, _} = r, {:nat_lit, n}, arity, subst),
+    do: unify_one(r, nat_lit_ctor(n), arity, subst)
 
   defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
     do: unify_spine(as, bs, arity, subst)
@@ -1035,10 +1085,17 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:float_lit, _}), do: true
   defp rigid_index?(_), do: false
 
+  # Term-level one-layer peel of a compact Nat literal (the term-space mirror of
+  # the value-level `Eval.nat_to_ctor/1`): `0 ↦ Z`, `n ↦ S (n-1)` with the
+  # predecessor left compact. Used only by the `unify_one` nat-literal bridge.
+  defp nat_lit_ctor(0), do: {:ctor, :Z, []}
+  defp nat_lit_ctor(n) when is_integer(n) and n > 0, do: {:ctor, :S, [{:nat_lit, n - 1}]}
+
+  # Only ever called on `rigid_index?` terms (all tuples), so a tuple head is
+  # exhaustive — no non-tuple fallback is reachable.
   defp head_key({:ctor, n, _}), do: {:ctor, n}
   defp head_key({:data, n, _, _}), do: {:data, n}
   defp head_key(t) when is_tuple(t), do: elem(t, 0)
-  defp head_key(other), do: other
 
   # Conservative occurs-check: does {:var, key} appear anywhere in term? Ignores
   # binder-depth shifts (over-approximates ⇒ at worst a spurious :undecided, never

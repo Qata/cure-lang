@@ -73,12 +73,6 @@ defmodule Antigen.Generators.Serialization do
   defp binary(tag, d),
     do: Gen.bind(term(d), fn a -> Gen.bind(term(d), fn b -> Gen.return({tag, a, b}) end) end)
 
-  defp ternary(tag, d) do
-    Gen.bind(term(d), fn a ->
-      Gen.bind(term(d), fn b -> Gen.bind(term(d), fn c -> Gen.return({tag, a, b, c}) end) end)
-    end)
-  end
-
   defp data_term(d) do
     Gen.bind(Gen.member_of(@data_names), fn n ->
       Gen.bind(term_list(d), fn ps ->

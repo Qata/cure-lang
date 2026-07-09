@@ -83,14 +83,12 @@ defmodule Cure.Core.Conv do
   # each step recurses on a compact predecessor, so this is O(#layers actually
   # compared), never O(n) space. `S` has no params, so its field list is `[pred]`.
   defp conv_struct?({:vnat, a}, {:vnat, b}, _depth, _sig), do: a == b
-  defp conv_struct?({:vnat, 0}, {:vctor, :Z, []}, _depth, _sig), do: true
-  defp conv_struct?({:vctor, :Z, []}, {:vnat, 0}, _depth, _sig), do: true
 
-  defp conv_struct?({:vnat, n}, {:vctor, :S, [pred]}, depth, sig) when n > 0,
-    do: conv_val?({:vnat, n - 1}, pred, depth, sig)
+  defp conv_struct?({:vnat, n}, {:vctor, _, _} = c, depth, sig),
+    do: conv_struct?(Eval.nat_to_ctor({:vnat, n}), c, depth, sig)
 
-  defp conv_struct?({:vctor, :S, [pred]}, {:vnat, n}, depth, sig) when n > 0,
-    do: conv_val?(pred, {:vnat, n - 1}, depth, sig)
+  defp conv_struct?({:vctor, _, _} = c, {:vnat, n}, depth, sig),
+    do: conv_struct?(c, Eval.nat_to_ctor({:vnat, n}), depth, sig)
 
   # A compact `Bounded` literal is definitionally equal to its `First`/`Next`
   # tower, both directions, peeling one compact layer per step — the analogue of
@@ -158,11 +156,20 @@ defmodule Cure.Core.Conv do
   # case's scrutinee is an argument position like any other, per Lean
   # `is_def_eq_app` (each arg via full `is_def_eq`) and Agda `compareElims`.
   defp conv_neutral?({:ncase, n1, m1, brs1}, {:ncase, n2, m2, brs2}, depth, sig) do
-    conv_val?({:vneutral, n1}, {:vneutral, n2}, depth, sig) and conv_closure?(m1, m2, depth, sig) and
+    conv_val?({:vneutral, n1}, {:vneutral, n2}, depth, sig) and conv_motive?(m1, m2, depth, sig) and
       conv_branches?(brs1, brs2, depth, sig)
   end
 
   defp conv_neutral?(_, _, _, _), do: false
+
+  # A stuck-case motive is a COMPLETE function term captured in a closure (a full
+  # λ over the scrutinee/indices), not a body-under-one-binder. So instantiate it
+  # with NO extra binder — exactly as `Quote.instantiate` reads it back — and
+  # compare the resulting function values (η handles the λ). Using `conv_closure?`
+  # here would push a spurious binder, shifting the motive's captured environment
+  # and making two motives that capture different values compare equal (unsound).
+  defp conv_motive?({:closure, env1, t1}, {:closure, env2, t2}, depth, sig),
+    do: conv_val?(Eval.eval(t1, env1), Eval.eval(t2, env2), depth, sig)
 
   defp conv_branches?(brs1, brs2, depth, sig) do
     length(brs1) == length(brs2) and
@@ -172,11 +179,14 @@ defmodule Cure.Core.Conv do
       end)
   end
 
-  defp conv_branch_bodies?(arity, {:closure, env1, body1}, {:closure, env2, body2}, depth, sig) do
-    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
-    ext = Enum.reverse(fresh)
-    conv_val?(Eval.eval(body1, ext ++ env1), Eval.eval(body2, ext ++ env2), depth + arity, sig)
-  end
+  defp conv_branch_bodies?(arity, {:closure, env1, body1}, {:closure, env2, body2}, depth, sig),
+    do:
+      conv_val?(
+        Eval.open_branch(env1, body1, arity, depth),
+        Eval.open_branch(env2, body2, arity, depth),
+        depth + arity,
+        sig
+      )
 
   # Syntactic equality for neutral values before δ. This prevents certified
   # recursive globals from unfolding forever when conversion reaches the same
@@ -224,12 +234,9 @@ defmodule Cure.Core.Conv do
   defp coerce_fields(_cname, vs, nil), do: vs
 
   defp coerce_fields(cname, vs, sig) do
-    case Cure.Core.Inductive.arg_telescope(sig, cname) do
-      tele when is_list(tele) and length(vs) > length(tele) ->
-        Enum.drop(vs, length(vs) - length(tele))
-
-      _ ->
-        vs
+    case Cure.Core.Inductive.field_count(sig, cname) do
+      n when is_integer(n) -> Eval.drop_leading_params(vs, n)
+      nil -> vs
     end
   end
 end

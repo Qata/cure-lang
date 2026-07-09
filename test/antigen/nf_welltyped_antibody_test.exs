@@ -7,7 +7,7 @@ defmodule Antigen.NfWellTypedAntibodyTest do
   signature-aware.
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Kernel, Context, Normalise, Eval}
+  alias Cure.Core.{Kernel, Context, Normalise}
   alias Cure.Elab.Program
 
   defp base_sig do

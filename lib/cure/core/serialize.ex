@@ -170,8 +170,6 @@ defmodule Cure.Core.Serialize do
 
   defp build_node(_tag, _args), do: {:error, :unknown_node}
 
-  defp unary(tag, x), do: with({:ok, t} <- build(x), do: {:ok, {tag, t}})
-
   defp binary(tag, a, b) do
     with {:ok, ta} <- build(a), {:ok, tb} <- build(b), do: {:ok, {tag, ta, tb}}
   end

@@ -16,12 +16,6 @@ defmodule Antigen.Assays.Universes do
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
   def run(%Challenge{kind: :indexed_case} = c), do: run(c, @real_kernel)
 
-  @doc "Same as the `:indexed_case` `run/1` clause but with an injectable kernel-op map (sensitivity test seam)."
-  def run(%Challenge{kind: :indexed_case, label: label, payload: %{def_name: dn}} = c, k) do
-    env = Generators.Universes.env_of(c)
-    judge(label, k.check_def.(env, dn), dn)
-  end
-
   def run(%Challenge{kind: :family, label: label, payload: %{family: fam, ctors: ctors}}) do
     env = Inductive.declare(Env.empty(), fam, ctors)
 
@@ -36,6 +30,12 @@ defmodule Antigen.Assays.Universes do
       end
 
     judge(label, verdict, fam.name)
+  end
+
+  @doc "Same as the `:indexed_case` `run/1` clause but with an injectable kernel-op map (sensitivity test seam)."
+  def run(%Challenge{kind: :indexed_case, label: label, payload: %{def_name: dn}} = c, k) do
+    env = Generators.Universes.env_of(c)
+    judge(label, k.check_def.(env, dn), dn)
   end
 
   defp judge(:well_typed, :ok, _n), do: :ok

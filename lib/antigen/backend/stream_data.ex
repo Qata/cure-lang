@@ -1,5 +1,10 @@
 defmodule Antigen.Backend.StreamData do
   @moduledoc "The StreamData backend — the ONLY module allowed to reference StreamData."
+  # `stream_data` is a `:test`-only dep (mix.exs), so in dev/prod compiles the
+  # module is absent. That is by design — this backend is swappable and only the
+  # test suite drives it — so silence the expected "undefined" warnings here
+  # rather than pulling the dep into every environment.
+  @compile {:no_warn_undefined, StreamData}
   @behaviour Antigen.Backend
 
   @impl true

@@ -10,7 +10,7 @@ defmodule Cure.Core.StuckElimDeltaTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Core.{Builtins, Context, Conv, Env, Inductive, Normalise}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Normalise}
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}

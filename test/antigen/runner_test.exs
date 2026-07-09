@@ -155,7 +155,7 @@ defmodule Antigen.RunnerTest.TriageWiring do
   end
 
   test "a non-typed_term infection is banked minimized (bisect drops a redundant def)" do
-    tmp = Path.join(System.tmp_dir!(), "antigen-triage-#{System.unique_integer([:positive])}")
+    tmp = Path.join("tmp", "antigen-triage-#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     on_exit(fn -> File.rm_rf!(tmp) end)
 

@@ -6,7 +6,7 @@ defmodule Antigen.CtorSpellingAntibodyTest do
   equate the two spellings of one ctor value under a shared type (A2).
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Kernel, Context, Conv, Eval}
+  alias Cure.Core.{Context, Conv, Eval}
   alias Cure.Elab.Program
 
   defp base_sig do
@@ -24,7 +24,6 @@ defmodule Antigen.CtorSpellingAntibodyTest do
   # correct fields-only ι binds [w] and {:var,1} resolves to the outer env slot;
   # WITHOUT A1 the 2-arg spine binds [w, ty] and {:var,1} wrongly resolves to ty.
   test "A4.i: ι over a params-on-spine ctor term matches the fields-only result" do
-    sig = base_sig()
     env = [{:vint, 42}]  # a distinct outer binder value in the eval env
     scrut = {:ctor, :reflexive, [@nat, z()]}         # K6 params-on-spine
     motive = {:lam, @nat, {:lam, @nat, {:lam, {:data, :Equivalent, [@nat], [{:var, 1}, {:var, 0}]}, @nat}}}

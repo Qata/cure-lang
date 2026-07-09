@@ -211,7 +211,7 @@ defmodule Antigen.ShrinkTest do
 
   test "Runner shrinks a deep head_swap survivor to the bare minimal witness before banking (§7.5)" do
     alias Antigen.Generators.Mutation
-    tmp = System.tmp_dir!()
+    tmp = "tmp/antigen_shrink"
     corpus = Path.join(tmp, "shrink_ab_#{:erlang.unique_integer([:positive])}.sexp")
     File.rm(corpus)
 

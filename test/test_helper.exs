@@ -24,3 +24,14 @@ IO.puts("test_helper: compiling Cure stdlib")
 Mix.Task.run("cure.compile_stdlib")
 
 ExUnit.start()
+
+# Antigen deliberately injects "immune response" violations (test scaffolding
+# exercising the detection machinery). Rather than flood stdout with one calm
+# breadcrumb per occurrence — which buries a genuine `ANTIGEN INFECTION` — the
+# Runner tallies them; report the total once, after the suite.
+ExUnit.after_suite(fn _result ->
+  case Antigen.Report.immune_response_count() do
+    0 -> :ok
+    n -> IO.puts("\n#{n} immune responses successfully triggered (expected, deliberately injected).")
+  end
+end)

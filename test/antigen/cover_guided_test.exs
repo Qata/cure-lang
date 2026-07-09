@@ -136,7 +136,7 @@ defmodule Antigen.CoverGuidedTest do
   end
 
   test "guided_loop terminates, grows the edge corpus, and tags jackpots with coverage_delta" do
-    tmp = Path.join(System.tmp_dir!(), "guided_#{System.unique_integer([:positive])}")
+    tmp = Path.join("tmp", "guided_#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     on_exit(fn -> File.rm_rf!(tmp) end)
     edge_path = Path.join(tmp, "edge.sexp")
@@ -182,7 +182,7 @@ defmodule Antigen.CoverGuidedTest do
   end
 
   test "guided_loop --precise attributes coverage per-challenge and still banks + terminates" do
-    tmp = Path.join(System.tmp_dir!(), "guided_p_#{System.unique_integer([:positive])}")
+    tmp = Path.join("tmp", "guided_p_#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     on_exit(fn -> File.rm_rf!(tmp) end)
     edge_path = Path.join(tmp, "edge.sexp")

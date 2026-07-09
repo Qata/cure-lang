@@ -175,8 +175,8 @@ defmodule Antigen.Assays.ErasureTest do
     alias Antigen.Runner
 
     test "each catalog is non-empty and correctly tagged" do
-      assert ErasureTerm.erase_challenges() != []
-      assert ErasureTerm.relevance_challenges() != []
+      assert length(ErasureTerm.erase_challenges()) > 0
+      assert length(ErasureTerm.relevance_challenges()) > 0
       ids = MapSet.new(ErasureTerm.erase_challenges(), & &1.assay)
       assert "erasure/idempotent" in ids and "erasure/selective" in ids and "erasure/wellformed" in ids
       assert Enum.all?(ErasureTerm.relevance_challenges(), & &1.assay == "relevance/soundness")

@@ -68,7 +68,7 @@ defmodule Antigen.CoverTest do
   end
 
   test "run_report produces a per-module kernel coverage map and writes a report" do
-    tmp = Path.join(System.tmp_dir!(), "antigen_cov_#{System.unique_integer([:positive])}")
+    tmp = Path.join("tmp", "antigen_cov_#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     out = Path.join(tmp, "kcov.md")
 

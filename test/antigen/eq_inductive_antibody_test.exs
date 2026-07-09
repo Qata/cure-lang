@@ -37,6 +37,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
 
   alias Cure.Core.{Kernel, Context, Conv, Eval}
   alias Cure.Elab.Program
+  import Cure.TestSupport.RetiredNode, only: [opaque: 1]
 
   @fuel 100_000
 
@@ -283,13 +284,13 @@ defmodule Antigen.EqInductiveAntibodyTest do
     sig = base_sig()
     ctx = Context.empty(sig)
 
-    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, {:eq, @nat, z(), z()}) end
-    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, {:refl, z()}) end
+    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, opaque({:eq, @nat, z(), z()})) end
+    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, opaque({:refl, z()})) end
 
     ctx_h = Context.extend(ctx, eq_ty(sig, @nat, z(), z()))
 
     assert_raise FunctionClauseError, fn ->
-      Kernel.infer(ctx_h, {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()})
+      Kernel.infer(ctx_h, opaque({:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}))
     end
   end
 end

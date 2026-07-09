@@ -415,7 +415,14 @@ defmodule Antigen.Runner do
 
           health = summarize(acc, count) |> Map.put(:triage, triage) |> Map.merge(health_extra(opts))
           {:ok, path} = Report.write_infection(opts[:report_dir], c_min, v, health, kind)
-          IO.puts(Report.breadcrumb(c_min, path, kind))
+
+          # A real infection is the whole point — print it, alarmingly. A
+          # deliberately-injected immune response is expected scaffolding; tally it
+          # (surfaced once at suite end) instead of flooding stdout per occurrence.
+          case kind do
+            :infection -> IO.puts(Report.breadcrumb(c_min, path, :infection))
+            :immune_response -> Report.tally_immune_response()
+          end
           Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
           %{acc | infections: acc.infections + 1}
       end

@@ -13,19 +13,6 @@ defmodule Antigen.Assays.Positivity do
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
   def run(%Challenge{kind: :family} = c), do: run(c, @real_kernel)
 
-  @doc "Same as the `:family` `run/1` clause but with an injectable kernel-op map (sensitivity test seam)."
-  def run(%Challenge{kind: :family, label: label, payload: %{family: fam}} = c, k) do
-    env = Generators.Positivity.env_of(c)
-    verdict = k.positive?.(env, Inductive.get_family(env, fam.name))
-
-    case {label, verdict} do
-      {:positive, :ok} -> :ok
-      {:negative, {:error, _}} -> :ok
-      {:positive, {:error, reason}} -> {:violation, {:wrongly_rejected, reason}}
-      {:negative, :ok} -> {:violation, {:wrongly_accepted, fam.name}}
-    end
-  end
-
   # Multi-family positivity challenge (W4 through-constructor shape): reuses the
   # :indexed_case record shape; the SUBJECT family is by convention the LAST
   # entry of payload.families. The def slot is an inert placeholder.
@@ -39,6 +26,19 @@ defmodule Antigen.Assays.Positivity do
       {:negative, {:error, _}} -> :ok
       {:positive, {:error, reason}} -> {:violation, {:wrongly_rejected, reason}}
       {:negative, :ok} -> {:violation, {:wrongly_accepted, subject}}
+    end
+  end
+
+  @doc "Same as the `:family` `run/1` clause but with an injectable kernel-op map (sensitivity test seam)."
+  def run(%Challenge{kind: :family, label: label, payload: %{family: fam}} = c, k) do
+    env = Generators.Positivity.env_of(c)
+    verdict = k.positive?.(env, Inductive.get_family(env, fam.name))
+
+    case {label, verdict} do
+      {:positive, :ok} -> :ok
+      {:negative, {:error, _}} -> :ok
+      {:positive, {:error, reason}} -> {:violation, {:wrongly_rejected, reason}}
+      {:negative, :ok} -> {:violation, {:wrongly_accepted, fam.name}}
     end
   end
 end

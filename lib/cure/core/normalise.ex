@@ -140,8 +140,7 @@ defmodule Cure.Core.Normalise do
   # this env (rather than `[]`) makes the OUTER `Quote.reify` re-eval a provable
   # identity, so free (context) variables read back unchanged instead of being
   # reflected by re-evaluation in a truncated env. (depth 0 → []).
-  defp id_env(0), do: []
-  defp id_env(depth), do: for(l <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, l}})
+  defp id_env(depth), do: Context.neutral_env(depth)
 
   defp nf_struct({:vpi, dom, {:closure, env, cod}}, sig, depth, opts) do
     fresh = {:vneutral, {:nvar, depth}}
@@ -173,10 +172,26 @@ defmodule Cure.Core.Normalise do
     do: {:napp, nf_neutral(neutral, sig, depth, opts), nf_value(arg, sig, depth, opts)}
 
   defp nf_neutral({:ncase, neutral, motive, branches}, sig, depth, opts) do
-    {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
+    {:ncase, nf_neutral(neutral, sig, depth, opts), nf_motive(motive, sig, depth, opts),
+     Enum.map(branches, &nf_branch(&1, sig, depth, opts))}
   end
 
   defp nf_neutral(neutral, _sig, _depth, _opts), do: neutral
+
+  # Normalize a stuck-case motive/branch closure. Left un-normalized these keep a
+  # certified global FOLDED (β/ι are recovered by `Quote.reify`, but δ only fires
+  # in `nf_value`), so `nf` would not be a δ-normal form. Mirror `Quote`'s
+  # readback: the motive is a COMPLETE function term instantiated with NO extra
+  # binder; a branch body lives under its ctor's `arity` binders. Re-close the
+  # normalized term over `id_env(depth)`, exactly as `nf_struct` does for λ/Π.
+  defp nf_motive({:closure, env, term}, sig, depth, opts),
+    do: {:closure, id_env(depth), quote_nf(Eval.eval(term, env), sig, depth, opts)}
+
+  defp nf_branch({c, arity, {:closure, env, body}}, sig, depth, opts),
+    do:
+      {c, arity,
+       {:closure, id_env(depth),
+        quote_nf(Eval.open_branch(env, body, arity, depth), sig, depth + arity, opts)}}
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth, sig)
 
@@ -243,12 +258,13 @@ defmodule Cure.Core.Normalise do
         # value passes through unchanged.
         case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
           {:vctor, cname, cargs} ->
-            {_c, ar, {:closure, env, body}} =
-              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+            case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+              {_c, ar, {:closure, env, body}} ->
+                {:ok, reapply(args, spend_fuel(Eval.reduce_branch_body(body, env, cargs, ar)))}
 
-            fields = Eval.drop_leading_params(cargs, ar)
-            reduced = spend_fuel(Eval.eval(body, Enum.reverse(fields) ++ env))
-            {:ok, reapply(args, reduced)}
+              nil ->
+                :stuck
+            end
 
           _ ->
             :stuck
@@ -284,11 +300,13 @@ defmodule Cure.Core.Normalise do
         # before the ctor ι.
         case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
           {:vctor, cname, cargs} ->
-            {_c, ar, {:closure, env, body}} =
-              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+            case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+              {_c, ar, {:closure, env, body}} ->
+                {:ok, reapply(args, spend_fuel(Eval.reduce_branch_body(body, env, cargs, ar)))}
 
-            fields = Eval.drop_leading_params(cargs, ar)
-            {:ok, reapply(args, spend_fuel(Eval.eval(body, Enum.reverse(fields) ++ env)))}
+              nil ->
+                :stuck
+            end
 
           _ ->
             :stuck
@@ -339,7 +357,7 @@ defmodule Cure.Core.Normalise do
   # A struct op at the wrong arity (unsaturated/overapplied): stuck, never unsound.
   defp builtin_op_fold(_op, _args, _sig, _opts), do: :stuck
 
-  defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
+  defp reapply(args, value), do: Eval.apply_spine(value, args)
 
   defp spend_fuel(reduced) do
     case Process.get(@fuel_key) do

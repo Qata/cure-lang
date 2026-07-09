@@ -50,8 +50,15 @@ defmodule Cure.Core.Context do
   most-recent variable (index 0) bound to the highest de Bruijn level.
   """
   @spec env(t()) :: [Value.t()]
-  def env(%__MODULE__{length: 0}), do: []
+  def env(%__MODULE__{length: n}), do: neutral_env(n)
 
-  def env(%__MODULE__{length: n}),
-    do: for(level <- (n - 1)..0//-1, do: {:vneutral, {:nvar, level}})
+  @doc """
+  A neutral NbE environment of `n` fresh variables — index 0 bound to level
+  `n-1`, down to level 0. The identity environment a readback re-evaluates
+  against (`Normalise`'s `id_env`); shared so the "fresh neutral per de Bruijn
+  level" frame lives in one place.
+  """
+  @spec neutral_env(non_neg_integer()) :: [Value.t()]
+  def neutral_env(0), do: []
+  def neutral_env(n), do: for(level <- (n - 1)..0//-1, do: {:vneutral, {:nvar, level}})
 end
