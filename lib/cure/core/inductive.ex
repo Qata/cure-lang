@@ -281,6 +281,20 @@ defmodule Cure.Core.Inductive do
     end
   end
 
+  @doc """
+  A constructor's field count (the length of its argument telescope), or nil when
+  the constructor is unknown. This is the single authority for "how many of a
+  ctor value's spine slots are FIELDS" — the count both `Eval`'s ι-rule (via the
+  branch arity) and `Conv`'s params-on-spine coercion strip down to.
+  """
+  @spec field_count(Env.t(), atom()) :: non_neg_integer() | nil
+  def field_count(env, cname) do
+    case arg_telescope(env, cname) do
+      tele when is_list(tele) -> length(tele)
+      _ -> nil
+    end
+  end
+
   @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:present`)."
   @spec ctor_quantities(Env.t(), atom()) :: [quantity()] | nil
   def ctor_quantities(env, cname) do

@@ -83,14 +83,12 @@ defmodule Cure.Core.Conv do
   # each step recurses on a compact predecessor, so this is O(#layers actually
   # compared), never O(n) space. `S` has no params, so its field list is `[pred]`.
   defp conv_struct?({:vnat, a}, {:vnat, b}, _depth, _sig), do: a == b
-  defp conv_struct?({:vnat, 0}, {:vctor, :Z, []}, _depth, _sig), do: true
-  defp conv_struct?({:vctor, :Z, []}, {:vnat, 0}, _depth, _sig), do: true
 
-  defp conv_struct?({:vnat, n}, {:vctor, :S, [pred]}, depth, sig) when n > 0,
-    do: conv_val?({:vnat, n - 1}, pred, depth, sig)
+  defp conv_struct?({:vnat, n}, {:vctor, _, _} = c, depth, sig),
+    do: conv_struct?(Eval.nat_to_ctor({:vnat, n}), c, depth, sig)
 
-  defp conv_struct?({:vctor, :S, [pred]}, {:vnat, n}, depth, sig) when n > 0,
-    do: conv_val?(pred, {:vnat, n - 1}, depth, sig)
+  defp conv_struct?({:vctor, _, _} = c, {:vnat, n}, depth, sig),
+    do: conv_struct?(c, Eval.nat_to_ctor({:vnat, n}), depth, sig)
 
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)
@@ -215,12 +213,9 @@ defmodule Cure.Core.Conv do
   defp coerce_fields(_cname, vs, nil), do: vs
 
   defp coerce_fields(cname, vs, sig) do
-    case Cure.Core.Inductive.arg_telescope(sig, cname) do
-      tele when is_list(tele) and length(vs) > length(tele) ->
-        Enum.drop(vs, length(vs) - length(tele))
-
-      _ ->
-        vs
+    case Cure.Core.Inductive.field_count(sig, cname) do
+      n when is_integer(n) -> Eval.drop_leading_params(vs, n)
+      nil -> vs
     end
   end
 end
