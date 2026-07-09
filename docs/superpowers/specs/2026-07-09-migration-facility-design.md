@@ -1,6 +1,10 @@
 # Migration Facility + `cure migrate` — Design Capture (PARKED for release 0.34)
 
-> **STATUS: PARKED.** Operator-ordered 2026-07-09 to *spec and park* — NOT to build now. This is a design capture, not an implementation-ready spec: the lossless-AST strategy (§4) has genuine open questions that need a brainstorm before a plan is written. Target: exist before the **0.34** release cut (alongside the Signal/Flow 0.34 hardening). Does not affect the in-flight value-surface parity program.
+> **STATUS: PARKED until after the dependent-pipeline parity work is complete** (operator-ordered 2026-07-09: "wait on executing this plan until after the dependent pipeline has been fixed up"). *Spec and park* — NOT to build now. This is a design capture, not an implementation-ready spec: the lossless-AST strategy (§4) has genuine open questions needing a brainstorm before a plan. Target: exist before the **0.34** release cut (alongside the Signal/Flow 0.34 hardening).
+>
+> **Near-term unblock is decoupled from this facility:** the Std library's uppercase type vars are being renamed to lowercase **by hand now** (a plain source edit, NOT via this unbuilt facility) so the dependent-pipeline parity program can proceed; see [[uppercase-typevar-bad-motive-finding]]. No compiler-side tolerance is built ahead of this facility.
+>
+> **Operator-DECIDED constraints (no longer open):** (1) migration MUST be lossless — no lossy-but-warned v0. (2) The migration corpus (the set of rules `cure migrate` applies) is EXACTLY the set the compiler warns on — one rule registry, two consumers. (3) `--strict` promotes the migration warnings to errors (the warn-now→error-later knob).
 
 ## 1. Goal
 
@@ -42,10 +46,11 @@ The parity program needs `Std.List`'s uppercase type vars to stop producing `:ba
 
 ## 7. Open questions for the pre-implementation brainstorm
 
-- Lossless model: full trivia-CST vs. comment-attachment on the current AST (§4.2) — the decisive design fork; assess `Printer` fidelity first.
+- Lossless model: full trivia-CST vs. comment-attachment on the current AST (§4.2) — the decisive design fork; assess `Printer` fidelity first. **Lossless is REQUIRED (operator-decided); a lossy v0 is NOT an option** — so this fork is about *how* to be lossless, not *whether*.
 - Is the migration pass a new module (`Cure.Migrate`?) wrapping the registry, or an evolution of `cure.rewrite`'s internals?
-- Policy surface: `--strict`, an edition/version pragma, or per-rule maturity levels?
-- Scope of the first release: which rules ship at 0.34 (likely just the two named), and does the lossless work block the whole facility or can a "lossy-but-warned" v0 ship first?
+- Per-rule maturity levels under `--strict` (a rule graduates warn→error independently), vs. one global switch.
+
+**RESOLVED (operator, no longer open):** migration MUST be lossless (no lossy v0); the `cure migrate` corpus === the compiler's warning set (one registry, two consumers); `--strict` turns those warnings into errors. Scope of first release: at least the two named rules (if/elif→pickup, uppercase-type-var→lowercase), all lossless.
 
 ## 8. Out of scope for this capture
 
