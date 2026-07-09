@@ -1,0 +1,89 @@
+defmodule Cure.Elab.ListTest do
+  @moduledoc """
+  `List` value surface in the dependent pipeline (Wave 2). `[]`/`[h|t]`/`[a,b,c]`
+  desugar to `Nil`/`Cons` ctor calls (reusing all ctor machinery) and emit as
+  native BEAM cons cells. Tests use Int/Nat elements.
+
+  Scope (revised mid-execution, spec §2 revision):
+    * Nested list PATTERNS (`[a,b] ->`) are IN scope — the matrix compiler
+      `desugar_nested_arms/2` lowers them before `constructor_pattern/1`.
+    * A BARE top-level `[]` body (`fn e() -> List(Int) = []`) is infer-only-
+      rejected (the `elaborate_body` third-dispatch-layer gap, Finding A) — the
+      empty-list VALUE is proven in goal-bearing positions instead, and the bare
+      body is pinned as a ledger guard.
+  """
+  use ExUnit.Case, async: true
+  alias Cure.Elab.{Program, Emit}
+
+  @nat "mod M\n  type Nat = Z | S(Nat)\n"
+
+  # SCOPE REVISION (mid-execution): a BARE top-level `[]` body is infer-only-
+  # ambiguous (third-dispatch-layer / elaborate_body gap — Finding A, spec §2).
+  # The empty-list VALUE is proven in a goal-bearing position instead; the bare
+  # body is pinned as a ledger guard below. Do NOT touch the elaborate_body
+  # whitelist to make the bare form pass (same discipline as Wave-1 pickup).
+  test "an empty-list value elaborates in a goal-bearing position" do
+    src = "mod M\n  fn single(h: Int) -> List(Int) = [h | []]\nend\n"
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a bare top-level [] body is infer-only-rejected (ledger guard, NOT a crash)" do
+    src = "mod M\n  fn e() -> List(Int) = []\nend\n"
+    assert {:error, {:unsolved_metavariables, :Nil}} = Program.elaborate(src)
+  end
+
+  test "a multi-element list literal elaborates" do
+    src = "mod M\n  fn xs() -> List(Int) = [1, 2, 3]\nend\n"
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a cons literal elaborates" do
+    src = "mod M\n  fn c(h: Int, t: List(Int)) -> List(Int) = [h | t]\nend\n"
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a multi-head cons literal elaborates" do
+    # Distinct parser path from both the plain [1,2,3] literal and the single
+    # [h|t] cons above: `build_multi_head_cons/3` (parser.ex:837-843) desugars
+    # [a, b | rest] right-associatively to [a | [b | rest]] BEFORE this node
+    # ever reaches `:list` handling, so this exercises a genuinely different
+    # AST shape than either other test (spec §3 antibody 3).
+    src =
+      "mod M\n  fn c(a: Int, b: Int, rest: List(Int)) -> List(Int) = [a, b | rest]\nend\n"
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a one-deep list pattern match elaborates" do
+    src =
+      @nat <>
+        "  fn is_empty(xs: List(Nat)) -> Bool =\n" <>
+        "    match xs\n" <>
+        "      [] -> true\n" <>
+        "      [h | t] -> false\nend\n"
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a mismatched-element list is rejected in checked position" do
+    src = "mod M\n  fn bad() -> List(Int) = [1, true]\nend\n"
+    assert {:error, _} = Program.elaborate(src)
+  end
+
+  # SCOPE REVISION (mid-execution): nested list patterns WORK on HEAD via the
+  # matrix compiler `desugar_nested_arms/2` (elaborator.ex:2974), invoked by
+  # elaborate_match/6 BEFORE constructor_pattern/1 could reject them. The
+  # original plan wrongly expected `[a,b]` to be rejected via
+  # nested_constructor_arg — that path never fires for list arms. This is now a
+  # POSITIVE test (spec §2 revision + antibody 7). Runtime coverage is in Task 3.
+  test "a nested list pattern elaborates" do
+    src =
+      @nat <>
+        "  fn f(xs: List(Nat)) -> Bool =\n" <>
+        "    match xs\n" <>
+        "      [a, b] -> true\n" <>
+        "      other -> false\nend\n"
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+end

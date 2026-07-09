@@ -561,6 +561,11 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Wave-2 List sugar: rewrite `[]`/`[h|t]`/`[a,b,c]` to Nil/Cons ctor-call form
+  # and delegate, reusing all ctor inference (see desugar_list/1).
+  def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
+    do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.
@@ -1082,6 +1087,11 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Wave-2 List sugar in checked position: desugar to Nil/Cons and re-check
+  # against the same expected type.
+  def elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env),
+    do: elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
 
@@ -1428,6 +1438,12 @@ defmodule Cure.Elab.Elaborator do
     # cross-constructor cases (a `Vector`'s shared index rules them out) fall out
     # of the inner index-refined match's coverage, exactly as the hand-written
     # nested form already does. Non-tuple scrutinees are returned unchanged.
+    # Wave-2 List sugar in pattern position: rewrite each arm's `[]`/`[h|t]`
+    # `:pattern` meta to Nil/Cons ctor-call form BEFORE any downstream pass, so
+    # rekey/refine/constructor_pattern all see the uniform function_call shape and
+    # no `:list` node survives. One-deep only; a nested list pattern desugars to a
+    # nested ctor pattern that `constructor_pattern/1` rejects (:nested_constructor_arg).
+    arms0 = desugar_list_patterns(arms0)
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
     with {:ok, arms1} <- desugar_as_patterns(arms0),
@@ -3774,6 +3790,53 @@ defmodule Cure.Elab.Elaborator do
 
   defp binds_any?(_other, _avoid), do: false
 
+  # Wave-2 List sugar → ctor-call surface form (reuses all ctor machinery).
+  #   []            -> Nil()
+  #   [h | t]       -> Cons(h, t)              (meta carries `cons: true`)
+  #   [e1, …, eN]   -> Cons(e1, Cons(…, Nil))  (right fold)
+  # Recurses into sub-elements/sub-patterns so a list-of-lists desugars fully.
+  # `m` threads the original node's line/col into the synthesized ctor calls.
+  defp desugar_list({:list, m, []}), do: ctor_call("Nil", m, [])
+
+  defp desugar_list({:list, m, [h, t]} = _node) do
+    if Keyword.get(m, :cons, false) do
+      ctor_call("Cons", m, [desugar_list(h), desugar_list(t)])
+    else
+      # a 2-element literal (no cons flag) folds like any other literal
+      fold_list_literal([h, t], m)
+    end
+  end
+
+  defp desugar_list({:list, m, elems}), do: fold_list_literal(elems, m)
+  defp desugar_list(other), do: other
+
+  defp fold_list_literal(elems, m) do
+    Enum.reduce(Enum.reverse(elems), ctor_call("Nil", m, []), fn e, acc ->
+      ctor_call("Cons", m, [desugar_list(e), acc])
+    end)
+  end
+
+  defp ctor_call(name, m, args),
+    do: {:function_call, [name: name] ++ Keyword.take(m, [:line, :col]), args}
+
+  # Rewrite `:list` patterns in each match arm to the ctor-call form before any
+  # downstream pattern pass runs (the pattern-position half of desugar_list/1).
+  defp desugar_list_patterns(arms) do
+    Enum.map(arms, fn
+      {:match_arm, meta, body} = arm ->
+        case Keyword.get(meta, :pattern) do
+          {:list, _, _} = lp ->
+            {:match_arm, Keyword.put(meta, :pattern, desugar_list(lp)), body}
+
+          _ ->
+            arm
+        end
+
+      other ->
+        other
+    end)
+  end
+
   defp constructor_pattern({:function_call, meta, args}) do
     cname = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
@@ -4842,6 +4905,9 @@ defmodule Cure.Elab.Elaborator do
       _ -> {:error, {:unsupported_expression, expr}}
     end
   end
+
+  def elaborate_expr({:list, _, _} = node, scope, env),
+    do: elaborate_expr(desugar_list(node), scope, env)
 
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
 
