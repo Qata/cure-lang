@@ -8,7 +8,7 @@ defmodule Cure.Core.CompactNatTest do
   # a huge codepoint stays O(1) — one integer, never a tower.
   use ExUnit.Case, async: true
   alias Cure.Core.{Builtins, Env, Kernel, Context, Eval, Conv, Normalise, Serialize, Term, Value}
-  alias Cure.Elab.Elaborator
+  alias Cure.Elab.{Elaborator, Declarations}
 
   @nat {:data, :Nat, [], []}
 
@@ -132,6 +132,40 @@ defmodule Cure.Core.CompactNatTest do
       c = Context.empty(s)
       lit = {:literal, [subtype: :integer], -1}
       assert {:error, _} = Elaborator.elaborate_expr_checked(lit, @nat, [], c, s)
+    end
+  end
+
+  describe "type-index position: a numeric literal lowers to a compact nat_lit" do
+    # A number written in a dependent type index — e.g. the `5` in `Bounded(5)`,
+    # or the `0x110000` Char bound in `Bounded(1114112)` — parses as a NAME node
+    # `{:variable, [scope: :local], "5"}` (the lexer's integer token stringified).
+    # The single type→Core lowering (`Declarations.lower_type/3`, the live path
+    # `idx_to_core`) must resolve that to `{:nat_lit, n}`, NOT a phantom
+    # `{:global, :"5"}`. Without this the compact-Nat surface payoff never reaches
+    # type-index position (the position the Char/Bounded footprint argument needs).
+    defp num(n), do: {:variable, [scope: :local], Integer.to_string(n)}
+
+    test "a bare numeric index name lowers to a compact nat_lit" do
+      env = Env.empty()
+      assert {:ok, {:nat_lit, 5}} = Declarations.lower_type(num(5), [], env)
+      # the full-plane Char bound is ONE integer, not a 1.1M-node tower
+      assert {:ok, {:nat_lit, 1_114_112}} = Declarations.lower_type(num(1_114_112), [], env)
+      assert {:ok, {:nat_lit, 0}} = Declarations.lower_type(num(0), [], env)
+    end
+
+    test "the index of an applied type `Bounded(5)` is a compact nat_lit" do
+      env = Env.empty()
+      # `Bounded` is unregistered here, so the head falls to a global spine — the
+      # point is the ARGUMENT: it is `{:nat_lit, 5}`, not the old `{:global, :\"5\"}`.
+      ast = {:function_call, [name: "Bounded"], [num(5)]}
+      assert {:ok, {:app, {:global, :Bounded}, {:nat_lit, 5}}} =
+               Declarations.lower_type(ast, [], env)
+    end
+
+    test "a genuine type variable in scope still resolves to its de Bruijn index" do
+      # Regression guard: the numeric rule must not shadow real (non-numeric) names.
+      env = Env.empty()
+      assert {:ok, {:var, 0}} = Declarations.lower_type({:variable, [scope: :local], "n"}, ["n"], env)
     end
   end
 

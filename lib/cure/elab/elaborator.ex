@@ -5016,24 +5016,13 @@ defmodule Cure.Elab.Elaborator do
 
   # -- type expressions -------------------------------------------------------
 
-  defp elaborate_type({:variable, _meta, "Type"}, _scope, _env), do: {:ok, {:type, 0}}
-
-  defp elaborate_type({:variable, _meta, name}, scope, _env) do
-    case Enum.find_index(scope, &(&1 == name)) do
-      nil -> {:ok, {:data, String.to_atom(name), [], []}}
-      index -> {:ok, {:var, index}}
-    end
-  end
-
-  defp elaborate_type({:function_call, meta, args}, scope, env) do
-    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-    with {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_type/3) do
-      {:ok, {:data, name, [], core_args}}
-    end
-  end
-
-  defp elaborate_type(other, _scope, _env), do: {:error, {:unsupported_type, other}}
+  # Type→Core lowering has a single source of truth: `Declarations.lower_type/3`
+  # (the live signature path's `idx_to_core`). This legacy entry — reached only by
+  # `elaborate/2`, a pre-dependent-pipeline signature elaborator — delegates there
+  # so both share name resolution, param/index splitting, and numeric-index
+  # lowering (`Bounded(5)` → `{:nat_lit, 5}`) rather than reinventing an
+  # impoverished copy that turned every unbound name into a phantom `{:data, …}`.
+  defp elaborate_type(ast, scope, env), do: Cure.Elab.Declarations.lower_type(ast, scope, env)
 
   # -- helpers ----------------------------------------------------------------
 
