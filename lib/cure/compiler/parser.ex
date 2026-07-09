@@ -1315,6 +1315,9 @@ defmodule Cure.Compiler.Parser do
       :type ->
         parse_type_def(state)
 
+      :typealias ->
+        parse_typealias(state)
+
       :proto ->
         parse_proto(state)
 
@@ -2944,6 +2947,42 @@ defmodule Cure.Compiler.Parser do
   # The lexer emits a single `:indent`/`:dedent` pair around the continuation
   # block; `parse_type_def/1` absorbs it so the variants themselves can be
   # parsed by the existing `parse_type_variant/1` / `parse_more_variants/1`.
+
+  # `typealias NAME(type_params?) = RHS` — a TRANSPARENT type synonym. Unlike
+  # `type NAME = Ctor(...)` (a nominal single-constructor ADT), the RHS is always
+  # parsed as a type EXPRESSION and the result is a `:type_annotation` node, which
+  # the elaborator lowers to a nullary def whose δ-unfolding makes `NAME`
+  # definitionally interchangeable with `RHS`. This disambiguates the applied-type
+  # synonym `typealias Char = Bounded(1114112)` from the identically-shaped
+  # single-variant ADT `type Color = RGB(Int)`, without disturbing the ADT path.
+  defp parse_typealias(state) do
+    token = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    {type_params, state} =
+      case peek(state) do
+        %Token{type: :lparen} ->
+          state = advance(state)
+          {tp, state} = parse_typed_params(state)
+          state = expect(state, :rparen)
+          {Enum.map(tp, fn {:param, _meta, n} -> n end), state}
+
+        _ ->
+          {[], state}
+      end
+
+    state = expect(state, :assign)
+    state = skip_newlines(state)
+    {rhs, state} = parse_type_expr(state)
+
+    meta = [name: name, line: token.line, col: token.col]
+    meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+    {{:type_annotation, meta, [rhs]}, state}
+  end
 
   defp parse_type_def(state) do
     token = peek(state)

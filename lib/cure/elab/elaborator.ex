@@ -3707,6 +3707,13 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_branch_body({:tuple, _meta, [_a, _b]} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
+  # A `[] -> []` (or `[a,b] -> [...]`) arm body: check it against the branch goal
+  # so a bare `[]` arm pins its element type from the goal instead of failing
+  # infer-only with `{:unsolved_metavariables, :Nil}` (Finding A). `expected` here
+  # is the refined branch goal; `elaborate_expr_checked` self-desugars the `:list`.
+  defp elaborate_branch_body({:list, _, _} = expr, expected, names, ctx, env),
+    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+
   defp elaborate_branch_body(expr, _expected, names, ctx, env) do
     with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
   end
