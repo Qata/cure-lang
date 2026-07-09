@@ -47,7 +47,21 @@ defmodule Cure.Compiler.Parser do
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
   # skipping tokens after a parse error.
-  @definition_keywords [:fn, :local, :mod, :rec, :type, :use, :sup, :app, :proto, :impl, :proof]
+  @definition_keywords [
+    :fn,
+    :local,
+    :mod,
+    :rec,
+    :type,
+    :use,
+    :sup,
+    :app,
+    :proto,
+    :impl,
+    :interface,
+    :implementation,
+    :proof
+  ]
 
   # Decorators that describe the *module*, not the declaration that follows.
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
@@ -1326,6 +1340,12 @@ defmodule Cure.Compiler.Parser do
 
       :impl ->
         parse_impl(state)
+
+      :interface ->
+        parse_interface(state)
+
+      :implementation ->
+        parse_implementation(state)
 
       :fsm ->
         parse_fsm(state)
@@ -3136,6 +3156,10 @@ defmodule Cure.Compiler.Parser do
           end
       end
 
+    # An optional `deriving Iface{, Iface}` suffix follows the last variant on
+    # the same line, so it must be consumed BEFORE the block-closing dedent.
+    {ast, state} = maybe_attach_deriving(ast, state)
+
     # Close the optional wrapping block by consuming the matching `:dedent`.
     # Surrounding newlines are skipped for us by the caller's own
     # `skip_newlines` but we also tolerate any trailing newline inside the
@@ -3153,6 +3177,37 @@ defmodule Cure.Compiler.Parser do
 
   defp layout_block_count(opened_block, pre_assign_block) do
     Enum.count([opened_block, pre_assign_block], & &1)
+  end
+
+  # `deriving` attaches a list of interface names to a constructor-bearing type
+  # (`:container` with `:enum` container_type). Type aliases can't derive, so
+  # non-container asts pass through untouched.
+  defp maybe_attach_deriving({:container, meta, body}, state) do
+    case peek(state) do
+      %Token{type: :keyword, value: :deriving} ->
+        state = advance(state)
+        {names, state} = parse_deriving_names(state, [])
+        {{:container, Keyword.put(meta, :deriving, names), body}, state}
+
+      _ ->
+        {{:container, meta, body}, state}
+    end
+  end
+
+  defp maybe_attach_deriving(ast, state), do: {ast, state}
+
+  defp parse_deriving_names(state, acc) do
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    case peek(state) do
+      %Token{type: :comma} ->
+        parse_deriving_names(advance(state), [name | acc])
+
+      _ ->
+        {Enum.reverse([name | acc]), state}
+    end
   end
 
   defp parse_gadt_ctors(state, acc) do
@@ -3488,6 +3543,118 @@ defmodule Cure.Compiler.Parser do
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
     ast = {:container, meta, body}
     {ast, state}
+  end
+
+  # -- Interface  interface Name(a) ------------------------------------------
+  #
+  # Compile-time typeclass declaration (the successor to `proto`). The head
+  # params are the type/higher-kinded variables the interface is indexed by
+  # (`interface Functor(f)`). The body is a definition block of method
+  # signatures; any method that carries a `= body` is a DEFAULT, captured
+  # separately in `meta[:defaults]` (name → body expr) so the elaborator can
+  # fill it into implementations that omit the method. The full body list is
+  # returned as the node's methods (each a `{:function_def, meta, exprs}`,
+  # `exprs == []` for a bare signature).
+  defp parse_interface(state) do
+    token = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    {params, state} =
+      case peek(state) do
+        %Token{type: :lparen} ->
+          state = advance(state)
+          {tp, state} = parse_name_list(state, :rparen)
+          state = expect(state, :rparen)
+          {tp, state}
+
+        _ ->
+          {[], state}
+      end
+
+    state = skip_newlines(state)
+    {body, state} = parse_definition_block(state)
+
+    defaults =
+      body
+      |> Enum.flat_map(fn
+        {:function_def, m, [expr | _]} -> [{Keyword.get(m, :name), expr}]
+        _ -> []
+      end)
+      |> Map.new()
+
+    meta = [
+      name: name,
+      params: params,
+      defaults: defaults,
+      line: token.line,
+      col: token.col
+    ]
+
+    {{:interface, meta, body}, state}
+  end
+
+  # -- Implementation  implementation Iface for Type [as Name] ----------------
+  #
+  # An instance of an interface for a concrete head type. `as Name` marks a
+  # NAMED implementation (selectable explicitly, exempt from global coherence);
+  # its absence is an anonymous instance keyed on `(interface, head ctor)`.
+  defp parse_implementation(state) do
+    token = peek(state)
+    state = advance(state)
+
+    {iface_name, state} = parse_dotted_name(state)
+
+    # Consume the `for` keyword.
+    state = expect(state, :keyword)
+
+    {for_type, state} = parse_type_expr(state)
+
+    {as_name, state} =
+      case peek(state) do
+        %Token{type: :keyword, value: :as} ->
+          s = advance(state)
+          as_token = peek(s)
+          {to_string(as_token.value), advance(s)}
+
+        _ ->
+          {nil, state}
+      end
+
+    {constraints, state} =
+      case peek(state) do
+        %Token{type: :keyword, value: :where} ->
+          s = advance(state)
+          parse_constraint_list(s)
+
+        _ ->
+          {[], state}
+      end
+
+    state = skip_newlines(state)
+    {body, state} = parse_definition_block(state)
+
+    for_name =
+      case for_type do
+        {:variable, _, n} -> n
+        {:function_call, m, _} -> Keyword.get(m, :name, "unknown")
+        _ -> "unknown"
+      end
+
+    meta = [
+      interface: iface_name,
+      for: for_name,
+      for_type: for_type,
+      as: as_name,
+      line: token.line,
+      col: token.col
+    ]
+
+    meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
+    {{:implementation, meta, body}, state}
   end
 
   # -- Import  use Path.{items} [as Alias] -----------------------------------
