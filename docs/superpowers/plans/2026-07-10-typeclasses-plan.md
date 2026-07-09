@@ -30,6 +30,7 @@
 - `lib/cure/elab/deriving.ex` *(new)* — structural instance generation for Equatable/Ord/Show (Task 7).
 - `lib/cure/elab/elaborator.ex` — wire interface/impl/method-call into the expression + declaration dispatchers; repoint `==`/`<`/… (Task 4, 6).
 - `lib/cure/elab/program.ex` — register interfaces/impls during module elaboration; thread the coherence registry (Task 2, 3).
+- `lib/cure/core/inductive.ex` — this is where `Cure.Core.Env`'s struct + accessors actually live (there is no `lib/cure/core/env.ex` file); add the `interfaces` field + `put_interface`/`get_interface` (Task 2) and the `coherence` field + `put_coherence`/`coherence` (Task 3).
 - `lib/cure/core/builtins.ex`, `normalise.ex`; `lib/cure/elab/emit.ex`, `guard_lint.ex` — remove `struct_eq`/`struct_ne` (Task 6).
 - `lib/std/{equatable,ord,show,functor,access}.cure` — migrate to `interface`/`implementation` (Task 8).
 - `test/cure/elab/*`, `test/oracle/typeclass/*` — tests per task.
@@ -55,11 +56,20 @@ defmodule Cure.Compiler.TypeclassParseTest do
   # interface/implementation/deriving are the compile-time typeclass surface
   # (replacing runtime proto/impl). This pins the AST the elaborator consumes.
   use ExUnit.Case, async: true
-  alias Cure.Compiler.Parser
+  alias Cure.Compiler.{Lexer, Parser}
 
+  # `Parser.parse/2` takes a TOKEN LIST, not raw source (@spec parse([Token.t()],
+  # keyword())) — mirror the tokenize-then-parse convention every other parser
+  # test uses (e.g. test/cure/compiler/builtin_decorator_parse_test.exs). The
+  # parsed AST is a plain `{atom(), keyword(), term()}` tuple, not a struct, so
+  # there is no `.definitions` field — a `mod ... end` block parses to
+  # `{:container, [container_type: :module, ...], body}`; `body` is the
+  # definitions list.
   defp defs(src) do
-    {:ok, ast} = Parser.parse(src)
-    ast.definitions
+    {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
+    {:ok, ast} = Parser.parse(tokens, emit_events: false)
+    {:container, _meta, body} = ast
+    body
   end
 
   test "an interface with a method and a default method parses" do
@@ -67,14 +77,19 @@ defmodule Cure.Compiler.TypeclassParseTest do
     mod M
       interface Equatable(a)
         fn eq(x: a, y: a) -> Bool
-      fn ne(x: a, y: a) -> Bool = true
+        fn ne(x: a, y: a) -> Bool = true
     end
     """
+    # `fn ne` must be indented to the SAME level as `fn eq` — i.e. nested
+    # INSIDE the interface block, not a sibling of the `interface` line — or
+    # it parses as an unrelated top-level def referencing an unbound `a` and
+    # is never captured as a default at all.
     assert Enum.any?(defs(src), &match?({:interface, _, _}, &1))
     {:interface, meta, methods} = Enum.find(defs(src), &match?({:interface, _, _}, &1))
     assert Keyword.get(meta, :name) == "Equatable"
     assert Keyword.get(meta, :params) == ["a"]
     assert length(methods) >= 1
+    assert Map.has_key?(Keyword.get(meta, :defaults, %{}), "ne")
   end
 
   test "an anonymous implementation parses with interface + for-type" do
@@ -106,8 +121,22 @@ defmodule Cure.Compiler.TypeclassParseTest do
       type Color = R | G | B deriving Equatable
     end
     """
-    type_def = Enum.find(defs(src), &match?({:type, _, _}, &1))
-    {:type, meta, _} = type_def
+    # An ADT type def parses to `{:container, meta, variants}` with
+    # `meta[:container_type] == :enum` and a STRING `:name` (there is no
+    # `{:type, meta, _}` node anywhere in the parser — confirmed against
+    # `parse_type_def_adt`/`builtin_decorator_parse_test.exs`'s own
+    # `find_type_decl/2` convention). Matching on `:type` here would never
+    # find anything, deriving suffix or not.
+    type_def =
+      Enum.find(defs(src), fn
+        {:container, meta, _} ->
+          Keyword.get(meta, :container_type) == :enum and Keyword.get(meta, :name) == "Color"
+
+        _ ->
+          false
+      end)
+
+    {:container, meta, _} = type_def
     assert "Equatable" in Keyword.get(meta, :deriving, [])
   end
 end
@@ -144,7 +173,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
 
 ### Task 2: Interface elaboration → Core record type
 
-**Files:** Create `lib/cure/elab/interface.ex`. Modify `lib/cure/elab/program.ex` (dispatch `{:interface, …}` during module elaboration). Test: `test/cure/elab/interface_elab_test.exs` (new).
+**Files:** Create `lib/cure/elab/interface.ex`. Modify `lib/cure/elab/program.ex` (dispatch `{:interface, …}` during module elaboration), `lib/cure/core/inductive.ex` (the `interfaces` `Env` field + accessors — this is where `Cure.Core.Env` lives, not a separate `env.ex`). Test: `test/cure/elab/interface_elab_test.exs` (new).
 
 **Interfaces:**
 - Consumes `{:interface, meta, methods}` (Task 1).
@@ -188,9 +217,13 @@ defmodule Cure.Elab.InterfaceElabTest do
     mod M
       interface Bad(a)
         fn m1(x: a) -> Bool
-      fn m2(y: a(a)) -> Bool
+        fn m2(y: a(a)) -> Bool
     end
     """
+    # `m2` MUST be indented to the same level as `m1` — nested inside the
+    # interface block — or it parses as an unrelated top-level def with a
+    # free/unbound `a`, and `Bad` ends up with only the (consistent) `m1`,
+    # never exercising the inconsistent-head-kind check at all.
     assert {:error, {:inconsistent_head_kind, :Bad}} = Program.elaborate(src)
   end
 end
@@ -209,7 +242,7 @@ Add `Env` field `interfaces: %{}` with `put_interface/3`, `get_interface/2`. In 
 
 Run: `mix test test/cure/elab/interface_elab_test.exs test/cure/elab/`
 ```bash
-git add -- lib/cure/elab/interface.ex lib/cure/core/env.ex lib/cure/elab/program.ex test/cure/elab/interface_elab_test.exs
+git add -- lib/cure/elab/interface.ex lib/cure/core/inductive.ex lib/cure/elab/program.ex test/cure/elab/interface_elab_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(elab): interface -> Core record type former + head-kind inference"
 ```
 
@@ -217,7 +250,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 ### Task 3: Coherence registry + implementation → dictionary value
 
-**Files:** Create `lib/cure/elab/coherence.ex`, `lib/cure/elab/implementation.ex`. Modify `program.ex` (dispatch `{:implementation, …}`), `env.ex` (carry the coherence registry). Test: `test/cure/elab/implementation_elab_test.exs` (new).
+**Files:** Create `lib/cure/elab/coherence.ex`, `lib/cure/elab/implementation.ex`. Modify `program.ex` (dispatch `{:implementation, …}`), `lib/cure/core/inductive.ex` (carry the coherence registry — this is where `Cure.Core.Env` lives, not a separate `env.ex`). Test: `test/cure/elab/implementation_elab_test.exs` (new).
 
 **Interfaces:**
 - Consumes `{:implementation, meta, methods}` (Task 1) + interface descriptor (Task 2).
@@ -263,11 +296,21 @@ defmodule Cure.Elab.ImplementationElabTest do
     mod M
       interface Eqs(a)
         fn eqs(x: a, y: a) -> Bool
-      fn nes(x: a, y: a) -> Bool = true
+        fn nes(x: a, y: a) -> Bool = true
       implementation Eqs for Int
         fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
     end
     """)
+    # `nes` must be indented to the same level as `eqs` — nested inside the
+    # interface — to be captured as a default at all; otherwise it's an
+    # unrelated top-level def with a free `a`, and `Eqs` has only `eqs`, so
+    # the `implementation` below is a complete (not omitting) impl and never
+    # exercises the default-fill path this test is named for. The dictionary
+    # value's `nes` field is a live, running default; deeper behavioural
+    # verification of the filled-in default's VALUE happens once method-call
+    # resolution exists (Task 4) and via the stdlib's real `Equatable.ne`
+    # default (Task 8) — here we assert only that registration succeeds
+    # despite the omission.
     {:ok, _} = Coherence.lookup_anon(Env.coherence(e), :Eqs, :Int)
   end
 end
@@ -285,7 +328,7 @@ Expected: FAIL — `{:implementation, …}` unhandled; `Coherence`/`Env.coherenc
 - [ ] **Step 4: Run green; Step 5: scoped regression + commit**
 
 ```bash
-git add -- lib/cure/elab/coherence.ex lib/cure/elab/implementation.ex lib/cure/core/env.ex lib/cure/elab/program.ex test/cure/elab/implementation_elab_test.exs
+git add -- lib/cure/elab/coherence.ex lib/cure/elab/implementation.ex lib/cure/core/inductive.ex lib/cure/elab/program.ex test/cure/elab/implementation_elab_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(elab): coherence registry + implementation -> dictionary value"
 ```
 
@@ -337,10 +380,28 @@ defmodule Cure.Elab.ResolveFirstOrderTest do
       implementation Eqs for Bool
         fn eqs(x: Bool, y: Bool) -> Bool = eq(x, y)
       fn same({a: Type}, x: a, y: a) -> Bool where Eqs(a) = eqs(x, y)
+      fn sameInt(x: Int, y: Int) -> Bool = same(x, y)
+      fn sameBool(x: Bool, y: Bool) -> Bool = same(x, y)
     end
     """
-    assert run(src, :"Cure.C2", :same, [1, 1]) == true
-    assert run(src, :"Cure.C2", :same, [true, false]) == false
+    # `same`'s dict parameter is a REAL runtime argument (spec §8: v1 threads
+    # runtime dictionaries at abstract sites, no monomorphisation) — its own
+    # emitted arity is 3 (dict, x, y), so it cannot be called directly via a
+    # bare 2-arg `apply/3` from outside Cure (that would be a permanent
+    # arity mismatch, not a red-then-green test). `sameInt`/`sameBool` call
+    # `same` from a concrete call site, where Resolve supplies the resolved
+    # dictionary reference as the extra argument; the wrappers get a clean
+    # 2-arg emitted arity and are what this test actually invokes — mirroring
+    # the established `functions: [:id, :g]` multi-function convention
+    # (test/cure/elab/polymorphic_function_test.exs), not the single-function
+    # `run/4` helper above.
+    {:ok, env} = Program.elaborate(src)
+
+    {:ok, m} =
+      Emit.compile_and_load(env, module: :"Cure.C2", functions: [:same, :sameInt, :sameBool])
+
+    assert apply(m, :sameInt, [1, 1]) == true
+    assert apply(m, :sameBool, [true, false]) == false
   end
 
   test "a method call on a type with no instance is a clean no_instance error" do
@@ -365,13 +426,29 @@ end
 
 ```elixir
   test "an unused dictionary is erased (quantity 0), a used one is present" do
-    # behavioural proxy: both compile+run; assert the emitted arity excludes the
-    # erased dict. (Uses Emit.module_forms to inspect the function arity.)
-    # ... elaborate a `fn ignore({a}, x: a) -> a where Eqs(a) = x` and assert its
-    # emitted arity is 1 (dict erased), vs `same/…` above whose dict is present.
+    src = """
+    mod C4
+      interface Eqs(a)
+        fn eqs(x: a, y: a) -> Bool
+      implementation Eqs for Int
+        fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+      fn ignore({a: Type}, x: a) -> a where Eqs(a) = x
+      fn same({a: Type}, x: a, y: a) -> Bool where Eqs(a) = eqs(x, y)
+    end
+    """
+    {:ok, env} = Program.elaborate(src)
+    forms = Emit.module_forms(env, :"Cure.C4", [:ignore, :same])
+    arities = for {:function, _line, name, arity, _clauses} <- forms, into: %{}, do: {name, arity}
+
+    # ignore/1's body never calls `eqs` -> the occurs-check demotes the dict
+    # to erased; only the runtime-relevant `x` survives emission (arity 1).
+    assert arities[:ignore] == 1
+    # same/2's body calls `eqs(x, y)` via the dict -> it stays present
+    # (arity 3: dict, x, y — the {a: Type} param is erased either way).
+    assert arities[:same] == 3
   end
 ```
-Implement the occurs-check demotion until this passes. (Replace the sketch with the concrete `Emit.module_forms` arity assertion during implementation — do not leave it a comment.)
+Implement the occurs-check demotion until this passes.
 
 - [ ] **Step 5: Run green; scoped regression + commit**
 
@@ -462,7 +539,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 - [ ] **Step 5: Run green; scoped regression + commit**
 
 ```bash
-git add -- lib/cure/core/builtins.ex lib/cure/core/normalise.ex lib/cure/elab/emit.ex lib/cure/elab/guard_lint.ex lib/cure/elab/elaborator.ex test/cure/elab/eq_retirement_test.exs <deleted struct_eq test paths>
+git add -- lib/cure/core/builtins.ex lib/cure/core/normalise.ex lib/cure/elab/emit.ex lib/cure/elab/guard_lint.ex lib/cure/elab/elaborator.ex test/cure/elab/eq_retirement_test.exs test/cure/core/builtin_op_test.exs test/cure/elab/binop_lowering_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat: retire struct_eq/struct_ne; == and < resolve via Equatable/Ord
 
 Removes the polymorphic structural-equality builtin-op and the 4-way == dispatch;
@@ -480,9 +557,9 @@ emitted code). Deletes the tests that asserted the retired struct_eq behaviour."
 - Consumes a `type` descriptor + a target interface.
 - Produces: a generated `implementation I for T` (registered like a hand-written one) whose method is structural — matches constructors, compares/renders fields pairwise via **their own** instance (recursively resolved; self-recursion memoised by name). Covers `Equatable`, `Ord`, `Show`. Mutual recursion across a batch: two-pass (signatures then bodies) OR a documented v1 scope-cut (§7).
 
-- [ ] **Step 1: Write the failing test** — `deriving Equatable` on a recursive ADT (`type Tree = Leaf | Node(Tree, Int, Tree)`), assert two equal trees compare `true`, unequal `false`; `deriving Show` renders a nested value; `deriving Ord` orders by constructor then field.
+- [ ] **Step 1: Write the failing test** — `deriving Equatable` on a recursive ADT (`type Tree = Leaf | Node(Tree, Int, Tree)`), assert two equal trees compare `true`, unequal `false`; `deriving Show` renders a nested value; `deriving Ord` orders by constructor then field. **Invoke the interface methods directly** — `eq(t1, t2)` / `lt(t1, t2)` / `show(t)` — **not** the `==`/`<` infix operators. Task 7 depends only on Task 4 and may run before Task 6 (they're independent siblings in the dependency order); until Task 6 retires it, `==`/`<` on an ADT still fall through the OLD 4-way `build_binop` dispatch to `struct_eq`/`struct_ne` (which lowers straight to BEAM's native `==`, itself a real deep structural comparator — see Task 6 §Interfaces) or the primitive int/float arms, so `t1 == t2` on two equal `Tree` values would already evaluate `true` with **no** `Equatable` instance registered at all. A test phrased with `==`/`<` would not go red before Task 7's implementation exists, defeating the point of the red test. Calling `eq`/`lt`/`show` as ordinary interface methods routes through Task 4's `Resolve.method_call`, independent of whichever order Tasks 6/7 land in.
 
-- [ ] **Step 2: Run it, watch it fail** — `deriving` currently parsed (Task 1) but no instance generated ⇒ `==`/`show`/`<` on the ADT is `{:no_instance, …}`.
+- [ ] **Step 2: Run it, watch it fail** — `deriving` currently parsed (Task 1) but no instance generated ⇒ `eq(t1, t2)`/`show(t)`/`lt(t1, t2)` on the ADT is `{:no_instance, …}` (an unresolved interface method call, per Task 4's contract).
 
 - [ ] **Step 3: Implement `Deriving.generate/3`** for each of the three interfaces: build the method AST structurally from the type's constructors/fields, emit an `{:implementation, …}` and route it through Task 3's registration. Memoise `(interface, head)` during generation so a recursive field resolves to the in-progress instance by name.
 
@@ -499,7 +576,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 **Files:** `lib/std/{equatable,ord,show,functor,access}.cure`. Test: `test/cure/stdlib/typeclass_migration_test.exs` (new).
 
-**Interfaces:** each module rewritten `proto`/`impl` → `interface`/`implementation`, elaborates through the dependent pipeline, methods resolve + run. **Circularity fix:** primitive `Equatable`/`Ord` impls reference the builtin-op directly (`int_eq(a,b)`, not `a == b` — §4.2). Functor → true HKT (§3.1/Task 5). `String`/`Atom` equality: use the correct primitive (or a documented BEAM-`==` special case — the review noted no `string_eq`/`atom_eq` builtin-op exists; add one or special-case, do NOT invent a repoint).
+**Interfaces:** each module rewritten `proto`/`impl` → `interface`/`implementation`, elaborates through the dependent pipeline, methods resolve + run. **Circularity fix:** primitive `Equatable`/`Ord` impls reference the builtin-op directly (`int_eq(a,b)`, not `a == b` — §4.2). Functor → true HKT (§3.1/Task 5). `String`/`Atom` equality: use the correct primitive (or a documented BEAM-`==` special case — the review noted no `string_eq`/`atom_eq` builtin-op exists; add one or special-case, do NOT invent a repoint). **Access risk (§7):** `access.cure`'s keyword-list helpers (e.g. `kw_fetch`, `access.cure:532`) use `==`/`!=` on statically `Any`-typed operands — §3.4's resolution has no rule for `Any` at all (neither a concrete head nor a rigid var under a constraint), so this is expected, not a surprise, to hit the §5 blocker rule; if it does, STOP and document it as a blocker rather than inventing an ad-hoc `Any` resolution rule.
 
 - [ ] **Step 1: Write the failing test** — for each module, elaborate it (`Program.elaborate(File.read!(...))`) and run a representative method: `eq(1,1)`, `Std.Ord` `lt`, `show` of a value, `fmap([1,2,3], …)`, an `Access` getter. Assert results.
 
