@@ -29,6 +29,7 @@ defmodule Cure.Core.Serialize do
   defp enc({:int_type}), do: "(int-type)"
   defp enc({:float_type}), do: "(float-type)"
   defp enc({:int_lit, n}), do: ["(int ", Integer.to_string(n), ")"]
+  defp enc({:nat_lit, n}), do: ["(nat ", Integer.to_string(n), ")"]
   defp enc({:float_lit, f}), do: ["(float ", Float.to_string(f), ")"]
   defp enc({:ctor, name, args}), do: ["(ctor ", sym(name), args_iodata(args), ")"]
 
@@ -138,6 +139,7 @@ defmodule Cure.Core.Serialize do
   defp build_node("int-type", []), do: {:ok, {:int_type}}
   defp build_node("float-type", []), do: {:ok, {:float_type}}
   defp build_node("int", [{:int, n}]), do: {:ok, {:int_lit, n}}
+  defp build_node("nat", [{:int, n}]), do: {:ok, {:nat_lit, n}}
   defp build_node("float", [{:float, f}]), do: {:ok, {:float_lit, f}}
   defp build_node("hole", [{:str, s}]), do: {:ok, {:hole, s}}
   defp build_node("absurd", []), do: {:ok, {:absurd}}

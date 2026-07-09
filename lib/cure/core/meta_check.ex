@@ -50,6 +50,7 @@ defmodule Cure.Core.MetaCheck do
   defp canonical_head?({:data, _, _, _}), do: true
   defp canonical_head?({:int_type}), do: true
   defp canonical_head?({:int_lit, _}), do: true
+  defp canonical_head?({:nat_lit, _}), do: true
   defp canonical_head?({:float_type}), do: true
   defp canonical_head?({:float_lit, _}), do: true
   defp canonical_head?(_), do: false
