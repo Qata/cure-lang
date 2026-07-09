@@ -199,9 +199,19 @@ defmodule Cure.Elab.ListTest do
 
   @nat "mod M\n  type Nat = Z | S(Nat)\n"
 
-  test "an empty-list literal elaborates" do
-    src = "mod M\n  fn e() -> List(Int) = []\nend\n"
+  # SCOPE REVISION (mid-execution): a BARE top-level `[]` body is infer-only-
+  # ambiguous (third-dispatch-layer / elaborate_body gap — Finding A, spec §2).
+  # The empty-list VALUE is proven in a goal-bearing position instead; the bare
+  # body is pinned as a ledger guard below. Do NOT touch the elaborate_body
+  # whitelist to make the bare form pass (same discipline as Wave-1 pickup).
+  test "an empty-list value elaborates in a goal-bearing position" do
+    src = "mod M\n  fn single(h: Int) -> List(Int) = [h | []]\nend\n"
     assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a bare top-level [] body is infer-only-rejected (ledger guard, NOT a crash)" do
+    src = "mod M\n  fn e() -> List(Int) = []\nend\n"
+    assert {:error, {:unsolved_metavariables, :Nil}} = Program.elaborate(src)
   end
 
   test "a multi-element list literal elaborates" do
@@ -242,7 +252,13 @@ defmodule Cure.Elab.ListTest do
     assert {:error, _} = Program.elaborate(src)
   end
 
-  test "a genuinely nested list pattern is rejected cleanly (ledger guard, NOT a crash)" do
+  # SCOPE REVISION (mid-execution): nested list patterns WORK on HEAD via the
+  # matrix compiler `desugar_nested_arms/2` (elaborator.ex:2974), invoked by
+  # elaborate_match/6 BEFORE constructor_pattern/1 could reject them. The
+  # original plan wrongly expected `[a,b]` to be rejected via
+  # nested_constructor_arg — that path never fires for list arms. This is now a
+  # POSITIVE test (spec §2 revision + antibody 7). Runtime coverage is in Task 3.
+  test "a nested list pattern elaborates" do
     src =
       @nat <>
         "  fn f(xs: List(Nat)) -> Bool =\n" <>
@@ -250,7 +266,7 @@ defmodule Cure.Elab.ListTest do
         "      [a, b] -> true\n" <>
         "      other -> false\nend\n"
 
-    assert {:error, _} = Program.elaborate(src)
+    assert {:ok, _} = Program.elaborate(src)
   end
 end
 ```
@@ -339,11 +355,21 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
     assert is_list(result)
   end
 
-  test "the empty list emits []" do
-    src = "mod M\n  fn e() -> List(Int) = []\nend\n"
+  # The empty-list VALUE (goal-bearing: a recursion whose base yields []). A bare
+  # top-level `fn e() -> List(Int) = []` is infer-only-rejected (Finding A, spec
+  # §2 / ledger guard in Task 2) — do NOT test that shape here.
+  test "a recursion base yields the native empty list []" do
+    src =
+      "mod M\n" <>
+        "  fn drop_all(xs: List(Int)) -> List(Int) =\n" <>
+        "    match xs\n" <>
+        "      [] -> xs\n" <>
+        "      [h | t] -> drop_all(t)\nend\n"
+
     {:ok, env} = Program.elaborate(src)
-    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List2", functions: [:e])
-    assert apply(mod, :e, []) == []
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List2", functions: [:drop_all])
+    assert apply(mod, :drop_all, [[1, 2, 3]]) == []
+    assert apply(mod, :drop_all, [[]]) == []
   end
 
   test "[h | t] builds the expected native list" do
@@ -377,6 +403,26 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
     {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List4", functions: [:is_empty])
     assert apply(mod, :is_empty, [[]]) == true
     assert apply(mod, :is_empty, [[:Z]]) == false
+  end
+
+  # SCOPE REVISION: nested list patterns work (matrix compiler). This proves
+  # NATIVE emit preserves nested matching at runtime — the matrix compiler lowers
+  # `[a, b]` to a chain of single-level `[H|T]` matches, each hitting
+  # list_branch_clause, so native cons cells must select correctly at every level.
+  test "a nested list pattern selects the arm at runtime (native emit)" do
+    src =
+      @nat <>
+        "  fn exactly_two(xs: List(Nat)) -> Bool =\n" <>
+        "    match xs\n" <>
+        "      [a, b] -> true\n" <>
+        "      other -> false\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List5", functions: [:exactly_two])
+    assert apply(mod, :exactly_two, [[:Z, :Z]]) == true
+    assert apply(mod, :exactly_two, [[:Z]]) == false
+    assert apply(mod, :exactly_two, [[]]) == false
+    assert apply(mod, :exactly_two, [[:Z, :Z, :Z]]) == false
   end
 ```
 
@@ -462,7 +508,7 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
 
 - [ ] **Step 4: Firewall + core-scope.** Run `mix test test/cure/dependent_pipeline_firewall_test.exs` (green). Confirm `git -C <worktree> diff --stat` shows the kernel proper (`core/{eval,normalise,conv,quote,kernel,term,erase,inductive}.ex`) UNTOUCHED — only `core/builtins.ex` changed in `core/`.
 
-- [ ] **Step 5: Ratchet.** Re-run the stdlib disposition script (roadmap §0). Record KEEP before/after. **Disposition is binary per module** (`Cure.Elab.Program.elaborate/1` accepts the WHOLE module or it doesn't — roadmap §0; confirmed by `program.ex`'s `register_pass`, which halts the entire module's elaboration on the FIRST failing declaration, `Enum.reduce_while`/`{:halt, err}`, `program.ex:706-737` — there is no per-function partial-KEEP state). Given the Task 4 Step 1 audit already expects `last/2` (and possibly others) to stay blocked by the deferred `nested_constructor_arg` gap, **`Std.List` itself realistically may NOT flip to KEEP this wave** — do not treat that as a failure signal or a reason to rewrite `last/2`'s pattern (forbidden, §2/Out-of-scope). The realistic, checkable win this wave is: (a) any OTHER module whose only remaining blocker was `List` not existing/not being one-deep-clean flips to KEEP now that List is seeded and desugars, and (b) if the audit finds `Std.List`'s patterns are ALL one-deep (contradicting the spec's own `last/2` finding — recheck it, don't assume), `Std.List` flips too. State the actual before/after KEEP set and which modules moved, honestly reporting if `Std.List` itself stayed FAILS and why (name the blocking function/pattern). A regression in the prior KEEP set (bool/bounded/decision/equivalent/nat/proof/sigma/vector) = STOP.
+- [ ] **Step 5: Ratchet.** Re-run the stdlib disposition script (roadmap §0). Record KEEP before/after. **Disposition is binary per module** (`Cure.Elab.Program.elaborate/1` accepts the WHOLE module or it doesn't — roadmap §0; confirmed by `program.ex`'s `register_pass`, which halts the entire module's elaboration on the FIRST failing declaration, `Enum.reduce_while`/`{:halt, err}`, `program.ex:706-737` — there is no per-function partial-KEEP state). **SCOPE REVISION:** the original expectation "`Std.List` won't flip because `last/2`'s `[x]` stays blocked by `nested_constructor_arg`" is WRONG — nested list patterns work on HEAD via the matrix compiler (spec §2 revision), so `last/2`'s pattern is no longer a blocker. `Std.List` may now flip **fully** to KEEP; or it may stay blocked on a DIFFERENT remaining question (the executor flagged `List(T)` type-parameter polymorphism as not-yet-isolated — if `Std.List` stays FAILS, isolate and name the actual blocker, do NOT assume it's a pattern gap and do NOT rewrite any pattern to dodge it, forbidden §2/Out-of-scope). State the actual before/after KEEP set and which modules moved: (a) any module whose only remaining blocker was `List` not existing flips now, and (b) `Std.List` itself flips if nothing else blocks it. A regression in the prior KEEP set (bool/bounded/decision/equivalent/nat/proof/sigma/vector) = STOP.
 
 - [ ] **Step 6: Oracle replay.** Run `mix test test/oracle_replay_test.exs` — report the live `N/N`; NO verdict may flip (List is additive).
 
@@ -483,7 +529,7 @@ Each of the four commits must be independently full-suite-green (the #22 Part-A 
 
 ## Out of scope (do NOT build here)
 
-- Genuinely nested list-literal **patterns** (`[1,2,3] ->`, `[a,b] ->`, `[a,b|rest] ->`) — the general `nested_constructor_arg` decision-tree lift (`elaborator.ex:3803`), shared with `Nat`'s `S(S(m))`; its own increment. The ledger-guard test pins this boundary.
+- Closing the **bare top-level `[]` body** (`fn e() -> List(Int) = []`) — the third-dispatch-layer / `elaborate_body` infer-only gap (Finding A, spec §2). Its honest fix is a future `elaborate_body` whitelist increment (shared with pickup); pinned by the Task-2 ledger-guard test. Do NOT touch the `declarations.ex` whitelist to make it pass. (NOTE: genuinely nested list **patterns** — deferred by the original draft as `nested_constructor_arg` — are now IN scope; the matrix compiler `desugar_nested_arms/2` handles them, so this wave includes them, verified by positive elaboration + runtime tests.)
 - List **comprehensions** (`[x for x <- xs, …]`) — separate feature.
 - Adding `Std.List` to `@auto_prelude` (seed only, per spec §1.1).
 - Everything else in the program (lambda-inference, String, @extern, Map/tuples/tail).
