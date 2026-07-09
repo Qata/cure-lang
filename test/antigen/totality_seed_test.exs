@@ -19,7 +19,11 @@ defmodule Antigen.TotalitySeedTest do
     Totality.diverging_mediated_cycle(),
     Totality.diverging_permuting_pair(),
     Totality.diverging_regrowing_self(),
-    Totality.diverging_one_leg_pair()
+    Totality.diverging_one_leg_pair(),
+    # premature-certification guard: an earlier mutual member must not be certified
+    # while a sibling body is still a pending placeholder. Regresses to
+    # {:wrongly_certified, [:f]} if the deferral is lost.
+    Totality.diverging_pending_sibling()
   ]
 
   test "W1 diverging antibodies are banked and every totality record replays :ok" do
@@ -33,8 +37,8 @@ defmodule Antigen.TotalitySeedTest do
         match?(%Antigen.Challenge{assay: "totality/" <> _}, r.entry)
       end)
 
-    # the pre-existing mutual-pair antibody + the five W1 records
-    assert length(tot) >= 6
+    # the pre-existing mutual-pair antibody + the five W1 records + pending-sibling
+    assert length(tot) >= 7
 
     assert Enum.all?(tot, &(&1.verdict == :ok)),
            "totality replay produced a non-:ok verdict: " <>

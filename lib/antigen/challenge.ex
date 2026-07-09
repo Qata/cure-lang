@@ -106,6 +106,8 @@ defmodule Antigen.Challenge do
     :Fp,
     # family-level universe ceiling probe (Kernel.check_family range-check)
     :Over, :MkOver,
+    # totality: pending-sibling marker in a def-group payload (premature-cert guard)
+    :pending,
     # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
     :Sq, :mksq, :j,
     # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors
