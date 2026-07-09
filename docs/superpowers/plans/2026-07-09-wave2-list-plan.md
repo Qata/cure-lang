@@ -30,7 +30,7 @@
 - Emit ctor lowering cond — `emit.ex:162-182`; branch dispatch `branch_clause/3` `emit.ex:401-407`; `sigma_branch_clause` `emit.ex:413-421`; `nat_branch_clause` `emit.ex:430-443`; `sigma_ctor?` `emit.ex:513-516`; `underscore_if_unused/2` `emit.ex:479-481`.
 - Parser `:list` node — `parser.ex:759-843`: `{:list, [line,col], []}` (empty); `{:list, [cons: true, …], [head, tail]}` (`[h|t]`); `{:list, [line], [e1,…,eN]}` (literal); `[a,b|rest]` right-nested via `build_multi_head_cons/3` `parser.ex:837-843`. Match-arm list patterns are the SAME `:list` nodes.
 - `constructor_pattern/1` bare-var rule — `elaborator.ex:3777-3805`, nested rejected `{:error, {:unsupported_pattern, :nested_constructor_arg}}` at `:3803`.
-- Value dispatchers (for the desugar clauses) — `elaborate_expr_typed` catch-all `elaborator.ex:554`; `elaborate_expr_checked` fallback `:1032`; scoped `elaborate_expr` catch-all `:4793`; the Sigma `%[..]` `:tuple` clause at `elaborator.ex:4765-4770` is the closest surface-sugar→ctor precedent.
+- Value dispatchers (for the desugar clauses) — `elaborate_expr_typed` catch-all `elaborator.ex:564`; `elaborate_expr_checked` fallback `:1085` (do NOT insert near `:1032` — that line is mid-`with`-block inside the Sigma `%[..]` checked clause, `:1025-1055`; inserting a new function clause there is a syntax error); scoped `elaborate_expr` catch-all `:4846` (do NOT insert near `:4793` — that line is inside the `{:variable, …}` clause's `case` body); the Sigma `%[..]` `:tuple` clause at `elaborator.ex:4818-4823` is the closest surface-sugar→ctor precedent; `elaborate_named_call_scoped` is at `elaborator.ex:4848-4849`. (Re-verify these four line numbers against HEAD immediately before editing — this file has had same-day churn and anchors drift fast.)
 - Sigma drift test to mirror — `test/antigen/builtin_sigma_drift_test.exs`.
 
 ---
@@ -180,7 +180,7 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
 - Modify: `lib/cure/elab/elaborator.ex` (add a `desugar_list/1` helper + thin `:list` clauses that rewrite-and-delegate)
 - Test: `test/cure/elab/list_test.exs` (create; elaboration-level assertions in this task, runtime in Task 3)
 
-**Design (LOCKED option i — reuse ctor machinery):** rewrite a `{:list, meta, elems}` surface node into the equivalent **surface constructor-call node** and delegate to the EXISTING elaboration of that node, so all ctor inference / pattern / exhaustiveness code is reused verbatim. A list ctor call is a `{:function_call, [name: "Cons"|"Nil", line:…, col:…], args}` surface node (the same shape `Z()`/`empty()`/`prepend(x, rest)` parse to — confirmed: `elaborate_named_call_scoped` reads `Keyword.fetch!(meta, :name)`, `elaborator.ex:4796`).
+**Design (LOCKED option i — reuse ctor machinery):** rewrite a `{:list, meta, elems}` surface node into the equivalent **surface constructor-call node** and delegate to the EXISTING elaboration of that node, so all ctor inference / pattern / exhaustiveness code is reused verbatim. A list ctor call is a `{:function_call, [name: "Cons"|"Nil", line:…, col:…], args}` surface node (the same shape `Z()`/`empty()`/`prepend(x, rest)` parse to — confirmed: `elaborate_named_call_scoped` reads `Keyword.fetch!(meta, :name)`, `elaborator.ex:4848-4849`, re-verify against HEAD).
 
 - [ ] **Step 1: Write elaboration-level tests (RED)**
 
@@ -211,6 +211,18 @@ defmodule Cure.Elab.ListTest do
 
   test "a cons literal elaborates" do
     src = "mod M\n  fn c(h: Int, t: List(Int)) -> List(Int) = [h | t]\nend\n"
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a multi-head cons literal elaborates" do
+    # Distinct parser path from both the plain [1,2,3] literal and the single
+    # [h|t] cons above: `build_multi_head_cons/3` (parser.ex:837-843) desugars
+    # [a, b | rest] right-associatively to [a | [b | rest]] BEFORE this node
+    # ever reaches `:list` handling, so this exercises a genuinely different
+    # AST shape than either other test (spec §3 antibody 3).
+    src =
+      "mod M\n  fn c(a: Int, b: Int, rest: List(Int)) -> List(Int) = [a, b | rest]\nend\n"
+
     assert {:ok, _} = Program.elaborate(src)
   end
 
@@ -283,9 +295,9 @@ Add a recursive surface-rewrite helper (place with other private elaborator help
 ```
 
 Add thin `:list` clauses that desugar-and-delegate, immediately before each catch-all/fallback:
-- `elaborate_expr_typed({:list, _, _} = node, names, ctx, env)` (before `:554`): `elaborate_expr_typed(desugar_list(node), names, ctx, env)`.
-- `elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env)` (before `:1032`): delegate with `expected_core`.
-- `elaborate_expr({:list, _, _} = node, scope, env)` (before the `:4793` catch-all): `elaborate_expr(desugar_list(node), scope, env)`.
+- `elaborate_expr_typed({:list, _, _} = node, names, ctx, env)` (before the catch-all at `:564`): `elaborate_expr_typed(desugar_list(node), names, ctx, env)`.
+- `elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env)` (before the fallback at `:1085`, NOT `:1032` which is mid-body of the Sigma `%[..]` clause): delegate with `expected_core`.
+- `elaborate_expr({:list, _, _} = node, scope, env)` (before the catch-all at `:4846`, NOT `:4793` which is mid-body of the `{:variable, …}` clause): `elaborate_expr(desugar_list(node), scope, env)`.
 - **Pattern position:** find where a `match`-arm pattern is dispatched (the caller of `constructor_pattern/1`). A `:list` pattern node must be `desugar_list`'d to the `{:function_call, [name: "Cons"|"Nil"], …}` form BEFORE `constructor_pattern/1` sees it, so a one-deep `[h|t]` becomes `Cons(h, t)` with bare-variable sub-patterns (accepted) and `[]` becomes `Nil()` (accepted). Add the desugar at the pattern-normalization entry point (mirror how the pattern path already accepts `{:function_call,…}` ctor patterns). If the cleanest hook is a single pre-pass over the arm's `:pattern`, use that; the observable contract is that no `:list` node reaches `constructor_pattern/1`.
 
 **Verification note for the executor:** confirm by tracing that `desugar_list` is invoked in BOTH expression and pattern position — the reject test "genuinely nested list pattern" must fail with `{:unsupported_pattern, :nested_constructor_arg}` (proving the desugar reached the pattern path and produced a nested ctor pattern), NOT with `{:unsupported_expression, {:list,…}}` (which would prove the pattern path never desugared).
@@ -339,6 +351,18 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
     {:ok, env} = Program.elaborate(src)
     {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List3", functions: [:c])
     assert apply(mod, :c, [1, [2, 3]]) == [1, 2, 3]
+  end
+
+  test "[a, b | rest] builds the expected native list (multi-head cons)" do
+    # Cross-checks against the classic-pipeline oracle
+    # test/cure/compiler/multi_head_cons_test.exs (Task 4 Step 3) — this is the
+    # only directed test in this suite that exercises build_multi_head_cons/3.
+    src =
+      "mod M\n  fn c(a: Int, b: Int, rest: List(Int)) -> List(Int) = [a, b | rest]\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List3b", functions: [:c])
+    assert apply(mod, :c, [1, 2, [3, 4]]) == [1, 2, 3, 4]
   end
 
   test "a one-deep list match selects the arm at runtime" do
@@ -431,17 +455,18 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
 
 - [ ] **Step 1: Audit `lib/std/list.cure`'s patterns.** Read every function; classify each as one-deep (`[]`/`[h|t]` with bare-var sub-patterns — will dependent-elaborate) vs. deeper (nested list pattern — out of scope this wave). Record the classification in the commit message / a ledger note. Do NOT rewrite deeper patterns to dodge the gap; leave them and ledger.
 
-- [ ] **Step 2: `Std.List` smoke test.** Add to `test/cure/elab/list_test.exs` one directed test that elaborates `use Std.List` and runs a real one-deep `Std.List` function through the dependent pipeline (pick one the audit confirms is one-deep — e.g. `cons`/`is_empty`/a `head`-with-default). Assert its runtime result. Red-first, then it passes on the already-implemented Tasks 1-3.
+- [ ] **Step 2: `Std.List` smoke test.** **Do NOT route this through a real `use Std.List`** — `module_slice_env` (`program.ex:509-520`) elaborates a used module via `register_pass` + `body_pass` (`program.ex:706-737`, `:760-767`), BOTH of which halt the WHOLE module's elaboration on the first failing declaration (`Enum.reduce_while`/`{:halt, err}`, no partial-module success). `lib/std/list.cure`'s `last/2` has arm `[x] -> x` (as of this review, `last/2` is at source lines 69-73 — but Task 1 Step 4 inserts 2+ new lines earlier in this same file, so that line number WILL have shifted by the time Task 4 runs; locate `last/2` by name/content, not by a frozen line number), which desugars to `Cons(x, Nil())` — `Nil()` is a nested nullary ctor call, hitting the deferred `nested_constructor_arg` gap (§2/Out-of-scope) — so `use Std.List` against the real file fails this wave NO MATTER which function the test calls; `last/2` alone poisons the whole import. (This is consistent with Step 5's corrected ratchet expectation: `Std.List` itself is not expected to flip to KEEP this wave.)
+  Instead, add to `test/cure/elab/list_test.exs` one directed test that inlines the VERBATIM body of one real, confirmed-one-deep `Std.List` function into a test-local `mod M` source string (same "inline the real declaration" pattern the Task 1 drift test already uses for `@list_src` — copy the function text exactly from `lib/std/list.cure` as it stands AFTER Task 1's edit, cite whatever its line is AT THAT POINT in a comment, don't rewrite the function body) and runs it through `Program.elaborate` + `Emit.compile_and_load`. `cons/2` (as of this review, before Task 1's edit, at source line 78 — re-locate by name after Task 1 lands: `fn cons(elem: T, list: List(T)) -> List(T) = [elem | list]`) is a safe pick — no match, no recursion, trivially one-deep. Assert its runtime result (e.g. `cons(1, [2, 3]) == [1, 2, 3]`). Red-first, then it passes on the already-implemented Tasks 1-3. Ledger note (fold into Step 1's audit record): `use Std.List` itself stays blocked until a future nested-pattern-lift wave closes `last/2` (and any other non-one-deep function the audit finds); this smoke test intentionally proves the desugar+emit machinery against real stdlib logic without depending on that future lift.
 
 - [ ] **Step 3: Oracle-equivalence (roadmap §3 item 6).** The classic behavioral oracle for lists is `test/cure/compiler/codegen_test.exs`, `test/cure/compiler/pattern_compiler_test.exs`, and the multi-head-cons test (`test/cure/compiler/multi_head_cons_test.exs` if present — else the cons cases in codegen_test). These are CLASSIC-pipeline tests and STAY GREEN (the classic pipeline is untouched this wave). Confirm they still pass — they are the semantics reference the dependent runtime results were mirrored against (native BEAM lists, first-arm-wins match). Do NOT edit them.
 
 - [ ] **Step 4: Firewall + core-scope.** Run `mix test test/cure/dependent_pipeline_firewall_test.exs` (green). Confirm `git -C <worktree> diff --stat` shows the kernel proper (`core/{eval,normalise,conv,quote,kernel,term,erase,inductive}.ex`) UNTOUCHED — only `core/builtins.ex` changed in `core/`.
 
-- [ ] **Step 5: Ratchet.** Re-run the stdlib disposition script (roadmap §0). Record KEEP before/after. Expected: `Std.List` flips toward KEEP (fully if all its used patterns are one-deep, else partially), plus any module whose only blocker was List. State which moved and which remain blocked (and on what). A regression in the prior KEEP set (bool/bounded/decision/equivalent/nat/proof/sigma/vector) = STOP.
+- [ ] **Step 5: Ratchet.** Re-run the stdlib disposition script (roadmap §0). Record KEEP before/after. **Disposition is binary per module** (`Cure.Elab.Program.elaborate/1` accepts the WHOLE module or it doesn't — roadmap §0; confirmed by `program.ex`'s `register_pass`, which halts the entire module's elaboration on the FIRST failing declaration, `Enum.reduce_while`/`{:halt, err}`, `program.ex:706-737` — there is no per-function partial-KEEP state). Given the Task 4 Step 1 audit already expects `last/2` (and possibly others) to stay blocked by the deferred `nested_constructor_arg` gap, **`Std.List` itself realistically may NOT flip to KEEP this wave** — do not treat that as a failure signal or a reason to rewrite `last/2`'s pattern (forbidden, §2/Out-of-scope). The realistic, checkable win this wave is: (a) any OTHER module whose only remaining blocker was `List` not existing/not being one-deep-clean flips to KEEP now that List is seeded and desugars, and (b) if the audit finds `Std.List`'s patterns are ALL one-deep (contradicting the spec's own `last/2` finding — recheck it, don't assume), `Std.List` flips too. State the actual before/after KEEP set and which modules moved, honestly reporting if `Std.List` itself stayed FAILS and why (name the blocking function/pattern). A regression in the prior KEEP set (bool/bounded/decision/equivalent/nat/proof/sigma/vector) = STOP.
 
 - [ ] **Step 6: Oracle replay.** Run `mix test test/oracle_replay_test.exs` — report the live `N/N`; NO verdict may flip (List is additive).
 
-- [ ] **Step 7: Full suite ONCE.** Run `mix test` — 0 failures, total = prior baseline (3154 after Wave 1) + all new Wave-2 tests. Any unrelated pre-existing failure your diff did not cause → STOP and report, do not "fix" out of scope.
+- [ ] **Step 7: Full suite ONCE.** Run `mix test` — 0 failures, total = baseline + all new Wave-2 tests. Do NOT assume a hardcoded prior-baseline count (e.g. a remembered "3154 after Wave 1") is still current — this branch has had other same-day landings; capture the actual baseline by running `mix test` once on this branch BEFORE Task 1's changes (or read it from the most recent green CI/commit on this exact branch) and diff against that live number, not a guessed one (same discipline as §4's oracle-replay note: read the live count, don't hardcode a stale one). Any unrelated pre-existing failure your diff did not cause → STOP and report, do not "fix" out of scope.
 
 - [ ] **Step 8: Commit** the smoke test + any ledger note:
 
