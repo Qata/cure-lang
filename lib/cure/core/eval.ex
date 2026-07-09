@@ -92,6 +92,12 @@ defmodule Cure.Core.Eval do
   def apply({:vlam, _dom, {:closure, env, body}}, varg), do: eval(body, [varg | env])
   def apply({:vneutral, n}, varg), do: {:vneutral, {:napp, n, varg}}
 
+  # Applying an argument to a non-function value is ill-typed (an over-applied
+  # constructor or a term that should have been rejected upstream). Raise a
+  # descriptive error instead of a cryptic FunctionClauseError.
+  def apply(nonfun, _varg),
+    do: raise("Eval.apply: #{inspect(nonfun)} is not a function (over-application / ill-typed term)")
+
   @doc """
   Instantiate a closure (e.g. a Π/Σ codomain family) at a value: evaluate the
   closure body in its captured environment extended with `value` at index 0.

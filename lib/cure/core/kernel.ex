@@ -105,7 +105,11 @@ defmodule Cure.Core.Kernel do
 
   def infer(ctx, {:app, f, a}) do
     with {:ok, f_type} <- infer(ctx, f),
-         {:ok, dom, cod_closure} <- ensure_pi(f_type),
+         # whnf the head's type first: a function whose type is a certified global
+         # (or applied family) that δ-reduces to a Π must not be rejected as
+         # :not_a_function on its un-reduced syntactic form.
+         {:ok, dom, cod_closure} <-
+           ensure_pi(Normalise.whnf_value(f_type, Context.signature(ctx))),
          :ok <- check(ctx, a, dom) do
       a_value = Eval.eval(a, Context.env(ctx))
       {:ok, Eval.apply_closure(cod_closure, a_value)}
@@ -596,9 +600,25 @@ defmodule Cure.Core.Kernel do
 
   # -- dependent case (§4.4) --------------------------------------------------
 
-  # Apply a (curried) motive value to a list of argument values.
+  # Apply a (curried) motive value to a list of argument values. Callers below
+  # use this only AFTER `check_motive_wf` has validated the motive is a function
+  # of the right shape (`apply_motive_checked` is the validating gate).
   defp apply_motive(motive_value, args),
     do: Enum.reduce(args, motive_value, fn arg, acc -> Eval.apply(acc, arg) end)
+
+  # Like `apply_motive`, but on the UNvalidated motive supplied by the (untrusted)
+  # elaborator: if some prefix reduces to a non-function while arguments remain,
+  # the motive is ill-formed — return `{:error, :bad_motive}` rather than crashing
+  # `Eval.apply` on a non-function value.
+  defp apply_motive_checked(motive_value, args) do
+    Enum.reduce_while(args, {:ok, motive_value}, fn arg, {:ok, acc} ->
+      case acc do
+        {:vlam, _, _} -> {:cont, {:ok, Eval.apply(acc, arg)}}
+        {:vneutral, _} -> {:cont, {:ok, Eval.apply(acc, arg)}}
+        _ -> {:halt, {:error, :bad_motive}}
+      end
+    end)
+  end
 
   # Extend `ctx` by a (dependent) telescope; return the new context and the fresh
   # neutral values bound for each telescope variable, in declaration order.
@@ -637,10 +657,10 @@ defmodule Cure.Core.Kernel do
     ctx_motive = Context.extend(ctx_indices, data_value)
     x_value = {:vneutral, {:nvar, scrut_level}}
 
-    body_value = apply_motive(motive_value, index_vals ++ [x_value])
-
-    case infer_type_value_sort(ctx_motive, body_value) do
-      {:ok, _level} -> :ok
+    with {:ok, body_value} <- apply_motive_checked(motive_value, index_vals ++ [x_value]),
+         {:ok, _level} <- infer_type_value_sort(ctx_motive, body_value) do
+      :ok
+    else
       _ -> {:error, :bad_motive}
     end
   end
@@ -771,8 +791,16 @@ defmodule Cure.Core.Kernel do
 
                   {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
                   ctx_branch = specialize_branch_context(ctx_branch, subst)
-                  # Result indices are written over the ctor's args (most-recent first).
-                  s_values = Enum.map(result_indices, &Eval.eval(&1, Enum.reverse(arg_vals)))
+                  # Result indices are written over the ctor frame `params(outer) ++
+                  # args(inner)` (see check_uniform_params), so the eval env is
+                  # reverse(arg_vals) ++ reverse(scrut_params). Omitting the params
+                  # made a result index that references a family PARAMETER (e.g.
+                  # `MkBar : Bar n n`) resolve to a stray out-of-range neutral.
+                  s_values =
+                    Enum.map(
+                      result_indices,
+                      &Eval.eval(&1, Enum.reverse(arg_vals) ++ Enum.reverse(scrut_params))
+                    )
                   ctor_value = {:vctor, cname, arg_vals}
 
                   expected =
