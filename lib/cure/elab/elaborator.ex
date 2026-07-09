@@ -455,6 +455,15 @@ defmodule Cure.Elab.Elaborator do
       :float when is_float(value) ->
         {:ok, {:float_lit, value}, {:vfloat_type}}
 
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF ->
+        case char_type_value(Context.signature(ctx)) do
+          {:ok, ty} -> {:ok, {:bounded_lit, value}, ty}
+          :no_bounded -> {:error, {:char_literal_needs_bounded, value}}
+        end
+
+      :char when is_integer(value) ->
+        {:error, {:char_literal_out_of_range, value}}
+
       _ ->
         {:error, {:unsupported_expression, expr}}
     end
@@ -1174,6 +1183,17 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp bound_to_int(_other), do: :error
+
+  # The type of every character literal: Char = Bounded(0x110000). A char literal
+  # is a codepoint value; the bound 0x110000 (= 1_114_112) is intrinsic, not from
+  # context. `:no_bounded` when the Bounded family is unregistered (needs
+  # `use Std.Bounded`), so the caller reports a fix-naming error, not a crash.
+  defp char_type_value(sig) do
+    case Inductive.builtin(sig, :bounded) do
+      nil -> :no_bounded
+      fid -> {:ok, {:vdata, fid, [{:vnat, 0x110000}]}}
+    end
+  end
 
   defp elaborate_lambda([], body_expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)
@@ -4989,6 +5009,11 @@ defmodule Cure.Elab.Elaborator do
       :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
       :integer when is_integer(value) -> {:ok, {:int_lit, value}}
       :float when is_float(value) -> {:ok, {:float_lit, value}}
+      # The guard is required, not cosmetic: an unguarded negative `{:bounded_lit,
+      # k}` reaching the kernel raises an uncaught `FunctionClauseError`
+      # (`Kernel.infer/2` has no catch-all) — see spec §3.4.
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF -> {:ok, {:bounded_lit, value}}
+      :char when is_integer(value) -> {:error, {:char_literal_out_of_range, value}}
       _ -> {:error, {:unsupported_expression, expr}}
     end
   end
