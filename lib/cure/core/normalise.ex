@@ -153,26 +153,12 @@ defmodule Cure.Core.Normalise do
      {:closure, id_env(depth), quote_nf(Eval.eval(body, [fresh | env]), sig, depth + 1, opts)}}
   end
 
-  defp nf_struct({:vsigma, dom, {:closure, env, cod}}, sig, depth, opts) do
-    fresh = {:vneutral, {:nvar, depth}}
-
-    {:vsigma, nf_value(dom, sig, depth, opts),
-     {:closure, id_env(depth), quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
-  end
-
-  defp nf_struct({:vpair, a, b}, sig, depth, opts),
-    do: {:vpair, nf_value(a, sig, depth, opts), nf_value(b, sig, depth, opts)}
-
   defp nf_struct({:vdata, name, args}, sig, depth, opts),
     do: {:vdata, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
 
   defp nf_struct({:vctor, name, args}, sig, depth, opts),
     do: {:vctor, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
 
-  defp nf_struct({:veq, ty, a, b}, sig, depth, opts),
-    do: {:veq, nf_value(ty, sig, depth, opts), nf_value(a, sig, depth, opts), nf_value(b, sig, depth, opts)}
-
-  defp nf_struct({:vrefl, a}, sig, depth, opts), do: {:vrefl, nf_value(a, sig, depth, opts)}
 
   defp nf_struct({:vneutral, neutral}, sig, depth, opts),
     do: {:vneutral, nf_neutral(neutral, sig, depth, opts)}
@@ -181,12 +167,6 @@ defmodule Cure.Core.Normalise do
 
   defp nf_neutral({:napp, neutral, arg}, sig, depth, opts),
     do: {:napp, nf_neutral(neutral, sig, depth, opts), nf_value(arg, sig, depth, opts)}
-
-  defp nf_neutral({:nfst, neutral}, sig, depth, opts), do: {:nfst, nf_neutral(neutral, sig, depth, opts)}
-  defp nf_neutral({:nsnd, neutral}, sig, depth, opts), do: {:nsnd, nf_neutral(neutral, sig, depth, opts)}
-
-  defp nf_neutral({:nprim, op, args}, sig, depth, opts),
-    do: {:nprim, op, Enum.map(args, &nf_value(&1, sig, depth, opts))}
 
   defp nf_neutral({:ncase, neutral, motive, branches}, sig, depth, opts) do
     {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
@@ -232,12 +212,22 @@ defmodule Cure.Core.Normalise do
         # conversion δ-loop on open terms. Freezing is always sound: it only
         # makes normal forms MORE distinct, never collapses two of them, and
         # `conv?` still δ-unfolds on demand when it must compare. (A6)
-        with true <- Env.certified?(sig, name),
-             %{body: body} <- Env.get_def(sig, name),
-             true <- Cure.Core.Term.closed?(body) do
-          reduce_unfolded(reapply(args, spend_fuel(Eval.eval(body, []))), sig, opts)
-        else
-          _ -> :stuck
+        # K2 (spec 2026-07-09 §1.2): dispatch FIRST on the builtin-op marker so a
+        # body-less op def never reaches the generic `Eval.eval(body, [])` path
+        # (which would crash on the nil body). The certified-body path below is
+        # unchanged for ordinary defs.
+        case Env.get_def(sig, name) do
+          %{builtin_op: bop} when not is_nil(bop) ->
+            builtin_op_fold(bop, args, sig, opts)
+
+          _ ->
+            with true <- Env.certified?(sig, name),
+                 %{body: body} <- Env.get_def(sig, name),
+                 true <- Cure.Core.Term.closed?(body) do
+              reduce_unfolded(reapply(args, spend_fuel(Eval.eval(body, []))), sig, opts)
+            else
+              _ -> :stuck
+            end
         end
 
       # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
@@ -255,19 +245,6 @@ defmodule Cure.Core.Normalise do
             :stuck
         end
 
-      # ι on projections: mirrors `vfst`/`vsnd` — the pair's first/second field.
-      {:nfst, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
-          _ -> :stuck
-        end
-
-      {:nsnd, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
-          _ -> :stuck
-        end
-
       _ ->
         :stuck
     end
@@ -275,17 +252,17 @@ defmodule Cure.Core.Normalise do
 
   # Decide, in ONE whnf of the eliminated target, whether a certified global's
   # δ-unfold made progress. If the unfold only re-exposed a stuck eliminator
-  # (`ncase`/`nfst`/`nsnd`) — the lazy-unfolding case — this both decides
-  # productiveness AND fires ι, so the two never re-force the same scrutinee.
+  # (`ncase`) — the lazy-unfolding case — this both decides productiveness AND
+  # fires ι, so the two never re-force the same scrutinee.
   #
-  # Threading the FORCED target through `spend_fuel(Eval.eval(...))`/`vfst`/`vsnd`
-  # (rather than returning the raw stuck eliminator for the outer `whnf_value`
+  # Threading the FORCED target through `spend_fuel(Eval.eval(...))` (rather than
+  # returning the raw stuck eliminator for the outer `whnf_value`
   # loop to re-force) is what keeps normalization LINEAR: a naive check that
   # whnf's the scrutinee to test productiveness and then lets the loop whnf it a
   # second time to reduce is Θ(2ᵈ) on total definitions whose recursive scrutinee
   # reduces to a constructor (e.g. `f n = case n {Z→Z; S k→case (f k) {…}}`).
   #
-  #   * ctor/pair target → ι fires here, result returned reduced (productive);
+  #   * ctor target      → ι fires here, result returned reduced (productive);
   #   * stuck target     → `:stuck`, so `whnf_value` keeps the global FOLDED;
   #   * anything else (ctor, λ, or a neutral not headed by an eliminator) →
   #     `{:ok, value}`, i.e. genuine progress the outer loop continues from.
@@ -305,24 +282,50 @@ defmodule Cure.Core.Normalise do
             :stuck
         end
 
-      {:nfst, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, a, _b} -> {:ok, reapply(args, spend_fuel(a))}
-          _ -> :stuck
-        end
-
-      {:nsnd, target} ->
-        case whnf_value({:vneutral, target}, sig, opts) do
-          {:vpair, _a, b} -> {:ok, reapply(args, spend_fuel(b))}
-          _ -> :stuck
-        end
-
       _ ->
         {:ok, value}
     end
   end
 
   defp reduce_unfolded(value, _sig, _opts), do: {:ok, value}
+
+  # Literal acceleration for builtin-op globals (spec 2026-07-09 §1.2; Lean
+  # reduce_nat / Idris Builtin-op analog). Fold ONLY a saturated spine whose
+  # arguments all whnf to literals — via the SAME audited table Eval uses
+  # (§G.1: div/rem by literal zero returns :stuck and the spine stays neutral).
+  # Anything else (open args, wrong arity/overapplication) stays stuck: never
+  # unsound, at worst a missed unfold. `args` are already VALUES (spine/2);
+  # whnf_value forces any residual certified-global redex among them.
+  # Amendment A1 (spec §1-A): struct_eq/struct_ne take [tyval, l, r] and
+  # delegate to the SAME audited :eq/:ne fold over the two VALUE args — the type
+  # argument is not consulted (and not forced for literalness). Folds iff both
+  # value args whnf to int/float literals (late-instantiated polymorphic
+  # operands, same as today's prim); NEUTRAL otherwise — ADT equality never
+  # computes in the kernel (R8c).
+  defp builtin_op_fold(op, [_tyval, l, r], sig, opts) when op in [:struct_eq, :struct_ne] do
+    vals = Enum.map([l, r], &whnf_value(&1, sig, opts))
+
+    if Enum.all?(vals, &(match?({:vint, _}, &1) or match?({:vfloat, _}, &1))) do
+      Eval.fold(if(op == :struct_eq, do: :eq, else: :ne), vals)
+    else
+      :stuck
+    end
+  end
+
+  defp builtin_op_fold(op, args, sig, opts) when op not in [:struct_eq, :struct_ne] do
+    arity = if op == :neg, do: 1, else: 2
+
+    with true <- length(args) == arity,
+         vals = Enum.map(args, &whnf_value(&1, sig, opts)),
+         true <- Enum.all?(vals, &(match?({:vint, _}, &1) or match?({:vfloat, _}, &1))) do
+      Eval.fold(op, vals)
+    else
+      _ -> :stuck
+    end
+  end
+
+  # A struct op at the wrong arity (unsaturated/overapplied): stuck, never unsound.
+  defp builtin_op_fold(_op, _args, _sig, _opts), do: :stuck
 
   defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
 

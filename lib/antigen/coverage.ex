@@ -89,7 +89,8 @@ defmodule Antigen.Coverage do
   # Former-histogram signal (spec §2): a bounded per-class count bucket for each
   # Core former, folded into `flags` so `key/1` stays a 4-tuple. Reuses the
   # existing `fold/3` + `tag/1` (fold only ever passes tuple nodes to its callback).
-  @former_classes [:lam, :pi, :app, :case, :ctor, :data, :eq, :rewrite, :prim]
+  # :prim retired (K2): builtin-op spines count under :app.
+  @former_classes [:lam, :pi, :app, :case, :ctor, :data, :eq, :rewrite]
   defp former_flags(terms) do
     counts =
       Enum.reduce(terms, %{}, fn t, acc ->

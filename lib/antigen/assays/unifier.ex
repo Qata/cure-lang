@@ -128,7 +128,6 @@ defmodule Antigen.Assays.Unifier do
   defp has_solved_var?({:fun, ps, r}, keys), do: Enum.any?(ps, &has_solved_var?(&1, keys)) or has_solved_var?(r, keys)
   defp has_solved_var?({:adt, _n, ps}, keys), do: Enum.any?(ps, &has_solved_var?(&1, keys))
   defp has_solved_var?({:map, kk, v}, keys), do: has_solved_var?(kk, keys) or has_solved_var?(v, keys)
-  defp has_solved_var?({:refinement, base, _, _}, keys), do: has_solved_var?(base, keys)
   defp has_solved_var?(_, _keys), do: false
 
   # Read the solution for `id` ONCE through the op-map, then check structurally
@@ -157,6 +156,5 @@ defmodule Antigen.Assays.Unifier do
   defp meta_free?({:app, f, x}), do: meta_free?(f) and meta_free?(x)
   defp meta_free?({:pi, d, c}), do: meta_free?(d) and meta_free?(c)
   defp meta_free?({:lam, d, b}), do: meta_free?(d) and meta_free?(b)
-  defp meta_free?({:sigma, d, c}), do: meta_free?(d) and meta_free?(c)
   defp meta_free?(_), do: true
 end

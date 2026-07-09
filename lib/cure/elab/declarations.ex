@@ -70,22 +70,6 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  @doc false
-  def elaborate_function_body_lean({:function_def, meta, body}, env) do
-    body_expr = single_body(body)
-
-    with {:ok, sig} <- function_signature(meta, env) do
-      ctx = build_context(env, sig.telescope)
-
-      with {:ok, body_term} <-
-             elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
-           :ok <- Relevance.check(env, sig.name, sig.quantities, body_term) do
-        lambda = wrap_binders(:lam, sig.telescope, body_term)
-        {:ok, Env.add_def(env, sig.name, sig.pi, lambda, sig.quantities)}
-      end
-    end
-  end
-
   # Shared signature elaboration: auto-generalize free type variables, build the
   # parameter telescope and the Π type. Deterministic in the type environment, so
   # the signature computed in the registration pass and the body pass agree.
@@ -101,7 +85,8 @@ defmodule Cure.Elab.Declarations do
     params = auto_generalize(params0, return_expr, env) ++ params0
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
-         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env) do
+         ctx = build_context(env, telescope),
+         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env, ctx) do
       {:ok,
        %{
          name: name,
@@ -354,8 +339,19 @@ defmodule Cure.Elab.Declarations do
       {:error, _} ->
         with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
              {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
-          {:ok, {:pair, a_term, b_term}}
+          {:ok, {:ctor, sigma_mk_pair(env), [a_term, b_term]}}
         end
+    end
+  end
+
+  # The registered Sigma constructor name (canonically `:mk_pair`), via the builtin
+  # registry; defaults to `:mk_pair` when no Sigma family is registered.
+  defp sigma_mk_pair(env) do
+    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
+         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
+      n
+    else
+      _ -> :mk_pair
     end
   end
 
@@ -372,7 +368,7 @@ defmodule Cure.Elab.Declarations do
   end
 
   # `if …` as a function body: check it against the declared return type so both
-  # branches inherit the expected type (a constant-motive bool_elim).
+  # branches inherit the expected type (a constant-motive `:case` on the inductive Bool).
   defp elaborate_body({:conditional, _meta, _} = expr, return_core, scope, ctx, env, _params) do
     Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
@@ -857,9 +853,19 @@ defmodule Cure.Elab.Declarations do
 
   # -- surface index/type expr → Core, with a de Bruijn scope -----------------
 
-  defp idx_to_core({:variable, _meta, "Type"}, _scope, _fam, _env), do: {:ok, {:type, 0}}
+  # `ctx` (5th arg, spec 2026-07-08 §7.3): the kernel typing context for the
+  # enclosing fn's parameters, threaded ONLY by the return-type lowering in
+  # `function_signature` (every other caller keeps the 4-arg form → nil). When
+  # present, a function-call node whose head is a term-level global carrying
+  # implicit (erased) parameters delegates to the term-position implicit-app
+  # machinery instead of lowering as a bare explicit-args spine. Crossing a
+  # binder-introducing form (pi/sigma/arrow) NULLs the ctx for that sub-lowering
+  # (the scope gains binders the kernel context lacks — §7.3 item 4).
+  defp idx_to_core(ast, scope, fam, env, ctx \\ nil)
 
-  defp idx_to_core({:variable, _meta, name}, scope, _fam, env) do
+  defp idx_to_core({:variable, _meta, "Type"}, _scope, _fam, _env, _ctx), do: {:ok, {:type, 0}}
+
+  defp idx_to_core({:variable, _meta, name}, scope, _fam, env, _ctx) do
     case Enum.find_index(scope, &(&1 == name)) do
       nil ->
         case resolve_index_name(name, env) do
@@ -872,48 +878,64 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp idx_to_core({:function_call, fmeta, args}, scope, fam, env) do
+  defp idx_to_core({:function_call, fmeta, args}, scope, fam, env, ctx) do
     if Keyword.get(fmeta, :function_type) do
       arrow_to_pi(args, scope, fam, env)
     else
       name = Keyword.fetch!(fmeta, :name)
       atom = String.to_atom(name)
 
-      with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env) do
-        qualified =
-          if String.contains?(name, ".") do
-            Cure.Elab.Resolution.resolve_qualified(env, name, :type)
-          else
-            :error
+      # Type-position implicit insertion (spec §7): a term-level global whose
+      # signature carries erased (implicit) parameters cannot lower as a bare
+      # explicit-args spine — the kernel would see an under-applied application
+      # (the `b(first(p))` motive gap). With a typing context threaded in
+      # (return-type lowering only), delegate the whole application to the
+      # term-position machinery. A local binder of the same name shadows the
+      # global (mirrors the applied-bound-var cond branch below), and families/
+      # ctors never carry def quantities, so this misses them by construction.
+      if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
+           implicit_global?(env, atom) do
+        with {:ok, term, _result_type} <-
+               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+          {:ok, term}
+        end
+      else
+        with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+          qualified =
+            if String.contains?(name, ".") do
+              Cure.Elab.Resolution.resolve_qualified(env, name, :type)
+            else
+              :error
+            end
+
+          cond do
+            match?({:ok, _}, qualified) ->
+              {:ok, key} = qualified
+              {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
+              {:ok, {:data, key, params, indices}}
+
+            # An applied BOUND variable — e.g. a higher-order parameter used as
+            # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+            # the head against the de Bruijn scope; a local binder shadows a global,
+            # so this is checked first. Without it `F(n)` became a dangling
+            # `{:global, :F}`, and the call site's implicit substitution could never
+            # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+            idx = Enum.find_index(scope, &(&1 == name)) ->
+              {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
+
+            atom == fam or Inductive.family?(env, atom) ->
+              # Split the applied arguments into the family's parameters (prefix) and
+              # indices (suffix); the kernel checks each slot against its own
+              # telescope. param_count is 0 for parameter-free families (all indices).
+              {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+              {:ok, {:data, atom, params, indices}}
+
+            Inductive.get_ctor(env, atom) ->
+              {:ok, {:ctor, atom, core_args}}
+
+            true ->
+              {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
           end
-
-        cond do
-          match?({:ok, _}, qualified) ->
-            {:ok, key} = qualified
-            {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
-            {:ok, {:data, key, params, indices}}
-
-          # An applied BOUND variable — e.g. a higher-order parameter used as
-          # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
-          # the head against the de Bruijn scope; a local binder shadows a global,
-          # so this is checked first. Without it `F(n)` became a dangling
-          # `{:global, :F}`, and the call site's implicit substitution could never
-          # turn `F` into a solvable metavariable (ledger #10 prerequisite).
-          idx = Enum.find_index(scope, &(&1 == name)) ->
-            {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
-
-          atom == fam or Inductive.family?(env, atom) ->
-            # Split the applied arguments into the family's parameters (prefix) and
-            # indices (suffix); the kernel checks each slot against its own
-            # telescope. param_count is 0 for parameter-free families (all indices).
-            {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
-            {:ok, {:data, atom, params, indices}}
-
-          Inductive.get_ctor(env, atom) ->
-            {:ok, {:ctor, atom, core_args}}
-
-          true ->
-            {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
         end
       end
     end
@@ -942,10 +964,17 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env) do
+  # Binder-introducing forms (sigma/pi/arrow) sub-lower with the 4-arg form:
+  # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
+  # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
+  # `bname` in scope, so it is already in the frame of one new lambda binder, and
+  # wrapping it under `{:lam, dom, body}` is exactly that frame. `:Sigma` is the
+  # canonical family name (only Std.Sigma registers `@builtin(:sigma)`), used as a
+  # literal so `Sigma(..)` lowers even in a raw-`Env.empty()` elaboration.
+  defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
-      {:ok, {:sigma, dom, body}}
+      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
     end
   end
 
@@ -955,7 +984,7 @@ defmodule Cure.Elab.Declarations do
   # `n` in `P(n)` as the Π-bound variable (de Bruijn `{:var, 0}`). Direct analog of
   # the `sigma_type` binder threading above; `nil` binders (anonymous domains, from
   # a mixed `(a, x: B) -> …`) push a placeholder so indices stay aligned.
-  defp idx_to_core({:pi_type, [binders: names], asts}, scope, fam, env) do
+  defp idx_to_core({:pi_type, [binders: names], asts}, scope, fam, env, _ctx) do
     {domains, [ret_ast]} = Enum.split(asts, length(asts) - 1)
 
     folded =
@@ -975,7 +1004,13 @@ defmodule Cure.Elab.Declarations do
 
   # A qualified TYPE reference (`Std.Nat` / `Std.Nat.Nat`, no call parens) OR a
   # projection `p.1` / `p.2` used in a type position (e.g. `SF(as, bs, p.1)`).
-  defp idx_to_core({:attribute_access, meta, [inner_ast]} = node, scope, fam, env) do
+  # For a projection, lower to the Std.Sigma projection global exactly as the
+  # term-position `sigma_projection` does — the ctx threaded from the return-type
+  # position (spec 2026-07-08 §7.3) is REQUIRED to solve the erased implicits, so
+  # `ctx` must not be discarded. A `.1`/`.2` reached with `ctx == nil` (a non-
+  # return-type index/telescope position that does not thread ctx) has no frame to
+  # solve the implicits and errors precisely — a spec §7.5-class residual.
+  defp idx_to_core({:attribute_access, meta, [inner_ast]} = node, scope, fam, env, ctx) do
     attr = Keyword.fetch!(meta, :attribute)
     dotted = Cure.Compiler.Parser.dotted_path_of(node)
 
@@ -985,20 +1020,38 @@ defmodule Cure.Elab.Declarations do
         {:ok, key} = Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)
         {:ok, {:data, key, [], []}}
 
-      attr in ["1", "2"] ->
-        with {:ok, inner} <- idx_to_core(inner_ast, scope, fam, env) do
-          case attr do
-            "1" -> {:ok, {:fst, inner}}
-            "2" -> {:ok, {:snd, inner}}
-          end
+      attr in ["1", "2"] and not is_nil(ctx) ->
+        gname = if attr == "1", do: :sigma_first, else: :sigma_second
+
+        with {:ok, term, _type} <-
+               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, gname, [inner_ast], scope, ctx) do
+          {:ok, term}
         end
+
+      attr in ["1", "2"] ->
+        {:error, {:sigma_projection_needs_ctx, attr}}
 
       true ->
         {:error, {:bad_projection, attr}}
     end
   end
 
-  defp idx_to_core(other, _scope, _fam, _env), do: {:error, {:unsupported_index_expr, other}}
+  defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  # A term-level global whose registered signature carries at least one erased
+  # (implicit) parameter — the only shape the bare-spine lowering mis-handles.
+  # Families and constructors are not defs, so they return false here. Mirrors
+  # the precedent `implicit_def?/2` (elaborator.ex:1278-1283) exactly, including
+  # its `is_list(q)` guard: `Env.add_def/4` (the 4-arg form used by some Antigen
+  # synthetic environments, e.g. `lib/antigen/generators/closure_env.ex`) defaults
+  # quantities to `nil`, and `:erased in nil` raises (`nil` is not Enumerable) —
+  # the guard is required for the same reason it is in the precedent function.
+  defp implicit_global?(env, atom) do
+    case Env.get_def(env, atom) do
+      %{quantities: q} when is_list(q) -> :erased in q
+      _ -> false
+    end
+  end
 
   defp resolve_index_name(name, env) do
     atom = String.to_atom(name)
@@ -1043,9 +1096,12 @@ defmodule Cure.Elab.Declarations do
   defp primitive_type("Float"), do: {:float_type}
   defp primitive_type(_), do: nil
 
-  defp map_idx_to_core(exprs, scope, fam, env) do
+  # Threads the ctx to NESTED argument positions (spec §7.3 item 3): in
+  # `b(first(p))` the head `b` is a bound var; the implicit-carrying global
+  # `first` sits one level down, in an argument position.
+  defp map_idx_to_core(exprs, scope, fam, env, ctx \\ nil) do
     Enum.reduce_while(exprs, {:ok, []}, fn e, {:ok, acc} ->
-      case idx_to_core(e, scope, fam, env) do
+      case idx_to_core(e, scope, fam, env, ctx) do
         {:ok, core} -> {:cont, {:ok, acc ++ [core]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -1143,12 +1199,15 @@ defmodule Cure.Elab.Declarations do
   # so the Σ codomain carries no reference to the bound component — `U` has no free
   # de Bruijn index and needs no shift. A genuinely dependent Σ field (`U`
   # mentioning `a`) would map `a` to a spurious family name and be rejected by
-  # `Kernel.check_family`; it is not admitted here. The assembled `{:sigma, …}`
-  # goes into the constructor telescope and is validated by the kernel.
+  # `Kernel.check_family`; it is not admitted here. Lowers to the builtin inductive
+  # `Sigma(D, λ_:D. U)`; because `U` is closed w.r.t. the binder, the wrapping
+  # lambda is trivially constant (it ignores its argument), which is still
+  # well-formed. The assembled `{:data, :Sigma, …}` goes into the constructor
+  # telescope and is validated by the kernel.
   defp type_to_core({:sigma_type, [binder: _bname], [dom_ast, body_ast]}) do
     with {:ok, dom} <- type_to_core(dom_ast),
          {:ok, body} <- type_to_core(body_ast) do
-      {:ok, {:sigma, dom, body}}
+      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
     end
   end
 

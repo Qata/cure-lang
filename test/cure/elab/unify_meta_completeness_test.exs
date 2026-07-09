@@ -30,24 +30,39 @@ defmodule Cure.Elab.UnifyMetaCompletenessTest do
     assert {:eq, @z, @z, {:refl, @z}} == Unify.zonk(t, ctx)
   end
 
-  test "zonk substitutes a solution buried in Sigma / pair / fst / snd" do
+  test "zonk substitutes a solution buried in inductive Sigma / mk_pair / projections" do
     ctx = MetaCtx.put_solution(elem(MetaCtx.fresh(MetaCtx.new()), 0), 0, @z)
 
-    assert {:sigma, @z, @z} == Unify.zonk({:sigma, {:meta, 0}, {:meta, 0}}, ctx)
-    assert {:pair, @z, @z} == Unify.zonk({:pair, {:meta, 0}, {:meta, 0}}, ctx)
-    assert {:fst, @z} == Unify.zonk({:fst, {:meta, 0}}, ctx)
-    assert {:snd, @z} == Unify.zonk({:snd, {:meta, 0}}, ctx)
+    # Inductive Sigma (D2): the former is `{:data, :Sigma}`, intro `{:ctor,
+    # :mk_pair}`, projections the elaborator's `sigma_first`/`sigma_second` global
+    # spines — zonk recurses into each and substitutes the buried meta.
+    assert {:data, :Sigma, [@z, @z], []} ==
+             Unify.zonk({:data, :Sigma, [{:meta, 0}, {:meta, 0}], []}, ctx)
+
+    assert {:ctor, :mk_pair, [@z, @z]} ==
+             Unify.zonk({:ctor, :mk_pair, [{:meta, 0}, {:meta, 0}]}, ctx)
+
+    assert {:app, {:global, :sigma_first}, @z} ==
+             Unify.zonk({:app, {:global, :sigma_first}, {:meta, 0}}, ctx)
+
+    assert {:app, {:global, :sigma_second}, @z} ==
+             Unify.zonk({:app, {:global, :sigma_second}, {:meta, 0}}, ctx)
   end
 
-  test "unify does not crash the kernel on a metavariable buried in an Eq (delta fallback)" do
-    # Two distinct `Eq` terms with no structural do_unify clause fall to the
-    # δ-convertibility fallback. One carries an UNSOLVED meta buried in the Eq;
-    # `meta_free?` must detect it and refuse the fallback, returning a clean error
-    # instead of passing `{:meta, _}` to `Cure.Core.Eval.eval`.
+  test "a metavariable in a builtin-op spine argument unifies structurally (never crashes the kernel)" do
+    # ENUMERATED VERDICT FLIP (K2): the retired `{:prim}` node had no structural
+    # do_unify clause, so this row used to fall to the δ-convertibility fallback,
+    # which had to REFUSE the meta-bearing term ({:error, _} — the old pin was
+    # "reject cleanly rather than pass {:meta,_} to the trusted Eval"). The
+    # builtin-op GLOBAL spine is an ordinary application, so structural
+    # decomposition now runs FIRST and soundly SOLVES the meta — strictly
+    # stronger: still no meta ever reaches Eval, and op-argument metas are now
+    # solvable (a first-class-ops benefit, spec §0).
     {ctx, m} = MetaCtx.fresh(MetaCtx.new())
-    t1 = {:eq, @nat, {:meta, m}, @z}
-    t2 = {:eq, @nat, {:ctor, :S, [@z]}, @z}
+    t1 = {:app, {:app, {:global, :int_add}, {:meta, m}}, {:int_lit, 0}}
+    t2 = {:app, {:app, {:global, :int_add}, {:int_lit, 1}}, {:int_lit, 0}}
 
-    assert {:error, _} = Unify.unify(t1, t2, ctx, nat_sig())
+    assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nat_sig())
+    assert Unify.zonk({:meta, m}, ctx2) == {:int_lit, 1}
   end
 end

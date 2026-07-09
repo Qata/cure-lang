@@ -16,7 +16,7 @@ defmodule Antigen.Assays.Normalizer do
   """
   alias Antigen.Challenge
   alias Cure.Types.{Reduce, CoreBridge}
-  alias Cure.Core.{Eval, Quote, Conv}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Eval, Normalise, Quote}
 
   @assay_fuel 500_000
   @real %{
@@ -30,6 +30,13 @@ defmodule Antigen.Assays.Normalizer do
   @doc false
   def __real__, do: @real
 
+  # K2 (spec 2026-07-09 §1.4): the independent encoding is now builtin-op
+  # GLOBAL spines, which fold only under the SIGNATURE-CARRYING certified-δ
+  # engine — the kernel-side expectation therefore normalizes/converts over a
+  # builtins-seeded env (bare `Eval.eval([])`/nil-sig conv would leave every
+  # spine stuck and the differential vacuous).
+  defp sig, do: Builtins.seed(Env.empty())
+
   @spec run(Challenge.t()) :: :ok | {:violation, term()}
   def run(%Challenge{kind: :surface_expr} = c), do: run(c, @real)
 
@@ -37,9 +44,10 @@ defmodule Antigen.Assays.Normalizer do
     actual = k.normalize.(p.ast, p.bindings)
 
     with {:ok, actual_core} <- k.to_core.(actual) do
-      expected_core = k.reify.(k.eval.(p.core_expected, []))
+      s = sig()
+      expected_core = Normalise.nf(Context.empty(s), p.core_expected, delta: :certified)
 
-      if Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> k.conv.(actual_core, expected_core, [], 0, nil) end) == true do
+      if Normalise.with_fuel(@assay_fuel, fn -> k.conv.(actual_core, expected_core, [], 0, s) end) == true do
         :ok
       else
         {:violation, {:normalize_disagrees_with_kernel, p.ast, %{actual: actual, expected: expected_core}}}
@@ -51,7 +59,7 @@ defmodule Antigen.Assays.Normalizer do
 
   def run(%Challenge{kind: :surface_expr, assay: "normalizer/equal", payload: p}, k) do
     surface_eq = k.equal.(p.a, p.b, p.bindings)
-    kernel_eq = Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> k.conv.(p.core_a, p.core_b, [], 0, nil) end)
+    kernel_eq = Normalise.with_fuel(@assay_fuel, fn -> k.conv.(p.core_a, p.core_b, [], 0, sig()) end)
 
     # Soundness direction ONLY (V1b, per the moduledoc): `equal?` must never claim
     # `true` when the kernel disagrees. The converse ("surface says false, kernel

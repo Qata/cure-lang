@@ -186,15 +186,6 @@ defmodule Cure.Core.Certificate do
   defp walk_node(emit, {:pi, d, c}, st, acc),
     do: walk(emit, c, shift_state(st, 1), walk(emit, d, st, acc))
 
-  defp walk_node(emit, {:sigma, a, b}, st, acc),
-    do: walk(emit, b, shift_state(st, 1), walk(emit, a, st, acc))
-
-  defp walk_node(emit, {:pair, a, b}, st, acc),
-    do: walk(emit, b, st, walk(emit, a, st, acc))
-
-  defp walk_node(emit, {:fst, x}, st, acc), do: walk(emit, x, st, acc)
-  defp walk_node(emit, {:snd, x}, st, acc), do: walk(emit, x, st, acc)
-
   defp walk_node(emit, {:data, _n, ps, is}, st, acc) do
     acc = Enum.reduce(ps, acc, fn t, ac -> walk(emit, t, st, ac) end)
     Enum.reduce(is, acc, fn t, ac -> walk(emit, t, st, ac) end)
@@ -202,20 +193,6 @@ defmodule Cure.Core.Certificate do
 
   defp walk_node(emit, {:ctor, _n, args}, st, acc),
     do: Enum.reduce(args, acc, fn a, ac -> walk(emit, a, st, ac) end)
-
-  defp walk_node(emit, {:eq, t, a, b}, st, acc) do
-    acc = walk(emit, t, st, acc)
-    acc = walk(emit, a, st, acc)
-    walk(emit, b, st, acc)
-  end
-
-  defp walk_node(emit, {:refl, a}, st, acc), do: walk(emit, a, st, acc)
-
-  defp walk_node(emit, {:rewrite, pr, m, b}, st, acc) do
-    acc = walk(emit, pr, st, acc)
-    acc = walk(emit, m, st, acc)
-    walk(emit, b, st, acc)
-  end
 
   # Leaves (vars, literals, types, untracked globals): no call, no matrix.
   defp walk_node(_emit, _term, _st, acc), do: acc
@@ -590,11 +567,7 @@ defmodule Cure.Core.Certificate do
   defp calls?(name, {:global, n}), do: n == name
   defp calls?(name, {:pi, d, c}), do: calls?(name, d) or calls?(name, c)
   defp calls?(name, {:lam, d, b}), do: calls?(name, d) or calls?(name, b)
-  defp calls?(name, {:sigma, a, b}), do: calls?(name, a) or calls?(name, b)
   defp calls?(name, {:app, f, a}), do: calls?(name, f) or calls?(name, a)
-  defp calls?(name, {:pair, a, b}), do: calls?(name, a) or calls?(name, b)
-  defp calls?(name, {:fst, p}), do: calls?(name, p)
-  defp calls?(name, {:snd, p}), do: calls?(name, p)
 
   defp calls?(name, {:data, _n, ps, is}),
     do: Enum.any?(ps, &calls?(name, &1)) or Enum.any?(is, &calls?(name, &1))
@@ -606,11 +579,6 @@ defmodule Cure.Core.Certificate do
       calls?(name, s) or calls?(name, m) or
         Enum.any?(brs, fn {_c, _ar, b} -> calls?(name, b) end)
 
-  defp calls?(name, {:eq, t, a, b}), do: calls?(name, t) or calls?(name, a) or calls?(name, b)
-  defp calls?(name, {:refl, a}), do: calls?(name, a)
-
-  defp calls?(name, {:rewrite, p, m, b}),
-    do: calls?(name, p) or calls?(name, m) or calls?(name, b)
 
   defp calls?(_name, _term), do: false
 end

@@ -55,8 +55,11 @@ defmodule Antigen.Challenge do
     :motive_dom, :SNat, :snat0,
     :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
     :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,
-    # rewrite/eq vertical: kind, def-names, motive family name
+    # rewrite/eq vertical: kind, def-names, motive family name, and the
+    # inductive identity family the migrated builders declare (Phase C —
+    # `Equivalent`/`reflexive` with param `a`, indices `x`/`y`, witness `w`)
     :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P,
+    :Equivalent, :reflexive, :y,
     # universes vertical
     :u,
     # tier-B typed-term vertical: kind, family/ctor/def names, sig version
@@ -492,7 +495,9 @@ defmodule Antigen.Challenge do
     "base_src" => :base_src,
     "variant_src" => :variant_src,
     "expect" => :expect,
-    "relation" => :relation
+    "relation" => :relation,
+    "expect_error" => :expect_error,
+    "functions" => :functions
   }
   def from_pieces(:elab_program, assay, label, seed, note, scaffold, _pieces) do
     payload =

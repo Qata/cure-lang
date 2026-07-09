@@ -32,18 +32,8 @@ defmodule Cure.Elab.Resolution do
 
   def rekey_term({:pi, dom, cod}, m), do: {:pi, rekey_term(dom, m), rekey_term(cod, m)}
   def rekey_term({:lam, dom, body}, m), do: {:lam, rekey_term(dom, m), rekey_term(body, m)}
-  def rekey_term({:sigma, a, b}, m), do: {:sigma, rekey_term(a, m), rekey_term(b, m)}
   def rekey_term({:app, f, a}, m), do: {:app, rekey_term(f, m), rekey_term(a, m)}
-  def rekey_term({:pair, a, b}, m), do: {:pair, rekey_term(a, m), rekey_term(b, m)}
-  def rekey_term({:fst, p}, m), do: {:fst, rekey_term(p, m)}
-  def rekey_term({:snd, p}, m), do: {:snd, rekey_term(p, m)}
-  def rekey_term({:eq, ty, a, b}, m), do: {:eq, rekey_term(ty, m), rekey_term(a, m), rekey_term(b, m)}
-  def rekey_term({:refl, a}, m), do: {:refl, rekey_term(a, m)}
 
-  def rekey_term({:rewrite, proof, motive, body}, m),
-    do: {:rewrite, rekey_term(proof, m), rekey_term(motive, m), rekey_term(body, m)}
-
-  def rekey_term({:prim, op, args}, m), do: {:prim, op, Enum.map(args, &rekey_term(&1, m))}
 
   # Leaves: :var, :type, :global, :int_type, :int_lit, :float_type, :float_lit.
   def rekey_term(leaf, _m), do: leaf
@@ -59,7 +49,9 @@ defmodule Cure.Elab.Resolution do
 
   Rewrites every embedded Core term (family/ctor telescopes, ctor result
   indices/params, and ALL def bodies+types in the slice) via `rekey_term/2`.
-  Functions keep their bare `defs` keys.
+  Colliding function names in `owned_def_names` additionally have their `defs`
+  KEY (and their `certified` membership) moved to the qualified `:"Mod#name"`
+  atom, so a shadowed import stays reachable only under its qualified key.
   """
   @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom())) :: Env.t()
   def rekey_module_env(env, module_id, owned_family_names),
@@ -75,8 +67,15 @@ defmodule Cure.Elab.Resolution do
         |> MapSet.new()
       )
 
-  @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom()), MapSet.t(atom())) :: Env.t()
-  def rekey_module_env(%Env{} = env, module_id, owned_family_names, shadowed_ctor_names) do
+  @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom()), MapSet.t(atom()), MapSet.t(atom())) ::
+          Env.t()
+  def rekey_module_env(
+        %Env{} = env,
+        module_id,
+        owned_family_names,
+        shadowed_ctor_names,
+        owned_def_names \\ MapSet.new()
+      ) do
     # Owned ctor names: ctors whose family is an owned family name.
     owned_ctor_names =
       for {cname, fname} <- env.ctor_to_family, MapSet.member?(owned_family_names, fname), into: MapSet.new(), do: cname
@@ -91,12 +90,19 @@ defmodule Cure.Elab.Resolution do
     amap =
       Enum.reduce(rekeyed_ctor_names, amap, fn c, acc -> Map.put(acc, c, rekey_atom(module_id, c)) end)
 
+    # Colliding function names: unlike ctors/families (leaf atoms rewritten inside
+    # Core terms), a def is addressed by its `defs` KEY and `certified` membership,
+    # both of which move to the qualified atom below.
+    amap =
+      Enum.reduce(owned_def_names, amap, fn d, acc -> Map.put(acc, d, rekey_atom(module_id, d)) end)
+
     %Env{
       env
       | families: rekey_families(env.families, owned_family_names, amap),
         ctors: rekey_ctors(env.ctors, rekeyed_ctor_names, amap),
         ctor_to_family: rekey_c2f(env.ctor_to_family, amap),
-        defs: rekey_defs(env.defs, amap),
+        defs: rekey_defs(env.defs, owned_def_names, module_id, amap),
+        certified: rekey_certified(env.certified, owned_def_names, module_id),
         builtins: rekey_builtins(env.builtins, amap)
     }
   end
@@ -132,10 +138,24 @@ defmodule Cure.Elab.Resolution do
     Map.new(c2f, fn {c, f} -> {Map.get(amap, c, c), Map.get(amap, f, f)} end)
   end
 
-  defp rekey_defs(defs, amap) do
+  # Rewrite embedded ctor/family references in every def's type+body (via `amap`),
+  # AND move the KEY of an owned-and-colliding def to its qualified atom.
+  defp rekey_defs(defs, owned_def_names, module_id, amap) do
     Map.new(defs, fn {k, d} ->
-      {k, %{d | type: rekey_term(d.type, amap), body: rekey_term(d.body, amap)}}
+      d2 = %{d | type: rekey_term(d.type, amap), body: rekey_term(d.body, amap)}
+      key = if MapSet.member?(owned_def_names, k), do: rekey_atom(module_id, k), else: k
+      {key, d2}
     end)
+  end
+
+  # Move certified membership for owned-and-colliding defs to their qualified atom
+  # so a re-keyed total function stays δ-reducible under its new key.
+  defp rekey_certified(certified, owned_def_names, module_id) do
+    (certified || MapSet.new())
+    |> Enum.map(fn name ->
+      if MapSet.member?(owned_def_names, name), do: rekey_atom(module_id, name), else: name
+    end)
+    |> MapSet.new()
   end
 
   defp rekey_tele(tele, amap), do: Enum.map(tele, fn {n, t} -> {n, rekey_term(t, amap)} end)
@@ -221,11 +241,11 @@ defmodule Cure.Elab.Resolution do
   key) never reaches this fallback (preserving R1).
   """
   @spec resolve_bare_shadowed(Env.t(), atom()) :: {:ok, atom()} | :none | {:ambiguous, [String.t()]}
-  def resolve_bare_shadowed(%Env{families: families, ctors: ctors}, bare) do
+  def resolve_bare_shadowed(%Env{families: families, ctors: ctors, defs: defs}, bare) do
     suffix = "#" <> Atom.to_string(bare)
 
     matches =
-      (Map.keys(ctors) ++ Map.keys(families))
+      (Map.keys(ctors) ++ Map.keys(families) ++ Map.keys(defs))
       |> Enum.flat_map(fn k ->
         s = Atom.to_string(k)
         if String.ends_with?(s, suffix), do: [{String.trim_trailing(s, suffix), k}], else: []
@@ -277,24 +297,28 @@ defmodule Cure.Elab.Resolution do
   end
 
   @doc """
-  All origin modules that provide family `bare` under a re-keyed `:"Mod#bare"`
-  family key. ≥2 ⇒ the unqualified name is ambiguous (no local winner claimed
-  the bare key). Returns [] when the bare key is present (a winner exists) or
-  the name is unknown.
+  All origin modules that provide `bare` under a re-keyed `:"Mod#bare"` key in
+  EITHER namespace — inductive families or plain global defs (Approach B re-keys
+  both on collision). ≥2 ⇒ the unqualified name is ambiguous (no local winner
+  claimed the bare key). Returns [] when the bare key is present in either map (a
+  winner exists) or the name is unknown. Families and defs are classified
+  independently, so a bare name reported here is ambiguous across whichever
+  namespaces re-keyed it; Cure's capitalized-type / lowercase-def convention
+  makes a cross-namespace spelling coincidence practically impossible (§3.4).
   """
   @spec ambiguous_modules(Env.t(), atom()) :: [String.t()]
-  def ambiguous_modules(%Env{families: families}, bare) do
-    if Map.has_key?(families, bare) do
+  def ambiguous_modules(%Env{families: families, defs: defs}, bare) do
+    if Map.has_key?(families, bare) or Map.has_key?(defs, bare) do
       []
     else
       suffix = "#" <> Atom.to_string(bare)
 
-      families
-      |> Map.keys()
+      (Map.keys(families) ++ Map.keys(defs))
       |> Enum.flat_map(fn k ->
         s = Atom.to_string(k)
         if String.ends_with?(s, suffix), do: [String.trim_trailing(s, suffix)], else: []
       end)
+      |> Enum.uniq()
     end
   end
 
@@ -302,7 +326,7 @@ defmodule Cure.Elab.Resolution do
     present? =
       case slot do
         :type -> fn k -> Inductive.family?(env, k) end
-        :value -> fn k -> not is_nil(Inductive.get_ctor(env, k)) end
+        :value -> fn k -> not is_nil(Inductive.get_ctor(env, k)) or Map.has_key?(env.defs, k) end
       end
 
     case Enum.find(keys, present?) do

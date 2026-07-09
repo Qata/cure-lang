@@ -793,70 +793,6 @@ defmodule Cure.Types.CheckerTest do
       assert {:ok, _} = Checker.check_module(ast, emit_events: false)
     end
 
-    test "local refinement aliases declared with `type` are visible to function signatures" do
-      # Regression for the gap left at the end of Phase 1: only stdlib
-      # type aliases were being lifted into `env.types`. User-defined
-      # local aliases (`type Pos = {x: Int | x > 0}`) were silently
-      # dropped by `collect_signatures/2`, so the function signature
-      # for `classify` resolved its return type to a bare nominal
-      # `{:named, "Pos"}` and the multi-clause body's `Int` failed the
-      # structural subtype check with
-      # "declared return type Pos but body has type Int".
-      #
-      # After the fix, `install_local_type_aliases/2` resolves `Pos`,
-      # `Neg`, `Zer` to their underlying refinements before any
-      # function signature is registered. The structural subtype check
-      # then accepts `:int` as a candidate inhabitant via the gradual
-      # rule `subtype?(t, {:refinement, base, _, _}) -> subtype?(t, base)`.
-      src = """
-      mod LocalAliasesMod
-        type Pos = {x: Int | x > 0}
-        type Neg = {x: Int | x < 0}
-        type Zer = {x: Int | x == 0}
-
-        fn classify(x: Int) -> Pos
-          | x when x > 0 -> x
-          | x when x < 0 -> 0 - x
-          | _            -> 1
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:ok, _} = Checker.check_module(ast, emit_events: false)
-    end
-
-    test "`type X = A | B | C` of pre-existing aliases is a union, not a fresh ADT" do
-      # Regression for the user's `type All = Pos | Neg | Zer` case.
-      # The parser produces an `:enum` container with three nullary
-      # variants regardless of whether `Pos`, `Neg`, `Zer` are fresh
-      # tags or pre-existing type aliases. The checker now disambiguates:
-      # if every variant name is already in `env.types`, the declaration
-      # registers a structural union `{:union, [t_Pos, t_Neg, t_Zer]}`
-      # in `env.types` and does *not* re-bind the names in the value
-      # scope. The body of `classify` returns `Int` values; subtype
-      # `:int <: union` succeeds because each member's gradual rule
-      # reduces to `:int <: :int`.
-      src = """
-      mod UnionAliasMod
-        type Pos = {x: Int | x > 0}
-        type Neg = {x: Int | x < 0}
-        type Zer = {x: Int | x == 0}
-
-        type All = Pos | Neg | Zer
-
-        fn classify(x: Int) -> All
-          | x when x > 0 -> x
-          | x when x < 0 -> 0 - x
-          | _            -> 1
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:ok, _} = Checker.check_module(ast, emit_events: false)
-    end
-
     test "`type X = A | B | C` with fresh tags still registers an ADT" do
       # When none of the variant names match an existing alias in
       # `env.types`, the declaration falls through to the original ADT
@@ -878,31 +814,13 @@ defmodule Cure.Types.CheckerTest do
       assert {:ok, _} = Checker.check_module(ast, emit_events: false)
     end
 
-    test "forward-referenced local refinement alias still resolves" do
-      # Even when the alias declaration comes textually *after* the
-      # function that consumes it, the dedicated pre-pass guarantees
-      # `env.types` carries the resolved refinement before any
-      # `register_fn_signature/2` call inspects the AST.
-      src = """
-      mod ForwardAliasMod
-        fn keep(n: Pos) -> Pos = n
-        type Pos = {x: Int | x > 0}
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:ok, _} = Checker.check_module(ast, emit_events: false)
-    end
-
     test "declared Int parameter survives multi-clause guard refinement" do
       # Regression for the bug where `check_multi_clause` bound every
-      # clause's pattern variables with `:any`, causing
-      # `GuardRefinement.refine_env/3` to wrap them in
-      # `{:refinement, :any, ...}`. The body of `| x when x < 0 -> -x`
-      # then failed `Type.numeric?/1` (which checks the refinement's
-      # base) and the checker emitted
-      # "unary '-' expects numeric operand, got {x: Any | ...}".
+      # clause's pattern variables with `:any`, so the body of
+      # `| x when x < 0 -> -x` failed `Type.numeric?/1` and the checker
+      # emitted "unary '-' expects numeric operand, got Any". Each clause
+      # now binds pattern variables at the declared parameter type, so a
+      # declared `Int` parameter stays `Int`.
       src = """
       mod MultiClauseRefine
         type Sign = PositiveTag | NegativeTag | ZeroTag
@@ -961,153 +879,6 @@ defmodule Cure.Types.CheckerTest do
     after
       :code.purge(:"Cure.BoxRoundtrip")
       :code.delete(:"Cure.BoxRoundtrip")
-    end
-  end
-
-  # ============================================================================
-  # Phase 2 (v0.34): refinement obligation enforcement
-  # ============================================================================
-  #
-  # Phase 1 made stdlib refinement aliases (`Std.Refine.Positive`,
-  # `Std.Refine.NonNegative`, ...) visible in the type checker. Phase 2
-  # makes them *enforced*: refinement-typed parameters are turned into
-  # SMT assumptions, refinement-typed return types into SMT obligations,
-  # and call-site arguments are checked against the callee's refinement
-  # parameters. The tests below cover the four headline outcomes:
-  #
-  #   * a provable function body / call site is accepted silently;
-  #   * a return value that violates the declared refinement surfaces
-  #     `E090 refinement_violation`;
-  #   * a call-site argument that violates the parameter refinement
-  #     surfaces the same error code (`E090`);
-  #   * an `:unknown` SMT outcome surfaces the `W091 refinement_unknown`
-  #     warning so compilation continues.
-  describe "Phase 2 refinement enforcement" do
-    @describetag :z3
-
-    test "provable: decrement(Positive) -> NonNegative type-checks" do
-      src = """
-      mod RefineProvable
-        use Std.Refine
-        fn decrement(n: Positive) -> NonNegative = n - 1
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:ok, _} = Checker.check_module(ast, emit_events: false)
-    end
-
-    test "provable: identity on a refinement is accepted" do
-      src = """
-      mod RefineIdentity
-        use Std.Refine
-        fn keep(n: Positive) -> Positive = n
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:ok, _} = Checker.check_module(ast, emit_events: false)
-    end
-
-    test "failing return: bad(Int) -> Positive surfaces E090" do
-      src = """
-      mod RefineBadReturn
-        use Std.Refine
-        fn bad(n: Int) -> Positive = n - 1
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:error, errors} = Checker.check_module(ast, emit_events: false)
-
-      assert Enum.any?(errors, fn
-               {:refinement_violation, msg, _} -> msg =~ "E090"
-               _ -> false
-             end)
-    end
-
-    test "failing call site: passing a non-Positive literal to decrement surfaces E090" do
-      src = """
-      mod RefineBadCall
-        use Std.Refine
-        fn decrement(n: Positive) -> NonNegative = n - 1
-        fn caller() -> NonNegative = decrement(0 - 3)
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:error, errors} = Checker.check_module(ast, emit_events: false)
-
-      assert Enum.any?(errors, fn
-               {:refinement_violation, msg, _} ->
-                 msg =~ "call to 'decrement'" and msg =~ "E090"
-
-               _ ->
-                 false
-             end)
-    end
-
-    test "caller refinement assumptions discharge nested call obligations" do
-      # `caller` knows `n > 0` from its own `Positive` parameter, so
-      # passing `n` to `decrement` (which also wants `Positive`) is
-      # provable without any further hints.
-      src = """
-      mod RefineNestedProvable
-        use Std.Refine
-        fn decrement(n: Positive) -> NonNegative = n - 1
-        fn caller(n: Positive) -> NonNegative = decrement(n)
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      assert {:ok, _} = Checker.check_module(ast, emit_events: false)
-    end
-
-    test "refinement_unknown warning fires when SMT cannot decide the obligation" do
-      # `byte_size` is modelled as an uninterpreted Int -> Int function in
-      # `Cure.SMT.Translator`. Z3 cannot rule out a counter-witness for
-      # `byte_size(n) > 0` from the empty assumption set, so the obligation
-      # comes back `:sat` (failed) -- which is also a useful diagnostic
-      # but is not what we want to test here. Instead, build a predicate
-      # that Z3 *cannot* refute either, by feeding `byte_size(n) >= 0` as
-      # the goal: SMT models `byte_size` as an unconstrained UF, so the
-      # obligation's negation is satisfiable and the call surfaces
-      # `:failed`. To exercise the `:unknown` path reliably we'd need to
-      # disable Z3, which is out of scope here. The test below at least
-      # confirms that an unprovable call-site obligation surfaces *some*
-      # refinement diagnostic (E090 or W091) rather than silently passing.
-      Events.subscribe(:type_checker, :type_warning)
-      Events.subscribe(:type_checker, :type_error)
-
-      src = """
-      mod RefineDiagnostic
-        use Std.Refine
-        fn decrement(n: Positive) -> NonNegative = n - 1
-        fn opaque(n: Int) -> Int = decrement(n)
-      """
-
-      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
-
-      result = Checker.check_module(ast, emit_events: true)
-
-      # Either the obligation was disproven (E090 error) or it could not
-      # be discharged (W091 warning); in both cases we expect a refinement
-      # diagnostic rather than silent acceptance.
-      diagnostic_seen? =
-        match?({:error, _}, result) or
-          receive do
-            {Cure.Pipeline.Events, :type_checker, :type_warning, {:refinement_unknown, _, _}, _} -> true
-          after
-            0 -> false
-          end
-
-      assert diagnostic_seen?
     end
   end
 

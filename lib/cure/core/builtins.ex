@@ -14,8 +14,57 @@ defmodule Cure.Core.Builtins do
   @schemas %{
     bool: [{:False, 0}, {:True, 0}],
     nat: [{:Z, 0}, {:S, 1}],
-    eq: [{:reflexive, 1}]
+    eq: [{:reflexive, 1}],
+    sigma: [{:mk_pair, 2}]
   }
+
+  # Builtin arithmetic/comparison op globals (K2 wave, spec 2026-07-09). Each is
+  # a BODY-LESS def carrying a `builtin_op` marker; the certified-δ engine folds
+  # a saturated literal spine via the audited `Eval.fold` table (Lean reduce_nat
+  # / Idris Builtin-op analog). Monomorphic per-type (Lean-aligned): the
+  # elaborator type-directs `+`/`==`/… to the int_* or float_* twin. `{name,
+  # op_key}`. Comparisons (@cmp_ops) have a Bool codomain; arithmetic/neg return
+  # the operand type. int_rem is Int-only (no float_rem — matches infer_prim).
+  @cmp_ops [:lt, :le, :gt, :ge, :eq, :ne]
+
+  @int_binops [
+    {:int_add, :add},
+    {:int_sub, :sub},
+    {:int_mul, :mul},
+    {:int_div, :div},
+    {:int_rem, :rem},
+    {:int_lt, :lt},
+    {:int_le, :le},
+    {:int_gt, :gt},
+    {:int_ge, :ge},
+    {:int_eq, :eq},
+    {:int_ne, :ne}
+  ]
+
+  @float_binops [
+    {:float_add, :add},
+    {:float_sub, :sub},
+    {:float_mul, :mul},
+    {:float_div, :div},
+    {:float_lt, :lt},
+    {:float_le, :le},
+    {:float_gt, :gt},
+    {:float_ge, :ge},
+    {:float_eq, :eq},
+    {:float_ne, :ne}
+  ]
+
+  @int_unops [{:int_neg, :neg}]
+  @float_unops [{:float_neg, :neg}]
+
+  # Amendment A1 (spec §1-A): polymorphic STRUCTURAL equality —
+  # struct_eq/struct_ne : Pi(a: Type0). a -> a -> Bool (explicit ω-present type
+  # argument; emit drops it). Transitional representation of the retiring
+  # {:prim, :eq/:ne} on non-int/float/bool operands: the hook folds only two
+  # literal VALUE args (late-instantiated polymorphic operands), stays NEUTRAL
+  # on ADTs (R8c). Distinct marker atoms so hook/emit/lint never conflate them
+  # with the monomorphic :eq/:ne. Op set is therefore 25, not 23.
+  @struct_ops [{:struct_eq, :struct_eq}, {:struct_ne, :struct_ne}]
 
   @doc "The expected schema descriptor for a builtin key. Raises for an unknown key."
   @spec schema(atom()) :: [{atom(), non_neg_integer()}]
@@ -57,6 +106,60 @@ defmodule Cure.Core.Builtins do
     |> maybe_seed(:bool, bool_family(), bool_ctors(), exclude)
     |> maybe_seed(:nat, nat_family(), nat_ctors(), exclude)
     |> maybe_seed(:eq, eq_family(), eq_ctors(), exclude)
+    |> maybe_seed(:sigma, sigma_family(), sigma_ctors(), exclude)
+    |> seed_ops()
+  end
+
+  @doc """
+  Seed the 25 builtin-op globals (11 int binary + 10 float binary +
+  int_neg/float_neg + the A1 polymorphic struct_eq/struct_ne) as body-less defs
+  carrying a `builtin_op` marker. Public so the Antigen generator envs (SigMenu
+  v1, Generators.Totality) can reuse it. Run AFTER the inductive seeds so the
+  Bool codomain resolves through the registry.
+  """
+  @spec seed_ops(Env.t()) :: Env.t()
+  def seed_ops(%Env{} = env) do
+    bool_ty = {:data, Inductive.builtin(env, :bool), [], []}
+
+    env
+    |> seed_binops(@int_binops, {:int_type}, bool_ty)
+    |> seed_binops(@float_binops, {:float_type}, bool_ty)
+    |> seed_unops(@int_unops, {:int_type})
+    |> seed_unops(@float_unops, {:float_type})
+    |> seed_struct_ops(bool_ty)
+  end
+
+  # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
+  # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
+  defp seed_struct_ops(env, bool_ty) do
+    ty = {:pi, {:type, 0}, {:pi, {:var, 0}, {:pi, {:var, 1}, bool_ty}}}
+
+    Enum.reduce(@struct_ops, env, fn {name, op_key}, acc ->
+      acc
+      |> Env.add_def(name, ty, nil)
+      |> Env.register_builtin_op(name, op_key)
+    end)
+  end
+
+  defp seed_binops(env, ops, dom, bool_ty) do
+    Enum.reduce(ops, env, fn {name, op_key}, acc ->
+      cod = if op_key in @cmp_ops, do: bool_ty, else: dom
+      ty = {:pi, dom, {:pi, dom, cod}}
+
+      acc
+      |> Env.add_def(name, ty, nil)
+      |> Env.register_builtin_op(name, op_key)
+    end)
+  end
+
+  defp seed_unops(env, ops, dom) do
+    Enum.reduce(ops, env, fn {name, op_key}, acc ->
+      ty = {:pi, dom, dom}
+
+      acc
+      |> Env.add_def(name, ty, nil)
+      |> Env.register_builtin_op(name, op_key)
+    end)
   end
 
   # A builtin whose bare family name is locally declared by the compiled module
@@ -113,5 +216,27 @@ defmodule Cure.Core.Builtins do
   defp eq_ctors,
     do: [
       Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])
+    ]
+
+  # Sigma : (a : Type) -> (b : (a) -> Type) -> Type   (2 params, no indices)
+  #   mk_pair : (x : a) -> b(x) -> Sigma(a, b)
+  # The library dependent pair (spec 2026-07-09-sigma-retirement), replacing the
+  # primitive {:sigma}/{:pair}/{:fst}/{:snd} Core forms. Level-0 like Equivalent.
+  # Source of truth is the @builtin(:sigma) decl in Std.Sigma; this seed is its
+  # byte-for-byte mirror, pinned by the conformance drift test.
+  defp sigma_family,
+    do: Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, {:var, 0}, {:type, 0}}], [], 0)
+
+  defp sigma_ctors,
+    do: [
+      Inductive.ctor(
+        :mk_pair,
+        # Second field `b(x)` is anonymous in the surface ctor sig, so the
+        # elaborator auto-names it `_a1` (positional; the drift test pins this).
+        [x: {:var, 1}, _a1: {:app, {:var, 1}, {:var, 0}}],
+        [],
+        [:present, :present],
+        [{:var, 3}, {:var, 2}]
+      )
     ]
 end

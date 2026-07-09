@@ -1,60 +1,69 @@
 defmodule Cure.Core.IntPrimTest do
   @moduledoc """
-  Primitive `Int` in the kernel (design decision 2026-07-01): the trusted core
-  gains integer literals and arithmetic so arithmetic type indices
-  (`Vector(T, m + n)`) reduce and compare *inside the kernel* — the single source
-  of truth the `Cure.Types.*` layer delegates to.
+  Primitive `Int` in the kernel — now via registry-keyed builtin-op GLOBALS
+  (K2, spec 2026-07-09; the `{:prim}` node is retired). Arithmetic type indices
+  (`Vector(T, m + n)`) still reduce and compare *inside the kernel*: the
+  certified-δ engine folds saturated literal spines through the audited
+  `Eval.fold` table; §G.1's rules survive verbatim (partial ops stay neutral,
+  open spines stay stuck and compare by napp congruence).
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Context, Conv, Eval, Kernel, Quote}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Kernel, Normalise, Quote}
 
-  test "eval folds integer arithmetic on literals" do
-    assert Eval.eval({:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]}, []) == {:vint, 8}
-    assert Eval.eval({:prim, :sub, [{:int_lit, 10}, {:int_lit, 3}]}, []) == {:vint, 7}
-    assert Eval.eval({:prim, :mul, [{:int_lit, 4}, {:int_lit, 6}]}, []) == {:vint, 24}
-    assert Eval.eval({:prim, :div, [{:int_lit, 20}, {:int_lit, 4}]}, []) == {:vint, 5}
+  defp env, do: Builtins.seed(Env.empty())
+  defp ctx, do: Context.empty(env())
+
+  defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
+
+  test "certified delta folds integer arithmetic on literal spines" do
+    assert {:int_lit, 8} = Normalise.nf(ctx(), app2(:int_add, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
+    assert {:int_lit, 7} = Normalise.nf(ctx(), app2(:int_sub, {:int_lit, 10}, {:int_lit, 3}), delta: :certified)
+    assert {:int_lit, 24} = Normalise.nf(ctx(), app2(:int_mul, {:int_lit, 4}, {:int_lit, 6}), delta: :certified)
+    assert {:int_lit, 5} = Normalise.nf(ctx(), app2(:int_div, {:int_lit, 20}, {:int_lit, 4}), delta: :certified)
   end
 
-  test "eval leaves arithmetic over a free variable stuck as a neutral" do
-    v = Eval.eval({:prim, :add, [{:var, 0}, {:int_lit, 1}]}, [{:vneutral, {:nvar, 0}}])
-    assert {:vneutral, {:nprim, :add, [{:vneutral, {:nvar, 0}}, {:vint, 1}]}} = v
+  test "arithmetic over a free variable stays stuck as a neutral spine" do
+    ctx1 = Context.extend(ctx(), {:vint_type})
+    t = app2(:int_add, {:var, 0}, {:int_lit, 1})
+    assert t == Normalise.nf(ctx1, t, delta: :certified)
   end
 
   test "division by zero stays stuck rather than crashing" do
-    v = Eval.eval({:prim, :div, [{:int_lit, 1}, {:int_lit, 0}]}, [])
-    assert {:vneutral, {:nprim, :div, [{:vint, 1}, {:vint, 0}]}} = v
+    t = app2(:int_div, {:int_lit, 1}, {:int_lit, 0})
+    assert t == Normalise.nf(ctx(), t, delta: :certified)
   end
 
   test "remainder by zero stays stuck rather than crashing (K2 §G.1 rule 1)" do
-    # rem is partial like div: on a zero divisor it must not fire — it stays a
-    # neutral term so normalization is total and conversion compares it
-    # syntactically. Completes the partial-op soundness coverage alongside div.
-    v = Eval.eval({:prim, :rem, [{:int_lit, 7}, {:int_lit, 0}]}, [])
-    assert {:vneutral, {:nprim, :rem, [{:vint, 7}, {:vint, 0}]}} = v
+    # rem is partial like div: on a zero divisor the fold must not fire — the
+    # spine stays a neutral term so normalization is total and conversion
+    # compares it syntactically. Completes the partial-op coverage with div.
+    t = app2(:int_rem, {:int_lit, 7}, {:int_lit, 0})
+    assert t == Normalise.nf(ctx(), t, delta: :certified)
   end
 
-  test "reify round-trips Int type, literals, and stuck prims" do
+  test "reify round-trips Int type, literals, and stuck op spines" do
     assert Quote.reify({:vint_type}) == {:int_type}
     assert Quote.reify({:vint, 8}) == {:int_lit, 8}
 
-    stuck = {:vneutral, {:nprim, :add, [{:vneutral, {:nvar, 0}}, {:vint, 1}]}}
-    assert Quote.reify(stuck, 1) == {:prim, :add, [{:var, 0}, {:int_lit, 1}]}
+    stuck =
+      {:vneutral,
+       {:napp, {:napp, {:nglobal, :int_add}, {:vneutral, {:nvar, 0}}}, {:vint, 1}}}
+
+    assert Quote.reify(stuck, 1) == app2(:int_add, {:var, 0}, {:int_lit, 1})
   end
 
   test "definitional equality: 3 + 5 converts with 8; 7 does not" do
-    assert Conv.conv?({:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]}, {:int_lit, 8}, [], 0)
-    refute Conv.conv?({:int_lit, 7}, {:int_lit, 8}, [], 0)
+    assert Conv.conv?(app2(:int_add, {:int_lit, 3}, {:int_lit, 5}), {:int_lit, 8}, [], 0, env())
+    refute Conv.conv?({:int_lit, 7}, {:int_lit, 8}, [], 0, env())
   end
 
-  test "kernel infers Int for literals and arithmetic, and Int : Type0" do
-    ctx = Context.empty()
-    assert {:ok, {:vint_type}} = Kernel.infer(ctx, {:int_lit, 42})
-    assert {:ok, {:vint_type}} = Kernel.infer(ctx, {:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
-    assert {:ok, {:vtype, 0}} = Kernel.infer(ctx, {:int_type})
+  test "kernel infers Int for literals and arithmetic spines, and Int : Type0" do
+    assert {:ok, {:vint_type}} = Kernel.infer(ctx(), {:int_lit, 42})
+    assert {:ok, {:vint_type}} = Kernel.infer(ctx(), app2(:int_add, {:int_lit, 1}, {:int_lit, 2}))
+    assert {:ok, {:vtype, 0}} = Kernel.infer(ctx(), {:int_type})
   end
 
-  test "kernel rejects arithmetic on a non-Int argument" do
-    ctx = Context.empty()
-    assert {:error, _} = Kernel.infer(ctx, {:prim, :add, [{:int_lit, 1}, {:type, 0}]})
+  test "kernel rejects arithmetic on a non-Int argument (app-argument check, R5)" do
+    assert {:error, _} = Kernel.infer(ctx(), app2(:int_add, {:int_lit, 1}, {:type, 0}))
   end
 end

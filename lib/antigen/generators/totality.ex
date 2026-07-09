@@ -102,21 +102,35 @@ defmodule Antigen.Generators.Totality do
   @doc """
   Structural recursion whose base (`Z`) branch carries a rich, call-free subterm —
   every non-application Core former the size-change walker descends through:
-  `pair`/`fst`/`snd`, `eq`/`refl`/`rewrite`, `pi`/`sigma`, and a variable-headed
-  application. The lone self-call `h y` stays structural, so the def is certified;
+  the inductive `mk_pair` (`:ctor`) and ι-on-`:case` projections, the inductive
+  `Equivalent`/`reflexive`/`:case`-transport (which replaced the retired
+  `eq`/`refl`/`rewrite`), `pi`/`Sigma` (`:data`), and a
+  variable-headed application. The lone self-call `h y` stays structural, so the def is certified;
   the enrichment exists purely to exercise `Certificate.walk_node`'s per-former arms.
   Label `:terminating`.
   """
   @spec enriched_terminating() :: Challenge.t()
   def enriched_terminating do
+    st = {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+
     base =
-      {:pair, {:fst, {:var, 0}},
-       {:pair, {:snd, {:var, 0}},
-        {:pair, {:eq, {:var, 0}, {:var, 0}, {:var, 0}},
-         {:pair, {:refl, {:var, 0}},
-          {:pair, {:rewrite, {:refl, {:var, 0}}, {:lam, @nat, {:var, 0}}, {:var, 0}},
-           {:pair, {:pi, @nat, @nat},
-            {:pair, {:sigma, @nat, @nat}, {:app, {:var, 0}, {:var, 0}}}}}}}}}
+      {:ctor, :mk_pair,
+       [{:case, {:var, 0}, {:lam, st, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+        {:ctor, :mk_pair,
+         [{:case, {:var, 0}, {:lam, st, @nat}, [{:mk_pair, 2, {:var, 0}}]},
+          {:ctor, :mk_pair,
+           [{:data, :Equivalent, [{:var, 0}], [{:var, 0}, {:var, 0}]},
+            {:ctor, :mk_pair,
+             [{:ctor, :reflexive, [{:var, 0}]},
+              {:ctor, :mk_pair,
+               [{:app,
+                 {:case, {:ctor, :reflexive, [{:var, 0}]}, {:lam, @nat, {:var, 0}},
+                  [{:reflexive, 1, {:lam, @nat, {:var, 0}}}]}, {:var, 0}},
+                {:ctor, :mk_pair,
+                 [{:pi, @nat, @nat},
+                  {:ctor, :mk_pair,
+                   [{:data, :Sigma, [@nat, {:lam, @nat, @nat}], []},
+                    {:app, {:var, 0}, {:var, 0}}]}]}]}]}]}]}]}
 
     body =
       {:lam, @nat,
@@ -134,7 +148,10 @@ defmodule Antigen.Generators.Totality do
   @spec nonvar_scrutinee_terminating() :: Challenge.t()
   def nonvar_scrutinee_terminating do
     inner =
-      {:case, {:fst, {:pair, {:var, 0}, {:var, 0}}}, @nat_mot,
+      {:case,
+       {:case, {:ctor, :mk_pair, [{:var, 0}, {:var, 0}]},
+        {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+       @nat_mot,
        [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:var, 1}}}]}
 
     body =
@@ -172,7 +189,11 @@ defmodule Antigen.Generators.Totality do
       {:lam, @nat,
        {:case, {:var, 0}, @nat_mot,
         [{:Z, 0, {:ctor, :Z, []}},
-         {:S, 1, {:app, {:global, :h}, {:fst, {:pair, {:var, 1}, {:var, 1}}}}}]}}
+         {:S, 1,
+          {:app, {:global, :h},
+           {:case, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]},
+            {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat},
+            [{:mk_pair, 2, {:var, 1}}]}}}]}}
 
     h_def(body, "diverging", "self-call arg is a projection → arg_relation :unknown")
   end
@@ -318,7 +339,8 @@ defmodule Antigen.Generators.Totality do
 
     body =
       {:lam, {:int_type},
-       {:case, {:prim, :eq, [{:var, 0}, {:int_lit, 0}]}, {:lam, {:data, :Bool, [], []}, {:int_type}},
+       {:case, {:app, {:app, {:global, :int_eq}, {:var, 0}}, {:int_lit, 0}},
+        {:lam, {:data, :Bool, [], []}, {:int_type}},
         [{:True, 0, {:int_lit, 0}}, {:False, 0, {:app, {:global, :f}, {:var, 0}}}]}}
 
     Challenge.new(
@@ -672,9 +694,16 @@ defmodule Antigen.Generators.Totality do
     )
   end
 
-  @doc "Rebuild the def-group's `Env` by folding `Env.add_def/4` over the payload."
+  @doc """
+  Rebuild the def-group's `Env` by folding `Env.add_def/4` over the payload.
+  Seeded with the builtin-op globals first (K2, spec 2026-07-09): the catalog's
+  retargeted `int_eq` spine (diverging_bool_elim_branch) must not die
+  `:unknown_global` when a consumer resolves the group's globals.
+  """
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{payload: %{defs: defs}}) do
-    Enum.reduce(defs, Env.empty(), fn d, env -> Env.add_def(env, d.name, d.type, d.body) end)
+    Enum.reduce(defs, Cure.Core.Builtins.seed_ops(Env.empty()), fn d, env ->
+      Env.add_def(env, d.name, d.type, d.body)
+    end)
   end
 end

@@ -16,15 +16,24 @@ defmodule Cure.Core.ValidatorTest do
       assert MapSet.new(Map.keys(Validator.wave0_config())) == MapSet.new(Validator.clauses())
     end
 
-    test "no clause is :reject in Wave 0 (pure instrumentation)" do
-      refute Enum.any?(Validator.wave0_config(), fn {_c, mode} -> mode == :reject end)
+    test "only the retired-primitive clauses are :reject in Wave 0" do
+      # Wave 0 was pure instrumentation until Phase C retired the primitive
+      # identity forms; a smuggled {:eq}/{:refl} node now rejects even in the
+      # dev-time default (the kernel has no clauses for them, so any such node
+      # is a firewall breach, not tech debt). D2 retired the primitive Sigma
+      # the same way, so {:sigma}/{:pair}/{:fst}/{:snd} join the reject set.
+      # K2 completes the same ratchet for {:prim}: builtin-op globals replace
+      # the node, the kernel clauses are stripped, so no_prim_node joins the set.
+      rejecting = for {c, :reject} <- Validator.wave0_config(), do: c
+      assert Enum.sort(rejecting) == [:no_eq_node, :no_prim_node, :no_sigma_node]
     end
 
-    test "legacy-detecting clauses warn; not-yet-reshaped clauses are off" do
+    test "legacy-detecting clauses warn (retired-primitive clause rejects); not-yet-reshaped clauses are off" do
       cfg = Validator.wave0_config()
       assert cfg.no_hole == :warn
-      assert cfg.no_eq_node == :warn
-      assert cfg.no_prim_node == :warn
+      assert cfg.no_eq_node == :reject
+      assert cfg.no_rewrite_node == :warn
+      assert cfg.no_prim_node == :reject
       assert cfg.no_absurd_node == :warn
       assert cfg.grade_on_binders == :off
       assert cfg.qualified_syms == :off
@@ -65,9 +74,12 @@ defmodule Cure.Core.ValidatorTest do
       assert {:ok, []} = Validator.validate({:lam, {:type, 0}, {:var, 0}})
     end
 
-    test "a legacy :eq node warns under Wave-0 config" do
-      assert {:ok, [w]} = Validator.validate({:eq, {:type, 0}, {:var, 0}, {:var, 0}})
-      assert w.clause == :no_eq_node and w.mode == :warn
+    test "a smuggled legacy :eq node REJECTS even under the Wave-0 default (Phase C flip)" do
+      assert {:error, [r]} = Validator.validate({:eq, {:type, 0}, {:var, 0}, {:var, 0}})
+      assert r.clause == :no_eq_node and r.mode == :reject
+
+      assert {:error, [r2]} = Validator.validate({:refl, {:var, 0}})
+      assert r2.clause == :no_eq_node and r2.mode == :reject
     end
 
     test "a hole warns under Wave-0 config (does not reject yet)" do
@@ -75,9 +87,34 @@ defmodule Cure.Core.ValidatorTest do
       assert w.clause == :no_hole and w.mode == :warn
     end
 
-    test "an :absurd node and a :prim node each warn" do
+    test "an :absurd node warns; a :prim node rejects (K2 ratchet complete)" do
       assert {:ok, [%{clause: :no_absurd_node}]} = Validator.validate({:absurd})
-      assert {:ok, [%{clause: :no_prim_node}]} = Validator.validate({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
+
+      assert {:error, [%{clause: :no_prim_node, mode: :reject}]} =
+               Validator.validate({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
+
+      assert {:error, [%{clause: :no_prim_node, mode: :reject}]} =
+               Validator.validate(
+                 {:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]},
+                 Validator.release_config()
+               )
+    end
+
+    # D2 T4b: the ratchet completed — Wave-0 now REJECTS the primitive Sigma
+    # nodes too (the kernel grammar no longer contains them; a node here is
+    # smuggled non-grammar, exactly like Phase C's no_eq_node endgame).
+    test "each primitive Sigma node rejects under Wave-0 AND release_config (D2 ratchet complete)" do
+      for node <- [
+            {:sigma, {:type, 0}, {:type, 0}},
+            {:pair, {:var, 0}, {:var, 0}},
+            {:fst, {:var, 0}},
+            {:snd, {:var, 0}}
+          ] do
+        assert {:error, [%{clause: :no_sigma_node, mode: :reject}]} = Validator.validate(node)
+
+        assert {:error, [%{clause: :no_sigma_node, mode: :reject}]} =
+                 Validator.validate(node, Validator.release_config())
+      end
     end
 
     test "config override to :reject flips admission (the per-wave flip mechanism)" do
@@ -139,31 +176,49 @@ defmodule Cure.Core.ValidatorTest do
       assert {:error, {:final_core_violation, [%{clause: :no_hole}]}} = Kernel.check_def(env, :withhole)
     end
 
-    test "a legacy node in the declared TYPE is caught too, not just the body" do
-      # helper : Eq(Int, 1, 1) ; body = refl(1) — a legacy `:eq` node used AS a
-      # definition's type (still typeable pre-K1). `eqty` reuses that same `:eq`
-      # type but its body is a clean `{:global, :helper}` reference, so the ONLY
-      # legacy node reachable from `eqty`'s own {type_term, body_term} pair is in
-      # its type_term. If the wiring only scanned body_term (the pre-fix shape),
-      # this def would wrongly admit even under a :reject override.
-      eq_ty = {:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}}
+    # (The legacy-node-in-TYPE test — {:eq} type / {:refl} body through
+    # check_def — was retired in the group-B removal commit: the kernel now
+    # rejects those forms as unknown grammar BEFORE the validator scan can run.
+    # Its wiring property, "the final-core scan covers the declared TYPE", is
+    # carried by the post-retirement probe below, added + cross-checked in the
+    # Step-2 commit while the legacy forms still round-tripped.)
+
+    test "a violating node in the declared TYPE is caught too — post-retirement probe" do
+      # Phase C twin of the legacy-node test above (added FIRST, per the
+      # add-then-retire protocol): once the primitive `{:eq}`/`{:refl}` kernel
+      # clauses are removed, that fixture can no longer REACH the validator —
+      # `check_def` kernel-typechecks type and body BEFORE the final-Core scan,
+      # and a primitive node is then unknown grammar there. The wiring property
+      # it proved (the scan covers the declared TYPE, not just the body) is
+      # re-proved here with current-grammar nodes: `natalias`'s TYPE is a
+      # bare-atom `{:global, …}` reference (a `qualified_syms` violation), its
+      # body a hole (kernel-accepted at any goal; only a `no_hole` WARN under
+      # this config). Under a `qualified_syms: :reject` override the rejection
+      # can therefore only originate in the type_term scan.
+      {:ok, env0} = Cure.Elab.Program.elaborate("mod M\nend\n")
 
       env =
-        Env.empty()
-        |> Env.add_def(:helper, eq_ty, {:refl, {:int_lit, 1}})
-        |> Env.add_def(:eqty, eq_ty, {:global, :helper})
+        env0
+        |> Env.add_def(:natty, {:type, 0}, {:data, :Nat, [], []})
+        |> Env.add_def(:natalias, {:global, :natty}, {:hole, "inhabit"})
 
-      Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_eq_node, :reject))
+      cfg = Map.put(Validator.wave0_config(), :qualified_syms, :reject)
+      Application.put_env(:cure, :final_core_config, cfg)
       on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)
 
-      assert {:error, {:final_core_violation, rejections}} = Kernel.check_def(env, :eqty)
-      assert Enum.any?(rejections, &(&1.clause == :no_eq_node))
+      assert {:error, {:final_core_violation, rejections}} = Kernel.check_def(env, :natalias)
+      assert Enum.any?(rejections, &(&1.clause == :qualified_syms))
     end
   end
 
   describe "release_config/0 (the strict ratchet, K3)" do
     test "no_hole is :reject in release mode" do
       assert Validator.release_config()[:no_hole] == :reject
+    end
+
+    test "no_prim_node is :reject in wave0 AND release (K2 — {:prim} stripped, builtin-op globals canonical)" do
+      assert Validator.wave0_config()[:no_prim_node] == :reject
+      assert Validator.release_config()[:no_prim_node] == :reject
     end
 
     test "no_absurd_node is :reject in release mode (K4 — the node is gone from final Core)" do
@@ -204,14 +259,13 @@ defmodule Cure.Core.ValidatorTest do
       assert Enum.any?(rj_eq, &(&1.clause == :no_eq_node))
     end
 
-    test "primitive :rewrite only WARNS in release (Phase B pending — still the transport eliminator)" do
-      # Retiring {:rewrite} (rewrite→single-branch :case) is Phase B, a structural
-      # re-plumbing (the body scopes differently: outer-context for {:rewrite} vs
-      # under the refl branch binder for :case). Until it lands, {:rewrite} must
-      # NOT block release, else every rewrite-using program's final Core is rejected.
+    test "primitive :rewrite REJECTS in release (Phase B landed — no producers remain)" do
+      # Phase B retired the {:rewrite} producers (rewrite → J/subst :case
+      # transport) and Phase C stripped the kernel clauses; a {:rewrite} node in
+      # final Core is now a smuggled non-grammar node and must block release.
       rw = {:rewrite, {:ctor, :refl, [{:int_type}, {:int_lit, 1}]}, {:type, 0}, {:ctor, :ok, []}}
-      assert {:ok, ws} = Validator.validate(rw, Validator.release_config())
-      assert Enum.any?(ws, &(&1.clause == :no_rewrite_node and &1.mode == :warn))
+      assert {:error, rejections} = Validator.validate(rw, Validator.release_config())
+      assert Enum.any?(rejections, &(&1.clause == :no_rewrite_node and &1.mode == :reject))
     end
   end
 end

@@ -21,8 +21,12 @@ defmodule Antigen.Generators.SerializationTest do
       |> Enum.take(@sample)
       |> MapSet.new(fn c -> elem(c.payload.term, 0) end)
 
-    for h <- [:pi, :lam, :app, :sigma, :pair, :fst, :snd, :eq, :refl, :rewrite,
-              :data, :ctor, :prim, :case, :type, :var, :int_lit, :float_lit, :global] do
+    # (:eq/:refl/:rewrite retired with the primitive identity forms, Phase C;
+    # :sigma/:pair/:fst/:snd retired with the primitive Sigma, D2; :prim retired
+    # with the builtin-op globals, K2 — those spellings serialize through the
+    # :data/:ctor/:case/:app shapes.)
+    for h <- [:pi, :lam, :app,
+              :data, :ctor, :case, :type, :var, :int_lit, :float_lit, :global] do
       assert h in heads, "missing serialisable shape: #{h}"
     end
   end

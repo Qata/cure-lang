@@ -1,0 +1,39 @@
+mod Std.Sigma
+  ## The dependent pair (Σ-type) — `Sigma(a, b)` packages a value `x : a` together
+  ## with a value of type `b(x)`, where the second component's type may depend on
+  ## the first. This is the library inductive that the compiler wires the surface
+  ## sugar to: `%[x, y]` builds one, `.1`/`.2` project, and `Sigma(x: T, U)` is the
+  ## type syntax (spec 2026-07-09-sigma-retirement).
+  ##
+  ## (Do not confuse this with `Std.Pair`, the non-dependent 2-tuple helpers.
+  ## `Sigma` is the dependently-typed form checked by the kernel; both share the
+  ## bare BEAM 2-tuple representation.)
+  ##
+  ## The `sigma_first`/`sigma_second` projection globals that `.1`/`.2` lower to are
+  ## added in D2 T2, once the surface `Sigma(x: T, U)` type lowers to this inductive
+  ## (before that, a `match` on a `Sigma`-typed value cannot be typed against the
+  ## `mk_pair` constructor).
+
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
+  @group(:core)
+
+  ## The dependent-pair type. The `@builtin(:sigma)` decorator binds this
+  ## declaration to the kernel's canonical Sigma family, so `Sigma`/`mk_pair` are
+  ## ordinary, go-to-definition-able names even though the compiler lowers the
+  ## `%[..]`/`.1`/`.2` surface sugar onto them. `mk_pair(x, y) : Sigma(a, b)` is the
+  ## sole constructor.
+  @builtin(:sigma)
+  type Sigma(a: Type, b: (a) -> Type) indices ()
+    mk_pair : (x: a) -> b(x) -> Sigma(a, b)
+
+  ## First projection: the witness. Surface users write `p.1`; the compiler lowers
+  ## it to this global (inlined to `element(1, p)` at codegen, keeping the bare
+  ## 2-tuple ABI). `a`/`b` are erased at runtime. The parameter type is written with
+  ## the `Sigma(x: T, U)` surface (a plain `Sigma(a, b)` is reserved by the parser).
+  fn sigma_first({a: Type}, {b: (a) -> Type}, p: Sigma(x: a, b(x))) -> a = match p
+    mk_pair(x, y) -> x
+
+  ## Second projection: the dependent payload, at type `b(sigma_first(p))`. Surface
+  ## users write `p.2`; lowered to this global (inlined to `element(2, p)`).
+  fn sigma_second({a: Type}, {b: (a) -> Type}, p: Sigma(x: a, b(x))) -> b(sigma_first(p)) = match p
+    mk_pair(x, y) -> y

@@ -14,8 +14,6 @@ defmodule Cure.Core.Value do
     * `{:vpi, dom_value, closure}`       Π type (closure = the codomain family)
     * `{:vlam, dom_value, closure}`      λ (domain kept so read-back is a true
                                          inverse — mirrors Idris's `Lam … ty`)
-    * `{:vsigma, dom_value, closure}`    Σ type
-    * `{:vpair, value, value}`           pair
     * `{:vneutral, neutral}`             stuck term
     * `{:vdata, name, [value]}`          fully-applied family (params ++ indices)
     * `{:vctor, name, [value]}`          fully-applied constructor
@@ -25,7 +23,6 @@ defmodule Cure.Core.Value do
     * `{:nvar, level}`                   free variable, de Bruijn *level*
     * `{:nglobal, name}`                 uncertified global (opaque until δ, M7)
     * `{:napp, neutral, value}`          stuck application
-    * `{:nfst, neutral}` / `{:nsnd, neutral}`   stuck projection
     * `{:ncase, neutral, motive_closure, branch_closures}`  stuck eliminator,
       `branch_closures :: [{ctor_name, arity, closure}]`
   """
@@ -42,13 +39,9 @@ defmodule Cure.Core.Value do
 
   def value?({:vpi, dom, cl}), do: value?(dom) and closure?(cl)
   def value?({:vlam, dom, cl}), do: value?(dom) and closure?(cl)
-  def value?({:vsigma, dom, cl}), do: value?(dom) and closure?(cl)
-  def value?({:vpair, a, b}), do: value?(a) and value?(b)
   def value?({:vneutral, n}), do: neutral?(n)
   def value?({:vdata, name, vs}), do: is_atom(name) and values?(vs)
   def value?({:vctor, name, vs}), do: is_atom(name) and values?(vs)
-  def value?({:veq, ty, a, b}), do: value?(ty) and value?(a) and value?(b)
-  def value?({:vrefl, a}), do: value?(a)
   def value?({:vint_type}), do: true
   def value?({:vint, n}), do: is_integer(n)
   def value?({:vfloat_type}), do: true
@@ -60,9 +53,6 @@ defmodule Cure.Core.Value do
   def neutral?({:nvar, level}), do: is_integer(level) and level >= 0
   def neutral?({:nglobal, name}), do: is_atom(name)
   def neutral?({:napp, n, v}), do: neutral?(n) and value?(v)
-  def neutral?({:nfst, n}), do: neutral?(n)
-  def neutral?({:nsnd, n}), do: neutral?(n)
-  def neutral?({:nprim, op, args}), do: is_atom(op) and values?(args)
 
   def neutral?({:ncase, n, motive_cl, branches}),
     do: neutral?(n) and closure?(motive_cl) and branch_closures?(branches)

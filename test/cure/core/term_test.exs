@@ -10,6 +10,9 @@ defmodule Cure.Core.TermTest do
     refute Term.term?({:type, 3})
     refute Term.term?({:var, -1})
     refute Term.term?(:not_a_term)
+    # {:prim} retired (K2, spec 2026-07-09): arithmetic is builtin-op global
+    # application spines — the bespoke node is out of the grammar.
+    refute Term.term?({:prim, :add, [{:int_lit, 1}, {:int_lit, 2}]})
   end
 
   test "shift lifts free vars at/above the cutoff, leaves bound vars" do
@@ -42,18 +45,16 @@ defmodule Cure.Core.TermTest do
       {:pi, {:type, 0}, {:var, 0}},
       {:lam, {:type, 0}, {:var, 0}},
       {:app, {:var, 0}, {:var, 1}},
-      {:sigma, {:type, 0}, {:var, 0}},
-      {:pair, {:type, 0}, {:type, 1}},
-      {:fst, {:var, 0}},
-      {:snd, {:var, 0}},
+      # Inductive Sigma (D2): the dependent pair is `{:data, :Sigma}` / `{:ctor,
+      # :mk_pair}` / projection-`:case`, all covered by the data/ctor/case rows
+      # below — no primitive sigma/pair/fst/snd term nodes remain.
+      {:data, :Sigma, [{:type, 0}, {:lam, {:type, 0}, {:var, 0}}], []},
+      {:ctor, :mk_pair, [{:type, 0}, {:type, 1}]},
       {:data, :SF, [{:type, 0}], [{:var, 0}]},
       {:ctor, :seq, [{:var, 0}, {:var, 1}]},
       {:case, {:var, 0}, {:lam, {:type, 0}, {:type, 0}},
        [{:prim, 0, {:type, 0}}, {:seq, 2, {:var, 1}}]},
       {:global, :and},
-      {:eq, {:type, 0}, {:var, 0}, {:var, 0}},
-      {:refl, {:var, 0}},
-      {:rewrite, {:refl, {:var, 0}}, {:lam, {:type, 0}, {:type, 0}}, {:var, 0}}
     ]
 
     for t <- terms do

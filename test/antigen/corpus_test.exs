@@ -248,8 +248,14 @@ defmodule Antigen.CorpusTest do
     # one static fault per operator (build/2's fault map is deterministic)
     op_faults = Enum.map(Mutation.operators(), fn op -> elem(Mutation.build(ctx, op), 1) end)
 
-    # a deepened fault (adds :depth + :wrap_path list) — take one concrete draw
-    {_deep, path} = B.interp(Mutation.deepen(ctx, {:fst, {:ctor, :Z, []}}, 3)) |> Enum.at(0)
+    # a deepened fault (adds :depth + :wrap_path list) — take one concrete draw;
+    # "fst on a Nat" spelled inductively (D2, projection case over mk_pair).
+    fault_term =
+      {:case, {:ctor, :Z, []},
+       {:lam, {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
+       [{:mk_pair, 2, {:var, 1}}]}
+
+    {_deep, path} = B.interp(Mutation.deepen(ctx, fault_term, 3)) |> Enum.at(0)
     deep_fault = Map.merge(hd(op_faults), %{depth: 3, wrap_path: path})
 
     # a conversion carrier fault (:expected_index/:actual_index/:carrier/:reduction ints+atoms)

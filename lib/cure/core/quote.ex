@@ -51,13 +51,6 @@ defmodule Cure.Core.Quote do
     {:lam, reify(dom, depth, sig), reify(body, depth + 1, sig)}
   end
 
-  def reify({:vsigma, dom, {:closure, env, b}}, depth, sig) do
-    body = Eval.eval(b, [{:vneutral, {:nvar, depth}} | env])
-    {:sigma, reify(dom, depth, sig), reify(body, depth + 1, sig)}
-  end
-
-  def reify({:vpair, a, b}, depth, sig), do: {:pair, reify(a, depth, sig), reify(b, depth, sig)}
-
   # Data value read-back. With a signature the param/index split is recovered from
   # the family's parameter telescope length; without one, all args stay in `params`
   # (the flat form conversion compares). See the moduledoc.
@@ -67,11 +60,6 @@ defmodule Cure.Core.Quote do
   end
 
   def reify({:vctor, name, vs}, depth, sig), do: {:ctor, name, Enum.map(vs, &reify(&1, depth, sig))}
-
-  def reify({:veq, ty, a, b}, depth, sig),
-    do: {:eq, reify(ty, depth, sig), reify(a, depth, sig), reify(b, depth, sig)}
-
-  def reify({:vrefl, a}, depth, sig), do: {:refl, reify(a, depth, sig)}
 
   def reify({:vint_type}, _depth, _sig), do: {:int_type}
   def reify({:vint, n}, _depth, _sig), do: {:int_lit, n}
@@ -103,12 +91,6 @@ defmodule Cure.Core.Quote do
 
   defp reify_neutral({:napp, n, v}, depth, sig),
     do: {:app, reify_neutral(n, depth, sig), reify(v, depth, sig)}
-
-  defp reify_neutral({:nfst, n}, depth, sig), do: {:fst, reify_neutral(n, depth, sig)}
-  defp reify_neutral({:nsnd, n}, depth, sig), do: {:snd, reify_neutral(n, depth, sig)}
-
-  defp reify_neutral({:nprim, op, args}, depth, sig),
-    do: {:prim, op, Enum.map(args, &reify(&1, depth, sig))}
 
   defp reify_neutral({:ncase, neutral, motive_cl, branch_cls}, depth, sig) do
     scrut = reify_neutral(neutral, depth, sig)

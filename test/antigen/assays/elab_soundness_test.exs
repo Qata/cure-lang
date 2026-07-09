@@ -142,8 +142,8 @@ defmodule Antigen.Assays.ElabSoundnessTest do
         seeded()
         |> Env.add_def(:loop, @nat, {:global, :loop})
         |> Env.certify(:loop)
-        |> Env.add_def(:probe, {:eq, @nat, {:global, :loop}, {:ctor, :Z, []}},
-                        {:refl, {:ctor, :Z, []}})
+        |> Env.add_def(:probe, {:data, :Equivalent, [@nat], [{:global, :loop}, {:ctor, :Z, []}]},
+                        {:ctor, :reflexive, [{:ctor, :Z, []}]})
 
       task = Task.async(fn -> Elab.run(prog("ignored"), kernel_with_env(env)) end)
       assert {:violation, {:fuel_exhausted, :probe}} = Task.await(task, 30_000)

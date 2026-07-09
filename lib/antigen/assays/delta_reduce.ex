@@ -15,6 +15,8 @@ defmodule Antigen.Assays.DeltaReduce do
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
+  # kpair : Sigma(Nat, const-Nat) = mk_pair(Z, S Z) — the inductive dependent pair (D2).
+  @kpair_sigma {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
 
   # v1 menu + two certified globals (see moduledoc). Declared here, not in the
   # shared SigMenu, because no other vertical needs global definitions.
@@ -22,7 +24,7 @@ defmodule Antigen.Assays.DeltaReduce do
     Generators.SigMenu.env_of(:v1)
     |> Env.add_def(:idnat, {:pi, @nat, @nat}, {:lam, @nat, {:var, 0}})
     |> Env.certify(:idnat)
-    |> Env.add_def(:kpair, {:sigma, @nat, @nat}, {:pair, @z, {:ctor, :S, [@z]}})
+    |> Env.add_def(:kpair, @kpair_sigma, {:ctor, :mk_pair, [@z, {:ctor, :S, [@z]}]})
     |> Env.certify(:kpair)
   end
 

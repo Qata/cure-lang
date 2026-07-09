@@ -53,7 +53,11 @@ defmodule Cure.Elab.Emit do
   """
   @spec compile_forms(Env.t(), module()) :: {:ok, [tuple()]} | {:error, term()}
   def compile_forms(%Env{defs: defs} = env, module) do
-    names = Map.keys(defs)
+    # Builtin-op defs are body-less (K2): nothing to emit — saturated uses
+    # inline to BEAM operators and first-class uses become local wrappers.
+    # (`function_form` would crash on the nil body.) The live pipeline calls
+    # /3 with local_defs, so this all-defs entry filters defensively.
+    names = for {name, d} <- defs, is_nil(Map.get(d, :builtin_op)), do: name
 
     compile_forms(env, module, names)
   end
@@ -160,6 +164,15 @@ defmodule Cure.Elab.Emit do
       args == [] and bool_ctor?(env, name) ->
         {:atom, @line, bool_atom(name)}
 
+      nat_ctor?(env, name) ->
+        case args do
+          [] -> {:integer, @line, 0}
+          [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
+        end
+
+      sigma_ctor?(env, name) ->
+        {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
+
       true ->
         case Enum.map(args, &lower(env, &1, ctx)) do
           [] -> {:atom, @line, name}
@@ -175,23 +188,6 @@ defmodule Cure.Elab.Emit do
   defp lower(_env, {:int_lit, n}, _ctx), do: {:integer, @line, n}
   defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
 
-  # Primitive operations lower to the corresponding BEAM operator.
-  defp lower(env, {:prim, op, [a, b]}, ctx)
-       when op in [:add, :sub, :mul, :div, :rem, :eq, :ne, :lt, :le, :gt, :ge, :and, :or] do
-    {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
-  end
-
-  defp lower(env, {:prim, op, [a]}, ctx) when op in [:not, :neg] do
-    {:op, @line, erl_unop(op), lower(env, a, ctx)}
-  end
-
-  defp lower(env, {:pair, a, b}, ctx) do
-    {:tuple, @line, [lower(env, a, ctx), lower(env, b, ctx)]}
-  end
-
-  defp lower(env, {:fst, p}, ctx), do: element(1, lower(env, p, ctx))
-  defp lower(env, {:snd, p}, ctx), do: element(2, lower(env, p, ctx))
-
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:lam, _dom, body}, ctx) do
@@ -203,31 +199,122 @@ defmodule Cure.Elab.Emit do
   defp lower(env, {:app, _, _} = app, ctx) do
     {head, args} = spine(app, [])
 
-    case connective_inline(head, args, env, ctx) do
+    case builtin_op_form(head, args, env, ctx) do
       {:ok, form} ->
         form
 
       :no ->
-        lower_app_spine(env, head, args, ctx)
+        case connective_inline(head, args, env, ctx) do
+          {:ok, form} ->
+            form
+
+          :no ->
+            lower_app_spine(env, head, args, ctx)
+        end
     end
   end
 
-  # A SATURATED application of a `Std.Bool` connective def inlines to the native
-  # BEAM boolean op — byte-for-byte the retired primitive's codegen (strict
-  # `:and`/`:or`/`:not`; `:==`/`:"/="` for Bool equality). An UNSATURATED use
-  # (wrong arg count) returns `:no` and falls through to an ordinary call to the
-  # def. Recognised by exact def name (the connectives are the canonical Std.Bool
-  # prelude functions).
-  defp connective_inline({:global, name}, [a, b], env, ctx)
-       when name in [:and, :or, :eq, :ne] do
-    {:ok, {:op, @line, connective_binop(name), lower(env, a, ctx), lower(env, b, ctx)}}
+  # Builtin-op global spines (K2 spec 2026-07-09 §1.5 + A1 §1-A), keyed via the
+  # def-record registry (`Env.builtin_op/2`) — a user def named int_add carries
+  # no marker and takes the ordinary global path. Saturated → the SAME BEAM
+  # operator as the retired prim lowering (struct ops DROP the type argument).
+  # Partial (0 < n < arity) must NOT reach `lower_app_spine`'s generic global
+  # branch (present_arity reads nil quantities as 0 and would emit a call to a
+  # nonexistent `int_add()`): route as wrapper + curried applications, same as
+  # the closure branch. The function-value ABI is curried 1-arg funs (lambdas
+  # lower so; closures apply one arg at a time), so wrappers nest 1-arg funs.
+  defp builtin_op_form({:global, g}, args, env, ctx) do
+    case Env.builtin_op(env, g) do
+      nil -> :no
+      op -> {:ok, lower_builtin_op(op, args, env, ctx)}
+    end
   end
 
-  defp connective_inline({:global, :not}, [a], env, ctx) do
-    {:ok, {:op, @line, :not, lower(env, a, ctx)}}
+  defp builtin_op_form(_head, _args, _env, _ctx), do: :no
+
+  defp lower_builtin_op(op, args, env, ctx) when op in [:struct_eq, :struct_ne] do
+    case args do
+      [_ty, l, r] ->
+        erl = if op == :struct_eq, do: :==, else: :"/="
+        {:op, @line, erl, lower(env, l, ctx), lower(env, r, ctx)}
+
+      _ ->
+        curry_apply(builtin_op_wrapper(op), args, env, ctx)
+    end
+  end
+
+  defp lower_builtin_op(:neg, args, env, ctx) do
+    case args do
+      [a] -> {:op, @line, :-, lower(env, a, ctx)}
+      _ -> curry_apply(builtin_op_wrapper(:neg), args, env, ctx)
+    end
+  end
+
+  defp lower_builtin_op(op, args, env, ctx) do
+    case args do
+      [a, b] -> {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
+      _ -> curry_apply(builtin_op_wrapper(op), args, env, ctx)
+    end
+  end
+
+  defp curry_apply(base, args, env, ctx),
+    do: Enum.reduce(args, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
+
+  # A first-class/partial builtin-op use: a local curried fun computing the op.
+  # Param names use a dedicated prefix (ctx vars are V<pos>/Fn<n>/_e<pos>), so
+  # no shadowing. The struct wrapper accepts and ignores the type argument.
+  defp builtin_op_wrapper(op) when op in [:struct_eq, :struct_ne] do
+    erl = if op == :struct_eq, do: :==, else: :"/="
+    body = {:op, @line, erl, {:var, @line, :BopL}, {:var, @line, :BopR}}
+
+    fun1(:_BopT, fun1(:BopL, fun1(:BopR, body)))
+  end
+
+  defp builtin_op_wrapper(:neg),
+    do: fun1(:BopA, {:op, @line, :-, {:var, @line, :BopA}})
+
+  defp builtin_op_wrapper(op) do
+    body = {:op, @line, erl_binop(op), {:var, @line, :BopL}, {:var, @line, :BopR}}
+    fun1(:BopL, fun1(:BopR, body))
+  end
+
+  defp fun1(param, body),
+    do: {:fun, @line, {:clauses, [{:clause, @line, [{:var, @line, param}], [], [body]}]}}
+
+  # A SATURATED application of a `Std.Bool` connective def inlines to the native
+  # BEAM boolean op — byte-for-byte the retired primitive's codegen (strict
+  # `:and`/`:or`/`:not`; `:==`/`:"/="` for Bool equality) — and a saturated
+  # Sigma projection `sigma_first(p)`/`sigma_second(p)` (a single-argument
+  # spine after implicit erasure) inlines to `element(1|2, P)`, keeping
+  # `.1`/`.2` zero-cost on the bare-2-tuple ABI (spec §1.5 / §2.3). An
+  # UNSATURATED use (wrong arg count, or the bare global passed as a value)
+  # returns `:no` and falls through to an ordinary call/reference. Recognised
+  # via the `inline_hint` marker on the def RECORD (set only by the
+  # `Std.Bool`/`Std.Sigma` import path), never by bare global atom — a user
+  # def shadowing `eq`/`sigma_first`/… carries no marker and is never inlined
+  # (R1 discipline, same as the builtin-op registry).
+  defp connective_inline({:global, name}, args, env, ctx) do
+    case Env.inline_hint(env, name) do
+      nil -> :no
+      hint -> inline_hint_form(hint, args, env, ctx)
+    end
   end
 
   defp connective_inline(_head, _args, _env, _ctx), do: :no
+
+  defp inline_hint_form(hint, [a, b], env, ctx) when hint in [:and, :or, :eq, :ne],
+    do: {:ok, {:op, @line, connective_binop(hint), lower(env, a, ctx), lower(env, b, ctx)}}
+
+  defp inline_hint_form(:not, [a], env, ctx),
+    do: {:ok, {:op, @line, :not, lower(env, a, ctx)}}
+
+  defp inline_hint_form(:sigma_first, [p], env, ctx),
+    do: {:ok, element(1, lower(env, p, ctx))}
+
+  defp inline_hint_form(:sigma_second, [p], env, ctx),
+    do: {:ok, element(2, lower(env, p, ctx))}
+
+  defp inline_hint_form(_hint, _args, _env, _ctx), do: :no
 
   defp connective_binop(:and), do: :and
   defp connective_binop(:or), do: :or
@@ -254,11 +341,20 @@ defmodule Cure.Elab.Emit do
 
   # A bare global: a nullary definition is called (`name()`); a definition with
   # present parameters used as a *value* (passed to a higher-order function)
-  # becomes a function reference `fun name/arity`.
+  # becomes a function reference `fun name/arity`. A BUILTIN-OP global has no
+  # compiled top-level function to reference (body-less; present_arity would
+  # read its nil quantities as 0 and emit a bogus `name()` call) — it becomes a
+  # local curried fun wrapper computing the op (K2 §1.5b).
   defp lower(env, {:global, name}, _ctx) do
-    case present_arity(env, name) do
-      0 -> {:call, @line, {:atom, @line, name}, []}
-      n -> {:fun, @line, {:function, name, n}}
+    case Env.builtin_op(env, name) do
+      nil ->
+        case present_arity(env, name) do
+          0 -> {:call, @line, {:atom, @line, name}, []}
+          n -> {:fun, @line, {:function, name, n}}
+        end
+
+      op ->
+        builtin_op_wrapper(op)
     end
   end
 
@@ -292,9 +388,6 @@ defmodule Cure.Elab.Emit do
   defp erl_binop(:and), do: :and
   defp erl_binop(:or), do: :or
 
-  defp erl_unop(:not), do: :not
-  defp erl_unop(:neg), do: :-
-
   defp element(n, tuple_form) do
     {:call, @line, {:atom, @line, :element}, [{:integer, @line, n}, tuple_form]}
   end
@@ -306,6 +399,50 @@ defmodule Cure.Elab.Emit do
   # the pattern binds only present fields; the body's de Bruijn frame still counts
   # every field (index 0 = last field), so erased fields keep a (dead) context slot.
   defp branch_clause(env, {cname, arity, body}, ctx) do
+    cond do
+      nat_ctor?(env, cname) -> nat_branch_clause(env, {cname, arity, body}, ctx)
+      sigma_ctor?(env, cname) -> sigma_branch_clause(env, {cname, arity, body}, ctx)
+      true -> generic_branch_clause(env, {cname, arity, body}, ctx)
+    end
+  end
+
+  # case-on-Sigma (spec §2.3): `mk_pair(x, y)` matches a bare 2-tuple `{X, Y}` (both
+  # fields present), binding both into the de Bruijn frame exactly as the generic
+  # tagged form would — but without the leading ctor-name atom, so the value stays
+  # the untagged 2-tuple the ABI requires.
+  defp sigma_branch_clause(env, {_mk_pair, 2, body}, ctx) do
+    base = length(ctx)
+    vx = :"V#{base}"
+    vy = :"V#{base + 1}"
+    body_form = lower(env, body, [vy, vx | ctx])
+    px = underscore_if_unused({:var, @line, vx}, body_form)
+    py = underscore_if_unused({:var, @line, vy}, body_form)
+    {:clause, @line, [{:tuple, @line, [px, py]}], [], [body_form]}
+  end
+
+  # case-on-Nat (spec §2.2): the zero ctor's branch matches literal 0; the succ
+  # ctor's branch matches a fresh N with guard `N > 0` (belt-and-braces: a rep
+  # bug crashes loudly instead of binding k = -1) and binds the predecessor as
+  # the body's first statement — Erlang patterns/guards cannot compute-and-bind,
+  # so `K = N - 1` must open the body, making it a two-form list. The body's
+  # de Bruijn frame still counts the field (index 0 = predecessor), exactly as
+  # the tuple form would have bound it.
+  defp nat_branch_clause(env, {_zero, 0, body}, ctx) do
+    {:clause, @line, [{:integer, @line, 0}], [], [lower(env, body, ctx)]}
+  end
+
+  defp nat_branch_clause(env, {_succ, 1, body}, ctx) do
+    base = length(ctx)
+    k = :"V#{base}"
+    n = :"N#{base}"
+    body_form = lower(env, body, [k | ctx])
+    k_var = underscore_if_unused({:var, @line, k}, body_form)
+    bind = {:match, @line, k_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
+    guard = [[{:op, @line, :>, {:var, @line, n}, {:integer, @line, 0}}]]
+    {:clause, @line, [{:var, @line, n}], guard, [bind, body_form]}
+  end
+
+  defp generic_branch_clause(env, {cname, arity, body}, ctx) do
     quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, arity)
     base = length(ctx)
 
@@ -361,6 +498,22 @@ defmodule Cure.Elab.Emit do
   # `{:prim}` comparisons already return at runtime), and a `:case` on Bool tests
   # those same lowercase atoms.
   defp bool_ctor?(env, name), do: Inductive.builtin(env, :bool) == Inductive.ctor_family(env, name)
+
+  # The canonical Std.Nat family (registry-keyed, nominal): its values are BEAM
+  # machine integers (spec 2026-07-08-nat-int-erasure). A locally-redeclared
+  # structural twin has a different family-id and keeps tuples.
+  defp nat_ctor?(env, name) do
+    fam = Inductive.builtin(env, :nat)
+    fam != nil and Inductive.ctor_family(env, name) == fam
+  end
+
+  # The canonical Sigma family (registry-keyed, nominal): its values are the bare
+  # BEAM 2-tuples the primitive pair always compiled to (spec 2026-07-09 D2 §1.5) —
+  # Std.Pair's element/2 interop and AtomVM depend on the untagged shape.
+  defp sigma_ctor?(env, name) do
+    fam = Inductive.builtin(env, :sigma)
+    fam != nil and Inductive.ctor_family(env, name) == fam
+  end
 
   defp bool_atom(:True), do: true
   defp bool_atom(:False), do: false

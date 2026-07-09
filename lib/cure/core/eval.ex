@@ -30,35 +30,27 @@ defmodule Cure.Core.Eval do
 
   def eval({:pi, dom, cod}, env), do: {:vpi, eval(dom, env), {:closure, env, cod}}
   def eval({:lam, dom, body}, env), do: {:vlam, eval(dom, env), {:closure, env, body}}
-  def eval({:sigma, a, b}, env), do: {:vsigma, eval(a, env), {:closure, env, b}}
   def eval({:app, f, a}, env), do: apply(eval(f, env), eval(a, env))
-  def eval({:pair, a, b}, env), do: {:vpair, eval(a, env), eval(b, env)}
-  def eval({:fst, p}, env), do: vfst(eval(p, env))
-  def eval({:snd, p}, env), do: vsnd(eval(p, env))
 
   def eval({:data, name, params, indices}, env),
     do: {:vdata, name, Enum.map(params ++ indices, &eval(&1, env))}
 
   def eval({:ctor, name, args}, env), do: {:vctor, name, Enum.map(args, &eval(&1, env))}
 
-  # Primitive Int: literals and arithmetic. `{:prim, op, args}` folds when every
-  # argument reduces to a literal; otherwise it stays neutral so open terms
-  # (`n + 1`) read back and compare structurally.
+  # Primitive Int/Float literals. Arithmetic is builtin-op GLOBALS (K2, spec
+  # 2026-07-09): Eval leaves every global neutral; the certified-δ engine
+  # (Normalise) folds saturated literal spines via `fold/2` below.
   def eval({:int_type}, _env), do: {:vint_type}
   def eval({:int_lit, n}, _env), do: {:vint, n}
   def eval({:float_type}, _env), do: {:vfloat_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
-  def eval({:prim, op, args}, env), do: prim(op, Enum.map(args, &eval(&1, env)))
 
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
-  def eval({:eq, ty, a, b}, env), do: {:veq, eval(ty, env), eval(a, env), eval(b, env)}
-  def eval({:refl, a}, env), do: {:vrefl, eval(a, env)}
 
   # `rewrite e at (x.M) in t` is erased at runtime to `t` (the proof and motive
   # are computationally irrelevant — `rewrite e _ t ⇝ t`, §4.6).
-  def eval({:rewrite, _proof, _motive, body}, env), do: eval(body, env)
 
   def eval({:case, scrut, motive, branches}, env) do
     case eval(scrut, env) do
@@ -95,64 +87,51 @@ defmodule Cure.Core.Eval do
 
   # -- projection ι -----------------------------------------------------------
 
-  # Fold a primitive when its arguments are concrete literals; a failed fold
-  # (e.g. division by zero) or a non-literal argument leaves the op stuck.
-  defp prim(op, args) do
-    case fold(op, args) do
-      {:ok, value} -> value
-      :stuck -> {:vneutral, {:nprim, op, args}}
-    end
-  end
+  # The audited δ fold table. Public (`@doc false`) so `Cure.Core.Normalise`'s
+  # builtin-op compute hook folds through the SAME table (K2, spec 2026-07-09).
+  # Returns `{:ok, value} | :stuck`; §G.1 rule 1 = div/rem by literal zero stays
+  # `:stuck` (the spine stays neutral, never crashes).
+  @doc false
+  def fold(:add, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a + b}}
+  def fold(:sub, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a - b}}
+  def fold(:mul, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a * b}}
+  def fold(:div, [{:vint, _}, {:vint, 0}]), do: :stuck
+  def fold(:div, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, div(a, b)}}
+  def fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
+  def fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
 
-  defp fold(:add, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a + b}}
-  defp fold(:sub, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a - b}}
-  defp fold(:mul, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, a * b}}
-  defp fold(:div, [{:vint, _}, {:vint, 0}]), do: :stuck
-  defp fold(:div, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, div(a, b)}}
-  defp fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
-  defp fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
-
-  defp fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
-  defp fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
-  defp fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
-  defp fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
+  def fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
+  def fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
+  def fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
+  def fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
 
   # Bool-producing folds now yield the `True`/`False` **constructor values** of the
   # canonical Bool inductive (the True/False ctor values). `:True`/`:False` are
   # hardcoded here (fold has no `sig` on its path — a deliberate plumbing decision;
   # the Task-10 antibody enforces agreement with Builtins.@schemas / seed/1).
-  defp fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a == b)}
-  defp fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a == b)}
-  defp fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a != b)}
-  defp fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a != b)}
-  defp fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a < b)}
-  defp fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a < b)}
-  defp fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a <= b)}
-  defp fold(:le, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a <= b)}
-  defp fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a > b)}
-  defp fold(:gt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a > b)}
-  defp fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a >= b)}
-  defp fold(:ge, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a >= b)}
+  def fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a == b)}
+  def fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a == b)}
+  def fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a != b)}
+  def fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a != b)}
+  def fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a < b)}
+  def fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a < b)}
+  def fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a <= b)}
+  def fold(:le, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a <= b)}
+  def fold(:gt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a > b)}
+  def fold(:gt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a > b)}
+  def fold(:ge, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a >= b)}
+  def fold(:ge, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a >= b)}
 
-  defp fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
-  defp fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
+  def fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
+  def fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
 
-  # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality
-  # (`eq`/`ne` on Bool) are NO LONGER primitives: they are ordinary Cure
-  # functions in Std.Bool that `case`-eliminate the inductive Bool
-  # (`and`/`or`/`not`/`eq`/`ne`). A residual `{:prim, :and/:or/:not}`
-  # or Bool-operand `{:prim, :eq/:ne}` — which a well-typed term can no longer
-  # contain — falls through to the `:stuck` catch-all below and is rejected by
-  # `Kernel.infer` (`{:unknown_prim, _}`). The numeric `:eq`/`:ne` clauses above
-  # (on Int/Float) are untouched.
-  defp fold(_op, _args), do: :stuck
+  # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality are
+  # Std.Bool `case`-defs, never entries in this table. The catch-all is §G.1
+  # rule 1's backstop: any op/argument pair with no clause above (zero divisor,
+  # non-literal value, Bool ctor operand) is `:stuck` — the builtin-op spine
+  # stays neutral, never unsound (K2, spec 2026-07-09).
+  def fold(_op, _args), do: :stuck
 
   defp vbool(true), do: {:vctor, :True, []}
   defp vbool(false), do: {:vctor, :False, []}
-
-  defp vfst({:vpair, a, _b}), do: a
-  defp vfst({:vneutral, n}), do: {:vneutral, {:nfst, n}}
-
-  defp vsnd({:vpair, _a, b}), do: b
-  defp vsnd({:vneutral, n}), do: {:vneutral, {:nsnd, n}}
 end

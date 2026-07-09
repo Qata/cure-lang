@@ -17,7 +17,9 @@ defmodule Antigen.Generators.DeltaReduceTest do
 
   test "the menu spans both δ+β application unfolds and δ+ι projection unfolds" do
     notes = DeltaReduce.cases() |> Enum.map(fn t -> elem(t, 2) end)
-    for frag <- ["δ+β", "nfst", "nsnd", "nested"] do
+    # Projection arms now emit inductive ι-on-case (mk_pair) rather than the retired
+    # primitive nfst/nsnd (D2); the menu still spans both projections + nested.
+    for frag <- ["δ+β", "project first", "project second", "nested"] do
       assert Enum.any?(notes, &String.contains?(&1, frag)), "missing arm: #{frag}"
     end
   end

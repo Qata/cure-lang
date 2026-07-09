@@ -345,9 +345,6 @@ defmodule Cure.QuoteTest do
       assert_round_trip("type Name = String")
     end
 
-    test "refinement type" do
-      assert_round_trip("type Nat = {x: Int | x >= 0}")
-    end
   end
 
   describe "Cure.quoted_to_string/2 imports" do

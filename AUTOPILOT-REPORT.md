@@ -1,80 +1,63 @@
-# Autopilot completion report — antigen-pre-port-banking
+# Autopilot completion report — kernel-parity-batch
 
-**Status: COMPLETE.** Branch `autopilot/antigen-pre-port-banking` (worktree
-`.claude/worktrees/antigen-pre-port-banking`), cut from `ed0779c` (HEAD of
-`autopilot/case-index-unification`, per operator instruction). 15 commits,
-final suite **2215 passed, 0 failures**, clean tree. **Not merged** — review
-and merge when ready. Note: this branch builds on the (unmerged)
-case-index-unification branch; merging this one brings that history with it.
+**Branch:** `autopilot/kernel-parity-batch` · **Status:** ALL SEVEN INITIATIVES LANDED · **Final gate at HEAD:** full suite 3291 passed / 0 failed (6 pre-existing skips), Antigen 503/503, oracle replay 65/65 zero divergence.
 
-## Stage outcomes
+**Do not auto-merge — operator merges.** Review this branch and merge into `main` when satisfied.
 
-| Stage | Outcome | Commits |
-|---|---|---|
-| 0 Spec | pre-existed on base branch (brainstormed in a prior session) | f7ef85a, bcbcdce (inherited) |
-| 1 Spec review (Sonnet) | 9 passes, 4 fixes (gate-5 completeness, D4 symmetric reroute, D2 shape-drift clarification, gate-4 W3 extension) | 507f894 |
-| 2 Plan reconcile | plan pre-existed; folded hardened-spec changes in (reroute contingencies, #13 correction, hedged ledger closes) | 32bced5 |
-| 3 Plan review (Sonnet) | 5 passes, 6 fixes (reach-test generalization guidance, test-immutability rule, spec-divergence note, symmetric soundness contingency, conditional file tracking, count fix) | d8d865a |
-| 4 Execute (Opus subagents, TDD) | Tasks 1–11 all complete | e05950d … c927e5b |
-| 5 Verify | full suite once: 2215/0; five banking/pin tests byte-stable; authors verified (all ghost-written, no trailers) | — |
+Every initiative ran the full chain: scout → spec → recursive-skeptical-review (Sonnet, 2 consecutive clean passes) → plan → plan review → Opus execution, each stage committed before the next. All commits ghost-authored (`Made In Heaven`), no trailers.
 
-## Headline findings (three kernel-level discoveries, two fixed red-green)
+---
 
-1. **Crash-class TCB gap (W3 audit):** `Cure.Core.Term.shift/3`, `subst/3`,
-   and `term?/1` had no clauses for literal/type-constant Core terms
-   (`{:int_lit,_}`, `{:int_type}`, bool/float forms). The first literal type
-   index to reach the case-index unifier crashed `unify_indices` with a
-   `FunctionClauseError` before the deletion rule was ever consulted.
-   Fixed + regression-tested in `360402b` (TCB commit,
-   `test/cure/core/term_literals_test.exs`).
-2. **Two live positivity soundness holes (W4 audit, exactly as the plan
-   predicted):** the sigma-hidden negative occurrence and the
-   through-constructor escape (`Bad ≅ (Bad -> Dec)` via `Box`) were both
-   wrongly ACCEPTED by the shallow positivity walk; double-negation was
-   already rejected. Fixed by the deep strict-positivity walk (env-aware
-   constructor expansion + Σ traversal) in `6148aff` (TCB commit); the three
-   W4 challenges are its permanent regression guards.
-3. **Universes fully sound (W5 audit):** all six probes green on first run —
-   no Type-in-Type, ceiling enforced, cumulativity + stratification accepted,
-   two-universe ctor-field rule enforced both ways. Roadmap #20's claims
-   verified; the subsystem had zero Antigen coverage before this run.
+## #10 — Global-def collision fix (A)
 
-No D4 incompleteness reroute fired anywhere; `reach.sexp` holds only the
-three intended W2 pins.
+Cross-module same-named functions no longer silently overwrite: globals gained the same collision protection families/ctors already had. Landed and gated earlier in the batch.
 
-## What was banked
+## #11 — Identity-type-as-inductive kernel surgery (B)
 
-- `corpus.sexp` 5 → **17** (+5 W1 adversarial diverging antibodies [LJB
-  discriminators], +1 W3 deletion-rule antibody, +3 W4 positivity escapes,
-  +3 W5 universes antibodies)
-- `seeds.sexp` 22 → **25** (+1 W3 deletion well-typed, +2 W5 well-typed;
-  `stratification`/`ctor_field(:well_typed)` are coverage-equivalent under
-  the plateauing seed key, so only one banks — apparatus design, the other
-  stays guarded by the per-run assay test)
-- `reach.sexp` (new store) — **3** W2 reach pins (even/odd, Ackermann,
-  permuted pair), each pinned to its documented conservative rejection;
-  P1 migrates them per D2
-- Kernel-level occurs-check pin: `test/cure/core/branch_unify_occurs_test.exs`
-  (documented divergence from spec W3's literal framing — see plan Task 6)
-- Roadmap ledger closed: A1 (stale-closed, + #13), A2/#23, A3/#19, A4, A9
+Primitive `{:eq}`/`{:refl}`/`{:rewrite}` retired to a genuine inductive `Eq` with refl-matching and rewrite-as-sugar (Agda/Lean/Idris-aligned, K/UIP adopted). Validator-ratcheted (`no_eq_node`/`no_rewrite_node: :reject`).
 
-## Per-task commits (Stage 4)
+## #12 — Parity queue C
 
-- Task 1 (W6 hygiene): `e05950d`
-- Task 2/3 (W1 + bank): `cf69a92`, `579d3fe`
-- Task 4/5 (W2 + reach store): `f5dda56`, `abca92e`
-- Task 6 (W3, incl. TCB fix): `360402b`, `051f20b`
-- Task 7/8 (W4 audit + deep positivity fix): `6148aff`
-- Task 9 (bank W4): `51e5f39`
-- Task 10 (W5 universes): `74277f7` (plan amendment), `612ed01`
-- Task 11 (ledger + final gate): `c927e5b`
+Dot syntax, match constructor guards, Nat→Int erasure — the operator-queued parity items, landed with oracle verification.
 
-## Deviations from the plan, all documented in-line
+## #13 — Sigma retirement (D1 enabler + D2)
 
-1. Task 6: kernel `Term` crash was not one of the plan's two anticipated
-   contingency verdicts → coordinator-approved red-green TCB fix (spec §7 /
-   gate 4 permits kernel changes forced by a W3 audit surprise).
-2. Task 10: seed-count literal `>= 6` → `>= 5` under the plan's
-   test-immutability carve-out (wrong prediction about intended
-   coverage-plateau dedup semantics: one seed per coverage cell), plan
-   amended first in `74277f7`.
+- **D1/D1b:** napp motive sort via reify+infer kernel clause + type-position implicit insertion (adjudicated mid-run scope extension, spec §7).
+- **D2:** primitive Sigma family (`{:sigma}/{:pair}/{:fst}/{:snd}`) fully retired to stdlib `Std.Sigma` (`@builtin(:sigma)` inductive + `mk_pair` + projection-`:case`). Bare-2-tuple BEAM ABI preserved. `no_sigma_node: :reject`. Adjudicated core_bridge carve-out (spec §8), behavior-pinned by classic tests.
+- Spec/plan: `docs/superpowers/specs/2026-07-09-sigma-retirement-design.md` (b66cb2f → 466fd36, §8 8a6505d), plan 4479318 → 773eb60. Landed 5707a00…77be1af.
+
+## #14 — Kernel infer/check coherence
+
+`check`'s ctor clause restructured to an ordered `cond` (foreign-ctor → fields-only → params-on-spine → `check_via_infer` fallback), Lean-aligned (check = infer + def-eq). Fixed reflexive params-on-spine accepted by infer but rejected by check.
+Spec a723931/5b7b46e, plan 3706d55/1983558. **Filed, not fixed:** ledger #28 ctor-spelling value dichotomy (spine vs fields-only diverge below the typing judgement — Conv length-strict, case ι shift, Erase spine params) — an operator design fork (Lean params-always vs Agda fields-only), see memory `ctor-spelling-value-dichotomy`.
+
+## #16 — Antigen source-level vertical (F)
+
+Elaboration-entry challenge family (carried-eq dispatch coverage) added to the Antigen soundness engine.
+
+## #15 — prim → delta-globals (K2) + K4 closure (E) — the class-closing item
+
+**The last kernel primitive is retired: Core's term grammar is now application spines only** (Pi/lam/app, data/ctor/case, Type/var/global + machine literals). Lean/Idris-aligned: arithmetic is ordinary globals with literal acceleration in the signature-carrying evaluator (Lean `reduce_nat` precedent, Idris2 Builtin-op def-records).
+
+- **Spec** 045cedd → hardened 8de233b → **Amendment A1** 72994f4; **plan** 222e9aa → hardened d7fe402 (13 passes, 28 findings) → A1 deltas 41ac1a2.
+- **Execution** b520176 (Phase 1: 23 builtin-op def-kind globals, registry marker, `unfold_certified_head` compute hook via the audited `Eval.fold` table, R4 nil-body kernel guards) → 65fbc35 (A1 extension) → 922f93d/9523f7a (Phase 2 consumers-first: GuardLint + emit spine recognition, then elaborator 4-way `==`/`!=` dispatch, core_bridge shape-dispatched spines + ordered from_core reverses, Reduce via sig-carrying kernel normalization) → 767140a (Phase 3: full `{:prim}`/`{:nprim}` strip incl. `infer_prim`, `no_prim_node: :reject` wave0+release, §J docs-drift fix, Antigen retargets + new `builtin_op_coherence_test` antibody, K4 absurd closed-as-landed bookkeeping) → bed397f (banked corpus records) → ac473d6 (comment tidy).
+- **Mid-run adjudication (Amendment A1):** the executor's corpus survey found live Nat-`==` ctor guards (`ctor_guard_test.exs`) that the locked monomorphic op set would newly reject — a designated STOP. Verified in source; adjudicated on the parity criterion (Idris2/Lean accept ADT `==`): added polymorphic `struct_eq`/`struct_ne : Pi(a: Type). a -> a -> Bool` builtin-op globals reproducing today's semantics verbatim (kernel-neutral on ADTs — the compute hook reuses `Eval.fold`, which only folds int/float; emit drops the type arg and lowers to BEAM `==`). Op set = 25. `ctor_guard_test` 4/4 byte-identical (no pin flip). Zero programs newly rejected.
+- **One substantive verdict flip, documented in-test:** `unify_meta_completeness_test:60-65` — a meta buried under a prim was walker-opaque (had to refuse); as a spine it decomposes structurally and the meta is soundly SOLVED. Strictly stronger.
+- **New capabilities:** first-class/partial application of ops (curried wrappers), op-argument metavariable solving, minimal Core grammar, Lean-bridge export path unblocked (encoder retarget is future work).
+- **Verified structurally by the orchestrator:** zero `{:prim`/`{:nprim` constructors under `lib/cure/core/`, `lib/cure/elab/`, `lib/antigen/`, `lib/cure/types/core_bridge.ex` (excepted validator predicate + one comment); `lib/cure/types/` diff = exactly `core_bridge.ex` + `reduce.ex`; `lib/cure/compiler/` untouched; ghost authorship on all 9 commits; full suite re-run once at final HEAD by the orchestrator: 3291/0.
+
+**Honest residuals (flagged, not fixed):** core_bridge float free-index defaults to `int_*` (stuck-not-wrong, no live case); GuardLint float ops + `struct_eq` always uninterpreted (sound direction); `seed_ops` Bool-codomain nil on Bool-excluding envs (unreachable, mirrors existing contract); `connective_inline` bare-atom keying (pre-existing, spec §5 follow-up); Lean `module_encoder` still rejects the legacy tuple (export coverage is future work).
+
+---
+
+## Filed for operator decision (not tasks, no code changed)
+
+1. **Ledger #28 — ctor-spelling value dichotomy** (from #14): pick ONE canonical value-level ctor spelling (Lean params-always vs Agda fields-only); the divergence sits below the typing judgement (Conv/ι/Erase). Memory: `ctor-spelling-value-dichotomy`.
+2. **`connective_inline` bare-atom keying** in emit — pre-existing smell for user-plausible names (`and`/`or`/`not`/`eq`/`ne`).
+3. **Pre-existing `Equivalent(int,x,y)` nf-idempotence infection** in the coverage fuzzer (predates this batch; queued in `builtin-inductive-foundation` memory).
+
+## Where things live
+
+- Specs/plans: `docs/superpowers/specs/2026-07-09-*.md`, `docs/superpowers/plans/2026-07-09-*.md` (this batch: sigma-retirement, infer-check-coherence, prim-delta-globals).
+- Memory updated: `kernel-primitive-endgame` → **CLASS CLOSED** (all retirements landed, never-candidates locked, don't re-survey).
+- The previous run's report (antigen-pre-port-banking) that this file replaces remains in git history.

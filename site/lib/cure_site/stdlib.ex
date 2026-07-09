@@ -33,7 +33,7 @@ defmodule CureSite.Stdlib do
   # nothing gets silently dropped.
   @groups_for_modules [
     {"Core",
-     ["Std.Core", "Std.Equal", "Std.Eq", "Std.Ord", "Std.Show", "Std.Functor", "Std.Refine"]},
+     ["Std.Core", "Std.Equal", "Std.Eq", "Std.Ord", "Std.Show", "Std.Functor"]},
     {"Collections",
      [
        "Std.List",

@@ -68,7 +68,6 @@ defmodule Antigen.Generators.UnifyProblem do
       {tv("T"), :int},
       {{:list, tv("T")}, {:list, :int}},
       {{:tuple, [tv("A"), tv("B")]}, {:tuple, [:int, :string]}},
-      {{:refinement, :int, "x", :positive}, :int},
       {:any, tv("T")},
       {:int, :float},
       {{:named, "foo"}, {:record, :foo, []}}

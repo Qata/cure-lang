@@ -34,23 +34,36 @@ defmodule Antigen.Generators.ConvPair do
 
   defp v(i), do: {:var, i}
 
+  # Σ(Nat, const-Nat) and its single-branch ι-on-case projections (replacing the
+  # retired primitive {:fst,_}/{:snd,_}). conv? is type-free, so the closed Sigma
+  # motive only supplies the mk_pair branch shape the projection eliminates.
+  defp sig, do: {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}
+  defp pfst(p), do: {:case, p, {:lam, sig(), {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 1}}]}
+  defp psnd(p), do: {:case, p, {:lam, sig(), {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 0}}]}
+
   defp shape do
     Gen.frequency([
       # -- stuck-neutral discrimination (conv_neutral?) --
-      {2, ret({:fst, v(0)}, {:fst, v(1)}, false, "nfst distinct inner (135)")},
-      {2, ret({:snd, v(0)}, {:snd, v(1)}, false, "nsnd distinct inner (136)")},
-      {2, ret({:fst, v(0)}, {:snd, v(0)}, false, "nfst vs nsnd head mismatch (150)")},
-      {2, ret({:prim, :add, [v(0), v(1)]}, {:prim, :add, [v(0), v(2)]}, false, "nprim distinct arg (139)")},
+      {2, ret(pfst(v(0)), pfst(v(1)), false, "ι-on-case first component, distinct inner (135)")},
+      {2, ret(psnd(v(0)), psnd(v(1)), false, "ι-on-case second component, distinct inner (136)")},
+      {2, ret(pfst(v(0)), psnd(v(0)), false, "case first vs second component, branch-body mismatch (150)")},
+      {2,
+       ret(
+         {:app, {:app, {:global, :int_add}, v(0)}, v(1)},
+         {:app, {:app, {:global, :int_add}, v(0)}, v(2)},
+         false,
+         "builtin-op spine distinct arg (napp congruence, K2 §1.8)"
+       )},
       # -- η (conv_struct? RHS-λ + eta_eq?) --
       {2, ret(v(0), {:lam, {:type, 0}, {:app, v(1), v(0)}}, true, "η neutral-vs-λ (70,108)")},
       {2, ret({:lam, {:type, 0}, v(1)}, {:lam, {:type, 0}, v(1)}, true, "λ-vs-λ η (107)")},
       {2, ret({:lam, {:type, 0}, v(1)}, {:type, 0}, false, "λ-vs-non-λ (109)")},
       # -- Σ-pair / refl (conv_struct?) --
-      {2, ret({:pair, v(0), v(1)}, {:pair, v(0), v(1)}, true, "pair reflexive (83)")},
-      {2, ret({:refl, v(0)}, {:refl, v(0)}, true, "refl reflexive (102)")},
+      {2, ret({:ctor, :mk_pair, [v(0), v(1)]}, {:ctor, :mk_pair, [v(0), v(1)]}, true, "mk_pair reflexive (83)")},
+      {2, ret({:ctor, :reflexive, [v(0)]}, {:ctor, :reflexive, [v(0)]}, true, "reflexive-ctor reflexive (102)")},
       # -- β for projections: fst/snd of an actual pair reduce (Eval vfst/vsnd) --
-      {2, ret({:fst, {:pair, v(0), v(1)}}, v(0), true, "fst(pair a b) = a (vfst β)")},
-      {2, ret({:snd, {:pair, v(0), v(1)}}, v(1), true, "snd(pair a b) = b (vsnd β)")},
+      {2, ret(pfst({:ctor, :mk_pair, [v(0), v(1)]}), v(0), true, "case (mk_pair a b) first → a (ι-on-case)")},
+      {2, ret(psnd({:ctor, :mk_pair, [v(0), v(1)]}), v(1), true, "case (mk_pair a b) second → b (ι-on-case)")},
       # -- an out-of-context de Bruijn var evaluates to a fresh neutral (Eval :var nil arm) --
       {1, ret({:var, 5}, {:var, 5}, true, "out-of-ctx var → neutral (eval)")},
       # -- same_value_no_delta? over a stuck app's argument --

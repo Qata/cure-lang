@@ -25,9 +25,9 @@ defmodule Cure.Elab.Relevance do
       - scrutinised as a `case` discriminant (`:scrutinee`);
       - applied as a function head (`:applied`).
     * EXEMPT (checked at `erased`, does not count): type/index positions
-      (`{:pi}`/`{:sigma}`/`{:data}`/`{:eq}` — Pi & Sigma domains, the `case`
-      motive), erased argument positions, and proof positions
-      (`{:refl}` argument, `{:rewrite}` proof + motive).
+      (`{:pi}`/`{:data}` — Pi domains, the `case`
+      motive), erased argument positions, and collapsible-family proof
+      elimination (the J/subst transport's scrutinee).
 
   Only the 0/ω slice is ported (per the reference manifest caveat: read Idris
   core as ω-except-erased; the linear `1` multiplicity is out of scope).
@@ -118,37 +118,69 @@ defmodule Cure.Elab.Relevance do
     end)
   end
 
-  # Sigma intro/elim: components carry the runtime value (relevant).
-  defp walk({:pair, a, b}, depth, _site, st) do
-    with :ok <- walk(a, depth, :returned, st), do: walk(b, depth, :returned, st)
-  end
-
-  defp walk({:fst, p}, depth, _site, st), do: walk(p, depth, :returned, st)
-  defp walk({:snd, p}, depth, _site, st), do: walk(p, depth, :returned, st)
-
-  # `rewrite proof motive body ⇝ body` at eval; proof + motive are exempt, the
-  # transported body is relevant.
-  defp walk({:rewrite, _proof, _motive, body}, depth, _site, st),
-    do: walk(body, depth, :returned, st)
-
   # `case`: the discriminant is scrutinised (relevant); the motive is a type
   # position (exempt); each branch body runs under `arity` fresh pattern binders.
+  #
+  # EXCEPTION — collapsible-family elimination (Phase B, spec "Phase-B encoding
+  # amendment"): a case whose single branch names the sole constructor of its
+  # family, all of whose fields are erased (e.g. `Equivalent`'s `reflexive`),
+  # inspects nothing at runtime — the matched shape is forced. Such a scrutinee
+  # is a PROOF position, exempt like the retired `{:rewrite}` node's proof
+  # (Idris2 permits case on a 0-multiplicity value precisely when the match has
+  # a single uninformative alternative; Brady/McBride/McKinna's collapsible
+  # families). Sound only because `Erase.erase` drops the whole case for the
+  # SAME class (its `collapsible_ctor?/3` must stay in lockstep with
+  # `collapsible_case?/2` here), so the exempted scrutinee never survives into
+  # the runtime term.
+  #
+  # Each branch additionally folds its constructor's own erased-field positions
+  # into the tracked set — a named erased pattern binder (spec 2026-07-08 §2.3)
+  # is policed exactly like an erased top-level parameter.
   defp walk({:case, scrut, _motive, branches}, depth, _site, st) do
-    with :ok <- walk(scrut, depth, :scrutinee, st) do
-      each(branches, fn {_cname, arity, body} -> walk(body, depth + arity, :returned, st) end)
+    scrut_check =
+      if collapsible_case?(st.env, branches),
+        do: :ok,
+        else: walk(scrut, depth, :scrutinee, st)
+
+    with :ok <- scrut_check do
+      each(branches, fn {cname, arity, body} ->
+        ctor_qs =
+          Inductive.ctor_quantities(st.env, cname) || List.duplicate(:present, arity)
+
+        branch_erased =
+          ctor_qs
+          |> Enum.with_index()
+          |> Enum.filter(fn {q, _p} -> q == :erased end)
+          |> Enum.map(fn {_q, p} -> depth + p end)
+
+        st2 = %{st | erased: Enum.into(branch_erased, st.erased)}
+        walk(body, depth + arity, :returned, st2)
+      end)
     end
   end
 
   # --- exempt positions: type formers and proof terms carry no runtime value ---
   defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
-  defp walk({:sigma, _a, _b}, _depth, _site, _st), do: :ok
   defp walk({:data, _n, _ps, _is}, _depth, _site, _st), do: :ok
-  defp walk({:eq, _ty, _a, _b}, _depth, _site, _st), do: :ok
-  defp walk({:refl, _a}, _depth, _site, _st), do: :ok
 
   # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no
   # erased-parameter occurrence to account for. Mirrors `Erase`'s leaf clause.
   defp walk(_leaf, _depth, _site, _st), do: :ok
+
+  # Exactly one branch, naming its family's ONLY constructor, whose fields are
+  # all erased (and nonempty — a nullary single-ctor family like Unit keeps
+  # today's relevant-scrutinee treatment; this rule targets proof-like carriers).
+  defp collapsible_case?(env, [{cname, arity, _body}]) do
+    with dname when dname != nil <- Inductive.ctor_family(env, cname),
+         [_only] <- Inductive.ctors_of(env, dname),
+         qs when is_list(qs) <- Inductive.ctor_quantities(env, cname) do
+      arity == length(qs) and qs != [] and Enum.all?(qs, &(&1 == :erased))
+    else
+      _ -> false
+    end
+  end
+
+  defp collapsible_case?(_env, _branches), do: false
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
   defp spine(head, acc), do: {head, acc}

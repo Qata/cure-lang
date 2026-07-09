@@ -94,20 +94,6 @@ defmodule Cure.Types.Unify do
 
   defp do_unify(t, t, subst, trace), do: {:ok, subst, [{t, t, :reflex} | trace]}
 
-  # Refinements are transparent to unification: the predicate narrows a
-  # base type with no structural contribution, so unifying through
-  # `{:refinement, base, ...}` on either side is just unifying `base`.
-  # Strip them eagerly -- before the `{:type_var, _}` clauses -- so a
-  # type variable binds to the cleaner base type rather than carrying
-  # an inapplicable predicate into downstream substitution.
-  defp do_unify({:refinement, base, _, _}, t, subst, trace) do
-    do_unify(base, t, subst, [{:refinement, :lhs, :strip} | trace])
-  end
-
-  defp do_unify(t, {:refinement, base, _, _}, subst, trace) do
-    do_unify(t, base, subst, [{:refinement, :rhs, :strip} | trace])
-  end
-
   defp do_unify({:type_var, name}, t, subst, trace) when is_binary(name) do
     bind(name, t, subst, [{:type_var_l, name, t} | trace])
   end
@@ -234,7 +220,6 @@ defmodule Cure.Types.Unify do
 
   defp occurs?(name, {:adt, _n, ps}, subst), do: Enum.any?(ps, &occurs?(name, &1, subst))
   defp occurs?(name, {:map, k, v}, subst), do: occurs?(name, k, subst) or occurs?(name, v, subst)
-  defp occurs?(name, {:refinement, base, _, _}, subst), do: occurs?(name, base, subst)
   defp occurs?(_name, _type, _subst), do: false
 
   # -- Substitution ------------------------------------------------------------
@@ -257,9 +242,6 @@ defmodule Cure.Types.Unify do
 
   defp do_apply({:adt, n, ps}, s), do: {:adt, n, Enum.map(ps, &do_apply(&1, s))}
   defp do_apply({:map, k, v}, s), do: {:map, do_apply(k, s), do_apply(v, s)}
-
-  defp do_apply({:refinement, base, var, pred}, s),
-    do: {:refinement, do_apply(base, s), var, pred}
 
   defp do_apply(other, _s), do: other
 

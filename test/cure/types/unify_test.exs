@@ -99,15 +99,6 @@ defmodule Cure.Types.UnifyTest do
       assert {:ok, _, _} = Unify.unify(adt, {:named, "Point"})
     end
 
-    test "refinements are transparent to unification" do
-      refined = {:refinement, :int, "x", nil}
-
-      assert {:ok, %{"T" => :int}, _} =
-               Unify.unify({:type_var, "T"}, refined)
-
-      assert {:ok, %{"T" => :int}, _} =
-               Unify.unify(refined, {:type_var, "T"})
-    end
   end
 
   describe "occurs check" do
@@ -140,13 +131,6 @@ defmodule Cure.Types.UnifyTest do
 
       assert {:map, :atom, :int} =
                Unify.apply_subst({:map, {:type_var, "K"}, {:type_var, "V"}}, subst)
-    end
-
-    test "substitutes through refinements" do
-      subst = %{"T" => :int}
-
-      assert {:refinement, :int, "x", nil} =
-               Unify.apply_subst({:refinement, {:type_var, "T"}, "x", nil}, subst)
     end
 
     test "substitutes through effect-annotated function types" do

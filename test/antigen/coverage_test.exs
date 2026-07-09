@@ -56,15 +56,21 @@ defmodule Antigen.CoverageTest do
   end
 
   test "terms_of extracts type, term and ctx for :mutant_term" do
+    # "fst on a Nat" spelled inductively (D2): projection case over mk_pair.
+    fault_term =
+      {:case, {:ctor, :Z, []},
+       {:lam, {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
+       [{:mk_pair, 2, {:var, 1}}]}
+
     c = Antigen.Challenge.new(
       kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
       payload: %{sig: :v1, ctx: [{:data, :Nat, [], []}],
-                 type: {:data, :Nat, [], []}, term: {:fst, {:ctor, :Z, []}},
+                 type: {:data, :Nat, [], []}, term: fault_term,
                  fault: %{kind: :proj_non_pair, witness: :head,
                           expected_head: :Sigma, injected_head: :Nat, scope: nil}}
     )
     ts = Antigen.Coverage.terms_of(c)
-    assert {:fst, {:ctor, :Z, []}} in ts
+    assert fault_term in ts
     assert {:data, :Nat, [], []} in ts
   end
 

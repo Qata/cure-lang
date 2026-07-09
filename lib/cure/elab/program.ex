@@ -14,6 +14,8 @@ defmodule Cure.Elab.Program do
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(source) when is_binary(source) do
+    Cure.Elab.GuardLint.reset_warnings()
+
     with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
       check_ast(ast)
@@ -29,11 +31,11 @@ defmodule Cure.Elab.Program do
   def check_ast(ast), do: check_ast(ast, [])
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
-  def check_ast(ast, opts) do
+  def check_ast(ast, _opts) do
     with :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast) do
-      Cure.Kernel.Backend.check_ast(ast, opts)
+      check_ast_elixir_core(ast)
     end
   end
 
@@ -131,21 +133,12 @@ defmodule Cure.Elab.Program do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
          env0 = merge_env(seeded, imported),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
-      TotalityClosure.certify_type_level(env)
-    end
-  end
-
-  @doc false
-  @spec check_ast_for_lean_backend(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
-  def check_ast_for_lean_backend(ast) do
-    case imports(ast) do
-      [] ->
-        seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast))
-        elaborate_declarations_lean(declarations(ast), seeded)
-
-      sources ->
-        {:error, {:lean_backend_unsupported_imports, sources}}
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
+         {:ok, certified} <- TotalityClosure.certify_type_level(env) do
+      # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
+      # defs so their intra-module uses keep inlining; any other module name
+      # is a no-op here (its hinted imports were marked slice-side).
+      {:ok, mark_inline_hints(certified, find_module_name(ast))}
     end
   end
 
@@ -228,20 +221,23 @@ defmodule Cure.Elab.Program do
   # checks each imported module. Std.Bool and Std.Nat qualify today. Excluded, why:
   #   Std.Core       -- legacy bool_not/bool_and use `pickup` (:unsupported_expression)
   #   Std.Equivalent -- uses a :cure_refl symbol literal the elaborator rejects
-  #   Std.Refine     -- refinement predicates not yet dependent-clean
   #   Equatable/Ord/Show/Functor protocols -- would couple instance resolution globally
   # Each can join once ported to dependent-clean syntax (ongoing parity work). The
   # listed modules are self-excluded (they stay self-contained on the seeded
   # builtins), which also breaks any bootstrap cycle. Each source is idempotent
   # under `merge_env`, so an explicit `use` is harmless and a local definition of
   # the same name shadows the import.
-  @auto_prelude ~w(Std.Bool Std.Nat)
+  #   Std.Sigma -- the dependent-pair projection globals `sigma_first`/`sigma_second`
+  #   that `.1`/`.2` lower to must resolve in EVERY module (the surface sugar is
+  #   usable without `use`, like %[..]); the Sigma family itself is seeded, and
+  #   Std.Sigma dependent-elaborates cleanly (D1-proven pattern), so it qualifies.
+  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma)
 
   # The canonical type each auto-prelude module provides. If a module locally
   # declares a same-named type (e.g. its own `type Nat = Zero | Suc`), that prelude
   # is NOT auto-imported — the local declaration is canonical and importing the
   # look-alike would collide (mirrors `declared_type_names`' builtin-seed skip).
-  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat}
+  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat, "Std.Sigma" => :Sigma}
 
   defp auto_prelude_imports(ast) do
     self = find_module_name(ast)
@@ -496,6 +492,19 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  # Function names DECLARED in a module's own source (transitive imports
+  # excluded). Mirror of `owned_family_names/1`, reusing the public
+  # `local_def_names/1` scanner in place of `declared_type_names/1`.
+  defp owned_def_names(path) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+      MapSet.new(local_def_names(ast))
+    else
+      _ -> MapSet.new()
+    end
+  end
+
   # Build ONE module's flat env slice (own decls + its own imports), as today.
   defp module_slice_env(path) do
     with {:ok, source} <- File.read(path),
@@ -504,8 +513,9 @@ defmodule Cure.Elab.Program do
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
          env0 = merge_env(seeded, imported),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
-      TotalityClosure.certify_type_level(env)
+         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
+         {:ok, certified} <- TotalityClosure.certify_type_level(env) do
+      {:ok, mark_inline_hints(certified, find_module_name(ast))}
     end
   end
 
@@ -532,18 +542,32 @@ defmodule Cure.Elab.Program do
 
     # Ownership scans the FULL transitive closure (not `modules`, which is
     # direct-only) — see the Design note + `transitive_import_modules/1` doc.
-    family_owners =
+    # Family AND def ownership in ONE transitive walk (avoid re-walking): both are
+    # `%{name => MapSet.t(owner_mod)}` maps fed to the shape-generic `classify/2`.
+    {family_owners, def_owners} =
       sources
       |> transitive_import_modules()
-      |> Enum.reduce(%{}, fn {mod_id, path}, acc ->
-        Enum.reduce(owned_family_names(path), acc, fn name, a ->
-          Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
-        end)
+      |> Enum.reduce({%{}, %{}}, fn {mod_id, path}, {fam_acc, def_acc} ->
+        fam_acc =
+          Enum.reduce(owned_family_names(path), fam_acc, fn name, a ->
+            Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
+          end)
+
+        def_acc =
+          Enum.reduce(owned_def_names(path), def_acc, fn name, a ->
+            Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
+          end)
+
+        {fam_acc, def_acc}
       end)
 
     local = declared_type_names(ast)
     local_ctors = declared_ctor_names(ast)
+    local_defs = MapSet.new(local_def_names(ast))
     %{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
+    # Def ambiguity (no local winner) is enforced at resolution time (Task 3 via
+    # `ambiguous_modules/2`); here we only need the losers to re-key their keys.
+    %{losers: def_losers} = Resolution.classify(def_owners, local_defs)
 
     collisions =
       losers |> Map.values() |> Enum.reduce(MapSet.new(), &MapSet.union/2)
@@ -558,10 +582,19 @@ defmodule Cure.Elab.Program do
                    |> Enum.map(fn {owner, _path} -> owner end)
                    |> MapSet.new()
 
+                 owner_mods =
+                   MapSet.union(MapSet.new(Map.keys(losers)), MapSet.new(Map.keys(def_losers)))
+
                  slice =
-                   Enum.reduce(losers, slice, fn {owner_mod, owned_losers}, s ->
+                   Enum.reduce(owner_mods, slice, fn owner_mod, s ->
                      if MapSet.member?(reachable, owner_mod) do
-                       Resolution.rekey_module_env(s, owner_mod, owned_losers, local_ctors)
+                       Resolution.rekey_module_env(
+                         s,
+                         owner_mod,
+                         Map.get(losers, owner_mod, MapSet.new()),
+                         local_ctors,
+                         Map.get(def_losers, owner_mod, MapSet.new())
+                       )
                      else
                        s
                      end
@@ -597,10 +630,37 @@ defmodule Cure.Elab.Program do
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
            {:ok, env0} <- import_env(imports(ast), MapSet.put(seen, module_name)),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
-        TotalityClosure.certify_type_level(env)
+        with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
+          {:ok, mark_inline_hints(certified, module_name)}
+        end
       else
         {:error, reason} -> {:error, {:dependent_import_failed, module_name, reason}}
       end
+    end
+  end
+
+  # Emit-inline markers for the prelude defs whose saturated applications lower
+  # to native BEAM forms (connectives → boolean ops, Sigma projections →
+  # element/2). Set HERE, on the import path keyed by source module identity —
+  # never by bare global atom — so a local def shadowing `eq`/`sigma_first`/…
+  # owns an unmarked record and is emitted as an ordinary call (R1 discipline;
+  # see `Env.register_inline_hint/3`).
+  @inline_hints %{
+    "Std.Bool" => [and: :and, or: :or, not: :not, eq: :eq, ne: :ne],
+    "Std.Sigma" => [sigma_first: :sigma_first, sigma_second: :sigma_second]
+  }
+
+  defp mark_inline_hints(env, module_name) do
+    case Map.get(@inline_hints, module_name) do
+      nil ->
+        env
+
+      hints ->
+        # Skip a hinted name the module doesn't actually define (a user module
+        # merely NAMED Std.Bool must not crash marking).
+        Enum.reduce(hints, env, fn {name, key}, e ->
+          if Env.get_def(e, name), do: Env.register_inline_hint(e, name, key), else: e
+        end)
     end
   end
 
@@ -645,29 +705,6 @@ defmodule Cure.Elab.Program do
   defp elaborate_declarations(items, env, prelude? \\ false) do
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?) do
       body_pass(fn_decls, env1)
-    end
-  end
-
-  defp elaborate_declarations_lean(items, env) do
-    with {:ok, env1, fn_decls} <- register_pass_lean(items, env) do
-      body_pass_lean(fn_decls, env1)
-    end
-  end
-
-  defp register_pass_lean(items, env) do
-    Enum.reduce_while(items, {:ok, env, []}, fn
-      {:function_def, _meta, _body} = decl, {:ok, acc, fns} ->
-        case Declarations.register_signature(decl, acc) do
-          {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl]}}
-          {:error, _} = err -> {:halt, err}
-        end
-
-      other, _acc ->
-        {:halt, {:error, {:lean_backend_unsupported_declaration, elem(other, 0)}}}
-    end)
-    |> case do
-      {:ok, _env, _fns} = ok -> ok
-      {:error, _} = err -> err
     end
   end
 
@@ -723,15 +760,6 @@ defmodule Cure.Elab.Program do
   defp body_pass(fn_decls, env) do
     Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
       case Declarations.elaborate_function_body(decl, acc) do
-        {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  defp body_pass_lean(fn_decls, env) do
-    Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
-      case Declarations.elaborate_function_body_lean(decl, acc) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
         {:error, _} = err -> {:halt, err}
       end

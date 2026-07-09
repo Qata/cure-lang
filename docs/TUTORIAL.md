@@ -86,27 +86,14 @@ loaded examples/recursion.cure -> Cure.Recursion
 ```
 Type `:help` for the full meta-command list. History is persisted to
 `~/.cure_history`.
-## 6. Refinement types
-A refinement type constrains a base type with a logical predicate:
-```cure
-type NonZero = {x: Int | x != 0}
-
-fn safe_div(a: Int, b: NonZero) -> Int = a / b
-```
-The compiler verifies the refinement at every call site using Z3.
-Inside the function body, `b` has type `{x: Int | x != 0}`, so `a / b`
-is safe.
-The `Std.Refine` stdlib module collects useful aliases:
-`Positive`, `Negative`, `Percentage`, `Probability`, ...
-## 7. Path-sensitive refinement
-When a variable appears in an `if` or `match` guard, its type is
-*refined along the matching branch*:
-```cure
-fn safe_inv(x: Int) -> Int =
-  if x != 0 then 1 / x else 0
-```
-Inside the `then` branch, the type checker knows `x : {x: Int | x != 0}`
-and `1 / x` type-checks without an additional refinement annotation.
+## 6. Refinement types (removed)
+Refinement types (predicate-constrained base types such as
+`{x: Int | x != 0}`) and their stdlib aliases have been removed for now,
+pending SMTCoq-style proof reconstruction. Until they return, use a plain
+base type and enforce the invariant with a guard or a runtime check.
+## 7. Path-sensitive refinement (removed)
+Path-sensitive refinement (narrowing a variable's type along an `if`/`match`
+branch) was part of the same removed feature; see section 6.
 ## 8. Sigma types
 A Sigma type pairs a value with a type that may depend on it:
 ```cure

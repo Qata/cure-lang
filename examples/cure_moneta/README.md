@@ -83,26 +83,23 @@ directly in the value. `show` always knows how many decimal places to print,
 and `convert` knows how to round the cross-currency result, because both pieces
 of information travel with the `Money`.
 
-### Refinement types and SMT verification (`moneta.cure:47`)
+### Domain aliases (`moneta.cure:47`)
 
 ```cure
-type PositiveAmount = {a: Int | a > 0}
-type NonNegAmount   = {a: Int | a >= 0}
-type Rate           = {r: Float | r > 0.0}
+type PositiveAmount = Int     -- invariant: a > 0
+type NonNegAmount   = Int     -- invariant: a >= 0
+type Rate           = Float   -- invariant: r > 0.0
 ```
 
-The Z3 solver proves at compile time that `PositiveAmount <: NonNegAmount`
-(every integer greater than zero is also non-negative), and that `Rate` is
-satisfiable (r = 1.0 is a witness). The `scale` function uses an inline
-refinement type as a parameter:
+Each alias names a domain invariant. The invariants themselves are unchecked
+for now: refinement-type checking (which formerly proved facts like
+`PositiveAmount <: NonNegAmount` via Z3) has been removed pending SMTCoq-style
+proof reconstruction. The `scale` function takes a plain `Int` factor:
 
 ```cure
-fn scale(m: Money, factor: {n: Int | n > 0}) -> Money =
+fn scale(m: Money, factor: Int) -> Money =
   Money{m | amount: m.amount * factor}
 ```
-
-A caller who passes 0 or a negative factor gets a type error, not a silently
-wrong result.
 
 ### Protocols for record types (`moneta.cure:100`)
 

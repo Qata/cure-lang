@@ -26,29 +26,58 @@ defmodule Antigen.Generators.EqualityTest do
     end
   end
 
-  test "the sample exercises refl, eq-type, and rewrite shapes" do
+  test "the sample exercises Equivalent-type, transport, and checked-reflexive shapes" do
     sample = B.interp(Equality.gen()) |> Enum.take(@sample)
     heads = sample |> Enum.map(fn c -> elem(c.payload.term, 0) end) |> MapSet.new()
-    for h <- [:refl, :eq, :rewrite], do: assert(h in heads, "shape #{h} never generated")
 
-    # an eq-type challenge is a Type-0 proposition (drives infer_type_value_sort)
-    assert Enum.any?(sample, fn c -> match?({:eq, _, _, _}, c.payload.term) and c.payload.type == {:type, 0} end)
-    # a refl challenge claims an Eq type
-    assert Enum.any?(sample, fn c -> match?({:refl, _}, c.payload.term) and match?({:eq, _, _, _}, c.payload.type) end)
+    # inductive Equivalent propositions + J/subst :case transports (an :app of a
+    # :case) replaced the retired {:refl}/{:eq}/{:rewrite} shapes.
+    for h <- [:data, :app], do: assert(h in heads, "shape #{h} never generated")
+
+    # an Equivalent-type challenge is a Type-0 proposition (family formation)
+    assert Enum.any?(sample, fn c ->
+             match?({:data, :Equivalent, _, _}, c.payload.term) and c.payload.type == {:type, 0}
+           end)
+
+    # a transport challenge is an :app whose head is a :case over a reflexive
+    # branch (the J/subst eliminator)
+    assert Enum.any?(sample, fn c ->
+             match?({:app, {:case, _, _, [{:reflexive, 1, _}]}, _}, c.payload.term)
+           end)
+
+    # a checked-reflexive transport claims an Equivalent type (fields-only
+    # reflexive in the checked body slot)
+    assert Enum.any?(sample, fn c ->
+             match?({:app, _, {:ctor, :reflexive, [_]}}, c.payload.term) and
+               match?({:data, :Equivalent, _, _}, c.payload.type)
+           end)
   end
 
-  test "neutral-refl shapes carry a non-empty context and a neutral subject" do
+  test "neutral Equivalent propositions carry a non-empty context and a neutral subject" do
     sample = B.interp(Equality.gen()) |> Enum.take(@sample)
 
-    neutral_refls =
+    neutral_props =
       Enum.filter(sample, fn c ->
-        match?({:refl, subj} when elem(subj, 0) in [:prim, :fst, :snd, :case], c.payload.term) and
-          c.payload.ctx != []
+        match?(
+          {:data, :Equivalent, _, [subj, _]} when elem(subj, 0) in [:app, :case],
+          c.payload.term
+        ) and c.payload.ctx != []
       end)
 
-    assert neutral_refls != [], "no neutral-refl shapes generated (needed for Conv neutral paths)"
+    assert neutral_props != [],
+           "no neutral Equivalent propositions generated (needed for Conv neutral paths)"
 
-    subjects = neutral_refls |> Enum.map(fn c -> elem(elem(c.payload.term, 1), 0) end) |> MapSet.new()
-    for s <- [:prim, :fst, :snd, :case], do: assert(s in subjects, "neutral subject #{s} never generated")
+    subjects =
+      neutral_props
+      |> Enum.map(fn c ->
+        {:data, :Equivalent, _, [subj, _]} = c.payload.term
+        elem(subj, 0)
+      end)
+      |> MapSet.new()
+
+    # Σ projections are now single-branch ι-on-`:case` over mk_pair (D2), so the
+    # former `:fst`/`:snd` neutral subjects are `:case`-headed; the former :prim
+    # subjects are builtin-op global spines, i.e. `:app`-headed (K2).
+    for s <- [:app, :case], do: assert(s in subjects, "neutral subject #{s} never generated")
   end
 end

@@ -21,7 +21,11 @@ The branch already contains foundations for:
 - positivity checks
 - constructor typing with computed indices
 - dependent `case`
-- Sigma pairs
+- Sigma pairs — as of task #13/D2 no longer a bespoke kernel primitive: the
+  dependent pair is the stdlib inductive `Std.Sigma` (family `Sigma(a, b)`,
+  constructor `mk_pair`) registered `@builtin(:sigma)` and routed entirely
+  through the generic indexed-family/`case` machinery; the surface `%[a, b]` /
+  `.1` / `.2` behaviour and the bare-2-tuple BEAM ABI are unchanged
 - equality/rewrite Core support
 - totality certificates for type-level reduction
 - elaborator-side metavariables for inferred erased arguments
@@ -79,7 +83,7 @@ being owned by the trusted kernel.
 Kernel-owned dependent routing needs to include:
 
 - `Pi`
-- `Sigma`
+- `Sigma` (now kernel-owned via the builtin inductive family, not a primitive — #13/D2)
 - `Eq`
 - `rewrite`
 - proof containers

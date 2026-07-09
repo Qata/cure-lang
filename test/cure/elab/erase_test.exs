@@ -82,8 +82,8 @@ defmodule Cure.Elab.EraseTest do
     refute Erase.has_hole?({:ctor, :prim, []})
   end
 
-  test "detects a hole inside a primitive-op argument (K3 completeness)" do
-    assert Erase.has_hole?({:prim, :add, [{:hole, "x"}, {:int_lit, 1}]})
-    refute Erase.has_hole?({:prim, :add, [{:int_lit, 2}, {:int_lit, 1}]})
+  test "detects a hole inside a builtin-op spine argument (K3 completeness; K2 re-spell)" do
+    assert Erase.has_hole?({:app, {:app, {:global, :int_add}, {:hole, "x"}}, {:int_lit, 1}})
+    refute Erase.has_hole?({:app, {:app, {:global, :int_add}, {:int_lit, 2}}, {:int_lit, 1}})
   end
 end

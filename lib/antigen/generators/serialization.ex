@@ -20,7 +20,7 @@ defmodule Antigen.Generators.Serialization do
   @data_names [:Nat, :Vec, :Bd]
   @ctor_names [:Z, :S, :vnil]
   @globals [:plus, :dbl]
-  @prim_ops [:add, :mul, :lt]
+  @op_globals [:int_add, :int_mul, :int_lt]
 
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
@@ -44,16 +44,12 @@ defmodule Antigen.Generators.Serialization do
 
     Gen.frequency([
       {4, leaf()},
-      {1, unary(:fst, d)},
-      {1, unary(:snd, d)},
-      {1, unary(:refl, d)},
       {1, binary(:pi, d)},
       {1, binary(:lam, d)},
       {1, binary(:app, d)},
-      {1, binary(:sigma, d)},
-      {1, binary(:pair, d)},
-      {1, ternary(:eq, d)},
-      {1, ternary(:rewrite, d)},
+      # (:refl/:eq/:rewrite retired with the primitive identity forms, Phase C;
+      # :sigma/:pair/:fst/:snd retired with the primitive Sigma, D2 —
+      # the inductive spellings ride the :data/:ctor/:case arms below.)
       {1, data_term(d)},
       {1, ctor_term(d)},
       {1, prim_term(d)},
@@ -72,8 +68,6 @@ defmodule Antigen.Generators.Serialization do
       Gen.bind(Gen.member_of(@globals), fn g -> Gen.return({:global, g}) end)
     ])
   end
-
-  defp unary(tag, d), do: Gen.bind(term(d), fn a -> Gen.return({tag, a}) end)
 
   defp binary(tag, d),
     do: Gen.bind(term(d), fn a -> Gen.bind(term(d), fn b -> Gen.return({tag, a, b}) end) end)
@@ -98,9 +92,13 @@ defmodule Antigen.Generators.Serialization do
     end)
   end
 
+  # Builtin-op global spines (K2: the {:prim} grammar rows re-spell as
+  # 2-arg application spines headed by a registered op global).
   defp prim_term(d) do
-    Gen.bind(Gen.member_of(@prim_ops), fn op ->
-      Gen.bind(term_list(d), fn args -> Gen.return({:prim, op, args}) end)
+    Gen.bind(Gen.member_of(@op_globals), fn g ->
+      Gen.bind(term(d), fn a ->
+        Gen.bind(term(d), fn b -> Gen.return({:app, {:app, {:global, g}, a}, b}) end)
+      end)
     end)
   end
 

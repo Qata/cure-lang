@@ -1,30 +1,36 @@
 defmodule Cure.Core.FloatPrimTest do
   @moduledoc """
-  Primitive `Float` in the kernel — the remaining numeric gap so float-indexed
-  types (`Rate`, `PositiveAmount`, …) evaluate and compare inside `Cure.Core`
-  rather than in the faked layer.
+  Primitive `Float` in the kernel — now via registry-keyed builtin-op GLOBALS
+  (K2, spec 2026-07-09; the `{:prim}` node is retired). Float-indexed types
+  (`Rate`, `PositiveAmount`, …) still evaluate and compare inside `Cure.Core`:
+  the certified-δ engine folds saturated literal float spines; §G.1 rule 1
+  (zero-divisor stays neutral) survives verbatim.
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Builtins, Context, Conv, Env, Eval, Kernel, Quote}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Kernel, Normalise, Quote}
 
-  test "eval folds float arithmetic" do
-    assert Eval.eval({:prim, :add, [{:float_lit, 1.5}, {:float_lit, 2.0}]}, []) == {:vfloat, 3.5}
-    assert Eval.eval({:prim, :mul, [{:float_lit, 2.0}, {:float_lit, 3.0}]}, []) == {:vfloat, 6.0}
-    assert Eval.eval({:prim, :div, [{:float_lit, 7.0}, {:float_lit, 2.0}]}, []) == {:vfloat, 3.5}
+  defp env, do: Builtins.seed(Env.empty())
+  defp ctx, do: Context.empty(env())
+
+  defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
+
+  test "certified delta folds float arithmetic" do
+    assert {:float_lit, 3.5} = Normalise.nf(ctx(), app2(:float_add, {:float_lit, 1.5}, {:float_lit, 2.0}), delta: :certified)
+    assert {:float_lit, 6.0} = Normalise.nf(ctx(), app2(:float_mul, {:float_lit, 2.0}, {:float_lit, 3.0}), delta: :certified)
+    assert {:float_lit, 3.5} = Normalise.nf(ctx(), app2(:float_div, {:float_lit, 7.0}, {:float_lit, 2.0}), delta: :certified)
   end
 
   test "float division by zero stays stuck rather than reducing (K2 §G.1 rule 1)" do
-    # A partial op must NOT fire when undefined: it stays a neutral term (compared
-    # syntactically by conversion), so normalization stays total and the kernel
-    # never invents a value for x / 0.0. Locks the soundness invariant against the
-    # eventual {:prim}->delta-global migration.
-    v = Eval.eval({:prim, :div, [{:float_lit, 7.0}, {:float_lit, 0.0}]}, [])
-    assert {:vneutral, {:nprim, :div, [{:vfloat, 7.0}, {:vfloat, 0.0}]}} = v
+    # A partial op must NOT fire when undefined: the spine stays a neutral term
+    # (compared syntactically by conversion), so normalization stays total and
+    # the kernel never invents a value for x / 0.0.
+    t = app2(:float_div, {:float_lit, 7.0}, {:float_lit, 0.0})
+    assert t == Normalise.nf(ctx(), t, delta: :certified)
   end
 
-  test "eval folds float comparisons to Bool constructor values" do
-    assert Eval.eval({:prim, :lt, [{:float_lit, 1.0}, {:float_lit, 2.0}]}, []) ==
-             Eval.eval({:ctor, :True, []}, [])
+  test "certified delta folds float comparisons to Bool constructor values" do
+    assert {:ctor, :True, []} =
+             Normalise.nf(ctx(), app2(:float_lt, {:float_lit, 1.0}, {:float_lit, 2.0}), delta: :certified)
   end
 
   test "reify round-trips Float type and literals" do
@@ -33,19 +39,19 @@ defmodule Cure.Core.FloatPrimTest do
   end
 
   test "definitional equality on floats" do
-    assert Conv.conv?({:prim, :add, [{:float_lit, 1.5}, {:float_lit, 2.0}]}, {:float_lit, 3.5}, [], 0)
-    refute Conv.conv?({:float_lit, 3.5}, {:float_lit, 3.6}, [], 0)
+    assert Conv.conv?(app2(:float_add, {:float_lit, 1.5}, {:float_lit, 2.0}), {:float_lit, 3.5}, [], 0, env())
+    refute Conv.conv?({:float_lit, 3.5}, {:float_lit, 3.6}, [], 0, env())
   end
 
-  test "kernel types Float literals and arithmetic" do
-    ctx = Context.empty(Builtins.seed(Env.empty()))
+  test "kernel types Float literals and arithmetic spines" do
+    ctx = ctx()
     assert {:ok, {:vtype, 0}} = Kernel.infer(ctx, {:float_type})
     assert {:ok, {:vfloat_type}} = Kernel.infer(ctx, {:float_lit, 1.5})
-    assert {:ok, {:vfloat_type}} = Kernel.infer(ctx, {:prim, :add, [{:float_lit, 1.0}, {:float_lit, 2.0}]})
+    assert {:ok, {:vfloat_type}} = Kernel.infer(ctx, app2(:float_add, {:float_lit, 1.0}, {:float_lit, 2.0}))
 
     assert {:ok, {:vdata, :Bool, []}} =
-             Kernel.infer(ctx, {:prim, :lt, [{:float_lit, 1.0}, {:float_lit, 2.0}]})
+             Kernel.infer(ctx, app2(:float_lt, {:float_lit, 1.0}, {:float_lit, 2.0}))
 
-    assert {:error, _} = Kernel.infer(ctx, {:prim, :add, [{:float_lit, 1.0}, {:int_lit, 2}]})
+    assert {:error, _} = Kernel.infer(ctx, app2(:float_add, {:float_lit, 1.0}, {:int_lit, 2}))
   end
 end

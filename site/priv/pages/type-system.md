@@ -1,10 +1,10 @@
 %{
   title: "Type System",
-  description: "Bidirectional checking, refinement types, dependent types (Sigma, Pi, equality), implicit arguments, holes, totality.",
+  description: "Bidirectional checking, dependent types (Sigma, Pi, equality), implicit arguments, holes, totality.",
   order: 3
 }
 ---
-Cure has a bidirectional type system with refinement types verified at compile time by the Z3 SMT solver and a compact **dependent-type** core: Sigma and Pi types, propositional equality, implicit arguments, holes, and totality classification. Types are checked statically -- no runtime type tags, no casts.
+Cure has a bidirectional type system with a compact **dependent-type** core: Sigma and Pi types, propositional equality, implicit arguments, holes, and totality classification. Types are checked statically -- no runtime type tags, no casts. (Refinement types -- predicate-constrained base types verified by Z3 -- were part of an earlier design and have been removed for now, pending SMTCoq-style proof reconstruction.)
 
 See the dedicated [Dependent types](#dependent-types) section for the language-level proof features landed in {{cure_vversion}}.
 
@@ -95,101 +95,21 @@ Cure defines these subtype relationships:
 - `Int <: Float` -- numeric widening (integers can be used where floats are expected)
 - `Never <: T` for all T -- the bottom type is a subtype of everything
 - `T <: Any` for all T -- every type is a subtype of the top type
-- `{x: Int | P(x)} <: Int` -- a refinement type is a subtype of its base type (dropping the constraint)
 - `List(A) <: List(B)` if `A <: B` -- lists are covariant
 - `(A -> B) <: (C -> D)` if `C <: A` and `B <: D` -- function types are contravariant in parameters and covariant in return types
 
-Examples of what this means in practice:
+## Refinement types (removed)
 
-```cure
-type Positive = {x: Int | x > 0}
-
-# Positive <: Int, so this is valid:
-fn double(x: Int) -> Int = x * 2
-fn use_positive(p: Positive) -> Int = double(p)
-
-# Int is NOT <: Positive, so this would be a type error:
-# fn bad(x: Int) -> Positive = x  -- error!
-```
-
-## Refinement types
-
-Refinement types constrain a base type with a logical predicate. The predicate is a boolean expression over the bound variable:
-
-```cure
-type NonZero = {x: Int | x != 0}
-type Positive = {x: Int | x > 0}
-type Percentage = {p: Int | p >= 0 and p <= 100}
-type NonNegative = {x: Int | x >= 0}
-type SmallInt = {n: Int | n >= 0 and n <= 255}
-```
-
-Predicates can use comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`), boolean connectives (`and`, `or`, `not`), and arithmetic (`+`, `-`, `*`).
-
-### Subtype verification via SMT
-
-Refinement subtyping is verified at compile time by sending logical implications to Z3. To check whether `{x: A | P(x)} <: {x: A | Q(x)}`, the compiler asks Z3 to prove: `forall x. P(x) => Q(x)`.
-
-Verified relationships:
-
-- **Positive <: NonZero** -- because `forall x. x > 0 => x != 0` (Z3 proves `unsat` for the negation)
-- **Percentage <: NonNegative** -- because `forall p. (p >= 0 and p <= 100) => p >= 0`
-- **SmallInt <: NonNegative** -- because `forall n. (n >= 0 and n <= 255) => n >= 0`
-
-Rejected relationships:
-
-- **NonZero is NOT <: Positive** -- Z3 finds the counterexample `x = -1` (satisfies `x != 0` but not `x > 0`)
-- **NonNegative is NOT <: Percentage** -- counterexample: `x = 101`
-
-```cure
-type NonZero = {x: Int | x != 0}
-type Positive = {x: Int | x > 0}
-
-fn needs_nonzero(x: NonZero) -> Int = x * 2
-
-# This is valid: Positive <: NonZero
-fn use_positive(p: Positive) -> Int = needs_nonzero(p)
-
-# This would be a type error: NonZero is NOT <: Positive
-# fn needs_positive(x: Positive) -> Int = x
-# fn bad(n: NonZero) -> Int = needs_positive(n)  -- error!
-```
-
-### Satisfiability checking
-
-The compiler verifies that refinement types are not empty (i.e., at least one value satisfies the constraint). This catches impossible types at definition time:
-
-- `{x: Int | x > 0}` -- satisfiable (e.g., `x = 1`)
-- `{x: Int | x > 0 and x < 0}` -- unsatisfiable: the compiler emits a warning that this type is empty
-
-## Dependent type verification at call sites
-
-Functions with `when` guards register as constrained types. When called with literal or statically-known arguments, the compiler substitutes values into the guard predicate and sends it to Z3.
-
-```cure
-fn safe_divide(a: Int, b: Int) -> Int when b != 0 = a / b
-fn positive_double(x: Int) -> Int when x > 0 = x * 2
-```
-
-At a call site:
-
-```cure
-fn main() -> Int =
-  safe_divide(42, 7)    # OK: Z3 proves 7 != 0
-  safe_divide(42, 0)    # Warning: guard constraint violated (b = 0, but b != 0 required)
-  positive_double(5)    # OK: Z3 proves 5 > 0
-  positive_double(-1)   # Warning: guard constraint violated
-```
-
-When the proof fails, the solver extracts a counterexample model from Z3's `(get-model)` output, showing the specific values that break the constraint:
-
-```text
-Warning: call to 'safe_divide': guard constraint may be violated
-  Constraint: b != 0
-  Counterexample: b = 0
-```
-
-When arguments are not statically known (e.g., from user input), the compiler reports that it cannot prove the constraint -- it is the programmer's responsibility to validate inputs.
+Cure previously supported refinement types -- base types constrained by a
+logical predicate, e.g. `{x: Int | x != 0}` -- with subtyping and satisfiability
+verified at compile time by the Z3 SMT solver, plus a `when`-guard call-site
+check that substituted statically-known arguments into the predicate. That whole
+layer (the SMT query engine, the classic refinement checker, and the stdlib
+aliases) has been removed for now, pending SMTCoq-style proof reconstruction, so
+the kernel stays independent of an untrusted solver. `when` guards still parse
+and register a constrained signature, but the call-site Z3 check no longer runs.
+Use a plain base type and enforce invariants with a guard or a runtime check
+until refinement types return through a different mechanism.
 
 ## Dependent types
 
@@ -201,7 +121,6 @@ Starting with v0.17.0 Cure ships a compact dependent-type core. Types can depend
 - **Implicit arguments** solved by first-order unification with occurs check.
 - **Holes** `?name` / `??` reporting goal type and local context.
 - **Totality** classification (`:total | :partial | :unknown`) with the optional `@total true` decorator.
-- **Path-sensitive refinement** flowing through `if` and `match` guards.
 
 ### Sigma types (dependent pairs)
 
@@ -283,19 +202,16 @@ fn factorial(n: Nat) -> Nat
 
 Direct structural recursion is verified in v0.17.0; mutual recursion is scheduled for v0.19.0.
 
-### Path-sensitive refinement
+### Path-sensitive refinement (removed)
 
-Refinement information now flows along `if` and `match` guards. `Cure.Types.PathRefinement` accumulates the branch condition (and its negation on the `else` side) into the type environment.
-
-```cure
-if x != 0 then 100 / x else 0
-```
-
-Inside the `then` branch, `x` is refined to `{x: Int | x != 0}`, so the division is safe without an explicit refinement annotation. The stdlib module `Std.Refine` ships ready-made refinements for everyday use: `NonZero`, `Positive`, `Negative`, `NonNegative`, `Percentage`, `Probability`, and predicate helpers.
+Path-sensitive refinement -- narrowing a variable's type along an `if`/`match`
+guard branch -- was part of the refinement-type layer and has been removed for
+now, together with the stdlib refinement aliases. See the note under
+[Refinement types](#refinement-types-removed).
 
 ### Error codes
 
-The dependent-type machinery contributes a dedicated range of error codes `E011`-`E020` (implicit-argument failures, sigma destructuring, totality failures, unfilled holes, refinement counterexamples, dependent-type mismatches, equality-proof mismatches, doctest mismatches).
+The dependent-type machinery contributes a dedicated range of error codes `E011`-`E020` (implicit-argument failures, sigma destructuring, totality failures, unfilled holes, dependent-type mismatches, equality-proof mismatches, doctest mismatches). Codes `E015` and `E018`, which covered refinement counterexamples, are retired now that refinement types are gone.
 
 v0.18.0 adds codes `E021`-`E025` for the pattern engine: unknown record field in a pattern, record-pattern field type mismatch, non-literal map-pattern key, unbound pin variable, and non-exhaustive nested match. Every code has a detailed explanation available via `cure explain Edd` or `cure why Edd`.
 
@@ -395,35 +311,13 @@ Warning: match expression has nested non-exhaustive cases (E025)
 The original flat classifier is kept as a fast-path for simple,
 single-level matches.
 
-### Structural refinement narrowing (v0.20.0)
+### Structural refinement narrowing (removed)
 
-v0.20.0 exposes a dedicated module -- `Cure.Types.PatternRefinement` --
-whose `narrow/2` function takes a pattern AST and a scrutinee type and
-returns `{bindings, narrowed_scrutinee}`. Two kinds of information come
-back:
-
-**Literal-equality witnesses.** A sub-pattern that is a literal means
-the matched value *is* that literal along the arm. Matching `0` against
-`:int` narrows the scrutinee to `{x: Int | x == 0}`; inside a tuple
-pattern with a literal slot, the corresponding element of the narrowed
-scrutinee picks up the refinement while variables in other slots keep
-their original element type.
-
-**Disjoint-tag witnesses.** A constructor pattern (`Ok(v)`,
-`Error(e)`) or a map pattern with a literal `:kind` tag narrows the
-scrutinee to a tagged variant:
-
-```elixir
-narrow({:function_call, [name: "Ok"], [{:variable, [], "v"}]}, :any)
-# => {%{"v" => :any}, {:variant, :ok, []}}
-```
-
-`PatternRefinement` integrates with the existing `Cure.Types.Refinement`
-representation so every narrowed type is something the SMT translator
-already understands. `bind_pattern_vars/3` in the type checker keeps its
-existing precise element typing for tuples / lists / records / maps --
-`PatternRefinement` is exposed as a separate module for callers that want
-the narrowed scrutinee.
+An earlier release exposed a `narrow/2` pass that turned literal-equality and
+disjoint-tag pattern witnesses into refinement-narrowed scrutinee types. It was
+part of the refinement-type layer and has been removed along with it.
+`bind_pattern_vars/3` in the type checker still binds pattern variables at their
+precise element type for tuples / lists / records / maps.
 
 ### Binary destructuring and exhaustiveness (v0.21.0)
 
@@ -436,19 +330,13 @@ segment specifier: `integer`/`size(n)` -> `Int`, `float` -> `Float`,
 
 A dedicated exhaustiveness pass --
 `Cure.Types.PatternChecker.check_binary_exhaustiveness/2` -- runs
-whenever the scrutinee of a `match` is a `Bitstring` (or a Bitstring
-refinement). A top-level wildcard, or the combination of an
-empty-binary arm (`<<>>`) and an open-ended tail arm
-(`<<_, _rest::binary>>`), covers the scrutinee; otherwise the
-compiler prints a concrete witness under code `E031`.
+whenever the scrutinee of a `match` is a `Bitstring`. A top-level
+wildcard, or the combination of an empty-binary arm (`<<>>`) and an
+open-ended tail arm (`<<_, _rest::binary>>`), covers the scrutinee;
+otherwise the compiler prints a concrete witness under code `E031`.
 
-`PatternRefinement.narrow/2` also gets a binary-literal branch that
-walks the segment children and collects the per-segment bindings
-separately from the scrutinee narrowing. v0.21.0 keeps the narrowing
-conservative -- a trailing `rest::binary` binds to plain `Bitstring` --
-but the hook is in place for future releases to emit
-`byte_size(rest) == byte_size(scrutinee) - sum_of_preceding_sizes`
-once the SMT translator gains the arithmetic.
+Binary patterns bind their segment variables at the type implied by the
+specifier; a trailing `rest::binary` binds to plain `Bitstring`.
 
 ### `let` destructuring exhaustiveness (v0.21.0)
 
@@ -462,27 +350,29 @@ RHS type -- the binding still compiles, matching Erlang's `=`
 semantics. Setting `partial: true` on the assignment metadata
 suppresses the warning.
 
-## Guard-based flow typing
+## Guards
 
-When a function has a `when` guard, parameter types are refined within the guarded body. The type checker narrows the type to include the guard constraint:
+A `when` guard on a function head registers a constrained signature and the
+guarded body type-checks against the declared parameter types:
 
 ```cure
 fn process(x: Int) -> Int when x > 0 =
-  # Inside this body, x has type {x: Int | x > 0}
   x * 2
 ```
 
-For multi-clause functions with guards, the type checker uses SMT to verify guard coverage and detect unreachable clauses:
+Multi-clause functions with guards are accepted clause by clause:
 
 ```cure
 fn classify(x: Int) -> String
   | x when x > 0 -> "positive"
   | x when x < 0 -> "negative"
   | _ -> "zero"
-# Guards cover all integers: x > 0, x < 0, and the wildcard for x == 0
 ```
 
-If a guard is unreachable (e.g., implied by a previous clause), the compiler warns about dead code.
+The SMT-backed guard-refinement and guard-coverage analysis of the
+refinement-type era has been removed; guard chains are still checked for
+catch-all coverage by the dependent pipeline's guard lint (see the guard
+coverage design notes).
 
 ## Record types
 

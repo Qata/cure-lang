@@ -14,7 +14,7 @@ defmodule Cure.Elab.Elaborator do
   """
 
   alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
-  alias Cure.Elab.{MetaCtx, Subst, Unify}
+  alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
 
   @doc """
   Elaborate a top-level function definition into `{:ok, core_lambda, type_value}`
@@ -296,6 +296,31 @@ defmodule Cure.Elab.Elaborator do
             end
         end
 
+      # A QUALIFIED call to a plain (non-ctor) global def: `A.foo(x)`. The
+      # qualified branch above mapped the dotted `name` to the def's registry key
+      # (`resolved`, bare or re-keyed `Mod#foo`) via `resolve_qualified/3`; without
+      # a clause acting on it the call falls through to the catch-all, which
+      # re-elaborates from the raw dotted name and can never find a `.`-spelled
+      # key. `elaborate_global_app/4` (as the `implicit_def?` clause uses it) reaches
+      # both plain and implicit defs. Guarded on the dot so bare def calls keep
+      # their existing paths.
+      String.contains?(name, ".") and Map.has_key?(env.defs, resolved) ->
+        result =
+          with {:ok, present} <- map_present_args(args, names, ctx, env) do
+            elaborate_global_app(env, resolved, present, ctx)
+          end
+
+        case result do
+          {:ok, _, _} = ok ->
+            ok
+
+          {:error, _} = orig ->
+            case elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx) do
+              {:ok, _, _} = ok -> ok
+              {:error, _} -> orig
+            end
+        end
+
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
       # generic paths so an ambiguous name surfaces `:ambiguous_name`, not a
@@ -465,19 +490,21 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A surface binary operator. Arithmetic and numeric comparisons still lower to
-  # the kernel primitive `{:prim, op, args}`. The Boolean CONNECTIVES `and`/`or`
-  # are retired as primitives: they lower to applications of the `Std.Bool`
-  # prelude defs `and`/`or`. Equality `==`/`!=` is operand-type-directed:
-  # numeric (Int/Float) operands keep the native `{:prim, :eq/:ne}` compare, while
-  # Bool operands lower to the `eq`/`ne` defs (so `case`-elimination, not a
-  # primitive, decides Boolean equality). We elaborate both operands in inference
-  # mode, assemble the term, and let the kernel infer the result type.
+  # A surface binary operator (K2 phase 2 + Amendment A1). Arithmetic and
+  # comparisons lower to registry-keyed builtin-op GLOBAL spines, type-directed
+  # by the left operand: Int → int_*, Float → float_*. The Boolean CONNECTIVES
+  # `and`/`or` lower to the `Std.Bool` prelude defs. `==`/`!=` dispatch 4-way:
+  # Bool → `eq`/`ne` defs; Int/Float → `int_eq`/`float_eq` twins; any OTHER
+  # operand type (ADT, neutral, type variable) → the polymorphic structural
+  # `struct_eq`/`struct_ne` global applied to the READBACK of the operand type
+  # (A1 §1-A — today's runtime-structural semantics, verbatim). We elaborate
+  # both operands in inference mode, assemble the term, and let the kernel
+  # infer the result type.
   def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
     with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
          {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
          {:ok, term} <-
-           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, Context.signature(ctx)),
+           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, ctx),
          {:ok, type} <- Kernel.infer(ctx, term) do
       {:ok, term, type}
     else
@@ -574,9 +601,6 @@ defmodule Cure.Elab.Elaborator do
   defp occurs_below?({:lam, d, b}, arity, depth),
     do: occurs_below?(d, arity, depth) or occurs_below?(b, arity, depth + 1)
 
-  defp occurs_below?({:sigma, a, b}, arity, depth),
-    do: occurs_below?(a, arity, depth) or occurs_below?(b, arity, depth + 1)
-
   defp occurs_below?({:case, s, m, brs}, arity, depth) do
     occurs_below?(s, arity, depth) or occurs_below?(m, arity, depth) or
       Enum.any?(brs, fn {_cn, ar, b} -> occurs_below?(b, arity, depth + ar) end)
@@ -590,45 +614,105 @@ defmodule Cure.Elab.Elaborator do
 
   defp occurs_below?(_other, _arity, _depth), do: false
 
-  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the kernel's
-  # primitive opcodes. Only the ops the kernel actually types are mapped; `<>`
-  # (string concat), `..`, and the like are left unsupported here.
+  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the
+  # builtin-op key the type-directed dispatch maps onto a monomorphic global
+  # (K2). Only the ops with registered globals are mapped; `<>` (string
+  # concat), `..`, and the like are left unsupported here.
   defp prim_op(:+), do: {:ok, :add}
   defp prim_op(:-), do: {:ok, :sub}
   defp prim_op(:*), do: {:ok, :mul}
   defp prim_op(:/), do: {:ok, :div}
   defp prim_op(:rem), do: {:ok, :rem}
-  defp prim_op(:==), do: {:ok, :eq}
-  defp prim_op(:!=), do: {:ok, :ne}
   defp prim_op(:<), do: {:ok, :lt}
   defp prim_op(:>), do: {:ok, :gt}
   defp prim_op(:<=), do: {:ok, :le}
   defp prim_op(:>=), do: {:ok, :ge}
   defp prim_op(_), do: :error
 
-  # Assemble the Core term for a surface binary operator. The connectives and
-  # Bool-operand equality become applications of the Std.Bool prelude defs (the
-  # `:and`/`:or`/Bool-`:eq`/`:ne` primitives are retired); everything else — and
-  # numeric `==`/`!=` — stays a native `{:prim, op, args}`.
-  defp build_binop(:and, l, r, _l_type, _sig), do: {:ok, app2(:and, l, r)}
-  defp build_binop(:or, l, r, _l_type, _sig), do: {:ok, app2(:or, l, r)}
+  # Assemble the Core term for a surface binary operator (K2 phase 2 + A1).
+  # The connectives and Bool-operand equality become applications of the
+  # Std.Bool prelude defs; arithmetic/comparisons become type-directed
+  # builtin-op global spines (int_*/float_*); non-primitive-typed `==`/`!=`
+  # becomes the polymorphic structural `struct_eq`/`struct_ne` global applied
+  # to the quoted operand type. Maps are explicit literals (no dynamic atom
+  # construction). The float map has NO `rem` entry — `rem` on Float is
+  # `{:error, {:unsupported_operand_type, :rem}}` (enumerated R5 churn; today
+  # it dies as kernel `{:prim_type, :rem}`).
+  @int_binop_globals %{
+    add: :int_add,
+    sub: :int_sub,
+    mul: :int_mul,
+    div: :int_div,
+    rem: :int_rem,
+    lt: :int_lt,
+    le: :int_le,
+    gt: :int_gt,
+    ge: :int_ge
+  }
+  @float_binop_globals %{
+    add: :float_add,
+    sub: :float_sub,
+    mul: :float_mul,
+    div: :float_div,
+    lt: :float_lt,
+    le: :float_le,
+    gt: :float_gt,
+    ge: :float_ge
+  }
 
-  defp build_binop(:==, l, r, l_type, sig) do
-    if bool_operand?(l_type, sig),
-      do: {:ok, app2(:eq, l, r)},
-      else: {:ok, {:prim, :eq, [l, r]}}
+  defp build_binop(:and, l, r, _l_type, _ctx), do: {:ok, app2(:and, l, r)}
+  defp build_binop(:or, l, r, _l_type, _ctx), do: {:ok, app2(:or, l, r)}
+
+  defp build_binop(op_sym, l, r, l_type, ctx) when op_sym in [:==, :!=] do
+    case primitive_scrut_kind(l_type, Context.signature(ctx)) do
+      {:ok, :bool} ->
+        {:ok, app2(if(op_sym == :==, do: :eq, else: :ne), l, r)}
+
+      {:ok, :int} ->
+        {:ok, app2(if(op_sym == :==, do: :int_eq, else: :int_ne), l, r)}
+
+      {:ok, :float} ->
+        {:ok, app2(if(op_sym == :==, do: :float_eq, else: :float_ne), l, r)}
+
+      :error ->
+        # A1 §1-A: structural equality — struct_eq/struct_ne applied to the
+        # readback of the operand type. A meta-containing readback must never
+        # reach the kernel (R8b): reject defensively (corpus predicts none).
+        ty = Quote.reify(l_type, Context.length(ctx))
+
+        if Unify.has_meta?(ty) do
+          {:error, {:unsupported_operand_type, op_sym}}
+        else
+          g = if op_sym == :==, do: :struct_eq, else: :struct_ne
+          {:ok, {:app, app2(g, ty, l), r}}
+        end
+    end
   end
 
-  defp build_binop(:!=, l, r, l_type, sig) do
-    if bool_operand?(l_type, sig),
-      do: {:ok, app2(:ne, l, r)},
-      else: {:ok, {:prim, :ne, [l, r]}}
-  end
-
-  defp build_binop(op_sym, l, r, _l_type, _sig) do
+  defp build_binop(op_sym, l, r, l_type, ctx) do
     case prim_op(op_sym) do
-      {:ok, op} -> {:ok, {:prim, op, [l, r]}}
-      :error -> :unsupported_op
+      {:ok, op} ->
+        case primitive_scrut_kind(l_type, Context.signature(ctx)) do
+          {:ok, :int} ->
+            case Map.fetch(@int_binop_globals, op) do
+              {:ok, g} -> {:ok, app2(g, l, r)}
+              :error -> {:error, {:unsupported_operand_type, op_sym}}
+            end
+
+          {:ok, :float} ->
+            case Map.fetch(@float_binop_globals, op) do
+              {:ok, g} -> {:ok, app2(g, l, r)}
+              :error -> {:error, {:unsupported_operand_type, op_sym}}
+            end
+
+          # No Bool arithmetic; non-numeric operand types reject here
+          # (enumerated R5 churn — today these die as kernel {:prim_type, op}).
+          _ ->
+            {:error, {:unsupported_operand_type, op_sym}}
+        end
+
+      :error ->
+        :unsupported_op
     end
   end
 
@@ -636,17 +720,14 @@ defmodule Cure.Elab.Elaborator do
   # argument outermost — the shape the kernel + emit expect for a curried def.
   defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
 
-  # The operand type resolves to the canonical `:bool` builtin family. Only a
-  # type that is *definitely* Bool diverts `==`/`!=` to the case-defs; anything
-  # else (Int/Float, a type variable, a neutral) keeps the native prim — so the
-  # change is a no-op for every non-Bool operand.
-  defp bool_operand?(l_type, sig), do: primitive_scrut_kind(l_type, sig) == {:ok, :bool}
-
+  # `.1`/`.2` lower to an application of the Std.Sigma projection global
+  # (`sigma_first`/`sigma_second`), with the erased implicits `{a}`/`{b}` solved
+  # from `inner`'s inferred `Sigma(a, b)` type by the implicit-insertion machinery.
+  # `inner` is the SURFACE AST (not the already-lowered term) so the wrapper infers
+  # it in the caller's context. Same `{:ok, term, result_type}` contract as before.
   defp sigma_projection(which, inner, names, ctx, env) do
-    with {:ok, inner_term, _type} <- elaborate_expr_typed(inner, names, ctx, env) do
-      term = {which, inner_term}
-      with {:ok, type} <- Kernel.infer(ctx, term), do: {:ok, term, type}
-    end
+    gname = if which == :fst, do: :sigma_first, else: :sigma_second
+    elaborate_implicit_global_app(env, gname, [inner], names, ctx)
   end
 
   # Record field projection `obj.field`. The object's type identifies its record
@@ -711,7 +792,6 @@ defmodule Cure.Elab.Elaborator do
   defp closed_term?({:var, k}, depth), do: k < depth
   defp closed_term?({:lam, d, b}, depth), do: closed_term?(d, depth) and closed_term?(b, depth + 1)
   defp closed_term?({:pi, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
-  defp closed_term?({:sigma, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
 
   defp closed_term?(tuple, depth) when is_tuple(tuple),
     do: tuple |> Tuple.to_list() |> Enum.all?(&closed_term?(&1, depth))
@@ -890,17 +970,29 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # Dependent-pair introduction `%[a, b]` in checking mode. The expected type must
-  # be a Σ; elaborate `a` against its domain, then `b` against the codomain
-  # instantiated at `a` (so a component like `prim()` gets its erased indices from
-  # the expected `SF(as, bs, d)`, not left as unsolved metavariables). The kernel
-  # re-checks the assembled `{:pair, …}`.
+  # be the builtin inductive Sigma; elaborate `a` against its domain, then `b`
+  # against the codomain APPLIED to `a` (the second Σ param `b_fn` is an arbitrary
+  # term — lambda, global, or neutral — so the instantiated codomain is the
+  # application `b_fn(a)` handed to the normalizer, NOT a binder-body substitution;
+  # spec §2.2). Lowers to the ctor `mk_pair`; the kernel re-checks it. With no Sigma
+  # family registered (a raw-`Env.empty()` elaboration), falls through to the
+  # inference fallback, which builds the same `{:ctor, :mk_pair, …}`.
   def elaborate_expr_checked({:tuple, _meta, [a_ast, b_ast]} = expr, expected_core, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
     case Kernel.normalize(ctx, expected_core) do
-      {:sigma, dom, cod} ->
+      {:data, fam, [dom, b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
+        [%{name: mk_pair} | _] = Inductive.ctors_of(env, sigma_fam)
+
         with {:ok, a_term} <- elaborate_expr_checked(a_ast, dom, names, ctx, env),
-             cod_inst = Subst.instantiate(cod, [a_term]),
+             # The second Σ param `b_fn` is an arbitrary term, so the instantiated
+             # codomain is the application `b_fn(a)` — normalized (β-reduced) so a
+             # dependent component like `prepend(x, empty())` sees its concrete
+             # expected type (`Vector(a, Suc(Zero))`) and can solve its implicits,
+             # exactly as the former `Subst.instantiate` did.
+             cod_inst = Kernel.normalize(ctx, {:app, b_fn, a_term}),
              {:ok, b_term} <- elaborate_expr_checked(b_ast, cod_inst, names, ctx, env),
-             term = {:pair, a_term, b_term},
+             term = {:ctor, mk_pair, [a_term, b_term]},
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -1003,31 +1095,27 @@ defmodule Cure.Elab.Elaborator do
   # its `ty`/endpoints are that param and the two indices. The primitive `{:veq}`
   # form is still produced by the internal transport machinery (retired later), so
   # both are accepted.
-  defp eq_parts({:veq, ty, a, b}), do: {:ok, ty, a, b}
   defp eq_parts({:vdata, :Equivalent, [ty, a, b]}), do: {:ok, ty, a, b}
   defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
 
   # Build the inductive identity type `Equivalent(ty, a, b)` and its `reflexive(x)`
   # proof (spec 2026-07-04). The elaborator's transport/motive machinery constructs
-  # these — not the retiring primitive `{:eq}`/`{:refl}` — so that every
+  # these — not the retired primitive `{:eq}`/`{:refl}` — so that every
   # Equivalent/reflexive which can reach user code (a `with … proof pf` binder, a
   # returned equality) shares the single inductive representation user signatures
-  # elaborate to. The `{:rewrite}` eliminator node is still emitted as the internal
-  # transport mechanism; its kernel typing accepts either representation via
-  # `ensure_eq`.
+  # elaborate to. As of Phase B the `{:rewrite}` eliminator node has NO producers
+  # left: every transport is the J/subst `transport_case` below (the kernel's
+  # `{:rewrite}` rule and elab traversal clauses are stripped in Phase C).
   defp mk_eq(ty, a, b), do: {:data, :Equivalent, [ty], [a, b]}
   # Checking-position reflexive: fields-only spine; the expected type supplies the
-  # parameter (M8.3 checking mode).
+  # parameter (M8.3 checking mode). (The inference-position params-on-spine form
+  # `{:ctor, :reflexive, [ty, x]}` — K6 §E.1 — lost its last elaborator consumer
+  # when bridge_step was deleted (B2); the kernel capability remains.)
   defp mk_refl(x), do: {:ctor, :reflexive, [x]}
-  # Inference-position reflexive (K6 §E.1): the family parameter `ty` rides the
-  # spine ahead of the witness `x`, so `Kernel.infer` reads it and yields
-  # `Equivalent(ty,x,x)` without metavariable inference. Used where reflexive sits
-  # in a proof/inferred slot.
-  defp mk_refl_infer(ty, x), do: {:ctor, :reflexive, [ty, x]}
 
   # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
   # default so ordinary elaboration is untouched; used to diagnose non-termination
-  # / mis-planning in the `rewrite_plan`/`find_bridge`/`bridge_step` recursion.
+  # / mis-planning in the `rewrite_plan` occurrence matching.
   defp rwlog(fun) do
     if System.get_env("CURE_REWRITE_LOG"), do: IO.puts(:stderr, "[rw] " <> fun.())
     :ok
@@ -1035,14 +1123,59 @@ defmodule Cure.Elab.Elaborator do
 
   defp rw_ins(t), do: t |> inspect(limit: 14, printable_limit: 240) |> String.slice(0, 300)
 
+  # Phase-B adopted encoding (spec "Phase-B encoding amendment", 2026-07-08): the
+  # standard J/subst transport, exactly how Agda/Lean derive `subst`/`Eq.mpr`
+  # from J. Given `proof : Equivalent(ty, l, r)` and a single-endpoint motive
+  # `M = {:lam, ty, …}`, build
+  #
+  #     {:case, proof,
+  #       λ(x:ty). λ(y:ty). λ(p : Equivalent(ty,x,y)). (M@x) -> (M@y),
+  #       [reflexive(w) -> λ(h : M@l). h]}
+  #
+  # whose kernel-inferred type at the use site is `(M@l) -> (M@r)` (the kernel
+  # applies the motive at the scrutinee's ACTUAL indices, kernel.ex
+  # `infer {:case,…}`), while the reflexive branch is checked at the ctor's own
+  # indices `[w,w]` with `w := l` bound by the index unifier, i.e. at
+  # `(M@l) -> (M@l)` — which the identity inhabits. Applying the case to a body
+  # elaborated OUTSIDE at `M@l` yields `M@r`: no de Bruijn body shift, and no
+  # in-branch endpoint collapse (the in-branch re-elaboration route was
+  # empirically disproven during B1 — `build_motive` abstracts BOTH endpoints,
+  # demanding `l ≡ r` definitionally in-branch, false exactly when a rewrite is
+  # needed).
+  #
+  # The identity branch's lam domain is annotated `M@l` (shifted into the
+  # 1-binder branch frame), NOT `M@w`: `Kernel.check(lam, vpi)` converts the
+  # annotation against the expected domain, and the branch's expected domain
+  # after `specialize_branch_value` is `M@l`, not the fresh witness neutral.
+  # Sound for every producer site here because each site's motive never
+  # mentions the proof's second endpoint (it is abstracted away by
+  # `motive_for`/`symmetry_proof`, or the motive is constant for the bridge),
+  # so the branch substitution cannot touch anything the annotation's
+  # evaluation sees.
+  defp transport_case(proof, ty, motive, l) do
+    # Motive binders outside-in: x (Equivalent's first index), y (second), then
+    # the scrutinee p. Under x,y the scrutinee annotation's param shifts by 2;
+    # under x,y,p the arrow domain sees x at de Bruijn 2; the (non-dependent)
+    # codomain sits under one more binder, so y is also at de Bruijn 2 there.
+    scrut_ty = {:data, :Equivalent, [Subst.shift(ty, 2, 0)], [{:var, 1}, {:var, 0}]}
+
+    arrow =
+      {:pi, {:app, Subst.shift(motive, 3, 0), {:var, 2}},
+       {:app, Subst.shift(motive, 4, 0), {:var, 2}}}
+
+    arrow_motive = {:lam, ty, {:lam, Subst.shift(ty, 1, 0), {:lam, scrut_ty, arrow}}}
+    id_dom = {:app, Subst.shift(motive, 1, 0), Subst.shift(l, 1, 0)}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, id_dom, {:var, 0}}}]}
+  end
+
   # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
   # goal `expected`. Returns `{:ok, build, body_expected}`: `body_expected` is
   # the goal the surface body `t` must satisfy, and `build.(body_core)` assembles
-  # the full Core `:rewrite` term(s) around the checked body. (A builder — rather
-  # than a fixed `proof`/`motive` pair — lets the bridge case below nest an outer
-  # rewrite around the original one.)
+  # the transport-`:case` application around the checked body. (A builder —
+  # rather than a fixed `proof`/`motive` pair — lets the bridge case below nest
+  # an outer transport around the original one.)
   #
-  # Core rewrite transports M[a] -> M[b]. Idris-style source `rewrite p in t`
+  # The transport takes M[a] -> M[b]. Idris-style source `rewrite p in t`
   # checks `t` under the rewritten goal and returns the original goal, so when
   # the expected type contains the proof's left endpoint we synthesize symmetry.
   defp rewrite_plan(ctx, proof, ty, a, b, expected) do
@@ -1055,119 +1188,38 @@ defmodule Cure.Elab.Elaborator do
       contains_term?(expected, a) ->
         with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
              {:ok, motive} <- motive_for(expected, a, ty) do
-          {:ok, fn body -> {:rewrite, sym_proof, motive, body} end, replace_term(expected, a, b)}
+          # sym_proof : Eq(ty, b, a), so the transport's left endpoint is `b`:
+          # (M@b) -> (M@a) applied to the body checked at M@b = expected[a↦b].
+          {:ok, fn body -> {:app, transport_case(sym_proof, ty, motive, b), body} end,
+           replace_term(expected, a, b)}
         end
 
-      # Definitional-but-not-syntactic occurrence (P0, rw07): `a` is absent from
-      # the goal syntactically, but a δ-reducible sub-occurrence of the goal
-      # normalizes at top level to a form that *exposes* `a`. Bridge it — see
-      # `bridge_step/7` — instead of falling through to the (wrong) `b` branch.
-      bridge = find_bridge(ctx, expected, a) ->
-        bridge_step(ctx, proof, ty, a, b, expected, bridge)
-
+      # NOTE (B2): the former `find_bridge`/`bridge_step` cond arm — the
+      # definitional-occurrence bridge built for rw07 (2ac4add) — was deleted as
+      # dead code, not migrated. `expected` is always normalized before entry,
+      # and since lazy δ-unfolding (ef3e958) + the nf idempotence fix, every
+      # subterm of a normal form re-normalizes to itself, so the bridge's firing
+      # condition (`normalize(s) != s` for a goal subterm `s`) is unsatisfiable.
+      # Evidence (corpus trace + structural argument) recorded in
+      # test/cure/elab/rewrite_as_case_test.exs, test (e).
       contains_term?(expected, b) ->
         {:ok, motive} = motive_for(expected, b, ty)
-        {:ok, fn body -> {:rewrite, proof, motive, body} end, replace_term(expected, b, a)}
+        # proof : Eq(ty, a, b): (M@a) -> (M@b) applied to the body checked at
+        # M@a = expected[b↦a].
+        {:ok, fn body -> {:app, transport_case(proof, ty, motive, a), body} end,
+         replace_term(expected, b, a)}
 
       true ->
         {:error, {:rewrite_no_match, a, b, expected}}
     end
   end
 
-  # Bridge-lemma rewrite step (P0 rw07, elaborator-only — no TCB change).
-  #
-  # The trusted normalizer preserves stuck `case`s and never δ-reduces the
-  # scrutinee, so a goal like `Eq(Nat, plus(plus(Z,n),Z), n)` freezes with the
-  # sub-term `plus(Z,n)` unreduced in scrutinee position; the proof's endpoint
-  # `plus(n,Z)` is therefore only *definitionally* (not syntactically) present
-  # and the syntactic occurrence match misses. The kernel cannot be asked to
-  # decide that conversion (its scrutinee stays stuck), but the *sub-occurrence*
-  # `plus(Z,n)` reduces to `n` at TOP level, a conversion the kernel does decide.
-  #
-  # We turn that top-level definitional step into an explicit propositional
-  # rewrite. The OUTER rewrite transports along an inline refl-bodied bridge
-  # proof of `Eq(ty_s, s', s)`; its residual goal is `expected` with `s` reduced
-  # to `s'`, which now contains `a` syntactically — so the ORIGINAL rewrite
-  # (recursively planned at that residual, the already-working `a`-branch) is
-  # nested as its body. Every conversion the kernel then sees is either
-  # top-level-decidable or between structurally identical terms.
-  #
-  # Scope (honest): this closes the reducible-inner-occurrence pattern rw07
-  # exercises — a single sub-occurrence whose top-level normal form exposes the
-  # proof endpoint. It does NOT implement fully general up-to-conversion
-  # occurrence matching.
-  defp find_bridge(ctx, expected, a) do
-    subs = reducible_subterms(expected)
-    rwlog(fn -> "find_bridge: #{length(subs)} reducible subterms, seeking a=#{rw_ins(a)}" end)
-
-    Enum.find_value(subs, fn s ->
-      s_nf = Kernel.normalize(ctx, s)
-
-      if s_nf != s and contains_term?(replace_term(expected, s, s_nf), a) do
-        rwlog(fn -> "  bridge candidate s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)}" end)
-        {s, s_nf}
-      end
-    end)
-  end
-
-  defp bridge_step(ctx, proof, ty, a, b, expected, {s, s_nf}) do
-    rwlog(fn -> "bridge_step s=#{rw_ins(s)} -> s_nf=#{rw_ins(s_nf)} (recurse on residual)" end)
-
-    with {:ok, ty_s} <- infer_type_term(ctx, s),
-         residual = replace_term(expected, s, s_nf),
-         {:ok, inner_build, body_expected} <- rewrite_plan(ctx, proof, ty, a, b, residual) do
-      # Inline bridge proof `Eq(ty_s, s', s)`: the outer `rewrite` (its proof)
-      # infers this asymmetric equality via a constant motive `λ_. Eq(ty_s, s', s)`
-      # whose `refl s'` premise is *checked* against `Eq(ty_s, s', s)` — the
-      # top-level conversion `s' ≡ s` the kernel decides. (A bare `refl` in proof
-      # position would only *infer* the symmetric `Eq(ty_s, s', s')`.)
-      const_motive =
-        {:lam, ty_s,
-         mk_eq(Subst.shift(ty_s, 1, 0), Subst.shift(s_nf, 1, 0), Subst.shift(s, 1, 0))}
-
-      # PROOF position: the outer `rewrite` INFERS this inner proof (kernel
-      # `infer({:rewrite,…})`). Since K6 §E.1 (parameters ride the spine), the
-      # inductive `refl` is now inferable — built with the family parameter `ty_s`
-      # ahead of the witness `s_nf`, so `infer` reads the param from the spine and
-      # yields `Eq(ty_s, s_nf, s_nf)`, which the outer `ensure_eq` consumes. The
-      # BODY is *checked* against `const_motive` (the inductive `refl`). This
-      # retires the last producer of the primitive `{:refl}` node. (Bridge is
-      # internal transport; only the outer motive — from the user goal — is
-      # user-facing.)
-      bridge_proof = {:rewrite, mk_refl_infer(ty_s, s_nf), const_motive, mk_refl(s_nf)}
-      {:ok, outer_motive} = motive_for(expected, s, ty_s)
-
-      build = fn body ->
-        {:rewrite, bridge_proof, outer_motive, inner_build.(body)}
-      end
-
-      {:ok, build, body_expected}
-    end
-  end
-
-  # Global-headed applications occurring in `term` (outermost-first): the only
-  # sub-terms the trusted normalizer may δ-reduce, hence the bridge candidates.
-  defp reducible_subterms(term) do
-    here = if global_app?(term), do: [term], else: []
-    here ++ Enum.flat_map(children(term), &reducible_subterms/1)
-  end
-
-  defp global_app?({:app, f, _}), do: global_head?(f)
-  defp global_app?(_), do: false
-  defp global_head?({:global, _}), do: true
-  defp global_head?({:app, f, _}), do: global_head?(f)
-  defp global_head?(_), do: false
-
-  defp infer_type_term(ctx, term) do
-    with {:ok, ty_value} <- Kernel.infer(ctx, term) do
-      {:ok, Quote.reify(ty_value, Context.length(ctx))}
-    end
-  end
-
   defp symmetry_proof(proof, ty, a, _b) do
+    # M = λz. Eq(ty, z, a); proof : Eq(ty, a, b). The transport is
+    # (M@a) -> (M@b) = Eq(ty,a,a) -> Eq(ty,b,a), applied to refl(a).
     motive_body = mk_eq(Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0))
     motive = {:lam, ty, motive_body}
-    {:ok, {:rewrite, proof, motive, mk_refl(a)}}
+    {:ok, {:app, transport_case(proof, ty, motive, a), mk_refl(a)}}
   end
 
   defp motive_for(expected, target, ty), do: {:ok, {:lam, ty, abstract_term(expected, target, 0)}}
@@ -1196,9 +1248,6 @@ defmodule Cure.Elab.Elaborator do
 
   defp abstract_term({:lam, d, b}, target, depth),
     do: {:lam, abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
-
-  defp abstract_term({:sigma, a, b}, target, depth),
-    do: {:sigma, abstract_term(a, target, depth), abstract_term(b, target, depth + 1)}
 
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
@@ -1237,9 +1286,6 @@ defmodule Cure.Elab.Elaborator do
 
   defp free_indices({:lam, d, b}, depth),
     do: MapSet.union(free_indices(d, depth), free_indices(b, depth + 1))
-
-  defp free_indices({:sigma, a, b}, depth),
-    do: MapSet.union(free_indices(a, depth), free_indices(b, depth + 1))
 
   defp free_indices({:case, s, m, brs}, depth) do
     base = MapSet.union(free_indices(s, depth), free_indices(m, depth))
@@ -1335,13 +1381,13 @@ defmodule Cure.Elab.Elaborator do
          {:ok, arms1b} <- desugar_tuple_args(arms1),
          # A guard on a *nested* constructor pattern is threaded through the
          # pattern-matrix compiler here: rows carry their guard, and each matrix
-         # leaf folds the reached rows into a `bool_elim` `if`-chain whose tail is
+         # leaf folds the reached rows into a `:case`-on-Bool `if`-chain whose tail is
          # the next row (the Wadler/Augustsson `match … default` continuation,
          # à la Idris' `CaseBuilder` errorCase — but over surface names, so no
          # de-Bruijn weakening is needed).
          {:ok, arms1c} <- desugar_nested_arms(arms1b, scrut_expr),
          # A guard on a *single-level* constructor pattern (which never reaches the
-         # matrix) is folded into a guardless arm whose body is a `bool_elim`
+         # matrix) is folded into a guardless arm whose body is a `:case`-on-Bool
          # `if`-chain over the constructor group's rows (same-constructor
          # fall-through), so it flows through the ordinary `:vdata` path below. A
          # guard on a *variable/catch-all* pattern is left for `try_guard_match`.
@@ -1828,7 +1874,14 @@ defmodule Cure.Elab.Elaborator do
       Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
         h_b1 = Subst.shift(h_ctx, sc, 0)
         motive_j = {:lam, t_b1, abstract_term(h_b1, e_b1, 0)}
-        transport = {:rewrite, {:var, 0}, motive_j, {:var, idx + sc}}
+        # J/subst transport (Phase B): prf {:var,0} : Eq(T, e, pat); the case's
+        # type is (M_j@e) -> (M_j@pat), applied to the original sibling h_j.
+        # Annotation-safety (transport_case doc): M_j abstracts e out of an
+        # OUTER-frame sibling type, so it mentions neither `pat` nor the ctor
+        # telescope vars pair-2 of the reflexive unify could bind.
+        transport =
+          {:app, transport_case({:var, 0}, t_b1, motive_j, e_b1), {:var, idx + sc}}
+
         %{name: sname, dom: replace_term(h_b1, e_b1, pat_b1), transport: transport}
       end)
 
@@ -2039,17 +2092,8 @@ defmodule Cure.Elab.Elaborator do
   defp generalize({:lam, d, b}, rb, s, depth),
     do: {:lam, generalize(d, rb, s, depth), generalize(b, rb, s, depth + 1)}
 
-  defp generalize({:sigma, a, b}, rb, s, depth),
-    do: {:sigma, generalize(a, rb, s, depth), generalize(b, rb, s, depth + 1)}
-
   defp generalize({:app, f, a}, rb, s, depth),
     do: {:app, generalize(f, rb, s, depth), generalize(a, rb, s, depth)}
-
-  defp generalize({:pair, a, b}, rb, s, depth),
-    do: {:pair, generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
-
-  defp generalize({:fst, p}, rb, s, depth), do: {:fst, generalize(p, rb, s, depth)}
-  defp generalize({:snd, p}, rb, s, depth), do: {:snd, generalize(p, rb, s, depth)}
 
   defp generalize({:data, n, ps, is}, rb, s, depth),
     do: {:data, n, Enum.map(ps, &generalize(&1, rb, s, depth)), Enum.map(is, &generalize(&1, rb, s, depth))}
@@ -2061,17 +2105,6 @@ defmodule Cure.Elab.Elaborator do
     do:
       {:case, generalize(scr, rb, s, depth), generalize(m, rb, s, depth),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, generalize(b, rb, s, depth + ar)} end)}
-
-  defp generalize({:eq, t, a, b}, rb, s, depth),
-    do: {:eq, generalize(t, rb, s, depth), generalize(a, rb, s, depth), generalize(b, rb, s, depth)}
-
-  defp generalize({:refl, a}, rb, s, depth), do: {:refl, generalize(a, rb, s, depth)}
-
-  defp generalize({:rewrite, p, m, b}, rb, s, depth),
-    do: {:rewrite, generalize(p, rb, s, depth), generalize(m, rb, s, depth), generalize(b, rb, s, depth)}
-
-  defp generalize({:prim, op, args}, rb, s, depth),
-    do: {:prim, op, Enum.map(args, &generalize(&1, rb, s, depth))}
 
   defp generalize(leaf, _rb, _s, _depth), do: leaf
 
@@ -2171,7 +2204,7 @@ defmodule Cure.Elab.Elaborator do
   # expression). Handles nesting: `w @ S(t @ Z())` yields `w ↦ S(Z())`, `t ↦ Z()`.
   defp strip_as_patterns({:as_pattern, _m, [name, sub]}) do
     {clean_sub, subs} = strip_as_patterns(sub)
-    {clean_sub, [{name, clean_sub} | subs]}
+    {clean_sub, [{name, strip_named_implicits(clean_sub)} | subs]}
   end
 
   defp strip_as_patterns({:function_call, m, args}) do
@@ -2400,15 +2433,18 @@ defmodule Cure.Elab.Elaborator do
 
   defp try_trivial_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
 
-  # A `when` guard on a variable/catch-all pattern desugars to a `bool_elim`
-  # chain: `match n | x when g -> a | x -> b` becomes `bool_elim g[x↦n] a[x↦n] b`,
-  # each guarded arm testing its guard and falling through (the `ff` branch) to
-  # the remaining arms. The chain must end in an *unguarded* catch-all — that is
-  # the fall-through when every guard is false; a still-guarded final arm is
-  # non-exhaustive and rejected. Restricted to a variable scrutinee so the
-  # substituted `n` is not duplicated-with-effects; richer patterns error rather
-  # than silently drop the guard. Built on the committed `bool_elim`; no kernel
-  # change. Returns `:not_applicable` only when NO arm is guarded.
+  # A `when` guard on a variable/catch-all pattern desugars to a `:case`-on-Bool
+  # chain (`bool_case/5`): `match n | x when g -> a | x -> b` becomes
+  # `case g[x↦n] of True -> a[x↦n] | False -> b`, each guarded arm testing its
+  # guard and falling through (the `ff` branch) to the remaining arms. The chain
+  # must end in an *unguarded* catch-all — the fall-through when every guard is
+  # false — unless the untrusted Z3 lint proves the guards exhaustive, in which
+  # case the final guarded arm becomes that catch-all (§2.3a); otherwise a
+  # still-guarded final arm is non-exhaustive and rejected. Restricted to a
+  # variable scrutinee so the substituted `n` is not duplicated-with-effects;
+  # richer patterns error rather than silently drop the guard. Lowers through
+  # `bool_case/5`; no kernel change. Returns `:not_applicable` only when NO arm
+  # is guarded.
   defp try_guard_match(scrut_expr, arms, expected, names, ctx, env) do
     cond do
       not Enum.any?(arms, &guarded_arm?/1) ->
@@ -2417,10 +2453,10 @@ defmodule Cure.Elab.Elaborator do
       # A variable scrutinee is substituted into the guard chain as-is: only a
       # variable is duplicated (no recomputation), so the surface path is safe.
       match?({:variable, _, _}, scrut_expr) ->
-        guard_chain(scrut_expr, arms, expected, names, ctx, env)
+        guard_chain(scrut_expr, arms, expected, names, ctx, env, [])
 
       # A non-variable scrutinee would be DUPLICATED (and recomputed) by surface
-      # substitution across the `bool_elim` chain. Bind it ONCE under a fresh Core
+      # substitution across the guard chain. Bind it ONCE under a fresh Core
       # λ and run the chain over the binder VARIABLE, so every substitution is of a
       # variable — a real `(λ s:T. <chain over s>) e` β-redex the kernel reduces
       # with `e` evaluated once. Closes the `:complex_scrutinee` reach gap.
@@ -2443,7 +2479,7 @@ defmodule Cure.Elab.Elaborator do
       expected1 = Subst.shift(expected, 1, 0)
 
       with {:ok, chain} <-
-             guard_chain({:variable, [], fresh}, arms, expected1, names1, ctx1, env) do
+             guard_chain({:variable, [], fresh}, arms, expected1, names1, ctx1, env, []) do
         {:ok, {:app, {:lam, dom, chain}, scrut_core}}
       end
     end
@@ -2451,18 +2487,56 @@ defmodule Cure.Elab.Elaborator do
 
   defp guarded_arm?({:match_arm, meta, _body}), do: Keyword.has_key?(meta, :guard)
 
-  # The final arm closes the chain: it must be an unguarded catch-all.
-  defp guard_chain(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env) do
-    if Keyword.has_key?(meta, :guard) do
-      {:error, {:unsupported_guard, :non_exhaustive}}
-    else
-      bind_catchall_body(scrut_expr, Keyword.fetch!(meta, :pattern), single_body(body), expected, names, ctx, env)
+  # The final arm closes the chain: it must be an unguarded catch-all — unless
+  # the untrusted Z3 lint proves the chain's guards exhaustive (spec
+  # 2026-07-08-guard-coverage-lint §2.3a), in which case the final guarded arm
+  # IS the catch-all: its provably-true test is elided and its body goes
+  # through the ordinary bind_catchall_body path, so the kernel re-checks
+  # exactly the term an unguarded catch-all would have produced. Every lint
+  # failure (unproven / untranslatable / Z3 unavailable) reproduces today's
+  # rejection byte-for-byte — including when the final guard itself fails to
+  # elaborate, which was never reached pre-lint.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env, acc) do
+    case Keyword.get(meta, :guard) do
+      nil ->
+        bind_catchall_body(
+          scrut_expr,
+          Keyword.fetch!(meta, :pattern),
+          single_body(body),
+          expected,
+          names,
+          ctx,
+          env
+        )
+
+      guard ->
+        pat = Keyword.fetch!(meta, :pattern)
+
+        elaborated =
+          with {:ok, guard_expr} <- guard_bind(scrut_expr, pat, guard) do
+            elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env)
+          end
+
+        case elaborated do
+          {:ok, test} ->
+            maybe_warn_shadowed(test, acc, ctx)
+
+            if GuardLint.prove_exhaustive(acc ++ [test], ctx) == :proven do
+              bind_catchall_body(scrut_expr, pat, single_body(body), expected, names, ctx, env)
+            else
+              {:error, {:unsupported_guard, :non_exhaustive}}
+            end
+
+          _error ->
+            {:error, {:unsupported_guard, :non_exhaustive}}
+        end
     end
   end
 
-  # A guarded arm becomes a `bool_elim` on its guard; an unguarded catch-all
-  # before the end shadows every later arm and closes the chain early.
-  defp guard_chain(scrut_expr, [{:match_arm, meta, body} | rest], expected, names, ctx, env) do
+  # A guarded arm becomes a `:case` on the inductive Bool (`bool_case/5`); an
+  # unguarded catch-all before the end shadows every later arm and closes the
+  # chain early.
+  defp guard_chain(scrut_expr, [{:match_arm, meta, body} | rest], expected, names, ctx, env, acc) do
     pat = Keyword.fetch!(meta, :pattern)
 
     case Keyword.get(meta, :guard) do
@@ -2475,10 +2549,23 @@ defmodule Cure.Elab.Elaborator do
              {:ok, test} <-
                elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env),
              {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
-             {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env) do
+             {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env, acc ++ [test]) do
+          maybe_warn_shadowed(test, acc, ctx)
           {:ok, bool_case(test, expected, tt, ff, ctx)}
         end
     end
+  end
+
+  # Dead-arm lint (§2.1): a guard implied by the disjunction of the guards
+  # before it can never fire. Warning only — elaboration is unaffected. The
+  # index is the guard's 0-based position among the chain's guarded arms.
+  defp maybe_warn_shadowed(_test, [], _ctx), do: :ok
+
+  defp maybe_warn_shadowed(test, acc, ctx) do
+    if GuardLint.shadowed?(test, acc, ctx),
+      do: GuardLint.record_warning({:guard_shadowed, length(acc)})
+
+    :ok
   end
 
   # Bind a catch-all pattern's variable to the scrutinee and check the body: `_`
@@ -2513,9 +2600,10 @@ defmodule Cure.Elab.Elaborator do
   defp guard_bind(_scrut, _pat, _expr), do: {:error, {:unsupported_guard, :non_catchall_pattern}}
 
   # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
-  # of Boolean eliminations — there is no `:vdata` to dispatch on. `match n | 0 ->
-  # a | _ -> b` becomes `bool_elim (n == 0) a b`; `match b | true -> t | false ->
-  # f` becomes `bool_elim b t f`. The already-elaborated Core scrutinee is reused
+  # of `:case`-on-Bool decisions (`bool_case/5`) — there is no `:vdata` to
+  # dispatch on. `match n | 0 -> a | _ -> b` becomes
+  # `case (n == 0) of True -> a | False -> b`; `match b | true -> t | false ->
+  # f` becomes `case b of True -> t | False -> f`. The already-elaborated Core scrutinee is reused
   # in each equality test (no surface duplication), and the kernel re-checks the
   # assembled chain. Returns `:not_applicable` for a non-primitive scrutinee or
   # arms that are not a clean literal/catch-all list (the ordinary path handles it).
@@ -2619,14 +2707,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A literal arm: test the scrutinee against the literal (a `:prim :eq` yielding
-  # the inductive Bool), take this body if equal, else recurse on the rest — the
-  # test scrutinised by a `:case` on Bool.
+  # A literal arm: test the scrutinee against the literal (a type-directed
+  # equality global spine yielding the inductive Bool — K2 phase 2), take this
+  # body if equal, else recurse on the rest — the test scrutinised by a `:case`
+  # on Bool. `prim` (the scrutinee's primitive kind, already in scope) picks the
+  # monomorphic twin; a Bool literal chain uses the Std.Bool `eq` case-def.
   defp literal_chain(scrut_expr, scrut_term, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, prim, rest, expected, names, ctx, env) do
-      test = {:prim, :eq, [scrut_term, lit_core(v, prim)]}
+      eq_global =
+        case prim do
+          :int -> :int_eq
+          :float -> :float_eq
+          :bool -> :eq
+        end
+
+      test = app2(eq_global, scrut_term, lit_core(v, prim))
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
   end
@@ -2675,7 +2772,8 @@ defmodule Cure.Elab.Elaborator do
   # `C(w…) -> if g₁ then a else if g₂ then … else <closer>`, where the closer is
   # the group's trailing unguarded arm or the match's catch-all. The result is a
   # plain guardless match the ordinary `:vdata` path compiles; the `if`s lower to
-  # the committed `bool_elim`. No matrix-compiler or kernel change.
+  # `:case` on the inductive Bool (through the general `:conditional` clause). No
+  # matrix-compiler or kernel change.
 
   defp ctor_guarded_arm?({:match_arm, meta, _body}) do
     Keyword.has_key?(meta, :guard) and
@@ -2965,7 +3063,7 @@ defmodule Cure.Elab.Elaborator do
   # pattern per remaining scrutinee. Emits a tree of single-scrutinee
   # `{:pattern_match}` nodes; every emitted match is single-level, so it re-uses
   # the dependent elaborator per node. At a leaf (no columns left), the reached
-  # rows are folded into a `bool_elim` `if`-chain: a guarded row tests its guard
+  # rows are folded into a `:case`-on-Bool `if`-chain: a guarded row tests its guard
   # and falls through to the next reached row, an unguarded row terminates the
   # chain (later rows shadowed), à la the Wadler/Augustsson `match … default`
   # continuation. All still over surface names, so no de-Bruijn weakening.
@@ -3194,12 +3292,6 @@ defmodule Cure.Elab.Elaborator do
           {:ok, {cname, length(telescope), body_term}}
         end
 
-      _solved_or_trivial when carried != nil ->
-        elaborate_carried_eq_branch(
-          cname, telescope, result_indices, body_expr, branch_names,
-          ctx, env, scrut_param_vals, result_type_term, carried
-        )
-
       _solved_or_trivial ->
         arity = length(telescope)
 
@@ -3216,34 +3308,58 @@ defmodule Cure.Elab.Elaborator do
             :trivial -> %{}
           end
 
-        branch_ctx =
-          ctx
-          |> extend_context(telescope, scrut_param_vals)
-          |> specialize_branch_context_subst(subst)
+        # C-c (spec 2026-07-08 §2.3): split the pattern's named implicits into
+        # BINDINGS (an unforced position written as a bare variable — binds the
+        # anonymized erased telescope slot at quantity 0, Relevance policing any
+        # relevant use) and CHECKS (forced positions, plus unforced dot/non-var
+        # forms that keep the `{:named_implicit_unforced,…}` reject). Compute the
+        # split and the renamed branch scope ONCE, before the carried/plain
+        # dispatch, so BOTH paths honor the binding.
+        {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
 
-        # Merge in the scrutinee VALUE substitution (`v ↦ ctor`) so a goal that
-        # mentions the scrutinee value itself (`Eq(T, v, v)`) refines to the
-        # branch constructor alongside the index inversion — the shared
-        # `refine_branch_goal` (Task 3.4), also used by the with-rematch path.
-        branch_expected =
-          refine_branch_goal(result_type_term, scrut_term, cname, arity, subst, branch_ctx)
+        tele_names =
+          Enum.reduce(bindings, branch_scope(quantities, pattern_vars), fn {name, {:variable, _, vname}}, acc ->
+            p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
+            List.replace_at(acc, arity - 1 - p, to_string(vname))
+          end)
 
-        # Lean substitutes a variable major premise by `ctor fields` in the
-        # entire subgoal — context AND everything elaborated inside it
-        # (`Meta/Tactic/Cases.lean:219-227`, the `subst.insert majorFVarId
-        # ctorApp`). Cure's surface analog: free occurrences of the scrutinee
-        # NAME in the branch body become the branch pattern expression, whose
-        # vars are already bound in branch scope and elaborate to exactly the
-        # `ctor_term` the kernel's branch goal expects. Without this, a body
-        # like `refl(v)` keeps `v` opaque (`v ≢ vz`) even though the goal
-        # correctly refined to `Eq(NV(Z), vz, vz)`.
-        body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
+        branch_names = tele_names ++ names
 
-        with :ok <-
-               check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env),
-             {:ok, body_term} <-
-               elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
-          {:ok, {cname, arity, body_term}}
+        if carried != nil do
+          elaborate_carried_eq_branch(
+            cname, telescope, result_indices, body_expr, branch_names,
+            ctx, env, scrut_param_vals, result_type_term, carried, checks, subst
+          )
+        else
+          branch_ctx =
+            ctx
+            |> extend_context(telescope, scrut_param_vals)
+            |> specialize_branch_context_subst(subst)
+
+          # Merge in the scrutinee VALUE substitution (`v ↦ ctor`) so a goal that
+          # mentions the scrutinee value itself (`Eq(T, v, v)`) refines to the
+          # branch constructor alongside the index inversion — the shared
+          # `refine_branch_goal` (Task 3.4), also used by the with-rematch path.
+          branch_expected =
+            refine_branch_goal(result_type_term, scrut_term, cname, arity, subst, branch_ctx)
+
+          # Lean substitutes a variable major premise by `ctor fields` in the
+          # entire subgoal — context AND everything elaborated inside it
+          # (`Meta/Tactic/Cases.lean:219-227`, the `subst.insert majorFVarId
+          # ctorApp`). Cure's surface analog: free occurrences of the scrutinee
+          # NAME in the branch body become the branch pattern expression, whose
+          # vars are already bound in branch scope and elaborate to exactly the
+          # `ctor_term` the kernel's branch goal expects. Without this, a body
+          # like `refl(v)` keeps `v` opaque (`v ≢ vz`) even though the goal
+          # correctly refined to `Eq(NV(Z), vz, vz)`.
+          body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
+
+          with :ok <-
+                 check_named_implicits(checks, subst, arity, telescope, branch_ctx, branch_names, env),
+               {:ok, body_term} <-
+                 elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
+            {:ok, {cname, arity, body_term}}
+          end
         end
     end
   end
@@ -3255,9 +3371,16 @@ defmodule Cure.Elab.Elaborator do
   # forced inner expression to a term `t` in the branch frame, and require `t`
   # convertible with `d`. The annotation binds nothing and produces no runtime
   # term, so on success we simply continue; on mismatch the branch is rejected.
-  defp check_named_implicits(pattern, subst, arity, telescope, branch_ctx, branch_names, env) do
-    pattern
-    |> constructor_named_implicits()
+  #
+  # The `checks` argument is the pre-split CHECK list from
+  # `split_named_implicits/4` (C-c, spec 2026-07-08 §2.3) — the bindings have
+  # already been peeled off and named in the branch scope. An unforced position
+  # written as a bare variable BINDS instead (split off there); reaching the
+  # `{:named_implicit_unforced,…}` error below with a dot/non-variable inner
+  # means nothing was pinned to check against — write a bare variable to bind
+  # the index instead.
+  defp check_named_implicits(checks, subst, arity, telescope, branch_ctx, branch_names, env) do
+    checks
     |> Enum.reduce_while(:ok, fn {name, inner}, :ok ->
       case named_implicit_forced_value(name, subst, arity, telescope) do
         {:ok, d} ->
@@ -3370,11 +3493,18 @@ defmodule Cure.Elab.Elaborator do
   # `prf`, transport each index-mentioning sibling `h : H[idx]` to `H[ctor_idx]`
   # via `rewrite prf (λz. H[idx↦z]) h`, and emit `λprf. (λh'. body) transport`.
   # Mirrors capability-B's `elaborate_with_eq_branch`, keyed on the index term.
-  defp elaborate_carried_eq_branch(cname, telescope, result_indices, body_expr, branch_names, ctx, env, scrut_param_vals, result_type_term, carried) do
+  defp elaborate_carried_eq_branch(cname, telescope, result_indices, body_expr, branch_names, ctx, env, scrut_param_vals, result_type_term, carried, pattern, subst) do
     %{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings} = carried
     arity = length(telescope)
     branch_ctx0 = extend_context(ctx, telescope, scrut_param_vals)
 
+    # C-a (spec 2026-07-08 §2.1): run the forced named-implicit check on this
+    # carried-eq branch too, in the same pre-proof frame the plain path uses
+    # (`branch_ctx0` specialized by the branch-unify subst) — otherwise a wrong
+    # dot on a carried branch is silently discarded.
+    check_ctx = specialize_branch_context_subst(branch_ctx0, subst)
+
+    with :ok <- check_named_implicits(pattern, subst, arity, telescope, check_ctx, branch_names, env) do
     # `ctor_idx` — this constructor's result index at the carried position, in the
     # branch_ctx0 frame (telescope bound). `Eq(T, idx, ctor_idx)` is the proof the
     # motive hands each branch (kernel checks the branch at `motive @ ctor_idx`).
@@ -3393,7 +3523,14 @@ defmodule Cure.Elab.Elaborator do
       Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
         h_b1 = Subst.shift(h_ctx, sc, 0)
         motive_j = {:lam, t_b1, abstract_term(h_b1, idx_b1, 0)}
-        transport = {:rewrite, {:var, 0}, motive_j, {:var, idx + sc}}
+        # J/subst transport (Phase B): prf {:var,0} : Eq(T, idx, ctor_idx); the
+        # case's type is (M_j@idx) -> (M_j@ctor_idx), applied to the sibling.
+        # Annotation-safety (transport_case doc): M_j abstracts the carried
+        # index out of an OUTER-frame sibling type, so it mentions neither
+        # `ctor_idx` nor the ctor telescope vars pair-2 could bind.
+        transport =
+          {:app, transport_case({:var, 0}, t_b1, motive_j, idx_b1), {:var, idx + sc}}
+
         %{name: sname, dom: replace_term(h_b1, idx_b1, pat_b1), transport: transport}
       end)
 
@@ -3424,6 +3561,7 @@ defmodule Cure.Elab.Elaborator do
         end)
 
       {:ok, {cname, arity, {:lam, eq_dom_term, wrapped}}}
+    end
     end
   end
 
@@ -3546,7 +3684,7 @@ defmodule Cure.Elab.Elaborator do
          Enum.find_index(names, &(&1 == scrut_name)) == i and
          scrut_name not in pattern_vars and
          not binds_any?(body_expr, [scrut_name | pattern_vars]) do
-      subst_surface_var(body_expr, scrut_name, pattern)
+      subst_surface_var(body_expr, scrut_name, strip_named_implicits(pattern))
     else
       body_expr
     end
@@ -3618,6 +3756,23 @@ defmodule Cure.Elab.Elaborator do
   defp named_implicit_arg?({:named_implicit_pat, _m, _n, _i}), do: true
   defp named_implicit_arg?(_), do: false
 
+  # A pattern's value-reconstruction (spliced into a branch body by
+  # `desugar_as_patterns` and `refine_scrutinee_in_body`) must carry no
+  # `{:named_implicit_pat,…}` annotation nodes — they are pattern-only
+  # syntax, invalid in expression position (spec 2026-07-08 §2.2). The
+  # positional-only form is what Idris/Lean substitute for the scrutinee.
+  # Recursive: nested constructor sub-patterns are cleaned too.
+  defp strip_named_implicits({:function_call, m, args}) do
+    positional =
+      args
+      |> Enum.reject(&named_implicit_arg?/1)
+      |> Enum.map(&strip_named_implicits/1)
+
+    {:function_call, m, positional}
+  end
+
+  defp strip_named_implicits(other), do: other
+
   # The named-implicit annotations of a constructor pattern, as `{name, inner}`
   # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
   # to run the forced-index convertibility check.
@@ -3625,6 +3780,21 @@ defmodule Cure.Elab.Elaborator do
     do: for({:named_implicit_pat, _m, name, inner} <- args, do: {name, inner})
 
   defp constructor_named_implicits(_), do: []
+
+  # Split a pattern's named implicits per spec 2026-07-08 §2.3: an UNFORCED
+  # position written as a bare variable BINDS (Idris quantity-0 pattern
+  # variable — probe evidence in the spec); everything else stays on the
+  # check path (forced positions check convertibility; unforced dot/non-var
+  # forms keep the `{:named_implicit_unforced,…}` reject).
+  defp split_named_implicits(pattern, subst, arity, telescope) do
+    pattern
+    |> constructor_named_implicits()
+    |> Enum.split_with(fn {name, inner} ->
+      match?({:variable, _, _}, inner) and
+        named_implicit_forced_value(name, subst, arity, telescope) == :error and
+        Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end) != nil
+    end)
+  end
 
   defp pattern_shape(p) when is_tuple(p) and tuple_size(p) > 0, do: elem(p, 0)
   defp pattern_shape(_), do: :unknown
@@ -3814,17 +3984,8 @@ defmodule Cure.Elab.Elaborator do
   defp replace_branch_vars({:lam, d, b}, subst),
     do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
 
-  defp replace_branch_vars({:sigma, a, b}, subst),
-    do: {:sigma, replace_branch_vars(a, subst), replace_branch_vars(b, shift_subst(subst, 1))}
-
   defp replace_branch_vars({:app, f, a}, subst),
     do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:pair, a, b}, subst),
-    do: {:pair, replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:fst, p}, subst), do: {:fst, replace_branch_vars(p, subst)}
-  defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
 
   defp replace_branch_vars({:data, n, ps, is}, subst),
     do: {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)), Enum.map(is, &replace_branch_vars(&1, subst))}
@@ -3836,17 +3997,6 @@ defmodule Cure.Elab.Elaborator do
     do:
       {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
-
-  defp replace_branch_vars({:eq, t, a, b}, subst),
-    do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:rewrite, p, m, b}, subst),
-    do: {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:prim, op, args}, subst),
-    do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}
 
   defp replace_branch_vars(other, _subst), do: other
 
@@ -4020,6 +4170,18 @@ defmodule Cure.Elab.Elaborator do
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
 
+  @doc """
+  Type-position entry for implicit insertion (spec 2026-07-08 §7): elaborate an
+  application of a global that carries implicit (erased) parameters, from its
+  SURFACE argument ASTs, in the caller's typing context. Used by the
+  return-type lowering in `Cure.Elab.Declarations` — term position reaches the
+  same machinery via `elaborate_named_call`. The kernel re-checks the assembled
+  signature, so nothing unsound rests on this path.
+  """
+  def elaborate_implicit_global_app(env, name, arg_asts, names, ctx) do
+    elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx)
+  end
+
   defp bidir_app_slot({dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
     {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(dom, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
@@ -4035,7 +4197,12 @@ defmodule Cure.Elab.Elaborator do
       # Domain still unsolved — infer the argument and unify to solve metavariables.
       case elaborate_expr_typed(arg, names, ctx, env) do
         {:ok, term, ty} ->
-          ty_term = Quote.reify(ty, Context.length(ctx))
+          # Recover the (params, indices) split that the sig-less `Quote.reify`
+          # collapses (elaborator.ex:1268 `resplit_data`), so an argument type that
+          # carries a NESTED indexed family — e.g. a Sigma projection's `p` whose
+          # type is `Sigma(x: Dec, SF(as, bs, x))` — does not reach the kernel with
+          # SF's indices smuggled into its param slot (a false `:arg_arity`).
+          ty_term = resplit_data(Quote.reify(ty, Context.length(ctx)), env)
 
           case Unify.unify(dom_inst, ty_term, mctx, env) do
             {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
@@ -4541,10 +4708,6 @@ defmodule Cure.Elab.Elaborator do
   defp has_meta?({:app, f, x}), do: has_meta?(f) or has_meta?(x)
   defp has_meta?({:pi, d, c}), do: has_meta?(d) or has_meta?(c)
   defp has_meta?({:lam, d, b}), do: has_meta?(d) or has_meta?(b)
-  defp has_meta?({:sigma, d, c}), do: has_meta?(d) or has_meta?(c)
-  defp has_meta?({:pair, a, b}), do: has_meta?(a) or has_meta?(b)
-  defp has_meta?({:fst, p}), do: has_meta?(p)
-  defp has_meta?({:snd, p}), do: has_meta?(p)
   defp has_meta?(_), do: false
 
   # -- parameters / binders ---------------------------------------------------
@@ -4596,13 +4759,25 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # Pair introduction `%[a, b]` in the scope-based term builder (function
-  # arguments and other sub-terms). Emits the Core `{:pair, …}`; its Σ type is
-  # derived by `Kernel.infer` on the enclosing application, which checks the pair
-  # against the callee's domain (so a dependent Σ parameter is honoured too).
+  # arguments and other sub-terms). Emits the builtin Sigma ctor `mk_pair`; its Σ
+  # type is derived by `Kernel.infer` on the enclosing application, which checks the
+  # ctor against the callee's domain (so a dependent Σ parameter is honoured too).
   def elaborate_expr({:tuple, _meta, [a, b]}, scope, env) do
     with {:ok, a_core} <- elaborate_expr(a, scope, env),
          {:ok, b_core} <- elaborate_expr(b, scope, env) do
-      {:ok, {:pair, a_core, b_core}}
+      {:ok, {:ctor, sigma_ctor_name(env), [a_core, b_core]}}
+    end
+  end
+
+  # The registered Sigma constructor name (canonically `:mk_pair`), resolved via the
+  # builtin registry (§1.4) rather than hard-coded; defaults to `:mk_pair` when no
+  # Sigma family is registered (a raw `Env.empty()` elaboration).
+  defp sigma_ctor_name(env) do
+    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
+         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
+      n
+    else
+      _ -> :mk_pair
     end
   end
 
@@ -4625,9 +4800,10 @@ defmodule Cure.Elab.Elaborator do
       if Inductive.get_ctor(env, atom) do
         # A constructor head applied to arguments is a saturated constructor, not
         # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:
-        # `resolve_free` only ever yields the NULLARY `{:ctor, atom, []}`, so
-        # folding args on with `{:app, …}` would apply a nullary ctor to an
-        # argument and the kernel would reject it (`:ctor_arity`).
+        # this saturated-call clause builds the saturated ctor directly, while
+        # `resolve_free` eta-expands bare positive-arity ctors (all-present,
+        # unindexed) into lambdas and yields the nullary `{:ctor, atom, []}`
+        # form otherwise.
         {:ok, {:ctor, atom, core_args}}
       else
         with {:ok, head} <- elaborate_expr({:variable, [], name}, scope, env) do
@@ -4642,9 +4818,56 @@ defmodule Cure.Elab.Elaborator do
     atom = String.to_atom(name)
 
     cond do
-      Inductive.get_ctor(env, atom) -> {:ok, {:ctor, atom, []}}
+      Inductive.get_ctor(env, atom) ->
+        eta_expand_bare_ctor(env, atom)
+
       Inductive.family?(env, atom) -> {:ok, {:data, atom, [], []}}
-      true -> {:ok, {:global, atom}}
+      # Bare VALUE position mirrors the call-position R7 trichotomy: a name
+      # provided by ≥2 re-keyed imports with no local/unshadowed winner is
+      # ambiguous (E089), same tuple shape as the call site.
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
+
+      # A bare def key present is the local winner (or a non-colliding import that
+      # kept its bare key): keep it. `resolve_bare_shadowed/2`'s contract requires
+      # this bare-absence check before the shadowed-import fallback, otherwise a
+      # re-keyed sibling (`Std.Nat#plus`) would override a local `plus`.
+      Map.has_key?(env.defs, atom) ->
+        {:ok, {:global, atom}}
+
+      # No local winner, no ambiguity: if exactly one re-keyed import provides
+      # the name, resolve to that qualified key; else keep the bare global.
+      true ->
+        case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+          {:ok, key} -> {:ok, {:global, key}}
+          _ -> {:ok, {:global, atom}}
+        end
+    end
+  end
+
+  # A bare positive-arity constructor reference eta-expands to nested lambdas
+  # (`S` becomes `λ n:Nat. S(n)`) so first-class ctor values elaborate instead
+  # of dying at the kernel's arity check (:ctor_arity) — the general gap behind
+  # spec 2026-07-08-nat-int-erasure rule 4 (Idris allows bare `S` everywhere).
+  # Scope: ctors whose args are all explicit/:present and whose result carries
+  # no params/indices. An implicit-carrying or indexed ctor keeps today's
+  # nullary resolution (and today's downstream error): a lambda-typed value
+  # cannot receive implicit insertion at its call sites, so eta-expanding it
+  # would produce an unusable value rather than a working one.
+  defp eta_expand_bare_ctor(env, atom) do
+    %{args: tele, quantities: qs, result_params: rp, result_indices: ri} =
+      Inductive.get_ctor(env, atom)
+
+    k = length(tele)
+
+    if k > 0 and Enum.all?(qs, &(&1 == :present)) and rp == [] and ri == [] do
+      body_args = for i <- (k - 1)..0//-1, do: {:var, i}
+      body = {:ctor, atom, body_args}
+
+      {:ok,
+       Enum.reduce(Enum.reverse(tele), body, fn {_name, dom}, acc -> {:lam, dom, acc} end)}
+    else
+      {:ok, {:ctor, atom, []}}
     end
   end
 

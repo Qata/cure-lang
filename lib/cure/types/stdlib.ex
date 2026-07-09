@@ -33,7 +33,7 @@ defmodule Cure.Types.Stdlib do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Stdlib.Paths
-  alias Cure.Types.{Env, Refinement, Type}
+  alias Cure.Types.{Env, Type}
 
   @persistent_key {__MODULE__, :signatures_v3}
 
@@ -47,11 +47,11 @@ defmodule Cure.Types.Stdlib do
       function names (`"map"`) to signatures. Installed selectively
       in response to `use Std.Mod` imports.
     * `:qualified_types` -- map of fully qualified type names
-      (`"Std.Refine.Positive"`) to canonical types. Currently only
+      (`"Std.Mod.TypeName"`) to canonical types. Currently only
       consumed by tests / introspection; Cure surface syntax does
       not address types by qualified name yet.
     * `:types_by_module` -- map of `"Std.Mod"` to a map of short
-      type names (`"Positive"`) to canonical types. Installed into
+      type names (`"TypeName"`) to canonical types. Installed into
       `env.types` selectively in response to `use Std.Mod`.
   """
   @type bundle :: %{
@@ -107,8 +107,8 @@ defmodule Cure.Types.Stdlib do
 
   @doc """
   Return the short-name type map for one stdlib module. The values are
-  canonical Cure types (`{:refinement, ...}`, `{:adt, ...}`, primitive
-  atoms for plain aliases). Returns `%{}` when the module is unknown.
+  canonical Cure types (`{:adt, ...}`, primitive atoms for plain
+  aliases). Returns `%{}` when the module is unknown.
   """
   @spec short_types_for(String.t()) :: %{String.t() => term()}
   def short_types_for(module_name) when is_binary(module_name) do
@@ -176,9 +176,8 @@ defmodule Cure.Types.Stdlib do
   Extend `env.types` with short-name type aliases from a single stdlib
   module. Mirrors `install_import/2` at the type level: a `use Std.Mod`
   in user code now also brings every public type alias from that module
-  into scope, so a parameter declared as `Positive` resolves to its
-  underlying refinement type rather than remaining a bare nominal
-  reference.
+  into scope, so a parameter declared with an aliased name resolves to
+  its underlying type rather than remaining a bare nominal reference.
   """
   @spec install_import_types(Env.t(), String.t()) :: Env.t()
   def install_import_types(%Env{} = env, module_name) when is_binary(module_name) do
@@ -308,11 +307,8 @@ defmodule Cure.Types.Stdlib do
 
   # Lift top-level type declarations:
   #
-  #   * `{:type_annotation, [refinement: true, name: name, ...], children}`
-  #     -- a refinement type alias built via `Refinement.from_type_annotation/2`.
-  #   * `{:type_annotation, [name: name, ...], [inner_ast]}` (no
-  #     `:refinement` flag) -- a plain type alias resolved through
-  #     `Type.resolve/1`.
+  #   * `{:type_annotation, [name: name, ...], [inner_ast]}` -- a plain
+  #     type alias resolved through `Type.resolve/1`.
   #   * `{:container, [container_type: :enum, name: name, type_params: tp], _}`
   #     -- an ADT, registered as `{:adt, downcased_name_atom,
   #     param_type_vars}` to match the user-side enum bookkeeping.
@@ -341,12 +337,6 @@ defmodule Cure.Types.Stdlib do
     cond do
       not is_binary(name) ->
         nil
-
-      Keyword.get(meta, :refinement) ->
-        case Refinement.from_type_annotation(meta, children) do
-          nil -> nil
-          ref -> {name, ref}
-        end
 
       true ->
         case children do

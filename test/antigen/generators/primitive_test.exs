@@ -9,14 +9,24 @@ defmodule Antigen.Generators.PrimitiveTest do
 
   @sample 400
 
-  test "every sampled prim challenge is a well-typed :typed_term over v1" do
+  # K2 (spec 2026-07-09): the generator emits builtin-op GLOBAL spines, not
+  # {:prim} nodes. The op is the spine's head global name.
+  defp spine?({:app, {:app, {:global, _g}, _a}, _b}), do: true
+  defp spine?({:app, {:global, _g}, _a}), do: true
+  defp spine?(_), do: false
+
+  defp op_of({:app, {:app, {:global, g}, _a}, _b}), do: g
+  defp op_of({:app, {:global, g}, _a}), do: g
+
+  test "every sampled builtin-op challenge is a well-typed :typed_term over v1" do
     for %Challenge{} = c <- B.interp(Primitive.gen()) |> Enum.take(@sample) do
       assert c.kind == :typed_term
       assert c.assay in Antigen.Generators.Term.assay_ids()
       assert c.payload.sig == :v1
       assert c.payload.ctx == []
-      assert match?({:prim, _op, _args}, c.payload.term),
-             "expected a :prim term, got #{inspect(c.payload.term)}"
+
+      assert spine?(c.payload.term),
+             "expected a builtin-op global spine, got #{inspect(c.payload.term)}"
 
       cx = ctx()
 
@@ -24,11 +34,13 @@ defmodule Antigen.Generators.PrimitiveTest do
         {:ok, inferred} ->
           # the claimed type is exactly the inferred type
           assert Normalise.quote(inferred, Context.length(cx)) == c.payload.type
-          # and it normalizes without fuel exhaustion (exercises Eval.fold)
-          assert Normalise.nf(cx, c.payload.term, fuel: 500_000) != :fuel_exhausted
+          # and it normalizes without fuel exhaustion (exercises the certified-δ
+          # builtin-op fold)
+          assert Normalise.nf(cx, c.payload.term, fuel: 500_000, delta: :certified) !=
+                   :fuel_exhausted
 
         other ->
-          flunk("prim term failed to infer: #{inspect(c.payload.term)} -> #{inspect(other)}")
+          flunk("builtin-op term failed to infer: #{inspect(c.payload.term)} -> #{inspect(other)}")
       end
     end
   end
@@ -36,8 +48,13 @@ defmodule Antigen.Generators.PrimitiveTest do
   test "the sample exercises every arithmetic op and both numeric types" do
     sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
 
-    ops = sample |> Enum.map(fn c -> elem(c.payload.term, 1) end) |> MapSet.new()
-    for op <- [:add, :sub, :mul, :div, :rem, :neg], do: assert(op in ops, "op #{op} never generated")
+    ops = sample |> Enum.map(fn c -> op_of(c.payload.term) end) |> MapSet.new()
+
+    for op <- [:int_add, :int_sub, :int_mul, :int_div, :int_rem, :int_neg],
+        do: assert(op in ops, "op #{op} never generated")
+
+    for op <- [:float_add, :float_sub, :float_mul, :float_div, :float_neg],
+        do: assert(op in ops, "op #{op} never generated")
 
     types = sample |> Enum.map(fn c -> c.payload.type end) |> MapSet.new()
     assert {:int_type} in types
@@ -47,23 +64,31 @@ defmodule Antigen.Generators.PrimitiveTest do
   test "the sample exercises Bool-returning numeric comparisons" do
     sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
 
-    ops = sample |> Enum.map(fn c -> elem(c.payload.term, 1) end) |> MapSet.new()
-    for op <- [:lt, :le, :gt, :ge, :eq, :ne], do: assert(op in ops, "op #{op} never generated")
+    ops = sample |> Enum.map(fn c -> op_of(c.payload.term) end) |> MapSet.new()
+
+    for op <- [:int_lt, :int_le, :int_gt, :int_ge, :int_eq, :int_ne],
+        do: assert(op in ops, "op #{op} never generated")
+
+    for op <- [:float_lt, :float_le, :float_gt, :float_ge, :float_eq, :float_ne],
+        do: assert(op in ops, "op #{op} never generated")
 
     # at least one challenge claims the Bool type
     assert Enum.any?(sample, fn c -> c.payload.type == {:data, :Bool, [], []} end)
 
-    # connectives (:and/:or/:not) are retired from the kernel — the generator must
-    # NOT emit them (they would infer-fail as {:unknown_prim, op})
-    refute Enum.any?(sample, fn c -> elem(c.payload.term, 1) in [:and, :or, :not] end)
+    # connectives (:and/:or/:not) are Std.Bool case-defs — the generator must
+    # NOT emit spines headed by them
+    refute Enum.any?(sample, fn c -> op_of(c.payload.term) in [:and, :or, :not] end)
   end
 
-  test "the sample includes at least one stuck (zero-divisor) prim" do
+  test "the sample includes at least one stuck (zero-divisor) op spine" do
     sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
 
     assert Enum.any?(sample, fn c ->
-             match?({:prim, op, [_, {:int_lit, 0}]} when op in [:div, :rem], c.payload.term)
+             match?(
+               {:app, {:app, {:global, g}, _}, {:int_lit, 0}} when g in [:int_div, :int_rem],
+               c.payload.term
+             )
            end),
-           "no zero-divisor prim generated (needed to hit Eval.fold's :stuck clauses)"
+           "no zero-divisor spine generated (needed to hit the fold's :stuck clauses)"
   end
 end

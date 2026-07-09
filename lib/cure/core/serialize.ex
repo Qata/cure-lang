@@ -10,8 +10,8 @@ defmodule Cure.Core.Serialize do
   names are symbols, hole labels are quoted strings, and `case` branches are
   `(branch <ctor> <arity> <body>)`.
 
-      encode({:prim, :add, [{:int_lit, 3}, {:int_lit, 5}]})
-      #=> "(prim add (int 3) (int 5))"
+      encode({:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}})
+      #=> "(app (app (global int_add) (int 3)) (int 5))"
   """
 
   @doc "Encode a Core term as a canonical S-expression string."
@@ -24,20 +24,12 @@ defmodule Cure.Core.Serialize do
   defp enc({:pi, d, c}), do: node("pi", [d, c])
   defp enc({:lam, d, b}), do: node("lam", [d, b])
   defp enc({:app, f, a}), do: node("app", [f, a])
-  defp enc({:sigma, a, b}), do: node("sigma", [a, b])
-  defp enc({:pair, a, b}), do: node("pair", [a, b])
-  defp enc({:fst, p}), do: node("fst", [p])
-  defp enc({:snd, p}), do: node("snd", [p])
-  defp enc({:eq, t, a, b}), do: node("eq", [t, a, b])
-  defp enc({:refl, a}), do: node("refl", [a])
-  defp enc({:rewrite, pr, m, b}), do: node("rewrite", [pr, m, b])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
   defp enc({:int_type}), do: "(int-type)"
   defp enc({:float_type}), do: "(float-type)"
   defp enc({:int_lit, n}), do: ["(int ", Integer.to_string(n), ")"]
   defp enc({:float_lit, f}), do: ["(float ", Float.to_string(f), ")"]
-  defp enc({:prim, op, args}), do: ["(prim ", sym(op), args_iodata(args), ")"]
   defp enc({:ctor, name, args}), do: ["(ctor ", sym(name), args_iodata(args), ")"]
 
   defp enc({:data, name, params, indices}),
@@ -153,26 +145,6 @@ defmodule Cure.Core.Serialize do
   defp build_node("pi", [d, c]), do: binary(:pi, d, c)
   defp build_node("lam", [d, b]), do: binary(:lam, d, b)
   defp build_node("app", [f, a]), do: binary(:app, f, a)
-  defp build_node("sigma", [a, b]), do: binary(:sigma, a, b)
-  defp build_node("pair", [a, b]), do: binary(:pair, a, b)
-  defp build_node("fst", [p]), do: unary(:fst, p)
-  defp build_node("snd", [p]), do: unary(:snd, p)
-  defp build_node("refl", [a]), do: unary(:refl, a)
-
-  defp build_node("eq", [t, a, b]) do
-    with {:ok, tt} <- build(t), {:ok, ta} <- build(a), {:ok, tb} <- build(b),
-         do: {:ok, {:eq, tt, ta, tb}}
-  end
-
-  defp build_node("rewrite", [pr, m, b]) do
-    with {:ok, tp} <- build(pr), {:ok, tm} <- build(m), {:ok, tb} <- build(b),
-         do: {:ok, {:rewrite, tp, tm, tb}}
-  end
-
-  defp build_node("prim", [{:atom, op} | args]) do
-    with {:ok, o} <- sym_atom(op), {:ok, cargs} <- build_all(args),
-         do: {:ok, {:prim, o, cargs}}
-  end
 
   defp build_node("ctor", [{:atom, name} | args]) do
     with {:ok, a} <- sym_atom(name), {:ok, cargs} <- build_all(args),

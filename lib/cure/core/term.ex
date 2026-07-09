@@ -15,18 +15,11 @@ defmodule Cure.Core.Term do
     * `{:pi, dom, cod}`                      dependent function type (binds in `cod`)
     * `{:lam, dom, body}`                    lambda (binds in `body`)
     * `{:app, f, a}`                         application
-    * `{:sigma, a, b}`                       dependent pair type (binds in `b`)
-    * `{:pair, a, b}`                        pair introduction
-    * `{:fst, p}` / `{:snd, p}`              projections
     * `{:data, name, params, indices}`       family applied to params + indices
     * `{:ctor, name, args}`                  data constructor application
     * `{:case, scrut, motive, branches}`     dependent eliminator;
                                              `branches :: [{ctor_name, arity, body}]`
     * `{:global, name}`                      reference to a global def
-    * `{:eq, ty, a, b}`                      propositional equality type
-    * `{:refl, a}`                           reflexivity proof
-    * `{:rewrite, proof, motive, body}`      transport / subst
-    * `{:prim, op, args}`                    primitive operation
     * `{:int_type}` / `{:int_lit, n}`        integer type / literal
     * `{:float_type}` / `{:float_lit, f}`    float type / literal
     (Bool is a real inductive family, not a primitive term form.)
@@ -54,10 +47,6 @@ defmodule Cure.Core.Term do
   def term?({:pi, dom, cod}), do: term?(dom) and term?(cod)
   def term?({:lam, dom, body}), do: term?(dom) and term?(body)
   def term?({:app, f, a}), do: term?(f) and term?(a)
-  def term?({:sigma, a, b}), do: term?(a) and term?(b)
-  def term?({:pair, a, b}), do: term?(a) and term?(b)
-  def term?({:fst, p}), do: term?(p)
-  def term?({:snd, p}), do: term?(p)
 
   def term?({:data, name, params, indices}),
     do: is_atom(name) and terms?(params) and terms?(indices)
@@ -68,13 +57,6 @@ defmodule Cure.Core.Term do
     do: term?(scrut) and term?(motive) and branches?(branches)
 
   def term?({:global, name}), do: is_atom(name)
-  def term?({:eq, ty, a, b}), do: term?(ty) and term?(a) and term?(b)
-  def term?({:refl, a}), do: term?(a)
-
-  def term?({:rewrite, proof, motive, body}),
-    do: term?(proof) and term?(motive) and term?(body)
-
-  def term?({:prim, op, args}), do: is_atom(op) and terms?(args)
 
   def term?({:int_type}), do: true
   def term?({:int_lit, n}), do: is_integer(n)
@@ -85,7 +67,7 @@ defmodule Cure.Core.Term do
 
   # -- de Bruijn shift / substitution -----------------------------------------
   #
-  # Binder convention: `:pi`/`:lam`/`:sigma` introduce exactly one binder in
+  # Binder convention: `:pi`/`:lam` introduce exactly one binder in
   # their codomain/body. A `:case` branch `{ctor, arity, body}` binds `arity`
   # variables in `body`. Motives (`:case`/`:rewrite`) are represented as
   # lambda-chains, so their binders are the ordinary `:lam` nodes inside them
@@ -107,11 +89,7 @@ defmodule Cure.Core.Term do
   def shift({:float_lit, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
   def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
-  def shift({:sigma, x, y}, a, c), do: {:sigma, shift(x, a, c), shift(y, a, c + 1)}
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
-  def shift({:pair, x, y}, a, c), do: {:pair, shift(x, a, c), shift(y, a, c)}
-  def shift({:fst, p}, a, c), do: {:fst, shift(p, a, c)}
-  def shift({:snd, p}, a, c), do: {:snd, shift(p, a, c)}
 
   def shift({:data, n, ps, is}, a, c),
     do: {:data, n, Enum.map(ps, &shift(&1, a, c)), Enum.map(is, &shift(&1, a, c))}
@@ -121,13 +99,7 @@ defmodule Cure.Core.Term do
   def shift({:case, s, m, brs}, a, c),
     do: {:case, shift(s, a, c), shift(m, a, c), Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, a, c + ar)} end)}
 
-  def shift({:eq, ty, x, y}, a, c), do: {:eq, shift(ty, a, c), shift(x, a, c), shift(y, a, c)}
-  def shift({:refl, x}, a, c), do: {:refl, shift(x, a, c)}
 
-  def shift({:rewrite, p, m, b}, a, c),
-    do: {:rewrite, shift(p, a, c), shift(m, a, c), shift(b, a, c)}
-
-  def shift({:prim, op, args}, a, c), do: {:prim, op, Enum.map(args, &shift(&1, a, c))}
 
   @doc """
   Is `term` closed (no free de Bruijn variables)?
@@ -135,7 +107,7 @@ defmodule Cure.Core.Term do
   A closed term has no variable index that escapes its own binders. Only a
   genuine free `{:var, k}` counts as open — non-variable leaves (`{:hole, _}`,
   globals, types, literals) are closed. The binder structure mirrors `shift/3`
-  exactly (the trusted source of truth): `:lam`/`:pi`/`:sigma` bind one variable
+  exactly (the trusted source of truth): `:lam`/`:pi` bind one variable
   in their body/codomain, and each `:case` branch binds `arity`; every other form
   is traversed at the same depth. Kept in lockstep with `shift/3` — if a new
   binding form is added there, add it here.
@@ -146,7 +118,6 @@ defmodule Cure.Core.Term do
   defp has_free_var?({:var, k}, depth), do: k >= depth
   defp has_free_var?({:lam, d, b}, depth), do: has_free_var?(d, depth) or has_free_var?(b, depth + 1)
   defp has_free_var?({:pi, d, c}, depth), do: has_free_var?(d, depth) or has_free_var?(c, depth + 1)
-  defp has_free_var?({:sigma, a, b}, depth), do: has_free_var?(a, depth) or has_free_var?(b, depth + 1)
 
   defp has_free_var?({:case, s, m, brs}, depth) do
     has_free_var?(s, depth) or has_free_var?(m, depth) or
@@ -154,7 +125,7 @@ defmodule Cure.Core.Term do
   end
 
   # Non-binding forms: recurse into every sub-term at the same depth. Covers
-  # :app/:pair/:fst/:snd/:ctor/:data/:eq/:refl/:rewrite/:prim and anything else.
+  # :app/:ctor/:data/:eq/:refl/:rewrite/:prim and anything else.
   defp has_free_var?(t, depth) when is_tuple(t),
     do: t |> Tuple.to_list() |> Enum.any?(&has_free_var?(&1, depth))
 
@@ -186,13 +157,7 @@ defmodule Cure.Core.Term do
   def subst({:lam, dom, body}, j, r),
     do: {:lam, subst(dom, j, r), subst(body, j + 1, shift(r, 1, 0))}
 
-  def subst({:sigma, x, y}, j, r),
-    do: {:sigma, subst(x, j, r), subst(y, j + 1, shift(r, 1, 0))}
-
   def subst({:app, f, x}, j, r), do: {:app, subst(f, j, r), subst(x, j, r)}
-  def subst({:pair, x, y}, j, r), do: {:pair, subst(x, j, r), subst(y, j, r)}
-  def subst({:fst, p}, j, r), do: {:fst, subst(p, j, r)}
-  def subst({:snd, p}, j, r), do: {:snd, subst(p, j, r)}
 
   def subst({:data, n, ps, is}, j, r),
     do: {:data, n, Enum.map(ps, &subst(&1, j, r)), Enum.map(is, &subst(&1, j, r))}
@@ -204,15 +169,6 @@ defmodule Cure.Core.Term do
       {:case, subst(s, j, r), subst(m, j, r),
        Enum.map(brs, fn {cn, ar, b} -> {cn, ar, subst(b, j + ar, shift(r, ar, 0))} end)}
 
-  def subst({:eq, ty, x, y}, j, r),
-    do: {:eq, subst(ty, j, r), subst(x, j, r), subst(y, j, r)}
-
-  def subst({:refl, x}, j, r), do: {:refl, subst(x, j, r)}
-
-  def subst({:rewrite, p, m, b}, j, r),
-    do: {:rewrite, subst(p, j, r), subst(m, j, r), subst(b, j, r)}
-
-  def subst({:prim, op, args}, j, r), do: {:prim, op, Enum.map(args, &subst(&1, j, r))}
 
   # -- serialization (commitment C2) ------------------------------------------
   #
@@ -231,15 +187,6 @@ defmodule Cure.Core.Term do
 
   def to_external({:app, f, a}),
     do: %{"node" => "app", "fun" => to_external(f), "arg" => to_external(a)}
-
-  def to_external({:sigma, a, b}),
-    do: %{"node" => "sigma", "fst" => to_external(a), "snd" => to_external(b)}
-
-  def to_external({:pair, a, b}),
-    do: %{"node" => "pair", "fst" => to_external(a), "snd" => to_external(b)}
-
-  def to_external({:fst, p}), do: %{"node" => "fst", "pair" => to_external(p)}
-  def to_external({:snd, p}), do: %{"node" => "snd", "pair" => to_external(p)}
 
   def to_external({:data, n, ps, is}),
     do: %{
@@ -265,22 +212,6 @@ defmodule Cure.Core.Term do
 
   def to_external({:global, n}), do: %{"node" => "global", "name" => Atom.to_string(n)}
 
-  def to_external({:eq, ty, a, b}),
-    do: %{"node" => "eq", "type" => to_external(ty), "lhs" => to_external(a), "rhs" => to_external(b)}
-
-  def to_external({:refl, a}), do: %{"node" => "refl", "value" => to_external(a)}
-
-  def to_external({:rewrite, p, m, b}),
-    do: %{
-      "node" => "rewrite",
-      "proof" => to_external(p),
-      "motive" => to_external(m),
-      "body" => to_external(b)
-    }
-
-  def to_external({:prim, op, args}),
-    do: %{"node" => "prim", "op" => Atom.to_string(op), "args" => Enum.map(args, &to_external/1)}
-
   def to_external({:int_type}), do: %{"node" => "int_type"}
   def to_external({:int_lit, n}), do: %{"node" => "int_lit", "value" => n}
   def to_external({:float_type}), do: %{"node" => "float_type"}
@@ -300,15 +231,6 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "app", "fun" => f, "arg" => a}),
     do: {:app, from_external(f), from_external(a)}
 
-  def from_external(%{"node" => "sigma", "fst" => a, "snd" => b}),
-    do: {:sigma, from_external(a), from_external(b)}
-
-  def from_external(%{"node" => "pair", "fst" => a, "snd" => b}),
-    do: {:pair, from_external(a), from_external(b)}
-
-  def from_external(%{"node" => "fst", "pair" => p}), do: {:fst, from_external(p)}
-  def from_external(%{"node" => "snd", "pair" => p}), do: {:snd, from_external(p)}
-
   def from_external(%{"node" => "data", "name" => n, "params" => ps, "indices" => is}),
     do: {:data, sym_atom(n), Enum.map(ps, &from_external/1), Enum.map(is, &from_external/1)}
 
@@ -323,17 +245,6 @@ defmodule Cure.Core.Term do
        end)}
 
   def from_external(%{"node" => "global", "name" => n}), do: {:global, sym_atom(n)}
-
-  def from_external(%{"node" => "eq", "type" => ty, "lhs" => a, "rhs" => b}),
-    do: {:eq, from_external(ty), from_external(a), from_external(b)}
-
-  def from_external(%{"node" => "refl", "value" => a}), do: {:refl, from_external(a)}
-
-  def from_external(%{"node" => "rewrite", "proof" => p, "motive" => m, "body" => b}),
-    do: {:rewrite, from_external(p), from_external(m), from_external(b)}
-
-  def from_external(%{"node" => "prim", "op" => op, "args" => args}),
-    do: {:prim, sym_atom(op), Enum.map(args, &from_external/1)}
 
   def from_external(%{"node" => "int_type"}), do: {:int_type}
   def from_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}

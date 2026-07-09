@@ -6,10 +6,12 @@ defmodule Cure.Core.EvalTest do
     assert {:vtype, 0} == Eval.eval({:app, {:lam, {:type, 0}, {:var, 0}}, {:type, 0}}, [])
   end
 
-  test "iota-reduces pair projections on a value pair" do
-    pair = {:pair, {:type, 0}, {:type, 1}}
-    assert {:vtype, 0} == Eval.eval({:fst, pair}, [])
-    assert {:vtype, 1} == Eval.eval({:snd, pair}, [])
+  test "iota-reduces mk_pair projections via a single-branch case" do
+    # Inductive Sigma (D2): projection is a `:case` over the `mk_pair` ctor.
+    pair = {:ctor, :mk_pair, [{:type, 0}, {:type, 1}]}
+    motive = {:lam, {:type, 0}, {:type, 0}}
+    assert {:vtype, 0} == Eval.eval({:case, pair, motive, [{:mk_pair, 2, {:var, 1}}]}, [])
+    assert {:vtype, 1} == Eval.eval({:case, pair, motive, [{:mk_pair, 2, {:var, 0}}]}, [])
   end
 
   test "a free variable evaluates to a neutral var" do
@@ -21,8 +23,10 @@ defmodule Cure.Core.EvalTest do
   end
 
   test "a stuck projection on a neutral stays neutral" do
-    assert {:vneutral, {:nfst, {:nvar, 0}}} ==
-             Eval.eval({:fst, {:var, 0}}, [{:vneutral, {:nvar, 0}}])
+    # Inductive Sigma (D2): a projection case on a neutral scrutinee is a stuck ncase.
+    motive = {:lam, {:type, 0}, {:type, 0}}
+    assert {:vneutral, {:ncase, {:nvar, 0}, _, _}} =
+             Eval.eval({:case, {:var, 0}, motive, [{:mk_pair, 2, {:var, 1}}]}, [{:vneutral, {:nvar, 0}}])
   end
 
   test "apply extends the environment with the argument at index 0" do

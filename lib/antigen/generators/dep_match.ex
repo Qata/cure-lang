@@ -37,7 +37,7 @@ defmodule Antigen.Generators.DepMatch do
     {:int_type},
     {:float_type},
     {:pi, @nat, @nat},
-    {:sigma, @nat, @nat},
+    {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []},
     {:data, :Vec, [@z], []}
   ]
   @ty_branches [
@@ -81,29 +81,31 @@ defmodule Antigen.Generators.DepMatch do
       # dependent motives: Vec m (type-former) and Eq Nat m m (propositional)
       {3, var_index(:vec)},
       {2, var_index(:eq)},
+      # D1 neutral-application motive λm.λv. b(m) — the napp sort clause
+      {2, neutral_app_motive_case()},
       # closed indices — force an :impossible branch (constant Nat motive)
       {2, closed_index(@z)},
       {2, closed_index({:ctor, :S, [@z]})},
       # extra context variable whose TYPE mentions the scrutinee index — branch
       # refinement specializes it via specialize_branch_context, driving
-      # replace_branch_vars over Eq / Σ / Π type shapes.
-      {2, var_index_extra({:eq, @nat, {:var, 1}, {:var, 1}})},
-      {2, var_index_extra({:sigma, @nat, vec({:var, 2})})},
+      # replace_branch_vars over Equivalent-data / Σ / Π type shapes.
+      {2, var_index_extra({:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]})},
+      {2, var_index_extra({:data, :Sigma, [@nat, {:lam, @nat, vec({:var, 2})}], []})},
       {2, var_index_extra({:pi, @nat, vec({:var, 2})})},
-      # extra context types carrying stuck value-level subterms (λ / pair / refl)
+      # extra context types carrying stuck value-level subterms (λ / pair / reflexive)
       # so specialize_branch_context's replace_branch_vars descends those arms.
-      {2, var_index_extra({:eq, {:pi, @nat, @nat}, {:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}})},
-      {2, var_index_extra({:eq, {:sigma, @nat, @nat}, {:pair, {:var, 1}, {:var, 1}}, {:pair, {:var, 1}, {:var, 1}}})},
-      {2, var_index_extra({:eq, {:eq, @nat, {:var, 1}, {:var, 1}}, {:refl, {:var, 1}}, {:refl, {:var, 1}}})},
+      {2, var_index_extra({:data, :Equivalent, [{:pi, @nat, @nat}], [{:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}]})},
+      {2, var_index_extra({:data, :Equivalent, [{:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}], [{:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}]})},
+      {2, var_index_extra({:data, :Equivalent, [{:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]}], [{:ctor, :reflexive, [{:var, 1}]}, {:ctor, :reflexive, [{:var, 1}]}]})},
       # two-var frame: a helper context var lets extra_ty carry a STUCK app /
-      # projection / prim — replace_branch_vars' app/fst/snd/prim arms.
-      {2, var_index_extra2({:pi, @nat, @nat}, {:eq, @nat, {:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}})},
-      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:fst, {:var, 1}}, {:fst, {:var, 1}}})},
-      {2, var_index_extra2({:sigma, @nat, @nat}, {:eq, @nat, {:snd, {:var, 1}}, {:snd, {:var, 1}}})},
-      {2, var_index_extra2({:int_type}, {:eq, {:int_type}, {:prim, :add, [{:var, 1}, {:var, 1}]}, {:prim, :add, [{:var, 1}, {:var, 1}]}})},
+      # projection / builtin-op spine (K2) — replace_branch_vars' app/fst/snd arms.
+      {2, var_index_extra2({:pi, @nat, @nat}, {:data, :Equivalent, [@nat], [{:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}]})},
+      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}]})},
+      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}]})},
+      {2, var_index_extra2({:int_type}, {:data, :Equivalent, [{:int_type}], [{:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}}, {:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}}]})},
       # a STUCK case over a Bool helper var in an index position — the case arm of
       # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.
-      {2, var_index_extra2(stuck_case_helper(), {:eq, @nat, stuck_case(), stuck_case()})},
+      {2, var_index_extra2(stuck_case_helper(), {:data, :Equivalent, [@nat], [stuck_case(), stuck_case()]})},
       # POLYMORPHIC motive: Γ = [n:Nat, x:a, a:Type0]; case n of Z→x | S→x with
       # motive λv:Nat. a — the result type is the Type-parameter VARIABLE a, so
       # check_motive_wf's infer_type_value_sort takes its neutral-var (nvar) clause
@@ -250,15 +252,23 @@ defmodule Antigen.Generators.DepMatch do
     )
   end
 
-  # case Z of Z→refl(List Nat) | S→refl(List Nat) with motive λv:Nat. Eq Type0
-  # (List Nat) (List Nat). Closed; result type is that Eq. Drives signature-aware
-  # read-back of the param-bearing family type `List Nat`.
+  # case Z of Z→reflexive(Nil) | S→reflexive(Nil) with motive λv:Nat.
+  # Equivalent (List Nat) Nil Nil. Closed; result type is that Equivalent.
+  # (Phase C retarget: the old form equated the TYPE `List Nat` at carrier
+  # Type0 via the primitive {:eq} — inexpressible as the inductive Equivalent,
+  # whose param lives in Type0. The param-bearing family `List Nat` now rides
+  # as Equivalent's PARAM, still driving signature-aware handling of a
+  # param-bearing family type through motive-WF and branch-body checks.)
   @list_nat {:data, :List, [{:data, :Nat, [], []}], []}
+  @nil_ln {:ctor, :Nil, []}
   defp eqtype_motive_case do
-    eqty = {:eq, {:type, 0}, @list_nat, @list_nat}
-    refl_ln = {:refl, @list_nat}
+    eqty = {:data, :Equivalent, [@list_nat], [@nil_ln, @nil_ln]}
+    refl_ln = {:ctor, :reflexive, [@nil_ln]}
+    # claimed type in FLAT params++indices form (reify has no signature to
+    # recover the split, so the inferred type reads back flat)
+    eqty_flat = {:data, :Equivalent, [@list_nat, @nil_ln, @nil_ln], []}
     Gen.return(
-      {[], {:case, @z, {:lam, @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty}
+      {[], {:case, @z, {:lam, @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty_flat}
     )
   end
 
@@ -284,15 +294,18 @@ defmodule Antigen.Generators.DepMatch do
     end)
   end
 
-  # Dependent motive λm.λv. Eq Nat m m — branch bodies are refl at the refined
-  # index (vnil : Eq Nat Z Z → refl Z; vcons : Eq Nat (S n) (S n) → refl (S n)).
+  # Dependent motive λm.λv. Equivalent Nat m m — branch bodies are reflexive at
+  # the refined index (vnil : Equivalent Nat Z Z → reflexive Z; vcons :
+  # Equivalent Nat (S n) (S n) → reflexive (S n)).
   defp var_index(:eq) do
-    eq_ty = fn m -> {:eq, @nat, m, m} end
+    eq_ty = fn m -> {:data, :Equivalent, [@nat], [m, m]} end
+    # claimed type in FLAT params++indices form (reify reads back flat)
+    eq_ty_flat = fn m -> {:data, :Equivalent, [@nat, m, m], []} end
     motive_eq = {:lam, @nat, {:lam, vec({:var, 0}), eq_ty.({:var, 1})}}
-    nil_body = {:refl, @z}
-    cons_body = {:refl, {:ctor, :S, [{:var, 2}]}}
+    nil_body = {:ctor, :reflexive, [@z]}
+    cons_body = {:ctor, :reflexive, [{:ctor, :S, [{:var, 2}]}]}
     term = mk_case({:var, 0}, motive_eq, [{:vnil, 0, nil_body}, {:vcons, 3, cons_body}])
-    Gen.return({[vec({:var, 0}), @nat], term, eq_ty.({:var, 1})})
+    Gen.return({[vec({:var, 0}), @nat], term, eq_ty_flat.({:var, 1})})
   end
 
   # Dependent motive λm.λv. Vec m — branch bodies must inhabit Vec at the refined
@@ -304,6 +317,28 @@ defmodule Antigen.Generators.DepMatch do
     # infer normalizes Vec's sole argument into the PARAMS slot (empty indices) —
     # the claimed type must match that reified normal form (see Generators.Term).
     Gen.return({[vec({:var, 0}), @nat], term, {:data, :Vec, [{:var, 1}], []}})
+  end
+
+  # D1 neutral-application motive: λm. λv:Vec(m). b(m) — the NEW napp shape
+  # (b is a free context variable of type (Nat) -> Type; b(m) reifies to
+  # {:app, <b>, <m>} and must sort via the new infer_type_value_sort clause).
+  # Closed to Vec(Z) so the vcons branch is :impossible (unify S k ~ Z fails,
+  # mirroring closed_index/1) — only vnil needs a real inhabitant, supplied by
+  # context witness w : b(Z).
+  #
+  # ctx (list position = final var index, per rebuild_context's reversed-fold):
+  #   0 = xs : Vec(Z)         (scrutinee)
+  #   1 = w  : b(Z)           (witness; its own type references b as {:var,0},
+  #                             the only var already bound at that point)
+  #   2 = b  : (Nat) -> Type
+  defp neutral_app_motive_case do
+    b_ty = {:pi, @nat, {:type, 0}}
+    w_ty = {:app, {:var, 0}, @z}
+    # under the motive's 2 own binders (m, v), ambient var k reads as {:var, 2+k}:
+    # b is ambient index 2 -> {:var, 4}; m is the motive's own outer binder -> {:var, 1}.
+    motive_napp = {:lam, @nat, {:lam, vec({:var, 0}), {:app, {:var, 4}, {:var, 1}}}}
+    term = mk_case({:var, 0}, motive_napp, [{:vnil, 0, {:var, 1}}, {:vcons, 3, @z}])
+    Gen.return({[vec(@z), w_ty, b_ty], term, {:app, {:var, 2}, @z}})
   end
 
   # Γ = [ xs : Vec <idx> (idx 0) ] with a closed index → one branch is :impossible.

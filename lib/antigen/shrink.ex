@@ -140,9 +140,6 @@ defmodule Antigen.Shrink do
   # rule 4: structural unwrap (Task 1: non-ctx rules incl. lam/case de Bruijn)
   defp rule4({:app, f, a}), do: [f, a]
   defp rule4({:ctor, _n, args}), do: args
-  defp rule4({:fst, p}), do: [p]
-  defp rule4({:snd, p}), do: [p]
-  defp rule4({:pair, a, b}), do: [a, b]
   defp rule4({:case, scrut, _m, branches}) do
     [scrut | for({_c, 0, body} <- branches, do: body)]   # scrut + arity-0 branch bodies only
   end
@@ -155,10 +152,6 @@ defmodule Antigen.Shrink do
   defp child_slots({:app, f, a}), do: [{&{:app, &1, a}, f}, {&{:app, f, &1}, a}]
   defp child_slots({:lam, d, b}), do: [{&{:lam, &1, b}, d}, {&{:lam, d, &1}, b}]
   defp child_slots({:pi, d, c}), do: [{&{:pi, &1, c}, d}, {&{:pi, d, &1}, c}]
-  defp child_slots({:sigma, a, b}), do: [{&{:sigma, &1, b}, a}, {&{:sigma, a, &1}, b}]
-  defp child_slots({:pair, a, b}), do: [{&{:pair, &1, b}, a}, {&{:pair, a, &1}, b}]
-  defp child_slots({:fst, p}), do: [{&{:fst, &1}, p}]
-  defp child_slots({:snd, p}), do: [{&{:snd, &1}, p}]
   defp child_slots({:ctor, n, args}), do: slot_list(args, &{:ctor, n, &1})
   defp child_slots({:data, n, ps, is}) do
     slot_list(ps, &{:data, n, &1, is}) ++ slot_list(is, &{:data, n, ps, &1})
@@ -170,19 +163,10 @@ defmodule Antigen.Shrink do
          {fn nb -> {:case, s, m, List.replace_at(brs, i, {c, ar, nb})} end, body}
        end))
   end
-  defp child_slots({:eq, ty, a, b}) do
-    [{&{:eq, &1, a, b}, ty}, {&{:eq, ty, &1, b}, a}, {&{:eq, ty, a, &1}, b}]
-  end
-  defp child_slots({:refl, a}), do: [{&{:refl, &1}, a}]
-  # :rewrite/:prim are real Core formers (Cure.Core.Term's node taxonomy) that
-  # `Term.gen_term`/`Antigen.Generators.Mutation` never construct today, so
-  # this clause is presently unreached — included anyway so term_candidates
-  # doesn't silently stop descending if either ever appears (no binder in
-  # either, matching Term.shift's own :rewrite/:prim clauses — no cutoff bump).
-  defp child_slots({:rewrite, p, m, b}) do
-    [{&{:rewrite, &1, m, b}, p}, {&{:rewrite, p, &1, b}, m}, {&{:rewrite, p, m, &1}, b}]
-  end
-  defp child_slots({:prim, op, args}), do: slot_list(args, &{:prim, op, &1})
+  # (The former :prim child-slot clause retired with the {:prim} node, K2:
+  # builtin-op spines are ordinary :app chains, covered by the :app clause.
+  # The former :rewrite clause retired with the primitive identity forms,
+  # Phase C.)
   defp child_slots(_leaf), do: []
 
   defp slot_list(elems, rebuild_list) do
@@ -212,7 +196,6 @@ defmodule Antigen.Shrink do
   def occurs?({:var, _}, _k), do: false
   def occurs?({:lam, d, b}, k), do: occurs?(d, k) or occurs?(b, k + 1)
   def occurs?({:pi, d, c}, k), do: occurs?(d, k) or occurs?(c, k + 1)
-  def occurs?({:sigma, a, b}, k), do: occurs?(a, k) or occurs?(b, k + 1)
   def occurs?({:case, s, m, brs}, k) do
     occurs?(s, k) or occurs?(m, k) or
       Enum.any?(brs, fn {_c, ar, body} -> occurs?(body, k + ar) end)
@@ -245,7 +228,6 @@ defmodule Antigen.Shrink do
   defp max_index_below({:var, _}, _depth), do: -1
   defp max_index_below({:lam, d, b}, depth), do: max(max_index_below(d, depth), max_index_below(b, depth + 1))
   defp max_index_below({:pi, d, c}, depth), do: max(max_index_below(d, depth), max_index_below(c, depth + 1))
-  defp max_index_below({:sigma, a, b}, depth), do: max(max_index_below(a, depth), max_index_below(b, depth + 1))
   defp max_index_below({:case, s, m, brs}, depth) do
     [max_index_below(s, depth), max_index_below(m, depth) |
      Enum.map(brs, fn {_c, ar, body} -> max_index_below(body, depth + ar) end)] |> Enum.max()

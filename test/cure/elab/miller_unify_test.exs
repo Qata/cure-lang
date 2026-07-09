@@ -70,25 +70,30 @@ defmodule Cure.Elab.MillerUnifyTest do
     assert {:lam, @nat, {:pi, @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
   end
 
-  test "Sigma solution: ?m(n) =? (Σk:Nat. Nat)  ⇒  ?m := λn. Σk:Nat. Nat" do
+  test "Sigma solution: ?m(n) =? Sigma(Nat, λ_.Nat)  ⇒  ?m := λn. Sigma(Nat, λ_.Nat)" do
     {ctx, m} = fam_ctx()
+    # Inductive Sigma (D2): the non-dependent pair type is `Sigma(Nat, λ_.Nat)`.
+    sig = {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
     t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, {:sigma, @nat, @nat}}
+    t2 = {:pi, @nat, sig}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, {:sigma, @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, @nat, sig} == Unify.zonk({:meta, m}, ctx2)
   end
 
-  test "Eq solution binding the pattern var: ?m(n) =? Eq Nat n n  ⇒  ?m := λn. Eq Nat n n" do
-    # The bound var n appears INSIDE the Eq — mabs must abstract it (var 0 under the
-    # solution's λ), not leave it dangling or escape. A wrong depth yields the wrong
-    # endpoint.
+  test "Equivalent solution binding the pattern var: ?m(n) =? Eq Nat n n  ⇒  ?m := λn. Eq Nat n n" do
+    # The bound var n appears INSIDE the Equivalent's index positions — mabs's
+    # :data clause must abstract it (var 0 under the solution's λ), not leave it
+    # dangling or escape. A wrong depth yields the wrong endpoint. (Migrated
+    # from the primitive {:eq} spelling when the form retired, Phase C; the
+    # dedicated mabs {:eq} clause retired with it.)
     {ctx, m} = fam_ctx()
+    eqv = {:data, :Equivalent, [@nat], [{:var, 0}, {:var, 0}]}
     t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, {:eq, @nat, {:var, 0}, {:var, 0}}}
+    t2 = {:pi, @nat, eqv}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, {:eq, @nat, {:var, 0}, {:var, 0}}} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, @nat, eqv} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "indexed-family solution: ?m(n) =? Vec n  ⇒  ?m := λn. Vec n (index abstracted)" do
@@ -109,10 +114,12 @@ defmodule Cure.Elab.MillerUnifyTest do
              solve_index(ctx, m, {:ctor, :S, [{:var, 0}]})
   end
 
-  test "prim-valued index: Vec(?m n) =? Vec(add n n)  ⇒  ?m := λn. add n n" do
+  test "op-spine-valued index: Vec(?m n) =? Vec(int_add n n)  ⇒  ?m := λn. int_add n n" do
+    # K2 re-spell: computed index is a builtin-op global spine (mabs's generic
+    # {:app} clause abstracts it; same solution shape).
     {ctx, m} = fam_ctx_nn()
-    assert {:lam, @nat, {:prim, :add, [{:var, 0}, {:var, 0}]}} ==
-             solve_index(ctx, m, {:prim, :add, [{:var, 0}, {:var, 0}]})
+    spine = {:app, {:app, {:global, :int_add}, {:var, 0}}, {:var, 0}}
+    assert {:lam, @nat, spine} == solve_index(ctx, m, spine)
   end
 
   test "case-valued index: Vec(?m n) =? Vec(case n {Z→Z; S k→k})  ⇒  ?m := λn. case n {…}" do

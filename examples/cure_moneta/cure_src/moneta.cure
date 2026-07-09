@@ -1,7 +1,7 @@
 mod Moneta
   ## Money, accounts, and ledger operations written in Cure.
   #
-  # Demonstrates: multi-line ADT, refinement types (PositiveAmount, Rate),
+  # Demonstrates: multi-line ADT, domain aliases (PositiveAmount, Rate),
   # records with fractional_units field, Show and Eq protocols, pattern
   # exhaustiveness on Currency, Result-chaining, @extern FFI for float
   # arithmetic, and recursive list operations over a ledger.
@@ -38,20 +38,20 @@ mod Moneta
   local fn str_repeat(s: String, n: Int) -> String
 
   # ---------------------------------------------------------------------------
-  # Refinement types
+  # Domain aliases (documented invariants unchecked pending SMTCoq)
   # ---------------------------------------------------------------------------
 
-  ## A positive integer amount. Used to type-check deposits and scale factors,
-  ## ensuring the caller never accidentally passes zero or negative values.
-  ## Z3 proves: PositiveAmount <: NonNegAmount (forall a. a > 0 => a >= 0).
-  type PositiveAmount = {a: Int | a > 0}
+  ## A positive integer amount (invariant: a > 0). Names deposits and scale
+  ## factors; the invariant is unchecked for now.
+  type PositiveAmount = Int
 
-  ## A non-negative integer amount. Valid for balances after subtraction.
-  type NonNegAmount = {a: Int | a >= 0}
+  ## A non-negative integer amount (invariant: a >= 0). Valid for balances
+  ## after subtraction.
+  type NonNegAmount = Int
 
-  ## A positive float exchange rate (target minor units per source minor unit).
-  ## Z3 proves: Rate is satisfiable (r = 1.0 satisfies r > 0.0).
-  type Rate = {r: Float | r > 0.0}
+  ## A positive float exchange rate (invariant: r > 0.0), target minor units
+  ## per source minor unit.
+  type Rate = Float
 
   # ---------------------------------------------------------------------------
   # ADT -- Currency
@@ -227,14 +227,14 @@ mod Moneta
         Error("insufficient funds: balance " <> show(a) <> " < " <> show(b))
 
   ## Scale Money by a positive integer factor (e.g. unit price * quantity).
-  ## The refinement type {n: Int | n > 0} is checked at compile time by Z3.
-  fn scale(m: Money, factor: {n: Int | n > 0}) -> Money =
+  ## `factor` is a plain Int; its positivity invariant is unchecked pending SMTCoq.
+  fn scale(m: Money, factor: Int) -> Money =
     Money{m | amount: m.amount * factor}
 
   ## Convert Money to another currency using a spot rate.
   ##
-  ## `rate` is the number of target minor units per source minor unit,
-  ## validated as positive by the Rate refinement type.
+  ## `rate` is the number of target minor units per source minor unit;
+  ## the Rate alias documents the intended positive-value invariant.
   ##
   ## Example: convert EUR 100.00 (amount=10000, frac=100) to USD at rate=1.08
   ##   => USD amount = round(10000 * 1.08) = 10800 cents = USD 108.00

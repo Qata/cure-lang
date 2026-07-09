@@ -270,7 +270,6 @@ defmodule Antigen.Runner do
   defp occurs?({:var, _}, _k), do: false
   defp occurs?({:lam, dom, body}, k), do: occurs?(dom, k) or occurs?(body, k + 1)
   defp occurs?({:pi, dom, cod}, k), do: occurs?(dom, k) or occurs?(cod, k + 1)
-  defp occurs?({:sigma, a, b}, k), do: occurs?(a, k) or occurs?(b, k + 1)
 
   defp occurs?({:case, scrut, motive, branches}, k) do
     # `motive` is itself a `:lam`-headed term (spec §6.5's constant-motive
@@ -347,6 +346,9 @@ defmodule Antigen.Runner do
   defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
   defp assay_module("elab/erasure"), do: Antigen.Assays.Elab
+  defp assay_module("elab/dot_forcing"), do: Antigen.Assays.Elab
+  defp assay_module("elab/guard_lint"), do: Antigen.Assays.Elab
+  defp assay_module("elab/nat_rep"), do: Antigen.Assays.Elab
   defp assay_module("elab/soundness"), do: Antigen.Assays.Elab
   defp assay_module("normalizer/differential"), do: Antigen.Assays.Normalizer
   defp assay_module("normalizer/equal"), do: Antigen.Assays.Normalizer
@@ -361,9 +363,6 @@ defmodule Antigen.Runner do
   defp assay_module("erasure/selective"), do: Antigen.Assays.Erasure
   defp assay_module("erasure/wellformed"), do: Antigen.Assays.Erasure
   defp assay_module("relevance/soundness"), do: Antigen.Assays.Erasure
-  defp assay_module("smt/implication"), do: Antigen.Assays.SmtLint
-  defp assay_module("smt/unsat"), do: Antigen.Assays.SmtLint
-  defp assay_module("smt/witness"), do: Antigen.Assays.SmtLint
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)

@@ -2822,8 +2822,7 @@ defmodule Cure.Compiler.Parser do
   #
   # Mirrors `parse_module/1` but emits `container_type: :proof`. Every
   # binding inside a proof container is expected to elaborate to an
-  # `Eq(T, a, b)` proof or a refinement-subtype witness; the type checker
-  # reports mismatches under code `E026`.
+  # `Eq(T, a, b)` proof; the type checker reports mismatches under code `E026`.
   defp parse_proof_container(state) do
     token = peek(state)
     state = advance(state)
@@ -3008,7 +3007,7 @@ defmodule Cure.Compiler.Parser do
     {{:indexed_type, meta, ctors}, state}
   end
 
-  # Ordinary ADT / alias / refinement body: `type NAME(type_params) = …`.
+  # Ordinary ADT / alias body: `type NAME(type_params) = …`.
   defp parse_type_def_adt(state, name, type_params, token) do
     state = skip_newlines(state)
 
@@ -3034,12 +3033,6 @@ defmodule Cure.Compiler.Parser do
 
     {ast, state} =
       case peek(state) do
-        %Token{type: :lbrace} ->
-          {refinement, state} = parse_refinement_type(state)
-          meta = [name: name, refinement: true, line: token.line, col: token.col]
-          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-          {{:type_annotation, meta, refinement}, state}
-
         %Token{type: :lparen} ->
           # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
           # The full type-expression parser handles the arrow; the result is a plain
@@ -3367,22 +3360,6 @@ defmodule Cure.Compiler.Parser do
       _ ->
         {nil, state}
     end
-  end
-
-  defp parse_refinement_type(state) do
-    # {x: BaseType | predicate}
-    state = advance(state)
-    var_token = peek(state)
-    state = advance(state)
-    state = expect(state, :colon)
-    {base_type, state} = parse_type_expr(state)
-    state = expect(state, :bar)
-    state = skip_newlines(state)
-    {predicate, state} = parse_expr(state, 0)
-    state = expect(state, :rbrace)
-
-    var_ast = {:variable, [scope: :local], to_string(var_token.value)}
-    {[var_ast, base_type, predicate], state}
   end
 
   # -- Protocol  proto Name(T) -----------------------------------------------
@@ -4346,11 +4323,6 @@ defmodule Cure.Compiler.Parser do
               many -> {{:tuple, [], many}, state}
             end
         end
-
-      :lbrace ->
-        # Refinement type: {x: T | pred}
-        {parts, state} = parse_refinement_type(state)
-        {{:type_annotation, [refinement: true], parts}, state}
 
       _ ->
         # Simple type: Name or Name(A, B)

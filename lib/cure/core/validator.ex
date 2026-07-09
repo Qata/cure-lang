@@ -28,6 +28,7 @@ defmodule Cure.Core.Validator do
     :grade_on_binders,
     :usage_relevance,
     :no_eq_node,
+    :no_sigma_node,
     :no_rewrite_node,
     :no_prim_node,
     :no_hole,
@@ -42,9 +43,23 @@ defmodule Cure.Core.Validator do
   @wave0_config %{
     grade_on_binders: :off,
     usage_relevance: :off,
-    no_eq_node: :warn,
+    # Phase C flipped `no_eq_node` to :reject even at dev time: the kernel has
+    # no `{:eq}`/`{:refl}` clauses left, so any such node in a checked def is a
+    # smuggled non-grammar term (firewall breach), not tolerable tech debt.
+    # `no_rewrite_node` stays :warn here (dev-time) and rejects at release.
+    no_eq_node: :reject,
+    # D2 T4b flipped `no_sigma_node` to :reject even at dev time: the kernel has
+    # no `{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` clauses left (T5 strip), so any
+    # such node in a checked def is smuggled non-grammar (firewall breach), not
+    # tolerable tech debt — same rationale as Phase C's `no_eq_node`.
+    no_sigma_node: :reject,
     no_rewrite_node: :warn,
-    no_prim_node: :warn,
+    # K2 flipped `no_prim_node` to :reject even at dev time: the kernel has no
+    # `{:prim}`/`{:nprim}` clauses left (arithmetic is registry-keyed builtin-op
+    # GLOBALS with certified-δ literal acceleration, spec 2026-07-09), so any
+    # such node in a checked def is smuggled non-grammar (firewall breach) —
+    # same rationale as Phase C's `no_eq_node` and D2's `no_sigma_node`.
+    no_prim_node: :reject,
     no_hole: :warn,
     qualified_syms: :off,
     ctor_signature: :off,
@@ -58,7 +73,7 @@ defmodule Cure.Core.Validator do
   @spec clauses() :: [clause()]
   def clauses, do: @clauses
 
-  @doc "The Wave-0 default mode for every clause (pure instrumentation; no :reject)."
+  @doc "The Wave-0 default mode for every clause (instrumentation, except the retired-primitive `no_eq_node` which rejects)."
   @spec wave0_config() :: config()
   def wave0_config, do: @wave0_config
 
@@ -72,13 +87,23 @@ defmodule Cure.Core.Validator do
   # Core; ex-falso is an empty-branch `case` over a provably-uninhabited scrutinee
   # (§H), so no `{:absurd}` term may survive.
   # K1a lands `no_eq_node: :reject` — the primitive `{:eq}`/`{:refl}` identity nodes
-  # are dead-producers (inductive Eq/refl + ctor bridge_step, f3b0e73); no such term
-  # may escape into a released artifact. `no_rewrite_node` stays `:warn` until Phase
-  # B (rewrite→:case) retires the still-produced transport eliminator.
+  # are dead-producers; no such term may escape into a released artifact (since
+  # Phase C this also holds at dev time — see @wave0_config).
+  # Phase B/C land `no_rewrite_node: :reject` — every `{:rewrite}` producer was
+  # retired (rewrite → J/subst single-branch `:case` transport) and the kernel
+  # clauses stripped, so a `{:rewrite}` node in final Core is smuggled grammar.
+  # K2 lands `no_prim_node: :reject` — `{:prim}`/`{:nprim}` are stripped from
+  # the kernel (builtin-op globals are canonical); explicit here even though
+  # wave0 already rejects, so the release ratchet is self-documenting (this was
+  # the recorded doc/code drift: §J said :off while wave0 had :warn and release
+  # never flipped it).
   @release_config @wave0_config
                   |> Map.put(:no_hole, :reject)
                   |> Map.put(:no_absurd_node, :reject)
                   |> Map.put(:no_eq_node, :reject)
+                  |> Map.put(:no_sigma_node, :reject)
+                  |> Map.put(:no_rewrite_node, :reject)
+                  |> Map.put(:no_prim_node, :reject)
 
   @doc "The strict Final-Core config enforced at the release/emit boundary (K3+)."
   @spec release_config() :: config()
@@ -101,7 +126,6 @@ defmodule Cure.Core.Validator do
   defp children({:lam, dom, body}), do: [dom, body]
   defp children({:lam, _grade, dom, body}), do: [dom, body]
   defp children({:sigma, a, b}), do: [a, b]
-  defp children({:sigma, _grade, a, b}), do: [a, b]
   defp children({:app, f, a}), do: [f, a]
   defp children({:pair, a, b}), do: [a, b]
   defp children({:fst, p}), do: [p]
@@ -112,7 +136,6 @@ defmodule Cure.Core.Validator do
   defp children({:eq, ty, a, b}), do: [ty, a, b]
   defp children({:refl, a}), do: [a]
   defp children({:rewrite, p, m, b}), do: [p, m, b]
-  defp children({:prim, _op, args}), do: args
   defp children(_leaf), do: []
 
   @doc "Validate `term` against the Wave-0 config."
@@ -156,6 +179,19 @@ defmodule Cure.Core.Validator do
   defp violation(:no_eq_node, {:refl, _}),
     do: "primitive :refl node; use ctor reflexive (K1)"
 
+  # no_sigma_node covers the four dependent-pair primitives that are DEAD-PRODUCERS
+  # after D2 T2/T3 (%[..] builds the inductive ctor mk_pair, Sigma(..) is the
+  # inductive {:data,:Sigma}, .1/.2 are projection globals). :warn while the kernel
+  # still carries the clauses (T4a), :reject at release and once T5 strips them.
+  defp violation(:no_sigma_node, {:sigma, _, _}),
+    do: "primitive :sigma node; use inductive Sigma (D2)"
+
+  defp violation(:no_sigma_node, {:pair, _, _}),
+    do: "primitive :pair node; use ctor mk_pair (D2)"
+
+  defp violation(:no_sigma_node, {:fst, _}), do: "primitive :fst node; use projection (D2)"
+  defp violation(:no_sigma_node, {:snd, _}), do: "primitive :snd node; use projection (D2)"
+
   # no_rewrite_node is split out because {:rewrite} is STILL PRODUCED as the
   # transport eliminator (rewrite_plan/symmetry_proof/bridge_step). Retiring it
   # (rewrite→single-branch :case, Phase B) is a structural re-plumbing, so it stays
@@ -174,7 +210,6 @@ defmodule Cure.Core.Validator do
   # 4-tuple forms ({:pi, grade, dom, cod}) do NOT match and so pass.
   defp violation(:grade_on_binders, {:pi, _, _}), do: "pi binder carries no grade"
   defp violation(:grade_on_binders, {:lam, _, _}), do: "lam binder carries no grade"
-  defp violation(:grade_on_binders, {:sigma, _, _}), do: "sigma binder carries no grade"
 
   # qualified_syms — bare-atom identity instead of a qualified Sym.
   defp violation(:qualified_syms, {:global, n}) when is_atom(n),

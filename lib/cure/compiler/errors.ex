@@ -53,11 +53,6 @@ defmodule Cure.Compiler.Errors do
     format_diagnostic("error", "arity mismatch", file, line, message)
   end
 
-  def format_error({:refinement_violation, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "refinement violation (E090)", file, line, message)
-  end
-
   def format_error({:extern_untyped_head, message, meta}, file) do
     line = Keyword.get(meta, :line, 0)
     format_diagnostic("error", "@extern declaration missing a typed head (E056)", file, line, message)
@@ -66,11 +61,6 @@ defmodule Cure.Compiler.Errors do
   def format_error({:extern_has_body, message, meta}, file) do
     line = Keyword.get(meta, :line, 0)
     format_diagnostic("error", "@extern declaration has a body (E057)", file, line, message)
-  end
-
-  def format_error({:refinement_unknown, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("warning", "refinement unknown (W091)", file, line, message)
   end
 
   # -- Parse Errors ------------------------------------------------------------
@@ -367,6 +357,18 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:ambiguous_name, name, modules}, file) do
+    format_diagnostic(
+      "error",
+      "ambiguous name (E089)",
+      file,
+      1,
+      "'#{name}' is provided by #{Enum.join(modules, " and ")}; qualify the " <>
+        "call (e.g. #{hd(modules)}.#{name}(...)) or define a local #{name} to " <>
+        "shadow them."
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
@@ -532,13 +534,14 @@ defmodule Cure.Compiler.Errors do
     goal type.
     """,
     "E015" => """
-    E015: Refinement Counterexample
+    E015: Refinement Counterexample (retired)
 
-    A value flowing into a refinement-typed parameter could violate
-    the refinement predicate. The Z3 model gives a concrete witness.
+    Reserved. This code covered refinement-type counterexamples, a
+    feature removed pending SMTCoq-style proof reconstruction; it no
+    longer fires.
 
-    Fix: tighten the caller's invariants, change the refinement to
-    accept the witness, or guard the call with a runtime check.
+    Fix: no action required -- refinement types are not currently part
+    of the language.
     """,
     "E016" => """
     E016: Dependent Type Mismatch
@@ -560,13 +563,14 @@ defmodule Cure.Compiler.Errors do
     `Std.Equivalent.trans/2`, `Std.Equivalent.cong/2`, or a `rewrite` step.
     """,
     "E018" => """
-    E018: Path-sensitive Refinement Conflict
+    E018: Path-sensitive Refinement Conflict (retired)
 
-    A path-sensitive refinement extracted from an `if`/`match` guard
-    contradicts a previously declared refinement on the same variable.
+    Reserved. This code covered path-sensitive refinement conflicts, a
+    feature removed pending SMTCoq-style proof reconstruction; it no
+    longer fires.
 
-    Fix: split the guard into incompatible sub-cases, or relax the
-    declared refinement.
+    Fix: no action required -- refinement types are not currently part
+    of the language.
     """,
     "E019" => """
     E019: Implicit Argument Solved Inconsistently
@@ -664,16 +668,15 @@ defmodule Cure.Compiler.Errors do
     E026: Proof Shape Mismatch
 
     A binding inside a `proof` container does not elaborate to an
-    `Eq(T, a, b)` proof or a refinement-subtype proof. Proof
-    containers are intended exclusively for propositional laws.
+    `Eq(T, a, b)` proof. Proof containers are intended exclusively for
+    propositional laws.
 
     Example:
       proof Arithmetic
         fn meaning() -> Int = 42   # Error: not a proof shape
 
     Fix: move ordinary code into a `mod` container; keep `proof`
-    containers for functions returning `Eq(...)` or for refinement
-    witnesses.
+    containers for functions returning `Eq(...)`.
     """,
     "E027" => """
     E027: assert_type Assertion Failed
@@ -747,10 +750,8 @@ defmodule Cure.Compiler.Errors do
           <<b, _rest::binary>> -> b
       # Warning: missing pattern `<<>>`
 
-    Fix: add the missing shape (typically `<<>>` or a size-0 case),
-    provide a catch-all arm, or narrow the scrutinee type with a
-    `byte_size` refinement so the uncovered cases are ruled out
-    statically.
+    Fix: add the missing shape (typically `<<>>` or a size-0 case) or
+    provide a catch-all arm.
     """,
     "E032" => """
     E032: Match Clause Unreachable (W-MATCH-UNREACHABLE)
@@ -1028,7 +1029,7 @@ defmodule Cure.Compiler.Errors do
     E036: Binary Comprehension Source Not Bitstring
 
     A binary comprehension generator `for <<pattern <- source>>`
-    requires `source` to be a `Bitstring` (or a refinement of it).
+    requires `source` to be a `Bitstring` (or a subtype of it).
     An Int, List, or other shape cannot drive byte-level iteration.
 
     Example:
@@ -1093,15 +1094,14 @@ defmodule Cure.Compiler.Errors do
     "E037" => """
     E037: Binary Segment Size Non-Linear
 
-    The compiler tried to emit a `byte_size(rest) ==
-    byte_size(scrutinee) - sum_of_preceding_sizes` refinement for a
-    trailing `rest::binary` segment, but one of the preceding
-    segments carries a size expression the SMT translator cannot
-    linearise (for example an arbitrary runtime expression, or a
-    non-byte-aligned specifier). The refinement is downgraded to
-    plain `Bitstring` and the pipeline emits this warning so you
-    can choose whether to tighten the pattern or accept the
-    looser type.
+    The compiler tried to compute the exact byte length of a trailing
+    `rest::binary` segment as `byte_size(scrutinee) -
+    sum_of_preceding_sizes`, but one of the preceding segments carries
+    a size expression that cannot be linearised (for example an
+    arbitrary runtime expression, or a non-byte-aligned specifier).
+    The segment is typed as plain `Bitstring` and the pipeline emits
+    this warning so you can choose whether to tighten the pattern or
+    accept the looser type.
 
     Example:
       fn f(buf: Bitstring, n: Int) -> Int =
@@ -1484,14 +1484,14 @@ defmodule Cure.Compiler.Errors do
     still exported.
 
     Types that commonly trigger E068:
-      - Dependent types and refinement predicates (`Positive Int`,
-        `Nat`, `Vec n T`) have no standard proto3 representation.
+      - Dependent types (`Nat`, `Vec n T`) have no standard proto3
+        representation.
       - Higher-kinded types and type-level functions.
       - `proof` container types (they are erased at runtime).
 
     Fix: annotate the field in the source with a `@export_as`
     attribute to give `cure export-types` a concrete target type, or
-    wrap the refinement in an outer `rec` and export only the record.
+    wrap the value in an outer `rec` and export only the record.
     """,
     "E069" => """
     E069: Snap Schema Incompatible
@@ -1515,42 +1515,6 @@ defmodule Cure.Compiler.Errors do
     Fix: locate the missing `.cure` file and run `:load <path>` to
     restore its bindings manually, or delete the entry from the snap
     file's `loaded_paths` list.
-    """,
-    "E090" => """
-    E090: Refinement Obligation Counterexample
-
-    A function's body, after substituting the actual return expression
-    into the declared return-type refinement, was disproven by Z3 under
-    the hypotheses derived from the parameter refinements. The solver
-    produced a counterexample assignment that violates the refinement.
-
-    Example:
-      use Std.Refine
-
-      fn shrink(n: Int) -> Positive = n - 1
-      # Error E090: when n = 1, n - 1 = 0 violates `x > 0`.
-
-    Fix: tighten the parameter type so the obligation discharges
-    (`shrink(n: {x: Int | x > 1})`), guard the body with a runtime
-    check (`pickup n > 1 -> n - 1; else -> 1`), or change the
-    declared return type so the body satisfies it.
-    """,
-    "W091" => """
-    W091: Refinement Obligation Unknown
-
-    The SMT solver returned `:unknown` for a refinement obligation
-    (parameter assumption => body satisfies declared return
-    refinement). The compilation continues -- W091 is a warning, not
-    an error -- but the obligation has not been proven.
-
-    Common causes are non-linear arithmetic, multiplications by
-    variables, or expressions outside the QF_LIA / QF_LRA fragments
-    Z3 can decide quickly under the default timeout.
-
-    Fix: simplify the body or the refinement, raise the solver
-    timeout via `cure check --hot-smt`, or accept the warning when
-    the obligation is true by hand and the cost of proving it
-    machine-checked is too high.
     """,
     "W086" => """
     W086: Import Cycle
@@ -1586,6 +1550,26 @@ defmodule Cure.Compiler.Errors do
 
     Fix: rename one of the modules, or remove the redundant file if it
     was an accidental copy.
+    """,
+    "E089" => """
+    E089: Ambiguous Name
+
+    An unqualified reference names a global that two or more imported
+    modules provide, and the local module does not redeclare it to claim
+    the name. Approach B re-keys every colliding import to its qualified
+    key (`Mod#name`), so the bare name has no single owner -- resolving it
+    silently would pick whichever import merged last. This fires at BOTH
+    reference sites: a call (`name(...)`) and a bare value (`f(name)`).
+
+    Example:
+      mod P
+        use Std.CollA        # exports helper/1
+        use Std.CollB        # also exports helper/1
+        fn f() -> Nat = helper(Z())   # Error: 'helper' is ambiguous
+      end
+
+    Fix: qualify the reference (`Std.CollA.helper(...)`), or define a
+    local `helper` to shadow both imports.
     """,
     "W088" => """
     W088: Unresolved Import

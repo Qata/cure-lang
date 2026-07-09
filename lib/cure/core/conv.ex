@@ -79,13 +79,7 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)
 
-  defp conv_struct?({:vpair, a1, b1}, {:vpair, a2, b2}, depth, sig),
-    do: conv_val?(a1, a2, depth, sig) and conv_val?(b1, b2, depth, sig)
-
   defp conv_struct?({:vpi, d1, c1}, {:vpi, d2, c2}, depth, sig),
-    do: conv_val?(d1, d2, depth, sig) and conv_closure?(c1, c2, depth, sig)
-
-  defp conv_struct?({:vsigma, d1, c1}, {:vsigma, d2, c2}, depth, sig),
     do: conv_val?(d1, d2, depth, sig) and conv_closure?(c1, c2, depth, sig)
 
   defp conv_struct?({:vdata, n1, vs1}, {:vdata, n2, vs2}, depth, sig),
@@ -94,12 +88,6 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth, sig),
     do: n1 == n2 and conv_spine?(vs1, vs2, depth, sig)
 
-  defp conv_struct?({:veq, t1, a1, b1}, {:veq, t2, a2, b2}, depth, sig),
-    do:
-      conv_val?(t1, t2, depth, sig) and conv_val?(a1, a2, depth, sig) and
-        conv_val?(b1, b2, depth, sig)
-
-  defp conv_struct?({:vrefl, a1}, {:vrefl, a2}, depth, sig), do: conv_val?(a1, a2, depth, sig)
   defp conv_struct?(_, _, _, _), do: false
 
   # -- η / β-under-binder -----------------------------------------------------
@@ -131,12 +119,6 @@ defmodule Cure.Core.Conv do
 
   defp conv_neutral?({:napp, n1, v1}, {:napp, n2, v2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig) and conv_val?(v1, v2, depth, sig)
-
-  defp conv_neutral?({:nfst, n1}, {:nfst, n2}, depth, sig), do: conv_neutral?(n1, n2, depth, sig)
-  defp conv_neutral?({:nsnd, n1}, {:nsnd, n2}, depth, sig), do: conv_neutral?(n1, n2, depth, sig)
-
-  defp conv_neutral?({:nprim, op1, a1}, {:nprim, op2, a2}, depth, sig),
-    do: op1 == op2 and conv_spine?(a1, a2, depth, sig)
 
   # The scrutinee compares up to conversion (lifted to a value, so whnf can
   # force a redex scrutinee that δι-reduces past the stuck case) — a stuck
@@ -172,12 +154,6 @@ defmodule Cure.Core.Conv do
 
   defp same_neutral_no_delta?({:napp, f1, a1}, {:napp, f2, a2}, depth),
     do: same_neutral_no_delta?(f1, f2, depth) and same_value_no_delta?(a1, a2, depth)
-
-  defp same_neutral_no_delta?({:nfst, n1}, {:nfst, n2}, depth), do: same_neutral_no_delta?(n1, n2, depth)
-  defp same_neutral_no_delta?({:nsnd, n1}, {:nsnd, n2}, depth), do: same_neutral_no_delta?(n1, n2, depth)
-
-  defp same_neutral_no_delta?({:nprim, op1, args1}, {:nprim, op2, args2}, depth),
-    do: op1 == op2 and same_spine_no_delta?(args1, args2, depth)
 
   defp same_neutral_no_delta?(_, _, _depth), do: false
 

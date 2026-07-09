@@ -29,9 +29,10 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       - type / index positions — Pi & Sigma DOMAINS are checked `erased` when the
         binder is inspectable-only (`rig` local, :265-272); the motive likewise;
       - erased ARGUMENT positions (`rigf` erased → `checkRig` erased, :288);
-      - `Eq` / proof positions — `Refl`'s argument is `Rig0`; Cure erases
-        `{:refl, _}` to `{:ctor, :cure_refl, []}` (arg dropped, `erase.ex:63`),
-        so proof-position use is genuinely runtime-free.
+      - `Eq` / proof positions — `Refl`'s argument is `Rig0`; Cure's
+        `reflexive` carries an ERASED witness (nullary at runtime) and the
+        J/subst transport's proof scrutinee is dropped wholesale by the
+        collapsible-family erasure, so proof-position use is runtime-free.
 
   We port the 0/ω slice only (per the manifest caveat: read Idris core as
   ω-except-erased; the linear `1` multiplicity is deliberately out of scope).
@@ -115,9 +116,9 @@ defmodule Cure.Elab.ErasureRelevanceTest do
 
     test "(e) erased implicit used only inside an Eq/proof position" do
       # `n` occurs in the return TYPE `Equivalent(Nat, n, n)` (type position) and inside
-      # `reflexive(n)` (a proof term; `refl`'s argument is erased — `erase.ex:63`
-      # drops it to `cure_refl`). No relevant use, so it must accept before AND
-      # after the check.
+      # `reflexive(n)` (a proof term; reflexive's witness field is erased, so
+      # the runtime value is the nullary reflexive ctor). No relevant use, so
+      # it must accept before AND after the check.
       src =
         mod("""
           fn f({n: Nat}, v: NV(n)) -> Equivalent(Nat, n, n) = reflexive(n)
@@ -203,25 +204,37 @@ defmodule Cure.Elab.ErasureRelevanceTest do
   end
 
   describe "seam: proofs are erased (proof irrelevance)" do
-    test "two different rewrite proofs erase to the same runtime term" do
-      env = Env.empty()
+    # (The primitive `{:rewrite}`-node version of the proof-irrelevance pin was
+    # retired with the form itself — group-A removal commit; its :case-transport
+    # twin below was cross-checked side by side first.)
+    # (The {:refl}/{:eq}→cure_refl/cure_eq placeholder pins retired with the
+    # primitive forms — group-B removal commit; the inductive twins below were
+    # cross-checked side by side first: reflexive is nullary at runtime via its
+    # erased witness, no placeholder atom needed.)
+
+    # Phase C twins (add-then-retire): the primitive proof forms retire; proof
+    # irrelevance must survive on the inductive vehicle. `reflexive`'s witness
+    # is an erased field (nullary at runtime), and the J/subst `:case`
+    # transport is a collapsible-family elimination whose PROOF vanishes at
+    # erase — swapping proofs changes nothing observable.
+    test "two different :case-transport proofs erase to the same runtime term" do
+      env = Cure.Core.Builtins.seed(Env.empty(), MapSet.new())
       body = {:ctor, :Causal, []}
       motive = {:lam, {:type, 0}, body}
-      r1 = {:rewrite, {:refl, {:ctor, :Dcoupled, []}}, motive, body}
-      r2 = {:rewrite, {:refl, {:ctor, :Causal, []}}, motive, body}
+      id_branch = {:reflexive, 1, {:lam, {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
+      t1 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}, motive, [id_branch]}, body}
+      t2 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Causal, []}]}, motive, [id_branch]}, body}
 
-      # `rewrite proof motive body ⇝ body` at erase (erase.ex): the proof is
-      # dropped, so swapping it changes nothing observable at runtime.
-      assert Erase.erase(env, r1) == Erase.erase(env, r2)
-      assert Erase.erase(env, r1) == Erase.erase(env, body)
+      assert Erase.erase(env, t1) == Erase.erase(env, t2)
+      # The collapsible case is GONE from the runtime term (the proof with it);
+      # what remains is the identity redex over the erased body.
+      assert {:app, {:lam, _dom, {:var, 0}}, erased_body} = Erase.erase(env, t1)
+      assert erased_body == Erase.erase(env, body)
     end
 
-    test "refl and Eq values erase to nullary runtime placeholders" do
-      env = Env.empty()
-      assert Erase.erase(env, {:refl, {:ctor, :Dcoupled, []}}) == {:ctor, :cure_refl, []}
-
-      assert Erase.erase(env, {:eq, {:data, :Dec, [], []}, {:ctor, :Causal, []}, {:ctor, :Causal, []}}) ==
-               {:ctor, :cure_eq, []}
+    test "a reflexive proof value is runtime-free (erased witness => nullary ctor)" do
+      env = Cure.Core.Builtins.seed(Env.empty(), MapSet.new())
+      assert Erase.erase(env, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}) == {:ctor, :reflexive, []}
     end
   end
 end

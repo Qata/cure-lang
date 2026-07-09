@@ -4,8 +4,8 @@ defmodule Cure.PGO do
 
   Loads `Cure.PGO.Profile` files from disk, merges them, partitions
   per-MFA entries into hot and cold sets at the configured threshold,
-  and exposes a struct that other optimisation passes (the inliner,
-  the SMT translator) can query.
+  and exposes a struct that other optimisation passes (e.g. the
+  inliner) can query.
 
   ## Usage
 

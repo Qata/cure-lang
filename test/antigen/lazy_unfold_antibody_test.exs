@@ -88,9 +88,24 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
     # IDENTICAL subterms and syntactic occurrence-matching stays uniform.
     folded = plus(neutral_n(), @z)
     assert folded == Normalise.nf(ctx1(), plus(plus(@z, neutral_n()), @z), fuel: @fuel)
+    # (The {:eq}-carrier goal assertion retired with the primitive form —
+    # group-B removal commit; the Equivalent-carrier twin below pins the same
+    # canonicalization property through the goal shape real rewrites use.)
+  end
 
-    goal = {:eq, @nat, plus(plus(@z, neutral_n()), @z), plus(neutral_n(), @z)}
-    assert {:eq, @nat, left, right} = Normalise.nf(ctx1(), goal, fuel: @fuel)
+  test "canonical form through the inductive Equivalent carrier (post-retirement twin)" do
+    # Phase C twin of the test above (add-then-retire): the `{:eq}` carrier
+    # retires with the primitive identity forms; the SAME δ-lazy-unfold
+    # canonicalization property is pinned through the inductive
+    # `{:data, :Equivalent, …}` goal — the shape real rewrite goals actually
+    # normalize as.
+    folded = plus(neutral_n(), @z)
+
+    goal =
+      {:data, :Equivalent, [@nat], [plus(plus(@z, neutral_n()), @z), plus(neutral_n(), @z)]}
+
+    assert {:data, :Equivalent, ps, is} = Normalise.nf(ctx1(), goal, fuel: @fuel)
+    assert [left, right] = Enum.take(ps ++ is, -2)
     assert left == folded
     assert right == folded
   end

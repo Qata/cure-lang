@@ -29,7 +29,12 @@ defmodule Antigen.Generators.TypeFormerTest do
   test "the sample exercises universes, Pi, Sigma, and Vec type-formers" do
     sample = B.interp(TypeFormer.gen()) |> Enum.take(@sample)
     heads = sample |> Enum.map(fn c -> elem(c.payload.term, 0) end) |> MapSet.new()
-    for h <- [:type, :pi, :sigma, :data], do: assert(h in heads, "type-former #{h} never generated")
+    # Sigma is now the inductive `{:data, :Sigma, …}` (D2), so its head is `:data`;
+    # assert the Sigma family specifically rather than a `:sigma` head atom.
+    for h <- [:type, :pi, :data], do: assert(h in heads, "type-former #{h} never generated")
+
+    assert Enum.any?(sample, &match?({:data, :Sigma, _, _}, &1.payload.term)),
+           "type-former Sigma never generated"
 
     # at least one term sits above Type 0 (a universe or a universe-codomain Pi)
     assert Enum.any?(sample, fn c -> c.payload.type != {:type, 0} end)

@@ -39,7 +39,11 @@ defmodule Antigen.MutationHealthGateTest do
     legacy =
       Antigen.Challenge.new(
         kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
-        payload: %{sig: :v1, ctx: [], type: {:data, :Nat, [], []}, term: {:fst, {:ctor, :Z, []}},
+        # term: "fst on a Nat" spelled inductively (D2, projection case over mk_pair)
+        payload: %{sig: :v1, ctx: [], type: {:data, :Nat, [], []},
+                   term: {:case, {:ctor, :Z, []},
+                          {:lam, {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
+                          [{:mk_pair, 2, {:var, 1}}]},
                    fault: %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma,
                             injected_head: :Nat, scope: nil}}   # no :depth / :wrap_path keys
       )

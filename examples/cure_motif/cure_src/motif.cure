@@ -2,9 +2,9 @@ mod Motif
   ## Length-indexed step sequencer for the Cure motif showcase.
   #
   # Demonstrates:
-  #   * Refinement types for every MIDI-domain primitive: Pitch, Velocity,
-  #     Channel, Bpm, StepsPerBeat, BarCount, RollReps. Z3 rejects
-  #     out-of-range literals and scales at compile time.
+  #   * Named aliases for every MIDI-domain primitive: Pitch, Velocity,
+  #     Channel, Bpm, StepsPerBeat, BarCount, RollReps. Each is a plain Int;
+  #     the documented ranges are invariants left unchecked pending SMTCoq.
   #   * ADT with parameter-carrying variants: Step (Rest, Note, Chord, Roll)
   #     and Event (NoteOn, NoteOff, Tick).
   #   * Length-indexed Pattern over Std.Vector: concat/1 claims the output
@@ -25,31 +25,31 @@ mod Motif
   local fn int_to_string(n: Int) -> String
 
   # ---------------------------------------------------------------------------
-  # Refinement types
+  # MIDI-domain aliases (documented ranges are invariants, unchecked pending SMTCoq)
   # ---------------------------------------------------------------------------
 
-  ## MIDI note number (0-127, 60 = middle C).
-  type Pitch = {p: Int | p >= 0 and p <= 127}
+  ## MIDI note number (invariant: 0-127, 60 = middle C).
+  type Pitch = Int
 
-  ## MIDI velocity (1-127, 0 is reserved for "note off").
-  type Velocity = {v: Int | v >= 1 and v <= 127}
+  ## MIDI velocity (invariant: 1-127, 0 is reserved for "note off").
+  type Velocity = Int
 
-  ## MIDI channel (0-15).
-  type Channel = {c: Int | c >= 0 and c <= 15}
+  ## MIDI channel (invariant: 0-15).
+  type Channel = Int
 
-  ## Musical tempo in beats per minute. The lower bound 20 matches the
-  ## slowest metronome marking in common notation; the upper bound 300
-  ## keeps the scheduler from spinning pathologically fast.
-  type Bpm = {b: Int | b >= 20 and b <= 300}
+  ## Musical tempo in beats per minute. Invariant: 20-300 -- the lower bound
+  ## 20 matches the slowest metronome marking in common notation; the upper
+  ## bound 300 keeps the scheduler from spinning pathologically fast.
+  type Bpm = Int
 
-  ## Subdivisions per beat. 1 = quarter notes, 4 = sixteenths, 8 = 32nds.
-  type StepsPerBeat = {s: Int | s >= 1 and s <= 16}
+  ## Subdivisions per beat (invariant: 1-16). 1 = quarter notes, 4 = sixteenths, 8 = 32nds.
+  type StepsPerBeat = Int
 
-  ## Number of bars in a repeat operation.
-  type BarCount = {n: Int | n >= 1 and n <= 64}
+  ## Number of bars in a repeat operation (invariant: 1-64).
+  type BarCount = Int
 
-  ## Number of notes in a roll (stuttered repeat at one step).
-  type RollReps = {k: Int | k >= 2 and k <= 8}
+  ## Number of notes in a roll (invariant: 2-8), a stuttered repeat at one step.
+  type RollReps = Int
 
   # ---------------------------------------------------------------------------
   # ADTs
@@ -75,18 +75,18 @@ mod Motif
     | Tick(Int)
 
   # ---------------------------------------------------------------------------
-  # Safe constructors -- all inputs are refinement-typed
+  # Constructors -- inputs use the MIDI-domain aliases
   # ---------------------------------------------------------------------------
 
-  ## Build a Note step from a refined Pitch and Velocity.
+  ## Build a Note step from a Pitch and Velocity.
   fn note(pitch: Pitch, vel: Velocity) -> Step = Note(pitch, vel)
 
-  ## Build a Chord step from three refined Pitches. Velocity is hard-coded
+  ## Build a Chord step from three Pitches. Velocity is hard-coded
   ## at 96 (mezzo-forte) to keep the constructor's surface small.
   fn chord(root: Pitch, third: Pitch, fifth: Pitch) -> Step =
     Chord(root, third, fifth)
 
-  ## Build a Roll step from a refined Pitch, Velocity, and repeat count.
+  ## Build a Roll step from a Pitch, Velocity, and repeat count.
   fn roll(pitch: Pitch, vel: Velocity, reps: RollReps) -> Step =
     Roll(pitch, vel, reps)
 
@@ -118,11 +118,9 @@ mod Motif
 
   ## Repeat a pattern `n` times. Length of the result is n * |p|.
   ##
-  ## `n` is declared as a plain `Int` so the recursive helper below can
-  ## decrement it without re-establishing a refinement at every step.
-  ## The `BarCount` type is kept above as documentation of the intended
-  ## domain range; the test suite exercises `1`, `4`, and `8` which all
-  ## fall inside it.
+  ## `n` is declared as a plain `Int`. The `BarCount` alias is kept above as
+  ## documentation of the intended domain range; the test suite exercises
+  ## `1`, `4`, and `8` which all fall inside it.
   fn repeat(p: List(Step), n: Int) -> List(Step) =
     repeat_acc(p, n, empty_pattern())
 

@@ -5,9 +5,9 @@ defmodule Cure.Elab.GuardTest do
   with each guard test its own Boolean elimination and the final unguarded
   catch-all closing the chain (the fall-through when every guard is false).
 
-  Guards need surface comparison operators to elaborate, so `{:binary_op}` now
-  lowers to the kernel's `{:prim, op, …}` (e.g. `x == 0` -> `{:prim, :eq, …}`).
-  Both build on the committed `bool_elim` primitive; no kernel change.
+  Guards need surface comparison operators to elaborate, so `{:binary_op}`
+  lowers to a builtin-op global spine (K2, spec 2026-07-09; e.g. `x == 0` ->
+  `int_eq x 0`). Both build on the committed `bool_elim`; no kernel change.
   """
   use ExUnit.Case, async: true
 

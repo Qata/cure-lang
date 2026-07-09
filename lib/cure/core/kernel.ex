@@ -66,7 +66,6 @@ defmodule Cure.Core.Kernel do
   # with an unmatched-clause exception (spec §5/§8.1).
   def infer(_ctx, {:absurd}), do: {:error, :absurd_in_reachable_position}
 
-  def infer(ctx, {:prim, op, args}), do: infer_prim(ctx, op, args)
 
   def infer(ctx, {:pi, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
@@ -94,61 +93,6 @@ defmodule Cure.Core.Kernel do
     case Env.get_def(Context.signature(ctx), name) do
       nil -> {:error, :unknown_global}
       %{type: type_term} -> {:ok, Eval.eval(type_term, [])}
-    end
-  end
-
-  def infer(ctx, {:eq, ty, a, b}) do
-    with {:ok, level} <- infer_sort(ctx, ty),
-         ty_value = Eval.eval(ty, Context.env(ctx)),
-         :ok <- check(ctx, a, ty_value),
-         :ok <- check(ctx, b, ty_value) do
-      {:ok, {:vtype, level}}
-    end
-  end
-
-  def infer(ctx, {:refl, a}) do
-    with {:ok, ty_value} <- infer(ctx, a) do
-      a_value = Eval.eval(a, Context.env(ctx))
-      {:ok, {:veq, ty_value, a_value, a_value}}
-    end
-  end
-
-  def infer(ctx, {:rewrite, proof, motive, body}) do
-    with {:ok, proof_type} <- infer(ctx, proof),
-         {:ok, a_value, b_value} <- ensure_eq(proof_type) do
-      # motive (x.M): result transports M[a/x] (the body's type) to M[b/x].
-      motive_value = Eval.eval(motive, Context.env(ctx))
-      expected_body = Eval.apply(motive_value, a_value)
-
-      case check(ctx, body, expected_body) do
-        :ok -> {:ok, Eval.apply(motive_value, b_value)}
-        {:error, _} -> {:error, :rewrite_premise}
-      end
-    end
-  end
-
-  def infer(ctx, {:sigma, a, b}) do
-    with {:ok, l1} <- infer_sort(ctx, a),
-         a_value = Eval.eval(a, Context.env(ctx)),
-         ctx2 = Context.extend(ctx, a_value),
-         {:ok, l2} <- infer_sort(ctx2, b) do
-      {:ok, {:vtype, Universe.max(l1, l2)}}
-    end
-  end
-
-  def infer(ctx, {:fst, p}) do
-    with {:ok, ptype} <- infer(ctx, p),
-         {:ok, dom, _cod} <- ensure_sigma(ptype) do
-      {:ok, dom}
-    end
-  end
-
-  def infer(ctx, {:snd, p}) do
-    with {:ok, ptype} <- infer(ctx, p),
-         {:ok, _dom, cod_closure} <- ensure_sigma(ptype) do
-      # Second component's type is B[fst p / x] (§4.7).
-      fst_value = Eval.eval({:fst, p}, Context.env(ctx))
-      {:ok, Eval.apply_closure(cod_closure, fst_value)}
     end
   end
 
@@ -277,39 +221,6 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # The §4.6 soundness gate: `refl a` checks against `Eq ty a' b'` iff the
-  # endpoints are definitionally equal AND `a` is convertible to them. This is
-  # the fix for the audit's bug (the old checker accepted any atom as a proof).
-  def check(ctx, {:refl, a}, {:veq, ty_value, a_value, b_value}) do
-    with :ok <- check(ctx, a, ty_value) do
-      depth = Context.length(ctx)
-      a_refl = Eval.eval(a, Context.env(ctx))
-
-      sig = Context.signature(ctx)
-
-      if Conv.conv_values?(a_value, b_value, depth, sig) and
-           Conv.conv_values?(a_refl, a_value, depth, sig) do
-        :ok
-      else
-        {:error, :not_definitionally_equal}
-      end
-    end
-  end
-
-  # A dependent pair is checked against a Σ: first component against the domain,
-  # second against the domain-instantiated codomain B[a/x] (§4.7).
-  def check(ctx, {:pair, a, b}, {:vsigma, dom, cod_closure}) do
-    with :ok <- check(ctx, a, dom) do
-      a_value = Eval.eval(a, Context.env(ctx))
-      expected_b = Eval.apply_closure(cod_closure, a_value)
-
-      case check(ctx, b, expected_b) do
-        :ok -> :ok
-        {:error, _} -> {:error, :sigma_mismatch}
-      end
-    end
-  end
-
   # A hole is a deferred term: accepted at any goal type. Its obligation is
   # reported to the user and blocks codegen until filled (§6 / M8.5).
   def check(_ctx, {:hole, _name}, _expected), do: :ok
@@ -334,25 +245,47 @@ defmodule Cure.Core.Kernel do
       %{args: tele, result_indices: result_indices} = ctor_sig ->
         result_params = Map.get(ctor_sig, :result_params, [])
 
-        if Inductive.ctor_family(sig, cname) != family do
-          {:error, {:foreign_ctor, cname}}
-        else
-          with {:ok, arg_env} <- check_ctor_app(ctx, params, args, tele) do
-            actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
-            actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
-            actual = {:vdata, family, actual_params ++ actual_indices}
+        cond do
+          Inductive.ctor_family(sig, cname) != family ->
+            {:error, {:foreign_ctor, cname}}
 
-            if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
-              :ok
-            else
-              {:error, {:conversion_failure, actual, expected}}
+          # Fields-only spelling — the existing specialized path, byte-identical.
+          # MUST be first: for a paramless family (pc == 0) the spine condition
+          # below collapses to this same predicate (spec §1 "order is load-bearing").
+          length(args) == length(tele) ->
+            with {:ok, arg_env} <- check_ctor_app(ctx, params, args, tele) do
+              actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
+              actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
+              actual = {:vdata, family, actual_params ++ actual_indices}
+
+              if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
+                :ok
+              else
+                {:error, {:conversion_failure, actual, expected}}
+              end
             end
-          end
+
+          # Params-on-spine spelling (K6/§E.1, the inference form): the fields-only
+          # strategy cannot measure this arity. Coherence (spec 2026-07-09, Lean's
+          # check = infer + def-eq): route to the generic fallback — infer re-checks
+          # the spine params against the family telescope (the K6 arm), then the
+          # result converts against `expected`. Accepts nothing that is not already
+          # inferable-and-convertible.
+          pc > 0 and length(args) == pc + length(tele) ->
+            check_via_infer(ctx, {:ctor, cname, args}, expected)
+
+          true ->
+            {:error, :ctor_arity}
         end
     end
   end
 
-  def check(ctx, term, expected) do
+  def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
+
+  # The generic checking rule (moduledoc: "falling back to `infer` plus a
+  # cumulative conversion test") — shared by the fallthrough clause and the
+  # params-on-spine ctor branch above so the coherence logic exists exactly once.
+  defp check_via_infer(ctx, term, expected) do
     with {:ok, inferred} <- infer(ctx, term) do
       if subtype?(inferred, expected, ctx) do
         :ok
@@ -376,6 +309,15 @@ defmodule Cure.Core.Kernel do
     case Env.get_def(env, name) do
       nil ->
         {:error, :unknown_global}
+
+      # Builtin-op def (K2, R4): body-less by design. Check its DECLARED TYPE
+      # only — the nil body must never reach `check`/`infer` (no nil clause →
+      # crash). Total by fiat (Lean/Idris treat primitive ops so). Reachable via
+      # TotalityClosure.certify_type_level once builtin-op spines occur in TYPE
+      # positions (dependent-index arithmetic). Ordering: BEFORE the generic
+      # %{type:, body:} clause, which these defs would also match.
+      %{builtin_op: op, type: type_term} when not is_nil(op) ->
+        with {:ok, _level} <- infer_sort(Context.empty(env), type_term), do: :ok
 
       %{type: type_term, body: body_term} ->
         ctx = Context.empty(env)
@@ -425,12 +367,20 @@ defmodule Cure.Core.Kernel do
   """
   @spec validate_certificate(Env.t(), atom()) :: {:ok, Env.t()} | {:error, term()}
   def validate_certificate(env, name) do
-    with :ok <- check_def(env, name) do
-      %{body: body} = Env.get_def(env, name)
+    case Env.get_def(env, name) do
+      # Builtin-op def (K2, R4): total by fiat, no body to submit to the
+      # termination checker. Type-check the declared type, then certify.
+      %{builtin_op: op} when not is_nil(op) ->
+        with :ok <- check_def(env, name), do: {:ok, Env.certify(env, name)}
 
-      if Certificate.terminating?(name, body, env),
-        do: {:ok, Env.certify(env, name)},
-        else: {:error, :not_total}
+      _ ->
+        with :ok <- check_def(env, name) do
+          %{body: body} = Env.get_def(env, name)
+
+          if Certificate.terminating?(name, body, env),
+            do: {:ok, Env.certify(env, name)},
+            else: {:error, :not_total}
+        end
     end
   end
 
@@ -513,19 +463,6 @@ defmodule Cure.Core.Kernel do
   # Require a type value to be a Π; return its domain value + codomain closure.
   defp ensure_pi({:vpi, dom, cod_closure}), do: {:ok, dom, cod_closure}
   defp ensure_pi(_), do: {:error, :not_a_function}
-
-  # Require a type value to be a Σ; return its domain value + codomain closure.
-  defp ensure_sigma({:vsigma, dom, cod_closure}), do: {:ok, dom, cod_closure}
-  defp ensure_sigma(_), do: {:error, :not_a_sigma}
-
-  # Require a type value to be an equality; return its two endpoint values.
-  # The inductive identity type `Equivalent(a, x, y)` (spec 2026-07-04) evaluates
-  # to a `{:vdata, :Equivalent, [a, x, y]}` value (1 parameter + 2 indices); its
-  # endpoints are the two indices. The primitive `{:veq}` form is still produced by
-  # the internal rewrite machinery (retired in a later phase), so both are accepted.
-  defp ensure_eq({:veq, _ty, a_value, b_value}), do: {:ok, a_value, b_value}
-  defp ensure_eq({:vdata, :Equivalent, [_ty, a_value, b_value]}), do: {:ok, a_value, b_value}
-  defp ensure_eq(_), do: {:error, :not_an_equality}
 
   # Check `args` against a dependent telescope, threading each evaluated arg so
   # later telescope types can depend on earlier args. Returns the arg values
@@ -677,6 +614,24 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # A neutral APPLICATION is a valid type iff the kernel's own term-level
+  # judgement says so: reify the spine back to a term (signature-aware, so a
+  # {:vdata,…} argument keeps its param/index split — quote.ex split_data_args)
+  # and infer it. infer/2's {:app, f, a} rule resolves the head's type (ctx var
+  # or signature global), CHECKS each argument against the instantiated Pi
+  # domain, and returns the codomain — full validation, nothing trusted from
+  # the (untrusted) elaborator that assembled the motive. Accept only a
+  # {:vtype, l} result: `b(first(p))` with `b : (a) -> Type` sorts at l; a
+  # non-type codomain stays :not_a_type_value.
+  defp infer_type_value_sort(ctx, {:vneutral, {:napp, _, _} = neutral}) do
+    term = Quote.reify({:vneutral, neutral}, Context.length(ctx), Context.signature(ctx))
+
+    case infer(ctx, term) do
+      {:ok, {:vtype, level}} -> {:ok, level}
+      _ -> {:error, :not_a_type_value}
+    end
+  end
+
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
 
@@ -705,37 +660,6 @@ defmodule Cure.Core.Kernel do
 
       with {:ok, l2} <- infer_type_value_sort(Context.extend(ctx, dom), cod_value) do
         {:ok, Universe.max(l1, l2)}
-      end
-    end
-  end
-
-  defp infer_type_value_sort(ctx, {:vsigma, dom, cod_closure}) do
-    with {:ok, l1} <- infer_type_value_sort(ctx, dom) do
-      fresh = {:vneutral, {:nvar, Context.length(ctx)}}
-      cod_value = Eval.apply_closure(cod_closure, fresh)
-
-      with {:ok, l2} <- infer_type_value_sort(Context.extend(ctx, dom), cod_value) do
-        {:ok, Universe.max(l1, l2)}
-      end
-    end
-  end
-
-  # Eq's type-formation rule (mirrors `infer/2`'s `{:eq, ty, a, b}` clause): its
-  # sort is the sort of the carrier `ty`, and both endpoints must inhabit `ty`.
-  # `ty`'s sort is inferred by value-recursion (robust to an indexed carrier); the
-  # endpoints are reified and `check`ed against `ty`. Read-back is
-  # SIGNATURE-AWARE (`Context.signature(ctx)`) so an endpoint that is an
-  # indexed-family type value (e.g. `SNat(s)`) recovers its param/index split and
-  # `check` sees the correct arity — without the signature the split collapses and
-  # a well-formed indexed-family Eq motive is false-rejected `:bad_motive`.
-  defp infer_type_value_sort(ctx, {:veq, ty, a, b}) do
-    with {:ok, level} <- infer_type_value_sort(ctx, ty) do
-      depth = Context.length(ctx)
-      sig = Context.signature(ctx)
-
-      with :ok <- check(ctx, Quote.reify(a, depth, sig), ty),
-           :ok <- check(ctx, Quote.reify(b, depth, sig), ty) do
-        {:ok, level}
       end
     end
   end
@@ -999,7 +923,6 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:data, _, _, _}), do: true
   defp rigid_index?({:type, _}), do: true
   defp rigid_index?({:pi, _, _}), do: true
-  defp rigid_index?({:sigma, _, _}), do: true
   defp rigid_index?({:int_type}), do: true
   defp rigid_index?({:float_type}), do: true
   defp rigid_index?({:int_lit, _}), do: true
@@ -1074,17 +997,8 @@ defmodule Cure.Core.Kernel do
   defp replace_branch_vars({:lam, d, b}, subst),
     do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
 
-  defp replace_branch_vars({:sigma, a, b}, subst),
-    do: {:sigma, replace_branch_vars(a, subst), replace_branch_vars(b, shift_subst(subst, 1))}
-
   defp replace_branch_vars({:app, f, a}, subst),
     do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:pair, a, b}, subst),
-    do: {:pair, replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:fst, p}, subst), do: {:fst, replace_branch_vars(p, subst)}
-  defp replace_branch_vars({:snd, p}, subst), do: {:snd, replace_branch_vars(p, subst)}
 
   defp replace_branch_vars({:data, n, ps, is}, subst),
     do: {:data, n, Enum.map(ps, &replace_branch_vars(&1, subst)), Enum.map(is, &replace_branch_vars(&1, subst))}
@@ -1096,17 +1010,6 @@ defmodule Cure.Core.Kernel do
     do:
       {:case, replace_branch_vars(scr, subst), replace_branch_vars(m, subst),
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
-
-  defp replace_branch_vars({:eq, t, a, b}, subst),
-    do: {:eq, replace_branch_vars(t, subst), replace_branch_vars(a, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:refl, a}, subst), do: {:refl, replace_branch_vars(a, subst)}
-
-  defp replace_branch_vars({:rewrite, p, m, b}, subst),
-    do: {:rewrite, replace_branch_vars(p, subst), replace_branch_vars(m, subst), replace_branch_vars(b, subst)}
-
-  defp replace_branch_vars({:prim, op, args}, subst),
-    do: {:prim, op, Enum.map(args, &replace_branch_vars(&1, subst))}
 
   defp replace_branch_vars(other, _subst), do: other
 
@@ -1143,27 +1046,12 @@ defmodule Cure.Core.Kernel do
   end
 
   # Cumulative subtyping: universe-level inclusion on sorts, conversion otherwise.
-  # Arithmetic: numeric-polymorphic (Int or Float), result matches the operands.
-  defp infer_prim(ctx, op, [a, b]) when op in [:add, :sub, :mul, :div] do
-    with {:ok, ta} <- infer(ctx, a),
-         true <- numeric_type?(ta),
-         :ok <- check(ctx, b, ta) do
-      {:ok, ta}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
 
-  # Integer remainder.
-  defp infer_prim(ctx, :rem, [a, b]) do
-    with :ok <- check(ctx, a, {:vint_type}), :ok <- check(ctx, b, {:vint_type}) do
-      {:ok, {:vint_type}}
-    else
-      _ -> {:error, {:prim_type, :rem}}
-    end
-  end
-
-  # Ordered comparison: numeric operands, boolean result.
+  # infer_prim retired (K2, spec 2026-07-09): arithmetic/comparison are
+  # registry-keyed builtin-op GLOBALS typed as ordinary Pi defs; the certified-δ
+  # engine folds saturated literal spines. `bool_type_value/1` stays — the
+  # elaborator's literal/`:case` lowering (and the seeded comparison codomains)
+  # still route through it.
   @doc """
   The type **value** denoting the canonical `Bool` inductive (`{:vdata, :Bool, []}`).
   Bool has no params/indices, so this is exactly what `infer({:ctor, :True/:False, []})`
@@ -1175,47 +1063,6 @@ defmodule Cure.Core.Kernel do
     fid = Inductive.builtin(sig, :bool) || raise "builtin :bool not seeded (bootstrap/load-order bug)"
     {:vdata, fid, []}
   end
-
-  defp infer_prim(ctx, op, [a, b]) when op in [:lt, :le, :gt, :ge] do
-    with {:ok, ta} <- infer(ctx, a),
-         true <- numeric_type?(ta),
-         :ok <- check(ctx, b, ta) do
-      {:ok, bool_type_value(Context.signature(ctx))}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
-
-  # Equality: any shared type, boolean result. (Accepts two Bool-typed operands
-  # too — see Eval.fold's Bool-operand equality clause.)
-  defp infer_prim(ctx, op, [a, b]) when op in [:eq, :ne] do
-    with {:ok, ta} <- infer(ctx, a), :ok <- check(ctx, b, ta) do
-      {:ok, bool_type_value(Context.signature(ctx))}
-    else
-      _ -> {:error, {:prim_type, op}}
-    end
-  end
-
-  # The Boolean connectives (`and`/`or`/`not`) are no longer primitives — they are
-  # Std.Bool functions (`and`/`or`/`not`) that `case`-eliminate the inductive
-  # Bool. A residual `{:prim, :and/:or/:not}` therefore falls through to the
-  # `{:unknown_prim, op}` clause below (the desired rejection). `bool_type_value/1`
-  # stays: the numeric comparisons above still return the inductive Bool through it.
-
-  # Numeric negation: numeric operand, same result type.
-  defp infer_prim(ctx, :neg, [a]) do
-    with {:ok, ta} <- infer(ctx, a), true <- numeric_type?(ta) do
-      {:ok, ta}
-    else
-      _ -> {:error, {:prim_type, :neg}}
-    end
-  end
-
-  defp infer_prim(_ctx, op, _args), do: {:error, {:unknown_prim, op}}
-
-  defp numeric_type?({:vint_type}), do: true
-  defp numeric_type?({:vfloat_type}), do: true
-  defp numeric_type?(_), do: false
 
   defp subtype?({:vtype, l1}, {:vtype, l2}, _ctx), do: Universe.le?(l1, l2)
 

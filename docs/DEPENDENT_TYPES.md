@@ -89,11 +89,9 @@ trusted Cure dependent typing:
 - `proof` containers are currently a legacy proof-shape gate. They require
   proof-looking return types, but they do not validate the proposition in the
   trusted Core kernel.
-- `Cure.Types.Pi`, `Cure.Types.Sigma`, `Cure.Types.Equality`,
-  `Cure.Types.Holes`, and `Cure.Types.Dependent` are compatibility helpers
-  unless the source program also routes through `Cure.Elab.Program`.
-- `Std.Refine` remains an SMT/refinement feature, not dependent typing through
-  the Core kernel.
+- `Cure.Types.Pi`, `Cure.Types.Sigma`, `Cure.Types.Equality`, and
+  `Cure.Types.Holes` are compatibility helpers unless the source program
+  also routes through `Cure.Elab.Program`.
 
 The next dependency work should turn the unsupported items above into either
 Core-backed user features or explicit compile-time rejections.

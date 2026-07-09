@@ -298,32 +298,4 @@ defmodule Cure.PGOTest do
   # SMT translator -- pattern-aware regression
   # ============================================================================
 
-  describe "SMT translator pgo_hint" do
-    alias Cure.SMT.Translator
-
-    test "default hint produces today's query" do
-      ast =
-        {:binary_op, [operator: :>], [{:variable, [], "x"}, {:literal, [subtype: :integer], 0}]}
-
-      old = Translator.generate_query(ast, %{})
-      new_default = Translator.generate_query(ast, %{}, :default)
-      assert old == new_default
-    end
-
-    test "hot hint emits the arith-solver option" do
-      ast =
-        {:binary_op, [operator: :>], [{:variable, [], "x"}, {:literal, [subtype: :integer], 0}]}
-
-      hot = Translator.generate_query(ast, %{}, :hot)
-      assert hot =~ "(set-option :smt.arith.solver 6)"
-    end
-
-    test "cold hint omits the arith-solver option" do
-      ast =
-        {:binary_op, [operator: :>], [{:variable, [], "x"}, {:literal, [subtype: :integer], 0}]}
-
-      cold = Translator.generate_query(ast, %{}, :cold)
-      refute cold =~ "(set-option :smt.arith.solver 6)"
-    end
-  end
 end

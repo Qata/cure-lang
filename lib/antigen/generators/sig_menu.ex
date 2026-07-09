@@ -29,7 +29,7 @@ defmodule Antigen.Generators.SigMenu do
   def goal_types, do: [nat(), bd(), vec(z()), vec(s(z())),
                        {:data, :List, [nat()], []}, {:data, :List, [bd()], []},
                        {:pi, nat(), nat()}, {:pi, nat(), bd()},
-                       {:sigma, nat(), nat()}]
+                       {:data, :Sigma, [nat(), {:lam, nat(), nat()}], []}]
 
   # -- the v1 environment -----------------------------------------------------
   @doc "Declare families, add plus/dbl, and certify them through the kernel."
@@ -41,6 +41,16 @@ defmodule Antigen.Generators.SigMenu do
         [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, nat()}], [])])
       |> Inductive.declare(Inductive.family(:Bd, [], [], 0),
         [Inductive.ctor(:T, [], []), Inductive.ctor(:F, [], [])])
+      # SList : Type0 — a snoc-free cons list of Nat, backing the carried-index
+      # forced-check seeds (dot-forcing vertical #24, spec 2026-07-08). Its
+      # `app` def (added below, mirroring `plus`) is the stuck function whose
+      # application forms `H`'s second, carried index.
+      |> Inductive.declare(Inductive.family(:SList, [], [], 0),
+        [
+          Inductive.ctor(:SNil, [], []),
+          Inductive.ctor(:SCons, [{:h, nat()}, {:t, {:data, :SList, [], []}}], [],
+            [:present, :present])
+        ])
       |> Inductive.declare(Inductive.family(:Vec, [], [{:n, nat()}], 0),
         [
           Inductive.ctor(:vnil, [], [z()]),
@@ -103,7 +113,7 @@ defmodule Antigen.Generators.SigMenu do
           Inductive.ctor(:tint, [], [{:int_type}]),
           Inductive.ctor(:tflt, [], [{:float_type}]),
           Inductive.ctor(:tpi, [], [{:pi, nat(), nat()}]),
-          Inductive.ctor(:tsig, [], [{:sigma, nat(), nat()}]),
+          Inductive.ctor(:tsig, [], [{:data, :Sigma, [nat(), {:lam, nat(), nat()}], []}]),
           Inductive.ctor(:tvec, [], [{:data, :Vec, [{:ctor, :Z, []}], []}])
         ])
       # Tg : (i:Int) -> Type0 / Tgf : (i:Float) -> Type0 — families indexed by a
@@ -114,6 +124,37 @@ defmodule Antigen.Generators.SigMenu do
         [Inductive.ctor(:tg0, [], [{:int_lit, 0}]), Inductive.ctor(:tg1, [], [{:int_lit, 1}])])
       |> Inductive.declare(Inductive.family(:Tgf, [], [{:i, {:float_type}}], 0),
         [Inductive.ctor(:tgf0, [], [{:float_lit, 0.0}]), Inductive.ctor(:tgf1, [], [{:float_lit, 1.5}])])
+      # Equivalent : (a:Type) -> a -> a -> Type, sole ctor reflexive (erased
+      # witness) — the SAME canonical identity family real Cure seeds via
+      # `Cure.Core.Builtins.seed/2` (byte-mirror of core/builtins.ex's
+      # eq_family/eq_ctors). Required since the primitive `{:eq}`/`{:refl}`/
+      # `{:rewrite}` Core forms retired (Phase C): Generators.Equality now emits
+      # inductive Equivalent propositions and J/subst `:case` transports, which
+      # need the family in the menu signature.
+      |> Inductive.declare(
+        Inductive.family(:Equivalent, [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0),
+        [Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])]
+      )
+      |> Inductive.register_builtin(:eq, :Equivalent)
+      # Sigma : (a:Type) -> ((a) -> Type) -> Type, sole ctor mk_pair — the SAME
+      # canonical dependent-pair family real Cure seeds via `Cure.Core.Builtins.seed/2`
+      # (byte-mirror of core/builtins.ex's sigma_family/sigma_ctors). Required since
+      # the primitive `{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` Core forms retired (D2):
+      # the generators now emit inductive Sigma / mk_pair / ι-on-case projections,
+      # which need the family in the menu signature.
+      |> Inductive.declare(
+        Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, {:var, 0}, {:type, 0}}], [], 0),
+        [
+          Inductive.ctor(
+            :mk_pair,
+            [x: {:var, 1}, _a1: {:app, {:var, 1}, {:var, 0}}],
+            [],
+            [:present, :present],
+            [{:var, 3}, {:var, 2}]
+          )
+        ]
+      )
+      |> Inductive.register_builtin(:sigma, :Sigma)
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, nat(), {:pi, nat(), nat()}}
@@ -131,7 +172,51 @@ defmodule Antigen.Generators.SigMenu do
     {:ok, env} = Kernel.validate_certificate(env, :plus)
     env = Env.add_def(env, :dbl, dbl_type, dbl_body)
     {:ok, env} = Kernel.validate_certificate(env, :dbl)
-    env
+
+    # app xs ys = case xs of SNil -> ys | SCons(h, t) -> SCons(h, app(t, ys))
+    # (structural on arg 1) — the stuck function forming `H`'s carried index.
+    slist = {:data, :SList, [], []}
+    app_type = {:pi, slist, {:pi, slist, slist}}
+
+    app_body =
+      {:lam, slist,
+       {:lam, slist,
+        {:case, {:var, 1}, {:lam, slist, slist},
+         [
+           {:SNil, 0, {:var, 0}},
+           {:SCons, 2,
+            {:ctor, :SCons,
+             [{:var, 1}, {:app, {:app, {:global, :app}, {:var, 0}}, {:var, 2}}]}}
+         ]}}}
+
+    env = Env.add_def(env, :app, app_type, app_body)
+    {:ok, env} = Kernel.validate_certificate(env, :app)
+
+    # H : (n:Nat, xs:SList) -> Type0, ctor hmk : H(S(m), app(as, bs)) — a
+    # TWO-index family whose FIRST index is ctor-pinned/invertible (S(m) against
+    # S(j) forces m := j) while the SECOND is a STUCK function application
+    # (app(as, bs), never a rigid head), so its index pair reduces `:undecided`
+    # and is dropped, leaving branch_unify to still `:solved` the forced `m`.
+    # G mirrors Task 2's sibling family. Together they give the dot-forcing
+    # vertical a genuinely multi-index, carried-shaped subst the Vec/Sq cases
+    # don't cover. All of hmk's telescope (m, as, bs) is erased (index witnesses).
+    env =
+      env
+      |> Inductive.declare(Inductive.family(:H, [], [{:n, nat()}, {:xs, slist}], 0),
+        [
+          Inductive.ctor(:hmk, [{:m, nat()}, {:as, slist}, {:bs, slist}],
+            [s({:var, 2}), {:app, {:app, {:global, :app}, {:var, 1}}, {:var, 0}}],
+            [:erased, :erased, :erased])
+        ])
+      |> Inductive.declare(Inductive.family(:G, [], [{:cs, slist}], 0),
+        [Inductive.ctor(:gwrap, [{:cs, slist}], [{:var, 0}], [:erased])])
+
+    # K2 (spec 2026-07-09): the 25 builtin-op globals (int_*/float_* twins +
+    # A1 struct_eq/struct_ne), seeded via the SAME public seeder real Cure uses.
+    # Required so retargeted builtin-op spines in the generator catalogs
+    # typecheck/fold instead of dying `:unknown_global`. Runs AFTER the Bool
+    # declaration above (comparison codomains resolve the :bool builtin).
+    Cure.Core.Builtins.seed_ops(env)
   end
 
   # -- context rebuild (spec §4.1) --------------------------------------------
@@ -151,7 +236,7 @@ defmodule Antigen.Generators.SigMenu do
       {:data, :Bd, _, _} -> true
       {:type, _} -> true
       {:pi, dom, cod} -> inhabitable?(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)
-      {:sigma, a, b} ->
+      {:data, :Sigma, [a, {:lam, _a, b}], []} ->
         inhabitable?(ctx, a) and
           inhabitable?(Context.extend(ctx, Eval.eval(a, Context.env(ctx))), b)
       {:data, :Vec, p, idx} ->
@@ -170,9 +255,9 @@ defmodule Antigen.Generators.SigMenu do
       {:type, _} -> nat()
       {:pi, dom, cod} ->
         {:lam, dom, canon(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)}
-      {:sigma, a, b} ->
+      {:data, :Sigma, [a, {:lam, _a, b}], []} ->
         av = canon(ctx, a)
-        {:pair, av, canon(ctx, subst0(b, av, ctx))}
+        {:ctor, :mk_pair, [av, canon(ctx, subst0(b, av, ctx))]}
       {:data, :Vec, p, idx} ->
         i = vec_index(p, idx)
         case whnf(ctx, i) do
@@ -233,12 +318,10 @@ defmodule Antigen.Generators.SigMenu do
     end)
   end
 
-  # β-substitute `arg`'s value for the Sigma's own bound variable (de Bruijn 0)
-  # into `b`. `b` is written one binder deeper than `ctx` (the `:sigma` binding
-  # convention: `{:sigma, a, b}` binds in `b`, matching `Kernel.infer`'s
-  # `ctx2 = Context.extend(ctx, a_value)` before checking `b`) — but the
-  # component actually placed in `{:pair, av, ...}` must be a term in the
-  # UNEXTENDED `ctx` (`Kernel.check`'s `:pair` clause checks its second
+  # β-substitute `arg`'s value for the Sigma codomain's own bound variable (de
+  # Bruijn 0) into `b`. `b` is the body of the inductive Sigma's codomain lambda
+  # `{:data, :Sigma, [a, {:lam, a, b}], []}`, one binder deeper than `ctx` — but the
+  # component actually placed in `{:ctor, :mk_pair, [av, ...]}` must be a term in the
   # component in the original `ctx`, against `cod_closure` applied to
   # `a_value` — never in an extended context). A raw `Term.subst/3` is not
   # enough: it replaces only index 0 and leaves every OTHER free index in `b`

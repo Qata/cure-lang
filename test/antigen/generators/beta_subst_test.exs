@@ -23,6 +23,13 @@ defmodule Antigen.Generators.BetaSubstTest do
   defp broke({:lam, t, b}, e, d), do: {:lam, broke(t, e, d), broke(b, e, d + 1)}
   defp broke({:pi, t, b}, e, d), do: {:pi, broke(t, e, d), broke(b, e, d + 1)}
   defp broke({:sigma, t, b}, e, d), do: {:sigma, broke(t, e, d), broke(b, e, d + 1)}
+  # Inductive Sigma (D2): a `{:data, …}` node introduces no binder itself (its Σ
+  # codomain lambda does, handled by the `{:lam}` clause), so its args recurse at the
+  # same depth — required for the σ-shift trap to keep its teeth.
+  defp broke({:data, n, ps, is}, e, d),
+    do: {:data, n, Enum.map(ps, &broke(&1, e, d)), Enum.map(is, &broke(&1, e, d))}
+
+  defp broke({:ctor, n, args}, e, d), do: {:ctor, n, Enum.map(args, &broke(&1, e, d))}
   defp broke({:app, f, x}, e, d), do: {:app, broke(f, e, d), broke(x, e, d)}
 
   defp broke({:case, s, m, brs}, e, d),

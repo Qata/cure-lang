@@ -6,6 +6,16 @@ defmodule Antigen.Generators.MutationTest do
 
   defp sample(gen, n), do: B.interp(gen) |> Enum.take(n)
 
+  # "fst on a Nat" spelled inductively (D2): a projection case over mk_pair
+  # scrutinising a Nat — intrinsically ill-typed (case on a non-Sigma), the same
+  # :proj_non_pair fault the retired primitive `{:fst, Z}` fixture carried.
+  defp proj_on_nat do
+    nat = {:data, :Nat, [], []}
+
+    {:case, {:ctor, :Z, []}, {:lam, {:data, :Sigma, [nat, {:lam, nat, nat}], []}, nat},
+     [{:mk_pair, 2, {:var, 1}}]}
+  end
+
   test "every operator produces a term the kernel REJECTS under infer (construction guarantee)" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
@@ -60,7 +70,7 @@ defmodule Antigen.Generators.MutationTest do
   test "each wrapper is non-contaminating and fault-driven (deterministic, fixed filler)" do
     ctx = Context.empty(SigMenu.env_of(:v1))
     wt = {:ctor, :Z, []}                 # well-typed Nat
-    fault = {:fst, {:ctor, :Z, []}}      # intrinsically ill-typed
+    fault = proj_on_nat()                # intrinsically ill-typed
 
     for kind <- Mutation.wrappers() do
       assert {:ok, _} = Kernel.infer(ctx, Mutation.wrap(wt, kind, wt)),
@@ -73,7 +83,7 @@ defmodule Antigen.Generators.MutationTest do
   test "a fixed deep wrapper stack stays well-typed and propagates a fault (composition)" do
     ctx = Context.empty(SigMenu.env_of(:v1))
     wt = {:ctor, :Z, []}
-    fault = {:fst, {:ctor, :Z, []}}
+    fault = proj_on_nat()
     # fold every wrapper kind, innermost-first, with a fixed Nat filler
     stack = fn inner -> Enum.reduce(Mutation.wrappers(), inner, fn k, acc -> Mutation.wrap(acc, k, wt) end) end
 
@@ -132,8 +142,13 @@ defmodule Antigen.Generators.MutationTest do
   test "pair_component's well-typed analog is accepted (operator genuinely ill-types)" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
-    good = {:app, {:lam, {:sigma, {:data, :Nat, [], []}, {:data, :Nat, [], []}}, {:var, 0}},
-            {:pair, {:ctor, :Z, []}, {:ctor, :Z, []}}}
+    # Inductive spelling (D2): identity-app over Sigma(Nat, λ_.Nat) checking a
+    # well-typed mk_pair — the same check-embedded shape as the operator's output.
+    nat = {:data, :Nat, [], []}
+
+    good = {:app, {:lam, {:data, :Sigma, [nat, {:lam, nat, nat}], []}, {:var, 0}},
+            {:ctor, :mk_pair, [{:ctor, :Z, []}, {:ctor, :Z, []}]}}
+
     assert {:ok, _} = Kernel.infer(ctx, good)
   end
 

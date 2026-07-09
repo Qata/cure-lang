@@ -17,7 +17,8 @@ defmodule Antigen.BuiltinBoolMigrationTest do
     # f = λn:Int. case (n == 0) of { True -> 0 ; False -> f n }  (diverges for n != 0)
     body =
       {:lam, {:int_type},
-       {:case, {:prim, :eq, [{:var, 0}, {:int_lit, 0}]}, {:lam, {:data, :Bool, [], []}, {:int_type}},
+       {:case, {:app, {:app, {:global, :int_eq}, {:var, 0}}, {:int_lit, 0}},
+        {:lam, {:data, :Bool, [], []}, {:int_type}},
         [{:True, 0, {:int_lit, 0}}, {:False, 0, {:app, {:global, :f}, {:var, 0}}}]}}
 
     refute Certificate.terminating?(:f, body, Builtins.seed(Env.empty()))
@@ -25,6 +26,8 @@ defmodule Antigen.BuiltinBoolMigrationTest do
 
   test "a comparison constructs the inductive Bool, not a primitive Bool value" do
     ctx = Context.empty(Builtins.seed(Env.empty()))
-    assert {:ok, {:vdata, :Bool, []}} = Kernel.infer(ctx, {:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]})
+
+    assert {:ok, {:vdata, :Bool, []}} =
+             Kernel.infer(ctx, {:app, {:app, {:global, :int_lt}, {:int_lit, 3}}, {:int_lit, 5}})
   end
 end

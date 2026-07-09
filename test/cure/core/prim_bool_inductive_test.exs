@@ -2,23 +2,27 @@ defmodule Cure.Core.PrimBoolInductiveTest do
   use ExUnit.Case, async: true
   alias Cure.Core.{Builtins, Context, Env, Kernel}
 
+  # K2 (spec 2026-07-09): comparisons are builtin-op GLOBAL spines.
   setup do
     %{ctx: Context.empty(Builtins.seed(Env.empty()))}
   end
 
-  test "a comparison infers to the Bool inductive, not {:vbool_type}", %{ctx: ctx} do
-    {:ok, ty} = Kernel.infer(ctx, {:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]})
+  defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
+
+  test "a comparison spine infers to the Bool inductive, not {:vbool_type}", %{ctx: ctx} do
+    {:ok, ty} = Kernel.infer(ctx, app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}))
     assert ty == {:vdata, :Bool, []}
   end
 
   test "equality infers to the Bool inductive", %{ctx: ctx} do
-    {:ok, ty} = Kernel.infer(ctx, {:prim, :eq, [{:int_lit, 3}, {:int_lit, 3}]})
+    {:ok, ty} = Kernel.infer(ctx, app2(:int_eq, {:int_lit, 3}, {:int_lit, 3}))
     assert ty == {:vdata, :Bool, []}
   end
 
-  test "the connective primitives are retired: a residual :and prim is rejected", %{ctx: ctx} do
-    tt = {:prim, :lt, [{:int_lit, 1}, {:int_lit, 2}]}
-    # `and` is now the Std.Bool case-def `and`, not a primitive.
-    assert {:error, {:unknown_prim, :and}} = Kernel.infer(ctx, {:prim, :and, [tt, tt]})
+  test "the connectives are not ops: an :and spine is an unknown global", %{ctx: ctx} do
+    tt = app2(:int_lt, {:int_lit, 1}, {:int_lit, 2})
+    # `and` is the Std.Bool case-def, absent from the bare seeded env
+    # (was {:unknown_prim, :and} in the prim world).
+    assert {:error, :unknown_global} = Kernel.infer(ctx, app2(:and, tt, tt))
   end
 end

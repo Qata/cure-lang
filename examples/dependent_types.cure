@@ -1,8 +1,9 @@
 mod DependentTypes
-  # Refinement types constrain values at compile time
-  type NonZero = {x: Int | x != 0}
-  type Positive = {x: Int | x > 0}
-  type Percentage = {p: Int | p >= 0 and p <= 100}
+  # Aliases naming domain invariants. The invariants are unchecked pending
+  # SMTCoq-style refinement support; each is a plain Int for now.
+  type NonZero = Int      # invariant: x != 0 (unchecked)
+  type Positive = Int     # invariant: x > 0 (unchecked)
+  type Percentage = Int   # invariant: 0 <= p <= 100 (unchecked)
 
   # Functions with guard constraints are verified at call sites
   fn safe_divide(a: Int, b: Int) -> Int when b != 0 = a / b

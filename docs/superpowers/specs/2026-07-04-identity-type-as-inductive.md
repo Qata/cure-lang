@@ -233,7 +233,97 @@ behaviour of user‑level inductives (`MyEq`/`mrefl`, `dp01`) and Cure's existin
 deletion rule (ledger #23); seeding builtin `Eq` extends, not introduces, the
 K stance.
 
-## Current state & the K6 coupling that blocks Phase B/C (2026‑07‑08)
+## Current state — REVISED 2026‑07‑08 (evening): the K6 gate is STALE; Phase B/C authorized and re‑scoped
+
+Operator approval obtained 2026‑07‑08: *"I approve the identity-type kernel
+surgery rewrite."* A fresh evidence probe (kernel-parity-batch branch) then
+found the section below OUTDATED in its central claim. Revised ground truth:
+
+1. **The K6‑blocks‑refl‑inference concern is DODGED AND LANDED.** The kernel
+   now infers a **params‑on‑spine saturated ctor** (commit `b355753` — K6
+   task 1 — `kernel.ex:200‑216`: when `length(args) == param_count +
+   field_count`, it re‑checks `params ++ fields` against the concatenated
+   telescopes and NbE‑derives the result indices — no metavariables, no grade
+   tracking, a small strictly‑sound kernel addition, NOT the deferred K6 grade
+   machinery). Commit `f3b0e73` — K6 task 2 — is the elaborator‑side consumer:
+   it retargets `bridge_step` to build its inference‑position proof through
+   this new capability instead of the primitive `{:refl}`.
+   `mk_refl_infer(ty,x) = {:ctor, :reflexive, [ty, x]}` (`elaborator.ex:1051`)
+   is inferable: probe evidence
+   `infer {:ctor,:reflexive,[Nat,Z]} => {:ok, {:vdata,:Equivalent,[Nat,Z,Z]}}`
+   (bare form still correctly rejects with `:ctor_requires_checking_mode`,
+   which is a KERNEL atom — `kernel.ex:222` — not an elaborator one as the
+   stale section below claimed). `bridge_step` already uses the inductive
+   spine form; additionally it is currently DORMANT in the whole corpus
+   (normalizer improvements route rw07 through the `contains_a` syntactic
+   path — traced with `CURE_REWRITE_LOG=1`, no test reaches `bridge_step`).
+2. **Primitive `{:eq}`/`{:refl}` have NO producers left.** All surface paths
+   build `{:data, :Equivalent, …}` / `{:ctor, :reflexive, …}`; the remaining
+   `{:eq,}`/`{:refl,}` matches in `lib/cure/elab/*` are structural traversal
+   clauses only. `no_eq_node` is `:warn` in the default validator config and
+   `:reject` in `release_config` (`validator.ex:45,81`).
+3. **The REAL remaining blocker for Phase B is the computed‑endpoints
+   desugaring problem, not refl inference.** The first Phase‑B attempt
+   (`d44edb8`, `rw_case_build`) was REVERTED in `c635e8c` with the diagnosis:
+   shifting an already‑elaborated body +1 into the refl branch type‑checks
+   only for VARIABLE endpoints (where `unify_indices` substitutes the branch
+   witness); for COMPUTED endpoints it drifts verdicts (empirically:
+   `frp01_par_assoc` accept→reject). **The correct Phase B re‑elaborates the
+   body INSIDE the refl branch** — routing through `elaborate_match`'s branch
+   machinery, whose `build_motive` sentinels handle computed indices — rather
+   than shifting a pre‑built body. That revert message is the roadmap.
+
+**Re‑scoped remaining work (this batch, operator‑approved):**
+
+- **Phase B (the surgery's heart):** `rewrite p in body` → single‑branch
+  inductive `:case` via in‑branch re‑elaboration (route through
+  `elaborate_match`/`build_motive`), replacing every `{:rewrite, …}` producer —
+  **seven** literal‑construction sites, not six (the previous count missed the
+  `bridge_step` outer wrap): `elaborator.ex:1083` (`rewrite_plan`'s
+  `contains_a`/symmetry branch), `:1095` (`contains_b` branch), `:1162`
+  (`bridge_step`'s inner bridge proof), `:1166` (`bridge_step`'s outer wrap —
+  previously omitted), `:1195` (`symmetry_proof`), `:1856`
+  (`elaborate_with_eq_branch`'s sibling transport), and `:3421`
+  (`elaborate_carried_eq_branch`'s sibling transport). Behavioural pin:
+  oracle `rewrite/rw01‑rw09`, `refl/rf01‑rf05`, and the **frp cluster with
+  computed endpoints (`frp01_par_assoc` is the sentinel that killed the naive
+  attempt)** must keep byte‑identical verdicts. Because two of the seven
+  producer sites (`:1856`, `:3421`) are the `with`‑clause sibling‑transport
+  machinery, not the `rewrite` keyword, the pin must also cover `with/*`
+  (`wi05_sibling_refine` exercises exactly this transport) and `withmulti/*` —
+  a regression there would be invisible to the `rewrite`/`refl`/`frp`
+  clusters alone.
+- **Phase C (subtractive):** with producers gone, strip the dead
+  `{:rewrite}`/`{:eq}`/`{:refl}`/`{:veq}` clauses across
+  `term.ex`/`eval.ex`/`kernel.ex`/`quote.ex`/`certificate.ex`/`serialize.ex`
+  and elab traversal helpers; flip `no_rewrite_node` (and default
+  `no_eq_node`) to `:reject`. Full TCB gate: the existing
+  `test/antigen/eq_inductive_antibody_test.exs` extended per Gate C
+  (equates‑no‑distinct‑normal‑forms obligation), full Antigen, full suite,
+  oracle replay.
+- **Phase B′ (stdlib fakery retirement) — ALREADY LANDED, not remaining
+  work.** Finding 3 above is stale: `48c68ab` (2026‑07‑04, before this batch)
+  rewrote `Std.Equal`/`Std.Proof`'s `:cure_refl` stubs into genuine inductive
+  proofs — `sym`/`trans`/`cong` now match `reflexive` for real (no runtime
+  token), and `Std.Proof` proves `plus_zero_right`/`plus_succ_right`/
+  `plus_comm` by induction on `Nat`, closing with `reflexive`/`rewrite`;
+  `plus_comm`'s old non‑inductive‑`Int` stub and the unprovable
+  `append_nil`/`map_id` stubs were dropped rather than faked. `ae02ba5` and
+  `b199a2a` (2026‑07‑08, earlier the same day — already on this branch, just
+  before this doc revision) renamed the module to
+  `Std.Equivalent`/`reflexive`. Both `lib/std/` and `priv/std/` carry the
+  current versions (`equivalent.cure`, `proof.cure`) — verified in this
+  review to contain no `:cure_refl` occurrences outside a doc‑comment
+  contrasting the old behaviour. Residual fakery (`:cure_refl`) survives only
+  in `examples/proof_laws.cure` and `vicure/test_syntax.cure`, which are demo/
+  fixture files outside finding 3's stated scope (`lib/std/equal.cure`,
+  `lib/std/proof.cure`) — not a Phase B′ blocker, and out of scope for this
+  batch unless the operator wants them swept too.
+
+The section below is retained verbatim as the historical record of the
+(now‑stale) 2026‑07‑08 morning assessment.
+
+## HISTORICAL (superseded): Current state & the K6 coupling that blocks Phase B/C (2026‑07‑08)
 
 **Phase A is LANDED and green.** Surface `Eq(ty,a,b)` elaborates to
 `{:data, :Eq, [ty], [a,b]}` (`declarations.ex:813`), `refl(x)` to
@@ -276,3 +366,31 @@ the primitive retirement (Phase B/C, `no_eq_node` clause) is a faithfulness
 migration **gated on K6** (hence on the grade machinery). It joins K6/K12‑Sym/K7
 as the deferred grade+representation modernization — surfaced to the operator as
 the campaign‑state finding. `no_eq_node` stays `:off`.
+
+## Phase-B encoding amendment (2026-07-08, post-B1 empirical STOP)
+
+The "re-elaborate the body inside the refl branch" prescription (from
+`c635e8c`'s diagnosis) is UNIMPLEMENTABLE for propositional rewrites, proven
+empirically during B1: `Equivalent`'s single ctor binds both index positions
+to one witness, so `build_motive` abstracts BOTH endpoints and the refl-branch
+goal demands `a ≡ b` definitionally in-branch — false precisely when a rewrite
+is needed (`plus_zero_right`: goal became `Equivalent(Nat, S(plus(n,Z)), S(n))`,
+a conversion failure; the endpoint is stuck-computed, so the index equation
+degrades to `:undecided` and no substitution occurs).
+
+**Adopted encoding — the standard J/subst transport** (canonical in
+Agda/Lean, where `subst`/`Eq.mpr` derive exactly this way from J):
+
+```
+transport = {:case, proof, λ(x y p). (motive@x) -> (motive@y), [reflexive(w) -> λh. h]}
+result    = {:app, transport, body}     # body elaborated OUTSIDE at motive@A, unchanged
+```
+
+Verdict-preserving by construction (the body is still checked at the identical
+`body_expected = motive@A`; only the eliminator node changes), no de Bruijn
+body-shift, dodges the indexed-motive reify gap (motive result only ever
+`Eval.apply`-ed). This is a faithful instantiation of locked Decision 3
+("single-branch dependent match on the proof carrying the motive
+`rewrite_plan` computes") — the branch body is the identity, and the motive is
+the arrow form. All seven producer sites reduce to one identity-transport
+helper.

@@ -66,8 +66,8 @@ defmodule Antigen.Generators.Term do
     if check_mode_only?(ctx, term), do: {:app, {:lam, goal, {:var, 0}}, term}, else: term
   end
 
-  defp check_mode_only?(_ctx, {:pair, _, _}), do: true
-
+  # The Sigma pair `mk_pair` is check-mode-only (a ctor of a params-carrying family),
+  # handled by the general ctor clause below — no separate primitive-pair clause (D2).
   defp check_mode_only?(ctx, {:ctor, cname, _args}) do
     sig = Context.signature(ctx)
 
@@ -132,17 +132,16 @@ defmodule Antigen.Generators.Term do
     [{3, Gen.bind(gen(body_ctx, cod, size - 1), fn b -> Gen.return({:lam, dom, b}) end)}]
   end
 
-  defp intro_rules(ctx, _goal, {:sigma, a, b}, size) do
+  defp intro_rules(ctx, _goal, {:data, :Sigma, [a, {:lam, _a, b}], []}, size) do
     [{3,
       Gen.bind(gen(ctx, a, size - 1), fn av ->
-        # `b` is written one binder deeper than `ctx` (sigma binds in `b`); the
-        # component that ends up inside `{:pair, av, bv}` must be a term in the
-        # UNEXTENDED `ctx` (`Kernel.check`'s `:pair` clause checks it there) —
-        # so β-substitute `av` for `b`'s own bound variable via `SigMenu.subst0/3`
-        # (same reasoning as `SigMenu.canon`'s Sigma clause, Task 1) before
-        # recursing. Unreachable in v1 (see Task 1's note) but must stay correct.
+        # `b` is the Σ codomain body, one binder deeper than `ctx` (the `{:lam, a, b}`
+        # binds the first component); the second component inside `{:ctor, :mk_pair,
+        # [av, bv]}` must be a term in the UNEXTENDED `ctx`, so β-substitute `av` for
+        # `b`'s own bound variable via `SigMenu.subst0/3` (same reasoning as
+        # `SigMenu.canon`'s Sigma clause). Unreachable in v1 but must stay correct.
         Gen.bind(gen(ctx, SigMenu.subst0(b, av, ctx), size - 1), fn bv ->
-          Gen.return({:pair, av, bv})
+          Gen.return({:ctor, :mk_pair, [av, bv]})
         end)
       end)}]
   end
@@ -347,17 +346,23 @@ defmodule Antigen.Generators.Term do
       end)}]
   end
 
-  # fst/snd of a Γ-variable of Sigma type whose relevant component meets the goal.
+  # Projection (via single-branch ι-on-case over mk_pair) of a Γ-variable of Sigma
+  # type whose relevant component meets the goal. The Σ is Sigma(Nat, const-Nat) in
+  # v1 (a, b closed), so the case motive is the constant component type.
   defp proj_rules(ctx, goal) do
     depth = Context.length(ctx)
 
     Enum.flat_map((if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))), fn k ->
       case whnf(ctx, Normalise.quote(Context.lookup(ctx, k), depth)) do
-        {:sigma, _a, _b} ->
-          fst_r = if accept_infer?(ctx, {:fst, {:var, k}}, goal), do: [{2, Gen.return({:fst, {:var, k}})}], else: []
-          snd_r = if accept_infer?(ctx, {:snd, {:var, k}}, goal), do: [{2, Gen.return({:snd, {:var, k}})}], else: []
+        {:data, :Sigma, [a, {:lam, _a, b}], []} = st ->
+          fst_t = {:case, {:var, k}, {:lam, st, a}, [{:mk_pair, 2, {:var, 1}}]}
+          snd_t = {:case, {:var, k}, {:lam, st, b}, [{:mk_pair, 2, {:var, 0}}]}
+          fst_r = if accept_infer?(ctx, fst_t, goal), do: [{2, Gen.return(fst_t)}], else: []
+          snd_r = if accept_infer?(ctx, snd_t, goal), do: [{2, Gen.return(snd_t)}], else: []
           fst_r ++ snd_r
-        _ -> []
+
+        _ ->
+          []
       end
     end)
   end

@@ -468,7 +468,6 @@ defmodule Cure.Types.PatternChecker do
   end
 
   defp bitstring_scrutinee?(:bitstring), do: true
-  defp bitstring_scrutinee?({:refinement, :bitstring, _, _}), do: true
   defp bitstring_scrutinee?(_), do: false
 
   defp empty_binary_pattern?({:literal, meta, []}),

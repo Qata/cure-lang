@@ -1,29 +1,40 @@
 defmodule Cure.Core.PrimBoolEvalTest do
   use ExUnit.Case, async: true
-  alias Cure.Core.Eval
+  alias Cure.Core.{Builtins, Context, Env, Normalise}
 
-  test "eval folds a comparison to the True constructor value" do
-    v = Eval.eval({:prim, :lt, [{:int_lit, 3}, {:int_lit, 5}]}, [])
-    assert v == Eval.eval({:ctor, :True, []}, [])
-    refute v == {:vbool, true}
+  # K2 (spec 2026-07-09): comparisons are builtin-op GLOBAL spines folded by
+  # the certified-δ engine (Eval alone leaves every global neutral).
+  defp ctx, do: Context.empty(Builtins.seed(Env.empty()))
+  defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
+
+  test "certified delta folds a comparison to the True constructor" do
+    t = Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
+    assert t == {:ctor, :True, []}
+    refute t == {:bool_lit, true}
   end
 
-  test "eval folds a false comparison to the False constructor value" do
-    v = Eval.eval({:prim, :lt, [{:int_lit, 5}, {:int_lit, 3}]}, [])
-    assert v == Eval.eval({:ctor, :False, []}, [])
+  test "certified delta folds a false comparison to the False constructor" do
+    assert {:ctor, :False, []} =
+             Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 5}, {:int_lit, 3}), delta: :certified)
   end
 
-  test "the connective primitives are retired: a residual connective prim is stuck" do
-    # `and`/`or`/`not` are now Std.Bool case-defs, not primitives; a residual prim
-    # no longer folds (it stays a stuck neutral).
-    assert match?({:vneutral, _}, Eval.eval({:prim, :and, [{:ctor, :True, []}, {:ctor, :True, []}]}, []))
-    assert match?({:vneutral, _}, Eval.eval({:prim, :not, [{:ctor, :False, []}]}, []))
+  test "the connectives are not builtin ops: an and/not spine stays neutral" do
+    # `and`/`or`/`not` are Std.Bool case-defs, not registered ops; their spines
+    # stay stuck over the bare seeded env.
+    t1 = app2(:and, {:ctor, :True, []}, {:ctor, :True, []})
+    assert t1 == Normalise.nf(ctx(), t1, delta: :certified)
+    t2 = {:app, {:global, :not}, {:ctor, :False, []}}
+    assert t2 == Normalise.nf(ctx(), t2, delta: :certified)
   end
 
-  test "Bool-operand equality is retired: only numeric :eq folds" do
-    # `==` on Bool is now the Std.Bool def `eq`; the Bool-operand `:eq` prim is
-    # gone, so a residual one is stuck. Numeric `:eq` still folds.
-    assert match?({:vneutral, _}, Eval.eval({:prim, :eq, [{:ctor, :True, []}, {:ctor, :False, []}]}, []))
-    assert Eval.eval({:prim, :eq, [{:int_lit, 3}, {:int_lit, 3}]}, []) == Eval.eval({:ctor, :True, []}, [])
+  test "Bool-operand equality never folds via the numeric twin: only literal int_eq folds" do
+    # `==` on Bool is the Std.Bool def `eq`; an int_eq spine over ctor args
+    # stays NEUTRAL (the fold requires int/float literal values). Numeric
+    # int_eq still folds.
+    t = app2(:int_eq, {:ctor, :True, []}, {:ctor, :False, []})
+    assert t == Normalise.nf(ctx(), t, delta: :certified)
+
+    assert {:ctor, :True, []} =
+             Normalise.nf(ctx(), app2(:int_eq, {:int_lit, 3}, {:int_lit, 3}), delta: :certified)
   end
 end

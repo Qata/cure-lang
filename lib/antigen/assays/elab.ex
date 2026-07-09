@@ -91,6 +91,135 @@ defmodule Antigen.Assays.Elab do
     end
   end
 
+  # elab/dot_forcing — catalog form (spec 2026-07-08-antigen-elab-dot-forcing):
+  # the actual verdict must match the expected one. Reject cells carrying
+  # `expect_error` also pin the error HEAD, so a fixture that rots into
+  # rejecting for an unrelated reason (parse error, unbound name) infects
+  # instead of passing silently.
+  def run(%Challenge{kind: :elab_program, assay: "elab/dot_forcing", payload: %{expect: expect} = p}) do
+    result = elaborate(p.src)
+    actual = verdict_bit(result)
+
+    cond do
+      actual != expect ->
+        {:violation, {:dot_forcing_verdict_wrong, p.id, %{expected: expect, actual: actual}}}
+
+      actual == :reject and Map.has_key?(p, :expect_error) ->
+        got = reject_head(result)
+
+        if got == p.expect_error do
+          :ok
+        else
+          {:violation, {:dot_forcing_wrong_reject_reason, p.id, got}}
+        end
+
+      true ->
+        :ok
+    end
+  end
+
+  # elab/dot_forcing — relation form: `:same` (verdict invariant under a
+  # typing-preserving perturbation) or `:flip` (an accepting base must reject
+  # after the targeted mutation — the call-site-wiring / load-bearing pin).
+  def run(%Challenge{kind: :elab_program, assay: "elab/dot_forcing", payload: %{relation: rel} = p}) do
+    base = verdict_bit(elaborate(p.base_src))
+    variant = verdict_bit(elaborate(p.variant_src))
+
+    ok? =
+      case rel do
+        :same -> base == variant
+        :flip -> base == :accept and variant == :reject
+      end
+
+    if ok? do
+      :ok
+    else
+      {:violation,
+       {:dot_forcing_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
+    end
+  end
+
+  # elab/guard_lint — catalog form (spec 2026-07-08-guard-coverage-lint §6):
+  # hand-verified exhaustive/non-exhaustive labels, two-sided; reject cells pin
+  # the error HEAD (:unsupported_guard) so a fixture that rots into rejecting
+  # for an unrelated reason (parse error, unbound name) infects.
+  def run(%Challenge{kind: :elab_program, assay: "elab/guard_lint", payload: %{expect: expect} = p}) do
+    result = elaborate(p.src)
+    actual = verdict_bit(result)
+
+    cond do
+      actual != expect ->
+        {:violation, {:guard_lint_verdict_wrong, p.id, %{expected: expect, actual: actual}}}
+
+      actual == :reject and Map.has_key?(p, :expect_error) ->
+        got = reject_head(result)
+
+        if got == p.expect_error do
+          :ok
+        else
+          {:violation, {:guard_lint_wrong_reject_reason, p.id, got}}
+        end
+
+      true ->
+        :ok
+    end
+  end
+
+  # elab/guard_lint — relation form: `:same` (verdict invariant under a
+  # typing-preserving perturbation) or `:flip` (dropping a guard from a
+  # proven-exhaustive set must flip accept -> reject — the never-over-prove pin).
+  def run(%Challenge{kind: :elab_program, assay: "elab/guard_lint", payload: %{relation: rel} = p}) do
+    base = verdict_bit(elaborate(p.base_src))
+    variant = verdict_bit(elaborate(p.variant_src))
+
+    ok? =
+      case rel do
+        :same -> base == variant
+        :flip -> base == :accept and variant == :reject
+      end
+
+    if ok? do
+      :ok
+    else
+      {:violation,
+       {:guard_lint_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
+    end
+  end
+
+  # elab/nat_rep — representation agreement (spec 2026-07-08-nat-int-erasure §3):
+  # the kernel's certified-δ normalisation of `main` (inductive semantics; the
+  # trusted oracle) must decode to the same integer BEAM execution returns
+  # (Int-rep emit; the system under test). NOT Eval.eval/2 — that leaves
+  # `{:global, _}` heads as stuck neutrals and cannot reduce `add(...)`.
+  def run(%Challenge{kind: :elab_program, assay: "elab/nat_rep", payload: p}) do
+    case elaborate(p.src) do
+      {:ok, env} ->
+        kernel = kernel_nat(env)
+        beam = beam_nat(env, p)
+
+        cond do
+          match?({:stuck, _}, kernel) ->
+            {:violation, {:nat_rep_kernel_stuck, p.id, elem(kernel, 1)}}
+
+          match?({:failed, _}, beam) ->
+            {:violation, {:nat_rep_beam_failed, p.id, elem(beam, 1)}}
+
+          kernel != beam ->
+            {:violation, {:nat_rep_mismatch, p.id, %{kernel: kernel, beam: beam}}}
+
+          true ->
+            :ok
+        end
+
+      other ->
+        # `other` cannot be `{:ok, _}` here (already matched above), so
+        # `verdict_bit(other)` would always be the tautological `:reject` —
+        # carry the actual rejection term instead, so a real corpus regression
+        # is debuggable rather than reporting a constant.
+        {:violation, {:nat_rep_program_rejected, p.id, other}}
+    end
+  end
+
   # elab/soundness — the emitted core is independently re-checked by the trusted
   # kernel: every def the elaborator produced must type-check at its emitted type.
   def run(%Challenge{kind: :elab_program, assay: "elab/soundness"} = c),
@@ -123,8 +252,8 @@ defmodule Antigen.Assays.Elab do
     env.defs
     |> Enum.sort_by(fn {name, _} -> name end)
     |> Enum.find_value(:ok, fn {name, %{type: ty, body: body}} ->
-      if Erase.has_hole?(body) do
-        nil                                                # skip incomplete def
+      if is_nil(body) or Erase.has_hole?(body) do
+        nil                                                # skip body-less (builtin-op, K2) / incomplete def
       else
         case Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> check_one(k, ctx, name, ty, body) end) do
           :ok -> nil
@@ -183,4 +312,59 @@ defmodule Antigen.Assays.Elab do
   # errors while agreeing on rejection).
   defp verdict_bit({:ok, _}), do: :accept
   defp verdict_bit(_), do: :reject
+
+  # Error head of a rejecting elaboration result. Non-tuple hardening (spec
+  # §2.3): parser grammar failures carry a LIST, and a normalized raise has no
+  # head — neither can ever match an `expect_error` atom, so both land in the
+  # wrong-reject-reason violation instead of crashing `elem/2`.
+  defp reject_head({:error, e}) when is_tuple(e) and tuple_size(e) > 0, do: elem(e, 0)
+  defp reject_head({:error, _non_tuple}), do: :non_tuple_error
+  defp reject_head({:raise, _}), do: :raised_error
+
+  # -- elab/nat_rep helpers ----------------------------------------------------
+
+  defp kernel_nat(env) do
+    ctx = Context.empty(env)
+
+    case Cure.Core.Normalise.nf(ctx, {:global, :main}, delta: :certified, mode: :nf) do
+      :fuel_exhausted -> {:stuck, :fuel_exhausted}
+      term -> decode_nat(term)
+    end
+  end
+
+  # Bare atoms only: none of this corpus's fixed/seeded programs declare a
+  # local `type Nat` (§2.4 nominal rule), so the canonical `:Z`/`:S` ctors
+  # never collide and are never re-keyed (verified: `Cure.Elab.Resolution`'s
+  # re-key path only fires when a LOCAL declaration shadows an import, and
+  # even then uses a `"Mod#name"` atom, e.g. `:"Std.Nat#Z"` — never the
+  # `"Std.Nat.Z"` dot-form). If a future corpus addition ever needs a
+  # colliding-import case, add the real `#`-separated guard then; don't
+  # speculate here.
+  defp decode_nat({:ctor, :Z, []}), do: {:nat, 0}
+
+  defp decode_nat({:ctor, :S, [inner]}) do
+    case decode_nat(inner) do
+      {:nat, n} -> {:nat, n + 1}
+      other -> other
+    end
+  end
+
+  defp decode_nat(other), do: {:stuck, other}
+
+  defp beam_nat(env, p) do
+    mod_name = :"Antigen.NatRep.#{:erlang.phash2(p.id)}"
+
+    case Cure.Elab.Emit.compile_and_load(env, module: mod_name, functions: p.functions) do
+      {:ok, mod} ->
+        case apply(mod, :main, []) do
+          n when is_integer(n) -> {:nat, n}
+          other -> {:failed, {:non_integer, other}}
+        end
+
+      err ->
+        {:failed, err}
+    end
+  rescue
+    e -> {:failed, {:raised, e}}
+  end
 end
