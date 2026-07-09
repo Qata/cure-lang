@@ -140,8 +140,7 @@ defmodule Cure.Core.Normalise do
   # this env (rather than `[]`) makes the OUTER `Quote.reify` re-eval a provable
   # identity, so free (context) variables read back unchanged instead of being
   # reflected by re-evaluation in a truncated env. (depth 0 → []).
-  defp id_env(0), do: []
-  defp id_env(depth), do: for(l <- (depth - 1)..0//-1, do: {:vneutral, {:nvar, l}})
+  defp id_env(depth), do: Context.neutral_env(depth)
 
   defp nf_struct({:vpi, dom, {:closure, env, cod}}, sig, depth, opts) do
     fresh = {:vneutral, {:nvar, depth}}
@@ -188,11 +187,11 @@ defmodule Cure.Core.Normalise do
   defp nf_motive({:closure, env, term}, sig, depth, opts),
     do: {:closure, id_env(depth), quote_nf(Eval.eval(term, env), sig, depth, opts)}
 
-  defp nf_branch({c, arity, {:closure, env, body}}, sig, depth, opts) do
-    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
-    ext = Enum.reverse(fresh)
-    {c, arity, {:closure, id_env(depth), quote_nf(Eval.eval(body, ext ++ env), sig, depth + arity, opts)}}
-  end
+  defp nf_branch({c, arity, {:closure, env, body}}, sig, depth, opts),
+    do:
+      {c, arity,
+       {:closure, id_env(depth),
+        quote_nf(Eval.open_branch(env, body, arity, depth), sig, depth + arity, opts)}}
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth, sig)
 
@@ -355,7 +354,7 @@ defmodule Cure.Core.Normalise do
   # A struct op at the wrong arity (unsaturated/overapplied): stuck, never unsound.
   defp builtin_op_fold(_op, _args, _sig, _opts), do: :stuck
 
-  defp reapply(args, value), do: Enum.reduce(args, value, fn arg, acc -> Eval.apply(acc, arg) end)
+  defp reapply(args, value), do: Eval.apply_spine(value, args)
 
   defp spend_fuel(reduced) do
     case Process.get(@fuel_key) do

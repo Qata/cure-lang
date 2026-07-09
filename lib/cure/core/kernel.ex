@@ -603,8 +603,7 @@ defmodule Cure.Core.Kernel do
   # Apply a (curried) motive value to a list of argument values. Callers below
   # use this only AFTER `check_motive_wf` has validated the motive is a function
   # of the right shape (`apply_motive_checked` is the validating gate).
-  defp apply_motive(motive_value, args),
-    do: Enum.reduce(args, motive_value, fn arg, acc -> Eval.apply(acc, arg) end)
+  defp apply_motive(motive_value, args), do: Eval.apply_spine(motive_value, args)
 
   # Like `apply_motive`, but on the UNvalidated motive supplied by the (untrusted)
   # elaborator: if some prefix reduces to a non-function while arguments remain,

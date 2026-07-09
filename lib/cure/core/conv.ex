@@ -162,11 +162,14 @@ defmodule Cure.Core.Conv do
       end)
   end
 
-  defp conv_branch_bodies?(arity, {:closure, env1, body1}, {:closure, env2, body2}, depth, sig) do
-    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
-    ext = Enum.reverse(fresh)
-    conv_val?(Eval.eval(body1, ext ++ env1), Eval.eval(body2, ext ++ env2), depth + arity, sig)
-  end
+  defp conv_branch_bodies?(arity, {:closure, env1, body1}, {:closure, env2, body2}, depth, sig),
+    do:
+      conv_val?(
+        Eval.open_branch(env1, body1, arity, depth),
+        Eval.open_branch(env2, body2, arity, depth),
+        depth + arity,
+        sig
+      )
 
   # Syntactic equality for neutral values before δ. This prevents certified
   # recursive globals from unfolding forever when conversion reaches the same

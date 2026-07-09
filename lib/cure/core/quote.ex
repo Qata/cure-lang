@@ -106,9 +106,6 @@ defmodule Cure.Core.Quote do
   defp instantiate({:closure, env, term}), do: Eval.eval(term, env)
 
   # Read a branch-body closure back under the constructor's `arity` binders.
-  defp reify_branch({:closure, env, body}, arity, depth, sig) do
-    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
-    ext = Enum.reverse(fresh)
-    reify(Eval.eval(body, ext ++ env), depth + arity, sig)
-  end
+  defp reify_branch({:closure, env, body}, arity, depth, sig),
+    do: reify(Eval.open_branch(env, body, arity, depth), depth + arity, sig)
 end

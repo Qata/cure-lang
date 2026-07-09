@@ -99,6 +99,29 @@ defmodule Cure.Core.Eval do
     do: raise("Eval.apply: #{inspect(nonfun)} is not a function (over-application / ill-typed term)")
 
   @doc """
+  Apply `value` to each of `args` left-to-right — the spine re-application shared
+  by motive elimination (`Kernel.apply_motive`) and stuck-eliminator δ-reduction
+  (`Normalise`'s `reapply`). β/ι fire per step for a `:vlam`; a neutral head just
+  accumulates its arguments.
+  """
+  @spec apply_spine(Cure.Core.Value.t(), [Cure.Core.Value.t()]) :: Cure.Core.Value.t()
+  def apply_spine(value, args), do: Enum.reduce(args, value, fn arg, acc -> apply(acc, arg) end)
+
+  @doc """
+  Evaluate a `case`-branch body under its constructor's `arity` fresh binders.
+  The fields occupy the innermost de Bruijn slots (last field = index 0), each a
+  fresh neutral at level `depth + i`. This is the single owner of the
+  branch-opening frame shared by `Conv`, `Quote`, and `Normalise`; callers
+  continue at depth `depth + arity`.
+  """
+  @spec open_branch([Cure.Core.Value.t()], Cure.Core.Term.t(), non_neg_integer(), non_neg_integer()) ::
+          Cure.Core.Value.t()
+  def open_branch(env, body, arity, depth) do
+    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
+    eval(body, Enum.reverse(fresh) ++ env)
+  end
+
+  @doc """
   Instantiate a closure (e.g. a Π/Σ codomain family) at a value: evaluate the
   closure body in its captured environment extended with `value` at index 0.
   """
