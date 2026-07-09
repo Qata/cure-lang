@@ -13,7 +13,7 @@
 - **Spec:** `docs/superpowers/specs/2026-07-09-wave4-checked-body-dispatch-design.md` (hardened, commit `bbf05b5`). Read it FULLY first — esp. §1.2 (the pre-existing pinned test that MUST be flipped) and §3 (the `uncons`/`Tuple` blocker likely behind Finding A — `Std.List` may ADVANCE rather than flip; do not report "flipped" unless the disposition run shows it).
 - **Two-pipeline steer:** dependent machinery is ONLY `lib/cure/elab/*` + `lib/cure/core/*`. `lib/cure/compiler/*` + `lib/cure/types/*` are the CLASSIC decoy — do not touch or consult.
 - **Kernel-scope invariant (hard gate):** `lib/cure/core/*` stays EMPTY of changes. `git diff` under `core/` must be empty. If a `core/` change seems needed, STOP — the design broke.
-- **Diff scope:** `lib/cure/elab/declarations.ex`, `lib/cure/elab/elaborator.ex`, the new test file `test/cure/elab/checked_body_dispatch_test.exs`, and the §1.2 update to `test/cure/elab/list_test.exs` (ONE pinned assertion + stale moduledoc/comments). NO other file.
+- **Diff scope:** `lib/cure/elab/declarations.ex`, `lib/cure/elab/elaborator.ex`, the new test file `test/cure/elab/checked_body_dispatch_test.exs`, the §1.2 update to `test/cure/elab/list_test.exs` (ONE pinned assertion + stale moduledoc/comments), and a comment-only refresh in `test/cure/elab/pickup_test.exs` (see Anchors — a pre-existing comment there goes stale by this wave's own change). NO other file.
 - **Line anchors drift** — re-verify EVERY clause head by identity (grep the function + the adjacent existing `:conditional`/`:tuple` clause) immediately before inserting.
 - **Build lock FREE.** One `mix` at a time; scoped runs while iterating; full `mix test` exactly ONCE at the gate. No `iex -S mix`, no background mix.
 - **Ghost commits:** `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, NO `Co-Authored-By`, NO signature, NO trailers.
@@ -26,6 +26,7 @@
 - `elaborate_branch_body/5` whitelist — `elaborator.ex`: clauses ~:3639-3685, catch-all ~:3687-3689. `:tuple` clause (~:3684) is the template.
 - `elaborate_expr_checked/5` self-desugars `:list` (~:1092-1093) and handles `:pickup` (~:1084-1087 → checked conditional ~:1074). Confirm both exist — the "no new desugar code" claim rests on them.
 - The pinned test to flip — `test/cure/elab/list_test.exs:30-32` + moduledoc :7-13 + comments :20-24, :100-102.
+- A second stale comment this wave invalidates (found by grepping for "Finding A"/"elaborate_body whitelist" repo-wide) — `test/cure/elab/pickup_test.exs:71-78`'s test-explanation comment says a bare top-level `pickup` body is "always infer-mode"; after this wave it is checked-mode. Refresh this comment (no assertion changes — the test's behavior/expectations are unaffected, only the prose explaining *why* the nested-pickup case differs from a bare top-level one).
 
 ---
 
@@ -37,6 +38,7 @@
 - Modify: `lib/cure/elab/declarations.ex` (`:list` + `:pickup` clauses in `elaborate_body/6`)
 - Modify: `lib/cure/elab/elaborator.ex` (`:list` clause in `elaborate_branch_body/5`)
 - Modify: `test/cure/elab/list_test.exs` (flip the §1.2 pinned assertion + refresh stale moduledoc/comments)
+- Modify: `test/cure/elab/pickup_test.exs` (comment-only refresh, :71-78 — no assertion change)
 - Test: `test/cure/elab/checked_body_dispatch_test.exs` (create)
 
 - [ ] **Step 1: Write the new antibody tests (RED)** — create `test/cure/elab/checked_body_dispatch_test.exs`:
@@ -139,20 +141,24 @@ Run: `mix test test/cure/elab/checked_body_dispatch_test.exs`
 
 Change the assertion from `{:error, {:unsolved_metavariables, :Nil}}` to `{:ok, _}` (the bare-`[]` body now elaborates). Rename the test to reflect the new truth (e.g. `"a bare top-level [] body elaborates in checked mode (Wave 4)"`). Refresh the stale moduledoc (:7-13) and the inline comments (:20-24, :100-102) that describe the rejection as permanent / say "do NOT touch the elaborate_body whitelist" — those statements are now false. State in the commit body that this test encoded a since-superseded scope decision (not a bug), per the "test proven wrong by the wave's own goal" exception.
 
-- [ ] **Step 6: Run — expect GREEN**
+- [ ] **Step 6: Refresh the second stale comment (`pickup_test.exs`)** — `test/cure/elab/pickup_test.exs:71-78`'s comment on the "pickup nested as an `if`'s else-branch" test currently says a bare top-level `pickup` body is "always infer-mode; see the plan's Anchors section on elaborate_body/elaborate_branch_body". That is now false — a bare top-level `:pickup` body is checked-mode after Step 3. Update the comment to say the nested-pickup case and the (now also checked) bare top-level case both reach `elaborate_expr_checked`'s `:pickup` clause; the distinction this test still usefully exercises is that the nested pickup arrives via the *outer* `:conditional`'s checked branches (elaborator.ex:1074-1080) rather than via `elaborate_body`'s own `:pickup` clause. No assertion changes — this test's behavior is untouched, only the prose is stale.
 
-Run: `mix test test/cure/elab/checked_body_dispatch_test.exs test/cure/elab/list_test.exs`
-Expected: all pass (new antibodies green; the flipped pinned test green; the rest of list_test still green).
+- [ ] **Step 7: Run — expect GREEN**
 
-- [ ] **Step 7: Commit**
+Run: `mix test test/cure/elab/checked_body_dispatch_test.exs test/cure/elab/list_test.exs test/cure/elab/pickup_test.exs`
+Expected: all pass (new antibodies green; the flipped pinned test green; the rest of list_test and all of pickup_test still green — pickup_test's edit is comment-only).
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git -C <worktree> add -- lib/cure/elab/declarations.ex lib/cure/elab/elaborator.ex \
-  test/cure/elab/checked_body_dispatch_test.exs test/cure/elab/list_test.exs
+  test/cure/elab/checked_body_dispatch_test.exs test/cure/elab/list_test.exs \
+  test/cure/elab/pickup_test.exs
 git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(elab): checked-mode body dispatch for :list and :pickup bodies (Finding A + sibling; value-surface Wave 4)" \
   -- lib/cure/elab/declarations.ex lib/cure/elab/elaborator.ex \
-  test/cure/elab/checked_body_dispatch_test.exs test/cure/elab/list_test.exs
+  test/cure/elab/checked_body_dispatch_test.exs test/cure/elab/list_test.exs \
+  test/cure/elab/pickup_test.exs
 ```
 
 ---
@@ -161,7 +167,7 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
 
 **Deliverable:** the wave is proven additive and green, with the honest disposition/cascade map.
 
-- [ ] **Step 1: Firewall + core-scope.** `mix test test/cure/dependent_pipeline_firewall_test.exs` green. `git -C <worktree> diff --stat` shows NO change under `lib/cure/core/`; full diff = declarations.ex, elaborator.ex, the two test files. If any `core/` file changed, STOP.
+- [ ] **Step 1: Firewall + core-scope.** `mix test test/cure/dependent_pipeline_firewall_test.exs` green. `git -C <worktree> diff --stat` shows NO change under `lib/cure/core/`; full diff = declarations.ex, elaborator.ex, and the three test files (the new `checked_body_dispatch_test.exs`, plus the comment/assertion refreshes in `list_test.exs` and `pickup_test.exs`). If any `core/` file changed, STOP.
 
 - [ ] **Step 2: Ratchet (the deliverable) — honest disposition map.** Re-run the stdlib disposition script. Record before/after value-surface KEEP. **Do NOT assume `Std.List` flips** — per spec §3 it likely ADVANCES to `uncons`/`split_first`'s `Tuple`-return-type gap (`{:unsupported_expression, _}` on the `:tuple` body, a pre-existing unrelated issue = the operator's unified-tuple initiative). Report `Std.List`'s ACTUAL post-wave status: flipped, or advanced-to-`uncons`-Tuple, or another blocker — named concretely. For every module that moved (flipped OR advanced), state its new status/blocker. A regression in the prior KEEP set (bool/bounded/decision/equivalent/nat/proof/sigma/vector/math) = STOP.
 
