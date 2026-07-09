@@ -58,30 +58,27 @@ defmodule Cure.Core.Eval do
   # are computationally irrelevant — `rewrite e _ t ⇝ t`, §4.6).
 
   def eval({:case, scrut, motive, branches}, env) do
-    case eval(scrut, env) do
+    # A compact Nat scrutinee peels ONE layer to `Z`/`S(pred)` and reuses the
+    # ctor ι-rule (the tail stays compact, so eliminating a depth-n literal is n
+    # steps, never an n-node heap tower); every other value passes through.
+    case nat_to_ctor_if(eval(scrut, env)) do
       {:vctor, cname, args} ->
-        {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
-        # The branch body binds the constructor's FIELDS (arity of them); the last
-        # field is de Bruijn index 0, so the body's environment is
-        # reverse(fields) ++ env. A K6 params-on-spine ctor value carries family
-        # params ahead of its fields — `drop_leading_params` coerces to fields-only.
-        fields = drop_leading_params(args, arity)
-        eval(body, Enum.reverse(fields) ++ env)
+        case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+          {_cname, arity, body} ->
+            reduce_branch_body(body, env, args, arity)
 
-      # A compact Nat scrutinee peels ONE layer to `Z`/`S(pred)` and reuses the
-      # ι-rule above (`Z` → the Z-branch in `env`; `S` → the S-branch binding the
-      # compact predecessor at index 0). The tail stays compact, so eliminating a
-      # depth-n literal is n reduction steps, never an n-node heap tower.
-      {:vnat, _} = nat ->
-        {:vctor, cname, args} = nat_to_ctor(nat)
-        {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
-        fields = drop_leading_params(args, arity)
-        eval(body, Enum.reverse(fields) ++ env)
+          nil ->
+            raise "ι: no branch for constructor #{inspect(cname)} " <>
+                    "(coverage violation / ill-typed case reached eval)"
+        end
 
       {:vneutral, neutral} ->
         motive_closure = {:closure, env, motive}
         branch_closures = Enum.map(branches, fn {c, ar, b} -> {c, ar, {:closure, env, b}} end)
         {:vneutral, {:ncase, neutral, motive_closure, branch_closures}}
+
+      other ->
+        raise "ι: non-data scrutinee #{inspect(other)} reached eval (ill-typed case)"
     end
   end
 
@@ -102,6 +99,19 @@ defmodule Cure.Core.Eval do
   @spec apply_closure({:closure, [Cure.Core.Value.t()], Cure.Core.Term.t()}, Cure.Core.Value.t()) ::
           Cure.Core.Value.t()
   def apply_closure({:closure, env, body}, value), do: eval(body, [value | env])
+
+  # The shared ι field-binding contract: bind a constructor's FIELDS (the last
+  # `arity` of `cargs`, after dropping any K6 params-on-spine via
+  # `drop_leading_params`) as the innermost de Bruijn variables — the last field
+  # is index 0, so the body's environment is `reverse(fields) ++ base_env`. This
+  # is the SINGLE owner of that invariant, which `eval`'s `:case` and both of
+  # `Normalise`'s `ncase` ι-arms must agree on; keeping it here stops the three
+  # sites from drifting. Public (`@doc false`) for the Normalise call-sites.
+  @doc false
+  def reduce_branch_body(body, base_env, cargs, arity) do
+    fields = drop_leading_params(cargs, arity)
+    eval(body, Enum.reverse(fields) ++ base_env)
+  end
 
   # -- fields-only ι ----------------------------------------------------------
 

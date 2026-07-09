@@ -241,12 +241,13 @@ defmodule Cure.Core.Normalise do
         # the ctor ι-rule below; every other value passes through unchanged.
         case Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)) do
           {:vctor, cname, cargs} ->
-            {_c, ar, {:closure, env, body}} =
-              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+            case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+              {_c, ar, {:closure, env, body}} ->
+                {:ok, reapply(args, spend_fuel(Eval.reduce_branch_body(body, env, cargs, ar)))}
 
-            fields = Eval.drop_leading_params(cargs, ar)
-            reduced = spend_fuel(Eval.eval(body, Enum.reverse(fields) ++ env))
-            {:ok, reapply(args, reduced)}
+              nil ->
+                :stuck
+            end
 
           _ ->
             :stuck
@@ -281,11 +282,13 @@ defmodule Cure.Core.Normalise do
         # See the twin arm above: peel a compact-Nat scrutinee before the ctor ι.
         case Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)) do
           {:vctor, cname, cargs} ->
-            {_c, ar, {:closure, env, body}} =
-              Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+            case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+              {_c, ar, {:closure, env, body}} ->
+                {:ok, reapply(args, spend_fuel(Eval.reduce_branch_body(body, env, cargs, ar)))}
 
-            fields = Eval.drop_leading_params(cargs, ar)
-            {:ok, reapply(args, spend_fuel(Eval.eval(body, Enum.reverse(fields) ++ env)))}
+              nil ->
+                :stuck
+            end
 
           _ ->
             :stuck
