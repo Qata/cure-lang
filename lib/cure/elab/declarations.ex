@@ -43,6 +43,24 @@ defmodule Cure.Elab.Declarations do
   # replace the placeholder with the real lambda. The environment already carries
   # every function's signature, so forward references and mutual recursion resolve.
   def elaborate_function_body({:function_def, meta, body}, env) do
+    case Keyword.get(meta, :extern) do
+      {mod, fun, arity} when is_atom(mod) and is_atom(fun) and is_integer(arity) ->
+        # Wave-3: a bodyless @extern is a typed FFI postulate — the signature IS
+        # the type; there is no term to elaborate/check. Mark the def with an
+        # extern sentinel (NOT a hole, so emit.reject_holes passes; NOT
+        # builtin_op, which is overloaded). emit lowers it to a remote call;
+        # TotalityClosure skips it. Do NOT call elaborate_body / Kernel.check /
+        # Relevance.check (no term exists).
+        with {:ok, sig} <- function_signature(meta, env) do
+          {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
+        end
+
+      _ ->
+        elaborate_real_body(meta, body, env)
+    end
+  end
+
+  defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
 
     with {:ok, sig} <- function_signature(meta, env) do

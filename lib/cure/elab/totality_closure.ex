@@ -36,6 +36,10 @@ defmodule Cure.Elab.TotalityClosure do
     env
     |> type_level_fns()
     |> MapSet.to_list()
+    # Wave-3: an @extern global has no Core body to certify (it is an asserted FFI
+    # postulate — spec §2.1 point 4). Certification is a category error for it, so
+    # skip it here rather than hand its sentinel body to Kernel.check.
+    |> Enum.reject(&extern_def?(env, &1))
     |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
       case Kernel.validate_certificate(acc, name) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
@@ -43,6 +47,8 @@ defmodule Cure.Elab.TotalityClosure do
       end
     end)
   end
+
+  defp extern_def?(env, name), do: match?(%{body: {:extern, _}}, Env.get_def(env, name))
 
   # -- seeds: globals appearing in family/constructor type positions ----------
 
