@@ -28,7 +28,7 @@ defmodule Cure.Core.Normalise do
       ctx
       |> eval_in(term)
       |> whnf_value(Context.signature(ctx), opts)
-      |> Quote.reify(Context.length(ctx))
+      |> Quote.reify(Context.length(ctx), Context.signature(ctx))
     end)
   end
 
@@ -39,13 +39,17 @@ defmodule Cure.Core.Normalise do
       ctx
       |> eval_in(term)
       |> nf_value(Context.signature(ctx), Context.length(ctx), opts)
-      |> Quote.reify(Context.length(ctx))
+      |> Quote.reify(Context.length(ctx), Context.signature(ctx))
     end)
   end
 
-  @doc "Read a semantic value back to a Core term."
-  @spec quote(Cure.Core.Value.t(), non_neg_integer(), opts()) :: Cure.Core.Term.t()
-  def quote(value, depth, _opts \\ []), do: Quote.reify(value, depth)
+  @doc """
+  Read a semantic value back to a Core term. The optional 3rd arg is the
+  inductive signature: passing it recovers an indexed family's param/index split
+  in the read-back (`nil`, the default, keeps the flat form conversion compares).
+  """
+  @spec quote(Cure.Core.Value.t(), non_neg_integer(), Env.t() | nil) :: Cure.Core.Term.t()
+  def quote(value, depth, sig \\ nil), do: Quote.reify(value, depth, sig)
 
   @doc false
   @spec whnf_value(Cure.Core.Value.t(), Env.t() | nil, opts()) :: Cure.Core.Value.t()
@@ -174,7 +178,7 @@ defmodule Cure.Core.Normalise do
 
   defp nf_neutral(neutral, _sig, _depth, _opts), do: neutral
 
-  defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth)
+  defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth, sig)
 
   defp unfold_head(neutral, sig, opts) do
     if opts[:delta] == :none do
