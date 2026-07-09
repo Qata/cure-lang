@@ -5,6 +5,15 @@
 **Status:** parked design — Bucket-B work, independent of the dependent-kernel
 cleanup. Not yet scheduled.
 
+> **Partially superseded (2026-07-09):** the stance that effects stay
+> surface-only and out of Core is no longer the target state. Operator
+> decision: effects become Core-representable via an inert `Effect` type
+> former — see
+> [`2026-07-09-effect-type-former-design.md`](2026-07-09-effect-type-former-design.md).
+> The surface `!`-discipline fixes described below remain valid as an
+> independent honesty repair for the classic pathway, but "the later
+> evolution (option b)" is now the locked direction, not a someday.
+
 ## Purpose
 
 Cure advertises an explicit effect system via the `!` annotation (e.g.

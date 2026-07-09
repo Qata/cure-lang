@@ -132,7 +132,7 @@ defmodule Cure.Core.Kernel do
 
         cond do
           pc == 0 ->
-            with {:ok, arg_env} <- check_ctor_app(ctx, [], args, tele) do
+            with {:ok, arg_env, _fields} <- check_ctor_app(ctx, [], args, tele) do
               # The accumulated arg values (most-recent first) are exactly the env
               # in which the result terms are written; compute them by NbE (so a
               # computed index like `and(d1,d2)` reduces once δ is available, M7).
@@ -153,7 +153,7 @@ defmodule Cure.Core.Kernel do
           length(args) == pc + length(tele) ->
             ptele = Inductive.param_telescope(sig, family_name) || []
 
-            with {:ok, arg_env} <- check_ctor_app(ctx, [], args, ptele ++ tele) do
+            with {:ok, arg_env, _fields} <- check_ctor_app(ctx, [], args, ptele ++ tele) do
               param_values = Enum.map(result_params, &Eval.eval(&1, arg_env))
               index_values = Enum.map(result_indices, &Eval.eval(&1, arg_env))
               {:ok, {:vdata, family_name, param_values ++ index_values}}
@@ -233,7 +233,20 @@ defmodule Cure.Core.Kernel do
   # to seed check_ctor_app, then re-derive the actual result and compare it to
   # `expected` (arguments checking against their own types is NOT enough — the
   # computed indices must still match the expected type's).
-  def check(ctx, {:ctor, cname, args}, {:vdata, family, combined_args} = expected) do
+  def check(ctx, {:ctor, cname, args}, {:vdata, _family, _combined} = expected) do
+    with {:ok, _value} <- elaborate_ctor(ctx, cname, args, expected), do: :ok
+  end
+
+  # Shared checking-mode constructor elaboration. Checks the fields-only spine
+  # against the ctor telescope, converts the computed result type against the
+  # expected `vdata`, and RETURNS the constructor's own value — assembled from the
+  # recursively-checked field values (`{:vctor, cname, field_vals}`). Returning the
+  # value lets a caller thread it up the spine instead of re-evaluating the surface
+  # sub-term at every level: the O(n²)→O(n) fix for deep constructor towers (the
+  # value-returning bidirectional checker, cf. Idris's `Glued`). The returned value
+  # is definitionally `Eval.eval({:ctor, cname, args}, env)`, so `check/3`'s `:ok`
+  # contract and all downstream index/conversion logic are unchanged.
+  defp elaborate_ctor(ctx, cname, args, {:vdata, family, combined_args} = expected) do
     sig = Context.signature(ctx)
     pc = Inductive.param_count(sig, family)
     {params, _indices} = Enum.split(combined_args, pc)
@@ -253,13 +266,13 @@ defmodule Cure.Core.Kernel do
           # MUST be first: for a paramless family (pc == 0) the spine condition
           # below collapses to this same predicate (spec §1 "order is load-bearing").
           length(args) == length(tele) ->
-            with {:ok, arg_env} <- check_ctor_app(ctx, params, args, tele) do
+            with {:ok, arg_env, field_vals} <- check_ctor_app(ctx, params, args, tele) do
               actual_params = Enum.map(result_params, &Eval.eval(&1, arg_env))
               actual_indices = Enum.map(result_indices, &Eval.eval(&1, arg_env))
               actual = {:vdata, family, actual_params ++ actual_indices}
 
               if Conv.conv_values?(actual, expected, Context.length(ctx), sig) do
-                :ok
+                {:ok, {:vctor, cname, field_vals}}
               else
                 {:error, {:conversion_failure, actual, expected}}
               end
@@ -270,9 +283,12 @@ defmodule Cure.Core.Kernel do
           # check = infer + def-eq): route to the generic fallback — infer re-checks
           # the spine params against the family telescope (the K6 arm), then the
           # result converts against `expected`. Accepts nothing that is not already
-          # inferable-and-convertible.
+          # inferable-and-convertible. This rare spelling is not the deep-tower hot
+          # path, so recovering the value with a single eval is fine.
           pc > 0 and length(args) == pc + length(tele) ->
-            check_via_infer(ctx, {:ctor, cname, args}, expected)
+            with :ok <- check_via_infer(ctx, {:ctor, cname, args}, expected) do
+              {:ok, Eval.eval({:ctor, cname, args}, Context.env(ctx))}
+            end
 
           true ->
             {:error, :ctor_arity}
@@ -480,8 +496,25 @@ defmodule Cure.Core.Kernel do
   defp do_spine(ctx, [{arg, {_name, type_term}} | rest], vals) do
     expected = Eval.eval(type_term, vals)
 
+    case check_field(ctx, arg, expected) do
+      {:ok, arg_val} -> do_spine(ctx, rest, [arg_val | vals])
+      {:error, _} = err -> err
+    end
+  end
+
+  # Check a spine field and return its VALUE. For a constructor field the value is
+  # assembled bottom-up from the recursively-checked sub-fields (no re-eval of the
+  # surface tower — the O(n²)→O(n) fix; see `elaborate_ctor`). Every other field
+  # (or a ctor whose goal is not a data type) uses the ordinary `check` plus a
+  # single `eval`; such fields are leaves of the spine recursion, so that eval is
+  # not re-entered per level. The returned value equals `Eval.eval(arg, env)`.
+  defp check_field(ctx, {:ctor, cname, args}, {:vdata, _f, _c} = expected) do
+    elaborate_ctor(ctx, cname, args, expected)
+  end
+
+  defp check_field(ctx, arg, expected) do
     with :ok <- check(ctx, arg, expected) do
-      do_spine(ctx, rest, [Eval.eval(arg, Context.env(ctx)) | vals])
+      {:ok, Eval.eval(arg, Context.env(ctx))}
     end
   end
 
@@ -517,6 +550,10 @@ defmodule Cure.Core.Kernel do
   # Check a constructor application's args against its telescope (dependent),
   # returning the accumulated arg values (most-recent first) for result-index
   # computation. A failure on a data-typed argument is an index disagreement.
+  # Returns `{:ok, arg_env, field_vals}`: `arg_env` is the accumulated values
+  # (params-most-recent-first, for result-index computation) exactly as before;
+  # `field_vals` is the fields in surface order, so a caller can assemble the
+  # constructor value without re-evaluating the surface spine.
   defp check_ctor_app(ctx, param_vals, args, tele) do
     if length(args) == length(tele) do
       # Seed the local evaluation environment with the family's actual parameter
@@ -524,19 +561,22 @@ defmodule Cure.Core.Kernel do
       # args numbering) so a ctor arg whose declared type references a parameter
       # (e.g. `prepend`'s `x : a`) resolves to the real parameter, not a bogus
       # out-of-range neutral.
-      check_ctor_app_rec(ctx, Enum.zip(args, tele), Enum.reverse(param_vals))
+      check_ctor_app_rec(ctx, Enum.zip(args, tele), Enum.reverse(param_vals), [])
     else
       {:error, :ctor_arity}
     end
   end
 
-  defp check_ctor_app_rec(_ctx, [], vals), do: {:ok, vals}
+  defp check_ctor_app_rec(_ctx, [], vals, fields), do: {:ok, vals, Enum.reverse(fields)}
 
-  defp check_ctor_app_rec(ctx, [{arg, {_name, type_term}} | rest], vals) do
+  defp check_ctor_app_rec(ctx, [{arg, {_name, type_term}} | rest], vals, fields) do
     expected = Eval.eval(type_term, vals)
 
-    case check(ctx, arg, expected) do
-      :ok -> check_ctor_app_rec(ctx, rest, [Eval.eval(arg, Context.env(ctx)) | vals])
+    # Thread the field's value UP from its own check instead of re-evaluating the
+    # surface sub-term here (`Eval.eval(arg, env)`), which made a depth-n tower
+    # O(n²). `check_field` returns exactly that value, so `vals` is unchanged.
+    case check_field(ctx, arg, expected) do
+      {:ok, arg_val} -> check_ctor_app_rec(ctx, rest, [arg_val | vals], [arg_val | fields])
       {:error, _} = err -> remap_index_error(err, expected)
     end
   end
