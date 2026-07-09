@@ -4,7 +4,7 @@
 
 **Goal:** Let a bodyless `@extern(:mod, :fn, arity)` function declaration elaborate through the DEPENDENT pipeline (as a typed opaque FFI postulate) and emit a direct Erlang remote call. No kernel CODE change.
 
-**Architecture:** Two changes plus one safety filter, all E/C-layer. (1) `declarations.ex`: when a function decl carries `meta[:extern]`, skip body elaboration and mark the def with an extern sentinel (the Π is already computed from the signature). (2) `emit.ex`: recognize the sentinel and emit a remote-call wrapper (`mod:fun(V0..Vn-1)`) with params synthesized from the arity, and widen the body-less filter so the sentinel is routed, not erased. (3) `totality_closure.ex`: filter extern-marked globals out of `certify_type_level/1` so a type-level-reachable extern is never handed to `Kernel.check` (the spec §2.1-point-4 hole). The kernel (`lib/cure/core/*` except nothing) is untouched — the extern is an opaque neutral it already knows how to not-unfold.
+**Architecture:** Two changes plus one safety filter, all E/C-layer. (1) `declarations.ex`: when a function decl carries `meta[:extern]`, skip body elaboration and mark the def with an extern sentinel (the Π is already computed from the signature). (2) `emit.ex`: recognize the sentinel and emit a remote-call wrapper (`mod:fun(V0..Vn-1)`) with params synthesized from the arity, patched at the SINGLE choke point every emit entry (`compile_and_load/2`, `compile_forms/2`, `compile_forms/3`) already shares — `function_form/2` (called only from `module_forms/3`) — so one patch fixes all three; see Task 2 Step 4 for why the line-60 all-defs filter itself must NOT change. (3) `totality_closure.ex`: filter extern-marked globals out of `certify_type_level/1` so a type-level-reachable extern is never handed to `Kernel.check` (the spec §2.1-point-4 hole). The kernel (`lib/cure/core/*` except nothing) is untouched — the extern is an opaque neutral it already knows how to not-unfold.
 
 **Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/*`) + emit (`lib/cure/elab/emit.ex`); ExUnit.
 
@@ -56,7 +56,7 @@ defmodule Cure.Elab.ExternTest do
   """
   use ExUnit.Case, async: true
   alias Cure.Elab.{Program, Emit}
-  alias Cure.Core.Inductive
+  alias Cure.Core.Env
 
   test "a bodyless @extern declaration elaborates" do
     src = "mod M\n  @extern(:erlang, :length, 1)\n  fn length(xs: List(Int)) -> Int\nend\n"
@@ -67,22 +67,22 @@ defmodule Cure.Elab.ExternTest do
     src = "mod M\n  @extern(:erlang, :length, 1)\n  fn length(xs: List(Int)) -> Int\nend\n"
     {:ok, env} = Program.elaborate(src)
     # The registered global exists and is a Pi (List(Int) -> Int), not a hole/error.
-    # (Assert via whatever Env accessor the pipeline exposes; discover it, do not
-    #  invent one — e.g. Inductive.get_def(env, :length) or the module's defs map.
-    #  The behavioral contract: a def named `length` exists with a Pi type whose
-    #  codomain is Int. Pin at least that the def is present and not {:hole,_}.)
+    # The behavioral contract: a def named `length` exists with a Pi type whose
+    # codomain is Int. Pin at least that the def is present and not {:hole,_}.
     def_entry = extern_def!(env, :length)
     refute match?({:hole, _}, Map.get(def_entry, :body))
     assert Map.get(def_entry, :type) != nil
   end
 
-  # helper: locate the extern def in the elaborated env; implement against the
-  # real Env/def structure (discovered while implementing Step 3), keep it behavioral.
-  defp extern_def!(env, name), do: Cure.Core.Inductive.get_def(env, name) || flunk("no def #{name}")
+  # `Cure.Core.Env.get_def/2` (verified: defined at `inductive.ex:1-140`'s
+  # `defmodule Cure.Core.Env`, a SEPARATE module from `Cure.Core.Inductive`
+  # at `:142-433` in the same file — `Inductive` has no `get_def/2`). This is
+  # the accessor every other elab module (`declarations.ex`, `emit.ex`,
+  # `totality_closure.ex`) already uses; re-verify by identity before relying
+  # on it, per the plan's line-anchor-drift caveat.
+  defp extern_def!(env, name), do: Env.get_def(env, name) || flunk("no def #{name}")
 end
 ```
-
-(If `Inductive.get_def/2` is not the real accessor, discover the correct one while implementing Step 3 and fix the helper — the contract is "the def is present, non-hole, has a Pi type," not a specific accessor name.)
 
 - [ ] **Step 2: Run — expect RED**
 
@@ -117,29 +117,70 @@ Expected: both tests PASS — the extern elaborates and its def is present, non-
 
 - [ ] **Step 5: Write the TotalityClosure test (RED) — antibody 7**
 
-Append a test that forces the extern name into the type-level closure so `certify_type_level` would submit it to `Kernel.validate_certificate`. Use the simplest fixture that puts an extern reference in a dependent-index position. If constructing a family whose index calls an extern is awkward in surface syntax, assert the mechanism directly:
+A surface fixture where an extern IS type-level-reachable **is constructible** —
+do not default to a mechanism-guard placeholder. `declarations.ex:63`'s own
+comment documents the precedent this fixture mirrors: a computed (non-ctor)
+index expression calling an ordinary global function, e.g. `plus` in
+`Vec(a, plus(m,n))` (also exercised by the `plus(m, ...)`-shaped oracle
+fixtures under `test/oracle/rewrite/`). `idx_to_core`'s function-call clause
+(`declarations.ex:881-942`) lowers a non-family, non-ctor call to a bare
+`{:global, atom}` app with NO existence check against `env`, and the two-pass
+elaborator (`program.ex:700-737`) registers every function's Π **before** any
+family/ctor is elaborated within the same `register_pass`, then marks every
+extern body only in the later `body_pass` — which completes, for every
+function, before `TotalityClosure.certify_type_level` ever runs
+(`program.ex:136-137`). So: declare an extern that returns `Nat` (not `Int` —
+the index position needs a `Nat`-typed expression to type-check), then declare
+an indexed family whose constructor's result index calls that extern directly
+(not inside another ctor), e.g. (verify exact surface syntax against
+`dependent_construction_test.exs`'s `@vec` fixture and adjust):
 
 ```elixir
   alias Cure.Elab.TotalityClosure
 
-  test "TotalityClosure does not certify an extern-marked global" do
-    # A module with an extern whose name is reachable from a type-level position.
-    # If a surface fixture that references the extern from an index is not
-    # expressible yet, this test still guards the filter by asserting that the
-    # extern name, IF present in type_level_fns, is skipped rather than submitted.
-    src = "mod M\n  @extern(:erlang, :length, 1)\n  fn length(xs: List(Int)) -> Int\nend\n"
+  test "TotalityClosure does not certify an extern-marked global reached from a type-level index" do
+    src =
+      "mod M\n" <>
+        "  type Nat = Z | S(Nat)\n" <>
+        "  @extern(:erlang, :abs, 1)\n  fn extlen(x: Nat) -> Nat\n" <>
+        "  type Boxed indices (n: Nat)\n" <>
+        "    mk : Boxed(extlen(Z()))\n" <>
+        "end\n"
+
     {:ok, env} = Program.elaborate(src)
 
-    # The full pipeline (which runs certify_type_level) already succeeded above,
-    # so the primary guard is {:ok, _}. Additionally pin the mechanism: an extern
-    # name must NOT be handed to Kernel.validate_certificate. Assert the filter
-    # by checking certify_type_level(env) returns :ok (or the env) and does not
-    # raise / return {:totality_required, :length}.
-    assert :ok == extern_certify_result(env)
+    # Reachability, not just absence-of-crash (falsifiability): :extlen must
+    # actually be in the type-level closure, or this test would pass vacuously.
+    assert MapSet.member?(TotalityClosure.type_level_fns(env), :extlen)
+
+    # The mechanism itself: re-running certify_type_level must still succeed
+    # (not {:error, {:totality_required, :extlen}}) — an extern has no body to
+    # certify, so it must be skipped, never submitted to Kernel.validate_certificate.
+    assert {:ok, _} = TotalityClosure.certify_type_level(env)
   end
 ```
 
-Because full elaboration ALREADY runs `certify_type_level` (`program.ex:137`), antibody 1 passing means the simple extern is not submitted OR is submitted and happens to pass — to make this test fail for the RIGHT reason before the filter, FIRST reproduce a fixture where the extern IS type-level-reachable (a family/ctor whose index mentions the extern), confirm it fails with a certificate error WITHOUT the filter, then add the filter. If no such surface fixture is expressible this wave, document that antibody 7 is a mechanism-guard (asserting `certify_type_level` skips extern names by construction) rather than a surface repro, and pin it by unit-testing the filtered `type_level_fns`/`certify_type_level` path directly. Do NOT claim a red-repro you could not construct.
+(The sketch above is illustrative, not literal — the implementer must get the
+concrete surface syntax and index-position expression to actually parse/elaborate,
+verifying against `dependent_construction_test.exs`'s `indices (n: Nat)` /
+`mk : Boxed(...)` shape, and MUST assert `:extlen ∈ type_level_fns(env)` — proving
+real reachability — before asserting the filter's effect. If, after an honest
+attempt at this exact recipe, no surface form of it actually parses/elaborates in
+current Cure syntax, that failure (with the concrete parse/elaborate error) is
+itself the evidence needed to fall back — and the fallback MUST be this
+concretely-specified direct unit test, not an open-ended "discover something":
+construct an `Env.t()` directly via `Env.add_def/5` (extern def, body
+`{:extern, {:erlang,:abs,1}}`) plus `Inductive.declare/3` for a family whose
+ctor `result_indices` contains `{:app, {:global, :extlen}, ...}` (mirroring
+`seed_globals`'s `from_ctors` walk, `totality_closure.ex:53-56`), assert
+`:extlen` ∈ `TotalityClosure.type_level_fns(env)` (reachability, RED before the
+filter — `certify_type_level(env)` returns `{:error, {:totality_required, :extlen}}`
+or crashes inside `Kernel.check_def`), then GREEN after Step 6's filter:
+`certify_type_level(env) == {:ok, _}` AND `:extlen` was never passed to
+`Kernel.validate_certificate` (assert via the returned env's `certified` set
+NOT containing `:extlen`, since an extern is by design never certified).
+Whichever fixture is used, it must proceed by first showing genuine RED
+(the pre-filter crash/rejection), never a same-test tautology.
 
 - [ ] **Step 6: Add the filter in `certify_type_level/1`**
 
@@ -244,11 +285,13 @@ In `emit.ex`, add a predicate and a wrapper builder near `function_form` (`:125-
 
 (Note `0..(arity-1)//1` yields `[]` when `arity == 0` — the 0-arity wrapper has an empty param list and calls `mod:fun()`, correct. Verify `@line` is the module attribute emit already uses for synthesized forms; reuse it.)
 
-- [ ] **Step 4: Route externs in BOTH emit paths + widen the filter**
+- [ ] **Step 4: Route externs at the single shared choke point (`function_form`/`module_forms`) — do NOT touch the line-60 filter**
 
-- The `/3` live path (`emit.ex:71-80`, explicit `local_defs`): before calling the generic `function_form`, route extern-marked defs to `extern_form(fn_atom, mfa)`. Match the def by `extern_def?/1` and pull `{mod,fun,arity}` from its `{:extern, …}` body.
-- The all-defs filter (`emit.ex:55-63`, line 60): widen so extern-marked defs are ALSO not passed to the generic body path — either skip them from `names` and emit them via `extern_form`, or route in the same place the `/3` path does. The observable contract: an extern def produces an `extern_form` `{:function,…}`, never reaches `function_form`'s `Erase.erase`, and is never dropped.
-- Confirm `reject_holes` (`:104-116`) passes the sentinel (it rejects only `{:hole,_}`; `{:extern,_}` is fine) — if `reject_holes` walks def bodies more broadly, add an `{:extern,_}` allowance.
+Re-verified against source: `compile_and_load/2` (`:36-44`), `compile_forms/2` (`:54-63`, the "all-defs" entry), and `compile_forms/3` (`:71-80`) are NOT three independent emit paths needing parallel routing — `compile_forms/2` computes `names` then delegates to `compile_forms/3`, and BOTH `compile_forms/3` and `compile_and_load/2` call `module_forms(env, module, names)` (`:84-93`), which does `Enum.map(names, &function_form(env, &1))` (`:85`). **`function_form/2` (`:125-139`) is the one and only place every entry point routes through.** Patch it (or its single call site in `module_forms/3`) ONCE: dispatch `extern_def?(Env.get_def(env, name))` before calling `Erase.erase`/`peel_params`/`lower`, and emit `extern_form(name, mfa)` instead. This single patch transitively fixes `compile_and_load/2`, `compile_forms/2`, and `compile_forms/3` — exactly the entry points antibodies 2/3/4 (via `compile_and_load/2`) exercise, so the fix is fully covered by tests without any dedicated `compile_forms/2` antibody.
+
+Do NOT "widen" the line-60 filter (`is_nil(Map.get(d, :builtin_op))`, `emit.ex:60`). Re-verify before editing: an extern-marked def carries NO `builtin_op` key (only `Env.register_builtin_op/3` sets one, and the extern branch never calls it), so line 60's filter **already includes** extern defs in `compile_forms/2`'s `names` — it was never excluding them. Widening it to additionally *skip* extern names (one of the two options an earlier draft of this plan offered) would make `compile_forms/2` silently DROP every extern from the emitted module — contradicting this task's own "never dropped" contract — and nothing in this plan's test suite would catch it, since no antibody calls `compile_forms/2` (confirmed: its only callers in `lib/`+`test/` are its own definition; the real pipeline, `lib/cure/compiler.ex:353`, calls `compile_forms/3` with explicit `local_defs`). Leave line 60 exactly as-is; it continues to protect only true nil-body `builtin_op` defs, an orthogonal case.
+
+Confirm `reject_holes` (`:104-116`) passes the sentinel (it rejects only `{:hole,_}`; `{:extern,_}` is fine) — if `reject_holes` walks def bodies more broadly, add an `{:extern,_}` allowance.
 
 - [ ] **Step 5: Run — expect GREEN**
 
