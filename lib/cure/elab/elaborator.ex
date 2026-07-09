@@ -551,7 +551,52 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # `pickup` predicate dispatch (value-surface Wave 1). Pure syntactic
+  # desugaring to a right-nested `:conditional` chain; reuses the conditional
+  # path's Bool-guard and branch-join checks verbatim. No kernel change.
+  # See docs/superpowers/specs/2026-07-09-wave1-pickup-design.md.
+  def elaborate_expr_typed({:pickup, _meta, clauses}, names, ctx, env) do
+    with {:ok, desugared} <- desugar_pickup(clauses) do
+      elaborate_expr_typed(desugared, names, ctx, env)
+    end
+  end
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # Fold a `pickup` clause list into a right-nested `:conditional` chain.
+  # The LAST clause is the terminator (its body is the seed); every earlier
+  # clause is a guard wrapper `{:conditional, [], [guard, body, acc]}`.
+  # Three terminator shapes (matching codegen.ex's pickup lowering exactly):
+  #   {:pickup_else, _, [e]}                         -> seed e
+  #   {:pickup_clause, _, [{:literal, _, true}, e]}  -> seed e (guard discarded)
+  #   anything else in last position                 -> defensive error
+  # A single-clause pickup (only the terminator) collapses to the seed body
+  # with no wrapping conditional (PICKUP §11: `pickup else -> e ≡ e`).
+  # The empty/terminatorless shapes are impossible post-parse (the parser's
+  # validate_pickup_clauses enforces them); the error arms are belt-and-suspenders.
+  defp desugar_pickup([]), do: {:error, {:pickup_missing_else, []}}
+
+  defp desugar_pickup(clauses) do
+    {wrappers, [last]} = Enum.split(clauses, length(clauses) - 1)
+
+    with {:ok, seed} <- pickup_seed(last) do
+      fold_pickup_wrappers(wrappers, seed)
+    end
+  end
+
+  defp fold_pickup_wrappers(wrappers, seed) do
+    Enum.reduce_while(Enum.reverse(wrappers), {:ok, seed}, fn
+      {:pickup_clause, _cm, [g, b]}, {:ok, acc} ->
+        {:cont, {:ok, {:conditional, [], [g, b, acc]}}}
+
+      other, {:ok, _acc} ->
+        {:halt, {:error, {:pickup_missing_else, other}}}
+    end)
+  end
+
+  defp pickup_seed({:pickup_else, _m, [e]}), do: {:ok, e}
+  defp pickup_seed({:pickup_clause, _m, [{:literal, _, true}, e]}), do: {:ok, e}
+  defp pickup_seed(other), do: {:error, {:pickup_missing_else, other}}
 
   # The first arm whose pattern is a constructor application, as
   # `{resolved_ctor, pattern_vars, body}` — the arm used to synthesise an
@@ -1026,6 +1071,14 @@ defmodule Cure.Elab.Elaborator do
          {:ok, t_core} <- elaborate_expr_checked(t, expected_core, names, ctx, env),
          {:ok, e_core} <- elaborate_expr_checked(e, expected_core, names, ctx, env) do
       {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
+    end
+  end
+
+  # `pickup` in checked position: desugar to the nested conditional and check
+  # it against the expected type (each branch body is checked at `expected_core`).
+  def elaborate_expr_checked({:pickup, _meta, clauses}, expected_core, names, ctx, env) do
+    with {:ok, desugared} <- desugar_pickup(clauses) do
+      elaborate_expr_checked(desugared, expected_core, names, ctx, env)
     end
   end
 
