@@ -30,19 +30,47 @@ the existing `Int`/`Float` primitives.
 
 ## 2. Why this shape (alternatives considered & rejected)
 
-### 2.1 `Char = Bounded(0x110000)` — REJECTED
+### 2.1 `Char = Bounded(0x110000)` — REJECTED for this wave (measured; see the option-(a) note)
 `Std.Bounded` (`lib/std/bounded.cure`) is a **unary Peano** Fin:
 `First : Bounded(S(m))`, `Next : Bounded(m) -> Bounded(S(m))`. Representing code
-point 97 would require 97 nested `Next` constructors — absurd as a runtime
-carrier and non-erasable to a machine integer. `Bounded` is a length-index proof
-type for `Vector`, not a codepoint carrier. Dead on arrival.
+point 97 would require 97 nested `Next` constructors. This was re-examined
+empirically rather than dismissed on principle:
+
+- **The value tower is *not* the blocker (fixed).** A char *value* `Next^k(First)`
+  is a deep constructor spine; the only expensive operation on it was
+  `Kernel.infer`, which was O(n²) (a single emoji, depth 128512, typechecked in
+  **4m 23s**). That quadratic was fixed — commit `341b1f1` ("perf(kernel): linear
+  infer on deep constructor spines") makes it linear; re-measured **153 ms** at
+  emoji depth (`nf`/`conv` were already linear, ~30 ms — BEAM grows process
+  stacks on the heap, so deep recursion never crashes). So the value tower alone
+  would now be feasible.
+- **The *bound* is the decisive blocker (measured, not fixed).** `Bounded(n)`'s
+  index `n` is a unary `Nat`, so the *type* `Bounded(0x110000)` must materialize
+  `n = 1,114,112` as a 1.1-million-deep `S`-tower. Measured (`bound_bench`): build
+  82 ms, `nf` 398 ms, `infer` 593 ms, and **~370 MB resident** (VM total
+  108 MB → 479 MB) — for the type index alone, present in every `Char`
+  signature. `341b1f1` does not touch this (it addressed the value spine, not the
+  index), and there is an unmeasured additional risk that index conversion
+  re-normalizes the bound *per char literal* (~400 ms × every `Char` literal).
+  This is what rules `Bounded` out for the working design.
+
+**Option (a) — the path that *would* make `Char = Bounded(0x110000)` viable —
+is a separate, parallel workstream (owned by another agent), not this wave.**
+Compact `Nat` literals in the kernel (native literal + `Nat.rec` peeling — Lean's
+kernel `Nat`, Agda's `{-# BUILTIN NATURAL #-}`) would give `Bounded(0x110000)` a
+*compact* index (no 1.1M tower) and a compact char *value* (an `int_lit` at
+`Bounded`, no value tower either). When that lands, `Char` may migrate to
+`Bounded(0x110000)` with a compact index. Until then, this wave ships the
+bespoke `Char` primitive (§2.3, option (b)) — compact, nominally distinct, and
+sidestepping *both* towers because its `0 ≤ cp ≤ 0x10FFFF` bound is a plain
+integer check in the elaborator's literal handler (§4.2), not a `Nat` index.
 
 ### 2.2 `Char` erases to `Int`, nominal only in the elaborator (kernel `Char = Int`) — REJECTED
 Zero-TCB, but `Char` and `Int` become kernel-indistinguishable: `f(c: Char)`
 would silently accept an `Int`, and `String = List(Char) = List(Int)` conflates
 strings with integer lists. Loses the type distinction the whole exercise is for.
 
-### 2.3 `Char` as a primitive base type — CHOSEN
+### 2.3 `Char` as a primitive base type — CHOSEN (option (b), the working design for this wave)
 Agda: `{-# BUILTIN CHAR Char #-}` (primitive, distinct from `Nat`, with
 `primCharToNat`/`primNatToChar`). Idris: primitive `Char`. Lean: a validated
 `UInt32` structure. Two of three real languages make `Char` a *primitive*, so a
