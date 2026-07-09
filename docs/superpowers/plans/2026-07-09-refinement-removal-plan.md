@@ -4,7 +4,7 @@
 
 **Goal:** Remove refinement types entirely (parser grammar, SMT query layer, classic checker machinery, Std.Refine, examples/docs/site claims, Antigen surface) while keeping GuardLint + `Cure.SMT.Process` + the z3 binary byte-identical in behavior.
 
-**Architecture:** Two green commits. C1 (Task 2) removes all lib/antigen machinery AND every test that dies with it — atomic, tree green at the boundary. C2 (Task 3) handles examples, docs, and site. Kernel (`lib/cure/core/`) and elaborator (`lib/cure/elab/`) diffs are EMPTY except the enumerated guard_lint.ex:194 comment reword.
+**Architecture:** Two green commits. C1 (Task 2) removes all lib/antigen machinery AND every test that dies with it — atomic, tree green at the boundary. C2 (Task 3) handles examples, docs, and site. Kernel (`lib/cure/core/`) and elaborator (`lib/cure/elab/`) diffs are EMPTY except the enumerated guard_lint.ex:194 comment reword AND the program.ex:220 comment reword (found during plan hardening: the spec's own §0 evidence citation — "program.ex:233 excludes `Std.Refine` from the dependent auto-prelude" — points at a comment that literally contains the string `Std.Refine`; the final grep gate (Task 4 Step 1) requires zero `Std.Refine` hits under lib/ with no exception for this file, so the comment must be reworded too).
 
 **Tech Stack:** Elixir, git. Spec: `docs/superpowers/specs/2026-07-09-refinement-removal-design.md` (hardened `eede85a` + `dc6c35f` + `6d61e1a`) — read it IN FULL first; its §1/§2 file dispositions and §3 gate are normative.
 
@@ -15,7 +15,7 @@
 - ONE `mix` command at a time, ever — including the two subproject `mix test` runs (Task 3) and scoped runs; never overlap.
 - Baseline (post-#17, commit `ed5f5de`): full suite **3277 passed / 0 failures / 0 skipped**; Antigen 503; oracle replay 65. All deltas reconcile against THESE numbers.
 - Tests immutable except: (a) the whole-file deletions and by-name selective removals enumerated in Task 2; (b) the two non-behavioral exceptions — `guard_lint.ex:194` comment reword and `normalizer_test.exs` fixture-tag rename. ANY other surviving-test change = STOP.
-- STOP conditions (spec §3.6): any `lib/cure/core/` or `lib/cure/elab/` file needs a change beyond guard_lint.ex:194's comment; the `dependent_types` check.examples expectation changes; any surviving test needs modification beyond the two exceptions; an oracle fixture uses refinement syntax; GuardLint behavior changes; either subproject `mix test` fails post-rewrite.
+- STOP conditions (spec §3.6, widened by plan hardening): any `lib/cure/core/` or `lib/cure/elab/` file needs a change beyond guard_lint.ex:194's comment AND program.ex:220's comment (the two permitted elab/ comment rewords — see Architecture note above); the `dependent_types` check.examples expectation changes; any surviving test needs modification beyond the two exceptions; an oracle fixture uses refinement syntax; GuardLint behavior changes; either subproject `mix test` fails post-rewrite.
 - Two-pipeline steer: everything you delete is CLASSIC-side (`lib/cure/types/*`, `lib/cure/smt/*` minus process.ex, peripheral tooling) plus the shared parser grammar. The dependent pipeline (`lib/cure/elab/*` + `lib/cure/core/*`) is off-limits. Class-C "refinement" (dependent-match index/goal refinement: `refine_branch`, `:refine` challenge kind, `Indexed.refinement/1`, `wi01/wi05` oracle fixtures) is a DIFFERENT concept — touching it is a defect.
 
 ---
@@ -32,6 +32,7 @@ ls lib/cure/smt/                                                     # solver tr
 ls lib/cure/types/ | grep -i "refine\|dependent"                     # the 5 delete files
 grep -rn "SMT.Solver\|SMT.Translator" lib/ | grep -v "smt/solver.ex\|smt/translator.ex"   # all external callers — must all be in the spec's strip list
 grep -n "run_with_z3" lib/cure/elab/guard_lint.ex                    # the :194 comment
+grep -n "Std.Refine" lib/cure/elab/program.ex                        # the :220 comment (auto-prelude exclusion rationale) — the second permitted elab/ comment reword
 ```
 
 Every `SMT.Solver`/`SMT.Translator` caller found must appear in spec §1's strip list (checker.ex, dependent.ex→deleted, proof/verifier.ex, pgo, doctor prose). An unlisted caller = STOP.
@@ -44,13 +45,13 @@ grep -rln "| *[a-z_]* *[<>=]" test/oracle/**/*.cure | xargs -I{} grep -l "{.*:.*
 
 Expected: empty (wi01/wi05 are Class-C with-abstraction fixtures, no `{x: T | p}` syntax — already verified; a hit = STOP).
 
-- [ ] **Step 4: Record the red baseline.** Confirm test counts: whole-file deletions 34+3+19+6+18+5+15+16 = **116 tests**; selective candidates 9+3+2+1+1+pgo-block = **~16+**. Run NO mix command in this task.
+- [ ] **Step 4: Record the red baseline.** Confirm test counts: whole-file deletions 34+3+19+6+18+5+15+16 = **116 tests**; selective candidates 9 (checker_test.exs) + 3 (stdlib_test.exs) + 2 (unify_test.exs) + 1 (parser_structural_test.exs) + 1 (quote_test.exs) + 3 (pgo_test.exs "SMT translator pgo_hint" block: "default hint produces today's query", "hot hint emits the arith-solver option", "cold hint omits the arith-solver option") = **19**, of which at most 18 die (checker_test.exs's "declared Int parameter survives multi-clause guard refinement" is expected to survive per Step 6's removal rule). Run NO mix command in this task.
 
 ### Task 2: C1 — core removal (lib + antigen + tests), green commit
 
 **Files:**
 - Delete: `lib/cure/smt/solver.ex`, `lib/cure/smt/translator.ex`, `lib/cure/smt/parser.ex`, `lib/cure/types/refinement.ex`, `lib/cure/types/guard_refinement.ex`, `lib/cure/types/path_refinement.ex`, `lib/cure/types/pattern_refinement.ex`, `lib/cure/types/dependent.ex`, `lib/std/refine.cure`, `lib/antigen/assays/smt_lint.ex`, `lib/antigen/generators/smt_query.ex`, `test/cure/smt/smt_test.exs`, `test/cure/smt/solver_k13_test.exs`, `test/cure/types/guard_refinement_test.exs`, `test/cure/types/path_refinement_test.exs`, `test/cure/types/pattern_refinement_narrowing_test.exs`, `test/cure/types/byte_size_refinement_test.exs`, `test/cure/types/dependent_test.exs`, `test/antigen/assays/smt_lint_test.exs`
-- Modify (strip refinement clauses/fields/rows per spec §1): `lib/cure/compiler/parser.ex` (3 grammar sites), `lib/cure/types/checker.ex`, `type.ex`, `unify.ex`, `env.ex`, `stdlib.ex`, `pattern_checker.ex`, `reduce.ex`, `core_bridge.ex` (comment), `lib/cure/export_types/protobuf.ex`, `lib/cure/optimizer/monomorphise.ex`, `lib/cure/doc/extractor.ex`, `lib/cure/doc/html_generator.ex`, `lib/cure/compiler/errors.ex`, `lib/cure/compiler/printer.ex`, `lib/cure/project/proof.ex`, `lib/cure/project/proof/verifier.ex`, `lib/cure/pgo.ex`, `lib/cure/pgo/profile.ex`, `lib/cure/bless.ex`, `lib/cure/bless/advisor.ex`, `lib/cure.ex`, `mix.exs`, `lib/cure/doctor.ex` (message reword), `lib/cure/elab/guard_lint.ex` (ONLY the :194 comment), `lib/antigen/runner.ex` (rows :366-368), `lib/antigen/generators/unify_problem.ex` (:71 row), `lib/antigen/assays/unifier.ex` (:131 strip clause), `lib/antigen/generators/surface_expr.ex` (:109-110 nodes)
+- Modify (strip refinement clauses/fields/rows per spec §1): `lib/cure/compiler/parser.ex` (3 grammar sites), `lib/cure/types/checker.ex`, `type.ex`, `unify.ex`, `env.ex`, `stdlib.ex`, `pattern_checker.ex`, `reduce.ex`, `core_bridge.ex` (comment), `lib/cure/export_types/protobuf.ex`, `lib/cure/optimizer/monomorphise.ex`, `lib/cure/doc/extractor.ex`, `lib/cure/doc/html_generator.ex`, `lib/cure/compiler/errors.ex`, `lib/cure/compiler/printer.ex`, `lib/cure/project/proof.ex`, `lib/cure/project/proof/verifier.ex`, `lib/cure/pgo.ex`, `lib/cure/pgo/profile.ex`, `lib/cure/bless.ex`, `lib/cure/bless/advisor.ex`, `lib/cure.ex`, `mix.exs`, `lib/cure/doctor.ex` (message reword), `lib/cure/elab/guard_lint.ex` (ONLY the :194 comment), `lib/cure/elab/program.ex` (ONLY the :220 comment — drops the stale `Std.Refine` bullet from the auto-prelude exclusion-rationale comment; no code line changes, `@auto_prelude`/`@auto_prelude_types` untouched), `lib/antigen/runner.ex` (rows :366-368), `lib/antigen/generators/unify_problem.ex` (:71 row), `lib/antigen/assays/unifier.ex` (:131 strip clause), `lib/antigen/generators/surface_expr.ex` (:109-110 nodes)
 - Test edits: selective removals + `test/antigen/assays/normalizer_test.exs` tag rename
 
 **Interfaces:**
@@ -62,7 +63,7 @@ Expected: empty (wi01/wi05 are Class-C with-abstraction fixtures, no `{x: T | p}
 
 - [ ] **Step 3: Strip the classic clauses.** Per spec §1: checker.ex (14 `{:refinement,…}` clauses + `strip_refinement/1`, `discharge_refinement/3`, `verify_return_refinement/7`, `verify_refinement_arg/5`, `non_refinement_or_non_numeric?/1`, the `check_sat` call), type.ex, unify.ex (:103-108/:237/:261-262), env.ex (2 struct fields + their touch-points), stdlib.ex (alias + `:refinement`-flag branch :345-346 + prose), pattern_checker.ex, reduce.ex, core_bridge.ex comment. Rule of thumb: after this step `grep -rn "{:refinement," lib/cure/types/` must be EMPTY.
 
-- [ ] **Step 4: Peripheral strips.** protobuf E068 clause, monomorphise :196/:449, doc extractor/html, errors.ex E090/W091 formatters + refinement prose, printer rendering, proof.ex `:refinement` kind (KEEP `:smt` kind + `verify_smt/2` + `find_z3/0`), verifier.ex `:refinement` clause + `verify_refinement/2`, pgo hooks, bless mentions, `mix.exs:122` + `lib/cure.ex:4` strings, doctor message reword, guard_lint.ex:194 comment reword (NO code line changes — diff must show exactly one comment hunk).
+- [ ] **Step 4: Peripheral strips.** protobuf E068 clause, monomorphise :196/:449, doc extractor/html, errors.ex E090/W091 formatters + refinement prose, printer rendering, proof.ex `:refinement` kind (KEEP `:smt` kind + `verify_smt/2` + `find_z3/0`), verifier.ex `:refinement` clause + `verify_refinement/2`, pgo hooks, bless mentions, `mix.exs:122` + `lib/cure.ex:4` strings, doctor message reword, guard_lint.ex:194 comment reword AND program.ex:220 comment reword (delete or reword the `#   Std.Refine     -- refinement predicates not yet dependent-clean` bullet so no literal `Std.Refine` string remains — NO code line changes to either file; `git diff -- lib/cure/elab/` must show exactly TWO comment hunks, guard_lint.ex:194 and program.ex:220).
 
 - [ ] **Step 5: Antigen surface.** runner rows :366-368 (`smt/implication|unsat|witness`), unify_problem :71 row, unifier.ex :131 strip clause, surface_expr :109-110 nodes; `normalizer_test.exs` — rename the `{:refinement, …}` synthetic fixture tuples to `{:untranslatable_probe, …}` throughout (behavior-preserving; assertions keep passing because CoreBridge never special-cased either shape).
 
@@ -116,7 +117,7 @@ grep -rn "parse_refinement_type" lib/                                # zero
 grep -rn "Std.Refine" lib/ examples/ docs/ site/ | grep -v "docs/superpowers/specs/\|docs/superpowers/audit_categorised.md\|CHANGELOG.md"   # zero
 ```
 
-- [ ] **Step 2: Diff-scope gate:** `git diff --stat ed5f5de..HEAD -- lib/cure/core/` EMPTY; `git diff ed5f5de..HEAD -- lib/cure/elab/` shows EXACTLY the one guard_lint.ex comment hunk.
+- [ ] **Step 2: Diff-scope gate:** `git diff --stat ed5f5de..HEAD -- lib/cure/core/` EMPTY; `git diff ed5f5de..HEAD -- lib/cure/elab/` shows EXACTLY two comment hunks — guard_lint.ex:194 and program.ex:220 — and no other file.
 
 - [ ] **Step 3: Full suite ONCE:** `mix test`. Expected: **0 failures, 0 skipped**; passed ≈ 3277 − 116 (whole files) − (actual selective removals, report exact count) + 0 new. Antigen (500-ish rows post-removal) and oracle replay 65 run inside — green. Report exact numbers with reconciliation arithmetic.
 
