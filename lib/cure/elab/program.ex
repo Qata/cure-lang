@@ -31,11 +31,11 @@ defmodule Cure.Elab.Program do
   def check_ast(ast), do: check_ast(ast, [])
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
-  def check_ast(ast, opts) do
+  def check_ast(ast, _opts) do
     with :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast) do
-      Cure.Kernel.Backend.check_ast(ast, opts)
+      check_ast_elixir_core(ast)
     end
   end
 
@@ -135,19 +135,6 @@ defmodule Cure.Elab.Program do
          env0 = merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
       TotalityClosure.certify_type_level(env)
-    end
-  end
-
-  @doc false
-  @spec check_ast_for_lean_backend(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
-  def check_ast_for_lean_backend(ast) do
-    case imports(ast) do
-      [] ->
-        seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast))
-        elaborate_declarations_lean(declarations(ast), seeded)
-
-      sources ->
-        {:error, {:lean_backend_unsupported_imports, sources}}
     end
   end
 
@@ -690,29 +677,6 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp elaborate_declarations_lean(items, env) do
-    with {:ok, env1, fn_decls} <- register_pass_lean(items, env) do
-      body_pass_lean(fn_decls, env1)
-    end
-  end
-
-  defp register_pass_lean(items, env) do
-    Enum.reduce_while(items, {:ok, env, []}, fn
-      {:function_def, _meta, _body} = decl, {:ok, acc, fns} ->
-        case Declarations.register_signature(decl, acc) do
-          {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl]}}
-          {:error, _} = err -> {:halt, err}
-        end
-
-      other, _acc ->
-        {:halt, {:error, {:lean_backend_unsupported_declaration, elem(other, 0)}}}
-    end)
-    |> case do
-      {:ok, _env, _fns} = ok -> ok
-      {:error, _} = err -> err
-    end
-  end
-
   defp register_pass(items, env, prelude?) do
     Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
       case decl do
@@ -765,15 +729,6 @@ defmodule Cure.Elab.Program do
   defp body_pass(fn_decls, env) do
     Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
       case Declarations.elaborate_function_body(decl, acc) do
-        {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  defp body_pass_lean(fn_decls, env) do
-    Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
-      case Declarations.elaborate_function_body_lean(decl, acc) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
         {:error, _} = err -> {:halt, err}
       end

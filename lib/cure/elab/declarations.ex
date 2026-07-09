@@ -70,22 +70,6 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  @doc false
-  def elaborate_function_body_lean({:function_def, meta, body}, env) do
-    body_expr = single_body(body)
-
-    with {:ok, sig} <- function_signature(meta, env) do
-      ctx = build_context(env, sig.telescope)
-
-      with {:ok, body_term} <-
-             elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
-           :ok <- Relevance.check(env, sig.name, sig.quantities, body_term) do
-        lambda = wrap_binders(:lam, sig.telescope, body_term)
-        {:ok, Env.add_def(env, sig.name, sig.pi, lambda, sig.quantities)}
-      end
-    end
-  end
-
   # Shared signature elaboration: auto-generalize free type variables, build the
   # parameter telescope and the Π type. Deterministic in the type environment, so
   # the signature computed in the registration pass and the body pass agree.
