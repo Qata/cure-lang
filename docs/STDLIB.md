@@ -29,7 +29,7 @@ The documentation below is organised by topic:
 - [Protocols](#protocols)  -- `Std.Equatable`, `Std.Ord`, `Std.Functor`.
 - [Value-shaped modules](#value-shaped-modules)  -- `Std.String`,
   `Std.Math`, `Std.Regex`, `Std.Json`, `Std.Http`, `Std.Time`.
-- [Types and proofs](#types-and-proofs)  -- `Std.Refine`, `Std.Equal`,
+- [Types and proofs](#types-and-proofs)  -- `Std.Equal`,
   `Std.Proof`.
 - [Concurrency and OTP](#concurrency-and-otp)  -- `Std.Actor`,
   `Std.Fsm`, `Std.Process`, `Std.Supervisor`, `Std.App`.
@@ -70,7 +70,7 @@ Known groups and their current membership (also the source of truth
 for `Cure.Stdlib.Preload.known_groups/0`):
 
 - `:core` -- `Std.Core`, `Std.Bounded`, `Std.Equal`, `Std.Equatable`, `Std.Ord`,
-  `Std.Show`, `Std.Functor`, `Std.Refine`, `Std.Proof`. `Std.Proof` is the one
+  `Std.Show`, `Std.Functor`, `Std.Proof`. `Std.Proof` is the one
   module that relies on the compile-time default (`:core`); `proof`
   containers only admit legacy proof-shaped returns, so no explicit
   `@group` decorator lives in its source.
@@ -509,22 +509,6 @@ Everything is stored in microseconds so arithmetic stays monomorphic.
 Runtime module: `:cure_std_time`.
 
 ## Types and proofs
-### Std.Refine
-Refinement type aliases plus matching runtime predicates. The aliases
-carry predicate obligations; the predicates are plain totals you can
-call at runtime.
-#### Type aliases
-- `NonZero = {x: Int | x != 0}`
-- `Positive = {x: Int | x > 0}`
-- `Negative = {x: Int | x < 0}`
-- `NonNegative = {x: Int | x >= 0}`
-- `NonPositive = {x: Int | x <= 0}`
-- `Percentage = {p: Int | p >= 0 and p <= 100}`
-- `PositiveFloat = {x: Float | x > 0.0}`
-- `Probability = {p: Float | p >= 0.0 and p <= 1.0}`
-#### Predicates
-- `positive?(n: Int) -> Bool`, `non_negative?(n: Int) -> Bool`.
-- `percentage?(p: Int) -> Bool`, `probability?(p: Float) -> Bool`.
 ### Std.Equal
 Legacy equality-token helpers. All four functions currently return
 the runtime atom `:cure_refl`; their public stdlib signatures are

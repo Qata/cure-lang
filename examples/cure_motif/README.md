@@ -1,7 +1,7 @@
 # cure_motif
 
 A length-indexed step sequencer that makes **dependent types the star of the
-show**. Where `cure_moneta` exercises refinement types on a business domain
+show**. Where `cure_moneta` exercises domain aliases on a business domain
 (money) and `cure_forge` exercises the full OTP surface, `cure_motif` puts
 **`Std.Vector`-backed length tracking**, a **typed `@record`-enabled FSM**, an
 **actor relay over the Melquiades Operator**, and a **`Cure.Temporal` liveness
@@ -25,21 +25,22 @@ the VM by the time ExUnit starts.
 Each bullet corresponds to at least one `describe/2` block in the test suite
 at `test/cure_motif_test.exs`.
 
-### Refinement types + SMT (`motif.cure:32`)
+### MIDI-domain aliases (`motif.cure:32`)
 
 ```cure
-type Pitch        = {p: Int | p >= 0 and p <= 127}
-type Velocity     = {v: Int | v >= 1 and v <= 127}
-type Channel      = {c: Int | c >= 0 and c <= 15}
-type Bpm          = {b: Int | b >= 20 and b <= 300}
-type StepsPerBeat = {s: Int | s >= 1 and s <= 16}
-type BarCount     = {n: Int | n >= 1 and n <= 64}
-type RollReps     = {k: Int | k >= 2 and k <= 8}
+type Pitch        = Int   -- invariant: 0-127
+type Velocity     = Int   -- invariant: 1-127
+type Channel      = Int   -- invariant: 0-15
+type Bpm          = Int   -- invariant: 20-300
+type StepsPerBeat = Int   -- invariant: 1-16
+type BarCount     = Int   -- invariant: 1-64
+type RollReps     = Int   -- invariant: 2-8
 ```
 
-Every MIDI-domain primitive is refinement-typed. Safe constructors (`note/2`,
-`chord/3`, `roll/3`) take the refined types, so out-of-range literals fail
-`cure check`, not at runtime.
+Every MIDI-domain primitive gets a named alias. The documented ranges are
+invariants left unchecked pending SMTCoq-style refinement support (removed for
+now); the constructors (`note/2`, `chord/3`, `roll/3`) take these aliases so the
+domain is at least named in the types.
 
 ### Pattern helpers (`motif.cure:99`)
 
@@ -173,7 +174,7 @@ examples/cure_motif/
   mix.exs                                 -- Elixir harness entry point
   .formatter.exs / .gitignore
   cure_src/
-    motif.cure                            -- refinement types, ADTs, Pattern helpers, rendering
+    motif.cure                            -- domain aliases, ADTs, Pattern helpers, rendering
     envelope.cure                         -- @record-annotated callback-mode FSM
     voice.cure                            -- voice actor (per-note state tracker)
     sequencer.cure                        -- sequencer actor (single-event relay + counter)
@@ -241,7 +242,7 @@ of the showcase once the fixes land.
 ## See also
 
 - [`docs/TYPE_SYSTEM.md`](../../docs/TYPE_SYSTEM.md) -- bidirectional
-  checking and refinement types
+  checking and the dependent type system
 - [`docs/FSM_GUIDE.md`](../../docs/FSM_GUIDE.md) -- FSM containers,
   callback mode, lifecycle hooks
 - [`docs/TEMPORAL.md`](../../docs/TEMPORAL.md) -- LTL temporal checker

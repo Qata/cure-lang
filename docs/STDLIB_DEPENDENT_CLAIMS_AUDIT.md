@@ -87,21 +87,15 @@ laws, but no trusted Core proof obligations are emitted yet.
 
 ## Borderline: Real Refinements, Not Kernel Dependent Types
 
-### `Std.Refine`
+### Refinement types (removed)
 
-Source: `lib/std/refine.cure`
+Formerly `lib/std/refine.cure`.
 
-`Std.Refine` provides real refinement aliases such as:
-
-- `NonZero = {x: Int | x != 0}`
-- `Positive = {x: Int | x > 0}`
-- `Percentage = {p: Int | p >= 0 and p <= 100}`
-- `Probability = {p: Float | p >= 0.0 and p <= 1.0}`
-
-These are legitimate as SMT-backed refinement types in the legacy checker.
-They should not be described as trusted-kernel dependent types unless and until
-the dependent kernel owns refinement checking or the documentation clearly
-distinguishes the two systems.
+The refinement-type aliases (`NonZero`, `Positive`, `Percentage`,
+`Probability`, ...) and the legacy SMT-backed refinement checker have been
+removed, pending SMTCoq-style proof reconstruction. They were never
+trusted-kernel dependent types; this entry is kept only to record that the
+feature and its stdlib module are gone.
 
 ## Routing Implication
 

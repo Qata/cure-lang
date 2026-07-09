@@ -4,7 +4,7 @@ defmodule CureMotif do
 
   The heavy lifting lives in `cure_src/`:
 
-    * `motif.cure`      -- pure core: refinement types, ADTs, Pattern
+    * `motif.cure`      -- pure core: domain aliases, ADTs, Pattern
       helpers, rendering (compiled to `:"Cure.Motif"`)
     * `envelope.cure`   -- `@record` callback-mode FSM
       (compiled to `:"Cure.FSM.Envelope"`)

@@ -45,6 +45,5 @@ runtime atom `:cure_refl`, matching the current `Std.Equal` compatibility API.
 
 - `Cure.Core` already has equality and rewrite nodes with kernel tests.
 - `Std.Equal` is still a runtime-token compatibility module.
-- `Std.Refine` provides SMT-backed refinement aliases and predicates.
 - `assert_type expr : T` is a compile-time type assertion that erases at
   runtime, but it is separate from the trusted dependent proof kernel.

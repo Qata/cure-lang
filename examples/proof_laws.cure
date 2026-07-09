@@ -2,7 +2,7 @@ proof ProofLaws
   ## Equality laws as programs (v0.19.0).
   ##
   ## A `proof` container is compiled to an ordinary BEAM module, but
-  ## its bindings must elaborate to `Equivalent(...)` or a refinement proof.
+  ## its bindings must elaborate to `Equivalent(...)`.
   ## Everything here returns the `:cure_refl` atom at runtime.
 
   ## `n + 0` equals `n`.
