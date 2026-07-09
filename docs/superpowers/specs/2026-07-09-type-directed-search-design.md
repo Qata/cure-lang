@@ -89,7 +89,7 @@ reliability typeclass users expect. General search accepts nondeterminism and
 backtracking as the price of power. **Same `solve/3`, different knobs.** The
 open design choice — whether instance resolution is `solve` with settings
 (Coq's `typeclasses eauto`) or a thin deterministic core sharing only the
-unifier — is decided in implementation and recorded here (§7 ledger #1); the
+unifier — is decided in implementation and recorded here (§8 ledger #1); the
 spec commits only to the shared substrate, not to that internal cut.
 
 ## 4. Termination and decidability
@@ -112,7 +112,7 @@ spec commits only to the shared substrate, not to that internal cut.
   `implementation` elaborates (typeclasses spec §5).
 - **Lemmas / user hints** register via an attribute on an ordinary definition
   — e.g. `@hint(:arith)` on `mul_nonneg` — placing it in a named database with
-  optional priority. (Surface syntax ledgered §7 #2; `@hint` illustrative.)
+  optional priority. (Surface syntax ledgered §8 #2; `@hint` illustrative.)
 - Registration is **elaborator metadata**, not a kernel concept: the kernel
   holds these as ordinary global defs; only the E-layer knows they are
   searchable. "Positing lemmas to the kernel" = registering globals + tagging
@@ -121,7 +121,44 @@ spec commits only to the shared substrate, not to that internal cut.
   definition, so a wrong "lemma" cannot be registered unless it typechecks —
   the DB cannot be poisoned with false facts.
 
-## 6. Clients
+## 6. Surface: `by search` (compute-first)
+
+The engine's surface entry point is the tactic **`by search`**, written where a
+proof is expected. The name states the mechanism — it *searches* — which is the
+whole reason it isn't Lean's opaque `simp`. Its semantics are **computation
+first, search only when needed**:
+
+1. Try to close the goal by computation (whnf / reflexivity). E.g. `So(5 > 0)`
+   normalizes to `So(True())`, inhabited by `Oh()`. If this closes the goal,
+   done — **no search runs**.
+2. Otherwise, run hint search (§2) over the relevant database.
+3. If search fails, a typed error carrying the residual goal (§8 ledger #5,
+   diagnostics) — never a loop, never a silent pass.
+
+The consequence is the intended rule: **a refinement pays for proof search only
+when its obligation is not decidable by computation.** Concrete/literal
+refinements (`five() -> {r | r>0} = 5`) close in step 1 with zero search;
+abstract ones (`scale`, `x*k ≥ 0`) fall to step 2.
+
+This is what lets the desugaring macro stay **uniform and dumb**: it *always*
+emits `by search` on the obligation it generates and never inspects the
+predicate. Step 1 makes `by search` a no-op wherever the goal is already closed,
+so "always emit it" costs nothing on the concrete cases and does the right thing
+on the abstract ones — `by search` absorbs the decision the macro would
+otherwise have to make.
+
+```cure
+%[5, by search]           # macro-emitted; step 1 (computation) closes it, no search
+%[x.1 * k.1, by search]   # macro-emitted; step 2 finds mul_nonneg in `arith`
+```
+
+In hand-written code `by search` appears only where the author wants
+automation, so its presence in source is informative — it marks exactly the
+spots where the compiler did non-trivial proof work. (A `by search` on an
+already-computationally-closed goal is a successful no-op; whether to warn on a
+redundant hand-written one is ledgered §8 #6.)
+
+## 7. Clients
 
 **Built now:**
 
@@ -152,7 +189,7 @@ the DB grows monotonically as users prove new lemmas — the Mathlib/Idris-prelu
 accretion model. This is the deliberate inverse of SMT (more complete, but
 uncertifiable on exactly the nonlinear cases that matter).
 
-## 7. Ledger (open decisions)
+## 8. Ledger (open decisions)
 
 1. **Instance profile factoring** — `solve` with settings vs. a thin
    deterministic instance core sharing only the unifier (§3). Implementation
@@ -167,8 +204,11 @@ uncertifiable on exactly the nonlinear cases that matter).
 5. **Diagnostics** — an unresolved goal must report the residual obligation and
    the search trace usefully (the typeclass "no instance for `Show(τ)`" error
    and the lemma "no hint produced `So(x*k≥0)`" error come from here).
+6. **Redundant `by search`** — whether a hand-written `by search` on a goal that
+   step 1 (computation) already closes is silent, or warns "no search needed
+   here." Macro-emitted `by search` on closed goals is always silent.
 
-## 8. Non-goals
+## 9. Non-goals
 
 - No kernel changes — the kernel checks found terms, nothing more.
 - No SMT / solver integration — syntactic rule application only.
