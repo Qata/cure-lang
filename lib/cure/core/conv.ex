@@ -141,11 +141,20 @@ defmodule Cure.Core.Conv do
   # case's scrutinee is an argument position like any other, per Lean
   # `is_def_eq_app` (each arg via full `is_def_eq`) and Agda `compareElims`.
   defp conv_neutral?({:ncase, n1, m1, brs1}, {:ncase, n2, m2, brs2}, depth, sig) do
-    conv_val?({:vneutral, n1}, {:vneutral, n2}, depth, sig) and conv_closure?(m1, m2, depth, sig) and
+    conv_val?({:vneutral, n1}, {:vneutral, n2}, depth, sig) and conv_motive?(m1, m2, depth, sig) and
       conv_branches?(brs1, brs2, depth, sig)
   end
 
   defp conv_neutral?(_, _, _, _), do: false
+
+  # A stuck-case motive is a COMPLETE function term captured in a closure (a full
+  # λ over the scrutinee/indices), not a body-under-one-binder. So instantiate it
+  # with NO extra binder — exactly as `Quote.instantiate` reads it back — and
+  # compare the resulting function values (η handles the λ). Using `conv_closure?`
+  # here would push a spurious binder, shifting the motive's captured environment
+  # and making two motives that capture different values compare equal (unsound).
+  defp conv_motive?({:closure, env1, t1}, {:closure, env2, t2}, depth, sig),
+    do: conv_val?(Eval.eval(t1, env1), Eval.eval(t2, env2), depth, sig)
 
   defp conv_branches?(brs1, brs2, depth, sig) do
     length(brs1) == length(brs2) and

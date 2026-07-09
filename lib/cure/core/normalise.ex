@@ -173,10 +173,26 @@ defmodule Cure.Core.Normalise do
     do: {:napp, nf_neutral(neutral, sig, depth, opts), nf_value(arg, sig, depth, opts)}
 
   defp nf_neutral({:ncase, neutral, motive, branches}, sig, depth, opts) do
-    {:ncase, nf_neutral(neutral, sig, depth, opts), motive, branches}
+    {:ncase, nf_neutral(neutral, sig, depth, opts), nf_motive(motive, sig, depth, opts),
+     Enum.map(branches, &nf_branch(&1, sig, depth, opts))}
   end
 
   defp nf_neutral(neutral, _sig, _depth, _opts), do: neutral
+
+  # Normalize a stuck-case motive/branch closure. Left un-normalized these keep a
+  # certified global FOLDED (β/ι are recovered by `Quote.reify`, but δ only fires
+  # in `nf_value`), so `nf` would not be a δ-normal form. Mirror `Quote`'s
+  # readback: the motive is a COMPLETE function term instantiated with NO extra
+  # binder; a branch body lives under its ctor's `arity` binders. Re-close the
+  # normalized term over `id_env(depth)`, exactly as `nf_struct` does for λ/Π.
+  defp nf_motive({:closure, env, term}, sig, depth, opts),
+    do: {:closure, id_env(depth), quote_nf(Eval.eval(term, env), sig, depth, opts)}
+
+  defp nf_branch({c, arity, {:closure, env, body}}, sig, depth, opts) do
+    fresh = for i <- 0..(arity - 1)//1, do: {:vneutral, {:nvar, depth + i}}
+    ext = Enum.reverse(fresh)
+    {c, arity, {:closure, id_env(depth), quote_nf(Eval.eval(body, ext ++ env), sig, depth + arity, opts)}}
+  end
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth, sig)
 
