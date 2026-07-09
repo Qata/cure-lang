@@ -240,6 +240,34 @@ defmodule Cure.Elab.Emit do
     end
   end
 
+  # A bare global: a nullary definition is called (`name()`); a definition with
+  # present parameters used as a *value* (passed to a higher-order function)
+  # becomes a function reference `fun name/arity`. A BUILTIN-OP global has no
+  # compiled top-level function to reference (body-less; present_arity would
+  # read its nil quantities as 0 and emit a bogus `name()` call) — it becomes a
+  # local curried fun wrapper computing the op (K2 §1.5b).
+  defp lower(env, {:global, name}, _ctx) do
+    case Env.builtin_op(env, name) do
+      nil ->
+        case present_arity(env, name) do
+          0 -> {:call, @line, {:atom, @line, name}, []}
+          n -> {:fun, @line, {:function, name, n}}
+        end
+
+      op ->
+        builtin_op_wrapper(op)
+    end
+  end
+
+  # {:absurd} is deleted from produced Core (K4 §H: the elaborator omits impossible
+  # branches; the validator release-rejects it; Term.term? excludes it). Retained
+  # only as a defensive stub — a hand-crafted {:absurd} reaching emit lowers to a
+  # crash rather than the raising catch-all. Not produced in practice.
+  defp lower(_env, {:absurd}, _ctx),
+    do: {:call, @line, {:atom, @line, :error}, [{:atom, @line, :absurd}]}
+
+  defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
+
   # Builtin-op global spines (K2 spec 2026-07-09 §1.5 + A1 §1-A), keyed via the
   # def-record registry (`Env.builtin_op/2`) — a user def named int_add carries
   # no marker and takes the ordinary global path. Saturated → the SAME BEAM
@@ -365,40 +393,12 @@ defmodule Cure.Elab.Emit do
     end
   end
 
-  # A bare global: a nullary definition is called (`name()`); a definition with
-  # present parameters used as a *value* (passed to a higher-order function)
-  # becomes a function reference `fun name/arity`. A BUILTIN-OP global has no
-  # compiled top-level function to reference (body-less; present_arity would
-  # read its nil quantities as 0 and emit a bogus `name()` call) — it becomes a
-  # local curried fun wrapper computing the op (K2 §1.5b).
-  defp lower(env, {:global, name}, _ctx) do
-    case Env.builtin_op(env, name) do
-      nil ->
-        case present_arity(env, name) do
-          0 -> {:call, @line, {:atom, @line, name}, []}
-          n -> {:fun, @line, {:function, name, n}}
-        end
-
-      op ->
-        builtin_op_wrapper(op)
-    end
-  end
-
   defp present_arity(env, name) do
     case Env.get_def(env, name) do
       %{quantities: qs} when is_list(qs) -> Enum.count(qs, &(&1 == :present))
       _ -> 0
     end
   end
-
-  # {:absurd} is deleted from produced Core (K4 §H: the elaborator omits impossible
-  # branches; the validator release-rejects it; Term.term? excludes it). Retained
-  # only as a defensive stub — a hand-crafted {:absurd} reaching emit lowers to a
-  # crash rather than the raising catch-all. Not produced in practice.
-  defp lower(_env, {:absurd}, _ctx),
-    do: {:call, @line, {:atom, @line, :error}, [{:atom, @line, :absurd}]}
-
-  defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
 
   defp erl_binop(:add), do: :+
   defp erl_binop(:sub), do: :-

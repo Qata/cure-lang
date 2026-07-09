@@ -23,7 +23,6 @@ defmodule Antigen.Generators.DotForcing do
   alias Antigen.{Gen, Challenge}
 
   @z {:ctor, :Z, []}
-  defp s(t), do: {:ctor, :S, [t]}
   # (λx:Nat. x) Z — β-reduces to Z: convertible to a forced Z WITHOUT being
   # syntactically equal, so Conv.conv? must actually decide (not just `==`).
   @lam_id_z {:app, {:lam, {:data, :Nat, [], []}, {:var, 0}}, @z}

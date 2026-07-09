@@ -26,8 +26,16 @@ defmodule Antigen.ReachPinTest do
   # No outstanding reach pins (all migrated to corpus.sexp — see moduledoc).
   @pins []
 
-  # keyed by focus — the pinned CURRENT verdict for each banked entry
-  @expected %{}
+  # keyed by focus — the pinned CURRENT verdict for each banked entry. Add
+  # entries to the map literal below.
+  @spec expected_verdicts() :: map()
+  defp expected_verdicts, do: %{}
+
+  # The map flows in as an untyped param so the 1.20 checker sees term(), not
+  # the empty-map singleton it would fold `expected_verdicts()` to — otherwise
+  # Map.fetch!/2 in the currently-dead (pins empty) replay loop is flagged as
+  # always-raising. Missing key still raises at runtime (drift detection).
+  defp pinned_verdict!(pins, focus), do: Map.fetch!(pins, focus)
 
   test "reach pins are banked and replay to their documented conservative rejection" do
     for c <- @pins, do: Corpus.append(@reach, c, Corpus.dedup_key(c, :antibody))
@@ -37,10 +45,10 @@ defmodule Antigen.ReachPinTest do
         do: @reach |> Corpus.stream() |> Enum.map(fn {:ok, c} -> c end),
         else: []
 
-    assert length(decoded) == map_size(@expected)
+    assert length(decoded) == map_size(expected_verdicts())
 
     for c <- decoded do
-      assert Assays.Totality.run(c) == Map.fetch!(@expected, c.payload.focus),
+      assert Assays.Totality.run(c) == pinned_verdict!(expected_verdicts(), c.payload.focus),
              "reach pin #{inspect(c.payload.focus)} drifted from its pinned verdict"
     end
   end

@@ -15,6 +15,7 @@ defmodule Cure.Core.EqReflRetirementTest do
 
   alias Cure.Core.{Context, Eval, Kernel, Serialize, Term}
   alias Cure.Elab.Program
+  import Cure.TestSupport.RetiredNode, only: [opaque: 1]
 
   @nat {:data, :Nat, [], []}
   defp z, do: {:ctor, :Z, []}
@@ -33,11 +34,11 @@ defmodule Cure.Core.EqReflRetirementTest do
     ctx = Context.empty(sig)
 
     assert_raise FunctionClauseError, fn ->
-      Kernel.infer(ctx, {:eq, @nat, z(), z()})
+      Kernel.infer(ctx, opaque({:eq, @nat, z(), z()}))
     end
 
     assert_raise FunctionClauseError, fn ->
-      Kernel.infer(ctx, {:refl, z()})
+      Kernel.infer(ctx, opaque({:refl, z()}))
     end
   end
 
@@ -47,18 +48,18 @@ defmodule Cure.Core.EqReflRetirementTest do
   end
 
   test "Term.to_external/1 refuses {:eq} and {:refl}" do
-    assert_raise FunctionClauseError, fn -> Term.to_external({:refl, z()}) end
+    assert_raise FunctionClauseError, fn -> Term.to_external(opaque({:refl, z()})) end
 
     assert_raise FunctionClauseError, fn ->
-      Term.to_external({:eq, @nat, z(), z()})
+      Term.to_external(opaque({:eq, @nat, z(), z()}))
     end
   end
 
   test "serializer neither encodes nor decodes {:eq} / {:refl}" do
-    assert_raise FunctionClauseError, fn -> Serialize.encode({:refl, {:int_lit, 1}}) end
+    assert_raise FunctionClauseError, fn -> Serialize.encode(opaque({:refl, {:int_lit, 1}})) end
 
     assert_raise FunctionClauseError, fn ->
-      Serialize.encode({:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}})
+      Serialize.encode(opaque({:eq, {:int_type}, {:int_lit, 1}, {:int_lit, 1}}))
     end
 
     assert {:error, _} = Serialize.decode("(eq (int-type) (int 1) (int 1))")

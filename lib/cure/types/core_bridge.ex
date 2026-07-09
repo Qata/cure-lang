@@ -102,16 +102,6 @@ defmodule Cure.Types.CoreBridge do
     end
   end
 
-  # Shape dispatch (§1.4): either converted operand a float literal → float_*.
-  defp binop_global(op_sym, l, r) do
-    map =
-      if match?({:float_lit, _}, l) or match?({:float_lit, _}, r),
-        do: @float_binops,
-        else: @int_binops
-
-    Map.get(map, op_sym)
-  end
-
   def to_core({:tuple, _meta, [a, b]}) do
     with {:ok, ca} <- to_core(a), {:ok, cb} <- to_core(b), do: {:ok, {:ctor, :mk_pair, [ca, cb]}}
   end
@@ -128,6 +118,16 @@ defmodule Cure.Types.CoreBridge do
     do: application(Keyword.get(meta, :name), args)
 
   def to_core(_other), do: :error
+
+  # Shape dispatch (§1.4): either converted operand a float literal → float_*.
+  defp binop_global(op_sym, l, r) do
+    map =
+      if match?({:float_lit, _}, l) or match?({:float_lit, _}, r),
+        do: @float_binops,
+        else: @int_binops
+
+    Map.get(map, op_sym)
+  end
 
   # A named application `f(a, b, …)` becomes a neutral spine `((f a) b) …`; its
   # arguments still evaluate, so `f(3 + 5)` normalizes to `f(8)`.

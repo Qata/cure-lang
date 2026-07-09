@@ -244,6 +244,8 @@ defmodule Cure.Core.Kernel do
     with {:ok, _value} <- elaborate_ctor(ctx, cname, args, expected), do: :ok
   end
 
+  def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
+
   # Shared checking-mode constructor elaboration. Checks the fields-only spine
   # against the ctor telescope, converts the computed result type against the
   # expected `vdata`, and RETURNS the constructor's own value — assembled from the
@@ -302,8 +304,6 @@ defmodule Cure.Core.Kernel do
         end
     end
   end
-
-  def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
 
   # The generic checking rule (moduledoc: "falling back to `infer` plus a
   # cumulative conversion test") — shared by the fallthrough clause and the
@@ -610,7 +610,7 @@ defmodule Cure.Core.Kernel do
   # list). `ctx` is extended in parallel purely to keep the ambient context's
   # depth/levels consistent for whatever uses the returned context afterward
   # (e.g. checking a branch body, which IS written relative to the ambient ctx).
-  defp extend_with_telescope(ctx, tele, param_vals \\ []) do
+  defp extend_with_telescope(ctx, tele, param_vals) do
     {ctx_final, _local_vals, fresh_vals} =
       Enum.reduce(tele, {ctx, Enum.reverse(param_vals), []}, fn {_name, type_term},
                                                                 {c, local_vals, fresh} ->
@@ -980,10 +980,11 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:float_lit, _}), do: true
   defp rigid_index?(_), do: false
 
+  # Only ever called on `rigid_index?` terms (all tuples), so a tuple head is
+  # exhaustive — no non-tuple fallback is reachable.
   defp head_key({:ctor, n, _}), do: {:ctor, n}
   defp head_key({:data, n, _, _}), do: {:data, n}
   defp head_key(t) when is_tuple(t), do: elem(t, 0)
-  defp head_key(other), do: other
 
   # Conservative occurs-check: does {:var, key} appear anywhere in term? Ignores
   # binder-depth shifts (over-approximates ⇒ at worst a spurious :undecided, never

@@ -13,6 +13,7 @@ defmodule Cure.Core.RewriteRetirementTest do
 
   alias Cure.Core.{Context, Eval, Kernel, Serialize, Term}
   alias Cure.Elab.Program
+  import Cure.TestSupport.RetiredNode, only: [opaque: 1]
 
   @nat {:data, :Nat, [], []}
   defp z, do: {:ctor, :Z, []}
@@ -31,7 +32,7 @@ defmodule Cure.Core.RewriteRetirementTest do
     ctx = Context.extend(Context.empty(sig), eq_val)
     node = {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}
 
-    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, node) end
+    assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, opaque(node)) end
   end
 
   test "Term.term?/1 rejects {:rewrite}" do
@@ -40,13 +41,13 @@ defmodule Cure.Core.RewriteRetirementTest do
 
   test "Term.to_external/1 refuses {:rewrite}" do
     assert_raise FunctionClauseError, fn ->
-      Term.to_external({:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()})
+      Term.to_external(opaque({:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}))
     end
   end
 
   test "serializer neither encodes nor decodes {:rewrite}" do
     assert_raise FunctionClauseError, fn ->
-      Serialize.encode({:rewrite, {:var, 0}, {:lam, {:int_type}, {:int_type}}, {:int_lit, 1}})
+      Serialize.encode(opaque({:rewrite, {:var, 0}, {:lam, {:int_type}, {:int_type}}, {:int_lit, 1}}))
     end
 
     assert {:error, _} =

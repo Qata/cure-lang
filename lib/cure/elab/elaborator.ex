@@ -37,79 +37,6 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate(other, _env), do: {:error, {:unsupported_expression, other}}
 
-  @doc """
-  Context-aware expression elaboration: elaborate `expr` to `{term, type_value}`
-  in a kernel typing `ctx` (whose variables are named, most-recently-bound first,
-  by `names`). Constructor applications route through `elaborate_ctor_app/3` so
-  their erased indices are inferred; other forms reuse the untyped elaborator and
-  the kernel's `infer/2` for their type.
-  """
-  @spec elaborate_expr_typed(term(), [String.t()], Context.t(), Env.t()) ::
-          {:ok, term(), Cure.Core.Value.t()} | {:error, term()}
-  def elaborate_expr_typed({:variable, _meta, "Type"}, _names, _ctx, _env),
-    do: {:ok, {:type, 0}, {:vtype, 1}}
-
-  def elaborate_expr_typed({:variable, _meta, name}, names, ctx, env) do
-    case Enum.find_index(names, &(&1 == name)) do
-      nil ->
-        with {:ok, term} <- resolve_free(name, env),
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
-        end
-
-      index ->
-        term = {:var, index}
-
-        with {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
-        end
-    end
-  end
-
-  # A forced (dot) pattern `{:forced_pattern, …}` is only meaningful in a
-  # constructor-argument PATTERN position (handled by the pattern path in a later
-  # task). Reaching ordinary expression elaboration means a dot was used outside
-  # a pattern (a `let` RHS, a function argument/body, …) — reject it. Placed
-  # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
-  # is reported.
-  def elaborate_expr_typed({:forced_pattern, meta, _expr}, _names, _ctx, _env),
-    do: {:error, {:forced_pattern_not_in_pattern, meta}}
-
-  # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
-  # constructor-argument PATTERN position (annotating an erased index by name).
-  # Reaching ordinary expression elaboration means it was used outside a pattern
-  # — reject it with a precise error (mirrors the forced-pattern guard above).
-  def elaborate_expr_typed({:named_implicit_pat, meta, _name, _inner}, _names, _ctx, _env),
-    do: {:error, {:named_implicit_not_in_pattern, meta}}
-
-  def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
-    cond do
-      # Record construction `Point{x: .., y: ..}` desugars to the positional
-      # constructor `Point(.., ..)` (fields ordered by the record's telescope).
-      Keyword.get(meta, :record) ->
-        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
-          elaborate_expr_typed(positional, names, ctx, env)
-        end
-
-      # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
-      # left "unknown"): elaborate the callee expression, then apply the outer
-      # arguments to its (function-typed) result.
-      callee = Keyword.get(meta, :callee) ->
-        with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
-          check_app_args(head, head_type, args, names, ctx, env)
-        end
-
-      true ->
-        elaborate_named_call(meta, args, names, ctx, env)
-    end
-  end
-
-  def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
-    with {:ok, positional} <- desugar_record_update(meta, children, env) do
-      elaborate_expr_typed(positional, names, ctx, env)
-    end
-  end
-
   # Desugar record construction `Point{x: .., y: ..}` (a `record: true` call whose
   # arguments are `field: value` pairs) into the positional constructor application
   # `Point(.., ..)`, ordering the values by the record constructor's field telescope
@@ -198,11 +125,10 @@ defmodule Cure.Elab.Elaborator do
   # Rewrite a constructor pattern's surface `:name` to the resolved registry key
   # so downstream re-derivation (`constructor_pattern/1` in `elaborate_matched_branch`
   # / `elaborate_rematch_branch`) yields the resolved atom, not the stale dotted
-  # one. A bare (non-dotted) name maps to itself, so this is a no-op there.
+  # one. Only ever called on a `constructor_pattern`-validated arm, which is always
+  # a `{:function_call, …}` node (bare nullary ctors included, with empty args).
   defp rekey_pattern_name({:function_call, pmeta, pargs}, cname),
     do: {:function_call, Keyword.put(pmeta, :name, Atom.to_string(cname)), pargs}
-
-  defp rekey_pattern_name(pattern, _cname), do: pattern
 
   # A constructor pattern whose (resolved) ctor belongs to a different family than
   # the scrutinee. If the ORIGINAL bare name was shadowed off the registry (now
@@ -416,6 +342,79 @@ defmodule Cure.Elab.Elaborator do
 
       _ ->
         {:error, :applied_non_function}
+    end
+  end
+
+  @doc """
+  Context-aware expression elaboration: elaborate `expr` to `{term, type_value}`
+  in a kernel typing `ctx` (whose variables are named, most-recently-bound first,
+  by `names`). Constructor applications route through `elaborate_ctor_app/3` so
+  their erased indices are inferred; other forms reuse the untyped elaborator and
+  the kernel's `infer/2` for their type.
+  """
+  @spec elaborate_expr_typed(term(), [String.t()], Context.t(), Env.t()) ::
+          {:ok, term(), Cure.Core.Value.t()} | {:error, term()}
+  def elaborate_expr_typed({:variable, _meta, "Type"}, _names, _ctx, _env),
+    do: {:ok, {:type, 0}, {:vtype, 1}}
+
+  def elaborate_expr_typed({:variable, _meta, name}, names, ctx, env) do
+    case Enum.find_index(names, &(&1 == name)) do
+      nil ->
+        with {:ok, term} <- resolve_free(name, env),
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
+      index ->
+        term = {:var, index}
+
+        with {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+    end
+  end
+
+  # A forced (dot) pattern `{:forced_pattern, …}` is only meaningful in a
+  # constructor-argument PATTERN position (handled by the pattern path in a later
+  # task). Reaching ordinary expression elaboration means a dot was used outside
+  # a pattern (a `let` RHS, a function argument/body, …) — reject it. Placed
+  # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
+  # is reported.
+  def elaborate_expr_typed({:forced_pattern, meta, _expr}, _names, _ctx, _env),
+    do: {:error, {:forced_pattern_not_in_pattern, meta}}
+
+  # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
+  # constructor-argument PATTERN position (annotating an erased index by name).
+  # Reaching ordinary expression elaboration means it was used outside a pattern
+  # — reject it with a precise error (mirrors the forced-pattern guard above).
+  def elaborate_expr_typed({:named_implicit_pat, meta, _name, _inner}, _names, _ctx, _env),
+    do: {:error, {:named_implicit_not_in_pattern, meta}}
+
+  def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
+    cond do
+      # Record construction `Point{x: .., y: ..}` desugars to the positional
+      # constructor `Point(.., ..)` (fields ordered by the record's telescope).
+      Keyword.get(meta, :record) ->
+        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
+          elaborate_expr_typed(positional, names, ctx, env)
+        end
+
+      # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
+      # left "unknown"): elaborate the callee expression, then apply the outer
+      # arguments to its (function-typed) result.
+      callee = Keyword.get(meta, :callee) ->
+        with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
+          check_app_args(head, head_type, args, names, ctx, env)
+        end
+
+      true ->
+        elaborate_named_call(meta, args, names, ctx, env)
+    end
+  end
+
+  def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
+    with {:ok, positional} <- desugar_record_update(meta, children, env) do
+      elaborate_expr_typed(positional, names, ctx, env)
     end
   end
 
@@ -1265,7 +1264,7 @@ defmodule Cure.Elab.Elaborator do
   # The transport takes M[a] -> M[b]. Idris-style source `rewrite p in t`
   # checks `t` under the rewritten goal and returns the original goal, so when
   # the expected type contains the proof's left endpoint we synthesize symmetry.
-  defp rewrite_plan(ctx, proof, ty, a, b, expected) do
+  defp rewrite_plan(_ctx, proof, ty, a, b, expected) do
     rwlog(fn ->
       "plan a=#{rw_ins(a)} b=#{rw_ins(b)} | contains_a=#{contains_term?(expected, a)} " <>
         "contains_b=#{contains_term?(expected, b)} expected=#{rw_ins(expected)}"
@@ -4620,13 +4619,14 @@ defmodule Cure.Elab.Elaborator do
     param_tele = Inductive.param_telescope(env, family) || []
     pc = length(param_tele)
 
-    present_count = Enum.count(ctor.quantities, &(&1 == :present))
-
     cond do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      present_count != length(arg_asts) ->
+      # Guard-ordered AFTER the nil check: `ctor.quantities` is only reached once
+      # `ctor` is known non-nil (an unknown ctor would otherwise crash here before
+      # the graceful error above could fire).
+      Enum.count(ctor.quantities, &(&1 == :present)) != length(arg_asts) ->
         {:error, {:constructor_arity_mismatch, cname}}
 
       true ->
@@ -4800,8 +4800,6 @@ defmodule Cure.Elab.Elaborator do
     {[d | ds], co}
   end
 
-  defp finish_global_app(result, name, codomain, ctx, env \\ nil, expected \\ nil)
-
   defp finish_global_app({:error, _} = err, _name, _cod, _ctx, _env, _expected), do: err
 
   defp finish_global_app({:ok, _mctx, _chosen, [_ | _]}, _name, _cod, _ctx, _env, _expected),
@@ -4909,18 +4907,6 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # The registered Sigma constructor name (canonically `:mk_pair`), resolved via the
-  # builtin registry (§1.4) rather than hard-coded; defaults to `:mk_pair` when no
-  # Sigma family is registered (a raw `Env.empty()` elaboration).
-  defp sigma_ctor_name(env) do
-    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
-         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
-      n
-    else
-      _ -> :mk_pair
-    end
-  end
-
   def elaborate_expr({:literal, meta, value} = expr, _scope, _env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
@@ -4934,6 +4920,18 @@ defmodule Cure.Elab.Elaborator do
     do: elaborate_expr(desugar_list(node), scope, env)
 
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
+
+  # The registered Sigma constructor name (canonically `:mk_pair`), resolved via the
+  # builtin registry (§1.4) rather than hard-coded; defaults to `:mk_pair` when no
+  # Sigma family is registered (a raw `Env.empty()` elaboration).
+  defp sigma_ctor_name(env) do
+    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
+         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
+      n
+    else
+      _ -> :mk_pair
+    end
+  end
 
   defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)

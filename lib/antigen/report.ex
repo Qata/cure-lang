@@ -16,6 +16,44 @@ defmodule Antigen.Report do
     {:ok, path}
   end
 
+  @counter_key {__MODULE__, :immune_responses}
+
+  @doc """
+  Tally one deliberately-injected (immune-response) violation instead of printing
+  a per-occurrence breadcrumb. A normal suite triggers hundreds of these — each is
+  the immune system working as designed, so flooding stdout with them buries the
+  one line that matters (a real `ANTIGEN INFECTION`). The count is surfaced once,
+  at suite end, by `immune_response_count/0`.
+  """
+  @spec tally_immune_response() :: :ok
+  def tally_immune_response do
+    :counters.add(counter_ref(), 1, 1)
+    :ok
+  end
+
+  @doc "Total immune responses tallied so far (0 if none / counter never created)."
+  @spec immune_response_count() :: non_neg_integer()
+  def immune_response_count do
+    case :persistent_term.get(@counter_key, nil) do
+      nil -> 0
+      ref -> :counters.get(ref, 1)
+    end
+  end
+
+  # Write-once atomic counter: the ref lives in persistent_term (read-many,
+  # write-once — the intended use), the count in a concurrency-safe `:counters`.
+  defp counter_ref do
+    case :persistent_term.get(@counter_key, nil) do
+      nil ->
+        ref = :counters.new(1, [:write_concurrency])
+        :persistent_term.put(@counter_key, ref)
+        ref
+
+      ref ->
+        ref
+    end
+  end
+
   @doc """
   One-line stdout marker. `:infection` (default) is a REAL soundness violation
   the assay caught in the system under test — the engine's whole point, and it

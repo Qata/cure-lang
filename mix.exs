@@ -20,6 +20,9 @@ defmodule Cure.MixProject do
       aliases: aliases(),
       package: package(),
       test_coverage: [tool: ExCoveralls],
+      # Fixtures under test/**/fixtures are loaded manually by tests, not run as
+      # test files — exclude them from the loader so 1.20 doesn't warn on them.
+      test_ignore_filters: [~r{/fixtures/}],
       dialyzer: [
         plt_file: {:no_warn, ".dialyzer/dialyzer.plt"},
         plt_add_deps: :app_tree,

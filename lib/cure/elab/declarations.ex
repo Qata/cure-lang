@@ -29,6 +29,96 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  def elaborate({:container, meta, variants}, env) do
+    case Keyword.get(meta, :container_type) do
+      :enum ->
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+        case Keyword.get(meta, :type_params, []) do
+          [] ->
+            case build_ctors(variants) do
+              {:ok, ctors} -> declare_at_min_level(env, name, ctors, 0)
+              {:error, _} = err -> err
+            end
+
+          type_params ->
+            # Parameterized ADT (`type List(a) = Nil | Cons(a, List(a))`). Each
+            # positional variant is an implicit constructor signature returning the
+            # family applied to its own parameters; reuse the parameterized-family
+            # (GADT) machinery with an empty index telescope.
+            params = Enum.map(type_params, fn p -> {:param, [], p} end)
+            sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
+            declare_parameterized(name, params, [], sigs, env)
+        end
+
+      :struct ->
+        # A record `rec Point\n  x: T\n  y: U` is a single-constructor family whose
+        # constructor shares the family name and whose argument telescope is named by
+        # the fields. The field names carried on the constructor telescope are what
+        # record construction (`Point{x: .., y: ..}`) and projection (`p.x`) read to
+        # map names to positions — no separate registry, and the kernel treats the
+        # argument names as plain labels.
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+        with :ok <- check_no_duplicate_fields(variants) do
+          case Keyword.get(meta, :type_params, []) do
+            [] ->
+              # Route through the GADT-ctor machinery with NAMED field domains so a
+              # field's type may reference an EARLIER field (a dependent record):
+              # `elaborate_gadt_ctor`'s named-binder scope-threading binds each field
+              # name for subsequent field types. Non-dependent records are unaffected —
+              # the resulting ctor telescope is still named by the fields, which is what
+              # construction/projection read.
+              sig = struct_ctor_sig(name, [], variants)
+              working_env = Inductive.declare(env, Inductive.family(name, [], [], 0), [])
+
+              with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
+                declare_at_min_level(env, name, [ctor], 0)
+              end
+
+            type_params ->
+              declare_parameterized_struct(name, type_params, variants, env)
+          end
+        end
+
+      other ->
+        {:error, {:unsupported_container, other}}
+    end
+  end
+
+  # Indexed (GADT) family: `type NAME(params) indices (idx) <ctor sigs>`. Head
+  # `(params)` are uniform parameters (restated, never matched); the `indices`
+  # clause lists the refined indices. Each constructor signature is an
+  # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
+  # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
+  # Type alias `type Name = RHS`: a nullary definition `Name : Type := RHS`.
+  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is
+  # trivially total, so it certifies and δ becomes available). No new type former.
+  def elaborate({:type_annotation, meta, [rhs]}, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env) do
+      env1 = Env.add_def(env, name, {:type, 0}, rhs_core, [])
+      {:ok, maybe_certify(env1, name)}
+    end
+  end
+
+  def elaborate({:indexed_type, meta, ctor_sigs}, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    params = Keyword.get(meta, :params, [])
+    index_params = Keyword.get(meta, :indices, [])
+    declare_parameterized(name, params, index_params, ctor_sigs, env)
+  end
+
+  def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  defp maybe_certify(env, name) do
+    case Kernel.validate_certificate(env, name) do
+      {:ok, certified} -> certified
+      {:error, _} -> env
+    end
+  end
+
   # Elaborate a function's signature to its Π type and register it (with a
   # placeholder body) so that later-defined functions and mutually-recursive peers
   # resolve as globals. Called for every function in a first pass, before any body
@@ -118,63 +208,6 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  def elaborate({:container, meta, variants}, env) do
-    case Keyword.get(meta, :container_type) do
-      :enum ->
-        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-        case Keyword.get(meta, :type_params, []) do
-          [] ->
-            case build_ctors(variants) do
-              {:ok, ctors} -> declare_at_min_level(env, name, ctors, 0)
-              {:error, _} = err -> err
-            end
-
-          type_params ->
-            # Parameterized ADT (`type List(a) = Nil | Cons(a, List(a))`). Each
-            # positional variant is an implicit constructor signature returning the
-            # family applied to its own parameters; reuse the parameterized-family
-            # (GADT) machinery with an empty index telescope.
-            params = Enum.map(type_params, fn p -> {:param, [], p} end)
-            sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
-            declare_parameterized(name, params, [], sigs, env)
-        end
-
-      :struct ->
-        # A record `rec Point\n  x: T\n  y: U` is a single-constructor family whose
-        # constructor shares the family name and whose argument telescope is named by
-        # the fields. The field names carried on the constructor telescope are what
-        # record construction (`Point{x: .., y: ..}`) and projection (`p.x`) read to
-        # map names to positions — no separate registry, and the kernel treats the
-        # argument names as plain labels.
-        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-        with :ok <- check_no_duplicate_fields(variants) do
-          case Keyword.get(meta, :type_params, []) do
-            [] ->
-              # Route through the GADT-ctor machinery with NAMED field domains so a
-              # field's type may reference an EARLIER field (a dependent record):
-              # `elaborate_gadt_ctor`'s named-binder scope-threading binds each field
-              # name for subsequent field types. Non-dependent records are unaffected —
-              # the resulting ctor telescope is still named by the fields, which is what
-              # construction/projection read.
-              sig = struct_ctor_sig(name, [], variants)
-              working_env = Inductive.declare(env, Inductive.family(name, [], [], 0), [])
-
-              with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
-                declare_at_min_level(env, name, [ctor], 0)
-              end
-
-            type_params ->
-              declare_parameterized_struct(name, type_params, variants, env)
-          end
-        end
-
-      other ->
-        {:error, {:unsupported_container, other}}
-    end
-  end
-
   # A parameterized record `rec Box(a)\n  val: a` is a single-constructor
   # parameterized family. Build the constructor through the shared GADT-ctor
   # machinery from a NAMED-domain signature (`struct_ctor_sig`), which handles the
@@ -224,30 +257,6 @@ defmodule Cure.Elab.Declarations do
     {:function_call, [name: Atom.to_string(fam)], args}
   end
 
-  # Indexed (GADT) family: `type NAME(params) indices (idx) <ctor sigs>`. Head
-  # `(params)` are uniform parameters (restated, never matched); the `indices`
-  # clause lists the refined indices. Each constructor signature is an
-  # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
-  # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
-  # Type alias `type Name = RHS`: a nullary definition `Name : Type := RHS`.
-  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is
-  # trivially total, so it certifies and δ becomes available). No new type former.
-  def elaborate({:type_annotation, meta, [rhs]}, env) do
-    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env) do
-      env1 = Env.add_def(env, name, {:type, 0}, rhs_core, [])
-      {:ok, maybe_certify(env1, name)}
-    end
-  end
-
-  def elaborate({:indexed_type, meta, ctor_sigs}, env) do
-    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    params = Keyword.get(meta, :params, [])
-    index_params = Keyword.get(meta, :indices, [])
-    declare_parameterized(name, params, index_params, ctor_sigs, env)
-  end
-
   # Declare a family with a parameter telescope and (optionally) an index
   # telescope from GADT-style constructor signatures. Shared by indexed types and
   # parameterized enums (the latter pass no indices).
@@ -265,15 +274,6 @@ defmodule Cure.Elab.Declarations do
          working_env = Inductive.declare(env, Inductive.family(name, param_tele, index_tele, 0), []),
          {:ok, ctors} <- elaborate_gadt_ctors(ctor_sigs, name, param_tele, index_tele, working_env) do
       declare_indexed_at_min_level(env, name, param_tele, index_tele, ctors, 0)
-    end
-  end
-
-  def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
-
-  defp maybe_certify(env, name) do
-    case Kernel.validate_certificate(env, name) do
-      {:ok, certified} -> certified
-      {:error, _} -> env
     end
   end
 
@@ -362,17 +362,6 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  # The registered Sigma constructor name (canonically `:mk_pair`), via the builtin
-  # registry; defaults to `:mk_pair` when no Sigma family is registered.
-  defp sigma_mk_pair(env) do
-    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
-         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
-      n
-    else
-      _ -> :mk_pair
-    end
-  end
-
   # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
   # return type by the kernel; it blocks codegen until filled).
   defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, _env, _params) do
@@ -401,6 +390,17 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}
+    end
+  end
+
+  # The registered Sigma constructor name (canonically `:mk_pair`), via the builtin
+  # registry; defaults to `:mk_pair` when no Sigma family is registered.
+  defp sigma_mk_pair(env) do
+    with fam when not is_nil(fam) <- Inductive.builtin(env, :sigma),
+         [%{name: n} | _] <- Inductive.ctors_of(env, fam) do
+      n
+    else
+      _ -> :mk_pair
     end
   end
 
@@ -989,29 +989,6 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  # `(D1, …, Dn) -> R` (surface `Function(D1,…,Dn,R)`, tagged `function_type`)
-  # becomes the non-dependent Π `Π(_:D1). … Π(_:Dn). R` — the native Core arrow the
-  # kernel applies (`f(x)`) and checks lambdas against. Each type is elaborated in
-  # the outer scope, then shifted past the arrow binders standing above it in the
-  # nest (those binders are anonymous and unreferenced, so the shift only relocates
-  # genuine outer-scope de Bruijn references).
-  defp arrow_to_pi(args, scope, fam, env) do
-    {domains, [ret]} = Enum.split(args, length(args) - 1)
-
-    with {:ok, dom_cores} <- map_idx_to_core(domains, scope, fam, env),
-         {:ok, ret_core} <- idx_to_core(ret, scope, fam, env) do
-      pi =
-        dom_cores
-        |> Enum.with_index()
-        |> Enum.reverse()
-        |> Enum.reduce(Cure.Core.Term.shift(ret_core, length(dom_cores), 0), fn {dom, i}, acc ->
-          {:pi, Cure.Core.Term.shift(dom, i, 0), acc}
-        end)
-
-      {:ok, pi}
-    end
-  end
-
   # Binder-introducing forms (sigma/pi/arrow) sub-lower with the 4-arg form:
   # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
@@ -1058,7 +1035,7 @@ defmodule Cure.Elab.Declarations do
   # `ctx` must not be discarded. A `.1`/`.2` reached with `ctx == nil` (a non-
   # return-type index/telescope position that does not thread ctx) has no frame to
   # solve the implicits and errors precisely — a spec §7.5-class residual.
-  defp idx_to_core({:attribute_access, meta, [inner_ast]} = node, scope, fam, env, ctx) do
+  defp idx_to_core({:attribute_access, meta, [inner_ast]} = node, scope, _fam, env, ctx) do
     attr = Keyword.fetch!(meta, :attribute)
     dotted = Cure.Compiler.Parser.dotted_path_of(node)
 
@@ -1085,6 +1062,29 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  # `(D1, …, Dn) -> R` (surface `Function(D1,…,Dn,R)`, tagged `function_type`)
+  # becomes the non-dependent Π `Π(_:D1). … Π(_:Dn). R` — the native Core arrow the
+  # kernel applies (`f(x)`) and checks lambdas against. Each type is elaborated in
+  # the outer scope, then shifted past the arrow binders standing above it in the
+  # nest (those binders are anonymous and unreferenced, so the shift only relocates
+  # genuine outer-scope de Bruijn references).
+  defp arrow_to_pi(args, scope, fam, env) do
+    {domains, [ret]} = Enum.split(args, length(args) - 1)
+
+    with {:ok, dom_cores} <- map_idx_to_core(domains, scope, fam, env),
+         {:ok, ret_core} <- idx_to_core(ret, scope, fam, env) do
+      pi =
+        dom_cores
+        |> Enum.with_index()
+        |> Enum.reverse()
+        |> Enum.reduce(Cure.Core.Term.shift(ret_core, length(dom_cores), 0), fn {dom, i}, acc ->
+          {:pi, Cure.Core.Term.shift(dom, i, 0), acc}
+        end)
+
+      {:ok, pi}
+    end
+  end
 
   # A term-level global whose registered signature carries at least one erased
   # (implicit) parameter — the only shape the bare-spine lowering mis-handles.

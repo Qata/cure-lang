@@ -720,9 +720,10 @@ defmodule Cure.Elab.Program do
         _ ->
           case Declarations.elaborate(decl, acc) do
             {:ok, acc2} ->
+              # `maybe_register_builtin` is total ({:ok, _} always), so there is no
+              # error branch to thread here.
               case maybe_register_builtin(decl, acc2, prelude?) do
                 {:ok, acc3} -> {:cont, {:ok, acc3, fns}}
-                {:error, _} = err -> {:halt, err}
               end
 
             {:error, _} = err ->
