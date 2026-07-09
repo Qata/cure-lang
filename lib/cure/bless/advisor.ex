@@ -12,7 +12,7 @@ defmodule Cure.Bless.Advisor do
 
   `patch` is a function that, given the full source string, returns the
   patched source. It is `nil` when a machine-applicable rewrite is not
-  available (e.g. refinement proofs that require domain knowledge).
+  available (e.g. proofs that require domain knowledge).
 
   `suggest/2` is the only public entry point: it receives an error tuple
   (as returned by `Cure.Types.Checker.check_module/2`) and the full

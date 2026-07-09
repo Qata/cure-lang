@@ -2,7 +2,7 @@ defmodule Cure.Bless do
   @moduledoc """
   Socratic type-error assistant (`cure bless`).
 
-  Reads a failing type or refinement diagnostic, walks the user
+  Reads a failing type diagnostic, walks the user
   through fixing it interactively:
 
   1. Parse the structured error tuple.

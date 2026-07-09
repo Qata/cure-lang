@@ -191,11 +191,11 @@ defmodule Cure.Elab.GuardLint do
   # `try/catch` in our code can intercept — with `trap_exit` at its default
   # `false`, an unhandled linked EXIT kills the receiving process outright,
   # bypassing ordinary exception handling entirely (this is a real per-`Cure.SMT.Process`
-  # gap: `Cure.SMT.Solver.run_with_z3` has the identical exposure and no extra
-  # guard against it either — but that pipeline is opt-in refinement checking,
-  # while this lint sits on every `Program.elaborate/1` call, where spec §3 make
-  # "must never crash an elaboration" an absolute, so we harden past parity with
-  # the existing caller rather than merely matching it). Toggling `trap_exit` for
+  # gap that any direct caller of the Z3 GenServer would share and would
+  # typically not guard against either — but this lint sits on every
+  # `Program.elaborate/1` call, where spec §3 make "must never crash an
+  # elaboration" an absolute, so we harden it unconditionally rather than
+  # merely matching an ordinary caller). Toggling `trap_exit` for
   # the duration of the query turns any such crash into an ordinary `{:EXIT, pid,
   # reason}` message we explicitly drain and fold into `:unknown`, instead of
   # letting it kill the caller. Residual, accepted trade-off: for the query's

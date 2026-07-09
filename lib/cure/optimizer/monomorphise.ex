@@ -193,7 +193,6 @@ defmodule Cure.Optimizer.Monomorphise do
   defp has_type_var?({:effun, ps, r, _}), do: Enum.any?(ps, &has_type_var?/1) or has_type_var?(r)
   defp has_type_var?({:adt, _, ps}), do: Enum.any?(ps, &has_type_var?/1)
   defp has_type_var?({:map, k, v}), do: has_type_var?(k) or has_type_var?(v)
-  defp has_type_var?({:refinement, base, _, _}), do: has_type_var?(base)
   defp has_type_var?({:pid, t}), do: has_type_var?(t)
   defp has_type_var?(_), do: false
 
@@ -446,7 +445,6 @@ defmodule Cure.Optimizer.Monomorphise do
 
   defp canonicalise({:adt, n, ps}), do: {:adt, n, Enum.map(ps, &canonicalise/1)}
   defp canonicalise({:map, k, v}), do: {:map, canonicalise(k), canonicalise(v)}
-  defp canonicalise({:refinement, base, var, _pred}), do: {:refinement, canonicalise(base), var, :erased}
   defp canonicalise({:pid, t}), do: {:pid, canonicalise(t)}
   defp canonicalise(other), do: other
 

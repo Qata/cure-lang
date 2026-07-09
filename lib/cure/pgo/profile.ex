@@ -12,9 +12,9 @@ defmodule Cure.PGO.Profile do
     function (when timing was attached at the call site).
   * `:branches` -- map from `site_id` (an integer assigned by codegen)
     to the number of times that branch arm was taken.
-  * `:smt_queries`, `:smt_total_us` -- the SMT solver's accumulated
-    work attributable to this function. Only populated when the
-    runtime instrumentation hooks into `Cure.SMT.Solver.check_sat/2`.
+  * `:smt_queries`, `:smt_total_us` -- generic per-function counters for
+    accumulated solver work. Retained as profile fields; populated only
+    when runtime instrumentation attributes solver time to a function.
 
   ## Stale-profile detection
 

@@ -163,8 +163,7 @@ defmodule Cure.Doc.Extractor do
         [
           %{
             name: Keyword.get(meta, :name, "Unknown"),
-            doc: Keyword.get(meta, :doc),
-            refinement: Keyword.get(meta, :refinement, false)
+            doc: Keyword.get(meta, :doc)
           }
         ]
 
@@ -182,8 +181,7 @@ defmodule Cure.Doc.Extractor do
               %{
                 name: Keyword.get(meta, :name, "Unknown"),
                 doc: Keyword.get(meta, :doc),
-                variants: variant_names,
-                refinement: false
+                variants: variant_names
               }
             ]
 

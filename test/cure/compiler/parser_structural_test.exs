@@ -155,12 +155,6 @@ defmodule Cure.Compiler.ParserStructuralTest do
       assert meta[:name] == "Name"
     end
 
-    test "refinement type" do
-      ast = parse!("type Nat = {x: Int | x >= 0}")
-      assert {:type_annotation, meta, [_var, _base, _pred]} = ast
-      assert meta[:name] == "Nat"
-      assert meta[:refinement] == true
-    end
   end
 
   # ── Protocols ────────────────────────────────────────────────────────

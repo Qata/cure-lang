@@ -94,7 +94,7 @@ defmodule Cure.Types.Reduce do
   # normalized under the SIGNATURE-CARRYING kernel engine (K2 §1.4: builtin-op
   # global spines fold only via the certified-δ hook, which needs the seeded op
   # defs — bare `Eval.eval([])` leaves them stuck), and read back; an
-  # irreducible type former (named ref, refinement, n-ary tuple) has no kernel
+  # irreducible type former (named ref, n-ary tuple) has no kernel
   # reduction, so we keep its shape and normalize each child through the kernel
   # in turn. No arithmetic is folded outside `Cure.Core`.
   defp kernel_normalize_via_core(ast) do

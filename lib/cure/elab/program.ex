@@ -217,7 +217,6 @@ defmodule Cure.Elab.Program do
   # checks each imported module. Std.Bool and Std.Nat qualify today. Excluded, why:
   #   Std.Core       -- legacy bool_not/bool_and use `pickup` (:unsupported_expression)
   #   Std.Equivalent -- uses a :cure_refl symbol literal the elaborator rejects
-  #   Std.Refine     -- refinement predicates not yet dependent-clean
   #   Equatable/Ord/Show/Functor protocols -- would couple instance resolution globally
   # Each can join once ported to dependent-clean syntax (ongoing parity work). The
   # listed modules are self-excluded (they stay self-contained on the seeded

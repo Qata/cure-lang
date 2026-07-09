@@ -17,7 +17,7 @@ defmodule Cure.Types.CoreBridge do
     * n-ary applications `f(a, b)`   ↔ neutral application spine over `{:global, f}`
 
   `to_core/1` returns `:error` only for nodes outside this grammar (named type
-  refs, refinements, n-ary tuples, …); those are irreducible type formers whose
+  refs, n-ary tuples, …); those are irreducible type formers whose
   children the caller still normalizes structurally. `from_core/1` maps a kernel
   normal form back to surface AST.
   """

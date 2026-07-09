@@ -958,7 +958,6 @@ defmodule Cure.Compiler.Printer do
   defp type_annotation_to_string(meta, children, depth, indent) do
     name = Keyword.get(meta, :name)
     type_params = Keyword.get(meta, :type_params)
-    refinement = Keyword.get(meta, :refinement, false)
 
     tp_str =
       if type_params && type_params != [] do
@@ -967,25 +966,12 @@ defmodule Cure.Compiler.Printer do
         ""
       end
 
-    if refinement do
-      case children do
-        [var_ast, base_type, predicate] ->
-          var_str = to_string(var_ast, depth, indent)
-          base_str = to_string(base_type, depth, indent)
-          pred_str = to_string(predicate, depth, indent)
-          "type #{name}#{tp_str} = {#{var_str}: #{base_str} | #{pred_str}}"
+    case children do
+      [type_expr] ->
+        "type #{name}#{tp_str} = #{to_string(type_expr, depth, indent)}"
 
-        _ ->
-          "type #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
-      end
-    else
-      case children do
-        [type_expr] ->
-          "type #{name}#{tp_str} = #{to_string(type_expr, depth, indent)}"
-
-        _ ->
-          "type #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
-      end
+      _ ->
+        "type #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
     end
   end
 

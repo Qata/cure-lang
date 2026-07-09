@@ -112,7 +112,7 @@ defmodule Cure.Doctor do
         %{
           severity: :warning,
           code: "DOC-ENV-Z3",
-          message: "Z3 not found on $PATH. SMT-backed refinement checks will be skipped.",
+          message: "Z3 not found on $PATH. Guard-coverage lint checks will be skipped.",
           file: nil,
           fix: "apt install z3 (Ubuntu/Debian) or brew install z3 (macOS)"
         }

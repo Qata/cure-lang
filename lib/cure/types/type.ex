@@ -20,7 +20,6 @@ defmodule Cure.Types.Type do
     record or ADT type; produced by `resolve_name/1` for any PascalCase
     name not in the built-in set (`Int`, `String`, ...)
   - `{:type_var, id}` -- fresh unification variable (future use)
-  - `{:refinement, base_type, var_name, predicate_ast}` -- structural only
   - `{:effun, [param_types], return_type, effects}` -- effectful function type
   - `{:union, [type1, type2, ...]}` -- structural union of pre-existing
     types. Produced when the type checker classifies
@@ -68,10 +67,7 @@ defmodule Cure.Types.Type do
   @doc "Returns true if `t` is a numeric type (`:int` or `:float`)."
   def numeric?(:int), do: true
   def numeric?(:float), do: true
-  # Path-sensitive refinements narrow a base type; for arithmetic we only
-  # care whether the underlying base is numeric.
-  def numeric?({:refinement, base, _, _}), do: numeric?(base)
-  # Named types are user-defined aliases (e.g. `type Rate = {r: Float | r > 0.0}`).
+  # Named types are user-defined aliases (e.g. `type Rate = Float`).
   # Without threading env into Type.numeric?/1 we cannot statically resolve the
   # alias to its base type. Treat them as potentially numeric so that code that
   # uses numeric type aliases (Rate, PositiveAmount, etc.) does not produce false
@@ -171,24 +167,6 @@ defmodule Cure.Types.Type do
     MapSet.subset?(e1, e2) and subtype?({:fun, pa, ra}, {:fun, pb, rb})
   end
 
-  # Refinement type is a subtype of its base type
-  def subtype?({:refinement, base, _, _}, sup) when is_atom(sup), do: subtype?(base, sup)
-
-  # Refinement subtype checking (delegates to SMT)
-  def subtype?({:refinement, _, _, _} = sub, {:refinement, _, _, _} = sup) do
-    case Cure.Types.Refinement.subtype?(sub, sup) do
-      true -> true
-      _ -> false
-    end
-  end
-
-  # Phase-1 gradual rule: a value typed at the refinement's base type is
-  # accepted as a candidate inhabitant of the refinement. The actual
-  # SMT-driven obligation is enforced separately at the function
-  # boundary (Phase 2). Without this rule, declaring a refinement alias
-  # as a return type would always reject a non-refined body.
-  def subtype?(t, {:refinement, base, _, _}), do: subtype?(t, base)
-
   # Named type (user-defined record/ADT) subtyping
   # {:named, "Pair"} is a subtype of {:adt, :pair, _} when the lowercased name matches
   def subtype?({:named, name}, {:adt, key, _params}),
@@ -242,15 +220,6 @@ defmodule Cure.Types.Type do
   def subtype?(_, _), do: false
 
   @doc "Returns true if `a` and `b` are compatible (either is subtype of the other, or either is `:any`)."
-  # Refinements only hold in the scope that introduced them. At use sites
-  # that only care about whether two values can be combined (arithmetic,
-  # comparisons, `if` branch joins, ...), the compatibility of the base
-  # type is what matters.
-  def compatible?({:refinement, a, _, _}, {:refinement, b, _, _}),
-    do: compatible?(a, b)
-
-  def compatible?({:refinement, base, _, _}, t), do: compatible?(base, t)
-  def compatible?(t, {:refinement, base, _, _}), do: compatible?(t, base)
   # Two values are compatible with a union when at least one of its
   # members is compatible with the other side. Mirrors the LUB-style
   # treatment of `:any`.
@@ -292,12 +261,6 @@ defmodule Cure.Types.Type do
   def join({:adt, n, ps1}, {:adt, n, ps2}) when length(ps1) == length(ps2) do
     {:adt, n, Enum.zip(ps1, ps2) |> Enum.map(fn {a, b} -> join(a, b) end)}
   end
-
-  # Two branches that produce the same refined base collapse to the base:
-  # the refinement is only sound inside the branch that introduced it.
-  def join({:refinement, a, _, _}, {:refinement, b, _, _}), do: join(a, b)
-  def join({:refinement, base, _, _}, t), do: join(base, t)
-  def join(t, {:refinement, base, _, _}), do: join(t, base)
 
   def join(_, _), do: :any
 
@@ -389,17 +352,10 @@ defmodule Cure.Types.Type do
   # Pre-resolved type wrapped by Cure.Types.Pi to keep Reduce opaque.
   def resolve({:type_value, _meta, t}), do: t
 
-  def resolve({:type_annotation, meta, children}) do
-    if Keyword.get(meta, :refinement) do
-      case Cure.Types.Refinement.from_type_annotation(meta, children) do
-        nil -> :any
-        refinement -> refinement
-      end
-    else
-      case children do
-        [inner] -> resolve(inner)
-        _ -> :any
-      end
+  def resolve({:type_annotation, _meta, children}) do
+    case children do
+      [inner] -> resolve(inner)
+      _ -> :any
     end
   end
 
@@ -485,7 +441,6 @@ defmodule Cure.Types.Type do
   def display({:type_var, id}) when is_binary(id), do: id
   def display({:type_var, id}), do: "t#{id}"
   def display({:type_hole, _}), do: "_"
-  def display({:refinement, base, var, _pred}), do: "{#{var}: #{display(base)} | ...}"
   def display({:union, ts}), do: Enum.map_join(ts, " | ", &display/1)
   def display({:sigma, _, _, _} = s), do: Cure.Types.Sigma.display(s)
 

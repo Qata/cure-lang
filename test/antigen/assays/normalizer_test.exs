@@ -38,12 +38,12 @@ defmodule Antigen.Assays.NormalizerTest do
   end
 
   test "V1a untranslatable-result negative control: a normalize stub returning an untranslatable AST infects" do
-    # {:refinement, ...} is outside CoreBridge.to_core's grammar (to_core -> :error),
+    # {:untranslatable_probe, ...} is outside CoreBridge.to_core's grammar (to_core -> :error),
     # so this exercises the `with ... else :error -> ...` branch that no other test
     # here reaches (Reduce.normalize itself always stays inside the translatable
     # fragment for a translatable input; only a broken stub can violate that).
     ch = diff_ch(add(lit(3), lit(5)), %{}, {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}})
-    k = %{Normalizer.__real__() | normalize: fn _ast, _b -> {:refinement, [], [lit(8)]} end}
+    k = %{Normalizer.__real__() | normalize: fn _ast, _b -> {:untranslatable_probe, [], [lit(8)]} end}
     assert {:violation, {:normalize_disagrees_with_kernel, _, {:untranslatable_result, _}}} =
              Normalizer.run(ch, k)
   end
@@ -70,12 +70,12 @@ defmodule Antigen.Assays.NormalizerTest do
   end
 
   describe "normalizer/intrinsic (V1c)" do
-    # {:refinement, ...} is outside CoreBridge's grammar (to_core -> :error).
+    # {:untranslatable_probe, ...} is outside CoreBridge's grammar (to_core -> :error).
     defp intr_ch(ast) do
       Challenge.new(kind: :surface_expr, assay: "normalizer/intrinsic", label: :untranslatable,
         payload: %{ast: ast}, seed: 1)
     end
-    defp untranslatable(inner), do: {:refinement, [], [inner]}
+    defp untranslatable(inner), do: {:untranslatable_probe, [], [inner]}
 
     test "baseline: normalize is a fixpoint and does not grow the term" do
       assert Normalizer.run(intr_ch(untranslatable(add(lit(3), lit(5))))) == :ok
@@ -84,13 +84,13 @@ defmodule Antigen.Assays.NormalizerTest do
     test "not-idempotent negative control" do
       # Must NOT also grow the term, or it trips :size_increased first (the
       # implementation checks size before idempotence — see Step 3's note). This
-      # stub retags {:refinement,...} <-> {:not_fixed,...} with the SAME child
+      # stub retags {:untranslatable_probe,...} <-> {:not_fixed,...} with the SAME child
       # count each call (term_size is tag-blind), so the size guard passes and
       # the oscillation exposes genuine non-idempotence: once != p.ast's shape,
       # twice flips back, so twice != once.
       k = %{Normalizer.__real__() | normalize: fn
-        {:refinement, m, [inner]}, _b -> {:not_fixed, m, [inner]}
-        {:not_fixed, m, [inner]}, _b -> {:refinement, m, [inner]}
+        {:untranslatable_probe, m, [inner]}, _b -> {:not_fixed, m, [inner]}
+        {:not_fixed, m, [inner]}, _b -> {:untranslatable_probe, m, [inner]}
         ast, _b -> ast
       end}
       assert {:violation, {:not_idempotent, _, _}} = Normalizer.run(intr_ch(untranslatable(lit(1))), k)

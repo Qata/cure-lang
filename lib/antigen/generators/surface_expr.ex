@@ -106,8 +106,6 @@ defmodule Antigen.Generators.SurfaceExpr do
   @spec intrinsic_challenges() :: [Challenge.t()]
   def intrinsic_challenges do
     [
-      {:refinement, [], [bin(:+, lit(3), lit(5))]},
-      {:refinement, [], [lit(1)]},
       {:named_ref, [], [var("T")]}
     ]
     |> Enum.with_index()

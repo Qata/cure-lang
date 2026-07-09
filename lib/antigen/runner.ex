@@ -363,9 +363,6 @@ defmodule Antigen.Runner do
   defp assay_module("erasure/selective"), do: Antigen.Assays.Erasure
   defp assay_module("erasure/wellformed"), do: Antigen.Assays.Erasure
   defp assay_module("relevance/soundness"), do: Antigen.Assays.Erasure
-  defp assay_module("smt/implication"), do: Antigen.Assays.SmtLint
-  defp assay_module("smt/unsat"), do: Antigen.Assays.SmtLint
-  defp assay_module("smt/witness"), do: Antigen.Assays.SmtLint
 
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)

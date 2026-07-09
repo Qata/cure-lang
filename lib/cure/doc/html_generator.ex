@@ -497,9 +497,6 @@ defmodule Cure.Doc.HTMLGenerator do
             Map.has_key?(t, :variants) and is_list(t.variants) and t.variants != [] ->
               " = " <> Enum.join(t.variants, " | ")
 
-            t.refinement ->
-              " (refinement)"
-
             true ->
               ""
           end

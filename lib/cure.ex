@@ -1,7 +1,7 @@
 defmodule Cure do
   @moduledoc """
   Cure -- dependently-typed programming language for the BEAM virtual machine
-  with first-class finite state machines and SMT-backed verification.
+  with first-class finite state machines and Z3-assisted guard analysis.
 
   Cure compiles `.cure` source files to BEAM bytecode through the following pipeline:
 
