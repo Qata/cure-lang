@@ -7,29 +7,33 @@ defmodule Cure.Elab.ListTest do
   Scope (revised mid-execution, spec §2 revision):
     * Nested list PATTERNS (`[a,b] ->`) are IN scope — the matrix compiler
       `desugar_nested_arms/2` lowers them before `constructor_pattern/1`.
-    * A BARE top-level `[]` body (`fn e() -> List(Int) = []`) is infer-only-
-      rejected (the `elaborate_body` third-dispatch-layer gap, Finding A) — the
-      empty-list VALUE is proven in goal-bearing positions instead, and the bare
-      body is pinned as a ledger guard.
+    * A BARE top-level `[]` body (`fn e() -> List(Int) = []`) now elaborates in
+      CHECKED mode (Wave 4 added `:list`/`:pickup` to the `elaborate_body`
+      whitelist), pinning the element type from the declared return type. The
+      former "infer-only-rejected ledger guard" for this shape was superseded by
+      Wave 4's own goal and flipped to `{:ok, _}` below.
   """
   use ExUnit.Case, async: true
   alias Cure.Elab.{Program, Emit}
 
   @nat "mod M\n  type Nat = Z | S(Nat)\n"
 
-  # SCOPE REVISION (mid-execution): a BARE top-level `[]` body is infer-only-
-  # ambiguous (third-dispatch-layer / elaborate_body gap — Finding A, spec §2).
-  # The empty-list VALUE is proven in a goal-bearing position instead; the bare
-  # body is pinned as a ledger guard below. Do NOT touch the elaborate_body
-  # whitelist to make the bare form pass (same discipline as Wave-1 pickup).
+  # An empty-list VALUE in a goal-bearing (cons-tail) position — always pinned by
+  # the surrounding `[h | _]`, independent of the body-dispatch whitelist.
   test "an empty-list value elaborates in a goal-bearing position" do
     src = "mod M\n  fn single(h: Int) -> List(Int) = [h | []]\nend\n"
     assert {:ok, _} = Program.elaborate(src)
   end
 
-  test "a bare top-level [] body is infer-only-rejected (ledger guard, NOT a crash)" do
+  # WAVE 4 (was a ledger guard): a bare top-level `[]` body now elaborates in
+  # CHECKED mode. Wave 4 added `:list` to the `elaborate_body` whitelist
+  # (declarations.ex), so the declared return type `List(Int)` pins `Nil`'s
+  # element metavariable. This test previously encoded a since-superseded scope
+  # decision (not a bug) asserting `{:error, {:unsolved_metavariables, :Nil}}`;
+  # the wave's own goal proved it wrong, so the assertion is flipped to `{:ok, _}`.
+  test "a bare top-level [] body elaborates in checked mode (Wave 4)" do
     src = "mod M\n  fn e() -> List(Int) = []\nend\n"
-    assert {:error, {:unsolved_metavariables, :Nil}} = Program.elaborate(src)
+    assert {:ok, _} = Program.elaborate(src)
   end
 
   test "a multi-element list literal elaborates" do
@@ -97,9 +101,9 @@ defmodule Cure.Elab.ListTest do
     assert is_list(result)
   end
 
-  # The empty-list VALUE (goal-bearing: a recursion whose base yields []). A bare
-  # top-level `fn e() -> List(Int) = []` is infer-only-rejected (Finding A, spec
-  # §2 / ledger guard above) — do NOT test that shape here.
+  # The empty-list VALUE (goal-bearing: a recursion whose base yields []). The
+  # bare top-level `fn e() -> List(Int) = []` shape now also elaborates in checked
+  # mode (Wave 4, tested above) — this test covers the recursion-base variant.
   test "a recursion base yields the native empty list []" do
     src =
       "mod M\n" <>

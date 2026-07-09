@@ -398,6 +398,19 @@ defmodule Cure.Elab.Declarations do
     Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
 
+  # A `[]`/`[h|t]`/`[a,b,c]` body: check it against the declared return type so a
+  # bare `[]` (which desugars to `Nil` with a metavariable element type) pins that
+  # element type from the goal instead of failing `{:unsolved_metavariables, :Nil}`
+  # (Finding A). `elaborate_expr_checked` self-desugars the `:list` node.
+  defp elaborate_body({:list, _, _} = expr, return_core, scope, ctx, env, _params),
+    do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+  # A `pickup …` body: check it against the declared return type so a first clause
+  # whose then-branch is bare `[]` (the `take` shape) pins its element type from
+  # the goal rather than being elaborated infer-only first.
+  defp elaborate_body({:pickup, _, _} = expr, return_core, scope, ctx, env, _params),
+    do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
   defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}

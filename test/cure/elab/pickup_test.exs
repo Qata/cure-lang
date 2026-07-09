@@ -69,13 +69,13 @@ defmodule Cure.Elab.PickupTest do
   end
 
   test "a pickup nested as an `if`'s else-branch elaborates in checked position" do
-    # `:conditional` (unlike a bare top-level `pickup`) IS in declarations.ex's
-    # elaborate_body whitelist, so this outer `if` reaches
-    # elaborate_expr_checked({:conditional, ...}) (elaborator.ex:1024-1028),
-    # which checks BOTH branches via elaborate_expr_checked — landing the
-    # nested `pickup` in elaborate_expr_checked's :pickup clause for real
-    # (unlike a bare top-level pickup body, which is always infer-mode; see
-    # the plan's Anchors section on elaborate_body/elaborate_branch_body).
+    # Both a bare top-level `pickup` body (Wave 4 added `:pickup` to
+    # declarations.ex's elaborate_body whitelist) and this nested case reach
+    # elaborate_expr_checked's `:pickup` clause. The distinction this test still
+    # usefully exercises is the PATH: here the nested `pickup` arrives via the
+    # OUTER `:conditional`'s checked branches (elaborator.ex:1074-1080 checks both
+    # then/else via elaborate_expr_checked), landing in the `:pickup` clause that
+    # way — rather than via elaborate_body's own (now-present) `:pickup` clause.
     src =
       @nat <>
         "  fn checked(b1: Bool, b2: Bool) -> Nat = if b1 then Z() else pickup\n" <>
