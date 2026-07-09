@@ -21,11 +21,19 @@ dictionary parameter through polymorphic code. The polymorphic structural
 equality primitive `struct_eq`/`struct_ne` is retired in favour of a real
 `Equatable` interface.
 
-**Success criterion:** every existing stdlib `proto`/`impl` module (`Equatable`,
-`Ord`, `Show`, `Functor`, `Access`, `Equivalent`, `JSON`) is rewritten to
+**Success criterion:** every existing stdlib `proto`/`impl` module —
+**`Equatable`, `Ord`, `Show`, `Functor`, `Access`** (verified by grep: 6, 4, 6,
+2, 3 `proto`/`impl` declarations respectively) — is rewritten to
 `interface`/`implementation`, elaborates through the dependent pipeline, and its
 methods resolve and run correctly; `struct_eq` and the 4-way `==` dispatch are
-gone; the full suite is green.
+gone; the full suite is green. **`Equivalent` and `JSON` are NOT proto/impl
+modules and are out of scope** (correction found during review — both have
+zero `proto`/`impl` declarations today): `Std.Equivalent` is the propositional
+identity type (`@builtin(:eq)`, a GADT-indexed inductive, not a
+dictionary-dispatched protocol — its own doc comment distinguishes it from
+`Equatable` for exactly this reason); `Std.Json` is an ADT plus `@extern` FFI
+calls with no protocol at all. Neither has anything for this design to
+rewrite; see §5.
 
 ## 2. Locked surface (restated, not re-litigated)
 
@@ -107,7 +115,14 @@ survives across module boundaries (imports contribute their instances).
 `(interface, head type)` is a hard error `{:overlapping_instance, iface, head}`.
 An anonymous instance whose head type is defined in *another* module than both
 the interface and the instance is an `{:orphan_instance, …}` error (Rust/Haskell
-orphan rule; enforced at registration).
+orphan rule; enforced at registration). **Builtin/primitive head types**
+(`Int`, `Float`, `Bool`, `String`, `Atom` — none of which has a defining
+module) are exempt from the module-triangulation check by construction: the
+comparison only fires between two *user* modules, so a moduleless head type
+never triggers `{:orphan_instance, …}`. This is not a corner case — it is the
+common path: every stdlib primitive `Equatable` implementation (§5) has
+`interface_module == instance_module == Std.Equatable` and a moduleless head
+type, and must register cleanly.
 
 **Resolution** at a method-call site `m(args...)` where `m` is an interface
 method:
@@ -119,21 +134,65 @@ method:
    **no dictionary value at runtime**. This is the generalisation of today's
    type-directed `==` dispatch.
 3. **Abstract head** (`T` is a rigid type variable `a` in scope under a
-   constraint `{Equatable a}`): the constraint introduced an **implicit
-   dictionary parameter** `dict_Equatable_a : Equatable(a)`; the method call
+   constraint `Equatable(a)`): the constraint introduced an **implicit
+   dictionary parameter**, written `dict` below (its full internal name is
+   `dict_Equatable_a`, disambiguating multiple constraints in scope by
+   interface and head variable) — `dict : Equatable(a)`. The method call
    **projects from that parameter** — `eq(x,y)` becomes `dict.eq x y`.
 4. **No instance found** and no constraint in scope: hard error
    `{:no_instance, iface, T}`.
+5. **Named instance, explicit reference:** a named implementation
+   (`implementation Equatable for Int as strictInt`) is registered under its
+   name as an ordinary dictionary-valued binding (§3.2) — no new call syntax is
+   needed. A caller selects it explicitly with plain record projection,
+   `strictInt.eq(x, y)`, exactly as it would project a field from any other
+   record value. This is the only way a named instance is ever used; it never
+   participates in steps 2-3's automatic resolution.
 
 ### 3.5 Constraints as implicit dictionary parameters
 
-A constrained signature `fn f{a: Type}(… ){Equatable a} -> …` (surface form per
-locked syntax) introduces, at elaboration, an **implicit parameter**
-`{dict : Equatable(a)}` immediately after the type parameter `a`. Its quantity is
-**ω-present iff a method is actually invoked** in the body — Cure's {0,ω}
-erasure discipline (memory `erasure-relevance-check-decision`) computes this for
-free: if the body never calls an `Equatable` method on `a`, the dictionary is
-erased. Calls to constrained functions pass the resolved dictionary implicitly
+A constrained signature is written with Cure's existing `where` constraint
+clause, which comes **after** the return type (`parse_fn_def`, `parser.ex`
+~2310-2318 parses `-> ReturnType` before ~2345-2354 parses `where`) —
+`fn f{a: Type}(x: a) -> Bool where Equatable(a) = …` (parsed today by
+`parse_constraint_list`/`parse_single_constraint`, `parser.ex` ~2345-2354 /
+~4505-4536, into a `{:function_call, [constraint: true], [a]}` AST node; no new
+constraint syntax is introduced). Elaborating this clause introduces an
+**implicit parameter** `{dict : Equatable(a)}` immediately after the type
+parameter `a`.
+
+**Quantity is NOT free.** The ordinary implicit-param path
+(`declarations.ex:567`, `q = if implicit, do: :erased, else: :present`)
+unconditionally assigns quantity `:erased` to every `{...}` parameter, and
+`Cure.Elab.Relevance` (M8.3) is a pure validator — it *rejects* relevant use of
+an erased binder, it never promotes one to `:present` (locked, memory
+`erasure-relevance-check-decision`: "do NOT auto-promote"). A constraint-
+introduced dict parameter therefore needs its own, separate quantity
+assignment, distinct from the generic implicit-param default:
+
+- A constraint-introduced dict parameter is elaborated with its body
+  *optimistically* at quantity `:present` (ω) — the opposite default from the
+  generic `declarations.ex:567` implicit-param path, which is
+  `:erased`-always. `:present` never causes a false `Relevance.check`
+  rejection (a present binder tolerates any use), so the body always
+  elaborates and kernel-checks cleanly regardless of whether it ends up using
+  the dictionary.
+- **After** elaboration, a lightweight occurs-check over the resulting Core
+  body asks whether the dict binder appears at all. If it never occurs,
+  the quantity is retroactively demoted to `:erased` (0); otherwise it stays
+  `:present` (ω). This is a one-way, safe **demotion** (present → erased only
+  when provably unused), never a **promotion** (erased → present) — so it
+  does not conflict with the locked "do NOT auto-promote" discipline (memory
+  `erasure-relevance-check-decision`), which is specifically about not
+  rescuing an erased binder that turns out to be used, not about avoiding a
+  safe downgrade of an unused present one.
+- `Relevance.check` still runs as the general soundness backstop on the final
+  quantity assignment, exactly as it does for every other def — it can only
+  ever confirm the demotion was safe (an erased binder that occurs would be a
+  contradiction, since the occurs-check that produced `:erased` already
+  proved no occurrence).
+
+Calls to constrained functions pass the resolved dictionary implicitly
 (resolution §3.4 applied at the call's concrete type argument).
 
 ### 3.6 Deriving
@@ -167,16 +226,45 @@ recursive equality**:
   `Equatable`/coherence (§3.4). The primitive arms are subsumed: on `Int`,
   resolution finds `equatable_Int` and inlines `int_eq` — same emitted code as
   today, reached through the interface instead of a hardcoded switch.
+- **Pre-existing tests that assert struct_eq/struct_ne behaviour directly**
+  must be deleted or rewritten as part of this tear-out, not left to fail
+  incidentally: `test/cure/core/builtin_op_test.exs`'s "Amendment A1:
+  struct_eq/struct_ne" describe block (types-as-Pi, folds-on-literals,
+  stays-neutral-on-ctors, R1 user-registered-shadow pin) and
+  `test/cure/elab/binop_lowering_test.exs`'s two tests asserting ADT `==`/`!=`
+  lower to a `struct_eq`/`struct_ne` spine. These assert the retiring feature's
+  own contract, so removing/replacing them is the correct action (not
+  test-weakening) — each is replaced by the equivalent `Equatable`-resolution
+  behavioural test named in §6.
 
 ### 4.2 Repointed (kept)
 
-`int_eq`, `float_eq`, `eq` (Bool), string equality, atom equality stay as
-builtin-op globals and become the **method bodies of the primitive `Equatable`
-implementations**. **Circularity fix (found during design):** the current
-`impl Equatable for Int` body is literally `a == b`; once `==` *is* `Equatable.eq`
-that is infinite regress. The migrated primitive implementations must therefore
-reference the **primitive builtin-op directly** (`int_eq(a,b)`, not `a == b`).
-This is the one non-mechanical rewrite in the stdlib migration.
+`int_eq`, `float_eq`, `eq` (Bool) stay as builtin-op globals and become the
+**method bodies of the primitive `Equatable` implementations**. **Circularity
+fix (found during design):** the current `impl Equatable for Int` body is
+literally `a == b`; once `==` *is* `Equatable.eq` that is infinite regress. The
+migrated primitive implementations must therefore reference the **primitive
+builtin-op directly** (`int_eq(a,b)`, not `a == b`).
+
+**Correction: no `string_eq`/`atom_eq` builtin-op exists to repoint.**
+`primitive_scrut_kind/2` (`elaborator.ex` ~2822-2829) recognises only
+`{:vint_type}`, `{:vfloat_type}`, and Bool's `{:vdata, …}` — there is no
+String or Atom arm, and `builtins.ex` defines no `string_eq`/`atom_eq` global
+(confirmed absent by search). Today, `String`/`Atom` `==` falls through
+`build_binop`'s `:error` branch to the generic `struct_eq`/`struct_ne` spine —
+the exact mechanism §4.1 tears out. So `String`/`Atom` are NOT a repoint like
+`Int`/`Float`/`Bool`; they need one of:
+(a) new `string_eq`/`atom_eq` builtin-op globals seeded alongside `int_eq`/
+`float_eq` (mirrors the existing pattern, becomes the new primitive
+`Equatable` bodies), or
+(b) their `Equatable` impl bodies emit directly to BEAM `==` as a primitive
+special case (no named builtin-op global), matching how §3.6 already allows
+first-order derived instances to emit to BEAM `==` as an optimisation.
+Either is a legitimate, mechanical choice, but the spec must pick one before
+migration — this is the *second* non-mechanical item in the stdlib migration,
+alongside the circularity fix above (§5.1's "primitive impls reference
+builtin-ops directly" undersells this: for `String`/`Atom` there is no
+existing builtin-op to reference).
 
 ### 4.3 `Ord` comparison operators
 
@@ -186,18 +274,34 @@ These are similarly re-expressed as `Ord` method resolution, with the primitive
 Non-`Ord` operand types now error via `{:no_instance, Ord, T}` instead of the
 current `{:unsupported_operand_type, _}`.
 
-## 5. Migration of the 7 stdlib modules
+**`Ordering` needs its own `Equatable` instance.** `Std.Ord`'s own derived
+helpers (`lt`/`le`/`gt`/`ge`, `ord.cure:57-66`) are defined as
+`compare(a,b) == LessThan()` / `!= GreaterThan()` — i.e. they use `==`/`!=` on
+the `Ordering` ADT that `Std.Ord` itself declares. Migrating `Ord` therefore
+also requires `Ordering` to carry a (derived) `Equatable` instance
+(`type Ordering = LessThan | EqualTo | GreaterThan deriving Equatable`);
+without it, `lt`/`le`/`gt`/`ge` break with `{:no_instance, Equatable,
+Ordering}` the moment `==`/`!=` retire. This is scope for §5's `Ord` item, not
+an incidental side effect to discover later.
 
-Rewrite each from `proto`/`impl` to `interface`/`implementation`:
+## 5. Migration of the 5 stdlib protocol modules
+
+Rewrite each from `proto`/`impl` to `interface`/`implementation`. (`Equivalent`
+and `JSON` are dropped from this list — see §1's correction: neither has any
+`proto`/`impl` to rewrite.)
 
 1. **Equatable** — primitive impls reference builtin-ops directly (§4.2);
-   `ne` default method.
-2. **Ord** — repoint `int_*`/`float_*` comparisons (§4.3).
+   `ne` default method; `String`/`Atom` need a new primitive builtin-op or a
+   BEAM-`==` special case, not a repoint (§4.2 correction).
+2. **Ord** — repoint `int_*`/`float_*` comparisons (§4.3); `Ordering` itself
+   needs a derived `Equatable` instance for `Ord`'s own `lt`/`le`/`gt`/`ge`
+   helpers (§4.3 correction).
 3. **Show** — `show : a → String`; primitive impls; deriving.
 4. **Functor** — `fmap`; head at kind `Type` (§3.1); `List` impl delegates to
    `Std.List.map`.
-5. **Access**, **Equivalent**, **JSON** — mechanical surface rewrite; verify
-   resolution.
+5. **Access** — mechanical surface rewrite; verify resolution. Note the
+   `Any`-typed `==`/`!=` uses inside its keyword-list helpers (§7 risk) may
+   make this module a documented blocker rather than a clean rewrite.
 
 Each migrated module must elaborate through the **dependent** pipeline cleanly.
 Where a module is not yet dependent-clean (memory `value-surface-parity-program`
@@ -212,21 +316,36 @@ rip-out). No stdlib module uses them after migration.
 
 ## 6. Testing strategy
 
-Strict red-green TDD throughout. Behavioural tests (elaborate real `.cure`
-source, assert Core shape and/or run the emitted BEAM), not implementation-
-coupled. Coverage:
+Strict red-green TDD throughout: write the failing test for a behaviour
+before the implementation code that satisfies it, then write only enough to
+turn it green. Behavioural tests (elaborate real `.cure` source, assert Core
+shape and/or run the emitted BEAM), not implementation-coupled. **Tests are
+immutable once green**: a test only changes if it is itself proven wrong
+(stated and justified before editing it) — going green is always achieved by
+fixing implementation code, never by loosening or deleting a test. The one
+documented exception is §4.1's tear-out of the two pre-existing struct_eq/
+struct_ne tests, which is not a weakening: it removes tests of a feature this
+design deliberately retires, each replaced by an equivalent behavioural test
+below. Coverage:
 
 - **Parse:** `interface`/`implementation` (anonymous + named + deriving) produce
   the expected AST nodes; a red parser test first.
 - **Interface → record type:** elaborating an interface registers a record type
   of the right field shape.
 - **Implementation → dictionary:** registers a dictionary; duplicate anonymous
-  instance ⇒ `{:overlapping_instance}`; orphan ⇒ `{:orphan_instance}`.
+  instance ⇒ `{:overlapping_instance}`; orphan ⇒ `{:orphan_instance}`; a
+  primitive impl (moduleless head type, e.g. `Equatable for Int`) registered
+  in the interface's own module does NOT falsely trigger `{:orphan_instance}`
+  (§3.4's builtin exemption).
 - **Concrete resolution:** `eq(1,2)` elaborates to the inlined `int_eq` spine
   (no dictionary), runs to `false`.
 - **Abstract resolution:** a constrained polymorphic `fn` projects the method
   from its implicit dictionary parameter; runs correctly for two different
   instances.
+- **Named-instance selection:** a named implementation is never chosen by
+  automatic resolution (an unqualified call still resolves to the anonymous
+  instance, or errors if none exists); explicit projection off the named
+  binding (`strictInt.eq(x, y)`) runs the named instance's method.
 - **Erasure:** a constrained `fn` that never calls a method erases the
   dictionary (quantity 0); one that does keeps it (quantity ω).
 - **Default method:** an implementation omitting `ne` gets the default closed
@@ -249,12 +368,34 @@ coupled. Coverage:
   (a no-instance type now errors). Mitigation: primitive types keep identical
   emitted code; ADTs used with `==` in tests get derived instances; run the full
   suite and triage each newly-failing `==` site (real regression vs. a type that
-  legitimately now needs a derived instance).
+  legitimately now needs a derived instance). **A structurally distinct case:
+  `==`/`!=` on statically `Any`-typed operands** (e.g. `lib/std/access.cure:532`,
+  `kw_fetch`'s `k == key` where both are `Any`). §3.4's resolution has no rule
+  for this at all — `Any` is neither a concrete head with a registered instance
+  nor a rigid type variable under a constraint, so this isn't even a clean
+  `{:no_instance, Equatable, T}` (there is no single `T`). Any dependent-clean
+  module using `==`/`!=` on `Any` (a common idiom) hits this. Out of scope to
+  solve here (§5's blocker rule covers it: such a module's migration is a
+  documented blocker until it is), but it must be surfaced explicitly rather
+  than assumed to fall out of the "type gets a derived instance" mitigation
+  above, which does not apply when there is no static type to derive one for.
 - **Resolution non-termination.** Recursive deriving (`eq` on a recursive type
   calling `eq` on its own sub-values) must resolve to the *same* instance, not
   loop in the resolver. Mitigation: resolution memoises `(interface, head)` and
-  the generated recursive method refers to itself by name.
-- **Stdlib not dependent-clean.** Some of the 7 modules may not elaborate
+  the generated recursive method refers to itself by name. **This handles only
+  self-recursion** (a type whose own derived instance calls itself); it does
+  NOT by itself handle **mutual recursion** — two or more types, each deriving
+  an instance whose method calls the other's (e.g. mutually-recursive ADTs
+  `A`/`B`). None of the 5 stdlib modules in §5 requires this for v1, but the
+  deriving facility (§3.6) is general, not scoped to self-recursive types
+  only. Mitigation: mutually-recursive deriving requests in the same
+  elaboration batch must be registered in two passes — forward-declare all
+  participating instances' dictionary *signatures* first (so each generated
+  body can resolve the others by name), then fill in bodies — mirroring how
+  mutually-recursive function groups already elaborate. If this two-pass
+  registration isn't implemented for v1, that is an explicit, documented
+  scope cut here (mutual recursion in deriving deferred), not a silent gap.
+- **Stdlib not dependent-clean.** Some of the 5 modules may not elaborate
   through the dependent pipeline for unrelated reasons. Mitigation: §5's blocker
   rule — surface it, do not paper over it. If a module is blocked, its migration
   is deferred with a written reason and the run continues with the rest.
