@@ -21,7 +21,7 @@ Operator order (2026-07-09, post-parity teardown batch): rip out the lean4lean b
 - `program.ex:38` currently routes ALL dependent checking through `Cure.Kernel.Backend.check_ast`; rewire it to the elixir-core implementation DIRECTLY (inline `Backend.ElixirCore`'s body at the call site or as a private helper in program.ex — plan decides the mechanics). The `:elixir_core`/`:lean` selection (opt/config/`CURE_KERNEL_BACKEND` env) disappears entirely; no live caller ever selected `:lean` (verified: no mix task, pipeline event, CLI flag, or config references it).
 
 **SURGICAL EDITS (bridge functions inside live files):**
-- `lib/cure/elab/program.ex`: remove `check_ast_for_lean_backend/1` (:142), `elaborate_declarations_lean` (:693), `register_pass_lean` (:699), `body_pass_lean` (:774), and the `:lean_backend_unsupported_*` error rows (:150, :708).
+- `lib/cure/elab/program.ex`: remove `check_ast_for_lean_backend/1` (:143), `elaborate_declarations_lean` (:693), `register_pass_lean` (:699), `body_pass_lean` (:774), and the `:lean_backend_unsupported_*` error rows (:150, :708) — the error rows sit INSIDE `check_ast_for_lean_backend`/`register_pass_lean` respectively and are removed as part of deleting those function bodies, not as separate edits.
 - `lib/cure/elab/declarations.ex`: remove `elaborate_function_body_lean/2` (:74, `@doc false`, bridge-only).
 
 **KEEP (explicitly, each load-bearing):**
@@ -51,6 +51,6 @@ Three test files are removed WITH their subsystem — `module_encoder_test.exs`,
 
 ## §5 Acceptance criteria
 
-1. `lib/cure/lean/`, `lib/cure/kernel/backend*`, `lean_bridge/`, `test/cure/lean/`, `test/cure/kernel/backend_test.exs` gone; the six bridge functions/error rows stripped from program.ex/declarations.ex.
+1. `lib/cure/lean/`, `lib/cure/kernel/backend*`, `lean_bridge/`, `test/cure/lean/`, `test/cure/kernel/backend_test.exs` gone; the five bridge functions (four in program.ex, one in declarations.ex) and the two nested `:lean_backend_unsupported_*` error rows stripped from program.ex/declarations.ex — seven items total per §1.
 2. Dependent checking routes directly to the elixir-core path with NO selection layer; behavior byte-identical (full suite minus deleted files' tests, all green).
 3. §3 greps clean; ghost authorship; commit message cites 3d6f739 (+ ae02ba5/ccbe2d0 hunks) and the decision-6 supersession.
