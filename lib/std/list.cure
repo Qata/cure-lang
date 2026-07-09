@@ -39,6 +39,12 @@ mod Std.List
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   @group(:collections)
 
+  ## The canonical cons-list family. Seeded programmatically into every module
+  ## (so `[]`/`[h | t]` literal sugar resolves without `use`), and declared here
+  ## with the builtin decorator; `builtin_list_drift_test.exs` pins the two equal.
+  @builtin(:list)
+  type List(a) = Nil | Cons(a, List(a))
+
   # -- Basic queries ----------------------------------------------------------
 
   ## Length of `list` as an `Int`. Delegates to `:erlang.length/1`.

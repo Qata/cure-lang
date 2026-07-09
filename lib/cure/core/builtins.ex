@@ -15,7 +15,8 @@ defmodule Cure.Core.Builtins do
     bool: [{:False, 0}, {:True, 0}],
     nat: [{:Z, 0}, {:S, 1}],
     eq: [{:reflexive, 1}],
-    sigma: [{:mk_pair, 2}]
+    sigma: [{:mk_pair, 2}],
+    list: [{:Nil, 0}, {:Cons, 2}]
   }
 
   # Builtin arithmetic/comparison op globals (K2 wave, spec 2026-07-09). Each is
@@ -107,6 +108,7 @@ defmodule Cure.Core.Builtins do
     |> maybe_seed(:nat, nat_family(), nat_ctors(), exclude)
     |> maybe_seed(:eq, eq_family(), eq_ctors(), exclude)
     |> maybe_seed(:sigma, sigma_family(), sigma_ctors(), exclude)
+    |> maybe_seed(:list, list_family(), list_ctors(), exclude)
     |> seed_ops()
   end
 
@@ -237,6 +239,31 @@ defmodule Cure.Core.Builtins do
         [],
         [:present, :present],
         [{:var, 3}, {:var, 2}]
+      )
+    ]
+
+  # List : (a : Type) -> Type   (1 param, no indices)
+  #   Nil  : List(a)
+  #   Cons : (x : a) -> (xs : List(a)) -> List(a)
+  # First parametrized + self-referential builtin family (Cons's second field
+  # references List itself, like nat's S). Source of truth is the @builtin(:list)
+  # decl in Std.List; this seed is its byte-for-byte mirror, pinned by
+  # builtin_list_drift_test.exs.
+  defp list_family, do: Inductive.family(:List, [a: {:type, 0}], [], 0)
+
+  # Field names auto-generated positionally by the elaborator (`_a0`/`_a1`); the
+  # result-param term is the family's own param `a` reindexed under the ctor's
+  # field binders (Nil: {:var, 0}; Cons: {:var, 2} beneath its two fields). The
+  # drift test pins both spellings against the source declaration.
+  defp list_ctors,
+    do: [
+      Inductive.ctor(:Nil, [], [], [], [{:var, 0}]),
+      Inductive.ctor(
+        :Cons,
+        [_a0: {:var, 0}, _a1: {:data, :List, [{:var, 1}], []}],
+        [],
+        [:present, :present],
+        [{:var, 2}]
       )
     ]
 end
