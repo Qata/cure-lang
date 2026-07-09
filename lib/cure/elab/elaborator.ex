@@ -177,6 +177,20 @@ defmodule Cure.Elab.Elaborator do
       end
 
     cond do
+      # An interface-method call (`eqs(x, y)`) resolves to a concrete instance
+      # from the head-positioned argument's type — inlined at a concrete head,
+      # projected off the dictionary parameter at a rigid one. Checked before the
+      # constructor/global paths so a method name never falls through to an
+      # unresolved global.
+      Cure.Elab.Resolve.method?(env, atom) ->
+        Cure.Elab.Resolve.method_call(env, atom, args, names, ctx)
+
+      # A call to a `where`-constrained global resolves and appends the dictionary
+      # the callee expects before the ordinary application machinery runs, so the
+      # dictionary parameter is supplied at every concrete call site.
+      Cure.Elab.Resolve.constrained?(env, atom) ->
+        Cure.Elab.Resolve.constrained_call(env, atom, args, names, ctx)
+
       name == "reflexive" and length(args) == 1 ->
         [arg] = args
 
@@ -373,6 +387,12 @@ defmodule Cure.Elab.Elaborator do
         end
     end
   end
+
+  # A synthetic dictionary argument `{:dict_value, iface, head}`, inserted by
+  # `Cure.Elab.Resolve` at a concrete call to a constrained function: build the
+  # instance's dictionary record value (its type is `iface(head)`).
+  def elaborate_expr_typed({:dict_value, iface, head}, _names, ctx, env),
+    do: Cure.Elab.Resolve.dict_value(env, iface, head, ctx)
 
   # A forced (dot) pattern `{:forced_pattern, …}` is only meaningful in a
   # constructor-argument PATTERN position (handled by the pattern path in a later
@@ -795,8 +815,23 @@ defmodule Cure.Elab.Elaborator do
   # type as the goal. The field type lives in the constructor frame `params ++
   # fields`; its parameter references are instantiated with the record value's
   # actual arguments (so `val : a` in `Box(Nat)` becomes `Nat`). A field type that
-  # references an EARLIER FIELD stays non-closed and is rejected — a genuinely
-  # dependent record field, which projection does not yet support.
+  # references an EARLIER FIELD (filled with the sentinel index below) is rejected —
+  # a genuinely dependent record field, which projection does not yet support. A
+  # field type that merely mentions the record PARAMETER at an abstract argument
+  # (`eqs : a -> a -> Bool` on a dictionary `Eqs(a)` over a rigid `a`) is fine: it
+  # is a legitimate context-open type, and the kernel re-checks the built `:case`.
+  @proj_field_sentinel 1_000_000
+
+  @doc """
+  Public entry to project field `field` from the record-typed surface expression
+  `inner`. Used by `Cure.Elab.Resolve` to pull an interface method off the
+  in-scope dictionary parameter at an abstract (rigid-head) call site.
+  """
+  @spec project_record_field(term(), String.t(), [String.t()], Context.t(), Env.t()) ::
+          {:ok, term(), term()} | {:error, term()}
+  def project_record_field(inner, field, names, ctx, env),
+    do: record_projection(inner, field, names, ctx, env)
+
   defp record_projection(inner, field, names, ctx, env) do
     with {:ok, _obj_term, obj_type} <- elaborate_expr_typed(inner, names, ctx, env) do
       case Quote.reify(obj_type, Context.length(ctx)) do
@@ -813,20 +848,19 @@ defmodule Cure.Elab.Elaborator do
 
               # Instantiate the field's type in `params ++ fields`: the parameters
               # get the record's actual arguments, earlier-field slots get a
-              # sentinel var (so a field-dependent field type is caught as
-              # non-closed below).
+              # sentinel var (so a field-dependent field type is caught below).
               ftype =
                 idx &&
                   Subst.instantiate(
                     elem(Enum.at(fields, idx), 1),
-                    params ++ List.duplicate({:var, 1_000_000}, idx)
+                    params ++ List.duplicate({:var, @proj_field_sentinel}, idx)
                   )
 
               cond do
                 is_nil(idx) ->
                   {:error, {:unknown_field, rec, field}}
 
-                not closed_term?(ftype) ->
+                mentions_prior_field?(ftype) ->
                   {:error, {:dependent_record_projection, rec, field}}
 
                 true ->
@@ -845,17 +879,21 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A Core term with no free de Bruijn variables (closed in the current frame).
-  defp closed_term?(term), do: closed_term?(term, 0)
-  defp closed_term?({:var, k}, depth), do: k < depth
-  defp closed_term?({:lam, d, b}, depth), do: closed_term?(d, depth) and closed_term?(b, depth + 1)
-  defp closed_term?({:pi, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
+  # Does the term reference the prior-field sentinel index (`@proj_field_sentinel`,
+  # substituted into earlier-field slots)? A `{:var, k}` at binder depth `d` is the
+  # sentinel iff `k - d >= @proj_field_sentinel` — the sentinel is lifted by one per
+  # binder crossed, so its distance from the current frame stays constant, while a
+  # genuine context/parameter reference stays far below the threshold.
+  defp mentions_prior_field?(term), do: mentions_prior_field?(term, 0)
+  defp mentions_prior_field?({:var, k}, depth), do: k - depth >= @proj_field_sentinel
+  defp mentions_prior_field?({:lam, d, b}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(b, depth + 1)
+  defp mentions_prior_field?({:pi, d, c}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(c, depth + 1)
 
-  defp closed_term?(tuple, depth) when is_tuple(tuple),
-    do: tuple |> Tuple.to_list() |> Enum.all?(&closed_term?(&1, depth))
+  defp mentions_prior_field?(tuple, depth) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.any?(&mentions_prior_field?(&1, depth))
 
-  defp closed_term?(list, depth) when is_list(list), do: Enum.all?(list, &closed_term?(&1, depth))
-  defp closed_term?(_other, _depth), do: true
+  defp mentions_prior_field?(list, depth) when is_list(list), do: Enum.any?(list, &mentions_prior_field?(&1, depth))
+  defp mentions_prior_field?(_other, _depth), do: false
 
   @doc """
   Checking-mode elaboration for proof forms whose Core term depends on the
@@ -968,6 +1006,16 @@ defmodule Cure.Elab.Elaborator do
           {:error, _} = orig ->
             orig
         end
+    end
+  end
+
+  # A synthetic dictionary argument in checking position (the constrained-call
+  # applicator's dictionary slot): build the instance's dictionary record value
+  # and let the kernel check it against the expected `iface(head)` type.
+  def elaborate_expr_checked({:dict_value, iface, head}, expected_core, _names, ctx, env) do
+    with {:ok, term, _type} <- Cure.Elab.Resolve.dict_value(env, iface, head, ctx),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
     end
   end
 

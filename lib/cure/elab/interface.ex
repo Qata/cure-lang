@@ -42,9 +42,27 @@ defmodule Cure.Elab.Interface do
         defaults: defaults
       }
 
-      {:ok, Env.put_interface(env, name_atom, desc)}
+      with {:ok, env1} <- declare_dictionary_former(desc, env) do
+        {:ok, Env.put_interface(env1, name_atom, desc)}
+      end
     end
   end
+
+  # The interface's dictionary type former: a single-constructor record family
+  # `Iface(head) ≙ Iface{ method : field-type, … }`. For a kind-`Type` interface
+  # this is a plain parameterized record; the higher-kinded former (a `f : Type ->
+  # Type` parameter) is built by the HKT resolution step and skipped here.
+  defp declare_dictionary_former(%{head_kind: :type} = desc, env) do
+    fields =
+      Enum.map(desc.method_order, fn m ->
+        info = Map.fetch!(desc.methods, m)
+        {:param, [type: info.type_ast], info.name}
+      end)
+
+    Cure.Elab.Declarations.declare_record(desc.name, [desc.head_var], fields, env)
+  end
+
+  defp declare_dictionary_former(_desc, env), do: {:ok, env}
 
   @doc "The interface descriptor whose method set contains `method`, or nil."
   @spec for_method(Env.t(), atom()) :: map() | nil

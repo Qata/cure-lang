@@ -129,7 +129,15 @@ defmodule Cure.Elab.Declarations do
   # is elaborated (see `Program.elaborate_declarations`).
   def register_signature({:function_def, meta, _body}, env) do
     with {:ok, sig} <- function_signature(meta, env) do
-      {:ok, Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)}
+      env1 = Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+
+      env2 =
+        case sig.constraints do
+          [] -> env1
+          specs -> Env.put_constrained(env1, sig.name, specs)
+        end
+
+      {:ok, env2}
     end
   end
 
@@ -164,13 +172,19 @@ defmodule Cure.Elab.Declarations do
       with {:ok, body_term} <-
              elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
            :ok <- Kernel.check(ctx, body_term, return_value),
+           # A `where`-introduced dictionary parameter is present by default but
+           # SAFELY demoted to `:erased` when the body never uses it relevantly (an
+           # `ignore`-style constrained function): the same criterion the relevance
+           # check enforces, so erasure (dropping it) stays sound. Only demotion,
+           # never promotion.
+           quantities = demote_unused_dicts(env, sig, body_term),
            # {0,ω} relevance check (M8.3): erasure will drop the `:erased` parameter
            # slots, so reject any body that uses one relevantly (returned / passed
            # in a present position / scrutinised / applied). E-layer; the kernel
            # stays quantity-blind. See `Cure.Elab.Relevance`.
-           :ok <- Relevance.check(env, sig.name, sig.quantities, body_term) do
+           :ok <- Relevance.check(env, sig.name, quantities, body_term) do
         lambda = wrap_binders(:lam, sig.telescope, body_term)
-        final = Env.add_def(env, sig.name, sig.pi, lambda, sig.quantities)
+        final = Env.add_def(env, sig.name, sig.pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
@@ -194,7 +208,15 @@ defmodule Cure.Elab.Declarations do
     # signature (`fn id(x: a) -> a`) is bound as a leading implicit `{a: Type}`
     # (erased), in order of first appearance. Restricted to occurrences provably of
     # kind Type, so an index variable (`Vec(_, n)`, `n : Nat`) is NOT mis-bound.
-    params = auto_generalize(params0, return_expr, env) ++ params0
+    params1 = auto_generalize(params0, return_expr, env) ++ params0
+
+    # A `where Iface(a)` clause introduces a runtime dictionary parameter typed by
+    # the interface's record former (`Eqs(a)`), appended AFTER the value params so
+    # the applicator has solved `a` from an earlier argument before it checks the
+    # dictionary (and so its de-Bruijn index is stable). `constraint_specs` tells a
+    # concrete call site which argument fixes `a` and how to name the dict binder.
+    {params, constraint_specs} =
+      inject_constraint_dicts(params1, Keyword.get(meta, :constraints, []))
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
@@ -207,9 +229,66 @@ defmodule Cure.Elab.Declarations do
          quantities: quantities,
          scope: scope,
          return_core: return_core,
+         constraints: constraint_specs,
          pi: wrap_binders(:pi, telescope, return_core)
        }}
     end
+  end
+
+  # Turn each `where Iface(a)` constraint into an implicit-style dictionary
+  # parameter `__dict_Iface_a : Iface(a)`, appended to the telescope. Returns the
+  # extended parameter list and a spec per constraint recording which explicit
+  # value parameter fixes the head variable `a` (`head_arg_index`) — a concrete
+  # call resolves the instance from that argument's type.
+  defp inject_constraint_dicts(params, []), do: {params, []}
+
+  defp inject_constraint_dicts(params, constraints) do
+    explicit_value_params =
+      Enum.filter(params, fn {:param, m, _n} -> not Keyword.get(m, :implicit, false) end)
+
+    {dict_params, specs} =
+      constraints
+      |> Enum.map(fn {:function_call, cm, [tyvar_ast]} ->
+        iface_str = Keyword.fetch!(cm, :name)
+        iface_atom = String.to_atom(iface_str)
+        {:variable, _, tyvar} = tyvar_ast
+        dict_name = "__dict_#{iface_str}_#{tyvar}"
+
+        idx =
+          Enum.find_index(explicit_value_params, fn {:param, pm, _n} ->
+            match?({:variable, _, ^tyvar}, Keyword.get(pm, :type))
+          end) || 0
+
+        dparam =
+          {:param, [type: {:function_call, [name: iface_str], [tyvar_ast]}, constraint_dict: {iface_atom, tyvar}],
+           dict_name}
+
+        {dparam, %{iface: iface_atom, tyvar: tyvar, head_arg_index: idx, dict_name: dict_name}}
+      end)
+      |> Enum.unzip()
+
+    {params ++ dict_params, specs}
+  end
+
+  # Demote each dictionary parameter to `:erased` when the body would still pass
+  # the relevance check with it erased — i.e. it is never used relevantly. This is
+  # the exact soundness criterion `Relevance.check` enforces, so a demoted dict is
+  # safe for erasure to drop. Non-dict quantities are never touched.
+  defp demote_unused_dicts(env, %{params: params, quantities: quantities, name: name}, body) do
+    dict_positions =
+      params
+      |> Enum.with_index()
+      |> Enum.filter(fn {{:param, m, _n}, _i} -> Keyword.has_key?(m, :constraint_dict) end)
+      |> Enum.map(fn {_p, i} -> i end)
+
+    Enum.reduce(dict_positions, quantities, fn pos, qs ->
+      trial = List.replace_at(qs, pos, :erased)
+
+      case Relevance.check(env, name, trial, body) do
+        :ok -> trial
+        _ -> qs
+      end
+    end)
   end
 
   # A parameterized record `rec Box(a)\n  val: a` is a single-constructor
@@ -219,6 +298,17 @@ defmodule Cure.Elab.Declarations do
   # ctor telescope by the fields (so construction/projection find them) while
   # threading each field into scope for the following field types (a dependent
   # record — `rec Box(a)\n  n: Nat\n  v: Vec(a, n)`).
+  @doc """
+  Declare a single-constructor record family `name(type_params)` whose fields are
+  `[{:param, [type: ast], fname}]`. This is the public entry the typeclass
+  elaborator uses to realise an interface as its dictionary record type former
+  (`Eqs(a) ≙ Eqs{ eqs : a -> a -> Bool }`).
+  """
+  @spec declare_record(atom(), [String.t()], [tuple()], Env.t()) ::
+          {:ok, Env.t()} | {:error, term()}
+  def declare_record(name, type_params, fields, env),
+    do: declare_parameterized_struct(name, type_params, fields, env)
+
   defp declare_parameterized_struct(name, type_params, fields, env) do
     params = Enum.map(type_params, fn p -> {:param, [], p} end)
     sig = struct_ctor_sig(name, type_params, fields)
@@ -778,7 +868,24 @@ defmodule Cure.Elab.Declarations do
     ordered
   end
 
-  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc) do
+  # A function-type node `T1 -> … -> R` (a method's field type in a typeclass
+  # dictionary record) carries `function_type: true` and NO `:name`. Recurse into
+  # its arrow components so a head/index variable buried inside is still collected,
+  # never treating it as a family application.
+  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+       when is_list(fmeta) do
+    if Keyword.get(fmeta, :function_type) do
+      Enum.reduce(args, acc, fn a, ac ->
+        collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac)
+      end)
+    else
+      collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+    end
+  end
+
+  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
+
+  defp collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc) do
     name = String.to_atom(Keyword.fetch!(fmeta, :name))
     index_types = family_index_types(name, fam, index_tele, env)
 
@@ -825,8 +932,6 @@ defmodule Cure.Elab.Declarations do
 
     Enum.reduce(args, acc, fn a, ac -> collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac) end)
   end
-
-  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
 
   # Collect free variables from an index EXPRESSION typed by `type`, recursing into
   # constructor applications so a variable that appears only *inside* a constructor

@@ -258,7 +258,31 @@ defmodule Cure.Elab.Program do
     local_defs = local_def_names(ast)
 
     with {:ok, env} <- check_ast(ast) do
-      {:ok, env, local_defs}
+      # `implementation` declarations synthesise mangled method globals that are
+      # not in the source AST; they are still this module's locals and must be
+      # emitted alongside the source-declared defs.
+      {:ok, env, local_defs ++ impl_def_names(env)}
+    end
+  end
+
+  @doc """
+  Names of the globals synthesised by `implementation` declarations (the mangled
+  per-method impl bodies + any dictionary values). Codegen must emit these as
+  module locals; `Cure.Elab.Resolve` references them by name.
+  """
+  @spec impl_def_names(Env.t()) :: [atom()]
+  def impl_def_names(env) do
+    case Env.coherence(env) do
+      nil ->
+        []
+
+      %{anon: anon, named: named} ->
+        refs = Map.values(anon) ++ Map.values(named)
+
+        method_defs = Enum.flat_map(refs, &Map.values(&1.methods))
+        dict_defs = Enum.flat_map(refs, fn ref -> List.wrap(Map.get(ref, :dict)) end)
+
+        Enum.uniq(method_defs ++ dict_defs)
     end
   end
 

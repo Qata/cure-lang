@@ -16,7 +16,8 @@ defmodule Cure.Core.Env do
             certified: nil,
             builtins: %{},
             interfaces: %{},
-            coherence: nil
+            coherence: nil,
+            constrained: %{}
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
@@ -26,7 +27,8 @@ defmodule Cure.Core.Env do
           certified: MapSet.t() | nil,
           builtins: %{atom() => atom()},
           interfaces: %{atom() => map()},
-          coherence: term()
+          coherence: term(),
+          constrained: %{atom() => [map()]}
         }
 
   @doc "An empty signature."
@@ -83,6 +85,20 @@ defmodule Cure.Core.Env do
   @doc "The coherence registry (instance table), or nil if none set."
   @spec coherence(t()) :: term()
   def coherence(%__MODULE__{coherence: registry}), do: registry
+
+  @doc """
+  Record that global `name` carries interface constraints — a list of
+  `%{iface, tyvar, head_arg_index, dict_name}` descriptors, one per `where
+  Iface(a)` clause. A concrete call to a constrained global supplies the
+  resolved dictionary as a trailing argument (`Cure.Elab.Resolve`).
+  """
+  @spec put_constrained(t(), atom(), [map()]) :: t()
+  def put_constrained(%__MODULE__{constrained: c} = env, name, specs),
+    do: %{env | constrained: Map.put(c, name, specs)}
+
+  @doc "The interface-constraint descriptors for global `name`, or nil."
+  @spec constrained(t(), atom()) :: [map()] | nil
+  def constrained(%__MODULE__{constrained: c}, name), do: Map.get(c, name)
 
   @doc """
   Mark a global as totality-certified (δ may unfold it). See M7.2.
