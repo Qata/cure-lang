@@ -123,7 +123,23 @@ defmodule Cure.Elab.Emit do
   end
 
   defp function_form(env, name) do
-    %{body: body, quantities: quantities} = Env.get_def(env, name)
+    case Env.get_def(env, name) do
+      %{body: {:extern, {mod, fun, arity}}} -> extern_form(name, {mod, fun, arity})
+      def -> real_function_form(name, def, env)
+    end
+  end
+
+  # Wave-3: emit a direct Erlang remote call, mirroring codegen.ex:691-705 (NOT
+  # calling it). Params are synthesized from the arity — a bodyless extern has no
+  # {:lam,…} chain to peel, so peel_params/4 would yield zero params for arity>0.
+  # `0..(arity-1)//1` yields `[]` at arity 0 → `mod:fun()`, correct.
+  defp extern_form(fn_atom, {mod, fun, arity}) do
+    param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
+    remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
+    {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [remote]}]}
+  end
+
+  defp real_function_form(name, %{body: body, quantities: quantities}, env) do
     qs = quantities || []
     {param_names, inner} = peel_params(Erase.erase(env, body), qs, 0, [])
 
