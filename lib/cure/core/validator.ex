@@ -136,7 +136,21 @@ defmodule Cure.Core.Validator do
   defp children({:eq, ty, a, b}), do: [ty, a, b]
   defp children({:refl, a}), do: [a]
   defp children({:rewrite, p, m, b}), do: [p, m, b]
-  defp children(_leaf), do: []
+
+  # Fallback for any tuple node NOT explicitly matched above (a genuine leaf like
+  # `{:var,_}`/`{:type,_}`/`{:global,_}`/`{:int_lit,_}`, OR an unrecognized/future
+  # form such as a graded `:app`/`:ctor` 4-tuple). Descend CONSERVATIVELY into
+  # every element that is itself a term-tuple or a list of them, so a forbidden
+  # node buried in an unknown wrapper cannot escape the walker (fail-closed).
+  # Genuine leaves carry only atoms/ints, so this yields no spurious children.
+  defp children(t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.flat_map(&term_children/1)
+
+  defp children(_nontuple), do: []
+
+  defp term_children(x) when is_tuple(x), do: [x]
+  defp term_children(xs) when is_list(xs), do: Enum.filter(xs, &is_tuple/1)
+  defp term_children(_atom_or_scalar), do: []
 
   @doc "Validate `term` against the Wave-0 config."
   @spec validate(tuple()) :: {:ok, [diagnostic()]} | {:error, [diagnostic()]}
