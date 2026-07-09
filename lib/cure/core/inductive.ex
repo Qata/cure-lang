@@ -9,7 +9,14 @@ defmodule Cure.Core.Env do
   closures — only Core terms and metadata — so it stays serializable.
   """
 
-  defstruct families: %{}, ctors: %{}, ctor_to_family: %{}, defs: %{}, certified: nil, builtins: %{}
+  defstruct families: %{},
+            ctors: %{},
+            ctor_to_family: %{},
+            defs: %{},
+            certified: nil,
+            builtins: %{},
+            interfaces: %{},
+            coherence: nil
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
@@ -17,7 +24,9 @@ defmodule Cure.Core.Env do
           ctor_to_family: %{atom() => atom()},
           defs: %{atom() => map()},
           certified: MapSet.t() | nil,
-          builtins: %{atom() => atom()}
+          builtins: %{atom() => atom()},
+          interfaces: %{atom() => map()},
+          coherence: term()
         }
 
   @doc "An empty signature."
@@ -53,6 +62,27 @@ defmodule Cure.Core.Env do
   @doc "The global definition `%{name, type, body}` for `name`, or nil."
   @spec get_def(t(), atom()) :: map() | nil
   def get_def(%__MODULE__{defs: defs}, name), do: Map.get(defs, name)
+
+  @doc """
+  Register a compile-time interface (typeclass) descriptor under its name
+  atom. The descriptor is elaborator-level metadata (head var, head kind,
+  method field types, default bodies) — see `Cure.Elab.Interface`.
+  """
+  @spec put_interface(t(), atom(), map()) :: t()
+  def put_interface(%__MODULE__{interfaces: ifaces} = env, name, desc),
+    do: %{env | interfaces: Map.put(ifaces, name, desc)}
+
+  @doc "The interface descriptor for `name`, or nil."
+  @spec get_interface(t(), atom()) :: map() | nil
+  def get_interface(%__MODULE__{interfaces: ifaces}, name), do: Map.get(ifaces, name)
+
+  @doc "Replace the coherence registry (instance table) carried in the env."
+  @spec put_coherence(t(), term()) :: t()
+  def put_coherence(%__MODULE__{} = env, registry), do: %{env | coherence: registry}
+
+  @doc "The coherence registry (instance table), or nil if none set."
+  @spec coherence(t()) :: term()
+  def coherence(%__MODULE__{coherence: registry}), do: registry
 
   @doc """
   Mark a global as totality-certified (δ may unfold it). See M7.2.

@@ -110,6 +110,10 @@ defmodule Cure.Elab.Declarations do
     declare_parameterized(name, params, index_params, ctor_sigs, env)
   end
 
+  def elaborate({:interface, _meta, _methods} = decl, env) do
+    Cure.Elab.Interface.elaborate(decl, env)
+  end
+
   def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
 
   defp maybe_certify(env, name) do

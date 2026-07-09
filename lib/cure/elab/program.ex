@@ -390,6 +390,12 @@ defmodule Cure.Elab.Program do
 
   defp declarations({tag, _meta, _body} = node) when tag in [:container, :indexed_type], do: [node]
 
+  # Compile-time typeclass declarations (Task 21). Both are top-level
+  # declarations the elaborator dispatches (`interface` → descriptor,
+  # `implementation` → dictionary + coherence registration).
+  defp declarations({tag, meta, _body} = node) when tag in [:interface, :implementation] and is_list(meta),
+    do: [node]
+
   # A top-level type alias `type Name = RHS` (named, non-refinement). Inline
   # refinement/annotation `:type_annotation` nodes are not declarations.
   defp declarations({:type_annotation, meta, _} = node) when is_list(meta) do
