@@ -186,6 +186,16 @@ defmodule Cure.Elab.Emit do
           [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
         end
 
+      # Bounded erases exactly like Nat — `First` → 0, `Next(pred)` → pred+1 — so a
+      # codepoint is a native integer at runtime (matches `{:bounded_lit, _}`). But
+      # Bounded is INDEXED: each ctor app also carries an erased implicit index `m`,
+      # so drop the erased args and keep only the present predecessor (if any).
+      bounded_ctor?(env, name) ->
+        case bounded_present_args(env, name, args) do
+          [] -> {:integer, @line, 0}
+          [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
+        end
+
       sigma_ctor?(env, name) ->
         {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
 
@@ -212,6 +222,10 @@ defmodule Cure.Elab.Emit do
   # Nat-ctor erasure (`Z` → 0, `S(n)` → n+1), so `{:nat_lit, 2}` and `S(S(Z))`
   # compile to the same value `2` and interoperate with nat `case` clauses.
   defp lower(_env, {:nat_lit, n}, _ctx), do: {:integer, @line, n}
+  # A compact Bounded literal erases to its raw codepoint integer — identical to
+  # the `First` → 0 / `Next(n)` → n+1 constructor erasure, so `{:bounded_lit, 97}`
+  # and `Next(...First)` compile to the same value 97.
+  defp lower(_env, {:bounded_lit, n}, _ctx), do: {:integer, @line, n}
   defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
 
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
@@ -427,6 +441,7 @@ defmodule Cure.Elab.Emit do
   defp branch_clause(env, {cname, arity, body}, ctx) do
     cond do
       nat_ctor?(env, cname) -> nat_branch_clause(env, {cname, arity, body}, ctx)
+      bounded_ctor?(env, cname) -> bounded_branch_clause(env, {cname, arity, body}, ctx)
       sigma_ctor?(env, cname) -> sigma_branch_clause(env, {cname, arity, body}, ctx)
       list_ctor?(env, cname) -> list_branch_clause(env, {cname, arity, body}, ctx)
       true -> generic_branch_clause(env, {cname, arity, body}, ctx)
@@ -486,6 +501,37 @@ defmodule Cure.Elab.Emit do
     bind = {:match, @line, k_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
     guard = [[{:op, @line, :>, {:var, @line, n}, {:integer, @line, 0}}]]
     {:clause, @line, [{:var, @line, n}], guard, [bind, body_form]}
+  end
+
+  # case-on-Bounded: erases to native integers like Nat (`First`≙`Z`,
+  # `Next`≙`S`), but — unlike Nat — Bounded is an INDEXED family: each ctor also
+  # binds an erased implicit index `{m : Nat}`, so the Core branch arity is 1
+  # (First: {m}) / 2 (Next: {m}, pred), not 0 / 1. The erased binders keep a dead
+  # de Bruijn slot but are never matched at runtime; the single PRESENT field
+  # (Next's predecessor) is the one that carries data. So: no present field ->
+  # `First`, matching literal 0; one present field -> `Next`, matching a fresh N
+  # with guard `N > 0` and binding the predecessor `pred = N - 1`.
+  defp bounded_branch_clause(env, {name, arity, body}, ctx) do
+    quantities = Inductive.ctor_quantities(env, name) || List.duplicate(:present, arity)
+    base = length(ctx)
+    field_names = for i <- indices(arity), do: :"V#{base + i}"
+    new_ctx = Enum.reverse(field_names) ++ ctx
+    body_form = lower(env, body, new_ctx)
+
+    case Enum.find_index(quantities, &(&1 == :present)) do
+      nil ->
+        # `First`: only the erased index -> matches literal 0.
+        {:clause, @line, [{:integer, @line, 0}], [], [body_form]}
+
+      present_idx ->
+        # `Next`: the present field is the predecessor = N - 1.
+        n = :"N#{base}"
+        pred_name = Enum.at(field_names, present_idx)
+        pred_var = underscore_if_unused({:var, @line, pred_name}, body_form)
+        bind = {:match, @line, pred_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
+        guard = [[{:op, @line, :>, {:var, @line, n}, {:integer, @line, 0}}]]
+        {:clause, @line, [{:var, @line, n}], guard, [bind, body_form]}
+    end
   end
 
   defp generic_branch_clause(env, {cname, arity, body}, ctx) do
@@ -551,6 +597,27 @@ defmodule Cure.Elab.Emit do
   defp nat_ctor?(env, name) do
     fam = Inductive.builtin(env, :nat)
     fam != nil and Inductive.ctor_family(env, name) == fam
+  end
+
+  # The canonical Std.Bounded family (registry-keyed, nominal): its `First`/`Next`
+  # values erase to native BEAM integers (Fin-as-int), like Nat's Z/S.
+  defp bounded_ctor?(env, name) do
+    fam = Inductive.builtin(env, :bounded)
+    fam != nil and Inductive.ctor_family(env, name) == fam
+  end
+
+  # Keep only the runtime-present args of a Bounded ctor app, dropping the erased
+  # implicit index `m`. If erasure already stripped the args (their count matches
+  # the present-quantity count) they are already the present ones; otherwise
+  # filter the full arg list against the ctor's declared quantities.
+  defp bounded_present_args(env, name, args) do
+    case Inductive.ctor_quantities(env, name) do
+      qs when is_list(qs) and length(qs) == length(args) ->
+        for {a, :present} <- Enum.zip(args, qs), do: a
+
+      _ ->
+        args
+    end
   end
 
   # The canonical Sigma family (registry-keyed, nominal): its values are the bare

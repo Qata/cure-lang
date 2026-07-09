@@ -92,6 +92,23 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vctor, :S, [pred]}, {:vnat, n}, depth, sig) when n > 0,
     do: conv_val?(pred, {:vnat, n - 1}, depth, sig)
 
+  # A compact `Bounded` literal is definitionally equal to its `First`/`Next`
+  # tower, both directions, peeling one compact layer per step — the analogue of
+  # the `vnat`↔`S`/`Z` rules above (`First`≙`Z`, `Next`≙`S`). Unlike Nat, each
+  # `Bounded` ctor value carries an erased implicit index `m` ahead of its fields
+  # (declaration order `[m]` / `[m, pred]`); the index is erased so the cross-rep
+  # rule ignores it and recurses only on the present predecessor (well-typedness
+  # forces `m` to the value both sides already agree on).
+  defp conv_struct?({:vbounded, a}, {:vbounded, b}, _depth, _sig), do: a == b
+  defp conv_struct?({:vbounded, 0}, {:vctor, :First, [_m]}, _depth, _sig), do: true
+  defp conv_struct?({:vctor, :First, [_m]}, {:vbounded, 0}, _depth, _sig), do: true
+
+  defp conv_struct?({:vbounded, n}, {:vctor, :Next, [_m, pred]}, depth, sig) when n > 0,
+    do: conv_val?({:vbounded, n - 1}, pred, depth, sig)
+
+  defp conv_struct?({:vctor, :Next, [_m, pred]}, {:vbounded, n}, depth, sig) when n > 0,
+    do: conv_val?(pred, {:vbounded, n - 1}, depth, sig)
+
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)
 
@@ -182,6 +199,7 @@ defmodule Cure.Core.Conv do
   # Same-representation fast-path; a cross-rep miss falls through to the real
   # `conv_struct?` peel (this predicate only short-circuits obvious equalities).
   defp same_value_no_delta?({:vnat, a}, {:vnat, b}, _depth, _sig), do: a == b
+  defp same_value_no_delta?({:vbounded, a}, {:vbounded, b}, _depth, _sig), do: a == b
   defp same_value_no_delta?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp same_value_no_delta?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 

@@ -64,6 +64,20 @@ defmodule Cure.Core.Kernel do
   # interchangeable at the type level too (needs `ctx` to reach the signature).
   def infer(ctx, {:nat_lit, n}) when is_integer(n) and n >= 0,
     do: {:ok, nat_type_value(Context.signature(ctx))}
+
+  # A compact `Bounded` literal `k` inhabits `Bounded(n)` for every bound `n > k`;
+  # pure inference cannot source the intended bound, so it yields the MINIMAL
+  # witness type `Bounded(k+1)` (sound: `k < k+1`). Admitting `k` at a wider
+  # DECLARED bound (e.g. the `Char = Bounded(0x110000)` case) is the checking rule's
+  # job — inference is the rarely-taken fallback. `Bounded` must be the registered
+  # `@builtin(:bounded)` family for the literal to have a type at all.
+  def infer(ctx, {:bounded_lit, k}) when is_integer(k) and k >= 0 do
+    case Inductive.builtin(Context.signature(ctx), :bounded) do
+      nil -> {:error, :bounded_family_unregistered}
+      fid -> {:ok, {:vdata, fid, [{:vnat, k + 1}]}}
+    end
+  end
+
   def infer(_ctx, {:float_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:float_lit, _f}), do: {:ok, {:vfloat_type}}
 
@@ -303,7 +317,47 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # Checking a compact `Bounded` literal against a concrete declared bound. δ-whnf
+  # the expected type to expose the `Bounded` family and its bound index; the
+  # literal `k` inhabits `Bounded(n)` iff `0 <= k < n`. The kernel re-derives `n`
+  # itself — it never trusts the elaborator's bound check (this is the TCB gate).
+  # This is where `97 : Char` (= `Bounded(0x110000)`) is admitted, which the
+  # infer-then-convert fallback cannot do (inference only knows `Bounded(k+1)`).
+  def check(ctx, {:bounded_lit, k}, expected) when is_integer(k) and k >= 0 do
+    sig = Context.signature(ctx)
+    bounded_fid = Inductive.builtin(sig, :bounded)
+    depth = Context.length(ctx)
+
+    case Normalise.whnf_value(expected, sig) do
+      {:vdata, ^bounded_fid, [bound_val]} when not is_nil(bounded_fid) ->
+        case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
+          {:ok, n} when k < n -> :ok
+          {:ok, n} -> {:error, {:bounded_lit_out_of_range, k, n}}
+          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth)}}
+        end
+
+      other ->
+        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth)}}
+    end
+  end
+
   def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
+
+  # Peel a value to a concrete non-negative integer bound, spanning both Nat
+  # representations: the compact `{:vnat, n}` and the `Z`/`S` tower (a bound may be
+  # written either way). A non-concrete (neutral/symbolic) bound returns `:error`
+  # — a literal cannot be checked against an unknown ceiling.
+  defp concrete_nat({:vnat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp concrete_nat({:vctor, :Z, []}), do: {:ok, 0}
+
+  defp concrete_nat({:vctor, :S, [pred]}) do
+    case concrete_nat(pred) do
+      {:ok, n} -> {:ok, n + 1}
+      :error -> :error
+    end
+  end
+
+  defp concrete_nat(_other), do: :error
 
   # The generic checking rule (moduledoc: "falling back to `infer` plus a
   # cumulative conversion test") — shared by the fallthrough clause and the
@@ -977,6 +1031,7 @@ defmodule Cure.Core.Kernel do
   # a rigid constructor-like head for index unification — same status the `S`/`Z`
   # tower already has via the `{:ctor, _, _}` clause above.
   defp rigid_index?({:nat_lit, _}), do: true
+  defp rigid_index?({:bounded_lit, _}), do: true
   defp rigid_index?({:float_lit, _}), do: true
   defp rigid_index?(_), do: false
 

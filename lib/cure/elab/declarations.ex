@@ -411,6 +411,14 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_body({:pickup, _, _} = expr, return_core, scope, ctx, env, _params),
     do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
+  # A bare literal body is checked against the declared return type so a numeric
+  # literal at `Nat`/`Bounded(n)` lowers to its compact `{:nat_lit,_}`/
+  # `{:bounded_lit,_}` form (`fn a() -> Char = 97`), instead of inferring `Int` and
+  # then failing conversion. Non-numeric / Int/Float literals fall through the
+  # checked path to the same infer-and-convert behavior as before.
+  defp elaborate_body({:literal, _meta, _value} = expr, return_core, scope, ctx, env, _params),
+    do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
   defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
     with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
       {:ok, term}

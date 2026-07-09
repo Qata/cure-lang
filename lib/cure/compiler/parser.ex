@@ -4753,10 +4753,10 @@ defmodule Cure.Compiler.Parser do
 
       # `@builtin(:key) type Name = ...` attaches the decorator to the type
       # container (an enum ADT → {:container, container_type: :enum, ...}, which
-      # attach_decorator/3's generic clause threads into :decorator meta). A
-      # @builtin on an indexed/GADT ({:indexed_type}) or alias ({:type_annotation})
-      # form is silently dropped — those have no attach_decorator clause today;
-      # out of scope here (Bool/Nat are both simple enums).
+      # attach_decorator/3's generic clause threads into :decorator meta).
+      # `@builtin(:key) type Name indices (...)` attaches to the {:indexed_type}
+      # meta (Bounded's GADT family). A @builtin on an alias ({:type_annotation})
+      # form is still silently dropped — no attach_decorator clause today.
       %Token{type: :keyword, value: :type} ->
         {type_ast, state} = parse_type_def(state)
         type_ast = attach_decorator(type_ast, dec_name, args)
@@ -4792,6 +4792,13 @@ defmodule Cure.Compiler.Parser do
           _ ->
             {:container, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), body}
         end
+
+      # `@builtin(:key) type Name indices (...)` — a GADT / indexed family.
+      # Thread the decorator into the indexed_type meta so
+      # program.ex's maybe_register_builtin can see it (mirrors the
+      # {:container} enum-ADT clause above).
+      {:indexed_type, meta, ctors} ->
+        {:indexed_type, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), ctors}
 
       {:function_def, meta, body} ->
         decoration =

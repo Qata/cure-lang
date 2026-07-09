@@ -13,7 +13,7 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Normalise, Quote}
   alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
 
   @doc """
@@ -1099,11 +1099,27 @@ defmodule Cure.Elab.Elaborator do
   # bare literal still defaults to `Int` in inference mode; only a `Nat`-checked
   # one becomes compact. Every other case defers to the ordinary checked path.
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
-    if Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0 and
-         nat_expected?(expected_core, ctx) do
-      {:ok, {:nat_lit, value}}
-    else
-      elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+    int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
+
+    cond do
+      int? and nat_expected?(expected_core, ctx) ->
+        {:ok, {:nat_lit, value}}
+
+      # Type-directed compact-Bounded literal: an integer literal checked against a
+      # `Bounded(n)` type (e.g. `Char = Bounded(0x110000)`) is the value `k` itself,
+      # a single compact node, iff `0 <= k < n`. This is the surface `let c: Char =
+      # 97` — a codepoint is ONE integer, never a `Next(...First)` tower. The kernel
+      # independently re-checks the bound (`check/3`), so this early check is only for
+      # a clear error message.
+      int? ->
+        case bounded_expected(expected_core, ctx) do
+          {:ok, n} when value < n -> {:ok, {:bounded_lit, value}}
+          {:ok, n} -> {:error, {:bounded_lit_out_of_range, value, n}}
+          :no -> elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+        end
+
+      true ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
     end
   end
 
@@ -1118,6 +1134,46 @@ defmodule Cure.Elab.Elaborator do
     not is_nil(nat_fid) and not Unify.has_meta?(expected_core) and
       match?({:vdata, ^nat_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
   end
+
+  # `{:ok, n}` iff the expected type δ-unfolds to the `Bounded` family with a
+  # concrete bound `n` (a full `Bounded(n)` with `n` a closed Nat) — `:no`
+  # otherwise (metavariable, non-Bounded, or symbolic bound). Sees through a
+  # `typealias` (e.g. `Char`) because `whnf_value` δ-unfolds the certified alias.
+  defp bounded_expected(expected_core, ctx) do
+    sig = Context.signature(ctx)
+    bounded_fid = Inductive.builtin(sig, :bounded)
+
+    if is_nil(bounded_fid) or Unify.has_meta?(expected_core) do
+      :no
+    else
+      value = Normalise.whnf_value(Eval.eval(expected_core, Context.env(ctx)), sig)
+
+      case value do
+        {:vdata, ^bounded_fid, [bound_val]} ->
+          case bound_to_int(Normalise.whnf_value(bound_val, sig)) do
+            {:ok, n} -> {:ok, n}
+            :error -> :no
+          end
+
+        _ ->
+          :no
+      end
+    end
+  end
+
+  # Peel a concrete Nat bound value (compact `{:vnat, _}` or `Z`/`S` tower) to an
+  # integer; `:error` for a symbolic/neutral bound.
+  defp bound_to_int({:vnat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp bound_to_int({:vctor, :Z, []}), do: {:ok, 0}
+
+  defp bound_to_int({:vctor, :S, [pred]}) do
+    case bound_to_int(pred) do
+      {:ok, n} -> {:ok, n + 1}
+      :error -> :error
+    end
+  end
+
+  defp bound_to_int(_other), do: :error
 
   defp elaborate_lambda([], body_expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)

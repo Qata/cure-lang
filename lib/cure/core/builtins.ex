@@ -16,7 +16,12 @@ defmodule Cure.Core.Builtins do
     nat: [{:Z, 0}, {:S, 1}],
     eq: [{:reflexive, 1}],
     sigma: [{:mk_pair, 2}],
-    list: [{:Nil, 0}, {:Cons, 2}]
+    list: [{:Nil, 0}, {:Cons, 2}],
+    # First/Next each carry an erased implicit index binder `{m : Nat}` (like
+    # Equivalent's erased witness `w`), so their STORED arities are 1 and 2 —
+    # First: {m}; Next: {m}, Bounded(m). The erased `m` drops at emit, leaving
+    # the runtime shape First->0 / Next(pred)->pred+1 (Nat's Z/S erasure).
+    bounded: [{:First, 1}, {:Next, 2}]
   }
 
   # Builtin arithmetic/comparison op globals (K2 wave, spec 2026-07-09). Each is

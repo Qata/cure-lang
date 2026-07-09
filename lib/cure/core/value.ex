@@ -48,6 +48,7 @@ defmodule Cure.Core.Value do
   def value?({:vint, n}), do: is_integer(n)
   # Compact Nat literal value (defeq to the n-fold `S`-tower over `Z`).
   def value?({:vnat, n}), do: is_integer(n) and n >= 0
+  def value?({:vbounded, n}), do: is_integer(n) and n >= 0
   def value?({:vfloat_type}), do: true
   def value?({:vfloat, f}), do: is_float(f)
   def value?(_), do: false

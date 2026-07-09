@@ -87,11 +87,16 @@ defmodule Cure.Compiler.DependentVecCodegenTest do
     assert apply(mod, :is_empty, [xs]) == false
     assert apply(mod, :head, [xs]) == 1
     assert apply(mod, :tail, [xs]) == {:prepend, 2, :empty}
-    assert apply(mod, :lookup, [xs, :First]) == 1
-    assert apply(mod, :lookup, [xs, {:Next, :First}]) == 2
-    assert apply(mod, :update, [xs, {:Next, :First}, fn x -> x + 100 end]) ==
+    # `Bounded(n)` (the `index` type) is now a registered `@builtin(:bounded)`
+    # family, so its `First`/`Next` values erase to compact integers exactly like
+    # Nat's Z/S — `First` is 0, `Next(First)` is 1. (Before Bounded's builtin
+    # registration these were the generic `:First` / `{:Next, :First}` atom-tuple
+    # forms.) The behaviour — and every expected result below — is unchanged.
+    assert apply(mod, :lookup, [xs, 0]) == 1
+    assert apply(mod, :lookup, [xs, 1]) == 2
+    assert apply(mod, :update, [xs, 1, fn x -> x + 100 end]) ==
              {:prepend, 1, {:prepend, 102, :empty}}
-    assert apply(mod, :set, [xs, :First, 9]) == {:prepend, 9, {:prepend, 2, :empty}}
+    assert apply(mod, :set, [xs, 0, 9]) == {:prepend, 9, {:prepend, 2, :empty}}
     assert apply(mod, :map, [xs, fn x -> x * 10 end]) == {:prepend, 10, {:prepend, 20, :empty}}
     assert apply(mod, :zip_with, [xs, {:prepend, 10, {:prepend, 20, :empty}}, fn x -> fn y -> x + y end end]) ==
              {:prepend, 11, {:prepend, 22, :empty}}

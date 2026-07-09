@@ -237,9 +237,11 @@ defmodule Cure.Core.Normalise do
       # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
       # matching branch body in `reverse(cargs) ++ env`.
       {:ncase, scrut, _motive, branches} ->
-        # `nat_to_ctor_if` peels a compact-Nat scrutinee to `Z`/`S` so it reuses
-        # the ctor ι-rule below; every other value passes through unchanged.
-        case Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)) do
+        # `nat_to_ctor_if`/`bounded_to_ctor_if` peel a compact-Nat / compact-Bounded
+        # scrutinee to `Z`/`S` / `First`/`Next` so it reuses the ctor ι-rule below;
+        # the two value shapes are disjoint, so composing is safe and every other
+        # value passes through unchanged.
+        case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
           {:vctor, cname, cargs} ->
             {_c, ar, {:closure, env, body}} =
               Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
@@ -278,8 +280,9 @@ defmodule Cure.Core.Normalise do
 
     case head do
       {:ncase, scrut, _motive, branches} ->
-        # See the twin arm above: peel a compact-Nat scrutinee before the ctor ι.
-        case Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)) do
+        # See the twin arm above: peel a compact-Nat / compact-Bounded scrutinee
+        # before the ctor ι.
+        case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
           {:vctor, cname, cargs} ->
             {_c, ar, {:closure, env, body}} =
               Enum.find(branches, fn {c, _ar, _b} -> c == cname end)

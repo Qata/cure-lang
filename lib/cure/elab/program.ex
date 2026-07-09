@@ -739,7 +739,18 @@ defmodule Cure.Elab.Program do
   # In a designated prelude source, a `@builtin(:key) type Name = ...` container
   # registers the canonical builtin family (schema-validated). Non-prelude
   # sources (or non-`@builtin` decls) pass through unchanged.
-  defp maybe_register_builtin({:container, meta, _body}, env, true) do
+  defp maybe_register_builtin({:container, meta, _body}, env, true),
+    do: register_builtin_from_meta(meta, env)
+
+  # A `@builtin(:key) type Name indices (...)` GADT family (e.g. Bounded)
+  # elaborates to an {:indexed_type} rather than a {:container}; register it
+  # identically off its :decorator meta.
+  defp maybe_register_builtin({:indexed_type, meta, _ctors}, env, true),
+    do: register_builtin_from_meta(meta, env)
+
+  defp maybe_register_builtin(_decl, env, _prelude?), do: {:ok, env}
+
+  defp register_builtin_from_meta(meta, env) do
     case Keyword.get(meta, :decorator) do
       {:builtin, args} ->
         key = builtin_key(args)
@@ -751,8 +762,6 @@ defmodule Cure.Elab.Program do
         {:ok, env}
     end
   end
-
-  defp maybe_register_builtin(_decl, env, _prelude?), do: {:ok, env}
 
   defp builtin_key([{:literal, _meta, key}]) when is_atom(key), do: key
   defp builtin_key([key]) when is_atom(key), do: key

@@ -47,6 +47,11 @@ defmodule Cure.Core.Eval do
   # `Z` (Lean kernel Nat / Agda BUILTIN NATURAL). It never materializes the tower;
   # `nat_to_ctor/1` peels one layer on demand at each ι-site.
   def eval({:nat_lit, n}, _env), do: {:vnat, n}
+  # Compact `Bounded` literal: a machine integer `k` standing for the k-fold
+  # `Next`-tower over `First` (Lean `Fin n` — a compact `Nat` plus a `< n` witness
+  # the kernel re-checks). It never materializes the tower; `bounded_to_ctor/1`
+  # peels one layer on demand at each ι-site, exactly like `nat_to_ctor/1`.
+  def eval({:bounded_lit, n}, _env), do: {:vbounded, n}
   def eval({:float_type}, _env), do: {:vfloat_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
 
@@ -74,6 +79,16 @@ defmodule Cure.Core.Eval do
       # depth-n literal is n reduction steps, never an n-node heap tower.
       {:vnat, _} = nat ->
         {:vctor, cname, args} = nat_to_ctor(nat)
+        {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
+        fields = drop_leading_params(args, arity)
+        eval(body, Enum.reverse(fields) ++ env)
+
+      # A compact Bounded scrutinee peels ONE layer to `First`/`Next(pred)` and
+      # reuses the ι-rule above — the exact analogue of the `{:vnat, _}` arm. The
+      # peel is declaration-arity (`[m]` / `[m, pred]`), so the erased index binds
+      # its dead de Bruijn slot exactly as a genuine `First`/`Next` value would.
+      {:vbounded, _} = b ->
+        {:vctor, cname, args} = bounded_to_ctor(b)
         {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
         fields = drop_leading_params(args, arity)
         eval(body, Enum.reverse(fields) ++ env)
@@ -135,6 +150,28 @@ defmodule Cure.Core.Eval do
   @doc false
   def nat_to_ctor_if({:vnat, _} = nat), do: nat_to_ctor(nat)
   def nat_to_ctor_if(value), do: value
+
+  # -- compact Bounded peeling ------------------------------------------------
+
+  # Peel one layer of a compact `Bounded` literal into its `First`/`Next`
+  # constructor value, leaving the predecessor COMPACT (`{:vbounded, k-1}`). The
+  # analogue of `nat_to_ctor/1` (`First`≙`Z`, `Next`≙`S`), but — unlike Nat —
+  # `Bounded` is INDEXED: each ctor carries an erased implicit index `{m : Nat}`
+  # ahead of its explicit fields (declaration order `[m, pred]`), so the peeled
+  # value is declaration-arity, matching both a genuine surface-written value
+  # (`eval` maps every ctor arg, §`eval({:ctor,…})`) and the branch arity the
+  # elaborator emits (First: 1, Next: 2). The erased index is computationally
+  # irrelevant; we fill it with its true value (`First`: m = 0; `Next` over
+  # `{:vbounded, k}`: m = k, since `Next : Bounded(m) -> Bounded(S(m))`).
+  @doc false
+  def bounded_to_ctor({:vbounded, 0}), do: {:vctor, :First, [{:vnat, 0}]}
+
+  def bounded_to_ctor({:vbounded, k}) when is_integer(k) and k > 0,
+    do: {:vctor, :Next, [{:vnat, k}, {:vbounded, k - 1}]}
+
+  @doc false
+  def bounded_to_ctor_if({:vbounded, _} = b), do: bounded_to_ctor(b)
+  def bounded_to_ctor_if(value), do: value
 
   # -- projection ι -----------------------------------------------------------
 

@@ -9,6 +9,7 @@ mod Std.Bounded
 
   @group(:core)
 
+  @builtin(:bounded)
   type Bounded indices (n: Nat)
     First : Bounded(S(m))
     Next : Bounded(m) -> Bounded(S(m))
