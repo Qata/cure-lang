@@ -64,12 +64,26 @@ Equatable : Π(a : Type). Type
 Equatable(a) ≙ record { eq : a → a → Bool, ne : a → a → Bool }
 ```
 
-- The interface head variable `a` has kind `Type` in every existing stdlib
-  interface — including `Functor(g)`, whose surface treats `g : Type` with free
-  element variables in the method signature (`fmap(container: g, f: a→b) → g`).
-  **v1 therefore does NOT require true higher-kinded (`Type → Type`) heads.**
-  The design keeps interface heads at kind `Type`, matching the current surface
-  exactly. (True HKT is a documented later extension, §8.)
+- The interface head variable carries an **inferred kind**, determined by how it
+  is used in the method signatures:
+  - When the head appears **as a type** (applied to nothing) — e.g. `Equatable(a)`
+    with `eq : a → a → Bool` — its kind is `Type`. The interface type former is
+    `Equatable : Π(a : Type). Type`.
+  - When the head appears **applied to a type** — e.g. `Functor(f)` with
+    `map : (a → b) → f(a) → f(b)` — its kind is **`Type → Type`**, a genuine
+    higher-kinded head. The interface type former is
+    `Functor : Π(f : Type → Type). Type`, and
+    `Functor(f) ≙ record { fmap : Π{a b : Type}. (a → b) → f(a) → f(b) }`.
+
+  **`Functor` is elaborated as true HKT** (`f : Type → Type`), NOT the degenerate
+  `g : Type` shape the old `proto Functor(g)` used — that shape returned the same
+  opaque container `g` and could not even express that `fmap` changes the element
+  type from `a` to `b`. Correcting it to real HKT is a faithful-to-Idris2
+  requirement of this design, not a later extension (§8 defers only kinds *beyond*
+  single-argument `Type → Type`). The head's kind is inferred by the elaborator
+  from the method signatures (Idris2's rule: `f a` forces `f : Type → Type`); an
+  interface whose head is used inconsistently (both `a` and `a(x)`) is a hard
+  error `{:inconsistent_head_kind, iface}`.
 - Method signatures with free type variables beyond the interface head (e.g.
   `fmap`'s `a`, `b`) are elaborated as **implicit-generalised** method fields:
   the record field type is a Π over those extra variables. This is ordinary
@@ -125,21 +139,38 @@ common path: every stdlib primitive `Equatable` implementation (§5) has
 type, and must register cleanly.
 
 **Resolution** at a method-call site `m(args...)` where `m` is an interface
-method:
-1. Infer the type `T` of the method's interface-head argument position (for
-   `eq(x,y)` that is the type of `x`).
-2. **Concrete head** (`T`'s head is a known type constructor with a registered
-   anonymous instance): resolve to that dictionary and **project + inline the
-   method statically** — `eq(x,y)` on `Int` becomes exactly `int_eq(x,y)`, with
-   **no dictionary value at runtime**. This is the generalisation of today's
-   type-directed `==` dispatch.
-3. **Abstract head** (`T` is a rigid type variable `a` in scope under a
-   constraint `Equatable(a)`): the constraint introduced an **implicit
-   dictionary parameter**, written `dict` below (its full internal name is
-   `dict_Equatable_a`, disambiguating multiple constraints in scope by
-   interface and head variable) — `dict : Equatable(a)`. The method call
-   **projects from that parameter** — `eq(x,y)` becomes `dict.eq x y`.
-4. **No instance found** and no constraint in scope: hard error
+method. First recover the **head key** — the type constructor the instance is
+selected by — from the type of the method's interface-head argument position:
+
+- **Kind-`Type` interface** (`Equatable`, `Ord`, `Show`, `Access`): the head
+  argument's type `T` (for `eq(x,y)`, the type of `x`) is itself the head; the
+  key is `T`'s head type constructor.
+- **Higher-kinded interface** (`Functor`, head `f : Type → Type`): the head
+  argument's type has the shape `f(a)` in the method signature, so the key is
+  extracted by **pattern-fragment unification** — solve `?f(?a) =?= T` where `?f`
+  is a metavariable of kind `Type → Type` applied to a distinct rigid `?a`. For
+  `fmap(xs, g)` with `xs : List(Int)`, this yields `?f := List`, `?a := Int`; the
+  key is the constructor `List`. This is the decidable Miller pattern fragment
+  (Cure already solves index metavariables this way — memories
+  `deferred-domain-metavar-finding`, `return-type-flow-finding`); a `T` that is
+  not of the form `C(_)` for a known constructor `C` (e.g. a bare `Int` where a
+  `Type → Type` head was expected) is `{:no_instance, iface, T}`.
+
+Then, with the head key in hand:
+1. **Concrete key** (a known type constructor with a registered anonymous
+   instance): resolve to that dictionary and **project + inline the method
+   statically** — `eq(x,y)` on `Int` becomes exactly `int_eq(x,y)`, and
+   `fmap(xs,g)` on `List` becomes exactly the `List` implementation's body, with
+   **no dictionary value at runtime**. This generalises today's type-directed
+   `==`/`fmap` dispatch.
+2. **Abstract key** (the key is a rigid type variable in scope under a constraint
+   — `Equatable(a)`, or `Functor(f)` with `f` a rigid `Type → Type` variable):
+   the constraint introduced an **implicit dictionary parameter**, written `dict`
+   below (full internal name `dict_<Iface>_<headvar>`, disambiguating multiple
+   in-scope constraints by interface and head variable) — `dict : Equatable(a)`.
+   The method call **projects from that parameter** — `eq(x,y)` becomes
+   `dict.eq x y`.
+3. **No instance found** and no constraint in scope: hard error
    `{:no_instance, iface, T}`.
 5. **Named instance, explicit reference:** a named implementation
    (`implementation Equatable for Int as strictInt`) is registered under its
@@ -297,8 +328,17 @@ and `JSON` are dropped from this list — see §1's correction: neither has any
    needs a derived `Equatable` instance for `Ord`'s own `lt`/`le`/`gt`/`ge`
    helpers (§4.3 correction).
 3. **Show** — `show : a → String`; primitive impls; deriving.
-4. **Functor** — `fmap`; head at kind `Type` (§3.1); `List` impl delegates to
-   `Std.List.map`.
+4. **Functor** — corrected to **true HKT** (§3.1): the head becomes
+   `f : Type → Type` and the method
+   `fmap : {a b} → (container: f(a), g: a → b) → f(b)` (element type changes
+   `a → b`), NOT the old degenerate `Functor(g)` with `g : Type` that returned an
+   opaque same-typed container. The `List` implementation is
+   `implementation Functor for List` with
+   `fmap({a},{b}, container: List(a), g: a → b) -> List(b) = Std.List.map(container, g)`.
+   Existing call sites (`fmap([1,2,3], fn x -> x + 10)`) keep working: resolution
+   extracts `f := List`, `a := Int` from the container's type `List(Int)` by
+   pattern-fragment unification (§3.4). Preserve the current argument order
+   (`fmap(container, g)`) and the `fmap` method name so callers are unchanged.
 5. **Access** — mechanical surface rewrite; verify resolution. Note the
    `Any`-typed `==`/`!=` uses inside its keyword-list helpers (§7 risk) may
    make this module a documented blocker rather than a clean rewrite.
@@ -342,6 +382,13 @@ below. Coverage:
 - **Abstract resolution:** a constrained polymorphic `fn` projects the method
   from its implicit dictionary parameter; runs correctly for two different
   instances.
+- **Higher-kinded resolution (Functor):** `fmap(xs, g)` with `xs : List(Int)`
+  resolves by extracting `f := List` from `List(Int)` via pattern-fragment
+  unification (§3.4), inlines the `List` implementation, and runs
+  (`fmap([1,2,3], fn x -> x + 10)` ⇒ `[11,12,13]`); the element type genuinely
+  changes (`fmap([1,2,3], fn x -> x > 1) : List(Bool)` typechecks and runs). A
+  `Functor` method applied to a non-`_( _ )` type (e.g. a bare `Int`) is
+  `{:no_instance, Functor, Int}`, not a crash.
 - **Named-instance selection:** a named implementation is never chosen by
   automatic resolution (an unqualified call still resolves to the anonymous
   instance, or errors if none exists); explicit projection off the named
@@ -379,6 +426,18 @@ below. Coverage:
   documented blocker until it is), but it must be surfaced explicitly rather
   than assumed to fall out of the "type gets a derived instance" mitigation
   above, which does not apply when there is no static type to derive one for.
+- **Higher-kinded resolution (Functor).** Extracting the type constructor from
+  `f(a) =?= List(Int)` requires higher-order unification, which is undecidable in
+  general. Mitigation: restrict to the **Miller pattern fragment** (`?f` a
+  metavariable applied to *distinct rigid* arguments) — decidable, and the only
+  shape a well-formed `Functor` method argument (`f(a)`) can take. Anything
+  outside the fragment is `{:no_instance, …}`, never a divergent solve. Cure
+  already solves index metavariables in this fragment (memories
+  `deferred-domain-metavar-finding`, `return-type-flow-finding`); this reuses
+  that machinery rather than adding a general HO-unifier. If the existing
+  unifier cannot be reused for the `Type → Type` head case without a kernel
+  change, that is a HARD-STOP-and-review (see TCB surface below), not an ad-hoc
+  elaborator hack.
 - **Resolution non-termination.** Recursive deriving (`eq` on a recursive type
   calling `eq` on its own sub-values) must resolve to the *same* instance, not
   loop in the resolver. Mitigation: resolution memoises `(interface, head)` and
@@ -412,8 +471,11 @@ below. Coverage:
 
 ## 8. Later extensions (explicitly out of scope for v1)
 
-- True higher-kinded interface heads (`Functor(f)` with `f : Type → Type`),
-  superclass/interface inheritance, multi-parameter interfaces, functional
+- Interface heads of kind **beyond single-argument `Type → Type`** —
+  multi-argument type constructors (`Bifunctor`, `f : Type → Type → Type`) and
+  higher-order kinds. **Single-argument `Type → Type` HKT (`Functor`) IS in v1**
+  (§3.1) — it is a faithfulness requirement, not deferred.
+- Superclass/interface inheritance, multi-parameter interfaces, functional
   dependencies, and monomorphising specialisation (v1 threads runtime
   dictionaries at abstract sites; specialisation is a perf optimisation later).
 
