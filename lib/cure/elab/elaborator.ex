@@ -341,6 +341,17 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  @doc """
+  Apply an already-elaborated `term` of value-type `type` to surface `args`,
+  checking each argument against the callee's Π domain (so a lambda argument
+  elaborates in checking mode). Used by `Cure.Elab.Resolve` to apply a method
+  projected off a dictionary at an abstract call site.
+  """
+  @spec apply_checked_args(term(), term(), [term()], [String.t()], Context.t(), Env.t()) ::
+          {:ok, term(), term()} | {:error, term()}
+  def apply_checked_args(term, type, args, names, ctx, env),
+    do: check_app_args(term, type, args, names, ctx, env)
+
   defp check_app_args(term, type, [], _names, _ctx, _env), do: {:ok, term, type}
 
   defp check_app_args(term, type, [arg | rest], names, ctx, env) do

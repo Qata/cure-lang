@@ -16,7 +16,7 @@ defmodule Cure.Elab.Resolve do
   ordinary implicit applicator threads it through.
   """
 
-  alias Cure.Core.{Context, Env, Eval, Kernel}
+  alias Cure.Core.{Context, Env, Eval}
   alias Cure.Elab.{Coherence, Elaborator, Interface}
 
   @doc "Is `atom` the name of a method declared by some in-scope interface?"
@@ -36,13 +36,17 @@ defmodule Cure.Elab.Resolve do
           {:ok, term(), term()} | {:error, term()}
   def method_call(env, method, args, names, ctx) do
     desc = Interface.for_method(env, method)
+    idx = head_param_index(desc, method)
+    head_ast = Enum.at(args, idx)
 
-    with {:ok, present} <- elaborate_args(args, names, ctx, env),
-         {:ok, head} <- head_class(desc, method, present) do
-      case head do
-        {:concrete, hc} -> concrete(env, desc, method, hc, present, ctx)
-        {:rigid, lvl} -> abstract(env, desc, method, present, lvl, names, ctx)
-        {:unknown, tval} -> {:error, {:no_instance, desc.name, tval}}
+    # Only the head-positioned argument is elaborated here — enough to classify the
+    # instance. The remaining arguments (which may be lambdas needing checking mode)
+    # are elaborated by the application machinery once the callee is fixed.
+    with {:ok, _term, tval} <- Elaborator.elaborate_expr_typed(head_ast, names, ctx, env) do
+      case classify(tval) do
+        {:concrete, hc} -> concrete(env, desc, method, hc, args, names, ctx)
+        {:rigid, lvl} -> abstract(env, desc, method, args, lvl, names, ctx)
+        {:unknown, tval2} -> {:error, {:no_instance, desc.name, tval2}}
       end
     end
   end
@@ -78,28 +82,13 @@ defmodule Cure.Elab.Resolve do
     end
   end
 
-  # -- argument elaboration + head classification -----------------------------
+  # -- head classification ----------------------------------------------------
 
-  defp elaborate_args(args, names, ctx, env) do
-    Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
-      case Elaborator.elaborate_expr_typed(arg, names, ctx, env) do
-        {:ok, term, tval} -> {:cont, {:ok, acc ++ [{term, tval}]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  # The head-positioned argument is the one whose interface-signature type is the
-  # bare head variable (`x : a`). Classify its inferred type value.
-  defp head_class(desc, method, present) do
-    idx = head_param_index(desc, method)
-
-    case Enum.at(present, idx) do
-      {_term, tval} -> {:ok, classify(tval)}
-      nil -> {:error, {:no_head_argument, desc.name, method}}
-    end
-  end
-
+  # The head-positioned parameter is the one whose interface-signature type is the
+  # bare head variable (`x : a`); for a higher-kinded interface the head appears
+  # applied (`container : f(a)`), no bare occurrence exists, and the head argument
+  # defaults to the first — its inferred type (`List(Int)`) still names the
+  # instance's type constructor.
   defp head_param_index(desc, method) do
     info = Map.fetch!(desc.methods, method)
     hv = desc.head_var
@@ -117,16 +106,15 @@ defmodule Cure.Elab.Resolve do
   defp classify(other), do: {:unknown, other}
 
   # -- concrete (static) dispatch ---------------------------------------------
-
-  defp concrete(env, desc, method, head, present, ctx) do
+  # Inline the instance's mangled method global and elaborate the call through the
+  # ordinary implicit-aware application machinery (so a lambda argument like
+  # `fmap`'s `g` is checked against its domain, and any method-level implicits are
+  # solved).
+  defp concrete(env, desc, method, head, args, names, ctx) do
     case Coherence.lookup_anon(Env.coherence(env), desc.name, head) do
       {:ok, ref} ->
         mangled = Map.fetch!(ref.methods, method)
-        term = Enum.reduce(present, {:global, mangled}, fn {t, _}, acc -> {:app, acc, t} end)
-
-        with {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
-        end
+        Elaborator.elaborate_implicit_global_app(env, mangled, args, names, ctx)
 
       {:error, _} ->
         {:error, {:no_instance, desc.name, head}}
@@ -137,11 +125,12 @@ defmodule Cure.Elab.Resolve do
   # The head is a rigid type variable `a` at de Bruijn level `lvl`; the enclosing
   # `where Iface(a)` constraint put a dictionary binder of type `Iface(a)` in
   # scope. Find it by type (the only binder whose type is `Iface(<that rigid a>)`),
-  # project the method field off it, and apply to the arguments.
-  defp abstract(env, desc, method, present, lvl, names, ctx) do
+  # project the method field off it, and apply to the arguments (checking each so a
+  # lambda argument is honoured).
+  defp abstract(env, desc, method, args, lvl, names, ctx) do
     case find_dict_binder(ctx, names, desc.name, lvl) do
       {:ok, dict_name} ->
-        with {:ok, proj, _ptype} <-
+        with {:ok, proj, ptype} <-
                Elaborator.project_record_field(
                  {:variable, [], dict_name},
                  Atom.to_string(method),
@@ -149,11 +138,7 @@ defmodule Cure.Elab.Resolve do
                  ctx,
                  env
                ) do
-          term = Enum.reduce(present, proj, fn {t, _}, acc -> {:app, acc, t} end)
-
-          with {:ok, type} <- Kernel.infer(ctx, term) do
-            {:ok, term, type}
-          end
+          Elaborator.apply_checked_args(proj, ptype, args, names, ctx, env)
         end
 
       :error ->
