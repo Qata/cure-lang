@@ -139,23 +139,33 @@ the existing fragment is untouched.
 ### 3.3 The effect-signature table (TCB)
 
 A small trusted table (sibling of `core/builtins.ex`) declaring each op's
-name, Core signature, and BEAM lowering. v1 inventory:
+name, Core signature, and BEAM lowering. Its role, sharpened by the
+provenance rule (below), is narrow: **BIFs we implement natively**, plus the
+generic FFI bridge. Stock Erlang/OTP BIFs do **not** belong here — they are
+raw externs wrapped by the typed process algebra (see
+[`2026-07-09-typed-beam-process-algebra-design.md`](2026-07-09-typed-beam-process-algebra-design.md)).
+v1 inventory:
 
 | op            | Core signature                          | BEAM lowering                          |
 |---------------|------------------------------------------|----------------------------------------|
-| `send`        | `Pid -> Msg -> Effect(Unit)`             | `erlang:send/2` (the send-operator semantics) |
-| `self_pid`    | `Effect(Pid)`                             | `erlang:self/0`                        |
-| `sleep`       | `Int -> Effect(Unit)`                     | `timer:sleep/1` / AtomVM equivalent    |
-| `print`       | `String -> Effect(Unit)`                  | `io:put_chars/1`                       |
 | `extern_call` | per-declaration (see below)               | direct remote call                     |
+
+The named-op table is therefore **empty of process/messaging ops** — `send`,
+`self`, `sleep`, `print`, timers, and the whole OTP surface resolve to stock
+BIFs, so they live in the sealed raw base `Std.Otp.Raw` and are wrapped by the
+typed algebra `Std.Otp`, not enshrined here. The table gains an entry only when
+Cure implements an actual custom effectful primitive (a native NIF with no
+honest stock MFA); the process algebra needs none.
 
 `extern_call` is the FFI bridge: `@extern` gains an effect-typed form whose
 declared return is `Effect(T)`; it lowers to the same direct remote call as
 today. This *closes the existing FFI purity lie for new code* — today every
 `@extern` wears a pure type regardless of behaviour. Migration of existing
-externs is ledgered (§10). Raw `receive`/`spawn` remain rejected (E043);
-process lifecycle stays behind the fsm/actor runtime shims, which appear in
-this table as ops only as the macro work needs them.
+externs is ledgered (§10). Raw `receive`/`spawn` remain rejected (E043); the
+mailbox is owned by the OTP behaviour a container lowers onto (`gen_server`/
+`gen_statem`), so callback bodies never `receive`. Process-lifecycle ops
+(`spawn_link`, `monitor`, `exit`, …) are raw-base externs reachable only via
+the typed algebra / macro output, never the surface.
 
 ## 4. Kernel delta summary (TCB)
 
