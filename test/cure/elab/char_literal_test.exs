@@ -28,14 +28,34 @@ defmodule Cure.Elab.CharLiteralTest do
       assert {:bounded_lit, 97} = body_of(env, :a)
     end
 
-    test "a full-plane emoji codepoint stays ONE compact node (AST-constructed)" do
-      # Until Task 2 (lexer UTF-8), '😀' cannot be lexed from source; drive the
-      # 128512 codepoint node straight through the infer-mode elaborator.
-      {:ok, env} = Program.elaborate("mod M\n  use Std.Bounded\nend\n")
-      sig = env
-      ctx = Context.empty(sig)
-      assert {:ok, {:bounded_lit, 128_512}, _ty} =
-               Elaborator.elaborate_expr_typed(char_node(128_512), [], ctx, sig)
+    test "a full-plane emoji codepoint stays ONE compact node" do
+      src = """
+      mod M
+        use Std.Bounded
+        typealias Char = Bounded(1114112)
+        fn emoji() -> Char = '😀'
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert {:bounded_lit, 128_512} = body_of(env, :emoji)
+    end
+
+    test "end-to-end: a char literal compiles and runs as its codepoint integer" do
+      src = """
+      mod CharRun
+        use Std.Bounded
+        typealias Char = Bounded(1114112)
+        fn emoji() -> Char = '😀'
+      end
+      """
+
+      {:ok, env} = Program.elaborate(src)
+
+      {:ok, mod} =
+        Cure.Elab.Emit.compile_and_load(env, module: :"Cure.CharRun", functions: [:emoji])
+
+      assert apply(mod, :emoji, []) == 128_512
     end
 
     test "a char literal passed as a plain call argument elaborates (locus 3)" do

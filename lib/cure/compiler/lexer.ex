@@ -899,37 +899,80 @@ defmodule Cure.Compiler.Lexer do
             ?\\ -> {?\\, advance(state, 1)}
             ?' -> {?', advance(state, 1)}
             ?0 -> {0, advance(state, 1)}
-            c -> {c, advance(state, 1)}
+            _ ->
+              case decode_char_at(state) do
+                {cp, state2} -> {cp, state2}
+                :invalid -> {:invalid, state}
+              end
           end
 
-        # Expect closing '
-        case peek(state) do
-          ?' ->
-            state = advance(state, 1)
-            token = Token.new(:char, value, state.line, start_col)
-            maybe_emit_event(state, token)
-            {:ok, %{state | tokens: [token | state.tokens]}}
+        if value == :invalid do
+          {:error, {:unterminated_char, state.line, start_col}, state}
+        else
+          # Expect closing '
+          case peek(state) do
+            ?' ->
+              state = advance(state, 1)
+              token = Token.new(:char, value, state.line, start_col)
+              maybe_emit_event(state, token)
+              {:ok, %{state | tokens: [token | state.tokens]}}
 
-          _ ->
-            {:error, {:unterminated_char, state.line, start_col}, state}
+            _ ->
+              {:error, {:unterminated_char, state.line, start_col}, state}
+          end
         end
 
       nil ->
         {:error, {:unterminated_char, state.line, start_col}, state}
 
-      c ->
-        state = advance(state, 1)
+      _ ->
+        case decode_char_at(state) do
+          {cp, state} ->
+            # Expect closing '
+            case peek(state) do
+              ?' ->
+                state = advance(state, 1)
+                token = Token.new(:char, cp, state.line, start_col)
+                maybe_emit_event(state, token)
+                {:ok, %{state | tokens: [token | state.tokens]}}
 
-        # Expect closing '
-        case peek(state) do
-          ?' ->
-            state = advance(state, 1)
-            token = Token.new(:char, c, state.line, start_col)
-            maybe_emit_event(state, token)
-            {:ok, %{state | tokens: [token | state.tokens]}}
+              _ ->
+                {:error, {:unterminated_char, state.line, start_col}, state}
+            end
 
-          _ ->
+          :invalid ->
             {:error, {:unterminated_char, state.line, start_col}, state}
+        end
+    end
+  end
+
+  # Read one character at the current position as a full Unicode codepoint,
+  # advancing past all its UTF-8 bytes. ASCII (byte < 0x80) keeps the fast
+  # single-byte path. A multi-byte sequence is decoded via String.next_codepoint/1
+  # on the remaining source; a truncated/invalid tail yields :invalid so the caller
+  # can surface the existing unterminated-char error rather than crash.
+  #
+  # The `pos >= byte_size(source)` clause is required, not defensive boilerplate:
+  # the escape-fallback call site reaches this function even when there is no byte
+  # left to read (a backslash at end-of-source) — `peek/1` returns nil there today
+  # and that nil falls through harmlessly to its catch-all. Without this guard,
+  # `:binary.at(source, pos)` raises `ArgumentError` on an out-of-range position,
+  # and `do_tokenize/1`'s `catch` clause does not rescue raised errors (only
+  # `throw`), so the lexer would crash instead of returning `{:unterminated_char,
+  # _, _}`. Mirrors the existing two-clause guard idiom used by `peek/1` below.
+  defp decode_char_at(%{source: source, pos: pos}) when pos >= byte_size(source), do: :invalid
+
+  defp decode_char_at(%{source: source, pos: pos} = state) do
+    case :binary.at(source, pos) do
+      byte when byte < 0x80 ->
+        {byte, advance(state, 1)}
+
+      _ ->
+        rest = binary_part(source, pos, byte_size(source) - pos)
+
+        case String.next_codepoint(rest) do
+          {<<cp::utf8>>, _tail} -> {cp, advance(state, byte_size(<<cp::utf8>>))}
+          _ -> :invalid
         end
     end
   end
