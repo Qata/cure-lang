@@ -102,6 +102,12 @@ defmodule Antigen.Challenge do
     :Bool, :True, :False, :MkT,
     # parametric positivity generator: subject family + ctor/binder name pools
     :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2,
+    # S8: inert app-head used in app/lam-headed ctor field types
+    :Fp,
+    # family-level universe ceiling probe (Kernel.check_family range-check)
+    :Over, :MkOver,
+    # totality: pending-sibling marker in a def-group payload (premature-cert guard)
+    :pending,
     # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
     :Sq, :mksq, :j,
     # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors

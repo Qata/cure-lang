@@ -1879,7 +1879,7 @@ defmodule Cure.Elab.Elaborator do
     |> Inductive.ctors_of(dname)
     |> Enum.map(& &1.name)
     |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
-      verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals)
+      verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals, param_vals)
 
       case Map.get(arm_map, cname) do
         {:matched, with_pattern, body_expr} ->
@@ -2351,7 +2351,7 @@ defmodule Cure.Elab.Elaborator do
       |> Inductive.ctors_of(dname)
       |> Enum.map(& &1.name)
       |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
-        verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals)
+        verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals, param_vals)
 
         case Map.get(arm_map, cname) do
           {:matched, pattern, body_expr} ->

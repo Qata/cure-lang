@@ -20,6 +20,10 @@ defmodule Cure.Core.Kernel do
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
+  # The fixed predicative ceiling (`Universe.ceiling()`), mirrored into a compile
+  # constant so it is usable in guards. Single source of truth stays `Universe`.
+  @universe_ceiling Universe.ceiling()
+
   @doc """
   Normalize `term` in `ctx` via the shared trusted Core normalizer
   (`Cure.Core.Normalise`).
@@ -201,7 +205,7 @@ defmodule Cure.Core.Kernel do
         motive_value = Eval.eval(motive, Context.env(ctx))
 
         with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
-             :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx),
+             :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx, scrut_params),
              :ok <-
                check_case_branches(
                  ctx,
@@ -462,14 +466,24 @@ defmodule Cure.Core.Kernel do
   index telescope (in the context of the parameters), each entry a valid type.
   """
   @spec check_family(Cure.Core.Env.t(), Inductive.family()) :: :ok | {:error, term()}
-  def check_family(env, %{params: params, indices: indices}) do
+  def check_family(env, %{params: params, indices: indices} = family) do
     base = Context.empty(env)
 
-    with {:ok, ctx_params} <- check_telescope(base, params),
+    with :ok <- check_family_level(Map.get(family, :level, 0)),
+         {:ok, ctx_params} <- check_telescope(base, params),
          {:ok, _ctx} <- check_telescope(ctx_params, indices) do
       :ok
     end
   end
+
+  # The family's declared universe must lie within the fixed predicative ceiling
+  # (`Type0 : Type1 : Type2`); a family at `Type k > ceiling` contradicts the
+  # hierarchy the rest of the kernel enforces (`Universe.succ`, `subtype?`).
+  defp check_family_level(level)
+       when is_integer(level) and level >= 0 and level <= @universe_ceiling,
+       do: :ok
+
+  defp check_family_level(_level), do: {:error, :universe_ceiling}
 
   @doc """
   Check a constructor well-formed against its family (§4.4): argument telescope
@@ -799,7 +813,7 @@ defmodule Cure.Core.Kernel do
   # scrutinee be eliminated by an empty branch list (ex-falso, K4/§H), with no
   # `{:absurd}` term. Relies on `:impossible` being the certain non-unification
   # verdict (K5a-hardened): a merely `:undecided` omission is NOT accepted.
-  defp check_coverage(ctx, sig, dname, branches, scrut_indices) do
+  defp check_coverage(ctx, sig, dname, branches, scrut_indices, scrut_params) do
     covered = branches |> Enum.map(fn {c, _ar, _b} -> c end) |> MapSet.new()
 
     uncovered =
@@ -808,7 +822,8 @@ defmodule Cure.Core.Kernel do
       |> Enum.reject(fn c -> MapSet.member?(covered, c.name) end)
 
     if Enum.all?(uncovered, fn c ->
-         unify_indices(ctx, c.result_indices, scrut_indices, length(c.args)) == :impossible
+         unify_indices(ctx, c.result_indices, scrut_indices, length(c.args), scrut_params) ==
+           :impossible
        end),
        do: :ok,
        else: {:error, :coverage}
@@ -836,7 +851,7 @@ defmodule Cure.Core.Kernel do
             true ->
               %{args: tele, result_indices: result_indices} = ctor
 
-              case unify_indices(ctx, result_indices, scrut_indices, arity) do
+              case unify_indices(ctx, result_indices, scrut_indices, arity, scrut_params) do
                 :impossible ->
                   {:cont, :ok}                         # unreachable branch: body NOT checked
 
@@ -894,12 +909,25 @@ defmodule Cure.Core.Kernel do
   """
   @spec branch_unify(Context.t(), atom(), atom(), [Cure.Core.Value.t()]) ::
           {:solved, map()} | :trivial | :impossible
-  def branch_unify(ctx, dname, cname, scrut_indices) do
+  def branch_unify(ctx, dname, cname, scrut_indices),
+    do: branch_unify(ctx, dname, cname, scrut_indices, [])
+
+  @doc """
+  Like `branch_unify/4`, but takes the scrutinee's actual family parameter VALUES
+  so a constructor whose result indices reference a family parameter (a GADT such
+  as `MkFoo : Foo a [a]`) unifies against the real params instead of a bare param
+  var that collides with a shifted scrutinee index. `branch_unify/4` is the
+  paramless specialisation (`scrut_params = []`); every caller over an indexed
+  family with parameters MUST use this arity.
+  """
+  @spec branch_unify(Context.t(), atom(), atom(), [Cure.Core.Value.t()], [Cure.Core.Value.t()]) ::
+          {:solved, map()} | :trivial | :impossible
+  def branch_unify(ctx, dname, cname, scrut_indices, scrut_params) do
     sig = Context.signature(ctx)
 
     with %{args: tele, result_indices: result_indices} <- Inductive.get_ctor(sig, cname),
          ^dname <- Inductive.ctor_family(sig, cname) do
-      unify_indices(ctx, result_indices, scrut_indices, length(tele))
+      unify_indices(ctx, result_indices, scrut_indices, length(tele), scrut_params)
     else
       _ -> :impossible
     end
@@ -911,7 +939,7 @@ defmodule Cure.Core.Kernel do
   # de Bruijn space (spec §4.3/§4.4). Verdict: {:solved, subst} | :trivial | :impossible.
   # :impossible fires on a definite rigid index-head clash or a same-key merge
   # conflict; uncertainty is always :undecided (never :impossible).
-  defp unify_indices(ctx, result_indices, scrut_indices, arity) do
+  defp unify_indices(ctx, result_indices, scrut_indices, arity, scrut_params) do
     # Index-vector arity is fixed by the family, so a length mismatch is a
     # definite non-unification — NOT something to silently truncate. `Enum.zip`
     # drops the tail of the longer list, which would ignore a surplus/missing
@@ -921,7 +949,28 @@ defmodule Cure.Core.Kernel do
     else
       outer_depth = Context.length(ctx)
 
+      # Instantiate the ctor's PARAMETER slots with the scrutinee's actual params
+      # before unifying. Result indices are written in the ctor frame
+      # `args(inner) ++ params(outer)`, so the p-th declared param is de Bruijn
+      # `arity + pc - 1 - p` (`check_uniform_params`). Left as bare vars, a param
+      # buried in a result-index spine (`MkFoo : Foo a [a]`) lands in `[arity, …)`
+      # — the SAME range a scrutinee index var shifts into — and the occurs/Cycle
+      # rule mistakes the two distinct variables for a cyclic self-occurrence,
+      # spuriously verdicting `:impossible`. That let an empty `case` on an
+      # inhabited indexed family pass coverage (ex-falso). Substituting the real
+      # params removes every bare param var, restoring the "r-side unknowns <
+      # arity, everything else outer" disjointness the unifier relies on.
+      pc = length(scrut_params)
+
+      pmap =
+        scrut_params
+        |> Enum.with_index()
+        |> Map.new(fn {pval, p} ->
+          {arity + pc - 1 - p, pval |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
+        end)
+
       result_indices
+      |> Enum.map(&subst_params(&1, pmap, 0))
       |> Enum.zip(scrut_indices)
       |> Enum.map(fn {r, s_val} ->
         {r, s_val |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
@@ -929,6 +978,44 @@ defmodule Cure.Core.Kernel do
       |> reduce_index_pairs(%{}, arity)
     end
   end
+
+  # Simultaneous, capture-avoiding substitution of the constructor's parameter
+  # de Bruijn slots (keys in `pmap`, in the un-shifted result-index frame) with
+  # the scrutinee's actual param terms. Unlike `replace_branch_vars`, which CHASES
+  # var→var chains (a union-find substitution), replacements here are taken
+  # verbatim — a param may be a bare outer var that must NOT be re-resolved as if
+  # it were another param slot. Under a binder introducing `d` vars, both the keys
+  # (via `k - depth`) and the replacements (shifted by `depth`) move accordingly.
+  defp subst_params({:var, k}, pmap, depth) do
+    case Map.get(pmap, k - depth) do
+      nil -> {:var, k}
+      repl -> Term.shift(repl, depth, 0)
+    end
+  end
+
+  defp subst_params({:pi, d, c}, pmap, depth),
+    do: {:pi, subst_params(d, pmap, depth), subst_params(c, pmap, depth + 1)}
+
+  defp subst_params({:lam, d, b}, pmap, depth),
+    do: {:lam, subst_params(d, pmap, depth), subst_params(b, pmap, depth + 1)}
+
+  defp subst_params({:app, f, a}, pmap, depth),
+    do: {:app, subst_params(f, pmap, depth), subst_params(a, pmap, depth)}
+
+  defp subst_params({:data, n, ps, is}, pmap, depth),
+    do:
+      {:data, n, Enum.map(ps, &subst_params(&1, pmap, depth)),
+       Enum.map(is, &subst_params(&1, pmap, depth))}
+
+  defp subst_params({:ctor, n, as}, pmap, depth),
+    do: {:ctor, n, Enum.map(as, &subst_params(&1, pmap, depth))}
+
+  defp subst_params({:case, s, m, brs}, pmap, depth),
+    do:
+      {:case, subst_params(s, pmap, depth), subst_params(m, pmap, depth),
+       Enum.map(brs, fn {c, ar, b} -> {c, ar, subst_params(b, pmap, depth + ar)} end)}
+
+  defp subst_params(other, _pmap, _depth), do: other
 
   defp reduce_index_pairs([], subst, _arity),
     do: (if map_size(subst) == 0, do: :trivial, else: {:solved, subst})

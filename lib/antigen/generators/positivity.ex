@@ -41,7 +41,17 @@ defmodule Antigen.Generators.Positivity do
       {3, occurs_family()},
       # NEGATIVE: subject in a data type's INDEX position → strictly_positive?'s
       # occurs-in-params/indices branch (318 → 319) fires → not strictly positive.
-      {2, Gen.return(occurs_in_index_family())}
+      {2, Gen.return(occurs_in_index_family())},
+      # NEGATIVE: subject buried under an APP- or LAM-headed ctor field type. These
+      # heads match none of strictly_positive?'s structural clauses (pi/data), so
+      # they fall to the catch-all — which must reject any occurrence of the subject.
+      # A former fail-open catch-all (`-> true`) admitted these unsoundly (finding
+      # S8); the app/lam field shapes are the only inputs that reach it.
+      {2, Gen.return(app_head_negative())},
+      {2, Gen.return(lam_head_negative())},
+      # POSITIVE control: an app-headed field with NO subject occurrence must still
+      # be admitted (the catch-all rejects only on occurrence, not on head shape).
+      {1, Gen.return(app_head_positive())}
     ])
   end
 
@@ -254,6 +264,57 @@ defmodule Antigen.Generators.Positivity do
       label: :negative,
       payload: %{family: fam, ctors: ctors},
       note: "negative occurrence: Bad left of an arrow"
+    )
+  end
+
+  # -- S8: app/lam-headed field types (strictly_positive?'s catch-all) ---------
+
+  # `F` — an inert type-level function head so a ctor field can be app-headed
+  # (`F Pgen`). Its identity is irrelevant to positivity; only whether the subject
+  # `:Pgen` occurs matters. In @known_atoms for :safe replay via the pool below.
+  @app_head {:global, :Fp}
+
+  @doc """
+  NEGATIVE: `MkBad : (Fp Pgen) -> Pgen` — the field type is an application whose
+  argument is the subject. `{:app, …}` matches no structural `strictly_positive?`
+  clause, so it reaches the catch-all, which rejects because `Pgen` occurs. The
+  pre-S8 fail-open catch-all (`-> true`) wrongly admitted it. Label `:negative`.
+  """
+  @spec app_head_negative() :: Challenge.t()
+  def app_head_negative do
+    parametric_challenge(
+      [[{:app, @app_head, @pgen}]],
+      :negative,
+      "S8 app-headed field: subject under {:app, …} (strictly_positive? catch-all)"
+    )
+  end
+
+  @doc """
+  NEGATIVE: `MkBad : (λ(_:Nat). Pgen) -> Pgen` — a lam-headed field type burying
+  the subject in the lambda body. `{:lam, …}` also reaches the catch-all; rejected
+  because `Pgen` occurs. Twin of `app_head_negative` for the other unstructured
+  head. Label `:negative`.
+  """
+  @spec lam_head_negative() :: Challenge.t()
+  def lam_head_negative do
+    parametric_challenge(
+      [[{:lam, @nat, @pgen}]],
+      :negative,
+      "S8 lam-headed field: subject under {:lam, …} (strictly_positive? catch-all)"
+    )
+  end
+
+  @doc """
+  POSITIVE control: `MkOk : (Fp Nat) -> Pgen` — app-headed, but the subject never
+  occurs, so the catch-all admits it. Guards against over-correcting S8 into a
+  blanket rejection of every app/lam-headed field. Label `:positive`.
+  """
+  @spec app_head_positive() :: Challenge.t()
+  def app_head_positive do
+    parametric_challenge(
+      [[{:app, @app_head, @nat}]],
+      :positive,
+      "S8 app-headed field, subject-free — must still be admitted"
     )
   end
 

@@ -33,21 +33,43 @@ defmodule Antigen.Generators.BranchUnify do
     {4, :Cyc4, :mkcyc, [{:var, 0}, {:var, 1}, {:var, 2}, {:var, 3}], :solved, "Cyc4 distinct — 4-index spine solve"}
   ]
 
+  # Parameterised-GADT cases (finding S9): `{ctx_vars, dname, cname, indices,
+  # params, verdict, note}`. `Foo (a:Nat) : Nat -> Type0` with `MkFoo : Foo a (S a)`
+  # buries the family parameter in a result-index spine. With ctx_vars=2 the frame
+  # is [level0 = param a, level1 = free index i]; de Bruijn 1 → level 0 (param), 0 →
+  # level 1 (index). Matching `MkFoo` against a free index is SOLVABLE (i := S a),
+  # NOT impossible — the pre-fix unifier collided the param var with a shifted
+  # scrutinee var and verdicted `:impossible`. These carry scrutinee `params`, so the
+  # assay drives `branch_unify/5`.
+  @param_cases [
+    {2, :Foo, :MkFoo, [{:var, 0}], [{:var, 1}], :solved,
+     "Foo MkFoo over a free index — param in result-index spine is SOLVABLE (S9)"},
+    {2, :Foo, :MkFoo, [{:ctor, :Z, []}], [{:var, 1}], :impossible,
+     "Foo MkFoo vs rigid Z index — genuine S/Z clash (S9 control)"}
+  ]
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
-    Gen.bind(Gen.member_of(@cases), fn {n, d, c, idx, verdict, note} ->
+    tagged =
+      Enum.map(@cases, fn {n, d, c, idx, verdict, note} -> {n, d, c, idx, [], verdict, note} end) ++
+        @param_cases
+
+    Gen.bind(Gen.member_of(tagged), fn {n, d, c, idx, params, verdict, note} ->
       Gen.return(
         Challenge.new(
           kind: :branch_unify,
           assay: "branchunify/verdict",
           label: verdict,
-          payload: %{ctx_vars: n, dname: d, cname: c, indices: idx},
+          payload: %{ctx_vars: n, dname: d, cname: c, indices: idx, params: params},
           note: note
         )
       )
     end)
   end
 
-  @doc "The literal case menu (for the generator's coverage self-test)."
+  @doc "The literal paramless case menu (for the generator's coverage self-test)."
   def cases, do: @cases
+
+  @doc "The parameterised-GADT case menu (finding S9 coverage self-test)."
+  def param_cases, do: @param_cases
 end

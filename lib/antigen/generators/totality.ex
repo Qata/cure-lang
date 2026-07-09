@@ -33,7 +33,10 @@ defmodule Antigen.Generators.Totality do
       {1, Gen.return(terminating_mutual_pair())},
       {1, Gen.return(swap_terminating())},
       {1, Gen.return(nullary_self_loop())},
-      {1, Gen.return(nullary_mutual_loop())}
+      {1, Gen.return(nullary_mutual_loop())},
+      # premature-certification guard: an earlier mutual member must not be certified
+      # while a sibling body is still a pending placeholder.
+      {1, Gen.return(diverging_pending_sibling())}
     ])
   end
 
@@ -60,6 +63,39 @@ defmodule Antigen.Generators.Totality do
         focus: [:f, :g]
       },
       note: "mutual cycle f->g->f (hole fixed d13d718; permanent regression guard)"
+    )
+  end
+
+  @doc """
+  A diverging mutual pair whose sibling body is still an elaborator PENDING
+  placeholder — the mid-body_pass state. `f = λx. g x`, `g = λx. f x` over
+  `Dec → Dec`, but `g`'s body is left as `{:hole, "__pending__"}` (via `pending:
+  [:g]`, honoured by `env_of`). At that moment `Certificate.mutual_group` reads
+  `g`'s (hole) body, sees no onward callees, and collapses `f`'s SCC to a singleton
+  — so a naive certifier certifies `f` as non-recursive though the `f↔g` cycle
+  genuinely diverges (finding: premature totality certification). The certifier must
+  DEFER (certify neither) while any callee is pending. `focus` is `[:f]` only (`g` is
+  a placeholder, not a real def to judge). Label `:diverging`.
+
+  The `diverging_mutual_pair` twin covers the FULL-env state (both bodies present);
+  this covers the pending-sibling state, the only one that exposes the deferral path.
+  """
+  @spec diverging_pending_sibling() :: Challenge.t()
+  def diverging_pending_sibling do
+    ty = {:pi, @dec, @dec}
+    bf = {:lam, @dec, {:app, {:global, :g}, {:var, 0}}}
+    bg = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+
+    Challenge.new(
+      kind: :def_group,
+      assay: "totality/diverging",
+      label: :diverging,
+      payload: %{
+        defs: [%{name: :f, type: ty, body: bf}, %{name: :g, type: ty, body: bg}],
+        pending: [:g],
+        focus: [:f]
+      },
+      note: "diverging pair with sibling g still a pending placeholder (premature-cert guard)"
     )
   end
 
@@ -699,11 +735,19 @@ defmodule Antigen.Generators.Totality do
   Seeded with the builtin-op globals first (K2, spec 2026-07-09): the catalog's
   retargeted `int_eq` spine (diverging_bool_elim_branch) must not die
   `:unknown_global` when a consumer resolves the group's globals.
+
+  A def named in `payload.pending` is registered with the elaborator's
+  `{:hole, "__pending__"}` placeholder body instead of its real body — reproducing
+  the mid-body_pass state in which a sibling has a signature but no elaborated term
+  (see `diverging_pending_sibling/0`).
   """
   @spec env_of(Challenge.t()) :: Env.t()
-  def env_of(%Challenge{payload: %{defs: defs}}) do
+  def env_of(%Challenge{payload: %{defs: defs} = payload}) do
+    pending = Map.get(payload, :pending, [])
+
     Enum.reduce(defs, Cure.Core.Builtins.seed_ops(Env.empty()), fn d, env ->
-      Env.add_def(env, d.name, d.type, d.body)
+      body = if d.name in pending, do: {:hole, "__pending__"}, else: d.body
+      Env.add_def(env, d.name, d.type, body)
     end)
   end
 end

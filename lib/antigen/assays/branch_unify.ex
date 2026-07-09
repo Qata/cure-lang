@@ -2,8 +2,8 @@ defmodule Antigen.Assays.BranchUnify do
   @moduledoc """
   `branchunify/verdict` — the known-label oracle for the kernel's index-refinement
   unifier. Builds a v1-menu context with `ctx_vars` outer `Nat` variables, evaluates
-  the scrutinee index terms to values, and asks `Cure.Core.Kernel.branch_unify/4`
-  to refine; the returned verdict category (`:trivial` | `:solved` | `:impossible`)
+  the scrutinee index terms (and family parameter terms) to values, and asks
+  `Cure.Core.Kernel.branch_unify/5` to refine; the returned verdict category (`:trivial` | `:solved` | `:impossible`)
   must match the correct-by-construction label. A disagreement is an
   index-unification soundness/completeness infection.
   """
@@ -18,11 +18,24 @@ defmodule Antigen.Assays.BranchUnify do
   # (`i := j`, later `j := i`) when matched against a crossing scrutinee
   # `Cyc4 i j j i` — the spec §4.1 resolve-before-bind obligation. Not in the shared
   # v1 menu (no other generator needs it), so it is declared here.
+  #
+  # Also extended with the PARAMETERISED GADT `Foo (a : Nat) : Nat -> Type0` whose
+  # constructor `MkFoo : Foo a (S a)` buries the family parameter `a` inside a
+  # result-index constructor spine. Matching `MkFoo` against a scrutinee with a free
+  # index MUST be `:solved` (i := S a) — but the parameter var, living at de Bruijn
+  # `>= arity`, collides with a shifted scrutinee index var, so the pre-fix unifier
+  # mistook it for a cyclic self-occurrence and verdicted `:impossible` (finding S9).
+  # `branch_unify/5` with the scrutinee's actual param VALUES is required to exercise
+  # this; the paramless `branch_unify/4` never reaches it.
   defp env do
     Generators.SigMenu.env_of(:v1)
     |> Inductive.declare(
       Inductive.family(:Cyc4, [], [{:i, @nat}, {:j, @nat}, {:k, @nat}, {:l, @nat}], 0),
       [Inductive.ctor(:mkcyc, [{:a, @nat}, {:b, @nat}], [{:var, 1}, {:var, 1}, {:var, 0}, {:var, 0}])]
+    )
+    |> Inductive.declare(
+      Inductive.family(:Foo, [{:a, @nat}], [{:i, @nat}], 0),
+      [Inductive.ctor(:MkFoo, [], [{:ctor, :S, [{:var, 0}]}])]
     )
   end
 
@@ -36,9 +49,10 @@ defmodule Antigen.Assays.BranchUnify do
       end)
 
     index_vals = Enum.map(p.indices, &Eval.eval(&1, Context.env(ctx)))
+    param_vals = Enum.map(Map.get(p, :params, []), &Eval.eval(&1, Context.env(ctx)))
 
     category =
-      case Kernel.branch_unify(ctx, p.dname, p.cname, index_vals) do
+      case Kernel.branch_unify(ctx, p.dname, p.cname, index_vals, param_vals) do
         {:solved, _} -> :solved
         other -> other
       end

@@ -11,7 +11,7 @@ defmodule Antigen.Generators.Universes do
   `:well_typed`/`:ill_typed`, correct by construction (argument in each @doc).
   """
   alias Antigen.Challenge
-  alias Cure.Core.{Env, Inductive}
+  alias Cure.Core.{Env, Inductive, Universe}
 
   @nat {:data, :Nat, [], []}
 
@@ -99,6 +99,29 @@ defmodule Antigen.Generators.Universes do
       label: label,
       payload: %{family: fam, ctors: ctors},
       note: "indexed ctor result-index check: IdxI (n:Int), #{label}"
+    )
+  end
+
+  @doc """
+  Family universe ceiling (`Kernel.check_family` → `:universe_ceiling`): a family
+  declared AT a level above the fixed predicative ceiling (`Type0 : Type1 : Type2`)
+  contradicts the hierarchy the rest of the kernel enforces and must be rejected.
+  `check_family` originally validated only the param/index telescopes and never
+  range-checked the declared `level`, so an over-ceiling family was admitted — the
+  family-level twin of the def-shaped `ceiling/1` probe (which pins `check_def`).
+  `Over` is declared at `Universe.ceiling() + 1`. Label `:ill_typed`.
+  """
+  @spec family_ceiling(:ill_typed) :: Challenge.t()
+  def family_ceiling(:ill_typed) do
+    fam = Inductive.family(:Over, [], [], Universe.ceiling() + 1)
+    ctors = [Inductive.ctor(:MkOver, [], [])]
+
+    Challenge.new(
+      kind: :family,
+      assay: "universes",
+      label: :ill_typed,
+      payload: %{family: fam, ctors: ctors},
+      note: "family declared at Type #{Universe.ceiling() + 1} (above the ceiling) must reject"
     )
   end
 

@@ -23,7 +23,10 @@ defmodule Antigen.UniversesSeedTest do
     Universes.type_in_type(:ill_typed),
     Universes.ceiling(:ill_typed),
     Universes.ctor_field(:ill_typed),
-    Universes.indexed_ctor(:ill_typed)
+    Universes.indexed_ctor(:ill_typed),
+    # family-level ceiling: check_family must range-check the declared level, not
+    # only the telescopes. Regresses to {:wrongly_accepted, :Over} if it doesn't.
+    Universes.family_ceiling(:ill_typed)
   ]
 
   @seed_candidates [
@@ -50,7 +53,7 @@ defmodule Antigen.UniversesSeedTest do
     # 4 antibodies + 3 seeds: stratification(:well_typed) and ctor_field(:well_typed)
     # share one coverage cell (see moduledoc), so the seed store holds one of them;
     # indexed_ctor(:well_typed) banks a distinct cell (Int-indexed result index).
-    assert length(uni) >= 6
+    assert length(uni) >= 7
 
     assert Enum.all?(uni, &(&1.verdict == :ok)),
            inspect(uni |> Enum.reject(&(&1.verdict == :ok)) |> Enum.map(& &1.verdict))

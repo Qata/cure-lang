@@ -89,6 +89,20 @@ defmodule Cure.Core.Certificate do
   """
   @spec terminating?(atom(), Cure.Core.Term.t(), Env.t()) :: boolean()
   def terminating?(name, body, env) do
+    if pending_callee?(name, body, env) do
+      # A callee still carries the elaborator's `{:hole, "__pending__"}` placeholder
+      # (its body has not been elaborated yet). Its onward calls are invisible, so
+      # the SCC is under-computed and a mutual member would be mis-certified as a
+      # non-recursive singleton. Certification must be *deferred*: stay uncertified
+      # (opaque to δ, always sound §7) until `TotalityClosure` re-certifies with
+      # every body present.
+      false
+    else
+      terminating_ready?(name, body, env)
+    end
+  end
+
+  defp terminating_ready?(name, body, env) do
     group = mutual_group(name, body, env)
 
     if MapSet.size(group) <= 1 do
@@ -376,6 +390,20 @@ defmodule Cure.Core.Certificate do
     if MapSet.member?(acc, g),
       do: forward_reach(env, rest, acc),
       else: forward_reach(env, callees_env(env, g) ++ rest, MapSet.put(acc, g))
+  end
+
+  # True when any global forward-reachable from `body` (excluding `name`, whose real
+  # body is the authoritative one passed in) still carries an elaborator pending-hole
+  # placeholder — meaning the call graph is incomplete and the SCC cannot be trusted.
+  defp pending_callee?(name, body, env) do
+    callees_of_body(body)
+    |> then(&forward_reach(env, &1, MapSet.new([name])))
+    |> MapSet.delete(name)
+    |> Enum.any?(&pending_body?(env, &1))
+  end
+
+  defp pending_body?(env, g) do
+    match?(%{body: {:hole, _}}, Env.get_def(env, g))
   end
 
   defp callees_of_body(body), do: body |> called_globals() |> MapSet.to_list()
