@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Spec:** `docs/superpowers/specs/2026-07-09-wave1-pickup-design.md` (hardened, commit c10ed85). Read it before starting; this plan implements it exactly.
-- **Diff scope:** ONLY `lib/cure/elab/elaborator.ex` + the new test file `test/cure/elab/pickup_test.exs`. `lib/cure/core/` MUST stay EMPTY of changes. No emit change. No parser change. No kernel change.
+- **Diff scope:** ONLY `lib/cure/elab/elaborator.ex` + the new test file `test/cure/elab/pickup_test.exs`. `lib/cure/core/` MUST stay EMPTY of changes. No emit change. No parser change. No kernel change. (`lib/cure/elab/declarations.ex` is deliberately NOT touched — see the Anchors note below on `elaborate_body`/`elaborate_branch_body`; nothing in this plan's test corpus needs it, and there is no red test that would distinguish its presence from its absence, so adding it would violate the red-test discipline.)
 - **Two-pipeline steer:** the dependent machinery lives ONLY in `lib/cure/elab/*` + `lib/cure/core/*`. IGNORE `lib/cure/compiler/*` (`codegen.ex`, `pattern_compiler.ex`) and `lib/cure/types/*` — those are the non-dependent lowering/checker pipeline and their same-named `pickup`/`conditional` functions are decoys. `lib/cure/compiler/pickup` handling in `codegen.ex` is the ORACLE (read for behavior), never a place to edit.
 - **BUILD-LOCK ORDERING (critical):** this plan's execution runs on the SAME worktree as the in-flight #22 canonical-spelling kernel batch. Only ONE `mix` suite may run at a time (a past concurrent full-suite run caused a kernel panic). Do NOT run any `mix` command until the #22 executor has released the build lock (confirmed complete). Until then, only write code/tests. When the lock is free, run scoped tests first, and the full suite exactly ONCE at the gate.
 - **Ghost-writer commits:** `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, NO `Co-Authored-By`, NO Claude signature, NO trailers.
@@ -37,6 +37,14 @@
 - `elaborate_expr_checked(expr, expected_core, names, ctx, env)` fallback — line 1032.
 - Parser output (parser.ex:2084-2119, 2226-2239): `{:pickup, meta, clauses}`; guard clause `{:pickup_clause, meta, [guard, body]}`; terminator either `{:pickup_else, meta, [body]}` OR a trailing `{:pickup_clause, meta, [{:literal, _, true}, body]}` (the alternative-form terminator, `pickup_terminator?/2`). Terminator-last + single-terminator + non-empty are all enforced at PARSE time (`validate_pickup_clauses`).
 
+**Found during plan hardening (not in the original spec) — a third dispatch layer sits in front of both clauses above, and a BARE TOP-LEVEL `pickup` body never reaches the checked-mode clause; ledgered, not fixed here:**
+
+`Program.elaborate` (what every test in this plan calls) resolves a function body through `Cure.Elab.Declarations.elaborate_function_body/2` (`program.ex:762` → `declarations.ex:45`), which calls **`elaborate_body/6`** (`declarations.ex:264-387`) — a PRIVATE, per-node-type whitelist dispatcher, distinct from `elaborate_expr_typed`/`elaborate_expr_checked`. It has explicit clauses for `:pattern_match`, `:with_abs`, `:rewrite_expr`, `:function_call`, `:tuple`, `:hole`, `:block`, **`:conditional`** (`declarations.ex:372-374`, routes to `Elaborator.elaborate_expr_checked/5` against the declared return type — exactly mirroring what `if` gets), and `:lambda`. Anything NOT in that list — including a bare `:pickup` — falls to the generic tail clause (`declarations.ex:383-387`), which ALWAYS uses INFER mode, discarding the declared return type. A second, structurally identical whitelist dispatcher — the PRIVATE `elaborate_branch_body/5` in `elaborator.ex` (`3570-3620`; generic tail at `3618-3620`, also infer-only) — governs match-ARM bodies the same way.
+
+Consequence: a bare **top-level (or match-arm)** `pickup` body is elaborated in INFER mode only, even though the function declares an explicit return type and even though the *sibling* construct `if`/`:conditional` gets full checked-mode treatment in that exact position. In principle this means `pickup` is not fully "the conditional path, verbatim" in that one position: a pickup body relying on the return type to pin an implicit (the class of program the return-type-flow finding unlocked for constructors) would fail where the textually-equivalent `if`/`elif` chain succeeds. **This plan does NOT extend `elaborate_body`/`elaborate_branch_body`** — every test in `@nat`'s `Nat`/`Bool` universe has no such implicit to pin, so no test here can distinguish "extended" from "not extended," and adding either clause without a red test that needs it would itself violate the red-test discipline this review enforces. Ledgered explicitly in "Out of scope" below, with the concrete one-line fix recorded for whenever a real need (and a real failing test) arises.
+
+Instead, to give `elaborate_expr_checked({:pickup, …})` (the clause this plan DOES add) a genuine red test without touching `declarations.ex`: **nest the checked-position `pickup` as the else-branch of a top-level `if`.** `if`'s inline else-branch is `parse_expr(state, 0)` (parser.ex:1421-1429), so `else pickup …` parses as `{:conditional, meta, [cond, then_branch, {:pickup, …}]}`; `:conditional` IS already in `elaborate_body`'s whitelist (`declarations.ex:372-374`, unmodified, existing code), so the outer `if` reaches `elaborate_expr_checked({:conditional, …})` (elaborator.ex:1024-1028) directly, which checks BOTH branches via `elaborate_expr_checked` — so the nested `pickup` in the else position hits `elaborate_expr_checked({:pickup, …})` for real, with zero new code outside `elaborator.ex`. Test 4, below, uses exactly this shape.
+
 ---
 
 ## Task 1: `pickup` desugaring + infer/checked dispatch
@@ -48,6 +56,7 @@
 **Interfaces:**
 - Consumes: existing `elaborate_expr_typed/4`, `elaborate_expr_checked/5` (the `:conditional` clauses at 466 / 1024); parser node shapes above.
 - Produces: `pickup` support in both value positions. No public signature changes; the two dispatchers gain a clause, and `desugar_pickup/1 :: (clauses) -> {:ok, expr} | {:error, {:pickup_missing_else, term}}` is a private helper.
+- **NOT produced (ledgered gap, out of scope — see "Out of scope"):** a matching clause in `declarations.ex`'s `elaborate_body/6` or `elaborate_branch_body/5` (`elaborator.ex:3570-3620`). A bare top-level or match-arm-body `pickup` stays infer-only for the structural reason explained in Anchors above — ledgered, not silently missing, no test in this plan needs it (test 4 reaches the checked-mode clause via nesting under `if` instead, which needs no `declarations.ex` change).
 
 - [ ] **Step 1: Write the failing test file**
 
@@ -62,6 +71,16 @@ defmodule Cure.Elab.PickupTest do
   Bool; all branch bodies must join. Tests use Bool guards + Nat bodies only
   (the dependent pipeline's supported surface); the classic pickup oracle's
   Atom/atom-literal cases are out of reach for the dependent path today.
+
+  Tests 1, 2, 3, 5, 6 are bare top-level `pickup` bodies — these reach
+  `elaborate_expr_typed`'s `:pickup` clause (a bare top-level body is always
+  elaborated in infer mode by `declarations.ex`'s `elaborate_body/6`; see the
+  plan's Anchors section). Test 4 nests `pickup` as the else-branch of a
+  top-level `if` specifically to reach `elaborate_expr_checked`'s `:pickup`
+  clause: `:conditional` (unlike `:pickup`) IS in `elaborate_body`'s
+  whitelist, so the outer `if` is checked-mode, and its checked `:conditional`
+  clause (elaborator.ex:1024-1028) checks BOTH branches via
+  `elaborate_expr_checked` — landing the nested `pickup` there for real.
   """
   use ExUnit.Case, async: true
 
@@ -114,15 +133,26 @@ defmodule Cure.Elab.PickupTest do
     assert apply(mod, :only, []) == {:S, :Z}
   end
 
-  test "a pickup used against a known return type (checked position) elaborates" do
+  test "a pickup nested as an `if`'s else-branch elaborates in checked position" do
+    # `:conditional` (unlike a bare top-level `pickup`) IS in declarations.ex's
+    # elaborate_body whitelist, so this outer `if` reaches
+    # elaborate_expr_checked({:conditional, ...}) (elaborator.ex:1024-1028),
+    # which checks BOTH branches via elaborate_expr_checked — landing the
+    # nested `pickup` in elaborate_expr_checked's :pickup clause for real
+    # (unlike a bare top-level pickup body, which is always infer-mode; see
+    # the plan's Anchors section on elaborate_body/elaborate_branch_body).
     src =
       @nat <>
-        "  fn checked(b: Bool) -> Nat =\n" <>
-        "    pickup\n" <>
-        "      b -> Z()\n" <>
-        "      else -> S(Z())\nend\n"
+        "  fn checked(b1: Bool, b2: Bool) -> Nat = if b1 then Z() else pickup\n" <>
+        "    b2 -> S(Z())\n" <>
+        "    else -> S(S(Z()))\nend\n"
 
-    assert {:ok, _env} = Program.elaborate(src)
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.Pickup4", functions: [:checked])
+
+    assert apply(mod, :checked, [true, true]) == :Z
+    assert apply(mod, :checked, [false, true]) == {:S, :Z}
+    assert apply(mod, :checked, [false, false]) == {:S, {:S, :Z}}
   end
 
   test "a non-Bool guard is rejected" do
@@ -154,7 +184,7 @@ end
 - [ ] **Step 2: Run the test to verify it fails (RED)** — only if the build lock is free (see Global Constraints); otherwise write Step 3 first and run Steps 2+4 together once the lock frees.
 
 Run: `mix test test/cure/elab/pickup_test.exs`
-Expected: the selection / trailing-true / degenerate / checked tests FAIL because `{:pickup, ...}` hits the `elaborate_expr_checked` fallback → `{:error, {:unsupported_expression, {:pickup, ...}}}`, so `Program.elaborate` returns `{:error, ...}` and the `{:ok, env}` match raises. (The two reject tests may already "pass" for the WRONG reason — an `:unsupported_expression` error rather than the targeted Bool/join error — which is why Step 4 re-confirms them after the clause exists.)
+Expected: the selection / trailing-true / degenerate / checked tests (1-4) FAIL because `{:pickup, ...}` reaches `elaborate_expr_typed`'s or `elaborate_expr_checked`'s catch-all → `{:error, {:unsupported_expression, {:pickup, ...}}}`, so `Program.elaborate` returns `{:error, ...}` and the `{:ok, env}`/`{:ok, mod}` matches raise. (Test 4's `pickup` sits inside an `if`'s else-branch, which reaches `elaborate_expr_checked`'s fallback specifically — same failure shape.) The two reject tests, 5-6, may already "pass" for the WRONG reason — an `:unsupported_expression` error rather than the targeted Bool/join error — which is why Step 4 re-confirms them after the clauses exist.
 
 - [ ] **Step 3: Add the desugaring helper + both dispatcher clauses**
 
@@ -258,3 +288,4 @@ git -C <worktree> commit --author="Made In Heaven <madeinheaven@madeinheaven.com
 - Type-position (`elaborate_expr/3`) `:pickup` support — deliberately omitted; the desugared `:conditional` is already transitively unsupported there (spec §2).
 - W081/W082 pickup-specific WARNINGS (classic redundant-clause / unreachable-else lints). If the dependent path doesn't reproduce them, that is acceptable Wave-1 degradation, ledgered as a possible follow-up, NOT built here.
 - The guard-scope gap (PICKUP §5.4: a guard's bindings visible in its own body). Inert today — the dependent elaborator has no clause for a bare `{:assignment, ...}` standalone expression, so no reachable guard both type-checks as Bool and introduces a binding. Ledgered in the spec (§1); re-derive before relying on it if standalone-assignment-as-expression is ever added.
+- **A matching `:pickup` clause in `declarations.ex`'s `elaborate_body/6` and `elaborator.ex`'s private `elaborate_branch_body/5`** (found during plan hardening — see Anchors). Neither is a whitelisted node type in either dispatcher, so a BARE top-level `pickup` function body or a `pickup` used as a `match`-arm body is always elaborated in INFER mode, discarding the declared/expected type, unlike the sibling `:conditional` (`if`) which both dispatchers already special-case to checked mode. This means `pickup` is not fully "the conditional path, verbatim" in those two positions specifically: a pickup body relying on the return/expected type to pin an implicit would fail where the textually-equivalent `if`/`elif` chain (or, for the match-arm case, a `match`-arm body written as nested `if`s) succeeds. Not fixed here — no test in this plan's corpus needs return-type-driven implicit resolution (the `@nat` universe has none), and adding either clause without a red test that requires it would itself violate this plan's own red-test discipline; test 4 reaches `elaborate_expr_checked`'s `:pickup` clause via nesting under an `if` instead, which needs no `declarations.ex`/`elaborate_branch_body` change. Ledgered as a Wave-1 follow-up: when a later wave (or a real std module) needs a bare top-level/match-arm `pickup` to resolve an implicit from its expected type, add `defp elaborate_body({:pickup, _meta, _} = expr, return_core, scope, ctx, env, _params), do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)` (mirroring `declarations.ex:372-374`) and/or `defp elaborate_branch_body({:pickup, _meta, _} = expr, expected, names, ctx, env), do: elaborate_expr_checked(expr, expected, names, ctx, env)` (mirroring `elaborator.ex:3575-3582`/`3615-3616`), each with a directed red test proving the implicit-resolution case first.
