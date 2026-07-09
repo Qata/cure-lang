@@ -15,7 +15,12 @@ defmodule Antigen.PositivitySeedTest do
   @antibodies [
     Positivity.double_negation_family(),
     Positivity.sigma_negative_family(),
-    Positivity.through_constructor_negative()
+    Positivity.through_constructor_negative(),
+    # S8: subject buried under app/lam-headed field types (strictly_positive?
+    # catch-all). If the catch-all ever regresses to fail-open these replay to
+    # {:wrongly_accepted, :Pgen} and this goes red.
+    Positivity.app_head_negative(),
+    Positivity.lam_head_negative()
   ]
 
   test "W4 positivity antibodies are banked and every positivity record replays :ok" do
@@ -28,7 +33,7 @@ defmodule Antigen.PositivitySeedTest do
         match?(%Antigen.Challenge{assay: "positivity"}, r.entry)
       end)
 
-    assert length(pos) >= 3
+    assert length(pos) >= 5
 
     assert Enum.all?(pos, &(&1.verdict == :ok)),
            inspect(pos |> Enum.reject(&(&1.verdict == :ok)) |> Enum.map(& &1.verdict))
