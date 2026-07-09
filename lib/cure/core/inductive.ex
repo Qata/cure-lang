@@ -361,7 +361,13 @@ defmodule Cure.Core.Inductive do
   defp strictly_positive?(env, fname, {:pi, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
-  defp strictly_positive?(_env, fname, {:data, fname, _ps, _is}, _seen), do: true
+  # A recursive occurrence of the family itself is strictly positive ONLY when
+  # `fname` does not also occur inside its own parameter/index arguments — the
+  # same guard the other-family clause below applies. Without it a negative
+  # occurrence buried in the family's own arguments (`Bad ((Bad Unit) -> Empty)`)
+  # would be admitted, breaking well-foundedness.
+  defp strictly_positive?(_env, fname, {:data, fname, ps, is}, _seen),
+    do: not Enum.any?(ps ++ is, &occurs?(fname, &1))
 
   defp strictly_positive?(env, fname, {:data, other, ps, is}, seen) do
     cond do

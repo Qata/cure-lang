@@ -872,6 +872,24 @@ defmodule Cure.Core.Kernel do
   defp unify_one(r, {:var, j}, arity, subst) when j >= arity,
     do: bind_index(j, r, arity, subst)                  # outer index var := ctor result index (4.3)
 
+  # Compact Nat literal ↔ Z/S bridge (mirrors conv.ex's cross-representation
+  # arms): a `{:nat_lit, n}` index is a closed canonical Nat, definitionally
+  # equal to its `S`-tower, so it must unify with `Z`/`S` result indices exactly
+  # as the tower form does. Peel one layer and recurse. Without this the generic
+  # rigid-head clash rule below wrongly verdicts a literal index `:impossible`
+  # against `S`/`Z` — a coverage soundness hole (a `case` on `Vone(0)` could omit
+  # `vz`, its only inhabitant, and still pass coverage). The peel terminates: `n`
+  # strictly decreases and only fires against a `:ctor`/`:nat_lit` counterpart
+  # (var counterparts bind via the clauses above).
+  defp unify_one({:nat_lit, a}, {:nat_lit, b}, _arity, subst),
+    do: if(a == b, do: {:ok, subst}, else: :impossible)
+
+  defp unify_one({:nat_lit, n}, {:ctor, _, _} = s, arity, subst),
+    do: unify_one(nat_lit_ctor(n), s, arity, subst)
+
+  defp unify_one({:ctor, _, _} = r, {:nat_lit, n}, arity, subst),
+    do: unify_one(r, nat_lit_ctor(n), arity, subst)
+
   defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
     do: unify_spine(as, bs, arity, subst)
 
@@ -979,6 +997,12 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:nat_lit, _}), do: true
   defp rigid_index?({:float_lit, _}), do: true
   defp rigid_index?(_), do: false
+
+  # Term-level one-layer peel of a compact Nat literal (the term-space mirror of
+  # the value-level `Eval.nat_to_ctor/1`): `0 ↦ Z`, `n ↦ S (n-1)` with the
+  # predecessor left compact. Used only by the `unify_one` nat-literal bridge.
+  defp nat_lit_ctor(0), do: {:ctor, :Z, []}
+  defp nat_lit_ctor(n) when is_integer(n) and n > 0, do: {:ctor, :S, [{:nat_lit, n - 1}]}
 
   # Only ever called on `rigid_index?` terms (all tuples), so a tuple head is
   # exhaustive — no non-tuple fallback is reachable.
