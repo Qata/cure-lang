@@ -3,9 +3,9 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog / knit ledger §10.1, promoted). Built as a `dialect` (§5) — zero
+(idea backlog / knit ledger §10.1, promoted). Built as a `macro` (§5) — zero
 compiler special-casing; hiding principles (§3) are law here as everywhere.
-Sibling of [`knit`](2026-07-08-knit-dialect-design.md): **same checking
+Sibling of [`knit`](2026-07-08-knit-macro-design.md): **same checking
 discipline, a richer state.** Explicitly *not* bolted onto the knit algebra
 (that spec's ledger §10.1 forbids it, correctly).
 
@@ -15,10 +15,10 @@ discipline, a richer state.** Explicitly *not* bolted onto the knit algebra
 
 Crochet patterns are programs, and — like knitting patterns — they ship as
 prose and are debugged with the hook in your hand at round 14, when the circle
-you wanted flat has turned into a taco. This dialect gives crochet the compile
+you wanted flat has turned into a taco. This macro gives crochet the compile
 error it has never had.
 
-The key structural fact, and why crochet is a *separate* dialect from `knit`:
+The key structural fact, and why crochet is a *separate* macro from `knit`:
 a knitter holds a whole row of live loops on the needle, so knit's state is a
 single running **stitch count** (`Nat`). A crocheter holds exactly **one** live
 loop on the hook and anchors each new stitch into a *specific position* in the
@@ -220,7 +220,7 @@ One source of truth, several renderings (knit §6, same machinery):
 
 ## 7. Errors — explainers in crocheter vocabulary (E290–E299)
 
-Per parent §4, no kernel vocabulary surfaces; the dialect's `explain` owns the
+Per parent §4, no kernel vocabulary surfaces; the macro's `explain` owns the
 shapes. Template as everywhere: what you wrote → why the fabric forbids it →
 what to write instead.
 
@@ -278,7 +278,7 @@ E297 (form asymmetry / unreachable shaping target). E298–E299 reserved.
 
 - **`knit`** (sibling) — shares the vertical (personas, tech-editor economic
   wedge, companion device, PDF/Ravelry publishing, `parse` import funnel).
-  The two dialects share *nothing algebraic* (different state) but *everything
+  The two macros share *nothing algebraic* (different state) but *everything
   ergonomic*; the knit-vertical scope doc's §2 principles are law here too.
 - **`units`** — hook size, gauge, and `form … diameter 12cm` are units facts;
   cm/inch and sts-per-10cm conversions reuse the units machinery.
@@ -307,8 +307,8 @@ E297 (form asymmetry / unreachable shaping target). E298–E299 reserved.
    on the hook and the return pass works them off, so its state is a full row
    of live loops — **knit's `Nat` state, not crochet's vector**. It is
    arguably closer to `knit` than to `crochet`. Options: a `tunisian` mode in
-   this dialect that swaps in the single-count algebra, a shared sub-algebra
-   both dialects import, or its own small dialect. Undecided; noted so the
+   this macro that swaps in the single-count algebra, a shared sub-algebra
+   both macros import, or its own small macro. Undecided; noted so the
    surface doesn't accidentally assume one-loop-on-hook everywhere.
 3. **Post / relief stitches** (`fpdc`/`bpdc`) — need the position to carry
    stitch *identity* (a post to grab), a modest extension of `Position`;
@@ -334,11 +334,11 @@ E297 (form asymmetry / unreachable shaping target). E298–E299 reserved.
 
 ## 11. Non-goals
 
-- **Not the knit algebra** — separate state, separate dialect (§1); no shared
+- **Not the knit algebra** — separate state, separate macro (§1); no shared
   count machinery beyond the ergonomic surface.
 - **No general fabric-graph shaping in v1** — §10.1; spike/overlay/deep-post
   work is v2.
-- **No garment/toy *design* automation** — the dialect checks patterns; it
+- **No garment/toy *design* automation** — the macro checks patterns; it
   does not draft or design them. "Generate an amigurumi cat from a photo" is a
   different product. `crochet` is the tech editor, not the designer.
 - **No freeform / sculptural crochet** — patterns worked by eye without a

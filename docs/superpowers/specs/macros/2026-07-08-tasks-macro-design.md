@@ -3,8 +3,8 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§6.5); built as a `dialect` (§5) — **Tier-2 template sugar** per §5.2. The
-`Every` dialect definition sketched verbatim in parent §5.1 is canonical; this
+(§6.5); built as a `macro` (§5) — **Tier-2 template sugar** per §5.2. The
+`Every` macro definition sketched verbatim in parent §5.1 is canonical; this
 spec completes it and extends the same treatment to `on`.
 
 ---
@@ -36,7 +36,7 @@ mod Greenhouse
 
 Rules:
 
-- **`every <duration>`** + indented block. The duration is a units-dialect
+- **`every <duration>`** + indented block. The duration is a units-macro
   literal (`500ms`, `2s`, `10us` — parent §6.6); a bare number is an error
   (§6, E115 style).
 - **`on <edge>(<pin>) [debounce <duration>]`** + indented block. Edges:
@@ -161,7 +161,7 @@ error[E151]: pin gpio21 cannot watch for edges
 - **`board`** (parent §6.1) supplies the typed pins and capabilities `on`
   checks against; module-level `let` bindings (the `fan` handle) are in scope
   in task bodies because both elaborate into the same generated `start/0`.
-- **units** (§6.6) owns duration literals; this dialect only *demands*
+- **units** (§6.6) owns duration literals; this macro only *demands*
   `Duration`, it defines nothing about it.
 - **`flow`** (§6.4): `source temp = sensor.celsius every 2s` inside a flow
   block is the same `every` machinery feeding a `Signal` instead of running
@@ -208,7 +208,7 @@ error[E151]: pin gpio21 cannot watch for edges
   described (§8.1); deadlines arrive with the cost/WCET grade axis, not
   before.
 - **No general cron surface.** Calendar scheduling (`job` — parent §7.3) is
-  host-side and a different dialect.
+  host-side and a different macro.
 - **No true ISR-context code in v1.** AtomVM delivers interrupts as
   messages; we do not pretend to run user code in interrupt context, and we
   do not impose fake ISR restrictions on code that doesn't (§4).

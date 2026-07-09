@@ -3,8 +3,8 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§6.1); built as a `dialect` (§5). Priority #3 in the surfaces spec — **the
-foundation**: every other embedded dialect (`driver`, `every`/`on`, `flow`
+(§6.1); built as a `macro` (§5). Priority #3 in the surfaces spec — **the
+foundation**: every other embedded macro (`driver`, `every`/`on`, `flow`
 sinks, `fleet`) consumes what `board` provides, and it kills the single most
 common category of beginner hardware bug (wrong / incapable / nonexistent
 pin) at zero user-visible type cost.
@@ -63,7 +63,7 @@ Rules:
 
 ## 3. Author surface — `boarddef`
 
-A board definition is declarative data (dialect power tier 1): chip, flash
+A board definition is declarative data (macro power tier 1): chip, flash
 geometry, pin ranges, per-pin capabilities, and bus defaults. The shipped
 ESP32-C3 definition, essentially complete:
 
@@ -142,7 +142,7 @@ Rules:
 
 ## 5. Representative error explainers
 
-The flagship (parent §4, reproduced as this dialect's `explain` output — on
+The flagship (parent §4, reproduced as this macro's `explain` output — on
 `:esp32`, where input-only pins exist):
 
 ```
@@ -160,7 +160,7 @@ query elaboration state (which pins this module has already claimed via
 `let` bindings and bus defaults) — a capability the error-explainer
 infrastructure spec must provide, noted here as a **dependency**: explainers
 receive not just the failure shape and provenance but a read-only view of
-the dialect's accumulated declarations.
+the macro's accumulated declarations.
 
 Others in the family:
 
@@ -186,7 +186,7 @@ definition, parent §4).
 ## 6. `check` integration (shipped templates)
 
 `board` is declarations-only, so its templates mostly guard *board authors*
-and *downstream dialects*:
+and *downstream macros*:
 
 - **Boarddef self-consistency** — bus pins exist and carry the needed caps;
   capability ranges cover every declared pin; flash offsets fit the declared
@@ -208,11 +208,11 @@ and *downstream dialects*:
   with the `input` capability as an interrupt source; the same literal
   discharge applies.
 - **`fleet`** (sibling spec): node blocks declare `on :esp32c3` — the fleet
-  compiler instantiates this dialect once per node kind, so heterogeneous
+  compiler instantiates this macro once per node kind, so heterogeneous
   fleets get per-board pin checking with one mechanism.
 - **`config`** (parent §6.7) checks pin non-conflict against the board file.
 - **Future linearity (grade wave):** claimed pins become linear resources —
-  parent §6.9's E118 ("gpio21 was claimed as uart0.tx") is *this* dialect's
+  parent §6.9's E118 ("gpio21 was claimed as uart0.tx") is *this* macro's
   data (the claim registry) enforced by the usage-grade axis. Until then, a
   weaker elaboration-time conflict check is ledgered (§8.2).
 
@@ -233,7 +233,7 @@ and *downstream dialects*:
    (`bus i2c0 (sda: gpio6, scl: gpio7)` in *user* code) or must define a
    derived boarddef.
 4. **Capability taxonomy** — fixed set (v1 position) vs. extensible by board
-   packages. Extensible caps that downstream dialects can *demand* need a
+   packages. Extensible caps that downstream macros can *demand* need a
    shared vocabulary anyway; recommendation: fixed core set + ledgered
    escape hatch, revisit when a real board needs one we lack.
 5. **ADC width / attenuation per board** — `adc.read(pin.gpio3) -> Raw12`

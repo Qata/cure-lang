@@ -5,8 +5,8 @@
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (§6.7 `config`, §6.8 `secret`); the `secret` semantics defined here are
 consumed by
-[`2026-07-08-protocol-dialect-design.md`](2026-07-08-protocol-dialect-design.md)
-(§6, IFC × transport) and the fleet spec (§11.8). Built as a `dialect` (§5):
+[`2026-07-08-protocol-macro-design.md`](2026-07-08-protocol-macro-design.md)
+(§6, IFC × transport) and the fleet spec (§11.8). Built as a `macro` (§5):
 `config` is Tier-1 declarative data, `secret` is Tier-2 sugar over the
 Final-Core Security grade axis
 ([`2026-07-07-final-core-grammar-design.md`](../2026-07-07-final-core-grammar-design.md)
@@ -125,9 +125,9 @@ classify the wires.
   principle 3), and erasure makes the refinements cost zero bytes on device.
 - `secret` elaborates to a grade annotation (`security: Secret`) on the
   binder. The kernel's §B.4 obligation (LUB tracking + no-downward-flow
-  under a non-trivial lattice) does all enforcement; the dialect contributes
+  under a non-trivial lattice) does all enforcement; the macro contributes
   only surface and explainers. Until the IFC wave lands enforcement, the
-  label is carried-not-checked (§B.3) and the dialect ships an
+  label is carried-not-checked (§B.3) and the macro ships an
   elaborator-side flow lint so the UX exists early — the same interim
   pattern as protocol affinity (protocol §10.3).
 - **Crash-report/log redaction — the runtime half of the guarantee.** Static

@@ -3,8 +3,8 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§7.5); built as a `dialect` (§5) — zero compiler special-casing. Consumed
-by every sibling dialect that ships property templates (§6).
+(§7.5); built as a `macro` (§5) — zero compiler special-casing. Consumed
+by every sibling macro that ships property templates (§6).
 
 ---
 
@@ -16,11 +16,11 @@ your tests."** It pays off the invisible dependent types three ways at once:
 
 1. **Generation for free** — a prop's typed parameters *are* its generators.
 2. **Tests you don't have to run** — static discharge (`proved by construction`).
-3. **Suites you didn't write** — dialect-attached template props
-   (*"your dialects write your tests"*).
+3. **Suites you didn't write** — macro-attached template props
+   (*"your macros write your tests"*).
 
 Per the hiding principles (parent §3, LAW): users write Bool-valued
-properties; the dialect manufactures generators, discharge attempts, and
+properties; the macro manufactures generators, discharge attempts, and
 counterexample explanations. No proof term, goal, or solver artifact is
 ever surfaced. The trust story is worth telling: kernel and greenhouse are
 tested by the same machinery.
@@ -73,11 +73,11 @@ type" error exists:
   pain, solved by construction).
 - **ADTs generate structurally, size-bounded** — the size bound reuses the
   recursion structure the totality checker already computed for the type.
-- **Indexed/dialect types generate valid inhabitants.** A `packet` generates
+- **Indexed/macro types generate valid inhabitants.** A `packet` generates
   *valid frames* (length fields consistent, CRC correct, `const` fields
   fixed); a `reducer`'s `Msg` generates message *sequences*; a `protocol`
   generates legal traces; fleet's `SubsetOf(role)` generates node subsets.
-  A dialect that manufactures a type registers its generator, via the same
+  A macro that manufactures a type registers its generator, via the same
   derivation interface the core rules use.
 - **Solver-narrowed refinements** (predicates the constructive rules cannot
   invert) are the one open corner — ledgered (§10.1). The locked SMT boundary
@@ -168,28 +168,28 @@ cached keyed by the prop and its dependency closure; CI **re-checks the
 cached term without invoking the solver at all** — kernel replay is fast and
 deterministic. The solver runs only on change (invalidation: §10.7).
 
-## 6. Dialect-shipped property templates
+## 6. Macro-shipped property templates
 
-Dialect authors ship properties alongside syntax — suites users never
-wrote. Mechanism: a fourth `dialect` section (after `syntax`, `expand`/
+Macro authors ship properties alongside syntax — suites users never
+wrote. Mechanism: a fourth `macro` section (after `syntax`, `expand`/
 `elab`, `explain`):
 
 ```cure
-dialect Packet
+macro Packet
   ...
   templates for $p:PacketDecl
     prop roundtrip(f: $(p.name)) =
       $(p.name).parse($(p.name).encode(f)) == Ok(f)
 ```
 
-- **Attachment is per-declaration.** When the dialect elaborates a user
+- **Attachment is per-declaration.** When the macro elaborates a user
   declaration, each `templates for` block matching its syntax category is
   instantiated with the declaration's quoted AST spliced in; the props join
   the suite in an auto-named block — `check Frame (packet templates)` —
   visibly distinct from hand-written props but treated identically.
 - **Templates are ordinary props** riding the whole ladder — statically
   discharged, certificate-elevated, or tested; never special-cased.
-- **Provenance is dual** — dialect name + user declaration line — so a
+- **Provenance is dual** — macro name + user declaration line — so a
   failing template explains itself against *the user's declaration* ("your
   `Frame.length` permits 255 but `payload` caps at 128"), per parent §4.
 - **Central proof, local re-check.** Where the library proves a template's
@@ -200,7 +200,7 @@ dialect Packet
 
 The shipped inventory across siblings (each named in its own spec):
 
-| Dialect | Templates |
+| Macro | Templates |
 |---|---|
 | `packet`/`codec` | round-trip: `parse ∘ encode == Ok` on generated valid frames |
 | `reducer` | graph conformance (only declared edges are ever taken; the catch-all rejects everything else); init-schema validity |
@@ -255,9 +255,9 @@ violating step — §4's Door trace is the canonical shape.
   kernel with no solver installed; a cache miss demotes to `tested` for that
   run, re-elevating when a solver is available. Rung movement is reported,
   never an error.
-- **Explainers.** `check` registers explainers (parent §4) like any dialect;
+- **Explainers.** `check` registers explainers (parent §4) like any macro;
   its distinctive output is the **counterexample explanation** — shrunk,
-  minimal, in the vocabulary of the dialect that owns the failing value
+  minimal, in the vocabulary of the macro that owns the failing value
   (reducer: states, messages, missing edges; packet: fields, offsets;
   fleet: nodes, partitions). Declaration provenance lets it say "add the
   edge, or assert the rejection" instead of dumping a term. Raw generator
@@ -288,7 +288,7 @@ violating step — §4's Door trace is the canonical shape.
    product moment); decide `--quiet` collapse and CI-summary treatment.
 3. **Template attachment interface** — exact `templates for $x:Category`
    binding rules, opt-out surface (`skip <name>`), per-template
-   parametrization, naming under multi-dialect attachment.
+   parametrization, naming under multi-macro attachment.
 4. **Certificate solver choice** — Z3's proof format is under-specified;
    cvc5/veriT emit Alethe. Z3 stays the lint solver per the locked decision
    while another solver certifies; pick the default; absence: warn vs. silent.

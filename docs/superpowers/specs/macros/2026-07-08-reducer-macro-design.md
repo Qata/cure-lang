@@ -4,8 +4,8 @@
 **Status:** design (operator-designed surface, consolidated from parent §5.5).
 Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§5.5, which remains the dialect-facility worked example; this document is the
-reducer's own home going forward); built as a `dialect` (§5), top power tier
+(§5.5, which remains the macro-facility worked example; this document is the
+reducer's own home going forward); built as a `macro` (§5), top power tier
 (tier 4 — `elab` with reflection, alongside `flow`).
 
 The parent's four hiding principles (§3) are LAW here: indices flow from
@@ -138,7 +138,7 @@ Design notes captured from the surface (parent §5.5, carried over): the graph
 deliberately allows **multiple edges per (state, message) pair**
 (nondeterministic in the graph, resolved by `when` guards in the body);
 header lines declare **capabilities** (`clock`) that clauses receive as
-binders; the user's own `type` declarations reference the dialect-**derived**
+binders; the user's own `type` declarations reference the macro-**derived**
 names `Door.State`/`Door.Msg` — a staging / name-resolution consequence,
 ledgered at the facility level (parent §9 item 6: two-pass resolution or
 forward-declaration semantics); the mandatory final catch-all binds the whole
@@ -146,7 +146,7 @@ model with `model.state` projecting the dependent pair's index (§10 item 4).
 
 ## 3. Derived types — what elaboration manufactures
 
-The user writes values and declarations; the dialect writes every type
+The user writes values and declarations; the macro writes every type
 (hiding principle 1). From the Door block, elaboration derives:
 
 - **`Door.State`** — one constructor per `over` schema:
@@ -246,7 +246,7 @@ statically-empty rejection stream.
 **Clock nuance — sample vs. merge.** Door only *samples* the clock (the
 generated scan uses `input.with_latest(clock)`); a time-driven reducer like
 Debounce instead **merges** `clock.tick` as an internal message — visible in
-the expansion above. The dialect emits the merge exactly when some clause
+the expansion above. The macro emits the merge exactly when some clause
 consumes a tick message — same grammar, one conditional in the elab. Whether
 that trigger is inferred or opted into explicitly is the first open decision
 (§10 item 1).
@@ -279,10 +279,10 @@ of quoted declarations, correct-by-construction, no proofs from anyone
   erase to nothing. The runtime model is just the live payload fields — the
   ESP32 zero-footprint story.
 
-## 6. The dialect definition (verbatim)
+## 6. The macro definition (verbatim)
 
 ```cure
-dialect Reducer
+macro Reducer
   ## `reducer Name fsm` — a state machine whose payload TYPE depends on its
   ## state; typed emissions/rejections; `body` lowers onto Flow (Signal.scan).
   ## (`fsm` names the lowering family — room for `reducer Name flow` later.)
@@ -400,7 +400,7 @@ dialect Reducer
 ```
 
 Honest gap (carried from the parent): `clause_to_arm` must *construct* GADT
-match arms and record literals against dialect-derived types —
+match arms and record literals against macro-derived types —
 `elab`-with-reflection territory (parent §5.2 tier 4, same as `flow`).
 **`reducer` therefore joins `fsm` in the dogfood test (parent §5.4):** the
 facility is done when this file compiles as a library.
@@ -414,7 +414,7 @@ vocabulary** — states, edges, guards, `over` blocks — in the fixed template
 Generated terms carry provenance, so a kernel failure deep inside a generated
 match arm is attributed to the user's `on … from …` line. A raw
 `cannot_unify` reaching a reducer user is a defect by definition; the
-fallback shows the raw error plus a "bug in the dialect layer, please
+fallback shows the raw error plus a "bug in the macro layer, please
 report" note.
 
 ## 8. Flow citizenship & consumers
@@ -428,13 +428,13 @@ citizens**: they compose inside `flow` blocks directly —
   *are* the audit log, and replay is literally `Signal.scan` over history.
   **`bot`** is `reducer` per conversation (sessions are per-user actors;
   typestate makes "ask for payment before a cart exists" inexpressible).
-  Both specialize this dialect; see
-  [`2026-07-08-workflow-bot-dialect-design.md`](2026-07-08-workflow-bot-dialect-design.md)
+  Both specialize this macro; see
+  [`2026-07-08-workflow-bot-macro-design.md`](2026-07-08-workflow-bot-macro-design.md)
   (written in parallel).
 - **`fleet` hub reducers** — a reducer inside `hub` logic is a stateful
   combinator under the fleet spec's ownership rule 4 (single owner, inferred
   from the downstream sink), emissions possibly fanning out to several nodes;
-  [`2026-07-08-fleet-dialect-design.md`](2026-07-08-fleet-dialect-design.md)
+  [`2026-07-08-fleet-macro-design.md`](2026-07-08-fleet-macro-design.md)
   §11.7 tracks confirming no extra projection cases arise.
 - **`view`** (parent §7.1) renders reducer models: because the model is the
   state-indexed GADT, **impossible UI states are unrepresentable** — the
@@ -486,7 +486,7 @@ to `Door.State`/`Door.Msg` (item 6), guard→refinement-context reach (item
 4. **Catch-all binder shape** — `on _ with (model, msg)` binds the dependent
    pair, with `model.state` as index-projection sugar; confirm the sugar.
 5. **Singleton-rule scope** — bare constructor in type position ⇒ singleton
-   refinement (`motor: Stopped`): a general language rule or per-dialect
+   refinement (`motor: Stopped`): a general language rule or per-macro
    elaboration?
 6. **Emission ordering guarantees** *(new)* — a step that both changes the
    model and emits produces one atomic `Step`, but downstream `model` and
@@ -503,9 +503,9 @@ to `Door.State`/`Door.Msg` (item 6), guard→refinement-context reach (item
 
 ## 11. Non-goals
 
-- **No kernel/TCB delta.** The dialect lives entirely in the untrusted
+- **No kernel/TCB delta.** The macro lives entirely in the untrusted
   frontend; its output is re-elaborated and kernel-checked like hand-written
-  code (parent §5.3). A buggy `Reducer` dialect can reject or confuse, never
+  code (parent §5.3). A buggy `Reducer` macro can reject or confuse, never
   produce an unsound program.
 - **No proof-authoring surface.** An obligation that does not discharge by
   computation gets an explainer or a narrower surface — never a goal shown

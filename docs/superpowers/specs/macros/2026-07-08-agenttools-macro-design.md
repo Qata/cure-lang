@@ -4,12 +4,12 @@
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (idea backlog #49, promoted); sibling of
-[`2026-07-08-workflow-bot-dialect-design.md`](2026-07-08-workflow-bot-dialect-design.md)
+[`2026-07-08-workflow-bot-macro-design.md`](2026-07-08-workflow-bot-macro-design.md)
 (`bot` = conversations with humans; `agenttools` = loops with models). Built
-as a `dialect` (parent §5), a specialization of `reducer` (parent §5.5),
+as a `macro` (parent §5), a specialization of `reducer` (parent §5.5),
 consuming the effect discipline
 ([`../2026-07-07-sound-effect-discipline-design.md`](../2026-07-07-sound-effect-discipline-design.md))
-and [`2026-07-08-config-secret-dialect-design.md`](2026-07-08-config-secret-dialect-design.md)'s
+and [`2026-07-08-config-secret-macro-design.md`](2026-07-08-config-secret-macro-design.md)'s
 `secret` semantics. Host-side, full BEAM. Zero TCB delta.
 
 ---
@@ -117,7 +117,7 @@ manifested tools within their refinements*: a hijacked HomeButler can set
 the thermostat to 28 °C; not to 60 °C, not on a non-home topic, not via a
 tool it wasn't given. Refinements (`amount: {n: Int | n <= 100}`) are the
 per-tool blast-radius limiter; `Await(:resident)` gates the irreversible.
-This dialect reduces injection to **declared blast radius**; it does not
+This macro reduces injection to **declared blast radius**; it does not
 eliminate it. Write that sentence in the docs verbatim.
 
 ## 4. The IFC payoff
@@ -169,7 +169,7 @@ the same argument as workflow-bot §2.1:
 - Every prompt sent, response received, tool call validated or rejected,
   tool result, approval request, and policy decision is an **emission** in
   the reducer's typed event stream, persisted via `store` (the `schema`
-  dialect's business).
+  macro's business).
 - State = fold of events; **replay is deterministic given the recorded model
   responses** — the model is the only nondeterminism in the loop, and it is
   recorded. "What did the agent see before it did that" is a fold, not
@@ -226,7 +226,7 @@ Shipped templates (parent §7.5), adversarial by design:
   approval` machinery unchanged (workflow-bot §2.3); a bot and an agent
   differ only in which peer is typed and which is validated.
 - **Effects spec** — the manifest is the `!` discipline; parameterized
-  capability instances (`Http(:get, host)`) are this dialect's demand on
+  capability instances (`Http(:get, host)`) are this macro's demand on
   the effect-kind taxonomy (§10.7).
 - **`config`/`secret`** — §4 consumes sink clearance and `declassify`
   wholesale, adding only the model-bound sink classifications.
@@ -269,7 +269,7 @@ Shipped templates (parent §7.5), adversarial by design:
 
 ## 11. Non-goals
 
-- **No model training or fine-tuning.** The dialect consumes models only.
+- **No model training or fine-tuning.** The macro consumes models only.
 - **No eval framework.** Scoring agent quality over task suites is `evals`
   (backlog #50); `check` tests the *loop's* invariants, not the model's
   judgment.

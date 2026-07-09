@@ -1,12 +1,12 @@
-# The `blocks` Meta-Dialect — Every Dialect as a Block Language
+# The `blocks` Meta-Macro — Every Macro as a Block Language
 
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (idea backlog #26, promoted). Unlike its siblings, `blocks` is not a domain
-dialect — it is a **tooling dialect built on the facility's grammar-as-data
-guarantee** ([facility spec](2026-07-08-dialect-facility-design.md) §2): a
-generic exporter that turns *any* dialect's grammar into a Blockly-style
+macro — it is a **tooling macro built on the facility's grammar-as-data
+guarantee** ([facility spec](2026-07-08-macro-facility-design.md) §2): a
+generic exporter that turns *any* macro's grammar into a Blockly-style
 visual block-programming surface.
 
 ---
@@ -15,11 +15,11 @@ visual block-programming surface.
 
 The facility spec states, as a requirement, that grammar rules are
 **declarative data** — and cashes that in twice (LSP for free, docs for
-free). This spec cashes it in a third time: **exporting any dialect as a
+free). This spec cashes it in a third time: **exporting any macro as a
 drag-and-drop block palette is nearly free.** Done once, generically,
-`blocks` gives every dialect — `board`, dialogue trees, dive plans, home
+`blocks` gives every macro — `board`, dialogue trees, dive plans, home
 rules, knitting rows, whatever the ecosystem writes — a visual mode with
-zero per-dialect work.
+zero per-macro work.
 
 Nobody has gotten this for free before. Scratch, Blockly, and MakeCode each
 hand-build their block sets and maintain a second representation alongside
@@ -48,17 +48,17 @@ there):
 - **Top-level forms** (container keywords like `reducer`, `packet`,
   `every`) become hat/container blocks that hold their indented structure.
 
-Blocks are **generated, never hand-designed per dialect**. A dialect MAY
+Blocks are **generated, never hand-designed per macro**. A macro MAY
 ship an optional **presentation annex** — declarative hints only (family
 color, an icon, palette grouping/ordering, a short tooltip) — which the
 generator honors when present and ignores when absent. The annex can change
 nothing structural: sockets, arity, and compatibility come from the grammar
 alone. The annex format is ledgered (§10.1).
 
-Worked example — one rule from the tasks dialect and its derived block:
+Worked example — one rule from the tasks macro and its derived block:
 
 ```cure
-dialect Every
+macro Every
   syntax every $period:Duration $body:Block
 ```
 
@@ -73,7 +73,7 @@ block Every.every
   kind   container             # top-level form → hat block
 ```
 
-The `reducer` dialect's `Edge` category
+The `reducer` macro's `Edge` category
 (`$src:UpperIdent --$msg:UpperIdent--> $tgt:UpperIdent`) likewise derives
 a three-socket edge block, stacked inside the reducer container's
 `Many(Edge)` mouth — nobody designed that; the grammar already said it.
@@ -137,7 +137,7 @@ text by watching the correspondence, not by migrating projects:
    way one opens an outline.
 
 No stage involves an export, a rewrite, or a cliff — the file on disk is
-ordinary `.cure` text throughout. The lesson/turtle teaching dialects (§9)
+ordinary `.cure` text throughout. The lesson/turtle teaching macros (§9)
 script these stages; when to *nudge* a user up a stage is ledgered with
 large-program ergonomics (§10.4).
 
@@ -147,11 +147,11 @@ Recommended host: **the toolchain's web-view surface** — a VS Code webview
 panel inside the extension (toolchain spec §6) and the same bundle served
 standalone in a browser via `cure blocks <file>`. One renderer, two frames.
 
-The compiler generates the **palette JSON** from the dialect registry — the
+The compiler generates the **palette JSON** from the macro registry — the
 same registry the LSP consumes (toolchain §6, "LSP for free"). The pipeline
-is: module's `use` lines → active dialects → their grammar rules → palette.
+is: module's `use` lines → active macros → their grammar rules → palette.
 A module that imports `Hardware.Every` and `Reducer` gets exactly those
-palettes, namespaced and colored per family. No dialect author ships
+palettes, namespaced and colored per family. No macro author ships
 front-end code; the renderer is generic and lives with the toolchain.
 
 Edits round-trip through the LSP's formatting channel: block mutations are
@@ -182,33 +182,33 @@ Two properties, one of each rung (parent §7.5 vocabulary):
   report.
 - **Round-trip stability** — the dynamic template: text→blocks→text is the
   identity modulo formatting (`parse(format(ast)) == Ok(ast)`). This is the
-  renderer's regression suite, run over every registered dialect's grammar
+  renderer's regression suite, run over every registered macro's grammar
   by generating random valid arrangements — Antigen's generator machinery
   pointed at the meta-grammar.
 
 ## 9. Relations
 
-- **Dialect facility** — total dependency. `blocks` is the third structural
+- **Macro facility** — total dependency. `blocks` is the third structural
   dividend of grammar-as-data (after LSP and docs rendering); if the
   meta-grammar changes (facility ledger §11.2), the palette generator
   changes with it, and nothing else does.
-- **Toolchain / LSP** — shared dialect registry (§6 here, toolchain §6);
+- **Toolchain / LSP** — shared macro registry (§6 here, toolchain §6);
   the VS Code extension hosts the webview; `cure blocks` joins the CLI
   table.
-- **Lesson / turtle dialects** — primary consumers: the teaching surfaces
+- **Lesson / turtle macros** — primary consumers: the teaching surfaces
   script the §5 disclosure stages and ship classroom palettes.
 - **A11y** — block UIs are notoriously mouse-only; keyboard navigation,
   screen-reader block traversal, and focus order are REQUIRED, specified in
   the parallel a11y spec
-  ([`2026-07-08-a11y-dialect-design.md`](2026-07-08-a11y-dialect-design.md)).
+  ([`2026-07-08-a11y-macro-design.md`](2026-07-08-a11y-macro-design.md)).
   The always-available text view is itself the strongest a11y property.
 
 ## 10. Open decisions (ledger)
 
 1. **Presentation-hint annex format** — where hints live (a `blocks`
-   section inside the `dialect`? a sibling declarative file?), the hint
+   section inside the `macro`? a sibling declarative file?), the hint
    vocabulary (color, icon, group, tooltip), and inheritance for categories
-   reused across dialects.
+   reused across macros.
 2. **Block persistence** — positions, collapsed states, and free-floating
    comments have no home in the AST. Sidecar file (`.cure.blocks`) vs.
    auto-layout on every open. Leaning sidecar-optional: auto-layout must be
@@ -232,7 +232,7 @@ Two properties, one of each rung (parent §7.5 vocabulary):
 - **No new visual semantics.** Blocks are exactly the text grammar rendered
   as shapes — nothing snaps together that couldn't be typed, nothing types
   that couldn't snap.
-- **No block-only dialects.** Every dialect is a text grammar first; a
+- **No block-only macros.** Every macro is a text grammar first; a
   grammar that only works visually is a design smell the facility rejects.
 - **Not replacing the text editor.** Blocks are an on-ramp and a lens; the
   LSP-backed text experience remains the primary surface.

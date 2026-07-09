@@ -3,9 +3,9 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§6.6); built as a `dialect` (§5) — the Tier-3 **literal rules** tier
-(`literal $n ms ~> Duration.ms($n)`). The smallest dialect in the catalog and
-the one every other dialect consumes.
+(§6.6); built as a `macro` (§5) — the Tier-3 **literal rules** tier
+(`literal $n ms ~> Duration.ms($n)`). The smallest macro in the catalog and
+the one every other macro consumes.
 
 ---
 
@@ -25,7 +25,7 @@ conversions** (`raw.millivolts(vref)`, `d.as_ms()`). There is **no** unit
 multiplication or division producing derived dimensions — no `m/s²`, no
 `v * a = w`, no dimension-exponent vectors in the type system.
 
-This is deliberate: the bugs this dialect exists to prevent are *confusions
+This is deliberate: the bugs this macro exists to prevent are *confusions
 between quantities*, and additive units catch every one of them. F#-style
 dimensional analysis buys physics simulation, not blink-an-LED correctness,
 at a real type-level cost; ledgered with a revisit trigger (§8.1).
@@ -113,7 +113,7 @@ docs must lead with it.
 
 ### 5.2 Literal rules
 
-Each suffix is one Tier-3 dialect rule: `literal $n ms ~> Duration.ms($n)`,
+Each suffix is one Tier-3 macro rule: `literal $n ms ~> Duration.ms($n)`,
 `literal $n pct ~> Percent.of($n)`, `literal $x v ~> Voltage.mv($x * 1000)`
 (the `v` rule scales at elaboration — the Float literal never reaches the
 Int carrier unscaled). The constructor's refinement is checked where the
@@ -169,18 +169,18 @@ units have no behavior to template, only ranges, and ranges come free.
   `debounce 20ms` — so the FRP surface never sees a bare tick count.
 - **Beyond the MCU** (parent §7): currency is the same pattern — a `usd`
   literal rule over an Int-cents carrier, additive-only — one line here,
-  designed by whoever builds the money dialect.
+  designed by whoever builds the money macro.
 
 ## 8. Open decisions (ledger)
 
-1. **Dimensional algebra** — out of v1 (§2). Revisit trigger: a real dialect
+1. **Dimensional algebra** — out of v1 (§2). Revisit trigger: a real macro
    (motor control? power budgeting?) needs a *derived* quantity (`v * a`)
    badly enough that its authors hand-roll unsafe `as_*` round-trips. Then
    evaluate F#-style exponent vectors as a Tier-4 elaboration, not kernel.
 2. **User-defined units surface** — probably yes; shape:
    `unit Rpm over Int suffix rpm range 0..=20000` / `unit Pascal over Float`
    — carrier, optional suffix, optional range; additive algebra derived.
-   Suffix-claim collisions ride the dialect facility's hygiene ledger.
+   Suffix-claim collisions ride the macro facility's hygiene ledger.
 3. **Float-carried units and NaN** — `Celsius` is Float-backed; NaN excluded
    by refinement at construction, or propagated as in plain Float? Leaning:
    exclude — a NaN reading is a driver error, not a temperature.

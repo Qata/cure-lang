@@ -4,9 +4,9 @@
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (§6.3 `packet` + §7.2 `codec`); substrate of
-[`2026-07-08-protocol-dialect-design.md`](2026-07-08-protocol-dialect-design.md)
+[`2026-07-08-protocol-macro-design.md`](2026-07-08-protocol-macro-design.md)
 (every protocol message compiles to a packet frame, §4 there). Built as a
-`dialect` (§5) — zero compiler special-casing.
+`macro` (§5) — zero compiler special-casing.
 
 ---
 
@@ -170,7 +170,7 @@ disagree about one type.
 ## 6. Errors
 
 Two audiences. **Compile-time** errors are layout mistakes, explained via
-the dialect's `explain` block:
+the macro's `explain` block:
 
 ```
 error[E155]: samples' length field comes after it
@@ -203,7 +203,7 @@ path (`SensorReport.header.version at byte 7`), never inner-relative math.
 
 ## 7. `check` integration
 
-`packet`/`codec` ship the flagship dialect property template (parent §7.5):
+`packet`/`codec` ship the flagship macro property template (parent §7.5):
 
 - **Round-trip**: `parse(encode(f)) == Ok(f)` re-run as a template on every
   user declaration — belt over the central proof, and it exercises the
@@ -271,7 +271,7 @@ path (`SensorReport.header.version at byte 7`), never inner-relative math.
 - **Not a protobuf/ASN.1/Kaitai compiler in v1** — no schema-language
   import, no descriptor files, no protobuf wire-compatibility. §2.2's
   inventory plus the ledgered collections cover the hobbyist wire world;
-  interop compilers can be dialects later, by somebody.
+  interop compilers can be macros later, by somebody.
 - **No compression** — a compressed body is `bytes(n)` handed to a library.
 - **No encryption** — that's transport; the `secret`-field × transport check
   lives in `protocol` (§6 there, keyed-edge story in protocol §10.8).

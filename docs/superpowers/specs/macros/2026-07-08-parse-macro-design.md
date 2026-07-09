@@ -4,7 +4,7 @@
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (§7.2); sibling of `packet` (§6.3, binary) and `codec` (§7.2, JSON/CBOR).
-Built as a `dialect` (§5) — zero compiler special-casing.
+Built as a `macro` (§5) — zero compiler special-casing.
 
 ---
 
@@ -12,7 +12,7 @@ Built as a `dialect` (§5) — zero compiler special-casing.
 
 A `parse` block declares a PEG-style grammar and compiles it to **plain,
 total, typed Cure functions** over the input string. Two strategic facts make
-this dialect more than a convenience:
+this macro more than a convenience:
 
 1. **It retires the `Std.Regex` dead-end on device.** AtomVM has no `:re`
    module — regex is proven unavailable on ESP32 in this project. A grammar
@@ -134,7 +134,7 @@ runtime."*
 
 ## 5. Runtime input errors — a UX product
 
-A parse failure is the *normal* runtime event this dialect must be great at:
+A parse failure is the *normal* runtime event this macro must be great at:
 
 - **Position-precise**: every error carries `line:col` plus byte offset.
 - **Farthest-failure heuristic** (standard PEG technique): report the
@@ -163,7 +163,7 @@ error beats three speculative ones.
 - **Typed captures** — each rule elaborates to a function returning its
   declared result type; the `->` ctor application is ordinary elaboration,
   so capture/ctor mismatch is caught by the same checker as any Cure call,
-  then translated by this dialect's explainers.
+  then translated by this macro's explainers.
 - **Totality** — §4's rejections make the output size-change-clean; nothing
   parser-specific enters the checker.
 - **Erasure** — rule-type indices and provenance metadata erase; the runtime
@@ -177,7 +177,7 @@ error beats three speculative ones.
   Codepoint-range/category classes are ledgered (§10.3). Recommended:
   embedded text formats (NMEA, AT commands, config lines, semver) are
   ASCII-structured with occasional UTF-8 payload — exactly this split.
-- The dialect is tier-1 (`syntax` + `elab` over quoted rule declarations);
+- The macro is tier-1 (`syntax` + `elab` over quoted rule declarations);
   the elaboration is a total compile-time Cure function, like `packet`'s.
 
 ## 7. The regex-refugee table
@@ -228,7 +228,7 @@ Shipped property templates (parent §7.5):
   is `cli`'s implementation detail, ledgered *there*, not here.
 - **`codec`** (§7.2) — JSON/CBOR/MessagePack belong to `codec`
   (schema-first from a type). Do not write a JSON grammar in `parse`; the
-  docs say so at the top of the dialect page.
+  docs say so at the top of the macro page.
 
 ## 10. Open decisions (ledger)
 

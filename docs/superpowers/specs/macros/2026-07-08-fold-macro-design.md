@@ -3,7 +3,7 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #61, promoted). Built as a `dialect` (§5) — zero compiler
+(idea backlog #61, promoted). Built as a `macro` (§5) — zero compiler
 special-casing; hiding principles (§3) are law here as everywhere.
 
 ---
@@ -63,7 +63,7 @@ not (§7).
   Instantiation re-runs all checks on the composed pattern: a sub-pattern
   that folds flat alone can still create a violating vertex where its
   creases meet yours, and that is what gets caught.
-- **Units** are degrees and millimetres (units dialect, parent §6.6);
+- **Units** are degrees and millimetres (units macro, parent §6.6);
   `paper` declares the sheet. The theorems are angle-based, hence
   **scale-independent** — resizing the paper never changes a verdict.
 
@@ -134,7 +134,7 @@ established — **typestate over the diagram sequence**:
   error — the sequence cannot invent geometry.
 - A step may only reference vertices and landmarks **established by prior
   steps** (a landmark created by step 4's fold does not exist in step 3).
-  Same machinery as the driver dialect's attach protocol: the diagram state
+  Same machinery as the driver macro's attach protocol: the diagram state
   is an index; out-of-order references are inexpressible.
 - **Sequence completeness:** every crease is either used by some step or
   explicitly marked `decorative` (pre-crease guides, reference creases). An
@@ -158,11 +158,11 @@ One source of truth, several renderings:
   path cannot conflate them: a machine cannot be told to cut a fold line.
   Driving such a machine from a Cure board program is the same `gpio`/plotter
   world as the rest of the parent catalog — and that one sentence is all the
-  hardware tie this dialect needs.
+  hardware tie this macro needs.
 
 ## 7. Errors — explainers in folder vocabulary
 
-Per parent §4, no kernel vocabulary ever surfaces; the dialect's `explain`
+Per parent §4, no kernel vocabulary ever surfaces; the macro's `explain`
 block owns the failure shapes. (Error-code allocation pending in the
 explainer registry — E18x used illustratively.)
 
@@ -212,8 +212,8 @@ flip will help.
 
 ## 9. Relations
 
-- **`knit`** ([`2026-07-08-knit-dialect-design.md`](2026-07-08-knit-dialect-design.md))
-  and the prospective quilt dialect — the craft family: declared geometry
+- **`knit`** ([`2026-07-08-knit-macro-design.md`](2026-07-08-knit-macro-design.md))
+  and the prospective quilt macro — the craft family: declared geometry
   with arithmetic invariants, checked per-literal, artifacts from one source;
   `fold` is the same shape with named theorems where knit has stitch balance.
 - **`blocks`** — visual crease editing (draw the pattern, get the `pattern`
@@ -228,7 +228,7 @@ flip will help.
    backtracking over face stacks), time budget, whether a found ordering is
    exported (useful — it is the folding order); all lint-grade per §4.
 2. **Curved creases** — **out.** Developable-surface differential geometry,
-   not vertex arithmetic; Maekawa/Kawasaki do not apply. A different dialect
+   not vertex arithmetic; Maekawa/Kawasaki do not apply. A different macro
    if ever; ledgered so nobody bolts it on.
 3. **Tessellations** — repeat units with boundary-condition checks (a unit's
    edge creases must meet its translated neighbour's compatibly). Attractive

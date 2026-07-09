@@ -3,9 +3,9 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§4); priority #2 in the surfaces spec. **Infrastructure, not a dialect** —
-but every dialect's `explain` block (parent §5.1) registers into it, and
-every error a dialect user ever sees is rendered by it. The parent calls it
+(§4); priority #2 in the surfaces spec. **Infrastructure, not a macro** —
+but every macro's `explain` block (parent §5.1) registers into it, and
+every error a macro user ever sees is rendered by it. The parent calls it
 "the single most important hiding mechanism"; this spec makes it a
 subsystem with a data model, a contract, and tests.
 
@@ -15,29 +15,29 @@ subsystem with a data model, a contract, and tests.
 
 `{:cannot_unify, plus(Z, ?0), S(Z)}` must never reach a user. Today,
 kernel/elaborator failures are Elixir terms, and the diagnostics registry
-(E001–E091) covers hand-written Cure, not dialect-generated code — when
+(E001–E091) covers hand-written Cure, not macro-generated code — when
 `every 500` elaborates into an `fsm` into core terms and the kernel rejects
 one, the failure surfaces three layers below anything the user wrote. The
 explainer subsystem closes that gap with three commitments:
 
-1. **Attribution** — every dialect-elaborated term carries provenance, so
+1. **Attribution** — every macro-elaborated term carries provenance, so
    any failure traces to the surface declaration that produced it (§2).
-2. **Translation** — dialects register pattern-matched explainers rendering
+2. **Translation** — macros register pattern-matched explainers rendering
    failures in domain vocabulary, on a fixed template (§3–§4).
-3. **The never-raw guarantee** — a raw kernel error reaching a dialect user
+3. **The never-raw guarantee** — a raw kernel error reaching a macro user
    is a defect *by definition*, and the fallback path says so out loud (§7).
 
-Build it now, while the dialect count is small (parent §4): retrofitting
-per-DSL error reflection across sixteen shipped dialects is misery.
+Build it now, while the macro count is small (parent §4): retrofitting
+per-DSL error reflection across sixteen shipped macros is misery.
 
 ## 2. Provenance — the data model
 
-Every term a dialect expansion emits carries a provenance record, attached as
+Every term a macro expansion emits carries a provenance record, attached as
 term metadata on the **elaborator side**:
 
 ```
 Provenance = {
-  dialect:  atom,                    # :driver, :protocol, :reducer, …
+  macro:  atom,                    # :driver, :protocol, :reducer, …
   span:     {file, {l0, c0}, {l1, c1}},   # the user's surface text
   decl_path: [String],               # human-readable declaration path
   expansion: [Provenance] | []       # outer layers, innermost-first tail
@@ -47,9 +47,9 @@ Provenance = {
 - **`decl_path`** is the breadcrumb into the surface declaration, e.g.
   `["reducer Door", "on MotorTimeout from Opening", "emit target"]` — built
   by the expansion machinery walking the surface tree, never by hand.
-- **`expansion`** records the chain when dialects nest: a `fleet` hub
+- **`expansion`** records the chain when macros nest: a `fleet` hub
   expands to `flow`, which expands to core. The head record is the
-  *innermost* dialect (closest to what the user literally wrote); each
+  *innermost* macro (closest to what the user literally wrote); each
   `expansion` element is one enclosing layer. §3 gives the ordering teeth.
 
 **TCB discipline (non-negotiable):** provenance is diagnostic metadata,
@@ -66,7 +66,7 @@ Cure — that branch exits this spec entirely (§7).
 
 ## 3. Registration and matching
 
-Dialects register explainers in their `explain` block (parent §5.1):
+Macros register explainers in their `explain` block (parent §5.1):
 
 ```cure
 explain
@@ -81,16 +81,16 @@ term, with the provenance implicitly available in the clause body
 
 **Dispatch:**
 
-1. Collect candidate dialects from the failure's provenance chain:
+1. Collect candidate macros from the failure's provenance chain:
    innermost first, then each `expansion` layer outward.
-2. Try each dialect's explainer clauses in that order; first match wins.
+2. Try each macro's explainer clauses in that order; first match wins.
    **Innermost provenance wins** — the layer closest to what the user wrote
    speaks first, because its vocabulary is the user's vocabulary (a `fleet`
    user who wrote a `flow` expression gets the flow-level message).
-3. Outer layers may **wrap**: an enclosing dialect can register a `wrap`
+3. Outer layers may **wrap**: an enclosing macro can register a `wrap`
    clause annotating an inner result with one line of outer context
    ("…inside the hub's `valve` node"). Recommended over the alternative —
-   letting the outer dialect *replace* the inner message — because
+   letting the outer macro *replace* the inner message — because
    replacement reintroduces the attribution gap one level up. Replacement
    stays possible (an outer clause claiming the shape outright) but the
    authoring guide discourages it.
@@ -98,7 +98,7 @@ term, with the provenance implicitly available in the clause body
 
 Explainer clauses are ordinary compile-time Cure (same staging as `elab`):
 size-change-checked, and never allowed to fail into a second error while
-rendering the first — a raised explainer is itself a dialect bug, routed
+rendering the first — a raised explainer is itself a macro bug, routed
 to §7.
 
 ## 4. The message template
@@ -124,9 +124,9 @@ E120 (parent §6.8, secret flow), E13x (fleet §5), E14x (protocol §3.2).
 *unify, unification, metavariable, Pi, sigma, index, refinement, GADT,
 elaboration, kernel* — are **banned from user-facing explainer text**.
 Enforced, not aspirational: a lint over every explainer's string literals
-fails the dialect's build on a banned-word hit — cute, cheap, and it keeps
-the promise honest as third-party dialects arrive. Recommended and adopted.
-The list lives with the registry file (§5): versioned, per-dialect
+fails the macro's build on a banned-word hit — cute, cheap, and it keeps
+the promise honest as third-party macros arrive. Recommended and adopted.
+The list lives with the registry file (§5): versioned, per-macro
 whitelistable for false positives.
 
 ## 5. Code allocation registry
@@ -154,7 +154,7 @@ without renumbering anything already written down:
 | E180–E184 | `cli` / `job` |
 | E185–E189 | `reducer` |
 | E190–E194 | `sim` / `pattern` |
-| E195–E199 | `check` + the dialect facility itself |
+| E195–E199 | `check` + the macro facility itself |
 | E200–E204 | `reef` |
 | E205–E209 | `synth` |
 | E210–E219 | `dive` |
@@ -168,17 +168,17 @@ without renumbering anything already written down:
 | E255–E259 | `a11y` |
 | E260–E264 | `flightplan` |
 | E265–E269 | `blocks` |
-| E270–E279 | dialect-composition seam errors (cross-dialect; see `2026-07-08-dialect-composition-design.md` §6) |
+| E270–E279 | macro-composition seam errors (cross-macro; see `2026-07-08-macro-composition-design.md` §6) |
 | E280–E289 | `cad` (solid modeling; E280 reuses units' bare-number shape) |
 | E290–E299 | `crochet` (E292 = circle-won't-lie-flat; sibling of `knit`) |
 
-**Community dialects do not get bare E-codes** — they use a namespaced
-form, `greenhouse-dialect/E3`. The bare numeric space is first-party
+**Community macros do not get bare E-codes** — they use a namespaced
+form, `greenhouse-macro/E3`. The bare numeric space is first-party
 curated: collisions between community packages are otherwise guaranteed,
 and a bare `E123` from a random package would counterfeit first-party
 authority. Recommended and adopted.
 
-Allocations live in a checked registry file (code → owning dialect →
+Allocations live in a checked registry file (code → owning macro →
 one-line summary; `lib/cure/diagnostics/codes.exs` or equivalent); the
 build fails on duplicates, codes outside the owner's block, or an explainer
 emitting an unregistered code.
@@ -190,7 +190,7 @@ now: gpio4, gpio5, gpio16, gpio17."* That sentence needs the claimed-pin set
 at the failure point; E14x needs the protocol state to say "device answers
 Accepted or Rejected". Good suggestions require elaboration-state access —
 the hard design point. Design: a **read-only context-query interface** —
-alongside its explainers, a dialect registers named queries:
+alongside its explainers, a macro registers named queries:
 
 ```cure
 context
@@ -201,18 +201,18 @@ context
 
 Rules that keep this honest:
 
-- **Queries are pure functions over data the dialect recorded at
-  elaboration time.** As it elaborates, a dialect deposits artifacts (the
+- **Queries are pure functions over data the macro recorded at
+  elaboration time.** As it elaborates, a macro deposits artifacts (the
   claimed-pin table, the protocol state chart, the regmap) into a
-  per-module, per-dialect store keyed by provenance. Queries read that
+  per-module, per-macro store keyed by provenance. Queries read that
   store. Nothing else.
 - **No re-elaboration during error formatting.** Rendering happens after
   elaboration has failed; the world is whatever the artifact store says it
   was. A query cannot call back into the elaborator, the kernel, or another
-  dialect's expansion — the interface simply doesn't expose those.
-- Queries are scoped to the registering dialect's own artifacts;
-  cross-dialect reads (units wanting the board's pin table) go through the
-  other dialect's *exported* queries — same rules, explicit dependency.
+  macro's expansion — the interface simply doesn't expose those.
+- Queries are scoped to the registering macro's own artifacts;
+  cross-macro reads (units wanting the board's pin table) go through the
+  other macro's *exported* queries — same rules, explicit dependency.
 - Queries obey the same staging/termination discipline as `elab` functions:
   total, host-side, no AtomVM constraints. The store is snapshot-at-failure;
   memory cost at scale is ledgered (§10.3).
@@ -223,8 +223,8 @@ Two exhaustive branches on `provenance`:
 
 - **Provenance present, no explainer matched** (or an explainer raised):
   the raw failure term is shown — honestly, not prettified — **plus** the
-  framing: *"This error came from the `driver` dialect, which failed to
-  explain it. This is a bug in the dialect — please report it at <the issue
+  framing: *"This error came from the `driver` macro, which failed to
+  explain it. This is a bug in the macro — please report it at <the issue
   URL from package metadata>."* The breadcrumb (decl_path + span) is still
   rendered, so even the fallback is sited at the user's line. Never-raw is
   thus really never-*unowned*: raw text may appear, but always wearing a
@@ -234,7 +234,7 @@ Two exhaustive branches on `provenance`:
   This spec does not restyle those — a deliberate scope boundary. Improving
   core-Cure error quality is real, separate work (unifier-level effort à la
   Elm/Rust, not domain translation); coupling it here would stall the
-  dialect wave.
+  macro wave.
 
 ## 8. LSP integration
 
@@ -251,20 +251,20 @@ The same explainers power the editor — no second rendering path:
   them. Schema details ledgered (§10.4).
 - **Hover** is the positive twin: the same domain-vocabulary discipline
   applied to *types* ("a temperature in Celsius from the BME280", not the
-  erased refinement) via dialect-registered pretty-printers over the same
+  erased refinement) via macro-registered pretty-printers over the same
   provenance. Mechanism shared; surface deferred to the toolchain spec.
 
 ## 9. Testing explainers
 
 - **Golden-file tests per explainer**: a failing input program → the exact
-  rendered message, byte-for-byte, in the dialect's test tree. The renderer
+  rendered message, byte-for-byte, in the macro's test tree. The renderer
   is deterministic (spans, breadcrumbs, query results all come from one
   elaboration), so golden files are stable.
 - **Initial golden corpus**: the seven conformance targets from §4 (E102,
   E110, E115, E118, E120, fleet E13x, protocol E14x), transcribed from the
   parent and sibling specs — their representative errors stop being
   aspirational prose and become CI.
-- **Explainer coverage lint**: a dialect's expansion machinery declares (or
+- **Explainer coverage lint**: a macro's expansion machinery declares (or
   the framework infers from its `elab` failure returns) its failure shapes;
   any shape with no matching `explain` clause is a build warning naming it.
   This dogfoods the never-raw goal — the fallback (§7) should fire only for

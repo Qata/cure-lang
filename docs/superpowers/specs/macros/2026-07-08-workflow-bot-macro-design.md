@@ -4,9 +4,9 @@
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (§7.3); sibling of
-[`2026-07-08-protocol-dialect-design.md`](2026-07-08-protocol-dialect-design.md)
+[`2026-07-08-protocol-macro-design.md`](2026-07-08-protocol-macro-design.md)
 (a bot conversation is morally a session — §7 below). Both surfaces are built
-as `dialect`s (parent §5) and both are **specializations of `reducer`**
+as `macro`s (parent §5) and both are **specializations of `reducer`**
 (parent §5.5) — host-side, full BEAM, no MCU constraints.
 
 ---
@@ -138,7 +138,7 @@ unpaid order" is not a code review comment or a runtime guard — it is the
 ### 2.1 Event sourcing by construction — the centerpiece
 
 This is not a feature added to `reducer`; it **falls out of the §5.5 design**
-and this dialect's job is mostly to say so and persist it:
+and this macro's job is mostly to say so and persist it:
 
 - The reducer's `Step` already separates `model` from `emission`. The
   emissions are exactly what an event-sourcing system calls the event log —
@@ -153,10 +153,10 @@ and this dialect's job is mostly to say so and persist it:
 
 `workflow` adds the persistence: each instance's message history + emission
 log lives in a `schema`-backed store (the `store` capability above; schemas,
-columns-as-refinements, and the storage backends are the `schema` dialect's
-business — [`2026-07-08-schema-dialect-design.md`](2026-07-08-schema-dialect-design.md)).
+columns-as-refinements, and the storage backends are the `schema` macro's
+business — [`2026-07-08-schema-macro-design.md`](2026-07-08-schema-macro-design.md)).
 Because emissions are typed against `OrderEmit`, the audit log is not strings
-in a table — it is a schema the `view`/`api` dialects can render directly.
+in a table — it is a schema the `view`/`api` macros can render directly.
 
 ### 2.2 Wall-clock time — durable timers
 
@@ -193,7 +193,7 @@ the reducer already knows how to wait.
 
 The dividend: a `view`/`api` admin surface renders **pending approvals for
 free** — they are exactly the requested-decision emissions not yet followed by
-a delivering message, a fold over the log the dialect ships as a template
+a delivering message, a fold over the log the macro ships as a template
 query. Nobody builds an inbox table; the event log *is* the inbox.
 
 ### 2.4 In-flight migration
@@ -202,7 +202,7 @@ Deploys happen mid-process; an order three weeks into `AwaitingPayment` must
 survive a schema change to `AwaitingPayment over {…}`. This is the `schema`
 spec's problem, deliberately not duplicated here: workflow models are
 schema-backed, so the **totality-checked migration chain**
-(`2026-07-08-schema-dialect-design.md`) applies to them like any other stored
+(`2026-07-08-schema-macro-design.md`) applies to them like any other stored
 record — every historical shape has a checked, total path to the current one.
 What this spec adds is the *semantics* question (migrate in place vs. drain
 old-version instances on their old definition), which is a genuine fork —
@@ -266,7 +266,7 @@ One user's conversation = one actor holding one reducer instance. This is
 BEAM's exact sweet spot: 10k concurrent conversations is an unremarkable
 Tuesday, isolation is per-process (one user's crash re-prompts one user), and
 idle sessions hibernate. Session lifecycle (spawn on first message, timeout to
-termination after declared inactivity) is the dialect's generated supervisor —
+termination after declared inactivity) is the macro's generated supervisor —
 users never write it. Long-lived session persistence rides the same store
 machinery as `workflow` (a bot session that must survive restarts is just a
 small workflow).
@@ -276,7 +276,7 @@ small workflow).
 A **platform adapter** normalizes each platform's webhook/socket traffic
 (Telegram, Discord, Slack, or MQTT for device-facing bots) into the bot's
 typed `Msg` values and routes by platform user id to the session actor.
-Adapters are **packages, not compiler work** — the dialect defines the
+Adapters are **packages, not compiler work** — the macro defines the
 adapter-facing interface (deliver typed `Msg` in, receive `say`/`ask` render
 calls out; interface details ledgered §8.5) and ships a reference adapter.
 Parsing free-text into a typed `Msg` is the adapter's problem, by whatever
@@ -316,7 +316,7 @@ failure is never a crash and never a silent drop — it is dialogue.
 ## 5. Explainers
 
 Following the parent §4 template (what you wrote → why forbidden → what
-instead), registered by this dialect:
+instead), registered by this macro:
 
 ```
 error[E175]: an order in AwaitingPayment has no payment to refund
@@ -339,7 +339,7 @@ error[E177]: workflow Order must end with a catch-all
 
 ## 6. `check` integration
 
-Shipped templates (parent §7.5 dialect-template mechanism), atop `reducer`'s
+Shipped templates (parent §7.5 macro-template mechanism), atop `reducer`'s
 inherited graph-conformance and init-validity templates:
 
 - **Replay determinism** (`workflow`): generate a message sequence, run it,
@@ -407,14 +407,14 @@ inherited graph-conformance and init-validity templates:
    the supervision shape need deciding.
 7. **Rate limiting** — per-session and per-platform outbound limits
    (platforms ban chatty bots); adapter-level concern vs. a declared
-   `rate` capability the dialect checks statically where literal.
+   `rate` capability the macro checks statically where literal.
 
 ## 9. Non-goals
 
 - **No BPMN import/export.** The graph notation is the process language;
-  round-tripping someone else's notation is a tooling project, not a dialect.
-- **No NLP / LLM intent parsing in the dialect.** An adapter may plug one in
-  (free text → typed `Msg` is exactly the adapter's job); the dialect sees
+  round-tripping someone else's notation is a tooling project, not a macro.
+- **No NLP / LLM intent parsing in the macro.** An adapter may plug one in
+  (free text → typed `Msg` is exactly the adapter's job); the macro sees
   typed messages and stays testable and total.
 - **No distributed workflow instances.** One instance = one actor = one node
   at a time; that is the consistency model. Fleets of instances are just many

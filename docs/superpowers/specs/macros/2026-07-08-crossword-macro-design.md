@@ -3,8 +3,8 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #65, promoted); built as a `dialect` (§5) — zero compiler
-special-casing. This dialect is the **poster child for the locked SMT trust
+(idea backlog #65, promoted); built as a `macro` (§5) — zero compiler
+special-casing. This macro is the **poster child for the locked SMT trust
 boundary as a product**: the fill solver may generate anything; only what the
 simple checked verifier accepts ever reaches a puzzle file.
 
@@ -20,7 +20,7 @@ constructor vocabulary, and makes the fill pipeline the project's
 solver-generates/kernel-verifies trust pattern made tangible: an untrusted
 search engine proposes fills, and simple, checked code verifies every one
 before it becomes a puzzle. Per the hiding principles (parent §3, LAW), the
-constructor declares a grid and word lists; the dialect manufactures the
+constructor declares a grid and word lists; the macro manufactures the
 indexed slot structure, the verification obligations, and the export code.
 No type, goal, or solver artifact is ever surfaced.
 
@@ -28,7 +28,7 @@ No type, goal, or solver artifact is ever surfaced.
 
 A `grid` declaration states dimensions, style, symmetry, the block pattern,
 and theme entries. **Slots are derived from the grid, never hand-declared**
-(hiding principle 1) — the dialect computes every Across and Down slot from
+(hiding principle 1) — the macro computes every Across and Down slot from
 the block pattern, numbers them by the standard convention, and checks the
 discipline cell-by-cell at compile time:
 
@@ -198,20 +198,20 @@ error[E1xx]: duplicate answer ERA
 ## 9. Relations
 
 - **`check`** — supplies the trust pattern and the ladder vocabulary this
-  dialect reports in; templates above.
+  macro reports in; templates above.
 - **`view`** — the one-line solving UI (§6).
 - **`parse`** — clue file import (`.xd`, plain-text clue lists) is a `parse`
   grammar; ledgered (§10).
 - **The `prompt` idea** — LLM-assisted clue *drafting* as an adapter: the
   model proposes candidate clues, the constructor picks and edits, the
-  dialect never auto-publishes a machine clue. Same shape as the solver
+  macro never auto-publishes a machine clue. Same shape as the solver
   boundary — generators generate, humans/checkers decide. Ledgered (§10).
 
 ## 10. Open decisions (ledger)
 
 1. **Cryptic support** — different grid conventions *and* a clue grammar
    (wordplay annotations, enumerations). `style :cryptic` covers the grid;
-   the clue grammar is probably a sibling dialect sharing this one's grid
+   the clue grammar is probably a sibling macro sharing this one's grid
    core — decide when a cryptic constructor shows up.
 2. **Word-list licensing & packaging** — shipped ranked dictionaries have
    licensing terms; pin list versions per puzzle (reproducible fills), and
@@ -232,9 +232,9 @@ error[E1xx]: duplicate answer ERA
 
 - **No automatic clue writing as a core feature** — the `prompt` adapter
   drafts; a human always selects. A puzzle whose clues no human chose is
-  not this dialect's product.
+  not this macro's product.
 - **No solving-engine competitiveness** — the shipped solver only needs to
   fill hobbyist grids acceptably; speed records belong to dedicated fill
   software, which the solver interface (§10.4) welcomes in.
 - **No other puzzle types** — sudoku, acrostics, spelling bees live in the
-  backlog's broader `puzzle` space; this dialect stays a crossword tool.
+  backlog's broader `puzzle` space; this macro stays a crossword tool.

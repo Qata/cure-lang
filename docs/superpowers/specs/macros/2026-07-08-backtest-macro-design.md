@@ -3,7 +3,7 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #93, promoted); built as a `dialect` (§5), zero compiler
+(idea backlog #93, promoted); built as a `macro` (§5), zero compiler
 special-casing. The four hiding principles (§3) are law: no user ever sees an
 index or a kernel error.
 
@@ -18,7 +18,7 @@ graded on (leakage/overfitting). `backtest` attacks all three in that order
 of confidence: look-ahead is **inexpressible** by type, zero-cost runs are
 **a compile error**, leakage across train/test splits is **inexpressible at
 the split boundary** — while overfitting itself gets only an honest lint,
-because nothing detects overfitting reliably and this dialect does not
+because nothing detects overfitting reliably and this macro does not
 pretend otherwise.
 
 The brand is skepticism: every other backtesting tool sells returns; this one
@@ -78,7 +78,7 @@ index `flow` already carries (parent §6.4). The same theorem that forbids an
 instantaneous feedback loop in `flow`, a screaming self-referential patch in
 `synth`, and a step-order dependence in `sim` also forbids a trading rule at
 *t* reading `close[t+1]`. **Backtesting is the fourth audience for one
-theorem** — the dialect adds no machinery, only vocabulary.
+theorem** — the macro adds no machinery, only vocabulary.
 
 Concretely: `px.close` at decision time *t* denotes the close of the *last
 completed* bar. `px.close |> shift(-1)` — tomorrow's close — is not a value a
@@ -111,7 +111,7 @@ mandatory, greppable, and printed in the report header (§7).
 
 ## 5. Data hygiene
 
-Data comes in through `schema` (sibling spec): this dialect brings no data
+Data comes in through `schema` (sibling spec): this macro brings no data
 layer of its own — it consumes the one that exists, as-of discipline included.
 
 - **Point-in-time joins.** Any join against fundamentals, earnings, or
@@ -122,7 +122,7 @@ layer of its own — it consumes the one that exists, as-of discipline included.
 - **Survivorship bias, named.** Universe declarations are **dated**:
   `universe sp500 as_of 2015-01-01` means membership *on that date*,
   delistings included thereafter. Running today's membership over the past
-  is the classic setup; the dialect cannot prove a data vendor honest, but
+  is the classic setup; the macro cannot prove a data vendor honest, but
   it forces the declaration to say which universe is meant, and the report
   repeats it.
 - **Walk-forward splits — leakage inexpressible.** `split walk_forward(train:
@@ -185,7 +185,7 @@ error[E237]: indicator `fast` is warmed up on test-segment data
   train window.
 ```
 
-## 9. `check` integration (parent §7.5 — the dialect ships its templates)
+## 9. `check` integration (parent §7.5 — the macro ships its templates)
 
 - **Leverage invariant:** the strategy never exceeds its declared
   `leverage max`. Static where derivable — `size fraction(f)`, `f <= 1.0`,
@@ -213,12 +213,12 @@ error[E237]: indicator `fast` is warmed up on test-segment data
   money types come from the ledger direction when it lands.
 - **`view`** — equity curves, drawdown charts, and walk-forward panels are
   observation streams rendered by `view`; the report is a document.
-- **`check`** — §9; static discharge of the leverage bound is this dialect's
+- **`check`** — §9; static discharge of the leverage bound is this macro's
   "tests you don't have to run" moment.
 
 ## 11. Safety & honesty
 
-This dialect is not financial advice and does not produce it. A backtest is
+This macro is not financial advice and does not produce it. A backtest is
 a statement about the past under declared assumptions; **it is not evidence
 of future returns**, and the report template says so verbatim. The compiler
 removes specific self-deceptions (§§3–5); it cannot remove market risk,
@@ -256,5 +256,5 @@ would carry an unmissable acknowledgment step. Nothing here commits to either.
 - **No HFT** — microsecond execution modeling is permanently out of scope;
   the honesty story does not extend there.
 - **No options pricing** — no greeks, no vol surfaces, no derivatives math.
-- **Not a data vendor** — bring your own data through `schema`; the dialect
+- **Not a data vendor** — bring your own data through `schema`; the macro
   checks what you declare about it, and cannot check what you did not.

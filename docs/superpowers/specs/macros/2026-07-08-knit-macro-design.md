@@ -3,7 +3,7 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #17, promoted). Built as a `dialect` (§5) — zero compiler
+(idea backlog #17, promoted). Built as a `macro` (§5) — zero compiler
 special-casing; hiding principles (§3) are law here as everywhere.
 
 ---
@@ -21,7 +21,7 @@ And the standard failure mode is *pure arithmetic*: stitch counts that don't
 balance from one row to the next — exactly the kind of fact refinement types
 check trivially, since every count is a concrete literal or a size parameter
 (so per hiding principle 3 every obligation discharges by computation). This
-dialect is the compile error every knitter has wanted for two centuries.
+macro is the compile error every knitter has wanted for two centuries.
 
 The user writes a pattern that reads like a published pattern — that is the
 point. Cure checks every row balances, in every size, against the declared
@@ -156,7 +156,7 @@ One source of truth, several renderings:
 
 ## 7. Errors — explainers in knitter vocabulary
 
-Per parent §4, no kernel vocabulary ever surfaces; the dialect's `explain`
+Per parent §4, no kernel vocabulary ever surfaces; the macro's `explain`
 block owns the failure shapes. (Error-code block allocation for `knit` is
 pending in the explainer registry — E17x used illustratively.)
 
@@ -211,20 +211,20 @@ to write instead — in stitches and rows, never in types.
   grammar over the abbreviation vocabulary. High-value on-ramp, real
   ambiguity in the wild corpus — **ledgered** (§10), not v1.
 - **`blocks`** — a chart-grid editor as an alternative visual input surface
-  rides [`2026-07-08-blocks-dialect-design.md`](2026-07-08-blocks-dialect-design.md); one line here.
+  rides [`2026-07-08-blocks-macro-design.md`](2026-07-08-blocks-macro-design.md); one line here.
 - **Report/PDF generation** — §6's printable artifact shares whatever
-  document-rendering machinery other dialects' reports use; the pattern PDF
-  is a renderer target, not new dialect semantics.
+  document-rendering machinery other macros' reports use; the pattern PDF
+  is a renderer target, not new macro semantics.
 - **`check`** — §8; the generator/oracle machinery is Antigen's, reused.
 
 ## 10. Open decisions (ledger)
 
 1. **Crochet** — a genuinely different algebra (stitches build on chains and
    into arbitrary earlier stitches; turning chains; rounds that spiral).
-   A separate dialect, explicitly **not** scope creep here — ledgered so
+   A separate macro, explicitly **not** scope creep here — ledgered so
    nobody bolts it onto the knit algebra. **Promoted 2026-07-08:**
-   [`2026-07-08-crochet-dialect-design.md`](2026-07-08-crochet-dialect-design.md)
-   — position-vector state (`Vec(Position,_)`) generalizing this dialect's
+   [`2026-07-08-crochet-macro-design.md`](2026-07-08-crochet-macro-design.md)
+   — position-vector state (`Vec(Position,_)`) generalizing this macro's
    `Nat` count; same checking discipline, floor identical to knit.
 2. **Colorwork** — probably v1.5, and the idea is worth preserving verbatim:
    **Fair Isle float lengths as refinements** — "no float longer than 5
@@ -253,9 +253,9 @@ to write instead — in stitches and rows, never in types.
 
 ## 11. Non-goals
 
-- **No crochet** — separate algebra, separate dialect (§10.1, now spec'd at
-  [`2026-07-08-crochet-dialect-design.md`](2026-07-08-crochet-dialect-design.md)).
-- **No garment *design* automation** — the dialect checks patterns; it does
+- **No crochet** — separate algebra, separate macro (§10.1, now spec'd at
+  [`2026-07-08-crochet-macro-design.md`](2026-07-08-crochet-macro-design.md)).
+- **No garment *design* automation** — the macro checks patterns; it does
   not grade, draft, or design them. "Given these measurements, generate a
   sweater" is a different product; `knit` is the tech editor, not the
   designer.

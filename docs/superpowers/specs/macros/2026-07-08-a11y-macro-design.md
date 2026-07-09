@@ -3,10 +3,10 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #78, promoted); built on the `dialect` facility (parent §5) —
+(idea backlog #78, promoted); built on the `macro` facility (parent §5) —
 though more precisely it is a **rule pack**: it exports almost no syntax of
 its own. It is consumed by `view`/`form`
-([web trio](2026-07-08-web-trio-dialect-design.md)) and `display` (backlog
+([web trio](2026-07-08-web-trio-macro-design.md)) and `display` (backlog
 #3), which run its rules over their own declarations.
 
 ---
@@ -80,20 +80,20 @@ silent* — the marked opt-out is the load-bearing design point, exactly the
   with `reduced: none` as the common explicit case. The renderer switches on
   the client's `prefers-reduced-motion`.
 - **Form labels (3.3.2).** Every `form` input is bound to a visible label —
-  the form dialect's single-source validation (web trio §4.2) gets its labels
+  the form macro's single-source validation (web trio §4.2) gets its labels
   checked here: one field declaration yields the refinement, the client
   hints, the server check, *and* the label binding.
 
 ## 4. The honesty ceiling
 
-Automated checking catches only a fraction of accessibility, and this dialect
+Automated checking catches only a fraction of accessibility, and this macro
 does not pretend otherwise. Static rules cannot verify that alt text is
 *meaningful*, that reading order makes *sense* to a human, or that the
 experience is actually usable with a screen reader. `alt: "image"` passes
 coverage and fails users; a focus order can be total and consistent and still
 be bewildering.
 
-What this dialect does is eliminate the **mechanical** violations — contrast
+What this macro does is eliminate the **mechanical** violations — contrast
 misses, unlabeled buttons, heading skips, keyboard traps — so that human
 attention goes where only humans can judge. It must never be marketed as
 "accessibility solved," and no report line it emits may imply conformance
@@ -108,7 +108,7 @@ What this does NOT check:
 - anything about content the user computes at runtime beyond the boundary
   checks in §2.
 
-Docs rule: every mention of the dialect's guarantees carries the ceiling in
+Docs rule: every mention of the macro's guarantees carries the ceiling in
 the same breath. The pitch is "the mechanical violations are gone before
 review," never "your app is accessible."
 
@@ -117,7 +117,7 @@ review," never "your app is accessible."
 There is almost no surface — that is the point. The rules are **on by
 default** for every `view` and `form`, at **AA level**, and violations are
 **errors, not warnings** (the parent's uniform-strictness spirit: a rule that
-can be ignored is a rule that will be). Users meet the dialect only as good
+can be ignored is a rule that will be). Users meet the macro only as good
 error messages.
 
 ```cure
@@ -155,7 +155,7 @@ axe-core's rule list.
 Explainers show the computed evidence and a concrete fix. The
 nearest-passing-color suggestion needs a context query (the read-only
 elaboration-artifact interface of the
-[error-explainer spec §6](2026-07-08-error-explainer-design.md)): the dialect
+[error-explainer spec §6](2026-07-08-error-explainer-design.md)): the macro
 deposits color pairs at elaboration time and registers
 `nearest_passing(fg, bg, ratio)` over them.
 
@@ -237,7 +237,7 @@ reducer state-space generation the check spec built for `view`:
 
 - **No screen-reader runtime behavior** — no AT simulation, no live-region
   runtime, no promises about how any given reader announces anything.
-- **No manual-audit replacement** — §4 is normative; the dialect's output
+- **No manual-audit replacement** — §4 is normative; the macro's output
   is an input to human review, not a substitute for it.
 - **No PDF/document accessibility** — this is about `view`/`form`/`display`
   trees; documents are a different product.

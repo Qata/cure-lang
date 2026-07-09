@@ -4,8 +4,8 @@
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (§7.4); sibling and substrate of
-[`2026-07-08-fleet-dialect-design.md`](2026-07-08-fleet-dialect-design.md)
-(fleet's generated channels are `protocol` sessions). Built as a `dialect`
+[`2026-07-08-fleet-macro-design.md`](2026-07-08-fleet-macro-design.md)
+(fleet's generated channels are `protocol` sessions). Built as a `macro`
 (§5) — zero compiler special-casing.
 
 ---
@@ -207,7 +207,7 @@ Shipped property templates (surfaces spec §7.5):
   against silicon; no unification attempted (the datasheet side can't run
   our endpoint), but explainer vocabulary is shared ("at this step…").
 - **`bot`** conversations and **`api`** request/response are session
-  specializations (an `api` route is a two-step protocol); those dialects
+  specializations (an `api` route is a two-step protocol); those macros
   may lower onto protocol internally — ledgered (§10.7).
 
 ## 9. Non-Cure peers
@@ -240,7 +240,7 @@ A phone app or browser isn't Cure. The declaration exports:
    declared compatibility window (adds `deprecated` steps); shared problem
    with fleet mixed-version rollout (fleet §11.5) — resolve once, here.
 6. **Foreign stub generation** (§9) — which languages first; whether stubs
-   are part of the dialect or a separate tool.
+   are part of the macro or a separate tool.
 7. **Lowering `api`/`bot` onto protocol** (§8) — unify now or after all
    three exist.
 8. **Encrypted transport story** for the IFC check (§6) — what counts as
@@ -256,4 +256,4 @@ A phone app or browser isn't Cure. The declaration exports:
   opt-in by writing a protocol; bare typed sends stay as they are (E045/
   E046).
 - Not a crypto library — §10.8 picks existing transport security; the
-  dialect only *checks* that secrets meet a keyed edge.
+  macro only *checks* that secrets meet a keyed edge.

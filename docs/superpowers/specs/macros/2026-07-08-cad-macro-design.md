@@ -4,8 +4,8 @@
 **Status:** design (operator-requested; sketched from a Cadova comparison).
 Child of [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 — it extends the parent's **beyond-the-MCU** reach (§7) into *fabrication*.
-Built as a `dialect` (see [`2026-07-08-dialect-facility-design.md`](2026-07-08-dialect-facility-design.md));
-consumes [`units`](2026-07-08-units-dialect-design.md) (`Length`). Prior art:
+Built as a `macro` (see [`2026-07-08-macro-facility-design.md`](2026-07-08-macro-facility-design.md));
+consumes [`units`](2026-07-08-units-macro-design.md) (`Length`). Prior art:
 Cadova (`~/3DModelling/Cadova`), SwiftSCAD, OpenSCAD, CadQuery.
 
 ---
@@ -22,7 +22,7 @@ and — the fabrication payoff — **statically-known printability constraints**
 (minimum wall, minimum feature, sane radii) checked before a single triangle
 is generated.
 
-This is a **host-side** dialect. Boolean/mesh evaluation runs a real geometry
+This is a **host-side** macro. Boolean/mesh evaluation runs a real geometry
 kernel (Manifold-class) reached by `@extern` on desktop BEAM, exactly as
 Cadova reaches Manifold-Swift; the output is a mesh/3MF artifact. CSG on a
 $3 microcontroller is a non-goal (§9) — `cad` is Cure being *a BEAM language
@@ -107,7 +107,7 @@ Rules:
   `union { … }`, `intersecting { … }`. Chained by indentation, not by a
   builder. `subtracting`/`union`/`intersecting` take a `Block` hole; nothing
   about them is special-cased.
-- **All lengths are `Length`** (the units dialect). A bare `20` where a
+- **All lengths are `Length`** (the units macro). A bare `20` where a
   length is meant is E280 — the units front door, reused wholesale.
 - **`for … in <lo> to <hi> step <s>`** is a comprehension whose body is a
   `Shape`, producing a `List(Shape)` that splices into the enclosing
@@ -122,13 +122,13 @@ rule — a CAD user reads it cold and notices nothing foreign. The exact
 spelling of the modifier vocabulary is ledgered (§8.1), not load-bearing
 here.
 
-## 4. Author surface — how `cad` is defined as a dialect
+## 4. Author surface — how `cad` is defined as a macro
 
 `cad` is library code. The load-bearing rules, in the §2 meta-grammar
 notation (examples with holes):
 
 ```cure
-dialect Cad
+macro Cad
   ## Solid modeling: shapes, transforms, boolean combinations.
 
   # primitives — refinements ride on the hole
@@ -219,7 +219,7 @@ dialect Cad
   facility feature is ledgered (§8.2), not assumed.
 - **Evaluation is host-side FFI.** `Cad.union`/`extrude`/`subtract` are
   `@extern` calls into the geometry kernel (Manifold-class) on desktop BEAM;
-  `model` exports 3MF/STL. The dialect is the typed, checked *surface*; the
+  `model` exports 3MF/STL. The macro is the typed, checked *surface*; the
   triangle-crunching is a native port, exactly as in every code-CAD tool.
 
 ## 6. Error explainers (E280–E289)
@@ -287,7 +287,7 @@ statically decidable case only).
    architecture, so deferred to implementation with real CAD users.
 2. **Environment / ambient context** (§5) — `with facets 64 { … }`
    reader-threading (v1) vs. a first-class ambient-context feature in the
-   dialect facility that `reducer`/`flow`/`cad` all share. The facility
+   macro facility that `reducer`/`flow`/`cad` all share. The facility
    feature is the right long-term home; ship the local `with` first.
 3. **Which geometry kernel, and the FFI boundary** — Manifold (Cadova's
    choice, maintains manifoldness) vs. alternatives; how a native port is
@@ -295,8 +295,8 @@ statically decidable case only).
    pure-BEAM fallback kernel is ever wanted (probably not — §9).
 4. **Printer-profile source** — where the nozzle/bed/overhang facts that
    power E283 live: a `profile` declaration in the model, a project-level
-   config (the `config` dialect), or slicer-file import. Leaning: a
-   `profile` block that is itself a tiny dialect, so the refinements have a
+   config (the `config` macro), or slicer-file import. Leaning: a
+   `profile` block that is itself a tiny macro, so the refinements have a
    typed source.
 5. **2D vs 3D unification detail** — whether `Shape` (dimension-polymorphic)
    is a legal user-facing type for helpers, or dimension must always be
@@ -314,7 +314,7 @@ statically decidable case only).
 
 - **No CSG on the microcontroller** — `cad` is host-side; AtomVM/ESP32 do not
   run a geometry kernel. The parent's target-honesty rule (§1) applies: a
-  dialect cannot make a $3 chip a CAD workstation. (A *board* can consume a
+  macro cannot make a $3 chip a CAD workstation. (A *board* can consume a
   `cad`-exported STL as a fabrication artifact; it does not evaluate it.)
 - **No claim of static manifoldness** — that is a backend invariant `cad`
   inherits, not a theorem it proves (§5). We do not counterfeit a guarantee

@@ -3,10 +3,10 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #33, promoted); built as a `dialect` (§5), zero compiler
+(idea backlog #33, promoted); built as a `macro` (§5), zero compiler
 special-casing. The four hiding principles (§3) are law: no user ever sees an
 index or a kernel error. Closest sibling:
-[`pattern`](2026-07-08-sim-pattern-dialect-design.md) — same demographic,
+[`pattern`](2026-07-08-sim-pattern-macro-design.md) — same demographic,
 same OSC-out architecture, same Erlang-timing pedigree.
 
 ---
@@ -65,7 +65,7 @@ Surface rules:
 - **`module name = ctor(params)`** instantiates from the module library
   (oscillators, filters, envelopes, LFOs, VCAs, mixers, delays, S&H,
   sequencers). Parameters carry units (§4); a bare number where a unit
-  belongs is the units dialect's error, inherited for free.
+  belongs is the units macro's error, inherited for free.
 - **`patch`** holds cables. One producer may feed many consumers (a mult is
   just multiple arrows from one port); an input port takes exactly one
   cable — mixing is explicit via `mixer(n)`, exactly as on a real rack.
@@ -116,7 +116,7 @@ requires an explicit converter — Eurorack's audio-vs-CV distinction, typed:
   (a raw control step at audio rate is a click; say how to smooth it).
 
 A rate mismatch without a converter is a type error with a friendly
-explainer (§6). Units ride the units dialect throughout — `hz`, `db`, `st`
+explainer (§6). Units ride the units macro throughout — `hz`, `db`, `st`
 (semitones), `samples`: `osc1.freq + 7` does not compile,
 `osc1.freq |> up(7st)` does. The ms/µs bug class, killed the same way.
 
@@ -126,7 +126,7 @@ Stated plainly, because everything else here depends on it: **the BEAM does
 control-rate work superbly and does not do per-sample audio DSP.** Not a
 limitation to apologize for — it is Sonic Pi's actual, proven architecture:
 an Erlang timing core driving an external synthesis engine — we keep the
-split. The dialect owns the **patch graph** (module topology, port/rate/unit
+split. The macro owns the **patch graph** (module topology, port/rate/unit
 types, the causality check — all compile-time) and the **control signals**
 (LFOs, envelope schedules, sequencer clocks, parameter automation — BEAM-side
 on the Flow runtime, at control rate). The backend owns per-sample DSP:
@@ -188,7 +188,7 @@ and names the click it prevents.)
 
 ## 7. `check` integration
 
-Dialect-shipped templates (parent §7.5 — "your dialects write your tests"),
+Macro-shipped templates (parent §7.5 — "your macros write your tests"),
 run against the compiled control graph — and, for audio laws, the backend's
 rendered output where the sim harness supports it.
 
@@ -246,7 +246,7 @@ too (control scheduling is deterministic, by `sim`'s lockstep argument).
 6. **Converter defaults** — blessed `a2k`/`k2a` window/slew defaults so
    beginners can write `a2k(x)`, or force the parameter (honest teaching)?
 7. **Distributed patches over `fleet`** — CV brain on one node, modulation
-   on another; revisit once both dialects have real users.
+   on another; revisit once both macros have real users.
 8. **Visual patch editor via `blocks`** — a cable graph is the most visual
    surface in the catalog; owned by the `blocks` effort.
 

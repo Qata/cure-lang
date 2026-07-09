@@ -3,7 +3,7 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§6.2); built as a `dialect` (§5). Priority #4 in the surfaces spec — **the
+(§6.2); built as a `macro` (§5). Priority #4 in the surfaces spec — **the
 ecosystem play**: when contributing a driver is a declarative afternoon, the
 package ecosystem writes itself, which is the actual thing that made Arduino
 sticky.
@@ -141,7 +141,7 @@ bus automatically:
 Register access lowers to the board's bus handles (board spec §6.1) and
 thence to `@extern` NIF calls (AtomVM `i2c`/`spi_`/`uart` drivers, or Linux
 `/dev` on generic-unix). Multi-byte registers ride the `packet` machinery for
-layout/endianness. The dialect emits burst reads where the declaration shows
+layout/endianness. The macro emits burst reads where the declaration shows
 contiguous `bytes(n)` (raw_data above is one transaction, not eight).
 
 ## 6. `check` integration (shipped templates)
@@ -185,7 +185,7 @@ contiguous `bytes(n)` (raw_data above is one transaction, not eight).
    register pairs; and declared `reset_value` per register (needed for the
    whole-register-write proof and the mock's power-on state).
 5. **Timing-critical protocols** — WS2812/DHT22-class bit-banged timing does
-   NOT fit this dialect (µs-level waveforms need the future cost/WCET grade
+   NOT fit this macro (µs-level waveforms need the future cost/WCET grade
    axis or dedicated NIFs). Honest scope note in docs; NIF-backed escape
    hatch (`@extern`) is the interim answer.
 6. **`sim` behavior blocks** (§4) — optional scripted dynamics for mocks

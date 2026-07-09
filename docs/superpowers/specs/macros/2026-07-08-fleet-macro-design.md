@@ -3,7 +3,7 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§7.4); built as a `dialect` (§5), so zero compiler special-casing.
+(§7.4); built as a `macro` (§5), so zero compiler special-casing.
 **Operator goal (verbatim intent):** write a `hub` logic section that
 coordinates every item of the fleet *as if it ran on a beefier central hub* —
 but the compiler **distributes that logic among the nodes**, which communicate
@@ -158,7 +158,7 @@ error[E13x]: `session_count` (hub, line 41) is stateful and drives sinks on
 - Option 1 (`at <node>`) is one annotation and covers the overwhelming
   majority of real cases (the single-writer principle).
 - Option 2 asks the user to declare a commutative-monoid merge; the
-  `check` dialect ships a template property that *tests* the claimed
+  `check` macro ships a template property that *tests* the claimed
   commutativity/associativity (and certificate elevation can often prove it
   for arithmetic merges).
 - Option 3 is deliberately loud and rare; the consensus primitive choice is

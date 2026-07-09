@@ -3,11 +3,11 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested flagship; backlog #99 promoted).
 Child of [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md);
-built as a `dialect` (§5). Heaviest consumer of
-[`fleet`](2026-07-08-fleet-dialect-design.md),
-[`driver`](2026-07-08-driver-dialect-design.md),
-[`units`](2026-07-08-units-dialect-design.md), and
-[`check`](2026-07-08-check-dialect-design.md).
+built as a `macro` (§5). Heaviest consumer of
+[`fleet`](2026-07-08-fleet-macro-design.md),
+[`driver`](2026-07-08-driver-macro-design.md),
+[`units`](2026-07-08-units-macro-design.md), and
+[`check`](2026-07-08-check-macro-design.md).
 
 **Operator direction (verbatim intent):** NASA-level multi-sensor redundancy —
 whether the sensors live on one ESP or several — the way the Shuttle used
@@ -19,7 +19,7 @@ optical water level and salinity.
 ## 1. Prior art — and the gap this fills
 
 - **Reef-Pi** (open-source Raspberry Pi controller): the module taxonomy this
-  dialect inherits — equipment, ATO, temperature, pH, dosing, lighting,
+  macro inherits — equipment, ATO, temperature, pH, dosing, lighting,
   timers, macros. Single sensor per function; no redundancy concept.
   (reef-pi.github.io, github.com/reef-pi/reef-pi)
 - **Neptune Apex ATK** (the commercial reference for top-off): a four-layer
@@ -45,7 +45,7 @@ semantics**, (b) **dissimilarity** as a first-class, checked property, or
 (c) **compile-time common-mode analysis** — proof that no single fault
 domain (node, bus, power rail, mounting point) can defeat a quorum. All
 three are exactly what a type-checked fleet language can do statically.
-That is this dialect.
+That is this macro.
 
 ## 2. The hazard model (why voting, and why the operator's two callouts)
 
@@ -75,7 +75,7 @@ single point of belief.
 | Analytic redundancy | **`derived` channels** — model-based estimates that vote alongside physical sensors (Apex's IQ-Fill, generalized) |
 | Force-fight / hardware voting at actuators | **Actuator interlocks** — max-runtime and limit sensors enforced *below* the control loop |
 | Fail-operational → fail-safe | **Degradation ladder** — declared per loop, coverage-checked |
-| A mechanical backup no computer can override | **Kept.** The float valve stays. Software voting never replaces the hardware backstop; the dialect *documents* it in the plan report. |
+| A mechanical backup no computer can override | **Kept.** The float valve stays. Software voting never replaces the hardware backstop; the macro *documents* it in the plan report. |
 
 ## 4. Surface
 
@@ -86,7 +86,7 @@ dashboard):
 reef Display90
   fleet
     node sump on :esp32c3
-      let opt_a  = OpticalLevel.on(pin.gpio4)     # driver dialect
+      let opt_a  = OpticalLevel.on(pin.gpio4)     # driver macro
       let flt_a  = FloatSwitch.on(pin.gpio5)
       let cond_1 = Conductivity.on(i2c0(0x64))
       let tmp_1  = Ds18b20.on(pin.gpio6)
@@ -333,12 +333,12 @@ warning[reef]: ato interlock allows 90s/30min but the TopOff loop under
   water changes, media swaps — with `after 14d` timers).
 - **`home`/`grow`** (backlog) — the quantity/quorum/interlock core specced
   here is domain-neutral; if a second domain adopts it, extract a shared
-  `quorum` sub-dialect (ledgered).
+  `quorum` sub-macro (ledgered).
 
 ## 14. Safety honesty
 
 This is livestock and property, not human life: the framing is honest
-engineering, not certification. The dialect's guarantees are about
+engineering, not certification. The macro's guarantees are about
 *declared* topology (it cannot know about the snail — only that you gave the
 snail two brackets to defeat); sensors it doesn't know about don't exist;
 and the last line of defense must remain mechanical and dumb (§7). The docs
@@ -487,11 +487,11 @@ criterion.
 
 ## 16. Open decisions (ledger)
 
-1. **Quorum sub-dialect extraction** (§13) — decide when `home`/`grow` want
+1. **Quorum sub-macro extraction** (§13) — decide when `home`/`grow` want
    it; premature now.
 2. **Error-code block** — register a reef block (E2xx range) with the
    explainer registry; also allocate blocks for the other promoted-twelve
-   dialects in the same pass.
+   macros in the same pass.
 3. **Redundant actuators** — dual return pumps / dual heaters
    (alternation, wear-leveling, failover): natural next step, design
    deferred until the sensor side lands.
@@ -520,7 +520,7 @@ criterion.
     schedule for un-isolated cells.
 11. **Kamoer-strip driver declaration** — range/resolution/protocol of the
     KWC-style long optical sensor as a shipped `driver`; plus ladder-channel
-    sugar (`ladder [...] at heights`) as dialect surface vs. plain channels.
+    sugar (`ladder [...] at heights`) as macro surface vs. plain channels.
 
 ## 17. Non-goals
 
@@ -528,7 +528,7 @@ criterion.
 - No replacement of mechanical backstops (§7 — designed-in humility).
 - No cloud dependency: the tank must not care that the internet is down
   (host node optional; alerts degrade to local buzzer/display).
-- No chemistry *management* advice (the dialect controls; reef chemistry
+- No chemistry *management* advice (the macro controls; reef chemistry
   targets are the keeper's numbers, entered in `config`).
 
 ## Appendix A — Salinity channels: the full survey (2026-07-08)

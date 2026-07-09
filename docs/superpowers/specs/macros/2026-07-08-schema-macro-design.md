@@ -4,7 +4,7 @@
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (§7.2), **absorbing §6.11 (OTA device-state migration — same machinery)**;
-built as a `dialect` (§5), so zero compiler special-casing.
+built as a `macro` (§5), so zero compiler special-casing.
 
 ---
 
@@ -178,7 +178,7 @@ worst-case serialized size per table from the schema (refinements bound it:
 budget report; an unbounded column (`String`, `List(T)`) in an `nvs` schema
 is a *warning* with an explainer suggesting a length refinement. Write-budget
 and wear notes are ledgered (§11.6). Serialization itself is the `codec`
-dialect (one blessed binary codec per backend; round-trip proved once,
+macro (one blessed binary codec per backend; round-trip proved once,
 centrally, inherited — parent §7.2).
 
 ## 6. Concurrency — an actor per store
@@ -238,7 +238,7 @@ error[E162]: cannot delete this User — 3 Items still reference it
   items first, or declare `on_delete cascade` if that is the intent.
 ```
 
-## 9. `check` integration (parent §7.5 — the dialect ships its templates)
+## 9. `check` integration (parent §7.5 — the macro ships its templates)
 
 - **Migration round-trip:** for every `migrate from v_{n-1}`, generate
   `v_{n-1}` records *from the old schema's refinements* (generators are free —
@@ -303,5 +303,5 @@ error[E162]: cannot delete this User — 3 Items still reference it
 - **No distributed transactions** — cross-node coordination is flow-level
   (`fleet`'s ownership rules); a store belongs to one node, full stop.
 - **No full SQL surface** — the combinators are the language; SQL is a
-  lowering target and an `unsafe` escape hatch, not a dialect goal.
+  lowering target and an `unsafe` escape hatch, not a macro goal.
 - No schema inference from existing databases; no down-migrations (§11.3).

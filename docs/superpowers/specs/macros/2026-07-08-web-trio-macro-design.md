@@ -4,9 +4,9 @@
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (§7.1); sibling of
-[`2026-07-08-protocol-dialect-design.md`](2026-07-08-protocol-dialect-design.md)
+[`2026-07-08-protocol-macro-design.md`](2026-07-08-protocol-macro-design.md)
 (an `api` route is a two-step session — relation §8, unification ledgered).
-All three built as `dialect`s (parent §5) — zero compiler special-casing.
+All three built as `macro`s (parent §5) — zero compiler special-casing.
 
 ---
 
@@ -210,7 +210,7 @@ form Signup
   rejects, because there is exactly one declaration.
 - Forms render through `view` (each step is a model state of a derived
   reducer) and submit through `api` (each step transition is a route) — the
-  dialect wires the trio together so the user declares fields, not plumbing.
+  macro wires the trio together so the user declares fields, not plumbing.
 - `on complete` receives the concatenated, fully-refined record — total, no
   `Option`s to unwrap, because the types made partial submissions impossible.
 
@@ -225,7 +225,7 @@ form Signup
 
   The **same explainer text** serves the compile-time route test (a `check`
   template feeding the route its own bad inputs) and the runtime response —
-  written once in the dialect's `explain` block, field-named, never leaking
+  written once in the macro's `explain` block, field-named, never leaking
   `cannot_unify` shapes.
 
 - **View field not in current state** (compile):
@@ -246,7 +246,7 @@ form Signup
     exists once Profile's data does.
   ```
 
-## 6. `check` integration (parent §7.5 — dialect-shipped templates)
+## 6. `check` integration (parent §7.5 — macro-shipped templates)
 
 - **`api`**: every route parses its own generated requests (generators derived
   from the param/body refinements — valid by construction, no discards); every
@@ -294,7 +294,7 @@ form Signup
 3. **Auth / session story** — middleware surface (`api` blocks compose a
    `with auth` layer?), where the session id lives, and how `secret`
    (IFC axis) constrains what a handler may echo into a response.
-4. **Static assets** — out of dialect scope (serve from a directory,
+4. **Static assets** — out of macro scope (serve from a directory,
    pass-through) vs. content-hashed and typed references from `view`.
 5. **Raw-HTML escape hatch** — none at all vs. `unsafe raw(s)` per the locked
    holes/unsafe taxonomy. Leaning `unsafe raw`: greppable pressure valve

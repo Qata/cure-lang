@@ -3,7 +3,7 @@
 **Date:** 2026-07-08
 **Status:** design (operator-requested). Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§7.3); built as `dialect`s (§5). Both target **HOST** (full BEAM /
+(§7.3); built as `macro`s (§5). Both target **HOST** (full BEAM /
 generic-unix) — no AtomVM constraints apply. `cli` is the first program most
 new users actually write; `job` is the BEAM guarantee ("your job cannot
 silently die") surfaced as one keyword.
@@ -12,7 +12,7 @@ silently die") surfaced as one keyword.
 
 ## 1. Purpose
 
-Two service-domain dialects that share a spine: **typed declarations at the
+Two service-domain macros that share a spine: **typed declarations at the
 boundary, ordinary total Cure inside.** `cli` declares commands, flags, and
 positional args with types and refinements, and generates the parser, help,
 and completion — argument validation and compile-time checking are the *same
@@ -54,7 +54,7 @@ Surface rules:
   required, and the parser says so.
 - **`run(args)`** is the per-command handler. `args` is a **typed record**
   manufactured by the elaborator from the declarations (hiding principle 1:
-  users write facts, the dialect writes the type). Inside `run`, every field
+  users write facts, the macro writes the type). Inside `run`, every field
   already satisfies its refinement — no re-checking, ever.
 - **`##` doc comments** are the help text. Generated from the declaration:
   the parser, `--help` at every level, shell completion scripts
@@ -74,7 +74,7 @@ error: --port must be between 1 and 65535, got 70000
 ```
 
 Single source of truth by construction: the parser's error path calls the
-dialect's explainer with the same failure shape (`{:refinement_failed, …}`)
+macro's explainer with the same failure shape (`{:refinement_failed, …}`)
 the elaborator would report. There is no second, hand-written validation
 message to drift.
 
@@ -124,8 +124,8 @@ job Heartbeat
 Surface rules:
 
 - **`schedule`** — a cron expression or `every <duration>` (reusing units
-  literals). Cron strings are **validated at compile time**: the dialect
-  parses them internally (a `parse`-dialect grammar), so an invalid cron
+  literals). Cron strings are **validated at compile time**: the macro
+  parses them internally (a `parse`-macro grammar), so an invalid cron
   string never ships. Timezone: **UTC-only in v1** — stated on the tin;
   local-tz semantics are ledgered (§8.4).
 - **`retry`** — `max` attempts and a backoff family: `constant(d)`,
@@ -203,21 +203,21 @@ what to write instead*):
 ## 6. Relations
 
 - **units** — `every 5m`, `timeout 10m`, `backoff constant(10s)`: durations
-  are the units dialect's literals, nothing new.
+  are the units macro's literals, nothing new.
 - **parse** — the cron grammar is a `parse` declaration internally, and cli
-  arg tokenization may reuse it; both dialects are `parse` consumers, not
+  arg tokenization may reuse it; both macros are `parse` consumers, not
   reimplementers.
 - **config** — jobs read `config`; CLI flags can override config values.
   **Precedence, stated once: flags > environment > config defaults.** The
-  cli dialect generates the override wiring so no user writes it.
+  cli macro generates the override wiring so no user writes it.
 - **schema** — job persistence and dead-letter records are natural `schema`
   tables when persistence lands (§8.2).
 - **workflow** — a job is a fine *driver* for a workflow (nightly tick
   advances `Order` reducers); the job owns the clock, the workflow owns the
   state.
 - **toolchain (dogfood)** — `cure` itself (`new`/`run`/`flash`/`jobs`/…)
-  should eventually be self-hosted on the `cli` dialect. If our own CLI
-  can't be expressed in it, the dialect isn't done — the §5.4 dogfood test,
+  should eventually be self-hosted on the `cli` macro. If our own CLI
+  can't be expressed in it, the macro isn't done — the §5.4 dogfood test,
   applied to services.
 
 ## 7. Open decisions (ledger)
@@ -240,7 +240,7 @@ what to write instead*):
    (mutating dotfiles is invasive; print-only is forgettable).
 6. **Structured output modes** — `--json` on generated commands (and on
    `cure jobs`) for scripting; interacts with help generation and error
-   rendering, so it's a dialect feature, not per-app boilerplate.
+   rendering, so it's a macro feature, not per-app boilerplate.
 7. **Overlap-lint duration estimate** (§4) — observed history vs. an
    `expect_duration` declaration vs. both; and where history lives before
    persistence (§8.2) exists.
@@ -248,7 +248,7 @@ what to write instead*):
 ## 8. Non-goals
 
 - **No argparse-ecosystem parity.** No plugin middleware, no dynamic command
-  registration, no hooks-around-parsing. The dialect covers the declarative
+  registration, no hooks-around-parsing. The macro covers the declarative
   90%; the rest is ordinary Cure in `run`.
 - **Not a cron daemon replacement.** Jobs live inside a running Cure app
   (that's what makes `sup` supervision real); nothing here manages system

@@ -1,16 +1,16 @@
-# `sim` & `pattern` — Play & Learning Dialects (+ Games Scoping Note)
+# `sim` & `pattern` — Play & Learning Macros (+ Games Scoping Note)
 
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(§7.6); built as `dialect`s (§5), zero compiler special-casing. The four
+(§7.6); built as `macro`s (§5), zero compiler special-casing. The four
 hiding principles (§3) are law: no user ever sees an index or a kernel error.
 
 ---
 
 ## 1. Purpose
 
-These are the joy-magnets — dialects for the demographic that made Arduino
+These are the joy-magnets — macros for the demographic that made Arduino
 big, before they own hardware at all. `sim` turns the BEAM's actual superpower
 (100k+ lightweight processes on a laptop) into agent-based modeling; `pattern`
 turns its *proven* live-music pedigree (Sonic Pi's timing core is famously
@@ -32,7 +32,7 @@ type Health =
   | Recovered
 
 sim Epidemic
-  space grid(100, 100)                 # library space; dialect is space-agnostic
+  space grid(100, 100)                 # library space; macro is space-agnostic
   seed 42                              # same seed ⇒ same run, exactly
   clock every 50ms                     # one tick = one simulated day
 
@@ -61,8 +61,8 @@ Surface rules:
 - **`rule`** clauses run in declaration order each tick; each is a **pure
   function of `(self, nbhd, rng)`** — own state, neighborhood *snapshot*,
   per-agent PRNG. That signature is the whole determinism contract (§2.2);
-  the dialect makes anything else inexpressible (correct-by-construction).
-- **`space`** is a library value, not dialect syntax. v1 ships the two
+  the macro makes anything else inexpressible (correct-by-construction).
+- **`space`** is a library value, not macro syntax. v1 ships the two
   classics: `grid(w, h)` (cellular automata, epidemics) and `plane(w, h)`
   (continuous 2D — flocking, `nbhd.within(radius)`). A space is anything with
   the snapshot/neighborhood interface; graphs/3D come later (§8.1).
@@ -122,7 +122,7 @@ live Set
 
 - **Mini-notation** (`beat`/`notes`): one cycle per string; `x`/note names
   are events, `_` rests; subdivision/groups follow the Tidal lineage. The
-  grammar is finalized via the `parse` dialect (§8.4) — pleasing dogfood:
+  grammar is finalized via the `parse` macro (§8.4) — pleasing dogfood:
   the music notation is itself a Cure grammar.
 - **Combinators**: `fast n`, `slow n`, `rev`, `every n f`, `stack(..)`,
   `cat(..)` — pure pattern → pattern functions; a pattern is a value.
@@ -171,13 +171,13 @@ and LED strips on an ESP32 (`out gpio(pin.gpio5)`, `out ledstrip(..)`) are
 supported targets of the *same* patterns. Write a light show on the laptop,
 flash it to the tree.
 
-## 4. Games — a scoping note, not a dialect
+## 4. Games — a scoping note, not a macro
 
 `reducer` (update) + `view` (render) + `on` (input) **already is the game
 loop** — the Elm architecture at 30fps. Terminal snake is a `reducer` over
 `%[snake, food, score]`, an `on keypress` feeding it, a `view` drawing the
 grid. **Decision: games ship as tutorials plus a tiny `terminal_view` helper
-library, NOT as a dialect.** The parent's bar for a dialect is new declaration
+library, NOT as a macro.** The parent's bar for a macro is new declaration
 semantics that manufacture types (§3, §5); a game introduces none, so a `game`
 keyword would be branding, not machinery. The tutorials are the point: grid
 games exercise the whole reducer/view/flow stack with zero hardware, and
@@ -212,7 +212,7 @@ reproduce, so a property about a seed is a property about *that* run.
 
 ```cure
 check Epidemic
-  ## Dialect-shipped reproducibility template — every sim inherits it.
+  ## Macro-shipped reproducibility template — every sim inherits it.
   prop reproducible(seed: Nat) =
     run(Epidemic, seed, ticks: 100).observations
       == run(Epidemic, seed, ticks: 100).observations
@@ -240,7 +240,7 @@ check PatternLaws
 - **`actor`/`fsm`** — every sim agent is an actor; the lockstep round is a
   barrier over the population. Nothing new at runtime.
 - **`flow`** — observation streams *are* `Signal`s; sim clock and tempo
-  clock live on the Flow runtime. Both dialects are Flow citizens.
+  clock live on the Flow runtime. Both macros are Flow citizens.
 - **`view`/dataviz** — `observe` streams plug straight into `view` charts
   (the live-drawing S/I/R curves are the classroom moment).
 - **`check`** (parent §7.5) — §6; sim reproducibility is the enabling
@@ -260,7 +260,7 @@ check PatternLaws
 3. **Sim distribution across cores** — lockstep purity makes BEAM-scheduler
    parallelism nearly free (§2.2); confirm the commit-barrier design (one
    process per agent vs. batched chunks per scheduler at 100k+).
-4. **Mini-notation grammar finalization** — via the `parse` dialect; pick the
+4. **Mini-notation grammar finalization** — via the `parse` macro; pick the
    Tidal-subset v1 (`[..]` groups, `*n`, `?` chance) and freeze it.
 5. **OSC schema / synth presets** — SuperCollider event schema (SonicPi- or
    SuperDirt-compatible for Tidal refugees?) and a preset bank so `play kick`

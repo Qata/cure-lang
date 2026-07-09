@@ -3,8 +3,8 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #35, promoted); built as a `dialect` (§5). Consumes
-[`units`](2026-07-08-units-dialect-design.md) heavily.
+(idea backlog #35, promoted); built as a `macro` (§5). Consumes
+[`units`](2026-07-08-units-macro-design.md) heavily.
 
 ---
 
@@ -80,7 +80,7 @@ Surface rules:
 - **`tank`** — a cylinder: volume and fill pressure, per gas.
 
 Units (`m`, `min`, `h`, `bar`, `L`, `L/min`, `pct`) come from the `units`
-dialect throughout. Imperial is supported strictly as **named unit
+macro throughout. Imperial is supported strictly as **named unit
 conversions** — `60ft`, `psi`, `cuft` are literal rules over the same metric
 carriers (feet→metres, psi→bar). There is never an ambient-unit ambiguity:
 depth is a `Depth`, pressure a `Pressure`, and `60ft` and `18m` are the same
@@ -131,7 +131,7 @@ groups**: a dive leaves you in a letter group; a surface interval moves you to
 a cleaner group by a table lookup; the next dive's NDL is reduced by the
 residual you carried in.
 
-The dialect threads this purely. Each dive segment produces a residual-nitrogen
+The macro threads this purely. Each dive segment produces a residual-nitrogen
 group (a table lookup keyed by depth and time). `surface_interval T` applies
 the surface-interval credit table to that group, producing the entry group for
 the next dive. That group feeds the `residual` argument of the next segment's
@@ -212,7 +212,7 @@ check Reef
   ✓ gas_reserve_held     proved by construction — 148 bar used ≤ 133 usable; 0 runs
 ```
 
-Dialect-shipped property templates exercise the *table edges* on
+Macro-shipped property templates exercise the *table edges* on
 generated plans: `prop`s generate depth/time/gas combinations that sit exactly
 on published NDL and MOD boundaries and assert the verdict flips at the right
 literal (this is how a mistranscribed table constant gets caught). And a
@@ -233,7 +233,7 @@ is the guardrail on the whole conversion story.
   rule** stated as law: config may only *tighten* a refinement, never loosen
   it. A diver may set `ascent_max: 6m/min` (stricter than the 9 default),
   `ppo2_max: 1.2bar`, `reserve: half` (stricter than thirds), or a
-  conservatism factor that shrinks NDLs. The dialect statically rejects any
+  conservatism factor that shrinks NDLs. The macro statically rejects any
   config that would relax a bound past the agency default. Conservatism is a
   one-way ratchet toward safety.
 - **`check`** — as §6: static discharge plus table-edge templates plus the
@@ -256,7 +256,7 @@ a dive on paper; the ocean does not read your plan.
 
 **v1 is planning-only.** It computes a plan before the dive and prints a slate.
 It has no concept of what is actually happening underwater — your real depth,
-your real time, your real breathing, your real ascent. Nothing in this dialect
+your real time, your real breathing, your real ascent. Nothing in this macro
 runs during a dive.
 
 **Do not build a real-time dive computer with this — explicitly.** Because
@@ -266,7 +266,7 @@ life-support firmware: it must track tissue loading continuously, tolerate
 sensor failure, degrade safely, and carry certification and liability that no
 hobby project has. The moment a display tells a diver "you have 4 minutes of
 no-deco time left," a bug in that number can kill them. That is categorically
-beyond hobby scope and beyond this dialect's design. This is ledgered as a
+beyond hobby scope and beyond this macro's design. This is ledgered as a
 hard warning (§9), and the docs must carry it on page one.
 
 **The tables are conservative by design, and their constants are not yours to
@@ -286,7 +286,7 @@ biology.
    as constants). A **later, heavily-caveated** addition could compute NDLs
    from a real model — **Bühlmann ZH-L16 with gradient factors** is the
    obvious candidate. This is a large step up in responsibility: it moves the
-   dialect from "reprints a published table" to "computes decompression," which
+   macro from "reprints a published table" to "computes decompression," which
    is exactly the boundary the safety section polices. Decision deferred; if
    taken, it ships behind explicit opt-in, still planning-only, with its own
    safety review. Staying table-based indefinitely is a legitimate outcome.
@@ -304,7 +304,7 @@ biology.
    ascents, CCR — beyond recreational limits and **probably a permanent
    non-goal.** Planning technical dives is a different discipline with a
    different liability profile; if it is ever attempted it is a separate
-   dialect with its own safety spec, not an extension of this one.
+   macro with its own safety spec, not an extension of this one.
 5. **Device crossover warning.** See §8: real-time on-device dive computing is
    explicitly discouraged and ledgered here as a hard, permanent warning, not
    a future feature.
@@ -321,6 +321,6 @@ biology.
   repetitive-dive planning only (§9.4).
 - **Not a replacement for certification, training, a briefing, a buddy, or a
   dive computer.** A planning aid, full stop.
-- **No medical or fitness-to-dive advice.** The dialect knows depths, times,
+- **No medical or fitness-to-dive advice.** The macro knows depths, times,
   and gases — not the diver. It cannot and does not assess anyone's health,
   and says so.

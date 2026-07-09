@@ -3,7 +3,7 @@
 **Date:** 2026-07-08
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
-(idea backlog #95, promoted); built as a `dialect` (§5), zero compiler
+(idea backlog #95, promoted); built as a `macro` (§5), zero compiler
 special-casing. The four hiding principles (§3) are law.
 
 ---
@@ -17,7 +17,7 @@ meet in the bench harness (§5): the declaration that teaches the theory
 verifies the solder. `gates` is also the **third audience for the causality
 theorem**, after `flow` and `synth`: a combinational loop — an output
 feeding back to an input with no flip-flop in the path — is rejected by the
-same causality index those dialects carry; the user hears only "real
+same causality index those macros carry; the user hears only "real
 hardware would oscillate" (§3).
 
 ## 2. Surface
@@ -68,7 +68,7 @@ legal (§3). `implements` is checked at compile time (§4).
 Invisible machinery: wires are values of a two-point type; a circuit
 elaborates to a total function (combinational) or a `reducer`-shaped step
 function (sequential) with the causality index manufactured from the
-netlist's wire graph. Users write gates; the dialect writes types.
+netlist's wire graph. Users write gates; the macro writes types.
 
 ## 3. Causality — combinational loops
 
@@ -176,13 +176,13 @@ per-family electrical data v1 chip declarations may not carry.
 - **Equivalence is static discharge.** An `implements` obligation reports
   as `proved (exhaustive — 8 vectors)`: enumeration at small n is the
   discharge-by-computation rung, with the vector count as receipt.
-- **Sequential templates.** Dialect-shipped bounded-sequence templates:
+- **Sequential templates.** Macro-shipped bounded-sequence templates:
   reset behavior (registers cleared after any sequence ending in `reset`),
   counter rollover (`Counter2` back to `%[0, 0]` after 4 ticks), "registers
   only change on clock edges". Bounded model checking, never called that.
 - **The bench harness IS `check` on-device.** The check spec ledgers
   on-device property runs over the serial harness as deferred
-  ([`2026-07-08-check-dialect-design.md`](2026-07-08-check-dialect-design.md)
+  ([`2026-07-08-check-macro-design.md`](2026-07-08-check-macro-design.md)
   §10.8); `gates` is its **concrete pilot** — the first on-device check
   story. The property is the truth table, the generator is exhaustive
   enumeration, the system under test is silicon, and the per-vector report
@@ -193,7 +193,7 @@ per-family electrical data v1 chip declarations may not carry.
 
 - **`automata`** (backlog #25, teaching family, homed with sim/pattern):
   the FSM ↔ sequential-circuit correspondence is a teaching bridge both
-  dialects present — a DFA compiles to registers + next-state logic; a
+  macros present — a DFA compiles to registers + next-state logic; a
   `gates` sequential circuit *is* a Moore machine.
 - **`board` / `driver` / `wiring`**: the harness consumes `board`'s typed
   pins (drive needs `output`, sense needs `input` — literal discharge);

@@ -1,11 +1,11 @@
-# Dialect Ideas Backlog — 50 Unspecced Designs
+# Macro Ideas Backlog — 50 Unspecced Designs
 
 **Date:** 2026-07-08
 **Status:** idea backlog (operator-requested). None of these are specced;
 each entry is a name, a pitch, and the invisible-machinery hook. Promotion
 path: pick one → full child spec in this directory following the established
-template. The premise throughout is the dialect facility
-(`2026-07-08-dialect-facility-design.md`): every one of these is library
+template. The premise throughout is the macro facility
+(`2026-07-08-macro-facility-design.md`): every one of these is library
 work, zero compiler changes. The brief was to think across *all* the niche
 ways people interact with programming — not just MCUs.
 
@@ -13,8 +13,8 @@ ways people interact with programming — not just MCUs.
 #33 synth, #35 dive, #37 checklist, #49 agenttools; from batch 2 — #52
 flightplan, #61 fold, #65 crossword, #78 a11y, #93 backtest, #95 gates; plus
 **#99 reef, promoted to flagship** (operator favourite; shuttle-grade voted
-sensor redundancy — see `2026-07-08-reef-dialect-design.md`). Each now has a
-`2026-07-08-<name>-dialect-design.md` in this directory.
+sensor redundancy — see `2026-07-08-reef-macro-design.md`). Each now has a
+`2026-07-08-<name>-macro-design.md` in this directory.
 
 Legend for hooks: **R** refinements · **T** typestate/GADT index · **U** units
 · **C** coverage/totality · **F** flow/causality · **E** effects/IFC ·
@@ -114,7 +114,7 @@ Legend for hooks: **R** refinements · **T** typestate/GADT index · **U** units
 25. **`automata`** — DFA/NFA/Turing machines for CS courses; equivalence and
     minimization checked; diagrams generated; the pumping lemma as a check
     counterexample generator. K,C
-26. **`blocks`** — the meta-dialect: export any dialect's declarative
+26. **`blocks`** — the meta-macro: export any macro's declarative
     grammar as a Blockly-style visual block palette, giving every other
     entry in this file a drag-and-drop mode for free. (Pure dividend of
     grammar-as-data.) —
@@ -197,7 +197,7 @@ Legend for hooks: **R** refinements · **T** typestate/GADT index · **U** units
 ## AI & language
 
 48. **`prompt`** — typed prompt templates: placeholders bound (coverage),
-    outputs parsed against a declared schema (the `parse` dialect pointed at
+    outputs parsed against a declared schema (the `parse` macro pointed at
     an LLM) with a retry policy — and the IFC payoff: a `secret` cannot flow
     into a prompt without an audited `declassify`. C,E
 49. **`agenttools`** — tool-using agent loops where every tool carries a

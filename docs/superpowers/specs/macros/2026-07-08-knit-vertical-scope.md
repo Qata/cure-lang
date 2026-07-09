@@ -2,8 +2,8 @@
 
 **Date:** 2026-07-08
 **Status:** vertical scoping (operator-requested). Companion to
-[`2026-07-08-knit-dialect-design.md`](2026-07-08-knit-dialect-design.md) —
-that spec defines the dialect; this document scopes the *product vertical*
+[`2026-07-08-knit-macro-design.md`](2026-07-08-knit-macro-design.md) —
+that spec defines the macro; this document scopes the *product vertical*
 around it: who it serves, the full workflow, and the ergonomic surface shown
 by worked example. Ergonomics rule inherited and sharpened here: **a
 published pattern is nearly valid source, and every convention knitters
@@ -15,15 +15,15 @@ already write becomes a checked assertion.**
 
 - **Knitters (pattern followers)** — the mass audience. Want: patterns that
   don't have errors, per-size clarity, yardage before buying yarn, and
-  knowing where they left off. They never see the dialect; they see PDFs,
+  knowing where they left off. They never see the macro; they see PDFs,
   charts, and the companion (§5).
 - **Designers** — the authors. Want: grading that doesn't break one size,
   charts generated from written instructions (not maintained in parallel),
   schematic conformance, professional-looking output. They write the
-  dialect, and it reads like what they already publish.
+  macro, and it reads like what they already publish.
 - **Tech editors** — the load-bearing persona nobody outside the industry
   knows exists: professionals paid per-pattern/hourly to verify exactly the
-  arithmetic this dialect checks — stitch counts, repeats, grading, chart/
+  arithmetic this macro checks — stitch counts, repeats, grading, chart/
   text agreement. `cure test` does the mechanical 80% of tech editing at
   zero marginal cost; the human tech editor moves up-stack to fit, style,
   and construction judgment. **This is the vertical's economic wedge**: a
@@ -32,7 +32,7 @@ already write becomes a checked assertion.**
 - **Yarn shops & brands** — pattern support and substitution math (§6);
   patterns that carry their own gauge-conversion logic reduce support load.
 
-Workflow, end to end: *write (dialect) → check (balance, all sizes,
+Workflow, end to end: *write (macro) → check (balance, all sizes,
 schematic, charts) → generate (PDF, charts, tables, yardage) → publish
 (Ravelry-ready, errata-free-by-construction) → knit (companion + device,
 progress persisted)*.
@@ -190,7 +190,7 @@ eyeballing the rest ship with exactly one broken size — the one the tech
 editor didn't knit. Here, adding `XXL (…)` to the sizes line *is* the
 request to prove it.
 
-### 3.4 Colorwork — Fair Isle floats (promoted from the dialect ledger)
+### 3.4 Colorwork — Fair Isle floats (promoted from the macro ledger)
 
 ```cure
   colorwork Fern over 12 sts
@@ -221,7 +221,7 @@ Generated from the same source, two forms:
   (`schema`), works offline.
 - **The MCU crossover:** `cure knit companion PlainBeanie --device` builds
   an **e-paper row counter** (ESP32 + rotary encoder — `board`/`display`
-  dialects): click to advance, long-press to step back, screen shows
+  macros): click to advance, long-press to step back, screen shows
 
   ```
   crown · rnd 43 of 56
@@ -238,7 +238,7 @@ Generated from the same source, two forms:
 
 From one source: written pattern PDF in standard layout (per-size numbers
 inline, both aggregate and size-isolated variants — "just my size" is a
-beloved feature), charts (SVG, correct RS/WS mirroring per the dialect's
+beloved feature), charts (SVG, correct RS/WS mirroring per the macro's
 `flat`/`in_the_round` semantics), schematic with per-size measurements at
 gauge, stitch-count tables, yardage per size (from gauge + area + a declared
 stitch-pattern take-up factor), difficulty metadata (derived: stitch
@@ -265,7 +265,7 @@ double duty as the swatch calculator every knitter does by hand.
 
 - **v1 — the tech editor in the compiler:** stitch algebra, sizes, checked
   callouts, divisibility, schematic conformance, charts + PDF, yardage.
-  (Everything in the dialect spec + §2's assertion/measurement/marker
+  (Everything in the macro spec + §2's assertion/measurement/marker
   ergonomics.)
 - **v1.5 — colorwork & lace depth:** Fair Isle floats (§3.4), chart-first
   authoring (draw the chart, derive the text), lace charts with `nupp`/
@@ -273,22 +273,22 @@ double duty as the swatch calculator every knitter does by hand.
 - **v2 — the knitting experience:** companion + row-counter device (§3.5),
   substitution tooling (§5), Ravelry publishing integration, designer
   grading helpers (grade-rule declarations rather than hand-tupled sizes —
-  ledgered in the dialect spec).
-- **Explicitly later (dialect-spec ledger stands):** brioche and short-rows
+  ledgered in the macro spec).
+- **Explicitly later (macro-spec ledger stands):** brioche and short-rows
   (non-row-local algebra), machine-knitting output, crochet (separate
-  dialect).
+  macro).
 
 ## 7. Relations
 
-Dialect spec (the base); `check` (all-sizes proofs are its static-discharge
+Macro spec (the base); `check` (all-sizes proofs are its static-discharge
 rung); `view`/`schema` (companion); `board`/`display`/`driver` (device);
 `units` (gauge/length); `blocks` (chart-first visual editing is literally
 the blocks view of the colorwork grammar); `parse` (importing existing
 written patterns from standard abbreviation text — the migration funnel for
-designers with a back-catalog; ledgered in the dialect spec, promoted to
+designers with a back-catalog; ledgered in the macro spec, promoted to
 v2-adjacent here because back-catalog import is how designers arrive).
 
-## 8. Ledger additions (beyond the dialect spec's)
+## 8. Ledger additions (beyond the macro spec's)
 
 1. **Grade rules** — declarative grading (`bust step 10cm, ease 5cm`) that
    *generates* the per-size tuples designers currently hand-write.
@@ -303,6 +303,6 @@ v2-adjacent here because back-catalog import is how designers arrive).
 
 ## 9. Non-goals
 
-Crochet (different algebra — own dialect someday); garment *design*
+Crochet (different algebra — own macro someday); garment *design*
 automation (fit is human judgment; we check arithmetic, not aesthetics);
 machine-knitting formats in v1; a yarn-inventory/stash app.

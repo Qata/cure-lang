@@ -4,8 +4,8 @@
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (idea backlog #37, promoted); companion of
-[`2026-07-08-flightplan-dialect-design.md`](2026-07-08-flightplan-dialect-design.md)
-(being specced in parallel). Built as a `dialect` (§5) — zero compiler
+[`2026-07-08-flightplan-macro-design.md`](2026-07-08-flightplan-macro-design.md)
+(being specced in parallel). Built as a `macro` (§5) — zero compiler
 special-casing.
 
 ---
@@ -20,7 +20,7 @@ switch no earlier item set, the abnormal procedure nothing can reach, or the
 emergency flow that trails off without a terminal instruction. The discipline
 pre-exists; the tool is the missing half. `checklist` supplies the tool.
 
-The dialect generalizes past the cockpit — pre-op surgical checklists, lab
+The macro generalizes past the cockpit — pre-op surgical checklists, lab
 startup, boat pre-departure, ham field day are the same shape — but aviation
 vocabulary leads: its conventions (challenge → response, normal/abnormal/
 emergency, memory items) are the most precise available, and everyone else's
@@ -28,7 +28,7 @@ checklists are informal copies of them.
 
 **Safety honesty, stated once and plainly:** this is a supplemental aid for
 GA and hobby use. It is not certified avionics, and the printed card plus the
-pilot's trained flow remain authoritative in the aircraft. The dialect makes
+pilot's trained flow remain authoritative in the aircraft. The macro makes
 *the checklist document* provably coherent; it does not make the device a
 required instrument.
 
@@ -39,7 +39,7 @@ each a sequence of items. An item is a `challenge -> expected response` pair:
 
 ```cure
 checklist C172S
-  use Std.Units          # kt, degC, psi, deg via the units dialect
+  use Std.Units          # kt, degC, psi, deg via the units macro
 
   normal BeforeStart
     "Preflight inspection" -> "COMPLETE"
@@ -73,7 +73,7 @@ checklist C172S
 
 - **Responses** are plain strings where no data exists (`"RICH"`), typed
   values where sensors or state do (`set 10deg`, `{p: Psi | p >= 25psi}`) —
-  units ride the units dialect, so a knots/mph or °C/°F confusion is the
+  units ride the units macro, so a knots/mph or °C/°F confusion is the
   same compile error it is everywhere else in Cure.
 - **Branch points** are `if <condition> -> goto <Procedure>` lines attached
   to an item; the condition ranges over state established by items or sensed
@@ -117,7 +117,7 @@ none ever surfaces a goal):
 One declaration, three surfaces:
 
 1. **Printable kneeboard cards** — the primary surface, because paper is
-   primary in cockpits and the dialect respects that. `cure checklist print`
+   primary in cockpits and the macro respects that. `cure checklist print`
    renders normal/abnormal/emergency card sets, memory sections boxed, in
    standard challenge–response layout. The proofs ride along invisibly: a
    card printed from a compiled checklist is one whose branches all resolve.
@@ -195,8 +195,8 @@ Shipped property templates (parent §7.5):
 - **`schema`** — execution-state persistence and its migrations (a firmware
   update mid-annual must not lose checklist state semantics).
 - **`reducer`** — the execution state machine underneath every surface (§4).
-- **`flightplan`** — companion dialect, specced in parallel
-  ([`2026-07-08-flightplan-dialect-design.md`](2026-07-08-flightplan-dialect-design.md));
+- **`flightplan`** — companion macro, specced in parallel
+  ([`2026-07-08-flightplan-macro-design.md`](2026-07-08-flightplan-macro-design.md));
   a plan's phase transitions are natural checklist triggers ("entering
   DESCENT ⇒ offer the Descent checklist").
 - **`units`** — every typed response with a magnitude (kt, °C, psi, deg)
@@ -226,9 +226,9 @@ Shipped property templates (parent §7.5):
 ## 10. Non-goals
 
 - **No certification.** Part 23/25 software assurance is out of scope,
-  permanently for this dialect; see §1's honesty statement.
-- **Not a POH replacement.** The dialect encodes and checks a checklist the
+  permanently for this macro; see §1's honesty statement.
+- **Not a POH replacement.** The macro encodes and checks a checklist the
   owner writes; the POH's procedures and limitations remain the authority.
 - **No auto-generation from POH PDFs.** Attractive, someday plausible, but
   extraction-from-PDF correctness is exactly the silent-error surface this
-  dialect exists to eliminate. Out of scope.
+  macro exists to eliminate. Out of scope.

@@ -4,8 +4,8 @@
 **Status:** design. Child of
 [`2026-07-08-beginner-embedded-surfaces-design.md`](2026-07-08-beginner-embedded-surfaces-design.md)
 (idea backlog #52, promoted); companion of
-[`2026-07-08-checklist-dialect-design.md`](2026-07-08-checklist-dialect-design.md),
-specced in parallel. Built as a `dialect` (§5) — zero compiler special-casing.
+[`2026-07-08-checklist-macro-design.md`](2026-07-08-checklist-macro-design.md),
+specced in parallel. Built as a `macro` (§5) — zero compiler special-casing.
 
 ---
 
@@ -26,7 +26,7 @@ before anyone drives to the airport.
 
 Two declarations: an `aircraft` profile (the POH transcribed as data, once
 per airframe) and a `flight` block (this trip). Units — `kt`, `nm`, `ft`,
-`gal`, `lb`, `in`, `degC`, `min` — come from the units dialect throughout;
+`gal`, `lb`, `in`, `degC`, `min` — come from the units macro throughout;
 `flightplan` is its heaviest consumer, shipping the aviation unit pack via
 units §8.2.
 
@@ -87,7 +87,7 @@ The check runs at **two** weights, and the second is the one that matters:
    W&B; the landing check is the one that gets skipped, because it needs
    the fuel-burn numbers first. The compiler has them, so it always runs.
 
-The flagship failure, and the dialect's reason to exist:
+The flagship failure, and the macro's reason to exist:
 
 ```
 error[E1xx]: landing CG is outside the Normal envelope
@@ -145,7 +145,7 @@ Truckee is precisely the number nobody runs in their head.
 ## 6. Generated artifacts
 
 A compiling plan generates the paperwork, print-first (the kneeboard is
-primary, exactly as the checklist dialect treats paper as primary): a
+primary, exactly as the checklist macro treats paper as primary): a
 **navlog** (per leg: magnetic heading with wind correction, groundspeed,
 time, fuel burned and remaining); a **W&B sheet** (the envelope polygon
 plotted with **both** points marked, takeoff and landing, plus the moment
@@ -200,19 +200,19 @@ Most of what a user would test is already static: a compiling plan has
   units §8.2. No bare number anywhere in a plan.
 - **`config`** — personal minimums (reserve, safety factor) under the
   monotone-safety rule (§4, §5).
-- **`checklist`** — companion dialect: the preflight card references the
+- **`checklist`** — companion macro: the preflight card references the
   computed numbers ("Fuel — 40gal CONFIRMED per plan"), and a plan's phase
   transitions are natural checklist triggers; ledgered on both sides.
 - **Report generation** — the navlog/W&B/fuel artifacts (§6) ride the
   general print/display rendering surface.
-- **`dive`** — sibling safety-refinement dialect: the same pattern of legal
+- **`dive`** — sibling safety-refinement macro: the same pattern of legal
   floors as types with config-only-tightens on top, over different tables.
 
 ## 10. Safety honesty
 
 Stated once, unhedged. This is a **planning aid** — not an EFB replacement,
 not certified, meeting no software assurance standard for flight
-operations. The POH numbers remain authoritative: the dialect checks
+operations. The POH numbers remain authoritative: the macro checks
 arithmetic *over* the profile the owner transcribed, and a transcription
 error is the owner's to catch (the §8 envelope sweep helps; it does not
 absolve). Weather, winds aloft, NOTAMs, and TFRs are **runtime data this v1
@@ -220,7 +220,7 @@ does not fetch** — winds and temperatures are declared inputs, entered from
 a briefing. Live-data integration is ledgered (§11.1) with the explicit
 note that stale-data risk changes the product class: a tool that silently
 plans on yesterday's winds is more dangerous than one that visibly demands
-today's. The pilot in command owns the go decision; the dialect's job is
+today's. The pilot in command owns the go decision; the macro's job is
 to make the arithmetic impossible to skip, not to make it.
 
 ## 11. Open decisions (ledger)
@@ -231,7 +231,7 @@ to make the arithmetic impossible to skip, not to make it.
 2. **IFR** — non-goal for v1, possibly permanent: alternates, approach
    minima, a far wider regulatory surface, mostly judgment not arithmetic.
 3. **Non-US reserve rules** — EASA/CASA/Transport Canada differ; ship
-   regulation packages as declared data (as the dive dialect ships tables),
+   regulation packages as declared data (as the dive macro ships tables),
    selected in the flight block, monotone rule intact.
 4. **Multiple aircraft profiles / club fleets** — profile storage, revision
    after a new W&B or an STC, distribution to members; likely rides
@@ -239,12 +239,12 @@ to make the arithmetic impossible to skip, not to make it.
 5. **Glide-range rings** — terrain-aware glide coverage per leg; needs
    elevation data, which reopens the runtime-data question.
 6. **Helicopter W&B** — lateral CG, two-axis envelopes, rotor performance:
-   different math, out of this dialect.
+   different math, out of this macro.
 
 ## 12. Non-goals
 
 - **No IFR** (v1; see §11.2).
 - **Not a certified EFB** and not trying to become one (§10).
 - **No live data in v1** — declared inputs only.
-- **Not flight instruction** — the dialect checks a plan, it does not teach
+- **Not flight instruction** — the macro checks a plan, it does not teach
   planning; its errors assume the vocabulary a human instructor teaches.

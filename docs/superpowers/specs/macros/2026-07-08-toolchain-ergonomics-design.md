@@ -46,14 +46,14 @@ sibling specs — this is the canonical list):
 | `cure flash [--port auto]` | Compose image + libs + app, flash; port autodetected by USB VID/PID |
 | `cure monitor` | Serial console (replaces `serial_monitor.py`); auto-reconnect |
 | `cure repl` | Host REPL; `:push` targets a device (§5) |
-| `cure test` | The `check` dialect runner (parent §7.5): static-discharge, then property runs |
+| `cure test` | The `check` macro runner (parent §7.5): static-discharge, then property runs |
 | `cure fleet report` | Projected-system report (fleet spec §9) |
 | `cure protocol report` | Session/endpoint report (protocol spec) |
 | `cure driver report` | Rendered regmap doc (driver spec §8.7) |
 | `cure jobs` | Job/schedule status (cli-job spec) |
 | `cure doctor` | Prereq + environment diagnosis (§9 — recommended in) |
 
-**Project manifest — `cure.toml`.** TOML, not another dialect: the manifest
+**Project manifest — `cure.toml`.** TOML, not another macro: the manifest
 is read by tools before the compiler exists in the process, and TOML is the
 ecosystem-neutral choice users already know from Cargo.
 
@@ -68,7 +68,7 @@ image = "esp32c3-0.9.2"  # board image version pin (§3)
 [deps]
 driver-bme280 = "1.2"
 
-[fleet]                   # fleet targets, when the fleet dialect is used
+[fleet]                   # fleet targets, when the fleet macro is used
 sensor = { count = 3 }
 ```
 
@@ -131,7 +131,7 @@ hardware second"; phase35 validated the feature surface this way). `cure run`
   GPIO/UART/I2C/SPI buses. The board's bus/pin handles resolve to virtual
   endpoints when running under sim — same `@extern` call surface, different
   backend, zero program changes.
-- **Generated device mocks attach automatically.** Driver-dialect
+- **Generated device mocks attach automatically.** Driver-macro
   declarations synthesize mock devices (driver spec §4); `cure run --sim`
   wires each mock onto the virtual bus its driver was declared over. Mock
   state is scriptable (`sim.bme280.set(celsius: 31.0)`) from the REPL and
@@ -159,8 +159,8 @@ BEAM's birthright and the demo that ends arguments (parent §2.5) — scoped
 honestly against AtomVM's limited code-loading support.
 
 - **Host REPL: always, fully.** `cure repl` runs against the host sim;
-  expressions elaborate through the full pipeline (types checked, dialects
-  active); module redefinition hot-swaps into the running sim. Pattern-dialect
+  expressions elaborate through the full pipeline (types checked, macros
+  active); module redefinition hot-swaps into the running sim. Pattern-macro
   live-coding (parent §7.6) depends **only on this host-side swap** — the
   easy path, deliberately.
 - **Device push: whole-module swap where AtomVM supports loading.** From the
@@ -177,9 +177,9 @@ honestly against AtomVM's limited code-loading support.
 
 ## 6. LSP, formatter, editor
 
-- **LSP for free from the dialect registry.** Because dialect grammars are
-  declarative data (parent §5.1), the LSP consumes the *same* dialect
-  registry as the compiler: per-dialect syntax highlighting, completion, and
+- **LSP for free from the macro registry.** Because macro grammars are
+  declarative data (parent §5.1), the LSP consumes the *same* macro
+  registry as the compiler: per-macro syntax highlighting, completion, and
   diagnostics arrive with zero per-DSL work — a structural consequence of the
   design, and the reason the LSP is cheap enough to be priority-#1 adjacent.
 - **Hover speaks domain vocabulary.** Hover is the error-explainer
@@ -188,9 +188,9 @@ honestly against AtomVM's limited code-loading support.
   refinement. The same explainer registrations that translate failures
   (parent §4) translate types; raw Pi types on hover are a defect by the same
   definition as raw kernel errors.
-- **Formatter: indentation-canonical, dialect-aware.** Cure's block structure
+- **Formatter: indentation-canonical, macro-aware.** Cure's block structure
   is indentation; the formatter normalizes to the canonical form and formats
-  dialect-extended syntax via the grammar rules (a declarative grammar is a
+  macro-extended syntax via the grammar rules (a declarative grammar is a
   pretty-printer specification read backwards). No configuration knobs in v1.
 - **Editor: VS Code extension** wrapping the LSP + a `cure monitor` terminal
   panel. Other editors get the LSP as-is.
@@ -247,7 +247,7 @@ one edit. Modules with *no* containers keep hand-written `start/0` unchanged
    rollout) waits for real AtomVM code-loading capabilities per chip and the
    OTA state-migration design (parent §6.11).
 4. **LSP implementation host** — Elixir-side (inside the compiler process:
-   trivially shares the dialect registry and elaborator; recommended) vs.
+   trivially shares the macro registry and elaborator; recommended) vs.
    standalone (faster startup, harder registry sharing). Recommendation:
    Elixir-side, long-running, one process per workspace.
 5. **Telemetry** — recommended: **none by default, opt-in prompt at first

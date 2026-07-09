@@ -7,8 +7,8 @@ it defines what all that machinery is ultimately *for*.
 **Goal:** make Cure a total no-brainer for custom ESP32 / Pico / embedded-Linux
 projects, for users who will never learn what a Pi type is — while delivering
 100% of the dependent-type benefits through domain DSLs.
-**Scope note (2026-07-08):** with the `dialect` facility (§5), embedded is the
-*first vertical*, not the identity — §7 catalogs beginner dialects across every
+**Scope note (2026-07-08):** with the `macro` facility (§5), embedded is the
+*first vertical*, not the identity — §7 catalogs beginner macros across every
 domain (web, data, services, distributed, play).
 
 Companion documents:
@@ -21,37 +21,37 @@ Companion documents:
 
 ## Child-spec index (2026-07-08 — every surface below is fully specced)
 
-Infrastructure: [dialect facility](2026-07-08-dialect-facility-design.md) (§5's
+Infrastructure: [macro facility](2026-07-08-macro-facility-design.md) (§5's
 home; the ONE compiler feature) ·
 [error explainers](2026-07-08-error-explainer-design.md) (§4's home; provenance,
 registry, code allocation E100–E199) ·
 [toolchain & ergonomics](2026-07-08-toolchain-ergonomics-design.md) (§2's home;
 `cure` CLI, images, host sim, REPL, LSP).
 
-Dialects: [board](2026-07-08-board-dialect-design.md) ·
-[driver](2026-07-08-driver-dialect-design.md) ·
-[packet/codec](2026-07-08-packet-codec-dialect-design.md) ·
-[tasks (`every`/`on`)](2026-07-08-tasks-dialect-design.md) ·
-[units](2026-07-08-units-dialect-design.md) ·
-[config/secret](2026-07-08-config-secret-dialect-design.md) ·
-[reducer](2026-07-08-reducer-dialect-design.md) (consolidates §5.5) ·
-[check](2026-07-08-check-dialect-design.md) ·
-[web trio (api/view/form)](2026-07-08-web-trio-dialect-design.md) ·
-[schema](2026-07-08-schema-dialect-design.md) (absorbs §6.11 OTA migration) ·
-[parse](2026-07-08-parse-dialect-design.md) ·
-[cli/job](2026-07-08-cli-job-dialect-design.md) ·
-[workflow/bot](2026-07-08-workflow-bot-dialect-design.md) ·
-[protocol](2026-07-08-protocol-dialect-design.md) ·
-[fleet](2026-07-08-fleet-dialect-design.md) ·
-[sim/pattern](2026-07-08-sim-pattern-dialect-design.md) (games scoped to
+Macros: [board](2026-07-08-board-macro-design.md) ·
+[driver](2026-07-08-driver-macro-design.md) ·
+[packet/codec](2026-07-08-packet-codec-macro-design.md) ·
+[tasks (`every`/`on`)](2026-07-08-tasks-macro-design.md) ·
+[units](2026-07-08-units-macro-design.md) ·
+[config/secret](2026-07-08-config-secret-macro-design.md) ·
+[reducer](2026-07-08-reducer-macro-design.md) (consolidates §5.5) ·
+[check](2026-07-08-check-macro-design.md) ·
+[web trio (api/view/form)](2026-07-08-web-trio-macro-design.md) ·
+[schema](2026-07-08-schema-macro-design.md) (absorbs §6.11 OTA migration) ·
+[parse](2026-07-08-parse-macro-design.md) ·
+[cli/job](2026-07-08-cli-job-macro-design.md) ·
+[workflow/bot](2026-07-08-workflow-bot-macro-design.md) ·
+[protocol](2026-07-08-protocol-macro-design.md) ·
+[fleet](2026-07-08-fleet-macro-design.md) ·
+[sim/pattern](2026-07-08-sim-pattern-macro-design.md) (games scoped to
 tutorials there) ·
-[cad](2026-07-08-cad-dialect-design.md) (beyond-MCU §7: host-side solid
+[cad](2026-07-08-cad-macro-design.md) (beyond-MCU §7: host-side solid
 modeling; the "no result builders" worked case) ·
-[crochet](2026-07-08-crochet-dialect-design.md) (knit's sibling; position-
+[crochet](2026-07-08-crochet-macro-design.md) (knit's sibling; position-
 vector state, the form-aware flat-circle law).
 
 Error-code blocks are authoritative in the error-explainer spec §5
-(E100–E199, per-dialect); where an older informal code in THIS document
+(E100–E199, per-macro); where an older informal code in THIS document
 disagrees with a child spec, the child spec wins.
 
 ---
@@ -178,7 +178,7 @@ error[E102]: pin gpio34 cannot be used as an output
 
 ---
 
-## 5. The `dialect` facility — DSLs are defined in Cure
+## 5. The `macro` facility — DSLs are defined in Cure
 
 **Decision (operator, 2026-07-08): the DSLs themselves are written in the
 language.** The compiler grows exactly ONE new frontend feature — a facility
@@ -193,11 +193,11 @@ library work, the ecosystem writes the languages.
 
 ### 5.1 Surface
 
-A `dialect` is a container (same family as `fsm`/`actor`/`sup`) with three
+A `macro` is a container (same family as `fsm`/`actor`/`sup`) with three
 parts — grammar, expansion, and explainers:
 
 ```cure
-dialect Every
+macro Every
   ## `every <duration>: <block>` — run a block periodically, supervised.
 
   syntax every $period:Duration $body:Block
@@ -217,7 +217,7 @@ dialect Every
 
 - **`syntax`** declares a grammar rule with *typed* non-terminals (`Duration`,
   `Block`, `UpperIdent`, `Indented(FieldDecl)`, …). Because rules are
-  declarative data, the LSP gets highlighting/completion for every dialect
+  declarative data, the LSP gets highlighting/completion for every macro
   with zero per-DSL work — a structural consequence, not a feature request.
 - **`expand`** is hygienic template rewriting (`~>`), for DSLs that are pure
   sugar over existing surface (most of them). `$fresh(..)` names are
@@ -230,11 +230,11 @@ dialect Every
   provably terminates even with user-defined syntax**, which Lean does not
   give you.
 - **`explain`** registers error explainers (§4). Expanded terms automatically
-  carry provenance (dialect name + source span), so a kernel failure deep
+  carry provenance (macro name + source span), so a kernel failure deep
   inside generated code is attributed to the user's surface line.
 
-Dialect syntax is **scoped by import** (`use Hardware.Every` brings the
-`every` keyword into the module), so dialects compose without a global
+Macro syntax is **scoped by import** (`use Hardware.Every` brings the
+`every` keyword into the module), so macros compose without a global
 grammar war.
 
 ### 5.2 Power tiers (and where each catalog entry sits)
@@ -251,16 +251,16 @@ migrate once the reflection API stabilizes.
 
 ### 5.3 Soundness story (why this is safe to hand to users)
 
-Dialect output is **re-elaborated and kernel-checked like hand-written
+Macro output is **re-elaborated and kernel-checked like hand-written
 code** — the facility lives entirely in the untrusted frontend, upstream of
 the elaborator, with the Final-Core validator and kernel unchanged behind it.
-A buggy dialect can produce a confusing error or a rejected program, **never
+A buggy macro can produce a confusing error or a rejected program, **never
 an unsound one**. This is the same layering argument as the elaborator itself:
 UX bugs are possible, soundness bugs are not. (TCB delta: zero.)
 
 ### 5.4 Dogfood test
 
-The facility is done when `fsm` itself could be re-expressed as a dialect
+The facility is done when `fsm` itself could be re-expressed as a macro
 (whether or not we actually move it). If the meta-layer can't express our own
 flagship container, it isn't powerful enough for third-party driver authors.
 
@@ -379,7 +379,7 @@ Design notes captured from the surface: the graph deliberately allows
 **multiple edges per (state, message) pair** (nondeterministic in the graph,
 resolved by `when` guards in the body); header lines declare **capabilities**
 (`clock`) that clauses receive as binders; the user's own `type` declarations
-reference the dialect-**derived** names `Door.State`/`Door.Msg` (a staging /
+reference the macro-**derived** names `Door.State`/`Door.Msg` (a staging /
 name-resolution consequence — see Open decisions §9); the mandatory final
 catch-all binds the whole model with `model.state` projecting the dependent
 pair's index.
@@ -454,10 +454,10 @@ statically-empty rejection stream. And because `body`'s inputs and outputs are
 `Signal`/`Event`, **reducers are Flow citizens**: they compose inside `flow`
 blocks directly (`sink motor <- Door.body(clock, presses).model |> …`).
 
-#### The dialect definition
+#### The macro definition
 
 ```cure
-dialect Reducer
+macro Reducer
   ## `reducer Name fsm` — a state machine whose payload TYPE depends on its
   ## state; typed emissions/rejections; `body` lowers onto Flow (Signal.scan).
   ## (`fsm` names the lowering family — room for `reducer Name flow` later.)
@@ -588,12 +588,12 @@ What the invisible machinery does in the operator's Door example:
   size-change gives "this reducer provably cannot hang."
 - Clock nuance: Door only *samples* the clock (`with_latest`); a time-driven
   reducer (Debounce) instead **merges** `clock.tick` as an internal message —
-  visible in the operator's expansion above. The dialect emits the merge
+  visible in the operator's expansion above. The macro emits the merge
   exactly when some clause consumes a tick message — same grammar, one
   conditional in the elab (trigger rule is an open decision, §9).
 
-Honest gap: this dialect sits at the top power tier — `clause_to_arm` must
-*construct* GADT match arms and record literals against dialect-derived types,
+Honest gap: this macro sits at the top power tier — `clause_to_arm` must
+*construct* GADT match arms and record literals against macro-derived types,
 which is `elab`-with-reflection territory (§5.2 tier 4), same as `flow`.
 **`reducer` therefore joins `fsm` in the dogfood test (§5.4):** the facility
 is done when this file compiles as a library.
@@ -876,9 +876,9 @@ checked total and type-correct against both schemas (dependent records).
 
 ---
 
-## 7. Beyond the MCU — the dialect facility de-specializes Cure
+## 7. Beyond the MCU — the macro facility de-specializes Cure
 
-**Operator direction (2026-07-08): since dialects are library code, Cure is
+**Operator direction (2026-07-08): since macros are library code, Cure is
 not "an MCU language" — it is a BEAM language where libraries are languages.
 Embedded is the first vertical, not the identity. Consider every domain.**
 
@@ -891,7 +891,7 @@ No other language in the hobbyist space can say this.
 
 ### 7.1 The web trio — `api`, `view`, `form` (the Elm architecture, completed)
 
-`reducer` (§5.5) already *is* Elm's update function. Three dialects complete
+`reducer` (§5.5) already *is* Elm's update function. Three macros complete
 the architecture:
 
 - **`api`** — declare routes with typed, refinement-validated params; total
@@ -977,7 +977,7 @@ the architecture:
   specced** (two-party v1, `choose`-at-role grammar making bad projections
   inexpressible, typestate handles + `serve` container, tag elision on the
   wire, affine handles, IFC×transport check): see
-  [`2026-07-08-protocol-dialect-design.md`](2026-07-08-protocol-dialect-design.md).
+  [`2026-07-08-protocol-macro-design.md`](2026-07-08-protocol-macro-design.md).
 - **`fleet`** — declare a device fleet + telemetry topics once; generate the
   firmware config, the broker topology, and the host-side dashboard glue.
   This is the MCU↔host **bridge product** — the `packet`/`protocol`/`flow`
@@ -986,7 +986,7 @@ the architecture:
   as live charts. **Now fully specced, including the distributed hub
   illusion (write centralized `hub` logic, compiler projects it onto the
   nodes as peer-to-peer messaging):** see
-  [`2026-07-08-fleet-dialect-design.md`](2026-07-08-fleet-dialect-design.md).
+  [`2026-07-08-fleet-macro-design.md`](2026-07-08-fleet-macro-design.md).
 
 ### 7.5 `check` — property testing derived from types
 
@@ -1113,10 +1113,10 @@ and **CI re-checks the proof without invoking the solver at all** (kernel
 replay is fast and deterministic; the solver runs only when the prop or its
 dependencies change).
 
-#### Dialect-shipped property templates
+#### Macro-shipped property templates
 
-Dialect authors ship properties alongside syntax, so users get suites they
-never wrote (*"your dialects write your tests"*):
+Macro authors ship properties alongside syntax, so users get suites they
+never wrote (*"your macros write your tests"*):
 
 - `packet`/`codec` ship `parse ∘ encode == Ok` (§6.3's central proof,
   re-run as a template on the user's own declarations).
@@ -1140,7 +1140,7 @@ never wrote (*"your dialects write your tests"*):
   run against the simulated clock. On-device property runs over the serial
   harness are a deferred follow-up.
 
-Open decisions for this dialect are ledgered in §9 (generator strategy for
+Open decisions for this macro are ledgered in §9 (generator strategy for
 solver-narrowed refinements; static-discharge reporting UX; the
 property-template interface).
 
@@ -1179,7 +1179,7 @@ invisible dependent types are only a *product* if the fifteen-minute path
 exists. Everything else is downstream of a user who blinked an LED on day one
 and got one good error message on day two.
 
-The `dialect` facility does not appear in this list because its *ordering* is
+The `macro` facility does not appear in this list because its *ordering* is
 itself an open decision (§9): either it lands first and the catalog ships as
 libraries from day one, or early DSLs (`board`, `driver`) ship semi-built-in
 for speed and migrate onto the facility once it exists. The decision rule:
@@ -1194,7 +1194,7 @@ fork the implementing spec/plan must close explicitly.
 
 **Facility-level**
 
-1. **Bootstrap order** — dialect facility first vs. semi-built-in early DSLs
+1. **Bootstrap order** — macro facility first vs. semi-built-in early DSLs
    that migrate (see §8).
 2. **Meta-grammar notation** — the `category` / `syntax` / `::=` sketch, the
    typed non-terminal inventory (`Duration`, `Block`, `RecordTypeBlock`,
@@ -1203,20 +1203,20 @@ fork the implementing spec/plan must close explicitly.
 3. **Quoted-AST representation** — auto-derived record types per syntax
    category (as assumed in §5.5) vs. one generic `Syntax` type; typing rules
    for `quote` / `$()` splices.
-4. **Hygiene mechanics** — `$fresh` semantics, capture rules, cross-dialect
-   name collisions when two imported dialects export the same keyword.
+4. **Hygiene mechanics** — `$fresh` semantics, capture rules, cross-macro
+   name collisions when two imported macros export the same keyword.
 5. **Tier-4 reflection API** — what `elab` may ask the elaborator (needed by
    `flow` and `reducer`'s `clause_to_arm`, which constructs GADT arms against
-   dialect-derived types). Smallest API that passes the dogfood test wins.
+   macro-derived types). Smallest API that passes the dogfood test wins.
 6. **Staging / name resolution** — user `type` declarations may reference
-   dialect-derived names (`DoorReject` mentions `Door.State`/`Door.Msg`
+   macro-derived names (`DoorReject` mentions `Door.State`/`Door.Msg`
    before the `reducer` block elaborates) ⇒ needs two-pass resolution or
    forward-declaration semantics.
 7. **Migration of existing containers** — whether `fsm`/`actor`/`sup`
    actually move onto the facility or remain built-in (dogfood test §5.4 only
    requires they *could*).
 8. **Explainer interface** — failure-shape pattern language, provenance
-   metadata format, and how explainers compose when nested dialects both
+   metadata format, and how explainers compose when nested macros both
    match.
 
 **`reducer`-level**
@@ -1236,7 +1236,7 @@ fork the implementing spec/plan must close explicitly.
 12. **Catch-all binder shape** — `on _ with (model, msg)` binds the dependent
     pair with `model.state` as index projection sugar; confirm the sugar.
 13. **Singleton rule scope** — bare constructor in type position ⇒ singleton
-    refinement (`motor: Stopped`): a general language rule or per-dialect
+    refinement (`motor: Stopped`): a general language rule or per-macro
     elaboration?
 
 **Surface-level (catalog)**
@@ -1253,7 +1253,7 @@ fork the implementing spec/plan must close explicitly.
     (constructive sampling vs. rejection sampling vs. Z3 model enumeration —
     the SMT trust boundary permits Z3 *generation*, since every generated
     value is checked, not trusted); static-discharge reporting UX (report
-    "proved" vs. silently skip); the dialect property-template interface
+    "proved" vs. silently skip); the macro property-template interface
     (how `packet`/`reducer`/`api` attach template props to user
     declarations).
 18. **Certificate elevation (§7.5)** — which solver produces certificates
