@@ -175,4 +175,16 @@ defmodule Antigen.RunnerTest.TriageWiring do
     assert Enum.map(min.payload.defs, & &1.name) == [:f]
     assert min.payload.focus == [:f]
   end
+
+  test "every registered_assays id resolves to an assay module (sync guard)" do
+    for id <- Runner.registered_assays() do
+      mod = Runner.assay_module_for(id)
+      assert Code.ensure_loaded?(mod) and function_exported?(mod, :run, 1),
+             "registered assay #{id} does not resolve to a module with run/1"
+    end
+
+    # no duplicate ids in the authoritative list
+    ids = Runner.registered_assays()
+    assert length(ids) == length(Enum.uniq(ids))
+  end
 end

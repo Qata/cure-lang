@@ -315,6 +315,64 @@ defmodule Antigen.Runner do
 
   def replay_one(%Challenge{assay: a} = c), do: apply(assay_module(a), :run, [c])
 
+  # Authoritative enumeration of every registered assay id (one per `assay_module/1`
+  # clause below). Keep in sync with the dispatch — the runner_test asserts each
+  # entry resolves to a module. The coverage-manifest gate uses this to detect a
+  # registered-but-unwired assay (`Antigen.CoverManifest`).
+  @registered_assays [
+    "stub",
+    "totality/diverging",
+    "totality/terminating",
+    "positivity",
+    "reflexivity",
+    "indexed/case",
+    "rewrite/eq",
+    "universes",
+    "term/rejection",
+    "serialize/roundtrip",
+    "serialize/decode",
+    "conv/decision",
+    "branchunify/verdict",
+    "forcing/dot",
+    "check/verdict",
+    "delta/nf",
+    "stuck_elim_delta",
+    "term/infer_check",
+    "term/subject_reduction",
+    "term/normalization",
+    "term/erasure_preservation",
+    "mutation/rejection",
+    "kernel/shift_subst",
+    "kernel/weakening",
+    "kernel/confluence",
+    "kernel/beta_subst",
+    "elab/shift_agrees",
+    "elab/completeness",
+    "elab/metamorphic",
+    "elab/erasure",
+    "elab/dot_forcing",
+    "elab/guard_lint",
+    "elab/nat_rep",
+    "elab/soundness",
+    "normalizer/differential",
+    "normalizer/equal",
+    "normalizer/intrinsic",
+    "unify/soundness",
+    "unify/intrinsic",
+    "unify_types/fixpoint",
+    "unify_types/intrinsic",
+    "totality_closure/soundness",
+    "totality_closure/completeness",
+    "erasure/idempotent",
+    "erasure/selective",
+    "erasure/wellformed",
+    "relevance/soundness"
+  ]
+
+  @doc "Every registered assay id (authoritative; keep in sync with `assay_module/1`)."
+  @spec registered_assays() :: [String.t()]
+  def registered_assays, do: @registered_assays
+
   # The assay registry: challenge assay-id → assay module.
   defp assay_module("stub"), do: Antigen.Assays.Stub
   defp assay_module("totality/diverging"), do: Antigen.Assays.Totality
