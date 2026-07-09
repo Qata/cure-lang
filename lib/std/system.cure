@@ -45,10 +45,10 @@ mod Std.System
   ## Query the VM with `:erlang.system_info/1`. Return type depends on
   ## `key`; callers should narrow it via the wrappers below.
   @extern(:erlang, :system_info, 1)
-  fn system_info(key: Atom) -> T
+  fn system_info(key: Atom) -> t
 
   ## Running OTP release version (as a charlist, per the BIF).
-  fn otp_version() -> T = system_info(:otp_release)
+  fn otp_version() -> t = system_info(:otp_release)
 
   ## Number of logical processors available to the VM.
   fn cpu_count() -> Int = system_info(:logical_processors)

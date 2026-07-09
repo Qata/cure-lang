@@ -17,8 +17,8 @@ defmodule Cure.Types.StdlibTest do
     test "Std.List.map resolves to the polymorphic signature" do
       bundle = Stdlib.all()
 
-      assert {:fun, [{:list, {:type_var, "T"}}, {:fun, [{:type_var, "T"}], {:type_var, "U"}}],
-              {:list, {:type_var, "U"}}} = Map.fetch!(bundle.qualified, "Std.List.map")
+      assert {:fun, [{:list, {:type_var, "t"}}, {:fun, [{:type_var, "t"}], {:type_var, "u"}}],
+              {:list, {:type_var, "u"}}} = Map.fetch!(bundle.qualified, "Std.List.map")
     end
   end
 

@@ -60,18 +60,18 @@ mod Std.Iter
   type UnfoldStep(a, seed) = Emit(a, seed)
   type EachDone = Done
 
-  local fn step(it: Iter(T)) -> Option(IterStep(T)) =
+  local fn step(it: Iter(t)) -> Option(IterStep(t)) =
     match it
       Iter(next) -> next(Step())
 
   # -- Constructors -----------------------------------------------------------
 
   ## An iterator that is immediately exhausted.
-  fn empty() -> Iter(T) =
+  fn empty() -> Iter(t) =
     Iter(fn(_) -> None())
 
   ## An iterator over a list (walks left to right).
-  fn from_list(list: List(T)) -> Iter(T) =
+  fn from_list(list: List(t)) -> Iter(t) =
     let next = fn(_) ->
       match list
         []      -> None()
@@ -81,7 +81,7 @@ mod Std.Iter
   ## Bridge for the lazy-pipeline idiom: `xs |> lazy |> map(...) |> ...`.
   ## Identical to `from_list/1`; the alternate name documents intent at
   ## the call site.
-  fn lazy(list: List(T)) -> Iter(T) = from_list(list)
+  fn lazy(list: List(t)) -> Iter(t) = from_list(list)
 
   ## A bounded integer range iterator (inclusive).
   fn range(lo: Int, hi: Int) -> Iter(Int) =
@@ -95,13 +95,13 @@ mod Std.Iter
 
   ## Infinite iterator: `x0, f(x0), f(f(x0)), ...`. Always pair with
   ## a slicer such as `take/2` or `take_while/2` before forcing.
-  fn iterate(x0: T, f: T -> T) -> Iter(T) =
+  fn iterate(x0: t, f: t -> t) -> Iter(t) =
     Iter(fn(_) -> Some(Yield(x0, iterate(f(x0), f))))
 
   ## Stream-style unfold. `f(seed)` returns either
   ## `Some(Emit(value, next_seed))` to emit `value` and continue, or
   ## `None()` to terminate.
-  fn unfold(seed: S, f: S -> Option(UnfoldStep(T, S))) -> Iter(T) =
+  fn unfold(seed: s, f: s -> Option(UnfoldStep(t, s))) -> Iter(t) =
     let next_step = fn(_) ->
       match f(seed)
         None() -> None()
@@ -109,19 +109,19 @@ mod Std.Iter
     Iter(next_step)
 
   ## Infinite iterator that yields `x` forever.
-  fn repeat(x: T) -> Iter(T) =
+  fn repeat(x: t) -> Iter(t) =
     Iter(fn(_) -> Some(Yield(x, repeat(x))))
 
   ## Infinite iterator that walks `list` repeatedly. An empty input
   ## collapses to `empty/0` so consumers terminate.
-  fn cycle(list: List(T)) -> Iter(T) =
+  fn cycle(list: List(t)) -> Iter(t) =
     match list
       []      -> empty()
       [_ | _] -> cycle_step(list, list)
 
   ## Private: step `cycle/1` by tracking the unspent suffix and the
   ## original list to restart from.
-  local fn cycle_step(remaining: List(T), original: List(T)) -> Iter(T) =
+  local fn cycle_step(remaining: List(t), original: List(t)) -> Iter(t) =
     let next = fn(_) ->
       match remaining
         []      -> step(cycle_step(original, original))
@@ -131,7 +131,7 @@ mod Std.Iter
   # -- Transformers (lazy in, lazy out) --------------------------------------
 
   ## Map `f` over every element of `it`, on demand.
-  fn map(it: Iter(T), f: T -> U) -> Iter(U) =
+  fn map(it: Iter(t), f: t -> u) -> Iter(u) =
     let next = fn(_) ->
       match step(it)
         None() -> None()
@@ -139,11 +139,11 @@ mod Std.Iter
     Iter(next)
 
   ## Keep elements of `it` for which `pred(elem)` is `true`.
-  fn filter(it: Iter(T), pred: T -> Bool) -> Iter(T) =
+  fn filter(it: Iter(t), pred: t -> Bool) -> Iter(t) =
     Iter(fn(_) -> filter_step(it, pred))
 
   ## Private: drive `filter/2` until a passing element is found.
-  local fn filter_step(it: Iter(T), pred: T -> Bool) -> Option(IterStep(T)) =
+  local fn filter_step(it: Iter(t), pred: t -> Bool) -> Option(IterStep(t)) =
     match step(it)
       None() -> None()
       Some(Yield(x, rest)) ->
@@ -153,7 +153,7 @@ mod Std.Iter
 
   ## Concatenate two iterators. Stepping `b` is deferred until `a`
   ## is exhausted.
-  fn concat(a: Iter(T), b: Iter(T)) -> Iter(T) =
+  fn concat(a: Iter(t), b: Iter(t)) -> Iter(t) =
     let next = fn(_) ->
       match step(a)
         None() -> step(b)
@@ -162,7 +162,7 @@ mod Std.Iter
 
   ## Map `f` over `it` and flatten one level of nesting; `f` returns
   ## an iterator per element.
-  fn flat_map(it: Iter(T), f: T -> Iter(U)) -> Iter(U) =
+  fn flat_map(it: Iter(t), f: t -> Iter(u)) -> Iter(u) =
     let next = fn(_) ->
       match step(it)
         None() -> None()
@@ -171,7 +171,7 @@ mod Std.Iter
 
   ## Combine two iterators element-wise using a curried `f`. Stops at
   ## the shorter iterator. `f` is `a -> b -> c`.
-  fn zip_with(a: Iter(T), b: Iter(U), f: T -> U -> V) -> Iter(V) =
+  fn zip_with(a: Iter(t), b: Iter(u), f: t -> u -> v) -> Iter(v) =
     let next = fn(_) ->
       match step(a)
         None() -> None()
@@ -183,7 +183,7 @@ mod Std.Iter
 
   ## Insert `sep` between consecutive elements of `it`. Empty and
   ## single-element iterators are passed through unchanged.
-  fn intersperse(it: Iter(T), sep: T) -> Iter(T) =
+  fn intersperse(it: Iter(t), sep: t) -> Iter(t) =
     let next = fn(_) ->
       match step(it)
         None() -> None()
@@ -191,7 +191,7 @@ mod Std.Iter
     Iter(next)
 
   ## Private: keep emitting `sep, elem` pairs after the first element.
-  local fn intersperse_tail(it: Iter(T), sep: T) -> Iter(T) =
+  local fn intersperse_tail(it: Iter(t), sep: t) -> Iter(t) =
     let next = fn(_) ->
       match step(it)
         None() -> None()
@@ -199,13 +199,13 @@ mod Std.Iter
     Iter(next)
 
   ## Private: prepend a single element to an existing iterator.
-  local fn prepend(x: T, it: Iter(T)) -> Iter(T) =
+  local fn prepend(x: t, it: Iter(t)) -> Iter(t) =
     Iter(fn(_) -> Some(Yield(x, it)))
 
   # -- Slicers (lazy in, lazy out) -------------------------------------------
 
   ## Lazy prefix: keep elements while `pred` holds, then terminate.
-  fn take_while(it: Iter(T), pred: T -> Bool) -> Iter(T) =
+  fn take_while(it: Iter(t), pred: t -> Bool) -> Iter(t) =
     let next = fn(_) ->
       match step(it)
         None() -> None()
@@ -216,11 +216,11 @@ mod Std.Iter
     Iter(next)
 
   ## Skip the first `n` elements. Negative or zero `n` is a no-op.
-  fn drop(it: Iter(T), n: Int) -> Iter(T) =
+  fn drop(it: Iter(t), n: Int) -> Iter(t) =
     Iter(fn(_) -> drop_step(it, n))
 
   ## Private: walk `n` elements past the iterator's current position.
-  local fn drop_step(it: Iter(T), n: Int) -> Option(IterStep(T)) =
+  local fn drop_step(it: Iter(t), n: Int) -> Option(IterStep(t)) =
     pickup
       n <= 0 -> step(it)
       else   ->
@@ -229,11 +229,11 @@ mod Std.Iter
           Some(Yield(_, rest)) -> drop_step(rest, n - 1)
 
   ## Skip elements while `pred` holds, then yield the rest unchanged.
-  fn drop_while(it: Iter(T), pred: T -> Bool) -> Iter(T) =
+  fn drop_while(it: Iter(t), pred: t -> Bool) -> Iter(t) =
     Iter(fn(_) -> drop_while_step(it, pred))
 
   ## Private: drive `drop_while/2` until the first failing element.
-  local fn drop_while_step(it: Iter(T), pred: T -> Bool) -> Option(IterStep(T)) =
+  local fn drop_while_step(it: Iter(t), pred: t -> Bool) -> Option(IterStep(t)) =
     match step(it)
       None() -> None()
       Some(Yield(x, rest)) ->
@@ -245,14 +245,14 @@ mod Std.Iter
 
   ## Left fold an iterator. `f` is a curried function
   ## `elem -> acc -> acc`.
-  fn fold(it: Iter(T), acc: U, f: T -> U -> U) -> U =
+  fn fold(it: Iter(t), acc: u, f: t -> u -> u) -> u =
     match step(it)
       None() -> acc
       Some(Yield(x, rest)) -> fold(rest, f(x)(acc), f)
 
   ## Take at most `n` values from the iterator as a plain list.
   ## Safe to call on infinite iterators.
-  fn take(it: Iter(T), n: Int) -> List(T) =
+  fn take(it: Iter(t), n: Int) -> List(t) =
     match n
       0 -> []
       _ ->
@@ -262,28 +262,28 @@ mod Std.Iter
 
   ## Materialise an iterator as a list. Non-terminating iterators
   ## never return; guard with `take/2` when unsure.
-  fn to_list(it: Iter(T)) -> List(T) =
+  fn to_list(it: Iter(t)) -> List(t) =
     match step(it)
       None() -> []
       Some(Yield(x, rest)) -> [x | to_list(rest)]
 
   ## Apply `f` to every element for its side effects. Returns `Done`
   ## once the iterator is exhausted.
-  fn each(it: Iter(T), f: T -> U) -> EachDone =
+  fn each(it: Iter(t), f: t -> u) -> EachDone =
     match step(it)
       None() -> Done()
       Some(Yield(x, rest)) -> each_after(f(x), rest, f)
 
   ## Private: ignore `f`'s return value and continue iterating.
-  local fn each_after(_value: U, rest: Iter(T), f: T -> U) -> EachDone =
+  local fn each_after(_value: u, rest: Iter(t), f: t -> u) -> EachDone =
     each(rest, f)
 
   ## Count elements satisfying `pred`. Tail-recursive.
-  fn count(it: Iter(T), pred: T -> Bool) -> Int =
+  fn count(it: Iter(t), pred: t -> Bool) -> Int =
     count_acc(it, pred, 0)
 
   ## Private accumulator helper for `count/2`.
-  local fn count_acc(it: Iter(T), pred: T -> Bool, acc: Int) -> Int =
+  local fn count_acc(it: Iter(t), pred: t -> Bool, acc: Int) -> Int =
     match step(it)
       None() -> acc
       Some(Yield(x, rest)) ->
@@ -293,7 +293,7 @@ mod Std.Iter
 
   ## `true` when at least one element satisfies `pred`. Stops at the
   ## first hit.
-  fn any(it: Iter(T), pred: T -> Bool) -> Bool =
+  fn any(it: Iter(t), pred: t -> Bool) -> Bool =
     match step(it)
       None() -> false
       Some(Yield(x, rest)) ->
@@ -303,7 +303,7 @@ mod Std.Iter
 
   ## `true` when every element satisfies `pred` (vacuously true for
   ## the empty iterator). Stops at the first miss.
-  fn all(it: Iter(T), pred: T -> Bool) -> Bool =
+  fn all(it: Iter(t), pred: t -> Bool) -> Bool =
     match step(it)
       None() -> true
       Some(Yield(x, rest)) ->
@@ -313,7 +313,7 @@ mod Std.Iter
 
   ## First element satisfying `pred`; returns `default` when nothing
   ## matches. Stops at the first hit.
-  fn find(it: Iter(T), pred: T -> Bool, default: T) -> T =
+  fn find(it: Iter(t), pred: t -> Bool, default: t) -> t =
     match step(it)
       None() -> default
       Some(Yield(x, rest)) ->

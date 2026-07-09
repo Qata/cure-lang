@@ -23,9 +23,9 @@ mod Std.Equatable
   @group(:core)
 
   ## Equality between two `T` values.
-  proto Equatable(T)
+  proto Equatable(t)
     ## `true` when `a` equals `b`.
-    fn eq(a: T, b: T) -> Bool
+    fn eq(a: t, b: t) -> Bool
 
   ## `Equatable` impl for `Int`: primitive `==`.
   impl Equatable for Int
@@ -54,7 +54,7 @@ mod Std.Equatable
     fn eq(a: Atom, b: Atom) -> Bool = a == b
 
   ## Inequality derived from `eq/2`.
-  fn ne(a: T, b: T) -> Bool =
+  fn ne(a: t, b: t) -> Bool =
     pickup
       eq(a, b) -> false
       else     -> true

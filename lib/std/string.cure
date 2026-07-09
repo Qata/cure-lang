@@ -118,7 +118,7 @@ mod Std.String
 
   ## Private helper: reverse a list using `:lists.reverse/1`.
   @extern(:lists, :reverse, 1)
-  local fn lists_reverse(l: List(T)) -> List(T)
+  local fn lists_reverse(l: List(t)) -> List(t)
 
   ## Private helper: list of codepoints -> binary.
   @extern(:erlang, :list_to_binary, 1)

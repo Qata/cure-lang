@@ -23,36 +23,36 @@ mod Std.Pair
   ## 1-based BEAM tuple element accessor; delegates to
   ## `:erlang.element/2`. `index` is 1-indexed, matching Erlang.
   @extern(:erlang, :element, 2)
-  fn element(index: Int, tuple: Tuple) -> T
+  fn element(index: Int, tuple: Tuple) -> t
 
   ## First element of a pair.
-  fn first(pair: Tuple) -> T = element(1, pair)
+  fn first(pair: Tuple) -> t = element(1, pair)
 
   ## Second element of a pair.
-  fn second(pair: Tuple) -> T = element(2, pair)
+  fn second(pair: Tuple) -> t = element(2, pair)
 
   ## Swap the elements of a pair: `%[a, b] -> %[b, a]`.
   fn swap(pair: Tuple) -> Tuple = %[second(pair), first(pair)]
 
   ## Apply `f` to the first element, leave the second alone.
-  fn map_first(pair: Tuple, f: A -> C) -> Tuple =
+  fn map_first(pair: Tuple, f: a -> c) -> Tuple =
     %[f(first(pair)), second(pair)]
 
   ## Apply `f` to the second element, leave the first alone.
-  fn map_second(pair: Tuple, f: B -> C) -> Tuple =
+  fn map_second(pair: Tuple, f: b -> c) -> Tuple =
     %[first(pair), f(second(pair))]
 
   ## Apply `f` to the first element and `g` to the second.
-  fn map_both(pair: Tuple, f: A -> C, g: B -> D) -> Tuple =
+  fn map_both(pair: Tuple, f: a -> c, g: b -> d) -> Tuple =
     %[f(first(pair)), g(second(pair))]
 
   ## Turn a pair into a 2-element list.
-  fn to_list(pair: Tuple) -> List(T) = [first(pair), second(pair)]
+  fn to_list(pair: Tuple) -> List(t) = [first(pair), second(pair)]
 
   ## Turn a list into a pair. Exactly two elements map to `%[a, b]`;
   ## single-element lists are duplicated; empty or longer lists fall
   ## back to `%[0, 0]`. Intended as a quick parser for simple inputs.
-  fn from_list(list: List(T)) -> Tuple =
+  fn from_list(list: List(t)) -> Tuple =
     match list
       [a, b] -> %[a, b]
       [a] -> %[a, a]

@@ -87,15 +87,15 @@ mod Std.Access
 
   ## Key-addressable container protocol: `fetch`, `get_and_update`,
   ## `pop`.
-  proto Access(C)
+  proto Access(c)
     ## Look up `key` in `container`; `Some(v)` or `None()` on miss.
-    fn fetch(container: C, key: Any) -> Option(Any)
+    fn fetch(container: c, key: Any) -> Option(Any)
     ## The workhorse updater: `f` receives `Some(v)` or `None()` and
     ## must return either `%[got, new_value]` or the atom `:pop`.
     ## Returns `%[got, new_container]`.
-    fn get_and_update(container: C, key: Any, f: Option(Any) -> Any) -> Tuple
+    fn get_and_update(container: c, key: Any, f: Option(Any) -> Any) -> Tuple
     ## Remove `key` from `container`; returns `%[popped, new_container]`.
-    fn pop(container: C, key: Any) -> Tuple
+    fn pop(container: c, key: Any) -> Tuple
 
   # -- impl Access for Map ---------------------------------------------------
 
@@ -162,14 +162,14 @@ mod Std.Access
   # -- Direct helpers --------------------------------------------------------
 
   ## Like `fetch/2`, but raises `:key_error` if the key is missing.
-  fn fetch_bang(container: C, key: Any) -> Any =
+  fn fetch_bang(container: c, key: Any) -> Any =
     match fetch(container, key)
       Some(v) -> v
       None()  -> raise_error(:key_error)
 
   ## Fetch the value under `key`, falling back to `default` when
   ## absent.
-  fn get(container: C, key: Any, default: Any) -> Any =
+  fn get(container: c, key: Any, default: Any) -> Any =
     match fetch(container, key)
       Some(v) -> v
       None()  -> default

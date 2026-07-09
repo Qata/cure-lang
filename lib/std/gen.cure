@@ -51,7 +51,7 @@ mod Std.Gen
     rand_uniform(2) == 1
 
   ## A constant "generator" that always returns the given value.
-  fn constant(v: T) -> T = v
+  fn constant(v: t) -> t = v
 
   # -- Combinators ------------------------------------------------------------
 
@@ -95,4 +95,4 @@ mod Std.Gen
   ## Default polymorphic shrinker; dispatches on the runtime shape of
   ## `v` and returns the empty list for types with no defined shrink.
   @extern(:cure_std_gen, :shrink, 1)
-  fn shrink(v: T) -> List(T)
+  fn shrink(v: t) -> List(t)

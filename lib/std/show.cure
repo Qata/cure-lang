@@ -23,9 +23,9 @@ mod Std.Show
   @group(:core)
 
   ## Convert a value of any `Show`-able type to its string representation.
-  proto Show(T)
+  proto Show(t)
     ## Canonical string form of `x`.
-    fn show(x: T) -> String
+    fn show(x: t) -> String
 
   # -- Implementations for primitive types ---------------------------
 
@@ -74,4 +74,4 @@ mod Std.Show
   # -- Convenience functions -----------------------------------------
 
   ## Same as `show/1` but append a trailing newline. Useful for logging.
-  fn show_line(x: T) -> String = show(x) <> "\n"
+  fn show_line(x: t) -> String = show(x) <> "\n"

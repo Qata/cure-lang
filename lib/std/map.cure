@@ -34,26 +34,26 @@ mod Std.Map
   ## Return a new map with `key` set to `value` (replaces any
   ## existing entry).
   @extern(:maps, :put, 3)
-  fn put(key: K, value: V, map: Map) -> Map
+  fn put(key: k, value: v, map: Map) -> Map
 
   ## Look up `key`. Raises `:badkey` if missing; use `get_or/3` for a
   ## total variant.
   @extern(:maps, :get, 2)
-  fn get(key: K, map: Map) -> V
+  fn get(key: k, map: Map) -> v
 
   ## Look up `key`, returning `default` when missing.
-  fn get_or(key: K, map: Map, default: V) -> V =
+  fn get_or(key: k, map: Map, default: v) -> v =
     pickup
       has_key(key, map) -> get(key, map)
       else              -> default
 
   ## Return `map` without `key`.
   @extern(:maps, :remove, 2)
-  fn remove(key: K, map: Map) -> Map
+  fn remove(key: k, map: Map) -> Map
 
   ## `true` when `key` is a member of `map`.
   @extern(:maps, :is_key, 2)
-  fn has_key(key: K, map: Map) -> Bool
+  fn has_key(key: k, map: Map) -> Bool
 
   ## Number of entries in `map`.
   @extern(:maps, :size, 1)
@@ -61,11 +61,11 @@ mod Std.Map
 
   ## List of keys.
   @extern(:maps, :keys, 1)
-  fn keys(map: Map) -> List(K)
+  fn keys(map: Map) -> List(k)
 
   ## List of values.
   @extern(:maps, :values, 1)
-  fn values(map: Map) -> List(V)
+  fn values(map: Map) -> List(v)
 
   ## List of `%[key, value]` tuples.
   @extern(:maps, :to_list, 1)
