@@ -166,4 +166,19 @@ defmodule Cure.Elab.ListTest do
     assert apply(mod, :exactly_two, [[]]) == false
     assert apply(mod, :exactly_two, [[:Z, :Z, :Z]]) == false
   end
+
+  # Std.List smoke (Task 4 Step 2): inline a real, confirmed-one-deep Std.List
+  # function VERBATIM (cons/2, lib/std/list.cure:84 after Task 1's edit —
+  # `fn cons(elem: T, list: List(T)) -> List(T) = [elem | list]`) and run it
+  # through the dependent pipeline. Proves the desugar+emit machinery against
+  # real stdlib logic and real `List(T)` type-parameter polymorphism, WITHOUT a
+  # `use Std.List` (the whole module stays blocked on the bodyless `@extern`
+  # length/1 FFI declaration — out of scope this wave, spec §6 — which halts the
+  # module before any list function; not a List-surface gap).
+  test "a real Std.List one-deep function (cons/2) runs through the dependent pipeline" do
+    src = "mod M\n  fn cons(elem: T, list: List(T)) -> List(T) = [elem | list]\nend\n"
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.ListCons", functions: [:cons])
+    assert apply(mod, :cons, [1, [2, 3]]) == [1, 2, 3]
+  end
 end
