@@ -1,0 +1,78 @@
+defmodule Cure.Elab.Coherence do
+  @moduledoc """
+  The coherence registry: the compile-time table of typeclass instances.
+
+  Anonymous instances are keyed on `(interface, head type constructor)` and must
+  be globally unique — a second instance for the same pair is an overlap error
+  (this is what "global coherence" means). Named instances (`... as strictInt`)
+  are keyed on their name, are exempt from the global-uniqueness rule, and are
+  selected explicitly rather than by resolution.
+
+  A registered value (`ref`) is an elaborator-level descriptor of the instance:
+  `%{iface, head, methods: %{method_atom => mangled_global_atom}, as}`. Method
+  bodies live as ordinary (mangled) global defs; `Cure.Elab.Resolve` reads this
+  table to inline them at concrete sites or thread a runtime dictionary at
+  abstract sites.
+  """
+
+  defstruct anon: %{}, named: %{}
+
+  @type t :: %__MODULE__{
+          anon: %{{atom(), atom()} => map()},
+          named: %{atom() => map()}
+        }
+
+  @doc "An empty registry."
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @doc """
+  Register an anonymous instance for `(iface, head)`. A pre-existing entry for
+  the same pair is an overlap error.
+  """
+  @spec register_anon(t(), atom(), atom(), map()) :: {:ok, t()} | {:error, term()}
+  def register_anon(%__MODULE__{anon: anon} = c, iface, head, ref) do
+    key = {iface, head}
+
+    if Map.has_key?(anon, key) do
+      {:error, {:overlapping_instance, iface, head}}
+    else
+      {:ok, %{c | anon: Map.put(anon, key, ref)}}
+    end
+  end
+
+  @doc """
+  Register a named instance under `name`. A pre-existing name is an overlap
+  error (`iface`/`head` are carried for a descriptive message).
+  """
+  @spec register_named(t(), atom(), {atom(), atom()}, map()) :: {:ok, t()} | {:error, term()}
+  def register_named(%__MODULE__{named: named} = c, name, {iface, head}, ref) do
+    if Map.has_key?(named, name) do
+      {:error, {:overlapping_named_instance, name, iface, head}}
+    else
+      {:ok, %{c | named: Map.put(named, name, ref)}}
+    end
+  end
+
+  @doc "Look up the anonymous instance for `(iface, head)`."
+  @spec lookup_anon(t() | nil, atom(), atom()) :: {:ok, map()} | {:error, term()}
+  def lookup_anon(%__MODULE__{anon: anon}, iface, head) do
+    case Map.fetch(anon, {iface, head}) do
+      {:ok, ref} -> {:ok, ref}
+      :error -> {:error, {:no_instance, iface, head}}
+    end
+  end
+
+  def lookup_anon(nil, iface, head), do: {:error, {:no_instance, iface, head}}
+
+  @doc "Look up a named instance by name."
+  @spec lookup_named(t() | nil, atom()) :: {:ok, map()} | {:error, term()}
+  def lookup_named(%__MODULE__{named: named}, name) do
+    case Map.fetch(named, name) do
+      {:ok, ref} -> {:ok, ref}
+      :error -> {:error, {:no_named_instance, name}}
+    end
+  end
+
+  def lookup_named(nil, name), do: {:error, {:no_named_instance, name}}
+end

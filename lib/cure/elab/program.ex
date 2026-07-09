@@ -723,6 +723,15 @@ defmodule Cure.Elab.Program do
             {:error, _} = err -> {:halt, err}
           end
 
+        # An implementation lowers each method to a mangled global; register its
+        # signatures + the coherence entry now, and thread the mangled defs into
+        # `fns` so their bodies elaborate in the second pass like any function.
+        {:implementation, _meta, _body} ->
+          case Cure.Elab.Implementation.register(decl, acc) do
+            {:ok, acc2, mangled_fns} -> {:cont, {:ok, acc2, fns ++ mangled_fns}}
+            {:error, _} = err -> {:halt, err}
+          end
+
         _ ->
           case Declarations.elaborate(decl, acc) do
             {:ok, acc2} ->
