@@ -756,6 +756,20 @@ defmodule Cure.Elab.Program do
             {:error, _} = err -> {:halt, err}
           end
 
+        # A `type … deriving Iface` container elaborates normally, then each named
+        # interface is derived structurally: `Cure.Elab.Deriving` synthesises an
+        # implementation whose mangled method bodies join `fns` for the second
+        # pass, exactly like a hand-written instance.
+        {:container, meta, _body} = decl when is_list(meta) ->
+          with {:ok, acc2} <- Declarations.elaborate(decl, acc),
+               {:ok, acc3} <- maybe_register_builtin(decl, acc2, prelude?),
+               {:ok, acc4, derived_fns} <-
+                 register_derived(Keyword.get(meta, :deriving, []), decl, acc3) do
+            {:cont, {:ok, acc4, fns ++ derived_fns}}
+          else
+            {:error, _} = err -> {:halt, err}
+          end
+
         _ ->
           case Declarations.elaborate(decl, acc) do
             {:ok, acc2} ->
@@ -789,6 +803,24 @@ defmodule Cure.Elab.Program do
     do: register_builtin_from_meta(meta, env)
 
   defp maybe_register_builtin(_decl, env, _prelude?), do: {:ok, env}
+
+  # Derive an instance of each named interface for a `deriving` container. Each
+  # generated implementation is registered like a hand-written one; its mangled
+  # method defs are threaded back so the second pass elaborates their bodies.
+  defp register_derived([], _decl, env), do: {:ok, env, []}
+
+  defp register_derived(names, decl, env) do
+    Enum.reduce_while(names, {:ok, env, []}, fn name, {:ok, acc, fns} ->
+      iface = String.to_atom(name)
+
+      with {:ok, impl_ast} <- Cure.Elab.Deriving.generate(iface, decl, acc),
+           {:ok, acc2, mangled_fns} <- Cure.Elab.Implementation.register(impl_ast, acc) do
+        {:cont, {:ok, acc2, fns ++ mangled_fns}}
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
 
   defp register_builtin_from_meta(meta, env) do
     case Keyword.get(meta, :decorator) do
