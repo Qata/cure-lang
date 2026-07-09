@@ -104,6 +104,8 @@ defmodule Antigen.Challenge do
     :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2,
     # S8: inert app-head used in app/lam-headed ctor field types
     :Fp,
+    # family-level universe ceiling probe (Kernel.check_family range-check)
+    :Over, :MkOver,
     # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
     :Sq, :mksq, :j,
     # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors
