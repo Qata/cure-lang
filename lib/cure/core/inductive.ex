@@ -402,7 +402,15 @@ defmodule Cure.Core.Inductive do
     end
   end
 
-  defp strictly_positive?(_env, _fname, _other, _seen), do: true
+  # Any other shape: a type-level application (`Neg Bad`), a type-level λ, a
+  # `case`, a bare variable, etc. The kernel has no polarity analysis for these
+  # heads, so the family occurring inside one CANNOT be certified strictly
+  # positive — `Neg := λt. t -> Empty` makes `Neg Bad` a hidden negative
+  # occurrence. The only sound answer is: strictly positive iff the family does
+  # not occur at all, mirroring the `:data`-other clause's conservatism (a
+  # false-open here admits `False`). An occurrence in a genuinely positive but
+  # unanalyzable spot is rejected — soundly incomplete, never unsound.
+  defp strictly_positive?(_env, fname, other, _seen), do: not occurs?(fname, other)
 
   # Does `fname` occur anywhere in `ty`, including inside the constructor fields
   # of other families referenced by `ty`? Used for arrow DOMAINS, where any
