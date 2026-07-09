@@ -904,37 +904,69 @@ defmodule Cure.Elab.Declarations do
   @spec lower_type(tuple(), [String.t()], Env.t()) :: {:ok, tuple()} | {:error, term()}
   def lower_type(ast, scope, env), do: idx_to_core(ast, scope, nil, env, nil)
 
-  # An all-digits binder name can only be a stringified integer token from the
-  # type parser (Cure identifiers never start with a digit), so it is a compact
-  # Nat literal, not a variable. Empty string and any non-digit char reject.
-  defp numeric_index_name?(name) when is_binary(name),
-    do: name != "" and String.match?(name, ~r/\A[0-9]+\z/)
+  # Classify an index NAME node as a numeral, since a name STARTING WITH A DIGIT
+  # can only be a stringified numeric token from the type parser (Cure identifiers
+  # never start with a digit) — never a binder. Returns:
+  #   {:ok, n}     — a non-negative integer Nat index (compact `nat_lit`)
+  #   {:error, r}  — a numeral-shaped name that is not a valid Nat index
+  #                  (fractional or negative), an error rather than a phantom global
+  #   :not_numeric — a real (non-numeric) name; fall through to binder/global lookup
+  #
+  # The lexer already normalizes hex (`0x…`), binary (`0b…`) and underscored
+  # integers to a decimal digit-string, so those arrive as all-digits. Scientific
+  # notation lexes as a float and arrives stringified (`1e6` → "1.0e6"); an
+  # integer-valued float is a valid index, a genuinely fractional one is rejected.
+  defp numeric_index_value(name) when is_binary(name) do
+    cond do
+      String.match?(name, ~r/\A[0-9]+\z/) ->
+        {:ok, String.to_integer(name)}
 
-  defp numeric_index_name?(_), do: false
+      String.match?(name, ~r/\A[0-9]/) ->
+        case Float.parse(name) do
+          {f, ""} when f >= 0.0 ->
+            t = trunc(f)
+            if t * 1.0 == f, do: {:ok, t}, else: {:error, {:non_integer_index, name}}
+
+          _ ->
+            {:error, {:non_integer_index, name}}
+        end
+
+      true ->
+        :not_numeric
+    end
+  end
+
+  defp numeric_index_value(_), do: :not_numeric
 
   defp idx_to_core(ast, scope, fam, env, ctx \\ nil)
 
   defp idx_to_core({:variable, _meta, "Type"}, _scope, _fam, _env, _ctx), do: {:ok, {:type, 0}}
 
   defp idx_to_core({:variable, _meta, name}, scope, _fam, env, _ctx) do
-    cond do
-      # A numeric literal in a dependent type index — the `5` in `Bounded(5)`, the
-      # `0x110000` Char bound in `Bounded(1114112)`. The lexer's integer token is
-      # stringified into a NAME node by the type parser, so it arrives here as an
-      # all-digits `name`. It can never be a binder (you cannot bind `5`), so it is
-      # unambiguously a compact `Nat` literal regardless of scope — the surface half
-      # of the compact-Nat kernel path (Lean/Agda: a numeral in index position is a
-      # `Nat`). Without this it fell through to a phantom `{:global, :"5"}`.
-      numeric_index_name?(name) ->
-        {:ok, {:nat_lit, String.to_integer(name)}}
+    # A numeric literal in a dependent type index — the `5` in `Bounded(5)`, the
+    # `0x110000` Char bound in `Bounded(1114112)`, a scientific `1e6`. The lexer's
+    # numeric token is stringified into a NAME node by the type parser. It can never
+    # be a binder (you cannot bind `5`), so it is unambiguously a compact `Nat`
+    # literal regardless of scope — the surface half of the compact-Nat kernel path
+    # (Lean/Agda: a numeral in index position is a `Nat`). Without this it fell
+    # through to a phantom `{:global, :"5"}`.
+    case numeric_index_value(name) do
+      {:ok, n} ->
+        {:ok, {:nat_lit, n}}
 
-      (idx = Enum.find_index(scope, &(&1 == name))) != nil ->
-        {:ok, {:var, idx}}
+      {:error, reason} ->
+        {:error, reason}
 
-      true ->
-        case resolve_index_name(name, env) do
-          {:ambiguous_name, atom, mods} -> {:error, {:ambiguous_name, atom, mods}}
-          node -> {:ok, node}
+      :not_numeric ->
+        cond do
+          (idx = Enum.find_index(scope, &(&1 == name))) != nil ->
+            {:ok, {:var, idx}}
+
+          true ->
+            case resolve_index_name(name, env) do
+              {:ambiguous_name, atom, mods} -> {:error, {:ambiguous_name, atom, mods}}
+              node -> {:ok, node}
+            end
         end
     end
   end
