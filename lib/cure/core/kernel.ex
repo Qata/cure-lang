@@ -20,6 +20,10 @@ defmodule Cure.Core.Kernel do
 
   @type result :: {:ok, Cure.Core.Value.t()} | {:error, term()}
 
+  # The fixed predicative ceiling (`Universe.ceiling()`), mirrored into a compile
+  # constant so it is usable in guards. Single source of truth stays `Universe`.
+  @universe_ceiling Universe.ceiling()
+
   @doc """
   Normalize `term` in `ctx` via the shared trusted Core normalizer
   (`Cure.Core.Normalise`).
@@ -407,14 +411,24 @@ defmodule Cure.Core.Kernel do
   index telescope (in the context of the parameters), each entry a valid type.
   """
   @spec check_family(Cure.Core.Env.t(), Inductive.family()) :: :ok | {:error, term()}
-  def check_family(env, %{params: params, indices: indices}) do
+  def check_family(env, %{params: params, indices: indices} = family) do
     base = Context.empty(env)
 
-    with {:ok, ctx_params} <- check_telescope(base, params),
+    with :ok <- check_family_level(Map.get(family, :level, 0)),
+         {:ok, ctx_params} <- check_telescope(base, params),
          {:ok, _ctx} <- check_telescope(ctx_params, indices) do
       :ok
     end
   end
+
+  # The family's declared universe must lie within the fixed predicative ceiling
+  # (`Type0 : Type1 : Type2`); a family at `Type k > ceiling` contradicts the
+  # hierarchy the rest of the kernel enforces (`Universe.succ`, `subtype?`).
+  defp check_family_level(level)
+       when is_integer(level) and level >= 0 and level <= @universe_ceiling,
+       do: :ok
+
+  defp check_family_level(_level), do: {:error, :universe_ceiling}
 
   @doc """
   Check a constructor well-formed against its family (§4.4): argument telescope
