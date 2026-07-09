@@ -86,4 +86,84 @@ defmodule Cure.Elab.ListTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "a list literal emits a NATIVE BEAM list" do
+    src = "mod M\n  fn xs() -> List(Int) = [1, 2, 3]\nend\n"
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List1", functions: [:xs])
+
+    result = apply(mod, :xs, [])
+    assert result == [1, 2, 3]
+    assert is_list(result)
+  end
+
+  # The empty-list VALUE (goal-bearing: a recursion whose base yields []). A bare
+  # top-level `fn e() -> List(Int) = []` is infer-only-rejected (Finding A, spec
+  # §2 / ledger guard above) — do NOT test that shape here.
+  test "a recursion base yields the native empty list []" do
+    src =
+      "mod M\n" <>
+        "  fn drop_all(xs: List(Int)) -> List(Int) =\n" <>
+        "    match xs\n" <>
+        "      [] -> xs\n" <>
+        "      [h | t] -> drop_all(t)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List2", functions: [:drop_all])
+    assert apply(mod, :drop_all, [[1, 2, 3]]) == []
+    assert apply(mod, :drop_all, [[]]) == []
+  end
+
+  test "[h | t] builds the expected native list" do
+    src = "mod M\n  fn c(h: Int, t: List(Int)) -> List(Int) = [h | t]\nend\n"
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List3", functions: [:c])
+    assert apply(mod, :c, [1, [2, 3]]) == [1, 2, 3]
+  end
+
+  test "[a, b | rest] builds the expected native list (multi-head cons)" do
+    # Cross-checks against the classic-pipeline oracle
+    # test/cure/compiler/multi_head_cons_test.exs (Task 4 Step 3) — this is the
+    # only directed test in this suite that exercises build_multi_head_cons/3.
+    src =
+      "mod M\n  fn c(a: Int, b: Int, rest: List(Int)) -> List(Int) = [a, b | rest]\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List3b", functions: [:c])
+    assert apply(mod, :c, [1, 2, [3, 4]]) == [1, 2, 3, 4]
+  end
+
+  test "a one-deep list match selects the arm at runtime" do
+    src =
+      @nat <>
+        "  fn is_empty(xs: List(Nat)) -> Bool =\n" <>
+        "    match xs\n" <>
+        "      [] -> true\n" <>
+        "      [h | t] -> false\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List4", functions: [:is_empty])
+    assert apply(mod, :is_empty, [[]]) == true
+    assert apply(mod, :is_empty, [[:Z]]) == false
+  end
+
+  # SCOPE REVISION: nested list patterns work (matrix compiler). This proves
+  # NATIVE emit preserves nested matching at runtime — the matrix compiler lowers
+  # `[a, b]` to a chain of single-level `[H|T]` matches, each hitting
+  # list_branch_clause, so native cons cells must select correctly at every level.
+  test "a nested list pattern selects the arm at runtime (native emit)" do
+    src =
+      @nat <>
+        "  fn exactly_two(xs: List(Nat)) -> Bool =\n" <>
+        "    match xs\n" <>
+        "      [a, b] -> true\n" <>
+        "      other -> false\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.List5", functions: [:exactly_two])
+    assert apply(mod, :exactly_two, [[:Z, :Z]]) == true
+    assert apply(mod, :exactly_two, [[:Z]]) == false
+    assert apply(mod, :exactly_two, [[]]) == false
+    assert apply(mod, :exactly_two, [[:Z, :Z, :Z]]) == false
+  end
 end
