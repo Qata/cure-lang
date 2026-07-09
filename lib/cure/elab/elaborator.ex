@@ -473,7 +473,7 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
-  def elaborate_expr_typed({:literal, meta, value} = expr, _names, ctx, _env) do
+  def elaborate_expr_typed({:literal, meta, value} = expr, names, ctx, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) ->
         ctor = if value, do: :True, else: :False
@@ -493,6 +493,12 @@ defmodule Cure.Elab.Elaborator do
 
       :char when is_integer(value) ->
         {:error, {:char_literal_out_of_range, value}}
+
+      # A string literal IS `List(Char)` — desugar to the char-literal list
+      # `['c₀', …, 'cₙ']` (one element per Unicode codepoint) and elaborate that,
+      # so `"abc"` and `['a','b','c']` produce the identical Cons spine.
+      :string when is_binary(value) ->
+        elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
       _ ->
         {:error, {:unsupported_expression, expr}}
@@ -1167,8 +1173,14 @@ defmodule Cure.Elab.Elaborator do
   # one becomes compact. Every other case defers to the ordinary checked path.
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
+    string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
 
     cond do
+      # A string literal checks as its `List(Char)` desugaring (see the typed
+      # clause), so the expected `List(Char)`/`String` type drives each char.
+      string? ->
+        elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+
       int? and nat_expected?(expected_core, ctx) ->
         {:ok, {:nat_lit, value}}
 
@@ -3974,6 +3986,16 @@ defmodule Cure.Elab.Elaborator do
 
   defp desugar_list({:list, m, elems}), do: fold_list_literal(elems, m)
   defp desugar_list(other), do: other
+
+  # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
+  # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
+  # `List(Char)` and reuses all of `desugar_list`'s Cons/Nil machinery. The empty
+  # string yields the empty list (`Nil`).
+  defp desugar_string(value, meta) when is_binary(value) do
+    loc = Keyword.take(meta, [:line, :col])
+    chars = Enum.map(String.to_charlist(value), fn cp -> {:literal, [subtype: :char] ++ loc, cp} end)
+    {:list, meta, chars}
+  end
 
   defp fold_list_literal(elems, m) do
     Enum.reduce(Enum.reverse(elems), ctor_call("Nil", m, []), fn e, acc ->
