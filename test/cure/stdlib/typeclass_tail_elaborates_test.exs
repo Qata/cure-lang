@@ -1,21 +1,20 @@
 defmodule Cure.Stdlib.TypeclassTailElaboratesTest do
   @moduledoc """
-  The #21 typeclass tail — `Std.Equatable`, `Std.Ord`, `Std.Show` — was written
-  against the legacy `proto`/`impl` surface, which the dependent elaborator
-  rejects with `{:unsupported_container, :protocol}`. All three are migrated to
-  `interface`/`implementation`; their derived helpers (`ne`, `lt`/`le`/`gt`/`ge`,
-  `show_line`) dispatch through a `where`-introduced dictionary.
+  The #21 typeclass tail — `Std.Equatable`, `Std.Comparable`, `Std.Show` — was
+  written against the legacy `proto`/`impl` surface, which the dependent
+  elaborator rejects with `{:unsupported_container, :protocol}`. All three are
+  migrated to `interface`/`implementation`.
 
-  `Std.Equatable` and `Std.Ord` now elaborate end-to-end on the dependent
+  `Std.Equatable` and `Std.Comparable` now elaborate end-to-end on the dependent
   pipeline (both ride `String = List(Char)` via `use Std.String`).
 
-  `Std.Ord`'s `Char` instance compares Unicode code points via
+  `Std.Comparable`'s `Char` instance compares Unicode code points via
   `Std.Char.code_point` (a `Char -> Int` coercion) and Int `<`; its `String`
   instance is lexicographic over `List(Char)` through a top-level
-  `compare_string` recursion. No `<` is used on a non-primitive operand, so the
-  old `{:unsupported_operand_type, :<}` blocker is gone. (The comparison
-  *operators* `<`/`>` on non-primitive operands still route nowhere yet — that
-  is the separate keystone step that unblocks `core`/`test`.)
+  `compare_string` recursion. `compare` is the only method — the comparison
+  *operators* `<`/`>`/`<=`/`>=` are the surface and route through it (a
+  non-primitive `a < b` desugars to `compare(a, b) == LessThan()`), so there
+  are no `lt`/`le`/`gt`/`ge` named helpers.
 
   `Std.Show` remains surface-migrated and classic-building (see
   `Cure.Compiler.InterfaceDispatchCodegenTest`) but does NOT yet elaborate on
@@ -37,8 +36,8 @@ defmodule Cure.Stdlib.TypeclassTailElaboratesTest do
     assert {:ok, _env} = elaborates("lib/std/equatable.cure")
   end
 
-  test "Std.Ord elaborates on the dependent pipeline (code-point + lexicographic)" do
-    assert {:ok, _env} = elaborates("lib/std/ord.cure")
+  test "Std.Comparable elaborates on the dependent pipeline (code-point + lexicographic)" do
+    assert {:ok, _env} = elaborates("lib/std/comparable.cure")
   end
 
   test "Std.Show is blocked on `<>` desugaring to an out-of-scope `combine`" do

@@ -1,10 +1,10 @@
 defmodule Cure.Elab.ComparisonOperatorOrdTest do
   @moduledoc """
-  Comparison operators are typeclass overloads resolved through `Std.Ord` — not
+  Comparison operators are typeclass overloads resolved through `Std.Comparable` — not
   bespoke `build_binop` cases. `<`/`>`/`<=`/`>=` keep their primitive meaning on
   `Int`/`Float`; on ANY other operand type `build_binop` reports
   `{:unsupported_operand_type, op}` and the elaborator desugars through
-  `Std.Ord.compare`:
+  `Std.Comparable.compare`:
 
       a <  b  ~>  compare(a, b) == LessThan()
       a >  b  ~>  compare(a, b) == GreaterThan()
@@ -13,7 +13,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
 
   `compare` then dispatches by coherence to the operand's `Ord` instance. This
   mirrors the `<>`/`+`-> `Std.Semigroup.combine` overload and requires
-  `use Std.Ord` in scope (class-import model).
+  `use Std.Comparable` in scope (class-import model).
   """
   use ExUnit.Case, async: true
   alias Cure.Elab.{Program, Emit}
@@ -28,7 +28,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
   test "`<` on Char routes through Ord.compare (code-point order)" do
     src = """
     mod T
-      use Std.Ord
+      use Std.Comparable
       use Std.Char
       fn go() -> Bool = 'a' < 'b'
     end
@@ -39,7 +39,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
   test "`>` on Char routes through Ord.compare" do
     src = """
     mod T
-      use Std.Ord
+      use Std.Comparable
       use Std.Char
       fn go() -> Bool = 'a' > 'b'
     end
@@ -50,7 +50,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
   test "`<=` on Char routes through Ord.compare (reflexive)" do
     src = """
     mod T
-      use Std.Ord
+      use Std.Comparable
       use Std.Char
       fn go() -> Bool = 'a' <= 'a'
     end
@@ -61,7 +61,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
   test "`>=` on Char routes through Ord.compare" do
     src = """
     mod T
-      use Std.Ord
+      use Std.Comparable
       use Std.Char
       fn go() -> Bool = 'b' >= 'a'
     end
@@ -72,7 +72,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
   test "`<` on String routes through Ord.compare (lexicographic)" do
     src = """
     mod T
-      use Std.Ord
+      use Std.Comparable
       use Std.String
       fn go() -> Bool = "ada" < "grace"
     end

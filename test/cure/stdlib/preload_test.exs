@@ -56,7 +56,7 @@ defmodule Cure.Stdlib.PreloadTest do
       core = Preload.stdlib_modules(:core)
 
       # The user-facing spec requires these exact modules under :core.
-      required = ~w(Core Equivalent Equatable Ord Show Functor)a
+      required = ~w(Core Equivalent Equatable Comparable Show Functor)a
 
       for short <- required do
         module = String.to_atom("Cure.Std.#{short}")

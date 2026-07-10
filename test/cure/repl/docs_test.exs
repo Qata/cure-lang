@@ -61,7 +61,7 @@ defmodule Cure.REPL.DocsTest do
 
       assert "Std.Core" in core
       assert "Std.Equatable" in core
-      assert "Std.Ord" in core
+      assert "Std.Comparable" in core
       refute "Std.List" in core
       refute "Std.Http" in core
     end

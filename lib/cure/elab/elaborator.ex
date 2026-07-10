@@ -679,8 +679,10 @@ defmodule Cure.Elab.Elaborator do
     do: elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
 
   # Desugar a comparison operator on a NON-primitive operand to the
-  # `Std.Ord.compare` method, tested against an `Ordering` constructor — the
-  # same shape as `Std.Ord`'s own derived `lt`/`le`/`gt`/`ge` helpers:
+  # `Std.Comparable.compare` method, tested against an `Ordering` constructor.
+  # The comparison operators ARE the surface for `Comparable` (there are no
+  # `lt`/`le`/`gt`/`ge` named helpers); each maps to a `compare` + `Ordering`
+  # test:
   #
   #     a <  b  ~>  compare(a, b) == LessThan()
   #     a >  b  ~>  compare(a, b) == GreaterThan()
@@ -691,7 +693,7 @@ defmodule Cure.Elab.Elaborator do
   # `==`/`!=` on the `Ordering` result rides the usual `struct_eq`/`struct_ne`
   # path. Reached only when `build_binop` reports the operand type has no
   # primitive `<`/`>`/`<=`/`>=` (Int/Float keep their primitive meaning).
-  # Requires `use Std.Ord` in scope so `compare` and the `Ordering`
+  # Requires `use Std.Comparable` in scope so `compare` and the `Ordering`
   # constructors resolve (class-import model, like `combine`).
   defp compare_op_call(cmp, l, r, names, ctx, env) do
     {ctor, eq_op} =

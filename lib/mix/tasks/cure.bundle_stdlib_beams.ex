@@ -150,7 +150,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         # the *loaded* version of an imported module; without this the probe
         # would hit the stale copy baked into `Cure.Stdlib.Preload` at the
         # last `mix compile` (or none at all for a brand-new module), and a
-        # cross-module call — e.g. `Std.Ord.compare` calling
+        # cross-module call — e.g. `Std.Comparable.compare` calling
         # `Std.Char.code_point/1` — would fall back to an undefined local
         # call and fail to compile.
         refresh_loaded_beam(module, dest_dir)

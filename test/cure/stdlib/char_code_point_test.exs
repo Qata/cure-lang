@@ -4,10 +4,10 @@ defmodule Cure.Stdlib.CharCodePointTest do
   Lean `Fin.val` analog for `Char = Bounded(0x110000)`. A `Char` already
   erases to a native integer, so the runtime bridge (`:cure_std_char.code_point/1`)
   is the identity; the point is purely to give the type-level coercion a name
-  so `Std.Ord`'s `Char`/`String` instances can compare code points.
+  so `Std.Comparable`'s `Char`/`String` instances can compare code points.
 
   This is the foundation of the comparison-operator keystone: routing `<`/`>`
-  on non-primitive operands through `Std.Ord`.
+  on non-primitive operands through `Std.Comparable`.
   """
   use ExUnit.Case, async: true
   alias Cure.Elab.{Program, Emit}

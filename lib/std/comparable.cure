@@ -1,24 +1,25 @@
 @group(:core)
-mod Std.Ord
+mod Std.Comparable
   ## `Std.Char` supplies `code_point` (Char -> Int) for the `Char` instance's
   ## code-point ordering; `Std.String` makes `String` the transparent
   ## `List(Char)` synonym the lexicographic `String` comparison folds over.
   use Std.Char
   use Std.String
-  ## Ordering protocol: three-way compare plus total-order helpers.
+  ## Total-ordering interface: three-way `compare`, returning an `Ordering`.
   ##
-  ## The `compare/2` callback returns `LessThan`, `EqualTo`, or `GreaterThan`.
-  ## Derived `lt`, `le`, `gt`, `ge` helpers build on that.
+  ## `compare/2` is the single method; the comparison *operators* `<`, `>`,
+  ## `<=`, `>=` are the surface — on a non-primitive operand they route through
+  ## `compare` automatically (`a < b` desugars to `compare(a, b) == LessThan()`),
+  ## so there are no `lt`/`le`/`gt`/`ge` named helpers to call.
   ##
   ## ## Examples
   ##
   ## ```cure
-  ## use Std.Ord
+  ## use Std.Comparable
   ##
   ## compare(1, 2)                           # => LessThan()
-  ## lt(1, 2)                                # => true
-  ## ge(3, 3)                                # => true
-  ## compare("ada", "grace")                 # => LessThan()
+  ## 'a' < 'b'                               # => true
+  ## "ada" < "grace"                         # => true
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
@@ -26,12 +27,12 @@ mod Std.Ord
   type Ordering = LessThan | EqualTo | GreaterThan
 
   ## Total ordering over `T`.
-  interface Ord(t)
+  interface Comparable(t)
     ## `LessThan` when `a < b`, `GreaterThan` when `a > b`, `EqualTo` otherwise.
     fn compare(a: t, b: t) -> Ordering
 
-  ## `Ord` impl for `Int`.
-  implementation Ord for Int
+  ## `Comparable` impl for `Int`.
+  implementation Comparable for Int
     ## Integer three-way compare.
     fn compare(a: Int, b: Int) -> Ordering =
       pickup
@@ -39,8 +40,8 @@ mod Std.Ord
         a > b -> GreaterThan()
         else  -> EqualTo()
 
-  ## `Ord` impl for `Float`.
-  implementation Ord for Float
+  ## `Comparable` impl for `Float`.
+  implementation Comparable for Float
     ## Float three-way compare (NaNs follow BEAM's term-order).
     fn compare(a: Float, b: Float) -> Ordering =
       pickup
@@ -48,10 +49,10 @@ mod Std.Ord
         a > b -> GreaterThan()
         else  -> EqualTo()
 
-  ## `Ord` impl for `Char`: compare Unicode code points. `code_point` is the
-  ## `Char -> Int` coercion (Char erases to its code point), so this is an `Int`
-  ## comparison — no method dispatch, works on both pipelines.
-  implementation Ord for Char
+  ## `Comparable` impl for `Char`: compare Unicode code points. `code_point` is
+  ## the `Char -> Int` coercion (Char erases to its code point), so this is an
+  ## `Int` comparison — no method dispatch, works on both pipelines.
+  implementation Comparable for Char
     ## Character three-way compare on code points.
     fn compare(a: Char, b: Char) -> Ordering =
       pickup
@@ -79,20 +80,7 @@ mod Std.Ord
               code_point(ha) > code_point(hb) -> GreaterThan()
               else                            -> compare_string(ta, tb)
 
-  ## `Ord` impl for `String`. Delegates to the lexicographic `compare_string`.
-  implementation Ord for String
+  ## `Comparable` impl for `String`. Delegates to lexicographic `compare_string`.
+  implementation Comparable for String
     ## String three-way compare, character by character.
     fn compare(a: String, b: String) -> Ordering = compare_string(a, b)
-
-  ## Strict less-than derived from `compare/2`. The `where Ord(t)`
-  ## constraint threads the dictionary that dispatches `compare`.
-  fn lt(a: t, b: t) -> Bool where Ord(t) = compare(a, b) == LessThan()
-
-  ## Less-than-or-equal derived from `compare/2`.
-  fn le(a: t, b: t) -> Bool where Ord(t) = compare(a, b) != GreaterThan()
-
-  ## Strict greater-than derived from `compare/2`.
-  fn gt(a: t, b: t) -> Bool where Ord(t) = compare(a, b) == GreaterThan()
-
-  ## Greater-than-or-equal derived from `compare/2`.
-  fn ge(a: t, b: t) -> Bool where Ord(t) = compare(a, b) != LessThan()

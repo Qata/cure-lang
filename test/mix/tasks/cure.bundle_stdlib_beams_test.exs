@@ -118,7 +118,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       # a stale/absent module and the cross-module @extern call falls back
       # to a local call -> `{:undefined_function, ...}` -> the dependent
       # module fails to compile. The bundle must load each fresh beam so
-      # later modules see its exports. (Std.Ord -> Std.Char.code_point.)
+      # later modules see its exports. (Std.Comparable -> Std.Char.code_point.)
       src = make_tmp!()
       dst = make_tmp!()
 

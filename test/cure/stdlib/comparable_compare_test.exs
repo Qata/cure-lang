@@ -1,6 +1,6 @@
 defmodule Cure.Stdlib.OrdCompareTest do
   @moduledoc """
-  Behavioral graduation of `Std.Ord` onto the dependent pipeline.
+  Behavioral graduation of `Std.Comparable` onto the dependent pipeline.
 
   The `Char` instance compares Unicode code points via `Std.Char.code_point`
   (a `Char -> Int` coercion) and Int `<`; the `String` instance is lexicographic
@@ -15,7 +15,7 @@ defmodule Cure.Stdlib.OrdCompareTest do
   defp run(body, fname, mod) do
     src = """
     mod T
-      use Std.Ord
+      use Std.Comparable
       use Std.Char
       use Std.String
       fn #{fname}() -> Bool = #{body}
