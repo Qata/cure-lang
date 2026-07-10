@@ -106,22 +106,38 @@ defmodule Cure.Project do
     end
   end
 
+  # Table-aware upsert (F10): only the [project] table's `edition` key is touched.
+  # An `edition =` key in another table (e.g. [dependencies]) is left alone, and a
+  # [project] header carrying a trailing comment is recognised (no duplicate table).
   defp upsert_edition(lines, edition) do
     kv = "edition = \"#{edition}\""
 
-    cond do
-      Enum.any?(lines, &Regex.match?(~r/^\s*edition\s*=/, &1)) ->
-        Enum.map(lines, fn l -> if Regex.match?(~r/^\s*edition\s*=/, l), do: kv, else: l end)
-
-      true ->
-        insert_after_project_header(lines, kv)
+    case project_edition_slot(lines) do
+      {:replace, i} -> List.replace_at(lines, i, kv)
+      {:insert_after, i} -> List.insert_at(lines, i, kv)
+      :no_project -> ["[project]", kv | lines]
     end
   end
 
-  defp insert_after_project_header(lines, kv) do
-    idx = Enum.find_index(lines, &Regex.match?(~r/^\s*\[project\]\s*$/, &1))
-    if idx, do: List.insert_at(lines, idx + 1, kv), else: ["[project]", kv | lines]
+  # Locate where the [project] table's edition key is (or should go).
+  defp project_edition_slot(lines) do
+    case Enum.find_index(lines, &project_header?/1) do
+      nil ->
+        :no_project
+
+      hidx ->
+        section = lines |> Enum.drop(hidx + 1) |> Enum.take_while(&(not table_header?(&1)))
+
+        case Enum.find_index(section, &edition_key?/1) do
+          nil -> {:insert_after, hidx + 1}
+          rel -> {:replace, hidx + 1 + rel}
+        end
+    end
   end
+
+  defp table_header?(line), do: Regex.match?(~r/^\s*\[[^\]]+\]/, line)
+  defp project_header?(line), do: Regex.match?(~r/^\s*\[project\]\s*(#.*)?$/, line)
+  defp edition_key?(line), do: Regex.match?(~r/^\s*edition\s*=/, line)
 
   # -- Dependency Resolution ---------------------------------------------------
 
