@@ -23,8 +23,20 @@ defmodule Cure.Elab.TupleTelescopeListMatchReachTest do
   # So the trigger is the combination: telescope depth >= 3 AND an inner
   # inductive (List) component whose element type must flow from the scrutinee.
   #
-  # When the elaborator threads the inner component's metavar through a depth->=3
-  # unit-terminated Σ-telescope, delete the `@tag :skip` and this must pass.
+  # LOCALIZED (2026-07-11): the bug is in `elaborate_match`
+  # (elaborator.ex:1922), NOT the tuple builder. Evidence: the SAME triple-with-
+  # List tuple built WITHOUT a match — `fn f(d: a) -> Tuple(a, a, List(a)) =
+  # %[d, d, []]` (probe V2) — elaborates fine, so `check_tuple_against/5`
+  # (elaborator.ex:1485) handles depth->=3 + inner List correctly. Only the `match`
+  # wrapper fails. List's `a` is a PARAMETER (not an index), so `build_motive`
+  # produces a CONSTANT motive = `result_type_term` (`Tuple(a,a,List(a))`); yet the
+  # Nil branch's List element metavar is left unsolved (`:Nil`) only when that
+  # constant result telescope is depth->=3 with an inner List (depth-2 `Tuple(a,
+  # List(a))` = probe R3 works; depth-3 all-scalar = R4 works). So the remaining
+  # dig is: why the constant-motive branch checking at result-telescope depth->=3
+  # fails to tie the Nil ctor's element param to the scrutinee's `a`. Start at
+  # `build_motive` + `elaborate_branches`/`elaborate_matched_branch` (the const-
+  # motive path over a parameter-only family), NOT `check_tuple_against`.
   @tag :skip
   test "3-ary tuple with a List component built from a List-scrutinee match elaborates" do
     src = """
