@@ -9,7 +9,7 @@ mod Std.Comparable
   ##
   ## `compare/2` is the single method; the comparison *operators* `<`, `>`,
   ## `<=`, `>=` are the surface — on a non-primitive operand they route through
-  ## `compare` automatically (`a < b` desugars to `compare(a, b) == LessThan()`),
+  ## `compare` automatically (`a < b` desugars to `compare(a, b) == LessThan`),
   ## so there are no `lt`/`le`/`gt`/`ge` named helpers to call.
   ##
   ## ## Examples
@@ -17,7 +17,7 @@ mod Std.Comparable
   ## ```cure
   ## use Std.Comparable
   ##
-  ## compare(1, 2)                           # => LessThan()
+  ## compare(1, 2)                           # => LessThan
   ## 'a' < 'b'                               # => true
   ## "ada" < "grace"                         # => true
   ## ```
@@ -36,18 +36,18 @@ mod Std.Comparable
     ## Integer three-way compare.
     fn compare(a: Int, b: Int) -> Ordering =
       pickup
-        a < b -> LessThan()
-        a > b -> GreaterThan()
-        else  -> EqualTo()
+        a < b -> LessThan
+        a > b -> GreaterThan
+        else  -> EqualTo
 
   ## `Comparable` impl for `Float`.
   implementation Comparable for Float
     ## Float three-way compare (NaNs follow BEAM's term-order).
     fn compare(a: Float, b: Float) -> Ordering =
       pickup
-        a < b -> LessThan()
-        a > b -> GreaterThan()
-        else  -> EqualTo()
+        a < b -> LessThan
+        a > b -> GreaterThan
+        else  -> EqualTo
 
   ## `Comparable` impl for `Char`: compare Unicode code points. `code_point` is
   ## the `Char -> Int` coercion (Char erases to its code point), so this is an
@@ -56,9 +56,9 @@ mod Std.Comparable
     ## Character three-way compare on code points.
     fn compare(a: Char, b: Char) -> Ordering =
       pickup
-        code_point(a) < code_point(b) -> LessThan()
-        code_point(a) > code_point(b) -> GreaterThan()
-        else                          -> EqualTo()
+        code_point(a) < code_point(b) -> LessThan
+        code_point(a) > code_point(b) -> GreaterThan
+        else                          -> EqualTo
 
   ## Lexicographic three-way compare over `String = List(Char)`: compare heads
   ## by code point, and on a tie recurse into the tails. A prefix sorts before
@@ -69,15 +69,15 @@ mod Std.Comparable
     match a
       [] ->
         match b
-          []      -> EqualTo()
-          [_ | _] -> LessThan()
+          []      -> EqualTo
+          [_ | _] -> LessThan
       [ha | ta] ->
         match b
-          []        -> GreaterThan()
+          []        -> GreaterThan
           [hb | tb] ->
             pickup
-              code_point(ha) < code_point(hb) -> LessThan()
-              code_point(ha) > code_point(hb) -> GreaterThan()
+              code_point(ha) < code_point(hb) -> LessThan
+              code_point(ha) > code_point(hb) -> GreaterThan
               else                            -> compare_string(ta, tb)
 
   ## `Comparable` impl for `String`. Delegates to lexicographic `compare_string`.

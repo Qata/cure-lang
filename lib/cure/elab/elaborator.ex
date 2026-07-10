@@ -3586,11 +3586,35 @@ defmodule Cure.Elab.Elaborator do
   # coverage). Validates every constructor arm names one of dname's OWN declared
   # constructors (spec §5 step 2 gap) and rejects duplicate arms / duplicate
   # defaults / an impossible-marked catch-all.
+  # A bare capitalized pattern (`Lt`) parses as a variable — the parser has no
+  # type information — but when the name resolves to a NULLARY constructor of the
+  # scrutinee's family it is a constructor pattern, not a fresh binder: `Lt` ≡
+  # `Lt()` (Idris/Agda/Lean read an uppercase bare pattern as a nullary
+  # constructor). Rewrite it to the canonical `Ctor()` node so the constructor
+  # path handles it identically to the parenthesized spelling. Every genuine
+  # variable/wildcard pattern — and any capitalized name that is NOT a nullary
+  # constructor of this family — is left untouched, so it still binds/defaults.
+  defp desugar_nullary_ctor_pattern({:variable, _meta, vname} = pat, sig, env, dname) do
+    cname = resolve_ctor_key(env, String.to_atom(vname))
+
+    case Inductive.get_ctor(env, cname) do
+      %{args: []} ->
+        if Inductive.ctor_family(sig, cname) == dname,
+          do: {:function_call, [name: vname], []},
+          else: pat
+
+      _ ->
+        pat
+    end
+  end
+
+  defp desugar_nullary_ctor_pattern(pat, _sig, _env, _dname), do: pat
+
   defp partition_arms(arms, ctx, env, dname) do
     sig = Context.signature(ctx)
 
     Enum.reduce_while(arms, {:ok, {%{}, nil}}, fn {:match_arm, arm_meta, body}, {:ok, {acc, default}} ->
-      pattern = Keyword.fetch!(arm_meta, :pattern)
+      pattern = arm_meta |> Keyword.fetch!(:pattern) |> desugar_nullary_ctor_pattern(sig, env, dname)
 
       case pattern do
         {:variable, _vmeta, vname} ->
