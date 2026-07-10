@@ -85,4 +85,24 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     assert {:ok, "2027"} = Cure.CLI.plan_migration(target: "2027", current: "2026")
     assert {:ok, "2026"} = Cure.CLI.plan_migration(target: "2026", current: "2026")
   end
+
+  # Finding 2 (audit iteration 4, LATENT): the project-level downgrade guard
+  # (plan_migration/1) measures the TARGET against the PROJECT edition, but a
+  # single file can pin a newer edition via its own @edition pragma — `from`. If
+  # `from` is newer than `target`, migrating that file is a per-file downgrade
+  # and must be refused, exactly as plan_migration refuses a project downgrade.
+  # Unreachable today (a future pragma is rejected as unknown before this point),
+  # so probed at the pure-planner unit with a pragma-less source and hypothetical
+  # editions (compare/2 is allow-list-independent, and no pragma means the parser
+  # never validates a year against the allow-list).
+  test "Finding 2: plan_migration_source refuses a file whose :from is newer than :target" do
+    src = "mod M\n  fn f() -> Int = 1\n"
+    assert {:error, :downgrade} = Cure.CLI.plan_migration_source(src, target: "2026", from: "2027")
+  end
+
+  test "Finding 2: plan_migration_source still migrates when :from is at or below :target" do
+    src = "mod M\n  fn f() -> Int = 1\n"
+    assert {:ok, _printed, _warns, "2026"} =
+             Cure.CLI.plan_migration_source(src, target: "2026", from: "2026")
+  end
 end

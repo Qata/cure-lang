@@ -1323,6 +1323,20 @@ defmodule Cure.CLI do
     # exists). The verify reparse (below) stays on `target` — the OUTPUT is target
     # syntax (I2/F12).
     from = Keyword.get(opts, :from, target)
+
+    # A file whose current edition (`from`, from its own @edition pragma) is NEWER
+    # than the migration target is a per-file DOWNGRADE. The project-level guard
+    # (plan_migration/1) only measures the target against the project edition, so a
+    # file that pins a newer edition would otherwise be "migrated" downward onto an
+    # older keyword set (Finding 2). Refuse it here, mirroring plan_migration/1.
+    if Cure.Edition.compare(from, target) == :gt do
+      {:error, :downgrade}
+    else
+      plan_migration_source_crossing(src, target, from, opts)
+    end
+  end
+
+  defp plan_migration_source_crossing(src, target, from, opts) do
     {:ok, toks, trivia} = Cure.Compiler.Lexer.tokenize(src, trivia: true, edition: from)
     {:ok, ast} = Cure.Compiler.Parser.parse(toks, emit_events: false, edition: from)
     attached = Cure.Compiler.Trivia.attach(ast, trivia)
@@ -1410,8 +1424,19 @@ defmodule Cure.CLI do
     results = Enum.map(files, &migrate_preflight_file(&1, target, source_edition))
     failed = for {:error, path} <- results, do: path
     blocked = for {:blocked, path, ids} <- results, do: {path, ids}
+    downgraded = for {:downgrade, path, from, tgt} <- results, do: {path, from, tgt}
 
     cond do
+      downgraded != [] ->
+        # A file pins an edition newer than the target — refuse the whole run
+        # rather than silently downgrade any file (Finding 2), mirroring the
+        # project-level downgrade guard in plan_migration/1.
+        Enum.each(downgraded, fn {path, from, tgt} ->
+          error("#{path}: edition #{from} is newer than the migration target #{tgt} — refusing to downgrade")
+        end)
+
+        {:error, {:downgrade, downgraded}}
+
       failed != [] ->
         Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
         {:error, {:preflight_failed, failed}}
@@ -1459,6 +1484,9 @@ defmodule Cure.CLI do
 
         {:blocked, ids} ->
           {:blocked, file, ids}
+
+        {:error, :downgrade} ->
+          {:downgrade, file, from, target}
 
         {:error, _reason} ->
           {:error, file}
