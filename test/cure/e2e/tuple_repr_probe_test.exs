@@ -159,8 +159,18 @@ defmodule Cure.E2E.TupleReprProbeTest do
     fn one() -> Tele = Ext(Int, Empty())
     fn start() -> Tele = one()
   """
-  test "P5 BY-DESIGN: Type-typed field as a runtime value => :unknown_global" do
-    # Types are not first-class runtime values; `Tele` must stay an erased index.
-    assert {:error, :unknown_global} = build(@p5, :"Cure.P5Probe", [:one, :start])
+  test "P5: a type is a first-class VALUE term (elaborates); the runtime boundary is emit" do
+    # Types ARE first-class values of type `Type` (Idris/Agda/Lean parity): `Int`
+    # in a `Type`-typed field position elaborates fine — it no longer dies
+    # `:unknown_global` (that was a bug, fixed in resolve_free). The remaining
+    # boundary is purely RUNTIME: a type kept as a NON-erased constructor field
+    # has no BEAM representation, so emit reports `cannot emit {:int_type}`.
+    #
+    # This is the P4/P5 split made precise: types belong in ERASED index
+    # positions (P4's `NonDep(shape)` / the HVect `shape` index emit cleanly),
+    # NOT as runtime value fields. `Tele` must stay an erased index.
+    assert {:ok, _env} = elab(@p5)
+    assert {:raise, msg} = build(@p5, :"Cure.P5Probe", [:one, :start])
+    assert msg =~ "cannot emit"
   end
 end

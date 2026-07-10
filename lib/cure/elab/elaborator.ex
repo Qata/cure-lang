@@ -5576,6 +5576,14 @@ defmodule Cure.Elab.Elaborator do
         eta_expand_bare_ctor(env, atom)
 
       Inductive.family?(env, atom) -> {:ok, {:data, atom, [], []}}
+      # A machine PRIMITIVE base type (Int/Float/Binary/Atom) in value position
+      # is a first-class value of type `Type` — the same first-classness families
+      # already get above (Idris/Agda/Lean: a type constructor name in term
+      # position IS the type value). Primitives are `Env.put_primitive` bindings,
+      # not families, so without this they fell through to `{:global, :Int}` →
+      # `:unknown_global`. The kernel already types the primitive Core node
+      # (`{:int_type}`, …) at `{:vtype, 0}`; this is a pure resolution fix.
+      prim = Env.primitive(env, name) -> {:ok, prim}
       # Bare VALUE position mirrors the call-position R7 trichotomy: a name
       # provided by ≥2 re-keyed imports with no local/unshadowed winner is
       # ambiguous (E089), same tuple shape as the call site.
