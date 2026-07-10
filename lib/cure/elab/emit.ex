@@ -430,7 +430,11 @@ defmodule Cure.Elab.Emit do
   defp erl_binop(:add), do: :+
   defp erl_binop(:sub), do: :-
   defp erl_binop(:mul), do: :*
+  # `div` is Erlang INTEGER division; `/` is float division. `Builtins` gives
+  # float_div the distinct op key `:fdiv` precisely so this mapping can tell them
+  # apart — do not collapse them.
   defp erl_binop(:div), do: :div
+  defp erl_binop(:fdiv), do: :/
   defp erl_binop(:rem), do: :rem
   defp erl_binop(:band), do: :band
   defp erl_binop(:bor), do: :bor

@@ -240,7 +240,12 @@ defmodule Cure.Core.Eval do
   def fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
   def fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
   def fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
-  def fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
+  # Float division has its own op key `:fdiv` (see `Builtins.@float_binops`): the
+  # BEAM instruction is `/`, not the integer `div` that `:div` folds to. Sharing the
+  # key made `Emit` lower `x / y` on floats to `erlang:div/2` (badarith at runtime)
+  # while THIS fold happily returned the correct quotient — the normaliser and the
+  # emitter disagreeing about the same term. Keep the two keys distinct.
+  def fold(:fdiv, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
 
   # Bool-producing folds now yield the `True`/`False` **constructor values** of the
   # canonical Bool inductive (the True/False ctor values). `:True`/`:False` are

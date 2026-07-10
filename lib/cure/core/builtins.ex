@@ -53,11 +53,17 @@ defmodule Cure.Core.Builtins do
     {:int_bsr, :bsr}
   ]
 
+  # NOTE `float_div` carries its OWN op key `:fdiv`, not `:div`. The op key is what
+  # `Eval.fold/2` and `Emit.erl_binop/1` dispatch on, and Erlang's `div` is INTEGER
+  # division (`7.0 div 2.0` raises badarith) while `/` is float division. `add`/`sub`/
+  # `mul` and the comparisons can safely share a key with their int twins because the
+  # corresponding BEAM operators (`+ - * < =< > >= == /=`) are int/float polymorphic;
+  # division is the sole operator where they are NOT the same instruction.
   @float_binops [
     {:float_add, :add},
     {:float_sub, :sub},
     {:float_mul, :mul},
-    {:float_div, :div},
+    {:float_div, :fdiv},
     {:float_lt, :lt},
     {:float_le, :le},
     {:float_gt, :gt},

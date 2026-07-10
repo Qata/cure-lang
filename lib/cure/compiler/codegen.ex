@@ -1126,12 +1126,39 @@ defmodule Cure.Compiler.Codegen do
 
           {:call, line, {:remote, line, {:atom, line, :erlang}, {:atom, line, :iolist_to_binary}}, [list_form]}
 
+        :/ ->
+          division_form(line, left_form, right_form)
+
         _ ->
           erl_op = cure_op_to_erlang(op)
           {:op, line, erl_op, left_form, right_form}
       end
 
     {form, state}
+  end
+
+  # Cure's `/` is type-directed: Int/Int is integer division, Float/Float is float
+  # division. The dependent pipeline resolves this statically (`int_div` vs
+  # `float_div`, distinct op keys). This classic codegen has no operand types here,
+  # and the two BEAM instructions are NOT interchangeable: `div` raises badarith on
+  # floats, and `/` returns a float for two ints. Mapping `/` to `div` unconditionally
+  # made `3.0 / 2.0` crash at runtime.
+  #
+  # Dispatch on the operands instead. Both are bound to variables first so neither
+  # side effect nor cost is duplicated; the two clauses have disjoint scopes, so
+  # reusing the names is fine.
+  defp division_form(line, left_form, right_form) do
+    l = {:var, line, :_DivL}
+    r = {:var, line, :_DivR}
+    pat = {:tuple, line, [l, r]}
+    is_float = fn v -> {:call, line, {:atom, line, :is_float}, [v]} end
+
+    {:case, line, {:tuple, line, [left_form, right_form]},
+     [
+       # guard [[a],[b]] is a disjunction: is_float(L) orelse is_float(R)
+       {:clause, line, [pat], [[is_float.(l)], [is_float.(r)]], [{:op, line, :/, l, r}]},
+       {:clause, line, [pat], [], [{:op, line, :div, l, r}]}
+     ]}
   end
 
   # -- Unary Operator Compilation ----------------------------------------------
