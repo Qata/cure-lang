@@ -72,7 +72,9 @@ defmodule Cure.Compiler.Lexer do
     at_line_start: true,
     paren_depth: 0,
     fsm_transition_depth: 0,
-    preserve_comments: false
+    preserve_comments: false,
+    collect_trivia: false,
+    trivia: []
   ]
 
   @type t :: %__MODULE__{}
@@ -95,14 +97,27 @@ defmodule Cure.Compiler.Lexer do
     `#` comments (v0.20.0+). Default `false` so existing pipelines see no
     change. Doc comments (`##`, `###`) are always preserved as `:doc_comment`
     tokens regardless of this flag.
+  - `:trivia` -- when `true`, additionally collect *every* comment and blank-line
+    run as positioned trivia and return `{:ok, tokens, trivia}` (a 3-tuple).
+    `trivia` is an ordered (source-order) list of
+    `{:comment, text, line, col} | {:doc_comment, text, line, col} | {:blank, count, line}`.
+    Default `false`, in which case the return shape is the usual `{:ok, tokens}`.
+    Independent of `:preserve_comments` (which governs the main token stream).
   """
-  @spec tokenize(String.t(), keyword()) :: {:ok, [Token.t()]} | {:error, term()}
+  @spec tokenize(String.t(), keyword()) ::
+          {:ok, [Token.t()]} | {:ok, [Token.t()], [tuple()]} | {:error, term()}
   def tokenize(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, true)
     preserve? = Keyword.get(opts, :preserve_comments, false)
+    trivia? = Keyword.get(opts, :trivia, false)
 
-    state = %__MODULE__{source: source, file: file, preserve_comments: preserve?}
+    state = %__MODULE__{
+      source: source,
+      file: file,
+      preserve_comments: preserve?,
+      collect_trivia: trivia?
+    }
 
     case do_tokenize(state) do
       {:ok, state} ->
@@ -114,7 +129,11 @@ defmodule Cure.Compiler.Lexer do
           Events.emit(:lexer, :lex_complete, tokens, Events.meta(file, state.line))
         end
 
-        {:ok, tokens}
+        if trivia? do
+          {:ok, tokens, Enum.reverse(state.trivia)}
+        else
+          {:ok, tokens}
+        end
 
       {:error, reason, state} ->
         if emit? do
@@ -216,7 +235,11 @@ defmodule Cure.Compiler.Lexer do
     # the line as blank and keep `at_line_start: true` for the next line.
     case peek(state) do
       c when c in [?\n, ?\r, nil] ->
-        # Blank line -- advance past the newline without emitting indent/dedent
+        # Blank line -- advance past the newline without emitting indent/dedent.
+        # Record it as trivia on the `\n`/EOF end-of-line (not the bare `\r`,
+        # which for `\r\n` would double-count the same line).
+        state = if c == ?\r, do: state, else: record_blank(state, state.line)
+
         state =
           case c do
             ?\n ->
@@ -255,6 +278,7 @@ defmodule Cure.Compiler.Lexer do
             {text, state} = consume_while(state, fn ch -> ch != ?\n end)
             token = Token.new(:doc_comment, text, state.line, start_col)
             maybe_emit_event(state, token)
+            state = record_trivia(state, {:doc_comment, text, state.line, start_col})
             {:ok, %{state | tokens: [token | state.tokens], at_line_start: true}}
 
           # plain `#` comment
@@ -376,6 +400,7 @@ defmodule Cure.Compiler.Lexer do
         {text, state} = consume_while(state, fn c -> c != ?\n end)
         token = Token.new(:doc_comment, text, state.line, start_col)
         maybe_emit_event(state, token)
+        state = record_trivia(state, {:doc_comment, text, state.line, start_col})
         {:ok, %{state | tokens: [token | state.tokens]}}
 
       # plain `#` comment
@@ -393,13 +418,59 @@ defmodule Cure.Compiler.Lexer do
   # is enabled. The token carries the trimmed comment body (without the
   # leading `# `), so consumers can re-render comments without having to
   # recover the prefix heuristically.
-  defp emit_line_comment_if_enabled(%{preserve_comments: true} = state, text, start_col) do
+  defp emit_line_comment_if_enabled(state, text, start_col) do
+    # Trivia collection is independent of `preserve_comments`: record the
+    # comment for a lossless reprint regardless of whether the main token
+    # stream carries a `:line_comment` token.
+    state = record_trivia(state, {:comment, text, state.line, start_col})
+    emit_line_comment_token(state, text, start_col)
+  end
+
+  defp emit_line_comment_token(%{preserve_comments: true} = state, text, start_col) do
     token = Token.new(:line_comment, text, state.line, start_col)
     maybe_emit_event(state, token)
     %{state | tokens: [token | state.tokens]}
   end
 
-  defp emit_line_comment_if_enabled(state, _text, _start_col), do: state
+  defp emit_line_comment_token(state, _text, _start_col), do: state
+
+  # -- Trivia collection (trivia: true) --------------------------------------
+  #
+  # Independent of `preserve_comments`: records every comment and blank-line
+  # run as a positioned item so a lossless reprint (migration facility) can
+  # place it back. Items are prepended (state.trivia is reversed on return).
+
+  defp record_trivia(%{collect_trivia: false} = state, _item), do: state
+
+  defp record_trivia(%{collect_trivia: true} = state, item) do
+    %{state | trivia: [item | state.trivia]}
+  end
+
+  # A blank line merges into an immediately-preceding blank run so a run of N
+  # consecutive blank lines becomes a single `{:blank, N, first_line}` item.
+  # Contiguity: the prior run spans `sl .. sl + count - 1`, so the next blank
+  # at `sl + count` extends it; anything else (a comment on an intervening
+  # line, a gap) starts a fresh run.
+  defp record_blank(%{collect_trivia: false} = state, _line), do: state
+
+  # The `\n` that terminates a comment-only line is NOT a blank line: the
+  # line-start comment branch (lex_indentation) leaves its trailing newline
+  # for the next lex_indentation call, which then sees an otherwise-empty
+  # line and would spuriously count it. A comment we just recorded on this
+  # exact line number means this end-of-line belongs to that comment -- skip.
+  defp record_blank(%{collect_trivia: true, trivia: [{k, _t, cl, _c} | _]} = state, line)
+       when k in [:comment, :doc_comment] and cl == line do
+    state
+  end
+
+  defp record_blank(%{collect_trivia: true, trivia: [{:blank, count, sl} | rest]} = state, line)
+       when sl + count == line do
+    %{state | trivia: [{:blank, count + 1, sl} | rest]}
+  end
+
+  defp record_blank(%{collect_trivia: true} = state, line) do
+    %{state | trivia: [{:blank, 1, line} | state.trivia]}
+  end
 
   # Consume a `###\n...\n###` block and emit a single `:doc_comment` token.
   #
@@ -441,6 +512,7 @@ defmodule Cure.Compiler.Lexer do
 
     token = Token.new(:doc_comment, text, start_line, start_col)
     maybe_emit_event(state, token)
+    state = record_trivia(state, {:doc_comment, text, start_line, start_col})
     {:ok, %{state | tokens: [token | state.tokens]}}
   end
 
