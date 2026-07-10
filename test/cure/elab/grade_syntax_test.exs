@@ -174,4 +174,43 @@ defmodule Cure.Elab.GradeSyntaxTest do
       assert {:ok, _} = Program.elaborate(src)
     end
   end
+
+  describe "grade errors NAME the problem (adversarial review F6/F8)" do
+    # These programs were already REJECTED — but with a `{:expected, :rparen, …}`
+    # cascade that says nothing about the grade. A grade is a deliberate annotation;
+    # a mistake in it deserves a diagnostic that points at the grade, not at a
+    # downstream token the real error desynced onto.
+    defp errors(src) do
+      {:error, {:parse_error, errs}} = Compiler.parse_source(src)
+      errs
+    end
+
+    test "a grade with a missing required type names the grade, not `expected rparen`" do
+      errs = errors("mod G\n  fn f(c :linear) -> Int = 0\nend\n")
+      assert Enum.any?(errs, &match?({:grade_requires_type, "c", :linear, _, _}, &1)),
+             "expected a {:grade_requires_type, …}, got #{inspect(errs)}"
+    end
+
+    test "an implicit graded binder with a missing type also names the grade" do
+      errs = errors("mod G\n  fn f({n :erased}) -> Int = 0\nend\n")
+      assert Enum.any?(errs, &match?({:grade_requires_type, "n", :erased, _, _}, &1)),
+             "expected a {:grade_requires_type, …}, got #{inspect(errs)}"
+    end
+
+    test "an unknown grade atom names the offending atom" do
+      errs = errors("mod G\n  fn f(x :bogus Int) -> Int = 0\nend\n")
+      assert Enum.any?(errs, &match?({:unknown_grade, :bogus, _, _}, &1)),
+             "expected a {:unknown_grade, :bogus, …}, got #{inspect(errs)}"
+    end
+
+    test ":unrestricted is reported as an unknown grade (it has no spelling)" do
+      errs = errors("mod G\n  fn f(x :unrestricted Int) -> Int = 0\nend\n")
+      assert Enum.any?(errs, &match?({:unknown_grade, :unrestricted, _, _}, &1)),
+             "expected a {:unknown_grade, :unrestricted, …}, got #{inspect(errs)}"
+    end
+
+    test "a well-formed grade still parses (no false positive)" do
+      assert {:ok, _} = Compiler.parse_source("mod G\n  fn f(c :linear Int) -> Int = c\nend\n")
+    end
+  end
 end

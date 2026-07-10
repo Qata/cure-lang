@@ -1416,7 +1416,11 @@ defmodule Cure.Compiler.Parser do
 
     # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
     # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
-    {grade, type_ann, state} = parse_binder_annotation(state, [:assign])
+    let_name = case pattern do
+      {:variable, _, n} -> n
+      _ -> "let binding"
+    end
+    {grade, type_ann, state} = parse_binder_annotation(state, let_name, [:assign])
 
     # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
     # to a `case`, whose binders take their grades from the constructor's field
@@ -2610,22 +2614,38 @@ defmodule Cure.Compiler.Parser do
   # each grade has exactly ONE surface form.
   @grade_atoms [:erased, :linear, :affine]
 
+  # After a binder NAME, an ATOM token is unambiguously a grade slot — a type
+  # annotation needs a colon first (`x: :ok`), whereas the grade's fused `:name`
+  # form lexes as one atom. So `:erased/:linear/:affine` → that grade; any OTHER
+  # atom (`:bogus`, or `:unrestricted`, which has no spelling) → a NAMED
+  # `{:unknown_grade, …}` rather than a silent no-op that desyncs the param list.
   defp parse_grade(state) do
     case peek(state) do
-      %Token{type: :atom, value: g} when g in @grade_atoms -> {g, advance(state)}
-      _ -> {nil, state}
+      %Token{type: :atom, value: g} when g in @grade_atoms ->
+        {:grade, g, advance(state)}
+
+      %Token{type: :atom, value: bad} = tok ->
+        {:unknown, bad, tok, advance(state)}
+
+      _ ->
+        {:none, state}
     end
   end
 
-  # A binder's annotation: `: Type`, or the graded `:g Type`.
+  # Tokens that cannot begin a type — after a grade, one of these means the required
+  # type is missing, so name THAT rather than let `parse_type_expr` swallow the token.
+  @non_type_tokens [:rparen, :rbrace, :rbracket, :comma, :assign, :newline, :indent, :dedent, :eof]
+
+  # A binder's annotation: `: Type`, or the graded `:g Type`. `name` labels the binder
+  # for diagnostics.
   #
   # `stop_on` names the tokens that may legally FOLLOW a grade in place of a type. A
   # parameter has none, so `c :linear` is an error — there is nothing to grade. A
   # `let` stops on `=`, because Idris's `letBinder` leaves the type optional even when
   # graded (`Idris/Parser.idr:821-824`) and `let_inferred/8` will synthesise it.
-  defp parse_binder_annotation(state, stop_on \\ []) do
+  defp parse_binder_annotation(state, name, stop_on \\ []) do
     case parse_grade(state) do
-      {nil, state} ->
+      {:none, state} ->
         case peek(state) do
           %Token{type: :colon} ->
             {type_ast, state} = parse_type_expr(advance(state))
@@ -2635,12 +2655,23 @@ defmodule Cure.Compiler.Parser do
             {nil, nil, state}
         end
 
-      {grade, state} ->
-        if peek(state).type in stop_on do
-          {grade, nil, state}
-        else
-          {type_ast, state} = parse_type_expr(state)
-          {grade, type_ast, state}
+      {:unknown, bad, tok, state} ->
+        # Consume the stray atom (already advanced past it) and name it, so the error
+        # points at the grade rather than cascading onto the next real token.
+        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col})}
+
+      {:grade, grade, state} ->
+        cond do
+          peek(state).type in stop_on ->
+            {grade, nil, state}
+
+          peek(state).type in @non_type_tokens ->
+            tok = peek(state)
+            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col})}
+
+          true ->
+            {type_ast, state} = parse_type_expr(state)
+            {grade, type_ast, state}
         end
     end
   end
@@ -2659,7 +2690,7 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    {grade, type_ast, state} = parse_binder_annotation(state)
+    {grade, type_ast, state} = parse_binder_annotation(state, name)
 
     state = expect(state, :rbrace)
 
@@ -2690,7 +2721,7 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Optional type annotation `: Type`, or a graded one `:g Type`.
-    {grade, type_ast, state} = parse_binder_annotation(state)
+    {grade, type_ast, state} = parse_binder_annotation(state, name)
 
     # Optional default value: = expr
     {default, state} =
