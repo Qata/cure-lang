@@ -776,10 +776,14 @@ defmodule Cure.Compiler.Lexer do
         c in ?0..?9 or c in ?a..?f or c in ?A..?F or c == ?_
       end)
 
-    if digits == "" do
+    clean = String.replace(digits, "_", "")
+
+    # Reject both an empty digit run (`0x`) and an all-underscore run (`0x_`):
+    # the latter passes `digits != ""` but strips to "", and String.to_integer
+    # would then raise ArgumentError. Guard on `clean` so both surface cleanly.
+    if clean == "" do
       {:error, {:invalid_hex_literal, state.line, start_col}, state}
     else
-      clean = String.replace(digits, "_", "")
       value = String.to_integer(clean, 16)
       token = Token.new(:integer, value, state.line, start_col)
       maybe_emit_event(state, token)
@@ -795,10 +799,13 @@ defmodule Cure.Compiler.Lexer do
         c in [?0, ?1, ?_]
       end)
 
-    if digits == "" do
+    clean = String.replace(digits, "_", "")
+
+    # Reject `0b` (empty) and `0b_` (all-underscore, strips to ""); the latter
+    # would otherwise reach String.to_integer/2 and raise. See lex_hex.
+    if clean == "" do
       {:error, {:invalid_binary_literal, state.line, start_col}, state}
     else
-      clean = String.replace(digits, "_", "")
       value = String.to_integer(clean, 2)
       token = Token.new(:integer, value, state.line, start_col)
       maybe_emit_event(state, token)
@@ -816,19 +823,13 @@ defmodule Cure.Compiler.Lexer do
         {frac_part, state} = consume_while(state, fn c -> c in ?0..?9 or c == ?_ end)
         {exp_part, state} = lex_exponent(state)
         raw = "#{int_part}.#{frac_part}#{exp_part}" |> String.replace("_", "")
-        value = String.to_float(raw)
-        token = Token.new(:float, value, state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]}}
+        finish_float(raw, state, start_col)
 
       # Scientific notation without dot: 1e3
       peek(state) in [?e, ?E] ->
         {exp_part, state} = lex_exponent(state)
         raw = "#{int_part}.0#{exp_part}" |> String.replace("_", "")
-        value = String.to_float(raw)
-        token = Token.new(:float, value, state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]}}
+        finish_float(raw, state, start_col)
 
       true ->
         clean = String.replace(int_part, "_", "")
@@ -837,6 +838,19 @@ defmodule Cure.Compiler.Lexer do
         maybe_emit_event(state, token)
         {:ok, %{state | tokens: [token | state.tokens]}}
     end
+  end
+
+  # Build a float token from an assembled numeric string, converting a raw that
+  # String.to_float/1 rejects — a truncated exponent (`1.0e`, from `1e`/`1e+`)
+  # or an out-of-range magnitude (`1.0e400`, which overflows the IEEE double) —
+  # into a clean lexer error instead of a raised ArgumentError that would crash
+  # the whole tokenize.
+  defp finish_float(raw, state, start_col) do
+    token = Token.new(:float, String.to_float(raw), state.line, start_col)
+    maybe_emit_event(state, token)
+    {:ok, %{state | tokens: [token | state.tokens]}}
+  rescue
+    ArgumentError -> {:error, {:invalid_float_literal, state.line, start_col}, state}
   end
 
   defp lex_exponent(state) do
