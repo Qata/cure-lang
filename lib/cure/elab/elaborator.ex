@@ -3961,13 +3961,21 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
   end
 
-  # A `let x = e ⏎ …` block. Each `let` desugars by SURFACE substitution —
-  # `let x = e in body` ≡ `body[x := e]` — then the remainder is elaborated
-  # normally. This sidesteps de Bruijn bookkeeping entirely (the rhs is
-  # re-elaborated at each use site of `x`; a naming convenience, not sharing).
-  # Sound: a later binder that shadows `x` (or would capture a free variable of
-  # `e`) is guarded by `binds_any?`; and every substituted body is re-checked by
-  # the kernel, so an unsound inline yields a REJECTION, never a bad accept.
+  # A `let x = e ⏎ …` block elaborates to the Core `:let` binder:
+  # `{:let, T, e, body}`, binding `e` EXACTLY ONCE.
+  #
+  # Previously this desugared by SURFACE substitution (`body[x := e]`), which
+  # re-elaborated `e` at every use site and dropped it entirely at zero uses —
+  # the recorded root cause of let-duplication and the join-point residual, and a
+  # silent aliasing engine that would defeat any future linearity check.
+  # Substitution was kept only because it made a let-bound value *transparent* in
+  # a later dependent type; a β-redex binds once but loses that transparency.
+  #
+  # The Core `:let` supplies both (Idris `Core/TT/Binder.idr` `Let`, Lean
+  # `Expr.letE`): ζ makes the variable definitionally its value. Here the
+  # elaborator's own context gets the same treatment via `Context.extend_def/3`,
+  # so `elaborate_expr_typed` on the remainder sees `x` as its value and dependent
+  # lets keep checking. The kernel re-checks the emitted `:let` regardless.
   defp elaborate_let_block([final], expected_core, names, ctx, env),
     do: elaborate_expr_checked(final, expected_core, names, ctx, env)
 
@@ -3978,39 +3986,64 @@ defmodule Cure.Elab.Elaborator do
          ctx,
          env
        ) do
-    cond do
-      not Keyword.get(meta, :let, false) ->
-        {:error, {:unsupported_block_statement, meta}}
+    if not Keyword.get(meta, :let, false) do
+      {:error, {:unsupported_block_statement, meta}}
+    else
+      case elaborate_expr_typed(rhs, names, ctx, env) do
+        {:ok, rhs_core, rhs_type} ->
+          bind_once_let(name, rhs_core, rhs_type, rest, expected_core, names, ctx, env)
 
-      Enum.any?(rest, &binds_any?(&1, [name])) ->
-        # A later statement rebinds `name` (shadowing): surface substitution would
-        # capture, so bind `rhs` ONCE under a real λ (a de-Bruijn binder that a
-        # deeper pattern binder correctly shadows) and elaborate the rest against
-        # the goal shifted under it — `(λ name:T. <rest>) rhs`. The outer goal never
-        # mentions `name`, so the β-redex checks back against `expected_core`
-        # exactly, and `rhs` is evaluated once. (The non-shadowing path keeps
-        # surface substitution, which handles a dependent `let` whose later type
-        # needs `name`'s concrete value.)
-        with {:ok, rhs_core, rhs_type} <- elaborate_expr_typed(rhs, names, ctx, env) do
-          dom = Quote.reify(rhs_type, Context.length(ctx))
-          ctx1 = Context.extend(ctx, rhs_type)
-          names1 = [name | names]
-          expected1 = Subst.shift(expected_core, 1, 0)
-
-          with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
-            {:ok, {:app, {:lam, dom, body_core}, rhs_core}}
+        # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
+        # check-only shape. Surface substitution never had to infer it: it
+        # re-elaborated the rhs in CHECKING mode at each use site, against the
+        # expected type there. A `:let` must commit to one type up front.
+        #
+        # So fall back to the old behaviour for exactly those right-hand sides,
+        # and keep bind-once wherever the rhs is inferable (which is every
+        # function call, constructor, literal and variable). The duplication that
+        # remains is now confined to check-only rhs's and is a KNOWN residual:
+        # closing it needs bidirectional `let` (an ascription, or propagating the
+        # body's demanded type back into the rhs), not more substitution.
+        #
+        # Shadowing + non-inferable is unrepresentable: substitution would capture
+        # and `:let` cannot be built, so surface the inference error.
+        {:error, _} = err ->
+          if Enum.any?(rest, &binds_any?(&1, [name])) do
+            err
+          else
+            rest
+            |> Enum.map(&subst_surface_var(&1, name, rhs))
+            |> elaborate_let_block(expected_core, names, ctx, env)
           end
-        end
-
-      true ->
-        rest
-        |> Enum.map(&subst_surface_var(&1, name, rhs))
-        |> elaborate_let_block(expected_core, names, ctx, env)
+      end
     end
   end
 
   defp elaborate_let_block(other, _expected_core, _names, _ctx, _env),
     do: {:error, {:unsupported_block, other}}
+
+  # `let x : T = e ⏎ rest`  ⟶  `{:let, T, e, rest}` with `x := e` in the context.
+  defp bind_once_let(name, rhs_core, rhs_type, rest, expected_core, names, ctx, env) do
+    # SIGNATURE-AWARE reify. A `{:vdata, name, args}` value flattens a family's
+    # params and indices into one list; without the signature the split is not
+    # recoverable and the read-back puts them all in `params`, so a `{:let, T, …}`
+    # over an indexed family fails the kernel's arity check (`:arg_arity`).
+    # Agda `getNumberOfParameters` / Lean `inductive_val.get_nparams`.
+    dom = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+    rhs_value = Eval.eval(rhs_core, Context.env(ctx))
+
+    # `extend_def/3`, not `extend/2`: the binder is definitionally its value (ζ),
+    # so a later `SNat(k)` sees `k`'s concrete value — the one thing a β-redex
+    # cannot give. A shadowing binder deeper in `rest` correctly shadows this de
+    # Bruijn binder, so no capture guard is needed on this path.
+    ctx1 = Context.extend_def(ctx, rhs_type, rhs_value)
+    names1 = [name | names]
+    expected1 = Subst.shift(expected_core, 1, 0)
+
+    with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
+      {:ok, {:let, dom, rhs_core, body_core}}
+    end
+  end
 
   # Surface-level scrutinee refinement (Lean `Cases.lean:219-227`): in a branch,
   # a VARIABLE scrutinee *is* the pattern, so free occurrences of its name in

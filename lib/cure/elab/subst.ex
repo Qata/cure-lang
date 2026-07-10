@@ -50,6 +50,9 @@ defmodule Cure.Elab.Subst do
   defp replace({:lam, d, b}, env, k, depth),
     do: {:lam, replace(d, env, k, depth), replace(b, env, k, depth + 1)}
 
+  defp replace({:let, t, v, b}, env, k, depth),
+    do: {:let, replace(t, env, k, depth), replace(v, env, k, depth), replace(b, env, k, depth + 1)}
+
 
   defp replace({:app, f, x}, env, k, depth),
     do: {:app, replace(f, env, k, depth), replace(x, env, k, depth)}
@@ -83,6 +86,9 @@ defmodule Cure.Elab.Subst do
 
   def shift({:lam, d, b}, amount, cutoff),
     do: {:lam, shift(d, amount, cutoff), shift(b, amount, cutoff + 1)}
+
+  def shift({:let, t, v, b}, amount, cutoff),
+    do: {:let, shift(t, amount, cutoff), shift(v, amount, cutoff), shift(b, amount, cutoff + 1)}
 
 
   def shift({:app, f, x}, amount, cutoff),

@@ -39,6 +39,12 @@ defmodule Cure.Elab.Erase do
 
   def erase(env, {:lam, dom, body}), do: {:lam, erase(env, dom), erase(env, body)}
 
+  # `:let` survives erasure: its whole point is that `val` is emitted ONCE and
+  # bound to a BEAM variable. Dropping it here would reintroduce the duplication
+  # the binder exists to remove. The ascription is erased like any other type.
+  def erase(env, {:let, ty, val, body}),
+    do: {:let, erase(env, ty), erase(env, val), erase(env, body)}
+
   def erase(env, {:app, _f, _x} = app) do
     {head, args} = spine(app, [])
 
@@ -165,6 +171,7 @@ defmodule Cure.Elab.Erase do
   @spec has_hole?(Cure.Core.Term.t()) :: boolean()
   def has_hole?({:hole, _name}), do: true
   def has_hole?({:lam, d, b}), do: has_hole?(d) or has_hole?(b)
+  def has_hole?({:let, t, v, b}), do: has_hole?(t) or has_hole?(v) or has_hole?(b)
   def has_hole?({:pi, d, c}), do: has_hole?(d) or has_hole?(c)
   def has_hole?({:app, f, x}), do: has_hole?(f) or has_hole?(x)
   def has_hole?({:ctor, _n, args}), do: Enum.any?(args, &has_hole?/1)
