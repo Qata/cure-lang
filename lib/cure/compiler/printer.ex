@@ -44,7 +44,84 @@ defmodule Cure.Compiler.Printer do
   @spec quoted_to_string(term(), keyword()) :: String.t()
   def quoted_to_string(ast, opts \\ []) do
     indent = Keyword.get(opts, :indent, @default_indent)
-    render(ast, 0, indent)
+
+    case ast do
+      # The outermost node of a multi-definition file is the program's
+      # top-level statement list. Apply the §5.4 top-of-file policy here (rule 3:
+      # exactly one blank line between every top-level definition; rule 1: no
+      # leading blanks) — NOT in the generic `{:block, …}` clause, because a
+      # function body is also a `:block` and may itself render at depth 0.
+      {:block, _meta, exprs} -> render_program(exprs, indent)
+      _ -> render(ast, 0, indent)
+    end
+  end
+
+  defp render_program(exprs, indent) do
+    exprs
+    |> Enum.map(&render(&1, 0, indent))
+    |> Enum.with_index()
+    |> Enum.map(fn {rendered, i} -> {rendered, i > 0} end)
+    |> join_statements("")
+  end
+
+  # Render a block body / statement list applying §5.4 rule 4: a single author
+  # blank between two statements is preserved (a run capped at 1), signalled by a
+  # `:blank` item in either the preceding statement's `:trailer` or the following
+  # statement's `:leading`; blanks adjacent to the block's open/close are dropped
+  # (never injected before the first or after the last statement). `child_depth`
+  # is the depth at which the statements render; the caller supplies the leading
+  # pad for the first line. With no trivia attached (e.g. the corpus fixpoint
+  # gate) every `blank?` is false, so output is byte-identical to a plain
+  # "\n"<>pad join.
+  defp render_stmt_list(exprs, child_depth, indent) do
+    pad = String.duplicate(indent, child_depth)
+
+    case exprs do
+      [] ->
+        ""
+
+      [only] ->
+        coerce(render(only, child_depth, indent))
+
+      [first | rest] ->
+        {pairs, _prev} =
+          Enum.reduce(rest, {[{render(first, child_depth, indent), false}], first}, fn e,
+                                                                                       {acc, prev} ->
+            blank? = trailer_blank?(prev) or leading_blank?(e)
+            {[{render(e, child_depth, indent), blank?} | acc], e}
+          end)
+
+        join_statements(Enum.reverse(pairs), pad)
+    end
+  end
+
+  # Join rendered statements, inserting exactly one blank line before any
+  # statement flagged `blank?` (§5.4 rules 3/4). `pad` indents each statement
+  # after the first; the blank line itself is emitted empty. Elements are
+  # coerced to strings (mirroring `Enum.join`), since a stray keyword-named
+  # `:variable` renders to a bare atom (e.g. a dangling `end`).
+  defp join_statements([], _pad), do: ""
+
+  defp join_statements([{first, _} | rest], pad) do
+    Enum.reduce(rest, coerce(first), fn {rendered, blank?}, acc ->
+      sep = if blank?, do: "\n\n" <> pad, else: "\n" <> pad
+      acc <> sep <> coerce(rendered)
+    end)
+  end
+
+  defp coerce(s) when is_binary(s), do: s
+  defp coerce(other), do: Kernel.to_string(other)
+
+  # True when a node carries a blank-run item in its attached `:leading` /
+  # `:trailer` trivia, respectively.
+  defp leading_blank?(node), do: has_blank?(trivia_meta(node), :leading)
+  defp trailer_blank?(node), do: has_blank?(trivia_meta(node), :trailer)
+
+  defp has_blank?(meta, key) do
+    case Keyword.get(meta, key) do
+      nil -> false
+      items -> Enum.any?(items, &match?({:blank, _, _}, &1))
+    end
   end
 
   # -- Trivia-aware dispatch wrapper ------------------------------------------
@@ -179,10 +256,18 @@ defmodule Cure.Compiler.Printer do
 
   # -- Block -----------------------------------------------------------------
 
+  # A block body (§5.4 rule 4): cap blank runs at 1 and trim blanks adjacent to
+  # the block's open/close; otherwise preserve the author's single blank between
+  # two statements. A blank between statements S[i-1] and S[i] is attached (per
+  # the Trivia classifier) to *either* S[i-1]'s `:trailer` or S[i]'s `:leading`,
+  # so we check both sides of each pair. A run of N blanks is one `:blank` item,
+  # so this caps at exactly one line; blanks adjacent to open/close attach to the
+  # block/last-statement and are dropped here (never injected before the first or
+  # after the last statement). With no trivia attached (e.g. the corpus fixpoint
+  # gate), every `blank?` is false, so output is byte-identical to a plain
+  # "\n"<>pad join.
   defp to_string({:block, _meta, exprs}, depth, indent) do
-    exprs
-    |> Enum.map(&render(&1, depth, indent))
-    |> Enum.join("\n" <> String.duplicate(indent, depth))
+    render_stmt_list(exprs, depth, indent)
   end
 
   # -- Binary Operators ------------------------------------------------------
@@ -1047,13 +1132,7 @@ defmodule Cure.Compiler.Printer do
 
   defp rhs_to_string({:block, _meta, exprs}, depth, indent) do
     pad = String.duplicate(indent, depth + 1)
-
-    inner =
-      exprs
-      |> Enum.map(&render(&1, depth + 1, indent))
-      |> Enum.join("\n#{pad}")
-
-    "\n#{pad}#{inner}"
+    "\n#{pad}" <> render_stmt_list(exprs, depth + 1, indent)
   end
 
   defp rhs_to_string(ast, depth, indent), do: render(ast, depth, indent)
@@ -1398,14 +1477,24 @@ defmodule Cure.Compiler.Printer do
 
   defp module_to_string(meta, body, depth, indent) do
     name = Keyword.get(meta, :name)
-    pad = String.duplicate(indent, depth + 1)
 
-    body_str =
-      body
-      |> Enum.map(&render(&1, depth + 1, indent))
-      |> Enum.join("\n#{pad}")
+    # A bare `mod Name` header (empty body — its definitions are siblings in the
+    # enclosing statement list, not nested) must not emit a dangling indented
+    # blank line.
+    case body do
+      [] ->
+        "mod #{name}"
 
-    "mod #{name}\n#{pad}#{body_str}"
+      _ ->
+        pad = String.duplicate(indent, depth + 1)
+
+        body_str =
+          body
+          |> Enum.map(&render(&1, depth + 1, indent))
+          |> Enum.join("\n#{pad}")
+
+        "mod #{name}\n#{pad}#{body_str}"
+    end
   end
 
   defp record_to_string(meta, fields, depth, indent) do

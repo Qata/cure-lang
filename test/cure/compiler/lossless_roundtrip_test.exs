@@ -45,27 +45,41 @@ defmodule Cure.Compiler.LosslessRoundtripTest do
     end
   end
 
-  test "a blank line inside a multi-line map literal is preserved verbatim (§5.4 point 5, not a statement list)" do
-    src = """
-    mod M
-    fn f() -> Int =
-      let m = %{
-        x: 1,
+  # §5.4 point 5 (multi-line *expression* span, e.g. a blank inside a multi-line
+  # map/list/record literal) is VACUOUS for Cure: the language has no multi-line
+  # collection-literal syntax at all -- a `%{`, `[`, or `(` that spans a newline
+  # fails to reparse (`expected :rbrace/:rbracket, got :dedent`). Verified
+  # 2026-07-10 against Parser.parse/2. There is therefore no in-language source
+  # that can exercise point 5, and the plan's original `blank_in_map` test
+  # encoded a feature Cure does not have (it failed at the *parse* step, before
+  # any printing). It is replaced below by tests of the rules that DO apply to
+  # Cure -- the statement-list rules 1, 3, and 4. See spec §5.4 point 5.
 
-        y: 2
-      }
-      1
-    """
+  test "§5.4 rules 1 & 3: 0 blank lines at top of file; exactly 1 between every top-level definition" do
+    # No blank between a/b; a 3-blank run between b/c; two leading blanks at top.
+    src = "\n\nmod M\nfn a() -> Int = 1\nfn b() -> Int = 2\n\n\n\nfn c() -> Int = 3\n"
 
-    {:ok, toks, trivia} = Lexer.tokenize(src, file: "blank_in_map.cure", trivia: true)
-    {:ok, ast} = Parser.parse(toks, file: "blank_in_map.cure", emit_events: false)
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: "top.cure", trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: "top.cure", emit_events: false)
     out = ast |> Trivia.attach(trivia) |> Printer.quoted_to_string()
 
-    # the blank line between the two map entries survives the reprint --
-    # points 1-4's statement-list normalization does not apply inside a map
-    # literal (there is no enclosing block/statement-list here), so nothing
-    # should collapse or inject it.
-    assert out =~ ~r/x:\s*1,\s*\n\s*\n\s*y:\s*2/
-    assert _ = parse!(out, "blank_in_map.cure")
+    assert out == "mod M\n\nfn a() -> Int = 1\n\nfn b() -> Int = 2\n\nfn c() -> Int = 3"
+    assert _ = parse!(out, "top.cure")
+  end
+
+  test "§5.4 rule 4: inside a block body, a single author blank between statements is preserved (and a run caps at 1)" do
+    # One blank between `let x` and `let y`; a 3-blank run between `let y` and
+    # `z` must collapse to a single blank; the trailing blank is trimmed.
+    src = "mod M\nfn f() -> Int =\n  let x = 1\n\n  let y = 2\n\n\n\n  let z = 3\n  z\n"
+
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: "body.cure", trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: "body.cure", emit_events: false)
+    out = ast |> Trivia.attach(trivia) |> Printer.quoted_to_string()
+
+    assert out =~ ~r/let x = 1\n[ ]*\n[ ]*let y = 2/, "single author blank not preserved: #{inspect(out)}"
+    assert out =~ ~r/let y = 2\n[ ]*\n[ ]*let z = 3/, "blank run not capped to 1: #{inspect(out)}"
+    # no double blank anywhere (run capped)
+    refute out =~ ~r/\n[ ]*\n[ ]*\n/, "an uncapped multi-blank run survived: #{inspect(out)}"
+    assert _ = parse!(out, "body.cure")
   end
 end

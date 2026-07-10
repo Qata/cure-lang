@@ -229,6 +229,20 @@ Modeled on Go's `go/printer`/`ast.CommentMap`: comments and blank-lines are
    is worth stating explicitly rather than leaving "inside a block body" to be
    misread as "anywhere inside any pair of brackets."
 
+   **Implementation note (2026-07-10): rule 5 is VACUOUS for Cure as it stands.**
+   Cure has no multi-line collection-literal syntax at all — a `%{`, `[`, or `(`
+   that spans a newline fails to reparse (`expected :rbrace/:rbracket, got
+   :dedent`; verified against `Parser.parse/2`). There is therefore no
+   in-language source that can place blank-line trivia "inside a multi-line
+   expression span," so no rule-5 case can arise. The Printer accordingly does
+   not special-case it (blank trivia that the classifier attaches below
+   statement level, deep inside an expression, is simply dropped — it can never
+   be re-emitted where it landed without a grammar that allows a newline there,
+   which Cure does not have). Rule 5 remains documented as the *intended*
+   behavior should Cure ever gain multi-line collection literals; until then it
+   is a no-op. Rules 1, 3, and 4 (statement-list normalization) are fully
+   implemented and gated by `lossless_roundtrip_test.exs`.
+
 ### 5.5 Rule registry (the anti-ad-hoc ask)
 
 A rule is a struct:
