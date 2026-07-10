@@ -172,7 +172,9 @@ defmodule Cure.Compiler do
 
   - `:file` -- filename for error messages (default: `"nofile"`)
 
-  Returns `{:ok, ast}` or `{:error, {:lex_error | :parse_error, reason}}`.
+  Returns `{:ok, ast}` or `{:error, {:lex_error | :parse_error | :edition_error, reason}}`.
+  An `:edition_error` is returned when the resolved edition (file pragma or project
+  `Cure.toml`) is unknown — surfaced rather than silently degraded to the default.
 
   ## Examples
 
