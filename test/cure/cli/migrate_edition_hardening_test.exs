@@ -48,6 +48,15 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     assert out == "# header\n@edition(\"2026\")\nmod M\n"
   end
 
+  # Iter-4 audit (LOW regression): the old substring Regex.replace preserved a
+  # file's CRLF line endings; the rewritten line-oriented splice must too, or the
+  # replaced pragma line drops its \r and the file ends up with mixed EOL.
+  test "Finding 1: splicing preserves CRLF line endings on the replaced pragma line" do
+    body = "@edition(\"2020\")\r\nmod M\r\n"
+    out = Cure.CLI.migrate_splice_edition(body, "2026")
+    assert out == "@edition(\"2026\")\r\nmod M\r\n"
+  end
+
   test "F4: migrate_project_edition falls back to current() when no project is present" do
     dir = Path.join(System.tmp_dir!(), "cure_noproj_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)

@@ -1653,7 +1653,12 @@ defmodule Cure.CLI do
   defp replace_leading_pragma_line(body, target) do
     lines = String.split(body, "\n")
     idx = Enum.find_index(lines, fn line -> not migrate_trivia_line?(line) end)
-    lines |> List.replace_at(idx, "@edition(\"#{target}\")") |> Enum.join("\n")
+    # Preserve the pragma line's own terminator: splitting on "\n" leaves a
+    # trailing "\r" on each line of a CRLF file, so a bare replacement would drop
+    # this line's "\r" and leave the file with mixed EOL (the old substring
+    # Regex.replace preserved CRLF). Carry the "\r" onto the canonical pragma.
+    eol = if String.ends_with?(Enum.at(lines, idx), "\r"), do: "\r", else: ""
+    lines |> List.replace_at(idx, "@edition(\"#{target}\")#{eol}") |> Enum.join("\n")
   end
 
   defp migrate_trivia_line?(line) do
