@@ -1862,19 +1862,26 @@ defmodule Cure.CLI do
         "files are committed before continuing."
     )
 
-    Enum.each(files, fn file ->
-      source = File.read!(file)
+    outcomes =
+      Enum.map(files, fn file ->
+        source = File.read!(file)
 
-      with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
-           {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do
-        formatted = Cure.Compiler.Printer.quoted_to_string(ast)
-        File.write!(file, formatted <> "\n")
-        info("  formatted #{file}")
-      else
-        {:error, reason} ->
-          error("  #{file}: #{inspect(reason)}")
-      end
-    end)
+        with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
+             {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do
+          formatted = Cure.Compiler.Printer.quoted_to_string(ast)
+          File.write!(file, formatted <> "\n")
+          info("  formatted #{file}")
+          :ok
+        else
+          {:error, reason} ->
+            error("  #{file}: #{inspect(reason)}")
+            :error
+        end
+      end)
+
+    # A file the formatter could not parse must fail the command, not be
+    # reported as a successful format run.
+    if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
   end
 
   # -- watch ---------------------------------------------------------------------
@@ -1933,31 +1940,39 @@ defmodule Cure.CLI do
     if files == [] do
       info("No benchmark files found. Place benchmarks under bench/*.cure")
     else
-      Enum.each(files, fn f ->
-        case File.read(f) do
-          {:ok, src} ->
-            case Cure.Compiler.compile_and_load(src, file: f, emit_events: false) do
-              {:ok, mod} ->
-                exports = mod.module_info(:exports)
+      outcomes =
+        Enum.map(files, fn f ->
+          case File.read(f) do
+            {:ok, src} ->
+              case Cure.Compiler.compile_and_load(src, file: f, emit_events: false) do
+                {:ok, mod} ->
+                  exports = mod.module_info(:exports)
 
-                bench_fns =
-                  Enum.filter(exports, fn {n, a} ->
-                    String.starts_with?(Atom.to_string(n), "bench") and a == 0
+                  bench_fns =
+                    Enum.filter(exports, fn {n, a} ->
+                      String.starts_with?(Atom.to_string(n), "bench") and a == 0
+                    end)
+
+                  Enum.each(bench_fns, fn {name, _} ->
+                    {us, _} = :timer.tc(fn -> apply(mod, name, []) end)
+                    info("  #{f}:#{name}  #{us / 1000} ms")
                   end)
 
-                Enum.each(bench_fns, fn {name, _} ->
-                  {us, _} = :timer.tc(fn -> apply(mod, name, []) end)
-                  info("  #{f}:#{name}  #{us / 1000} ms")
-                end)
+                  :ok
 
-              {:error, reason} ->
-                error("  #{f}: #{inspect(reason)}")
-            end
+                {:error, reason} ->
+                  error("  #{f}: #{inspect(reason)}")
+                  :error
+              end
 
-          {:error, reason} ->
-            error("  #{f}: #{reason}")
-        end
-      end)
+            {:error, reason} ->
+              error("  #{f}: #{reason}")
+              :error
+          end
+        end)
+
+      # A benchmark file that failed to read or compile must fail the command.
+      if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
     end
   end
 
@@ -2138,11 +2153,17 @@ defmodule Cure.CLI do
   defp cmd_keys_generate(handle) do
     try do
       case Cure.Project.Signing.generate_keypair(handle) do
-        {:ok, ^handle} -> info("Generated keypair for '#{handle}' under ~/.cure/keys/")
-        other -> error("key generation returned unexpected: #{inspect(other)}")
+        {:ok, ^handle} ->
+          info("Generated keypair for '#{handle}' under ~/.cure/keys/")
+
+        other ->
+          error("key generation returned unexpected: #{inspect(other)}")
+          exit({:shutdown, 1})
       end
     rescue
-      e -> error("key generation failed: #{Exception.message(e)}")
+      e ->
+        error("key generation failed: #{Exception.message(e)}")
+        exit({:shutdown, 1})
     end
   end
 

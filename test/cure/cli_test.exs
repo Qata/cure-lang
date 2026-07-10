@@ -202,6 +202,22 @@ defmodule Cure.CLITest do
     end
   end
 
+  describe "cure fmt --aggressive (failure)" do
+    test "an unparseable file makes the command fail, not report success" do
+      path = Path.join(System.tmp_dir!(), "cure_fmt_bad_#{System.unique_integer([:positive])}.cure")
+      # A lexically/syntactically broken source the parser rejects.
+      File.write!(path, "mod M\n  fn f( -> = )(\n")
+      on_exit(fn -> File.rm_rf!(path) end)
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["fmt", "--aggressive", path])) == {:shutdown, 1}
+        end)
+
+      assert output =~ Path.basename(path)
+    end
+  end
+
   describe "cure deps" do
     setup do
       tmp = Path.join(System.tmp_dir!(), "cure_cli_deps_test_#{System.unique_integer([:positive])}")
