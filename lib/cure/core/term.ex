@@ -75,6 +75,11 @@ defmodule Cure.Core.Term do
   def term?({:float_lit, f}), do: is_float(f)
   def term?({:binary_type}), do: true
 
+  # A hole is a live Core node — `Kernel.check/3` accepts one at any type, and a definition
+  # mid-development legitimately contains them (only the release/emit boundary rejects
+  # them). It carries no de Bruijn variables, so it is an inert leaf everywhere below.
+  def term?({:hole, name}), do: is_binary(name)
+
   def term?(_), do: false
 
   # -- de Bruijn shift / substitution -----------------------------------------
@@ -102,6 +107,7 @@ defmodule Cure.Core.Term do
   def shift({:float_type} = t, _amount, _cutoff), do: t
   def shift({:float_lit, _} = t, _amount, _cutoff), do: t
   def shift({:binary_type} = t, _amount, _cutoff), do: t
+  def shift({:hole, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
   def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
@@ -168,6 +174,7 @@ defmodule Cure.Core.Term do
   def subst({:float_type} = t, _j, _r), do: t
   def subst({:float_lit, _} = t, _j, _r), do: t
   def subst({:binary_type} = t, _j, _r), do: t
+  def subst({:hole, _} = t, _j, _r), do: t
 
   def subst({:pi, dom, cod}, j, r),
     do: {:pi, subst(dom, j, r), subst(cod, j + 1, shift(r, 1, 0))}
@@ -237,6 +244,7 @@ defmodule Cure.Core.Term do
   def to_external({:float_type}), do: %{"node" => "float_type"}
   def to_external({:float_lit, f}), do: %{"node" => "float_lit", "value" => f}
   def to_external({:binary_type}), do: %{"node" => "binary_type"}
+  def to_external({:hole, name}), do: %{"node" => "hole", "name" => name}
 
   @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
   @spec from_external(map()) :: t()
@@ -274,6 +282,7 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "float_type"}), do: {:float_type}
   def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
   def from_external(%{"node" => "binary_type"}), do: {:binary_type}
+  def from_external(%{"node" => "hole", "name" => name}) when is_binary(name), do: {:hole, name}
 
   # -- helpers ----------------------------------------------------------------
 

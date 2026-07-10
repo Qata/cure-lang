@@ -21,12 +21,25 @@ defmodule Cure.Core.Eval do
   @spec eval(Cure.Core.Term.t(), [Cure.Core.Value.t()]) :: Cure.Core.Value.t()
   def eval({:type, level}, _env), do: {:vtype, level}
 
-  def eval({:var, k}, env) do
+  # An index past the end of `env` is a RIGID FREE VARIABLE: Core admits open terms, and the
+  # neutral it becomes is what `Conv.conv?/5` compares when both sides share the environment.
+  # (Caveat worth knowing: `{:nvar, l}` is a de Bruijn LEVEL, and this arm reuses the index as
+  # one. That is only coherent while the value is never read back — `Quote.reify/2` would turn
+  # it into the negative index `depth - k - 1`. Callers that reify must supply
+  # `Context.env/1`, which binds every index in scope.)
+  #
+  # A NEGATIVE index is not a free variable, it is not a well-formed term at all — `term?/1`
+  # rejects `{:var, -1}` — and `Enum.at/2` counts from the end, so it used to return the
+  # OLDEST binding's value. Silently evaluating to the wrong binder is the one answer that
+  # cannot be right.
+  def eval({:var, k}, env) when is_integer(k) and k >= 0 do
     case Enum.at(env, k) do
       nil -> {:vneutral, {:nvar, k}}
       v -> v
     end
   end
+
+  def eval({:var, k}, _env), do: raise("eval: negative de Bruijn index #{inspect(k)}")
 
   def eval({:pi, dom, cod}, env), do: {:vpi, eval(dom, env), {:closure, env, cod}}
   def eval({:lam, dom, body}, env), do: {:vlam, eval(dom, env), {:closure, env, body}}

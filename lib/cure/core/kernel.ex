@@ -92,6 +92,13 @@ defmodule Cure.Core.Kernel do
   # with an unmatched-clause exception (spec §5/§8.1).
   def infer(_ctx, {:absurd}), do: {:error, :absurd_in_reachable_position}
 
+  # A hole is checkable at any type (`check/3` below) but has nothing to infer — its type is
+  # known only from the expected type, as in Agda and Idris. Without this clause `infer/2`
+  # raised an unmatched-clause exception on a node the kernel otherwise accepts, and every
+  # caller that expects `{:error, _}` — `MetaCheck.progresses?/2` and `type_preserved?/2`,
+  # whose `case`/`else` cannot catch a raise — crashed on a legitimate mid-development term.
+  def infer(_ctx, {:hole, name}), do: {:error, {:hole_in_inference_position, name}}
+
 
   def infer(ctx, {:pi, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
@@ -422,15 +429,23 @@ defmodule Cure.Core.Kernel do
       # TotalityClosure.certify_type_level once builtin-op spines occur in TYPE
       # positions (dependent-index arithmetic). Ordering: BEFORE the generic
       # %{type:, body:} clause, which these defs would also match.
+      # A builtin-op def has no body, but it still has a declared TYPE, and that type is
+      # inside the Final-Core grammar boundary just like a body is. This branch used to check
+      # only that the type is a valid sort, so every `:reject` clause the validator enforces
+      # was silently unenforced along this admission path — the exact gap the validator exists
+      # to close, and one `validator_test.exs` already pins for the generic branch.
       %{builtin_op: op, type: type_term} when not is_nil(op) ->
-        with {:ok, _level} <- infer_sort(Context.empty(env), type_term), do: :ok
+        with {:ok, _level} <- infer_sort(Context.empty(env), type_term),
+             :ok <- run_final_core_validator([type_term]) do
+          :ok
+        end
 
       %{type: type_term, body: body_term} ->
         ctx = Context.empty(env)
 
         with {:ok, _level} <- infer_sort(ctx, type_term),
              :ok <- check(ctx, body_term, Eval.eval(type_term, [])),
-             :ok <- run_final_core_validator(type_term, body_term) do
+             :ok <- run_final_core_validator([type_term, body_term]) do
           :ok
         end
     end
@@ -441,25 +456,31 @@ defmodule Cure.Core.Kernel do
   # as one in the body. Emits warnings via the pipeline and rejects only clauses
   # configured to :reject (none, by Wave-0 default); on a mixed verdict,
   # rejections from either term are combined.
-  defp run_final_core_validator(type_term, body_term) do
+  # Every Core term admitted by `check_def` — a declared type, a body, or both — crosses the
+  # Final-Core grammar boundary. Warnings are emitted; rejections from all terms are
+  # collected so one call reports every violation rather than the first.
+  defp run_final_core_validator(terms) do
     cfg = Cure.Core.Validator.check_def_config()
+    results = Enum.map(terms, &Cure.Core.Validator.validate(&1, cfg))
 
-    case {Cure.Core.Validator.validate(type_term, cfg), Cure.Core.Validator.validate(body_term, cfg)} do
-      {{:ok, w1}, {:ok, w2}} ->
-        Enum.each(w1 ++ w2, fn d ->
+    case Enum.flat_map(results, fn
+           {:error, rejections} -> rejections
+           {:ok, _warnings} -> []
+         end) do
+      [] ->
+        for {:ok, warnings} <- results, d <- warnings do
           Cure.Pipeline.Events.emit(
             :kernel,
             :final_core_violation,
             %{clause: d.clause, message: d.message},
             %{}
           )
-        end)
+        end
 
         :ok
 
-      {{:error, r1}, {:ok, _}} -> {:error, {:final_core_violation, r1}}
-      {{:ok, _}, {:error, r2}} -> {:error, {:final_core_violation, r2}}
-      {{:error, r1}, {:error, r2}} -> {:error, {:final_core_violation, r1 ++ r2}}
+      rejections ->
+        {:error, {:final_core_violation, rejections}}
     end
   end
 
