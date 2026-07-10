@@ -5533,8 +5533,11 @@ defmodule Cure.Compiler.Parser do
   # 4-digit year (matching Cure.Edition's pre-parse `pragma_capture` regex).
   # Anything else — unquoted int, non-year string, missing arg — is malformed.
   defp valid_edition_pragma_arg?([{:literal, meta, val}]) do
+    # `\A..\z` (not `^..$`): `$` also matches just before a trailing newline, so
+    # `^\d{4}$` would accept "2026\n". A pragma literal has no embedded newline
+    # today, so this is belt-and-suspenders — but the intent is exactly-4-digits.
     Keyword.get(meta, :subtype) == :string and is_binary(val) and
-      Regex.match?(~r/^\d{4}$/, val)
+      Regex.match?(~r/\A\d{4}\z/, val)
   end
 
   defp valid_edition_pragma_arg?(_), do: false
