@@ -355,7 +355,10 @@ defmodule Cure.Compiler.Printer do
     case op do
       :not -> "not #{inner}"
       :- -> "-#{inner}"
-      _ -> "#{op}#{inner}"
+      # Word-spelled prefix operators (e.g. `bnot`) need a separating space, or
+      # `bnot a` reprints as the single identifier `bnota`. Only symbolic
+      # single-character operators like `-` may abut their operand.
+      _ -> "#{op}#{unary_sep(op)}#{inner}"
     end
   end
 
@@ -1442,7 +1445,12 @@ defmodule Cure.Compiler.Printer do
 
       type_str = if type_ast, do: ": #{render(type_ast, depth, indent)}", else: ""
       default_str = if default, do: " = #{render(default, depth, indent)}", else: ""
-      "#{prefix}#{name}#{type_str}#{default_str}"
+      rendered = "#{prefix}#{name}#{type_str}#{default_str}"
+
+      # An implicit parameter (`{n: Nat}`, `{T: Type}`) is brace-delimited; the
+      # braces are what mark it implicit, so dropping them silently turns it into
+      # an ordinary positional parameter (an arity/calling-convention change).
+      if Keyword.get(meta, :implicit), do: "{#{rendered}}", else: rendered
     end)
   end
 
@@ -2026,7 +2034,19 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
+  # A `with`-abstraction rematch arm (`Parent | WithPat -> …`, spec §4) carries
+  # its patterns in meta: the enclosing `parent_patterns` and the `pattern`
+  # matched against the with-scrutinee, joined by `|` in surface syntax.
+  defp match_arm_head({:with_rematch_arm, meta, [_body]}, depth, indent) do
+    rematch_patterns(meta)
+    |> Enum.map_join(" | ", &render(&1, depth, indent))
+  end
+
   defp match_arm_rhs_inline({:match_arm, meta, [body]}, depth, indent) do
+    arm_body_to_string(meta, body, depth, indent)
+  end
+
+  defp match_arm_rhs_inline({:with_rematch_arm, meta, [body]}, depth, indent) do
     arm_body_to_string(meta, body, depth, indent)
   end
 
@@ -2037,6 +2057,26 @@ defmodule Cure.Compiler.Printer do
       inner_pad = String.duplicate(indent, depth + 1)
       body_str = wrapped_body_to_string(body, depth, indent)
       head <> " ->\n" <> inner_pad <> body_str
+    end
+  end
+
+  defp render_match_arm_wrapped({:with_rematch_arm, _meta, [body]}, head, depth, indent) do
+    inner_pad = String.duplicate(indent, depth + 1)
+    body_str = wrapped_body_to_string(body, depth, indent)
+    head <> " ->\n" <> inner_pad <> body_str
+  end
+
+  defp rematch_patterns(meta) do
+    Keyword.get(meta, :parent_patterns, []) ++ [Keyword.get(meta, :pattern)]
+  end
+
+  # A space after a prefix operator unless it is a purely symbolic
+  # (non-alphabetic) spelling like `-` that can safely abut its operand;
+  # word-spelled operators such as `bnot` must not fuse into the operand.
+  defp unary_sep(op) do
+    case Atom.to_string(op) do
+      <<c, _::binary>> when c in ?a..?z or c in ?A..?Z -> " "
+      _ -> ""
     end
   end
 
