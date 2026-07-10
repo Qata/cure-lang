@@ -205,17 +205,68 @@ remains correct for one thing: **ownership transfer** — a `Task` handed to a
 supervisor, which the giver is thereby relieved of. Different type, deliberate
 annotation.
 
-### 5.4 Hard prerequisite: bind-once `let`
+### 5.4 Hard prerequisite: `let` must stop substituting
 
 Cure's `let` inlines its rhs at every use site and drops it at zero uses
-(`elaborate_let_block`; see the `bind-once β-redex` finding — this is already
-the recorded root cause of three landed bugs, and the Effect spec §5.1 already
-special-cases effectful `let` around it). A linear value routed through
-substituting `let` is duplicated or discarded *below* the level where the
-linearity check runs — the check would pass while the elaborator manufactures
-the very aliasing it forbids. **The bind-once `let` fix must land before any
-linear value exists.** It is sequenced first in §11 and is independently
-motivated (join-point residual).
+(`elaborate_let_block`, `lib/cure/elab/elaborator.ex:1141-1148` — the comment
+says so outright; see the `bind-once β-redex` finding, already the recorded
+root cause of three bugs, and the Effect spec §5.1, which special-cases
+effectful `let` around it). A linear value routed through substituting `let` is
+duplicated or discarded **below** the level where the linearity check runs: the
+check counts one surface occurrence and passes, while the elaborator
+manufactures the very aliasing it just certified impossible. Two processes get
+spawned where the types proved one.
+
+**The β-redex itself already exists** — `elaborator.ex:3983-3993` builds
+`{:app, {:lam, dom, body}, rhs}` from existing Core formers, landed in 809823d.
+It is gated on `Enum.any?(rest, &binds_any?(&1, [name]))`, i.e. it fires only
+when substitution would capture. The work is the gate, not the construction.
+
+Flipping the gate unconditionally regresses **dependent** `let`. Cure's
+`Context` entries are types, never values (`core/context.ex:15`:
+`defstruct types: [], length: 0, …`), and Core has no `let` former (six nodes).
+A λ-bound `n` gives `n : Nat`, not `n ≡ 3`, so `let n = 3 ⏎ v : Vector(Int, n)`
+gets stuck. Substitution keeps the *definition* and loses *sharing*; a β-redex
+keeps *sharing* and loses the *definition*.
+
+**This is a false dilemma created by the missing node.** Idris 2 has no such
+choice: `Let` is a `Binder` carrying its value *and* a quantity
+(`Core/TT/Binder.idr:93-98`, `Let : FC -> RigCount -> (val : type) -> (ty : type) -> Binder type`),
+appearing under the single `Bind` term node (`Core/TT/Term.idr:97-104`).
+ζ-reduction unfolds it on demand (`Core/Normalise/Eval.idr:124-130`, and
+`:242-244`: a `Local` whose binder is a `Let` evaluates to its value), so the
+value is reachable for conversion while occurring exactly once in the term.
+Lean has the same node (`Expr.letE` + `LocalDecl.ldecl` + ζ/`zetaDelta`). Agda
+takes the other road — no `Let` in internal syntax, let-bindings in the
+checking environment, substituted into terms — which is what Cure does today,
+and pays the same duplication cost. (The Idris claims were read from
+`~/Develop/Idris2` this session; the Lean/Agda claims are from memory.)
+
+Two consequences fix the plan:
+
+**(a) Quantity-gated bind-once — sound, zero kernel change, sufficient for
+linear channels.** Extend the `cond` from "shadowing" to "shadowing **or** the
+binder is quantity `1` or effect-typed." This is not a heuristic: QTT's own
+rule checks a binder's *type* at quantity `0` (Idris `LinearCheck.idr:374-377`
+— `lcheck erased erase env ty`), so a `1` binder can never occur in a type or
+index position, and a β-redex can never strand a dependent type. Every linear
+binder is unconditionally safe to bind once.
+
+**(b) A `Let` binder in Core is the real fix, and it is what (a) is a bridge
+to.** (a) leaves `ω` dependent `let` substituting, so term duplication — and
+with it the still-open join-point bug — survives. A value-carrying `Let` with a
+`RigCount`, plus ζ, kills both and aligns Cure with Idris and Lean
+simultaneously, satisfying the standing TCB-change condition. Cost is bounded
+and enumerable: one Core node through `term?/1`, `subst/3`, `Eval`, `Conv`,
+`Normalise.nf_struct`, `Quote`, `Serialize`, `Validator`, plus Antigen coverage
+cells. Note Idris gets this cheaply because `Bind` is one node parameterized by
+`Binder`; Cure has separate `:pi`/`:lam` tags, so `:let` is a third — price
+that before committing.
+
+Sobering note from the reference implementation: `LinearCheck.idr:227-232`
+catches `LinearMisuse` and *retries the binder as linear*
+(`setMultiplicity b linear`). Production linearity in a dependently-typed
+language is not pristine; do not plan as though ours will be.
 
 ### 5.5 One-shot closures and linear containers
 
@@ -546,9 +597,16 @@ Preconditions unchanged from the process-algebra spec: classic rip-out, macro
 facility, inert `Effect(T)` (0.34), rungs 1–2 (externs, then sealed
 `Std.Otp` + codes floor). Then this design, strictly ordered:
 
-1. **Bind-once `let`** (§5.4) — prerequisite for any linear value; lands
-   independently (already motivated by the join-point residual).
-2. **{0,1,ω} in the E layer** (§5) — extend `relevance.ex`; kernel untouched.
+1. **Core `Let` binder with ζ and a quantity** (§5.4b) — the Idris/Lean node.
+   Kills term duplication (and the open join-point bug) at the root, and makes
+   dependent `let` and bind-once coexist rather than trade off. Pre-approved
+   under the standing TCB-alignment condition. *If deferred*, the sound bridge
+   is §5.4a: quantity-gated bind-once, zero kernel change, exact rather than
+   heuristic (QTT checks binder types at quantity `0`). Either path unblocks
+   step 2; only (b) also closes the join-point residual.
+2. **{0,1,ω} in the E layer** (§5) — extend `relevance.ex`; kernel stays
+   quantity-blind for *usage* (Idris keeps `LinearCheck` outside its core
+   checker), though `Let`/`Pi`/`Lam` carry a quantity as data, as in Idris.
 3. **`Chan(p)` + `Std.Proc` over `Effect(T)`** (§4) + the `protocol`/`process`
    macros (§6) + EGV failure (§7) + backend contract (§9). Kernel untouched.
 4. **Resources** (§8) — with the reactive roadmap's `resource` (0.35) /
@@ -556,6 +614,11 @@ facility, inert `Effect(T)` (0.34), rungs 1–2 (externs, then sealed
 5. Ledger: dependent protocols (`Depends`), delegation (drain-and-handoff +
    `Seq`), linear-container ergonomics, distribution (out of scope; refs are
    per-boot, nodes unmodeled).
+
+Steps 1 and 2 partially invert the ordering asserted in the first draft of this
+spec: the prerequisite is smaller than claimed (the β-redex is built), and the
+gate that makes it exact is *derived from* the quantity lattice rather than
+preceding it.
 
 Deadlock freedom ships as an **out-of-TCB lint** (acyclicity/priority analysis
 over the session-dependency graph), same trust shape as the Z3 guard lint —
