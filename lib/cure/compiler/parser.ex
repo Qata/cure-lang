@@ -5011,13 +5011,23 @@ defmodule Cure.Compiler.Parser do
     # well-placed pragma carries its edition value on the {:decorator, …} node's
     # args (the "2026" string literal).
     if dec_name == "edition" do
+      # Placement first (F1/F3: must be file-leading; a second pragma is no longer
+      # leading), then argument validation (F7: must be a "YYYY" string literal, not
+      # an unquoted int / non-year string / bare pragma). Mark the file as past its
+      # leading position afterwards so a subsequent `@edition` is caught as misplaced.
       state =
-        if file_leading?(state) do
-          state
-        else
-          add_error(state, {:edition_pragma_placement, token.line, token.col})
+        cond do
+          not file_leading?(state) ->
+            add_error(state, {:edition_pragma_placement, token.line, token.col})
+
+          not valid_edition_pragma_arg?(args) ->
+            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+
+          true ->
+            state
         end
 
+      state = %{state | seen_stmt?: true}
       ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
       {ast, state}
     else
@@ -5461,6 +5471,9 @@ defmodule Cure.Compiler.Parser do
 
   defp peek(%{tokens: tokens, pos: pos}), do: Enum.at(tokens, pos)
 
+  # Look n tokens past the current position (peek_ahead(state, 0) == peek(state)).
+  defp peek_ahead(%{tokens: tokens, pos: pos}, n), do: Enum.at(tokens, pos + n)
+
   defp peek_at(%{tokens: tokens, pos: pos}, offset) do
     idx = pos + offset
     if idx >= 0 and idx < length(tokens), do: Enum.at(tokens, idx), else: nil
@@ -5516,16 +5529,43 @@ defmodule Cure.Compiler.Parser do
   # in parse_at/1 reads.
   defp file_leading?(state), do: not state.seen_stmt?
 
-  # Mark that a substantive top-level statement is about to be parsed. A
-  # decorator prefix (`:at`) or a comment is NOT substantive, so it does not
-  # flip the flag — this keeps a file-leading `@edition(...)` (and comments
-  # ahead of it) from being seen as "after a statement". Called just before a
-  # top-level `parse_expr`, so the flag is set BEFORE descending into a
-  # module body, letting an in-body `@edition` be detected as misplaced.
+  # A well-formed `@edition` argument is exactly one string literal holding a
+  # 4-digit year (matching Cure.Edition's pre-parse `pragma_capture` regex).
+  # Anything else — unquoted int, non-year string, missing arg — is malformed.
+  defp valid_edition_pragma_arg?([{:literal, meta, val}]) do
+    Keyword.get(meta, :subtype) == :string and is_binary(val) and
+      Regex.match?(~r/^\d{4}$/, val)
+  end
+
+  defp valid_edition_pragma_arg?(_), do: false
+
+  # Mark that a substantive top-level statement is about to be parsed. Comments
+  # are NOT substantive. A decorator prefix (`:at`) is substantive UNLESS it is a
+  # leading `@edition(...)` pragma — every other decorator (`@extern`, `@derive`,
+  # `@builtin`, `@group`, ...) leads a real definition and must flip the flag, so
+  # an `@edition` that follows a decorated definition is correctly seen as
+  # misplaced (audit F1). Called just before a top-level `parse_expr`, so the
+  # flag is set BEFORE descending into a module body, letting an in-body
+  # `@edition` be detected as misplaced.
   defp mark_seen_if_stmt(state) do
     case peek(state) do
-      %Token{type: type} when type in [:at, :line_comment, :doc_comment] -> state
-      _ -> %{state | seen_stmt?: true}
+      %Token{type: type} when type in [:line_comment, :doc_comment] ->
+        state
+
+      %Token{type: :at} ->
+        if edition_pragma_next?(state), do: state, else: %{state | seen_stmt?: true}
+
+      _ ->
+        %{state | seen_stmt?: true}
+    end
+  end
+
+  # True when the upcoming `@name` decorator is specifically `@edition` — the one
+  # non-substantive decorator (a file-leading pragma, not a definition prefix).
+  defp edition_pragma_next?(state) do
+    case peek_ahead(state, 1) do
+      %Token{value: v} -> to_string(v) == "edition"
+      _ -> false
     end
   end
 
