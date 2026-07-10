@@ -1337,6 +1337,11 @@ defmodule Cure.Compiler.Parser do
       :opaque ->
         parse_type_def(advance(state), opaque: true)
 
+      # `primitive Name` — an irreducible machine base type (Int/Float/Binary).
+      # No constructors, no `=`; the `@builtin(:tag)` marker names its Core node.
+      :primitive ->
+        parse_primitive_def(state)
+
       :typealias ->
         parse_typealias(state)
 
@@ -3010,6 +3015,29 @@ defmodule Cure.Compiler.Parser do
     meta = [name: name, line: token.line, col: token.col]
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
     {{:type_annotation, meta, [rhs]}, state}
+  end
+
+  # `primitive Name` → a constructor-less primitive-type container. The optional
+  # `@builtin(:tag)` decorator is threaded on by `attach_decorator/3` when the
+  # form is written `@builtin(:tag) primitive Name`.
+  defp parse_primitive_def(state) do
+    token = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = skip_newlines(state)
+
+    meta = [
+      container_type: :primitive,
+      name: name,
+      language: :cure,
+      line: token.line,
+      col: token.col
+    ]
+
+    {{:container, meta, []}, state}
   end
 
   defp parse_type_def(state, opts \\ []) do
@@ -4956,6 +4984,14 @@ defmodule Cure.Compiler.Parser do
         {type_ast, state} = parse_type_def(state)
         type_ast = attach_decorator(type_ast, dec_name, args)
         {type_ast, state}
+
+      # `@builtin(:tag) primitive Name` attaches the decorator to the primitive
+      # container (the generic {:container, …} attach_decorator clause writes it
+      # into :decorator meta, like `@builtin(:key) type Name`).
+      %Token{type: :keyword, value: :primitive} ->
+        {prim_ast, state} = parse_primitive_def(state)
+        prim_ast = attach_decorator(prim_ast, dec_name, args)
+        {prim_ast, state}
 
       _ ->
         # Standalone decorator or property
