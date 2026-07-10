@@ -55,18 +55,27 @@ Verified against the code (not specs) on 2026-07-10:
   thread on C3-class targets; port handlers run on the scheduler thread; I²C
   blocks with `portMAX_DELAY`; SPI busy-polls; the receive-marker optimization
   does not exist (opcodes are no-ops); a 16-slot shared event queue drops ISR
-  events silently when full; `mailbox_message_create_from_term` silently drops
-  a message when its malloc fails; `exit(Pid, kill)` is untrappable; OOM is a
-  catchable per-process error, except during termination-message construction
-  where it aborts the whole VM.
+  events silently when full; **`mailbox_send` dereferences a NULL on allocation
+  failure** (`mailbox_message_create_from_term` returns NULL at
+  `mailbox.c:243-245`; `mailbox_send` at `:269-273` passes it straight to
+  `mailbox_post_message`, which does `m->next = …` unguarded on both the
+  non-SMP path `:229-233` and the SMP CAS path `:218-221`) — i.e. `send` under
+  memory exhaustion crashes the VM, it does not drop the message;
+  `exit(Pid, kill)` is untrappable; OOM is a catchable per-process error, except
+  during termination-message construction where it aborts the whole VM.
 
 ## 3. Architecture: three layers, one boundary rule
 
 ```
-Layer 1  Kernel (TCB)         — UNCHANGED. No new judgement, no indexed bind.
-                                Checks Chan/Resource as ordinary indexed
-                                families; Effect(T) stays inert and
-                                non-dependent.
+Layer 1  Kernel (TCB)         — UNCHANGED BY THIS DESIGN. No new judgement,
+                                no indexed bind. Checks Chan/Resource as
+                                ordinary indexed families; Effect(T) stays
+                                inert and non-dependent.
+                                (The Core `Let` binder recommended in §11 step 1
+                                is an independently-motivated PREREQUISITE — it
+                                fixes term duplication and the join-point bug —
+                                not a requirement of this design. §5.4a is the
+                                zero-kernel path to the same guarantee.)
 
 Layer 2  Elaborator + Std     — protocol/state indices on channel and resource
                                 types; {0,1,ω} linearity check in the E layer
@@ -194,6 +203,14 @@ return from a scope without transfer. The error message must name the protocol
 state at the point of loss ("`acct : Account@Open` is dropped on the branch
 where …") — source spans preserved through macro expansion.
 
+**The error is reuse of a *consumed* handle, never the operation count.** Two
+sends on a channel are perfectly legal when the protocol admits two —
+`h1 = send(h, m1); h2 = send(h1, m2)` at `Chan(Send(A, Send(B, Done)))` is
+well-typed. What is rejected is `send(h, m1); send(h, m2)`, because `h` no
+longer exists. Likewise in `let h2 = h; recv(h); recv(h2)` the error is
+`let h2 = h` (duplication), not the second `recv`. Do not implement a
+"one operation per channel" check; implement use-counting.
+
 ### 5.3 Linear vs affine
 
 **Overturned decision #3:** the `protocol` macro spec chose affine handles
@@ -318,6 +335,22 @@ communicated values, e.g. `recv n : Nat` then `recv Vec(Byte, n)`) are in
 scope: a `Protocol` code constructor `Depends(shape, El(shape) -> Protocol)`,
 elaborated like any other indexed data — ledgered for v1.1, not load-bearing
 for the floor.
+
+**Constraints on payloads are Σ-types, not refinements.** Cure removed
+refinement types on 2026-07-09 (`d889d9f`, `599b1fe`) and they return only if
+an SMTCoq-style reconstruction path lands, which is explicitly not queued. So a
+constrained reply is written with an explicit proof component:
+
+```cure
+protocol SizedWorker
+  recv n       : Nat
+  recv payload : Vec(Byte, n)
+  send result  : Σ r : Result. ValidForSize(r, n)   # NOT {r : Result | …}
+  close
+```
+
+The obligation discharges by computation for concrete `n`, or by an explicit
+proof term. See §12.7.
 
 ### 6.2 Server: a receive loop, not a callback triple
 
@@ -470,6 +503,53 @@ replies — the same distinction as `gen_server:call` vs `cast`, and exactly wha
 operator would hide the most latency-relevant fact in an MCU program at its call
 site.
 
+### 6.7 Elaboration: surface statements to checked Core
+
+A `process` block is a statement language. Each statement elaborates to an
+`Effect` bind whose continuation **rebinds the handle at its new protocol
+state**; the user's single name `acct` becomes a sequence of distinct Core
+variables. Rules, in order of application:
+
+1. `send c, M` → `bind(send(cᵢ, M), fn(cᵢ₊₁) = ⟦rest⟧)`
+2. `x = call c, Q` → `bind(call(cᵢ, Q), fn(%[x, cᵢ₊₁]) = ⟦rest⟧)`
+3. `x = expr` (pure) → bind-once (§5.4); **never** surface substitution when the
+   binder is linear or effect-typed
+4. A `receive` block → `bind(offer(cᵢ), fn(b) = match b …)`, each branch binding
+   its own correctly-typed continuation channel from the returned sum (§4.2).
+   The `match` must be total over `Msg(p, state)`.
+5. `c` reaches a terminal protocol state at scope end → the elaborator inserts
+   `close(c)`. The user neither writes it nor may omit the path to it (§6.3).
+6. At a `raise`/`try` boundary, the elaborator knows every live linear binder and
+   inserts `cancel` for each (§7).
+7. The block's final expression must have type `Effect(R)` — no silent escape
+   from the effect type.
+
+Worked, for §6.3's client verbatim:
+
+```
+main : Effect(Int)
+main =
+  bind(spawn(Account.serve, 0),  fn(a0) =        -- a0 : Chan(Account@Open)
+  bind(send(a0, Deposit(100)),   fn(a1) =        -- a1 : Chan(Account@Open)
+  bind(call(a1, Balance()),      fn(%[b, a2]) =  -- b : Int, a2 : Chan(Account@Open)
+  bind(send(a2, Close()),        fn(a3) =        -- a3 : Chan(Account@Closed) = Chan(Done)
+  bind(close(a3),                fn(_) =         -- rule 5: inserted, not written
+  pure(b))))))
+```
+
+Note the last two binds: `send(a2, Close())` is the user's statement, driving the
+protocol to its terminal state; `close(a3)` is inserted by rule 5 to consume the
+now-`Done` channel. They are distinct steps and both are required — the protocol
+transition and the linear consumption are not the same event.
+
+Each `aᵢ` occurs exactly once — this is what the §5 linearity check counts, and
+why rule 3 is not optional. `bind` here is the plain **non-dependent** bind of
+the inert `Effect(T)` (§4.1): the protocol dependency rides inside the values
+(`%[b, a3]`, and `offer`'s sum), never in the monad's index.
+
+Source spans are preserved through macro expansion so a dropped-obligation error
+names the surface line and the protocol state (§5.2).
+
 ## 7. Failure model: let it crash, typed
 
 BEAM reality: `exit(Pid, kill)` is untrappable (AtomVM `nifs.c:4722`,
@@ -589,7 +669,13 @@ timestamp (`gpio_driver.c:368-385`). Consequences, encoded in the types:
 ## 9. Backend contract (the trusted lowering)
 
 If the elaborator accepts a program, the emitted BEAM code implements the
-protocol transitions. Narrow obligations, enumerated:
+protocol transitions **and preserves the memory and scheduling invariants
+below**. Protocol fidelity alone is *not* the contract: a backend can implement
+every transition faithfully and still reboot the board (§9.4), lose messages
+undetectably (§9.1), or degrade every receive to O(N) (§9.2). All three are
+obligations, not optimizations. See §12.8.
+
+Narrow obligations, enumerated:
 
 ### 9.1 Wire format: the header token
 
@@ -605,12 +691,16 @@ Every process-to-process session message is
   counter (`globalcontext.h:570-580`): unique per boot, NOT across reboots —
   sessions must never be persisted or assumed stable across restart.
 - **`Seq`** — per-session sequence number, **type-directed**: emitted only for
-  protocols marked reliable or (later) delegable. Purpose on AtomVM: silent
-  message drop under memory pressure is real
-  (`mailbox_message_create_from_term` returns NULL on malloc failure and the
-  message vanishes, `mailbox.c:243-245`); a sequence gap is the only way a
-  receiver can detect it, surfacing as `PeerDown`-shaped failure instead of an
-  infinite hang.
+  protocols that permit session delegation, whose lowering needs it to reorder
+  across a handoff (§9.4). It is omitted everywhere else, which in v1 is
+  everywhere.
+
+  *An earlier draft justified `Seq` as a detector for AtomVM's "silent message
+  drop under memory pressure." That justification is withdrawn: there is no
+  silent drop. `mailbox_send` dereferences the NULL returned by a failed
+  allocation and crashes the VM (§2). A sequence gap cannot be observed by a
+  receiver that no longer exists. The hazard is real but belongs to §10.4, not
+  to the wire format.*
 - **`Tag`** — elided when the protocol state admits exactly one message
   (session typing pays for its ref: add a ref, delete a tag, ≈wash on the
   wire).
@@ -632,8 +722,11 @@ receive O(N) from the front. Therefore:
   drain loop — O(1) amortized.
 - **The catch-all quarantine clause is mandatory in every emitted receive**:
   it is simultaneously the O(1) guarantee (mailbox never accumulates), the
-  foreign-boundary decode (§9.3), and junk hygiene (the property mailbox-type
-  systems get as a theorem, delivered here by construction). For a process
+  foreign-boundary decode (§9.3), and junk hygiene — which mailbox-type systems
+  obtain as a theorem *for a non-trivial subclass* of well-typed processes
+  (de'Liguoro & Padovani prove deadlock freedom for all well-typed processes,
+  junk freedom only for that subclass), and which this design obtains by
+  construction for all emitted receives. For a process
   lowered to a behaviour (§9.6), **`handle_info` *is* this clause** — it is not
   an invention, it is the callback OTP already provides, now generated and
   counted rather than hand-written.
@@ -755,6 +848,17 @@ The clone already carries local patches as a matter of course; these join them.
    blocking behaviour was not audited.
 3. (Optional, later) event-queue depth/overflow counter exposure, so §8.4's
    soundness-not-completeness caveat is at least observable.
+4. **Guard the NULL in `mailbox_send`.** On allocation failure
+   `mailbox_message_create_from_term` returns NULL (`mailbox.c:243-245`) and
+   `mailbox_send` (`:269-273`) passes it to `mailbox_post_message`, which
+   dereferences it unguarded on both paths (`:229-233`, `:218-221`). A `send`
+   that loses a malloc therefore crashes the whole VM rather than failing the
+   sender. `mailbox_message_create_normal_message` (`:265-267`) has the same
+   defect via `CONTAINER_OF` on NULL. This is an upstream AtomVM bug, it is
+   reachable from any Cure `send` under memory pressure, and no language-level
+   design can defend against it. Patch: check the NULL and raise
+   `out_of_memory` in the *sender* (which is catchable, §2), leaving the
+   receiver untouched.
 
 ## 11. Sequencing
 
@@ -796,6 +900,21 @@ arrives by construction.
 
 ## 12. Overturned decisions (explicit, per repo convention)
 
+Two kinds, with different consequences. **Items 1–3 and 5 overturn locked
+decisions recorded elsewhere and therefore require edits to those documents**
+before other in-flight work keeps assuming the old stance:
+
+| # | Overturns | Document needing update |
+|---|---|---|
+| 1 | rung-3 indexed bind | `2026-07-09-typed-beam-process-algebra-design.md` §8, §10 |
+| 2 | "indices, not linear types" (+ bad citation) | same, §10, §14 |
+| 3 | affine protocol handles | `macros/2026-07-08-protocol-macro-design.md` |
+| 5 | Melquiades `<-|` typing | `lib/cure/types/checker.ex`, error catalog E044–E046 |
+
+**Item 4 corrects this design's own earlier draft. Items 6–10 correct the
+originating brief** — a conversational artifact, not a tracked document; they
+need no external edit and are recorded here so the reasoning is not relitigated.
+
 1. **Rung 3 indexed bind (`Effect(pre,post,T)`) — deleted** (§4.1). The
    parameterized monad simulated missing linearity; with `1` planned, the
    kernel-touching item disappears. Rungs 0–2 of that spec stand.
@@ -817,6 +936,51 @@ arrives by construction.
    by the protocol check, which is total rather than `@strict_inbox`-gated.
    If the spelling is kept, `<-|` must be statement-position-only and typed
    `(1 c : Chan(Send(m, next))) -> El(m) -> Effect(Chan(next))`.
+6. **The brief's Layer-1 kernel-responsibility list — rejected.** It asked the
+   kernel to understand *"Protocol, Capability, World, Transition, Linear/affine
+   usage, Equality/refinement proofs, Protocol completion proofs, Join/
+   convergence proofs."* Four are wrong: `World` is deleted (§12.1);
+   linear/affine usage is an **E-layer** check with the kernel quantity-blind
+   (§5.1, as Idris keeps `LinearCheck` outside its core); refinement proofs do
+   not exist in Cure (§12.7); completion and join-convergence proofs overclaim
+   (liveness is not proven, §14). The kernel understands `Chan` and `Resource`
+   as ordinary indexed families and nothing else. **Net kernel delta from this
+   design: zero** — the Core `Let` binder of §11 step 1 is an
+   independently-motivated prerequisite (§5.4), not a cost of concurrency, and
+   §5.4a reaches the same guarantee with no kernel change at all. The brief
+   would have grown the TCB substantially to reach a goal that needs no TCB
+   growth.
+7. **Refinement types are assumed by the brief and do not exist.** Two sites:
+   Layer 1's *"Equality/refinement proofs"*, and the only dependent-protocol
+   example, `send result : {r : Result | valid_for_size r n}`. Cure removed
+   refinement types on 2026-07-09 (`d889d9f`, `599b1fe`); they return only with
+   an SMTCoq path that is explicitly not queued. Constrained payloads are
+   Σ-types with an explicit proof component (§6.1).
+8. **The brief's backend contract is necessary but insufficient.** *"If Cure
+   accepts `Proc pre post a`, then generated BEAM code implements the
+   corresponding protocol transitions"* — a backend can satisfy this exactly and
+   still `AVM_ABORT()` the board (`context.c:761,794`), crash the VM on a `send`
+   that loses a malloc (`mailbox.c:269-273`, §10.4), or make every receive O(N)
+   (`opcodes.def:228-229`). Protocol fidelity is orthogonal to memory and
+   scheduling safety; the contract carries all three (§9).
+9. **The brief's `Effect` migration plan is vacuous; deliverable 9 is retired.**
+   It prescribed keeping `Effect` as unsafe/legacy, porting ops off it, and
+   eventually quarantining it. But `Effect` **is not built** (§2: six Core
+   formers, none an effect node; `effect_bind`/`effect_pure`/`extern_call`
+   appear nowhere in `lib/`), so there is no legacy code to annotate — and this
+   design *keeps* `Effect(T)` as its substrate rather than escaping it (§4.2).
+   **There is no migration. There is preemption.** The relationship is inverted:
+   `Effect(T)` is not the thing to leave, it is the thing to build on.
+10. **The brief's task/join algebra is ill-formed.** `Await` returns a `Task`
+    rather than a value while the prose writes `x = await a`; `Task` appears with
+    four different shapes. Decisively, `join_both : … -> proof : SameResult a b
+    -> Program w w (Σ x : A. ResultOf a = x × ResultOf b = x)` demands agreement
+    **as a precondition** — but agreement between two independent processes'
+    results is a *post*-condition, unknowable before observation — and its return
+    type projects `ResultOf a` from a handle `join_both` has just linearly
+    consumed. Correct shape: join both, obtain `x, y : A`, then **decide** `x = y`
+    on the values (`Std.Decision`). `Fair scheduler -> Eventually (…)` likewise
+    presupposes a temporal modality Cure lacks and this design declines (§14).
 
 ## 13. Non-negotiable invariants (checklist)
 
@@ -837,6 +1001,11 @@ only; delegation excluded until §9.4 lifts it); assume interrupt completeness
   best-effort, with drop-and-count semantics.
 - Foreign-boundary trust is irreducible: `accepts` contracts and `@blocking`
   budgets are declarations about code we didn't compile.
+- **`send` is not memory-safe on stock AtomVM.** Under allocation failure it
+  dereferences NULL and takes the VM down (§2, §10.4). No typing discipline
+  defends against this; it is fixed by the patch or it is not fixed. Until
+  patched, every guarantee in this document is conditional on the sender's
+  malloc succeeding.
 - The token is provenance, not security; refs are per-boot.
 - Liveness is not proven: protocol *safety* is checked; *completion* holds
   only under fairness/termination assumptions (deadlock lint is advisory);
