@@ -24,11 +24,34 @@ defmodule Cure.Elab.FoldAccumulatorPolySeedReachTest do
   # So the trigger is a polymorphic seed in accumulator position whose params are
   # constrained only by a later function-typed argument.
   #
-  # This blocks the dependent side of `Std.Set` (the other blocker is that the
-  # classic checker cannot instantiate the parameterised `Map(k,v)` at all — see
-  # [[dep-pipeline-survey-2026-07-11]]). When the elaborator propagates the
-  # fold's lambda-derived accumulator type back into the seed argument, delete the
-  # `@tag :skip` and this must pass.
+  # VERIFIED ROOT CAUSE (instrumented `bidir_app_slot`/`resolve_deferred_slots`,
+  # elaborator.ex:5161-5303). In `foldl(list, new(), lambda)`:
+  #   1. arg `list` solves foldl's element param `a := t`.
+  #   2. arg `new()` at domain `b` (a metavar): infers standalone, but
+  #      `finish_global_app` rejects it at the `has_meta?` gate (its own implicit
+  #      `{k}{v}` are unsolved and no expected type is threaded in infer mode) →
+  #      the slot DEFERS it WITHOUT unifying `new()`'s codomain shape `Map(?k,?v)`
+  #      into `b`, so `b` stays `{:meta,1}`.
+  #   3. arg `lambda` at domain `a -> b -> b`: also DEFERS (its param domain path).
+  #   4. `resolve_deferred_slots` is SINGLE-PASS, IN-ORDER, and re-checks each
+  #      deferred arg via `elaborate_expr_checked` (which does NOT thread `mctx`)
+  #      only once its domain is fully concrete. It processes `new()` first, finds
+  #      `b` still `{:meta,1}`, and fails — the lambda (which would solve
+  #      `b := Map(t, Bool)` from `put(elem, true, acc)`) never gets to run first.
+  # `b`/`?k`/`?v` are MUTUALLY determined by new()'s shape + the lambda's body, and
+  # no single in-order, non-threading pass makes either domain concrete before its
+  # arg's turn.
+  #
+  # FIX SKETCH (deliberate spine-inference rework — NOT a safe additive tick edit;
+  # high regression risk across all applications, greens no committable module
+  # since Std.Set is classic-coexistence-blocked anyway): make deferred resolution
+  # (a) unify a deferred FUNCTION arg's instantiated codomain shape into its domain
+  # at defer time (parallel to `solve_deferred_domain`'s constructor branch, which
+  # today only handles ctors), AND (b) iterate to a fixpoint with mctx-threading
+  # re-checking so a later arg can solve an earlier arg's domain. Then delete the
+  # `@tag :skip` and this must pass. The other Std.Set blocker is that the classic
+  # checker cannot instantiate the parameterised `Map(k,v)` at all — see
+  # [[dep-pipeline-survey-2026-07-11]].
   @tag :skip
   test "polymorphic seed in foldl accumulator position is solved from the lambda" do
     src = """
