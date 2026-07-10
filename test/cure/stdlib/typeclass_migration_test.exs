@@ -25,16 +25,11 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
       assert inspect(Map.get(env.defs, :bump).body) =~ "__impl_Functor_List_fmap"
     end
 
-    # END-TO-END RUN is blocked upstream, NOT by typeclasses: Std.Functor's List
-    # instance delegates to `Std.List.map`, and cross-module *polymorphic* stdlib
-    # calls still mis-elaborate on the dependent pipeline — the qualified
-    # `Std.List.map` lowers to a bare `{:global, :map}` (real global is
-    # `Std.List#map`) and the caller passes `map`'s erased type params explicitly.
-    # `resolve_hkt_test` proves the identical fmap RUNS once its delegate is a
-    # local fn, so resolution + emit of the typeclass machinery is sound; the gap
-    # is the #23 cross-module-call surface. Unskip when that lands.
-    @tag :skip
-    test "fmap over a List runs end-to-end (needs #23 cross-module polymorphic calls)" do
+    test "the imported instance's delegate global is re-keyed to match the moved def" do
+      # Std.Functor's List instance body calls `Std.List.map`. When M imports both
+      # Std.List and Std.Functor, `map` collides (owned via two reachable edges) and
+      # its def KEY moves to `:"Std.List#map"`. The instance body's `{:global, :map}`
+      # reference MUST follow — otherwise it dangles and emit fails with {:map, N}.
       src = """
       mod M
         use Std.List
@@ -42,7 +37,23 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
         fn bump(xs: List(Int)) -> List(Int) = fmap(xs, fn(x) -> x + 10)
       """
       {:ok, env} = Program.elaborate(src)
-      functions = Enum.uniq([:bump | Program.impl_def_names(env)])
+      impl = Map.get(env.defs, :__impl_Functor_List_fmap)
+      body = inspect(impl.body)
+      assert body =~ "Std.List#map"
+      refute body =~ "{:global, :map}"
+    end
+
+    test "fmap over a List runs end-to-end (#23 cross-module polymorphic calls)" do
+      src = """
+      mod M
+        use Std.List
+        use Std.Functor
+        fn bump(xs: List(Int)) -> List(Int) = fmap(xs, fn(x) -> x + 10)
+      """
+      {:ok, env} = Program.elaborate(src)
+      # Co-emit the transitive closure: bump -> impl fmap -> Std.List#map.
+      roots = [:bump | Program.impl_def_names(env)]
+      functions = Program.reachable_def_names(env, roots)
       {:ok, m} = Emit.compile_and_load(env, module: :"Cure.M", functions: functions)
       assert apply(m, :bump, [[1, 2, 3]]) == [11, 12, 13]
     end

@@ -294,6 +294,61 @@ defmodule Cure.Elab.Program do
   end
 
   @doc """
+  The transitive closure of local defs reachable from `roots` via `{:global, _}`
+  references in def bodies+types.
+
+  Emit lowers a `{:global, name}` to a *local* call within the emitted module, so
+  a self-contained module must co-emit every reachable callee — a cross-module
+  polymorphic call (e.g. an imported instance body delegating to `Std.List#map`)
+  pulls the callee in transitively. Builtin-op defs (body-less; saturated uses
+  inline to BEAM operators) are excluded — they never need a function form.
+  """
+  @spec reachable_def_names(Env.t(), [atom()]) :: [atom()]
+  def reachable_def_names(%Env{defs: defs} = env, roots) do
+    Enum.reduce(roots, MapSet.new(), fn root, seen ->
+      collect_reachable(env, defs, root, seen)
+    end)
+    |> MapSet.to_list()
+  end
+
+  defp collect_reachable(env, defs, name, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        seen
+
+      match?(%{builtin_op: op} when not is_nil(op), Map.get(defs, name)) ->
+        # Body-less builtin op: reachable but never emitted as a function form.
+        seen
+
+      true ->
+        case Map.get(defs, name) do
+          nil ->
+            seen
+
+          d ->
+            seen = MapSet.put(seen, name)
+
+            [d.type, d.body]
+            |> Enum.flat_map(&global_refs/1)
+            |> Enum.reduce(seen, &collect_reachable(env, defs, &1, &2))
+        end
+    end
+  end
+
+  # Every `{:global, name}` atom referenced anywhere in a Core term.
+  defp global_refs({:global, name}), do: [name]
+  defp global_refs({:data, _n, ps, is}), do: Enum.flat_map(ps ++ is, &global_refs/1)
+  defp global_refs({:ctor, _n, args}), do: Enum.flat_map(args, &global_refs/1)
+
+  defp global_refs({:case, s, mo, brs}),
+    do: global_refs(s) ++ global_refs(mo) ++ Enum.flat_map(brs, fn {_c, _a, b} -> global_refs(b) end)
+
+  defp global_refs({:pi, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
+  defp global_refs({:lam, dom, body}), do: global_refs(dom) ++ global_refs(body)
+  defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
+  defp global_refs(_leaf), do: []
+
+  @doc """
   Does a parsed program/AST use dependent constructs the kernel must check?
 
   This is intentionally a surface-feature router, not a semantic checker. Forms
