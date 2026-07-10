@@ -122,14 +122,19 @@ defmodule Cure.E2E.TupleReprProbeTest do
 
   # ================= GAPS (pinned to current behavior) =================
 
+  # P2b (formerly a GAP): flat n-ary `%[1, 2, 3]` now elaborates. Against a bare
+  # nested `Sigma(a, Sigma(b, Int))` it checks column-by-column into the
+  # right-nested pair `mk_pair(1, mk_pair(2, 3))` (emitted nested `{1, {2, 3}}`);
+  # against a `Tuple(…)` telescope it builds the flat form (see flat_telescope_test).
   @p2b """
   mod P2b
     fn triple() -> Sigma(a: Int, Sigma(b: Int, Int)) = %[1, 2, 3]
-    fn start() -> Int = triple().1
+    fn first_of() -> Int = triple().1
+    fn start() -> Int = first_of()
   """
-  test "P2b GAP: flat n-ary tuple %[1,2,3] is :unsupported_expression" do
-    assert {:error, {:unsupported_expression, {:tuple, _, elems}}} = elab(@p2b)
-    assert length(elems) == 3
+  test "P2b (closed): flat n-ary tuple %[1,2,3] elaborates and projects" do
+    assert {:ok, mod} = build(@p2b, :"Cure.P2bProbe", [:triple, :first_of, :start])
+    assert apply(mod, :first_of, []) == 1
   end
 
   @p3 """

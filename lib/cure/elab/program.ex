@@ -943,7 +943,17 @@ defmodule Cure.Elab.Program do
   # see `Env.register_inline_hint/3`).
   @inline_hints %{
     "Std.Bool" => [and: :and, or: :or, not: :not, eq: :eq, ne: :ne],
-    "Std.Sigma" => [sigma_first: :sigma_first, sigma_second: :sigma_second]
+    "Std.Sigma" => [
+      sigma_first: :sigma_first,
+      sigma_second: :sigma_second,
+      tproj2: :tproj2,
+      tproj3: :tproj3,
+      tproj4: :tproj4,
+      tproj5: :tproj5,
+      tproj6: :tproj6,
+      tproj7: :tproj7,
+      tproj8: :tproj8
+    ]
   }
 
   defp mark_inline_hints(env, module_name) do

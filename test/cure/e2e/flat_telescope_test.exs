@@ -68,4 +68,63 @@ defmodule Cure.E2E.FlatTelescopeTest do
     assert apply(mod, :t, []) == {1, {2, 3}}
   end
 
+  # --- positional projection `.i` (type Ti, emit element(i)) -----------------
+
+  @proj2 """
+  mod Proj2
+    fn t() -> Tuple(Int, Int) = %[10, 20]
+    fn snd() -> Int = t().2
+    fn start() -> Int = snd()
+  """
+  test "positional .2 on an arity-2 telescope projects the 2nd element (type Int)" do
+    assert {:ok, mod} = build(@proj2, :"Cure.Proj2", [:t, :snd, :start])
+    assert apply(mod, :snd, []) == 20
+  end
+
+  @proj3 """
+  mod Proj3
+    fn t() -> Tuple(Int, Int, Int) = %[10, 20, 30]
+    fn second() -> Int = t().2
+    fn third() -> Int = t().3
+    fn start() -> Int = third()
+  """
+  test "positional .2 and .3 on an arity-3 telescope project the right elements" do
+    assert {:ok, mod} = build(@proj3, :"Cure.Proj3", [:t, :second, :third, :start])
+    assert apply(mod, :second, []) == 20
+    assert apply(mod, :third, []) == 30
+  end
+
+  # --- telescope pattern `%[p1..pn]` (routes through positional projection) ---
+
+  @pat3 """
+  mod Pat3
+    fn sum(t: Tuple(Int, Int, Int)) -> Int = match t
+      %[a, b, c] -> a + b + c
+    fn start() -> Int = sum(%[100, 20, 3])
+  """
+  test "an arity-3 telescope pattern binds all three components positionally" do
+    assert {:ok, mod} = build(@pat3, :"Cure.Pat3", [:sum, :start])
+    assert apply(mod, :sum, [{100, 20, 3}]) == 123
+  end
+
+  # --- Std.Tuple's own shapes (first/second/swap/third) over flat telescopes --
+  # Mirrors lib/std/tuple.cure's bodies in-module (the ad-hoc single-source
+  # builder cannot link a `use`-d module's beam for emit). `swap` exercises
+  # construction-from-projections; the stdlib module elaborating green is the
+  # cross-module acceptance.
+
+  @tupleapi """
+  mod TupleApi
+    fn second(t: Tuple(a, b)) -> b = t.2
+    fn swap(t: Tuple(a, b)) -> Tuple(b, a) = %[t.2, t.1]
+    fn third(t: Tuple(a, b, c)) -> c = t.3
+    fn start() -> Int = second(%[10, 20])
+  """
+  test "first/second/swap/third shapes elaborate and run over flat telescopes" do
+    assert {:ok, mod} = build(@tupleapi, :"Cure.TupleApi", [:second, :swap, :third, :start])
+    assert apply(mod, :second, [{10, 20}]) == 20
+    assert apply(mod, :swap, [{10, 20}]) == {20, 10}
+    assert apply(mod, :third, [{1, 2, 3}]) == 3
+  end
+
 end

@@ -202,12 +202,6 @@ defmodule Cure.Elab.Emit do
           [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
         end
 
-      # The telescope terminator `unit` (empty tuple `%[]` / `Tuple()`) erases to
-      # the flat empty BEAM tuple `{}`. Inside a telescope spine it is consumed by
-      # `telescope_cars/1` and never reaches here.
-      name == :unit and args == [] ->
-        {:tuple, @line, []}
-
       sigma_ctor?(env, name) ->
         # A UNIT-TERMINATED `mk_pair` spine `mk_pair(e1, … mk_pair(en, unit))` is a
         # flat telescope `Tuple(T1,…,Tn)` — lower it to ONE flat BEAM tuple
@@ -418,6 +412,17 @@ defmodule Cure.Elab.Emit do
 
   defp inline_hint_form(:sigma_second, [p], env, ctx),
     do: {:ok, element(2, lower(env, p, ctx))}
+
+  # Flat-telescope positional projections `tproj_i(p)` inline to `element(i, P)`
+  # — the i-th slot of the flat BEAM tuple. The final `[p]` spine (one explicit
+  # argument after the erased type/tail implicits) is what reaches here.
+  defp inline_hint_form(:tproj2, [p], env, ctx), do: {:ok, element(2, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj3, [p], env, ctx), do: {:ok, element(3, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj4, [p], env, ctx), do: {:ok, element(4, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj5, [p], env, ctx), do: {:ok, element(5, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj6, [p], env, ctx), do: {:ok, element(6, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj7, [p], env, ctx), do: {:ok, element(7, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj8, [p], env, ctx), do: {:ok, element(8, lower(env, p, ctx))}
 
   defp inline_hint_form(_hint, _args, _env, _ctx), do: :no
 

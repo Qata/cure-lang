@@ -1,9 +1,11 @@
 defmodule Cure.Elab.TupleTypeNaryTest do
-  # `Tuple(T1, …, Tn)` for n ≥ 3 is the honest n-ary surface tuple type. It parses
-  # to `{:tuple_type, [arity: n], [t1…tn]}` (a flat product), distinct from the
-  # arity-2 `Tuple(T, U)` which keeps aliasing the non-dependent `Sigma`
-  # (`{:sigma_type, …}`, Task 1). The elaborator lowers `{:tuple_type, …}` to the
-  # per-arity `TupleN` inductive family (Task 4); at parse time it is only a shape.
+  # `Tuple(T1, …, Tn)` for EVERY arity n ≥ 2 is the honest n-ary surface tuple
+  # type (unified-tuple design, Option B). It parses to
+  # `{:tuple_type, [arity: n, binders: bs], [t1…tn]}` (a flat product) uniformly —
+  # arity 2 included, no longer an alias of the bare `{:sigma_type, …}`. The
+  # elaborator lowers `{:tuple_type, …}` to the unit-terminated Σ telescope
+  # `Sigma(T1, … Sigma(Tn, Unit))` (no per-arity family); at parse time it is only
+  # a shape. The bare `Sigma(x: T, U)` surface still parses to `{:sigma_type, …}`.
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
 
@@ -33,13 +35,26 @@ defmodule Cure.Elab.TupleTypeNaryTest do
     assert length(elems) == 3
   end
 
-  test "arity-2 Tuple(Int, Int) still aliases Sigma — no tuple_type node" do
+  test "arity-2 Tuple(Int, Int) parses to {:tuple_type, arity: 2, [_,_]} (Option B: uniform)" do
     ast = parse("""
     mod M
       fn mk(a: Int, b: Int) -> Tuple(Int, Int) = a
     """)
 
-    assert nodes_of(ast, :tuple_type) == []
+    assert [{:tuple_type, meta, elems}] = nodes_of(ast, :tuple_type)
+    assert Keyword.get(meta, :arity) == 2
+    assert length(elems) == 2
+    # No longer an alias of the bare Σ surface.
+    assert nodes_of(ast, :sigma_type) == []
+  end
+
+  test "the bare Sigma(x: T, U) surface still parses to {:sigma_type, …}" do
+    ast = parse("""
+    mod M
+      fn mk(a: Int, b: Int) -> Sigma(x: Int, Int) = a
+    """)
+
     assert [{:sigma_type, _, [_, _]} | _] = nodes_of(ast, :sigma_type)
+    assert nodes_of(ast, :tuple_type) == []
   end
 end

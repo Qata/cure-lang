@@ -103,16 +103,20 @@ defmodule Cure.Elab.TuplePatternTest do
     assert apply(mod, :g, []) == {:S, :Z}
   end
 
-  test "an n-element tuple pattern projects through the right-nested Σ" do
+  test "an n-element flat-telescope tuple pattern projects positionally" do
+    # Option B: a flat `%[x, y, z]` pattern matches a flat `Tuple(…)` telescope
+    # (unit-terminated Σ, lowered to a flat BEAM tuple), binding each component
+    # POSITIONALLY (`x = p.1`, `y = p.2`, `z = p.3`). A genuinely nested Σ is
+    # destructured with the nested pattern `%[x, %[y, z]]` instead (see below).
     src =
       @nat <>
-        "  fn f(p: Sigma(a: Nat, Sigma(b: Nat, Nat))) -> Nat = match p\n    %[x, y, z] -> z\nend\n"
+        "  fn f(p: Tuple(Nat, Nat, Nat)) -> Nat = match p\n    %[x, y, z] -> z\nend\n"
 
     {:ok, env} = Program.elaborate(src)
     {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.TripleTupleE2E", functions: [:f])
 
-    # p = (Z, (S Z, S(S Z))); the third element is p.2.2.
-    assert apply(mod, :f, [{:Z, {{:S, :Z}, {:S, {:S, :Z}}}}]) == {:S, {:S, :Z}}
+    # p = {Z, S Z, S(S Z)} (flat); the third element is p.3.
+    assert apply(mod, :f, [{:Z, {:S, :Z}, {:S, {:S, :Z}}}]) == {:S, {:S, :Z}}
   end
 
   test "a nested tuple pattern binds through the inner Σ" do

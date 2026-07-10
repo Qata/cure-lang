@@ -9,7 +9,7 @@ mod Std.Tuple
   ## Arity-2 aliases the non-dependent dependent-pair, so the later
   ## position may depend on the earlier one; the n-ary families are plain
   ## flat products. This module is the honest replacement for the old
-  ## `Std.Pair`. The n-ary accessors (`get`, `third`, …) land alongside the
+  ## `Std.Pair`. The n-ary accessors (`third`, …) land alongside the
   ## n-ary literal surface.
   ##
   ## ## Examples
@@ -20,6 +20,7 @@ mod Std.Tuple
   ## first(%[1, 2])          # => 1
   ## second(%[1, 2])         # => 2
   ## swap(%[1, 2])           # => %[2, 1]
+  ## third(%[1, 2, 3])       # => 3
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
@@ -27,6 +28,11 @@ mod Std.Tuple
   ## The first component of a pair.
   fn first(t: Tuple(a, b)) -> a = t.1
 
-  ## NOTE: `second`/`swap` are temporarily withheld while flat-telescope
-  ## positional projection (`.2`+ via pattern lowering) lands — restored at the
-  ## acceptance step of the telescope build.
+  ## The second component of a pair.
+  fn second(t: Tuple(a, b)) -> b = t.2
+
+  ## Swap the two components of a pair.
+  fn swap(t: Tuple(a, b)) -> Tuple(b, a) = %[t.2, t.1]
+
+  ## The third component of a 3-tuple.
+  fn third(t: Tuple(a, b, c)) -> c = t.3

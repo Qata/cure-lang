@@ -463,10 +463,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:attribute_access, meta, [inner]}, names, ctx, env) do
-    case Keyword.fetch!(meta, :attribute) do
-      "1" -> sigma_projection(:fst, inner, names, ctx, env)
-      "2" -> sigma_projection(:snd, inner, names, ctx, env)
-      field -> record_projection(inner, field, names, ctx, env)
+    attr = Keyword.fetch!(meta, :attribute)
+
+    case parse_positional_index(attr) do
+      {:ok, i} -> positional_projection(i, inner, names, ctx, env)
+      :error -> record_projection(inner, attr, names, ctx, env)
     end
   end
 
@@ -655,23 +656,47 @@ defmodule Cure.Elab.Elaborator do
   # still needs a checking position (its expected type supplies the codomain family).
   # The codomain `B` is closed w.r.t. the fresh Σ binder, so it is shifted +1 to keep
   # its free de Bruijn indices pointing at the same context entries under the `λ`.
-  def elaborate_expr_typed({:tuple, _meta, [a_ast, b_ast]}, names, ctx, env) do
-    with {:ok, a_core, a_type} <- elaborate_expr_typed(a_ast, names, ctx, env),
-         {:ok, b_core, b_type} <- elaborate_expr_typed(b_ast, names, ctx, env) do
-      len = Context.length(ctx)
-      a_type_term = Quote.reify(a_type, len)
-      b_type_term = Quote.reify(b_type, len)
-      fam = Inductive.builtin(env, :sigma)
-
-      sigma_term =
-        {:data, fam, [a_type_term, {:lam, a_type_term, Cure.Core.Term.shift(b_type_term, 1)}], []}
-
-      sigma_val = Eval.eval(sigma_term, Context.env(ctx))
-      {:ok, {:ctor, sigma_ctor_name(env), [a_core, b_core]}, sigma_val}
+  def elaborate_expr_typed({:tuple, _meta, [_, _ | _] = elems}, names, ctx, env) do
+    with {:ok, parts} <- elaborate_tuple_parts(elems, names, ctx, env) do
+      {value, type_term} = build_telescope_value(parts, ctx, env)
+      {:ok, value, Eval.eval(type_term, Context.env(ctx))}
     end
   end
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # Synthesise each element of a tuple literal to `{core, type_term}` (the inferred
+  # type reified to a Core term at the current depth).
+  defp elaborate_tuple_parts(elems, names, ctx, env) do
+    len = Context.length(ctx)
+
+    Enum.reduce_while(elems, {:ok, []}, fn e, {:ok, acc} ->
+      case elaborate_expr_typed(e, names, ctx, env) do
+        {:ok, core, type} -> {:cont, {:ok, acc ++ [{core, Quote.reify(type, len)}]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  # Build the unit-terminated telescope value + type from synthesised parts:
+  # `%[e1, …, en]` (no expected type) is a flat `Tuple(T1, …, Tn)` —
+  # `mk_pair(e1, … mk_pair(en, unit))` at type `Sigma(T1, λ. … Sigma(Tn, λ. Unit))`.
+  # A genuinely DEPENDENT pair still needs a checking position (its expected type
+  # supplies the codomain family); synthesis is the non-dependent product, which
+  # is exactly a Tuple. Folds from the right so each accumulated type shifts +1
+  # under the fresh Σ binder (non-dependent, so the binder is unused).
+  defp build_telescope_value(parts, _ctx, env) do
+    mk_pair = sigma_ctor_name(env)
+    fam = Inductive.builtin(env, :sigma)
+
+    Enum.reduce(Enum.reverse(parts), {{:ctor, :unit, []}, {:data, :Unit, [], []}}, fn
+      {core, type_term}, {val_acc, type_acc} ->
+        value = {:ctor, mk_pair, [core, val_acc]}
+        cod = {:lam, type_term, Cure.Core.Term.shift(type_acc, 1)}
+        type = {:data, fam, [type_term, cod], []}
+        {value, type}
+    end)
+  end
 
   # Desugar a concatenation operator to the `Std.Semigroup.combine` method call,
   # letting the interface-dispatch machinery pick the instance by operand type.
@@ -944,6 +969,81 @@ defmodule Cure.Elab.Elaborator do
   defp sigma_projection(which, inner, names, ctx, env) do
     gname = if which == :fst, do: :sigma_first, else: :sigma_second
     elaborate_implicit_global_app(env, gname, [inner], names, ctx)
+  end
+
+  # A `.N` attribute where `N` is a positive integer is a POSITIONAL projection
+  # (`.1`, `.2`, …); anything else is a record field name.
+  defp parse_positional_index(attr) do
+    case Integer.parse(attr) do
+      {i, ""} when i >= 1 -> {:ok, i}
+      _ -> :error
+    end
+  end
+
+  # Positional projection `base.i`. When `base` is a flat unit-terminated
+  # telescope of arity `n` (a `Tuple(T1,…,Tn)` value, lowered to a flat BEAM
+  # tuple), `.i` for `i ≥ 2` lowers to the `Std.Sigma` positional-projection
+  # global `tproj_i` — typed at the true i-th component `Ti` and inlined to
+  # `element(i, base)` (see sigma.cure). `.1` is `sigma_first` (correct for any
+  # telescope). For a bare dependent pair (`Sigma(a, b)`, tail not `Unit`) or any
+  # non-telescope, `.1`/`.2` keep their `sigma_first`/`sigma_second` meaning and
+  # a higher index falls to the record path — exactly the pre-telescope behavior.
+  # The classification is a heuristic over `base`'s inferred type; the kernel
+  # re-checks the chosen `tproj_i` application against its real signature, so a
+  # misclassification can only surface as a clean rejection, never unsoundness.
+  defp positional_projection(i, inner, names, ctx, env) do
+    case telescope_arity_of(inner, names, ctx, env) do
+      {:telescope, n} when i <= n and i >= 2 ->
+        elaborate_implicit_global_app(env, :"tproj#{i}", [inner], names, ctx)
+
+      {:telescope, n} when i <= n ->
+        sigma_projection(:fst, inner, names, ctx, env)
+
+      _ ->
+        case i do
+          1 -> sigma_projection(:fst, inner, names, ctx, env)
+          2 -> sigma_projection(:snd, inner, names, ctx, env)
+          _ -> record_projection(inner, Integer.to_string(i), names, ctx, env)
+        end
+    end
+  end
+
+  # `{:telescope, n}` when `inner`'s inferred type is a unit-terminated Σ
+  # telescope of arity `n` (`Sigma(T1, … Sigma(Tn, Unit))`), else `:not_telescope`.
+  defp telescope_arity_of(inner, names, ctx, env) do
+    case elaborate_expr_typed(inner, names, ctx, env) do
+      {:ok, _term, type_value} ->
+        case Inductive.builtin(env, :sigma) do
+          nil ->
+            :not_telescope
+
+          sigma_fam ->
+            # `type_value` is a semantic VALUE (as returned by elaboration); read it
+            # back to a Core term (family param/index split recovered via the sig)
+            # before walking the Σ spine.
+            type_term = Quote.reify(type_value, Context.length(ctx), Context.signature(ctx))
+            count_tele(type_term, ctx, sigma_fam, 0)
+        end
+
+      _ ->
+        :not_telescope
+    end
+  end
+
+  # Walk the Σ spine, instantiating each codomain (non-dependent for a telescope,
+  # so the applied argument is discarded) until a `Unit` terminator is reached.
+  defp count_tele(type, ctx, sigma_fam, n) do
+    case Kernel.normalize(ctx, type) do
+      {:data, ^sigma_fam, [_dom, cod], []} ->
+        tail = Kernel.normalize(ctx, {:app, cod, {:ctor, :unit, []}})
+        count_tele(tail, ctx, sigma_fam, n + 1)
+
+      {:data, :Unit, [], []} when n >= 1 ->
+        {:telescope, n}
+
+      _ ->
+        :not_telescope
+    end
   end
 
   # Record field projection `obj.field`. The object's type identifies its record
@@ -3182,16 +3282,19 @@ defmodule Cure.Elab.Elaborator do
     app2(eq_global, scrut_term, lit_core(v, prim))
   end
 
-  # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
-  # `e1 = base.1`, `e2 = base.2.1`, …, `en = base.2.….2` (the final tail). Each
-  # element may itself be a nested tuple, recursing on its own projection base.
-  defp tuple_subs([last], base), do: tuple_elem_sub(last, base)
-
-  defp tuple_subs([e | rest], base) do
-    with {:ok, s1} <- tuple_elem_sub(e, tuple_proj(base, "1")),
-         {:ok, s2} <- tuple_subs(rest, tuple_proj(base, "2")) do
-      {:ok, s1 ++ s2}
-    end
+  # A flat n-element tuple projects POSITIONALLY: `%[e1, …, en]` binds
+  # `e1 = base.1`, `e2 = base.2`, …, `en = base.n` (each `.i` resolves against the
+  # flat lowering via `positional_projection`). Each element may itself be a
+  # nested tuple, recursing on its own projection base (`base.i.1`, `base.i.2`, …).
+  defp tuple_subs(elems, base) do
+    elems
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn {e, i}, {:ok, acc} ->
+      case tuple_elem_sub(e, tuple_proj(base, Integer.to_string(i))) do
+        {:ok, s} -> {:cont, {:ok, acc ++ s}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
   end
 
   defp tuple_proj(base, n), do: {:attribute_access, [attribute: n], [base]}
