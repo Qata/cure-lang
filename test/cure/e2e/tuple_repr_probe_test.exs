@@ -122,14 +122,26 @@ defmodule Cure.E2E.TupleReprProbeTest do
 
   # ================= GAPS (pinned to current behavior) =================
 
+  # GAP CLOSED (unified-tuple Increment 2): `%[1,2,3]` is now the flat `Tuple3`
+  # family and emits a flat BEAM 3-tuple — no longer `:unsupported_expression`. It
+  # is a DISTINCT type from the nested pair `Sigma(a:Int, Sigma(b:Int, Int))`
+  # (`{1,{2,3}}`), so checking a flat-3 literal against the nested-pair type is a
+  # type error, not a coincidental success.
   @p2b """
   mod P2b
-    fn triple() -> Sigma(a: Int, Sigma(b: Int, Int)) = %[1, 2, 3]
-    fn start() -> Int = triple().1
+    fn triple() -> Tuple(Int, Int, Int) = %[1, 2, 3]
   """
-  test "P2b GAP: flat n-ary tuple %[1,2,3] is :unsupported_expression" do
-    assert {:error, {:unsupported_expression, {:tuple, _, elems}}} = elab(@p2b)
-    assert length(elems) == 3
+  test "P2b CLOSED: flat n-ary tuple %[1,2,3] elaborates and emits flat" do
+    assert {:ok, mod} = build(@p2b, :"Cure.P2bProbe", [:triple])
+    assert apply(mod, :triple, []) == {1, 2, 3}
+  end
+
+  @p2b_nested """
+  mod P2bN
+    fn triple() -> Sigma(a: Int, Sigma(b: Int, Int)) = %[1, 2, 3]
+  """
+  test "P2b distinctness: a flat-3 literal does NOT check against the nested pair" do
+    assert {:error, _} = elab(@p2b_nested)
   end
 
   @p3 """

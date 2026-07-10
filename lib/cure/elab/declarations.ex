@@ -763,6 +763,10 @@ defmodule Cure.Elab.Declarations do
     Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
   end
 
+  defp collect_type_vars({:tuple_type, _m, children}, bound, env, acc) when is_list(children) do
+    Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
+  end
+
   defp collect_type_vars(_other, _bound, _env, acc), do: acc
 
   defp type_var_name?(<<c, _::binary>>) when c in ?a..?z, do: true
@@ -1344,6 +1348,24 @@ defmodule Cure.Elab.Declarations do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
       {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
+    end
+  end
+
+  # A flat n-ary tuple TYPE `Tuple(T1,…,Tn)` (n ≥ 3, parser `:tuple_type`) lowers to
+  # the `TupleN` inductive family applied to its N element types — the non-dependent
+  # flat product (each Ti scoped independently; no binder threading, unlike the
+  # dependent arity-2 `sigma_type`). The family is seeded by `Core.Builtins`.
+  defp idx_to_core({:tuple_type, [arity: n], asts}, scope, fam, env, _ctx) do
+    asts
+    |> Enum.reduce_while({:ok, []}, fn ast, {:ok, rev} ->
+      case idx_to_core(ast, scope, fam, env) do
+        {:ok, core} -> {:cont, {:ok, [core | rev]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rev} -> {:ok, {:data, :"Tuple#{n}", Enum.reverse(rev), []}}
+      {:error, _} = err -> err
     end
   end
 

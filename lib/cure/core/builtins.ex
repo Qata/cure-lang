@@ -126,8 +126,43 @@ defmodule Cure.Core.Builtins do
     |> maybe_seed(:eq, eq_family(), eq_ctors(), exclude)
     |> maybe_seed(:sigma, sigma_family(), sigma_ctors(), exclude)
     |> maybe_seed(:list, list_family(), list_ctors(), exclude)
+    |> seed_tuples()
     |> seed_ops()
     |> seed_primitives()
+  end
+
+  # The flat n-ary tuple families `Tuple3 … Tuple8` (spec 2026-07-09-unified-tuple,
+  # scope A). Arity 2 is the non-dependent Sigma (seeded above); arities 3..8 are
+  # ordinary parametric inductives — `TupleN : Type -> … -> Type` (N type params,
+  # no indices) with a single flat constructor `mk_tupleN(x1,…,xN)` — exactly how
+  # Haskell/OCaml/Rust give bounded tuples, so NO kernel change. Each is a distinct
+  # family, so a flat `Tuple3(A,B,C)` and a nested `Sigma(A, Sigma(B,C))` never
+  # unify (the representation distinctness the spec requires). Not registered under
+  # a `@builtin` key — they are compiler-internal, resolved by family name.
+  defp seed_tuples(%Env{} = env) do
+    Enum.reduce(3..8, env, fn n, acc ->
+      Inductive.declare(acc, tuple_family(n), tuple_ctors(n))
+    end)
+  end
+
+  # TupleN : (a1 : Type) -> … -> (aN : Type) -> Type   (N params, no indices)
+  #   mk_tupleN : (x1 : a1) -> … -> (xN : aN) -> TupleN(a1,…,aN)
+  # Non-dependent flat product. In the ctor's field telescope every field's type is
+  # the param at the SAME positional depth: with N params bound then i fields, param
+  # (i+1) sits at de-Bruijn `{:var, N-1}` for every field i (the analog of Sigma's
+  # mk_pair fields). The result-param term reads each family param from beneath the
+  # N fields: param j (1-indexed) is `{:var, 2N-j}` (matches Sigma's `[var3,var2]`
+  # for N=2). All fields present; the type params are inferred, not passed.
+  defp tuple_family(n) do
+    params = for i <- 1..n, do: {:"a#{i}", {:type, 0}}
+    Inductive.family(:"Tuple#{n}", params, [], 0)
+  end
+
+  defp tuple_ctors(n) do
+    fields = for i <- 0..(n - 1), do: {:"_a#{i}", {:var, n - 1}}
+    presence = List.duplicate(:present, n)
+    result_params = for j <- 1..n, do: {:var, 2 * n - j}
+    [Inductive.ctor(:"mk_tuple#{n}", fields, [], presence, result_params)]
   end
 
   # The machine base types' name→node floor (spec 2026-07-10-primitive-type-
