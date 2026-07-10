@@ -1221,8 +1221,11 @@ defmodule Cure.CLI do
     print? = Keyword.get(opts, :print, false)
     strict? = Keyword.get(opts, :strict, false)
 
-    # Resolve the crossing target: `--edition YYYY` when given, else the latest
-    # minted edition. A user-supplied value is validated through
+    # Resolve the crossing target: `--edition YYYY` when given, else the compiler
+    # default edition (`Cure.Edition.current/0`) — which is deliberately DECOUPLED
+    # from the newest *known* edition (staged rollout), so with no flag `migrate`
+    # targets the default, NOT necessarily the newest minted edition. A
+    # user-supplied value is validated through
     # Cure.Edition.parse/1 BEFORE it can reach plan_migration_source/2 or the
     # phase-2 bump — set_edition/2 writes whatever string it is handed verbatim,
     # so an unvalidated typo would only surface much later on the next project
@@ -1285,7 +1288,9 @@ defmodule Cure.CLI do
   end
 
   # `--edition YYYY` (validated against the known-editions allow-list) or the
-  # latest minted edition when the flag is absent.
+  # compiler default edition (`Cure.Edition.current/0`) when the flag is absent.
+  # NB: the default is decoupled from the newest *known* edition (staged rollout),
+  # so an absent flag targets the default, not necessarily the newest minted one.
   defp migrate_resolve_edition(opts) do
     case Keyword.get(opts, :edition) do
       nil ->
