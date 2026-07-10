@@ -4,7 +4,7 @@ defmodule Antigen.Assays.InductiveEnvTest do
   alias Antigen.Challenge
   alias Cure.Core.Inductive
 
-  defp canonical_ctor(result_indices \\ [{:int_lit, 3}]) do
+  defp canonical_ctor(result_indices) do
     Inductive.ctor(
       :antigenA,
       [{:x, {:var, 0}}, {:y, {:var, 1}}],
