@@ -100,6 +100,40 @@ defmodule Cure.Project.DepEditionIsolationTest do
     assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
   end
 
+  # Iteration 9 (audit): `cure deps update` calls `resolve_git_dep/2` DIRECTLY,
+  # bypassing `resolve_one`'s trim guard, so the whitespace/empty-git rejection must
+  # also live at the `resolve_git_dep` boundary — otherwise `deps update` clones
+  # nothing and silently "resolves" to :ok. Test the boundary directly.
+  test "resolve_git_dep rejects a whitespace-only git URL", %{root: root} do
+    dep = %{name: "bad", git: "   ", path: nil, tag: nil, version: nil, constraint: nil}
+    assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_git_dep(dep, root)
+  end
+
+  test "resolve_git_dep rejects an empty git URL", %{root: root} do
+    dep = %{name: "bad", git: "", path: nil, tag: nil, version: nil, constraint: nil}
+    assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_git_dep(dep, root)
+  end
+
+  # Iteration 9 (audit): `resolve_git_dep/2` discarded `System.cmd`'s exit status, so
+  # ANY failed clone (unreachable URL, bad tag, network error) left an empty dir,
+  # found zero .cure files, and silently "resolved" to :ok — a bogus green build.
+  # A failed clone must fail loudly.
+  test "resolve_git_dep fails loudly when the clone fails", %{root: root} do
+    # A syntactically-valid but nonexistent local repo URL: `git clone` exits
+    # non-zero immediately (no network, no prompt).
+    dep = %{
+      name: "bad",
+      git: "file://" <> Path.join(root, "nonexistent.git"),
+      path: nil,
+      tag: nil,
+      version: nil,
+      constraint: nil
+    }
+
+    assert {:error, {:dependency_clone_failed, "bad", _out}} =
+             Cure.Project.resolve_git_dep(dep, root)
+  end
+
   # Iteration 7 (audit A3-F1): a dependency whose OWN Cure.toml declares an unknown
   # edition must FAIL LOUDLY, not silently. dep_project_dir now routes the dep's
   # manifest into resolve_edition, so a typo'd dep edition makes compile_file return

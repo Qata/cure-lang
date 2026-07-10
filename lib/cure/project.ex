@@ -618,24 +618,46 @@ defmodule Cure.Project do
   """
   @spec resolve_git_dep(map(), String.t()) :: :ok | {:error, term()}
   def resolve_git_dep(%{name: name, git: url} = dep, root) do
-    target = Path.join(root, "_build/deps/#{name}")
+    # `cmd_deps_update` calls this DIRECTLY (bypassing resolve_one's trim guard),
+    # so the blank/whitespace-URL rejection must live here too — otherwise a
+    # `git = "   "` dep clones nothing and silently "resolves" to :ok.
+    if is_binary(url) and String.trim(url) != "" do
+      target = Path.join(root, "_build/deps/#{name}")
 
-    unless File.dir?(Path.join(target, ".git")) do
+      with :ok <- ensure_clone(dep, url, target, name) do
+        cure_files = Path.wildcard(Path.join(target, "lib/**/*.cure"))
+        dep_ebin = Path.join(root, "_build/deps/#{name}")
+
+        # Route through the shared helper so a git dep also resolves under its OWN
+        # edition (dep_project_dir bounded at `target`, honouring a nested manifest)
+        # rather than relying solely on find_root stopping at the clone's `.git`,
+        # and so an unknown dep edition fails loudly (A3-F1) — consistent with
+        # path/tarball.
+        with :ok <- compile_dep_files(cure_files, name, dep_ebin, target) do
+          :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
+          :ok
+        end
+      end
+    else
+      {:error, {:invalid_dependency, name}}
+    end
+  end
+
+  # Clone the git dep unless it is already present. `System.cmd`'s exit status was
+  # previously discarded, so ANY failed clone (unreachable URL, bad tag, network
+  # error) left an empty dir → zero .cure files → a silent `:ok` "resolution".
+  # Fail loudly on a non-zero clone.
+  defp ensure_clone(dep, url, target, name) do
+    if File.dir?(Path.join(target, ".git")) do
+      :ok
+    else
       File.mkdir_p!(target)
       args = ["clone", "--depth", "1"] ++ ref_args(dep) ++ [url, target]
-      System.cmd("git", args, stderr_to_stdout: true)
-    end
 
-    cure_files = Path.wildcard(Path.join(target, "lib/**/*.cure"))
-    dep_ebin = Path.join(root, "_build/deps/#{name}")
-
-    # Route through the shared helper so a git dep also resolves under its OWN
-    # edition (dep_project_dir bounded at `target`, honouring a nested manifest)
-    # rather than relying solely on find_root stopping at the clone's `.git`, and
-    # so an unknown dep edition fails loudly (A3-F1) — consistent with path/tarball.
-    with :ok <- compile_dep_files(cure_files, name, dep_ebin, target) do
-      :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
-      :ok
+      case System.cmd("git", args, stderr_to_stdout: true) do
+        {_out, 0} -> :ok
+        {out, _nonzero} -> {:error, {:dependency_clone_failed, name, out}}
+      end
     end
   end
 
