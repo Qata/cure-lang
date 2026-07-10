@@ -31,10 +31,30 @@ defmodule Cure.Migrate.Rule do
           the paren-context skip in spec §5.5), so warn but leave the AST as-is.
         * `:no_change` — nothing found; transparent.
     * `:warning_template` — the message body emitted when the rule fires.
+    * `:tolerate_safe?` — the spec's "where safe" knob for the `cure build`
+      consumer. `false` (default): the rule *warns* during build but its rewrite
+      is NOT folded into the compiled AST — the legacy form compiles as-is. Only
+      `true` when the rewrite is certified semantics-preserving-and-compilable,
+      so that `cure build` may normalize it in-memory. `cure migrate` always
+      applies every rule's rewrite regardless of this flag.
+
+      All three day-one rules are `false`: each legacy form still compiles today,
+      so folding the rewrite is unnecessary, and doing so is either unsafe
+      (lowercasing a dependently-typed signature breaks metavar solving),
+      redundant (`if/elif` still compiles), or cosmetic (decorator relocation).
+      A rule opts in only once its rewrite is proven safe AND the legacy form has
+      actually stopped compiling (the "warn-now → error-later" transition).
   """
 
   @enforce_keys [:id, :description, :phase, :detect_and_rewrite, :warning_template]
-  defstruct [:id, :description, :phase, :detect_and_rewrite, :warning_template]
+  defstruct [
+    :id,
+    :description,
+    :phase,
+    :detect_and_rewrite,
+    :warning_template,
+    tolerate_safe?: false
+  ]
 
   @typedoc "The whole-file AST a rule receives and returns (a `{:block, …}` node)."
   @type ast :: term()
@@ -57,6 +77,7 @@ defmodule Cure.Migrate.Rule do
           description: String.t(),
           phase: :syntactic | :needs_resolution,
           detect_and_rewrite: (ast(), ctx() -> result()),
-          warning_template: String.t()
+          warning_template: String.t(),
+          tolerate_safe?: boolean()
         }
 end

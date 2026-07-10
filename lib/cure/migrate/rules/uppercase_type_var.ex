@@ -86,7 +86,9 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     params = Keyword.get(meta, :params, [])
     return_type = Keyword.get(meta, :return_type)
 
-    types = Enum.map(params, &param_type/1) ++ List.wrap(return_type)
+    types =
+      (Enum.map(params, &param_type/1) ++ List.wrap(return_type)) |> Enum.reject(&is_nil/1)
+
     names = Enum.flat_map(types, &type_var_names/1)
 
     candidates = names |> Enum.filter(&rename?(&1, ctx)) |> Enum.uniq()
@@ -97,10 +99,7 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     if rename_map == %{} do
       {meta, []}
     else
-      new_params =
-        Enum.map(params, fn {:param, pmeta, pname} ->
-          {:param, Keyword.update!(pmeta, :type, &rename_in_type(&1, rename_map)), pname}
-        end)
+      new_params = Enum.map(params, &rename_param(&1, rename_map))
 
       meta =
         meta
@@ -111,7 +110,22 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     end
   end
 
+  # Real signatures carry param shapes beyond `{:param, [type: T], name}` (bare
+  # variables, dependent binders, …). Only a proper typed `:param` contributes a
+  # type expression; every other shape is transparent to this rule.
   defp param_type({:param, pmeta, _name}), do: Keyword.get(pmeta, :type)
+  defp param_type(_other), do: nil
+
+  # Rewrite the `:type` of a proper typed param; leave every other param shape
+  # (and typeless params) exactly as-is.
+  defp rename_param({:param, pmeta, pname} = param, map) do
+    case Keyword.fetch(pmeta, :type) do
+      {:ok, _type} -> {:param, Keyword.update!(pmeta, :type, &rename_in_type(&1, map)), pname}
+      :error -> param
+    end
+  end
+
+  defp rename_param(other, _map), do: other
 
   defp put_return_type(meta, nil, _map), do: meta
 

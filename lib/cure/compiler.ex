@@ -101,6 +101,7 @@ defmodule Cure.Compiler do
 
     with {:ok, tokens} <- lex(source, file, emit?),
          {:ok, ast} <- parse(tokens, file, emit?),
+         {:ok, ast} <- migrate_warn(ast, file),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
          {:ok, forms, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
@@ -253,6 +254,16 @@ defmodule Cure.Compiler do
       {:ok, ast} -> {:ok, ast}
       {:error, errors} -> {:error, {:parse_error, errors}}
     end
+  end
+
+  # `cure build` warn-and-tolerate consumer of the migration facility (spec
+  # §5.1): run the deprecation rules, print each warning to stderr, and continue
+  # compiling on the *tolerated* (rewritten-in-memory) AST — the source file is
+  # never modified. `cure migrate` is the separate rewrite-and-write consumer.
+  defp migrate_warn(ast, file) do
+    {ast, warnings} = Cure.Migrate.run(ast, file: file, apply: :safe_only)
+    Enum.each(warnings, fn w -> IO.warn("#{w.file}:#{w.line}: #{w.message}", []) end)
+    {:ok, ast}
   end
 
   defp maybe_optimize(ast, false, _opts), do: {:ok, ast}

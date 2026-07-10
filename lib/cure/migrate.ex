@@ -54,20 +54,27 @@ defmodule Cure.Migrate do
 
     * `:file` — the source path, recorded on each warning (default `"nofile"`).
     * `:rules` — override the registry (default `rules/0`).
+    * `:apply` — which rewrites to fold into the returned AST:
+        * `:all` (default) — every rule's rewrite; used by `cure migrate`.
+        * `:safe_only` — only the rewrites of rules flagged `tolerate_safe?`;
+          used by `cure build`, so an unsafe rule *warns* but leaves the legacy
+          form as-is in the compiled AST (spec's "normalize in-memory where
+          safe"). Warnings are emitted for every fired rule in both modes.
   """
   @spec run(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()]}
   def run(ast, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     rule_set = Keyword.get(opts, :rules, rules())
+    apply_mode = Keyword.get(opts, :apply, :all)
     ctx = build_ctx(ast)
 
     Enum.reduce(rule_set, {ast, []}, fn %Rule{} = rule, {acc_ast, warns} ->
       case rule.detect_and_rewrite.(acc_ast, ctx) do
         {:rewrite, new_ast} ->
-          {new_ast, warns ++ warnings_for(rule, file, [nil])}
+          {commit(rule, apply_mode, acc_ast, new_ast), warns ++ warnings_for(rule, file, [nil])}
 
         {:rewrite, new_ast, lines} ->
-          {new_ast, warns ++ warnings_for(rule, file, lines)}
+          {commit(rule, apply_mode, acc_ast, new_ast), warns ++ warnings_for(rule, file, lines)}
 
         {:warn, lines} ->
           {acc_ast, warns ++ warnings_for(rule, file, lines)}
@@ -77,6 +84,12 @@ defmodule Cure.Migrate do
       end
     end)
   end
+
+  # Fold the rewrite (`:all` mode, or a `tolerate_safe?` rule) or keep the legacy
+  # AST while still having warned (`:safe_only` mode, unsafe rule).
+  defp commit(_rule, :all, _old_ast, new_ast), do: new_ast
+  defp commit(%Rule{tolerate_safe?: true}, :safe_only, _old_ast, new_ast), do: new_ast
+  defp commit(%Rule{tolerate_safe?: false}, :safe_only, old_ast, _new_ast), do: old_ast
 
   defp warnings_for(%Rule{} = rule, file, lines) do
     Enum.map(lines, fn line ->
