@@ -79,7 +79,12 @@ defmodule Antigen.Generators.KernelProbe do
     :cert_unknown_list_node,
     :cert_nontuple_call_arg,
     :cert_nontuple_list_elem,
-    :cert_calls_nontuple_head
+    :cert_calls_nontuple_head,
+    # Editions-facility probes — the edition-derived keyword set and the migrate
+    # fixpoint loop, driven through Cure.Edition.retired_keywords/2 and
+    # Cure.Migrate.run_to_fixpoint/2 (no term generator reaches this surface).
+    :edition_retired_keywords,
+    :migrate_fixpoint_converges
   ]
 
   @doc """
