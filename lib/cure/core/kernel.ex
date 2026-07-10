@@ -1093,6 +1093,53 @@ defmodule Cure.Core.Kernel do
   defp unify_one({:ctor, _, _} = r, {:nat_lit, n}, arity, subst),
     do: unify_one(r, nat_lit_ctor(n), arity, subst)
 
+  # Compact Bounded literal ↔ First/Next bridge — the exact mirror of the Nat
+  # bridge above, and of `conv.ex`'s cross-representation arms (conv_struct?,
+  # the `{:vbounded, _}` vs `{:vctor, :First/:Next, _}` clauses). A
+  # `{:bounded_lit, k}` index is a closed canonical `Bounded` value,
+  # definitionally equal to its k-fold `Next`-tower over `First` (Lean `Fin n`),
+  # so it must unify with `First`/`Next` result indices exactly as the tower does.
+  #
+  # The leading `m` argument of both constructors is the ERASED implicit bound
+  # (`builtins.ex`: `First/1`, `Next/2`). `conv` ignores it; so must this, or two
+  # definitionally equal indices would fail to unify on a computationally
+  # irrelevant argument. Keep these clauses in lock-step with conv.ex's.
+  #
+  # Without this bridge `head_key({:bounded_lit, k})` is `:bounded_lit`, which can
+  # never equal `{:ctor, :First}`/`{:ctor, :Next}`, so the generic rigid-head clash
+  # rule below verdicts a literal index `:impossible` against its own tower
+  # expansion. That is a COVERAGE SOUNDNESS HOLE identical to the Nat one this
+  # bridge's sibling closes: a `case` whose scrutinee index is the tower spelling
+  # could omit the scrutinee's own reachable constructor and still pass
+  # `check_coverage`, admitting a partial eliminator as total.
+  #
+  # The peel terminates: `n` strictly decreases, and only fires against a
+  # `:ctor`/`:bounded_lit` counterpart (var counterparts bind via the clauses above).
+  defp unify_one({:bounded_lit, a}, {:bounded_lit, b}, _arity, subst),
+    do: if(a == b, do: {:ok, subst}, else: :impossible)
+
+  defp unify_one({:bounded_lit, 0}, {:ctor, :First, [_m]}, _arity, subst), do: {:ok, subst}
+  defp unify_one({:ctor, :First, [_m]}, {:bounded_lit, 0}, _arity, subst), do: {:ok, subst}
+
+  defp unify_one({:bounded_lit, n}, {:ctor, :Next, [_m, pred]}, arity, subst) when n > 0,
+    do: unify_one({:bounded_lit, n - 1}, pred, arity, subst)
+
+  defp unify_one({:ctor, :Next, [_m, pred]}, {:bounded_lit, n}, arity, subst) when n > 0,
+    do: unify_one(pred, {:bounded_lit, n - 1}, arity, subst)
+
+  # Genuine cross-representation constructor clash: `0` is not a successor, and a
+  # positive `k` is not `First`. Stated explicitly so the `:impossible` verdict is
+  # derived from the VALUES rather than falling through to the generic head-key
+  # clash rule, which would reach the same answer here only by coincidence.
+  defp unify_one({:bounded_lit, 0}, {:ctor, :Next, [_m, _pred]}, _arity, _subst), do: :impossible
+  defp unify_one({:ctor, :Next, [_m, _pred]}, {:bounded_lit, 0}, _arity, _subst), do: :impossible
+
+  defp unify_one({:bounded_lit, n}, {:ctor, :First, [_m]}, _arity, _subst) when n > 0,
+    do: :impossible
+
+  defp unify_one({:ctor, :First, [_m]}, {:bounded_lit, n}, _arity, _subst) when n > 0,
+    do: :impossible
+
   defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
     do: unify_spine(as, bs, arity, subst)
 
