@@ -76,8 +76,8 @@ defmodule Antigen.Generators.SigMenuTest do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
     list_nat = {:data, :List, [SigMenu.nat()], []}
-    nil_wrapped = {:app, {:lam, list_nat, {:var, 0}}, {:ctor, :Nil, []}}
-    cons_wrapped = {:app, {:lam, list_nat, {:var, 0}},
+    nil_wrapped = {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}}, {:ctor, :Nil, []}}
+    cons_wrapped = {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}},
                     {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
     assert {:ok, _} = Kernel.infer(ctx, nil_wrapped)
     assert {:ok, _} = Kernel.infer(ctx, cons_wrapped)
@@ -123,7 +123,7 @@ defmodule Antigen.Generators.SigMenuTest do
     ctx = Context.empty(env)
     seeds = SigMenu.goal_types()
     assert Enum.any?(seeds, &match?({:data, :Sigma, _, _}, &1))
-    assert Enum.any?(seeds, &match?({:pi, _, _}, &1))
+    assert Enum.any?(seeds, &match?({:pi, _g, _, _}, &1))
 
     for g <- seeds do
       assert SigMenu.inhabitable?(ctx, g), "non-inhabitable seed: #{inspect(g)}"
@@ -144,8 +144,8 @@ defmodule Antigen.Generators.SigMenuTest do
     alias Antigen.Backend.StreamData, as: SD
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
-    gen = Term.gen_term(ctx, {:pi, SigMenu.nat(), SigMenu.nat()})
+    gen = Term.gen_term(ctx, {:pi, Cure.Core.Grade.unrestricted(), SigMenu.nat(), SigMenu.nat()})
     terms = SD.sample(SD.interp(gen), 10)
-    assert Enum.any?(terms, &match?({:lam, _, _}, &1))
+    assert Enum.any?(terms, &match?({:lam, _g, _, _}, &1))
   end
 end

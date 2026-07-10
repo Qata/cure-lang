@@ -18,10 +18,10 @@ defmodule Cure.Core.NfStuckCaseDeltaTest do
   defp plus_body do
     z_branch = {:Z, 0, {:var, 0}}
     s_branch = {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}
-    {:lam, @nat, {:lam, @nat, {:case, {:var, 1}, {:lam, @nat, @nat}, [z_branch, s_branch]}}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
   end
 
-  defp plus_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp plus_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
   defp plus(a, b), do: {:app, {:app, {:global, :plus}, a}, b}
 
   defp env do
@@ -38,7 +38,7 @@ defmodule Cure.Core.NfStuckCaseDeltaTest do
     # case x of Z => plus (S Z) Z | S k => Z    — x free ⇒ stuck.
     # The Z-branch body `plus 1 0` must δ/ι-normalize to `S Z`.
     node =
-      {:case, {:var, 0}, {:lam, @nat, @nat},
+      {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat},
        [{:Z, 0, plus(s(@z), @z)}, {:S, 1, @z}]}
 
     assert {:case, {:var, 0}, _motive, branches} = Normalise.nf(ctx(), node)
@@ -49,9 +49,9 @@ defmodule Cure.Core.NfStuckCaseDeltaTest do
   test "nf δ-unfolds a certified global inside a stuck-case motive" do
     # motive λ(_:Nat). plus (S Z) Z — its body must normalize to `S Z`.
     node =
-      {:case, {:var, 0}, {:lam, @nat, plus(s(@z), @z)}, [{:Z, 0, @z}, {:S, 1, @z}]}
+      {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, plus(s(@z), @z)}, [{:Z, 0, @z}, {:S, 1, @z}]}
 
-    assert {:case, {:var, 0}, {:lam, _dom, motive_body}, _branches} = Normalise.nf(ctx(), node)
+    assert {:case, {:var, 0}, {:lam, _g, _dom, motive_body}, _branches} = Normalise.nf(ctx(), node)
     assert motive_body == s(@z), "stuck-case motive body must δ-normalize; got #{inspect(motive_body)}"
   end
 end

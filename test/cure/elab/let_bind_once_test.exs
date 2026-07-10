@@ -1,6 +1,6 @@
 defmodule Cure.Elab.LetBindOnceTest do
   @moduledoc """
-  `let x = e ⏎ body` must elaborate to the Core `{:let, ty, e, body}` binder, so
+  `let x = e ⏎ body` must elaborate to the Core `{:let, Cure.Core.Grade.unrestricted(), ty, e, body}` binder, so
   `e` occurs **once** in the term regardless of how often `x` is used.
 
   Before the `:let` former existed, `elaborate_let_block/5` eliminated the binding

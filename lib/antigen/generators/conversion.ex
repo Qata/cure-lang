@@ -33,7 +33,7 @@ defmodule Antigen.Generators.Conversion do
 
   def carrier_term(:conv_motive, a, b, fd),
     do:
-      {:case, {:ctor, :T, []}, {:lam, bd(), vec(plus(num(a), num(b)))},
+      {:case, {:ctor, :T, []}, {:lam, Cure.Core.Grade.unrestricted(), bd(), vec(plus(num(a), num(b)))},
        [{:T, 0, vec_of(fd)}, {:F, 0, vec_of(fd)}]}
 
   # accept: whole-term type when the filler matches

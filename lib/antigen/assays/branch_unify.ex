@@ -85,7 +85,7 @@ defmodule Antigen.Assays.BranchUnify do
       Inductive.family(:CaseIdx, [], [{:i, @nat}], 0),
       [
         Inductive.ctor(:mkci, [{:b, @bd}], [
-          {:case, {:var, 0}, {:lam, @bd, @nat}, [{:T, 0, @z}, {:F, 0, @s1}]}
+          {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @bd, @nat}, [{:T, 0, @z}, {:F, 0, @s1}]}
         ])
       ]
     )

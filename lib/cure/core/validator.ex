@@ -41,7 +41,7 @@ defmodule Cure.Core.Validator do
   ]
 
   @wave0_config %{
-    grade_on_binders: :off,
+    grade_on_binders: :reject,
     usage_relevance: :off,
     # Phase C flipped `no_eq_node` to :reject even at dev time: the kernel has
     # no `{:eq}`/`{:refl}` clauses left, so any such node in a checked def is a
@@ -117,15 +117,12 @@ defmodule Cure.Core.Validator do
   @spec nodes(tuple()) :: [tuple()]
   def nodes(term), do: [term | Enum.flat_map(children(term), &nodes/1)]
 
-  # Immediate Core-term children (NOT the term itself). Both the current binder
-  # forms and the future graded 4-tuple forms are matched so the walker survives
-  # the later grade reshape. `:case` branches are descended structurally (body
-  # only) so a branch tuple is never treated as a node.
-  defp children({:pi, dom, cod}), do: [dom, cod]
+  # Immediate Core-term children (NOT the term itself). Binders are graded
+  # 4-/5-tuples; the grade is not a child. `:case` branches are descended
+  # structurally (body only) so a branch tuple is never treated as a node.
   defp children({:pi, _grade, dom, cod}), do: [dom, cod]
-  defp children({:lam, dom, body}), do: [dom, body]
-  defp children({:let, ty, val, body}), do: [ty, val, body]
   defp children({:lam, _grade, dom, body}), do: [dom, body]
+  defp children({:let, _grade, ty, val, body}), do: [ty, val, body]
   defp children({:sigma, a, b}), do: [a, b]
   defp children({:app, f, a}), do: [f, a]
   defp children({:pair, a, b}), do: [a, b]
@@ -227,10 +224,13 @@ defmodule Cure.Core.Validator do
 
   # -- deferred checklist clauses (`:off` in Wave 0, ready to flip) ------------
 
-  # grade_on_binders — current 3-tuple binders carry no grade; the future graded
-  # 4-tuple forms ({:pi, grade, dom, cod}) do NOT match and so pass.
+  # grade_on_binders — a STALE ungraded 3-tuple binder. `Term.term?/1` already
+  # rejects these, but Elixir will happily let one flow through a catch-all, so
+  # this is the belt to that suspenders. Now `:reject` (was `:off` while the
+  # graded reshape was pending).
   defp violation(:grade_on_binders, {:pi, _, _}), do: "pi binder carries no grade"
   defp violation(:grade_on_binders, {:lam, _, _}), do: "lam binder carries no grade"
+  defp violation(:grade_on_binders, {:let, _, _, _}), do: "let binder carries no grade"
 
   # qualified_syms — bare-atom identity instead of a qualified Sym.
   defp violation(:qualified_syms, {:global, n}) when is_atom(n),

@@ -9,8 +9,8 @@ defmodule Cure.Core.SubjectReductionTest do
   # so Sigma terms are excluded until a later wave adds an inferable eliminator
   # corpus.
   @corpus [
-    {:app, {:lam, {:type, 0}, {:var, 0}}, {:int_type}},        # beta -> {:int_type}
-    {:app, {:lam, {:int_type}, {:var, 0}}, {:int_lit, 7}},     # beta -> {:int_lit, 7}
+    {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:int_type}},        # beta -> {:int_type}
+    {:app, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}}, {:int_lit, 7}},     # beta -> {:int_lit, 7}
     {:type, 0}                                                 # already normal
   ]
 

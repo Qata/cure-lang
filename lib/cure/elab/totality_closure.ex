@@ -83,8 +83,8 @@ defmodule Cure.Elab.TotalityClosure do
   # -- collect global names occurring in a Core term --------------------------
 
   defp collect({:global, n}), do: [n]
-  defp collect({:pi, d, c}), do: collect(d) ++ collect(c)
-  defp collect({:lam, d, b}), do: collect(d) ++ collect(b)
+  defp collect({:pi, _g, d, c}), do: collect(d) ++ collect(c)
+  defp collect({:lam, _g, d, b}), do: collect(d) ++ collect(b)
   defp collect({:app, f, a}), do: collect(f) ++ collect(a)
 
   defp collect({:data, _n, ps, is}),

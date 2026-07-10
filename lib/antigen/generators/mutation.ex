@@ -85,7 +85,7 @@ defmodule Antigen.Generators.Mutation do
 
   def build(ctx, :app_domain) do
     g = Gen.bind(gvec0(ctx), fn v ->
-          Gen.return({:app, {:lam, nat_t(), {:var, 0}}, v})  # (λx:Nat.x) applied to Vec
+          Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), nat_t(), {:var, 0}}, v})  # (λx:Nat.x) applied to Vec
         end)
     {g, %{kind: :app_domain, witness: :head, expected_head: :Nat, injected_head: :Vec, scope: nil}}
   end
@@ -101,7 +101,7 @@ defmodule Antigen.Generators.Mutation do
   def build(_ctx, :proj_non_pair) do
     # fst on a Nat: a :case with a Sigma motive + mk_pair branch scrutinising a
     # Nat is ill-typed (case on a non-Sigma) — the same proj-non-pair fault.
-    g = Gen.bind(Gen.int(0, 3), fn k -> Gen.return({:case, nat_numeral(k), {:lam, sig(), nat_t()}, [{:mk_pair, 2, {:var, 1}}]}) end)
+    g = Gen.bind(Gen.int(0, 3), fn k -> Gen.return({:case, nat_numeral(k), {:lam, Cure.Core.Grade.unrestricted(), sig(), nat_t()}, [{:mk_pair, 2, {:var, 1}}]}) end)
     {g, %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma, injected_head: :Nat, scope: nil}}
   end
 
@@ -124,7 +124,7 @@ defmodule Antigen.Generators.Mutation do
     # Σ Nat. Nat expects both components Nat; a Bd (T) in the first slot violates
     # it. The identity-app forces Kernel.infer to CHECK the pair against Σ Nat.Nat.
     bad_pair = {:ctor, :mk_pair, [{:ctor, :T, []}, z()]}   # T : Bd, not Nat
-    g = Gen.return({:app, {:lam, sig(), {:var, 0}}, bad_pair})
+    g = Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), sig(), {:var, 0}}, bad_pair})
     {g, %{kind: :pair_component, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
   end
 
@@ -132,9 +132,9 @@ defmodule Antigen.Generators.Mutation do
     # (λ x:Nat. T) has body T : Bd, violating the declared codomain Nat. Applied
     # through an identity-Pi wrapper so `check` compares the Bd body against Nat
     # (distinct fault class from app_domain, which breaks the domain).
-    bad_fun = {:lam, nat_t(), {:ctor, :T, []}}       # body T : Bd, not Nat
-    pi_t = {:pi, nat_t(), nat_t()}
-    g = Gen.return({:app, {:lam, pi_t, {:app, {:var, 0}, z()}}, bad_fun})
+    bad_fun = {:lam, Cure.Core.Grade.unrestricted(), nat_t(), {:ctor, :T, []}}       # body T : Bd, not Nat
+    pi_t = {:pi, Cure.Core.Grade.unrestricted(), nat_t(), nat_t()}
+    g = Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), pi_t, {:app, {:var, 0}, z()}}, bad_fun})
     {g, %{kind: :app_result, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
   end
 
@@ -143,7 +143,7 @@ defmodule Antigen.Generators.Mutation do
     # parameter. Check-embedded (a bare param-ctor → :ctor_requires_checking_mode).
     list_nat = {:data, :List, [nat_t()], []}
     bad_cons = {:ctor, :Cons, [{:ctor, :T, []}, {:ctor, :Nil, []}]}
-    g = Gen.return({:app, {:lam, list_nat, {:var, 0}}, bad_cons})
+    g = Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}}, bad_cons})
     {g, %{kind: :type_param_mismatch, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
   end
 
@@ -162,8 +162,8 @@ defmodule Antigen.Generators.Mutation do
   @max_depth 8
   def max_depth, do: @max_depth
 
-  defp sig, do: {:data, :Sigma, [nat_t(), {:lam, nat_t(), nat_t()}], []}
-  defp motive, do: {:lam, nat_t(), nat_t()}
+  defp sig, do: {:data, :Sigma, [nat_t(), {:lam, Cure.Core.Grade.unrestricted(), nat_t(), nat_t()}], []}
+  defp motive, do: {:lam, Cure.Core.Grade.unrestricted(), nat_t(), nat_t()}
   defp nat_branches(zbody), do: [{:Z, 0, zbody}, {:S, 1, {:var, 0}}]
 
   @doc """
@@ -188,7 +188,7 @@ defmodule Antigen.Generators.Mutation do
   def wrap(inner, :ctor_nat, _filler), do: {:ctor, :S, [inner]}
   def wrap(inner, :case_scrut, _filler), do: {:case, inner, motive(), nat_branches(z())}
   def wrap(inner, :case_branch, filler), do: {:case, filler, motive(), nat_branches(inner)}
-  def wrap(inner, :pair, filler), do: {:app, {:lam, sig(), z()}, {:ctor, :mk_pair, [inner, filler]}}
+  def wrap(inner, :pair, filler), do: {:app, {:lam, Cure.Core.Grade.unrestricted(), sig(), z()}, {:ctor, :mk_pair, [inner, filler]}}
 
   # Each wrapper places `inner` at a Nat-checked hole; filler is a well-typed Nat.
   # :app_arg/:case_branch/:pair draw a well-typed Nat filler; :ctor_nat/:case_scrut ignore it.

@@ -183,17 +183,17 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
       # slice) is well-typed too, so inspect WHICH body each qualified key
       # resolved to, not just overall success.
       {:ok, env} = check(fixture_qualified_both())
-      assert match?({:lam, _, {:ctor, :Z, []}}, env.defs[:"Std.CollA#helper"].body)
-      assert match?({:lam, _, {:ctor, :S, [{:ctor, :Z, []}]}}, env.defs[:"Std.CollB#helper"].body)
+      assert match?({:lam, _g, _, {:ctor, :Z, []}}, env.defs[:"Std.CollA#helper"].body)
+      assert match?({:lam, _g, _, {:ctor, :S, [{:ctor, :Z, []}]}}, env.defs[:"Std.CollB#helper"].body)
     end
 
     test "local def shadows the imports; qualified still reaches them" do
       # Local helper(x) = S(S(Z())) -- a THIRD shape, so a bare call resolving to
       # the local body (correct) is distinguishable from either import's body.
       {:ok, env} = check(fixture_local_shadow())
-      assert match?({:lam, _, {:ctor, :S, [{:ctor, :S, [{:ctor, :Z, []}]}]}}, env.defs[:helper].body)
-      assert match?({:lam, _, {:ctor, :Z, []}}, env.defs[:"Std.CollA#helper"].body)
-      assert match?({:lam, _, {:ctor, :S, [{:ctor, :Z, []}]}}, env.defs[:"Std.CollB#helper"].body)
+      assert match?({:lam, _g, _, {:ctor, :S, [{:ctor, :S, [{:ctor, :Z, []}]}]}}, env.defs[:helper].body)
+      assert match?({:lam, _g, _, {:ctor, :Z, []}}, env.defs[:"Std.CollA#helper"].body)
+      assert match?({:lam, _g, _, {:ctor, :S, [{:ctor, :Z, []}]}}, env.defs[:"Std.CollB#helper"].body)
     end
 
     test "non-colliding imported defs keep bare keys (no blanket re-keying)" do

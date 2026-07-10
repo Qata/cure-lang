@@ -3,7 +3,7 @@ defmodule Antigen.BisectTest do
   alias Antigen.{Bisect, Challenge}
 
   @nat {:data, :Nat, [], []}
-  defp d(name, body), do: %{name: name, type: {:pi, @nat, @nat}, body: body}
+  defp d(name, body), do: %{name: name, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: body}
 
   defp def_group(names_bodies, focus) do
     Challenge.new(kind: :def_group, assay: "totality/terminating", label: :terminating,

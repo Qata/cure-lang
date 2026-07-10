@@ -23,7 +23,7 @@ defmodule Antigen.Generators.SeedPoolTest do
     bank(path, Challenge.new(kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
       payload: %{sig: :v1, ctx: [], type: nat,
                  term: {:case, {:ctor, :Z, []},
-                        {:lam, {:data, :Sigma, [nat, {:lam, nat, nat}], []}, nat},
+                        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, nat},
                         [{:mk_pair, 2, {:var, 1}}]},
                  fault: %{kind: :proj_non_pair}}))
 

@@ -95,76 +95,50 @@ half-migrated tree.
       Pinned asymmetries: `erased ⊀ linear` (a linear value must be used);
       `affine ⊀ linear` (an affine value may be dropped).
 
-- [~] **2. Core binder reshape (TCB).** — **IN PROGRESS, TREE IS DIRTY.**
+- [x] **2 + 3. Binder reshape + full migration (TCB).** LANDED.
+      All Core binders are graded 4-/5-tuples; `Conv` compares grades by
+      **equality**; `Kernel.check` rejects a λ whose grade differs from its Π's;
+      `validator.ex`'s `grade_on_binders` rule flipped `:off` → `:reject`.
+      1195 grades inserted across 150 files; 125 match sites converted.
+      Antibody `kernel/grade_conv` (7 cells), mutation-validated both ways.
 
-      **DONE (uncommitted):** `Grade` gained `unrestricted/0` + `affine/0`.
-      `Term` (moduledoc, `term?/1` now REJECTS 3-tuples, `shift/3`, `subst/3`,
-      `has_free_var?/2`, `to_external/1`, `from_external/1` with `grade_ext`/
-      `grade_int` helpers). `Value` (`{:vpi, g, dom, cl}`, `{:vlam, g, dom, cl}`).
-      `Eval` (pi/lam/let/apply). `Quote` (vpi/vlam round-trip the grade).
-      **`Conv` compares grades by equality** at the `{:vpi, …}` clause — the
-      load-bearing change. `Kernel` (infer pi/lam/let, `check` λ-vs-Π now errors
-      `{:grade_mismatch, …}`, `ensure_pi`, `infer_type_value_sort`,
-      `subst_params`, `rigid_index?`, `replace_branch_vars`). `Serialize`
-      (`grade_tok`/`decode_grade`/`graded2`/`graded3`). `MetaCheck` (stale
-      3-tuple clauses deleted — ONE canonical spelling). `Certificate`.
-      `Inductive`. `Builtins`. `Validator`: 3-tuple `children/1` clauses deleted,
-      `:let` added, and **`grade_on_binders` flipped `:off` → `:reject`**.
-      Also fixed `Antigen.Assays.KernelLaw.zeta_subst/1`, whose `{:let, _t, e, body}`
-      pattern could never match a 5-tuple (caught by Elixir's type checker, not by
-      a test — see the hazard below), and `Generators.ZetaSubst`.
+      **What the mechanical pass could NOT see, and what caught it:**
+      * `wrap_binders(:pi, …)` / `wrap(:pi, …)` (elab) and
+        `Generators.Serialization.binary(tag, …)` build the binder tuple from a
+        **tag**. No textual pass sees those. `Term.term?/1` rejecting 3-tuples
+        caught the first two at runtime; a generator round-trip test the third.
+      * **`normalise.ex` was missed entirely.** `nf_struct({:vpi, dom, cl})` kept
+        matching the ungraded shape, fell through a catch-all, and δ-normalisation
+        silently stopped happening under a binder. Exactly one test caught it
+        (`NfStuckCaseDeltaTest`). This is the fallthrough hazard, in the TCB.
+        **Sweep every file in `lib/cure/core/` after any taxonomy change; do not
+        trust a list of files you believe you edited.**
+      * The blanket pass **corrupted tests that deliberately construct stale
+        shapes** (`validator_test`, `grade_binder_test`). Those now build them with
+        `:erlang.list_to_tuple/1` so no mechanical pass can "fix" them.
 
-      **RED TEST WRITTEN:** `test/cure/core/grade_binder_test.exs` (17 tests) —
-      `term?/1` rejects 3-tuples, `shift`/`subst` leave the grade alone, **Conv
-      distinguishes a linear Π from an unrestricted one**, a λ must check against
-      a Π of the same grade, graded `let` still ζ-reduces, serialize/external/
-      reify round-trip every grade.
+      **`lib/cure/types/` IS OFF-LIMITS.** It has its OWN, unrelated
+      `{:pi, [{name, type, mode}], ret_ast}` — the *classic* pipeline's Pi, with
+      `mode :: :explicit | :implicit | :erased`. The mechanical pass injected a
+      Core grade into it, including into an `@type` spec. It compiled. Reverted.
+      Two different `:pi` namespaces exist; only Core's is graded.
 
-      **REMAINING (mechanical, ~925 sites):** `lib/cure/elab` 105,
-      `lib/antigen` 342, `test/` 465, `lib/cure/types` 13.
+      **Metastatic is not a constraint.** Its MetaAST is `{type, keyword_meta,
+      children}` and governs the *surface* AST (`Cure.Compiler.Parser`). Cure never
+      calls Metastatic (`grep -rn "Metastatic\." lib/` → nothing). Core was never
+      3-arity-uniform anyway: `{:var, k}` is 2-arity, `{:data, …}` and `{:case, …}`
+      are 4-arity, `{:absurd}` is 1-arity.
 
-      **Disambiguation rule — this is the trap.** Elixir spells a *match* and a
-      *construction* identically. In Antigen generators and tests virtually every
-      site is a CONSTRUCTION → insert the literal `:unrestricted`. In
-      `lib/cure/elab` and `lib/cure/core` they are mixed → a match takes `_g` (or
-      a bound `g`), a construction takes `Grade.unrestricted()`.
-      **NEVER put the literal `:unrestricted` in a match position.** It compiles,
-      it passes today (nothing is graded yet), and it silently stops matching the
-      moment slice 5 introduces a linear binder. That is the same
-      silently-wrong-fallthrough hazard as the 3-tuple itself.
+      **Corpora needed migrating, idempotently.** `key=` (base64 s-expr) and
+      `pieces=` (plaintext) in `corpus.sexp`/`seeds.sexp`/`coverage.sexp` plus
+      `test/fixtures/core_conformance.txt` hold serialized binders. Scaffolds hold
+      none (verified). `mix test` **banks seeds into the committed corpora**, so a
+      run under the graded kernel leaves already-graded records behind and a blind
+      regex double-inserts. The migration checks for an existing grade first, and
+      asserts idempotence on re-application.
 
-      *Antibody still to write:* `kernel/grade_conv` — a grade mismatch on
-      otherwise-identical Π types must be REJECTED by conversion, accepted when
-      grades agree. Mutation-validate it: make `Conv` ignore the grade, prove the
-      antibody fires, restore.
-
-      *Original scope, for reference:*
-      `Term` (`term?/1`, `shift/3`, `subst/3`, `has_free_var?/2`,
-      `to_external/1`, `from_external/1`), `Value` (`{:vpi, g, dom, cl}`,
-      `{:vlam, g, dom, cl}`), `Eval`, `Quote` (round-trip the grade), `Conv`
-      (**compare by equality**), `Kernel` (`infer`/`check` on `:pi`/`:lam`/`:let`;
-      checking a λ against a `vpi` must match grades), `Serialize`, `Normalise`,
-      `MetaCheck`, `Certificate`, `Validator`, `Builtins`, `Inductive`.
-      *Antibody:* `kernel/grade_conv` — a grade mismatch on otherwise-identical
-      Π types must be REJECTED by conversion, and accepted when grades agree.
-      Mutation-validate it: make `Conv` ignore the grade, prove the antibody
-      fires, restore.
-      *Done when:* full suite green, full Antigen campaign 0 infections,
-      `Term.term?/1` rejects every 3-tuple binder.
-
-      *Migration recipe (learned the hard way — Elixir will not help you):*
-      a stale 3-tuple `{:pi, a, b}` does **not** raise; it falls through to a
-      catch-all and behaves silently wrong. So migrate in this order:
-      (i) reshape `Term.term?/1` FIRST so it *rejects* 3-tuple binders — that
-      turns silent fallthrough into a loud test failure;
-      (ii) then reshape the rest of `core/`;
-      (iii) then let the 3795-test suite drive the elab/antigen/test migration.
-      Do not trust `mix compile`; it will be green while the kernel is wrong.
-
-- [ ] **3. Mechanical migration** of the ~950 non-TCB sites (elab, antigen, test).
-      Flip `validator.ex`'s already-reserved `grade_on_binders` rule from `:off`.
-      *Done when:* no `{:pi, _, _}` / `{:lam, _, _}` / `{:let, _, _, _}` construction
-      survives anywhere; the validator rule is on and green.
+      *Gate:* 3813 passed / 0 failed. Antigen 314/314 cells, 400-run campaign → 0
+      infections. Oracle replay 65/65. `mix dialyzer` passes.
 
 - [ ] **4. Usage check (E layer).** Generalise `relevance.ex` from `{0, ω}` to the
       full carrier: `Grade.admits?/2` for the used-vs-declared rule (Idris

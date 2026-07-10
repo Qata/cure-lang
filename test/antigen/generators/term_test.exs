@@ -25,9 +25,9 @@ defmodule Antigen.Generators.TermTest do
   test "a Pi goal yields a lambda" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
-    goal = {:pi, SigMenu.nat(), SigMenu.nat()}
+    goal = {:pi, Cure.Core.Grade.unrestricted(), SigMenu.nat(), SigMenu.nat()}
     ts = sample(Term.gen_term(ctx, goal), 40)
-    assert Enum.any?(ts, &match?({:lam, _, _}, &1))
+    assert Enum.any?(ts, &match?({:lam, _g, _, _}, &1))
     for t <- ts, do: assert {:ok, _} = Kernel.infer(ctx, t)
   end
 

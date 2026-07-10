@@ -36,17 +36,17 @@ defmodule Cure.Core.MotiveWfIndexedDomainTest do
   # POSITIVE: motive `λs. Π(SNat s). Dec` — indexed family as a Π domain. Was
   # rejected (`:bad_motive`) by the reify path; must be accepted by value-recursion.
   test "an indexed family as a Π-domain motive is well-formed (was :bad_motive)" do
-    motive = {:lam, @dec, {:pi, @snat_s, @dec}}
-    def_type = {:pi, @dec, {:pi, @snat_s, @dec}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), @snat_s, @dec}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), @snat_s, @dec}}
 
     body =
-      {:lam, @dec,
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
        {:case, {:var, 0}, motive,
         [
           {:Dcoupled, 0,
-           {:lam, {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}, {:ctor, :Dcoupled, []}}},
+           {:lam, Cure.Core.Grade.unrestricted(), {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}, {:ctor, :Dcoupled, []}}},
           {:Causal, 0,
-           {:lam, {:data, :SNat, [], [{:ctor, :Causal, []}]}, {:ctor, :Dcoupled, []}}}
+           {:lam, Cure.Core.Grade.unrestricted(), {:data, :SNat, [], [{:ctor, :Causal, []}]}, {:ctor, :Dcoupled, []}}}
         ]}}
 
     env = Env.add_def(base_env(), :probe, def_type, body)
@@ -59,11 +59,11 @@ defmodule Cure.Core.MotiveWfIndexedDomainTest do
   # rejected both before and after the fix; it proves the new path is a real sort
   # check, not a blanket accept.
   test "a Π-domain motive whose domain is not a type is still rejected (:bad_motive)" do
-    neg_motive = {:lam, @dec, {:pi, {:ctor, :Dcoupled, []}, @dec}}
-    def_type = {:pi, @dec, @dec}
+    neg_motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), {:ctor, :Dcoupled, []}, @dec}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}
 
     body =
-      {:lam, @dec,
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
        {:case, {:var, 0}, neg_motive,
         [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]}}
 

@@ -21,7 +21,7 @@ defmodule Cure.Core.ValidatorUnknownNodeTest do
   end
 
   test "the walker still descends known nodes (no false negatives on plain terms)" do
-    node = {:lam, {:type, 0}, {:app, {:var, 0}, {:hole, :b}}}
+    node = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:app, {:var, 0}, {:hole, :b}}}
     assert {:error, diags} = Validator.validate(node, Validator.release_config())
     assert Enum.any?(diags, &(&1.clause == :no_hole))
   end

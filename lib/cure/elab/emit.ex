@@ -131,7 +131,7 @@ defmodule Cure.Elab.Emit do
 
   # Wave-3: emit a direct Erlang remote call, mirroring codegen.ex:691-705 (NOT
   # calling it). Params are synthesized from the arity — a bodyless extern has no
-  # {:lam,…} chain to peel, so peel_params/4 would yield zero params for arity>0.
+  # {:lam, Cure.Core.Grade.unrestricted(),…} chain to peel, so peel_params/4 would yield zero params for arity>0.
   # `0..(arity-1)//1` yields `[]` at arity 0 → `mod:fun()`, correct.
   #
   # The arity is the def's PRESENT count, as in `real_function_form/3` and at every call site
@@ -164,7 +164,7 @@ defmodule Cure.Elab.Emit do
   # as Erlang params) and erased binders `_e<pos>` (dead after erasure).
   defp peel_params(term, [], _pos, acc), do: {Enum.reverse(acc), term}
 
-  defp peel_params({:lam, _dom, body}, [q | qs], pos, acc) do
+  defp peel_params({:lam, _g, _dom, body}, [q | qs], pos, acc) do
     name = if q == :present, do: :"V#{pos}", else: :"_e#{pos}"
     peel_params(body, qs, pos + 1, [name | acc])
   end
@@ -238,7 +238,7 @@ defmodule Cure.Elab.Emit do
 
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
-  defp lower(env, {:lam, _dom, body}, ctx) do
+  defp lower(env, {:lam, _g, _dom, body}, ctx) do
     var = :"Fn#{length(ctx)}"
     clause = {:clause, @line, [{:var, @line, var}], [], [lower(env, body, [var | ctx])]}
     {:fun, @line, {:clauses, [clause]}}
@@ -248,7 +248,7 @@ defmodule Cure.Elab.Emit do
   # payoff of the `:let` binder: `v` is emitted ONCE and bound to a BEAM variable,
   # where surface substitution emitted it at every use site (and not at all at
   # zero uses). Its parameter takes de Bruijn index 0 in the body's frame.
-  defp lower(env, {:let, _ty, val, body}, ctx) do
+  defp lower(env, {:let, _g, _ty, val, body}, ctx) do
     var = :"L#{length(ctx)}"
     bind = {:match, @line, {:var, @line, var}, lower(env, val, ctx)}
     {:block, @line, [bind, lower(env, body, [var | ctx])]}

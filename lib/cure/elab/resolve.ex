@@ -279,11 +279,11 @@ defmodule Cure.Elab.Resolve do
         {:app, acc, {:var, arity - 1 - i}}
       end)
 
-    Enum.reduce(Enum.reverse(domains), body, fn dom, acc -> {:lam, dom, acc} end)
+    Enum.reduce(Enum.reverse(domains), body, fn dom, acc -> {:lam, Cure.Core.Grade.unrestricted(), dom, acc} end)
   end
 
   defp peel_domains(_pi, 0), do: []
-  defp peel_domains({:pi, dom, cod}, n), do: [dom | peel_domains(cod, n - 1)]
+  defp peel_domains({:pi, _g, dom, cod}, n), do: [dom | peel_domains(cod, n - 1)]
   defp peel_domains(_other, _n), do: []
 
   defp head_type_core(:Int), do: {:int_type}

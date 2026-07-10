@@ -22,7 +22,7 @@ defmodule Antigen.Assays.ErasureTest do
   # once here at module level (NOT re-declared by Task 2's describe block) so both
   # this task's app-head known-finding test and Task 2's selective tests share it.
   defp app_env(env) do
-    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
     env
     |> Env.add_def(:f, ty, {:int_lit, 0}, [:present, :erased])
     |> Env.add_def(:g, ty, {:int_lit, 0}, [:erased, :present])

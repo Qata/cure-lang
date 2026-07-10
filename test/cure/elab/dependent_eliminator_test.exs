@@ -134,7 +134,7 @@ defmodule Cure.Elab.DependentEliminatorTest do
     test "motive applying a non-function head rejects :bad_motive" do
       ctx = Context.empty(nat_env())
       nat = {:data, :Nat, [], []}
-      motive = {:lam, nat, {:app, {:var, 0}, {:ctor, :Z, []}}}
+      motive = {:lam, Cure.Core.Grade.unrestricted(), nat, {:app, {:var, 0}, {:ctor, :Z, []}}}
       assert {:error, :bad_motive} = Kernel.infer(ctx, bad_motive_case(motive))
     end
 

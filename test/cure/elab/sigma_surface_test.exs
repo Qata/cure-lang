@@ -44,7 +44,7 @@ defmodule Cure.Elab.SigmaSurfaceTest do
   defp mentions?(list, tag) when is_list(list), do: Enum.any?(list, &mentions?(&1, tag))
   defp mentions?(_other, _tag), do: false
 
-  defp unwrap_lams({:lam, _dom, body}), do: unwrap_lams(body)
+  defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
   defp unwrap_lams(term), do: term
 
   test "forget_dec packages the decoupledness index into a Sigma pair" do
@@ -58,7 +58,7 @@ defmodule Cure.Elab.SigmaSurfaceTest do
     assert {:ctor, :mk_pair, [_d, _sf]} = unwrap_lams(body)
     refute mentions?(body, :pair)
     # Declared type ends in a dependent Σ.
-    assert {:pi, _, _} = type
+    assert {:pi, _g, _, _} = type
   end
 
   test "recover projects the second component at the projected index type" do

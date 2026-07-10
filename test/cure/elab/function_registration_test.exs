@@ -25,8 +25,8 @@ defmodule Cure.Elab.FunctionRegistrationTest do
 
     assert {:ok, env} = elaborate_all(src)
     assert %{name: :andd, type: type, body: body} = Env.get_def(env, :andd)
-    assert {:pi, _, {:pi, _, _}} = type
-    assert {:lam, _, {:lam, _, {:var, 1}}} = body
+    assert {:pi, _g1, _, {:pi, _g2, _, _}} = type
+    assert {:lam, _g1, _, {:lam, _g2, _, {:var, 1}}} = body
   end
 
   test "rejects an ill-typed function body" do

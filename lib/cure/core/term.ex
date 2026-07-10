@@ -12,9 +12,9 @@ defmodule Cure.Core.Term do
 
     * `{:type, level}`                       universe, `level` in 0..2
     * `{:var, k}`                            bound variable, de Bruijn index `k >= 0`
-    * `{:pi, dom, cod}`                      dependent function type (binds in `cod`)
-    * `{:lam, dom, body}`                    lambda (binds in `body`)
-    * `{:let, ty, val, body}`                let-binding (binds in `body`);
+    * `{:pi, g, dom, cod}`                   dependent function type (binds in `cod`)
+    * `{:lam, g, dom, body}`                 lambda (binds in `body`)
+    * `{:let, g, ty, val, body}`             let-binding (binds in `body`);
                                              ζ-transparent: the variable is
                                              definitionally `val`. Idris
                                              `Binder.Let`, Lean `Expr.letE`.
@@ -41,6 +41,8 @@ defmodule Cure.Core.Term do
 
   # Single source of truth for the universe ceiling is `Cure.Core.Universe`; this
   # module only mirrors the value into its compile-time shape-check guards.
+  alias Cure.Core.Grade
+
   @ceiling Cure.Core.Universe.ceiling()
 
   @typedoc "A `:case` branch: constructor name, its arity, and the branch body."
@@ -58,9 +60,9 @@ defmodule Cure.Core.Term do
   @type t ::
           {:type, non_neg_integer()}
           | {:var, non_neg_integer()}
-          | {:pi, t(), t()}
-          | {:lam, t(), t()}
-          | {:let, t(), t(), t()}
+          | {:pi, Grade.t(), t(), t()}
+          | {:lam, Grade.t(), t(), t()}
+          | {:let, Grade.t(), t(), t(), t()}
           | {:app, t(), t()}
           | {:data, atom(), [t()], [t()]}
           | {:ctor, atom(), [t()]}
@@ -92,9 +94,14 @@ defmodule Cure.Core.Term do
   @spec term?(term()) :: boolean()
   def term?({:type, level}), do: is_integer(level) and level >= 0 and level <= @ceiling
   def term?({:var, k}), do: is_integer(k) and k >= 0
-  def term?({:pi, dom, cod}), do: term?(dom) and term?(cod)
-  def term?({:lam, dom, body}), do: term?(dom) and term?(body)
-  def term?({:let, ty, val, body}), do: term?(ty) and term?(val) and term?(body)
+  # Binders carry a QTT grade in their FIRST field (Idris `Core/TT/Binder.idr`).
+  # A stale 3-tuple binder is NOT a term — Elixir would otherwise let it fall
+  # through a catch-all and behave silently wrong, so this is the net.
+  def term?({:pi, g, dom, cod}), do: Grade.grade?(g) and term?(dom) and term?(cod)
+  def term?({:lam, g, dom, body}), do: Grade.grade?(g) and term?(dom) and term?(body)
+
+  def term?({:let, g, ty, val, body}),
+    do: Grade.grade?(g) and term?(ty) and term?(val) and term?(body)
   def term?({:app, f, a}), do: term?(f) and term?(a)
 
   def term?({:data, name, params, indices}),
@@ -156,11 +163,11 @@ defmodule Cure.Core.Term do
   def shift({:atom_type} = t, _amount, _cutoff), do: t
   def shift({:atom_lit, _} = t, _amount, _cutoff), do: t
   def shift({:hole, _} = t, _amount, _cutoff), do: t
-  def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
-  def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
+  def shift({:pi, g, dom, cod}, a, c), do: {:pi, g, shift(dom, a, c), shift(cod, a, c + 1)}
+  def shift({:lam, g, dom, body}, a, c), do: {:lam, g, shift(dom, a, c), shift(body, a, c + 1)}
   # `ty` and `val` live OUTSIDE the binder; only `body` is one deeper.
-  def shift({:let, ty, val, body}, a, c),
-    do: {:let, shift(ty, a, c), shift(val, a, c), shift(body, a, c + 1)}
+  def shift({:let, g, ty, val, body}, a, c),
+    do: {:let, g, shift(ty, a, c), shift(val, a, c), shift(body, a, c + 1)}
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
 
   def shift({:data, n, ps, is}, a, c),
@@ -188,11 +195,13 @@ defmodule Cure.Core.Term do
   def closed?(term), do: not has_free_var?(term, 0)
 
   defp has_free_var?({:var, k}, depth), do: k >= depth
-  defp has_free_var?({:lam, d, b}, depth), do: has_free_var?(d, depth) or has_free_var?(b, depth + 1)
+  defp has_free_var?({:lam, _g, d, b}, depth),
+    do: has_free_var?(d, depth) or has_free_var?(b, depth + 1)
 
-  defp has_free_var?({:let, t, v, b}, depth),
+  defp has_free_var?({:let, _g, t, v, b}, depth),
     do: has_free_var?(t, depth) or has_free_var?(v, depth) or has_free_var?(b, depth + 1)
-  defp has_free_var?({:pi, d, c}, depth), do: has_free_var?(d, depth) or has_free_var?(c, depth + 1)
+  defp has_free_var?({:pi, _g, d, c}, depth),
+    do: has_free_var?(d, depth) or has_free_var?(c, depth + 1)
 
   defp has_free_var?({:case, s, m, brs}, depth) do
     has_free_var?(s, depth) or has_free_var?(m, depth) or
@@ -232,14 +241,14 @@ defmodule Cure.Core.Term do
   def subst({:atom_lit, _} = t, _j, _r), do: t
   def subst({:hole, _} = t, _j, _r), do: t
 
-  def subst({:pi, dom, cod}, j, r),
-    do: {:pi, subst(dom, j, r), subst(cod, j + 1, shift(r, 1, 0))}
+  def subst({:pi, g, dom, cod}, j, r),
+    do: {:pi, g, subst(dom, j, r), subst(cod, j + 1, shift(r, 1, 0))}
 
-  def subst({:lam, dom, body}, j, r),
-    do: {:lam, subst(dom, j, r), subst(body, j + 1, shift(r, 1, 0))}
+  def subst({:lam, g, dom, body}, j, r),
+    do: {:lam, g, subst(dom, j, r), subst(body, j + 1, shift(r, 1, 0))}
 
-  def subst({:let, ty, val, body}, j, r),
-    do: {:let, subst(ty, j, r), subst(val, j, r), subst(body, j + 1, shift(r, 1, 0))}
+  def subst({:let, g, ty, val, body}, j, r),
+    do: {:let, g, subst(ty, j, r), subst(val, j, r), subst(body, j + 1, shift(r, 1, 0))}
 
   def subst({:app, f, x}, j, r), do: {:app, subst(f, j, r), subst(x, j, r)}
 
@@ -264,14 +273,16 @@ defmodule Cure.Core.Term do
   @spec to_external(t()) :: map()
   def to_external({:type, l}), do: %{"node" => "type", "level" => l}
   def to_external({:var, k}), do: %{"node" => "var", "index" => k}
-  def to_external({:pi, d, c}), do: %{"node" => "pi", "dom" => to_external(d), "cod" => to_external(c)}
+  def to_external({:pi, g, d, c}),
+    do: %{"node" => "pi", "grade" => grade_ext(g), "dom" => to_external(d), "cod" => to_external(c)}
 
-  def to_external({:lam, d, b}),
-    do: %{"node" => "lam", "dom" => to_external(d), "body" => to_external(b)}
+  def to_external({:lam, g, d, b}),
+    do: %{"node" => "lam", "grade" => grade_ext(g), "dom" => to_external(d), "body" => to_external(b)}
 
-  def to_external({:let, t, v, b}),
+  def to_external({:let, g, t, v, b}),
     do: %{
       "node" => "let",
+      "grade" => grade_ext(g),
       "type" => to_external(t),
       "value" => to_external(v),
       "body" => to_external(b)
@@ -320,14 +331,14 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "type", "level" => l}), do: {:type, l}
   def from_external(%{"node" => "var", "index" => k}), do: {:var, k}
 
-  def from_external(%{"node" => "pi", "dom" => d, "cod" => c}),
-    do: {:pi, from_external(d), from_external(c)}
+  def from_external(%{"node" => "pi", "grade" => g, "dom" => d, "cod" => c}),
+    do: {:pi, grade_int(g), from_external(d), from_external(c)}
 
-  def from_external(%{"node" => "lam", "dom" => d, "body" => b}),
-    do: {:lam, from_external(d), from_external(b)}
+  def from_external(%{"node" => "lam", "grade" => g, "dom" => d, "body" => b}),
+    do: {:lam, grade_int(g), from_external(d), from_external(b)}
 
-  def from_external(%{"node" => "let", "type" => t, "value" => v, "body" => b}),
-    do: {:let, from_external(t), from_external(v), from_external(b)}
+  def from_external(%{"node" => "let", "grade" => g, "type" => t, "value" => v, "body" => b}),
+    do: {:let, grade_int(g), from_external(t), from_external(v), from_external(b)}
 
   def from_external(%{"node" => "app", "fun" => f, "arg" => a}),
     do: {:app, from_external(f), from_external(a)}
@@ -379,4 +390,13 @@ defmodule Cure.Core.Term do
        do: term?(body)
 
   defp branch?(_), do: false
+
+  # Grades cross the external boundary as their own names; `Grade` owns the
+  # carrier, so nothing here pattern-matches one.
+  defp grade_ext(g), do: Atom.to_string(g)
+
+  defp grade_int(s) when is_binary(s) do
+    g = String.to_existing_atom(s)
+    if Grade.grade?(g), do: g, else: raise(ArgumentError, "not a grade: #{s}")
+  end
 end

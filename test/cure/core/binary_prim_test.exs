@@ -53,6 +53,6 @@ defmodule Cure.Core.BinaryPrimTest do
 
   test "a `Binary` signature elaborates to the primitive, not the free global :Binary" do
     {:ok, env} = Program.elaborate("mod M\n  fn f(b: Binary) -> Binary = b\nend\n")
-    assert env.defs[:f].type == {:pi, {:binary_type}, {:binary_type}}
+    assert env.defs[:f].type == {:pi, Cure.Core.Grade.unrestricted(), {:binary_type}, {:binary_type}}
   end
 end

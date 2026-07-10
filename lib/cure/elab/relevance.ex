@@ -90,14 +90,14 @@ defmodule Cure.Elab.Relevance do
 
   # A closure value being returned: its domain is a type position (exempt); its
   # body is relevant. Descending binds one more variable.
-  defp walk({:lam, _dom, body}, depth, _site, st), do: walk(body, depth + 1, :returned, st)
+  defp walk({:lam, _g, _dom, body}, depth, _site, st), do: walk(body, depth + 1, :returned, st)
 
   # `:let` — the ascription is a type position (exempt). The VALUE is always
   # evaluated at runtime (`X = Val` in the emitted BEAM), so it is a relevant
   # position regardless of whether the body uses the binder; that is the honest
   # dual of `Emit`'s unconditional bind. The body inherits the let's own site and
   # binds one more variable.
-  defp walk({:let, _ty, val, body}, depth, site, st) do
+  defp walk({:let, _g, _ty, val, body}, depth, site, st) do
     with :ok <- walk(val, depth, :present_arg, st), do: walk(body, depth + 1, site, st)
   end
 
@@ -172,7 +172,7 @@ defmodule Cure.Elab.Relevance do
   end
 
   # --- exempt positions: type formers and proof terms carry no runtime value ---
-  defp walk({:pi, _d, _c}, _depth, _site, _st), do: :ok
+  defp walk({:pi, _g, _d, _c}, _depth, _site, _st), do: :ok
   defp walk({:data, _n, _ps, _is}, _depth, _site, _st), do: :ok
 
   # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no

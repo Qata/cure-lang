@@ -65,6 +65,14 @@ defmodule Cure.Core.Grade do
   @spec grade?(term()) :: boolean()
   def grade?(g), do: g in @all
 
+  @doc "The unrestricted grade, `ω`. The default for every unannotated binder."
+  @spec unrestricted() :: t()
+  def unrestricted, do: :unrestricted
+
+  @doc "The affine grade, `≤1` — used at most once, and may be dropped."
+  @spec affine() :: t()
+  def affine, do: :affine
+
   @doc "Every grade, for exhaustive checks."
   @spec all() :: [t()]
   def all, do: @all

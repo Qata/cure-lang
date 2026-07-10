@@ -62,7 +62,7 @@ defmodule Antigen.Assays.KernelProbe do
   # Size-change certification of a self-referential `:f` whose body is the (possibly
   # malformed) `body`. Registers `:f` so the call graph is realistic.
   defp cert_terminates?(body) do
-    env = Env.add_def(base_env(), :f, {:pi, @nat, @nat}, body)
+    env = Env.add_def(base_env(), :f, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body)
     Certificate.terminating?(:f, body, env)
   end
 
@@ -115,7 +115,7 @@ defmodule Antigen.Assays.KernelProbe do
       |> Inductive.declare(Inductive.family(:Wrap, [], [], 0),
         [Inductive.ctor(:wrapB, [{:a, {:data, :Bad, [], []}}], [], [:present], [])])
       |> Inductive.declare(Inductive.family(:Bad, [], [], 0),
-        [Inductive.ctor(:mkA, [{:f, {:pi, {:data, :Wrap, [], []}, @nat}}], [], [:present], [])])
+        [Inductive.ctor(:mkA, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Wrap, [], []}, @nat}}], [], [:present], [])])
 
     Inductive.positive?(env, Inductive.family(:Bad, [], [], 0))
   end
@@ -132,8 +132,8 @@ defmodule Antigen.Assays.KernelProbe do
   # (`f(a,b) = f(a)`): the change-matrix row for the missing argument is `nil`,
   # so `arg_relation(nil, _)` yields `:unknown` and the def is (soundly) rejected.
   defp evaluate(:cert_under_application) do
-    body = {:lam, @nat, {:lam, @nat, {:app, {:global, :f}, {:var, 1}}}}
-    env = Env.add_def(base_env(), :f, {:pi, @nat, {:pi, @nat, @nat}}, body)
+    body = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :f}, {:var, 1}}}}
+    env = Env.add_def(base_env(), :f, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, body)
     Certificate.terminating?(:f, body, env)
   end
 
@@ -141,12 +141,12 @@ defmodule Antigen.Assays.KernelProbe do
   # `h` undefined): `callees_env`/`reaches?` must treat the body-less global as a
   # leaf (`_ -> []`) instead of crashing; with no cycle back to `f` it certifies.
   defp evaluate(:cert_dangling_callee) do
-    body_f = {:lam, @nat, {:app, {:global, :g}, {:var, 0}}}
-    body_g = {:lam, @nat, {:app, {:global, :h}, {:var, 0}}}
+    body_f = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :g}, {:var, 0}}}
+    body_g = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :h}, {:var, 0}}}
     env =
       base_env()
-      |> Env.add_def(:f, {:pi, @nat, @nat}, body_f)
-      |> Env.add_def(:g, {:pi, @nat, @nat}, body_g)
+      |> Env.add_def(:f, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body_f)
+      |> Env.add_def(:g, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body_g)
 
     Certificate.terminating?(:f, body_f, env)
   end
@@ -161,12 +161,12 @@ defmodule Antigen.Assays.KernelProbe do
   # A `case` whose data scrutinee's constructor is absent from the branch set
   # (coverage would reject this upstream): `Eval.eval`'s ι-rule hits `nil` → raise.
   defp evaluate(:eval_no_branch),
-    do: catch_raise(fn -> Eval.eval({:case, {:ctor, :S, [@z]}, {:lam, @nat, @nat}, [{:Z, 0, @z}]}, []) end)
+    do: catch_raise(fn -> Eval.eval({:case, {:ctor, :S, [@z]}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}]}, []) end)
 
   # A `case` whose scrutinee evaluates to a non-data value (`{:vint, 3}`): the
   # ι-rule's `other ->` arm raises (an ill-typed case reached eval).
   defp evaluate(:eval_nondata_scrutinee),
-    do: catch_raise(fn -> Eval.eval({:case, {:int_lit, 3}, {:lam, @nat, @nat}, [{:Z, 0, @z}]}, []) end)
+    do: catch_raise(fn -> Eval.eval({:case, {:int_lit, 3}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}]}, []) end)
 
   # β-reducing an argument into a non-function value (over-applied ctor / term
   # that should have been rejected): `Eval.apply`'s catch-all raises.
@@ -210,7 +210,7 @@ defmodule Antigen.Assays.KernelProbe do
   # `First` / `Next(pred)` and reuses the ordinary ι-rule. `First` selects the
   # `First` branch; `Next 2` selects `Next`, binding the compact predecessor.
   defp evaluate(:eval_bounded_iota) do
-    motive = {:lam, @bounded_ty, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @bounded_ty, @nat}
     branches = [{:First, 1, @z}, {:Next, 2, {:var, 0}}]
     {Eval.eval({:case, {:bounded_lit, 0}, motive, branches}, []),
      Eval.eval({:case, {:bounded_lit, 2}, motive, branches}, [])}
@@ -242,7 +242,7 @@ defmodule Antigen.Assays.KernelProbe do
   # absent from the branch set: the bounded ι-arm's nil-guard raises the same legible
   # "ι: no branch" coverage-violation as the `vctor` arm (an ill-typed case reached eval).
   defp evaluate(:eval_bounded_no_branch),
-    do: catch_raise(fn -> Eval.eval({:case, {:bounded_lit, 0}, {:lam, @bounded_ty, @nat}, [{:Next, 2, {:var, 0}}]}, []) end)
+    do: catch_raise(fn -> Eval.eval({:case, {:bounded_lit, 0}, {:lam, Cure.Core.Grade.unrestricted(), @bounded_ty, @nat}, [{:Next, 2, {:var, 0}}]}, []) end)
 
   # reify each new value form back to its term: compact `Bounded`, `Binary`/`Atom`
   # type formers, and an atom literal — the read-back half of the value surface.
@@ -357,8 +357,8 @@ defmodule Antigen.Assays.KernelProbe do
     c = Context.extend(ctx(), {:vdata, :Bool, []})
     branches = [{:False, 0, {:hole, :h}}, {:True, 0, {:hole, :h}}]
 
-    {Kernel.infer(c, {:case, {:var, 0}, {:lam, {:data, :Bool, [], []}, {:binary_type}}, branches}),
-     Kernel.infer(c, {:case, {:var, 0}, {:lam, {:data, :Bool, [], []}, {:atom_type}}, branches})}
+    {Kernel.infer(c, {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:binary_type}}, branches}),
+     Kernel.infer(c, {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:atom_type}}, branches})}
   end
 
   # The index-unifier's compact-`Bounded`↔`First`/`Next` bridge: equal literals and
@@ -410,12 +410,12 @@ defmodule Antigen.Assays.KernelProbe do
       |> Env.add_def(:Syn, {:type, 0}, {:data, :Foo, [], []})
       |> Inductive.declare(Inductive.family(:Foo, [], [], 0), [])
       |> Inductive.declare(Inductive.family(:Host, [], [], 0), [
-        Inductive.ctor(:mkH, [{:f, {:pi, {:global, :Syn}, @nat}}], [], [:present], [])
+        Inductive.ctor(:mkH, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Syn}, @nat}}], [], [:present], [])
       ])
 
     ec =
       Inductive.declare(base_env(), Inductive.family(:HU, [], [], 0), [
-        Inductive.ctor(:mkU, [{:f, {:pi, {:global, :Unknown}, @nat}}], [], [:present], [])
+        Inductive.ctor(:mkU, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Unknown}, @nat}}], [], [:present], [])
       ])
 
     {Inductive.positive?(ea, Inductive.family(:HS, [], [], 0)),
@@ -444,7 +444,7 @@ defmodule Antigen.Assays.KernelProbe do
   # bound. Both a nested and the subsequent outer reduction complete normally.
   defp evaluate(:whnf_nested_fuel_restore) do
     Normalise.with_fuel(8, fn ->
-      inner = Normalise.with_fuel(4, fn -> Normalise.whnf(ctx(), {:app, {:lam, @nat, {:var, 0}}, {:nat_lit, 3}}) end)
+      inner = Normalise.with_fuel(4, fn -> Normalise.whnf(ctx(), {:app, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}, {:nat_lit, 3}}) end)
       {inner, Normalise.whnf(ctx(), {:nat_lit, 5})}
     end)
   end
@@ -456,27 +456,27 @@ defmodule Antigen.Assays.KernelProbe do
   # An unknown tuple node (`{:foo, child}`) whose child self-calls `:f`: the tuple
   # fallback recurses via `walk`.
   defp evaluate(:cert_unknown_tuple_node),
-    do: cert_terminates?({:lam, @nat, {:foo, {:app, {:global, :f}, {:var, 0}}}})
+    do: cert_terminates?({:lam, Cure.Core.Grade.unrestricted(), @nat, {:foo, {:app, {:global, :f}, {:var, 0}}}})
 
   # An unknown node carrying a LIST child (`{:blk, [call]}`): the fallback descends
   # each list element.
   defp evaluate(:cert_unknown_list_node),
-    do: cert_terminates?({:lam, @nat, {:blk, [{:app, {:global, :f}, {:var, 0}}]}})
+    do: cert_terminates?({:lam, Cure.Core.Grade.unrestricted(), @nat, {:blk, [{:app, {:global, :f}, {:var, 0}}]}})
 
   # A non-tuple term in a call-argument slot (`f(7)`): `walk` on the bare int `7` hits
   # the non-tuple catch-all.
   defp evaluate(:cert_nontuple_call_arg),
-    do: cert_terminates?({:lam, @nat, {:app, {:global, :f}, 7}})
+    do: cert_terminates?({:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :f}, 7}})
 
   # A non-tuple element inside an unknown node's list child (`{:blk, [99, call]}`):
   # `descend_unknown` skips the bare int `99`.
   defp evaluate(:cert_nontuple_list_elem),
-    do: cert_terminates?({:lam, @nat, {:blk, [99, {:app, {:global, :f}, {:var, 0}}]}})
+    do: cert_terminates?({:lam, Cure.Core.Grade.unrestricted(), @nat, {:blk, [99, {:app, {:global, :f}, {:var, 0}}]}})
 
   # A non-tuple term to the LEFT of an application (`(7)(f)`): the `calls?` fast-path
   # hits its non-tuple catch-all before the right operand's self-call short-circuits.
   defp evaluate(:cert_calls_nontuple_head),
-    do: cert_terminates?({:lam, @nat, {:app, 7, {:global, :f}}})
+    do: cert_terminates?({:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, 7, {:global, :f}}})
 
   # round-trip a term through the s-expression serializer.
   defp roundtrip(term), do: {term, Serialize.decode(IO.iodata_to_binary(Serialize.encode(term)))}

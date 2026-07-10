@@ -25,7 +25,7 @@ defmodule Antigen.CoverGuidedTest do
   alias Antigen.{Cover, Triage, Challenge, Corpus}
 
   @nat {:data, :Nat, [], []}
-  defp d(name, body), do: %{name: name, type: {:pi, @nat, @nat}, body: body}
+  defp d(name, body), do: %{name: name, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: body}
 
   # Reducible in both dimensions: droppable defs (g, h) + an S-tower body to shrink.
   defp both_dims_ch do

@@ -469,7 +469,7 @@ defmodule Cure.Core.Inductive do
   # field headed by ANOTHER family is checked by expanding that family's
   # constructor fields (`seen` breaks family cycles); `fname` occurring in
   # another family's parameters/indices is conservatively rejected.
-  defp strictly_positive?(env, fname, {:pi, dom, cod}, seen),
+  defp strictly_positive?(env, fname, {:pi, _g, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
   # A recursive occurrence of the family itself is strictly positive ONLY when

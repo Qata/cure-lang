@@ -28,8 +28,8 @@ defmodule Antigen.Generators.SigMenu do
   """
   def goal_types, do: [nat(), bd(), vec(z()), vec(s(z())),
                        {:data, :List, [nat()], []}, {:data, :List, [bd()], []},
-                       {:pi, nat(), nat()}, {:pi, nat(), bd()},
-                       {:data, :Sigma, [nat(), {:lam, nat(), nat()}], []}]
+                       {:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}, {:pi, Cure.Core.Grade.unrestricted(), nat(), bd()},
+                       {:data, :Sigma, [nat(), {:lam, Cure.Core.Grade.unrestricted(), nat(), nat()}], []}]
 
   # -- the v1 environment -----------------------------------------------------
   @doc "Declare families, add plus/dbl, and certify them through the kernel."
@@ -118,8 +118,8 @@ defmodule Antigen.Generators.SigMenu do
           Inductive.ctor(:tbd, [], [bd()]),
           Inductive.ctor(:tint, [], [{:int_type}]),
           Inductive.ctor(:tflt, [], [{:float_type}]),
-          Inductive.ctor(:tpi, [], [{:pi, nat(), nat()}]),
-          Inductive.ctor(:tsig, [], [{:data, :Sigma, [nat(), {:lam, nat(), nat()}], []}]),
+          Inductive.ctor(:tpi, [], [{:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}]),
+          Inductive.ctor(:tsig, [], [{:data, :Sigma, [nat(), {:lam, Cure.Core.Grade.unrestricted(), nat(), nat()}], []}]),
           Inductive.ctor(:tvec, [], [{:data, :Vec, [{:ctor, :Z, []}], []}])
         ])
       # Tg : (i:Int) -> Type0 / Tgf : (i:Float) -> Type0 — families indexed by a
@@ -149,7 +149,7 @@ defmodule Antigen.Generators.SigMenu do
       # the generators now emit inductive Sigma / mk_pair / ι-on-case projections,
       # which need the family in the menu signature.
       |> Inductive.declare(
-        Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, {:var, 0}, {:type, 0}}], [], 0),
+        Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, Cure.Core.Grade.unrestricted(), {:var, 0}, {:type, 0}}], [], 0),
         [
           Inductive.ctor(
             :mk_pair,
@@ -163,16 +163,16 @@ defmodule Antigen.Generators.SigMenu do
       |> Inductive.register_builtin(:sigma, :Sigma)
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
-    plus_type = {:pi, nat(), {:pi, nat(), nat()}}
+    plus_type = {:pi, Cure.Core.Grade.unrestricted(), nat(), {:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}}
     plus_body =
-      {:lam, nat(), {:lam, nat(),
-        {:case, {:var, 1}, {:lam, nat(), nat()},
+      {:lam, Cure.Core.Grade.unrestricted(), nat(), {:lam, Cure.Core.Grade.unrestricted(), nat(),
+        {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), nat(), nat()},
          [{:Z, 0, {:var, 0}},
           {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}]}}}
 
     # dbl m = plus m m
-    dbl_type = {:pi, nat(), nat()}
-    dbl_body = {:lam, nat(), {:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 0}}}
+    dbl_type = {:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}
+    dbl_body = {:lam, Cure.Core.Grade.unrestricted(), nat(), {:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 0}}}
 
     env = Env.add_def(env, :plus, plus_type, plus_body)
     {:ok, env} = Kernel.validate_certificate(env, :plus)
@@ -182,12 +182,12 @@ defmodule Antigen.Generators.SigMenu do
     # app xs ys = case xs of SNil -> ys | SCons(h, t) -> SCons(h, app(t, ys))
     # (structural on arg 1) — the stuck function forming `H`'s carried index.
     slist = {:data, :SList, [], []}
-    app_type = {:pi, slist, {:pi, slist, slist}}
+    app_type = {:pi, Cure.Core.Grade.unrestricted(), slist, {:pi, Cure.Core.Grade.unrestricted(), slist, slist}}
 
     app_body =
-      {:lam, slist,
-       {:lam, slist,
-        {:case, {:var, 1}, {:lam, slist, slist},
+      {:lam, Cure.Core.Grade.unrestricted(), slist,
+       {:lam, Cure.Core.Grade.unrestricted(), slist,
+        {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), slist, slist},
          [
            {:SNil, 0, {:var, 0}},
            {:SCons, 2,
@@ -241,8 +241,8 @@ defmodule Antigen.Generators.SigMenu do
       {:data, :Nat, _, _} -> true
       {:data, :Bd, _, _} -> true
       {:type, _} -> true
-      {:pi, dom, cod} -> inhabitable?(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)
-      {:data, :Sigma, [a, {:lam, _a, b}], []} ->
+      {:pi, _g, dom, cod} -> inhabitable?(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)
+      {:data, :Sigma, [a, {:lam, _g, _a, b}], []} ->
         inhabitable?(ctx, a) and
           inhabitable?(Context.extend(ctx, Eval.eval(a, Context.env(ctx))), b)
       {:data, :Vec, p, idx} ->
@@ -259,9 +259,9 @@ defmodule Antigen.Generators.SigMenu do
       {:data, :Nat, _, _} -> z()
       {:data, :Bd, _, _} -> {:ctor, :T, []}
       {:type, _} -> nat()
-      {:pi, dom, cod} ->
-        {:lam, dom, canon(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)}
-      {:data, :Sigma, [a, {:lam, _a, b}], []} ->
+      {:pi, _g, dom, cod} ->
+        {:lam, Cure.Core.Grade.unrestricted(), dom, canon(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)}
+      {:data, :Sigma, [a, {:lam, _g, _a, b}], []} ->
         av = canon(ctx, a)
         {:ctor, :mk_pair, [av, canon(ctx, subst0(b, av, ctx))]}
       {:data, :Vec, p, idx} ->
@@ -326,7 +326,7 @@ defmodule Antigen.Generators.SigMenu do
 
   # β-substitute `arg`'s value for the Sigma codomain's own bound variable (de
   # Bruijn 0) into `b`. `b` is the body of the inductive Sigma's codomain lambda
-  # `{:data, :Sigma, [a, {:lam, a, b}], []}`, one binder deeper than `ctx` — but the
+  # `{:data, :Sigma, [a, {:lam, Cure.Core.Grade.unrestricted(), a, b}], []}`, one binder deeper than `ctx` — but the
   # component actually placed in `{:ctor, :mk_pair, [av, ...]}` must be a term in the
   # component in the original `ctx`, against `cod_closure` applied to
   # `a_value` — never in an extended context). A raw `Term.subst/3` is not

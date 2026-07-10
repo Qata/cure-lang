@@ -80,7 +80,7 @@ defmodule Cure.Core.PositivityTypealiasSoundnessTest do
   test "I1: a negative occurrence hidden behind an unexpanded typealias (`{:global, name}`) field must be rejected, not silently accepted" do
     env =
       base()
-      |> Env.add_def(:Neg, {:type, 0}, {:pi, @bad, {:int_type}})
+      |> Env.add_def(:Neg, {:type, 0}, {:pi, Cure.Core.Grade.unrestricted(), @bad, {:int_type}})
       |> Inductive.declare(Inductive.family(:Bad, [], [], 0), [
         Inductive.ctor(:mk, [{:f, {:global, :Neg}}], [])
       ])
@@ -95,7 +95,7 @@ defmodule Cure.Core.PositivityTypealiasSoundnessTest do
       |> Inductive.declare(Inductive.family(:BadLiteral, [], [], 0), [
         Inductive.ctor(
           :mk_literal,
-          [{:f, {:pi, {:data, :BadLiteral, [], []}, {:int_type}}}],
+          [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :BadLiteral, [], []}, {:int_type}}}],
           []
         )
       ])
@@ -114,7 +114,7 @@ defmodule Cure.Core.PositivityTypealiasSoundnessTest do
   # I2: the same missing `{:global, name}` case also breaks the arrow-DOMAIN
   # scan specifically (`occurs_deep?/4`), independent of I1's catch-all path.
   #
-  # `strictly_positive?(env, fname, {:pi, dom, cod}, seen)` guards the domain
+  # `strictly_positive?(env, fname, {:pi, Cure.Core.Grade.unrestricted(), dom, cod}, seen)` guards the domain
   # via `occurs_deep?(env, fname, dom, seen)`, whose own definition is
   # `occurs?(fname, ty) or Enum.any?(data_heads(ty), ...)`. Both halves miss
   # a `{:global, name}` domain:
@@ -140,7 +140,7 @@ defmodule Cure.Core.PositivityTypealiasSoundnessTest do
       base()
       |> Env.add_def(:NegDom, {:type, 0}, @bad)
       |> Inductive.declare(Inductive.family(:Bad, [], [], 0), [
-        Inductive.ctor(:mk, [{:f, {:pi, {:global, :NegDom}, {:int_type}}}], [])
+        Inductive.ctor(:mk, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :NegDom}, {:int_type}}}], [])
       ])
 
     assert {:error, {:non_strictly_positive, :mk}} ==

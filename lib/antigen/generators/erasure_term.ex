@@ -27,7 +27,7 @@ defmodule Antigen.Generators.ErasureTerm do
   end
 
   defp app_env(env) do
-    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
     env |> Env.add_def(:f, ty, {:int_lit, 0}, [:present, :erased])
   end
 

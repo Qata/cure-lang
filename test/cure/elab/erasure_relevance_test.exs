@@ -220,15 +220,15 @@ defmodule Cure.Elab.ErasureRelevanceTest do
     test "two different :case-transport proofs erase to the same runtime term" do
       env = Cure.Core.Builtins.seed(Env.empty(), MapSet.new())
       body = {:ctor, :Causal, []}
-      motive = {:lam, {:type, 0}, body}
-      id_branch = {:reflexive, 1, {:lam, {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
+      motive = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, body}
+      id_branch = {:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
       t1 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}, motive, [id_branch]}, body}
       t2 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Causal, []}]}, motive, [id_branch]}, body}
 
       assert Erase.erase(env, t1) == Erase.erase(env, t2)
       # The collapsible case is GONE from the runtime term (the proof with it);
       # what remains is the identity redex over the erased body.
-      assert {:app, {:lam, _dom, {:var, 0}}, erased_body} = Erase.erase(env, t1)
+      assert {:app, {:lam, _g, _dom, {:var, 0}}, erased_body} = Erase.erase(env, t1)
       assert erased_body == Erase.erase(env, body)
     end
 

@@ -12,7 +12,7 @@ defmodule Cure.Core.PositivitySelfParamSoundnessTest do
   @unit {:data, :Unit, [], []}
   @empty {:data, :Empty, [], []}
   # neg = (Bad Unit) -> Empty : Bad occurs to the LEFT of an arrow (negative).
-  @neg {:pi, {:data, :Bad, [@unit], []}, @empty}
+  @neg {:pi, Cure.Core.Grade.unrestricted(), {:data, :Bad, [@unit], []}, @empty}
 
   defp base do
     Env.empty()

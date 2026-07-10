@@ -11,8 +11,9 @@ defmodule Cure.Core.Value do
   Value shapes:
 
     * `{:vtype, level}`                  universe
-    * `{:vpi, dom_value, closure}`       Π type (closure = the codomain family)
-    * `{:vlam, dom_value, closure}`      λ (domain kept so read-back is a true
+    * `{:vpi, grade, dom_value, closure}` Π type (closure = the codomain family);
+                                         `grade` is the QTT quantity of the binder
+    * `{:vlam, grade, dom_value, closure}` λ (domain kept so read-back is a true
                                          inverse — mirrors Idris's `Lam … ty`)
     * `{:vneutral, neutral}`             stuck term
     * `{:vdata, name, [value]}`          fully-applied family (params ++ indices)
@@ -29,7 +30,7 @@ defmodule Cure.Core.Value do
       `branch_closures :: [{ctor_name, arity, closure}]`
   """
 
-  alias Cure.Core.{Term, Universe}
+  alias Cure.Core.{Grade, Term, Universe}
 
   @typedoc "A `:ncase` branch closure: constructor name, arity, and the branch's closure."
   @type branch_closure :: {atom(), non_neg_integer(), closure()}
@@ -54,8 +55,8 @@ defmodule Cure.Core.Value do
   """
   @type t ::
           {:vtype, non_neg_integer()}
-          | {:vpi, t(), closure()}
-          | {:vlam, t(), closure()}
+          | {:vpi, Grade.t(), t(), closure()}
+          | {:vlam, Grade.t(), t(), closure()}
           | {:vneutral, neutral()}
           | {:vdata, atom(), [t()]}
           | {:vctor, atom(), [t()]}
@@ -74,8 +75,8 @@ defmodule Cure.Core.Value do
   def value?({:vtype, level}),
     do: is_integer(level) and level >= 0 and level <= Universe.ceiling()
 
-  def value?({:vpi, dom, cl}), do: value?(dom) and closure?(cl)
-  def value?({:vlam, dom, cl}), do: value?(dom) and closure?(cl)
+  def value?({:vpi, g, dom, cl}), do: Grade.grade?(g) and value?(dom) and closure?(cl)
+  def value?({:vlam, g, dom, cl}), do: Grade.grade?(g) and value?(dom) and closure?(cl)
   def value?({:vneutral, n}), do: neutral?(n)
   def value?({:vdata, name, vs}), do: is_atom(name) and values?(vs)
   def value?({:vctor, name, vs}), do: is_atom(name) and values?(vs)

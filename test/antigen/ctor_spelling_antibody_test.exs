@@ -26,7 +26,7 @@ defmodule Antigen.CtorSpellingAntibodyTest do
   test "A4.i: ι over a params-on-spine ctor term matches the fields-only result" do
     env = [{:vint, 42}]  # a distinct outer binder value in the eval env
     scrut = {:ctor, :reflexive, [@nat, z()]}         # K6 params-on-spine
-    motive = {:lam, @nat, {:lam, @nat, {:lam, {:data, :Equivalent, [@nat], [{:var, 1}, {:var, 0}]}, @nat}}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Equivalent, [@nat], [{:var, 1}, {:var, 0}]}, @nat}}}
     body = {:var, 1}                                  # branch-external reference
     node = {:case, scrut, motive, [{:reflexive, 1, body}]}
     # Expected: the outer binder (42), NOT the coerced-away param (@nat value).
@@ -68,7 +68,7 @@ defmodule Antigen.CtorSpellingAntibodyTest do
     # Context.extend/2 wants a VALUE, not a term — {:vdata, :Nat, []}, not @nat.
     ctx = Context.extend(Context.empty(sig), {:vdata, :Nat, []})  # one outer binder
     node = {:case, {:ctor, :reflexive, [@nat, z()]},
-            {:lam, @nat, {:lam, @nat, {:lam, {:data, :Equivalent, [@nat], [{:var,1},{:var,0}]}, @nat}}},
+            {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Equivalent, [@nat], [{:var,1},{:var,0}]}, @nat}}},
             [{:reflexive, 1, {:var, 1}}]}
     # WITHOUT A1: the 2-arg spine binds [w, ty] ahead of the outer binder, so
     # {:var,1} wrongly resolves to `ty` (a Nat data value), not the outer var.

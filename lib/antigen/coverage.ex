@@ -152,7 +152,7 @@ defmodule Antigen.Coverage do
 
   # `:has_shadowing` (spec §7.2): a coarse approximation — any `:lam`/`:pi`/`:sigma`
   # binder nested underneath another such binder. A single top-level binder does
-  # not count; only nesting (e.g. a curried `{:pi, _, {:pi, _, _}}`) does.
+  # not count; only nesting (e.g. a curried `{:pi, Cure.Core.Grade.unrestricted(), _, {:pi, Cure.Core.Grade.unrestricted(), _, _}}`) does.
   defp has_shadowing?(t), do: nested_binder?(t, false)
 
   defp nested_binder?(t, inside?) when is_tuple(t) do
@@ -184,7 +184,7 @@ defmodule Antigen.Coverage do
   # tuples/lists); non-term children (the leading tag atom, bare integers/de
   # Bruijn indices, plain atoms) don't count, so a primitive leaf like
   # `{:type, 0}` or `{:var, 0}` has depth 0, not 1 — verified against the
-  # Step-1 fixtures: `{:app, {:lam, {:type,0}, {:var,0}}, {:type,0}}` computes
+  # Step-1 fixtures: `{:app, {:lam, Cure.Core.Grade.unrestricted(), {:type,0}, {:var,0}}, {:type,0}}` computes
   # to depth 2 (bucket `:b0_2`) and the four-`:app` `deep` fixture computes to
   # depth 3 (bucket `:b3_5`).
   defp fold_depth(t) when is_tuple(t) do

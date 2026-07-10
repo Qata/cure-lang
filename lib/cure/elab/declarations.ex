@@ -794,8 +794,12 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
+  # Builds a `:pi`/`:lam` chain from a telescope. The binder tuple is assembled
+  # from a TAG, so no textual pass can see it — the grade must be threaded here
+  # explicitly. `Term.term?/1` is what caught this during the QTT reshape.
   defp wrap_binders(tag, telescope, inner) do
-    Enum.reduce(Enum.reverse(telescope), inner, fn {_name, type}, acc -> {tag, type, acc} end)
+    g = Cure.Core.Grade.unrestricted()
+    Enum.reduce(Enum.reverse(telescope), inner, fn {_name, type}, acc -> {tag, g, type, acc} end)
   end
 
   # -- indexed families -------------------------------------------------------
@@ -1078,7 +1082,7 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp pi_domains({:pi, dom, cod}), do: [dom | pi_domains(cod)]
+  defp pi_domains({:pi, _g, dom, cod}), do: [dom | pi_domains(cod)]
   defp pi_domains(_), do: []
 
   # The positional index types of family `name` (self or already registered).
@@ -1261,13 +1265,13 @@ defmodule Cure.Elab.Declarations do
   # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
   # `bname` in scope, so it is already in the frame of one new lambda binder, and
-  # wrapping it under `{:lam, dom, body}` is exactly that frame. `:Sigma` is the
+  # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame. `:Sigma` is the
   # canonical family name (only Std.Sigma registers `@builtin(:sigma)`), used as a
   # literal so `Sigma(..)` lowers even in a raw-`Env.empty()` elaboration.
   defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
+      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
     end
   end
 
@@ -1291,7 +1295,7 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, rev_doms, inner_scope} <- folded,
          {:ok, ret} <- idx_to_core(ret_ast, inner_scope, fam, env) do
-      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, dom, acc} end)}
+      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, Cure.Core.Grade.unrestricted(), dom, acc} end)}
     end
   end
 
@@ -1347,7 +1351,7 @@ defmodule Cure.Elab.Declarations do
         |> Enum.with_index()
         |> Enum.reverse()
         |> Enum.reduce(Cure.Core.Term.shift(ret_core, length(dom_cores), 0), fn {dom, i}, acc ->
-          {:pi, Cure.Core.Term.shift(dom, i, 0), acc}
+          {:pi, Cure.Core.Grade.unrestricted(), Cure.Core.Term.shift(dom, i, 0), acc}
         end)
 
       {:ok, pi}
