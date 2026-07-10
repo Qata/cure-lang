@@ -85,42 +85,52 @@ defmodule Cure.Migrate do
   """
   @spec run(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()]}
   def run(ast, opts \\ []) do
-    {new_ast, warns, _rewrote?} = fold_rules(ast, opts)
+    {new_ast, warns, _rewriters} = fold_rules(ast, opts)
     {new_ast, warns}
   end
 
   # Shared fold behind `run/2` and `run_to_fixpoint/2`. Threads the AST through
-  # the rule set as `run/2` documents, and additionally reports `rewrote?` —
-  # whether any rule's committed rewrite actually changed the AST during this
+  # the rule set as `run/2` documents, and additionally reports `rewriters` — the
+  # ordered ids of rules whose committed rewrite actually changed the AST this
   # pass. `run_to_fixpoint/2` needs that: a pass whose rewrites net to identity
   # (e.g. a non-monotone `x->y`/`y->x` pair) leaves the AST equal yet is still
   # actively rewriting, so AST-equality alone cannot tell "done" from "thrashing"
   # — while a pure `:warn` rule must NOT count as a rewrite (it never converges
-  # away, so counting it would loop forever).
-  @spec fold_rules(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()], boolean()}
+  # away, so counting it would loop forever). The list (not just a boolean) also
+  # lets a verify failure be attributed to a *rewriter* rather than a warner.
+  @spec fold_rules(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()], [atom()]}
   defp fold_rules(ast, opts) do
     file = Keyword.get(opts, :file, "nofile")
     rule_set = Keyword.get(opts, :rules, rules())
     apply_mode = Keyword.get(opts, :apply, :all)
     ctx = build_ctx(ast)
 
-    Enum.reduce(rule_set, {ast, [], false}, fn %Rule{} = rule, {acc_ast, warns, rewrote?} ->
-      case rule.detect_and_rewrite.(acc_ast, ctx) do
-        {:rewrite, new_ast} ->
-          committed = commit(rule, apply_mode, acc_ast, new_ast)
-          {committed, warns ++ warnings_for(rule, file, [nil]), rewrote? or committed != acc_ast}
+    {ast, warns, rev_rewriters} =
+      Enum.reduce(rule_set, {ast, [], []}, fn %Rule{} = rule, {acc_ast, warns, rewriters} ->
+        case rule.detect_and_rewrite.(acc_ast, ctx) do
+          {:rewrite, new_ast} ->
+            committed = commit(rule, apply_mode, acc_ast, new_ast)
+            {committed, warns ++ warnings_for(rule, file, [nil]), maybe_rewriter(rewriters, rule, committed, acc_ast)}
 
-        {:rewrite, new_ast, lines} ->
-          committed = commit(rule, apply_mode, acc_ast, new_ast)
-          {committed, warns ++ warnings_for(rule, file, lines), rewrote? or committed != acc_ast}
+          {:rewrite, new_ast, lines} ->
+            committed = commit(rule, apply_mode, acc_ast, new_ast)
+            {committed, warns ++ warnings_for(rule, file, lines), maybe_rewriter(rewriters, rule, committed, acc_ast)}
 
-        {:warn, lines} ->
-          {acc_ast, warns ++ warnings_for(rule, file, lines), rewrote?}
+          {:warn, lines} ->
+            {acc_ast, warns ++ warnings_for(rule, file, lines), rewriters}
 
-        :no_change ->
-          {acc_ast, warns, rewrote?}
-      end
-    end)
+          :no_change ->
+            {acc_ast, warns, rewriters}
+        end
+      end)
+
+    {ast, warns, Enum.reverse(rev_rewriters)}
+  end
+
+  # Prepend the rule's id to the (reversed) rewriter list iff its commit actually
+  # changed the AST — a `:safe_only`-suppressed rewrite is not a rewriter.
+  defp maybe_rewriter(rewriters, %Rule{id: id}, committed, old_ast) do
+    if committed != old_ast, do: [id | rewriters], else: rewriters
   end
 
   # Fold the rewrite (`:all` mode, or a `:machine`-tier rule) or keep the legacy
@@ -147,22 +157,32 @@ defmodule Cure.Migrate do
   @spec run_to_fixpoint(Rule.ast(), keyword()) ::
           {:ok, Rule.ast(), [Warning.t()]}
           | {:error, {:no_convergence, [atom()]}}
-          | {:error, {:verify_failed, atom()}}
+          | {:error, {:verify_failed, atom() | nil}}
   def run_to_fixpoint(ast, opts \\ []) do
     max = Keyword.get(opts, :max_passes, @max_passes)
-    baseline_comments = comment_texts(Cure.Compiler.Printer.quoted_to_string(ast))
-    do_fixpoint(ast, opts, max, [], baseline_comments)
+    # The target edition governs the verify reparse (F12): output valid only under
+    # the crossing target must parse under it, not the compiler default.
+    edition = Keyword.get(opts, :edition) || Cure.Edition.current()
+
+    case safe_print(ast) do
+      {:ok, src} -> do_fixpoint(ast, opts, max, [], comment_texts(src), edition)
+      # An input the Printer can't render can't be migrated cleanly — report it as
+      # a verify failure (no culprit rule) rather than crashing the caller.
+      {:error, _} -> {:error, {:verify_failed, nil}}
+    end
   end
 
-  defp do_fixpoint(ast, opts, passes_left, warns, baseline) do
-    {new_ast, pass_warns, rewrote?} = fold_rules(ast, opts)
+  defp do_fixpoint(ast, opts, passes_left, warns, baseline, edition) do
+    {new_ast, pass_warns, rewriters} = fold_rules(ast, opts)
 
     cond do
       # Fixpoint reached: nothing rewrote the AST this pass. Pure `:warn` rules
       # may still have fired (they warn every pass and never converge away) —
-      # that is expected and does NOT block convergence.
-      new_ast == ast and not rewrote? ->
-        {:ok, ast, warns ++ pass_warns}
+      # that is expected and does NOT block convergence. Deduplicate the
+      # accumulated warnings (F2): a rule that fires on N passes must surface its
+      # warning once, not once per pass.
+      new_ast == ast and rewriters == [] ->
+        {:ok, ast, Enum.uniq(warns ++ pass_warns)}
 
       # Still rewriting at the pass budget → the rule set does not converge
       # (a rule-set bug, not a user error). Report the rules that fired last.
@@ -170,13 +190,14 @@ defmodule Cure.Migrate do
         {:error, {:no_convergence, pass_warns |> Enum.map(& &1.rule) |> Enum.uniq()}}
 
       true ->
-        case verify(new_ast, baseline) do
+        case verify(new_ast, baseline, edition) do
           :ok ->
-            do_fixpoint(new_ast, opts, passes_left - 1, warns ++ pass_warns, baseline)
+            do_fixpoint(new_ast, opts, passes_left - 1, warns ++ pass_warns, baseline, edition)
 
           {:error, _reason} ->
-            culprit = pass_warns |> List.last() |> then(&(&1 && &1.rule))
-            {:error, {:verify_failed, culprit}}
+            # Attribute to a rule that actually REWROTE this pass (F-culprit): a
+            # verify break is caused by a rewrite, never by a pure-warn rule.
+            {:error, {:verify_failed, List.last(rewriters)}}
         end
     end
   end
@@ -187,12 +208,14 @@ defmodule Cure.Migrate do
   # Checking against the true original (not pass-to-pass) is what makes this
   # catch a comment a rule drops on pass 3 even though passes 1-2 preserved
   # everything — re-basing to each intermediate pass would let that slip
-  # through as "no *new* loss this pass".
-  defp verify(ast, baseline_comments) do
-    src = Cure.Compiler.Printer.quoted_to_string(ast)
-
-    with {:ok, toks} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
-         {:ok, _} <- Cure.Compiler.Parser.parse(toks, emit_events: false) do
+  # through as "no *new* loss this pass". Reparse uses the target `edition` so
+  # output valid only under it is not spuriously rejected (F12). The whole body
+  # is guarded (F3b): a rule that yields unrenderable/unparseable output must
+  # surface a clean {:error, …}, never crash the migration.
+  defp verify(ast, baseline_comments, edition) do
+    with {:ok, src} <- safe_print(ast),
+         {:ok, toks} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false, edition: edition),
+         {:ok, _} <- Cure.Compiler.Parser.parse(toks, emit_events: false, edition: edition) do
       if baseline_comments -- comment_texts(src) == [] do
         :ok
       else
@@ -201,6 +224,16 @@ defmodule Cure.Migrate do
     else
       _ -> {:error, :reparse}
     end
+  rescue
+    _ -> {:error, :verify_crashed}
+  end
+
+  # Render an AST to source, converting a Printer exception (e.g. an unrenderable
+  # node a buggy rule produced) into a value rather than a propagating crash.
+  defp safe_print(ast) do
+    {:ok, Cure.Compiler.Printer.quoted_to_string(ast)}
+  rescue
+    _ -> {:error, :unprintable}
   end
 
   # Mirrors Cure.CLI's migrate_comments/1 (lib/cure/cli.ex:1319): every `#`-led
