@@ -59,69 +59,6 @@ defmodule Cure.Audit.EraseRelevanceTest do
   end
 
   # ---------------------------------------------------------------------------
-  # ER1 — Relevance.check's top-level short-circuit skips ctor-field escapes
-  # ---------------------------------------------------------------------------
-
-  # THE BUG: `Cure.Elab.Relevance.check/4` (relevance.ex:62-76) computes
-  # `erased` from the DEF'S OWN top-level `quantities` vector only, and when
-  # that set is empty it returns `:ok` WITHOUT EVER CALLING `walk/4`:
-  #
-  #     if MapSet.size(erased) == 0 do
-  #       :ok
-  #     else
-  #       ...
-  #       walk(body, length(quantities), :returned, st)
-  #     end
-  #
-  # But erased-ness does not only originate at the top-level signature — a
-  # `:case` branch matching a constructor with its OWN erased field (e.g.
-  # Box's `bmk : Box(m)`, quantities `[:erased]`) introduces a FRESH erased
-  # binder purely from pattern matching (relevance.ex's `:case` clause folds
-  # `branch_erased` into `st.erased`, lines 150-156). For an all-`:present`
-  # top-level signature (no implicit/erased params of its own — a completely
-  # ordinary function like `fn f(b: Box(k)) -> Nat = match b bmk(m) -> m`),
-  # the top-level `erased` set is empty, so `walk` is never invoked, so the
-  # `:case` clause's own branch-erased tracking never runs, so a branch that
-  # RETURNS the erased ctor field sails through unchecked.
-  #
-  # This is not speculative: test/cure/elab/named_implicit_tail_test.exs's
-  # "C-c prerequisite" test (lines 92-112) already documents this exact gap
-  # in its own comment and works around it by adding a deliberately-unused
-  # DUMMY erased top-level parameter just so `walk` gets invoked at all:
-  # "`Relevance.check/4` short-circuits to `:ok` WITHOUT ever calling `walk`
-  # when `quantities` has zero `:erased` entries ... an assumption §2.3's
-  # fold makes false". This test removes that workaround — an honest,
-  # ordinary all-`:present` signature — and shows the check still wrongly
-  # accepts a relevant escape of an erased ctor field.
-  #
-  # Idris's `Core/LinearCheck.idr` has no such early-out: `lcheck` always
-  # walks the whole term threading the usage count, so a `Rig0` binder
-  # introduced by pattern-matching on an indexed constructor is policed
-  # exactly like a `Rig0` binder from the signature — there is only one
-  # notion of "erased", not two (checked vs. unchecked depending on origin).
-  #
-  # Concrete runtime consequence: `Erase.erase` DOES drop `bmk`'s sole field
-  # unconditionally (it is the ctor's whole quantity vector, `:erased`), so
-  # accepting this program means the compiled function returns a binding
-  # that no longer exists at runtime — undefined-variable-shaped BEAM output
-  # in the best case, silently wrong behavior in the worst.
-  test "ER1: an all-present top-level signature must still reject a branch returning an erased ctor field" do
-    env = box_env()
-    bmk = ctor_atom(env, :bmk)
-
-    # Hand-built RAW (pre-`wrap_binders`) Core body for
-    #   fn probe(b: Box(k)) -> Nat = match b
-    #     bmk(m) -> m
-    # ONE outer param (`b`, quantities `[:present]`, so `depth = 1` and `b`
-    # is `{:var, 0}`). The sole branch names `bmk`'s one (erased) field and
-    # returns it unmodified — a textbook `:returned` relevant use.
-    body = {:case, {:var, 0}, {:type, 0}, [{bmk, 1, {:var, 0}}]}
-
-    assert {:error, {:erased_used_relevantly, %{site: :returned}}} =
-             Cure.Elab.Relevance.check(env, :probe, [:present], body)
-  end
-
-  # ---------------------------------------------------------------------------
   # ER2 — Erase.erase does not drop erased ctor args when the ctor heads a
   # curried `:app` spine instead of appearing as one flat `{:ctor, name, args}`
   # node

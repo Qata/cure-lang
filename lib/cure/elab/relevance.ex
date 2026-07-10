@@ -67,12 +67,13 @@ defmodule Cure.Elab.Relevance do
       |> Enum.map(fn {_q, idx} -> idx end)
       |> MapSet.new()
 
-    if MapSet.size(erased) == 0 do
-      :ok
-    else
-      st = %{env: env, name: name, erased: erased}
-      walk(body, length(quantities), :returned, st)
-    end
+    # No early-out when `erased` is empty. Erasedness does not only originate at
+    # the signature: matching a constructor with an erased FIELD introduces a fresh
+    # erased binder (see the `:case` clause's `branch_erased` fold), so an ordinary
+    # all-`:present` function can still return a value that `Erase.erase` deletes.
+    # Idris's `lcheck` (Core/LinearCheck.idr) likewise always walks the body — there
+    # is one notion of erased, not a checked and an unchecked one.
+    walk(body, length(quantities), :returned, %{env: env, name: name, erased: erased})
   end
 
   # --- relevant positions: an erased-parameter occurrence here is a violation --
