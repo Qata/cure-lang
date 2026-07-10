@@ -40,7 +40,8 @@ defmodule Cure.Migrate do
   def rules,
     do: [
       Cure.Migrate.Rules.IfElifToPickup.rule(),
-      Cure.Migrate.Rules.UppercaseTypeVar.rule()
+      Cure.Migrate.Rules.UppercaseTypeVar.rule(),
+      Cure.Migrate.Rules.GroupHoist.rule()
     ]
 
   @doc """
