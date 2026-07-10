@@ -111,11 +111,7 @@ alongside the `Binary` type. This is chosen deliberately: those are core
 string-surface operations and universal `Char` availability directly serves the
 ongoing `Std.String` work (#29). The type itself would resolve via the seed
 regardless; preluding the module is what brings the bridge functions along.
-
-> Decision point for spec review: if you would rather keep `to_binary` /
-> `from_binary` behind an explicit `use Std.Binary` and make only the *type*
-> universal (via the seed), that is the one place with a real trade-off — say so
-> and §3 narrows to type-only. Wholesale is the chosen default.
+(Confirmed at spec review: wholesale, not type-only.)
 
 ## Interaction with the sibling spec
 
