@@ -4909,11 +4909,21 @@ defmodule Cure.Compiler.Parser do
 
     state = skip_newlines(state)
 
-    # Module-level decorators (e.g. `@group(:core)`) describe the module, not
-    # the next declaration. They always stand alone, whatever follows.
+    # Module-level decorators (e.g. `@group(:core)`) describe the MODULE. The
+    # canonical form is `@group(:g)` directly above `mod`, where it attaches to
+    # the module container (spec 2026-07-10-group-decorator-placement). Any
+    # other position still parses as a standalone node here (Task 4 will make
+    # that a hard error, once the stdlib is migrated).
     if dec_name in @module_level_decorators do
-      ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
-      {ast, state}
+      case peek(state) do
+        %Token{type: :keyword, value: :mod} ->
+          {mod_ast, state} = parse_module(state)
+          {attach_decorator(mod_ast, dec_name, args), state}
+
+        _ ->
+          ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+          {ast, state}
+      end
     else
       parse_at_attach(state, token, dec_name, args)
     end
