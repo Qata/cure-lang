@@ -3295,6 +3295,17 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  # A monotonic per-process counter yielding a unique infix for generated
+  # scrutinee names, so nested-pattern lowerings at different match sites (and
+  # different nesting depths) never produce colliding — hence capturing — names.
+  # Process-local: one elaboration runs sequentially in one process, and tests
+  # assert only on the {:ok, _} verdict, never on generated names.
+  defp fresh_tag do
+    n = Process.get(:cure_desugar_gensym, 0)
+    Process.put(:cure_desugar_gensym, n + 1)
+    Integer.to_string(n) <> "$"
+  end
+
   defp desugar_nested_arms(arms, scrut_expr) do
     cond do
       not Enum.any?(arms, &arm_has_nested?/1) ->
@@ -3428,7 +3439,16 @@ defmodule Cure.Elab.Elaborator do
        end) do
       {:error, {:unsupported_pattern, :shadowed_nested}}
     else
-      fresh = for i <- 1..k//1, do: "$n" <> cname <> Integer.to_string(i)
+      # Seed the fresh scrutinee names with a per-invocation unique tag. Every
+      # deeper name (`split_ctor_arms`, `split_default`) derives from these, so a
+      # unique seed makes the WHOLE lowered subtree's names unique. Without it,
+      # two independently-desugared nested matches — an outer arm whose body is
+      # itself a nested match — regenerate identical names (`$nSome1_Y1`) and the
+      # inner binder captures a reference the outer desugaring baked into the
+      # body (variable capture → spurious `:branch_type`). See
+      # nested_match_capture_test.exs.
+      tag = fresh_tag()
+      fresh = for i <- 1..k//1, do: "$n" <> tag <> cname <> Integer.to_string(i)
 
       rows =
         Enum.map(arms, fn {:match_arm, m, b} ->
