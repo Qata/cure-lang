@@ -95,8 +95,17 @@ defmodule Cure.CLI do
         ["run" | [path]] ->
           cmd_run(path, opts)
 
+        # Wrong argument count for a fixed-arity command is a usage error, not an
+        # unknown command — without this fallback it fell through to the generic
+        # catch-all and misblamed `run` (a valid command) as unknown.
+        ["run" | _] ->
+          usage_error("Usage: cure run <file>")
+
         ["check" | [path]] ->
           cmd_check(path, opts)
+
+        ["check" | _] ->
+          usage_error("Usage: cure check <file>")
 
         ["lsp"] ->
           cmd_lsp()
@@ -109,6 +118,9 @@ defmodule Cure.CLI do
 
         ["init" | [name]] ->
           cmd_init(name)
+
+        ["init" | _] ->
+          usage_error("Usage: cure init <name>")
 
         ["deps"] ->
           cmd_deps()
@@ -134,6 +146,9 @@ defmodule Cure.CLI do
 
         ["explain" | [code]] ->
           cmd_explain(code)
+
+        ["explain" | _] ->
+          usage_error("Usage: cure explain [<error-code>]")
 
         ["doc" | paths] ->
           cmd_doc(paths, opts)
@@ -165,6 +180,9 @@ defmodule Cure.CLI do
         ["why" | [code]] ->
           cmd_explain(code)
 
+        ["why" | _] ->
+          usage_error("Usage: cure why [<error-code>]")
+
         ["doctor"] ->
           cmd_doctor(opts)
 
@@ -177,8 +195,14 @@ defmodule Cure.CLI do
         ["search" | [query]] ->
           cmd_search(query, opts)
 
+        ["search" | _] ->
+          usage_error("Usage: cure search <query>")
+
         ["info" | [name]] ->
           cmd_info(name, opts)
+
+        ["info" | _] ->
+          usage_error("Usage: cure info <name>")
 
         ["keys", "generate", handle] ->
           cmd_keys_generate(handle)
@@ -359,7 +383,7 @@ defmodule Cure.CLI do
     end
   end
 
-  defp cmd_trace([], _opts), do: error("Usage: cure trace Module.fun/arity")
+  defp cmd_trace([], _opts), do: usage_error("Usage: cure trace Module.fun/arity")
 
   defp cmd_trace([target | _], opts) do
     duration = Keyword.get(opts, :duration, 10) * 1000
@@ -459,7 +483,7 @@ defmodule Cure.CLI do
 
   # -- compile -----------------------------------------------------------------
 
-  defp cmd_compile([], _opts), do: error("Usage: cure compile <file|directory>")
+  defp cmd_compile([], _opts), do: usage_error("Usage: cure compile <file|directory>")
 
   defp cmd_compile(paths, opts) do
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
@@ -1881,7 +1905,7 @@ defmodule Cure.CLI do
 
   # -- new -----------------------------------------------------------------------
 
-  defp cmd_new([], _opts), do: error("Usage: cure new <name> [--lib | --app | --fsm]")
+  defp cmd_new([], _opts), do: usage_error("Usage: cure new <name> [--lib | --app | --fsm]")
 
   defp cmd_new([name | _], opts) do
     template =
@@ -1955,7 +1979,7 @@ defmodule Cure.CLI do
   defp cmd_explain(code) do
     case Cure.Compiler.Errors.explain(code) do
       {:ok, text} -> info(text)
-      :error -> error("Unknown error code: #{code}. Run 'cure explain' for a list.")
+      :error -> usage_error("Unknown error code: #{code}. Run 'cure explain' for a list.")
     end
   end
 
@@ -2304,6 +2328,13 @@ defmodule Cure.CLI do
   defp info(msg), do: IO.puts(msg)
   defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
   defp error(msg), do: IO.puts(:stderr, "error: #{msg}")
+
+  # A user-facing usage/lookup error that must fail the command: print to stderr
+  # and exit non-zero, so `cure <misuse> && next` stops and CI wrappers see it.
+  defp usage_error(msg) do
+    error(msg)
+    exit({:shutdown, 1})
+  end
 
   # Print a pre-formatted multi-line diagnostic (e.g. from
   # `Cure.Compiler.Errors`) verbatim. The string already contains its own

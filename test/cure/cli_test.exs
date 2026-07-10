@@ -53,10 +53,10 @@ defmodule Cure.CLITest do
       File.rm_rf!("_build/test_cli_ebin")
     end
 
-    test "no path shows error" do
+    test "no path shows a usage error and exits nonzero" do
       output =
         capture_io(:stderr, fn ->
-          Cure.CLI.main(["compile"])
+          assert catch_exit(Cure.CLI.main(["compile"])) == {:shutdown, 1}
         end)
 
       assert output =~ "Usage"
@@ -64,6 +64,20 @@ defmodule Cure.CLITest do
   end
 
   describe "cure run" do
+    test "a wrong argument count is a usage error, not 'Unknown command'" do
+      # `["run" | [path]]` matches exactly one arg; 0 or 2+ used to fall through
+      # to the generic catch-all and get misblamed as an unknown command.
+      for args <- [["run"], ["run", "a.cure", "b.cure"]] do
+        output =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main(args)) == {:shutdown, 1}
+          end)
+
+        assert output =~ "Usage: cure run"
+        refute output =~ "Unknown command"
+      end
+    end
+
     test "compiles and runs a .cure file with main/0" do
       # Create a temp file with main
       path = Path.join(System.tmp_dir!(), "cure_cli_test.cure")
@@ -166,14 +180,25 @@ defmodule Cure.CLITest do
       assert File.exists?("acme/test/main_test.cure")
     end
 
-    test "prints a usage hint when called without a project name" do
+    test "prints a usage hint (and exits nonzero) when called without a project name" do
       output =
         capture_io(:stderr, fn ->
-          Cure.CLI.main(["new"])
+          assert catch_exit(Cure.CLI.main(["new"])) == {:shutdown, 1}
         end)
 
       assert output =~ "Usage"
       assert output =~ "cure new"
+    end
+  end
+
+  describe "cure explain (unknown code)" do
+    test "an unknown error code fails instead of silently exiting 0" do
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["explain", "E99999"])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "Unknown error code"
     end
   end
 
