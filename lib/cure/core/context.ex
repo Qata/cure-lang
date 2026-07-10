@@ -12,10 +12,11 @@ defmodule Cure.Core.Context do
 
   alias Cure.Core.{Env, Value}
 
-  defstruct types: [], length: 0, signature: nil
+  defstruct types: [], env: [], length: 0, signature: nil
 
   @type t :: %__MODULE__{
           types: [Value.t()],
+          env: [Value.t()],
           length: non_neg_integer(),
           signature: Env.t() | nil
         }
@@ -32,10 +33,46 @@ defmodule Cure.Core.Context do
   @spec signature(t()) :: Env.t() | nil
   def signature(%__MODULE__{signature: s}), do: s
 
-  @doc "Extend the context with one more variable of the given type value."
+  @doc """
+  Extend the context with one more variable of the given type value.
+
+  The variable is *opaque*: it evaluates to a fresh neutral at its own de Bruijn
+  level, exactly as `neutral_env/1` would have produced. This is the binder used
+  by `:pi`, `:lam` and `:case` branches.
+  """
   @spec extend(t(), Value.t()) :: t()
   def extend(%__MODULE__{} = ctx, type_value),
-    do: %{ctx | types: [type_value | ctx.types], length: ctx.length + 1}
+    do: %{
+      ctx
+      | types: [type_value | ctx.types],
+        env: [{:vneutral, {:nvar, ctx.length}} | ctx.env],
+        length: ctx.length + 1
+    }
+
+  @doc """
+  Extend the context with a variable that is *definitionally equal to a value* —
+  a `let`-declaration.
+
+  This is the one thing an opaque binder cannot express, and the reason Core has
+  a `:let` former at all: the variable occurs once in the term (sharing) yet
+  evaluates to its value (ζ-transparency). Mirrors Idris's `Env` of `Binder`s,
+  whose `Let` carries its value (`Core/TT/Binder.idr:93-98`) and unfolds on
+  lookup (`Core/Normalise/Eval.idr:242-244`), and Lean's value-carrying
+  `LocalDecl.ldecl` (`src/Lean/LocalContext.lean:86`).
+
+  `type_value` types the variable; `value` is what it evaluates to. Because the
+  variable is never neutral, no inferred type can mention it — which is why the
+  NbE formulation needs no re-abstraction step (contrast Lean's fvar-based
+  `infer_let`, `src/kernel/type_checker.cpp`, which ends in `mk_pi(fvars, r)`).
+  """
+  @spec extend_def(t(), Value.t(), Value.t()) :: t()
+  def extend_def(%__MODULE__{} = ctx, type_value, value),
+    do: %{
+      ctx
+      | types: [type_value | ctx.types],
+        env: [value | ctx.env],
+        length: ctx.length + 1
+    }
 
   @doc "The type value of the variable at de Bruijn index `k` (0 = most recent)."
   @spec lookup(t(), non_neg_integer()) :: Value.t() | nil
@@ -51,11 +88,15 @@ defmodule Cure.Core.Context do
   def length(%__MODULE__{length: n}), do: n
 
   @doc """
-  The NbE environment for this context: a fresh neutral per variable, with the
-  most-recent variable (index 0) bound to the highest de Bruijn level.
+  The NbE environment for this context, indexed by de Bruijn index.
+
+  Each `extend/2` contributes a fresh neutral at its own level; each
+  `extend_def/3` contributes the bound value. For a context built only from
+  `extend/2` this is exactly `neutral_env(length(ctx))` — the property the rest
+  of the kernel relied on when the environment was derived rather than stored.
   """
   @spec env(t()) :: [Value.t()]
-  def env(%__MODULE__{length: n}), do: neutral_env(n)
+  def env(%__MODULE__{env: env}), do: env
 
   @doc """
   A neutral NbE environment of `n` fresh variables — index 0 bound to level

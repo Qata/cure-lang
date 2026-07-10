@@ -28,6 +28,7 @@ defmodule Antigen.Assays.KernelLaw do
   def run(%Challenge{assay: "kernel/weakening", payload: p}), do: weakening(p)
   def run(%Challenge{assay: "kernel/confluence", payload: p}), do: confluence(p)
   def run(%Challenge{assay: "kernel/beta_subst", payload: p}), do: beta_subst(p)
+  def run(%Challenge{assay: "kernel/zeta_subst", payload: p}), do: zeta_subst(p)
   def run(%Challenge{assay: "elab/shift_agrees", payload: p}), do: shift_agrees(p.term)
 
   defp ctx_of(p), do: SigMenu.rebuild_context(SigMenu.env_of(p.sig), p.ctx)
@@ -150,6 +151,37 @@ defmodule Antigen.Assays.KernelLaw do
   # The generator only ever emits redexes; a non-redex term is a wiring bug, not a
   # kernel finding — surface it distinctly.
   defp beta_subst(%{term: other}), do: {:violation, {:beta_subst_not_a_redex, other}}
+
+  # ── 3e. ζ: `let` agrees with capture-avoiding substitution ─────────────────
+  #
+  # The antibody for the Core `:let` binder. `Eval`'s ζ pushes the *evaluated*
+  # value of `e` into the NbE environment and never shifts; `Subst.instantiate/2`
+  # shifts `e` by the binder depth. Different mechanisms, same answer — or the
+  # `:let` node is unsound.
+  #
+  # Reusing `beta_nf_agrees/3` and `beta_type_agrees/3` verbatim is deliberate:
+  # the property IS the same property, so it must be checked by the same code.
+  # A pass here means ζ equates exactly what substitution equates — no distinct
+  # normal forms collapsed — and terminates wherever substitution does (both
+  # sides share the assay fuel and abstain together on exhaustion).
+  defp zeta_subst(%{term: {:let, _t, e, body}} = p) do
+    ctx = ctx_of(p)
+    subst_term = Subst.instantiate(body, [e])
+
+    # `shift_subst/1` is the pure de Bruijn sigma-algebra (laws 1-4). Running it
+    # on the `:let` term itself is what property-tests `Term.shift/3` and
+    # `Term.subst/3`'s new clauses -- specifically that `body` is one binder
+    # deeper than `ty`/`val`. Nothing else in the corpus generates a `:let` yet,
+    # so without this the new binder's sigma-algebra would be covered only by
+    # ExUnit.
+    with :ok <- shift_subst(p.term),
+         :ok <- beta_nf_agrees(ctx, p.term, subst_term),
+         :ok <- beta_type_agrees(ctx, p.term, subst_term) do
+      :ok
+    end
+  end
+
+  defp zeta_subst(%{term: other}), do: {:violation, {:zeta_subst_not_a_let, other}}
 
   # (a) β-reduction ≡ substitution. Normalized under the same fuel so a divergent
   # (fuel-exhausting) case abstains rather than false-positives.

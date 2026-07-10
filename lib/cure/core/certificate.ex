@@ -197,6 +197,17 @@ defmodule Cure.Core.Certificate do
   defp walk_node(emit, {:lam, d, b}, st, acc),
     do: walk(emit, b, shift_state(st, 1), walk(emit, d, st, acc))
 
+  # `:let` binds one variable in `body` only.
+  #
+  # Correctness-by-inspection, not a bug fix: without this clause the catch-all
+  # returns `acc` untouched, so a `let`'s subterms contribute no size-change
+  # edges. That FAILS CLOSED (fewer edges ⇒ harder to certify), and recursion is
+  # anyway found by `gather_globals/2`, which walks any tuple. Verified: deleting
+  # this clause changes no `terminating?/3` verdict I could construct. It is here
+  # because a traversal must not silently skip a binder's children.
+  defp walk_node(emit, {:let, t, v, b}, st, acc),
+    do: walk(emit, b, shift_state(st, 1), walk(emit, v, st, walk(emit, t, st, acc)))
+
   defp walk_node(emit, {:pi, d, c}, st, acc),
     do: walk(emit, c, shift_state(st, 1), walk(emit, d, st, acc))
 
@@ -618,6 +629,7 @@ defmodule Cure.Core.Certificate do
   defp calls?(name, {:global, n}), do: n == name
   defp calls?(name, {:pi, d, c}), do: calls?(name, d) or calls?(name, c)
   defp calls?(name, {:lam, d, b}), do: calls?(name, d) or calls?(name, b)
+  defp calls?(name, {:let, t, v, b}), do: calls?(name, t) or calls?(name, v) or calls?(name, b)
   defp calls?(name, {:app, f, a}), do: calls?(name, f) or calls?(name, a)
 
   defp calls?(name, {:data, _n, ps, is}),

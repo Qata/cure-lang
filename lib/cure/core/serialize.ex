@@ -23,6 +23,7 @@ defmodule Cure.Core.Serialize do
   defp enc({:global, name}), do: ["(global ", sym(name), ")"]
   defp enc({:pi, d, c}), do: node("pi", [d, c])
   defp enc({:lam, d, b}), do: node("lam", [d, b])
+  defp enc({:let, t, v, b}), do: node("let", [t, v, b])
   defp enc({:app, f, a}), do: node("app", [f, a])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
@@ -204,6 +205,7 @@ defmodule Cure.Core.Serialize do
 
   defp build_node("pi", [d, c]), do: binary(:pi, d, c)
   defp build_node("lam", [d, b]), do: binary(:lam, d, b)
+  defp build_node("let", [t, v, b]), do: ternary(:let, t, v, b)
   defp build_node("app", [f, a]), do: binary(:app, f, a)
 
   defp build_node("ctor", [name | args]) do
@@ -228,6 +230,11 @@ defmodule Cure.Core.Serialize do
 
   defp binary(tag, a, b) do
     with {:ok, ta} <- build(a), {:ok, tb} <- build(b), do: {:ok, {tag, ta, tb}}
+  end
+
+  defp ternary(tag, a, b, c) do
+    with {:ok, ta} <- build(a), {:ok, tb} <- build(b), {:ok, tc} <- build(c),
+         do: {:ok, {tag, ta, tb, tc}}
   end
 
   defp build_all(items) do

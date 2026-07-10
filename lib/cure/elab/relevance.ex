@@ -92,6 +92,15 @@ defmodule Cure.Elab.Relevance do
   # body is relevant. Descending binds one more variable.
   defp walk({:lam, _dom, body}, depth, _site, st), do: walk(body, depth + 1, :returned, st)
 
+  # `:let` — the ascription is a type position (exempt). The VALUE is always
+  # evaluated at runtime (`X = Val` in the emitted BEAM), so it is a relevant
+  # position regardless of whether the body uses the binder; that is the honest
+  # dual of `Emit`'s unconditional bind. The body inherits the let's own site and
+  # binds one more variable.
+  defp walk({:let, _ty, val, body}, depth, site, st) do
+    with :ok <- walk(val, depth, :present_arg, st), do: walk(body, depth + 1, site, st)
+  end
+
   # Application spine: the head is `:applied`; each argument is relevant iff the
   # callee's quantity for that position is `:present` (erased positions exempt —
   # the dual of `Erase.erase`'s `{:app, …}` filtering).

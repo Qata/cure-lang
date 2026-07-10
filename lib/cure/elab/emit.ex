@@ -244,6 +244,16 @@ defmodule Cure.Elab.Emit do
     {:fun, @line, {:clauses, [clause]}}
   end
 
+  # `let x := v in body`  ⟶  `begin Lk = <v>, <body> end`. This is the whole
+  # payoff of the `:let` binder: `v` is emitted ONCE and bound to a BEAM variable,
+  # where surface substitution emitted it at every use site (and not at all at
+  # zero uses). Its parameter takes de Bruijn index 0 in the body's frame.
+  defp lower(env, {:let, _ty, val, body}, ctx) do
+    var = :"L#{length(ctx)}"
+    bind = {:match, @line, {:var, @line, var}, lower(env, val, ctx)}
+    {:block, @line, [bind, lower(env, body, [var | ctx])]}
+  end
+
   defp lower(env, {:app, _, _} = app, ctx) do
     {head, args} = spine(app, [])
 
