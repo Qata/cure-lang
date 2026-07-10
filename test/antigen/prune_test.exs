@@ -61,7 +61,7 @@ defmodule Antigen.PruneTest do
       def run(_c), do: {:violation, :drift}
     end
 
-    rec = stub_rec({:type, 3})
+    rec = stub_rec({:type, 0})
     corpus = write("corpus.sexp", [rec])
     retired = path("retired.sexp")
 
