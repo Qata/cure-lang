@@ -3644,7 +3644,13 @@ defmodule Cure.Elab.Elaborator do
   defp join_point?(default, uncovered, carried, idx_vals, motive) do
     default != nil and length(uncovered) >= 2 and carried == nil and idx_vals == [] and
       match?({:lam, _g, _s, _r}, motive) and
-      not MapSet.member?(free_indices(elem(motive, 3), 0), 0)
+      not MapSet.member?(free_indices(elem(motive, 3), 0), 0) and
+      # Disabled in a def that uses `:linear`/`:affine` grades: the shared catch-all
+      # λ would make the usage check ω-scale a restricted capture and over-reject it
+      # (review F11). `Declarations.elaborate_function_body` sets this per def. The
+      # per-branch expansion the join replaces is what the usage check then sees, and
+      # its independent-branch agreement is correct (Idris `LinearCheck.idr:441-442`).
+      not Process.get(:qtt_join_disabled, false)
   end
 
   defp elaborate_join(false, _default, _names, _ctx, _env, _motive), do: {:ok, nil}

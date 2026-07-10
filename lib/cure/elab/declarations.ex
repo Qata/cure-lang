@@ -228,7 +228,18 @@ defmodule Cure.Elab.Declarations do
   # Elaborate a function's body against its (already registered) signature and
   # replace the placeholder with the real lambda. The environment already carries
   # every function's signature, so forward references and mutual recursion resolve.
-  def elaborate_function_body({:function_def, meta, body}, env) do
+  def elaborate_function_body({:function_def, meta, body} = fdef, env) do
+    # Slice 4c's join point shares a catch-all body under a `{:lam, ω, …}`, and slice
+    # 4b's usage check ω-scales a λ's captured variables — so a `:linear`/`:affine`
+    # variable captured by a shared catch-all is over-rejected (review F11). Idris
+    # never materialises a shared capturing continuation at linearity-check time
+    # (`LinearCheck.idr:441-442` checks each alternative independently); the join is a
+    # pure term-size optimization. The sound-by-construction fix: skip the join in a
+    # def that uses restricted grades, so the usage check sees the per-branch form
+    # (whose independent-branch `alt` agreement is already correct). This flag is read
+    # by `Elaborator.join_point?/5` and re-set per def, covering every nested match.
+    Process.put(:qtt_join_disabled, def_uses_restricted_grade?(fdef))
+
     case Keyword.get(meta, :extern) do
       {mod, fun, arity} when is_atom(mod) and is_atom(fun) and is_integer(arity) ->
         # Wave-3: a bodyless @extern is a typed FFI postulate — the signature IS
@@ -271,6 +282,26 @@ defmodule Cure.Elab.Declarations do
       {:error, {:extern_arity_mismatch, sig.name, arity, present}}
     end
   end
+
+  # True if the def annotates any binder — a parameter or an inner `let` — with a
+  # `:linear` or `:affine` grade. `:erased` does NOT count: an erased capture is
+  # policed by the position check regardless of scaling, so the join never
+  # over-rejects it. Restricted grades come only from explicit slice-5 surface
+  # syntax, so this is false for every current (ungraded) program and the join keeps
+  # firing there.
+  defp def_uses_restricted_grade?({:function_def, meta, body}) do
+    Enum.any?(Keyword.get(meta, :params, []), &restricted_grade_node?/1) or
+      restricted_grade_node?(body)
+  end
+
+  defp restricted_grade_node?({_tag, meta, children}) when is_list(meta) do
+    Keyword.get(meta, :grade) in [:linear, :affine] or restricted_grade_node?(children)
+  end
+
+  defp restricted_grade_node?(list) when is_list(list),
+    do: Enum.any?(list, &restricted_grade_node?/1)
+
+  defp restricted_grade_node?(_), do: false
 
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
