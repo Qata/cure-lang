@@ -202,8 +202,24 @@ defmodule Cure.Elab.Emit do
           [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
         end
 
+      # The telescope terminator `unit` (empty tuple `%[]` / `Tuple()`) erases to
+      # the flat empty BEAM tuple `{}`. Inside a telescope spine it is consumed by
+      # `telescope_cars/1` and never reaches here.
+      name == :unit and args == [] ->
+        {:tuple, @line, []}
+
       sigma_ctor?(env, name) ->
-        {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
+        # A UNIT-TERMINATED `mk_pair` spine `mk_pair(e1, … mk_pair(en, unit))` is a
+        # flat telescope `Tuple(T1,…,Tn)` — lower it to ONE flat BEAM tuple
+        # `{e1,…,en}`, dropping the `unit`. Each car is lowered independently, so an
+        # inner telescope car flattens on its own (opt-in nesting: `%[1,%[2,3]]` →
+        # `{1,{2,3}}`). A NON-unit-terminated pair (a bare `Sigma(x:T,U)`) keeps the
+        # structural nested 2-tuple emit. The `unit` marker is thus consumed here and
+        # never appears at runtime.
+        case telescope_cars(env, {:ctor, name, args}) do
+          {:telescope, cars} -> {:tuple, @line, Enum.map(cars, &lower(env, &1, ctx))}
+          :not_telescope -> {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
+        end
 
       list_ctor?(env, name) ->
         case {name, args} do
@@ -461,6 +477,26 @@ defmodule Cure.Elab.Emit do
   defp element(n, tuple_form) do
     {:call, @line, {:atom, @line, :element}, [{:integer, @line, n}, tuple_form]}
   end
+
+  # Classify a Core term as a UNIT-TERMINATED Σ-telescope spine, returning its car
+  # list `[e1, …, en]` (the flat components, `unit` dropped) — or `:not_telescope`
+  # for a bare `Sigma(x:T,U)` pair (whose tail is an ordinary value, not `unit`).
+  # This is the emit-time reader of the `unit` marker: it decides flat-vs-nested for
+  # BOTH values (here) and telescope patterns (`telescope_pattern_cars/2`).
+  defp telescope_cars(_env, {:ctor, :unit, []}), do: {:telescope, []}
+
+  defp telescope_cars(env, {:ctor, name, [car, cdr]}) do
+    if sigma_ctor?(env, name) do
+      case telescope_cars(env, cdr) do
+        {:telescope, rest} -> {:telescope, [car | rest]}
+        :not_telescope -> :not_telescope
+      end
+    else
+      :not_telescope
+    end
+  end
+
+  defp telescope_cars(_env, _other), do: :not_telescope
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
   defp spine(head, acc), do: {head, acc}

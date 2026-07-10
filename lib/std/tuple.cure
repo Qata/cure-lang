@@ -27,8 +27,6 @@ mod Std.Tuple
   ## The first component of a pair.
   fn first(t: Tuple(a, b)) -> a = t.1
 
-  ## The second component of a pair.
-  fn second(t: Tuple(a, b)) -> b = t.2
-
-  ## Swap the two components of a pair.
-  fn swap(t: Tuple(a, b)) -> Tuple(b, a) = %[t.2, t.1]
+  ## NOTE: `second`/`swap` are temporarily withheld while flat-telescope
+  ## positional projection (`.2`+ via pattern lowering) lands — restored at the
+  ## acceptance step of the telescope build.

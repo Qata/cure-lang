@@ -8,7 +8,7 @@ defmodule Cure.Elab.Program do
   """
 
   alias Cure.Compiler.{Lexer, Parser}
-  alias Cure.Core.{Env, Validator}
+  alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{Coherence, Declarations, Erase, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
@@ -250,7 +250,7 @@ defmodule Cure.Elab.Program do
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast_elixir_core(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
-         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         seeded = seed_with_telescope_support(ast),
          {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -276,6 +276,28 @@ defmodule Cure.Elab.Program do
       _ ->
         []
     end)
+  end
+
+  # The seeded base env plus telescope support. `Unit` (the empty telescope `%[]`
+  # / `Tuple()`, the terminator of the unit-terminated Σ chain a flat `Tuple(…)`
+  # unfolds to — spec 2026-07-09-unified-tuple §3.4) is declared here in the
+  # E-LAYER via the ordinary `Inductive.declare/3` that `type`/`rec` use, NOT in
+  # the trusted `Core.Builtins` seed: it needs no `@builtin` schema and carries no
+  # kernel-judgement change, so it stays out of the TCB. A module declaring its own
+  # `Unit` shadows this (the local declaration overwrites the same key), same as any
+  # seeded builtin. `unit : Unit` is a plain nullary inductive.
+  defp seed_with_telescope_support(ast) do
+    seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast))
+
+    if MapSet.member?(declared_type_names(ast), :Unit) do
+      seeded
+    else
+      Inductive.declare(
+        seeded,
+        Inductive.family(:Unit, [], [], 0),
+        [Inductive.ctor(:unit, [], [])]
+      )
+    end
   end
 
   # Family/type names the module declares itself. A builtin (Bool/Nat) is NOT
@@ -755,7 +777,7 @@ defmodule Cure.Elab.Program do
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
          :ok <- check_declarations(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
-         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         seeded = seed_with_telescope_support(ast),
          {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -901,7 +923,7 @@ defmodule Cure.Elab.Program do
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
            :ok <- check_declarations(ast),
            {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
-           seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+           seeded = seed_with_telescope_support(ast),
            {:ok, env0} <- merge_env(seeded, imported),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do

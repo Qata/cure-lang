@@ -1221,22 +1221,21 @@ defmodule Cure.Elab.Elaborator do
   # spec §2.2). Lowers to the ctor `mk_pair`; the kernel re-checks it. With no Sigma
   # family registered (a raw-`Env.empty()` elaboration), falls through to the
   # inference fallback, which builds the same `{:ctor, :mk_pair, …}`.
-  def elaborate_expr_checked({:tuple, _meta, [a_ast, b_ast]} = expr, expected_core, names, ctx, env) do
+  # A tuple literal `%[e1, …, en]` (n ≥ 2) checked against a Σ-shaped goal. ONE
+  # recursion (`check_tuple_against/5`) elaborates both the bare dependent pair
+  # (`Sigma(x:T, U)` — the last element is the whole second component) AND the
+  # unit-terminated telescope (`Tuple(T1,…,Tn)` = `Sigma(T1, … Sigma(Tn, Unit))` —
+  # each element gets its own `mk_pair` cell, bottoming at `unit`). Which one is
+  # produced is driven ENTIRELY by the goal's structure: whether a Σ layer's tail
+  # bottoms at `Unit` (telescope) or at an ordinary type (bare). A non-Σ goal falls
+  # through to the fallback exactly as the former arity-2 clause did.
+  def elaborate_expr_checked({:tuple, _meta, elems} = expr, expected_core, names, ctx, env)
+      when is_list(elems) and length(elems) >= 2 do
     sigma_fam = Inductive.builtin(env, :sigma)
 
     case Kernel.normalize(ctx, expected_core) do
-      {:data, fam, [dom, b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
-        [%{name: mk_pair} | _] = Inductive.ctors_of(env, sigma_fam)
-
-        with {:ok, a_term} <- elaborate_expr_checked(a_ast, dom, names, ctx, env),
-             # The second Σ param `b_fn` is an arbitrary term, so the instantiated
-             # codomain is the application `b_fn(a)` — normalized (β-reduced) so a
-             # dependent component like `prepend(x, empty())` sees its concrete
-             # expected type (`Vector(a, Suc(Zero))`) and can solve its implicits,
-             # exactly as the former `Subst.instantiate` did.
-             cod_inst = Kernel.normalize(ctx, {:app, b_fn, a_term}),
-             {:ok, b_term} <- elaborate_expr_checked(b_ast, cod_inst, names, ctx, env),
-             term = {:ctor, mk_pair, [a_term, b_term]},
+      {:data, fam, [_dom, _b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
+        with {:ok, term} <- check_tuple_against(elems, expected_core, names, ctx, env),
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -1325,6 +1324,68 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  # Recursively elaborate a run of surface tuple elements against a Σ-shaped goal,
+  # peeling ONE Σ layer per element. Distinguishes two terminations:
+  #
+  #   * telescope terminator — the current Σ's tail bottoms at `Unit`
+  #     (`telescope_terminator?/3`): the element inhabits the Σ's *domain* and a
+  #     trailing `unit` closes the spine, so `%[…,e]` against `Sigma(D, λ_.Unit)`
+  #     becomes `mk_pair(check(e,D), unit)`. This is how `Tuple(T1,…,Tn)` builds a
+  #     flat, unit-terminated HList that emit later flattens to a BEAM tuple.
+  #
+  #   * bare dependent pair — the tail is an ordinary type: the LAST element is the
+  #     whole second component, so `%[a,b]` against `Sigma(D, Cod)` checks `b` at
+  #     `Cod[a]` directly (no `unit`). Preserves the landed `Sigma(x:T,U)` ABI.
+  #
+  # An empty run against `Unit` yields `unit` (the telescope terminator itself).
+  defp check_tuple_against([], expected_core, _names, ctx, _env) do
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, :Unit, [], []} -> {:ok, {:ctor, :unit, []}}
+      other -> {:error, {:tuple_arity_mismatch, :expected_more, other}}
+    end
+  end
+
+  defp check_tuple_against([e | rest], expected_core, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, fam, [dom, b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
+        if rest == [] and not telescope_terminator?(b_fn, ctx, env) do
+          # Last element, tail is an ordinary type → e IS the whole second
+          # component (a bare pair, possibly itself a nested tuple).
+          elaborate_expr_checked(e, expected_core, names, ctx, env)
+        else
+          [%{name: mk_pair} | _] = Inductive.ctors_of(env, sigma_fam)
+
+          with {:ok, e_term} <- elaborate_expr_checked(e, dom, names, ctx, env),
+               cod_inst = Kernel.normalize(ctx, {:app, b_fn, e_term}),
+               {:ok, rest_term} <- check_tuple_against(rest, cod_inst, names, ctx, env) do
+            {:ok, {:ctor, mk_pair, [e_term, rest_term]}}
+          end
+        end
+
+      other ->
+        # Goal is not a Σ: only a single remaining element can inhabit it directly
+        # (the bare final component of a 2-tuple). More than one is an arity error.
+        if rest == [] do
+          elaborate_expr_checked(e, expected_core, names, ctx, env)
+        else
+          {:error, {:tuple_arity_mismatch, :too_many, other}}
+        end
+    end
+  end
+
+  # Does this Σ's second parameter (a `λ`) bottom at `Unit`? Applying it to a
+  # closed probe term and normalizing β-reduces a non-dependent tail to its body;
+  # a dependent tail that mentions its argument won't reduce to `Unit` anyway. This
+  # is the sole signal separating a telescope layer from a bare dependent pair.
+  defp telescope_terminator?(b_fn, ctx, _env) do
+    case Kernel.normalize(ctx, {:app, b_fn, {:ctor, :unit, []}}) do
+      {:data, :Unit, [], []} -> true
+      _ -> false
+    end
+  end
 
   # True iff the (meta-free) expected type evaluates to the canonical `Nat` family.
   defp nat_expected?(expected_core, ctx) do

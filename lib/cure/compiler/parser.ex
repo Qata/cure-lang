@@ -4669,27 +4669,24 @@ defmodule Cure.Compiler.Parser do
     {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
   end
 
-  # Tuple(T1, …, Tn) — the honest surface tuple (spec §3.3). Parse a comma-separated
-  # list of `[binder?:] type` positions (≥ 2). Arity 2 aliases the non-dependent
-  # Sigma — `Tuple(T, U)` => `sigma_type` with unused binder "_", `Tuple(x: T, U)`
-  # => `sigma_type` binding `x` for a later position — reusing `type_to_core`'s
-  # existing `sigma_type` clauses (no elaborator change). Arity ≥ 3 is the flat
-  # n-ary product `{:tuple_type, [arity: n], [t1…tn]}` (non-dependent: binders are
-  # not meaningful for the flat families, so they are dropped) lowered to the
-  # `TupleN` inductive family by the elaborator.
+  # Tuple(T1, …, Tn) — the honest surface tuple (spec 2026-07-09-unified-tuple §3).
+  # Parse a comma-separated list of `[binder?:] type` positions (≥ 2). EVERY arity
+  # (including 2) becomes `{:tuple_type, [arity: n, binders: bs], [t1…tn]}` — the
+  # elaborator unfolds it to a UNIT-TERMINATED nested Σ telescope
+  # (`Sigma(T1, λb1. … Sigma(Tn, λbn. Unit))`) which emit flattens to a flat BEAM
+  # tuple. This is DELIBERATELY distinct from bare `Sigma(x:T, U)` (`:sigma_type`,
+  # NOT unit-terminated): the terminator is what lets emit tell "flatten the whole
+  # spine" from "this element is itself a nested tuple". Per-position binders are
+  # retained so a later position may depend on an earlier one (dependent telescope);
+  # an anonymous position is binder `"_"`.
   defp parse_tuple_type(state) do
     state = advance(state)
     {positions, state} = parse_tuple_positions(state, [])
     state = expect(state, :rparen)
 
-    ast =
-      case positions do
-        [{binder, dom}, {_b2, body}] ->
-          {:sigma_type, [binder: binder], [dom, body]}
-
-        many ->
-          {:tuple_type, [arity: length(many)], Enum.map(many, &elem(&1, 1))}
-      end
+    binders = Enum.map(positions, &elem(&1, 0))
+    types = Enum.map(positions, &elem(&1, 1))
+    ast = {:tuple_type, [arity: length(positions), binders: binders], types}
 
     {ast, state}
   end

@@ -619,21 +619,30 @@ defmodule Cure.Elab.Declarations do
 
   # A pair `%[a, b]` is a dependent-pair introduction; the kernel checks it
   # against the declared Σ return type.
-  defp elaborate_body({:tuple, _meta, [a_ast, b_ast]} = expr, return_core, scope, ctx, env, _params) do
-    # Check the pair against the declared return type first, so a *dependent* pair
+  defp elaborate_body({:tuple, _meta, elems} = expr, return_core, scope, ctx, env, _params)
+       when is_list(elems) and length(elems) >= 2 do
+    # Check the tuple against the declared return type first, so a *dependent* pair
     # (`Sigma(n: Nat, Vector(a, n))`) elaborates its second component against the
     # codomain instantiated at the first — otherwise a component like
     # `prepend(x, empty())` is inferred and its underdetermined parts are left as
-    # unsolved metavariables. Fall back to inferring both components when the
+    # unsolved metavariables. A flat telescope `Tuple(T1,…,Tn)` = `%[e1,…,en]`
+    # likewise checks each element against its Σ layer (`check_tuple_against/5`).
+    # For an arity-2 pair only, fall back to inferring both components when the
     # return type is not a Σ the checker can use (preserving the prior behaviour).
     case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
       {:ok, term} ->
         {:ok, term}
 
-      {:error, _} ->
-        with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
-             {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
-          {:ok, {:ctor, sigma_mk_pair(env), [a_term, b_term]}}
+      {:error, _} = err ->
+        case elems do
+          [a_ast, b_ast] ->
+            with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
+                 {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
+              {:ok, {:ctor, sigma_mk_pair(env), [a_term, b_term]}}
+            end
+
+          _ ->
+            err
         end
     end
   end
@@ -760,6 +769,10 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp collect_type_vars({:sigma_type, _m, children}, bound, env, acc) when is_list(children) do
+    Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
+  end
+
+  defp collect_type_vars({:tuple_type, _m, children}, bound, env, acc) when is_list(children) do
     Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
   end
 
@@ -1347,6 +1360,17 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A flat tuple TYPE `Tuple(T1, …, Tn)` unfolds to the UNIT-TERMINATED nested Σ
+  # telescope `Sigma(T1, λb1. Sigma(T2, λb2. … Sigma(Tn, λbn. Unit)))` — reusing the
+  # kernel's binary Σ (no new kernel surface). The terminating `Unit` is what emit
+  # keys on to flatten the whole spine to a flat BEAM tuple (spec §3.4). Each binder
+  # `bi` is threaded into scope so a later position may depend on an earlier one
+  # (dependent telescope); anonymous positions carry `"_"`.
+  defp idx_to_core({:tuple_type, meta, type_asts}, scope, fam, env, _ctx) do
+    binders = Keyword.get(meta, :binders) || List.duplicate("_", length(type_asts))
+    build_telescope_type(Enum.zip(binders, type_asts), scope, fam, env)
+  end
+
   # A dependent function type `(x1: D1, …, xn: Dn) -> R` becomes the Π
   # `Π(x1:D1). … Π(xn:Dn). R`. Each domain is elaborated with the earlier binders
   # in scope, and the codomain with all of them, so `(n: N) -> P(n)` resolves the
@@ -1406,6 +1430,15 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}
+
+  defp build_telescope_type([{bname, ast} | rest], scope, fam, env) do
+    with {:ok, dom} <- idx_to_core(ast, scope, fam, env),
+         {:ok, body} <- build_telescope_type(rest, [bname | scope], fam, env) do
+      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
+    end
+  end
 
   # `(D1, …, Dn) -> R` (surface `Function(D1,…,Dn,R)`, tagged `function_type`)
   # becomes the non-dependent Π `Π(_:D1). … Π(_:Dn). R` — the native Core arrow the
