@@ -1080,13 +1080,17 @@ defmodule Cure.Project do
   # not leak into the value — which for the validated `edition` key would turn a
   # valid `"2026"  # pin` into `2026"  # pin` and hard-fail the load (A2-F1).
   defp strip_inline_comment(val) do
-    {kept, _in_quotes?} =
+    {kept, _in_quotes?, _escaped?} =
       val
       |> String.to_charlist()
-      |> Enum.reduce_while({[], false}, fn
-        ?#, {acc, false} -> {:halt, {acc, false}}
-        ?", {acc, in_q} -> {:cont, {[?" | acc], not in_q}}
-        ch, {acc, in_q} -> {:cont, {[ch | acc], in_q}}
+      |> Enum.reduce_while({[], false, false}, fn
+        # Inside a basic string a backslash escapes the next char, so a `\"` does
+        # NOT close the string (and a following `#` stays part of the value).
+        ?\\, {acc, true, false} -> {:cont, {[?\\ | acc], true, true}}
+        ch, {acc, in_q, true} -> {:cont, {[ch | acc], in_q, false}}
+        ?#, {acc, false, false} -> {:halt, {acc, false, false}}
+        ?", {acc, in_q, false} -> {:cont, {[?" | acc], not in_q, false}}
+        ch, {acc, in_q, false} -> {:cont, {[ch | acc], in_q, false}}
       end)
 
     kept |> Enum.reverse() |> List.to_string()

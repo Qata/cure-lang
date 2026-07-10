@@ -155,4 +155,17 @@ defmodule Cure.ProjectEditionTest do
     assert {:ok, project} = Cure.Project.load(dir)
     assert project.name == "C# rocks"
   end
+
+  # Iteration 7 (audit A1-F1): the inline-comment stripper must respect backslash
+  # escapes inside a basic string. An ESCAPED quote (`\"`) does not close the
+  # string, so a `#` that follows it is still inside the value, not a comment.
+  # Without escape-awareness, `"a \" b # c"` mis-toggles the quote state at the
+  # `\"`, treats the `#` as a comment, and silently truncates the value.
+  test "an escaped quote inside a value does not cause a false comment cut" do
+    dir = write_toml("[project]\nname = \"a \\\" b # c\"\nedition = \"2026\"\n")
+    assert {:ok, project} = Cure.Project.load(dir)
+
+    assert String.contains?(project.name, "# c"),
+           "value truncated at # despite the # being inside the string: #{inspect(project.name)}"
+  end
 end
