@@ -1220,3 +1220,126 @@ Commits this cycle: `a0d4681` (printer bnot/braces/with-rematch), `69e143c`
 this record.
 
 ---
+
+## Iteration 17
+
+Resumed the in-progress cycle: fixed the Outstanding findings from iteration 16's
+audit (and follow-on findings surfaced mid-cycle), ran the full suite green, then
+ran a fresh 4-agent adversarial audit over every changed slice. All agent findings
+were verified against source / reproduced before counting.
+
+### Fixed this cycle (10 commits, all ghost-authored)
+
+- **Printer — nested unary minus + spurious doc line** (`6d28345`) — separated a
+  nested unary minus so `- -x` no longer fuses into `--` (lexed as an FSM-transition
+  token); dropped a spurious empty `## ` line from a fenced doc comment.
+- **Lexer — malformed numeric literals** (`70d2c0a`) — `lex_hex`/`lex_binary_int`
+  now reject an all-underscore radix (`clean == ""`); new `finish_float/3` rescues
+  `ArgumentError` from `String.to_float`. No numeric path can crash the tokenizer.
+- **Project — non-UTF-8 value bytes** (`058cf25`) — replaced `String.to_charlist`
+  in `strip_inline_comment` with a byte-wise binary scan, so a Cure.toml value with
+  invalid UTF-8 no longer raises on load.
+- **Migrate — freshen against body names** (`58f976d`) — `var_names_deep` folds the
+  function body's variable names into the freshening reserved set, so a renamed
+  signature binder (`T`→`t`) can't collide with a distinct free `t` used only in the
+  body.
+- **Lexer — over-long atom** (`0434cb9`) — `lex_atom_or_colon` guards `byte_size > 255`
+  and errors instead of letting `String.to_atom` crash the tokenizer.
+- **Project — [compiler] table hardening** (`471e9b0`) — the `[compiler]` table
+  interned every key via `String.to_atom` on arbitrary bytes (crash on non-UTF-8;
+  one permanent atom per distinct key = atom-table DoS). Replaced with a fixed
+  allow-list (`type_check`/`optimize`); unrecognized keys dropped, never interned.
+- **Printer — doc-comment trailing newlines** (`d015405`) — `String.trim_trailing`
+  instead of a single `replace_suffix`, so a fenced doc comment with ≥2 trailing
+  blank body lines no longer emits a spurious `## ` line.
+- **Migrate — seed kind universe `Type`** (`3ca3053`) — the uppercase-type-var rule
+  lowercased `Type` (the universe/sort) to a free `type` in `{a: Type}` signatures,
+  corrupting every dependent stdlib signature under `cure migrate`. Seeded `"Type"`
+  into `build_ctx`'s builtin set. **This reverses iteration 16's "not a bug" call**:
+  16 reasoned both forms compile so it was meaning-preserving, but `Type` is
+  unambiguously the universe (never a user variable — Idris/Agda/Lean parity), and a
+  migration tool must not rename it. The migrate audit agent independently confirmed
+  `Type` is the ONLY surface sort, so seeding it closes the whole class.
+- **Printer — comments inside a call's argument list** (`b23d18a`) — a comment can
+  legally sit inside a function call's arg list (the one comma-separated construct
+  whose parens may span newlines and reparse). The single-line span dropped it (a
+  silent `cure fmt` loss; a spurious `:comment_dropped` migrate rejection). When any
+  arg carries a leading/trailing comment the list renders one-per-line, with the
+  comma before any trailing comment so the `#` never eats it. No-comment case is
+  byte-for-byte the single-line span.
+- **Printer — inline `=` body with a leading comment** (`3df66ee`) — a comment
+  between `=` and an inline body was rendered `= # note` (commenting the body out),
+  then reparsed with the comment relocated across passes (non-idempotent). Now the
+  body breaks to the next line as the source wrote it.
+
+Full suite after fixes: **3963 passed, 0 failures**; 139 immune responses; Antigen
+309/309 cells across 34 assays.
+
+### Fresh audit — 4 agents, every finding verified against source → ZERO confirmed bugs
+
+- **Lexer** (clean): all five raise-capable conversion sites (`lex_hex` L787,
+  `lex_binary_int` L809, `lex_decimal` L836, `finish_float` L849, atom intern L1145)
+  are guarded or rescued; octal/quoted-atom/keyword paths and float state-threading
+  verified safe. The never-raise invariant holds.
+- **Project** (clean): every sibling `apply_kv` table stores string keys (no atom
+  interning), `scan_inline_comment` is byte-exact-equivalent to the old charlist
+  version (multibyte-safe by construction — `#`/`"`/`\` are all <0x80, never a
+  UTF-8 continuation byte), and the second-order flow (non-UTF-8 value bytes now
+  reaching `parse_scalar`/regex/slice) raises nowhere.
+- **Migrate** (clean): the `walk/4` vs `var_names_deep/2` structural asymmetry is
+  real but UNREACHABLE — lambda params are type-less (`fn(y: T)` isn't representable)
+  and every live type-var carrier (let/ascription `type_annotation`, type
+  applications) is a list-child 3-tuple handled symmetrically by both. `Type` is the
+  only surface universe; idempotence holds on both example traces.
+- **Printer** (all findings dissolved under verification):
+  - F1 (`:trailer` comment between args dropped) — **not reachable**: reproduced
+    `g(1,\n # c\n 2)`; the classifier attaches the own-line comment as `:leading` on
+    the NEXT arg (verified via AST inspection), so the multiline path keeps it and
+    the reprint is idempotent.
+  - F2 (augmented-assignment RHS parallel-site miss) — **not reachable**: an
+    augmented-assignment RHS cannot span a newline (`x +=\n 1` fails to parse), so a
+    leading-comment RHS is unrepresentable; the `=` fix's parallel site is dead code.
+  - F3 (comma after a bare-comment arg line) — theoretical; the agent could not
+    construct a triggering arg expression, and neither could I.
+  - F4 (decorator args not rerouted) — pre-existing (decorator rendering untouched
+    this cycle) and the comment is RELOCATED, not dropped (verify's comment-text diff
+    is order-insensitive, so it passes). While checking F4 I found that the PARSER
+    silently drops a decorator on a `type` declaration (`@derive(Eq)\ntype T` → the
+    `type_annotation` AST carries no decorator) — a pre-existing parser feature gap
+    (do type decls support decorators?), a design question, NOT a printer bug and
+    out of this loop's scope.
+
+### Outstanding findings (after iteration 17)
+
+**None confirmed in the changed slices.** This is the FIRST clean audit; iteration 16
+was not clean, so the streak = 1. One more clean audit converges the loop.
+
+**Newly noted (pre-existing, out of changed-slice scope — carry, do not block):**
+- Parser silently drops a decorator on a `type` declaration (`@derive` on a type is
+  discarded at parse time). Feature/design question (should type decls carry
+  decorators?), not a reprint bug. Needs an operator/design call before any fix.
+
+**Blocked — needs operator (UNCHANGED from iteration 16):**
+- `cure migrate` uppercase-type-var CTX false-positive — the general name-resolution
+  decision (user/imported type constructor vs free type var). The `Type`-sort case is
+  now FIXED (`3ca3053`); the general `Nat`/`Vector`-in-a-bare-file case remains the
+  blocked decision.
+- deps update no-op; partial/interrupted clone accepted; migrate no-flag target;
+  hyphenated dependency names (general package-manager scope).
+
+**Latent / unreachable today (carried, re-confirmed robust):**
+- `comment_texts` non-quote-aware; `walk`/`var_names_deep` asymmetry (unreachable);
+  `ProtoToInterface` `retires_keywords` with `enforced_in: nil` (by design);
+  `group_hoist` multi-`mod`-per-file (unsupported shape); printer F3 (unconstructable);
+  decorator-arg comment relocation (F4, relocation-not-loss).
+
+**Loop status:** iteration 17 fixed 10 real bugs (2 tokenizer crash-guards, 2 project
+untrusted-input hardenings incl. an atom-DoS, 1 migrate binder desync, 1 migrate
+universe-sort corruption, 4 printer round-trip/idempotence fixes). Fresh audit CLEAN
+(zero confirmed). **ONE clean audit — NOT yet converged** (need two consecutive). The
+cron is **left in place**. Full suite green: 3963 passed, 0 failures. Do NOT merge.
+
+Commits this cycle: `6d28345`, `70d2c0a`, `058cf25`, `58f976d`, `0434cb9`, `471e9b0`,
+`d015405`, `3ca3053`, `b23d18a`, `3df66ee`, plus this record.
+
+---
