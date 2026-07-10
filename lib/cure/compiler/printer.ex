@@ -1383,7 +1383,20 @@ defmodule Cure.Compiler.Printer do
     "\n#{pad}" <> render_stmt_list(exprs, depth + 1, indent)
   end
 
-  defp rhs_to_string(ast, depth, indent), do: render(ast, depth, indent)
+  # A body carrying its OWN leading comment cannot be rendered inline after `=`:
+  # `= # note` would comment the body out. Break it to the next line — the form
+  # the source used — so the comment sits above the body and the reprint is both
+  # lossless and idempotent (rendering inline drifted the comment across passes:
+  # body-leading → `=`-trailing → statement-leading). No leading comment ⇒ the
+  # inline form, byte-for-byte as before.
+  defp rhs_to_string(ast, depth, indent) do
+    if comment_item?(Keyword.get(trivia_meta(ast), :leading)) do
+      pad = String.duplicate(indent, depth + 1)
+      "\n#{pad}" <> render(ast, depth + 1, indent)
+    else
+      render(ast, depth, indent)
+    end
+  end
 
   # -- Function Definition ---------------------------------------------------
 

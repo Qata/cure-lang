@@ -164,6 +164,22 @@ defmodule Cure.Compiler.TriviaTest do
     assert reprint(out) == out, "trailing-comment reprint is not idempotent"
   end
 
+  # A comment between `=` and an inline body attaches as a LEADING comment on the
+  # body. Rendered inline (`= # note`) the `#` comments out the body, so the
+  # printer shoved the body to the next line and the comment drifted — from
+  # body-leading, to `=`-trailing, to fn-leading — across successive reprints
+  # (non-idempotent, and a relocation `cure fmt` must never do). When the body
+  # carries a leading comment the whole body must break to the next line, exactly
+  # as the source wrote it.
+  test "a comment between = and an inline body round-trips idempotently without relocating" do
+    src = "mod M\n  fn f() -> Int =\n    # note\n    1\n"
+    out = reprint(src)
+
+    assert out =~ "# note", "body-leading comment was dropped: #{inspect(out)}"
+    assert reparses?(out), "reprint no longer parses: #{inspect(out)}"
+    assert reprint(out) == out, "= / inline-body comment reprint is not idempotent: #{inspect(out)}"
+  end
+
   defp reparses?(src) do
     with {:ok, toks} <- Lexer.tokenize(src, file: "r.cure", emit_events: false),
          {:ok, _ast} <- Parser.parse(toks, file: "r.cure", emit_events: false) do
