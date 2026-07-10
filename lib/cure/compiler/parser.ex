@@ -42,7 +42,7 @@ defmodule Cure.Compiler.Parser do
 
   # -- Parser State ----------------------------------------------------------
 
-  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false]
+  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, edition: nil, seen_stmt?: false]
 
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
@@ -92,7 +92,8 @@ defmodule Cure.Compiler.Parser do
   def parse(tokens, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, true)
-    state = %__MODULE__{tokens: tokens, file: file, emit_events: emit?}
+    edition = Keyword.get(opts, :edition, Cure.Edition.current())
+    state = %__MODULE__{tokens: tokens, file: file, emit_events: emit?, edition: edition}
 
     {exprs, state} = parse_program(state)
 
@@ -144,6 +145,7 @@ defmodule Cure.Compiler.Parser do
             {Enum.reverse(acc), state}
 
           _ ->
+            state = mark_seen_if_stmt(state)
             prev_errors = length(state.errors)
             {expr, state} = parse_expr(state, 0)
             expr = attach_doc(expr, doc_text)
@@ -158,6 +160,7 @@ defmodule Cure.Compiler.Parser do
         end
 
       _ ->
+        state = mark_seen_if_stmt(state)
         prev_errors = length(state.errors)
         {expr, state} = parse_expr(state, 0)
         # Recovery: synchronize after a broken top-level statement so subsequent
@@ -4999,19 +5002,38 @@ defmodule Cure.Compiler.Parser do
     # the old placement unparseable — and therefore un-migratable — so we mirror
     # the `if`→`pickup` path (emit a deprecation event, keep the decorator node)
     # and let `cure migrate`'s @group-hoist rule relocate it to the canonical spot.
-    if dec_name in @module_level_decorators do
-      case peek(state) do
-        %Token{type: :keyword, value: :mod} ->
-          {mod_ast, state} = parse_module(state)
-          {attach_decorator(mod_ast, dec_name, args), state}
+    # `@edition("YYYY")` is a standalone file-leading pragma, not a decorator
+    # that attaches to a following declaration. It must appear before any
+    # substantive statement; a misplaced one is a HARD parse error (stricter
+    # than @group's soft-deprecation path, because the edition selects the
+    # keyword set and cannot be honoured once parsing is underway). A
+    # well-placed pragma carries its edition value on the {:decorator, …} node's
+    # args (the "2026" string literal).
+    if dec_name == "edition" do
+      state =
+        if file_leading?(state) do
+          state
+        else
+          add_error(state, {:edition_pragma_placement, token.line, token.col})
+        end
 
-        _ ->
-          state = emit_group_placement_deprecation(state, token, dec_name)
-          ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
-          {ast, state}
-      end
+      ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+      {ast, state}
     else
-      parse_at_attach(state, token, dec_name, args)
+      if dec_name in @module_level_decorators do
+        case peek(state) do
+          %Token{type: :keyword, value: :mod} ->
+            {mod_ast, state} = parse_module(state)
+            {attach_decorator(mod_ast, dec_name, args), state}
+
+          _ ->
+            state = emit_group_placement_deprecation(state, token, dec_name)
+            ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+            {ast, state}
+        end
+      else
+        parse_at_attach(state, token, dec_name, args)
+      end
     end
   end
 
@@ -5484,6 +5506,25 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :dedent} -> advance(state)
       _ -> state
+    end
+  end
+
+  # File-leading = no substantive (non-decorator, non-comment) top-level
+  # statement has yet been consumed. `@edition` must be the first thing in a
+  # file (comments/blanks aside); this flag is what the pragma-placement check
+  # in parse_at/1 reads.
+  defp file_leading?(state), do: not state.seen_stmt?
+
+  # Mark that a substantive top-level statement is about to be parsed. A
+  # decorator prefix (`:at`) or a comment is NOT substantive, so it does not
+  # flip the flag — this keeps a file-leading `@edition(...)` (and comments
+  # ahead of it) from being seen as "after a statement". Called just before a
+  # top-level `parse_expr`, so the flag is set BEFORE descending into a
+  # module body, letting an in-body `@edition` be detected as misplaced.
+  defp mark_seen_if_stmt(state) do
+    case peek(state) do
+      %Token{type: type} when type in [:at, :line_comment, :doc_comment] -> state
+      _ -> %{state | seen_stmt?: true}
     end
   end
 
