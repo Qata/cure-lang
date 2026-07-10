@@ -754,3 +754,88 @@ decisions. The cron is **left in place**; do NOT merge.
 Commits this cycle: `0eae043` (stale-ref doc fix only).
 
 ---
+
+## Iteration 12
+
+Iteration 11 was the first clean audit, but its two agents never probed
+`###`-fenced multi-line doc comments — so a real edition-core bug survived the
+whole run and only surfaced now. This cycle's fresh audit (two Opus agents:
+(1) edition core + compiler resolve/lex/parse, (2) migrate engine + editions dep
+glue) returned **one confirmed live bug** (fixed) and **one finding that I
+refuted against source**.
+
+**Fixed this cycle:**
+
+- **[MED] Edition pre-scan was `###`-fence-blind — spurious `{:edition_error}` on
+  a valid file.** (`7c211a8`) The lexer swallows a `###...###` fenced doc comment
+  into a single `:doc_comment` token (`lex_fenced_doc`/`fence_close_line?`), so an
+  `@edition(...)` line *inside* the fence is never a pragma. But
+  `first_substantive_line`/`trivia_line?` were line-based: they skipped only the
+  opening `###` line (starts with `#`) and then read the fenced-out
+  `@edition("2025")` as the first substantive line — resolving a pragma the
+  compiler never sees. A file with a non-default year fenced in a doc comment was
+  rejected with `{:error, {:edition_error, {:unknown_edition, "2025"}}}` *before
+  lexing*. Verified end-to-end: `pragma_edition` returned `"2025"` and `resolve`
+  returned the error while the lexer produced **no `:at` token**; after the fix
+  `pragma_edition` → `nil`, `resolve` → `{:ok, "2026"}` (compiles under default).
+  Fix skips the whole fenced block (opening line through the next `###` line, or
+  EOF), matching the lexer exactly. 3 red→green tests in `edition_test.exs`
+  (fenced `@edition` not a pragma; real pragma *after* a fence still read;
+  indented fence skipped).
+
+**Refuted against source (NOT counted):**
+
+- **Agent 2 — "`cure migrate` crashes on a non-numeric project edition."** The
+  agent claimed `Cure.Project.load` stores `edition:` raw "with no allow-list
+  check anywhere," so `resolve_project` returns `{:ok, "stable"}` and later
+  `compare/2`→`year/1` raises an uncaught `ArgumentError`. **False.**
+  `Cure.Project.load` (project.ex:116–125) validates the declared edition through
+  `Cure.Edition.parse(ed)` and returns `{:error, {:unknown_edition, ed}}` for any
+  invalid value. Empirically confirmed: for `edition = "stable"`, `"2026-beta"`,
+  and numeric-unknown `"2030"`, both `Project.load` and `Cure.Edition.resolve`
+  return `{:error, {:unknown_edition, _}}` — no `{:ok, "stable"}`, no crash, no
+  "refusing to downgrade" mis-report. `migrate_project_edition`'s
+  `{:error, {:unknown_edition, _}}` clause is therefore **live**, not dead, and
+  emits the intended clean diagnostic. Both resolution paths (pragma via `parse`,
+  project via `load`→`parse`) validate; the claimed asymmetry does not exist. The
+  agent confabulated an unvalidated `load` and never read lines 116–125.
+
+**Everything else agent 2 checked and cleared** (cross-checked plausible):
+`run_to_fixpoint` convergence/thrash-detection, `verify/3` multiset comment check,
+the three firing machine rules (hoist/module_rename/if_elif), splice/bump CRLF
+handling (latent — bump inert at single edition), git-guard, two-phase apply.
+
+**Full suite:** 3898 passed (3 doctests, 3895 tests), 0 failures; Antigen
+309/309 ✓ (`7c211a8`).
+
+## Outstanding findings (after iteration 12)
+
+The fresh audit found ONE real bug (fixed above); the second finding was refuted.
+No in-scope editions bug remains open. Carried forward UNCHANGED (none are
+editions defects):
+
+### Blocked — needs operator (design decisions; no parity-clear answer)
+- `cure deps update` is effectively a no-op (skips path/registry deps; git deps
+  cache-skip via `ensure_clone` with no fetch/checkout).
+- Partial/interrupted clone accepted as green (`.git` present, no worktree).
+- `cure migrate` no-flag target = `current()` (conservative) vs newest-known
+  (Rust `cargo fix --edition` moves forward) — product decision.
+- Hyphenated dependency names silently dropped (`parse_dep_line` `\w+`).
+
+### Latent / unreachable today (recorded, not fixed)
+- `comment_texts` non-quote-aware (no current rule edits string-literal contents).
+- Standalone pragma-less file not edition-stamped on a bump (coupled to the
+  migrate-target decision).
+- `ProtoToInterface` `retires_keywords` with `enforced_in: nil` (inert until a
+  retiring edition exists).
+
+**Loop status:** iteration 12's fresh audit found a real bug, so it is **NOT**
+clean — the two-consecutive-clean-audit streak resets (11 clean, 12 not). The
+"blocked floor" note from iteration 11 was premature: the fence bug was a genuine,
+in-scope edition-core defect that the prior clean audit simply never probed. The
+cron is **left in place** — convergence is not met and a confirming clean audit is
+still owed. Do NOT merge.
+
+Commits this cycle: `7c211a8` (fence-skip fix + 3 tests).
+
+---
