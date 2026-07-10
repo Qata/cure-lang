@@ -41,7 +41,45 @@ defmodule Antigen.Generators.KernelProbe do
     :eval_nondata_scrutinee,
     :apply_nonfun,
     :conv_unknown_ctor_fallback,
-    :validator_rejects_hole_body
+    :validator_rejects_hole_body,
+    # Value-surface probes — the atom / bounded / binary-type / bitwise family the
+    # dependent value surface added, driven through eval / conv / quote / serialize /
+    # infer / check / branch_unify / positivity (no term generator produces these).
+    :eval_value_literals,
+    :eval_negative_debruijn,
+    :eval_bounded_no_branch,
+    :eval_bounded_iota,
+    :eval_bounded_peel,
+    :eval_bitwise_fold,
+    :quote_value_surface,
+    :conv_atom_binary,
+    :conv_bounded_crossrep,
+    :conv_no_delta_value_surface,
+    :serialize_value_surface,
+    :serialize_special_atoms,
+    :serialize_malformed_symbol,
+    :infer_value_type_formers,
+    :infer_bounded_unregistered,
+    :infer_bounded_registered,
+    :check_bounded_in_range,
+    :check_bounded_out_of_range,
+    :check_bounded_tower,
+    :check_bounded_not_concrete,
+    :check_bounded_wrong_family,
+    :check_ctor_via_infer,
+    :sort_value_type_formers,
+    :unify_bounded_bridge,
+    :unify_rigid_value_heads,
+    :opaque_family_positivity,
+    :positivity_alias_expansion,
+    :occurs_bare_global,
+    :whnf_arity2_direct,
+    :whnf_nested_fuel_restore,
+    :cert_unknown_tuple_node,
+    :cert_unknown_list_node,
+    :cert_nontuple_call_arg,
+    :cert_nontuple_list_elem,
+    :cert_calls_nontuple_head
   ]
 
   @doc """

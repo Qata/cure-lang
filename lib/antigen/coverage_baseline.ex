@@ -21,10 +21,20 @@ defmodule Antigen.CoverageBaseline do
   proven-unreachable guard code (which lowers the ratio) is accepted by re-recording.
   Everyday `mix test` never regenerates it, so the floor cannot silently drift down.
 
-  Residual cold lines under this replay are the documented, proven-unreachable
-  defensive backstops (guarded by a same-module invariant no public input can
-  violate — reaching them would need to call the private `defp` directly) plus the
-  `Normalise.whnf/2` arity clause, which only a direct unit call warms.
+  Residual cold lines under this replay (7, as of the value-surface batch) are the
+  documented, proven-unreachable defensive backstops — guarded by a same-module
+  invariant no public input can violate, so reaching them would need to call the
+  private `defp` directly (which would weaken TCB encapsulation):
+
+    * `Certificate` 471/478 — a mutual-SCC member always has a real body (a `nil`
+      body yields no callees and is filtered out of the group), so `arity_of(nil)` /
+      `function_edges(_,_,nil)` are unreachable; 603 — `shift_term`'s non-var/non-ctor
+      catch-all, unreachable because `build_recon` only ever emits `{:ctor, _, [var…]}`.
+    * `Inductive` 526 — `gather_data_heads`'s seen-cycle branch, shadowed by `occurs?`'s
+      own cycle guard which short-circuits any global cycle before it is reached.
+    * `Kernel` 1218 — `unify_spine`'s length-mismatch catch-all, guarded out by the
+      equal-length lockstep of its callers; 1384/1390 — `replace_branch_var`'s self-map
+      and depth-limit fallbacks, impossible under `bind_index`'s acyclic-forest invariant.
   """
   alias Antigen.{Cover, Runner, Corpus, CoverManifest, Generators}
   alias Antigen.Backend.StreamData, as: B
