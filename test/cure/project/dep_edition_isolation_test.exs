@@ -43,4 +43,19 @@ defmodule Cure.Project.DepEditionIsolationTest do
            "expected the path dep to compile under the default edition and emit a .beam, " <>
              "but none was produced — it inherited the consumer's unknown edition"
   end
+
+  # Iteration 6 (audit A1-F2): a dependency whose inline table has a present-but-
+  # BLANK path (`foo = { path = "" }`) previously routed to the git-clone clause
+  # (parse_dep_line always emits a `git: nil` key), building `git clone … nil …`
+  # and CRASHING System.cmd with an ArgumentError. A malformed dep must fail with
+  # a clean error tuple, not raise.
+  test "a dependency with a blank path fails with an error, not a crash", %{root: root} do
+    project = %Cure.Project{
+      name: "app",
+      root: root,
+      dependencies: [%{name: "bad", path: "", git: nil, tag: nil, version: nil, constraint: nil}]
+    }
+
+    assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
+  end
 end

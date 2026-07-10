@@ -256,7 +256,16 @@ defmodule Cure.Project do
     :ok
   end
 
-  defp resolve_one(%{git: _url} = dep, root, _reuse_lock?) do
+  # A present-but-blank `path` (or `git`) is a malformed dependency. `parse_dep_line`
+  # always emits both keys, so a blank path leaves `git: nil` — which would match the
+  # git clause below and crash System.cmd on a nil URL. Fail with a clear error.
+  defp resolve_one(%{path: "", name: name}, _root, _reuse_lock?),
+    do: {:error, {:invalid_dependency, name}}
+
+  defp resolve_one(%{git: "", name: name}, _root, _reuse_lock?),
+    do: {:error, {:invalid_dependency, name}}
+
+  defp resolve_one(%{git: url} = dep, root, _reuse_lock?) when is_binary(url) do
     resolve_git_dep(dep, root)
   end
 
