@@ -160,6 +160,12 @@ defmodule Antigen.Challenge do
     :conv_pair, :convertible, :distinct,
     # Branch-unification vertical: kind + verdict labels + crossing-family names
     :branch_unify, :solved, :impossible, :trivial, :Cyc4, :mkcyc,
+    # Branch-unification dependent-matching TAILS (coverage-plateau follow-up):
+    # occurs-check family, interleaved-crossing family, compact-Nat-literal family,
+    # :case-headed and stuck-spine-headed and nested-:data-headed result-index
+    # families, and the motive-probe payload's shape tag + verdict label.
+    :Cyc1, :idcyc, :Cyc4b, :mkcyc2, :Nl, :nlc, :nlt, :CaseIdx, :mkci,
+    :SpineU, :spu, :Dboth, :mkboth, :neutral, :nonfun, :bad_motive,
     # Dot-forcing vertical (#24): kind + verdict labels + the carried-index family
     # H/hmk (its Sq/mksq + Vec/vcons siblings are interned above). These ride the
     # scaffold `family`/`cname` fields through `known_atom!` on decode.
@@ -294,10 +300,33 @@ defmodule Antigen.Challenge do
   def to_pieces(%__MODULE__{kind: :conv_pair, payload: %{t1: t1, t2: t2, ctx: n, expect: e}}),
     do: {%{"ctx" => n, "expect" => e}, [{"t1", t1}, {"t2", t2}]}
 
-  # branch-unify: family/ctor/ctx-size in the scaffold; scrutinee index terms as pieces.
-  def to_pieces(%__MODULE__{kind: :branch_unify, payload: %{ctx_vars: n, dname: d, cname: c, indices: idx}}) do
-    scaffold = %{"ctx_vars" => n, "dname" => Atom.to_string(d), "cname" => Atom.to_string(c)}
-    {scaffold, idx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"idx:#{i}", t} end)}
+  # branch-unify (motive-probe variant): no family/ctor/indices at all — the
+  # scenario is fully determined by the `shape` tag, so it rides alone in the
+  # scaffold with no Term pieces. Matched BEFORE the general clause below (whose
+  # pattern requires ctx_vars/dname/cname/indices keys the motive-probe payload
+  # doesn't have, so match order doesn't actually matter for correctness, but
+  # keeping the two `:branch_unify` clauses adjacent documents the split).
+  def to_pieces(%__MODULE__{kind: :branch_unify, payload: %{motive_probe: shape}}),
+    do: {%{"motive_probe" => Atom.to_string(shape)}, []}
+
+  # branch-unify: family/ctor/ctx-size in the scaffold; scrutinee index terms AND
+  # scrutinee param terms (finding S9 / Cyc1's branch_unify/5 path) as pieces,
+  # counted separately in the scaffold so `from_pieces` can split the flat pieces
+  # list back into the two groups.
+  def to_pieces(%__MODULE__{
+        kind: :branch_unify,
+        payload: %{ctx_vars: n, dname: d, cname: c, indices: idx, params: params}
+      }) do
+    scaffold = %{
+      "ctx_vars" => n,
+      "dname" => Atom.to_string(d),
+      "cname" => Atom.to_string(c),
+      "param_count" => length(params)
+    }
+
+    idx_pieces = idx |> Enum.with_index() |> Enum.map(fn {t, i} -> {"idx:#{i}", t} end)
+    param_pieces = params |> Enum.with_index() |> Enum.map(fn {t, i} -> {"param:#{i}", t} end)
+    {scaffold, idx_pieces ++ param_pieces}
   end
 
   def to_pieces(%__MODULE__{
@@ -482,16 +511,31 @@ defmodule Antigen.Challenge do
     new(kind: :conv_pair, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
+  def from_pieces(:branch_unify, assay, label, seed, note, %{"motive_probe" => shape_str}, _pieces) do
+    payload = %{motive_probe: known_atom!(shape_str)}
+    new(kind: :branch_unify, assay: assay, label: label, payload: payload, seed: seed, note: note)
+  end
+
   def from_pieces(:branch_unify, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)
-    n = length(pieces)
-    indices = if n == 0, do: [], else: for(i <- 0..(n - 1)//1, do: Map.fetch!(pmap, "idx:#{i}"))
+    # `param_count` is absent on records banked before the params round-trip fix —
+    # default 0 so old committed corpus/seed lines (paramless branch_unify/4 shapes
+    # only) still decode.
+    param_count = Map.get(scaffold, "param_count", 0)
+    idx_count = pieces |> Enum.count(fn {k, _} -> String.starts_with?(k, "idx:") end)
+
+    indices =
+      if idx_count == 0, do: [], else: for(i <- 0..(idx_count - 1)//1, do: Map.fetch!(pmap, "idx:#{i}"))
+
+    params =
+      if param_count == 0, do: [], else: for(i <- 0..(param_count - 1)//1, do: Map.fetch!(pmap, "param:#{i}"))
 
     payload = %{
       ctx_vars: scaffold["ctx_vars"],
       dname: known_atom!(scaffold["dname"]),
       cname: known_atom!(scaffold["cname"]),
-      indices: indices
+      indices: indices,
+      params: params
     }
 
     new(kind: :branch_unify, assay: assay, label: label, payload: payload, seed: seed, note: note)

@@ -38,6 +38,11 @@ defmodule Antigen.Coverage do
 
   def terms_of(%Challenge{kind: :branch_unify, payload: %{indices: idx}}), do: idx
 
+  # motive-probe branch_unify variant: fully determined by the `shape` tag, no
+  # Core terms in the payload at all (see Antigen.Generators.BranchUnify's
+  # `@motive_cases` and Antigen.Assays.BranchUnify's `motive_probe_result/1`).
+  def terms_of(%Challenge{kind: :branch_unify, payload: %{motive_probe: _}}), do: []
+
   def terms_of(%Challenge{kind: :dot_forcing, payload: %{indices: idx, written: w}}), do: idx ++ [w]
 
   # `[]` bypasses the well_formed? gate: a check-mode term may be a {:hole, _}
