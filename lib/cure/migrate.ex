@@ -37,7 +37,11 @@ defmodule Cure.Migrate do
   caller passes an explicit `:rules` list (tests do).
   """
   @spec rules() :: [Rule.t()]
-  def rules, do: [Cure.Migrate.Rules.IfElifToPickup.rule()]
+  def rules,
+    do: [
+      Cure.Migrate.Rules.IfElifToPickup.rule(),
+      Cure.Migrate.Rules.UppercaseTypeVar.rule()
+    ]
 
   @doc """
   Run `rules` over `ast` as an ordered fold. Each rule sees the AST as left by
