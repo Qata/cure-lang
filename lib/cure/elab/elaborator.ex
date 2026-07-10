@@ -769,23 +769,13 @@ defmodule Cure.Elab.Elaborator do
       {:ok, :float} ->
         {:ok, app2(if(op_sym == :==, do: :float_eq, else: :float_ne), l, r)}
 
-      :error ->
-        # A1 §1-A: structural equality — struct_eq/struct_ne applied to the
-        # readback of the operand type. A meta-containing readback must never
-        # reach the kernel (R8b): reject defensively (corpus predicts none).
-        # Signature-aware readback: an applied INDEXED family (e.g. `Bounded(n)`,
-        # Char's underlying type) must keep its param/index split, because this
-        # `ty` flows into `Kernel.infer` (the caller), which arity-checks params
-        # and indices separately. A sig-less readback flattens the index into the
-        # param slot and the kernel rejects it with `:arg_arity`.
-        ty = Quote.reify(l_type, Context.length(ctx), Context.signature(ctx))
+      # An indexed family (Bounded — Char) erases to a native int but is not a
+      # monomorphic twin, so it takes the same polymorphic struct_eq path.
+      {:ok, :bounded} ->
+        struct_eq_binop(op_sym, l, r, l_type, ctx)
 
-        if Unify.has_meta?(ty) do
-          {:error, {:unsupported_operand_type, op_sym}}
-        else
-          g = if op_sym == :==, do: :struct_eq, else: :struct_ne
-          {:ok, {:app, app2(g, ty, l), r}}
-        end
+      :error ->
+        struct_eq_binop(op_sym, l, r, l_type, ctx)
     end
   end
 
@@ -813,6 +803,25 @@ defmodule Cure.Elab.Elaborator do
 
       :error ->
         :unsupported_op
+    end
+  end
+
+  # A1 §1-A: structural equality — struct_eq/struct_ne applied to the readback of
+  # the operand type. The readback is signature-aware: an applied INDEXED family
+  # (e.g. `Bounded(n)`, Char's underlying type) must keep its param/index split,
+  # because this `ty` flows into `Kernel.infer` (the caller), which arity-checks
+  # params and indices separately — a sig-less readback flattens the index into
+  # the param slot and the kernel rejects it with `:arg_arity`. A meta-containing
+  # readback must never reach the kernel (R8b): reject defensively (corpus
+  # predicts none).
+  defp struct_eq_binop(op_sym, l, r, l_type, ctx) do
+    ty = Quote.reify(l_type, Context.length(ctx), Context.signature(ctx))
+
+    if Unify.has_meta?(ty) do
+      {:error, {:unsupported_operand_type, op_sym}}
+    else
+      g = if op_sym == :==, do: :struct_eq, else: :struct_ne
+      {:ok, {:app, app2(g, ty, l), r}}
     end
   end
 
@@ -2866,7 +2875,7 @@ defmodule Cure.Elab.Elaborator do
             end
 
           literal_chain?(pats, prim) ->
-            literal_chain(scrut_expr, scrut_term, prim, pats, expected, names, ctx, env)
+            literal_chain(scrut_expr, scrut_term, scrut_type, prim, pats, expected, names, ctx, env)
 
           true ->
             :not_applicable
@@ -2902,6 +2911,16 @@ defmodule Cure.Elab.Elaborator do
     if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error
   end
 
+  # An applied `Bounded(n)` (Char's underlying type) is an indexed family that
+  # erases to a native int. It is NOT one of the monomorphic int/float/bool eq
+  # twins, so equality is the polymorphic `struct_eq` — but a literal chain over
+  # it lowers exactly like the primitive chains. Arithmetic on it stays rejected
+  # (the arithmetic `build_binop` clause has no `:bounded` arm), preserving the
+  # `0 ≤ k < n` invariant.
+  defp primitive_scrut_kind({:vdata, fid, [_bound]}, sig) do
+    if fid == Inductive.builtin(sig, :bounded), do: {:ok, :bounded}, else: :error
+  end
+
   defp primitive_scrut_kind(_type, _sig), do: :error
 
   defp bool_exhaustive?([{p1, _}, {p2, _}]),
@@ -2927,6 +2946,8 @@ defmodule Cure.Elab.Elaborator do
   defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
   defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
   defp literal_of?({:literal, _m, v}, :bool), do: is_boolean(v)
+  # A char literal `'a'` carries its integer codepoint (subtype `:char`).
+  defp literal_of?({:literal, _m, v}, :bounded), do: is_integer(v)
   defp literal_of?(_p, _prim), do: false
 
   defp catchall_pat?({:variable, _m, _name}), do: true
@@ -2935,9 +2956,10 @@ defmodule Cure.Elab.Elaborator do
   defp lit_core(v, :int), do: {:int_lit, v}
   defp lit_core(v, :float), do: {:float_lit, v}
   defp lit_core(v, :bool), do: {:ctor, if(v, do: :True, else: :False), []}
+  defp lit_core(v, :bounded), do: {:bounded_lit, v}
 
   # The final (catch-all) arm: the chain's innermost default branch.
-  defp literal_chain(scrut_expr, _scrut_term, _prim, [{pat, body}], expected, names, ctx, env) do
+  defp literal_chain(scrut_expr, _scrut_term, _scrut_type, _prim, [{pat, body}], expected, names, ctx, env) do
     case pat do
       {:variable, _m, "_"} ->
         elaborate_expr_checked(body, expected, names, ctx, env)
@@ -2956,20 +2978,35 @@ defmodule Cure.Elab.Elaborator do
   # body if equal, else recurse on the rest — the test scrutinised by a `:case`
   # on Bool. `prim` (the scrutinee's primitive kind, already in scope) picks the
   # monomorphic twin; a Bool literal chain uses the Std.Bool `eq` case-def.
-  defp literal_chain(scrut_expr, scrut_term, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
+  # A `:bounded` (Char) chain uses the polymorphic `struct_eq` — `scrut_type`
+  # supplies its erased type argument — instead of a monomorphic eq twin.
+  defp literal_chain(scrut_expr, scrut_term, scrut_type, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
-           literal_chain(scrut_expr, scrut_term, prim, rest, expected, names, ctx, env) do
-      eq_global =
-        case prim do
-          :int -> :int_eq
-          :float -> :float_eq
-          :bool -> :eq
-        end
-
-      test = app2(eq_global, scrut_term, lit_core(v, prim))
+           literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
+      test = lit_eq_test(prim, scrut_term, v, scrut_type, ctx)
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
+  end
+
+  # The per-arm equality test `scrut == literal` yielding the inductive Bool. A
+  # `:bounded` scrutinee (Char) has no monomorphic eq twin, so it uses the
+  # polymorphic `struct_eq` applied to the signature-aware readback of the
+  # scrutinee type (its type argument is erased at emit).
+  defp lit_eq_test(:bounded, scrut_term, v, scrut_type, ctx) do
+    ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
+    {:app, app2(:struct_eq, ty, scrut_term), lit_core(v, :bounded)}
+  end
+
+  defp lit_eq_test(prim, scrut_term, v, _scrut_type, _ctx) do
+    eq_global =
+      case prim do
+        :int -> :int_eq
+        :float -> :float_eq
+        :bool -> :eq
+      end
+
+    app2(eq_global, scrut_term, lit_core(v, prim))
   end
 
   # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
