@@ -84,9 +84,20 @@ defmodule Cure.Core.Eval do
       # its dead de Bruijn slot exactly as a genuine `First`/`Next` value would.
       {:vbounded, _} = b ->
         {:vctor, cname, args} = bounded_to_ctor(b)
-        {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
-        fields = drop_leading_params(args, arity)
-        eval(body, Enum.reverse(fields) ++ env)
+
+        # Same nil-guard as the `:vctor` arm above. Without it a `case` missing the
+        # peeled constructor died with an opaque `MatchError` on `nil` instead of
+        # naming the coverage violation. Both arms must fail the same, legible way:
+        # reaching here at all means an ill-typed term slipped past `check_coverage`.
+        case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+          {_cname, arity, body} ->
+            fields = drop_leading_params(args, arity)
+            eval(body, Enum.reverse(fields) ++ env)
+
+          nil ->
+            raise "ι: no branch for constructor #{inspect(cname)} " <>
+                    "(coverage violation / ill-typed case reached eval)"
+        end
 
       {:vneutral, neutral} ->
         motive_closure = {:closure, env, motive}

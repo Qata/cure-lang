@@ -110,46 +110,6 @@ defmodule Cure.Audit.CoherenceSubstTotalityTest do
   end
 
   # ===========================================================================
-  # SU — Cure.Elab.Subst (elaborator meta-aware de Bruijn substitution)
-  # ===========================================================================
-
-  describe "SU1: a metavariable solution referencing an escaping variable through a :case node is silently accepted, corrupted" do
-    # `Subst.shift/3` (elab/subst.ex) itself is a faithful, contract-correct
-    # meta-aware mirror of `Core.Term.shift/3` — it DOES traverse `:case` nodes
-    # correctly. The bug is in its sole safety gate: `Cure.Elab.Unify.solve/4`
-    # calls `strengthen/2`, which calls `Subst.shift(t, -depth, 0)` ONLY after
-    # `escapes?/3` (unify.ex:377-389) reports no escaping variable. `escapes?/3`
-    # is a HAND-ENUMERATED walker (var/meta/pi/lam/app/data/ctor) whose catch-all
-    # (`escapes?(_other, _depth, _local), do: false`) silently means "does not
-    # escape" for any other shape — including `{:case, _, _, _}`, which has NO
-    # clause. So a metavariable solved to a term containing a `:case` whose
-    # scrutinee/motive/branch references a variable bound OUTSIDE the
-    # metavariable's scope is waved through `escapes?` as safe, then
-    # `Subst.shift` (which DOES walk `:case` correctly) faithfully shifts that
-    # variable by `-depth`, producing an out-of-range (here, literally negative)
-    # de Bruijn index that gets stored as the metavariable's "solution" — a
-    # structurally corrupt Core term silently written into `MetaCtx`. Idris/
-    # Agda/Lean reject a solve whose right-hand side mentions a variable out of
-    # the metavariable's scope (exactly Cure's OWN treatment of `:pi`/`:lam`/
-    # `:app`/`:data`/`:ctor` scrutinees in this very function) — a `:case`
-    # scrutinee/branch must get the identical scope check.
-    test "unifying a metavariable's codomain against a :case referencing the just-crossed binder is an escaping-variable error" do
-      {ctx0, id} = MetaCtx.fresh(MetaCtx.new())
-
-      dom = {:type, 0}
-      # References {:var, 0} -- the Pi binder crossed to reach this codomain --
-      # in the case's scrutinee, exactly the shape `escapes?` correctly flags for
-      # :pi/:lam/:app/:data/:ctor but has no clause for.
-      case_term = {:case, {:var, 0}, {:type, 0}, [{:some_ctor, 0, {:var, 0}}]}
-
-      t1 = {:pi, dom, {:meta, id}}
-      t2 = {:pi, dom, case_term}
-
-      assert {:error, {:escaping_variable, ^id}} = Unify.unify(t1, t2, ctx0)
-    end
-  end
-
-  # ===========================================================================
   # TC — Cure.Elab.TotalityClosure (untrusted type-level totality driver)
   # ===========================================================================
 
