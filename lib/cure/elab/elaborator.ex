@@ -500,6 +500,11 @@ defmodule Cure.Elab.Elaborator do
       :string when is_binary(value) ->
         elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
+      # A symbol literal `:ok` is a value of the Int-tier primitive `Atom` base
+      # type — a BEAM atom is its own canonical value (Core `{:atom_lit, a}`).
+      :symbol when is_atom(value) ->
+        {:ok, {:atom_lit, value}, {:vatom_type}}
+
       _ ->
         {:error, {:unsupported_expression, expr}}
     end

@@ -134,6 +134,7 @@ defmodule Cure.Core.Builtins do
     |> Env.put_primitive("Int", {:int_type})
     |> Env.put_primitive("Float", {:float_type})
     |> Env.put_primitive("Binary", {:binary_type})
+    |> Env.put_primitive("Atom", {:atom_type})
   end
 
   @doc """

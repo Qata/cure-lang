@@ -85,6 +85,8 @@ defmodule Cure.Core.Kernel do
   def infer(_ctx, {:float_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:float_lit, _f}), do: {:ok, {:vfloat_type}}
   def infer(_ctx, {:binary_type}), do: {:ok, {:vtype, 0}}
+  def infer(_ctx, {:atom_type}), do: {:ok, {:vtype, 0}}
+  def infer(_ctx, {:atom_lit, a}) when is_atom(a), do: {:ok, {:vatom_type}}
 
   # {:absurd} is an elaborator-only marker sitting in a discharged (unreachable)
   # case branch, which check_case_branches never checks. It has no positive typing
@@ -803,6 +805,7 @@ defmodule Cure.Core.Kernel do
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vbinary_type}), do: {:ok, 0}
+  defp infer_type_value_sort(_ctx, {:vatom_type}), do: {:ok, 0}
 
   defp infer_type_value_sort(ctx, {:vdata, name, _args}) do
     case Inductive.get_family(Context.signature(ctx), name) do
@@ -1194,6 +1197,8 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:int_type}), do: true
   defp rigid_index?({:float_type}), do: true
   defp rigid_index?({:binary_type}), do: true
+  defp rigid_index?({:atom_type}), do: true
+  defp rigid_index?({:atom_lit, _}), do: true
   defp rigid_index?({:int_lit, _}), do: true
   # A compact Nat literal is a closed canonical value (`2` ≡ `S(S(Z))`), so it is
   # a rigid constructor-like head for index unification — same status the `S`/`Z`

@@ -227,6 +227,8 @@ defmodule Cure.Elab.Emit do
   # and `Next(...First)` compile to the same value 97.
   defp lower(_env, {:bounded_lit, n}, _ctx), do: {:integer, @line, n}
   defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
+  # An atom literal is its own BEAM value.
+  defp lower(_env, {:atom_lit, a}, _ctx), do: {:atom, @line, a}
 
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.

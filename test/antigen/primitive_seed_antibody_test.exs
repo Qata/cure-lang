@@ -6,38 +6,41 @@ defmodule Antigen.PrimitiveSeedAntibodyTest do
   predate it, gated by the #2/#3 batch) and changes no kernel judgement.
 
   Two properties:
-    * EXACTLY-THREE-CANONICAL — the seeded floor is precisely {Int→int_type,
-      Float→float_type, Binary→binary_type}: no extra bindings, each mapping to
-      the already-gated canonical node. A drifted binding would silently
-      repoint a base type.
-    * KERNEL-INERT — inference/conversion on the three primitive nodes is
-      identical whether or not the primitives floor is present. The floor is a
-      resolution convenience, never consulted by the TCB.
+    * EXACTLY-FOUR-CANONICAL — the seeded floor is precisely {Int→int_type,
+      Float→float_type, Binary→binary_type, Atom→atom_type}: no extra bindings,
+      each mapping to the already-gated canonical node (`{:atom_type}` gated by
+      the Atom batch). A drifted binding would silently repoint a base type.
+    * KERNEL-INERT — inference/conversion on the primitive nodes is identical
+      whether or not the primitives floor is present. The floor is a resolution
+      convenience, never consulted by the TCB.
   """
   use ExUnit.Case, async: true
   alias Cure.Core.{Builtins, Context, Conv, Env, Kernel}
 
-  test "EXACTLY-THREE-CANONICAL: the floor is precisely the three canonical bindings" do
+  test "EXACTLY-FOUR-CANONICAL: the floor is precisely the four canonical bindings" do
     env = Builtins.seed(Env.empty())
 
     assert Env.primitive(env, "Int") == {:int_type}
     assert Env.primitive(env, "Float") == {:float_type}
     assert Env.primitive(env, "Binary") == {:binary_type}
-    assert map_size(env.primitives) == 3
+    assert Env.primitive(env, "Atom") == {:atom_type}
+    assert map_size(env.primitives) == 4
   end
 
   test "KERNEL-INERT: primitive-node judgements ignore the floor" do
     with_floor = Builtins.seed(Env.empty())
     without = %{with_floor | primitives: %{}}
 
-    for node <- [{:int_type}, {:float_type}, {:binary_type}] do
+    for node <- [{:int_type}, {:float_type}, {:binary_type}, {:atom_type}] do
       assert Kernel.infer(Context.empty(with_floor), node) ==
                Kernel.infer(Context.empty(without), node),
              "kernel inference on #{inspect(node)} must not depend on the primitives floor"
     end
 
-    # The three nodes stay mutually non-convertible either way (no floor-induced collapse).
+    # The nodes stay mutually non-convertible either way (no floor-induced collapse).
     refute Conv.conv?({:int_type}, {:binary_type}, [], 0, with_floor)
     refute Conv.conv?({:float_type}, {:binary_type}, [], 0, with_floor)
+    refute Conv.conv?({:atom_type}, {:binary_type}, [], 0, with_floor)
+    refute Conv.conv?({:atom_type}, {:int_type}, [], 0, with_floor)
   end
 end

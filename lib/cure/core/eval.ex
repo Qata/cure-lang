@@ -56,6 +56,11 @@ defmodule Cure.Core.Eval do
   def eval({:binary_type}, _env), do: {:vbinary_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
 
+  # BEAM atom base type + literal. An atom is its own canonical value (like an
+  # int literal): Eval maps the type node and literal node straight to values.
+  def eval({:atom_type}, _env), do: {:vatom_type}
+  def eval({:atom_lit, a}, _env), do: {:vatom, a}
+
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 

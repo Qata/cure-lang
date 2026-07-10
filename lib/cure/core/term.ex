@@ -23,6 +23,9 @@ defmodule Cure.Core.Term do
     * `{:int_type}` / `{:int_lit, n}`        integer type / literal
     * `{:float_type}` / `{:float_lit, f}`    float type / literal
     * `{:binary_type}`                       BEAM binary base type (Int-tier)
+    * `{:atom_type}` / `{:atom_lit, a}`      BEAM atom base type / literal (`a`
+                                             an atom); the atom is its own
+                                             canonical value (Int-tier prim)
     * `{:nat_lit, n}`                        compact Nat literal (`n >= 0`),
                                              definitionally equal to the n-fold
                                              `S`-tower over `Z` (Lean kernel Nat /
@@ -74,6 +77,8 @@ defmodule Cure.Core.Term do
   def term?({:float_type}), do: true
   def term?({:float_lit, f}), do: is_float(f)
   def term?({:binary_type}), do: true
+  def term?({:atom_type}), do: true
+  def term?({:atom_lit, a}), do: is_atom(a)
 
   def term?(_), do: false
 
@@ -102,6 +107,8 @@ defmodule Cure.Core.Term do
   def shift({:float_type} = t, _amount, _cutoff), do: t
   def shift({:float_lit, _} = t, _amount, _cutoff), do: t
   def shift({:binary_type} = t, _amount, _cutoff), do: t
+  def shift({:atom_type} = t, _amount, _cutoff), do: t
+  def shift({:atom_lit, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
   def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
@@ -168,6 +175,8 @@ defmodule Cure.Core.Term do
   def subst({:float_type} = t, _j, _r), do: t
   def subst({:float_lit, _} = t, _j, _r), do: t
   def subst({:binary_type} = t, _j, _r), do: t
+  def subst({:atom_type} = t, _j, _r), do: t
+  def subst({:atom_lit, _} = t, _j, _r), do: t
 
   def subst({:pi, dom, cod}, j, r),
     do: {:pi, subst(dom, j, r), subst(cod, j + 1, shift(r, 1, 0))}
@@ -237,6 +246,8 @@ defmodule Cure.Core.Term do
   def to_external({:float_type}), do: %{"node" => "float_type"}
   def to_external({:float_lit, f}), do: %{"node" => "float_lit", "value" => f}
   def to_external({:binary_type}), do: %{"node" => "binary_type"}
+  def to_external({:atom_type}), do: %{"node" => "atom_type"}
+  def to_external({:atom_lit, a}), do: %{"node" => "atom_lit", "value" => Atom.to_string(a)}
 
   @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
   @spec from_external(map()) :: t()
@@ -274,6 +285,8 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "float_type"}), do: {:float_type}
   def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
   def from_external(%{"node" => "binary_type"}), do: {:binary_type}
+  def from_external(%{"node" => "atom_type"}), do: {:atom_type}
+  def from_external(%{"node" => "atom_lit", "value" => a}), do: {:atom_lit, String.to_atom(a)}
 
   # -- helpers ----------------------------------------------------------------
 
