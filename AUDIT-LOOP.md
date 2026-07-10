@@ -359,3 +359,72 @@ Commits this cycle: `4b300ef` (LATENT-1), `e012adb` (A3-F1/F2), `e07fc24` (A2-F1
 `be4c43b` (A1-F2), `d5f8e07` (A1-F1), `02a8b4c` (A2-F2 + doc A2-F3/F5).
 
 ---
+
+## Iteration 7 — fresh 3-Opus audit of the iteration-6 changes + fixes
+
+No open bugs entered this cycle (iteration 6's Outstanding was by-design only), so
+this was a pure audit of the iteration-6 diff (`git log 9850ce9..b5d81a3`). Three
+parallel Opus agents (project/dep, migrate splice, edition semantics), read-only.
+**Every claim verified against source before counting.** The migrate-splice agent
+came back **clean** (token-only replacement correct across LF/CRLF/lone-CR/trailing-
+comment/empty). The other two surfaced **5 confirmed real bugs**, all fixed:
+
+- **A1-F1 (escaped-quote data loss in `strip_inline_comment`)** — `99c1202`: the
+  quote-state toggle ignored backslash escapes, so a `\"` inside a basic string
+  wrongly closed it and a following `#` truncated the value. Now tracks `\`-escapes.
+- **A1-F3 (whitespace-only path bypassed the blank-dep guard)** — `f9cc1d1`: the
+  `!= ""` guard is literal, so `path = "   "` slipped through and silently resolved
+  to zero files. Trim before deciding; extracted `resolve_path_dep/3`.
+- **A3-F1 (a dep's own unknown edition failed SILENTLY)** — `857305f`: iteration-6's
+  `dep_project_dir` routes the dep manifest into `resolve_edition`, so a typo'd dep
+  edition makes `compile_file` error — but the `_ =` discard left the build green
+  with no beams. New `compile_dep_files/4` propagates `{:dependency_edition_error,…}`
+  (other dep compile errors stay non-fatal, as before). Git deps now also route
+  through it + `dep_project_dir`, closing the "git dep vendored without .git" leak
+  the semantics agent flagged as a consistency gap.
+- **A1-F4 (O(N) redundant manifest re-parse in `detect_app`)** — `64e43ab`: resolved
+  each file's edition by re-reading+validating the project Cure.toml once per file
+  (plus a wasted `find_root` for pragma'd files). Check the cheap pragma first;
+  memoize the manifest edition by project root. Behavior-identical, just faster.
+- **A3-F2 (parse_source resolved a different edition than the compile path)** —
+  `15f33f4`: it passed only `:source`, ignoring the project manifest, so a pragma-
+  less file was inspected under `current()` while it compiles under the manifest
+  edition (latent: one edition). Now discovers the project root from a real `:file`.
+
+**Verified NON-bugs / by-design (recorded, not fixed):**
+
+- **A3-F3** — `Edition.current` is a hardcoded constant, not `List.last(all())`. This
+  is intentional: the default is decoupled from the newest *known* edition so a new
+  edition can be minted as opt-in before it is promoted to default (Rust parity).
+  Clarified the docstring (`15f33f4`) so it is not "fixed" into a derivation.
+- **A1-F2** — `strip_inline_comment` doesn't track TOML single-quoted (literal)
+  strings, so a `#` inside `'...'` would be mis-cut. Pre-existing and inert: the
+  loader's `strip_quotes`/`parse_scalar` don't support single-quoted strings at all,
+  so such a value is already unusable. Out of scope for the editions work.
+- **migrate splice raw-`target` interpolation** — `target` is interpolated into the
+  `Regex.replace` replacement string, where `\N` would be a backreference. Not
+  reachable: `target` is allow-list-constrained to a 4-digit numeric edition. Noted.
+
+**Refuted on verification:** the pre-pass↔compile-pass edition-mismatch hypothesis
+(identical source + identical `find_root` ⇒ identical edition); `find_dep_root`
+termination/escape (sound); `resolve_one` clause-ordering (correct); dep values
+passing through `strip_inline_comment` (they use the separate `parse_dep_line`).
+
+**Full suite after all fixes: 3887 passed, 0 failing** (+3 new tests; 146 immune
+responses expected; Antigen shape-coverage 309/309).
+
+## Outstanding findings (after iteration 7)
+
+- None open as bugs. Three by-design/inert items above (A3-F3, A1-F2, the migrate
+  interpolation) are recorded as rationale so a future audit doesn't re-flag them.
+
+**Loop status:** iteration 7's fresh audit found 5 confirmed bugs — so it is **NOT
+a clean audit**, and the Group A–E fixes are NEW code not yet independently audited.
+Convergence (two consecutive clean audits) is **not** met (iterations 6 and 7 both
+found bugs). The cron is **left in place**; the next fire (iteration 8) runs a fresh
+audit over the iteration-7 changes. Do NOT merge.
+
+Commits this cycle: `99c1202` (A1-F1), `f9cc1d1` (A1-F3), `857305f` (A3-F1),
+`64e43ab` (A1-F4), `15f33f4` (A3-F2 + A3-F3 doc).
+
+---
