@@ -72,4 +72,27 @@ defmodule Cure.Project.DepEditionIsolationTest do
 
     assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
   end
+
+  # Iteration 7 (audit A3-F1): a dependency whose OWN Cure.toml declares an unknown
+  # edition must FAIL LOUDLY, not silently. dep_project_dir now routes the dep's
+  # manifest into resolve_edition, so a typo'd dep edition makes compile_file return
+  # {:edition_error, …}. That error was discarded (`_ =`), leaving the build green
+  # with no beams and only opaque missing-module errors downstream. Propagate it.
+  test "a dependency's own unknown edition fails the build loudly", %{root: root} do
+    dep = Path.join(root, "dep")
+    dep_lib = Path.join(dep, "lib")
+    File.mkdir_p!(dep_lib)
+    # The DEP ships its own manifest with a typo'd edition.
+    File.write!(Path.join(dep, "Cure.toml"), "[project]\nname = \"dep\"\nedition = \"9999\"\n")
+    File.write!(Path.join(dep_lib, "d.cure"), "mod DepMod\n  fn f() -> Int = 1\n")
+
+    project = %Cure.Project{
+      name: "app",
+      root: root,
+      dependencies: [%{name: "mydep", path: "dep", git: nil, tag: nil, version: nil, constraint: nil}]
+    }
+
+    assert {:error, {:dependency_edition_error, "mydep", {:unknown_edition, "9999"}}} =
+             Cure.Project.resolve_deps(project)
+  end
 end

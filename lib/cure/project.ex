@@ -295,21 +295,33 @@ defmodule Cure.Project do
     dep_ebin = Path.join(root, "_build/deps/#{name}")
     File.mkdir_p!(dep_ebin)
 
-    Enum.each(cure_files, fn file ->
-      # Edition-per-package (Rust parity): the dep resolves under its OWN root,
-      # never the consumer's. dep_project_dir picks the dep's own Cure.toml if it
-      # ships one (bounded at abs_path) and otherwise abs_path itself (→ default),
-      # so resolve_edition never walks up into the consumer's Cure.toml.
-      _ =
-        Cure.Compiler.compile_file(file,
-          output_dir: dep_ebin,
-          emit_events: false,
-          project_dir: dep_project_dir(file, abs_path)
-        )
-    end)
+    with :ok <- compile_dep_files(cure_files, name, dep_ebin, abs_path) do
+      :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
+      :ok
+    end
+  end
 
-    :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
-    :ok
+  # Compile a dependency's sources, each under its OWN edition (dep_project_dir,
+  # bounded at `base`, so it honours the dep's own Cure.toml — nested or not — yet
+  # never inherits the consumer's edition). Most compile errors stay non-fatal (a
+  # dep may ship files the consumer never exercises, matching the historic `_ =`
+  # behaviour), but an UNKNOWN-EDITION error is FATAL and loud (A3-F1): a typo'd
+  # dep edition must brick the build, not silently emit no beams and surface later
+  # as opaque missing-module errors.
+  defp compile_dep_files(cure_files, name, dep_ebin, base) do
+    Enum.reduce_while(cure_files, :ok, fn file, :ok ->
+      case Cure.Compiler.compile_file(file,
+             output_dir: dep_ebin,
+             emit_events: false,
+             project_dir: dep_project_dir(file, base)
+           ) do
+        {:error, {:edition_error, reason}} ->
+          {:halt, {:error, {:dependency_edition_error, name, reason}}}
+
+        _ ->
+          {:cont, :ok}
+      end
+    end)
   end
 
   defp resolve_registry_dep(name, constraint, root, reuse_lock?) do
@@ -370,22 +382,13 @@ defmodule Cure.Project do
     dep_ebin = Path.join(root, "_build/deps/#{name}-#{version}/ebin")
     File.mkdir_p!(dep_ebin)
 
-    Enum.each(cure_files, fn file ->
-      # Edition-per-package (Rust parity): a tarball dep resolves under its own
-      # extraction root, never the consumer's. dep_project_dir finds the dep's own
-      # Cure.toml even under the common nested layout (target/<pkg>-<vsn>/Cure.toml,
-      # which the `**/lib/**` glob anticipates), bounded at `target` so a
-      # manifest-less dep falls to the default rather than the consumer's edition.
-      _ =
-        Cure.Compiler.compile_file(file,
-          output_dir: dep_ebin,
-          emit_events: false,
-          project_dir: dep_project_dir(file, target)
-        )
-    end)
-
-    :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
-    :ok
+    # Edition-per-package: each file resolves under the dep's own Cure.toml even in
+    # the common nested layout (target/<pkg>-<vsn>/Cure.toml, which the `**/lib/**`
+    # glob anticipates), bounded at `target`; an unknown dep edition fails loudly.
+    with :ok <- compile_dep_files(cure_files, name, dep_ebin, target) do
+      :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
+      :ok
+    end
   end
 
   defp strip_sha_prefix("sha256:" <> rest), do: rest
@@ -622,13 +625,16 @@ defmodule Cure.Project do
     end
 
     cure_files = Path.wildcard(Path.join(target, "lib/**/*.cure"))
+    dep_ebin = Path.join(root, "_build/deps/#{name}")
 
-    Enum.each(cure_files, fn file ->
-      _ = Cure.Compiler.compile_file(file, output_dir: Path.join(root, "_build/deps/#{name}"), emit_events: false)
-    end)
-
-    :code.add_patha(String.to_charlist(Path.expand(Path.join(root, "_build/deps/#{name}"))))
-    :ok
+    # Route through the shared helper so a git dep also resolves under its OWN
+    # edition (dep_project_dir bounded at `target`, honouring a nested manifest)
+    # rather than relying solely on find_root stopping at the clone's `.git`, and
+    # so an unknown dep edition fails loudly (A3-F1) — consistent with path/tarball.
+    with :ok <- compile_dep_files(cure_files, name, dep_ebin, target) do
+      :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
+      :ok
+    end
   end
 
   defp ref_args(%{tag: tag}) when is_binary(tag) and tag != "", do: ["--branch", tag]
