@@ -428,6 +428,16 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
+      # `element(t, i)` — dependent n-ary telescope/tuple projection. ONE surface
+      # for the i-th component, typed at the true `Ti` (not a numbered `tproj_i`),
+      # with a COMPILE-TIME bounds check: an `i` beyond the arity is rejected at
+      # elaboration, never a runtime crash. `t.i` is sugar for this (both share
+      # `positional_projection`). `i` must be a static positive integer literal —
+      # the bounds check is only meaningful for a statically-known index.
+      Keyword.get(meta, :name) == "element" and element_projection?(args) ->
+        [t_arg, {:literal, _, i}] = args
+        positional_projection(i, t_arg, names, ctx, env)
+
       # Record construction `Point{x: .., y: ..}` desugars to the positional
       # constructor `Point(.., ..)` (fields ordered by the record's telescope).
       Keyword.get(meta, :record) ->
@@ -976,6 +986,13 @@ defmodule Cure.Elab.Elaborator do
     elaborate_implicit_global_app(env, gname, [inner], names, ctx)
   end
 
+  # `element(t, i)` is the dependent n-ary projection form iff called with exactly
+  # two arguments and a STATIC positive-integer literal index — the only shape for
+  # which the compile-time bounds check is meaningful. Any other `element(…)` call
+  # falls through to ordinary name resolution.
+  defp element_projection?([_t_arg, {:literal, _meta, i}]) when is_integer(i) and i >= 1, do: true
+  defp element_projection?(_), do: false
+
   # A `.N` attribute where `N` is a positive integer is a POSITIONAL projection
   # (`.1`, `.2`, …); anything else is a record field name.
   defp parse_positional_index(attr) do
@@ -1003,6 +1020,13 @@ defmodule Cure.Elab.Elaborator do
 
       {:telescope, n} when i <= n ->
         sigma_projection(:fst, inner, names, ctx, env)
+
+      # The arity is statically known and `i` is out of `[1, n]` — reject at
+      # elaboration. A telescope carries its arity in its type, so an
+      # out-of-bounds positional access (`t.9` / `element(t, 9)` on a 3-tuple)
+      # is a compile-time error, never a runtime `element/2` crash.
+      {:telescope, n} ->
+        {:error, {:telescope_index_out_of_bounds, i, n}}
 
       _ ->
         case i do
