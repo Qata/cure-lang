@@ -300,13 +300,17 @@ defmodule Cure.Elab.Declarations do
            # graded `Conv` forbids. Both now come from one vector.
            final_pi = wrap_binders(:pi, sig.telescope, quantities, sig.return_core),
            lambda = wrap_binders(:lam, sig.telescope, quantities, body_term),
-           # The assertion that would have caught the whole dichotomy class: the
-           # stored λ must kernel-check against the stored Π. Idris fixes the type and
-           # checks clauses against it; this is the same discipline, applied to the
-           # term we are about to persist. Cheap — the body already type-checked; this
-           # only re-confirms the binder grades line up.
-           final_type_value = Eval.eval(final_pi, Context.env(Context.empty(env))),
-           :ok <- Kernel.check(Context.empty(env), lambda, final_type_value) do
+           # The assertion that would have caught the whole dichotomy class: the stored
+           # Π and λ must agree on every binder's grade. Compare the two grade spines
+           # STRUCTURALLY — do NOT re-run a full `Kernel.check` of the body. The body
+           # already type-checked at `:284` against `build_context`'s WHNF'd context; a
+           # second kernel check here would rebuild the context WITHOUT that whnf (the
+           # `:lam` rule's `Context.extend` does not normalise `exp_dom`), so a
+           # parameter whose type is a δ-unfoldable alias reaches the kernel as an
+           # opaque neutral and a `match` on it fails `:case_scrutinee_not_data` — a
+           # regression the first cut of this slice shipped (adversarial review F1).
+           # The grade check is all slice 6 needs, and it is O(telescope depth).
+           :ok <- assert_binder_grades_agree(final_pi, lambda, sig.name) do
         final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
@@ -842,6 +846,26 @@ defmodule Cure.Elab.Declarations do
     |> Enum.reverse()
     |> Enum.reduce(inner, fn {{_name, type}, g}, acc -> {tag, g, type, acc} end)
   end
+
+  # Slice-6 guard: the stored Π and λ must carry the same grade at every binder
+  # position. Both are built from one `quantities` vector by `wrap_binders/4`, so on
+  # correct code this always holds; it fires only if a future change sources the two
+  # from different vectors (mutation-validated: build the final Pi from the ORIGINAL
+  # instead of the demoted vector → `{:grade_mismatch, %{pi:, lam:}}`). Structural,
+  # so it never inspects a binder's TYPE — no whnf, no body re-check.
+  defp assert_binder_grades_agree(pi, lam, name) do
+    case grade_spine_mismatch(pi, lam) do
+      nil -> :ok
+      {pg, lg} -> {:error, {:grade_mismatch, %{def: name, pi: pg, lam: lg}}}
+    end
+  end
+
+  defp grade_spine_mismatch({:pi, pg, _pd, pc}, {:lam, lg, _ld, lb}) do
+    if pg == lg, do: grade_spine_mismatch(pc, lb), else: {pg, lg}
+  end
+
+  # Spines exhausted in lockstep (both built from the same telescope) — agreed.
+  defp grade_spine_mismatch(_pi_cod, _lam_body), do: nil
 
   defp binder_grades(nil, n), do: List.duplicate(Cure.Core.Grade.unrestricted(), n)
 

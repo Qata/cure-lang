@@ -104,4 +104,50 @@ defmodule Cure.Elab.PiGradeSourceTest do
       assert :ok == Kernel.check(ctx, d.body, Eval.eval(d.type, Context.env(ctx)))
     end
   end
+
+  describe "the slice-6 grade assertion does not re-reject valid bodies (regression, adversarial review F1)" do
+    # The first cut of slice 6 asserted grade-agreement by re-running a full
+    # `Kernel.check` of the λ against the Π — but in a context that, unlike
+    # `build_context/2`, did NOT whnf the binder types. A parameter whose type is a
+    # δ-unfoldable ALIAS then reached the kernel as an opaque `{:vneutral,{:nglobal}}`
+    # rather than its `{:vdata}` head, so a `match` on it failed with
+    # `:case_scrutinee_not_data` — even though the body already type-checked against
+    # the same type via the whnf'd `build_context`. The grade check must compare the
+    # Pi/λ grade spines STRUCTURALLY, never re-check the body.
+    test "a function matching on a type-alias parameter still elaborates" do
+      src = """
+      mod Demo
+        typealias IntList = List(Int)
+        fn is_empty2(xs: IntList) -> Bool =
+          match xs
+            [] -> true
+            [_ | _] -> false
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      d = Env.get_def(env, :is_empty2)
+      # And the grade is still recorded honestly (one explicit param, omega).
+      assert d.quantities == [:unrestricted]
+      assert pi_grades(d.type) == [:unrestricted]
+    end
+
+    test "an alias-typed match with a where-dict (demotion path) still elaborates" do
+      src = """
+      mod Demo2
+        interface Eqs(a)
+          fn eqs(x: a, y: a) -> Bool
+        implementation Eqs for Int
+          fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+        typealias IntList = List(Int)
+        fn first_or({a: Type}, xs: IntList, d: Int) -> Int where Eqs(Int) =
+          match xs
+            [] -> d
+            [h | _] -> h
+      end
+      """
+
+      assert {:ok, _env} = Program.elaborate(src)
+    end
+  end
 end
