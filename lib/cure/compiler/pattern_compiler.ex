@@ -260,7 +260,7 @@ defmodule Cure.Compiler.PatternCompiler do
     case Map.fetch(state.vars, name) do
       {:ok, existing_atom} ->
         # Repeated occurrence: bind a fresh var and emit an equality guard.
-        fresh = fresh_var_atom(name, state)
+        {fresh, state} = fresh_var_atom(name, state)
         guard = equality_guard(fresh, existing_atom, state.line)
 
         state = %{
@@ -291,12 +291,14 @@ defmodule Cure.Compiler.PatternCompiler do
     {{:match, line, var_form, inner_form}, state}
   end
 
+  # Two repeats of the same name in one pattern (`[x, x, x]`) must produce DISTINCT Erlang
+  # variables, each equated to the original by its own guard. The counter that guarantees
+  # that was declared on the codegen struct and read here, but incremented nowhere: every
+  # dup in a clause collapsed onto `V__dup_x_0`, so a third occurrence re-matched a variable
+  # already bound to the second occurrence's value.
   defp fresh_var_atom(name, state) do
-    # We use the state.line as a disambiguator so that two repeats on the
-    # same logical name in the same clause still produce distinct atoms.
-    # The :pattern_dup_counter field is incremented each time.
     counter = Map.get(state, :pattern_dup_counter, 0)
-    String.to_atom("V__dup_#{name}_#{counter}")
+    {String.to_atom("V__dup_#{name}_#{counter}"), %{state | pattern_dup_counter: counter + 1}}
   end
 
   defp equality_guard(fresh, existing, line) do

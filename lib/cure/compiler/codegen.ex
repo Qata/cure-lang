@@ -692,7 +692,7 @@ defmodule Cure.Compiler.Codegen do
           compile_body_exprs(multiple, fn_state)
       end
 
-    clause = {:clause, line, param_forms, guard_forms, body_forms}
+    clause = {:clause, line, param_forms, guard_forms, wrap_early_return(body_forms, body, line)}
     {{:function, line, fn_atom, length(params), [clause]}, warnings}
   end
 
@@ -731,6 +731,7 @@ defmodule Cure.Compiler.Codegen do
         guard_forms = compile_guard_with_extras(guard, extra_guards, clause_state)
 
         {body_forms, warnings} = compile_body_exprs(body_list, clause_state)
+        body_forms = wrap_early_return(body_forms, body_list, line)
 
         {{:clause, line, pattern_forms, guard_forms, body_forms}, warnings}
       end)
@@ -1111,10 +1112,22 @@ defmodule Cure.Compiler.Codegen do
       tag = constructor_tag(name)
       {{:tuple, line, [{:atom, line, tag}]}, state}
     else
-      var_atom = mangle_var(name)
-      form = {:var, line, var_atom}
-      {form, state}
+      # Consult the scope. A `let` that shadows an existing name rebinds it to a FRESH
+      # Erlang variable (Erlang bindings are single-assignment), so the name's current
+      # Erlang atom is whatever `state.vars` says — not `mangle_var/1`'s fixed answer.
+      # Names with no binder in scope (module-level references, comprehension bindings)
+      # still fall back to the mangled form.
+      var_atom = Map.get(state.vars, name) || mangle_var(name)
+      {{:var, line, var_atom}, state}
     end
+  end
+
+  # A fresh Erlang variable for a Cure name that is being re-bound. `temp_counter` makes it
+  # unique within the clause; the suffix is `__s<n>` so the result is a legal Erlang
+  # variable name.
+  defp fresh_shadow_atom(name, state) do
+    n = state.temp_counter
+    {String.to_atom("V_#{name}__s#{n}"), %{state | temp_counter: n + 1}}
   end
 
   # -- Binary Operator Compilation ---------------------------------------------
@@ -1423,7 +1436,32 @@ defmodule Cure.Compiler.Codegen do
 
   # -- Assignment (let binding) ------------------------------------------------
 
-  defp compile_assignment(meta, pattern, value, state) do
+  # `let x = 1` followed by `let x = 2` re-binds the name for the rest of the block — what
+  # the type checker's `bind_pattern_vars` permits and what every later reference expects to
+  # see. Erlang variables are single-assignment, so the shadow must get a NEW Erlang
+  # variable. It used to go through `PatternCompiler.compile_variable_pattern/2`'s
+  # already-bound branch, which exists for NON-LINEAR PATTERNS (`[x, x]`, where the second
+  # `x` must equal the first): that mints a fresh variable plus an equality guard and leaves
+  # `state.vars[name]` pointing at the ORIGINAL atom. `compile_assignment/4` then dropped the
+  # guard, and `compile_variable/2` never consulted `state.vars` at all — so `let x = 1; let
+  # x = 2; x` bound a fresh unused variable and evaluated to 1.
+  defp compile_assignment(meta, {:variable, _vmeta, name} = pattern, value, state)
+       when is_binary(name) do
+    if Map.has_key?(state.vars, name) do
+      line = Keyword.get(meta, :line, state.line)
+      {val_form, state} = do_compile_expr(value, state)
+      {fresh, state} = fresh_shadow_atom(name, state)
+      state = %{state | vars: Map.put(state.vars, name, fresh)}
+      {{:match, line, {:var, line, fresh}, val_form}, state}
+    else
+      compile_binding(meta, pattern, value, state)
+    end
+  end
+
+  defp compile_assignment(meta, pattern, value, state),
+    do: compile_binding(meta, pattern, value, state)
+
+  defp compile_binding(meta, pattern, value, state) do
     line = Keyword.get(meta, :line, state.line)
     {val_form, state} = do_compile_expr(value, state)
 
@@ -1442,17 +1480,27 @@ defmodule Cure.Compiler.Codegen do
 
   # -- Augmented Assignment ----------------------------------------------------
 
-  defp compile_augmented_assignment(meta, var_ast, value, state) do
+  # `x += 1` used to emit Erlang's `V_x = V_x + 1`. `V_x` is already bound, so that is not a
+  # rebinding but a re-match: it demands `old == old + 1`, and every augmented assignment on
+  # a bound variable raised `{badmatch, _}`. Like a `let` shadow, it must bind a fresh Erlang
+  # variable — the read of the old value happens on the right of the match.
+  defp compile_augmented_assignment(meta, {:variable, _vmeta, name} = var_ast, value, state)
+       when is_binary(name) do
     line = Keyword.get(meta, :line, state.line)
     op = Keyword.get(meta, :operator)
 
-    {var_form, state} = do_compile_expr(var_ast, state)
+    {old_form, state} = do_compile_expr(var_ast, state)
     {val_form, state} = do_compile_expr(value, state)
 
-    erl_op = cure_op_to_erlang(op)
-    rhs = {:op, line, erl_op, var_form, val_form}
-    form = {:match, line, var_form, rhs}
-    {form, state}
+    rhs =
+      case op do
+        :/ -> division_form(line, old_form, val_form)
+        _ -> {:op, line, cure_op_to_erlang(op), old_form, val_form}
+      end
+
+    {fresh, state} = fresh_shadow_atom(name, state)
+    state = %{state | vars: Map.put(state.vars, name, fresh)}
+    {{:match, line, {:var, line, fresh}, rhs}, state}
   end
 
   # -- Conditional (if/elif/else) ----------------------------------------------
@@ -1461,8 +1509,14 @@ defmodule Cure.Compiler.Codegen do
     line = Keyword.get(meta, :line, state.line)
 
     {cond_form, state} = do_compile_expr(condition, state)
+
+    # The two branches are sibling scopes: a `let` in one must not leave its rebinding
+    # visible to the other, nor to the code after the `if`. Only `vars` is restored —
+    # warnings and the fresh-variable counter are cumulative by design.
+    outer_vars = state.vars
     {then_form, state} = do_compile_expr(then_branch, state)
-    {else_form, state} = do_compile_expr(else_branch, state)
+    {else_form, state} = do_compile_expr(else_branch, %{state | vars: outer_vars})
+    state = %{state | vars: outer_vars}
 
     form =
       {:case, line, cond_form,
@@ -1865,6 +1919,41 @@ defmodule Cure.Compiler.Codegen do
 
     {form, state}
   end
+
+  # `return e` throws `{:cure_return, e}` so it can unwind out of an `if` arm or a `match`
+  # body. Nothing installed the matching catch — `grep -rn cure_return lib/` found only the
+  # throw — so any `return` not already inside a user-written `try` escaped the function
+  # entirely and blew up its caller. Wrap the body of any function that contains one.
+  defp wrap_early_return(body_forms, body_ast, line) do
+    if contains_early_return?(body_ast) do
+      catch_clause =
+        {:clause, line,
+         [
+           {:tuple, line,
+            [
+              {:atom, line, :throw},
+              {:tuple, line, [{:atom, line, :cure_return}, {:var, line, :V__ret}]},
+              {:var, line, :_}
+            ]}
+         ], [], [{:var, line, :V__ret}]}
+
+      [{:try, line, body_forms, [], [catch_clause], []}]
+    else
+      body_forms
+    end
+  end
+
+  defp contains_early_return?({:early_return, _meta, _children}), do: true
+
+  defp contains_early_return?({_tag, meta, children}) when is_list(meta) do
+    contains_early_return?(children) or
+      Enum.any?(meta, fn {_k, v} -> contains_early_return?(v) end)
+  end
+
+  defp contains_early_return?(list) when is_list(list),
+    do: Enum.any?(list, &contains_early_return?/1)
+
+  defp contains_early_return?(_other), do: false
 
   # -- Throw -------------------------------------------------------------------
 
