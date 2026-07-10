@@ -9,14 +9,19 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
   ANY green module's dependent elaboration would otherwise go uncaught (only a
   handful of modules had individual `*_elaborates_test.exs` guards).
 
-  The `@green` list only ever GROWS. The eight modules NOT listed are the known
+  The `@green` list only ever GROWS. The seven modules NOT listed are the known
   remaining blockers, documented for the rip-out ledger (do NOT assert they fail —
   that would freeze current brokenness; they are promoted into `@green` as they are
   fixed):
 
-    * `access` — irreducibly `Any`-typed (dynamic heterogeneous access);
-      blocked on the `Any` top-type design fork (no in-language lower-risk
-      default) plus the `proto Access(c)` → `interface` migration (#21).
+    * `access` — proven dependent-SOLVABLE (opaque `Any` + the `:cure_std_any`
+      believe_me backend + runtime `is_map`/`is_tuple` tag dispatch, replacing
+      `proto Access`); the `Any` top-type "design fork" is DISSOLVED. It is NOT
+      listed here because it is CLASSIC-COEXISTENCE-blocked like show/io/set: the
+      dependent-green rewrite introduces `.1`/`.2` + `Tuple(Any,Any)`, which flips
+      `Cure.Elab.Program.dependent?/1` and hence its emitted ctor tags
+      (snake_case→PascalCase), breaking the classic-era behavioral tests in
+      `stdlib_test.exs`. It flips green at rip-out time, not before.
     * `show`, `io` — dependent-green WITH `use Std.String` + `use Std.Semigroup`
       (proven separately), but the committed files omit those imports because the
       CLASSIC checker breaks on them (String=List(Char) vs binary). They flip green
