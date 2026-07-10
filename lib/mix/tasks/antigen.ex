@@ -86,6 +86,13 @@ defmodule Mix.Tasks.Antigen do
         r = Antigen.Runner.generate(runner_opts)
         IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked (seed=#{r.seed})")
 
+        # Surface shape-coverage inline so a banking loop shows what the current
+        # generators can/can't produce (same report `mix test` prints post-suite).
+        case Antigen.CoverManifest.report(Antigen.CoverManifest.summary()) do
+          nil -> :ok
+          line -> IO.puts(line)
+        end
+
       :cover ->
         {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)
 

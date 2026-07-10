@@ -91,5 +91,16 @@ defmodule Antigen.SeededGenerationTest do
       assert out2 =~ "seed=424242"
       assert File.read!(t1) == File.read!(t2)
     end
+
+    test "prints the shape-coverage manifest report inline" do
+      t = Path.join(@tmp, "cov.sexp")
+
+      out =
+        capture_io(fn ->
+          Mix.Tasks.Antigen.run(["generate", "--seed", "1", "--count", "40", "--seeds", t])
+        end)
+
+      assert out =~ "shape-coverage"
+    end
   end
 end
