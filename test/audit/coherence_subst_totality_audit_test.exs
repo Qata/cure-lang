@@ -1,0 +1,223 @@
+defmodule Cure.Audit.CoherenceSubstTotalityTest do
+  @moduledoc """
+  Red tests for an audit of `lib/cure/elab/coherence.ex`, `lib/cure/elab/subst.ex`,
+  and `lib/cure/elab/totality_closure.ex` (2026-07-10). Every test here is a
+  specific executable claim of CORRECT behaviour that fails today. See each
+  test's leading comment for the bug, why it is wrong, and what Idris/Agda/Lean
+  do instead.
+  """
+  use ExUnit.Case, async: true
+  @moduletag :audit
+
+  alias Cure.Core.{Env, Inductive, Certificate}
+  alias Cure.Elab.{Program, Coherence, TotalityClosure, Unify, MetaCtx}
+
+  # ===========================================================================
+  # CO — Cure.Elab.Coherence (global typeclass coherence)
+  # ===========================================================================
+
+  describe "CO1: cross-module coherence/interface data is dropped by program.ex's merge_env" do
+    # `merge_env/2` (lib/cure/elab/program.ex:719-728) builds a FRESH `%Env{}`
+    # literal copying only `families/ctors/ctor_to_family/defs/certified/builtins`
+    # — `interfaces`, `coherence`, and `constrained` are never mentioned, so they
+    # silently revert to the struct defaults (`%{}`/`nil`/`%{}`), discarding BOTH
+    # sides' data. `merge_env` is the ONLY function used to fold an imported
+    # module's env into the importer's (program.ex:135, :457, :633 — the same
+    # path `use Std.CollA`/`use Std.CollB` exercise in
+    # `Cure.Elab.GlobalNamespaceSoundnessTest`), so ANY `interface`/
+    # `implementation` declared in an imported module vanishes for the importer:
+    # its interface descriptor is unreachable (`Env.get_interface` misses) and
+    # its dictionary is unreachable (`Coherence.lookup_anon` misses). Coherence
+    # is documented as GLOBAL (module doc: "must be globally unique"; memory
+    # `typeclass-surface-decisions`: "coherence = global + named implementations")
+    # — Idris/Agda/Lean/Haskell instance resolution is visible across module/
+    # import boundaries by construction; a design that can only see instances
+    # declared in the CURRENT file is not global coherence, it's per-file
+    # coherence, and — worse — it means overlap CANNOT be detected across module
+    # boundaries at all: the moment a second import's slice is merged in
+    # (program.ex:633), the first import's already-registered coherence table is
+    # unconditionally wiped, so two colliding anonymous instances contributed by
+    # two different imported modules can never even be compared.
+    setup do
+      real_src = Cure.Stdlib.Paths.source_dir()
+      tmp = Path.join(System.tmp_dir!(), "cure_coherence_audit_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(tmp)
+      File.cp_r!(real_src, tmp)
+
+      File.write!(Path.join(tmp, "coimpl.cure"), """
+      mod Std.CoImpl
+        interface Eqs(a)
+          fn eqs(x: a, y: a) -> Bool
+        implementation Eqs for Int
+          fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+      end
+      """)
+
+      previous = Application.get_env(:cure, :stdlib_source_dir)
+      Application.put_env(:cure, :stdlib_source_dir, tmp)
+
+      on_exit(fn ->
+        case previous do
+          nil -> Application.delete_env(:cure, :stdlib_source_dir)
+          value -> Application.put_env(:cure, :stdlib_source_dir, value)
+        end
+
+        File.rm_rf!(tmp)
+      end)
+
+      :ok
+    end
+
+    test "an interface + anonymous implementation declared in an imported module stay visible (global coherence) to the importing module" do
+      src = "mod P\n  use Std.CoImpl\n  fn ignore() -> Int = 0\nend\n"
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert Env.get_interface(env, :Eqs) != nil
+      assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
+    end
+  end
+
+  describe "CO2: an instance for a typealias that unfolds to an already-instantiated type is not detected as an overlap" do
+    # `Cure.Elab.Implementation.register/2` (implementation.ex:31-32) derives the
+    # coherence key's `head` from `meta[:for]`, which the parser
+    # (compiler/parser.ex:3658-3663) sets to the RAW SURFACE NAME of the `for`
+    # clause — `{:variable, _, n} -> n` for a bare name, with ZERO semantic
+    # typealias unfolding. `typealias MyInt = Int` is a "TRANSPARENT type
+    # synonym" (parser.ex:2979 comment) at the type-checking level, but
+    # coherence keys `for Int` and `for MyInt` under two DIFFERENT atoms
+    # (`:Int` vs `:MyInt`), so both anonymous instances register successfully —
+    # two live dictionaries for what is definitionally the SAME type. Idris/
+    # Agda/Lean/Rust coherence resolves the type to its head NORMAL FORM (through
+    # transparent synonyms) before comparing/keying instances, precisely to rule
+    # this out; two dictionaries for one type means an expression using `eqs`
+    # can compute two different answers depending on which spelling of the type
+    # the call site happens to use.
+    test "an anonymous instance for Int and one for a transparent alias of Int overlap" do
+      src = """
+      mod M
+        typealias MyInt = Int
+        interface Eqs(a)
+          fn eqs(x: a, y: a) -> Bool
+        implementation Eqs for Int
+          fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+        implementation Eqs for MyInt
+          fn eqs(x: MyInt, y: MyInt) -> Bool = int_eq(x, y)
+      end
+      """
+
+      assert {:error, {:overlapping_instance, :Eqs, :Int}} = Program.elaborate(src)
+    end
+  end
+
+  # ===========================================================================
+  # SU — Cure.Elab.Subst (elaborator meta-aware de Bruijn substitution)
+  # ===========================================================================
+
+  describe "SU1: a metavariable solution referencing an escaping variable through a :case node is silently accepted, corrupted" do
+    # `Subst.shift/3` (elab/subst.ex) itself is a faithful, contract-correct
+    # meta-aware mirror of `Core.Term.shift/3` — it DOES traverse `:case` nodes
+    # correctly. The bug is in its sole safety gate: `Cure.Elab.Unify.solve/4`
+    # calls `strengthen/2`, which calls `Subst.shift(t, -depth, 0)` ONLY after
+    # `escapes?/3` (unify.ex:377-389) reports no escaping variable. `escapes?/3`
+    # is a HAND-ENUMERATED walker (var/meta/pi/lam/app/data/ctor) whose catch-all
+    # (`escapes?(_other, _depth, _local), do: false`) silently means "does not
+    # escape" for any other shape — including `{:case, _, _, _}`, which has NO
+    # clause. So a metavariable solved to a term containing a `:case` whose
+    # scrutinee/motive/branch references a variable bound OUTSIDE the
+    # metavariable's scope is waved through `escapes?` as safe, then
+    # `Subst.shift` (which DOES walk `:case` correctly) faithfully shifts that
+    # variable by `-depth`, producing an out-of-range (here, literally negative)
+    # de Bruijn index that gets stored as the metavariable's "solution" — a
+    # structurally corrupt Core term silently written into `MetaCtx`. Idris/
+    # Agda/Lean reject a solve whose right-hand side mentions a variable out of
+    # the metavariable's scope (exactly Cure's OWN treatment of `:pi`/`:lam`/
+    # `:app`/`:data`/`:ctor` scrutinees in this very function) — a `:case`
+    # scrutinee/branch must get the identical scope check.
+    test "unifying a metavariable's codomain against a :case referencing the just-crossed binder is an escaping-variable error" do
+      {ctx0, id} = MetaCtx.fresh(MetaCtx.new())
+
+      dom = {:type, 0}
+      # References {:var, 0} -- the Pi binder crossed to reach this codomain --
+      # in the case's scrutinee, exactly the shape `escapes?` correctly flags for
+      # :pi/:lam/:app/:data/:ctor but has no clause for.
+      case_term = {:case, {:var, 0}, {:type, 0}, [{:some_ctor, 0, {:var, 0}}]}
+
+      t1 = {:pi, dom, {:meta, id}}
+      t2 = {:pi, dom, case_term}
+
+      assert {:error, {:escaping_variable, ^id}} = Unify.unify(t1, t2, ctx0)
+    end
+  end
+
+  # ===========================================================================
+  # TC — Cure.Elab.TotalityClosure (untrusted type-level totality driver)
+  # ===========================================================================
+
+  describe "TC1: a self-call hidden inside a still-live :rewrite node bypasses termination analysis entirely" do
+    # `{:rewrite, proof, motive, body}` is NOT a retired/dead node: validator.ex
+    # keeps `no_rewrite_node: :warn` (not :reject) at dev time with the comment
+    # "STILL PRODUCED as the transport eliminator (rewrite_plan/symmetry_proof/
+    # bridge_step)" (validator.ex:209-215) — real elaborated Core terms carry it
+    # today. `Cure.Core.Certificate.calls?/2` (certificate.ex:595-611) is the
+    # self-call FAST PATH gating the whole size-change analysis:
+    # `if calls?(name, body), do: size_change_total?(name, body), else: true`
+    # (certificate.ex:110) — if `calls?` says "no self-call", the function is
+    # certified total WITHOUT ANY termination analysis. `calls?/2` is hand-
+    # enumerated (global/pi/lam/app/data/ctor/case) with a catch-all `false` and
+    # has NO `:rewrite` clause, so a self-call sitting inside a `:rewrite`
+    # node's proof/motive/body is invisible to it. A function whose only
+    # self-call is hidden this way is therefore certified total unconditionally
+    # -- even an unrestricted, non-decreasing self-loop. Idris/Agda/Lean's
+    # termination checkers walk the FULL term grammar (every node that can host
+    # a call) before ever deciding "no recursion" is a valid exit; skipping an
+    # entire live node shape is not a completeness gap here, it is unsoundness:
+    # the kernel would now be willing to δ-unfold a function that may not
+    # terminate.
+    test "Certificate.terminating?/3 must not certify a self-call reachable only through a :rewrite node" do
+      dom = {:type, 0}
+      self_call = {:app, {:global, :loop}, {:var, 0}}
+      # loop(x) = rewrite(<proof>, <motive>, loop(x)) -- no decrease, ever.
+      body = {:lam, dom, {:rewrite, dom, dom, self_call}}
+
+      refute Certificate.terminating?(:loop, body, Env.empty())
+    end
+  end
+
+  describe "TC2: a global call hidden inside a :rewrite node is invisible to TotalityClosure's type-level reachability walk" do
+    # The same missing-clause shape recurs in the untrusted driver:
+    # `TotalityClosure.collect/1` (totality_closure.ex:85-98) hand-enumerates
+    # global/pi/lam/app/data/ctor/case with a catch-all `[]`, and also has no
+    # `:rewrite` clause -- contrast `Cure.Core.Certificate.gather_globals/2`
+    # (certificate.ex:549-553), which IS structurally generic (walks every
+    # tuple/list) and would not miss this. A family/ctor index that calls
+    # `outer`, whose body in turn calls `inner` ONLY from inside a `:rewrite`
+    # node, must still require `inner` to be certified: normalising the index
+    # expression may need to δ-unfold `outer` and then `inner`. Because `inner`
+    # never enters the type-level set, `certify_type_level/1` never asks the
+    # kernel to certify it, so a non-terminating `inner` reachable this way is
+    # never caught by §7's `:totality_required` gate (soundness rests entirely
+    # on this closure being complete; §7 says as much).
+    #
+    # NOTE: `lib/antigen/assays/totality_closure_assay.ex`'s "independent"
+    # completeness oracle (`__reachable__/1` / `globals/1`) is a near-verbatim
+    # COPY of this same hand-enumerated walker (same clause set, same missing
+    # `:rewrite`), so the existing completeness property test can never catch
+    # this: both sides of that comparison share the identical blind spot.
+    test "TotalityClosure.type_level_fns/1 must find a global reachable only through a :rewrite node" do
+      dec = {:data, :Dec, [], []}
+
+      outer_body = {:lam, dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
+
+      env =
+        Env.empty()
+        |> Inductive.declare(Inductive.family(:Dec, [], [], 0), [Inductive.ctor(:Dcoupled, [], [])])
+        |> Env.add_def(:outer, {:pi, dec, dec}, outer_body)
+        |> Env.add_def(:inner, {:pi, dec, dec}, {:lam, dec, {:var, 0}})
+        |> Inductive.declare(Inductive.family(:Wrap, [], [{:d, dec}], 0), [
+          Inductive.ctor(:mkWrap, [{:x, dec}], [{:app, {:global, :outer}, {:var, 0}}])
+        ])
+
+      assert MapSet.member?(TotalityClosure.type_level_fns(env), :inner)
+    end
+  end
+end
