@@ -1133,9 +1133,19 @@ defmodule Cure.Compiler.Lexer do
             {name, state}
           end
 
-        token = Token.new(:atom, String.to_atom(name), state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]}}
+        # The BEAM caps atoms at 255 characters; String.to_atom/1 raises an
+        # UNCAUGHT SystemLimitError past that (not the ArgumentError the numeric
+        # paths rescue, and do_tokenize's catch only catches throws), so a
+        # 256-char `:atom` literal would crash tokenize. Guard the length and
+        # return a clean error instead. `name` is ASCII (consume_while accepts
+        # only [A-Za-z0-9_] plus a trailing ?/!), so byte_size == char count.
+        if byte_size(name) > 255 do
+          {:error, {:atom_too_long, state.line, start_col}, state}
+        else
+          token = Token.new(:atom, String.to_atom(name), state.line, start_col)
+          maybe_emit_event(state, token)
+          {:ok, %{state | tokens: [token | state.tokens]}}
+        end
 
       # `::` is the binary-segment specifier operator introduced in
       # v0.20.0. It is distinct from `:` (type annotations) and from
