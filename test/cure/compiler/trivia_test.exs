@@ -137,6 +137,42 @@ defmodule Cure.Compiler.TriviaTest do
     assert reprint(out) == out, "doc-comment reprint is not idempotent"
   end
 
+  # A function call's argument list is the one comma-separated construct whose
+  # delimiters can span newlines and still reparse, so a comment CAN legally sit
+  # inside it. The single-line span form has nowhere to put such a comment and
+  # dropped it silently — a lossless-reprint violation (and, in `cure migrate`,
+  # a spurious `:comment_dropped` rejection). A leading comment on an argument
+  # must survive the round-trip and reprint idempotently.
+  test "a leading comment on a call argument survives the reprint" do
+    src = "mod M\n  fn g(a: Int, b: Int) -> Int = a\n  fn f() -> Int = g(\n    # keep me\n    1,\n    2)\n"
+    out = reprint(src)
+
+    assert out =~ "keep me", "call-argument comment was dropped: #{inspect(out)}"
+    assert reparses?(out), "reprint no longer parses: #{inspect(out)}"
+    assert reprint(out) == out, "call-argument-comment reprint is not idempotent"
+  end
+
+  # A trailing comment attaches to the PRECEDING argument, so the separating
+  # comma must be emitted before the comment — otherwise the `#` swallows the
+  # comma and the argument list reparses one element short.
+  test "a trailing comment on a call argument survives without eating the comma" do
+    src = "mod M\n  fn g(a: Int, b: Int) -> Int = a\n  fn f() -> Int = g(1, # inline\n    2)\n"
+    out = reprint(src)
+
+    assert out =~ "inline", "trailing call-argument comment was dropped: #{inspect(out)}"
+    assert reparses?(out), "reprint no longer parses (comma likely eaten): #{inspect(out)}"
+    assert reprint(out) == out, "trailing-comment reprint is not idempotent"
+  end
+
+  defp reparses?(src) do
+    with {:ok, toks} <- Lexer.tokenize(src, file: "r.cure", emit_events: false),
+         {:ok, _ast} <- Parser.parse(toks, file: "r.cure", emit_events: false) do
+      true
+    else
+      _ -> false
+    end
+  end
+
   # helper: collect all values of a given meta key across the AST
   defp collect_meta(ast, key, acc \\ [])
   defp collect_meta({_k, m, ch}, key, acc) when is_list(m) and is_list(ch) do

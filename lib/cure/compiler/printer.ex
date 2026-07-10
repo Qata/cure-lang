@@ -531,7 +531,7 @@ defmodule Cure.Compiler.Printer do
             "send #{render(target, depth, indent)}, #{render(message, depth, indent)}"
 
           _ ->
-            "#{name}(#{args_to_string(args, depth, indent)})"
+            "#{name}(#{call_args_to_string(args, depth, indent)})"
         end
 
       # FSM transition
@@ -546,7 +546,7 @@ defmodule Cure.Compiler.Printer do
 
         case args do
           [piped | rest] when rest != [] ->
-            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{args_to_string(rest, depth, indent)})"
+            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{call_args_to_string(rest, depth, indent)})"
 
           [piped] ->
             "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}"
@@ -556,7 +556,7 @@ defmodule Cure.Compiler.Printer do
         end
 
       true ->
-        "#{quote_if_reserved(name)}(#{args_to_string(args, depth, indent)})"
+        "#{quote_if_reserved(name)}(#{call_args_to_string(args, depth, indent)})"
     end
   end
 
@@ -1259,6 +1259,68 @@ defmodule Cure.Compiler.Printer do
 
   defp args_to_string(args, depth, indent) do
     render_span(args, ",", depth, indent)
+  end
+
+  # A function call's argument list is the ONE comma-separated construct whose
+  # delimiters (`(` … `)`) can span newlines and still reparse -- list (`[…]`),
+  # tuple (`%[…]`), and map (`%{…}`) literals cannot, so a comment never attaches
+  # to their elements. When an argument carries its own leading/trailing comment,
+  # the single-line span has nowhere to put it and would drop it (a lossless-
+  # reprint violation, and a spurious `:comment_dropped` migration rejection), so
+  # the argument list is rendered one-per-line -- the only layout that both keeps
+  # the comment and reparses. With no argument comment, this is byte-for-byte the
+  # single-line span, so the common path is untouched.
+  defp call_args_to_string(args, depth, indent) do
+    if Enum.any?(args, &has_comment_trivia?/1) do
+      render_call_args_multiline(args, depth, indent)
+    else
+      render_span(args, ",", depth, indent)
+    end
+  end
+
+  defp has_comment_trivia?(node) do
+    meta = trivia_meta(node)
+    comment_item?(Keyword.get(meta, :leading)) or comment_item?(Keyword.get(meta, :trailing))
+  end
+
+  defp comment_item?(nil), do: false
+
+  defp comment_item?(items) do
+    Enum.any?(items, fn
+      {:comment, _, _, _} -> true
+      {:doc_comment, _, _, _} -> true
+      _ -> false
+    end)
+  end
+
+  # One argument per line: leading comment lines (at the inner pad), then the
+  # value with its separating comma emitted BEFORE any trailing comment (else the
+  # `#` swallows the comma and the list reparses one element short), and the
+  # closing `)` returns to the caller's indent.
+  defp render_call_args_multiline(args, depth, indent) do
+    inner_pad = String.duplicate(indent, depth + 1)
+    close_pad = String.duplicate(indent, depth)
+    last = length(args) - 1
+
+    body =
+      args
+      |> Enum.with_index()
+      |> Enum.map_join("\n", fn {arg, i} ->
+        meta = trivia_meta(arg)
+        comma = if i == last, do: "", else: ","
+        value_line = append_trailing(inner_pad <> to_string(arg, depth + 1, indent) <> comma, Keyword.get(meta, :trailing))
+
+        (leading_comment_lines(Keyword.get(meta, :leading), inner_pad) ++ [value_line])
+        |> Enum.join("\n")
+      end)
+
+    "\n" <> body <> "\n" <> close_pad
+  end
+
+  defp leading_comment_lines(nil, _pad), do: []
+
+  defp leading_comment_lines(items, pad) do
+    items |> Enum.flat_map(&trivia_lines/1) |> Enum.map(&pad_or_empty(&1, pad))
   end
 
   defp pairs_to_string(pairs, depth, indent) do
