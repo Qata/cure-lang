@@ -559,16 +559,34 @@ defmodule Cure.Elab.Elaborator do
   # (A1 §1-A — today's runtime-structural semantics, verbatim). We elaborate
   # both operands in inference mode, assemble the term, and let the kernel
   # infer the result type.
+  # Concatenation is an operator overload resolved through the `Std.Semigroup`
+  # interface, not a bespoke `build_binop` case: `x <> y` desugars to the
+  # `combine` method, which coherence dispatches by the operand's type (the
+  # `List` instance delegates to the reducing library `Std.List.append`). A
+  # non-numeric `+` is the same overload (Swift-style) — numeric `+`/`-`/`<`/…
+  # keep their primitive meaning and only route here when `build_binop` reports
+  # the operand type has no primitive op.
   def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
-    with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
-         {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
-         {:ok, term} <-
-           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, ctx),
-         {:ok, type} <- Kernel.infer(ctx, term) do
-      {:ok, term, type}
+    op = Keyword.fetch!(meta, :operator)
+
+    if op == :<> do
+      combine_call(l, r, names, ctx, env)
     else
-      :unsupported_op -> {:error, {:unsupported_expression, expr}}
-      other -> other
+      with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
+           {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+           {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
+           {:ok, type} <- Kernel.infer(ctx, term) do
+        {:ok, term, type}
+      else
+        {:error, {:unsupported_operand_type, :+}} ->
+          combine_call(l, r, names, ctx, env)
+
+        :unsupported_op ->
+          {:error, {:unsupported_expression, expr}}
+
+        other ->
+          other
+      end
     end
   end
 
@@ -650,6 +668,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # Desugar a concatenation operator to the `Std.Semigroup.combine` method call,
+  # letting the interface-dispatch machinery pick the instance by operand type.
+  defp combine_call(l, r, names, ctx, env),
+    do: elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.
   # The LAST clause is the terminator (its body is the seed); every earlier
