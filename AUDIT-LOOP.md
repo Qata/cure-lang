@@ -1128,3 +1128,95 @@ fmt/bench/keygen exits), `c4b4947` (printer pipe/keyword parens), `9ccd04c`
 (migrate body-rename), plus this record.
 
 ---
+
+## Iteration 16
+
+The iteration-15 Outstanding list held no actionable-unblocked reachable bug, so
+this cycle was driven by a fresh adversarial audit: four parallel general-purpose
+Opus agents over edition/project, migrate engine+rules, lexer/parser/printer, and
+CLI dispatch — read-only, each reproducing with `mix run` (no `mix test`, to avoid
+a concurrent-suite panic). Every finding was reproduced and read against source
+before counting. **Five real bugs confirmed and fixed** (four reachable now, one
+latent); the CLI dispatch surface came back clean.
+
+### Confirmed + fixed
+
+- **Printer: three round-trip corruptions** (`a0d4681`) — the printer backs
+  `cure fmt`/`migrate`/`rewrite`, so each silently corrupted valid code:
+  1. Word-spelled prefix `bnot` fell through the unary_op fallback `"#{op}#{inner}"`
+     with no space → `bnot a` reprinted as the single identifier `bnota`. Emit a
+     separating space for alphabetic operator spellings.
+  2. `typed_params_to_string` dropped the braces on implicit params → `{T: Type}`
+     became positional `T: Type` (an arity/calling-convention change). Re-wrap.
+  3. `match_arm_head`/`match_arm_rhs_inline`/`render_match_arm_wrapped` had no
+     `{:with_rematch_arm,…}` clause → reprinting a `with`-abstraction rematch arm
+     (`Parent | WithPat -> …`) raised `FunctionClauseError`, crashing fmt/migrate
+     on valid code (the repo's own corpus contains such arms). Render from
+     `parent_patterns ++ [pattern]`. (4 new round-trip tests in
+     `printer_fidelity_test.exs`; golden suites 91 green.)
+- **Migrate: implicit type-parameter binder desync** (`69e143c`) — an implicit
+  param `{T: Type}` introduces its type variable via the param NAME, but
+  `rewrite_signature` collected candidates only from param/return TYPES and
+  `rename_param` rewrote only a param's type, so the rule lowercased every
+  reference (`x: T`, `-> T`) while leaving the binder spelled `T` → references
+  bound to nothing; the reparse-only verify accepted it. Collect implicit binder
+  names and rename the binder in lockstep, including under freshening
+  (`{t1: type}, x: t1` when a plain `t` is already in scope). This hits the rule's
+  PRIMARY use case (idiomatic `{T: Type}`). Distinct from the blocked ctx issue.
+  (Verified end-to-end; migrate suite 45 green.)
+- **Migrate: fence-blind leading-pragma finder** (`5cbe764`) — the bump splicer's
+  `replace_leading_pragma_line` located the pragma with `migrate_trivia_line?`
+  (blank/`#`-only), blind to `###` fenced doc comments whose body lines need not
+  start with `#`. It diverged from the resolver's fence-aware scan, so a real
+  leading pragma after a fenced doc comment was missed (silent-failed bump / mutated
+  an in-comment `@edition` example). Exposed `Cure.Edition.leading_line_index/1`
+  (the same fence-aware scan) and retired the divergent local test. **Latent** —
+  only a real bump (a second minted edition) reaches it — but a real logic
+  divergence that activates exactly when editions roll forward. (2 new tests.)
+
+### Investigated → NOT a bug
+
+- **`Type`→`type` sort lowercasing** (compounding the binder desync): the
+  universe sort `Type` isn't in the migrate ctx seed, so the rule lowercases it.
+  Verified BOTH `fn id({T: Type}, …)` and the migrated `fn id({t: type}, …)`
+  compile `:ok` — meaning-preserving, not corruption. It is at most a
+  convention-choice tied to the blocked general ctx decision; left as-is. The
+  binder-desync fix makes the output self-consistent regardless.
+- **CLI dispatch/exit surface** — swept empirically: every fixed-arity fallback
+  and aggregate-then-exit path exits correctly, no exit-0-on-error, no success
+  routed through error, no clause shadowing, fuzzy matcher bounded. Clean.
+- **Edition resolution / Cure.toml round-trip** — ~23 adversarial pragma inputs
+  and 10 toml layouts: pre-scan and parser agree everywhere, `set_edition`→`load`
+  round-trips, no reachable `year/1` raise. Clean.
+- **Migrate rules** (`if_elif_to_pickup`, `module_rename`, `removed_module`,
+  `proto_to_interface`, engine idempotence) — robust; `group_hoist` has a
+  multi-`mod`-per-file edge but that shape is unsupported/unreachable.
+
+### Outstanding findings (after iteration 16)
+
+**Blocked — needs operator (UNCHANGED):**
+- `cure migrate` uppercase-type-var CTX false-positive — the general
+  name-resolution decision (distinguishing a user/imported type constructor from
+  a free type var). The narrow `Type`-sort case is benign (both forms compile).
+- deps update no-op; partial/interrupted clone accepted; migrate no-flag target;
+  hyphenated dependency names (general package-manager scope).
+
+**Latent / unreachable today (carried, agents re-confirmed robust):**
+- `comment_texts` non-quote-aware (no reachable misaccept found);
+  `ProtoToInterface` `retires_keywords` with `enforced_in: nil` (by design);
+  `group_hoist` multi-`mod`-per-file (unsupported shape).
+
+**Message-quality nit (correct exit, deferred):**
+- Zero-arg commands with trailing junk misblame "Unknown command" (exit correct).
+
+**Loop status:** iteration 16 fixed 5 real bugs (3 printer round-trip corruptions
+incl. a crash, 1 migrate binder desync on the rule's primary use case, 1 latent
+fence-blind pragma finder). NOT converged — a fresh audit found new confirmed
+bugs, so the streak resets. The cron is **left in place**. Full suite green:
+3946 passed, 0 failures. Do NOT merge.
+
+Commits this cycle: `a0d4681` (printer bnot/braces/with-rematch), `69e143c`
+(migrate implicit-binder rename), `5cbe764` (fence-aware pragma finder), plus
+this record.
+
+---
