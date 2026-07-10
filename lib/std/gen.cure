@@ -1,3 +1,4 @@
+@group(:test)
 mod Std.Gen
   ## Tiny stateless generator API for property-based testing (v0.19.0).
   ##
@@ -23,8 +24,6 @@ mod Std.Gen
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:test)
-
   # -- Primitive randomness ---------------------------------------------------
 
   ## Private wrapper over `:rand.uniform/1`; returns an integer in

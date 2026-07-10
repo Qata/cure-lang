@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.NonEmpty
   ## A list that is *guaranteed* to hold at least one element.
   ##
@@ -21,8 +22,6 @@ mod Std.NonEmpty
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:collections)
-
   ## A first element (`head`) and everything after it (`tail`, possibly empty).
   type NonEmpty(t) = NonEmpty(t, List(t))
 

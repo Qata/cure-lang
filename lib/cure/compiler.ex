@@ -328,21 +328,16 @@ defmodule Cure.Compiler do
     end
   end
 
-  # First `{:decorator, [name: "group"...], [{:literal, _, atom}]}` node found
-  # anywhere in the parsed program, or nil. Mirrors the parser's standalone
-  # module-level decorator shape.
+  # The `@group(:g)` atom for the parsed program, or nil. `@group` above `mod`
+  # attaches to the module container's meta; the in-body form is a parse error
+  # (spec 2026-07-10-group-decorator-placement), so meta is the only source.
   defp group_atom(node) do
     node |> group_atoms() |> List.first()
   end
 
-  defp group_atoms({:decorator, meta, [{:literal, _, atom}]})
-       when is_list(meta) and is_atom(atom) do
-    if Keyword.get(meta, :name) == "group", do: [atom], else: []
-  end
-
   # A module container with `@group(:g)` attached above `mod` carries the group
   # in its meta (`decorator: {:group, [{:literal, _, atom}]}`). Read it there,
-  # then still descend into the body for the transitional standalone form.
+  # then descend into the body for nested containers.
   defp group_atoms({:container, meta, children}) when is_list(meta) and is_list(children) do
     from_meta =
       case Keyword.get(meta, :decorator) do

@@ -7,8 +7,8 @@ defmodule Antigen.BuiltinListDriftTest do
   # in every module without `use`. This antibody fails if the two ever drift.
   # First parametrized + self-referential family through this comparison.
   @list_src """
+  @group(:collections)
   mod Std.List
-    @group(:collections)
     @builtin(:list)
     type List(a) = Nil | Cons(a, List(a))
   """

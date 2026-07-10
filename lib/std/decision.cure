@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Decision
   ## Decidable propositions -- a definitive yes-or-no answer that carries its
   ## own evidence.
@@ -18,8 +19,6 @@ mod Std.Decision
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   ## The empty type: it has no constructors, so it has no values. That is exactly
   ## what makes it useful -- a function `P -> Empty` can only be written when `P`
   ## itself is uninhabitable, so such a function is a proof that `P` is false.

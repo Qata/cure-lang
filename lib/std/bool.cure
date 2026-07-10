@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Bool
   ## Booleans as a real inductive type.
   ##
@@ -6,8 +7,6 @@ mod Std.Bool
   ## results and the general `:case` recursor eliminates (retiring the bespoke
   ## `bool_elim` primitive). Erasure lowers its constructors to native BEAM
   ## atoms `false`/`true`.
-
-  @group(:core)
 
   @builtin(:bool)
   type Bool = False | True

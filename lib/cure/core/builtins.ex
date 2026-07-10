@@ -127,6 +127,20 @@ defmodule Cure.Core.Builtins do
     |> maybe_seed(:sigma, sigma_family(), sigma_ctors(), exclude)
     |> maybe_seed(:list, list_family(), list_ctors(), exclude)
     |> seed_ops()
+    |> seed_primitives()
+  end
+
+  # The machine base types' name→node floor (spec 2026-07-10-primitive-type-
+  # declarations). These are the canonical bindings the Std `@builtin(:tag)
+  # primitive Name` declarations mirror and confirm. Inert w.r.t. the kernel:
+  # a surface-name resolution table only, adding no Core node and changing no
+  # judgement (the three nodes predate it, gated by the #2/#3 batch).
+  defp seed_primitives(%Env{} = env) do
+    env
+    |> Env.put_primitive("Int", {:int_type})
+    |> Env.put_primitive("Float", {:float_type})
+    |> Env.put_primitive("Binary", {:binary_type})
+    |> Env.put_primitive("Atom", {:atom_type})
   end
 
   @doc """

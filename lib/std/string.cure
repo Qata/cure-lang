@@ -1,21 +1,29 @@
+@group(:text)
 mod Std.String
-  ## String (UTF-8 binary) operations: length, concat, split, trim,
+  ## Value-surface string operations: length, concat, split, trim,
   ## case conversion, and integer/float/atom parsing.
   ##
-  ## `String` is Erlang's binary type. `length/1` reports the byte
-  ## size; case conversion and trimming go through OTP's Unicode-aware
-  ## `:string` module. Numeric parsers raise on malformed input,
-  ## matching the underlying BIFs.
+  ## A `String` is a `List(Char)` — the charlist of Unicode code points a
+  ## string literal `"hi"` elaborates to. You can pattern-match, fold, and
+  ## `map` it like any other list; the functions here are the string-flavoured
+  ## conveniences.
+  ##
+  ## Each function tolerates either representation of its input — the
+  ## dependent-surface charlist *or* a raw BEAM binary handed in from OTP — by
+  ## normalising through `:unicode.characters_to_list/1` before it touches a
+  ## list-only BIF. Producers (`concat`, `from_int`, `reverse`, …) always yield
+  ## the value-surface `List(Char)`. Use `Std.Binary.to_binary`/`from_binary`
+  ## only when you must hand a raw BEAM binary back to OTP.
   ##
   ## ## Examples
   ##
   ## ```cure
   ## use Std.String
   ##
-  ## length("hello")                         # => 5
+  ## length("hello")                         # => 5   (code points, not bytes)
   ## concat("foo", "bar")                    # => "foobar"
   ## upcase("cafe")                          # => "CAFE"
-  ## split("a,b,c", ",")                     # => ["a", "b", "c"]
+  ## split("a,b,c", ",")                     # => ["a", "b,c"]  (splits once)
   ## repeat("ab", 3)                         # => "ababab"
   ## ```
   ##
@@ -23,28 +31,47 @@ mod Std.String
   ## use Std.String
   ##
   ## from_int(42)                            # => "42"
-  ## to_int("  -17 " |> trim)                # => -17
+  ## to_int(trim("  -17 "))                  # => -17
   ## ```
 
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:text)
+  use Std.Char
+  use Std.Atom
+
+  ## `String` is the value-surface charlist of Unicode code points.
+  typealias String = List(Char)
+
+  # -- Input adapter ----------------------------------------------------------
+
+  ## Normalise any chardata (a value-surface charlist or a raw BEAM binary) to a
+  ## flat `List(Char)`. Every function that feeds a list-only BIF routes its
+  ## input through here first, so both representations are accepted.
+  @extern(:unicode, :characters_to_list, 1)
+  local fn as_charlist(s: String) -> String
 
   # -- Basic operations -------------------------------------------------------
 
-  ## Byte length of `s`; delegates to `:erlang.byte_size/1`. This is not
-  ## grapheme count: multi-byte code points contribute more than one.
-  @extern(:erlang, :byte_size, 1)
-  fn length(s: String) -> Int
+  ## `:erlang.length/1` on a normalised charlist.
+  @extern(:erlang, :length, 1)
+  local fn list_length(s: String) -> Int
+
+  ## Number of code points in `s`. Unlike a byte-length, this counts
+  ## characters: a multi-byte code point is one.
+  fn length(s: String) -> Int = list_length(as_charlist(s))
 
   ## `true` when `s` is the empty string.
-  fn is_empty(s: String) -> Bool = s == ""
+  fn is_empty(s: String) -> Bool = length(s) == 0
 
-  ## Concatenate two strings; uses the `<>` binary operator.
-  fn concat(a: String, b: String) -> String = a <> b
+  ## `:lists.append/2` on two normalised charlists.
+  @extern(:lists, :append, 2)
+  local fn append_cl(a: String, b: String) -> String
+
+  ## Concatenate two strings; yields a `List(Char)`.
+  fn concat(a: String, b: String) -> String = append_cl(as_charlist(a), as_charlist(b))
 
   # -- Case conversion --------------------------------------------------------
 
   ## Lower-case `s` using Unicode case folding (`:string.lowercase/1`).
+  ## Representation-preserving: a charlist maps to a charlist.
   @extern(:string, :lowercase, 1)
   fn downcase(s: String) -> String
 
@@ -54,72 +81,76 @@ mod Std.String
 
   # -- Trim -------------------------------------------------------------------
 
-  ## Strip leading and trailing whitespace (`:string.trim/1`).
-  @extern(:string, :trim, 1)
-  fn trim(s: String) -> String
+  ## Private helper: `:string.trim/2` with an explicit direction atom.
+  ## Representation-preserving.
+  @extern(:string, :trim, 2)
+  local fn trim_dir(s: String, where: Atom) -> String
+
+  ## Strip leading and trailing whitespace.
+  fn trim(s: String) -> String = trim_dir(s, :both)
 
   ## Strip leading whitespace only.
-  @extern(:string, :trim_leading, 1)
-  fn trim_leading(s: String) -> String
+  fn trim_leading(s: String) -> String = trim_dir(s, :leading)
 
   ## Strip trailing whitespace only.
-  @extern(:string, :trim_trailing, 1)
-  fn trim_trailing(s: String) -> String
+  fn trim_trailing(s: String) -> String = trim_dir(s, :trailing)
 
   # -- Conversion -------------------------------------------------------------
 
-  ## Render an `Int` as its canonical decimal string.
-  @extern(:erlang, :integer_to_binary, 1)
+  ## Render an `Int` as its canonical decimal string (a `List(Char)`).
+  @extern(:erlang, :integer_to_list, 1)
   fn from_int(n: Int) -> String
 
-  ## Render a `Float` as its canonical decimal string.
-  @extern(:erlang, :float_to_binary, 1)
+  ## Render a `Float` as its string form (`:erlang.float_to_list/1`).
+  @extern(:erlang, :float_to_list, 1)
   fn from_float(f: Float) -> String
 
   ## Render an `Atom` as its name; no `:` prefix is added.
-  @extern(:erlang, :atom_to_binary, 1)
+  @extern(:erlang, :atom_to_list, 1)
   fn from_atom(a: Atom) -> String
 
+  ## `:erlang.list_to_integer/1` on a normalised charlist.
+  @extern(:erlang, :list_to_integer, 1)
+  local fn cl_to_int(s: String) -> Int
+
   ## Parse `s` as a base-10 integer. Raises on bad input.
-  @extern(:erlang, :binary_to_integer, 1)
-  fn to_int(s: String) -> Int
+  fn to_int(s: String) -> Int = cl_to_int(as_charlist(s))
+
+  ## `:erlang.list_to_float/1` on a normalised charlist.
+  @extern(:erlang, :list_to_float, 1)
+  local fn cl_to_float(s: String) -> Float
 
   ## Parse `s` as a float. Raises on bad input.
-  @extern(:erlang, :binary_to_float, 1)
-  fn to_float(s: String) -> Float
+  fn to_float(s: String) -> Float = cl_to_float(as_charlist(s))
+
+  ## `:erlang.list_to_atom/1` on a normalised charlist.
+  @extern(:erlang, :list_to_atom, 1)
+  local fn cl_to_atom(s: String) -> Atom
 
   ## Convert `s` to an atom. Raises on bad encoding; beware atom-table
   ## exhaustion in long-running nodes if `s` is attacker-controlled.
-  @extern(:erlang, :binary_to_atom, 1)
-  fn to_atom(s: String) -> Atom
+  fn to_atom(s: String) -> Atom = cl_to_atom(as_charlist(s))
 
-  # -- Split / Join -----------------------------------------------------------
+  # -- Split / Repeat / Reverse -----------------------------------------------
 
-  ## Split `s` on every occurrence of `sep`. Uses `:binary.split/2`.
-  @extern(:binary, :split, 2)
-  fn split(s: String, sep: String) -> List(String)
+  ## Private helper: `:string.split/3` splitting on the first occurrence.
+  ## Representation-preserving.
+  @extern(:string, :split, 3)
+  local fn split_first(s: String, sep: String, where: Atom) -> List(String)
 
-  # -- Repeat -----------------------------------------------------------------
+  ## Split `s` on the first occurrence of `sep`.
+  fn split(s: String, sep: String) -> List(String) = split_first(s, sep, :leading)
 
-  ## Return `s` concatenated with itself `n` times (`:binary.copy/2`).
-  @extern(:binary, :copy, 2)
-  fn repeat(s: String, n: Int) -> String
+  ## `:string.copies/2` on a normalised charlist.
+  @extern(:string, :copies, 2)
+  local fn copies_cl(s: String, n: Int) -> String
 
-  # -- Reverse (via charlist) -------------------------------------------------
+  ## Return `s` concatenated with itself `n` times.
+  fn repeat(s: String, n: Int) -> String = copies_cl(as_charlist(s), n)
 
-  ## Reverse `s`. Operates on the underlying charlist, so the result is
-  ## byte-reversed rather than grapheme-reversed.
-  fn reverse(s: String) -> String =
-    list_to_binary(lists_reverse(binary_to_list(s)))
-
-  ## Private helper: binary -> list of codepoints.
-  @extern(:erlang, :binary_to_list, 1)
-  local fn binary_to_list(s: String) -> List(Int)
-
-  ## Private helper: reverse a list using `:lists.reverse/1`.
+  ## `:lists.reverse/1` on a normalised charlist.
   @extern(:lists, :reverse, 1)
-  local fn lists_reverse(l: List(t)) -> List(t)
+  local fn reverse_cl(s: String) -> String
 
-  ## Private helper: list of codepoints -> binary.
-  @extern(:erlang, :list_to_binary, 1)
-  local fn list_to_binary(l: List(Int)) -> String
+  ## Reverse `s` by code point.
+  fn reverse(s: String) -> String = reverse_cl(as_charlist(s))

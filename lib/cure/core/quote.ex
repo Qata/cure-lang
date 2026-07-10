@@ -70,6 +70,8 @@ defmodule Cure.Core.Quote do
   def reify({:vfloat_type}, _depth, _sig), do: {:float_type}
   def reify({:vbinary_type}, _depth, _sig), do: {:binary_type}
   def reify({:vfloat, f}, _depth, _sig), do: {:float_lit, f}
+  def reify({:vatom_type}, _depth, _sig), do: {:atom_type}
+  def reify({:vatom, a}, _depth, _sig), do: {:atom_lit, a}
 
   def reify({:vneutral, n}, depth, sig), do: reify_neutral(n, depth, sig)
 

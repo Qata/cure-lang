@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Proof
   ## Genuine propositional-equality proofs over the inductive `Std.Nat`
   ## (spec 2026-07-04-identity-type-as-inductive).
@@ -25,8 +26,6 @@ mod Std.Proof
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   ## `n + 0 = n`. Induction on `n`: the `Z` case is reflexive, and the
   ## `S` case rewrites by the inductive hypothesis before closing on
   ## `reflexive(S(k))`.

@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Equivalent
   ## Propositional equality — the inductive identity type `Equivalent(a, x, y)`
   ## (spec 2026-07-04-identity-type-as-inductive).
@@ -28,8 +29,6 @@ mod Std.Equivalent
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   ## The identity type. The `@builtin(:eq)` decorator binds this declaration to
   ## the kernel's canonical identity family, so `Equivalent` and `reflexive` are
   ## ordinary, go-to-definition-able names even though the compiler gives them

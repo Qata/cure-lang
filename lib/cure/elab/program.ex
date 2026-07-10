@@ -352,13 +352,26 @@ defmodule Cure.Elab.Program do
   #   that `.1`/`.2` lower to must resolve in EVERY module (the surface sugar is
   #   usable without `use`, like %[..]); the Sigma family itself is seeded, and
   #   Std.Sigma dependent-elaborates cleanly (D1-proven pattern), so it qualifies.
-  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma)
+  #   Std.Bounded -- `Char = Bounded(0x110000)`, so the `:bounded` family must
+  #   resolve in EVERY module for a char/string LITERAL (`'a'`, "hi") to elaborate
+  #   (`char_type_value` looks up `:bounded`); string literals are core surface
+  #   sugar, exactly like %[..]. Std.Bounded is tiny + dependent-clean, so it
+  #   qualifies. (Not seeded — auto-import avoids colliding with its own decl.)
+  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary Std.Bounded)
 
   # The canonical type each auto-prelude module provides. If a module locally
   # declares a same-named type (e.g. its own `type Nat = Zero | Suc`), that prelude
   # is NOT auto-imported — the local declaration is canonical and importing the
   # look-alike would collide (mirrors `declared_type_names`' builtin-seed skip).
-  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat, "Std.Sigma" => :Sigma}
+  @auto_prelude_types %{
+    "Std.Bool" => :Bool,
+    "Std.Nat" => :Nat,
+    "Std.Sigma" => :Sigma,
+    "Std.Int" => :Int,
+    "Std.Float" => :Float,
+    "Std.Binary" => :Binary,
+    "Std.Bounded" => :Bounded
+  }
 
   defp auto_prelude_imports(ast) do
     self = find_module_name(ast)
@@ -406,6 +419,68 @@ defmodule Cure.Elab.Program do
         Enum.uniq(method_defs ++ dict_defs)
     end
   end
+
+  @doc """
+  The transitive closure of local defs reachable from `roots` via `{:global, _}`
+  references in def bodies+types.
+
+  Emit lowers a `{:global, name}` to a *local* call within the emitted module, so
+  a self-contained module must co-emit every reachable callee — a cross-module
+  polymorphic call (e.g. an imported instance body delegating to `Std.List#map`)
+  pulls the callee in transitively. Builtin-op defs (body-less; saturated uses
+  inline to BEAM operators) are excluded — they never need a function form.
+  """
+  @spec reachable_def_names(Env.t(), [atom()]) :: [atom()]
+  def reachable_def_names(%Env{defs: defs} = env, roots) do
+    Enum.reduce(roots, MapSet.new(), fn root, seen ->
+      collect_reachable(env, defs, root, seen)
+    end)
+    |> MapSet.to_list()
+  end
+
+  defp collect_reachable(env, defs, name, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        seen
+
+      match?(%{builtin_op: op} when not is_nil(op), Map.get(defs, name)) ->
+        # Body-less builtin op: reachable but never emitted as a function form.
+        seen
+
+      match?(%{type: {:type, _}}, Map.get(defs, name)) ->
+        # A TYPE-LEVEL def (a type alias like `Char = Bounded(…)`, whose type is
+        # `Type`) is referenced from a value body only in a type position (a
+        # lambda domain) and is never emitted as a runtime function — skip it and
+        # its type-level references entirely.
+        seen
+
+      true ->
+        case Map.get(defs, name) do
+          nil ->
+            seen
+
+          d ->
+            seen = MapSet.put(seen, name)
+
+            [d.type, d.body]
+            |> Enum.flat_map(&global_refs/1)
+            |> Enum.reduce(seen, &collect_reachable(env, defs, &1, &2))
+        end
+    end
+  end
+
+  # Every `{:global, name}` atom referenced anywhere in a Core term.
+  defp global_refs({:global, name}), do: [name]
+  defp global_refs({:data, _n, ps, is}), do: Enum.flat_map(ps ++ is, &global_refs/1)
+  defp global_refs({:ctor, _n, args}), do: Enum.flat_map(args, &global_refs/1)
+
+  defp global_refs({:case, s, mo, brs}),
+    do: global_refs(s) ++ global_refs(mo) ++ Enum.flat_map(brs, fn {_c, _a, b} -> global_refs(b) end)
+
+  defp global_refs({:pi, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
+  defp global_refs({:lam, dom, body}), do: global_refs(dom) ++ global_refs(body)
+  defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
+  defp global_refs(_leaf), do: []
 
   @doc """
   Does a parsed program/AST use dependent constructs the kernel must check?
@@ -706,18 +781,39 @@ defmodule Cure.Elab.Program do
 
   # The full shadow-aware imported-env builder.
   defp shadow_resolved_imports(ast) do
-    sources = auto_prelude_imports(ast) ++ imports(ast)
+    # Dedup by module identity: a module that is BOTH auto-preluded and named in an
+    # explicit `use` (e.g. `char.cure` says `use Std.Bounded`, which is also in the
+    # auto-prelude) must be a SINGLE provider. Otherwise the shadow resolver sees the
+    # same family supplied "twice" and re-keys it to `Mod#Type` as if two distinct
+    # modules collided — dragging a builtin-owning prelude's key (`:bounded`) onto
+    # `Std.Bounded#Bounded`, which then clashes with the prelude source's own
+    # canonical `@builtin` self-registration. Auto-prelude entries come first so an
+    # explicit duplicate is the one dropped.
+    sources = Enum.uniq(auto_prelude_imports(ast) ++ imports(ast))
     modules = distinct_import_modules(sources)
 
     # Ownership scans the FULL transitive closure (not `modules`, which is
     # direct-only) — see the Design note + `transitive_import_modules/1` doc.
     # Family AND def ownership in ONE transitive walk (avoid re-walking): both are
     # `%{name => MapSet.t(owner_mod)}` maps fed to the shape-generic `classify/2`.
+    #
+    # The module being elaborated is dropped from the owner walk: the auto-prelude
+    # chain can transitively re-enter THIS module (e.g. Std.Bounded is reached via
+    # Std.Binary → Std.Char → Std.Bounded), and that self-import is not a foreign
+    # provider — it is the same module as the local declaration. Counting it would
+    # make `classify` see a family both locally declared AND "imported" (n_sources
+    # ≥ 2) and re-key the module's own family against itself, so `@builtin(:bounded)`
+    # would clash with the leaked `:"Std.Bounded#Bounded"`. Self contributes only
+    # through `local` below.
+    #
     # Family, def AND constructor ownership in ONE transitive walk. Constructor names are their
     # own namespace: a bare `Ok` collides with an imported `Ok` even when the families never do.
+    self_mod = find_module_name(ast)
+
     {family_owners, def_owners, ctor_owners} =
       sources
       |> transitive_import_modules()
+      |> Enum.reject(fn {mod_id, _path} -> mod_id == self_mod end)
       |> Enum.reduce({%{}, %{}, %{}}, fn {mod_id, path}, {fam_acc, def_acc, ctor_acc} ->
         add = fn names, acc ->
           Enum.reduce(names, acc, fn name, a ->
@@ -871,7 +967,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      interfaces coherence constrained)a
+                      primitives interfaces coherence constrained)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -894,6 +990,7 @@ defmodule Cure.Elab.Program do
          defs: Map.merge(left.defs, right.defs),
          certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
          builtins: Map.merge(left.builtins, right.builtins),
+         primitives: Map.merge(left.primitives, right.primitives),
          interfaces: Map.merge(left.interfaces, right.interfaces),
          coherence: coherence,
          constrained: Map.merge(left.constrained, right.constrained)
@@ -996,8 +1093,17 @@ defmodule Cure.Elab.Program do
   # In a designated prelude source, a `@builtin(:key) type Name = ...` container
   # registers the canonical builtin family (schema-validated). Non-prelude
   # sources (or non-`@builtin` decls) pass through unchanged.
-  defp maybe_register_builtin({:container, meta, _body}, env, true),
-    do: register_builtin_from_meta(meta, env)
+  #
+  # A `@builtin(:tag) primitive Name` container is NOT an inductive family: its
+  # marker is consumed by Declarations.elaborate's :primitive path (which binds
+  # the floor), so it must skip the inductive-family schema validation here.
+  defp maybe_register_builtin({:container, meta, _body}, env, true) do
+    if Keyword.get(meta, :container_type) == :primitive do
+      {:ok, env}
+    else
+      register_builtin_from_meta(meta, env)
+    end
+  end
 
   # A `@builtin(:key) type Name indices (...)` GADT family (e.g. Bounded)
   # elaborates to an {:indexed_type} rather than a {:container}; register it

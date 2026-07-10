@@ -1,3 +1,4 @@
+@group(:system)
 mod Std.Time
   ## Time primitives for Cure (v0.27.0).
   ##
@@ -38,8 +39,6 @@ mod Std.Time
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:system)
-
   ## A point in time, stored as Unix epoch microseconds.
   rec Instant
     micros: Int

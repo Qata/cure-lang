@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Core
   ## Identity, composition, booleans, comparison, and the `Result` /
   ## `Option` sum types.
@@ -31,8 +32,6 @@ mod Std.Core
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   # -- Combinators ------------------------------------------------------------
 
   ## Identity function: returns its argument unchanged.

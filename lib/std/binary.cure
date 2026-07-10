@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Binary
   ## The bridge between Cure's two string representations.
   ##
@@ -7,7 +8,7 @@ mod Std.Binary
   ##
   ## A **`Binary`** is the BEAM binary. It is what OTP's `:string`, `:binary`,
   ## and `:erlang` string functions consume and produce (Unicode case folding,
-  ## `integer_to_binary`, `binary:split`, …). Cure keeps it as an opaque type.
+  ## `integer_to_binary`, `binary:split`, …). Cure keeps it as a primitive type.
   ##
   ## `to_binary` / `from_binary` convert between them so a `List(Char)` program
   ## can reach an OTP binary primitive and come back. Conversion is UTF-8:
@@ -23,13 +24,12 @@ mod Std.Binary
   ## from_binary("hi")                        # => ['h', 'i']
   ## ```
 
-  use Std.Bounded
+  ## The BEAM binary as a primitive base type — its visible, inspectable home.
+  @builtin(:binary) primitive Binary
 
-  @group(:core)
-
-  ## `Char` is a Unicode scalar: an index below the code-point ceiling
-  ## `0x110000`. A `Char` value erases to its code-point integer.
-  typealias Char = Bounded(1114112)
+  ## `Char` lives in its own module (`Std.Char`); import it for the `List(Char)`
+  ## signatures below.
+  use Std.Char
 
   ## Encode a `List(Char)` as its UTF-8 `Binary`. The list erases to a list of
   ## code-point ints, which `:unicode.characters_to_binary/1` renders to a

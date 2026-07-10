@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.List
   ## Eager, persistent, singly-linked lists.
   ##
@@ -32,13 +33,13 @@ mod Std.List
   ## use Std.List
   ##
   ## match uncons([1, 2, 3])
-  ##   %[h, t] -> Std.Io.print_int(h)          # prints 1
-  ##   _       -> Std.Io.println("empty")
+  ##   Some(p) -> Std.Io.print_int(p.1)         # prints 1
+  ##   None()  -> Std.Io.println("empty")
   ## ```
 
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:collections)
+  use Std.Option
 
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
   ## The canonical cons-list family. Seeded programmatically into every module
   ## (so `[]`/`[h | t]` literal sugar resolves without `use`), and declared here
   ## with the builtin decorator; `builtin_list_drift_test.exs` pins the two equal.
@@ -225,14 +226,15 @@ mod Std.List
 
   # -- Destructuring helpers (v0.18.0) ---------------------------------------
 
-  ## Split `list` into `%[head, tail]`; empty list maps to `%[[], []]`.
-  fn uncons(list: List(t)) -> Tuple =
+  ## Split `list` into `Some(%[head, tail])`, or `None()` when empty.
+  fn uncons(list: List(t)) -> Option(Tuple(t, List(t))) =
     match list
-      [h | t] -> %[h, t]
-      []      -> %[[], []]
+      [h | t] -> Some(%[h, t])
+      []      -> None()
 
-  ## Like `uncons/1`, but substitutes `default` for the head when empty.
-  fn split_first(list: List(t), default: t) -> Tuple =
+  ## Like `uncons/1`, but substitutes `default` for the head when empty, so the
+  ## result is always a `%[head, tail]` pair.
+  fn split_first(list: List(t), default: t) -> Tuple(t, List(t)) =
     match list
       [h | t] -> %[h, t]
       []      -> %[default, []]

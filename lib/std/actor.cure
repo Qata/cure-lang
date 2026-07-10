@@ -1,3 +1,4 @@
+@group(:concurrency)
 mod Std.Actor
   ## Typed-actor runtime operations: spawn, stop, send, introspect.
   ##
@@ -26,8 +27,6 @@ mod Std.Actor
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:concurrency)
-
   ## Spawn a new actor instance from a compiled actor module atom.
   ## The spawning process is recorded as the actor's caller
   ## automatically; lifecycle hooks can reach it via

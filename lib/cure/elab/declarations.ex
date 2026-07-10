@@ -95,6 +95,18 @@ defmodule Cure.Elab.Declarations do
           declare_opaque_at_min_level(env, name, param_tele, 0)
         end
 
+      :primitive ->
+        # `@builtin(:tag) primitive Name` — read the marker, map it to a Core
+        # node, and confirm the binding against the seeded floor (rejecting a
+        # missing marker, an unknown tag, or a tag that disagrees with the floor).
+        name = Keyword.get(meta, :name)
+
+        with {:ok, tag} <- primitive_builtin_tag(meta),
+             {:ok, node} <- primitive_tag_node(tag),
+             :ok <- confirm_primitive_floor(env, name, node) do
+          {:ok, Env.put_primitive(env, name, node)}
+        end
+
       other ->
         {:error, {:unsupported_container, other}}
     end
@@ -149,7 +161,7 @@ defmodule Cure.Elab.Declarations do
   defp type_name?(env, name) do
     atom = String.to_atom(name)
 
-    primitive_type(name) != nil or
+    Env.primitive(env, name) != nil or
       Inductive.get_family(env, atom) != nil or
       match?(%{type: {:type, _}}, Env.get_def(env, atom))
   end
@@ -1365,8 +1377,8 @@ defmodule Cure.Elab.Declarations do
     # — resolves to the family. A name that is only a constructor (a nullary value
     # like `Z` used as an index argument) still resolves to the constructor.
     cond do
-      primitive_type(name) != nil ->
-        primitive_type(name)
+      Env.primitive(env, name) != nil ->
+        Env.primitive(env, name)
 
       Inductive.family?(env, atom) ->
         {:data, atom, [], []}
@@ -1391,15 +1403,31 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  # The built-in primitive types that map to Core type-constants (not opaque
-  # globals). `Int`/`Float` stay irreducibly primitive (BEAM machine types).
-  # `Bool` is NO LONGER here: it is a real inductive family (Std.Bool, seeded
-  # into every env0), so a `Bool` annotation falls through to the ordinary
-  # family lookup `{:data, :Bool, [], []}` — exactly as `Nat` always has.
-  defp primitive_type("Int"), do: {:int_type}
-  defp primitive_type("Float"), do: {:float_type}
-  defp primitive_type("Binary"), do: {:binary_type}
-  defp primitive_type(_), do: nil
+  # The `@builtin(:tag)` on a primitive container, or an error if absent.
+  defp primitive_builtin_tag(meta) do
+    case Keyword.get(meta, :decorator) do
+      {:builtin, [{:literal, _, tag}]} when is_atom(tag) -> {:ok, tag}
+      _ -> {:error, {:primitive_missing_builtin, Keyword.get(meta, :name)}}
+    end
+  end
+
+  # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
+  # tag, not by surface name). Exactly four tags are legal.
+  defp primitive_tag_node(:int), do: {:ok, {:int_type}}
+  defp primitive_tag_node(:float), do: {:ok, {:float_type}}
+  defp primitive_tag_node(:binary), do: {:ok, {:binary_type}}
+  defp primitive_tag_node(:atom), do: {:ok, {:atom_type}}
+  defp primitive_tag_node(other), do: {:error, {:unknown_primitive_tag, other}}
+
+  # A declaration's node must match the seeded floor for that name (consistency
+  # contract — mirrors the Bool/Nat seeded-look-alike agreement).
+  defp confirm_primitive_floor(env, name, node) do
+    case Env.primitive(env, name) do
+      nil -> :ok
+      ^node -> :ok
+      other -> {:error, {:primitive_floor_mismatch, name, node, other}}
+    end
+  end
 
   # Threads the ctx to NESTED argument positions (spec §7.3 item 3): in
   # `b(first(p))` the head `b` is a bound var; the implicit-carrying global

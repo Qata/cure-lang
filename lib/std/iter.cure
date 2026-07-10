@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.Iter
   ## Lazy iterators.
   ##
@@ -52,8 +53,6 @@ mod Std.Iter
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:collections)
-
   type StepToken = Step
   type Iter(a) = Iter(StepToken -> Option(IterStep(a)))
   type IterStep(a) = Yield(a, Iter(a))

@@ -51,6 +51,8 @@ defmodule Cure.Core.Value do
   def value?({:vbounded, n}), do: is_integer(n) and n >= 0
   def value?({:vfloat_type}), do: true
   def value?({:vbinary_type}), do: true
+  def value?({:vatom_type}), do: true
+  def value?({:vatom, a}), do: is_atom(a)
   def value?({:vfloat, f}), do: is_float(f)
   def value?(_), do: false
 

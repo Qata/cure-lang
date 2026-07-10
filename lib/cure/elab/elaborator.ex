@@ -500,6 +500,11 @@ defmodule Cure.Elab.Elaborator do
       :string when is_binary(value) ->
         elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
+      # A symbol literal `:ok` is a value of the Int-tier primitive `Atom` base
+      # type — a BEAM atom is its own canonical value (Core `{:atom_lit, a}`).
+      :symbol when is_atom(value) ->
+        {:ok, {:atom_lit, value}, {:vatom_type}}
+
       _ ->
         {:error, {:unsupported_expression, expr}}
     end
@@ -619,6 +624,30 @@ defmodule Cure.Elab.Elaborator do
   # and delegate, reusing all ctor inference (see desugar_list/1).
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
+
+  # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
+  # `let` rhs, any sub-term the checked tuple clause at line ~1137 doesn't reach).
+  # Synthesizes the non-dependent Σ `Sigma(A, λ_:A. B)` from the inferred component
+  # types — the honest surface `Tuple(A, B)`. Mirrors the scope-based builder
+  # (`elaborate_expr/3`, ~5129) and the checked clause; a *genuinely dependent* pair
+  # still needs a checking position (its expected type supplies the codomain family).
+  # The codomain `B` is closed w.r.t. the fresh Σ binder, so it is shifted +1 to keep
+  # its free de Bruijn indices pointing at the same context entries under the `λ`.
+  def elaborate_expr_typed({:tuple, _meta, [a_ast, b_ast]}, names, ctx, env) do
+    with {:ok, a_core, a_type} <- elaborate_expr_typed(a_ast, names, ctx, env),
+         {:ok, b_core, b_type} <- elaborate_expr_typed(b_ast, names, ctx, env) do
+      len = Context.length(ctx)
+      a_type_term = Quote.reify(a_type, len)
+      b_type_term = Quote.reify(b_type, len)
+      fam = Inductive.builtin(env, :sigma)
+
+      sigma_term =
+        {:data, fam, [a_type_term, {:lam, a_type_term, Cure.Core.Term.shift(b_type_term, 1)}], []}
+
+      sigma_val = Eval.eval(sigma_term, Context.env(ctx))
+      {:ok, {:ctor, sigma_ctor_name(env), [a_core, b_core]}, sigma_val}
+    end
+  end
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
@@ -5167,7 +5196,7 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr({:literal, meta, value} = expr, _scope, _env) do
+  def elaborate_expr({:literal, meta, value} = expr, scope, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
       :integer when is_integer(value) -> {:ok, {:int_lit, value}}
@@ -5177,6 +5206,12 @@ defmodule Cure.Elab.Elaborator do
       # (`Kernel.infer/2` has no catch-all) — see spec §3.4.
       :char when is_integer(value) and value >= 0 and value <= 0x10FFFF -> {:ok, {:bounded_lit, value}}
       :char when is_integer(value) -> {:error, {:char_literal_out_of_range, value}}
+      # A string literal argument IS `List(Char)` — desugar to its char-literal
+      # list and re-enter, exactly as the typed/checked paths do (so `f("hi")`
+      # and `f(['h','i'])` build the identical Cons spine).
+      :string when is_binary(value) -> elaborate_expr(desugar_string(value, meta), scope, env)
+      # A symbol literal argument `:ok` is an `Atom` value (Core `{:atom_lit, a}`).
+      :symbol when is_atom(value) -> {:ok, {:atom_lit, value}}
       _ -> {:error, {:unsupported_expression, expr}}
     end
   end

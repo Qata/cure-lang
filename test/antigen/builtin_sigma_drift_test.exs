@@ -10,8 +10,8 @@ defmodule Antigen.BuiltinSigmaDriftTest do
   # bare tuples/maps — no metadata to strip). This is the FIRST family with params
   # and a function-typed field to run through this comparison.
   @sigma_src """
+  @group(:core)
   mod Std.Sigma
-    @group(:core)
     @builtin(:sigma)
     type Sigma(a: Type, b: (a) -> Type) indices ()
       mk_pair : (x: a) -> b(x) -> Sigma(a, b)

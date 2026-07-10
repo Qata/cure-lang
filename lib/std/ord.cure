@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Ord
   ## Ordering protocol: three-way compare plus total-order helpers.
   ##
@@ -16,8 +17,6 @@ mod Std.Ord
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   ## Three-way ordering result.
   type Ordering = LessThan | EqualTo | GreaterThan
 

@@ -38,8 +38,10 @@ defmodule Cure.Types.ProtocolTest do
             fn show(x: Bool) -> String = if x then "true" else "false"
         """)
 
-      assert m.show(42) == "42"
-      assert m.show(-1) == "-1"
+      # #29: String is List(Char); from_int yields a value-surface charlist,
+      # while the Bool impl's string literal stays a classic binary.
+      assert m.show(42) == ~c"42"
+      assert m.show(-1) == ~c"-1"
       assert m.show(true) == "true"
       assert m.show(false) == "false"
     after
@@ -172,7 +174,7 @@ defmodule Cure.Types.ProtocolTest do
             fn default_val(x: Bool) -> Bool = false
         """)
 
-      assert m.show(42) == "42"
+      assert m.show(42) == ~c"42"
       assert m.show(true) == "true"
       assert m.default_val(99) == 0
       assert m.default_val(true) == false

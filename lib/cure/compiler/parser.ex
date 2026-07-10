@@ -1366,6 +1366,11 @@ defmodule Cure.Compiler.Parser do
       :opaque ->
         parse_type_def(advance(state), opaque: true)
 
+      # `primitive Name` — an irreducible machine base type (Int/Float/Binary).
+      # No constructors, no `=`; the `@builtin(:tag)` marker names its Core node.
+      :primitive ->
+        parse_primitive_def(state)
+
       :typealias ->
         parse_typealias(state)
 
@@ -3041,6 +3046,29 @@ defmodule Cure.Compiler.Parser do
     {{:type_annotation, meta, [rhs]}, state}
   end
 
+  # `primitive Name` → a constructor-less primitive-type container. The optional
+  # `@builtin(:tag)` decorator is threaded on by `attach_decorator/3` when the
+  # form is written `@builtin(:tag) primitive Name`.
+  defp parse_primitive_def(state) do
+    token = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = skip_newlines(state)
+
+    meta = [
+      container_type: :primitive,
+      name: name,
+      language: :cure,
+      line: token.line,
+      col: token.col
+    ]
+
+    {{:container, meta, []}, state}
+  end
+
   defp parse_type_def(state, opts \\ []) do
     opaque? = Keyword.get(opts, :opaque, false)
     token = peek(state)
@@ -4584,6 +4612,9 @@ defmodule Cure.Compiler.Parser do
           base_name == "Sigma" and match?(%Token{type: :lparen}, peek(state)) ->
             parse_sigma_type(state)
 
+          base_name == "Tuple" and match?(%Token{type: :lparen}, peek(state)) ->
+            parse_tuple_type(state)
+
           match?(%Token{type: :lparen}, peek(state)) ->
             state = advance(state)
             {params, state} = parse_type_param_list(state)
@@ -4631,6 +4662,31 @@ defmodule Cure.Compiler.Parser do
     binder = to_string(name_token.value)
     state = advance(state)
     state = expect(state, :colon)
+    {dom_type, state} = parse_type_expr(state)
+    state = expect(state, :comma)
+    {body_type, state} = parse_type_expr(state)
+    state = expect(state, :rparen)
+    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
+  end
+
+  # Tuple(T, U) — the honest arity-2 surface tuple (spec §3.3). It aliases the
+  # non-dependent Sigma: `Tuple(T, U)` => `sigma_type` with the unused binder "_",
+  # `Tuple(x: T, U)` => `sigma_type` binding `x` so a later position may name it.
+  # Both reuse `type_to_core`/`idx_to_core`'s existing `sigma_type` clauses, so no
+  # elaborator change is needed. Arity != 2 is handled by the n-ary path (a later
+  # increment); until then a third position falls through to `expect(:rparen)`.
+  defp parse_tuple_type(state) do
+    state = advance(state)
+
+    {binder, state} =
+      case {peek(state), peek_at(state, 1)} do
+        {%Token{} = t, %Token{type: :colon}} ->
+          {to_string(t.value), advance(advance(state))}
+
+        _ ->
+          {"_", state}
+      end
+
     {dom_type, state} = parse_type_expr(state)
     state = expect(state, :comma)
     {body_type, state} = parse_type_expr(state)
@@ -4939,8 +4995,7 @@ defmodule Cure.Compiler.Parser do
     # Module-level decorators (e.g. `@group(:core)`) describe the MODULE. The
     # canonical form is `@group(:g)` directly above `mod`, where it attaches to
     # the module container (spec 2026-07-10-group-decorator-placement). Any
-    # other position still parses as a standalone node here (Task 4 will make
-    # that a hard error, once the stdlib is migrated).
+    # other position is a hard error — the in-body form is not tolerated.
     if dec_name in @module_level_decorators do
       case peek(state) do
         %Token{type: :keyword, value: :mod} ->
@@ -4948,6 +5003,7 @@ defmodule Cure.Compiler.Parser do
           {attach_decorator(mod_ast, dec_name, args), state}
 
         _ ->
+          state = add_error(state, {:group_not_above_module, token.line, token.col})
           ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
           {ast, state}
       end
@@ -4983,6 +5039,14 @@ defmodule Cure.Compiler.Parser do
         {type_ast, state} = parse_type_def(state)
         type_ast = attach_decorator(type_ast, dec_name, args)
         {type_ast, state}
+
+      # `@builtin(:tag) primitive Name` attaches the decorator to the primitive
+      # container (the generic {:container, …} attach_decorator clause writes it
+      # into :decorator meta, like `@builtin(:key) type Name`).
+      %Token{type: :keyword, value: :primitive} ->
+        {prim_ast, state} = parse_primitive_def(state)
+        prim_ast = attach_decorator(prim_ast, dec_name, args)
+        {prim_ast, state}
 
       _ ->
         # Standalone decorator or property

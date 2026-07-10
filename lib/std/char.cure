@@ -1,0 +1,17 @@
+@group(:core)
+mod Std.Char
+  ## The Unicode code point — Cure's character type.
+  ##
+  ## A `Char` is a Unicode scalar: an index below the code-point ceiling
+  ## `0x110000` (1114112). It is `Bounded(0x110000)`, so a `Char` value is one
+  ## machine integer that erases to its code point. Character literals (`'a'`,
+  ## `'\n'`) elaborate to `Char` values, and a `String` is a `List(Char)`. This
+  ## module gives the type its visible, documented home, mirroring
+  ## `Std.Int`/`Std.Float`/`Std.Binary`/`Std.Atom`.
+  ##
+  ## `use Std.Char` also brings `Bounded` into scope (via `use Std.Bounded`), so
+  ## a bare character literal elaborates without a separate `Bounded` import.
+
+  use Std.Bounded
+
+  typealias Char = Bounded(1114112)

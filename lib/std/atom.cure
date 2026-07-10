@@ -1,0 +1,10 @@
+@group(:core)
+mod Std.Atom
+  ## The primitive interned symbol.
+  ##
+  ## `Atom` is an irreducible BEAM atom — not an inductive, not a postulate. Its
+  ## introduction forms are symbol literals (`:ok`, `:error`, `:millisecond`),
+  ## which the elaborator lowers to `{:atom_lit, a}`; on the BEAM an atom is its
+  ## own value, so `==` compares them natively. This module gives the type itself
+  ## a visible, documented home, mirroring `Std.Int`/`Std.Float`/`Std.Binary`.
+  @builtin(:atom) primitive Atom
