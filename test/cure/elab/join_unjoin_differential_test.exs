@@ -109,4 +109,45 @@ defmodule Cure.Elab.JoinUnjoinDifferentialTest do
                "The un-join is #{if un_join == :accept, do: "UNSOUND (accepts what per-branch rejects)", else: "incomplete (rejects what per-branch accepts)"}."
     end
   end
+
+  # The @battery uses only NULLARY constructors, so the `arity > 0` machinery
+  # (`drop_levels`, `Subst.shift(scrut, 1 + arity, 0)`) is never exercised there.
+  # These use field constructors, whose defaulted branches bind `arity` pattern
+  # variables under the join, stressing exactly that arithmetic (red-team Finding 2).
+  @arity_battery [
+    {"1-field constructor swept into the catch-all",
+     "mod JA\n  type C = A | B(Int) | D | E | G(Int) | H\n" <>
+       "  fn sink(x :linear Int) -> Int = x\n" <>
+       "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n",
+     :accept},
+    {"matched arm binds a field, catch-all captures linear v",
+     "mod JA\n  type C = A(Int) | B | D | E | G | H\n" <>
+       "  fn sink(x :linear Int) -> Int = x\n" <>
+       "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A(n) -> sink(v)\n      _ -> sink(v)\nend\n",
+     :accept},
+    {"2-field constructor in the catch-all (drop_levels range > 1)",
+     "mod JA\n  type C = A | B(Int, Int) | D | E | G | H\n" <>
+       "  fn sink(x :linear Int) -> Int = x\n" <>
+       "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n",
+     :accept},
+    {"linear v used twice under a field-constructor catch-all → reject",
+     "mod JA\n  type C = A | B(Int) | D | E | G | H\n" <>
+       "  fn sink(x :linear Int) -> Int = x\n  fn use2(a: Int, b: Int) -> Int = a\n" <>
+       "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n",
+     :reject}
+  ]
+
+  for {label, src, expected} <- @arity_battery do
+    @arity_src src
+    @arity_expected expected
+    test "un-join ≡ per-branch (arity>0): #{label}" do
+      {per_branch, un_join} = both(@arity_src)
+
+      assert per_branch == @arity_expected,
+             "per-branch (oracle) verdict #{per_branch} != expected #{@arity_expected}"
+
+      assert un_join == per_branch,
+             "UN-JOIN DIVERGED (arity>0): un_join=#{un_join}, per_branch=#{per_branch}"
+    end
+  end
 end

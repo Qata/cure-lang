@@ -260,7 +260,16 @@ defmodule Cure.Elab.Relevance do
   # `alt`. `walk_joined_case/7` reproduces that: it walks the shared body's captures
   # ONCE, unscaled, and injects them as one more alternative into the branch `alt`.
   defp walk({:let, g, _ty, val, body}, depth, site, st) do
-    case join_view(val, body, depth) do
+    # The un-join inlines the let binder, so it never records the binder's OWN usage
+    # — it must therefore only fire when the binder carries NO obligation, i.e. an
+    # unrestricted grade. `wrap_join/2` always emits `ω`, so every compiler join
+    # qualifies. A user-written `let g :linear = λ …` that happens to match the join
+    # shape has a restricted grade `g`, so it takes the generic path below, where
+    # `check_binder(st, depth, g, …)` enforces g's own obligation (found by the
+    # un-join red-team: skipping it accepted a linear closure dropped in some branch).
+    join = if Grade.restricted?(g), do: :not_join, else: join_view(val, body, depth)
+
+    case join do
       {:join, lg, jbody, scrut, branches} ->
         walk_joined_case(lg, jbody, scrut, branches, depth, site, st)
 
@@ -413,6 +422,12 @@ defmodule Cure.Elab.Relevance do
     with {:ok, uj} <- walk(jbody, depth + 1, :returned, track_erased(st, lg, depth)),
          :ok <- check_binder(st, depth, lg, uj, :lambda) do
       jbody_captures = Map.delete(uj, depth)
+      # How the continuation uses its OWN parameter. A defaulted branch `j(s)` runs
+      # `jbody[z := s]`, so `s` is used `param_uses` times (β-reduction). Discarding
+      # this — counting `s` once regardless — under-counts a continuation that
+      # duplicates its argument (`fn(z) -> add(z,z)` → `j(v)` uses `v` twice). It is a
+      # SET because `jbody` may itself branch (red-team A3.F1).
+      param_uses = Map.get(uj, depth, no_uses())
       case_depth = depth + 1
 
       scrut_usage =
@@ -421,17 +436,27 @@ defmodule Cure.Elab.Relevance do
           else: walk(scrut, case_depth, :scrutinee, st)
 
       with {:ok, us} <- scrut_usage,
-           {:ok, ubs} <- walk_join_branches(branches, case_depth, depth, jbody_captures, st) do
+           {:ok, ubs} <-
+             walk_join_branches(branches, case_depth, depth, jbody_captures, param_uses, st) do
         {:ok, seq(us, alt(ubs)) |> Map.delete(depth)}
       end
     end
+  end
+
+  # Scale a usage map by a SET of grades (β-substitution of a parameter used at those
+  # grades): each level's usage becomes every `mul(pg, u)` over `pg` in the set and
+  # `u` in the level's current set.
+  defp scale_by_set(usage, grade_set) do
+    Map.new(usage, fn {l, su} ->
+      {l, for(pg <- grade_set, u <- su, into: MapSet.new(), do: Grade.mul(pg, u))}
+    end)
   end
 
   # Like `walk_branches/3`, but a branch that IS a join application `{:app, {:var,
   # arity}, s}` contributes the shared continuation's captures (already computed,
   # unscaled) seq'd with the usage of its scrutinee argument — never counting the
   # join binder itself (it is inlined). Matched arms walk normally.
-  defp walk_join_branches(branches, depth, join_level, jbody_captures, st) do
+  defp walk_join_branches(branches, depth, join_level, jbody_captures, param_uses, st) do
     branches
     |> Enum.reduce_while({:ok, []}, fn {cname, arity, body}, {:ok, acc} ->
       ctor_qs =
@@ -451,9 +476,19 @@ defmodule Cure.Elab.Relevance do
           {:app, {:var, idx}, s} when depth + arity - 1 - idx == join_level ->
             # Defaulted branch: it runs the shared continuation. Its usage is that
             # continuation's captures plus the usage of the scrutinee it is applied
-            # to; the join binder is inlined, never counted.
-            with {:ok, us} <- walk(s, depth + arity, :present_arg, st2) do
-              {:ok, seq(us, jbody_captures) |> Map.drop(drop_levels)}
+            # to; the join binder is inlined, never counted. `check_fields` still
+            # polices this branch's OWN pattern-bound constructor fields, uniformly
+            # with the matched-arm clause below — currently a no-op (ctor fields are
+            # only `:erased`/`:unrestricted`), but the invariant must not depend on
+            # that (red-team Finding 3).
+            with {:ok, us0} <- walk(s, depth + arity, :present_arg, st2) do
+              # `s` is used `param_uses` times: the continuation runs `jbody[z := s]`.
+              us = scale_by_set(us0, param_uses)
+              bu = seq(us, jbody_captures)
+
+              with :ok <- check_fields(st2, ctor_qs, depth, bu) do
+                {:ok, Map.drop(bu, drop_levels)}
+              end
             end
 
           _ ->

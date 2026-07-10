@@ -93,6 +93,77 @@ defmodule Cure.Elab.JoinGradeTest do
     end
   end
 
+  describe "the un-joined let binder's OWN grade is still enforced (red-team F1/F2)" do
+    # `join_view` fires on ANY user `let g = λ …` over a `case`, not only the
+    # compiler's join. The un-join inlines the join binder — so if it also skipped the
+    # let binder's OWN grade obligation, a `let g :linear = λ` applied in only some
+    # branches would drop g's linear resource and be accepted. The un-join must only
+    # fire when the let grade is unrestricted; a restricted let-grade falls back to the
+    # generic `:let`, which enforces it. (Found by the un-join red-team; the
+    # differential oracle is blind to it because there is no compiler catch-all here,
+    # so both toggle modes run the same `join_view` path.)
+    @two_lg "type Two = T | F\n"
+
+    test "a linear let-bound closure applied in only some branches is REJECTED" do
+      src =
+        "mod JG\n  #{@two_lg}" <>
+          "  fn sink(x :linear Int) -> Int = x\n" <>
+          "  fn f(x: Two) -> Int =\n    let g :linear (Int) -> Int = fn(k) -> sink(k)\n" <>
+          "    match x\n      T() -> 0\n      F() -> g(1)\nend\n"
+
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+    end
+
+    test "a linear let-bound closure applied in EVERY branch is accepted" do
+      src =
+        "mod JG\n  #{@two_lg}" <>
+          "  fn sink(x :linear Int) -> Int = x\n" <>
+          "  fn f(x: Two) -> Int =\n    let g :linear (Int) -> Int = fn(k) -> sink(k)\n" <>
+          "    match x\n      T() -> g(0)\n      F() -> g(1)\nend\n"
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+
+    test "an erased let-bound closure applied at runtime is REJECTED" do
+      src =
+        "mod JG\n  #{@two_lg}" <>
+          "  fn f(x: Two) -> Int =\n    let g :erased (Int) -> Int = fn(k) -> k\n" <>
+          "    match x\n      T() -> 0\n      F() -> g(1)\nend\n"
+
+      assert {:error, _} = Program.elaborate(src)
+    end
+  end
+
+  describe "the branch argument is scaled by the continuation's own-parameter usage (red-team A3.F1)" do
+    # `j(v)` where the shared continuation `j = fn(z) -> …` uses `z` some number of
+    # times means `v` is used that many times (β-reduction). The un-join must scale
+    # the branch argument by the continuation's usage of its own parameter — not
+    # discard it. A continuation that DUPLICATES its argument makes a linear `v` used
+    # twice → reject; an identity continuation uses it once → accept.
+    @two_a "type Two = T | F\n"
+
+    test "a continuation that duplicates its argument makes a linear var used twice → REJECT" do
+      src =
+        "mod JG\n  #{@two_a}" <>
+          "  fn add(a: Int, b: Int) -> Int = a\n" <>
+          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n" <>
+          "    let j : (Int) -> Int = fn(z) -> add(z, z)\n" <>
+          "    match x\n      T() -> j(v)\n      F() -> j(v)\nend\n"
+
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+    end
+
+    test "an identity continuation uses its linear argument once → accept" do
+      src =
+        "mod JG\n  #{@two_a}" <>
+          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n" <>
+          "    let j : (Int) -> Int = fn(z) -> z\n" <>
+          "    match x\n      T() -> j(v)\n      F() -> j(v)\nend\n"
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+  end
+
   describe "the un-join's one-shot soundness gate" do
     # `relevance.ex`'s un-join fires on ANY `let`-bound λ over a `case`, not only the
     # compiler's join. A USER `let g = λ …` applied MORE THAN ONCE per path is NOT
