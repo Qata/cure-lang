@@ -187,63 +187,81 @@ testable at the compile-resolve boundary.
   (`@\s*edition\s*\(`), so a spaced pragma is no longer invisible to resolution
   or duplicated by the bump.
 
-## Outstanding after iteration 3 (fresh audit running)
+## Iteration 4 — audit of iteration 3's fixes (2 Opus agents) + fixes
 
-- **Follow-up (from F-A, LOW/design):** wire manifest-wide edition into the CLI
-  build path *correctly* — resolve each file under the nearest ancestor
-  `Cure.toml`, not a blanket cwd `project_dir` (which would misapply the app
-  edition to stdlib/deps). Deferred as a scoped task, not a blocker; the pragma
-  path already covers per-file incremental migration.
+The escalation gate was lifted by the operator ("just fix them… if you find a
+bug, fix it"), so F-A/F-B/F-C — previously escalated as latent/design-blocked —
+were all fixed in iteration 3's tail (build-path `resolve/1` wiring `2aee2e9`,
+source-edition parse-input `671ec68`, pragma whitespace tolerance `614f29a`).
+Iteration 4 audited those fixes and the F-A/F-B/F-C follow-ups.
 
-## (superseded) Blocked — needs operator
+### Iteration 4 — carried-over findings FIXED
 
-The three remaining confirmed findings are all **LATENT** — none can misbehave
-until a **second edition** is minted (today `@known == ["2026"]`, so every path
-resolves to the one value). They are **not TDD-fixable now** (a red test needs a
-real retired keyword / a 2nd edition to make the wrong behaviour observable), and
-two require **design decisions on the compile / migrate pipelines that the spec &
-plan deliberately did not scope**. Per the loop's escalation guardrail, recorded
-here rather than blind-patched on hot paths. Operator: pick a resolution per item.
+- **CLI Finding 1 [MED, live regression] — `eb33b88`.** The phase-2 bump detected
+  and spliced the `@edition` pragma with a whole-body regex, so an `@edition(...)`
+  buried in a comment/string falsely triggered a bump (in-comment mutation, no
+  real leading pragma added). The F-C whitespace widening extended this to spaced
+  forms, making it reachable with the single minted edition. Fixed: detection
+  routes through `Cure.Edition.pragma_edition` (anchored to the first substantive
+  line); splice rewrites only that leading line. Red: a spaced `@ edition("2020")`
+  in a comment no longer bumps.
+- **Compiler F1 [latent] — `bfde322`.** The parser accepted pragma forms the
+  single-line pre-parse resolver could not see: a **multi-line** pragma (parser
+  honoured the declared edition while the resolver lexed under the default → silent
+  wrong-edition once a 2nd edition exists) and an **indented** pragma (resolver's
+  `^\s*@` over-matched a form the parser rejects as placement). Fixed both:
+  parser rejects a multi-line pragma as `:edition_pragma_malformed`; resolver
+  regex anchored at column 0 (`^@`). The two now agree on what a valid pragma is.
+- **F2 [polish] — `e21f3b1`.** The `@edition` pragma errors and the compile-boundary
+  `{:edition_error, {:unknown_edition, _}}` hit the catch-all `inspect`. Added
+  dedicated `format_error` clauses; unknown-edition variants list the known set.
+- **CLI Finding 2 [latent] — `5651ace`.** The downgrade guard measured target vs
+  the *project* edition only; a file pinning a newer edition via its own pragma
+  (`from`) slipped through and would be rewritten onto an older keyword set.
+  Fixed: `plan_migration_source` refuses `from > target` (`{:error, :downgrade}`);
+  `migrate_preflight` aborts the run with a precise message. Probed at the pure
+  planner with hypothetical editions (unreachable end-to-end with one edition).
 
-- **F-A LATENT [HIGH-when-live] — build pipeline is edition-blind for lexing.**
-  `compiler.ex` `lex/parse` (245-256) and every `cure build`/`run` caller never
-  call `Cure.Edition.resolve/1` nor pass `:edition`; the lexer always uses
-  `current()`. So §4's edition-parameterized lexing is dead on the build path:
-  once a keyword is retired at edition N, a file pinned to edition N-1 will fail
-  to `cure build` (the retired word won't lex as a keyword) — defeating the
-  feature's headline purpose. The LIVE half (unknown pragma) is already closed at
-  the parser. **Decision needed:** wire `resolve/1` into the compile pipeline
-  (where — `compiler.ex` vs each CLI caller? how is `project_dir` derived from a
-  file path? per-build Cure.toml caching? does a resolve error abort the build?).
-  This is an unplanned integration task on the hot path, not a localized fix.
-- **F-B LATENT [HIGH-when-live] — `cure migrate` parses the INPUT under the
-  TARGET edition, not the source.** `plan_migration_source` (cli ~1304-1305) and
-  `migrate_preflight_file` tokenize/parse the source with `edition: target`. To
-  detect a keyword retired *at* target you must parse under the OLD edition where
-  it's still a keyword; under target the construct lexes as a bare identifier, the
-  rule silently no-ops, and phase 2 bumps anyway. Masked today (proto/impl ship
-  `enforced_in: nil`, 2026 is the floor). I2/F12 correctly fixed the *verify*
-  reparse to use `target`; the two edition roles (parse-input = source,
-  verify-output = target) are conflated onto `target`. **Decision needed:** thread
-  the project (source) edition into parse-input while keeping verify at target.
-  Not TDD-able now — the real migrate path uses the live registry, not injectable
-  fixture rules, so no crossing exists that makes input-parse-edition observable.
-- **F-C LATENT [MED] — pragma whitespace grammar drift.** The parser is
-  whitespace-insensitive, so `@edition ("2026")` / `@ edition("2026")` parse as
-  valid pragmas, but the regex surfaces (`Cure.Edition.pragma_edition`, cli
-  `migrate_edition_pragma`/`migrate_splice_edition`) require tight `@edition(` →
-  a spaced pragma is invisible to resolution and to the phase-2 bump splicer.
-  Masked now (default == the only valid value). **Decision needed (low-stakes):**
-  tighten the parser to reject interior whitespace, OR loosen the three regexes to
-  tolerate it — semantics-only, prefer the lower-risk direction. Recorded, not
-  guessed.
+### Iteration 4 — fresh audit result (2 Opus agents, verified against source)
 
-**Loop status:** iteration 3 fixed every LIVE/testable bug; the suite is green.
-The residue is latent multi-edition/design work that the autonomous loop must not
-self-decide. Operator notified once (see below). The cron is **left in place**
-per the escalation guardrail; a subsequent fire that finds only this Blocked
-section (no new testable findings) should STOP quietly WITHOUT re-notifying and
-WITHOUT deleting the cron — await an operator design decision or an explicit
-cancel. Do NOT merge.
+- **parser.ex / errors.ex slice — CLEAN.** Verified myself: the literal `meta`
+  always carries `:line` (a plain `"YYYY"` arg lexes as a `:string` token with a
+  line; the line-less literal only arises inside string interpolation, unreachable
+  here); `single_line_edition_pragma?` runs after `valid_edition_pragma_arg?` so
+  `args` is guaranteed a one-element literal list; the new formatter clauses
+  precede the catch-all and their tuple shapes are disjoint from every earlier
+  clause.
+- **cli.ex / edition.ex slice — ONE confirmed LOW regression (now FIXED, `a5f8131`).**
+  `replace_leading_pragma_line` split on `"\n"`, so on a CRLF file the replaced
+  pragma line dropped its `\r` → mixed EOL (the old substring `Regex.replace`
+  preserved CRLF). Latent (the bump path needs a 2nd edition to fire), but a
+  genuine output-corruption regression I introduced. Red: `migrate_splice_edition`
+  on a CRLF body now preserves `\r\n`. All other hunts (trivia-predicate agreement,
+  `^@` missing a real pragma, downgrade-guard caller/shape preservation, result
+  bucket double-handling) were traced and REFUTED against source.
+
+### Iteration 4 — FIXED (5 commits, full suite 3864 passed / 0 failed)
+
+`eb33b88` (CLI Finding 1) · `bfde322` (Compiler F1) · `e21f3b1` (F2 messages) ·
+`5651ace` (CLI Finding 2) · `a5f8131` (CRLF, from this iteration's own audit).
+
+## Outstanding findings (after iteration 4)
+
+- **Follow-up (from F-A, LOW/design, CARRIED FORWARD):** `cure build`/`run`
+  callers do not thread a `project_dir` into `Cure.Compiler.compile_*`, so a
+  project's `Cure.toml [project].edition` is honoured only when a caller passes
+  it explicitly (the compile boundary `resolve_edition/2` is wired and tested; the
+  gap is purely which callers supply `project_dir`). Correct wiring must resolve
+  each file under its **nearest ancestor `Cure.toml`**, not a blanket cwd dir
+  (which would misapply the app edition to stdlib/deps). LATENT with one edition
+  (Cure.toml can only say `2026` == default). Deferred as a scoped design task,
+  not a blocker; the pragma path already covers per-file incremental migration.
+
+**Loop status:** iteration 4's fresh audit found ONE confirmed real bug (the CRLF
+regression), now fixed — so this audit is **NOT clean**. Convergence (two
+consecutive clean audits) is not met. The one Outstanding item is a LATENT
+design-scoped follow-up, not a testable bug. The cron is **left in place**; the
+next fire (iteration 5) audits iteration 4's fixes — including the CRLF fix and
+the F-A/F-B/F-C hardening. Do NOT merge.
 
 ---
