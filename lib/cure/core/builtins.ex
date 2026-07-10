@@ -139,7 +139,7 @@ defmodule Cure.Core.Builtins do
   """
   @spec seed_ops(Env.t()) :: Env.t()
   def seed_ops(%Env{} = env) do
-    bool_ty = {:data, Inductive.builtin(env, :bool), [], []}
+    bool_ty = {:data, bool_family_id(env), [], []}
 
     env
     |> seed_binops(@int_binops, {:int_type}, bool_ty)
@@ -148,6 +148,24 @@ defmodule Cure.Core.Builtins do
     |> seed_unops(@float_unops, {:float_type})
     |> seed_struct_ops(bool_ty)
   end
+
+  # The family id to bake into every comparison / structural-equality codomain.
+  #
+  # `seed_ops/1` snapshots this as a plain Core term, not a live registry lookup, so it has to
+  # be right at the moment it runs — and `seed/2` runs it unconditionally, as its last step.
+  # Reading it only out of `Inductive.builtin(env, :bool)` got `nil` in exactly the scenario
+  # `seed_ops`'s own doc describes: a module that declares its own `Bool` has `:Bool` in
+  # `seed/2`'s `exclude` set, so `maybe_seed(:bool, …)` never registered anything, and the
+  # module's `@builtin(:bool)` declaration only registers the real family LATER, in
+  # `elaborate_declarations`. All 12 comparison ops and both struct ops were left with
+  # `{:data, nil, [], []}` as their codomain — a type `Kernel.infer/2` rejects with
+  # `{:error, {:unknown_family, nil}}`, which propagates to `check_def/2`'s builtin-op clause
+  # whose own comment promises those ops are "Total by fiat".
+  #
+  # `maybe_seed/5` excludes precisely on `family.name`, so the family the module goes on to
+  # declare carries the same name the seed would have used. The canonical name is therefore the
+  # correct snapshot under both orders, and the op signatures no longer vary with seeding order.
+  defp bool_family_id(env), do: Inductive.builtin(env, :bool) || bool_family().name
 
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.

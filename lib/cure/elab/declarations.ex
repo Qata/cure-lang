@@ -225,12 +225,34 @@ defmodule Cure.Elab.Declarations do
         # builtin_op, which is overloaded). emit lowers it to a remote call;
         # TotalityClosure skips it. Do NOT call elaborate_body / Kernel.check /
         # Relevance.check (no term exists).
-        with {:ok, sig} <- function_signature(meta, env) do
+        with {:ok, sig} <- function_signature(meta, env),
+             :ok <- check_extern_arity(sig, arity) do
           {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
         end
 
       _ ->
         elaborate_real_body(meta, body, env)
+    end
+  end
+
+  # The arity in `@extern(:mod, :fun, arity)` names the TARGET Erlang function — `erlang:hd/1`.
+  # Erased parameters never reach the BEAM, so that number is also exactly the def's present
+  # arity, which is what `Emit` gives the generated function and what every Cure call site passes
+  # (`Emit.present_arity/2`, off the same `quantities`). Nothing used to force the two to agree.
+  #
+  # An extern with an erased implicit — `head({T: Type}, xs: List(T))`, and auto-generalization
+  # inserts one for any free lowercase type var even when the user writes none — has a present
+  # arity strictly below its surface telescope length. A user counting the parens writes 2, and
+  # `Emit` then generated `head/2` calling `erlang:hd(V0, V1)` while every Cure caller invoked
+  # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
+  # it. Rejecting the mismatch is the only reading under which the number means one thing.
+  defp check_extern_arity(sig, arity) do
+    present = Enum.count(sig.quantities || [], &(&1 == :present))
+
+    if arity == present do
+      :ok
+    else
+      {:error, {:extern_arity_mismatch, sig.name, arity, present}}
     end
   end
 

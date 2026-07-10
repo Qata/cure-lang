@@ -174,6 +174,24 @@ defmodule Cure.Elab.GuardLintTest do
       assert [{:guard_shadowed, 1}] = GuardLint.warnings()
     end
 
+    # With only one shadowed arm the order is unobservable. With two, it was reversed:
+    # `guard_chain/7` recursed into every LATER arm — each recording its own warning — before
+    # checking the CURRENT arm's shadow status. `record_warning/1` prepends and `warnings/0`
+    # reverses, a scheme that restores insertion order only when the caller inserts in source
+    # order. Here the caller inserted bottom-up, so the reversal handed back descending indices.
+    test "two shadowed guards warn in source order, not reversed" do
+      src =
+        @nat <>
+          "  fn cls(n: Int, b: Int) -> Nat = match n\n" <>
+          "    x when x < b -> Z()\n" <>
+          "    x when x < b -> S(Z())\n" <>
+          "    x when x < b -> S(S(Z()))\n" <>
+          "    x -> S(S(S(Z())))\nend\n"
+
+      assert {:ok, _env} = Program.elaborate(src)
+      assert GuardLint.warnings() == [{:guard_shadowed, 1}, {:guard_shadowed, 2}]
+    end
+
     test "an unshadowed chain leaves no warnings (and elaborate/1 resets stale ones)" do
       GuardLint.record_warning({:guard_shadowed, 99})
 

@@ -2822,8 +2822,13 @@ defmodule Cure.Elab.Elaborator do
              {:ok, test} <-
                elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env),
              {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
+             # Warn for THIS arm before recursing into the later ones. The check needs only
+             # `test` and `acc`, both bound here; running it after the recursion meant every
+             # later arm had already recorded its own warning, so `GuardLint.warnings/0` —
+             # which restores insertion order by reversing a prepended list — handed back a
+             # chain's shadow warnings in descending arm index.
+             :ok <- maybe_warn_shadowed(test, acc, ctx),
              {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env, acc ++ [test]) do
-          maybe_warn_shadowed(test, acc, ctx)
           {:ok, bool_case(test, expected, tt, ff, ctx)}
         end
     end

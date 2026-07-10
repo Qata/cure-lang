@@ -124,7 +124,7 @@ defmodule Cure.Elab.Emit do
 
   defp function_form(env, name) do
     case Env.get_def(env, name) do
-      %{body: {:extern, {mod, fun, arity}}} -> extern_form(name, {mod, fun, arity})
+      %{body: {:extern, {mod, fun, _arity}}} -> extern_form(name, {mod, fun}, present_arity(env, name))
       def -> real_function_form(name, def, env)
     end
   end
@@ -133,7 +133,13 @@ defmodule Cure.Elab.Emit do
   # calling it). Params are synthesized from the arity — a bodyless extern has no
   # {:lam,…} chain to peel, so peel_params/4 would yield zero params for arity>0.
   # `0..(arity-1)//1` yields `[]` at arity 0 → `mod:fun()`, correct.
-  defp extern_form(fn_atom, {mod, fun, arity}) do
+  #
+  # The arity is the def's PRESENT count, as in `real_function_form/3` and at every call site
+  # (`present_arity/2`), never the raw literal from `@extern(…)` — an erased parameter never
+  # reaches the BEAM. `Declarations.check_extern_arity/2` rejects a literal that disagrees, so
+  # the two agree by construction; reading the quantities here keeps that true by construction
+  # rather than by convention.
+  defp extern_form(fn_atom, {mod, fun}, arity) do
     param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
     remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
     {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [remote]}]}
