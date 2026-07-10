@@ -1332,10 +1332,11 @@ defmodule Cure.Elab.Declarations do
   end
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
-  # tag, not by surface name). Exactly three tags are legal.
+  # tag, not by surface name). Exactly four tags are legal.
   defp primitive_tag_node(:int), do: {:ok, {:int_type}}
   defp primitive_tag_node(:float), do: {:ok, {:float_type}}
   defp primitive_tag_node(:binary), do: {:ok, {:binary_type}}
+  defp primitive_tag_node(:atom), do: {:ok, {:atom_type}}
   defp primitive_tag_node(other), do: {:error, {:unknown_primitive_tag, other}}
 
   # A declaration's node must match the seeded floor for that name (consistency
