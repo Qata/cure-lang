@@ -29,13 +29,13 @@ defmodule CureAtelierTest do
     test "painter and curator can add/remove tags without coordination" do
       painter_set =
         :cure_std_crdt.or_empty()
-        |> :cure_std_crdt.or_add(:painter, :abstract)
-        |> :cure_std_crdt.or_add(:painter, :cubism)
+        |> :cure_std_crdt.or_add(:painter, 1, :abstract)
+        |> :cure_std_crdt.or_add(:painter, 2, :cubism)
 
       curator_set =
         :cure_std_crdt.or_empty()
-        |> :cure_std_crdt.or_add(:curator, :abstract)
-        |> :cure_std_crdt.or_add(:curator, :impressionism)
+        |> :cure_std_crdt.or_add(:curator, 1, :abstract)
+        |> :cure_std_crdt.or_add(:curator, 2, :impressionism)
 
       merged = :cure_std_crdt.or_merge(painter_set, curator_set)
 

@@ -68,8 +68,8 @@ defmodule :cure_std_crdt_test do
   describe "ORSet" do
     test "add, remove, read" do
       s = :cure_std_crdt.or_empty()
-      s = :cure_std_crdt.or_add(s, :n1, :apple)
-      s = :cure_std_crdt.or_add(s, :n1, :banana)
+      s = :cure_std_crdt.or_add(s, :n1, 1, :apple)
+      s = :cure_std_crdt.or_add(s, :n1, 2, :banana)
       assert :cure_std_crdt.or_value(s) == [:apple, :banana]
 
       s = :cure_std_crdt.or_remove(s, :apple)
@@ -78,9 +78,9 @@ defmodule :cure_std_crdt_test do
 
     test "add wins over a concurrent remove that did not observe it" do
       # n1 adds :apple
-      a = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n1, :apple)
+      a = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n1, 1, :apple)
       # n2 adds :apple too, then removes it
-      b = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n2, :apple)
+      b = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n2, 1, :apple)
       b = :cure_std_crdt.or_remove(b, :apple)
 
       merged = :cure_std_crdt.or_merge(a, b)
@@ -89,10 +89,42 @@ defmodule :cure_std_crdt_test do
     end
 
     test "obeys the CRDT merge laws" do
-      a = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n1, :apple)
-      b = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n2, :banana)
+      a = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n1, 1, :apple)
+      b = :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n2, 1, :banana)
       c = :cure_std_crdt.or_remove(a, :apple)
       assert_merge_laws(&:cure_std_crdt.or_merge/2, [a, b, c])
+    end
+
+    test "or_add is referentially transparent" do
+      s = :cure_std_crdt.or_empty()
+      assert :cure_std_crdt.or_add(s, :n1, 1, :apple) == :cure_std_crdt.or_add(s, :n1, 1, :apple)
+    end
+
+    test "or_add leaves the process dictionary untouched" do
+      before = Process.get()
+      :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n1, 1, :apple)
+      assert Process.get() == before
+    end
+
+    test "adds from one replica in different processes do not collide" do
+      # Both tasks act as logical replica :n1 — a replica is a node id, not
+      # an OS process. Distinct tags must stay distinct across processes.
+      add = fn tag, elem ->
+        Task.async(fn -> :cure_std_crdt.or_add(:cure_std_crdt.or_empty(), :n1, tag, elem) end)
+        |> Task.await()
+      end
+
+      apples = add.(1, :apple)
+      bananas = add.(2, :banana)
+
+      merged = :cure_std_crdt.or_merge(apples, bananas)
+      assert Enum.sort(:cure_std_crdt.or_value(merged)) == [:apple, :banana]
+
+      # Removing :apple must not disturb :banana, even after :banana's
+      # originating replica state is merged back in.
+      pruned = :cure_std_crdt.or_remove(merged, :apple)
+      final = :cure_std_crdt.or_merge(pruned, bananas)
+      assert :cure_std_crdt.or_value(final) == [:banana]
     end
   end
 
