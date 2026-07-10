@@ -452,6 +452,16 @@ defmodule Cure.Compiler.Lexer do
   # line, a gap) starts a fresh run.
   defp record_blank(%{collect_trivia: false} = state, _line), do: state
 
+  # The `\n` that terminates a comment-only line is NOT a blank line: the
+  # line-start comment branch (lex_indentation) leaves its trailing newline
+  # for the next lex_indentation call, which then sees an otherwise-empty
+  # line and would spuriously count it. A comment we just recorded on this
+  # exact line number means this end-of-line belongs to that comment -- skip.
+  defp record_blank(%{collect_trivia: true, trivia: [{k, _t, cl, _c} | _]} = state, line)
+       when k in [:comment, :doc_comment] and cl == line do
+    state
+  end
+
   defp record_blank(%{collect_trivia: true, trivia: [{:blank, count, sl} | rest]} = state, line)
        when sl + count == line do
     %{state | trivia: [{:blank, count + 1, sl} | rest]}
