@@ -558,12 +558,23 @@ defmodule Cure.Compiler.Parser do
   # -- Grouping ( ... ) ------------------------------------------------------
 
   defp parse_grouped(state) do
+    open = peek(state)
     state = advance(state)
     state = skip_newlines(state)
-    {expr, state} = parse_expr(state, 0)
-    state = skip_newlines(state)
-    state = expect(state, :rparen)
-    {expr, state}
+
+    case peek(state) do
+      %Token{type: :rparen} ->
+        # `()` — the unit value (Swift-style): the sole inhabitant of `Unit`. It
+        # is NOT an empty tuple; it lowers to the nullary `unit` constructor.
+        state = advance(state)
+        {{:unit_value, [line: open.line, col: open.col]}, state}
+
+      _ ->
+        {expr, state} = parse_expr(state, 0)
+        state = skip_newlines(state)
+        state = expect(state, :rparen)
+        {expr, state}
+    end
   end
 
   # -- Infix Operators -------------------------------------------------------
@@ -3246,8 +3257,27 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
 
     {ast, state} =
-      case peek(state) do
-        %Token{type: :lparen} ->
+      case {peek(state), peek_at(state, 1)} do
+        {%Token{type: :lparen}, %Token{type: :rparen}} ->
+          # `type Unit = ()` — the Swift-style unit type: `Unit` is the type, `()`
+          # its sole value. `= ()` is RESERVED to `Unit`; `()` names the one
+          # built-in unit type and is not a spelling other types may borrow, so
+          # any other name declared as `()` is a hard error. When permitted, this
+          # builds exactly the nullary single-`unit`-ctor family the compiler
+          # seeds into every module (see program.ex seed_with_telescope_support/1).
+          state = advance(advance(state))
+
+          meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+
+          if name == "Unit" do
+            {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
+          else
+            state = add_error(state, {:unit_type_reserved, name})
+            {{:container, meta, []}, state}
+          end
+
+        {%Token{type: :lparen}, _} ->
           # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
           # The full type-expression parser handles the arrow; the result is a plain
           # type alias (`:type_annotation`).

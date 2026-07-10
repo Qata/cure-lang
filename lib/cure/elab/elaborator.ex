@@ -660,6 +660,13 @@ defmodule Cure.Elab.Elaborator do
 
   # Wave-2 List sugar: rewrite `[]`/`[h|t]`/`[a,b,c]` to Nil/Cons ctor-call form
   # and delegate, reusing all ctor inference (see desugar_list/1).
+  # `()` — the unit value (Swift-style), the sole inhabitant of `Unit`. It is the
+  # nullary `unit` constructor of the seeded `Unit` family; the same node emit
+  # already understands as the empty-telescope terminator.
+  def elaborate_expr_typed({:unit_value, _meta}, _names, _ctx, _env) do
+    {:ok, {:ctor, :unit, []}, {:data, :Unit, [], []}}
+  end
+
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
 
