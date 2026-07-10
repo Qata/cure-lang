@@ -97,6 +97,56 @@ defmodule Cure.Migrate do
     end)
   end
 
+  @typedoc "Why a path failed the git preflight."
+  @type git_reason :: :dirty | :untracked | :not_a_repo
+
+  @doc """
+  Preflight git-safety guard for `cure migrate` (spec §5.7): every path must be
+  tracked and porcelain-clean before any file is rewritten, so a migration can
+  always be reviewed and reverted as a diff. Classifies **each** path
+  independently (no short-circuit) and returns one reason per failing path — a
+  batch can legitimately mix untracked scratch files with merely-dirty tracked
+  ones, and a single reason-for-the-whole-batch could not represent that without
+  misreporting some paths.
+
+  Returns `:ok` when every path is clean, else `{:error, [{path, reason}]}` in
+  the order `paths` was given, where `reason` is `:untracked`, `:dirty`, or
+  `:not_a_repo`.
+
+  Each `git` invocation pins `cd: Path.dirname(path)` (git discovers the repo
+  root upward from there): `git status`/`git ls-files` resolve relative to the
+  caller's cwd, not the repo containing `path`, so without this a path in a
+  different repo than the caller's cwd fails with "outside repository".
+  """
+  @spec git_guard([Path.t()]) :: :ok | {:error, [{Path.t(), git_reason()}]}
+  def git_guard(paths) do
+    failures =
+      paths
+      |> Enum.map(fn path -> {path, classify_path(path)} end)
+      |> Enum.reject(fn {_path, reason} -> reason == :clean end)
+
+    if failures == [], do: :ok, else: {:error, failures}
+  end
+
+  defp classify_path(path) do
+    dir = Path.dirname(path)
+
+    case System.cmd("git", ["ls-files", "--error-unmatch", path], cd: dir, stderr_to_stdout: true) do
+      {_out, 0} -> porcelain_status(path, dir)
+      {out, _nonzero} -> if not_a_repo?(out), do: :not_a_repo, else: :untracked
+    end
+  end
+
+  defp porcelain_status(path, dir) do
+    case System.cmd("git", ["status", "--porcelain", "--", path], cd: dir) do
+      {"", 0} -> :clean
+      {_nonempty, 0} -> :dirty
+      {_out, _nonzero} -> :dirty
+    end
+  end
+
+  defp not_a_repo?(output), do: output =~ "not a git repository"
+
   @doc """
   Build the per-file context consulted by `:needs_resolution` rules: the set of
   type names (as strings) in scope for `ast`. Seeded with Cure's built-in
