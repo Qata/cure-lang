@@ -4669,15 +4669,33 @@ defmodule Cure.Compiler.Parser do
     {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
   end
 
-  # Tuple(T, U) — the honest arity-2 surface tuple (spec §3.3). It aliases the
-  # non-dependent Sigma: `Tuple(T, U)` => `sigma_type` with the unused binder "_",
-  # `Tuple(x: T, U)` => `sigma_type` binding `x` so a later position may name it.
-  # Both reuse `type_to_core`/`idx_to_core`'s existing `sigma_type` clauses, so no
-  # elaborator change is needed. Arity != 2 is handled by the n-ary path (a later
-  # increment); until then a third position falls through to `expect(:rparen)`.
+  # Tuple(T1, …, Tn) — the honest surface tuple (spec §3.3). Parse a comma-separated
+  # list of `[binder?:] type` positions (≥ 2). Arity 2 aliases the non-dependent
+  # Sigma — `Tuple(T, U)` => `sigma_type` with unused binder "_", `Tuple(x: T, U)`
+  # => `sigma_type` binding `x` for a later position — reusing `type_to_core`'s
+  # existing `sigma_type` clauses (no elaborator change). Arity ≥ 3 is the flat
+  # n-ary product `{:tuple_type, [arity: n], [t1…tn]}` (non-dependent: binders are
+  # not meaningful for the flat families, so they are dropped) lowered to the
+  # `TupleN` inductive family by the elaborator.
   defp parse_tuple_type(state) do
     state = advance(state)
+    {positions, state} = parse_tuple_positions(state, [])
+    state = expect(state, :rparen)
 
+    ast =
+      case positions do
+        [{binder, dom}, {_b2, body}] ->
+          {:sigma_type, [binder: binder], [dom, body]}
+
+        many ->
+          {:tuple_type, [arity: length(many)], Enum.map(many, &elem(&1, 1))}
+      end
+
+    {ast, state}
+  end
+
+  # A `[binder?:] type` position list, comma-separated, terminated by `:rparen`.
+  defp parse_tuple_positions(state, acc) do
     {binder, state} =
       case {peek(state), peek_at(state, 1)} do
         {%Token{} = t, %Token{type: :colon}} ->
@@ -4687,11 +4705,13 @@ defmodule Cure.Compiler.Parser do
           {"_", state}
       end
 
-    {dom_type, state} = parse_type_expr(state)
-    state = expect(state, :comma)
-    {body_type, state} = parse_type_expr(state)
-    state = expect(state, :rparen)
-    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
+    {type, state} = parse_type_expr(state)
+    acc = [{binder, type} | acc]
+
+    case peek(state) do
+      %Token{type: :comma} -> parse_tuple_positions(advance(state), acc)
+      _ -> {Enum.reverse(acc), state}
+    end
   end
 
   defp maybe_parse_function_type(state, left) do

@@ -1,0 +1,34 @@
+@group(:collections)
+mod Std.Tuple
+  ## Honest surface tuples.
+  ##
+  ## `Tuple(T, U)` is the arity-2 product — a flat BEAM `{a, b}` — and
+  ## `Tuple(T1, …, Tn)` (3 ≤ n ≤ 8) are the flat n-ary products. A tuple
+  ## literal is written `%[a, b, …]` and projected with `.1`, `.2`, … .
+  ##
+  ## Arity-2 aliases the non-dependent dependent-pair, so the later
+  ## position may depend on the earlier one; the n-ary families are plain
+  ## flat products. This module is the honest replacement for the old
+  ## `Std.Pair`. The n-ary accessors (`get`, `third`, …) land alongside the
+  ## n-ary literal surface.
+  ##
+  ## ## Examples
+  ##
+  ## ```cure
+  ## use Std.Tuple
+  ##
+  ## first(%[1, 2])          # => 1
+  ## second(%[1, 2])         # => 2
+  ## swap(%[1, 2])           # => %[2, 1]
+  ## ```
+
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
+
+  ## The first component of a pair.
+  fn first(t: Tuple(a, b)) -> a = t.1
+
+  ## The second component of a pair.
+  fn second(t: Tuple(a, b)) -> b = t.2
+
+  ## Swap the two components of a pair.
+  fn swap(t: Tuple(a, b)) -> Tuple(b, a) = %[t.2, t.1]
