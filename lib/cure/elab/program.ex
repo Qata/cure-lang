@@ -9,7 +9,7 @@ defmodule Cure.Elab.Program do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Core.{Env, Validator}
-  alias Cure.Elab.{Declarations, Erase, Resolution, TotalityClosure}
+  alias Cure.Elab.{Coherence, Declarations, Erase, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -132,7 +132,7 @@ defmodule Cure.Elab.Program do
   def check_ast_elixir_core(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
-         env0 = merge_env(seeded, imported),
+         {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
@@ -454,7 +454,11 @@ defmodule Cure.Elab.Program do
   defp import_env(imports, seen) do
     Enum.reduce_while(imports, {:ok, Env.empty()}, fn source, {:ok, acc} ->
       case source |> import_source_path() |> import_source_env(seen) do
-        {:ok, imported} -> {:cont, {:ok, merge_env(acc, imported)}}
+        {:ok, imported} ->
+          case merge_env(acc, imported) do
+            {:ok, merged} -> {:cont, {:ok, merged}}
+            {:error, _} = err -> {:halt, err}
+          end
         {:error, _} = err -> {:halt, err}
       end
     end)
@@ -542,7 +546,7 @@ defmodule Cure.Elab.Program do
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
-         env0 = merge_env(seeded, imported),
+         {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
       {:ok, mark_inline_hints(certified, find_module_name(ast))}
@@ -630,7 +634,10 @@ defmodule Cure.Elab.Program do
                      end
                    end)
 
-                 {:cont, {:ok, merge_env(acc, slice)}}
+                 case merge_env(acc, slice) do
+                   {:ok, merged} -> {:cont, {:ok, merged}}
+                   {:error, _} = err -> {:halt, err}
+                 end
 
                {:error, _} = err ->
                  {:halt, err}
@@ -658,8 +665,10 @@ defmodule Cure.Elab.Program do
       with {:ok, source} <- File.read(path),
            {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
-           {:ok, env0} <- import_env(imports(ast), MapSet.put(seen, module_name)),
-           {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
+           {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
+           seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+           {:ok, env0} <- merge_env(seeded, imported),
+           {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
           {:ok, mark_inline_hints(certified, module_name)}
         end
@@ -716,23 +725,78 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp merge_env(%Env{} = left, %Env{} = right) do
-    %Env{
-      families: Map.merge(left.families, right.families),
-      ctors: Map.merge(left.ctors, right.ctors),
-      ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
-      defs: Map.merge(left.defs, right.defs),
-      certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
-      builtins: Map.merge(left.builtins, right.builtins)
-    }
+  # Every `Env` field this function knows how to combine. `merge_env/2` builds a
+  # FRESH `%Env{}`, so any field omitted here silently reverts to the struct default
+  # — that is how `interfaces`/`coherence`/`constrained` were lost across module
+  # boundaries, making an imported interface's instances invisible to the importer
+  # and quietly breaking global coherence. The assertion below turns the next such
+  # omission into a compile error rather than a runtime mystery.
+  @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
+                      interfaces coherence constrained)a
+
+  @env_keys Map.keys(Map.from_struct(%Env{}))
+  missing = @env_keys -- @merged_env_keys
+
+  if missing != [] do
+    raise CompileError,
+      description:
+        "Cure.Elab.Program.merge_env/2 does not merge Env field(s) #{inspect(missing)}. " <>
+          "Add them to the merge (and to @merged_env_keys) or they will be dropped " <>
+          "when an imported module's env is combined with the importing module's."
   end
+
+  defp merge_env(%Env{} = left, %Env{} = right) do
+    with {:ok, coherence} <- merge_coherence(left.coherence, right.coherence) do
+      {:ok,
+       %Env{
+         families: Map.merge(left.families, right.families),
+         ctors: Map.merge(left.ctors, right.ctors),
+         ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
+         defs: Map.merge(left.defs, right.defs),
+         certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
+         builtins: Map.merge(left.builtins, right.builtins),
+         interfaces: Map.merge(left.interfaces, right.interfaces),
+         coherence: coherence,
+         constrained: Map.merge(left.constrained, right.constrained)
+       }}
+    end
+  end
+
+  defp merge_coherence(nil, right), do: {:ok, right}
+  defp merge_coherence(left, nil), do: {:ok, left}
+
+  defp merge_coherence(%Coherence{} = left, %Coherence{} = right) do
+    # Global coherence must survive the merge: two modules may not each supply an
+    # anonymous instance for the same `(interface, head)`. Identical entries are
+    # fine — a diamond import re-delivers the same instance descriptor by two paths,
+    # and `import_env/2` accumulates left-to-right — so only a genuine DISAGREEMENT
+    # is an overlap. Named instances are exempt from uniqueness by design but their
+    # names must still not collide with a different instance.
+    with {:ok, anon} <- merge_instances(left.anon, right.anon, :overlapping_instance),
+         {:ok, named} <- merge_instances(left.named, right.named, :overlapping_named_instance) do
+      {:ok, %Coherence{anon: anon, named: named}}
+    end
+  end
+
+  defp merge_instances(left, right, error_tag) do
+    Enum.reduce_while(right, {:ok, left}, fn {key, ref}, {:ok, acc} ->
+      case Map.fetch(acc, key) do
+        {:ok, ^ref} -> {:cont, {:ok, acc}}
+        {:ok, _other} -> {:halt, {:error, overlap_error(error_tag, key)}}
+        :error -> {:cont, {:ok, Map.put(acc, key, ref)}}
+      end
+    end)
+  end
+
+  defp overlap_error(:overlapping_instance, {iface, head}), do: {:overlapping_instance, iface, head}
+  defp overlap_error(:overlapping_named_instance, name), do: {:overlapping_named_instance, name}
 
   # Two passes so that forward references and mutual recursion resolve: first
   # every type/record is elaborated and every function *signature* is registered;
   # then every function *body* is elaborated against the fully-populated
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
-  defp elaborate_declarations(items, env, prelude? \\ false) do
+  defp elaborate_declarations(items, env, prelude?) do
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?) do
       body_pass(fn_decls, env1)
     end

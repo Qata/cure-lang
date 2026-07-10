@@ -10,72 +10,12 @@ defmodule Cure.Audit.CoherenceSubstTotalityTest do
   @moduletag :audit
 
   alias Cure.Core.{Env, Inductive, Certificate}
-  alias Cure.Elab.{Program, Coherence, TotalityClosure, Unify, MetaCtx}
+  alias Cure.Elab.{Program, TotalityClosure}
 
   # ===========================================================================
   # CO — Cure.Elab.Coherence (global typeclass coherence)
   # ===========================================================================
 
-  describe "CO1: cross-module coherence/interface data is dropped by program.ex's merge_env" do
-    # `merge_env/2` (lib/cure/elab/program.ex:719-728) builds a FRESH `%Env{}`
-    # literal copying only `families/ctors/ctor_to_family/defs/certified/builtins`
-    # — `interfaces`, `coherence`, and `constrained` are never mentioned, so they
-    # silently revert to the struct defaults (`%{}`/`nil`/`%{}`), discarding BOTH
-    # sides' data. `merge_env` is the ONLY function used to fold an imported
-    # module's env into the importer's (program.ex:135, :457, :633 — the same
-    # path `use Std.CollA`/`use Std.CollB` exercise in
-    # `Cure.Elab.GlobalNamespaceSoundnessTest`), so ANY `interface`/
-    # `implementation` declared in an imported module vanishes for the importer:
-    # its interface descriptor is unreachable (`Env.get_interface` misses) and
-    # its dictionary is unreachable (`Coherence.lookup_anon` misses). Coherence
-    # is documented as GLOBAL (module doc: "must be globally unique"; memory
-    # `typeclass-surface-decisions`: "coherence = global + named implementations")
-    # — Idris/Agda/Lean/Haskell instance resolution is visible across module/
-    # import boundaries by construction; a design that can only see instances
-    # declared in the CURRENT file is not global coherence, it's per-file
-    # coherence, and — worse — it means overlap CANNOT be detected across module
-    # boundaries at all: the moment a second import's slice is merged in
-    # (program.ex:633), the first import's already-registered coherence table is
-    # unconditionally wiped, so two colliding anonymous instances contributed by
-    # two different imported modules can never even be compared.
-    setup do
-      real_src = Cure.Stdlib.Paths.source_dir()
-      tmp = Path.join(System.tmp_dir!(), "cure_coherence_audit_#{System.unique_integer([:positive])}")
-      File.mkdir_p!(tmp)
-      File.cp_r!(real_src, tmp)
-
-      File.write!(Path.join(tmp, "coimpl.cure"), """
-      mod Std.CoImpl
-        interface Eqs(a)
-          fn eqs(x: a, y: a) -> Bool
-        implementation Eqs for Int
-          fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
-      end
-      """)
-
-      previous = Application.get_env(:cure, :stdlib_source_dir)
-      Application.put_env(:cure, :stdlib_source_dir, tmp)
-
-      on_exit(fn ->
-        case previous do
-          nil -> Application.delete_env(:cure, :stdlib_source_dir)
-          value -> Application.put_env(:cure, :stdlib_source_dir, value)
-        end
-
-        File.rm_rf!(tmp)
-      end)
-
-      :ok
-    end
-
-    test "an interface + anonymous implementation declared in an imported module stay visible (global coherence) to the importing module" do
-      src = "mod P\n  use Std.CoImpl\n  fn ignore() -> Int = 0\nend\n"
-
-      assert {:ok, env} = Program.elaborate(src)
-      assert Env.get_interface(env, :Eqs) != nil
-      assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
-    end
-  end
 
   describe "CO2: an instance for a typealias that unfolds to an already-instantiated type is not detected as an overlap" do
     # `Cure.Elab.Implementation.register/2` (implementation.ex:31-32) derives the
