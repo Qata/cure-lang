@@ -64,12 +64,22 @@ defmodule Cure.Compiler.Printer do
   # block carries no trivia (the corpus fixpoint gate, and every file the plain
   # Printer sees) is byte-identical to before.
   defp render_program(exprs, meta, indent) do
+    nodes = flatten_top_level(exprs)
+
     body =
-      exprs
-      |> flatten_top_level()
+      nodes
       |> Enum.map(&render(&1, 0, indent))
       |> Enum.with_index()
-      |> Enum.map(fn {rendered, i} -> {rendered, i > 0} end)
+      # Rule 3 puts one blank between top-level items — EXCEPT a decorator hugs
+      # the item it decorates (no blank between them). The parser absorbs a
+      # decorator written directly above its `mod`/`def` into that node, so a
+      # decorator only survives as a standalone top-level sibling when a rule
+      # (e.g. group-hoist) relocates it; rendering it tight matches the absorbed
+      # form, so `print∘reparse∘print` is a fixpoint and `cure migrate` is
+      # text-idempotent instead of shedding a blank line on its second run.
+      |> Enum.map(fn {rendered, i} ->
+        {rendered, i > 0 and not match?({:decorator, _, _}, Enum.at(nodes, i - 1))}
+      end)
       |> join_statements("")
 
     body

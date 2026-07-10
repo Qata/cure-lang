@@ -104,6 +104,26 @@ defmodule Cure.Migrate.GroupHoistTest do
     assert reparses?(out, "fp.cure")
   end
 
+  test "cure migrate is text-idempotent — a hoisted @group does not shift whitespace on re-run" do
+    # `cure migrate` reparses its own output on a second run. The printer's
+    # top-level rule blanks every item, so a hoisted @group *standalone sibling*
+    # rendered `@group(:g)\n\nmod A` — but on reparse the decorator is absorbed
+    # into the module container and re-renders tight (`@group(:g)\nmod A`). So a
+    # second `cure migrate` silently changed whitespace: the tool advertises
+    # idempotence but was not text-idempotent. A decorator must hug the item it
+    # decorates, matching the absorbed form.
+    src = "mod A\nfn a() -> Int = 1\n@group(:g)\n"
+    out1 = migrate_fixpoint(src, "ti.cure")
+    out2 = migrate_fixpoint(out1, "ti.cure")
+    assert out1 == out2
+
+    # and the same for two stacked groups on one module
+    src2 = "mod A\nfn a() -> Int = 1\n@group(:g1)\n@group(:g2)\n"
+    s1 = migrate_fixpoint(src2, "ti2.cure")
+    s2 = migrate_fixpoint(s1, "ti2.cure")
+    assert s1 == s2
+  end
+
   test "under run_to_fixpoint each module's @group stays above its own module" do
     # Two in-body groups. The non-idempotent rewrite walked every non-first-module
     # group one module toward the top each pass, so both ended stacked above the
