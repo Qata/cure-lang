@@ -134,15 +134,19 @@ defmodule Cure.Elab.JoinGradeTest do
     end
   end
 
-  describe "the branch argument is scaled by the continuation's own-parameter usage (red-team A3.F1)" do
-    # `j(v)` where the shared continuation `j = fn(z) -> …` uses `z` some number of
-    # times means `v` is used that many times (β-reduction). The un-join must scale
-    # the branch argument by the continuation's usage of its own parameter — not
-    # discard it. A continuation that DUPLICATES its argument makes a linear `v` used
-    # twice → reject; an identity continuation uses it once → accept.
+  describe "a join argument is scaled by the continuation's DECLARED param grade (red-team A3.F1 + A2)" do
+    # `j(s)` scales `s` by `j`'s DECLARED parameter grade — ω for today's ungraded
+    # lambdas — exactly as a normal application does (Idris `checkRig = rigf |*| rig`).
+    # NOT by how many times the parameter is USED: that was `scale_by_set`, which
+    # implemented call-by-NAME (an unused parameter would skip evaluating the argument)
+    # and under-counted, because the BEAM is call-by-VALUE — `s` is ALWAYS evaluated,
+    # so a resource consumed while computing it can never be annihilated by the
+    # continuation ignoring its parameter.
     @two_a "type Two = T | F\n"
 
-    test "a continuation that duplicates its argument makes a linear var used twice → REJECT" do
+    test "a linear var passed to a join continuation is ω-scaled → REJECT" do
+      # The continuation has a ω parameter, so passing a linear resource is rejected
+      # regardless of how the body uses it — the declared grade governs.
       src =
         "mod JG\n  #{@two_a}" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
@@ -153,14 +157,31 @@ defmodule Cure.Elab.JoinGradeTest do
       assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
     end
 
-    test "an identity continuation uses its linear argument once → accept" do
+    test "an AFFINE var consumed twice while computing a join arg is REJECTED even if the continuation ignores its parameter" do
+      # `j` ignores `z`, so `scale_by_set` would scale `dup(w,w)`'s usage of `w` by
+      # `:erased` and ANNIHILATE it — accepting a genuine double-use of the affine `w`.
+      # Call-by-value: `dup(w,w)` is evaluated regardless, so `w` is used twice.
       src =
         "mod JG\n  #{@two_a}" <>
-          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n" <>
-          "    let j : (Int) -> Int = fn(z) -> z\n" <>
-          "    match x\n      T() -> j(v)\n      F() -> j(v)\nend\n"
+          "  fn dup(a: Int, b: Int) -> Int = a\n" <>
+          "  fn f(x: Two, w :affine Int) -> Int =\n" <>
+          "    let j : (Int) -> Int = fn(z) -> 0\n" <>
+          "    match x\n      T() -> j(dup(w, w))\n      F() -> 0\nend\n"
 
-      assert {:ok, _} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :affine}}} = Program.elaborate(src)
+    end
+
+    test "a linear var used once outside AND once as a join arg (continuation ignores it) is REJECTED" do
+      # `v` referenced twice unconditionally: `let x2 = v` and `j(v)`. The join arg's
+      # use must not be annihilated by `j` ignoring its parameter, or the two uses
+      # combine to `:linear` (add(:linear,:erased)) instead of `:unrestricted`.
+      src =
+        "mod JG\n  #{@two_a}" <>
+          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n    let x2 = v\n" <>
+          "    let j : (Int) -> Int = fn(z) -> 0\n" <>
+          "    match x\n      T() -> j(v)\n      F() -> x2\nend\n"
+
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
     end
   end
 
