@@ -75,7 +75,9 @@ defmodule Cure.Core.Printer do
   def print({:case, scrut, _motive, branches}, names) do
     arms =
       Enum.map_join(branches, "; ", fn {ctor, arity, body} ->
-        binders = if arity == 0, do: [], else: Enum.map(0..(arity - 1), fn i -> "x#{i}" end)
+        # Fresh names that avoid `names` (and each other), so a case nested in a
+        # case does not print the inner branch's binders with the outer's labels.
+        binders = fresh_n(names, arity)
         head = Enum.join([Atom.to_string(ctor) | binders], " ")
         "#{head} -> #{print(body, Enum.reverse(binders) ++ names)}"
       end)
@@ -118,6 +120,16 @@ defmodule Cure.Core.Printer do
       Stream.flat_map(1..1000, fn i -> Enum.map(@letters, &"#{&1}#{i}") end)
     ])
     |> Enum.find(fn c -> not MapSet.member?(taken, c) end)
+  end
+
+  # `arity` distinct names, each avoiding `names` and the ones already chosen.
+  defp fresh_n(names, arity) do
+    Enum.reduce(1..arity//1, {[], names}, fn _, {acc, scope} ->
+      name = fresh(scope)
+      {[name | acc], [name | scope]}
+    end)
+    |> elem(0)
+    |> Enum.reverse()
   end
 
   # Does the term mention de Bruijn index 0 at its own binding depth?

@@ -1,5 +1,7 @@
 # Trust Ledger (Axiom Surface, Phase 0) Implementation Plan
 
+> **STATUS (2026-07-11): all 7 tasks LANDED** on `autopilot/axiom-surface` (unmerged) — commits `d18b842`, `27c8250`, `c03e8a5`, `4c2f441`, `bcf19a2`, `8963a37`, `215bfd2`, plus review fixes `75f209c`/`ad6f5fb`. The unchecked boxes below are the original as-written plan, kept for historical reference; two as-built corrections are inline (unresolved-globals, below). The Phase-1 conformance harness landed separately (`160af53`).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `cure audit trust <Module>`, a deterministic report of every assumption a Cure module makes without proof.
@@ -571,7 +573,7 @@ git commit -m "feat(audit): fail-closed Core.Term reference walker"
 
 **Axiom identity** is `{mfa, type}` — never the Cure def name, which is a bare atom pre-rekey. Two wrappers of one MFA at two types are two axioms; one MFA at one type reached by two names is one axiom. `via` records one reaching def name for display only.
 
-**Reachability** starts at `roots/1` and walks both a def's **type** and its **body** (a type-level global is reachable). Unlike `Program.reachable_def_names/2`, it does **not** skip `builtin_op` defs or type-level defs. An unresolved global **raises**: `Kernel.infer/2` (`kernel.ex:151`) already rejects dangling globals, so on a checked env the condition is unreachable, and if it fires the caller skipped `check_def`.
+**Reachability** starts at `roots/1` and walks both a def's **type** and its **body** (a type-level global is reachable). Unlike `Program.reachable_def_names/2`, it does **not** skip `builtin_op` defs or type-level defs. **Correction (as-built):** the original plan said an unresolved global *raises*, on the theory that `Kernel.infer/2` rejects dangling globals so the case is unreachable. That is false for a def's **type** — a bodyless `@extern` postulates its signature unchecked, so `Std.Fsm` elaborates with `Pid`/`Any`/`Map`/`Tuple`/`String` undefined. The ledger instead resolves each global against `defs → families → ctors` and reports the remainder under an `UNRESOLVED` section (the `%Report{}` struct carries a `unresolved: [atom()]` field for this). See spec §4.6.
 
 **`not_proven_total`** = reachable roots absent from `env.certified`, **excluding** externs (no body to certify) and `builtin_op`s. Guard `env.certified` for `nil`.
 

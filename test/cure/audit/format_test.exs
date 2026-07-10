@@ -94,6 +94,18 @@ defmodule Cure.Audit.FormatTest do
     assert json =~ ~S(weird\"name)
   end
 
+  test "json escapes control characters, which JSON forbids raw" do
+    # A raw newline/tab inside a JSON string is illegal (RFC 8259 §7). They must
+    # be emitted as \n / \t escape sequences.
+    r = %Report{
+      axioms: [%Axiom{mfa: {:m, :f, 1}, type: "a\nb\tc", via: :v, bucket: :otp}]
+    }
+
+    json = Format.to_json(r, [])
+    refute json =~ "a\nb", "raw newline leaked into JSON"
+    assert json =~ ~S(a\nb\tc)
+  end
+
   test "render/2 selects the format" do
     assert Format.render(report(), format: "json") =~ ~s("schema":1)
     assert Format.render(report(), format: "text") =~ "AXIOMS — OTP (1)"

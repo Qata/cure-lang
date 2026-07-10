@@ -57,6 +57,11 @@ defmodule :cure_std_test_test do
     assert {:Ok, :ok} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, 0)
   end
 
+  test "a negative run count is vacuously Ok, not a FunctionClauseError" do
+    # `runs: Int` admits negatives; `find_counterexample` only claused 0 and n>0.
+    assert {:Ok, :ok} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, -1)
+  end
+
   test "a property that RAISES is a failure, not a propagated exception" do
     # The doc says forall_shrunk never raises. A user property can raise on some
     # drawn value (an `assert` inside it, a partial function). That must be

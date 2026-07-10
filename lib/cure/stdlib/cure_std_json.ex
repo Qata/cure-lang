@@ -75,11 +75,10 @@ defmodule :cure_std_json do
 
   # -- Private ----------------------------------------------------------------
 
-  defp float_to_string(f) when is_float(f) do
-    cond do
-      f == trunc(f) -> :erlang.float_to_binary(f, [{:decimals, 1}])
-      # `:compact` is a bare-atom option; `{:compact, []}` is invalid and raises.
-      true -> :erlang.float_to_binary(f, [:compact, {:decimals, 15}])
-    end
-  end
+  # `[:short]` is the shortest decimal string that round-trips back to `f`. It is
+  # crash-free for every float (the old `{:decimals, N}` form raised for
+  # magnitudes >= ~1e254) and precision-exact (fixed decimals silently truncated
+  # `0.30000000000000004` to `"0.3"` and any `|f| < 1e-15` to `"0.0"`). Whole
+  # numbers still render with a `.0` (e.g. `"1.0"`), keeping them JSON floats.
+  defp float_to_string(f) when is_float(f), do: :erlang.float_to_binary(f, [:short])
 end

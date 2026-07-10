@@ -28,6 +28,20 @@ defmodule :cure_std_json_test do
       # took the other branch, so it went unnoticed.
       assert :cure_std_json.encode({:Num, 1.5}) == "1.5"
     end
+
+    test "encodes large and tiny floats without crashing, round-trip exact" do
+      # The fixed-decimal formatting (`{:decimals, N}`) both CRASHED for large
+      # magnitudes (|f| >= ~1e254) and silently lost precision (fixed digits
+      # after the point, not significant digits). `[:short]` is crash-free and
+      # round-trips exactly.
+      for f <- [1.0e300, 1.7976931348623157e308, 1.0e-16, 5.0e-324,
+                0.30000000000000004, 1.0000000000000002] do
+        s = :cure_std_json.encode({:Num, f})
+        assert is_binary(s)
+        # `decode(encode(f))` must recover the same float.
+        assert {:Ok, {:Num, ^f}} = :cure_std_json.decode(s)
+      end
+    end
   end
 
   describe "decode/1" do

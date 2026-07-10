@@ -92,7 +92,10 @@ mod Std.Test
   ##
   ## Returns `Ok(:ok)` when every sample satisfied the property, and
   ## `Error(minimal)` carrying the minimised counterexample otherwise.
-  ## Unlike `forall/3`, this never raises: a failing property is a value.
+  ## Unlike `forall/3`, a failing property is a value, not a raise — including a
+  ## property that itself throws (treated as a failure). Given a total generator
+  ## and property this never raises; a generator that throws has no witness
+  ## value to return and is a caller error.
   @extern(:cure_std_test, :forall_shrunk, 3)
   fn forall_shrunk(gen: Atom -> t, property: t -> Bool, runs: Int) -> Result(Atom, t)
 

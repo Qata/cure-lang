@@ -58,6 +58,22 @@ defmodule Cure.Core.PrinterTest do
              "let a : Int = 1 in a"
   end
 
+  test "nested case branches do not reuse binder names" do
+    # A case branch synthesised binders `x0, x1, …` without consulting the names
+    # already in scope, so a case nested in a case printed the inner branch's
+    # binders with the SAME labels as the outer — visually merging four distinct
+    # de Bruijn indices into two. Here the outer Cons binds two vars, and its
+    # body is another case that also binds two; the four labels must be distinct.
+    inner = {:case, {:var, 0}, {:type, 0}, [{:Cons, 2, {:var, 1}}]}
+    outer = {:case, {:global, :s}, {:type, 0}, [{:Cons, 2, inner}]}
+
+    text = Printer.print(outer)
+    labels = Regex.scan(~r/\b(x\d+|[a-z]\d*)\b/, text) |> Enum.map(&List.first/1)
+    # The two Cons branches must not both introduce `x0`/`x1`.
+    binder_labels = Enum.filter(labels, &String.starts_with?(&1, "x"))
+    assert binder_labels == Enum.uniq(binder_labels), "case binders collide: #{text}"
+  end
+
   test "raises on an unknown node rather than printing garbage" do
     assert_raise ArgumentError, ~r/unknown Core term/, fn ->
       Printer.print({:bogus, 1})

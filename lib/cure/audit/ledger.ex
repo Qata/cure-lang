@@ -56,9 +56,12 @@ defmodule Cure.Audit.Ledger do
     # shadowing redefinition does not. Keying on name alone would exclude the
     # shadow from roots and, if nothing else referenced it, hide the axiom
     # entirely: a fail-open hole in a fail-closed tool.
-    for {name, d} <- defs,
-        Map.get(prelude, name) == nil or Map.get(prelude, name).body != d.body,
-        do: name
+    names =
+      for {name, d} <- defs,
+          Map.get(prelude, name) == nil or Map.get(prelude, name).body != d.body,
+          do: name
+
+    Enum.sort(names)
   end
 
   @spec bucket({atom(), atom(), non_neg_integer()}) :: :otp | :cure_runtime | :cure_bridge

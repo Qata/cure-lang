@@ -122,5 +122,19 @@ defmodule Cure.Audit.Format do
   # `to_json` must go through this — an MFA atom or a hole name can legitimately
   # contain `"` or `\`, and a single raw one corrupts the whole document.
   defp jstr(term), do: ~s(") <> escape(to_string(term)) <> ~s(")
-  defp escape(s), do: s |> String.replace("\\", "\\\\") |> String.replace("\"", "\\\"")
+
+  # A JSON string may not contain a raw `"`, `\`, or any control char U+0000–001F
+  # (RFC 8259 §7). Escape the backslash first, then the quote, then any control
+  # byte as its \uXXXX form (with the common short forms for the usual four).
+  defp escape(s) do
+    s
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\"", "\\\"")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
+    |> String.replace(~r/[\x00-\x1f]/, fn <<c>> ->
+      "\\u" <> String.pad_leading(Integer.to_string(c, 16), 4, "0")
+    end)
+  end
 end

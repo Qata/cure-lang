@@ -3,9 +3,10 @@ defmodule :cure_std_time do
   Runtime helpers for `Std.Time` (v0.27.0).
 
   Targets of the `@extern` bridges in `lib/std/time.cure`. Wraps
-  OTP's `Calendar` / `DateTime` / `:erlang.system_time/1` into the
-  `Instant` and `Duration` record shapes (tagged maps with
-  `__struct__: :instant` / `__struct__: :duration`).
+  OTP's `Calendar` / `DateTime` / `:erlang.system_time/1`. `Instant` is an
+  opaque internal `%{__struct__: :instant}` map (never surface-constructed);
+  `Duration` is the tuple `{:Duration, micros}` because Cure builds it in surface
+  (see the dependent-erasure note below).
 
   Runtime shapes are the DEPENDENT-pipeline erasure.
 

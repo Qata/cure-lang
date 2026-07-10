@@ -28,7 +28,9 @@ defmodule :cure_std_test do
     end
   end
 
-  defp find_counterexample(_gen, _property, 0), do: :all_pass
+  # Zero or fewer runs: nothing to falsify, so vacuously pass. `runs: Int` admits
+  # negatives, so this must not be a bare `0` clause.
+  defp find_counterexample(_gen, _property, n) when n <= 0, do: :all_pass
 
   defp find_counterexample(gen, property, n) when n > 0 do
     value = gen.(:draw)

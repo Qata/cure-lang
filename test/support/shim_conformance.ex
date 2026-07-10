@@ -237,12 +237,12 @@ defmodule Cure.Audit.ShimConformance do
       # reads an effect, so the postulate is pure. It is not.
       a({:cure_std_time, :now, 0}, ret([]), inst, :effectful),
       a({:cure_std_time, :utc_now, 0}, ret([]), inst, :effectful),
-      a({:cure_std_time, :parse_iso8601, 1}, seq([iso]), {:result, inst, :any}),
+      a({:cure_std_time, :parse_iso8601, 1}, seq([iso]), {:result, inst, :parse_error}),
       a({:cure_std_time, :format_iso8601, 1}, seq([instant()]), :binary),
       a({:cure_std_time, :add, 2}, seq([instant(), duration()]), inst),
       a({:cure_std_time, :diff, 2}, seq([instant(), instant()]), dur),
       a({:cure_std_time, :zone, 2}, seq([instant(), {:member_of, ["UTC", "+01:00", "Bad/Zone"]}]),
-        {:result, :binary, :any}),
+        {:result, :binary, :parse_error}),
       a({:cure_std_time, :to_unix, 1}, seq([instant()]), :int),
       a({:cure_std_time, :of_unix, 1}, seq([int()]), inst)
     ]
@@ -274,8 +274,9 @@ defmodule Cure.Audit.ShimConformance do
   defp json do
     [
       a({:cure_std_json, :encode, 1}, seq([json_value()]), :binary),
-      a({:cure_std_json, :decode, 1}, seq([{:member_of, ["[1,2]", "3", "null", "{oops"]}]),
-        {:result, :json, :any}),
+      a({:cure_std_json, :decode, 1},
+        seq([{:member_of, ["[1,2]", "3", "null", "true", "\"s\"", "{\"k\":1}", "{oops"]}]),
+        {:result, :json, :binary}),
       a({:cure_std_json, :num_of_int, 1}, seq([int()]), :json)
     ]
   end
@@ -341,13 +342,16 @@ defmodule Cure.Audit.ShimConformance do
   end
 
   defp no_hidden_state({m, f, args_len} = _mfa, args) do
-    parent_ets = length(:ets.all())
-
     task =
       Task.async(fn ->
+        # ETS tables are scoped to THIS process's ownership, not a VM-global
+        # `:ets.all()` count — that global count races against any concurrent
+        # async test creating a table. A shim that opens a table owns it here.
+        before_tables = owned_tables(self())
         before_dict = Process.get()
         _ = invoke(m, f, args)
         after_dict = Process.get()
+        after_tables = owned_tables(self())
 
         {:message_queue_len, mailbox} = Process.info(self(), :message_queue_len)
 
@@ -358,19 +362,25 @@ defmodule Cure.Audit.ShimConformance do
           mailbox != 0 ->
             {:failed, "#{mailbox} message(s) in mailbox"}
 
+          after_tables != before_tables ->
+            {:failed, "created an ETS table"}
+
           true ->
             :ok
         end
       end)
 
-    result = Task.await(task, 5_000)
     _ = args_len
+    Task.await(task, 5_000)
+  end
 
-    cond do
-      result != :ok -> result
-      length(:ets.all()) != parent_ets -> {:failed, "created an ETS table"}
-      true -> :ok
-    end
+  defp owned_tables(pid) do
+    :ets.all()
+    |> Enum.filter(fn t ->
+      # A table can vanish between `all/0` and `info/2`; treat that as not-owned.
+      :ets.info(t, :owner) == pid
+    end)
+    |> MapSet.new()
   end
 
   defp totality({m, f, _}, args) do
@@ -433,6 +443,12 @@ defmodule Cure.Audit.ShimConformance do
   # `rec Duration(micros)` → `{:Duration, micros}`.
   defp shape?(:duration, {:Duration, m}), do: is_integer(m)
   defp shape?(:duration, _), do: false
+
+  # `ParseError = InvalidFormat(String) | OutOfRange(String)` — so the Error side
+  # of a Result is really checked, not waved through with `:any`.
+  defp shape?(:parse_error, {:InvalidFormat, m}), do: is_binary(m)
+  defp shape?(:parse_error, {:OutOfRange, m}), do: is_binary(m)
+  defp shape?(:parse_error, _), do: false
 
   defp shape?(:json, v) do
     v == :Null or match?({:Bool, _}, v) or match?({:Num, _}, v) or
