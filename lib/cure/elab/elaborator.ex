@@ -4091,9 +4091,12 @@ defmodule Cure.Elab.Elaborator do
     if not Keyword.get(meta, :let, false) do
       {:error, {:unsupported_block_statement, meta}}
     else
+      # A surface grade (`let c :linear = e`, plan slice 5b); absent means ω.
+      grade = Keyword.get(meta, :grade, Grade.unrestricted())
+
       case Keyword.get(meta, :type_annotation) do
-        nil -> let_inferred(name, rhs, meta, rest, expected_core, names, ctx, env)
-        ann -> let_ascribed(name, rhs, ann, rest, expected_core, names, ctx, env)
+        nil -> let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env)
+        ann -> let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env)
       end
     end
   end
@@ -4105,16 +4108,16 @@ defmodule Cure.Elab.Elaborator do
   # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
   # (exactly what surface substitution did at each use site) and bound ONCE.
   # This is the general escape from the check-only residual.
-  defp let_ascribed(name, rhs, ann, rest, expected_core, names, ctx, env) do
+  defp let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env) do
     with {:ok, ty_core} <- elaborate_type(ann, names, env),
          {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
       ty_value = Eval.eval(ty_core, Context.env(ctx))
-      bind_once_let(name, rhs_core, ty_core, ty_value, rest, expected_core, names, ctx, env)
+      bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
     end
   end
 
   # `let x = e` — synthesise `e`'s type, then bind once.
-  defp let_inferred(name, rhs, meta, rest, expected_core, names, ctx, env) do
+  defp let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env) do
     case elaborate_expr_typed(rhs, names, ctx, env) do
       {:ok, rhs_core, rhs_type} ->
         # SIGNATURE-AWARE reify. A `{:vdata, name, args}` value flattens a
@@ -4124,7 +4127,7 @@ defmodule Cure.Elab.Elaborator do
         # check (`:arg_arity`). Agda `getNumberOfParameters` / Lean
         # `inductive_val.get_nparams`.
         ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
-        bind_once_let(name, rhs_core, ty_core, rhs_type, rest, expected_core, names, ctx, env)
+        bind_once_let(name, rhs_core, ty_core, rhs_type, grade, rest, expected_core, names, ctx, env)
 
       # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
       # check-only shape. Surface substitution never had to infer it: it
@@ -4132,6 +4135,14 @@ defmodule Cure.Elab.Elaborator do
       # commit to one type up front, so it needs `let x : T = e` (`let_ascribed/8`).
       {:error, _} = err ->
         cond do
+          # A GRADE cannot survive this branch. Every path below abandons the `:let`
+          # node and surface-substitutes the rhs, so there is nowhere to record the
+          # grade and it would be silently dropped — the program would compile, pass,
+          # and lie about its linearity. A graded `let` must produce a real `:let`.
+          # Ascribing the binding gives `let_ascribed/9`, which always builds one.
+          Keyword.has_key?(meta, :grade) ->
+            {:error, {:graded_let_needs_annotation, name, meta}}
+
           # Shadowing + non-inferable is unrepresentable: substitution would
           # capture and `:let` cannot be built. Surface the inference error.
           Enum.any?(rest, &binds_any?(&1, [name])) ->
@@ -4162,7 +4173,7 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # `let x : T = e ⏎ rest`  ⟶  `{:let, Cure.Core.Grade.unrestricted(), T, e, rest}` with `x := e` in the context.
-  defp bind_once_let(name, rhs_core, ty_core, ty_value, rest, expected_core, names, ctx, env) do
+  defp bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env) do
     rhs_value = Eval.eval(rhs_core, Context.env(ctx))
 
     # `extend_def/3`, not `extend/2`: the binder is definitionally its value (ζ),
@@ -4174,7 +4185,7 @@ defmodule Cure.Elab.Elaborator do
     expected1 = Subst.shift(expected_core, 1, 0)
 
     with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
-      {:ok, {:let, Cure.Core.Grade.unrestricted(), ty_core, rhs_core, body_core}}
+      {:ok, {:let, grade, ty_core, rhs_core, body_core}}
     end
   end
 

@@ -1414,16 +1414,19 @@ defmodule Cure.Compiler.Parser do
     # Assignment has BP 5, so parsing at BP 6 stops before `=`
     {pattern, state} = parse_expr(state, 6)
 
-    # Check for type annotation
-    {type_ann, state} =
-      case peek(state) do
-        %Token{type: :colon} ->
-          state = advance(state)
-          {type_expr, state} = parse_type_expr(state)
-          {type_expr, state}
+    # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
+    # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
+    {grade, type_ann, state} = parse_binder_annotation(state, [:assign])
 
-        _ ->
-          {nil, state}
+    # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
+    # to a `case`, whose binders take their grades from the constructor's field
+    # quantities, so there is no single Core binder for this grade to land on. Reject
+    # it here rather than parse it and silently ignore the annotation.
+    state =
+      if grade && not match?({:variable, _, _}, pattern) do
+        add_error(state, {:graded_let_requires_variable, grade, token.line, token.col})
+      else
+        state
       end
 
     # Expect =
@@ -1435,6 +1438,7 @@ defmodule Cure.Compiler.Parser do
 
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
+    meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -2613,9 +2617,13 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # A graded binder's type is REQUIRED — `c :linear` has no type to grade. An
-  # ungraded binder keeps today's optional `: Type`.
-  defp parse_binder_annotation(state) do
+  # A binder's annotation: `: Type`, or the graded `:g Type`.
+  #
+  # `stop_on` names the tokens that may legally FOLLOW a grade in place of a type. A
+  # parameter has none, so `c :linear` is an error — there is nothing to grade. A
+  # `let` stops on `=`, because Idris's `letBinder` leaves the type optional even when
+  # graded (`Idris/Parser.idr:821-824`) and `let_inferred/8` will synthesise it.
+  defp parse_binder_annotation(state, stop_on \\ []) do
     case parse_grade(state) do
       {nil, state} ->
         case peek(state) do
@@ -2628,8 +2636,12 @@ defmodule Cure.Compiler.Parser do
         end
 
       {grade, state} ->
-        {type_ast, state} = parse_type_expr(state)
-        {grade, type_ast, state}
+        if peek(state).type in stop_on do
+          {grade, nil, state}
+        else
+          {type_ast, state} = parse_type_expr(state)
+          {grade, type_ast, state}
+        end
     end
   end
 

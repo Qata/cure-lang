@@ -277,21 +277,44 @@ half-migrated tree.
       *Gate:* 3872 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
       infections. Oracle replay 65/65. `mix dialyzer` passes. stdlib 44/44.
 
-- [ ] **5b. Surface syntax — `let`.** `let c :linear = e` when `e` infers;
+- [x] **5b. Surface syntax — `let`.** LANDED. `let c :linear = e` when `e` infers;
       `let c :linear T = e` when it does not.
-      *The rule, and its mechanical cause:* a **graded `let` must produce a real
-      `:let` node**. `let_inferred/8` falls back to *surface substitution* when the rhs
-      has no inferable type (a bare lambda, an `if`, a `pickup`) — and on that path no
-      `:let` node is ever built, so there is nowhere to put the grade and it would be
-      silently dropped. So: rhs infers → no annotation needed; rhs does not infer →
-      require the ascription and say so. Never substitute and discard the grade.
-      *Red tests first:* `let c :linear = mk()` binds a graded `:let`; a graded `let`
-      with a non-inferable rhs is rejected with a named error, never accepted with the
-      grade dropped; an ungraded `let` keeps every path it has today, including the
-      one-use substitution fallback; `let (a, b) :linear = e` is a parse error (a
-      destructuring `let` becomes a `case`, whose binders take their grades from the
-      constructor's field quantities — graded destructuring is a separate feature, not
-      a silently-ignored annotation).
+
+      Idris's `letBinder` is `multiplicity >> pat >> option (":" type) >> "=" >> val`
+      (`Idris/Parser.idr:821-824`), so the type stays **optional even when graded** —
+      the grade and the type are orthogonal, and `let_inferred/8` synthesises the type.
+
+      **The one place a graded `let` must be ascribed, and its mechanical cause.** When
+      the rhs has no inferable type (a bare lambda, an `if`, a `pickup`),
+      `let_inferred/8` abandons the `:let` node and **surface-substitutes** the rhs into
+      its single use site. On that path no `:let` node exists, so there is nowhere to
+      record the grade and it would be silently dropped — the program would compile,
+      pass, and lie about its linearity. So: a graded `let` MUST produce a real `:let`
+      node; if the rhs infers that is automatic, otherwise
+      `{:graded_let_needs_annotation, name, meta}`. Never substitute and discard.
+
+      Graded destructuring (`let [h | _t] :linear = xs`) is a **parse error**: a
+      destructuring `let` lowers to a `case`, whose binders take their grades from the
+      constructor's field quantities, so there is no single Core binder to carry it.
+
+      **A hole this slice opened, and closed.** Making `:erased` spellable on a `let`
+      exposed the fact that `Relevance`'s POSITION check tracked only erased
+      *parameters* and erased constructor *fields* — never `:let`/`:lam` binders. And
+      `check_binder/5` defers `:erased` to that position check. So `:erased` was the one
+      grade **no** mechanism policed on those binders: `let c :erased = e` and then
+      returning `c` was accepted. `Emit` binds every `:let` unconditionally, so the
+      value does exist at runtime — the lie was in the annotation, not in erasure. Fixed
+      by `track_erased/3`: an erased `:let`/`:lam` binder joins the tracked set, exactly
+      as an erased constructor field already does.
+
+      Five mutations validated, each failing exactly its own claims: hardcode `ω` in
+      `bind_once_let/10` → **7** tests (the compiles-and-lies guard); drop the
+      graded-let substitution guard → the not-silently-substituted test; drop the
+      graded-destructuring guard → its test; make the type non-optional after a grade →
+      12 tests; drop `track_erased/3` → the 3 erased-binder tests.
+
+      *Gate:* 3896 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
+      infections. Oracle replay 65/65. `mix dialyzer` passes. stdlib 44/44.
 
 - [ ] **6. The Pi is the single source of truth (E layer, structural).**
       Cure stores each parameter's quantity **twice, and the two disagree**:

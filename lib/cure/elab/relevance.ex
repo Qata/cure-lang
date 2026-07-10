@@ -165,6 +165,17 @@ defmodule Cure.Elab.Relevance do
     end
   end
 
+  # An `:erased` `:let` or `:lam` binder joins the POSITION check's tracked set, exactly
+  # as an erased constructor FIELD does in `walk_branches/3`. Without this, `:erased`
+  # is the one grade no mechanism polices on those binders: `check_binder/5` defers
+  # erasure to the position check, and the position check only ever knew about
+  # parameters and fields — so `let c :erased = e` and then returning `c` was accepted.
+  # `Emit` binds every `:let` unconditionally, so the value does exist at runtime; the
+  # lie was in the annotation, not in erasure.
+  defp track_erased(st, g, level) do
+    if Grade.erased?(g), do: %{st | erased: MapSet.put(st.erased, level)}, else: st
+  end
+
   # --- usage algebra ---------------------------------------------------------
 
   # Zero uses. A level absent from a usage map has exactly this.
@@ -225,7 +236,7 @@ defmodule Cure.Elab.Relevance do
   # `mul/2` consequence rather than a rule of its own (Idris: `eraseLinear env`
   # when a `Lam` is checked at `top`, LinearCheck.idr:233-237).
   defp walk({:lam, g, _dom, body}, depth, _site, st) do
-    with {:ok, u} <- walk(body, depth + 1, :returned, st),
+    with {:ok, u} <- walk(body, depth + 1, :returned, track_erased(st, g, depth)),
          :ok <- check_binder(st, depth, g, u, :lambda) do
       {:ok, u |> Map.delete(depth) |> scale(Grade.unrestricted())}
     end
@@ -238,7 +249,7 @@ defmodule Cure.Elab.Relevance do
   # binds one more variable. Value and body both run, so their usages sum.
   defp walk({:let, g, _ty, val, body}, depth, site, st) do
     with {:ok, uv} <- walk(val, depth, :present_arg, st),
-         {:ok, ub} <- walk(body, depth + 1, site, st),
+         {:ok, ub} <- walk(body, depth + 1, site, track_erased(st, g, depth)),
          :ok <- check_binder(st, depth, g, ub, :let) do
       {:ok, seq(uv, Map.delete(ub, depth))}
     end
