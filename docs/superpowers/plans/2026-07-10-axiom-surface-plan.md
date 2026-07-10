@@ -20,6 +20,7 @@
 - **Avoid `Registry` and `persistent_term`** — absent on AtomVM.
 - **Only one full build/test run at any moment.** Never launch concurrent suites.
 - **Commits are never co-signed.** Write them as the user only.
+- **Strict TDD, every task.** Step 1 writes the test, Step 2 confirms it fails, Step 3 writes only enough implementation to pass it, Step 4 confirms green. Do not write implementation code before its test exists and has been run red. A test, once it correctly encodes intended behavior, is never weakened or deleted to reach green — the implementation changes, not the test. Task 7 Step 3 is the plan's one sanctioned exception, and it states why the test (not the code) was wrong before touching it: fix the implementation code, not the test, unless you can make the same kind of explicit case.
 
 ## Verified Facts (measured on this branch; do not re-derive)
 
@@ -37,6 +38,7 @@ These were confirmed by running the real elaborator. Tasks depend on them.
 | `env.certified` | a `MapSet`, but **defaults to `nil`** in the struct — guard before `MapSet.member?/2` |
 | `add_def/5` def record | `%{name:, type:, body:, quantities:}` — **no `:builtin_op` key** unless `register_builtin_op/3` ran. Use `Map.get(def, :builtin_op)`, never `%{builtin_op: op}` pattern-match on an unregistered def |
 | Extern body sentinel | `{:extern, {m, f, a}}` — not a `Core.Term` |
+| Builtin-op body sentinel | Every `builtin_op`-tagged def has **`body: nil`** (confirmed: exactly the 31 `Builtins.seed_ops`-registered defs, e.g. `int_add`, `struct_eq`, in `Std.List`'s env — none untagged). `def.type` is always a real `Core.Term` for these; only `body` is `nil`. Reproduced by running the plan's own code: without a walker clause for `nil`, `Cure.Audit.Refs.walk/2` raises `unknown Core term in Audit.Refs: nil` — and it fires on **both** Task 3's `x + x` divergence test and the Task 7 `Std.List` golden test, because Ledger's reachability walk (unlike codegen's) does not skip `builtin_op` defs and calls `Refs.globals/scan` directly on every reachable def's `body`. Task 2 must add a `nil` clause to `Refs.walk/2` before Task 3 can pass. |
 
 **Roots strategy (resolves a gap in the spec).** The spec says the ledger reports axioms "reachable from a module" but never defines the roots. `env.defs` for a single module also contains the 42 prelude defs, including two externs (`unicode:characters_to_list/1`, `unicode:characters_to_binary/1`) that `Std.List` does not declare. Roots are therefore:
 
@@ -56,6 +58,7 @@ This keeps the collector reading `Core.Env` (a macro-emitted def appears in the 
 | Create `lib/cure/audit/targets.ex` | `Cure.Audit.Targets` — hand-maintained per-target capability table. |
 | Create `lib/cure/audit/format.ex` | `Cure.Audit.Format` — `%Report{}` → deterministic text or JSON. |
 | Create `lib/cure/audit/source.ex` | `Cure.Audit.Source` — locate `Std.X` → `lib/std/x.cure` by scanning `mod` headers. |
+| Create `lib/cure/audit/cli.ex` | `Cure.Audit.CLI` — pure `run/2`: locate, audit, format, decide `--strict`. No `System.halt/1`; the escript clause in `lib/cure/cli.ex` does that. |
 | Modify `lib/cure/cli.ex` | Add the `["audit", "trust", mod]` verb and its switches. |
 | Create `test/cure/core/printer_test.exs` | |
 | Create `test/cure/audit/refs_test.exs` | |
@@ -138,6 +141,23 @@ defmodule Cure.Core.PrinterTest do
     # (a : Int) -> Vec(a)
     ty = {:pi, {:int_type}, {:data, :Vec, [{:var, 0}], []}}
     assert Printer.print(ty) == "(a : Int) -> Vec(a)"
+  end
+
+  test "a non-dependent arrow shifts names so an outer binder stays reachable" do
+    # ∀ {a}. Int -> a   ==  {:pi, {:type,0}, {:pi, {:int_type}, {:var,1}}}
+    #
+    # The inner pi is non-dependent (its own cod, `{:var,1}`, does not mention
+    # ITS var 0), so `non_dependent_arrow` fires and must NOT name the inner
+    # binder — but `a` (the outer forall's binder) is still referenced one
+    # level deeper as `{:var,1}`, and printing the inner cod without pushing a
+    # placeholder onto `names` misaligns every outer index by one. Verified
+    # against the real implementation: dropping the `["_" | names]` push here
+    # renders this as "∀ {a}. Int -> ?1" instead of "∀ {a}. Int -> a" — wrong,
+    # and every other test in this file passes either way, because none of
+    # them nest a non-dependent arrow inside a binder whose variable survives
+    # past it.
+    ty = {:pi, {:type, 0}, {:pi, {:int_type}, {:var, 1}}}
+    assert Printer.print(ty) == "∀ {a}. Int -> a"
   end
 
   test "flattens application spines" do
@@ -318,7 +338,7 @@ end
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/cure/core/printer_test.exs`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -344,7 +364,7 @@ git commit -m "feat(core): add an untrusted Core.Term pretty-printer"
 - Produces:
   - `Cure.Audit.Refs.scan(term_or_extern) :: %{globals: [atom()], holes: [String.t()], absurd: non_neg_integer()}` — one exhaustive walk. Lists are deduplicated and sorted. Raises `ArgumentError` on an unknown node.
   - `Cure.Audit.Refs.globals(term_or_extern) :: [atom()]` — `scan/1 |> Map.fetch!(:globals)`.
-  - Accepts the non-Core sentinel `{:extern, {m, f, a}}` (a def's `body` slot) and returns the empty scan for it.
+  - Accepts two non-Core sentinels that occupy a def's `body` slot, both returning the empty scan: `{:extern, {m, f, a}}`, and **`nil`** — every `builtin_op`-tagged def has a `nil` body (see Verified Facts). Without this clause, `Ledger`'s reachability walk (Task 3), which deliberately does not skip `builtin_op` defs, raises the instant it reaches one — which happens for any module using arithmetic, comparison, or `struct_eq`, `Std.List` included.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -390,6 +410,16 @@ defmodule Cure.Audit.RefsTest do
              %{globals: [], holes: [], absurd: 0}
   end
 
+  test "accepts nil — a builtin op's absent body" do
+    # Every `builtin_op`-tagged def (`Builtins.seed_ops`) has `body: nil`, not a
+    # Core.Term. Ledger's reachability walk does not skip builtin_op defs (Task
+    # 3), so it calls `Refs.scan/1` on one for any module that reaches `+`,
+    # `==`, etc. — which is most of them. Without this clause, `mix test` on
+    # Task 3's divergence test and the Task 7 `Std.List` golden test both raise
+    # `unknown Core term in Audit.Refs: nil`.
+    assert Refs.scan(nil) == %{globals: [], holes: [], absurd: 0}
+  end
+
   test "raises on an unknown node instead of silently returning []" do
     assert_raise ArgumentError, ~r/unknown Core term/, fn -> Refs.scan({:bogus}) end
   end
@@ -416,6 +446,11 @@ end
 
 Run: `mix test test/cure/audit/refs_test.exs`
 Expected: FAIL — `Cure.Audit.Refs` undefined.
+
+Note: two implementation clauses below are already load-bearing for Task 3, not
+speculative hardening — `walk(nil, acc)` in particular. Skipping it here means
+Task 3's own test suite fails with a raised `ArgumentError`, not a normal
+assertion failure.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -450,6 +485,13 @@ defmodule Cure.Audit.Refs do
 
   # The non-Core sentinel occupying an extern def's `body` slot.
   defp walk({:extern, {m, f, a}}, acc) when is_atom(m) and is_atom(f) and is_integer(a), do: acc
+
+  # The non-Core sentinel occupying a builtin_op def's `body` slot (`int_add`,
+  # `struct_eq`, …: `Builtins.seed_ops` never gives them a body). Ledger's
+  # reachability walk does not skip builtin_op defs, so this fires on ordinary
+  # input (any module using `+`/`==`), not on malformed input — required, not
+  # defensive.
+  defp walk(nil, acc), do: acc
 
   defp walk({:global, name}, acc), do: %{acc | globals: [name | acc.globals]}
   defp walk({:hole, name}, acc), do: %{acc | holes: [name | acc.holes]}
@@ -496,9 +538,9 @@ end
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/cure/audit/refs_test.exs`
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
-If the Antigen guard raises on some former, that is the walker doing its job: add the missing clause to `walk/2` and re-run. Do **not** add a catch-all.
+If the Antigen guard raises on some former, that is the walker doing its job: add the missing clause to `walk/2` and re-run. Do **not** add a catch-all. (`nil` and `{:extern, _}` are the two deliberate, documented exceptions to that rule — both are non-`Core.Term` sentinels that occupy a def's `body` slot, not unknown grammar.)
 
 - [ ] **Step 5: Commit**
 
@@ -614,7 +656,8 @@ defmodule Cure.Audit.LedgerTest do
 
     empty = """
     mod Test.Empty
-      type Void
+      type Void =
+        |
     end
     """
 
@@ -912,7 +955,7 @@ end
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/cure/audit/ledger_test.exs`
-Expected: PASS.
+Expected: PASS, 12 tests (8 from `LedgerTest` + 4 from `TargetsTest`, both in this file).
 
 - [ ] **Step 5: Commit**
 
@@ -1141,7 +1184,7 @@ git commit -m "feat(audit): deterministic text and JSON report formatting"
 - Consumes: `Cure.Audit.Ledger.audit_source/2`, `Cure.Audit.Format`.
 - Produces:
   - `Cure.Audit.Source.locate(module :: String.t()) :: {:ok, Path.t()} | {:error, :not_found}` — scans `lib/std/*.cure` for a `mod <Module>` header. Filename does not determine module name (`Std.NonEmpty` lives in `non_empty.cure`, `Std.CRDT` in `crdt.cure`), so the header is authoritative.
-  - `Cure.Audit.CLI.run(module :: String.t(), opts :: keyword()) :: {:ok, String.t()} | {:strict_failure, String.t()}` — pure; returns the report text and whether `--strict` should fail. The CLI clause calls `System.halt/1`, the function does not, so it stays testable.
+  - `Cure.Audit.CLI.run(module :: String.t(), opts :: keyword()) :: {:ok, String.t()} | {:strict_failure, String.t()} | {:error, :not_found}` — pure; returns the report text and whether `--strict` should fail, or propagates `Source.locate/1`'s miss. The CLI clause calls `System.halt/1`, the function does not, so it stays testable.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1161,6 +1204,14 @@ defmodule Cure.Audit.TrustCLITest do
 
   test "an unknown module is not found" do
     assert Source.locate("Std.NoSuchModule") == {:error, :not_found}
+  end
+
+  test "CLI.run propagates a not-found module — the path the halt(1) clause depends on" do
+    # Source.locate/1 returning {:error, :not_found} is tested above; this pins
+    # that CLI.run/2's `with` actually propagates it rather than raising or
+    # swallowing it, since that is the exact tuple the CLI command clause
+    # pattern-matches on to print "no such module" and halt(1).
+    assert CLI.run("Std.NoSuchModule", []) == {:error, :not_found}
   end
 
   test "Std.List produces a report and does not fail --strict" do
@@ -1271,10 +1322,11 @@ Add to `Cure.Audit.Format`:
 In `lib/cure/cli.ex`, add these switches to the existing `OptionParser.parse/2` `switches:` keyword list (it already carries `filter: :string` and friends):
 
 ```elixir
-          strict: :boolean,
           target: :string,
           format: :string,
 ```
+
+**`strict: :boolean` already exists** in that list (used today by `cure migrate --strict`) — do **not** add it again. `target:` and `format:` are the only genuinely new keys; `cure audit trust --strict` reads the same global `opts[:strict]` every other verb reads, exactly as `verbose` and the other shared flags already do.
 
 and add this clause to the command `case`, immediately before the `["migrate" | paths]` clause:
 
@@ -1288,7 +1340,16 @@ and add this clause to the command `case`, immediately before the `["migrate" | 
           audit_opts =
             case Keyword.get(opts, :target) do
               nil -> audit_opts
-              t -> Keyword.put(audit_opts, :target, String.to_existing_atom(t))
+              # `String.to_existing_atom/1` would raise ArgumentError on any
+              # target string nothing has interned yet — every real target
+              # (:atomvm) is already an atom because `Targets` module-attributes
+              # it, but a typo'd --target would crash the CLI outright, which
+              # contradicts Task 4's own test that an unknown target degrades
+              # to "nothing unavailable," not a crash. `to_atom/1` is the
+              # deliberate choice: bounded human CLI input, not untrusted
+              # network/JSON input, so the usual atom-exhaustion objection
+              # does not apply.
+              t -> Keyword.put(audit_opts, :target, String.to_atom(t))
             end
 
           case Cure.Audit.CLI.run(module, audit_opts) do
@@ -1309,9 +1370,9 @@ and add this clause to the command `case`, immediately before the `["migrate" | 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/cure/audit/trust_cli_test.exs`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
-Note `format: :string` may already exist in the switches list. Do not add a duplicate key — `OptionParser` will not complain, but the plan's intent is one entry per switch.
+Note `strict: :boolean` already exists in the switches list (verified: `lib/cure/cli.ex`, used by `cure migrate --strict`) — the Step 3 edit above adds only `target:` and `format:` for this reason. `OptionParser` would not complain about a duplicate key, but the plan's intent is one entry per switch.
 
 - [ ] **Step 5: Commit**
 
@@ -1396,7 +1457,7 @@ Do **not** special-case the ordering to preserve the spec's prose.
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `mix test test/cure/audit/trust_cli_test.exs`
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Run the full suite once**
 
