@@ -48,8 +48,15 @@ defmodule Cure.Edition do
     end
   end
 
-  defp year(<<y::binary-size(4)>>), do: String.to_integer(y)
-  defp year(other) when is_binary(other), do: String.to_integer(other)
+  # Total over binaries: a non-numeric edition raises a clear domain error rather
+  # than the opaque String.to_integer ArgumentError (F8). compare/2 is spec'd on
+  # t(), so this only fires on a contract violation, but it fires legibly.
+  defp year(edition) when is_binary(edition) do
+    case Integer.parse(edition) do
+      {n, ""} -> n
+      _ -> raise ArgumentError, "not a valid edition (expected a numeric year): #{inspect(edition)}"
+    end
+  end
 
   @doc """
   The edition named by a file-leading `@edition("YYYY")` pragma, or `nil`. Uses a
@@ -87,7 +94,9 @@ defmodule Cure.Edition do
   """
   @spec resolve(map()) :: {:ok, t()} | {:error, term()}
   def resolve(input) do
-    case pragma_edition(Map.get(input, :source, "")) do
+    # `|| ""` coalesces an explicit `source: nil` (not just an absent key) so the
+    # is_binary-guarded pre-scan never crashes on a nil source (F6).
+    case pragma_edition(Map.get(input, :source) || "") do
       nil -> resolve_project(Map.get(input, :project_dir))
       pragma -> parse(pragma)
     end
