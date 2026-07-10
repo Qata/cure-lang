@@ -1038,3 +1038,93 @@ unknown-command exit + deps fallback), `d540eb6` (printer range/send/dot parens)
 `b2af49b` (CLI keys fallback + stdlib/migrate non-zero exit), plus this record.
 
 ---
+
+## Iteration 15
+
+**CLI-consistency pass (clears iteration 14's deferred "Outstanding CLI" list).**
+Both lower-severity CLI classes carried from iteration 14 are now fixed:
+- Added `usage_error/1` (print to stderr + `exit({:shutdown, 1})`) and routed the
+  bare-`error(...)`-then-fall-through usage paths through it: `cure compile`/
+  `cure trace`/`cure new` with no args, `cure explain <unknown-code>`, and the
+  runtime-failure paths of `cure fmt --aggressive` / `cure bench` / `cure keys
+  generate` (which aggregate per-file outcomes then exit non-zero if any failed).
+  `migrate_bump` propagates its failure value so a bad bump also exits non-zero.
+- Added `[cmd | _]` fallback arms so a wrong argument count on a fixed-arity
+  command (`run`, `check`, `init`, `explain`/`why`, `search`, `info`) names the
+  command in a usage error instead of misblaming it as "Unknown command".
+  (`ebd6098`, `7a3772d`; tests strengthened to `catch_exit == {:shutdown, 1}`.)
+
+**Fresh adversarial audit** — three parallel general-purpose Opus agents over the
+changed slices (printer, CLI, edition/project/migrate), every finding verified
+against source before counting.
+
+### Confirmed + fixed
+
+- **Printer drops parens around pipe and prefix-keyword operands** (`c4b4947`).
+  `|>` lowers to a pipe-tagged `:function_call` (not `:binary_op`) binding
+  loosest (level 10); the right-extending prefix keywords (`throw`/`yield`/
+  `return`/`spawn`) grab everything to their right. As child operands of a
+  tighter operator both were reprinted without parens, so parse→print→parse
+  changed the parse (`(a |> f) + b` → `a |> f + b`, `(throw x) + 1` →
+  `throw x + 1`, `(a <-| b) |> f` → `a <-| b |> f`). Added `child_prec/1` clauses
+  ({10,:left} for pipe-tagged calls, `:lowest` for the keyword nodes) and routed
+  the pipe render's own left operand through `operand_str`. 8 new round-trip
+  cases in `printer_precedence_test.exs` (27 total, green); golden suites
+  (lossless_roundtrip / printer_totality / formatter, 64) unregressed.
+- **`UppercaseTypeVar` half-renames a body type variable** (`9ccd04c`). The rule
+  lowercased a free type var only in the signature meta; the body walk recursed
+  without the rename map, so a variable bound by the signature and referenced
+  again in the body (`let y: T` annotation, `empty_of(T)` type application) kept
+  the old `T` while its binder became `t` — a meaning-changing rewrite the verify
+  pass accepts because the reprint still parses. Threaded the signature's rename
+  map through the body walk (renaming matching variable nodes and type-bearing
+  meta; keys are uppercase so lowercase value bindings are untouched; nested
+  signatures shadow). **This is a DISTINCT failure mode from the blocked ctx
+  design issue** — an incomplete rewrite scope, not a ctx false-positive; a
+  ctx-only fix would not have addressed it. 2 new red→green tests.
+
+### CLEAN (verified against source)
+
+- **CLI slice** — the exit-status + dispatch-shadowing fixes from iterations 14–15
+  hold: no exit-0-on-error path remains, no `usage_error` on a success path, no
+  fuzzy-matcher misblame of a valid command. One residual message-only nit
+  (zero-arg commands like `version`/`lsp` with trailing junk say "Unknown
+  command: <cmd>" instead of a takes-no-arguments usage line) — **exit code is
+  correctly 1**; pre-existing, not a regression, message quality only. Recorded,
+  not fixed (disproportionate churn for a correct-exit nit).
+- **Edition resolution / `Cure.toml` round-trip / migrate idempotence** — probed
+  extensively (BOM, CRLF, doc-comment-before-pragma, spacey/multi-line/5-digit
+  pragmas, no `[project]` table, `[[project]]`, duplicate tables, single-quoted
+  values); every `nil` pre-scan is a parser hard-error (no silent wrong-edition),
+  no reachable `year/1 ArgumentError`, `set_edition`→`load` round-trips, and
+  `run_to_fixpoint` is idempotent on a combined rename+uppercase+proto+if/elif
+  file. No new bug.
+
+### Outstanding findings (after iteration 15)
+
+**Blocked — needs operator (UNCHANGED):**
+- **`cure migrate` uppercase-type-var CTX corruption** — the *ctx false-positive*
+  failure mode (needs a name-resolution design decision, see iteration 13).
+  Distinct from the body-rename bug fixed this iteration.
+- deps update no-op; partial/interrupted clone accepted as green; migrate no-flag
+  target = `current()` vs newest-known; hyphenated dependency names dropped
+  (general package-manager scope).
+
+**Latent / unreachable today (carried):**
+- `comment_texts` non-quote-aware; standalone pragma-less file not edition-stamped
+  on a bump; `ProtoToInterface` `retires_keywords` with `enforced_in: nil`.
+
+**Message-quality nit (correct exit, deferred):**
+- Zero-arg commands with trailing junk misblame "Unknown command" (exit correct).
+
+**Loop status:** iteration 15 fixed 4 real bugs (2 CLI-consistency clearing
+iteration 14's deferred list, 1 printer parens-dropping, 1 migrate body-rename
+corruption). NOT converged — a fresh audit found new confirmed bugs, so the
+streak resets. The cron is **left in place**. Full suite green: 3939 passed,
+0 failures. Do NOT merge.
+
+Commits this cycle: `ebd6098` (CLI usage/arg exits), `7a3772d` (CLI
+fmt/bench/keygen exits), `c4b4947` (printer pipe/keyword parens), `9ccd04c`
+(migrate body-rename), plus this record.
+
+---
