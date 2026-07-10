@@ -1,5 +1,7 @@
 @group(:text)
 mod Std.Json
+  use Std.String
+  use Std.Result
   ## JSON encoder and decoder for Cure (v0.23.0).
   ##
   ## Runtime companion to the v0.21.0 `@derive(JSON)` extension. The

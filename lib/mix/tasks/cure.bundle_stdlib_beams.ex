@@ -143,7 +143,17 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
 
   defp do_compile(src, dest_dir, counts) do
     case Cure.Compiler.compile_file(src, output_dir: dest_dir, emit_events: false) do
-      {:ok, _module, _warnings} ->
+      {:ok, module, _warnings} ->
+        # Load the freshly-compiled beam into the VM so a *later* stdlib
+        # module can resolve cross-module calls against it. The classic
+        # import resolver (`Cure.Compiler.Codegen.module_exports?/3`) probes
+        # the *loaded* version of an imported module; without this the probe
+        # would hit the stale copy baked into `Cure.Stdlib.Preload` at the
+        # last `mix compile` (or none at all for a brand-new module), and a
+        # cross-module call — e.g. `Std.Comparable.compare` calling
+        # `Std.Char.code_point/1` — would fall back to an undefined local
+        # call and fail to compile.
+        refresh_loaded_beam(module, dest_dir)
         {:ok, %{counts | compiled: counts.compiled + 1}}
 
       {:error, _reason} ->
@@ -156,6 +166,22 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
 
         {:ok, %{counts | errors: counts.errors + 1}}
     end
+  end
+
+  # Purge any previously-loaded copy of `module` and load the beam just
+  # written to `dest_dir`, so later modules in the same bundle run probe its
+  # fresh export table. Best-effort: a beam we cannot load (e.g. a codegen
+  # that wrote an unexpected filename) leaves the VM's current copy in place
+  # rather than aborting the bundle.
+  defp refresh_loaded_beam(module, dest_dir) do
+    base = Path.join(dest_dir, Atom.to_string(module)) |> String.to_charlist()
+
+    if File.exists?(to_string(base) <> ".beam") do
+      :code.purge(module)
+      :code.load_abs(base)
+    end
+
+    :ok
   end
 
   @doc false

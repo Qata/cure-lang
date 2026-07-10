@@ -875,6 +875,26 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # A bare neutral GLOBAL used in type position — e.g. a `typealias String =
+  # List(Char)` appearing as a `match`/dispatch result type — is a valid type of
+  # sort `level` iff the kernel's own term-level judgement says so. Same trust
+  # discipline as the `{:napp}` clause above: reify the neutral back to a
+  # `{:global, g}` term and `infer` it, resolving `g`'s declared type from the
+  # signature; accept only a `{:vtype, l}` result. A typealias is a nullary def
+  # `g : Type := RHS`, so its declared type is a universe and this admits it as a
+  # motive body — without this clause a constant motive `λ_. String` (and every
+  # abstract interface method returning an aliased type) is a spurious
+  # `:bad_motive`, since `infer_type_value_sort` had no clause for `{:nglobal, _}`.
+  defp infer_type_value_sort(ctx, {:vneutral, {:nglobal, _} = neutral}) do
+    term = Quote.reify({:vneutral, neutral}, Context.length(ctx), Context.signature(ctx))
+
+    case infer(ctx, term) do
+      {:ok, {:vtype, level}} -> {:ok, level}
+      _ -> {:error, :not_a_type_value}
+    end
+  end
+
+
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vbinary_type}), do: {:ok, 0}

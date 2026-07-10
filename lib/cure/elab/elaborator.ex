@@ -428,6 +428,16 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
+      # `element(t, i)` — dependent n-ary telescope/tuple projection. ONE surface
+      # for the i-th component, typed at the true `Ti` (not a numbered `tproj_i`),
+      # with a COMPILE-TIME bounds check: an `i` beyond the arity is rejected at
+      # elaboration, never a runtime crash. `t.i` is sugar for this (both share
+      # `positional_projection`). `i` must be a static positive integer literal —
+      # the bounds check is only meaningful for a statically-known index.
+      Keyword.get(meta, :name) == "element" and element_projection?(args) ->
+        [t_arg, {:literal, _, i}] = args
+        positional_projection(i, t_arg, names, ctx, env)
+
       # Record construction `Point{x: .., y: ..}` desugars to the positional
       # constructor `Point(.., ..)` (fields ordered by the record's telescope).
       Keyword.get(meta, :record) ->
@@ -468,10 +478,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:attribute_access, meta, [inner]}, names, ctx, env) do
-    case Keyword.fetch!(meta, :attribute) do
-      "1" -> sigma_projection(:fst, inner, names, ctx, env)
-      "2" -> sigma_projection(:snd, inner, names, ctx, env)
-      field -> record_projection(inner, field, names, ctx, env)
+    attr = Keyword.fetch!(meta, :attribute)
+
+    case parse_positional_index(attr) do
+      {:ok, i} -> positional_projection(i, inner, names, ctx, env)
+      :error -> record_projection(inner, attr, names, ctx, env)
     end
   end
 
@@ -564,16 +575,38 @@ defmodule Cure.Elab.Elaborator do
   # (A1 §1-A — today's runtime-structural semantics, verbatim). We elaborate
   # both operands in inference mode, assemble the term, and let the kernel
   # infer the result type.
+  # Concatenation is an operator overload resolved through the `Std.Semigroup`
+  # interface, not a bespoke `build_binop` case: `x <> y` desugars to the
+  # `combine` method, which coherence dispatches by the operand's type (the
+  # `List` instance delegates to the reducing library `Std.List.append`). A
+  # non-numeric `+` is the same overload (Swift-style) — numeric `+`/`-`/`<`/…
+  # keep their primitive meaning and only route here when `build_binop` reports
+  # the operand type has no primitive op.
   def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
-    with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
-         {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
-         {:ok, term} <-
-           build_binop(Keyword.fetch!(meta, :operator), l_core, r_core, l_type, ctx),
-         {:ok, type} <- Kernel.infer(ctx, term) do
-      {:ok, term, type}
+    op = Keyword.fetch!(meta, :operator)
+
+    if op == :<> do
+      combine_call(l, r, names, ctx, env)
     else
-      :unsupported_op -> {:error, {:unsupported_expression, expr}}
-      other -> other
+      with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
+           {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+           {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
+           {:ok, type} <- Kernel.infer(ctx, term) do
+        {:ok, term, type}
+      else
+        {:error, {:unsupported_operand_type, :+}} ->
+          combine_call(l, r, names, ctx, env)
+
+        {:error, {:unsupported_operand_type, cmp}}
+        when cmp in [:<, :>, :<=, :>=] ->
+          compare_op_call(cmp, l, r, names, ctx, env)
+
+        :unsupported_op ->
+          {:error, {:unsupported_expression, expr}}
+
+        other ->
+          other
+      end
     end
   end
 
@@ -627,6 +660,13 @@ defmodule Cure.Elab.Elaborator do
 
   # Wave-2 List sugar: rewrite `[]`/`[h|t]`/`[a,b,c]` to Nil/Cons ctor-call form
   # and delegate, reusing all ctor inference (see desugar_list/1).
+  # `()` — the unit value (Swift-style), the sole inhabitant of `Unit`. It is the
+  # nullary `unit` constructor of the seeded `Unit` family; the same node emit
+  # already understands as the empty-telescope terminator.
+  def elaborate_expr_typed({:unit_value, _meta}, _names, _ctx, _env) do
+    {:ok, {:ctor, :unit, []}, {:data, :Unit, [], []}}
+  end
+
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
 
@@ -638,23 +678,83 @@ defmodule Cure.Elab.Elaborator do
   # still needs a checking position (its expected type supplies the codomain family).
   # The codomain `B` is closed w.r.t. the fresh Σ binder, so it is shifted +1 to keep
   # its free de Bruijn indices pointing at the same context entries under the `λ`.
-  def elaborate_expr_typed({:tuple, _meta, [a_ast, b_ast]}, names, ctx, env) do
-    with {:ok, a_core, a_type} <- elaborate_expr_typed(a_ast, names, ctx, env),
-         {:ok, b_core, b_type} <- elaborate_expr_typed(b_ast, names, ctx, env) do
-      len = Context.length(ctx)
-      a_type_term = Quote.reify(a_type, len)
-      b_type_term = Quote.reify(b_type, len)
-      fam = Inductive.builtin(env, :sigma)
-
-      sigma_term =
-        {:data, fam, [a_type_term, {:lam, Cure.Core.Grade.unrestricted(), a_type_term, Cure.Core.Term.shift(b_type_term, 1)}], []}
-
-      sigma_val = Eval.eval(sigma_term, Context.env(ctx))
-      {:ok, {:ctor, sigma_ctor_name(env), [a_core, b_core]}, sigma_val}
+  def elaborate_expr_typed({:tuple, _meta, [_, _ | _] = elems}, names, ctx, env) do
+    with {:ok, parts} <- elaborate_tuple_parts(elems, names, ctx, env) do
+      {value, type_term} = build_telescope_value(parts, ctx, env)
+      {:ok, value, Eval.eval(type_term, Context.env(ctx))}
     end
   end
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # Synthesise each element of a tuple literal to `{core, type_term}` (the inferred
+  # type reified to a Core term at the current depth).
+  defp elaborate_tuple_parts(elems, names, ctx, env) do
+    len = Context.length(ctx)
+
+    Enum.reduce_while(elems, {:ok, []}, fn e, {:ok, acc} ->
+      case elaborate_expr_typed(e, names, ctx, env) do
+        {:ok, core, type} -> {:cont, {:ok, acc ++ [{core, Quote.reify(type, len)}]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  # Build the unit-terminated telescope value + type from synthesised parts:
+  # `%[e1, …, en]` (no expected type) is a flat `Tuple(T1, …, Tn)` —
+  # `mk_pair(e1, … mk_pair(en, unit))` at type `Sigma(T1, λ. … Sigma(Tn, λ. Unit))`.
+  # A genuinely DEPENDENT pair still needs a checking position (its expected type
+  # supplies the codomain family); synthesis is the non-dependent product, which
+  # is exactly a Tuple. Folds from the right so each accumulated type shifts +1
+  # under the fresh Σ binder (non-dependent, so the binder is unused).
+  defp build_telescope_value(parts, _ctx, env) do
+    mk_pair = sigma_ctor_name(env)
+    fam = Inductive.builtin(env, :sigma)
+
+    Enum.reduce(Enum.reverse(parts), {{:ctor, :unit, []}, {:data, :Unit, [], []}}, fn
+      {core, type_term}, {val_acc, type_acc} ->
+        value = {:ctor, mk_pair, [core, val_acc]}
+        cod = {:lam, Cure.Core.Grade.unrestricted(), type_term, Cure.Core.Term.shift(type_acc, 1)}
+        type = {:data, fam, [type_term, cod], []}
+        {value, type}
+    end)
+  end
+
+  # Desugar a concatenation operator to the `Std.Semigroup.combine` method call,
+  # letting the interface-dispatch machinery pick the instance by operand type.
+  defp combine_call(l, r, names, ctx, env),
+    do: elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
+
+  # Desugar a comparison operator on a NON-primitive operand to the
+  # `Std.Comparable.compare` method, tested against an `Ordering` constructor.
+  # The comparison operators ARE the surface for `Comparable` (there are no
+  # `lt`/`le`/`gt`/`ge` named helpers); each maps to a `compare` + `Ordering`
+  # test:
+  #
+  #     a <  b  ~>  compare(a, b) == LessThan()
+  #     a >  b  ~>  compare(a, b) == GreaterThan()
+  #     a <= b  ~>  compare(a, b) != GreaterThan()
+  #     a >= b  ~>  compare(a, b) != LessThan()
+  #
+  # `compare` dispatches by coherence to the operand's `Ord` instance; the
+  # `==`/`!=` on the `Ordering` result rides the usual `struct_eq`/`struct_ne`
+  # path. Reached only when `build_binop` reports the operand type has no
+  # primitive `<`/`>`/`<=`/`>=` (Int/Float keep their primitive meaning).
+  # Requires `use Std.Comparable` in scope so `compare` and the `Ordering`
+  # constructors resolve (class-import model, like `combine`).
+  defp compare_op_call(cmp, l, r, names, ctx, env) do
+    {ctor, eq_op} =
+      case cmp do
+        :< -> {"LessThan", :==}
+        :> -> {"GreaterThan", :==}
+        :<= -> {"GreaterThan", :!=}
+        :>= -> {"LessThan", :!=}
+      end
+
+    compare = {:function_call, [name: "compare"], [l, r]}
+    ordering = {:function_call, [name: ctor], []}
+    elaborate_expr_typed({:binary_op, [operator: eq_op], [compare, ordering]}, names, ctx, env)
+  end
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.
   # The LAST clause is the terminator (its body is the seed); every earlier
@@ -891,6 +991,95 @@ defmodule Cure.Elab.Elaborator do
   defp sigma_projection(which, inner, names, ctx, env) do
     gname = if which == :fst, do: :sigma_first, else: :sigma_second
     elaborate_implicit_global_app(env, gname, [inner], names, ctx)
+  end
+
+  # `element(t, i)` is the dependent n-ary projection form iff called with exactly
+  # two arguments and a STATIC positive-integer literal index — the only shape for
+  # which the compile-time bounds check is meaningful. Any other `element(…)` call
+  # falls through to ordinary name resolution.
+  defp element_projection?([_t_arg, {:literal, _meta, i}]) when is_integer(i) and i >= 1, do: true
+  defp element_projection?(_), do: false
+
+  # A `.N` attribute where `N` is a positive integer is a POSITIONAL projection
+  # (`.1`, `.2`, …); anything else is a record field name.
+  defp parse_positional_index(attr) do
+    case Integer.parse(attr) do
+      {i, ""} when i >= 1 -> {:ok, i}
+      _ -> :error
+    end
+  end
+
+  # Positional projection `base.i`. When `base` is a flat unit-terminated
+  # telescope of arity `n` (a `Tuple(T1,…,Tn)` value, lowered to a flat BEAM
+  # tuple), `.i` for `i ≥ 2` lowers to the `Std.Sigma` positional-projection
+  # global `tproj_i` — typed at the true i-th component `Ti` and inlined to
+  # `element(i, base)` (see sigma.cure). `.1` is `sigma_first` (correct for any
+  # telescope). For a bare dependent pair (`Sigma(a, b)`, tail not `Unit`) or any
+  # non-telescope, `.1`/`.2` keep their `sigma_first`/`sigma_second` meaning and
+  # a higher index falls to the record path — exactly the pre-telescope behavior.
+  # The classification is a heuristic over `base`'s inferred type; the kernel
+  # re-checks the chosen `tproj_i` application against its real signature, so a
+  # misclassification can only surface as a clean rejection, never unsoundness.
+  defp positional_projection(i, inner, names, ctx, env) do
+    case telescope_arity_of(inner, names, ctx, env) do
+      {:telescope, n} when i <= n and i >= 2 ->
+        elaborate_implicit_global_app(env, :"tproj#{i}", [inner], names, ctx)
+
+      {:telescope, n} when i <= n ->
+        sigma_projection(:fst, inner, names, ctx, env)
+
+      # The arity is statically known and `i` is out of `[1, n]` — reject at
+      # elaboration. A telescope carries its arity in its type, so an
+      # out-of-bounds positional access (`t.9` / `element(t, 9)` on a 3-tuple)
+      # is a compile-time error, never a runtime `element/2` crash.
+      {:telescope, n} ->
+        {:error, {:telescope_index_out_of_bounds, i, n}}
+
+      _ ->
+        case i do
+          1 -> sigma_projection(:fst, inner, names, ctx, env)
+          2 -> sigma_projection(:snd, inner, names, ctx, env)
+          _ -> record_projection(inner, Integer.to_string(i), names, ctx, env)
+        end
+    end
+  end
+
+  # `{:telescope, n}` when `inner`'s inferred type is a unit-terminated Σ
+  # telescope of arity `n` (`Sigma(T1, … Sigma(Tn, Unit))`), else `:not_telescope`.
+  defp telescope_arity_of(inner, names, ctx, env) do
+    case elaborate_expr_typed(inner, names, ctx, env) do
+      {:ok, _term, type_value} ->
+        case Inductive.builtin(env, :sigma) do
+          nil ->
+            :not_telescope
+
+          sigma_fam ->
+            # `type_value` is a semantic VALUE (as returned by elaboration); read it
+            # back to a Core term (family param/index split recovered via the sig)
+            # before walking the Σ spine.
+            type_term = Quote.reify(type_value, Context.length(ctx), Context.signature(ctx))
+            count_tele(type_term, ctx, sigma_fam, 0)
+        end
+
+      _ ->
+        :not_telescope
+    end
+  end
+
+  # Walk the Σ spine, instantiating each codomain (non-dependent for a telescope,
+  # so the applied argument is discarded) until a `Unit` terminator is reached.
+  defp count_tele(type, ctx, sigma_fam, n) do
+    case Kernel.normalize(ctx, type) do
+      {:data, ^sigma_fam, [_dom, cod], []} ->
+        tail = Kernel.normalize(ctx, {:app, cod, {:ctor, :unit, []}})
+        count_tele(tail, ctx, sigma_fam, n + 1)
+
+      {:data, :Unit, [], []} when n >= 1 ->
+        {:telescope, n}
+
+      _ ->
+        :not_telescope
+    end
   end
 
   # Record field projection `obj.field`. The object's type identifies its record
@@ -1168,22 +1357,21 @@ defmodule Cure.Elab.Elaborator do
   # spec §2.2). Lowers to the ctor `mk_pair`; the kernel re-checks it. With no Sigma
   # family registered (a raw-`Env.empty()` elaboration), falls through to the
   # inference fallback, which builds the same `{:ctor, :mk_pair, …}`.
-  def elaborate_expr_checked({:tuple, _meta, [a_ast, b_ast]} = expr, expected_core, names, ctx, env) do
+  # A tuple literal `%[e1, …, en]` (n ≥ 2) checked against a Σ-shaped goal. ONE
+  # recursion (`check_tuple_against/5`) elaborates both the bare dependent pair
+  # (`Sigma(x:T, U)` — the last element is the whole second component) AND the
+  # unit-terminated telescope (`Tuple(T1,…,Tn)` = `Sigma(T1, … Sigma(Tn, Unit))` —
+  # each element gets its own `mk_pair` cell, bottoming at `unit`). Which one is
+  # produced is driven ENTIRELY by the goal's structure: whether a Σ layer's tail
+  # bottoms at `Unit` (telescope) or at an ordinary type (bare). A non-Σ goal falls
+  # through to the fallback exactly as the former arity-2 clause did.
+  def elaborate_expr_checked({:tuple, _meta, elems} = expr, expected_core, names, ctx, env)
+      when is_list(elems) and length(elems) >= 2 do
     sigma_fam = Inductive.builtin(env, :sigma)
 
     case Kernel.normalize(ctx, expected_core) do
-      {:data, fam, [dom, b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
-        [%{name: mk_pair} | _] = Inductive.ctors_of(env, sigma_fam)
-
-        with {:ok, a_term} <- elaborate_expr_checked(a_ast, dom, names, ctx, env),
-             # The second Σ param `b_fn` is an arbitrary term, so the instantiated
-             # codomain is the application `b_fn(a)` — normalized (β-reduced) so a
-             # dependent component like `prepend(x, empty())` sees its concrete
-             # expected type (`Vector(a, Suc(Zero))`) and can solve its implicits,
-             # exactly as the former `Subst.instantiate` did.
-             cod_inst = Kernel.normalize(ctx, {:app, b_fn, a_term}),
-             {:ok, b_term} <- elaborate_expr_checked(b_ast, cod_inst, names, ctx, env),
-             term = {:ctor, mk_pair, [a_term, b_term]},
+      {:data, fam, [_dom, _b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
+        with {:ok, term} <- check_tuple_against(elems, expected_core, names, ctx, env),
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -1272,6 +1460,68 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  # Recursively elaborate a run of surface tuple elements against a Σ-shaped goal,
+  # peeling ONE Σ layer per element. Distinguishes two terminations:
+  #
+  #   * telescope terminator — the current Σ's tail bottoms at `Unit`
+  #     (`telescope_terminator?/3`): the element inhabits the Σ's *domain* and a
+  #     trailing `unit` closes the spine, so `%[…,e]` against `Sigma(D, λ_.Unit)`
+  #     becomes `mk_pair(check(e,D), unit)`. This is how `Tuple(T1,…,Tn)` builds a
+  #     flat, unit-terminated HList that emit later flattens to a BEAM tuple.
+  #
+  #   * bare dependent pair — the tail is an ordinary type: the LAST element is the
+  #     whole second component, so `%[a,b]` against `Sigma(D, Cod)` checks `b` at
+  #     `Cod[a]` directly (no `unit`). Preserves the landed `Sigma(x:T,U)` ABI.
+  #
+  # An empty run against `Unit` yields `unit` (the telescope terminator itself).
+  defp check_tuple_against([], expected_core, _names, ctx, _env) do
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, :Unit, [], []} -> {:ok, {:ctor, :unit, []}}
+      other -> {:error, {:tuple_arity_mismatch, :expected_more, other}}
+    end
+  end
+
+  defp check_tuple_against([e | rest], expected_core, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, fam, [dom, b_fn], []} when fam == sigma_fam and not is_nil(sigma_fam) ->
+        if rest == [] and not telescope_terminator?(b_fn, ctx, env) do
+          # Last element, tail is an ordinary type → e IS the whole second
+          # component (a bare pair, possibly itself a nested tuple).
+          elaborate_expr_checked(e, expected_core, names, ctx, env)
+        else
+          [%{name: mk_pair} | _] = Inductive.ctors_of(env, sigma_fam)
+
+          with {:ok, e_term} <- elaborate_expr_checked(e, dom, names, ctx, env),
+               cod_inst = Kernel.normalize(ctx, {:app, b_fn, e_term}),
+               {:ok, rest_term} <- check_tuple_against(rest, cod_inst, names, ctx, env) do
+            {:ok, {:ctor, mk_pair, [e_term, rest_term]}}
+          end
+        end
+
+      other ->
+        # Goal is not a Σ: only a single remaining element can inhabit it directly
+        # (the bare final component of a 2-tuple). More than one is an arity error.
+        if rest == [] do
+          elaborate_expr_checked(e, expected_core, names, ctx, env)
+        else
+          {:error, {:tuple_arity_mismatch, :too_many, other}}
+        end
+    end
+  end
+
+  # Does this Σ's second parameter (a `λ`) bottom at `Unit`? Applying it to a
+  # closed probe term and normalizing β-reduces a non-dependent tail to its body;
+  # a dependent tail that mentions its argument won't reduce to `Unit` anyway. This
+  # is the sole signal separating a telescope layer from a bare dependent pair.
+  defp telescope_terminator?(b_fn, ctx, _env) do
+    case Kernel.normalize(ctx, {:app, b_fn, {:ctor, :unit, []}}) do
+      {:data, :Unit, [], []} -> true
+      _ -> false
+    end
+  end
 
   # True iff the (meta-free) expected type evaluates to the canonical `Nat` family.
   defp nat_expected?(expected_core, ctx) do
@@ -3095,16 +3345,19 @@ defmodule Cure.Elab.Elaborator do
     app2(eq_global, scrut_term, lit_core(v, prim))
   end
 
-  # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
-  # `e1 = base.1`, `e2 = base.2.1`, …, `en = base.2.….2` (the final tail). Each
-  # element may itself be a nested tuple, recursing on its own projection base.
-  defp tuple_subs([last], base), do: tuple_elem_sub(last, base)
-
-  defp tuple_subs([e | rest], base) do
-    with {:ok, s1} <- tuple_elem_sub(e, tuple_proj(base, "1")),
-         {:ok, s2} <- tuple_subs(rest, tuple_proj(base, "2")) do
-      {:ok, s1 ++ s2}
-    end
+  # A flat n-element tuple projects POSITIONALLY: `%[e1, …, en]` binds
+  # `e1 = base.1`, `e2 = base.2`, …, `en = base.n` (each `.i` resolves against the
+  # flat lowering via `positional_projection`). Each element may itself be a
+  # nested tuple, recursing on its own projection base (`base.i.1`, `base.i.2`, …).
+  defp tuple_subs(elems, base) do
+    elems
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn {e, i}, {:ok, acc} ->
+      case tuple_elem_sub(e, tuple_proj(base, Integer.to_string(i))) do
+        {:ok, s} -> {:cont, {:ok, acc ++ s}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
   end
 
   defp tuple_proj(base, n), do: {:attribute_access, [attribute: n], [base]}
@@ -3269,6 +3522,17 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  # A monotonic per-process counter yielding a unique infix for generated
+  # scrutinee names, so nested-pattern lowerings at different match sites (and
+  # different nesting depths) never produce colliding — hence capturing — names.
+  # Process-local: one elaboration runs sequentially in one process, and tests
+  # assert only on the {:ok, _} verdict, never on generated names.
+  defp fresh_tag do
+    n = Process.get(:cure_desugar_gensym, 0)
+    Process.put(:cure_desugar_gensym, n + 1)
+    Integer.to_string(n) <> "$"
+  end
+
   defp desugar_nested_arms(arms, scrut_expr) do
     cond do
       not Enum.any?(arms, &arm_has_nested?/1) ->
@@ -3402,7 +3666,16 @@ defmodule Cure.Elab.Elaborator do
        end) do
       {:error, {:unsupported_pattern, :shadowed_nested}}
     else
-      fresh = for i <- 1..k//1, do: "$n" <> cname <> Integer.to_string(i)
+      # Seed the fresh scrutinee names with a per-invocation unique tag. Every
+      # deeper name (`split_ctor_arms`, `split_default`) derives from these, so a
+      # unique seed makes the WHOLE lowered subtree's names unique. Without it,
+      # two independently-desugared nested matches — an outer arm whose body is
+      # itself a nested match — regenerate identical names (`$nSome1_Y1`) and the
+      # inner binder captures a reference the outer desugaring baked into the
+      # body (variable capture → spurious `:branch_type`). See
+      # nested_match_capture_test.exs.
+      tag = fresh_tag()
+      fresh = for i <- 1..k//1, do: "$n" <> tag <> cname <> Integer.to_string(i)
 
       rows =
         Enum.map(arms, fn {:match_arm, m, b} ->
@@ -3560,11 +3833,35 @@ defmodule Cure.Elab.Elaborator do
   # coverage). Validates every constructor arm names one of dname's OWN declared
   # constructors (spec §5 step 2 gap) and rejects duplicate arms / duplicate
   # defaults / an impossible-marked catch-all.
+  # A bare capitalized pattern (`Lt`) parses as a variable — the parser has no
+  # type information — but when the name resolves to a NULLARY constructor of the
+  # scrutinee's family it is a constructor pattern, not a fresh binder: `Lt` ≡
+  # `Lt()` (Idris/Agda/Lean read an uppercase bare pattern as a nullary
+  # constructor). Rewrite it to the canonical `Ctor()` node so the constructor
+  # path handles it identically to the parenthesized spelling. Every genuine
+  # variable/wildcard pattern — and any capitalized name that is NOT a nullary
+  # constructor of this family — is left untouched, so it still binds/defaults.
+  defp desugar_nullary_ctor_pattern({:variable, _meta, vname} = pat, sig, env, dname) do
+    cname = resolve_ctor_key(env, String.to_atom(vname))
+
+    case Inductive.get_ctor(env, cname) do
+      %{args: []} ->
+        if Inductive.ctor_family(sig, cname) == dname,
+          do: {:function_call, [name: vname], []},
+          else: pat
+
+      _ ->
+        pat
+    end
+  end
+
+  defp desugar_nullary_ctor_pattern(pat, _sig, _env, _dname), do: pat
+
   defp partition_arms(arms, ctx, env, dname) do
     sig = Context.signature(ctx)
 
     Enum.reduce_while(arms, {:ok, {%{}, nil}}, fn {:match_arm, arm_meta, body}, {:ok, {acc, default}} ->
-      pattern = Keyword.fetch!(arm_meta, :pattern)
+      pattern = arm_meta |> Keyword.fetch!(:pattern) |> desugar_nullary_ctor_pattern(sig, env, dname)
 
       case pattern do
         {:variable, _vmeta, vname} ->
@@ -4045,7 +4342,18 @@ defmodule Cure.Elab.Elaborator do
         end
 
       true ->
-        with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
+        # An ordinary (non-constructor) function-call arm body. Infer FIRST to
+        # preserve every case that already worked; ONLY when inference cannot
+        # solve the call's result-type metavariables — a polymorphic nullary
+        # function like `empty() -> Iter(t)` whose `t` has no argument to fix it
+        # — retry in checking mode, letting the branch's expected type pin them
+        # (mirrors the constructor-arm path above; Idris checks arm bodies
+        # against the match's expected type).
+        case elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, term, _type} -> {:ok, term}
+          {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+          {:error, _} = err -> err
+        end
     end
   end
 
@@ -4217,11 +4525,14 @@ defmodule Cure.Elab.Elaborator do
   defp refine_scrutinee_in_body(body_expr, {:var, i}, pattern, pattern_vars, names) do
     scrut_name = Enum.at(names, i)
 
+    stripped = strip_named_implicits(pattern)
+
     if is_binary(scrut_name) and
          Enum.find_index(names, &(&1 == scrut_name)) == i and
          scrut_name not in pattern_vars and
+         expressible_pattern?(stripped) and
          not binds_any?(body_expr, [scrut_name | pattern_vars]) do
-      subst_surface_var(body_expr, scrut_name, strip_named_implicits(pattern))
+      subst_surface_var(body_expr, scrut_name, stripped)
     else
       body_expr
     end
@@ -4230,12 +4541,45 @@ defmodule Cure.Elab.Elaborator do
   defp refine_scrutinee_in_body(body_expr, _scrut_term, _pattern, _pattern_vars, _names),
     do: body_expr
 
+  # Can this branch pattern be rendered into TERM position? A wildcard `_` has
+  # no value, so a pattern containing one (`[_ | _]`) is not expressible; the
+  # surface scrutinee-refinement must be skipped for it (the scrutinee variable
+  # stays in branch scope with its original type and the body checks against
+  # that directly). Rendering `[_ | _]` as an expression resolved both `_`s to
+  # the head element binder and mis-typed the tail slot.
+  defp expressible_pattern?({:variable, _meta, "_"}), do: false
+
+  defp expressible_pattern?({_tag, _meta, children}) when is_list(children),
+    do: Enum.all?(children, &expressible_pattern?/1)
+
+  defp expressible_pattern?(list) when is_list(list),
+    do: Enum.all?(list, &expressible_pattern?/1)
+
+  defp expressible_pattern?(_other), do: true
+
   defp subst_surface_var({:variable, _meta, name}, name, replacement), do: replacement
 
   defp subst_surface_var({tag, meta, children}, name, replacement) when is_list(children),
-    do: {tag, meta, Enum.map(children, &subst_surface_var(&1, name, replacement))}
+    do: {tag, subst_surface_meta(meta, name, replacement),
+         Enum.map(children, &subst_surface_var(&1, name, replacement))}
 
   defp subst_surface_var(other, _name, _replacement), do: other
+
+  # A curried call `f(x)(y)` parses with its callee expression stashed in META
+  # (`callee:`, parser.ex `parse_call`), NOT in the node's children — so the
+  # generic child walk above would skip any variable inside the callee. Rewrite
+  # the `:callee` sub-expression too, or a nested-match desugaring (or a `let`)
+  # that renames `x` leaves the `x` inside `f(x)` untouched, and it reaches the
+  # kernel as an undefined `{:global, :x}`.
+  defp subst_surface_meta(meta, name, replacement) when is_list(meta) do
+    case Keyword.fetch(meta, :callee) do
+      {:ok, callee} ->
+        Keyword.put(meta, :callee, subst_surface_var(callee, name, replacement))
+
+      :error ->
+        meta
+    end
+  end
 
   # Does any nested binder in the remaining statements bind one of `avoid`?
   #
@@ -5461,6 +5805,14 @@ defmodule Cure.Elab.Elaborator do
         eta_expand_bare_ctor(env, atom)
 
       Inductive.family?(env, atom) -> {:ok, {:data, atom, [], []}}
+      # A machine PRIMITIVE base type (Int/Float/Binary/Atom) in value position
+      # is a first-class value of type `Type` — the same first-classness families
+      # already get above (Idris/Agda/Lean: a type constructor name in term
+      # position IS the type value). Primitives are `Env.put_primitive` bindings,
+      # not families, so without this they fell through to `{:global, :Int}` →
+      # `:unknown_global`. The kernel already types the primitive Core node
+      # (`{:int_type}`, …) at `{:vtype, 0}`; this is a pure resolution fix.
+      prim = Env.primitive(env, name) -> {:ok, prim}
       # Bare VALUE position mirrors the call-position R7 trichotomy: a name
       # provided by ≥2 re-keyed imports with no local/unshadowed winner is
       # ambiguous (E089), same tuple shape as the call site.

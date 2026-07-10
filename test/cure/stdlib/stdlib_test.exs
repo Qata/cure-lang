@@ -199,23 +199,15 @@ defmodule Cure.StdlibTest do
   end
 
   describe "Std.Core -- comparison operations" do
+    # `eq`/`ne`/`lt`/`le`/`gt`/`ge` no longer exist as named helpers: the
+    # operators `==`/`!=`/`<`/`<=`/`>`/`>=` are the surface (equality is
+    # structural; ordering routes through `Std.Comparable`). Only the
+    # ordering-derived combinators `min`/`max`/`clamp` remain, now carrying a
+    # `where Comparable(t)` constraint.
     setup do
       m = compile_stdlib("core")
       on_exit(fn -> purge(m) end)
       %{m: m}
-    end
-
-    test "eq and ne", %{m: m} do
-      assert m.eq(3, 3) == true
-      assert m.eq(3, 4) == false
-      assert m.ne(3, 4) == true
-    end
-
-    test "lt, le, gt, ge", %{m: m} do
-      assert m.lt(3, 5) == true
-      assert m.le(3, 3) == true
-      assert m.gt(5, 3) == true
-      assert m.ge(3, 3) == true
     end
 
     test "min and max", %{m: m} do

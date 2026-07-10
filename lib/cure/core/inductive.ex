@@ -237,7 +237,15 @@ defmodule Cure.Core.Inductive do
   the other three inhabitants all denote a runtime-present argument.
   """
   @type quantity :: Grade.t()
-  @type family :: %{name: atom(), params: telescope(), indices: telescope(), level: non_neg_integer()}
+  @type family :: %{
+          :name => atom(),
+          :params => telescope(),
+          :indices => telescope(),
+          :level => non_neg_integer(),
+          # Set (to `true`) only by `opaque_family/3` for postulate families the
+          # kernel refuses to eliminate; absent on ordinary inductive families.
+          optional(:opaque) => boolean()
+        }
   @type ctor :: %{
           name: atom(),
           args: telescope(),
@@ -473,8 +481,13 @@ defmodule Cure.Core.Inductive do
   # declared family's constructor fields (the through-constructor rule) — and
   # the codomain stays strictly positive. Σ is covariant in both components. A
   # field headed by ANOTHER family is checked by expanding that family's
-  # constructor fields (`seen` breaks family cycles); `fname` occurring in
-  # another family's parameters/indices is conservatively rejected.
+  # constructor fields (`seen` breaks family cycles). When `fname` occurs inside
+  # another family's ARGUMENTS (nested positivity — `Node (List Rose)`), the
+  # other family's constructor fields are INSTANTIATED with those arguments and
+  # re-checked: a strictly-positive parameter (`List`, `Option`) keeps `fname`
+  # positive, a negative one (`Neg t = t -> Empty`) drops it left of an arrow and
+  # is rejected. An opaque/constructorless carrier has unknowable polarity and is
+  # conservatively rejected.
   defp strictly_positive?(env, fname, {:pi, _g, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
@@ -487,21 +500,61 @@ defmodule Cure.Core.Inductive do
     do: not Enum.any?(ps ++ is, &occurs?(env, fname, &1))
 
   defp strictly_positive?(env, fname, {:data, other, ps, is}, seen) do
-    cond do
-      Enum.any?(ps ++ is, &occurs?(env, fname, &1)) ->
-        false
+    args = ps ++ is
+    fname_in_args = Enum.any?(args, &occurs?(env, fname, &1))
 
+    cond do
+      # Re-entering a family already on the expansion stack — a recursive or
+      # mutual occurrence. Greatest-fixpoint: accept (its fields are being
+      # verified further up the stack). This is what makes a nested self-call
+      # like `Lst(Rose(a))` terminate and admit.
       MapSet.member?(seen, other) ->
         true
 
-      true ->
+      # `fname` is not passed into `other`. Only a direct/mutual reference to
+      # `fname` inside `other`'s OWN fields could break positivity; expand and
+      # check them (parameters stay bound variables — no instantiation needed).
+      not fname_in_args ->
         seen2 = MapSet.put(seen, other)
 
         env
         |> ctors_of(other)
-        |> Enum.all?(fn %{args: args} ->
-          Enum.all?(args, fn {_n, ty} -> strictly_positive?(env, fname, ty, seen2) end)
+        |> Enum.all?(fn %{args: fields} ->
+          Enum.all?(fields, fn {_n, ty} -> strictly_positive?(env, fname, ty, seen2) end)
         end)
+
+      # `fname` flows into `other`'s arguments, but `other` is opaque
+      # (postulate) or constructorless: its parameter polarity is unknowable,
+      # so no positive certificate can be issued. Reject (soundly incomplete).
+      opaque_or_ctorless?(env, other) ->
+        false
+
+      # NESTED positivity (Agda `Positivity.hs` / Coq's "check the instantiated
+      # constructors" rule): instantiate `other`'s constructor fields with the
+      # ACTUAL arguments and require `fname` to remain strictly positive in each.
+      # This drops `fname` into exactly the structural slots where `other` uses
+      # each parameter — a negative parameter (`Neg t = t -> Empty`) lands
+      # `fname` left of an arrow and is rejected; a positive parameter (`List`,
+      # `Option`) keeps it positive.
+      true ->
+        nt =
+          length(param_telescope(env, other) || []) + length(index_telescope(env, other) || [])
+
+        if nt == length(args) do
+          seen2 = MapSet.put(seen, other)
+
+          env
+          |> ctors_of(other)
+          |> Enum.all?(fn ctor ->
+            ctor
+            |> instantiate_fields(nt, args)
+            |> Enum.all?(&strictly_positive?(env, fname, &1, seen2))
+          end)
+        else
+          # Argument arity does not match the declared telescope — the term is
+          # malformed for this family; cannot align args to binders. Reject.
+          false
+        end
     end
   end
 
@@ -514,6 +567,30 @@ defmodule Cure.Core.Inductive do
   # false-open here admits `False`). An occurrence in a genuinely positive but
   # unanalyzable spot is rejected — soundly incomplete, never unsound.
   defp strictly_positive?(env, fname, other, _seen), do: not occurs?(env, fname, other)
+
+  # An opaque (postulate) or constructorless carrier exposes no constructor
+  # fields, so the polarity of its parameters cannot be established. Conservative.
+  defp opaque_or_ctorless?(env, other),
+    do: opaque?(env, other) or ctors_of(env, other) == []
+
+  # Instantiate a constructor's field telescope by substituting the family's
+  # `nt` parameter/index binders with the ACTUAL arguments. Parameters are the
+  # outermost binders, so at field position `i` the binder for argument `t`
+  # (0-indexed, outermost = 0) sits at de Bruijn index `i + (nt - 1 - t)`; the
+  # argument is shifted over the `i` preceding-field binders. `Term.subst` is
+  # targeted (it does not renumber the untouched binders) — exactly what the
+  # positivity predicates, which match `fname` by head and inspect arrow
+  # structure (index-insensitive), require.
+  defp instantiate_fields(%{args: field_tele}, nt, args) do
+    field_tele
+    |> Enum.with_index()
+    |> Enum.map(fn {{_n, ty}, i} ->
+      Enum.reduce(0..(nt - 1)//1, ty, fn t, acc ->
+        j = i + (nt - 1 - t)
+        Cure.Core.Term.subst(acc, j, Cure.Core.Term.shift(Enum.at(args, t), i, 0))
+      end)
+    end)
+  end
 
   # Does `fname` occur anywhere in `ty`, including inside the constructor fields
   # of other families referenced by `ty`? Used for arrow DOMAINS, where any

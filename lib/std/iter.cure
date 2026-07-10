@@ -1,5 +1,6 @@
 @group(:collections)
 mod Std.Iter
+  use Std.Option
   ## Lazy iterators.
   ##
   ## Cure comprehensions and `Std.List` are eager: every step

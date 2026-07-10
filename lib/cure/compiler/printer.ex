@@ -491,6 +491,26 @@ defmodule Cure.Compiler.Printer do
 
   # -- Function Call ---------------------------------------------------------
 
+  # `Tuple(T1, …, Tn)` type surface (n-ary telescope, `parse_tuple_type`). Each
+  # position's binder is retained: an anonymous position (binder `"_"`) prints
+  # just its type; a named position prints `b: T`, so a dependent telescope
+  # (`Tuple(n: Nat, Vector(a, n))`) round-trips losslessly.
+  defp to_string({:tuple_type, meta, types}, depth, indent) do
+    binders = Keyword.get(meta, :binders, [])
+
+    positions =
+      types
+      |> Enum.with_index()
+      |> Enum.map_join(", ", fn {t, i} ->
+        case Enum.at(binders, i) do
+          b when is_binary(b) and b != "_" -> "#{b}: #{render(t, depth, indent)}"
+          _ -> render(t, depth, indent)
+        end
+      end)
+
+    "Tuple(#{positions})"
+  end
+
   defp to_string({:function_call, meta, args}, depth, indent) do
     name = Keyword.get(meta, :name, "unknown")
 
@@ -1362,6 +1382,7 @@ defmodule Cure.Compiler.Printer do
         :app -> app_to_string(meta, body, depth, indent)
         :proof -> proof_to_string(meta, body, depth, indent)
         :primitive -> primitive_to_string(meta, body, depth, indent)
+        :opaque -> opaque_to_string(meta, body, depth, indent)
         _ -> inspect({:container, meta, body})
       end
 
@@ -1376,6 +1397,18 @@ defmodule Cure.Compiler.Printer do
   # module home. The body is empty; a `@builtin(:tag)` decorator (in meta) prints
   # on the preceding line via `maybe_prepend_decorator/5` in `container_to_string`.
   defp primitive_to_string(meta, _body, _depth, _indent), do: "primitive #{Keyword.get(meta, :name)}"
+
+  # `opaque type Name` / `opaque type Name(p1, …)` — a constructor-less,
+  # non-eliminable carrier (Agda `postulate`). No body; head params, if any,
+  # round-trip from `:type_params`.
+  defp opaque_to_string(meta, _body, _depth, _indent) do
+    name = Keyword.get(meta, :name)
+
+    case Keyword.get(meta, :type_params, []) do
+      [] -> "opaque type #{name}"
+      ps -> "opaque type #{name}(#{Enum.join(ps, ", ")})"
+    end
+  end
 
   # -- Supervisor container (`sup Name`) -------------------------------------
   #

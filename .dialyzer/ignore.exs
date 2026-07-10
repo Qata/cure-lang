@@ -28,8 +28,8 @@
 
   # -- PRE-EXISTING BASELINE, recorded 2026-07-10 -----------------------------
   #
-  # `mix dialyzer` is a GATE on NEW warnings, not a claim of zero. These 32
-  # (file, kind) pairs cover the 61 warnings present when Dialyzer was first
+  # `mix dialyzer` is a GATE on NEW warnings, not a claim of zero. These
+  # (file, kind) pairs cover the warnings present when Dialyzer was first
   # adopted, on a tree at 3795 tests green. They are NOT endorsed — most are
   # MapSet/`:sets` opaqueness false positives under Elixir 1.20 + OTP 29, plus
   # `unknown_function` for the optional `stream_data` backend.
@@ -66,7 +66,11 @@
   {"lib/cure/elab/implementation.ex", :call_without_opaque},
   {"lib/cure/elab/program.ex", :call_with_opaque},
   {"lib/cure/elab/program.ex", :call_without_opaque},
+  # resolve.ex: the classify/3 typealias-unfold path flows a MapSet `seen`
+  # through a private helper (dispatch-side coherence), same opaqueness class.
+  {"lib/cure/elab/resolve.ex", :call_with_opaque},
+  {"lib/cure/elab/resolve.ex", :call_without_opaque},
   {"lib/cure/types/checker.ex", :pattern_match_cov},
   {"lib/cure/types/env.ex", :call_with_opaque},
-  {"lib/mix/tasks/antigen.ex", :no_return},
+  {"lib/mix/tasks/antigen.ex", :no_return}
 ]

@@ -203,7 +203,17 @@ defmodule Cure.Elab.Emit do
         end
 
       sigma_ctor?(env, name) ->
-        {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
+        # A UNIT-TERMINATED `mk_pair` spine `mk_pair(e1, … mk_pair(en, unit))` is a
+        # flat telescope `Tuple(T1,…,Tn)` — lower it to ONE flat BEAM tuple
+        # `{e1,…,en}`, dropping the `unit`. Each car is lowered independently, so an
+        # inner telescope car flattens on its own (opt-in nesting: `%[1,%[2,3]]` →
+        # `{1,{2,3}}`). A NON-unit-terminated pair (a bare `Sigma(x:T,U)`) keeps the
+        # structural nested 2-tuple emit. The `unit` marker is thus consumed here and
+        # never appears at runtime.
+        case telescope_cars(env, {:ctor, name, args}) do
+          {:telescope, cars} -> {:tuple, @line, Enum.map(cars, &lower(env, &1, ctx))}
+          :not_telescope -> {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
+        end
 
       list_ctor?(env, name) ->
         case {name, args} do
@@ -413,6 +423,17 @@ defmodule Cure.Elab.Emit do
   defp inline_hint_form(:sigma_second, [p], env, ctx),
     do: {:ok, element(2, lower(env, p, ctx))}
 
+  # Flat-telescope positional projections `tproj_i(p)` inline to `element(i, P)`
+  # — the i-th slot of the flat BEAM tuple. The final `[p]` spine (one explicit
+  # argument after the erased type/tail implicits) is what reaches here.
+  defp inline_hint_form(:tproj2, [p], env, ctx), do: {:ok, element(2, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj3, [p], env, ctx), do: {:ok, element(3, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj4, [p], env, ctx), do: {:ok, element(4, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj5, [p], env, ctx), do: {:ok, element(5, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj6, [p], env, ctx), do: {:ok, element(6, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj7, [p], env, ctx), do: {:ok, element(7, lower(env, p, ctx))}
+  defp inline_hint_form(:tproj8, [p], env, ctx), do: {:ok, element(8, lower(env, p, ctx))}
+
   defp inline_hint_form(_hint, _args, _env, _ctx), do: :no
 
   defp connective_binop(:and), do: :and
@@ -471,6 +492,26 @@ defmodule Cure.Elab.Emit do
   defp element(n, tuple_form) do
     {:call, @line, {:atom, @line, :element}, [{:integer, @line, n}, tuple_form]}
   end
+
+  # Classify a Core term as a UNIT-TERMINATED Σ-telescope spine, returning its car
+  # list `[e1, …, en]` (the flat components, `unit` dropped) — or `:not_telescope`
+  # for a bare `Sigma(x:T,U)` pair (whose tail is an ordinary value, not `unit`).
+  # This is the emit-time reader of the `unit` marker: it decides flat-vs-nested for
+  # BOTH values (here) and telescope patterns (`telescope_pattern_cars/2`).
+  defp telescope_cars(_env, {:ctor, :unit, []}), do: {:telescope, []}
+
+  defp telescope_cars(env, {:ctor, name, [car, cdr]}) do
+    if sigma_ctor?(env, name) do
+      case telescope_cars(env, cdr) do
+        {:telescope, rest} -> {:telescope, [car | rest]}
+        :not_telescope -> :not_telescope
+      end
+    else
+      :not_telescope
+    end
+  end
+
+  defp telescope_cars(_env, _other), do: :not_telescope
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
   defp spine(head, acc), do: {head, acc}

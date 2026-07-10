@@ -558,12 +558,23 @@ defmodule Cure.Compiler.Parser do
   # -- Grouping ( ... ) ------------------------------------------------------
 
   defp parse_grouped(state) do
+    open = peek(state)
     state = advance(state)
     state = skip_newlines(state)
-    {expr, state} = parse_expr(state, 0)
-    state = skip_newlines(state)
-    state = expect(state, :rparen)
-    {expr, state}
+
+    case peek(state) do
+      %Token{type: :rparen} ->
+        # `()` — the unit value (Swift-style): the sole inhabitant of `Unit`. It
+        # is NOT an empty tuple; it lowers to the nullary `unit` constructor.
+        state = advance(state)
+        {{:unit_value, [line: open.line, col: open.col]}, state}
+
+      _ ->
+        {expr, state} = parse_expr(state, 0)
+        state = skip_newlines(state)
+        state = expect(state, :rparen)
+        {expr, state}
+    end
   end
 
   # -- Infix Operators -------------------------------------------------------
@@ -3246,8 +3257,27 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
 
     {ast, state} =
-      case peek(state) do
-        %Token{type: :lparen} ->
+      case {peek(state), peek_at(state, 1)} do
+        {%Token{type: :lparen}, %Token{type: :rparen}} ->
+          # `type Unit = ()` — the Swift-style unit type: `Unit` is the type, `()`
+          # its sole value. `= ()` is RESERVED to `Unit`; `()` names the one
+          # built-in unit type and is not a spelling other types may borrow, so
+          # any other name declared as `()` is a hard error. When permitted, this
+          # builds exactly the nullary single-`unit`-ctor family the compiler
+          # seeds into every module (see program.ex seed_with_telescope_support/1).
+          state = advance(advance(state))
+
+          meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+
+          if name == "Unit" do
+            {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
+          else
+            state = add_error(state, {:unit_type_reserved, name})
+            {{:container, meta, []}, state}
+          end
+
+        {%Token{type: :lparen}, _} ->
           # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
           # The full type-expression parser handles the arrow; the result is a plain
           # type alias (`:type_annotation`).
@@ -4749,15 +4779,30 @@ defmodule Cure.Compiler.Parser do
     {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
   end
 
-  # Tuple(T, U) — the honest arity-2 surface tuple (spec §3.3). It aliases the
-  # non-dependent Sigma: `Tuple(T, U)` => `sigma_type` with the unused binder "_",
-  # `Tuple(x: T, U)` => `sigma_type` binding `x` so a later position may name it.
-  # Both reuse `type_to_core`/`idx_to_core`'s existing `sigma_type` clauses, so no
-  # elaborator change is needed. Arity != 2 is handled by the n-ary path (a later
-  # increment); until then a third position falls through to `expect(:rparen)`.
+  # Tuple(T1, …, Tn) — the honest surface tuple (spec 2026-07-09-unified-tuple §3).
+  # Parse a comma-separated list of `[binder?:] type` positions (≥ 2). EVERY arity
+  # (including 2) becomes `{:tuple_type, [arity: n, binders: bs], [t1…tn]}` — the
+  # elaborator unfolds it to a UNIT-TERMINATED nested Σ telescope
+  # (`Sigma(T1, λb1. … Sigma(Tn, λbn. Unit))`) which emit flattens to a flat BEAM
+  # tuple. This is DELIBERATELY distinct from bare `Sigma(x:T, U)` (`:sigma_type`,
+  # NOT unit-terminated): the terminator is what lets emit tell "flatten the whole
+  # spine" from "this element is itself a nested tuple". Per-position binders are
+  # retained so a later position may depend on an earlier one (dependent telescope);
+  # an anonymous position is binder `"_"`.
   defp parse_tuple_type(state) do
     state = advance(state)
+    {positions, state} = parse_tuple_positions(state, [])
+    state = expect(state, :rparen)
 
+    binders = Enum.map(positions, &elem(&1, 0))
+    types = Enum.map(positions, &elem(&1, 1))
+    ast = {:tuple_type, [arity: length(positions), binders: binders], types}
+
+    {ast, state}
+  end
+
+  # A `[binder?:] type` position list, comma-separated, terminated by `:rparen`.
+  defp parse_tuple_positions(state, acc) do
     {binder, state} =
       case {peek(state), peek_at(state, 1)} do
         {%Token{} = t, %Token{type: :colon}} ->
@@ -4767,11 +4812,13 @@ defmodule Cure.Compiler.Parser do
           {"_", state}
       end
 
-    {dom_type, state} = parse_type_expr(state)
-    state = expect(state, :comma)
-    {body_type, state} = parse_type_expr(state)
-    state = expect(state, :rparen)
-    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
+    {type, state} = parse_type_expr(state)
+    acc = [{binder, type} | acc]
+
+    case peek(state) do
+      %Token{type: :comma} -> parse_tuple_positions(advance(state), acc)
+      _ -> {Enum.reverse(acc), state}
+    end
   end
 
   defp maybe_parse_function_type(state, left) do
