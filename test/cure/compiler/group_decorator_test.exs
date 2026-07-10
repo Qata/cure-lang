@@ -15,6 +15,16 @@ defmodule Cure.Compiler.GroupDecoratorTest do
     ast
   end
 
+  # Parse a source string and return the parser's error list ({:ok, _} -> []).
+  defp parse_errors(src) do
+    {:ok, tokens} = Lexer.tokenize(src)
+
+    case Parser.parse(tokens, emit_events: false) do
+      {:ok, _ast} -> []
+      {:error, errors} -> errors
+    end
+  end
+
   # The module container node in a parsed program (unwraps a {:block, _, items}).
   defp module_node(ast) do
     items =
@@ -31,5 +41,13 @@ defmodule Cure.Compiler.GroupDecoratorTest do
     ast = parse!("@group(:core)\nmod M\n  fn f(x: Int) -> Int = x\nend\n")
     {:container, meta, _body} = module_node(ast)
     assert {:group, [{:literal, _, :core}]} = Keyword.get(meta, :decorator)
+  end
+
+  test "@group inside the mod body is a hard parse error" do
+    errors =
+      parse_errors("mod M\n  @group(:core)\n  fn f(x: Int) -> Int = x\nend\n")
+
+    assert Enum.any?(errors, &match?({:group_not_above_module, _line, _col}, &1)),
+           "expected a :group_not_above_module error, got: #{inspect(errors)}"
   end
 end

@@ -2,14 +2,15 @@ defmodule Cure.Compiler.GroupDecoratorAttrTest do
   use ExUnit.Case, async: true
 
   # Classic (non-dependent) module: routes through Cure.Compiler.Codegen.
-  @classic_src "mod GroupClassicFixture\n  @group(:test)\n  fn f() -> Int = 1\n"
+  # `@group` sits above `mod` (the canonical placement post-cutover).
+  @classic_src "@group(:test)\nmod GroupClassicFixture\n  fn f() -> Int = 1\n"
 
-  # Dependent module (indexed type ⇒ Cure.Elab.Emit pipeline). The @group
-  # decorator sits at module level, before an indexed type declaration.
+  # Dependent module (indexed type ⇒ Cure.Elab.Emit pipeline). `@group` sits
+  # above `mod`, describing the whole module.
   @dependent_src """
+  @group(:test)
   mod GroupDependentFixture
     type Nat = Z | S(Nat)
-    @group(:test)
     type Vector(a: Type) indices (n: Nat)
       empty : Vector(a, Z)
   end

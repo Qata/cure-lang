@@ -4912,8 +4912,7 @@ defmodule Cure.Compiler.Parser do
     # Module-level decorators (e.g. `@group(:core)`) describe the MODULE. The
     # canonical form is `@group(:g)` directly above `mod`, where it attaches to
     # the module container (spec 2026-07-10-group-decorator-placement). Any
-    # other position still parses as a standalone node here (Task 4 will make
-    # that a hard error, once the stdlib is migrated).
+    # other position is a hard error — the in-body form is not tolerated.
     if dec_name in @module_level_decorators do
       case peek(state) do
         %Token{type: :keyword, value: :mod} ->
@@ -4921,6 +4920,7 @@ defmodule Cure.Compiler.Parser do
           {attach_decorator(mod_ast, dec_name, args), state}
 
         _ ->
+          state = add_error(state, {:group_not_above_module, token.line, token.col})
           ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
           {ast, state}
       end
