@@ -167,7 +167,12 @@ defmodule Antigen.Challenge do
     # Check-mode vertical: kind + the Bd ctor T used in a reject case
     :check_mode, :T,
     # Delta-reduction vertical: kind + label + the certified global names
-    :delta_reduce, :reduces, :idnat, :kpair
+    :delta_reduce, :reduces, :idnat, :kpair,
+    # Normalise fuel/opts + certified-δ tail (same delta_reduce kind): new
+    # probe labels + a third certified global whose δ-unfold re-exposes a
+    # STUCK case (the reduce_unfolded branch-miss twin of the direct-case
+    # probe over idnat/kpair).
+    :fuel_probe, :opts_reject, :donly
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -320,8 +325,27 @@ defmodule Antigen.Challenge do
   def to_pieces(%__MODULE__{kind: :check_mode, payload: %{ctx_vars: n, term: term, type: ty}}),
     do: {%{"ctx_vars" => n}, [{"term", term}, {"type", ty}]}
 
-  def to_pieces(%__MODULE__{kind: :delta_reduce, payload: %{term: term, expected: exp}}),
+  def to_pieces(%__MODULE__{kind: :delta_reduce, label: :reduces, payload: %{term: term, expected: exp}}),
     do: {%{}, [{"term", term}, {"expected", exp}]}
+
+  # Fuel/opts vertical (Normalise fuel accounting + certified-δ unfolding tail):
+  # same {term, expected} Term pieces as :reduces, plus the (deliberately
+  # non-default) normalize opts and the expected outcome atom riding in the
+  # scaffold — a plain keyword list / atom, never routed through `known_atom!`
+  # (the values are literals already interned by `Cure.Core.Normalise`'s own
+  # source, which is always loaded).
+  def to_pieces(%__MODULE__{
+        kind: :delta_reduce,
+        label: :fuel_probe,
+        payload: %{term: term, expected: exp, opts: opts, want: want}
+      }),
+      do: {%{"opts" => opts, "want" => want}, [{"term", term}, {"expected", exp}]}
+
+  # opts-validation vertical: no Term pieces at all — the probe exercises
+  # `Normalise`'s opts validator directly against a fixed dummy neutral, so only
+  # the malformed opts keyword list rides in the scaffold.
+  def to_pieces(%__MODULE__{kind: :delta_reduce, label: :opts_reject, payload: %{opts: opts}}),
+    do: {%{"opts" => opts}, []}
 
   def to_pieces(%__MODULE__{kind: :malformed, payload: p}) do
     %{sig: sig, ctx: ctx, term: term} = p
@@ -521,10 +545,27 @@ defmodule Antigen.Challenge do
     new(kind: :check_mode, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
-  def from_pieces(:delta_reduce, assay, label, seed, note, _scaffold, pieces) do
+  def from_pieces(:delta_reduce, assay, :reduces, seed, note, _scaffold, pieces) do
     pmap = Map.new(pieces)
     payload = %{term: Map.fetch!(pmap, "term"), expected: Map.fetch!(pmap, "expected")}
-    new(kind: :delta_reduce, assay: assay, label: label, payload: payload, seed: seed, note: note)
+    new(kind: :delta_reduce, assay: assay, label: :reduces, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:delta_reduce, assay, :fuel_probe, seed, note, scaffold, pieces) do
+    pmap = Map.new(pieces)
+
+    payload = %{
+      term: Map.fetch!(pmap, "term"),
+      expected: Map.fetch!(pmap, "expected"),
+      opts: scaffold["opts"],
+      want: scaffold["want"]
+    }
+
+    new(kind: :delta_reduce, assay: assay, label: :fuel_probe, payload: payload, seed: seed, note: note)
+  end
+
+  def from_pieces(:delta_reduce, assay, :opts_reject, seed, note, scaffold, _pieces) do
+    new(kind: :delta_reduce, assay: assay, label: :opts_reject, payload: %{opts: scaffold["opts"]}, seed: seed, note: note)
   end
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do

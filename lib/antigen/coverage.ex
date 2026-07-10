@@ -46,6 +46,11 @@ defmodule Antigen.Coverage do
 
   def terms_of(%Challenge{kind: :delta_reduce, payload: %{term: t, expected: e}}), do: [t, e]
 
+  # opts-rejection probes carry no Core Term at all (a deliberately malformed
+  # `opts` keyword list, checked directly against a fixed dummy neutral) → no
+  # terms to well-form-check, mirroring :decode_probe/:check_mode above.
+  def terms_of(%Challenge{kind: :delta_reduce, label: :opts_reject}), do: []
+
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]
 
