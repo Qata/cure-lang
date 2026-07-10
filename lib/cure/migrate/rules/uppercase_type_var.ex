@@ -48,7 +48,7 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   @doc false
   @spec detect_and_rewrite(Rule.ast(), Rule.ctx()) :: Rule.result()
   def detect_and_rewrite(ast, ctx) do
-    {new_ast, lines} = walk(ast, ctx, [])
+    {new_ast, lines} = walk(ast, ctx, %{}, [])
 
     case lines do
       [] -> :no_change
@@ -57,33 +57,59 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   end
 
   # ── AST walk: rewrite every function signature, collect warning lines ──────
+  #
+  # `active` maps each in-scope type variable to its lowercased replacement,
+  # accumulated from enclosing signatures. A variable a signature renames must
+  # be renamed identically wherever it recurs in that function's body (a `let`
+  # type annotation, a body type application, …); threading `active` through the
+  # body walk keeps binder and reference in sync. Its keys are always uppercase
+  # type-variable names, so lowercase value bindings are never touched.
 
-  defp walk({:function_def, meta, body}, ctx, lines) do
-    {new_meta, renamed} = rewrite_signature(meta, ctx)
-    lines = if renamed != [], do: [Keyword.get(meta, :line) | lines], else: lines
-    {new_body, lines} = walk(body, ctx, lines)
+  defp walk({:function_def, meta, body}, ctx, active, lines) do
+    {new_meta, rename_map} = rewrite_signature(meta, ctx)
+    lines = if rename_map != %{}, do: [Keyword.get(meta, :line) | lines], else: lines
+    # A nested signature's own binders shadow an outer variable of the same name.
+    inner = Map.merge(active, rename_map)
+    {new_body, lines} = walk(body, ctx, inner, lines)
     {{:function_def, new_meta, new_body}, lines}
   end
 
-  defp walk({k, meta, ch}, ctx, lines) when is_list(ch) do
-    {new_ch, lines} = walk(ch, ctx, lines)
-    {{k, meta, new_ch}, lines}
+  defp walk({:variable, meta, name}, _ctx, active, lines) when is_binary(name) do
+    {{:variable, meta, Map.get(active, name, name)}, lines}
   end
 
-  defp walk({k, meta, name, inner}, ctx, lines) when is_binary(name) do
-    {new_inner, lines} = walk(inner, ctx, lines)
-    {{k, meta, name, new_inner}, lines}
+  defp walk({k, meta, ch}, ctx, active, lines) when is_list(ch) do
+    {new_ch, lines} = walk(ch, ctx, active, lines)
+    {{k, rename_meta(meta, active), new_ch}, lines}
   end
 
-  defp walk(l, ctx, lines) when is_list(l) do
-    Enum.map_reduce(l, lines, fn child, acc -> walk(child, ctx, acc) end)
+  defp walk({k, meta, name, inner}, ctx, active, lines) when is_binary(name) do
+    {new_inner, lines} = walk(inner, ctx, active, lines)
+    {{k, rename_meta(meta, active), name, new_inner}, lines}
   end
 
-  defp walk(other, _ctx, lines), do: {other, lines}
+  defp walk(l, ctx, active, lines) when is_list(l) do
+    Enum.map_reduce(l, lines, fn child, acc -> walk(child, ctx, active, acc) end)
+  end
+
+  defp walk(other, _ctx, _active, lines), do: {other, lines}
+
+  # Rename type-variable occurrences that a node carries in its META rather than
+  # its children — an assignment's `:type_annotation`, a param's `:type`, etc.
+  # `active`'s keys are uppercase type-variable names, so `rename_in_type` (which
+  # only touches variable nodes present in the map) never disturbs value data,
+  # constructor-name strings, or line/col numbers held in meta.
+  defp rename_meta(meta, active) when map_size(active) == 0, do: meta
+
+  defp rename_meta(meta, active) do
+    Enum.map(meta, fn {k, v} -> {k, rename_in_type(v, active)} end)
+  end
 
   # ── Signature rewrite ──────────────────────────────────────────────────────
 
-  # Returns {new_meta, renamed_names}. `renamed_names` is [] when nothing changed.
+  # Returns {new_meta, rename_map}. `rename_map` is %{} when nothing changed;
+  # otherwise it maps each renamed uppercase binder to its lowercased target so
+  # the caller can propagate the same rename into the function body.
   defp rewrite_signature(meta, ctx) do
     params = Keyword.get(meta, :params, [])
     return_type = Keyword.get(meta, :return_type)
@@ -99,7 +125,7 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     rename_map = build_rename_map(candidates, reserved)
 
     if rename_map == %{} do
-      {meta, []}
+      {meta, %{}}
     else
       new_params = Enum.map(params, &rename_param(&1, rename_map))
 
@@ -108,7 +134,7 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
         |> Keyword.put(:params, new_params)
         |> put_return_type(return_type, rename_map)
 
-      {meta, Map.keys(rename_map)}
+      {meta, rename_map}
     end
   end
 

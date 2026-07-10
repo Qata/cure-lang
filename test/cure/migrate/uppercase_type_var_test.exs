@@ -55,4 +55,25 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert out =~ "z: t1)"
     refute out =~ "T"
   end
+
+  test "a renamed type var is also renamed where it recurs in the body (let annotation)" do
+    # The binder `T` is bound by the signature and referenced again in a body
+    # `let y: T = x` type annotation. Renaming only the signature leaves the
+    # body annotation dangling on an unbound `T`; the rename must propagate.
+    {out, _} = migrate("mod M\nfn id(x: T) -> T =\n  let y: T = x\n  y\n", "f.cure")
+    assert out =~ "x: t"
+    assert out =~ "-> t"
+    assert out =~ "let y: t ="
+    refute out =~ "T"
+  end
+
+  test "a renamed type var is also renamed in a body type application" do
+    # `empty_of(T)` in the body passes the bound type var as a type argument;
+    # it must track the signature rename to `t`, not stay `T`.
+    {out, _} = migrate("mod M\nfn wrap(x: T) -> List(T) =\n  cons(x, empty_of(T))\n", "g.cure")
+    assert out =~ "x: t"
+    assert out =~ "List(t)"
+    assert out =~ "empty_of(t)"
+    refute out =~ "T"
+  end
 end
