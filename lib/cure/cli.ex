@@ -868,13 +868,19 @@ defmodule Cure.CLI do
             info("Updating #{length(deps)} dependency(ies) for #{project.name}...")
 
             Enum.each(deps, fn dep ->
-              # `resolve_git_dep/2` clones into `_build/deps/<name>` and
-              # compiles the dep's `lib/`. Today it always returns
-              # `:ok` (it raises on failure), so the bare assignment
-              # below is sufficient; if it ever grows an `{:error, _}`
-              # tag we will get a `MatchError` here and notice.
+              # `resolve_git_dep/2` clones into `_build/deps/<name>` and compiles
+              # the dep's `lib/`. It now returns `{:error, _}` for a dep whose own
+              # edition is unknown (dependency_edition_error) — report and abort
+              # like `cmd_deps` rather than crashing with a MatchError.
               if Map.get(dep, :git) do
-                :ok = Cure.Project.resolve_git_dep(dep, project.root)
+                case Cure.Project.resolve_git_dep(dep, project.root) do
+                  :ok ->
+                    :ok
+
+                  {:error, reason} ->
+                    error("Failed to update dependency #{Map.get(dep, :name, "?")}: #{inspect(reason)}")
+                    exit({:shutdown, 1})
+                end
               end
             end)
 

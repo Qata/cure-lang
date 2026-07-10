@@ -73,6 +73,33 @@ defmodule Cure.Project.DepEditionIsolationTest do
     assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
   end
 
+  # Iteration 8 (audit finding 2): the blank-git rejection must also catch a
+  # WHITESPACE-only git URL, mirroring the path clause. Only a LITERAL empty `git`
+  # was rejected; `git = "   "` satisfied the `is_binary` git clause, reached
+  # `System.cmd("git", ["clone", …, "   ", target])` whose result is discarded,
+  # cloned nothing, found zero files, and silently "resolved" to :ok.
+  test "a whitespace-only git URL is rejected, not silently resolved", %{root: root} do
+    project = %Cure.Project{
+      name: "app",
+      root: root,
+      dependencies: [%{name: "bad", path: nil, git: "   ", tag: nil, version: nil, constraint: nil}]
+    }
+
+    assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
+  end
+
+  # Iteration 8: guard that the literal-empty git URL stays rejected after the
+  # blank/whitespace clauses were merged into one trim-aware clause.
+  test "a literal-empty git URL is rejected", %{root: root} do
+    project = %Cure.Project{
+      name: "app",
+      root: root,
+      dependencies: [%{name: "bad", path: nil, git: "", tag: nil, version: nil, constraint: nil}]
+    }
+
+    assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
+  end
+
   # Iteration 7 (audit A3-F1): a dependency whose OWN Cure.toml declares an unknown
   # edition must FAIL LOUDLY, not silently. dep_project_dir now routes the dep's
   # manifest into resolve_edition, so a typo'd dep edition makes compile_file return

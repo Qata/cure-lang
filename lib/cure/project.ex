@@ -270,15 +270,17 @@ defmodule Cure.Project do
     end
   end
 
-  # A present-but-blank `git` is a malformed dependency. `parse_dep_line` always
-  # emits both keys, so a blank git leaves `path: nil` — guard it before the git
-  # clause so an empty URL never reaches System.cmd. (A blank/whitespace `path` is
-  # already rejected in the path clause above.)
-  defp resolve_one(%{git: "", name: name}, _root, _reuse_lock?),
-    do: {:error, {:invalid_dependency, name}}
-
-  defp resolve_one(%{git: url} = dep, root, _reuse_lock?) when is_binary(url) do
-    resolve_git_dep(dep, root)
+  # A blank OR whitespace-only `git` is a malformed dependency. `parse_dep_line`
+  # captures the quoted URL verbatim (no trim), so `git = "   "` reaches here as a
+  # binary; the literal `!= ""` guard alone let it slip into System.cmd, cloning
+  # nothing and silently "resolving" to :ok. Trim before deciding — mirroring the
+  # path clause above so both malformed-dep guards agree.
+  defp resolve_one(%{git: url, name: name} = dep, root, _reuse_lock?) when is_binary(url) do
+    if String.trim(url) == "" do
+      {:error, {:invalid_dependency, name}}
+    else
+      resolve_git_dep(dep, root)
+    end
   end
 
   defp resolve_one(%{name: name} = dep, root, reuse_lock?) do
