@@ -44,7 +44,116 @@ defmodule Cure.Compiler.Printer do
   @spec quoted_to_string(term(), keyword()) :: String.t()
   def quoted_to_string(ast, opts \\ []) do
     indent = Keyword.get(opts, :indent, @default_indent)
-    to_string(ast, 0, indent)
+    render(ast, 0, indent)
+  end
+
+  # -- Trivia-aware dispatch wrapper ------------------------------------------
+  #
+  # Every node is rendered through this single `render/3` clause, which
+  # delegates the actual syntax to the per-kind `to_string/3` clauses and then
+  # layers on any attached trivia (spec §5.2 / §5.4): `:leading` comment lines
+  # emitted (each at the node's own indent) before the node, `:trailing`
+  # comments appended on the node's own line, and `:trailer` lines emitted
+  # after the node at the node's indent. Every recursive child render also goes
+  # through `render/3`, so trivia is applied uniformly at every depth.
+  #
+  # CRITICAL: when a node carries NONE of `:leading` / `:trailing` /
+  # `:trailer`, this returns the per-kind `to_string/3` output byte-for-byte.
+  # An AST printed without `Trivia.attach/2` (e.g. the corpus fixpoint gate)
+  # has no trivia keys anywhere, so its output is identical to the pre-trivia
+  # Printer.
+  defp render(node, depth, indent) do
+    meta = trivia_meta(node)
+    leading = Keyword.get(meta, :leading)
+    trailing = Keyword.get(meta, :trailing)
+    trailer = Keyword.get(meta, :trailer)
+
+    if leading == nil and trailing == nil and trailer == nil do
+      to_string(node, depth, indent)
+    else
+      to_string(node, depth, indent)
+      |> prepend_leading(leading, depth, indent)
+      |> append_trailing(trailing)
+      |> append_trailer(trailer, depth, indent)
+    end
+  end
+
+  defp trivia_meta({_k, meta, _}) when is_list(meta), do: meta
+  defp trivia_meta({_k, meta, _, _}) when is_list(meta), do: meta
+  defp trivia_meta(_), do: []
+
+  # `:leading` items become full lines emitted before the node. The first line
+  # takes the pad supplied by the parent join site; every subsequent line (and
+  # the node itself) is re-padded here. Blank lines are emitted empty.
+  defp prepend_leading(rendered, nil, _depth, _indent), do: rendered
+
+  defp prepend_leading(rendered, items, depth, indent) do
+    pad = String.duplicate(indent, depth)
+
+    case Enum.flat_map(items, &trivia_lines/1) do
+      [] ->
+        rendered
+
+      [first | rest] ->
+        rest_str = Enum.map_join(rest, "", fn l -> "\n" <> pad_or_empty(l, pad) end)
+        first <> rest_str <> "\n" <> pad <> rendered
+    end
+  end
+
+  # `:trailing` comments sit on the node's own final line.
+  defp append_trailing(rendered, nil), do: rendered
+
+  defp append_trailing(rendered, items) do
+    Enum.reduce(items, rendered, fn item, acc -> acc <> "  " <> comment_text(item) end)
+  end
+
+  # `:trailer` items become full lines after the node, at the node's indent.
+  defp append_trailer(rendered, nil, _depth, _indent), do: rendered
+
+  defp append_trailer(rendered, items, depth, indent) do
+    pad = String.duplicate(indent, depth)
+
+    items
+    |> Enum.flat_map(&trivia_lines/1)
+    |> Enum.reduce(rendered, fn l, acc -> acc <> "\n" <> pad_or_empty(l, pad) end)
+  end
+
+  # Physical lines for a trivia item. Blank runs emit NOTHING: the Trivia
+  # classifier attaches a blank to the innermost/deepest container that ends
+  # before it (spec §5.2), which is routinely a node buried inside an
+  # expression (a call in a cons cell, an operand in a `%[...]` tuple, …).
+  # Cure has no way to write a blank line there -- a collection literal cannot
+  # span a newline without failing to reparse -- so a blank is dropped rather
+  # than emitted into a position that cannot hold it. Comments are never
+  # dropped; they attach to statement-level nodes where a full line is legal.
+  defp trivia_lines({:blank, _count, _}), do: []
+  defp trivia_lines({:comment, text, _, _}), do: ["# " <> text]
+
+  defp trivia_lines({:doc_comment, text, _, _}) do
+    text |> String.split("\n") |> Enum.map(&("## " <> &1))
+  end
+
+  defp comment_text({:comment, text, _, _}), do: "# " <> text
+  defp comment_text({:doc_comment, text, _, _}), do: "## " <> text
+
+  defp pad_or_empty("", _pad), do: ""
+  defp pad_or_empty(line, pad), do: pad <> line
+
+  # A comma-separated expression span (map/record pairs, list/tuple elements,
+  # call args). Cure has NO multi-line collection literals -- a `[`, `(`, `%{`
+  # spanning a newline fails to reparse (the layout lexer emits a DEDENT the
+  # bracket parser rejects) -- so a span is always emitted on one line, exactly
+  # as before trivia support. Each element is rendered with the per-kind
+  # `to_string/3` directly rather than the trivia-aware `render/3`, so an
+  # element's OWN attached trivia is skipped (there is no single-line position
+  # for a comment or blank there). The element's inner subtree still recurses
+  # through `render/3`, so e.g. statement comments inside a lambda body are
+  # kept. In the std corpus the only trivia that lands on a span element is a
+  # blank run (never a comment), so nothing a lossless reprint must keep is
+  # lost. Trivia attached to the span CONTAINER node itself flows normally
+  # through `render/3` at the enclosing statement level.
+  defp render_span(children, sep, depth, indent) do
+    Enum.map_join(children, sep <> " ", &to_string(&1, depth, indent))
   end
 
   # -- Literals --------------------------------------------------------------
@@ -72,7 +181,7 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:block, _meta, exprs}, depth, indent) do
     exprs
-    |> Enum.map(&to_string(&1, depth, indent))
+    |> Enum.map(&render(&1, depth, indent))
     |> Enum.join("\n" <> String.duplicate(indent, depth))
   end
 
@@ -81,7 +190,7 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:binary_op, meta, [left, right]}, depth, indent) do
     op = Keyword.get(meta, :operator)
     op_str = operator_to_string(op)
-    "#{to_string(left, depth, indent)} #{op_str} #{to_string(right, depth, indent)}"
+    "#{render(left, depth, indent)} #{op_str} #{render(right, depth, indent)}"
   end
 
   # -- Unary Operators -------------------------------------------------------
@@ -90,9 +199,9 @@ defmodule Cure.Compiler.Printer do
     op = Keyword.get(meta, :operator)
 
     case op do
-      :not -> "not #{to_string(operand, depth, indent)}"
-      :- -> "-#{to_string(operand, depth, indent)}"
-      _ -> "#{op}#{to_string(operand, depth, indent)}"
+      :not -> "not #{render(operand, depth, indent)}"
+      :- -> "-#{render(operand, depth, indent)}"
+      _ -> "#{op}#{render(operand, depth, indent)}"
     end
   end
 
@@ -102,10 +211,10 @@ defmodule Cure.Compiler.Printer do
     type_ann =
       case Keyword.get(meta, :type_annotation) do
         nil -> ""
-        type_ast -> ": #{to_string(type_ast, depth, indent)}"
+        type_ast -> ": #{render(type_ast, depth, indent)}"
       end
 
-    lhs = to_string(pattern, depth, indent)
+    lhs = render(pattern, depth, indent)
     rhs = rhs_to_string(value, depth, indent)
 
     if Keyword.get(meta, :let) do
@@ -128,28 +237,28 @@ defmodule Cure.Compiler.Printer do
         :/ -> "/="
       end
 
-    "#{to_string(lhs, depth, indent)} #{op_str} #{to_string(rhs, depth, indent)}"
+    "#{render(lhs, depth, indent)} #{op_str} #{render(rhs, depth, indent)}"
   end
 
   # -- Conditional -----------------------------------------------------------
 
   defp to_string({:conditional, _meta, [condition, then_br, else_br]}, depth, indent) do
-    cond_str = to_string(condition, depth, indent)
+    cond_str = render(condition, depth, indent)
 
     case {then_br, else_br} do
       {_, {:literal, [subtype: :null], nil}} ->
         # No else branch
-        "if #{cond_str} then #{to_string(then_br, depth, indent)}"
+        "if #{cond_str} then #{render(then_br, depth, indent)}"
 
       {_, {:conditional, _, _}} ->
         # elif chain
-        then_str = to_string(then_br, depth, indent)
+        then_str = render(then_br, depth, indent)
         elif_str = conditional_to_elif(else_br, depth, indent)
         "if #{cond_str} then #{then_str} #{elif_str}"
 
       _ ->
-        then_str = to_string(then_br, depth, indent)
-        else_str = to_string(else_br, depth, indent)
+        then_str = render(then_br, depth, indent)
+        else_str = render(else_br, depth, indent)
         "if #{cond_str} then #{then_str} else #{else_str}"
     end
   end
@@ -172,7 +281,7 @@ defmodule Cure.Compiler.Printer do
         # An empty `match` is malformed (E-MATCH-EMPTY), but the
         # printer must still produce some surface text so type-checker
         # diagnostics can attach to the keyword.
-        "match #{to_string(scrutinee, depth, indent)}"
+        "match #{render(scrutinee, depth, indent)}"
 
       true ->
         # MATCH §9.6 also describes a single-arm-irrefutable -> `let`
@@ -204,7 +313,7 @@ defmodule Cure.Compiler.Printer do
       [{:pickup_else, _, [body]}] ->
         # PICKUP §8.6: degenerate `pickup` -- single terminator only --
         # collapses to the body.
-        to_string(body, depth, indent)
+        render(body, depth, indent)
 
       [] ->
         # The parser rejects this with E-PICKUP-NO-ELSE; for
@@ -227,11 +336,11 @@ defmodule Cure.Compiler.Printer do
   # safe fallback so trees produced by macro expansion or partial
   # quoting still print legibly.
   defp to_string({:pickup_clause, _meta, [guard, body]}, depth, indent) do
-    "#{to_string(guard, depth, indent)} -> #{to_string(body, depth, indent)}"
+    "#{render(guard, depth, indent)} -> #{render(body, depth, indent)}"
   end
 
   defp to_string({:pickup_else, _meta, [body]}, depth, indent) do
-    "else -> #{to_string(body, depth, indent)}"
+    "else -> #{render(body, depth, indent)}"
   end
 
   # -- Function Call ---------------------------------------------------------
@@ -249,7 +358,7 @@ defmodule Cure.Compiler.Printer do
       name == "send" and not Keyword.has_key?(meta, :pipe) ->
         case args do
           [target, message] ->
-            "send #{to_string(target, depth, indent)}, #{to_string(message, depth, indent)}"
+            "send #{render(target, depth, indent)}, #{render(message, depth, indent)}"
 
           _ ->
             "#{name}(#{args_to_string(args, depth, indent)})"
@@ -263,10 +372,10 @@ defmodule Cure.Compiler.Printer do
       Keyword.get(meta, :pipe) == true ->
         case args do
           [piped | rest] when rest != [] ->
-            "#{to_string(piped, depth, indent)} |> #{name}(#{args_to_string(rest, depth, indent)})"
+            "#{render(piped, depth, indent)} |> #{name}(#{args_to_string(rest, depth, indent)})"
 
           [piped] ->
-            "#{to_string(piped, depth, indent)} |> #{name}"
+            "#{render(piped, depth, indent)} |> #{name}"
 
           [] ->
             name
@@ -281,7 +390,7 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:record_update, meta, [base | fields]}, depth, indent) do
     name = Keyword.get(meta, :name)
-    base_str = to_string(base, depth, indent)
+    base_str = render(base, depth, indent)
     fields_str = pairs_to_string(fields, depth, indent)
     "#{name}{#{base_str} | #{fields_str}}"
   end
@@ -290,14 +399,14 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:attribute_access, meta, [parent]}, depth, indent) do
     attr = Keyword.get(meta, :attribute)
-    "#{to_string(parent, depth, indent)}.#{attr}"
+    "#{render(parent, depth, indent)}.#{attr}"
   end
 
   # -- Range -----------------------------------------------------------------
 
   defp to_string({:range, meta, [left, right]}, depth, indent) do
     op = if Keyword.get(meta, :inclusive), do: "..=", else: ".."
-    "#{to_string(left, depth, indent)}#{op}#{to_string(right, depth, indent)}"
+    "#{render(left, depth, indent)}#{op}#{render(right, depth, indent)}"
   end
 
   # -- Collections -----------------------------------------------------------
@@ -306,7 +415,7 @@ defmodule Cure.Compiler.Printer do
     if Keyword.get(meta, :cons) do
       case elements do
         [head, tail] ->
-          "[#{to_string(head, depth, indent)} | #{to_string(tail, depth, indent)}]"
+          "[#{render(head, depth, indent)} | #{render(tail, depth, indent)}]"
 
         _ ->
           "[#{args_to_string(elements, depth, indent)}]"
@@ -340,7 +449,7 @@ defmodule Cure.Compiler.Printer do
   # -- Comprehension ---------------------------------------------------------
 
   defp to_string({:comprehension, _meta, [body | generators_and_filters]}, depth, indent) do
-    body_str = to_string(body, depth, indent)
+    body_str = render(body, depth, indent)
     clauses = Enum.map(generators_and_filters, &gen_or_filter_to_string(&1, depth, indent))
     "[#{body_str} for #{Enum.join(clauses, ", ")}]"
   end
@@ -360,7 +469,7 @@ defmodule Cure.Compiler.Printer do
       Enum.map_join(parts, fn
         {:literal, [subtype: :string], s} -> escape_string(s)
         {:literal, _, s} when is_binary(s) -> escape_string(s)
-        expr -> "\#{#{to_string(expr, depth, indent)}}"
+        expr -> "\#{#{render(expr, depth, indent)}}"
       end)
 
     ~s("#{inner}")
@@ -419,7 +528,7 @@ defmodule Cure.Compiler.Printer do
   # -- Early Return / Throw / Yield / Spawn ---------------------------------
 
   defp to_string({:early_return, _meta, [expr]}, depth, indent) do
-    "return #{to_string(expr, depth, indent)}"
+    "return #{render(expr, depth, indent)}"
   end
 
   # Melquiades send node. The author's chosen surface form is carried on
@@ -431,8 +540,8 @@ defmodule Cure.Compiler.Printer do
   #
   # Any other value falls back to the ASCII operator form.
   defp to_string({:send, meta, [target, message]}, depth, indent) do
-    target_str = to_string(target, depth, indent)
-    message_str = to_string(message, depth, indent)
+    target_str = render(target, depth, indent)
+    message_str = render(message, depth, indent)
 
     case Keyword.get(meta, :melquiades_form, :ascii) do
       :unicode -> "#{target_str} ✉ #{message_str}"
@@ -442,11 +551,11 @@ defmodule Cure.Compiler.Printer do
   end
 
   defp to_string({:throw, _meta, [expr]}, depth, indent) do
-    "throw #{to_string(expr, depth, indent)}"
+    "throw #{render(expr, depth, indent)}"
   end
 
   defp to_string({:yield, _meta, [expr]}, depth, indent) do
-    "yield #{to_string(expr, depth, indent)}"
+    "yield #{render(expr, depth, indent)}"
   end
 
   defp to_string({:async_operation, meta, children}, depth, indent) do
@@ -482,7 +591,7 @@ defmodule Cure.Compiler.Printer do
 
     case children do
       [try_body | rest] ->
-        try_str = "try\n#{pad}#{to_string(try_body, depth + 1, indent)}"
+        try_str = "try\n#{pad}#{render(try_body, depth + 1, indent)}"
 
         {catch_arms, rest} =
           Enum.split_while(rest, fn
@@ -505,7 +614,7 @@ defmodule Cure.Compiler.Printer do
         finally_str =
           case rest do
             [finally_body] ->
-              "\nfinally\n#{pad}#{to_string(finally_body, depth + 1, indent)}"
+              "\nfinally\n#{pad}#{render(finally_body, depth + 1, indent)}"
 
             _ ->
               ""
@@ -544,7 +653,7 @@ defmodule Cure.Compiler.Printer do
   # the specifier chain is emitted as `::type-signedness-endianness-size-unit`.
 
   defp to_string({:bin_segment, meta, [value]}, depth, indent) do
-    value_str = to_string(value, depth, indent)
+    value_str = render(value, depth, indent)
     spec_str = bin_segment_specifier_string(meta, depth, indent)
 
     if spec_str == "" do
@@ -560,7 +669,7 @@ defmodule Cure.Compiler.Printer do
   # rebinding it.
 
   defp to_string({:pin, _meta, [inner]}, depth, indent) do
-    "^" <> to_string(inner, depth, indent)
+    "^" <> render(inner, depth, indent)
   end
 
   # -- As-pattern (`name @ inner`) -------------------------------------------
@@ -569,7 +678,7 @@ defmodule Cure.Compiler.Printer do
   # The name is a bare string; the inner is the destructuring pattern.
 
   defp to_string({:as_pattern, _meta, [name, inner]}, depth, indent) when is_binary(name) do
-    name <> " @ " <> to_string(inner, depth, indent)
+    name <> " @ " <> render(inner, depth, indent)
   end
 
   # -- Forced (dot) pattern (`.x` / `.(compound)`) ---------------------------
@@ -579,7 +688,7 @@ defmodule Cure.Compiler.Printer do
   # variable/literal prints as `.x`; anything compound prints as `.(...)`.
 
   defp to_string({:forced_pattern, _meta, inner}, depth, indent) do
-    inner_str = to_string(inner, depth, indent)
+    inner_str = render(inner, depth, indent)
 
     case inner do
       {:variable, _, _} -> "." <> inner_str
@@ -595,7 +704,7 @@ defmodule Cure.Compiler.Printer do
   # standard `{tag, meta, children}` shape.
 
   defp to_string({:named_implicit_pat, _meta, name, inner}, depth, indent) do
-    "{ " <> name <> " = " <> to_string(inner, depth, indent) <> " }"
+    "{ " <> name <> " = " <> render(inner, depth, indent) <> " }"
   end
 
   # -- Hole (`?name` / `??`) -------------------------------------------------
@@ -613,7 +722,7 @@ defmodule Cure.Compiler.Printer do
   # -- assert_type (`assert_type expr : Type`) -------------------------------
 
   defp to_string({:assert_type, _meta, [expr, type_ast]}, depth, indent) do
-    "assert_type " <> to_string(expr, depth, indent) <> " : " <> to_string(type_ast, depth, indent)
+    "assert_type " <> render(expr, depth, indent) <> " : " <> render(type_ast, depth, indent)
   end
 
   # -- Dependent function type (Π) -------------------------------------------
@@ -630,11 +739,11 @@ defmodule Cure.Compiler.Printer do
       binders
       |> Enum.zip(doms)
       |> Enum.map(fn
-        {nil, d} -> to_string(d, depth, indent)
-        {name, d} -> "#{name}: #{to_string(d, depth, indent)}"
+        {nil, d} -> render(d, depth, indent)
+        {name, d} -> "#{name}: #{render(d, depth, indent)}"
       end)
 
-    "(" <> Enum.join(dom_strs, ", ") <> ") -> " <> to_string(ret, depth, indent)
+    "(" <> Enum.join(dom_strs, ", ") <> ") -> " <> render(ret, depth, indent)
   end
 
   # -- Dependent pair type (Σ) -----------------------------------------------
@@ -647,8 +756,8 @@ defmodule Cure.Compiler.Printer do
     "Sigma(" <>
       binder <>
       ": " <>
-      to_string(dom_type, depth, indent) <>
-      ", " <> to_string(body_type, depth, indent) <> ")"
+      render(dom_type, depth, indent) <>
+      ", " <> render(body_type, depth, indent) <> ")"
   end
 
   # -- GADT constructor signature --------------------------------------------
@@ -664,8 +773,8 @@ defmodule Cure.Compiler.Printer do
 
     chain =
       Enum.map_join(elems, " -> ", fn
-        {:named_dom, dname, inner} -> "(#{dname}: #{to_string(inner, depth, indent)})"
-        other -> to_string(other, depth, indent)
+        {:named_dom, dname, inner} -> "(#{dname}: #{render(inner, depth, indent)})"
+        other -> render(other, depth, indent)
       end)
 
     "#{name} : #{chain}"
@@ -690,7 +799,7 @@ defmodule Cure.Compiler.Printer do
 
     ctors_str =
       ctors
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{body_pad}")
 
     type_block = "#{header}\n#{body_pad}#{ctors_str}"
@@ -719,7 +828,7 @@ defmodule Cure.Compiler.Printer do
 
     body_str =
       body
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     "interface #{name}#{params_str}\n#{pad}#{body_str}"
@@ -740,7 +849,7 @@ defmodule Cure.Compiler.Printer do
 
     where_str =
       if constraints != [] do
-        " where " <> Enum.map_join(constraints, ", ", &to_string(&1, depth, indent))
+        " where " <> Enum.map_join(constraints, ", ", &render(&1, depth, indent))
       else
         ""
       end
@@ -749,11 +858,11 @@ defmodule Cure.Compiler.Printer do
 
     body_str =
       body
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     head =
-      "implementation #{iface} for #{to_string(for_type, depth, indent)}#{as_str}#{where_str}"
+      "implementation #{iface} for #{render(for_type, depth, indent)}#{as_str}#{where_str}"
 
     "#{head}\n#{pad}#{body_str}"
   end
@@ -768,7 +877,7 @@ defmodule Cure.Compiler.Printer do
     proof_str = if proof, do: " proof #{proof}", else: ""
 
     case arms do
-      [] -> "with " <> to_string(scrutinee, depth, indent) <> proof_str
+      [] -> "with " <> render(scrutinee, depth, indent) <> proof_str
       _ -> render_scrutinee_block("with ", scrutinee, proof_str, arms, depth, indent)
     end
   end
@@ -791,7 +900,7 @@ defmodule Cure.Compiler.Printer do
         ""
       else
         inner =
-          Enum.map_join(opts, ", ", fn {k, v} -> "#{k}: #{to_string(v, depth, indent)}" end)
+          Enum.map_join(opts, ", ", fn {k, v} -> "#{k}: #{render(v, depth, indent)}" end)
 
         " (#{inner})"
       end
@@ -808,19 +917,19 @@ defmodule Cure.Compiler.Printer do
     pat_inner =
       case pattern do
         {:literal, _, segs} when is_list(segs) ->
-          Enum.map_join(segs, ", ", &to_string(&1, depth, indent))
+          Enum.map_join(segs, ", ", &render(&1, depth, indent))
 
         _ ->
-          to_string(pattern, depth, indent)
+          render(pattern, depth, indent)
       end
 
-    "<<" <> pat_inner <> " <- " <> to_string(source, depth, indent) <> ">>"
+    "<<" <> pat_inner <> " <- " <> render(source, depth, indent) <> ">>"
   end
 
   # -- Propositional-equality rewrite (`rewrite proof in body`) --------------
 
   defp to_string({:rewrite_expr, _meta, [proof, body]}, depth, indent) do
-    "rewrite " <> to_string(proof, depth, indent) <> " in " <> to_string(body, depth, indent)
+    "rewrite " <> render(proof, depth, indent) <> " in " <> render(body, depth, indent)
   end
 
   # -- Fallback --------------------------------------------------------------
@@ -840,20 +949,20 @@ defmodule Cure.Compiler.Printer do
   defp lambda_body_to_string({:block, meta, exprs} = block, depth, indent) do
     case Keyword.get(meta, :block_shape) do
       :brace ->
-        body = Enum.map_join(exprs, "; ", &to_string(&1, depth, indent))
+        body = Enum.map_join(exprs, "; ", &render(&1, depth, indent))
         "{ #{body} }"
 
       :end ->
-        body = Enum.map_join(exprs, "; ", &to_string(&1, depth, indent))
+        body = Enum.map_join(exprs, "; ", &render(&1, depth, indent))
         "#{body}; end"
 
       _ ->
-        to_string(block, depth, indent)
+        render(block, depth, indent)
     end
   end
 
   defp lambda_body_to_string(other, depth, indent) do
-    to_string(other, depth, indent)
+    render(other, depth, indent)
   end
 
   defp operator_to_string(:+), do: "+"
@@ -878,51 +987,51 @@ defmodule Cure.Compiler.Printer do
   defp operator_to_string(other), do: Atom.to_string(other)
 
   defp args_to_string(args, depth, indent) do
-    Enum.map_join(args, ", ", &to_string(&1, depth, indent))
+    render_span(args, ",", depth, indent)
   end
 
   defp pairs_to_string(pairs, depth, indent) do
-    Enum.map_join(pairs, ", ", &to_string(&1, depth, indent))
+    render_span(pairs, ",", depth, indent)
   end
 
   defp pair_to_string(key, value, depth, indent) do
     case key do
       {:literal, [subtype: :symbol], atom_val} when is_atom(atom_val) ->
-        "#{atom_val}: #{to_string(value, depth, indent)}"
+        "#{atom_val}: #{render(value, depth, indent)}"
 
       _ ->
-        "#{to_string(key, depth, indent)} => #{to_string(value, depth, indent)}"
+        "#{render(key, depth, indent)} => #{render(value, depth, indent)}"
     end
   end
 
   defp match_arm_to_string({:match_arm, meta, [body]}, depth, indent) do
     pattern = Keyword.get(meta, :pattern)
     guard = Keyword.get(meta, :guard)
-    pat_str = to_string(pattern, depth, indent)
+    pat_str = render(pattern, depth, indent)
     body_str = arm_body_to_string(meta, body, depth, indent)
 
     if guard do
-      "#{pat_str} when #{to_string(guard, depth, indent)} -> #{body_str}"
+      "#{pat_str} when #{render(guard, depth, indent)} -> #{body_str}"
     else
       "#{pat_str} -> #{body_str}"
     end
   end
 
   defp gen_or_filter_to_string({:generator, _meta, [pattern, collection]}, depth, indent) do
-    "#{to_string(pattern, depth, indent)} <- #{to_string(collection, depth, indent)}"
+    "#{render(pattern, depth, indent)} <- #{render(collection, depth, indent)}"
   end
 
   defp gen_or_filter_to_string({:filter, _meta, [expr]}, depth, indent) do
-    to_string(expr, depth, indent)
+    render(expr, depth, indent)
   end
 
   defp gen_or_filter_to_string({:binary_generator, _meta, _} = node, depth, indent) do
-    to_string(node, depth, indent)
+    render(node, depth, indent)
   end
 
   defp conditional_to_elif({:conditional, _meta, [cond_ast, then_br, else_br]}, depth, indent) do
-    cond_str = to_string(cond_ast, depth, indent)
-    then_str = to_string(then_br, depth, indent)
+    cond_str = render(cond_ast, depth, indent)
+    then_str = render(then_br, depth, indent)
 
     case else_br do
       {:literal, [subtype: :null], nil} ->
@@ -932,7 +1041,7 @@ defmodule Cure.Compiler.Printer do
         "elif #{cond_str} then #{then_str} #{conditional_to_elif(else_br, depth, indent)}"
 
       _ ->
-        "elif #{cond_str} then #{then_str} else #{to_string(else_br, depth, indent)}"
+        "elif #{cond_str} then #{then_str} else #{render(else_br, depth, indent)}"
     end
   end
 
@@ -941,13 +1050,13 @@ defmodule Cure.Compiler.Printer do
 
     inner =
       exprs
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     "\n#{pad}#{inner}"
   end
 
-  defp rhs_to_string(ast, depth, indent), do: to_string(ast, depth, indent)
+  defp rhs_to_string(ast, depth, indent), do: render(ast, depth, indent)
 
   # -- Function Definition ---------------------------------------------------
 
@@ -964,14 +1073,14 @@ defmodule Cure.Compiler.Printer do
 
     prefix = if visibility == :private, do: "local fn", else: "fn"
     params_str = typed_params_to_string(params, depth, indent)
-    ret_str = if return_type, do: " -> #{to_string(return_type, depth, indent)}", else: ""
+    ret_str = if return_type, do: " -> #{render(return_type, depth, indent)}", else: ""
 
     guard_str =
-      if guard, do: " when #{to_string(guard, depth, indent)}", else: ""
+      if guard, do: " when #{render(guard, depth, indent)}", else: ""
 
     constraints_str =
       if constraints != [] do
-        cs = Enum.map_join(constraints, ", ", &to_string(&1, depth, indent))
+        cs = Enum.map_join(constraints, ", ", &render(&1, depth, indent))
         " where #{cs}"
       else
         ""
@@ -1082,16 +1191,16 @@ defmodule Cure.Compiler.Printer do
           _ -> ""
         end
 
-      type_str = if type_ast, do: ": #{to_string(type_ast, depth, indent)}", else: ""
-      default_str = if default, do: " = #{to_string(default, depth, indent)}", else: ""
+      type_str = if type_ast, do: ": #{render(type_ast, depth, indent)}", else: ""
+      default_str = if default, do: " = #{render(default, depth, indent)}", else: ""
       "#{prefix}#{name}#{type_str}#{default_str}"
     end)
   end
 
   defp fn_clause_to_string(%{params: params, guard: guard, body: [body_ast]}, depth, indent) do
-    params_str = Enum.map_join(params, ", ", &to_string(&1, depth, indent))
-    guard_str = if guard, do: " when #{to_string(guard, depth, indent)}", else: ""
-    body_str = to_string(body_ast, depth, indent)
+    params_str = Enum.map_join(params, ", ", &render(&1, depth, indent))
+    guard_str = if guard, do: " when #{render(guard, depth, indent)}", else: ""
+    body_str = render(body_ast, depth, indent)
     "| #{params_str}#{guard_str} -> #{body_str}"
   end
 
@@ -1127,7 +1236,7 @@ defmodule Cure.Compiler.Printer do
     settings =
       for key <- [:strategy, :intensity, :period],
           (val = Keyword.get(meta, key)) != nil do
-        "#{key} = #{to_string(val, depth + 1, indent)}"
+        "#{key} = #{render(val, depth + 1, indent)}"
       end
 
     children_block =
@@ -1138,7 +1247,7 @@ defmodule Cure.Compiler.Printer do
         specs ->
           specs_str =
             specs
-            |> Enum.map(&to_string(&1, depth + 2, indent))
+            |> Enum.map(&render(&1, depth + 2, indent))
             |> Enum.join("\n#{child_pad}")
 
           ["children\n#{child_pad}#{specs_str}"]
@@ -1161,7 +1270,7 @@ defmodule Cure.Compiler.Printer do
     init = Keyword.get(meta, :init)
     pad = String.duplicate(indent, depth + 1)
 
-    init_str = if init, do: " with #{to_string(init, depth, indent)}", else: ""
+    init_str = if init, do: " with #{render(init, depth, indent)}", else: ""
 
     callbacks =
       callback_blocks_to_string(meta, [:on_start, :on_message, :on_stop], depth, indent)
@@ -1179,7 +1288,7 @@ defmodule Cure.Compiler.Printer do
     settings =
       for key <- [:vsn, :description, :root, :applications, :included_applications, :env, :registered],
           (val = Keyword.get(meta, key)) != nil do
-        "#{key} = #{to_string(val, depth + 1, indent)}"
+        "#{key} = #{render(val, depth + 1, indent)}"
       end
 
     callback_lines =
@@ -1221,7 +1330,7 @@ defmodule Cure.Compiler.Printer do
 
     body_str =
       body
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     case body do
@@ -1266,9 +1375,9 @@ defmodule Cure.Compiler.Printer do
 
     head =
       if guard do
-        to_string(pattern, depth, indent) <> " when " <> to_string(guard, depth, indent)
+        render(pattern, depth, indent) <> " when " <> render(guard, depth, indent)
       else
-        to_string(pattern, depth, indent)
+        render(pattern, depth, indent)
       end
 
     case body do
@@ -1277,13 +1386,13 @@ defmodule Cure.Compiler.Printer do
 
         body_str =
           exprs
-          |> Enum.map(&to_string(&1, depth + 1, indent))
+          |> Enum.map(&render(&1, depth + 1, indent))
           |> Enum.join("\n#{inner_pad}")
 
         head <> " ->\n#{inner_pad}#{body_str}"
 
       _ ->
-        head <> " -> " <> to_string(body, depth, indent)
+        head <> " -> " <> render(body, depth, indent)
     end
   end
 
@@ -1293,7 +1402,7 @@ defmodule Cure.Compiler.Printer do
 
     body_str =
       body
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     "mod #{name}\n#{pad}#{body_str}"
@@ -1315,7 +1424,7 @@ defmodule Cure.Compiler.Printer do
       fields
       |> Enum.map(fn {:param, field_meta, field_name} ->
         type_ast = Keyword.get(field_meta, :type)
-        "#{field_name}: #{to_string(type_ast, depth + 1, indent)}"
+        "#{field_name}: #{render(type_ast, depth + 1, indent)}"
       end)
       |> Enum.join("\n#{pad}")
 
@@ -1353,7 +1462,7 @@ defmodule Cure.Compiler.Printer do
     params = Keyword.get(meta, :params, [])
 
     if params != [] do
-      params_str = Enum.map_join(params, ", ", &to_string(&1, depth, indent))
+      params_str = Enum.map_join(params, ", ", &render(&1, depth, indent))
       "#{name}(#{params_str})"
     else
       name
@@ -1361,7 +1470,7 @@ defmodule Cure.Compiler.Printer do
   end
 
   defp variant_to_string({:variable, _meta, name}, _depth, _indent), do: name
-  defp variant_to_string(other, depth, indent), do: to_string(other, depth, indent)
+  defp variant_to_string(other, depth, indent), do: render(other, depth, indent)
 
   defp protocol_to_string(meta, body, depth, indent) do
     name = Keyword.get(meta, :name)
@@ -1377,7 +1486,7 @@ defmodule Cure.Compiler.Printer do
 
     body_str =
       body
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     "proto #{name}#{tp_str}\n#{pad}#{body_str}"
@@ -1391,7 +1500,7 @@ defmodule Cure.Compiler.Printer do
 
     constraints_str =
       if constraints != [] do
-        cs = Enum.map_join(constraints, ", ", &to_string(&1, depth, indent))
+        cs = Enum.map_join(constraints, ", ", &render(&1, depth, indent))
         " where #{cs}"
       else
         ""
@@ -1399,7 +1508,7 @@ defmodule Cure.Compiler.Printer do
 
     body_str =
       body
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     "impl #{protocol} for #{for_type}#{constraints_str}\n#{pad}#{body_str}"
@@ -1413,14 +1522,14 @@ defmodule Cure.Compiler.Printer do
 
     payload_str =
       if payload do
-        " with #{to_string(payload, depth, indent)}"
+        " with #{render(payload, depth, indent)}"
       else
         ""
       end
 
     transitions_str =
       body
-      |> Enum.map(&to_string(&1, depth + 1, indent))
+      |> Enum.map(&render(&1, depth + 1, indent))
       |> Enum.join("\n#{pad}")
 
     # Annotations
@@ -1435,7 +1544,7 @@ defmodule Cure.Compiler.Printer do
           clauses when is_list(clauses) and clauses != [] ->
             clauses_str =
               clauses
-              |> Enum.map(&to_string(&1, depth + 2, indent))
+              |> Enum.map(&render(&1, depth + 2, indent))
               |> Enum.join("\n#{String.duplicate(indent, depth + 2)}")
 
             ["\n#{pad}#{cb_name}\n#{String.duplicate(indent, depth + 2)}#{clauses_str}"]
@@ -1479,7 +1588,7 @@ defmodule Cure.Compiler.Printer do
 
     case children do
       [type_expr] ->
-        "type #{name}#{tp_str} = #{to_string(type_expr, depth, indent)}"
+        "type #{name}#{tp_str} = #{render(type_expr, depth, indent)}"
 
       _ ->
         "type #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
@@ -1526,12 +1635,12 @@ defmodule Cure.Compiler.Printer do
 
   defp bytes_to_string(_meta, [{:bin_segment, _, _} | _] = segments) do
     # v0.20.0: bytes literal carries a list of `{:bin_segment, ...}` children.
-    inner = Enum.map_join(segments, ", ", &to_string(&1, 0, @default_indent))
+    inner = Enum.map_join(segments, ", ", &render(&1, 0, @default_indent))
     "<<#{inner}>>"
   end
 
   defp bytes_to_string(_meta, elements) when is_list(elements) do
-    inner = Enum.map_join(elements, ", ", &to_string(&1, 0, @default_indent))
+    inner = Enum.map_join(elements, ", ", &render(&1, 0, @default_indent))
     "<<#{inner}>>"
   end
 
@@ -1550,7 +1659,7 @@ defmodule Cure.Compiler.Printer do
       case Keyword.get(meta, :size) do
         nil -> parts
         {:literal, _, n} when is_integer(n) -> parts ++ [Integer.to_string(n)]
-        ast -> parts ++ ["size(" <> to_string(ast, depth, indent) <> ")"]
+        ast -> parts ++ ["size(" <> render(ast, depth, indent) <> ")"]
       end
 
     parts =
@@ -1593,7 +1702,7 @@ defmodule Cure.Compiler.Printer do
   defp render_scrutinee_block(keyword, scrutinee, suffix, arms, depth, indent) do
     pad_kw = String.duplicate(indent, depth)
     pad = pad_kw <> indent
-    scrut_str = to_string(scrutinee, depth, indent)
+    scrut_str = render(scrutinee, depth, indent)
 
     heads = Enum.map(arms, &match_arm_head(&1, depth + 1, indent))
     rhs_inline = Enum.map(arms, &match_arm_rhs_inline(&1, depth + 1, indent))
@@ -1636,10 +1745,10 @@ defmodule Cure.Compiler.Printer do
   defp match_arm_head({:match_arm, meta, [_body]}, depth, indent) do
     pattern = Keyword.get(meta, :pattern)
     guard = Keyword.get(meta, :guard)
-    pat_str = to_string(pattern, depth, indent)
+    pat_str = render(pattern, depth, indent)
 
     if guard do
-      pat_str <> " when " <> to_string(guard, depth, indent)
+      pat_str <> " when " <> render(guard, depth, indent)
     else
       pat_str
     end
@@ -1666,7 +1775,7 @@ defmodule Cure.Compiler.Printer do
     if Keyword.get(meta, :impossible) do
       "impossible"
     else
-      to_string(body, depth, indent)
+      render(body, depth, indent)
     end
   end
 
@@ -1719,15 +1828,15 @@ defmodule Cure.Compiler.Printer do
   defp pickup_clause_head({:pickup_else, _meta, [_body]}, _depth, _indent), do: "else"
 
   defp pickup_clause_head({:pickup_clause, _meta, [guard, _body]}, depth, indent) do
-    to_string(guard, depth, indent)
+    render(guard, depth, indent)
   end
 
   defp pickup_clause_rhs_inline({:pickup_else, _meta, [body]}, depth, indent) do
-    to_string(body, depth, indent)
+    render(body, depth, indent)
   end
 
   defp pickup_clause_rhs_inline({:pickup_clause, _meta, [_guard, body]}, depth, indent) do
-    to_string(body, depth, indent)
+    render(body, depth, indent)
   end
 
   defp render_pickup_clause_wrapped({:pickup_else, _meta, [body]}, _head, depth, indent) do
@@ -1769,11 +1878,11 @@ defmodule Cure.Compiler.Printer do
   defp wrapped_body_to_string({:block, meta, exprs} = block, depth, indent) do
     case Keyword.get(meta, :block_shape) do
       :brace ->
-        body = Enum.map_join(exprs, "; ", &to_string(&1, depth + 1, indent))
+        body = Enum.map_join(exprs, "; ", &render(&1, depth + 1, indent))
         "{ " <> body <> " }"
 
       :end ->
-        body = Enum.map_join(exprs, "; ", &to_string(&1, depth + 1, indent))
+        body = Enum.map_join(exprs, "; ", &render(&1, depth + 1, indent))
         body <> "; end"
 
       _ ->
@@ -1782,17 +1891,17 @@ defmodule Cure.Compiler.Printer do
         inner_pad = String.duplicate(indent, depth + 1)
 
         exprs
-        |> Enum.map(&to_string(&1, depth + 1, indent))
+        |> Enum.map(&render(&1, depth + 1, indent))
         |> Enum.join("\n" <> inner_pad)
         |> case do
-          "" -> to_string(block, depth + 1, indent)
+          "" -> render(block, depth + 1, indent)
           rendered -> rendered
         end
     end
   end
 
   defp wrapped_body_to_string(other, depth, indent) do
-    to_string(other, depth + 1, indent)
+    render(other, depth + 1, indent)
   end
 
   defp multiline?(str) when is_binary(str), do: String.contains?(str, "\n")
