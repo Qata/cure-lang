@@ -67,6 +67,48 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute out =~ "T"
   end
 
+  test "an implicit type-parameter binder is renamed in sync with its references" do
+    # `{T: Type}` introduces the type variable via the param NAME `T`. Renaming
+    # only the references (`x: T`, `-> T`) while leaving the binder spelled `T`
+    # leaves those references bound to nothing — a working file turned broken
+    # that the reparse-only verify still accepts. Binder and references must
+    # move together.
+    {out, _} = migrate("mod M\nfn id({T: Type}, x: T) -> T = x\n", "impl.cure")
+
+    # Reparse and pull the implicit binder name and the reference names back out.
+    {:ok, toks} = Lexer.tokenize(out, file: "impl.cure", emit_events: false)
+    {:ok, ast} = Parser.parse(toks, file: "impl.cure", emit_events: false)
+    fdef = find_fn(ast)
+    params = Keyword.get(elem(fdef, 1), :params)
+    return_type = Keyword.get(elem(fdef, 1), :return_type)
+
+    [{:param, binder_meta, binder_name}, {:param, xmeta, _}] = params
+    assert Keyword.get(binder_meta, :implicit), "the implicit param lost its :implicit flag"
+    {:variable, _, xtype} = Keyword.get(xmeta, :type)
+    {:variable, _, rtype} = return_type
+
+    # All three must be the SAME (lowercased) name — no binder/reference desync.
+    assert binder_name == xtype
+    assert binder_name == rtype
+    assert binder_name == String.downcase(binder_name)
+  end
+
+  defp find_fn(ast) do
+    ast
+    |> flatten_nodes()
+    |> Enum.find(fn
+      {:function_def, _, _} -> true
+      _ -> false
+    end)
+  end
+
+  defp flatten_nodes({_tag, _meta, kids} = node) when is_list(kids) do
+    [node | Enum.flat_map(kids, &flatten_nodes/1)]
+  end
+
+  defp flatten_nodes(list) when is_list(list), do: Enum.flat_map(list, &flatten_nodes/1)
+  defp flatten_nodes(other), do: [other]
+
   test "a renamed type var is also renamed in a body type application" do
     # `empty_of(T)` in the body passes the bound type var as a type argument;
     # it must track the signature rename to `t`, not stay `T`.

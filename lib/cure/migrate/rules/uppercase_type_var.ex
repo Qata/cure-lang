@@ -117,7 +117,12 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     types =
       (Enum.map(params, &param_type/1) ++ List.wrap(return_type)) |> Enum.reject(&is_nil/1)
 
-    names = Enum.flat_map(types, &type_var_names/1)
+    # An implicit type-parameter `{T: Type}` introduces its type variable via the
+    # param NAME, not its type — collect those binder names too so the binder is
+    # renamed in lockstep with its references (else the two desync).
+    binder_names = Enum.flat_map(params, &implicit_binder_name/1)
+
+    names = Enum.flat_map(types, &type_var_names/1) ++ binder_names
 
     candidates = names |> Enum.filter(&rename?(&1, ctx)) |> Enum.uniq()
     reserved = names |> Enum.reject(&rename?(&1, ctx)) |> MapSet.new()
@@ -144,12 +149,25 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   defp param_type({:param, pmeta, _name}), do: Keyword.get(pmeta, :type)
   defp param_type(_other), do: nil
 
-  # Rewrite the `:type` of a proper typed param; leave every other param shape
-  # (and typeless params) exactly as-is.
-  defp rename_param({:param, pmeta, pname} = param, map) do
+  # The binder name of an implicit type parameter (`{T: Type}` -> ["T"]); an
+  # explicit param's name is a value binder, never a type variable, so it is
+  # never a rename candidate.
+  defp implicit_binder_name({:param, pmeta, name}) when is_binary(name) do
+    if Keyword.get(pmeta, :implicit), do: [name], else: []
+  end
+
+  defp implicit_binder_name(_other), do: []
+
+  # Rewrite the `:type` of a proper typed param, and — for an implicit type
+  # parameter — its binder NAME too, so binder and references rename together.
+  # Every other param shape (and typeless params) is left as-is.
+  defp rename_param({:param, pmeta, pname}, map) do
+    new_name =
+      if Keyword.get(pmeta, :implicit), do: Map.get(map, pname, pname), else: pname
+
     case Keyword.fetch(pmeta, :type) do
-      {:ok, _type} -> {:param, Keyword.update!(pmeta, :type, &rename_in_type(&1, map)), pname}
-      :error -> param
+      {:ok, _type} -> {:param, Keyword.update!(pmeta, :type, &rename_in_type(&1, map)), new_name}
+      :error -> {:param, pmeta, new_name}
     end
   end
 
