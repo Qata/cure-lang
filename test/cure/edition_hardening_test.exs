@@ -35,4 +35,15 @@ defmodule Cure.EditionHardeningTest do
   test "F-C: resolve/1 honors a whitespace-spaced pragma" do
     assert Cure.Edition.resolve(%{source: "@edition (\"2026\")\nmod M\n"}) == {:ok, "2026"}
   end
+
+  # F1 (audit iteration 4): the parser rejects an INDENTED `@edition` (it is no
+  # longer file-leading → :edition_pragma_placement), so the resolver must not
+  # over-match it either. A leading-whitespace pragma is not a valid pragma; the
+  # pre-scan regex is anchored at column 0 (`^@`, not `^\s*@`) so resolution and
+  # the parser agree it is "no pragma" rather than silently selecting an edition
+  # the parser will reject.
+  test "F1: pragma_edition does not over-match an indented (non-leading) pragma" do
+    assert Cure.Edition.pragma_edition("  @edition(\"2026\")\nmod M\n") == nil
+    assert Cure.Edition.pragma_edition("\t@edition(\"2026\")\nmod M\n") == nil
+  end
 end

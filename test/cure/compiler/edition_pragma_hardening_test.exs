@@ -76,6 +76,24 @@ defmodule Cure.Compiler.EditionPragmaHardeningTest do
     refute malformed_error?(errors)
   end
 
+  # F1 (audit iteration 4) — the pre-parse resolver (Cure.Edition.pragma_edition)
+  # reads the pragma with a single-line regex, so a pragma split across lines is
+  # invisible to it (returns nil → resolve falls back to project/default). The
+  # token-based parser must NOT honour a form the resolver can't see, or the two
+  # disagree: the file would LEX under the resolver's (default) edition while the
+  # parser accepts a different DECLARED edition — a silent wrong-edition compile
+  # once a second edition is minted. The canonical pragma is a single line, so a
+  # multi-line pragma is a malformed-pragma error.
+  test "F1: a multi-line @edition pragma is rejected (parser agrees with the resolver)" do
+    src = "@edition(\n\"2026\")\nmod M\n  fn f() -> Int = 1\n"
+    # The pre-parse resolver cannot see a multi-line pragma:
+    assert Cure.Edition.pragma_edition(src) == nil
+    # ...so the parser must reject it rather than silently honour a declared edition
+    # the resolver never selected for lexing:
+    assert {:error, errors} = parse(src)
+    assert malformed_error?(errors)
+  end
+
   # Guard against over-correction: the happy path must still parse.
   test "a well-placed valid @edition still parses cleanly" do
     assert {:ok, _ast} = parse("@edition(\"2026\")\nmod M\n  fn f() -> Int = 1\n")

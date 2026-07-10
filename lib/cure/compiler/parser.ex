@@ -5023,6 +5023,14 @@ defmodule Cure.Compiler.Parser do
           not valid_edition_pragma_arg?(args) ->
             add_error(state, {:edition_pragma_malformed, token.line, token.col})
 
+          not single_line_edition_pragma?(token, args) ->
+            # Canonical pragma is a single line. The pre-parse resolver
+            # (Cure.Edition.pragma_edition) reads the pragma with a single-line
+            # regex, so a multi-line pragma is invisible to it — honouring it here
+            # would lex under the resolver's (default) edition while accepting a
+            # different declared one (F1, audit iteration 4). Reject it as malformed.
+            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+
           not known_edition_pragma_arg?(args) ->
             # Well-formed "YYYY" but not a minted edition. The build pipeline
             # (compiler.ex lex/parse) never calls Cure.Edition.resolve, so this
@@ -5558,6 +5566,17 @@ defmodule Cure.Compiler.Parser do
     do: Cure.Edition.valid?(val)
 
   defp known_edition_pragma_arg?(_), do: false
+
+  # The canonical `@edition("YYYY")` pragma is a single line: the string literal
+  # sits on the same line as the `@`. A pragma split across lines is invisible to
+  # the single-line pre-parse resolver (Cure.Edition.pragma_edition), so it must
+  # not be honoured here (F1). Presupposes valid_edition_pragma_arg? passed, so
+  # args is a one-element literal list; a non-literal arg is treated as single-line
+  # (it will already have failed the format check).
+  defp single_line_edition_pragma?(token, [{:literal, meta, _}]),
+    do: Keyword.get(meta, :line) == token.line
+
+  defp single_line_edition_pragma?(_token, _args), do: true
 
   # Mark that a substantive top-level statement is about to be parsed. Comments
   # are NOT substantive. A decorator prefix (`:at`) is substantive UNLESS it is a

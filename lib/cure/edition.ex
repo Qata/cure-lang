@@ -90,11 +90,13 @@ defmodule Cure.Edition do
   end
 
   defp pragma_capture(line) do
-    # `@\s*edition\s*\(` tolerates the interior whitespace the parser's tokenizer
-    # ignores (`@ edition(...)`, `@edition (...)`) — resolution must not miss a
-    # pragma the compiler would accept (F-C), or the file resolves to the wrong
-    # edition than it parses under.
-    case Regex.run(~r/^\s*@\s*edition\s*\(\s*"(\d{4})"\s*\)/, line) do
+    # Anchored at column 0 (`^@`, not `^\s*@`): an INDENTED pragma is not
+    # file-leading, and the parser rejects it (:edition_pragma_placement), so
+    # resolution must not over-match it either — the two must agree on what a
+    # valid pragma is (F1). The INTERIOR `@\s*edition\s*\(` still tolerates the
+    # whitespace the parser's tokenizer ignores (`@ edition(...)`, `@edition
+    # (...)`) so resolution never misses a pragma the compiler would accept (F-C).
+    case Regex.run(~r/^@\s*edition\s*\(\s*"(\d{4})"\s*\)/, line) do
       [_, year] -> year
       nil -> nil
     end
