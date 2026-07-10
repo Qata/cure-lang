@@ -100,6 +100,71 @@ defmodule Antigen.Corpus do
     end
   end
 
+  @doc """
+  Merge `sources` (record files) into `dest`, deduplicating by each record's own
+  embedded `key=` field — the same key `append/3`/`seen?/2` use. Records are copied
+  **verbatim** (raw lines, never decoded→re-encoded), so the merge is byte-preserving
+  and cannot mint atoms; it is kind-agnostic (corpus OR seeds) because it trusts each
+  record's stored key. Deduplicates across sources within one call too. Lines with no
+  extractable key are skipped and counted (a keyless line has no dedup identity).
+  Missing / empty sources contribute nothing. Returns an `%{added, duplicate, keyless}`
+  tally.
+  """
+  @spec merge(String.t(), [String.t()]) :: %{
+          added: non_neg_integer(),
+          duplicate: non_neg_integer(),
+          keyless: non_neg_integer()
+        }
+  def merge(dest, sources) when is_list(sources) do
+    File.mkdir_p!(Path.dirname(dest))
+
+    seen0 =
+      dest |> record_lines() |> Enum.map(&raw_key/1) |> Enum.reject(&is_nil/1) |> MapSet.new()
+
+    {rev_new, tally, _seen} =
+      Enum.reduce(sources, {[], %{added: 0, duplicate: 0, keyless: 0}, seen0}, fn src, acc ->
+        Enum.reduce(record_lines(src), acc, fn line, {out, t, seen} ->
+          case raw_key(line) do
+            nil ->
+              {out, %{t | keyless: t.keyless + 1}, seen}
+
+            key ->
+              if MapSet.member?(seen, key) do
+                {out, %{t | duplicate: t.duplicate + 1}, seen}
+              else
+                {[line | out], %{t | added: t.added + 1}, MapSet.put(seen, key)}
+              end
+          end
+        end)
+      end)
+
+    case Enum.reverse(rev_new) do
+      [] -> :ok
+      lines -> File.write!(dest, newline_guard(dest) <> Enum.join(lines, "\n") <> "\n", [:append])
+    end
+
+    tally
+  end
+
+  # Non-blank, newline-trimmed record lines of a file (empty list if the file is absent).
+  defp record_lines(path) do
+    if File.exists?(path) do
+      path |> File.stream!() |> Enum.map(&String.trim_trailing(&1, "\n")) |> Enum.reject(&(&1 == ""))
+    else
+      []
+    end
+  end
+
+  # A leading "\n" iff `dest` is non-empty and does not already end in one, so an
+  # appended record can never be glued onto a hand-edited last line without a newline.
+  defp newline_guard(dest) do
+    case File.read(dest) do
+      {:ok, ""} -> ""
+      {:ok, content} -> if String.ends_with?(content, "\n"), do: "", else: "\n"
+      _ -> ""
+    end
+  end
+
   @spec stream(String.t()) :: Enumerable.t()
   def stream(path) do
     if File.exists?(path) do
