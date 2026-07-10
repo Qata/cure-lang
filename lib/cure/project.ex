@@ -259,7 +259,37 @@ defmodule Cure.Project do
   end
 
   defp resolve_one(%{path: rel_path, name: name}, root, _reuse_lock?)
-       when is_binary(rel_path) and rel_path != "" do
+       when is_binary(rel_path) do
+    # A whitespace-only path is a malformed dependency, not a real path — the
+    # literal `!= ""` guard alone let it through and it would "resolve" to zero
+    # files (A1-F3). Trim before deciding; an all-blank path is rejected like "".
+    if String.trim(rel_path) == "" do
+      {:error, {:invalid_dependency, name}}
+    else
+      resolve_path_dep(rel_path, name, root)
+    end
+  end
+
+  # A present-but-blank `git` is a malformed dependency. `parse_dep_line` always
+  # emits both keys, so a blank git leaves `path: nil` — guard it before the git
+  # clause so an empty URL never reaches System.cmd. (A blank/whitespace `path` is
+  # already rejected in the path clause above.)
+  defp resolve_one(%{git: "", name: name}, _root, _reuse_lock?),
+    do: {:error, {:invalid_dependency, name}}
+
+  defp resolve_one(%{git: url} = dep, root, _reuse_lock?) when is_binary(url) do
+    resolve_git_dep(dep, root)
+  end
+
+  defp resolve_one(%{name: name} = dep, root, reuse_lock?) do
+    version = Map.get(dep, :version)
+    constraint = Map.get(dep, :constraint) || version || ">= 0.0.0"
+    resolve_registry_dep(name, constraint, root, reuse_lock?)
+  end
+
+  defp resolve_one(_, _root, _reuse_lock?), do: :ok
+
+  defp resolve_path_dep(rel_path, name, root) do
     abs_path = Path.expand(rel_path, root)
     cure_files = Path.wildcard(Path.join(abs_path, "lib/**/*.cure"))
     dep_ebin = Path.join(root, "_build/deps/#{name}")
@@ -281,27 +311,6 @@ defmodule Cure.Project do
     :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
     :ok
   end
-
-  # A present-but-blank `path` (or `git`) is a malformed dependency. `parse_dep_line`
-  # always emits both keys, so a blank path leaves `git: nil` — which would match the
-  # git clause below and crash System.cmd on a nil URL. Fail with a clear error.
-  defp resolve_one(%{path: "", name: name}, _root, _reuse_lock?),
-    do: {:error, {:invalid_dependency, name}}
-
-  defp resolve_one(%{git: "", name: name}, _root, _reuse_lock?),
-    do: {:error, {:invalid_dependency, name}}
-
-  defp resolve_one(%{git: url} = dep, root, _reuse_lock?) when is_binary(url) do
-    resolve_git_dep(dep, root)
-  end
-
-  defp resolve_one(%{name: name} = dep, root, reuse_lock?) do
-    version = Map.get(dep, :version)
-    constraint = Map.get(dep, :constraint) || version || ">= 0.0.0"
-    resolve_registry_dep(name, constraint, root, reuse_lock?)
-  end
-
-  defp resolve_one(_, _root, _reuse_lock?), do: :ok
 
   defp resolve_registry_dep(name, constraint, root, reuse_lock?) do
     with {:ok, version_string, sha} <- pick_version(name, constraint, root, reuse_lock?),

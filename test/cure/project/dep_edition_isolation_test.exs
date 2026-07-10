@@ -58,4 +58,18 @@ defmodule Cure.Project.DepEditionIsolationTest do
 
     assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
   end
+
+  # Iteration 7 (audit A1-F3): the blank-path rejection must also catch a
+  # WHITESPACE-only path. `path = "   "` satisfies the `!= ""` guard literally, so
+  # it slipped into the path clause, expanded to `<root>/   `, found zero files,
+  # and silently "resolved" to :ok — defeating the malformed-dep rejection.
+  test "a whitespace-only path is rejected, not silently resolved", %{root: root} do
+    project = %Cure.Project{
+      name: "app",
+      root: root,
+      dependencies: [%{name: "bad", path: "   ", git: nil, tag: nil, version: nil, constraint: nil}]
+    }
+
+    assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
+  end
 end
