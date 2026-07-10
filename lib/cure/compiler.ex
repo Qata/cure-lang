@@ -184,14 +184,18 @@ defmodule Cure.Compiler do
   def parse_source(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
 
-    # Tooling entry: resolve the file pragma so inspection sees the same keyword
-    # set the compiler would. A resolve error (unknown edition) degrades to the
-    # default only to pick a lexer keyword set — the parser still validates the
-    # pragma itself and rejects an unknown one (:edition_pragma_unknown), so an
-    # unknown edition surfaces as a parse error rather than silently succeeding.
-    # No project_dir is consulted here (headless).
+    # Tooling entry: resolve the file's edition so inspection sees the same keyword
+    # set the compiler would — pragma > project Cure.toml > default, matching the
+    # compile path (A3-F2). A real :file discovers its project root so a manifest-
+    # pinned edition is honoured; a genuine no-file source stays headless (nil dir
+    # → default). A resolve error (unknown edition) degrades to the default only to
+    # pick a lexer keyword set — the parser still validates the pragma itself and
+    # rejects an unknown one (:edition_pragma_unknown), so an unknown edition
+    # surfaces as a parse error rather than silently succeeding.
+    project_dir = if file in [nil, "nofile"], do: nil, else: Cure.Project.find_root(file)
+
     edition =
-      case Cure.Edition.resolve(%{source: source}) do
+      case Cure.Edition.resolve(%{source: source, project_dir: project_dir}) do
         {:ok, ed} -> ed
         {:error, _} -> Cure.Edition.current()
       end

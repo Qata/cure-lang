@@ -24,7 +24,16 @@ defmodule Cure.Edition do
   @spec known() :: [t()]
   def known, do: @known
 
-  @doc "The newest known edition — the compiler default when none is declared."
+  @doc """
+  The compiler default edition applied when none is declared.
+
+  Deliberately a standalone constant, NOT derived from `all/0` — the default is
+  decoupled from the newest *known* edition on purpose (Rust parity): a new
+  edition may be minted into `@known` as opt-in (selectable via pragma/manifest)
+  while the default stays on the older, stable one until it is promoted. Today
+  `@known` has one entry so `@current` coincides with the newest; do not "fix"
+  this to `List.last(all())` — that would collapse the staged-rollout capability.
+  """
   @spec current() :: t()
   def current, do: @current
 
