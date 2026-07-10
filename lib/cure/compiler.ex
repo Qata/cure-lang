@@ -272,16 +272,25 @@ defmodule Cure.Compiler do
   # `@edition` pragma > `Cure.toml` `[project].edition` > compiler default). The
   # resolved edition drives the lexer's keyword set (§4), so a file pinned to an
   # older edition still parses a since-retired keyword under `cure build` — the
-  # feature's headline purpose (F-A). A caller that knows the project root passes
-  # `:project_dir`; otherwise only the file pragma is consulted (a bare
-  # `cure run file.cure` with no manifest → default, §3.2 point 3). An unknown
-  # edition (typo'd pragma / bad manifest) fails loudly HERE (§3.1) rather than
-  # compiling silently under the default.
+  # feature's headline purpose (F-A). The project root is taken from `:project_dir`
+  # when a caller supplies it, else discovered from the file's path (see below); a
+  # bare source with no file and no manifest resolves to the file pragma alone,
+  # else default (§3.2 point 3). An unknown edition (typo'd pragma / bad manifest)
+  # fails loudly HERE (§3.1) rather than compiling silently under the default.
   defp resolve_edition(source, opts) do
     input = %{source: source}
 
+    # A caller that knows the project root passes `:project_dir`; otherwise it is
+    # DISCOVERED from the file's own path — the nearest ancestor `Cure.toml`. This
+    # is what lets `cure build`/`run` honour a project's `[project].edition`
+    # without every CLI caller threading a dir, while a file deep in a dependency
+    # tree still binds to its own manifest (nearest wins), not a far-away app's.
+    project_dir =
+      Keyword.get(opts, :project_dir) ||
+        Cure.Project.find_root(Keyword.get(opts, :file))
+
     input =
-      case Keyword.get(opts, :project_dir) do
+      case project_dir do
         nil -> input
         dir -> Map.put(input, :project_dir, dir)
       end

@@ -52,4 +52,56 @@ defmodule Cure.Compiler.EditionCompileTest do
     assert {:ok, _mod, _warns} =
              Cure.Compiler.compile_string(src, file: "t.cure", emit_events: false, output_dir: dir)
   end
+
+  # Iteration 5 (F-A follow-up): compile_file must resolve each file under its
+  # NEAREST ANCESTOR Cure.toml (spec §3.2: pragma > Cure.toml > default), not only
+  # when a caller explicitly passes :project_dir. The CLI build/run callers never
+  # thread :project_dir, so before this a project's [project].edition — including
+  # a TYPO'd one — was silently ignored on the build path (§3.1 "fail loudly"
+  # violated). Auto-discovery walks up from the file's own directory.
+  test "compile_file fails loudly on an unknown edition in an ancestor Cure.toml", %{dir: dir} do
+    File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"9999\"\n")
+    file = Path.join(dir, "a.cure")
+    File.write!(file, "mod M\n  fn f() -> Int = 1\n")
+
+    assert {:error, {:edition_error, {:unknown_edition, "9999"}}} =
+             Cure.Compiler.compile_file(file, emit_events: false, output_dir: dir)
+  end
+
+  test "compile_file resolves the NEAREST ancestor Cure.toml (child shadows parent)", %{dir: dir} do
+    # Parent manifest is valid; the nearer child manifest is a typo. Nearest wins,
+    # so the build must fail on the child's "9999", proving it is not merely
+    # scanning cwd or any ancestor.
+    File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"2026\"\n")
+    sub = Path.join(dir, "sub")
+    File.mkdir_p!(sub)
+    File.write!(Path.join(sub, "Cure.toml"), "[project]\nname = \"y\"\nedition = \"9999\"\n")
+    file = Path.join(sub, "a.cure")
+    File.write!(file, "mod M\n  fn f() -> Int = 1\n")
+
+    assert {:error, {:edition_error, {:unknown_edition, "9999"}}} =
+             Cure.Compiler.compile_file(file, emit_events: false, output_dir: dir)
+  end
+
+  test "compile_file honors a valid ancestor Cure.toml across a subdirectory", %{dir: dir} do
+    File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"2026\"\n")
+    sub = Path.join(dir, "sub")
+    File.mkdir_p!(sub)
+    file = Path.join(sub, "a.cure")
+    File.write!(file, "mod M\n  fn f() -> Int = 1\n")
+
+    assert {:ok, _mod, _warns} =
+             Cure.Compiler.compile_file(file, emit_events: false, output_dir: dir)
+  end
+
+  test "a file @edition pragma overrides an unknown ancestor Cure.toml (precedence)", %{dir: dir} do
+    # Pragma > Cure.toml: a valid pragma must win over a typo'd manifest, so the
+    # file compiles rather than failing on the manifest's bad edition.
+    File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"9999\"\n")
+    file = Path.join(dir, "a.cure")
+    File.write!(file, "@edition(\"2026\")\nmod M\n  fn f() -> Int = 1\n")
+
+    assert {:ok, _mod, _warns} =
+             Cure.Compiler.compile_file(file, emit_events: false, output_dir: dir)
+  end
 end

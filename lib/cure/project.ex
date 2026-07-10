@@ -64,6 +64,37 @@ defmodule Cure.Project do
 
   # -- Loading -----------------------------------------------------------------
 
+  @doc """
+  The directory of the nearest ancestor `Cure.toml`, starting from the directory
+  containing `file_path` and walking up to the filesystem root — or `nil` if no
+  ancestor holds a `Cure.toml`. Mirrors how Cargo/npm locate the enclosing
+  project: the NEAREST manifest wins, so a file deep in a dependency tree binds to
+  its own project's manifest, not a far-away app's (spec §3.2 edition precedence).
+  """
+  @spec find_root(String.t() | nil) :: String.t() | nil
+  def find_root(nil), do: nil
+
+  def find_root(file_path) when is_binary(file_path) do
+    file_path |> Path.expand() |> Path.dirname() |> find_root_from_dir()
+  end
+
+  defp find_root_from_dir(dir) do
+    parent = Path.dirname(dir)
+
+    cond do
+      File.regular?(Path.join(dir, "Cure.toml")) ->
+        dir
+
+      # `Path.dirname/1` is a fixpoint at the filesystem root ("/" -> "/"), so
+      # stop there rather than looping forever when no manifest exists above.
+      parent == dir ->
+        nil
+
+      true ->
+        find_root_from_dir(parent)
+    end
+  end
+
   @doc "Load a Cure.toml from the given directory (or current dir)."
   @spec load(String.t()) :: {:ok, t()} | {:error, term()}
   def load(dir \\ ".") do
