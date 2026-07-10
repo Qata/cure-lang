@@ -33,6 +33,11 @@ defmodule Antigen.Coverage do
   def terms_of(%Challenge{kind: :serialize, payload: %{term: term}}), do: [term]
   # decode probes carry a raw string, not a Core term → no terms to well-form-check
   def terms_of(%Challenge{kind: :decode_probe}), do: []
+  # elab_program challenges carry raw SURFACE source (a string), not a Core term —
+  # same reasoning as decode_probe. Only ever hit when an `:elab_program` generator
+  # is wired into `default_gen` (previously none were — every `elab_*` fixed
+  # catalog was deliberately kept out of it); latent until `ElabLiteralTyping`.
+  def terms_of(%Challenge{kind: :elab_program}), do: []
 
   def terms_of(%Challenge{kind: :conv_pair, payload: %{t1: t1, t2: t2}}), do: [t1, t2]
 

@@ -132,8 +132,74 @@ defmodule Antigen.Generators.DepMatch do
       # Int/Float-value-indexed families Tg/Tgf — literal indices unified at match
       # time (rigid_index? int_lit/float_lit).
       {2, tg_closed(:int)},
-      {2, tg_closed(:float)}
+      {2, tg_closed(:float)},
+      # Compact Nat literal (K2, spec 2026-07-09): a `case` scrutinee that IS a
+      # `{:nat_lit, n}` value (not the S/Z tower) — the reachability lever for
+      # `Eval.nat_to_ctor`/`nat_to_ctor_if` (n=0 and n>0 both peel one layer).
+      {2, nat_case(0)},
+      {2, nat_case(4)},
+      # Vec closed at a compact-Nat index instead of the tower — drives the
+      # `{:nat_lit,_} <-> {:ctor,_,_}` bridge in `unify_one`, i.e. `nat_lit_ctor/1`
+      # (n=0 and n>0 both peel one layer during index unification).
+      {2, closed_index({:nat_lit, 0})},
+      {2, closed_index({:nat_lit, 4})},
+      # Sq diagonal closed at a compact-Nat literal vs a mismatched tower ctor —
+      # the merge clash in `bind_index` compares the two rigid result-index terms
+      # and calls `rigid_index?` on the (unpeeled) `{:nat_lit, _}` side.
+      {1, sq_closed({:nat_lit, 4}, {:ctor, :S, [@z]})}
     ])
+  end
+
+  # A `case` directly on a compact Nat literal scrutinee (0-index family Nat
+  # itself, not Vec/Sq/Ty): `case {:nat_lit,n} of Z -> Z | S(k) -> k`. Mirrors
+  # `tyvar_motive_case`'s single-level motive shape (Nat has no index to
+  # separately abstract) and `eqtype_motive_case`'s closed non-var scrutinee.
+  # `Kernel.infer` on the `{:nat_lit,n}` scrutinee itself resolves via
+  # `nat_type_value`; `Eval.eval`'s `:case` clause peels it via `nat_to_ctor_if`.
+  defp nat_case(n) do
+    term = {:case, {:nat_lit, n}, {:lam, @nat, @nat}, [{:Z, 0, @z}, {:S, 1, {:var, 0}}]}
+    Gen.return({[], term, @nat})
+  end
+
+  @doc """
+  Deterministic compact-Nat coverage probes, as full `%Challenge{}`s (one per
+  assay so `term/subject_reduction`/`term/normalization` — which force `nf`,
+  hence `Eval.eval` — are exercised directly, not left to random `@assays`
+  sampling). Public so a coverage test can drive them without going through
+  `Gen` sampling machinery. Mirrors the shapes wired into `case_challenge/0`
+  above (`nat_case/1`, `closed_index/1` at a nat_lit index, `sq_closed/2` at a
+  mismatched nat_lit/ctor pair).
+  """
+  @spec compact_nat_probes() :: [Challenge.t()]
+  def compact_nat_probes do
+    specs = [
+      {"compact_nat/case_zero", {[], {:case, {:nat_lit, 0}, {:lam, @nat, @nat},
+        [{:Z, 0, @z}, {:S, 1, {:var, 0}}]}, @nat},
+       "case on {:nat_lit,0} — Eval.nat_to_ctor(0) / nat_to_ctor_if"},
+      {"compact_nat/case_succ", {[], {:case, {:nat_lit, 4}, {:lam, @nat, @nat},
+        [{:Z, 0, @z}, {:S, 1, {:var, 0}}]}, @nat},
+       "case on {:nat_lit,4} — Eval.nat_to_ctor(n>0) / nat_to_ctor_if"},
+      {"compact_nat/vec_closed_zero",
+       {[vec({:nat_lit, 0})], mk_case({:var, 0}, motive(@nat), [{:vnil, 0, @z}, {:vcons, 3, @z}]), @nat},
+       "Vec({:nat_lit,0}) closed index — Kernel.nat_lit_ctor(0) bridge"},
+      {"compact_nat/vec_closed_succ",
+       {[vec({:nat_lit, 4})], mk_case({:var, 0}, motive(@nat), [{:vnil, 0, @z}, {:vcons, 3, @z}]), @nat},
+       "Vec({:nat_lit,4}) closed index — Kernel.nat_lit_ctor(n>0) bridge"},
+      {"compact_nat/sq_merge_clash",
+       {[sq({:nat_lit, 4}, {:ctor, :S, [@z]})], mk_case({:var, 0}, sq_motive(), [{:mksq, 1, @z}]), @nat},
+       "Sq({:nat_lit,4}, S(Z)) diagonal merge — Kernel.rigid_index?'s nat_lit clause"}
+    ]
+
+    for {id, {ctx, term, type}, note} <- specs,
+        assay <- @assays do
+      Challenge.new(
+        kind: :typed_term,
+        assay: assay,
+        label: :well_typed,
+        payload: %{sig: :v1, ctx: ctx, type: type, term: term},
+        note: "#{id} (#{assay}): #{note}"
+      )
+    end
   end
 
   # Closed scrutinee x : Ty T for an ARBITRARY closed type index (possibly matching

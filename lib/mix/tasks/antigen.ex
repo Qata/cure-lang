@@ -219,7 +219,12 @@ defmodule Mix.Tasks.Antigen do
       # Elaborator/kernel shift agreement — over generated meta-free terms, the
       # elaborator's Subst.shift must equal the kernel's Term.shift (the shift-half
       # of the beta_subst cross-check; a TCB-boundary capture guard).
-      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")}
+      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")},
+      # Elaborator-driven literal typing (compact-Nat coverage batch) — the lever
+      # for Kernel.bool_type_value/1 (boolean literal, inference position) and
+      # Kernel.nat_type_value/1 (Nat-checked literal, re-checked via elab/soundness
+      # over the real prelude env) — neither reachable from a bare Core-term probe.
+      {1, Antigen.Generators.ElabLiteralTyping.gen()}
     ])
   end
 
