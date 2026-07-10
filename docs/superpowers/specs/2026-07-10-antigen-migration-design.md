@@ -1,164 +1,153 @@
-# Antigen migration-awareness — bringing forward replay data across kernel shape changes
+# Antigen staleness handling — prune + regenerate replay data across kernel shape changes
 
 **Status:** design approved 2026-07-10 (feature/idris-parity). Ready for implementation plan.
+Supersedes the initial term-migration draft (a rewrite engine was found to be YAGNI —
+see "Why no rewrite engine").
 
 ## Problem
 
 Antigen's replay stores (`test/antigen/corpus.sexp`, `seeds.sexp`, `reach.sexp`) are
 generator-independent C2 records: replay decodes each record and re-runs its assay
-**through the kernel**. When the kernel's term grammar changes — e.g. `{:sigma,a,b}`
-retired for inductive `{:data,:Sigma,…}`, compact `{:nat_lit,n}` added, primitive
-`eq`/`refl`/`rewrite` replaced by inductive spellings — old records go stale in one
-of two ways:
+**through the kernel**. When the kernel's term grammar changes — e.g. `prim`
+arithmetic nodes retired for delta-globals (#15), `{:sigma}`/`pair` retired for
+inductive spellings, compact `{:nat_lit,n}` added — old records go stale in one of two
+ways:
 
 1. **Undecodable** — the serialized term uses a head/atom the current grammar no
-   longer recognizes. Caught today by `corpus_replay_test` test 1 ("both committed
-   corpora decode without error").
-2. **Label drift** — the term still decodes but now means something different to the
-   kernel, so it replays to a different verdict. Caught today by `corpus_replay_test`
-   test 3 ("every committed entry satisfies its assay invariant").
+   longer recognizes (`:unknown_node`, or `:safe`-decode `not an already existing
+   atom`). Caught today by `corpus_replay_test` test 1 ("both committed corpora decode
+   without error").
+2. **Label drift** — the term still decodes but now means something different, so it
+   replays to a different verdict. Caught today by `corpus_replay_test` test 3 ("every
+   committed entry satisfies its assay invariant").
 
-Records are currently **unversioned**, and format drift is already handled ad-hoc
-(`decode_record`'s `legacy_record?` branch for an old note encoding). There is no
-way to bring a stale record forward, so stale data simply rots — exactly the wall we
-hit trying to fold a prior session's scratch corpus into the master.
+Records are currently **unversioned**, and there is no way to bring a stale record
+forward, so stale data just rots — the wall we hit trying to fold a prior session's
+scratch corpus into the master (its `(prim mul …)` terms fail `:unknown_node`).
 
-## Key enabling facts
+## Locked decision: split by provenance, and neither branch rewrites terms
 
-- **On-disk terms are clean s-expressions** (`Cure.Core.Serialize`):
-  `(pi (data Dec () ()) (app (global f) (var 0)))`. A migration can parse a record
-  head-agnostically into a generic tree, rewrite stale heads structurally, and hand
-  the result to the current decoder — **no need to freeze old decoders per version**.
-- **The replay gate is a truth oracle.** Because every record is re-checked against
-  the live kernel on each `mix test`, a migration does **not** need an a-priori
-  truth-preservation proof: a bad rewrite makes `corpus_replay_test` go red. This is
-  what makes record-migration safe.
-- **The coverage manifest made generators the shape authority.** Every
-  soundness-relevant shape now has a named, correct-by-construction generator cell
-  expressed in code, which migrates for free when the kernel changes (you edit the
-  generator). So most records are *reproducible from generators* and do not need term
-  migration at all.
+- **Generator-derived records → regenerate.** The bulk: all coverage seeds
+  (`seeds.sexp`) and curated reach records (`reach.sexp`, banked from generator reach
+  constructors). Anything re-derivable by re-running a generator.
+- **Fuzz-found antibodies → prune (keep-if-valid, else retire).** `corpus.sexp`
+  entries are specific witnesses no generator deterministically reproduces (shrinking +
+  generator drift make per-seed replay non-reproducing). They are not regenerated and
+  **not term-migrated** — each is re-checked against the live kernel and either kept or
+  retired.
 
-## Locked decision: split by provenance
+Neither branch performs a term rewrite.
 
-- **Generator-derived records → regenerate** (do not migrate). This is the bulk:
-  all coverage seeds (`seeds.sexp`) and the curated reach records (`reach.sexp`,
-  banked from generator reach constructors) — anything re-derivable by re-running a
-  generator.
-- **Fuzz-found, shrunk antibodies → migrate** (`corpus.sexp`). These are irreproducible
-  specific witnesses (e.g. the committed `totality/diverging` + `reflexivity`
-  mutual-recursion guards) that no generator deterministically reproduces. Only these
-  justify a term rewriter.
+## Why no rewrite engine (what changed from the first draft)
 
-Consequence: the actual term-migration engine runs on a **handful** of records, so it
-is a lazy per-change rule registry, not a general grammar-rewrite system.
+Empirical check: the orphaned scratch "antibodies" are all `kind=typed_term` over the
+*free-term* assays (`term/normalization`, `term/subject_reduction`) — the continuous
+generators deliberately excluded from the coverage manifest. Their terms use retired
+`(prim …)` grammar, so their shape is **no longer expressible**. Two consequences:
+
+- A frozen guard for an inexpressible shape is **obsolete** → drop it.
+- The live term generator + assay already exercise the *current* spelling on every run,
+  so translating an old witness forward only adds a **redundant** guard.
+
+More generally, the coverage manifest made **generators the shape authority**: every
+soundness-relevant shape-class has a named, correct-by-construction generator cell that
+migrates for free when the kernel changes (you edit the generator). So a stale
+generator-derived record is best *re-derived*, and a stale fuzz-found antibody's
+shape-class, if it still matters, is covered by a **cell** — making the frozen witness
+redundant. Term-migration would only pay off for a fuzz-found antibody that is (a)
+still expressible, (b) still valuable as a guard, and (c) not covered by any cell —
+a near-empty intersection after the manifest work. That rare case is handled by a
+**manual** edit of the one record, not standing infrastructure. Building a versioned
+s-expr rewrite engine, a rule registry, and `schema=` versioning for it is YAGNI.
 
 ## Components
 
-### C1. Provenance stamp (`origin=`)
-
-Add an `origin=` field to the record format, set when a record is banked:
-- `:fuzz` — a shrunk infection banked by the runner (→ migrate).
-- `:seed` / `:generator` — a coverage-novel seed harvested from a generator (→ regenerate).
-
-Legacy records (no `origin=`) default by file: `corpus.sexp` → `:fuzz`,
-`seeds.sexp` → `:seed`, `reach.sexp` → `:generator` (curated reach constructors).
-`origin` is metadata only — it selects the migrate-vs-regenerate path; it is not part
-of the dedup identity.
-
-### C2. Schema versioning (`schema=<n>`)
-
-Add a monotonic integer `schema=` field. `Antigen.Corpus.schema_version/0` returns the
-current version; newly-encoded records stamp it. A record with no `schema=` field is
-version `0`. The constant is bumped **only** when a kernel grammar / `Serialize` change
-lands that requires a rewrite rule — the bump and the rule are added together.
-
-Both `origin=` and `schema=` are additive fields; `decode_record` reads them with
-legacy defaults, so existing committed records keep decoding unchanged.
-
-### C3. Regeneration — `mix antigen.regen-seeds`
+### C1. Regeneration — `mix antigen.regen-seeds`
 
 Reuses the existing generate path. Drops the stale seed pool and re-harvests
 coverage-novel seeds from the *current* generators into a fresh `seeds.sexp`, dedup by
-seed (coverage) key. Undecodable old seeds are not carried forward — they are
-re-derived, not translated. Zero term-rewriting. (May be a thin wrapper over
-`mix antigen generate` targeting `test/antigen/seeds.sexp`.) `reach.sexp`, when
-non-empty, is regenerated by the same principle — re-running its generator reach
-constructors — reusing the existing reach-banking path rather than a term rewrite.
+seed (coverage) key. Undecodable old seeds are simply not carried — they are
+re-derived, not translated. `reach.sexp`, when non-empty, is regenerated by the same
+principle (re-running its generator reach constructors), reusing the existing
+reach-banking path. Zero term-rewriting.
 
-### C4. Antibody migration — `mix antigen.migrate`
+Likely a thin wrapper over `mix antigen generate` targeting the canonical paths, plus a
+"replace, not append" mode so the fresh pool supersedes the stale one.
 
-`Antigen.Migrations` — an ordered registry of rules `vₙ → vₙ₊₁`, each a **structural
-s-expr rewrite**. The migrator, per record from a `:fuzz`/migrate-eligible source:
+### C2. Antibody prune — `mix antigen.prune`
 
-1. Parse each `pieces` s-expr into a generic head-agnostic tree
-   (`Antigen.SExpr.parse/1`, tolerant of unknown heads).
-2. Apply every rule from the record's `schema` version up to current, in order. A rule
-   is a tree→tree function that pattern-matches a stale head and rewrites it (e.g.
-   `(sigma a b)` → `(data Sigma (a b) ())`); unmatched subtrees pass through unchanged.
-3. Re-serialize, **re-decode with the current grammar**, and from the decoded
-   `Challenge` recompute the antibody dedup key (`assay + serialized terms`).
-4. Dedup by the recomputed key; re-stamp `schema=current`, preserve `origin`.
+Walk `corpus.sexp`. For each record, decode and replay it through the live kernel
+(the same path `corpus_replay_test` uses):
 
-**Atom note:** a rule that introduces a new ctor/family atom (e.g. `:Sigma`) requires
-that atom to be in `Challenge.@known_atoms` so the `:safe` re-decode can intern it —
-adding the atom is part of landing the rule.
+- **decodes AND replays `:ok`** → keep (still a valid regression guard).
+- **undecodable OR replays to a non-`:ok` verdict** → move to
+  `test/antigen/retired.sexp`, annotated with the failure reason (`:unknown_node`,
+  `unknown_assay`, a label-drift verdict, etc.).
 
-**Retirement.** A record that no rule chain can make decode-and-replay is not silently
-dropped: it is moved to `test/antigen/retired.sexp` with a logged reason (the shape it
-guarded is no longer expressible). `migrate` prints a per-record summary
-(migrated / unchanged / retired) and never mutates files it wasn't pointed at.
+Prints a per-record tally (kept / retired, with reasons). Never rewrites a term; never
+silently deletes — a retired record stays reviewable in `retired.sexp` so a human can
+decide whether its shape-class needs a generator cell.
 
-### C5. Verification — the existing replay gate (no new oracle)
+`prune` requires a replay registry covering the corpus's assays; it reuses / extends
+the `corpus_replay_test` registry so "kept" means "genuinely re-checked", not
+"assay unknown, skipped".
 
-After `mix antigen.migrate`, `corpus_replay_test` re-runs every record through the live
-kernel. Test 1 (decodes) + test 3 (replays `:ok`) are the safety net: a rule that
-mistranslates a term flips the verdict and the suite goes red. No a-priori proofs; the
-gate is the proof obligation.
+### C3. Retirement store — `test/antigen/retired.sexp`
+
+An append-only, git-tracked record of what was pruned and why (one comment/annotation
+per retired record). Not replayed by the gate. Purpose: auditability (nothing vanishes)
+and a worklist ("should this become a cell?"). Kept out of `corpus.sexp` so the replay
+gate stays green.
+
+### C4. Verification — the existing replay gate (unchanged)
+
+After `regen-seeds` + `prune`, `corpus_replay_test` re-runs every remaining record
+through the live kernel: test 1 (decodes) + test 3 (replays `:ok`) must be green. Since
+prune's keep-criterion *is* that gate's criterion, a correct prune leaves the gate
+green by construction. This is also the guard against an over-eager regen introducing an
+undecodable seed.
 
 ## Workflow / data flow
 
-Manual and git-reviewed — tests never mutate committed files (preserving the git-clean
-CI guarantee):
+Manual and git-reviewed — tests never mutate committed files (preserving git-clean CI):
 
 1. Land a kernel shape change.
-2. Bump `Corpus.schema_version/0` and add the `vₙ→vₙ₊₁` rewrite rule(s) (+ any new
-   `@known_atoms`).
-3. Run `mix antigen.migrate` (rewrites `corpus.sexp` antibodies) and
-   `mix antigen.regen-seeds` (rebuilds `seeds.sexp`, and `reach.sexp` if non-empty).
-4. Review the diff; run `mix test` — the replay gate verifies.
+2. Run `mix antigen.regen-seeds` (rebuilds `seeds.sexp`, and `reach.sexp` if non-empty)
+   and `mix antigen.prune` (moves stale antibodies to `retired.sexp`).
+3. Review the diff (what regenerated, what retired and why); for any retired guard that
+   still matters, add or confirm a generator cell for its shape-class.
+4. `mix test` — the replay gate verifies.
 5. Commit.
 
 **Relationship to `mix antigen.merge`** (already built): unchanged. `merge` is the
-byte-level dedup-union for recovering replay values banked to a scratch/tmp dir;
-`migrate` re-shapes + re-keys the masters. They compose front-to-back: recover with
-`merge`, then bring forward with `migrate`.
+byte-level dedup-union for recovering replay values banked to a scratch/tmp dir in the
+*current* era; it does not clean stale data. Front-to-back: recover with `merge`, then
+`prune` / `regen-seeds` to bring the result to current-grammar health. (The prior
+scratch data we tried to fold is stale enough that it is dropped by prune, not
+recovered — which is the correct outcome.)
 
 ## Error handling
 
-- Undecodable-even-after-migration → retirement (C4), never a crash or silent loss.
+- Undecodable record → retired with reason (C2), never a crash or silent loss.
 - Keyless / malformed source lines during merge → skipped and counted (existing
   `Corpus.merge` behavior).
-- A rewrite rule that produces an invalid s-expr → surfaced as a migrate failure for
-  that record (retired with reason), not a whole-run abort.
+- A regen that would emit an undecodable seed → caught by the replay gate (C4).
 
 ## Testing
 
-- `Antigen.SExpr` parse/serialize round-trip; unknown-head pass-through.
-- A representative rewrite rule fires on the stale head and leaves other subtrees
-  intact.
-- `migrate` recomputes the key and dedups two records that rewrite to the same shape.
-- Retirement path: an unbringable record lands in `retired.sexp` with a reason and is
-  removed from the master.
-- End-to-end: a synthetic `schema=0` legacy record with a stale head migrates to
-  current and then replays `:ok` through the real kernel.
-- `regen-seeds` produces a fully decodable seed pool.
+- `prune` keeps a decodes-and-replays-`:ok` record and retires an `:unknown_node` one,
+  writing the reason to `retired.sexp` and removing it from the master (on a tmp copy).
+- `prune` retires a label-drift record (decodes, replays non-`:ok`).
+- `prune` leaves an all-green corpus untouched (idempotent).
+- `regen-seeds` produces a fully decodable seed pool that replays clean.
+- Post-run, `corpus_replay_test` is green.
 - The existing `corpus_replay_test` remains the ultimate gate.
 
 ## Non-goals
 
-- No general/speculative grammar-rewrite engine — rules are added lazily per real
-  change.
+- **No term-rewrite engine, no `schema=` versioning, no rule registry** (YAGNI — see
+  "Why no rewrite engine"). Rare precious re-expressible antibodies are hand-migrated.
 - No migration of seeds (regenerated instead).
-- No a-priori truth-preservation proofs (the replay gate is the oracle).
+- No per-seed replay to "reproduce" a specific record (generator drift + shrinking make
+  it non-reproducing).
 - No automatic in-test mutation of committed stores.
