@@ -252,8 +252,12 @@ defmodule Antigen.Assays.Elab do
     env.defs
     |> Enum.sort_by(fn {name, _} -> name end)
     |> Enum.find_value(:ok, fn {name, %{type: ty, body: body}} ->
-      if is_nil(body) or Erase.has_hole?(body) do
-        nil                                                # skip body-less (builtin-op, K2) / incomplete def
+      if is_nil(body) or extern_body?(body) or Erase.has_hole?(body) do
+        # skip body-less (builtin-op, K2) / extern FFI axiom / incomplete def —
+        # none are kernel-checkable (the kernel has no clause for an extern body;
+        # like a postulate, it is trusted at its declared type). Mirrors the
+        # production pipeline's `extern_def?` skip in totality_closure.ex.
+        nil
       else
         case Cure.Core.Normalise.with_fuel(@assay_fuel, fn -> check_one(k, ctx, name, ty, body) end) do
           :ok -> nil
@@ -263,6 +267,11 @@ defmodule Antigen.Assays.Elab do
       end
     end)
   end
+
+  # An `@extern(mod, fun, arity)` FFI body — a value-level axiom the kernel does
+  # not inspect (there is no `infer` clause for it, by design).
+  defp extern_body?({:extern, _}), do: true
+  defp extern_body?(_), do: false
 
   # infer -> Conv (with a check-fallback for checking-mode-only forms, e.g.
   # parameter-bearing constructor bodies the kernel refuses to infer).

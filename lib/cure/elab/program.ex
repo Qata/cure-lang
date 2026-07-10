@@ -231,13 +231,20 @@ defmodule Cure.Elab.Program do
   #   that `.1`/`.2` lower to must resolve in EVERY module (the surface sugar is
   #   usable without `use`, like %[..]); the Sigma family itself is seeded, and
   #   Std.Sigma dependent-elaborates cleanly (D1-proven pattern), so it qualifies.
-  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma)
+  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary)
 
   # The canonical type each auto-prelude module provides. If a module locally
   # declares a same-named type (e.g. its own `type Nat = Zero | Suc`), that prelude
   # is NOT auto-imported — the local declaration is canonical and importing the
   # look-alike would collide (mirrors `declared_type_names`' builtin-seed skip).
-  @auto_prelude_types %{"Std.Bool" => :Bool, "Std.Nat" => :Nat, "Std.Sigma" => :Sigma}
+  @auto_prelude_types %{
+    "Std.Bool" => :Bool,
+    "Std.Nat" => :Nat,
+    "Std.Sigma" => :Sigma,
+    "Std.Int" => :Int,
+    "Std.Float" => :Float,
+    "Std.Binary" => :Binary
+  }
 
   defp auto_prelude_imports(ast) do
     self = find_module_name(ast)
