@@ -5162,7 +5162,7 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr({:literal, meta, value} = expr, _scope, _env) do
+  def elaborate_expr({:literal, meta, value} = expr, scope, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
       :integer when is_integer(value) -> {:ok, {:int_lit, value}}
@@ -5172,6 +5172,12 @@ defmodule Cure.Elab.Elaborator do
       # (`Kernel.infer/2` has no catch-all) — see spec §3.4.
       :char when is_integer(value) and value >= 0 and value <= 0x10FFFF -> {:ok, {:bounded_lit, value}}
       :char when is_integer(value) -> {:error, {:char_literal_out_of_range, value}}
+      # A string literal argument IS `List(Char)` — desugar to its char-literal
+      # list and re-enter, exactly as the typed/checked paths do (so `f("hi")`
+      # and `f(['h','i'])` build the identical Cons spine).
+      :string when is_binary(value) -> elaborate_expr(desugar_string(value, meta), scope, env)
+      # A symbol literal argument `:ok` is an `Atom` value (Core `{:atom_lit, a}`).
+      :symbol when is_atom(value) -> {:ok, {:atom_lit, value}}
       _ -> {:error, {:unsupported_expression, expr}}
     end
   end

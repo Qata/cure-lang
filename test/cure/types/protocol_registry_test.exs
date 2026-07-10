@@ -113,8 +113,8 @@ defmodule Cure.Types.ProtocolRegistryTest do
       {:ok, mod_a} = Cure.Compiler.compile_and_load(source_a)
       assert mod_a == :"Cure.ModA"
 
-      # Module A's display function should work
-      assert mod_a.display(42) == "42"
+      # Module A's display function should work (#29: from_int → List(Char))
+      assert mod_a.display(42) == ~c"42"
 
       # The impl should be registered globally
       assert {:ok, :"Cure.ModA"} = ProtocolRegistry.lookup_impl("Displayable", "display", "Int")

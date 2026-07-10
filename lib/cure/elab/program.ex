@@ -231,7 +231,12 @@ defmodule Cure.Elab.Program do
   #   that `.1`/`.2` lower to must resolve in EVERY module (the surface sugar is
   #   usable without `use`, like %[..]); the Sigma family itself is seeded, and
   #   Std.Sigma dependent-elaborates cleanly (D1-proven pattern), so it qualifies.
-  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary)
+  #   Std.Bounded -- `Char = Bounded(0x110000)`, so the `:bounded` family must
+  #   resolve in EVERY module for a char/string LITERAL (`'a'`, "hi") to elaborate
+  #   (`char_type_value` looks up `:bounded`); string literals are core surface
+  #   sugar, exactly like %[..]. Std.Bounded is tiny + dependent-clean, so it
+  #   qualifies. (Not seeded — auto-import avoids colliding with its own decl.)
+  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary Std.Bounded)
 
   # The canonical type each auto-prelude module provides. If a module locally
   # declares a same-named type (e.g. its own `type Nat = Zero | Suc`), that prelude
@@ -243,7 +248,8 @@ defmodule Cure.Elab.Program do
     "Std.Sigma" => :Sigma,
     "Std.Int" => :Int,
     "Std.Float" => :Float,
-    "Std.Binary" => :Binary
+    "Std.Binary" => :Binary,
+    "Std.Bounded" => :Bounded
   }
 
   defp auto_prelude_imports(ast) do
