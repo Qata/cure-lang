@@ -21,12 +21,12 @@ mod Std.Ord
   type Ordering = LessThan | EqualTo | GreaterThan
 
   ## Total ordering over `T`.
-  proto Ord(t)
+  interface Ord(t)
     ## `LessThan` when `a < b`, `GreaterThan` when `a > b`, `EqualTo` otherwise.
     fn compare(a: t, b: t) -> Ordering
 
   ## `Ord` impl for `Int`.
-  impl Ord for Int
+  implementation Ord for Int
     ## Integer three-way compare.
     fn compare(a: Int, b: Int) -> Ordering =
       pickup
@@ -35,7 +35,7 @@ mod Std.Ord
         else  -> EqualTo()
 
   ## `Ord` impl for `Float`.
-  impl Ord for Float
+  implementation Ord for Float
     ## Float three-way compare (NaNs follow BEAM's term-order).
     fn compare(a: Float, b: Float) -> Ordering =
       pickup
@@ -44,7 +44,7 @@ mod Std.Ord
         else  -> EqualTo()
 
   ## `Ord` impl for `String`. Uses byte-wise ordering of the binary.
-  impl Ord for String
+  implementation Ord for String
     ## String three-way compare.
     fn compare(a: String, b: String) -> Ordering =
       pickup
@@ -52,14 +52,15 @@ mod Std.Ord
         a > b -> GreaterThan()
         else  -> EqualTo()
 
-  ## Strict less-than derived from `compare/2`.
-  fn lt(a: t, b: t) -> Bool = compare(a, b) == LessThan()
+  ## Strict less-than derived from `compare/2`. The `where Ord(t)`
+  ## constraint threads the dictionary that dispatches `compare`.
+  fn lt(a: t, b: t) -> Bool where Ord(t) = compare(a, b) == LessThan()
 
   ## Less-than-or-equal derived from `compare/2`.
-  fn le(a: t, b: t) -> Bool = compare(a, b) != GreaterThan()
+  fn le(a: t, b: t) -> Bool where Ord(t) = compare(a, b) != GreaterThan()
 
   ## Strict greater-than derived from `compare/2`.
-  fn gt(a: t, b: t) -> Bool = compare(a, b) == GreaterThan()
+  fn gt(a: t, b: t) -> Bool where Ord(t) = compare(a, b) == GreaterThan()
 
   ## Greater-than-or-equal derived from `compare/2`.
-  fn ge(a: t, b: t) -> Bool = compare(a, b) != LessThan()
+  fn ge(a: t, b: t) -> Bool where Ord(t) = compare(a, b) != LessThan()
