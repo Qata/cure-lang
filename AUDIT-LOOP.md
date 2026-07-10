@@ -568,3 +568,103 @@ a clean audit**. Convergence (two consecutive clean audits) is **not** met
 Commits this cycle: `c0beb65` (git-URL + clone-status), `21f56be` (docstring).
 
 ---
+
+## Iteration 10
+
+Fresh adversarial audit of the iteration-9 changes (`c0beb65`, `21f56be`) via three
+parallel Opus subagents: (1) the new `ensure_clone`/`resolve_git_dep` logic, (2) the
+end-to-end dep-resolution contract + CLI handlers, (3) the migrate/lexer/parser/
+edition surface (deliberately broadened — iterations 8–9 were dep-focused). Every
+finding verified against CURRENT source before counting. **2 confirmed bugs fixed.**
+One agent (dep-contract) audited a STALE view of the file (line numbers off by
+hundreds; claimed `strip_inline_comment` "does not exist"); its headline findings
+were refuted against current source.
+
+**Confirmed bugs (fixed):**
+
+- **`ref` dependency pin silently dropped** (`project.ex parse_dep_line`, agent 1).
+  `parse_dep_line` extracted `path/git/tag/version/constraint` but never `ref`,
+  although `ref_args/1` has a live `%{ref: ...}` clause and `write_lock` persists a
+  `ref` row. A `mydep = { git = "...", ref = "abc123" }` pin was silently ignored —
+  the dep cloned the remote default branch while the lockfile claimed a ref. Now
+  parsed and honoured. (`5c79183`)
+- **Misleading migrate default-target comments** (`cli.ex`, agent 3). Two comments
+  in `cmd_migrate`/`migrate_resolve_edition` asserted the no-flag target is "the
+  latest minted edition", contradicting `Edition.current/0`'s documented decoupling
+  from the newest known edition (staged rollout). The code targets `current()`; the
+  comments now say so. (`980ce23`)
+
+**Verified NON-bugs / refuted (checked against current source):**
+
+- Agent-2 "BUG 1" (registry deps crash the git clause, "no guard"): REFUTED — the
+  git clause (`project.ex:278`) has `when is_binary(url)`; registry deps carry
+  `git: nil`, so `is_binary(nil)` is false → they route to the registry clause.
+- Agent-2 "BUG 2" (failed clone silent): REFUTED — fixed in iteration 9
+  (`ensure_clone` checks `System.cmd`'s exit status).
+- Agent-2 "BUG 5" (`strip_inline_comment` missing → scalar comments corrupt):
+  REFUTED — `parse_kv` calls `strip_inline_comment` (`project.ex:1144`). The agent
+  grepped a stale checkout.
+- Agent-3 extensive verified-correct list: retirement direction/boundary
+  (`compare in [:eq,:gt]`), lone-CR/CRLF data-loss closed, resolver↔parser pragma
+  agreement, `\N`-backreference safety, and rule idempotency (ModuleRename,
+  UppercaseTypeVar, GroupHoist, ProtoToInterface) all confirmed sound.
+- `dep_project_dir`/`find_dep_root` iteration-6 escape re-verified closed (agent 1).
+
+## Outstanding findings (after iteration 10)
+
+### Latent / unreachable today (recorded, not fixed — no failing red test possible)
+
+- **`comment_texts`/`migrate_comments` treat `#` inside string literals as a
+  comment** (`migrate.ex:242`, mirror `cli.ex:1319`). The `~r/#+\s?(.*)$/` scan is
+  not quote-aware, so `x = "a # b"` yields a bogus "comment". This could false-fail
+  the lossless-comment `verify` (`:comment_dropped`) — BUT only if a migrate rule
+  rewrites string-literal CONTENTS (or removes one of two identical `#`-string
+  lines). No current rule edits string contents, so the bogus comment is stable
+  across baseline/output and never trips. Genuine helper flaw; fix = quote-aware
+  scan (reuse the `strip_inline_comment` pattern). Deferred: cannot be reproduced
+  by a failing red test through any current rule.
+- **Standalone pragma-less file is syntax-migrated but never edition-stamped**
+  (`cli.ex migrate_file_bump?`/`migrate_splice_edition`, agent 3). The prepend-new-
+  pragma branch is unreachable from the CLI; a pragma-less standalone file migrated
+  across an edition boundary would get target-spelling syntax with no `@edition`
+  marker → resolves to the older default next compile. LATENT (fires only when a
+  2nd edition exists so a bump actually happens) and needs a stamping-policy
+  decision (see operator items).
+- **`ProtoToInterface` declares `retires_keywords: ["proto","impl"]` with
+  `enforced_in: nil`** (agent 3). Inert today (`retired_keywords/2` guards on
+  `enforced_in != nil`); arguably correct-for-now (can't enforce retirement at an
+  unminted edition). Latent trap for whoever later sets `enforced_in`.
+
+### Blocked — needs operator (design decisions; no parity-clear answer)
+
+- **`cure deps update` is effectively a no-op.** It only iterates git deps
+  (`if Map.get(dep, :git)`), skipping path and registry deps entirely; and for an
+  already-cloned git dep `ensure_clone` short-circuits on an existing `.git` with
+  no fetch/checkout — so changing a pinned `tag`/`ref` and running `deps update`
+  never picks up the new revision, yet it writes the lock and prints "Lockfile
+  updated." Making `update` truly update requires a semantics decision (force
+  re-clone? `git fetch` + checkout? re-resolve registry versions?). Pre-existing,
+  orthogonal to editions.
+- **Partial/interrupted clone accepted as green.** `ensure_clone` trusts
+  `File.dir?(target/.git)`; a clone interrupted after `.git` is created but before
+  checkout leaves an orphan `.git`, so the dep "resolves" with zero modules. Needs
+  a completeness/robustness policy (no clean cheap fix).
+- **`cure migrate` no-flag target = `current()` (default), not newest-known.** The
+  comments are now corrected, but whether a *migration* tool should default to the
+  newest known edition (Rust `cargo fix --edition` moves forward) vs. the
+  conservative default is a genuine product decision.
+- **Hyphenated dependency names silently dropped** (agent 2, plausible). A
+  `[dependencies]` line whose name is not `\w+` (e.g. `my-lib = {...}`) fails both
+  `parse_dep_line` regexes → `nil` → dropped with no diagnostic. Whether to widen
+  the name grammar or error loudly on an unparseable dep line is a small design
+  call.
+
+**Loop status:** iteration 10's fresh audit found 2 confirmed bugs (fixed) plus
+design-decision items above — so it is **NOT a clean audit**. Convergence (two
+consecutive clean audits) is not met (iterations 6–10 all found bugs). The design
+items need an operator decision before the loop can reach "bug-free"; a
+PushNotification was sent. The cron is **left in place**; do NOT merge.
+
+Commits this cycle: `5c79183` (ref pin), `980ce23` (migrate comments).
+
+---
