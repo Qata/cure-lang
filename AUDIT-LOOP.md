@@ -937,3 +937,104 @@ Commits this cycle: `dca8612` (fence 0x20 fix), `dceb2d2` (set_edition comment),
 plus this record.
 
 ---
+
+## Iteration 14
+
+Driven by a fresh adversarial audit (two parallel Opus general-purpose agents
+over the printer and CLI slices). Every finding below was reproduced against
+source before counting. **Six real bugs found and fixed; one agent finding
+refuted.**
+
+### Fixed (with commit SHAs)
+
+1. **Printer dropped precedence parentheses** (`281c9f6`, `d540eb6`) — the
+   canonical printer emitted operator operands with bare `render/3`, never
+   re-inserting the grouping parens the Pratt parser needs. `cure fmt` and
+   `cure migrate` silently changed program meaning on valid code:
+   `(x + 1) * 2` → `x + 1 * 2` (= `x + (1*2)`), `1 - (2 - x)` → `1 - 2 - x`,
+   `(if c then a else b) + 1` → `if c then a else b + 1`. Fix = precedence- and
+   associativity-aware `operand_str/5` + `child_prec/1` + `op_prec/1`, mirroring
+   `Cure.Compiler.Parser.Precedence`. First commit covered `:binary_op`/
+   `:unary_op`; the audit (agent A) then found the parser lowers `..`/`..=` →
+   `:range`, `<-|` → `:send`, `.` → `:attribute_access` as their OWN node types,
+   which were unguarded in both directions (`(1..2)+3` → `1..2 + 3`,
+   `(a+b).x` → `a + b.x`, `(pid <-| msg)+1` → `pid <-| msg + 1`). Second commit
+   routed those nodes' operands through the same machinery. 19 structural
+   round-trip tests (`printer_precedence_test.exs`); golden fixpoint/roundtrip/
+   formatter suites stay green (minimal parens, no over-parenthesisation).
+
+2. **`cure <typo>` exited 0** (`8b26495`) — the catch-all unknown-command arm
+   printed an error but returned normally, so a mistyped command silently
+   succeeded (`cure typo && next` proceeded). Now `exit({:shutdown, 1})`.
+
+3. **`cure deps <bad>` misblamed `deps`** (`8b26495`) — no `[deps | rest]` arm,
+   so a bad subcommand fell to the catch-all which bound `unknown = "deps"`:
+   it named a valid command as unknown, suggested an unrelated one, and exited 0.
+   New `[deps | rest]` arm names the real offender and exits non-zero.
+
+4. **`cure keys <malformed>` misdispatch** (`b2af49b`) — the exact structural
+   analog of the deps bug: `keys` had `generate <handle>`/`list` arms but no
+   `[keys | rest]` fallback, so bare/missing-handle/unknown/extra-arg `keys`
+   invocations were misblamed as an unknown top-level command (fuzzy matcher even
+   suggested `deps`). New keys usage arm fails cleanly. 4 tests.
+
+5. **`cure stdlib` exited 0 on a module compile failure** (`b2af49b`) — SEVERE
+   false success: it printed the per-module error but continued and returned
+   normally, so a broken stdlib build read as exit 0 to a CI wrapper. Now tracks
+   per-module outcomes and exits `{:shutdown, 1}` if any module failed.
+
+6. **`cure migrate` exited 0 on an edition-stamp failure** (`b2af49b`,
+   editions-scope) — `migrate_bump` printed "could not bump project edition" but
+   its `cond` fell through to `:ok`, so a migration that failed to stamp the new
+   edition falsely reported success. `migrate_bump` now returns the cond value
+   (`{:error, reason}` on stamp failure) and `migrate_apply_and_bump` propagates
+   it, so `main/1` halts non-zero.
+
+### Refuted (verified against source, not a bug)
+
+- Agent B's "the Printer mangles every file one-token-per-line / `--print` vs
+  `--write` disagree." Reproduced: the "mangling" only occurs for **invalid**
+  Cure input (`module Foo do … end`, `proto Show do … end` — Elixir/Erlang block
+  syntax, not Cure's indentation-based `mod`). The parser yields a degenerate
+  `{:block, [ {:variable,…"module"}, {:variable,…"Foo"}, … ]}` and the printer
+  faithfully renders each bare token on its own line. Real `.cure` files
+  (`set.cure`, `adt.cure`, whole stdlib corpus) round-trip structurally stable
+  (`printer_totality_test` fixpoint + `lossless_roundtrip_test` already pin this).
+  Garbage-in, not corruption of valid code.
+
+## Outstanding findings (after iteration 14)
+
+### Lower-severity CLI (real, deferred to a coherent separate cleanup)
+- **Fixed-arity single-arg commands misblame "Unknown command"** on a wrong
+  argument count — `run`, `check`, `init`, `search`, `info`, `explain`/`why`
+  (each `["cmd" | [x]]` with no `["cmd" | rest]` fallback). Exit code is now
+  CORRECT (the catch-all exits 1); only the message misleads (names a valid
+  command as unknown). Message quality, not a correctness bug.
+- **Usage-arg errors still exit 0** (bare `error(...)`, no exit): `cure compile`/
+  `cure trace`/`cure new` with no args, `cure explain <unknown-code>`,
+  `cure fmt --aggressive` on an unparseable file, `cure bench` on a broken file,
+  `cure keys generate` key-gen failure. Real but low-harm. Best fixed together as
+  a `usage_error/1` helper (print + exit) plus `[cmd | rest]` fallbacks — a
+  focused CLI-consistency pass for a later iteration.
+
+### Blocked — needs operator (UNCHANGED from iteration 13)
+- **HIGH: `cure migrate` uppercase-type-var corruption** — needs a
+  name-resolution design decision (see iteration 13 section). Not touched.
+- deps update no-op; partial/interrupted clone accepted as green; migrate no-flag
+  target = `current()` vs newest-known; hyphenated dependency names dropped
+  (general package-manager scope).
+
+### Latent / unreachable today (carried)
+- `comment_texts` non-quote-aware; standalone pragma-less file not edition-stamped
+  on a bump; `ProtoToInterface` `retires_keywords` with `enforced_in: nil`.
+
+**Loop status:** iteration 14 was a heavy bug-finding cycle — 6 real bugs fixed
+(2 printer correctness affecting `cure fmt`/`cure migrate`, 4 CLI exit-status),
+1 agent finding refuted. NOT converged; streak resets. The cron is **left in
+place**. Full suite green: 3926 passed, 0 failures. Do NOT merge.
+
+Commits this cycle: `281c9f6` (printer binary/unary parens), `8b26495` (CLI
+unknown-command exit + deps fallback), `d540eb6` (printer range/send/dot parens),
+`b2af49b` (CLI keys fallback + stdlib/migrate non-zero exit), plus this record.
+
+---
