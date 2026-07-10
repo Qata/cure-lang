@@ -534,7 +534,7 @@ defmodule Cure.Compiler.Printer do
   defp to_string(other, _depth, _indent) when is_binary(other), do: other
 
   defp to_string(other, _depth, _indent) do
-    inspect(other)
+    raise Cure.Compiler.Printer.UnprintableNodeError, node: other
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
