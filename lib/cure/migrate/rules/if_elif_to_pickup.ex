@@ -50,6 +50,8 @@ defmodule Cure.Migrate.Rules.IfElifToPickup do
       id: :W_if_elif_pickup,
       description: "legacy `if`/`elif`/`else` is migrated to the `pickup` primitive",
       phase: :syntactic,
+      tier: :machine,
+      since: "2026",
       detect_and_rewrite: &detect_and_rewrite/2,
       warning_template: "legacy `if`/`elif` will be migrated to `pickup`"
     }

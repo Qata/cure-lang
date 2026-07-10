@@ -38,6 +38,8 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
       id: :W_uppercase_type_var,
       description: "a free uppercase type variable is lowercased",
       phase: :needs_resolution,
+      tier: :review,
+      since: "2026",
       detect_and_rewrite: &detect_and_rewrite/2,
       warning_template: "uppercase type variable will be lowercased"
     }

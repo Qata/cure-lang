@@ -44,6 +44,9 @@ defmodule Cure.Migrate.Rules.RemovedModule do
       id: :W_removed_module,
       description: "a reference to a removed stdlib module is flagged (no auto-migration)",
       phase: :syntactic,
+      tier: :manual,
+      since: "2026",
+      enforced_in: "2026",
       detect_and_rewrite: &detect_and_rewrite/2,
       warning_template:
         "removed stdlib module: no automatic migration — port this reference by hand"

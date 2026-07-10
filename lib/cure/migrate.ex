@@ -58,10 +58,10 @@ defmodule Cure.Migrate do
     * `:rules` — override the registry (default `rules/0`).
     * `:apply` — which rewrites to fold into the returned AST:
         * `:all` (default) — every rule's rewrite; used by `cure migrate`.
-        * `:safe_only` — only the rewrites of rules flagged `tolerate_safe?`;
-          used by `cure build`, so an unsafe rule *warns* but leaves the legacy
-          form as-is in the compiled AST (spec's "normalize in-memory where
-          safe"). Warnings are emitted for every fired rule in both modes.
+        * `:safe_only` — only the rewrites of `:machine`-tier rules; used by
+          `cure build`, so a `:review`/`:manual` rule *warns* but leaves the
+          legacy form as-is in the compiled AST (spec's "normalize in-memory
+          where safe"). Warnings are emitted for every fired rule in both modes.
   """
   @spec run(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()]}
   def run(ast, opts \\ []) do
@@ -87,11 +87,11 @@ defmodule Cure.Migrate do
     end)
   end
 
-  # Fold the rewrite (`:all` mode, or a `tolerate_safe?` rule) or keep the legacy
-  # AST while still having warned (`:safe_only` mode, unsafe rule).
+  # Fold the rewrite (`:all` mode, or a `:machine`-tier rule) or keep the legacy
+  # AST while still having warned (`:safe_only` mode, `:review`/`:manual` rule).
   defp commit(_rule, :all, _old_ast, new_ast), do: new_ast
-  defp commit(%Rule{tolerate_safe?: true}, :safe_only, _old_ast, new_ast), do: new_ast
-  defp commit(%Rule{tolerate_safe?: false}, :safe_only, old_ast, _new_ast), do: old_ast
+  defp commit(%Rule{tier: :machine}, :safe_only, _old_ast, new_ast), do: new_ast
+  defp commit(%Rule{}, :safe_only, old_ast, _new_ast), do: old_ast
 
   defp warnings_for(%Rule{} = rule, file, lines) do
     Enum.map(lines, fn line ->

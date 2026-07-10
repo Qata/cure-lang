@@ -39,6 +39,8 @@ defmodule Cure.Migrate.Rules.GroupHoist do
       id: :W_group_hoist,
       description: "an in-body `@group(...)` decorator is hoisted above `mod`",
       phase: :syntactic,
+      tier: :machine,
+      since: "2026",
       detect_and_rewrite: &detect_and_rewrite/2,
       warning_template: "`@group(...)` will be hoisted above `mod`"
     }
