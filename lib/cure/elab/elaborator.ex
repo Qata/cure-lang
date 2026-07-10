@@ -4115,11 +4115,14 @@ defmodule Cure.Elab.Elaborator do
   defp refine_scrutinee_in_body(body_expr, {:var, i}, pattern, pattern_vars, names) do
     scrut_name = Enum.at(names, i)
 
+    stripped = strip_named_implicits(pattern)
+
     if is_binary(scrut_name) and
          Enum.find_index(names, &(&1 == scrut_name)) == i and
          scrut_name not in pattern_vars and
+         expressible_pattern?(stripped) and
          not binds_any?(body_expr, [scrut_name | pattern_vars]) do
-      subst_surface_var(body_expr, scrut_name, strip_named_implicits(pattern))
+      subst_surface_var(body_expr, scrut_name, stripped)
     else
       body_expr
     end
@@ -4127,6 +4130,22 @@ defmodule Cure.Elab.Elaborator do
 
   defp refine_scrutinee_in_body(body_expr, _scrut_term, _pattern, _pattern_vars, _names),
     do: body_expr
+
+  # Can this branch pattern be rendered into TERM position? A wildcard `_` has
+  # no value, so a pattern containing one (`[_ | _]`) is not expressible; the
+  # surface scrutinee-refinement must be skipped for it (the scrutinee variable
+  # stays in branch scope with its original type and the body checks against
+  # that directly). Rendering `[_ | _]` as an expression resolved both `_`s to
+  # the head element binder and mis-typed the tail slot.
+  defp expressible_pattern?({:variable, _meta, "_"}), do: false
+
+  defp expressible_pattern?({_tag, _meta, children}) when is_list(children),
+    do: Enum.all?(children, &expressible_pattern?/1)
+
+  defp expressible_pattern?(list) when is_list(list),
+    do: Enum.all?(list, &expressible_pattern?/1)
+
+  defp expressible_pattern?(_other), do: true
 
   defp subst_surface_var({:variable, _meta, name}, name, replacement), do: replacement
 
