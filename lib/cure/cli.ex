@@ -67,6 +67,7 @@ defmodule Cure.CLI do
           token: :string,
           cover: :boolean,
           strict: :boolean,
+          edition: :string,
           registry: :string,
           include_erts: :boolean,
           overwrite: :boolean,
@@ -1214,18 +1215,108 @@ defmodule Cure.CLI do
     print? = Keyword.get(opts, :print, false)
     strict? = Keyword.get(opts, :strict, false)
 
-    case migrate_targets(paths) do
-      [] ->
-        info("No .cure files found")
-        :ok
+    # Resolve the crossing target: `--edition YYYY` when given, else the latest
+    # minted edition. A user-supplied value is validated through
+    # Cure.Edition.parse/1 BEFORE it can reach plan_migration_source/2 or the
+    # phase-2 bump — set_edition/2 writes whatever string it is handed verbatim,
+    # so an unvalidated typo would only surface much later on the next project
+    # load. plan_migration/1 then refuses a downgrade target before any file is
+    # read.
+    with {:ok, target} <- migrate_resolve_edition(opts),
+         {:ok, ^target} <- plan_migration(target: target) do
+      case migrate_targets(paths) do
+        [] ->
+          info("No .cure files found")
+          :ok
 
-      files ->
-        with :ok <- migrate_git_guard(files, check?, print?),
-             {:ok, results} <- migrate_preflight_all(files),
-             :ok <- migrate_strict_gate(results, strict?) do
-          migrate_apply(results, check?, print?)
+        files ->
+          with :ok <- migrate_git_guard(files, check?, print?),
+               {:ok, results} <- migrate_preflight_all(files, target),
+               :ok <- migrate_strict_gate(results, target, strict?) do
+            migrate_apply_and_bump(results, target, paths, check?, print?)
+          end
+      end
+    end
+  end
+
+  # `--edition YYYY` (validated against the known-editions allow-list) or the
+  # latest minted edition when the flag is absent.
+  defp migrate_resolve_edition(opts) do
+    case Keyword.get(opts, :edition) do
+      nil ->
+        {:ok, Cure.Edition.current()}
+
+      raw ->
+        case Cure.Edition.parse(raw) do
+          {:ok, _} ->
+            {:ok, raw}
+
+          {:error, {:unknown_edition, _}} = err ->
+            error("unknown edition: #{inspect(raw)}")
+            err
         end
     end
+  end
+
+  @doc false
+  # Pure planning: refuse a downgrade target (target older than the project's
+  # current declared edition).
+  def plan_migration(opts) do
+    target = Keyword.fetch!(opts, :target)
+    current = Keyword.get(opts, :current, Cure.Edition.current())
+    if Cure.Edition.compare(target, current) == :lt, do: {:error, :downgrade}, else: {:ok, target}
+  end
+
+  @doc false
+  # Pure planning for one source: run the crossing rule set to a fixpoint; if a
+  # blocking :manual item fired, report it; else return the migrated source and
+  # the pending edition bump. The :blocked clause is checked BEFORE strict?, so a
+  # :manual item is never promoted to a :strict_violation — it stays a block
+  # (spec §8: --strict does not promote :manual).
+  def plan_migration_source(src, opts) do
+    target = Keyword.fetch!(opts, :target)
+    {:ok, toks, trivia} = Cure.Compiler.Lexer.tokenize(src, trivia: true, edition: target)
+    {:ok, ast} = Cure.Compiler.Parser.parse(toks, emit_events: false, edition: target)
+    attached = Cure.Compiler.Trivia.attach(ast, trivia)
+    rules = Cure.Migrate.rules_for_crossing(target)
+
+    case Cure.Migrate.run_to_fixpoint(attached, rules: rules) do
+      {:ok, out_ast, warns} ->
+        blocking =
+          Cure.Migrate.blocking_manual(target)
+          |> Enum.map(& &1.id)
+          |> Enum.filter(fn id -> Enum.any?(warns, &(&1.rule == id)) end)
+
+        strict? = Keyword.get(opts, :strict, false)
+        fixable_fired = fixable_tier_warnings(warns, target)
+
+        cond do
+          blocking != [] ->
+            # :manual blocks the bump regardless of --strict (never promoted, §8)
+            {:blocked, blocking}
+
+          strict? and fixable_fired != [] ->
+            # --strict promotes fixable-tier (:machine/:review) warnings to errors
+            {:error, {:strict_violation, fixable_fired}}
+
+          true ->
+            {:ok, Cure.Compiler.Printer.quoted_to_string(out_ast), warns, target}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The ids of fired warnings whose rule is a fixable tier (:machine/:review).
+  defp fixable_tier_warnings(warns, target) do
+    fixable_ids =
+      Cure.Migrate.rules_for_crossing(target)
+      |> Enum.filter(&(&1.tier in [:machine, :review]))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    warns |> Enum.map(& &1.rule) |> Enum.filter(&MapSet.member?(fixable_ids, &1)) |> Enum.uniq()
   end
 
   # Target selection mirrors cmd_fmt/2 exactly (explicit paths with dir
@@ -1258,88 +1349,111 @@ defmodule Cure.CLI do
     end
   end
 
-  # In-memory batch preflight (spec §5.8): run every file through
-  # lex→parse→attach→Migrate.run→print→reparse+comment-preservation. Only if
-  # ALL files pass is anything written; on any failure, write nothing and report
-  # the failing file(s).
-  defp migrate_preflight_all(files) do
-    results = Enum.map(files, &migrate_preflight_file/1)
+  # In-memory batch preflight (spec §5.8 / §6.1): run every file through the
+  # crossing rule set to a fixpoint (which itself verifies reparse + comment
+  # preservation on every pass). Only if ALL files pass is anything written; on
+  # any failure, write nothing and report the failing file(s). A file whose
+  # migration is blocked by a fired :manual rule is reported per-file (with the
+  # hand-port rule ids) as a phase-1 block that skips the write — NOT as a bare
+  # parse failure. The :blocked routing here (and in plan_migration_source/2) is
+  # what keeps a :manual item from ever reaching the --strict gate, so it is
+  # never promoted to a :strict_violation (spec §8).
+  defp migrate_preflight_all(files, target) do
+    results = Enum.map(files, &migrate_preflight_file(&1, target))
     failed = for {:error, path} <- results, do: path
+    blocked = for {:blocked, path, ids} <- results, do: {path, ids}
 
-    if failed == [] do
-      {:ok, Enum.map(results, fn {:ok, r} -> r end)}
-    else
-      Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
-      {:error, {:preflight_failed, failed}}
+    cond do
+      failed != [] ->
+        Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
+        {:error, {:preflight_failed, failed}}
+
+      blocked != [] ->
+        Enum.each(blocked, fn {path, ids} ->
+          error("#{path}: manual migration required — #{Enum.map_join(ids, ", ", &to_string/1)}")
+        end)
+
+        {:error, {:blocked, blocked}}
+
+      true ->
+        {:ok, for({:ok, r} <- results, do: r)}
     end
   end
 
-  defp migrate_preflight_file(file) do
+  defp migrate_preflight_file(file, target) do
     with {:ok, source} <- File.read(file),
          {:ok, toks, trivia} <-
-           Cure.Compiler.Lexer.tokenize(source, file: file, trivia: true),
-         {:ok, ast} <- Cure.Compiler.Parser.parse(toks, file: file, emit_events: false) do
-      attached = Cure.Compiler.Trivia.attach(ast, trivia)
-      {new_ast, warnings} = Cure.Migrate.run(attached, file: file)
-      output = migrate_render(new_ast)
+           Cure.Compiler.Lexer.tokenize(source, file: file, trivia: true, edition: target),
+         {:ok, in_ast} <-
+           Cure.Compiler.Parser.parse(toks, file: file, emit_events: false, edition: target) do
+      # Baseline = the un-migrated input reprinted the same way plan_migration_source/2
+      # prints the migrated AST, so `changed?` reflects a real rule rewrite (the old
+      # `new_ast != attached`), not incidental reformatting.
+      baseline =
+        Cure.Compiler.Printer.quoted_to_string(Cure.Compiler.Trivia.attach(in_ast, trivia))
 
-      if migrate_output_ok?(source, output, file) do
-        {:ok,
-         %{path: file, output: output, changed?: new_ast != attached, warnings: warnings}}
-      else
-        {:error, file}
+      case plan_migration_source(source, target: target) do
+        {:ok, printed, warnings, bump} ->
+          output = if String.ends_with?(printed, "\n"), do: printed, else: printed <> "\n"
+
+          {:ok,
+           %{
+             path: file,
+             output: output,
+             changed?: printed != baseline,
+             warnings: warnings,
+             bump: bump
+           }}
+
+        {:blocked, ids} ->
+          {:blocked, file, ids}
+
+        {:error, _reason} ->
+          {:error, file}
       end
     else
       _ -> {:error, file}
     end
   end
 
-  # Canonical file text: the printer output with the §5.4 rule-2 single trailing
-  # newline applied at write time.
-  defp migrate_render(ast) do
-    out = Cure.Compiler.Printer.quoted_to_string(ast)
-    if String.ends_with?(out, "\n"), do: out, else: out <> "\n"
-  end
+  # --strict promotes fixable-tier (:machine/:review) warnings to errors; write
+  # nothing. A file blocked only by a :manual rule never reaches here — it is
+  # already reported by migrate_preflight_all/2's :blocked path (spec §8:
+  # --strict does not promote :manual).
+  defp migrate_strict_gate(_results, _target, false), do: :ok
 
-  # The migrated output must reparse AND preserve every source comment (spec
-  # §5.2: a migration never silently drops a comment).
-  defp migrate_output_ok?(source, output, file) do
-    migrate_reparses?(output, file) and migrate_comments(source) -- migrate_comments(output) == []
-  end
+  defp migrate_strict_gate(results, target, true) do
+    violators =
+      for r <- results,
+          ids = fixable_tier_warnings(r.warnings, target),
+          ids != [],
+          do: {r.path, ids}
 
-  defp migrate_reparses?(source, file) do
-    with {:ok, toks} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
-         {:ok, _ast} <- Cure.Compiler.Parser.parse(toks, file: file, emit_events: false) do
-      true
+    if violators == [] do
+      :ok
     else
-      _ -> false
+      Enum.each(violators, fn {path, ids} ->
+        error("#{path}: fixable migration warnings present (--strict) — #{Enum.map_join(ids, ", ", &to_string/1)}")
+      end)
+
+      {:error, {:strict_violation, violators}}
     end
   end
 
-  defp migrate_comments(src) do
-    src
-    |> String.split("\n")
-    |> Enum.flat_map(fn line ->
-      case Regex.run(~r/#+\s?(.*)$/, line) do
-        [_, txt] -> [String.trim(txt)]
-        _ -> []
-      end
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.sort()
-  end
+  # Phase 2 of the two-phase migrate: write the rewritten files (unless
+  # --check/--print), then, only if every targeted file succeeded, bump the
+  # edition marker toward `target`. The bump writes only when it actually raises
+  # the edition (target strictly greater than the current marker), so a routine
+  # `cure migrate` at the latest edition never gratuitously stamps a pragma or
+  # rewrites Cure.toml.
+  defp migrate_apply_and_bump(results, target, paths, check?, print?) do
+    case migrate_apply(results, check?, print?) do
+      :ok ->
+        migrate_bump(results, target, paths, check?, print?)
+        :ok
 
-  # --strict: any fired migration warning becomes an error; write nothing.
-  defp migrate_strict_gate(_results, false), do: :ok
-
-  defp migrate_strict_gate(results, true) do
-    warned = for r <- results, r.warnings != [], do: r.path
-
-    if warned == [] do
-      :ok
-    else
-      Enum.each(warned, fn path -> error("#{path}: migration warnings present (--strict)") end)
-      {:error, {:strict_warnings, warned}}
+      other ->
+        other
     end
   end
 
@@ -1366,6 +1480,83 @@ defmodule Cure.CLI do
     end)
 
     :ok
+  end
+
+  # Bump the edition marker to `target` (phase 2). A whole-project run (no
+  # explicit paths) with a resolvable Cure.toml bumps its `edition` key; a
+  # standalone-file run splices/replaces each file's leading `@edition` pragma.
+  # In every mode the bump only writes when `target` is strictly newer than the
+  # existing marker. --check/--print never write; they only report the pending
+  # bump when it would raise the edition.
+  defp migrate_bump(results, target, paths, check?, print?) do
+    cond do
+      check? ->
+        if migrate_project_bump?(paths, target) or Enum.any?(results, &migrate_file_bump?(&1.path, target)),
+          do: info("would bump edition to #{target}")
+
+      print? ->
+        if migrate_project_bump?(paths, target) or Enum.any?(results, &migrate_file_bump?(&1.path, target)),
+          do: IO.puts("# pending edition bump: #{target}")
+
+      paths == [] and migrate_project_bump?(paths, target) ->
+        case Cure.Project.set_edition(Path.join(".", "Cure.toml"), target) do
+          :ok -> info("bumped project edition to #{target}")
+          {:error, reason} -> error("could not bump project edition: #{inspect(reason)}")
+        end
+
+      true ->
+        Enum.each(results, fn r ->
+          if migrate_file_bump?(r.path, target) do
+            File.write!(r.path, migrate_splice_edition(File.read!(r.path), target))
+            info("bumped #{r.path} to edition #{target}")
+          end
+        end)
+    end
+
+    :ok
+  end
+
+  # A whole-project run whose Cure.toml declares an edition strictly older than
+  # `target` (an absent marker means the current edition — no bump).
+  defp migrate_project_bump?([], target) do
+    case Cure.Project.load(".") do
+      {:ok, %{edition: ed}} when is_binary(ed) -> Cure.Edition.compare(target, ed) == :gt
+      _ -> false
+    end
+  end
+
+  defp migrate_project_bump?(_paths, _target), do: false
+
+  # A standalone file whose leading `@edition` pragma (if any) is strictly older
+  # than `target`. No pragma means the current edition — no bump.
+  defp migrate_file_bump?(path, target) do
+    case File.read(path) do
+      {:ok, body} ->
+        case migrate_edition_pragma(body) do
+          nil -> false
+          ed -> Cure.Edition.compare(target, ed) == :gt
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp migrate_edition_pragma(body) do
+    case Regex.run(~r/@edition\(\s*"([^"]+)"\s*\)/, body) do
+      [_, ed] -> ed
+      _ -> nil
+    end
+  end
+
+  # Replace an existing leading `@edition("…")` pragma, or splice a new one at
+  # the very top (the pragma must precede any statement, spec §4).
+  defp migrate_splice_edition(body, target) do
+    if Regex.match?(~r/@edition\(\s*"[^"]+"\s*\)/, body) do
+      Regex.replace(~r/@edition\(\s*"[^"]+"\s*\)/, body, "@edition(\"#{target}\")", global: false)
+    else
+      "@edition(\"#{target}\")\n" <> body
+    end
   end
 
   # v0.21.0: algebra formatter is now the default. It renders the
