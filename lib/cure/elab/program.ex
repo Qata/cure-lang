@@ -794,8 +794,17 @@ defmodule Cure.Elab.Program do
   # In a designated prelude source, a `@builtin(:key) type Name = ...` container
   # registers the canonical builtin family (schema-validated). Non-prelude
   # sources (or non-`@builtin` decls) pass through unchanged.
-  defp maybe_register_builtin({:container, meta, _body}, env, true),
-    do: register_builtin_from_meta(meta, env)
+  #
+  # A `@builtin(:tag) primitive Name` container is NOT an inductive family: its
+  # marker is consumed by Declarations.elaborate's :primitive path (which binds
+  # the floor), so it must skip the inductive-family schema validation here.
+  defp maybe_register_builtin({:container, meta, _body}, env, true) do
+    if Keyword.get(meta, :container_type) == :primitive do
+      {:ok, env}
+    else
+      register_builtin_from_meta(meta, env)
+    end
+  end
 
   # A `@builtin(:key) type Name indices (...)` GADT family (e.g. Bounded)
   # elaborates to an {:indexed_type} rather than a {:container}; register it

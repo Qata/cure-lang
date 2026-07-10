@@ -1,0 +1,9 @@
+@group(:core)
+mod Std.Int
+  ## The primitive machine integer.
+  ##
+  ## `Int` is an irreducible BEAM integer — not an inductive, not a postulate.
+  ## Arithmetic and bitwise operations on `Int` are provided as builtin
+  ## operators (`+`, `-`, `band`, `bsl`, …); this module gives the type itself a
+  ## visible, documented home.
+  @builtin(:int) primitive Int
