@@ -90,8 +90,38 @@ defmodule Cure.Edition do
 
   defp first_substantive_line(source) do
     case String.split(source, "\n", parts: 2) do
-      [line, rest] -> if trivia_line?(line), do: first_substantive_line(rest), else: line
-      [line] -> if trivia_line?(line), do: nil, else: line
+      [line, rest] ->
+        cond do
+          # A `###...###` fenced doc comment: the lexer swallows the whole block
+          # (opening line through the next `###` line) into ONE :doc_comment token,
+          # so nothing inside it — including an `@edition(...)` line — is a pragma.
+          # Skip the entire fence, exactly like the lexer, before scanning on.
+          fence_open_line?(line) -> first_substantive_line(skip_fence(rest))
+          trivia_line?(line) -> first_substantive_line(rest)
+          true -> line
+        end
+
+      [line] ->
+        # Last line, no trailing newline. An unterminated fence (opened but never
+        # closed) swallows the rest of the file, so it yields no substantive line.
+        if fence_open_line?(line) or trivia_line?(line), do: nil, else: line
+    end
+  end
+
+  # A fenced doc comment opens on a line whose first non-whitespace characters are
+  # `###` (three or more hashes), matching the lexer's `lex_fenced_doc` trigger
+  # (`#` followed by two more `#`). `##` is a single-line doc comment, not a fence,
+  # and is handled by `trivia_line?`.
+  defp fence_open_line?(line), do: String.starts_with?(String.trim_leading(line), "###")
+
+  # Consume the body of a fenced doc comment: drop lines until (and including) the
+  # next line whose first non-whitespace characters are `###` (the close), matching
+  # the lexer's `fence_close_line?`. Returns the source after the close. If EOF is
+  # reached first the whole remainder is consumed (unterminated fence).
+  defp skip_fence(source) do
+    case String.split(source, "\n", parts: 2) do
+      [line, rest] -> if fence_open_line?(line), do: rest, else: skip_fence(rest)
+      [_line] -> ""
     end
   end
 
