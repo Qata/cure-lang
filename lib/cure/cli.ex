@@ -1140,7 +1140,7 @@ defmodule Cure.CLI do
 
       modules =
         Enum.flat_map(cure_files, fn file ->
-          source = File.read!(file)
+          source = read_source_or_exit(file)
 
           with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
                {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do
@@ -1237,6 +1237,19 @@ defmodule Cure.CLI do
       missing ->
         error("Cannot read #{Enum.join(missing, ", ")}: no such file or directory")
         exit({:shutdown, 1})
+    end
+  end
+
+  # Read a source file for a fmt/doc worker, degrading ANY read error to a clean
+  # non-zero exit instead of a raw File.Error stacktrace. `expand_cure_targets`
+  # rejects a *missing* explicit target up front, but `File.exists?` is true for
+  # a file that exists yet is unreadable (chmod 000), and the no-argument
+  # wildcard scan does not go through that guard at all — so the workers still
+  # need a tolerant read. Mirrors how run/check/compile read with File.read.
+  defp read_source_or_exit(file) do
+    case File.read(file) do
+      {:ok, source} -> source
+      {:error, reason} -> error("Cannot read #{file}: #{reason}") && exit({:shutdown, 1})
     end
   end
 
@@ -1760,7 +1773,7 @@ defmodule Cure.CLI do
   # program structure.
   defp fmt_algebra(files) do
     Enum.each(files, fn file ->
-      source = File.read!(file)
+      source = read_source_or_exit(file)
 
       case Cure.Compiler.Formatter.format_algebra(source) do
         {:ok, ^source} ->
@@ -1775,7 +1788,7 @@ defmodule Cure.CLI do
 
   defp fmt_safe(files) do
     Enum.each(files, fn file ->
-      source = File.read!(file)
+      source = read_source_or_exit(file)
 
       case Cure.Compiler.Formatter.format(source) do
         {:ok, ^source} ->
@@ -1794,7 +1807,7 @@ defmodule Cure.CLI do
   defp fmt_diff(files) do
     changed =
       Enum.reduce(files, 0, fn file, count ->
-        source = File.read!(file)
+        source = read_source_or_exit(file)
         {:ok, formatted} = Cure.Compiler.Formatter.format_algebra(source)
 
         if formatted == source do
@@ -1852,7 +1865,7 @@ defmodule Cure.CLI do
   defp fmt_check(files) do
     mismatched =
       Enum.filter(files, fn file ->
-        source = File.read!(file)
+        source = read_source_or_exit(file)
         {:ok, formatted} = Cure.Compiler.Formatter.format_algebra(source)
         formatted != source
       end)
@@ -1876,7 +1889,7 @@ defmodule Cure.CLI do
 
     outcomes =
       Enum.map(files, fn file ->
-        source = File.read!(file)
+        source = read_source_or_exit(file)
 
         with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
              {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do

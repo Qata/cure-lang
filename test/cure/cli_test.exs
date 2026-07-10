@@ -326,6 +326,37 @@ defmodule Cure.CLITest do
                  {:shutdown, 1}
       end)
     end
+
+    # `File.exists?` returns true for a file that exists but is unreadable
+    # (chmod 000), so the missing-file guard let it through to a worker whose
+    # `File.read!` then raised a raw File.Error stacktrace. A permission error
+    # must degrade to a clean exit 1, exactly as run/check (which read with
+    # File.read) already do.
+    for {cmd, label} <- [{"fmt", "fmt"}, {"fmt --check", "fmt --check"}, {"doc", "doc"}] do
+      @cmd_args String.split(cmd)
+      test "cure #{label} on an unreadable (existing) file exits 1 without crashing" do
+        path =
+          Path.join(
+            System.tmp_dir!(),
+            "cure_noperm_#{System.unique_integer([:positive])}.cure"
+          )
+
+        File.write!(path, "mod M\n  fn f() -> Int = 1\n")
+        File.chmod!(path, 0o000)
+        on_exit(fn ->
+          File.chmod(path, 0o644)
+          File.rm_rf!(path)
+        end)
+
+        # Root (and some CI) can read a 0o000 file; only meaningful when the
+        # permission bits actually deny this process a read.
+        if match?({:error, _}, File.read(path)) do
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main(@cmd_args ++ [path])) == {:shutdown, 1}
+          end)
+        end
+      end
+    end
   end
 
   describe "unknown-command suggestions" do
