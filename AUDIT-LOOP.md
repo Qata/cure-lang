@@ -245,23 +245,68 @@ Iteration 4 audited those fixes and the F-A/F-B/F-C follow-ups.
 `eb33b88` (CLI Finding 1) · `bfde322` (Compiler F1) · `e21f3b1` (F2 messages) ·
 `5651ace` (CLI Finding 2) · `a5f8131` (CRLF, from this iteration's own audit).
 
-## Outstanding findings (after iteration 4)
+## Iteration 5 — F-A follow-up fixed + audit of it (2 Opus agents)
 
-- **Follow-up (from F-A, LOW/design, CARRIED FORWARD):** `cure build`/`run`
-  callers do not thread a `project_dir` into `Cure.Compiler.compile_*`, so a
-  project's `Cure.toml [project].edition` is honoured only when a caller passes
-  it explicitly (the compile boundary `resolve_edition/2` is wired and tested; the
-  gap is purely which callers supply `project_dir`). Correct wiring must resolve
-  each file under its **nearest ancestor `Cure.toml`**, not a blanket cwd dir
-  (which would misapply the app edition to stdlib/deps). LATENT with one edition
-  (Cure.toml can only say `2026` == default). Deferred as a scoped design task,
-  not a blocker; the pragma path already covers per-file incremental migration.
+### Iteration 5 — carried-over finding FIXED
 
-**Loop status:** iteration 4's fresh audit found ONE confirmed real bug (the CRLF
-regression), now fixed — so this audit is **NOT clean**. Convergence (two
-consecutive clean audits) is not met. The one Outstanding item is a LATENT
-design-scoped follow-up, not a testable bug. The cron is **left in place**; the
-next fire (iteration 5) audits iteration 4's fixes — including the CRLF fix and
-the F-A/F-B/F-C hardening. Do NOT merge.
+- **F-A follow-up [was LOW/design] — `913aa99`.** The compile boundary honoured a
+  project's `[project].edition` only when a caller passed `:project_dir`, but the
+  `cure build`/`run` callers never did — so a project manifest's edition (incl. a
+  typo'd one) was silently ignored on the build path (§3.1 "fail loudly" violated
+  for a bad manifest). Added `Cure.Project.find_root/1` (walk up from the file's
+  dir to the nearest ancestor `Cure.toml`) and had `resolve_edition/2` discover
+  the project root from the file path when `:project_dir` is absent. Nearest wins;
+  `parse_source` stays headless; a no-`:file` compile does not discover (nil
+  guard). Red: `compile_file` under a dir with a typo'd `Cure.toml` now fails
+  loudly; child-manifest shadows parent; pragma still overrides the manifest.
+
+### Iteration 5 — fresh audit result (2 Opus agents, every finding verified against source)
+
+Both agents: **no today-triggerable bug** (suite green because no ancestor
+`Cure.toml` exists above the compiled sources today, and with one minted edition
+a *valid* manifest can only resolve to the default). Two **latent** hazards from
+the newly-broad auto-discovery, both confirmed by reproduction:
+
+- **Unbounded upward walk [MED, latent] — FIXED `0b4d2f3`.** `find_root` walked to
+  the filesystem root, so a file with no nearby manifest could bind to an
+  unrelated ancestor `Cure.toml` (a sibling/parent project, a stray `~/Cure.toml`)
+  — with a typo'd/foreign edition that would *spuriously fail* this repo's own
+  internal stdlib/example/compile mix tasks, which previously consulted no
+  manifest for such sources. Fixed: bound the walk at the enclosing git repo (a
+  dir holding `.git`; a git worktree's `.git` file counts), returning nil at the
+  repo root with no manifest. Red: a `Cure.toml` above a `.git` boundary is no
+  longer discovered; a `Cure.toml` AT the repo root still is. This also corrects
+  a **git dependency** (LATENT-1, git flavour): its checkout carries its own
+  `.git`, so its sources now resolve under the dependency's OWN manifest/default
+  instead of inheriting the consuming app's edition.
+- **REPL `:load` of a file under an unrelated project [LOW, latent].** Same root
+  cause; now bounded by the `.git` fix (a REPL-loaded file only binds to a
+  manifest within its own repo). Considered resolved by `0b4d2f3`.
+
+### Iteration 5 — FIXED (2 commits, full suite 3874 passed / 0 failed)
+
+`913aa99` (F-A follow-up: nearest-ancestor discovery) ·
+`0b4d2f3` (bound discovery at the git-repo root).
+
+## Outstanding findings (after iteration 5)
+
+- **LATENT-1 residual (path/tarball dep inheritance) [LOW, latent]:** for a
+  **path** or **tarball** dependency that ships WITHOUT its own `Cure.toml` (and,
+  being under the consumer's `_build/deps/`, without its own `.git`), `find_root`
+  still walks up to the consuming project's manifest and the dep would compile
+  under the consumer's edition rather than the default. Git deps are already
+  fixed (own `.git` bounds them). Fix direction: `resolve_one` (path) and
+  `install_tarball` should pass `project_dir: <dep_base>` so the dep resolves
+  under its own root/default, never the consumer's (Rust edition-per-package
+  parity). Deferred: purely latent (one edition), the wrong-behaviour is not
+  observable today, and a clean red test wants dependency-resolution fixtures
+  (private fs/network-heavy call sites). Not a blocker.
+
+**Loop status:** iteration 5's fresh audit found confirmed (latent) hazards; the
+primary one (unbounded walk) is FIXED this cycle, so the audit is **NOT clean**.
+Convergence (two consecutive clean audits) is not met. The one Outstanding item
+is a LATENT, low-severity dep-resolution residual. The cron is **left in place**;
+the next fire (iteration 6) audits iteration 5's fixes and may address LATENT-1.
+Do NOT merge.
 
 ---
