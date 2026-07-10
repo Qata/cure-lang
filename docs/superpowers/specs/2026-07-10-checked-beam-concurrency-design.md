@@ -1032,15 +1032,18 @@ preceding it.
 - **`Context` now stores its NbE environment** instead of deriving it from
   `length`. `extend/2` pushes a neutral; `extend_def/3` pushes the bound value.
   That derivation was the sole structural obstacle to ζ, exactly as predicted.
-- **A residual remains, and linearity must not rely on its absence.** Bind-once
-  requires an *inferable* rhs; a bare lambda, `if`, or `pickup` has no inferable
-  type and still elaborates by surface substitution (14 of 30 stdlib `let`s bind
-  once; the rest have a lambda rhs). **A linear handle bound to a check-only rhs
-  would still be duplicated below the check.** Before `{0,1,ω}` lands, either
-  close this with a bidirectional `let` (surface ascription, or propagating the
-  body's demanded type into the rhs) or make the linearity check reject a `1`
-  binder whose rhs took the substitution path. This is the one place §5.4's
-  "prerequisite" is still genuinely unmet.
+- **The prerequisite is now fully met** (`9e7eeb2`). `let x : T = e` already
+  parsed; honoring the ascription gives the bidirectional `let`, so a check-only
+  rhs (bare lambda, `if`, `pickup`) is elaborated in *checking* mode and bound
+  once. Surface substitution now runs **only at exactly one use**: `≥2` uses
+  would duplicate the rhs, `0` uses would drop it unelaborated (a pre-existing
+  hole — an ill-typed unused rhs reached a green build). Both are now
+  `{:let_needs_annotation, …}`, whose fix is to ascribe.
+
+  **The elaborator therefore cannot duplicate or discard a `let`'s rhs.** Every
+  binding is bound once in Core, or elaborated exactly once at its single use
+  site. That is precisely the property `{0,1,ω}` requires, and it now holds
+  unconditionally. Step 2 may proceed without a substitution-path escape clause.
 
 Deadlock freedom ships as an **out-of-TCB lint** (acyclicity/priority analysis
 over the session-dependency graph), same trust shape as the Z3 guard lint —
