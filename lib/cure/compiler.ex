@@ -99,8 +99,9 @@ defmodule Cure.Compiler do
       file: file
     ]
 
-    with {:ok, tokens} <- lex(source, file, emit?),
-         {:ok, ast} <- parse(tokens, file, emit?),
+    with {:ok, edition} <- resolve_edition(source, opts),
+         {:ok, tokens} <- lex(source, file, emit?, edition),
+         {:ok, ast} <- parse(tokens, file, emit?, edition),
          {:ok, ast} <- migrate_warn(ast, file),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
@@ -183,8 +184,18 @@ defmodule Cure.Compiler do
   def parse_source(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
 
-    with {:ok, tokens} <- lex(source, file, false) do
-      parse(tokens, file, false)
+    # Tooling entry: resolve the file pragma so inspection sees the same keyword
+    # set the compiler would, but stay robust — an unknown edition falls back to
+    # the default rather than refusing to parse (unlike the compile path, which
+    # fails loudly). No project_dir is consulted here (headless).
+    edition =
+      case Cure.Edition.resolve(%{source: source}) do
+        {:ok, ed} -> ed
+        {:error, _} -> Cure.Edition.current()
+      end
+
+    with {:ok, tokens} <- lex(source, file, false, edition) do
+      parse(tokens, file, false, edition)
     end
   end
 
@@ -212,8 +223,9 @@ defmodule Cure.Compiler do
       file: file
     ]
 
-    with {:ok, tokens} <- lex(source, file, emit?),
-         {:ok, ast} <- parse(tokens, file, emit?),
+    with {:ok, edition} <- resolve_edition(source, opts),
+         {:ok, tokens} <- lex(source, file, emit?, edition),
+         {:ok, ast} <- parse(tokens, file, emit?, edition),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
          {:ok, forms, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
@@ -242,17 +254,41 @@ defmodule Cure.Compiler do
 
   # -- Pipeline Steps ----------------------------------------------------------
 
-  defp lex(source, file, emit?) do
-    case Lexer.tokenize(source, file: file, emit_events: emit?) do
+  defp lex(source, file, emit?, edition) do
+    case Lexer.tokenize(source, file: file, emit_events: emit?, edition: edition) do
       {:ok, tokens} -> {:ok, tokens}
       {:error, reason} -> {:error, {:lex_error, reason}}
     end
   end
 
-  defp parse(tokens, file, emit?) do
-    case Parser.parse(tokens, file: file, emit_events: emit?) do
+  defp parse(tokens, file, emit?, edition) do
+    case Parser.parse(tokens, file: file, emit_events: emit?, edition: edition) do
       {:ok, ast} -> {:ok, ast}
       {:error, errors} -> {:error, {:parse_error, errors}}
+    end
+  end
+
+  # Resolve the edition this source compiles under (spec §3.2 precedence: file
+  # `@edition` pragma > `Cure.toml` `[project].edition` > compiler default). The
+  # resolved edition drives the lexer's keyword set (§4), so a file pinned to an
+  # older edition still parses a since-retired keyword under `cure build` — the
+  # feature's headline purpose (F-A). A caller that knows the project root passes
+  # `:project_dir`; otherwise only the file pragma is consulted (a bare
+  # `cure run file.cure` with no manifest → default, §3.2 point 3). An unknown
+  # edition (typo'd pragma / bad manifest) fails loudly HERE (§3.1) rather than
+  # compiling silently under the default.
+  defp resolve_edition(source, opts) do
+    input = %{source: source}
+
+    input =
+      case Keyword.get(opts, :project_dir) do
+        nil -> input
+        dir -> Map.put(input, :project_dir, dir)
+      end
+
+    case Cure.Edition.resolve(input) do
+      {:ok, edition} -> {:ok, edition}
+      {:error, reason} -> {:error, {:edition_error, reason}}
     end
   end
 
