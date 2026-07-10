@@ -125,7 +125,6 @@ defmodule Cure.Elab.Resolve do
 
   defp classify({:vint_type}), do: {:concrete, :Int}
   defp classify({:vfloat_type}), do: {:concrete, :Float}
-  defp classify({:vstring_type}), do: {:concrete, :String}
   defp classify({:vdata, name, _vs}), do: {:concrete, name}
   defp classify({:vneutral, {:nvar, lvl}}), do: {:rigid, lvl}
   defp classify(other), do: {:unknown, other}

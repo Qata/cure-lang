@@ -42,7 +42,22 @@ defmodule Cure.Core.Env do
   must `check_def/2` it before it may be referenced; certification (M7.2) gates
   whether δ-reduction may unfold it.
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t()) :: t()
+  @typedoc """
+  What a definition's body slot may actually hold.
+
+  Three inhabitants, and only the first is a Core term:
+
+    * a `Cure.Core.Term.t()` — an ordinary definition;
+    * `nil` — a builtin, seeded with a type but no body (`Cure.Core.Builtins`);
+    * `{:extern, {mod, fun, arity}}` — an `@extern` FFI binding, whose body lives
+      on the BEAM, not in Core.
+
+  The spec used to claim this was always a term. Dialyzer disagreed, and it was
+  right: `Declarations` passes the `:extern` tuple and `Builtins` passes `nil`.
+  """
+  @type def_body :: Cure.Core.Term.t() | nil | {:extern, {module(), atom(), arity()}}
+
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body()) :: t()
   def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil)
 
   @doc """
@@ -50,7 +65,7 @@ defmodule Cure.Core.Env do
   (`nil` = unspecified/all runtime-relevant). Erased parameters are dropped by
   erasure (M8.3 / M9).
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t(), [atom()] | nil) :: t()
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body(), [atom()] | nil) :: t()
   def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities),
     do: %{
       env

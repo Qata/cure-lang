@@ -43,8 +43,40 @@ defmodule Cure.Core.Term do
   # module only mirrors the value into its compile-time shape-check guards.
   @ceiling Cure.Core.Universe.ceiling()
 
-  @typedoc "A Core term (see the module doc for the node taxonomy)."
-  @type t :: tuple()
+  @typedoc "A `:case` branch: constructor name, its arity, and the branch body."
+  @type branch :: {atom(), non_neg_integer(), t()}
+
+  @typedoc """
+  A Core term — the node taxonomy above, as a closed union.
+
+  This is deliberately NOT `tuple()`. Written loosely, Dialyzer and Elixir's
+  set-theoretic checker are blind to binder shape: a wrong-arity `{:pi, dom}`
+  or a pattern that can never match sails straight through. Written precisely,
+  both catch it statically, which is the only cheap net over a taxonomy that is
+  reshaped from time to time (the QTT grade reshape being the current one).
+  """
+  @type t ::
+          {:type, non_neg_integer()}
+          | {:var, non_neg_integer()}
+          | {:pi, t(), t()}
+          | {:lam, t(), t()}
+          | {:let, t(), t(), t()}
+          | {:app, t(), t()}
+          | {:data, atom(), [t()], [t()]}
+          | {:ctor, atom(), [t()]}
+          | {:case, t(), t(), [branch()]}
+          | {:global, atom()}
+          | {:int_type}
+          | {:int_lit, integer()}
+          | {:nat_lit, non_neg_integer()}
+          | {:bounded_lit, non_neg_integer()}
+          | {:float_type}
+          | {:float_lit, float()}
+          | {:binary_type}
+          | {:atom_type}
+          | {:atom_lit, atom()}
+          | {:hole, atom() | String.t()}
+          | {:absurd}
 
   @doc "Highest universe level (inclusive). The fixed hierarchy is `Type 0 : Type 1 : Type 2`."
   @spec ceiling() :: non_neg_integer()

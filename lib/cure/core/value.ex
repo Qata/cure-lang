@@ -31,8 +31,43 @@ defmodule Cure.Core.Value do
 
   alias Cure.Core.{Term, Universe}
 
-  @typedoc "A semantic value."
-  @type t :: tuple()
+  @typedoc "A `:ncase` branch closure: constructor name, arity, and the branch's closure."
+  @type branch_closure :: {atom(), non_neg_integer(), closure()}
+
+  @typedoc "A binder closure: an environment plus an unevaluated body term."
+  @type closure :: {:closure, [t()], Term.t()}
+
+  @typedoc "A stuck computation: a head plus an eliminator spine."
+  @type neutral ::
+          {:nvar, non_neg_integer()}
+          | {:nglobal, atom()}
+          | {:napp, neutral(), t()}
+          | {:ncase, neutral(), closure(), [branch_closure()]}
+
+  @typedoc """
+  A semantic value — the shapes above, as a closed union.
+
+  Deliberately NOT `tuple()`, for the same reason as `Cure.Core.Term.t/0`:
+  written loosely, Dialyzer and Elixir's set-theoretic checker cannot see that a
+  wrong-arity `{:vpi, dom, cl}` is wrong, and a reshape of the taxonomy proceeds
+  silently. Written precisely, both catch it statically.
+  """
+  @type t ::
+          {:vtype, non_neg_integer()}
+          | {:vpi, t(), closure()}
+          | {:vlam, t(), closure()}
+          | {:vneutral, neutral()}
+          | {:vdata, atom(), [t()]}
+          | {:vctor, atom(), [t()]}
+          | {:vint_type}
+          | {:vint, integer()}
+          | {:vnat, non_neg_integer()}
+          | {:vbounded, non_neg_integer()}
+          | {:vfloat_type}
+          | {:vfloat, float()}
+          | {:vbinary_type}
+          | {:vatom_type}
+          | {:vatom, atom()}
 
   @doc "True when `value` is a structurally well-formed semantic value."
   @spec value?(term()) :: boolean()
