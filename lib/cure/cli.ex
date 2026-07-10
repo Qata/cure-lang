@@ -1648,17 +1648,18 @@ defmodule Cure.CLI do
   end
 
   # The leading pragma sits on the first non-trivia line (blank/`#`-comment lines
-  # are trivia, matching Cure.Edition's own scan). Replace that one line with the
-  # canonical form; everything above it (leading comments) is preserved verbatim.
+  # are trivia, matching Cure.Edition's own scan). Rewrite only the `@edition(…)`
+  # TOKEN on that line — NOT the whole line — so anything after the `)` (a trailing
+  # comment) survives (A3-F2), and a lone-CR file whose "first line" is the whole
+  # body keeps its body (A3-F1). The token regex mirrors Cure.Edition.pragma_capture
+  # (anchored `^@`, interior whitespace tolerated); the trailing "\r" of a CRLF/CR
+  # line lands after the match and is preserved for free — no separate EOL fixup.
+  @edition_token ~r/^@\s*edition\s*\(\s*"\d{4}"\s*\)/
   defp replace_leading_pragma_line(body, target) do
     lines = String.split(body, "\n")
     idx = Enum.find_index(lines, fn line -> not migrate_trivia_line?(line) end)
-    # Preserve the pragma line's own terminator: splitting on "\n" leaves a
-    # trailing "\r" on each line of a CRLF file, so a bare replacement would drop
-    # this line's "\r" and leave the file with mixed EOL (the old substring
-    # Regex.replace preserved CRLF). Carry the "\r" onto the canonical pragma.
-    eol = if String.ends_with?(Enum.at(lines, idx), "\r"), do: "\r", else: ""
-    lines |> List.replace_at(idx, "@edition(\"#{target}\")#{eol}") |> Enum.join("\n")
+    rewritten = Regex.replace(@edition_token, Enum.at(lines, idx), "@edition(\"#{target}\")", global: false)
+    lines |> List.replace_at(idx, rewritten) |> Enum.join("\n")
   end
 
   defp migrate_trivia_line?(line) do

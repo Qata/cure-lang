@@ -114,4 +114,30 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     assert {:ok, _printed, _warns, "2026"} =
              Cure.CLI.plan_migration_source(src, target: "2026", from: "2026")
   end
+
+  # Iteration 6 (audit A3-F2): the splice replaces the LEADING PRAGMA TOKEN, not
+  # the whole line. `pragma_capture`'s regex is deliberately unanchored at the end
+  # (so resolution still reads `@edition("2026")  # note` — the parser treats the
+  # trailing comment as trivia), which means a whole-LINE replacement would delete
+  # any trailing content. Preserve everything after the `)`.
+  test "A3-F2: splicing preserves a trailing comment on the pragma line" do
+    spliced = Cure.CLI.migrate_splice_edition("@edition(\"2026\")  # pin the surface\nmod M\n", "2026")
+    assert String.contains?(spliced, "# pin the surface"),
+           "trailing comment on the pragma line must survive the bump, got: #{inspect(spliced)}"
+    assert String.starts_with?(spliced, "@edition(\"2026\")")
+    assert String.contains?(spliced, "mod M")
+  end
+
+  # Iteration 6 (audit A3-F1): a lone-CR (`\r`-terminated) file has no `\n`, so
+  # splitting on "\n" yields ONE element = the whole file. Replacing that element
+  # wholesale would destroy the body. Replacing only the matched pragma prefix
+  # keeps the rest of the file intact.
+  test "A3-F1: splicing a lone-CR file does not destroy the body" do
+    body = "@edition(\"2026\")\rmod M\r  fn f() -> Int = 1\r"
+    spliced = Cure.CLI.migrate_splice_edition(body, "2026")
+    assert String.contains?(spliced, "mod M"),
+           "lone-CR body must survive the bump, got: #{inspect(spliced)}"
+    assert String.contains?(spliced, "fn f()")
+    assert String.starts_with?(spliced, "@edition(\"2026\")")
+  end
 end
