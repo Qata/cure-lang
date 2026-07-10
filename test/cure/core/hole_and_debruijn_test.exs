@@ -44,6 +44,10 @@ defmodule Cure.Core.HoleAndDeBruijnTest do
       refute Term.term?({:hole, :not_a_string})
     end
 
+    test "term? recognises {:absurd} too — same omission, same live node" do
+      assert Term.term?({:absurd})
+    end
+
     test "shift is the identity on it, at any amount and cutoff" do
       assert Term.shift({:hole, "p"}, 1, 0) == {:hole, "p"}
       assert Term.shift({:hole, "p"}, 3, 5) == {:hole, "p"}

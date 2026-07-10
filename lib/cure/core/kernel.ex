@@ -314,11 +314,11 @@ defmodule Cure.Core.Kernel do
         case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
           {:ok, n} when k < n -> :ok
           {:ok, n} -> {:error, {:bounded_lit_out_of_range, k, n}}
-          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth)}}
+          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth, sig)}}
         end
 
       other ->
-        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth)}}
+        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth, sig)}}
     end
   end
 
@@ -405,8 +405,15 @@ defmodule Cure.Core.Kernel do
       else
         # Conversion failure diagnostic (§10): report both normal forms so the
         # mismatch is legible (and serializable via C2 for independent checkers).
+        # Legible means the context's signature has to be threaded through: without
+        # it, `reify` collapses an indexed family's params/indices split into a flat
+        # `params` list with `indices => []`, which `Conv` tolerates but a human — or
+        # an independent checker rebuilding the term — cannot.
         depth = Context.length(ctx)
-        {:error, {:conversion_failure, Quote.reify(inferred, depth), Quote.reify(expected, depth)}}
+        sig = Context.signature(ctx)
+
+        {:error,
+         {:conversion_failure, Quote.reify(inferred, depth, sig), Quote.reify(expected, depth, sig)}}
       end
     end
   end

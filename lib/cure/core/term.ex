@@ -80,6 +80,10 @@ defmodule Cure.Core.Term do
   # them). It carries no de Bruijn variables, so it is an inert leaf everywhere below.
   def term?({:hole, name}), do: is_binary(name)
 
+  # Likewise `{:absurd}`: `Kernel.check/3` admits it against any type once the context is
+  # inconsistent, `Serialize` encodes and decodes it, and `Validator` has a clause for it.
+  def term?({:absurd}), do: true
+
   def term?(_), do: false
 
   # -- de Bruijn shift / substitution -----------------------------------------

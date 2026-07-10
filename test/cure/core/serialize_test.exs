@@ -10,8 +10,12 @@ defmodule Cure.Core.SerializeTest do
 
   @terms [
     {:type, 0},
-    {:type, 3},
+    # `Universe.ceiling()` is 2, and `Term.term?/1` bounds a universe level by it. This row
+    # used to read `{:type, 3}` — a term the Core's own grammar rejects, which round-tripped
+    # only because `decode/1` never checked the shape it rebuilt.
+    {:type, 2},
     {:var, 5},
+    {:absurd},
     {:global, :compose},
     {:int_type},
     {:float_type},
