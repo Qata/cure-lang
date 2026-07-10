@@ -20,7 +20,7 @@ defmodule Cure.Elab.Relevance do
 
     * RELEVANT (a `0` binder here is a violation):
       - returned as the value (`:returned`);
-      - passed in a `:present` argument position of a call/constructor
+      - passed in a `:unrestricted` argument position of a call/constructor
         (`:present_arg`);
       - scrutinised as a `case` discriminant (`:scrutinee`);
       - applied as a function head (`:applied`).
@@ -70,7 +70,7 @@ defmodule Cure.Elab.Relevance do
     # No early-out when `erased` is empty. Erasedness does not only originate at
     # the signature: matching a constructor with an erased FIELD introduces a fresh
     # erased binder (see the `:case` clause's `branch_erased` fold), so an ordinary
-    # all-`:present` function can still return a value that `Erase.erase` deletes.
+    # all-`:unrestricted` function can still return a value that `Erase.erase` deletes.
     # Idris's `lcheck` (Core/LinearCheck.idr) likewise always walks the body — there
     # is one notion of erased, not a checked and an unchecked one.
     walk(body, length(quantities), :returned, %{env: env, name: name, erased: erased})
@@ -102,7 +102,7 @@ defmodule Cure.Elab.Relevance do
   end
 
   # Application spine: the head is `:applied`; each argument is relevant iff the
-  # callee's quantity for that position is `:present` (erased positions exempt —
+  # callee's quantity for that position is `:unrestricted` (erased positions exempt —
   # the dual of `Erase.erase`'s `{:app, …}` filtering).
   defp walk({:app, _f, _x} = app, depth, _site, st) do
     {head, args} = spine(app, [])
@@ -112,7 +112,7 @@ defmodule Cure.Elab.Relevance do
       args
       |> Enum.zip(quantities)
       |> each(fn {arg, q} ->
-        if q == :present, do: walk(arg, depth, :present_arg, st), else: :ok
+        if q == :unrestricted, do: walk(arg, depth, :present_arg, st), else: :ok
       end)
     end
   end
@@ -120,13 +120,13 @@ defmodule Cure.Elab.Relevance do
   # Constructor: same present/erased split, via the family's ctor quantities.
   defp walk({:ctor, cname, args}, depth, _site, st) do
     quantities =
-      (Inductive.ctor_quantities(st.env, cname) || List.duplicate(:present, length(args)))
+      (Inductive.ctor_quantities(st.env, cname) || List.duplicate(:unrestricted, length(args)))
       |> pad(length(args))
 
     args
     |> Enum.zip(quantities)
     |> each(fn {arg, q} ->
-      if q == :present, do: walk(arg, depth, :present_arg, st), else: :ok
+      if q == :unrestricted, do: walk(arg, depth, :present_arg, st), else: :ok
     end)
   end
 
@@ -157,7 +157,7 @@ defmodule Cure.Elab.Relevance do
     with :ok <- scrut_check do
       each(branches, fn {cname, arity, body} ->
         ctor_qs =
-          Inductive.ctor_quantities(st.env, cname) || List.duplicate(:present, arity)
+          Inductive.ctor_quantities(st.env, cname) || List.duplicate(:unrestricted, arity)
 
         branch_erased =
           ctor_qs
@@ -200,22 +200,22 @@ defmodule Cure.Elab.Relevance do
   defp callee_quantities({:global, name}, arity, env) do
     case Env.get_def(env, name) do
       %{quantities: qs} when is_list(qs) -> pad(qs, arity)
-      _ -> List.duplicate(:present, arity)
+      _ -> List.duplicate(:unrestricted, arity)
     end
   end
 
   defp callee_quantities({:ctor, cname, _args}, arity, env) do
-    (Inductive.ctor_quantities(env, cname) || List.duplicate(:present, arity)) |> pad(arity)
+    (Inductive.ctor_quantities(env, cname) || List.duplicate(:unrestricted, arity)) |> pad(arity)
   end
 
-  defp callee_quantities(_other, arity, _env), do: List.duplicate(:present, arity)
+  defp callee_quantities(_other, arity, _env), do: List.duplicate(:unrestricted, arity)
 
   # Conservative padding: an argument position with no declared quantity is
-  # treated as `:present` (relevant), never silently exempted.
+  # treated as `:unrestricted` (relevant), never silently exempted.
   defp pad(qs, n) when length(qs) == n, do: qs
 
   # Over-application: the extra arguments apply to the callee's RESULT and are always present.
-  defp pad(qs, n) when length(qs) < n, do: qs ++ List.duplicate(:present, n - length(qs))
+  defp pad(qs, n) when length(qs) < n, do: qs ++ List.duplicate(:unrestricted, n - length(qs))
 
   # Fewer arguments than declared quantities: by `Erase.erase/2`'s own convention, the term is
   # ALREADY ERASED — its erased arguments have been dropped, so the survivors occupy the
@@ -225,7 +225,7 @@ defmodule Cure.Elab.Relevance do
   # full quantity vector against the shrunk arg list would realign survivors onto leading
   # positions and DROP them"); Relevance, its documented dual, did not. Every surviving
   # argument of an already-erased term is relevant.
-  defp pad(_qs, n), do: List.duplicate(:present, n)
+  defp pad(_qs, n), do: List.duplicate(:unrestricted, n)
 
   defp each(list, fun) do
     Enum.reduce_while(list, :ok, fn item, :ok ->

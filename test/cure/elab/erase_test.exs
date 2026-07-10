@@ -69,7 +69,7 @@ defmodule Cure.Elab.EraseTest do
     # g : (@0 Int) -> Int -> Int  (param 0 erased, param 1 present)
     env =
       Env.add_def(Env.empty(), :g, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}},
-        {:int_lit, 0}, [:erased, :present])
+        {:int_lit, 0}, [:erased, :unrestricted])
 
     app = {:app, {:app, {:global, :g}, {:int_lit, 1}}, {:int_lit, 2}}
     once = Erase.erase(env, app)

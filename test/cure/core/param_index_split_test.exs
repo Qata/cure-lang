@@ -19,7 +19,7 @@ defmodule Cure.Core.ParamIndexSplitTest do
       Inductive.family(:P, [{:a, @type0}], [{:n, @dec}], 1),
       [
         Inductive.ctor(:wrap, [{:p, {:var, 0}}], [{:ctor, :Causal, []}],
-          [:present], [{:var, 1}])
+          [:unrestricted], [{:var, 1}])
       ]
     )
   end

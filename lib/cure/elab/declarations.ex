@@ -259,7 +259,7 @@ defmodule Cure.Elab.Declarations do
   # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
   # it. Rejecting the mismatch is the only reading under which the number means one thing.
   defp check_extern_arity(sig, arity) do
-    present = Enum.count(sig.quantities || [], &(&1 == :present))
+    present = Enum.count(sig.quantities || [], &(&1 == :unrestricted))
 
     if arity == present do
       :ok
@@ -764,7 +764,7 @@ defmodule Cure.Elab.Declarations do
         type_expr ->
           case idx_to_core(type_expr, scope, nil, env) do
             {:ok, core} ->
-              q = if Keyword.get(pmeta, :implicit), do: :erased, else: :present
+              q = if Keyword.get(pmeta, :implicit), do: :erased, else: :unrestricted
               {:cont, {:ok, tele ++ [{String.to_atom(pname), core}], quants ++ [q], [pname | scope]}}
 
             {:error, _} = err ->
@@ -892,7 +892,7 @@ defmodule Cure.Elab.Declarations do
             # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
-                List.duplicate(:present, length(expl_tele))
+                List.duplicate(:unrestricted, length(expl_tele))
 
             {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
           end

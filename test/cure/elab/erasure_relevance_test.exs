@@ -21,7 +21,7 @@ defmodule Cure.Elab.ErasureRelevanceTest do
 
     * RELEVANT for a `0` binder (usage counts → violation):
       - RETURNED as the value (the term IS the binder);
-      - passed in a `ω` / `:present` argument position (`rigf` present → `checkRig`
+      - passed in a `ω` / `:unrestricted` argument position (`rigf` present → `checkRig`
         stays `rig`);
       - SCRUTINISED (case discriminant is checked at the ambient `rig`);
       - APPLIED as a function head.
@@ -145,7 +145,7 @@ defmodule Cure.Elab.ErasureRelevanceTest do
     """
 
     test "naming the erased index of a matched constructor is an error, not a silent bind" do
-      # `vs : SNat(n) -> NV(S(n))` has quantities [:erased (n), :present (SNat)].
+      # `vs : SNat(n) -> NV(S(n))` has quantities [:erased (n), :unrestricted (SNat)].
       # In `vs(s)` the surface var `s` names the PRESENT field; the erased index
       # `n` gets the unnameable placeholder `"_erased"` (elaborator `branch_scope`).
       # Referencing `n` in the body must NOT resolve to the erased slot — it is
@@ -251,7 +251,7 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       env
     end
 
-    # `ssuc`'s quantities are `[:erased, :present]` — the auto-generalized index `n` at
+    # `ssuc`'s quantities are `[:erased, :unrestricted]` — the auto-generalized index `n` at
     # position 0, the explicit `SNat(n)` field at position 1.
 
     test "a constructor heading a curried spine erases like the same constructor as a flat node" do

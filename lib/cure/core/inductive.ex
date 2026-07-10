@@ -212,6 +212,7 @@ defmodule Cure.Core.Env do
 end
 
 defmodule Cure.Core.Inductive do
+  alias Cure.Core.Grade
   @moduledoc """
   Representation of indexed inductive families and their constructors
   (design spec §4.4; mirrors Idris `Core/Context/Data.idr` and Lean
@@ -230,7 +231,12 @@ defmodule Cure.Core.Inductive do
   alias Cure.Core.Env
 
   @type telescope :: [{atom(), Cure.Core.Term.t()}]
-  @type quantity :: :erased | :present
+  @typedoc """
+  A definition's or constructor's per-argument quantity. This is the **grade
+  carrier** (`Cure.Core.Grade.t/0`), not a bespoke pair: `:erased` is `0`, and
+  the other three inhabitants all denote a runtime-present argument.
+  """
+  @type quantity :: Grade.t()
   @type family :: %{name: atom(), params: telescope(), indices: telescope(), level: non_neg_integer()}
   @type ctor :: %{
           name: atom(),
@@ -286,12 +292,12 @@ defmodule Cure.Core.Inductive do
 
   @doc """
   Build a constructor signature. Every argument defaults to runtime-relevant
-  (`:present`, quantity ω); use `ctor/4` to mark inferred index arguments
+  (`:unrestricted`, quantity ω); use `ctor/4` to mark inferred index arguments
   `:erased` (quantity 0) so they are dropped by erasure (M8.3 / M9).
   """
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()]) :: ctor()
   def ctor(name, arg_tele, result_indices),
-    do: ctor(name, arg_tele, result_indices, List.duplicate(:present, length(arg_tele)))
+    do: ctor(name, arg_tele, result_indices, List.duplicate(:unrestricted, length(arg_tele)))
 
   @doc "Build a constructor signature with explicit {0,ω} argument quantities."
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()]) :: ctor()
@@ -392,7 +398,7 @@ defmodule Cure.Core.Inductive do
     end
   end
 
-  @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:present`)."
+  @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:unrestricted`)."
   @spec ctor_quantities(Env.t(), atom()) :: [quantity()] | nil
   def ctor_quantities(env, cname) do
     case get_ctor(env, cname) do

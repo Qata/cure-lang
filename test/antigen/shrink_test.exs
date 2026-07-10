@@ -256,7 +256,7 @@ defmodule Antigen.ShrinkTest do
     defp bloated_family_ch do
       bloated = {:app, {:app, {:global, :plus}, {:ctor, :S, [{:ctor, :Z, []}]}}, {:ctor, :Z, []}}
       fam = Cure.Core.Inductive.family(:F, [], [], 0)
-      ctor = Cure.Core.Inductive.ctor(:MkF, [{:x, bloated}], [], [:present], [])
+      ctor = Cure.Core.Inductive.ctor(:MkF, [{:x, bloated}], [], [:unrestricted], [])
       Challenge.new(kind: :family, assay: "positivity", label: :well_typed,
                     payload: %{family: fam, ctors: [ctor]}, seed: 1)
     end

@@ -140,7 +140,29 @@ half-migrated tree.
       *Gate:* 3813 passed / 0 failed. Antigen 314/314 cells, 400-run campaign → 0
       infections. Oracle replay 65/65. `mix dialyzer` passes.
 
-- [ ] **4. Usage check (E layer).** Generalise `relevance.ex` from `{0, ω}` to the
+- [x] **4a. Quantities are grades.** LANDED. Def/ctor `quantities` were the ad-hoc
+      `:erased | :present` pair; `:present` (the ω one) is now `:unrestricted`, and
+      `Inductive.quantity/0` IS `Grade.t/0`. 123 atoms renamed across 29 files.
+
+      **The dangerous half was `Erase`.** It keeps an argument iff a runtime value
+      exists for it, and asked `q == :present`. A blind rename turns that into
+      `q == :unrestricted`, which **silently drops every `:linear` and `:affine`
+      argument** from the emitted term. The predicate is `Grade.present?/1`
+      (anything but `0`). Same trap in `Emit` (which params get real BEAM variable
+      names vs `_e` placeholders) and three `Enum.count(.., & &1 == :present)`
+      sites in the elaborator. Guarded by `test/cure/elab/quantity_grade_test.exs`,
+      mutation-validated: the equality predicate fails 3 of 7.
+
+      **Corpora again.** `:present` lives in `scaffold=` as a **binary string**
+      leaf (35 records) and in `key=` as base64 text (369 records) — never in
+      `pieces=`. The key rewrite MUST use a strict boundary regex: flags named
+      `case_present` / `app_present` exist and a naive word swap corrupts them
+      (271 preserved in `seeds.sexp`).
+
+      *Gate:* 3820 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
+      infections. Oracle replay 65/65. `mix dialyzer` passes.
+
+- [ ] **4b. Usage check (E layer).** Generalise `relevance.ex` from `{0, ω}` to the
       full carrier: `Grade.admits?/2` for the used-vs-declared rule (Idris
       `LinearCheck.idr:274-276`, generalised — this is where affinity enters) and
       `Grade.mul/2` to scale a usage context on entering a subterm.

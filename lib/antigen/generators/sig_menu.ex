@@ -55,7 +55,7 @@ defmodule Antigen.Generators.SigMenu do
         [
           Inductive.ctor(:SNil, [], []),
           Inductive.ctor(:SCons, [{:h, nat()}, {:t, {:data, :SList, [], []}}], [],
-            [:present, :present])
+            [:unrestricted, :unrestricted])
         ])
       |> Inductive.declare(Inductive.family(:Vec, [], [{:n, nat()}], 0),
         [
@@ -68,7 +68,7 @@ defmodule Antigen.Generators.SigMenu do
           # non-vacuous on the v1 menu (the erasure_preservation assay, Task 5),
           # and the paradigmatic forced-argument case. Arity/types are unchanged.
           Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})],
-            [:erased, :present, :present])
+            [:erased, :unrestricted, :unrestricted])
         ])
       |> Inductive.declare(Inductive.family(:List, [{:A, {:type, 0}}], [], 0),
         [
@@ -83,7 +83,7 @@ defmodule Antigen.Generators.SigMenu do
           # (hd, tl), A sits at var 2. Convention confirmed against
           # elab_soundness_test's F(a)/Mk(x:a) and check_uniform_params.
           Inductive.ctor(:Cons, [{:hd, {:var, 0}}, {:tl, {:data, :List, [{:var, 1}], []}}], [],
-            [:present, :present], [{:var, 2}])
+            [:unrestricted, :unrestricted], [{:var, 2}])
         ])
       # Bool + the :bool builtin binding — the SAME canonical family real Cure
       # seeds via `Cure.Core.Builtins.seed/2` (ctor order `False | True`), which
@@ -155,7 +155,7 @@ defmodule Antigen.Generators.SigMenu do
             :mk_pair,
             [x: {:var, 1}, _a1: {:app, {:var, 1}, {:var, 0}}],
             [],
-            [:present, :present],
+            [:unrestricted, :unrestricted],
             [{:var, 3}, {:var, 2}]
           )
         ]

@@ -194,7 +194,7 @@ defmodule Cure.Core.Builtins do
 
     Enum.reduce(@struct_ops, env, fn {name, op_key}, acc ->
       acc
-      |> Env.add_def(name, ty, nil, [:erased, :present, :present])
+      |> Env.add_def(name, ty, nil, [:erased, :unrestricted, :unrestricted])
       |> Env.register_builtin_op(name, op_key)
     end)
   end
@@ -293,7 +293,7 @@ defmodule Cure.Core.Builtins do
         # elaborator auto-names it `_a1` (positional; the drift test pins this).
         [x: {:var, 1}, _a1: {:app, {:var, 1}, {:var, 0}}],
         [],
-        [:present, :present],
+        [:unrestricted, :unrestricted],
         [{:var, 3}, {:var, 2}]
       )
     ]
@@ -318,7 +318,7 @@ defmodule Cure.Core.Builtins do
         :Cons,
         [_a0: {:var, 0}, _a1: {:data, :List, [{:var, 1}], []}],
         [],
-        [:present, :present],
+        [:unrestricted, :unrestricted],
         [{:var, 2}]
       )
     ]

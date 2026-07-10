@@ -21,7 +21,7 @@ defmodule Cure.Elab.Emit do
   """
 
   alias Cure.Compiler.BeamWriter
-  alias Cure.Core.{Env, Inductive, Validator}
+  alias Cure.Core.{Grade, Env, Inductive, Validator}
   alias Cure.Elab.Erase
 
   @line 1
@@ -153,7 +153,7 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, inner, ctx)
 
     params =
-      for {n, :present} <- Enum.zip(param_names, qs),
+      for {n, :unrestricted} <- Enum.zip(param_names, qs),
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     clause = {:clause, @line, params, [], [body_form]}
@@ -165,7 +165,7 @@ defmodule Cure.Elab.Emit do
   defp peel_params(term, [], _pos, acc), do: {Enum.reverse(acc), term}
 
   defp peel_params({:lam, _g, _dom, body}, [q | qs], pos, acc) do
-    name = if q == :present, do: :"V#{pos}", else: :"_e#{pos}"
+    name = if Grade.present?(q), do: :"V#{pos}", else: :"_e#{pos}"
     peel_params(body, qs, pos + 1, [name | acc])
   end
 
@@ -440,7 +440,7 @@ defmodule Cure.Elab.Emit do
 
   defp present_arity(env, name) do
     case Env.get_def(env, name) do
-      %{quantities: qs} when is_list(qs) -> Enum.count(qs, &(&1 == :present))
+      %{quantities: qs} when is_list(qs) -> Enum.count(qs, &Grade.present?/1)
       _ -> 0
     end
   end
@@ -552,13 +552,13 @@ defmodule Cure.Elab.Emit do
   # `First`, matching literal 0; one present field -> `Next`, matching a fresh N
   # with guard `N > 0` and binding the predecessor `pred = N - 1`.
   defp bounded_branch_clause(env, {name, arity, body}, ctx) do
-    quantities = Inductive.ctor_quantities(env, name) || List.duplicate(:present, arity)
+    quantities = Inductive.ctor_quantities(env, name) || List.duplicate(:unrestricted, arity)
     base = length(ctx)
     field_names = for i <- indices(arity), do: :"V#{base + i}"
     new_ctx = Enum.reverse(field_names) ++ ctx
     body_form = lower(env, body, new_ctx)
 
-    case Enum.find_index(quantities, &(&1 == :present)) do
+    case Enum.find_index(quantities, &Grade.present?/1) do
       nil ->
         # `First`: only the erased index -> matches literal 0.
         {:clause, @line, [{:integer, @line, 0}], [], [body_form]}
@@ -575,13 +575,13 @@ defmodule Cure.Elab.Emit do
   end
 
   defp generic_branch_clause(env, {cname, arity, body}, ctx) do
-    quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, arity)
+    quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:unrestricted, arity)
     base = length(ctx)
 
     fields =
       for i <- indices(arity) do
-        q = Enum.at(quantities, i, :present)
-        if q == :present, do: {:present, :"V#{base + i}"}, else: {:erased, :"_f#{base + i}"}
+        q = Enum.at(quantities, i, :unrestricted)
+        if q == :unrestricted, do: {:unrestricted, :"V#{base + i}"}, else: {:erased, :"_f#{base + i}"}
       end
 
     field_names = Enum.map(fields, fn {_q, n} -> n end)
@@ -589,7 +589,7 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, body, new_ctx)
 
     present =
-      for {:present, n} <- fields,
+      for {:unrestricted, n} <- fields,
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     pattern =
@@ -653,7 +653,7 @@ defmodule Cure.Elab.Emit do
   defp bounded_present_args(env, name, args) do
     case Inductive.ctor_quantities(env, name) do
       qs when is_list(qs) and length(qs) == length(args) ->
-        for {a, :present} <- Enum.zip(args, qs), do: a
+        for {a, :unrestricted} <- Enum.zip(args, qs), do: a
 
       _ ->
         args

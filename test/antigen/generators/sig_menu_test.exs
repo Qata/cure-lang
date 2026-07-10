@@ -136,7 +136,7 @@ defmodule Antigen.Generators.SigMenuTest do
 
   test "vcons declares its length witness n as :erased (so erase is not identity)" do
     env = SigMenu.env_of(:v1)
-    assert Inductive.ctor_quantities(env, :vcons) == [:erased, :present, :present]
+    assert Inductive.ctor_quantities(env, :vcons) == [:erased, :unrestricted, :unrestricted]
   end
 
   test "gen_term over a Pi goal produces a lambda" do

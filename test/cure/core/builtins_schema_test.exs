@@ -12,7 +12,7 @@ defmodule Cure.Core.BuiltinsSchemaTest do
           args: arg_types,
           result_indices: [],
           result_params: [],
-          quantities: List.duplicate(:present, length(arg_types))
+          quantities: List.duplicate(:unrestricted, length(arg_types))
         }
       end)
 

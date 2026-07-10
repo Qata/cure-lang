@@ -13,7 +13,7 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Normalise, Quote}
+  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
   alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
 
   @doc """
@@ -3587,7 +3587,7 @@ defmodule Cure.Elab.Elaborator do
     # A surface constructor pattern names only the PRESENT (non-erased) args; the
     # erased indices are reconstructed from the telescope, not bound in the source.
     %{quantities: quantities} = Inductive.get_ctor(env, cname)
-    present = Enum.count(quantities, &(&1 == :present))
+    present = Enum.count(quantities, &Grade.present?/1)
     fresh = default_pattern_vars(cname, present)
     syn_pattern = {:function_call, [name: Atom.to_string(cname)], Enum.map(fresh, &{:variable, [], &1})}
 
@@ -4418,7 +4418,7 @@ defmodule Cure.Elab.Elaborator do
   defp branch_scope(quantities, pattern_vars) do
     {names_in_order, _rest} =
       Enum.map_reduce(quantities, pattern_vars, fn
-        :present, [v | rest] -> {v, rest}
+        :unrestricted, [v | rest] -> {v, rest}
         :erased, vars -> {"_erased", vars}
       end)
 
@@ -4599,11 +4599,11 @@ defmodule Cure.Elab.Elaborator do
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
-  defp solve_arg({{_name, _type_term}, :present}, {:ok, _mctx, _chosen, []}, _env),
+  defp solve_arg({{_name, _type_term}, :unrestricted}, {:ok, _mctx, _chosen, []}, _env),
     do: {:halt, {:error, :too_few_arguments}}
 
   defp solve_arg(
-         {{_name, type_term}, :present},
+         {{_name, type_term}, :unrestricted},
          {:ok, mctx, chosen, [{arg, arg_type_term} | rest]},
          env
        ) do
@@ -4692,10 +4692,10 @@ defmodule Cure.Elab.Elaborator do
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 
-  defp bidir_app_slot({_dom, :present}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env),
+  defp bidir_app_slot({_dom, :unrestricted}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env),
     do: {:halt, {:error, :too_few_arguments}}
 
-  defp bidir_app_slot({dom, :present}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
+  defp bidir_app_slot({dom, :unrestricted}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
     dom_inst = dom |> Subst.instantiate(chosen) |> Unify.zonk(mctx)
 
     if has_meta?(dom_inst) do
@@ -4909,10 +4909,10 @@ defmodule Cure.Elab.Elaborator do
     solve_fields(slots, asts, seed, pc, params, [val | acc], mctx, names, ctx, env)
   end
 
-  defp solve_fields([{{_fn, _ft}, :present} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
+  defp solve_fields([{{_fn, _ft}, :unrestricted} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
     do: mctx
 
-  defp solve_fields([{{_fn, ftype}, :present} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
+  defp solve_fields([{{_fn, ftype}, :unrestricted} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
     ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
 
     {mctx, val} = solve_field(arg, ftype_inst, mctx, names, ctx, env)
@@ -4992,7 +4992,7 @@ defmodule Cure.Elab.Elaborator do
       # Guard-ordered AFTER the nil check: `ctor.quantities` is only reached once
       # `ctor` is known non-nil (an unknown ctor would otherwise crash here before
       # the graceful error above could fire).
-      Enum.count(ctor.quantities, &(&1 == :present)) != length(arg_asts) ->
+      Enum.count(ctor.quantities, &Grade.present?/1) != length(arg_asts) ->
         {:error, {:constructor_arity_mismatch, cname}}
 
       true ->
@@ -5052,7 +5052,7 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp check_ctor_args([{_idx, ftype, :present} | slots], [arg | asts], seed, pc, params, acc, mctx, names, ctx, env, cname) do
+  defp check_ctor_args([{_idx, ftype, :unrestricted} | slots], [arg | asts], seed, pc, params, acc, mctx, names, ctx, env, cname) do
     ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
 
     if has_meta?(ftype_inst) do
@@ -5370,7 +5370,7 @@ defmodule Cure.Elab.Elaborator do
   # (`S` becomes `λ n:Nat. S(n)`) so first-class ctor values elaborate instead
   # of dying at the kernel's arity check (:ctor_arity) — the general gap behind
   # spec 2026-07-08-nat-int-erasure rule 4 (Idris allows bare `S` everywhere).
-  # Scope: ctors whose args are all explicit/:present and whose result carries
+  # Scope: ctors whose args are all explicit/:unrestricted and whose result carries
   # no params/indices. An implicit-carrying or indexed ctor keeps today's
   # nullary resolution (and today's downstream error): a lambda-typed value
   # cannot receive implicit insertion at its call sites, so eta-expanding it
@@ -5381,7 +5381,7 @@ defmodule Cure.Elab.Elaborator do
 
     k = length(tele)
 
-    if k > 0 and Enum.all?(qs, &(&1 == :present)) and rp == [] and ri == [] do
+    if k > 0 and Enum.all?(qs, &Grade.present?/1) and rp == [] and ri == [] do
       body_args = for i <- (k - 1)..0//-1, do: {:var, i}
       body = {:ctor, atom, body_args}
 

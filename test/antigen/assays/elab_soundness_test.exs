@@ -87,7 +87,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       #      test would falsely report a `{:core_ill_typed, ...}}` violation
       #      instead of `:ok`.
       fam = Cure.Core.Inductive.family(:F, [{:a, {:type, 0}}], [], 0)
-      ctor = Cure.Core.Inductive.ctor(:Mk, [{:x, {:var, 0}}], [], [:present], [{:var, 1}])
+      ctor = Cure.Core.Inductive.ctor(:Mk, [{:x, {:var, 0}}], [], [:unrestricted], [{:var, 1}])
       seeded() |> Cure.Core.Inductive.declare(fam, [ctor])
     end
 

@@ -94,7 +94,7 @@ defmodule Antigen.Assays.KernelProbe do
   # (the `:index_mismatch` remap fires only when the expected type is a `:vdata`).
   defp evaluate(:remap_index_passthrough) do
     fam = Inductive.family(:Wrap, [], [], 0)
-    ctor = Inductive.ctor(:wrap, [{:v, {:int_type}}], [], [:present], [])
+    ctor = Inductive.ctor(:wrap, [{:v, {:int_type}}], [], [:unrestricted], [])
     env = Inductive.declare(base_env(), fam, [ctor])
     Kernel.check(Context.empty(env), {:ctor, :wrap, [{:type, 0}]}, {:vdata, :Wrap, []})
   end
@@ -113,9 +113,9 @@ defmodule Antigen.Assays.KernelProbe do
     env =
       base_env()
       |> Inductive.declare(Inductive.family(:Wrap, [], [], 0),
-        [Inductive.ctor(:wrapB, [{:a, {:data, :Bad, [], []}}], [], [:present], [])])
+        [Inductive.ctor(:wrapB, [{:a, {:data, :Bad, [], []}}], [], [:unrestricted], [])])
       |> Inductive.declare(Inductive.family(:Bad, [], [], 0),
-        [Inductive.ctor(:mkA, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Wrap, [], []}, @nat}}], [], [:present], [])])
+        [Inductive.ctor(:mkA, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Wrap, [], []}, @nat}}], [], [:unrestricted], [])])
 
     Inductive.positive?(env, Inductive.family(:Bad, [], [], 0))
   end
@@ -402,7 +402,7 @@ defmodule Antigen.Assays.KernelProbe do
       base_env()
       |> Env.add_def(:Syn2, {:type, 0}, {:data, :HS, [], []})
       |> Inductive.declare(Inductive.family(:HS, [], [], 0), [
-        Inductive.ctor(:mkS, [{:f, {:global, :Syn2}}], [], [:present], [])
+        Inductive.ctor(:mkS, [{:f, {:global, :Syn2}}], [], [:unrestricted], [])
       ])
 
     eb =
@@ -410,12 +410,12 @@ defmodule Antigen.Assays.KernelProbe do
       |> Env.add_def(:Syn, {:type, 0}, {:data, :Foo, [], []})
       |> Inductive.declare(Inductive.family(:Foo, [], [], 0), [])
       |> Inductive.declare(Inductive.family(:Host, [], [], 0), [
-        Inductive.ctor(:mkH, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Syn}, @nat}}], [], [:present], [])
+        Inductive.ctor(:mkH, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Syn}, @nat}}], [], [:unrestricted], [])
       ])
 
     ec =
       Inductive.declare(base_env(), Inductive.family(:HU, [], [], 0), [
-        Inductive.ctor(:mkU, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Unknown}, @nat}}], [], [:present], [])
+        Inductive.ctor(:mkU, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Unknown}, @nat}}], [], [:unrestricted], [])
       ])
 
     {Inductive.positive?(ea, Inductive.family(:HS, [], [], 0)),
@@ -429,7 +429,7 @@ defmodule Antigen.Assays.KernelProbe do
   defp evaluate(:occurs_bare_global) do
     env =
       Inductive.declare(base_env(), Inductive.family(:HN, [], [], 0), [
-        Inductive.ctor(:mkN, [{:f, {:global, :HN}}], [], [:present], [])
+        Inductive.ctor(:mkN, [{:f, {:global, :HN}}], [], [:unrestricted], [])
       ])
 
     Inductive.positive?(env, Inductive.family(:HN, [], [], 0))

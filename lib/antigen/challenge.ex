@@ -67,7 +67,7 @@ defmodule Antigen.Challenge do
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
     :f, :g, :h, :plus, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
-    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
+    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :unrestricted, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
     # reify / data-split verticals (lean-shape-matching): indexed-case def names
@@ -85,7 +85,7 @@ defmodule Antigen.Challenge do
     # universes vertical
     :u,
     # erasure quantities: the ω annotation `:many` on a ctor field (siblings
-    # `:present`/`:erased` already interned). Family seeds carry it as text in the
+    # `:unrestricted`/`:erased` already interned). Family seeds carry it as text in the
     # scaffold and reconstruct it via `to_existing_atom`, so it must be interned or
     # a fresh-VM decode raises "not an already existing atom" (found banking
     # universes/family seeds — see many_quantity_decode_test).
