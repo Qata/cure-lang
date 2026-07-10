@@ -668,3 +668,89 @@ PushNotification was sent. The cron is **left in place**; do NOT merge.
 Commits this cycle: `5c79183` (ref pin), `980ce23` (migrate comments).
 
 ---
+
+## Iteration 11
+
+No outstanding *fixable* bugs entered this cycle — iteration 10 left only
+operator-blocked design items and latent-until-2nd-edition items. Fresh
+adversarial audit via two sharpened Opus subagents scoped to LIVE, reproducible-
+on-the-current-tree bugs (single edition 2026), explicitly excluding every
+already-recorded latent/design item: (1) the edition CORE mechanism
+(edition.ex + compiler resolve/lex/parse + lexer keyword-set selection), (2) the
+migrate APPLY/BUMP path + the Cure.toml parser. Both returned **no new confirmed
+live bug**. This is the first CLEAN fresh audit of the run.
+
+**Fixed this cycle:**
+
+- Stale `comment_texts` cross-reference (`migrate.ex:239`) — it pointed at
+  `Cure.CLI's migrate_comments/1 (cli.ex:1319)`, which no longer exists
+  (`comment_texts` is now the sole lossless-comment check). Replaced the dead
+  reference with an accurate note of the known latent non-quote-aware limitation.
+  (`0eae043`)
+
+**Audit verification (both agents, cross-checked against source):**
+
+- **Edition core (agent 1):** empirically verified `pragma_edition`↔parser
+  agreement across pathological inputs (trailing junk after `)`, interior spaces,
+  CRLF / lone-CR, blank-then-pragma, indented → `:edition_pragma_placement`,
+  5-digit/multi-line → `:edition_pragma_malformed`, unknown → `:unknown_edition`).
+  In every resolver-under-match row the parser independently re-validates and
+  rejects, so the net compile outcome is correct. Precedence (pragma > manifest >
+  default) and manifest validation (`Project.load` gates through `Edition.parse`,
+  so no unknown edition leaks) both correct. `retired_keywords/2` returns `[]` for
+  every edition today, so the lexer keyword set is edition-invariant — all
+  resolver↔parser value-divergences are latent by construction (need a 2nd minted
+  edition with non-empty `retires_keywords`). `year/1`'s non-numeric raise is
+  unreachable on live paths.
+- **Migrate apply/bump + TOML (agent 2):** phase-1 rewrite IS live (all six rules
+  `since: "2026"` fire) and verified non-corrupting/idempotent; phase-2 bump is
+  inert at `target == current == 2026` (splice never executes), and when forced
+  reachable it handled CRLF/lone-CR/only-pragma/no-trailing-newline correctly.
+  TOML parser correct on `type_check = true # note`, quoted `=`-in-value, empty
+  value, etc. `check`/`print` never write; git-guard enforced only for write.
+  `detect_app` memo keys on `find_root`, cannot diverge from a fresh resolve.
+
+**Refuted / out-of-scope (checked):** leading BOM fails to lex (pre-existing lexer
+limit, fails loud, not edition-specific); resolver `trivia_line?` tolerates tabs
+that the lexer rejects (lexer rejects the file anyway → no wrong edition);
+unquoted-TOML-array / non-`stdlib_path` string coercion / table-header-trailing-
+content all require INVALID TOML, not valid input.
+
+**Marginal observation (recorded, not fixed):** `cure migrate --print` emits one
+extra trailing newline (`IO.puts(r.output)` where `r.output` already ends in
+`\n`), disagreeing with write-mode by a newline. Cosmetic (`--print` never writes);
+the "correct" fix is ambiguous for multi-file output (the double newline acts as a
+separator), so deferred as polish, not a bug.
+
+## Outstanding findings (after iteration 11)
+
+The fresh audit added no new fixable bug. Carried forward, UNCHANGED from
+iteration 10:
+
+### Blocked — needs operator (design decisions; no parity-clear answer)
+- `cure deps update` is effectively a no-op (skips path/registry deps; git deps
+  cache-skip via `ensure_clone` with no fetch/checkout).
+- Partial/interrupted clone accepted as green (`.git` present, no worktree).
+- `cure migrate` no-flag target = `current()` (conservative) vs newest-known
+  (Rust `cargo fix --edition` moves forward) — product decision.
+- Hyphenated dependency names silently dropped (`parse_dep_line` `\w+`).
+
+### Latent / unreachable today (recorded, not fixed)
+- `comment_texts` non-quote-aware (documented in-code this cycle; no current rule
+  triggers it).
+- Standalone pragma-less file not edition-stamped on a bump (needs stamping
+  policy; coupled to the migrate-target decision).
+- `ProtoToInterface` `retires_keywords` with `enforced_in: nil` (inert; correct
+  until a retiring edition exists).
+
+**Loop status:** iteration 11's fresh audit is CLEAN of new fixable bugs — the
+FIRST clean audit (iterations 6–10 all found bugs). Convergence needs TWO
+consecutive clean audits, so it is NOT met this cycle regardless. Moreover the
+system is not "bug-free": the Blocked items are real gaps whose fixes require an
+operator design decision (raised via PushNotification in iteration 10). The loop
+has reached its blocked floor — nothing further is auto-fixable without those
+decisions. The cron is **left in place**; do NOT merge.
+
+Commits this cycle: `0eae043` (stale-ref doc fix only).
+
+---
