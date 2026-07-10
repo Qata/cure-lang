@@ -306,10 +306,15 @@ HOLES (0)
 ABSURD (0)
 
 NOT PROVEN TOTAL (4)   — cannot be used in proofs; not assumptions
-  reverse, last, drop, take
+  drop, last, reverse, take
 
 UNAUDITED (0)
 ```
+
+(Names are sorted. An earlier draft of this sample listed them in declaration
+order, `reverse, last, drop, take`, which is not stable: it depends on the
+reachability walk. Determinism is the whole point of the section, so the
+implementation sorts and this sample follows it.)
 
 `--format json` emits the same content with a `schema` version field, for CI.
 
