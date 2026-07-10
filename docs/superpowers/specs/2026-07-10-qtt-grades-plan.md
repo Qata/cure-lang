@@ -173,6 +173,26 @@ half-migrated tree.
       *Hazard:* a linear binder captured by a non-one-shot closure. `mul/2` is
       what makes that fall out — do not special-case it.
 
+- [ ] **4c. Join points (E layer).** Bind a catch-all body **once** instead of
+      re-elaborating it per uncovered constructor. Encoding uses only existing
+      Core formers: wrap the `:case` in the `:let` binder slice 1 added, binding
+      `j = {:lam, ω, S, e}` at type `{:pi, ω, S, R}` — literally the motive λ with
+      `:lam` rewritten to `:pi` — and emit `{:app, j, scrut}` in each defaulted
+      branch. The λ supplies the laziness a bare `:let` would destroy: the
+      catch-all must not run when a real arm matches.
+      *Scope:* only when the motive is **non-dependent** (its body has no free
+      `{:var, 0}`) and **≥2** constructors are uncovered. A dependent motive would
+      need the branch's reconstructed `C(args…)` — including its erased telescope
+      args — rather than `scrut`, so it keeps today's expansion; one uncovered
+      constructor makes a closure a pessimization.
+      *Red tests to write first:* a 6-constructor type with one arm covered
+      elaborates the catch-all body **once**, not 5×; two nested catch-alls give
+      2 copies, not 25; a named catch-all `x -> g(x)` still sees the scrutinee's
+      value; each constructor still normalizes to the same result it does today
+      (semantics preserved); one uncovered constructor emits **no** join point; a
+      dependent-motive match is unchanged and still typechecks.
+      *Not a blocker for 4b* — see "Known prerequisite" above.
+
 - [ ] **5. Surface syntax.** `fn f(1 x: T)`, `fn f(0 {n: Nat})`, an affine marker,
       and `let 1 c = spawn …`. Parser + elaborator. Default remains `ω`, so no
       existing source changes.
@@ -187,12 +207,51 @@ Without that, a linear handle could be cloned *below* the usage check — the
 elaborator would manufacture the aliasing the type system forbids. Slice 4 may
 therefore proceed with no substitution-path escape clause.
 
-The remaining sibling defect is the **join-point residual**: `elaborate_match`
-copies a continuation into every branch. It is a `match` problem, not a `let`
-problem, and it wants the same treatment (share, don't copy). It does not block
-slices 2–5, but a linear value used in a shared continuation would be
-miscounted — so **slice 4 must either fix join points or reject linear values in
-a duplicated continuation.**
+The remaining sibling defect is the **join-point residual**. An earlier draft of
+this plan described it as "`elaborate_match` copies a continuation into every
+branch" and concluded that **slice 4 must either fix join points or reject linear
+values in a duplicated continuation**. Both halves of that sentence were wrong.
+The corrected, measured account:
+
+**Where the duplication actually is.** Core `:case` has no default branch, so a
+surface catch-all (`_ -> e` / `x -> e`) is expanded into one Core branch per
+*uncovered constructor*, and `elaborate_default_branch/10` surface-substitutes
+the catch-all's variable and **re-elaborates `e` from scratch each time**. Guards
+are not the cause: `guard_chain/7` is already linear (its fall-through `ff` is
+elaborated once), and `split_first_tuple_column/2` refuses to duplicate a row
+(it bails to `:not_applicable` unless the first-column heads are distinct).
+`fold_ctor_guard_groups/2` splices the closer per guarded group, but that is
+subsumed by the catch-all expansion.
+
+Measured on `elaborate/1`, counting occurrences of the catch-all body's callee in
+the elaborated Core:
+
+| shape | copies |
+|---|---|
+| 3-constructor type, 1 arm covered | 2 |
+| 6-constructor type, 1 arm covered | 5 |
+| two *nested* catch-alls, 6-constructor type | **25** |
+
+So *k* nested catch-alls over an *n*-constructor type yield **(n−1)^k** copies —
+exponential term growth, paid in flash on an ESP32.
+
+**It is not a soundness problem.** Idris combines branch usages by *agreement*,
+not summation (`LinearCheck.idr:528-540`, `combineUsage`): a `Use0`/`Use1`
+mismatch across branches is an error, and `UseAny` wins over anything. Every copy
+the expansion makes lands in a **disjoint constructor branch**, never
+sequentially within one branch, so a linear variable in the copied body is still
+counted **once**. Duplication cannot inflate `1` to `ω`. Slice 4b is therefore
+safe with or without join points, and needs no escape clause.
+
+Cure's `combine` must nevertheless be **grade-aware**, where Idris's is not.
+Idris throws on a `Use0`/`Use1` mismatch regardless of the binder's grade because
+Idris has no affine quantity. For Cure, a `:affine` binder used in one branch and
+dropped in another is **legal** — affine may be dropped. The rule is
+`Grade.admits?(declared, uses_in_branch)` checked **per branch**, not on a summed
+count.
+
+Join points are therefore a **term-size fix, not a soundness fix** — tracked
+below as slice 4c on the operator's direction.
 
 ---
 

@@ -16,6 +16,11 @@ defmodule Cure.Elab.Elaborator do
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
   alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
 
+  # Placeholder body for a `:case` branch the join point will fill (see
+  # `join_point?/5`, `elaborate_join/6`, `wrap_join/2`). Never reaches the kernel:
+  # `wrap_join/2` replaces every marker before the term escapes `elaborate_match`.
+  @join_marker :"$join_point"
+
   @doc """
   Elaborate a top-level function definition into `{:ok, core_lambda, type_value}`
   — the λ over the parameters and the Π type it inhabits.
@@ -1732,12 +1737,12 @@ defmodule Cure.Elab.Elaborator do
           k = length(family.indices)
           motive = if carried, do: wrap_motive_carried_eq(motive0, k, carried), else: motive0
 
-          with {:ok, branches} <-
+          with {:ok, branches, join} <-
                  elaborate_branches(
                    arms, names, ctx, env, dname,
-                   idx_vals, param_vals, scrut_term, result_type_term, carried
+                   idx_vals, param_vals, scrut_term, result_type_term, carried, motive
                  ) do
-            case_term = {:case, scrut_term, motive, branches}
+            case_term = wrap_join({:case, scrut_term, motive, branches}, join)
             {:ok, if(carried, do: {:app, case_term, mk_refl(carried.idx_term)}, else: case_term)}
           end
 
@@ -2418,17 +2423,31 @@ defmodule Cure.Elab.Elaborator do
   # `idx_vals` are the scrutinee's index VALUES (for branch_unify); each
   # branch's expected type comes from the kernel's branch_unify verdict subst
   # plus the scrutinee-value refinement (see elaborate_matched_branch).
-  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term, carried) do
+  #
+  # Returns `{:ok, branches, join}`. `join` is `nil`, or `{join_ty, join_val}` —
+  # the JOIN POINT (plan slice 4c): the catch-all body, elaborated ONCE, which
+  # `wrap_join/2` binds around the assembled `:case`. Branches that would have
+  # re-elaborated it carry the `@join_marker` body until then.
+  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term, carried, motive) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname) do
       sig = Context.signature(ctx)
+      cnames = sig |> Inductive.ctors_of(dname) |> Enum.map(& &1.name)
 
-      sig
-      |> Inductive.ctors_of(dname)
-      |> Enum.map(& &1.name)
-      |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
-        verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals, param_vals)
+      verdicts = Map.new(cnames, &{&1, Kernel.branch_unify(ctx, dname, &1, idx_vals, param_vals)})
 
-        case Map.get(arm_map, cname) do
+      uncovered =
+        Enum.filter(cnames, fn c ->
+          not Map.has_key?(arm_map, c) and Map.get(verdicts, c) != :impossible
+        end)
+
+      join? = join_point?(default, uncovered, carried, idx_vals, motive)
+
+      branches =
+        cnames
+        |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
+          verdict = Map.fetch!(verdicts, cname)
+
+          case Map.get(arm_map, cname) do
           {:matched, pattern, body_expr} ->
             case elaborate_matched_branch(
                    verdict, pattern, body_expr, names, ctx, env,
@@ -2452,6 +2471,14 @@ defmodule Cure.Elab.Elaborator do
               verdict == :impossible ->
                 {:cont, {:ok, acc}}                      # omit (K4 §H)
 
+              # The join point covers this constructor: leave a marker whose body
+              # `wrap_join/2` fills with `{:app, j, scrut}` once it knows the
+              # let-binder's depth. The catch-all body is elaborated exactly once,
+              # below, instead of once per uncovered constructor.
+              join? ->
+                arity = length(Inductive.get_ctor(env, cname).args)
+                {:cont, {:ok, acc ++ [{cname, arity, @join_marker}]}}
+
               default != nil ->
                 case elaborate_default_branch(
                        verdict, cname, default, names, ctx, env,
@@ -2464,8 +2491,13 @@ defmodule Cure.Elab.Elaborator do
               true ->
                 {:halt, {:error, {:missing_branch, cname}}}
             end
-        end
-      end)
+          end
+        end)
+
+      with {:ok, brs} <- branches,
+           {:ok, join} <- elaborate_join(join?, default, names, ctx, env, motive) do
+        {:ok, brs, join}
+      end
     end
   end
 
@@ -3575,6 +3607,76 @@ defmodule Cure.Elab.Elaborator do
           end
       end
     end)
+  end
+
+  # ── Join points (plan slice 4c) ─────────────────────────────────────────────
+  # Core `:case` has no default branch, so a surface catch-all becomes one branch
+  # per uncovered constructor — and `elaborate_default_branch/10` re-elaborates
+  # its body for each. The copies MULTIPLY through nesting: `k` nested catch-alls
+  # over an `n`-constructor type used to yield `(n-1)^k` copies (measured: 25 for
+  # k=2, n=6). A join point binds the body once and calls it from each branch.
+  #
+  # No new Core former is needed. Given the motive `λ(s : S). R`, bind
+  #
+  #     j = {:lam, ω, S, body}   at   {:pi, ω, S, R}
+  #
+  # in the `:let` binder, and make each defaulted branch `{:app, j, scrut}`. The λ
+  # is load-bearing: a bare `:let` of `body` would be EAGER (`Emit` lowers `:let`
+  # to a match block), so the catch-all would run even when a real arm matched.
+  # It also subsumes the surface substitution — a named catch-all `x -> …` is
+  # precisely the λ's binder, so `x` is the scrutinee's value by construction.
+  #
+  # NOT a soundness fix. Idris combines branch usages by agreement rather than
+  # summation (`LinearCheck.idr:528-540`), and the copies always landed in
+  # DISJOINT constructor branches, so a linear variable in the catch-all was
+  # already counted once. This buys term size, which on an ESP32 is flash.
+  #
+  # Fire only where it pays and where it is obviously type-correct:
+  #
+  #   * ≥2 uncovered constructors — one call site would pay a closure to save
+  #     nothing;
+  #   * no carried index equality, and an UNINDEXED family — otherwise `motive`
+  #     is not the plain `λ(s : S). R` this encoding reads it as;
+  #   * a NON-DEPENDENT motive (`R` does not mention `s`). A dependent `R` would
+  #     type each branch at `R[s := C(args…)]`, so the join would have to be
+  #     applied to the branch's reconstructed constructor — including its erased
+  #     telescope args — rather than to `scrut`. Left as today's expansion.
+  defp join_point?(default, uncovered, carried, idx_vals, motive) do
+    default != nil and length(uncovered) >= 2 and carried == nil and idx_vals == [] and
+      match?({:lam, _g, _s, _r}, motive) and
+      not MapSet.member?(free_indices(elem(motive, 3), 0), 0)
+  end
+
+  defp elaborate_join(false, _default, _names, _ctx, _env, _motive), do: {:ok, nil}
+
+  defp elaborate_join(true, {vname, body_expr}, names, ctx, env, {:lam, _g, s_term, r_term}) do
+    # `r_term` already lives under the motive's binder, so in `ctx1` it IS the
+    # catch-all's expected type — no shift.
+    ctx1 = Context.extend(ctx, Eval.eval(s_term, Context.env(ctx)))
+    names1 = [vname | names]
+
+    with {:ok, body} <- elaborate_expr_checked(body_expr, r_term, names1, ctx1, env) do
+      {:ok, {{:pi, Grade.unrestricted(), s_term, r_term}, {:lam, Grade.unrestricted(), s_term, body}}}
+    end
+  end
+
+  # Wrap the assembled `:case` in the join binder and discharge every marker.
+  # Inserting a binder between the context and the case shifts everything inside
+  # by one: `scrut` and `motive` at cutoff 0, a branch body at cutoff `arity` (its
+  # own constructor binders must not move). Inside a branch the join sits at index
+  # `arity`, and the scrutinee it is applied to has travelled under `1 + arity`
+  # binders.
+  defp wrap_join(case_term, nil), do: case_term
+
+  defp wrap_join({:case, scrut, motive, branches}, {join_ty, join_val}) do
+    branches1 =
+      Enum.map(branches, fn
+        {c, arity, @join_marker} -> {c, arity, {:app, {:var, arity}, Subst.shift(scrut, 1 + arity, 0)}}
+        {c, arity, body} -> {c, arity, Subst.shift(body, 1, arity)}
+      end)
+
+    inner = {:case, Subst.shift(scrut, 1, 0), Subst.shift(motive, 1, 0), branches1}
+    {:let, Grade.unrestricted(), join_ty, join_val, inner}
   end
 
   # A variable/wildcard catch-all covers `cname` (not explicitly matched): rebuild
