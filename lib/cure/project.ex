@@ -85,6 +85,15 @@ defmodule Cure.Project do
       File.regular?(Path.join(dir, "Cure.toml")) ->
         dir
 
+      # Do not ESCAPE the enclosing git repository: a `Cure.toml` above the repo
+      # (a sibling/parent project, or a stray `~/Cure.toml`) is unrelated, and
+      # binding a file to it would let a stranger's edition silently drive — or,
+      # with a typo, spuriously fail — this repo's builds. `.git` marks the repo
+      # root (a normal clone: a directory; a git worktree: a file), so stop here
+      # with no manifest found rather than walking further up.
+      File.exists?(Path.join(dir, ".git")) ->
+        nil
+
       # `Path.dirname/1` is a fixpoint at the filesystem root ("/" -> "/"), so
       # stop there rather than looping forever when no manifest exists above.
       parent == dir ->

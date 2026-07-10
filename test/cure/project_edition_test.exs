@@ -37,6 +37,37 @@ defmodule Cure.ProjectEditionTest do
     assert Cure.Project.find_root(nil) == nil
   end
 
+  # Iteration 5 audit (Agent B finding 1): the upward walk must not ESCAPE the
+  # enclosing git repository. A `Cure.toml` above the repo (a sibling/parent
+  # project, or a stray ~/Cure.toml) is unrelated; binding to it would let a
+  # stranger's edition silently drive — or, with a typo, spuriously fail — builds
+  # of files in this repo. Stop at the dir holding `.git` (a git worktree uses a
+  # `.git` FILE, a normal clone a dir — both count).
+  test "find_root stops at the git-repo root and does not escape to an ancestor Cure.toml" do
+    base = Path.join(System.tmp_dir!(), "cure_gitbound_#{System.unique_integer([:positive])}")
+    repo = Path.join(base, "repo")
+    src = Path.join(repo, "src")
+    File.mkdir_p!(src)
+    on_exit(fn -> File.rm_rf!(base) end)
+    # Stray manifest ABOVE the repo boundary; must NOT be discovered.
+    File.write!(Path.join(base, "Cure.toml"), "[project]\nname = \"stray\"\nedition = \"9999\"\n")
+    # Repo boundary marker (a git worktree writes a `.git` file).
+    File.write!(Path.join(repo, ".git"), "gitdir: /wherever\n")
+
+    assert Cure.Project.find_root(Path.join(src, "a.cure")) == nil
+  end
+
+  test "find_root still returns a Cure.toml that sits AT the git-repo root" do
+    base = Path.join(System.tmp_dir!(), "cure_gitroot_#{System.unique_integer([:positive])}")
+    src = Path.join(base, "src")
+    File.mkdir_p!(src)
+    on_exit(fn -> File.rm_rf!(base) end)
+    File.write!(Path.join(base, ".git"), "gitdir: /wherever\n")
+    File.write!(Path.join(base, "Cure.toml"), "[project]\nname = \"ok\"\nedition = \"2026\"\n")
+
+    assert Cure.Project.find_root(Path.join(src, "a.cure")) == Path.expand(base)
+  end
+
   test "loads a validated edition from the [project] table" do
     dir = write_toml("[project]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2026\"\n")
     {:ok, project} = Cure.Project.load(dir)
