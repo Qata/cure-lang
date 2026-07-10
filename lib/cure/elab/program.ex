@@ -723,7 +723,8 @@ defmodule Cure.Elab.Program do
       ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
       defs: Map.merge(left.defs, right.defs),
       certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
-      builtins: Map.merge(left.builtins, right.builtins)
+      builtins: Map.merge(left.builtins, right.builtins),
+      primitives: Map.merge(left.primitives, right.primitives)
     }
   end
 
