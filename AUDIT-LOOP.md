@@ -1506,3 +1506,74 @@ merge.
 Commits this cycle: `3ff2515`, `7b2ce0a`, plus this record.
 
 ---
+
+## Iteration 20
+
+**Scope of fresh audit:** the two slices iteration 19 changed —
+`lib/cure/migrate/rules/group_hoist.ex` (3ff2515, the `above_mod?`/
+`split_off_above_mod` idempotence fix) and `lib/cure/cli.ex` (7b2ce0a,
+`read_source_or_exit`). Two read-only adversarial Opus agents plus my own
+empirical fixpoint/stability probes; every claim verified against source.
+
+**Both agents returned CLEAN on the iteration-19 fixes:**
+- group_hoist (3ff2515): idempotence holds (≤2 passes, last pass `:no_change`),
+  detector↔rewriter move-sets provably equal (no spurious rewrite-but-same-AST →
+  no `run_to_fixpoint` non-convergence), correct nearest-preceding-module
+  association across 3+ modules, multiple in-body groups, interleaved `@inline`,
+  EOF groups, prefix groups. Nodes relocated as-is, trivia rides along, order
+  preserved, output reparses. (Agent initially mis-`cd`'d into the main clone;
+  it then audited the correct `3ff2515` blob — my working tree is verified on
+  `autopilot/editions` @ 7f6e1f1 with the fix present, no drift.)
+- CLI (7b2ce0a): all six fmt/doc reads converted, `error(...) && exit(...)`
+  idiom proven identical to the run/check reference sites (`error/1` → `IO.puts`
+  returns truthy `:ok`), exit propagates cleanly through the enumerations (only
+  unrelated `try` in the file), fmt_diff/fmt_check contracts intact.
+
+**One confirmed bug found by my own stress-probing — PRE-EXISTING, now fixed:**
+
+3. **`cure migrate` not text-idempotent for a hoisted decorator** (fixed
+   `7f6e1f1`). Driving `run_to_fixpoint` then reparsing its output and running
+   again shed a blank line: a hoisted `@group` standalone sibling printed
+   `@group(:g)\n\nmod A`, but on reparse the parser ABSORBS a decorator written
+   directly above its `mod` into the container, which re-renders tight
+   (`@group(:g)\nmod A`). Root cause in the printer, not group_hoist: the §5.4
+   top-level rule (`render_program`, printer.ex:72) blanked EVERY item via an
+   unconditional `i > 0`, treating a standalone decorator sibling as its own
+   definition. The migration advertises idempotence (spec §6.1) but was only
+   AST-convergent, not text-idempotent, so a second `cure migrate` (or a
+   `cure fmt --check` afterwards) silently changed whitespace. Fix: a top-level
+   decorator hugs the item it decorates (`i > 0 and not prev-is-decorator`),
+   matching the absorbed form → `print∘reparse∘print` is a fixpoint. Pre-existing
+   (the single-group hoist has always produced the standalone form); NOT a
+   regression from iteration 19. Near-zero blast radius — real files never carry
+   a standalone top-level decorator sibling (the parser absorbs them), so no
+   existing corpus/printer test changed. Verified: printer 34, trivia, migrate
+   51, formatter 30, algebra + lossless-roundtrip 55 all green; 3-module and
+   multi-group inputs now `STABLE: true`.
+
+### Outstanding findings (after iteration 20)
+
+**None confirmed remaining.** The one found bug fixed this cycle. Because this
+cycle's audit DID surface a bug, the streak is **0** — two consecutive clean
+audits still required.
+
+**Latent / adjacent (carried + one new, NOT counted as blocking bugs):**
+- NEW: `cure test` / project-lib load (`cli.ex` ~1001/1070) still `File.read!`
+  the `Path.wildcard` corpus, so a chmod-000 file in your own `lib/`/`test/`
+  raises a raw File.Error rather than a clean exit. Pre-existing, out of the
+  fmt/doc fix scope; defensible (a broken corpus file fails the build either
+  way, stacktrace-exit vs clean-exit). Flagged for a future tolerant-read pass.
+- Duplicate `[project]` divergence; `comment_texts` non-quote-aware; migrate
+  engine no rule-rescue; parser drops `type` decorator; `edition = ""` fails
+  load; uppercase-type-var CTX false-positive; package-manager scope items
+  (UNCHANGED).
+
+**Loop status:** iteration 20 confirmed both iteration-19 fixes hold under fresh
+adversarial audit, and found + fixed one pre-existing text-idempotence defect in
+the printer (surfaced by stress-probing group_hoist's fixpoint stability). Audit
+NOT clean → streak reset to 0. Cron **left in place**. Full suite green:
+**3975 passed, 0 failures**; Antigen 309/309. Do NOT merge.
+
+Commits this cycle: `7f6e1f1`, plus this record.
+
+---
