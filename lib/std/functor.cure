@@ -1,10 +1,12 @@
 @group(:core)
 mod Std.Functor
-  ## Functor protocol for structures that support `fmap`.
+  ## Functor interface for structures that support `fmap`.
   ##
-  ## A functor is any container that admits a structure-preserving
-  ## map. The built-in impl for `List` delegates to `Std.List.map/2`;
-  ## additional impls can be declared for user-defined container
+  ## A functor is any container `F` that admits a structure-preserving
+  ## map. `Functor` is genuinely higher-kinded: its head `f` has kind
+  ## `Type -> Type`, so `fmap` lifts a function `A -> B` to `F(A) -> F(B)`.
+  ## The built-in implementation for `List` delegates to `Std.List.map/2`;
+  ## additional implementations can be declared for user-defined container
   ## types.
   ##
   ## ## Examples
@@ -15,15 +17,17 @@ mod Std.Functor
   ## fmap([1, 2, 3], fn(x) -> x + 10)        # => [11, 12, 13]
   ## ```
 
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
-  ## `Functor(F)` lifts an arbitrary function `A -> B` to an
-  ## endo-transformation on a container `F`.
-  proto Functor(g)
-    ## Apply `f` to every element inside the functorial `container`.
-    fn fmap(container: g, f: a -> b) -> g
+  use Std.List
 
-  ## `Functor` impl for `List`: delegates to `Std.List.map/2`.
-  impl Functor for List
-    ## Map `f` over every element of `container`.
-    fn fmap(container: List, f: a -> b) -> List =
-      Std.List.map(container, f)
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
+  ## `Functor(F)` lifts an arbitrary function `A -> B` to a
+  ## structure-preserving transformation `F(A) -> F(B)`.
+  interface Functor(f)
+    ## Apply `g` to every element inside the functorial `container`.
+    fn fmap(container: f(a), g: a -> b) -> f(b)
+
+  ## `Functor` implementation for `List`: delegates to `Std.List.map/2`.
+  implementation Functor for List
+    ## Map `g` over every element of `container`.
+    fn fmap(container: List(a), g: a -> b) -> List(b) =
+      Std.List.map(container, g)

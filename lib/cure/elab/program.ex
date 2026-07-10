@@ -740,7 +740,13 @@ defmodule Cure.Elab.Program do
       defs: Map.merge(left.defs, right.defs),
       certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
       builtins: Map.merge(left.builtins, right.builtins),
-      primitives: Map.merge(left.primitives, right.primitives)
+      primitives: Map.merge(left.primitives, right.primitives),
+      # Typeclass state must cross the import boundary too, or a `use`d module's
+      # interfaces + instances vanish and a method call in the importer is
+      # `:unknown_global` / `{:no_instance, …}`. Interfaces are a plain map;
+      # the coherence registry is a struct (nil = empty), unioned right-wins.
+      interfaces: Map.merge(left.interfaces, right.interfaces),
+      coherence: Cure.Elab.Coherence.merge(left.coherence, right.coherence)
     }
   end
 
