@@ -1,0 +1,73 @@
+@group(:core)
+mod Std.Telescope
+  ## The telescope type — the shape all surface tuples are made of.
+  ##
+  ## A *telescope* is a right-nested chain of dependent pairs terminated by the
+  ## empty telescope `Unit`:
+  ##
+  ## ```
+  ##   Sigma(T1, λ. Sigma(T2, λ. … Sigma(Tn, λ. Unit)))
+  ## ```
+  ##
+  ## Each `Sigma` (from `Std.Sigma`) packages one component; the trailing `Unit`
+  ## marks "no more components". This is the honest, arity-uniform generalisation
+  ## of the dependent pair: `Std.Tuple`'s `Tuple(T1, …, Tn)` is exactly a
+  ## telescope, presented at a fixed (monomorphised) arity so users never see the
+  ## `Sigma`/`Unit` spine.
+  ##
+  ## ## Representation
+  ##
+  ## `Unit` is the compiler-provided empty-telescope terminator (an ordinary
+  ## nullary inductive, `unit : Unit`, seeded into every module — the analogue of
+  ## `Std.Sigma`'s `@builtin(:sigma)` pair). It exists only at the type level: at
+  ## CODEGEN a telescope `mk_pair(e1, … mk_pair(en, unit))` lowers to ONE FLAT
+  ## BEAM tuple `{e1, …, en}` — the `unit` marker is dropped, never materialised at
+  ## runtime ("erased before runtime"). So a telescope keeps the bare BEAM-tuple
+  ## ABI (`element/2` interop) while remaining a genuine iterated Σ to the kernel.
+  ## Nesting is opt-in: `Tuple(A, Tuple(B, C))` is `{a, {b, c}}`.
+  ##
+  ## ## Positional projections `tproj2 … tproj8`
+  ##
+  ## A telescope's intermediate TAILS have no contiguous runtime representation
+  ## (only leaf `element(i)` slots do), so the i-th component (for `i ≥ 2`) cannot
+  ## be reached with `Std.Sigma`'s `sigma_second` — that projects the TAIL, whose
+  ## type is a shorter telescope, not the i-th component's type `Ti`. These globals
+  ## give the i-th component its true type `Ti` (the body is the well-typed
+  ## `sigma_first ∘ sigma_second^(i-1)` composition, checked but never run) while
+  ## INLINING at codegen to `element(i, p)` — the same zero-cost trick
+  ## `sigma_first`/`sigma_second` use on the flat BEAM-tuple ABI. The prefix
+  ## `{r: Type}` absorbs the tail, so `tproj_i` accepts any telescope of arity ≥ i
+  ## (`.2` on an arity-5 tuple binds `r := Sigma(T3, … Unit)`). Arity ≥ 3
+  ## telescopes are non-dependent products, so the component types do not depend on
+  ## earlier elements. `.1` stays `sigma_first` (already correct for any
+  ## telescope); the surface `Tuple` arity caps at 8, so the family stops at
+  ## `tproj8`.
+
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
+  fn tproj2({a: Type}, {b: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, r))) -> b =
+    sigma_first(sigma_second(p))
+
+  fn tproj3({a: Type}, {b: Type}, {c: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, r)))) -> c =
+    sigma_first(sigma_second(sigma_second(p)))
+
+  fn tproj4({a: Type}, {b: Type}, {c: Type}, {d: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, r))))) -> d =
+    sigma_first(sigma_second(sigma_second(sigma_second(p))))
+
+  fn tproj5({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, r)))))) -> e =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(p)))))
+
+  fn tproj6({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, r))))))) -> f =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p))))))
+
+  fn tproj7({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {g: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, Sigma(x7: g, r)))))))) -> g =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p)))))))
+
+  fn tproj8({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {g: Type}, {h: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, Sigma(x7: g, Sigma(x8: h, r))))))))) -> h =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p))))))))
