@@ -54,6 +54,13 @@ defmodule Antigen.Coverage do
   # (which Term.term? rejects) and the assay self-validates via Kernel.check.
   def terms_of(%Challenge{kind: :check_mode}), do: []
 
+  # Kernel def-level probes carry only a probe tag; the assay reconstructs the
+  # input and calls the kernel directly (check_def/validate_certificate/…), so
+  # there is no standalone Core Term to well-form-check — bypass the gate as
+  # :check_mode/:decode_probe do (some inputs, e.g. `{:absurd}`/`{:hole,_}`, are
+  # deliberately shapes Term.term? rejects).
+  def terms_of(%Challenge{kind: :kernel_probe}), do: []
+
   def terms_of(%Challenge{kind: :delta_reduce, payload: %{term: t, expected: e}}), do: [t, e]
 
   # opts-rejection probes carry no Core Term at all (a deliberately malformed

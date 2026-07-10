@@ -46,7 +46,8 @@ defmodule Antigen.CoverManifest do
     Rewrite,
     ClosureEnv,
     Conversion,
-    ErasureTerm
+    ErasureTerm,
+    KernelProbe
   }
 
   # Generator modules under the shape-coverage manifest. Each declares the
@@ -82,7 +83,8 @@ defmodule Antigen.CoverManifest do
     Rewrite,
     ClosureEnv,
     Conversion,
-    ErasureTerm
+    ErasureTerm,
+    KernelProbe
   ]
 
   @doc "The generator modules under the shape-coverage manifest."

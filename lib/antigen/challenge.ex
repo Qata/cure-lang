@@ -184,7 +184,16 @@ defmodule Antigen.Challenge do
     # (:a, :n, :x, :y) are already interned above; the assay's own fixed probe
     # atoms (absent-name sentinels, the legacy record, the builtin-probe keys)
     # never ride through to_pieces/from_pieces so they need no entry here.
-    :AntigenEnv, :antigenA
+    :AntigenEnv, :antigenA,
+    # Kernel def-level cold-line probe vertical (:kernel_probe kind). The kind +
+    # label ride through to_pieces/from_pieces; the probe tag is the only payload
+    # (stored as the scaffold "probe" string), so every probe name must intern.
+    :kernel_probe, :probe,
+    :infer_absurd, :infer_fields_only_ctor, :check_ctor_arity, :check_def_unknown,
+    :check_def_builtin_op, :validate_cert_builtin_op, :family_ceiling, :normalize_opts,
+    :validator_warn_emit, :remap_index_passthrough, :quote_foreign_vdata,
+    :positivity_through_ctor, :decode_unknown_symbol, :cert_under_application,
+    :cert_dangling_callee
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -306,6 +315,11 @@ defmodule Antigen.Challenge do
 
   # decode probe: the raw input string rides in the scaffold (no Core-term pieces).
   def to_pieces(%__MODULE__{kind: :decode_probe, payload: %{input: s}}), do: {%{"input" => s}, []}
+
+  # Kernel def-level probe: the payload is a single fixed probe tag (no Core
+  # terms), stored in the scaffold like :decode_probe's input.
+  def to_pieces(%__MODULE__{kind: :kernel_probe, payload: %{probe: probe}}),
+    do: {%{"probe" => Atom.to_string(probe)}, []}
 
   # conv pair: two terms as pieces; context size + expected verdict in the scaffold.
   def to_pieces(%__MODULE__{kind: :conv_pair, payload: %{t1: t1, t2: t2, ctx: n, expect: e}}),
@@ -527,6 +541,12 @@ defmodule Antigen.Challenge do
 
   def from_pieces(:decode_probe, assay, label, seed, note, scaffold, _pieces),
     do: new(kind: :decode_probe, assay: assay, label: label, payload: %{input: scaffold["input"]}, seed: seed, note: note)
+
+  def from_pieces(:kernel_probe, assay, label, seed, note, scaffold, _pieces) do
+    probe = known_atom!(scaffold["probe"])
+    new(kind: :kernel_probe, assay: assay, label: label, payload: %{probe: probe},
+        seed: seed, note: note, cover_tag: probe)
+  end
 
   def from_pieces(:conv_pair, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)

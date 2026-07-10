@@ -232,7 +232,13 @@ defmodule Mix.Tasks.Antigen do
       # for Kernel.bool_type_value/1 (boolean literal, inference position) and
       # Kernel.nat_type_value/1 (Nat-checked literal, re-checked via elab/soundness
       # over the real prelude env) — neither reachable from a bare Core-term probe.
-      {1, Antigen.Generators.ElabLiteralTyping.gen()}
+      {1, Antigen.Generators.ElabLiteralTyping.gen()},
+      # Kernel def-level probes (cold-line completion batch) — the lever for the
+      # check_def / validate_certificate / check_family / normalize-3 / Final-Core
+      # validator-emit / infer-rejection / remap_index_error defensive clauses that
+      # are entry points into the kernel's def and family machinery, not `infer` of
+      # a single closed term, so no term-shaped generator reaches them.
+      {1, Antigen.Generators.KernelProbe.gen()}
     ])
   end
 
