@@ -480,6 +480,14 @@ defmodule Cure.Elab.Program do
   defp global_refs({:pi, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
   defp global_refs({:lam, dom, body}), do: global_refs(dom) ++ global_refs(body)
   defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
+
+  # The `:let` binder is the seventh Core former. Without this clause it fell
+  # through to the catch-all below, and every global referenced only inside a
+  # `let` vanished from `reachable_def_names/2` — co-emitting such a closure
+  # produced a module that called a function it never defined.
+  defp global_refs({:let, ty, val, body}),
+    do: global_refs(ty) ++ global_refs(val) ++ global_refs(body)
+
   defp global_refs(_leaf), do: []
 
   @doc """
