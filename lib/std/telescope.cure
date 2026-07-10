@@ -2,8 +2,14 @@
 mod Std.Telescope
   ## The telescope type — the shape all surface tuples are made of.
   ##
-  ## A *telescope* is a right-nested chain of dependent pairs terminated by the
-  ## empty telescope `Unit`:
+  ## A *telescope* is a list of component types, in order: the reified *shape* of
+  ## a tuple. `Telescope` below is that shape as honest data (the Agda/Idris
+  ## telescope-as-data): the empty telescope `Empty`, or `More(head, rest)` —
+  ## one component type `head` consed onto a shorter telescope `rest`. So
+  ## `Tuple(Int, Bool, Int)` has shape `More(Int, More(Bool, More(Int, Empty)))`.
+  ##
+  ## `Telescope` names the shape; a *value* of that shape is the right-nested
+  ## chain of dependent pairs terminated by the empty telescope `Unit`:
   ##
   ## ```
   ##   Sigma(T1, λ. Sigma(T2, λ. … Sigma(Tn, λ. Unit)))
@@ -14,6 +20,9 @@ mod Std.Telescope
   ## of the dependent pair: `Std.Tuple`'s `Tuple(T1, …, Tn)` is exactly a
   ## telescope, presented at a fixed (monomorphised) arity so users never see the
   ## `Sigma`/`Unit` spine.
+
+  ## The telescope shape as data: a heterogeneous list of component types.
+  type Telescope = Empty | More(Type, Telescope)
   ##
   ## ## Representation
   ##
