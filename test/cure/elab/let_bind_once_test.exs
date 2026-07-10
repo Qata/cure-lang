@@ -111,4 +111,67 @@ defmodule Cure.Elab.LetBindOnceTest do
       assert {:error, _} = Program.elaborate(src)
     end
   end
+
+  describe "bidirectional let (ascription closes the check-only residual)" do
+    # A bare lambda has no inferable type, so bind-once cannot commit to one.
+    # `let f : T = fn(x) -> …` supplies it, and the rhs is elaborated in CHECKING
+    # mode — exactly what surface substitution did at each use site, done once.
+    test "an ascribed lambda rhs binds once" do
+      src =
+        "mod L\n" <>
+          "  fn ap(f: (Int) -> Int, n: Int) -> Int = f(n)\n" <>
+          "  fn f(n: Int) -> Int =\n    let g : (Int) -> Int = fn(x) -> x + 1\n    ap(g, n) + ap(g, n)\n"
+
+      body = body_of!(src, :f)
+      assert lets(body) == 1
+    end
+
+    test "an ascribed rhs is checked, not merely trusted" do
+      src =
+        "mod L\n" <>
+          "  fn f(n: Int) -> Int =\n    let g : (Int) -> Int = n\n    n\n"
+
+      assert {:error, _} = Program.elaborate(src)
+    end
+
+    # Without an ascription and without inference, substitution would DUPLICATE
+    # the rhs at every use site. Two uses ⇒ diagnostic, not silent duplication.
+    test "an unannotated non-inferable rhs used twice is a clear error" do
+      src =
+        "mod L\n" <>
+          "  fn ap(f: (Int) -> Int, n: Int) -> Int = f(n)\n" <>
+          "  fn f(n: Int) -> Int =\n    let g = fn(x) -> x + 1\n    ap(g, n) + ap(g, n)\n"
+
+      assert {:error, {:let_needs_annotation, "g", _}} = Program.elaborate(src)
+    end
+
+    # Zero uses: substitution DROPS the rhs, so it is never elaborated and an
+    # ill-typed one sails through. Unchecked code must not reach a green build.
+    test "an unused, ill-typed, non-inferable rhs is rejected (not silently dropped)" do
+      src =
+        "mod L\n" <>
+          "  fn f(n: Int) -> Int =\n    let g = fn(x) -> nonexistent_thing(x)\n    n\n"
+
+      assert {:error, _} = Program.elaborate(src)
+    end
+
+    test "an ascribed unused rhs IS elaborated, and its errors surface" do
+      src =
+        "mod L\n" <>
+          "  fn f(n: Int) -> Int =\n    let g : (Int) -> Int = fn(x) -> nonexistent_thing(x)\n    n\n"
+
+      assert {:error, _} = Program.elaborate(src)
+    end
+
+    # One use cannot duplicate, so substitution stays legal (and is what the
+    # stdlib relies on today).
+    test "an unannotated non-inferable rhs used once still elaborates" do
+      src =
+        "mod L\n" <>
+          "  fn ap(f: (Int) -> Int, n: Int) -> Int = f(n)\n" <>
+          "  fn f(n: Int) -> Int =\n    let g = fn(x) -> x + 1\n    ap(g, n)\n"
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+  end
 end

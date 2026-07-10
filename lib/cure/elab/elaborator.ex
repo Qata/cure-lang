@@ -3989,32 +3989,9 @@ defmodule Cure.Elab.Elaborator do
     if not Keyword.get(meta, :let, false) do
       {:error, {:unsupported_block_statement, meta}}
     else
-      case elaborate_expr_typed(rhs, names, ctx, env) do
-        {:ok, rhs_core, rhs_type} ->
-          bind_once_let(name, rhs_core, rhs_type, rest, expected_core, names, ctx, env)
-
-        # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
-        # check-only shape. Surface substitution never had to infer it: it
-        # re-elaborated the rhs in CHECKING mode at each use site, against the
-        # expected type there. A `:let` must commit to one type up front.
-        #
-        # So fall back to the old behaviour for exactly those right-hand sides,
-        # and keep bind-once wherever the rhs is inferable (which is every
-        # function call, constructor, literal and variable). The duplication that
-        # remains is now confined to check-only rhs's and is a KNOWN residual:
-        # closing it needs bidirectional `let` (an ascription, or propagating the
-        # body's demanded type back into the rhs), not more substitution.
-        #
-        # Shadowing + non-inferable is unrepresentable: substitution would capture
-        # and `:let` cannot be built, so surface the inference error.
-        {:error, _} = err ->
-          if Enum.any?(rest, &binds_any?(&1, [name])) do
-            err
-          else
-            rest
-            |> Enum.map(&subst_surface_var(&1, name, rhs))
-            |> elaborate_let_block(expected_core, names, ctx, env)
-          end
+      case Keyword.get(meta, :type_annotation) do
+        nil -> let_inferred(name, rhs, meta, rest, expected_core, names, ctx, env)
+        ann -> let_ascribed(name, rhs, ann, rest, expected_core, names, ctx, env)
       end
     end
   end
@@ -4022,28 +3999,95 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_let_block(other, _expected_core, _names, _ctx, _env),
     do: {:error, {:unsupported_block, other}}
 
+  # `let x : T = e` — BIDIRECTIONAL. The ascription supplies the type a
+  # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
+  # (exactly what surface substitution did at each use site) and bound ONCE.
+  # This is the general escape from the check-only residual.
+  defp let_ascribed(name, rhs, ann, rest, expected_core, names, ctx, env) do
+    with {:ok, ty_core} <- elaborate_type(ann, names, env),
+         {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+      ty_value = Eval.eval(ty_core, Context.env(ctx))
+      bind_once_let(name, rhs_core, ty_core, ty_value, rest, expected_core, names, ctx, env)
+    end
+  end
+
+  # `let x = e` — synthesise `e`'s type, then bind once.
+  defp let_inferred(name, rhs, meta, rest, expected_core, names, ctx, env) do
+    case elaborate_expr_typed(rhs, names, ctx, env) do
+      {:ok, rhs_core, rhs_type} ->
+        # SIGNATURE-AWARE reify. A `{:vdata, name, args}` value flattens a
+        # family's params and indices into one list; without the signature the
+        # split is not recoverable and the read-back puts them all in `params`,
+        # so a `{:let, T, …}` over an indexed family fails the kernel's arity
+        # check (`:arg_arity`). Agda `getNumberOfParameters` / Lean
+        # `inductive_val.get_nparams`.
+        ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+        bind_once_let(name, rhs_core, ty_core, rhs_type, rest, expected_core, names, ctx, env)
+
+      # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
+      # check-only shape. Surface substitution never had to infer it: it
+      # re-elaborated the rhs in CHECKING mode at each use site. A `:let` must
+      # commit to one type up front, so it needs `let x : T = e` (`let_ascribed/8`).
+      {:error, _} = err ->
+        cond do
+          # Shadowing + non-inferable is unrepresentable: substitution would
+          # capture and `:let` cannot be built. Surface the inference error.
+          Enum.any?(rest, &binds_any?(&1, [name])) ->
+            err
+
+          # Substitution is only safe at EXACTLY ONE use:
+          #
+          #   * ≥2 uses  — it DUPLICATES the rhs. That is what made surface
+          #     substitution a silent aliasing engine.
+          #   * 0 uses   — it DROPS the rhs, which is therefore never elaborated:
+          #     an ill-typed unused binding sails through to a green build.
+          #     (It also means a zero-use binding would not RUN once effects
+          #     arrive — that is `effect_bind`'s job, not this path's.)
+          #
+          # Both are refused, and the message says how to fix it: ascribe the
+          # binding (`let x : T = e`) and it binds once, checked.
+          count_surface_uses(rest, name) != 1 ->
+            {:error, {:let_needs_annotation, name, meta}}
+
+          # Exactly one use: the rhs is elaborated once, in checking mode, at that
+          # use site. No duplication, and it IS type-checked.
+          true ->
+            rest
+            |> Enum.map(&subst_surface_var(&1, name, rhs))
+            |> elaborate_let_block(expected_core, names, ctx, env)
+        end
+    end
+  end
+
   # `let x : T = e ⏎ rest`  ⟶  `{:let, T, e, rest}` with `x := e` in the context.
-  defp bind_once_let(name, rhs_core, rhs_type, rest, expected_core, names, ctx, env) do
-    # SIGNATURE-AWARE reify. A `{:vdata, name, args}` value flattens a family's
-    # params and indices into one list; without the signature the split is not
-    # recoverable and the read-back puts them all in `params`, so a `{:let, T, …}`
-    # over an indexed family fails the kernel's arity check (`:arg_arity`).
-    # Agda `getNumberOfParameters` / Lean `inductive_val.get_nparams`.
-    dom = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+  defp bind_once_let(name, rhs_core, ty_core, ty_value, rest, expected_core, names, ctx, env) do
     rhs_value = Eval.eval(rhs_core, Context.env(ctx))
 
     # `extend_def/3`, not `extend/2`: the binder is definitionally its value (ζ),
     # so a later `SNat(k)` sees `k`'s concrete value — the one thing a β-redex
     # cannot give. A shadowing binder deeper in `rest` correctly shadows this de
     # Bruijn binder, so no capture guard is needed on this path.
-    ctx1 = Context.extend_def(ctx, rhs_type, rhs_value)
+    ctx1 = Context.extend_def(ctx, ty_value, rhs_value)
     names1 = [name | names]
     expected1 = Subst.shift(expected_core, 1, 0)
 
     with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
-      {:ok, {:let, dom, rhs_core, body_core}}
+      {:ok, {:let, ty_core, rhs_core, body_core}}
     end
   end
+
+  # Free occurrences of surface variable `name` in the remaining statements.
+  # Mirrors `subst_surface_var/3`'s traversal (which is likewise shadowing-blind;
+  # the shadowing case is rejected before either is reached).
+  defp count_surface_uses(list, name) when is_list(list),
+    do: Enum.reduce(list, 0, &(count_surface_uses(&1, name) + &2))
+
+  defp count_surface_uses({:variable, _meta, name}, name), do: 1
+
+  defp count_surface_uses({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.reduce(children, 0, &(count_surface_uses(&1, name) + &2))
+
+  defp count_surface_uses(_other, _name), do: 0
 
   # Surface-level scrutinee refinement (Lean `Cases.lean:219-227`): in a branch,
   # a VARIABLE scrutinee *is* the pattern, so free occurrences of its name in
