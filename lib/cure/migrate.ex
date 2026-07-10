@@ -65,24 +65,40 @@ defmodule Cure.Migrate do
   """
   @spec run(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()]}
   def run(ast, opts \\ []) do
+    {new_ast, warns, _rewrote?} = fold_rules(ast, opts)
+    {new_ast, warns}
+  end
+
+  # Shared fold behind `run/2` and `run_to_fixpoint/2`. Threads the AST through
+  # the rule set as `run/2` documents, and additionally reports `rewrote?` —
+  # whether any rule's committed rewrite actually changed the AST during this
+  # pass. `run_to_fixpoint/2` needs that: a pass whose rewrites net to identity
+  # (e.g. a non-monotone `x->y`/`y->x` pair) leaves the AST equal yet is still
+  # actively rewriting, so AST-equality alone cannot tell "done" from "thrashing"
+  # — while a pure `:warn` rule must NOT count as a rewrite (it never converges
+  # away, so counting it would loop forever).
+  @spec fold_rules(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()], boolean()}
+  defp fold_rules(ast, opts) do
     file = Keyword.get(opts, :file, "nofile")
     rule_set = Keyword.get(opts, :rules, rules())
     apply_mode = Keyword.get(opts, :apply, :all)
     ctx = build_ctx(ast)
 
-    Enum.reduce(rule_set, {ast, []}, fn %Rule{} = rule, {acc_ast, warns} ->
+    Enum.reduce(rule_set, {ast, [], false}, fn %Rule{} = rule, {acc_ast, warns, rewrote?} ->
       case rule.detect_and_rewrite.(acc_ast, ctx) do
         {:rewrite, new_ast} ->
-          {commit(rule, apply_mode, acc_ast, new_ast), warns ++ warnings_for(rule, file, [nil])}
+          committed = commit(rule, apply_mode, acc_ast, new_ast)
+          {committed, warns ++ warnings_for(rule, file, [nil]), rewrote? or committed != acc_ast}
 
         {:rewrite, new_ast, lines} ->
-          {commit(rule, apply_mode, acc_ast, new_ast), warns ++ warnings_for(rule, file, lines)}
+          committed = commit(rule, apply_mode, acc_ast, new_ast)
+          {committed, warns ++ warnings_for(rule, file, lines), rewrote? or committed != acc_ast}
 
         {:warn, lines} ->
-          {acc_ast, warns ++ warnings_for(rule, file, lines)}
+          {acc_ast, warns ++ warnings_for(rule, file, lines), rewrote?}
 
         :no_change ->
-          {acc_ast, warns}
+          {acc_ast, warns, rewrote?}
       end
     end)
   end
@@ -97,6 +113,90 @@ defmodule Cure.Migrate do
     Enum.map(lines, fn line ->
       %Warning{rule: rule.id, message: rule.warning_template, file: file, line: line}
     end)
+  end
+
+  @max_passes 8
+
+  @doc """
+  Run the registry to a fixpoint (spec §6.1): repeatedly apply `run/2` until a
+  full pass changes nothing. After each changing pass, verify the reprinted
+  output reparses and preserves every comment; a verify failure aborts. If the
+  AST is still changing at `:max_passes`, return `{:error, {:no_convergence,
+  culprit_rule_ids}}` (a rule-set bug, not a user error).
+  """
+  @spec run_to_fixpoint(Rule.ast(), keyword()) ::
+          {:ok, Rule.ast(), [Warning.t()]}
+          | {:error, {:no_convergence, [atom()]}}
+          | {:error, {:verify_failed, atom()}}
+  def run_to_fixpoint(ast, opts \\ []) do
+    max = Keyword.get(opts, :max_passes, @max_passes)
+    baseline_comments = comment_texts(Cure.Compiler.Printer.quoted_to_string(ast))
+    do_fixpoint(ast, opts, max, [], baseline_comments)
+  end
+
+  defp do_fixpoint(ast, opts, passes_left, warns, baseline) do
+    {new_ast, pass_warns, rewrote?} = fold_rules(ast, opts)
+
+    cond do
+      # Fixpoint reached: nothing rewrote the AST this pass. Pure `:warn` rules
+      # may still have fired (they warn every pass and never converge away) —
+      # that is expected and does NOT block convergence.
+      new_ast == ast and not rewrote? ->
+        {:ok, ast, warns ++ pass_warns}
+
+      # Still rewriting at the pass budget → the rule set does not converge
+      # (a rule-set bug, not a user error). Report the rules that fired last.
+      passes_left <= 1 ->
+        {:error, {:no_convergence, pass_warns |> Enum.map(& &1.rule) |> Enum.uniq()}}
+
+      true ->
+        case verify(new_ast, baseline) do
+          :ok ->
+            do_fixpoint(new_ast, opts, passes_left - 1, warns ++ pass_warns, baseline)
+
+          {:error, _reason} ->
+            culprit = pass_warns |> List.last() |> then(&(&1 && &1.rule))
+            {:error, {:verify_failed, culprit}}
+        end
+    end
+  end
+
+  # Reprint → reparse (fail if the output no longer parses) AND diff comments
+  # against `baseline` — the ORIGINAL input's comment texts, captured once by
+  # `run_to_fixpoint/2` before the first pass, not the previous pass's output.
+  # Checking against the true original (not pass-to-pass) is what makes this
+  # catch a comment a rule drops on pass 3 even though passes 1-2 preserved
+  # everything — re-basing to each intermediate pass would let that slip
+  # through as "no *new* loss this pass".
+  defp verify(ast, baseline_comments) do
+    src = Cure.Compiler.Printer.quoted_to_string(ast)
+
+    with {:ok, toks} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
+         {:ok, _} <- Cure.Compiler.Parser.parse(toks, emit_events: false) do
+      if baseline_comments -- comment_texts(src) == [] do
+        :ok
+      else
+        {:error, :comment_dropped}
+      end
+    else
+      _ -> {:error, :reparse}
+    end
+  end
+
+  # Mirrors Cure.CLI's migrate_comments/1 (lib/cure/cli.ex:1319): every `#`-led
+  # comment body, trimmed, sorted — the same coarse-but-adequate lossless check
+  # the file-mode `cure migrate` pipeline already uses.
+  defp comment_texts(src) do
+    src
+    |> String.split("\n")
+    |> Enum.flat_map(fn line ->
+      case Regex.run(~r/#+\s?(.*)$/, line) do
+        [_, txt] -> [String.trim(txt)]
+        _ -> []
+      end
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.sort()
   end
 
   @typedoc "Why a path failed the git preflight."
