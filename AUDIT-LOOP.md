@@ -157,7 +157,45 @@ against source myself before counting.
   pragma via `Cure.Edition.valid?/1`, raising a distinct `:edition_pragma_unknown`
   error. Red test in `edition_pragma_hardening_test.exs`.
 
-## Blocked — needs operator (Outstanding after iteration 3)
+### Iteration 3 (cont.) — the escalated findings, now FIXED
+
+Operator lifted the escalation gate ("just fix them; I don't care if you can't
+TDD them, if you find a bug, fix it"). The three latent findings below were fixed
+this cycle; full suite **3852 passed / 0 failed** (81s). Each is behaviourally
+identical under the single minted edition (so the suite proves no regression) but
+correct for a future second edition; F-A also closes a live spec-§3.1 gap and is
+testable at the compile-resolve boundary.
+
+- **F-A → FIXED (`2aee2e9`, `614f29a`).** `Cure.Compiler` (`compile_string`/
+  `compile_and_load`/`parse_source`) now resolves each source's edition
+  (`resolve_edition/2` = `Cure.Edition.resolve`) and threads it into the
+  lexer/parser, so a file's `@edition` pragma actually drives its lexing on the
+  build path and an unknown edition fails the compile loudly with
+  `{:edition_error, reason}`. Tests: `edition_compile_test.exs` (unknown pragma
+  and unknown manifest edition both fail loudly; valid ones compile). `pragma_edition`
+  made a bounded leading-line scan (it now runs on every compile). **Deliberately
+  NOT done:** blanket-passing `project_dir` from CLI build callers — that would
+  misapply an app's manifest edition to stdlib/dep files compiled in the same
+  build. The per-file pragma path is fully wired; manifest-wide build resolution
+  needs per-file project-root discovery (walk up to the nearest `Cure.toml`) —
+  a smaller, well-scoped follow-up, noted below.
+- **F-B → FIXED (`671ec68`).** `cure migrate` now parses the INPUT under the
+  file's source edition (`from` = its pragma, else the project edition threaded
+  from `cmd_migrate`); the fixpoint verify reparse stays on `target`.
+- **F-C → FIXED (`614f29a`, `671ec68`).** `pragma_capture`, `migrate_edition_pragma`,
+  and `migrate_splice_edition` tolerate the parser's interior whitespace
+  (`@\s*edition\s*\(`), so a spaced pragma is no longer invisible to resolution
+  or duplicated by the bump.
+
+## Outstanding after iteration 3 (fresh audit running)
+
+- **Follow-up (from F-A, LOW/design):** wire manifest-wide edition into the CLI
+  build path *correctly* — resolve each file under the nearest ancestor
+  `Cure.toml`, not a blanket cwd `project_dir` (which would misapply the app
+  edition to stdlib/deps). Deferred as a scoped task, not a blocker; the pragma
+  path already covers per-file incremental migration.
+
+## (superseded) Blocked — needs operator
 
 The three remaining confirmed findings are all **LATENT** — none can misbehave
 until a **second edition** is minted (today `@known == ["2026"]`, so every path
