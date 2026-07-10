@@ -28,9 +28,15 @@ defmodule Cure.Elab.Deriving do
 
   @doc """
   Build the `{:implementation, …}` AST deriving `iface` for the ADT described by
-  `container`. Returns `{:error, {:deriving_needs_strings, :Show}}` for `Show`,
-  `{:error, {:cannot_derive, iface}}` for a non-derivable interface, and
-  `{:error, {:no_such_interface, iface}}` if the interface is not in scope.
+  `container`. Refuses, rather than emit an instance that cannot elaborate, with:
+
+    * `{:deriving_needs_strings, :Show}` — `Show` (no string primitives yet)
+    * `{:cannot_derive, iface}` — a non-derivable interface
+    * `{:no_such_interface, iface}` — the interface is not in scope
+    * `{:cannot_derive_shape, iface, type}` — the container has no variants
+    * `{:deriving_needs_constraints, iface, type}` — a constructor field has the
+      bound type parameter's own type, so the instance would need a dictionary
+      the derivation cannot thread
   """
   @spec generate(atom(), tuple(), Env.t()) :: {:ok, tuple()} | {:error, term()}
   def generate(:Show, _container, _env), do: {:error, {:deriving_needs_strings, :Show}}
@@ -42,20 +48,76 @@ defmodule Cure.Elab.Deriving do
 
       desc ->
         type_name = Keyword.fetch!(meta, :name)
+        type_params = Keyword.get(meta, :type_params, [])
         ctors = constructors(body)
-        for_type = for_type_ast(type_name, Keyword.get(meta, :type_params, []))
+        for_type = for_type_ast(type_name, type_params)
 
-        method_defs =
-          Enum.map(desc.method_order, fn m ->
-            method_def(iface, desc, m, type_name, for_type, ctors, env)
-          end)
-
-        impl_meta = [interface: Atom.to_string(iface), for: type_name, for_type: for_type, as: nil]
-        {:ok, {:implementation, impl_meta, method_defs}}
+        with :ok <- check_derivable_shape(iface, type_name, ctors),
+             :ok <- check_no_constrained_field(iface, type_name, type_params, body),
+             {:ok, method_defs} <- method_defs(iface, desc, type_name, for_type, ctors, env) do
+          impl_meta = [interface: Atom.to_string(iface), for: type_name, for_type: for_type, as: nil]
+          {:ok, {:implementation, impl_meta, method_defs}}
+        end
     end
   end
 
   def generate(iface, _container, _env), do: {:error, {:cannot_derive, iface}}
+
+  # `constructors/1` recognises only `variant: true`-tagged entries, and falls through to
+  # `[]` for anything else — a `rec`'s named-field list, say. With no constructors the
+  # derived method's body is `match(x, [])`: a scrutinee and zero arms, unsatisfiable for
+  # every input. `generate/3` is public and its contract says nothing about enum shapes, so
+  # refuse here rather than emit a vacuous instance. Deriving is defined over variant types
+  # in Haskell and Idris 2 alike; asking for anything else is an error at the derivation
+  # site.
+  defp check_derivable_shape(iface, type_name, []),
+    do: {:error, {:cannot_derive_shape, iface, String.to_atom(type_name)}}
+
+  defp check_derivable_shape(_iface, _type_name, _ctors), do: :ok
+
+  # Deriving for a parameterized type works only while no constructor field has the bound
+  # type parameter's own type. `type Box(a) = Empty | Full` and `type Tree(a) = Leaf |
+  # Node(Tree(a), Tree(a))` are fine — a field of the recursive family resolves to the
+  # in-progress instance. `type Lst(a) = Nil | Cons(a, Lst(a))` is not: the derived body
+  # calls `eq(a0, b0)` on the `a`-typed field, `a` auto-generalizes to a RIGID type
+  # variable, and the instance genuinely needs a `where Equatable(a)` dictionary the
+  # derivation does not thread.
+  #
+  # Threading it would not be sufficient either: a concrete call `eq(l1, l2)` with
+  # `l1 : Lst(Int)` must then solve `a := Int` from the argument's type to select
+  # `Equatable(Int)`, and `Resolve.dict_arguments/5` matches only a parameter typed by the
+  # bare head variable — it would resolve `Equatable(Lst)`, the in-progress instance
+  # itself. That is a feature (dictionary passing under a type constructor), not a missing
+  # keyword.
+  #
+  # Until it lands, refuse with a specific error rather than emit an instance whose body
+  # cannot elaborate — the same discipline `generate(:Show, …)` already follows. It used to
+  # emit one, and the author saw `{:no_instance, :Equatable, {:rigid, 0}}` pointing at
+  # nothing they wrote. Silently resolving the wrong dictionary would be worse still.
+  defp check_no_constrained_field(_iface, _type_name, [], _body), do: :ok
+
+  defp check_no_constrained_field(iface, type_name, type_params, body) do
+    if Enum.any?(field_types(body), &bare_type_param?(&1, type_params)) do
+      {:error, {:deriving_needs_constraints, iface, String.to_atom(type_name)}}
+    else
+      :ok
+    end
+  end
+
+  defp field_types(body) do
+    Enum.flat_map(body, fn
+      {:function_def, m, _} ->
+        if Keyword.get(m, :variant, false), do: Keyword.get(m, :params, []), else: []
+
+      _ ->
+        []
+    end)
+  end
+
+  defp bare_type_param?({:variable, _m, name}, type_params) when is_binary(name),
+    do: name in type_params
+
+  defp bare_type_param?(_ast, _type_params), do: false
 
   # -- constructor extraction -------------------------------------------------
 
@@ -79,9 +141,27 @@ defmodule Cure.Elab.Deriving do
 
   # -- method synthesis -------------------------------------------------------
 
+  defp method_defs(iface, desc, type_name, for_type, ctors, env) do
+    Enum.reduce_while(desc.method_order, {:ok, []}, fn m, {:ok, acc} ->
+      case method_def(iface, desc, m, type_name, for_type, ctors, env) do
+        {:ok, fn_def} -> {:cont, {:ok, acc ++ [fn_def]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
   # One mangled-nothing-yet `{:function_def, …}` for interface method `m`: its
   # signature is the interface method's signature with the head variable replaced
   # by this concrete type, its body is the structural comparator for `iface`.
+  #
+  # The body must scrutinise the parameters the SIGNATURE actually binds. It used to
+  # hardcode `x` and `y` while the signature took its names from `info.params`, so any
+  # `Equatable`/`Ord` interface not spelled with parameters literally named `x` and `y`
+  # — `a1`/`a2`, `l`/`r`, `this`/`that` are all equally valid surface syntax — derived a
+  # body referencing two free variables its own signature never bound. Every derived
+  # instance under that interface failed to elaborate, fields or no fields. GHC's derived
+  # `Eq`/`Ord` and Idris 2's `Deriving.Eq`/`Ord` cannot disagree this way: header and body
+  # come from the same generation step. Now so do Cure's.
   defp method_def(iface, desc, m, _type_name, for_type, ctors, env) do
     info = Map.fetch!(desc.methods, m)
 
@@ -100,13 +180,21 @@ defmodule Cure.Elab.Deriving do
       arity: length(params)
     ]
 
-    {:function_def, meta, [body(iface, info.name, ctors, env)]}
+    case Enum.map(params, fn {:param, _pm, pname} -> pname end) do
+      [left, right] ->
+        {:ok, {:function_def, meta, [body(iface, info.name, left, right, ctors, env)]}}
+
+      other ->
+        # `Equatable.eq` and `Ord.lt` are binary comparators. A structural body cannot be
+        # synthesised for any other shape.
+        {:error, {:cannot_derive_method, iface, m, {:expected_two_parameters, length(other)}}}
+    end
   end
 
   # `Equatable.eq` — for each constructor, both sides must be that same
   # constructor and every field pair must be equal (nested-match conjunction);
   # any other pairing is `false`.
-  defp body(:Equatable, eq_name, ctors, _env) do
+  defp body(:Equatable, eq_name, left, right, ctors, _env) do
     single = length(ctors) == 1
 
     arms =
@@ -115,17 +203,17 @@ defmodule Cure.Elab.Deriving do
           [arm(ctor_pat(cname, bs("b", arity)), eq_conj(eq_name, pairs(arity)))] ++
             if single, do: [], else: [arm(wildcard(), bool(false))]
 
-        arm(ctor_pat(cname, bs("a", arity)), match(var("y"), inner))
+        arm(ctor_pat(cname, bs("a", arity)), match(var(right), inner))
       end)
 
-    match(var("x"), arms)
+    match(var(left), arms)
   end
 
   # `Ord.lt` — `x < y` iff `x`'s constructor ranks before `y`'s; on the same
   # constructor, compare fields lexicographically (`lt` on the first differing
   # field, `eq` to advance). Cross-constructor arms fold to the constant decided
   # by declaration order.
-  defp body(:Ord, lt_name, ctors, env) do
+  defp body(:Ord, lt_name, left, right, ctors, env) do
     eq_name = equatable_method(env)
     indexed = Enum.with_index(ctors)
 
@@ -140,10 +228,10 @@ defmodule Cure.Elab.Deriving do
             end
           end)
 
-        arm(ctor_pat(cname, bs("l", arity)), match(var("y"), inner))
+        arm(ctor_pat(cname, bs("l", arity)), match(var(right), inner))
       end)
 
-    match(var("x"), arms)
+    match(var(left), arms)
   end
 
   # The equality method name to call from a derived `Ord` (its lexicographic
