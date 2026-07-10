@@ -274,6 +274,12 @@ defmodule Cure.Compiler.DepGraph do
     end)
   end
 
+  # A multi-statement source parses to a top-level `{:block, _, items}` wrapping
+  # the module container (+ any trailing sibling). Descend into its items, just
+  # as we descend into a raw list — otherwise the module name is lost and the
+  # whole module drops out of the baked closure/order maps.
+  defp find_module({:block, _meta, items}) when is_list(items), do: find_module(items)
+
   defp find_module(_other), do: {nil, nil}
 
   defp collect_uses(ast), do: walk(ast, [], &use_collector/2) |> Enum.reverse()
