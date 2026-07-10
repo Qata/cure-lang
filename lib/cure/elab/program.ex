@@ -320,6 +320,13 @@ defmodule Cure.Elab.Program do
         # Body-less builtin op: reachable but never emitted as a function form.
         seen
 
+      match?(%{type: {:type, _}}, Map.get(defs, name)) ->
+        # A TYPE-LEVEL def (a type alias like `Char = Bounded(…)`, whose type is
+        # `Type`) is referenced from a value body only in a type position (a
+        # lambda domain) and is never emitted as a runtime function — skip it and
+        # its type-level references entirely.
+        seen
+
       true ->
         case Map.get(defs, name) do
           nil ->
