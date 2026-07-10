@@ -36,7 +36,7 @@ defmodule Cure.Elab.Declarations do
 
         case Keyword.get(meta, :type_params, []) do
           [] ->
-            case build_ctors(variants) do
+            case build_ctors(variants, env) do
               {:ok, ctors} -> declare_at_min_level(env, name, ctors, 0)
               {:error, _} = err -> err
             end
@@ -1297,8 +1297,8 @@ defmodule Cure.Elab.Declarations do
     # — resolves to the family. A name that is only a constructor (a nullary value
     # like `Z` used as an index argument) still resolves to the constructor.
     cond do
-      primitive_type(name) != nil ->
-        primitive_type(name)
+      Env.primitive(env, name) != nil ->
+        Env.primitive(env, name)
 
       Inductive.family?(env, atom) ->
         {:data, atom, [], []}
@@ -1322,16 +1322,6 @@ defmodule Cure.Elab.Declarations do
         {:global, atom}
     end
   end
-
-  # The built-in primitive types that map to Core type-constants (not opaque
-  # globals). `Int`/`Float` stay irreducibly primitive (BEAM machine types).
-  # `Bool` is NO LONGER here: it is a real inductive family (Std.Bool, seeded
-  # into every env0), so a `Bool` annotation falls through to the ordinary
-  # family lookup `{:data, :Bool, [], []}` — exactly as `Nat` always has.
-  defp primitive_type("Int"), do: {:int_type}
-  defp primitive_type("Float"), do: {:float_type}
-  defp primitive_type("Binary"), do: {:binary_type}
-  defp primitive_type(_), do: nil
 
   # The `@builtin(:tag)` on a primitive container, or an error if absent.
   defp primitive_builtin_tag(meta) do
@@ -1411,9 +1401,9 @@ defmodule Cure.Elab.Declarations do
 
   # -- constructors -----------------------------------------------------------
 
-  defp build_ctors(variants) do
+  defp build_ctors(variants, env) do
     Enum.reduce_while(variants, {:ok, []}, fn variant, {:ok, acc} ->
-      case variant_to_ctor(variant) do
+      case variant_to_ctor(variant, env) do
         {:ok, ctor} -> {:cont, {:ok, acc ++ [ctor]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -1421,27 +1411,27 @@ defmodule Cure.Elab.Declarations do
   end
 
   # Nullary constructor: `None`
-  defp variant_to_ctor({:variable, _meta, vname}),
+  defp variant_to_ctor({:variable, _meta, vname}, _env),
     do: {:ok, Inductive.ctor(String.to_atom(vname), [], [])}
 
   # Constructor with fields: `Some(T)` / `SVCons(Sig, SVDesc)`
-  defp variant_to_ctor({:function_def, meta, _body}) do
+  defp variant_to_ctor({:function_def, meta, _body}, env) do
     vname = meta |> Keyword.fetch!(:name) |> String.to_atom()
     field_asts = Keyword.fetch!(meta, :params)
 
-    case fields_to_telescope(field_asts) do
+    case fields_to_telescope(field_asts, env) do
       {:ok, tele} -> {:ok, Inductive.ctor(vname, tele, [])}
       {:error, _} = err -> err
     end
   end
 
-  defp variant_to_ctor(other), do: {:error, {:unsupported_variant, other}}
+  defp variant_to_ctor(other, _env), do: {:error, {:unsupported_variant, other}}
 
-  defp fields_to_telescope(field_asts) do
+  defp fields_to_telescope(field_asts, env) do
     field_asts
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {ast, i}, {:ok, acc} ->
-      case type_to_core(ast) do
+      case type_to_core(ast, env) do
         {:ok, core} -> {:cont, {:ok, acc ++ [{:"f#{i}", core}]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -1450,16 +1440,16 @@ defmodule Cure.Elab.Declarations do
 
   # -- surface type expr → Core type term -------------------------------------
 
-  defp type_to_core({:variable, _meta, "Type"}), do: {:ok, {:type, 0}}
+  defp type_to_core({:variable, _meta, "Type"}, _env), do: {:ok, {:type, 0}}
 
-  defp type_to_core({:variable, _meta, name}) do
-    case primitive_type(name) do
+  defp type_to_core({:variable, _meta, name}, env) do
+    case Env.primitive(env, name) do
       nil -> {:ok, {:data, String.to_atom(name), [], []}}
       prim -> {:ok, prim}
     end
   end
 
-  defp type_to_core({:function_call, meta, params}) do
+  defp type_to_core({:function_call, meta, params}, env) do
     cond do
       Keyword.get(meta, :function_type) ->
         {:error, {:unsupported_field_type, :function}}
@@ -1467,7 +1457,7 @@ defmodule Cure.Elab.Declarations do
       true ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        with {:ok, core_params} <- map_type_to_core(params) do
+        with {:ok, core_params} <- map_type_to_core(params, env) do
           # A saturated family application becomes a `:data` with index args.
           {:ok, {:data, name, [], core_params}}
         end
@@ -1484,18 +1474,18 @@ defmodule Cure.Elab.Declarations do
   # lambda is trivially constant (it ignores its argument), which is still
   # well-formed. The assembled `{:data, :Sigma, …}` goes into the constructor
   # telescope and is validated by the kernel.
-  defp type_to_core({:sigma_type, [binder: _bname], [dom_ast, body_ast]}) do
-    with {:ok, dom} <- type_to_core(dom_ast),
-         {:ok, body} <- type_to_core(body_ast) do
+  defp type_to_core({:sigma_type, [binder: _bname], [dom_ast, body_ast]}, env) do
+    with {:ok, dom} <- type_to_core(dom_ast, env),
+         {:ok, body} <- type_to_core(body_ast, env) do
       {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
     end
   end
 
-  defp type_to_core(other), do: {:error, {:unsupported_field_type, other}}
+  defp type_to_core(other, _env), do: {:error, {:unsupported_field_type, other}}
 
-  defp map_type_to_core(asts) do
+  defp map_type_to_core(asts, env) do
     Enum.reduce_while(asts, {:ok, []}, fn ast, {:ok, acc} ->
-      case type_to_core(ast) do
+      case type_to_core(ast, env) do
         {:ok, core} -> {:cont, {:ok, acc ++ [core]}}
         {:error, _} = err -> {:halt, err}
       end
