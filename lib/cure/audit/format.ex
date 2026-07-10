@@ -34,6 +34,7 @@ defmodule Cure.Audit.Format do
       "ABSURD (#{report.absurd})",
       not_total_section(report.not_proven_total),
       target_section(report.axioms, target),
+      unresolved_section(report.unresolved),
       list_section("UNAUDITED", Enum.map(report.unaudited, fn {label, _} -> label end))
     ]
     |> Enum.reject(&is_nil/1)
@@ -54,6 +55,7 @@ defmodule Cure.Audit.Format do
       ~s("holes":[#{Enum.map_join(report.holes, ",", &~s("#{escape(&1)}"))}],) <>
       ~s("absurd":#{report.absurd},) <>
       ~s("not_proven_total":[#{Enum.map_join(report.not_proven_total, ",", &~s("#{&1}"))}],) <>
+      ~s("unresolved":[#{Enum.map_join(report.unresolved, ",", &~s("#{&1}"))}],) <>
       ~s("unaudited":[#{Enum.map_join(report.unaudited, ",", fn {l, _} -> ~s("#{l}") end)}]}) <>
       "\n"
   end
@@ -80,6 +82,14 @@ defmodule Cure.Audit.Format do
 
   defp not_total_section(names) do
     "NOT PROVEN TOTAL (#{length(names)})   — cannot be used in proofs; not assumptions\n" <>
+      "  " <> Enum.map_join(names, ", ", &Atom.to_string/1)
+  end
+
+  defp unresolved_section([]),
+    do: "UNRESOLVED (0)   — names a signature mentions that do not exist"
+
+  defp unresolved_section(names) do
+    "UNRESOLVED (#{length(names)})   — names a signature mentions that do not exist\n" <>
       "  " <> Enum.map_join(names, ", ", &Atom.to_string/1)
   end
 

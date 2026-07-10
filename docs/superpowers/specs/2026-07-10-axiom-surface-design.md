@@ -266,10 +266,25 @@ slot.
 and catastrophic for a ledger: the first drops arithmetic, which is an axiom. The
 ledger shares the *shape* of that walk and none of its filters.
 
-An unresolved global is a **raise**, not a finding. `Kernel.infer/2`
-(`kernel.ex:151`) already returns `{:error, :unknown_global}` for a dangling
-reference, so on a kernel-checked env the condition is unreachable. If it fires,
-the ledger's caller skipped `check_def`.
+An unresolved global is a **finding**, reported under `UNRESOLVED`.
+
+This section previously said it was a raise, on the grounds that `Kernel.infer/2`
+(`kernel.ex:151`) returns `{:error, :unknown_global}` for a dangling reference,
+so the condition was unreachable on a kernel-checked env. **That was wrong**, and
+building the tool proved it: `Std.Fsm` declares
+`fn spawn(fsm_module: Atom) -> Pid` and sixteen siblings, where `Pid`, `Any`,
+`Map`, `Tuple` and `String` are none of them a def, a family, or a constructor —
+and the module elaborates. It elaborates precisely *because* a bodyless `@extern`
+is a postulate: the signature is believed, never checked. All 17 of `Std.Fsm`'s
+bridge axioms are typed with names that do not exist in Core.
+
+So the ledger resolves a global against `env.defs`, then `env.families`, then
+`env.ctors`, and reports what resolves to nothing. This is the single sharpest
+thing the tool has found: an axiom whose type mentions a type that does not
+exist. Raising would merely have made `Std.Fsm`, `Std.Actor`, `Std.Supervisor`
+and `Std.Process` unauditable.
+
+`UNRESOLVED` does not affect `--strict`, which still keys on `UNAUDITED` alone.
 
 **`Cure.Core.Printer` — new, untrusted.** Nothing in the tree renders a
 `Core.Term` to text. `Quote.reify/2` returns a term; call sites hand it to
@@ -307,6 +322,8 @@ ABSURD (0)
 
 NOT PROVEN TOTAL (4)   — cannot be used in proofs; not assumptions
   drop, last, reverse, take
+
+UNRESOLVED (0)   — names a signature mentions that do not exist
 
 UNAUDITED (0)
 ```

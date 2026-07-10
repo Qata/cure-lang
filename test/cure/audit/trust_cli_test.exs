@@ -74,6 +74,8 @@ defmodule Cure.Audit.GoldenTest do
   NOT PROVEN TOTAL (4)   — cannot be used in proofs; not assumptions
     drop, last, reverse, take
 
+  UNRESOLVED (0)   — names a signature mentions that do not exist
+
   UNAUDITED (0)
   """
 

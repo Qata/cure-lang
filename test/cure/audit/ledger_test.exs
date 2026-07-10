@@ -135,3 +135,59 @@ defmodule Cure.Audit.TargetsTest do
     assert :atomvm in Targets.known()
   end
 end
+
+defmodule Cure.Audit.UnresolvedTest do
+  use ExUnit.Case, async: true
+  alias Cure.Audit.{CLI, Ledger}
+
+  # `Std.Fsm` declares `fn spawn(fsm_module: Atom) -> Pid` and four siblings.
+  # `Pid` is defined nowhere — not a def, not a family, not a constructor — yet
+  # the module elaborates, because a bodyless @extern is a postulate whose
+  # signature is never checked. The spec asserted this could not happen
+  # ("Kernel.infer/2 already rejects dangling globals"). It does happen.
+  #
+  # A ledger that raises here is a ledger that cannot audit Std.Fsm, Std.Actor,
+  # Std.Supervisor or Std.Process. Report the finding; do not crash on it.
+
+  test "a dangling global in a signature is reported, not raised" do
+    src = """
+    mod Test.Dangling
+      @extern(:erlang, :self, 0)
+      fn me() -> Pid
+    end
+    """
+
+    report = Ledger.audit_source(src, "Test.Dangling")
+    assert report.unresolved == [:Pid]
+    assert [axiom] = report.axioms
+    assert axiom.mfa == {:erlang, :self, 0}
+  end
+
+  test "a global naming a real def is not reported unresolved" do
+    src = """
+    mod Test.Resolved
+      fn f(x: Int) -> Int = x
+      fn g(x: Int) -> Int = f(x)
+    end
+    """
+
+    assert Ledger.audit_source(src, "Test.Resolved").unresolved == []
+  end
+
+  test "Std.Fsm audits without crashing and names every undefined type" do
+    assert {:ok, text} = CLI.run("Std.Fsm", [])
+
+    # All 17 bridge axioms are typed with names that do not exist in Core.
+    # `Pid`, `Any`, `Map` and `Tuple` are surface-only spellings the dependent
+    # pathway never defines; `String` is the #29 String→List(Char) migration.
+    assert text =~ "AXIOMS — CURE BRIDGE (17)"
+    assert text =~ "UNRESOLVED (5)"
+    assert text =~ "Any, Map, Pid, String, Tuple"
+  end
+
+  test "the four other bridge modules audit without crashing" do
+    for m <- ~w(Std.Actor Std.Supervisor Std.Process) do
+      assert {:ok, _} = CLI.run(m, []), "#{m} crashed"
+    end
+  end
+end

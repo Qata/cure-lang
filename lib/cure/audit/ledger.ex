@@ -26,6 +26,7 @@ defmodule Cure.Audit.Ledger do
               holes: [],
               absurd: 0,
               not_proven_total: [],
+              unresolved: [],
               unaudited: []
 
     @type t :: %__MODULE__{}
@@ -76,7 +77,7 @@ defmodule Cure.Audit.Ledger do
 
   @spec audit_env(Env.t()) :: Report.t()
   def audit_env(%Env{} = env) do
-    reachable = reachable(env, roots(env))
+    {reachable, unresolved} = reachable(env, roots(env))
 
     axioms =
       for name <- reachable,
@@ -101,6 +102,7 @@ defmodule Cure.Audit.Ledger do
       holes: scans |> Enum.flat_map(& &1.holes) |> Enum.sort(),
       absurd: scans |> Enum.map(& &1.absurd) |> Enum.sum(),
       not_proven_total: not_proven_total(env, reachable),
+      unresolved: unresolved,
       unaudited: []
     }
   end
@@ -111,26 +113,41 @@ defmodule Cure.Audit.Ledger do
   # Our own walk. NOT Program.reachable_def_names/2, whose collect_reachable/4
   # skips builtin_op defs and type-level defs — correct for codegen, and
   # catastrophic here, because the first drops arithmetic, which is an axiom.
+  #
+  # Returns `{reachable_def_names, unresolved_global_names}`.
+  #
+  # The design spec asserted an unresolved global was unreachable on a checked
+  # env, citing `Kernel.infer/2`'s `{:error, :unknown_global}`. That is false for
+  # a def's *type*: `Std.Fsm` declares `fn spawn(fsm_module: Atom) -> Pid` where
+  # `Pid` is neither a def, a family, nor a constructor, and the module
+  # elaborates — because a bodyless `@extern` is a postulate whose signature is
+  # believed, not checked. Raising here would make the tool unable to audit
+  # Std.Fsm, Std.Actor, Std.Supervisor and Std.Process. It is a finding, and a
+  # sharp one: an axiom whose type names something that does not exist.
   defp reachable(env, roots) do
-    Enum.reduce(roots, MapSet.new(), fn root, seen -> collect(env, root, seen) end)
-    |> MapSet.to_list()
-    |> Enum.sort()
+    {seen, unresolved} =
+      Enum.reduce(roots, {MapSet.new(), MapSet.new()}, fn root, acc -> collect(env, root, acc) end)
+
+    {seen |> MapSet.to_list() |> Enum.sort(), unresolved |> MapSet.to_list() |> Enum.sort()}
   end
 
-  defp collect(env, name, seen) do
-    if MapSet.member?(seen, name) do
-      seen
-    else
-      case Map.get(env.defs, name) do
-        nil ->
-          # Kernel.infer/2 already rejects dangling globals on a checked env.
-          raise ArgumentError, "unresolved global #{inspect(name)}: caller skipped check_def"
+  defp collect(env, name, {seen, unresolved} = acc) do
+    cond do
+      MapSet.member?(seen, name) or MapSet.member?(unresolved, name) ->
+        acc
 
-        def ->
-          seen = MapSet.put(seen, name)
-          refs = Refs.globals(def.type) ++ Refs.globals(def.body)
-          Enum.reduce(refs, seen, fn ref, s -> collect(env, ref, s) end)
-      end
+      def = Map.get(env.defs, name) ->
+        seen = MapSet.put(seen, name)
+        refs = Refs.globals(def.type) ++ Refs.globals(def.body)
+        Enum.reduce(refs, {seen, unresolved}, fn ref, a -> collect(env, ref, a) end)
+
+      # A global may name a type family or a constructor rather than a def.
+      # Those are resolved; they simply do not live in `env.defs`.
+      Map.has_key?(env.families, name) or Map.has_key?(env.ctors, name) ->
+        acc
+
+      true ->
+        {seen, MapSet.put(unresolved, name)}
     end
   end
 
