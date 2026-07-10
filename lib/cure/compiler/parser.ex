@@ -4585,6 +4585,9 @@ defmodule Cure.Compiler.Parser do
           base_name == "Sigma" and match?(%Token{type: :lparen}, peek(state)) ->
             parse_sigma_type(state)
 
+          base_name == "Tuple" and match?(%Token{type: :lparen}, peek(state)) ->
+            parse_tuple_type(state)
+
           match?(%Token{type: :lparen}, peek(state)) ->
             state = advance(state)
             {params, state} = parse_type_param_list(state)
@@ -4632,6 +4635,31 @@ defmodule Cure.Compiler.Parser do
     binder = to_string(name_token.value)
     state = advance(state)
     state = expect(state, :colon)
+    {dom_type, state} = parse_type_expr(state)
+    state = expect(state, :comma)
+    {body_type, state} = parse_type_expr(state)
+    state = expect(state, :rparen)
+    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
+  end
+
+  # Tuple(T, U) — the honest arity-2 surface tuple (spec §3.3). It aliases the
+  # non-dependent Sigma: `Tuple(T, U)` => `sigma_type` with the unused binder "_",
+  # `Tuple(x: T, U)` => `sigma_type` binding `x` so a later position may name it.
+  # Both reuse `type_to_core`/`idx_to_core`'s existing `sigma_type` clauses, so no
+  # elaborator change is needed. Arity != 2 is handled by the n-ary path (a later
+  # increment); until then a third position falls through to `expect(:rparen)`.
+  defp parse_tuple_type(state) do
+    state = advance(state)
+
+    {binder, state} =
+      case {peek(state), peek_at(state, 1)} do
+        {%Token{} = t, %Token{type: :colon}} ->
+          {to_string(t.value), advance(advance(state))}
+
+        _ ->
+          {"_", state}
+      end
+
     {dom_type, state} = parse_type_expr(state)
     state = expect(state, :comma)
     {body_type, state} = parse_type_expr(state)
