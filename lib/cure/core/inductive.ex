@@ -17,7 +17,8 @@ defmodule Cure.Core.Env do
             builtins: %{},
             interfaces: %{},
             coherence: nil,
-            constrained: %{}
+            constrained: %{},
+            primitives: %{}
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
@@ -28,7 +29,8 @@ defmodule Cure.Core.Env do
           builtins: %{atom() => atom()},
           interfaces: %{atom() => map()},
           coherence: term(),
-          constrained: %{atom() => [map()]}
+          constrained: %{atom() => [map()]},
+          primitives: %{String.t() => tuple()}
         }
 
   @doc "An empty signature."
@@ -64,6 +66,15 @@ defmodule Cure.Core.Env do
   @doc "The global definition `%{name, type, body}` for `name`, or nil."
   @spec get_def(t(), atom()) :: map() | nil
   def get_def(%__MODULE__{defs: defs}, name), do: Map.get(defs, name)
+
+  @doc "Register a primitive base type: surface name → its Core type node."
+  @spec put_primitive(t(), String.t(), tuple()) :: t()
+  def put_primitive(%__MODULE__{primitives: p} = env, name, node) when is_binary(name),
+    do: %{env | primitives: Map.put(p, name, node)}
+
+  @doc "The Core node a primitive surface name resolves to, or nil."
+  @spec primitive(t(), String.t()) :: tuple() | nil
+  def primitive(%__MODULE__{primitives: p}, name) when is_binary(name), do: Map.get(p, name)
 
   @doc """
   Register a compile-time interface (typeclass) descriptor under its name
