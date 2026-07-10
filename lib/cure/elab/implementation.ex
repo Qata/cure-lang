@@ -17,7 +17,7 @@ defmodule Cure.Elab.Implementation do
   """
 
   alias Cure.Core.Env
-  alias Cure.Elab.{Coherence, Declarations}
+  alias Cure.Elab.{Coherence, Declarations, Resolve}
 
   @doc """
   Register an implementation: build its mangled method defs, record the instance
@@ -43,8 +43,9 @@ defmodule Cure.Elab.Implementation do
                build_methods(desc, iface, head, for_type, body),
              ref = %{iface: iface, head: head, methods: method_map, as: as_name},
              {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
-             {:ok, env2} <- register_signatures(mangled_fns, env1) do
-          {:ok, env2, mangled_fns}
+             {:ok, env2} <- register_signatures(mangled_fns, env1),
+             {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
+          {:ok, env3, mangled_fns}
         end
     end
   end
@@ -284,6 +285,30 @@ defmodule Cure.Elab.Implementation do
       {:error, _} = err -> err
     end
   end
+
+  # Cure's coherence policy is global uniqueness plus NAMED implementations as the escape hatch:
+  # `implementation Eqs for Int as strictInt` registers under `:strictInt` "as an ordinary
+  # dictionary-valued binding… A caller selects it explicitly with plain record projection,
+  # `strictInt.eqs(x, y)` … no new call syntax is needed".
+  #
+  # `register_instance/5` only wrote the ref into `Coherence.named`. Nothing ever bound the atom
+  # `:strictInt` to a value, and `Coherence.lookup_named/2` had zero callers in lib/ — so there
+  # was no path by which any reference to `strictInt` could resolve. The escape hatch the policy
+  # depends on to let a second, overlapping instance coexist was accepted at register time and
+  # then permanently unreachable. Binding it as an ordinary global of type `Iface(head)` is what
+  # makes record projection find it.
+  #
+  # A higher-kinded interface has no Core dictionary record family to be a value of
+  # (`Interface.declare_dictionary_former/2` builds one only for a `:type` head kind), so there
+  # is nothing to bind; that gap is tracked with the abstract-dispatch gap it belongs to.
+  defp bind_named_instance(env, _desc, _iface, _head, nil, _ref), do: {:ok, env}
+
+  defp bind_named_instance(env, %{head_kind: :type}, iface, head, name, ref) do
+    term = Resolve.dict_term_from_ref(env, iface, ref)
+    {:ok, Env.add_def(env, String.to_atom(name), Resolve.dict_type_term(iface, head), term)}
+  end
+
+  defp bind_named_instance(env, _desc, _iface, _head, _name, _ref), do: {:ok, env}
 
   defp register_signatures(fn_decls, env) do
     Enum.reduce_while(fn_decls, {:ok, env}, fn fd, {:ok, acc} ->

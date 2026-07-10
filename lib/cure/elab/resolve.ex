@@ -236,22 +236,34 @@ defmodule Cure.Elab.Resolve do
   # eta-expansion lowers to curried 1-argument funs whose inner *saturated* spine is
   # a direct `impl(x, y)` call — ABI-correct at both the projection and the call.
   defp dict_term(env, iface, head) do
-    desc = Env.get_interface(env, iface)
-
     case Coherence.lookup_anon(Env.coherence(env), iface, head) do
-      {:ok, ref} ->
-        fields =
-          Enum.map(desc.method_order, fn m ->
-            arity = length(Map.fetch!(desc.methods, m).params)
-            eta_expand(env, Map.fetch!(ref.methods, m), arity)
-          end)
-
-        {:ok, {:ctor, iface, fields}}
-
-      {:error, _} ->
-        {:error, {:no_instance, iface, head}}
+      {:ok, ref} -> {:ok, dict_term_from_ref(env, iface, ref)}
+      {:error, _} -> {:error, {:no_instance, iface, head}}
     end
   end
+
+  @doc """
+  The dictionary value for an instance `ref`, independent of how the instance is registered.
+  `dict_term/3` reaches this through the anonymous registry; `Cure.Elab.Implementation` uses it
+  directly for a NAMED implementation, whose ref lives in the coherence table's `named` map and
+  is invisible to `lookup_anon/3`.
+  """
+  @spec dict_term_from_ref(Env.t(), atom(), map()) :: term()
+  def dict_term_from_ref(env, iface, ref) do
+    desc = Env.get_interface(env, iface)
+
+    fields =
+      Enum.map(desc.method_order, fn m ->
+        arity = length(Map.fetch!(desc.methods, m).params)
+        eta_expand(env, Map.fetch!(ref.methods, m), arity)
+      end)
+
+    {:ctor, iface, fields}
+  end
+
+  @doc "The Core type `Iface(head)` of a dictionary value for `iface` at `head`."
+  @spec dict_type_term(atom(), atom()) :: term()
+  def dict_type_term(iface, head), do: {:data, iface, [head_type_core(head)], []}
 
   # `λ(d0).…λ(d_{n-1}). gname(v0, …, v_{n-1})` — the global eta-expanded to arity
   # `n`, taking each binder domain from the global's own Π type (closed for a
