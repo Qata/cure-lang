@@ -1343,3 +1343,100 @@ Commits this cycle: `6d28345`, `70d2c0a`, `058cf25`, `58f976d`, `0434cb9`, `471e
 `d015405`, `3ca3053`, `b23d18a`, `3df66ee`, plus this record.
 
 ---
+
+## Iteration 18
+
+Outstanding list from iteration 17 was empty (that cycle's fresh audit was clean),
+so this cycle ran a BROAD convergence-deciding audit over the whole editions surface
+(not just a diff): edition+project, migrate engine+rules, lexer/parser/printer, CLI.
+Four general-purpose agents; every finding verified against source / reproduced before
+counting. Broadening past iteration 17's changed-slice scope surfaced three real
+PRE-EXISTING bugs (two CLI, one migrate rule) — so this audit is NOT clean and the
+streak resets.
+
+### Fixed this cycle (3 commits, all ghost-authored)
+
+- **Migrate — `group_hoist` mis-hoists across modules** (`825c110`) — the rule keyed
+  every in-body `@group(...)` decorator to the FIRST module container and spliced them
+  all before it. Multi-module files parse AND compile (verified), and `cure migrate`
+  runs on source syntactically, so a `@group` written under a later module was silently
+  re-associated with the first — semantic corruption from a `tier: :machine`
+  (auto-applied) rule, accepted by `verify/3` because the output still reparses with
+  comments intact. Now each mover hoists to just before its NEAREST PRECEDING module
+  (`hoist_segments/1`); single-module behaviour unchanged. Reverses the prior
+  "unsupported shape / latent" classification — it is reachable. (2 new tests.)
+- **CLI — `fmt`/`doc` crash on a missing file** (`6f56728`) — both read each target
+  with `File.read!`, so a missing explicit path (`cure fmt typo.cure`, an everyday
+  mistake) raised an uncaught `File.Error` (raw BEAM stacktrace), unlike
+  `run`/`check`/`compile` which report + exit 1. Added a shared `expand_cure_targets/1`
+  that rejects non-existent explicit targets with a clean non-zero exit before any
+  worker reads them. (3 new tests.)
+- **CLI — `migrate` absent from the suggestion list** (`6f56728`, same commit) —
+  `migrate` is a real dispatch command but was missing from the `known_commands` list
+  the "did you mean" suggester searches, so a near-miss typo (`cure migrat`) never
+  proposed it. Added it. (1 new test.)
+
+Full suite after fixes: **3969 passed, 0 failures**; 140 immune responses; Antigen
+309/309 across 34 assays.
+
+### Fresh audit — verified findings (agent claims confirmed/refuted against source)
+
+CONFIRMED (fixed above):
+- group_hoist multi-module mis-hoist (reproduced: `@group(:core)` under `mod Second`
+  hoisted above `mod First`).
+- fmt/doc File.read! crash on missing file (reproduced: `File.Error` raised, uncaught).
+- migrate missing from known_commands (confirmed: real command at cli.ex:162, absent
+  from the ~w list).
+
+REFUTED / NOT bugs (verified myself, not counted):
+- **CLI git-guard on a nonexistent dir** — predicted `System.cmd` `:enoent` raise does
+  NOT occur on this platform; it prints a spawn warning and degrades to `untracked` +
+  clean exit 1. Benign.
+- **Lexer+parser+printer slice** — the subagent degenerated twice (0 tool-uses,
+  corrupted output), so I audited it INLINE with an empirical round-trip harness: 23
+  constructs (binops, pipes, unary minus, bool connectives, records, tuples, lists,
+  maps, lambdas, match, if-elif, guards, char/string-escape literals, deriving,
+  decorators, extern, type applications, comments in nested-call/match-arm) all
+  round-trip structurally and print idempotently; the lexer never raised on 9
+  adversarial byte inputs (NUL, lone `--`, unterminated string, truncated multibyte,
+  tabs, CRLF, bad escapes). CLEAN.
+- **edition+project** — never-raise, no atom-DoS, pre-scan↔parser↔rewriter agreement
+  all hold. Two non-bug notes: duplicate `[project]` tables round-trip divergence
+  (latent — single edition today, `set_edition` always writes "2026" so no mismatch is
+  producible) and `edition = ""` failing the whole load (a clean error tuple; a design
+  nit, defensible as fail-loud-on-typo).
+- **migrate engine** — fixpoint is non-oscillating (all rules one-directional +
+  self-idempotent); `comment_texts` false-accept unreachable by any current rule
+  (none edit string-literal contents); engine rule-execution not rescue-guarded is a
+  latent hardening gap with NO reachable raise in parser-produced ASTs.
+
+### Outstanding findings (after iteration 18)
+
+**None confirmed remaining in any slice** (the three found were all fixed this cycle).
+Because this cycle's audit DID find bugs, the streak is **0** — the next cycle must run
+a fresh audit and find zero, then one more, for two consecutive clean audits.
+
+**Latent / unreachable today (carried, re-confirmed):**
+- Duplicate `[project]` tables `set_edition`↔`load` divergence (live only once a second
+  edition is minted).
+- `comment_texts` non-quote-aware false-accept (no current rule edits string literals).
+- migrate engine does not rescue a raising rule (no reachable raise in real ASTs).
+- Parser silently drops a decorator on a `type` declaration (feature/design question).
+
+**Design nits (not bugs, not fixing without an operator call):**
+- `edition = ""` fails the whole load rather than defaulting like a missing key.
+
+**Blocked — needs operator (UNCHANGED):**
+- `cure migrate` uppercase-type-var CTX false-positive (general name-resolution
+  decision; `Type`-sort sub-case FIXED in iteration 17).
+- deps update no-op; partial/interrupted clone accepted; migrate no-flag target;
+  hyphenated dependency names (general package-manager scope).
+
+**Loop status:** iteration 18 fixed 3 real pre-existing bugs (1 migrate semantic
+corruption, 2 CLI crash/UX) that only surfaced once the audit widened beyond the last
+diff. Fresh audit therefore NOT clean → streak reset to 0. Cron **left in place**.
+Full suite green: 3969 passed, 0 failures. Do NOT merge.
+
+Commits this cycle: `825c110`, `6f56728`, plus this record.
+
+---
