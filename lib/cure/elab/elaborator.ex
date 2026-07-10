@@ -1263,8 +1263,17 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, {:unsolved_metavariables, _}} = orig ->
-            if implicit_def?(env, atom) and not Unify.has_meta?(expected_core) do
-              case elaborate_global_app_expected(env, atom, args, names, ctx, expected_core) do
+            # Resolve a qualified (`Std.Map.keys`) or bare-shadowed name to its
+            # registry key BEFORE the implicit-def retry, mirroring the inference
+            # dispatch (`resolved` at the top of `elaborate_named_call_scoped`).
+            # Without this, a dotted call's `atom` (`:"Std.Map.keys"`) is not a def
+            # key, so `implicit_def?` is false and the expected return type is never
+            # threaded in — leaving a return-only implicit (e.g. `keys : {k} -> ... ->
+            # List(k)`) unsolved even though the goal `List(t)` determines it.
+            resolved = resolve_def_key(env, name, atom)
+
+            if implicit_def?(env, resolved) and not Unify.has_meta?(expected_core) do
+              case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
                 {:ok, term, _type} ->
                   with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
                     {:ok, term}
@@ -1891,6 +1900,25 @@ defmodule Cure.Elab.Elaborator do
     case Env.get_def(env, atom) do
       %{quantities: q} when is_list(q) -> :erased in q
       _ -> false
+    end
+  end
+
+  # Map a surface call name to its def-registry key: a qualified (`Std.Map.keys`)
+  # name resolves through the value namespace, a bare name through bare-shadowing;
+  # either falls back to the raw atom. Mirrors the `resolved` computation at the
+  # top of `elaborate_named_call_scoped` so the checked-mode retry looks up the
+  # same def the inference path does.
+  defp resolve_def_key(env, name, atom) do
+    if String.contains?(name, ".") do
+      case Cure.Elab.Resolution.resolve_qualified(env, name, :value) do
+        {:ok, key} -> key
+        :error -> atom
+      end
+    else
+      case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+        {:ok, key} -> key
+        _ -> atom
+      end
     end
   end
 
