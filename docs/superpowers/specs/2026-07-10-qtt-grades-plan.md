@@ -47,12 +47,16 @@ TCB-alignment directive (`tcb-change-blanket-approval`).
 
 ## Blast radius (measured 2026-07-10)
 
+Re-measured after merging `feature/idris-parity` (2026-07-10, tree at 3795 tests
+green):
+
 | area | binder sites | nature |
 |---|---|---|
-| `lib/cure/core/` | 74 | **TCB. Reviewed diff.** |
+| `lib/cure/core/` | 76 | **TCB. Reviewed diff.** |
 | `lib/cure/elab/` | 92 | mechanical |
 | `lib/antigen/` | 339 | mechanical (generators construct binder literals) |
 | `test/` | 435 | mechanical |
+| `types/`, `compiler/`, `mix/` | 13 | classic pathway; check whether it even sees Core binders |
 
 **Hazard:** Elixir will not error on a stale 3-tuple `{:pi, a, b}` — it falls
 through to a catch-all and behaves silently wrong. The nets are `Term.term?/1`
