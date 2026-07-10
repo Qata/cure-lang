@@ -1166,22 +1166,33 @@ defmodule Cure.Project do
   # table-header parser already has, so a trailing `# note` on a value line does
   # not leak into the value — which for the validated `edition` key would turn a
   # valid `"2026"  # pin` into `2026"  # pin` and hard-fail the load (A2-F1).
-  defp strip_inline_comment(val) do
-    {kept, _in_quotes?, _escaped?} =
-      val
-      |> String.to_charlist()
-      |> Enum.reduce_while({[], false, false}, fn
-        # Inside a basic string a backslash escapes the next char, so a `\"` does
-        # NOT close the string (and a following `#` stays part of the value).
-        ?\\, {acc, true, false} -> {:cont, {[?\\ | acc], true, true}}
-        ch, {acc, in_q, true} -> {:cont, {[ch | acc], in_q, false}}
-        ?#, {acc, false, false} -> {:halt, {acc, false, false}}
-        ?", {acc, in_q, false} -> {:cont, {[?" | acc], not in_q, false}}
-        ch, {acc, in_q, false} -> {:cont, {[ch | acc], in_q, false}}
-      end)
-
-    kept |> Enum.reverse() |> List.to_string()
+  defp strip_inline_comment(val) when is_binary(val) do
+    # Scan the value BYTE-WISE, not via String.to_charlist/1: a Cure.toml is
+    # arbitrary user bytes and a non-UTF-8 byte (e.g. a latin-1 `café`) made
+    # to_charlist raise UnicodeConversionError, crashing every project load. The
+    # comment/quote logic only inspects ASCII bytes (`#`, `"`, `\`), so byte
+    # iteration is equivalent and preserves all other bytes verbatim.
+    val |> scan_inline_comment(false, false, []) |> :erlang.iolist_to_binary()
   end
+
+  # (bytes-kept-reversed accumulator; in_quotes?; escaped?)
+  defp scan_inline_comment(<<>>, _in_q, _esc, acc), do: Enum.reverse(acc)
+
+  # Inside a basic string a backslash escapes the next char, so a `\"` does NOT
+  # close the string (and a following `#` stays part of the value).
+  defp scan_inline_comment(<<?\\, rest::binary>>, true, false, acc),
+    do: scan_inline_comment(rest, true, true, [?\\ | acc])
+
+  defp scan_inline_comment(<<ch, rest::binary>>, in_q, true, acc),
+    do: scan_inline_comment(rest, in_q, false, [ch | acc])
+
+  defp scan_inline_comment(<<?#, _rest::binary>>, false, false, acc), do: Enum.reverse(acc)
+
+  defp scan_inline_comment(<<?", rest::binary>>, in_q, false, acc),
+    do: scan_inline_comment(rest, not in_q, false, [?" | acc])
+
+  defp scan_inline_comment(<<ch, rest::binary>>, in_q, false, acc),
+    do: scan_inline_comment(rest, in_q, false, [ch | acc])
 
   # `parse_kv/1` only ever yields a `{binary, binary}` pair, so every
   # in-tree call site of `strip_quotes/1` and `parse_scalar/1` hands
