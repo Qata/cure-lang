@@ -162,16 +162,62 @@ half-migrated tree.
       *Gate:* 3820 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
       infections. Oracle replay 65/65. `mix dialyzer` passes.
 
-- [ ] **4b. Usage check (E layer).** Generalise `relevance.ex` from `{0, ω}` to the
-      full carrier: `Grade.admits?/2` for the used-vs-declared rule (Idris
-      `LinearCheck.idr:274-276`, generalised — this is where affinity enters) and
-      `Grade.mul/2` to scale a usage context on entering a subterm.
-      *Red tests to write first:* using a `1` binder twice is rejected; using it
-      zero times is rejected; using an `affine` binder zero times is ACCEPTED;
-      using it twice is rejected; an `ω` binder is unconstrained; an erased binder
-      in a relevant position is rejected (existing behaviour, must not regress).
-      *Hazard:* a linear binder captured by a non-one-shot closure. `mul/2` is
-      what makes that fall out — do not special-case it.
+- [x] **4b. Usage check (E layer).** LANDED. `relevance.ex` now runs the **two
+      mechanisms Idris runs**, which the old plan text conflated into one:
+
+      1. **Position check** — Idris `rigSafe` (`LinearCheck.idr:166-170`), at a
+         `Local` occurrence. This is what Cure already had: an `:erased` binder may
+         not appear in a relevant position. Kept, unchanged, errors and all.
+      2. **Usage check** — Idris `checkUsageOK` (`:274-276`), at a `Bind`:
+         `when (isLinear r && used /= 1) (throw …)`. Generalised over the carrier;
+         this is where affinity enters.
+
+      **Usage is carried as a grade**, not a count (`:erased` = 0 uses, `:linear` =
+      1, `:unrestricted` = many), so composition IS the semiring: `add/2` in
+      sequence, `mul/2` on entering a subterm. The rule is then `Grade.leq(used,
+      declared)` — subusaging — which is *exhaustively equivalent* to
+      `Grade.admits?(declared, n)` over all 16 pairs (pinned in `grade_test.exs`).
+      This is what let the whole pass keep grades **opaque**: `relevance.ex`
+      pattern-matches no grade.
+
+      **The closure hazard falls out of `mul/2`, as predicted.** A λ's body scales
+      its usage of *outer* binders by `ω`, because a closure may be entered any
+      number of times. `fn(1 x) -> fn(_) -> x` is rejected with `used: ω`. Idris
+      does the same via `eraseLinear env` (`:233-237`). Mutation-validated: delete
+      the scale, exactly the two closure tests fail.
+
+      **Branches combine by AGREEMENT, not summation.** A `case` yields a *set* of
+      usages per binder, one per branch; every member must satisfy `leq`. A
+      `:linear` binder used in one branch and dropped in another is rejected; an
+      `:affine` one is accepted. Idris's `combineUsage` (`:528-540`) throws on any
+      `Use0`/`Use1` mismatch **regardless of grade** — right for Idris, which has
+      no affine, wrong here. Mutation-validated: sum the branches instead of
+      collecting them and exactly the three agreement tests fail.
+
+      **A latent slice-4a bug was found and fixed here.** 4a's rename turned
+      `q == :present` into `q == :unrestricted` at the two argument-position gates
+      in `relevance.ex` — the *precise* predicate 4a's own notes say silently drops
+      `:linear` and `:affine`, corrected in `Erase` and `Emit` but missed here. It
+      was dormant only because no restricted grade was reachable; **4b is what made
+      it reachable.** Now `Grade.present?/1`. Mutation-validated: restore the
+      equality and exactly the two new gate tests fail. *The lesson generalises:
+      after a taxonomy rename, grep for the OLD predicate's shape, not the old
+      atom.*
+
+      *Division of labour:* counting runs for `:linear`/`:affine`. `:erased` stays
+      with the position check, which reports the *site* and carries the
+      collapsible-family exemption. `:unrestricted` imposes no obligation — so
+      **every existing program is unaffected**, which is why the suite moved only
+      by the 24 new tests.
+
+      *Known conservatism (not a bug, recorded):* the ω-scale applies to every λ,
+      including the one-shot λs the elaborator itself emits (join points,
+      `bind_once_guard`). A linear variable used inside such a λ will be counted
+      `ω`. Idris is conservative in the same place. Revisit only if slice 5's
+      surface syntax makes it bite.
+
+      *Gate:* 3852 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
+      infections. Oracle replay 65/65. `mix dialyzer` passes.
 
 - [x] **4c. Join points (E layer).** *(landed `87dcaeb`)* Bind a catch-all body **once** instead of
       re-elaborating it per uncovered constructor. Encoding uses only existing

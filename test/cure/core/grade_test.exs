@@ -169,4 +169,40 @@ defmodule Cure.Core.GradeTest do
       assert Grade.restricted?(:erased)
     end
   end
+
+  describe "the usage rule: leq/2 IS admits?/2 when usage is carried as a grade" do
+    # `Cure.Elab.Relevance` (slice 4b) carries a binder's usage as a grade rather
+    # than a count, so it can compose usages with the semiring (`add/2` in
+    # sequence, `mul/2` on entering a subterm) and then apply the rule as
+    # `leq(used, declared)`. That is only legitimate if subusaging and Idris's
+    # `checkUsageOK` (`LinearCheck.idr:274-276`, generalised as `admits?/2`) agree
+    # everywhere. The carrier is finite, so this is a proof, not a sample.
+    #
+    # A usage of `:affine` means "zero or one" — it arises from scaling a single
+    # use by an affine position — so it must be admitted exactly when BOTH counts
+    # are.
+    @uses %{erased: [0], linear: [1], affine: [0, 1], unrestricted: [2]}
+
+    test "leq(used, declared) agrees with admits? on every one of the 16 pairs" do
+      for used <- @all, declared <- @all do
+        by_count = Enum.all?(@uses[used], &Grade.admits?(declared, &1))
+
+        assert Grade.leq(used, declared) == by_count,
+               "leq(#{used}, #{declared}) = #{Grade.leq(used, declared)} but " <>
+                 "admits?(#{declared}, #{inspect(@uses[used])}) = #{by_count}"
+      end
+    end
+
+    test "the rule has teeth in both directions" do
+      # A linear binder must be used exactly once: neither dropping nor duplicating.
+      refute Grade.leq(:erased, :linear)
+      refute Grade.leq(:unrestricted, :linear)
+      assert Grade.leq(:linear, :linear)
+
+      # An affine binder may be dropped, but not duplicated.
+      assert Grade.leq(:erased, :affine)
+      assert Grade.leq(:linear, :affine)
+      refute Grade.leq(:unrestricted, :affine)
+    end
+  end
 end
