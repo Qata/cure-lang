@@ -44,4 +44,35 @@ defmodule Cure.Migrate.GroupHoistTest do
     refute out =~ ~r/mod\s+M[\s\S]*grouping tag/
     assert reparses?(out, "c.cure")
   end
+
+  test "a @group under a later module hoists above THAT module, not the first" do
+    # Multi-module files parse and compile; migrate runs on source syntactically.
+    # The `@group(:core)` belongs to `Second` (it trails Second's `mod`), so it
+    # must hoist above `Second`. The rule keyed every mover to the FIRST module,
+    # silently re-associating the group with `First` — a semantic corruption that
+    # `verify/3` accepts (the output reparses, comments preserved).
+    src = "mod First\nfn f() -> Int = 1\nmod Second\n@group(:core)\nfn g() -> Int = 2\n"
+    {out, warns} = migrate(src, "multi.cure")
+
+    assert Enum.any?(warns, &(&1.rule == :W_group_hoist))
+    # @group sits directly above Second...
+    assert out =~ ~r/@group\(:core\)\s*\n\s*mod\s+Second/
+    # ...and NOT above First (no @group between the start and `mod First`).
+    refute out =~ ~r/@group\(:core\)[\s\S]*mod\s+First/
+    assert reparses?(out, "multi.cure")
+  end
+
+  test "each @group hoists above its own module in a two-module, two-group file" do
+    src =
+      "mod First\n@group(:a)\nfn f() -> Int = 1\nmod Second\n@group(:b)\nfn g() -> Int = 2\n"
+
+    {out, _} = migrate(src, "two.cure")
+
+    assert out =~ ~r/@group\(:a\)\s*\n\s*mod\s+First/
+    assert out =~ ~r/@group\(:b\)\s*\n\s*mod\s+Second/
+    # neither group landed above the wrong module (both stacked above First was
+    # the bug symptom)
+    refute out =~ ~r/@group\(:b\)[\s\S]*mod\s+First/
+    assert reparses?(out, "two.cure")
+  end
 end
