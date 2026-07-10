@@ -18,7 +18,7 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     dir = Path.join(System.tmp_dir!(), "cure_noproj_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
-    assert Cure.CLI.migrate_project_edition(dir) == Cure.Edition.current()
+    assert Cure.CLI.migrate_project_edition(dir) == {:ok, Cure.Edition.current()}
   end
 
   test "F4: migrate_project_edition reads a declared [project].edition" do
@@ -28,7 +28,19 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     # Uses the one minted edition; confirms the helper resolves the project value
     # (not a crash / not something else) even though it equals current() today.
     File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"2026\"\n")
-    assert Cure.CLI.migrate_project_edition(dir) == "2026"
+    assert Cure.CLI.migrate_project_edition(dir) == {:ok, "2026"}
+  end
+
+  # I4 (audit iteration 2): a Cure.toml declaring an edition the compiler does
+  # not know must be SURFACED, not masked as current() — masking would let a
+  # broken project edition wave through a real downgrade. "1999" is guaranteed
+  # off the known-editions allow-list.
+  test "I4: migrate_project_edition surfaces an unknown declared edition" do
+    dir = Path.join(System.tmp_dir!(), "cure_badproj_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"1999\"\n")
+    assert Cure.CLI.migrate_project_edition(dir) == {:error, {:unknown_edition, "1999"}}
   end
 
   # The pure downgrade comparison honours the passed :current (this is what the

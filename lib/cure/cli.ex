@@ -1222,12 +1222,12 @@ defmodule Cure.CLI do
     # so an unvalidated typo would only surface much later on the next project
     # load. plan_migration/1 then refuses a downgrade target before any file is
     # read.
-    with {:ok, target} <- migrate_resolve_edition(opts) do
-      # Measure the downgrade guard against the PROJECT's declared edition, not
-      # always the latest minted one (F4), and print a diagnostic on refusal
-      # instead of a silent nonzero exit (F5).
-      project_edition = migrate_project_edition(".")
-
+    # Measure the downgrade guard against the PROJECT's declared edition, not
+    # always the latest minted one (F4), and print a diagnostic on refusal
+    # instead of a silent nonzero exit (F5). An invalid edition DECLARED in the
+    # project aborts here (I4) rather than being masked as the compiler default.
+    with {:ok, target} <- migrate_resolve_edition(opts),
+         {:ok, project_edition} <- migrate_project_edition(".") do
       case plan_migration(target: target, current: project_edition) do
         {:error, :downgrade} ->
           error(
@@ -1258,10 +1258,23 @@ defmodule Cure.CLI do
   # The project's declared edition (Cure.toml [project].edition), or the compiler
   # default when there is no project / it declares none. The downgrade guard
   # measures the target against THIS, not always the latest minted edition (F4).
+  #
+  # An INVALID declared edition (a Cure.toml naming an edition the compiler does
+  # not know) is surfaced as `{:error, {:unknown_edition, _}}` — NOT masked as
+  # the default (I4). Masking would silently defeat the downgrade guard: a broken
+  # project edition would read as `current()` and wave through a real downgrade.
+  # Only a genuinely absent/unreadable project falls back to the default.
   def migrate_project_edition(dir \\ ".") do
     case Cure.Edition.resolve(%{project_dir: dir}) do
-      {:ok, ed} -> ed
-      {:error, _} -> Cure.Edition.current()
+      {:ok, ed} ->
+        {:ok, ed}
+
+      {:error, {:unknown_edition, ed}} = err ->
+        error("invalid edition #{inspect(ed)} declared in #{Path.join(dir, "Cure.toml")}")
+        err
+
+      {:error, _} ->
+        {:ok, Cure.Edition.current()}
     end
   end
 
@@ -1306,7 +1319,10 @@ defmodule Cure.CLI do
     attached = Cure.Compiler.Trivia.attach(ast, trivia)
     rules = Cure.Migrate.rules_for_crossing(target)
 
-    case Cure.Migrate.run_to_fixpoint(attached, rules: rules) do
+    # Thread the crossing target so the fixpoint's verify reparse uses the SAME
+    # edition the migration targets, not the compiler default (I2 — wires the
+    # F12 edition-plumbing that was otherwise inert at this production caller).
+    case Cure.Migrate.run_to_fixpoint(attached, rules: rules, edition: target) do
       {:ok, out_ast, warns} ->
         blocking =
           Cure.Migrate.blocking_manual(target)
