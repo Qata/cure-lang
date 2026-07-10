@@ -56,4 +56,27 @@ defmodule Cure.ProjectSetEditionTest do
     assert out =~ ~r/edition = "2027"/
     refute out =~ ~r/edition = "2026"/
   end
+
+  # I1 (audit iteration 2): the write side accepted a `[project]` header carrying
+  # a trailing comment, but the loader required the line to END with `]`, so the
+  # written edition was silently dropped on read-back. Round-trip through load —
+  # not just the file text — to pin write/read grammar agreement.
+  test "I1: edition written under a comment-trailing [project] header round-trips through load",
+       %{dir: dir} do
+    write_toml(dir, "[project] # my project\nname = \"x\"\n")
+    path = Path.join(dir, "Cure.toml")
+    assert :ok = Cure.Project.set_edition(path, "2026")
+    assert {:ok, project} = Cure.Project.load(dir)
+    assert project.edition == "2026"
+  end
+
+  # A plain [project] table (no comment) must likewise round-trip — guards the
+  # loader-grammar change against regressing the ordinary case.
+  test "I1: edition written under a plain [project] header round-trips through load", %{dir: dir} do
+    write_toml(dir, "[project]\nname = \"x\"\n")
+    path = Path.join(dir, "Cure.toml")
+    assert :ok = Cure.Project.set_edition(path, "2026")
+    assert {:ok, project} = Cure.Project.load(dir)
+    assert project.edition == "2026"
+  end
 end

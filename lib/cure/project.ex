@@ -112,26 +112,27 @@ defmodule Cure.Project do
   defp upsert_edition(lines, edition) do
     kv = "edition = \"#{edition}\""
 
-    case project_edition_slot(lines) do
-      {:replace, i} -> List.replace_at(lines, i, kv)
-      {:insert_after, i} -> List.insert_at(lines, i, kv)
-      :no_project -> ["[project]", kv | lines]
+    case Enum.find_index(lines, &project_header?/1) do
+      nil ->
+        ["[project]", kv | lines]
+
+      hidx ->
+        {head, [header | after_header]} = Enum.split(lines, hidx)
+        {section, tail} = Enum.split_while(after_header, &(not table_header?(&1)))
+        head ++ [header | edition_in_section(section, kv)] ++ tail
     end
   end
 
-  # Locate where the [project] table's edition key is (or should go).
-  defp project_edition_slot(lines) do
-    case Enum.find_index(lines, &project_header?/1) do
-      nil ->
-        :no_project
-
-      hidx ->
-        section = lines |> Enum.drop(hidx + 1) |> Enum.take_while(&(not table_header?(&1)))
-
-        case Enum.find_index(section, &edition_key?/1) do
-          nil -> {:insert_after, hidx + 1}
-          rel -> {:replace, hidx + 1 + rel}
-        end
+  # Set the edition within the [project] section. If any `edition =` key is
+  # present, replace EVERY one (a malformed duplicate would otherwise leave a
+  # stale value that the last-write-wins loader reads back); if none, insert the
+  # key right after the header. Keys in later tables are outside `section` and
+  # are never touched.
+  defp edition_in_section(section, kv) do
+    if Enum.any?(section, &edition_key?/1) do
+      Enum.map(section, fn line -> if edition_key?(line), do: kv, else: line end)
+    else
+      [kv | section]
     end
   end
 
@@ -818,13 +819,24 @@ defmodule Cure.Project do
       trimmed == "" or String.starts_with?(trimmed, "#") ->
         parse_lines(rest, section, acc)
 
-      String.starts_with?(trimmed, "[") and String.ends_with?(trimmed, "]") ->
-        header = String.slice(trimmed, 1..-2//1) |> String.trim()
+      header = table_header_name(trimmed) ->
         parse_lines(rest, {:table, header}, acc)
 
       true ->
         acc = apply_kv(section, trimmed, acc)
         parse_lines(rest, section, acc)
+    end
+  end
+
+  # A table header line, tolerating an inline comment after the `]` (valid TOML,
+  # e.g. `[project] # my project`). Returns the header name, or nil if the line
+  # is not a header. Kept consistent with the `set_edition` writer grammar so a
+  # header this loader accepts is one the writer will also target (and vice
+  # versa) — otherwise a written `edition` would be dropped on read-back.
+  defp table_header_name(trimmed) do
+    case Regex.run(~r/^\[([^\]]*)\]\s*(?:#.*)?$/, trimmed) do
+      [_, name] -> String.trim(name)
+      nil -> nil
     end
   end
 
