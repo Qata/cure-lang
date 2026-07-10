@@ -41,7 +41,9 @@ defmodule Cure.Migrate do
     do: [
       Cure.Migrate.Rules.IfElifToPickup.rule(),
       Cure.Migrate.Rules.UppercaseTypeVar.rule(),
-      Cure.Migrate.Rules.GroupHoist.rule()
+      Cure.Migrate.Rules.GroupHoist.rule(),
+      Cure.Migrate.Rules.ModuleRename.rule(),
+      Cure.Migrate.Rules.RemovedModule.rule()
     ]
 
   @doc """
