@@ -67,12 +67,20 @@ defmodule Cure.Edition do
   """
   @spec pragma_edition(String.t()) :: t() | nil
   def pragma_edition(source) when is_binary(source) do
-    source
-    |> String.split("\n")
-    |> Enum.drop_while(&trivia_line?/1)
-    |> case do
-      [first | _] -> pragma_capture(first)
-      [] -> nil
+    # Bounded scan: the pragma (if any) is the first non-blank, non-comment line,
+    # so split only at each leading newline (`parts: 2`) instead of materialising
+    # the whole file — this runs on every compile now that resolution is wired
+    # into the build pipeline (F-A), so it must not be O(file size).
+    case first_substantive_line(source) do
+      nil -> nil
+      line -> pragma_capture(line)
+    end
+  end
+
+  defp first_substantive_line(source) do
+    case String.split(source, "\n", parts: 2) do
+      [line, rest] -> if trivia_line?(line), do: first_substantive_line(rest), else: line
+      [line] -> if trivia_line?(line), do: nil, else: line
     end
   end
 
@@ -82,7 +90,11 @@ defmodule Cure.Edition do
   end
 
   defp pragma_capture(line) do
-    case Regex.run(~r/^\s*@edition\(\s*"(\d{4})"\s*\)/, line) do
+    # `@\s*edition\s*\(` tolerates the interior whitespace the parser's tokenizer
+    # ignores (`@ edition(...)`, `@edition (...)`) — resolution must not miss a
+    # pragma the compiler would accept (F-C), or the file resolves to the wrong
+    # edition than it parses under.
+    case Regex.run(~r/^\s*@\s*edition\s*\(\s*"(\d{4})"\s*\)/, line) do
       [_, year] -> year
       nil -> nil
     end
