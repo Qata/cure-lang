@@ -21,9 +21,15 @@ defmodule Cure.Migrate.Rule do
       `:needs_resolution` for rules that must consult the per-file `ctx` (the
       set of in-scope type names) before deciding — e.g. an uppercase type
       variable that is actually a declared type must NOT be renamed.
-    * `:detect_and_rewrite` — `(ast, ctx) -> {:rewrite, new_ast} | :no_change`.
-      Given the current AST and the file context, either return the rewritten
-      AST (which the fold threads into the next rule) or `:no_change`.
+    * `:detect_and_rewrite` — `(ast, ctx) -> result`. Given the current AST and
+      the file context, one of:
+        * `{:rewrite, new_ast}` — rewrote; `run/2` records ONE warning from
+          `warning_template` (with no line).
+        * `{:rewrite, new_ast, lines}` — rewrote and knows the exact source
+          line(s) it fired on; `run/2` records one warning per line.
+        * `{:warn, lines}` — detected legacy shape(s) it could NOT rewrite (e.g.
+          the paren-context skip in spec §5.5), so warn but leave the AST as-is.
+        * `:no_change` — nothing found; transparent.
     * `:warning_template` — the message body emitted when the rule fires.
   """
 
@@ -36,8 +42,15 @@ defmodule Cure.Migrate.Rule do
   @typedoc "Per-file context: the set of type names in scope (spec §4)."
   @type ctx :: MapSet.t()
 
+  @typedoc "A source line a warning points at (`nil` when the rule has none)."
+  @type warning_loc :: pos_integer() | nil
+
   @typedoc "A rule's decision for one file."
-  @type result :: {:rewrite, ast()} | :no_change
+  @type result ::
+          {:rewrite, ast()}
+          | {:rewrite, ast(), [warning_loc()]}
+          | {:warn, [warning_loc()]}
+          | :no_change
 
   @type t :: %__MODULE__{
           id: atom(),

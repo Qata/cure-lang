@@ -37,7 +37,7 @@ defmodule Cure.Migrate do
   caller passes an explicit `:rules` list (tests do).
   """
   @spec rules() :: [Rule.t()]
-  def rules, do: []
+  def rules, do: [Cure.Migrate.Rules.IfElifToPickup.rule()]
 
   @doc """
   Run `rules` over `ast` as an ordered fold. Each rule sees the AST as left by
@@ -59,11 +59,23 @@ defmodule Cure.Migrate do
     Enum.reduce(rule_set, {ast, []}, fn %Rule{} = rule, {acc_ast, warns} ->
       case rule.detect_and_rewrite.(acc_ast, ctx) do
         {:rewrite, new_ast} ->
-          {new_ast, warns ++ [%Warning{rule: rule.id, message: rule.warning_template, file: file}]}
+          {new_ast, warns ++ warnings_for(rule, file, [nil])}
+
+        {:rewrite, new_ast, lines} ->
+          {new_ast, warns ++ warnings_for(rule, file, lines)}
+
+        {:warn, lines} ->
+          {acc_ast, warns ++ warnings_for(rule, file, lines)}
 
         :no_change ->
           {acc_ast, warns}
       end
+    end)
+  end
+
+  defp warnings_for(%Rule{} = rule, file, lines) do
+    Enum.map(lines, fn line ->
+      %Warning{rule: rule.id, message: rule.warning_template, file: file, line: line}
     end)
   end
 

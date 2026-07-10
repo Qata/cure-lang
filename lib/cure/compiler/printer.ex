@@ -51,17 +51,30 @@ defmodule Cure.Compiler.Printer do
       # exactly one blank line between every top-level definition; rule 1: no
       # leading blanks) — NOT in the generic `{:block, …}` clause, because a
       # function body is also a `:block` and may itself render at depth 0.
-      {:block, _meta, exprs} -> render_program(exprs, indent)
+      {:block, meta, exprs} -> render_program(exprs, meta, indent)
       _ -> render(ast, 0, indent)
     end
   end
 
-  defp render_program(exprs, indent) do
-    exprs
-    |> Enum.map(&render(&1, 0, indent))
-    |> Enum.with_index()
-    |> Enum.map(fn {rendered, i} -> {rendered, i > 0} end)
-    |> join_statements("")
+  # Render the whole-file statement list, then re-apply the *block's own* trivia:
+  # a `:leading` comment at the very top of the file, a `:trailing` comment on the
+  # file's last line (a genuine end-of-file trailing comment — spec §5.2 forbids
+  # dropping it), and any `:trailer` lines after the last statement. All three
+  # helpers no-op on `nil`, and blank runs render to nothing, so a file whose
+  # block carries no trivia (the corpus fixpoint gate, and every file the plain
+  # Printer sees) is byte-identical to before.
+  defp render_program(exprs, meta, indent) do
+    body =
+      exprs
+      |> Enum.map(&render(&1, 0, indent))
+      |> Enum.with_index()
+      |> Enum.map(fn {rendered, i} -> {rendered, i > 0} end)
+      |> join_statements("")
+
+    body
+    |> prepend_leading(Keyword.get(meta, :leading), 0, indent)
+    |> append_trailing(Keyword.get(meta, :trailing))
+    |> append_trailer(Keyword.get(meta, :trailer), 0, indent)
   end
 
   # Render a block body / statement list applying §5.4 rule 4: a single author
