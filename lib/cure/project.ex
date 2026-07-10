@@ -241,7 +241,15 @@ defmodule Cure.Project do
     File.mkdir_p!(dep_ebin)
 
     Enum.each(cure_files, fn file ->
-      _ = Cure.Compiler.compile_file(file, output_dir: dep_ebin, emit_events: false)
+      # Edition-per-package (Rust parity): the dep resolves under its OWN root,
+      # never the consumer's. Pinning :project_dir to the dep base stops
+      # resolve_edition from walking up into the consumer's Cure.toml.
+      _ =
+        Cure.Compiler.compile_file(file,
+          output_dir: dep_ebin,
+          emit_events: false,
+          project_dir: abs_path
+        )
     end)
 
     :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
@@ -319,7 +327,16 @@ defmodule Cure.Project do
     File.mkdir_p!(dep_ebin)
 
     Enum.each(cure_files, fn file ->
-      _ = Cure.Compiler.compile_file(file, output_dir: dep_ebin, emit_events: false)
+      # Edition-per-package (Rust parity): a tarball dep resolves under its own
+      # extraction root, never the consumer's. Pinning :project_dir to the
+      # extraction target keeps resolve_edition from inheriting the consumer's
+      # edition when the dep ships no Cure.toml.
+      _ =
+        Cure.Compiler.compile_file(file,
+          output_dir: dep_ebin,
+          emit_events: false,
+          project_dir: target
+        )
     end)
 
     :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
