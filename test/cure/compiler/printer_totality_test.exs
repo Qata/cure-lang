@@ -132,6 +132,199 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     child_spec binary_generator named_implicit_pat
   )a
 
+  # ── Per-kind round-trip unit tests (Task 3) ──────────────────────────────
+
+  test "pin pattern round-trips as ^name" do
+    src = """
+    mod M
+      fn f(t: Atom) -> Bool =
+        match t
+          ^target -> true
+          _ -> false
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "pin.cure"))
+    assert out =~ "^target"
+    assert parse!(out, "pin.cure")
+  end
+
+  test "as-pattern round-trips as name @ inner" do
+    src = """
+    mod M
+      fn f(xs: List) -> List =
+        match xs
+          whole @ [h | t] -> whole
+          _ -> xs
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "as.cure"))
+    assert out =~ "whole @ "
+    assert parse!(out, "as.cure")
+  end
+
+  test "assert_type round-trips as assert_type expr : Type" do
+    src = """
+    mod M
+      fn answer() -> Int = assert_type 42 : Int
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "assert.cure"))
+    assert out =~ "assert_type 42 : Int"
+    assert parse!(out, "assert.cure")
+  end
+
+  test "hole round-trips as ?name" do
+    src = """
+    mod M
+      fn f() -> Int = ?goal
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "hole.cure"))
+    assert out =~ "?goal"
+    assert parse!(out, "hole.cure")
+  end
+
+  test "forced pattern round-trips as .x and .(compound)" do
+    src = """
+    mod M
+      type Sing indices (n: Nat)
+        SZ : Sing(Z)
+        SS : Sing(k) -> Sing(S(k))
+
+      fn f(s: Sing(m)) -> Int =
+        match s
+          SZ({n = .Z}) -> 0
+          _ -> 1
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "forced.cure"))
+    assert out =~ ".Z"
+    assert parse!(out, "forced.cure")
+  end
+
+  test "named-implicit dot pattern round-trips as { name = inner }" do
+    src = """
+    mod M
+      type Sing indices (n: Nat)
+        SZ : Sing(Z)
+        SS : Sing(k) -> Sing(S(k))
+
+      fn f(s: Sing(m)) -> Int =
+        match s
+          SS({k = .p}, r) -> 1
+          _ -> 0
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "nimpl.cure"))
+    assert out =~ "{ k = "
+    assert parse!(out, "nimpl.cure")
+  end
+
+  test "indexed type family with gadt constructors round-trips" do
+    src = """
+    mod M
+      type Vect(a: Type) indices (n: Nat)
+        VNil : Vect(a, Z)
+        VCons : (k: Nat) -> a -> Vect(a, k) -> Vect(a, S(k))
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "vect.cure"))
+    assert out =~ "type Vect(a: Type) indices (n: Nat)"
+    assert out =~ "VNil : Vect(a, Z)"
+    assert out =~ "VCons : (k: Nat) -> a -> Vect(a, k) -> Vect(a, S(k))"
+    assert parse!(out, "vect.cure")
+  end
+
+  test "interface round-trips" do
+    src = """
+    mod M
+      interface Show(a)
+        fn show(x: a) -> String
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "iface.cure"))
+    assert out =~ "interface Show(a)"
+    assert out =~ "fn show(x: a) -> String"
+    assert parse!(out, "iface.cure")
+  end
+
+  test "implementation round-trips" do
+    src = """
+    mod M
+      interface Show(a)
+        fn show(x: a) -> String
+
+      implementation Show for Int
+        fn show(x: Int) -> String = "int"
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "impl.cure"))
+    assert out =~ "implementation Show for Int"
+    assert parse!(out, "impl.cure")
+  end
+
+  test "pi type round-trips as dependent arrow" do
+    src = """
+    mod M
+      fn f(g: (n: Nat) -> Vect(n)) -> Int = 0
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "pi.cure"))
+    assert out =~ "(n: Nat) -> Vect(n)"
+    assert parse!(out, "pi.cure")
+  end
+
+  test "sigma type round-trips" do
+    src = """
+    mod M
+      fn f(p: Sigma(n: Nat, Vect(n))) -> Int = 0
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "sigma.cure"))
+    assert out =~ "Sigma(n: Nat, Vect(n))"
+    assert parse!(out, "sigma.cure")
+  end
+
+  test "with-abstraction round-trips" do
+    src = """
+    mod M
+      fn f(x: Int) -> Int =
+        with g(x)
+          0 -> 1
+          _ -> 2
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "with.cure"))
+    assert out =~ "with g(x)"
+    assert parse!(out, "with.cure")
+  end
+
+  test "child spec round-trips inside a supervisor" do
+    src = """
+    mod M
+      sup Root
+        children
+          Counter as counter
+          sup Workers as workers
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "child.cure"))
+    assert out =~ "Counter as counter"
+    assert out =~ "sup Workers as workers"
+    assert parse!(out, "child.cure")
+  end
+
+  test "binary generator round-trips as <<pat <- source>>" do
+    src = """
+    mod M
+      fn f(buf: Bitstring) -> List = [b for <<b <- buf>>]
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "bingen.cure"))
+    assert out =~ "<<b <- buf>>"
+    assert parse!(out, "bingen.cure")
+  end
+
   test "every node kind the parser can construct has a matching Printer clause (static, corpus-independent)" do
     missing = MapSet.difference(MapSet.new(@all_node_kinds), printer_handled_kinds())
     assert MapSet.to_list(missing) == [],
