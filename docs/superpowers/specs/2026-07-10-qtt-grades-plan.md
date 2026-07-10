@@ -1,16 +1,33 @@
 # QTT Graded Binders — Implementation Plan
 
-**STATUS: COMPLETE (2026-07-11).** All eight slices landed and gated on
+**STATUS: COMPLETE & CLOSED (2026-07-11).** All eight slices landed and gated on
 `core-let-binder`: 1 `4050c81` · 2+3 · 4a `330dca6` · 4b `a5306ed` · 4c `87dcaeb`
 · 5a `f5bc929` · 5b `4ab3450` · 6 `4624909`, plus the Conv λ-grade TCB fix
-`fc97ed7` that an extended Antigen antibody surfaced. Final gate: 3902 tests / 0
-failed, Antigen 322/322 cells + 300-run campaign → 0 infections, oracle replay
-65/65, `mix dialyzer` clean, stdlib 44/44. An adversarial multi-agent review is in
-flight; any confirmed findings will be triaged red-green before this plan is
-considered closed. Deferred, non-blocking: surface grades on λ-expressions and
-constructor fields (both representable in Core today, just unspellable), and
-making `quantities` a pure projection of the Pi (the slice-6 assertion already
-makes the two a verified mirror).
+`fc97ed7` that an extended Antigen antibody surfaced.
+
+The adversarial multi-agent review has since **converged** — three red-team rounds
+over the whole stack, no accepts-unsound hole surviving. It drove the F11 join-point
+over-rejection to a real fix: the usage checker now **un-joins** the slice-4c join
+idiom (counts the shared continuation's captures once, Idris-per-branch) — landed
+`a844b53`, with four soundness fixes the red-team caught (`e2ec55b`, `4e1f59a`) and a
+final hardening making the un-join lean on structure not coincidence (`937ede3`:
+`join_view` requires the continuation λ's grade unrestricted). The review cron was
+then cancelled and `autopilot/kernel-parity-batch` merged in (`33c41b9`), which
+adopts Dialyzer as a gate; a latent dead `{:vstring_type}` classify clause it
+surfaced was removed as an integration fix.
+
+Post-merge gate (the current numbers; supersedes the pre-merge 3902/65/44):
+**4025 tests / 0 failed**, Antigen **322/322 cells + 0 infections** (200-run
+campaign), oracle replay **69/69**, `mix dialyzer` **green**, stdlib **48/48**.
+
+Deferred, non-blocking, and OUT OF THIS PLAN (each needs its own spec if pursued):
+(i) **surface grades on λ-expressions and constructor fields** — representable in
+Core today, just unspellable; this is E/P-layer (parser + elaborator), NOT K-layer,
+and landing it re-arms the `937ede3` landmine (the un-join's soundness currently
+holds because `elaborate_lambda` hardcodes ω), so it must be co-designed with a
+graded-λ usage rule. (ii) **`quantities` as a pure projection of the Pi** — the
+slice-6 assertion already makes the two a verified mirror, so this is churn with no
+behavioural change, not a soundness need.
 
 **Branch:** `core-let-binder`
 **Goal:** full Quantitative Type Theory (Atkey) with `{0, 1, affine, ω}` grades on
