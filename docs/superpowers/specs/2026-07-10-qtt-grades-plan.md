@@ -43,6 +43,24 @@ TCB-alignment directive (`tcb-change-blanket-approval`).
 7. **Default grade is `:unrestricted`.** Every existing 3-tuple site migrates to
    `:unrestricted`, which is behaviour-preserving.
 
+8. **`:lam` IS graded, even though it doubles the migration.** Considered and
+   REJECTED: grading only the types (`:pi`, `:vpi`, `:let`) and leaving `:lam` a
+   3-tuple. That is 380 sites instead of 1029, and it looks sound at slice 2 —
+   `Conv` only ever compares *types*, a λ's grade is redundant with its Π's, and
+   `Kernel.infer` on a λ could default to `ω` (the elaborator can never infer a
+   bare lambda anyway, so λs always arrive in checking mode).
+
+   It breaks at **slice 4**, which is how a soundness hole ships. `relevance.ex`
+   learns a binder's quantity from the **def's parameter vector**, so it only
+   knows *top-level* params. An **inner** λ binding a linear variable —
+   `fn(1 c: Chan) -> Effect(Unit)`, exactly a `spawn` body — would be invisible to
+   the usage check, and its linear binder silently unchecked. Idris stores the
+   multiplicity on `Lam` for precisely this: `LinearCheck.lcheck` reads
+   `multiplicity b` off the binder (`Core/LinearCheck.idr`, `lcheckBinder`).
+
+   Site split, measured post-merge: `:pi` 315, `:vpi` 18, `:let` 47 (= 380);
+   `:lam` 634, `:vlam` 15 (= 649). Total 1029.
+
 ---
 
 ## Blast radius (measured 2026-07-10)
@@ -91,7 +109,16 @@ half-migrated tree.
       *Done when:* full suite green, full Antigen campaign 0 infections,
       `Term.term?/1` rejects every 3-tuple binder.
 
-- [ ] **3. Mechanical migration** of the 866 non-TCB sites (elab, antigen, test).
+      *Migration recipe (learned the hard way — Elixir will not help you):*
+      a stale 3-tuple `{:pi, a, b}` does **not** raise; it falls through to a
+      catch-all and behaves silently wrong. So migrate in this order:
+      (i) reshape `Term.term?/1` FIRST so it *rejects* 3-tuple binders — that
+      turns silent fallthrough into a loud test failure;
+      (ii) then reshape the rest of `core/`;
+      (iii) then let the 3795-test suite drive the elab/antigen/test migration.
+      Do not trust `mix compile`; it will be green while the kernel is wrong.
+
+- [ ] **3. Mechanical migration** of the ~950 non-TCB sites (elab, antigen, test).
       Flip `validator.ex`'s already-reserved `grade_on_binders` rule from `:off`.
       *Done when:* no `{:pi, _, _}` / `{:lam, _, _}` / `{:let, _, _, _}` construction
       survives anywhere; the validator rule is on and green.
