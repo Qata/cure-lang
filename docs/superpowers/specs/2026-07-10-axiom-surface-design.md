@@ -160,14 +160,16 @@ doubles as a debt counter for #23/#18. It should shrink to nothing.
 
 ### 4.2 Trust classes
 
-Nine things live in `Core.Env` (`lib/cure/core/inductive.ex:12`). Five are
+Ten things live in `Core.Env` (`lib/cure/core/inductive.ex:12`) — `families`,
+`ctors`, `ctor_to_family`, `defs`, `certified`, `builtins`, `interfaces`,
+`coherence`, `constrained`, `primitives`. Five classes drawn from them are
 trust-relevant. Each is one pattern-match.
 
 | Class | Detection | Meaning |
 |---|---|---|
 | `ffi_postulate` | `%{body: {:extern, {m,f,a}}}` | You assert BEAM's `m:f/a` inhabits this Π type, totally and purely. Nothing checks it. |
 | `builtin_op` | `%{builtin_op: op}` when non-nil | You assert BEAM's operator implements Core's semantics. |
-| `opaque_family` | `Inductive.opaque?/2` | An Agda-style `postulate` type. Sound only because `kernel.ex:211` refuses to eliminate it. |
+| `opaque_family` | `Inductive.opaque?/2` | An Agda-style `postulate` type. Sound only because `kernel.ex:238` refuses to eliminate it. |
 | `hole` | `{:hole, _}` in a body | Incompleteness, not trust. Already blocks codegen. |
 | `absurd` | `{:absurd}` in a body | Admitted only under an inconsistent context. Reported because it is the shape a soundness bug would exploit. |
 
@@ -231,7 +233,7 @@ UNAVAILABLE ON TARGET (1)
 ```
 
 The dependency is real: `cure_std_time.ex:137` calls `Regex.match?` inside
-`zone/1`, so `Std.Time.zone` needs `:re` and is dead on AtomVM today, silently.
+`zone/2`, so `Std.Time.zone` needs `:re` and is dead on AtomVM today, silently.
 This is a portability wart, not a bug — on canonical BEAM it works — and deletion
 is the wrong response. Non-portable modules stay in `Std`; the ledger reports
 where they run.
@@ -248,11 +250,12 @@ omitted entirely.
 ### 4.6 Components
 
 **`Cure.Audit.Refs` — a fail-closed walker.** `Program.global_refs/1`
-(`program.ex:473`) ends in `defp global_refs(_leaf), do: []`. For codegen that is
+(`program.ex:473–483`) ends in `defp global_refs(_leaf), do: []`. For codegen that is
 benign. For a ledger it is fatal in the future tense: the day the Core grammar
 grows a node, reachability silently under-reports and the ledger quietly stops
 finding axioms. `Audit.Refs.refs/1` enumerates every node in `Core.Term.term?/1`
-(`term.ex:57–90`) explicitly and **raises** on anything else. It carries one extra
+(`term.ex:57–97`, which includes the `hole` and `absurd` clauses §4.2 reports on)
+explicitly and **raises** on anything else. It carries one extra
 clause for the non-Core `{:extern, {m,f,a}}` sentinel that occupies a def's `body`
 slot.
 
@@ -264,7 +267,7 @@ and catastrophic for a ledger: the first drops arithmetic, which is an axiom. Th
 ledger shares the *shape* of that walk and none of its filters.
 
 An unresolved global is a **raise**, not a finding. `Kernel.infer/2`
-(`kernel.ex:127`) already returns `{:error, :unknown_global}` for a dangling
+(`kernel.ex:151`) already returns `{:error, :unknown_global}` for a dangling
 reference, so on a kernel-checked env the condition is unreachable. If it fires,
 the ledger's caller skipped `check_def`.
 
@@ -287,10 +290,8 @@ ratchet. Every section prints even when empty, so a section going from `(0)` to
 ```
 $ cure audit trust Std.List
 
-AXIOMS — OTP (3)
+AXIOMS — OTP (1)
   erlang:length/1          ∀{a}. List(a) -> Int
-  erlang:hd/1              ∀{a}. List(a) -> a
-  erlang:tl/1              ∀{a}. List(a) -> List(a)
 
 AXIOMS — CURE RUNTIME (0)
 
@@ -329,7 +330,7 @@ Red-green, one failing test before each fix.
    upgrades automatically as the grammar grows.
 4. `opaque type` yields `opaque_family`; a genuinely-empty inductive does not
    (`opaque_family?/1` keys on the marker, not the constructor count —
-   `inductive.ex:324`).
+   `inductive.ex:333`).
 5. `Std.List` reports exactly `reverse, last, drop, take` as not-proven-total,
    under that heading, not among the axioms.
 6. `Std.Time` — which does not elaborate — lands in `UNAUDITED`; `--strict` exits
@@ -398,11 +399,19 @@ widened to cover the harness's directory.
 
 ### 5.3 The real output is a partition, not a pass/fail
 
-Running the four properties over 49 axioms sorts them into three sets, and that
-partition is what Phases 2 and 3 consume:
+Running the four properties — plus the hand-enumerated parametricity check
+(§5.1) where it applies, which is what actually catches `shrink`: the four
+alone would pass it, since it is deterministic, total, and shape-correct —
+over 49 axioms sorts them into three sets, and that partition is what Phases 2
+and 3 consume:
 
-- **True and mechanically confirmed.** Rewrite in Cure; the axiom disappears.
-  Expected: most of `crdt` (22), `json` (3), `gen`'s two monomorphic shrinkers.
+- **True and mechanically confirmed.** For a pure shim (§6), the axiom
+  disappears outright on rewrite. For a mixed shim with a real OTP primitive
+  underneath (§7), confirming the axiom true does not make the OTP dependency
+  go away — it splits, per §7, rather than vanishing. Expected: most of `crdt`
+  (22), `gen`'s two monomorphic shrinkers, and `json` (3) — the last of these
+  is true as declared but still ends up in Phase 3 (§7), not Phase 2, because
+  its marshalling wraps genuine `:erlang` calls.
 - **False and repairable by changing the Cure signature.** `shrink` wants
   `interface Shrink t` rather than `∀t. t -> List(t)` — a typeclass method is
   permitted to dispatch on `t`, which is precisely what it does. `forall_shrunk`
@@ -459,7 +468,7 @@ computation into Cure.
 
 | Module | Axioms now | OTP primitives underneath | Axioms after |
 |---|---:|---|---:|
-| `time` | 9 | `:erlang.system_time`, `:calendar.iso_week_number` | ~2 |
+| `time` | 9 | `:erlang.system_time`, Elixir's `DateTime` (`from_iso8601`, `to_unix`, `to_iso8601`) | ~2 |
 | `regex` | 7 | `:re.run`, `:compile`, `:replace`, `:split` | ~4 |
 | `http` | 4 | `:httpc.request`, `:inets.start` | ~2 |
 | `json` | 3 | `:erlang.float_to_binary`, `:iolist_to_binary` | ~2 |
@@ -471,11 +480,12 @@ same of OTP, which has been load-bearing for thirty years. The `CURE RUNTIME`
 bucket empties into `OTP`, and the thesis — *no axiom should point at code we
 wrote* — is met.
 
-Two residues survive and are honest about themselves. `time.now` and the four
-`http` axioms are effectful (§5.3), so their post-split OTP axioms are still
-false as *pure* postulates. They are correct as effectful ones, and they wait on
-the inert `Effect` former. `Std.Regex` and `Std.Http` remain in `Std` and remain
-absent on AtomVM; `--target` reports it (§4.5).
+Two residues survive and are honest about themselves. `time.now`, `time.utc_now`
+(it delegates straight to `now/0`), and the four `http` axioms are effectful
+(§5.3), so their post-split OTP axioms are still false as *pure* postulates.
+They are correct as effectful ones, and they wait on the inert `Effect` former.
+`Std.Regex` and `Std.Http` remain in `Std` and remain absent on AtomVM;
+`--target` reports it (§4.5).
 
 ## 8. Out of scope: the 43 bridge axioms
 
