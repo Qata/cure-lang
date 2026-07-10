@@ -70,6 +70,39 @@ defmodule Cure.Elab.Erase do
           |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)
         end
 
+      # A constructor heading a curried spine is the same term as the flat `{:ctor, name, args}`
+      # node, and must erase to the same runtime shape. The bare fallback below kept every
+      # argument, erased ones included — so an erased index literally survived into the runtime
+      # term, and two Core encodings of one value erased differently. `Relevance`, the dual
+      # pass, already anticipates this head shape in `callee_quantities/3`; `Erase` did not.
+      {:ctor, cname, head_args} ->
+        all = head_args ++ args
+        quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, length(all))
+
+        if length(all) >= length(quantities) do
+          # Saturated (or over-applied, when a field is itself a function): the leading
+          # `length(quantities)` arguments are the ctor's own fields and collapse into the flat
+          # node; anything beyond applies to the result and is always present.
+          {fields, extra} = Enum.split(all, length(quantities))
+
+          kept =
+            fields
+            |> Enum.zip(quantities)
+            |> Enum.filter(fn {_arg, q} -> q == :present end)
+            |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
+
+          extra
+          |> Enum.map(&erase(env, &1))
+          |> Enum.reduce({:ctor, cname, kept}, fn arg, acc -> {:app, acc, arg} end)
+        else
+          # Partially applied, or already erased: filtering would realign the quantity vector
+          # onto the wrong positions. Keep every argument and recurse, so erase(erase(t)) is
+          # erase(t) — the same reasoning as the flat `{:ctor, …}` and `{:global, …}` clauses.
+          args
+          |> Enum.map(&erase(env, &1))
+          |> Enum.reduce(erase(env, head), fn arg, acc -> {:app, acc, arg} end)
+        end
+
       _ ->
         args
         |> Enum.map(&erase(env, &1))
