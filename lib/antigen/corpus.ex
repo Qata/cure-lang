@@ -146,8 +146,13 @@ defmodule Antigen.Corpus do
     tally
   end
 
-  # Non-blank, newline-trimmed record lines of a file (empty list if the file is absent).
-  defp record_lines(path) do
+  @doc """
+  Non-blank, newline-trimmed record lines of a file (empty list if the file is
+  absent). Raw lines — no decode — so callers preserve byte identity. Used by
+  `merge/2` and `Antigen.Prune`.
+  """
+  @spec record_lines(String.t()) :: [String.t()]
+  def record_lines(path) do
     if File.exists?(path) do
       path |> File.stream!() |> Enum.map(&String.trim_trailing(&1, "\n")) |> Enum.reject(&(&1 == ""))
     else
