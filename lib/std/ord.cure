@@ -1,5 +1,10 @@
 @group(:core)
 mod Std.Ord
+  ## `Std.Char` supplies `code_point` (Char -> Int) for the `Char` instance's
+  ## code-point ordering; `Std.String` makes `String` the transparent
+  ## `List(Char)` synonym the lexicographic `String` comparison folds over.
+  use Std.Char
+  use Std.String
   ## Ordering protocol: three-way compare plus total-order helpers.
   ##
   ## The `compare/2` callback returns `LessThan`, `EqualTo`, or `GreaterThan`.
@@ -43,14 +48,41 @@ mod Std.Ord
         a > b -> GreaterThan()
         else  -> EqualTo()
 
-  ## `Ord` impl for `String`. Uses byte-wise ordering of the binary.
-  implementation Ord for String
-    ## String three-way compare.
-    fn compare(a: String, b: String) -> Ordering =
+  ## `Ord` impl for `Char`: compare Unicode code points. `code_point` is the
+  ## `Char -> Int` coercion (Char erases to its code point), so this is an `Int`
+  ## comparison — no method dispatch, works on both pipelines.
+  implementation Ord for Char
+    ## Character three-way compare on code points.
+    fn compare(a: Char, b: Char) -> Ordering =
       pickup
-        a < b -> LessThan()
-        a > b -> GreaterThan()
-        else  -> EqualTo()
+        code_point(a) < code_point(b) -> LessThan()
+        code_point(a) > code_point(b) -> GreaterThan()
+        else                          -> EqualTo()
+
+  ## Lexicographic three-way compare over `String = List(Char)`: compare heads
+  ## by code point, and on a tie recurse into the tails. A prefix sorts before
+  ## its extension (`"ad" < "ada"`). Written as a plain top-level recursion (not
+  ## a self-recursive interface method) so the impl body carries no nested
+  ## method dispatch.
+  fn compare_string(a: String, b: String) -> Ordering =
+    match a
+      [] ->
+        match b
+          []      -> EqualTo()
+          [_ | _] -> LessThan()
+      [ha | ta] ->
+        match b
+          []        -> GreaterThan()
+          [hb | tb] ->
+            pickup
+              code_point(ha) < code_point(hb) -> LessThan()
+              code_point(ha) > code_point(hb) -> GreaterThan()
+              else                            -> compare_string(ta, tb)
+
+  ## `Ord` impl for `String`. Delegates to the lexicographic `compare_string`.
+  implementation Ord for String
+    ## String three-way compare, character by character.
+    fn compare(a: String, b: String) -> Ordering = compare_string(a, b)
 
   ## Strict less-than derived from `compare/2`. The `where Ord(t)`
   ## constraint threads the dictionary that dispatches `compare`.
