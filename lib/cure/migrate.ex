@@ -43,7 +43,8 @@ defmodule Cure.Migrate do
       Cure.Migrate.Rules.UppercaseTypeVar.rule(),
       Cure.Migrate.Rules.GroupHoist.rule(),
       Cure.Migrate.Rules.ModuleRename.rule(),
-      Cure.Migrate.Rules.RemovedModule.rule()
+      Cure.Migrate.Rules.RemovedModule.rule(),
+      Cure.Migrate.Rules.ProtoToInterface.rule()
     ]
 
   @doc """

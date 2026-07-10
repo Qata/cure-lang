@@ -3613,6 +3613,7 @@ defmodule Cure.Compiler.Parser do
       name: "#{proto_name}.#{for_name}",
       protocol: proto_name,
       for: for_name,
+      for_type: for_type,
       line: token.line,
       col: token.col
     ]
