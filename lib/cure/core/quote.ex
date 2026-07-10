@@ -66,7 +66,9 @@ defmodule Cure.Core.Quote do
   # Read a compact Nat back to a compact literal term — NOT an `S`-tower (which
   # would reintroduce the blow-up at read-back time).
   def reify({:vnat, n}, _depth, _sig), do: {:nat_lit, n}
+  def reify({:vbounded, n}, _depth, _sig), do: {:bounded_lit, n}
   def reify({:vfloat_type}, _depth, _sig), do: {:float_type}
+  def reify({:vbinary_type}, _depth, _sig), do: {:binary_type}
   def reify({:vfloat, f}, _depth, _sig), do: {:float_lit, f}
 
   def reify({:vneutral, n}, depth, sig), do: reify_neutral(n, depth, sig)

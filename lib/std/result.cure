@@ -31,6 +31,11 @@ mod Std.Result
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   @group(:option)
 
+  ## A computation that either succeeded with a value (`Ok`) or failed with a
+  ## reason (`Error`). `Ok(v)` erases to `{:Ok, v}` and `Error(e)` to
+  ## `{:Error, e}` on the BEAM.
+  type Result(t, e) = Ok(t) | Error(e)
+
   ## Build an `Ok(value)` Result.
   fn ok(value: t) -> Result(t, e) = Ok(value)
 

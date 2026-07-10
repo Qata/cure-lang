@@ -21,12 +21,25 @@ defmodule Cure.Core.Eval do
   @spec eval(Cure.Core.Term.t(), [Cure.Core.Value.t()]) :: Cure.Core.Value.t()
   def eval({:type, level}, _env), do: {:vtype, level}
 
-  def eval({:var, k}, env) do
+  # An index past the end of `env` is a RIGID FREE VARIABLE: Core admits open terms, and the
+  # neutral it becomes is what `Conv.conv?/5` compares when both sides share the environment.
+  # (Caveat worth knowing: `{:nvar, l}` is a de Bruijn LEVEL, and this arm reuses the index as
+  # one. That is only coherent while the value is never read back — `Quote.reify/2` would turn
+  # it into the negative index `depth - k - 1`. Callers that reify must supply
+  # `Context.env/1`, which binds every index in scope.)
+  #
+  # A NEGATIVE index is not a free variable, it is not a well-formed term at all — `term?/1`
+  # rejects `{:var, -1}` — and `Enum.at/2` counts from the end, so it used to return the
+  # OLDEST binding's value. Silently evaluating to the wrong binder is the one answer that
+  # cannot be right.
+  def eval({:var, k}, env) when is_integer(k) and k >= 0 do
     case Enum.at(env, k) do
       nil -> {:vneutral, {:nvar, k}}
       v -> v
     end
   end
+
+  def eval({:var, k}, _env), do: raise("eval: negative de Bruijn index #{inspect(k)}")
 
   def eval({:pi, dom, cod}, env), do: {:vpi, eval(dom, env), {:closure, env, cod}}
   def eval({:lam, dom, body}, env), do: {:vlam, eval(dom, env), {:closure, env, body}}
@@ -47,7 +60,13 @@ defmodule Cure.Core.Eval do
   # `Z` (Lean kernel Nat / Agda BUILTIN NATURAL). It never materializes the tower;
   # `nat_to_ctor/1` peels one layer on demand at each ι-site.
   def eval({:nat_lit, n}, _env), do: {:vnat, n}
+  # Compact `Bounded` literal: a machine integer `k` standing for the k-fold
+  # `Next`-tower over `First` (Lean `Fin n` — a compact `Nat` plus a `< n` witness
+  # the kernel re-checks). It never materializes the tower; `bounded_to_ctor/1`
+  # peels one layer on demand at each ι-site, exactly like `nat_to_ctor/1`.
+  def eval({:bounded_lit, n}, _env), do: {:vbounded, n}
   def eval({:float_type}, _env), do: {:vfloat_type}
+  def eval({:binary_type}, _env), do: {:vbinary_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
 
   # Opaque until the global is certified total (M7 gates δ here).
@@ -66,6 +85,27 @@ defmodule Cure.Core.Eval do
         case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
           {_cname, arity, body} ->
             reduce_branch_body(body, env, args, arity)
+
+          nil ->
+            raise "ι: no branch for constructor #{inspect(cname)} " <>
+                    "(coverage violation / ill-typed case reached eval)"
+        end
+
+      # A compact Bounded scrutinee peels ONE layer to `First`/`Next(pred)` and
+      # reuses the ι-rule above — the exact analogue of the `{:vnat, _}` arm. The
+      # peel is declaration-arity (`[m]` / `[m, pred]`), so the erased index binds
+      # its dead de Bruijn slot exactly as a genuine `First`/`Next` value would.
+      {:vbounded, _} = b ->
+        {:vctor, cname, args} = bounded_to_ctor(b)
+
+        # Same nil-guard as the `:vctor` arm above. Without it a `case` missing the
+        # peeled constructor died with an opaque `MatchError` on `nil` instead of
+        # naming the coverage violation. Both arms must fail the same, legible way:
+        # reaching here at all means an ill-typed term slipped past `check_coverage`.
+        case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+          {_cname, arity, body} ->
+            fields = drop_leading_params(args, arity)
+            eval(body, Enum.reverse(fields) ++ env)
 
           nil ->
             raise "ι: no branch for constructor #{inspect(cname)} " <>
@@ -175,6 +215,28 @@ defmodule Cure.Core.Eval do
   def nat_to_ctor_if({:vnat, _} = nat), do: nat_to_ctor(nat)
   def nat_to_ctor_if(value), do: value
 
+  # -- compact Bounded peeling ------------------------------------------------
+
+  # Peel one layer of a compact `Bounded` literal into its `First`/`Next`
+  # constructor value, leaving the predecessor COMPACT (`{:vbounded, k-1}`). The
+  # analogue of `nat_to_ctor/1` (`First`≙`Z`, `Next`≙`S`), but — unlike Nat —
+  # `Bounded` is INDEXED: each ctor carries an erased implicit index `{m : Nat}`
+  # ahead of its explicit fields (declaration order `[m, pred]`), so the peeled
+  # value is declaration-arity, matching both a genuine surface-written value
+  # (`eval` maps every ctor arg, §`eval({:ctor,…})`) and the branch arity the
+  # elaborator emits (First: 1, Next: 2). The erased index is computationally
+  # irrelevant; we fill it with its true value (`First`: m = 0; `Next` over
+  # `{:vbounded, k}`: m = k, since `Next : Bounded(m) -> Bounded(S(m))`).
+  @doc false
+  def bounded_to_ctor({:vbounded, 0}), do: {:vctor, :First, [{:vnat, 0}]}
+
+  def bounded_to_ctor({:vbounded, k}) when is_integer(k) and k > 0,
+    do: {:vctor, :Next, [{:vnat, k}, {:vbounded, k - 1}]}
+
+  @doc false
+  def bounded_to_ctor_if({:vbounded, _} = b), do: bounded_to_ctor(b)
+  def bounded_to_ctor_if(value), do: value
+
   # -- projection ι -----------------------------------------------------------
 
   # The audited δ fold table. Public (`@doc false`) so `Cure.Core.Normalise`'s
@@ -190,10 +252,24 @@ defmodule Cure.Core.Eval do
   def fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
   def fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
 
+  # Int-only bitwise (BEAM `band`/`bor`/`bxor`/`bsl`/`bsr`/`bnot` BIFs). Shifts
+  # are total on arbitrary-precision ints (negative shift shifts the other way),
+  # so no `:stuck` guard is needed.
+  def fold(:band, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.band(a, b)}}
+  def fold(:bor, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bor(a, b)}}
+  def fold(:bxor, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bxor(a, b)}}
+  def fold(:bsl, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bsl(a, b)}}
+  def fold(:bsr, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bsr(a, b)}}
+
   def fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
   def fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
   def fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
-  def fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
+  # Float division has its own op key `:fdiv` (see `Builtins.@float_binops`): the
+  # BEAM instruction is `/`, not the integer `div` that `:div` folds to. Sharing the
+  # key made `Emit` lower `x / y` on floats to `erlang:div/2` (badarith at runtime)
+  # while THIS fold happily returned the correct quotient — the normaliser and the
+  # emitter disagreeing about the same term. Keep the two keys distinct.
+  def fold(:fdiv, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
 
   # Bool-producing folds now yield the `True`/`False` **constructor values** of the
   # canonical Bool inductive (the True/False ctor values). `:True`/`:False` are
@@ -214,6 +290,8 @@ defmodule Cure.Core.Eval do
 
   def fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
   def fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
+
+  def fold(:bnot, [{:vint, a}]), do: {:ok, {:vint, Bitwise.bnot(a)}}
 
   # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality are
   # Std.Bool `case`-defs, never entries in this table. The catch-all is §G.1

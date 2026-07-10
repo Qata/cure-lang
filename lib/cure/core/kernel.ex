@@ -68,14 +68,36 @@ defmodule Cure.Core.Kernel do
   # interchangeable at the type level too (needs `ctx` to reach the signature).
   def infer(ctx, {:nat_lit, n}) when is_integer(n) and n >= 0,
     do: {:ok, nat_type_value(Context.signature(ctx))}
+
+  # A compact `Bounded` literal `k` inhabits `Bounded(n)` for every bound `n > k`;
+  # pure inference cannot source the intended bound, so it yields the MINIMAL
+  # witness type `Bounded(k+1)` (sound: `k < k+1`). Admitting `k` at a wider
+  # DECLARED bound (e.g. the `Char = Bounded(0x110000)` case) is the checking rule's
+  # job — inference is the rarely-taken fallback. `Bounded` must be the registered
+  # `@builtin(:bounded)` family for the literal to have a type at all.
+  def infer(ctx, {:bounded_lit, k}) when is_integer(k) and k >= 0 do
+    case Inductive.builtin(Context.signature(ctx), :bounded) do
+      nil -> {:error, :bounded_family_unregistered}
+      fid -> {:ok, {:vdata, fid, [{:vnat, k + 1}]}}
+    end
+  end
+
   def infer(_ctx, {:float_type}), do: {:ok, {:vtype, 0}}
   def infer(_ctx, {:float_lit, _f}), do: {:ok, {:vfloat_type}}
+  def infer(_ctx, {:binary_type}), do: {:ok, {:vtype, 0}}
 
   # {:absurd} is an elaborator-only marker sitting in a discharged (unreachable)
   # case branch, which check_case_branches never checks. It has no positive typing
   # rule; a reachable occurrence fails cleanly here rather than crashing the kernel
   # with an unmatched-clause exception (spec §5/§8.1).
   def infer(_ctx, {:absurd}), do: {:error, :absurd_in_reachable_position}
+
+  # A hole is checkable at any type (`check/3` below) but has nothing to infer — its type is
+  # known only from the expected type, as in Agda and Idris. Without this clause `infer/2`
+  # raised an unmatched-clause exception on a node the kernel otherwise accepts, and every
+  # caller that expects `{:error, _}` — `MetaCheck.progresses?/2` and `type_preserved?/2`,
+  # whose `case`/`else` cannot catch a raise — crashed on a legitimate mid-development term.
+  def infer(_ctx, {:hole, name}), do: {:error, {:hole_in_inference_position, name}}
 
 
   def infer(ctx, {:pi, dom, cod}) do
@@ -184,27 +206,15 @@ defmodule Cure.Core.Kernel do
     case infer(ctx, scrut) do
       {:ok, {:vdata, dname, scrut_args}} ->
         family = Inductive.get_family(sig, dname)
-        # {:vdata} carries params ++ indices; the motive and the branch-index
-        # unifier range over indices only, so split the params off up front.
-        pc = Inductive.param_count(sig, dname)
-        {scrut_params, scrut_idx} = Enum.split(scrut_args, pc)
-        motive_value = Eval.eval(motive, Context.env(ctx))
-
-        with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
-             :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx, scrut_params),
-             :ok <-
-               check_case_branches(
-                 ctx,
-                 sig,
-                 dname,
-                 motive_value,
-                 branches,
-                 scrut_idx,
-                 scrut_params
-               ) do
-          # Result type = motive at the scrutinee's actual indices and value (§4.4).
-          scrut_value = Eval.eval(scrut, Context.env(ctx))
-          {:ok, apply_motive(motive_value, scrut_idx ++ [scrut_value])}
+        # An OPAQUE (postulate) family is non-eliminable: refuse the `case`
+        # BEFORE coverage. A zero-constructor family passes coverage vacuously
+        # (empty branch list = ex-falso, §H), so without this guard an opaque
+        # type would be freely ex-falso-eliminable — the marker, not the ctor
+        # count, is what forbids elimination (Agda `postulate`).
+        if Inductive.opaque_family?(family) do
+          {:error, :opaque_not_eliminable}
+        else
+          infer_case_data(ctx, sig, dname, family, scrut, scrut_args, motive, branches)
         end
 
       {:ok, _other} ->
@@ -212,6 +222,31 @@ defmodule Cure.Core.Kernel do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  defp infer_case_data(ctx, sig, dname, family, scrut, scrut_args, motive, branches) do
+    # {:vdata} carries params ++ indices; the motive and the branch-index
+    # unifier range over indices only, so split the params off up front.
+    pc = Inductive.param_count(sig, dname)
+    {scrut_params, scrut_idx} = Enum.split(scrut_args, pc)
+    motive_value = Eval.eval(motive, Context.env(ctx))
+
+    with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
+         :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx, scrut_params),
+         :ok <-
+           check_case_branches(
+             ctx,
+             sig,
+             dname,
+             motive_value,
+             branches,
+             scrut_idx,
+             scrut_params
+           ) do
+      # Result type = motive at the scrutinee's actual indices and value (§4.4).
+      scrut_value = Eval.eval(scrut, Context.env(ctx))
+      {:ok, apply_motive(motive_value, scrut_idx ++ [scrut_value])}
     end
   end
 
@@ -243,8 +278,48 @@ defmodule Cure.Core.Kernel do
   # to seed check_ctor_app, then re-derive the actual result and compare it to
   # `expected` (arguments checking against their own types is NOT enough — the
   # computed indices must still match the expected type's).
-  def check(ctx, {:ctor, cname, args}, {:vdata, _family, _combined} = expected) do
-    with {:ok, _value} <- elaborate_ctor(ctx, cname, args, expected), do: :ok
+  def check(ctx, {:ctor, cname, args} = term, expected) do
+    # Weak-head-normalise the GOAL before dispatching on its head: a constructor
+    # can be checked against any type that δ-unfolds to the family's `{:vdata,…}`
+    # — e.g. a `typealias String = List(Char)` goal, which reaches here as the
+    # bare alias global (a neutral), not a literal `{:vdata,…}`. This mirrors the
+    # `bounded_lit` clause below (and Agda/Lean, which whnf the goal in checking
+    # mode). Sound: `elaborate_ctor` still field-checks and converts the computed
+    # result against the whnf'd goal, which is definitionally the original goal, so
+    # no ill-typed constructor is admitted. A goal that does NOT expose a `{:vdata}`
+    # head falls through to the infer-then-convert path, exactly as before.
+    case Normalise.whnf_value(expected, Context.signature(ctx)) do
+      {:vdata, _family, _combined} = vd ->
+        with {:ok, _value} <- elaborate_ctor(ctx, cname, args, vd), do: :ok
+
+      _ ->
+        check_via_infer(ctx, term, expected)
+    end
+  end
+
+  # Checking a compact `Bounded` literal against a concrete declared bound. δ-whnf
+  # the expected type to expose the `Bounded` family and its bound index; the
+  # literal `k` inhabits `Bounded(n)` iff `0 <= k < n`. The kernel re-derives `n`
+  # itself — it never trusts the elaborator's bound check (this is the TCB gate).
+  # This is where `97 : Char` (= `Bounded(0x110000)`) is admitted, which the
+  # infer-then-convert fallback cannot do (inference only knows `Bounded(k+1)`).
+  # Placed before the generic catch-all so it is reachable (Elixir clause order).
+  def check(ctx, {:bounded_lit, k}, expected) when is_integer(k) and k >= 0 do
+    sig = Context.signature(ctx)
+    bounded_fid = Inductive.builtin(sig, :bounded)
+    depth = Context.length(ctx)
+
+    case Normalise.whnf_value(expected, sig) do
+      {:vdata, ^bounded_fid, [bound_val]} when not is_nil(bounded_fid) ->
+        case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
+          {:ok, n} when k < n -> :ok
+          {:ok, n} -> {:error, {:bounded_lit_out_of_range, k, n}}
+          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth, sig)}}
+        end
+
+      other ->
+        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth, sig)}}
+    end
   end
 
   def check(ctx, term, expected), do: check_via_infer(ctx, term, expected)
@@ -304,6 +379,22 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # Peel a value to a concrete non-negative integer bound, spanning both Nat
+  # representations: the compact `{:vnat, n}` and the `Z`/`S` tower (a bound may be
+  # written either way). A non-concrete (neutral/symbolic) bound returns `:error`
+  # — a literal cannot be checked against an unknown ceiling.
+  defp concrete_nat({:vnat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp concrete_nat({:vctor, :Z, []}), do: {:ok, 0}
+
+  defp concrete_nat({:vctor, :S, [pred]}) do
+    case concrete_nat(pred) do
+      {:ok, n} -> {:ok, n + 1}
+      :error -> :error
+    end
+  end
+
+  defp concrete_nat(_other), do: :error
+
   # The generic checking rule (moduledoc: "falling back to `infer` plus a
   # cumulative conversion test") — shared by the fallthrough clause and the
   # params-on-spine ctor branch above so the coherence logic exists exactly once.
@@ -314,8 +405,15 @@ defmodule Cure.Core.Kernel do
       else
         # Conversion failure diagnostic (§10): report both normal forms so the
         # mismatch is legible (and serializable via C2 for independent checkers).
+        # Legible means the context's signature has to be threaded through: without
+        # it, `reify` collapses an indexed family's params/indices split into a flat
+        # `params` list with `indices => []`, which `Conv` tolerates but a human — or
+        # an independent checker rebuilding the term — cannot.
         depth = Context.length(ctx)
-        {:error, {:conversion_failure, Quote.reify(inferred, depth), Quote.reify(expected, depth)}}
+        sig = Context.signature(ctx)
+
+        {:error,
+         {:conversion_failure, Quote.reify(inferred, depth, sig), Quote.reify(expected, depth, sig)}}
       end
     end
   end
@@ -338,15 +436,23 @@ defmodule Cure.Core.Kernel do
       # TotalityClosure.certify_type_level once builtin-op spines occur in TYPE
       # positions (dependent-index arithmetic). Ordering: BEFORE the generic
       # %{type:, body:} clause, which these defs would also match.
+      # A builtin-op def has no body, but it still has a declared TYPE, and that type is
+      # inside the Final-Core grammar boundary just like a body is. This branch used to check
+      # only that the type is a valid sort, so every `:reject` clause the validator enforces
+      # was silently unenforced along this admission path — the exact gap the validator exists
+      # to close, and one `validator_test.exs` already pins for the generic branch.
       %{builtin_op: op, type: type_term} when not is_nil(op) ->
-        with {:ok, _level} <- infer_sort(Context.empty(env), type_term), do: :ok
+        with {:ok, _level} <- infer_sort(Context.empty(env), type_term),
+             :ok <- run_final_core_validator([type_term]) do
+          :ok
+        end
 
       %{type: type_term, body: body_term} ->
         ctx = Context.empty(env)
 
         with {:ok, _level} <- infer_sort(ctx, type_term),
              :ok <- check(ctx, body_term, Eval.eval(type_term, [])),
-             :ok <- run_final_core_validator(type_term, body_term) do
+             :ok <- run_final_core_validator([type_term, body_term]) do
           :ok
         end
     end
@@ -357,25 +463,31 @@ defmodule Cure.Core.Kernel do
   # as one in the body. Emits warnings via the pipeline and rejects only clauses
   # configured to :reject (none, by Wave-0 default); on a mixed verdict,
   # rejections from either term are combined.
-  defp run_final_core_validator(type_term, body_term) do
+  # Every Core term admitted by `check_def` — a declared type, a body, or both — crosses the
+  # Final-Core grammar boundary. Warnings are emitted; rejections from all terms are
+  # collected so one call reports every violation rather than the first.
+  defp run_final_core_validator(terms) do
     cfg = Cure.Core.Validator.check_def_config()
+    results = Enum.map(terms, &Cure.Core.Validator.validate(&1, cfg))
 
-    case {Cure.Core.Validator.validate(type_term, cfg), Cure.Core.Validator.validate(body_term, cfg)} do
-      {{:ok, w1}, {:ok, w2}} ->
-        Enum.each(w1 ++ w2, fn d ->
+    case Enum.flat_map(results, fn
+           {:error, rejections} -> rejections
+           {:ok, _warnings} -> []
+         end) do
+      [] ->
+        for {:ok, warnings} <- results, d <- warnings do
           Cure.Pipeline.Events.emit(
             :kernel,
             :final_core_violation,
             %{clause: d.clause, message: d.message},
             %{}
           )
-        end)
+        end
 
         :ok
 
-      {{:error, r1}, {:ok, _}} -> {:error, {:final_core_violation, r1}}
-      {{:ok, _}, {:error, r2}} -> {:error, {:final_core_violation, r2}}
-      {{:error, r1}, {:error, r2}} -> {:error, {:final_core_violation, r1 ++ r2}}
+      rejections ->
+        {:error, {:final_core_violation, rejections}}
     end
   end
 
@@ -718,6 +830,7 @@ defmodule Cure.Core.Kernel do
 
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
+  defp infer_type_value_sort(_ctx, {:vbinary_type}), do: {:ok, 0}
 
   defp infer_type_value_sort(ctx, {:vdata, name, _args}) do
     case Inductive.get_family(Context.signature(ctx), name) do
@@ -1008,6 +1121,53 @@ defmodule Cure.Core.Kernel do
   defp unify_one({:ctor, _, _} = r, {:nat_lit, n}, arity, subst),
     do: unify_one(r, nat_lit_ctor(n), arity, subst)
 
+  # Compact Bounded literal ↔ First/Next bridge — the exact mirror of the Nat
+  # bridge above, and of `conv.ex`'s cross-representation arms (conv_struct?,
+  # the `{:vbounded, _}` vs `{:vctor, :First/:Next, _}` clauses). A
+  # `{:bounded_lit, k}` index is a closed canonical `Bounded` value,
+  # definitionally equal to its k-fold `Next`-tower over `First` (Lean `Fin n`),
+  # so it must unify with `First`/`Next` result indices exactly as the tower does.
+  #
+  # The leading `m` argument of both constructors is the ERASED implicit bound
+  # (`builtins.ex`: `First/1`, `Next/2`). `conv` ignores it; so must this, or two
+  # definitionally equal indices would fail to unify on a computationally
+  # irrelevant argument. Keep these clauses in lock-step with conv.ex's.
+  #
+  # Without this bridge `head_key({:bounded_lit, k})` is `:bounded_lit`, which can
+  # never equal `{:ctor, :First}`/`{:ctor, :Next}`, so the generic rigid-head clash
+  # rule below verdicts a literal index `:impossible` against its own tower
+  # expansion. That is a COVERAGE SOUNDNESS HOLE identical to the Nat one this
+  # bridge's sibling closes: a `case` whose scrutinee index is the tower spelling
+  # could omit the scrutinee's own reachable constructor and still pass
+  # `check_coverage`, admitting a partial eliminator as total.
+  #
+  # The peel terminates: `n` strictly decreases, and only fires against a
+  # `:ctor`/`:bounded_lit` counterpart (var counterparts bind via the clauses above).
+  defp unify_one({:bounded_lit, a}, {:bounded_lit, b}, _arity, subst),
+    do: if(a == b, do: {:ok, subst}, else: :impossible)
+
+  defp unify_one({:bounded_lit, 0}, {:ctor, :First, [_m]}, _arity, subst), do: {:ok, subst}
+  defp unify_one({:ctor, :First, [_m]}, {:bounded_lit, 0}, _arity, subst), do: {:ok, subst}
+
+  defp unify_one({:bounded_lit, n}, {:ctor, :Next, [_m, pred]}, arity, subst) when n > 0,
+    do: unify_one({:bounded_lit, n - 1}, pred, arity, subst)
+
+  defp unify_one({:ctor, :Next, [_m, pred]}, {:bounded_lit, n}, arity, subst) when n > 0,
+    do: unify_one(pred, {:bounded_lit, n - 1}, arity, subst)
+
+  # Genuine cross-representation constructor clash: `0` is not a successor, and a
+  # positive `k` is not `First`. Stated explicitly so the `:impossible` verdict is
+  # derived from the VALUES rather than falling through to the generic head-key
+  # clash rule, which would reach the same answer here only by coincidence.
+  defp unify_one({:bounded_lit, 0}, {:ctor, :Next, [_m, _pred]}, _arity, _subst), do: :impossible
+  defp unify_one({:ctor, :Next, [_m, _pred]}, {:bounded_lit, 0}, _arity, _subst), do: :impossible
+
+  defp unify_one({:bounded_lit, n}, {:ctor, :First, [_m]}, _arity, _subst) when n > 0,
+    do: :impossible
+
+  defp unify_one({:ctor, :First, [_m]}, {:bounded_lit, n}, _arity, _subst) when n > 0,
+    do: :impossible
+
   defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
     do: unify_spine(as, bs, arity, subst)
 
@@ -1108,11 +1268,13 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:pi, _, _}), do: true
   defp rigid_index?({:int_type}), do: true
   defp rigid_index?({:float_type}), do: true
+  defp rigid_index?({:binary_type}), do: true
   defp rigid_index?({:int_lit, _}), do: true
   # A compact Nat literal is a closed canonical value (`2` ≡ `S(S(Z))`), so it is
   # a rigid constructor-like head for index unification — same status the `S`/`Z`
   # tower already has via the `{:ctor, _, _}` clause above.
   defp rigid_index?({:nat_lit, _}), do: true
+  defp rigid_index?({:bounded_lit, _}), do: true
   defp rigid_index?({:float_lit, _}), do: true
   defp rigid_index?(_), do: false
 

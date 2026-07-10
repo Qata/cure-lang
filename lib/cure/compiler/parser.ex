@@ -47,7 +47,21 @@ defmodule Cure.Compiler.Parser do
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
   # skipping tokens after a parse error.
-  @definition_keywords [:fn, :local, :mod, :rec, :type, :use, :sup, :app, :proto, :impl, :proof]
+  @definition_keywords [
+    :fn,
+    :local,
+    :mod,
+    :rec,
+    :type,
+    :use,
+    :sup,
+    :app,
+    :proto,
+    :impl,
+    :interface,
+    :implementation,
+    :proof
+  ]
 
   # Decorators that describe the *module*, not the declaration that follows.
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
@@ -195,13 +209,44 @@ defmodule Cure.Compiler.Parser do
           {left_bp, _right_bp} when left_bp < min_bp ->
             {left, state}
 
-          {_left_bp, right_bp} ->
+          {left_bp, right_bp} ->
             state = advance(state)
-            handle_infix_op(state, left, token, right_bp, min_bp)
+            {ast, state} = build_infix_op(state, left, token, right_bp)
+            state = reject_non_assoc_chain(state, token, left_bp)
+            parse_infix(state, ast, min_bp)
 
           :not_infix ->
             {left, state}
         end
+    end
+  end
+
+  # `a == b == c`, `a..b..c`, `a <-| b <-| c`: the spec's operator table and
+  # `Precedence`'s own moduledoc call these non-associative, and `right_bp = left_bp + 1`
+  # only stops the operator from swallowing a peer on its own right-hand side. It does
+  # nothing to stop the loop above from picking the freshly-built node back up as a new
+  # left operand at the original `min_bp` — mechanically the same trick `+` and `*` use to
+  # left-associate. So the table's "non-assoc" entries parsed as plain left-associative
+  # operators, and `a <-| b <-| c` quietly fanned out into two sends.
+  #
+  # Reject the chain outright, as Haskell (`infix 4 ==`), Rust, and Agda/Idris all do. The
+  # error is recorded rather than raised, so the parser keeps going and reports the rest of
+  # the file's problems in the same pass.
+  defp reject_non_assoc_chain(state, token, left_bp) do
+    next = peek(state)
+
+    # Every operator sharing a left BP with a non-associative one is in its class.
+    chained? =
+      Precedence.non_assoc?(token.type) and match?({^left_bp, _}, Precedence.infix_bp(next.type))
+
+    if chained? do
+      error =
+        {:non_associative, Precedence.operator_symbol(token.type), :chained_with,
+         Precedence.operator_symbol(next.type), next.line, next.col}
+
+      add_error(state, error)
+    else
+      state
     end
   end
 
@@ -300,6 +345,9 @@ defmodule Cure.Compiler.Parser do
 
       :not_op ->
         parse_unary(state, :boolean)
+
+      :bnot_op ->
+        parse_unary(state, :bitwise)
 
       # Grouping
       :lparen ->
@@ -520,13 +568,14 @@ defmodule Cure.Compiler.Parser do
 
   # -- Infix Operators -------------------------------------------------------
 
-  defp handle_infix_op(state, left, token, right_bp, min_bp) do
+  # Build the node for one infix operator whose left operand is already parsed. The
+  # caller resumes the Pratt loop, so it can see the token that follows.
+  defp build_infix_op(state, left, token, right_bp) do
     case token.type do
       # Pipe desugaring: a |> f  or  a |> f(b, c)
       :pipe ->
         {right, state} = parse_expr(state, right_bp)
-        ast = desugar_pipe(left, right, token)
-        parse_infix(state, ast, min_bp)
+        {desugar_pipe(left, right, token), state}
 
       # Melquiades operator: `pid <-| message` or `pid ✉ message`.
       # Lowers to `{:send, meta, [target, message]}` and carries the
@@ -536,44 +585,41 @@ defmodule Cure.Compiler.Parser do
         {right, state} = parse_expr(state, right_bp)
         form = melquiades_form(token.value)
         meta = [line: token.line, col: token.col, melquiades_form: form]
-        ast = {:send, meta, [left, right]}
-        parse_infix(state, ast, min_bp)
+        {{:send, meta, [left, right]}, state}
 
       # Dot access: obj.field -> {:attribute_access, ...}
       :dot ->
         field_token = peek(state)
         state = advance(state)
         field_name = to_string(field_token.value)
-        ast = {:attribute_access, [attribute: field_name, line: token.line, col: token.col], [left]}
-        parse_infix(state, ast, min_bp)
+        meta = [attribute: field_name, line: token.line, col: token.col]
+        {{:attribute_access, meta, [left]}, state}
 
       # Range operators
       type when type in [:range, :range_inclusive] ->
         {right, state} = parse_expr(state, right_bp)
         inclusive = type == :range_inclusive
-        ast = {:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        {{:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}, state}
 
       # Assignment
       :assign ->
         {right, state} = parse_expr(state, right_bp)
-        ast = {:assignment, [line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        {{:assignment, [line: token.line, col: token.col], [left, right]}, state}
 
       # Augmented assignment
       type when type in [:plus_assign, :minus_assign, :star_assign, :slash_assign] ->
         {right, state} = parse_expr(state, right_bp)
         op = augmented_op(type)
-        ast = {:augmented_assignment, [operator: op, line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        meta = [operator: op, line: token.line, col: token.col]
+        {{:augmented_assignment, meta, [left, right]}, state}
 
       # Regular binary operator
       _ ->
         {right, state} = parse_expr(state, right_bp)
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
-        ast = {:binary_op, [category: category, operator: op, line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        meta = [category: category, operator: op, line: token.line, col: token.col]
+        {{:binary_op, meta, [left, right]}, state}
     end
   end
 
@@ -1315,6 +1361,11 @@ defmodule Cure.Compiler.Parser do
       :type ->
         parse_type_def(state)
 
+      # `opaque type Name(params)` — a constructor-less, non-eliminable carrier
+      # type. Consume `opaque`, then parse the type head with the opaque flag.
+      :opaque ->
+        parse_type_def(advance(state), opaque: true)
+
       :typealias ->
         parse_typealias(state)
 
@@ -1326,6 +1377,12 @@ defmodule Cure.Compiler.Parser do
 
       :impl ->
         parse_impl(state)
+
+      :interface ->
+        parse_interface(state)
+
+      :implementation ->
+        parse_implementation(state)
 
       :fsm ->
         parse_fsm(state)
@@ -2984,7 +3041,8 @@ defmodule Cure.Compiler.Parser do
     {{:type_annotation, meta, [rhs]}, state}
   end
 
-  defp parse_type_def(state) do
+  defp parse_type_def(state, opts \\ []) do
+    opaque? = Keyword.get(opts, :opaque, false)
     token = peek(state)
     state = advance(state)
 
@@ -3007,11 +3065,20 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
-    case peek(state) do
-      %Token{type: :keyword, value: :indices} ->
+    cond do
+      # `opaque type Name(params)` — no `= …` body, no indices, no ctors. The
+      # head params become the family's uniform parameters; the empty variant
+      # list plus the `:opaque` container tag drive the non-eliminable marker.
+      opaque? ->
+        type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
+        meta = [container_type: :opaque, name: name, line: token.line, col: token.col]
+        meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+        {{:container, meta, []}, state}
+
+      match?(%Token{type: :keyword, value: :indices}, peek(state)) ->
         parse_indexed_family(state, name, head_params, token)
 
-      _ ->
+      true ->
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
         parse_type_def_adt(state, name, type_params, token)
     end
@@ -3136,6 +3203,10 @@ defmodule Cure.Compiler.Parser do
           end
       end
 
+    # An optional `deriving Iface{, Iface}` suffix follows the last variant on
+    # the same line, so it must be consumed BEFORE the block-closing dedent.
+    {ast, state} = maybe_attach_deriving(ast, state)
+
     # Close the optional wrapping block by consuming the matching `:dedent`.
     # Surrounding newlines are skipped for us by the caller's own
     # `skip_newlines` but we also tolerate any trailing newline inside the
@@ -3153,6 +3224,37 @@ defmodule Cure.Compiler.Parser do
 
   defp layout_block_count(opened_block, pre_assign_block) do
     Enum.count([opened_block, pre_assign_block], & &1)
+  end
+
+  # `deriving` attaches a list of interface names to a constructor-bearing type
+  # (`:container` with `:enum` container_type). Type aliases can't derive, so
+  # non-container asts pass through untouched.
+  defp maybe_attach_deriving({:container, meta, body}, state) do
+    case peek(state) do
+      %Token{type: :keyword, value: :deriving} ->
+        state = advance(state)
+        {names, state} = parse_deriving_names(state, [])
+        {{:container, Keyword.put(meta, :deriving, names), body}, state}
+
+      _ ->
+        {{:container, meta, body}, state}
+    end
+  end
+
+  defp maybe_attach_deriving(ast, state), do: {ast, state}
+
+  defp parse_deriving_names(state, acc) do
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    case peek(state) do
+      %Token{type: :comma} ->
+        parse_deriving_names(advance(state), [name | acc])
+
+      _ ->
+        {Enum.reverse([name | acc]), state}
+    end
   end
 
   defp parse_gadt_ctors(state, acc) do
@@ -3449,8 +3551,7 @@ defmodule Cure.Compiler.Parser do
     {proto_name, state} = parse_dotted_name(state)
 
     # Expect `for`
-    state = expect(state, :keyword)
-    # ^ consumes the `for` keyword token
+    state = expect_keyword(state, :for)
 
     # Type being implemented
     {for_type, state} = parse_type_expr(state)
@@ -3488,6 +3589,118 @@ defmodule Cure.Compiler.Parser do
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
     ast = {:container, meta, body}
     {ast, state}
+  end
+
+  # -- Interface  interface Name(a) ------------------------------------------
+  #
+  # Compile-time typeclass declaration (the successor to `proto`). The head
+  # params are the type/higher-kinded variables the interface is indexed by
+  # (`interface Functor(f)`). The body is a definition block of method
+  # signatures; any method that carries a `= body` is a DEFAULT, captured
+  # separately in `meta[:defaults]` (name → body expr) so the elaborator can
+  # fill it into implementations that omit the method. The full body list is
+  # returned as the node's methods (each a `{:function_def, meta, exprs}`,
+  # `exprs == []` for a bare signature).
+  defp parse_interface(state) do
+    token = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    {params, state} =
+      case peek(state) do
+        %Token{type: :lparen} ->
+          state = advance(state)
+          {tp, state} = parse_name_list(state, :rparen)
+          state = expect(state, :rparen)
+          {tp, state}
+
+        _ ->
+          {[], state}
+      end
+
+    state = skip_newlines(state)
+    {body, state} = parse_definition_block(state)
+
+    defaults =
+      body
+      |> Enum.flat_map(fn
+        {:function_def, m, [expr | _]} -> [{Keyword.get(m, :name), expr}]
+        _ -> []
+      end)
+      |> Map.new()
+
+    meta = [
+      name: name,
+      params: params,
+      defaults: defaults,
+      line: token.line,
+      col: token.col
+    ]
+
+    {{:interface, meta, body}, state}
+  end
+
+  # -- Implementation  implementation Iface for Type [as Name] ----------------
+  #
+  # An instance of an interface for a concrete head type. `as Name` marks a
+  # NAMED implementation (selectable explicitly, exempt from global coherence);
+  # its absence is an anonymous instance keyed on `(interface, head ctor)`.
+  defp parse_implementation(state) do
+    token = peek(state)
+    state = advance(state)
+
+    {iface_name, state} = parse_dotted_name(state)
+
+    # Consume the `for` keyword.
+    state = expect_keyword(state, :for)
+
+    {for_type, state} = parse_type_expr(state)
+
+    {as_name, state} =
+      case peek(state) do
+        %Token{type: :keyword, value: :as} ->
+          s = advance(state)
+          as_token = peek(s)
+          {to_string(as_token.value), advance(s)}
+
+        _ ->
+          {nil, state}
+      end
+
+    {constraints, state} =
+      case peek(state) do
+        %Token{type: :keyword, value: :where} ->
+          s = advance(state)
+          parse_constraint_list(s)
+
+        _ ->
+          {[], state}
+      end
+
+    state = skip_newlines(state)
+    {body, state} = parse_definition_block(state)
+
+    for_name =
+      case for_type do
+        {:variable, _, n} -> n
+        {:function_call, m, _} -> Keyword.get(m, :name, "unknown")
+        _ -> "unknown"
+      end
+
+    meta = [
+      interface: iface_name,
+      for: for_name,
+      for_type: for_type,
+      as: as_name,
+      line: token.line,
+      col: token.col
+    ]
+
+    meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
+    {{:implementation, meta, body}, state}
   end
 
   # -- Import  use Path.{items} [as Alias] -----------------------------------
@@ -4117,8 +4330,7 @@ defmodule Cure.Compiler.Parser do
     {module_path, state} = parse_dotted_name(state)
 
     # Expect `as child_id`.
-    state = expect(state, :keyword)
-    # ^ consumes the `as` keyword
+    state = expect_keyword(state, :as)
     id_token = peek(state)
     id_name = to_string(id_token.value)
     state = advance(state)
@@ -4724,11 +4936,21 @@ defmodule Cure.Compiler.Parser do
 
     state = skip_newlines(state)
 
-    # Module-level decorators (e.g. `@group(:core)`) describe the module, not
-    # the next declaration. They always stand alone, whatever follows.
+    # Module-level decorators (e.g. `@group(:core)`) describe the MODULE. The
+    # canonical form is `@group(:g)` directly above `mod`, where it attaches to
+    # the module container (spec 2026-07-10-group-decorator-placement). Any
+    # other position still parses as a standalone node here (Task 4 will make
+    # that a hard error, once the stdlib is migrated).
     if dec_name in @module_level_decorators do
-      ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
-      {ast, state}
+      case peek(state) do
+        %Token{type: :keyword, value: :mod} ->
+          {mod_ast, state} = parse_module(state)
+          {attach_decorator(mod_ast, dec_name, args), state}
+
+        _ ->
+          ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+          {ast, state}
+      end
     else
       parse_at_attach(state, token, dec_name, args)
     end
@@ -4753,10 +4975,10 @@ defmodule Cure.Compiler.Parser do
 
       # `@builtin(:key) type Name = ...` attaches the decorator to the type
       # container (an enum ADT → {:container, container_type: :enum, ...}, which
-      # attach_decorator/3's generic clause threads into :decorator meta). A
-      # @builtin on an indexed/GADT ({:indexed_type}) or alias ({:type_annotation})
-      # form is silently dropped — those have no attach_decorator clause today;
-      # out of scope here (Bool/Nat are both simple enums).
+      # attach_decorator/3's generic clause threads into :decorator meta).
+      # `@builtin(:key) type Name indices (...)` attaches to the {:indexed_type}
+      # meta (Bounded's GADT family). A @builtin on an alias ({:type_annotation})
+      # form is still silently dropped — no attach_decorator clause today.
       %Token{type: :keyword, value: :type} ->
         {type_ast, state} = parse_type_def(state)
         type_ast = attach_decorator(type_ast, dec_name, args)
@@ -4792,6 +5014,13 @@ defmodule Cure.Compiler.Parser do
           _ ->
             {:container, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), body}
         end
+
+      # `@builtin(:key) type Name indices (...)` — a GADT / indexed family.
+      # Thread the decorator into the indexed_type meta so
+      # program.ex's maybe_register_builtin can see it (mirrors the
+      # {:container} enum-ADT clause above).
+      {:indexed_type, meta, ctors} ->
+        {:indexed_type, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), ctors}
 
       {:function_def, meta, body} ->
         decoration =

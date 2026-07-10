@@ -237,4 +237,78 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       assert Erase.erase(env, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}) == {:ctor, :reflexive, []}
     end
   end
+
+  describe "Erase and Relevance agree on what a constructor application is" do
+    # The elaborated ctor name may be bare or module-qualified (`:ssuc` vs `:"P.ssuc"`).
+    defp ctor_atom(env, base) do
+      Enum.find([base, String.to_atom("P." <> to_string(base))], base, fn c ->
+        is_list(Cure.Core.Inductive.ctor_quantities(env, c))
+      end)
+    end
+
+    defp snat_env do
+      {:ok, env} = Program.elaborate(mod(""))
+      env
+    end
+
+    # `ssuc`'s quantities are `[:erased, :present]` — the auto-generalized index `n` at
+    # position 0, the explicit `SNat(n)` field at position 1.
+
+    test "a constructor heading a curried spine erases like the same constructor as a flat node" do
+      # `Erase.erase/2`'s `{:app, _, _}` clause special-cased only a `{:global, _}` head; every
+      # other head fell through to a fallback that kept ALL arguments with no quantity filter.
+      # So the erased index survived into the runtime term, and two Core encodings of one value
+      # erased to two different runtime shapes — erasure was not invariant under the eta-shape
+      # difference that Idris's LinearCheck and Agda's `@0` are invariant under.
+      env = snat_env()
+      ssuc = ctor_atom(env, :ssuc)
+
+      erased_index = {:nat_lit, 0}
+      present_field = {:ctor, ctor_atom(env, :szero), []}
+
+      flat = Erase.erase(env, {:ctor, ssuc, [erased_index, present_field]})
+      spine = Erase.erase(env, {:app, {:app, {:ctor, ssuc, []}, erased_index}, present_field})
+
+      assert flat == {:ctor, ssuc, [present_field]}
+      assert spine == flat
+    end
+
+    test "erasing an already-erased curried spine is idempotent" do
+      env = snat_env()
+      ssuc = ctor_atom(env, :ssuc)
+      present_field = {:ctor, ctor_atom(env, :szero), []}
+
+      once = Erase.erase(env, {:app, {:app, {:ctor, ssuc, []}, {:nat_lit, 0}}, present_field})
+      assert Erase.erase(env, once) == once
+    end
+
+    test "Relevance does not exempt a shrunk constructor's surviving argument" do
+      # `Relevance.walk`'s `:ctor` clause zipped `args` against the ctor's FULL quantity vector,
+      # and `callee_quantities/3` reached the same misalignment through `pad/2`'s
+      # `Enum.take(qs, n)`. `Enum.zip/2` truncates silently. By `Erase.erase/2`'s own documented
+      # convention a shrunk arg list means the term is ALREADY erased, so its survivor sits in
+      # the original TRAILING slot — but the raw zip labelled it with `quantities[0] = :erased`
+      # and skipped it. That is the exact false negative Erase's own comment warns about, on the
+      # side that is supposed to be Erase's dual.
+      env = snat_env()
+      ssuc = ctor_atom(env, :ssuc)
+
+      # One argument where the real arity is two, and that argument is the erased binder.
+      body = {:ctor, ssuc, [{:var, 0}]}
+
+      assert {:error, {:erased_used_relevantly, _}} =
+               Cure.Elab.Relevance.check(env, :probe, [:erased], body)
+    end
+
+    test "a saturated constructor still exempts its genuinely erased argument" do
+      # Guard against a dual that simply calls everything relevant.
+      env = snat_env()
+      ssuc = ctor_atom(env, :ssuc)
+      present_field = {:ctor, ctor_atom(env, :szero), []}
+
+      body = {:ctor, ssuc, [{:var, 0}, present_field]}
+
+      assert :ok = Cure.Elab.Relevance.check(env, :probe, [:erased], body)
+    end
+  end
 end

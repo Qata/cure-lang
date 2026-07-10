@@ -3,15 +3,17 @@ defmodule Antigen.Generators.DecodeProbe do
   Known-label generator for the `serialize/decode` robustness vertical
   (`Antigen.Assays.Serialization`, `:decode_probe` clause): raw S-expression
   strings fed straight to `Cure.Core.Serialize.decode/1`, which must be TOTAL —
-  a well-formed leaf/string decodes to `{:ok, _}`; malformed input returns
-  `{:error, _}` and never crashes or loops.
+  a well-formed term decodes to `{:ok, _}`; malformed input returns `{:error, _}`
+  and never crashes or loops.
 
   This reaches `Serialize`'s decode EDGE/ERROR paths that the term-roundtrip
-  vertical cannot: bare-leaf `build` (int/float/atom/str, top level), the string
-  tokenizer (`take_string` + `tokenize`'s `?"` clause), and the `parse` / `build`
-  error branches (`:unexpected_eof` / `:unexpected_rparen` / `:unterminated_list`
-  / `:malformed`). The challenge carries a raw string (no Core term), so
-  `Coverage.terms_of/1` returns `[]` and the runner's well-formedness gate keeps it.
+  vertical cannot: the leaf `build_node` clauses, the string tokenizer
+  (`take_string` + `tokenize`'s `?"` clause), the `parse` / `build` error branches
+  (`:unexpected_eof` / `:unexpected_rparen` / `:unterminated_list` / `:malformed`),
+  and the `:ill_formed_term` gate that rejects a syntactically-valid s-expression
+  whose *shape* violates a `Cure.Core.Term.term?/1` invariant. The challenge carries
+  a raw string (no Core term), so `Coverage.terms_of/1` returns `[]` and the runner's
+  well-formedness gate keeps it.
   """
   alias Antigen.{Gen, Challenge}
 
@@ -25,19 +27,29 @@ defmodule Antigen.Generators.DecodeProbe do
     for cell <- [:valid_sexp, :invalid_sexp], do: {"serialize/decode", cell}
   end
 
-  # Decode to {:ok, _}: bare int/float/atom leaves + quoted strings (incl. an
-  # escaped quote, for take_string's escape clause) + the two structured leaves
-  # `hole`/`absurd` (tuple terms → the assay re-encodes them, reaching enc's
-  # hole/absurd clauses that the well_formed? gate keeps out of the roundtrip gen).
-  @valid ["5", "-3", "0", "1.5", "-2.0", "foo", "Nat", "\"hi\"", "\"a\\\"b\"",
-          "(hole \"h\")", "(absurd)"]
+  # Decode to {:ok, _}: every leaf node, wrapped as `enc/1` always emits it. Quoted strings
+  # (with an escaped quote and an escaped backslash) reach `take_string`'s escape clauses; the
+  # structured leaves `hole`/`absurd` are tuple terms, so the assay re-encodes them and reaches
+  # `enc`'s hole/absurd clauses that the well_formed? gate keeps out of the roundtrip gen.
+  @valid ["(int 5)", "(int -3)", "(int 0)", "(float 1.5)", "(float -2.0)", "(type 0)",
+          "(var 0)", "(nat 0)", "(bounded 0)", "(global foo)", "(global Nat)", "(int-type)",
+          "(hole \"h\")", "(hole \"a\\\"b\")", "(hole \"a\\\\b\")", "(absurd)"]
 
-  # Decode to {:error, _}: unbalanced / non-atom-headed / truncated S-expressions,
-  # trailing tokens, an unterminated string, an unknown node head, and case/ctor
-  # bodies whose sub-terms fail to build (build_all / build_branches error paths).
+  # Decode to {:error, _}: unbalanced / non-atom-headed / truncated S-expressions, trailing
+  # tokens, an unterminated string, an unknown node head, and case/ctor bodies whose sub-terms
+  # fail to build (build_all / build_branches error paths).
+  #
+  # Then the shape violations: a bare token standing where a full term belongs (`enc` never
+  # emits one), and every literal whose sign `Term.term?/1` constrains but `build_node` reads
+  # as a plain integer — a universe level outside `0..Universe.ceiling()`, a negative de Bruijn
+  # index, a negative compact `nat`/`bounded` literal, a negative case-branch arity. Each of
+  # these once rebuilt a term the kernel's own grammar rejects.
   @invalid ["", ")", "(", "(foo", "(5 6)", "(int", "( )", "((", "))",
             "5 6", "\"abc", "(zzz)", "(ctor Foo (zzz))",
-            "(case (var 0) (var 0) foo)", "(case (var 0) (var 0) (branch Z 0 (zzz)))"]
+            "(case (var 0) (var 0) foo)", "(case (var 0) (var 0) (branch Z 0 (zzz)))",
+            "5", "foo", "\"hi\"", "(ctor Z 5)", "(app foo (int 5))",
+            "(type -1)", "(type 999)", "(var -1)", "(nat -5)", "(bounded -5)",
+            "(case (var 0) (type 0) (branch Z -3 (var 0)))"]
 
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do

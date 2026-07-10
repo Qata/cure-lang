@@ -95,5 +95,25 @@ defmodule Cure.Elab.TotalityClosure do
   defp collect({:case, s, m, brs}),
     do: collect(s) ++ collect(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> collect(b) end)
 
+  # Fail closed, like `Validator.children/1` and `Certificate.walk_node/4`: descend into
+  # every element of an unrecognized node that is itself a term-tuple or a list of them.
+  # The catch-all used to answer `[]` — "no globals here" — for any shape this list does not
+  # name, so a global reachable only through such a node never entered the closure and was
+  # never submitted for certification. That is a totality hole, not a missed optimisation.
+  # Genuine leaves (`{:var,_}`, `{:type,_}`, `{:int_lit,_}`) carry only atoms and integers
+  # and yield nothing.
+  defp collect(term) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.flat_map(fn
+      child when is_tuple(child) -> collect(child)
+      children when is_list(children) -> Enum.flat_map(children, &collect_child/1)
+      _leaf -> []
+    end)
+  end
+
   defp collect(_), do: []
+
+  defp collect_child(child) when is_tuple(child), do: collect(child)
+  defp collect_child(_other), do: []
 end

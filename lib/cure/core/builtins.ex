@@ -16,7 +16,12 @@ defmodule Cure.Core.Builtins do
     nat: [{:Z, 0}, {:S, 1}],
     eq: [{:reflexive, 1}],
     sigma: [{:mk_pair, 2}],
-    list: [{:Nil, 0}, {:Cons, 2}]
+    list: [{:Nil, 0}, {:Cons, 2}],
+    # First/Next each carry an erased implicit index binder `{m : Nat}` (like
+    # Equivalent's erased witness `w`), so their STORED arities are 1 and 2 —
+    # First: {m}; Next: {m}, Bounded(m). The erased `m` drops at emit, leaving
+    # the runtime shape First->0 / Next(pred)->pred+1 (Nat's Z/S erasure).
+    bounded: [{:First, 1}, {:Next, 2}]
   }
 
   # Builtin arithmetic/comparison op globals (K2 wave, spec 2026-07-09). Each is
@@ -39,14 +44,26 @@ defmodule Cure.Core.Builtins do
     {:int_gt, :gt},
     {:int_ge, :ge},
     {:int_eq, :eq},
-    {:int_ne, :ne}
+    {:int_ne, :ne},
+    # Int-only bitwise (no float twin). Codomain is Int (not in @cmp_ops).
+    {:int_band, :band},
+    {:int_bor, :bor},
+    {:int_bxor, :bxor},
+    {:int_bsl, :bsl},
+    {:int_bsr, :bsr}
   ]
 
+  # NOTE `float_div` carries its OWN op key `:fdiv`, not `:div`. The op key is what
+  # `Eval.fold/2` and `Emit.erl_binop/1` dispatch on, and Erlang's `div` is INTEGER
+  # division (`7.0 div 2.0` raises badarith) while `/` is float division. `add`/`sub`/
+  # `mul` and the comparisons can safely share a key with their int twins because the
+  # corresponding BEAM operators (`+ - * < =< > >= == /=`) are int/float polymorphic;
+  # division is the sole operator where they are NOT the same instruction.
   @float_binops [
     {:float_add, :add},
     {:float_sub, :sub},
     {:float_mul, :mul},
-    {:float_div, :div},
+    {:float_div, :fdiv},
     {:float_lt, :lt},
     {:float_le, :le},
     {:float_gt, :gt},
@@ -55,7 +72,7 @@ defmodule Cure.Core.Builtins do
     {:float_ne, :ne}
   ]
 
-  @int_unops [{:int_neg, :neg}]
+  @int_unops [{:int_neg, :neg}, {:int_bnot, :bnot}]
   @float_unops [{:float_neg, :neg}]
 
   # Amendment A1 (spec §1-A): polymorphic STRUCTURAL equality —
@@ -113,15 +130,16 @@ defmodule Cure.Core.Builtins do
   end
 
   @doc """
-  Seed the 25 builtin-op globals (11 int binary + 10 float binary +
-  int_neg/float_neg + the A1 polymorphic struct_eq/struct_ne) as body-less defs
-  carrying a `builtin_op` marker. Public so the Antigen generator envs (SigMenu
-  v1, Generators.Totality) can reuse it. Run AFTER the inductive seeds so the
-  Bool codomain resolves through the registry.
+  Seed the 31 builtin-op globals (16 int binary [11 arith/cmp + 5 bitwise] +
+  10 float binary + int_neg/int_bnot/float_neg + the A1 polymorphic
+  struct_eq/struct_ne) as body-less defs carrying a `builtin_op` marker. Public
+  so the Antigen generator envs (SigMenu v1, Generators.Totality) can reuse it.
+  Run AFTER the inductive seeds so the Bool codomain resolves through the
+  registry.
   """
   @spec seed_ops(Env.t()) :: Env.t()
   def seed_ops(%Env{} = env) do
-    bool_ty = {:data, Inductive.builtin(env, :bool), [], []}
+    bool_ty = {:data, bool_family_id(env), [], []}
 
     env
     |> seed_binops(@int_binops, {:int_type}, bool_ty)
@@ -131,14 +149,36 @@ defmodule Cure.Core.Builtins do
     |> seed_struct_ops(bool_ty)
   end
 
+  # The family id to bake into every comparison / structural-equality codomain.
+  #
+  # `seed_ops/1` snapshots this as a plain Core term, not a live registry lookup, so it has to
+  # be right at the moment it runs — and `seed/2` runs it unconditionally, as its last step.
+  # Reading it only out of `Inductive.builtin(env, :bool)` got `nil` in exactly the scenario
+  # `seed_ops`'s own doc describes: a module that declares its own `Bool` has `:Bool` in
+  # `seed/2`'s `exclude` set, so `maybe_seed(:bool, …)` never registered anything, and the
+  # module's `@builtin(:bool)` declaration only registers the real family LATER, in
+  # `elaborate_declarations`. All 12 comparison ops and both struct ops were left with
+  # `{:data, nil, [], []}` as their codomain — a type `Kernel.infer/2` rejects with
+  # `{:error, {:unknown_family, nil}}`, which propagates to `check_def/2`'s builtin-op clause
+  # whose own comment promises those ops are "Total by fiat".
+  #
+  # `maybe_seed/5` excludes precisely on `family.name`, so the family the module goes on to
+  # declare carries the same name the seed would have used. The canonical name is therefore the
+  # correct snapshot under both orders, and the op signatures no longer vary with seeding order.
+  defp bool_family_id(env), do: Inductive.builtin(env, :bool) || bool_family().name
+
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
+  # The type argument is computationally irrelevant (BEAM `==` is polymorphic and
+  # emit drops it), so it is ERASED: a caller may pass its own erased type
+  # parameter there without a relevance violation (#26). Erasure drops the type
+  # argument, so the emitted spine is the two value operands.
   defp seed_struct_ops(env, bool_ty) do
     ty = {:pi, {:type, 0}, {:pi, {:var, 0}, {:pi, {:var, 1}, bool_ty}}}
 
     Enum.reduce(@struct_ops, env, fn {name, op_key}, acc ->
       acc
-      |> Env.add_def(name, ty, nil)
+      |> Env.add_def(name, ty, nil, [:erased, :present, :present])
       |> Env.register_builtin_op(name, op_key)
     end)
   end

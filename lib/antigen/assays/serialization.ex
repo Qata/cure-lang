@@ -20,12 +20,10 @@ defmodule Antigen.Assays.Serialization do
     end
   end
 
-  # Decode robustness: `decode` must be total — malformed input errors cleanly
-  # (never crashes/loops); well-formed input decodes, and a decoded *term* (a
-  # tagged tuple, e.g. {:hole, _} / {:absurd}) must re-encode and roundtrip — this
-  # exercises enc's hole/absurd clauses, which the well_formed? gate keeps out of
-  # the term-roundtrip vertical. Bare-leaf decodes (raw int/float/string scalars)
-  # are decode-only; enc has no clause for a bare scalar.
+  # Decode robustness: `decode` must be total — malformed input errors cleanly (never
+  # crashes/loops); well-formed input decodes to a Core TERM (never a bare scalar), and that
+  # term must re-encode and roundtrip. This exercises enc's hole/absurd clauses, which the
+  # well_formed? gate keeps out of the term-roundtrip vertical.
   def run(%Challenge{kind: :decode_probe, label: :invalid_sexp, payload: %{input: s}}) do
     case Serialize.decode(s) do
       {:error, _} -> :ok
@@ -40,9 +38,6 @@ defmodule Antigen.Assays.Serialization do
           {:ok, ^t} -> :ok
           got -> {:violation, {:reencode_mismatch, s, t, got}}
         end
-
-      {:ok, _scalar} ->
-        :ok
 
       got ->
         {:violation, {:decode_probe, :valid_sexp, s, got}}

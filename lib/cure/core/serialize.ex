@@ -28,8 +28,10 @@ defmodule Cure.Core.Serialize do
   defp enc({:absurd}), do: "(absurd)"
   defp enc({:int_type}), do: "(int-type)"
   defp enc({:float_type}), do: "(float-type)"
+  defp enc({:binary_type}), do: "(binary-type)"
   defp enc({:int_lit, n}), do: ["(int ", Integer.to_string(n), ")"]
   defp enc({:nat_lit, n}), do: ["(nat ", Integer.to_string(n), ")"]
+  defp enc({:bounded_lit, n}), do: ["(bounded ", Integer.to_string(n), ")"]
   defp enc({:float_lit, f}), do: ["(float ", Float.to_string(f), ")"]
   defp enc({:ctor, name, args}), do: ["(ctor ", sym(name), args_iodata(args), ")"]
 
@@ -52,22 +54,60 @@ defmodule Cure.Core.Serialize do
     end)
   end
 
-  defp sym(atom), do: Atom.to_string(atom)
-  defp str(s), do: [?", String.replace(s, "\"", "\\\""), ?"]
+  # An Elixir atom is an arbitrary byte sequence, not an identifier: `:"has space"` is a
+  # perfectly ordinary global name. Emitting one as a bareword produces something the
+  # tokenizer splits into several tokens, so `decode(encode(t))` would not return `t`. A name
+  # the tokenizer cannot read back as a single symbol is quoted instead, and the symbol
+  # positions of `decode/1` accept a quoted string wherever they accept a bareword.
+  defp sym(atom) do
+    s = Atom.to_string(atom)
+    if bareword?(s), do: s, else: str(s)
+  end
+
+  defp bareword?(""), do: false
+
+  defp bareword?(s) do
+    not String.contains?(s, [" ", "\t", "\n", "\r", "(", ")", "\"", "\\"]) and
+      not number_like?(s)
+  end
+
+  # `classify/1` turns "5" or "1.0" into an `{:int, _}`/`{:float, _}` token, never a symbol.
+  defp number_like?(s),
+    do: match?({_, ""}, Integer.parse(s)) or match?({_, ""}, Float.parse(s))
+
+  # Backslash first, or escaping the quote would re-escape its own escape character.
+  defp str(s) do
+    escaped = s |> String.replace("\\", "\\\\") |> String.replace("\"", "\\\"")
+    [?", escaped, ?"]
+  end
 
   # -- decoding ---------------------------------------------------------------
 
   @doc "Decode a canonical S-expression string back into a Core term."
   @spec decode(binary()) :: {:ok, Cure.Core.Term.t()} | {:error, term()}
+  # The bytes are untrusted: this is the entry point an independent checker feeds an on-disk
+  # artifact into. Rebuilding a *tuple* is not enough — every shape invariant `Term.term?/1`
+  # states must hold, or the kernel is handed a term its own grammar rejects. `{:type, -1}`
+  # would type-check as `Type(-1) : Type(0)`; `{:var, -1}` would resolve, via `Enum.at/2`'s
+  # count-from-the-end semantics, to a binding it does not name; a negative `nat`/`bounded`
+  # literal or a negative branch arity would crash `infer/2` with `FunctionClauseError`
+  # against clauses guarded `n >= 0` with no fallback. Checking the finished term against
+  # `Term.term?/1` — one linear pass — closes all of those at once and cannot drift from the
+  # grammar it is validating against.
   def decode(string) when is_binary(string) do
     with {:ok, tokens} <- tokenize(string, []),
          {:ok, sexp, []} <- parse(tokens),
-         {:ok, term} <- build(sexp) do
+         {:ok, term} <- build(sexp),
+         :ok <- well_formed(term) do
       {:ok, term}
     else
       {:ok, _sexp, _rest} -> {:error, :trailing_tokens}
       {:error, _} = err -> err
     end
+  end
+
+  defp well_formed(term) do
+    if Cure.Core.Term.term?(term), do: :ok, else: {:error, {:ill_formed_term, term}}
   end
 
   # tokenizer → [:lparen | :rparen | {:atom, s} | {:int, n} | {:float, f} | {:str, s}]
@@ -88,16 +128,22 @@ defmodule Cure.Core.Serialize do
     tokenize(rest, [classify(word) | acc])
   end
 
+  defp take_string(<<?\\, ?\\, rest::binary>>, acc), do: take_string(rest, [?\\ | acc])
   defp take_string(<<?\\, ?", rest::binary>>, acc), do: take_string(rest, [?" | acc])
-  defp take_string(<<?", rest::binary>>, acc), do: {:ok, acc |> Enum.reverse() |> to_string(), rest}
+  defp take_string(<<?", rest::binary>>, acc), do: {:ok, finish(acc), rest}
   defp take_string(<<>>, _acc), do: :error
   defp take_string(<<c, rest::binary>>, acc), do: take_string(rest, [c | acc])
 
   defp take_atom(<<c, _::binary>> = bin, acc) when c in [?\s, ?\t, ?\n, ?\r, ?(, ?)],
-    do: {acc |> Enum.reverse() |> to_string(), bin}
+    do: {finish(acc), bin}
 
-  defp take_atom(<<>>, acc), do: {acc |> Enum.reverse() |> to_string(), <<>>}
+  defp take_atom(<<>>, acc), do: {finish(acc), <<>>}
   defp take_atom(<<c, rest::binary>>, acc), do: take_atom(rest, [c | acc])
+
+  # `acc` accumulates raw BYTES, so it must be reassembled as bytes. `to_string/1` on a list of
+  # integers reads them as codepoints and would re-encode each byte of a multi-byte character
+  # separately, mangling any non-ASCII name on the way back in.
+  defp finish(acc), do: acc |> Enum.reverse() |> :erlang.list_to_binary()
 
   defp classify(word) do
     case Integer.parse(word) do
@@ -122,24 +168,28 @@ defmodule Cure.Core.Serialize do
     with {:ok, item, rest} <- parse(tokens), do: parse_list(rest, [item | acc])
   end
 
-  # build: s-expr → Core term
-  defp build({:int, n}), do: {:ok, n}
-  defp build({:float, f}), do: {:ok, f}
-  defp build({:atom, s}), do: {:ok, s}
-  defp build({:str, s}), do: {:ok, s}
-
+  # build: s-expr → Core term.
+  #
+  # Every Core term is `(tag …)`. A bare token — `5`, `foo` — is never one, and `enc/1` never
+  # emits one in a child position: literals are always wrapped, as `(int 5)`. `build_node`'s
+  # own clauses match the raw tokens they need directly, so nothing here needs a leaf
+  # pass-through; having one only let a raw Elixir scalar sit where a subterm belongs.
   defp build({:sexp, [{:atom, head} | args]}), do: build_node(head, args)
   defp build(_), do: {:error, :malformed}
 
   defp build_node("type", [{:int, n}]), do: {:ok, {:type, n}}
   defp build_node("var", [{:int, k}]), do: {:ok, {:var, k}}
-  defp build_node("global", [{:atom, n}]) do
+
+  defp build_node("global", [n]) do
     with {:ok, a} <- sym_atom(n), do: {:ok, {:global, a}}
   end
+
   defp build_node("int-type", []), do: {:ok, {:int_type}}
   defp build_node("float-type", []), do: {:ok, {:float_type}}
+  defp build_node("binary-type", []), do: {:ok, {:binary_type}}
   defp build_node("int", [{:int, n}]), do: {:ok, {:int_lit, n}}
   defp build_node("nat", [{:int, n}]), do: {:ok, {:nat_lit, n}}
+  defp build_node("bounded", [{:int, n}]), do: {:ok, {:bounded_lit, n}}
   defp build_node("float", [{:float, f}]), do: {:ok, {:float_lit, f}}
   defp build_node("hole", [{:str, s}]), do: {:ok, {:hole, s}}
   defp build_node("absurd", []), do: {:ok, {:absurd}}
@@ -148,12 +198,12 @@ defmodule Cure.Core.Serialize do
   defp build_node("lam", [d, b]), do: binary(:lam, d, b)
   defp build_node("app", [f, a]), do: binary(:app, f, a)
 
-  defp build_node("ctor", [{:atom, name} | args]) do
+  defp build_node("ctor", [name | args]) do
     with {:ok, a} <- sym_atom(name), {:ok, cargs} <- build_all(args),
          do: {:ok, {:ctor, a, cargs}}
   end
 
-  defp build_node("data", [{:atom, name}, {:sexp, ps}, {:sexp, is}]) do
+  defp build_node("data", [name, {:sexp, ps}, {:sexp, is}]) do
     with {:ok, a} <- sym_atom(name), {:ok, cps} <- build_all(ps), {:ok, cis} <- build_all(is),
          do: {:ok, {:data, a, cps, cis}}
   end
@@ -183,7 +233,7 @@ defmodule Cure.Core.Serialize do
 
   defp build_branches(branches) do
     Enum.reduce_while(branches, {:ok, []}, fn
-      {:sexp, [{:atom, "branch"}, {:atom, ctor}, {:int, arity}, body]}, {:ok, acc} ->
+      {:sexp, [{:atom, "branch"}, ctor, {:int, arity}, body]}, {:ok, acc} ->
         with {:ok, a} <- sym_atom(ctor), {:ok, b} <- build(body) do
           {:cont, {:ok, acc ++ [{a, arity, b}]}}
         else
@@ -195,12 +245,17 @@ defmodule Cure.Core.Serialize do
     end)
   end
 
+  # A symbol reads as a bareword, or as a quoted string when its name is not one (see `sym/1`).
+  defp sym_atom({:atom, s}), do: intern(s)
+  defp sym_atom({:str, s}), do: intern(s)
+  defp sym_atom(_other), do: {:error, :malformed_symbol}
+
   # Bounded symbol interning (K12 / spec §D): decode names into EXISTING atoms
   # only. Untrusted C2 input cannot then exhaust the atom table — an unknown
   # symbol fails the decode cleanly (`:unknown_symbol`) instead of minting a new
   # permanent atom. Every symbol in a real program is already interned by the
   # compiler, so valid terms still round-trip.
-  defp sym_atom(s) do
+  defp intern(s) do
     {:ok, String.to_existing_atom(s)}
   rescue
     ArgumentError -> {:error, {:unknown_symbol, s}}

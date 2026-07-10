@@ -72,7 +72,14 @@ defmodule Cure.Core.Normalise do
   @spec with_fuel(fuel(), (-> term())) :: term() | :fuel_exhausted
   def with_fuel(:infinity, fun), do: fun.()
 
+  # The budget lives in the process dictionary, so it is a dynamically-scoped variable and
+  # must be saved and restored like one. It used to be unconditionally `Process.delete`d on
+  # exit: a nested `with_fuel` — `conv_within?/6` inside a fueled `nf/3`, or a reentrant
+  # `whnf/3` — wiped the enclosing, still-live counter on its way out, and every subsequent
+  # δ-unfold in the outer computation found no key and ran unbounded. The bound a caller
+  # asked for silently stopped being a bound.
   def with_fuel(fuel, fun) when is_integer(fuel) and fuel > 0 do
+    outer = Process.get(@fuel_key, :none)
     Process.put(@fuel_key, fuel)
 
     try do
@@ -80,7 +87,10 @@ defmodule Cure.Core.Normalise do
     catch
       :throw, {@fuel_key, :exhausted} -> :fuel_exhausted
     after
-      Process.delete(@fuel_key)
+      case outer do
+        :none -> Process.delete(@fuel_key)
+        remaining -> Process.put(@fuel_key, remaining)
+      end
     end
   end
 
@@ -252,9 +262,11 @@ defmodule Cure.Core.Normalise do
       # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the
       # matching branch body in `reverse(cargs) ++ env`.
       {:ncase, scrut, _motive, branches} ->
-        # `nat_to_ctor_if` peels a compact-Nat scrutinee to `Z`/`S` so it reuses
-        # the ctor ι-rule below; every other value passes through unchanged.
-        case Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)) do
+        # `nat_to_ctor_if`/`bounded_to_ctor_if` peel a compact-Nat / compact-Bounded
+        # scrutinee to `Z`/`S` / `First`/`Next` so it reuses the ctor ι-rule below;
+        # the two value shapes are disjoint, so composing is safe and every other
+        # value passes through unchanged.
+        case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
           {:vctor, cname, cargs} ->
             case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
               {_c, ar, {:closure, env, body}} ->
@@ -294,8 +306,9 @@ defmodule Cure.Core.Normalise do
 
     case head do
       {:ncase, scrut, _motive, branches} ->
-        # See the twin arm above: peel a compact-Nat scrutinee before the ctor ι.
-        case Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)) do
+        # See the twin arm above: peel a compact-Nat / compact-Bounded scrutinee
+        # before the ctor ι.
+        case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
           {:vctor, cname, cargs} ->
             case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
               {_c, ar, {:closure, env, body}} ->
@@ -340,7 +353,7 @@ defmodule Cure.Core.Normalise do
   end
 
   defp builtin_op_fold(op, args, sig, opts) when op not in [:struct_eq, :struct_ne] do
-    arity = if op == :neg, do: 1, else: 2
+    arity = if op in [:neg, :bnot], do: 1, else: 2
 
     with true <- length(args) == arity,
          vals = Enum.map(args, &whnf_value(&1, sig, opts)),

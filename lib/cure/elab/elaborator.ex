@@ -13,7 +13,7 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Normalise, Quote}
   alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
 
   @doc """
@@ -177,6 +177,20 @@ defmodule Cure.Elab.Elaborator do
       end
 
     cond do
+      # An interface-method call (`eqs(x, y)`) resolves to a concrete instance
+      # from the head-positioned argument's type — inlined at a concrete head,
+      # projected off the dictionary parameter at a rigid one. Checked before the
+      # constructor/global paths so a method name never falls through to an
+      # unresolved global.
+      Cure.Elab.Resolve.method?(env, atom) ->
+        Cure.Elab.Resolve.method_call(env, atom, args, names, ctx)
+
+      # A call to a `where`-constrained global resolves and appends the dictionary
+      # the callee expects before the ordinary application machinery runs, so the
+      # dictionary parameter is supplied at every concrete call site.
+      Cure.Elab.Resolve.constrained?(env, atom) ->
+        Cure.Elab.Resolve.constrained_call(env, atom, args, names, ctx)
+
       name == "reflexive" and length(args) == 1 ->
         [arg] = args
 
@@ -327,6 +341,17 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  @doc """
+  Apply an already-elaborated `term` of value-type `type` to surface `args`,
+  checking each argument against the callee's Π domain (so a lambda argument
+  elaborates in checking mode). Used by `Cure.Elab.Resolve` to apply a method
+  projected off a dictionary at an abstract call site.
+  """
+  @spec apply_checked_args(term(), term(), [term()], [String.t()], Context.t(), Env.t()) ::
+          {:ok, term(), term()} | {:error, term()}
+  def apply_checked_args(term, type, args, names, ctx, env),
+    do: check_app_args(term, type, args, names, ctx, env)
+
   defp check_app_args(term, type, [], _names, _ctx, _env), do: {:ok, term, type}
 
   defp check_app_args(term, type, [arg | rest], names, ctx, env) do
@@ -373,6 +398,12 @@ defmodule Cure.Elab.Elaborator do
         end
     end
   end
+
+  # A synthetic dictionary argument `{:dict_value, iface, head}`, inserted by
+  # `Cure.Elab.Resolve` at a concrete call to a constrained function: build the
+  # instance's dictionary record value (its type is `iface(head)`).
+  def elaborate_expr_typed({:dict_value, iface, head}, _names, ctx, env),
+    do: Cure.Elab.Resolve.dict_value(env, iface, head, ctx)
 
   # A forced (dot) pattern `{:forced_pattern, …}` is only meaningful in a
   # constructor-argument PATTERN position (handled by the pattern path in a later
@@ -442,7 +473,7 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
-  def elaborate_expr_typed({:literal, meta, value} = expr, _names, ctx, _env) do
+  def elaborate_expr_typed({:literal, meta, value} = expr, names, ctx, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) ->
         ctor = if value, do: :True, else: :False
@@ -453,6 +484,21 @@ defmodule Cure.Elab.Elaborator do
 
       :float when is_float(value) ->
         {:ok, {:float_lit, value}, {:vfloat_type}}
+
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF ->
+        case char_type_value(Context.signature(ctx)) do
+          {:ok, ty} -> {:ok, {:bounded_lit, value}, ty}
+          :no_bounded -> {:error, {:char_literal_needs_bounded, value}}
+        end
+
+      :char when is_integer(value) ->
+        {:error, {:char_literal_out_of_range, value}}
+
+      # A string literal IS `List(Char)` — desugar to the char-literal list
+      # `['c₀', …, 'cₙ']` (one element per Unicode codepoint) and elaborate that,
+      # so `"abc"` and `['a','b','c']` produce the identical Cons spine.
+      :string when is_binary(value) ->
+        elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
       _ ->
         {:error, {:unsupported_expression, expr}}
@@ -480,6 +526,15 @@ defmodule Cure.Elab.Elaborator do
       :not ->
         with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
              term = {:app, {:global, :not}, o_core},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
+      # Int-only bitwise complement. `int_bnot : Int -> Int`, so the kernel
+      # infer both types the operand against Int and rejects a non-Int operand.
+      :bnot ->
+        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+             term = {:app, {:global, :int_bnot}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
@@ -676,6 +731,12 @@ defmodule Cure.Elab.Elaborator do
   defp prim_op(:>), do: {:ok, :gt}
   defp prim_op(:<=), do: {:ok, :le}
   defp prim_op(:>=), do: {:ok, :ge}
+  # Int-only bitwise (no float twin — an @float_binop_globals miss rejects).
+  defp prim_op(:band), do: {:ok, :band}
+  defp prim_op(:bor), do: {:ok, :bor}
+  defp prim_op(:bxor), do: {:ok, :bxor}
+  defp prim_op(:bsl), do: {:ok, :bsl}
+  defp prim_op(:bsr), do: {:ok, :bsr}
   defp prim_op(_), do: :error
 
   # Assemble the Core term for a surface binary operator (K2 phase 2 + A1).
@@ -696,7 +757,12 @@ defmodule Cure.Elab.Elaborator do
     lt: :int_lt,
     le: :int_le,
     gt: :int_gt,
-    ge: :int_ge
+    ge: :int_ge,
+    band: :int_band,
+    bor: :int_bor,
+    bxor: :int_bxor,
+    bsl: :int_bsl,
+    bsr: :int_bsr
   }
   @float_binop_globals %{
     add: :float_add,
@@ -723,18 +789,13 @@ defmodule Cure.Elab.Elaborator do
       {:ok, :float} ->
         {:ok, app2(if(op_sym == :==, do: :float_eq, else: :float_ne), l, r)}
 
-      :error ->
-        # A1 §1-A: structural equality — struct_eq/struct_ne applied to the
-        # readback of the operand type. A meta-containing readback must never
-        # reach the kernel (R8b): reject defensively (corpus predicts none).
-        ty = Quote.reify(l_type, Context.length(ctx))
+      # An indexed family (Bounded — Char) erases to a native int but is not a
+      # monomorphic twin, so it takes the same polymorphic struct_eq path.
+      {:ok, :bounded} ->
+        struct_eq_binop(op_sym, l, r, l_type, ctx)
 
-        if Unify.has_meta?(ty) do
-          {:error, {:unsupported_operand_type, op_sym}}
-        else
-          g = if op_sym == :==, do: :struct_eq, else: :struct_ne
-          {:ok, {:app, app2(g, ty, l), r}}
-        end
+      :error ->
+        struct_eq_binop(op_sym, l, r, l_type, ctx)
     end
   end
 
@@ -765,6 +826,25 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A1 §1-A: structural equality — struct_eq/struct_ne applied to the readback of
+  # the operand type. The readback is signature-aware: an applied INDEXED family
+  # (e.g. `Bounded(n)`, Char's underlying type) must keep its param/index split,
+  # because this `ty` flows into `Kernel.infer` (the caller), which arity-checks
+  # params and indices separately — a sig-less readback flattens the index into
+  # the param slot and the kernel rejects it with `:arg_arity`. A meta-containing
+  # readback must never reach the kernel (R8b): reject defensively (corpus
+  # predicts none).
+  defp struct_eq_binop(op_sym, l, r, l_type, ctx) do
+    ty = Quote.reify(l_type, Context.length(ctx), Context.signature(ctx))
+
+    if Unify.has_meta?(ty) do
+      {:error, {:unsupported_operand_type, op_sym}}
+    else
+      g = if op_sym == :==, do: :struct_eq, else: :struct_ne
+      {:ok, {:app, app2(g, ty, l), r}}
+    end
+  end
+
   # A saturated `f(a)(b)` application of a global by name, most-recently-applied
   # argument outermost — the shape the kernel + emit expect for a curried def.
   defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
@@ -786,8 +866,23 @@ defmodule Cure.Elab.Elaborator do
   # type as the goal. The field type lives in the constructor frame `params ++
   # fields`; its parameter references are instantiated with the record value's
   # actual arguments (so `val : a` in `Box(Nat)` becomes `Nat`). A field type that
-  # references an EARLIER FIELD stays non-closed and is rejected — a genuinely
-  # dependent record field, which projection does not yet support.
+  # references an EARLIER FIELD (filled with the sentinel index below) is rejected —
+  # a genuinely dependent record field, which projection does not yet support. A
+  # field type that merely mentions the record PARAMETER at an abstract argument
+  # (`eqs : a -> a -> Bool` on a dictionary `Eqs(a)` over a rigid `a`) is fine: it
+  # is a legitimate context-open type, and the kernel re-checks the built `:case`.
+  @proj_field_sentinel 1_000_000
+
+  @doc """
+  Public entry to project field `field` from the record-typed surface expression
+  `inner`. Used by `Cure.Elab.Resolve` to pull an interface method off the
+  in-scope dictionary parameter at an abstract (rigid-head) call site.
+  """
+  @spec project_record_field(term(), String.t(), [String.t()], Context.t(), Env.t()) ::
+          {:ok, term(), term()} | {:error, term()}
+  def project_record_field(inner, field, names, ctx, env),
+    do: record_projection(inner, field, names, ctx, env)
+
   defp record_projection(inner, field, names, ctx, env) do
     with {:ok, _obj_term, obj_type} <- elaborate_expr_typed(inner, names, ctx, env) do
       case Quote.reify(obj_type, Context.length(ctx)) do
@@ -804,20 +899,19 @@ defmodule Cure.Elab.Elaborator do
 
               # Instantiate the field's type in `params ++ fields`: the parameters
               # get the record's actual arguments, earlier-field slots get a
-              # sentinel var (so a field-dependent field type is caught as
-              # non-closed below).
+              # sentinel var (so a field-dependent field type is caught below).
               ftype =
                 idx &&
                   Subst.instantiate(
                     elem(Enum.at(fields, idx), 1),
-                    params ++ List.duplicate({:var, 1_000_000}, idx)
+                    params ++ List.duplicate({:var, @proj_field_sentinel}, idx)
                   )
 
               cond do
                 is_nil(idx) ->
                   {:error, {:unknown_field, rec, field}}
 
-                not closed_term?(ftype) ->
+                mentions_prior_field?(ftype) ->
                   {:error, {:dependent_record_projection, rec, field}}
 
                 true ->
@@ -836,17 +930,21 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A Core term with no free de Bruijn variables (closed in the current frame).
-  defp closed_term?(term), do: closed_term?(term, 0)
-  defp closed_term?({:var, k}, depth), do: k < depth
-  defp closed_term?({:lam, d, b}, depth), do: closed_term?(d, depth) and closed_term?(b, depth + 1)
-  defp closed_term?({:pi, d, c}, depth), do: closed_term?(d, depth) and closed_term?(c, depth + 1)
+  # Does the term reference the prior-field sentinel index (`@proj_field_sentinel`,
+  # substituted into earlier-field slots)? A `{:var, k}` at binder depth `d` is the
+  # sentinel iff `k - d >= @proj_field_sentinel` — the sentinel is lifted by one per
+  # binder crossed, so its distance from the current frame stays constant, while a
+  # genuine context/parameter reference stays far below the threshold.
+  defp mentions_prior_field?(term), do: mentions_prior_field?(term, 0)
+  defp mentions_prior_field?({:var, k}, depth), do: k - depth >= @proj_field_sentinel
+  defp mentions_prior_field?({:lam, d, b}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(b, depth + 1)
+  defp mentions_prior_field?({:pi, d, c}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(c, depth + 1)
 
-  defp closed_term?(tuple, depth) when is_tuple(tuple),
-    do: tuple |> Tuple.to_list() |> Enum.all?(&closed_term?(&1, depth))
+  defp mentions_prior_field?(tuple, depth) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.any?(&mentions_prior_field?(&1, depth))
 
-  defp closed_term?(list, depth) when is_list(list), do: Enum.all?(list, &closed_term?(&1, depth))
-  defp closed_term?(_other, _depth), do: true
+  defp mentions_prior_field?(list, depth) when is_list(list), do: Enum.any?(list, &mentions_prior_field?(&1, depth))
+  defp mentions_prior_field?(_other, _depth), do: false
 
   @doc """
   Checking-mode elaboration for proof forms whose Core term depends on the
@@ -959,6 +1057,16 @@ defmodule Cure.Elab.Elaborator do
           {:error, _} = orig ->
             orig
         end
+    end
+  end
+
+  # A synthetic dictionary argument in checking position (the constrained-call
+  # applicator's dictionary slot): build the instance's dictionary record value
+  # and let the kernel check it against the expected `iface(head)` type.
+  def elaborate_expr_checked({:dict_value, iface, head}, expected_core, _names, ctx, env) do
+    with {:ok, term, _type} <- Cure.Elab.Resolve.dict_value(env, iface, head, ctx),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
     end
   end
 
@@ -1098,11 +1206,33 @@ defmodule Cure.Elab.Elaborator do
   # bare literal still defaults to `Int` in inference mode; only a `Nat`-checked
   # one becomes compact. Every other case defers to the ordinary checked path.
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
-    if Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0 and
-         nat_expected?(expected_core, ctx) do
-      {:ok, {:nat_lit, value}}
-    else
-      elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+    int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
+    string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
+
+    cond do
+      # A string literal checks as its `List(Char)` desugaring (see the typed
+      # clause), so the expected `List(Char)`/`String` type drives each char.
+      string? ->
+        elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+
+      int? and nat_expected?(expected_core, ctx) ->
+        {:ok, {:nat_lit, value}}
+
+      # Type-directed compact-Bounded literal: an integer literal checked against a
+      # `Bounded(n)` type (e.g. `Char = Bounded(0x110000)`) is the value `k` itself,
+      # a single compact node, iff `0 <= k < n`. This is the surface `let c: Char =
+      # 97` — a codepoint is ONE integer, never a `Next(...First)` tower. The kernel
+      # independently re-checks the bound (`check/3`), so this early check is only for
+      # a clear error message.
+      int? ->
+        case bounded_expected(expected_core, ctx) do
+          {:ok, n} when value < n -> {:ok, {:bounded_lit, value}}
+          {:ok, n} -> {:error, {:bounded_lit_out_of_range, value, n}}
+          :no -> elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+        end
+
+      true ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
     end
   end
 
@@ -1116,6 +1246,57 @@ defmodule Cure.Elab.Elaborator do
 
     not is_nil(nat_fid) and not Unify.has_meta?(expected_core) and
       match?({:vdata, ^nat_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
+  end
+
+  # `{:ok, n}` iff the expected type δ-unfolds to the `Bounded` family with a
+  # concrete bound `n` (a full `Bounded(n)` with `n` a closed Nat) — `:no`
+  # otherwise (metavariable, non-Bounded, or symbolic bound). Sees through a
+  # `typealias` (e.g. `Char`) because `whnf_value` δ-unfolds the certified alias.
+  defp bounded_expected(expected_core, ctx) do
+    sig = Context.signature(ctx)
+    bounded_fid = Inductive.builtin(sig, :bounded)
+
+    if is_nil(bounded_fid) or Unify.has_meta?(expected_core) do
+      :no
+    else
+      value = Normalise.whnf_value(Eval.eval(expected_core, Context.env(ctx)), sig)
+
+      case value do
+        {:vdata, ^bounded_fid, [bound_val]} ->
+          case bound_to_int(Normalise.whnf_value(bound_val, sig)) do
+            {:ok, n} -> {:ok, n}
+            :error -> :no
+          end
+
+        _ ->
+          :no
+      end
+    end
+  end
+
+  # Peel a concrete Nat bound value (compact `{:vnat, _}` or `Z`/`S` tower) to an
+  # integer; `:error` for a symbolic/neutral bound.
+  defp bound_to_int({:vnat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp bound_to_int({:vctor, :Z, []}), do: {:ok, 0}
+
+  defp bound_to_int({:vctor, :S, [pred]}) do
+    case bound_to_int(pred) do
+      {:ok, n} -> {:ok, n + 1}
+      :error -> :error
+    end
+  end
+
+  defp bound_to_int(_other), do: :error
+
+  # The type of every character literal: Char = Bounded(0x110000). A char literal
+  # is a codepoint value; the bound 0x110000 (= 1_114_112) is intrinsic, not from
+  # context. `:no_bounded` when the Bounded family is unregistered (needs
+  # `use Std.Bounded`), so the caller reports a fix-naming error, not a crash.
+  defp char_type_value(sig) do
+    case Inductive.builtin(sig, :bounded) do
+      nil -> :no_bounded
+      fid -> {:ok, {:vdata, fid, [{:vnat, 0x110000}]}}
+    end
   end
 
   defp elaborate_lambda([], body_expr, expected_core, names, ctx, env),
@@ -2641,8 +2822,13 @@ defmodule Cure.Elab.Elaborator do
              {:ok, test} <-
                elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env),
              {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
+             # Warn for THIS arm before recursing into the later ones. The check needs only
+             # `test` and `acc`, both bound here; running it after the recursion meant every
+             # later arm had already recorded its own warning, so `GuardLint.warnings/0` —
+             # which restores insertion order by reversing a prepended list — handed back a
+             # chain's shadow warnings in descending arm index.
+             :ok <- maybe_warn_shadowed(test, acc, ctx),
              {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env, acc ++ [test]) do
-          maybe_warn_shadowed(test, acc, ctx)
           {:ok, bool_case(test, expected, tt, ff, ctx)}
         end
     end
@@ -2714,7 +2900,7 @@ defmodule Cure.Elab.Elaborator do
             end
 
           literal_chain?(pats, prim) ->
-            literal_chain(scrut_expr, scrut_term, prim, pats, expected, names, ctx, env)
+            literal_chain(scrut_expr, scrut_term, scrut_type, prim, pats, expected, names, ctx, env)
 
           true ->
             :not_applicable
@@ -2750,6 +2936,16 @@ defmodule Cure.Elab.Elaborator do
     if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error
   end
 
+  # An applied `Bounded(n)` (Char's underlying type) is an indexed family that
+  # erases to a native int. It is NOT one of the monomorphic int/float/bool eq
+  # twins, so equality is the polymorphic `struct_eq` — but a literal chain over
+  # it lowers exactly like the primitive chains. Arithmetic on it stays rejected
+  # (the arithmetic `build_binop` clause has no `:bounded` arm), preserving the
+  # `0 ≤ k < n` invariant.
+  defp primitive_scrut_kind({:vdata, fid, [_bound]}, sig) do
+    if fid == Inductive.builtin(sig, :bounded), do: {:ok, :bounded}, else: :error
+  end
+
   defp primitive_scrut_kind(_type, _sig), do: :error
 
   defp bool_exhaustive?([{p1, _}, {p2, _}]),
@@ -2775,6 +2971,8 @@ defmodule Cure.Elab.Elaborator do
   defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
   defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
   defp literal_of?({:literal, _m, v}, :bool), do: is_boolean(v)
+  # A char literal `'a'` carries its integer codepoint (subtype `:char`).
+  defp literal_of?({:literal, _m, v}, :bounded), do: is_integer(v)
   defp literal_of?(_p, _prim), do: false
 
   defp catchall_pat?({:variable, _m, _name}), do: true
@@ -2783,9 +2981,10 @@ defmodule Cure.Elab.Elaborator do
   defp lit_core(v, :int), do: {:int_lit, v}
   defp lit_core(v, :float), do: {:float_lit, v}
   defp lit_core(v, :bool), do: {:ctor, if(v, do: :True, else: :False), []}
+  defp lit_core(v, :bounded), do: {:bounded_lit, v}
 
   # The final (catch-all) arm: the chain's innermost default branch.
-  defp literal_chain(scrut_expr, _scrut_term, _prim, [{pat, body}], expected, names, ctx, env) do
+  defp literal_chain(scrut_expr, _scrut_term, _scrut_type, _prim, [{pat, body}], expected, names, ctx, env) do
     case pat do
       {:variable, _m, "_"} ->
         elaborate_expr_checked(body, expected, names, ctx, env)
@@ -2804,20 +3003,35 @@ defmodule Cure.Elab.Elaborator do
   # body if equal, else recurse on the rest — the test scrutinised by a `:case`
   # on Bool. `prim` (the scrutinee's primitive kind, already in scope) picks the
   # monomorphic twin; a Bool literal chain uses the Std.Bool `eq` case-def.
-  defp literal_chain(scrut_expr, scrut_term, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
+  # A `:bounded` (Char) chain uses the polymorphic `struct_eq` — `scrut_type`
+  # supplies its erased type argument — instead of a monomorphic eq twin.
+  defp literal_chain(scrut_expr, scrut_term, scrut_type, prim, [{{:literal, _m, v}, body} | rest], expected, names, ctx, env) do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
-           literal_chain(scrut_expr, scrut_term, prim, rest, expected, names, ctx, env) do
-      eq_global =
-        case prim do
-          :int -> :int_eq
-          :float -> :float_eq
-          :bool -> :eq
-        end
-
-      test = app2(eq_global, scrut_term, lit_core(v, prim))
+           literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
+      test = lit_eq_test(prim, scrut_term, v, scrut_type, ctx)
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
+  end
+
+  # The per-arm equality test `scrut == literal` yielding the inductive Bool. A
+  # `:bounded` scrutinee (Char) has no monomorphic eq twin, so it uses the
+  # polymorphic `struct_eq` applied to the signature-aware readback of the
+  # scrutinee type (its type argument is erased at emit).
+  defp lit_eq_test(:bounded, scrut_term, v, scrut_type, ctx) do
+    ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
+    {:app, app2(:struct_eq, ty, scrut_term), lit_core(v, :bounded)}
+  end
+
+  defp lit_eq_test(prim, scrut_term, v, _scrut_type, _ctx) do
+    eq_global =
+      case prim do
+        :int -> :int_eq
+        :float -> :float_eq
+        :bool -> :eq
+      end
+
+    app2(eq_global, scrut_term, lit_core(v, prim))
   end
 
   # An n-element tuple type is a right-nested Σ, so `%[e1, …, en]` projects as
@@ -3799,17 +4013,34 @@ defmodule Cure.Elab.Elaborator do
 
   defp subst_surface_var(other, _name, _replacement), do: other
 
-  # Does any nested match arm bind one of `avoid`? (Arm patterns live in the
-  # arm's meta, not its children, so the generic subst walk never rewrites a
-  # binder position — this predicate only guards shadowing/capture in bodies.)
+  # Does any nested binder in the remaining statements bind one of `avoid`?
+  #
+  # This guards `elaborate_let_block`'s surface-substitution branch against CAPTURE.
+  # Answering `false` sends the block down the substitution path, so a binder we fail
+  # to see here silently rewrites a position it must not touch. Both binding forms
+  # must be recognized:
+  #
+  #   * a match arm's pattern — which lives in the arm's META, not its children, so
+  #     the generic child walk never sees it. Previously only a `{:function_call, …}`
+  #     pattern's DIRECT variable arguments were collected, so a bare catch-all arm
+  #     (`x -> S(x)`) and any nested/aliased pattern went unnoticed.
+  #   * a lambda's parameters — likewise in META (`params:`), not children. A lambda
+  #     shadowing an outer `let` name had its body rewritten, so `let x = Z()` turned
+  #     `fn(x) -> S(x)` into `fn(x) -> S(Z())`: still well-typed, kernel-accepted, and
+  #     computing the wrong value.
+  #
+  # Over-reporting merely costs the (safe) bind-once β-redex path; under-reporting is a
+  # miscompilation. When in doubt, say true.
   defp binds_any?({:match_arm, meta, body}, avoid) do
-    vars =
-      case Keyword.get(meta, :pattern) do
-        {:function_call, _pmeta, args} -> for {:variable, _vmeta, v} <- args, do: v
-        _ -> []
-      end
-
+    vars = meta |> Keyword.get(:pattern) |> pattern_binders()
     Enum.any?(vars, &(&1 in avoid)) or binds_any?(body, avoid)
+  end
+
+  defp binds_any?({:lambda, meta, children}, avoid) do
+    params = for {:param, _pmeta, p} <- Keyword.get(meta, :params, []), do: p
+
+    Enum.any?(params, &(&1 in avoid)) or
+      children |> List.wrap() |> Enum.any?(&binds_any?(&1, avoid))
   end
 
   defp binds_any?({_tag, _meta, children}, avoid) when is_list(children),
@@ -3819,6 +4050,18 @@ defmodule Cure.Elab.Elaborator do
     do: Enum.any?(list, &binds_any?(&1, avoid))
 
   defp binds_any?(_other, _avoid), do: false
+
+  # Every name a pattern binds. In pattern position every `{:variable, _, v}` node IS a
+  # binder, at any depth — nested constructor arguments, as-patterns, list/tuple
+  # patterns. Constructor NAMES live in meta (`name:`), never as children, so this
+  # never mistakes a constructor for a binder.
+  defp pattern_binders({:variable, _meta, v}), do: [v]
+
+  defp pattern_binders({_tag, _meta, children}) when is_list(children),
+    do: Enum.flat_map(children, &pattern_binders/1)
+
+  defp pattern_binders(list) when is_list(list), do: Enum.flat_map(list, &pattern_binders/1)
+  defp pattern_binders(_other), do: []
 
   # Wave-2 List sugar → ctor-call surface form (reuses all ctor machinery).
   #   []            -> Nil()
@@ -3839,6 +4082,16 @@ defmodule Cure.Elab.Elaborator do
 
   defp desugar_list({:list, m, elems}), do: fold_list_literal(elems, m)
   defp desugar_list(other), do: other
+
+  # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
+  # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
+  # `List(Char)` and reuses all of `desugar_list`'s Cons/Nil machinery. The empty
+  # string yields the empty list (`Nil`).
+  defp desugar_string(value, meta) when is_binary(value) do
+    loc = Keyword.take(meta, [:line, :col])
+    chars = Enum.map(String.to_charlist(value), fn cp -> {:literal, [subtype: :char] ++ loc, cp} end)
+    {:list, meta, chars}
+  end
 
   defp fold_list_literal(elems, m) do
     Enum.reduce(Enum.reverse(elems), ctor_call("Nil", m, []), fn e, acc ->
@@ -4919,6 +5172,11 @@ defmodule Cure.Elab.Elaborator do
       :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
       :integer when is_integer(value) -> {:ok, {:int_lit, value}}
       :float when is_float(value) -> {:ok, {:float_lit, value}}
+      # The guard is required, not cosmetic: an unguarded negative `{:bounded_lit,
+      # k}` reaching the kernel raises an uncaught `FunctionClauseError`
+      # (`Kernel.infer/2` has no catch-all) — see spec §3.4.
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF -> {:ok, {:bounded_lit, value}}
+      :char when is_integer(value) -> {:error, {:char_literal_out_of_range, value}}
       _ -> {:error, {:unsupported_expression, expr}}
     end
   end

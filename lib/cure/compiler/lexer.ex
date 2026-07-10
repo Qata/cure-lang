@@ -45,12 +45,14 @@ defmodule Cure.Compiler.Lexer do
   # `parse_app_container/1` when the token is followed by an identifier
   # at block-prefix position.
   @keywords ~w(
-    mod fn let type typealias indexed indices rec proto impl fsm local use as
+    mod fn let type typealias opaque indexed indices rec proto impl fsm local use as
+    interface implementation deriving
     match pickup if elif else then for do end
     in try catch finally throw return yield
     spawn send receive after
     actor
     when where and or not
+    band bor bxor bsl bsr bnot
     true false nil
     extern proof
   )a
@@ -651,6 +653,12 @@ defmodule Cure.Compiler.Lexer do
           :and -> {:and_op, :and}
           :or -> {:or_op, :or}
           :not -> {:not_op, :not}
+          :band -> {:band_op, :band}
+          :bor -> {:bor_op, :bor}
+          :bxor -> {:bxor_op, :bxor}
+          :bsl -> {:bsl_op, :bsl}
+          :bsr -> {:bsr_op, :bsr}
+          :bnot -> {:bnot_op, :bnot}
           other -> {:keyword, other}
         end
       else
@@ -810,14 +818,27 @@ defmodule Cure.Compiler.Lexer do
 
       ?# ->
         if peek_at(state, 1) == ?{ do
-          # String interpolation
+          # String interpolation. The interpolated expression is its own paren scope:
+          # enter at depth 0, and restore the enclosing depth on the way out.
+          outer_paren_depth = state.paren_depth
           state = advance(state, 2)
-          {expr_tokens, state} = lex_interpolation_expr(state, 0)
+          {expr_tokens, state} = lex_interpolation_expr(%{state | paren_depth: 0}, 0)
+          state = %{state | paren_depth: outer_paren_depth}
           lex_string_body(state, start_col, [{:expr, expr_tokens} | acc])
         else
           state2 = advance(state, 1)
           lex_string_body(state2, start_col, ["#" | acc])
         end
+
+      # A string literal may span physical lines — there is no lexer error for a raw
+      # newline in one. `advance/2` only moves `pos` and `col`, so swallowing the byte
+      # through the catch-all below left `line` stale, and every token after a multi-line
+      # string reported a line number short by however many newlines the string held.
+      # Every other multi-line construct here (`handle_newline/1`, `collect_fenced_lines/2`,
+      # `lex_indentation/1`'s blank-line branch) bumps `line` and resets `col`.
+      ?\n ->
+        state = %{state | pos: state.pos + 1, line: state.line + 1, col: 1}
+        lex_string_body(state, start_col, ["\n" | acc])
 
       c ->
         state = advance(state, 1)
@@ -848,15 +869,19 @@ defmodule Cure.Compiler.Lexer do
         {[token | rest], state}
 
       _ ->
-        # Tokenize one token inside interpolation, then continue
-        inner_state = %{state | tokens: [], paren_depth: 0}
+        # Tokenize one token inside interpolation, then continue. `paren_depth` must
+        # survive the step: it used to be forced to 0 on the way in and overwritten with
+        # the pre-step snapshot on the way out, so a `(` opened inside an interpolation
+        # never reached the counter `handle_newline/1` consults, and a newline inside a
+        # parenthesised call in `"#{f(a,\nb)}"` emitted a spurious `:newline`.
+        inner_state = %{state | tokens: []}
 
         case lex_next(inner_state) do
           {:ok, inner_state} ->
             produced = Enum.reverse(inner_state.tokens)
 
-            next_state = %{inner_state | tokens: state.tokens, paren_depth: state.paren_depth}
-            {rest, final_state} = lex_interpolation_expr(next_state, depth)
+            next_state = %{inner_state | tokens: state.tokens}
+            {rest, final_state} = lex_interpolation_expr(next_state, depth + brace_delta(produced))
             {produced ++ rest, final_state}
 
           {:error, _reason, err_state} ->
@@ -864,6 +889,14 @@ defmodule Cure.Compiler.Lexer do
         end
     end
   end
+
+  # `depth` counts the braces still open inside a `#{…}`, and the clauses above only see a
+  # BARE `{` — the raw byte. `%{` is consumed whole by `lex_percent/1` as one `:map_open`
+  # token, so its brace never bumped the counter, while its closing `}` was still seen raw.
+  # `"#{ %{a: 1} }"` therefore ended the interpolation at the map's `}`, one brace early,
+  # and swallowed the rest of the string as literal text. A record literal's `Type{` uses a
+  # bare `{`, which is why only the map sigil was affected.
+  defp brace_delta(produced), do: Enum.count(produced, &(&1.type == :map_open))
 
   defp normalize_string_parts(parts) do
     # Merge consecutive binary parts, keep {:expr, tokens} as-is
@@ -899,37 +932,80 @@ defmodule Cure.Compiler.Lexer do
             ?\\ -> {?\\, advance(state, 1)}
             ?' -> {?', advance(state, 1)}
             ?0 -> {0, advance(state, 1)}
-            c -> {c, advance(state, 1)}
+            _ ->
+              case decode_char_at(state) do
+                {cp, state2} -> {cp, state2}
+                :invalid -> {:invalid, state}
+              end
           end
 
-        # Expect closing '
-        case peek(state) do
-          ?' ->
-            state = advance(state, 1)
-            token = Token.new(:char, value, state.line, start_col)
-            maybe_emit_event(state, token)
-            {:ok, %{state | tokens: [token | state.tokens]}}
+        if value == :invalid do
+          {:error, {:unterminated_char, state.line, start_col}, state}
+        else
+          # Expect closing '
+          case peek(state) do
+            ?' ->
+              state = advance(state, 1)
+              token = Token.new(:char, value, state.line, start_col)
+              maybe_emit_event(state, token)
+              {:ok, %{state | tokens: [token | state.tokens]}}
 
-          _ ->
-            {:error, {:unterminated_char, state.line, start_col}, state}
+            _ ->
+              {:error, {:unterminated_char, state.line, start_col}, state}
+          end
         end
 
       nil ->
         {:error, {:unterminated_char, state.line, start_col}, state}
 
-      c ->
-        state = advance(state, 1)
+      _ ->
+        case decode_char_at(state) do
+          {cp, state} ->
+            # Expect closing '
+            case peek(state) do
+              ?' ->
+                state = advance(state, 1)
+                token = Token.new(:char, cp, state.line, start_col)
+                maybe_emit_event(state, token)
+                {:ok, %{state | tokens: [token | state.tokens]}}
 
-        # Expect closing '
-        case peek(state) do
-          ?' ->
-            state = advance(state, 1)
-            token = Token.new(:char, c, state.line, start_col)
-            maybe_emit_event(state, token)
-            {:ok, %{state | tokens: [token | state.tokens]}}
+              _ ->
+                {:error, {:unterminated_char, state.line, start_col}, state}
+            end
 
-          _ ->
+          :invalid ->
             {:error, {:unterminated_char, state.line, start_col}, state}
+        end
+    end
+  end
+
+  # Read one character at the current position as a full Unicode codepoint,
+  # advancing past all its UTF-8 bytes. ASCII (byte < 0x80) keeps the fast
+  # single-byte path. A multi-byte sequence is decoded via String.next_codepoint/1
+  # on the remaining source; a truncated/invalid tail yields :invalid so the caller
+  # can surface the existing unterminated-char error rather than crash.
+  #
+  # The `pos >= byte_size(source)` clause is required, not defensive boilerplate:
+  # the escape-fallback call site reaches this function even when there is no byte
+  # left to read (a backslash at end-of-source) — `peek/1` returns nil there today
+  # and that nil falls through harmlessly to its catch-all. Without this guard,
+  # `:binary.at(source, pos)` raises `ArgumentError` on an out-of-range position,
+  # and `do_tokenize/1`'s `catch` clause does not rescue raised errors (only
+  # `throw`), so the lexer would crash instead of returning `{:unterminated_char,
+  # _, _}`. Mirrors the existing two-clause guard idiom used by `peek/1` below.
+  defp decode_char_at(%{source: source, pos: pos}) when pos >= byte_size(source), do: :invalid
+
+  defp decode_char_at(%{source: source, pos: pos} = state) do
+    case :binary.at(source, pos) do
+      byte when byte < 0x80 ->
+        {byte, advance(state, 1)}
+
+      _ ->
+        rest = binary_part(source, pos, byte_size(source) - pos)
+
+        case String.next_codepoint(rest) do
+          {<<cp::utf8>>, _tail} -> {cp, advance(state, byte_size(<<cp::utf8>>))}
+          _ -> :invalid
         end
     end
   end

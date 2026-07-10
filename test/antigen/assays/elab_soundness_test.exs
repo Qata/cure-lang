@@ -105,6 +105,43 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       assert {:violation, {:core_ill_typed, :bad_mk, _}} =
                Elab.run(prog("ignored"), kernel_with_env(env))
     end
+
+    # Antibody for the kernel change "whnf the GOAL in check/3's `{:ctor,…}` clause"
+    # (kernel.ex ~260): a constructor may be checked against any type that δ-unfolds
+    # to the family's `{:vdata,…}` — e.g. a `typealias`/alias-def goal, which reaches
+    # `check/3` as the bare alias global (a NEUTRAL), not a literal `{:vdata,…}`. The
+    # goal type of each def below is `{:global, :FNatAlias}` / `{:global, :FBoolAlias}`;
+    # `Eval.eval` produces the `{:nglobal,…}` neutral (eval never δ-unfolds a def), so
+    # only `check`'s own `whnf_value` exposes the `{:vdata}` head. Both aliases are
+    # `certify`'d so `Normalise.whnf_value` will δ-unfold them (see normalise.ex:243).
+    #
+    # The pair is the antibody: COMPLETENESS — a SOUND ctor at an alias goal is admitted
+    # (was a false `:core_ill_typed` via the infer→CRCM fallback before the whnf); and
+    # SOUNDNESS — an UNSOUND ctor at an alias goal is STILL rejected, proving the whnf
+    # exposes the head WITHOUT admitting a constructor the un-aliased goal would reject
+    # (whnf(alias) is definitionally the alias, so no distinct normal forms are equated).
+    defp aliased_option_env do
+      option_env()
+      |> Env.add_def(:FNatAlias, {:type, 0}, {:data, :F, [@nat], []})
+      |> Env.certify(:FNatAlias)
+      |> Env.add_def(:FBoolAlias, {:type, 0}, {:data, :F, [@bool], []})
+      |> Env.certify(:FBoolAlias)
+    end
+
+    test "COMPLETENESS: sound ctor body at a δ-reducible ALIAS goal re-checks :ok" do
+      # def ok_alias : FNatAlias = Mk(Z)  where FNatAlias := F(Nat).
+      env = aliased_option_env()
+            |> Env.add_def(:ok_alias, {:global, :FNatAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
+    end
+
+    test "SOUNDNESS: unsound ctor body at a δ-reducible ALIAS goal STILL infects" do
+      # def bad_alias : FBoolAlias = Mk(Z)  where FBoolAlias := F(Bool); Z:Nat ≠ Bool.
+      env = aliased_option_env()
+            |> Env.add_def(:bad_alias, {:global, :FBoolAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      assert {:violation, {:core_ill_typed, :bad_alias, _}} =
+               Elab.run(prog("ignored"), kernel_with_env(env))
+    end
   end
 
   describe "fuel bound" do

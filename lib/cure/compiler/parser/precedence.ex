@@ -5,8 +5,13 @@ defmodule Cure.Compiler.Parser.Precedence do
   Binding powers (BP) determine operator precedence. Higher BP binds tighter.
   For left-associative operators, right BP = left BP + 1.
   For right-associative operators, right BP = left BP.
-  For non-associative operators, right BP = left BP + 1 (and the parser
-  rejects chaining).
+  For non-associative operators, right BP = left BP + 1, and the parser rejects
+  chaining outright — see `non_assoc?/1` and `Cure.Compiler.Parser`'s
+  `reject_non_assoc_chain/3`. Binding power alone cannot express
+  non-associativity: `right = left + 1` is exactly what a LEFT-associative
+  operator uses, and it only stops the operator from swallowing a peer on its own
+  right-hand side. Nothing about it stops the Pratt loop from picking the built
+  node back up as a new left operand.
 
   ## Precedence Levels (lowest to highest)
 
@@ -58,6 +63,13 @@ defmodule Cure.Compiler.Parser.Precedence do
   def infix_bp(:star), do: {80, 81}
   def infix_bp(:slash), do: {80, 81}
   def infix_bp(:percent), do: {80, 81}
+  # Bitwise (Erlang precedence): `band` binds at multiplicative level; `bor`,
+  # `bxor`, `bsl`, `bsr` bind at additive level. Left-associative.
+  def infix_bp(:band_op), do: {80, 81}
+  def infix_bp(:bor_op), do: {70, 71}
+  def infix_bp(:bxor_op), do: {70, 71}
+  def infix_bp(:bsl_op), do: {70, 71}
+  def infix_bp(:bsr_op), do: {70, 71}
   # Dot access -- left-associative
   def infix_bp(:dot), do: {100, 101}
   # Assignment operators (very low, right-assoc)
@@ -68,15 +80,29 @@ defmodule Cure.Compiler.Parser.Precedence do
   def infix_bp(:slash_assign), do: {5, 4}
   def infix_bp(_), do: :not_infix
 
+  @doc """
+  True for operators the spec marks non-associative, which the parser refuses to chain:
+  `a == b == c`, `a..b..c`, and `a <-| b <-| c` are all parse errors.
+  """
+  @spec non_assoc?(atom()) :: boolean()
+  def non_assoc?(type),
+    do: type in [:melquiades, :eq, :neq, :lt, :gt, :lte, :gte, :range, :range_inclusive]
+
   @doc "Returns the right binding power for a prefix operator, or `:not_prefix`."
   @spec prefix_bp(atom()) :: pos_integer() | :not_prefix
   def prefix_bp(:minus), do: 90
   def prefix_bp(:not_op), do: 90
+  def prefix_bp(:bnot_op), do: 90
   def prefix_bp(_), do: :not_prefix
 
   @doc "Returns the operator category for a given token type."
   @spec operator_category(atom()) :: atom()
   def operator_category(type) when type in [:plus, :minus, :star, :slash, :percent], do: :arithmetic
+
+  def operator_category(type)
+      when type in [:band_op, :bor_op, :bxor_op, :bsl_op, :bsr_op, :bnot_op],
+      do: :bitwise
+
   def operator_category(type) when type in [:eq, :neq, :lt, :gt, :lte, :gte], do: :comparison
   def operator_category(type) when type in [:and_op, :or_op], do: :boolean
   def operator_category(:string_concat), do: :string
@@ -102,6 +128,12 @@ defmodule Cure.Compiler.Parser.Precedence do
   def operator_symbol(:and_op), do: :and
   def operator_symbol(:or_op), do: :or
   def operator_symbol(:not_op), do: :not
+  def operator_symbol(:band_op), do: :band
+  def operator_symbol(:bor_op), do: :bor
+  def operator_symbol(:bxor_op), do: :bxor
+  def operator_symbol(:bsl_op), do: :bsl
+  def operator_symbol(:bsr_op), do: :bsr
+  def operator_symbol(:bnot_op), do: :bnot
   def operator_symbol(:string_concat), do: :<>
   def operator_symbol(:range), do: :..
   def operator_symbol(:range_inclusive), do: :"..="

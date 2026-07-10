@@ -16,7 +16,7 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
   alias Cure.Elab.{Elaborator, Relevance}
 
   @ceiling 2
@@ -34,22 +34,22 @@ defmodule Cure.Elab.Declarations do
       :enum ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        case Keyword.get(meta, :type_params, []) do
-          [] ->
-            case build_ctors(variants) do
-              {:ok, ctors} -> declare_at_min_level(env, name, ctors, 0)
-              {:error, _} = err -> err
-            end
-
-          type_params ->
-            # Parameterized ADT (`type List(a) = Nil | Cons(a, List(a))`). Each
-            # positional variant is an implicit constructor signature returning the
-            # family applied to its own parameters; reuse the parameterized-family
-            # (GADT) machinery with an empty index telescope.
-            params = Enum.map(type_params, fn p -> {:param, [], p} end)
-            sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
-            declare_parameterized(name, params, [], sigs, env)
-        end
+        # Enum ADT (`type List(a) = Nil | Cons(a, List(a))`, or `type Nat = Z | S(Nat)`).
+        # Each positional variant is an implicit constructor signature returning the
+        # family applied to its own parameters; reuse the parameterized-family (GADT)
+        # machinery with an empty index telescope.
+        #
+        # The zero-type-param case used to have its own `build_ctors/1` pipeline, a
+        # strict subset of `idx_to_core/5` with no arrow clause — so a function-typed
+        # field was rejected for `type Callback = Wrap((Int) -> Int)` while the
+        # semantically identical `rec Callback` and `type Callback(a) = ...` both
+        # accepted it. That was duplication producing an arbitrary feature gap, not a
+        # deliberate restriction; a negative occurrence is still rejected, by
+        # `Inductive.positive?/2` where it belongs.
+        type_params = Keyword.get(meta, :type_params, [])
+        params = Enum.map(type_params, fn p -> {:param, [], p} end)
+        sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
+        declare_parameterized(name, params, [], sigs, env)
 
       :struct ->
         # A record `rec Point\n  x: T\n  y: U` is a single-constructor family whose
@@ -81,6 +81,20 @@ defmodule Cure.Elab.Declarations do
           end
         end
 
+      :opaque ->
+        # `opaque type Name(params)` — a constructor-less, non-eliminable carrier
+        # family. Elaborate the parameter telescope (each `a : Type0`), then
+        # register a family MARKED opaque with zero constructors. No ctor or
+        # positivity checks (there are none); the marker makes the kernel refuse
+        # to eliminate it (Agda `postulate`).
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+
+        with {:ok, param_tele} <-
+               elaborate_index_telescope(params, name, env, [], :duplicate_parameter) do
+          declare_opaque_at_min_level(env, name, param_tele, 0)
+        end
+
       other ->
         {:error, {:unsupported_container, other}}
     end
@@ -91,15 +105,22 @@ defmodule Cure.Elab.Declarations do
   # clause lists the refined indices. Each constructor signature is an
   # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
   # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
-  # Type alias `type Name = RHS`: a nullary definition `Name : Type := RHS`.
-  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is
-  # trivially total, so it certifies and δ becomes available). No new type former.
-  def elaborate({:type_annotation, meta, [rhs]}, env) do
-    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env) do
-      env1 = Env.add_def(env, name, {:type, 0}, rhs_core, [])
-      {:ok, maybe_certify(env1, name)}
+  # `type X = Y` with a single bare right-hand side is ambiguous, and the parser cannot
+  # resolve it — it tags the RHS `variant: true` and defers:
+  #
+  #   type MyNat = Nat          -- an ALIAS: `Nat` names a type in scope
+  #   type Unit = MkUnit        -- a one-constructor ENUM: `MkUnit` names no type
+  #
+  # (`typealias X = Y` is never a variant, and `type X = A | B` already parses as an
+  # `:enum` container.) Resolve on whether the RHS names a type. Getting this wrong used
+  # to be invisible: the alias branch installed `Unit := {:data, :MkUnit, [], []}` with a
+  # hardcoded kind and nothing ever checked it, so a one-constructor enum silently became
+  # an alias to a family that does not exist.
+  def elaborate({:type_annotation, meta, [rhs]} = decl, env) do
+    if single_variant_enum?(rhs, env) do
+      elaborate({:container, Keyword.put(meta, :container_type, :enum), [rhs]}, env)
+    else
+      elaborate_typealias(decl, env)
     end
   end
 
@@ -110,7 +131,62 @@ defmodule Cure.Elab.Declarations do
     declare_parameterized(name, params, index_params, ctor_sigs, env)
   end
 
+  def elaborate({:interface, _meta, _methods} = decl, env) do
+    Cure.Elab.Interface.elaborate(decl, env)
+  end
+
   def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  defp single_variant_enum?({:variable, rmeta, name}, env) when is_list(rmeta) and is_binary(name),
+    do: Keyword.get(rmeta, :variant, false) and not type_name?(env, name)
+
+  defp single_variant_enum?(_rhs, _env), do: false
+
+  # Does `name` denote a type in `env`? A builtin primitive, a declared family, the
+  # universe itself, or an earlier alias (a def whose declared type is a universe).
+  defp type_name?(_env, "Type"), do: true
+
+  defp type_name?(env, name) do
+    atom = String.to_atom(name)
+
+    primitive_type(name) != nil or
+      Inductive.get_family(env, atom) != nil or
+      match?(%{type: {:type, _}}, Env.get_def(env, atom))
+  end
+
+  # Type alias `typealias Name = RHS`: a nullary definition `Name : Type := RHS`.
+  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is trivially
+  # total, so it certifies and δ becomes available). No new type former.
+  #
+  # The RHS must BE a type. It used to be installed with a hardcoded declared type of
+  # `{:type, 0}`, and the only kernel check that ever ran on it was `maybe_certify/2` —
+  # whose whole job is to swallow errors, because for a FUNCTION body a failure there
+  # means only "does not certify as total, so stop δ-unfolding it", never "ill-typed"
+  # (the body's `Kernel.check/3` already ran and its error was propagated). A typealias
+  # has no such prior check, so `validate_certificate/2` was its first and only one, and
+  # a genuine kind error was discarded exactly like a benign non-termination verdict.
+  # `typealias Bad = Z` aliased `Bad` to a Nat CONSTRUCTOR and reported `{:ok, _}`. Idris
+  # (`Bad : Type; Bad = Z`) and Lean (`def Bad : Type := Z`) both reject it outright.
+  #
+  # Infer the RHS's type and demand a universe, then register the alias at THAT level —
+  # `typealias U = Type` is legal and lives at `Type 1`, not `Type 0`.
+  defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env),
+         {:ok, level} <- typealias_universe(env, name, rhs_core) do
+      env1 = Env.add_def(env, name, {:type, level}, rhs_core, [])
+      {:ok, maybe_certify(env1, name)}
+    end
+  end
+
+  defp typealias_universe(env, name, rhs_core) do
+    case Kernel.infer(Context.empty(env), rhs_core) do
+      {:ok, {:vtype, level}} -> {:ok, level}
+      {:ok, other} -> {:error, {:typealias_not_a_type, name, Quote.reify(other, 0)}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp maybe_certify(env, name) do
     case Kernel.validate_certificate(env, name) do
@@ -125,7 +201,15 @@ defmodule Cure.Elab.Declarations do
   # is elaborated (see `Program.elaborate_declarations`).
   def register_signature({:function_def, meta, _body}, env) do
     with {:ok, sig} <- function_signature(meta, env) do
-      {:ok, Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)}
+      env1 = Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+
+      env2 =
+        case sig.constraints do
+          [] -> env1
+          specs -> Env.put_constrained(env1, sig.name, specs)
+        end
+
+      {:ok, env2}
     end
   end
 
@@ -141,12 +225,34 @@ defmodule Cure.Elab.Declarations do
         # builtin_op, which is overloaded). emit lowers it to a remote call;
         # TotalityClosure skips it. Do NOT call elaborate_body / Kernel.check /
         # Relevance.check (no term exists).
-        with {:ok, sig} <- function_signature(meta, env) do
+        with {:ok, sig} <- function_signature(meta, env),
+             :ok <- check_extern_arity(sig, arity) do
           {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
         end
 
       _ ->
         elaborate_real_body(meta, body, env)
+    end
+  end
+
+  # The arity in `@extern(:mod, :fun, arity)` names the TARGET Erlang function — `erlang:hd/1`.
+  # Erased parameters never reach the BEAM, so that number is also exactly the def's present
+  # arity, which is what `Emit` gives the generated function and what every Cure call site passes
+  # (`Emit.present_arity/2`, off the same `quantities`). Nothing used to force the two to agree.
+  #
+  # An extern with an erased implicit — `head({T: Type}, xs: List(T))`, and auto-generalization
+  # inserts one for any free lowercase type var even when the user writes none — has a present
+  # arity strictly below its surface telescope length. A user counting the parens writes 2, and
+  # `Emit` then generated `head/2` calling `erlang:hd(V0, V1)` while every Cure caller invoked
+  # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
+  # it. Rejecting the mismatch is the only reading under which the number means one thing.
+  defp check_extern_arity(sig, arity) do
+    present = Enum.count(sig.quantities || [], &(&1 == :present))
+
+    if arity == present do
+      :ok
+    else
+      {:error, {:extern_arity_mismatch, sig.name, arity, present}}
     end
   end
 
@@ -160,13 +266,19 @@ defmodule Cure.Elab.Declarations do
       with {:ok, body_term} <-
              elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
            :ok <- Kernel.check(ctx, body_term, return_value),
+           # A `where`-introduced dictionary parameter is present by default but
+           # SAFELY demoted to `:erased` when the body never uses it relevantly (an
+           # `ignore`-style constrained function): the same criterion the relevance
+           # check enforces, so erasure (dropping it) stays sound. Only demotion,
+           # never promotion.
+           quantities = demote_unused_dicts(env, sig, body_term),
            # {0,ω} relevance check (M8.3): erasure will drop the `:erased` parameter
            # slots, so reject any body that uses one relevantly (returned / passed
            # in a present position / scrutinised / applied). E-layer; the kernel
            # stays quantity-blind. See `Cure.Elab.Relevance`.
-           :ok <- Relevance.check(env, sig.name, sig.quantities, body_term) do
+           :ok <- Relevance.check(env, sig.name, quantities, body_term) do
         lambda = wrap_binders(:lam, sig.telescope, body_term)
-        final = Env.add_def(env, sig.name, sig.pi, lambda, sig.quantities)
+        final = Env.add_def(env, sig.name, sig.pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
@@ -190,7 +302,15 @@ defmodule Cure.Elab.Declarations do
     # signature (`fn id(x: a) -> a`) is bound as a leading implicit `{a: Type}`
     # (erased), in order of first appearance. Restricted to occurrences provably of
     # kind Type, so an index variable (`Vec(_, n)`, `n : Nat`) is NOT mis-bound.
-    params = auto_generalize(params0, return_expr, env) ++ params0
+    params1 = auto_generalize(params0, return_expr, env) ++ params0
+
+    # A `where Iface(a)` clause introduces a runtime dictionary parameter typed by
+    # the interface's record former (`Eqs(a)`), appended AFTER the value params so
+    # the applicator has solved `a` from an earlier argument before it checks the
+    # dictionary (and so its de-Bruijn index is stable). `constraint_specs` tells a
+    # concrete call site which argument fixes `a` and how to name the dict binder.
+    {params, constraint_specs} =
+      inject_constraint_dicts(params1, Keyword.get(meta, :constraints, []))
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
@@ -203,9 +323,66 @@ defmodule Cure.Elab.Declarations do
          quantities: quantities,
          scope: scope,
          return_core: return_core,
+         constraints: constraint_specs,
          pi: wrap_binders(:pi, telescope, return_core)
        }}
     end
+  end
+
+  # Turn each `where Iface(a)` constraint into an implicit-style dictionary
+  # parameter `__dict_Iface_a : Iface(a)`, appended to the telescope. Returns the
+  # extended parameter list and a spec per constraint recording which explicit
+  # value parameter fixes the head variable `a` (`head_arg_index`) — a concrete
+  # call resolves the instance from that argument's type.
+  defp inject_constraint_dicts(params, []), do: {params, []}
+
+  defp inject_constraint_dicts(params, constraints) do
+    explicit_value_params =
+      Enum.filter(params, fn {:param, m, _n} -> not Keyword.get(m, :implicit, false) end)
+
+    {dict_params, specs} =
+      constraints
+      |> Enum.map(fn {:function_call, cm, [tyvar_ast]} ->
+        iface_str = Keyword.fetch!(cm, :name)
+        iface_atom = String.to_atom(iface_str)
+        {:variable, _, tyvar} = tyvar_ast
+        dict_name = "__dict_#{iface_str}_#{tyvar}"
+
+        idx =
+          Enum.find_index(explicit_value_params, fn {:param, pm, _n} ->
+            match?({:variable, _, ^tyvar}, Keyword.get(pm, :type))
+          end) || 0
+
+        dparam =
+          {:param, [type: {:function_call, [name: iface_str], [tyvar_ast]}, constraint_dict: {iface_atom, tyvar}],
+           dict_name}
+
+        {dparam, %{iface: iface_atom, tyvar: tyvar, head_arg_index: idx, dict_name: dict_name}}
+      end)
+      |> Enum.unzip()
+
+    {params ++ dict_params, specs}
+  end
+
+  # Demote each dictionary parameter to `:erased` when the body would still pass
+  # the relevance check with it erased — i.e. it is never used relevantly. This is
+  # the exact soundness criterion `Relevance.check` enforces, so a demoted dict is
+  # safe for erasure to drop. Non-dict quantities are never touched.
+  defp demote_unused_dicts(env, %{params: params, quantities: quantities, name: name}, body) do
+    dict_positions =
+      params
+      |> Enum.with_index()
+      |> Enum.filter(fn {{:param, m, _n}, _i} -> Keyword.has_key?(m, :constraint_dict) end)
+      |> Enum.map(fn {_p, i} -> i end)
+
+    Enum.reduce(dict_positions, quantities, fn pos, qs ->
+      trial = List.replace_at(qs, pos, :erased)
+
+      case Relevance.check(env, name, trial, body) do
+        :ok -> trial
+        _ -> qs
+      end
+    end)
   end
 
   # A parameterized record `rec Box(a)\n  val: a` is a single-constructor
@@ -215,6 +392,17 @@ defmodule Cure.Elab.Declarations do
   # ctor telescope by the fields (so construction/projection find them) while
   # threading each field into scope for the following field types (a dependent
   # record — `rec Box(a)\n  n: Nat\n  v: Vec(a, n)`).
+  @doc """
+  Declare a single-constructor record family `name(type_params)` whose fields are
+  `[{:param, [type: ast], fname}]`. This is the public entry the typeclass
+  elaborator uses to realise an interface as its dictionary record type former
+  (`Eqs(a) ≙ Eqs{ eqs : a -> a -> Bool }`).
+  """
+  @spec declare_record(atom(), [String.t()], [tuple()], Env.t()) ::
+          {:ok, Env.t()} | {:error, term()}
+  def declare_record(name, type_params, fields, env),
+    do: declare_parameterized_struct(name, type_params, fields, env)
+
   defp declare_parameterized_struct(name, type_params, fields, env) do
     params = Enum.map(type_params, fn p -> {:param, [], p} end)
     sig = struct_ctor_sig(name, type_params, fields)
@@ -398,6 +586,14 @@ defmodule Cure.Elab.Declarations do
   # whose then-branch is bare `[]` (the `take` shape) pins its element type from
   # the goal rather than being elaborated infer-only first.
   defp elaborate_body({:pickup, _, _} = expr, return_core, scope, ctx, env, _params),
+    do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+  # A bare literal body is checked against the declared return type so a numeric
+  # literal at `Nat`/`Bounded(n)` lowers to its compact `{:nat_lit,_}`/
+  # `{:bounded_lit,_}` form (`fn a() -> Char = 97`), instead of inferring `Int` and
+  # then failing conversion. Non-numeric / Int/Float literals fall through the
+  # checked path to the same infer-and-convert behavior as before.
+  defp elaborate_body({:literal, _meta, _value} = expr, return_core, scope, ctx, env, _params),
     do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
   defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
@@ -766,7 +962,24 @@ defmodule Cure.Elab.Declarations do
     ordered
   end
 
-  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc) do
+  # A function-type node `T1 -> … -> R` (a method's field type in a typeclass
+  # dictionary record) carries `function_type: true` and NO `:name`. Recurse into
+  # its arrow components so a head/index variable buried inside is still collected,
+  # never treating it as a family application.
+  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+       when is_list(fmeta) do
+    if Keyword.get(fmeta, :function_type) do
+      Enum.reduce(args, acc, fn a, ac ->
+        collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac)
+      end)
+    else
+      collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+    end
+  end
+
+  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
+
+  defp collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc) do
     name = String.to_atom(Keyword.fetch!(fmeta, :name))
     index_types = family_index_types(name, fam, index_tele, env)
 
@@ -813,8 +1026,6 @@ defmodule Cure.Elab.Declarations do
 
     Enum.reduce(args, acc, fn a, ac -> collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac) end)
   end
-
-  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
 
   # Collect free variables from an index EXPRESSION typed by `type`, recursing into
   # constructor applications so a variable that appears only *inside* a constructor
@@ -1187,6 +1398,7 @@ defmodule Cure.Elab.Declarations do
   # family lookup `{:data, :Bool, [], []}` — exactly as `Nat` always has.
   defp primitive_type("Int"), do: {:int_type}
   defp primitive_type("Float"), do: {:float_type}
+  defp primitive_type("Binary"), do: {:binary_type}
   defp primitive_type(_), do: nil
 
   # Threads the ctx to NESTED argument positions (spec §7.3 item 3): in
@@ -1222,98 +1434,24 @@ defmodule Cure.Elab.Declarations do
   defp declare_indexed_at_min_level(_env, _name, _param_tele, _index_tele, _ctors, _level),
     do: {:error, :universe_ceiling}
 
-  # -- constructors -----------------------------------------------------------
+  # Opaque (postulate) family: register with the `opaque: true` marker and zero
+  # constructors, checking only that the parameter telescope is well-formed
+  # (level search on `:universe_level`). There are no constructors, so
+  # check_all_ctors / positive? are vacuous and deliberately skipped.
+  defp declare_opaque_at_min_level(env, name, param_tele, level) when level <= @ceiling do
+    family = Inductive.opaque_family(name, param_tele, level)
+    env2 = Inductive.declare(env, family, [])
 
-  defp build_ctors(variants) do
-    Enum.reduce_while(variants, {:ok, []}, fn variant, {:ok, acc} ->
-      case variant_to_ctor(variant) do
-        {:ok, ctor} -> {:cont, {:ok, acc ++ [ctor]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  # Nullary constructor: `None`
-  defp variant_to_ctor({:variable, _meta, vname}),
-    do: {:ok, Inductive.ctor(String.to_atom(vname), [], [])}
-
-  # Constructor with fields: `Some(T)` / `SVCons(Sig, SVDesc)`
-  defp variant_to_ctor({:function_def, meta, _body}) do
-    vname = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    field_asts = Keyword.fetch!(meta, :params)
-
-    case fields_to_telescope(field_asts) do
-      {:ok, tele} -> {:ok, Inductive.ctor(vname, tele, [])}
+    case Kernel.check_family(env2, Inductive.get_family(env2, name)) do
+      :ok -> {:ok, env2}
+      {:error, :universe_level} -> declare_opaque_at_min_level(env, name, param_tele, level + 1)
       {:error, _} = err -> err
     end
   end
 
-  defp variant_to_ctor(other), do: {:error, {:unsupported_variant, other}}
+  defp declare_opaque_at_min_level(_env, _name, _param_tele, _level),
+    do: {:error, :universe_ceiling}
 
-  defp fields_to_telescope(field_asts) do
-    field_asts
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {ast, i}, {:ok, acc} ->
-      case type_to_core(ast) do
-        {:ok, core} -> {:cont, {:ok, acc ++ [{:"f#{i}", core}]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  # -- surface type expr → Core type term -------------------------------------
-
-  defp type_to_core({:variable, _meta, "Type"}), do: {:ok, {:type, 0}}
-
-  defp type_to_core({:variable, _meta, name}) do
-    case primitive_type(name) do
-      nil -> {:ok, {:data, String.to_atom(name), [], []}}
-      prim -> {:ok, prim}
-    end
-  end
-
-  defp type_to_core({:function_call, meta, params}) do
-    cond do
-      Keyword.get(meta, :function_type) ->
-        {:error, {:unsupported_field_type, :function}}
-
-      true ->
-        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-        with {:ok, core_params} <- map_type_to_core(params) do
-          # A saturated family application becomes a `:data` with index args.
-          {:ok, {:data, name, [], core_params}}
-        end
-    end
-  end
-
-  # A pair/Σ field type `MkW(Sigma(a: T, U))`. Field telescopes here are
-  # non-dependent (each field is elaborated without the earlier fields in scope),
-  # so the Σ codomain carries no reference to the bound component — `U` has no free
-  # de Bruijn index and needs no shift. A genuinely dependent Σ field (`U`
-  # mentioning `a`) would map `a` to a spurious family name and be rejected by
-  # `Kernel.check_family`; it is not admitted here. Lowers to the builtin inductive
-  # `Sigma(D, λ_:D. U)`; because `U` is closed w.r.t. the binder, the wrapping
-  # lambda is trivially constant (it ignores its argument), which is still
-  # well-formed. The assembled `{:data, :Sigma, …}` goes into the constructor
-  # telescope and is validated by the kernel.
-  defp type_to_core({:sigma_type, [binder: _bname], [dom_ast, body_ast]}) do
-    with {:ok, dom} <- type_to_core(dom_ast),
-         {:ok, body} <- type_to_core(body_ast) do
-      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
-    end
-  end
-
-  defp type_to_core(other), do: {:error, {:unsupported_field_type, other}}
-
-  defp map_type_to_core(asts) do
-    Enum.reduce_while(asts, {:ok, []}, fn ast, {:ok, acc} ->
-      case type_to_core(ast) do
-        {:ok, core} -> {:cont, {:ok, acc ++ [core]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
 
   # -- declaration at the least well-formed universe level --------------------
 
