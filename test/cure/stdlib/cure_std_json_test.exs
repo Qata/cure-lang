@@ -20,6 +20,14 @@ defmodule :cure_std_json_test do
       assert :cure_std_json.encode({:Arr, [{:Num, 1.0}, {:Num, 2.0}]}) == "[1.0,2.0]"
       assert :cure_std_json.encode({:Obj, [{:JsonPair, "a", {:Num, 1.0}}]}) == ~s({"a":1.0})
     end
+
+    test "encodes a non-whole float" do
+      # Regression: `float_to_string` passed `{:compact, []}` to
+      # `:erlang.float_to_binary/2`, whose valid option is the bare atom
+      # `:compact`. Any fractional Num raised ArgumentError. Whole-number floats
+      # took the other branch, so it went unnoticed.
+      assert :cure_std_json.encode({:Num, 1.5}) == "1.5"
+    end
   end
 
   describe "decode/1" do

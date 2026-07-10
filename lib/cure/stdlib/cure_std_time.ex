@@ -7,10 +7,19 @@ defmodule :cure_std_time do
   `Instant` and `Duration` record shapes (tagged maps with
   `__struct__: :instant` / `__struct__: :duration`).
 
-  Runtime shapes are the DEPENDENT-pipeline erasure. `Instant` and `Duration`
-  are opaque — Cure never projects them, only threads them back through these
-  externs — so they stay internal `__struct__` maps. The values Cure DOES match
-  carry the constructor's own name:
+  Runtime shapes are the DEPENDENT-pipeline erasure.
+
+  `Instant` is opaque — it is only ever produced and consumed by these externs,
+  never constructed or projected in surface Cure — so it stays an internal
+  `%{__struct__: :instant}` map.
+
+  `Duration` is NOT opaque: `Std.Time.seconds/1` and friends build it in surface
+  with record-literal syntax (`Duration{micros: …}`), which erases to the tuple
+  `{:Duration, micros}`. The shim must produce and match that same tuple, or a
+  shim-built `diff/2` result and a surface-built `seconds/1` value would be
+  structurally incompatible.
+
+  The values Cure DOES match carry the constructor's own name:
 
     * `parse_iso8601`, `zone` → `Result(_, ParseError)` → `{:Ok, _}` / `{:Error, _}`
     * `ParseError = InvalidFormat(String) | OutOfRange(String)`
@@ -69,7 +78,7 @@ defmodule :cure_std_time do
 
   def add(
         %{@struct_key => :instant, micros: imicros},
-        %{@struct_key => :duration, micros: dmicros}
+        {:Duration, dmicros}
       )
       when is_integer(imicros) and is_integer(dmicros) do
     new_instant(imicros + dmicros)
@@ -125,8 +134,10 @@ defmodule :cure_std_time do
     %{@struct_key => :instant, micros: micros}
   end
 
+  # `rec Duration(micros)` → `{:Duration, micros}`, matching the surface
+  # record-literal erasure so shim-built and Cure-built Durations are one shape.
   defp new_duration(micros) when is_integer(micros) do
-    %{@struct_key => :duration, micros: micros}
+    {:Duration, micros}
   end
 
   # `ParseError = InvalidFormat(String) | OutOfRange(String)`.

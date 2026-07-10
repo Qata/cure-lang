@@ -33,9 +33,12 @@ defmodule :cure_std_test do
   defp find_counterexample(gen, property, n) when n > 0 do
     value = gen.(:draw)
 
-    case property.(value) do
+    # `safe_invoke` treats a raising property as `false`: a property that blows
+    # up on a drawn value has not been shown to hold, so that value is a
+    # counterexample. Without this the function raises, contradicting its
+    # `Result`/totality contract. The shrink loop already does the same.
+    case safe_invoke(property, value) do
       true -> find_counterexample(gen, property, n - 1)
-      false -> {:failed, value}
       _ -> {:failed, value}
     end
   end

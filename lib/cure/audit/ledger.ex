@@ -48,12 +48,17 @@ defmodule Cure.Audit.Ledger do
   """
   @spec roots(Env.t()) :: [atom()]
   def roots(%Env{defs: defs}) do
-    prelude = MapSet.new(Map.keys(prelude_env().defs))
+    prelude = prelude_env().defs
 
-    defs
-    |> Map.keys()
-    |> Enum.reject(&MapSet.member?(prelude, &1))
-    |> Enum.sort()
+    # Diff on (name, body), not name alone. A module may redefine a prelude name
+    # — e.g. `fn eq(...) = @extern(...)` — and elaboration is deterministic, so a
+    # genuine prelude def has a byte-identical body in both envs while a
+    # shadowing redefinition does not. Keying on name alone would exclude the
+    # shadow from roots and, if nothing else referenced it, hide the axiom
+    # entirely: a fail-open hole in a fail-closed tool.
+    for {name, d} <- defs,
+        Map.get(prelude, name) == nil or Map.get(prelude, name).body != d.body,
+        do: name
   end
 
   @spec bucket({atom(), atom(), non_neg_integer()}) :: :otp | :cure_runtime | :cure_bridge

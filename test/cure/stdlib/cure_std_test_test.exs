@@ -56,4 +56,15 @@ defmodule :cure_std_test_test do
   test "zero runs vacuously passes" do
     assert {:Ok, :ok} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, 0)
   end
+
+  test "a property that RAISES is a failure, not a propagated exception" do
+    # The doc says forall_shrunk never raises. A user property can raise on some
+    # drawn value (an `assert` inside it, a partial function). That must be
+    # treated as the property not holding -- an Error counterexample -- exactly
+    # as `false` is, and exactly as the shrink loop's safe_invoke already does.
+    gen = fn _ -> 100 end
+    property = fn n -> if n == 100, do: raise("boom"), else: n < 50 end
+
+    assert {:Error, _value} = :cure_std_test.forall_shrunk(gen, property, 5)
+  end
 end

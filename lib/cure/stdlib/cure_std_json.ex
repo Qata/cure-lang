@@ -78,7 +78,8 @@ defmodule :cure_std_json do
   defp float_to_string(f) when is_float(f) do
     cond do
       f == trunc(f) -> :erlang.float_to_binary(f, [{:decimals, 1}])
-      true -> :erlang.float_to_binary(f, [{:compact, []}, {:decimals, 15}])
+      # `:compact` is a bare-atom option; `{:compact, []}` is invalid and raises.
+      true -> :erlang.float_to_binary(f, [:compact, {:decimals, 15}])
     end
   end
 end

@@ -58,7 +58,9 @@ defmodule :cure_std_time_test do
       {:Ok, b} = :cure_std_time.parse_iso8601("2026-04-21T15:12:46Z")
 
       d = :cure_std_time.diff(b, a)
-      assert d == %{__struct__: :duration, micros: 60_000_000}
+      # Duration is surface-constructible (`Duration{micros: …}`), so it erases
+      # to the tuple `{:Duration, micros}`, not a struct map.
+      assert d == {:Duration, 60_000_000}
 
       back = :cure_std_time.add(a, d)
       assert back == b
@@ -66,7 +68,7 @@ defmodule :cure_std_time_test do
 
     test "negative durations move backward in time" do
       {:Ok, a} = :cure_std_time.parse_iso8601("2026-04-21T15:11:46Z")
-      d = %{__struct__: :duration, micros: -60_000_000}
+      d = {:Duration, -60_000_000}
       out = :cure_std_time.add(a, d)
       assert :cure_std_time.format_iso8601(out) == "2026-04-21T15:10:46Z"
     end

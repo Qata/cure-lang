@@ -67,6 +67,33 @@ defmodule Cure.Audit.FormatTest do
     assert String.ends_with?(json, "}\n")
   end
 
+  test "json escapes every string field, not just type and holes" do
+    # A target module/function atom can contain a quote or backslash. If any
+    # interpolated field is emitted raw, the whole JSON document is corrupt.
+    r = %Report{
+      axioms: [
+        %Axiom{
+          mfa: {:"evil\"mod", :"f\\n", 1},
+          type: "Int",
+          via: :"weird\"name",
+          bucket: :otp
+        }
+      ],
+      opaque: [:"O\"pq"],
+      not_proven_total: [:"n\\t"],
+      unresolved: [:"u\"r"]
+    }
+
+    json = Format.to_json(r, [])
+    # No unescaped double-quote may appear inside a string value. A cheap proxy:
+    # the raw atom text must not survive verbatim.
+    refute json =~ ~s(evil"mod)
+    refute json =~ ~s(weird"name)
+    refute json =~ ~s(O"pq)
+    assert json =~ ~S(evil\"mod)
+    assert json =~ ~S(weird\"name)
+  end
+
   test "render/2 selects the format" do
     assert Format.render(report(), format: "json") =~ ~s("schema":1)
     assert Format.render(report(), format: "text") =~ "AXIOMS — OTP (1)"

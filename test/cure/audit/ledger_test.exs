@@ -105,6 +105,24 @@ defmodule Cure.Audit.LedgerTest do
     assert audit(src).axioms == []
   end
 
+  test "an axiom hidden behind a shadowed prelude name is still reported" do
+    # `roots/1` diffs the module env against a prelude env. A module may define
+    # its own global under a prelude name (`eq`, `plus`, …). If the diff keys on
+    # NAME alone, that def is excluded from roots, and if nothing else references
+    # it, the whole axiom vanishes — a fail-open hole in a fail-closed tool. The
+    # diff must key on (name, body): a redefinition has a different body.
+    src = """
+    mod Test.Shadow
+      @extern(:evil_module, :sneaky_axiom, 2)
+      fn eq(x: Int, y: Int) -> Int
+    end
+    """
+
+    report = Ledger.audit_source(src, "Test.Shadow")
+    assert [axiom] = report.axioms
+    assert axiom.mfa == {:evil_module, :sneaky_axiom, 2}
+  end
+
   test "a module that fails to elaborate is recorded as unaudited" do
     report = Ledger.audit_source("mod Test.Broken\n  fn f(x: Int) -> = \nend\n", "Test.Broken")
     assert [{"Test.Broken", _reason}] = report.unaudited

@@ -1,7 +1,8 @@
 # Cure's axiom surface — design
 
 **Date:** 2026-07-10
-**Status:** designed, not implemented
+**Status:** Phase 0 (ledger) and Phase 1 (conformance harness) landed on
+`autopilot/axiom-surface` (unmerged, 2026-07-11); Phases 2–3 designed only.
 **Thesis:** *No axiom should point at code we wrote.*
 
 Supersedes the trust-ledger design of the same date, which is now Phase 0 of
@@ -26,6 +27,10 @@ They divide by target:
 | `OTP` | 64 | `erlang` (31), `maps` (11), `math` (8), `string` (5), `unicode` (3), `rand` (2), `lists` (2), `os` (1), `io` (1) |
 | `CURE RUNTIME` | 49 | `cure_std_crdt` (22), `cure_std_time` (9), `cure_std_regex` (7), `cure_std_http` (4), `cure_std_json` (3), `cure_std_gen` (3), `cure_std_test` (1) |
 | `CURE BRIDGE` | 43 | `Elixir.Cure.FSM.Builtins` (17), `App` (9), `Actor` (8), `Sup` (7), `Process` (2) |
+
+*(These counts are the design-time baseline. Phase 1 later retired `Std.Gen.shrink`
+from an `@extern` to an `interface` (see §5.3), so the current totals are 155
+externs / 48 `CURE RUNTIME`. The arithmetic below uses the baseline figures.)*
 
 **92 of 156 — 59% — point at cure-lang's own Elixir, not at OTP.** Trusting
 `erlang:length/1` is trusting OTP, which is reasonable and is not going to
@@ -198,7 +203,7 @@ imported modules are rekeyed to `Mod#name` by `Resolution.rekey_module_env`. Nam
 are an unreliable identity.
 
 An axiom's identity is **`(target MFA, elaborated type)`**. `erlang:length/1` at
-`∀{a}. List(a) -> Int` is the same assumption however the Cure wrapper is
+`∀ {a}. List(a) -> Int` is the same assumption however the Cure wrapper is
 spelled, and two wrappers of one MFA at two types are two assumptions. This
 sidesteps the anonymous-instance provenance gap entirely: module attribution is a
 best-effort *display* field, never part of an axiom's identity.
@@ -306,7 +311,7 @@ ratchet. Every section prints even when empty, so a section going from `(0)` to
 $ cure audit trust Std.List
 
 AXIOMS — OTP (1)
-  erlang:length/1          ∀{a}. List(a) -> Int
+  erlang:length/1          ∀ {a}. List(a) -> Int
 
 AXIOMS — CURE RUNTIME (0)
 
@@ -318,6 +323,7 @@ KERNEL BUILTINS
   31 builtin operators (Cure.Core.Builtins)
 
 HOLES (0)
+
 ABSURD (0)
 
 NOT PROVEN TOTAL (4)   — cannot be used in proofs; not assumptions

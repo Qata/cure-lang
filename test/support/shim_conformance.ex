@@ -82,7 +82,10 @@ defmodule Cure.Audit.ShimConformance do
   defp elem, do: int()
 
   defp int_list, do: {:member_of, [[], [1], [3, 1, 2], [5, 5], [-1, 0, 1]]}
-  defp text, do: {:member_of, ["", "a", "aa b aaa", "1a2", "hello"]}
+  # Includes "ab" so the `(a)(b)` pattern actually matches and yields capture
+  # groups — otherwise `run`/`scan` only ever produce `{:Matched, whole, []}`
+  # and the groups field is never exercised.
+  defp text, do: {:member_of, ["", "a", "aa b aaa", "1a2", "hello", "ab", "xabx"]}
   defp pattern, do: {:member_of, ["a+", "[0-9]+", "\\s", "(a)(b)"]}
 
   # -- CRDT states, built from the module's own constructors -------------------
@@ -142,7 +145,21 @@ defmodule Cure.Audit.ShimConformance do
 
   defp regex, do: map(pattern(), &:cure_std_regex.compile_bang/1)
 
-  defp json_value, do: {:one_of, [map(int(), &:cure_std_json.num_of_int/1), ret({:Arr, []})]}
+  # Exercise every Value constructor `encode/1` handles, not just Num and empty
+  # Arr: the nullary `:Null`, `Bool`, `Str`, a non-empty nested `Arr`, and an
+  # `Obj` of `JsonPair`s.
+  defp json_value do
+    {:member_of,
+     [
+       {:Num, 1.5},
+       :Null,
+       {:Bool, true},
+       {:Bool, false},
+       {:Str, "hi"},
+       {:Arr, [{:Num, 1.0}, {:Str, "x"}]},
+       {:Obj, [{:JsonPair, "k", {:Num, 2.0}}]}
+     ]}
+  end
 
   # A deterministic generator + property pair for `forall_shrunk`.
   defp gen_fn, do: {:member_of, [fn _ -> 7 end, fn _ -> 100 end]}
@@ -157,11 +174,15 @@ defmodule Cure.Audit.ShimConformance do
     crdt() ++ time() ++ regex_axioms() ++ json() ++ gen() ++ test_axioms()
   end
 
-  @doc "Axioms excluded from execution, with the reason."
+  @doc """
+  Axioms excluded from execution, with the reason. These are the real target
+  MFAs (the `@extern` targets), not the Cure surface names — `Std.Http`'s
+  `get_with_headers/2` targets `:cure_std_http.get/2`, so the tuple names `get`.
+  """
   def excluded do
     [
       {{:cure_std_http, :get, 1}, "network I/O"},
-      {{:cure_std_http, :get_with_headers, 2}, "network I/O"},
+      {{:cure_std_http, :get, 2}, "network I/O"},
       {{:cure_std_http, :post, 3}, "network I/O"},
       {{:cure_std_http, :head, 1}, "network I/O"}
     ]
@@ -205,14 +226,18 @@ defmodule Cure.Audit.ShimConformance do
 
   defp time do
     inst = {:struct, :instant}
-    dur = {:struct, :duration}
+    # Duration is surface-constructible, so it erases to `{:Duration, micros}`.
+    dur = :duration
+    # A mix of valid and invalid ISO-8601 strings, so BOTH the `{:Ok, Instant}`
+    # and the `{:Error, ParseError}` branches of parse_iso8601 are shape-checked.
+    iso = {:member_of, ["2026-05-01T09:00:00Z", "2026-04-21T15:11:46.5Z", "not-a-date", ""]}
 
     [
       # Reads the clock. Declared `-> Instant ! Io`, but `declarations.ex` never
       # reads an effect, so the postulate is pure. It is not.
       a({:cure_std_time, :now, 0}, ret([]), inst, :effectful),
       a({:cure_std_time, :utc_now, 0}, ret([]), inst, :effectful),
-      a({:cure_std_time, :parse_iso8601, 1}, seq([text()]), {:result, inst, :any}),
+      a({:cure_std_time, :parse_iso8601, 1}, seq([iso]), {:result, inst, :any}),
       a({:cure_std_time, :format_iso8601, 1}, seq([instant()]), :binary),
       a({:cure_std_time, :add, 2}, seq([instant(), duration()]), inst),
       a({:cure_std_time, :diff, 2}, seq([instant(), instant()]), dur),
@@ -377,7 +402,8 @@ defmodule Cure.Audit.ShimConformance do
   end
 
   # ---------------------------------------------------------------------------
-  # Runtime shapes. These are the CLASSIC erasure (lowercase tags).
+  # Runtime shapes. These are the DEPENDENT erasure: constructor-name tags,
+  # nullary -> bare atom, records -> tuples in declaration order.
   # ---------------------------------------------------------------------------
 
   defp shape?(:any, _v), do: true
@@ -397,9 +423,16 @@ defmodule Cure.Audit.ShimConformance do
   defp shape?({:option, s}, {:Some, v}), do: shape?(s, v)
   defp shape?({:option, _}, _), do: false
 
-  # `rec Matched(whole, groups)` → `{:Matched, whole, groups}`.
-  defp shape?(:matched, {:Matched, whole, groups}), do: is_binary(whole) and is_list(groups)
+  # `rec Matched(whole, groups)` → `{:Matched, whole, groups}`; every captured
+  # group is itself a String.
+  defp shape?(:matched, {:Matched, whole, groups}),
+    do: is_binary(whole) and is_list(groups) and Enum.all?(groups, &is_binary/1)
+
   defp shape?(:matched, _), do: false
+
+  # `rec Duration(micros)` → `{:Duration, micros}`.
+  defp shape?(:duration, {:Duration, m}), do: is_integer(m)
+  defp shape?(:duration, _), do: false
 
   defp shape?(:json, v) do
     v == :Null or match?({:Bool, _}, v) or match?({:Num, _}, v) or

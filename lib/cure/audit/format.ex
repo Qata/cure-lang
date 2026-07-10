@@ -46,17 +46,17 @@ defmodule Cure.Audit.Format do
   def to_json(report, _opts) do
     axioms =
       Enum.map(report.axioms, fn a ->
-        ~s({"mfa":"#{mfa(a)}","type":"#{escape(a.type)}","via":"#{a.via}","bucket":"#{a.bucket}"})
+        ~s({"mfa":#{jstr(mfa(a))},"type":#{jstr(a.type)},"via":#{jstr(a.via)},"bucket":#{jstr(a.bucket)}})
       end)
 
     ~s({"schema":1,"axioms":[#{Enum.join(axioms, ",")}],) <>
-      ~s("opaque":[#{Enum.map_join(report.opaque, ",", &~s("#{&1}"))}],) <>
+      ~s("opaque":[#{Enum.map_join(report.opaque, ",", &jstr/1)}],) <>
       ~s("builtin_count":#{report.builtin_count},) <>
-      ~s("holes":[#{Enum.map_join(report.holes, ",", &~s("#{escape(&1)}"))}],) <>
+      ~s("holes":[#{Enum.map_join(report.holes, ",", &jstr/1)}],) <>
       ~s("absurd":#{report.absurd},) <>
-      ~s("not_proven_total":[#{Enum.map_join(report.not_proven_total, ",", &~s("#{&1}"))}],) <>
-      ~s("unresolved":[#{Enum.map_join(report.unresolved, ",", &~s("#{&1}"))}],) <>
-      ~s("unaudited":[#{Enum.map_join(report.unaudited, ",", fn {l, _} -> ~s("#{l}") end)}]}) <>
+      ~s("not_proven_total":[#{Enum.map_join(report.not_proven_total, ",", &jstr/1)}],) <>
+      ~s("unresolved":[#{Enum.map_join(report.unresolved, ",", &jstr/1)}],) <>
+      ~s("unaudited":[#{Enum.map_join(report.unaudited, ",", fn {l, _} -> jstr(l) end)}]}) <>
       "\n"
   end
 
@@ -117,5 +117,10 @@ defmodule Cure.Audit.Format do
 
   defp mfa(%Axiom{mfa: {m, f, a}}), do: "#{m}:#{f}/#{a}"
   defp pad(s), do: String.pad_trailing(s, 24)
+
+  # A JSON string literal: quote and escape any term. Every field emitted into
+  # `to_json` must go through this — an MFA atom or a hole name can legitimately
+  # contain `"` or `\`, and a single raw one corrupts the whole document.
+  defp jstr(term), do: ~s(") <> escape(to_string(term)) <> ~s(")
   defp escape(s), do: s |> String.replace("\\", "\\\\") |> String.replace("\"", "\\\"")
 end
