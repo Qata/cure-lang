@@ -123,3 +123,89 @@ Then a fresh audit ran on these fix commits (iteration 2's audit step).
   last-wins the second. Invalid input; both paths best-effort. Accepted.
 
 ---
+
+## Iteration 3 — audit of iteration 2's fixes (3 agents) + fixes
+
+Fresh 3-agent Opus audit of `ee07b6c`/`a8bbbfa`/`817b45e`. Each finding verified
+against source myself before counting.
+
+- **CLI audit (I2/I4): CLEAN.** No new defects. One pre-existing non-regression
+  noted (`migrate_project_edition(".")` keys off CWD, not the migrated files'
+  dir) — unchanged by the fix, not counted.
+- **project audit: two real defects** (one a regression the iteration-2 fix
+  introduced). Both FIXED this cycle.
+- **cross-cutting audit: F-A/F-B/F-C.** F-A had a LIVE sub-part (fixed) and a
+  LATENT sub-part (escalated). F-B/F-C are LATENT. `compare/2`/`year/1` totality,
+  the lexer keyword-gating fold, and the phase-2 bump write-side all verified
+  CLEAN.
+
+### Iteration 3 — FIXED (commit `86b9be3`, full suite 3845 passed / 0 failed)
+- **I1b (MED regression):** iteration-2's `$`-anchored loader regex stopped
+  recognising a TOML array-of-tables header `[[deps]]` as a section boundary →
+  its keys leaked into the preceding `[project]` table, while the writer still
+  bounded on it (writer/loader split again). Broadened `table_header_name/1` to
+  `\[{1,2}..\]{1,2}` and derived BOTH writer boundary predicates from it —
+  one grammar by construction. Red test: array-of-tables load round-trip.
+- **I1c (LOW):** loader tolerated `[ project ]` (internal whitespace) but writer
+  `project_header?` required literal `[project]` → duplicate table on write.
+  `project_header?` is now `table_header_name(line) == "project"` (agrees with
+  the loader; dotted `[project.env]` still excluded). Red test: no-duplicate.
+- **F-A LIVE (MED):** the build pipeline (`compiler.ex` lex/parse) never calls
+  `Cure.Edition.resolve`, so a well-formed but unknown `@edition("9999")` was
+  only format-checked and compiled silently — violates spec §3.1 ("a typo'd
+  edition must fail loudly") / §3.3. The parser now allow-list-validates the
+  pragma via `Cure.Edition.valid?/1`, raising a distinct `:edition_pragma_unknown`
+  error. Red test in `edition_pragma_hardening_test.exs`.
+
+## Blocked — needs operator (Outstanding after iteration 3)
+
+The three remaining confirmed findings are all **LATENT** — none can misbehave
+until a **second edition** is minted (today `@known == ["2026"]`, so every path
+resolves to the one value). They are **not TDD-fixable now** (a red test needs a
+real retired keyword / a 2nd edition to make the wrong behaviour observable), and
+two require **design decisions on the compile / migrate pipelines that the spec &
+plan deliberately did not scope**. Per the loop's escalation guardrail, recorded
+here rather than blind-patched on hot paths. Operator: pick a resolution per item.
+
+- **F-A LATENT [HIGH-when-live] — build pipeline is edition-blind for lexing.**
+  `compiler.ex` `lex/parse` (245-256) and every `cure build`/`run` caller never
+  call `Cure.Edition.resolve/1` nor pass `:edition`; the lexer always uses
+  `current()`. So §4's edition-parameterized lexing is dead on the build path:
+  once a keyword is retired at edition N, a file pinned to edition N-1 will fail
+  to `cure build` (the retired word won't lex as a keyword) — defeating the
+  feature's headline purpose. The LIVE half (unknown pragma) is already closed at
+  the parser. **Decision needed:** wire `resolve/1` into the compile pipeline
+  (where — `compiler.ex` vs each CLI caller? how is `project_dir` derived from a
+  file path? per-build Cure.toml caching? does a resolve error abort the build?).
+  This is an unplanned integration task on the hot path, not a localized fix.
+- **F-B LATENT [HIGH-when-live] — `cure migrate` parses the INPUT under the
+  TARGET edition, not the source.** `plan_migration_source` (cli ~1304-1305) and
+  `migrate_preflight_file` tokenize/parse the source with `edition: target`. To
+  detect a keyword retired *at* target you must parse under the OLD edition where
+  it's still a keyword; under target the construct lexes as a bare identifier, the
+  rule silently no-ops, and phase 2 bumps anyway. Masked today (proto/impl ship
+  `enforced_in: nil`, 2026 is the floor). I2/F12 correctly fixed the *verify*
+  reparse to use `target`; the two edition roles (parse-input = source,
+  verify-output = target) are conflated onto `target`. **Decision needed:** thread
+  the project (source) edition into parse-input while keeping verify at target.
+  Not TDD-able now — the real migrate path uses the live registry, not injectable
+  fixture rules, so no crossing exists that makes input-parse-edition observable.
+- **F-C LATENT [MED] — pragma whitespace grammar drift.** The parser is
+  whitespace-insensitive, so `@edition ("2026")` / `@ edition("2026")` parse as
+  valid pragmas, but the regex surfaces (`Cure.Edition.pragma_edition`, cli
+  `migrate_edition_pragma`/`migrate_splice_edition`) require tight `@edition(` →
+  a spaced pragma is invisible to resolution and to the phase-2 bump splicer.
+  Masked now (default == the only valid value). **Decision needed (low-stakes):**
+  tighten the parser to reject interior whitespace, OR loosen the three regexes to
+  tolerate it — semantics-only, prefer the lower-risk direction. Recorded, not
+  guessed.
+
+**Loop status:** iteration 3 fixed every LIVE/testable bug; the suite is green.
+The residue is latent multi-edition/design work that the autonomous loop must not
+self-decide. Operator notified once (see below). The cron is **left in place**
+per the escalation guardrail; a subsequent fire that finds only this Blocked
+section (no new testable findings) should STOP quietly WITHOUT re-notifying and
+WITHOUT deleting the cron — await an operator design decision or an explicit
+cancel. Do NOT merge.
+
+---
