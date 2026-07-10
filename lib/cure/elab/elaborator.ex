@@ -581,6 +581,10 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:unsupported_operand_type, :+}} ->
           combine_call(l, r, names, ctx, env)
 
+        {:error, {:unsupported_operand_type, cmp}}
+        when cmp in [:<, :>, :<=, :>=] ->
+          compare_op_call(cmp, l, r, names, ctx, env)
+
         :unsupported_op ->
           {:error, {:unsupported_expression, expr}}
 
@@ -673,6 +677,35 @@ defmodule Cure.Elab.Elaborator do
   # letting the interface-dispatch machinery pick the instance by operand type.
   defp combine_call(l, r, names, ctx, env),
     do: elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
+
+  # Desugar a comparison operator on a NON-primitive operand to the
+  # `Std.Ord.compare` method, tested against an `Ordering` constructor — the
+  # same shape as `Std.Ord`'s own derived `lt`/`le`/`gt`/`ge` helpers:
+  #
+  #     a <  b  ~>  compare(a, b) == LessThan()
+  #     a >  b  ~>  compare(a, b) == GreaterThan()
+  #     a <= b  ~>  compare(a, b) != GreaterThan()
+  #     a >= b  ~>  compare(a, b) != LessThan()
+  #
+  # `compare` dispatches by coherence to the operand's `Ord` instance; the
+  # `==`/`!=` on the `Ordering` result rides the usual `struct_eq`/`struct_ne`
+  # path. Reached only when `build_binop` reports the operand type has no
+  # primitive `<`/`>`/`<=`/`>=` (Int/Float keep their primitive meaning).
+  # Requires `use Std.Ord` in scope so `compare` and the `Ordering`
+  # constructors resolve (class-import model, like `combine`).
+  defp compare_op_call(cmp, l, r, names, ctx, env) do
+    {ctor, eq_op} =
+      case cmp do
+        :< -> {"LessThan", :==}
+        :> -> {"GreaterThan", :==}
+        :<= -> {"GreaterThan", :!=}
+        :>= -> {"LessThan", :!=}
+      end
+
+    compare = {:function_call, [name: "compare"], [l, r]}
+    ordering = {:function_call, [name: ctor], []}
+    elaborate_expr_typed({:binary_op, [operator: eq_op], [compare, ordering]}, names, ctx, env)
+  end
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.
   # The LAST clause is the terminator (its body is the seed); every earlier
