@@ -122,29 +122,43 @@ mod TestShowcase
   # ---- 4. Shrinking-aware properties -----------------------------------------
 
   ## `forall_shrunk` shrinks counterexamples when a property fails.
-  ## Here the property always holds, so no shrinking is triggered and
-  ## the result is `Ok(:ok)`. A failing property would yield
-  ## `Error(minimal_counterexample)` rather than raising.
-  fn prop_shrunk_happy() -> Result(Atom, Any) =
-    forall_shrunk(
+  ## It returns a `Result`: `Ok(:ok)` when every sample satisfied the
+  ## property, `Error(minimal)` carrying the smallest counterexample
+  ## otherwise. It never raises -- a failing property is a value.
+  ##
+  ## Destructuring the result here is deliberate: it pins that the
+  ## runtime shape `cure_std_test` returns really is a `Result` this
+  ## pipeline can pattern-match.
+  fn prop_shrunk_happy() -> Atom =
+    match forall_shrunk(
       fn(_) -> int_in(0, 200),
       fn(n) -> n >= 0,
       50
     )
+      Ok(_)    -> :ok
+      Error(_) -> raise_shrunk()
 
   ## Same with the 100-run convenience wrapper.
-  fn prop_shrunk_default_happy() -> Result(Atom, Any) =
-    forall_shrunk_default(
+  fn prop_shrunk_default_happy() -> Atom =
+    match forall_shrunk_default(
       fn(_) -> list_int(6, 1, 50),
       fn(xs) -> all(xs, fn(x) -> x > 0)
     )
+      Ok(_)    -> :ok
+      Error(_) -> raise_shrunk()
 
   ## `forall_shrunk` over lists: appending [] is the identity.
-  fn prop_shrunk_append_nil() -> Result(Atom, Any) =
-    forall_shrunk_default(
+  fn prop_shrunk_append_nil() -> Atom =
+    match forall_shrunk_default(
       fn(_) -> list_int(8, -20, 20),
       fn(xs) -> append(xs, []) == xs
     )
+      Ok(_)    -> :ok
+      Error(_) -> raise_shrunk()
+
+  ## A shrunk counterexample means the property is false: fail loudly.
+  local fn raise_shrunk() -> Atom =
+    assert(false)
 
   # ---- 5. Generator combinator showcase --------------------------------------
 
