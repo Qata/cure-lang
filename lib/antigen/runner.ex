@@ -425,6 +425,18 @@ defmodule Antigen.Runner do
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)
 
+  @doc """
+  The full assay replay registry: every registered assay id mapped to its module.
+  Built from `registered_assays/0` + `assay_module_for/1`, so it stays in sync with
+  the dispatch table automatically (unlike a hand-maintained literal). Consumers:
+  `Antigen.Prune` (re-check each corpus record against the live kernel) and any
+  replay driver that must cover *every* assay, not a hardcoded subset.
+  """
+  @spec replay_registry() :: %{String.t() => module()}
+  def replay_registry do
+    for id <- registered_assays(), into: %{}, do: {id, assay_module_for(id)}
+  end
+
   defp bank_seed(c, opts, acc) do
     case Corpus.append(opts[:seeds_path], c, Corpus.dedup_key(c, :seed)) do
       :appended -> %{acc | seeds_banked: acc.seeds_banked + 1}
