@@ -1284,6 +1284,10 @@ defmodule Cure.Project do
           path: Map.get(pairs, "path"),
           git: Map.get(pairs, "git"),
           tag: Map.get(pairs, "tag"),
+          # `ref` was recorded by write_lock and consumed by ref_args/1 but never
+          # parsed here, so a `ref =` pin was silently dropped (dep cloned the
+          # remote default branch). Extract it so the pin is honoured.
+          ref: Map.get(pairs, "ref"),
           version: Map.get(pairs, "version"),
           constraint: Map.get(pairs, "constraint") || Map.get(pairs, "version")
         }

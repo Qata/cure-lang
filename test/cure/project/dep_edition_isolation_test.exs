@@ -100,6 +100,23 @@ defmodule Cure.Project.DepEditionIsolationTest do
     assert {:error, {:invalid_dependency, "bad"}} = Cure.Project.resolve_deps(project)
   end
 
+  # Iteration 10 (audit): `parse_dep_line` recorded tag/version/constraint but NOT
+  # `ref`, even though `ref_args/1` has a live `%{ref: ...}` clause and `write_lock`
+  # persists a `ref` row — so a `ref =` pin was silently dropped (the dep cloned the
+  # remote default branch while the lockfile claimed a ref).
+  test "a git dependency's ref pin is parsed", %{root: root} do
+    File.write!(
+      Path.join(root, "Cure.toml"),
+      "[project]\nname = \"app\"\n\n[dependencies]\n" <>
+        "mydep = { git = \"https://example.test/r.git\", ref = \"abc123\" }\n"
+    )
+
+    {:ok, project} = Cure.Project.load(root)
+    dep = Enum.find(project.dependencies, &(&1.name == "mydep"))
+
+    assert Map.get(dep, :ref) == "abc123"
+  end
+
   # Iteration 9 (audit): `cure deps update` calls `resolve_git_dep/2` DIRECTLY,
   # bypassing `resolve_one`'s trim guard, so the whitespace/empty-git rejection must
   # also live at the `resolve_git_dep` boundary — otherwise `deps update` clones
