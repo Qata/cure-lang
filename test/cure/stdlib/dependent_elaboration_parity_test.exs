@@ -65,4 +65,50 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
            "stdlib modules regressed on the dependent pipeline:\n" <>
              Enum.map_join(Enum.reverse(failures), "\n", fn {n, e} -> "  Std.#{n}: #{e}" end)
   end
+
+  # The classic-coexistence contract: `show`/`io` elaborate cleanly on the
+  # dependent pipeline the instant they can carry their held-out imports
+  # (`use Std.String` + `use Std.Semigroup`). The committed files omit those
+  # imports ONLY because the CLASSIC checker breaks on them (String=List(Char) vs
+  # binary), so they cannot appear in the `@green` scan above — but they flip green
+  # the moment classic is deleted (#18). This guard locks that "green-on-deletion"
+  # property in as a regression: a future break in `show`/`io`'s dependent side is
+  # caught HERE rather than only at rip-out time. `io` genuinely needs BOTH imports
+  # (its `<>` routes through `Std.Semigroup.combine`).
+  @coexistence [{"show", ~w(Std.String Std.Semigroup)}, {"io", ~w(Std.String Std.Semigroup)}]
+
+  test "classic-coexistence modules (show/io) elaborate once their held-out imports are added" do
+    failures =
+      Enum.reduce(@coexistence, [], fn {name, uses}, acc ->
+        src = inject_uses(Path.join("lib/std", name <> ".cure"), uses)
+
+        result =
+          try do
+            Program.elaborate(src)
+          rescue
+            e -> {:raise, Exception.message(e)}
+          catch
+            kind, value -> {:raise, "#{inspect(kind)}: #{inspect(value)}"}
+          end
+
+        case result do
+          {:ok, _env} -> acc
+          other -> [{name, inspect(other, limit: 5)} | acc]
+        end
+      end)
+
+    assert failures == [],
+           "classic-coexistence modules no longer elaborate with imports (green-on-" <>
+             "deletion contract broken):\n" <>
+             Enum.map_join(Enum.reverse(failures), "\n", fn {n, e} -> "  Std.#{n}: #{e}" end)
+  end
+
+  # Insert `use <mod>` lines immediately after the `mod …` header line, mirroring
+  # how `Cure.Stdlib.Preload` would supply them once classic is gone.
+  defp inject_uses(path, uses) do
+    lines = String.split(File.read!(path), "\n")
+    {pre, [mod_line | post]} = Enum.split_while(lines, &(not String.match?(&1, ~r/^\s*mod\s/)))
+    use_lines = Enum.map(uses, &("  use " <> &1))
+    Enum.join(pre ++ [mod_line] ++ use_lines ++ post, "\n")
+  end
 end
