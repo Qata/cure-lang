@@ -124,6 +124,7 @@ defmodule Cure.Core.Validator do
   defp children({:pi, dom, cod}), do: [dom, cod]
   defp children({:pi, _grade, dom, cod}), do: [dom, cod]
   defp children({:lam, dom, body}), do: [dom, body]
+  defp children({:let, ty, val, body}), do: [ty, val, body]
   defp children({:lam, _grade, dom, body}), do: [dom, body]
   defp children({:sigma, a, b}), do: [a, b]
   defp children({:app, f, a}), do: [f, a]

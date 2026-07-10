@@ -111,6 +111,28 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # let-binding (ζ). Typing mirrors Lean's `infer_let`
+  # (`src/kernel/type_checker.cpp`): the ascription must be a sort, the value
+  # must check against it, and the let's type is the body's type.
+  #
+  # The body is checked under `Context.extend_def/3`, so the bound variable is
+  # definitionally its value. Two consequences worth stating, because they are
+  # what make this a small change:
+  #
+  #   * No inferred type can mention the bound variable — it is never a neutral —
+  #     so unlike Lean's fvar formulation there is nothing to re-abstract
+  #     (`mk_pi(fvars, r)`). Values carry their own environments.
+  #   * `Eval` erases the node (ζ), so no `let` reaches `Conv`, `Quote` or any
+  #     normal form. Sharing lives in the term; transparency lives in the env.
+  def infer(ctx, {:let, ty, val, body}) do
+    with {:ok, _level} <- infer_sort(ctx, ty),
+         ty_value = Eval.eval(ty, Context.env(ctx)),
+         :ok <- check(ctx, val, ty_value) do
+      val_value = Eval.eval(val, Context.env(ctx))
+      infer(Context.extend_def(ctx, ty_value, val_value), body)
+    end
+  end
+
   def infer(ctx, {:lam, dom, body}) do
     with {:ok, _level} <- infer_sort(ctx, dom) do
       dom_value = Eval.eval(dom, Context.env(ctx))
@@ -270,6 +292,21 @@ defmodule Cure.Core.Kernel do
 
   # A hole is a deferred term: accepted at any goal type. Its obligation is
   # reported to the user and blocks codegen until filled (§6 / M8.5).
+  # Checking a `let` pushes the expected type through to the body. Without this
+  # clause `check_via_infer/3` would INFER the body, which forbids check-only
+  # terms (`{:hole, _}`, `{:absurd}`, `{:bounded_lit, _}`) in a let body — the
+  # very regression a `(λ x. body) val` β-redex encoding suffers, since the λ
+  # must be inferred. `expected` is a level-indexed value and stays valid under
+  # the extended context.
+  def check(ctx, {:let, ty, val, body}, expected) do
+    with {:ok, _level} <- infer_sort(ctx, ty),
+         ty_value = Eval.eval(ty, Context.env(ctx)),
+         :ok <- check(ctx, val, ty_value) do
+      val_value = Eval.eval(val, Context.env(ctx))
+      check(Context.extend_def(ctx, ty_value, val_value), body, expected)
+    end
+  end
+
   def check(_ctx, {:hole, _name}, _expected), do: :ok
 
   # Checking-mode constructor application: the expected vdata supplies the

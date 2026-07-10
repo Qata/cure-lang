@@ -14,6 +14,10 @@ defmodule Cure.Core.Term do
     * `{:var, k}`                            bound variable, de Bruijn index `k >= 0`
     * `{:pi, dom, cod}`                      dependent function type (binds in `cod`)
     * `{:lam, dom, body}`                    lambda (binds in `body`)
+    * `{:let, ty, val, body}`                let-binding (binds in `body`);
+                                             ζ-transparent: the variable is
+                                             definitionally `val`. Idris
+                                             `Binder.Let`, Lean `Expr.letE`.
     * `{:app, f, a}`                         application
     * `{:data, name, params, indices}`       family applied to params + indices
     * `{:ctor, name, args}`                  data constructor application
@@ -58,6 +62,7 @@ defmodule Cure.Core.Term do
   def term?({:var, k}), do: is_integer(k) and k >= 0
   def term?({:pi, dom, cod}), do: term?(dom) and term?(cod)
   def term?({:lam, dom, body}), do: term?(dom) and term?(body)
+  def term?({:let, ty, val, body}), do: term?(ty) and term?(val) and term?(body)
   def term?({:app, f, a}), do: term?(f) and term?(a)
 
   def term?({:data, name, params, indices}),
@@ -121,6 +126,9 @@ defmodule Cure.Core.Term do
   def shift({:hole, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
   def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
+  # `ty` and `val` live OUTSIDE the binder; only `body` is one deeper.
+  def shift({:let, ty, val, body}, a, c),
+    do: {:let, shift(ty, a, c), shift(val, a, c), shift(body, a, c + 1)}
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
 
   def shift({:data, n, ps, is}, a, c),
@@ -149,6 +157,9 @@ defmodule Cure.Core.Term do
 
   defp has_free_var?({:var, k}, depth), do: k >= depth
   defp has_free_var?({:lam, d, b}, depth), do: has_free_var?(d, depth) or has_free_var?(b, depth + 1)
+
+  defp has_free_var?({:let, t, v, b}, depth),
+    do: has_free_var?(t, depth) or has_free_var?(v, depth) or has_free_var?(b, depth + 1)
   defp has_free_var?({:pi, d, c}, depth), do: has_free_var?(d, depth) or has_free_var?(c, depth + 1)
 
   defp has_free_var?({:case, s, m, brs}, depth) do
@@ -195,6 +206,9 @@ defmodule Cure.Core.Term do
   def subst({:lam, dom, body}, j, r),
     do: {:lam, subst(dom, j, r), subst(body, j + 1, shift(r, 1, 0))}
 
+  def subst({:let, ty, val, body}, j, r),
+    do: {:let, subst(ty, j, r), subst(val, j, r), subst(body, j + 1, shift(r, 1, 0))}
+
   def subst({:app, f, x}, j, r), do: {:app, subst(f, j, r), subst(x, j, r)}
 
   def subst({:data, n, ps, is}, j, r),
@@ -222,6 +236,14 @@ defmodule Cure.Core.Term do
 
   def to_external({:lam, d, b}),
     do: %{"node" => "lam", "dom" => to_external(d), "body" => to_external(b)}
+
+  def to_external({:let, t, v, b}),
+    do: %{
+      "node" => "let",
+      "type" => to_external(t),
+      "value" => to_external(v),
+      "body" => to_external(b)
+    }
 
   def to_external({:app, f, a}),
     do: %{"node" => "app", "fun" => to_external(f), "arg" => to_external(a)}
@@ -271,6 +293,9 @@ defmodule Cure.Core.Term do
 
   def from_external(%{"node" => "lam", "dom" => d, "body" => b}),
     do: {:lam, from_external(d), from_external(b)}
+
+  def from_external(%{"node" => "let", "type" => t, "value" => v, "body" => b}),
+    do: {:let, from_external(t), from_external(v), from_external(b)}
 
   def from_external(%{"node" => "app", "fun" => f, "arg" => a}),
     do: {:app, from_external(f), from_external(a)}

@@ -3,7 +3,7 @@ defmodule Antigen.Assays.KernelLawTest do
   alias Antigen.Generators.Term, as: TermGen
   alias Antigen.Runner
 
-  @law_ids ~w(kernel/shift_subst kernel/weakening kernel/confluence kernel/beta_subst elab/shift_agrees)
+  @law_ids ~w(kernel/shift_subst kernel/weakening kernel/confluence kernel/beta_subst kernel/zeta_subst elab/shift_agrees)
 
   test "typed_term/1 accepts every kernel-law assay-id (guard widened)" do
     for id <- @law_ids do
