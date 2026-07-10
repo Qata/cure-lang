@@ -257,8 +257,23 @@ defmodule Cure.Core.Kernel do
   # to seed check_ctor_app, then re-derive the actual result and compare it to
   # `expected` (arguments checking against their own types is NOT enough — the
   # computed indices must still match the expected type's).
-  def check(ctx, {:ctor, cname, args}, {:vdata, _family, _combined} = expected) do
-    with {:ok, _value} <- elaborate_ctor(ctx, cname, args, expected), do: :ok
+  def check(ctx, {:ctor, cname, args} = term, expected) do
+    # Weak-head-normalise the GOAL before dispatching on its head: a constructor
+    # can be checked against any type that δ-unfolds to the family's `{:vdata,…}`
+    # — e.g. a `typealias String = List(Char)` goal, which reaches here as the
+    # bare alias global (a neutral), not a literal `{:vdata,…}`. This mirrors the
+    # `bounded_lit` clause below (and Agda/Lean, which whnf the goal in checking
+    # mode). Sound: `elaborate_ctor` still field-checks and converts the computed
+    # result against the whnf'd goal, which is definitionally the original goal, so
+    # no ill-typed constructor is admitted. A goal that does NOT expose a `{:vdata}`
+    # head falls through to the infer-then-convert path, exactly as before.
+    case Normalise.whnf_value(expected, Context.signature(ctx)) do
+      {:vdata, _family, _combined} = vd ->
+        with {:ok, _value} <- elaborate_ctor(ctx, cname, args, vd), do: :ok
+
+      _ ->
+        check_via_infer(ctx, term, expected)
+    end
   end
 
   # Checking a compact `Bounded` literal against a concrete declared bound. δ-whnf
