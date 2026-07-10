@@ -122,9 +122,10 @@ mod TestShowcase
   # ---- 4. Shrinking-aware properties -----------------------------------------
 
   ## `forall_shrunk` shrinks counterexamples when a property fails.
-  ## Here the property always holds, so no shrinking is triggered --
-  ## we just verify the happy path compiles and returns `:ok`.
-  fn prop_shrunk_happy() -> Int =
+  ## Here the property always holds, so no shrinking is triggered and
+  ## the result is `Ok(:ok)`. A failing property would yield
+  ## `Error(minimal_counterexample)` rather than raising.
+  fn prop_shrunk_happy() -> Result(Atom, Any) =
     forall_shrunk(
       fn(_) -> int_in(0, 200),
       fn(n) -> n >= 0,
@@ -132,14 +133,14 @@ mod TestShowcase
     )
 
   ## Same with the 100-run convenience wrapper.
-  fn prop_shrunk_default_happy() -> List(Int) =
+  fn prop_shrunk_default_happy() -> Result(Atom, Any) =
     forall_shrunk_default(
       fn(_) -> list_int(6, 1, 50),
       fn(xs) -> all(xs, fn(x) -> x > 0)
     )
 
   ## `forall_shrunk` over lists: appending [] is the identity.
-  fn prop_shrunk_append_nil() -> List(Int) =
+  fn prop_shrunk_append_nil() -> Result(Atom, Any) =
     forall_shrunk_default(
       fn(_) -> list_int(8, -20, 20),
       fn(xs) -> append(xs, []) == xs
