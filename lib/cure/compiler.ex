@@ -185,9 +185,11 @@ defmodule Cure.Compiler do
     file = Keyword.get(opts, :file, "nofile")
 
     # Tooling entry: resolve the file pragma so inspection sees the same keyword
-    # set the compiler would, but stay robust — an unknown edition falls back to
-    # the default rather than refusing to parse (unlike the compile path, which
-    # fails loudly). No project_dir is consulted here (headless).
+    # set the compiler would. A resolve error (unknown edition) degrades to the
+    # default only to pick a lexer keyword set — the parser still validates the
+    # pragma itself and rejects an unknown one (:edition_pragma_unknown), so an
+    # unknown edition surfaces as a parse error rather than silently succeeding.
+    # No project_dir is consulted here (headless).
     edition =
       case Cure.Edition.resolve(%{source: source}) do
         {:ok, ed} -> ed

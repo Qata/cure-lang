@@ -5032,10 +5032,12 @@ defmodule Cure.Compiler.Parser do
             add_error(state, {:edition_pragma_malformed, token.line, token.col})
 
           not known_edition_pragma_arg?(args) ->
-            # Well-formed "YYYY" but not a minted edition. The build pipeline
-            # (compiler.ex lex/parse) never calls Cure.Edition.resolve, so this
-            # is the only place a standalone file's pragma edition is checked
-            # against the allow-list — spec §3.1 ("a typo'd edition must fail
+            # Well-formed "YYYY" but not a minted edition. The compile entrypoints
+            # (compiler.ex compile_string/compile_and_load) resolve the edition via
+            # Cure.Edition.resolve BEFORE lex/parse and already reject a typo there,
+            # so on that path this branch never fires. It remains the allow-list
+            # gate for DIRECT Parser.parse callers that skip resolve_edition
+            # (detect_app, parse_source) — spec §3.1 ("a typo'd edition must fail
             # loudly") / §3.3 ("its argument is validated as an edition").
             add_error(state, {:edition_pragma_unknown, token.line, token.col})
 

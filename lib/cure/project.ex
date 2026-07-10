@@ -744,10 +744,18 @@ defmodule Cure.Project do
       Enum.flat_map(files, fn file ->
         case File.read(file) do
           {:ok, source} ->
+            # Resolve each file's edition (pragma > its project's Cure.toml >
+            # default) so the pre-pass reads it against the SAME keyword set the
+            # real compile pass will (A2-F2). Without this the pre-pass lexed under
+            # current(), so a file pinned to an older edition that used a since-
+            # retired keyword would fail to parse here, get swallowed below, and go
+            # invisible to app detection while the real compile parsed it fine.
+            edition = app_pre_pass_edition(source, file)
+
             with {:ok, tokens} <-
-                   Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
+                   Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false, edition: edition),
                  {:ok, ast} <-
-                   Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do
+                   Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false, edition: edition) do
               find_app_containers(ast, file)
             else
               _ -> []
@@ -767,6 +775,17 @@ defmodule Cure.Project do
 
       multiple ->
         {:error, {:duplicate_app, Enum.map(multiple, fn c -> {c.file, c.name} end)}}
+    end
+  end
+
+  # Edition for a single file in the app-detection pre-pass: its `@edition` pragma,
+  # else its project's Cure.toml (the nearest ancestor, bounded at the repo root),
+  # else the compiler default. An unknown edition degrades to the default here (the
+  # real compile pass reports it loudly); the pre-pass must never crash a build.
+  defp app_pre_pass_edition(source, file) do
+    case Cure.Edition.resolve(%{source: source, project_dir: find_root(file)}) do
+      {:ok, ed} -> ed
+      {:error, _} -> Cure.Edition.current()
     end
   end
 
