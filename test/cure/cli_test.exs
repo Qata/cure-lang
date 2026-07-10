@@ -235,4 +235,28 @@ defmodule Cure.CLITest do
       refute stderr =~ "Unknown command: deps"
     end
   end
+
+  describe "cure keys (malformed subcommands)" do
+    # `keys` has arms for `generate <handle>` and `list` but no `[keys | rest]`
+    # fallback, so any malformed invocation fell through to the generic catch-all
+    # — misblaming `keys` as an unknown top-level command (and the fuzzy matcher
+    # even suggested `deps`). Same defect class as the deps fix.
+    for {args, label} <- [
+          {["keys"], "bare"},
+          {["keys", "generate"], "missing handle"},
+          {["keys", "bogus"], "unknown subcommand"},
+          {["keys", "list", "extra"], "extra arg"}
+        ] do
+      @args args
+      test "an unusable keys invocation (#{label}) fails without blaming a top-level command" do
+        stderr =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main(@args)) == {:shutdown, 1}
+          end)
+
+        assert stderr =~ "keys"
+        refute stderr =~ "Unknown command: keys"
+      end
+    end
+  end
 end

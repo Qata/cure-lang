@@ -186,6 +186,13 @@ defmodule Cure.CLI do
         ["keys", "list"] ->
           cmd_keys_list()
 
+        # Any other `keys` shape (bare, missing handle, unknown/extra subcommand)
+        # must give a keys-specific usage error and fail — not fall through to the
+        # generic catch-all, which would misblame `keys` as an unknown command.
+        ["keys" | _rest] ->
+          error("Usage: cure keys generate <handle> | cure keys list")
+          exit({:shutdown, 1})
+
         ["release" | rest] ->
           cmd_release(rest, opts)
 
@@ -806,16 +813,26 @@ defmodule Cure.CLI do
     else
       info("Compiling Cure standard library (#{length(cure_files)} modules)")
 
-      Enum.each(cure_files, fn path ->
-        name = Path.basename(path, ".cure")
+      outcomes =
+        Enum.map(cure_files, fn path ->
+          name = Path.basename(path, ".cure")
 
-        case Cure.Compiler.compile_file(path, output_dir: output_dir, emit_events: false) do
-          {:ok, module, _} -> info("  #{name} -> #{module}")
-          {:error, reason} -> error("  #{name}: #{inspect(reason)}")
-        end
-      end)
+          case Cure.Compiler.compile_file(path, output_dir: output_dir, emit_events: false) do
+            {:ok, module, _} ->
+              info("  #{name} -> #{module}")
+              :ok
+
+            {:error, reason} ->
+              error("  #{name}: #{inspect(reason)}")
+              :error
+          end
+        end)
 
       info("Output: #{output_dir}")
+
+      # A module that failed to compile must make the command fail — otherwise a
+      # broken stdlib build reports success and a CI wrapper reads exit 0.
+      if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
     end
   end
 
@@ -1550,8 +1567,9 @@ defmodule Cure.CLI do
   defp migrate_apply_and_bump(results, target, paths, check?, print?) do
     case migrate_apply(results, check?, print?) do
       :ok ->
+        # Propagate a bump failure (e.g. Cure.toml could not be stamped) so the
+        # command exits non-zero instead of falsely reporting success.
         migrate_bump(results, target, paths, check?, print?)
-        :ok
 
       other ->
         other
@@ -1590,19 +1608,30 @@ defmodule Cure.CLI do
   # existing marker. --check/--print never write; they only report the pending
   # bump when it would raise the edition.
   defp migrate_bump(results, target, paths, check?, print?) do
+    # The cond's value is the command result: :ok everywhere except a project
+    # edition-stamp failure, which returns {:error, reason} so the caller fails.
     cond do
       check? ->
         if migrate_project_bump?(paths, target) or Enum.any?(results, &migrate_file_bump?(&1.path, target)),
           do: info("would bump edition to #{target}")
 
+        :ok
+
       print? ->
         if migrate_project_bump?(paths, target) or Enum.any?(results, &migrate_file_bump?(&1.path, target)),
           do: IO.puts("# pending edition bump: #{target}")
 
+        :ok
+
       paths == [] and migrate_project_bump?(paths, target) ->
         case Cure.Project.set_edition(Path.join(".", "Cure.toml"), target) do
-          :ok -> info("bumped project edition to #{target}")
-          {:error, reason} -> error("could not bump project edition: #{inspect(reason)}")
+          :ok ->
+            info("bumped project edition to #{target}")
+            :ok
+
+          {:error, reason} ->
+            error("could not bump project edition: #{inspect(reason)}")
+            {:error, reason}
         end
 
       true ->
@@ -1612,9 +1641,9 @@ defmodule Cure.CLI do
             info("bumped #{r.path} to edition #{target}")
           end
         end)
-    end
 
-    :ok
+        :ok
+    end
   end
 
   # A whole-project run whose Cure.toml declares an edition strictly older than
