@@ -10,7 +10,7 @@ defmodule Antigen.Generators.ElabNatRep do
   seed — no runtime randomness).
   """
 
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
 
   @defs """
     fn add(a: Nat, b: Nat) -> Nat = match a
@@ -33,15 +33,34 @@ defmodule Antigen.Generators.ElabNatRep do
   defp nat_lit(n) when n > 0, do: "S(" <> nat_lit(n - 1) <> ")"
 
   @fixed [
-    {"ctor/zero", "Z()"},
-    {"ctor/three", "S(S(S(Z())))"},
-    {"match/pred", "pred(S(S(Z())))"},
-    {"match/pred_zero", "pred(Z())"},
-    {"arith/add", "add(S(S(Z())), S(S(S(Z()))))"},
-    {"arith/dbl", "dbl(S(S(Z())))"},
-    {"arith/nested", "add(dbl(S(Z())), pred(S(S(S(Z())))))"},
-    {"arith/deep", "dbl(dbl(dbl(S(Z()))))"}
+    {"ctor/zero", :ctor_zero, "Z()"},
+    {"ctor/three", :ctor_three, "S(S(S(Z())))"},
+    {"match/pred", :match_pred, "pred(S(S(Z())))"},
+    {"match/pred_zero", :match_pred_zero, "pred(Z())"},
+    {"arith/add", :arith_add, "add(S(S(Z())), S(S(S(Z()))))"},
+    {"arith/dbl", :arith_dbl, "dbl(S(S(Z())))"},
+    {"arith/nested", :arith_nested, "add(dbl(S(Z())), pred(S(S(S(Z())))))"},
+    {"arith/deep", :arith_deep, "dbl(dbl(dbl(S(Z()))))"}
   ]
+
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`): one per fixed lowering-rule
+  cell, plus `:seeded` for the deterministic depth-varied arithmetic corpus.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    fixed = for {_id, cell, _expr} <- @fixed, do: {"elab/nat_rep", cell}
+    fixed ++ [{"elab/nat_rep", :seeded}]
+  end
+
+  @doc """
+  Sampleable generator over every declared cell (the corpus is otherwise a fixed
+  catalog + seeded expressions). Used by the coverage-manifest gate.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(nat_rep_challenges())
+  end
 
   # Deterministic seeded arithmetic expressions (pure function of the seed —
   # Antigen scripts/tests must not use runtime randomness).
@@ -60,35 +79,36 @@ defmodule Antigen.Generators.ElabNatRep do
   @spec nat_rep_challenges() :: [Challenge.t()]
   def nat_rep_challenges do
     fixed =
-      Enum.map(@fixed, fn {id, expr} ->
-        challenge(id, expr)
+      Enum.map(@fixed, fn {id, cell, expr} ->
+        challenge(id, cell, expr)
       end)
 
-    seeded = for s <- 1..6, do: challenge("seeded/#{s}", seeded_expr(s))
+    seeded = for s <- 1..6, do: challenge("seeded/#{s}", :seeded, seeded_expr(s))
 
     fixed ++ seeded
   end
 
   @doc "Catalog ids with their main expressions."
   @spec catalog() :: [{String.t(), String.t()}]
-  def catalog, do: Enum.map(@fixed, fn {id, expr} -> {id, expr} end)
+  def catalog, do: Enum.map(@fixed, fn {id, _cell, expr} -> {id, expr} end)
 
   @doc "Full module source for a fixed cell id."
   @spec source(String.t()) :: String.t() | nil
   def source(id) do
-    case Enum.find(@fixed, fn {i, _} -> i == id end) do
-      {_id, expr} -> program(expr)
+    case Enum.find(@fixed, fn {i, _, _} -> i == id end) do
+      {_id, _cell, expr} -> program(expr)
       nil -> nil
     end
   end
 
-  defp challenge(id, expr) do
+  defp challenge(id, cell, expr) do
     Challenge.new(
       kind: :elab_program,
       assay: "elab/nat_rep",
       label: :agree,
       payload: %{id: id, src: program(expr), functions: @functions},
-      note: "kernel-vs-BEAM agreement for `#{expr}`"
+      note: "kernel-vs-BEAM agreement for `#{expr}`",
+      cover_tag: cell
     )
   end
 end

@@ -45,10 +45,52 @@ defmodule Antigen.CoverManifestGateTest do
                   ])
 
   test "every declared shape cell is actually produced (recurrence guard)" do
-    missing = CoverManifest.missing(800)
+    # summary/1 both checks coverage AND stashes the result for the suite-end report
+    # (test/test_helper.exs after_suite → CoverManifest.report/0). Routing the gate
+    # through it means a normal `mix test` populates that report with no extra sampling.
+    missing = CoverManifest.summary(800).missing
 
     assert MapSet.size(missing) == 0,
            "coverage-manifest cells never produced: #{inspect(Enum.sort(missing))}"
+  end
+
+  test "summary/1 stashes a summary the suite-end report can render" do
+    s = CoverManifest.summary(800)
+    assert CoverManifest.stashed_summary() == s
+    assert s.expected == MapSet.size(CoverManifest.expected())
+    assert s.produced == s.expected - MapSet.size(s.missing)
+    assert is_list(s.assays) and s.assays != []
+  end
+
+  test "report/0 renders the aggregate line and, when incomplete, a hyphenated per-shape list" do
+    # nil summary (manifest never evaluated this run) ⇒ report stays silent.
+    assert CoverManifest.report(nil) == nil
+
+    # A fully-covered summary ⇒ single ✓ aggregate line, no per-shape detail.
+    ok = %{expected: 5, produced: 5, missing: MapSet.new(), missing_detail: [], assays: ["a", "b"]}
+    ok_line = CoverManifest.report(ok)
+    assert ok_line =~ "5/5 declared cells produced across 2 manifest assays ✓"
+    refute ok_line =~ "never produced"
+
+    # An incompletely-covered summary ⇒ aggregate line PLUS one hyphen line per
+    # uncovered shape, each naming the assay, the cell, and the responsible
+    # generator (the surface this feature exists to provide).
+    bad = %{
+      expected: 5,
+      produced: 3,
+      missing: MapSet.new([{"positivity", :app_head_negative}, {"universes", :family_ceiling}]),
+      missing_detail: [
+        %{assay: "positivity", cell: :app_head_negative, generator: Antigen.Generators.Positivity},
+        %{assay: "universes", cell: :family_ceiling, generator: Antigen.Generators.Universes}
+      ],
+      assays: ["positivity", "universes"]
+    }
+
+    bad_line = CoverManifest.report(bad)
+    assert bad_line =~ "3/5 declared cells produced"
+    assert bad_line =~ "2 shape(s) uncovered in 2 assay(s):"
+    assert bad_line =~ "  - positivity · app_head_negative — declared by Positivity, never produced"
+    assert bad_line =~ "  - universes · family_ceiling — declared by Universes, never produced"
   end
 
   test "the four second-pass finding cells are in the manifest" do

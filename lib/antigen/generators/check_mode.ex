@@ -40,16 +40,37 @@ defmodule Antigen.Generators.CheckMode do
      "check nosuchctor : List Nat — checking-mode unknown constructor (unknown_ctor)"}
   ]
 
+  # Shape-coverage cell per @cases entry, in the SAME order (kept parallel rather
+  # than folded into @cases so `cases/0`'s 5-tuple shape — which the generator
+  # self-test destructures — stays intact).
+  @cells [
+    :param_ctor_accept,
+    :nullary_param_ctor_accept,
+    :hole_accept,
+    :sigma_intro_accept,
+    :sigma_mismatch_reject,
+    :index_mismatch_reject,
+    :unknown_ctor_reject
+  ]
+
+  @doc """
+  Shape-coverage cells for the manifest gate (`Antigen.CoverManifest`) — one per
+  `check/3` verdict shape; the gate confirms every cell is produced by `gen/0`.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells, do: for(cell <- @cells, do: {"check/verdict", cell})
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
-    Gen.bind(Gen.member_of(@cases), fn {n, term, ty, verdict, note} ->
+    Gen.bind(Gen.member_of(Enum.zip(@cases, @cells)), fn {{n, term, ty, verdict, note}, cell} ->
       Gen.return(
         Challenge.new(
           kind: :check_mode,
           assay: "check/verdict",
           label: verdict,
           payload: %{ctx_vars: n, term: term, type: ty},
-          note: note
+          note: note,
+          cover_tag: cell
         )
       )
     end)

@@ -27,15 +27,38 @@ defmodule Antigen.Generators.IndexedDecl do
   alias Antigen.{Gen, Challenge}
   alias Cure.Core.Inductive
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`). This generator shares the
+  `"universes"` assay id with `Generators.Universes`, so its cells carry a distinct
+  `:idx_` prefix (indexed-declaration shapes) and union with that participant's
+  cells in the manifest. One cell per `check_ctor` verdict-branch `shape/1` builds.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [
+          :idx_nullary_match,
+          :idx_nullary_mistype,
+          :idx_nullary_arity,
+          :idx_argbearing_ok,
+          :idx_argbearing_nontype,
+          :idx_param_uniform,
+          :idx_param_nonuniform,
+          :idx_param_arity,
+          :idx_dependent_eq
+        ],
+        do: {"universes", cell}
+  end
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
     Gen.bind(Gen.member_of([:int, :float]), fn kind ->
-      Gen.bind(shape(kind), fn {fam, label, ctors, note} ->
+      Gen.bind(shape(kind), fn {fam, label, ctors, note, cell} ->
         Gen.return(
           Challenge.new(
             kind: :family,
             assay: "universes",
             label: label,
+            cover_tag: cell,
             payload: %{family: fam, ctors: ctors},
             note: note
           )
@@ -68,7 +91,7 @@ defmodule Antigen.Generators.IndexedDecl do
       indices = for i <- 0..(k - 1), do: {:n, {:var, i}}
       fam = Inductive.family(:MyEqK, [{:a, {:type, 0}}], indices, 0)
       ctor = Inductive.ctor(:mreflK, [{:w, {:var, 0}}], List.duplicate({:var, 0}, k), [:many], [{:var, 1}])
-      Gen.return({fam, :well_typed, [ctor], "dependent #{k}-index family, generalized var repeated (Type param)"})
+      Gen.return({fam, :well_typed, [ctor], "dependent #{k}-index family, generalized var repeated (Type param)", :idx_dependent_eq})
     end)
   end
 
@@ -77,9 +100,9 @@ defmodule Antigen.Generators.IndexedDecl do
     fam = idxi(kind)
 
     Gen.frequency([
-      {3, ctor_result(fam, :well_typed, :mki, single(lit(kind)), "nullary matching index")},
-      {2, ctor_result(fam, :ill_typed, :mkb, single(lit(other(kind))), "nullary mismatched-type index")},
-      {1, ctor_result(fam, :ill_typed, :mkb, arity_indices(kind), "nullary wrong-arity index")}
+      {3, ctor_result(fam, :well_typed, :mki, single(lit(kind)), "nullary matching index", :idx_nullary_match)},
+      {2, ctor_result(fam, :ill_typed, :mkb, single(lit(other(kind))), "nullary mismatched-type index", :idx_nullary_mistype)},
+      {1, ctor_result(fam, :ill_typed, :mkb, arity_indices(kind), "nullary wrong-arity index", :idx_nullary_arity)}
     ])
   end
 
@@ -93,13 +116,13 @@ defmodule Antigen.Generators.IndexedDecl do
       {2,
        Gen.bind(lit(kind), fn v ->
          ctor = Inductive.ctor(:mki, [{:x, itype(kind)}], [v])
-         Gen.return({fam, :well_typed, [ctor], "arg-bearing ctor (x:#{kind}) -> IdxI"})
+         Gen.return({fam, :well_typed, [ctor], "arg-bearing ctor (x:#{kind}) -> IdxI", :idx_argbearing_ok})
        end)},
       {1,
        Gen.bind(lit(kind), fn v ->
          # field type is a value, not a type ⇒ infer_sort halts in check_ctor_args
          ctor = Inductive.ctor(:mki, [{:x, lit_of(kind)}], [v])
-         Gen.return({fam, :ill_typed, [ctor], "arg-bearing ctor with non-type field"})
+         Gen.return({fam, :ill_typed, [ctor], "arg-bearing ctor with non-type field", :idx_argbearing_nontype})
        end)}
     ])
   end
@@ -110,16 +133,16 @@ defmodule Antigen.Generators.IndexedDecl do
     fam = Inductive.family(:P, [{:a, {:type, 0}}], [{:n, itype(kind)}], 0)
     # result_params: [a]=uniform (accept); [x]=non-uniform var (reject); []=wrong
     # count (check_uniform_params' arity branch).
-    {rparams, label, note} =
+    {rparams, label, note, cell} =
       case uniformity do
-        :uniform -> {[{:var, 1}], :well_typed, "parameterized uniform (result param = a)"}
-        :non_uniform -> {[{:var, 0}], :ill_typed, "parameterized non-uniform (result param = x)"}
-        :arity -> {[], :ill_typed, "parameterized wrong result-param arity"}
+        :uniform -> {[{:var, 1}], :well_typed, "parameterized uniform (result param = a)", :idx_param_uniform}
+        :non_uniform -> {[{:var, 0}], :ill_typed, "parameterized non-uniform (result param = x)", :idx_param_nonuniform}
+        :arity -> {[], :ill_typed, "parameterized wrong result-param arity", :idx_param_arity}
       end
 
     Gen.bind(lit(kind), fn v ->
       ctor = Inductive.ctor(:pc, [{:x, {:var, 0}}], [v], [:many], rparams)
-      Gen.return({fam, label, [ctor], note})
+      Gen.return({fam, label, [ctor], note, cell})
     end)
   end
 
@@ -127,9 +150,9 @@ defmodule Antigen.Generators.IndexedDecl do
   defp lit_of(:int), do: {:int_lit, 0}
   defp lit_of(:float), do: {:float_lit, 0.0}
 
-  defp ctor_result(fam, label, cname, indices_gen, note) do
+  defp ctor_result(fam, label, cname, indices_gen, note, cell) do
     Gen.bind(indices_gen, fn is ->
-      Gen.return({fam, label, [Inductive.ctor(cname, [], is)], note})
+      Gen.return({fam, label, [Inductive.ctor(cname, [], is)], note, cell})
     end)
   end
 

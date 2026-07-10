@@ -22,12 +22,38 @@ defmodule Antigen.Generators.DotForcing do
   """
   alias Antigen.{Gen, Challenge}
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`): one per distinct forced-value
+  case shape (family × verdict), so the gate confirms every `:accept`/`:reject`/
+  `:unforced` shape the assay checks is actually produced by sampling `@cases`.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [
+          :vec_accept_syntactic,
+          :vec_accept_convertible,
+          :vec_reject_ctor_clash,
+          :vec_reject_field_var,
+          :vec_unforced_field,
+          :vec_unforced_absent,
+          :sq_accept_diagonal,
+          :sq_reject_multi_index,
+          :vec_accept_nontrivial,
+          :vec_reject_differing,
+          :h_accept_carried,
+          :h_reject_carried
+        ],
+        do: {"forcing/dot", cell}
+  end
+
   @z {:ctor, :Z, []}
   # (λx:Nat. x) Z — β-reduces to Z: convertible to a forced Z WITHOUT being
   # syntactically equal, so Conv.conv? must actually decide (not just `==`).
   @lam_id_z {:app, {:lam, {:data, :Nat, [], []}, {:var, 0}}, @z}
 
-  # {ctx_vars, family, cname, scrut_index_terms, name, written_value, label, note}
+  # {ctx_vars, family, cname, scrut_index_terms, name, written_value, label, note}.
+  # Coverage cells are kept OUT of this tuple (in @case_cells, positionally aligned)
+  # so the 8-tuple shape stays stable for the corpus-roundtrip / menu tests.
   @cases [
     {0, :Vec, :vcons, [{:ctor, :S, [@z]}], "n", @z, :accept,
      "Vec vcons {n=.Z} vs forced Z — syntactic match"},
@@ -61,14 +87,32 @@ defmodule Antigen.Generators.DotForcing do
      "H hmk {m=.(S Z)} under a multi-sibling carried-index subst — rigid clash on the forced-check primitives, not the dispatch wiring"}
   ]
 
+  # Coverage cell per @cases entry, positionally aligned (one per distinct family ×
+  # verdict shape). Kept out of @cases so its 8-tuple shape stays stable.
+  @case_cells [
+    :vec_accept_syntactic,
+    :vec_accept_convertible,
+    :vec_reject_ctor_clash,
+    :vec_reject_field_var,
+    :vec_unforced_field,
+    :vec_unforced_absent,
+    :sq_accept_diagonal,
+    :sq_reject_multi_index,
+    :vec_accept_nontrivial,
+    :vec_reject_differing,
+    :h_accept_carried,
+    :h_reject_carried
+  ]
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
-    Gen.bind(Gen.member_of(@cases), fn {n, fam, c, idx, name, written, label, note} ->
+    Gen.bind(Gen.member_of(Enum.zip(@cases, @case_cells)), fn {{n, fam, c, idx, name, written, label, note}, cell} ->
       Gen.return(
         Challenge.new(
           kind: :dot_forcing,
           assay: "forcing/dot",
           label: label,
+          cover_tag: cell,
           payload: %{
             ctx_vars: n,
             family: fam,

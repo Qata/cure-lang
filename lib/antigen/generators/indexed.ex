@@ -5,8 +5,53 @@ defmodule Antigen.Generators.Indexed do
   `:well_typed`/`:ill_typed` label is correct by construction; the assay checks
   the kernel accepts iff well-typed. No elaborator, no term generator.
   """
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
   alias Cure.Core.{Env, Inductive}
+
+  # -- coverage manifest ------------------------------------------------------
+  # One shape-cell per (obligation, label) twin. Every builder routes through
+  # `challenge/6`, which stamps `cover_tag: :"#{name}_#{label}"`; `name` is the
+  # obligation atom (also the def_name), `label` the well/ill twin. These are the
+  # only shapes this generator constructs — no invented cells.
+  @shapes [
+    {:branch_family, :well_typed}, {:branch_family, :ill_typed},
+    {:coverage_gap, :well_typed}, {:coverage_gap, :ill_typed},
+    {:refine, :well_typed}, {:refine, :ill_typed},
+    {:motive_wf, :well_typed}, {:motive_wf, :ill_typed},
+    {:motive_dom, :well_typed}, {:motive_dom, :ill_typed},
+    {:data_split, :well_typed}, {:data_split, :ill_typed},
+    {:reify_distinct, :well_typed}, {:reify_distinct, :ill_typed},
+    {:discharge, :well_typed}, {:discharge, :ill_typed},
+    {:inject, :well_typed}, {:inject, :ill_typed},
+    {:delete, :well_typed}, {:delete, :ill_typed}
+  ]
+
+  @doc "Coverage-manifest cells (`Antigen.CoverManifest`) — one per obligation × label twin."
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for {name, label} <- @shapes, do: {"indexed/case", :"#{name}_#{label}"}
+  end
+
+  @doc """
+  Uniform sampleable generator over the vertical's hand-built `case` challenges
+  (this vertical is otherwise curated / seed-test-fed). Used by the coverage-manifest
+  gate to confirm every declared cell is actually produced.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of([
+      branch_family(:well_typed), branch_family(:ill_typed),
+      coverage(:well_typed), coverage(:ill_typed),
+      refinement(:well_typed), refinement(:ill_typed),
+      motive_wf(:well_typed), motive_wf(:ill_typed),
+      motive_indexed_domain(:well_typed), motive_indexed_domain(:ill_typed),
+      data_split_validation(:well_typed), data_split_validation(:ill_typed),
+      reify_collapse_distinct(:well_typed), reify_collapse_distinct(:ill_typed),
+      discharge(:well_typed), discharge(:ill_typed),
+      injectivity(:well_typed), injectivity(:ill_typed),
+      deletion(:well_typed), deletion(:ill_typed)
+    ])
+  end
 
   @dec {:data, :Dec, [], []}
   @wr {:data, :Wr, [], []}
@@ -371,7 +416,8 @@ defmodule Antigen.Generators.Indexed do
       assay: "indexed/case",
       label: label,
       payload: %{families: families, def_name: name, def_type: def_type, def_body: def_body},
-      note: note
+      note: note,
+      cover_tag: :"#{name}_#{label}"
     )
   end
 end

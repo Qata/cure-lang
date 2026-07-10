@@ -11,7 +11,7 @@ defmodule Antigen.Generators.ElabGuardLint do
   probe-fn BODY only, never `preamble <> body`.
   """
 
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
 
   @preamble """
     type Nat = Z | S(Nat)
@@ -21,9 +21,9 @@ defmodule Antigen.Generators.ElabGuardLint do
   @spec module(String.t()) :: String.t()
   def module(body), do: "mod P\n" <> @preamble <> body <> "end\n"
 
-  # -- Two-sided catalog: {id, expect, expect_error | nil, note, body} ---------
+  # -- Two-sided catalog: {id, cell, expect, expect_error | nil, note, body} ---
   @catalog [
-    {"exhaustive/trichotomy", :accept, nil,
+    {"exhaustive/trichotomy", :exhaustive_trichotomy, :accept, nil,
      "lt/eq/gt trichotomy over Int, no catch-all — the headline recovery cell",
      """
        fn cmp(a: Int, b: Int) -> Nat = match a
@@ -31,21 +31,21 @@ defmodule Antigen.Generators.ElabGuardLint do
          x when x == b -> S(Z())
          x when x > b -> S(S(Z()))
      """},
-    {"exhaustive/complement", :accept, nil,
+    {"exhaustive/complement", :exhaustive_complement, :accept, nil,
      "two-guard complement over Int, no catch-all",
      """
        fn cmp(a: Int, b: Int) -> Nat = match a
          x when x < b -> Z()
          x when x >= b -> S(Z())
      """},
-    {"gap/missing_eq", :reject, :unsupported_guard,
+    {"gap/missing_eq", :gap_missing_eq, :reject, :unsupported_guard,
      "lt/gt with the equality case missing — genuinely non-exhaustive",
      """
        fn cmp(a: Int, b: Int) -> Nat = match a
          x when x < b -> Z()
          x when x > b -> S(Z())
      """},
-    {"untranslatable/user_fn", :reject, :unsupported_guard,
+    {"untranslatable/user_fn", :untranslatable_user_fn, :reject, :unsupported_guard,
      "semantically exhaustive via user Bool fns, but outside the fragment — K13 keeps it rejected",
      """
        fn pos(i: Int) -> Bool = i > 0
@@ -54,7 +54,7 @@ defmodule Antigen.Generators.ElabGuardLint do
          x when pos(x) -> Z()
          x when nonpos(x) -> S(Z())
      """},
-    {"shadowed/with_catchall", :accept, nil,
+    {"shadowed/with_catchall", :shadowed_with_catchall, :accept, nil,
      "repeated guard with a catch-all — warns (channel tested at unit level) but accepts",
      """
        fn cls(n: Int, b: Int) -> Nat = match n
@@ -62,7 +62,7 @@ defmodule Antigen.Generators.ElabGuardLint do
          x when x < b -> S(Z())
          x -> S(S(Z()))
      """},
-    {"control/guarded_catchall", :accept, nil,
+    {"control/guarded_catchall", :control_guarded_catchall, :accept, nil,
      "structurally exhaustive control — the lint never runs here",
      """
        fn cls(n: Int) -> Nat = match n
@@ -71,10 +71,29 @@ defmodule Antigen.Generators.ElabGuardLint do
      """}
   ]
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`): one per two-sided catalog
+  cell, plus the metamorphic transform cells (all under the `elab/guard_lint` assay).
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    base = for {_id, cell, _e, _err, _n, _b} <- @catalog, do: {"elab/guard_lint", cell}
+    base ++ [{"elab/guard_lint", :drop_guard}, {"elab/guard_lint", :alpha_rename}]
+  end
+
+  @doc """
+  Sampleable generator over every declared cell (the vertical is otherwise a
+  fixed two-sided catalog + metamorphic layer). Used by the coverage-manifest gate.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(guard_lint_challenges() ++ metamorphic_challenges())
+  end
+
   @doc "All two-sided catalog challenges as `%Challenge{}` structs (deterministic)."
   @spec guard_lint_challenges() :: [Challenge.t()]
   def guard_lint_challenges do
-    Enum.map(@catalog, fn {id, expect, err, note, body} ->
+    Enum.map(@catalog, fn {id, cell, expect, err, note, body} ->
       payload = %{id: id, src: module(body), expect: expect}
       payload = if err, do: Map.put(payload, :expect_error, err), else: payload
 
@@ -83,20 +102,21 @@ defmodule Antigen.Generators.ElabGuardLint do
         assay: "elab/guard_lint",
         label: expect,
         payload: payload,
-        note: note
+        note: note,
+        cover_tag: cell
       )
     end)
   end
 
   @doc "The catalog ids paired with their expected verdicts."
   @spec catalog() :: [{String.t(), :accept | :reject}]
-  def catalog, do: Enum.map(@catalog, fn {id, expect, _e, _n, _b} -> {id, expect} end)
+  def catalog, do: Enum.map(@catalog, fn {id, _cell, expect, _e, _n, _b} -> {id, expect} end)
 
   @doc "Look up a catalog entry's full module source by id."
   @spec source(String.t()) :: String.t() | nil
   def source(id) do
     case entry(id) do
-      {_id, _e, _err, _n, body} -> module(body)
+      {_id, _cell, _e, _err, _n, body} -> module(body)
       nil -> nil
     end
   end
@@ -105,12 +125,12 @@ defmodule Antigen.Generators.ElabGuardLint do
   @spec body(String.t()) :: String.t() | nil
   def body(id) do
     case entry(id) do
-      {_id, _e, _err, _n, body} -> body
+      {_id, _cell, _e, _err, _n, body} -> body
       nil -> nil
     end
   end
 
-  defp entry(id), do: Enum.find(@catalog, fn {i, _, _, _, _} -> i == id end)
+  defp entry(id), do: Enum.find(@catalog, fn {i, _, _, _, _, _} -> i == id end)
 
   # -- Metamorphic challenges --------------------------------------------------
 
@@ -125,7 +145,7 @@ defmodule Antigen.Generators.ElabGuardLint do
   """
   @spec metamorphic_challenges() :: [Challenge.t()]
   def metamorphic_challenges do
-    Enum.flat_map(@catalog, fn {id, expect, _err, _note, body} ->
+    Enum.flat_map(@catalog, fn {id, _cell, expect, _err, _note, body} ->
       base_src = module(body)
 
       invariance =
@@ -160,9 +180,13 @@ defmodule Antigen.Generators.ElabGuardLint do
         base_src: base_src,
         variant_src: variant_src
       },
-      note: "#{id} #{relation} under #{transform}"
+      note: "#{id} #{relation} under #{transform}",
+      cover_tag: meta_cell(transform)
     )
   end
+
+  defp meta_cell("drop_guard"), do: :drop_guard
+  defp meta_cell("alpha_rename"), do: :alpha_rename
 
   # -- Metamorphic transforms (probe-fn BODY input only) ------------------------
 

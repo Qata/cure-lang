@@ -49,27 +49,51 @@ defmodule Antigen.Generators.Conversion do
 
   defp carrier_gen, do: Gen.frequency(Enum.map(@carriers, fn c -> {1, Gen.return(c)} end))
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`). The only deterministic branch
+  the reject generator tags is the carrier KIND (`:conv_index` / `:conv_motive`);
+  the conv depth/split is randomised and carries no enumerable shape-class. One cell
+  per carrier under the reject assay.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for c <- @carriers, do: {"mutation/rejection", c}
+  end
+
+  @doc """
+  Sampleable generator that guarantees every declared carrier cell by binding over
+  the fixed `@carriers` set. Used by the coverage-manifest gate.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.bind(Gen.member_of(@carriers), fn carrier -> reject_for(carrier) end)
+  end
+
   # Carriers are closed, binder-free terms (spec §4) — no env/context is needed
   # to construct them; the assays independently rebuild their own env from the
   # payload's `sig: :v1` field when they run.
   @spec conv_reject() :: Gen.t()
   def conv_reject do
-    Gen.bind(carrier_gen(), fn carrier ->
-      Gen.bind(depth_split(), fn {d, a, b} ->
-        term = carrier_term(carrier, a, b, d + 1)   # filler one deeper ⇒ mismatch
+    Gen.bind(carrier_gen(), fn carrier -> reject_for(carrier) end)
+  end
 
-        fault = %{
-          kind: carrier, witness: :conv, expected_index: d, actual_index: d + 1,
-          reduction: :required, depth: d, carrier: carrier
-        }
+  # Build a reject carrier for a fixed carrier kind (filler one deeper ⇒ mismatch).
+  defp reject_for(carrier) do
+    Gen.bind(depth_split(), fn {d, a, b} ->
+      term = carrier_term(carrier, a, b, d + 1)
 
-        Gen.return(
-          Challenge.new(
-            kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
-            payload: %{sig: :v1, ctx: [], type: vec(num(d)), term: term, fault: fault}
-          )
+      fault = %{
+        kind: carrier, witness: :conv, expected_index: d, actual_index: d + 1,
+        reduction: :required, depth: d, carrier: carrier
+      }
+
+      Gen.return(
+        Challenge.new(
+          kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+          payload: %{sig: :v1, ctx: [], type: vec(num(d)), term: term, fault: fault},
+          cover_tag: carrier
         )
-      end)
+      )
     end)
   end
 

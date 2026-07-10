@@ -25,7 +25,7 @@ defmodule Antigen.Generators.ElabDotForcing do
   spec §2.2 structural note).
   """
 
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
 
   # Carried + forced mixed shape (#12 Task 2): H's first index is ctor-pinned
   # (forced m := j), the second is a stuck function index carried via the
@@ -60,39 +60,39 @@ defmodule Antigen.Generators.ElabDotForcing do
   @spec module(:carried | :exist, String.t()) :: String.t()
   def module(pre, body), do: "mod P\n" <> preamble(pre) <> body <> "end\n"
 
-  # -- Two-sided catalog: {id, expect, expect_error | nil, preamble, note, body}
+  # -- Two-sided catalog: {id, cell, expect, expect_error | nil, preamble, note, body}
   @catalog [
-    {"forced/carried/right", :accept, nil, :carried,
+    {"forced/carried/right", :forced_carried_right, :accept, nil, :carried,
      "right dot on the carried-eq path (over-rejection guard)",
      """
        fn g({j: Nat}, {p: SList}, {q: SList}, v: H(S(j), app(p, q)), w: G(app(p, q))) -> Nat = match v
          hmk({m = .j}) -> Z()
      """},
-    {"forced/carried/wrong", :reject, :forced_pattern_mismatch, :carried,
+    {"forced/carried/wrong", :forced_carried_wrong, :reject, :forced_pattern_mismatch, :carried,
      "wrong dot on the carried-eq path (the C-a cell — pre-#12 this ACCEPTED)",
      """
        fn f({j: Nat}, {p: SList}, {q: SList}, v: H(S(j), app(p, q)), w: G(app(p, q))) -> Nat = match v
          hmk({m = .(S(j))}) -> Z()
      """},
-    {"forced/plain/right", :accept, nil, :exist,
+    {"forced/plain/right", :forced_plain_right, :accept, nil, :exist,
      "right dot on the plain dispatch path (landed C-b shape)",
      """
        fn f({a: Type}, {k: Nat}, v: Vec(a, S(k))) -> Vec(a, S(k)) = match v
          vcons({n = .k}, h, t) -> v
      """},
-    {"forced/plain/wrong", :reject, :forced_pattern_mismatch, :exist,
+    {"forced/plain/wrong", :forced_plain_wrong, :reject, :forced_pattern_mismatch, :exist,
      "wrong dot on the plain dispatch path",
      """
        fn f({a: Type}, {k: Nat}, v: Vec(a, S(k))) -> Vec(a, S(k)) = match v
          vcons({n = .(S(k))}, h, t) -> v
      """},
-    {"unforced/bind_erased", :accept, nil, :exist,
+    {"unforced/bind_erased", :unforced_bind_erased, :accept, nil, :exist,
      "unforced bare-variable named implicit bound at quantity 0, used only erasedly",
      """
        fn f({a: Type}, p: Pack(a)) -> Nat = match p
          pk({m = mm}, v) -> Z()
      """},
-    {"unforced/bind_relevant", :reject, :erased_used_relevantly, :exist,
+    {"unforced/bind_relevant", :unforced_bind_relevant, :reject, :erased_used_relevantly, :exist,
      "quantity-0 binding used relevantly rejects via Relevance (C-c gate)",
      """
        fn g({a: Type}, p: Pack(a)) -> Nat = match p
@@ -100,10 +100,36 @@ defmodule Antigen.Generators.ElabDotForcing do
      """}
   ]
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`): one per two-sided catalog
+  cell, plus the metamorphic transform cells (all under the `elab/dot_forcing` assay).
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    base = for {_id, cell, _e, _err, _p, _n, _b} <- @catalog, do: {"elab/dot_forcing", cell}
+
+    base ++
+      [
+        {"elab/dot_forcing", :alpha_rename},
+        {"elab/dot_forcing", :extra_unused_param},
+        {"elab/dot_forcing", :corrupt_dot},
+        {"elab/dot_forcing", :promote_use}
+      ]
+  end
+
+  @doc """
+  Sampleable generator over every declared cell (the vertical is otherwise a
+  fixed two-sided catalog + metamorphic layer). Used by the coverage-manifest gate.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(dot_forcing_challenges() ++ metamorphic_challenges())
+  end
+
   @doc "All two-sided catalog challenges as `%Challenge{}` structs (deterministic)."
   @spec dot_forcing_challenges() :: [Challenge.t()]
   def dot_forcing_challenges do
-    Enum.map(@catalog, fn {id, expect, err, pre, note, body} ->
+    Enum.map(@catalog, fn {id, cell, expect, err, pre, note, body} ->
       payload = %{id: id, src: module(pre, body), expect: expect}
       payload = if err, do: Map.put(payload, :expect_error, err), else: payload
 
@@ -112,20 +138,21 @@ defmodule Antigen.Generators.ElabDotForcing do
         assay: "elab/dot_forcing",
         label: expect,
         payload: payload,
-        note: note
+        note: note,
+        cover_tag: cell
       )
     end)
   end
 
   @doc "The catalog ids paired with their expected verdicts."
   @spec catalog() :: [{String.t(), :accept | :reject}]
-  def catalog, do: Enum.map(@catalog, fn {id, expect, _e, _p, _n, _b} -> {id, expect} end)
+  def catalog, do: Enum.map(@catalog, fn {id, _cell, expect, _e, _p, _n, _b} -> {id, expect} end)
 
   @doc "Look up a catalog entry's full module source by id."
   @spec source(String.t()) :: String.t() | nil
   def source(id) do
     case entry(id) do
-      {_id, _e, _err, pre, _n, body} -> module(pre, body)
+      {_id, _cell, _e, _err, pre, _n, body} -> module(pre, body)
       nil -> nil
     end
   end
@@ -134,12 +161,12 @@ defmodule Antigen.Generators.ElabDotForcing do
   @spec body(String.t()) :: String.t() | nil
   def body(id) do
     case entry(id) do
-      {_id, _e, _err, _pre, _n, body} -> body
+      {_id, _cell, _e, _err, _pre, _n, body} -> body
       nil -> nil
     end
   end
 
-  defp entry(id), do: Enum.find(@catalog, fn {i, _, _, _, _, _} -> i == id end)
+  defp entry(id), do: Enum.find(@catalog, fn {i, _, _, _, _, _, _} -> i == id end)
 
   # -- Metamorphic challenges --------------------------------------------------
 
@@ -160,7 +187,7 @@ defmodule Antigen.Generators.ElabDotForcing do
   """
   @spec metamorphic_challenges() :: [Challenge.t()]
   def metamorphic_challenges do
-    Enum.flat_map(@catalog, fn {id, expect, _err, pre, _note, body} ->
+    Enum.flat_map(@catalog, fn {id, _cell, expect, _err, pre, _note, body} ->
       base_src = module(pre, body)
 
       invariance =
@@ -195,9 +222,15 @@ defmodule Antigen.Generators.ElabDotForcing do
         base_src: base_src,
         variant_src: variant_src
       },
-      note: "#{id} #{relation} under #{transform}"
+      note: "#{id} #{relation} under #{transform}",
+      cover_tag: meta_cell(transform)
     )
   end
+
+  defp meta_cell("alpha_rename"), do: :alpha_rename
+  defp meta_cell("extra_unused_param"), do: :extra_unused_param
+  defp meta_cell("corrupt_dot"), do: :corrupt_dot
+  defp meta_cell("promote_use"), do: :promote_use
 
   # -- Metamorphic transforms (probe-fn BODY input only) ------------------------
 

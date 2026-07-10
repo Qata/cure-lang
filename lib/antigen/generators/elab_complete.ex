@@ -34,7 +34,7 @@ defmodule Antigen.Generators.ElabComplete do
   oracle (no Idris needed) that catches de Bruijn / binder-framing bugs.
   """
 
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
 
   # Two preambles. `:nat_nv` — Nat, its singleton SNat(n), an indexed view NV(n),
   # and the certified toS/view builders. `:slist_f` — SList, append, and the
@@ -75,14 +75,15 @@ defmodule Antigen.Generators.ElabComplete do
 
   # -- The completeness catalog ------------------------------------------------
   #
-  # Each entry: {id, preamble, note, fn-body}. Every one is construction-
+  # Each entry: {id, cell, preamble, note, fn-body}. Every one is construction-
   # guaranteed well-typed (Idris-accepted). `id` names the goal *shape* so a
   # reported infection reads as a blast-radius coordinate.
   @catalog [
     # (control) goal mentions ONLY the index; plain var scrutinee. build_motive's
     # index generalization + var abstraction already handle this — expected
     # ACCEPT, so it anchors that an infection elsewhere is shape-specific.
-    {"idx_only/var/rebuild", :nat_nv, "goal NV(n), var scrutinee, rebuild constructor",
+    {"idx_only/var/rebuild", :idx_only_var_rebuild, :nat_nv,
+     "goal NV(n), var scrutinee, rebuild constructor",
      """
        fn f({n: Nat}, v: NV(n)) -> NV(n) =
          match v
@@ -92,7 +93,8 @@ defmodule Antigen.Generators.ElabComplete do
 
     # goal is an Eq whose TYPE argument carries the index AND whose value
     # endpoints are the scrutinee value; var scrutinee; reflexive(ctor) bodies.
-    {"eq_value/var/refl_ctor", :nat_nv, "goal Equivalent(NV(n), v, v), var scrutinee, reflexive(ctor)",
+    {"eq_value/var/refl_ctor", :eq_value_var_refl_ctor, :nat_nv,
+     "goal Equivalent(NV(n), v, v), var scrutinee, reflexive(ctor)",
      """
        fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
          match v
@@ -102,7 +104,8 @@ defmodule Antigen.Generators.ElabComplete do
 
     # same goal, but branch bodies return `reflexive(v)` (the scrutinee value) rather
     # than rebuilding the constructor — isolates value-occurrence refinement.
-    {"eq_value/var/refl_scrut", :nat_nv, "goal Equivalent(NV(n), v, v), reflexive(v)",
+    {"eq_value/var/refl_scrut", :eq_value_var_refl_scrut, :nat_nv,
+     "goal Equivalent(NV(n), v, v), reflexive(v)",
      """
        fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
          match v
@@ -111,7 +114,8 @@ defmodule Antigen.Generators.ElabComplete do
      """},
 
     # the scrutinee is a COMPUTED view expression, not a variable.
-    {"eq_value/computed/refl_ctor", :nat_nv, "goal Equivalent(NV(n), view(n), view(n)), computed scrutinee",
+    {"eq_value/computed/refl_ctor", :eq_value_computed_refl_ctor, :nat_nv,
+     "goal Equivalent(NV(n), view(n), view(n)), computed scrutinee",
      """
        fn f(n: Nat) -> Equivalent(NV(n), view(n), view(n)) =
          match view(n)
@@ -121,7 +125,8 @@ defmodule Antigen.Generators.ElabComplete do
 
     # computed-index family: goal mentions the scrutinee's stuck computed index
     # through a rebuild (the FRP `app`-style crux, generalized). Covered by 3a.
-    {"computed_idx/rebuild", :slist_f, "goal F(app(p,q)) rebuild — computed result index",
+    {"computed_idx/rebuild", :computed_idx_rebuild, :slist_f,
+     "goal F(app(p,q)) rebuild — computed result index",
      """
        fn g({p: SList}, {q: SList}, v: F(app(p, q))) -> F(app(p, q)) =
          match v
@@ -130,16 +135,46 @@ defmodule Antigen.Generators.ElabComplete do
      """}
   ]
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`). Each catalog goal-shape cell
+  appears under both `elab/completeness` and `elab/soundness` (the latter reuses
+  the same challenges via `soundness_challenges/0`); the metamorphic transforms
+  are their own cells under `elab/metamorphic`.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    catalog_cells = for {_id, cell, _pre, _note, _body} <- @catalog, do: cell
+
+    for(assay <- ["elab/completeness", "elab/soundness"], c <- catalog_cells, do: {assay, c}) ++
+      [
+        {"elab/metamorphic", :arm_reorder},
+        {"elab/metamorphic", :alpha_rename},
+        {"elab/metamorphic", :extra_unused_param}
+      ]
+  end
+
+  @doc """
+  Sampleable generator over every declared cell (the vertical is otherwise a
+  fixed catalog + metamorphic layer). Used by the coverage-manifest gate.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(
+      completeness_challenges() ++ soundness_challenges() ++ metamorphic_challenges()
+    )
+  end
+
   @doc "All completeness challenges as `%Challenge{}` structs (deterministic)."
   @spec completeness_challenges() :: [Challenge.t()]
   def completeness_challenges do
-    Enum.map(@catalog, fn {id, pre, note, body} ->
+    Enum.map(@catalog, fn {id, cell, pre, note, body} ->
       Challenge.new(
         kind: :elab_program,
         assay: "elab/completeness",
         label: :well_typed,
         payload: %{id: id, src: module(pre, body)},
-        note: note
+        note: note,
+        cover_tag: cell
       )
     end)
   end
@@ -156,8 +191,8 @@ defmodule Antigen.Generators.ElabComplete do
   @doc "Look up a catalog entry's full module source by id (for tests/probes)."
   @spec source(String.t()) :: String.t() | nil
   def source(id) do
-    case Enum.find(@catalog, fn {i, _, _, _} -> i == id end) do
-      {_id, pre, _note, body} -> module(pre, body)
+    case Enum.find(@catalog, fn {i, _, _, _, _} -> i == id end) do
+      {_id, _cell, pre, _note, body} -> module(pre, body)
       nil -> nil
     end
   end
@@ -190,7 +225,7 @@ defmodule Antigen.Generators.ElabComplete do
   @doc "Metamorphic challenges: each catalog base paired with each of its variants."
   @spec metamorphic_challenges() :: [Challenge.t()]
   def metamorphic_challenges do
-    Enum.flat_map(@catalog, fn {id, pre, _note, body} ->
+    Enum.flat_map(@catalog, fn {id, _cell, pre, _note, body} ->
       base_src = module(pre, body)
 
       Enum.map(variants(body), fn {transform, vbody} ->
@@ -199,11 +234,16 @@ defmodule Antigen.Generators.ElabComplete do
           assay: "elab/metamorphic",
           label: :none,
           payload: %{id: id, transform: transform, base_src: base_src, variant_src: module(pre, vbody)},
-          note: "#{id} invariant under #{transform}"
+          note: "#{id} invariant under #{transform}",
+          cover_tag: meta_cell(transform)
         )
       end)
     end)
   end
+
+  defp meta_cell("arm_reorder"), do: :arm_reorder
+  defp meta_cell("alpha_rename"), do: :alpha_rename
+  defp meta_cell("extra_unused_param"), do: :extra_unused_param
 
   # Swap the two match arms (order-independent for a covering dependent match).
   # An arm line is an INDENTED `pattern -> body`; the `fn … -> RetType =`

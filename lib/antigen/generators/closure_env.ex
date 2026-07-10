@@ -14,7 +14,7 @@ defmodule Antigen.Generators.ClosureEnv do
       transitive-callee global, for which `type_level_fns` and the independent
       reachability walk must agree (subset).
   """
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
   alias Cure.Core.Env
 
   # -- env helpers -------------------------------------------------------------
@@ -35,20 +35,49 @@ defmodule Antigen.Generators.ClosureEnv do
   defp with_ctor_index(env, ct, g),
     do: %{env | ctors: Map.put(env.ctors, ct, %{name: ct, args: [], result_indices: [{:app, {:global, g}, {:int_lit, 0}}], result_params: [], quantities: []})}
 
+  # -- coverage manifest -------------------------------------------------------
+
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`). Soundness names the three
+  fixed catalog shapes (diverging in a family-index position, diverging in a ctor
+  result-index position, and the all-total control); completeness names the direct
+  vs transitive-callee type-position globals.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    [
+      {"totality_closure/soundness", :diverging_family_index},
+      {"totality_closure/soundness", :diverging_ctor_index},
+      {"totality_closure/soundness", :all_total},
+      {"totality_closure/completeness", :direct_type_global},
+      {"totality_closure/completeness", :transitive_callee}
+    ]
+  end
+
+  @doc """
+  Uniform sampleable generator over both fixed catalogs (this vertical is otherwise
+  seed-test–fed). Used by the coverage-manifest gate to confirm every declared cell
+  is actually produced.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(soundness_challenges() ++ completeness_challenges())
+  end
+
   # -- catalogs ----------------------------------------------------------------
 
   @doc "V5a soundness catalog: diverging-in-type-position (reject) + all-total (accept)."
   @spec soundness_challenges() :: [Challenge.t()]
   def soundness_challenges do
     [
-      {Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop), :reject},
-      {Env.empty() |> loop_def() |> with_ctor_index(:Wrap, :loop), :reject},
-      {Env.empty() |> total_def() |> with_family_index(:Vessel, :total_id), :accept}
+      {Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop), :reject, :diverging_family_index},
+      {Env.empty() |> loop_def() |> with_ctor_index(:Wrap, :loop), :reject, :diverging_ctor_index},
+      {Env.empty() |> total_def() |> with_family_index(:Vessel, :total_id), :accept, :all_total}
     ]
     |> Enum.with_index()
-    |> Enum.map(fn {{env, expect}, i} ->
+    |> Enum.map(fn {{env, expect, cell}, i} ->
       Challenge.new(kind: :closure_env, assay: "totality_closure/soundness", label: :diverging,
-        payload: %{env: env, expect: expect}, seed: i)
+        payload: %{env: env, expect: expect}, seed: i, cover_tag: cell)
     end)
   end
 
@@ -56,13 +85,13 @@ defmodule Antigen.Generators.ClosureEnv do
   @spec completeness_challenges() :: [Challenge.t()]
   def completeness_challenges do
     [
-      Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop),
-      Env.empty() |> callee_def() |> loop_calls_callee() |> with_family_index(:Vessel, :loop)
+      {Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop), :direct_type_global},
+      {Env.empty() |> callee_def() |> loop_calls_callee() |> with_family_index(:Vessel, :loop), :transitive_callee}
     ]
     |> Enum.with_index()
-    |> Enum.map(fn {env, i} ->
+    |> Enum.map(fn {{env, cell}, i} ->
       Challenge.new(kind: :closure_env, assay: "totality_closure/completeness", label: :positive,
-        payload: %{env: env}, seed: i)
+        payload: %{env: env}, seed: i, cover_tag: cell)
     end)
   end
 end
