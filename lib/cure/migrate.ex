@@ -236,9 +236,12 @@ defmodule Cure.Migrate do
     _ -> {:error, :unprintable}
   end
 
-  # Mirrors Cure.CLI's migrate_comments/1 (lib/cure/cli.ex:1319): every `#`-led
-  # comment body, trimmed, sorted — the same coarse-but-adequate lossless check
-  # the file-mode `cure migrate` pipeline already uses.
+  # The lossless-comment check for `verify/3`: every `#`-led comment body, trimmed,
+  # sorted. Coarse-but-adequate — KNOWN latent limitation: the scan is not
+  # quote-aware, so a `#` inside a string literal is misread as a comment. Harmless
+  # today (no migrate rule rewrites string-literal contents, so the bogus entry is
+  # stable across baseline/output and never trips `:comment_dropped`); make this
+  # quote-aware before adding any rule that edits inside string literals.
   defp comment_texts(src) do
     src
     |> String.split("\n")
