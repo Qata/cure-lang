@@ -35,6 +35,20 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 
+  test "the kind universe `Type` in an implicit binder is not lowercased" do
+    # `{a: Type}` is a dependently-typed implicit parameter: `a` is the binder,
+    # `Type` its kind (the universe). `Type` is a built-in sort, not a free type
+    # variable — there is no reading of it as a user variable — yet it is absent
+    # from `Cure.Types.Env`'s `types` map, so without an explicit ctx seed the
+    # rule downgrades it to a distinct free var `type`, corrupting what `a` binds
+    # against. This shape pervades the dependently-typed stdlib (vector, sigma,
+    # equivalent, …); it must be left untouched.
+    {out, warns} = migrate("mod M\nfn f({a: Type}, x: a) -> a = x\n", "kind.cure")
+    assert out =~ "{a: Type}"
+    refute out =~ "type"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
   test "T and t in the same signature freshen rather than merge" do
     {out, _} = migrate("mod M\nfn f(x: T, y: t) -> T = x\n", "c.cure")
     # every occurrence of the freshened `T` binder becomes `t1` consistently...

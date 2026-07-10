@@ -322,8 +322,16 @@ defmodule Cure.Migrate do
     MapSet.union(builtin_type_names(), declared_type_names(ast))
   end
 
+  # `Type` — the kind universe / sort — is a built-in name that lives in every
+  # scope but is not an entry in `Cure.Types.Env`'s `types` map (it classifies
+  # types rather than being one). It appears pervasively in dependent signatures
+  # (`{a: Type}`, `(a) -> Type`), and there is no reading of it as a user type
+  # variable, so it is seeded here explicitly to keep the uppercase-type-var rule
+  # from downgrading it to a free `type`.
+  @builtin_sorts ["Type"]
+
   defp builtin_type_names do
-    Cure.Types.Env.new().types |> Map.keys() |> MapSet.new()
+    (Cure.Types.Env.new().types |> Map.keys()) |> Enum.concat(@builtin_sorts) |> MapSet.new()
   end
 
   # Every type name this file introduces, gathered by a full pre-order walk:
