@@ -1,5 +1,17 @@
 # QTT Graded Binders — Implementation Plan
 
+**STATUS: COMPLETE (2026-07-11).** All eight slices landed and gated on
+`core-let-binder`: 1 `4050c81` · 2+3 · 4a `330dca6` · 4b `a5306ed` · 4c `87dcaeb`
+· 5a `f5bc929` · 5b `4ab3450` · 6 `4624909`, plus the Conv λ-grade TCB fix
+`fc97ed7` that an extended Antigen antibody surfaced. Final gate: 3902 tests / 0
+failed, Antigen 322/322 cells + 300-run campaign → 0 infections, oracle replay
+65/65, `mix dialyzer` clean, stdlib 44/44. An adversarial multi-agent review is in
+flight; any confirmed findings will be triaged red-green before this plan is
+considered closed. Deferred, non-blocking: surface grades on λ-expressions and
+constructor fields (both representable in Core today, just unspellable), and
+making `quantities` a pure projection of the Pi (the slice-6 assertion already
+makes the two a verified mirror).
+
 **Branch:** `core-let-binder`
 **Goal:** full Quantitative Type Theory (Atkey) with `{0, 1, affine, ω}` grades on
 Core binders, so linear *and* affine types land on one mechanism.
