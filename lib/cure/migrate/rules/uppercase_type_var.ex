@@ -66,7 +66,12 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   # type-variable names, so lowercase value bindings are never touched.
 
   defp walk({:function_def, meta, body}, ctx, active, lines) do
-    {new_meta, rename_map} = rewrite_signature(meta, ctx)
+    # Freshening must avoid every name the BODY already uses, not just signature
+    # names, or a renamed signature binder (`T` -> `t`) can land on a distinct
+    # free type var the body introduces (`let y: t = …`) and silently merge two
+    # variables — the very merge the rule's freshening exists to prevent.
+    body_names = var_names_deep(body, [])
+    {new_meta, rename_map} = rewrite_signature(meta, ctx, body_names)
     lines = if rename_map != %{}, do: [Keyword.get(meta, :line) | lines], else: lines
     # A nested signature's own binders shadow an outer variable of the same name.
     inner = Map.merge(active, rename_map)
@@ -110,7 +115,7 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   # Returns {new_meta, rename_map}. `rename_map` is %{} when nothing changed;
   # otherwise it maps each renamed uppercase binder to its lowercased target so
   # the caller can propagate the same rename into the function body.
-  defp rewrite_signature(meta, ctx) do
+  defp rewrite_signature(meta, ctx, body_names) do
     params = Keyword.get(meta, :params, [])
     return_type = Keyword.get(meta, :return_type)
 
@@ -124,8 +129,18 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
 
     names = Enum.flat_map(types, &type_var_names/1) ++ binder_names
 
+    # Candidates come from the SIGNATURE only — a body-only uppercase name is a
+    # constructor/free var whose meaning the per-file ctx cannot settle here, so
+    # the rule deliberately never renames it. But the freshening avoidance set
+    # `reserved` also folds in the body's names, so a freshened target never
+    # collides with a name the body already uses.
     candidates = names |> Enum.filter(&rename?(&1, ctx)) |> Enum.uniq()
-    reserved = names |> Enum.reject(&rename?(&1, ctx)) |> MapSet.new()
+
+    reserved =
+      names
+      |> Enum.reject(&rename?(&1, ctx))
+      |> Enum.concat(body_names)
+      |> MapSet.new()
 
     rename_map = build_rename_map(candidates, reserved)
 
@@ -211,6 +226,29 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   defp type_var_names({_k, _meta, ch}) when is_list(ch), do: Enum.flat_map(ch, &type_var_names/1)
   defp type_var_names(l) when is_list(l), do: Enum.flat_map(l, &type_var_names/1)
   defp type_var_names(_), do: []
+
+  # Every variable-node name anywhere in a subtree — descending BOTH children
+  # and meta-borne type expressions (a `let`'s `:type_annotation`, a param's
+  # `:type`), since a body type variable frequently lives in meta rather than as
+  # a child. Over-collecting value-variable names is harmless: it only pushes a
+  # freshened target to a higher suffix, never causes an incorrect merge.
+  defp var_names_deep({:variable, meta, name}, acc) when is_binary(name),
+    do: meta |> meta_values() |> Enum.reduce([name | acc], &var_names_deep/2)
+
+  defp var_names_deep({_k, meta, name, inner}, acc) when is_binary(name),
+    do: var_names_deep(inner, meta |> meta_values() |> Enum.reduce([name | acc], &var_names_deep/2))
+
+  defp var_names_deep({_k, meta, ch}, acc) when is_list(ch),
+    do: Enum.reduce(ch, meta |> meta_values() |> Enum.reduce(acc, &var_names_deep/2), &var_names_deep/2)
+
+  defp var_names_deep({_k, meta, inner}, acc),
+    do: var_names_deep(inner, meta |> meta_values() |> Enum.reduce(acc, &var_names_deep/2))
+
+  defp var_names_deep(l, acc) when is_list(l), do: Enum.reduce(l, acc, &var_names_deep/2)
+  defp var_names_deep(_, acc), do: acc
+
+  defp meta_values(meta) when is_list(meta), do: Enum.map(meta, fn {_k, v} -> v end)
+  defp meta_values(_), do: []
 
   # Rewrite variable nodes whose name is a rename key; recurse into applications.
   defp rename_in_type({:variable, meta, name}, map) when is_binary(name) do

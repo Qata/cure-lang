@@ -93,6 +93,19 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert binder_name == String.downcase(binder_name)
   end
 
+  test "a freshened signature binder avoids a distinct lowercase type var used only in the body" do
+    # `T` in the signature lowercases to `t`, but the body already uses a
+    # distinct free type var `t` in a `let` annotation. Freshening consulted
+    # only signature names, so `T`→`t` silently MERGED onto the body's `t` —
+    # violating the rule's own "T and t freshen rather than merge" guarantee.
+    # The freshener must see the body's `t` and pick `t1`, leaving body `t`.
+    {out, _} = migrate("mod M\nfn f(x: T) -> T =\n  let y: t = g(x)\n  y\n", "bodyfresh.cure")
+    assert out =~ "x: t1"
+    assert out =~ "-> t1"
+    assert out =~ "let y: t ="
+    refute out =~ "T"
+  end
+
   defp find_fn(ast) do
     ast
     |> flatten_nodes()
