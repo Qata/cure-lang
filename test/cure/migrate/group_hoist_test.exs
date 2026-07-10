@@ -1,0 +1,47 @@
+defmodule Cure.Migrate.GroupHoistTest do
+  use ExUnit.Case, async: true
+  alias Cure.Compiler.{Lexer, Parser, Trivia, Printer}
+  alias Cure.Migrate
+
+  defp reparses?(src, file) do
+    with {:ok, toks} <- Lexer.tokenize(src, file: file, emit_events: false),
+         {:ok, _ast} <- Parser.parse(toks, file: file, emit_events: false) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp migrate(src, file) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: file, trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: file, emit_events: false)
+    {new_ast, warns} = Migrate.run(Trivia.attach(ast, trivia), file: file)
+    {Printer.quoted_to_string(new_ast), warns}
+  end
+
+  test "in-body @group is hoisted to directly above mod and output reparses" do
+    {out, warns} = migrate("mod M\n@group(:core)\nfn f() -> Int = 1\n", "a.cure")
+    # decorator now appears before `mod`, and not after it
+    assert out =~ ~r/@group\(:core\)\s*\n\s*mod\s+M/
+    refute out =~ ~r/mod\s+M[\s\S]*@group\(:core\)/
+    assert Enum.any?(warns, &(&1.rule == :W_group_hoist))
+    assert reparses?(out, "a.cure")
+  end
+
+  test "a file already in above-mod form is unchanged and does not warn" do
+    src = "@group(:core)\nmod M\nfn f() -> Int = 1\n"
+    {out, warns} = migrate(src, "b.cure")
+    assert out =~ ~r/@group\(:core\)\s*\n\s*mod\s+M/
+    refute Enum.any?(warns, &(&1.rule == :W_group_hoist))
+  end
+
+  test "a comment on the @group line travels with the hoisted decorator (never dropped or orphaned)" do
+    {out, _} = migrate("mod M\n@group(:core)  # grouping tag\nfn f() -> Int = 1\n", "c.cure")
+    # the comment survives...
+    assert out =~ "grouping tag"
+    # ...and rides above mod with the decorator, not left stranded below it
+    assert out =~ ~r/@group\(:core\).*grouping tag[\s\S]*mod\s+M/
+    refute out =~ ~r/mod\s+M[\s\S]*grouping tag/
+    assert reparses?(out, "c.cure")
+  end
+end
