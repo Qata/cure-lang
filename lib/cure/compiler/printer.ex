@@ -522,14 +522,18 @@ defmodule Cure.Compiler.Printer do
       Keyword.get(meta, :from) != nil ->
         fsm_transition_to_string(meta, depth, indent)
 
-      # Pipe call
+      # Pipe call. `|>` binds loosest (level 10, left-assoc), so a left operand
+      # whose own precedence is lower — a bare `<-|` send, a conditional — must
+      # be parenthesised or the reprint reparses differently.
       Keyword.get(meta, :pipe) == true ->
+        pipe_parent = {10, :left}
+
         case args do
           [piped | rest] when rest != [] ->
-            "#{render(piped, depth, indent)} |> #{name}(#{args_to_string(rest, depth, indent)})"
+            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{args_to_string(rest, depth, indent)})"
 
           [piped] ->
-            "#{render(piped, depth, indent)} |> #{name}"
+            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}"
 
           [] ->
             name
@@ -1203,6 +1207,18 @@ defmodule Cure.Compiler.Printer do
   defp child_prec({:range, _meta, _}), do: {50, :none}
   defp child_prec({:send, _meta, _}), do: {8, :none}
   defp child_prec({:attribute_access, _meta, _}), do: {100, :left}
+  # `|>` lowers to a pipe-tagged :function_call, binding loosest (level 10); an
+  # ordinary call is a primary (atom) and never needs parens.
+  defp child_prec({:function_call, meta, _}) do
+    if Keyword.get(meta, :pipe) == true, do: {10, :left}, else: :atom
+  end
+
+  # Right-extending prefix keywords (`throw`/`yield`/`return`/`spawn`) grab
+  # everything to their right, so as a left operand they must be parenthesised.
+  defp child_prec({:throw, _meta, _}), do: :lowest
+  defp child_prec({:yield, _meta, _}), do: :lowest
+  defp child_prec({:early_return, _meta, _}), do: :lowest
+  defp child_prec({:async_operation, _meta, _}), do: :lowest
   defp child_prec({:conditional, _meta, _}), do: :lowest
   defp child_prec({:pattern_match, _meta, _}), do: :lowest
   defp child_prec({:pickup, _meta, _}), do: :lowest

@@ -51,7 +51,18 @@ defmodule Cure.Compiler.PrinterPrecedenceTest do
     "(pid <-| msg) + 1",
     "(a + b).x",
     "a.b + c",
-    "Std.Map.put(k, v, m)"
+    "Std.Map.put(k, v, m)",
+    # `|>` lowers to a pipe-tagged :function_call (not :binary_op) and binds
+    # loosest (level 10); the right-extending prefix keywords (`throw`, `yield`,
+    # …) grab everything to their right. Both must be parenthesised as operands.
+    "(a |> f) + b",
+    "b + (a |> f)",
+    "(a |> f) < b",
+    "(a |> f).x",
+    "a |> f |> g",
+    "(a <-| b) |> f",
+    "(throw x) + 1",
+    "(yield x) + 1"
   ]
 
   for expr <- @exprs do
