@@ -26,6 +26,11 @@ mod Std.Map
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
+  ## The map carrier type. Opaque: values flow through the `:maps`
+  ## externs below; the key/value types are not tracked at this
+  ## surface (a future parameterised `Map(k, v)` is tracked separately).
+  opaque type Map
+
   ## New empty map.
   @extern(:maps, :new, 0)
   fn new() -> Map
