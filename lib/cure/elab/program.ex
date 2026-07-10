@@ -32,11 +32,93 @@ defmodule Cure.Elab.Program do
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast, _opts) do
+    with :ok <- check_declarations(ast) do
+      check_ast_elixir_core(ast)
+    end
+  end
+
+  # The declaration-level guards, in one place. `check_ast/2` runs them for the entry module;
+  # `module_slice_env/1` and `import_source_env/2` run them for every module reached through a
+  # `use` import. Those two paths used to call `elaborate_declarations/3` straight from the
+  # parsed AST with no guards at all, so a duplicate inside a `Std.*` source was silently kept
+  # last-wins — the exact `Map.put`-overwrite hole these checks exist to close, reachable
+  # through two doors they never covered.
+  @spec check_declarations(tuple() | list()) :: :ok | {:error, term()}
+  defp check_declarations(ast) do
     with :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast),
          :ok <- check_no_fn_ctor_collision(ast) do
-      check_ast_elixir_core(ast)
+      check_no_sibling_collision(ast)
+    end
+  end
+
+  # Two sibling `mod` blocks in ONE compilation unit may not bind the same name.
+  #
+  # A module is a namespace, and two modules in two FILES may share a name freely: the stdlib
+  # has `map` in five modules. Those are reconciled by the import rekey machinery
+  # (`Resolution.rekey_module_env`, LOCKED type-shadowing Approach B), which this check does
+  # not touch. But `declarations/1` flattens all SIBLING modules of one AST into a single list
+  # before `elaborate_declarations/3` ever runs, and nothing rekeys them — they share one flat
+  # `env.defs` / `env.families` / `env.ctor_to_family`, each a plain `Map.put`. So the later
+  # sibling silently wins the bare key:
+  #
+  #     mod A  fn foo() -> Int = 1  end
+  #     mod B  fn foo() -> Int = 2  end   # A's `foo` is GONE; A's callers δ-unfold B's body
+  #
+  # For types it is worse than lost — it is incoherent. `type Foo = MkA` / `type Foo = MkB`
+  # leaves `MkA` registered as a constructor whose `ctor_to_family` entry names a family whose
+  # constructor set contains only `MkB`. That is precisely the state `check_no_duplicate_ctors`
+  # rejects within one module.
+  #
+  # Rejecting is the sound reading. Rekeying siblings the way imports are rekeyed would require
+  # elaborating each sibling into its own slice, which would break the bare cross-sibling
+  # references that flat elaboration makes work today (`mod B  fn baz() = bar()  end`, calling
+  # A's `bar`). Nothing in the tree declares sibling modules in one file, so nothing loses.
+  @spec check_no_sibling_collision(tuple() | list()) :: :ok | {:error, term()}
+  defp check_no_sibling_collision(ast) do
+    case top_modules(ast) do
+      mods when length(mods) < 2 ->
+        :ok
+
+      mods ->
+        # `fn` names and constructor names share one bare-atom namespace, so they collide with
+        # each other across siblings exactly as `check_no_fn_ctor_collision` says they do
+        # within one. Type names live in `env.families`, their own namespace.
+        with :ok <- first_sibling_collision(mods, &value_names/1),
+             do: first_sibling_collision(mods, &type_names/1)
+    end
+  end
+
+  defp first_sibling_collision(mods, extract) do
+    mods
+    |> Enum.flat_map(fn mod ->
+      owner = module_name_atom(mod)
+      for name <- mod |> declarations() |> Enum.flat_map(extract) |> Enum.uniq(), do: {name, owner}
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.find(fn {_name, owners} -> length(owners) > 1 end)
+    |> case do
+      nil -> :ok
+      {name, owners} -> {:error, {:sibling_module_collision, name, Enum.sort(owners)}}
+    end
+  end
+
+  defp value_names(decl), do: fn_names(decl) ++ ctor_names(decl)
+
+  defp fn_names({:function_def, meta, _body}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> [String.to_atom(name)]
+      _ -> []
+    end
+  end
+
+  defp fn_names(_decl), do: []
+
+  defp module_name_atom({:container, meta, _body}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      n when is_binary(n) -> String.to_atom(n)
+      n when is_atom(n) -> n
     end
   end
 
@@ -583,6 +665,7 @@ defmodule Cure.Elab.Program do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         :ok <- check_declarations(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
          {:ok, env0} <- merge_env(seeded, imported),
@@ -704,6 +787,7 @@ defmodule Cure.Elab.Program do
       with {:ok, source} <- File.read(path),
            {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+           :ok <- check_declarations(ast),
            {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
            seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
            {:ok, env0} <- merge_env(seeded, imported),
