@@ -4358,13 +4358,18 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A pair `%[a, b]` (dependent-pair introduction) as a branch body: a
-  # checking-mode expression against this branch's (index-refined) Σ type — the
-  # expected type pins the components' erased indices (an FRP `step`'s `prim()`
-  # continuation has no other way to solve its index metas). Without this a
-  # Σ-returning eliminator fails its arms with `:unsupported_expression`.
-  defp elaborate_branch_body({:tuple, _meta, [_a, _b]} = expr, expected, names, ctx, env),
-    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+  # A tuple `%[a, b, …]` (dependent-pair / flat Σ-telescope introduction) as a
+  # branch body: a checking-mode expression against this branch's (index-refined)
+  # Σ type — the expected type pins the components' erased indices (an FRP `step`'s
+  # `prim()` continuation has no other way to solve its index metas; likewise a
+  # flat n-ary tuple whose last component is a bare `[]` needs the goal's `List(_)`
+  # to solve the inner `Nil` element). Without this a Σ-returning eliminator fails
+  # its arms with `:unsupported_expression`, or an inner `[]` fails infer-only with
+  # `{:unsolved_metavariables, :Nil}`. Matches ANY arity ≥ 2: the 2-tuple is a bare
+  # dependent pair, arity ≥ 3 is the flat telescope (#35) — both check identically.
+  defp elaborate_branch_body({:tuple, _meta, elems} = expr, expected, names, ctx, env)
+       when length(elems) >= 2,
+       do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
   # A `[] -> []` (or `[a,b] -> [...]`) arm body: check it against the branch goal
   # so a bare `[]` arm pins its element type from the goal instead of failing
