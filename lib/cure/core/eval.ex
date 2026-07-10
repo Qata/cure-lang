@@ -53,6 +53,7 @@ defmodule Cure.Core.Eval do
   # peels one layer on demand at each ι-site, exactly like `nat_to_ctor/1`.
   def eval({:bounded_lit, n}, _env), do: {:vbounded, n}
   def eval({:float_type}, _env), do: {:vfloat_type}
+  def eval({:binary_type}, _env), do: {:vbinary_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
 
   # Opaque until the global is certified total (M7 gates δ here).

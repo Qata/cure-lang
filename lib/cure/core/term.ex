@@ -22,6 +22,7 @@ defmodule Cure.Core.Term do
     * `{:global, name}`                      reference to a global def
     * `{:int_type}` / `{:int_lit, n}`        integer type / literal
     * `{:float_type}` / `{:float_lit, f}`    float type / literal
+    * `{:binary_type}`                       BEAM binary base type (Int-tier)
     * `{:nat_lit, n}`                        compact Nat literal (`n >= 0`),
                                              definitionally equal to the n-fold
                                              `S`-tower over `Z` (Lean kernel Nat /
@@ -72,6 +73,7 @@ defmodule Cure.Core.Term do
   def term?({:bounded_lit, n}), do: is_integer(n) and n >= 0
   def term?({:float_type}), do: true
   def term?({:float_lit, f}), do: is_float(f)
+  def term?({:binary_type}), do: true
 
   def term?(_), do: false
 
@@ -99,6 +101,7 @@ defmodule Cure.Core.Term do
   def shift({:bounded_lit, _} = t, _amount, _cutoff), do: t
   def shift({:float_type} = t, _amount, _cutoff), do: t
   def shift({:float_lit, _} = t, _amount, _cutoff), do: t
+  def shift({:binary_type} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
   def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
@@ -164,6 +167,7 @@ defmodule Cure.Core.Term do
   def subst({:bounded_lit, _} = t, _j, _r), do: t
   def subst({:float_type} = t, _j, _r), do: t
   def subst({:float_lit, _} = t, _j, _r), do: t
+  def subst({:binary_type} = t, _j, _r), do: t
 
   def subst({:pi, dom, cod}, j, r),
     do: {:pi, subst(dom, j, r), subst(cod, j + 1, shift(r, 1, 0))}
@@ -232,6 +236,7 @@ defmodule Cure.Core.Term do
   def to_external({:bounded_lit, n}), do: %{"node" => "bounded_lit", "value" => n}
   def to_external({:float_type}), do: %{"node" => "float_type"}
   def to_external({:float_lit, f}), do: %{"node" => "float_lit", "value" => f}
+  def to_external({:binary_type}), do: %{"node" => "binary_type"}
 
   @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
   @spec from_external(map()) :: t()
@@ -268,6 +273,7 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "bounded_lit", "value" => n}), do: {:bounded_lit, n}
   def from_external(%{"node" => "float_type"}), do: {:float_type}
   def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
+  def from_external(%{"node" => "binary_type"}), do: {:binary_type}
 
   # -- helpers ----------------------------------------------------------------
 

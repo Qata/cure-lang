@@ -1318,6 +1318,7 @@ defmodule Cure.Elab.Declarations do
   # family lookup `{:data, :Bool, [], []}` — exactly as `Nat` always has.
   defp primitive_type("Int"), do: {:int_type}
   defp primitive_type("Float"), do: {:float_type}
+  defp primitive_type("Binary"), do: {:binary_type}
   defp primitive_type(_), do: nil
 
   # Threads the ctx to NESTED argument positions (spec §7.3 item 3): in

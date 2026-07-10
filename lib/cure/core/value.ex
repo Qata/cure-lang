@@ -50,6 +50,7 @@ defmodule Cure.Core.Value do
   def value?({:vnat, n}), do: is_integer(n) and n >= 0
   def value?({:vbounded, n}), do: is_integer(n) and n >= 0
   def value?({:vfloat_type}), do: true
+  def value?({:vbinary_type}), do: true
   def value?({:vfloat, f}), do: is_float(f)
   def value?(_), do: false
 
