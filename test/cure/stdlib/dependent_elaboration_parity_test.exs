@@ -14,10 +14,9 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
   that would freeze current brokenness; they are promoted into `@green` as they are
   fixed):
 
-    * `access`, `app` — irreducibly `Any`-typed (dynamic heterogeneous access /
-      OTP `application:get_env` config `term()`); blocked on the `Any` top-type
-      design fork (no in-language lower-risk default). `app` additionally needs
-      `get_env/2` vs `/3` arity overloading.
+    * `access` — irreducibly `Any`-typed (dynamic heterogeneous access);
+      blocked on the `Any` top-type design fork (no in-language lower-risk
+      default) plus the `proto Access(c)` → `interface` migration (#21).
     * `show`, `io` — dependent-green WITH `use Std.String` + `use Std.Semigroup`
       (proven separately), but the committed files omit those imports because the
       CLASSIC checker breaks on them (String=List(Char) vs binary). They flip green
@@ -35,7 +34,7 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
   alias Cure.Elab.Program
 
   @green ~w(
-    actor atom binary bool bounded char comparable core crdt decision equatable
+    actor app atom binary bool bounded char comparable core crdt decision equatable
     equivalent float fsm functor gen int iter json list map match math nat
     non_empty option process proof result semigroup sigma string supervisor
     system telescope test time tuple unit vector
