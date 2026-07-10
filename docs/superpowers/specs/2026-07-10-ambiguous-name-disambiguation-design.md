@@ -135,9 +135,14 @@ R14. **No runtime, no TCB, no codegen change.** Runtime constructor tags stay
     bare (the AtomVM invariant, shadowing spec §3.5). This is a surface-syntax
     and E-layer-resolution change only. `lib/cure/core/*` is untouched.
 
-## 5. Prerequisite (P0): the qualifier is currently unchecked
+## 5. Prerequisites (P0)
 
-**This must land before R8, or forcing qualification buys nothing.**
+**Two independent bugs. Both must land before R8, or the escape hatch this spec
+forces people onto does not exist — and, worse, silently lies.** Found by source
+read on 2026-07-10; P0.2 was corroborated by an independent audit of
+`resolution.ex` the same day.
+
+### 5.1 P0.1 — the qualifier is currently unchecked
 
 `Resolution.resolve_qualified/3` (`lib/cure/elab/resolution.ex:209-232`) tries
 the re-keyed `:"Mod#Name"` key first and then falls back to the **bare atom**:
@@ -170,6 +175,65 @@ spec — it already lives there, outside the core `Env`), and require:
 - `Self.N` → the bare key **only if** `N` is declared by the current module.
 
 This is a bug fix independent of R8 and can be tested and landed first.
+
+### 5.2 P0.2 — constructor-name collisions are never detected
+
+**The motivating example in this spec does not work today, and fails silently.**
+
+`Program.shadow_resolved_imports/1` computes collisions over exactly two
+namespaces — family names and def names:
+
+```elixir
+%{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
+%{losers: def_losers}                   = Resolution.classify(def_owners, local_defs)
+owner_mods = MapSet.union(MapSet.new(Map.keys(losers)), MapSet.new(Map.keys(def_losers)))
+```
+
+`rekey_module_env/5` is then applied only to modules in `owner_mods`. Its
+`shadowed_ctor_names` argument (`local_ctors`) is therefore *only ever consulted
+for a module that already lost a family-name or def-name collision*. A module
+whose sole collision is a **constructor** name is never re-keyed at all.
+`Resolution.ambiguous_modules/2` has the same blind spot — it scans `families`
+and `defs`, never `ctors` (`resolution.ex:310`).
+
+Consequence, for the exact case this spec exists to fix:
+
+```cure
+use Std.Nat                  # brings Nat, Z, S
+type Peano = Z | S(Peano)    # family names Peano vs Nat — NO family collision
+```
+
+1. `Std.Nat` is not a loser, so it is never re-keyed. No `:"Std.Nat#S"` key is
+   ever created.
+2. The local declaration reaches `Inductive.declare/3`, whose `Map.put` on
+   `env.ctors` **silently overwrites** the imported `S`.
+3. Because of P0.1's unchecked bare fallback, `resolve_qualified(env,
+   "Std.Nat.S", :value)` misses `:"Std.Nat#S"` and falls through to the bare
+   `:S` — **which is now the local constructor.**
+
+So `Nat.S` today does not merely fail to reach the import; it resolves, without
+diagnostic, to the *wrong* constructor. R9's escape hatch is unimplementable
+until this is fixed, and R8's warning would be actively harmful — it would tell
+users to write a qualified form that silently means something else.
+
+Note the interaction: P0.1 alone is a laxity, P0.2 alone is data loss. Composed,
+they produce *silent misresolution of an explicitly qualified name*, which is
+strictly worse than either. Fix both, and prefer fixing P0.2 first — with
+ownership checked (P0.1), the missing `:"Std.Nat#S"` key would at least become a
+loud `{:qualifier_not_owner, …}` rather than a wrong answer.
+
+**Fix.** Extend collision classification to a third namespace. `classify/2` is
+already shape-generic (it takes a `%{name => MapSet.t(owner)}` map and a local
+set, and is called twice with different namespaces); pass it `ctor_owners` built
+the same way `family_owners`/`def_owners` are, and union the resulting losers
+into `owner_mods`. Extend `ambiguous_modules/2` to scan `ctors`. The existing
+`rekey_module_env/5` already accepts `shadowed_ctor_names` and does the right
+thing once its module is actually in `owner_mods` — the re-key transform itself
+is not at fault and needs no change.
+
+**Scope note.** This also fixes the import-vs-import variant (two imported
+modules exporting the same constructor name from different families), which is
+today an equally silent clobber and which R7 was *supposed* to have covered.
 
 ## 6. Surface syntax: `Self`
 
@@ -304,11 +368,24 @@ W-code `W089` is the next free code (`W081`, `W082`, `W086`, `W088` are taken).
 
 Red tests first, per the project's discipline. Layered:
 
-**P0 (independent, lands first)**
+**P0.1 (independent, lands first)**
 - `Bogus.Z` with `use Std.Nat` ⇒ `:qualifier_not_owner`, *not* silent success.
 - `Self.Z` with no local `Z` ⇒ `:no_such_local_name`.
 - `Std.Nat.Z` (correct owner, unshadowed) ⇒ still resolves. **Regression guard
   for the load-bearing fallback.**
+
+**P0.2 (independent, lands first — and before P0.1, per §5.2)**
+- `use Std.Nat` + `type Peano = Z | S(Peano)` ⇒ `Nat.S` resolves to
+  `Std.Nat`'s constructor, **not** the local one. *This is the test that fails
+  most loudly today: it currently returns the wrong constructor with no
+  diagnostic.* Assert on the resulting Core, not on `{:ok, _}`.
+- Same program ⇒ the imported `S` is still present in the env under some key
+  (guards against the silent `Map.put` clobber).
+- Two imported modules exporting `Ok` from different families, no local
+  declaration ⇒ bare `Ok` is `{:ambiguous_name, …}` (R7 was supposed to cover
+  this and does not).
+- A local ctor colliding with an import whose *family name also* collides ⇒
+  unchanged behavior (regression guard: this is the path that works today).
 
 **R8 / R9 (Phase 1)**
 - Local ctor `S` + imported `S`, bare use ⇒ exactly one `W089`, and the program
