@@ -1,0 +1,44 @@
+mod Std.Binary
+  ## The bridge between Cure's two string representations.
+  ##
+  ## A **`String`** is a `List(Char)` — a cons spine of code points, the form a
+  ## string literal `"hi"` elaborates to. It is the value-surface representation:
+  ## you pattern-match, `map`, and fold it like any other list.
+  ##
+  ## A **`Binary`** is the BEAM binary. It is what OTP's `:string`, `:binary`,
+  ## and `:erlang` string functions consume and produce (Unicode case folding,
+  ## `integer_to_binary`, `binary:split`, …). Cure keeps it as an opaque type.
+  ##
+  ## `to_binary` / `from_binary` convert between them so a `List(Char)` program
+  ## can reach an OTP binary primitive and come back. Conversion is UTF-8:
+  ## `Char` erases to its code point, so a `List(Char)` erases to a list of
+  ## code-point ints, which `:unicode.characters_to_binary/1` encodes.
+  ##
+  ## ## Examples
+  ##
+  ## ```cure
+  ## use Std.Binary
+  ##
+  ## to_binary(['h', 'i'])                    # => "hi"   (the Binary <<"hi">>)
+  ## from_binary("hi")                        # => ['h', 'i']
+  ## ```
+
+  use Std.Bounded
+
+  @group(:core)
+
+  ## `Char` is a Unicode scalar: an index below the code-point ceiling
+  ## `0x110000`. A `Char` value erases to its code-point integer.
+  typealias Char = Bounded(1114112)
+
+  ## Encode a `List(Char)` as its UTF-8 `Binary`. The list erases to a list of
+  ## code-point ints, which `:unicode.characters_to_binary/1` renders to a
+  ## binary; delegates to that BIF.
+  @extern(:unicode, :characters_to_binary, 1)
+  fn to_binary(cs: List(Char)) -> Binary
+
+  ## Decode a UTF-8 `Binary` back into its `List(Char)` of code points;
+  ## delegates to `:unicode.characters_to_list/1`.
+  @extern(:unicode, :characters_to_list, 1)
+  fn from_binary(b: Binary) -> List(Char)
+end
