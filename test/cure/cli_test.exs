@@ -121,13 +121,16 @@ defmodule Cure.CLITest do
   end
 
   describe "unknown command" do
-    test "prints error" do
-      output =
+    test "prints error and exits nonzero" do
+      # A mistyped command must not exit 0 — `cure foobar && next` should stop.
+      # Mirrors the `cure deps` no-Cure.toml contract (this describe's sibling),
+      # which already asserts {:shutdown, 1} on an error path.
+      stderr =
         capture_io(:stderr, fn ->
-          Cure.CLI.main(["foobar"])
+          assert catch_exit(Cure.CLI.main(["foobar"])) == {:shutdown, 1}
         end)
 
-      assert output =~ "Unknown command"
+      assert stderr =~ "Unknown command"
     end
   end
 
@@ -214,6 +217,22 @@ defmodule Cure.CLITest do
         end)
 
       assert stderr =~ "No Cure.toml found"
+    end
+
+    test "an unknown deps subcommand names the bad subcommand and exits nonzero", %{tmp: tmp} do
+      # `cure deps frobnicate` used to fall through to the generic catch-all,
+      # which bound `unknown = "deps"` — blaming a valid command, suggesting an
+      # unrelated one, and exiting 0. It must instead name the real offender
+      # (`frobnicate`) and fail.
+      File.cd!(tmp)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["deps", "frobnicate"])) == {:shutdown, 1}
+        end)
+
+      assert stderr =~ "Unknown deps subcommand: frobnicate"
+      refute stderr =~ "Unknown command: deps"
     end
   end
 end

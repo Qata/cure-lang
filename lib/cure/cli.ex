@@ -119,6 +119,13 @@ defmodule Cure.CLI do
         ["deps", "tree"] ->
           cmd_deps_tree()
 
+        # A `deps` invocation with an unrecognised subcommand must name the real
+        # offender and fail, not fall through to the generic catch-all (which
+        # would bind `unknown = "deps"`, blame a valid command, and exit 0).
+        ["deps" | rest] ->
+          error("Unknown deps subcommand: #{Enum.join(rest, " ")}. Known: update, tree.")
+          exit({:shutdown, 1})
+
         ["test"] ->
           cmd_test(opts)
 
@@ -242,6 +249,9 @@ defmodule Cure.CLI do
             end
 
           error("Unknown command: #{unknown}.#{suffix} Run 'cure help' for usage.")
+          # A mistyped command must not exit 0, or `cure <typo> && next` proceeds
+          # and CI wrappers cannot detect the mistake.
+          exit({:shutdown, 1})
       end
     end
   end
