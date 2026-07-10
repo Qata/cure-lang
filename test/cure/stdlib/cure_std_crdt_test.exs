@@ -133,7 +133,7 @@ defmodule :cure_std_crdt_test do
       a = :cure_std_crdt.lww_set(:cure_std_crdt.lww_empty(:n1), :v1, 10, :n1)
       b = :cure_std_crdt.lww_set(:cure_std_crdt.lww_empty(:n2), :v2, 20, :n2)
       merged = :cure_std_crdt.lww_merge(a, b)
-      assert :cure_std_crdt.lww_value(merged) == :v2
+      assert :cure_std_crdt.lww_value(merged) == {:some, :v2}
     end
 
     test "ties break on node ordering" do
@@ -141,7 +141,7 @@ defmodule :cure_std_crdt_test do
       b = :cure_std_crdt.lww_set(:cure_std_crdt.lww_empty(:beta), :from_beta, 5, :beta)
       merged = :cure_std_crdt.lww_merge(a, b)
       # alpha < beta lexicographically; beta wins because na >= nb in the merge.
-      assert :cure_std_crdt.lww_value(merged) == :from_beta
+      assert :cure_std_crdt.lww_value(merged) == {:some, :from_beta}
     end
 
     test "obeys the CRDT merge laws" do
@@ -149,6 +149,14 @@ defmodule :cure_std_crdt_test do
       b = :cure_std_crdt.lww_set(:cure_std_crdt.lww_empty(:n2), :v2, 5, :n2)
       c = :cure_std_crdt.lww_set(:cure_std_crdt.lww_empty(:n3), :v3, 10, :n3)
       assert_merge_laws(&:cure_std_crdt.lww_merge/2, [a, b, c])
+    end
+
+    test "an unset register reads as None(), not as a bare :empty" do
+      # `lww_value` is declared `LWWRegister -> Option(t)`. It used to be
+      # declared `-> t` and return the atom `:empty`, so at `t = Int` a caller
+      # was promised an integer and handed `:empty`. Nullary Cure constructors
+      # erase to one-tuples, so `None()` is `{:none}`.
+      assert :cure_std_crdt.lww_value(:cure_std_crdt.lww_empty(:n1)) == {:none}
     end
   end
 

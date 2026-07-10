@@ -149,7 +149,12 @@ defmodule :cure_std_crdt do
     %{@k => :lww_register, value: value, stamp: stamp, node: node}
   end
 
-  def lww_value(%{@k => :lww_register, value: value}), do: value
+  # An unset register has no value, so the result is an `Option(t)`.
+  # This used to return the bare atom `:empty` under a declared `-> t`: at
+  # `t = Int` a caller was promised an integer and handed `:empty`. Nullary Cure
+  # constructors erase to one-tuples, so `None()` is `{:none}`.
+  def lww_value(%{@k => :lww_register, value: :empty}), do: {:none}
+  def lww_value(%{@k => :lww_register, value: value}), do: {:some, value}
 
   def lww_merge(
         %{@k => :lww_register, stamp: sa, node: na} = a,

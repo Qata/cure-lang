@@ -64,18 +64,18 @@ defmodule :cure_std_regex do
             {:some, new_match(whole, groups)}
 
           {:match, []} ->
-            :none
+            {:none}
 
           :nomatch ->
-            :none
+            {:none}
         end
 
       :error ->
-        :none
+        {:none}
     end
   end
 
-  def run(_, _), do: :none
+  def run(_, _), do: {:none}
 
   # -- All matches ------------------------------------------------------------
 

@@ -185,8 +185,7 @@ defmodule Cure.Audit.ShimConformance do
       a({:cure_std_crdt, :or_merge, 2}, seq([orset(), orset()]), os),
       a({:cure_std_crdt, :lww_empty, 1}, seq([node_atom()]), lw),
       a({:cure_std_crdt, :lww_set, 4}, seq([lww(), elem(), stamp(), node_atom()]), lw),
-      # Declared `LWWRegister -> t`. An empty register yields the atom `:empty`.
-      a({:cure_std_crdt, :lww_value, 1}, seq([lww()]), :int, :type_defect),
+      a({:cure_std_crdt, :lww_value, 1}, seq([lww()]), {:option, :int}),
       a({:cure_std_crdt, :lww_merge, 2}, seq([lww(), lww()]), lw),
       a({:cure_std_crdt, :mv_empty, 0}, ret([]), mvr),
       a({:cure_std_crdt, :mv_write, 4}, seq([mv(), elem(), stamp(), node_atom()]), mvr),
@@ -241,7 +240,7 @@ defmodule Cure.Audit.ShimConformance do
   defp json do
     [
       a({:cure_std_json, :encode, 1}, seq([json_value()]), :binary),
-      a({:cure_std_json, :decode, 1}, seq([{:member_of, ["[1,2]", "3", "{oops"]}]),
+      a({:cure_std_json, :decode, 1}, seq([{:member_of, ["[1,2]", "3", "null", "{oops"]}]),
         {:result, :json, :any}),
       a({:cure_std_json, :num_of_int, 1}, seq([int()]), :json)
     ]
@@ -383,13 +382,18 @@ defmodule Cure.Audit.ShimConformance do
   defp shape?({:result, ok, _err}, {:ok, v}), do: shape?(ok, v)
   defp shape?({:result, _ok, err}, {:error, e}), do: shape?(err, e)
   defp shape?({:result, _, _}, _), do: false
-  defp shape?({:option, _s}, :none), do: true
+
+  # A NULLARY Cure constructor erases to a ONE-TUPLE, not a bare atom:
+  # `None()` is `{:none}`, `Null()` is `{:null}`. Verified by compiling
+  # `fn mk() -> Option(Int) = None()` and inspecting the result. A shim that
+  # returns the bare atom cannot be destructured by Cure at all.
+  defp shape?({:option, _s}, {:none}), do: true
   defp shape?({:option, s}, {:some, v}), do: shape?(s, v)
   defp shape?({:option, _}, _), do: false
 
   defp shape?(:json, v) do
     match?({:num, _}, v) or match?({:arr, _}, v) or match?({:obj, _}, v) or
-      match?({:str, _}, v) or match?({:bool, _}, v) or v == :null
+      match?({:str, _}, v) or match?({:bool, _}, v) or match?({:null}, v)
   end
 
   # ---------------------------------------------------------------------------

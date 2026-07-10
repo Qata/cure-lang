@@ -3,7 +3,7 @@ defmodule :cure_std_json_test do
 
   describe "encode/1" do
     test "encodes scalars" do
-      assert :cure_std_json.encode(:null) == "null"
+      assert :cure_std_json.encode({:null}) == "null"
       assert :cure_std_json.encode({:bool, true}) == "true"
       assert :cure_std_json.encode({:bool, false}) == "false"
       assert :cure_std_json.encode({:num, 1.0}) == "1.0"
@@ -23,6 +23,14 @@ defmodule :cure_std_json_test do
 
     test "returns an error string on bad input" do
       assert {:error, _msg} = :cure_std_json.decode("{bogus")
+    end
+
+    test "null decodes to Null(), the one-tuple, not the bare atom :null" do
+      # `Null` is a nullary Cure constructor and erases to `{:null}`. Returning
+      # `:null` produced a `Value` that classic Cure could not pattern-match:
+      # `match decode("null") ... Null() -> …` crashed on the match.
+      assert {:ok, {:null}} = :cure_std_json.decode("null")
+      assert :cure_std_json.encode({:null}) == "null"
     end
   end
 

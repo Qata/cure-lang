@@ -38,12 +38,13 @@ defmodule Cure.Audit.ShimConformanceTest do
       assert Keyword.has_key?(failures, :referential_transparency)
     end
 
-    test "crdt.lww_value does not inhabit its declared type", %{partition: p} do
-      # Declared `fn lww_value(r: LWWRegister) -> t`. An empty register returns
-      # the atom `:empty`, which is not a `t` — at `t = Int`, not an integer.
-      # Repairable by changing the signature to `-> Option(t)`.
-      assert {:type_defect, failures} = p[{:cure_std_crdt, :lww_value, 1}]
-      assert Keyword.has_key?(failures, :type_conformance)
+    test "crdt.lww_value now inhabits its declared type", %{partition: p} do
+      # It used to be declared `fn lww_value(r: LWWRegister) -> t` and return the
+      # atom `:empty` for an unset register — at `t = Int`, not an integer. The
+      # harness found it; the repair changed the signature to `-> Option(t)`, so
+      # an empty register reads as `None()` (the one-tuple `{:none}`) and every
+      # sample now conforms.
+      assert {:conformant, []} = p[{:cure_std_crdt, :lww_value, 1}]
     end
 
     test "regex compilation allocates a fresh reference, so it is not a pure function",
@@ -66,7 +67,6 @@ defmodule Cure.Audit.ShimConformanceTest do
       known = [
         {:cure_std_time, :now, 0},
         {:cure_std_time, :utc_now, 0},
-        {:cure_std_crdt, :lww_value, 1},
         {:cure_std_regex, :compile, 1},
         {:cure_std_regex, :compile_bang, 1}
       ]

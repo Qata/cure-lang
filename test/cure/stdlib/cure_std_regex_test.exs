@@ -47,9 +47,9 @@ defmodule :cure_std_regex_test do
                :cure_std_regex.run(r, "hello world, again")
     end
 
-    test "returns :none when nothing matches" do
+    test "returns None() -- the one-tuple {:none} -- when nothing matches" do
       {:ok, r} = :cure_std_regex.compile("^\\d+$")
-      assert :cure_std_regex.run(r, "abc") == :none
+      assert :cure_std_regex.run(r, "abc") == {:none}
     end
   end
 

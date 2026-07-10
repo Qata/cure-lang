@@ -13,7 +13,10 @@ defmodule :cure_std_json do
   # -- Encoder -----------------------------------------------------------------
 
   @doc "Encode a `Std.Json.Value` tagged tuple to a JSON string."
-  def encode(:null), do: "null"
+  # `Null()` is a NULLARY Cure constructor, which erases to the one-tuple
+  # `{:null}`, not the bare atom `:null`. Emitting `:null` produced a `Value`
+  # that Cure could not pattern-match at all.
+  def encode({:null}), do: "null"
   def encode({:bool, true}), do: "true"
   def encode({:bool, false}), do: "false"
   def encode({:num, f}) when is_float(f), do: float_to_string(f)
@@ -47,7 +50,7 @@ defmodule :cure_std_json do
     end
   end
 
-  defp to_value(nil), do: :null
+  defp to_value(nil), do: {:null}
   defp to_value(true), do: {:bool, true}
   defp to_value(false), do: {:bool, false}
   defp to_value(n) when is_integer(n), do: {:num, n * 1.0}
