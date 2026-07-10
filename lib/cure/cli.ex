@@ -1245,7 +1245,7 @@ defmodule Cure.CLI do
 
             files ->
               with :ok <- migrate_git_guard(files, check?, print?),
-                   {:ok, results} <- migrate_preflight_all(files, target),
+                   {:ok, results} <- migrate_preflight_all(files, target, project_edition),
                    :ok <- migrate_strict_gate(results, target, strict?) do
                 migrate_apply_and_bump(results, target, paths, check?, print?)
               end
@@ -1314,14 +1314,20 @@ defmodule Cure.CLI do
   # (spec §8: --strict does not promote :manual).
   def plan_migration_source(src, opts) do
     target = Keyword.fetch!(opts, :target)
-    {:ok, toks, trivia} = Cure.Compiler.Lexer.tokenize(src, trivia: true, edition: target)
-    {:ok, ast} = Cure.Compiler.Parser.parse(toks, emit_events: false, edition: target)
+    # Parse the INPUT under the SOURCE edition (`:from`, the file's current
+    # edition), NOT the target (F-B). A keyword retired *at* target is still a
+    # keyword below it; parsing the input under target would lex the to-be-removed
+    # construct as a bare identifier, the crossing rule would never match, and the
+    # bump would fire on an unrewritten file. Defaults to `target` for callers
+    # that predate the split (behaviourally identical while only one edition
+    # exists). The verify reparse (below) stays on `target` — the OUTPUT is target
+    # syntax (I2/F12).
+    from = Keyword.get(opts, :from, target)
+    {:ok, toks, trivia} = Cure.Compiler.Lexer.tokenize(src, trivia: true, edition: from)
+    {:ok, ast} = Cure.Compiler.Parser.parse(toks, emit_events: false, edition: from)
     attached = Cure.Compiler.Trivia.attach(ast, trivia)
     rules = Cure.Migrate.rules_for_crossing(target)
 
-    # Thread the crossing target so the fixpoint's verify reparse uses the SAME
-    # edition the migration targets, not the compiler default (I2 — wires the
-    # F12 edition-plumbing that was otherwise inert at this production caller).
     case Cure.Migrate.run_to_fixpoint(attached, rules: rules, edition: target) do
       {:ok, out_ast, warns} ->
         blocking =
@@ -1400,8 +1406,8 @@ defmodule Cure.CLI do
   # parse failure. The :blocked routing here (and in plan_migration_source/2) is
   # what keeps a :manual item from ever reaching the --strict gate, so it is
   # never promoted to a :strict_violation (spec §8).
-  defp migrate_preflight_all(files, target) do
-    results = Enum.map(files, &migrate_preflight_file(&1, target))
+  defp migrate_preflight_all(files, target, source_edition) do
+    results = Enum.map(files, &migrate_preflight_file(&1, target, source_edition))
     failed = for {:error, path} <- results, do: path
     blocked = for {:blocked, path, ids} <- results, do: {path, ids}
 
@@ -1422,19 +1428,23 @@ defmodule Cure.CLI do
     end
   end
 
-  defp migrate_preflight_file(file, target) do
+  defp migrate_preflight_file(file, target, source_edition) do
     with {:ok, source} <- File.read(file),
+         # Parse the input under the file's CURRENT edition (its own pragma if it
+         # carries one, else the project's edition) — see plan_migration_source/2
+         # (F-B). The verify reparse inside the fixpoint stays on `target`.
+         from = Cure.Edition.pragma_edition(source) || source_edition,
          {:ok, toks, trivia} <-
-           Cure.Compiler.Lexer.tokenize(source, file: file, trivia: true, edition: target),
+           Cure.Compiler.Lexer.tokenize(source, file: file, trivia: true, edition: from),
          {:ok, in_ast} <-
-           Cure.Compiler.Parser.parse(toks, file: file, emit_events: false, edition: target) do
+           Cure.Compiler.Parser.parse(toks, file: file, emit_events: false, edition: from) do
       # Baseline = the un-migrated input reprinted the same way plan_migration_source/2
       # prints the migrated AST, so `changed?` reflects a real rule rewrite (the old
       # `new_ast != attached`), not incidental reformatting.
       baseline =
         Cure.Compiler.Printer.quoted_to_string(Cure.Compiler.Trivia.attach(in_ast, trivia))
 
-      case plan_migration_source(source, target: target) do
+      case plan_migration_source(source, target: target, from: from) do
         {:ok, printed, warnings, bump} ->
           output = if String.ends_with?(printed, "\n"), do: printed, else: printed <> "\n"
 
@@ -1589,17 +1599,23 @@ defmodule Cure.CLI do
   # is restricted to a 4-digit year (matching Cure.Edition) so a malformed value
   # is treated as "no marker" (nil) rather than flowing into compare/2 (F9).
   def migrate_edition_pragma(body) do
-    case Regex.run(~r/@edition\(\s*"(\d{4})"\s*\)/, body) do
+    # `@\s*edition\s*\(` mirrors the parser's whitespace tolerance (F-C) so a
+    # spaced pragma is detected — otherwise the bump would splice a duplicate.
+    case Regex.run(~r/@\s*edition\s*\(\s*"(\d{4})"\s*\)/, body) do
       [_, ed] -> ed
       _ -> nil
     end
   end
 
   # Replace an existing leading `@edition("…")` pragma, or splice a new one at
-  # the very top (the pragma must precede any statement, spec §4).
+  # the very top (the pragma must precede any statement, spec §4). The match
+  # tolerates the parser's interior whitespace (F-C) so a spaced pragma is
+  # replaced in place rather than duplicated.
   defp migrate_splice_edition(body, target) do
-    if Regex.match?(~r/@edition\(\s*"[^"]+"\s*\)/, body) do
-      Regex.replace(~r/@edition\(\s*"[^"]+"\s*\)/, body, "@edition(\"#{target}\")", global: false)
+    pat = ~r/@\s*edition\s*\(\s*"[^"]+"\s*\)/
+
+    if Regex.match?(pat, body) do
+      Regex.replace(pat, body, "@edition(\"#{target}\")", global: false)
     else
       "@edition(\"#{target}\")\n" <> body
     end

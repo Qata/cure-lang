@@ -14,6 +14,15 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     assert Cure.CLI.migrate_edition_pragma("mod M\n") == nil
   end
 
+  # F-C (audit iteration 3): the phase-2 bump detector must recognise the same
+  # spaced pragmas the parser accepts, or a bump would splice a SECOND pragma
+  # above an existing (spaced) one. Mirror the parser's whitespace tolerance.
+  test "F-C: migrate_edition_pragma tolerates whitespace the parser accepts" do
+    assert Cure.CLI.migrate_edition_pragma("@edition (\"2026\")\nmod M\n") == "2026"
+    assert Cure.CLI.migrate_edition_pragma("@ edition(\"2026\")\nmod M\n") == "2026"
+    assert Cure.CLI.migrate_edition_pragma("@edition( \"2026\" )\nmod M\n") == "2026"
+  end
+
   test "F4: migrate_project_edition falls back to current() when no project is present" do
     dir = Path.join(System.tmp_dir!(), "cure_noproj_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
