@@ -336,18 +336,26 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:binary_op, meta, [left, right]}, depth, indent) do
     op = Keyword.get(meta, :operator)
     op_str = operator_to_string(op)
-    "#{render(left, depth, indent)} #{op_str} #{render(right, depth, indent)}"
+    parent = op_prec(op)
+    left_s = operand_str(left, depth, indent, parent, :left)
+    right_s = operand_str(right, depth, indent, parent, :right)
+    "#{left_s} #{op_str} #{right_s}"
   end
 
   # -- Unary Operators -------------------------------------------------------
 
   defp to_string({:unary_op, meta, [operand]}, depth, indent) do
     op = Keyword.get(meta, :operator)
+    # A prefix operator binds at level 90 (see the precedence table below): its
+    # operand needs parentheses whenever it is a lower-precedence expression, or
+    # `-(x + 1)` would reprint as `-x + 1` (= `(-x) + 1`) and `not (a and b)` as
+    # `not a and b` (= `(not a) and b`) — both meaning-changing.
+    inner = operand_str(operand, depth, indent, {90, :right}, :right)
 
     case op do
-      :not -> "not #{render(operand, depth, indent)}"
-      :- -> "-#{render(operand, depth, indent)}"
-      _ -> "#{op}#{render(operand, depth, indent)}"
+      :not -> "not #{inner}"
+      :- -> "-#{inner}"
+      _ -> "#{op}#{inner}"
     end
   end
 
@@ -1131,6 +1139,77 @@ defmodule Cure.Compiler.Printer do
   defp operator_to_string(:.), do: "."
   defp operator_to_string(:=), do: "="
   defp operator_to_string(other), do: Atom.to_string(other)
+
+  # -- Precedence-aware parenthesisation -------------------------------------
+  #
+  # The parser is a Pratt parser (Cure.Compiler.Parser.Precedence). Reprinting
+  # must re-insert exactly the parentheses needed to recover the SAME parse — no
+  # more (over-parenthesising is ugly and breaks the print-fixpoint), no fewer
+  # (under-parenthesising silently changes meaning). The table below mirrors
+  # Precedence but is keyed by the operator ATOM the printer sees (`:+`) rather
+  # than the token type Precedence uses (`:plus`); the two MUST stay in
+  # agreement — any precedence change in the parser must be mirrored here.
+
+  # Render `child` as an operand of a parent operator of precedence `parent`
+  # (`{level, assoc}` or `:unknown`) on the given `side`, wrapping in parens only
+  # when the parse would otherwise change.
+  defp operand_str(child, depth, indent, parent, side) do
+    s = render(child, depth, indent)
+    if needs_parens?(child_prec(child), parent, side), do: "(#{s})", else: s
+  end
+
+  # An atomic/primary operand (variable, literal, call, access, …) never needs
+  # parens; a control-flow operand (`if`/`match`/lambda/assignment) always does.
+  defp needs_parens?(:atom, _parent, _side), do: false
+  defp needs_parens?(:lowest, _parent, _side), do: true
+  # Unknown parent operator: be conservative and parenthesise any compound child.
+  defp needs_parens?(_child, :unknown, _side), do: true
+
+  defp needs_parens?({clevel, _cassoc}, {plevel, passoc}, side) do
+    cond do
+      clevel < plevel -> true
+      clevel > plevel -> false
+      # Equal precedence: parens needed unless the child sits on the parent's
+      # associative side (`a - b - c` = `(a - b) - c`, so a left child of a
+      # left-assoc op needs none; its right child does).
+      true -> not associates?(passoc, side)
+    end
+  end
+
+  defp associates?(:left, :left), do: true
+  defp associates?(:right, :right), do: true
+  defp associates?(_assoc, _side), do: false
+
+  # Precedence of a child node, as it matters for operand parenthesisation.
+  defp child_prec({:binary_op, meta, _}) do
+    case op_prec(Keyword.get(meta, :operator)) do
+      :unknown -> :lowest
+      prec -> prec
+    end
+  end
+
+  defp child_prec({:unary_op, _meta, _}), do: {90, :right}
+  defp child_prec({:conditional, _meta, _}), do: :lowest
+  defp child_prec({:pattern_match, _meta, _}), do: :lowest
+  defp child_prec({:pickup, _meta, _}), do: :lowest
+  defp child_prec({:lambda, _meta, _}), do: :lowest
+  defp child_prec({:assignment, _meta, _}), do: :lowest
+  defp child_prec({:augmented_assignment, _meta, _}), do: :lowest
+  defp child_prec(_other), do: :atom
+
+  # {level, assoc} per operator atom, mirroring Cure.Compiler.Parser.Precedence.
+  defp op_prec(:|>), do: {10, :left}
+  defp op_prec(:or), do: {20, :left}
+  defp op_prec(:and), do: {30, :left}
+  defp op_prec(op) when op in [:==, :!=, :<, :>, :<=, :>=], do: {40, :none}
+  defp op_prec(op) when op in [:.., :"..="], do: {50, :none}
+  defp op_prec(:<>), do: {60, :right}
+  defp op_prec(op) when op in [:+, :-, :bor, :bxor, :bsl, :bsr], do: {70, :left}
+  defp op_prec(op) when op in [:*, :/, :rem, :%, :band], do: {80, :left}
+  defp op_prec(:.), do: {100, :left}
+  defp op_prec(op) when op in [:=, :"+=", :"-=", :"*=", :"/="], do: {5, :right}
+  defp op_prec(:melquiades), do: {8, :none}
+  defp op_prec(_other), do: :unknown
 
   defp args_to_string(args, depth, indent) do
     render_span(args, ",", depth, indent)
