@@ -7,9 +7,14 @@ defmodule :cure_std_time do
   `Instant` and `Duration` record shapes (tagged maps with
   `__struct__: :instant` / `__struct__: :duration`).
 
-  Parse errors surface as tagged tuples matching Cure's `ParseError`
-  ADT (`{:invalid_format, msg}`, `{:out_of_range, msg}`) via a plain
-  atom tag and single binary payload.
+  Runtime shapes are the DEPENDENT-pipeline erasure. `Instant` and `Duration`
+  are opaque — Cure never projects them, only threads them back through these
+  externs — so they stay internal `__struct__` maps. The values Cure DOES match
+  carry the constructor's own name:
+
+    * `parse_iso8601`, `zone` → `Result(_, ParseError)` → `{:Ok, _}` / `{:Error, _}`
+    * `ParseError = InvalidFormat(String) | OutOfRange(String)`
+      → `{:InvalidFormat, msg}` / `{:OutOfRange, msg}`
   """
 
   @struct_key :__struct__
@@ -22,25 +27,27 @@ defmodule :cure_std_time do
   # -- ISO 8601 ---------------------------------------------------------------
 
   def parse_iso8601(s) when is_binary(s) do
+    # The `{:ok, …}` / `{:error, …}` matched here are `DateTime.from_iso8601/1`'s
+    # own results; the outer tuples are the Cure `Result`.
     case DateTime.from_iso8601(s) do
       {:ok, %DateTime{} = dt, _offset} ->
-        {:ok, new_instant(DateTime.to_unix(dt, :microsecond))}
+        {:Ok, new_instant(DateTime.to_unix(dt, :microsecond))}
 
       {:error, :invalid_format} ->
-        {:error, parse_error(:invalid_format, "cannot parse ISO 8601 timestamp: #{inspect(s)}")}
+        {:Error, parse_error(:invalid_format, "cannot parse ISO 8601 timestamp: #{inspect(s)}")}
 
       {:error, :invalid_date} ->
-        {:error, parse_error(:out_of_range, "calendar date is out of range: #{inspect(s)}")}
+        {:Error, parse_error(:out_of_range, "calendar date is out of range: #{inspect(s)}")}
 
       {:error, :invalid_time} ->
-        {:error, parse_error(:out_of_range, "wall-clock time is out of range: #{inspect(s)}")}
+        {:Error, parse_error(:out_of_range, "wall-clock time is out of range: #{inspect(s)}")}
 
       {:error, reason} ->
-        {:error, parse_error(:invalid_format, "ISO 8601 parse failed: #{inspect(reason)}")}
+        {:Error, parse_error(:invalid_format, "ISO 8601 parse failed: #{inspect(reason)}")}
     end
   end
 
-  def parse_iso8601(_), do: {:error, parse_error(:invalid_format, "expected a string")}
+  def parse_iso8601(_), do: {:Error, parse_error(:invalid_format, "expected a string")}
 
   def format_iso8601(%{@struct_key => :instant, micros: micros}) when is_integer(micros) do
     iso =
@@ -93,10 +100,11 @@ defmodule :cure_std_time do
         # `DateTime.to_iso8601/1` emits `Z` because we normalised to UTC;
         # replace the trailing `Z` with the real offset suffix.
         iso = String.replace_suffix(base, "Z", suffix)
-        {:ok, iso}
+        {:Ok, iso}
 
+      # `canonical_zone/1`'s `:error` is internal; the outer tuple is the Result.
       :error ->
-        {:error, parse_error(:invalid_format, "unknown time zone: #{inspect(name)}")}
+        {:Error, parse_error(:invalid_format, "unknown time zone: #{inspect(name)}")}
     end
   end
 
@@ -121,9 +129,9 @@ defmodule :cure_std_time do
     %{@struct_key => :duration, micros: micros}
   end
 
-  defp parse_error(tag, message) when tag in [:invalid_format, :out_of_range] do
-    {tag, message}
-  end
+  # `ParseError = InvalidFormat(String) | OutOfRange(String)`.
+  defp parse_error(:invalid_format, message), do: {:InvalidFormat, message}
+  defp parse_error(:out_of_range, message), do: {:OutOfRange, message}
 
   # Minimal zone table. "UTC" and "Etc/UTC" resolve to offset 0; explicit
   # `+HH:MM` / `-HH:MM` offsets are parsed inline. The IANA database is not

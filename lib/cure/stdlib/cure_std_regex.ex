@@ -2,18 +2,19 @@ defmodule :cure_std_regex do
   @moduledoc """
   Runtime helpers for `Std.Regex` (v0.27.0).
 
-  Wraps OTP's `:re` module. A compiled regex is represented as a Cure
-  record `%{__struct__: :regex, handle: compiled_pattern}`; match
-  results are `%{__struct__: :matched, whole: ..., groups: [...]}`.
+  Wraps OTP's `:re` module.
 
-  All matching entry points accept either a compiled `%{__struct__:
-  :regex, ...}` record or a raw pattern string. The string form is
-  compiled on every call -- hot paths should memoise the compiled
-  record to avoid the overhead.
+  Runtime shapes are the DEPENDENT-pipeline erasure. A constructor `C(a, b)`
+  erases to `{:C, a, b}`, a nullary `C()` to the bare atom `:C`, and a record
+  `rec R` to `{:R, field1, …}` in declaration order:
 
-  The `compile!/1` alternative raises the `:cure_regex_invalid`
-  exception on bad patterns so callers that treat compile failure as
-  programmer error can stay terse.
+    * `Result(Regex, RegexError)` → `{:Ok, regex}` / `{:Error, {:InvalidPattern, msg}}`
+    * `Option(Matched)`           → `{:Some, matched}` / `:None`
+    * `rec Matched(whole, groups)` → `{:Matched, whole, groups}`
+
+  The compiled `Regex` is opaque — Cure never pattern-matches it, only threads
+  it back into these entry points — so it stays an internal struct map. Match
+  entry points also accept a raw pattern string, compiled on every call.
   """
 
   @struct_key :__struct__
@@ -21,18 +22,19 @@ defmodule :cure_std_regex do
   # -- Compile ----------------------------------------------------------------
 
   def compile(pattern) when is_binary(pattern) do
+    # `{:ok, re}` here is `:re.compile/2`'s own result, not a Cure Result.
     case :re.compile(pattern, [:unicode]) do
-      {:ok, re} -> {:ok, new_regex(re)}
-      {:error, reason} -> {:error, {:invalid_pattern, format_reason(reason)}}
+      {:ok, re} -> {:Ok, new_regex(re)}
+      {:error, reason} -> {:Error, {:InvalidPattern, format_reason(reason)}}
     end
   end
 
-  def compile(_), do: {:error, {:invalid_pattern, "pattern must be a string"}}
+  def compile(_), do: {:Error, {:InvalidPattern, "pattern must be a string"}}
 
   def compile_bang(pattern) when is_binary(pattern) do
     case compile(pattern) do
-      {:ok, regex} -> regex
-      {:error, {:invalid_pattern, msg}} -> raise ArgumentError, "invalid regex: #{msg}"
+      {:Ok, regex} -> regex
+      {:Error, {:InvalidPattern, msg}} -> raise ArgumentError, "invalid regex: #{msg}"
     end
   end
 
@@ -59,23 +61,24 @@ defmodule :cure_std_regex do
   def run(regex, input) when is_binary(input) do
     case resolve(regex) do
       {:ok, re} ->
+        # `{:match, …}` / `:nomatch` are `:re.run/3`'s own results.
         case :re.run(input, re, [{:capture, :all, :binary}]) do
           {:match, [whole | groups]} ->
-            {:some, new_match(whole, groups)}
+            {:Some, new_match(whole, groups)}
 
           {:match, []} ->
-            {:none}
+            :None
 
           :nomatch ->
-            {:none}
+            :None
         end
 
       :error ->
-        {:none}
+        :None
     end
   end
 
-  def run(_, _), do: {:none}
+  def run(_, _), do: :None
 
   # -- All matches ------------------------------------------------------------
 
@@ -133,8 +136,9 @@ defmodule :cure_std_regex do
     %{@struct_key => :regex, handle: compiled}
   end
 
+  # `rec Matched(whole, groups)` → `{:Matched, whole, groups}` in field order.
   defp new_match(whole, groups) when is_binary(whole) and is_list(groups) do
-    %{@struct_key => :matched, whole: whole, groups: groups}
+    {:Matched, whole, groups}
   end
 
   defp resolve(%{@struct_key => :regex, handle: re}), do: {:ok, re}

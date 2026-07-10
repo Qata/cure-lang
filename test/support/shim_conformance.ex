@@ -29,13 +29,22 @@ defmodule Cure.Audit.ShimConformance do
   the zero evidence available today, and a rewrite in Cure is what turns evidence
   into proof.
 
-  ## Shapes are the CLASSIC erasure
+  ## Shapes are the DEPENDENT erasure
 
-  These modules are compiled by the classic pipeline, which erases `Ok(v)` to
-  `{:ok, v}` and `Some(v)` to `{:some, v}`. The dependent pipeline erases the
-  same constructors to `{:Ok, v}` / `{:Some, v}`. When #23 makes these modules
-  elaborate, every `Result`- and `Option`-returning axiom here changes shape at
-  once. See `pipeline-ctor-erasure-divergence`.
+  The classic pipeline is being removed. The shims now emit the dependent
+  pipeline's constructor erasure, and this harness checks against it:
+
+    * `C(a, b)` → `{:C, a, b}`; a nullary `C()` → the bare atom `:C`
+    * `rec R` → `{:R, field1, …}` in declaration order
+
+  So `Ok(v)` is `{:Ok, v}`, `None()` is `:None`, `Null()` is `:Null`, and
+  `rec Matched(whole, groups)` is `{:Matched, whole, groups}`. The erasure rule
+  was measured directly (`Std.Result`/`Std.Option` elaborate; a standalone ADT
+  and record confirmed the nullary-atom and tuple-in-declaration-order rules).
+  These modules do not yet dependent-elaborate (#23), so end-to-end consumption
+  through the dependent pipeline cannot be exercised here; this harness checks
+  the runtime shapes against the measured rule. See
+  `pipeline-ctor-erasure-divergence`.
   """
 
   alias Antigen.Backend.StreamData, as: Backend
@@ -133,7 +142,7 @@ defmodule Cure.Audit.ShimConformance do
 
   defp regex, do: map(pattern(), &:cure_std_regex.compile_bang/1)
 
-  defp json_value, do: {:one_of, [map(int(), &:cure_std_json.num_of_int/1), ret({:arr, []})]}
+  defp json_value, do: {:one_of, [map(int(), &:cure_std_json.num_of_int/1), ret({:Arr, []})]}
 
   # A deterministic generator + property pair for `forall_shrunk`.
   defp gen_fn, do: {:member_of, [fn _ -> 7 end, fn _ -> 100 end]}
@@ -216,7 +225,7 @@ defmodule Cure.Audit.ShimConformance do
 
   defp regex_axioms do
     rx = :regex
-    matched = {:struct, :matched}
+    matched = :matched
 
     [
       # `:re.compile/2` returns a pattern embedding a freshly-allocated
@@ -379,21 +388,22 @@ defmodule Cure.Audit.ShimConformance do
   defp shape?(:regex, v), do: is_map(v) and Map.has_key?(v, :handle)
   defp shape?({:struct, tag}, v), do: is_map(v) and Map.get(v, :__struct__) == tag
   defp shape?({:list, s}, v), do: is_list(v) and Enum.all?(v, &shape?(s, &1))
-  defp shape?({:result, ok, _err}, {:ok, v}), do: shape?(ok, v)
-  defp shape?({:result, _ok, err}, {:error, e}), do: shape?(err, e)
+  defp shape?({:result, ok, _err}, {:Ok, v}), do: shape?(ok, v)
+  defp shape?({:result, _ok, err}, {:Error, e}), do: shape?(err, e)
   defp shape?({:result, _, _}, _), do: false
 
-  # A NULLARY Cure constructor erases to a ONE-TUPLE, not a bare atom:
-  # `None()` is `{:none}`, `Null()` is `{:null}`. Verified by compiling
-  # `fn mk() -> Option(Int) = None()` and inspecting the result. A shim that
-  # returns the bare atom cannot be destructured by Cure at all.
-  defp shape?({:option, _s}, {:none}), do: true
-  defp shape?({:option, s}, {:some, v}), do: shape?(s, v)
+  # Dependent erasure: `Some(v)` → `{:Some, v}`; nullary `None()` → `:None`.
+  defp shape?({:option, _s}, :None), do: true
+  defp shape?({:option, s}, {:Some, v}), do: shape?(s, v)
   defp shape?({:option, _}, _), do: false
 
+  # `rec Matched(whole, groups)` → `{:Matched, whole, groups}`.
+  defp shape?(:matched, {:Matched, whole, groups}), do: is_binary(whole) and is_list(groups)
+  defp shape?(:matched, _), do: false
+
   defp shape?(:json, v) do
-    match?({:num, _}, v) or match?({:arr, _}, v) or match?({:obj, _}, v) or
-      match?({:str, _}, v) or match?({:bool, _}, v) or match?({:null}, v)
+    v == :Null or match?({:Bool, _}, v) or match?({:Num, _}, v) or
+      match?({:Str, _}, v) or match?({:Arr, _}, v) or match?({:Obj, _}, v)
   end
 
   # ---------------------------------------------------------------------------

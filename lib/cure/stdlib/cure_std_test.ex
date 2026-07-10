@@ -5,8 +5,8 @@ defmodule :cure_std_test do
   When a property fails, walk the shrink candidates in aggressive-first order
   and pick the smallest value that still makes the property return `false`.
 
-  Returns a `Std.Result`: `{:ok, :ok}` when every sample satisfied the property,
-  `{:error, minimal}` carrying the minimised counterexample when one did not.
+  Returns a `Std.Result`: `{:Ok, :ok}` when every sample satisfied the property,
+  `{:Error, minimal}` carrying the minimised counterexample when one did not.
 
   It used to return the bare atom `:ok` and raise
   `{:property_failed_with_shrunk, minimal}`, under an `@extern` postulating
@@ -14,21 +14,17 @@ defmodule :cure_std_test do
   and the raise made the postulated totality false. The type is now
   `Result(Atom, t)` and both branches produce a value.
 
-  The tags are LOWERCASE. The classic pipeline — which is what compiles
-  `lib/std/test.cure` — erases `Ok(v)` to `{:ok, v}`, while the dependent
-  pipeline erases it to `{:Ok, v}`. Every sibling shim (`cure_std_time`,
-  `cure_std_regex`, `cure_std_json`) uses the lowercase form, and classic Cure
-  cannot destructure the uppercase one. When `test.cure` eventually
-  dependent-elaborates (#23), this tag has to change with it.
+  The tags are the DEPENDENT-pipeline erasure: `Ok(v)` → `{:Ok, v}`,
+  `Error(e)` → `{:Error, e}`.
   """
 
   def forall_shrunk(gen, property, runs) when is_function(gen) and is_function(property) do
     case find_counterexample(gen, property, runs) do
       :all_pass ->
-        {:ok, :ok}
+        {:Ok, :ok}
 
       {:failed, value} ->
-        {:error, shrink_loop(value, property)}
+        {:Error, shrink_loop(value, property)}
     end
   end
 
