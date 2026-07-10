@@ -34,4 +34,12 @@ ExUnit.after_suite(fn _result ->
     0 -> :ok
     n -> IO.puts("\n#{n} immune responses successfully triggered (expected, deliberately injected).")
   end
+
+  # Shape-coverage summary: any manifest assay whose declared cells were not all
+  # produced this run is surfaced here (see Antigen.CoverManifest.report/0). Silent
+  # when the coverage-manifest gate did not run this invocation (nothing stashed).
+  case Antigen.CoverManifest.report() do
+    nil -> :ok
+    line -> IO.puts("\n" <> line)
+  end
 end)

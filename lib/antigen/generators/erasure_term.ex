@@ -11,7 +11,7 @@ defmodule Antigen.Generators.ErasureTerm do
       they are dedicated known-finding fixtures in `erasure_test.exs`.
     * `relevance_challenges/0` — the four per-site rejected bodies + a clean control.
   """
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
   alias Cure.Core.{Env, Inductive}
 
   defp il(n), do: {:int_lit, n}
@@ -32,6 +32,29 @@ defmodule Antigen.Generators.ErasureTerm do
   end
 
   defp app2(head, x0, x1), do: {:app, {:app, head, x0}, x1}
+
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`). The relevance catalog's shape-
+  classes are the four per-site rejected bodies (an erased binder returned, applied,
+  scrutinised, or passed to a present ctor arg) plus the clean control. Only the
+  `relevance/soundness` assay is onboarded here (the erase catalog is a separate
+  assay family).
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [:returned, :applied, :scrutinee, :present_arg, :clean_control],
+        do: {"relevance/soundness", cell}
+  end
+
+  @doc """
+  Uniform sampleable generator over the relevance catalog (this vertical is otherwise
+  seed-test–fed). Used by the coverage-manifest gate to confirm every declared cell
+  is actually produced.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(relevance_challenges())
+  end
 
   defp ch(assay, payload, seed) do
     Challenge.new(kind: :erasure_term, assay: assay, label: :positive, payload: payload, seed: seed)
@@ -66,12 +89,14 @@ defmodule Antigen.Generators.ErasureTerm do
       rel(e, {:case, {:var, 0}, il(0), []}, :scrutinee, 2),
       rel(cenv, {:ctor, :MkQ, [{:var, 0}, il(0)]}, :present_arg, 3),
       Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :positive,
-        payload: %{env: e, name: :d, quantities: [:erased], body: il(7), site: nil}, seed: 4)
+        payload: %{env: e, name: :d, quantities: [:erased], body: il(7), site: nil}, seed: 4,
+        cover_tag: :clean_control)
     ]
   end
 
   defp rel(env, body, site, seed) do
     Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :negative,
-      payload: %{env: env, name: :d, quantities: [:erased], body: body, site: site}, seed: seed)
+      payload: %{env: env, name: :d, quantities: [:erased], body: body, site: site}, seed: seed,
+      cover_tag: site)
   end
 end

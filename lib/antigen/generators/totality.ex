@@ -12,6 +12,27 @@ defmodule Antigen.Generators.Totality do
   alias Antigen.{Gen, Challenge}
   alias Cure.Core.Env
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`) — a soundness-relevant subset
+  of the `gen/1`-reachable def-group shapes across both assay ids. `:pending_sibling`
+  is the premature-certification finding cell (a mutual member judged while a sibling
+  body is still an elaborator placeholder), which the always-complete-env sampling
+  never reached.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    [
+      {"totality/diverging", :diverging_mutual},
+      {"totality/diverging", :reconstruct_equal},
+      {"totality/diverging", :nullary_self},
+      {"totality/diverging", :nullary_mutual},
+      {"totality/diverging", :pending_sibling},
+      {"totality/terminating", :structural},
+      {"totality/terminating", :two_arg},
+      {"totality/terminating", :mutual_accept}
+    ]
+  end
+
   @dec {:data, :Dec, [], []}
   @nat {:data, :Nat, [], []}
 
@@ -62,7 +83,8 @@ defmodule Antigen.Generators.Totality do
         defs: [%{name: :f, type: ty, body: bf}, %{name: :g, type: ty, body: bg}],
         focus: [:f, :g]
       },
-      note: "mutual cycle f->g->f (hole fixed d13d718; permanent regression guard)"
+      note: "mutual cycle f->g->f (hole fixed d13d718; permanent regression guard)",
+      cover_tag: :diverging_mutual
     )
   end
 
@@ -95,7 +117,8 @@ defmodule Antigen.Generators.Totality do
         pending: [:g],
         focus: [:f]
       },
-      note: "diverging pair with sibling g still a pending placeholder (premature-cert guard)"
+      note: "diverging pair with sibling g still a pending placeholder (premature-cert guard)",
+      cover_tag: :pending_sibling
     )
   end
 
@@ -119,19 +142,21 @@ defmodule Antigen.Generators.Totality do
       assay: "totality/terminating",
       label: :terminating,
       payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
-      note: "structural recursion h(S y) = h y"
+      note: "structural recursion h(S y) = h y",
+      cover_tag: :structural
     )
   end
 
   @nat_mot {:lam, @nat, @nat}
 
-  defp h_def(body, label, note) do
+  defp h_def(body, label, note, cell \\ nil) do
     Challenge.new(
       kind: :def_group,
       assay: "totality/#{label}",
       label: String.to_atom(label),
       payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
-      note: note
+      note: note,
+      cover_tag: cell
     )
   end
 
@@ -209,7 +234,8 @@ defmodule Antigen.Generators.Totality do
        {:case, {:var, 0}, @nat_mot,
         [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:ctor, :S, [{:var, 0}]}}}]}}
 
-    h_def(body, "diverging", "self-call arg is the scrutinee reconstruction (arg_relation :equal)")
+    h_def(body, "diverging", "self-call arg is the scrutinee reconstruction (arg_relation :equal)",
+      :reconstruct_equal)
   end
 
   @doc """
@@ -256,7 +282,8 @@ defmodule Antigen.Generators.Totality do
       assay: "totality/terminating",
       label: :terminating,
       payload: %{defs: [%{name: :f, type: ty, body: body}], focus: [:f]},
-      note: "curried 2-arg structural recursion f a (S y) = f a y (mixed change matrix)"
+      note: "curried 2-arg structural recursion f a (S y) = f a y (mixed change matrix)",
+      cover_tag: :two_arg
     )
   end
 
@@ -289,7 +316,8 @@ defmodule Antigen.Generators.Totality do
         ],
         focus: [:f, :g]
       },
-      note: "terminating mutual pair f(S y)=g y, g(S y)=f y; f base calls out-of-SCC leaf h"
+      note: "terminating mutual pair f(S y)=g y, g(S y)=f y; f base calls out-of-SCC leaf h",
+      cover_tag: :mutual_accept
     )
   end
 
@@ -332,7 +360,8 @@ defmodule Antigen.Generators.Totality do
       assay: "totality/diverging",
       label: :diverging,
       payload: %{defs: [%{name: :f, type: @nat, body: {:global, :f}}], focus: [:f]},
-      note: "nullary self-loop f = f (0×0 change matrix)"
+      note: "nullary self-loop f = f (0×0 change matrix)",
+      cover_tag: :nullary_self
     )
   end
 
@@ -352,7 +381,8 @@ defmodule Antigen.Generators.Totality do
         defs: [%{name: :f, type: @nat, body: {:global, :g}}, %{name: :g, type: @nat, body: {:global, :f}}],
         focus: [:f, :g]
       },
-      note: "nullary mutual loop f = g, g = f (0×0 cross-function edges)"
+      note: "nullary mutual loop f = g, g = f (0×0 cross-function edges)",
+      cover_tag: :nullary_mutual
     )
   end
 

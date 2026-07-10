@@ -18,7 +18,34 @@ defmodule Antigen.Generators.SurfaceExpr do
   `Cure.Types.CoreBridge.to_core`, so a CoreBridge/substitution bug surfaces as a
   real mismatch in V1a/V1b rather than a mirrored one.
   """
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
+
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`), keyed per assay id. The
+  `normalizer/differential` and `normalizer/intrinsic` catalogs each carry one
+  deterministic label; `normalizer/equal` branches per-entry on the
+  `:kernel_equal`/`:kernel_unequal` twin. These are the only deterministic
+  shape-branches the fixed catalogs stamp.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    [
+      {"normalizer/differential", :translatable},
+      {"normalizer/equal", :kernel_equal},
+      {"normalizer/equal", :kernel_unequal},
+      {"normalizer/intrinsic", :untranslatable}
+    ]
+  end
+
+  @doc """
+  Sampleable generator over the three fixed catalogs (this vertical is otherwise a
+  deterministic seed-fed catalog). Used by the coverage-manifest gate to confirm
+  every declared cell is actually produced.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(differential_challenges() ++ equal_challenges() ++ intrinsic_challenges())
+  end
 
   # This module's OWN copy of the surface->core operator tables — separate data
   # from CoreBridge's private maps, but MUST carry the same mapping and the same
@@ -82,7 +109,8 @@ defmodule Antigen.Generators.SurfaceExpr do
     |> Enum.with_index()
     |> Enum.map(fn {{ast, bindings}, i} ->
       Challenge.new(kind: :surface_expr, assay: "normalizer/differential", label: :translatable,
-        payload: %{ast: ast, bindings: bindings, core_expected: encode(ast, bindings)}, seed: i)
+        payload: %{ast: ast, bindings: bindings, core_expected: encode(ast, bindings)}, seed: i,
+        cover_tag: :translatable)
     end)
   end
 
@@ -98,7 +126,8 @@ defmodule Antigen.Generators.SurfaceExpr do
     |> Enum.with_index()
     |> Enum.map(fn {{a, b, label}, i} ->
       Challenge.new(kind: :surface_expr, assay: "normalizer/equal", label: label,
-        payload: %{a: a, b: b, bindings: %{}, core_a: encode(a, %{}), core_b: encode(b, %{})}, seed: i)
+        payload: %{a: a, b: b, bindings: %{}, core_a: encode(a, %{}), core_b: encode(b, %{})}, seed: i,
+        cover_tag: label)
     end)
   end
 
@@ -111,7 +140,7 @@ defmodule Antigen.Generators.SurfaceExpr do
     |> Enum.with_index()
     |> Enum.map(fn {ast, i} ->
       Challenge.new(kind: :surface_expr, assay: "normalizer/intrinsic", label: :untranslatable,
-        payload: %{ast: ast}, seed: i)
+        payload: %{ast: ast}, seed: i, cover_tag: :untranslatable)
     end)
   end
 end

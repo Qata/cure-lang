@@ -10,10 +10,51 @@ defmodule Antigen.Generators.Universes do
   `:family` shape (checked by `Kernel.check_family` + `check_ctor`). Labels are
   `:well_typed`/`:ill_typed`, correct by construction (argument in each @doc).
   """
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
   alias Cure.Core.{Env, Inductive, Universe}
 
   @nat {:data, :Nat, [], []}
+
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`). `:family_ceiling` is the
+  family-level ceiling cell — `check_family`'s declared-level range-check, which had
+  no coverage because every ceiling probe was def-shaped (`check_def`).
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [
+          :type_in_type,
+          :ceiling_def,
+          :cumulativity,
+          :stratification,
+          :ctor_field_pos,
+          :ctor_field_neg,
+          :indexed_ctor_pos,
+          :indexed_ctor_neg,
+          :family_ceiling
+        ],
+        do: {"universes", cell}
+  end
+
+  @doc """
+  Uniform sampleable generator over the vertical's named constructors (the universes
+  vertical is otherwise curated / seed-test–fed). Used by the coverage-manifest gate
+  to confirm every declared cell is actually produced.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of([
+      type_in_type(:ill_typed),
+      ceiling(:ill_typed),
+      cumulativity(:well_typed),
+      stratification(:well_typed),
+      ctor_field(:well_typed),
+      ctor_field(:ill_typed),
+      indexed_ctor(:well_typed),
+      indexed_ctor(:ill_typed),
+      family_ceiling(:ill_typed)
+    ])
+  end
 
   defp nat_family,
     do:
@@ -24,7 +65,7 @@ defmodule Antigen.Generators.Universes do
   @spec type_in_type(:ill_typed) :: Challenge.t()
   def type_in_type(:ill_typed) do
     def_challenge(:ill_typed, [], {:type, 0}, {:type, 0},
-      "Type-in-Type: Type 0 : Type 0 must reject (Type 0 : Type 1)")
+      "Type-in-Type: Type 0 : Type 0 must reject (Type 0 : Type 1)", :type_in_type)
   end
 
   @doc """
@@ -36,21 +77,21 @@ defmodule Antigen.Generators.Universes do
   @spec ceiling(:ill_typed) :: Challenge.t()
   def ceiling(:ill_typed) do
     def_challenge(:ill_typed, [], {:type, 2}, {:type, 1},
-      "ceiling: Type 2 has no sort — a def cannot be annotated AT Type 2")
+      "ceiling: Type 2 has no sort — a def cannot be annotated AT Type 2", :ceiling_def)
   end
 
   @doc "Cumulativity: `Nat : Type 0` accepted at `Type 1` (`Type 0 <: Type 1`)."
   @spec cumulativity(:well_typed) :: Challenge.t()
   def cumulativity(:well_typed) do
     def_challenge(:well_typed, [nat_family()], {:type, 1}, @nat,
-      "cumulativity: Nat (level 0) accepted at Type 1")
+      "cumulativity: Nat (level 0) accepted at Type 1", :cumulativity)
   end
 
   @doc "Exact stratification: `def u : Type 1 = Type 0` accepted."
   @spec stratification(:well_typed) :: Challenge.t()
   def stratification(:well_typed) do
     def_challenge(:well_typed, [], {:type, 1}, {:type, 0},
-      "stratification: Type 0 : Type 1 accepted")
+      "stratification: Type 0 : Type 1 accepted", :stratification)
   end
 
   @doc """
@@ -69,7 +110,8 @@ defmodule Antigen.Generators.Universes do
       assay: "universes",
       label: label,
       payload: %{family: fam, ctors: ctors},
-      note: "two-universe rule: field x : Type 0 (sort level 1) vs family level #{level}"
+      note: "two-universe rule: field x : Type 0 (sort level 1) vs family level #{level}",
+      cover_tag: if(label == :well_typed, do: :ctor_field_pos, else: :ctor_field_neg)
     )
   end
 
@@ -98,7 +140,8 @@ defmodule Antigen.Generators.Universes do
       assay: "universes",
       label: label,
       payload: %{family: fam, ctors: ctors},
-      note: "indexed ctor result-index check: IdxI (n:Int), #{label}"
+      note: "indexed ctor result-index check: IdxI (n:Int), #{label}",
+      cover_tag: if(label == :well_typed, do: :indexed_ctor_pos, else: :indexed_ctor_neg)
     )
   end
 
@@ -121,7 +164,8 @@ defmodule Antigen.Generators.Universes do
       assay: "universes",
       label: :ill_typed,
       payload: %{family: fam, ctors: ctors},
-      note: "family declared at Type #{Universe.ceiling() + 1} (above the ceiling) must reject"
+      note: "family declared at Type #{Universe.ceiling() + 1} (above the ceiling) must reject",
+      cover_tag: :family_ceiling
     )
   end
 
@@ -132,13 +176,14 @@ defmodule Antigen.Generators.Universes do
     Env.add_def(env, dn, dt, db)
   end
 
-  defp def_challenge(label, families, def_type, def_body, note) do
+  defp def_challenge(label, families, def_type, def_body, note, cell) do
     Challenge.new(
       kind: :indexed_case,
       assay: "universes",
       label: label,
       payload: %{families: families, def_name: :u, def_type: def_type, def_body: def_body},
-      note: note
+      note: note,
+      cover_tag: cell
     )
   end
 end

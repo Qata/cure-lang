@@ -17,8 +17,56 @@ defmodule Antigen.Generators.Rewrite do
   cannot eliminate a non-Equivalent scrutinee), and the premise/result checks
   ride the transport's Π type `(M@a) -> (M@b)`.
   """
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
   alias Cure.Core.{Env, Inductive}
+
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`) — one per obligation variant.
+  The four verticals split into their argument variants (not just well/ill), because
+  `refl_typing`/`rewrite_premise`/`transport_type` each carry ≥2 same-label shapes
+  (e.g. `:base` and `:redex` are both well-typed). Each builder stamps its own cell.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [
+          :eq_formation_well_typed,
+          :eq_formation_ill_typed,
+          :refl_typing_base,
+          :refl_typing_redex,
+          :refl_typing_conjunct1_violation,
+          :refl_typing_conjunct2_violation,
+          :rewrite_premise_well_typed,
+          :rewrite_premise_proof_not_eq,
+          :rewrite_premise_body_mismatch,
+          :transport_type_transport_correct,
+          :transport_type_refl_coherence,
+          :transport_type_left_at_source
+        ],
+        do: {"rewrite/eq", cell}
+  end
+
+  @doc """
+  Uniform sampleable generator over the vertical's hand-built transport challenges
+  (this vertical is otherwise curated / seed-test-fed). Used by the coverage-manifest
+  gate to confirm every declared cell is actually produced.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of([
+      eq_formation(:well_typed),
+      eq_formation(:ill_typed),
+      refl_typing(:base),
+      refl_typing(:redex),
+      refl_typing(:conjunct1_violation),
+      refl_typing(:conjunct2_violation),
+      rewrite_premise(:well_typed),
+      rewrite_premise(:proof_not_eq),
+      rewrite_premise(:body_mismatch),
+      transport_type(:transport_correct),
+      transport_type(:refl_coherence),
+      transport_type(:left_at_source)
+    ])
+  end
 
   @dec {:data, :Dec, [], []}
   @causal {:ctor, :Causal, []}
@@ -68,14 +116,14 @@ defmodule Antigen.Generators.Rewrite do
     eq = {:data, :Equivalent, [@dec], [@causal, @dcoupled]}
     challenge(:well_typed, [dec_family(), eq_family()], :eq_formation,
       {:pi, eq, @dec}, {:lam, eq, @causal},
-      "Equivalent Dec Causal Dcoupled — both endpoints : Dec")
+      "Equivalent Dec Causal Dcoupled — both endpoints : Dec", :eq_formation_well_typed)
   end
 
   def eq_formation(:ill_typed) do
     eq = {:data, :Equivalent, [@dec], [@causal, {:ctor, :MkFoo, []}]}
     challenge(:ill_typed, [dec_family(), foo_family(), eq_family()], :eq_formation,
       {:pi, eq, @dec}, {:lam, eq, @causal},
-      "ill-typed: Equivalent Dec Causal MkFoo — MkFoo : Foo, not Dec")
+      "ill-typed: Equivalent Dec Causal MkFoo — MkFoo : Foo, not Dec", :eq_formation_ill_typed)
   end
 
   # -- 4.2 reflexive typing + reflexive-conversion guard -----------------------
@@ -85,7 +133,7 @@ defmodule Antigen.Generators.Rewrite do
     eq = {:data, :Equivalent, [@dec], [@causal, @causal]}
     challenge(:well_typed, [dec_family(), eq_family()], :refl_typing,
       eq, {:ctor, :reflexive, [@causal]},
-      "reflexive Causal : Equivalent Dec Causal Causal")
+      "reflexive Causal : Equivalent Dec Causal Causal", :refl_typing_base)
   end
 
   # redex: endpoint is a redex that normalizes to Causal — conv is up-to-nf.
@@ -94,7 +142,8 @@ defmodule Antigen.Generators.Rewrite do
     eq = {:data, :Equivalent, [@dec], [@causal, redex]}
     challenge(:well_typed, [dec_family(), eq_family()], :refl_typing,
       eq, {:ctor, :reflexive, [@causal]},
-      "reflexive Causal against Equivalent Dec Causal ((λx.x) Causal) — conv up-to-normalization")
+      "reflexive Causal against Equivalent Dec Causal ((λx.x) Causal) — conv up-to-normalization",
+      :refl_typing_redex)
   end
 
   # conjunct-1 violation: endpoints not convertible (Causal vs Dcoupled).
@@ -102,7 +151,8 @@ defmodule Antigen.Generators.Rewrite do
     eq = {:data, :Equivalent, [@dec], [@causal, @dcoupled]}
     challenge(:ill_typed, [dec_family(), eq_family()], :refl_typing,
       eq, {:ctor, :reflexive, [@causal]},
-      "ill-typed: reflexive Causal : Equivalent Dec Causal Dcoupled — endpoints not convertible (conjunct 1)")
+      "ill-typed: reflexive Causal : Equivalent Dec Causal Dcoupled — endpoints not convertible (conjunct 1)",
+      :refl_typing_conjunct1_violation)
   end
 
   # conjunct-2 violation: endpoints equal to each other (Dcoupled,Dcoupled) so
@@ -111,7 +161,8 @@ defmodule Antigen.Generators.Rewrite do
     eq = {:data, :Equivalent, [@dec], [@dcoupled, @dcoupled]}
     challenge(:ill_typed, [dec_family(), eq_family()], :refl_typing,
       eq, {:ctor, :reflexive, [@causal]},
-      "ill-typed: reflexive Causal : Equivalent Dec Dcoupled Dcoupled — conjunct 1 holds, witness≠endpoints (conjunct 2)")
+      "ill-typed: reflexive Causal : Equivalent Dec Dcoupled Dcoupled — conjunct 1 holds, witness≠endpoints (conjunct 2)",
+      :refl_typing_conjunct2_violation)
   end
 
   # -- 4.3 transport premise discipline -----------------------------------------
@@ -134,7 +185,7 @@ defmodule Antigen.Generators.Rewrite do
        {:lam, @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
     challenge(:well_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
-      "transport p (λx.P x) h : P Dcoupled from h : P Causal")
+      "transport p (λx.P x) h : P Dcoupled from h : P Causal", :rewrite_premise_well_typed)
   end
 
   # proof is `h : P Causal`, not an equality → the reflexive branch cannot
@@ -146,7 +197,8 @@ defmodule Antigen.Generators.Rewrite do
       {:lam, @p_causal, {:app, transport({:var, 0}, @dec, @motive, @causal), {:var, 0}}}
 
     challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
-      "ill-typed: transport proof is h : P Causal, not an Equivalent — reflexive branch is foreign")
+      "ill-typed: transport proof is h : P Causal, not an Equivalent — reflexive branch is foreign",
+      :rewrite_premise_proof_not_eq)
   end
 
   # proof IS a genuine equality (so we reach the argument check), but the body
@@ -158,7 +210,8 @@ defmodule Antigen.Generators.Rewrite do
       {:lam, @eq_cd, {:app, transport({:var, 0}, @dec, @motive, @causal), {:ctor, :Causal, []}}}
 
     challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
-      "ill-typed: transported body Causal:Dec, not P Causal — premise check fails at the app")
+      "ill-typed: transported body Causal:Dec, not P Causal — premise check fails at the app",
+      :rewrite_premise_body_mismatch)
   end
 
   # -- 4.4 transport result-type correctness ----------------------------------
@@ -172,7 +225,7 @@ defmodule Antigen.Generators.Rewrite do
        {:lam, @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
     challenge(:well_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
-      "declared P Dcoupled; the transport's Π moves the type to M b")
+      "declared P Dcoupled; the transport's Π moves the type to M b", :transport_type_transport_correct)
   end
 
   # refl coherence: transport (reflexive Causal) (λx.P x) @ h : P Causal (b = a).
@@ -188,7 +241,7 @@ defmodule Antigen.Generators.Rewrite do
       {:lam, @p_causal, {:app, transport(proof, @dec, @motive, @causal), {:var, 0}}}
 
     challenge(:well_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
-      "transport (reflexive Causal) M h : P Causal — vacuous transport")
+      "transport (reflexive Causal) M h : P Causal — vacuous transport", :transport_type_refl_coherence)
   end
 
   # left-at-source: SAME transport body but declared codomain P Causal (= M a).
@@ -201,16 +254,18 @@ defmodule Antigen.Generators.Rewrite do
        {:lam, @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
     challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
-      "ill-typed: declared P Causal but the transport yields P Dcoupled — accepting = no transport")
+      "ill-typed: declared P Causal but the transport yields P Dcoupled — accepting = no transport",
+      :transport_type_left_at_source)
   end
 
-  defp challenge(label, families, name, def_type, def_body, note) do
+  defp challenge(label, families, name, def_type, def_body, note, cell) do
     Challenge.new(
       kind: :rewrite_eq,
       assay: "rewrite/eq",
       label: label,
       payload: %{families: families, def_name: name, def_type: def_type, def_body: def_body},
-      note: note
+      note: note,
+      cover_tag: cell
     )
   end
 end

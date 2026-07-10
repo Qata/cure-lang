@@ -9,6 +9,30 @@ defmodule Antigen.Generators.Positivity do
   alias Antigen.{Gen, Challenge}
   alias Cure.Core.{Env, Inductive}
 
+  @doc """
+  Soundness-relevant strict-positivity shape cells for the coverage manifest gate
+  (`Antigen.CoverManifest`). Each names one field-type shape the assay must
+  actually generate; `:app_head_negative`/`:lam_head_negative` are the finding-S8
+  cells (the app/λ-headed catch-all path) that had no coverage.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [
+          :direct_positive,
+          :arrow_negative,
+          :double_negation,
+          :sigma_negative,
+          :through_ctor_positive,
+          :through_ctor_negative,
+          :deep_negative,
+          :index_occurrence,
+          :app_head_negative,
+          :lam_head_negative,
+          :app_head_positive
+        ],
+        do: {"positivity", cell}
+  end
+
   @natp {:data, :Natp, [], []}
   @bad {:data, :Bad, [], []}
   @decd {:data, :Dec, [], []}
@@ -93,7 +117,8 @@ defmodule Antigen.Generators.Positivity do
     parametric_challenge(
       [[{:data, :Vec, [], [@pgen]}]],
       :negative,
-      "occurs?/2 in a data index: subject in an index position (strictly_positive? 318)"
+      "occurs?/2 in a data index: subject in an index position (strictly_positive? 318)",
+      :index_occurrence
     )
   end
 
@@ -165,7 +190,7 @@ defmodule Antigen.Generators.Positivity do
     end)
   end
 
-  defp parametric_challenge(arg_type_lists, label, note) do
+  defp parametric_challenge(arg_type_lists, label, note, cell \\ nil) do
     ctors =
       arg_type_lists
       |> Enum.with_index()
@@ -183,7 +208,8 @@ defmodule Antigen.Generators.Positivity do
       assay: "positivity",
       label: label,
       payload: %{family: Inductive.family(:Pgen, [], [], 0), ctors: ctors},
-      note: note
+      note: note,
+      cover_tag: cell
     )
   end
 
@@ -248,7 +274,8 @@ defmodule Antigen.Generators.Positivity do
       assay: "positivity",
       label: :positive,
       payload: %{family: fam, ctors: ctors},
-      note: "strictly-positive Nat-like family"
+      note: "strictly-positive Nat-like family",
+      cover_tag: :direct_positive
     )
   end
 
@@ -263,7 +290,8 @@ defmodule Antigen.Generators.Positivity do
       assay: "positivity",
       label: :negative,
       payload: %{family: fam, ctors: ctors},
-      note: "negative occurrence: Bad left of an arrow"
+      note: "negative occurrence: Bad left of an arrow",
+      cover_tag: :arrow_negative
     )
   end
 
@@ -285,7 +313,8 @@ defmodule Antigen.Generators.Positivity do
     parametric_challenge(
       [[{:app, @app_head, @pgen}]],
       :negative,
-      "S8 app-headed field: subject under {:app, …} (strictly_positive? catch-all)"
+      "S8 app-headed field: subject under {:app, …} (strictly_positive? catch-all)",
+      :app_head_negative
     )
   end
 
@@ -300,7 +329,8 @@ defmodule Antigen.Generators.Positivity do
     parametric_challenge(
       [[{:lam, @nat, @pgen}]],
       :negative,
-      "S8 lam-headed field: subject under {:lam, …} (strictly_positive? catch-all)"
+      "S8 lam-headed field: subject under {:lam, …} (strictly_positive? catch-all)",
+      :lam_head_negative
     )
   end
 
@@ -314,7 +344,8 @@ defmodule Antigen.Generators.Positivity do
     parametric_challenge(
       [[{:app, @app_head, @nat}]],
       :positive,
-      "S8 app-headed field, subject-free — must still be admitted"
+      "S8 app-headed field, subject-free — must still be admitted",
+      :app_head_positive
     )
   end
 
@@ -337,7 +368,8 @@ defmodule Antigen.Generators.Positivity do
       assay: "positivity",
       label: :negative,
       payload: %{family: fam, ctors: ctors},
-      note: "W4 double negation: Bad in an arrow domain (two deep) — strict positivity rejects"
+      note: "W4 double negation: Bad in an arrow domain (two deep) — strict positivity rejects",
+      cover_tag: :double_negation
     )
   end
 
@@ -360,7 +392,8 @@ defmodule Antigen.Generators.Positivity do
       assay: "positivity",
       label: :negative,
       payload: %{family: fam, ctors: ctors},
-      note: "W4 sigma-hidden negative: Bad left of an arrow inside a Σ component"
+      note: "W4 sigma-hidden negative: Bad left of an arrow inside a Σ component",
+      cover_tag: :sigma_negative
     )
   end
 
@@ -393,7 +426,8 @@ defmodule Antigen.Generators.Positivity do
         def_type: {:type, 0},
         def_body: {:data, :Dec, [], []}
       },
-      note: "W4 through-constructor: Bad -> Dec hidden inside Box's ctor; subject = Bad (last family)"
+      note: "W4 through-constructor: Bad -> Dec hidden inside Box's ctor; subject = Bad (last family)",
+      cover_tag: :through_ctor_negative
     )
   end
 
@@ -417,7 +451,8 @@ defmodule Antigen.Generators.Positivity do
       assay: "positivity",
       label: :positive,
       payload: %{families: [wrap, t], def_name: :probe, def_type: {:type, 0}, def_body: {:data, :T, [], []}},
-      note: "through-constructor positive: T strictly-positive inside Wrap's ctor; subject = T (last family)"
+      note: "through-constructor positive: T strictly-positive inside Wrap's ctor; subject = T (last family)",
+      cover_tag: :through_ctor_positive
     )
   end
 
@@ -445,7 +480,8 @@ defmodule Antigen.Generators.Positivity do
       assay: "positivity",
       label: :negative,
       payload: %{families: [dec, wrap, bad], def_name: :probe, def_type: {:type, 0}, def_body: {:data, :Dec, [], []}},
-      note: "through-constructor deep negative: Bad reachable only via Wrap's ctor in an arrow domain (occurs_deep?); subject = Bad (last family)"
+      note: "through-constructor deep negative: Bad reachable only via Wrap's ctor in an arrow domain (occurs_deep?); subject = Bad (last family)",
+      cover_tag: :deep_negative
     )
   end
 

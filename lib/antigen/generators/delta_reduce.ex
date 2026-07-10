@@ -47,16 +47,35 @@ defmodule Antigen.Generators.DeltaReduce do
      "nested: idnat (snd kpair) → S Z (unfold exposes the case, reduce_unfolded)"}
   ]
 
+  # Shape-coverage cell per @cases entry, same order (kept parallel so `cases/0`'s
+  # 3-tuple shape, which the self-test destructures, stays intact).
+  @cells [
+    :delta_beta_id,
+    :delta_beta_succ,
+    :delta_iota_fst,
+    :delta_iota_snd,
+    :nested_fst,
+    :nested_snd_reduce_unfolded
+  ]
+
+  @doc """
+  Shape-coverage cells for the manifest gate (`Antigen.CoverManifest`) — one per
+  δ-reduction shape; the gate confirms every cell is produced by `gen/0`.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells, do: for(cell <- @cells, do: {"delta/nf", cell})
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
-    Gen.bind(Gen.member_of(@cases), fn {term, expected, note} ->
+    Gen.bind(Gen.member_of(Enum.zip(@cases, @cells)), fn {{term, expected, note}, cell} ->
       Gen.return(
         Challenge.new(
           kind: :delta_reduce,
           assay: "delta/nf",
           label: :reduces,
           payload: %{term: term, expected: expected},
-          note: note
+          note: note,
+          cover_tag: cell
         )
       )
     end)

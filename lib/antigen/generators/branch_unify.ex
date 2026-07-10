@@ -15,6 +15,26 @@ defmodule Antigen.Generators.BranchUnify do
   """
   alias Antigen.{Gen, Challenge}
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`): the three paramless verdict
+  classes plus the two parameterised-GADT verdict classes. `:param_solved` is the
+  finding-S9 cell — a solvable branch whose family parameter is buried in a
+  result-index spine, unreachable via `branch_unify/4`.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [:trivial, :solved, :impossible, :param_solved, :param_impossible],
+        do: {"branchunify/verdict", cell}
+  end
+
+  # The coverage cell for a case: paramless cases are named by their verdict; the
+  # parameterised-GADT cases (finding S9) get a distinct `:param_*` cell so the gate
+  # sees the branch_unify/5 param path as its own coverage obligation.
+  defp cover_cell([], verdict), do: verdict
+  defp cover_cell(_params, :solved), do: :param_solved
+  defp cover_cell(_params, :impossible), do: :param_impossible
+  defp cover_cell(_params, verdict), do: verdict
+
   # {ctx_vars, dname, cname, index_terms, verdict, note}
   @cases [
     {0, :Vec, :vnil, [{:ctor, :Z, []}], :trivial, "Vec vnil [Z] — syntactic match"},
@@ -61,7 +81,8 @@ defmodule Antigen.Generators.BranchUnify do
           assay: "branchunify/verdict",
           label: verdict,
           payload: %{ctx_vars: n, dname: d, cname: c, indices: idx, params: params},
-          note: note
+          note: note,
+          cover_tag: cover_cell(params, verdict)
         )
       )
     end)

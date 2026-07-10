@@ -23,16 +23,46 @@ defmodule Antigen.Generators.Malformed do
   @bd {:data, :Bd, [], []}
   @z {:ctor, :Z, []}
 
+  @doc """
+  Shape-coverage cells for the manifest gate (`Antigen.CoverManifest`). Each names
+  one defensive rejection shape this generator constructs; the gate confirms every
+  cell is actually produced by sampling `gen/0`.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [
+          :absurd_in_reachable_position,
+          :unknown_global,
+          :unknown_family,
+          :unknown_ctor,
+          :case_scrutinee_not_data,
+          :app_non_function,
+          :rewrite_bad_proof,
+          :rewrite_premise,
+          :universe_ceiling,
+          :unknown_op_global,
+          :builtin_op_nonnumeric,
+          :case_unknown_ctor_branch,
+          :case_foreign_ctor_branch,
+          :motive_non_type_var,
+          :motive_unknown_family,
+          :motive_bare_value,
+          :motive_napp_reject
+        ],
+        do: {"term/rejection", cell}
+  end
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
-    Gen.bind(malformation(), fn {term, note} ->
+    Gen.bind(malformation(), fn {term, note, cell} ->
       Gen.return(
         Challenge.new(
           kind: :malformed,
           assay: "term/rejection",
           label: :ill_typed,
           payload: %{sig: :v1, ctx: [], term: term},
-          note: "malformed (must reject): #{note}"
+          note: "malformed (must reject): #{note}",
+          cover_tag: cell
         )
       )
     end)
@@ -40,40 +70,42 @@ defmodule Antigen.Generators.Malformed do
 
   defp malformation do
     Gen.frequency([
-      {1, tagged({:absurd}, "absurd in reachable position")},
-      {2, tagged({:global, :nosuchdef}, "unknown global")},
-      {2, tagged({:data, :NoSuchFamily, [], []}, "unknown family")},
+      {1, tagged({:absurd}, "absurd in reachable position", :absurd_in_reachable_position)},
+      {2, tagged({:global, :nosuchdef}, "unknown global", :unknown_global)},
+      {2, tagged({:data, :NoSuchFamily, [], []}, "unknown family", :unknown_family)},
       {2, ctor_bad()},
       {3, case_non_data()},
       {2, app_non_function()},
       {2, rewrite_bad_proof()},
       {2, rewrite_premise()},
-      {1, tagged({:type, 2}, "universe ceiling (Type 2 has no sort)")},
+      {1, tagged({:type, 2}, "universe ceiling (Type 2 has no sort)", :universe_ceiling)},
       # an UNREGISTERED op-named global spine → :unknown_global (K2: the
       # {:prim,<unknown op>} seed re-encodes as a global-app error, R5-enumerated)
-      {1, tagged({:app, {:global, :nosuchop}, @z}, "unknown builtin-op global")},
+      {1, tagged({:app, {:global, :nosuchop}, @z}, "unknown builtin-op global", :unknown_op_global)},
       # int_add on non-numeric operands → the app-argument check failure
       # (check-against-{:vint_type} mismatch; was infer_prim's :prim_type)
       {1,
        tagged(
          {:app, {:app, {:global, :int_add}, {:type, 0}}, {:type, 0}},
-         "builtin-op on non-numeric operands"
+         "builtin-op on non-numeric operands",
+         :builtin_op_nonnumeric
        )},
       # a case covering Nat's ctors PLUS a spurious branch — coverage passes, so
       # check_case_branches reaches the bad branch: an unknown ctor (:unknown_ctor)
       # or a ctor of another family (:foreign_ctor, vnil belongs to Vec).
-      {1, tagged(case_extra_branch(:nosuchctor), "case with unknown-ctor branch")},
-      {1, tagged(case_extra_branch(:vnil), "case with foreign-ctor branch")},
+      {1, tagged(case_extra_branch(:nosuchctor), "case with unknown-ctor branch", :case_unknown_ctor_branch)},
+      {1, tagged(case_extra_branch(:vnil), "case with foreign-ctor branch", :case_foreign_ctor_branch)},
       # a case whose MOTIVE result is not a well-formed type → check_motive_wf's
       # :bad_motive via infer_type_value_sort: a bound non-type var (λv.v), an
       # unknown family (λv.NoSuchFamily), or a bare value (λv.Z).
-      {1, tagged(case_bad_motive({:lam, @nat, {:var, 0}}), "case motive returns a non-type var")},
-      {1, tagged(case_bad_motive({:lam, @nat, {:data, :NoSuchFamily, [], []}}), "case motive returns an unknown family")},
-      {1, tagged(case_bad_motive({:lam, @nat, @z}), "case motive returns a bare value")},
+      {1, tagged(case_bad_motive({:lam, @nat, {:var, 0}}), "case motive returns a non-type var", :motive_non_type_var)},
+      {1, tagged(case_bad_motive({:lam, @nat, {:data, :NoSuchFamily, [], []}}), "case motive returns an unknown family", :motive_unknown_family)},
+      {1, tagged(case_bad_motive({:lam, @nat, @z}), "case motive returns a bare value", :motive_bare_value)},
       {1,
        tagged(
          case_bad_motive({:lam, @nat, {:app, {:var, 0}, @z}}),
-         "case motive applies a non-function (Nat-typed) head — napp reject path"
+         "case motive applies a non-function (Nat-typed) head — napp reject path",
+         :motive_napp_reject
        )}
     ])
   end
@@ -100,7 +132,8 @@ defmodule Antigen.Generators.Malformed do
       Gen.bind(bd_ctor(), fn b ->
         tagged(
           {:app, transport({:ctor, :reflexive, [@nat, @z]}, @nat, {:lam, @nat, @nat}, @z), b},
-          "transport body ill-typed (Nat motive, Bd body)"
+          "transport body ill-typed (Nat motive, Bd body)",
+          :rewrite_premise
         )
       end),
       # proof reflexive Bd T : Equivalent Bd T T; motive λx:Bd.Bd ⇒ Bd; body is a Nat
@@ -109,7 +142,8 @@ defmodule Antigen.Generators.Malformed do
           {:app,
            transport({:ctor, :reflexive, [@bd, {:ctor, :T, []}]}, @bd, {:lam, @bd, @bd},
              {:ctor, :T, []}), n},
-          "transport body ill-typed (Bd motive, Nat body)"
+          "transport body ill-typed (Bd motive, Nat body)",
+          :rewrite_premise
         )
       end)
     ])
@@ -134,19 +168,19 @@ defmodule Antigen.Generators.Malformed do
 
   # {:ctor, <undeclared>, args} with a random (well-formed) argument list.
   defp ctor_bad do
-    Gen.bind(arglist(), fn args -> tagged({:ctor, :nosuchctor, args}, "unknown ctor") end)
+    Gen.bind(arglist(), fn args -> tagged({:ctor, :nosuchctor, args}, "unknown ctor", :unknown_ctor) end)
   end
 
   # case over a scrutinee that does NOT infer to a data value.
   defp case_non_data do
     Gen.bind(non_data(), fn scrut ->
-      tagged({:case, scrut, {:lam, @nat, @nat}, []}, "case scrutinee not data")
+      tagged({:case, scrut, {:lam, @nat, @nat}, []}, "case scrutinee not data", :case_scrutinee_not_data)
     end)
   end
 
   # apply a non-function to an argument.
   defp app_non_function do
-    Gen.bind(non_function(), fn f -> tagged({:app, f, @z}, "apply non-function") end)
+    Gen.bind(non_function(), fn f -> tagged({:app, f, @z}, "apply non-function", :app_non_function) end)
   end
 
   # transport whose proof does not infer to an Equivalent — the reflexive
@@ -156,7 +190,8 @@ defmodule Antigen.Generators.Malformed do
     Gen.bind(non_eq_proof(), fn pr ->
       tagged(
         {:app, transport(pr, @nat, {:lam, @nat, @nat}, @z), @z},
-        "transport proof not an equality"
+        "transport proof not an equality",
+        :rewrite_bad_proof
       )
     end)
   end
@@ -205,5 +240,5 @@ defmodule Antigen.Generators.Malformed do
     end)
   end
 
-  defp tagged(term, note), do: Gen.return({term, note})
+  defp tagged(term, note, cell), do: Gen.return({term, note, cell})
 end

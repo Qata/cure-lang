@@ -13,8 +13,37 @@ defmodule Antigen.Generators.UnifyProblem do
       non-syntactic accept the engine has (type-var bind, list/tuple recursion,
       `:int`/`:float` widening in that direction only, named-vs-record match).
   """
-  alias Antigen.Challenge
+  alias Antigen.{Challenge, Gen}
   alias Cure.Elab.MetaCtx
+
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`) for the two `Cure.Types.Unify`
+  assays. `unify_types/fixpoint` enumerates one cell per non-syntactic accept form
+  the catalog hand-builds (type-var bind, list/tuple recursion, `:any` LHS,
+  int→float widening, named-vs-record); `unify_types/intrinsic` keys on the
+  per-entry `expect` branch (`:ok` accept vs the `:error` occurs-check cycle). The
+  `Cure.Elab.Unify` (`unify/soundness`, `unify/intrinsic`) catalogs are out of this
+  manifest's scope and stay untagged.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    fixpoint =
+      for cell <- [:tvar_bind, :list_rec, :tuple_rec, :any_lhs, :int_float_widen, :named_record],
+          do: {"unify_types/fixpoint", cell}
+
+    intrinsic = for cell <- [:ok, :error], do: {"unify_types/intrinsic", cell}
+    fixpoint ++ intrinsic
+  end
+
+  @doc """
+  Sampleable generator over the two `Cure.Types.Unify` fixed catalogs (this vertical
+  is otherwise a deterministic seed-fed catalog). Used by the coverage-manifest gate
+  to confirm every declared cell is actually produced.
+  """
+  @spec gen(keyword()) :: Gen.t()
+  def gen(_opts \\ []) do
+    Gen.member_of(types_fixpoint_challenges() ++ types_intrinsic_challenges())
+  end
 
   # -- Core term helpers (V2a): closed ctor-only ------------------------------
   defp z0, do: {:ctor, :Z, []}
@@ -65,17 +94,17 @@ defmodule Antigen.Generators.UnifyProblem do
   @spec types_fixpoint_challenges() :: [Challenge.t()]
   def types_fixpoint_challenges do
     [
-      {tv("T"), :int},
-      {{:list, tv("T")}, {:list, :int}},
-      {{:tuple, [tv("A"), tv("B")]}, {:tuple, [:int, :string]}},
-      {:any, tv("T")},
-      {:int, :float},
-      {{:named, "foo"}, {:record, :foo, []}}
+      {tv("T"), :int, :tvar_bind},
+      {{:list, tv("T")}, {:list, :int}, :list_rec},
+      {{:tuple, [tv("A"), tv("B")]}, {:tuple, [:int, :string]}, :tuple_rec},
+      {:any, tv("T"), :any_lhs},
+      {:int, :float, :int_float_widen},
+      {{:named, "foo"}, {:record, :foo, []}, :named_record}
     ]
     |> Enum.with_index()
-    |> Enum.map(fn {{t1, t2}, i} ->
+    |> Enum.map(fn {{t1, t2, cell}, i} ->
       Challenge.new(kind: :unify_problem, assay: "unify_types/fixpoint", label: :translatable,
-        payload: %{t1: t1, t2: t2}, seed: i)
+        payload: %{t1: t1, t2: t2}, seed: i, cover_tag: cell)
     end)
   end
 
@@ -91,7 +120,7 @@ defmodule Antigen.Generators.UnifyProblem do
     |> Enum.with_index()
     |> Enum.map(fn {{t1, t2, expect}, i} ->
       Challenge.new(kind: :unify_problem, assay: "unify_types/intrinsic", label: :translatable,
-        payload: %{t1: t1, t2: t2, expect: expect}, seed: i)
+        payload: %{t1: t1, t2: t2, expect: expect}, seed: i, cover_tag: expect)
     end)
   end
 end

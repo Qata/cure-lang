@@ -2,7 +2,11 @@ defmodule Antigen.Challenge do
   @moduledoc "A generated challenge injected into the kernel (umbrella §3)."
   alias Cure.Core.Inductive
   @enforce_keys [:kind, :assay, :label, :payload]
-  defstruct [:kind, :assay, :label, :payload, :seed, :note]
+  # `cover_tag` is run-time coverage metadata (a generator-chosen shape-cell id for
+  # the coverage manifest gate), NOT part of a challenge's semantic identity: it is
+  # deliberately absent from `encode_record`/`from_pieces`, so replayed corpus
+  # records carry `cover_tag: nil`. See `Antigen.CoverManifest`.
+  defstruct [:kind, :assay, :label, :payload, :seed, :note, :cover_tag]
 
   @type kind ::
           :stub
@@ -27,7 +31,8 @@ defmodule Antigen.Challenge do
           label: label(),
           payload: map(),
           seed: integer() | nil,
-          note: String.t() | nil
+          note: String.t() | nil,
+          cover_tag: atom() | nil
         }
 
   # Force-intern the closed set of atoms that `decode_record`/`from_pieces/7`
@@ -142,7 +147,8 @@ defmodule Antigen.Challenge do
   def __known_atoms__, do: @known_atoms
 
   @spec new(keyword()) :: t()
-  def new(fields), do: struct!(__MODULE__, Keyword.merge([label: :none, seed: nil, note: nil], fields))
+  def new(fields),
+    do: struct!(__MODULE__, Keyword.merge([label: :none, seed: nil, note: nil, cover_tag: nil], fields))
 
   @spec stub(Cure.Core.Term.t()) :: t()
   def stub(term), do: new(kind: :stub, assay: "stub", label: :none, payload: %{term: term})

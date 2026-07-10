@@ -19,6 +19,14 @@ defmodule Antigen.Generators.Forcing do
   # A closed Dec value to apply the cycle to (the group's domain is `Dec`).
   @n {:ctor, :Causal, []}
 
+  @doc """
+  Coverage-manifest cell (`Antigen.CoverManifest`). The forcing vertical builds a
+  single shape — the diverging mutual pair `t = f n` vs `t' = g n` that forces the
+  cycle through δ — so it declares exactly one cell.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells, do: [{"reflexivity", :diverging_pair}]
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []), do: Gen.return(forcing_pair())
 
@@ -38,6 +46,7 @@ defmodule Antigen.Generators.Forcing do
       kind: :forcing_pair,
       assay: "reflexivity",
       label: :diverging,
+      cover_tag: :diverging_pair,
       payload: %{defs: defs, focus: focus, t: t, tprime: tprime},
       note: "forces the wrongly-certified f→g→f cycle through δ"
     )

@@ -46,16 +46,36 @@ defmodule Antigen.Generators.BetaSubst do
      "case branch: x under the S branch's arity-1 binder — e shifts by 1 there"}
   ]
 
+  # Shape-coverage cell per @cases entry, same order (kept parallel so `cases/0`'s
+  # 6-tuple shape, which the self-test destructures, stays intact).
+  @cells [
+    :lam_depth1,
+    :lam_depth2,
+    :lam_depth3,
+    :pi_codomain,
+    :sigma_codomain,
+    :case_branch
+  ]
+
+  @doc """
+  Shape-coverage cells for the manifest gate (`Antigen.CoverManifest`) — one per
+  capture-trap depth/binder shape; the gate confirms every cell is produced by
+  `gen/0`.
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells, do: for(cell <- @cells, do: {"kernel/beta_subst", cell})
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
-    Gen.bind(Gen.member_of(@cases), fn {ctx, type, t, e, body, note} ->
+    Gen.bind(Gen.member_of(Enum.zip(@cases, @cells)), fn {{ctx, type, t, e, body, note}, cell} ->
       Gen.return(
         Challenge.new(
           kind: :typed_term,
           assay: "kernel/beta_subst",
           label: :well_typed,
           payload: %{sig: :v1, ctx: ctx, type: type, term: {:app, {:lam, t, body}, e}},
-          note: note
+          note: note,
+          cover_tag: cell
         )
       )
     end)

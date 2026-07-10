@@ -15,6 +15,16 @@ defmodule Antigen.Generators.DecodeProbe do
   """
   alias Antigen.{Gen, Challenge}
 
+  @doc """
+  Coverage-manifest cells (`Antigen.CoverManifest`): the two decode outcomes the
+  probe asserts — a well-formed leaf/string that must decode `{:ok, _}` and a
+  malformed input that must return `{:error, _}` (never crash/loop).
+  """
+  @spec cover_cells() :: [{String.t(), atom()}]
+  def cover_cells do
+    for cell <- [:valid_sexp, :invalid_sexp], do: {"serialize/decode", cell}
+  end
+
   # Decode to {:ok, _}: bare int/float/atom leaves + quoted strings (incl. an
   # escaped quote, for take_string's escape clause) + the two structured leaves
   # `hole`/`absurd` (tuple terms → the assay re-encodes them, reaching enc's
@@ -44,6 +54,7 @@ defmodule Antigen.Generators.DecodeProbe do
           kind: :decode_probe,
           assay: "serialize/decode",
           label: label,
+          cover_tag: label,
           payload: %{input: s},
           note: "decode probe (#{label})"
         )
