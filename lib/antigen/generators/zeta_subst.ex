@@ -56,7 +56,23 @@ defmodule Antigen.Generators.ZetaSubst do
     {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
      {:lam, Cure.Core.Grade.unrestricted(), @nat,
       {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]}},
-     "multi-use trap: x as scrutinee and in both branches, at two depths"}
+     "multi-use trap: x as scrutinee and in both branches, at two depths"},
+    # The `:let` binder's GRADE (slice 2+3). The kernel deliberately ignores it —
+    # `infer`/`check` bind it as `_g`, and Idris's `sameBinders` lists only `Pi` and
+    # `Lam`, so a `Let`'s rig never enters conversion there either. What must hold is
+    # that ζ is grade-INDEPENDENT and that `Term.shift`/`Term.subst` PRESERVE the
+    # grade: the law compares `nf(let)` against `nf(subst(body, 0, e))`, and the
+    # substituted side never carries the grade at all. Before these cells every
+    # generated `:let` was `ω`, so the 5th field was never varied.
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
+     "erased let: ζ agrees with subst regardless of the binder's grade"},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
+     "linear let: ζ agrees with subst regardless of the binder's grade"},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
+     "affine let: ζ agrees with subst regardless of the binder's grade"}
   ]
 
   @cells [
@@ -66,7 +82,10 @@ defmodule Antigen.Generators.ZetaSubst do
     :pi_codomain,
     :sigma_codomain,
     :case_branch,
-    :used_twice
+    :used_twice,
+    :grade_erased,
+    :grade_linear,
+    :grade_affine
   ]
 
   @doc """
@@ -77,6 +96,13 @@ defmodule Antigen.Generators.ZetaSubst do
   @spec cover_cells() :: [{String.t(), atom()}]
   def cover_cells, do: for(cell <- @cells, do: {"kernel/zeta_subst", cell})
 
+  # The grade the `:let` binder carries, per cell. Everything else defaults to `ω`,
+  # which is what every cell used before the graded cells were added.
+  defp let_grade(:grade_erased), do: Grade.zero()
+  defp let_grade(:grade_linear), do: Grade.one()
+  defp let_grade(:grade_affine), do: Grade.affine()
+  defp let_grade(_cell), do: Grade.unrestricted()
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
     Gen.bind(Gen.member_of(Enum.zip(@cases, @cells)), fn {{ctx, type, t, e, body, note}, cell} ->
@@ -85,7 +111,7 @@ defmodule Antigen.Generators.ZetaSubst do
           kind: :typed_term,
           assay: "kernel/zeta_subst",
           label: :well_typed,
-          payload: %{sig: :v1, ctx: ctx, type: type, term: {:let, Grade.unrestricted(), t, e, body}},
+          payload: %{sig: :v1, ctx: ctx, type: type, term: {:let, let_grade(cell), t, e, body}},
           note: note,
           cover_tag: cell
         )

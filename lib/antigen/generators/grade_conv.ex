@@ -42,7 +42,25 @@ defmodule Antigen.Generators.GradeConv do
     {[], @ty0, {:pi, :linear, @nat, {:pi, :unrestricted, @nat, @nat}},
      "nested: the OUTER grade differs, the inner agrees"},
     {[], @ty0, {:pi, :unrestricted, @nat, {:pi, :linear, @nat, @nat}},
-     "nested: the INNER grade differs, the outer agrees"}
+     "nested: the INNER grade differs, the outer agrees"},
+    # ── λ, not just Π ────────────────────────────────────────────────────────
+    # Idris compares the multiplicity of a `Lam` binder exactly as it does a `Pi`'s:
+    # `sameBinders (Lam {}) (Lam {}) = True` and `multiplicity bx == multiplicity by`
+    # (`Core/Normalise/Convert.idr:328-337`), reached from `convGen` on Bind-vs-Bind.
+    # The η clause at `:351` only ever fires for Lam-vs-NON-Bind. Cure's `Conv` routed
+    # EVERY `{:vlam, …}` on the left straight to η, so two λs differing only in grade
+    # were convertible — and this generator emitted no λ cell, so nothing noticed.
+    {[], {:pi, :erased, @nat, @nat}, {:lam, :erased, @nat, {:var, 0}},
+     "erased λ: distinct from 1, <=1 and w"},
+    {[], {:pi, :linear, @nat, @nat}, {:lam, :linear, @nat, {:var, 0}},
+     "linear λ: the QTT `1` on a term binder"},
+    {[], {:pi, :affine, @nat, @nat}, {:lam, :affine, @nat, {:var, 0}},
+     "affine λ: leq(:linear, :affine) holds, yet the TERMS differ"},
+    {[], {:pi, :unrestricted, @nat, @nat}, {:lam, :unrestricted, @nat, {:var, 0}},
+     "unrestricted λ: the default `w`"},
+    {[], {:pi, :unrestricted, @nat, {:pi, :linear, @nat, @nat}},
+     {:lam, :unrestricted, @nat, {:lam, :linear, @nat, {:var, 0}}},
+     "nested λ: the INNER grade differs, the outer agrees"}
   ]
 
   @cells [
@@ -52,7 +70,12 @@ defmodule Antigen.Generators.GradeConv do
     :pi_unrestricted,
     :pi_universe_dom,
     :nested_outer,
-    :nested_inner
+    :nested_inner,
+    :lam_erased,
+    :lam_linear,
+    :lam_affine,
+    :lam_unrestricted,
+    :lam_nested_inner
   ]
 
   @doc """
@@ -62,7 +85,7 @@ defmodule Antigen.Generators.GradeConv do
   @spec cover_cells() :: [{String.t(), atom()}]
   def cover_cells, do: for(cell <- @cells, do: {"kernel/grade_conv", cell})
 
-  @doc "Every grade other than `g` — the siblings a `{:pi, g, …}` must not convert with."
+  @doc "Every grade other than `g` — the siblings a `{:pi, g, …}` / `{:lam, g, …}` must not convert with."
   @spec others(Grade.t()) :: [Grade.t()]
   def others(g), do: Grade.all() -- [g]
 

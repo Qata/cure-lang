@@ -212,7 +212,21 @@ defmodule Antigen.Assays.KernelLaw do
     end
   end
 
-  defp grade_conv(%{term: other}), do: {:violation, {:grade_conv_not_a_pi, other}}
+  # A λ's grade is part of the TERM's identity, exactly as a Π's is part of the type's.
+  # Idris reaches `convBinders` (which compares `multiplicity`) from `convGen` on
+  # Bind-vs-Bind, so Lam-vs-Lam is grade-sensitive; its η clause only fires for
+  # Lam-vs-non-Bind. No use-site half here: a λ is the thing being compared.
+  defp grade_conv(%{term: {:lam, g, _dom, _body} = t} = p) do
+    ctx = ctx_of(p)
+    env = Context.env(ctx)
+    depth = Context.length(ctx)
+    sig = SigMenu.env_of(p.sig)
+
+    with :ok <- grade_conv_refl(t, env, depth, sig),
+         do: grade_conv_distinct(t, g, env, depth, sig)
+  end
+
+  defp grade_conv(%{term: other}), do: {:violation, {:grade_conv_not_a_binder, other}}
 
   defp grade_conv_refl(t, env, depth, sig) do
     if Conv.conv?(t, t, env, depth, sig),
@@ -220,10 +234,10 @@ defmodule Antigen.Assays.KernelLaw do
       else: {:violation, {:grade_conv_not_reflexive, t}}
   end
 
-  # Every OTHER grade must yield a non-convertible Π.
-  defp grade_conv_distinct({:pi, _g, dom, cod} = t, g, env, depth, sig) do
+  # Every OTHER grade must yield a non-convertible binder — Π or λ alike.
+  defp grade_conv_distinct(t, g, env, depth, sig) do
     Enum.reduce_while(Antigen.Generators.GradeConv.others(g), :ok, fn g2, _acc ->
-      other = {:pi, g2, dom, cod}
+      other = regrade(t, g2)
 
       if Conv.conv?(t, other, env, depth, sig) do
         {:halt, {:violation, {:grade_conv_collapsed, %{left: t, right: other}}}}
@@ -232,6 +246,9 @@ defmodule Antigen.Assays.KernelLaw do
       end
     end)
   end
+
+  defp regrade({:pi, _g, dom, cod}, g2), do: {:pi, g2, dom, cod}
+  defp regrade({:lam, _g, dom, body}, g2), do: {:lam, g2, dom, body}
 
   # The use-site half: a λ checks against a Π of its own grade, and only that one.
   # This is where the discipline actually bites, and it is what a `Conv` that
