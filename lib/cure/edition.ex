@@ -88,6 +88,47 @@ defmodule Cure.Edition do
     end
   end
 
+  @doc """
+  The 0-based index — into `String.split(source, "\\n")` — of the first
+  substantive line, where a file-leading `@edition` pragma must sit, or `nil` if
+  the file has none. Fence-aware in exactly the way `pragma_edition/1` is: a
+  `###`-fenced doc comment before the pragma (whose body lines need not start
+  with `#`) is skipped as one unit, so a rewriter can target the same line the
+  resolver reads instead of re-deriving a divergent, fence-blind index.
+  """
+  @spec leading_line_index(String.t()) :: non_neg_integer() | nil
+  def leading_line_index(source) do
+    source |> String.split("\n") |> scan_leading_index(0)
+  end
+
+  defp scan_leading_index([], _idx), do: nil
+
+  defp scan_leading_index([line | rest], idx) do
+    cond do
+      fence_open_line?(line) ->
+        case drop_fence_lines(rest, idx + 1) do
+          {:closed, rest2, idx2} -> scan_leading_index(rest2, idx2)
+          :unterminated -> nil
+        end
+
+      trivia_line?(line) ->
+        scan_leading_index(rest, idx + 1)
+
+      true ->
+        idx
+    end
+  end
+
+  # Drop lines up to AND INCLUDING the next fence marker (the close), mirroring
+  # `skip_fence/1`; return the remaining lines and the index just past the close,
+  # or `:unterminated` if EOF is hit first (an unterminated fence has no
+  # substantive line after it).
+  defp drop_fence_lines([], _idx), do: :unterminated
+
+  defp drop_fence_lines([line | rest], idx) do
+    if fence_open_line?(line), do: {:closed, rest, idx + 1}, else: drop_fence_lines(rest, idx + 1)
+  end
+
   defp first_substantive_line(source) do
     case String.split(source, "\n", parts: 2) do
       [line, rest] ->

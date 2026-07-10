@@ -1721,8 +1721,11 @@ defmodule Cure.CLI do
     end
   end
 
-  # The leading pragma sits on the first non-trivia line (blank/`#`-comment lines
-  # are trivia, matching Cure.Edition's own scan). Rewrite only the `@edition(…)`
+  # The leading pragma sits on the first substantive line. We locate THAT line
+  # via Cure.Edition.leading_line_index/1 — the same fence-aware scan the resolver
+  # uses — rather than a local trivia test, so a `###`-fenced doc comment before
+  # the pragma (whose body lines need not start with `#`) is skipped identically
+  # and we never rewrite a line buried in a comment. Rewrite only the `@edition(…)`
   # TOKEN on that line — NOT the whole line — so anything after the `)` (a trailing
   # comment) survives (A3-F2), and a lone-CR file whose "first line" is the whole
   # body keeps its body (A3-F1). The token regex mirrors Cure.Edition.pragma_capture
@@ -1731,14 +1734,9 @@ defmodule Cure.CLI do
   @edition_token ~r/^@\s*edition\s*\(\s*"\d{4}"\s*\)/
   defp replace_leading_pragma_line(body, target) do
     lines = String.split(body, "\n")
-    idx = Enum.find_index(lines, fn line -> not migrate_trivia_line?(line) end)
+    idx = Cure.Edition.leading_line_index(body)
     rewritten = Regex.replace(@edition_token, Enum.at(lines, idx), "@edition(\"#{target}\")", global: false)
     lines |> List.replace_at(idx, rewritten) |> Enum.join("\n")
-  end
-
-  defp migrate_trivia_line?(line) do
-    t = String.trim(line)
-    t == "" or String.starts_with?(t, "#")
   end
 
   # v0.21.0: algebra formatter is now the default. It renders the

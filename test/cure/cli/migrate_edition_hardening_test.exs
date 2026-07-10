@@ -57,6 +57,27 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     assert out == "@edition(\"2026\")\r\nmod M\r\n"
   end
 
+  # Finding (audit iteration 6): the splicer's line-finder (migrate_trivia_line?)
+  # only skipped blank/`#`-comment lines, so it was blind to `###`-fenced doc
+  # comments whose BODY lines need not start with `#`. It therefore diverged from
+  # Cure.Edition.pragma_edition's fence-aware scan: on a file whose real leading
+  # pragma sits after a fenced doc comment, the finder stopped INSIDE the fence
+  # and rewrote the wrong line. (Reachable once a second edition exists, i.e. when
+  # a bump actually rewrites a pragma; exercised here via migrate_splice_edition.)
+  test "Finding: splice skips a fenced doc comment and bumps the real pragma, not the fence body" do
+    body = "###\ndoc line\n###\n@edition(\"2026\")\nfn f() -> Int = 1\n"
+    out = Cure.CLI.migrate_splice_edition(body, "2099")
+    # The real pragma is bumped; the fence and its body line are untouched.
+    assert out == "###\ndoc line\n###\n@edition(\"2099\")\nfn f() -> Int = 1\n"
+  end
+
+  test "Finding: splice leaves an @edition example inside a fenced doc comment alone" do
+    body = "###\n@edition(\"1900\")\n###\n@edition(\"2026\")\nfn f() -> Int = 1\n"
+    out = Cure.CLI.migrate_splice_edition(body, "2099")
+    # Only the real leading pragma moves; the in-fence example stays 1900.
+    assert out == "###\n@edition(\"1900\")\n###\n@edition(\"2099\")\nfn f() -> Int = 1\n"
+  end
+
   test "F4: migrate_project_edition falls back to current() when no project is present" do
     dir = Path.join(System.tmp_dir!(), "cure_noproj_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
