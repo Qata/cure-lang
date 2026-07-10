@@ -209,13 +209,44 @@ defmodule Cure.Compiler.Parser do
           {left_bp, _right_bp} when left_bp < min_bp ->
             {left, state}
 
-          {_left_bp, right_bp} ->
+          {left_bp, right_bp} ->
             state = advance(state)
-            handle_infix_op(state, left, token, right_bp, min_bp)
+            {ast, state} = build_infix_op(state, left, token, right_bp)
+            state = reject_non_assoc_chain(state, token, left_bp)
+            parse_infix(state, ast, min_bp)
 
           :not_infix ->
             {left, state}
         end
+    end
+  end
+
+  # `a == b == c`, `a..b..c`, `a <-| b <-| c`: the spec's operator table and
+  # `Precedence`'s own moduledoc call these non-associative, and `right_bp = left_bp + 1`
+  # only stops the operator from swallowing a peer on its own right-hand side. It does
+  # nothing to stop the loop above from picking the freshly-built node back up as a new
+  # left operand at the original `min_bp` — mechanically the same trick `+` and `*` use to
+  # left-associate. So the table's "non-assoc" entries parsed as plain left-associative
+  # operators, and `a <-| b <-| c` quietly fanned out into two sends.
+  #
+  # Reject the chain outright, as Haskell (`infix 4 ==`), Rust, and Agda/Idris all do. The
+  # error is recorded rather than raised, so the parser keeps going and reports the rest of
+  # the file's problems in the same pass.
+  defp reject_non_assoc_chain(state, token, left_bp) do
+    next = peek(state)
+
+    # Every operator sharing a left BP with a non-associative one is in its class.
+    chained? =
+      Precedence.non_assoc?(token.type) and match?({^left_bp, _}, Precedence.infix_bp(next.type))
+
+    if chained? do
+      error =
+        {:non_associative, Precedence.operator_symbol(token.type), :chained_with,
+         Precedence.operator_symbol(next.type), next.line, next.col}
+
+      add_error(state, error)
+    else
+      state
     end
   end
 
@@ -537,13 +568,14 @@ defmodule Cure.Compiler.Parser do
 
   # -- Infix Operators -------------------------------------------------------
 
-  defp handle_infix_op(state, left, token, right_bp, min_bp) do
+  # Build the node for one infix operator whose left operand is already parsed. The
+  # caller resumes the Pratt loop, so it can see the token that follows.
+  defp build_infix_op(state, left, token, right_bp) do
     case token.type do
       # Pipe desugaring: a |> f  or  a |> f(b, c)
       :pipe ->
         {right, state} = parse_expr(state, right_bp)
-        ast = desugar_pipe(left, right, token)
-        parse_infix(state, ast, min_bp)
+        {desugar_pipe(left, right, token), state}
 
       # Melquiades operator: `pid <-| message` or `pid ✉ message`.
       # Lowers to `{:send, meta, [target, message]}` and carries the
@@ -553,44 +585,41 @@ defmodule Cure.Compiler.Parser do
         {right, state} = parse_expr(state, right_bp)
         form = melquiades_form(token.value)
         meta = [line: token.line, col: token.col, melquiades_form: form]
-        ast = {:send, meta, [left, right]}
-        parse_infix(state, ast, min_bp)
+        {{:send, meta, [left, right]}, state}
 
       # Dot access: obj.field -> {:attribute_access, ...}
       :dot ->
         field_token = peek(state)
         state = advance(state)
         field_name = to_string(field_token.value)
-        ast = {:attribute_access, [attribute: field_name, line: token.line, col: token.col], [left]}
-        parse_infix(state, ast, min_bp)
+        meta = [attribute: field_name, line: token.line, col: token.col]
+        {{:attribute_access, meta, [left]}, state}
 
       # Range operators
       type when type in [:range, :range_inclusive] ->
         {right, state} = parse_expr(state, right_bp)
         inclusive = type == :range_inclusive
-        ast = {:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        {{:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}, state}
 
       # Assignment
       :assign ->
         {right, state} = parse_expr(state, right_bp)
-        ast = {:assignment, [line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        {{:assignment, [line: token.line, col: token.col], [left, right]}, state}
 
       # Augmented assignment
       type when type in [:plus_assign, :minus_assign, :star_assign, :slash_assign] ->
         {right, state} = parse_expr(state, right_bp)
         op = augmented_op(type)
-        ast = {:augmented_assignment, [operator: op, line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        meta = [operator: op, line: token.line, col: token.col]
+        {{:augmented_assignment, meta, [left, right]}, state}
 
       # Regular binary operator
       _ ->
         {right, state} = parse_expr(state, right_bp)
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
-        ast = {:binary_op, [category: category, operator: op, line: token.line, col: token.col], [left, right]}
-        parse_infix(state, ast, min_bp)
+        meta = [category: category, operator: op, line: token.line, col: token.col]
+        {{:binary_op, meta, [left, right]}, state}
     end
   end
 
@@ -3522,8 +3551,7 @@ defmodule Cure.Compiler.Parser do
     {proto_name, state} = parse_dotted_name(state)
 
     # Expect `for`
-    state = expect(state, :keyword)
-    # ^ consumes the `for` keyword token
+    state = expect_keyword(state, :for)
 
     # Type being implemented
     {for_type, state} = parse_type_expr(state)
@@ -3627,7 +3655,7 @@ defmodule Cure.Compiler.Parser do
     {iface_name, state} = parse_dotted_name(state)
 
     # Consume the `for` keyword.
-    state = expect(state, :keyword)
+    state = expect_keyword(state, :for)
 
     {for_type, state} = parse_type_expr(state)
 
@@ -4302,8 +4330,7 @@ defmodule Cure.Compiler.Parser do
     {module_path, state} = parse_dotted_name(state)
 
     # Expect `as child_id`.
-    state = expect(state, :keyword)
-    # ^ consumes the `as` keyword
+    state = expect_keyword(state, :as)
     id_token = peek(state)
     id_name = to_string(id_token.value)
     state = advance(state)

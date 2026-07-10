@@ -5,8 +5,13 @@ defmodule Cure.Compiler.Parser.Precedence do
   Binding powers (BP) determine operator precedence. Higher BP binds tighter.
   For left-associative operators, right BP = left BP + 1.
   For right-associative operators, right BP = left BP.
-  For non-associative operators, right BP = left BP + 1 (and the parser
-  rejects chaining).
+  For non-associative operators, right BP = left BP + 1, and the parser rejects
+  chaining outright — see `non_assoc?/1` and `Cure.Compiler.Parser`'s
+  `reject_non_assoc_chain/3`. Binding power alone cannot express
+  non-associativity: `right = left + 1` is exactly what a LEFT-associative
+  operator uses, and it only stops the operator from swallowing a peer on its own
+  right-hand side. Nothing about it stops the Pratt loop from picking the built
+  node back up as a new left operand.
 
   ## Precedence Levels (lowest to highest)
 
@@ -74,6 +79,14 @@ defmodule Cure.Compiler.Parser.Precedence do
   def infix_bp(:star_assign), do: {5, 4}
   def infix_bp(:slash_assign), do: {5, 4}
   def infix_bp(_), do: :not_infix
+
+  @doc """
+  True for operators the spec marks non-associative, which the parser refuses to chain:
+  `a == b == c`, `a..b..c`, and `a <-| b <-| c` are all parse errors.
+  """
+  @spec non_assoc?(atom()) :: boolean()
+  def non_assoc?(type),
+    do: type in [:melquiades, :eq, :neq, :lt, :gt, :lte, :gte, :range, :range_inclusive]
 
   @doc "Returns the right binding power for a prefix operator, or `:not_prefix`."
   @spec prefix_bp(atom()) :: pos_integer() | :not_prefix
