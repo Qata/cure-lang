@@ -773,7 +773,12 @@ defmodule Cure.Elab.Elaborator do
         # A1 §1-A: structural equality — struct_eq/struct_ne applied to the
         # readback of the operand type. A meta-containing readback must never
         # reach the kernel (R8b): reject defensively (corpus predicts none).
-        ty = Quote.reify(l_type, Context.length(ctx))
+        # Signature-aware readback: an applied INDEXED family (e.g. `Bounded(n)`,
+        # Char's underlying type) must keep its param/index split, because this
+        # `ty` flows into `Kernel.infer` (the caller), which arity-checks params
+        # and indices separately. A sig-less readback flattens the index into the
+        # param slot and the kernel rejects it with `:arg_arity`.
+        ty = Quote.reify(l_type, Context.length(ctx), Context.signature(ctx))
 
         if Unify.has_meta?(ty) do
           {:error, {:unsupported_operand_type, op_sym}}
