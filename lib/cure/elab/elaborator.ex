@@ -620,6 +620,30 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
 
+  # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
+  # `let` rhs, any sub-term the checked tuple clause at line ~1137 doesn't reach).
+  # Synthesizes the non-dependent Σ `Sigma(A, λ_:A. B)` from the inferred component
+  # types — the honest surface `Tuple(A, B)`. Mirrors the scope-based builder
+  # (`elaborate_expr/3`, ~5129) and the checked clause; a *genuinely dependent* pair
+  # still needs a checking position (its expected type supplies the codomain family).
+  # The codomain `B` is closed w.r.t. the fresh Σ binder, so it is shifted +1 to keep
+  # its free de Bruijn indices pointing at the same context entries under the `λ`.
+  def elaborate_expr_typed({:tuple, _meta, [a_ast, b_ast]}, names, ctx, env) do
+    with {:ok, a_core, a_type} <- elaborate_expr_typed(a_ast, names, ctx, env),
+         {:ok, b_core, b_type} <- elaborate_expr_typed(b_ast, names, ctx, env) do
+      len = Context.length(ctx)
+      a_type_term = Quote.reify(a_type, len)
+      b_type_term = Quote.reify(b_type, len)
+      fam = Inductive.builtin(env, :sigma)
+
+      sigma_term =
+        {:data, fam, [a_type_term, {:lam, a_type_term, Cure.Core.Term.shift(b_type_term, 1)}], []}
+
+      sigma_val = Eval.eval(sigma_term, Context.env(ctx))
+      {:ok, {:ctor, sigma_ctor_name(env), [a_core, b_core]}, sigma_val}
+    end
+  end
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.

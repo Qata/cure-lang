@@ -665,7 +665,16 @@ defmodule Cure.Elab.Program do
       with {:ok, source} <- File.read(path),
            {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
-           {:ok, env0} <- import_env(imports(ast), MapSet.put(seen, module_name)),
+           {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
+           # Seed builtins into the imported module's own env, exactly as the
+           # top-level (~134) and module-slice (~551) paths do. Without this an
+           # imported module body that uses a builtin literal (`true`/`false` →
+           # `:bool`, `[..]` → `:list`, `%[..]` → `:sigma`) elaborates against an
+           # unseeded env and dies with `builtin :bool not seeded`. The
+           # `declared_type_names` skip keeps a module declaring its own same-named
+           # type canonical (no look-alike seed), mirroring the other two paths.
+           seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+           env0 = merge_env(seeded, imported),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
           {:ok, mark_inline_hints(certified, module_name)}

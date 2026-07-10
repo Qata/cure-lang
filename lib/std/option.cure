@@ -85,7 +85,7 @@ mod Std.Option
 
   ## Pair two Options. Returns `Some(%[va, vb])` when both sides are
   ## `Some`, `None` otherwise.
-  fn zip(a: Option(t), b: Option(u)) -> Option(Tuple) =
+  fn zip(a: Option(t), b: Option(u)) -> Option(Tuple(t, u)) =
     match a
       None() -> None()
       Some(va) ->
