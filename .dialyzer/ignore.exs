@@ -24,5 +24,31 @@
   {"lib/cure/types/env.ex", :contract_with_opaque},
   {"lib/cure/types/pattern_checker.ex", :call_without_opaque},
   {"lib/cure/types/totality.ex", :call_without_opaque},
-  {"lib/cure/repl.ex",  :call_without_opaque}
+  {"lib/cure/repl.ex",  :call_without_opaque},
+
+  # Same MapSet-opaqueness class on the modules added/grown since the list
+  # above. `:call_with_opaque` is the sibling tag: a MapSet flowing INTO a
+  # private helper as an argument (`do_closure(_, _, seen)`, `bfs_import_modules(
+  # _, seen, _)`, `strictly_positive?(_, _, _, seen)`) rather than through a
+  # public MapSet function. Nothing to fix at the call site — see the rationale
+  # above.
+  {"lib/antigen/cover_report.ex", :call_without_opaque},
+  {"lib/cure/compiler/dep_graph.ex", :call_without_opaque},
+  {"lib/cure/compiler/dep_graph.ex", :call_with_opaque},
+  {"lib/cure/core/certificate.ex", :call_without_opaque},
+  {"lib/cure/core/certificate.ex", :call_with_opaque},
+  {"lib/cure/core/inductive.ex", :call_without_opaque},
+  {"lib/cure/core/inductive.ex", :call_with_opaque},
+  {"lib/cure/elab/implementation.ex", :call_without_opaque},
+  {"lib/cure/elab/program.ex", :call_without_opaque},
+  {"lib/cure/elab/program.ex", :call_with_opaque},
+  {"lib/cure/elab/resolve.ex", :call_without_opaque},
+  {"lib/cure/elab/resolve.ex", :call_with_opaque},
+  {"lib/cure/types/env.ex", :call_with_opaque},
+
+  # The StreamData backend is the ONE module allowed to reference StreamData,
+  # a `:test`-only dep deliberately absent from dev/prod (and thus the PLT).
+  # The module already carries `@compile {:no_warn_undefined, StreamData}` for
+  # the compiler; this is the dialyzer counterpart of that same decision.
+  {"lib/antigen/backend/stream_data.ex", :unknown_function}
 ]
