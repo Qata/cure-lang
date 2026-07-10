@@ -1440,3 +1440,69 @@ Full suite green: 3969 passed, 0 failures. Do NOT merge.
 Commits this cycle: `825c110`, `6f56728`, plus this record.
 
 ---
+
+## Iteration 19
+
+**Scope of fresh audit:** the two slices iteration 18 changed —
+`lib/cure/migrate/rules/group_hoist.ex` (825c110) and `lib/cure/cli.ex` (6f56728) —
+two read-only adversarial Opus agents, every finding verified against source by hand
+before counting.
+
+**Two confirmed bugs — both INCOMPLETE iteration-18 fixes (the widened fix missed the
+real code path):**
+
+1. **group_hoist non-idempotent under `run_to_fixpoint` → multi-module corruption**
+   (fixed `3ff2515`). 825c110 made a single `Migrate.run/2` pass hoist each `@group`
+   above its own module — but `cure migrate` drives `run_to_fixpoint` (cli.ex:1421),
+   which threads the AST between passes WITHOUT reparsing. Pass 1 hoists a group
+   directly above its module; that decorator now sits (as a sibling) after the previous
+   module, so the "nearest preceding module by any module before it" heuristic re-flagged
+   it on pass 2 and dragged it above the previous module — walking every non-first-module
+   group one module toward the top of the file per pass. Empirically confirmed via
+   `run_to_fixpoint`: `@group(:core)` belonging to `Second` landed above `First`; a
+   two-module/two-group file stacked BOTH groups above `First`.
+   Root cause: "directly above the next module" and "in the previous module's body" are
+   the same *position* to both `preceding_module?/1` and `hoist_segments/1`. Fix adds an
+   `above_mod?/2` predicate (a contiguous group-decorator run terminating at a module
+   container is already above-mod → left in place) in BOTH the detector and the rewriter,
+   making the rewrite idempotent. Note: a `@group` written *directly* above a `mod` is
+   absorbed into the module container by the parser, so it is never a standalone sibling —
+   the corruption is reachable only for genuinely in-body groups under a 2nd+ module.
+   Red tests drive the actual `run_to_fixpoint` path (a string-reparse loop re-absorbs the
+   decorator and masks the bug).
+
+2. **`cure fmt`/`doc` crash on an unreadable (existing) file** (fixed `7b2ce0a`).
+   6f56728's `expand_cure_targets` guarded only non-existence, but `File.exists?` is true
+   for a chmod-000 file, so it reached a worker whose `File.read!` raised a raw File.Error
+   stacktrace — and the no-argument wildcard scan bypasses that guard entirely. Both fmt
+   and doc affected (`fmt_algebra`/`fmt_safe`/`fmt_diff`/`fmt_check`/`fmt_aggressive` +
+   `cmd_doc`). Fix routes every fmt/doc read through a shared `read_source_or_exit/1`
+   (File.read → report + exit 1), mirroring run/check/compile. Red tests skip under a
+   process that can still read a 0o000 file (root/CI).
+
+**Refuted / non-bug (verified, not counted):**
+- CLI: mixed/missing paths, broken symlink, empty-dir, `[]`-default parity, exit codes,
+  `known_commands` (`migrate` present once; suggester stable, no regression) all hold.
+- group_hoist: prefix groups, interleaved non-group decorators, consecutive containers,
+  non-block/empty AST all correct; single-module and first-module cases were already
+  idempotent.
+
+### Outstanding findings (after iteration 19)
+
+**None confirmed remaining.** Both found bugs fixed this cycle. Because this cycle's audit
+DID find bugs, the streak is **0** — two consecutive clean audits are still required.
+
+**Latent / unreachable, design nits, and Blocked—needs-operator: UNCHANGED from
+iteration 18** (duplicate `[project]` divergence; `comment_texts` non-quote-aware;
+migrate engine no rule-rescue; parser drops `type` decorator; `edition = ""` fails load;
+uppercase-type-var CTX false-positive; package-manager scope items).
+
+**Loop status:** iteration 19 found + fixed 2 bugs, both incomplete iteration-18 fixes
+exposed by auditing 18's own changed slices against their real runtime paths
+(`run_to_fixpoint`, the wildcard scan). Fresh audit NOT clean → streak reset to 0. Cron
+**left in place**. Full suite green: **3974 passed, 0 failures**; Antigen 309/309. Do NOT
+merge.
+
+Commits this cycle: `3ff2515`, `7b2ce0a`, plus this record.
+
+---
