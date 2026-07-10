@@ -292,9 +292,22 @@ defmodule Cure.Elab.Declarations do
            # slots, so reject any body that uses one relevantly (returned / passed
            # in a present position / scrutinised / applied). E-layer; the kernel
            # stays quantity-blind. See `Cure.Elab.Relevance`.
-           :ok <- Relevance.check(env, sig.name, quantities, body_term) do
-        lambda = wrap_binders(:lam, sig.telescope, body_term)
-        final = Env.add_def(env, sig.name, sig.pi, lambda, quantities)
+           :ok <- Relevance.check(env, sig.name, quantities, body_term),
+           # The Pi is the single source of truth (slice 6). `sig.pi` was built from
+           # the ORIGINAL quantities; `demote_unused_dicts/3` may have lowered a dict
+           # since, so rebuild the stored type from the DEMOTED vector — otherwise the
+           # stored Pi (dict `ω`) and λ (dict `:erased`) would disagree, a pairing the
+           # graded `Conv` forbids. Both now come from one vector.
+           final_pi = wrap_binders(:pi, sig.telescope, quantities, sig.return_core),
+           lambda = wrap_binders(:lam, sig.telescope, quantities, body_term),
+           # The assertion that would have caught the whole dichotomy class: the
+           # stored λ must kernel-check against the stored Π. Idris fixes the type and
+           # checks clauses against it; this is the same discipline, applied to the
+           # term we are about to persist. Cheap — the body already type-checked; this
+           # only re-confirms the binder grades line up.
+           final_type_value = Eval.eval(final_pi, Context.env(Context.empty(env))),
+           :ok <- Kernel.check(Context.empty(env), lambda, final_type_value) do
+        final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
@@ -340,7 +353,11 @@ defmodule Cure.Elab.Declarations do
          scope: scope,
          return_core: return_core,
          constraints: constraint_specs,
-         pi: wrap_binders(:pi, telescope, return_core)
+         # The PRE-REGISTRATION type, honest about the ORIGINAL quantities (implicit
+         # ⇒ erased). `demote_unused_dicts/3` may lower a dict below this after the
+         # body is seen; the final stored Pi is rebuilt from the demoted vector so it
+         # agrees with the λ (see `elaborate_function_body`).
+         pi: wrap_binders(:pi, telescope, quantities, return_core)
        }}
     end
   end
@@ -811,12 +828,26 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
-  # Builds a `:pi`/`:lam` chain from a telescope. The binder tuple is assembled
-  # from a TAG, so no textual pass can see it — the grade must be threaded here
-  # explicitly. `Term.term?/1` is what caught this during the QTT reshape.
-  defp wrap_binders(tag, telescope, inner) do
-    g = Cure.Core.Grade.unrestricted()
-    Enum.reduce(Enum.reverse(telescope), inner, fn {_name, type}, acc -> {tag, g, type, acc} end)
+  # Builds a `:pi`/`:lam` chain from a telescope, each binder carrying the grade at
+  # its position in `quantities` (slice 6 — the Pi is the single source of truth). A
+  # `nil` vector, or one shorter than the telescope, defaults the remainder to `ω`.
+  # The binder tuple is assembled from a TAG, so no textual pass can see it — the
+  # grade must be threaded here explicitly; `Term.term?/1` caught this during the
+  # reshape.
+  defp wrap_binders(tag, telescope, quantities, inner) do
+    grades = binder_grades(quantities, length(telescope))
+
+    telescope
+    |> Enum.zip(grades)
+    |> Enum.reverse()
+    |> Enum.reduce(inner, fn {{_name, type}, g}, acc -> {tag, g, type, acc} end)
+  end
+
+  defp binder_grades(nil, n), do: List.duplicate(Cure.Core.Grade.unrestricted(), n)
+
+  defp binder_grades(quantities, n) do
+    pad = n - length(quantities)
+    if pad > 0, do: quantities ++ List.duplicate(Cure.Core.Grade.unrestricted(), pad), else: Enum.take(quantities, n)
   end
 
   # -- indexed families -------------------------------------------------------

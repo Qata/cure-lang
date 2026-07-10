@@ -316,51 +316,43 @@ half-migrated tree.
       *Gate:* 3896 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
       infections. Oracle replay 65/65. `mix dialyzer` passes. stdlib 44/44.
 
-- [ ] **6. The Pi is the single source of truth (E layer, structural).**
-      Cure stores each parameter's quantity **twice, and the two disagree**:
-      `wrap_binders/3` hardcodes `Grade.unrestricted()` on every `:pi` and `:lam`
-      binder, while the real vector lives in `sig.quantities`. An erased implicit has
-      `quantities: [:erased]` and a Pi that says `ω`. This is the recorded
-      `ctor-spelling value dichotomy` class, one level up.
+- [x] **6. The Pi is the single source of truth (E layer, structural).** LANDED.
+      The stored Pi and λ now carry the real per-parameter grade, and the two agree
+      across `demote_unused_dicts/3`.
 
-      **Idris settles the design.** The quantity lives on the Pi binder and nowhere
-      else: `lcheck`'s `App` case reads `rigf` straight off the callee's normalised
-      type (`LinearCheck.idr:283`, `NBind _ _ (Pi _ rigf _ ty)`). The erasure vector
-      `eraseArgs` is a **derived projection** of that type — `findErasedFrom` walks the
-      Pi spine and inserts a position iff `isErased c` (`TTImp/Elab/Utils.idr:39-49`),
-      computed once at def registration (`TTImp/ProcessType.idr:172`) and cached for
-      the backend. And Idris has **no analogue of `demote_unused_dicts`**: `newDef`
-      fixes the type first, then clauses are checked against it. Nothing lowers a
-      quantity after the body has been seen.
+      **What was wrong, measured.** For `fn ignore({a}, x) -> a where Eqs(a)`, the def
+      stored `quantities: [:erased, :unrestricted, :erased]` (implicit erased, dict
+      demoted) while BOTH binders were all-`ω`. The parallel store was the truth; the
+      binders lied. The `ctor-spelling value dichotomy` class, one level up.
 
-      *Target:* thread the quantities into `wrap_binders`, and make `quantities` a
-      projection of the Pi spine rather than a parallel store.
-      *Measured:* threading them into both `:pi` and `:lam` is **already green** — the
-      full suite passes (3852 at the time of measuring). The blocker is not conversion.
+      **Idris settles it** — the quantity lives on the Pi (`lcheck` App reads `rigf`
+      off the callee's type, `LinearCheck.idr:283`) and `eraseArgs` is a derived
+      projection (`findErasedFrom`, `TTImp/Elab/Utils.idr:39-49`); nothing lowers a
+      quantity after the type is fixed.
 
-      *The blocker is ordering.* `sig.pi` is built from the ORIGINAL quantities and
-      pre-registered at `declarations.ex:216` so the body can recurse; then
-      `demote_unused_dicts/3` lowers an unused `where`-dict from `ω` to `:erased`, and
-      the λ is built from the DEMOTED vector at `:292`. `Env.add_def` then stores a def
-      whose Pi says `ω` on the dict arrow and whose λ says `:erased` — a pairing the
-      kernel's own rule forbids (`kernel.ex:289`, `{:grade_mismatch, %{lam:, pi:}}`).
-      Nothing re-checks a stored λ against its stored Π, so it stays green. It
-      compiles, it passes, and it lies.
+      **The fix, three parts.** (i) `wrap_binders/4` threads the quantity vector onto
+      each binder. (ii) `sig.pi` is built at signature time from the ORIGINAL
+      quantities (honest for pre-registration and recursion); the final stored Pi is
+      **rebuilt from the DEMOTED vector** so it agrees with the λ — otherwise the Pi
+      (dict `ω`) and λ (dict `:erased`) disagree, which the graded `Conv` forbids.
+      (iii) the assertion that would have caught the whole class: `Kernel.check` the
+      final λ against the final Π before `Env.add_def`. Mutation-validated — rebuild
+      the Pi from the ORIGINAL vector instead of the demoted one and the assertion
+      fires with exactly `{:grade_mismatch, %{pi: :unrestricted, lam: :erased}}`.
 
-      *So the slice is:* (i) rebuild the Pi from the post-demotion quantities so Pi and
-      λ agree, or hoist the demotion decision ahead of the type — noting Cure's
-      demotion has no Idris counterpart and is a pure optimisation on a
-      compiler-inserted binder; (ii) derive `quantities` from the Pi; (iii) **add the
-      assertion that would have caught this whole class**: `Kernel.check` the final λ
-      against the final Pi before `Env.add_def`.
-      *Red test first:* a `where`-constrained def whose dict is unused must not
-      register a λ and a Π whose grades disagree.
-      *Consequence once landed:* a graded function's **type** advertises its grade, so
-      `Conv` distinguishes `(1 c: Chan) -> R` from `(c: Chan) -> R` and linearity
-      survives passing `f` itself as a value. Until then, grades are enforced at the
-      def's own body (via `quantities` → `Relevance`/`Erase`/`Emit`/callee-scaling) but
-      not in its type — which is exactly today's status for erased implicits.
+      The extern path is coherent by construction (Pi from `sig.quantities`, no body to
+      demote). A graded function's TYPE now advertises its grade, so `Conv`
+      distinguishes `(c :linear T) -> R` from `(c: T) -> R` and linearity survives
+      passing `f` itself as a value.
 
+      *Deferred, deliberately:* making `quantities` a *pure projection* of the Pi (a
+      representation refactor touching every `.quantities` reader). The assertion
+      already makes the two stores a **verified mirror** — they cannot diverge at any
+      def boundary without `Kernel.check` firing — so removing the field is churn with
+      no behavioural change, not a soundness need.
+
+      *Gate:* 3902 passed / 0 failed. Antigen 322/322 cells, 300-run campaign → 0
+      infections. Oracle replay 65/65. `mix dialyzer` passes. stdlib 44/44.
 ---
 
 ## Known prerequisite, already met
