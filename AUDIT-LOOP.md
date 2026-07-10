@@ -428,3 +428,71 @@ Commits this cycle: `99c1202` (A1-F1), `f9cc1d1` (A1-F3), `857305f` (A3-F1),
 `64e43ab` (A1-F4), `15f33f4` (A3-F2 + A3-F3 doc).
 
 ---
+
+## Iteration 8
+
+Fresh adversarial audit of the iteration-7 changes (`99c1202`, `f9cc1d1`,
+`857305f`, `64e43ab`, `15f33f4`) via three parallel Opus subagents over the
+changed slices (comment-stripper + `detect_app`; dep resolution; `parse_source` +
+edition semantics), read-only. Every returned finding was verified against source
+before counting. **4 confirmed bugs fixed.**
+
+**Confirmed bugs (fixed):**
+
+- **F1 — `deps update` MatchError on a git dep with an unknown edition**
+  (`cli.ex:877`). Iteration 7 (`857305f`) made `resolve_git_dep/2` route through
+  `compile_dep_files`, so it can now return
+  `{:error, {:dependency_edition_error, ...}}`. `cmd_deps_update` still bound it
+  with `:ok = ...`, which raises a `MatchError` — the comment right above literally
+  predicted this. Now reports and aborts like `cmd_deps`. (`ff385ac`)
+- **F2 — whitespace-only git URL silently resolves to `:ok`** (`project.ex:277`).
+  The A1-F3 whitespace guard was added to the *path* clause but not the *git*
+  clause: only literal `git = ""` was rejected, so `git = "   "` reached
+  `System.cmd("git", ["clone", …, "   ", target])`, cloned nothing, found zero
+  files, and "resolved" to `:ok`. Merged the blank/whitespace git clauses into one
+  trim-aware clause mirroring the path clause. (`ff385ac`)
+- **F3 — `parse_source` swallows unknown MANIFEST editions** (`compiler.ex:197`).
+  Iteration 7 (`15f33f4`) had `parse_source` discover `project_dir` from the real
+  `:file`, so `resolve/1` can now return `{:error, {:unknown_edition, _}}` from a
+  typo'd manifest for a *pragma-less* source. The parser cannot re-catch a manifest
+  error (the manifest isn't in the source), yet the `{:error, _} -> current()`
+  branch degraded it to the default — silently hiding a real §3.1 error. Now
+  propagates `{:edition_error, reason}` like the compile path; the misleading
+  comment claiming the parser re-validates is corrected. (`604d101`)
+- **F5 — Edition moduledoc contradicted `current/0`** (`edition.ex:7`). The
+  moduledoc still asserted "`current/0` is the newest" while the `current/0`
+  docstring (added `15f33f4`) documents the intentional default-vs-newest
+  decoupling. Fixed the moduledoc to match (staged-rollout / Rust parity).
+  (`604d101`)
+
+**Verified NON-bugs (recorded, not fixed):**
+
+- **`strip_inline_comment` / `detect_app` (agent 1)** — both iteration-7 changes
+  traced char-by-char and branch-by-branch; behaviorally correct, no regression.
+  The only issue anywhere in that slice is the pre-existing single-quoted-TOML-
+  literal limitation (already recorded as A1-F2, untouched by these commits).
+- **`compile_dep_files` swallows non-edition errors (agent 2, finding 3)** —
+  pre-existing/by-design: it deliberately reproduces the historic `_ =`
+  behaviour (a dep may ship files the consumer never exercises); iteration 7
+  narrowly promoted only the edition error to fatal. Not a regression.
+- **parse_source F2/F3/F4 (agent 3)** — the dep_graph behavior change is the
+  intended fix; the synthetic-`:file`-label trap is not realized by any caller
+  today; no stray-ancestor `Cure.toml` hazard exists in-repo (worktree `.git`
+  file stops `find_root`).
+
+**Full suite after all fixes: 3891 passed, 0 failing** (+4 new tests: 2 dep-iso,
+2 parse_source; 138 immune responses expected; Antigen shape-coverage 309/309).
+
+## Outstanding findings (after iteration 8)
+
+- None open as bugs. The by-design/inert items above are recorded so a future
+  audit doesn't re-flag them.
+
+**Loop status:** iteration 8's fresh audit found 4 confirmed bugs — so it is **NOT
+a clean audit**. Convergence (two consecutive clean audits) is **not** met
+(iterations 6, 7, and 8 all found bugs). The cron is **left in place**; the next
+fire (iteration 9) runs a fresh audit over the iteration-8 changes. Do NOT merge.
+
+Commits this cycle: `ff385ac` (F1 + F2), `604d101` (F3 + F5 doc).
+
+---
