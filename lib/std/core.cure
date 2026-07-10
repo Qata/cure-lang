@@ -1,6 +1,8 @@
 @group(:core)
 mod Std.Core
   use Std.Comparable
+  use Std.Result
+  use Std.Option
 
   ## Identity, composition, booleans, comparison, and the `Result` /
   ## `Option` sum types.
