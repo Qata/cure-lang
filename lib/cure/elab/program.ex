@@ -34,7 +34,8 @@ defmodule Cure.Elab.Program do
   def check_ast(ast, _opts) do
     with :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
-         :ok <- check_no_duplicate_ctors(ast) do
+         :ok <- check_no_duplicate_ctors(ast),
+         :ok <- check_no_fn_ctor_collision(ast) do
       check_ast_elixir_core(ast)
     end
   end
@@ -82,20 +83,25 @@ defmodule Cure.Elab.Program do
   # `Map.put`, so the second would overwrite the first.
   @spec check_no_duplicate_types(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_types(ast) do
-    extract = fn
-      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
-        case Keyword.get(meta, :name) do
-          n when is_binary(n) -> [String.to_atom(n)]
-          n when is_atom(n) and not is_nil(n) -> [n]
-          _ -> []
-        end
-
-      _ ->
-        []
-    end
-
-    first_dup_per_module(ast, extract, :duplicate_type, & &1)
+    first_dup_per_module(ast, &type_names/1, :duplicate_type, & &1)
   end
+
+  # Type names a declaration binds. `:interface` belongs here: `Cure.Elab.Interface`
+  # declares the interface's DICTIONARY as a record family of the same name, through the
+  # same `Inductive.declare/3` (a bare `Map.put`) that `type`/`indexed type`/`rec` use.
+  # Omitting it let `interface Equatable(a)` and a sibling `type Equatable = Foo | Bar`
+  # both register a family named `:Equatable`: whichever elaborated second won the slot,
+  # and `env.ctor_to_family` kept a dangling entry for the loser's constructor.
+  defp type_names({tag, meta, _})
+       when tag in [:container, :indexed_type, :type_annotation, :interface] and is_list(meta) do
+    case Keyword.get(meta, :name) do
+      n when is_binary(n) -> [String.to_atom(n)]
+      n when is_atom(n) and not is_nil(n) -> [n]
+      _ -> []
+    end
+  end
+
+  defp type_names(_decl), do: []
 
   # A module must not bind the same constructor name twice — within one type
   # (`A | A`) or across two types in the same module (`env.ctor_to_family` maps each
@@ -104,6 +110,37 @@ defmodule Cure.Elab.Program do
   @spec check_no_duplicate_ctors(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_ctors(ast) do
     first_dup_per_module(ast, &ctor_names/1, :duplicate_constructor, & &1)
+  end
+
+  # A module must not bind one name as BOTH a constructor and a top-level function.
+  # `type Foo = C` and `fn C() -> Int` both bind `C` in the same namespace; whichever
+  # `Resolution` favours, the other is silently unreachable by name. Cure has no
+  # type-directed disambiguation, so this must be a compile error rather than a coin
+  # flip. Scoped per module, like the other duplicate checks.
+  @spec check_no_fn_ctor_collision(tuple() | list()) :: :ok | {:error, term()}
+  defp check_no_fn_ctor_collision(ast) do
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn decls, :ok ->
+      ctors = decls |> Enum.flat_map(&ctor_names/1) |> MapSet.new()
+
+      decls
+      |> Enum.flat_map(fn
+        {:function_def, meta, _body} ->
+          case Keyword.get(meta, :name) do
+            name when is_binary(name) -> [String.to_atom(name)]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+      |> Enum.find(&MapSet.member?(ctors, &1))
+      |> case do
+        nil -> {:cont, :ok}
+        clash -> {:halt, {:error, {:constructor_function_collision, clash}}}
+      end
+    end)
   end
 
   # A module must not bind the same top-level function name twice: `Env.add_def`
@@ -165,17 +202,7 @@ defmodule Cure.Elab.Program do
   defp declared_type_names(ast) do
     ast
     |> declarations()
-    |> Enum.flat_map(fn
-      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
-        case Keyword.get(meta, :name) do
-          n when is_binary(n) -> [String.to_atom(n)]
-          n when is_atom(n) and not is_nil(n) -> [n]
-          _ -> []
-        end
-
-      _ ->
-        []
-    end)
+    |> Enum.flat_map(&type_names/1)
     |> MapSet.new()
   end
 
@@ -197,6 +224,18 @@ defmodule Cure.Elab.Program do
   end
 
   defp ctor_names({:indexed_type, _meta, ctor_sigs}), do: Enum.flat_map(ctor_sigs, &gadt_ctor_names/1)
+
+  # `type X = Y` with a single bare RHS is either a one-constructor enum (`type Unit =
+  # MkUnit`) or an alias (`type MyNat = Nat`), decided by whether `Y` names a type — a
+  # question this AST-level scan cannot answer. The parser tags both `variant: true`.
+  # Counting `Y` as a constructor over-approximates: it also names the alias's target.
+  # That is the safe direction (the checks it feeds reject ambiguity), and it only bites
+  # a module that aliases a type AND declares a function with that type's exact,
+  # capitalized name.
+  defp ctor_names({:type_annotation, _meta, [{_tag, rmeta, _} = rhs]}) when is_list(rmeta) do
+    if Keyword.get(rmeta, :variant, false), do: variant_ctor_names(rhs), else: []
+  end
+
   defp ctor_names(_decl), do: []
 
   defp variant_ctor_names({:variable, _meta, name}) when is_binary(name), do: [String.to_atom(name)]
