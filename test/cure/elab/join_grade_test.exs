@@ -93,6 +93,48 @@ defmodule Cure.Elab.JoinGradeTest do
     end
   end
 
+  describe "the un-join's one-shot soundness gate" do
+    # `relevance.ex`'s un-join fires on ANY `let`-bound λ over a `case`, not only the
+    # compiler's join. A USER `let g = λ …` applied MORE THAN ONCE per path is NOT
+    # one-shot, so its captures must NOT be counted once — the gate (`count_level ≤ 1`,
+    # app-head only) falls back to the sound ω-scale. Here `g` captures linear `v` and
+    # is applied twice in the `A()` branch, so `v` is used twice on that path → reject.
+    # Weakening the gate would un-join this and accept it — UNSOUND.
+    # A 2-constructor type with FULLY EXPLICIT branches (no `_`) so there is no
+    # compiler catch-all join — only the user's `let g = λ …`, which is what the gate
+    # governs.
+    @two "type Two = T | F\n"
+
+    test "a let-bound lambda applied twice per path, capturing a linear var, is REJECTED" do
+      src =
+        "mod JG\n  #{@two}" <>
+          "  fn sink(x :linear Int) -> Int = x\n" <>
+          "  fn add(a: Int, b: Int) -> Int = a\n" <>
+          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n" <>
+          "    let g : (Int) -> Int = fn(k) -> sink(v)\n" <>
+          "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
+
+      assert {:error, {:usage_violation, %{used: :unrestricted}}} = Program.elaborate(src)
+    end
+
+    test "an AFFINE var captured by a lambda applied twice per path is REJECTED (gate soundness)" do
+      # The sharp case: if the gate wrongly un-joined this, the twice-applied lambda's
+      # non-tail applications would be walked as matched arms and the affine capture
+      # LOST — read as 0 uses, which affine ACCEPTS. Loosening the gate (its non-bare
+      # branch clause) flips this program from reject to accept — a verified
+      # unsoundness. The tight gate rejects.
+      src =
+        "mod JG\n  #{@two}" <>
+          "  fn asink(x :affine Int) -> Int = x\n" <>
+          "  fn add(a: Int, b: Int) -> Int = a\n" <>
+          "  fn f(x: Two) -> Int =\n    let v :affine = 1\n" <>
+          "    let g : (Int) -> Int = fn(k) -> asink(v)\n" <>
+          "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
+
+      assert {:error, {:usage_violation, %{declared: :affine}}} = Program.elaborate(src)
+    end
+  end
+
   describe "the join optimization is preserved for ungraded code" do
     test "an ungraded 6-constructor catch-all still shares the body once (join fires)" do
       src =
