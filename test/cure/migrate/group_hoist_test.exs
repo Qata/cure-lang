@@ -19,6 +19,17 @@ defmodule Cure.Migrate.GroupHoistTest do
     {Printer.quoted_to_string(new_ast), warns}
   end
 
+  # Drives the real `cure migrate` path: `run_to_fixpoint` threads the AST
+  # between passes WITHOUT reparsing, so an AST-level non-idempotent rewrite
+  # corrupts here even when a single `run/2` pass (or a reparse-between-passes
+  # loop) looks correct.
+  defp migrate_fixpoint(src, file) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: file, trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: file, emit_events: false)
+    {:ok, final, _warns} = Migrate.run_to_fixpoint(Trivia.attach(ast, trivia), edition: "2026")
+    Printer.quoted_to_string(final)
+  end
+
   test "in-body @group is hoisted to directly above mod and output reparses" do
     {out, warns} = migrate("mod M\n@group(:core)\nfn f() -> Int = 1\n", "a.cure")
     # decorator now appears before `mod`, and not after it
@@ -74,5 +85,38 @@ defmodule Cure.Migrate.GroupHoistTest do
     # the bug symptom)
     refute out =~ ~r/@group\(:b\)[\s\S]*mod\s+First/
     assert reparses?(out, "two.cure")
+  end
+
+  test "under run_to_fixpoint a later module's @group hoists above THAT module, not the first" do
+    # `cure migrate` runs `run_to_fixpoint`, which threads the AST between passes
+    # WITHOUT reparsing. `@group(:core)` is in-body of `Second`; pass 1 correctly
+    # hoists it directly above `Second`, but the AST-level decorator now sits
+    # after `mod First`, so the nearest-preceding-module heuristic re-flags it on
+    # pass 2 and drags it above `First`. Single-pass `run/2` looks right; the
+    # fixpoint the CLI actually uses corrupts.
+    src = "mod First\nfn f() -> Int = 1\nmod Second\n@group(:core)\nfn g() -> Int = 2\n"
+    out = migrate_fixpoint(src, "fp.cure")
+
+    # @group ends up directly above Second...
+    assert out =~ ~r/@group\(:core\)\s*\n+\s*mod\s+Second/
+    # ...and is NOT dragged above First.
+    refute out =~ ~r/@group\(:core\)[\s\S]*mod\s+First/
+    assert reparses?(out, "fp.cure")
+  end
+
+  test "under run_to_fixpoint each module's @group stays above its own module" do
+    # Two in-body groups. The non-idempotent rewrite walked every non-first-module
+    # group one module toward the top each pass, so both ended stacked above the
+    # FIRST module.
+    src =
+      "mod First\n@group(:a)\nfn f() -> Int = 1\nmod Second\n@group(:b)\nfn g() -> Int = 2\n"
+
+    out = migrate_fixpoint(src, "fp2.cure")
+
+    assert out =~ ~r/@group\(:a\)\s*\n+\s*mod\s+First/
+    assert out =~ ~r/@group\(:b\)\s*\n+\s*mod\s+Second/
+    # @group(:b) must not have been dragged above First
+    refute out =~ ~r/@group\(:b\)[\s\S]*mod\s+First/
+    assert reparses?(out, "fp2.cure")
   end
 end
