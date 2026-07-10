@@ -374,19 +374,54 @@ defmodule Cure.Elab.Unify do
   # Does `t` reference (freely) any of the outermost `depth` binders? `local`
   # counts binders internal to `t`; a variable `i >= local` is free, at free index
   # `i - local`, and escapes iff that index is `< depth`.
+  #
+  # This walker is FAIL-CLOSED: its catch-all answers `true` (escapes). `strengthen/2`
+  # reads `false` as "safe to solve this metavariable", so a `false` for a shape we
+  # failed to enumerate would let a term mentioning a crossed binder be lifted out of
+  # its scope. Previously a `{:case, ...}` fell into a `_other -> false` catch-all and
+  # was silently declared scope-safe.
+  #
+  # Note a generic structural tuple-walk would NOT be a correct catch-all here, the way
+  # it is for `Inductive.occurs?`: binder-introducing nodes must bump `local`, and
+  # walking a branch body without bumping it *under*-estimates the free index
+  # (`i - local` too large ⇒ `< depth` less often ⇒ escapes missed). So every binder is
+  # enumerated explicitly, every leaf is enumerated explicitly, and anything unknown is
+  # assumed to escape. Refusing to solve a metavariable is soundly incomplete; solving
+  # it out of scope is not.
   defp escapes?({:var, i}, depth, local), do: i >= local and i - local < depth
-  defp escapes?({:meta, _}, _depth, _local), do: false
+
+  # Binders. `:case` binds `ar` fields in each branch body; the motive is already a
+  # lambda, so it is walked at `local` (mirrors `Subst.shift`'s `:case` clause).
   defp escapes?({:pi, d, c}, depth, local), do: escapes?(d, depth, local) or escapes?(c, depth, local + 1)
   defp escapes?({:lam, d, b}, depth, local), do: escapes?(d, depth, local) or escapes?(b, depth, local + 1)
 
-  defp escapes?({:app, f, x}, depth, local), do: escapes?(f, depth, local) or escapes?(x, depth, local)
+  defp escapes?({:case, s, m, brs}, depth, local) do
+    escapes?(s, depth, local) or escapes?(m, depth, local) or
+      Enum.any?(brs, fn {_c, ar, b} -> escapes?(b, depth, local + ar) end)
+  end
 
+  # Non-binding compound nodes.
+  defp escapes?({:app, f, x}, depth, local), do: escapes?(f, depth, local) or escapes?(x, depth, local)
 
   defp escapes?({:data, _f, ps, is}, depth, local),
     do: Enum.any?(ps ++ is, &escapes?(&1, depth, local))
 
   defp escapes?({:ctor, _c, args}, depth, local), do: Enum.any?(args, &escapes?(&1, depth, local))
-  defp escapes?(_other, _depth, _local), do: false
+
+  # Leaves. A `{:meta, _}` binds nothing and its own scope is checked when it is
+  # solved (`occurs?`/`strengthen` run again there).
+  defp escapes?({:meta, _}, _depth, _local), do: false
+  defp escapes?({:type, _}, _depth, _local), do: false
+  defp escapes?({:global, _}, _depth, _local), do: false
+  defp escapes?({:int_type}, _depth, _local), do: false
+  defp escapes?({:int_lit, _}, _depth, _local), do: false
+  defp escapes?({:nat_lit, _}, _depth, _local), do: false
+  defp escapes?({:bounded_lit, _}, _depth, _local), do: false
+  defp escapes?({:float_type}, _depth, _local), do: false
+  defp escapes?({:float_lit, _}, _depth, _local), do: false
+  defp escapes?({:binary_type}, _depth, _local), do: false
+
+  defp escapes?(_unknown, _depth, _local), do: true
 
   # Does metavariable `id` occur in `t` (following solutions)? Structurally
   # complete (generic tuple/list walk) so an occurrence buried in ANY shape is

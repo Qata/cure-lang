@@ -80,6 +80,15 @@ defmodule Cure.Core.Term do
   def term?({:atom_type}), do: true
   def term?({:atom_lit, a}), do: is_atom(a)
 
+  # A hole is a live Core node — `Kernel.check/3` accepts one at any type, and a definition
+  # mid-development legitimately contains them (only the release/emit boundary rejects
+  # them). It carries no de Bruijn variables, so it is an inert leaf everywhere below.
+  def term?({:hole, name}), do: is_binary(name)
+
+  # Likewise `{:absurd}`: `Kernel.check/3` admits it against any type once the context is
+  # inconsistent, `Serialize` encodes and decodes it, and `Validator` has a clause for it.
+  def term?({:absurd}), do: true
+
   def term?(_), do: false
 
   # -- de Bruijn shift / substitution -----------------------------------------
@@ -109,6 +118,7 @@ defmodule Cure.Core.Term do
   def shift({:binary_type} = t, _amount, _cutoff), do: t
   def shift({:atom_type} = t, _amount, _cutoff), do: t
   def shift({:atom_lit, _} = t, _amount, _cutoff), do: t
+  def shift({:hole, _} = t, _amount, _cutoff), do: t
   def shift({:pi, dom, cod}, a, c), do: {:pi, shift(dom, a, c), shift(cod, a, c + 1)}
   def shift({:lam, dom, body}, a, c), do: {:lam, shift(dom, a, c), shift(body, a, c + 1)}
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
@@ -177,6 +187,7 @@ defmodule Cure.Core.Term do
   def subst({:binary_type} = t, _j, _r), do: t
   def subst({:atom_type} = t, _j, _r), do: t
   def subst({:atom_lit, _} = t, _j, _r), do: t
+  def subst({:hole, _} = t, _j, _r), do: t
 
   def subst({:pi, dom, cod}, j, r),
     do: {:pi, subst(dom, j, r), subst(cod, j + 1, shift(r, 1, 0))}
@@ -248,6 +259,7 @@ defmodule Cure.Core.Term do
   def to_external({:binary_type}), do: %{"node" => "binary_type"}
   def to_external({:atom_type}), do: %{"node" => "atom_type"}
   def to_external({:atom_lit, a}), do: %{"node" => "atom_lit", "value" => Atom.to_string(a)}
+  def to_external({:hole, name}), do: %{"node" => "hole", "name" => name}
 
   @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
   @spec from_external(map()) :: t()
@@ -287,6 +299,7 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "binary_type"}), do: {:binary_type}
   def from_external(%{"node" => "atom_type"}), do: {:atom_type}
   def from_external(%{"node" => "atom_lit", "value" => a}), do: {:atom_lit, String.to_atom(a)}
+  def from_external(%{"node" => "hole", "name" => name}) when is_binary(name), do: {:hole, name}
 
   # -- helpers ----------------------------------------------------------------
 

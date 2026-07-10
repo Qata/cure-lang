@@ -86,5 +86,56 @@ defmodule Cure.Elab.ExternTest do
     assert apply(mod, :double, [21]) == 42
   end
 
+  describe "the @extern arity is the target's arity, i.e. the def's PRESENT arity" do
+    # `extern_form/3` used to build the emitted function's BEAM arity, and the number of
+    # arguments it passed to the remote call, from the raw integer literal — never from the
+    # def's own `:present` quantities, the way `real_function_form/3` and every CALL SITE
+    # (`present_arity/2`) do. Nothing cross-checked the two, so they were free to diverge.
+    #
+    # An extern with an erased implicit has a present arity strictly below its surface
+    # telescope length. Auto-generalization inserts one for any free lowercase type var even
+    # when the user writes none, so this is not an exotic shape. A user counting the parens
+    # writes 2 for `head({T: Type}, xs: List(T))`; `Emit` then generated `head/2` calling
+    # `erlang:hd(V0, V1)`, while every Cure caller invoked `head/1`. Both forms compiled; the
+    # module broke the moment anything called it.
+
+    test "an extern with an erased implicit param emits at its present arity and calls correctly" do
+      src = """
+      mod M
+        @extern(:erlang, :hd, 1)
+        fn head({T: Type}, xs: List(T)) -> T
+        fn use_head(xs: List(Int)) -> Int = head(xs)
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+
+      assert {:ok, mod} =
+               Emit.compile_and_load(env,
+                 module: :"Cure.ExternErasedArity",
+                 functions: [:head, :use_head]
+               )
+
+      assert {:head, 1} in mod.module_info(:exports)
+      assert apply(mod, :use_head, [[1, 2, 3]]) == 1
+    end
+
+    test "a literal arity that disagrees with the present arity is rejected" do
+      src = """
+      mod M
+        @extern(:erlang, :hd, 2)
+        fn head({T: Type}, xs: List(T)) -> T
+      end
+      """
+
+      assert {:error, {:extern_arity_mismatch, :head, 2, 1}} = Program.elaborate(src)
+    end
+
+    test "a nullary extern still means arity 0" do
+      src = "mod M\n  @extern(:erlang, :time, 0)\n  fn now() -> Int\nend\n"
+      assert {:ok, _env} = Program.elaborate(src)
+    end
+  end
+
   defp extern_def!(env, name), do: Env.get_def(env, name) || flunk("no def #{name}")
 end

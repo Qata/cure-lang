@@ -58,13 +58,15 @@ defmodule Cure.Compiler.MelquiadesParserTest do
       assert Keyword.get(fc_meta, :name) == "build"
     end
 
-    test "the operator is non-associative: `a <-| b <-| c` does not nest" do
-      # Non-associative means the parser stops after the first send.
-      # We just check it still parses (errors are swallowed by `parse/1`
-      # because non-assoc rejection only changes shape), and that the
-      # outer node is exactly one `:send` with `b` on the right, not two.
-      ast = parse!("a <-| b")
-      assert {:send, _, [_, _]} = ast
+    test "the operator is non-associative: `a <-| b <-| c` is rejected" do
+      # It used to nest into two sends — `a <-| b` evaluated, then its return value
+      # sent on to `c` — which is precisely the fan-out non-associativity exists to
+      # prevent. `right_bp = left_bp + 1` alone cannot stop it; that is what a
+      # left-associative operator uses.
+      {:ok, tokens} = Lexer.tokenize("a <-| b <-| c", emit_events: false)
+
+      assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+      assert Enum.any?(errors, &match?({:non_associative, :"<-|", :chained_with, :"<-|", _, _}, &1))
     end
   end
 

@@ -42,9 +42,34 @@ defmodule Cure.Elab.Interface do
         defaults: defaults
       }
 
-      with {:ok, env1} <- declare_dictionary_former(desc, env) do
+      with :ok <- check_method_names_free(desc, env),
+           {:ok, env1} <- declare_dictionary_former(desc, env) do
         {:ok, Env.put_interface(env1, name_atom, desc)}
       end
+    end
+  end
+
+  # `for_method/2` is the SOLE lookup `Resolve.method_call` uses to find the interface owning an
+  # unqualified call like `size(x)`, and it is `Enum.find_value/2` over the whole `env.interfaces`
+  # map — the FIRST interface, in unspecified map-iteration order, whose method table holds the
+  # name. Nothing anywhere checked whether a method name is unique across in-scope interfaces, so
+  # two interfaces both declaring `size` left every unqualified call bound to whichever descriptor
+  # the map happened to yield first, with no diagnostic at the declaration or the call.
+  #
+  # Idris2 and Lean 4 both require disambiguation when two in-scope interfaces/classes declare a
+  # same-named method: an unqualified reference that cannot be disambiguated is a compile error,
+  # never an arbitrary pick. Cure has no qualified method-call syntax, so the ambiguity can only
+  # be reported where it is created.
+  defp check_method_names_free(desc, %Env{interfaces: ifaces}) do
+    desc.method_order
+    |> Enum.find_value(fn m ->
+      Enum.find_value(ifaces, fn {other, other_desc} ->
+        if other != desc.name and Map.has_key?(other_desc.methods, m), do: {m, other}
+      end)
+    end)
+    |> case do
+      nil -> :ok
+      {method, other} -> {:error, {:ambiguous_method, method, Enum.sort([desc.name, other])}}
     end
   end
 

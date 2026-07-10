@@ -94,6 +94,13 @@ defmodule Cure.Core.Kernel do
   # with an unmatched-clause exception (spec §5/§8.1).
   def infer(_ctx, {:absurd}), do: {:error, :absurd_in_reachable_position}
 
+  # A hole is checkable at any type (`check/3` below) but has nothing to infer — its type is
+  # known only from the expected type, as in Agda and Idris. Without this clause `infer/2`
+  # raised an unmatched-clause exception on a node the kernel otherwise accepts, and every
+  # caller that expects `{:error, _}` — `MetaCheck.progresses?/2` and `type_preserved?/2`,
+  # whose `case`/`else` cannot catch a raise — crashed on a legitimate mid-development term.
+  def infer(_ctx, {:hole, name}), do: {:error, {:hole_in_inference_position, name}}
+
 
   def infer(ctx, {:pi, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
@@ -309,11 +316,11 @@ defmodule Cure.Core.Kernel do
         case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
           {:ok, n} when k < n -> :ok
           {:ok, n} -> {:error, {:bounded_lit_out_of_range, k, n}}
-          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth)}}
+          :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth, sig)}}
         end
 
       other ->
-        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth)}}
+        {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth, sig)}}
     end
   end
 
@@ -400,8 +407,15 @@ defmodule Cure.Core.Kernel do
       else
         # Conversion failure diagnostic (§10): report both normal forms so the
         # mismatch is legible (and serializable via C2 for independent checkers).
+        # Legible means the context's signature has to be threaded through: without
+        # it, `reify` collapses an indexed family's params/indices split into a flat
+        # `params` list with `indices => []`, which `Conv` tolerates but a human — or
+        # an independent checker rebuilding the term — cannot.
         depth = Context.length(ctx)
-        {:error, {:conversion_failure, Quote.reify(inferred, depth), Quote.reify(expected, depth)}}
+        sig = Context.signature(ctx)
+
+        {:error,
+         {:conversion_failure, Quote.reify(inferred, depth, sig), Quote.reify(expected, depth, sig)}}
       end
     end
   end
@@ -424,15 +438,23 @@ defmodule Cure.Core.Kernel do
       # TotalityClosure.certify_type_level once builtin-op spines occur in TYPE
       # positions (dependent-index arithmetic). Ordering: BEFORE the generic
       # %{type:, body:} clause, which these defs would also match.
+      # A builtin-op def has no body, but it still has a declared TYPE, and that type is
+      # inside the Final-Core grammar boundary just like a body is. This branch used to check
+      # only that the type is a valid sort, so every `:reject` clause the validator enforces
+      # was silently unenforced along this admission path — the exact gap the validator exists
+      # to close, and one `validator_test.exs` already pins for the generic branch.
       %{builtin_op: op, type: type_term} when not is_nil(op) ->
-        with {:ok, _level} <- infer_sort(Context.empty(env), type_term), do: :ok
+        with {:ok, _level} <- infer_sort(Context.empty(env), type_term),
+             :ok <- run_final_core_validator([type_term]) do
+          :ok
+        end
 
       %{type: type_term, body: body_term} ->
         ctx = Context.empty(env)
 
         with {:ok, _level} <- infer_sort(ctx, type_term),
              :ok <- check(ctx, body_term, Eval.eval(type_term, [])),
-             :ok <- run_final_core_validator(type_term, body_term) do
+             :ok <- run_final_core_validator([type_term, body_term]) do
           :ok
         end
     end
@@ -443,25 +465,31 @@ defmodule Cure.Core.Kernel do
   # as one in the body. Emits warnings via the pipeline and rejects only clauses
   # configured to :reject (none, by Wave-0 default); on a mixed verdict,
   # rejections from either term are combined.
-  defp run_final_core_validator(type_term, body_term) do
+  # Every Core term admitted by `check_def` — a declared type, a body, or both — crosses the
+  # Final-Core grammar boundary. Warnings are emitted; rejections from all terms are
+  # collected so one call reports every violation rather than the first.
+  defp run_final_core_validator(terms) do
     cfg = Cure.Core.Validator.check_def_config()
+    results = Enum.map(terms, &Cure.Core.Validator.validate(&1, cfg))
 
-    case {Cure.Core.Validator.validate(type_term, cfg), Cure.Core.Validator.validate(body_term, cfg)} do
-      {{:ok, w1}, {:ok, w2}} ->
-        Enum.each(w1 ++ w2, fn d ->
+    case Enum.flat_map(results, fn
+           {:error, rejections} -> rejections
+           {:ok, _warnings} -> []
+         end) do
+      [] ->
+        for {:ok, warnings} <- results, d <- warnings do
           Cure.Pipeline.Events.emit(
             :kernel,
             :final_core_violation,
             %{clause: d.clause, message: d.message},
             %{}
           )
-        end)
+        end
 
         :ok
 
-      {{:error, r1}, {:ok, _}} -> {:error, {:final_core_violation, r1}}
-      {{:ok, _}, {:error, r2}} -> {:error, {:final_core_violation, r2}}
-      {{:error, r1}, {:error, r2}} -> {:error, {:final_core_violation, r1 ++ r2}}
+      rejections ->
+        {:error, {:final_core_violation, rejections}}
     end
   end
 
@@ -1095,6 +1123,53 @@ defmodule Cure.Core.Kernel do
 
   defp unify_one({:ctor, _, _} = r, {:nat_lit, n}, arity, subst),
     do: unify_one(r, nat_lit_ctor(n), arity, subst)
+
+  # Compact Bounded literal ↔ First/Next bridge — the exact mirror of the Nat
+  # bridge above, and of `conv.ex`'s cross-representation arms (conv_struct?,
+  # the `{:vbounded, _}` vs `{:vctor, :First/:Next, _}` clauses). A
+  # `{:bounded_lit, k}` index is a closed canonical `Bounded` value,
+  # definitionally equal to its k-fold `Next`-tower over `First` (Lean `Fin n`),
+  # so it must unify with `First`/`Next` result indices exactly as the tower does.
+  #
+  # The leading `m` argument of both constructors is the ERASED implicit bound
+  # (`builtins.ex`: `First/1`, `Next/2`). `conv` ignores it; so must this, or two
+  # definitionally equal indices would fail to unify on a computationally
+  # irrelevant argument. Keep these clauses in lock-step with conv.ex's.
+  #
+  # Without this bridge `head_key({:bounded_lit, k})` is `:bounded_lit`, which can
+  # never equal `{:ctor, :First}`/`{:ctor, :Next}`, so the generic rigid-head clash
+  # rule below verdicts a literal index `:impossible` against its own tower
+  # expansion. That is a COVERAGE SOUNDNESS HOLE identical to the Nat one this
+  # bridge's sibling closes: a `case` whose scrutinee index is the tower spelling
+  # could omit the scrutinee's own reachable constructor and still pass
+  # `check_coverage`, admitting a partial eliminator as total.
+  #
+  # The peel terminates: `n` strictly decreases, and only fires against a
+  # `:ctor`/`:bounded_lit` counterpart (var counterparts bind via the clauses above).
+  defp unify_one({:bounded_lit, a}, {:bounded_lit, b}, _arity, subst),
+    do: if(a == b, do: {:ok, subst}, else: :impossible)
+
+  defp unify_one({:bounded_lit, 0}, {:ctor, :First, [_m]}, _arity, subst), do: {:ok, subst}
+  defp unify_one({:ctor, :First, [_m]}, {:bounded_lit, 0}, _arity, subst), do: {:ok, subst}
+
+  defp unify_one({:bounded_lit, n}, {:ctor, :Next, [_m, pred]}, arity, subst) when n > 0,
+    do: unify_one({:bounded_lit, n - 1}, pred, arity, subst)
+
+  defp unify_one({:ctor, :Next, [_m, pred]}, {:bounded_lit, n}, arity, subst) when n > 0,
+    do: unify_one(pred, {:bounded_lit, n - 1}, arity, subst)
+
+  # Genuine cross-representation constructor clash: `0` is not a successor, and a
+  # positive `k` is not `First`. Stated explicitly so the `:impossible` verdict is
+  # derived from the VALUES rather than falling through to the generic head-key
+  # clash rule, which would reach the same answer here only by coincidence.
+  defp unify_one({:bounded_lit, 0}, {:ctor, :Next, [_m, _pred]}, _arity, _subst), do: :impossible
+  defp unify_one({:ctor, :Next, [_m, _pred]}, {:bounded_lit, 0}, _arity, _subst), do: :impossible
+
+  defp unify_one({:bounded_lit, n}, {:ctor, :First, [_m]}, _arity, _subst) when n > 0,
+    do: :impossible
+
+  defp unify_one({:ctor, :First, [_m]}, {:bounded_lit, n}, _arity, _subst) when n > 0,
+    do: :impossible
 
   defp unify_one({:ctor, c, as}, {:ctor, c, bs}, arity, subst) when length(as) == length(bs),
     do: unify_spine(as, bs, arity, subst)

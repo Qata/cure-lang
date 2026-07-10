@@ -9,7 +9,7 @@ defmodule Cure.Elab.Program do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Core.{Env, Validator}
-  alias Cure.Elab.{Declarations, Erase, Resolution, TotalityClosure}
+  alias Cure.Elab.{Coherence, Declarations, Erase, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -32,10 +32,93 @@ defmodule Cure.Elab.Program do
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast, _opts) do
+    with :ok <- check_declarations(ast) do
+      check_ast_elixir_core(ast)
+    end
+  end
+
+  # The declaration-level guards, in one place. `check_ast/2` runs them for the entry module;
+  # `module_slice_env/1` and `import_source_env/2` run them for every module reached through a
+  # `use` import. Those two paths used to call `elaborate_declarations/3` straight from the
+  # parsed AST with no guards at all, so a duplicate inside a `Std.*` source was silently kept
+  # last-wins — the exact `Map.put`-overwrite hole these checks exist to close, reachable
+  # through two doors they never covered.
+  @spec check_declarations(tuple() | list()) :: :ok | {:error, term()}
+  defp check_declarations(ast) do
     with :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
-         :ok <- check_no_duplicate_ctors(ast) do
-      check_ast_elixir_core(ast)
+         :ok <- check_no_duplicate_ctors(ast),
+         :ok <- check_no_fn_ctor_collision(ast) do
+      check_no_sibling_collision(ast)
+    end
+  end
+
+  # Two sibling `mod` blocks in ONE compilation unit may not bind the same name.
+  #
+  # A module is a namespace, and two modules in two FILES may share a name freely: the stdlib
+  # has `map` in five modules. Those are reconciled by the import rekey machinery
+  # (`Resolution.rekey_module_env`, LOCKED type-shadowing Approach B), which this check does
+  # not touch. But `declarations/1` flattens all SIBLING modules of one AST into a single list
+  # before `elaborate_declarations/3` ever runs, and nothing rekeys them — they share one flat
+  # `env.defs` / `env.families` / `env.ctor_to_family`, each a plain `Map.put`. So the later
+  # sibling silently wins the bare key:
+  #
+  #     mod A  fn foo() -> Int = 1  end
+  #     mod B  fn foo() -> Int = 2  end   # A's `foo` is GONE; A's callers δ-unfold B's body
+  #
+  # For types it is worse than lost — it is incoherent. `type Foo = MkA` / `type Foo = MkB`
+  # leaves `MkA` registered as a constructor whose `ctor_to_family` entry names a family whose
+  # constructor set contains only `MkB`. That is precisely the state `check_no_duplicate_ctors`
+  # rejects within one module.
+  #
+  # Rejecting is the sound reading. Rekeying siblings the way imports are rekeyed would require
+  # elaborating each sibling into its own slice, which would break the bare cross-sibling
+  # references that flat elaboration makes work today (`mod B  fn baz() = bar()  end`, calling
+  # A's `bar`). Nothing in the tree declares sibling modules in one file, so nothing loses.
+  @spec check_no_sibling_collision(tuple() | list()) :: :ok | {:error, term()}
+  defp check_no_sibling_collision(ast) do
+    case top_modules(ast) do
+      mods when length(mods) < 2 ->
+        :ok
+
+      mods ->
+        # `fn` names and constructor names share one bare-atom namespace, so they collide with
+        # each other across siblings exactly as `check_no_fn_ctor_collision` says they do
+        # within one. Type names live in `env.families`, their own namespace.
+        with :ok <- first_sibling_collision(mods, &value_names/1),
+             do: first_sibling_collision(mods, &type_names/1)
+    end
+  end
+
+  defp first_sibling_collision(mods, extract) do
+    mods
+    |> Enum.flat_map(fn mod ->
+      owner = module_name_atom(mod)
+      for name <- mod |> declarations() |> Enum.flat_map(extract) |> Enum.uniq(), do: {name, owner}
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.find(fn {_name, owners} -> length(owners) > 1 end)
+    |> case do
+      nil -> :ok
+      {name, owners} -> {:error, {:sibling_module_collision, name, Enum.sort(owners)}}
+    end
+  end
+
+  defp value_names(decl), do: fn_names(decl) ++ ctor_names(decl)
+
+  defp fn_names({:function_def, meta, _body}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> [String.to_atom(name)]
+      _ -> []
+    end
+  end
+
+  defp fn_names(_decl), do: []
+
+  defp module_name_atom({:container, meta, _body}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      n when is_binary(n) -> String.to_atom(n)
+      n when is_atom(n) -> n
     end
   end
 
@@ -82,20 +165,25 @@ defmodule Cure.Elab.Program do
   # `Map.put`, so the second would overwrite the first.
   @spec check_no_duplicate_types(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_types(ast) do
-    extract = fn
-      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
-        case Keyword.get(meta, :name) do
-          n when is_binary(n) -> [String.to_atom(n)]
-          n when is_atom(n) and not is_nil(n) -> [n]
-          _ -> []
-        end
-
-      _ ->
-        []
-    end
-
-    first_dup_per_module(ast, extract, :duplicate_type, & &1)
+    first_dup_per_module(ast, &type_names/1, :duplicate_type, & &1)
   end
+
+  # Type names a declaration binds. `:interface` belongs here: `Cure.Elab.Interface`
+  # declares the interface's DICTIONARY as a record family of the same name, through the
+  # same `Inductive.declare/3` (a bare `Map.put`) that `type`/`indexed type`/`rec` use.
+  # Omitting it let `interface Equatable(a)` and a sibling `type Equatable = Foo | Bar`
+  # both register a family named `:Equatable`: whichever elaborated second won the slot,
+  # and `env.ctor_to_family` kept a dangling entry for the loser's constructor.
+  defp type_names({tag, meta, _})
+       when tag in [:container, :indexed_type, :type_annotation, :interface] and is_list(meta) do
+    case Keyword.get(meta, :name) do
+      n when is_binary(n) -> [String.to_atom(n)]
+      n when is_atom(n) and not is_nil(n) -> [n]
+      _ -> []
+    end
+  end
+
+  defp type_names(_decl), do: []
 
   # A module must not bind the same constructor name twice — within one type
   # (`A | A`) or across two types in the same module (`env.ctor_to_family` maps each
@@ -104,6 +192,37 @@ defmodule Cure.Elab.Program do
   @spec check_no_duplicate_ctors(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_ctors(ast) do
     first_dup_per_module(ast, &ctor_names/1, :duplicate_constructor, & &1)
+  end
+
+  # A module must not bind one name as BOTH a constructor and a top-level function.
+  # `type Foo = C` and `fn C() -> Int` both bind `C` in the same namespace; whichever
+  # `Resolution` favours, the other is silently unreachable by name. Cure has no
+  # type-directed disambiguation, so this must be a compile error rather than a coin
+  # flip. Scoped per module, like the other duplicate checks.
+  @spec check_no_fn_ctor_collision(tuple() | list()) :: :ok | {:error, term()}
+  defp check_no_fn_ctor_collision(ast) do
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn decls, :ok ->
+      ctors = decls |> Enum.flat_map(&ctor_names/1) |> MapSet.new()
+
+      decls
+      |> Enum.flat_map(fn
+        {:function_def, meta, _body} ->
+          case Keyword.get(meta, :name) do
+            name when is_binary(name) -> [String.to_atom(name)]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+      |> Enum.find(&MapSet.member?(ctors, &1))
+      |> case do
+        nil -> {:cont, :ok}
+        clash -> {:halt, {:error, {:constructor_function_collision, clash}}}
+      end
+    end)
   end
 
   # A module must not bind the same top-level function name twice: `Env.add_def`
@@ -132,7 +251,7 @@ defmodule Cure.Elab.Program do
   def check_ast_elixir_core(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
-         env0 = merge_env(seeded, imported),
+         {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
@@ -165,17 +284,7 @@ defmodule Cure.Elab.Program do
   defp declared_type_names(ast) do
     ast
     |> declarations()
-    |> Enum.flat_map(fn
-      {tag, meta, _} when tag in [:container, :indexed_type, :type_annotation] and is_list(meta) ->
-        case Keyword.get(meta, :name) do
-          n when is_binary(n) -> [String.to_atom(n)]
-          n when is_atom(n) and not is_nil(n) -> [n]
-          _ -> []
-        end
-
-      _ ->
-        []
-    end)
+    |> Enum.flat_map(&type_names/1)
     |> MapSet.new()
   end
 
@@ -197,6 +306,18 @@ defmodule Cure.Elab.Program do
   end
 
   defp ctor_names({:indexed_type, _meta, ctor_sigs}), do: Enum.flat_map(ctor_sigs, &gadt_ctor_names/1)
+
+  # `type X = Y` with a single bare RHS is either a one-constructor enum (`type Unit =
+  # MkUnit`) or an alias (`type MyNat = Nat`), decided by whether `Y` names a type — a
+  # question this AST-level scan cannot answer. The parser tags both `variant: true`.
+  # Counting `Y` as a constructor over-approximates: it also names the alias's target.
+  # That is the safe direction (the checks it feeds reject ambiguity), and it only bites
+  # a module that aliases a type AND declares a function with that type's exact,
+  # capitalized name.
+  defp ctor_names({:type_annotation, _meta, [{_tag, rmeta, _} = rhs]}) when is_list(rmeta) do
+    if Keyword.get(rmeta, :variant, false), do: variant_ctor_names(rhs), else: []
+  end
+
   defp ctor_names(_decl), do: []
 
   defp variant_ctor_names({:variable, _meta, name}) when is_binary(name), do: [String.to_atom(name)]
@@ -529,7 +650,11 @@ defmodule Cure.Elab.Program do
   defp import_env(imports, seen) do
     Enum.reduce_while(imports, {:ok, Env.empty()}, fn source, {:ok, acc} ->
       case source |> import_source_path() |> import_source_env(seen) do
-        {:ok, imported} -> {:cont, {:ok, merge_env(acc, imported)}}
+        {:ok, imported} ->
+          case merge_env(acc, imported) do
+            {:ok, merged} -> {:cont, {:ok, merged}}
+            {:error, _} = err -> {:halt, err}
+          end
         {:error, _} = err -> {:halt, err}
       end
     end)
@@ -615,9 +740,10 @@ defmodule Cure.Elab.Program do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         :ok <- check_declarations(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
-         env0 = merge_env(seeded, imported),
+         {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
       {:ok, mark_inline_hints(certified, find_module_name(ast))}
@@ -642,16 +768,36 @@ defmodule Cure.Elab.Program do
 
   # The full shadow-aware imported-env builder.
   defp shadow_resolved_imports(ast) do
-    sources = auto_prelude_imports(ast) ++ imports(ast)
+    # Dedup by module identity: a module that is BOTH auto-preluded and named in an
+    # explicit `use` (e.g. `char.cure` says `use Std.Bounded`, which is also in the
+    # auto-prelude) must be a SINGLE provider. Otherwise the shadow resolver sees the
+    # same family supplied "twice" and re-keys it to `Mod#Type` as if two distinct
+    # modules collided — dragging a builtin-owning prelude's key (`:bounded`) onto
+    # `Std.Bounded#Bounded`, which then clashes with the prelude source's own
+    # canonical `@builtin` self-registration. Auto-prelude entries come first so an
+    # explicit duplicate is the one dropped.
+    sources = Enum.uniq(auto_prelude_imports(ast) ++ imports(ast))
     modules = distinct_import_modules(sources)
 
     # Ownership scans the FULL transitive closure (not `modules`, which is
     # direct-only) — see the Design note + `transitive_import_modules/1` doc.
     # Family AND def ownership in ONE transitive walk (avoid re-walking): both are
     # `%{name => MapSet.t(owner_mod)}` maps fed to the shape-generic `classify/2`.
+    #
+    # The module being elaborated is dropped from the owner walk: the auto-prelude
+    # chain can transitively re-enter THIS module (e.g. Std.Bounded is reached via
+    # Std.Binary → Std.Char → Std.Bounded), and that self-import is not a foreign
+    # provider — it is the same module as the local declaration. Counting it would
+    # make `classify` see a family both locally declared AND "imported" (n_sources
+    # ≥ 2) and re-key the module's own family against itself, so `@builtin(:bounded)`
+    # would clash with the leaked `:"Std.Bounded#Bounded"`. Self contributes only
+    # through `local` below.
+    self_mod = find_module_name(ast)
+
     {family_owners, def_owners} =
       sources
       |> transitive_import_modules()
+      |> Enum.reject(fn {mod_id, _path} -> mod_id == self_mod end)
       |> Enum.reduce({%{}, %{}}, fn {mod_id, path}, {fam_acc, def_acc} ->
         fam_acc =
           Enum.reduce(owned_family_names(path), fam_acc, fn name, a ->
@@ -705,7 +851,10 @@ defmodule Cure.Elab.Program do
                      end
                    end)
 
-                 {:cont, {:ok, merge_env(acc, slice)}}
+                 case merge_env(acc, slice) do
+                   {:ok, merged} -> {:cont, {:ok, merged}}
+                   {:error, _} = err -> {:halt, err}
+                 end
 
                {:error, _} = err ->
                  {:halt, err}
@@ -733,17 +882,11 @@ defmodule Cure.Elab.Program do
       with {:ok, source} <- File.read(path),
            {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+           :ok <- check_declarations(ast),
            {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
-           # Seed builtins into the imported module's own env, exactly as the
-           # top-level (~134) and module-slice (~551) paths do. Without this an
-           # imported module body that uses a builtin literal (`true`/`false` →
-           # `:bool`, `[..]` → `:list`, `%[..]` → `:sigma`) elaborates against an
-           # unseeded env and dies with `builtin :bool not seeded`. The
-           # `declared_type_names` skip keeps a module declaring its own same-named
-           # type canonical (no look-alike seed), mirroring the other two paths.
            seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
-           env0 = merge_env(seeded, imported),
-           {:ok, env} <- elaborate_declarations(declarations(ast), env0) do
+           {:ok, env0} <- merge_env(seeded, imported),
+           {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
           {:ok, mark_inline_hints(certified, module_name)}
         end
@@ -800,30 +943,79 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp merge_env(%Env{} = left, %Env{} = right) do
-    %Env{
-      families: Map.merge(left.families, right.families),
-      ctors: Map.merge(left.ctors, right.ctors),
-      ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
-      defs: Map.merge(left.defs, right.defs),
-      certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
-      builtins: Map.merge(left.builtins, right.builtins),
-      primitives: Map.merge(left.primitives, right.primitives),
-      # Typeclass state must cross the import boundary too, or a `use`d module's
-      # interfaces + instances vanish and a method call in the importer is
-      # `:unknown_global` / `{:no_instance, …}`. Interfaces are a plain map;
-      # the coherence registry is a struct (nil = empty), unioned right-wins.
-      interfaces: Map.merge(left.interfaces, right.interfaces),
-      coherence: Cure.Elab.Coherence.merge(left.coherence, right.coherence)
-    }
+  # Every `Env` field this function knows how to combine. `merge_env/2` builds a
+  # FRESH `%Env{}`, so any field omitted here silently reverts to the struct default
+  # — that is how `interfaces`/`coherence`/`constrained` were lost across module
+  # boundaries, making an imported interface's instances invisible to the importer
+  # and quietly breaking global coherence. The assertion below turns the next such
+  # omission into a compile error rather than a runtime mystery.
+  @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
+                      primitives interfaces coherence constrained)a
+
+  @env_keys Map.keys(Map.from_struct(%Env{}))
+  missing = @env_keys -- @merged_env_keys
+
+  if missing != [] do
+    raise CompileError,
+      description:
+        "Cure.Elab.Program.merge_env/2 does not merge Env field(s) #{inspect(missing)}. " <>
+          "Add them to the merge (and to @merged_env_keys) or they will be dropped " <>
+          "when an imported module's env is combined with the importing module's."
   end
+
+  defp merge_env(%Env{} = left, %Env{} = right) do
+    with {:ok, coherence} <- merge_coherence(left.coherence, right.coherence) do
+      {:ok,
+       %Env{
+         families: Map.merge(left.families, right.families),
+         ctors: Map.merge(left.ctors, right.ctors),
+         ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
+         defs: Map.merge(left.defs, right.defs),
+         certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
+         builtins: Map.merge(left.builtins, right.builtins),
+         primitives: Map.merge(left.primitives, right.primitives),
+         interfaces: Map.merge(left.interfaces, right.interfaces),
+         coherence: coherence,
+         constrained: Map.merge(left.constrained, right.constrained)
+       }}
+    end
+  end
+
+  defp merge_coherence(nil, right), do: {:ok, right}
+  defp merge_coherence(left, nil), do: {:ok, left}
+
+  defp merge_coherence(%Coherence{} = left, %Coherence{} = right) do
+    # Global coherence must survive the merge: two modules may not each supply an
+    # anonymous instance for the same `(interface, head)`. Identical entries are
+    # fine — a diamond import re-delivers the same instance descriptor by two paths,
+    # and `import_env/2` accumulates left-to-right — so only a genuine DISAGREEMENT
+    # is an overlap. Named instances are exempt from uniqueness by design but their
+    # names must still not collide with a different instance.
+    with {:ok, anon} <- merge_instances(left.anon, right.anon, :overlapping_instance),
+         {:ok, named} <- merge_instances(left.named, right.named, :overlapping_named_instance) do
+      {:ok, %Coherence{anon: anon, named: named}}
+    end
+  end
+
+  defp merge_instances(left, right, error_tag) do
+    Enum.reduce_while(right, {:ok, left}, fn {key, ref}, {:ok, acc} ->
+      case Map.fetch(acc, key) do
+        {:ok, ^ref} -> {:cont, {:ok, acc}}
+        {:ok, _other} -> {:halt, {:error, overlap_error(error_tag, key)}}
+        :error -> {:cont, {:ok, Map.put(acc, key, ref)}}
+      end
+    end)
+  end
+
+  defp overlap_error(:overlapping_instance, {iface, head}), do: {:overlapping_instance, iface, head}
+  defp overlap_error(:overlapping_named_instance, name), do: {:overlapping_named_instance, name}
 
   # Two passes so that forward references and mutual recursion resolve: first
   # every type/record is elaborated and every function *signature* is registered;
   # then every function *body* is elaborated against the fully-populated
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
-  defp elaborate_declarations(items, env, prelude? \\ false) do
+  defp elaborate_declarations(items, env, prelude?) do
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?) do
       body_pass(fn_decls, env1)
     end

@@ -818,14 +818,27 @@ defmodule Cure.Compiler.Lexer do
 
       ?# ->
         if peek_at(state, 1) == ?{ do
-          # String interpolation
+          # String interpolation. The interpolated expression is its own paren scope:
+          # enter at depth 0, and restore the enclosing depth on the way out.
+          outer_paren_depth = state.paren_depth
           state = advance(state, 2)
-          {expr_tokens, state} = lex_interpolation_expr(state, 0)
+          {expr_tokens, state} = lex_interpolation_expr(%{state | paren_depth: 0}, 0)
+          state = %{state | paren_depth: outer_paren_depth}
           lex_string_body(state, start_col, [{:expr, expr_tokens} | acc])
         else
           state2 = advance(state, 1)
           lex_string_body(state2, start_col, ["#" | acc])
         end
+
+      # A string literal may span physical lines — there is no lexer error for a raw
+      # newline in one. `advance/2` only moves `pos` and `col`, so swallowing the byte
+      # through the catch-all below left `line` stale, and every token after a multi-line
+      # string reported a line number short by however many newlines the string held.
+      # Every other multi-line construct here (`handle_newline/1`, `collect_fenced_lines/2`,
+      # `lex_indentation/1`'s blank-line branch) bumps `line` and resets `col`.
+      ?\n ->
+        state = %{state | pos: state.pos + 1, line: state.line + 1, col: 1}
+        lex_string_body(state, start_col, ["\n" | acc])
 
       c ->
         state = advance(state, 1)
@@ -856,15 +869,19 @@ defmodule Cure.Compiler.Lexer do
         {[token | rest], state}
 
       _ ->
-        # Tokenize one token inside interpolation, then continue
-        inner_state = %{state | tokens: [], paren_depth: 0}
+        # Tokenize one token inside interpolation, then continue. `paren_depth` must
+        # survive the step: it used to be forced to 0 on the way in and overwritten with
+        # the pre-step snapshot on the way out, so a `(` opened inside an interpolation
+        # never reached the counter `handle_newline/1` consults, and a newline inside a
+        # parenthesised call in `"#{f(a,\nb)}"` emitted a spurious `:newline`.
+        inner_state = %{state | tokens: []}
 
         case lex_next(inner_state) do
           {:ok, inner_state} ->
             produced = Enum.reverse(inner_state.tokens)
 
-            next_state = %{inner_state | tokens: state.tokens, paren_depth: state.paren_depth}
-            {rest, final_state} = lex_interpolation_expr(next_state, depth)
+            next_state = %{inner_state | tokens: state.tokens}
+            {rest, final_state} = lex_interpolation_expr(next_state, depth + brace_delta(produced))
             {produced ++ rest, final_state}
 
           {:error, _reason, err_state} ->
@@ -872,6 +889,14 @@ defmodule Cure.Compiler.Lexer do
         end
     end
   end
+
+  # `depth` counts the braces still open inside a `#{…}`, and the clauses above only see a
+  # BARE `{` — the raw byte. `%{` is consumed whole by `lex_percent/1` as one `:map_open`
+  # token, so its brace never bumped the counter, while its closing `}` was still seen raw.
+  # `"#{ %{a: 1} }"` therefore ended the interpolation at the map's `}`, one brace early,
+  # and swallowed the rest of the string as literal text. A record literal's `Type{` uses a
+  # bare `{`, which is why only the map sigil was affected.
+  defp brace_delta(produced), do: Enum.count(produced, &(&1.type == :map_open))
 
   defp normalize_string_parts(parts) do
     # Merge consecutive binary parts, keep {:expr, tokens} as-is

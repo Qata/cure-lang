@@ -67,12 +67,13 @@ defmodule Cure.Elab.Relevance do
       |> Enum.map(fn {_q, idx} -> idx end)
       |> MapSet.new()
 
-    if MapSet.size(erased) == 0 do
-      :ok
-    else
-      st = %{env: env, name: name, erased: erased}
-      walk(body, length(quantities), :returned, st)
-    end
+    # No early-out when `erased` is empty. Erasedness does not only originate at
+    # the signature: matching a constructor with an erased FIELD introduces a fresh
+    # erased binder (see the `:case` clause's `branch_erased` fold), so an ordinary
+    # all-`:present` function can still return a value that `Erase.erase` deletes.
+    # Idris's `lcheck` (Core/LinearCheck.idr) likewise always walks the body — there
+    # is one notion of erased, not a checked and an unchecked one.
+    walk(body, length(quantities), :returned, %{env: env, name: name, erased: erased})
   end
 
   # --- relevant positions: an erased-parameter occurrence here is a violation --
@@ -109,7 +110,9 @@ defmodule Cure.Elab.Relevance do
 
   # Constructor: same present/erased split, via the family's ctor quantities.
   defp walk({:ctor, cname, args}, depth, _site, st) do
-    quantities = Inductive.ctor_quantities(st.env, cname) || List.duplicate(:present, length(args))
+    quantities =
+      (Inductive.ctor_quantities(st.env, cname) || List.duplicate(:present, length(args)))
+      |> pad(length(args))
 
     args
     |> Enum.zip(quantities)
@@ -200,8 +203,20 @@ defmodule Cure.Elab.Relevance do
 
   # Conservative padding: an argument position with no declared quantity is
   # treated as `:present` (relevant), never silently exempted.
-  defp pad(qs, n) when length(qs) >= n, do: Enum.take(qs, n)
-  defp pad(qs, n), do: qs ++ List.duplicate(:present, n - length(qs))
+  defp pad(qs, n) when length(qs) == n, do: qs
+
+  # Over-application: the extra arguments apply to the callee's RESULT and are always present.
+  defp pad(qs, n) when length(qs) < n, do: qs ++ List.duplicate(:present, n - length(qs))
+
+  # Fewer arguments than declared quantities: by `Erase.erase/2`'s own convention, the term is
+  # ALREADY ERASED — its erased arguments have been dropped, so the survivors occupy the
+  # ORIGINAL trailing positions, not the leading ones. `Enum.take(qs, n)` realigned them onto
+  # the leading labels, and a genuinely present survivor landing on an `:erased` label was
+  # silently exempted from the relevance check. Erase guards this exact case ("re-zipping the
+  # full quantity vector against the shrunk arg list would realign survivors onto leading
+  # positions and DROP them"); Relevance, its documented dual, did not. Every surviving
+  # argument of an already-erased term is relevant.
+  defp pad(_qs, n), do: List.duplicate(:present, n)
 
   defp each(list, fun) do
     Enum.reduce_while(list, :ok, fn item, :ok ->

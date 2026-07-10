@@ -1,12 +1,27 @@
 defmodule Cure.Elab.CrossModuleNamesTest do
   @moduledoc """
-  A module is a namespace: each `mod` compiles to its own BEAM module (`Cure.A`,
-  `Cure.B`), so two SIBLING modules sharing a function / type / constructor name is
-  legitimate (the stdlib has `map` in five modules, `show`/`eq` in six). Cross-module
-  collisions are resolved by the E-layer resolution/rekey machinery (LOCKED
-  type-shadowing Approach B), NOT by outright rejection. The within-module
-  duplicate checks must therefore be scoped PER MODULE — a repeat only within one
-  module is the silent-overwrite soundness bug.
+  A module is a namespace: each `mod` compiles to its own BEAM module (`Cure.A`, `Cure.B`), so
+  two modules sharing a function / type / constructor name is legitimate — the stdlib has `map`
+  in six modules. Those collisions are resolved by the E-layer resolution/rekey machinery
+  (`Resolution.rekey_module_env`, LOCKED type-shadowing Approach B), not by rejection.
+
+  That rekey machinery runs on IMPORTED module slices. It does not run on two sibling `mod`
+  blocks in one compilation unit, and that distinction is load-bearing. `declarations/1`
+  flattens every sibling of one AST into a single list before `elaborate_declarations/3` runs,
+  so siblings share one flat `env.defs` / `env.families` / `env.ctor_to_family`, each a plain
+  `Map.put`. This file used to assert `{:ok, _}` for exactly that case without ever inspecting
+  which declaration survived. It did not survive:
+
+    * `mod A fn foo = 1 end  mod B fn foo = 2 end` kept only B's body. A's own callers would
+      δ-unfold B's `foo`.
+    * `mod A type Foo = MkA end  mod B type Foo = MkB end` left `MkA` registered as a
+      constructor whose `ctor_to_family` entry names a family whose constructor set holds only
+      `MkB` — the incoherent state `check_no_duplicate_ctors` rejects within one module.
+
+  So sibling collisions are now rejected. Rekeying them instead would mean elaborating each
+  sibling into its own slice, which would break the bare cross-sibling references flat
+  elaboration makes work today (see the last test). The within-module duplicate checks stay
+  scoped per module: a repeat inside one module remains its own, distinct error.
   """
   use ExUnit.Case, async: false
 
@@ -19,28 +34,55 @@ defmodule Cure.Elab.CrossModuleNamesTest do
     Program.check_ast(ast)
   end
 
-  test "two sibling modules may share a function name" do
-    src = "mod A\n  fn foo(x: Int) -> Int = x\nend\nmod B\n  fn foo(x: Int) -> Int = 99\nend\n"
-    assert {:ok, _} = check(src)
+  describe "modules in separate files may share names (the rekey path)" do
+    test "two imported stdlib modules both declaring `map` coexist" do
+      # Std.Result and Std.Vector each declare their own `map`. The import rekey path keeps
+      # both; this is the guarantee the sibling check below must not disturb.
+      src = "mod Client\n  use Std.Result\n  use Std.Vector\n  fn f() -> Int = 1\nend\n"
+      assert {:ok, _} = check(src)
+    end
   end
 
-  test "two sibling modules may share a type name" do
-    src = "mod A\n  type Foo = MkA\nend\nmod B\n  type Foo = MkB\nend\n"
-    assert {:ok, _} = check(src)
+  describe "sibling modules in ONE compilation unit may not share a name" do
+    test "a shared function name is rejected, naming both owners" do
+      src = "mod A\n  fn foo(x: Int) -> Int = x\nend\nmod B\n  fn foo(x: Int) -> Int = 99\nend\n"
+      assert {:error, {:sibling_module_collision, :foo, [:A, :B]}} = check(src)
+    end
+
+    test "a shared type name is rejected" do
+      src = "mod A\n  type Foo = MkA\nend\nmod B\n  type Foo = MkB\nend\n"
+      assert {:error, {:sibling_module_collision, :Foo, [:A, :B]}} = check(src)
+    end
+
+    test "a shared constructor name is rejected even across different families" do
+      src = "mod A\n  type Foo = C\nend\nmod B\n  type Bar = C\nend\n"
+      assert {:error, {:sibling_module_collision, :C, [:A, :B]}} = check(src)
+    end
+
+    test "a function in one sibling colliding with a constructor in another is rejected" do
+      # `fn` names and constructor names share one bare-atom namespace, exactly as
+      # `check_no_fn_ctor_collision` establishes within a single module.
+      src = "mod A\n  fn C(x: Int) -> Int = x\nend\nmod B\n  type Bar = C\nend\n"
+      assert {:error, {:sibling_module_collision, :C, [:A, :B]}} = check(src)
+    end
+
+    test "siblings with disjoint names are fine, and may still call each other by bare name" do
+      src = "mod A\n  fn bar() -> Int = 7\nend\nmod B\n  fn baz() -> Int = bar()\nend\n"
+      assert {:ok, env} = check(src)
+      assert env.defs[:bar]
+      assert env.defs[:baz]
+    end
   end
 
-  test "two sibling modules may share a constructor name" do
-    src = "mod A\n  type Foo = C\nend\nmod B\n  type Bar = C\nend\n"
-    assert {:ok, _} = check(src)
-  end
+  describe "a duplicate within one module keeps its own error" do
+    test "function" do
+      src = "mod A\n  fn foo(x: Int) -> Int = x\n  fn foo(y: Int) -> Int = y\nend\n"
+      assert {:error, {:duplicate_definition, :foo}} = check(src)
+    end
 
-  test "a duplicate WITHIN one module is still rejected (function)" do
-    src = "mod A\n  fn foo(x: Int) -> Int = x\n  fn foo(y: Int) -> Int = y\nend\n"
-    assert {:error, {:duplicate_definition, :foo}} = check(src)
-  end
-
-  test "a duplicate WITHIN one module is still rejected (constructor across two types)" do
-    src = "mod A\n  type Foo = C | D\n  type Bar = C | E\nend\n"
-    assert {:error, {:duplicate_constructor, :C}} = check(src)
+    test "constructor across two types" do
+      src = "mod A\n  type Foo = C | D\n  type Bar = C | E\nend\n"
+      assert {:error, {:duplicate_constructor, :C}} = check(src)
+    end
   end
 end

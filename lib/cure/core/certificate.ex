@@ -208,8 +208,31 @@ defmodule Cure.Core.Certificate do
   defp walk_node(emit, {:ctor, _n, args}, st, acc),
     do: Enum.reduce(args, acc, fn a, ac -> walk(emit, a, st, ac) end)
 
-  # Leaves (vars, literals, types, untracked globals): no call, no matrix.
+  # Fallback for any tuple node not matched above: a genuine leaf (`{:var,_}`,
+  # `{:int_lit,_}`, an untracked `{:global,_}`), OR an unrecognized/future form. Descend
+  # CONSERVATIVELY into every element that is itself a term-tuple or a list of them —
+  # the same fail-closed discipline as `Validator.children/1`. Genuine leaves carry only
+  # atoms and integers, so they yield no children and cost nothing.
+  #
+  # It used to return `acc` unchanged, which reads "no call here" for a node whose shape
+  # this module has never seen. A self-call one wrapper deep was then invisible to the
+  # change-matrix builder, and the moduledoc's claim that "the kernel never certifies a
+  # function it cannot prove total" was false for `terminating?/3` called in isolation.
+  # `terminating?/3` is public, and `certify_hardening_test.exs` already calls it directly.
+  defp walk_node(emit, term, st, acc) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.reduce(acc, fn
+      child, ac when is_tuple(child) -> walk(emit, child, st, ac)
+      children, ac when is_list(children) -> Enum.reduce(children, ac, &descend_unknown(emit, &1, st, &2))
+      _leaf, ac -> ac
+    end)
+  end
+
   defp walk_node(_emit, _term, _st, acc), do: acc
+
+  defp descend_unknown(emit, child, st, acc) when is_tuple(child), do: walk(emit, child, st, acc)
+  defp descend_unknown(_emit, _child, _st, acc), do: acc
 
   # Enter a case branch matching `scrut` with constructor `ctor`/arity `ar`:
   # shift the frame by `ar`, then for each parameter decide whether `scrut`
@@ -607,6 +630,19 @@ defmodule Cure.Core.Certificate do
       calls?(name, s) or calls?(name, m) or
         Enum.any?(brs, fn {_c, _ar, b} -> calls?(name, b) end)
 
+
+  # Same fail-closed fallback as `walk_node/4`: an unrecognized node is searched, not
+  # assumed call-free. This is the fast path that decides whether `size_change_total?/2`
+  # runs at all, so a false `false` here certifies a function nobody ever analysed.
+  defp calls?(name, term) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.any?(fn
+      child when is_tuple(child) -> calls?(name, child)
+      children when is_list(children) -> Enum.any?(children, &(is_tuple(&1) and calls?(name, &1)))
+      _leaf -> false
+    end)
+  end
 
   defp calls?(_name, _term), do: false
 end

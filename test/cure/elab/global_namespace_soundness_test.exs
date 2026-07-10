@@ -43,14 +43,21 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
     assert {:error, {:duplicate_definition, :foo}} = check(src)
   end
 
-  test "a fn/ctor name collision cannot smuggle an ill-typed value past the kernel" do
-    # `C` is both a constructor (: Foo) and a fn (() -> Int). Passing `C()` where a
-    # `Foo` is expected must never be accepted: resolution picks the fn (Int) and the
-    # kernel rejects Int-vs-Foo. (Sound regardless of which side resolution favours.)
+  test "a fn/ctor name collision within one module is rejected outright" do
+    # `C` is both a constructor (: Foo) and a fn (() -> Int). Cure has no type-directed
+    # constructor disambiguation, so whichever side `Resolution` favours, the other is
+    # silently unreachable by name — a silent overwrite, not a choice. Reject it.
+    #
+    # This used to assert `{:conversion_failure, _, _}` on `wants(C())`, which passed for
+    # the wrong reason: `type Foo = C` was mis-elaborated as an ALIAS to a nonexistent
+    # family `C`, so `C` only ever named the function and the kernel caught Int-vs-Foo at
+    # the call. Once `type Foo = C` correctly declares the constructor, `wants(C())`
+    # resolves to it and is perfectly well-typed — nothing ill-typed was ever smuggled,
+    # and nothing forced the collision to surface.
     src =
       "mod X\n  type Foo = C\n  fn C() -> Int = 3\n  fn wants(x: Foo) -> Int = 0\n  fn test() -> Int = wants(C())\nend\n"
 
-    assert {:error, {:conversion_failure, _, _}} = check(src)
+    assert {:error, {:constructor_function_collision, :C}} = check(src)
   end
 
   # ---------------------------------------------------------------------------

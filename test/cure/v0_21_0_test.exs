@@ -83,7 +83,7 @@ defmodule Cure.V0_21_0Test do
         fn apply_cb(cb: Callback, x: Int) -> Int =
           match cb
             On(f) -> f(x)
-            Off -> x
+            Off() -> x
       """
 
       assert {:ok, _mod, _warnings} = compile(source)
@@ -97,7 +97,7 @@ defmodule Cure.V0_21_0Test do
         fn apply_t(t: Transform, a: Int, b: Int) -> Int =
           match t
             Morph(f) -> f(a, b)
-            Id -> a
+            Id() -> a
       """
 
       assert {:ok, _mod, _warnings} = compile(source)
