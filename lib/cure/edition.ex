@@ -108,16 +108,22 @@ defmodule Cure.Edition do
     end
   end
 
-  # A fenced doc comment opens on a line whose first non-whitespace characters are
-  # `###` (three or more hashes), matching the lexer's `lex_fenced_doc` trigger
-  # (`#` followed by two more `#`). `##` is a single-line doc comment, not a fence,
-  # and is handled by `trivia_line?`.
-  defp fence_open_line?(line), do: String.starts_with?(String.trim_leading(line), "###")
+  # A fenced doc comment opens (and closes) on a line whose first non-space
+  # characters are `###`. The lexer measures leading indentation with
+  # `count_leading_spaces`, which counts ONLY the ASCII space 0x20 (tabs are a hard
+  # `:tab_not_allowed` error, and other whitespace — form-feed, vertical-tab — is
+  # never indentation). So the pre-scan must strip only leading 0x20 spaces before
+  # testing for `###`, NOT String.trim_leading/1 (which strips all Unicode
+  # whitespace): a `\t###`/`\f###` line is fence *body* to the lexer, and treating
+  # it as a fence marker made the pre-scan close a fence early and read a buried
+  # @edition as a pragma the compiler never sees. `##` (exactly two hashes) is a
+  # single-line doc comment, not a fence, and is handled by `trivia_line?`.
+  defp fence_open_line?(line), do: String.starts_with?(drop_leading_spaces(line), "###")
 
   # Consume the body of a fenced doc comment: drop lines until (and including) the
-  # next line whose first non-whitespace characters are `###` (the close), matching
-  # the lexer's `fence_close_line?`. Returns the source after the close. If EOF is
-  # reached first the whole remainder is consumed (unterminated fence).
+  # next fence marker line (the close), matching the lexer's `fence_close_line?`.
+  # Returns the source after the close. If EOF is reached first the whole remainder
+  # is consumed (unterminated fence).
   defp skip_fence(source) do
     case String.split(source, "\n", parts: 2) do
       [line, rest] -> if fence_open_line?(line), do: rest, else: skip_fence(rest)
@@ -125,10 +131,22 @@ defmodule Cure.Edition do
     end
   end
 
+  # A line is trivia (blank or a `#`/`##` comment) iff, after stripping leading
+  # ASCII spaces (the only whitespace the lexer treats as indentation), it is empty
+  # or starts with `#`. Leading indentation is 0x20-only for the same reason as
+  # `fence_open_line?`: a line whose non-space run leads with a tab is not a
+  # skippable comment to the lexer (it is a `:tab_not_allowed` error), so the
+  # pre-scan must stop there rather than skip it and fabricate a pragma downstream.
   defp trivia_line?(line) do
-    t = String.trim(line)
+    t = line |> drop_leading_spaces() |> String.trim_trailing()
     t == "" or String.starts_with?(t, "#")
   end
+
+  # Strip leading ASCII spaces (0x20) only, mirroring the lexer's
+  # `count_leading_spaces`. Tabs and other whitespace are deliberately preserved so
+  # the pre-scan classifies them exactly as the lexer would.
+  defp drop_leading_spaces(<<?\s, rest::binary>>), do: drop_leading_spaces(rest)
+  defp drop_leading_spaces(line), do: line
 
   defp pragma_capture(line) do
     # Anchored at column 0 (`^@`, not `^\s*@`): an INDENTED pragma is not

@@ -52,6 +52,38 @@ defmodule Cure.EditionTest do
       src = "  ###\n  @edition(\"2025\")\n  ###\nmod M\n"
       assert Cure.Edition.pragma_edition(src) == nil
     end
+
+    # Iteration 13 (audit): the fence detector used String.trim_leading/1, which
+    # strips ALL Unicode whitespace (tab, form-feed, vertical-tab), whereas the
+    # lexer's count_leading_spaces counts ONLY the ASCII space 0x20. So a fence
+    # body line whose `###` is preceded by a non-space whitespace char closed the
+    # fence for the pre-scan but not the lexer — the pre-scan resumed inside the
+    # still-open doc comment and read a buried @edition as a pragma. The lexer
+    # keeps the whole block as one :doc_comment (no @ token), so there is no
+    # pragma; a valid file was rejected with a spurious {:unknown_edition, ...}.
+    test "a non-space-indented ### inside a fence body does not close the fence" do
+      for ws <- ["\t", "\f", "\v"] do
+        src = "###\n#{ws}###\n@edition(\"2027\")\n###\ncode\n"
+        assert Cure.Edition.pragma_edition(src) == nil,
+               "ws #{inspect(ws)}: buried @edition wrongly read as a pragma"
+      end
+    end
+
+    # Agreement guard: a SPACE-indented ### genuinely closes the fence for the
+    # lexer (count_leading_spaces counts 0x20), so the following @edition IS a
+    # real file-leading pragma. The fix must keep reading it.
+    test "a space-indented ### does close the fence, exposing a following pragma" do
+      src = "###\n ###\n@edition(\"2026\")\n###\ncode\n"
+      assert Cure.Edition.pragma_edition(src) == "2026"
+    end
+
+    # A tab-indented ### as the opening line is not a fence for the lexer (it
+    # rejects the leading tab as :tab_not_allowed); the pre-scan must not fabricate
+    # a pragma from a line the lexer never accepts.
+    test "a tab-indented ### opening line does not fabricate a pragma" do
+      src = "\t###\n@edition(\"2027\")\nmod M\n"
+      assert Cure.Edition.pragma_edition(src) == nil
+    end
   end
 
   describe "resolve/1 precedence" do
