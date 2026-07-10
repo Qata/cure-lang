@@ -355,7 +355,16 @@ defmodule Cure.Elab.Relevance do
   # (not ω) never under-counts. Any other shape → `:not_join`, keeping the sound,
   # conservative ω-scale of the generic `:let`/`:lam` path.
   defp join_view({:lam, lg, _dom, jbody}, {:case, scrut, motive, branches}, depth) do
-    if join_binder_safe?(scrut, motive, branches, depth) do
+    # The continuation's parameter grade `lg` must be unrestricted. The un-join scales
+    # a branch argument by `lg` (`scale(us0, lg)`); a RESTRICTED `lg` — in particular
+    # `:erased` — would annihilate that argument's usage (`mul(:erased, _) = :erased`)
+    # while `Erase` still keeps the call argument (`{:var}`-headed apps are never
+    # dropped), an under-rejection. Today every `:lam` is `ω` (no surface syntax grades
+    # a lambda parameter), so this is belt-and-suspenders — but making it STRUCTURAL
+    # keeps a future lambda-grade slice from silently re-opening the hole (both round-3
+    # red-team agents flagged this exact landmine). A restricted `lg` → the sound
+    # generic `:let` path (which ω-scales the whole lambda value).
+    if not Grade.restricted?(lg) and join_binder_safe?(scrut, motive, branches, depth) do
       {:join, lg, jbody, scrut, branches}
     else
       :not_join
