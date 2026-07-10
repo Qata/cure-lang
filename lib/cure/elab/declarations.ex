@@ -81,6 +81,20 @@ defmodule Cure.Elab.Declarations do
           end
         end
 
+      :opaque ->
+        # `opaque type Name(params)` — a constructor-less, non-eliminable carrier
+        # family. Elaborate the parameter telescope (each `a : Type0`), then
+        # register a family MARKED opaque with zero constructors. No ctor or
+        # positivity checks (there are none); the marker makes the kernel refuse
+        # to eliminate it (Agda `postulate`).
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+
+        with {:ok, param_tele} <-
+               elaborate_index_telescope(params, name, env, [], :duplicate_parameter) do
+          declare_opaque_at_min_level(env, name, param_tele, 0)
+        end
+
       other ->
         {:error, {:unsupported_container, other}}
     end
@@ -1337,6 +1351,24 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp declare_indexed_at_min_level(_env, _name, _param_tele, _index_tele, _ctors, _level),
+    do: {:error, :universe_ceiling}
+
+  # Opaque (postulate) family: register with the `opaque: true` marker and zero
+  # constructors, checking only that the parameter telescope is well-formed
+  # (level search on `:universe_level`). There are no constructors, so
+  # check_all_ctors / positive? are vacuous and deliberately skipped.
+  defp declare_opaque_at_min_level(env, name, param_tele, level) when level <= @ceiling do
+    family = Inductive.opaque_family(name, param_tele, level)
+    env2 = Inductive.declare(env, family, [])
+
+    case Kernel.check_family(env2, Inductive.get_family(env2, name)) do
+      :ok -> {:ok, env2}
+      {:error, :universe_level} -> declare_opaque_at_min_level(env, name, param_tele, level + 1)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp declare_opaque_at_min_level(_env, _name, _param_tele, _level),
     do: {:error, :universe_ceiling}
 
   # -- constructors -----------------------------------------------------------

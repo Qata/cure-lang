@@ -198,27 +198,15 @@ defmodule Cure.Core.Kernel do
     case infer(ctx, scrut) do
       {:ok, {:vdata, dname, scrut_args}} ->
         family = Inductive.get_family(sig, dname)
-        # {:vdata} carries params ++ indices; the motive and the branch-index
-        # unifier range over indices only, so split the params off up front.
-        pc = Inductive.param_count(sig, dname)
-        {scrut_params, scrut_idx} = Enum.split(scrut_args, pc)
-        motive_value = Eval.eval(motive, Context.env(ctx))
-
-        with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
-             :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx, scrut_params),
-             :ok <-
-               check_case_branches(
-                 ctx,
-                 sig,
-                 dname,
-                 motive_value,
-                 branches,
-                 scrut_idx,
-                 scrut_params
-               ) do
-          # Result type = motive at the scrutinee's actual indices and value (§4.4).
-          scrut_value = Eval.eval(scrut, Context.env(ctx))
-          {:ok, apply_motive(motive_value, scrut_idx ++ [scrut_value])}
+        # An OPAQUE (postulate) family is non-eliminable: refuse the `case`
+        # BEFORE coverage. A zero-constructor family passes coverage vacuously
+        # (empty branch list = ex-falso, §H), so without this guard an opaque
+        # type would be freely ex-falso-eliminable — the marker, not the ctor
+        # count, is what forbids elimination (Agda `postulate`).
+        if Inductive.opaque_family?(family) do
+          {:error, :opaque_not_eliminable}
+        else
+          infer_case_data(ctx, sig, dname, family, scrut, scrut_args, motive, branches)
         end
 
       {:ok, _other} ->
@@ -226,6 +214,31 @@ defmodule Cure.Core.Kernel do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  defp infer_case_data(ctx, sig, dname, family, scrut, scrut_args, motive, branches) do
+    # {:vdata} carries params ++ indices; the motive and the branch-index
+    # unifier range over indices only, so split the params off up front.
+    pc = Inductive.param_count(sig, dname)
+    {scrut_params, scrut_idx} = Enum.split(scrut_args, pc)
+    motive_value = Eval.eval(motive, Context.env(ctx))
+
+    with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
+         :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx, scrut_params),
+         :ok <-
+           check_case_branches(
+             ctx,
+             sig,
+             dname,
+             motive_value,
+             branches,
+             scrut_idx,
+             scrut_params
+           ) do
+      # Result type = motive at the scrutinee's actual indices and value (§4.4).
+      scrut_value = Eval.eval(scrut, Context.env(ctx))
+      {:ok, apply_motive(motive_value, scrut_idx ++ [scrut_value])}
     end
   end
 

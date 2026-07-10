@@ -247,6 +247,18 @@ defmodule Cure.Core.Inductive do
     do: %{name: name, params: param_tele, indices: index_tele, level: level}
 
   @doc """
+  Build an OPAQUE (postulate) family signature: constructor-less and marked
+  `opaque: true` so the kernel refuses to eliminate it (Agda `postulate T :
+  Set`). Distinct from a genuinely-empty inductive — which is unmarked and
+  remains ex-falso-eliminable. An opaque type carries values (e.g. `@extern`
+  BEAM ops) through the TCB to codegen without the kernel ever inspecting or
+  unfolding them. Always parameter-only (no indices).
+  """
+  @spec opaque_family(atom(), telescope(), non_neg_integer()) :: family()
+  def opaque_family(name, param_tele, level),
+    do: %{name: name, params: param_tele, indices: [], level: level, opaque: true}
+
+  @doc """
   Build a constructor signature. Every argument defaults to runtime-relevant
   (`:present`, quantity ω); use `ctor/4` to mark inferred index arguments
   `:erased` (quantity 0) so they are dropped by erasure (M8.3 / M9).
@@ -296,6 +308,19 @@ defmodule Cure.Core.Inductive do
   @doc "Is `name` a registered family?"
   @spec family?(Env.t(), atom()) :: boolean()
   def family?(%Env{families: fs}, name), do: Map.has_key?(fs, name)
+
+  @doc """
+  Is `name` an OPAQUE (postulate) family? The `opaque: true` marker — not the
+  constructor count — is what makes a type non-eliminable, so a genuinely-empty
+  inductive answers `false` here while `opaque type Effect` answers `true`.
+  """
+  @spec opaque?(Env.t(), atom()) :: boolean()
+  def opaque?(%Env{} = env, name), do: opaque_family?(get_family(env, name))
+
+  @doc "Is `family` (a family map or nil) marked opaque?"
+  @spec opaque_family?(family() | nil) :: boolean()
+  def opaque_family?(%{opaque: true}), do: true
+  def opaque_family?(_), do: false
 
   @doc "The family signature for `name`, or nil."
   @spec get_family(Env.t(), atom()) :: family() | nil

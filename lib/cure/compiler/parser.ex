@@ -1332,6 +1332,11 @@ defmodule Cure.Compiler.Parser do
       :type ->
         parse_type_def(state)
 
+      # `opaque type Name(params)` — a constructor-less, non-eliminable carrier
+      # type. Consume `opaque`, then parse the type head with the opaque flag.
+      :opaque ->
+        parse_type_def(advance(state), opaque: true)
+
       :typealias ->
         parse_typealias(state)
 
@@ -3007,7 +3012,8 @@ defmodule Cure.Compiler.Parser do
     {{:type_annotation, meta, [rhs]}, state}
   end
 
-  defp parse_type_def(state) do
+  defp parse_type_def(state, opts \\ []) do
+    opaque? = Keyword.get(opts, :opaque, false)
     token = peek(state)
     state = advance(state)
 
@@ -3030,11 +3036,20 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
-    case peek(state) do
-      %Token{type: :keyword, value: :indices} ->
+    cond do
+      # `opaque type Name(params)` — no `= …` body, no indices, no ctors. The
+      # head params become the family's uniform parameters; the empty variant
+      # list plus the `:opaque` container tag drive the non-eliminable marker.
+      opaque? ->
+        type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
+        meta = [container_type: :opaque, name: name, line: token.line, col: token.col]
+        meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+        {{:container, meta, []}, state}
+
+      match?(%Token{type: :keyword, value: :indices}, peek(state)) ->
         parse_indexed_family(state, name, head_params, token)
 
-      _ ->
+      true ->
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
         parse_type_def_adt(state, name, type_params, token)
     end
