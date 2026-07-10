@@ -18,7 +18,9 @@ form — **losslessly**, preserving every comment. Warn-now → error-later.
 
 The uppercase-type-var → lowercase rule is the first *new* client; the existing
 `if`/`elif` → `pickup` rewrite (today in `mix cure.rewrite`) is the first
-*existing* client to fold into the registry.
+*existing* client to fold into the registry. A third seed, the `@group` hoist
+(§5.5), is the first *relocation* rule — it moves a decorator rather than
+transforming a node in place, exercising the trivia model's carry path.
 
 ## 2. Operator-decided constraints (locked, not open)
 
@@ -295,6 +297,25 @@ A rule is a struct:
     e.g. `t` → `t1` → `t2`, recursively checked so a freshened name cannot
     collide with an existing or previously-freshened binder) and warn —
     **never silently merge.**
+  - `@group(:x)` hoist (`:syntactic`) — relocate an in-body `@group(...)`
+    decorator to directly above the module's `mod` declaration; idempotent
+    (a file already in the above-`mod` form is left unchanged). This
+    supersedes the fragile line-regex codemod at
+    `787a9745…/scratchpad/migrate_group.exs`, which manually collapses a
+    trailing blank line and would mangle or drop any comment on/around the
+    `@group` line. **This is the first rule that is a *relocation* (detach a
+    node + reinsert it elsewhere), not an in-place transform**, so it is the
+    load-bearing exercise of two facility properties: (1) `Trivia.carry/2`
+    (§5.2) — comments attached to the `@group` node must travel with it to
+    its new position, and the trivia at its old slot must re-home to the
+    following sibling; (2) the §5.4 blank-line policy — the blank the
+    line-regex script hand-collapses is normalized automatically. It also
+    confirms the registry's `detect_and_rewrite: (ast, ctx) -> {:rewrite,
+    ast} | :no_change` signature is general enough for a move with **no
+    signature change** (it returns a whole rewritten AST). Implementation
+    prerequisite: confirm how module-level vs body-level decorator
+    attachment is represented in the AST (`{:decorator, …}` nodes exist and
+    the Printer already renders them) before writing the rewrite.
 
 ### 5.6 `cure migrate` CLI + policy
 
@@ -392,7 +413,8 @@ design didn't anticipate hitting a Printer/trivia gap despite the gates in
    round-trip gate.
 3. **Rule registry** — `Cure.Migrate.Rule` + registry; port `if/elif→pickup`
    (including resolving its known parenthesised-context reparse limitation,
-   §5.5) and uppercase-type-var→lowercase; wire the `cure build`
+   §5.5), uppercase-type-var→lowercase, and the `@group` hoist (the first
+   relocation rule — exercises `Trivia.carry/2`); wire the `cure build`
    warn-and-tolerate consumer.
 4. **`cure migrate` CLI + policy + git guard** — subcommand, `--check`/`--print`/
    `--strict`, git-safety guard, batch-atomicity preflight (§5.8).
@@ -422,7 +444,11 @@ faithful whole-file reprint and must not be skipped.
   freshen-and-warn case (including a freshen that must skip past an
   already-used `t1` to `t2`), and `if/elif→pickup` on a conditional embedded in
   a call-argument list (the known parenthesised-context case, §5.5) reparsing
-  successfully post-fix.
+  successfully post-fix. The `@group` hoist additionally has a
+  **comment-carry-across-move** red case: a `#`-comment attached to the in-body
+  `@group(...)` line must appear attached to the hoisted decorator above `mod`
+  (never dropped, never left orphaned at the old slot), and an idempotence case
+  (a file already in above-`mod` form is unchanged).
 - **`cure migrate` CLI tests:** in-place, `--check` exit code, `--print`,
   `--strict` error promotion, the git-guard refusal (dirty tree / untracked
   file, and a staged-only case — changes in the index but no working-tree
@@ -436,8 +462,46 @@ faithful whole-file reprint and must not be skipped.
 ## 8. Out of scope (v1)
 
 - Per-rule warn→error maturity levels (one global `--strict` for now).
-- Any new migration rules beyond the two seeds.
+- Any new migration rules beyond the **three** seeds (if/elif→pickup,
+  uppercase-type-var→lowercase, `@group` hoist).
 - A full concrete-syntax-tree replacing the AST (the trivia-on-`meta` model is
   sufficient for lossless reprint; a CST is not needed and not built).
 - Migrating the kernel/elaborator or the classic-pipeline rip-out (unrelated;
   tracked elsewhere).
+- Repointing `cure fmt` onto the trivia Printer (see §9 — the trivia Printer
+  built here is Layer 1 of that future change, but the change itself is not v1).
+
+## 9. Future work — `cure fmt` / `cure migrate` convergence (post-v1)
+
+Operator direction (2026-07-10): later, repoint `cure fmt` off its current
+Algebra formatter (`Cure.Compiler.Formatter.format_algebra`) onto the lossless
+trivia Printer built here, and give the Printer a conservative Algebra layout
+layer, so `cure fmt` can format **without** the git-clean guard.
+
+**Why the git guard is a migration-only concern, not a formatting one.**
+`cure migrate` runs rewrite *rules* that **restructure** the AST, so the guard
+exists to make a possibly-buggy rule trivially revertable — a safety net against
+*rule* errors. Pure formatting does not change the tree; it re-lays-out the same
+AST. A formatter that is both **lossless** (trivia model) and **round-trip
+verified** (reparse → compare → bail to original on any mismatch) cannot lose
+information — worst case is "no change," never a corrupted file — exactly why
+`gofmt`/`prettier`/`mix format` run freely on a dirty tree. So `cure fmt` needs
+no guard.
+
+**Layering.**
+
+```
+L1  total, trivia-aware Printer          ← built in this v1 (Phases 1–2), shared
+L2  + conservative Algebra layout        ← width-aware breaking (future; reuse algebra.ex)
+L3a cure fmt   = L2 + comment-aware verify + bail-to-original, NO rules, NO guard
+L3b cure migrate = L2 + rule pass + git guard + batch atomicity  (this v1 minus L2)
+```
+
+**The one required semantic flip.** Today's `verify_algebra`
+(`formatter.ex:146-166`) **strips `{:comment}` nodes before comparing**, so its
+"safe" means structurally-safe, comments be damned. For a lossless `cure fmt`
+the verify must become **comment-aware** — compare the attached trivia too and
+bail if any comment would move or vanish. Without that flip, "conservative" does
+not imply "lossless." Building the migration engine now delivers ~80% of this
+future repoint; what remains later is the Algebra-layer reuse plus this verify
+change.
