@@ -1,63 +1,57 @@
-# Autopilot completion report — kernel-parity-batch
+# Autopilot Completion Report — Cure Editions
 
-**Branch:** `autopilot/kernel-parity-batch` · **Status:** ALL SEVEN INITIATIVES LANDED · **Final gate at HEAD:** full suite 3291 passed / 0 failed (6 pre-existing skips), Antigen 503/503, oracle replay 65/65 zero divergence.
+**Branch:** `autopilot/editions` (worktree `.claude/worktrees/editions`)
+**Status:** ✅ Complete — full suite green, ready for review & merge. **NOT auto-merged.**
+**Final gate:** `MIX_ENV=test mix test` → **3817 passed, 0 failures** (3 doctests, 3814 tests; baseline before this work was 3778). Antigen shape-coverage 309/309.
 
-**Do not auto-merge — operator merges.** Review this branch and merge into `main` when satisfied.
+> The previous run's report (kernel-parity-batch) that this file replaces remains in git history.
 
-Every initiative ran the full chain: scout → spec → recursive-skeptical-review (Sonnet, 2 consecutive clean passes) → plan → plan review → Opus execution, each stage committed before the next. All commits ghost-authored (`Made In Heaven`), no trailers.
+## What shipped
 
----
+A Rust-style **editions** system layered over Cure's migration facility (spec scope "C"): editions gate the parser keyword set and carry per-rule provenance; `cure migrate` rewrites both keyword and stdlib changes across an edition boundary and can stamp the new edition; there is no edition-conditional stdlib resolver (renamed names error with a fix-hint). Edition identity is a calendar-year string; precedence is file `@edition("YYYY")` pragma > `Cure.toml` `[project].edition` > compiler default. Editions begin at "2026"; `proto`→`interface` is the first forward deprecation (`enforced_in: nil`).
 
-## #10 — Global-def collision fix (A)
+## Stage-by-stage outcome
 
-Cross-module same-named functions no longer silently overwrite: globals gained the same collision protection families/ctors already had. Landed and gated earlier in the batch.
+| Stage | Outcome | Commit(s) |
+|-------|---------|-----------|
+| 0 — Brainstorm + spec | Design approved by operator; spec written | `1a3dc93` |
+| 1 — Spec review (Sonnet, recursive-skeptical) | Hardened to convergence | `fe97bc2` |
+| 2 — Plan (writing-plans) | 13-task plan across 7 phases | `426fcf9` |
+| 3 — Plan review (Sonnet, recursive-skeptical) | Hardened to convergence | `bf5b606` |
+| 4 — Execute (Opus, TDD) | 12 task commits (Tasks 3+4 atomic), all green | `0fb93db` … `813093d` |
+| 5 — Verify + report | Full suite green; this report; notify | — |
 
-## #11 — Identity-type-as-inductive kernel surgery (B)
+## Task commits (Stage 4)
 
-Primitive `{:eq}`/`{:refl}`/`{:rewrite}` retired to a genuine inductive `Eq` with refl-matching and rewrite-as-sugar (Agda/Lean/Idris-aligned, K/UIP adopted). Validator-ratcheted (`no_eq_node`/`no_rewrite_node: :reject`).
+- `0fb93db` Task 1 — `Cure.Edition` identity, ordering, validation
+- `d5ac15a` Task 2 — `resolve/1` precedence + `Cure.toml [project].edition`
+- `309bcc6` Tasks 3+4 (atomic) — `tier`/`since`/`enforced_in` provenance replaces `tolerate_safe?` on `Rule`; 5 rules re-tagged
+- `b2dca93` Task 5 — edition-derived keyword set in the lexer
+- `d2f00bf` Task 6 — thread `:edition` through the parser; enforce `@edition` placement
+- `ed2014e` Task 7 — `run_to_fixpoint/2` with reparse verify + `@max_passes 8` backstop
+- `30ff52c` Task 8 — monotone-rewrite property gate over the 44-file stdlib corpus
+- `9231a9a` Task 9 — `proto`/`impl` → `interface`/`implementation` rule (first `retires_keywords` rule) + `parse_impl` `for_type` fix
+- `efba21f` Task 10 — edition-crossing rule selection + lossless `Cure.toml` edition writer
+- `2be6ab5` Task 11 — edition-aware two-phase `cure migrate` (fixpoint rewrite + edition bump, `--strict`, `--edition`)
+- `813093d` Task 12 — Antigen coverage probes for the edition keyword-set + migrate fixpoint (manifest 307→309)
+- Task 13 — full-suite gate: no fixups needed, no commit (tree already green)
 
-## #12 — Parity queue C
+## Notable in-flight corrections (subagents caught real defects)
 
-Dot syntax, match constructor guards, Nat→Int erasure — the operator-queued parity items, landed with oracle verification.
+1. **Task 7** — the plan's convergence check `new_ast == ast` was provably wrong: paired flip rules cancel to identity, so pass 1 looks converged. Fixed with a per-step `rewrote?` flag (converge only when AST unchanged AND no rule rewrote), so pure `:warn` rules don't loop forever.
+2. **Task 9** — the plan pinned `proto→interface` as tier `:machine`, but `:machine` folds rewrites into `cure build`, which would reroute the stdlib's `Ord`/`Show` to the dependent pipeline that cannot yet compile them (the `<`/`<>` blockers), reddening every build. Downgraded to `:review` (source untouched under `:safe_only`; `cure migrate` still rewrites), with a promote-to-`:machine` note. Also added `Trivia.carry/2` to preserve doc-comments the naive rewrite dropped (caught by the monotone gate).
+3. **Task 12** — the plan expected a raised Antigen floor, but `Cure.Edition`/`Cure.Migrate` aren't among the 8 cover-compiled kernel modules, so the floor is unaffected. Probes are still legitimate soundness assertions gated by the CoverManifest; source trusted over the plan.
 
-## #13 — Sigma retirement (D1 enabler + D2)
+Every deviation trusted real source over a plan snippet and is documented in its commit; no behavioral test was weakened (the only immutable-test edits were plan-sanctioned: Tasks 3+4 fixture keys and Task 11's stale `--strict` pin, both re-asserting the new contract).
 
-- **D1/D1b:** napp motive sort via reify+infer kernel clause + type-position implicit insertion (adjudicated mid-run scope extension, spec §7).
-- **D2:** primitive Sigma family (`{:sigma}/{:pair}/{:fst}/{:snd}`) fully retired to stdlib `Std.Sigma` (`@builtin(:sigma)` inductive + `mk_pair` + projection-`:case`). Bare-2-tuple BEAM ABI preserved. `no_sigma_node: :reject`. Adjudicated core_bridge carve-out (spec §8), behavior-pinned by classic tests.
-- Spec/plan: `docs/superpowers/specs/2026-07-09-sigma-retirement-design.md` (b66cb2f → 466fd36, §8 8a6505d), plan 4479318 → 773eb60. Landed 5707a00…77be1af.
+## Ghost-writing constraint
 
-## #14 — Kernel infer/check coherence
+All 15 run commits authored as `Made In Heaven <madeinheaven@madeinheaven.com>`; a trailer scan across all bodies found **zero** `Co-Authored-By` / `Claude-Session` / "Generated with" trailers.
 
-`check`'s ctor clause restructured to an ordered `cond` (foreign-ctor → fields-only → params-on-spine → `check_via_infer` fallback), Lean-aligned (check = infer + def-eq). Fixed reflexive params-on-spine accepted by infer but rejected by check.
-Spec a723931/5b7b46e, plan 3706d55/1983558. **Filed, not fixed:** ledger #28 ctor-spelling value dichotomy (spine vs fields-only diverge below the typing judgement — Conv length-strict, case ι shift, Erase spine params) — an operator design fork (Lean params-always vs Agda fields-only), see memory `ctor-spelling-value-dichotomy`.
+## Follow-on (filed, not done)
 
-## #16 — Antigen source-level vertical (F)
+- **Session task #11** — a migration rule to rewrite tuple **types** in signatures from parenthesized `(A, B)` to `%[A, B]` (the unified-tuple surface), requested mid-run. Investigation attached to the task: neither branch's stdlib carries the syntax in type position, so the change lives in the parser's tuple-type grammar; the executor should start from the parser diff (main vs `feature/idris-parity`) and derive the rewrite from real AST node shapes. Sequenced after this editions work so it inherits the tier/provenance machinery. **Not part of this branch.**
 
-Elaboration-entry challenge family (carried-eq dispatch coverage) added to the Antigen soundness engine.
+## Next step for the operator
 
-## #15 — prim → delta-globals (K2) + K4 closure (E) — the class-closing item
-
-**The last kernel primitive is retired: Core's term grammar is now application spines only** (Pi/lam/app, data/ctor/case, Type/var/global + machine literals). Lean/Idris-aligned: arithmetic is ordinary globals with literal acceleration in the signature-carrying evaluator (Lean `reduce_nat` precedent, Idris2 Builtin-op def-records).
-
-- **Spec** 045cedd → hardened 8de233b → **Amendment A1** 72994f4; **plan** 222e9aa → hardened d7fe402 (13 passes, 28 findings) → A1 deltas 41ac1a2.
-- **Execution** b520176 (Phase 1: 23 builtin-op def-kind globals, registry marker, `unfold_certified_head` compute hook via the audited `Eval.fold` table, R4 nil-body kernel guards) → 65fbc35 (A1 extension) → 922f93d/9523f7a (Phase 2 consumers-first: GuardLint + emit spine recognition, then elaborator 4-way `==`/`!=` dispatch, core_bridge shape-dispatched spines + ordered from_core reverses, Reduce via sig-carrying kernel normalization) → 767140a (Phase 3: full `{:prim}`/`{:nprim}` strip incl. `infer_prim`, `no_prim_node: :reject` wave0+release, §J docs-drift fix, Antigen retargets + new `builtin_op_coherence_test` antibody, K4 absurd closed-as-landed bookkeeping) → bed397f (banked corpus records) → ac473d6 (comment tidy).
-- **Mid-run adjudication (Amendment A1):** the executor's corpus survey found live Nat-`==` ctor guards (`ctor_guard_test.exs`) that the locked monomorphic op set would newly reject — a designated STOP. Verified in source; adjudicated on the parity criterion (Idris2/Lean accept ADT `==`): added polymorphic `struct_eq`/`struct_ne : Pi(a: Type). a -> a -> Bool` builtin-op globals reproducing today's semantics verbatim (kernel-neutral on ADTs — the compute hook reuses `Eval.fold`, which only folds int/float; emit drops the type arg and lowers to BEAM `==`). Op set = 25. `ctor_guard_test` 4/4 byte-identical (no pin flip). Zero programs newly rejected.
-- **One substantive verdict flip, documented in-test:** `unify_meta_completeness_test:60-65` — a meta buried under a prim was walker-opaque (had to refuse); as a spine it decomposes structurally and the meta is soundly SOLVED. Strictly stronger.
-- **New capabilities:** first-class/partial application of ops (curried wrappers), op-argument metavariable solving, minimal Core grammar, Lean-bridge export path unblocked (encoder retarget is future work).
-- **Verified structurally by the orchestrator:** zero `{:prim`/`{:nprim` constructors under `lib/cure/core/`, `lib/cure/elab/`, `lib/antigen/`, `lib/cure/types/core_bridge.ex` (excepted validator predicate + one comment); `lib/cure/types/` diff = exactly `core_bridge.ex` + `reduce.ex`; `lib/cure/compiler/` untouched; ghost authorship on all 9 commits; full suite re-run once at final HEAD by the orchestrator: 3291/0.
-
-**Honest residuals (flagged, not fixed):** core_bridge float free-index defaults to `int_*` (stuck-not-wrong, no live case); GuardLint float ops + `struct_eq` always uninterpreted (sound direction); `seed_ops` Bool-codomain nil on Bool-excluding envs (unreachable, mirrors existing contract); `connective_inline` bare-atom keying (pre-existing, spec §5 follow-up); Lean `module_encoder` still rejects the legacy tuple (export coverage is future work).
-
----
-
-## Filed for operator decision (not tasks, no code changed)
-
-1. **Ledger #28 — ctor-spelling value dichotomy** (from #14): pick ONE canonical value-level ctor spelling (Lean params-always vs Agda fields-only); the divergence sits below the typing judgement (Conv/ι/Erase). Memory: `ctor-spelling-value-dichotomy`.
-2. **`connective_inline` bare-atom keying** in emit — pre-existing smell for user-plausible names (`and`/`or`/`not`/`eq`/`ne`).
-3. **Pre-existing `Equivalent(int,x,y)` nf-idempotence infection** in the coverage fuzzer (predates this batch; queued in `builtin-inductive-foundation` memory).
-
-## Where things live
-
-- Specs/plans: `docs/superpowers/specs/2026-07-09-*.md`, `docs/superpowers/plans/2026-07-09-*.md` (this batch: sigma-retirement, infer-check-coherence, prim-delta-globals).
-- Memory updated: `kernel-primitive-endgame` → **CLASS CLOSED** (all retirements landed, never-candidates locked, don't re-survey).
-- The previous run's report (antigen-pre-port-banking) that this file replaces remains in git history.
+Review and merge `autopilot/editions` into `feature/idris-parity`. The worktree is preserved.
