@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10
 **Status:** design — approved direction, targets 0.35/0.36 (after the inert `Effect(T)` former ships)
-**Supersedes / overturns:** four specific decisions in prior specs, each flagged inline and collected in §12.
+**Supersedes / overturns:** eleven decisions, collected in §12 — four of them locked decisions in prior specs (requiring edits to those documents), the rest corrections to the originating brief and to this design's own earlier drafts.
 **Companions:**
 - `2026-07-09-effect-type-former-design.md` (the inert `Effect(T)` this design builds ON, not against)
 - `2026-07-09-typed-beam-process-algebra-design.md` (rungs 0–2 stand; rung 3 is replaced by §4 here)
@@ -52,8 +52,12 @@ Verified against the code (not specs) on 2026-07-10:
   (`elaborate_let_block`): the rhs is inlined per use and dropped at zero uses.
   This is a hard prerequisite blocker for linear values (§5.4).
 - **AtomVM facts** (audited in the clone, file:line in §9/§10): single scheduler
-  thread on C3-class targets; port handlers run on the scheduler thread; I²C
-  blocks with `portMAX_DELAY`; SPI busy-polls; the receive-marker optimization
+  thread on C3-class targets; port handlers run on the scheduler thread; the I²C
+  **port driver** blocks with `portMAX_DELAY` (but the newer `i2c_resource` NIF
+  collection takes a bounded `send_timeout_ms` — §10.1); SPI busy-polls with no
+  timeout parameter at all; supervisors require neither `proc_lib` nor `sys` of
+  a child (§12.11); `gen_server:call` monitors, exits the caller on peer death,
+  and defaults to a 5000 ms timeout; the receive-marker optimization
   does not exist (opcodes are no-ops); a 16-slot shared event queue drops ISR
   events silently when full; **`mailbox_send` dereferences a NULL on allocation
   failure** (`mailbox_message_create_from_term` returns NULL at
@@ -129,11 +133,21 @@ spec §4 — data, derived, erased):
 
 ```
 Protocol ::= Send(MsgShape, Protocol)
-           | Recv(MsgShape, Protocol)
-           | Offer(List(%[MsgShape, Protocol]))     -- external choice
-           | Select(List(%[MsgShape, Protocol]))    -- internal choice
+           | Recv(MsgShape, Deadline, Protocol)
+           | Offer(Deadline, List(%[MsgShape, Protocol]))   -- external choice
+           | Select(List(%[MsgShape, Protocol]))            -- internal choice
            | Done
+
+Deadline ::= Forever | Within(Duration)
 ```
+
+**The two blocking formers carry a `Deadline`; the two non-blocking ones do
+not.** `Recv` and `Offer` wait for a peer; `Send` and `Select` do not, because
+BEAM `send` is asynchronous. The deadline lives in the *protocol*, never in an
+operation's argument list — arrows describe, statements drive (§6.6). A reactor
+rejects `Forever` on any receive or offer reachable from its drain phase (§8.3);
+`Forever` remains legal and idiomatic in unclocked server loops, which is what a
+`process Foo.serve` waiting for work actually wants.
 
 `Chan : Protocol -> Type` is an ordinary indexed family (same machinery as
 `Bounded`/`Vector`). The operations return the *next-state channel inside the
@@ -141,13 +155,32 @@ result*, so the plain non-dependent `Effect(T)` bind suffices:
 
 ```
 send   : (1 c : Chan(Send(m, next))) -> El(m) -> Effect(Chan(next))
-recv   : (1 c : Chan(Recv(m, next)))          -> Effect(%[El(m), Chan(next)])
+recv   : (1 c : Chan(Recv(m, d, next)))       -> Effect(%[El(m), Chan(next)])
 select : (1 c : Chan(Select(bs))) -> (tag : TagOf(bs)) -> El(payload(bs,tag))
                                               -> Effect(Chan(cont(bs, tag)))
-offer  : (1 c : Chan(Offer(bs)))              -> Effect(Branches(bs))
+offer  : (1 c : Chan(Offer(d, bs)))           -> Effect(Branches(bs))
 close  : (1 c : Chan(Done))                   -> Effect(Unit)
 cancel : (1 c : Chan(s))                      -> Effect(Unit)   -- any state
 ```
+
+`call` is **not primitive**. A protocol clause
+`recv Q() reply R within d -> s` denotes `Send(Q, Recv(R, Within(d), s))`, and
+`call` is sugar for send-then-recv across that pair:
+
+```
+call : (1 c : Chan(Send(q, Recv(r, d, next)))) -> El(q)
+                                            -> Effect(%[El(r), Chan(next)])
+```
+
+`call` is deadline-**polymorphic** in `d`; it is the *reactor* that rejects
+`Forever` (§8.3), not `call`'s type — otherwise ordinary non-clocked `process`
+code could never call at all. The deadline is read off the protocol, never passed
+at the call site, so `call acct, Balance()` stays as written in §6.3. It is the
+blocking budget of the `recv` half, it participates in the reactor's Σ-budget
+check, and its expiry raises exactly where `PeerDown` raises (§7). Stating it
+matters because the underlying `gen_server:call/2` would otherwise silently use
+5000 ms (`gen_server.erl:406`) — 500 ticks of a 100 Hz reactor. `send` never
+blocks and has no deadline.
 
 `offer` returns a **sum whose constructors carry the correctly-typed
 continuation channel** (`Branches([Deposit → s1, Balance → s2]) =
@@ -253,11 +286,29 @@ appearing under the single `Bind` term node (`Core/TT/Term.idr:97-104`).
 ζ-reduction unfolds it on demand (`Core/Normalise/Eval.idr:124-130`, and
 `:242-244`: a `Local` whose binder is a `Let` evaluates to its value), so the
 value is reachable for conversion while occurring exactly once in the term.
-Lean has the same node (`Expr.letE` + `LocalDecl.ldecl` + ζ/`zetaDelta`). Agda
-takes the other road — no `Let` in internal syntax, let-bindings in the
-checking environment, substituted into terms — which is what Cure does today,
-and pays the same duplication cost. (The Idris claims were read from
-`~/Develop/Idris2` this session; the Lean/Agda claims are from memory.)
+
+**Lean does the same, and does it in the trusted kernel.** `Expr.letE` carries
+name/type/value/body (`src/Lean/Expr.lean:409`); `LocalDecl.ldecl` carries a
+`value : Expr` (`src/Lean/LocalContext.lean:86`); `zetaDelta` is a `Meta`
+reduction setting (`src/Lean/Meta/Basic.lean:186`). Decisively, the C++ kernel
+ζ-reduces directly — `whnf_core` does
+`r = whnf_core(instantiate(let_body(e), let_value(e)), …)`
+(`src/kernel/type_checker.cpp:475`) and unfolds let-bound free variables via
+`is_let_fvar(m_lctx, e)` (`:389, :413, :650`). So Lean uses **both** mechanisms:
+a `letE` node in the term *and* value-carrying decls in the local context.
+
+**Agda takes the other road, and pays exactly the cost Cure pays.** Its internal
+`Term` has **no `Let` constructor** — `Var'`, `Lam`, `Lit`, `Def`, `Con`, `Pi`,
+`Sort`, `Level`, `MetaV`, `DontCare`, `Dummy`
+(`src/full/Agda/Syntax/Internal.hs:345-361`). A surface `let` therefore cannot
+survive into internal syntax: bindings live in the type-checking environment
+(`envLetBindings :: !LetBindings`, `src/full/Agda/TypeChecking/Monad/Base.hs:4280`,
+added by `addLetBinding'`, `Monad/Context.hs:280`) and are resolved at each
+occurrence — so a let-bound value can be duplicated in the internal term. That
+is Cure's situation today, minus Agda's environment.
+
+(All three sets of citations were read from source this session:
+`~/Develop/Idris2`, `~/Develop/lean4`, `~/Develop/agda`.)
 
 Two consequences fix the plan:
 
@@ -272,13 +323,30 @@ binder is unconditionally safe to bind once.
 **(b) A `Let` binder in Core is the real fix, and it is what (a) is a bridge
 to.** (a) leaves `ω` dependent `let` substituting, so term duplication — and
 with it the still-open join-point bug — survives. A value-carrying `Let` with a
-`RigCount`, plus ζ, kills both and aligns Cure with Idris and Lean
-simultaneously, satisfying the standing TCB-change condition. Cost is bounded
-and enumerable: one Core node through `term?/1`, `subst/3`, `Eval`, `Conv`,
+`RigCount`, plus ζ, kills both. **The Idris citation alone satisfies the standing
+TCB-change condition** — that approval names Idris, Agda and Lean as equal
+alignment authorities; Agda and Lean are merely listed first because their
+trusted checking is concentrated in an identifiable kernel while Idris's is
+spread across `Core/*`. Lean's independent agreement (its kernel ζ-reduces
+`letE` at `type_checker.cpp:475`) is corroboration, not the licence. Cost is
+bounded and enumerable:
+one Core node through `term?/1`, `subst/3`, `Eval`, `Conv`,
 `Normalise.nf_struct`, `Quote`, `Serialize`, `Validator`, plus Antigen coverage
 cells. Note Idris gets this cheaply because `Bind` is one node parameterized by
 `Binder`; Cure has separate `:pi`/`:lam` tags, so `:let` is a third — price
 that before committing.
+
+**Implementation note (from Lean, not from first principles).** Two mechanisms
+are available and Lean uses both: keep the value in the *term* (`letE`), and
+keep it in the *local context* (`ldecl`). Cure's `Context` currently stores only
+types — `defstruct types: [], length: 0, signature: nil` (`core/context.ex:15`)
+— and derives its NbE environment from `length` alone (`:53` → `neutral_env(n)`),
+so every variable maps to a fresh neutral and there is nowhere to put a let's
+value. **That derivation is the single structural obstacle to ζ.** The fix is to
+have `Context` carry a real environment in which ordinary binders push a neutral
+and `Let` binders push the evaluated value; ζ then falls out of `Eval`'s existing
+variable lookup, and `Conv` never sees a `let` at all. This mirrors Idris's
+`Env`-of-`Binder`s and Lean's `is_let_fvar` unfolding.
 
 Sobering note from the reference implementation: `LinearCheck.idr:227-232`
 catches `LinearMisuse` and *retries the binder as linear*
@@ -308,12 +376,16 @@ with protocol-state diagnostics.
 ```cure
 protocol Account
   state Open
-    recv Deposit(Int)        -> Open
-    recv Balance() reply Int -> Open
-    recv Close()             -> Closed
+    recv Deposit(Int)                    -> Open
+    recv Balance() reply Int within 2.ms -> Open
+    recv Close()                         -> Closed
   state Closed
     done
 ```
+
+`within 2.ms` is the reply's deadline (§4.2). Omitting it yields `Forever`,
+which is legal in unclocked `process` code and a compile error anywhere a
+reactor's drain phase can reach (§8.3). `send`-only clauses never carry one.
 
 Compact linear form (elaborates to explicit states):
 
@@ -649,7 +721,27 @@ interrupt-rate bounds per pin, which the `resources` block collects):
    doesn't just stall the loop, it silently discards interrupt edges.
 
 Budgets are declarations about foreign IDF code — trusted at the boundary like
-message contracts, not proven. §10.1 upgrades them from promise to mechanism.
+message contracts, not proven. §10.1 upgrades them from promise to mechanism —
+completely for I²C today (`i2c_resource`'s `send_timeout_ms`), and for SPI only
+after the patch.
+
+**Session `call` blocks too, and must be budgeted.** `call` waits for a peer's
+reply; on the `gen_server` lowering that wait is `gen:call`'s monitor-guarded
+selective receive, and **`gen_server:call/2` defaults to a 5000 ms timeout**
+(`gen_server.erl:406`). Five seconds is 500 ticks of a 100 Hz reactor. Therefore:
+
+- every blocking receive reachable from a reactor's drain phase carries a
+  `Within(d)` deadline in its **protocol** (§4.2), never a call-site argument;
+- that deadline is the operation's `@blocking` budget and participates in the
+  Σ-budget check (constraint 1) and the event-queue ceiling (constraint 2)
+  exactly as a driver op does;
+- a reachable `Recv(_, Forever, _)` or `Offer(Forever, _)`, or a `Within(d)`
+  with `d` exceeding the tick period, is a compile error **inside a reactor**. Outside a reactor
+  (ordinary `process` code with no clock) `Forever` is legal and `Within(d)` is
+  merely a declaration.
+
+Timeout expiry is a peer-failure branch (§7), not a distinct outcome: it raises
+where `PeerDown` raises. This keeps the failure model single-shaped.
 
 ### 8.4 GPIO interrupt honesty
 
@@ -699,7 +791,7 @@ Every process-to-process session message is
   drop under memory pressure." That justification is withdrawn: there is no
   silent drop. `mailbox_send` dereferences the NULL returned by a failed
   allocation and crashes the VM (§2). A sequence gap cannot be observed by a
-  receiver that no longer exists. The hazard is real but belongs to §10.4, not
+  receiver that no longer exists. The hazard is real but belongs to §10.3, not
   to the wire format.*
 - **`Tag`** — elided when the protocol state admits exactly one message
   (session typing pays for its ref: add a ref, delete a tag, ≈wash on the
@@ -733,14 +825,16 @@ receive O(N) from the front. Therefore:
 - VM selective receive is never emitted for a process that **owns its own
   mailbox**.
 
-**Qualification (the O(1) claim is not unconditional).** A Cure process that is
-itself supervised is a behaviour (§9.6), so OTP owns its mailbox and it cannot
-run a head-take inside a callback. Its `call` lowers to `gen_server:call`,
-inheriting OTP's ref-based **selective receive** — the O(N) path on AtomVM. This
-is tolerable because `handle_info` keeps such a mailbox drained, so N is
-normally zero; but the guarantee is conditional and must not be discovered on
-hardware. **The O(1) head-take guarantee holds only for processes that own their
-own mailbox.**
+**Qualification (the O(1) claim is not unconditional).** A Cure process on the
+`gen_server` lowering (§9.6) does not own its mailbox inside a callback and
+cannot head-take there. Its `call` lowers to `gen_server:call`, inheriting
+`gen:call`'s monitor-guarded **selective receive** (`gen.erl:62-69`) — the O(N)
+path on AtomVM. This is tolerable because `handle_info` keeps such a mailbox
+drained, so N is normally zero; but the guarantee is conditional and must not be
+discovered on hardware. **The O(1) head-take guarantee holds only for processes
+that own their own mailbox — i.e. those on the `raw` lowering.** Note the
+condition is the *lowering*, not supervision: a raw loop is supervisable
+(§12.11), so a supervised process can keep the O(1) guarantee by choosing `raw`.
 
 ### 9.3 Foreign boundary
 
@@ -786,17 +880,40 @@ budgets — none may survive into emitted code.
 
 ### 9.6 Behaviour lowering: session loops become `gen_server`s
 
-A session-typed `receive` loop lowers naturally to a bare tail-recursive
-Erlang loop, which would be smaller and faster than `gen_server` on AtomVM.
-**This is wrong and must not be done.** A bare loop cannot be supervised: OTP
-supervisors require children started via `proc_lib` that speak the `sys`
-protocol. Emitting raw loops loses supervision, `sys:get_state`, and release
-handling — for exactly the containers whose purpose is supervision.
+A session-typed `receive` loop lowers naturally to a bare tail-recursive Erlang
+loop, which is smaller and faster than `gen_server` on AtomVM. An earlier draft
+of this section claimed such a loop *cannot be supervised*, because supervisors
+require `proc_lib`-started children speaking the `sys` protocol. **That claim is
+false** and is retracted (§12.11). AtomVM's supervisor starts a child with a
+plain `apply(M, F, Args)` accepting `{ok, Pid}` (`supervisor.erl:555`) and traps
+exits itself (`:207`); it demands neither `proc_lib` nor `sys` of the child. A
+bare loop whose start function `spawn_link`s and returns `{ok, Pid}` **is**
+supervisable. `proc_lib` buys crash reports and `sys` introspection, not
+supervisability.
 
-Therefore a `process` that is a supervised container lowers **into** a
-`gen_server`, with the protocol state as the server state: reply-carrying
-clauses become `handle_call`, reply-less clauses become `handle_cast`, and
-`handle_info` is the quarantine clause (§9.2).
+The choice is therefore a **trade-off, not a necessity**, and it is genuinely
+close on this hardware:
+
+*For `gen_server` (the default):* OTP interop (an Elixir caller can
+`GenServer.call` a Cure actor); `sys:get_state` on-device introspection;
+`handle_info` supplies the quarantine clause for free; crash reports; the
+idiomatic child spec.
+
+*For a bare loop:* no behaviour dispatch and no `{reply, R, S}` tuple churn; and
+decisively, **the process owns its own mailbox, which is the precondition for
+the O(1) head-take guarantee** (§9.2). A Cure process lowered to `gen_server`
+cannot head-take inside a callback, so its outgoing `call` goes through
+`gen:call`'s selective receive on the monitor ref (`gen.erl:62-69`) — the O(N)
+path, since AtomVM has no receive-marker optimization.
+
+**Decision: `gen_server` is the default lowering; a `raw` lowering is available
+for mailbox-owning processes on the reactor's hot path**, where the O(1)
+guarantee is worth surrendering introspection and interop. Both are supervisable.
+This is a per-container annotation, not a global mode.
+
+Under the `gen_server` lowering the protocol state is the server state:
+reply-carrying clauses become `handle_call`, reply-less clauses become
+`handle_cast`, and `handle_info` is the quarantine clause (§9.2).
 
 ```erlang
 handle_call({'$cure', Sid, tick}, _From, N) -> {reply, {'$cure', Sid, N + 1}, N + 1}.
@@ -835,20 +952,35 @@ codegen, replaced by macro expansion into ordinary checked Cure.
 
 The clone already carries local patches as a matter of course; these join them.
 
-1. **Bounded driver timeouts (highest-leverage item in this design).** I²C
-   uses `portMAX_DELAY` on the scheduler thread (`i2c_driver.c:247,432,535`);
-   SPI busy-polls (`spi_driver.c:359`, marked TODO upstream). Patch: the
-   lowering passes each op's **declared `@blocking` budget as the driver
-   timeout**. This converts the worst failure mode on the chip (wedged bus →
-   frozen scheduler → overflowed event queue → eaten GPIO edges → watchdog
-   reboot) into a typed, `rescue`-able error, and upgrades §8.3's budgets from
-   promise to mechanism.
-2. **Audit `i2c_resource`** (`i2c_resource.c:905`) — the newer NIF-collection
-   I²C API — before committing the resource lowering to the port driver; its
-   blocking behaviour was not audited.
-3. (Optional, later) event-queue depth/overflow counter exposure, so §8.4's
+1. **Bounded driver timeouts — and for I²C this is a *lowering choice*, not a
+   patch.** The worst failure mode on the chip is a wedged bus → frozen
+   scheduler → overflowed 16-slot event queue → eaten GPIO edges → watchdog
+   reboot. Bounding the blocking call is what prevents it. But the two buses
+   differ:
+
+   - **I²C: do not use the port driver.** `i2c_driver.c` blocks with
+     `portMAX_DELAY` (`:247,432,535`). The newer **`i2c_resource` NIF collection
+     already accepts a `send_timeout_ms`** and threads it into
+     `i2c_master_cmd_begin(…, MS_TO_TICKS(send_timeout_ms))`
+     (`i2c_resource.c:446,583,791`), defaulting to
+     `DEFAULT_SEND_TIMEOUT_MS 500` (`:59`). **Lower `resource I2c` onto
+     `i2c_resource`, passing the declared `@blocking` budget as
+     `send_timeout_ms`.** No upstream patch required. Note 500 ms is still 50
+     ticks of a 100 Hz reactor, so the declared budget must *override* the
+     default, never inherit it. Being a `REGISTER_NIF_COLLECTION` (`:905`) it
+     still runs synchronously on the scheduler thread — bounded, not
+     asynchronous.
+   - **SPI: a patch is still required.** `spi_device_polling_transmit`
+     (`spi_driver.c:359,552,600`) takes **no timeout parameter at all** and
+     busy-polls to completion; upstream TODOs at those lines propose
+     `spi_device_queue_trans` plus an interrupt-driven mechanism. Until that
+     lands, an SPI `@blocking` budget is a declaration, not a mechanism.
+
+   This is what upgrades §8.3's budgets from promise to mechanism — completely
+   for I²C today, and for SPI only after the patch.
+2. (Optional, later) event-queue depth/overflow counter exposure, so §8.4's
    soundness-not-completeness caveat is at least observable.
-4. **Guard the NULL in `mailbox_send`.** On allocation failure
+3. **Guard the NULL in `mailbox_send`.** On allocation failure
    `mailbox_message_create_from_term` returns NULL (`mailbox.c:243-245`) and
    `mailbox_send` (`:269-273`) passes it to `mailbox_post_message`, which
    dereferences it unguarded on both paths (`:229-233`, `:218-221`). A `send`
@@ -879,7 +1011,8 @@ facility, inert `Effect(T)` (0.34), rungs 1–2 (externs, then sealed
 3. **`Chan(p)` + `Std.Proc` over `Effect(T)`** (§4) + the `protocol`/`process`
    macros (§6) + EGV failure (§7) + backend contract (§9). Kernel untouched.
 4. **Resources** (§8) — with the reactive roadmap's `resource` (0.35) /
-   `program` (0.37) layers; AtomVM timeout patch (§10.1) lands here.
+   `program` (0.37) layers; I²C lowers onto `i2c_resource` and the SPI timeout
+   patch (§10.1) lands here.
 5. Ledger: dependent protocols (`Depends`), delegation (drain-and-handoff +
    `Seq`), linear-container ergonomics, distribution (out of scope; refs are
    per-boot, nodes unmodeled).
@@ -911,9 +1044,11 @@ before other in-flight work keeps assuming the old stance:
 | 3 | affine protocol handles | `macros/2026-07-08-protocol-macro-design.md` |
 | 5 | Melquiades `<-|` typing | `lib/cure/types/checker.ex`, error catalog E044–E046 |
 
-**Item 4 corrects this design's own earlier draft. Items 6–10 correct the
-originating brief** — a conversational artifact, not a tracked document; they
-need no external edit and are recorded here so the reasoning is not relitigated.
+**Items 4 and 11 correct this design's own earlier drafts** — 11 in particular
+retracts a claim that was asserted as fact and turned out to be false against
+AtomVM's source. **Items 6–10 correct the originating brief** — a conversational
+artifact, not a tracked document. Neither group needs an external edit; both are
+recorded so the reasoning is not relitigated.
 
 1. **Rung 3 indexed bind (`Effect(pre,post,T)`) — deleted** (§4.1). The
    parameterized monad simulated missing linearity; with `1` planned, the
@@ -960,7 +1095,7 @@ need no external edit and are recorded here so the reasoning is not relitigated.
    accepts `Proc pre post a`, then generated BEAM code implements the
    corresponding protocol transitions"* — a backend can satisfy this exactly and
    still `AVM_ABORT()` the board (`context.c:761,794`), crash the VM on a `send`
-   that loses a malloc (`mailbox.c:269-273`, §10.4), or make every receive O(N)
+   that loses a malloc (`mailbox.c:269-273`, §10.3), or make every receive O(N)
    (`opcodes.def:228-229`). Protocol fidelity is orthogonal to memory and
    scheduling safety; the contract carries all three (§9).
 9. **The brief's `Effect` migration plan is vacuous; deliverable 9 is retired.**
@@ -981,6 +1116,14 @@ need no external edit and are recorded here so the reasoning is not relitigated.
     consumed. Correct shape: join both, obtain `x, y : A`, then **decide** `x = y`
     on the values (`Std.Decision`). `Fair scheduler -> Eventually (…)` likewise
     presupposes a temporal modality Cure lacks and this design declines (§14).
+11. **"A bare loop cannot be supervised" — retracted** (this design's own earlier
+    §9.6 draft). Verified false against AtomVM: `supervisor.erl:555` starts a
+    child by plain `apply(M, F, Args)` expecting `{ok, Pid}`, and traps exits
+    itself (`:207`); it requires neither `proc_lib` nor the `sys` protocol of the
+    child. `proc_lib` buys crash reports and `sys` introspection, not
+    supervisability. `gen_server` remains the **default** lowering on interop and
+    introspection grounds, but a `raw` loop is supervisable and is the only way a
+    supervised process can own its mailbox and keep the O(1) head-take (§9.2, §9.6).
 
 ## 13. Non-negotiable invariants (checklist)
 
@@ -1002,7 +1145,7 @@ only; delegation excluded until §9.4 lifts it); assume interrupt completeness
 - Foreign-boundary trust is irreducible: `accepts` contracts and `@blocking`
   budgets are declarations about code we didn't compile.
 - **`send` is not memory-safe on stock AtomVM.** Under allocation failure it
-  dereferences NULL and takes the VM down (§2, §10.4). No typing discipline
+  dereferences NULL and takes the VM down (§2, §10.3). No typing discipline
   defends against this; it is fixed by the patch or it is not fixed. Until
   patched, every guarantee in this document is conditional on the sender's
   malloc succeeding.
@@ -1012,9 +1155,12 @@ only; delegation excluded until §9.4 lifts it); assume interrupt completeness
   `await` against an unfair peer can block until its timeout/monitor fires.
 - Budget arithmetic trusts declared interrupt-rate bounds.
 - **The O(1) receive guarantee is conditional** (§9.2): it holds for processes
-  that own their own mailbox. A supervised process is a behaviour, so its
-  `call` lowers to `gen_server:call` and inherits OTP's ref-based selective
-  receive — O(N) on AtomVM, with N normally zero because `handle_info` drains.
+  that own their own mailbox — i.e. those on the `raw` lowering. A process
+  lowered to `gen_server` cannot head-take inside a callback, so its `call`
+  goes through `gen:call`'s ref-based selective receive (`gen.erl:62-69`) —
+  O(N) on AtomVM, with N normally zero because `handle_info` drains. The
+  condition is the **lowering**, not supervision: a supervised process may be a
+  raw loop (§9.6, §12.11).
 - **Static fsm typestate requires a linear owner** (§6.4). An ω-shared fsm
   degrades to the flat message-set floor; recovering its state needs a runtime
   query returning a dependent pair.
