@@ -92,6 +92,37 @@ defmodule Cure.Project do
     end
   end
 
+  @doc """
+  Insert or replace `edition = "<edition>"` under the `[project]` table of the
+  `Cure.toml` at `path`, preserving all other lines. Lossless line edit — does
+  not reformat the file.
+  """
+  @spec set_edition(Path.t(), Cure.Edition.t()) :: :ok | {:error, term()}
+  def set_edition(path, edition) do
+    with {:ok, body} <- File.read(path) do
+      lines = String.split(body, "\n")
+      new = upsert_edition(lines, edition)
+      File.write(path, Enum.join(new, "\n"))
+    end
+  end
+
+  defp upsert_edition(lines, edition) do
+    kv = "edition = \"#{edition}\""
+
+    cond do
+      Enum.any?(lines, &Regex.match?(~r/^\s*edition\s*=/, &1)) ->
+        Enum.map(lines, fn l -> if Regex.match?(~r/^\s*edition\s*=/, l), do: kv, else: l end)
+
+      true ->
+        insert_after_project_header(lines, kv)
+    end
+  end
+
+  defp insert_after_project_header(lines, kv) do
+    idx = Enum.find_index(lines, &Regex.match?(~r/^\s*\[project\]\s*$/, &1))
+    if idx, do: List.insert_at(lines, idx + 1, kv), else: ["[project]", kv | lines]
+  end
+
   # -- Dependency Resolution ---------------------------------------------------
 
   @doc """

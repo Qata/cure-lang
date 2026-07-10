@@ -47,6 +47,25 @@ defmodule Cure.Migrate do
       Cure.Migrate.Rules.ProtoToInterface.rule()
     ]
 
+  @doc "Rules to apply when crossing to `target` (spec §7.2)."
+  @spec rules_for_crossing(Cure.Edition.t(), [Rule.t()]) :: [Rule.t()]
+  def rules_for_crossing(target, rules \\ rules()) do
+    Enum.filter(rules, fn r ->
+      mandatory = r.enforced_in != nil and Cure.Edition.compare(r.enforced_in, target) in [:lt, :eq]
+      proactive = r.tier in [:machine, :review] and Cure.Edition.compare(r.since, target) in [:lt, :eq]
+      mandatory or proactive
+    end)
+  end
+
+  @doc "The :manual rules whose old form is illegal at `target` (block the bump)."
+  @spec blocking_manual(Cure.Edition.t(), [Rule.t()]) :: [Rule.t()]
+  def blocking_manual(target, rules \\ rules()) do
+    Enum.filter(rules, fn r ->
+      r.tier == :manual and r.enforced_in != nil and
+        Cure.Edition.compare(r.enforced_in, target) in [:lt, :eq]
+    end)
+  end
+
   @doc """
   Run `rules` over `ast` as an ordered fold. Each rule sees the AST as left by
   the previous rule; a `{:rewrite, new_ast}` result is threaded forward and
