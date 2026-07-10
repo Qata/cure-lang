@@ -1,3 +1,20 @@
+defmodule Antigen.Challenge.UnknownAtomError do
+  @moduledoc """
+  Raised when a serialized record needs an atom that is absent from
+  `Antigen.Challenge.__known_atoms__/0` — the portability whitelist every replay
+  VM is guaranteed to have interned. Such a record would crash a fresh replay
+  VM's decode with an opaque `ArgumentError: not an already existing atom`;
+  surfacing it as this typed error lets the banker reject it loudly instead.
+  """
+  defexception [:name]
+
+  @impl true
+  def message(%{name: name}) do
+    "atom #{inspect(name)} is absent from Antigen.Challenge.__known_atoms__/0 — " <>
+      "add it there (see the :many precedent) or a fresh replay VM will fail to decode this record"
+  end
+end
+
 defmodule Antigen.Challenge do
   @moduledoc "A generated challenge injected into the kernel (umbrella §3)."
   alias Cure.Core.Inductive
@@ -67,8 +84,15 @@ defmodule Antigen.Challenge do
     :Equivalent, :reflexive, :y,
     # universes vertical
     :u,
+    # erasure quantities: the ω annotation `:many` on a ctor field (siblings
+    # `:present`/`:erased` already interned). Family seeds carry it as text in the
+    # scaffold and reconstruct it via `to_existing_atom`, so it must be interned or
+    # a fresh-VM decode raises "not an already existing atom" (found banking
+    # universes/family seeds — see many_quantity_decode_test).
+    :many,
     # tier-B typed-term vertical: kind, family/ctor/def names, sig version
-    :typed_term, :v1, :Bd, :T, :F, :Vec, :vnil, :vcons, :plus, :dbl, :x, :xs,
+    # (:MkF is the shrink-test family F's ctor — a bloated-ctor-arg pieces-bridge probe)
+    :typed_term, :v1, :Bd, :T, :F, :MkF, :Vec, :vnil, :vcons, :plus, :dbl, :x, :xs,
     # mutation corpus: kind, fault kinds, witness enum, extra type-former head
     # (:ill_typed already above; :Z/:S/:Nat/:Vec already interned above)
     :mutant_term,
@@ -136,8 +160,10 @@ defmodule Antigen.Challenge do
     :conv_pair, :convertible, :distinct,
     # Branch-unification vertical: kind + verdict labels + crossing-family names
     :branch_unify, :solved, :impossible, :trivial, :Cyc4, :mkcyc,
-    # Dot-forcing vertical (#24): kind + verdict labels
-    :dot_forcing, :accept, :reject, :unforced,
+    # Dot-forcing vertical (#24): kind + verdict labels + the carried-index family
+    # H/hmk (its Sq/mksq + Vec/vcons siblings are interned above). These ride the
+    # scaffold `family`/`cname` fields through `known_atom!` on decode.
+    :dot_forcing, :accept, :reject, :unforced, :H, :hmk,
     # Check-mode vertical: kind + the Bd ctor T used in a reject case
     :check_mode, :T,
     # Delta-reduction vertical: kind + label + the certified global names
@@ -145,6 +171,35 @@ defmodule Antigen.Challenge do
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
+
+  # String view of the whitelist — decode gets strings and must check membership
+  # WITHOUT minting an atom for a miss (a miss is the error path, not a new atom).
+  @known_atom_strings MapSet.new(@known_atoms, &Atom.to_string/1)
+
+  @doc """
+  Reconstruct a whitelisted atom from its serialized string, or raise
+  `Antigen.Challenge.UnknownAtomError`. Every decode-side `String.to_existing_atom`
+  in `from_pieces/7` goes through here.
+
+  Unlike `String.to_existing_atom/1` — which only asks "is this atom interned in
+  THIS VM?" — this checks membership in the portability whitelist `@known_atoms`,
+  the set every replay VM is guaranteed to have interned when this module loads.
+  An atom interned here (e.g. a generator built a term literally carrying it) but
+  absent from the whitelist decodes fine locally yet crashes a fresh replay VM;
+  checking membership turns that latent poison into a loud, specific error at the
+  point of reconstruction — and, via `Corpus.append/3`'s self-check, at banking
+  time so `mix antigen` rejects it instead of poisoning the store.
+  """
+  @spec known_atom!(String.t()) :: atom()
+  def known_atom!(str) when is_binary(str) do
+    if MapSet.member?(@known_atom_strings, str) do
+      # safe: membership guarantees the atom is already interned (it is a literal
+      # in @known_atoms), so this never mints.
+      String.to_existing_atom(str)
+    else
+      raise Antigen.Challenge.UnknownAtomError, name: str
+    end
+  end
 
   @spec new(keyword()) :: t()
   def new(fields),
@@ -351,7 +406,7 @@ defmodule Antigen.Challenge do
     pmap = Map.new(pieces)
     params = rebuild_telescope(scaffold["fam_param_names"], "fam_param", pmap)
     indices = rebuild_telescope(scaffold["fam_index_names"], "fam_index", pmap)
-    fam = Inductive.family(String.to_existing_atom(scaffold["fam_name"]), params, indices, scaffold["fam_level"])
+    fam = Inductive.family(known_atom!(scaffold["fam_name"]), params, indices, scaffold["fam_level"])
 
     ctors =
       scaffold["ctors"]
@@ -360,12 +415,12 @@ defmodule Antigen.Challenge do
         args =
           cs["arg_names"]
           |> Enum.with_index()
-          |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "ctor:#{j}:arg:#{k}")} end)
+          |> Enum.map(fn {n, k} -> {known_atom!(n), Map.fetch!(pmap, "ctor:#{j}:arg:#{k}")} end)
 
         ridx = for k <- 0..(cs["ridx_count"] - 1)//1, do: Map.fetch!(pmap, "ctor:#{j}:ridx:#{k}")
         rparam = for k <- 0..((cs["rparam_count"] || 0) - 1)//1, do: Map.fetch!(pmap, "ctor:#{j}:rparam:#{k}")
-        quantities = Enum.map(cs["quantities"], &String.to_existing_atom/1)
-        Inductive.ctor(String.to_existing_atom(cs["name"]), args, ridx, quantities, rparam)
+        quantities = Enum.map(cs["quantities"], &known_atom!/1)
+        Inductive.ctor(known_atom!(cs["name"]), args, ridx, quantities, rparam)
       end)
 
     new(kind: :family, assay: assay, label: label, payload: %{family: fam, ctors: ctors}, seed: seed, note: note)
@@ -381,7 +436,7 @@ defmodule Antigen.Challenge do
 
     payload = %{
       families: families,
-      def_name: String.to_existing_atom(scaffold["def_name"]),
+      def_name: known_atom!(scaffold["def_name"]),
       def_type: Map.fetch!(pmap, "def_type"),
       def_body: Map.fetch!(pmap, "def_body")
     }
@@ -399,7 +454,7 @@ defmodule Antigen.Challenge do
     ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
 
     payload = %{
-      sig: String.to_existing_atom(scaffold["sig"]),
+      sig: known_atom!(scaffold["sig"]),
       ctx: ctx,
       type: Map.fetch!(pmap, "type"),
       term: Map.fetch!(pmap, "term")
@@ -434,8 +489,8 @@ defmodule Antigen.Challenge do
 
     payload = %{
       ctx_vars: scaffold["ctx_vars"],
-      dname: String.to_existing_atom(scaffold["dname"]),
-      cname: String.to_existing_atom(scaffold["cname"]),
+      dname: known_atom!(scaffold["dname"]),
+      cname: known_atom!(scaffold["cname"]),
       indices: indices
     }
 
@@ -450,8 +505,8 @@ defmodule Antigen.Challenge do
 
     payload = %{
       ctx_vars: scaffold["ctx_vars"],
-      family: String.to_existing_atom(scaffold["family"]),
-      cname: String.to_existing_atom(scaffold["cname"]),
+      family: known_atom!(scaffold["family"]),
+      cname: known_atom!(scaffold["cname"]),
       indices: indices,
       name: scaffold["name"],
       written: written
@@ -477,7 +532,7 @@ defmodule Antigen.Challenge do
     len = scaffold["ctx_len"]
     ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
 
-    payload = %{sig: String.to_existing_atom(scaffold["sig"]), ctx: ctx, term: Map.fetch!(pmap, "term")}
+    payload = %{sig: known_atom!(scaffold["sig"]), ctx: ctx, term: Map.fetch!(pmap, "term")}
     new(kind: :malformed, assay: assay, label: label, payload: payload, seed: seed, note: note)
   end
 
@@ -487,7 +542,7 @@ defmodule Antigen.Challenge do
     ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
 
     payload = %{
-      sig: String.to_existing_atom(scaffold["sig"]),
+      sig: known_atom!(scaffold["sig"]),
       ctx: ctx,
       type: Map.fetch!(pmap, "type"),
       term: Map.fetch!(pmap, "term"),
@@ -527,14 +582,14 @@ defmodule Antigen.Challenge do
     params =
       fam_scaffold["fam_param_names"]
       |> Enum.with_index()
-      |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:param:#{k}")} end)
+      |> Enum.map(fn {n, k} -> {known_atom!(n), Map.fetch!(pmap, "#{prefix}:param:#{k}")} end)
 
     indices =
       fam_scaffold["fam_index_names"]
       |> Enum.with_index()
-      |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:index:#{k}")} end)
+      |> Enum.map(fn {n, k} -> {known_atom!(n), Map.fetch!(pmap, "#{prefix}:index:#{k}")} end)
 
-    fam = Inductive.family(String.to_existing_atom(fam_scaffold["fam_name"]), params, indices, fam_scaffold["fam_level"])
+    fam = Inductive.family(known_atom!(fam_scaffold["fam_name"]), params, indices, fam_scaffold["fam_level"])
 
     ctors =
       fam_scaffold["ctors"]
@@ -543,12 +598,12 @@ defmodule Antigen.Challenge do
         args =
           cs["arg_names"]
           |> Enum.with_index()
-          |> Enum.map(fn {n, k} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:ctor:#{j}:arg:#{k}")} end)
+          |> Enum.map(fn {n, k} -> {known_atom!(n), Map.fetch!(pmap, "#{prefix}:ctor:#{j}:arg:#{k}")} end)
 
         ridx = for k <- 0..(cs["ridx_count"] - 1)//1, do: Map.fetch!(pmap, "#{prefix}:ctor:#{j}:ridx:#{k}")
         rparam = for k <- 0..((cs["rparam_count"] || 0) - 1)//1, do: Map.fetch!(pmap, "#{prefix}:ctor:#{j}:rparam:#{k}")
-        quantities = Enum.map(cs["quantities"], &String.to_existing_atom/1)
-        Inductive.ctor(String.to_existing_atom(cs["name"]), args, ridx, quantities, rparam)
+        quantities = Enum.map(cs["quantities"], &known_atom!/1)
+        Inductive.ctor(known_atom!(cs["name"]), args, ridx, quantities, rparam)
       end)
 
     {fam, ctors}
@@ -577,18 +632,18 @@ defmodule Antigen.Challenge do
     defs =
       Enum.map(scaffold["names"], fn n ->
         %{
-          name: String.to_existing_atom(n),
+          name: known_atom!(n),
           type: Map.fetch!(pmap, "type:" <> n),
           body: Map.fetch!(pmap, "body:" <> n)
         }
       end)
 
-    {defs, Enum.map(scaffold["focus"], &String.to_existing_atom/1)}
+    {defs, Enum.map(scaffold["focus"], &known_atom!/1)}
   end
 
   defp rebuild_telescope(names, prefix, pmap) do
     names
     |> Enum.with_index()
-    |> Enum.map(fn {n, i} -> {String.to_existing_atom(n), Map.fetch!(pmap, "#{prefix}:#{i}")} end)
+    |> Enum.map(fn {n, i} -> {known_atom!(n), Map.fetch!(pmap, "#{prefix}:#{i}")} end)
   end
 end

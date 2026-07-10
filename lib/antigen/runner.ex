@@ -62,7 +62,7 @@ defmodule Antigen.Runner do
       end
 
     final =
-      Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
+      Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, rejected: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
         run_challenge(c, opts, acc, count)
       end)
 
@@ -99,6 +99,7 @@ defmodule Antigen.Runner do
     %{
       infections: final.infections,
       seeds_banked: final.seeds_banked,
+      rejected: final.rejected,
       seed: seed,
       health: summarize(final, count),
       health_metrics: metrics,
@@ -293,8 +294,8 @@ defmodule Antigen.Runner do
     seed = Keyword.get(opts, :seed) || fresh_seed()
 
     draw(opts[:gen], count, seed)
-    |> Enum.reduce(%{seeds_banked: 0}, fn c, acc -> bank_seed(%{c | seed: seed_of(c)}, opts, acc) end)
-    |> Map.take([:seeds_banked])
+    |> Enum.reduce(%{seeds_banked: 0, rejected: 0}, fn c, acc -> bank_seed(%{c | seed: seed_of(c)}, opts, acc) end)
+    |> Map.take([:seeds_banked, :rejected])
     |> Map.put(:seed, seed)
   end
 
@@ -445,7 +446,27 @@ defmodule Antigen.Runner do
     case Corpus.append(opts[:seeds_path], c, Corpus.dedup_key(c, :seed)) do
       :appended -> %{acc | seeds_banked: acc.seeds_banked + 1}
       :duplicate -> acc
+      {:rejected, e} -> report_unportable(c, e); %{acc | rejected: acc.rejected + 1}
     end
+  end
+
+  # Loud, inline report of a record that could NOT be banked because it reconstructs
+  # an atom absent from `Challenge.__known_atoms__/0` (it would crash the replay gate
+  # on a fresh VM). Printed to stderr so it stands out in a banking loop's output; the
+  # message names the missing atom and how to fix it.
+  defp report_unportable(c, e) do
+    IO.puts(:stderr, "")
+
+    IO.puts(
+      :stderr,
+      IO.ANSI.format([
+        :red,
+        :bright,
+        "!!! ANTIGEN: non-portable record NOT banked (assay=#{c.assay} kind=#{c.kind}) !!!"
+      ])
+    )
+
+    IO.puts(:stderr, "  " <> Exception.message(e))
   end
 
   @doc """
@@ -497,7 +518,11 @@ defmodule Antigen.Runner do
             :infection -> IO.puts(Report.breadcrumb(c_min, path, :infection))
             :immune_response -> Report.tally_immune_response()
           end
-          Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
+          case Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody)) do
+            {:rejected, e} -> report_unportable(c_min, e)
+            _ -> :ok
+          end
+
           %{acc | infections: acc.infections + 1}
       end
     else

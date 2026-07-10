@@ -57,8 +57,8 @@ defmodule Antigen.Corpus do
     with [@marker | fields] <- String.split(String.trim_trailing(line, "\n"), "\t"),
          m <- Map.new(fields, fn f -> List.to_tuple(String.split(f, "=", parts: 2)) end),
          {:ok, pieces} <- decode_pieces(m["pieces"]) do
-      kind = String.to_existing_atom(m["kind"])
-      label = String.to_existing_atom(m["label"])
+      kind = Challenge.known_atom!(m["kind"])
+      label = Challenge.known_atom!(m["label"])
       seed = if m["seed"] == "-", do: nil, else: String.to_integer(m["seed"])
       base_scaffold = decode_scaffold(m["scaffold"] || "-")
 
@@ -87,16 +87,39 @@ defmodule Antigen.Corpus do
   def decode_scaffold("-"), do: %{}
   def decode_scaffold(b64), do: :erlang.binary_to_term(Base.decode64!(b64), [:safe])
 
-  @spec append(String.t(), Challenge.t(), String.t()) :: :appended | :duplicate
+  @spec append(String.t(), Challenge.t(), String.t()) ::
+          :appended | :duplicate | {:rejected, Exception.t()}
   def append(path, %Challenge{} = c, dedup_key) do
     File.mkdir_p!(Path.dirname(path))
 
     if seen?(path, dedup_key) do
       :duplicate
     else
-      # single append syscall — atomic per record (spec §7.1)
-      File.write!(path, encode_record(c, dedup_key) <> "\n", [:append])
-      :appended
+      # Portability self-check BEFORE the write: a record that reconstructs an atom
+      # absent from `Challenge.__known_atoms__/0` decodes fine here (the generating VM
+      # already interned it) but crashes a fresh replay VM — so never bank it. The
+      # check re-decodes the very line we would append; membership (not interning) is
+      # what `known_atom!` enforces, so this catches the poison the local VM can't feel.
+      line = encode_record(c, dedup_key)
+
+      case portability_check(line) do
+        :ok ->
+          # single append syscall — atomic per record (spec §7.1)
+          File.write!(path, line <> "\n", [:append])
+          :appended
+
+        {:error, reason} ->
+          {:rejected, reason}
+      end
+    end
+  end
+
+  # :ok unless decoding the encoded line raises the whitelist error; any other
+  # decode outcome is out of scope here (a separate concern) and does not block banking.
+  defp portability_check(line) do
+    case decode_record(line) do
+      {:error, %Challenge.UnknownAtomError{} = e} -> {:error, e}
+      _ -> :ok
     end
   end
 

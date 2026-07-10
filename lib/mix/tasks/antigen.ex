@@ -79,12 +79,12 @@ defmodule Mix.Tasks.Antigen do
     case mode do
       :explore ->
         r = Antigen.Runner.explore(runner_opts)
-        IO.puts("antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked (seed=#{r.seed})")
+        IO.puts("antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked#{rejected_note(r)} (seed=#{r.seed})")
 
       :generate ->
         install_sigterm_trap()
         r = Antigen.Runner.generate(runner_opts)
-        IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked (seed=#{r.seed})")
+        IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked#{rejected_note(r)} (seed=#{r.seed})")
 
         # Surface shape-coverage inline so a banking loop shows what the current
         # generators can/can't produce (same report `mix test` prints post-suite).
@@ -222,6 +222,13 @@ defmodule Mix.Tasks.Antigen do
       {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")}
     ])
   end
+
+  # Tally note for records the portability guard refused to bank (each was already
+  # reported loudly to stderr as it happened — see `Runner.report_unportable/2`).
+  defp rejected_note(%{rejected: n}) when is_integer(n) and n > 0,
+    do: ", #{n} non-portable rejected"
+
+  defp rejected_note(_), do: ""
 
   defp resolve_count(opts) do
     cond do
