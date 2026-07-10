@@ -15,3 +15,12 @@ mod Std.Char
   use Std.Bounded
 
   typealias Char = Bounded(1114112)
+
+  ## The Unicode code point of `c` as an `Int` (the Lean `Fin.val` analog for
+  ## `Char = Bounded(0x110000)`). A `Char` already erases to its code point, so
+  ## the runtime bridge is the identity; this names the `Char -> Int` coercion
+  ## so `Std.Ord`'s `Char`/`String` instances can compare code points. Named
+  ## `code_point` (not `to_int`) because `Std.String` also exposes a `to_int`
+  ## and the dependent pipeline resolves globals by bare name.
+  @extern(:cure_std_char, :code_point, 1)
+  fn code_point(c: Char) -> Int
