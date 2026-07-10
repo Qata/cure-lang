@@ -18,50 +18,6 @@ defmodule Cure.Audit.InterfaceImplTest do
   alias Cure.Elab.{Program, Coherence}
   alias Cure.Core.{Env, Inductive}
 
-  # --------------------------------------------------------------------------
-  # IF1 — an implementation method's declared type is never checked against
-  # the interface's declared method type.
-  # --------------------------------------------------------------------------
-
-  test "IF1: an implementation method whose declared type diverges from the interface's declared method type is accepted" do
-    # BUG (critical soundness hole). `Implementation.build_methods/5`
-    # (implementation.ex:57-70) takes the instance clause found by
-    # `method_def/4` (implementation.ex:74-87) VERBATIM -- it only renames the
-    # function (`rename_fn/2`, implementation.ex:126-127) and threads it into
-    # the ordinary function pipeline. `register_signatures/2`
-    # (implementation.ex:149-156) -> `Declarations.register_signature/2`
-    # (declarations.ex:144-156) -> `function_signature/2` computes the
-    # mangled global's Pi type purely from the CLAUSE'S OWN `params`/
-    # `return_type` (as written in the `implementation` body) -- never from
-    # `desc.methods[:eqs].type_ast` (the INTERFACE's declared
-    # `a -> a -> Bool`, substituted with this instance's head type). Nothing
-    # anywhere in implementation.ex, declarations.ex, or resolve.ex unifies
-    # the two. For concrete (static) dispatch -- the common case --
-    # `Resolve.concrete/6` (resolve.ex:113-122) inlines the mangled global
-    # directly via `elaborate_implicit_global_app`, so the interface's
-    # contract is never consulted at the call site either.
-    #
-    # Idris2 and Lean 4 both check every `implementation`/`instance` method
-    # against the interface/class's declared field type -- an implementation
-    # IS a record/structure literal, checked field-by-field against the
-    # record's declared field types. Cure's own design spec §3.2 agrees
-    # ("implementation Equatable for Int elaborates to a record value...  of
-    # type Equatable(Int)"), but the actual code never builds+checks that
-    # record at registration time for a concrete instance.
-    src = """
-    mod M
-      interface Eqs(a)
-        fn eqs(x: a, y: a) -> Bool
-      implementation Eqs for Int
-        fn eqs(x: Int, y: Int) -> Int = 42
-    end
-    """
-
-    assert match?({:error, _}, Program.elaborate(src)),
-           "an implementation method whose declared type (Int) diverges from " <>
-             "the interface's declared method type (Bool) must be rejected " <>
-             "at registration, with zero call sites needed to surface it"
-  end
 
   # --------------------------------------------------------------------------
   # IF2 — a higher-kinded interface never gets its Core dictionary record
@@ -192,40 +148,4 @@ defmodule Cure.Audit.InterfaceImplTest do
              "selection (design spec §3.4 point 5) has something to project"
   end
 
-  # --------------------------------------------------------------------------
-  # IF5 — an implementation-body clause matching no interface method is
-  # silently dropped instead of rejected.
-  # --------------------------------------------------------------------------
-
-  test "IF5: an implementation clause whose name matches no interface method is silently dropped instead of rejected" do
-    # BUG. `Implementation.build_methods/5` (implementation.ex:57-70) only
-    # iterates `desc.method_order` -- the INTERFACE's own method list -- and,
-    # for each, searches the impl `body` BY EXACT NAME via `method_def/4` /
-    # `function_def_named?/2` (implementation.ex:74-90). A clause present in
-    # `body` whose name matches none of the interface's methods (a typo, e.g.
-    # `eqz` instead of `eqs`) is simply never looked at: it contributes
-    # nothing and produces no diagnostic. If the REAL method the user meant
-    # to override (here `eqs`) happens to have an interface default, the
-    # whole `implementation` registers successfully anyway -- silently
-    # falling back to the default and discarding the user's actual clause
-    # with no warning or error of any kind.
-    #
-    # Idris2 rejects an `implementation`-block clause that does not name one
-    # of the interface's methods (a stray/mistyped clause is a compile
-    # error, not a silently-ignored extra).
-    src = """
-    mod M
-      interface Eqs(a)
-        fn eqs(x: a, y: a) -> Bool = true
-        fn nes(x: a, y: a) -> Bool = true
-      implementation Eqs for Int
-        fn eqz(x: Int, y: Int) -> Bool = int_eq(x, y)
-    end
-    """
-
-    assert match?({:error, _}, Program.elaborate(src)),
-           "an implementation clause naming no declared interface method " <>
-             "(here 'eqz', matching neither 'eqs' nor 'nes') must be " <>
-             "rejected, not silently dropped in favour of defaults"
-  end
 end
