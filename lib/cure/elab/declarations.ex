@@ -149,6 +149,82 @@ defmodule Cure.Elab.Declarations do
 
   def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
 
+  @doc """
+  Register a type family's HEADER — its name and parameter/index telescopes with
+  an EMPTY constructor list — WITHOUT elaborating its constructor bodies.
+
+  `Program.register_pass` runs this over every declaration in a module before it
+  elaborates any constructor body, so a field type may name a sibling declared
+  later (forward reference) or a mutually-recursive partner. The authoritative
+  declaration — same header, real constructors — still happens in the main pass
+  via `elaborate/2`, which re-declares the family (`Inductive.declare` is a plain
+  keyed put, so re-registering the header with the real ctors simply overwrites
+  the empty placeholder).
+
+  Only the ctor-bearing enum / record / indexed families need this: their bodies
+  are what reference siblings. `@builtin` containers are skipped (the canonical
+  builtin registration owns them). Everything else — aliases, opaque carriers,
+  interfaces, primitives, functions — is returned unchanged; their
+  forward-reference cases are out of scope for this pass and handled (or rejected)
+  in the main pass exactly as before.
+  """
+  @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
+  def declare_header({:container, meta, _variants}, env) when is_list(meta) do
+    cond do
+      match?({:builtin, _}, Keyword.get(meta, :decorator)) ->
+        {:ok, env}
+
+      Keyword.get(meta, :container_type) in [:enum, :struct] ->
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+        register_header(name, params, [], env)
+
+      true ->
+        {:ok, env}
+    end
+  end
+
+  def declare_header({:indexed_type, meta, _ctor_sigs}, env) when is_list(meta) do
+    if match?({:builtin, _}, Keyword.get(meta, :decorator)) do
+      {:ok, env}
+    else
+      name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+      params = Keyword.get(meta, :params, [])
+      index_params = Keyword.get(meta, :indices, [])
+      register_header(name, params, index_params, env)
+    end
+  end
+
+  # A bare single right-hand side (`type B = MkB`) parses as `:type_annotation`
+  # and is a single-constructor enum when the RHS names no existing type (the
+  # same disambiguation `elaborate/2` makes). Register its header so an earlier
+  # sibling may forward-reference it; a genuine typealias (`type MyNat = Nat`)
+  # binds a nullary def, not a ctor-bearing family, so it is left to the main
+  # pass.
+  def declare_header({:type_annotation, meta, [rhs]}, env) when is_list(meta) do
+    if single_variant_enum?(rhs, env) do
+      name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+      params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+      register_header(name, params, [], env)
+    else
+      {:ok, env}
+    end
+  end
+
+  def declare_header(_decl, env), do: {:ok, env}
+
+  # Elaborate the parameter/index telescopes (mirroring `declare_parameterized`'s
+  # prefix) and register the family with an empty constructor list.
+  defp register_header(name, params, index_params, env) do
+    param_scope = params |> Enum.map(fn {:param, _m, n} -> n end) |> Enum.reverse()
+
+    with {:ok, param_tele} <-
+           elaborate_index_telescope(params, name, env, [], :duplicate_parameter),
+         {:ok, index_tele} <- elaborate_index_telescope(index_params, name, env, param_scope) do
+      {:ok, Inductive.declare(env, Inductive.family(name, param_tele, index_tele, 0), [])}
+    end
+  end
+
   defp single_variant_enum?({:variable, rmeta, name}, env) when is_list(rmeta) and is_binary(name),
     do: Keyword.get(rmeta, :variant, false) and not type_name?(env, name)
 

@@ -1039,6 +1039,26 @@ defmodule Cure.Elab.Program do
   end
 
   defp register_pass(items, env, prelude?) do
+    with {:ok, env_h} <- declare_type_headers(items, env) do
+      body_register_pass(items, env_h, prelude?)
+    end
+  end
+
+  # Header pre-pass: register every ctor-bearing type family's HEADER (name +
+  # telescopes, empty ctors) before any constructor body is elaborated, so a
+  # field type may forward-reference a sibling declared later or a
+  # mutually-recursive partner (standard `data`-block scoping). `declare_header`
+  # is a no-op for non-type decls and for `@builtin` containers.
+  defp declare_type_headers(items, env) do
+    Enum.reduce_while(items, {:ok, env}, fn decl, {:ok, acc} ->
+      case Declarations.declare_header(decl, acc) do
+        {:ok, acc2} -> {:cont, {:ok, acc2}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp body_register_pass(items, env, prelude?) do
     Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
       case decl do
         {:function_def, _meta, _body} ->
