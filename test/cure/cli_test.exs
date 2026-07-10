@@ -300,4 +300,45 @@ defmodule Cure.CLITest do
       end
     end
   end
+
+  describe "missing-file handling for fmt / doc" do
+    # `cure fmt typo.cure` is an everyday mistake. fmt/doc read each target with
+    # File.read!, which raised an uncaught File.Error (BEAM stacktrace) on a
+    # missing file — unlike run/check/compile, which report + exit 1. A missing
+    # explicit target must be a clean non-zero exit, never a crash.
+    test "cure fmt on a missing file exits 1 without crashing" do
+      capture_io(:stderr, fn ->
+        assert catch_exit(Cure.CLI.main(["fmt", "/no/such/missing_fmt_xyz.cure"])) ==
+                 {:shutdown, 1}
+      end)
+    end
+
+    test "cure fmt --check on a missing file exits 1 without crashing" do
+      capture_io(:stderr, fn ->
+        assert catch_exit(Cure.CLI.main(["fmt", "--check", "/no/such/missing_fmtc_xyz.cure"])) ==
+                 {:shutdown, 1}
+      end)
+    end
+
+    test "cure doc on a missing file exits 1 without crashing" do
+      capture_io(:stderr, fn ->
+        assert catch_exit(Cure.CLI.main(["doc", "/no/such/missing_doc_xyz.cure"])) ==
+                 {:shutdown, 1}
+      end)
+    end
+  end
+
+  describe "unknown-command suggestions" do
+    # `migrate` is a real dispatch command (cli.ex) but was absent from the
+    # known_commands list the "did you mean" suggester searches, so a near-miss
+    # typo never proposed it.
+    test "a typo near 'migrate' suggests migrate" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["migrat"])) == {:shutdown, 1}
+        end)
+
+      assert stderr =~ "migrate"
+    end
+  end
 end

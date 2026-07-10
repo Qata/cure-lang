@@ -268,7 +268,7 @@ defmodule Cure.CLI do
         [unknown | _] ->
           known_commands = ~w(
             compile run check lsp stdlib version init deps test
-            explain doc repl fmt watch new bench why doctor fix
+            explain doc repl fmt watch new bench why doctor fix migrate
             publish search info keys release top trace synth bless replay
             john profile draw verify export-types snap story help
           )
@@ -1130,9 +1130,7 @@ defmodule Cure.CLI do
           Path.wildcard("lib/**/*.cure") ++ Path.wildcard("lib/std/*.cure")
 
         _ ->
-          Enum.flat_map(paths, fn p ->
-            if File.dir?(p), do: Path.wildcard(Path.join(p, "**/*.cure")), else: [p]
-          end)
+          expand_cure_targets(paths)
       end
 
     if cure_files == [] do
@@ -1224,6 +1222,24 @@ defmodule Cure.CLI do
   #
   #   * `--check`: dry-run that prints which files would change without
   #     rewriting them. Uses the algebra formatter in v0.21.0.
+  # Expand explicit path arguments (for `fmt`/`doc`) to a list of .cure files: a
+  # directory expands to its .cure files, a plain path is kept. A path that does
+  # not exist is a user error (a typo'd filename) — report it and exit non-zero,
+  # rather than passing it to a worker whose File.read! would crash with a raw
+  # BEAM stacktrace. Mirrors how `run`/`check`/`compile` treat a missing file.
+  defp expand_cure_targets(paths) do
+    case Enum.reject(paths, &File.exists?/1) do
+      [] ->
+        Enum.flat_map(paths, fn p ->
+          if File.dir?(p), do: Path.wildcard(Path.join(p, "**/*.cure")), else: [p]
+        end)
+
+      missing ->
+        error("Cannot read #{Enum.join(missing, ", ")}: no such file or directory")
+        exit({:shutdown, 1})
+    end
+  end
+
   defp cmd_fmt(paths, opts) do
     cure_files =
       case paths do
@@ -1231,9 +1247,7 @@ defmodule Cure.CLI do
           Path.wildcard("lib/**/*.cure") ++ Path.wildcard("test/**/*.cure")
 
         _ ->
-          Enum.flat_map(paths, fn p ->
-            if File.dir?(p), do: Path.wildcard(Path.join(p, "**/*.cure")), else: [p]
-          end)
+          expand_cure_targets(paths)
       end
 
     cond do
