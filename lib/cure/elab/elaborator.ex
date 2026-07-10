@@ -4170,9 +4170,26 @@ defmodule Cure.Elab.Elaborator do
   defp subst_surface_var({:variable, _meta, name}, name, replacement), do: replacement
 
   defp subst_surface_var({tag, meta, children}, name, replacement) when is_list(children),
-    do: {tag, meta, Enum.map(children, &subst_surface_var(&1, name, replacement))}
+    do: {tag, subst_surface_meta(meta, name, replacement),
+         Enum.map(children, &subst_surface_var(&1, name, replacement))}
 
   defp subst_surface_var(other, _name, _replacement), do: other
+
+  # A curried call `f(x)(y)` parses with its callee expression stashed in META
+  # (`callee:`, parser.ex `parse_call`), NOT in the node's children — so the
+  # generic child walk above would skip any variable inside the callee. Rewrite
+  # the `:callee` sub-expression too, or a nested-match desugaring (or a `let`)
+  # that renames `x` leaves the `x` inside `f(x)` untouched, and it reaches the
+  # kernel as an undefined `{:global, :x}`.
+  defp subst_surface_meta(meta, name, replacement) when is_list(meta) do
+    case Keyword.fetch(meta, :callee) do
+      {:ok, callee} ->
+        Keyword.put(meta, :callee, subst_surface_var(callee, name, replacement))
+
+      :error ->
+        meta
+    end
+  end
 
   # Does any nested binder in the remaining statements bind one of `avoid`?
   #

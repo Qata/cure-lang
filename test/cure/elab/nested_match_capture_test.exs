@@ -41,10 +41,7 @@ defmodule Cure.Elab.NestedMatchCaptureTest do
 
   test "let-bound nested-match lambda referencing outer binder (Std.Iter zip_with shape, non-curried)" do
     # The `let next = fn(_) -> nested match … outer-bound var …` shape used
-    # throughout Std.Iter. (The fully-curried `f(x)(y)` direct-ctor variant is
-    # blocked on a separate ctor-arg lambda bug — see the
-    # direct-ctor-field-lambda finding — so this pins the capture fix on the
-    # let-bound form that iter actually relies on.)
+    # throughout Std.Iter.
     src = """
     mod M
       use Std.Option
@@ -62,6 +59,39 @@ defmodule Cure.Elab.NestedMatchCaptureTest do
               match step(b)
                 None() -> None()
                 Some(Yield(y, rest_b)) -> Some(Yield(x, zip_first(rest_a, rest_b)))
+        Iter(next)
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "nested-pattern binder used inside a CURRIED application (Std.Iter zip_with, f(x)(y))" do
+    # zip_with's real shape: `f : t -> u -> v` combines the two elements via the
+    # curried application `f(x)(y)`, where `x` is bound by the OUTER match's
+    # nested pattern. A curried call `f(x)` parses with its callee preserved in
+    # the node's META (`callee:`), NOT its children (parser.ex `parse_call`).
+    # The nested-pattern desugarer renames `x` to a fresh scrutinee name via
+    # `subst_surface_var`, which walked children only — so the `x` hidden inside
+    # the callee `f(x)` was never renamed and leaked to the kernel as
+    # `{:global, :x}` → `:unknown_global`. Substituting through `:callee` fixes
+    # it. This was Std.Iter's last blocker.
+    src = """
+    mod M
+      use Std.Option
+      type StepToken = Step
+      type Iter(a) = Iter(StepToken -> Option(IterStep(a)))
+      type IterStep(a) = Yield(a, Iter(a))
+      local fn step(it: Iter(t)) -> Option(IterStep(t)) =
+        match it
+          Iter(next) -> next(Step())
+      fn zip_with(a: Iter(t), b: Iter(u), f: t -> u -> v) -> Iter(v) =
+        let next = fn(_) ->
+          match step(a)
+            None() -> None()
+            Some(Yield(x, rest_a)) ->
+              match step(b)
+                None() -> None()
+                Some(Yield(y, rest_b)) -> Some(Yield(f(x)(y), zip_with(rest_a, rest_b, f)))
         Iter(next)
     """
 
