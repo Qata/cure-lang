@@ -101,6 +101,28 @@ defmodule Cure.Compiler.TriviaTest do
     end
   end
 
+  alias Cure.Compiler.Printer
+
+  defp reprint(src) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: "d.cure", trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: "d.cure", emit_events: false)
+    ast |> Trivia.attach(trivia) |> Printer.quoted_to_string()
+  end
+
+  # A fenced doc comment with no blank body line (`### tail\n###`) carries a
+  # trailing "\n" in its token text (the opening-tail prepend over an empty
+  # body). Splitting on "\n" naively yielded a spurious empty `## ` line, which
+  # reparses as an extra doc comment the source never had. The reprint must not
+  # invent that empty line, and formatting must be idempotent.
+  test "a fenced doc comment with no blank body line does not gain a spurious empty ## line" do
+    out = reprint("### tail\n###\nmod M\n  fn f() -> Int = 1\n")
+
+    refute out |> String.split("\n") |> Enum.any?(&(String.trim_trailing(&1) == "##")),
+           "reprint invented an empty `## ` doc line: #{inspect(out)}"
+
+    assert reprint(out) == out, "doc-comment reprint is not idempotent"
+  end
+
   # helper: collect all values of a given meta key across the AST
   defp collect_meta(ast, key, acc \\ [])
   defp collect_meta({_k, m, ch}, key, acc) when is_list(m) and is_list(ch) do

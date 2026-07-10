@@ -45,6 +45,15 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     assert_roundtrips("mod M\n  fn f(a: Int, b: Int) -> Int = bnot a band b\n")
   end
 
+  test "nested unary minus does not fuse into -- (which re-lexes as an FSM arrow)" do
+    # `-(-5)` printed as `--5` re-lexes as the start of an FSM transition `--…`,
+    # so the reprint fails to parse. The `-` operand needs a separator when its
+    # rendering itself begins with `-`.
+    out = assert_roundtrips("mod M\n  fn f(x: Int) -> Int = -(-x)\n")
+    refute out =~ "--"
+    assert_roundtrips("mod M\n  fn f(x: Int) -> Int = -(-(-x))\n")
+  end
+
   test "an implicit type parameter keeps its braces (stays implicit, not positional)" do
     out = assert_roundtrips("mod M\n  fn id({A: Type}, x: A) -> A = x\n")
     assert out =~ "{A: Type}" or out =~ "{A : Type}"

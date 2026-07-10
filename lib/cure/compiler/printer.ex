@@ -268,7 +268,15 @@ defmodule Cure.Compiler.Printer do
   defp trivia_lines({:comment, text, _, _}), do: ["# " <> text]
 
   defp trivia_lines({:doc_comment, text, _, _}) do
-    text |> String.split("\n") |> Enum.map(&("## " <> &1))
+    # A fenced doc token's text can carry a single trailing "\n" that is an
+    # artifact of its construction (an `### tail` opening-tail prepended over an
+    # empty body), not a real blank body line. Splitting it verbatim would emit
+    # a spurious empty `## ` line that reparses as an extra doc comment, so drop
+    # exactly one trailing newline first. Internal blank lines are preserved.
+    text
+    |> String.replace_suffix("\n", "")
+    |> String.split("\n")
+    |> Enum.map(&("## " <> &1))
   end
 
   defp comment_text({:comment, text, _, _}), do: "# " <> text
@@ -354,7 +362,11 @@ defmodule Cure.Compiler.Printer do
 
     case op do
       :not -> "not #{inner}"
-      :- -> "-#{inner}"
+      # A leading `-` on the operand would abut into `--`, which the lexer reads
+      # as the start of an FSM transition (`-->`/`--|`) and fails on — so `-(-x)`
+      # must reprint as `- -x`, not `--x`. Separate only when the operand's own
+      # rendering starts with `-` (a nested unary minus / negative literal).
+      :- -> if String.starts_with?(inner, "-"), do: "- #{inner}", else: "-#{inner}"
       # Word-spelled prefix operators (e.g. `bnot`) need a separating space, or
       # `bnot a` reprints as the single identifier `bnota`. Only symbolic
       # single-character operators like `-` may abut their operand.
