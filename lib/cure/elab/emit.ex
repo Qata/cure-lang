@@ -202,7 +202,7 @@ defmodule Cure.Elab.Emit do
           [n] -> {:op, @line, :+, lower(env, n, ctx), {:integer, @line, 1}}
         end
 
-      sigma_ctor?(env, name) or tuple_ctor?(env, name) ->
+      sigma_ctor?(env, name) ->
         {:tuple, @line, Enum.map(args, &lower(env, &1, ctx))}
 
       list_ctor?(env, name) ->
@@ -657,15 +657,6 @@ defmodule Cure.Elab.Emit do
     fam = Inductive.builtin(env, :sigma)
     fam != nil and Inductive.ctor_family(env, name) == fam
   end
-
-  # The flat n-ary tuple families `Tuple3 … Tuple8` (spec 2026-07-09-unified-tuple):
-  # their single `mk_tupleN` constructor lowers to a bare BEAM N-tuple `{…}` — the
-  # untagged flat shape (like Sigma's 2-tuple), so an OCaml/Haskell-style tuple maps
-  # to the native BEAM tuple. Detected by family (not name) so a user `mk_tuple3`
-  # def cannot masquerade.
-  @tuple_families for n <- 3..8, do: :"Tuple#{n}"
-
-  defp tuple_ctor?(env, name), do: Inductive.ctor_family(env, name) in @tuple_families
 
   # The canonical Std.List family (registry-keyed, nominal): its values are native
   # BEAM lists — Nil is [], Cons(h,t) is [H|T] — so Erlang/AtomVM list NIFs interop.

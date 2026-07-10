@@ -671,39 +671,6 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A flat n-ary tuple literal `%[a1,…,an]` (3 ≤ n ≤ 8) in synthesis mode: infer
-  # each element, assemble the `TupleN` family value from the element types, and
-  # build the flat `mk_tupleN` constructor. Arity > 8 is rejected (records/lists
-  # cover wider products — the v1 limit, à la Haskell/OCaml). Arity 2 is the
-  # dependent Sigma above; a NESTED `%[a, %[b,c]]` stays two `mk_pair`s.
-  def elaborate_expr_typed({:tuple, _meta, elems}, names, ctx, env)
-      when length(elems) >= 3 do
-    n = length(elems)
-
-    if n > 8 do
-      {:error, {:tuple_arity_exceeded, n}}
-    else
-      elems
-      |> Enum.reduce_while({:ok, [], []}, fn e, {:ok, rc, rt} ->
-        case elaborate_expr_typed(e, names, ctx, env) do
-          {:ok, c, t} -> {:cont, {:ok, [c | rc], [t | rt]}}
-          {:error, _} = err -> {:halt, err}
-        end
-      end)
-      |> case do
-        {:ok, rc, rt} ->
-          len = Context.length(ctx)
-          type_terms = rt |> Enum.reverse() |> Enum.map(&Quote.reify(&1, len))
-          data_term = {:data, :"Tuple#{n}", type_terms, []}
-          data_val = Eval.eval(data_term, Context.env(ctx))
-          {:ok, {:ctor, :"mk_tuple#{n}", Enum.reverse(rc)}, data_val}
-
-        {:error, _} = err ->
-          err
-      end
-    end
-  end
-
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
   # Desugar a concatenation operator to the `Std.Semigroup.combine` method call,
@@ -1276,50 +1243,6 @@ defmodule Cure.Elab.Elaborator do
 
       _ ->
         elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
-    end
-  end
-
-  # A flat n-ary tuple literal `%[a1,…,an]` (3 ≤ n ≤ 8) checked against a `TupleN`
-  # goal: check each element at the matching family type argument (non-dependent —
-  # the positions are independent, so no per-position substitution as arity-2's
-  # `cod_inst` needs), then re-check the assembled `mk_tupleN`. Any other goal (or a
-  # NESTED literal against `Tuple(A, Tuple(B,C))`) falls through to the fallback.
-  def elaborate_expr_checked({:tuple, _meta, elems} = expr, expected_core, names, ctx, env)
-      when length(elems) >= 3 do
-    n = length(elems)
-
-    cond do
-      n > 8 ->
-        {:error, {:tuple_arity_exceeded, n}}
-
-      true ->
-        want = :"Tuple#{n}"
-
-        case Kernel.normalize(ctx, expected_core) do
-          {:data, fam, params, []} when fam == want and length(params) == n ->
-            elems
-            |> Enum.zip(params)
-            |> Enum.reduce_while({:ok, []}, fn {e, pty}, {:ok, rev} ->
-              case elaborate_expr_checked(e, pty, names, ctx, env) do
-                {:ok, c} -> {:cont, {:ok, [c | rev]}}
-                {:error, _} = err -> {:halt, err}
-              end
-            end)
-            |> case do
-              {:ok, rev} ->
-                term = {:ctor, :"mk_tuple#{n}", Enum.reverse(rev)}
-
-                with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-                  {:ok, term}
-                end
-
-              {:error, _} = err ->
-                err
-            end
-
-          _ ->
-            elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
-        end
     end
   end
 
