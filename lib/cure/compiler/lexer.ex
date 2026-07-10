@@ -59,6 +59,8 @@ defmodule Cure.Compiler.Lexer do
 
   @keyword_strings Enum.map(@keywords, &Atom.to_string/1)
 
+  @keyword_string_set MapSet.new(@keyword_strings)
+
   # -- Lexer state -----------------------------------------------------------
 
   defstruct [
@@ -74,7 +76,8 @@ defmodule Cure.Compiler.Lexer do
     fsm_transition_depth: 0,
     preserve_comments: false,
     collect_trivia: false,
-    trivia: []
+    trivia: [],
+    keyword_set: @keyword_string_set
   ]
 
   @type t :: %__MODULE__{}
@@ -103,6 +106,11 @@ defmodule Cure.Compiler.Lexer do
     `{:comment, text, line, col} | {:doc_comment, text, line, col} | {:blank, count, line}`.
     Default `false`, in which case the return shape is the usual `{:ok, tokens}`.
     Independent of `:preserve_comments` (which governs the main token stream).
+  - `:edition` -- the Cure edition the source is read against (default
+    `Cure.Edition.current/0`). Keywords retired at/before this edition (per the
+    migration registry) are lexed as plain identifiers instead.
+  - `:migrate_rules` -- the migration rule list used to derive the retired-keyword
+    set (default `Cure.Migrate.rules/0`); overridable for testing.
   """
   @spec tokenize(String.t(), keyword()) ::
           {:ok, [Token.t()]} | {:ok, [Token.t()], [tuple()]} | {:error, term()}
@@ -112,11 +120,17 @@ defmodule Cure.Compiler.Lexer do
     preserve? = Keyword.get(opts, :preserve_comments, false)
     trivia? = Keyword.get(opts, :trivia, false)
 
+    edition = Keyword.get(opts, :edition, Cure.Edition.current())
+    migrate_rules = Keyword.get(opts, :migrate_rules, Cure.Migrate.rules())
+    retired = MapSet.new(Cure.Edition.retired_keywords(edition, migrate_rules))
+    keyword_set = MapSet.difference(@keyword_string_set, retired)
+
     state = %__MODULE__{
       source: source,
       file: file,
       preserve_comments: preserve?,
-      collect_trivia: trivia?
+      collect_trivia: trivia?,
+      keyword_set: keyword_set
     }
 
     case do_tokenize(state) do
@@ -688,7 +702,7 @@ defmodule Cure.Compiler.Lexer do
     # effect annotations and FSM hard events.
     {word, state} =
       cond do
-        state.fsm_transition_depth > 0 and word not in @keyword_strings ->
+        state.fsm_transition_depth > 0 and not MapSet.member?(state.keyword_set, word) ->
           case peek(state) do
             c when c in [?!, ??] ->
               {word <> <<c::utf8>>, advance(state, 1)}
@@ -697,7 +711,7 @@ defmodule Cure.Compiler.Lexer do
               {word, state}
           end
 
-        word not in @keyword_strings and peek(state) == ?? ->
+        not MapSet.member?(state.keyword_set, word) and peek(state) == ?? ->
           # `?` immediately followed by an identifier-starter is a *hole*
           # prefix (`?name`), so only consume the `?` when it is a
           # proper suffix (followed by something that can't begin a
@@ -715,7 +729,7 @@ defmodule Cure.Compiler.Lexer do
       end
 
     {type, value} =
-      if word in @keyword_strings do
+      if MapSet.member?(state.keyword_set, word) do
         kw = String.to_atom(word)
 
         case kw do

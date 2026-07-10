@@ -139,4 +139,24 @@ defmodule Cure.Edition do
     :persistent_term.erase(@advisory_key)
     :ok
   end
+
+  @doc """
+  The keywords retired at or before `edition`, derived from the migration
+  registry (single source of truth). A rule retires each of its
+  `retires_keywords` at its `enforced_in` edition: present for editions before
+  it, absent at/after. `enforced_in: nil` never retires.
+
+  `Cure.Migrate.rules()` is called at RUNTIME (the default arg) rather than at
+  compile time to avoid a compile cycle (lexer → Edition → Migrate → rule
+  modules).
+  """
+  @spec retired_keywords(t(), [Cure.Migrate.Rule.t()]) :: [String.t()]
+  def retired_keywords(edition, rules \\ Cure.Migrate.rules()) do
+    for r <- rules,
+        r.enforced_in != nil,
+        compare(edition, r.enforced_in) in [:eq, :gt],
+        kw <- r.retires_keywords,
+        uniq: true,
+        do: kw
+  end
 end
