@@ -158,4 +158,50 @@ defmodule Cure.Elab.TypeShadowingTest do
 
     assert {:ok, _env} = elaborate(src)
   end
+
+  describe "a constructor name collides in its OWN namespace, independent of its family" do
+    # The collision-detection pipeline used to scan exactly two namespaces: family/type names
+    # (`owned_family_names/1`) and top-level def names (`owned_def_names/1`). A constructor was
+    # only ever re-keyed as a SIDE EFFECT of its owning family colliding — `rekey_module_env`
+    # derived its owned-ctor set from the owned FAMILY names.
+    #
+    # So a local constructor whose bare name matches an imported constructor of a DIFFERENT,
+    # non-colliding family was never seen as a collision at all. `Std.Result` was never re-keyed,
+    # and the plain `Map.put` in `Inductive.declare/3` destroyed its `Ok` — with no diagnostic
+    # AND no qualified escape hatch, since `resolve_qualified/3` reads the re-keyed env. That
+    # breaks this module's own promise of "keeping the imported family reachable via a qualified
+    # escape hatch". Constructor ownership is now scanned as its own namespace.
+    @src """
+    mod CtorNameCollision
+      use Std.Result
+      type Res = Ok(Int) | Nope
+      fn mk() -> Res = Ok(5)
+    end
+    """
+
+    test "the losing import stays reachable at its qualified key" do
+      assert {:ok, env} = elaborate(@src)
+
+      assert {:ok, :"Std.Result#Ok"} =
+               Cure.Elab.Resolution.resolve_qualified(env, "Std.Result.Ok", :value)
+
+      assert env.ctor_to_family[:"Std.Result#Ok"] == :Result
+    end
+
+    test "the local declaration wins the bare key" do
+      assert {:ok, env} = elaborate(@src)
+
+      assert env.ctor_to_family[:Ok] == :Res
+      assert Cure.Core.Env.get_def(env, :mk).body == {:ctor, :Ok, [int_lit: 5]}
+    end
+
+    test "a non-colliding constructor of the same import keeps its bare key" do
+      # `Result` is `Ok(t) | Error(e)`; only `Ok` collides. `Error` must not be dragged along —
+      # "a constructor keeps its bare key unless its own name is in shadowed_ctor_names".
+      assert {:ok, env} = elaborate(@src)
+
+      assert env.ctor_to_family[:Error] == :Result
+      assert env.families[:Result].name == :Result
+    end
+  end
 end

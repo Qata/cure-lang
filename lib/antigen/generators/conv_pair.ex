@@ -44,7 +44,13 @@ defmodule Antigen.Generators.ConvPair do
           :app_arg_float,
           :app_arg_data,
           :app_arg_ctor,
-          :app_arg_lam
+          :app_arg_lam,
+          :app_arg_nat,
+          :nat_refl,
+          :nat_distinct,
+          :nat_vs_tower,
+          :tower_vs_nat,
+          :neutral_head_mismatch
         ],
         do: {"conv/decision", cell}
   end
@@ -108,9 +114,27 @@ defmodule Antigen.Generators.ConvPair do
       {1, Gen.bind(Gen.int(-9, 9), fn k -> app_refl({:float_lit, k / 2}, "vfloat (191)", :app_arg_float) end)},
       {1, app_refl({:data, :Nat, [], []}, "vdata (193)", :app_arg_data)},
       {1, app_refl({:ctor, :Z, []}, "vctor (196)", :app_arg_ctor)},
-      {1, app_refl({:lam, {:type, 0}, {:type, 0}}, "vλ fallback → conv_struct η (199)", :app_arg_lam)}
+      {1, app_refl({:lam, {:type, 0}, {:type, 0}}, "vλ fallback → conv_struct η (199)", :app_arg_lam)},
+      # -- compact-Nat conversion (conv_struct? 85/88/91, same_value_no_delta? 194) --
+      # The definitional-equality bridge between a compact `{:nat_lit,n}` and its
+      # n-fold S/Z tower, both directions, plus the neutral-spine no-δ fast path on
+      # a nat-literal argument. This is the conversion-layer sibling of the audited
+      # compact-lit↔tower unifier bridge; previously never exercised by any generator.
+      {1, app_refl({:nat_lit, 3}, "vnat no-δ fast path (194)", :app_arg_nat)},
+      {2, ret({:nat_lit, 2}, {:nat_lit, 2}, true, "compact-nat reflexive (85)", :nat_refl)},
+      {2, ret({:nat_lit, 2}, {:nat_lit, 3}, false, "compact-nat distinct literals (85)", :nat_distinct)},
+      {2, ret({:nat_lit, 1}, s_tower(1), true, "compact-lit vs S/Z tower (88)", :nat_vs_tower)},
+      {2, ret(s_tower(2), {:nat_lit, 2}, true, "S/Z tower vs compact-lit (91)", :tower_vs_nat)},
+      # -- structurally-distinct stuck neutrals (conv_neutral? head-mismatch, 146) --
+      {2, ret(v(0), {:app, v(1), {:type, 0}}, false, "nvar vs napp head mismatch (146)", :neutral_head_mismatch)}
     ])
   end
+
+  # The n-fold successor tower over Z: `S (S (… Z))`, the ctor-spelling counterpart
+  # of `{:nat_lit, n}`. Evaluates to the `{:vctor, :S, [{:vctor, :Z, []}]}`-shaped
+  # value `Eval.nat_to_ctor/1` peels a compact literal into.
+  defp s_tower(0), do: {:ctor, :Z, []}
+  defp s_tower(n) when n > 0, do: {:ctor, :S, [s_tower(n - 1)]}
 
   # `v0 arg` compared to itself: same_neutral_no_delta? recurses through the napp
   # spine into same_value_no_delta? on the argument value.

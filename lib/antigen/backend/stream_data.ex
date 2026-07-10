@@ -25,4 +25,44 @@ defmodule Antigen.Backend.StreamData do
 
   @impl true
   def sample(native, count), do: Enum.take(native, count)
+
+  # StreamData's own `__reduce__` caps generation size at this value; the seeded
+  # path replicates the cap via `StreamData.scale/2` so its value sequence matches
+  # a normal (os-timestamp-seeded) enumeration started from the same seed.
+  @max_size 100
+
+  @doc """
+  Deterministically draw `count` values from `descr` using the integer `seed` — the
+  reproducibility primitive for `mix antigen --seed N`.
+
+  Unlike `Enum.take/2` on `interp(descr)` (whose `Enumerable` impl reseeds from
+  `:os.timestamp/0` every enumeration, so runs cannot be replayed), this drives the
+  public `StreamData.check_all/3` with an explicit `initial_seed`, accumulating each
+  generated value. `check_all` ramps size unbounded, so the generator is wrapped in
+  `StreamData.scale/2` to reinstate StreamData's normal `#{@max_size}` size cap —
+  making the produced sequence identical to what a same-seed enumeration would yield.
+  Same `seed` ⇒ same sequence; different `seed` ⇒ (with overwhelming probability) a
+  different one.
+  """
+  @spec sample_seeded(term(), non_neg_integer(), integer()) :: [term()]
+  def sample_seeded(descr, count, seed) when is_integer(seed) and is_integer(count) and count >= 0 do
+    key = {:antigen_sample_seeded, make_ref()}
+    Process.put(key, [])
+    capped = StreamData.scale(interp(descr), fn size -> min(size, @max_size) end)
+
+    try do
+      StreamData.check_all(
+        capped,
+        [initial_seed: {seed, 0, 0}, initial_size: 1, max_runs: count, max_run_time: :infinity],
+        fn value ->
+          Process.put(key, [value | Process.get(key)])
+          {:ok, nil}
+        end
+      )
+
+      key |> Process.get() |> Enum.reverse()
+    after
+      Process.delete(key)
+    end
+  end
 end

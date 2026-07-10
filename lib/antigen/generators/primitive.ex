@@ -42,6 +42,7 @@ defmodule Antigen.Generators.Primitive do
   @bool_type {:data, :Bool, [], []}
   @int_cmp_ops [:int_lt, :int_le, :int_gt, :int_ge, :int_eq, :int_ne]
   @float_cmp_ops [:float_lt, :float_le, :float_gt, :float_ge, :float_eq, :float_ne]
+  @struct_ops [:struct_eq, :struct_ne]
 
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
@@ -65,8 +66,53 @@ defmodule Antigen.Generators.Primitive do
     Gen.frequency([
       {5, Gen.bind(int_prim(@max_depth), fn t -> Gen.return({t, {:int_type}}) end)},
       {4, Gen.bind(float_prim(@max_depth), fn t -> Gen.return({t, {:float_type}}) end)},
-      {5, Gen.bind(bool_prim(@max_depth), fn t -> Gen.return({t, @bool_type}) end)}
+      {5, Gen.bind(bool_prim(@max_depth), fn t -> Gen.return({t, @bool_type}) end)},
+      {2, struct_eq_int()},
+      {2, struct_eq_float()},
+      {1, struct_eq_partial()}
     ])
+  end
+
+  # -- A1 struct_eq/struct_ne (polymorphic structural equality) ---------------
+  # `struct_eq/struct_ne : Pi(a:Type0). a -> a -> Bool` (Cure.Core.Builtins
+  # seed_struct_ops). A FULLY saturated 3-arg spine (type witness + two literal
+  # operands) is the reachability lever for `Normalise.builtin_op_fold`'s
+  # `[_tyval, l, r]` struct-op arm — it folds via the SAME audited `Eval.fold`
+  # table when both operands whnf to int/float literals (Amendment A1, spec
+  # 2026-07-09 §1-A).
+  defp struct_eq_int do
+    Gen.bind(Gen.member_of(@struct_ops), fn g ->
+      Gen.bind(int_lit(), fn a ->
+        Gen.bind(int_lit(), fn b ->
+          Gen.return({{:app, {:app, {:app, {:global, g}, {:int_type}}, a}, b}, @bool_type})
+        end)
+      end)
+    end)
+  end
+
+  defp struct_eq_float do
+    Gen.bind(Gen.member_of(@struct_ops), fn g ->
+      Gen.bind(float_lit(), fn a ->
+        Gen.bind(float_lit(), fn b ->
+          Gen.return({{:app, {:app, {:app, {:global, g}, {:float_type}}, a}, b}, @bool_type})
+        end)
+      end)
+    end)
+  end
+
+  # An UNDER-saturated struct_eq/struct_ne spine (the type witness only, no
+  # operands yet) — a legitimate partial application (its type is the residual
+  # `a -> a -> Bool` Pi), but its argument count (1) matches neither the 3-arg
+  # struct-op clause NOR the generic op clause (whose guard excludes struct_eq/
+  # struct_ne outright) — the reachability lever for `builtin_op_fold`'s final
+  # wrong-arity catch-all (§ "A struct op at the wrong arity" — never unsound,
+  # at worst a missed fold; the spine just stays neutral/stuck).
+  defp struct_eq_partial do
+    Gen.bind(Gen.member_of(@struct_ops), fn g ->
+      Gen.bind(Gen.member_of([{:int_type}, {:float_type}]), fn ty ->
+        Gen.return({{:app, {:global, g}, ty}, {:pi, ty, {:pi, ty, @bool_type}}})
+      end)
+    end)
   end
 
   # -- Int ops ------------------------------------------------------------------

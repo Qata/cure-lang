@@ -39,6 +39,12 @@ defmodule Antigen.Generators.SigMenu do
       Env.empty()
       |> Inductive.declare(Inductive.family(:Nat, [], [], 0),
         [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, nat()}], [])])
+      # The :nat builtin binding — the SAME canonical family real Cure seeds via
+      # `Cure.Core.Builtins.seed/2` (mirrors the :bool binding below). Required so
+      # a bare compact `{:nat_lit, n}` term typechecks: `Kernel.infer`'s nat_lit
+      # clause resolves its type via `nat_type_value` (reads the :nat builtin),
+      # which raises "builtin :nat not seeded" without this registration.
+      |> Inductive.register_builtin(:nat, :Nat)
       |> Inductive.declare(Inductive.family(:Bd, [], [], 0),
         [Inductive.ctor(:T, [], []), Inductive.ctor(:F, [], [])])
       # SList : Type0 — a snoc-free cons list of Nat, backing the carried-index

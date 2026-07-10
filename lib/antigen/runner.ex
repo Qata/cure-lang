@@ -12,7 +12,7 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
+  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.
@@ -51,17 +51,18 @@ defmodule Antigen.Runner do
 
   def explore(opts) do
     count = Keyword.get(opts, :count, 200)
+    seed = Keyword.get(opts, :seed) || fresh_seed()
 
     challenges =
       cond do
         opts[:challenges] -> opts[:challenges]
-        opts[:bias] -> draw_biased(opts[:gen], count, Keyword.get(opts, :round_size, @round_size))
+        opts[:bias] -> draw_biased(opts[:gen], count, Keyword.get(opts, :round_size, @round_size), seed)
         # exactly one undivided draw when unbiased (spec §4 — take is not composable)
-        true -> draw(opts[:gen], count)
+        true -> draw(opts[:gen], count, seed)
       end
 
     final =
-      Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
+      Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, rejected: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
         run_challenge(c, opts, acc, count)
       end)
 
@@ -98,6 +99,8 @@ defmodule Antigen.Runner do
     %{
       infections: final.infections,
       seeds_banked: final.seeds_banked,
+      rejected: final.rejected,
+      seed: seed,
       health: summarize(final, count),
       health_metrics: metrics,
       stamp: stamp
@@ -288,10 +291,12 @@ defmodule Antigen.Runner do
 
   def generate(opts) do
     count = Keyword.get(opts, :count, 200)
+    seed = Keyword.get(opts, :seed) || fresh_seed()
 
-    draw(opts[:gen], count)
-    |> Enum.reduce(%{seeds_banked: 0}, fn c, acc -> bank_seed(%{c | seed: seed_of(c)}, opts, acc) end)
-    |> Map.take([:seeds_banked])
+    draw(opts[:gen], count, seed)
+    |> Enum.reduce(%{seeds_banked: 0, rejected: 0}, fn c, acc -> bank_seed(%{c | seed: seed_of(c)}, opts, acc) end)
+    |> Map.take([:seeds_banked, :rejected])
+    |> Map.put(:seed, seed)
   end
 
   def replay(paths, assays) do
@@ -328,7 +333,9 @@ defmodule Antigen.Runner do
     "indexed/case",
     "rewrite/eq",
     "universes",
+    "inductive/env_roundtrip",
     "term/rejection",
+    "kernel/probe",
     "serialize/roundtrip",
     "serialize/decode",
     "conv/decision",
@@ -382,7 +389,9 @@ defmodule Antigen.Runner do
   defp assay_module("indexed/case"), do: Antigen.Assays.Indexed
   defp assay_module("rewrite/eq"), do: Antigen.Assays.Rewrite
   defp assay_module("universes"), do: Antigen.Assays.Universes
+  defp assay_module("inductive/env_roundtrip"), do: Antigen.Assays.InductiveEnv
   defp assay_module("term/rejection"), do: Antigen.Assays.Malformed
+  defp assay_module("kernel/probe"), do: Antigen.Assays.KernelProbe
   defp assay_module("serialize/roundtrip"), do: Antigen.Assays.Serialization
   defp assay_module("serialize/decode"), do: Antigen.Assays.Serialization
   defp assay_module("conv/decision"), do: Antigen.Assays.Conv
@@ -425,11 +434,43 @@ defmodule Antigen.Runner do
   @doc "Public view of the assay registry (for tests)."
   def assay_module_for(assay_id), do: assay_module(assay_id)
 
+  @doc """
+  The full assay replay registry: every registered assay id mapped to its module.
+  Built from `registered_assays/0` + `assay_module_for/1`, so it stays in sync with
+  the dispatch table automatically (unlike a hand-maintained literal). Consumers:
+  `Antigen.Prune` (re-check each corpus record against the live kernel) and any
+  replay driver that must cover *every* assay, not a hardcoded subset.
+  """
+  @spec replay_registry() :: %{String.t() => module()}
+  def replay_registry do
+    for id <- registered_assays(), into: %{}, do: {id, assay_module_for(id)}
+  end
+
   defp bank_seed(c, opts, acc) do
     case Corpus.append(opts[:seeds_path], c, Corpus.dedup_key(c, :seed)) do
       :appended -> %{acc | seeds_banked: acc.seeds_banked + 1}
       :duplicate -> acc
+      {:rejected, e} -> report_unportable(c, e); %{acc | rejected: acc.rejected + 1}
     end
+  end
+
+  # Loud, inline report of a record that could NOT be banked because it reconstructs
+  # an atom absent from `Challenge.__known_atoms__/0` (it would crash the replay gate
+  # on a fresh VM). Printed to stderr so it stands out in a banking loop's output; the
+  # message names the missing atom and how to fix it.
+  defp report_unportable(c, e) do
+    IO.puts(:stderr, "")
+
+    IO.puts(
+      :stderr,
+      IO.ANSI.format([
+        :red,
+        :bright,
+        "!!! ANTIGEN: non-portable record NOT banked (assay=#{c.assay} kind=#{c.kind}) !!!"
+      ])
+    )
+
+    IO.puts(:stderr, "  " <> Exception.message(e))
   end
 
   @doc """
@@ -481,7 +522,11 @@ defmodule Antigen.Runner do
             :infection -> IO.puts(Report.breadcrumb(c_min, path, :infection))
             :immune_response -> Report.tally_immune_response()
           end
-          Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody))
+          case Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody)) do
+            {:rejected, e} -> report_unportable(c_min, e)
+            _ -> :ok
+          end
+
           %{acc | infections: acc.infections + 1}
       end
     else
@@ -497,32 +542,49 @@ defmodule Antigen.Runner do
     end
   end
 
-  @doc "Public single-batch draw (wraps the private `draw/2`) for the guided loop."
-  def draw_n(gen, count), do: draw(gen, count)
+  @doc "Public single-batch draw (wraps the private `draw/3`) for the guided loop."
+  def draw_n(gen, count), do: draw(gen, count, fresh_seed())
 
-  defp draw(gen, count), do: Backend.StreamData.interp(gen) |> Enum.take(count)
+  # Seeded draw — every draw is replayable given `seed` (see `Backend.StreamData.sample_seeded/3`).
+  defp draw(gen, count, seed), do: Backend.StreamData.sample_seeded(gen, count, seed)
+
+  @doc """
+  A fresh, wall-clock-derived master seed for an unseeded run. Distinct across
+  `mix antigen` invocations (separate VMs) so each run prints a replayable seed.
+  """
+  @spec fresh_seed() :: integer()
+  def fresh_seed, do: System.system_time(:microsecond)
+
+  @doc """
+  Per-round seed for a biased run, derived deterministically from the master `seed`
+  and the 0-based round index. Keeps rounds independent (each its own RNG stream)
+  yet fully reproducible from a single master seed.
+  """
+  @spec round_seed(integer(), non_neg_integer()) :: integer()
+  def round_seed(seed, index), do: :erlang.phash2({seed, index})
 
   # `bias: true` draw (spec §4): draw `round_size` at a time, stamp the accumulated
   # batch's per-group health, reweight the mix, continue. Precondition: `gen` is the
   # reweightable `{:frequency, ws}` shape (`Mix.Tasks.Antigen.default_gen/0`) — an
   # ad-hoc non-frequency gen hits this match and crashes clearly rather than
   # silently misbehaving (bias:true is a CLI-only feature this run, §7 non-goals).
-  defp draw_biased(gen, count, round_size) do
+  defp draw_biased(gen, count, round_size, seed) do
     {:frequency, ws0} = gen
-    # `round_size <= 0` would stall `draw_rounds/4` (n never decreases) — floor it,
+    # `round_size <= 0` would stall `draw_rounds/6` (n never decreases) — floor it,
     # since `opts[:round_size]` is caller-suppliable with no CLI validation.
-    draw_rounds(ws0, count, max(round_size, 1), [])
+    draw_rounds(ws0, count, max(round_size, 1), seed, 0, [])
   end
 
-  defp draw_rounds(_ws, 0, _round_size, acc), do: acc |> Enum.reverse() |> List.flatten()
+  defp draw_rounds(_ws, 0, _round_size, _seed, _idx, acc), do: acc |> Enum.reverse() |> List.flatten()
 
-  defp draw_rounds(ws, remaining, round_size, acc) do
+  defp draw_rounds(ws, remaining, round_size, seed, idx, acc) do
     n = min(round_size, remaining)
-    batch = draw({:frequency, ws}, n)
+    # Each round draws from its own reproducible sub-seed derived from the master.
+    batch = draw({:frequency, ws}, n, round_seed(seed, idx))
     stamps = round_stamps(List.flatten([batch | acc]))
     new_weights = reweight(Enum.map(ws, fn {w, _g} -> w end), gen_group_table(), stamps)
     ws2 = Enum.zip(new_weights, ws) |> Enum.map(fn {w, {_old_w, g}} -> {w, g} end)
-    draw_rounds(ws2, remaining - n, round_size, [batch | acc])
+    draw_rounds(ws2, remaining - n, round_size, seed, idx + 1, [batch | acc])
   end
 
   # `discard_rate` isn't knowable during the draw phase (discards are decided later,

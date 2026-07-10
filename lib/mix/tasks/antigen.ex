@@ -2,8 +2,14 @@ defmodule Mix.Tasks.Antigen do
   @moduledoc """
   Run the Antigen property-based metatheory engine (spec §8).
 
-      mix antigen [--count N | --budget Nm] [--bias] [--corpus PATH] [--seeds PATH] [--report-dir DIR]
-      mix antigen generate [--count N | --budget Nm] [--seeds PATH] [--report-dir DIR]
+      mix antigen [--count N | --budget Nm] [--bias] [--seed N] [--corpus PATH] [--seeds PATH] [--report-dir DIR]
+      mix antigen generate [--count N | --budget Nm] [--seed N] [--seeds PATH] [--report-dir DIR]
+
+  Every run prints the integer master seed it used (`seed=…`). Re-running with
+  `--seed N` replays that run's generation exactly (deterministic draws, including
+  each `--bias` round's sub-seed) — the way to reproduce a specific `mix antigen`
+  run. `--seed` sets the RNG master seed; it is unrelated to `--seeds PATH` (the
+  seed-corpus file).
 
   `mix antigen` is the **explorer**: generate → assay → bank; it self-terminates
   after a bounded number of generation rounds (`--count`, default #{20_000},
@@ -37,7 +43,8 @@ defmodule Mix.Tasks.Antigen do
 
   @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string,
              report_dir: :string, out: :string, guided: :boolean, precise: :boolean,
-             edge_corpus: :string, plateau: :integer, guided_round: :integer]
+             edge_corpus: :string, plateau: :integer, guided_round: :integer, seed: :integer,
+             record_new_coverage_baseline: :boolean]
 
   @impl Mix.Task
   def run(argv) do
@@ -61,7 +68,9 @@ defmodule Mix.Tasks.Antigen do
       seeds_path: seeds_path,
       report_dir: opts[:report_dir] || "tmp/antigen",
       count: count,
-      bias: opts[:bias]
+      bias: opts[:bias],
+      # nil ⇒ the runner picks (and reports) a fresh seed; `--seed N` replays a run.
+      seed: opts[:seed]
     ]
 
     # Install the corpus-backed filler pool (spec §3) once, before dispatch, so both
@@ -71,33 +80,63 @@ defmodule Mix.Tasks.Antigen do
     case mode do
       :explore ->
         r = Antigen.Runner.explore(runner_opts)
-        IO.puts("antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked")
+        IO.puts("antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked#{rejected_note(r)} (seed=#{r.seed})")
 
       :generate ->
         install_sigterm_trap()
         r = Antigen.Runner.generate(runner_opts)
-        IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked")
+        IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked#{rejected_note(r)} (seed=#{r.seed})")
+
+        # Surface shape-coverage inline so a banking loop shows what the current
+        # generators can/can't produce (same report `mix test` prints post-suite).
+        case Antigen.CoverManifest.report(Antigen.CoverManifest.summary()) do
+          nil -> :ok
+          line -> IO.puts(line)
+        end
 
       :cover ->
-        {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)
-
-        case cover_mode do
-          :guided ->
-            r = Antigen.Cover.guided_loop(cover_opts)
-
-            IO.puts(
-              "antigen cover --guided: #{r.covered_lines} kernel lines covered, " <>
-                "#{r.banked} edge(s) banked, #{r.infections} infection(s) over #{r.rounds} round(s)"
-            )
-
-          :report ->
-            {coverage, _report} = Antigen.Cover.run_report(cover_opts)
-            covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
-            total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
-            pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
-            dest = if opts[:out], do: " → #{opts[:out]}", else: ""
-            IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
+        if opts[:record_new_coverage_baseline] do
+          record_coverage_baseline()
+        else
+          run_cover(opts, runner_opts)
         end
+    end
+  end
+
+  # Re-distil the coverage corpus + rewrite the floor. The ONLY sanctioned way to
+  # move the coverage-baseline gate (`Antigen.CoverageBaselineTest`): a genuine
+  # improvement raises the floor; newly-added proven-unreachable guard code is
+  # accepted by re-recording. Everyday `mix test` never regenerates it.
+  defp record_coverage_baseline do
+    %{records: n, measured: m} = Antigen.CoverageBaseline.record!()
+    {tc, tt} = Enum.reduce(m, {0, 0}, fn {_, v}, {a, b} -> {a + v.covered, b + v.total} end)
+
+    IO.puts(
+      "antigen cover --record-new-coverage-baseline: #{n} record(s) → " <>
+        "#{Antigen.CoverageBaseline.coverage_path()}, floor #{tc}/#{tt} → " <>
+        Antigen.CoverageBaseline.baseline_path()
+    )
+  end
+
+  defp run_cover(opts, runner_opts) do
+    {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)
+
+    case cover_mode do
+      :guided ->
+        r = Antigen.Cover.guided_loop(cover_opts)
+
+        IO.puts(
+          "antigen cover --guided: #{r.covered_lines} kernel lines covered, " <>
+            "#{r.banked} edge(s) banked, #{r.infections} infection(s) over #{r.rounds} round(s)"
+        )
+
+      :report ->
+        {coverage, _report} = Antigen.Cover.run_report(cover_opts)
+        covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
+        total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
+        pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
+        dest = if opts[:out], do: " → #{opts[:out]}", else: ""
+        IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
     end
   end
 
@@ -204,9 +243,35 @@ defmodule Mix.Tasks.Antigen do
       # Elaborator/kernel shift agreement — over generated meta-free terms, the
       # elaborator's Subst.shift must equal the kernel's Term.shift (the shift-half
       # of the beta_subst cross-check; a TCB-boundary capture guard).
-      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")}
+      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")},
+      # Inductive Env-accessor roundtrip — declares straight through
+      # `Inductive.declare/3`/`register_builtin/3` and reads the family/ctor
+      # metadata back through the accessor layer (`family?`, `arg_telescope`,
+      # `ctor_result_indices`, `field_count`, `ctor_quantities`,
+      # `index_telescope`, `param_telescope`, `ctor_result_params`); the lever
+      # for the Env-accessor cold-line bucket every other family-shaped
+      # generator bypasses by never reading a declaration back out.
+      {1, Antigen.Generators.InductiveEnv.gen()},
+      # Elaborator-driven literal typing (compact-Nat coverage batch) — the lever
+      # for Kernel.bool_type_value/1 (boolean literal, inference position) and
+      # Kernel.nat_type_value/1 (Nat-checked literal, re-checked via elab/soundness
+      # over the real prelude env) — neither reachable from a bare Core-term probe.
+      {1, Antigen.Generators.ElabLiteralTyping.gen()},
+      # Kernel def-level probes (cold-line completion batch) — the lever for the
+      # check_def / validate_certificate / check_family / normalize-3 / Final-Core
+      # validator-emit / infer-rejection / remap_index_error defensive clauses that
+      # are entry points into the kernel's def and family machinery, not `infer` of
+      # a single closed term, so no term-shaped generator reaches them.
+      {1, Antigen.Generators.KernelProbe.gen()}
     ])
   end
+
+  # Tally note for records the portability guard refused to bank (each was already
+  # reported loudly to stderr as it happened — see `Runner.report_unportable/2`).
+  defp rejected_note(%{rejected: n}) when is_integer(n) and n > 0,
+    do: ", #{n} non-portable rejected"
+
+  defp rejected_note(_), do: ""
 
   defp resolve_count(opts) do
     cond do

@@ -82,18 +82,33 @@ defmodule Cure.Elab.Resolution do
         |> MapSet.new()
       )
 
-  @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom()), MapSet.t(atom()), MapSet.t(atom())) ::
-          Env.t()
+  @spec rekey_module_env(
+          Env.t(),
+          String.t(),
+          MapSet.t(atom()),
+          MapSet.t(atom()),
+          MapSet.t(atom()),
+          MapSet.t(atom())
+        ) :: Env.t()
   def rekey_module_env(
         %Env{} = env,
         module_id,
         owned_family_names,
         shadowed_ctor_names,
-        owned_def_names \\ MapSet.new()
+        owned_def_names \\ MapSet.new(),
+        declared_ctor_names \\ MapSet.new()
       ) do
-    # Owned ctor names: ctors whose family is an owned family name.
+    # Owned ctor names: ctors whose family is an owned family name, PLUS the constructors the
+    # module declares in its own source. The family-derived set alone could only ever re-key a
+    # constructor as a side effect of its family colliding, so a constructor that collides while
+    # its family does not — `Ok` of a local `Res` against `Ok` of the imported `Result` — was
+    # never re-keyed, and the plain `Map.put` in `Inductive.declare/3` destroyed the import's
+    # `Ok` with no diagnostic and no qualified key to recover it from.
     owned_ctor_names =
-      for {cname, fname} <- env.ctor_to_family, MapSet.member?(owned_family_names, fname), into: MapSet.new(), do: cname
+      for {cname, fname} <- env.ctor_to_family,
+          MapSet.member?(owned_family_names, fname),
+          into: declared_ctor_names,
+          do: cname
 
     rekeyed_ctor_names = MapSet.intersection(owned_ctor_names, shadowed_ctor_names)
 

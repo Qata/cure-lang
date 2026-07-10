@@ -170,4 +170,59 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
       assert {:error, _} = Program.elaborate(src)
     end
   end
+
+  describe "an instance head is normalized through transparent typealiases before it is keyed" do
+    # `Implementation.register/2` derived the coherence key's `head` straight from `meta[:for]`,
+    # which the parser sets to the RAW SURFACE NAME of the `for` clause with zero unfolding. A
+    # `typealias` is a transparent synonym at the type-checking level, but `for Int` and
+    # `for MyInt` keyed two DIFFERENT atoms, so both anonymous instances registered — two live
+    # dictionaries for what is definitionally one type, and `eqs` could compute two different
+    # answers depending on which spelling the call site used. Idris/Agda/Lean/Rust all resolve an
+    # instance head to its normal form before comparing.
+    @iface "  interface Eqs(a)\n    fn eqs(x: a, y: a) -> Bool\n"
+    defp for_int(body), do: "  implementation Eqs for Int\n    fn eqs(x: Int, y: Int) -> Bool = #{body}\n"
+
+    test "an instance for Int and one for a transparent alias of Int overlap" do
+      src =
+        "mod M\n  typealias MyInt = Int\n" <>
+          @iface <>
+          for_int("int_eq(x, y)") <>
+          "  implementation Eqs for MyInt\n    fn eqs(x: MyInt, y: MyInt) -> Bool = int_eq(x, y)\nend\n"
+
+      assert {:error, {:overlapping_instance, :Eqs, :Int}} = Program.elaborate(src)
+    end
+
+    test "a lone alias instance registers under the unfolded head, so bare `Int` dispatch finds it" do
+      # The guard against a normalizer that rejects overlap by collapsing every head to one atom.
+      src =
+        "mod M\n  typealias MyInt = Int\n" <>
+          @iface <>
+          "  implementation Eqs for MyInt\n    fn eqs(x: MyInt, y: MyInt) -> Bool = int_eq(x, y)\n" <>
+          "  fn use_it(a: Int, b: Int) -> Bool = eqs(a, b)\nend\n"
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert {:ok, %{head: :Int}} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
+    end
+
+    test "an alias chain unfolds all the way to the head" do
+      src =
+        "mod M\n  typealias MyInt = Int\n  typealias Yours = MyInt\n" <>
+          @iface <>
+          for_int("int_eq(x, y)") <>
+          "  implementation Eqs for Yours\n    fn eqs(x: Yours, y: Yours) -> Bool = int_eq(x, y)\nend\n"
+
+      assert {:error, {:overlapping_instance, :Eqs, :Int}} = Program.elaborate(src)
+    end
+
+    test "an alias of a data family resolves to the family, not the alias name" do
+      src =
+        "mod M\n  type Col = Red | Blue\n  typealias C = Col\n" <>
+          @iface <>
+          "  implementation Eqs for C\n    fn eqs(x: C, y: C) -> Bool = struct_eq(x, y)\n" <>
+          "  fn use_it(a: Col, b: Col) -> Bool = eqs(a, b)\nend\n"
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert {:ok, %{head: :Col}} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Col)
+    end
+  end
 end

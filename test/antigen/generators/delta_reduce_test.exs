@@ -6,12 +6,12 @@ defmodule Antigen.Generators.DeltaReduceTest do
 
   @sample 200
 
-  test "every sampled δ-reduction probe's normal form agrees with the live normalizer" do
+  test "every sampled probe (reduces/fuel_probe/opts_reject) agrees with the live kernel" do
     for %Challenge{} = c <- B.interp(DeltaReduce.gen()) |> Enum.take(@sample) do
       assert c.kind == :delta_reduce
-      assert c.label == :reduces
+      assert c.label in [:reduces, :fuel_probe, :opts_reject]
       assert Assays.DeltaReduce.run(c) == :ok,
-             "normal-form oracle disagreed on #{c.note}"
+             "oracle disagreed on #{c.note}"
     end
   end
 
@@ -24,7 +24,7 @@ defmodule Antigen.Generators.DeltaReduceTest do
     end
   end
 
-  test "every case round-trips through the corpus with its payload intact" do
+  test "every :reduces case round-trips through the corpus with its payload intact" do
     for {term, expected, note} <- DeltaReduce.cases() do
       chal =
         Challenge.new(
@@ -38,6 +38,44 @@ defmodule Antigen.Generators.DeltaReduceTest do
       line = Corpus.encode_record(chal)
       assert {:ok, c2} = Corpus.decode_record(line)
       assert c2.kind == :delta_reduce
+      assert c2.payload == chal.payload
+    end
+  end
+
+  test "every fuel_probe case round-trips through the corpus with its payload intact" do
+    for {term, opts, want, expected, note} <- DeltaReduce.fuel_cases() do
+      chal =
+        Challenge.new(
+          kind: :delta_reduce,
+          assay: "delta/nf",
+          label: :fuel_probe,
+          payload: %{term: term, expected: expected, opts: opts, want: want},
+          note: note
+        )
+
+      line = Corpus.encode_record(chal)
+      assert {:ok, c2} = Corpus.decode_record(line)
+      assert c2.kind == :delta_reduce
+      assert c2.label == :fuel_probe
+      assert c2.payload == chal.payload
+    end
+  end
+
+  test "every opts_reject case round-trips through the corpus with its payload intact" do
+    for {opts, note} <- DeltaReduce.opts_reject_cases() do
+      chal =
+        Challenge.new(
+          kind: :delta_reduce,
+          assay: "delta/nf",
+          label: :opts_reject,
+          payload: %{opts: opts},
+          note: note
+        )
+
+      line = Corpus.encode_record(chal)
+      assert {:ok, c2} = Corpus.decode_record(line)
+      assert c2.kind == :delta_reduce
+      assert c2.label == :opts_reject
       assert c2.payload == chal.payload
     end
   end
