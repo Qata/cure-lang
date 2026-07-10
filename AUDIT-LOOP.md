@@ -839,3 +839,101 @@ still owed. Do NOT merge.
 Commits this cycle: `7c211a8` (fence-skip fix + 3 tests).
 
 ---
+
+## Iteration 13
+
+Two fresh Opus agents: (A) a differential of the just-landed fence fix against the
+lexer; (B) a broad sweep of edition/project/migrate/CLI, primed that prior "clean"
+audits had blind spots. Both surfaced REAL bugs (verified + reproduced). One
+further finding is a genuine severe bug that cannot be fixed without an operator
+design decision — escalated below.
+
+**Fixed this cycle:**
+
+- **[MED] Fence pre-scan counted all Unicode whitespace as indentation.**
+  (`dca8612`) `fence_open_line?` used `String.trim_leading/1` (strips tab/`\f`/`\v`),
+  but the lexer's `count_leading_spaces` counts ONLY ASCII `0x20`. So a fenced-doc
+  body line like `\t###` was a fence *marker* to the pre-scan but ordinary body to
+  the lexer: the pre-scan closed the fence early and read a buried
+  `@edition("2027")` as a pragma, rejecting a valid file with a spurious
+  `{:unknown_edition,"2027"}`. Reproduced for tab/form-feed/vertical-tab; a
+  SPACE-indented ` ###` correctly agrees (lexer counts 0x20) and is preserved.
+  Fix: strip only leading 0x20 in both `fence_open_line?` and `trivia_line?`
+  (`drop_leading_spaces`), mirroring the lexer. Identical on all valid files.
+  4 red→green tests.
+- **[LOW] `Cure.Project.set_edition/2` dropped a trailing comment.** (`dceb2d2`)
+  Documented "lossless line edit", but the existing-key branch rewrote the whole
+  line to bare `edition = "X"`, discarding `# pinned`. The sibling migrate writer
+  `replace_leading_pragma_line/2` preserves trailing text; the two must agree.
+  Fix: `replace_edition_value/3` rewrites only the quoted value, keeping leading
+  indent + trailing content; falls back to canonical line for a non-quoted value.
+  1 red→green test.
+
+**Full suite:** 3902 passed (3 doctests, 3899 tests), 0 failures; Antigen 309/309 ✓.
+
+## Blocked — needs operator (NEW, iteration 13): `cure migrate` silently corrupts non-builtin uppercase type names
+
+**Severity: HIGH — silent semantic corruption.** The migrate rule
+`:W_uppercase_type_var` (edition-crossing, `since: "2026"`, `:review` tier, which
+`cure migrate` auto-applies via `apply: :all`) lowercases every uppercase, bare,
+type-position name **not in `build_ctx/1`**. `build_ctx` = the 9 builtin
+primitives (`Cure.Types.Env.new().types`) ∪ types DECLARED IN THE SAME FILE. It
+includes NO imported types, NO builtin kind `Type`, NO builtin inductives
+(`Nat`) or data constructors (`Z`/`S`). So running `cure migrate` over real code
+rewrites, e.g. in `lib/std/vector.cure` (17 rewrites): `a: Type` → `a: type`,
+`n: Nat` → `n: nat`, `Vector(a, S(Z))` → `Vector(a, S(z))` — turning concrete
+types/kinds/constructors into free type variables. Reproduced end-to-end via the
+exact CLI path (`Cure.Compiler.Lexer.tokenize` → `Parser.parse` →
+`Migrate.run_to_fixpoint(rules: rules_for_crossing("2026"), edition:"2026")` →
+`Printer`). `verify/3` (reparse + comment multiset) does NOT catch it: the
+lowercased program reparses cleanly and drops no comments, so the corruption is
+committed and written. (`cure build` is safe — it runs `apply: :safe_only`, and
+this `:review`-tier rule only warns there.)
+
+**Why there is no self-contained fix.** The behavioral contract
+`test/cure/migrate/warn_tolerate_parity_test.exs:15` asserts a FREE, UNBOUND `T`
+in `fn id(x: T) -> T` MUST fire the rule (rename). `Option`, `Nat`, `Z` are
+syntactically identical free unbound uppercase names in the same type positions.
+The ONLY thing separating "rename `T`" from "keep `Option`" is whether the name
+resolves to a known type — which needs a complete name environment. A
+binder-only redesign (rename only names bound as implicit `{X: Type}` params)
+would violate that contract test (which I must not weaken), and a pure-safening
+heuristic (add in-file application-heads) still corrupts bare-only imports
+(`Nat`, `Z`). The builtins registry has no constructors and no `Type`/`Nat`
+(verified: `Env.new().types` == the 9 primitives, `.constructors` == []).
+
+**The design decision required:** how should the syntactic migrate facility obtain
+the complete set of in-scope uppercase names (imported types + builtin kinds +
+builtin inductives + data constructors)? Options: (a) make `build_ctx`
+name-resolution-aware — thread the file path + project, resolve imports via the
+module loader, and seed builtin kinds/inductives/constructors (architectural
+change; couples migrate to the compiler + filesystem); (b) change the
+contract so the rule renames ONLY names bound as explicit type-param binders
+(operator must approve editing `warn_tolerate_parity_test.exs:15`); (c) demote the
+rule so `cure migrate` warns but does not auto-rewrite it (changes the intended
+`:review`-applies-in-migrate semantics). All are design forks with real risk; I
+will not ship a partial fix that still corrupts the stdlib. PushNotification sent.
+
+## Outstanding findings (after iteration 13)
+
+### Blocked — needs operator
+- **NEW (HIGH): `cure migrate` uppercase-type-var corruption** (see the section
+  above) — needs a name-resolution design decision.
+- `cure deps update` no-op (skips path/registry; git deps cache-skip, no refetch).
+- Partial/interrupted clone accepted as green (`.git` present, no worktree).
+- `cure migrate` no-flag target = `current()` vs newest-known (product decision).
+- Hyphenated dependency names silently dropped (`parse_dep_line` `\w+`).
+
+### Latent / unreachable today (recorded, not fixed)
+- `comment_texts` non-quote-aware (no current rule edits string-literal contents).
+- Standalone pragma-less file not edition-stamped on a bump.
+- `ProtoToInterface` `retires_keywords` with `enforced_in: nil` (inert).
+
+**Loop status:** iteration 13 found and fixed 2 real bugs and escalated 1 HIGH
+severity bug that needs an operator design decision. NOT clean; streak resets. The
+cron is **left in place**. Do NOT merge.
+
+Commits this cycle: `dca8612` (fence 0x20 fix), `dceb2d2` (set_edition comment),
+plus this record.
+
+---
