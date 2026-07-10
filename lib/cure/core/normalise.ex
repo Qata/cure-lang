@@ -343,7 +343,7 @@ defmodule Cure.Core.Normalise do
   end
 
   defp builtin_op_fold(op, args, sig, opts) when op not in [:struct_eq, :struct_ne] do
-    arity = if op == :neg, do: 1, else: 2
+    arity = if op in [:neg, :bnot], do: 1, else: 2
 
     with true <- length(args) == arity,
          vals = Enum.map(args, &whnf_value(&1, sig, opts)),

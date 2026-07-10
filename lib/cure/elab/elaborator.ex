@@ -530,6 +530,15 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
+      # Int-only bitwise complement. `int_bnot : Int -> Int`, so the kernel
+      # infer both types the operand against Int and rejects a non-Int operand.
+      :bnot ->
+        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+             term = {:app, {:global, :int_bnot}, o_core},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
       _ ->
         {:error, {:unsupported_expression, expr}}
     end
@@ -722,6 +731,12 @@ defmodule Cure.Elab.Elaborator do
   defp prim_op(:>), do: {:ok, :gt}
   defp prim_op(:<=), do: {:ok, :le}
   defp prim_op(:>=), do: {:ok, :ge}
+  # Int-only bitwise (no float twin — an @float_binop_globals miss rejects).
+  defp prim_op(:band), do: {:ok, :band}
+  defp prim_op(:bor), do: {:ok, :bor}
+  defp prim_op(:bxor), do: {:ok, :bxor}
+  defp prim_op(:bsl), do: {:ok, :bsl}
+  defp prim_op(:bsr), do: {:ok, :bsr}
   defp prim_op(_), do: :error
 
   # Assemble the Core term for a surface binary operator (K2 phase 2 + A1).
@@ -742,7 +757,12 @@ defmodule Cure.Elab.Elaborator do
     lt: :int_lt,
     le: :int_le,
     gt: :int_gt,
-    ge: :int_ge
+    ge: :int_ge,
+    band: :int_band,
+    bor: :int_bor,
+    bxor: :int_bxor,
+    bsl: :int_bsl,
+    bsr: :int_bsr
   }
   @float_binop_globals %{
     add: :float_add,

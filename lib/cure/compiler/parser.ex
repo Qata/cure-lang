@@ -315,6 +315,9 @@ defmodule Cure.Compiler.Parser do
       :not_op ->
         parse_unary(state, :boolean)
 
+      :bnot_op ->
+        parse_unary(state, :bitwise)
+
       # Grouping
       :lparen ->
         parse_grouped(state)

@@ -227,6 +227,15 @@ defmodule Cure.Core.Eval do
   def fold(:rem, [{:vint, _}, {:vint, 0}]), do: :stuck
   def fold(:rem, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, rem(a, b)}}
 
+  # Int-only bitwise (BEAM `band`/`bor`/`bxor`/`bsl`/`bsr`/`bnot` BIFs). Shifts
+  # are total on arbitrary-precision ints (negative shift shifts the other way),
+  # so no `:stuck` guard is needed.
+  def fold(:band, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.band(a, b)}}
+  def fold(:bor, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bor(a, b)}}
+  def fold(:bxor, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bxor(a, b)}}
+  def fold(:bsl, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bsl(a, b)}}
+  def fold(:bsr, [{:vint, a}, {:vint, b}]), do: {:ok, {:vint, Bitwise.bsr(a, b)}}
+
   def fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
   def fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
   def fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
@@ -251,6 +260,8 @@ defmodule Cure.Core.Eval do
 
   def fold(:neg, [{:vint, a}]), do: {:ok, {:vint, -a}}
   def fold(:neg, [{:vfloat, a}]), do: {:ok, {:vfloat, -a}}
+
+  def fold(:bnot, [{:vint, a}]), do: {:ok, {:vint, Bitwise.bnot(a)}}
 
   # The Boolean connectives (`and`/`or`/`not`) and Bool-operand equality are
   # Std.Bool `case`-defs, never entries in this table. The catch-all is §G.1

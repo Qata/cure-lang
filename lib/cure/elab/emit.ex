@@ -320,6 +320,13 @@ defmodule Cure.Elab.Emit do
     end
   end
 
+  defp lower_builtin_op(:bnot, args, env, ctx) do
+    case args do
+      [a] -> {:op, @line, :bnot, lower(env, a, ctx)}
+      _ -> curry_apply(builtin_op_wrapper(:bnot), args, env, ctx)
+    end
+  end
+
   defp lower_builtin_op(op, args, env, ctx) do
     case args do
       [a, b] -> {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
@@ -343,6 +350,9 @@ defmodule Cure.Elab.Emit do
 
   defp builtin_op_wrapper(:neg),
     do: fun1(:BopA, {:op, @line, :-, {:var, @line, :BopA}})
+
+  defp builtin_op_wrapper(:bnot),
+    do: fun1(:BopA, {:op, @line, :bnot, {:var, @line, :BopA}})
 
   defp builtin_op_wrapper(op) do
     body = {:op, @line, erl_binop(op), {:var, @line, :BopL}, {:var, @line, :BopR}}
@@ -422,6 +432,11 @@ defmodule Cure.Elab.Emit do
   defp erl_binop(:mul), do: :*
   defp erl_binop(:div), do: :div
   defp erl_binop(:rem), do: :rem
+  defp erl_binop(:band), do: :band
+  defp erl_binop(:bor), do: :bor
+  defp erl_binop(:bxor), do: :bxor
+  defp erl_binop(:bsl), do: :bsl
+  defp erl_binop(:bsr), do: :bsr
   defp erl_binop(:eq), do: :==
   defp erl_binop(:ne), do: :"/="
   defp erl_binop(:lt), do: :<

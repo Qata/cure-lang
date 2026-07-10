@@ -58,6 +58,13 @@ defmodule Cure.Compiler.Parser.Precedence do
   def infix_bp(:star), do: {80, 81}
   def infix_bp(:slash), do: {80, 81}
   def infix_bp(:percent), do: {80, 81}
+  # Bitwise (Erlang precedence): `band` binds at multiplicative level; `bor`,
+  # `bxor`, `bsl`, `bsr` bind at additive level. Left-associative.
+  def infix_bp(:band_op), do: {80, 81}
+  def infix_bp(:bor_op), do: {70, 71}
+  def infix_bp(:bxor_op), do: {70, 71}
+  def infix_bp(:bsl_op), do: {70, 71}
+  def infix_bp(:bsr_op), do: {70, 71}
   # Dot access -- left-associative
   def infix_bp(:dot), do: {100, 101}
   # Assignment operators (very low, right-assoc)
@@ -72,11 +79,17 @@ defmodule Cure.Compiler.Parser.Precedence do
   @spec prefix_bp(atom()) :: pos_integer() | :not_prefix
   def prefix_bp(:minus), do: 90
   def prefix_bp(:not_op), do: 90
+  def prefix_bp(:bnot_op), do: 90
   def prefix_bp(_), do: :not_prefix
 
   @doc "Returns the operator category for a given token type."
   @spec operator_category(atom()) :: atom()
   def operator_category(type) when type in [:plus, :minus, :star, :slash, :percent], do: :arithmetic
+
+  def operator_category(type)
+      when type in [:band_op, :bor_op, :bxor_op, :bsl_op, :bsr_op, :bnot_op],
+      do: :bitwise
+
   def operator_category(type) when type in [:eq, :neq, :lt, :gt, :lte, :gte], do: :comparison
   def operator_category(type) when type in [:and_op, :or_op], do: :boolean
   def operator_category(:string_concat), do: :string
@@ -102,6 +115,12 @@ defmodule Cure.Compiler.Parser.Precedence do
   def operator_symbol(:and_op), do: :and
   def operator_symbol(:or_op), do: :or
   def operator_symbol(:not_op), do: :not
+  def operator_symbol(:band_op), do: :band
+  def operator_symbol(:bor_op), do: :bor
+  def operator_symbol(:bxor_op), do: :bxor
+  def operator_symbol(:bsl_op), do: :bsl
+  def operator_symbol(:bsr_op), do: :bsr
+  def operator_symbol(:bnot_op), do: :bnot
   def operator_symbol(:string_concat), do: :<>
   def operator_symbol(:range), do: :..
   def operator_symbol(:range_inclusive), do: :"..="

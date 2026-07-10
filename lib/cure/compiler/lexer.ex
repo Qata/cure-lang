@@ -52,6 +52,7 @@ defmodule Cure.Compiler.Lexer do
     spawn send receive after
     actor
     when where and or not
+    band bor bxor bsl bsr bnot
     true false nil
     extern proof
   )a
@@ -652,6 +653,12 @@ defmodule Cure.Compiler.Lexer do
           :and -> {:and_op, :and}
           :or -> {:or_op, :or}
           :not -> {:not_op, :not}
+          :band -> {:band_op, :band}
+          :bor -> {:bor_op, :bor}
+          :bxor -> {:bxor_op, :bxor}
+          :bsl -> {:bsl_op, :bsl}
+          :bsr -> {:bsr_op, :bsr}
+          :bnot -> {:bnot_op, :bnot}
           other -> {:keyword, other}
         end
       else

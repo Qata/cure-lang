@@ -44,7 +44,13 @@ defmodule Cure.Core.Builtins do
     {:int_gt, :gt},
     {:int_ge, :ge},
     {:int_eq, :eq},
-    {:int_ne, :ne}
+    {:int_ne, :ne},
+    # Int-only bitwise (no float twin). Codomain is Int (not in @cmp_ops).
+    {:int_band, :band},
+    {:int_bor, :bor},
+    {:int_bxor, :bxor},
+    {:int_bsl, :bsl},
+    {:int_bsr, :bsr}
   ]
 
   @float_binops [
@@ -60,7 +66,7 @@ defmodule Cure.Core.Builtins do
     {:float_ne, :ne}
   ]
 
-  @int_unops [{:int_neg, :neg}]
+  @int_unops [{:int_neg, :neg}, {:int_bnot, :bnot}]
   @float_unops [{:float_neg, :neg}]
 
   # Amendment A1 (spec §1-A): polymorphic STRUCTURAL equality —
@@ -118,11 +124,12 @@ defmodule Cure.Core.Builtins do
   end
 
   @doc """
-  Seed the 25 builtin-op globals (11 int binary + 10 float binary +
-  int_neg/float_neg + the A1 polymorphic struct_eq/struct_ne) as body-less defs
-  carrying a `builtin_op` marker. Public so the Antigen generator envs (SigMenu
-  v1, Generators.Totality) can reuse it. Run AFTER the inductive seeds so the
-  Bool codomain resolves through the registry.
+  Seed the 31 builtin-op globals (16 int binary [11 arith/cmp + 5 bitwise] +
+  10 float binary + int_neg/int_bnot/float_neg + the A1 polymorphic
+  struct_eq/struct_ne) as body-less defs carrying a `builtin_op` marker. Public
+  so the Antigen generator envs (SigMenu v1, Generators.Totality) can reuse it.
+  Run AFTER the inductive seeds so the Bool codomain resolves through the
+  registry.
   """
   @spec seed_ops(Env.t()) :: Env.t()
   def seed_ops(%Env{} = env) do
