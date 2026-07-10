@@ -32,7 +32,8 @@
 - `lib/cure/migrate/rule.ex` — `Cure.Migrate.Rule` struct (Phase 3).
 - `lib/cure/migrate/rules/if_elif_to_pickup.ex` — first seed rule (Phase 3).
 - `lib/cure/migrate/rules/uppercase_type_var.ex` — second seed rule (Phase 3).
-- Tests: `test/cure/compiler/printer_totality_test.exs`, `test/cure/compiler/trivia_test.exs`, `test/cure/compiler/lossless_roundtrip_test.exs`, `test/cure/migrate/rule_registry_test.exs`, `test/cure/migrate/if_elif_to_pickup_test.exs`, `test/cure/migrate/uppercase_type_var_test.exs`, `test/cure/migrate/warn_tolerate_parity_test.exs`, `test/cure/cli/migrate_cli_test.exs`.
+- `lib/cure/migrate/rules/group_hoist.ex` — third seed rule, `@group` hoist (Phase 3, Task 9b).
+- Tests: `test/cure/compiler/printer_totality_test.exs`, `test/cure/compiler/trivia_test.exs`, `test/cure/compiler/lossless_roundtrip_test.exs`, `test/cure/migrate/rule_registry_test.exs`, `test/cure/migrate/if_elif_to_pickup_test.exs`, `test/cure/migrate/uppercase_type_var_test.exs`, `test/cure/migrate/group_hoist_test.exs`, `test/cure/migrate/warn_tolerate_parity_test.exs`, `test/cure/cli/migrate_cli_test.exs`.
 - Fixture: `test/fixtures/printer_totality.cure` — exercises every surface construct (Phase 1).
 
 **Modified files:**
@@ -770,7 +771,7 @@ One registry, two consumers (spec §5.5). Seed rules: `if/elif→pickup` and upp
 
 **Interfaces:**
 - Produces: `%Cure.Migrate.Rule{id: atom, description: String.t, phase: :syntactic | :needs_resolution, detect_and_rewrite: (ast, ctx -> {:rewrite, ast} | :no_change), warning_template: String.t}`.
-- Produces: `Cure.Migrate.rules() :: [Rule.t]` (declaration order) — the real seed-rule list, populated in Tasks 8 and 9.
+- Produces: `Cure.Migrate.rules() :: [Rule.t]` (declaration order) — the real seed-rule list, populated in Tasks 8, 9, and 9b.
 - Produces: `Cure.Migrate.run(ast, opts) :: {ast, [warning]}` where `opts` carries `:file` and an **optional `:rules` override** (`Keyword.get(opts, :rules, rules())`, defaulting to the real registry — this override exists solely so the ordered-fold *mechanism* is unit-testable in this task, before any real rule exists); `ctx` is built from the AST alone (declared + imported type names); rules run once each as an ordered fold (spec §5.5); `warning` is `%Cure.Migrate.Warning{rule: atom, message: String.t, file: String.t, line: pos_integer}`.
 
 **Sequencing note:** this task must NOT depend on `:W_if_elif_pickup` or `:W_uppercase_type_var` — neither rule module exists until Tasks 8/9. This task's test proves the fold/warning-collection *mechanism* using a synthetic rule constructed inline in the test, passed via the `:rules` override above, so Task 7 is a fully closable, independently-green unit.
@@ -821,7 +822,7 @@ Expected: FAIL — `Cure.Migrate` does not exist.
 
 - [ ] **Step 3: Implement the struct, registry, and `run/2`**
 
-Create `lib/cure/migrate/rule.ex` (the struct + `@type`). Create `lib/cure/migrate.ex` with: `Warning` struct; `rules/0` returning `[]` for now (Tasks 8/9 will each register their seed rule here); `build_ctx/1` computing the per-file declared+imported type-name `MapSet` from the AST, **seeded with Cure's built-in primitive type names** (see the note below — this seeding is load-bearing, not optional); `run/2` reading `Keyword.get(opts, :rules, rules())`, folding those rules in order, each called with `(ast, ctx)`, collecting a warning (rendered from `warning_template`) whenever a rule returns `{:rewrite, _}`. `run/2` returns `{final_ast, warnings}`.
+Create `lib/cure/migrate/rule.ex` (the struct + `@type`). Create `lib/cure/migrate.ex` with: `Warning` struct; `rules/0` returning `[]` for now (Tasks 8/9/9b will each register their seed rule here); `build_ctx/1` computing the per-file declared+imported type-name `MapSet` from the AST, **seeded with Cure's built-in primitive type names** (see the note below — this seeding is load-bearing, not optional); `run/2` reading `Keyword.get(opts, :rules, rules())`, folding those rules in order, each called with `(ast, ctx)`, collecting a warning (rendered from `warning_template`) whenever a rule returns `{:rewrite, _}`. `run/2` returns `{final_ast, warnings}`.
 
 **Why `build_ctx/1` must seed primitive type names (verified 2026-07-10):** `parse_type_atom/1` (parser.ex:3281-3305) parses a bare type-position identifier — whether `Int`, `T`, or `Foo` — into the exact same node shape, `{:variable, [scope: :local], name}`. The parser makes **zero syntactic distinction** between a reference to a built-in primitive type and a free/undeclared type variable; both are equally "a bare uppercase identifier in a type position" from the AST's point of view. Task 9's uppercase-type-var rule detects exactly that shape and treats anything not in `ctx` as a free type var to rename. If `build_ctx/1` only scanned the file's own `type ... = ...` declarations and `import`/`use` list (as spec §5.5's prose alone might suggest), a file with no local type declarations — e.g. `"mod M\nfn f(x: Int) -> Int = x\n"`, which is the shape of nearly every fixture in this entire plan — would have an **empty** ctx, and the rule would incorrectly treat `Int` itself as a free uppercase type var and rename it. `build_ctx/1` must therefore start from the real built-in primitive set: `Int`, `Float`, `String`, `Bool`, `Atom`, `Unit`, `Any`, `Never`, `Char` (confirmed at `lib/cure/types/env.ex:35-44`, `Cure.Types.Env.new/0`'s `builtin_types` map). **Derive this set programmatically from `Cure.Types.Env.new/0` at runtime — do not hardcode a second, duplicate literal list of these 9 names inside `Cure.Migrate`.** Concretely: `Map.keys(Cure.Types.Env.new().types) |> MapSet.new()` (the `Env` struct's `:types` field, `env.ex:11`, is exactly this map). A copy-pasted literal list would silently drift the moment a future primitive is added to `Cure.Types.Env` without a corresponding edit here — `Cure.Migrate` sits before the elaborator (spec §5.1) and never type-checks, but calling `Env.new/0` is a pure, side-effect-free struct constructor, not a type-checking call, so this dependency is safe and carries no elaboration coupling. Union the file's own declared/imported names on top of that derived seed, never instead of it.
 
@@ -1016,6 +1017,140 @@ end
 ```bash
 git add lib/cure/migrate/rules/uppercase_type_var.ex lib/cure/migrate.ex test/cure/migrate/uppercase_type_var_test.exs
 git commit -m "feat(migrate): uppercase-type-var->lowercase rule with ctx resolution and freshening"
+```
+
+### Task 9b: `@group(:x)` hoist rule (relocation + trivia-carry)
+
+Added post-plan-review (operator, 2026-07-10) as the **third day-one seed rule**
+(spec §5.5). It is the first *relocation* rule — it moves a decorator node
+rather than transforming a node in place — so it is the load-bearing exercise of
+`Trivia.carry/2` and the §5.4 blank-line policy. It supersedes the fragile
+line-regex codemod at `787a9745…/scratchpad/migrate_group.exs`.
+
+**Files:**
+- Create: `lib/cure/migrate/rules/group_hoist.ex`
+- Test: `test/cure/migrate/group_hoist_test.exs`
+
+**Interfaces:**
+- Consumes: `Cure.Migrate.Rule`, `Cure.Compiler.Trivia.carry/2`, `Cure.Migrate.run/2`.
+- Produces: `Cure.Migrate.Rules.GroupHoist.rule() :: Rule.t` with `id: :W_group_hoist`, `phase: :syntactic`. Registered in `Cure.Migrate.rules/0`.
+
+Behavior (spec §5.5): relocate an in-body `@group(...)` decorator to directly
+above the module's `mod` declaration. Idempotent (already-above-`mod` → no
+change, no warning). Comments attached to the `@group` node travel with it
+(`Trivia.carry/2`); the old slot's trivia re-homes to the following sibling.
+
+- [ ] **Step 1: Determine the AST representation and canonical target form (discovery, no code yet)**
+
+Before writing the red test, establish how a module-level `@group` is
+represented and rendered — the rule's *target output* depends on it, so this is
+not optional. Run:
+
+```bash
+grep -n "group\|:decorator\|decorators" lib/cure/compiler/parser.ex | head -30
+grep -n "decorator" lib/cure/compiler/printer.ex
+```
+
+Then in `iex -S mix`, parse both an in-body and an above-`mod` `@group` and
+inspect the AST:
+
+```elixir
+{:ok, t1} = Cure.Compiler.Lexer.tokenize("mod M\n@group(:core)\nfn f() -> Int = 1\n", emit_events: false)
+{:ok, a1} = Cure.Compiler.Parser.parse(t1, emit_events: false)
+IO.inspect(a1, limit: :infinity)
+{:ok, t2} = Cure.Compiler.Lexer.tokenize("@group(:core)\nmod M\nfn f() -> Int = 1\n", emit_events: false)
+{:ok, a2} = Cure.Compiler.Parser.parse(t2, emit_events: false)
+IO.inspect(a2, limit: :infinity)
+```
+
+Record: is a module-attached `@group` a child of the module node, a sibling
+before it, or an entry in a decorator list on `mod`'s meta? What does
+`Printer.quoted_to_string(a2)` emit (confirm it renders the decorator above
+`mod`, and that it reparses)? The rewrite in Step 3 transforms the in-body shape
+(`a1`) into the above-`mod` shape (`a2`); use the *actual* `a2` shape as the
+target, not an assumed one.
+
+- [ ] **Step 2: Write failing tests (hoist, idempotence, comment-carry)**
+
+```elixir
+# test/cure/migrate/group_hoist_test.exs
+defmodule Cure.Migrate.GroupHoistTest do
+  use ExUnit.Case, async: true
+  alias Cure.Compiler.{Lexer, Parser, Trivia, Printer}
+  alias Cure.Migrate
+
+  defp reparses?(src, file) do
+    with {:ok, toks} <- Lexer.tokenize(src, file: file, emit_events: false),
+         {:ok, _ast} <- Parser.parse(toks, file: file, emit_events: false) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp migrate(src, file) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: file, trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: file, emit_events: false)
+    {new_ast, warns} = Migrate.run(Trivia.attach(ast, trivia), file: file)
+    {Printer.quoted_to_string(new_ast), warns}
+  end
+
+  test "in-body @group is hoisted to directly above mod and output reparses" do
+    {out, warns} = migrate("mod M\n@group(:core)\nfn f() -> Int = 1\n", "a.cure")
+    # decorator now appears before `mod`, and not after it
+    assert out =~ ~r/@group\(:core\)\s*\n\s*mod\s+M/
+    refute out =~ ~r/mod\s+M[\s\S]*@group\(:core\)/
+    assert Enum.any?(warns, &(&1.rule == :W_group_hoist))
+    assert reparses?(out, "a.cure")
+  end
+
+  test "a file already in above-mod form is unchanged and does not warn" do
+    src = "@group(:core)\nmod M\nfn f() -> Int = 1\n"
+    {out, warns} = migrate(src, "b.cure")
+    assert out =~ ~r/@group\(:core\)\s*\n\s*mod\s+M/
+    refute Enum.any?(warns, &(&1.rule == :W_group_hoist))
+  end
+
+  test "a comment on the @group line travels with the hoisted decorator (never dropped or orphaned)" do
+    {out, _} = migrate("mod M\n@group(:core)  # grouping tag\nfn f() -> Int = 1\n", "c.cure")
+    # the comment survives...
+    assert out =~ "grouping tag"
+    # ...and rides above mod with the decorator, not left stranded below it
+    assert out =~ ~r/@group\(:core\).*grouping tag[\s\S]*mod\s+M/
+    refute out =~ ~r/mod\s+M[\s\S]*grouping tag/
+    assert reparses?(out, "c.cure")
+  end
+end
+```
+
+- [ ] **Step 3: Run to verify it fails**
+
+Run: `mix test test/cure/migrate/group_hoist_test.exs`
+Expected: FAIL — `Cure.Migrate.Rules.GroupHoist` does not exist.
+
+- [ ] **Step 4: Implement the rule**
+
+Create `lib/cure/migrate/rules/group_hoist.ex`. `detect_and_rewrite/2`: locate the
+in-body `@group(...)` decorator node (using the representation found in Step 1)
+and the module (`mod`) node; if the decorator is already above `mod`, return
+`:no_change`. Otherwise detach the decorator from its in-body position and
+reinsert it in the module-attached position that renders above `mod` (matching
+the `a2` shape from Step 1), calling `Trivia.carry(old_group_node,
+new_group_node)` so its leading/trailing comments travel, and re-homing the old
+slot's trailer/leading trivia to the following sibling. Return `{:rewrite,
+final_ast}`. Register `rule/0` in `Cure.Migrate.rules/0` (append after the
+uppercase-type-var rule).
+
+- [ ] **Step 5: Run to verify it passes**
+
+Run: `mix test test/cure/migrate/group_hoist_test.exs`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add lib/cure/migrate/rules/group_hoist.ex lib/cure/migrate.ex test/cure/migrate/group_hoist_test.exs
+git commit -m "feat(migrate): @group hoist relocation rule with trivia carry"
 ```
 
 ### Task 10: `cure build` warn-and-tolerate consumer + parity test
@@ -1475,7 +1610,7 @@ Keep the rest of the mix task's CLI surface (`--check`/`--print`, file expansion
 ## Self-Review
 
 **Spec coverage:**
-- §5.2 trivia model → Tasks 4–6. §5.3 Printer totality (raise catch-all + exhaustiveness + corpus gate) → Tasks 1–3. §5.4 blank-line policy → Task 6. §5.5 registry + two seed rules (incl. paren-context fix, T+t freshening) → Tasks 7–10. §5.6 CLI → Task 12. §5.7 git guard → Task 11. §5.8 batch atomicity → Task 12. §7 gates → Tasks 2, 3, 6, 10, 11, 12. §8 out-of-scope respected (no `cure fmt` rewire; one global `--strict`).
+- §5.2 trivia model → Tasks 4–6. §5.3 Printer totality (raise catch-all + exhaustiveness + corpus gate) → Tasks 1–3. §5.4 blank-line policy → Task 6. §5.5 registry + three seed rules (incl. paren-context fix, T+t freshening, and the `@group` relocation/trivia-carry rule) → Tasks 7–10 (rules in Tasks 8, 9, 9b). §5.6 CLI → Task 12. §5.7 git guard → Task 11. §5.8 batch atomicity → Task 12. §7 gates → Tasks 2, 3, 6, 10, 11, 12. §8 out-of-scope respected (no `cure fmt` rewire; one global `--strict`).
 - **Known plan-shape caveat:** Task 3 is a TDD *loop* over the corrected list of 15 genuinely-missing node kinds (down from an initial, unverified 25 — see the recursive-skeptical-review note below) rather than a fixed step count. This is deliberate — the exact per-node clause code depends on each node's shape in `parser.ex`, which the implementer verifies at the construction site. The method and one full worked example (`:pin`) are given; the loop's exit condition (both gates green) is concrete and falsifiable.
 
 **Placeholder scan:** No "TBD"/"handle edge cases"/"similar to Task N". Task 3's per-kind steps are a genuine repeated TDD cycle with a worked example, not a placeholder.
@@ -1508,4 +1643,4 @@ Clean-pass counter: 0 of 2 (Pass 15 found a new issue; per the skill's 15-pass c
 
 **Convergence Status: NOT CONVERGED.** This review ran the maximum 15 passes without reaching two consecutive clean passes (only Pass 14 was clean; Pass 15 — the last pass permitted — found and fixed one genuine issue, which resets the counter to 0). Per this review's own governing instructions, the loop stops here rather than running a 16th pass, and the plan is left in its current, heavily-hardened-but-unconverged state. All 15 passes' findings above were fixed in place as they were found; nothing here is left pending. What remains unverified is only the meta-property that a 16th pass would have found nothing new — that could not be established within the pass budget. A human reviewer (or a fresh review run) should do at least one more pass, focused first on the two lenses least recently applied in isolation (edge cases, order/sequencing), before this plan is treated as fully hardened.
 
-**Type consistency:** `Cure.Migrate.run/2` → `{ast, [warning]}` used consistently in Tasks 7, 8, 9, 10, 12; the `opts[:rules]` override introduced in Task 7 (so Task 7's own test doesn't depend on Tasks 8/9's not-yet-existing rules) is reused by Task 13 to scope `mix cure.rewrite`'s delegation to only the if/elif rule. `Rule` fields (`id`, `phase`, `detect_and_rewrite`, `warning_template`) consistent between Task 7 definition and Tasks 8/9 producers. `Trivia.attach/2` + `carry/2` and `git_guard/1` signatures consistent across producer and consumer tasks. Rule ids `:W_if_elif_pickup` / `:W_uppercase_type_var` consistent across Tasks 8/9/10; `git_guard/1`'s per-file `[{path, reason}]` list (reason atoms `:dirty` / `:untracked` / `:not_a_repo`, defined in Task 11 — reworked from an earlier, ambiguous single-reason-per-batch shape during this hardening pass, see Pass 8 below) is propagated by Task 12's `cmd_migrate/2` intact, wrapped under one `{:git_guard_failed, reasons}` tag rather than re-flattened.
+**Type consistency:** `Cure.Migrate.run/2` → `{ast, [warning]}` used consistently in Tasks 7, 8, 9, 10, 12; the `opts[:rules]` override introduced in Task 7 (so Task 7's own test doesn't depend on Tasks 8/9's not-yet-existing rules) is reused by Task 13 to scope `mix cure.rewrite`'s delegation to only the if/elif rule. `Rule` fields (`id`, `phase`, `detect_and_rewrite`, `warning_template`) consistent between Task 7 definition and Tasks 8/9 producers. `Trivia.attach/2` + `carry/2` and `git_guard/1` signatures consistent across producer and consumer tasks. Rule ids `:W_if_elif_pickup` / `:W_uppercase_type_var` / `:W_group_hoist` consistent across Tasks 8/9/9b/10 (the `@group` hoist, Task 9b, is a relocation rule reusing `Trivia.carry/2` from Task 5 and registered in `rules/0` after the other two); `git_guard/1`'s per-file `[{path, reason}]` list (reason atoms `:dirty` / `:untracked` / `:not_a_repo`, defined in Task 11 — reworked from an earlier, ambiguous single-reason-per-batch shape during this hardening pass, see Pass 8 below) is propagated by Task 12's `cmd_migrate/2` intact, wrapped under one `{:git_guard_failed, reasons}` tag rather than re-flattened.
