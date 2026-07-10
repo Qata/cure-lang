@@ -42,7 +42,7 @@ defmodule Cure.Core.Env do
   must `check_def/2` it before it may be referenced; certification (M7.2) gates
   whether δ-reduction may unfold it.
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t()) :: t()
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t() | nil) :: t()
   def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil)
 
   @doc """
@@ -50,7 +50,7 @@ defmodule Cure.Core.Env do
   (`nil` = unspecified/all runtime-relevant). Erased parameters are dropped by
   erasure (M8.3 / M9).
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t(), [atom()] | nil) :: t()
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t() | nil, [atom()] | nil) :: t()
   def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities),
     do: %{
       env
@@ -216,7 +216,15 @@ defmodule Cure.Core.Inductive do
 
   @type telescope :: [{atom(), Cure.Core.Term.t()}]
   @type quantity :: :erased | :present
-  @type family :: %{name: atom(), params: telescope(), indices: telescope(), level: non_neg_integer()}
+  @type family :: %{
+          :name => atom(),
+          :params => telescope(),
+          :indices => telescope(),
+          :level => non_neg_integer(),
+          # Set (to `true`) only by `opaque_family/3` for postulate families the
+          # kernel refuses to eliminate; absent on ordinary inductive families.
+          optional(:opaque) => boolean()
+        }
   @type ctor :: %{
           name: atom(),
           args: telescope(),
