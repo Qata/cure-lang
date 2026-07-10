@@ -755,8 +755,10 @@ defmodule Cure.Project do
     # Lex+parse only enough to find `app` containers. We intentionally
     # emit no events during the pre-pass so the main compile pass
     # remains the sole emitter for LSP consumers.
-    containers =
-      Enum.flat_map(files, fn file ->
+    # Thread a project-root → edition cache so a project of N files sharing one
+    # Cure.toml parses+validates that manifest ONCE, not N times (A1-F4).
+    {containers, _cache} =
+      Enum.flat_map_reduce(files, %{}, fn file, cache ->
         case File.read(file) do
           {:ok, source} ->
             # Resolve each file's edition (pragma > its project's Cure.toml >
@@ -765,19 +767,22 @@ defmodule Cure.Project do
             # current(), so a file pinned to an older edition that used a since-
             # retired keyword would fail to parse here, get swallowed below, and go
             # invisible to app detection while the real compile parsed it fine.
-            edition = app_pre_pass_edition(source, file)
+            {edition, cache} = app_pre_pass_edition(source, file, cache)
 
-            with {:ok, tokens} <-
-                   Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false, edition: edition),
-                 {:ok, ast} <-
-                   Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false, edition: edition) do
-              find_app_containers(ast, file)
-            else
-              _ -> []
-            end
+            result =
+              with {:ok, tokens} <-
+                     Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false, edition: edition),
+                   {:ok, ast} <-
+                     Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false, edition: edition) do
+                find_app_containers(ast, file)
+              else
+                _ -> []
+              end
+
+            {result, cache}
 
           _ ->
-            []
+            {[], cache}
         end
       end)
 
@@ -797,10 +802,39 @@ defmodule Cure.Project do
   # else its project's Cure.toml (the nearest ancestor, bounded at the repo root),
   # else the compiler default. An unknown edition degrades to the default here (the
   # real compile pass reports it loudly); the pre-pass must never crash a build.
-  defp app_pre_pass_edition(source, file) do
-    case Cure.Edition.resolve(%{source: source, project_dir: find_root(file)}) do
-      {:ok, ed} -> ed
-      {:error, _} -> Cure.Edition.current()
+  #
+  # The per-file pragma is checked FIRST (cheap regex) so a pragma'd file never
+  # triggers `find_root`; only a pragma-less file consults the project manifest,
+  # and that result is memoised by project root in `cache` (A1-F4) — equivalent to
+  # the old `resolve(%{source, project_dir: find_root(file)})` but without re-
+  # reading the same Cure.toml once per file.
+  defp app_pre_pass_edition(source, file, cache) do
+    case Cure.Edition.pragma_edition(source) do
+      nil ->
+        root = find_root(file)
+
+        case Map.fetch(cache, root) do
+          {:ok, ed} ->
+            {ed, cache}
+
+          :error ->
+            ed =
+              case Cure.Edition.resolve(%{project_dir: root}) do
+                {:ok, e} -> e
+                {:error, _} -> Cure.Edition.current()
+              end
+
+            {ed, Map.put(cache, root, ed)}
+        end
+
+      pragma ->
+        ed =
+          case Cure.Edition.parse(pragma) do
+            {:ok, e} -> e
+            {:error, _} -> Cure.Edition.current()
+          end
+
+        {ed, cache}
     end
   end
 
