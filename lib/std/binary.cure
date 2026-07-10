@@ -41,4 +41,3 @@ mod Std.Binary
   ## delegates to `:unicode.characters_to_list/1`.
   @extern(:unicode, :characters_to_list, 1)
   fn from_binary(b: Binary) -> List(Char)
-end
