@@ -48,6 +48,7 @@ defmodule Cure.Project do
   defstruct [
     :name,
     :version,
+    :edition,
     dependencies: [],
     compiler_opts: [],
     source_paths: ["lib"],
@@ -71,7 +72,17 @@ defmodule Cure.Project do
     case File.read(path) do
       {:ok, content} ->
         project = parse_toml(content)
-        {:ok, %{project | root: dir}}
+
+        case project.edition do
+          nil ->
+            {:ok, %{project | root: dir}}
+
+          ed ->
+            case Cure.Edition.parse(ed) do
+              {:ok, _} -> {:ok, %{project | root: dir}}
+              {:error, _} = err -> err
+            end
+        end
 
       {:error, :enoent} ->
         {:error, :no_project_file}
@@ -740,6 +751,7 @@ defmodule Cure.Project do
     %__MODULE__{
       name: Map.get(parsed.project, "name", "unnamed"),
       version: Map.get(parsed.project, "version", "0.1.0"),
+      edition: Map.get(parsed.project, "edition"),
       dependencies: parsed.deps,
       compiler_opts: parsed.compiler,
       source_paths: source_paths,
