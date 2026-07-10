@@ -288,25 +288,74 @@ the newly-broad auto-discovery, both confirmed by reproduction:
 `913aa99` (F-A follow-up: nearest-ancestor discovery) ·
 `0b4d2f3` (bound discovery at the git-repo root).
 
-## Outstanding findings (after iteration 5)
+## Iteration 6 — LATENT-1 fixed + fresh 3-Opus audit of the editions slices + fixes
 
-- **LATENT-1 residual (path/tarball dep inheritance) [LOW, latent]:** for a
-  **path** or **tarball** dependency that ships WITHOUT its own `Cure.toml` (and,
-  being under the consumer's `_build/deps/`, without its own `.git`), `find_root`
-  still walks up to the consuming project's manifest and the dep would compile
-  under the consumer's edition rather than the default. Git deps are already
-  fixed (own `.git` bounds them). Fix direction: `resolve_one` (path) and
-  `install_tarball` should pass `project_dir: <dep_base>` so the dep resolves
-  under its own root/default, never the consumer's (Rust edition-per-package
-  parity). Deferred: purely latent (one edition), the wrong-behaviour is not
-  observable today, and a clean red test wants dependency-resolution fixtures
-  (private fs/network-heavy call sites). Not a blocker.
+**Outstanding from iteration 5 (LATENT-1) — FIXED first:**
 
-**Loop status:** iteration 5's fresh audit found confirmed (latent) hazards; the
-primary one (unbounded walk) is FIXED this cycle, so the audit is **NOT clean**.
-Convergence (two consecutive clean audits) is not met. The one Outstanding item
-is a LATENT, low-severity dep-resolution residual. The cron is **left in place**;
-the next fire (iteration 6) audits iteration 5's fixes and may address LATENT-1.
-Do NOT merge.
+- **LATENT-1 residual (path/tarball dep edition inheritance)** — `4b300ef`: pinned
+  `project_dir` at both dep-compile sites (path `resolve_one`, `install_tarball`)
+  so a manifest-less dep resolves under its own base/default, never the consumer's
+  edition. Red→green via a public `resolve_deps/1` path-dep fixture
+  (`test/cure/project/dep_edition_isolation_test.exs`).
+
+**Fresh audit — 3 parallel Opus agents over the changed slices** (project/dep,
+compiler/edition resolve, CLI migrate). 10 raw claims; **each verified against
+source before counting** (two agent line-refs were wrong — `detect_app` is
+`project.ex:703` not `compiler.ex:711`; `compiler.ex` is only 424 lines — corrected
+by reading the real code). Confirmed-real findings, all FIXED this cycle:
+
+- **A3-F1 + A3-F2 (migrate splice data-loss)** — `e012adb`: `replace_leading_pragma_line`
+  replaced the whole leading line, so it (a) dropped a trailing comment on the pragma
+  line and (b) DESTROYED the entire body of a lone-CR file (no `\n` ⇒ one "line").
+  Now rewrites only the matched `@edition(...)` token; trailing content + EOL survive.
+- **A2-F1 (TOML inline comment → spurious hard fail)** — `e07fc24`: `edition = "2026"  # pin`
+  leaked the comment into the value (`2026"  # pin`) and hard-failed a VALID edition.
+  `parse_kv` now strips the first `#` outside quotes (a `#` inside a quoted value kept).
+- **A1-F2 (blank-path dep crash)** — `be4c43b`: `{ path = "" }` routed to the git clause
+  (a `git: nil` key) and crashed `System.cmd` on a nil URL. Now `{:error, {:invalid_dependency, name}}`;
+  git clause guarded on a binary URL.
+- **A1-F1 (nested dep manifest ignored)** — `d5f8e07`: `Cure.Project.load` reads `<dir>/Cure.toml`
+  directly, so the fixed `project_dir: target` missed a tarball dep's own manifest under the
+  nested `target/<pkg>-<vsn>/` layout the `**/lib/**` glob anticipates. New base-bounded
+  `dep_project_dir/2` finds the dep's own Cure.toml yet never escapes into the consumer tree.
+- **A2-F2 (app-detect pre-pass ignored per-file editions)** — `02a8b4c`: `detect_app` lexed under
+  `current()`; now resolves each file's edition (pragma > project > default) and threads it.
+  Latent (one edition) but a real precedence gap. Same commit corrects two stale comments
+  (**A2-F3** `parse_source`, **A2-F5** parser unknown-pragma gate) that wrongly claimed the
+  build path never calls `Edition.resolve`.
+
+**Verified but DEFERRED as by-design (recorded, not "fixed"):**
+
+- **A2-F4** — the "no edition declared" advisory is deduped once per OS process (a
+  single `:persistent_term` key). This is intentional anti-spam for a long-lived
+  compiler process; being once-per-process rather than once-per-project is a
+  defensible advisory policy, not a correctness bug.
+- **A3-F3** — the phase-2 bump's PREPEND branch is unreachable from `migrate_bump`
+  (a pragma-less file returns `false` from `migrate_file_bump?`), so a standalone
+  file with no `@edition` is not stamped on migration. This matches Rust parity:
+  `cargo fix --edition` bumps the PACKAGE manifest (Cure's `migrate_project_bump?`
+  path), not each file. Per-file stamping on migration is a separate design choice,
+  not a bug; the prepend branch still serves the public `migrate_splice_edition/2`.
+
+**Refuted on verification (not counted):** A1-F3 (git-dep site safe — the fresh
+`git clone` always has a `.git` dir bounding `find_root`; the agent self-refuted).
+
+**Full suite after all fixes: 3884 passed, 0 failing** (+9 new tests; 148 immune
+responses expected; Antigen shape-coverage 309/309).
+
+## Outstanding findings (after iteration 6)
+
+- None open as bugs. The two items above (A2-F4, A3-F3) are **by-design**, kept
+  here as rationale so a future audit doesn't re-flag them.
+
+**Loop status:** iteration 6's fresh audit found 8 confirmed bugs — so it is **NOT
+a clean audit**, and the Group-1–5 fixes are NEW code not yet independently audited.
+Convergence (two consecutive clean audits) is **not** met. The cron is **left in
+place**; the next fire (iteration 7) runs a fresh audit over the iteration-6
+changes — a clean result there is the FIRST clean audit, and a second consecutive
+clean audit closes the loop. Do NOT merge.
+
+Commits this cycle: `4b300ef` (LATENT-1), `e012adb` (A3-F1/F2), `e07fc24` (A2-F1),
+`be4c43b` (A1-F2), `d5f8e07` (A1-F1), `02a8b4c` (A2-F2 + doc A2-F3/F5).
 
 ---
