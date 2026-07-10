@@ -2,8 +2,14 @@ defmodule Mix.Tasks.Antigen do
   @moduledoc """
   Run the Antigen property-based metatheory engine (spec §8).
 
-      mix antigen [--count N | --budget Nm] [--bias] [--corpus PATH] [--seeds PATH] [--report-dir DIR]
-      mix antigen generate [--count N | --budget Nm] [--seeds PATH] [--report-dir DIR]
+      mix antigen [--count N | --budget Nm] [--bias] [--seed N] [--corpus PATH] [--seeds PATH] [--report-dir DIR]
+      mix antigen generate [--count N | --budget Nm] [--seed N] [--seeds PATH] [--report-dir DIR]
+
+  Every run prints the integer master seed it used (`seed=…`). Re-running with
+  `--seed N` replays that run's generation exactly (deterministic draws, including
+  each `--bias` round's sub-seed) — the way to reproduce a specific `mix antigen`
+  run. `--seed` sets the RNG master seed; it is unrelated to `--seeds PATH` (the
+  seed-corpus file).
 
   `mix antigen` is the **explorer**: generate → assay → bank; it self-terminates
   after a bounded number of generation rounds (`--count`, default #{20_000},
@@ -37,7 +43,7 @@ defmodule Mix.Tasks.Antigen do
 
   @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string,
              report_dir: :string, out: :string, guided: :boolean, precise: :boolean,
-             edge_corpus: :string, plateau: :integer, guided_round: :integer]
+             edge_corpus: :string, plateau: :integer, guided_round: :integer, seed: :integer]
 
   @impl Mix.Task
   def run(argv) do
@@ -61,7 +67,9 @@ defmodule Mix.Tasks.Antigen do
       seeds_path: seeds_path,
       report_dir: opts[:report_dir] || "tmp/antigen",
       count: count,
-      bias: opts[:bias]
+      bias: opts[:bias],
+      # nil ⇒ the runner picks (and reports) a fresh seed; `--seed N` replays a run.
+      seed: opts[:seed]
     ]
 
     # Install the corpus-backed filler pool (spec §3) once, before dispatch, so both
@@ -71,12 +79,12 @@ defmodule Mix.Tasks.Antigen do
     case mode do
       :explore ->
         r = Antigen.Runner.explore(runner_opts)
-        IO.puts("antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked")
+        IO.puts("antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked (seed=#{r.seed})")
 
       :generate ->
         install_sigterm_trap()
         r = Antigen.Runner.generate(runner_opts)
-        IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked")
+        IO.puts("antigen generate: #{r.seeds_banked} seed(s) banked (seed=#{r.seed})")
 
       :cover ->
         {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)

@@ -51,13 +51,14 @@ defmodule Antigen.Runner do
 
   def explore(opts) do
     count = Keyword.get(opts, :count, 200)
+    seed = Keyword.get(opts, :seed) || fresh_seed()
 
     challenges =
       cond do
         opts[:challenges] -> opts[:challenges]
-        opts[:bias] -> draw_biased(opts[:gen], count, Keyword.get(opts, :round_size, @round_size))
+        opts[:bias] -> draw_biased(opts[:gen], count, Keyword.get(opts, :round_size, @round_size), seed)
         # exactly one undivided draw when unbiased (spec §4 — take is not composable)
-        true -> draw(opts[:gen], count)
+        true -> draw(opts[:gen], count, seed)
       end
 
     final =
@@ -98,6 +99,7 @@ defmodule Antigen.Runner do
     %{
       infections: final.infections,
       seeds_banked: final.seeds_banked,
+      seed: seed,
       health: summarize(final, count),
       health_metrics: metrics,
       stamp: stamp
@@ -288,10 +290,12 @@ defmodule Antigen.Runner do
 
   def generate(opts) do
     count = Keyword.get(opts, :count, 200)
+    seed = Keyword.get(opts, :seed) || fresh_seed()
 
-    draw(opts[:gen], count)
+    draw(opts[:gen], count, seed)
     |> Enum.reduce(%{seeds_banked: 0}, fn c, acc -> bank_seed(%{c | seed: seed_of(c)}, opts, acc) end)
     |> Map.take([:seeds_banked])
+    |> Map.put(:seed, seed)
   end
 
   def replay(paths, assays) do
@@ -509,32 +513,49 @@ defmodule Antigen.Runner do
     end
   end
 
-  @doc "Public single-batch draw (wraps the private `draw/2`) for the guided loop."
-  def draw_n(gen, count), do: draw(gen, count)
+  @doc "Public single-batch draw (wraps the private `draw/3`) for the guided loop."
+  def draw_n(gen, count), do: draw(gen, count, fresh_seed())
 
-  defp draw(gen, count), do: Backend.StreamData.interp(gen) |> Enum.take(count)
+  # Seeded draw — every draw is replayable given `seed` (see `Backend.StreamData.sample_seeded/3`).
+  defp draw(gen, count, seed), do: Backend.StreamData.sample_seeded(gen, count, seed)
+
+  @doc """
+  A fresh, wall-clock-derived master seed for an unseeded run. Distinct across
+  `mix antigen` invocations (separate VMs) so each run prints a replayable seed.
+  """
+  @spec fresh_seed() :: integer()
+  def fresh_seed, do: System.system_time(:microsecond)
+
+  @doc """
+  Per-round seed for a biased run, derived deterministically from the master `seed`
+  and the 0-based round index. Keeps rounds independent (each its own RNG stream)
+  yet fully reproducible from a single master seed.
+  """
+  @spec round_seed(integer(), non_neg_integer()) :: integer()
+  def round_seed(seed, index), do: :erlang.phash2({seed, index})
 
   # `bias: true` draw (spec §4): draw `round_size` at a time, stamp the accumulated
   # batch's per-group health, reweight the mix, continue. Precondition: `gen` is the
   # reweightable `{:frequency, ws}` shape (`Mix.Tasks.Antigen.default_gen/0`) — an
   # ad-hoc non-frequency gen hits this match and crashes clearly rather than
   # silently misbehaving (bias:true is a CLI-only feature this run, §7 non-goals).
-  defp draw_biased(gen, count, round_size) do
+  defp draw_biased(gen, count, round_size, seed) do
     {:frequency, ws0} = gen
-    # `round_size <= 0` would stall `draw_rounds/4` (n never decreases) — floor it,
+    # `round_size <= 0` would stall `draw_rounds/6` (n never decreases) — floor it,
     # since `opts[:round_size]` is caller-suppliable with no CLI validation.
-    draw_rounds(ws0, count, max(round_size, 1), [])
+    draw_rounds(ws0, count, max(round_size, 1), seed, 0, [])
   end
 
-  defp draw_rounds(_ws, 0, _round_size, acc), do: acc |> Enum.reverse() |> List.flatten()
+  defp draw_rounds(_ws, 0, _round_size, _seed, _idx, acc), do: acc |> Enum.reverse() |> List.flatten()
 
-  defp draw_rounds(ws, remaining, round_size, acc) do
+  defp draw_rounds(ws, remaining, round_size, seed, idx, acc) do
     n = min(round_size, remaining)
-    batch = draw({:frequency, ws}, n)
+    # Each round draws from its own reproducible sub-seed derived from the master.
+    batch = draw({:frequency, ws}, n, round_seed(seed, idx))
     stamps = round_stamps(List.flatten([batch | acc]))
     new_weights = reweight(Enum.map(ws, fn {w, _g} -> w end), gen_group_table(), stamps)
     ws2 = Enum.zip(new_weights, ws) |> Enum.map(fn {w, {_old_w, g}} -> {w, g} end)
-    draw_rounds(ws2, remaining - n, round_size, [batch | acc])
+    draw_rounds(ws2, remaining - n, round_size, seed, idx + 1, [batch | acc])
   end
 
   # `discard_rate` isn't knowable during the draw phase (discards are decided later,
