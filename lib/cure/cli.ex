@@ -1595,30 +1595,42 @@ defmodule Cure.CLI do
   end
 
   @doc false
-  # Extract a leading `@edition("YYYY")` marker for the phase-2 bump. The capture
-  # is restricted to a 4-digit year (matching Cure.Edition) so a malformed value
-  # is treated as "no marker" (nil) rather than flowing into compare/2 (F9).
-  def migrate_edition_pragma(body) do
-    # `@\s*edition\s*\(` mirrors the parser's whitespace tolerance (F-C) so a
-    # spaced pragma is detected — otherwise the bump would splice a duplicate.
-    case Regex.run(~r/@\s*edition\s*\(\s*"(\d{4})"\s*\)/, body) do
-      [_, ed] -> ed
-      _ -> nil
-    end
-  end
+  # Extract a FILE-LEADING `@edition("YYYY")` marker for the phase-2 bump. Routed
+  # through Cure.Edition.pragma_edition so detection is anchored to the first
+  # substantive line (skipping leading blank/comment trivia) — an `@edition(...)`
+  # buried in a comment or string is NOT a pragma and must not trigger a bump
+  # (Finding 1). That helper also mirrors the parser's interior whitespace (F-C)
+  # and restricts the capture to a 4-digit year (F9), so a malformed value reads
+  # as "no marker" (nil) rather than flowing into compare/2.
+  def migrate_edition_pragma(body), do: Cure.Edition.pragma_edition(body)
 
-  # Replace an existing leading `@edition("…")` pragma, or splice a new one at
-  # the very top (the pragma must precede any statement, spec §4). The match
-  # tolerates the parser's interior whitespace (F-C) so a spaced pragma is
-  # replaced in place rather than duplicated.
-  defp migrate_splice_edition(body, target) do
-    pat = ~r/@\s*edition\s*\(\s*"[^"]+"\s*\)/
-
-    if Regex.match?(pat, body) do
-      Regex.replace(pat, body, "@edition(\"#{target}\")", global: false)
+  @doc false
+  # Replace an existing file-leading `@edition("…")` pragma in place, or splice a
+  # new one at the very top (the pragma must precede any statement, spec §4). The
+  # leading pragma is the first substantive line (Cure.Edition.pragma_edition
+  # agrees), so we replace THAT line rather than a whole-body regex match — a
+  # global-less regex would otherwise rewrite an earlier in-comment mention
+  # (Finding 1). No leading pragma → prepend one at the very top.
+  def migrate_splice_edition(body, target) do
+    if migrate_edition_pragma(body) do
+      replace_leading_pragma_line(body, target)
     else
       "@edition(\"#{target}\")\n" <> body
     end
+  end
+
+  # The leading pragma sits on the first non-trivia line (blank/`#`-comment lines
+  # are trivia, matching Cure.Edition's own scan). Replace that one line with the
+  # canonical form; everything above it (leading comments) is preserved verbatim.
+  defp replace_leading_pragma_line(body, target) do
+    lines = String.split(body, "\n")
+    idx = Enum.find_index(lines, fn line -> not migrate_trivia_line?(line) end)
+    lines |> List.replace_at(idx, "@edition(\"#{target}\")") |> Enum.join("\n")
+  end
+
+  defp migrate_trivia_line?(line) do
+    t = String.trim(line)
+    t == "" or String.starts_with?(t, "#")
   end
 
   # v0.21.0: algebra formatter is now the default. It renders the

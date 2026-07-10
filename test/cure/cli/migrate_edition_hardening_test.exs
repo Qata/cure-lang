@@ -23,6 +23,31 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
     assert Cure.CLI.migrate_edition_pragma("@edition( \"2026\" )\nmod M\n") == "2026"
   end
 
+  # Finding 1 (audit iteration 4, TODAY-triggerable regression): the phase-2 bump
+  # detector and splicer must only recognise a FILE-LEADING pragma (the first
+  # substantive line), never an `@edition(...)` buried in a comment or string.
+  # The F-C whitespace widening had extended a latent whole-body scan so a spaced
+  # `@ edition("2020")` inside a comment falsely matched → a false "bumped" report
+  # plus in-comment mutation while never adding a real leading pragma. Detection
+  # must agree with Cure.Edition.pragma_edition (anchored to the first line).
+  test "Finding 1: an @edition inside a comment is not a leading pragma (no false bump)" do
+    assert Cure.CLI.migrate_edition_pragma("# migrate with @ edition (\"2020\")\nmod M\n") == nil
+    assert Cure.CLI.migrate_edition_pragma("# see @edition(\"2020\")\nmod M\n") == nil
+  end
+
+  test "Finding 1: splicing prepends a real pragma and leaves an in-comment mention intact" do
+    body = "# migrate with @ edition (\"2020\")\nmod M\n"
+    out = Cure.CLI.migrate_splice_edition(body, "2026")
+    assert out == "@edition(\"2026\")\n" <> body
+    assert out =~ "# migrate with @ edition (\"2020\")"
+  end
+
+  test "Finding 1: splicing replaces an existing leading pragma after leading comments" do
+    body = "# header\n@edition(\"2020\")\nmod M\n"
+    out = Cure.CLI.migrate_splice_edition(body, "2026")
+    assert out == "# header\n@edition(\"2026\")\nmod M\n"
+  end
+
   test "F4: migrate_project_edition falls back to current() when no project is present" do
     dir = Path.join(System.tmp_dir!(), "cure_noproj_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
