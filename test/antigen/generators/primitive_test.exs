@@ -10,11 +10,17 @@ defmodule Antigen.Generators.PrimitiveTest do
   @sample 400
 
   # K2 (spec 2026-07-09): the generator emits builtin-op GLOBAL spines, not
-  # {:prim} nodes. The op is the spine's head global name.
+  # {:prim} nodes. The op is the spine's head global name. A1 (spec 2026-07-09
+  # §1-A) adds the polymorphic struct_eq/struct_ne op: a saturated spine carries
+  # a leading TYPE-witness argument, so it is a 3-arg application, not 2; an
+  # under-saturated struct_eq/struct_ne (type witness only) is structurally the
+  # same 1-arg shape as an ordinary unop and already matched below.
+  defp spine?({:app, {:app, {:app, {:global, _g}, _ty}, _a}, _b}), do: true
   defp spine?({:app, {:app, {:global, _g}, _a}, _b}), do: true
   defp spine?({:app, {:global, _g}, _a}), do: true
   defp spine?(_), do: false
 
+  defp op_of({:app, {:app, {:app, {:global, g}, _ty}, _a}, _b}), do: g
   defp op_of({:app, {:app, {:global, g}, _a}, _b}), do: g
   defp op_of({:app, {:global, g}, _a}), do: g
 

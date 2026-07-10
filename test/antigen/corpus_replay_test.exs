@@ -13,33 +13,18 @@ defmodule Antigen.CorpusReplayTest do
   violation again and this test goes red.
   """
   use ExUnit.Case, async: true
-  alias Antigen.{Runner, Assays}
+  alias Antigen.Runner
 
   @corpus "test/antigen/corpus.sexp"
   @seeds "test/antigen/seeds.sexp"
 
-  @registry %{
-    "stub" => Assays.Stub,
-    "totality/diverging" => Assays.Totality,
-    "totality/terminating" => Assays.Totality,
-    "positivity" => Assays.Positivity,
-    "reflexivity" => Assays.Reflexivity,
-    "indexed/case" => Assays.Indexed,
-    "rewrite/eq" => Assays.Rewrite,
-    "universes" => Assays.Universes,
-    "stuck_elim_delta" => Assays.StuckElimDelta,
-    "term/infer_check" => Assays.Term,
-    "term/subject_reduction" => Assays.Term,
-    "term/normalization" => Assays.Term,
-    "mutation/rejection" => Assays.Mutation,
-    "kernel/shift_subst" => Assays.KernelLaw,
-    "kernel/weakening" => Assays.KernelLaw,
-    "kernel/confluence" => Assays.KernelLaw,
-    "elab/completeness" => Assays.Elab,
-    "elab/metamorphic" => Assays.Elab,
-    "elab/erasure" => Assays.Elab,
-    "elab/soundness" => Assays.Elab
-  }
+  # The single source of truth for assay dispatch — the same registry `mix antigen`
+  # replays through (`Runner.replay_registry/0`, built from every registered assay).
+  # A previous hand-maintained subset here silently drifted: valid seeds banked for
+  # newer assays (kernel/beta_subst, elab/shift_agrees, serialize/*, delta/nf,
+  # forcing/dot, …) replayed to `{:violation, {:unknown_assay, _}}` — a false
+  # regression from a stale test fixture, not a real kernel defect.
+  @registry Runner.replay_registry()
 
   test "both committed corpora decode without error (structural integrity)" do
     for path <- [@corpus, @seeds], File.exists?(path) do
@@ -66,6 +51,17 @@ defmodule Antigen.CorpusReplayTest do
            "#{length(failing)} committed entr(y/ies) fail their invariant — the " <>
              "mutual-recursion hole may have regressed: " <>
              inspect(Enum.map(failing, & &1.verdict))
+  end
+
+  test "the replay registry dispatches broad assays the old hardcoded subset lacked" do
+    # Red-green guard for the stale-fixture finding: these assays all have banked
+    # seeds but were absent from the hand-maintained subset, so replay misreported
+    # them as `unknown_assay`. The shared registry must dispatch every one.
+    for assay <-
+          ~w(kernel/beta_subst elab/shift_agrees serialize/roundtrip serialize/decode
+             conv/decision check/verdict branchunify/verdict delta/nf forcing/dot term/rejection) do
+      assert Map.has_key?(@registry, assay), "replay registry does not dispatch #{assay}"
+    end
   end
 
   test "banked :mutant_term seeds replay as correct rejections" do

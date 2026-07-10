@@ -462,12 +462,12 @@ defmodule Cure.Core.Inductive do
   # same guard the other-family clause below applies. Without it a negative
   # occurrence buried in the family's own arguments (`Bad ((Bad Unit) -> Empty)`)
   # would be admitted, breaking well-foundedness.
-  defp strictly_positive?(_env, fname, {:data, fname, ps, is}, _seen),
-    do: not Enum.any?(ps ++ is, &occurs?(fname, &1))
+  defp strictly_positive?(env, fname, {:data, fname, ps, is}, _seen),
+    do: not Enum.any?(ps ++ is, &occurs?(env, fname, &1))
 
   defp strictly_positive?(env, fname, {:data, other, ps, is}, seen) do
     cond do
-      Enum.any?(ps ++ is, &occurs?(fname, &1)) ->
+      Enum.any?(ps ++ is, &occurs?(env, fname, &1)) ->
         false
 
       MapSet.member?(seen, other) ->
@@ -492,14 +492,14 @@ defmodule Cure.Core.Inductive do
   # not occur at all, mirroring the `:data`-other clause's conservatism (a
   # false-open here admits `False`). An occurrence in a genuinely positive but
   # unanalyzable spot is rejected — soundly incomplete, never unsound.
-  defp strictly_positive?(_env, fname, other, _seen), do: not occurs?(fname, other)
+  defp strictly_positive?(env, fname, other, _seen), do: not occurs?(env, fname, other)
 
   # Does `fname` occur anywhere in `ty`, including inside the constructor fields
   # of other families referenced by `ty`? Used for arrow DOMAINS, where any
   # reachable occurrence is a negative position.
   defp occurs_deep?(env, fname, ty, seen) do
-    occurs?(fname, ty) or
-      Enum.any?(data_heads(ty), fn other ->
+    occurs?(env, fname, ty) or
+      Enum.any?(data_heads(env, ty), fn other ->
         other != fname and not MapSet.member?(seen, other) and
           env
           |> ctors_of(other)
@@ -511,33 +511,89 @@ defmodule Cure.Core.Inductive do
       end)
   end
 
-  # Every family name appearing as a `{:data, …}` head anywhere in the term.
-  defp data_heads(term), do: term |> gather_data_heads(MapSet.new()) |> MapSet.to_list()
+  # Every family name appearing as a `{:data, …}` head anywhere in the term,
+  # looking THROUGH `{:global, _}` type synonyms — a field written as the bare
+  # alias `Wrap` (where `typealias Wrap = W`) must still expose `W` as a head, or
+  # `occurs_deep?`'s through-constructor rule never inspects `W`'s fields.
+  defp data_heads(env, term),
+    do: term |> gather_data_heads(env, MapSet.new(), MapSet.new()) |> MapSet.to_list()
 
-  defp gather_data_heads({:data, n, ps, is}, acc),
-    do: Enum.reduce(ps ++ is, MapSet.put(acc, n), &gather_data_heads/2)
+  defp gather_data_heads({:data, n, ps, is}, env, acc, seen),
+    do: Enum.reduce(ps ++ is, MapSet.put(acc, n), &gather_data_heads(&1, env, &2, seen))
 
-  defp gather_data_heads(t, acc) when is_tuple(t),
-    do: t |> Tuple.to_list() |> Enum.reduce(acc, &gather_data_heads/2)
+  defp gather_data_heads({:global, g}, env, acc, seen) do
+    if MapSet.member?(seen, g) do
+      acc
+    else
+      case Env.get_def(env, g) do
+        %{body: body} when not is_nil(body) ->
+          gather_data_heads(body, env, acc, MapSet.put(seen, g))
 
-  defp gather_data_heads(l, acc) when is_list(l), do: Enum.reduce(l, acc, &gather_data_heads/2)
-  defp gather_data_heads(_t, acc), do: acc
+        _ ->
+          acc
+      end
+    end
+  end
+
+  defp gather_data_heads(t, env, acc, seen) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.reduce(acc, &gather_data_heads(&1, env, &2, seen))
+
+  defp gather_data_heads(l, env, acc, seen) when is_list(l),
+    do: Enum.reduce(l, acc, &gather_data_heads(&1, env, &2, seen))
+
+  defp gather_data_heads(_t, _env, acc, _seen), do: acc
 
   # Does the family name `fname` occur anywhere in `term` (as an applied family)?
-  defp occurs?(fname, {:data, fname, _ps, _is}), do: true
+  #
+  # This walker is FAIL-CLOSED: its catch-all descends into any unrecognized
+  # tuple/list rather than answering "does not occur". Its callers
+  # (`strictly_positive?`, `occurs_deep?`) read `false` as "safe to admit", so a
+  # fail-OPEN catch-all here is a soundness hole, not a missing optimization —
+  # any Core node shape it failed to enumerate would silently smuggle a negative
+  # occurrence past the positivity check. The structural descent makes the
+  # enumeration total by construction; it is the same over-approximating pattern
+  # `Cure.Core.Kernel.occurs_index?/2` uses. Constructor/family NAMES are atoms,
+  # which are leaves, so `fname` is only ever matched against a `{:data, …}` head
+  # — never against a name that merely happens to be spelled the same.
+  #
+  # `{:global, g}` is δ-unfolded before the decision. Agda (`Positivity.hs`),
+  # Lean 4 (the `inductive` elaborator) and Idris 2 (`Positivity.idr`) all run
+  # the positivity walk over the alias-EXPANDED type, precisely so that
+  # `typealias Neg = Bad -> Int` cannot smuggle a negative occurrence of `Bad`
+  # into `MkBad : Neg -> Bad` — the classic `MkBad : (Bad -> Nat) -> Bad` paradox
+  # constructor, which inhabits `False`.
+  #
+  # Read the question as: does `fname` occur in `term`'s δ-NORMAL FORM? Then an
+  # OPAQUE global (no body, or absent from the signature) normalizes to itself
+  # and demonstrably contains no occurrence — `false` is the correct answer, not
+  # a fail-open one. This is what keeps `{:app, {:global, :Neg}, Empty}` admitted
+  # while `{:app, {:global, :Neg}, Bad}` is still rejected: `Bad` is found in the
+  # ARGUMENT by the structural walk, not in the opaque head. A CYCLIC alias has no
+  # δ-normal form, so it answers `true` (soundly incomplete, never unsound).
+  defp occurs?(env, fname, term), do: occurs?(env, fname, term, MapSet.new())
 
-  defp occurs?(fname, {:data, _other, ps, is}),
-    do: Enum.any?(ps, &occurs?(fname, &1)) or Enum.any?(is, &occurs?(fname, &1))
+  defp occurs?(_env, fname, {:data, fname, _ps, _is}, _seen), do: true
 
-  defp occurs?(fname, {:pi, d, c}), do: occurs?(fname, d) or occurs?(fname, c)
-  defp occurs?(fname, {:lam, d, b}), do: occurs?(fname, d) or occurs?(fname, b)
-  defp occurs?(fname, {:app, f, a}), do: occurs?(fname, f) or occurs?(fname, a)
-  defp occurs?(fname, {:ctor, _n, args}), do: Enum.any?(args, &occurs?(fname, &1))
+  # Defensive: a family is normally referenced as `{:data, fname, _, _}`, never as
+  # a bare global, but if the two name spaces ever collide, treat it as an occurrence.
+  defp occurs?(_env, fname, {:global, fname}, _seen), do: true
 
-  defp occurs?(fname, {:case, s, m, brs}),
-    do:
-      occurs?(fname, s) or occurs?(fname, m) or
-        Enum.any?(brs, fn {_c, _ar, body} -> occurs?(fname, body) end)
+  defp occurs?(env, fname, {:global, g}, seen) do
+    if MapSet.member?(seen, g) do
+      true
+    else
+      case Env.get_def(env, g) do
+        %{body: body} when not is_nil(body) -> occurs?(env, fname, body, MapSet.put(seen, g))
+        _ -> false
+      end
+    end
+  end
 
-  defp occurs?(_fname, _term), do: false
+  defp occurs?(env, fname, t, seen) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.any?(&occurs?(env, fname, &1, seen))
+
+  defp occurs?(env, fname, l, seen) when is_list(l),
+    do: Enum.any?(l, &occurs?(env, fname, &1, seen))
+
+  defp occurs?(_env, _fname, _leaf, _seen), do: false
 end

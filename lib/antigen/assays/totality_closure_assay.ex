@@ -92,5 +92,24 @@ defmodule Antigen.Assays.TotalityClosureAssay do
   defp globals({:data, _n, ps, is}), do: Enum.flat_map(ps, &globals/1) ++ Enum.flat_map(is, &globals/1)
   defp globals({:ctor, _n, args}), do: Enum.flat_map(args, &globals/1)
   defp globals({:case, s, m, brs}), do: globals(s) ++ globals(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> globals(b) end)
+
+  # Fail closed on an unrecognized node, exactly as `TotalityClosure.collect/1` does. This
+  # walker is the INDEPENDENT oracle for that one, and a catch-all `[]` here reproduced the
+  # subject's blind spot verbatim: both sides missed a global reachable only through a node
+  # neither list names, so the completeness property could never fail. An oracle that shares
+  # its subject's bug tests nothing.
+  defp globals(term) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.flat_map(fn
+      child when is_tuple(child) -> globals(child)
+      children when is_list(children) -> Enum.flat_map(children, &globals_child/1)
+      _leaf -> []
+    end)
+  end
+
   defp globals(_), do: []
+
+  defp globals_child(child) when is_tuple(child), do: globals(child)
+  defp globals_child(_other), do: []
 end

@@ -72,7 +72,14 @@ defmodule Cure.Core.Normalise do
   @spec with_fuel(fuel(), (-> term())) :: term() | :fuel_exhausted
   def with_fuel(:infinity, fun), do: fun.()
 
+  # The budget lives in the process dictionary, so it is a dynamically-scoped variable and
+  # must be saved and restored like one. It used to be unconditionally `Process.delete`d on
+  # exit: a nested `with_fuel` — `conv_within?/6` inside a fueled `nf/3`, or a reentrant
+  # `whnf/3` — wiped the enclosing, still-live counter on its way out, and every subsequent
+  # δ-unfold in the outer computation found no key and ran unbounded. The bound a caller
+  # asked for silently stopped being a bound.
   def with_fuel(fuel, fun) when is_integer(fuel) and fuel > 0 do
+    outer = Process.get(@fuel_key, :none)
     Process.put(@fuel_key, fuel)
 
     try do
@@ -80,7 +87,10 @@ defmodule Cure.Core.Normalise do
     catch
       :throw, {@fuel_key, :exhausted} -> :fuel_exhausted
     after
-      Process.delete(@fuel_key)
+      case outer do
+        :none -> Process.delete(@fuel_key)
+        remaining -> Process.put(@fuel_key, remaining)
+      end
     end
   end
 

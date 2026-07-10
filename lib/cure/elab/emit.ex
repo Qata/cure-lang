@@ -124,7 +124,7 @@ defmodule Cure.Elab.Emit do
 
   defp function_form(env, name) do
     case Env.get_def(env, name) do
-      %{body: {:extern, {mod, fun, arity}}} -> extern_form(name, {mod, fun, arity})
+      %{body: {:extern, {mod, fun, _arity}}} -> extern_form(name, {mod, fun}, present_arity(env, name))
       def -> real_function_form(name, def, env)
     end
   end
@@ -133,7 +133,13 @@ defmodule Cure.Elab.Emit do
   # calling it). Params are synthesized from the arity — a bodyless extern has no
   # {:lam,…} chain to peel, so peel_params/4 would yield zero params for arity>0.
   # `0..(arity-1)//1` yields `[]` at arity 0 → `mod:fun()`, correct.
-  defp extern_form(fn_atom, {mod, fun, arity}) do
+  #
+  # The arity is the def's PRESENT count, as in `real_function_form/3` and at every call site
+  # (`present_arity/2`), never the raw literal from `@extern(…)` — an erased parameter never
+  # reaches the BEAM. `Declarations.check_extern_arity/2` rejects a literal that disagrees, so
+  # the two agree by construction; reading the quantities here keeps that true by construction
+  # rather than by convention.
+  defp extern_form(fn_atom, {mod, fun}, arity) do
     param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
     remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
     {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [remote]}]}
@@ -227,6 +233,8 @@ defmodule Cure.Elab.Emit do
   # and `Next(...First)` compile to the same value 97.
   defp lower(_env, {:bounded_lit, n}, _ctx), do: {:integer, @line, n}
   defp lower(_env, {:float_lit, f}, _ctx), do: {:float, @line, f}
+  # An atom literal is its own BEAM value.
+  defp lower(_env, {:atom_lit, a}, _ctx), do: {:atom, @line, a}
 
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
@@ -430,7 +438,11 @@ defmodule Cure.Elab.Emit do
   defp erl_binop(:add), do: :+
   defp erl_binop(:sub), do: :-
   defp erl_binop(:mul), do: :*
+  # `div` is Erlang INTEGER division; `/` is float division. `Builtins` gives
+  # float_div the distinct op key `:fdiv` precisely so this mapping can tell them
+  # apart — do not collapse them.
   defp erl_binop(:div), do: :div
+  defp erl_binop(:fdiv), do: :/
   defp erl_binop(:rem), do: :rem
   defp erl_binop(:band), do: :band
   defp erl_binop(:bor), do: :bor

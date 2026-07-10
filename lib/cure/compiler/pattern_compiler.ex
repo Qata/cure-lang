@@ -1,3 +1,14 @@
+defmodule Cure.Compiler.PatternCompiler.Error do
+  @moduledoc """
+  Raised when a pattern's shape is not one this compiler recognizes.
+
+  `Cure.Compiler.Codegen.compile_module/2` rescues this and returns
+  `{:error, {:pattern_error, code, message, line}}`, so an invalid pattern surfaces
+  the way every other compile failure does.
+  """
+  defexception [:code, :message, :line]
+end
+
 defmodule Cure.Compiler.PatternCompiler do
   @moduledoc """
   Dedicated pattern-to-Erlang-abstract-form compiler for `match`, `let`,
@@ -41,7 +52,11 @@ defmodule Cure.Compiler.PatternCompiler do
   - The pin operator `^x` (see `Cure.Compiler.Parser` for the surface
     syntax) compiles to a fresh variable plus an equality guard.
   - Binary patterns `<<x:8, rest/binary>>` compile to `{:bin, _, _}`.
-  - Ranges are not allowed in pattern position.
+  - As-patterns `whole @ Some(x)` compile to Erlang's `Whole = {some, X}`.
+  - Any shape outside the recognized set — a range, a bare nullary constructor,
+    a lowercase call head — raises `Cure.Compiler.PatternCompiler.Error`, which
+    `Codegen.compile_module/2` turns into `{:error, {:pattern_error, …}}`. A
+    wildcard row is only ever introduced by an actual `_` or variable.
   """
 
   alias Cure.Compiler.Codegen
@@ -86,9 +101,26 @@ defmodule Cure.Compiler.PatternCompiler do
         var_atom = Codegen.mangle_var(name)
         {{:var, state.line, var_atom}, state}
 
-      # Named variable
-      {:variable, _meta, name} when is_binary(name) ->
+      # Bare PascalCase identifier: a nullary constructor written without its `()`.
+      # `docs/MATCH.md` §5.12 requires the parens precisely because this grammar cannot
+      # otherwise tell a capitalized binder from a capitalized constructor — and E074
+      # exists to say so. Until now nothing raised it, and the name bound a variable that
+      # matched everything, silently shadowing every arm below it.
+      {:variable, meta, name} when is_binary(name) ->
+        if constructor?(name) do
+          bad_pattern!(
+            "E074",
+            "bare nullary constructor `#{name}` in pattern position — write `#{name}()`",
+            Keyword.get(meta, :line, state.line)
+          )
+        end
+
         compile_variable_pattern(name, state)
+
+      # As-pattern: `whole @ Some(x)` binds the scrutinee AND matches the inner pattern.
+      # Erlang spells this `Whole = {some, X}` — a `{:match, …}` node, legal in patterns.
+      {:as_pattern, meta, [name, inner]} when is_binary(name) ->
+        compile_as_pattern(meta, name, inner, state)
 
       # Pin operator: ^x -- parsed as {:pin, meta, [{:variable, _, name}]}
       {:pin, meta, [inner]} ->
@@ -123,22 +155,42 @@ defmodule Cure.Compiler.PatternCompiler do
             negated = negate_literal_form(form, Keyword.get(meta, :line, state.line))
             {negated, state}
 
-          _ ->
-            # Fall through to generic handling
-            {{:var, state.line, :_}, state}
+          op ->
+            bad_pattern!(
+              "E090",
+              "unary `#{op}` is not a pattern",
+              Keyword.get(meta, :line, state.line)
+            )
         end
 
-      # Range not supported in pattern position
+      # Range not supported in pattern position (`docs/PATTERNS.md`, and this module's own
+      # moduledoc). It used to compile to a wildcard on the promise that "the type checker
+      # will flag it"; no stage ever did, so `1..10 -> …` matched every value.
       {:range, meta, _} ->
-        line = Keyword.get(meta, :line, state.line)
-        # Best effort: compile as wildcard and let the type checker flag it.
-        # A structured error is emitted via the Events pipeline by callers.
-        {{:var, line, :_}, state}
+        bad_pattern!(
+          "E090",
+          "range patterns are not supported in pattern position",
+          Keyword.get(meta, :line, state.line)
+        )
 
-      # Fallback: unknown pattern -> wildcard with a best-effort literal
-      _other ->
-        {{:var, state.line, :_}, state}
+      other ->
+        bad_pattern!("E090", "unrecognized pattern shape: #{inspect(other)}", state.line)
     end
+  end
+
+  # Maranget's algorithm — and every pattern elaborator built on it — specializes over a
+  # CLOSED set of head shapes. An input outside that set is a compile error; a wildcard row
+  # is only ever introduced by an actual `_` or variable in the source. This module used to
+  # answer four different unrecognized shapes with `{:var, line, :_}`: a bare nullary
+  # constructor, an as-pattern, a range, and any call whose name wasn't capitalized (a
+  # typo'd `some(x)` for `Some(x)`). Each became an unconditional wildcard that swallowed
+  # every scrutinee and shadowed every arm below — silent miscompilation, no diagnostic.
+  @spec bad_pattern!(String.t(), String.t(), integer()) :: no_return()
+  defp bad_pattern!(code, message, line) do
+    raise Cure.Compiler.PatternCompiler.Error,
+      code: code,
+      line: line,
+      message: "#{code}: #{message} (line #{line})"
   end
 
   # -- Literals ---------------------------------------------------------------
@@ -208,7 +260,7 @@ defmodule Cure.Compiler.PatternCompiler do
     case Map.fetch(state.vars, name) do
       {:ok, existing_atom} ->
         # Repeated occurrence: bind a fresh var and emit an equality guard.
-        fresh = fresh_var_atom(name, state)
+        {fresh, state} = fresh_var_atom(name, state)
         guard = equality_guard(fresh, existing_atom, state.line)
 
         state = %{
@@ -226,12 +278,27 @@ defmodule Cure.Compiler.PatternCompiler do
     end
   end
 
+  # `whole @ Some(x)`: bind the whole scrutinee to `whole` and match `Some(x)` besides. The
+  # inner pattern compiles exactly as if it had appeared bare — an as-binding is a
+  # let-around-the-column, never an opaque node that disables matching on it. The classic
+  # pipeline had no clause for this at all, so both halves fell into the catch-all and the
+  # arm matched everything; the dependent elaborator has understood it all along
+  # (`Elaborator.desugar_as_patterns/1`) and the oracle suite pins the semantics.
+  defp compile_as_pattern(meta, name, inner, state) do
+    line = Keyword.get(meta, :line, state.line)
+    {inner_form, state} = do_compile(inner, state)
+    {var_form, state} = compile_variable_pattern(name, state)
+    {{:match, line, var_form, inner_form}, state}
+  end
+
+  # Two repeats of the same name in one pattern (`[x, x, x]`) must produce DISTINCT Erlang
+  # variables, each equated to the original by its own guard. The counter that guarantees
+  # that was declared on the codegen struct and read here, but incremented nowhere: every
+  # dup in a clause collapsed onto `V__dup_x_0`, so a third occurrence re-matched a variable
+  # already bound to the second occurrence's value.
   defp fresh_var_atom(name, state) do
-    # We use the state.line as a disambiguator so that two repeats on the
-    # same logical name in the same clause still produce distinct atoms.
-    # The :pattern_dup_counter field is incremented each time.
     counter = Map.get(state, :pattern_dup_counter, 0)
-    String.to_atom("V__dup_#{name}_#{counter}")
+    {String.to_atom("V__dup_#{name}_#{counter}"), %{state | pattern_dup_counter: counter + 1}}
   end
 
   defp equality_guard(fresh, existing, line) do
@@ -358,8 +425,10 @@ defmodule Cure.Compiler.PatternCompiler do
         compile_constructor_pattern(name, args, line, state)
 
       true ->
-        # Unknown call in pattern position -- best effort: wildcard.
-        {{:var, line, :_}, state}
+        # A lowercase call head is not a constructor and not a record. `some(x)` — a typo
+        # for `Some(x)` — used to compile to a bind-everything wildcard, discarding the
+        # argument `x` along with the shape test.
+        bad_pattern!("E090", "`#{name}(…)` is not a constructor or record pattern", line)
     end
   end
 

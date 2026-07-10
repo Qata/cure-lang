@@ -75,6 +75,8 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
   defp conv_struct?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp conv_struct?({:vbinary_type}, {:vbinary_type}, _depth, _sig), do: true
+  defp conv_struct?({:vatom_type}, {:vatom_type}, _depth, _sig), do: true
+  defp conv_struct?({:vatom, a}, {:vatom, b}, _depth, _sig), do: a == b
   defp conv_struct?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 
   # Compact Nat literals. Same representation → O(1) bignum equality. Cross
@@ -213,6 +215,8 @@ defmodule Cure.Core.Conv do
   defp same_value_no_delta?({:vbounded, a}, {:vbounded, b}, _depth, _sig), do: a == b
   defp same_value_no_delta?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp same_value_no_delta?({:vbinary_type}, {:vbinary_type}, _depth, _sig), do: true
+  defp same_value_no_delta?({:vatom_type}, {:vatom_type}, _depth, _sig), do: true
+  defp same_value_no_delta?({:vatom, a}, {:vatom, b}, _depth, _sig), do: a == b
   defp same_value_no_delta?({:vfloat, a}, {:vfloat, b}, _depth, _sig), do: a == b
 
   defp same_value_no_delta?({:vdata, n1, args1}, {:vdata, n2, args2}, depth, sig),

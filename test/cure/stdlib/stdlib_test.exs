@@ -483,12 +483,13 @@ defmodule Cure.StdlibTest do
     end
 
     test "concat", %{m: m} do
-      assert m.concat("hello", " world") == "hello world"
+      # #29: String is List(Char); concat yields the value-surface charlist.
+      assert m.concat("hello", " world") == ~c"hello world"
     end
 
     test "from_int and from_atom", %{m: m} do
-      assert m.from_int(42) == "42"
-      assert m.from_atom(:hello) == "hello"
+      assert m.from_int(42) == ~c"42"
+      assert m.from_atom(:hello) == ~c"hello"
     end
 
     test "to_int", %{m: m} do
@@ -504,7 +505,7 @@ defmodule Cure.StdlibTest do
     end
 
     test "repeat", %{m: m} do
-      assert m.repeat("ab", 3) == "ababab"
+      assert m.repeat("ab", 3) == ~c"ababab"
     end
 
     test "trim", %{m: m} do
@@ -513,8 +514,8 @@ defmodule Cure.StdlibTest do
     end
 
     test "reverse", %{m: m} do
-      assert m.reverse("hello") == "olleh"
-      assert m.reverse("") == ""
+      assert m.reverse("hello") == ~c"olleh"
+      assert m.reverse("") == ~c""
     end
   end
 

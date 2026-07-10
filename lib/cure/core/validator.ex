@@ -149,7 +149,13 @@ defmodule Cure.Core.Validator do
   defp children(_nontuple), do: []
 
   defp term_children(x) when is_tuple(x), do: [x]
-  defp term_children(xs) when is_list(xs), do: Enum.filter(xs, &is_tuple/1)
+
+  # Recurse into nested lists. `Enum.filter(xs, &is_tuple/1)` kept only elements that were
+  # themselves tuples, so a list OF LISTS of subterms — one level deeper than
+  # `validator_unknown_node_test.exs` reaches — was filtered out entirely, and everything
+  # inside it escaped a walker whose own comment promises nothing can.
+  defp term_children(xs) when is_list(xs), do: Enum.flat_map(xs, &term_children/1)
+
   defp term_children(_atom_or_scalar), do: []
 
   @doc "Validate `term` against the Wave-0 config."

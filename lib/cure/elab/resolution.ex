@@ -13,30 +13,45 @@ defmodule Cure.Elab.Resolution do
   Substitute constructor/family atoms in a Core term per `atom_map`
   (`%{bare => rekeyed}`). Rewrites the three bare-atom term positions —
   `:data` heads, `:ctor` heads, and `:case` branch tags — and recurses through
-  every structural node. Leaves `:global` (function references keep bare names)
-  and all literals untouched. An atom absent from `atom_map` is passed through.
+  every structural node. Leaves `:global` (function references keep bare names —
+  use `rekey_term/3` to also re-key colliding def references) and all literals
+  untouched. An atom absent from `atom_map` is passed through.
   """
   @spec rekey_term(term, %{atom() => atom()}) :: term when term: tuple()
-  def rekey_term(term, m)
+  def rekey_term(term, m), do: rekey_term(term, m, %{})
 
-  def rekey_term({:data, n, ps, is}, m),
-    do: {:data, Map.get(m, n, n), Enum.map(ps, &rekey_term(&1, m)), Enum.map(is, &rekey_term(&1, m))}
+  @doc """
+  As `rekey_term/2`, but additionally re-keys `{:global, name}` def references
+  through `def_map` (`%{bare_def => :"Mod#def"}`).
 
-  def rekey_term({:ctor, n, args}, m),
-    do: {:ctor, Map.get(m, n, n), Enum.map(args, &rekey_term(&1, m))}
+  A def is normally addressed by its `defs` KEY, which moves to `:"Mod#name"`
+  when the def collides (see `rekey_defs`). A reference embedded in ANOTHER
+  slice's body must follow that move, or it dangles (emit fails with
+  `{name, arity}` undefined). `def_map` is kept SEPARATE from the type/ctor
+  `atom_map` on purpose: a function may share a name with an unrelated
+  constructor being re-keyed, and only the def-reference position may consult
+  the def rename — never a `:data`/`:ctor`/`:case` tag.
+  """
+  @spec rekey_term(term, %{atom() => atom()}, %{atom() => atom()}) :: term when term: tuple()
+  def rekey_term({:data, n, ps, is}, m, d),
+    do: {:data, Map.get(m, n, n), Enum.map(ps, &rekey_term(&1, m, d)), Enum.map(is, &rekey_term(&1, m, d))}
 
-  def rekey_term({:case, s, mo, brs}, m),
+  def rekey_term({:ctor, n, args}, m, d),
+    do: {:ctor, Map.get(m, n, n), Enum.map(args, &rekey_term(&1, m, d))}
+
+  def rekey_term({:case, s, mo, brs}, m, d),
     do:
-      {:case, rekey_term(s, m), rekey_term(mo, m),
-       Enum.map(brs, fn {cn, ar, b} -> {Map.get(m, cn, cn), ar, rekey_term(b, m)} end)}
+      {:case, rekey_term(s, m, d), rekey_term(mo, m, d),
+       Enum.map(brs, fn {cn, ar, b} -> {Map.get(m, cn, cn), ar, rekey_term(b, m, d)} end)}
 
-  def rekey_term({:pi, dom, cod}, m), do: {:pi, rekey_term(dom, m), rekey_term(cod, m)}
-  def rekey_term({:lam, dom, body}, m), do: {:lam, rekey_term(dom, m), rekey_term(body, m)}
-  def rekey_term({:app, f, a}, m), do: {:app, rekey_term(f, m), rekey_term(a, m)}
+  def rekey_term({:pi, dom, cod}, m, d), do: {:pi, rekey_term(dom, m, d), rekey_term(cod, m, d)}
+  def rekey_term({:lam, dom, body}, m, d), do: {:lam, rekey_term(dom, m, d), rekey_term(body, m, d)}
+  def rekey_term({:app, f, a}, m, d), do: {:app, rekey_term(f, m, d), rekey_term(a, m, d)}
 
+  def rekey_term({:global, n}, _m, d), do: {:global, Map.get(d, n, n)}
 
-  # Leaves: :var, :type, :global, :int_type, :int_lit, :float_type, :float_lit.
-  def rekey_term(leaf, _m), do: leaf
+  # Leaves: :var, :type, :int_type, :int_lit, :float_type, :float_lit.
+  def rekey_term(leaf, _m, _d), do: leaf
 
   @doc """
   Re-key every family named in `owned_family_names` within `env`'s slice to
@@ -67,18 +82,33 @@ defmodule Cure.Elab.Resolution do
         |> MapSet.new()
       )
 
-  @spec rekey_module_env(Env.t(), String.t(), MapSet.t(atom()), MapSet.t(atom()), MapSet.t(atom())) ::
-          Env.t()
+  @spec rekey_module_env(
+          Env.t(),
+          String.t(),
+          MapSet.t(atom()),
+          MapSet.t(atom()),
+          MapSet.t(atom()),
+          MapSet.t(atom())
+        ) :: Env.t()
   def rekey_module_env(
         %Env{} = env,
         module_id,
         owned_family_names,
         shadowed_ctor_names,
-        owned_def_names \\ MapSet.new()
+        owned_def_names \\ MapSet.new(),
+        declared_ctor_names \\ MapSet.new()
       ) do
-    # Owned ctor names: ctors whose family is an owned family name.
+    # Owned ctor names: ctors whose family is an owned family name, PLUS the constructors the
+    # module declares in its own source. The family-derived set alone could only ever re-key a
+    # constructor as a side effect of its family colliding, so a constructor that collides while
+    # its family does not — `Ok` of a local `Res` against `Ok` of the imported `Result` — was
+    # never re-keyed, and the plain `Map.put` in `Inductive.declare/3` destroyed the import's
+    # `Ok` with no diagnostic and no qualified key to recover it from.
     owned_ctor_names =
-      for {cname, fname} <- env.ctor_to_family, MapSet.member?(owned_family_names, fname), into: MapSet.new(), do: cname
+      for {cname, fname} <- env.ctor_to_family,
+          MapSet.member?(owned_family_names, fname),
+          into: declared_ctor_names,
+          do: cname
 
     rekeyed_ctor_names = MapSet.intersection(owned_ctor_names, shadowed_ctor_names)
 
@@ -90,18 +120,21 @@ defmodule Cure.Elab.Resolution do
     amap =
       Enum.reduce(rekeyed_ctor_names, amap, fn c, acc -> Map.put(acc, c, rekey_atom(module_id, c)) end)
 
-    # Colliding function names: unlike ctors/families (leaf atoms rewritten inside
-    # Core terms), a def is addressed by its `defs` KEY and `certified` membership,
-    # both of which move to the qualified atom below.
-    amap =
-      Enum.reduce(owned_def_names, amap, fn d, acc -> Map.put(acc, d, rekey_atom(module_id, d)) end)
+    # Colliding function names: a def is addressed by its `defs` KEY and
+    # `certified` membership (both moved to the qualified atom below), AND by
+    # `{:global, name}` references embedded in OTHER slices' bodies. The latter
+    # are rewritten inside Core terms via a SEPARATE `def_map` — kept apart from
+    # the family/ctor `amap` so a function sharing a name with a re-keyed
+    # constructor is not swept up in a `:data`/`:ctor`/`:case` position.
+    def_map =
+      Enum.reduce(owned_def_names, %{}, fn d, acc -> Map.put(acc, d, rekey_atom(module_id, d)) end)
 
     %Env{
       env
-      | families: rekey_families(env.families, owned_family_names, amap),
-        ctors: rekey_ctors(env.ctors, rekeyed_ctor_names, amap),
+      | families: rekey_families(env.families, owned_family_names, amap, def_map),
+        ctors: rekey_ctors(env.ctors, rekeyed_ctor_names, amap, def_map),
         ctor_to_family: rekey_c2f(env.ctor_to_family, amap),
-        defs: rekey_defs(env.defs, owned_def_names, module_id, amap),
+        defs: rekey_defs(env.defs, owned_def_names, module_id, amap, def_map),
         certified: rekey_certified(env.certified, owned_def_names, module_id),
         builtins: rekey_builtins(env.builtins, amap)
     }
@@ -109,25 +142,25 @@ defmodule Cure.Elab.Resolution do
 
   defp rekey_atom(module_id, bare), do: String.to_atom(module_id <> "#" <> Atom.to_string(bare))
 
-  defp rekey_families(families, owned, amap) do
+  defp rekey_families(families, owned, amap, def_map) do
     Map.new(families, fn {k, fam} ->
       if MapSet.member?(owned, k) do
         {Map.fetch!(amap, k),
          %{fam | name: Map.fetch!(amap, k),
-                 params: rekey_tele(fam.params, amap), indices: rekey_tele(fam.indices, amap)}}
+                 params: rekey_tele(fam.params, amap, def_map), indices: rekey_tele(fam.indices, amap, def_map)}}
       else
-        {k, %{fam | params: rekey_tele(fam.params, amap), indices: rekey_tele(fam.indices, amap)}}
+        {k, %{fam | params: rekey_tele(fam.params, amap, def_map), indices: rekey_tele(fam.indices, amap, def_map)}}
       end
     end)
   end
 
-  defp rekey_ctors(ctors, owned_ctor_names, amap) do
+  defp rekey_ctors(ctors, owned_ctor_names, amap, def_map) do
     Map.new(ctors, fn {k, c} ->
       c2 = %{c |
         name: Map.get(amap, c.name, c.name),
-        args: rekey_tele(c.args, amap),
-        result_indices: Enum.map(c.result_indices, &rekey_term(&1, amap)),
-        result_params: Enum.map(c.result_params, &rekey_term(&1, amap))
+        args: rekey_tele(c.args, amap, def_map),
+        result_indices: Enum.map(c.result_indices, &rekey_term(&1, amap, def_map)),
+        result_params: Enum.map(c.result_params, &rekey_term(&1, amap, def_map))
       }
 
       if MapSet.member?(owned_ctor_names, k), do: {Map.fetch!(amap, k), c2}, else: {k, c2}
@@ -138,11 +171,12 @@ defmodule Cure.Elab.Resolution do
     Map.new(c2f, fn {c, f} -> {Map.get(amap, c, c), Map.get(amap, f, f)} end)
   end
 
-  # Rewrite embedded ctor/family references in every def's type+body (via `amap`),
-  # AND move the KEY of an owned-and-colliding def to its qualified atom.
-  defp rekey_defs(defs, owned_def_names, module_id, amap) do
+  # Rewrite embedded ctor/family references (via `amap`) AND colliding def
+  # references (via `def_map`) in every def's type+body, AND move the KEY of an
+  # owned-and-colliding def to its qualified atom.
+  defp rekey_defs(defs, owned_def_names, module_id, amap, def_map) do
     Map.new(defs, fn {k, d} ->
-      d2 = %{d | type: rekey_term(d.type, amap), body: rekey_term(d.body, amap)}
+      d2 = %{d | type: rekey_term(d.type, amap, def_map), body: rekey_term(d.body, amap, def_map)}
       key = if MapSet.member?(owned_def_names, k), do: rekey_atom(module_id, k), else: k
       {key, d2}
     end)
@@ -158,7 +192,8 @@ defmodule Cure.Elab.Resolution do
     |> MapSet.new()
   end
 
-  defp rekey_tele(tele, amap), do: Enum.map(tele, fn {n, t} -> {n, rekey_term(t, amap)} end)
+  defp rekey_tele(tele, amap, def_map),
+    do: Enum.map(tele, fn {n, t} -> {n, rekey_term(t, amap, def_map)} end)
 
   defp rekey_builtins(builtins, amap),
     do: Map.new(builtins, fn {k, fid} -> {k, Map.get(amap, fid, fid)} end)

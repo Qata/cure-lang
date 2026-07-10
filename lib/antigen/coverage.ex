@@ -33,10 +33,20 @@ defmodule Antigen.Coverage do
   def terms_of(%Challenge{kind: :serialize, payload: %{term: term}}), do: [term]
   # decode probes carry a raw string, not a Core term → no terms to well-form-check
   def terms_of(%Challenge{kind: :decode_probe}), do: []
+  # elab_program challenges carry raw SURFACE source (a string), not a Core term —
+  # same reasoning as decode_probe. Only ever hit when an `:elab_program` generator
+  # is wired into `default_gen` (previously none were — every `elab_*` fixed
+  # catalog was deliberately kept out of it); latent until `ElabLiteralTyping`.
+  def terms_of(%Challenge{kind: :elab_program}), do: []
 
   def terms_of(%Challenge{kind: :conv_pair, payload: %{t1: t1, t2: t2}}), do: [t1, t2]
 
   def terms_of(%Challenge{kind: :branch_unify, payload: %{indices: idx}}), do: idx
+
+  # motive-probe branch_unify variant: fully determined by the `shape` tag, no
+  # Core terms in the payload at all (see Antigen.Generators.BranchUnify's
+  # `@motive_cases` and Antigen.Assays.BranchUnify's `motive_probe_result/1`).
+  def terms_of(%Challenge{kind: :branch_unify, payload: %{motive_probe: _}}), do: []
 
   def terms_of(%Challenge{kind: :dot_forcing, payload: %{indices: idx, written: w}}), do: idx ++ [w]
 
@@ -44,7 +54,19 @@ defmodule Antigen.Coverage do
   # (which Term.term? rejects) and the assay self-validates via Kernel.check.
   def terms_of(%Challenge{kind: :check_mode}), do: []
 
+  # Kernel def-level probes carry only a probe tag; the assay reconstructs the
+  # input and calls the kernel directly (check_def/validate_certificate/…), so
+  # there is no standalone Core Term to well-form-check — bypass the gate as
+  # :check_mode/:decode_probe do (some inputs, e.g. `{:absurd}`/`{:hole,_}`, are
+  # deliberately shapes Term.term? rejects).
+  def terms_of(%Challenge{kind: :kernel_probe}), do: []
+
   def terms_of(%Challenge{kind: :delta_reduce, payload: %{term: t, expected: e}}), do: [t, e]
+
+  # opts-rejection probes carry no Core Term at all (a deliberately malformed
+  # `opts` keyword list, checked directly against a fixed dummy neutral) → no
+  # terms to well-form-check, mirroring :decode_probe/:check_mode above.
+  def terms_of(%Challenge{kind: :delta_reduce, label: :opts_reject}), do: []
 
   def terms_of(%Challenge{kind: :mutant_term, payload: %{ctx: ctx, type: type, term: term}}),
     do: [type, term | ctx]

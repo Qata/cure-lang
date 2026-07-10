@@ -39,6 +39,11 @@ defmodule Cure.Core.Context do
 
   @doc "The type value of the variable at de Bruijn index `k` (0 = most recent)."
   @spec lookup(t(), non_neg_integer()) :: Value.t() | nil
+  # A negative index is as out-of-range as one past the end, and must fail the same way.
+  # `Enum.at/2` counts from the end for a negative index, so `lookup(ctx, -1)` used to return
+  # the OLDEST binding's type — and `Kernel.infer/2` then reported `{:var, -1}` as well-typed
+  # at a binding it does not name. `Term.term?/1` has always rejected `{:var, -1}`.
+  def lookup(%__MODULE__{}, k) when not is_integer(k) or k < 0, do: nil
   def lookup(%__MODULE__{types: ts}, k), do: Enum.at(ts, k)
 
   @doc "Number of variables in scope."

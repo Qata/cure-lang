@@ -39,13 +39,15 @@ defmodule Antigen.CoverManifest do
     ElabErasure,
     ElabGuardLint,
     ElabNatRep,
+    ElabLiteralTyping,
     SurfaceExpr,
     UnifyProblem,
     Indexed,
     Rewrite,
     ClosureEnv,
     Conversion,
-    ErasureTerm
+    ErasureTerm,
+    KernelProbe
   }
 
   # Generator modules under the shape-coverage manifest. Each declares the
@@ -74,13 +76,15 @@ defmodule Antigen.CoverManifest do
     ElabErasure,
     ElabGuardLint,
     ElabNatRep,
+    ElabLiteralTyping,
     SurfaceExpr,
     UnifyProblem,
     Indexed,
     Rewrite,
     ClosureEnv,
     Conversion,
-    ErasureTerm
+    ErasureTerm,
+    KernelProbe
   ]
 
   @doc "The generator modules under the shape-coverage manifest."

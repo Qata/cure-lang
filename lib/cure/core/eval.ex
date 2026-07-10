@@ -21,12 +21,25 @@ defmodule Cure.Core.Eval do
   @spec eval(Cure.Core.Term.t(), [Cure.Core.Value.t()]) :: Cure.Core.Value.t()
   def eval({:type, level}, _env), do: {:vtype, level}
 
-  def eval({:var, k}, env) do
+  # An index past the end of `env` is a RIGID FREE VARIABLE: Core admits open terms, and the
+  # neutral it becomes is what `Conv.conv?/5` compares when both sides share the environment.
+  # (Caveat worth knowing: `{:nvar, l}` is a de Bruijn LEVEL, and this arm reuses the index as
+  # one. That is only coherent while the value is never read back — `Quote.reify/2` would turn
+  # it into the negative index `depth - k - 1`. Callers that reify must supply
+  # `Context.env/1`, which binds every index in scope.)
+  #
+  # A NEGATIVE index is not a free variable, it is not a well-formed term at all — `term?/1`
+  # rejects `{:var, -1}` — and `Enum.at/2` counts from the end, so it used to return the
+  # OLDEST binding's value. Silently evaluating to the wrong binder is the one answer that
+  # cannot be right.
+  def eval({:var, k}, env) when is_integer(k) and k >= 0 do
     case Enum.at(env, k) do
       nil -> {:vneutral, {:nvar, k}}
       v -> v
     end
   end
+
+  def eval({:var, k}, _env), do: raise("eval: negative de Bruijn index #{inspect(k)}")
 
   def eval({:pi, dom, cod}, env), do: {:vpi, eval(dom, env), {:closure, env, cod}}
   def eval({:lam, dom, body}, env), do: {:vlam, eval(dom, env), {:closure, env, body}}
@@ -56,6 +69,11 @@ defmodule Cure.Core.Eval do
   def eval({:binary_type}, _env), do: {:vbinary_type}
   def eval({:float_lit, f}, _env), do: {:vfloat, f}
 
+  # BEAM atom base type + literal. An atom is its own canonical value (like an
+  # int literal): Eval maps the type node and literal node straight to values.
+  def eval({:atom_type}, _env), do: {:vatom_type}
+  def eval({:atom_lit, a}, _env), do: {:vatom, a}
+
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
@@ -84,9 +102,20 @@ defmodule Cure.Core.Eval do
       # its dead de Bruijn slot exactly as a genuine `First`/`Next` value would.
       {:vbounded, _} = b ->
         {:vctor, cname, args} = bounded_to_ctor(b)
-        {_cname, arity, body} = Enum.find(branches, fn {c, _ar, _b} -> c == cname end)
-        fields = drop_leading_params(args, arity)
-        eval(body, Enum.reverse(fields) ++ env)
+
+        # Same nil-guard as the `:vctor` arm above. Without it a `case` missing the
+        # peeled constructor died with an opaque `MatchError` on `nil` instead of
+        # naming the coverage violation. Both arms must fail the same, legible way:
+        # reaching here at all means an ill-typed term slipped past `check_coverage`.
+        case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+          {_cname, arity, body} ->
+            fields = drop_leading_params(args, arity)
+            eval(body, Enum.reverse(fields) ++ env)
+
+          nil ->
+            raise "ι: no branch for constructor #{inspect(cname)} " <>
+                    "(coverage violation / ill-typed case reached eval)"
+        end
 
       {:vneutral, neutral} ->
         motive_closure = {:closure, env, motive}
@@ -240,7 +269,12 @@ defmodule Cure.Core.Eval do
   def fold(:add, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a + b}}
   def fold(:sub, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a - b}}
   def fold(:mul, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, {:vfloat, a * b}}
-  def fold(:div, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
+  # Float division has its own op key `:fdiv` (see `Builtins.@float_binops`): the
+  # BEAM instruction is `/`, not the integer `div` that `:div` folds to. Sharing the
+  # key made `Emit` lower `x / y` on floats to `erlang:div/2` (badarith at runtime)
+  # while THIS fold happily returned the correct quotient — the normaliser and the
+  # emitter disagreeing about the same term. Keep the two keys distinct.
+  def fold(:fdiv, [{:vfloat, a}, {:vfloat, b}]) when b != 0.0, do: {:ok, {:vfloat, a / b}}
 
   # Bool-producing folds now yield the `True`/`False` **constructor values** of the
   # canonical Bool inductive (the True/False ctor values). `:True`/`:False` are

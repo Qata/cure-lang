@@ -9,7 +9,7 @@ defmodule Antigen.Generators.BranchUnifyTest do
   test "every sampled branch-unify probe's verdict agrees with the live kernel" do
     for %Challenge{} = c <- B.interp(BranchUnify.gen()) |> Enum.take(@sample) do
       assert c.kind == :branch_unify
-      assert c.label in [:trivial, :solved, :impossible]
+      assert c.label in [:trivial, :solved, :impossible, :bad_motive]
       assert Assays.BranchUnify.run(c) == :ok,
              "verdict oracle disagreed on #{c.note} (#{c.label})"
     end

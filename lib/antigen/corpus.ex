@@ -57,8 +57,8 @@ defmodule Antigen.Corpus do
     with [@marker | fields] <- String.split(String.trim_trailing(line, "\n"), "\t"),
          m <- Map.new(fields, fn f -> List.to_tuple(String.split(f, "=", parts: 2)) end),
          {:ok, pieces} <- decode_pieces(m["pieces"]) do
-      kind = String.to_existing_atom(m["kind"])
-      label = String.to_existing_atom(m["label"])
+      kind = Challenge.known_atom!(m["kind"])
+      label = Challenge.known_atom!(m["label"])
       seed = if m["seed"] == "-", do: nil, else: String.to_integer(m["seed"])
       base_scaffold = decode_scaffold(m["scaffold"] || "-")
 
@@ -87,16 +87,109 @@ defmodule Antigen.Corpus do
   def decode_scaffold("-"), do: %{}
   def decode_scaffold(b64), do: :erlang.binary_to_term(Base.decode64!(b64), [:safe])
 
-  @spec append(String.t(), Challenge.t(), String.t()) :: :appended | :duplicate
+  @spec append(String.t(), Challenge.t(), String.t()) ::
+          :appended | :duplicate | {:rejected, Exception.t()}
   def append(path, %Challenge{} = c, dedup_key) do
     File.mkdir_p!(Path.dirname(path))
 
     if seen?(path, dedup_key) do
       :duplicate
     else
-      # single append syscall — atomic per record (spec §7.1)
-      File.write!(path, encode_record(c, dedup_key) <> "\n", [:append])
-      :appended
+      # Portability self-check BEFORE the write: a record that reconstructs an atom
+      # absent from `Challenge.__known_atoms__/0` decodes fine here (the generating VM
+      # already interned it) but crashes a fresh replay VM — so never bank it. The
+      # check re-decodes the very line we would append; membership (not interning) is
+      # what `known_atom!` enforces, so this catches the poison the local VM can't feel.
+      line = encode_record(c, dedup_key)
+
+      case portability_check(line) do
+        :ok ->
+          # single append syscall — atomic per record (spec §7.1)
+          File.write!(path, line <> "\n", [:append])
+          :appended
+
+        {:error, reason} ->
+          {:rejected, reason}
+      end
+    end
+  end
+
+  # :ok unless decoding the encoded line raises the whitelist error; any other
+  # decode outcome is out of scope here (a separate concern) and does not block banking.
+  defp portability_check(line) do
+    case decode_record(line) do
+      {:error, %Challenge.UnknownAtomError{} = e} -> {:error, e}
+      _ -> :ok
+    end
+  end
+
+  @doc """
+  Merge `sources` (record files) into `dest`, deduplicating by each record's own
+  embedded `key=` field — the same key `append/3`/`seen?/2` use. Records are copied
+  **verbatim** (raw lines, never decoded→re-encoded), so the merge is byte-preserving
+  and cannot mint atoms; it is kind-agnostic (corpus OR seeds) because it trusts each
+  record's stored key. Deduplicates across sources within one call too. Lines with no
+  extractable key are skipped and counted (a keyless line has no dedup identity).
+  Missing / empty sources contribute nothing. Returns an `%{added, duplicate, keyless}`
+  tally.
+  """
+  @spec merge(String.t(), [String.t()]) :: %{
+          added: non_neg_integer(),
+          duplicate: non_neg_integer(),
+          keyless: non_neg_integer()
+        }
+  def merge(dest, sources) when is_list(sources) do
+    File.mkdir_p!(Path.dirname(dest))
+
+    seen0 =
+      dest |> record_lines() |> Enum.map(&raw_key/1) |> Enum.reject(&is_nil/1) |> MapSet.new()
+
+    {rev_new, tally, _seen} =
+      Enum.reduce(sources, {[], %{added: 0, duplicate: 0, keyless: 0}, seen0}, fn src, acc ->
+        Enum.reduce(record_lines(src), acc, fn line, {out, t, seen} ->
+          case raw_key(line) do
+            nil ->
+              {out, %{t | keyless: t.keyless + 1}, seen}
+
+            key ->
+              if MapSet.member?(seen, key) do
+                {out, %{t | duplicate: t.duplicate + 1}, seen}
+              else
+                {[line | out], %{t | added: t.added + 1}, MapSet.put(seen, key)}
+              end
+          end
+        end)
+      end)
+
+    case Enum.reverse(rev_new) do
+      [] -> :ok
+      lines -> File.write!(dest, newline_guard(dest) <> Enum.join(lines, "\n") <> "\n", [:append])
+    end
+
+    tally
+  end
+
+  @doc """
+  Non-blank, newline-trimmed record lines of a file (empty list if the file is
+  absent). Raw lines — no decode — so callers preserve byte identity. Used by
+  `merge/2` and `Antigen.Prune`.
+  """
+  @spec record_lines(String.t()) :: [String.t()]
+  def record_lines(path) do
+    if File.exists?(path) do
+      path |> File.stream!() |> Enum.map(&String.trim_trailing(&1, "\n")) |> Enum.reject(&(&1 == ""))
+    else
+      []
+    end
+  end
+
+  # A leading "\n" iff `dest` is non-empty and does not already end in one, so an
+  # appended record can never be glued onto a hand-edited last line without a newline.
+  defp newline_guard(dest) do
+    case File.read(dest) do
+      {:ok, ""} -> ""
+      {:ok, content} -> if String.ends_with?(content, "\n"), do: "", else: "\n"
+      _ -> ""
     end
   end
 

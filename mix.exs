@@ -57,6 +57,12 @@ defmodule Cure.MixProject do
   def cli do
     [
       preferred_envs: [
+        # Antigen drives StreamData (a `:test`-only dep), so these tasks must run
+        # in :test; auto-select it so no MIX_ENV=test prefix is needed. `antigen.prune`
+        # (replays assays) and `antigen.merge` (pure file ops) don't generate, so they
+        # run fine in :dev and are intentionally omitted.
+        antigen: :test,
+        "antigen.regen_seeds": :test,
         coveralls: :test,
         "coveralls.detail": :test,
         "coveralls.post": :test,

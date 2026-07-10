@@ -500,6 +500,11 @@ defmodule Cure.Elab.Elaborator do
       :string when is_binary(value) ->
         elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
+      # A symbol literal `:ok` is a value of the Int-tier primitive `Atom` base
+      # type — a BEAM atom is its own canonical value (Core `{:atom_lit, a}`).
+      :symbol when is_atom(value) ->
+        {:ok, {:atom_lit, value}, {:vatom_type}}
+
       _ ->
         {:error, {:unsupported_expression, expr}}
     end
@@ -2846,8 +2851,13 @@ defmodule Cure.Elab.Elaborator do
              {:ok, test} <-
                elaborate_expr_checked(guard_expr, bool_type_term(Context.signature(ctx)), names, ctx, env),
              {:ok, tt} <- elaborate_expr_checked(body_expr, expected, names, ctx, env),
+             # Warn for THIS arm before recursing into the later ones. The check needs only
+             # `test` and `acc`, both bound here; running it after the recursion meant every
+             # later arm had already recorded its own warning, so `GuardLint.warnings/0` —
+             # which restores insertion order by reversing a prepended list — handed back a
+             # chain's shadow warnings in descending arm index.
+             :ok <- maybe_warn_shadowed(test, acc, ctx),
              {:ok, ff} <- guard_chain(scrut_expr, rest, expected, names, ctx, env, acc ++ [test]) do
-          maybe_warn_shadowed(test, acc, ctx)
           {:ok, bool_case(test, expected, tt, ff, ctx)}
         end
     end
@@ -4032,17 +4042,34 @@ defmodule Cure.Elab.Elaborator do
 
   defp subst_surface_var(other, _name, _replacement), do: other
 
-  # Does any nested match arm bind one of `avoid`? (Arm patterns live in the
-  # arm's meta, not its children, so the generic subst walk never rewrites a
-  # binder position — this predicate only guards shadowing/capture in bodies.)
+  # Does any nested binder in the remaining statements bind one of `avoid`?
+  #
+  # This guards `elaborate_let_block`'s surface-substitution branch against CAPTURE.
+  # Answering `false` sends the block down the substitution path, so a binder we fail
+  # to see here silently rewrites a position it must not touch. Both binding forms
+  # must be recognized:
+  #
+  #   * a match arm's pattern — which lives in the arm's META, not its children, so
+  #     the generic child walk never sees it. Previously only a `{:function_call, …}`
+  #     pattern's DIRECT variable arguments were collected, so a bare catch-all arm
+  #     (`x -> S(x)`) and any nested/aliased pattern went unnoticed.
+  #   * a lambda's parameters — likewise in META (`params:`), not children. A lambda
+  #     shadowing an outer `let` name had its body rewritten, so `let x = Z()` turned
+  #     `fn(x) -> S(x)` into `fn(x) -> S(Z())`: still well-typed, kernel-accepted, and
+  #     computing the wrong value.
+  #
+  # Over-reporting merely costs the (safe) bind-once β-redex path; under-reporting is a
+  # miscompilation. When in doubt, say true.
   defp binds_any?({:match_arm, meta, body}, avoid) do
-    vars =
-      case Keyword.get(meta, :pattern) do
-        {:function_call, _pmeta, args} -> for {:variable, _vmeta, v} <- args, do: v
-        _ -> []
-      end
-
+    vars = meta |> Keyword.get(:pattern) |> pattern_binders()
     Enum.any?(vars, &(&1 in avoid)) or binds_any?(body, avoid)
+  end
+
+  defp binds_any?({:lambda, meta, children}, avoid) do
+    params = for {:param, _pmeta, p} <- Keyword.get(meta, :params, []), do: p
+
+    Enum.any?(params, &(&1 in avoid)) or
+      children |> List.wrap() |> Enum.any?(&binds_any?(&1, avoid))
   end
 
   defp binds_any?({_tag, _meta, children}, avoid) when is_list(children),
@@ -4052,6 +4079,18 @@ defmodule Cure.Elab.Elaborator do
     do: Enum.any?(list, &binds_any?(&1, avoid))
 
   defp binds_any?(_other, _avoid), do: false
+
+  # Every name a pattern binds. In pattern position every `{:variable, _, v}` node IS a
+  # binder, at any depth — nested constructor arguments, as-patterns, list/tuple
+  # patterns. Constructor NAMES live in meta (`name:`), never as children, so this
+  # never mistakes a constructor for a binder.
+  defp pattern_binders({:variable, _meta, v}), do: [v]
+
+  defp pattern_binders({_tag, _meta, children}) when is_list(children),
+    do: Enum.flat_map(children, &pattern_binders/1)
+
+  defp pattern_binders(list) when is_list(list), do: Enum.flat_map(list, &pattern_binders/1)
+  defp pattern_binders(_other), do: []
 
   # Wave-2 List sugar → ctor-call surface form (reuses all ctor machinery).
   #   []            -> Nil()
@@ -5157,7 +5196,7 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr({:literal, meta, value} = expr, _scope, _env) do
+  def elaborate_expr({:literal, meta, value} = expr, scope, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
       :integer when is_integer(value) -> {:ok, {:int_lit, value}}
@@ -5167,6 +5206,12 @@ defmodule Cure.Elab.Elaborator do
       # (`Kernel.infer/2` has no catch-all) — see spec §3.4.
       :char when is_integer(value) and value >= 0 and value <= 0x10FFFF -> {:ok, {:bounded_lit, value}}
       :char when is_integer(value) -> {:error, {:char_literal_out_of_range, value}}
+      # A string literal argument IS `List(Char)` — desugar to its char-literal
+      # list and re-enter, exactly as the typed/checked paths do (so `f("hi")`
+      # and `f(['h','i'])` build the identical Cons spine).
+      :string when is_binary(value) -> elaborate_expr(desugar_string(value, meta), scope, env)
+      # A symbol literal argument `:ok` is an `Atom` value (Core `{:atom_lit, a}`).
+      :symbol when is_atom(value) -> {:ok, {:atom_lit, value}}
       _ -> {:error, {:unsupported_expression, expr}}
     end
   end

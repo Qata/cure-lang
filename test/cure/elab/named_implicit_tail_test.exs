@@ -89,26 +89,19 @@ defmodule Cure.Elab.NamedImplicitTailTest do
 
       {:ok, env} = Program.elaborate(src)
 
-      # Hand-built Core body for `fn f({j: Nat}, b: Box(k)) -> Nat`: TWO outer
-      # params — an unused erased dummy (`j`, declared first, so it lands at
-      # var-index 1/level 0) ahead of the present scrutinee (`b`, declared
-      # last, so it stays at var-index 0/level 1, exactly as if it were the
-      # sole param). The dummy is required: `Relevance.check/4` short-circuits
-      # to `:ok` WITHOUT ever calling `walk` when `quantities` has zero
-      # `:erased` entries (today's guard assumes erased-ness can only
-      # originate from an outer parameter — an assumption §2.3's fold makes
-      # false, but the guard itself is untouched by this fix, so a
-      # top-level-all-`:present` signature can never reach the `:case` clause
-      # to prove it). This is not a workaround: every real Cure signature that
-      # matches on an indexed-family value already carries at least one
-      # auto-generalized erased implicit (see Task 4's `{a: Type}`), so the
-      # dummy mirrors production shape rather than dodging it. Branch `bmk`
-      # binds 1 field (the erased `m`) and RETURNS it — `{:var, 0}` under the
-      # branch's 1 fresh binder. The motive slot is ignored by Relevance.walk.
+      # Hand-built Core body for `fn f(b: Box(k)) -> Nat`: ONE outer param, the
+      # present scrutinee `b` at var-index 0. Branch `bmk` binds 1 field (the
+      # erased `m`) and RETURNS it — `{:var, 0}` under the branch's 1 fresh
+      # binder. The motive slot is ignored by Relevance.walk.
+      #
+      # An all-`:present` signature is deliberate. §2.3's fold introduces the
+      # erased binder from the PATTERN, not the signature, and `Relevance.check/4`
+      # walks every body regardless of its own quantities, so this is policed
+      # without needing a dummy erased top-level parameter to prime the walk.
       body = {:case, {:var, 0}, {:type, 0}, [{ctor_atom(env, :bmk), 1, {:var, 0}}]}
 
       assert {:error, {:erased_used_relevantly, %{site: :returned}}} =
-               Cure.Elab.Relevance.check(env, :probe_fn, [:erased, :present], body)
+               Cure.Elab.Relevance.check(env, :probe_fn, [:present], body)
     end
   end
 

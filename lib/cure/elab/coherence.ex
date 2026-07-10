@@ -75,4 +75,18 @@ defmodule Cure.Elab.Coherence do
   end
 
   def lookup_named(nil, name), do: {:error, {:no_named_instance, name}}
+
+  @doc """
+  Union two coherence registries — used when an importing module merges an
+  imported module's instances into its own env. A `nil` registry is the empty
+  registry. Later (right) registrations win on key collision; genuine
+  cross-module overlap is a global-coherence concern surfaced at registration,
+  not here (v1 keeps the merge total so imports never fail to combine).
+  """
+  @spec merge(t() | nil, t() | nil) :: t() | nil
+  def merge(nil, other), do: other
+  def merge(other, nil), do: other
+
+  def merge(%__MODULE__{anon: a1, named: n1}, %__MODULE__{anon: a2, named: n2}),
+    do: %__MODULE__{anon: Map.merge(a1, a2), named: Map.merge(n1, n2)}
 end

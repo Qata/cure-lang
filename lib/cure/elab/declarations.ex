@@ -16,7 +16,7 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
   alias Cure.Elab.{Elaborator, Relevance}
 
   @ceiling 2
@@ -34,22 +34,22 @@ defmodule Cure.Elab.Declarations do
       :enum ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        case Keyword.get(meta, :type_params, []) do
-          [] ->
-            case build_ctors(variants, env) do
-              {:ok, ctors} -> declare_at_min_level(env, name, ctors, 0)
-              {:error, _} = err -> err
-            end
-
-          type_params ->
-            # Parameterized ADT (`type List(a) = Nil | Cons(a, List(a))`). Each
-            # positional variant is an implicit constructor signature returning the
-            # family applied to its own parameters; reuse the parameterized-family
-            # (GADT) machinery with an empty index telescope.
-            params = Enum.map(type_params, fn p -> {:param, [], p} end)
-            sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
-            declare_parameterized(name, params, [], sigs, env)
-        end
+        # Enum ADT (`type List(a) = Nil | Cons(a, List(a))`, or `type Nat = Z | S(Nat)`).
+        # Each positional variant is an implicit constructor signature returning the
+        # family applied to its own parameters; reuse the parameterized-family (GADT)
+        # machinery with an empty index telescope.
+        #
+        # The zero-type-param case used to have its own `build_ctors/1` pipeline, a
+        # strict subset of `idx_to_core/5` with no arrow clause — so a function-typed
+        # field was rejected for `type Callback = Wrap((Int) -> Int)` while the
+        # semantically identical `rec Callback` and `type Callback(a) = ...` both
+        # accepted it. That was duplication producing an arbitrary feature gap, not a
+        # deliberate restriction; a negative occurrence is still rejected, by
+        # `Inductive.positive?/2` where it belongs.
+        type_params = Keyword.get(meta, :type_params, [])
+        params = Enum.map(type_params, fn p -> {:param, [], p} end)
+        sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
+        declare_parameterized(name, params, [], sigs, env)
 
       :struct ->
         # A record `rec Point\n  x: T\n  y: U` is a single-constructor family whose
@@ -117,15 +117,22 @@ defmodule Cure.Elab.Declarations do
   # clause lists the refined indices. Each constructor signature is an
   # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
   # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
-  # Type alias `type Name = RHS`: a nullary definition `Name : Type := RHS`.
-  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is
-  # trivially total, so it certifies and δ becomes available). No new type former.
-  def elaborate({:type_annotation, meta, [rhs]}, env) do
-    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env) do
-      env1 = Env.add_def(env, name, {:type, 0}, rhs_core, [])
-      {:ok, maybe_certify(env1, name)}
+  # `type X = Y` with a single bare right-hand side is ambiguous, and the parser cannot
+  # resolve it — it tags the RHS `variant: true` and defers:
+  #
+  #   type MyNat = Nat          -- an ALIAS: `Nat` names a type in scope
+  #   type Unit = MkUnit        -- a one-constructor ENUM: `MkUnit` names no type
+  #
+  # (`typealias X = Y` is never a variant, and `type X = A | B` already parses as an
+  # `:enum` container.) Resolve on whether the RHS names a type. Getting this wrong used
+  # to be invisible: the alias branch installed `Unit := {:data, :MkUnit, [], []}` with a
+  # hardcoded kind and nothing ever checked it, so a one-constructor enum silently became
+  # an alias to a family that does not exist.
+  def elaborate({:type_annotation, meta, [rhs]} = decl, env) do
+    if single_variant_enum?(rhs, env) do
+      elaborate({:container, Keyword.put(meta, :container_type, :enum), [rhs]}, env)
+    else
+      elaborate_typealias(decl, env)
     end
   end
 
@@ -141,6 +148,57 @@ defmodule Cure.Elab.Declarations do
   end
 
   def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  defp single_variant_enum?({:variable, rmeta, name}, env) when is_list(rmeta) and is_binary(name),
+    do: Keyword.get(rmeta, :variant, false) and not type_name?(env, name)
+
+  defp single_variant_enum?(_rhs, _env), do: false
+
+  # Does `name` denote a type in `env`? A builtin primitive, a declared family, the
+  # universe itself, or an earlier alias (a def whose declared type is a universe).
+  defp type_name?(_env, "Type"), do: true
+
+  defp type_name?(env, name) do
+    atom = String.to_atom(name)
+
+    Env.primitive(env, name) != nil or
+      Inductive.get_family(env, atom) != nil or
+      match?(%{type: {:type, _}}, Env.get_def(env, atom))
+  end
+
+  # Type alias `typealias Name = RHS`: a nullary definition `Name : Type := RHS`.
+  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is trivially
+  # total, so it certifies and δ becomes available). No new type former.
+  #
+  # The RHS must BE a type. It used to be installed with a hardcoded declared type of
+  # `{:type, 0}`, and the only kernel check that ever ran on it was `maybe_certify/2` —
+  # whose whole job is to swallow errors, because for a FUNCTION body a failure there
+  # means only "does not certify as total, so stop δ-unfolding it", never "ill-typed"
+  # (the body's `Kernel.check/3` already ran and its error was propagated). A typealias
+  # has no such prior check, so `validate_certificate/2` was its first and only one, and
+  # a genuine kind error was discarded exactly like a benign non-termination verdict.
+  # `typealias Bad = Z` aliased `Bad` to a Nat CONSTRUCTOR and reported `{:ok, _}`. Idris
+  # (`Bad : Type; Bad = Z`) and Lean (`def Bad : Type := Z`) both reject it outright.
+  #
+  # Infer the RHS's type and demand a universe, then register the alias at THAT level —
+  # `typealias U = Type` is legal and lives at `Type 1`, not `Type 0`.
+  defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env),
+         {:ok, level} <- typealias_universe(env, name, rhs_core) do
+      env1 = Env.add_def(env, name, {:type, level}, rhs_core, [])
+      {:ok, maybe_certify(env1, name)}
+    end
+  end
+
+  defp typealias_universe(env, name, rhs_core) do
+    case Kernel.infer(Context.empty(env), rhs_core) do
+      {:ok, {:vtype, level}} -> {:ok, level}
+      {:ok, other} -> {:error, {:typealias_not_a_type, name, Quote.reify(other, 0)}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp maybe_certify(env, name) do
     case Kernel.validate_certificate(env, name) do
@@ -179,12 +237,34 @@ defmodule Cure.Elab.Declarations do
         # builtin_op, which is overloaded). emit lowers it to a remote call;
         # TotalityClosure skips it. Do NOT call elaborate_body / Kernel.check /
         # Relevance.check (no term exists).
-        with {:ok, sig} <- function_signature(meta, env) do
+        with {:ok, sig} <- function_signature(meta, env),
+             :ok <- check_extern_arity(sig, arity) do
           {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
         end
 
       _ ->
         elaborate_real_body(meta, body, env)
+    end
+  end
+
+  # The arity in `@extern(:mod, :fun, arity)` names the TARGET Erlang function — `erlang:hd/1`.
+  # Erased parameters never reach the BEAM, so that number is also exactly the def's present
+  # arity, which is what `Emit` gives the generated function and what every Cure call site passes
+  # (`Emit.present_arity/2`, off the same `quantities`). Nothing used to force the two to agree.
+  #
+  # An extern with an erased implicit — `head({T: Type}, xs: List(T))`, and auto-generalization
+  # inserts one for any free lowercase type var even when the user writes none — has a present
+  # arity strictly below its surface telescope length. A user counting the parens writes 2, and
+  # `Emit` then generated `head/2` calling `erlang:hd(V0, V1)` while every Cure caller invoked
+  # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
+  # it. Rejecting the mismatch is the only reading under which the number means one thing.
+  defp check_extern_arity(sig, arity) do
+    present = Enum.count(sig.quantities || [], &(&1 == :present))
+
+    if arity == present do
+      :ok
+    else
+      {:error, {:extern_arity_mismatch, sig.name, arity, present}}
     end
   end
 
@@ -1332,10 +1412,11 @@ defmodule Cure.Elab.Declarations do
   end
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
-  # tag, not by surface name). Exactly three tags are legal.
+  # tag, not by surface name). Exactly four tags are legal.
   defp primitive_tag_node(:int), do: {:ok, {:int_type}}
   defp primitive_tag_node(:float), do: {:ok, {:float_type}}
   defp primitive_tag_node(:binary), do: {:ok, {:binary_type}}
+  defp primitive_tag_node(:atom), do: {:ok, {:atom_type}}
   defp primitive_tag_node(other), do: {:error, {:unknown_primitive_tag, other}}
 
   # A declaration's node must match the seeded floor for that name (consistency
@@ -1399,98 +1480,6 @@ defmodule Cure.Elab.Declarations do
   defp declare_opaque_at_min_level(_env, _name, _param_tele, _level),
     do: {:error, :universe_ceiling}
 
-  # -- constructors -----------------------------------------------------------
-
-  defp build_ctors(variants, env) do
-    Enum.reduce_while(variants, {:ok, []}, fn variant, {:ok, acc} ->
-      case variant_to_ctor(variant, env) do
-        {:ok, ctor} -> {:cont, {:ok, acc ++ [ctor]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  # Nullary constructor: `None`
-  defp variant_to_ctor({:variable, _meta, vname}, _env),
-    do: {:ok, Inductive.ctor(String.to_atom(vname), [], [])}
-
-  # Constructor with fields: `Some(T)` / `SVCons(Sig, SVDesc)`
-  defp variant_to_ctor({:function_def, meta, _body}, env) do
-    vname = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    field_asts = Keyword.fetch!(meta, :params)
-
-    case fields_to_telescope(field_asts, env) do
-      {:ok, tele} -> {:ok, Inductive.ctor(vname, tele, [])}
-      {:error, _} = err -> err
-    end
-  end
-
-  defp variant_to_ctor(other, _env), do: {:error, {:unsupported_variant, other}}
-
-  defp fields_to_telescope(field_asts, env) do
-    field_asts
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {ast, i}, {:ok, acc} ->
-      case type_to_core(ast, env) do
-        {:ok, core} -> {:cont, {:ok, acc ++ [{:"f#{i}", core}]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  # -- surface type expr → Core type term -------------------------------------
-
-  defp type_to_core({:variable, _meta, "Type"}, _env), do: {:ok, {:type, 0}}
-
-  defp type_to_core({:variable, _meta, name}, env) do
-    case Env.primitive(env, name) do
-      nil -> {:ok, {:data, String.to_atom(name), [], []}}
-      prim -> {:ok, prim}
-    end
-  end
-
-  defp type_to_core({:function_call, meta, params}, env) do
-    cond do
-      Keyword.get(meta, :function_type) ->
-        {:error, {:unsupported_field_type, :function}}
-
-      true ->
-        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-
-        with {:ok, core_params} <- map_type_to_core(params, env) do
-          # A saturated family application becomes a `:data` with index args.
-          {:ok, {:data, name, [], core_params}}
-        end
-    end
-  end
-
-  # A pair/Σ field type `MkW(Sigma(a: T, U))`. Field telescopes here are
-  # non-dependent (each field is elaborated without the earlier fields in scope),
-  # so the Σ codomain carries no reference to the bound component — `U` has no free
-  # de Bruijn index and needs no shift. A genuinely dependent Σ field (`U`
-  # mentioning `a`) would map `a` to a spurious family name and be rejected by
-  # `Kernel.check_family`; it is not admitted here. Lowers to the builtin inductive
-  # `Sigma(D, λ_:D. U)`; because `U` is closed w.r.t. the binder, the wrapping
-  # lambda is trivially constant (it ignores its argument), which is still
-  # well-formed. The assembled `{:data, :Sigma, …}` goes into the constructor
-  # telescope and is validated by the kernel.
-  defp type_to_core({:sigma_type, [binder: _bname], [dom_ast, body_ast]}, env) do
-    with {:ok, dom} <- type_to_core(dom_ast, env),
-         {:ok, body} <- type_to_core(body_ast, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
-    end
-  end
-
-  defp type_to_core(other, _env), do: {:error, {:unsupported_field_type, other}}
-
-  defp map_type_to_core(asts, env) do
-    Enum.reduce_while(asts, {:ok, []}, fn ast, {:ok, acc} ->
-      case type_to_core(ast, env) do
-        {:ok, core} -> {:cont, {:ok, acc ++ [core]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
 
   # -- declaration at the least well-formed universe level --------------------
 

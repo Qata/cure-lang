@@ -54,6 +54,8 @@ defmodule Cure.Core.MetaCheck do
   defp canonical_head?({:bounded_lit, _}), do: true
   defp canonical_head?({:float_type}), do: true
   defp canonical_head?({:binary_type}), do: true
+  defp canonical_head?({:atom_type}), do: true
+  defp canonical_head?({:atom_lit, _}), do: true
   defp canonical_head?({:float_lit, _}), do: true
   defp canonical_head?(_), do: false
 end

@@ -27,11 +27,9 @@ mod Std.Binary
   ## The BEAM binary as a primitive base type — its visible, inspectable home.
   @builtin(:binary) primitive Binary
 
-  use Std.Bounded
-
-  ## `Char` is a Unicode scalar: an index below the code-point ceiling
-  ## `0x110000`. A `Char` value erases to its code-point integer.
-  typealias Char = Bounded(1114112)
+  ## `Char` lives in its own module (`Std.Char`); import it for the `List(Char)`
+  ## signatures below.
+  use Std.Char
 
   ## Encode a `List(Char)` as its UTF-8 `Binary`. The list erases to a list of
   ## code-point ints, which `:unicode.characters_to_binary/1` renders to a
