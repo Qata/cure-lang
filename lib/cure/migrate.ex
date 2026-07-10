@@ -130,15 +130,20 @@ defmodule Cure.Migrate do
 
   defp classify_path(path) do
     dir = Path.dirname(path)
+    # Pin the git call to the file's own directory and address the file by its
+    # basename there: this resolves correctly whether `path` was given absolute
+    # or relative to a different cwd (a relative `lib/a.cure` addressed from
+    # `cd lib` would otherwise become `lib/lib/a.cure` and misclassify).
+    name = Path.basename(path)
 
-    case System.cmd("git", ["ls-files", "--error-unmatch", path], cd: dir, stderr_to_stdout: true) do
-      {_out, 0} -> porcelain_status(path, dir)
+    case System.cmd("git", ["ls-files", "--error-unmatch", name], cd: dir, stderr_to_stdout: true) do
+      {_out, 0} -> porcelain_status(name, dir)
       {out, _nonzero} -> if not_a_repo?(out), do: :not_a_repo, else: :untracked
     end
   end
 
-  defp porcelain_status(path, dir) do
-    case System.cmd("git", ["status", "--porcelain", "--", path], cd: dir) do
+  defp porcelain_status(name, dir) do
+    case System.cmd("git", ["status", "--porcelain", "--", name], cd: dir) do
       {"", 0} -> :clean
       {_nonempty, 0} -> :dirty
       {_out, _nonzero} -> :dirty

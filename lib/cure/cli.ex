@@ -60,6 +60,7 @@ defmodule Cure.CLI do
           algebra: :boolean,
           safe: :boolean,
           check: :boolean,
+          print: :boolean,
           dry_run: :boolean,
           hex: :boolean,
           handle: :string,
@@ -134,6 +135,12 @@ defmodule Cure.CLI do
 
         ["fmt" | paths] ->
           cmd_fmt(paths, opts)
+
+        ["migrate" | paths] ->
+          case cmd_migrate(paths, opts) do
+            :ok -> :ok
+            {:error, _} -> System.halt(1)
+          end
 
         ["watch" | rest] ->
           cmd_watch(rest, opts)
@@ -1193,6 +1200,172 @@ defmodule Cure.CLI do
         # otherwise a no-op.
         fmt_algebra(cure_files)
     end
+  end
+
+  # `cure migrate` — the rewrite-and-write consumer of the migration facility
+  # (spec §5.6/§5.8). PUBLIC, deviating from this file's `defp cmd_*` convention,
+  # so tests can call it directly and assert on its `:ok | {:error, {reason,
+  # detail}}` return without spawning a subprocess or hitting the `System.halt`
+  # in `main/1`'s dispatch arm (which is what turns a non-`:ok` return into a
+  # non-zero exit for CI).
+  @doc false
+  def cmd_migrate(paths, opts) do
+    check? = Keyword.get(opts, :check, false)
+    print? = Keyword.get(opts, :print, false)
+    strict? = Keyword.get(opts, :strict, false)
+
+    case migrate_targets(paths) do
+      [] ->
+        info("No .cure files found")
+        :ok
+
+      files ->
+        with :ok <- migrate_git_guard(files, check?, print?),
+             {:ok, results} <- migrate_preflight_all(files),
+             :ok <- migrate_strict_gate(results, strict?) do
+          migrate_apply(results, check?, print?)
+        end
+    end
+  end
+
+  # Target selection mirrors cmd_fmt/2 exactly (explicit paths with dir
+  # expansion, else the lib/** + test/** corpus under cwd).
+  defp migrate_targets(paths) do
+    case paths do
+      [] ->
+        Path.wildcard("lib/**/*.cure") ++ Path.wildcard("test/**/*.cure")
+
+      _ ->
+        Enum.flat_map(paths, fn p ->
+          if File.dir?(p), do: Path.wildcard(Path.join(p, "**/*.cure")), else: [p]
+        end)
+    end
+  end
+
+  # --check/--print are read-only and git-guard-exempt; every writing mode runs
+  # the preflight guard first and reports git_guard/1's per-file list intact.
+  defp migrate_git_guard(_files, true, _print?), do: :ok
+  defp migrate_git_guard(_files, _check?, true), do: :ok
+
+  defp migrate_git_guard(files, _check?, _print?) do
+    case Cure.Migrate.git_guard(files) do
+      :ok ->
+        :ok
+
+      {:error, reasons} ->
+        Enum.each(reasons, fn {path, reason} -> error("#{path}: #{reason}") end)
+        {:error, {:git_guard_failed, reasons}}
+    end
+  end
+
+  # In-memory batch preflight (spec §5.8): run every file through
+  # lex→parse→attach→Migrate.run→print→reparse+comment-preservation. Only if
+  # ALL files pass is anything written; on any failure, write nothing and report
+  # the failing file(s).
+  defp migrate_preflight_all(files) do
+    results = Enum.map(files, &migrate_preflight_file/1)
+    failed = for {:error, path} <- results, do: path
+
+    if failed == [] do
+      {:ok, Enum.map(results, fn {:ok, r} -> r end)}
+    else
+      Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
+      {:error, {:preflight_failed, failed}}
+    end
+  end
+
+  defp migrate_preflight_file(file) do
+    with {:ok, source} <- File.read(file),
+         {:ok, toks, trivia} <-
+           Cure.Compiler.Lexer.tokenize(source, file: file, trivia: true),
+         {:ok, ast} <- Cure.Compiler.Parser.parse(toks, file: file, emit_events: false) do
+      attached = Cure.Compiler.Trivia.attach(ast, trivia)
+      {new_ast, warnings} = Cure.Migrate.run(attached, file: file)
+      output = migrate_render(new_ast)
+
+      if migrate_output_ok?(source, output, file) do
+        {:ok,
+         %{path: file, output: output, changed?: new_ast != attached, warnings: warnings}}
+      else
+        {:error, file}
+      end
+    else
+      _ -> {:error, file}
+    end
+  end
+
+  # Canonical file text: the printer output with the §5.4 rule-2 single trailing
+  # newline applied at write time.
+  defp migrate_render(ast) do
+    out = Cure.Compiler.Printer.quoted_to_string(ast)
+    if String.ends_with?(out, "\n"), do: out, else: out <> "\n"
+  end
+
+  # The migrated output must reparse AND preserve every source comment (spec
+  # §5.2: a migration never silently drops a comment).
+  defp migrate_output_ok?(source, output, file) do
+    migrate_reparses?(output, file) and migrate_comments(source) -- migrate_comments(output) == []
+  end
+
+  defp migrate_reparses?(source, file) do
+    with {:ok, toks} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
+         {:ok, _ast} <- Cure.Compiler.Parser.parse(toks, file: file, emit_events: false) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp migrate_comments(src) do
+    src
+    |> String.split("\n")
+    |> Enum.flat_map(fn line ->
+      case Regex.run(~r/#+\s?(.*)$/, line) do
+        [_, txt] -> [String.trim(txt)]
+        _ -> []
+      end
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.sort()
+  end
+
+  # --strict: any fired migration warning becomes an error; write nothing.
+  defp migrate_strict_gate(_results, false), do: :ok
+
+  defp migrate_strict_gate(results, true) do
+    warned = for r <- results, r.warnings != [], do: r.path
+
+    if warned == [] do
+      :ok
+    else
+      Enum.each(warned, fn path -> error("#{path}: migration warnings present (--strict)") end)
+      {:error, {:strict_warnings, warned}}
+    end
+  end
+
+  defp migrate_apply(results, true, _print?) do
+    # --check: report the files a migration would change; never writes.
+    pending = for r <- results, r.changed?, do: r.path
+    Enum.each(pending, fn path -> info("would migrate: #{path}") end)
+    if pending == [], do: :ok, else: {:error, {:pending, pending}}
+  end
+
+  defp migrate_apply(results, _check?, true) do
+    # --print: emit every file's migrated form to stdout; never writes.
+    Enum.each(results, fn r -> IO.puts(r.output) end)
+    :ok
+  end
+
+  defp migrate_apply(results, _check?, _print?) do
+    # Default: write each file a migration actually changed.
+    Enum.each(results, fn r ->
+      if r.changed? do
+        File.write!(r.path, r.output)
+        info("migrated: #{r.path}")
+      end
+    end)
+
+    :ok
   end
 
   # v0.21.0: algebra formatter is now the default. It renders the
