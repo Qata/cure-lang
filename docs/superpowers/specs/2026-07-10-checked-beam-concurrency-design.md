@@ -413,6 +413,63 @@ unchecked send any more than a user can. Hygiene, spans, and the no-raw-BEAM
 rule come from the macro facility spec unchanged. The macro buys the surface;
 the elaborator and kernel buy the guarantee.
 
+### 6.6 Syntax rationale: arrows describe the protocol, statements drive it
+
+Considered and rejected: an arrowised surface (`inbox -> message` for receive,
+`outbox <- message` for send). Four reasons, ordered by weight.
+
+**Infix invites nesting; typestate forbids it.** `send acct, Deposit(100)` is a
+statement and cannot be nested. `acct <- Deposit(100)` is an expression, so
+`f(acct <- Deposit(100), acct)` parses — and the second `acct` has no
+principled meaning (pre- or post-transition?). Argument evaluation order would
+become protocol-observable. Cure already demonstrates this failure: the
+existing Melquiades operator `<-|` / `✉` (`lexer.ex:1075,1096`,
+`types/checker.ex:1528-1534`) is documented as returning *the message's type*
+"so `<-|` chains and binds naturally in `let`/block contexts" — i.e. a send
+whose effect on the handle is invisible. That is exactly the shape typestate
+must forbid. See §12.5.
+
+**`receive` is not a binary operation.** A session receive is an n-way `offer`
+over every message legal in the current state; there is no single "message" to
+arrow into. `inbox -> message` can express only a one-message state — precisely
+the case where tag elision already applies, i.e. the case needing syntax least.
+Send is naturally infix; receive is naturally a block.
+
+**`->` would collide at the site of use.** `->` (`:arrow`, `lexer.ex:1154`)
+already means function types, match arms, fsm transitions, and protocol
+transitions. Inside a `receive` block, arms already use `->`; a second meaning
+on adjacent lines is collision, not overloading.
+
+**`<-` reads backwards to the target audience.** In Haskell `do`, Elixir `with`,
+and BEAM comprehensions, `x <- e` *binds a result* — it reads as receive. In Go,
+`ch <- v` sends. Either convention misleads half the room, and the misled half
+is the Elixir refugee this surface exists for. (Occam/CSP `!`/`?` avoids the
+ambiguity but makes a checked, stateful send look identical to Erlang's
+unchecked one.)
+
+**The layer argument, which is decisive.** Per the bible's rule, flow computes
+and only Program performs effects. The pure dataflow layer already owns the
+arrow aesthetic (`|>` `:pipe`, `Signal.map`, `zip_with`, `fold`) — correctly,
+because arrowised composition composes *stateless* signal functions. A session
+handle is nothing but state. Keeping **pipes/arrows = pure dataflow, statements
+= effects** makes the syntax carry the layer boundary the whole design rests on,
+at zero cost. Spending that distinction on an operator would blur it.
+
+**The rule, therefore:** arrows *describe* the protocol (`recv Deposit(Int) ->
+Open`, the same arrow as `Red --timer--> Green`); statements *drive* it (`send`,
+`call`, `receive`).
+
+**Retained from the proposal — type-directed dispatch, but not type-directed
+syntax.** The protocol already decides whether a message carries a reply, so a
+`call` on a reply-less message (and a `send` on a replying one) is a type error.
+`send` and `call` nonetheless stay distinct keywords, for a target-specific
+reason: **`call` blocks and `send` does not.** On a single-scheduler C3 that is
+the difference between a 10 µs statement and one that yields until a peer
+replies — the same distinction as `gen_server:call` vs `cast`, and exactly what
+`@blocking(budget:)` (§8.3) exists to make visible. Collapsing them into one
+operator would hide the most latency-relevant fact in an MCU program at its call
+site.
+
 ## 7. Failure model: let it crash, typed
 
 BEAM reality: `exit(Pid, kill)` is untrappable (AtomVM `nifs.c:4722`,
@@ -677,9 +734,9 @@ state and the transition clauses checked total over (state × legal event).
 Retired by this lowering: `Std.Actor.notify/1` and the implicit `:caller`
 capture; `Std.Fsm.state/1` returning a bare `Atom`; the ETS-backed
 `Cure.Actor.Runtime` (state lives in the behaviour); every defensive wildcard
-clause on a typed channel; and the string-based `Cure.FSM.Compiler` /
-`Cure.Actor.Compiler` codegen, replaced by macro expansion into ordinary
-checked Cure.
+clause on a typed channel; the Melquiades operator `<-|` / `✉` as currently
+typed (§12.5); and the string-based `Cure.FSM.Compiler` / `Cure.Actor.Compiler`
+codegen, replaced by macro expansion into ordinary checked Cure.
 
 ## 10. AtomVM obligations (patches we own)
 
@@ -750,6 +807,16 @@ arrives by construction.
 4. **Failure surfaced as per-op `Result` (this design's own earlier draft
    direction) — replaced by EGV exit + scoped `rescue`** (§7), matching BEAM
    idiom.
+5. **The Melquiades send operator `<-|` / `✉` — retired, or retyped.** Its
+   current semantics (`types/checker.ex:1528-1534`) return *the message's* type
+   so it "chains and binds naturally in `let`/block contexts." Under typestate a
+   send must yield the **next-state channel**; an operator that yields the
+   message makes the handle's transition invisible and permits nesting a
+   protocol transition inside an expression (§6.6). Its reserved error codes
+   E044 (Not A Pid), E045 (Untyped Send) and E046 (Inbox Mismatch) are subsumed
+   by the protocol check, which is total rather than `@strict_inbox`-gated.
+   If the spelling is kept, `<-|` must be statement-position-only and typed
+   `(1 c : Chan(Send(m, next))) -> El(m) -> Effect(Chan(next))`.
 
 ## 13. Non-negotiable invariants (checklist)
 
