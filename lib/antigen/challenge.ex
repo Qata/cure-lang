@@ -167,7 +167,13 @@ defmodule Antigen.Challenge do
     # Check-mode vertical: kind + the Bd ctor T used in a reject case
     :check_mode, :T,
     # Delta-reduction vertical: kind + label + the certified global names
-    :delta_reduce, :reduces, :idnat, :kpair
+    :delta_reduce, :reduces, :idnat, :kpair,
+    # Inductive-Env-accessor roundtrip vertical (:family kind, reused — no new
+    # kind): AntigenEnv/antigenA family+ctor names. Param/index/arg binder names
+    # (:a, :n, :x, :y) are already interned above; the assay's own fixed probe
+    # atoms (absent-name sentinels, the legacy record, the builtin-probe keys)
+    # never ride through to_pieces/from_pieces so they need no entry here.
+    :AntigenEnv, :antigenA
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

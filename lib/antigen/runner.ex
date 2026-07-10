@@ -12,7 +12,7 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
+  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.
@@ -333,6 +333,7 @@ defmodule Antigen.Runner do
     "indexed/case",
     "rewrite/eq",
     "universes",
+    "inductive/env_roundtrip",
     "term/rejection",
     "serialize/roundtrip",
     "serialize/decode",
@@ -387,6 +388,7 @@ defmodule Antigen.Runner do
   defp assay_module("indexed/case"), do: Antigen.Assays.Indexed
   defp assay_module("rewrite/eq"), do: Antigen.Assays.Rewrite
   defp assay_module("universes"), do: Antigen.Assays.Universes
+  defp assay_module("inductive/env_roundtrip"), do: Antigen.Assays.InductiveEnv
   defp assay_module("term/rejection"), do: Antigen.Assays.Malformed
   defp assay_module("serialize/roundtrip"), do: Antigen.Assays.Serialization
   defp assay_module("serialize/decode"), do: Antigen.Assays.Serialization

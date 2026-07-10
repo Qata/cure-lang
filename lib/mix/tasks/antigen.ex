@@ -219,7 +219,15 @@ defmodule Mix.Tasks.Antigen do
       # Elaborator/kernel shift agreement — over generated meta-free terms, the
       # elaborator's Subst.shift must equal the kernel's Term.shift (the shift-half
       # of the beta_subst cross-check; a TCB-boundary capture guard).
-      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")}
+      {1, Antigen.Generators.Term.typed_term("elab/shift_agrees")},
+      # Inductive Env-accessor roundtrip — declares straight through
+      # `Inductive.declare/3`/`register_builtin/3` and reads the family/ctor
+      # metadata back through the accessor layer (`family?`, `arg_telescope`,
+      # `ctor_result_indices`, `field_count`, `ctor_quantities`,
+      # `index_telescope`, `param_telescope`, `ctor_result_params`); the lever
+      # for the Env-accessor cold-line bucket every other family-shaped
+      # generator bypasses by never reading a declaration back out.
+      {1, Antigen.Generators.InductiveEnv.gen()}
     ])
   end
 
