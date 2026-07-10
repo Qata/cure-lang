@@ -553,14 +553,20 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:attribute_access, meta, [parent]}, depth, indent) do
     attr = Keyword.get(meta, :attribute)
-    "#{render(parent, depth, indent)}.#{attr}"
+    # Dot access binds at level 100 (highest); a lower-precedence base needs
+    # parens or `(a + b).x` reprints as `a + b.x` (= `a + (b.x)`).
+    "#{operand_str(parent, depth, indent, {100, :left}, :left)}.#{attr}"
   end
 
   # -- Range -----------------------------------------------------------------
 
   defp to_string({:range, meta, [left, right]}, depth, indent) do
     op = if Keyword.get(meta, :inclusive), do: "..=", else: ".."
-    "#{render(left, depth, indent)}#{op}#{render(right, depth, indent)}"
+    # Range binds at level 50 (non-associative); operands that bind looser need
+    # parens or `(a == b)..c` reprints as `a == b..c` (= `a == (b .. c)`).
+    parent = {50, :none}
+
+    "#{operand_str(left, depth, indent, parent, :left)}#{op}#{operand_str(right, depth, indent, parent, :right)}"
   end
 
   # -- Collections -----------------------------------------------------------
@@ -694,8 +700,12 @@ defmodule Cure.Compiler.Printer do
   #
   # Any other value falls back to the ASCII operator form.
   defp to_string({:send, meta, [target, message]}, depth, indent) do
-    target_str = render(target, depth, indent)
-    message_str = render(message, depth, indent)
+    # The Melquiades send operator binds at level 8 (non-associative); operands
+    # that bind looser need parens or `(pid <-| msg) + 1` reprints as
+    # `pid <-| msg + 1` (= `pid <-| (msg + 1)`).
+    parent = {8, :none}
+    target_str = operand_str(target, depth, indent, parent, :left)
+    message_str = operand_str(message, depth, indent, parent, :right)
 
     case Keyword.get(meta, :melquiades_form, :ascii) do
       :unicode -> "#{target_str} ✉ #{message_str}"
@@ -1189,6 +1199,10 @@ defmodule Cure.Compiler.Printer do
   end
 
   defp child_prec({:unary_op, _meta, _}), do: {90, :right}
+  # Infix operators the parser lowers to their own node types (not :binary_op).
+  defp child_prec({:range, _meta, _}), do: {50, :none}
+  defp child_prec({:send, _meta, _}), do: {8, :none}
+  defp child_prec({:attribute_access, _meta, _}), do: {100, :left}
   defp child_prec({:conditional, _meta, _}), do: :lowest
   defp child_prec({:pattern_match, _meta, _}), do: :lowest
   defp child_prec({:pickup, _meta, _}), do: :lowest

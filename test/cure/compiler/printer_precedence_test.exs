@@ -41,13 +41,24 @@ defmodule Cure.Compiler.PrinterPrecedenceTest do
     "-(x + 1)",
     "not (a and b)",
     "(a <> b) <> c",
-    "a <> (b <> c)"
+    "a <> (b <> c)",
+    # Non-`:binary_op` infix nodes the parser lowers specially — range (`..`),
+    # send (`<-|`), and dot access (`.`) — must also parenthesise their operands
+    # (as parents) and be parenthesised (as operands) by precedence.
+    "(1..2) + 3",
+    "3 + (1..2)",
+    "(a == b)..c",
+    "(pid <-| msg) + 1",
+    "(a + b).x",
+    "a.b + c",
+    "Std.Map.put(k, v, m)"
   ]
 
   for expr <- @exprs do
     @expr expr
     test "precedence-preserving reprint: #{expr}" do
-      src = "mod M\n  fn f(x: Int, a: Bool, b: Bool, c: Bool) -> Int = #{@expr}\n"
+      src =
+        "mod M\n  fn f(x: Int, a: Int, b: Int, c: Int, pid: Int, msg: Int, k: Int, v: Int, m: Int) -> Int = #{@expr}\n"
       ast = parse!(src)
       out = Printer.quoted_to_string(ast)
       reparsed = parse!(out)
