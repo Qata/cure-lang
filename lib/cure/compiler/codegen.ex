@@ -98,26 +98,34 @@ defmodule Cure.Compiler.Codegen do
     output_dir = Keyword.get(opts, :output_dir)
     declared_phases = Keyword.get(opts, :declared_phases)
 
-    case ast do
-      {:container, meta, body} when is_list(meta) ->
-        normalize_compile_result(dispatch_container(meta, body, emit?, file, output_dir, declared_phases))
+    # `PatternCompiler` raises on a pattern shape it does not recognize rather than
+    # compiling it to a wildcard that silently swallows every scrutinee. Turn that into the
+    # `{:error, _}` every other compile failure returns.
+    try do
+      case ast do
+        {:container, meta, body} when is_list(meta) ->
+          normalize_compile_result(dispatch_container(meta, body, emit?, file, output_dir, declared_phases))
 
-      # If the AST is a block, find the first container (module/fsm) inside it
-      # and merge any sibling definitions into its body (the parser may place
-      # function definitions in a sibling block rather than inside the container).
-      {:block, _, children} when is_list(children) ->
-        case find_container(children) do
-          {:container, meta, body} ->
-            merged_body = merge_sibling_defs(body, children)
+        # If the AST is a block, find the first container (module/fsm) inside it
+        # and merge any sibling definitions into its body (the parser may place
+        # function definitions in a sibling block rather than inside the container).
+        {:block, _, children} when is_list(children) ->
+          case find_container(children) do
+            {:container, meta, body} ->
+              merged_body = merge_sibling_defs(body, children)
 
-            normalize_compile_result(dispatch_container(meta, merged_body, emit?, file, output_dir, declared_phases))
+              normalize_compile_result(dispatch_container(meta, merged_body, emit?, file, output_dir, declared_phases))
 
-          nil ->
-            {:error, {:expected_module, ast}}
-        end
+            nil ->
+              {:error, {:expected_module, ast}}
+          end
 
-      _ ->
-        {:error, {:expected_module, ast}}
+        _ ->
+          {:error, {:expected_module, ast}}
+      end
+    rescue
+      e in Cure.Compiler.PatternCompiler.Error ->
+        {:error, {:pattern_error, e.code, e.message, e.line}}
     end
   end
 

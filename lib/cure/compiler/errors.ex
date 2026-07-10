@@ -1571,6 +1571,27 @@ defmodule Cure.Compiler.Errors do
     Fix: qualify the reference (`Std.CollA.helper(...)`), or define a
     local `helper` to shadow both imports.
     """,
+    "E090" => """
+    E090: Unrecognized Pattern Shape (E-MATCH-UNRECOGNIZED-PATTERN)
+
+    A pattern's head is not one the pattern compiler recognizes. Match
+    arms are parsed with the general expression parser, so shapes that
+    are legal expressions but not legal patterns reach pattern position
+    and must be rejected here.
+
+    Pattern compilation specializes over a closed set of head shapes; a
+    shape outside that set used to compile to a wildcard, which matches
+    every value and shadows every arm below it.
+
+    Examples:
+      match x
+        1..10 -> 1        # error: range patterns are not supported
+        some(v) -> v      # error: lowercase head is not a constructor
+        -f(x) -> 0        # error: unary `-` is not a pattern
+
+    Fix: use a `when` guard for a range test (`n when n >= 1 and n <= 10`),
+    capitalize a constructor name, or bind a variable and test in the body.
+    """,
     "W088" => """
     W088: Unresolved Import
 
