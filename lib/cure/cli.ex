@@ -1222,20 +1222,46 @@ defmodule Cure.CLI do
     # so an unvalidated typo would only surface much later on the next project
     # load. plan_migration/1 then refuses a downgrade target before any file is
     # read.
-    with {:ok, target} <- migrate_resolve_edition(opts),
-         {:ok, ^target} <- plan_migration(target: target) do
-      case migrate_targets(paths) do
-        [] ->
-          info("No .cure files found")
-          :ok
+    with {:ok, target} <- migrate_resolve_edition(opts) do
+      # Measure the downgrade guard against the PROJECT's declared edition, not
+      # always the latest minted one (F4), and print a diagnostic on refusal
+      # instead of a silent nonzero exit (F5).
+      project_edition = migrate_project_edition(".")
 
-        files ->
-          with :ok <- migrate_git_guard(files, check?, print?),
-               {:ok, results} <- migrate_preflight_all(files, target),
-               :ok <- migrate_strict_gate(results, target, strict?) do
-            migrate_apply_and_bump(results, target, paths, check?, print?)
+      case plan_migration(target: target, current: project_edition) do
+        {:error, :downgrade} ->
+          error(
+            "refusing to downgrade: target edition #{inspect(target)} is older than " <>
+              "the project edition #{inspect(project_edition)}"
+          )
+
+          {:error, :downgrade}
+
+        {:ok, ^target} ->
+          case migrate_targets(paths) do
+            [] ->
+              info("No .cure files found")
+              :ok
+
+            files ->
+              with :ok <- migrate_git_guard(files, check?, print?),
+                   {:ok, results} <- migrate_preflight_all(files, target),
+                   :ok <- migrate_strict_gate(results, target, strict?) do
+                migrate_apply_and_bump(results, target, paths, check?, print?)
+              end
           end
       end
+    end
+  end
+
+  @doc false
+  # The project's declared edition (Cure.toml [project].edition), or the compiler
+  # default when there is no project / it declares none. The downgrade guard
+  # measures the target against THIS, not always the latest minted edition (F4).
+  def migrate_project_edition(dir \\ ".") do
+    case Cure.Edition.resolve(%{project_dir: dir}) do
+      {:ok, ed} -> ed
+      {:error, _} -> Cure.Edition.current()
     end
   end
 
@@ -1542,8 +1568,12 @@ defmodule Cure.CLI do
     end
   end
 
-  defp migrate_edition_pragma(body) do
-    case Regex.run(~r/@edition\(\s*"([^"]+)"\s*\)/, body) do
+  @doc false
+  # Extract a leading `@edition("YYYY")` marker for the phase-2 bump. The capture
+  # is restricted to a 4-digit year (matching Cure.Edition) so a malformed value
+  # is treated as "no marker" (nil) rather than flowing into compare/2 (F9).
+  def migrate_edition_pragma(body) do
+    case Regex.run(~r/@edition\(\s*"(\d{4})"\s*\)/, body) do
       [_, ed] -> ed
       _ -> nil
     end
