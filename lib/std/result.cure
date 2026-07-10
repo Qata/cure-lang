@@ -1,3 +1,4 @@
+@group(:option)
 mod Std.Result
   ## Standalone `Result(T, E)` helpers.
   ##
@@ -29,8 +30,6 @@ mod Std.Result
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:option)
-
   ## A computation that either succeeded with a value (`Ok`) or failed with a
   ## reason (`Error`). `Ok(v)` erases to `{:Ok, v}` and `Error(e)` to
   ## `{:Error, e}` on the BEAM.

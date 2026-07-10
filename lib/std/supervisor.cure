@@ -1,3 +1,4 @@
+@group(:concurrency)
 mod Std.Supervisor
   ## Start, stop, and introspect Cure supervisor trees.
   ##
@@ -18,8 +19,6 @@ mod Std.Supervisor
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:concurrency)
-
   ## Start a compiled Cure supervisor module. Returns the top-level
   ## supervisor pid on success.
   @extern(Elixir.Cure.Sup.Builtins, :sup_start, 1)

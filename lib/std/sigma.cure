@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Sigma
   ## The dependent pair (Σ-type) — `Sigma(a, b)` packages a value `x : a` together
   ## with a value of type `b(x)`, where the second component's type may depend on
@@ -15,8 +16,6 @@ mod Std.Sigma
   ## `mk_pair` constructor).
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   ## The dependent-pair type. The `@builtin(:sigma)` decorator binds this
   ## declaration to the kernel's canonical Sigma family, so `Sigma`/`mk_pair` are
   ## ordinary, go-to-definition-able names even though the compiler lowers the

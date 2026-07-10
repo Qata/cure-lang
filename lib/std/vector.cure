@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.Vector
   ## Length-indexed vectors.
   ##
@@ -8,8 +9,6 @@ mod Std.Vector
 
   use Std.Nat
   use Std.Bounded
-
-  @group(:collections)
 
   type Vector(a: Type) indices (n: Nat)
     empty : Vector(a, Z)

@@ -1,3 +1,4 @@
+@group(:system)
 mod Std.CRDT
   ## Conflict-free Replicated Data Types for Cure (v0.27.0).
   ##
@@ -46,8 +47,6 @@ mod Std.CRDT
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:system)
-
   ## Grow-only counter. Per-replica counts are summed on read.
   rec GCounter
     counts: t

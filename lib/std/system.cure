@@ -1,3 +1,4 @@
+@group(:system)
 mod Std.System
   ## System operations: time, process identity, node info, exit.
   ##
@@ -15,8 +16,6 @@ mod Std.System
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:system)
-
   ## Native monotonic-time reading in implementation-defined units.
   ## Use for measuring durations (`a - b` is meaningful); not
   ## wall-clock.

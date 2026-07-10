@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.List
   ## Eager, persistent, singly-linked lists.
   ##
@@ -37,8 +38,6 @@ mod Std.List
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:collections)
-
   ## The canonical cons-list family. Seeded programmatically into every module
   ## (so `[]`/`[h | t]` literal sugar resolves without `use`), and declared here
   ## with the builtin decorator; `builtin_list_drift_test.exs` pins the two equal.

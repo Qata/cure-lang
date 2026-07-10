@@ -1,3 +1,4 @@
+@group(:network)
 mod Std.Http
   ## Minimal HTTP client (v0.23.0).
   ##
@@ -27,8 +28,6 @@ mod Std.Http
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:network)
-
   ## HTTP response: status code, response headers, and body.
   rec Response
     status: Int

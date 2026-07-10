@@ -1,10 +1,9 @@
+@group(:core)
 mod Std.Nat
   ## Peano natural numbers for type-level computation.
   ##
   ## `Nat` is intentionally small: it exists so indexed stdlib types can use a
   ## trusted, total unary natural-number index.
-
-  @group(:core)
 
   @builtin(:nat)
   type Nat = Z | S(Nat)

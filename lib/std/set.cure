@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.Set
   ## Sets represented as maps with `true` values.
   ##
@@ -24,8 +25,6 @@ mod Std.Set
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:collections)
-
   ## New empty set.
   fn new() -> Map = Std.Map.new()
 

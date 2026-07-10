@@ -1,3 +1,4 @@
+@group(:option)
 mod Std.Option
   ## Standalone `Option(T)` helpers.
   ##
@@ -26,8 +27,6 @@ mod Std.Option
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:option)
-
   ## An optional value: either present (`Some`) or absent (`None`). `Some(v)`
   ## erases to `{:Some, v}` and `None()` to `{:None}` on the BEAM.
   type Option(t) = Some(t) | None()

@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Functor
   ## Functor protocol for structures that support `fmap`.
   ##
@@ -15,8 +16,6 @@ mod Std.Functor
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   ## `Functor(F)` lifts an arbitrary function `A -> B` to an
   ## endo-transformation on a container `F`.
   proto Functor(g)

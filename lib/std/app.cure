@@ -1,3 +1,4 @@
+@group(:system)
 mod Std.App
   ## Start, stop, and inspect OTP applications from Cure.
   ##
@@ -18,8 +19,6 @@ mod Std.App
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:system)
-
   ## Ensure the application and all of its dependencies are started.
   ## Returns `:ok` whether or not the application was already running.
   @extern(Elixir.Cure.App.Builtins, :ensure_all_started, 1)

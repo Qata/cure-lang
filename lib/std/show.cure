@@ -1,3 +1,4 @@
+@group(:core)
 mod Std.Show
   ## The `Show` protocol: convert values to their human-readable
   ## `String` form.
@@ -20,8 +21,6 @@ mod Std.Show
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:core)
-
   ## Convert a value of any `Show`-able type to its string representation.
   proto Show(t)
     ## Canonical string form of `x`.

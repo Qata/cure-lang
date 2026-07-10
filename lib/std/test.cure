@@ -1,3 +1,4 @@
+@group(:test)
 mod Std.Test
   ## Test assertion primitives plus a shrinking-aware property runner.
   ##
@@ -29,8 +30,6 @@ mod Std.Test
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:test)
-
   ## Private: raise `reason` as an Erlang error.
   @extern(:erlang, :error, 1)
   local fn raise_error(reason: Atom) -> Atom

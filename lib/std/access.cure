@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.Access
   ## Access protocol and composable lenses, modelled on Elixir's
   ## [`Access`](https://hexdocs.pm/elixir/Access.html) behaviour.
@@ -44,8 +45,6 @@ mod Std.Access
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:collections)
-
   # -- FFI primitives --------------------------------------------------------
 
   ## Private: raise `reason` via `:erlang.error/1`.

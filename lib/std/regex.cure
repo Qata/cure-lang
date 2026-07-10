@@ -1,3 +1,4 @@
+@group(:text)
 mod Std.Regex
   ## Regular expressions for Cure (v0.27.0).
   ##
@@ -35,8 +36,6 @@ mod Std.Regex
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:text)
-
   ## Opaque compiled regex handle.
   rec Regex
     handle: t

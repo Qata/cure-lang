@@ -1,3 +1,4 @@
+@group(:collections)
 mod Std.Pair
   ## Two-tuple helpers.
   ##
@@ -18,8 +19,6 @@ mod Std.Pair
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:collections)
-
   ## 1-based BEAM tuple element accessor; delegates to
   ## `:erlang.element/2`. `index` is 1-indexed, matching Erlang.
   @extern(:erlang, :element, 2)

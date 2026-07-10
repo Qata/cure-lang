@@ -1,3 +1,4 @@
+@group(:text)
 mod Std.Json
   ## JSON encoder and decoder for Cure (v0.23.0).
   ##
@@ -23,8 +24,6 @@ mod Std.Json
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  @group(:text)
-
   ## Key/value pair inside a JSON object. Named rather than using a
   ## raw tuple type so the ADT surface stays simple.
   rec JsonPair
