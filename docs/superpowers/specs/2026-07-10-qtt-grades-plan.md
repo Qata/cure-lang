@@ -240,9 +240,103 @@ half-migrated tree.
       dependent-motive match is unchanged and still typechecks.
       *Not a blocker for 4b* — see "Known prerequisite" above.
 
-- [ ] **5. Surface syntax.** `fn f(1 x: T)`, `fn f(0 {n: Nat})`, an affine marker,
-      and `let 1 c = spawn …`. Parser + elaborator. Default remains `ω`, so no
-      existing source changes.
+- [x] **5a. Surface syntax — parameters.** LANDED. The grade **replaces the binder's
+      colon** and sits at the binding site; absent means `ω`, so no existing source
+      changes (stdlib: 44 passed, 0 failed).
+
+      ```
+      fn run({n :erased Nat}, c :linear Chan(Cmd), h :affine Handle, budget: Int) -> Unit
+      ```
+
+      **The numeral spelling this plan originally specified is impossible, measured.**
+      `fn f(x: 1) -> Int` already parses, with `1` as a literal type, so `:1` collides
+      with real syntax; `?` is already the **hole** token, so `1?` would overload
+      Cure's hole taxonomy; and Idris has **no affine grade**, so "Idris parity" only
+      ever justified `0`/`1` — the two that collide. `:erased`/`:linear`/`:affine`
+      already lex as single `atom` tokens, are unambiguous after a binder name, and —
+      being atoms, not keywords — steal no identifiers.
+
+      **The grade decorates the ARROW, not the name and not the type.** Core spells it
+      `{:pi, g, dom, cod}`; `Conv` compares `g` while `dom` is an ordinary type. So
+      `linear c` (decorates the name) and `c: linear T` (would make `linear T` a type
+      Cure has no former for) are both wrong. `c :linear T` decorates the binding.
+      `:unrestricted` is deliberately **not** a spelling — `ω` is written by omission,
+      so each grade has exactly one surface form.
+
+      *Also fixed:* `check_extern_arity/2` counted `q == :unrestricted` as "present" —
+      slice 4a's rename trap for the third time, after `Erase`/`Emit` (4a) and
+      `Relevance` (4b). An `@extern` on a def with a `:linear` parameter was rejected
+      as an arity mismatch. Now `Grade.present?/1`.
+
+      Four mutations validated, each failing exactly its own tests: admit
+      `:unrestricted` as a spelling → the one-spelling test; make a graded binder's
+      type optional → the type-required test; ignore `meta[:grade]` in the telescope →
+      **4** tests (the compiles-and-lies guard); restore `== :unrestricted` in
+      `check_extern_arity` → the extern test.
+
+      *Gate:* 3872 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
+      infections. Oracle replay 65/65. `mix dialyzer` passes. stdlib 44/44.
+
+- [ ] **5b. Surface syntax — `let`.** `let c :linear = e` when `e` infers;
+      `let c :linear T = e` when it does not.
+      *The rule, and its mechanical cause:* a **graded `let` must produce a real
+      `:let` node**. `let_inferred/8` falls back to *surface substitution* when the rhs
+      has no inferable type (a bare lambda, an `if`, a `pickup`) — and on that path no
+      `:let` node is ever built, so there is nowhere to put the grade and it would be
+      silently dropped. So: rhs infers → no annotation needed; rhs does not infer →
+      require the ascription and say so. Never substitute and discard the grade.
+      *Red tests first:* `let c :linear = mk()` binds a graded `:let`; a graded `let`
+      with a non-inferable rhs is rejected with a named error, never accepted with the
+      grade dropped; an ungraded `let` keeps every path it has today, including the
+      one-use substitution fallback; `let (a, b) :linear = e` is a parse error (a
+      destructuring `let` becomes a `case`, whose binders take their grades from the
+      constructor's field quantities — graded destructuring is a separate feature, not
+      a silently-ignored annotation).
+
+- [ ] **6. The Pi is the single source of truth (E layer, structural).**
+      Cure stores each parameter's quantity **twice, and the two disagree**:
+      `wrap_binders/3` hardcodes `Grade.unrestricted()` on every `:pi` and `:lam`
+      binder, while the real vector lives in `sig.quantities`. An erased implicit has
+      `quantities: [:erased]` and a Pi that says `ω`. This is the recorded
+      `ctor-spelling value dichotomy` class, one level up.
+
+      **Idris settles the design.** The quantity lives on the Pi binder and nowhere
+      else: `lcheck`'s `App` case reads `rigf` straight off the callee's normalised
+      type (`LinearCheck.idr:283`, `NBind _ _ (Pi _ rigf _ ty)`). The erasure vector
+      `eraseArgs` is a **derived projection** of that type — `findErasedFrom` walks the
+      Pi spine and inserts a position iff `isErased c` (`TTImp/Elab/Utils.idr:39-49`),
+      computed once at def registration (`TTImp/ProcessType.idr:172`) and cached for
+      the backend. And Idris has **no analogue of `demote_unused_dicts`**: `newDef`
+      fixes the type first, then clauses are checked against it. Nothing lowers a
+      quantity after the body has been seen.
+
+      *Target:* thread the quantities into `wrap_binders`, and make `quantities` a
+      projection of the Pi spine rather than a parallel store.
+      *Measured:* threading them into both `:pi` and `:lam` is **already green** — the
+      full suite passes (3852 at the time of measuring). The blocker is not conversion.
+
+      *The blocker is ordering.* `sig.pi` is built from the ORIGINAL quantities and
+      pre-registered at `declarations.ex:216` so the body can recurse; then
+      `demote_unused_dicts/3` lowers an unused `where`-dict from `ω` to `:erased`, and
+      the λ is built from the DEMOTED vector at `:292`. `Env.add_def` then stores a def
+      whose Pi says `ω` on the dict arrow and whose λ says `:erased` — a pairing the
+      kernel's own rule forbids (`kernel.ex:289`, `{:grade_mismatch, %{lam:, pi:}}`).
+      Nothing re-checks a stored λ against its stored Π, so it stays green. It
+      compiles, it passes, and it lies.
+
+      *So the slice is:* (i) rebuild the Pi from the post-demotion quantities so Pi and
+      λ agree, or hoist the demotion decision ahead of the type — noting Cure's
+      demotion has no Idris counterpart and is a pure optimisation on a
+      compiler-inserted binder; (ii) derive `quantities` from the Pi; (iii) **add the
+      assertion that would have caught this whole class**: `Kernel.check` the final λ
+      against the final Pi before `Env.add_def`.
+      *Red test first:* a `where`-constrained def whose dict is unused must not
+      register a λ and a Π whose grades disagree.
+      *Consequence once landed:* a graded function's **type** advertises its grade, so
+      `Conv` distinguishes `(1 c: Chan) -> R` from `(c: Chan) -> R` and linearity
+      survives passing `f` itself as a value. Until then, grades are enforced at the
+      def's own body (via `quantities` → `Relevance`/`Erase`/`Emit`/callee-scaling) but
+      not in its type — which is exactly today's status for erased implicits.
 
 ---
 

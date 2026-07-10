@@ -16,7 +16,7 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
+  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote}
   alias Cure.Elab.{Elaborator, Relevance}
 
   @ceiling 2
@@ -259,7 +259,11 @@ defmodule Cure.Elab.Declarations do
   # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
   # it. Rejecting the mismatch is the only reading under which the number means one thing.
   defp check_extern_arity(sig, arity) do
-    present = Enum.count(sig.quantities || [], &(&1 == :unrestricted))
+    # PRESENT, not unrestricted. Slice 4a's rename left `== :unrestricted` here, which
+    # excludes `:linear`/`:affine` parameters — they have runtime values and DO reach
+    # the BEAM, so they must be counted. Same trap 4a fixed in `Erase`/`Emit` and 4b
+    # fixed in `Relevance`.
+    present = Enum.count(sig.quantities || [], &Grade.present?/1)
 
     if arity == present do
       :ok
@@ -748,6 +752,15 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # The quantity a parameter binds at: an explicit surface grade wins, else the
+  # position's default (`:erased` for an implicit, `ω` for an explicit).
+  defp param_quantity(pmeta) do
+    case Keyword.get(pmeta, :grade) do
+      nil -> if Keyword.get(pmeta, :implicit), do: Grade.zero(), else: Grade.unrestricted()
+      g -> g
+    end
+  end
+
   defp elaborate_param_telescope_rec(params, env) do
     params
     |> Enum.reduce_while({:ok, [], [], []}, fn {:param, pmeta, pname}, {:ok, tele, quants, scope} ->
@@ -764,7 +777,11 @@ defmodule Cure.Elab.Declarations do
         type_expr ->
           case idx_to_core(type_expr, scope, nil, env) do
             {:ok, core} ->
-              q = if Keyword.get(pmeta, :implicit), do: :erased, else: :unrestricted
+              # A surface grade (`c :linear T`, plan slice 5) overrides the position's
+              # default: an implicit defaults to `:erased`, an explicit to `ω`. `ω`
+              # itself has no spelling — it is written by omitting the grade — so each
+              # grade has exactly one surface form.
+              q = param_quantity(pmeta)
               {:cont, {:ok, tele ++ [{String.to_atom(pname), core}], quants ++ [q], [pname | scope]}}
 
             {:error, _} = err ->

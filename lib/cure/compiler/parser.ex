@@ -2586,26 +2586,72 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # QTT grades (plan slice 5). A grade REPLACES the binder's colon and sits at the
+  # binding site: `c :linear Chan(Cmd)`, `{n :erased Nat}`. An absent grade means
+  # `ω`, so every existing program is unchanged.
+  #
+  # The grade belongs to the ARROW, not to the name and not to the type: Core spells
+  # it `{:pi, g, dom, cod}` and `Conv` compares `g` as part of the Pi while `dom` is
+  # an ordinary type. `linear c` would decorate the name; `c: linear T` would claim
+  # `linear T` is a type, and Core has no modality former.
+  #
+  # Idris spells quantities as bare numerals (`Idris/Parser.idr:647-653`) and Cure
+  # cannot: `fn f(x: 1)` already parses with `1` as a literal type, and `?` is
+  # already the hole token, so neither `:1` nor `1?` is free. Idris has no affine
+  # grade to port a spelling from anyway. These atoms already lex as single tokens,
+  # are unambiguous after a binder name, and — being atoms, not keywords — steal no
+  # identifiers.
+  #
+  # `:unrestricted` is deliberately NOT a spelling: `ω` is written by omission, so
+  # each grade has exactly ONE surface form.
+  @grade_atoms [:erased, :linear, :affine]
+
+  defp parse_grade(state) do
+    case peek(state) do
+      %Token{type: :atom, value: g} when g in @grade_atoms -> {g, advance(state)}
+      _ -> {nil, state}
+    end
+  end
+
+  # A graded binder's type is REQUIRED — `c :linear` has no type to grade. An
+  # ungraded binder keeps today's optional `: Type`.
+  defp parse_binder_annotation(state) do
+    case parse_grade(state) do
+      {nil, state} ->
+        case peek(state) do
+          %Token{type: :colon} ->
+            {type_ast, state} = parse_type_expr(advance(state))
+            {nil, type_ast, state}
+
+          _ ->
+            {nil, nil, state}
+        end
+
+      {grade, state} ->
+        {type_ast, state} = parse_type_expr(state)
+        {grade, type_ast, state}
+    end
+  end
+
+  defp put_binder_meta(meta, grade, type_ast) do
+    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
+    if grade, do: Keyword.put(meta, :grade, grade), else: meta
+  end
+
   # `{name}` or `{name: Type}` — an implicit, erased argument (design spec §6).
   # Its type may be omitted and inferred by the elaborator from later parameter
-  # types / the return type.
+  # types / the return type. `{name :g Type}` overrides the erased default.
   defp parse_implicit_param(state) do
     state = advance(state)
     name_token = peek(state)
     name = to_string(name_token.value)
     state = advance(state)
 
-    {type_ast, state} =
-      case peek(state) do
-        %Token{type: :colon} -> parse_type_expr(advance(state))
-        _ -> {nil, state}
-      end
+    {grade, type_ast, state} = parse_binder_annotation(state)
 
     state = expect(state, :rbrace)
 
-    meta = [implicit: true]
-    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
-    {{:param, meta, name}, state}
+    {{:param, put_binder_meta([implicit: true], grade, type_ast), name}, state}
   end
 
   defp parse_explicit_param(state) do
@@ -2631,16 +2677,8 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    # Optional type annotation: : Type
-    {type_ast, state} =
-      case peek(state) do
-        %Token{type: :colon} ->
-          state = advance(state)
-          parse_type_expr(state)
-
-        _ ->
-          {nil, state}
-      end
+    # Optional type annotation `: Type`, or a graded one `:g Type`.
+    {grade, type_ast, state} = parse_binder_annotation(state)
 
     # Optional default value: = expr
     {default, state} =
@@ -2655,8 +2693,7 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    param_meta = []
-    param_meta = if type_ast, do: Keyword.put(param_meta, :type, type_ast), else: param_meta
+    param_meta = put_binder_meta([], grade, type_ast)
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 

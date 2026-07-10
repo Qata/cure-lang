@@ -170,7 +170,7 @@ defmodule Cure.Elab.Erase do
     with dname when dname != nil <- Inductive.ctor_family(env, cname),
          [_only] <- Inductive.ctors_of(env, dname),
          qs when is_list(qs) <- Inductive.ctor_quantities(env, cname) do
-      arity == length(qs) and qs != [] and Enum.all?(qs, &(&1 == :erased))
+      arity == length(qs) and qs != [] and Enum.all?(qs, &Grade.erased?/1)
     else
       _ -> false
     end
