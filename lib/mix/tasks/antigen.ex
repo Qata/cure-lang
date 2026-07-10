@@ -227,7 +227,12 @@ defmodule Mix.Tasks.Antigen do
       # `index_telescope`, `param_telescope`, `ctor_result_params`); the lever
       # for the Env-accessor cold-line bucket every other family-shaped
       # generator bypasses by never reading a declaration back out.
-      {1, Antigen.Generators.InductiveEnv.gen()}
+      {1, Antigen.Generators.InductiveEnv.gen()},
+      # Elaborator-driven literal typing (compact-Nat coverage batch) — the lever
+      # for Kernel.bool_type_value/1 (boolean literal, inference position) and
+      # Kernel.nat_type_value/1 (Nat-checked literal, re-checked via elab/soundness
+      # over the real prelude env) — neither reachable from a bare Core-term probe.
+      {1, Antigen.Generators.ElabLiteralTyping.gen()}
     ])
   end
 
