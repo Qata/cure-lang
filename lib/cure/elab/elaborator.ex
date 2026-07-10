@@ -3996,7 +3996,18 @@ defmodule Cure.Elab.Elaborator do
         end
 
       true ->
-        with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
+        # An ordinary (non-constructor) function-call arm body. Infer FIRST to
+        # preserve every case that already worked; ONLY when inference cannot
+        # solve the call's result-type metavariables — a polymorphic nullary
+        # function like `empty() -> Iter(t)` whose `t` has no argument to fix it
+        # — retry in checking mode, letting the branch's expected type pin them
+        # (mirrors the constructor-arm path above; Idris checks arm bodies
+        # against the match's expected type).
+        case elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, term, _type} -> {:ok, term}
+          {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+          {:error, _} = err -> err
+        end
     end
   end
 
