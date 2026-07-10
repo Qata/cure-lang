@@ -1,0 +1,12 @@
+mod PrinterTotality
+
+# Construct-complete fixture for the Printer-totality gate.
+# Grown by the Task-3 loop: each time the gate reports UnprintableNodeError
+# for a node kind, add a construct here that produces it, then add its
+# Printer clause.
+
+fn classify(n: Int) -> String =
+  match n
+    ^zero -> "zero"
+    whole @ x -> "some"
+    _ -> "other"
