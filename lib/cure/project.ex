@@ -1085,9 +1085,20 @@ defmodule Cure.Project do
         %{acc | compiler: [{:stdlib_path, strip_quotes(val)} | acc.compiler]}
 
       {key, val} ->
-        atom_key = String.to_atom(key)
-        bool_val = strip_quotes(val) == "true"
-        %{acc | compiler: [{atom_key, bool_val} | acc.compiler]}
+        # Only the boolean flags the compiler actually reads (see compiler_opts/1)
+        # are recognized; map those to their atom via a fixed allow-list. Every
+        # other key is stored-but-never-consumed, so it is dropped rather than
+        # fed through String.to_atom/1 on arbitrary user bytes — which raised on
+        # a non-UTF-8 key and interned one permanent atom per distinct key (an
+        # atom-table DoS from a large or malicious manifest).
+        case compiler_bool_key(key) do
+          {:ok, atom_key} ->
+            bool_val = strip_quotes(val) == "true"
+            %{acc | compiler: [{atom_key, bool_val} | acc.compiler]}
+
+          :error ->
+            acc
+        end
     end
   end
 
@@ -1152,6 +1163,13 @@ defmodule Cure.Project do
   end
 
   defp apply_kv(_section, _line, acc), do: acc
+
+  # The recognized boolean `[compiler]` keys, as an allow-list. Kept in lockstep
+  # with compiler_opts/1 (the only reader of these flags). An unrecognized key is
+  # dropped rather than interned via String.to_atom/1 on arbitrary user bytes.
+  defp compiler_bool_key("type_check"), do: {:ok, :type_check}
+  defp compiler_bool_key("optimize"), do: {:ok, :optimize}
+  defp compiler_bool_key(_other), do: :error
 
   defp parse_kv(line) do
     case String.split(line, "=", parts: 2) do
