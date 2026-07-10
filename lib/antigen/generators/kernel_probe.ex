@@ -34,7 +34,14 @@ defmodule Antigen.Generators.KernelProbe do
     :positivity_through_ctor,
     :decode_unknown_symbol,
     :cert_under_application,
-    :cert_dangling_callee
+    :cert_dangling_callee,
+    # Adversarial "backstop" probes — feed malformed input straight at a kernel
+    # boundary and assert the defensive guard fires (rather than assuming it does).
+    :eval_no_branch,
+    :eval_nondata_scrutinee,
+    :apply_nonfun,
+    :conv_unknown_ctor_fallback,
+    :validator_rejects_hole_body
   ]
 
   @doc """

@@ -20,15 +20,21 @@ defmodule Antigen.KernelProbeCoverageTest do
   use ExUnit.Case, async: false
   alias Antigen.{Cover, Runner, Generators}
   alias Antigen.Backend.StreamData, as: B
-  alias Cure.Core.{Kernel, Quote, Serialize, Inductive, Certificate}
+  alias Cure.Core.{Kernel, Quote, Serialize, Inductive, Certificate, Eval, Conv}
 
-  # Target cold lines, per instrumented module (source order).
+  # Target cold lines, per instrumented module (source order). The trailing block
+  # (Eval/Conv + Kernel 377) is the adversarial-backstop set: lines reached only by
+  # feeding the kernel malformed input at a real boundary — the ι-guards in
+  # `Eval.eval`/`Eval.apply`, `coerce_fields`'s unknown-ctor fallback, and the
+  # Final-Core validator's hole-body rejection. See the `:eval_no_branch` … probes.
   @targets %{
-    Kernel => [42, 78, 175, 301, 332, 342, 366, 369, 396, 431, 604],
+    Kernel => [42, 78, 175, 301, 332, 342, 366, 369, 377, 396, 431, 604],
     Quote => [86],
     Serialize => [206],
     Inductive => [425, 426],
-    Certificate => [286, 414, 541]
+    Certificate => [286, 414, 541],
+    Eval => [71, 81, 99],
+    Conv => [221]
   }
 
   test "the kernel/probe campaign path warms every targeted def-level cold line" do
@@ -37,8 +43,8 @@ defmodule Antigen.KernelProbeCoverageTest do
     cov =
       Cover.with_cover(modules, fn ->
         # Enough draws to hit every probe of the fixed member_of menu with
-        # overwhelming probability (15 probes, 400 draws).
-        challenges = B.interp(Generators.KernelProbe.gen()) |> Enum.take(400)
+        # overwhelming probability (20 probes, 500 draws).
+        challenges = B.interp(Generators.KernelProbe.gen()) |> Enum.take(500)
 
         for c <- challenges do
           assert Runner.replay_one(c) == :ok,

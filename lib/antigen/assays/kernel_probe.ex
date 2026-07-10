@@ -16,7 +16,7 @@ defmodule Antigen.Assays.KernelProbe do
   the term-well-formedness gate (like `check/verdict`, `serialize/decode`).
   """
   alias Antigen.Challenge
-  alias Cure.Core.{Kernel, Builtins, Env, Context, Eval, Inductive, Universe, Quote, Serialize, Certificate}
+  alias Cure.Core.{Kernel, Builtins, Env, Context, Eval, Conv, Inductive, Universe, Quote, Serialize, Certificate, Validator}
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
@@ -120,6 +120,56 @@ defmodule Antigen.Assays.KernelProbe do
     Certificate.terminating?(:f, body_f, env)
   end
 
+  # -- adversarial "backstop" probes: malformed input at a real kernel boundary --
+  # Each feeds the kernel an ill-formed value the upstream checks would normally
+  # reject, and asserts the *defensive* clause fires — proving the guard does its
+  # job under attack rather than assuming it. The three ι-guards RAISE (a coverage
+  # violation / ill-typed value reached the evaluator), so `evaluate` catches the
+  # raise and returns `{:raised, message}` for the oracle to inspect.
+
+  # A `case` whose data scrutinee's constructor is absent from the branch set
+  # (coverage would reject this upstream): `Eval.eval`'s ι-rule hits `nil` → raise.
+  defp evaluate(:eval_no_branch),
+    do: catch_raise(fn -> Eval.eval({:case, {:ctor, :S, [@z]}, {:lam, @nat, @nat}, [{:Z, 0, @z}]}, []) end)
+
+  # A `case` whose scrutinee evaluates to a non-data value (`{:vint, 3}`): the
+  # ι-rule's `other ->` arm raises (an ill-typed case reached eval).
+  defp evaluate(:eval_nondata_scrutinee),
+    do: catch_raise(fn -> Eval.eval({:case, {:int_lit, 3}, {:lam, @nat, @nat}, [{:Z, 0, @z}]}, []) end)
+
+  # β-reducing an argument into a non-function value (over-applied ctor / term
+  # that should have been rejected): `Eval.apply`'s catch-all raises.
+  defp evaluate(:apply_nonfun),
+    do: catch_raise(fn -> Eval.apply({:vint, 3}, {:vint, 4}) end)
+
+  # Convertibility of two constructor values whose ctor is UNKNOWN to a non-nil
+  # signature: `coerce_fields`'s `field_count == nil` arm falls back to a strict
+  # length compare (sound) instead of crashing. Identical spines ⇒ still convertible.
+  defp evaluate(:conv_unknown_ctor_fallback),
+    do: Conv.conv?({:ctor, :Foo, [@z]}, {:ctor, :Foo, [@z]}, base_env(), 0, base_env())
+
+  # A def whose BODY is a hole, with `no_hole: :reject` in effect: `check` admits
+  # the hole (K3) so it reaches the Final-Core validator, which rejects it —
+  # driving `run_final_core_validator`'s `{{:ok,_},{:error,_}}` arm. Restores the
+  # app-env config afterwards so the reject override never leaks to other probes.
+  defp evaluate(:validator_rejects_hole_body) do
+    prev = Application.get_env(:cure, :final_core_config)
+
+    try do
+      Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_hole, :reject))
+      env = Env.add_def(base_env(), :holey_body, @nat, {:hole, :h})
+      Kernel.check_def(env, :holey_body)
+    after
+      if prev, do: Application.put_env(:cure, :final_core_config, prev), else: Application.delete_env(:cure, :final_core_config)
+    end
+  end
+
+  defp catch_raise(fun) do
+    {:returned, fun.()}
+  rescue
+    e -> {:raised, Exception.message(e)}
+  end
+
   defp ctx, do: Context.empty(base_env())
 
   # -- oracle: the verdict each probe MUST return --
@@ -141,4 +191,11 @@ defmodule Antigen.Assays.KernelProbe do
   defp matches?(:cert_under_application, r), do: r == false
   # No cycle back to `f` through the dangling callee → certified total (true).
   defp matches?(:cert_dangling_callee, r), do: r == true
+
+  # -- backstop oracles: the guard MUST fire (raise the documented ι-error / reject) --
+  defp matches?(:eval_no_branch, r), do: match?({:raised, "ι: no branch" <> _}, r)
+  defp matches?(:eval_nondata_scrutinee, r), do: match?({:raised, "ι: non-data scrutinee" <> _}, r)
+  defp matches?(:apply_nonfun, r), do: match?({:raised, "Eval.apply:" <> _}, r)
+  defp matches?(:conv_unknown_ctor_fallback, r), do: r == true
+  defp matches?(:validator_rejects_hole_body, r), do: match?({:error, {:final_core_violation, _}}, r)
 end

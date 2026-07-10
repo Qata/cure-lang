@@ -43,7 +43,8 @@ defmodule Mix.Tasks.Antigen do
 
   @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string,
              report_dir: :string, out: :string, guided: :boolean, precise: :boolean,
-             edge_corpus: :string, plateau: :integer, guided_round: :integer, seed: :integer]
+             edge_corpus: :string, plateau: :integer, guided_round: :integer, seed: :integer,
+             record_new_coverage_baseline: :boolean]
 
   @impl Mix.Task
   def run(argv) do
@@ -94,25 +95,48 @@ defmodule Mix.Tasks.Antigen do
         end
 
       :cover ->
-        {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)
-
-        case cover_mode do
-          :guided ->
-            r = Antigen.Cover.guided_loop(cover_opts)
-
-            IO.puts(
-              "antigen cover --guided: #{r.covered_lines} kernel lines covered, " <>
-                "#{r.banked} edge(s) banked, #{r.infections} infection(s) over #{r.rounds} round(s)"
-            )
-
-          :report ->
-            {coverage, _report} = Antigen.Cover.run_report(cover_opts)
-            covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
-            total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
-            pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
-            dest = if opts[:out], do: " → #{opts[:out]}", else: ""
-            IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
+        if opts[:record_new_coverage_baseline] do
+          record_coverage_baseline()
+        else
+          run_cover(opts, runner_opts)
         end
+    end
+  end
+
+  # Re-distil the coverage corpus + rewrite the floor. The ONLY sanctioned way to
+  # move the coverage-baseline gate (`Antigen.CoverageBaselineTest`): a genuine
+  # improvement raises the floor; newly-added proven-unreachable guard code is
+  # accepted by re-recording. Everyday `mix test` never regenerates it.
+  defp record_coverage_baseline do
+    %{records: n, measured: m} = Antigen.CoverageBaseline.record!()
+    {tc, tt} = Enum.reduce(m, {0, 0}, fn {_, v}, {a, b} -> {a + v.covered, b + v.total} end)
+
+    IO.puts(
+      "antigen cover --record-new-coverage-baseline: #{n} record(s) → " <>
+        "#{Antigen.CoverageBaseline.coverage_path()}, floor #{tc}/#{tt} → " <>
+        Antigen.CoverageBaseline.baseline_path()
+    )
+  end
+
+  defp run_cover(opts, runner_opts) do
+    {cover_mode, cover_opts} = cover_dispatch(opts, runner_opts)
+
+    case cover_mode do
+      :guided ->
+        r = Antigen.Cover.guided_loop(cover_opts)
+
+        IO.puts(
+          "antigen cover --guided: #{r.covered_lines} kernel lines covered, " <>
+            "#{r.banked} edge(s) banked, #{r.infections} infection(s) over #{r.rounds} round(s)"
+        )
+
+      :report ->
+        {coverage, _report} = Antigen.Cover.run_report(cover_opts)
+        covered = coverage |> Map.values() |> Enum.map(&length(&1.covered)) |> Enum.sum()
+        total = coverage |> Map.values() |> Enum.map(& &1.total) |> Enum.sum()
+        pct = if total > 0, do: Float.round(covered * 100 / total, 1), else: 0.0
+        dest = if opts[:out], do: " → #{opts[:out]}", else: ""
+        IO.puts("antigen cover: #{covered}/#{total} kernel lines (#{pct}%)#{dest}")
     end
   end
 

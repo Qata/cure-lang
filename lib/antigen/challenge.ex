@@ -193,7 +193,12 @@ defmodule Antigen.Challenge do
     :check_def_builtin_op, :validate_cert_builtin_op, :family_ceiling, :normalize_opts,
     :validator_warn_emit, :remap_index_passthrough, :quote_foreign_vdata,
     :positivity_through_ctor, :decode_unknown_symbol, :cert_under_application,
-    :cert_dangling_callee
+    :cert_dangling_callee,
+    # Adversarial "backstop" probes: feed the kernel malformed input at a real
+    # boundary (Eval.eval / Eval.apply / Conv.conv? / check_def) and prove the
+    # defensive guard fires (raises the documented ι-error / rejects the hole body).
+    :eval_no_branch, :eval_nondata_scrutinee, :apply_nonfun,
+    :conv_unknown_ctor_fallback, :validator_rejects_hole_body
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
