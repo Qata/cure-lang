@@ -496,3 +496,75 @@ fire (iteration 9) runs a fresh audit over the iteration-8 changes. Do NOT merge
 Commits this cycle: `ff385ac` (F1 + F2), `604d101` (F3 + F5 doc).
 
 ---
+
+## Iteration 9
+
+Fresh adversarial audit of the iteration-8 changes (`ff385ac`, `604d101`) via
+three parallel Opus subagents (dep resolution; `parse_source` propagation;
+edition-surface interactions), read-only. Every finding verified against source
+before counting. **3 confirmed bugs fixed** (two of them the same defect, found
+independently by two agents).
+
+**Confirmed bugs (fixed):**
+
+- **`cure deps update` bypasses the whitespace/empty git-URL guard**
+  (`cli.ex:876` → `project.ex resolve_git_dep`). Found independently by agents 1
+  and 3. Iteration 8's trim guard lives in `resolve_one/3`, but `cmd_deps_update`
+  calls `resolve_git_dep/2` DIRECTLY (the only caller outside `resolve_one`), and
+  `""`/`"   "` are truthy in Elixir, so a `git = "   "` dep reached `git clone`
+  with a blank URL, cloned nothing, and silently resolved to `:ok` ("Lockfile
+  updated") — the exact mode iteration 8 claimed to close, still live on the
+  update path. Fixed at the `resolve_git_dep` boundary so BOTH commands agree.
+  (`c0beb65`)
+- **`resolve_git_dep/2` discarded the clone exit status** (`project.ex`, agent 3;
+  pre-existing, not an iteration-8 regression but the mechanism that made the
+  above silent). ANY failed clone — unreachable URL, bad tag, network error —
+  left an empty dir → zero `.cure` files → `compile_dep_files([])` → `:ok`, a
+  bogus green build. Now checks `System.cmd`'s status and fails loudly with
+  `{:dependency_clone_failed, name, out}` (via new `ensure_clone/4` helper).
+  (`c0beb65`)
+- **Stale `parse_source` docstring** (`compiler.ex:175`, agent 2). The
+  iteration-8 change added a `{:edition_error, _}` return but left the prose
+  contract listing only `:lex_error`/`:parse_error`. Documented the new return.
+  (`21f56be`)
+
+**Verified NON-bugs (recorded, not fixed):**
+
+- The two iteration-8 edits themselves are regression-free: the merged git clause
+  is behavior-equivalent to the old two-clause form on every `parse_dep_line`
+  shape (clause order unchanged, path clause still precedes git); the
+  `cmd_deps_update` `case` covers the full `resolve_git_dep` return contract; no
+  remaining `:ok = resolve_git_dep(...)` bind exists (no lingering MatchError).
+- `parse_source` propagation causes no runtime/consumer breakage: the sole lib
+  caller `dep_graph.ex:194` matches `{:error, reason}` generically; no test
+  asserts the old `parse_source` pragma-error shape (the pragma tests drive
+  `Parser.parse/2` directly); the formatter path already handles `:edition_error`.
+- Edition tagging is coherent across all three entry points
+  (`compile_*`→`:edition_error`, `parse_source`→`:edition_error`,
+  `Project.load`/`Edition.resolve`→raw `:unknown_edition`, each paired with its
+  own matcher); a typo'd edition in the root manifest, a path dep, AND a git dep
+  are all loud. `dep_project_dir`/`find_dep_root` iteration-6 escape re-verified
+  closed. Multi-edition latent review (hypothetical `@known ["2026","2027"]`)
+  found no off-by-one in `all/0`/`compare/2`/`retired_keywords/2`/keyword-set
+  selection. `Edition.resolve` precedence + `|| ""` nil-coalesce sound.
+- `cmd_compile` swallowing a `Project.load` edition error to `project = nil`
+  (agent 3, minor) is harmless: the per-file `compile_file` re-resolves the same
+  typo'd manifest and aborts loudly, so the build never completes with the wrong
+  stdlib. Message-quality only, not a correctness bug.
+
+**Full suite after all fixes: 3894 passed, 0 failing** (+3 new tests; 157 immune
+responses expected; Antigen shape-coverage 309/309).
+
+## Outstanding findings (after iteration 9)
+
+- None open as bugs. The by-design/inert items above are recorded so a future
+  audit doesn't re-flag them.
+
+**Loop status:** iteration 9's fresh audit found 3 confirmed bugs — so it is **NOT
+a clean audit**. Convergence (two consecutive clean audits) is **not** met
+(iterations 6–9 all found bugs). The cron is **left in place**; the next fire
+(iteration 10) runs a fresh audit over the iteration-9 changes. Do NOT merge.
+
+Commits this cycle: `c0beb65` (git-URL + clone-status), `21f56be` (docstring).
+
+---
