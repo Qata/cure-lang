@@ -191,8 +191,8 @@ defmodule Cure.Core.Serialize do
   defp build_node("binary-type", []), do: {:ok, {:binary_type}}
   defp build_node("atom-type", []), do: {:ok, {:atom_type}}
 
-  defp build_node("atom", [{:atom, a}]) do
-    with {:ok, at} <- sym_atom(a), do: {:ok, {:atom_lit, at}}
+  defp build_node("atom", [n]) do
+    with {:ok, at} <- sym_atom(n), do: {:ok, {:atom_lit, at}}
   end
 
   defp build_node("int", [{:int, n}]), do: {:ok, {:int_lit, n}}
