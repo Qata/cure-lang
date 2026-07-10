@@ -123,6 +123,20 @@ defmodule Cure.Compiler.TriviaTest do
     assert reprint(out) == out, "doc-comment reprint is not idempotent"
   end
 
+  # Two-or-more trailing blank body lines leave two-or-more trailing "\n" in the
+  # token text. Dropping only ONE (String.replace_suffix) still leaves a trailing
+  # "\n", so the split yields a spurious empty `## ` line — the same defect as the
+  # single-newline case, one blank line deeper. Trailing blanks carry no meaning
+  # in a doc comment, so every trailing newline must be dropped.
+  test "a fenced doc comment with multiple trailing blank body lines gains no spurious ## line" do
+    out = reprint("### tail\nline1\n\n\n###\nmod M\n  fn f() -> Int = 1\n")
+
+    refute out |> String.split("\n") |> Enum.any?(&(String.trim_trailing(&1) == "##")),
+           "reprint invented an empty `## ` doc line: #{inspect(out)}"
+
+    assert reprint(out) == out, "doc-comment reprint is not idempotent"
+  end
+
   # helper: collect all values of a given meta key across the AST
   defp collect_meta(ast, key, acc \\ [])
   defp collect_meta({_k, m, ch}, key, acc) when is_list(m) and is_list(ch) do

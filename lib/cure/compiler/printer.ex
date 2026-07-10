@@ -268,13 +268,14 @@ defmodule Cure.Compiler.Printer do
   defp trivia_lines({:comment, text, _, _}), do: ["# " <> text]
 
   defp trivia_lines({:doc_comment, text, _, _}) do
-    # A fenced doc token's text can carry a single trailing "\n" that is an
-    # artifact of its construction (an `### tail` opening-tail prepended over an
-    # empty body), not a real blank body line. Splitting it verbatim would emit
-    # a spurious empty `## ` line that reparses as an extra doc comment, so drop
-    # exactly one trailing newline first. Internal blank lines are preserved.
+    # A fenced doc token's text can carry trailing "\n"s — an artifact of its
+    # construction (an `### tail` opening-tail prepended over an empty body) and
+    # any genuine trailing blank body lines, which carry no meaning in a doc
+    # comment. Splitting them verbatim would emit spurious empty `## ` lines that
+    # reparse as extra doc comments, so drop every trailing newline first.
+    # Internal blank lines are preserved.
     text
-    |> String.replace_suffix("\n", "")
+    |> String.trim_trailing("\n")
     |> String.split("\n")
     |> Enum.map(&("## " <> &1))
   end
