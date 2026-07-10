@@ -159,7 +159,7 @@ defmodule Cure.Project do
       hidx ->
         {head, [header | after_header]} = Enum.split(lines, hidx)
         {section, tail} = Enum.split_while(after_header, &(not table_header?(&1)))
-        head ++ [header | edition_in_section(section, kv)] ++ tail
+        head ++ [header | edition_in_section(section, kv, edition)] ++ tail
     end
   end
 
@@ -168,11 +168,25 @@ defmodule Cure.Project do
   # stale value that the last-write-wins loader reads back); if none, insert the
   # key right after the header. Keys in later tables are outside `section` and
   # are never touched.
-  defp edition_in_section(section, kv) do
+  defp edition_in_section(section, kv, edition) do
     if Enum.any?(section, &edition_key?/1) do
-      Enum.map(section, fn line -> if edition_key?(line), do: kv, else: line end)
+      Enum.map(section, fn line ->
+        if edition_key?(line), do: replace_edition_value(line, kv, edition), else: line
+      end)
     else
       [kv | section]
+    end
+  end
+
+  # Rewrite only the VALUE of an existing `edition =` line, preserving leading
+  # indentation and any trailing inline comment — a lossless line edit, matching
+  # the migrate writer `Cure.CLI.replace_leading_pragma_line/2`. Falls back to the
+  # canonical `kv` when the line's value is not a simple quoted string (a
+  # malformed line the last-write-wins loader would reject anyway).
+  defp replace_edition_value(line, kv, edition) do
+    case Regex.run(~r/^(\s*edition\s*=\s*)"[^"]*"(.*)$/, line) do
+      [_, prefix, rest] -> prefix <> "\"#{edition}\"" <> rest
+      nil -> kv
     end
   end
 

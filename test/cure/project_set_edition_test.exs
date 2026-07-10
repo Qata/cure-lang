@@ -57,6 +57,18 @@ defmodule Cure.ProjectSetEditionTest do
     refute out =~ ~r/edition = "2026"/
   end
 
+  # Iteration 13 (audit): set_edition/2 documents a "lossless line edit" but the
+  # existing-key replacement rewrote the whole line to the bare `edition = "X"`,
+  # dropping a trailing inline comment. The sibling migrate writer
+  # (replace_leading_pragma_line) preserves trailing text; the two must agree.
+  test "preserves a trailing comment on the edition line when replacing", %{dir: dir} do
+    path = write_toml(dir, "[project]\nname = \"x\"\nedition = \"2026\"  # pinned\n")
+    assert :ok = Cure.Project.set_edition(path, "2027")
+    out = File.read!(path)
+    assert out =~ ~r/edition = "2027"  # pinned/
+    refute out =~ ~r/edition = "2026"/
+  end
+
   # I1 (audit iteration 2): the write side accepted a `[project]` header carrying
   # a trailing comment, but the loader required the line to END with `]`, so the
   # written edition was silently dropped on read-back. Round-trip through load —
