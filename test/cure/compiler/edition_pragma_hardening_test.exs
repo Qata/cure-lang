@@ -16,6 +16,9 @@ defmodule Cure.Compiler.EditionPragmaHardeningTest do
   defp malformed_error?(errors),
     do: Enum.any?(errors, &match?({:edition_pragma_malformed, _, _}, &1))
 
+  defp unknown_error?(errors),
+    do: Enum.any?(errors, &match?({:edition_pragma_unknown, _, _}, &1))
+
   # F1 — a decorator-led definition (@extern/@derive/@builtin...) is substantive;
   # a later @edition is therefore misplaced and must be a hard error.
   test "F1: @edition after a @derive-led definition is a placement error" do
@@ -57,6 +60,20 @@ defmodule Cure.Compiler.EditionPragmaHardeningTest do
     src = "@edition\nmod M\n  fn f() -> Int = 1\n"
     assert {:error, errors} = parse(src)
     assert malformed_error?(errors)
+  end
+
+  # F-A LIVE (audit iteration 3): a well-formed but UNKNOWN edition (`"9999"` is
+  # not on the allow-list) must fail loudly at parse — spec §3.1 ("a typo'd
+  # edition must fail loudly") / §3.3 ("its argument is validated as an edition").
+  # The build pipeline (compiler.ex lex/parse) never calls Cure.Edition.resolve,
+  # so the parser's format-only check let an unknown edition compile silently.
+  # This is a DISTINCT error from :edition_pragma_malformed (the value is a valid
+  # 4-digit year in shape, just not a minted edition).
+  test "F-A: a well-formed but unknown @edition value is an unknown-edition error" do
+    src = "@edition(\"9999\")\nmod M\n  fn f() -> Int = 1\n"
+    assert {:error, errors} = parse(src)
+    assert unknown_error?(errors)
+    refute malformed_error?(errors)
   end
 
   # Guard against over-correction: the happy path must still parse.

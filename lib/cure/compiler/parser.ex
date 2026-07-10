@@ -5023,6 +5023,14 @@ defmodule Cure.Compiler.Parser do
           not valid_edition_pragma_arg?(args) ->
             add_error(state, {:edition_pragma_malformed, token.line, token.col})
 
+          not known_edition_pragma_arg?(args) ->
+            # Well-formed "YYYY" but not a minted edition. The build pipeline
+            # (compiler.ex lex/parse) never calls Cure.Edition.resolve, so this
+            # is the only place a standalone file's pragma edition is checked
+            # against the allow-list — spec §3.1 ("a typo'd edition must fail
+            # loudly") / §3.3 ("its argument is validated as an edition").
+            add_error(state, {:edition_pragma_unknown, token.line, token.col})
+
           true ->
             state
         end
@@ -5541,6 +5549,15 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp valid_edition_pragma_arg?(_), do: false
+
+  # A well-formed pragma arg whose value is a KNOWN edition (allow-list membership
+  # via Cure.Edition — the single source of truth). Presupposes the format check
+  # (`valid_edition_pragma_arg?`) already passed; a non-known "YYYY" string is an
+  # :edition_pragma_unknown error rather than a silent accept.
+  defp known_edition_pragma_arg?([{:literal, _meta, val}]) when is_binary(val),
+    do: Cure.Edition.valid?(val)
+
+  defp known_edition_pragma_arg?(_), do: false
 
   # Mark that a substantive top-level statement is about to be parsed. Comments
   # are NOT substantive. A decorator prefix (`:at`) is substantive UNLESS it is a

@@ -136,8 +136,13 @@ defmodule Cure.Project do
     end
   end
 
-  defp table_header?(line), do: Regex.match?(~r/^\s*\[[^\]]+\]/, line)
-  defp project_header?(line), do: Regex.match?(~r/^\s*\[project\]\s*(#.*)?$/, line)
+  # All three header predicates derive from ONE grammar (`table_header_name/1`)
+  # so the set_edition writer and the loader can never disagree about what a
+  # table boundary is (the I1/I1b/I1c bug class). `table_header?` is any header;
+  # `project_header?` is the [project] table specifically (name == "project",
+  # excluding dotted subtables like `[project.env]`).
+  defp table_header?(line), do: table_header_name(line) != nil
+  defp project_header?(line), do: table_header_name(line) == "project"
   defp edition_key?(line), do: Regex.match?(~r/^\s*edition\s*=/, line)
 
   # -- Dependency Resolution ---------------------------------------------------
@@ -833,8 +838,13 @@ defmodule Cure.Project do
   # is not a header. Kept consistent with the `set_edition` writer grammar so a
   # header this loader accepts is one the writer will also target (and vice
   # versa) — otherwise a written `edition` would be dropped on read-back.
-  defp table_header_name(trimmed) do
-    case Regex.run(~r/^\[([^\]]*)\]\s*(?:#.*)?$/, trimmed) do
+  defp table_header_name(line) do
+    # `\[{1,2}..\]{1,2}` recognises both a table header `[name]` and a TOML
+    # array-of-tables header `[[name]]` (the latter is still a section boundary —
+    # dropping it would leak its keys into the preceding table). `\s*(?:#.*)?$`
+    # tolerates an inline comment. Trimmed internally so the writer's boundary
+    # predicates can call this on raw lines.
+    case Regex.run(~r/^\[{1,2}([^\]]*)\]{1,2}\s*(?:#.*)?$/, String.trim(line)) do
       [_, name] -> String.trim(name)
       nil -> nil
     end
