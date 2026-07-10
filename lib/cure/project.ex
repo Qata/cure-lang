@@ -1013,9 +1013,28 @@ defmodule Cure.Project do
 
   defp parse_kv(line) do
     case String.split(line, "=", parts: 2) do
-      [key, val] -> {String.trim(key), String.trim(val)}
+      [key, val] -> {String.trim(key), val |> strip_inline_comment() |> String.trim()}
       _ -> {"", ""}
     end
+  end
+
+  # Drop a TOML inline comment from a value: the first `#` that is NOT inside a
+  # double-quoted string begins a comment (a `#` within quotes — e.g. a
+  # `"C# rocks"` value — is literal). This mirrors the inline-comment tolerance the
+  # table-header parser already has, so a trailing `# note` on a value line does
+  # not leak into the value — which for the validated `edition` key would turn a
+  # valid `"2026"  # pin` into `2026"  # pin` and hard-fail the load (A2-F1).
+  defp strip_inline_comment(val) do
+    {kept, _in_quotes?} =
+      val
+      |> String.to_charlist()
+      |> Enum.reduce_while({[], false}, fn
+        ?#, {acc, false} -> {:halt, {acc, false}}
+        ?", {acc, in_q} -> {:cont, {[?" | acc], not in_q}}
+        ch, {acc, in_q} -> {:cont, {[ch | acc], in_q}}
+      end)
+
+    kept |> Enum.reverse() |> List.to_string()
   end
 
   # `parse_kv/1` only ever yields a `{binary, binary}` pair, so every

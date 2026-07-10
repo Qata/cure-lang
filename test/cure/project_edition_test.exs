@@ -84,4 +84,22 @@ defmodule Cure.ProjectEditionTest do
     dir = write_toml("[project]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2062\"\n")
     assert {:error, {:unknown_edition, "2062"}} = Cure.Project.load(dir)
   end
+
+  # Iteration 6 (audit A2-F1): TOML permits an inline comment after a value, and
+  # the header parser already tolerates it (`[project] # note`). A trailing comment
+  # on the `edition` value must NOT leak into the value — otherwise a VALID edition
+  # (`"2026"  # pin`) becomes `2026"  # pin`, which fails validation and hard-fails
+  # the load, breaking the "fail loud only on a genuinely unknown edition" contract.
+  test "a trailing inline comment on the edition value is stripped, not a hard fail" do
+    dir = write_toml("[project]\nname = \"demo\"\nedition = \"2026\"  # pin the surface\n")
+    assert {:ok, project} = Cure.Project.load(dir)
+    assert project.edition == "2026"
+  end
+
+  # A `#` INSIDE the quoted value is not a comment delimiter and must be preserved.
+  test "a hash inside a quoted string value is not treated as a comment" do
+    dir = write_toml("[project]\nname = \"C# rocks\"\nedition = \"2026\"\n")
+    assert {:ok, project} = Cure.Project.load(dir)
+    assert project.name == "C# rocks"
+  end
 end
