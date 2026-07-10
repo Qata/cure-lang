@@ -71,27 +71,30 @@ defmodule Cure.Audit.ResolutionTest do
   end
 
   # ---------------------------------------------------------------------------
-  # R2: `resolve.ex`'s `head_param_index/2` (private, exercised indirectly via
-  # `Resolve.method_call/5` <- `elaborate_named_call/5`) defaults to parameter
-  # index 0 whenever the head type variable has no BARE occurrence among a
-  # method's params — the only case a higher-kinded interface (`Functor`) can
-  # ever be in, since its head always appears applied (`f(a)`), never bare.
-  # `test/cure/elab/resolve_hkt_test.exs`'s own passing `Functor` test happens
-  # to declare `fmap(container: f(a), g: a -> b)` with the applied-head param
-  # FIRST, which is exactly why it passes — masking that the "default to
-  # first" heuristic is not actually locating the head, just getting lucky on
-  # param order.
+  # R2 (RESIDUAL — the dispatch half is FIXED and now gated by
+  # `test/cure/elab/resolve_head_param_order_test.exs`): `head_param_index/2` now
+  # locates the `f(a)`-typed parameter wherever it is declared, so this program no
+  # longer reports `{:no_instance, ...}`.
   #
-  # Here the interface and its implementation both declare
-  # `fmap(g: a -> b, container: f(a))` — a legal, unremarkable reordering; the
-  # design doc (`docs/superpowers/specs/2026-07-10-typeclasses-design.md`
-  # §3.4) defines resolution by "the type of the method's interface-head
-  # argument position", not by textual position. `head_param_index` picks
-  # index 0 (`g`, a lambda) as the head instead of index 1 (`container`, the
-  # actual `f(a)`-typed argument), so a registered, valid `Functor for List`
-  # instance is not found.
+  # What remains red is a DIFFERENT, more general defect that R2's fixture happens
+  # to also exercise: a lambda argument declared BEFORE the argument that fixes its
+  # domain cannot be elaborated. `fmap(fn(x) -> x + 10, xs)` fails with
+  # `{:unsolved_metavariables, :deferred_argument}` because the lambda's domain
+  # metavar is only solved by `xs`, which is elaborated after it.
+  #
+  # This has nothing to do with interfaces. The same shape fails with no interface
+  # in sight:
+  #
+  #     fn app2(g: a -> b, xs: List(a)) -> List(b) = lmap(xs, g)
+  #     fn bump(xs: List(Int)) -> List(Int) = app2(fn(x) -> x + 10, xs)
+  #
+  # The fix is in the elaborator's argument machinery — either elaborate arguments
+  # in dependency order, or defer a lambda argument until its domain metavar is
+  # solved and revisit it (Idris 2's `Core/Unify.idr` retry queue; Agda's postponed
+  # type-checking constraints). `resolve_deferred_slots` already does a narrow
+  # version of this for a deferred argument's OWN domain metavar.
   # ---------------------------------------------------------------------------
-  test "R2: higher-kinded method dispatch finds the f(a)-typed head argument regardless of its declared position" do
+  test "R2: a lambda argument preceding the argument that fixes its domain elaborates" do
     src = """
     mod HktParamOrder
       fn lmap(xs: List(a), g: a -> b) -> List(b) =

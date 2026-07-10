@@ -84,19 +84,44 @@ defmodule Cure.Elab.Resolve do
 
   # -- head classification ----------------------------------------------------
 
-  # The head-positioned parameter is the one whose interface-signature type is the
-  # bare head variable (`x : a`); for a higher-kinded interface the head appears
-  # applied (`container : f(a)`), no bare occurrence exists, and the head argument
-  # defaults to the first — its inferred type (`List(Int)`) still names the
-  # instance's type constructor.
+  # The head-positioned parameter is the one whose interface-signature type mentions
+  # the head variable. A first-order interface mentions it BARE (`x : a`); a
+  # higher-kinded one mentions it APPLIED (`container : f(a)`) and never bare — its
+  # inferred type (`List(Int)`) still names the instance's type constructor, so that
+  # parameter is the dispatch head just the same.
+  #
+  # Both forms are located explicitly. Defaulting the higher-kinded case to parameter
+  # 0 only worked while the applied-head parameter happened to be declared first;
+  # reordering to `fmap(g: (a) -> b, container: f(a))` — legal, and nothing in the
+  # parser or `Cure.Elab.Interface` forbids it — classified `g` as the head and
+  # reported `{:no_instance, ...}` for a correctly registered instance.
+  #
+  # `Interface.collect_head_uses/3` classifies the same two shapes; keep them aligned.
   defp head_param_index(desc, method) do
     info = Map.fetch!(desc.methods, method)
     hv = desc.head_var
 
-    Enum.find_index(info.params, fn {:param, pm, _} ->
-      match?({:variable, _, ^hv}, Keyword.fetch!(pm, :type))
-    end) || 0
+    bare =
+      Enum.find_index(info.params, fn {:param, pm, _} ->
+        match?({:variable, _, ^hv}, Keyword.fetch!(pm, :type))
+      end)
+
+    applied =
+      Enum.find_index(info.params, fn {:param, pm, _} ->
+        applied_head?(Keyword.fetch!(pm, :type), hv)
+      end)
+
+    # `|| 0` is unreachable for any interface `Interface.infer_head_kind/3` accepted
+    # (it requires at least one bare or applied use somewhere in the interface), but a
+    # method that mentions the head only in its RETURN type has no head parameter.
+    bare || applied || 0
   end
+
+  # `f(a)` — the head variable in applied (higher-kinded) position. A function type
+  # parses as `{:function_call, [name: "Function", function_type: true], _}`, so it
+  # only matches when the interface's head variable is literally named `Function`.
+  defp applied_head?({:function_call, fmeta, _args}, hv), do: Keyword.get(fmeta, :name) == hv
+  defp applied_head?(_type, _hv), do: false
 
   defp classify({:vint_type}), do: {:concrete, :Int}
   defp classify({:vfloat_type}), do: {:concrete, :Float}
