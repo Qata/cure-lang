@@ -188,20 +188,19 @@ defmodule Cure.Compiler do
     # set the compiler would — pragma > project Cure.toml > default, matching the
     # compile path (A3-F2). A real :file discovers its project root so a manifest-
     # pinned edition is honoured; a genuine no-file source stays headless (nil dir
-    # → default). A resolve error (unknown edition) degrades to the default only to
-    # pick a lexer keyword set — the parser still validates the pragma itself and
-    # rejects an unknown one (:edition_pragma_unknown), so an unknown edition
-    # surfaces as a parse error rather than silently succeeding.
+    # → default). An unknown edition is surfaced, not swallowed (iteration 8, F1):
+    # a manifest edition error can't be re-caught by the parser (the manifest isn't
+    # in the source), so degrading to current() would hide a real §3.1 error.
     project_dir = if file in [nil, "nofile"], do: nil, else: Cure.Project.find_root(file)
 
-    edition =
-      case Cure.Edition.resolve(%{source: source, project_dir: project_dir}) do
-        {:ok, ed} -> ed
-        {:error, _} -> Cure.Edition.current()
-      end
+    case Cure.Edition.resolve(%{source: source, project_dir: project_dir}) do
+      {:ok, edition} ->
+        with {:ok, tokens} <- lex(source, file, false, edition) do
+          parse(tokens, file, false, edition)
+        end
 
-    with {:ok, tokens} <- lex(source, file, false, edition) do
-      parse(tokens, file, false, edition)
+      {:error, reason} ->
+        {:error, {:edition_error, reason}}
     end
   end
 

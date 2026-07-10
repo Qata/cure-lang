@@ -4,9 +4,11 @@ defmodule Cure.Edition do
   project is read against (design: docs/superpowers/specs/2026-07-10-editions-design.md).
 
   An edition is a 4-digit calendar-year string. The set of real editions is the
-  closed allow-list `@known`; `current/0` is the newest. Ordering is by integer
-  year and is deliberately independent of the allow-list so ordering logic is
-  usable for editions not yet minted.
+  closed allow-list `@known`; `current/0` is the compiler default, deliberately
+  DECOUPLED from the newest known edition so a new edition can be minted as opt-in
+  before promotion to default (Rust parity — see `current/0`). Ordering is by
+  integer year and is deliberately independent of the allow-list so ordering logic
+  is usable for editions not yet minted.
   """
 
   require Logger

@@ -33,6 +33,32 @@ defmodule Cure.Compiler.EditionCompileTest do
              )
   end
 
+  # Iteration 8 (audit F1): parse_source is the headless tooling entry (dep_graph,
+  # formatters). Once it discovers project_dir from the real :file, resolve/1 can
+  # return {:error, {:unknown_edition, _}} from a typo'd MANIFEST for a pragma-less
+  # source — which the parser CANNOT re-catch (the manifest isn't in the source).
+  # Swallowing it to current() silently degraded a real edition error; surface it
+  # like the compile path.
+  test "parse_source surfaces an unknown manifest edition instead of degrading to default",
+       %{dir: dir} do
+    File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"1999\"\n")
+    file = Path.join(dir, "m.cure")
+    src = "mod M\n  fn f() -> Int = 1\n"
+    File.write!(file, src)
+
+    assert {:error, {:edition_error, {:unknown_edition, "1999"}}} =
+             Cure.Compiler.parse_source(src, file: file)
+  end
+
+  test "parse_source parses normally under a valid manifest edition", %{dir: dir} do
+    File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"2026\"\n")
+    file = Path.join(dir, "m.cure")
+    src = "mod M\n  fn f() -> Int = 1\n"
+    File.write!(file, src)
+
+    assert {:ok, _ast} = Cure.Compiler.parse_source(src, file: file)
+  end
+
   test "compile honors a valid manifest edition (resolve is consulted, no crash)", %{dir: dir} do
     File.write!(Path.join(dir, "Cure.toml"), "[project]\nname = \"x\"\nedition = \"2026\"\n")
     src = "mod M\n  fn f() -> Int = 1\n"
