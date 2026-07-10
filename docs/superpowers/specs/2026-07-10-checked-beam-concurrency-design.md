@@ -354,7 +354,56 @@ type, dropped handle (spawn without reaching a terminal state or `cancel`),
 handle duplication, handle in ω container, handle captured by non-one-shot
 closure.
 
-### 6.4 Macro placement
+### 6.4 Containers: `fsm`, `actor`, `sup`, `app`
+
+The classic containers are **three different kinds of thing**, indiscriminately
+compiled to processes today (`Cure.FSM.Compiler`, `Cure.Actor.Compiler`, over an
+ETS-backed runtime). Under the layer rule they separate:
+
+**`fsm` reduces.** It is a protocol plus a total pure transition function, and
+needs a process only to be *addressable*. `Red --timer--> Green` already *is* a
+session protocol; the macro expands `*` into a clause per state and derives the
+reducer. The payoff is on the caller:
+
+```cure
+process drive() -> Unit =
+  light = spawn TrafficLight.serve   # light : TrafficLight@Red
+  send light, timer()                # light : TrafficLight@Green
+  send light, emergency()            # light : TrafficLight@Red
+```
+
+The handle's type *is* the machine's state; `Std.Fsm.state/1` (today a runtime
+query returning a bare `Atom`) becomes a compile-time fact and is retired.
+
+**Limit — this holds only while the handle is linear.** A registered, ω-shared
+fsm cannot let any client know the state; its protocol degenerates to the flat
+message-set floor ("legal in *some* state"). Sharing costs a runtime query
+returning a dependent pair:
+
+```cure
+%[s, chan] = Fsm.reopen(light_pid)   # Σ s : State. Chan(TrafficLight@s)
+```
+
+This is the rung-2-floor / rung-3-ceiling distinction surfacing as an
+ergonomics fact rather than a slogan.
+
+**`actor` is a process.** `on_message` clauses become a `receive` loop over a
+protocol; the untyped `notify(%[:tick_at, n])` firing at an implicit `:caller`
+becomes `reply(n) : Int` read from the protocol. Reply-less messages cannot be
+awaited; a missing clause is a totality error (today the message rots in the
+mailbox). `Std.Actor.notify/1` and the implicit `:caller` capture are retired.
+
+**`sup` owns addresses, not conversations.**
+`Supervisor([clock: Pid(Clock), …])`; `Sup.child(sup, :clock) : Effect(Pid(Clock))`
+yields an ω address, and `Session.open(pid) : Effect(Chan(Clock@Ready))` mints
+the linear conversation. A crash-and-restart kills the session, not the address:
+a `call` on the stale channel raises `PeerDown` rather than returning a stale
+reply or hanging. Children are the **affine** case (§5.3) — the supervisor owns
+them, so the spawner is relieved of the join obligation.
+
+**`app`** owns the root supervisor capability, linearly, for the VM's lifetime.
+
+### 6.5 Macro placement
 
 `protocol`, `process`, `accepts`, `resource` are Tier-3/Tier-5 macros of the
 planned facility: they derive codes, mint behaviour-shaped modules via
@@ -512,7 +561,7 @@ Every process-to-process session message is
 Resources are local capabilities, not sessions: **no token, no refs, no
 overhead** — the drain phase emits plain driver calls.
 
-### 9.2 Receive lowering: never scan
+### 9.2 Receive lowering: never scan (when we own the mailbox)
 
 AtomVM has no receive-marker optimization (`recv_mark`/`recv_set` removed,
 `opcodes.def:228-229`; OTP-24 marker opcodes are no-ops,
@@ -527,9 +576,21 @@ receive O(N) from the front. Therefore:
 - **The catch-all quarantine clause is mandatory in every emitted receive**:
   it is simultaneously the O(1) guarantee (mailbox never accumulates), the
   foreign-boundary decode (§9.3), and junk hygiene (the property mailbox-type
-  systems get as a theorem, delivered here by construction).
-- VM selective receive is reserved for the trusted runtime library, never
-  emitted for user protocols.
+  systems get as a theorem, delivered here by construction). For a process
+  lowered to a behaviour (§9.6), **`handle_info` *is* this clause** — it is not
+  an invention, it is the callback OTP already provides, now generated and
+  counted rather than hand-written.
+- VM selective receive is never emitted for a process that **owns its own
+  mailbox**.
+
+**Qualification (the O(1) claim is not unconditional).** A Cure process that is
+itself supervised is a behaviour (§9.6), so OTP owns its mailbox and it cannot
+run a head-take inside a callback. Its `call` lowers to `gen_server:call`,
+inheriting OTP's ref-based **selective receive** — the O(N) path on AtomVM. This
+is tolerable because `handle_info` keeps such a mailbox drained, so N is
+normally zero; but the guarantee is conditional and must not be discovered on
+hardware. **The O(1) head-take guarantee holds only for processes that own their
+own mailbox.**
 
 ### 9.3 Foreign boundary
 
@@ -572,6 +633,53 @@ becomes the compile-time effect interpreter that sank effects-as-data (its own
 from the Effect spec (`no_effect_in_erased_position`, `effect_ops_known`, …)
 apply unchanged; `codes_erased` extends to protocol states, quantities, and
 budgets — none may survive into emitted code.
+
+### 9.6 Behaviour lowering: session loops become `gen_server`s
+
+A session-typed `receive` loop lowers naturally to a bare tail-recursive
+Erlang loop, which would be smaller and faster than `gen_server` on AtomVM.
+**This is wrong and must not be done.** A bare loop cannot be supervised: OTP
+supervisors require children started via `proc_lib` that speak the `sys`
+protocol. Emitting raw loops loses supervision, `sys:get_state`, and release
+handling — for exactly the containers whose purpose is supervision.
+
+Therefore a `process` that is a supervised container lowers **into** a
+`gen_server`, with the protocol state as the server state: reply-carrying
+clauses become `handle_call`, reply-less clauses become `handle_cast`, and
+`handle_info` is the quarantine clause (§9.2).
+
+```erlang
+handle_call({'$cure', Sid, tick}, _From, N) -> {reply, {'$cure', Sid, N + 1}, N + 1}.
+handle_cast({'$cure', _Sid, reset}, _N)     -> {noreply, 0};
+handle_cast({'$cure', _Sid, stop},   N)     -> {stop, normal, N}.
+handle_info(Other, N) -> 'Cure.Quarantine':drop(Other), {noreply, N}.
+```
+
+Three consequences, all in the design's favour:
+
+- **`handle_info` *is* the quarantine clause** (§9.2) — inherited, not invented.
+- **`gen_server:call`'s exit-on-peer-death *is* the EGV failure model** (§7).
+  `PeerDown` is inherited from OTP, not implemented.
+- **No defensive catch-all on typed clauses.** `handle_cast` gets no
+  `handle_cast(_, S) -> {noreply, S}` fallback, because the type system proved
+  no other tagged message can arrive on a valid `Sid`. The guarantee is visible
+  as an *absence* in the emitted source; every equivalent handler written today
+  needs that wildcard because nothing knows what may arrive.
+
+Supervisors lower essentially as they do today (`supervisor` behaviour, child
+specs, strategies) — unchanged, because supervision operates on **addresses**,
+and addresses were never the thing that needed typing (§4.4, §6.4).
+
+`fsm` containers with a linear owner need no process at all (§6.4); only the
+addressable form lowers to a behaviour, with the protocol state as the server
+state and the transition clauses checked total over (state × legal event).
+
+Retired by this lowering: `Std.Actor.notify/1` and the implicit `:caller`
+capture; `Std.Fsm.state/1` returning a bare `Atom`; the ETS-backed
+`Cure.Actor.Runtime` (state lives in the behaviour); every defensive wildcard
+clause on a typed channel; and the string-based `Cure.FSM.Compiler` /
+`Cure.Actor.Compiler` codegen, replaced by macro expansion into ordinary
+checked Cure.
 
 ## 10. AtomVM obligations (patches we own)
 
@@ -667,6 +775,13 @@ only; delegation excluded until §9.4 lifts it); assume interrupt completeness
   only under fairness/termination assumptions (deadlock lint is advisory);
   `await` against an unfair peer can block until its timeout/monitor fires.
 - Budget arithmetic trusts declared interrupt-rate bounds.
+- **The O(1) receive guarantee is conditional** (§9.2): it holds for processes
+  that own their own mailbox. A supervised process is a behaviour, so its
+  `call` lowers to `gen_server:call` and inherits OTP's ref-based selective
+  receive — O(N) on AtomVM, with N normally zero because `handle_info` drains.
+- **Static fsm typestate requires a linear owner** (§6.4). An ω-shared fsm
+  degrades to the flat message-set floor; recovering its state needs a runtime
+  query returning a dependent pair.
 - Function colouring exists: a pure `fn` cannot send. The macro surface makes
   effectful code pleasant, not ambient. The sanctioned escape for foreign
   needs remains the user's own explicit `@extern` (sealed-raw-base
