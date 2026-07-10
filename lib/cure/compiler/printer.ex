@@ -66,6 +66,7 @@ defmodule Cure.Compiler.Printer do
   defp render_program(exprs, meta, indent) do
     body =
       exprs
+      |> flatten_top_level()
       |> Enum.map(&render(&1, 0, indent))
       |> Enum.with_index()
       |> Enum.map(fn {rendered, i} -> {rendered, i > 0} end)
@@ -76,6 +77,53 @@ defmodule Cure.Compiler.Printer do
     |> append_trailing(Keyword.get(meta, :trailing))
     |> append_trailer(Keyword.get(meta, :trailer), 0, indent)
   end
+
+  # A bare `mod Name` header leaves its sibling definitions wrapped in a single
+  # `:block` node. That wrapper has NO surface syntax (it renders as a plain
+  # statement list) and is dropped on reparse — the definitions become top-level
+  # siblings. Flatten it here so the §5.4 top-of-file rule-3 blank policy sees the
+  # same statement set the reparse will; otherwise `print∘reparse∘print` inserts
+  # blanks the first print did not, and the corpus fixpoint gate fails. The
+  # wrapper's OWN trivia (a section-header comment attached to the block's
+  # `:leading`, a `:trailer` after its last statement) is carried onto the edge
+  # statements so flattening the syntax-less wrapper loses no comment.
+  defp flatten_top_level(exprs) do
+    Enum.flat_map(exprs, fn
+      {:block, bmeta, inner} when is_list(inner) and inner != [] ->
+        inner |> flatten_top_level() |> carry_block_trivia(bmeta)
+
+      other ->
+        [other]
+    end)
+  end
+
+  defp carry_block_trivia(inner, bmeta) do
+    inner
+    |> prepend_node_trivia(:leading, Keyword.get(bmeta, :leading))
+    |> append_node_trivia(:trailer, Keyword.get(bmeta, :trailer))
+    |> append_node_trivia(:trailing, Keyword.get(bmeta, :trailing))
+  end
+
+  defp prepend_node_trivia(list, _key, nil), do: list
+
+  defp prepend_node_trivia([{tag, meta, ch} | rest], key, items) when is_list(meta),
+    do: [{tag, Keyword.update(meta, key, items, &(items ++ &1)), ch} | rest]
+
+  defp prepend_node_trivia(list, _key, _items), do: list
+
+  defp append_node_trivia(list, _key, nil), do: list
+
+  defp append_node_trivia(list, key, items) when is_list(items) and items != [] do
+    case List.pop_at(list, -1) do
+      {{tag, meta, ch}, front} when is_list(meta) ->
+        front ++ [{tag, Keyword.update(meta, key, items, &(&1 ++ items)), ch}]
+
+      _ ->
+        list
+    end
+  end
+
+  defp append_node_trivia(list, _key, _items), do: list
 
   # Render a block body / statement list applying §5.4 rule 4: a single author
   # blank between two statements is preserved (a run capped at 1), signalled by a
@@ -1301,20 +1349,33 @@ defmodule Cure.Compiler.Printer do
   defp container_to_string(meta, body, depth, indent) do
     type = Keyword.get(meta, :container_type)
 
-    case type do
-      :module -> module_to_string(meta, body, depth, indent)
-      :struct -> record_to_string(meta, body, depth, indent)
-      :enum -> enum_to_string(meta, body, depth, indent)
-      :protocol -> protocol_to_string(meta, body, depth, indent)
-      :trait -> impl_to_string(meta, body, depth, indent)
-      :fsm -> fsm_to_string(meta, body, depth, indent)
-      :supervisor -> supervisor_to_string(meta, body, depth, indent)
-      :actor -> actor_to_string(meta, body, depth, indent)
-      :app -> app_to_string(meta, body, depth, indent)
-      :proof -> proof_to_string(meta, body, depth, indent)
-      _ -> inspect({:container, meta, body})
-    end
+    result =
+      case type do
+        :module -> module_to_string(meta, body, depth, indent)
+        :struct -> record_to_string(meta, body, depth, indent)
+        :enum -> enum_to_string(meta, body, depth, indent)
+        :protocol -> protocol_to_string(meta, body, depth, indent)
+        :trait -> impl_to_string(meta, body, depth, indent)
+        :fsm -> fsm_to_string(meta, body, depth, indent)
+        :supervisor -> supervisor_to_string(meta, body, depth, indent)
+        :actor -> actor_to_string(meta, body, depth, indent)
+        :app -> app_to_string(meta, body, depth, indent)
+        :proof -> proof_to_string(meta, body, depth, indent)
+        :primitive -> primitive_to_string(meta, body, depth, indent)
+        _ -> inspect({:container, meta, body})
+      end
+
+    # A module-level decorator (`@group(:g)`) attaches to the container itself and
+    # prints on its own line directly above it — the canonical above-`mod` form.
+    maybe_prepend_decorator(result, nil, Keyword.get(meta, :decorator), depth, indent)
   end
+
+  # -- Primitive type home (`primitive Name`) --------------------------------
+  #
+  # An irreducible base type (`Int`, `Float`, `Binary`, `Atom`) given a documented
+  # module home. The body is empty; a `@builtin(:tag)` decorator (in meta) prints
+  # on the preceding line via `maybe_prepend_decorator/5` in `container_to_string`.
+  defp primitive_to_string(meta, _body, _depth, _indent), do: "primitive #{Keyword.get(meta, :name)}"
 
   # -- Supervisor container (`sup Name`) -------------------------------------
   #

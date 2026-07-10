@@ -4994,8 +4994,11 @@ defmodule Cure.Compiler.Parser do
 
     # Module-level decorators (e.g. `@group(:core)`) describe the MODULE. The
     # canonical form is `@group(:g)` directly above `mod`, where it attaches to
-    # the module container (spec 2026-07-10-group-decorator-placement). Any
-    # other position is a hard error — the in-body form is not tolerated.
+    # the module container (spec 2026-07-10-group-decorator-placement). The
+    # in-body form is deprecated, not fatal: hard-failing would make a file using
+    # the old placement unparseable — and therefore un-migratable — so we mirror
+    # the `if`→`pickup` path (emit a deprecation event, keep the decorator node)
+    # and let `cure migrate`'s @group-hoist rule relocate it to the canonical spot.
     if dec_name in @module_level_decorators do
       case peek(state) do
         %Token{type: :keyword, value: :mod} ->
@@ -5003,7 +5006,7 @@ defmodule Cure.Compiler.Parser do
           {attach_decorator(mod_ast, dec_name, args), state}
 
         _ ->
-          state = add_error(state, {:group_not_above_module, token.line, token.col})
+          state = emit_group_placement_deprecation(state, token, dec_name)
           ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
           {ast, state}
       end
@@ -5504,6 +5507,24 @@ defmodule Cure.Compiler.Parser do
     if state.emit_events do
       payload =
         {:if_deprecated, "`if`/`elif` are deprecated; rewrite as `pickup` (E-IF-REMOVED, see docs/PICKUP.md §17)",
+         line: token.line, col: token.col}
+
+      Events.emit(:parser, :deprecation, payload, Events.meta(state.file, token.line))
+    end
+
+    state
+  end
+
+  # A module-level decorator (`@group`) placed somewhere other than directly above
+  # `mod` is the deprecated in-body form. Mirroring `emit_if_deprecation/2`, emit a
+  # deprecation event (spec-reserved code `E-GROUP-PLACEMENT`) rather than a hard
+  # error, so the file still parses and the @group-hoist migration can relocate it.
+  defp emit_group_placement_deprecation(state, token, dec_name) do
+    if state.emit_events do
+      payload =
+        {:group_not_above_module,
+         "@#{dec_name}(...) belongs directly above `mod`; rewrite via `cure migrate` " <>
+           "(E-GROUP-PLACEMENT, see docs/superpowers/specs/2026-07-10-group-decorator-placement)",
          line: token.line, col: token.col}
 
       Events.emit(:parser, :deprecation, payload, Events.meta(state.file, token.line))
