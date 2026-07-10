@@ -7,15 +7,15 @@ defmodule Cure.Elab.TotalityClosureTest do
   @dcoupled {:ctor, :Dcoupled, []}
   @causal {:ctor, :Causal, []}
   @svdesc {:data, :SVDesc, [], []}
-  @dec_motive {:lam, @dec, @dec}
+  @dec_motive {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}
 
-  defp and_type, do: {:pi, @dec, {:pi, @dec, @dec}}
+  defp and_type, do: {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}}
 
   defp and_body do
     inner = {:case, {:var, 0}, @dec_motive, [{:Dcoupled, 0, @dcoupled}, {:Causal, 0, @causal}]}
 
-    {:lam, @dec,
-     {:lam, @dec,
+    {:lam, Cure.Core.Grade.unrestricted(), @dec,
+     {:lam, Cure.Core.Grade.unrestricted(), @dec,
       {:case, {:var, 1}, @dec_motive, [{:Dcoupled, 0, @dcoupled}, {:Causal, 0, inner}]}}}
   end
 

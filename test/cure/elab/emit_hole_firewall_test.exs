@@ -29,7 +29,7 @@ defmodule Cure.Elab.EmitHoleFirewallTest do
   # still all that stands between an unfilled proof obligation and a shipped
   # binary. Same #102 property, new vehicle.
   defp case_transport_with_hole_proof do
-    id_branch = {:reflexive, 1, {:lam, {:type, 0}, {:var, 0}}}
+    id_branch = {:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}}
     {:app, {:case, {:hole, "p"}, {:type, 0}, [id_branch]}, {:int_lit, 0}}
   end
 

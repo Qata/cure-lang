@@ -42,7 +42,22 @@ defmodule Cure.Core.Env do
   must `check_def/2` it before it may be referenced; certification (M7.2) gates
   whether δ-reduction may unfold it.
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t() | nil) :: t()
+  @typedoc """
+  What a definition's body slot may actually hold.
+
+  Three inhabitants, and only the first is a Core term:
+
+    * a `Cure.Core.Term.t()` — an ordinary definition;
+    * `nil` — a builtin, seeded with a type but no body (`Cure.Core.Builtins`);
+    * `{:extern, {mod, fun, arity}}` — an `@extern` FFI binding, whose body lives
+      on the BEAM, not in Core.
+
+  The spec used to claim this was always a term. Dialyzer disagreed, and it was
+  right: `Declarations` passes the `:extern` tuple and `Builtins` passes `nil`.
+  """
+  @type def_body :: Cure.Core.Term.t() | nil | {:extern, {module(), atom(), arity()}}
+
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body()) :: t()
   def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil)
 
   @doc """
@@ -50,7 +65,7 @@ defmodule Cure.Core.Env do
   (`nil` = unspecified/all runtime-relevant). Erased parameters are dropped by
   erasure (M8.3 / M9).
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t() | nil, [atom()] | nil) :: t()
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body(), [atom()] | nil) :: t()
   def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities),
     do: %{
       env
@@ -197,6 +212,7 @@ defmodule Cure.Core.Env do
 end
 
 defmodule Cure.Core.Inductive do
+  alias Cure.Core.Grade
   @moduledoc """
   Representation of indexed inductive families and their constructors
   (design spec §4.4; mirrors Idris `Core/Context/Data.idr` and Lean
@@ -215,7 +231,12 @@ defmodule Cure.Core.Inductive do
   alias Cure.Core.Env
 
   @type telescope :: [{atom(), Cure.Core.Term.t()}]
-  @type quantity :: :erased | :present
+  @typedoc """
+  A definition's or constructor's per-argument quantity. This is the **grade
+  carrier** (`Cure.Core.Grade.t/0`), not a bespoke pair: `:erased` is `0`, and
+  the other three inhabitants all denote a runtime-present argument.
+  """
+  @type quantity :: Grade.t()
   @type family :: %{
           :name => atom(),
           :params => telescope(),
@@ -279,12 +300,12 @@ defmodule Cure.Core.Inductive do
 
   @doc """
   Build a constructor signature. Every argument defaults to runtime-relevant
-  (`:present`, quantity ω); use `ctor/4` to mark inferred index arguments
+  (`:unrestricted`, quantity ω); use `ctor/4` to mark inferred index arguments
   `:erased` (quantity 0) so they are dropped by erasure (M8.3 / M9).
   """
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()]) :: ctor()
   def ctor(name, arg_tele, result_indices),
-    do: ctor(name, arg_tele, result_indices, List.duplicate(:present, length(arg_tele)))
+    do: ctor(name, arg_tele, result_indices, List.duplicate(:unrestricted, length(arg_tele)))
 
   @doc "Build a constructor signature with explicit {0,ω} argument quantities."
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()]) :: ctor()
@@ -385,7 +406,7 @@ defmodule Cure.Core.Inductive do
     end
   end
 
-  @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:present`)."
+  @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:unrestricted`)."
   @spec ctor_quantities(Env.t(), atom()) :: [quantity()] | nil
   def ctor_quantities(env, cname) do
     case get_ctor(env, cname) do
@@ -467,7 +488,7 @@ defmodule Cure.Core.Inductive do
   # positive, a negative one (`Neg t = t -> Empty`) drops it left of an arrow and
   # is rejected. An opaque/constructorless carrier has unknowable polarity and is
   # conservatively rejected.
-  defp strictly_positive?(env, fname, {:pi, dom, cod}, seen),
+  defp strictly_positive?(env, fname, {:pi, _g, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
   # A recursive occurrence of the family itself is strictly positive ONLY when

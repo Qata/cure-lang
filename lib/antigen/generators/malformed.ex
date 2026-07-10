@@ -98,12 +98,12 @@ defmodule Antigen.Generators.Malformed do
       # a case whose MOTIVE result is not a well-formed type → check_motive_wf's
       # :bad_motive via infer_type_value_sort: a bound non-type var (λv.v), an
       # unknown family (λv.NoSuchFamily), or a bare value (λv.Z).
-      {1, tagged(case_bad_motive({:lam, @nat, {:var, 0}}), "case motive returns a non-type var", :motive_non_type_var)},
-      {1, tagged(case_bad_motive({:lam, @nat, {:data, :NoSuchFamily, [], []}}), "case motive returns an unknown family", :motive_unknown_family)},
-      {1, tagged(case_bad_motive({:lam, @nat, @z}), "case motive returns a bare value", :motive_bare_value)},
+      {1, tagged(case_bad_motive({:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}), "case motive returns a non-type var", :motive_non_type_var)},
+      {1, tagged(case_bad_motive({:lam, Cure.Core.Grade.unrestricted(), @nat, {:data, :NoSuchFamily, [], []}}), "case motive returns an unknown family", :motive_unknown_family)},
+      {1, tagged(case_bad_motive({:lam, Cure.Core.Grade.unrestricted(), @nat, @z}), "case motive returns a bare value", :motive_bare_value)},
       {1,
        tagged(
-         case_bad_motive({:lam, @nat, {:app, {:var, 0}, @z}}),
+         case_bad_motive({:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:var, 0}, @z}}),
          "case motive applies a non-function (Nat-typed) head — napp reject path",
          :motive_napp_reject
        )}
@@ -119,7 +119,7 @@ defmodule Antigen.Generators.Malformed do
   # `case Z of {Z→Z; S→Z; <bad>→Z}` — the full Nat ctor set (coverage passes) plus
   # a spurious final branch the kernel rejects in check_case_branches.
   defp case_extra_branch(bad_ctor) do
-    {:case, @z, {:lam, @nat, @nat}, [{:Z, 0, @z}, {:S, 1, @z}, {bad_ctor, 0, @z}]}
+    {:case, @z, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}, {:S, 1, @z}, {bad_ctor, 0, @z}]}
   end
 
   # rewrite with a VALID Eq proof but a body that does not inhabit the motive at
@@ -131,7 +131,7 @@ defmodule Antigen.Generators.Malformed do
       # transport expects a Nat body; body is a Bd
       Gen.bind(bd_ctor(), fn b ->
         tagged(
-          {:app, transport({:ctor, :reflexive, [@nat, @z]}, @nat, {:lam, @nat, @nat}, @z), b},
+          {:app, transport({:ctor, :reflexive, [@nat, @z]}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, @z), b},
           "transport body ill-typed (Nat motive, Bd body)",
           :rewrite_premise
         )
@@ -140,7 +140,7 @@ defmodule Antigen.Generators.Malformed do
       Gen.bind(numeral(), fn n ->
         tagged(
           {:app,
-           transport({:ctor, :reflexive, [@bd, {:ctor, :T, []}]}, @bd, {:lam, @bd, @bd},
+           transport({:ctor, :reflexive, [@bd, {:ctor, :T, []}]}, @bd, {:lam, Cure.Core.Grade.unrestricted(), @bd, @bd},
              {:ctor, :T, []}), n},
           "transport body ill-typed (Bd motive, Nat body)",
           :rewrite_premise
@@ -153,9 +153,9 @@ defmodule Antigen.Generators.Malformed do
   # elaborator's `transport_case/4`; replaced the retired `{:rewrite}` node.
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
-    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
+    arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
 # NOTE: the `{:absurd}` family is exercised by this generator's assay test (which
@@ -174,7 +174,7 @@ defmodule Antigen.Generators.Malformed do
   # case over a scrutinee that does NOT infer to a data value.
   defp case_non_data do
     Gen.bind(non_data(), fn scrut ->
-      tagged({:case, scrut, {:lam, @nat, @nat}, []}, "case scrutinee not data", :case_scrutinee_not_data)
+      tagged({:case, scrut, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, []}, "case scrutinee not data", :case_scrutinee_not_data)
     end)
   end
 
@@ -189,7 +189,7 @@ defmodule Antigen.Generators.Malformed do
   defp rewrite_bad_proof do
     Gen.bind(non_eq_proof(), fn pr ->
       tagged(
-        {:app, transport(pr, @nat, {:lam, @nat, @nat}, @z), @z},
+        {:app, transport(pr, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, @z), @z},
         "transport proof not an equality",
         :rewrite_bad_proof
       )
@@ -203,8 +203,8 @@ defmodule Antigen.Generators.Malformed do
     Gen.one_of([
       literal(),
       Gen.return({:type, 0}),
-      Gen.return({:pi, @nat, @nat}),
-      Gen.return({:lam, @nat, @z})
+      Gen.return({:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}),
+      Gen.return({:lam, Cure.Core.Grade.unrestricted(), @nat, @z})
     ])
   end
 

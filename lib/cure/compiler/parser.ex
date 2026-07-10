@@ -1414,16 +1414,23 @@ defmodule Cure.Compiler.Parser do
     # Assignment has BP 5, so parsing at BP 6 stops before `=`
     {pattern, state} = parse_expr(state, 6)
 
-    # Check for type annotation
-    {type_ann, state} =
-      case peek(state) do
-        %Token{type: :colon} ->
-          state = advance(state)
-          {type_expr, state} = parse_type_expr(state)
-          {type_expr, state}
+    # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
+    # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
+    let_name = case pattern do
+      {:variable, _, n} -> n
+      _ -> "let binding"
+    end
+    {grade, type_ann, state} = parse_binder_annotation(state, let_name, [:assign])
 
-        _ ->
-          {nil, state}
+    # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
+    # to a `case`, whose binders take their grades from the constructor's field
+    # quantities, so there is no single Core binder for this grade to land on. Reject
+    # it here rather than parse it and silently ignore the annotation.
+    state =
+      if grade && not match?({:variable, _, _}, pattern) do
+        add_error(state, {:graded_let_requires_variable, grade, token.line, token.col})
+      else
+        state
       end
 
     # Expect =
@@ -1435,6 +1442,7 @@ defmodule Cure.Compiler.Parser do
 
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
+    meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -2586,26 +2594,107 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # QTT grades (plan slice 5). A grade REPLACES the binder's colon and sits at the
+  # binding site: `c :linear Chan(Cmd)`, `{n :erased Nat}`. An absent grade means
+  # `ω`, so every existing program is unchanged.
+  #
+  # The grade belongs to the ARROW, not to the name and not to the type: Core spells
+  # it `{:pi, g, dom, cod}` and `Conv` compares `g` as part of the Pi while `dom` is
+  # an ordinary type. `linear c` would decorate the name; `c: linear T` would claim
+  # `linear T` is a type, and Core has no modality former.
+  #
+  # Idris spells quantities as bare numerals (`Idris/Parser.idr:647-653`) and Cure
+  # cannot: `fn f(x: 1)` already parses with `1` as a literal type, and `?` is
+  # already the hole token, so neither `:1` nor `1?` is free. Idris has no affine
+  # grade to port a spelling from anyway. These atoms already lex as single tokens,
+  # are unambiguous after a binder name, and — being atoms, not keywords — steal no
+  # identifiers.
+  #
+  # `:unrestricted` is deliberately NOT a spelling: `ω` is written by omission, so
+  # each grade has exactly ONE surface form.
+  @grade_atoms [:erased, :linear, :affine]
+
+  # After a binder NAME, an ATOM token is unambiguously a grade slot — a type
+  # annotation needs a colon first (`x: :ok`), whereas the grade's fused `:name`
+  # form lexes as one atom. So `:erased/:linear/:affine` → that grade; any OTHER
+  # atom (`:bogus`, or `:unrestricted`, which has no spelling) → a NAMED
+  # `{:unknown_grade, …}` rather than a silent no-op that desyncs the param list.
+  defp parse_grade(state) do
+    case peek(state) do
+      %Token{type: :atom, value: g} when g in @grade_atoms ->
+        {:grade, g, advance(state)}
+
+      %Token{type: :atom, value: bad} = tok ->
+        {:unknown, bad, tok, advance(state)}
+
+      _ ->
+        {:none, state}
+    end
+  end
+
+  # Tokens that cannot begin a type — after a grade, one of these means the required
+  # type is missing, so name THAT rather than let `parse_type_expr` swallow the token.
+  @non_type_tokens [:rparen, :rbrace, :rbracket, :comma, :assign, :newline, :indent, :dedent, :eof]
+
+  # A binder's annotation: `: Type`, or the graded `:g Type`. `name` labels the binder
+  # for diagnostics.
+  #
+  # `stop_on` names the tokens that may legally FOLLOW a grade in place of a type. A
+  # parameter has none, so `c :linear` is an error — there is nothing to grade. A
+  # `let` stops on `=`, because Idris's `letBinder` leaves the type optional even when
+  # graded (`Idris/Parser.idr:821-824`) and `let_inferred/8` will synthesise it.
+  defp parse_binder_annotation(state, name, stop_on \\ []) do
+    case parse_grade(state) do
+      {:none, state} ->
+        case peek(state) do
+          %Token{type: :colon} ->
+            {type_ast, state} = parse_type_expr(advance(state))
+            {nil, type_ast, state}
+
+          _ ->
+            {nil, nil, state}
+        end
+
+      {:unknown, bad, tok, state} ->
+        # Consume the stray atom (already advanced past it) and name it, so the error
+        # points at the grade rather than cascading onto the next real token.
+        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col})}
+
+      {:grade, grade, state} ->
+        cond do
+          peek(state).type in stop_on ->
+            {grade, nil, state}
+
+          peek(state).type in @non_type_tokens ->
+            tok = peek(state)
+            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col})}
+
+          true ->
+            {type_ast, state} = parse_type_expr(state)
+            {grade, type_ast, state}
+        end
+    end
+  end
+
+  defp put_binder_meta(meta, grade, type_ast) do
+    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
+    if grade, do: Keyword.put(meta, :grade, grade), else: meta
+  end
+
   # `{name}` or `{name: Type}` — an implicit, erased argument (design spec §6).
   # Its type may be omitted and inferred by the elaborator from later parameter
-  # types / the return type.
+  # types / the return type. `{name :g Type}` overrides the erased default.
   defp parse_implicit_param(state) do
     state = advance(state)
     name_token = peek(state)
     name = to_string(name_token.value)
     state = advance(state)
 
-    {type_ast, state} =
-      case peek(state) do
-        %Token{type: :colon} -> parse_type_expr(advance(state))
-        _ -> {nil, state}
-      end
+    {grade, type_ast, state} = parse_binder_annotation(state, name)
 
     state = expect(state, :rbrace)
 
-    meta = [implicit: true]
-    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
-    {{:param, meta, name}, state}
+    {{:param, put_binder_meta([implicit: true], grade, type_ast), name}, state}
   end
 
   defp parse_explicit_param(state) do
@@ -2631,16 +2720,8 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    # Optional type annotation: : Type
-    {type_ast, state} =
-      case peek(state) do
-        %Token{type: :colon} ->
-          state = advance(state)
-          parse_type_expr(state)
-
-        _ ->
-          {nil, state}
-      end
+    # Optional type annotation `: Type`, or a graded one `:g Type`.
+    {grade, type_ast, state} = parse_binder_annotation(state, name)
 
     # Optional default value: = expr
     {default, state} =
@@ -2655,8 +2736,7 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    param_meta = []
-    param_meta = if type_ast, do: Keyword.put(param_meta, :type, type_ast), else: param_meta
+    param_meta = put_binder_meta([], grade, type_ast)
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
@@ -5011,8 +5091,11 @@ defmodule Cure.Compiler.Parser do
 
     # Module-level decorators (e.g. `@group(:core)`) describe the MODULE. The
     # canonical form is `@group(:g)` directly above `mod`, where it attaches to
-    # the module container (spec 2026-07-10-group-decorator-placement). Any
-    # other position is a hard error — the in-body form is not tolerated.
+    # the module container (spec 2026-07-10-group-decorator-placement). The
+    # in-body form is deprecated, not fatal: hard-failing would make a file using
+    # the old placement unparseable — and therefore un-migratable — so we mirror
+    # the `if`→`pickup` path (emit a deprecation event, keep the decorator node)
+    # and let `cure migrate`'s @group-hoist rule relocate it to the canonical spot.
     if dec_name in @module_level_decorators do
       case peek(state) do
         %Token{type: :keyword, value: :mod} ->
@@ -5020,7 +5103,7 @@ defmodule Cure.Compiler.Parser do
           {attach_decorator(mod_ast, dec_name, args), state}
 
         _ ->
-          state = add_error(state, {:group_not_above_module, token.line, token.col})
+          state = emit_group_placement_deprecation(state, token, dec_name)
           ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
           {ast, state}
       end
@@ -5521,6 +5604,24 @@ defmodule Cure.Compiler.Parser do
     if state.emit_events do
       payload =
         {:if_deprecated, "`if`/`elif` are deprecated; rewrite as `pickup` (E-IF-REMOVED, see docs/PICKUP.md §17)",
+         line: token.line, col: token.col}
+
+      Events.emit(:parser, :deprecation, payload, Events.meta(state.file, token.line))
+    end
+
+    state
+  end
+
+  # A module-level decorator (`@group`) placed somewhere other than directly above
+  # `mod` is the deprecated in-body form. Mirroring `emit_if_deprecation/2`, emit a
+  # deprecation event (spec-reserved code `E-GROUP-PLACEMENT`) rather than a hard
+  # error, so the file still parses and the @group-hoist migration can relocate it.
+  defp emit_group_placement_deprecation(state, token, dec_name) do
+    if state.emit_events do
+      payload =
+        {:group_not_above_module,
+         "@#{dec_name}(...) belongs directly above `mod`; rewrite via `cure migrate` " <>
+           "(E-GROUP-PLACEMENT, see docs/superpowers/specs/2026-07-10-group-decorator-placement)",
          line: token.line, col: token.col}
 
       Events.emit(:parser, :deprecation, payload, Events.meta(state.file, token.line))

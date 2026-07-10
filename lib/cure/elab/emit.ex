@@ -21,7 +21,7 @@ defmodule Cure.Elab.Emit do
   """
 
   alias Cure.Compiler.BeamWriter
-  alias Cure.Core.{Env, Inductive, Validator}
+  alias Cure.Core.{Grade, Env, Inductive, Validator}
   alias Cure.Elab.Erase
 
   @line 1
@@ -131,7 +131,7 @@ defmodule Cure.Elab.Emit do
 
   # Wave-3: emit a direct Erlang remote call, mirroring codegen.ex:691-705 (NOT
   # calling it). Params are synthesized from the arity — a bodyless extern has no
-  # {:lam,…} chain to peel, so peel_params/4 would yield zero params for arity>0.
+  # {:lam, Cure.Core.Grade.unrestricted(),…} chain to peel, so peel_params/4 would yield zero params for arity>0.
   # `0..(arity-1)//1` yields `[]` at arity 0 → `mod:fun()`, correct.
   #
   # The arity is the def's PRESENT count, as in `real_function_form/3` and at every call site
@@ -153,7 +153,7 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, inner, ctx)
 
     params =
-      for {n, :present} <- Enum.zip(param_names, qs),
+      for {n, :unrestricted} <- Enum.zip(param_names, qs),
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     clause = {:clause, @line, params, [], [body_form]}
@@ -164,8 +164,8 @@ defmodule Cure.Elab.Emit do
   # as Erlang params) and erased binders `_e<pos>` (dead after erasure).
   defp peel_params(term, [], _pos, acc), do: {Enum.reverse(acc), term}
 
-  defp peel_params({:lam, _dom, body}, [q | qs], pos, acc) do
-    name = if q == :present, do: :"V#{pos}", else: :"_e#{pos}"
+  defp peel_params({:lam, _g, _dom, body}, [q | qs], pos, acc) do
+    name = if Grade.present?(q), do: :"V#{pos}", else: :"_e#{pos}"
     peel_params(body, qs, pos + 1, [name | acc])
   end
 
@@ -248,10 +248,20 @@ defmodule Cure.Elab.Emit do
 
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
-  defp lower(env, {:lam, _dom, body}, ctx) do
+  defp lower(env, {:lam, _g, _dom, body}, ctx) do
     var = :"Fn#{length(ctx)}"
     clause = {:clause, @line, [{:var, @line, var}], [], [lower(env, body, [var | ctx])]}
     {:fun, @line, {:clauses, [clause]}}
+  end
+
+  # `let x := v in body`  ⟶  `begin Lk = <v>, <body> end`. This is the whole
+  # payoff of the `:let` binder: `v` is emitted ONCE and bound to a BEAM variable,
+  # where surface substitution emitted it at every use site (and not at all at
+  # zero uses). Its parameter takes de Bruijn index 0 in the body's frame.
+  defp lower(env, {:let, _g, _ty, val, body}, ctx) do
+    var = :"L#{length(ctx)}"
+    bind = {:match, @line, {:var, @line, var}, lower(env, val, ctx)}
+    {:block, @line, [bind, lower(env, body, [var | ctx])]}
   end
 
   defp lower(env, {:app, _, _} = app, ctx) do
@@ -451,7 +461,7 @@ defmodule Cure.Elab.Emit do
 
   defp present_arity(env, name) do
     case Env.get_def(env, name) do
-      %{quantities: qs} when is_list(qs) -> Enum.count(qs, &(&1 == :present))
+      %{quantities: qs} when is_list(qs) -> Enum.count(qs, &Grade.present?/1)
       _ -> 0
     end
   end
@@ -583,13 +593,13 @@ defmodule Cure.Elab.Emit do
   # `First`, matching literal 0; one present field -> `Next`, matching a fresh N
   # with guard `N > 0` and binding the predecessor `pred = N - 1`.
   defp bounded_branch_clause(env, {name, arity, body}, ctx) do
-    quantities = Inductive.ctor_quantities(env, name) || List.duplicate(:present, arity)
+    quantities = Inductive.ctor_quantities(env, name) || List.duplicate(:unrestricted, arity)
     base = length(ctx)
     field_names = for i <- indices(arity), do: :"V#{base + i}"
     new_ctx = Enum.reverse(field_names) ++ ctx
     body_form = lower(env, body, new_ctx)
 
-    case Enum.find_index(quantities, &(&1 == :present)) do
+    case Enum.find_index(quantities, &Grade.present?/1) do
       nil ->
         # `First`: only the erased index -> matches literal 0.
         {:clause, @line, [{:integer, @line, 0}], [], [body_form]}
@@ -606,13 +616,13 @@ defmodule Cure.Elab.Emit do
   end
 
   defp generic_branch_clause(env, {cname, arity, body}, ctx) do
-    quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, arity)
+    quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:unrestricted, arity)
     base = length(ctx)
 
     fields =
       for i <- indices(arity) do
-        q = Enum.at(quantities, i, :present)
-        if q == :present, do: {:present, :"V#{base + i}"}, else: {:erased, :"_f#{base + i}"}
+        q = Enum.at(quantities, i, :unrestricted)
+        if q == :unrestricted, do: {:unrestricted, :"V#{base + i}"}, else: {:erased, :"_f#{base + i}"}
       end
 
     field_names = Enum.map(fields, fn {_q, n} -> n end)
@@ -620,7 +630,7 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, body, new_ctx)
 
     present =
-      for {:present, n} <- fields,
+      for {:unrestricted, n} <- fields,
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     pattern =
@@ -684,7 +694,7 @@ defmodule Cure.Elab.Emit do
   defp bounded_present_args(env, name, args) do
     case Inductive.ctor_quantities(env, name) do
       qs when is_list(qs) and length(qs) == length(args) ->
-        for {a, :present} <- Enum.zip(args, qs), do: a
+        for {a, :unrestricted} <- Enum.zip(args, qs), do: a
 
       _ ->
         args

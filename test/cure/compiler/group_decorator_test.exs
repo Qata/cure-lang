@@ -2,7 +2,8 @@ defmodule Cure.Compiler.GroupDecoratorTest do
   @moduledoc """
   `@group(:g)` placed ABOVE `mod` attaches to the module container (spec
   2026-07-10-group-decorator-placement). This test file grows across the
-  expand→migrate→contract tasks; Task 4 adds the hard-error case.
+  expand→migrate→contract tasks; the in-body placement is a tolerated deprecation
+  (parses, emits `E-GROUP-PLACEMENT`) so `cure migrate` can hoist it.
   """
   use ExUnit.Case, async: true
 
@@ -43,11 +44,20 @@ defmodule Cure.Compiler.GroupDecoratorTest do
     assert {:group, [{:literal, _, :core}]} = Keyword.get(meta, :decorator)
   end
 
-  test "@group inside the mod body is a hard parse error" do
-    errors =
-      parse_errors("mod M\n  @group(:core)\n  fn f(x: Int) -> Int = x\nend\n")
+  test "@group inside the mod body is tolerated (deprecated), not a hard error" do
+    src = "mod M\n  @group(:core)\n  fn f(x: Int) -> Int = x\nend\n"
 
-    assert Enum.any?(errors, &match?({:group_not_above_module, _line, _col}, &1)),
-           "expected a :group_not_above_module error, got: #{inspect(errors)}"
+    assert parse_errors(src) == [],
+           "in-body @group must parse so the @group-hoist migration can relocate it"
+
+    # It survives as an un-hoisted in-body decorator node, ready for the migration.
+    assert deep_has_decorator?(parse!(src)),
+           "expected the in-body @group to remain as a :decorator node"
   end
+
+  # True iff the tree carries a `{:decorator, meta, _}` node naming `group`.
+  defp deep_has_decorator?({:decorator, meta, _}), do: Keyword.get(meta, :name) in [:group, "group"]
+  defp deep_has_decorator?({_tag, _meta, children}), do: deep_has_decorator?(children)
+  defp deep_has_decorator?(list) when is_list(list), do: Enum.any?(list, &deep_has_decorator?/1)
+  defp deep_has_decorator?(_), do: false
 end

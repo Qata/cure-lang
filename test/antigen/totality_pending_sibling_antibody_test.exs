@@ -32,7 +32,7 @@ defmodule Antigen.TotalityPendingSiblingAntibodyTest do
     env = Gen.env_of(c)
 
     assert %{body: {:hole, "__pending__"}} = Env.get_def(env, :g)
-    assert %{body: {:lam, _, _}} = Env.get_def(env, :f)
+    assert %{body: {:lam, _g, _, _}} = Env.get_def(env, :f)
   end
 
   test "the certifier DEFERS f while g is pending (does not certify)" do

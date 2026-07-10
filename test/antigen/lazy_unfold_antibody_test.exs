@@ -40,7 +40,7 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
   defp plus_body do
     z_branch = {:Z, 0, {:var, 0}}
     s_branch = {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}
-    {:lam, @nat, {:lam, @nat, {:case, {:var, 1}, {:lam, @nat, @nat}, [z_branch, s_branch]}}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
   end
 
   defp env do
@@ -49,7 +49,7 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
       Inductive.ctor(:Z, [], []),
       Inductive.ctor(:S, [{:n, @nat}], [])
     ])
-    |> Env.add_def(:plus, {:pi, @nat, {:pi, @nat, @nat}}, plus_body())
+    |> Env.add_def(:plus, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, plus_body())
     |> Env.certify(:plus)
   end
 
@@ -133,16 +133,16 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
   # Θ(2ᵈ). Deciding productiveness and firing ι must share ONE whnf of `f k`.
   defp f_env do
     inner_case =
-      {:case, {:app, {:global, :f}, {:var, 0}}, {:lam, @nat, @nat}, [{:Z, 0, @z}, {:S, 1, @z}]}
+      {:case, {:app, {:global, :f}, {:var, 0}}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}, {:S, 1, @z}]}
 
-    body = {:lam, @nat, {:case, {:var, 0}, {:lam, @nat, @nat}, [{:Z, 0, @z}, {:S, 1, inner_case}]}}
+    body = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}, {:S, 1, inner_case}]}}
 
     Env.empty()
     |> Inductive.declare(Inductive.family(:Nat, [], [], 0), [
       Inductive.ctor(:Z, [], []),
       Inductive.ctor(:S, [{:n, @nat}], [])
     ])
-    |> Env.add_def(:f, {:pi, @nat, @nat}, body)
+    |> Env.add_def(:f, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body)
     |> Env.certify(:f)
   end
 

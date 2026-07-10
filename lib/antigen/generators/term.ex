@@ -57,13 +57,13 @@ defmodule Antigen.Generators.Term do
   # Route a check-mode-only top-level term through an identity-application wrap so
   # Assays.Term.run/2's unconditional `k.infer.(ctx, p.term)` never hits a shape
   # with no infer path (a bare `:pair` has no infer clause; a bare param-bearing
-  # `:ctor` errors `:ctor_requires_checking_mode`). `infer` on `{:app, {:lam, goal,
+  # `:ctor` errors `:ctor_requires_checking_mode`). `infer` on `{:app, {:lam, Cure.Core.Grade.unrestricted(), goal,
   # {:var,0}}, term}` infers the identity lambda's `goal -> goal`, then CHECKS
   # `term` against the domain `goal` — the check-mode path these shapes need — and
   # the overall type reduces back to `goal`, so downstream use of `inferred` is
   # unaffected. Every other v1 top-level shape already has a working infer path.
   defp top_level_term(ctx, goal, term) do
-    if check_mode_only?(ctx, term), do: {:app, {:lam, goal, {:var, 0}}, term}, else: term
+    if check_mode_only?(ctx, term), do: {:app, {:lam, Cure.Core.Grade.unrestricted(), goal, {:var, 0}}, term}, else: term
   end
 
   # The Sigma pair `mk_pair` is check-mode-only (a ctor of a params-carrying family),
@@ -127,15 +127,15 @@ defmodule Antigen.Generators.Term do
   end
 
   # -- check-mode introductions ----------------------------------------------
-  defp intro_rules(ctx, _goal, {:pi, dom, cod}, size) do
+  defp intro_rules(ctx, _goal, {:pi, _g, dom, cod}, size) do
     body_ctx = Context.extend(ctx, Eval.eval(dom, Context.env(ctx)))
-    [{3, Gen.bind(gen(body_ctx, cod, size - 1), fn b -> Gen.return({:lam, dom, b}) end)}]
+    [{3, Gen.bind(gen(body_ctx, cod, size - 1), fn b -> Gen.return({:lam, Cure.Core.Grade.unrestricted(), dom, b}) end)}]
   end
 
-  defp intro_rules(ctx, _goal, {:data, :Sigma, [a, {:lam, _a, b}], []}, size) do
+  defp intro_rules(ctx, _goal, {:data, :Sigma, [a, {:lam, _g, _a, b}], []}, size) do
     [{3,
       Gen.bind(gen(ctx, a, size - 1), fn av ->
-        # `b` is the Σ codomain body, one binder deeper than `ctx` (the `{:lam, a, b}`
+        # `b` is the Σ codomain body, one binder deeper than `ctx` (the `{:lam, Cure.Core.Grade.unrestricted(), a, b}`
         # binds the first component); the second component inside `{:ctor, :mk_pair,
         # [av, bv]}` must be a term in the UNEXTENDED `ctx`, so β-substitute `av` for
         # `b`'s own bound variable via `SigMenu.subst0/3` (same reasoning as
@@ -275,7 +275,7 @@ defmodule Antigen.Generators.Term do
         [{@redex_weight,
           Gen.bind(gen_referencing(body_ctx, shift_goal(goal), size - 1, 0), fn body ->
             Gen.bind(gen(ctx, dom, size - 1), fn arg ->
-              Gen.return({:app, {:lam, dom, body}, arg})
+              Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), dom, body}, arg})
             end)
           end)}]
       _ -> []
@@ -336,7 +336,7 @@ defmodule Antigen.Generators.Term do
 
   defp case_for(ctx, fam, goal, size) do
     scrut_ty = {:data, fam, [], []}
-    motive = {:lam, scrut_ty, shift_goal(goal)}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, shift_goal(goal)}
 
     [{@redex_weight,
       Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
@@ -354,9 +354,9 @@ defmodule Antigen.Generators.Term do
 
     Enum.flat_map((if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))), fn k ->
       case whnf(ctx, Normalise.quote(Context.lookup(ctx, k), depth)) do
-        {:data, :Sigma, [a, {:lam, _a, b}], []} = st ->
-          fst_t = {:case, {:var, k}, {:lam, st, a}, [{:mk_pair, 2, {:var, 1}}]}
-          snd_t = {:case, {:var, k}, {:lam, st, b}, [{:mk_pair, 2, {:var, 0}}]}
+        {:data, :Sigma, [a, {:lam, _g, _a, b}], []} = st ->
+          fst_t = {:case, {:var, k}, {:lam, Cure.Core.Grade.unrestricted(), st, a}, [{:mk_pair, 2, {:var, 1}}]}
+          snd_t = {:case, {:var, k}, {:lam, Cure.Core.Grade.unrestricted(), st, b}, [{:mk_pair, 2, {:var, 0}}]}
           fst_r = if accept_infer?(ctx, fst_t, goal), do: [{2, Gen.return(fst_t)}], else: []
           snd_r = if accept_infer?(ctx, snd_t, goal), do: [{2, Gen.return(snd_t)}], else: []
           fst_r ++ snd_r
@@ -384,7 +384,7 @@ defmodule Antigen.Generators.Term do
   # Walk a Π-telescope, generating each domain argument.
   defp gen_args(ctx, ty, size, acc) do
     case whnf(ctx, ty) do
-      {:pi, dom, cod} ->
+      {:pi, _g, dom, cod} ->
         Gen.bind(gen(ctx, dom, size - 1), fn a ->
           # substitute `a` into `cod` by evaluating cod's closure with a's value
           cod_ctx_ty = subst_cod(cod, a, ctx)

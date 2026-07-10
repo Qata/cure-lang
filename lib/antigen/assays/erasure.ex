@@ -4,7 +4,7 @@ defmodule Antigen.Assays.Erasure do
   `Cure.Elab.Erase` / `Cure.Elab.Relevance` (spec: antigen-erasure-relevance).
 
     * erasure/idempotent — `erase∘erase == erase` + hole preservation (V4a).
-    * erasure/selective  — erase keeps exactly the :present positions (ctor + app-head).
+    * erasure/selective  — erase keeps exactly the :unrestricted positions (ctor + app-head).
     * erasure/wellformed — `term?(t) ⟹ term?(erase t)`.
     * relevance/soundness — an :erased binder used relevantly must be rejected.
 
@@ -41,7 +41,7 @@ defmodule Antigen.Assays.Erasure do
   end
 
   def run(%Challenge{kind: :erasure_term, assay: "erasure/selective", payload: %{env: env, term: {:ctor, c, args} = t, surface: :ctor}}, k) do
-    qs = k.ctor_quantities.(env, c) || List.duplicate(:present, length(args))
+    qs = k.ctor_quantities.(env, c) || List.duplicate(:unrestricted, length(args))
     expected = present_args(args, qs)
 
     case k.erase.(env, t) do
@@ -57,10 +57,10 @@ defmodule Antigen.Assays.Erasure do
     qs =
       case k.get_def.(env, name) do
         %{quantities: q} when is_list(q) -> q
-        _ -> List.duplicate(:present, length(args))
+        _ -> List.duplicate(:unrestricted, length(args))
       end
 
-    padded = qs ++ List.duplicate(:present, max(0, length(args) - length(qs)))
+    padded = qs ++ List.duplicate(:unrestricted, max(0, length(args) - length(qs)))
     expected = present_args(args, padded)
     {_h, kept} = app_spine(k.erase.(env, t), [])
     if kept == expected, do: :ok, else: {:violation, {:wrong_positions_kept, name}}
@@ -91,7 +91,7 @@ defmodule Antigen.Assays.Erasure do
   end
 
   defp present_args(args, qs) do
-    args |> Enum.zip(qs) |> Enum.filter(fn {_a, q} -> q == :present end) |> Enum.map(fn {a, _q} -> a end)
+    args |> Enum.zip(qs) |> Enum.filter(fn {_a, q} -> q == :unrestricted end) |> Enum.map(fn {a, _q} -> a end)
   end
 
   # collect an application spine head + args (left-to-right), mirroring Erase.spine/2

@@ -13,8 +13,13 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Normalise, Quote}
+  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
   alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
+
+  # Placeholder body for a `:case` branch the join point will fill (see
+  # `join_point?/5`, `elaborate_join/6`, `wrap_join/2`). Never reaches the kernel:
+  # `wrap_join/2` replaces every marker before the term escapes `elaborate_match`.
+  @join_marker :"$join_point"
 
   @doc """
   Elaborate a top-level function definition into `{:ok, core_lambda, type_value}`
@@ -356,7 +361,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp check_app_args(term, type, [arg | rest], names, ctx, env) do
     case type do
-      {:vpi, dom_value, cod_closure} ->
+      {:vpi, _g, dom_value, cod_closure} ->
         dom_term = Quote.reify(dom_value, Context.length(ctx))
 
         with {:ok, arg_term} <- elaborate_expr_checked(arg, dom_term, names, ctx, env) do
@@ -692,7 +697,7 @@ defmodule Cure.Elab.Elaborator do
     Enum.reduce(Enum.reverse(parts), {{:ctor, :unit, []}, {:data, :Unit, [], []}}, fn
       {core, type_term}, {val_acc, type_acc} ->
         value = {:ctor, mk_pair, [core, val_acc]}
-        cod = {:lam, type_term, Cure.Core.Term.shift(type_acc, 1)}
+        cod = {:lam, Cure.Core.Grade.unrestricted(), type_term, Cure.Core.Term.shift(type_acc, 1)}
         type = {:data, fam, [type_term, cod], []}
         {value, type}
     end)
@@ -811,10 +816,10 @@ defmodule Cure.Elab.Elaborator do
   # depends on the constructor-bound variables.
   defp occurs_below?({:var, k}, arity, depth), do: k >= depth and k < depth + arity
 
-  defp occurs_below?({:pi, d, c}, arity, depth),
+  defp occurs_below?({:pi, _g, d, c}, arity, depth),
     do: occurs_below?(d, arity, depth) or occurs_below?(c, arity, depth + 1)
 
-  defp occurs_below?({:lam, d, b}, arity, depth),
+  defp occurs_below?({:lam, _g, d, b}, arity, depth),
     do: occurs_below?(d, arity, depth) or occurs_below?(b, arity, depth + 1)
 
   defp occurs_below?({:case, s, m, brs}, arity, depth) do
@@ -1124,8 +1129,8 @@ defmodule Cure.Elab.Elaborator do
   # genuine context/parameter reference stays far below the threshold.
   defp mentions_prior_field?(term), do: mentions_prior_field?(term, 0)
   defp mentions_prior_field?({:var, k}, depth), do: k - depth >= @proj_field_sentinel
-  defp mentions_prior_field?({:lam, d, b}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(b, depth + 1)
-  defp mentions_prior_field?({:pi, d, c}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(c, depth + 1)
+  defp mentions_prior_field?({:lam, _g, d, b}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(b, depth + 1)
+  defp mentions_prior_field?({:pi, _g, d, c}, depth), do: mentions_prior_field?(d, depth) or mentions_prior_field?(c, depth + 1)
 
   defp mentions_prior_field?(tuple, depth) when is_tuple(tuple),
     do: tuple |> Tuple.to_list() |> Enum.any?(&mentions_prior_field?(&1, depth))
@@ -1552,13 +1557,13 @@ defmodule Cure.Elab.Elaborator do
 
   defp elaborate_lambda([{:param, _pm, pname} | rest], body_expr, expected_core, names, ctx, env) do
     case Kernel.normalize(ctx, expected_core) do
-      {:pi, dom_term, cod_term} ->
+      {:pi, _g, dom_term, cod_term} ->
         dom_value = Eval.eval(dom_term, Context.env(ctx))
         ctx1 = Context.extend(ctx, dom_value)
 
         with {:ok, body_term} <-
                elaborate_lambda(rest, body_expr, cod_term, [pname | names], ctx1, env) do
-          {:ok, {:lam, dom_term, body_term}}
+          {:ok, {:lam, Cure.Core.Grade.unrestricted(), dom_term, body_term}}
         end
 
       _ ->
@@ -1641,7 +1646,7 @@ defmodule Cure.Elab.Elaborator do
   # Phase-B adopted encoding (spec "Phase-B encoding amendment", 2026-07-08): the
   # standard J/subst transport, exactly how Agda/Lean derive `subst`/`Eq.mpr`
   # from J. Given `proof : Equivalent(ty, l, r)` and a single-endpoint motive
-  # `M = {:lam, ty, …}`, build
+  # `M = {:lam, Cure.Core.Grade.unrestricted(), ty, …}`, build
   #
   #     {:case, proof,
   #       λ(x:ty). λ(y:ty). λ(p : Equivalent(ty,x,y)). (M@x) -> (M@y),
@@ -1675,12 +1680,12 @@ defmodule Cure.Elab.Elaborator do
     scrut_ty = {:data, :Equivalent, [Subst.shift(ty, 2, 0)], [{:var, 1}, {:var, 0}]}
 
     arrow =
-      {:pi, {:app, Subst.shift(motive, 3, 0), {:var, 2}},
+      {:pi, Cure.Core.Grade.unrestricted(), {:app, Subst.shift(motive, 3, 0), {:var, 2}},
        {:app, Subst.shift(motive, 4, 0), {:var, 2}}}
 
-    arrow_motive = {:lam, ty, {:lam, Subst.shift(ty, 1, 0), {:lam, scrut_ty, arrow}}}
+    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), Subst.shift(ty, 1, 0), {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
     id_dom = {:app, Subst.shift(motive, 1, 0), Subst.shift(l, 1, 0)}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, id_dom, {:var, 0}}}]}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), id_dom, {:var, 0}}}]}
   end
 
   # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
@@ -1733,11 +1738,11 @@ defmodule Cure.Elab.Elaborator do
     # M = λz. Eq(ty, z, a); proof : Eq(ty, a, b). The transport is
     # (M@a) -> (M@b) = Eq(ty,a,a) -> Eq(ty,b,a), applied to refl(a).
     motive_body = mk_eq(Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0))
-    motive = {:lam, ty, motive_body}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), ty, motive_body}
     {:ok, {:app, transport_case(proof, ty, motive, a), mk_refl(a)}}
   end
 
-  defp motive_for(expected, target, ty), do: {:ok, {:lam, ty, abstract_term(expected, target, 0)}}
+  defp motive_for(expected, target, ty), do: {:ok, {:lam, Cure.Core.Grade.unrestricted(), ty, abstract_term(expected, target, 0)}}
 
   defp contains_term?(term, target), do: term == target or Enum.any?(children(term), &contains_term?(&1, target))
 
@@ -1758,11 +1763,11 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
   defp abstract_term({:var, _} = var, _target, _depth), do: var
 
-  defp abstract_term({:pi, d, c}, target, depth),
-    do: {:pi, abstract_term(d, target, depth), abstract_term(c, target, depth + 1)}
+  defp abstract_term({:pi, _g, d, c}, target, depth),
+    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, target, depth + 1)}
 
-  defp abstract_term({:lam, d, b}, target, depth),
-    do: {:lam, abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
+  defp abstract_term({:lam, _g, d, b}, target, depth),
+    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
 
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
@@ -1796,10 +1801,10 @@ defmodule Cure.Elab.Elaborator do
   defp free_indices({:var, i}, depth) when i >= depth, do: MapSet.new([i - depth])
   defp free_indices({:var, _}, _depth), do: MapSet.new()
 
-  defp free_indices({:pi, d, c}, depth),
+  defp free_indices({:pi, _g, d, c}, depth),
     do: MapSet.union(free_indices(d, depth), free_indices(c, depth + 1))
 
-  defp free_indices({:lam, d, b}, depth),
+  defp free_indices({:lam, _g, d, b}, depth),
     do: MapSet.union(free_indices(d, depth), free_indices(b, depth + 1))
 
   defp free_indices({:case, s, m, brs}, depth) do
@@ -1951,12 +1956,12 @@ defmodule Cure.Elab.Elaborator do
           k = length(family.indices)
           motive = if carried, do: wrap_motive_carried_eq(motive0, k, carried), else: motive0
 
-          with {:ok, branches} <-
+          with {:ok, branches, join} <-
                  elaborate_branches(
                    arms, names, ctx, env, dname,
-                   idx_vals, param_vals, scrut_term, result_type_term, carried
+                   idx_vals, param_vals, scrut_term, result_type_term, carried, motive
                  ) do
-            case_term = {:case, scrut_term, motive, branches}
+            case_term = wrap_join({:case, scrut_term, motive, branches}, join)
             {:ok, if(carried, do: {:app, case_term, mk_refl(carried.idx_term)}, else: case_term)}
           end
 
@@ -2034,7 +2039,7 @@ defmodule Cure.Elab.Elaborator do
             cond do
               # Capability A (bare value-abstraction) is SUBSUMED by the unified
               # match front-end: since Phase 2½ plain `match` value-refines the
-              # goal per branch (the same refinement A's `{:lam, T, g_abs}` motive
+              # goal per branch (the same refinement A's `{:lam, Cure.Core.Grade.unrestricted(), T, g_abs}` motive
               # provided), so `with <e>` with no proof and no sibling is exactly a
               # plain `match <e>`. (Task 3.2; the arms are already `{:match_arm}`.)
               # elaborate_match handles indexed AND non-indexed families, so the
@@ -2266,7 +2271,7 @@ defmodule Cure.Elab.Elaborator do
     eq_ty_w =
       mk_eq(Subst.shift(scrut_type_term, 1, 0), Subst.shift(scrut_term, 1, 0), {:var, 0})
 
-    {:lam, scrut_type_term, {:pi, eq_ty_w, Subst.shift(g_abs, 1, 0)}}
+    {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term, {:pi, Cure.Core.Grade.unrestricted(), eq_ty_w, Subst.shift(g_abs, 1, 0)}}
   end
 
   # In-scope parameters whose (reified) type mentions the scrutinee term, in
@@ -2379,7 +2384,7 @@ defmodule Cure.Elab.Elaborator do
       scrut_term: scrut_term, scrut_type_term: scrut_type_term} = cfg
 
     # `applied` = Π(prf : Eq(T,e,pat)). G[e↦pat]. Bind prf → the branch_ctx1 frame.
-    {:pi, eq_dom_term, cod_b1} = applied
+    {:pi, _g, eq_dom_term, cod_b1} = applied
     eq_dom_value = Eval.eval(eq_dom_term, Context.env(branch_ctx0))
     branch_ctx1 = Context.extend(branch_ctx0, eq_dom_value)
     branch_names1 = [prf_name | branch_names0]
@@ -2394,7 +2399,7 @@ defmodule Cure.Elab.Elaborator do
     sib_data =
       Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
         h_b1 = Subst.shift(h_ctx, sc, 0)
-        motive_j = {:lam, t_b1, abstract_term(h_b1, e_b1, 0)}
+        motive_j = {:lam, Cure.Core.Grade.unrestricted(), t_b1, abstract_term(h_b1, e_b1, 0)}
         # J/subst transport (Phase B): prf {:var,0} : Eq(T, e, pat); the case's
         # type is (M_j@e) -> (M_j@pat), applied to the original sibling h_j.
         # Annotation-safety (transport_case doc): M_j abstracts e out of an
@@ -2423,10 +2428,10 @@ defmodule Cure.Elab.Elaborator do
         |> Enum.with_index()
         |> Enum.reverse()
         |> Enum.reduce(inner, fn {%{dom: d, transport: t}, i}, acc ->
-          {:app, {:lam, Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
+          {:app, {:lam, Cure.Core.Grade.unrestricted(), Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
         end)
 
-      {:ok, {cname, arity, {:lam, eq_dom_term, wrapped}}}
+      {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
     end
   end
 
@@ -2502,7 +2507,7 @@ defmodule Cure.Elab.Elaborator do
 
     (index_types ++ [scrut_type])
     |> Enum.reverse()
-    |> Enum.reduce(body, fn type, acc -> {:lam, type, acc} end)
+    |> Enum.reduce(body, fn type, acc -> {:lam, Cure.Core.Grade.unrestricted(), type, acc} end)
   end
 
   # Step 3b detection. Return `nil` unless the scrutinee has EXACTLY ONE computed
@@ -2582,15 +2587,15 @@ defmodule Cure.Elab.Elaborator do
     eq_dom =
       mk_eq(Subst.shift(idx_type_term, k + 1, 0), Subst.shift(idx_term, k + 1, 0), {:var, k - pos})
 
-    new_body = {:pi, eq_dom, Subst.shift(body, 1, 0)}
+    new_body = {:pi, Cure.Core.Grade.unrestricted(), eq_dom, Subst.shift(body, 1, 0)}
 
-    Enum.reduce(binder_types, new_body, fn type, acc -> {:lam, type, acc} end)
+    Enum.reduce(binder_types, new_body, fn type, acc -> {:lam, Cure.Core.Grade.unrestricted(), type, acc} end)
   end
 
-  # Peel `n` leading `{:lam, dom, body}` binders, returning `{doms_outermost_first,
+  # Peel `n` leading `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` binders, returning `{doms_outermost_first,
   # inner_body}`.
   defp peel_lams(body, 0, acc), do: {Enum.reverse(acc), body}
-  defp peel_lams({:lam, dom, body}, n, acc), do: peel_lams(body, n - 1, [dom | acc])
+  defp peel_lams({:lam, _g, dom, body}, n, acc), do: peel_lams(body, n - 1, [dom | acc])
 
   # Rewrite the free variables of `term` for placement under the motive's k+1
   # binders (`depth` counts binders entered *within* term): a free variable that
@@ -2607,11 +2612,11 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp generalize({:pi, d, c}, rb, s, depth),
-    do: {:pi, generalize(d, rb, s, depth), generalize(c, rb, s, depth + 1)}
+  defp generalize({:pi, _g, d, c}, rb, s, depth),
+    do: {:pi, Cure.Core.Grade.unrestricted(), generalize(d, rb, s, depth), generalize(c, rb, s, depth + 1)}
 
-  defp generalize({:lam, d, b}, rb, s, depth),
-    do: {:lam, generalize(d, rb, s, depth), generalize(b, rb, s, depth + 1)}
+  defp generalize({:lam, _g, d, b}, rb, s, depth),
+    do: {:lam, Cure.Core.Grade.unrestricted(), generalize(d, rb, s, depth), generalize(b, rb, s, depth + 1)}
 
   defp generalize({:app, f, a}, rb, s, depth),
     do: {:app, generalize(f, rb, s, depth), generalize(a, rb, s, depth)}
@@ -2637,17 +2642,31 @@ defmodule Cure.Elab.Elaborator do
   # `idx_vals` are the scrutinee's index VALUES (for branch_unify); each
   # branch's expected type comes from the kernel's branch_unify verdict subst
   # plus the scrutinee-value refinement (see elaborate_matched_branch).
-  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term, carried) do
+  #
+  # Returns `{:ok, branches, join}`. `join` is `nil`, or `{join_ty, join_val}` —
+  # the JOIN POINT (plan slice 4c): the catch-all body, elaborated ONCE, which
+  # `wrap_join/2` binds around the assembled `:case`. Branches that would have
+  # re-elaborated it carry the `@join_marker` body until then.
+  defp elaborate_branches(arms, names, ctx, env, dname, idx_vals, param_vals, scrut_term, result_type_term, carried, motive) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname) do
       sig = Context.signature(ctx)
+      cnames = sig |> Inductive.ctors_of(dname) |> Enum.map(& &1.name)
 
-      sig
-      |> Inductive.ctors_of(dname)
-      |> Enum.map(& &1.name)
-      |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
-        verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals, param_vals)
+      verdicts = Map.new(cnames, &{&1, Kernel.branch_unify(ctx, dname, &1, idx_vals, param_vals)})
 
-        case Map.get(arm_map, cname) do
+      uncovered =
+        Enum.filter(cnames, fn c ->
+          not Map.has_key?(arm_map, c) and Map.get(verdicts, c) != :impossible
+        end)
+
+      join? = join_point?(default, uncovered, carried, idx_vals, motive)
+
+      branches =
+        cnames
+        |> Enum.reduce_while({:ok, []}, fn cname, {:ok, acc} ->
+          verdict = Map.fetch!(verdicts, cname)
+
+          case Map.get(arm_map, cname) do
           {:matched, pattern, body_expr} ->
             case elaborate_matched_branch(
                    verdict, pattern, body_expr, names, ctx, env,
@@ -2671,6 +2690,14 @@ defmodule Cure.Elab.Elaborator do
               verdict == :impossible ->
                 {:cont, {:ok, acc}}                      # omit (K4 §H)
 
+              # The join point covers this constructor: leave a marker whose body
+              # `wrap_join/2` fills with `{:app, j, scrut}` once it knows the
+              # let-binder's depth. The catch-all body is elaborated exactly once,
+              # below, instead of once per uncovered constructor.
+              join? ->
+                arity = length(Inductive.get_ctor(env, cname).args)
+                {:cont, {:ok, acc ++ [{cname, arity, @join_marker}]}}
+
               default != nil ->
                 case elaborate_default_branch(
                        verdict, cname, default, names, ctx, env,
@@ -2683,8 +2710,13 @@ defmodule Cure.Elab.Elaborator do
               true ->
                 {:halt, {:error, {:missing_branch, cname}}}
             end
-        end
-      end)
+          end
+        end)
+
+      with {:ok, brs} <- branches,
+           {:ok, join} <- elaborate_join(join?, default, names, ctx, env, motive) do
+        {:ok, brs, join}
+      end
     end
   end
 
@@ -3001,7 +3033,7 @@ defmodule Cure.Elab.Elaborator do
 
       with {:ok, chain} <-
              guard_chain({:variable, [], fresh}, arms, expected1, names1, ctx1, env, []) do
-        {:ok, {:app, {:lam, dom, chain}, scrut_core}}
+        {:ok, {:app, {:lam, Cure.Core.Grade.unrestricted(), dom, chain}, scrut_core}}
       end
     end
   end
@@ -3171,7 +3203,7 @@ defmodule Cure.Elab.Elaborator do
   # The kernel re-checks the assembled `:case`, so nothing built here is trusted.
   defp bool_case(scrut_term, motive_body_type, tt, ff, ctx) do
     bool_ty = bool_type_term(Context.signature(ctx))
-    motive = {:lam, bool_ty, Cure.Core.Term.shift(motive_body_type, 1, 0)}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), bool_ty, Cure.Core.Term.shift(motive_body_type, 1, 0)}
     {:case, scrut_term, motive, [{:True, 0, tt}, {:False, 0, ff}]}
   end
 
@@ -3843,6 +3875,82 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  # ── Join points (plan slice 4c) ─────────────────────────────────────────────
+  # Core `:case` has no default branch, so a surface catch-all becomes one branch
+  # per uncovered constructor — and `elaborate_default_branch/10` re-elaborates
+  # its body for each. The copies MULTIPLY through nesting: `k` nested catch-alls
+  # over an `n`-constructor type used to yield `(n-1)^k` copies (measured: 25 for
+  # k=2, n=6). A join point binds the body once and calls it from each branch.
+  #
+  # No new Core former is needed. Given the motive `λ(s : S). R`, bind
+  #
+  #     j = {:lam, ω, S, body}   at   {:pi, ω, S, R}
+  #
+  # in the `:let` binder, and make each defaulted branch `{:app, j, scrut}`. The λ
+  # is load-bearing: a bare `:let` of `body` would be EAGER (`Emit` lowers `:let`
+  # to a match block), so the catch-all would run even when a real arm matched.
+  # It also subsumes the surface substitution — a named catch-all `x -> …` is
+  # precisely the λ's binder, so `x` is the scrutinee's value by construction.
+  #
+  # NOT a soundness fix. Idris combines branch usages by agreement rather than
+  # summation (`LinearCheck.idr:528-540`), and the copies always landed in
+  # DISJOINT constructor branches, so a linear variable in the catch-all was
+  # already counted once. This buys term size, which on an ESP32 is flash.
+  #
+  # Fire only where it pays and where it is obviously type-correct:
+  #
+  #   * ≥2 uncovered constructors — one call site would pay a closure to save
+  #     nothing;
+  #   * no carried index equality, and an UNINDEXED family — otherwise `motive`
+  #     is not the plain `λ(s : S). R` this encoding reads it as;
+  #   * a NON-DEPENDENT motive (`R` does not mention `s`). A dependent `R` would
+  #     type each branch at `R[s := C(args…)]`, so the join would have to be
+  #     applied to the branch's reconstructed constructor — including its erased
+  #     telescope args — rather than to `scrut`. Left as today's expansion.
+  defp join_point?(default, uncovered, carried, idx_vals, motive) do
+    default != nil and length(uncovered) >= 2 and carried == nil and idx_vals == [] and
+      match?({:lam, _g, _s, _r}, motive) and
+      not MapSet.member?(free_indices(elem(motive, 3), 0), 0) and
+      # Disabled in a def that uses `:linear`/`:affine` grades: the shared catch-all
+      # λ would make the usage check ω-scale a restricted capture and over-reject it
+      # (review F11). `Declarations.elaborate_function_body` sets this per def. The
+      # per-branch expansion the join replaces is what the usage check then sees, and
+      # its independent-branch agreement is correct (Idris `LinearCheck.idr:441-442`).
+      not Process.get(:qtt_join_disabled, false)
+  end
+
+  defp elaborate_join(false, _default, _names, _ctx, _env, _motive), do: {:ok, nil}
+
+  defp elaborate_join(true, {vname, body_expr}, names, ctx, env, {:lam, _g, s_term, r_term}) do
+    # `r_term` already lives under the motive's binder, so in `ctx1` it IS the
+    # catch-all's expected type — no shift.
+    ctx1 = Context.extend(ctx, Eval.eval(s_term, Context.env(ctx)))
+    names1 = [vname | names]
+
+    with {:ok, body} <- elaborate_expr_checked(body_expr, r_term, names1, ctx1, env) do
+      {:ok, {{:pi, Grade.unrestricted(), s_term, r_term}, {:lam, Grade.unrestricted(), s_term, body}}}
+    end
+  end
+
+  # Wrap the assembled `:case` in the join binder and discharge every marker.
+  # Inserting a binder between the context and the case shifts everything inside
+  # by one: `scrut` and `motive` at cutoff 0, a branch body at cutoff `arity` (its
+  # own constructor binders must not move). Inside a branch the join sits at index
+  # `arity`, and the scrutinee it is applied to has travelled under `1 + arity`
+  # binders.
+  defp wrap_join(case_term, nil), do: case_term
+
+  defp wrap_join({:case, scrut, motive, branches}, {join_ty, join_val}) do
+    branches1 =
+      Enum.map(branches, fn
+        {c, arity, @join_marker} -> {c, arity, {:app, {:var, arity}, Subst.shift(scrut, 1 + arity, 0)}}
+        {c, arity, body} -> {c, arity, Subst.shift(body, 1, arity)}
+      end)
+
+    inner = {:case, Subst.shift(scrut, 1, 0), Subst.shift(motive, 1, 0), branches1}
+    {:let, Grade.unrestricted(), join_ty, join_val, inner}
+  end
+
   # A variable/wildcard catch-all covers `cname` (not explicitly matched): rebuild
   # the constructor pattern `cname(fresh…)`, substitute the catch-all's name with
   # that reconstruction in the body (so the bound var resolves to the very term
@@ -3853,7 +3961,7 @@ defmodule Cure.Elab.Elaborator do
     # A surface constructor pattern names only the PRESENT (non-erased) args; the
     # erased indices are reconstructed from the telescope, not bound in the source.
     %{quantities: quantities} = Inductive.get_ctor(env, cname)
-    present = Enum.count(quantities, &(&1 == :present))
+    present = Enum.count(quantities, &Grade.present?/1)
     fresh = default_pattern_vars(cname, present)
     syn_pattern = {:function_call, [name: Atom.to_string(cname)], Enum.map(fresh, &{:variable, [], &1})}
 
@@ -4123,7 +4231,7 @@ defmodule Cure.Elab.Elaborator do
     sib_data =
       Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
         h_b1 = Subst.shift(h_ctx, sc, 0)
-        motive_j = {:lam, t_b1, abstract_term(h_b1, idx_b1, 0)}
+        motive_j = {:lam, Cure.Core.Grade.unrestricted(), t_b1, abstract_term(h_b1, idx_b1, 0)}
         # J/subst transport (Phase B): prf {:var,0} : Eq(T, idx, ctor_idx); the
         # case's type is (M_j@idx) -> (M_j@ctor_idx), applied to the sibling.
         # Annotation-safety (transport_case doc): M_j abstracts the carried
@@ -4158,10 +4266,10 @@ defmodule Cure.Elab.Elaborator do
         |> Enum.with_index()
         |> Enum.reverse()
         |> Enum.reduce(inner, fn {%{dom: d, transport: t}, i}, acc ->
-          {:app, {:lam, Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
+          {:app, {:lam, Cure.Core.Grade.unrestricted(), Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
         end)
 
-      {:ok, {cname, arity, {:lam, eq_dom_term, wrapped}}}
+      {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
     end
     end
   end
@@ -4238,13 +4346,21 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
   end
 
-  # A `let x = e ⏎ …` block. Each `let` desugars by SURFACE substitution —
-  # `let x = e in body` ≡ `body[x := e]` — then the remainder is elaborated
-  # normally. This sidesteps de Bruijn bookkeeping entirely (the rhs is
-  # re-elaborated at each use site of `x`; a naming convenience, not sharing).
-  # Sound: a later binder that shadows `x` (or would capture a free variable of
-  # `e`) is guarded by `binds_any?`; and every substituted body is re-checked by
-  # the kernel, so an unsound inline yields a REJECTION, never a bad accept.
+  # A `let x = e ⏎ …` block elaborates to the Core `:let` binder:
+  # `{:let, Cure.Core.Grade.unrestricted(), T, e, body}`, binding `e` EXACTLY ONCE.
+  #
+  # Previously this desugared by SURFACE substitution (`body[x := e]`), which
+  # re-elaborated `e` at every use site and dropped it entirely at zero uses —
+  # the recorded root cause of let-duplication and the join-point residual, and a
+  # silent aliasing engine that would defeat any future linearity check.
+  # Substitution was kept only because it made a let-bound value *transparent* in
+  # a later dependent type; a β-redex binds once but loses that transparency.
+  #
+  # The Core `:let` supplies both (Idris `Core/TT/Binder.idr` `Let`, Lean
+  # `Expr.letE`): ζ makes the variable definitionally its value. Here the
+  # elaborator's own context gets the same treatment via `Context.extend_def/3`,
+  # so `elaborate_expr_typed` on the remainder sees `x` as its value and dependent
+  # lets keep checking. The kernel re-checks the emitted `:let` regardless.
   defp elaborate_let_block([final], expected_core, names, ctx, env),
     do: elaborate_expr_checked(final, expected_core, names, ctx, env)
 
@@ -4255,39 +4371,119 @@ defmodule Cure.Elab.Elaborator do
          ctx,
          env
        ) do
-    cond do
-      not Keyword.get(meta, :let, false) ->
-        {:error, {:unsupported_block_statement, meta}}
+    if not Keyword.get(meta, :let, false) do
+      {:error, {:unsupported_block_statement, meta}}
+    else
+      # A surface grade (`let c :linear = e`, plan slice 5b); absent means ω.
+      grade = Keyword.get(meta, :grade, Grade.unrestricted())
 
-      Enum.any?(rest, &binds_any?(&1, [name])) ->
-        # A later statement rebinds `name` (shadowing): surface substitution would
-        # capture, so bind `rhs` ONCE under a real λ (a de-Bruijn binder that a
-        # deeper pattern binder correctly shadows) and elaborate the rest against
-        # the goal shifted under it — `(λ name:T. <rest>) rhs`. The outer goal never
-        # mentions `name`, so the β-redex checks back against `expected_core`
-        # exactly, and `rhs` is evaluated once. (The non-shadowing path keeps
-        # surface substitution, which handles a dependent `let` whose later type
-        # needs `name`'s concrete value.)
-        with {:ok, rhs_core, rhs_type} <- elaborate_expr_typed(rhs, names, ctx, env) do
-          dom = Quote.reify(rhs_type, Context.length(ctx))
-          ctx1 = Context.extend(ctx, rhs_type)
-          names1 = [name | names]
-          expected1 = Subst.shift(expected_core, 1, 0)
-
-          with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
-            {:ok, {:app, {:lam, dom, body_core}, rhs_core}}
-          end
-        end
-
-      true ->
-        rest
-        |> Enum.map(&subst_surface_var(&1, name, rhs))
-        |> elaborate_let_block(expected_core, names, ctx, env)
+      case Keyword.get(meta, :type_annotation) do
+        nil -> let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env)
+        ann -> let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env)
+      end
     end
   end
 
   defp elaborate_let_block(other, _expected_core, _names, _ctx, _env),
     do: {:error, {:unsupported_block, other}}
+
+  # `let x : T = e` — BIDIRECTIONAL. The ascription supplies the type a
+  # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
+  # (exactly what surface substitution did at each use site) and bound ONCE.
+  # This is the general escape from the check-only residual.
+  defp let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env) do
+    with {:ok, ty_core} <- elaborate_type(ann, names, env),
+         {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+      ty_value = Eval.eval(ty_core, Context.env(ctx))
+      bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
+    end
+  end
+
+  # `let x = e` — synthesise `e`'s type, then bind once.
+  defp let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env) do
+    case elaborate_expr_typed(rhs, names, ctx, env) do
+      {:ok, rhs_core, rhs_type} ->
+        # SIGNATURE-AWARE reify. A `{:vdata, name, args}` value flattens a
+        # family's params and indices into one list; without the signature the
+        # split is not recoverable and the read-back puts them all in `params`,
+        # so a `{:let, Cure.Core.Grade.unrestricted(), T, …}` over an indexed family fails the kernel's arity
+        # check (`:arg_arity`). Agda `getNumberOfParameters` / Lean
+        # `inductive_val.get_nparams`.
+        ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+        bind_once_let(name, rhs_core, ty_core, rhs_type, grade, rest, expected_core, names, ctx, env)
+
+      # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
+      # check-only shape. Surface substitution never had to infer it: it
+      # re-elaborated the rhs in CHECKING mode at each use site. A `:let` must
+      # commit to one type up front, so it needs `let x : T = e` (`let_ascribed/8`).
+      {:error, _} = err ->
+        cond do
+          # A GRADE cannot survive this branch. Every path below abandons the `:let`
+          # node and surface-substitutes the rhs, so there is nowhere to record the
+          # grade and it would be silently dropped — the program would compile, pass,
+          # and lie about its linearity. A graded `let` must produce a real `:let`.
+          # Ascribing the binding gives `let_ascribed/9`, which always builds one.
+          Keyword.has_key?(meta, :grade) ->
+            {:error, {:graded_let_needs_annotation, name, meta}}
+
+          # Shadowing + non-inferable is unrepresentable: substitution would
+          # capture and `:let` cannot be built. Surface the inference error.
+          Enum.any?(rest, &binds_any?(&1, [name])) ->
+            err
+
+          # Substitution is only safe at EXACTLY ONE use:
+          #
+          #   * ≥2 uses  — it DUPLICATES the rhs. That is what made surface
+          #     substitution a silent aliasing engine.
+          #   * 0 uses   — it DROPS the rhs, which is therefore never elaborated:
+          #     an ill-typed unused binding sails through to a green build.
+          #     (It also means a zero-use binding would not RUN once effects
+          #     arrive — that is `effect_bind`'s job, not this path's.)
+          #
+          # Both are refused, and the message says how to fix it: ascribe the
+          # binding (`let x : T = e`) and it binds once, checked.
+          count_surface_uses(rest, name) != 1 ->
+            {:error, {:let_needs_annotation, name, meta}}
+
+          # Exactly one use: the rhs is elaborated once, in checking mode, at that
+          # use site. No duplication, and it IS type-checked.
+          true ->
+            rest
+            |> Enum.map(&subst_surface_var(&1, name, rhs))
+            |> elaborate_let_block(expected_core, names, ctx, env)
+        end
+    end
+  end
+
+  # `let x : T = e ⏎ rest`  ⟶  `{:let, Cure.Core.Grade.unrestricted(), T, e, rest}` with `x := e` in the context.
+  defp bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env) do
+    rhs_value = Eval.eval(rhs_core, Context.env(ctx))
+
+    # `extend_def/3`, not `extend/2`: the binder is definitionally its value (ζ),
+    # so a later `SNat(k)` sees `k`'s concrete value — the one thing a β-redex
+    # cannot give. A shadowing binder deeper in `rest` correctly shadows this de
+    # Bruijn binder, so no capture guard is needed on this path.
+    ctx1 = Context.extend_def(ctx, ty_value, rhs_value)
+    names1 = [name | names]
+    expected1 = Subst.shift(expected_core, 1, 0)
+
+    with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
+      {:ok, {:let, grade, ty_core, rhs_core, body_core}}
+    end
+  end
+
+  # Free occurrences of surface variable `name` in the remaining statements.
+  # Mirrors `subst_surface_var/3`'s traversal (which is likewise shadowing-blind;
+  # the shadowing case is rejected before either is reached).
+  defp count_surface_uses(list, name) when is_list(list),
+    do: Enum.reduce(list, 0, &(count_surface_uses(&1, name) + &2))
+
+  defp count_surface_uses({:variable, _meta, name}, name), do: 1
+
+  defp count_surface_uses({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.reduce(children, 0, &(count_surface_uses(&1, name) + &2))
+
+  defp count_surface_uses(_other, _name), do: 0
 
   # Surface-level scrutinee refinement (Lean `Cases.lean:219-227`): in a branch,
   # a VARIABLE scrutinee *is* the pattern, so free occurrences of its name in
@@ -4654,7 +4850,7 @@ defmodule Cure.Elab.Elaborator do
   defp branch_scope(quantities, pattern_vars) do
     {names_in_order, _rest} =
       Enum.map_reduce(quantities, pattern_vars, fn
-        :present, [v | rest] -> {v, rest}
+        :unrestricted, [v | rest] -> {v, rest}
         :erased, vars -> {"_erased", vars}
       end)
 
@@ -4719,11 +4915,11 @@ defmodule Cure.Elab.Elaborator do
 
   defp replace_branch_vars({:var, i}, subst), do: replace_branch_var(i, subst, 0)
 
-  defp replace_branch_vars({:pi, d, c}, subst),
-    do: {:pi, replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
+  defp replace_branch_vars({:pi, _g, d, c}, subst),
+    do: {:pi, Cure.Core.Grade.unrestricted(), replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
 
-  defp replace_branch_vars({:lam, d, b}, subst),
-    do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
+  defp replace_branch_vars({:lam, _g, d, b}, subst),
+    do: {:lam, Cure.Core.Grade.unrestricted(), replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
 
   defp replace_branch_vars({:app, f, a}, subst),
     do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}
@@ -4835,11 +5031,11 @@ defmodule Cure.Elab.Elaborator do
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
-  defp solve_arg({{_name, _type_term}, :present}, {:ok, _mctx, _chosen, []}, _env),
+  defp solve_arg({{_name, _type_term}, :unrestricted}, {:ok, _mctx, _chosen, []}, _env),
     do: {:halt, {:error, :too_few_arguments}}
 
   defp solve_arg(
-         {{_name, type_term}, :present},
+         {{_name, type_term}, :unrestricted},
          {:ok, mctx, chosen, [{arg, arg_type_term} | rest]},
          env
        ) do
@@ -4928,10 +5124,10 @@ defmodule Cure.Elab.Elaborator do
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 
-  defp bidir_app_slot({_dom, :present}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env),
+  defp bidir_app_slot({_dom, :unrestricted}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env),
     do: {:halt, {:error, :too_few_arguments}}
 
-  defp bidir_app_slot({dom, :present}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
+  defp bidir_app_slot({dom, :unrestricted}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
     dom_inst = dom |> Subst.instantiate(chosen) |> Unify.zonk(mctx)
 
     if has_meta?(dom_inst) do
@@ -4990,7 +5186,7 @@ defmodule Cure.Elab.Elaborator do
   # to the deferral path. Additive/fallback-only: reached only after inference has
   # already failed, and the assembled call is kernel-re-checked by
   # `finish_global_app`, so nothing unsound rests on the solve.
-  defp try_lambda_meta_pi({:lambda, meta, [body_expr]}, {:pi, dom_term, cod_term}, mctx, names, ctx, env) do
+  defp try_lambda_meta_pi({:lambda, meta, [body_expr]}, {:pi, _g, dom_term, cod_term}, mctx, names, ctx, env) do
     case Keyword.fetch!(meta, :params) do
       [{:param, _pm, pname}] ->
         if has_meta?(dom_term) do
@@ -5008,9 +5204,9 @@ defmodule Cure.Elab.Elaborator do
               # and the later `P(Zero)` kernel check expects the split form.
               body_ty_term = Quote.reify(body_ty, Context.length(ctx1), env)
 
-              case Unify.unify({:pi, dom_term, cod_term}, {:pi, dom_term, body_ty_term}, mctx, env) do
+              case Unify.unify({:pi, Cure.Core.Grade.unrestricted(), dom_term, cod_term}, {:pi, Cure.Core.Grade.unrestricted(), dom_term, body_ty_term}, mctx, env) do
                 {:ok, mctx} ->
-                  {:ok, mctx, {:lam, dom_term, body_term}}
+                  {:ok, mctx, {:lam, Cure.Core.Grade.unrestricted(), dom_term, body_term}}
 
                 {:error, _} -> :fallthrough
               end
@@ -5145,10 +5341,10 @@ defmodule Cure.Elab.Elaborator do
     solve_fields(slots, asts, seed, pc, params, [val | acc], mctx, names, ctx, env)
   end
 
-  defp solve_fields([{{_fn, _ft}, :present} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
+  defp solve_fields([{{_fn, _ft}, :unrestricted} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
     do: mctx
 
-  defp solve_fields([{{_fn, ftype}, :present} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
+  defp solve_fields([{{_fn, ftype}, :unrestricted} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
     ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
 
     {mctx, val} = solve_field(arg, ftype_inst, mctx, names, ctx, env)
@@ -5228,7 +5424,7 @@ defmodule Cure.Elab.Elaborator do
       # Guard-ordered AFTER the nil check: `ctor.quantities` is only reached once
       # `ctor` is known non-nil (an unknown ctor would otherwise crash here before
       # the graceful error above could fire).
-      Enum.count(ctor.quantities, &(&1 == :present)) != length(arg_asts) ->
+      Enum.count(ctor.quantities, &Grade.present?/1) != length(arg_asts) ->
         {:error, {:constructor_arity_mismatch, cname}}
 
       true ->
@@ -5288,7 +5484,7 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp check_ctor_args([{_idx, ftype, :present} | slots], [arg | asts], seed, pc, params, acc, mctx, names, ctx, env, cname) do
+  defp check_ctor_args([{_idx, ftype, :unrestricted} | slots], [arg | asts], seed, pc, params, acc, mctx, names, ctx, env, cname) do
     ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
 
     if has_meta?(ftype_inst) do
@@ -5323,7 +5519,7 @@ defmodule Cure.Elab.Elaborator do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      Enum.any?(ctor.quantities, &(&1 == :erased)) ->
+      Enum.any?(ctor.quantities, &Grade.erased?/1) ->
         {:error, {:bidirectional_erased_field, cname}}
 
       length(ctor.args) != length(arg_asts) ->
@@ -5397,7 +5593,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp peel_pi(type, 0), do: {[], type}
 
-  defp peel_pi({:pi, d, c}, n) do
+  defp peel_pi({:pi, _g, d, c}, n) do
     {ds, co} = peel_pi(c, n - 1)
     {[d | ds], co}
   end
@@ -5446,8 +5642,8 @@ defmodule Cure.Elab.Elaborator do
   defp has_meta?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_meta?/1)
   defp has_meta?({:ctor, _n, args}), do: Enum.any?(args, &has_meta?/1)
   defp has_meta?({:app, f, x}), do: has_meta?(f) or has_meta?(x)
-  defp has_meta?({:pi, d, c}), do: has_meta?(d) or has_meta?(c)
-  defp has_meta?({:lam, d, b}), do: has_meta?(d) or has_meta?(b)
+  defp has_meta?({:pi, _g, d, c}), do: has_meta?(d) or has_meta?(c)
+  defp has_meta?({:lam, _g, d, b}), do: has_meta?(d) or has_meta?(b)
   defp has_meta?(_), do: false
 
   # -- parameters / binders ---------------------------------------------------
@@ -5462,8 +5658,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # Wrap a Core body in λ's (or Π's) over the parameter telescope, p0 outermost.
+  # Same shape as `Declarations.wrap_binders/3`: the binder tuple is assembled
+  # from a TAG, invisible to any textual migration. Grade threaded explicitly.
   defp wrap(tag, tele, body) do
-    Enum.reduce(Enum.reverse(tele), body, fn {_name, type}, acc -> {tag, type, acc} end)
+    g = Cure.Core.Grade.unrestricted()
+    Enum.reduce(Enum.reverse(tele), body, fn {_name, type}, acc -> {tag, g, type, acc} end)
   end
 
   defp single_body([expr]), do: expr
@@ -5611,7 +5810,7 @@ defmodule Cure.Elab.Elaborator do
   # (`S` becomes `λ n:Nat. S(n)`) so first-class ctor values elaborate instead
   # of dying at the kernel's arity check (:ctor_arity) — the general gap behind
   # spec 2026-07-08-nat-int-erasure rule 4 (Idris allows bare `S` everywhere).
-  # Scope: ctors whose args are all explicit/:present and whose result carries
+  # Scope: ctors whose args are all explicit/:unrestricted and whose result carries
   # no params/indices. An implicit-carrying or indexed ctor keeps today's
   # nullary resolution (and today's downstream error): a lambda-typed value
   # cannot receive implicit insertion at its call sites, so eta-expanding it
@@ -5622,12 +5821,12 @@ defmodule Cure.Elab.Elaborator do
 
     k = length(tele)
 
-    if k > 0 and Enum.all?(qs, &(&1 == :present)) and rp == [] and ri == [] do
+    if k > 0 and Enum.all?(qs, &Grade.present?/1) and rp == [] and ri == [] do
       body_args = for i <- (k - 1)..0//-1, do: {:var, i}
       body = {:ctor, atom, body_args}
 
       {:ok,
-       Enum.reduce(Enum.reverse(tele), body, fn {_name, dom}, acc -> {:lam, dom, acc} end)}
+       Enum.reduce(Enum.reverse(tele), body, fn {_name, dom}, acc -> {:lam, Cure.Core.Grade.unrestricted(), dom, acc} end)}
     else
       {:ok, {:ctor, atom, []}}
     end

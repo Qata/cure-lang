@@ -67,7 +67,7 @@ defmodule Antigen.Challenge do
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
     :f, :g, :h, :plus, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
-    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
+    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :unrestricted, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
     # reify / data-split verticals (lean-shape-matching): indexed-case def names
@@ -85,7 +85,7 @@ defmodule Antigen.Challenge do
     # universes vertical
     :u,
     # erasure quantities: the ω annotation `:many` on a ctor field (siblings
-    # `:present`/`:erased` already interned). Family seeds carry it as text in the
+    # `:unrestricted`/`:erased` already interned). Family seeds carry it as text in the
     # scaffold and reconstruct it via `to_existing_atom`, so it must be interned or
     # a fresh-VM decode raises "not an already existing atom" (found banking
     # universes/family seeds — see many_quantity_decode_test).
@@ -198,7 +198,20 @@ defmodule Antigen.Challenge do
     # boundary (Eval.eval / Eval.apply / Conv.conv? / check_def) and prove the
     # defensive guard fires (raises the documented ι-error / rejects the hole body).
     :eval_no_branch, :eval_nondata_scrutinee, :apply_nonfun,
-    :conv_unknown_ctor_fallback, :validator_rejects_hole_body
+    :conv_unknown_ctor_fallback, :validator_rejects_hole_body,
+    # Value-surface probes (atom / bounded / binary-type / bitwise family).
+    :eval_value_literals, :eval_negative_debruijn, :eval_bounded_no_branch,
+    :eval_bounded_iota, :eval_bounded_peel, :eval_bitwise_fold,
+    :quote_value_surface, :conv_atom_binary, :conv_bounded_crossrep,
+    :conv_no_delta_value_surface, :serialize_value_surface, :serialize_special_atoms,
+    :serialize_malformed_symbol, :infer_value_type_formers, :infer_bounded_unregistered,
+    :infer_bounded_registered, :check_bounded_in_range, :check_bounded_out_of_range,
+    :check_bounded_tower, :check_bounded_not_concrete, :check_bounded_wrong_family,
+    :check_ctor_via_infer, :sort_value_type_formers, :unify_bounded_bridge,
+    :unify_rigid_value_heads, :opaque_family_positivity, :positivity_alias_expansion,
+    :occurs_bare_global, :whnf_arity2_direct, :whnf_nested_fuel_restore,
+    :cert_unknown_tuple_node, :cert_unknown_list_node, :cert_nontuple_call_arg,
+    :cert_nontuple_list_elem, :cert_calls_nontuple_head
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

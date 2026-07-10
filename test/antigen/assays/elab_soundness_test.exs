@@ -26,7 +26,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
   end
 
   test "baseline: a genuinely well-typed program re-checks sound (:ok)" do
-    # id : Nat -> Nat = fn x -> x ; emitted core body {:lam,Nat,{:var,0}} infers cleanly.
+    # id : Nat -> Nat = fn x -> x ; emitted core body {:lam, Cure.Core.Grade.unrestricted(),Nat,{:var,0}} infers cleanly.
     assert Elab.run(prog("mod P\nfn id(x: Nat) -> Nat = x\nend")) == :ok
   end
 
@@ -34,7 +34,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
     # def `bad`: body is Bool->Bool identity, DECLARED Nat->Nat. infer=vpi Bool Bool,
     # eval(declared)=vpi Nat Nat -> not convertible -> type_annotation_wrong.
     env = seeded()
-          |> Env.add_def(:bad, {:pi, @nat, @nat}, {:lam, @bool, {:var, 0}})
+          |> Env.add_def(:bad, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, {:lam, Cure.Core.Grade.unrestricted(), @bool, {:var, 0}})
     assert {:violation, {:type_annotation_wrong, :bad, _}} =
              Elab.run(prog("ignored"), kernel_with_env(env))
   end
@@ -53,7 +53,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
 
   test "hole-bearing def is skipped, not infected" do
     # body has a hole; kernel would accept, but we skip it -> whole run :ok.
-    env = seeded() |> Env.add_def(:h, {:pi, @nat, @nat}, {:lam, @nat, {:hole, :g}})
+    env = seeded() |> Env.add_def(:h, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:hole, :g}})
     assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
   end
 
@@ -87,7 +87,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       #      test would falsely report a `{:core_ill_typed, ...}}` violation
       #      instead of `:ok`.
       fam = Cure.Core.Inductive.family(:F, [{:a, {:type, 0}}], [], 0)
-      ctor = Cure.Core.Inductive.ctor(:Mk, [{:x, {:var, 0}}], [], [:present], [{:var, 1}])
+      ctor = Cure.Core.Inductive.ctor(:Mk, [{:x, {:var, 0}}], [], [:unrestricted], [{:var, 1}])
       seeded() |> Cure.Core.Inductive.declare(fam, [ctor])
     end
 

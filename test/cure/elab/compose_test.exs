@@ -28,7 +28,7 @@ defmodule Cure.Elab.ComposeTest do
     end)
   end
 
-  defp unwrap_lams({:lam, _dom, body}), do: unwrap_lams(body)
+  defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
   defp unwrap_lams(term), do: term
 
   test "compose = seq(l, r) elaborates and kernel-checks from source" do
@@ -40,7 +40,7 @@ defmodule Cure.Elab.ComposeTest do
     assert length(args) == 7
 
     # Its declared type is a 7-binder Π ending in the SF family.
-    assert {:pi, _, _} = type
+    assert {:pi, _g, _, _} = type
   end
 
   test "rejects compose when the declared return index contradicts and's result" do

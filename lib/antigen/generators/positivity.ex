@@ -95,12 +95,12 @@ defmodule Antigen.Generators.Positivity do
   # shape). None mention :Pgen, so every family that carries them stays strictly
   # positive.
   @occurs_domains [
-    {:lam, @nat, @z},
-    {:data, :Sigma, [@z, {:lam, @z, @z}], []},
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, @z},
+    {:data, :Sigma, [@z, {:lam, Cure.Core.Grade.unrestricted(), @z, @z}], []},
     {:ctor, :mk_pair, [@z, @z]},
     {:app, @z, @z},
-    {:case, @z, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]},
-    {:case, @z, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]},
+    {:case, @z, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+    {:case, @z, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]},
     {:ctor, :S, [@z]},
     {:data, :Equivalent, [@nat], [@z, @z]},
     {:ctor, :reflexive, [@z]},
@@ -137,7 +137,7 @@ defmodule Antigen.Generators.Positivity do
         |> Enum.with_index()
         |> Enum.map(fn {dom, i} ->
           cod = if rem(i, 2) == 0, do: @nat, else: {:int_type}
-          {:pi, dom, cod}
+          {:pi, Cure.Core.Grade.unrestricted(), dom, cod}
         end)
 
       Gen.return(
@@ -236,10 +236,10 @@ defmodule Antigen.Generators.Positivity do
       {3, Gen.member_of(@bases)},
       {2, Gen.return(@pgen)},
       {1, Gen.bind(Gen.member_of(@bases), fn dom ->
-            Gen.bind(positive_safe(depth - 1), fn cod -> Gen.return({:pi, dom, cod}) end)
+            Gen.bind(positive_safe(depth - 1), fn cod -> Gen.return({:pi, Cure.Core.Grade.unrestricted(), dom, cod}) end)
           end)},
       {1, Gen.bind(Gen.member_of(@bases), fn a ->
-            Gen.bind(Gen.member_of(@bases), fn b -> Gen.return({:data, :Sigma, [a, {:lam, a, b}], []}) end)
+            Gen.bind(Gen.member_of(@bases), fn b -> Gen.return({:data, :Sigma, [a, {:lam, Cure.Core.Grade.unrestricted(), a, b}], []}) end)
           end)}
     ])
   end
@@ -248,11 +248,11 @@ defmodule Antigen.Generators.Positivity do
   # which strict positivity always rejects (every option is provably negative).
   defp negative_arg(depth) do
     Gen.frequency([
-      {2, Gen.bind(positive_safe(depth), fn cod -> Gen.return({:pi, @pgen, cod}) end)},
+      {2, Gen.bind(positive_safe(depth), fn cod -> Gen.return({:pi, Cure.Core.Grade.unrestricted(), @pgen, cod}) end)},
       {1, Gen.bind(positive_safe(depth), fn cod ->
-            Gen.return({:pi, {:data, :Sigma, [@pgen, {:lam, @pgen, hd(@bases)}], []}, cod})
+            Gen.return({:pi, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@pgen, {:lam, Cure.Core.Grade.unrestricted(), @pgen, hd(@bases)}], []}, cod})
           end)},
-      {1, Gen.return({:pi, {:pi, hd(@bases), @pgen}, hd(@bases)})}
+      {1, Gen.return({:pi, Cure.Core.Grade.unrestricted(), {:pi, Cure.Core.Grade.unrestricted(), hd(@bases), @pgen}, hd(@bases)})}
     ])
   end
 
@@ -283,7 +283,7 @@ defmodule Antigen.Generators.Positivity do
   @spec negative_family() :: Challenge.t()
   def negative_family do
     fam = Inductive.family(:Bad, [], [], 0)
-    ctors = [Inductive.ctor(:MkBad, [{:f, {:pi, @bad, @bad}}], [])]
+    ctors = [Inductive.ctor(:MkBad, [{:f, {:pi, Cure.Core.Grade.unrestricted(), @bad, @bad}}], [])]
 
     Challenge.new(
       kind: :family,
@@ -320,16 +320,16 @@ defmodule Antigen.Generators.Positivity do
 
   @doc """
   NEGATIVE: `MkBad : (λ(_:Nat). Pgen) -> Pgen` — a lam-headed field type burying
-  the subject in the lambda body. `{:lam, …}` also reaches the catch-all; rejected
+  the subject in the lambda body. `{:lam, Cure.Core.Grade.unrestricted(), …}` also reaches the catch-all; rejected
   because `Pgen` occurs. Twin of `app_head_negative` for the other unstructured
   head. Label `:negative`.
   """
   @spec lam_head_negative() :: Challenge.t()
   def lam_head_negative do
     parametric_challenge(
-      [[{:lam, @nat, @pgen}]],
+      [[{:lam, Cure.Core.Grade.unrestricted(), @nat, @pgen}]],
       :negative,
-      "S8 lam-headed field: subject under {:lam, …} (strictly_positive? catch-all)",
+      "S8 lam-headed field: subject under {:lam, Cure.Core.Grade.unrestricted(), …} (strictly_positive? catch-all)",
       :lam_head_negative
     )
   end
@@ -360,7 +360,7 @@ defmodule Antigen.Generators.Positivity do
   @spec double_negation_family() :: Challenge.t()
   def double_negation_family do
     fam = Inductive.family(:Bad, [], [], 0)
-    field = {:pi, {:pi, @bad, @decd}, @decd}
+    field = {:pi, Cure.Core.Grade.unrestricted(), {:pi, Cure.Core.Grade.unrestricted(), @bad, @decd}, @decd}
     ctors = [Inductive.ctor(:MkBad, [{:f, field}], [])]
 
     Challenge.new(
@@ -384,7 +384,7 @@ defmodule Antigen.Generators.Positivity do
   @spec sigma_negative_family() :: Challenge.t()
   def sigma_negative_family do
     fam = Inductive.family(:Bad, [], [], 0)
-    field = {:data, :Sigma, [{:pi, @bad, @decd}, {:lam, {:pi, @bad, @decd}, @decd}], []}
+    field = {:data, :Sigma, [{:pi, Cure.Core.Grade.unrestricted(), @bad, @decd}, {:lam, Cure.Core.Grade.unrestricted(), {:pi, Cure.Core.Grade.unrestricted(), @bad, @decd}, @decd}], []}
     ctors = [Inductive.ctor(:MkBad, [{:f, field}], [])]
 
     Challenge.new(
@@ -408,7 +408,7 @@ defmodule Antigen.Generators.Positivity do
   @spec through_constructor_negative() :: Challenge.t()
   def through_constructor_negative do
     box = {Inductive.family(:Box, [], [], 0),
-           [Inductive.ctor(:mk, [{:f, {:pi, @bad, @decd}}], [])]}
+           [Inductive.ctor(:mk, [{:f, {:pi, Cure.Core.Grade.unrestricted(), @bad, @decd}}], [])]}
 
     bad = {Inductive.family(:Bad, [], [], 0),
            [Inductive.ctor(:MkBad, [{:b, {:data, :Box, [], []}}], [])]}
@@ -473,7 +473,7 @@ defmodule Antigen.Generators.Positivity do
             [Inductive.ctor(:wrap, [{:x, {:data, :Bad, [], []}}], [])]}
 
     bad = {Inductive.family(:Bad, [], [], 0),
-           [Inductive.ctor(:MkBad, [{:f, {:pi, {:data, :Wrap, [], []}, {:data, :Dec, [], []}}}], [])]}
+           [Inductive.ctor(:MkBad, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Wrap, [], []}, {:data, :Dec, [], []}}}], [])]}
 
     Challenge.new(
       kind: :indexed_case,

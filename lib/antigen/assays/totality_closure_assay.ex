@@ -86,8 +86,8 @@ defmodule Antigen.Assays.TotalityClosureAssay do
   end
 
   defp globals({:global, n}), do: [n]
-  defp globals({:pi, d, c}), do: globals(d) ++ globals(c)
-  defp globals({:lam, d, b}), do: globals(d) ++ globals(b)
+  defp globals({:pi, _g, d, c}), do: globals(d) ++ globals(c)
+  defp globals({:lam, _g, d, b}), do: globals(d) ++ globals(b)
   defp globals({:app, f, a}), do: globals(f) ++ globals(a)
   defp globals({:data, _n, ps, is}), do: Enum.flat_map(ps, &globals/1) ++ Enum.flat_map(is, &globals/1)
   defp globals({:ctor, _n, args}), do: Enum.flat_map(args, &globals/1)

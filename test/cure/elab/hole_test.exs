@@ -27,7 +27,7 @@ defmodule Cure.Elab.HoleTest do
     end)
   end
 
-  defp unwrap_lams({:lam, _dom, body}), do: unwrap_lams(body)
+  defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
   defp unwrap_lams(term), do: term
 
   test "the lexer/parser turn ?body into a hole node" do

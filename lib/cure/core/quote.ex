@@ -41,14 +41,14 @@ defmodule Cure.Core.Quote do
 
   def reify({:vtype, level}, _depth, _sig), do: {:type, level}
 
-  def reify({:vpi, dom, {:closure, env, cod}}, depth, sig) do
+  def reify({:vpi, g, dom, {:closure, env, cod}}, depth, sig) do
     body = Eval.eval(cod, [{:vneutral, {:nvar, depth}} | env])
-    {:pi, reify(dom, depth, sig), reify(body, depth + 1, sig)}
+    {:pi, g, reify(dom, depth, sig), reify(body, depth + 1, sig)}
   end
 
-  def reify({:vlam, dom, {:closure, env, b}}, depth, sig) do
+  def reify({:vlam, g, dom, {:closure, env, b}}, depth, sig) do
     body = Eval.eval(b, [{:vneutral, {:nvar, depth}} | env])
-    {:lam, reify(dom, depth, sig), reify(body, depth + 1, sig)}
+    {:lam, g, reify(dom, depth, sig), reify(body, depth + 1, sig)}
   end
 
   # Data value read-back. With a signature the param/index split is recovered from

@@ -58,7 +58,7 @@ defmodule Antigen.CorpusReplayTest do
     # seeds but were absent from the hand-maintained subset, so replay misreported
     # them as `unknown_assay`. The shared registry must dispatch every one.
     for assay <-
-          ~w(kernel/beta_subst elab/shift_agrees serialize/roundtrip serialize/decode
+          ~w(kernel/beta_subst kernel/zeta_subst kernel/grade_conv elab/shift_agrees serialize/roundtrip serialize/decode
              conv/decision check/verdict branchunify/verdict delta/nf forcing/dot term/rejection) do
       assert Map.has_key?(@registry, assay), "replay registry does not dispatch #{assay}"
     end

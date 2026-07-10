@@ -94,14 +94,14 @@ defmodule Cure.Elab.NamedImplicitTailTest do
       # erased `m`) and RETURNS it — `{:var, 0}` under the branch's 1 fresh
       # binder. The motive slot is ignored by Relevance.walk.
       #
-      # An all-`:present` signature is deliberate. §2.3's fold introduces the
+      # An all-`:unrestricted` signature is deliberate. §2.3's fold introduces the
       # erased binder from the PATTERN, not the signature, and `Relevance.check/4`
       # walks every body regardless of its own quantities, so this is policed
       # without needing a dummy erased top-level parameter to prime the walk.
       body = {:case, {:var, 0}, {:type, 0}, [{ctor_atom(env, :bmk), 1, {:var, 0}}]}
 
       assert {:error, {:erased_used_relevantly, %{site: :returned}}} =
-               Cure.Elab.Relevance.check(env, :probe_fn, [:present], body)
+               Cure.Elab.Relevance.check(env, :probe_fn, [:unrestricted], body)
     end
   end
 

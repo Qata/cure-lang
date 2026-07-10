@@ -24,18 +24,22 @@ defmodule Cure.Core.ValidatorTest do
       # the same way, so {:sigma}/{:pair}/{:fst}/{:snd} join the reject set.
       # K2 completes the same ratchet for {:prim}: builtin-op globals replace
       # the node, the kernel clauses are stripped, so no_prim_node joins the set.
+      # `grade_on_binders` joined the rejecting set when Core binders gained a QTT
+      # grade: an ungraded 3-tuple binder is now a stale shape, not a current one.
       rejecting = for {c, :reject} <- Validator.wave0_config(), do: c
-      assert Enum.sort(rejecting) == [:no_eq_node, :no_prim_node, :no_sigma_node]
+
+      assert Enum.sort(rejecting) ==
+               [:grade_on_binders, :no_eq_node, :no_prim_node, :no_sigma_node]
     end
 
-    test "legacy-detecting clauses warn (retired-primitive clause rejects); not-yet-reshaped clauses are off" do
+    test "legacy-detecting clauses warn; retired-primitive and stale-binder clauses reject" do
       cfg = Validator.wave0_config()
       assert cfg.no_hole == :warn
       assert cfg.no_eq_node == :reject
       assert cfg.no_rewrite_node == :warn
       assert cfg.no_prim_node == :reject
       assert cfg.no_absurd_node == :warn
-      assert cfg.grade_on_binders == :off
+      assert cfg.grade_on_binders == :reject
       assert cfg.qualified_syms == :off
       assert cfg.level_expr == :off
     end
@@ -43,10 +47,10 @@ defmodule Cure.Core.ValidatorTest do
 
   describe "nodes/1 walker" do
     test "enumerates the term and all sub-terms pre-order" do
-      term = {:app, {:lam, {:type, 0}, {:var, 0}}, {:int_lit, 3}}
+      term = {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:int_lit, 3}}
       got = Cure.Core.Validator.nodes(term)
       assert hd(got) == term
-      assert {:lam, {:type, 0}, {:var, 0}} in got
+      assert {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}} in got
       assert {:type, 0} in got
       assert {:var, 0} in got
       assert {:int_lit, 3} in got
@@ -71,7 +75,7 @@ defmodule Cure.Core.ValidatorTest do
 
   describe "validate/2 (Wave-0 active clauses)" do
     test "a clean current-grammar term yields no diagnostics" do
-      assert {:ok, []} = Validator.validate({:lam, {:type, 0}, {:var, 0}})
+      assert {:ok, []} = Validator.validate({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}})
     end
 
     test "a smuggled legacy :eq node REJECTS even under the Wave-0 default (Phase C flip)" do
@@ -124,16 +128,25 @@ defmodule Cure.Core.ValidatorTest do
     end
   end
 
-  describe "deferred clauses recognize legacy shape when flipped on" do
-    test "grade_on_binders fires on a current (ungraded) binder when set to :warn" do
+  describe "grade_on_binders detects a STALE ungraded binder" do
+    # Built with `list_to_tuple/1` on purpose: these are the pre-QTT shapes, and a
+    # mechanical grade-insertion pass must not be able to "fix" them into 4-tuples.
+    defp stale_pi, do: :erlang.list_to_tuple([:pi, {:type, 0}, {:var, 0}])
+
+    test "fires on a stale ungraded binder when set to :warn" do
       cfg = Map.put(Validator.wave0_config(), :grade_on_binders, :warn)
-      assert {:ok, ws} = Validator.validate({:pi, {:type, 0}, {:var, 0}}, cfg)
+      assert {:ok, ws} = Validator.validate(stale_pi(), cfg)
       assert Enum.any?(ws, &(&1.clause == :grade_on_binders))
     end
 
-    test "grade_on_binders does NOT fire on a hypothetical graded binder" do
+    test "rejects a stale ungraded binder under the Wave-0 default" do
+      assert Validator.wave0_config().grade_on_binders == :reject
+      assert {:error, _} = Validator.validate(stale_pi())
+    end
+
+    test "does NOT fire on a graded binder" do
       cfg = Map.put(Validator.wave0_config(), :grade_on_binders, :warn)
-      graded = {:pi, :omega, {:type, 0}, {:var, 0}}
+      graded = {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}
       assert {:ok, ws} = Validator.validate(graded, cfg)
       refute Enum.any?(ws, &(&1.clause == :grade_on_binders))
     end
@@ -150,7 +163,7 @@ defmodule Cure.Core.ValidatorTest do
     end
 
     test "in Wave-0 config these deferred clauses stay silent (are :off)" do
-      assert {:ok, []} = Validator.validate({:pi, {:type, 0}, {:global, :foo}})
+      assert {:ok, []} = Validator.validate({:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:global, :foo}})
     end
   end
 
@@ -163,12 +176,12 @@ defmodule Cure.Core.ValidatorTest do
 
     test "a clean def still admits under the default (non-breaking)" do
       # idty : Type 0 -> Type 0  ;  body = λx. x  (clean, admits)
-      env = Env.add_def(Env.empty(), :idty, {:pi, {:type, 0}, {:type, 0}}, {:lam, {:type, 0}, {:var, 0}})
+      env = Env.add_def(Env.empty(), :idty, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}})
       assert :ok == Kernel.check_def(env, :idty)
     end
 
     test "with a reject-override config, a hole-bearing def fails admission" do
-      env = Env.add_def(Env.empty(), :withhole, {:pi, {:type, 0}, {:type, 0}}, {:lam, {:type, 0}, {:hole, :h}})
+      env = Env.add_def(Env.empty(), :withhole, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:hole, :h}})
 
       Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_hole, :reject))
       on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)

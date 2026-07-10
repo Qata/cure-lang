@@ -19,7 +19,7 @@ defmodule Antigen.SigmaRetirementTest do
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
   @sz {:ctor, :S, [@z]}
-  @sigma {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+  @sigma {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
 
   defp seeded_ctx, do: Context.empty(Builtins.seed(Env.empty()))
 
@@ -32,8 +32,8 @@ defmodule Antigen.SigmaRetirementTest do
     assert :ok = Kernel.check(ctx, pair, sigma_value)
 
     # First/second projections as single-branch case: ι-reduce to the components.
-    fst = {:case, pair, {:lam, @sigma, @nat}, [{:mk_pair, 2, {:var, 1}}]}
-    snd = {:case, pair, {:lam, @sigma, @nat}, [{:mk_pair, 2, {:var, 0}}]}
+    fst = {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, @nat}, [{:mk_pair, 2, {:var, 1}}]}
+    snd = {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, @nat}, [{:mk_pair, 2, {:var, 0}}]}
     assert Normalise.nf(ctx, fst) == @z
     assert Normalise.nf(ctx, snd) == @sz
   end

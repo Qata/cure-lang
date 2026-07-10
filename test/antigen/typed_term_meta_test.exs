@@ -25,7 +25,7 @@ defmodule Antigen.TypedTermMetaTest do
       {empty, SigMenu.nat()}, {empty, SigMenu.bd()},
       {empty, SigMenu.vec({:ctor, :Z, []})},
       {empty, SigMenu.vec({:ctor, :S, [{:ctor, :Z, []}]})},
-      {empty, {:pi, SigMenu.nat(), SigMenu.nat()}},
+      {empty, {:pi, Cure.Core.Grade.unrestricted(), SigMenu.nat(), SigMenu.nat()}},
       {stuck_ctx, SigMenu.vec({:var, 1})}
     ]
 

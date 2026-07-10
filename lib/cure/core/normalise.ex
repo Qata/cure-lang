@@ -152,17 +152,17 @@ defmodule Cure.Core.Normalise do
   # reflected by re-evaluation in a truncated env. (depth 0 → []).
   defp id_env(depth), do: Context.neutral_env(depth)
 
-  defp nf_struct({:vpi, dom, {:closure, env, cod}}, sig, depth, opts) do
+  defp nf_struct({:vpi, g, dom, {:closure, env, cod}}, sig, depth, opts) do
     fresh = {:vneutral, {:nvar, depth}}
 
-    {:vpi, nf_value(dom, sig, depth, opts),
+    {:vpi, g, nf_value(dom, sig, depth, opts),
      {:closure, id_env(depth), quote_nf(Eval.eval(cod, [fresh | env]), sig, depth + 1, opts)}}
   end
 
-  defp nf_struct({:vlam, dom, {:closure, env, body}}, sig, depth, opts) do
+  defp nf_struct({:vlam, g, dom, {:closure, env, body}}, sig, depth, opts) do
     fresh = {:vneutral, {:nvar, depth}}
 
-    {:vlam, nf_value(dom, sig, depth, opts),
+    {:vlam, g, nf_value(dom, sig, depth, opts),
      {:closure, id_env(depth), quote_nf(Eval.eval(body, [fresh | env]), sig, depth + 1, opts)}}
   end
 

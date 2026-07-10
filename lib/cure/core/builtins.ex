@@ -1,4 +1,5 @@
 defmodule Cure.Core.Builtins do
+  alias Cure.Core.Grade
   @moduledoc """
   Canonical builtin-inductive schemas and the programmatic seeder.
 
@@ -188,11 +189,12 @@ defmodule Cure.Core.Builtins do
   # parameter there without a relevance violation (#26). Erasure drops the type
   # argument, so the emitted spine is the two value operands.
   defp seed_struct_ops(env, bool_ty) do
-    ty = {:pi, {:type, 0}, {:pi, {:var, 0}, {:pi, {:var, 1}, bool_ty}}}
+    w = Grade.unrestricted()
+    ty = {:pi, w, {:type, 0}, {:pi, w, {:var, 0}, {:pi, w, {:var, 1}, bool_ty}}}
 
     Enum.reduce(@struct_ops, env, fn {name, op_key}, acc ->
       acc
-      |> Env.add_def(name, ty, nil, [:erased, :present, :present])
+      |> Env.add_def(name, ty, nil, [:erased, :unrestricted, :unrestricted])
       |> Env.register_builtin_op(name, op_key)
     end)
   end
@@ -200,7 +202,7 @@ defmodule Cure.Core.Builtins do
   defp seed_binops(env, ops, dom, bool_ty) do
     Enum.reduce(ops, env, fn {name, op_key}, acc ->
       cod = if op_key in @cmp_ops, do: bool_ty, else: dom
-      ty = {:pi, dom, {:pi, dom, cod}}
+      ty = {:pi, Grade.unrestricted(), dom, {:pi, Grade.unrestricted(), dom, cod}}
 
       acc
       |> Env.add_def(name, ty, nil)
@@ -210,7 +212,7 @@ defmodule Cure.Core.Builtins do
 
   defp seed_unops(env, ops, dom) do
     Enum.reduce(ops, env, fn {name, op_key}, acc ->
-      ty = {:pi, dom, dom}
+      ty = {:pi, Grade.unrestricted(), dom, dom}
 
       acc
       |> Env.add_def(name, ty, nil)
@@ -281,7 +283,7 @@ defmodule Cure.Core.Builtins do
   # Source of truth is the @builtin(:sigma) decl in Std.Sigma; this seed is its
   # byte-for-byte mirror, pinned by the conformance drift test.
   defp sigma_family,
-    do: Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, {:var, 0}, {:type, 0}}], [], 0)
+    do: Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, Grade.unrestricted(), {:var, 0}, {:type, 0}}], [], 0)
 
   defp sigma_ctors,
     do: [
@@ -291,7 +293,7 @@ defmodule Cure.Core.Builtins do
         # elaborator auto-names it `_a1` (positional; the drift test pins this).
         [x: {:var, 1}, _a1: {:app, {:var, 1}, {:var, 0}}],
         [],
-        [:present, :present],
+        [:unrestricted, :unrestricted],
         [{:var, 3}, {:var, 2}]
       )
     ]
@@ -316,7 +318,7 @@ defmodule Cure.Core.Builtins do
         :Cons,
         [_a0: {:var, 0}, _a1: {:data, :List, [{:var, 1}], []}],
         [],
-        [:present, :present],
+        [:unrestricted, :unrestricted],
         [{:var, 2}]
       )
     ]

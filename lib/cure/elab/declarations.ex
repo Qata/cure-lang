@@ -16,7 +16,7 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
+  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote}
   alias Cure.Elab.{Elaborator, Relevance}
 
   @ceiling 2
@@ -304,7 +304,18 @@ defmodule Cure.Elab.Declarations do
   # Elaborate a function's body against its (already registered) signature and
   # replace the placeholder with the real lambda. The environment already carries
   # every function's signature, so forward references and mutual recursion resolve.
-  def elaborate_function_body({:function_def, meta, body}, env) do
+  def elaborate_function_body({:function_def, meta, body} = fdef, env) do
+    # Slice 4c's join point shares a catch-all body under a `{:lam, ω, …}`, and slice
+    # 4b's usage check ω-scales a λ's captured variables — so a `:linear`/`:affine`
+    # variable captured by a shared catch-all is over-rejected (review F11). Idris
+    # never materialises a shared capturing continuation at linearity-check time
+    # (`LinearCheck.idr:441-442` checks each alternative independently); the join is a
+    # pure term-size optimization. The sound-by-construction fix: skip the join in a
+    # def that uses restricted grades, so the usage check sees the per-branch form
+    # (whose independent-branch `alt` agreement is already correct). This flag is read
+    # by `Elaborator.join_point?/5` and re-set per def, covering every nested match.
+    Process.put(:qtt_join_disabled, def_uses_restricted_grade?(fdef))
+
     case Keyword.get(meta, :extern) do
       {mod, fun, arity} when is_atom(mod) and is_atom(fun) and is_integer(arity) ->
         # Wave-3: a bodyless @extern is a typed FFI postulate — the signature IS
@@ -335,7 +346,11 @@ defmodule Cure.Elab.Declarations do
   # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
   # it. Rejecting the mismatch is the only reading under which the number means one thing.
   defp check_extern_arity(sig, arity) do
-    present = Enum.count(sig.quantities || [], &(&1 == :present))
+    # PRESENT, not unrestricted. Slice 4a's rename left `== :unrestricted` here, which
+    # excludes `:linear`/`:affine` parameters — they have runtime values and DO reach
+    # the BEAM, so they must be counted. Same trap 4a fixed in `Erase`/`Emit` and 4b
+    # fixed in `Relevance`.
+    present = Enum.count(sig.quantities || [], &Grade.present?/1)
 
     if arity == present do
       :ok
@@ -343,6 +358,26 @@ defmodule Cure.Elab.Declarations do
       {:error, {:extern_arity_mismatch, sig.name, arity, present}}
     end
   end
+
+  # True if the def annotates any binder — a parameter or an inner `let` — with a
+  # `:linear` or `:affine` grade. `:erased` does NOT count: an erased capture is
+  # policed by the position check regardless of scaling, so the join never
+  # over-rejects it. Restricted grades come only from explicit slice-5 surface
+  # syntax, so this is false for every current (ungraded) program and the join keeps
+  # firing there.
+  defp def_uses_restricted_grade?({:function_def, meta, body}) do
+    Enum.any?(Keyword.get(meta, :params, []), &restricted_grade_node?/1) or
+      restricted_grade_node?(body)
+  end
+
+  defp restricted_grade_node?({_tag, meta, children}) when is_list(meta) do
+    Keyword.get(meta, :grade) in [:linear, :affine] or restricted_grade_node?(children)
+  end
+
+  defp restricted_grade_node?(list) when is_list(list),
+    do: Enum.any?(list, &restricted_grade_node?/1)
+
+  defp restricted_grade_node?(_), do: false
 
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
@@ -364,9 +399,26 @@ defmodule Cure.Elab.Declarations do
            # slots, so reject any body that uses one relevantly (returned / passed
            # in a present position / scrutinised / applied). E-layer; the kernel
            # stays quantity-blind. See `Cure.Elab.Relevance`.
-           :ok <- Relevance.check(env, sig.name, quantities, body_term) do
-        lambda = wrap_binders(:lam, sig.telescope, body_term)
-        final = Env.add_def(env, sig.name, sig.pi, lambda, quantities)
+           :ok <- Relevance.check(env, sig.name, quantities, body_term),
+           # The Pi is the single source of truth (slice 6). `sig.pi` was built from
+           # the ORIGINAL quantities; `demote_unused_dicts/3` may have lowered a dict
+           # since, so rebuild the stored type from the DEMOTED vector — otherwise the
+           # stored Pi (dict `ω`) and λ (dict `:erased`) would disagree, a pairing the
+           # graded `Conv` forbids. Both now come from one vector.
+           final_pi = wrap_binders(:pi, sig.telescope, quantities, sig.return_core),
+           lambda = wrap_binders(:lam, sig.telescope, quantities, body_term),
+           # The assertion that would have caught the whole dichotomy class: the stored
+           # Π and λ must agree on every binder's grade. Compare the two grade spines
+           # STRUCTURALLY — do NOT re-run a full `Kernel.check` of the body. The body
+           # already type-checked at `:284` against `build_context`'s WHNF'd context; a
+           # second kernel check here would rebuild the context WITHOUT that whnf (the
+           # `:lam` rule's `Context.extend` does not normalise `exp_dom`), so a
+           # parameter whose type is a δ-unfoldable alias reaches the kernel as an
+           # opaque neutral and a `match` on it fails `:case_scrutinee_not_data` — a
+           # regression the first cut of this slice shipped (adversarial review F1).
+           # The grade check is all slice 6 needs, and it is O(telescope depth).
+           :ok <- assert_binder_grades_agree(final_pi, lambda, sig.name) do
+        final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
@@ -412,7 +464,11 @@ defmodule Cure.Elab.Declarations do
          scope: scope,
          return_core: return_core,
          constraints: constraint_specs,
-         pi: wrap_binders(:pi, telescope, return_core)
+         # The PRE-REGISTRATION type, honest about the ORIGINAL quantities (implicit
+         # ⇒ erased). `demote_unused_dicts/3` may lower a dict below this after the
+         # body is seen; the final stored Pi is rebuilt from the demoted vector so it
+         # agrees with the λ (see `elaborate_function_body`).
+         pi: wrap_binders(:pi, telescope, quantities, return_core)
        }}
     end
   end
@@ -837,6 +893,15 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # The quantity a parameter binds at: an explicit surface grade wins, else the
+  # position's default (`:erased` for an implicit, `ω` for an explicit).
+  defp param_quantity(pmeta) do
+    case Keyword.get(pmeta, :grade) do
+      nil -> if Keyword.get(pmeta, :implicit), do: Grade.zero(), else: Grade.unrestricted()
+      g -> g
+    end
+  end
+
   defp elaborate_param_telescope_rec(params, env) do
     params
     |> Enum.reduce_while({:ok, [], [], []}, fn {:param, pmeta, pname}, {:ok, tele, quants, scope} ->
@@ -853,7 +918,11 @@ defmodule Cure.Elab.Declarations do
         type_expr ->
           case idx_to_core(type_expr, scope, nil, env) do
             {:ok, core} ->
-              q = if Keyword.get(pmeta, :implicit), do: :erased, else: :present
+              # A surface grade (`c :linear T`, plan slice 5) overrides the position's
+              # default: an implicit defaults to `:erased`, an explicit to `ω`. `ω`
+              # itself has no spelling — it is written by omitting the grade — so each
+              # grade has exactly one surface form.
+              q = param_quantity(pmeta)
               {:cont, {:ok, tele ++ [{String.to_atom(pname), core}], quants ++ [q], [pname | scope]}}
 
             {:error, _} = err ->
@@ -883,8 +952,46 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
-  defp wrap_binders(tag, telescope, inner) do
-    Enum.reduce(Enum.reverse(telescope), inner, fn {_name, type}, acc -> {tag, type, acc} end)
+  # Builds a `:pi`/`:lam` chain from a telescope, each binder carrying the grade at
+  # its position in `quantities` (slice 6 — the Pi is the single source of truth). A
+  # `nil` vector, or one shorter than the telescope, defaults the remainder to `ω`.
+  # The binder tuple is assembled from a TAG, so no textual pass can see it — the
+  # grade must be threaded here explicitly; `Term.term?/1` caught this during the
+  # reshape.
+  defp wrap_binders(tag, telescope, quantities, inner) do
+    grades = binder_grades(quantities, length(telescope))
+
+    telescope
+    |> Enum.zip(grades)
+    |> Enum.reverse()
+    |> Enum.reduce(inner, fn {{_name, type}, g}, acc -> {tag, g, type, acc} end)
+  end
+
+  # Slice-6 guard: the stored Π and λ must carry the same grade at every binder
+  # position. Both are built from one `quantities` vector by `wrap_binders/4`, so on
+  # correct code this always holds; it fires only if a future change sources the two
+  # from different vectors (mutation-validated: build the final Pi from the ORIGINAL
+  # instead of the demoted vector → `{:grade_mismatch, %{pi:, lam:}}`). Structural,
+  # so it never inspects a binder's TYPE — no whnf, no body re-check.
+  defp assert_binder_grades_agree(pi, lam, name) do
+    case grade_spine_mismatch(pi, lam) do
+      nil -> :ok
+      {pg, lg} -> {:error, {:grade_mismatch, %{def: name, pi: pg, lam: lg}}}
+    end
+  end
+
+  defp grade_spine_mismatch({:pi, pg, _pd, pc}, {:lam, lg, _ld, lb}) do
+    if pg == lg, do: grade_spine_mismatch(pc, lb), else: {pg, lg}
+  end
+
+  # Spines exhausted in lockstep (both built from the same telescope) — agreed.
+  defp grade_spine_mismatch(_pi_cod, _lam_body), do: nil
+
+  defp binder_grades(nil, n), do: List.duplicate(Cure.Core.Grade.unrestricted(), n)
+
+  defp binder_grades(quantities, n) do
+    pad = n - length(quantities)
+    if pad > 0, do: quantities ++ List.duplicate(Cure.Core.Grade.unrestricted(), pad), else: Enum.take(quantities, n)
   end
 
   # -- indexed families -------------------------------------------------------
@@ -977,7 +1084,7 @@ defmodule Cure.Elab.Declarations do
             # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
-                List.duplicate(:present, length(expl_tele))
+                List.duplicate(:unrestricted, length(expl_tele))
 
             {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
           end
@@ -1167,7 +1274,7 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp pi_domains({:pi, dom, cod}), do: [dom | pi_domains(cod)]
+  defp pi_domains({:pi, _g, dom, cod}), do: [dom | pi_domains(cod)]
   defp pi_domains(_), do: []
 
   # The positional index types of family `name` (self or already registered).
@@ -1350,13 +1457,13 @@ defmodule Cure.Elab.Declarations do
   # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
   # `bname` in scope, so it is already in the frame of one new lambda binder, and
-  # wrapping it under `{:lam, dom, body}` is exactly that frame. `:Sigma` is the
+  # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame. `:Sigma` is the
   # canonical family name (only Std.Sigma registers `@builtin(:sigma)`), used as a
   # literal so `Sigma(..)` lowers even in a raw-`Env.empty()` elaboration.
   defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
+      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
     end
   end
 
@@ -1391,7 +1498,7 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, rev_doms, inner_scope} <- folded,
          {:ok, ret} <- idx_to_core(ret_ast, inner_scope, fam, env) do
-      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, dom, acc} end)}
+      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, Cure.Core.Grade.unrestricted(), dom, acc} end)}
     end
   end
 
@@ -1436,7 +1543,7 @@ defmodule Cure.Elab.Declarations do
   defp build_telescope_type([{bname, ast} | rest], scope, fam, env) do
     with {:ok, dom} <- idx_to_core(ast, scope, fam, env),
          {:ok, body} <- build_telescope_type(rest, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
+      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
     end
   end
 
@@ -1456,7 +1563,7 @@ defmodule Cure.Elab.Declarations do
         |> Enum.with_index()
         |> Enum.reverse()
         |> Enum.reduce(Cure.Core.Term.shift(ret_core, length(dom_cores), 0), fn {dom, i}, acc ->
-          {:pi, Cure.Core.Term.shift(dom, i, 0), acc}
+          {:pi, Cure.Core.Grade.unrestricted(), Cure.Core.Term.shift(dom, i, 0), acc}
         end)
 
       {:ok, pi}

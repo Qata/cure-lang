@@ -20,8 +20,8 @@ defmodule Antigen.Generators.BetaSubstTest do
     end
   end
 
-  defp broke({:lam, t, b}, e, d), do: {:lam, broke(t, e, d), broke(b, e, d + 1)}
-  defp broke({:pi, t, b}, e, d), do: {:pi, broke(t, e, d), broke(b, e, d + 1)}
+  defp broke({:lam, _g, t, b}, e, d), do: {:lam, Cure.Core.Grade.unrestricted(), broke(t, e, d), broke(b, e, d + 1)}
+  defp broke({:pi, _g, t, b}, e, d), do: {:pi, Cure.Core.Grade.unrestricted(), broke(t, e, d), broke(b, e, d + 1)}
   defp broke({:sigma, t, b}, e, d), do: {:sigma, broke(t, e, d), broke(b, e, d + 1)}
   # Inductive Sigma (D2): a `{:data, …}` node introduces no binder itself (its Σ
   # codomain lambda does, handled by the `{:lam}` clause), so its args recurse at the
@@ -43,7 +43,7 @@ defmodule Antigen.Generators.BetaSubstTest do
     for %Challenge{} = c <- B.interp(BetaSubst.gen()) |> Enum.take(@sample) do
       assert c.kind == :typed_term
       assert c.assay == "kernel/beta_subst"
-      assert match?({:app, {:lam, _, _}, _}, c.payload.term)
+      assert match?({:app, {:lam, _g, _, _}, _}, c.payload.term)
       assert match?({:ok, _}, Kernel.infer(ctx_of(c.payload.ctx), c.payload.term)),
              "redex not well-typed: #{c.note}"
       assert Assays.KernelLaw.run(c) == :ok, "β/subst disagreed on #{c.note}"
@@ -56,7 +56,7 @@ defmodule Antigen.Generators.BetaSubstTest do
   test "each capture trap detects an unshifted substitution (reduction teeth)" do
     for {ctx_types, _type, t, e, body, note} <- BetaSubst.cases() do
       ctx = ctx_of(ctx_types)
-      beta_nf = Normalise.nf(ctx, {:app, {:lam, t, body}, e})
+      beta_nf = Normalise.nf(ctx, {:app, {:lam, Cure.Core.Grade.unrestricted(), t, body}, e})
       broken_nf = Normalise.nf(ctx, broke(body, e, 0))
       assert beta_nf != broken_nf,
              "capture trap #{note} does NOT distinguish an unshifted subst — no teeth"
@@ -71,7 +71,7 @@ defmodule Antigen.Generators.BetaSubstTest do
   # is ill-typed and the typing half catches it. Assert both facts honestly.
   defp redex_type(ctx, t, e, body) do
     depth = Cure.Core.Context.length(ctx)
-    {:ok, v} = Kernel.infer(ctx, {:app, {:lam, t, body}, e})
+    {:ok, v} = Kernel.infer(ctx, {:app, {:lam, Cure.Core.Grade.unrestricted(), t, body}, e})
     Normalise.quote(v, depth)
   end
 
@@ -88,7 +88,7 @@ defmodule Antigen.Generators.BetaSubstTest do
     for {ctx_types, _type, t, e, body, note} <- BetaSubst.cases() do
       ctx = ctx_of(ctx_types)
       depth = Cure.Core.Context.length(ctx)
-      {:ok, vr} = Kernel.infer(ctx, {:app, {:lam, t, body}, e})
+      {:ok, vr} = Kernel.infer(ctx, {:app, {:lam, Cure.Core.Grade.unrestricted(), t, body}, e})
       {:ok, vs} = Kernel.infer(ctx, Subst.instantiate(body, [e]))
       assert Normalise.quote(vr, depth) == Normalise.quote(vs, depth),
              "substitution lemma failed on #{note}"
@@ -117,7 +117,7 @@ defmodule Antigen.Generators.BetaSubstTest do
           kind: :typed_term,
           assay: "kernel/beta_subst",
           label: :well_typed,
-          payload: %{sig: :v1, ctx: ctx, type: type, term: {:app, {:lam, t, body}, e}},
+          payload: %{sig: :v1, ctx: ctx, type: type, term: {:app, {:lam, Cure.Core.Grade.unrestricted(), t, body}, e}},
           note: note
         )
 

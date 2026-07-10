@@ -16,7 +16,7 @@ defmodule Antigen.Assays.KernelLaw do
   alias Antigen.Challenge
   alias Antigen.Generators.SigMenu
   alias Antigen.Assays.Term, as: TermAssay
-  alias Cure.Core.{Term, Context, Eval, Normalise, Kernel}
+  alias Cure.Core.{Conv, Term, Context, Eval, Normalise, Kernel}
   alias Cure.Elab.Subst
 
   @nat {:data, :Nat, [], []}
@@ -28,6 +28,8 @@ defmodule Antigen.Assays.KernelLaw do
   def run(%Challenge{assay: "kernel/weakening", payload: p}), do: weakening(p)
   def run(%Challenge{assay: "kernel/confluence", payload: p}), do: confluence(p)
   def run(%Challenge{assay: "kernel/beta_subst", payload: p}), do: beta_subst(p)
+  def run(%Challenge{assay: "kernel/zeta_subst", payload: p}), do: zeta_subst(p)
+  def run(%Challenge{assay: "kernel/grade_conv", payload: p}), do: grade_conv(p)
   def run(%Challenge{assay: "elab/shift_agrees", payload: p}), do: shift_agrees(p.term)
 
   defp ctx_of(p), do: SigMenu.rebuild_context(SigMenu.env_of(p.sig), p.ctx)
@@ -136,7 +138,7 @@ defmodule Antigen.Assays.KernelLaw do
   # binder body crosses. A shift/capture bug shows up in (a) as a normal-form
   # disagreement AND in (b) as a mis-scoped `subst_term` that infers to no type or a
   # different one — the typing-level teeth the nf comparison alone cannot see.
-  defp beta_subst(%{term: {:app, {:lam, _t, body}, e}} = p) do
+  defp beta_subst(%{term: {:app, {:lam, _g, _t, body}, e}} = p) do
     ctx = ctx_of(p)
     redex = p.term
     subst_term = Subst.instantiate(body, [e])
@@ -150,6 +152,123 @@ defmodule Antigen.Assays.KernelLaw do
   # The generator only ever emits redexes; a non-redex term is a wiring bug, not a
   # kernel finding — surface it distinctly.
   defp beta_subst(%{term: other}), do: {:violation, {:beta_subst_not_a_redex, other}}
+
+  # ── 3e. ζ: `let` agrees with capture-avoiding substitution ─────────────────
+  #
+  # The antibody for the Core `:let` binder. `Eval`'s ζ pushes the *evaluated*
+  # value of `e` into the NbE environment and never shifts; `Subst.instantiate/2`
+  # shifts `e` by the binder depth. Different mechanisms, same answer — or the
+  # `:let` node is unsound.
+  #
+  # Reusing `beta_nf_agrees/3` and `beta_type_agrees/3` verbatim is deliberate:
+  # the property IS the same property, so it must be checked by the same code.
+  # A pass here means ζ equates exactly what substitution equates — no distinct
+  # normal forms collapsed — and terminates wherever substitution does (both
+  # sides share the assay fuel and abstain together on exhaustion).
+  defp zeta_subst(%{term: {:let, _g, _t, e, body}} = p) do
+    ctx = ctx_of(p)
+    subst_term = Subst.instantiate(body, [e])
+
+    # `shift_subst/1` is the pure de Bruijn sigma-algebra (laws 1-4). Running it
+    # on the `:let` term itself is what property-tests `Term.shift/3` and
+    # `Term.subst/3`'s new clauses -- specifically that `body` is one binder
+    # deeper than `ty`/`val`. Nothing else in the corpus generates a `:let` yet,
+    # so without this the new binder's sigma-algebra would be covered only by
+    # ExUnit.
+    with :ok <- shift_subst(p.term),
+         :ok <- beta_nf_agrees(ctx, p.term, subst_term),
+         :ok <- beta_type_agrees(ctx, p.term, subst_term) do
+      :ok
+    end
+  end
+
+  defp zeta_subst(%{term: other}), do: {:violation, {:zeta_subst_not_a_let, other}}
+
+  # ── 3f. a binder's GRADE is part of type identity ──────────────────────────
+  #
+  # Idris `Core/Normalise/Convert.idr:328` compares `multiplicity` in
+  # `convBinders`, so `(1 x : A) -> B` and `(x : A) -> B` are DIFFERENT TYPES.
+  # Comparison is by EQUALITY, never by the subusaging preorder: `leq(:linear,
+  # :affine)` holds, and yet those two Π types must not convert.
+  #
+  # Reflexivity is checked first so the law cannot pass vacuously by rejecting
+  # everything — a `Conv` that returned `false` unconditionally would otherwise
+  # look healthy.
+  defp grade_conv(%{term: {:pi, g, dom, cod} = t} = p) do
+    ctx = ctx_of(p)
+    env = Context.env(ctx)
+    depth = Context.length(ctx)
+    sig = SigMenu.env_of(p.sig)
+
+    with :ok <- grade_conv_refl(t, env, depth, sig),
+         :ok <- grade_conv_distinct(t, g, env, depth, sig) do
+      # The use-site half needs a λ that INHABITS the Π. The identity λ does so
+      # only when `dom == cod`; the shrinker happily rewrites a codomain into
+      # something else (it does not preserve well-typedness), and the nested
+      # cases have a Π codomain. Skip the half we cannot construct — the
+      # conversion half above is the property, and the `pi_*` cells all satisfy
+      # `dom == cod`, so it is still exercised.
+      if dom == cod, do: grade_conv_check(ctx, g, dom, t, env), else: :ok
+    end
+  end
+
+  # A λ's grade is part of the TERM's identity, exactly as a Π's is part of the type's.
+  # Idris reaches `convBinders` (which compares `multiplicity`) from `convGen` on
+  # Bind-vs-Bind, so Lam-vs-Lam is grade-sensitive; its η clause only fires for
+  # Lam-vs-non-Bind. No use-site half here: a λ is the thing being compared.
+  defp grade_conv(%{term: {:lam, g, _dom, _body} = t} = p) do
+    ctx = ctx_of(p)
+    env = Context.env(ctx)
+    depth = Context.length(ctx)
+    sig = SigMenu.env_of(p.sig)
+
+    with :ok <- grade_conv_refl(t, env, depth, sig),
+         do: grade_conv_distinct(t, g, env, depth, sig)
+  end
+
+  defp grade_conv(%{term: other}), do: {:violation, {:grade_conv_not_a_binder, other}}
+
+  defp grade_conv_refl(t, env, depth, sig) do
+    if Conv.conv?(t, t, env, depth, sig),
+      do: :ok,
+      else: {:violation, {:grade_conv_not_reflexive, t}}
+  end
+
+  # Every OTHER grade must yield a non-convertible binder — Π or λ alike.
+  defp grade_conv_distinct(t, g, env, depth, sig) do
+    Enum.reduce_while(Antigen.Generators.GradeConv.others(g), :ok, fn g2, _acc ->
+      other = regrade(t, g2)
+
+      if Conv.conv?(t, other, env, depth, sig) do
+        {:halt, {:violation, {:grade_conv_collapsed, %{left: t, right: other}}}}
+      else
+        {:cont, :ok}
+      end
+    end)
+  end
+
+  defp regrade({:pi, _g, dom, cod}, g2), do: {:pi, g2, dom, cod}
+  defp regrade({:lam, _g, dom, body}, g2), do: {:lam, g2, dom, body}
+
+  # The use-site half: a λ checks against a Π of its own grade, and only that one.
+  # This is where the discipline actually bites, and it is what a `Conv` that
+  # ignored grades would silently permit.
+  defp grade_conv_check(ctx, g, dom, t, env) do
+    vpi = Eval.eval(t, env)
+
+    same = Kernel.check(ctx, {:lam, g, dom, {:var, 0}}, vpi)
+
+    if same != :ok do
+      {:violation, {:grade_conv_same_grade_rejected, %{grade: g, reason: same}}}
+    else
+      Enum.reduce_while(Antigen.Generators.GradeConv.others(g), :ok, fn g2, _acc ->
+        case Kernel.check(ctx, {:lam, g2, dom, {:var, 0}}, vpi) do
+          :ok -> {:halt, {:violation, {:grade_conv_wrong_grade_accepted, %{pi: g, lam: g2}}}}
+          {:error, _} -> {:cont, :ok}
+        end
+      end)
+    end
+  end
 
   # (a) β-reduction ≡ substitution. Normalized under the same fuel so a divergent
   # (fuel-exhausting) case abstains rather than false-positives.

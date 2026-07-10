@@ -16,7 +16,7 @@ defmodule Antigen.NeutralAppMotiveTest do
 
   # ctx: [ b : (Nat) -> Type ]  (level 0)
   defp ctx_with_type_family(env) do
-    pi = Eval.eval({:pi, {:data, :Nat, [], []}, {:type, 0}}, [])
+    pi = Eval.eval({:pi, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:type, 0}}, [])
     Context.extend(Context.empty(env), pi)
   end
 
@@ -24,7 +24,7 @@ defmodule Antigen.NeutralAppMotiveTest do
     ctx = ctx_with_type_family(nat_env())
     nat = {:data, :Nat, [], []}
     # b is de Bruijn var 1 UNDER the motive's own binder (v : Nat is var 0).
-    motive = {:lam, nat, {:app, {:var, 1}, {:var, 0}}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), nat, {:app, {:var, 1}, {:var, 0}}}
 
     # Branch bodies must inhabit b(idx) — impossible to write closed, so use a
     # scrutinee-free acceptance probe: check_motive_wf alone gates the motive;
@@ -42,7 +42,7 @@ defmodule Antigen.NeutralAppMotiveTest do
   test "reject pin: a motive applying a NON-function head still fails :bad_motive" do
     ctx = Context.empty(nat_env())
     nat = {:data, :Nat, [], []}
-    motive = {:lam, nat, {:app, {:var, 0}, {:ctor, :Z, []}}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), nat, {:app, {:var, 0}, {:ctor, :Z, []}}}
     kase = {:case, {:ctor, :Z, []}, motive, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:ctor, :Z, []}}]}
 
     assert {:error, :bad_motive} = Kernel.infer(ctx, kase)

@@ -63,7 +63,7 @@ defmodule Cure.Core.PositivityNestedTest do
     env =
       base()
       |> Inductive.declare(Inductive.family(:Neg, [t: {:type, 0}], [], 0), [
-        Inductive.ctor(:MkNeg, [{:f, {:pi, {:var, 0}, @empty}}], [])
+        Inductive.ctor(:MkNeg, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:var, 0}, @empty}}], [])
       ])
       |> Inductive.declare(Inductive.family(:Bad, [], [], 0), [
         Inductive.ctor(:MkBad, [{:g, {:data, :Neg, [{:data, :Bad, [], []}], []}}], [])
@@ -106,7 +106,7 @@ defmodule Cure.Core.PositivityNestedTest do
       |> Inductive.declare(Inductive.family(:Iter, [a: {:type, 0}], [], 0), [
         Inductive.ctor(
           :MkIter,
-          [{:f, {:pi, {:data, :Tok, [], []}, {:data, :Option, [iterstep_a], []}}}],
+          [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Tok, [], []}, {:data, :Option, [iterstep_a], []}}}],
           []
         )
       ])

@@ -33,10 +33,10 @@ defmodule Cure.Elab.UnifyScopeCheckTest do
     {ctx, id} = MetaCtx.fresh(MetaCtx.new())
 
     # (x: Type) -> case _ { C() -> x } — the branch body is the Pi's own binder.
-    case_term = {:case, {:global, :dummy_scrutinee}, {:lam, @dom, @dom}, [{:C, 0, {:var, 0}}]}
+    case_term = {:case, {:global, :dummy_scrutinee}, {:lam, Cure.Core.Grade.unrestricted(), @dom, @dom}, [{:C, 0, {:var, 0}}]}
 
     assert {:error, {:escaping_variable, ^id}} =
-             Unify.unify({:pi, @dom, {:meta, id}}, {:pi, @dom, case_term}, ctx)
+             Unify.unify({:pi, Cure.Core.Grade.unrestricted(), @dom, {:meta, id}}, {:pi, Cure.Core.Grade.unrestricted(), @dom, case_term}, ctx)
   end
 
   test "the scope check also fires on a :case scrutinee referencing a crossed binder" do
@@ -45,16 +45,16 @@ defmodule Cure.Elab.UnifyScopeCheckTest do
     case_term = {:case, {:var, 0}, {:type, 0}, [{:some_ctor, 0, {:var, 0}}]}
 
     assert {:error, {:escaping_variable, ^id}} =
-             Unify.unify({:pi, @dom, {:meta, id}}, {:pi, @dom, case_term}, ctx)
+             Unify.unify({:pi, Cure.Core.Grade.unrestricted(), @dom, {:meta, id}}, {:pi, Cure.Core.Grade.unrestricted(), @dom, case_term}, ctx)
   end
 
   test "the scope check fires when the :case is nested inside a constructor argument" do
     {ctx, id} = MetaCtx.fresh(MetaCtx.new())
 
-    case_term = {:case, {:global, :dummy_scrutinee}, {:lam, @dom, @dom}, [{:C, 0, {:var, 0}}]}
+    case_term = {:case, {:global, :dummy_scrutinee}, {:lam, Cure.Core.Grade.unrestricted(), @dom, @dom}, [{:C, 0, {:var, 0}}]}
 
     assert {:error, {:escaping_variable, ^id}} =
-             Unify.unify({:pi, @dom, {:meta, id}}, {:pi, @dom, {:ctor, :Wrap, [case_term]}}, ctx)
+             Unify.unify({:pi, Cure.Core.Grade.unrestricted(), @dom, {:meta, id}}, {:pi, Cure.Core.Grade.unrestricted(), @dom, {:ctor, :Wrap, [case_term]}}, ctx)
   end
 
   test "a :case branch body referencing only its OWN pattern binders does not escape" do
@@ -63,9 +63,9 @@ defmodule Cure.Elab.UnifyScopeCheckTest do
     # the branch arity or it would reject this legitimate solution.
     {ctx, id} = MetaCtx.fresh(MetaCtx.new())
 
-    case_term = {:case, {:global, :dummy_scrutinee}, {:lam, @dom, @dom}, [{:C, 1, {:var, 0}}]}
+    case_term = {:case, {:global, :dummy_scrutinee}, {:lam, Cure.Core.Grade.unrestricted(), @dom, @dom}, [{:C, 1, {:var, 0}}]}
 
-    assert {:ok, ctx} = Unify.unify({:pi, @dom, {:meta, id}}, {:pi, @dom, case_term}, ctx)
+    assert {:ok, ctx} = Unify.unify({:pi, Cure.Core.Grade.unrestricted(), @dom, {:meta, id}}, {:pi, Cure.Core.Grade.unrestricted(), @dom, case_term}, ctx)
     assert {:case, _, _, [{:C, 1, {:var, 0}}]} = MetaCtx.solution(ctx, id)
   end
 
@@ -76,6 +76,6 @@ defmodule Cure.Elab.UnifyScopeCheckTest do
     {ctx, id} = MetaCtx.fresh(MetaCtx.new())
 
     assert {:error, {:escaping_variable, ^id}} =
-             Unify.unify({:pi, @dom, {:meta, id}}, {:pi, @dom, {:some_future_node, {:var, 0}}}, ctx)
+             Unify.unify({:pi, Cure.Core.Grade.unrestricted(), @dom, {:meta, id}}, {:pi, Cure.Core.Grade.unrestricted(), @dom, {:some_future_node, {:var, 0}}}, ctx)
   end
 end

@@ -155,7 +155,7 @@ defmodule Cure.Core.SerializeUntrustedInputTest do
         )
         |> Inductive.declare(
           Inductive.family(:P, [{:a, {:type, 0}}], [{:n, {:data, :Dec, [], []}}], 1),
-          [Inductive.ctor(:wrap, [{:p, {:var, 0}}], [{:ctor, :Causal, []}], [:present], [{:var, 1}])]
+          [Inductive.ctor(:wrap, [{:p, {:var, 0}}], [{:ctor, :Causal, []}], [:unrestricted], [{:var, 1}])]
         )
 
       dec_val = {:vdata, :Dec, []}

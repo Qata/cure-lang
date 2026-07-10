@@ -41,8 +41,22 @@ defmodule Cure.Core.Eval do
 
   def eval({:var, k}, _env), do: raise("eval: negative de Bruijn index #{inspect(k)}")
 
-  def eval({:pi, dom, cod}, env), do: {:vpi, eval(dom, env), {:closure, env, cod}}
-  def eval({:lam, dom, body}, env), do: {:vlam, eval(dom, env), {:closure, env, body}}
+  def eval({:pi, g, dom, cod}, env), do: {:vpi, g, eval(dom, env), {:closure, env, cod}}
+  def eval({:lam, g, dom, body}, env), do: {:vlam, g, eval(dom, env), {:closure, env, body}}
+
+  # ζ (zeta): a `let` is NOT a value former. Its value is pushed into the
+  # environment and the body evaluated under it, so the bound variable evaluates
+  # to `val` rather than to a neutral. Faithful to Idris's
+  # `Core/Normalise/Eval.idr:124-130`, which does
+  # `eval env (mkClosure … val :: locs) scope stk`.
+  #
+  # Consequence, and the reason `Value`/`Conv`/`Quote` need no clause: a `let`
+  # can never survive evaluation, so no normal form ever contains one. The
+  # SHARING the node buys lives in the term (and in `Emit`); the TRANSPARENCY
+  # lives here. `ty` is not evaluated — it is a typing annotation, already
+  # checked by the kernel, and evaluating it would be wasted work.
+  # ζ. The grade is a typing annotation; evaluation never consults it.
+  def eval({:let, _g, _ty, val, body}, env), do: eval(body, [eval(val, env) | env])
   def eval({:app, f, a}, env), do: apply(eval(f, env), eval(a, env))
 
   def eval({:data, name, params, indices}, env),
@@ -134,7 +148,7 @@ defmodule Cure.Core.Eval do
   with the argument; a neutral function accumulates the argument on its spine.
   """
   @spec apply(Cure.Core.Value.t(), Cure.Core.Value.t()) :: Cure.Core.Value.t()
-  def apply({:vlam, _dom, {:closure, env, body}}, varg), do: eval(body, [varg | env])
+  def apply({:vlam, _g, _dom, {:closure, env, body}}, varg), do: eval(body, [varg | env])
   def apply({:vneutral, n}, varg), do: {:vneutral, {:napp, n, varg}}
 
   # Applying an argument to a non-function value is ill-typed (an over-applied

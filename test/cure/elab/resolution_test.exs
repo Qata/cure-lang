@@ -18,10 +18,10 @@ defmodule Cure.Elab.ResolutionTest do
     end
 
     test "rewrites a :case branch TAG (the position distinct from {:ctor,…})", %{map: m} do
-      term = {:case, {:var, 0}, {:lam, {:data, :Nat, [], []}, {:type, 0}},
+      term = {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:type, 0}},
               [{:Z, 0, {:var, 0}}, {:S, 1, {:ctor, :Z, []}}]}
       assert Resolution.rekey_term(term, m) ==
-               {:case, {:var, 0}, {:lam, {:data, :"Std.Nat#Nat", [], []}, {:type, 0}},
+               {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:type, 0}},
                 [{:"Std.Nat#Z", 0, {:var, 0}}, {:"Std.Nat#S", 1, {:ctor, :"Std.Nat#Z", []}}]}
     end
 
@@ -30,8 +30,8 @@ defmodule Cure.Elab.ResolutionTest do
     end
 
     test "recurses through structural nodes and leaves unmapped atoms alone", %{map: m} do
-      term = {:pi, {:data, :Nat, [], []}, {:data, :Other, [], []}}
-      assert Resolution.rekey_term(term, m) == {:pi, {:data, :"Std.Nat#Nat", [], []}, {:data, :Other, [], []}}
+      term = {:pi, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Other, [], []}}
+      assert Resolution.rekey_term(term, m) == {:pi, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:data, :Other, [], []}}
     end
   end
 
@@ -50,8 +50,8 @@ defmodule Cure.Elab.ResolutionTest do
         )
         |> Cure.Core.Env.add_def(
           :plus,
-          {:pi, {:data, :Nat, [], []}, {:data, :Nat, [], []}},
-          {:case, {:var, 0}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}},
+          {:pi, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}},
+          {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}},
            [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:ctor, :S, [{:var, 0}]}}]}
         )
 
@@ -81,7 +81,7 @@ defmodule Cure.Elab.ResolutionTest do
       out = Cure.Elab.Resolution.rekey_module_env(env, "Std.Nat", MapSet.new([:Nat]))
       body = out.defs[:plus].body
       assert {:case, _, _, [{:"Std.Nat#Z", 0, _}, {:"Std.Nat#S", 1, _}]} = body
-      assert out.defs[:plus].type == {:pi, {:data, :"Std.Nat#Nat", [], []}, {:data, :"Std.Nat#Nat", [], []}}
+      assert out.defs[:plus].type == {:pi, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:data, :"Std.Nat#Nat", [], []}}
     end
 
     test "leaves a non-owned family in the same env untouched", %{env: env} do

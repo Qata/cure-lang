@@ -21,8 +21,14 @@ defmodule Cure.Core.Serialize do
   defp enc({:type, n}), do: ["(type ", Integer.to_string(n), ")"]
   defp enc({:var, k}), do: ["(var ", Integer.to_string(k), ")"]
   defp enc({:global, name}), do: ["(global ", sym(name), ")"]
-  defp enc({:pi, d, c}), do: node("pi", [d, c])
-  defp enc({:lam, d, b}), do: node("lam", [d, b])
+  # Binders carry a QTT grade, encoded as a leading symbol — the same convention
+  # `:ctor`/`:global` use for their names. `Grade` owns the carrier; nothing here
+  # pattern-matches a grade.
+  defp enc({:pi, g, d, c}), do: ["(pi ", sym(g), " ", enc(d), " ", enc(c), ")"]
+  defp enc({:lam, g, d, b}), do: ["(lam ", sym(g), " ", enc(d), " ", enc(b), ")"]
+
+  defp enc({:let, g, t, v, b}),
+    do: ["(let ", sym(g), " ", enc(t), " ", enc(v), " ", enc(b), ")"]
   defp enc({:app, f, a}), do: node("app", [f, a])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
@@ -202,8 +208,9 @@ defmodule Cure.Core.Serialize do
   defp build_node("hole", [{:str, s}]), do: {:ok, {:hole, s}}
   defp build_node("absurd", []), do: {:ok, {:absurd}}
 
-  defp build_node("pi", [d, c]), do: binary(:pi, d, c)
-  defp build_node("lam", [d, b]), do: binary(:lam, d, b)
+  defp build_node("pi", [g, d, c]), do: graded2(:pi, g, d, c)
+  defp build_node("lam", [g, d, b]), do: graded2(:lam, g, d, b)
+  defp build_node("let", [g, t, v, b]), do: graded3(:let, g, t, v, b)
   defp build_node("app", [f, a]), do: binary(:app, f, a)
 
   defp build_node("ctor", [name | args]) do
@@ -226,9 +233,29 @@ defmodule Cure.Core.Serialize do
 
   defp build_node(_tag, _args), do: {:error, :unknown_node}
 
+  # Decode a grade symbol through the same bounded-interning path names use, then
+  # verify it against the carrier. An unknown symbol fails the decode cleanly.
+  defp decode_grade(tok) do
+    with {:ok, g} <- sym_atom(tok) do
+      if Cure.Core.Grade.grade?(g), do: {:ok, g}, else: {:error, {:bad_grade, g}}
+    end
+  end
+
+  defp graded2(tag, g, a, b) do
+    with {:ok, gg} <- decode_grade(g), {:ok, ta} <- build(a), {:ok, tb} <- build(b),
+         do: {:ok, {tag, gg, ta, tb}}
+  end
+
+  defp graded3(tag, g, a, b, c) do
+    with {:ok, gg} <- decode_grade(g), {:ok, ta} <- build(a), {:ok, tb} <- build(b),
+         {:ok, tc} <- build(c),
+         do: {:ok, {tag, gg, ta, tb, tc}}
+  end
+
   defp binary(tag, a, b) do
     with {:ok, ta} <- build(a), {:ok, tb} <- build(b), do: {:ok, {tag, ta, tb}}
   end
+
 
   defp build_all(items) do
     Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->

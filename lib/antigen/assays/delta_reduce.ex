@@ -35,22 +35,22 @@ defmodule Antigen.Assays.DeltaReduce do
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
-  @motive {:lam, @nat, @nat}
+  @motive {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
   # kpair : Sigma(Nat, const-Nat) = mk_pair(Z, S Z) — the inductive dependent pair (D2).
-  @kpair_sigma {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+  @kpair_sigma {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
   # donly's body re-exposes a case stuck on a missing S branch under
   # reduce_unfolded's post-unfold ι follow-through — see the generator moduledoc.
-  @donly_body {:lam, @nat, {:case, {:app, {:global, :idnat}, {:var, 0}}, @motive, [{:Z, 0, @z}]}}
+  @donly_body {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:app, {:global, :idnat}, {:var, 0}}, @motive, [{:Z, 0, @z}]}}
 
   # v1 menu + three certified globals (see moduledoc). Declared here, not in the
   # shared SigMenu, because no other vertical needs global definitions.
   defp env do
     Generators.SigMenu.env_of(:v1)
-    |> Env.add_def(:idnat, {:pi, @nat, @nat}, {:lam, @nat, {:var, 0}})
+    |> Env.add_def(:idnat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}})
     |> Env.certify(:idnat)
     |> Env.add_def(:kpair, @kpair_sigma, {:ctor, :mk_pair, [@z, {:ctor, :S, [@z]}]})
     |> Env.certify(:kpair)
-    |> Env.add_def(:donly, {:pi, @nat, @nat}, @donly_body)
+    |> Env.add_def(:donly, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @donly_body)
     |> Env.certify(:donly)
   end
 

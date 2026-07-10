@@ -3,7 +3,7 @@ defmodule Antigen.ManyQuantityDecodeTest do
   Regression: a banked `kind=family` challenge whose ctor field carries the ω
   erasure quantity (`:many`) must decode in a fresh process. The quantity round-trips
   through `to_existing_atom("many")`, so `:many` has to be interned — i.e. present in
-  `Challenge.__known_atoms__/0` alongside its siblings `:present`/`:erased`. Otherwise
+  `Challenge.__known_atoms__/0` alongside its siblings `:unrestricted`/`:erased`. Otherwise
   `decode_record` raises `ArgumentError` ("not an already existing atom") in any VM
   that never generated a many-quantity term (e.g. the replay gate). Surfaced by banking
   universes/family seeds.

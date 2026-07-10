@@ -499,8 +499,8 @@ defmodule Cure.Elab.Program do
   defp global_refs({:case, s, mo, brs}),
     do: global_refs(s) ++ global_refs(mo) ++ Enum.flat_map(brs, fn {_c, _a, b} -> global_refs(b) end)
 
-  defp global_refs({:pi, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
-  defp global_refs({:lam, dom, body}), do: global_refs(dom) ++ global_refs(body)
+  defp global_refs({:pi, _g, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
+  defp global_refs({:lam, _g, dom, body}), do: global_refs(dom) ++ global_refs(body)
   defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
   defp global_refs(_leaf), do: []
 
@@ -583,7 +583,7 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp split_pi({:pi, dom, cod}, acc), do: split_pi(cod, [dom | acc])
+  defp split_pi({:pi, _g, dom, cod}, acc), do: split_pi(cod, [dom | acc])
   defp split_pi(goal, acc), do: {Enum.reverse(acc), goal}
 
   @doc """

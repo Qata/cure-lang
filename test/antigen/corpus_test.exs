@@ -17,7 +17,7 @@ defmodule Antigen.CorpusTest do
         kind: :stub,
         assay: "stub",
         label: :none,
-        payload: %{term: {:app, {:lam, {:type, 0}, {:var, 0}}, {:type, 0}}},
+        payload: %{term: {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}}},
         seed: 42,
         note: "hi"
       )
@@ -78,7 +78,7 @@ defmodule Antigen.CorpusTest do
   end
 
   test "decode_record still reads a legacy Base64 piece (dual-read)" do
-    term = {:app, {:lam, {:type, 0}, {:var, 0}}, {:type, 0}}
+    term = {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}}
     # hand-build a legacy record: pieces = id::Base64(Serialize.encode(term))
     legacy =
       Enum.join(
@@ -252,7 +252,7 @@ defmodule Antigen.CorpusTest do
     # "fst on a Nat" spelled inductively (D2, projection case over mk_pair).
     fault_term =
       {:case, {:ctor, :Z, []},
-       {:lam, {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
        [{:mk_pair, 2, {:var, 1}}]}
 
     {_deep, path} = B.interp(Mutation.deepen(ctx, fault_term, 3)) |> Enum.at(0)

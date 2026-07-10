@@ -41,11 +41,9 @@ defmodule Cure.Core.MetaCheck do
     end
   end
 
-  defp canonical_head?({:lam, _, _}), do: true
   defp canonical_head?({:lam, _, _, _}), do: true
   defp canonical_head?({:ctor, _, _}), do: true
   defp canonical_head?({:type, _}), do: true
-  defp canonical_head?({:pi, _, _}), do: true
   defp canonical_head?({:pi, _, _, _}), do: true
   defp canonical_head?({:data, _, _, _}), do: true
   defp canonical_head?({:int_type}), do: true

@@ -37,7 +37,7 @@ defmodule Cure.Elab.SigmaInductiveTest do
   defp has_data?(list, fam) when is_list(list), do: Enum.any?(list, &has_data?(&1, fam))
   defp has_data?(_other, _fam), do: false
 
-  defp unwrap_lams({:lam, _dom, body}), do: unwrap_lams(body)
+  defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
   defp unwrap_lams(term), do: term
 
   defp elaborate(src) do

@@ -13,18 +13,21 @@ defmodule Cure.Elab.Erase do
   with holes typechecks but must not be emitted (§6 negative #5).
   """
 
-  alias Cure.Core.Inductive
+  alias Cure.Core.{Grade, Inductive}
 
   @doc "Erase a Core term to its runtime form (drop erased constructor arguments)."
   @spec erase(Cure.Core.Env.t(), Cure.Core.Term.t()) :: Cure.Core.Term.t()
   def erase(env, {:ctor, cname, args}) do
-    quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, length(args))
+    quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:unrestricted, length(args))
 
     if length(args) == length(quantities) do
       kept =
         args
         |> Enum.zip(quantities)
-        |> Enum.filter(fn {_arg, q} -> q == :present end)
+        # A runtime value exists for every grade EXCEPT `0`. Asking
+        # `q == :unrestricted` would silently drop `:linear` and `:affine`
+        # arguments — the grade carrier is not a two-point lattice any more.
+        |> Enum.filter(fn {_arg, q} -> Grade.present?(q) end)
         |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
 
       {:ctor, cname, kept}
@@ -37,7 +40,13 @@ defmodule Cure.Elab.Erase do
     end
   end
 
-  def erase(env, {:lam, dom, body}), do: {:lam, erase(env, dom), erase(env, body)}
+  def erase(env, {:lam, g, dom, body}), do: {:lam, g, erase(env, dom), erase(env, body)}
+
+  # `:let` survives erasure: its whole point is that `val` is emitted ONCE and
+  # bound to a BEAM variable. Dropping it here would reintroduce the duplication
+  # the binder exists to remove. The ascription is erased like any other type.
+  def erase(env, {:let, _g, ty, val, body}),
+    do: {:let, Cure.Core.Grade.unrestricted(), erase(env, ty), erase(env, val), erase(env, body)}
 
   def erase(env, {:app, _f, _x} = app) do
     {head, args} = spine(app, [])
@@ -47,18 +56,21 @@ defmodule Cure.Elab.Erase do
         quantities =
           case Cure.Core.Env.get_def(env, name) do
             %{quantities: qs} when is_list(qs) -> qs
-            _ -> List.duplicate(:present, length(args))
+            _ -> List.duplicate(:unrestricted, length(args))
           end
 
         if length(args) >= length(quantities) do
           # Full or over-application: filter the callee's own parameters by their
           # quantity, and keep every argument beyond them (those apply to the
           # *result* `mk()(z)` and are always present).
-          padded = quantities ++ List.duplicate(:present, length(args) - length(quantities))
+          padded = quantities ++ List.duplicate(:unrestricted, length(args) - length(quantities))
 
           args
           |> Enum.zip(padded)
-          |> Enum.filter(fn {_arg, q} -> q == :present end)
+          # A runtime value exists for every grade EXCEPT `0`. Asking
+        # `q == :unrestricted` would silently drop `:linear` and `:affine`
+        # arguments — the grade carrier is not a two-point lattice any more.
+        |> Enum.filter(fn {_arg, q} -> Grade.present?(q) end)
           |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
           |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)
         else
@@ -77,7 +89,7 @@ defmodule Cure.Elab.Erase do
       # pass, already anticipates this head shape in `callee_quantities/3`; `Erase` did not.
       {:ctor, cname, head_args} ->
         all = head_args ++ args
-        quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:present, length(all))
+        quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:unrestricted, length(all))
 
         if length(all) >= length(quantities) do
           # Saturated (or over-applied, when a field is itself a function): the leading
@@ -88,7 +100,10 @@ defmodule Cure.Elab.Erase do
           kept =
             fields
             |> Enum.zip(quantities)
-            |> Enum.filter(fn {_arg, q} -> q == :present end)
+            # A runtime value exists for every grade EXCEPT `0`. Asking
+        # `q == :unrestricted` would silently drop `:linear` and `:affine`
+        # arguments — the grade carrier is not a two-point lattice any more.
+        |> Enum.filter(fn {_arg, q} -> Grade.present?(q) end)
             |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
 
           extra
@@ -110,7 +125,7 @@ defmodule Cure.Elab.Erase do
     end
   end
 
-  def erase(env, {:pi, d, c}), do: {:pi, erase(env, d), erase(env, c)}
+  def erase(env, {:pi, g, d, c}), do: {:pi, g, erase(env, d), erase(env, c)}
 
   def erase(env, {:data, n, ps, is}),
     do: {:data, n, Enum.map(ps, &erase(env, &1)), Enum.map(is, &erase(env, &1))}
@@ -155,7 +170,7 @@ defmodule Cure.Elab.Erase do
     with dname when dname != nil <- Inductive.ctor_family(env, cname),
          [_only] <- Inductive.ctors_of(env, dname),
          qs when is_list(qs) <- Inductive.ctor_quantities(env, cname) do
-      arity == length(qs) and qs != [] and Enum.all?(qs, &(&1 == :erased))
+      arity == length(qs) and qs != [] and Enum.all?(qs, &Grade.erased?/1)
     else
       _ -> false
     end
@@ -164,8 +179,9 @@ defmodule Cure.Elab.Erase do
   @doc "Does the term still contain an unfilled hole?"
   @spec has_hole?(Cure.Core.Term.t()) :: boolean()
   def has_hole?({:hole, _name}), do: true
-  def has_hole?({:lam, d, b}), do: has_hole?(d) or has_hole?(b)
-  def has_hole?({:pi, d, c}), do: has_hole?(d) or has_hole?(c)
+  def has_hole?({:lam, _g, d, b}), do: has_hole?(d) or has_hole?(b)
+  def has_hole?({:let, _g, t, v, b}), do: has_hole?(t) or has_hole?(v) or has_hole?(b)
+  def has_hole?({:pi, _g, d, c}), do: has_hole?(d) or has_hole?(c)
   def has_hole?({:app, f, x}), do: has_hole?(f) or has_hole?(x)
   def has_hole?({:ctor, _n, args}), do: Enum.any?(args, &has_hole?/1)
   def has_hole?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_hole?/1)

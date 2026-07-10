@@ -15,9 +15,9 @@ accept | (app (app (global float_add) (float 1.0)) (float 2.0)) | (float-type)
 accept | (app (app (global int_lt) (int 3)) (int 5)) | (data Bool () ())
 reject | (app (global not) (ctor True))
 accept | (app (global int_neg) (int 5)) | (int-type)
-accept | (pi (int-type) (type 0)) | (type 1)
-accept | (data Sigma ((int-type) (lam (int-type) (int-type))) ()) | (type 0)
-accept | (lam (int-type) (var 0))
+accept | (pi unrestricted (int-type) (type 0)) | (type 1)
+accept | (data Sigma ((int-type) (lam unrestricted (int-type) (int-type))) ()) | (type 0)
+accept | (lam unrestricted (int-type) (var 0))
 # identity type: the primitive (eq …)/(refl …) forms retired (Phase C,
 # spec 2026-07-04) — the inductive family is the conformance surface. The
 # params-on-spine reflexive is the inferable spelling (K6 §E.1); the type

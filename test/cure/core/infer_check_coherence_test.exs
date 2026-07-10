@@ -38,7 +38,7 @@ defmodule Cure.Core.InferCheckCoherenceTest do
   test "checking position inside inference: (λ p : Eq(Int,3,3). p)(spine_refl) infers" do
     ctx = ctx()
     eq_ty = {:data, :Equivalent, [{:int_type}], [{:int_lit, 3}, {:int_lit, 3}]}
-    term = {:app, {:lam, eq_ty, {:var, 0}}, @spine_refl}
+    term = {:app, {:lam, Cure.Core.Grade.unrestricted(), eq_ty, {:var, 0}}, @spine_refl}
     assert {:ok, _} = Kernel.infer(ctx, term)
   end
 end

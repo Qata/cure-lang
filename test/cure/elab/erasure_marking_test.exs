@@ -31,21 +31,21 @@ defmodule Cure.Elab.ErasureMarkingTest do
     {:ok, env} = elaborate_all(@src)
 
     assert Inductive.ctor_quantities(env, :seq) ==
-             [:erased, :erased, :erased, :erased, :erased, :present, :present]
+             [:erased, :erased, :erased, :erased, :erased, :unrestricted, :unrestricted]
 
     assert Inductive.ctor_quantities(env, :prim) == [:erased, :erased]
   end
 
   test "plain ADT constructor fields are all runtime-relevant (present)" do
     {:ok, env} = elaborate_all(@src)
-    assert Inductive.ctor_quantities(env, :SVCons) == [:present, :present]
+    assert Inductive.ctor_quantities(env, :SVCons) == [:unrestricted, :unrestricted]
     assert Inductive.ctor_quantities(env, :SVNil) == []
   end
 
   test "the count of erased args equals the inferred implicit-index arity" do
     {:ok, env} = elaborate_all(@src)
     erased = env |> Inductive.ctor_quantities(:seq) |> Enum.count(&(&1 == :erased))
-    present = env |> Inductive.ctor_quantities(:seq) |> Enum.count(&(&1 == :present))
+    present = env |> Inductive.ctor_quantities(:seq) |> Enum.count(&(&1 == :unrestricted))
     assert erased == 5
     assert present == 2
   end

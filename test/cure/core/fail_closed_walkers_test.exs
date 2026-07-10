@@ -85,12 +85,12 @@ defmodule Cure.Core.FailClosedWalkersTest do
   end
 
   describe "termination analysis descends into unrecognized nodes" do
-    @ty {:pi, {:type, 0}, {:type, 0}}
+    @ty {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}
 
     test "a self-call hidden inside an unrecognized wrapper is not certified total" do
       # f(n) = <wrap>(f(n)) — literally `f = f` with one extra tuple layer. No argument is
       # ever threaded through the self-call, so this diverges under any evaluator.
-      body = {:lam, {:type, 0}, {:audit_wrap, {:app, {:global, :f}, {:var, 0}}}}
+      body = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:audit_wrap, {:app, {:global, :f}, {:var, 0}}}}
       env = Env.empty() |> Env.add_def(:f, @ty, body)
 
       refute Certificate.terminating?(:f, body, env)
@@ -98,7 +98,7 @@ defmodule Cure.Core.FailClosedWalkersTest do
 
     test "a self-call hidden inside a live :rewrite node is not certified total" do
       dom = {:type, 0}
-      body = {:lam, dom, {:rewrite, dom, dom, {:app, {:global, :loop}, {:var, 0}}}}
+      body = {:lam, Cure.Core.Grade.unrestricted(), dom, {:rewrite, dom, dom, {:app, {:global, :loop}, {:var, 0}}}}
 
       refute Certificate.terminating?(:loop, body, Env.empty())
     end
@@ -107,8 +107,8 @@ defmodule Cure.Core.FailClosedWalkersTest do
       # f(x) = <wrap>(g(x)); g(x) = f(x). `x` never changes. Unwrapped, this is already
       # rejected. Hiding f's call to g used to starve the endo-edge check of every edge,
       # so `Enum.all?/2` passed vacuously.
-      f_body = {:lam, {:type, 0}, {:audit_wrap, {:app, {:global, :g}, {:var, 0}}}}
-      g_body = {:lam, {:type, 0}, {:app, {:global, :f}, {:var, 0}}}
+      f_body = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:audit_wrap, {:app, {:global, :g}, {:var, 0}}}}
+      g_body = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:app, {:global, :f}, {:var, 0}}}
       env = Env.empty() |> Env.add_def(:f, @ty, f_body) |> Env.add_def(:g, @ty, g_body)
 
       refute Certificate.terminating?(:f, f_body, env)
@@ -126,22 +126,22 @@ defmodule Cure.Core.FailClosedWalkersTest do
         ])
 
       # id(n) = case n of Z -> Z | S k -> S k   (no recursion at all)
-      body = {:lam, nat, {:case, {:var, 0}, nat, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:ctor, :S, [{:var, 0}]}}]}}
+      body = {:lam, Cure.Core.Grade.unrestricted(), nat, {:case, {:var, 0}, nat, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:ctor, :S, [{:var, 0}]}}]}}
 
-      assert Certificate.terminating?(:id, body, Env.add_def(env, :id, {:pi, nat, nat}, body))
+      assert Certificate.terminating?(:id, body, Env.add_def(env, :id, {:pi, Cure.Core.Grade.unrestricted(), nat, nat}, body))
     end
   end
 
   describe "type-level reachability descends into unrecognized nodes" do
     test "a global reachable only through a :rewrite node enters the type-level closure" do
       dec = {:data, :Dec, [], []}
-      outer_body = {:lam, dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
+      outer_body = {:lam, Cure.Core.Grade.unrestricted(), dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
 
       env =
         Env.empty()
         |> Inductive.declare(Inductive.family(:Dec, [], [], 0), [Inductive.ctor(:Dcoupled, [], [])])
-        |> Env.add_def(:outer, {:pi, dec, dec}, outer_body)
-        |> Env.add_def(:inner, {:pi, dec, dec}, {:lam, dec, {:var, 0}})
+        |> Env.add_def(:outer, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, outer_body)
+        |> Env.add_def(:inner, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, {:lam, Cure.Core.Grade.unrestricted(), dec, {:var, 0}})
         |> Inductive.declare(Inductive.family(:Wrap, [], [{:d, dec}], 0), [
           Inductive.ctor(:mkWrap, [{:x, dec}], [{:app, {:global, :outer}, {:var, 0}}])
         ])
@@ -151,13 +151,13 @@ defmodule Cure.Core.FailClosedWalkersTest do
 
     test "the Antigen completeness oracle sees it too — it must not share the subject's blind spot" do
       dec = {:data, :Dec, [], []}
-      outer_body = {:lam, dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
+      outer_body = {:lam, Cure.Core.Grade.unrestricted(), dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
 
       env =
         Env.empty()
         |> Inductive.declare(Inductive.family(:Dec, [], [], 0), [Inductive.ctor(:Dcoupled, [], [])])
-        |> Env.add_def(:outer, {:pi, dec, dec}, outer_body)
-        |> Env.add_def(:inner, {:pi, dec, dec}, {:lam, dec, {:var, 0}})
+        |> Env.add_def(:outer, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, outer_body)
+        |> Env.add_def(:inner, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, {:lam, Cure.Core.Grade.unrestricted(), dec, {:var, 0}})
         |> Inductive.declare(Inductive.family(:Wrap, [], [{:d, dec}], 0), [
           Inductive.ctor(:mkWrap, [{:x, dec}], [{:app, {:global, :outer}, {:var, 0}}])
         ])

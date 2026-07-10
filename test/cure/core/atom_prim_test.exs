@@ -66,6 +66,6 @@ defmodule Cure.Core.AtomPrimTest do
 
   test "an `Atom` signature elaborates to the primitive, not a free global :Atom" do
     {:ok, env} = Program.elaborate("mod M\n  fn f(a: Atom) -> Atom = a\nend\n")
-    assert env.defs[:f].type == {:pi, {:atom_type}, {:atom_type}}
+    assert env.defs[:f].type == {:pi, Cure.Core.Grade.unrestricted(), {:atom_type}, {:atom_type}}
   end
 end

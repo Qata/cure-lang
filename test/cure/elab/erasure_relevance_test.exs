@@ -21,7 +21,7 @@ defmodule Cure.Elab.ErasureRelevanceTest do
 
     * RELEVANT for a `0` binder (usage counts → violation):
       - RETURNED as the value (the term IS the binder);
-      - passed in a `ω` / `:present` argument position (`rigf` present → `checkRig`
+      - passed in a `ω` / `:unrestricted` argument position (`rigf` present → `checkRig`
         stays `rig`);
       - SCRUTINISED (case discriminant is checked at the ambient `rig`);
       - APPLIED as a function head.
@@ -145,7 +145,7 @@ defmodule Cure.Elab.ErasureRelevanceTest do
     """
 
     test "naming the erased index of a matched constructor is an error, not a silent bind" do
-      # `vs : SNat(n) -> NV(S(n))` has quantities [:erased (n), :present (SNat)].
+      # `vs : SNat(n) -> NV(S(n))` has quantities [:erased (n), :unrestricted (SNat)].
       # In `vs(s)` the surface var `s` names the PRESENT field; the erased index
       # `n` gets the unnameable placeholder `"_erased"` (elaborator `branch_scope`).
       # Referencing `n` in the body must NOT resolve to the erased slot — it is
@@ -220,15 +220,15 @@ defmodule Cure.Elab.ErasureRelevanceTest do
     test "two different :case-transport proofs erase to the same runtime term" do
       env = Cure.Core.Builtins.seed(Env.empty(), MapSet.new())
       body = {:ctor, :Causal, []}
-      motive = {:lam, {:type, 0}, body}
-      id_branch = {:reflexive, 1, {:lam, {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
+      motive = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, body}
+      id_branch = {:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
       t1 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}, motive, [id_branch]}, body}
       t2 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Causal, []}]}, motive, [id_branch]}, body}
 
       assert Erase.erase(env, t1) == Erase.erase(env, t2)
       # The collapsible case is GONE from the runtime term (the proof with it);
       # what remains is the identity redex over the erased body.
-      assert {:app, {:lam, _dom, {:var, 0}}, erased_body} = Erase.erase(env, t1)
+      assert {:app, {:lam, _g, _dom, {:var, 0}}, erased_body} = Erase.erase(env, t1)
       assert erased_body == Erase.erase(env, body)
     end
 
@@ -251,7 +251,7 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       env
     end
 
-    # `ssuc`'s quantities are `[:erased, :present]` — the auto-generalized index `n` at
+    # `ssuc`'s quantities are `[:erased, :unrestricted]` — the auto-generalized index `n` at
     # position 0, the explicit `SNat(n)` field at position 1.
 
     test "a constructor heading a curried spine erases like the same constructor as a flat node" do

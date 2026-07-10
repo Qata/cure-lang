@@ -44,11 +44,14 @@ defmodule Cure.Elab.Subst do
   defp replace({:type, _} = t, _env, _k, _depth), do: t
   defp replace({:global, _} = g, _env, _k, _depth), do: g
 
-  defp replace({:pi, d, c}, env, k, depth),
-    do: {:pi, replace(d, env, k, depth), replace(c, env, k, depth + 1)}
+  defp replace({:pi, _g, d, c}, env, k, depth),
+    do: {:pi, Cure.Core.Grade.unrestricted(), replace(d, env, k, depth), replace(c, env, k, depth + 1)}
 
-  defp replace({:lam, d, b}, env, k, depth),
-    do: {:lam, replace(d, env, k, depth), replace(b, env, k, depth + 1)}
+  defp replace({:lam, _g, d, b}, env, k, depth),
+    do: {:lam, Cure.Core.Grade.unrestricted(), replace(d, env, k, depth), replace(b, env, k, depth + 1)}
+
+  defp replace({:let, _g, t, v, b}, env, k, depth),
+    do: {:let, Cure.Core.Grade.unrestricted(), replace(t, env, k, depth), replace(v, env, k, depth), replace(b, env, k, depth + 1)}
 
 
   defp replace({:app, f, x}, env, k, depth),
@@ -78,11 +81,14 @@ defmodule Cure.Elab.Subst do
   def shift({:type, _} = t, _amount, _cutoff), do: t
   def shift({:global, _} = g, _amount, _cutoff), do: g
 
-  def shift({:pi, d, c}, amount, cutoff),
-    do: {:pi, shift(d, amount, cutoff), shift(c, amount, cutoff + 1)}
+  def shift({:pi, _g, d, c}, amount, cutoff),
+    do: {:pi, Cure.Core.Grade.unrestricted(), shift(d, amount, cutoff), shift(c, amount, cutoff + 1)}
 
-  def shift({:lam, d, b}, amount, cutoff),
-    do: {:lam, shift(d, amount, cutoff), shift(b, amount, cutoff + 1)}
+  def shift({:lam, _g, d, b}, amount, cutoff),
+    do: {:lam, Cure.Core.Grade.unrestricted(), shift(d, amount, cutoff), shift(b, amount, cutoff + 1)}
+
+  def shift({:let, _g, t, v, b}, amount, cutoff),
+    do: {:let, Cure.Core.Grade.unrestricted(), shift(t, amount, cutoff), shift(v, amount, cutoff), shift(b, amount, cutoff + 1)}
 
 
   def shift({:app, f, x}, amount, cutoff),

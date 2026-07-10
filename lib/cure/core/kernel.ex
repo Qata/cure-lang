@@ -102,7 +102,7 @@ defmodule Cure.Core.Kernel do
   def infer(_ctx, {:hole, name}), do: {:error, {:hole_in_inference_position, name}}
 
 
-  def infer(ctx, {:pi, dom, cod}) do
+  def infer(ctx, {:pi, _g, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
          dom_value = Eval.eval(dom, Context.env(ctx)),
          ctx2 = Context.extend(ctx, dom_value),
@@ -111,7 +111,29 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  def infer(ctx, {:lam, dom, body}) do
+  # let-binding (ζ). Typing mirrors Lean's `infer_let`
+  # (`src/kernel/type_checker.cpp`): the ascription must be a sort, the value
+  # must check against it, and the let's type is the body's type.
+  #
+  # The body is checked under `Context.extend_def/3`, so the bound variable is
+  # definitionally its value. Two consequences worth stating, because they are
+  # what make this a small change:
+  #
+  #   * No inferred type can mention the bound variable — it is never a neutral —
+  #     so unlike Lean's fvar formulation there is nothing to re-abstract
+  #     (`mk_pi(fvars, r)`). Values carry their own environments.
+  #   * `Eval` erases the node (ζ), so no `let` reaches `Conv`, `Quote` or any
+  #     normal form. Sharing lives in the term; transparency lives in the env.
+  def infer(ctx, {:let, _g, ty, val, body}) do
+    with {:ok, _level} <- infer_sort(ctx, ty),
+         ty_value = Eval.eval(ty, Context.env(ctx)),
+         :ok <- check(ctx, val, ty_value) do
+      val_value = Eval.eval(val, Context.env(ctx))
+      infer(Context.extend_def(ctx, ty_value, val_value), body)
+    end
+  end
+
+  def infer(ctx, {:lam, g, dom, body}) do
     with {:ok, _level} <- infer_sort(ctx, dom) do
       dom_value = Eval.eval(dom, Context.env(ctx))
       ctx2 = Context.extend(ctx, dom_value)
@@ -119,7 +141,7 @@ defmodule Cure.Core.Kernel do
       with {:ok, cod_value} <- infer(ctx2, body) do
         # Reify the body's type into a codomain family over the binder.
         cod_term = Quote.reify(cod_value, Context.length(ctx2))
-        {:ok, {:vpi, dom_value, {:closure, Context.env(ctx), cod_term}}}
+        {:ok, {:vpi, g, dom_value, {:closure, Context.env(ctx), cod_term}}}
       end
     end
   end
@@ -256,20 +278,43 @@ defmodule Cure.Core.Kernel do
   @spec check(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) :: :ok | {:error, term()}
   # Bidirectional rule: a lambda is checked against a Π, propagating the expected
   # domain into the body (more robust than infer when the body is not standalone).
-  def check(ctx, {:lam, dom, body}, {:vpi, exp_dom, cod_closure}) do
+  # A λ checks against a Π of the SAME grade. Grades are part of type identity
+  # (see `Conv`), so a mismatch is a type error, not a usage error — the usage
+  # check never runs in the kernel. Compared by equality, never by `Grade.leq/2`.
+  def check(ctx, {:lam, g, dom, body}, {:vpi, exp_g, exp_dom, cod_closure}) do
     dom_value = Eval.eval(dom, Context.env(ctx))
 
-    if Conv.conv_values?(dom_value, exp_dom, Context.length(ctx), Context.signature(ctx)) do
-      fresh = {:vneutral, {:nvar, Context.length(ctx)}}
-      cod_value = Eval.apply_closure(cod_closure, fresh)
-      check(Context.extend(ctx, exp_dom), body, cod_value)
-    else
-      {:error, :domain_mismatch}
+    cond do
+      g != exp_g ->
+        {:error, {:grade_mismatch, %{lam: g, pi: exp_g}}}
+
+      not Conv.conv_values?(dom_value, exp_dom, Context.length(ctx), Context.signature(ctx)) ->
+        {:error, :domain_mismatch}
+
+      true ->
+        fresh = {:vneutral, {:nvar, Context.length(ctx)}}
+        cod_value = Eval.apply_closure(cod_closure, fresh)
+        check(Context.extend(ctx, exp_dom), body, cod_value)
     end
   end
 
   # A hole is a deferred term: accepted at any goal type. Its obligation is
   # reported to the user and blocks codegen until filled (§6 / M8.5).
+  # Checking a `let` pushes the expected type through to the body. Without this
+  # clause `check_via_infer/3` would INFER the body, which forbids check-only
+  # terms (`{:hole, _}`, `{:absurd}`, `{:bounded_lit, _}`) in a let body — the
+  # very regression a `(λ x. body) val` β-redex encoding suffers, since the λ
+  # must be inferred. `expected` is a level-indexed value and stays valid under
+  # the extended context.
+  def check(ctx, {:let, _g, ty, val, body}, expected) do
+    with {:ok, _level} <- infer_sort(ctx, ty),
+         ty_value = Eval.eval(ty, Context.env(ctx)),
+         :ok <- check(ctx, val, ty_value) do
+      val_value = Eval.eval(val, Context.env(ctx))
+      check(Context.extend_def(ctx, ty_value, val_value), body, expected)
+    end
+  end
+
   def check(_ctx, {:hole, _name}, _expected), do: :ok
 
   # Checking-mode constructor application: the expected vdata supplies the
@@ -607,7 +652,7 @@ defmodule Cure.Core.Kernel do
   end
 
   # Require a type value to be a Π; return its domain value + codomain closure.
-  defp ensure_pi({:vpi, dom, cod_closure}), do: {:ok, dom, cod_closure}
+  defp ensure_pi({:vpi, _g, dom, cod_closure}), do: {:ok, dom, cod_closure}
   defp ensure_pi(_), do: {:error, :not_a_function}
 
   # Check `args` against a dependent telescope, threading each evaluated arg so
@@ -744,7 +789,7 @@ defmodule Cure.Core.Kernel do
   defp apply_motive_checked(motive_value, args) do
     Enum.reduce_while(args, {:ok, motive_value}, fn arg, {:ok, acc} ->
       case acc do
-        {:vlam, _, _} -> {:cont, {:ok, Eval.apply(acc, arg)}}
+        {:vlam, _, _, _} -> {:cont, {:ok, Eval.apply(acc, arg)}}
         {:vneutral, _} -> {:cont, {:ok, Eval.apply(acc, arg)}}
         _ -> {:halt, {:error, :bad_motive}}
       end
@@ -853,7 +898,7 @@ defmodule Cure.Core.Kernel do
   # already classifies bare indexed-family motive RESULTS), so acceptance is
   # exactly what a non-lossy reify+infer would decide, and a non-type domain still
   # falls through to `:not_a_type_value` (rejected, no false positives).
-  defp infer_type_value_sort(ctx, {:vpi, dom, cod_closure}) do
+  defp infer_type_value_sort(ctx, {:vpi, _g, dom, cod_closure}) do
     with {:ok, l1} <- infer_type_value_sort(ctx, dom) do
       fresh = {:vneutral, {:nvar, Context.length(ctx)}}
       cod_value = Eval.apply_closure(cod_closure, fresh)
@@ -1054,11 +1099,11 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  defp subst_params({:pi, d, c}, pmap, depth),
-    do: {:pi, subst_params(d, pmap, depth), subst_params(c, pmap, depth + 1)}
+  defp subst_params({:pi, g, d, c}, pmap, depth),
+    do: {:pi, g, subst_params(d, pmap, depth), subst_params(c, pmap, depth + 1)}
 
-  defp subst_params({:lam, d, b}, pmap, depth),
-    do: {:lam, subst_params(d, pmap, depth), subst_params(b, pmap, depth + 1)}
+  defp subst_params({:lam, g, d, b}, pmap, depth),
+    do: {:lam, g, subst_params(d, pmap, depth), subst_params(b, pmap, depth + 1)}
 
   defp subst_params({:app, f, a}, pmap, depth),
     do: {:app, subst_params(f, pmap, depth), subst_params(a, pmap, depth)}
@@ -1268,7 +1313,7 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:ctor, _, _}), do: true
   defp rigid_index?({:data, _, _, _}), do: true
   defp rigid_index?({:type, _}), do: true
-  defp rigid_index?({:pi, _, _}), do: true
+  defp rigid_index?({:pi, _, _, _}), do: true
   defp rigid_index?({:int_type}), do: true
   defp rigid_index?({:float_type}), do: true
   defp rigid_index?({:binary_type}), do: true
@@ -1352,11 +1397,11 @@ defmodule Cure.Core.Kernel do
 
   defp replace_branch_vars({:var, i}, subst), do: replace_branch_var(i, subst, 0)
 
-  defp replace_branch_vars({:pi, d, c}, subst),
-    do: {:pi, replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
+  defp replace_branch_vars({:pi, g, d, c}, subst),
+    do: {:pi, g, replace_branch_vars(d, subst), replace_branch_vars(c, shift_subst(subst, 1))}
 
-  defp replace_branch_vars({:lam, d, b}, subst),
-    do: {:lam, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
+  defp replace_branch_vars({:lam, g, d, b}, subst),
+    do: {:lam, g, replace_branch_vars(d, subst), replace_branch_vars(b, shift_subst(subst, 1))}
 
   defp replace_branch_vars({:app, f, a}, subst),
     do: {:app, replace_branch_vars(f, subst), replace_branch_vars(a, subst)}

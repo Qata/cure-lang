@@ -262,7 +262,19 @@ defmodule Mix.Tasks.Antigen do
       # validator-emit / infer-rejection / remap_index_error defensive clauses that
       # are entry points into the kernel's def and family machinery, not `infer` of
       # a single closed term, so no term-shaped generator reaches them.
-      {1, Antigen.Generators.KernelProbe.gen()}
+      {1, Antigen.Generators.KernelProbe.gen()},
+
+      # 33. ζ for the Core `:let` binder — the same capture traps as `BetaSubst`
+      # (position 28), so a divergence between the two is attributable to the
+      # `:let` node alone. APPENDED, not inserted next to its sibling: the group
+      # table in `Antigen.Runner` is indexed by POSITION, so inserting mid-list
+      # silently renumbers every generator after it and adaptive reweighting then
+      # bumps the wrong ones. Group `f` (fixed menu).
+      {2, Antigen.Generators.ZetaSubst.gen()},
+
+      # 34. A binder's GRADE is part of type identity (Idris Convert.idr:328).
+      # APPENDED, like ZetaSubst: `@group_table` is indexed by POSITION.
+      {2, Antigen.Generators.GradeConv.gen()}
     ])
   end
 

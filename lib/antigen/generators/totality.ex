@@ -71,9 +71,9 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_mutual_pair() :: Challenge.t()
   def diverging_mutual_pair do
-    ty = {:pi, @dec, @dec}
-    bf = {:lam, @dec, {:app, {:global, :g}, {:var, 0}}}
-    bg = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}
+    bf = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :g}, {:var, 0}}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :f}, {:var, 0}}}
 
     Challenge.new(
       kind: :def_group,
@@ -104,9 +104,9 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_pending_sibling() :: Challenge.t()
   def diverging_pending_sibling do
-    ty = {:pi, @dec, @dec}
-    bf = {:lam, @dec, {:app, {:global, :g}, {:var, 0}}}
-    bg = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}
+    bf = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :g}, {:var, 0}}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :f}, {:var, 0}}}
 
     Challenge.new(
       kind: :def_group,
@@ -130,10 +130,10 @@ defmodule Antigen.Generators.Totality do
   """
   @spec structural_terminating() :: Challenge.t()
   def structural_terminating do
-    motive = {:lam, @nat, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
     body =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, motive,
         [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:var, 0}}}]}}
 
@@ -141,20 +141,20 @@ defmodule Antigen.Generators.Totality do
       kind: :def_group,
       assay: "totality/terminating",
       label: :terminating,
-      payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
+      payload: %{defs: [%{name: :h, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: body}], focus: [:h]},
       note: "structural recursion h(S y) = h y",
       cover_tag: :structural
     )
   end
 
-  @nat_mot {:lam, @nat, @nat}
+  @nat_mot {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
   defp h_def(body, label, note, cell \\ nil) do
     Challenge.new(
       kind: :def_group,
       assay: "totality/#{label}",
       label: String.to_atom(label),
-      payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
+      payload: %{defs: [%{name: :h, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: body}], focus: [:h]},
       note: note,
       cover_tag: cell
     )
@@ -172,29 +172,29 @@ defmodule Antigen.Generators.Totality do
   """
   @spec enriched_terminating() :: Challenge.t()
   def enriched_terminating do
-    st = {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+    st = {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
 
     base =
       {:ctor, :mk_pair,
-       [{:case, {:var, 0}, {:lam, st, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+       [{:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), st, @nat}, [{:mk_pair, 2, {:var, 1}}]},
         {:ctor, :mk_pair,
-         [{:case, {:var, 0}, {:lam, st, @nat}, [{:mk_pair, 2, {:var, 0}}]},
+         [{:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), st, @nat}, [{:mk_pair, 2, {:var, 0}}]},
           {:ctor, :mk_pair,
            [{:data, :Equivalent, [{:var, 0}], [{:var, 0}, {:var, 0}]},
             {:ctor, :mk_pair,
              [{:ctor, :reflexive, [{:var, 0}]},
               {:ctor, :mk_pair,
                [{:app,
-                 {:case, {:ctor, :reflexive, [{:var, 0}]}, {:lam, @nat, {:var, 0}},
-                  [{:reflexive, 1, {:lam, @nat, {:var, 0}}}]}, {:var, 0}},
+                 {:case, {:ctor, :reflexive, [{:var, 0}]}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}},
+                  [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}}]}, {:var, 0}},
                 {:ctor, :mk_pair,
-                 [{:pi, @nat, @nat},
+                 [{:pi, Cure.Core.Grade.unrestricted(), @nat, @nat},
                   {:ctor, :mk_pair,
-                   [{:data, :Sigma, [@nat, {:lam, @nat, @nat}], []},
+                   [{:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []},
                     {:app, {:var, 0}, {:var, 0}}]}]}]}]}]}]}]}
 
     body =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, @nat_mot, [{:Z, 0, base}, {:S, 1, {:app, {:global, :h}, {:var, 0}}}]}}
 
     h_def(body, "terminating", "structural recursion with a rich call-free base branch")
@@ -211,12 +211,12 @@ defmodule Antigen.Generators.Totality do
     inner =
       {:case,
        {:case, {:ctor, :mk_pair, [{:var, 0}, {:var, 0}]},
-        {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]},
        @nat_mot,
        [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:var, 1}}}]}
 
     body =
-      {:lam, @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, inner}]}}
+      {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, inner}]}}
 
     h_def(body, "terminating", "certified through an inner case on a non-var scrutinee")
   end
@@ -230,7 +230,7 @@ defmodule Antigen.Generators.Totality do
   @spec reconstruct_equal_diverging() :: Challenge.t()
   def reconstruct_equal_diverging do
     body =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, @nat_mot,
         [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :h}, {:ctor, :S, [{:var, 0}]}}}]}}
 
@@ -248,13 +248,13 @@ defmodule Antigen.Generators.Totality do
   def unknown_arg_diverging do
     # in the S-branch the original scrutinee n sits at de Bruijn 1 (shifted past y)
     body =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, @nat_mot,
         [{:Z, 0, {:ctor, :Z, []}},
          {:S, 1,
           {:app, {:global, :h},
            {:case, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]},
-            {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat},
+            {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat},
             [{:mk_pair, 2, {:var, 1}}]}}}]}}
 
     h_def(body, "diverging", "self-call arg is a projection → arg_relation :unknown")
@@ -268,11 +268,11 @@ defmodule Antigen.Generators.Totality do
   """
   @spec two_arg_terminating() :: Challenge.t()
   def two_arg_terminating do
-    ty = {:pi, @nat, {:pi, @nat, @nat}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
     body =
-      {:lam, @nat,
-       {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat,
         {:case, {:var, 0}, @nat_mot,
          [{:Z, 0, {:ctor, :Z, []}},
           {:S, 1, {:app, {:app, {:global, :f}, {:var, 2}}, {:var, 0}}}]}}}
@@ -297,12 +297,12 @@ defmodule Antigen.Generators.Totality do
   """
   @spec terminating_mutual_pair() :: Challenge.t()
   def terminating_mutual_pair do
-    ty = {:pi, @nat, @nat}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}
     # f's Z-branch calls the out-of-group leaf h (identity) — an intra-body call to
     # a global NOT in the {f,g} SCC, so function_edges' emit takes its nil arm.
-    bf = {:lam, @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:app, {:global, :h}, {:ctor, :Z, []}}}, {:S, 1, {:app, {:global, :g}, {:var, 0}}}]}}
-    bg = {:lam, @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :f}, {:var, 0}}}]}}
-    bh = {:lam, @nat, {:var, 0}}
+    bf = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:app, {:global, :h}, {:ctor, :Z, []}}}, {:S, 1, {:app, {:global, :g}, {:var, 0}}}]}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 0}, @nat_mot, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :f}, {:var, 0}}}]}}
+    bh = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}
 
     Challenge.new(
       kind: :def_group,
@@ -330,11 +330,11 @@ defmodule Antigen.Generators.Totality do
   """
   @spec swap_terminating() :: Challenge.t()
   def swap_terminating do
-    ty = {:pi, @nat, {:pi, @nat, @nat}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
     body =
-      {:lam, @nat,
-       {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat,
         {:case, {:var, 1}, @nat_mot,
          [{:Z, 0, {:ctor, :Z, []}},
           {:S, 1, {:app, {:app, {:global, :f}, {:var, 1}}, {:var, 0}}}]}}}
@@ -401,12 +401,12 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_bool_elim_branch() :: Challenge.t()
   def diverging_bool_elim_branch do
-    ty = {:pi, {:int_type}, {:int_type}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}
 
     body =
-      {:lam, {:int_type},
+      {:lam, Cure.Core.Grade.unrestricted(), {:int_type},
        {:case, {:app, {:app, {:global, :int_eq}, {:var, 0}}, {:int_lit, 0}},
-        {:lam, {:data, :Bool, [], []}, {:int_type}},
+        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:int_type}},
         [{:True, 0, {:int_lit, 0}}, {:False, 0, {:app, {:global, :f}, {:var, 0}}}]}}
 
     Challenge.new(
@@ -432,19 +432,19 @@ defmodule Antigen.Generators.Totality do
   @spec terminating_bool_elim_branch() :: Challenge.t()
   def terminating_bool_elim_branch do
     inner =
-      {:case, {:ctor, :True, []}, {:lam, {:data, :Bool, [], []}, @nat},
+      {:case, {:ctor, :True, []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, @nat},
        [{:True, 0, {:app, {:global, :h}, {:var, 0}}}, {:False, 0, {:app, {:global, :h}, {:var, 0}}}]}
 
     body =
-      {:lam, @nat,
-       {:case, {:var, 0}, {:lam, @nat, @nat},
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat},
         [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, inner}]}}
 
     Challenge.new(
       kind: :def_group,
       assay: "totality/terminating",
       label: :terminating,
-      payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
+      payload: %{defs: [%{name: :h, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: body}], focus: [:h]},
       note: "structural recursion with the decreasing self-call inside a bool_elim branch"
     )
   end
@@ -462,10 +462,10 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_three_cycle() :: Challenge.t()
   def diverging_three_cycle do
-    ty = {:pi, @dec, @dec}
-    bf = {:lam, @dec, {:app, {:global, :g}, {:var, 0}}}
-    bg = {:lam, @dec, {:app, {:global, :h}, {:var, 0}}}
-    bh = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}
+    bf = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :g}, {:var, 0}}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :h}, {:var, 0}}}
+    bh = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :f}, {:var, 0}}}
 
     Challenge.new(
       kind: :def_group,
@@ -492,10 +492,10 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_mediated_cycle() :: Challenge.t()
   def diverging_mediated_cycle do
-    ty = {:pi, @dec, @dec}
-    b_id = {:lam, @dec, {:var, 0}}
-    bf = {:lam, @dec, {:app, {:global, :total_id}, {:app, {:global, :g}, {:var, 0}}}}
-    bg = {:lam, @dec, {:app, {:global, :f}, {:var, 0}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}
+    b_id = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:var, 0}}
+    bf = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :total_id}, {:app, {:global, :g}, {:var, 0}}}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :f}, {:var, 0}}}
 
     Challenge.new(
       kind: :def_group,
@@ -522,10 +522,10 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_permuting_pair() :: Challenge.t()
   def diverging_permuting_pair do
-    ty = {:pi, @dec, {:pi, @dec, @dec}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}}
     # inner frame: y = var 0, x = var 1
-    bf = {:lam, @dec, {:lam, @dec, {:app, {:app, {:global, :g}, {:var, 0}}, {:var, 1}}}}
-    bg = {:lam, @dec, {:lam, @dec, {:app, {:app, {:global, :f}, {:var, 1}}, {:var, 0}}}}
+    bf = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:app, {:global, :g}, {:var, 0}}, {:var, 1}}}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:app, {:global, :f}, {:var, 1}}, {:var, 0}}}}
 
     Challenge.new(
       kind: :def_group,
@@ -547,10 +547,10 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_regrowing_self() :: Challenge.t()
   def diverging_regrowing_self do
-    motive = {:lam, @nat, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
     body =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, motive,
         [
           {:Z, 0, {:ctor, :Z, []}},
@@ -561,7 +561,7 @@ defmodule Antigen.Generators.Totality do
       kind: :def_group,
       assay: "totality/diverging",
       label: :diverging,
-      payload: %{defs: [%{name: :h, type: {:pi, @nat, @nat}, body: body}], focus: [:h]},
+      payload: %{defs: [%{name: :h, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: body}], focus: [:h]},
       note: "W1 regrowing self-call h (S y) — diverges on every S input"
     )
   end
@@ -575,14 +575,14 @@ defmodule Antigen.Generators.Totality do
   """
   @spec diverging_one_leg_pair() :: Challenge.t()
   def diverging_one_leg_pair do
-    motive = {:lam, @nat, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
     bf =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, motive,
         [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :g}, {:var, 0}}}]}}
 
-    bg = {:lam, @nat, {:app, {:global, :f}, {:ctor, :S, [{:var, 0}]}}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :f}, {:ctor, :S, [{:var, 0}]}}}
 
     Challenge.new(
       kind: :def_group,
@@ -590,8 +590,8 @@ defmodule Antigen.Generators.Totality do
       label: :diverging,
       payload: %{
         defs: [
-          %{name: :f, type: {:pi, @nat, @nat}, body: bf},
-          %{name: :g, type: {:pi, @nat, @nat}, body: bg}
+          %{name: :f, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: bf},
+          %{name: :g, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: bg}
         ],
         focus: [:f, :g]
       },
@@ -614,15 +614,15 @@ defmodule Antigen.Generators.Totality do
   """
   @spec wellfounded_even_odd() :: Challenge.t()
   def wellfounded_even_odd do
-    motive = {:lam, @nat, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
     be =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, motive,
         [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:app, {:global, :odd}, {:var, 0}}}]}}
 
     bo =
-      {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
        {:case, {:var, 0}, motive,
         [
           {:Z, 0, {:ctor, :S, [{:ctor, :Z, []}]}},
@@ -635,8 +635,8 @@ defmodule Antigen.Generators.Totality do
       label: :terminating,
       payload: %{
         defs: [
-          %{name: :even, type: {:pi, @nat, @nat}, body: be},
-          %{name: :odd, type: {:pi, @nat, @nat}, body: bo}
+          %{name: :even, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: be},
+          %{name: :odd, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: bo}
         ],
         focus: [:even, :odd]
       },
@@ -654,12 +654,12 @@ defmodule Antigen.Generators.Totality do
   """
   @spec wellfounded_ackermann() :: Challenge.t()
   def wellfounded_ackermann do
-    motive = {:lam, @nat, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
     # frame under λm. λn.: m = var 1, n = var 0
     body =
-      {:lam, @nat,
-       {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat,
         {:case, {:var, 1}, motive,
          [
            # Z: S n
@@ -683,7 +683,7 @@ defmodule Antigen.Generators.Totality do
       assay: "totality/terminating",
       label: :terminating,
       payload: %{
-        defs: [%{name: :ack, type: {:pi, @nat, {:pi, @nat, @nat}}, body: body}],
+        defs: [%{name: :ack, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, body: body}],
         focus: [:ack]
       },
       note: "W2 reach pin: Ackermann, lexicographic (m, n) descent (P1 target)"
@@ -699,12 +699,12 @@ defmodule Antigen.Generators.Totality do
   """
   @spec wellfounded_permuted_pair() :: Challenge.t()
   def wellfounded_permuted_pair do
-    motive = {:lam, @nat, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
     # f frame: n = var 1, m = var 0; S-branch binds y at 0 (m -> 1, n -> 2)
     bf =
-      {:lam, @nat,
-       {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat,
         {:case, {:var, 1}, motive,
          [
            {:Z, 0, {:var, 0}},
@@ -712,7 +712,7 @@ defmodule Antigen.Generators.Totality do
          ]}}}
 
     # g a b = f b a; frame: a = var 1, b = var 0
-    bg = {:lam, @nat, {:lam, @nat, {:app, {:app, {:global, :f}, {:var, 0}}, {:var, 1}}}}
+    bg = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:app, {:global, :f}, {:var, 0}}, {:var, 1}}}}
 
     Challenge.new(
       kind: :def_group,
@@ -720,8 +720,8 @@ defmodule Antigen.Generators.Totality do
       label: :terminating,
       payload: %{
         defs: [
-          %{name: :f, type: {:pi, @nat, {:pi, @nat, @nat}}, body: bf},
-          %{name: :g, type: {:pi, @nat, {:pi, @nat, @nat}}, body: bg}
+          %{name: :f, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, body: bf},
+          %{name: :g, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, body: bg}
         ],
         focus: [:f, :g]
       },
@@ -744,8 +744,8 @@ defmodule Antigen.Generators.Totality do
   def diverging_size_change_control do
     # frame under λa. λb.: a = var 1, b = var 0
     body =
-      {:lam, @nat,
-       {:lam, @nat,
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat,
         {:app, {:app, {:global, :loop}, {:ctor, :S, [{:var, 1}]}}, {:ctor, :S, [{:var, 0}]}}}}
 
     Challenge.new(
@@ -753,7 +753,7 @@ defmodule Antigen.Generators.Totality do
       assay: "totality/diverging",
       label: :diverging,
       payload: %{
-        defs: [%{name: :loop, type: {:pi, @nat, {:pi, @nat, @nat}}, body: body}],
+        defs: [%{name: :loop, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, body: body}],
         focus: [:loop]
       },
       note: "size-change control: loop a b = loop (S a) (S b) — unmatched params, all-unknown loop"

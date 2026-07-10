@@ -22,7 +22,7 @@ defmodule Antigen.Generators.InductiveEnv do
   Shape: a parameterized, Int-indexed family
   `AntigenEnv : (a:Type0) -> (n:Int) -> Type0` with a single two-field,
   MIXED-quantity ctor `antigenA : (x:a) -> (y:a) -> AntigenEnv a <lit>`
-  (`quantities = [:erased, :present]`, uniform `result_params = [a]`) — the
+  (`quantities = [:erased, :unrestricted]`, uniform `result_params = [a]`) — the
   same proven-working "parameterized uniform" shape `IndexedDecl.param/2`
   uses, extended to two fields so every accessor's "found" branch reads back
   non-trivial, multi-element data (a length-2 arg telescope, a length-2
@@ -46,7 +46,7 @@ defmodule Antigen.Generators.InductiveEnv do
           :antigenA,
           [{:x, {:var, 0}}, {:y, {:var, 1}}],
           [{:int_lit, n}],
-          [:erased, :present],
+          [:erased, :unrestricted],
           [{:var, 2}]
         )
 
