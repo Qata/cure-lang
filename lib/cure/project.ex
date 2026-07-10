@@ -233,6 +233,31 @@ defmodule Cure.Project do
     is_nil(Map.get(dep, :path)) and is_nil(Map.get(dep, :git))
   end
 
+  @doc false
+  # The project dir a dependency source at `file` resolves its edition against:
+  # the nearest ancestor directory holding a `Cure.toml`, walking up from the
+  # file but NEVER above `base` (the dependency's extraction/checkout root). This
+  # honours a dep that ships its own Cure.toml even under a nested layout
+  # (`base/<pkg>-<vsn>/Cure.toml`, which `Cure.Project.load` reads directly and
+  # would otherwise miss with a fixed `project_dir: base`), while the base bound
+  # guarantees a manifest-less dep never inherits the CONSUMER's edition (A1-F1).
+  @spec dep_project_dir(String.t(), String.t()) :: String.t()
+  def dep_project_dir(file, base) do
+    base = Path.expand(base)
+    file |> Path.expand() |> Path.dirname() |> find_dep_root(base)
+  end
+
+  defp find_dep_root(dir, base) do
+    cond do
+      File.regular?(Path.join(dir, "Cure.toml")) -> dir
+      dir == base -> base
+      # Defensive: a file under `base` reaches `base` exactly on the way up, but
+      # if we ever step above it, stop rather than escape into the consumer tree.
+      not String.starts_with?(dir <> "/", base <> "/") -> base
+      true -> dir |> Path.dirname() |> find_dep_root(base)
+    end
+  end
+
   defp resolve_one(%{path: rel_path, name: name}, root, _reuse_lock?)
        when is_binary(rel_path) and rel_path != "" do
     abs_path = Path.expand(rel_path, root)
@@ -242,13 +267,14 @@ defmodule Cure.Project do
 
     Enum.each(cure_files, fn file ->
       # Edition-per-package (Rust parity): the dep resolves under its OWN root,
-      # never the consumer's. Pinning :project_dir to the dep base stops
-      # resolve_edition from walking up into the consumer's Cure.toml.
+      # never the consumer's. dep_project_dir picks the dep's own Cure.toml if it
+      # ships one (bounded at abs_path) and otherwise abs_path itself (→ default),
+      # so resolve_edition never walks up into the consumer's Cure.toml.
       _ =
         Cure.Compiler.compile_file(file,
           output_dir: dep_ebin,
           emit_events: false,
-          project_dir: abs_path
+          project_dir: dep_project_dir(file, abs_path)
         )
     end)
 
@@ -337,14 +363,15 @@ defmodule Cure.Project do
 
     Enum.each(cure_files, fn file ->
       # Edition-per-package (Rust parity): a tarball dep resolves under its own
-      # extraction root, never the consumer's. Pinning :project_dir to the
-      # extraction target keeps resolve_edition from inheriting the consumer's
-      # edition when the dep ships no Cure.toml.
+      # extraction root, never the consumer's. dep_project_dir finds the dep's own
+      # Cure.toml even under the common nested layout (target/<pkg>-<vsn>/Cure.toml,
+      # which the `**/lib/**` glob anticipates), bounded at `target` so a
+      # manifest-less dep falls to the default rather than the consumer's edition.
       _ =
         Cure.Compiler.compile_file(file,
           output_dir: dep_ebin,
           emit_events: false,
-          project_dir: target
+          project_dir: dep_project_dir(file, target)
         )
     end)
 

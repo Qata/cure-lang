@@ -68,6 +68,59 @@ defmodule Cure.ProjectEditionTest do
     assert Cure.Project.find_root(Path.join(src, "a.cure")) == Path.expand(base)
   end
 
+  # Iteration 6 (audit A1-F1): a tarball dep extracts under a nested package dir
+  # (`target/<pkg>-<vsn>/lib/...`, which the install glob `**/lib/**` anticipates),
+  # and `Cure.Project.load` reads `<dir>/Cure.toml` DIRECTLY (no upward walk). A
+  # fixed `project_dir: target` therefore missed a nested dep's own Cure.toml and
+  # resolved it under the default edition instead of its declared one. dep_project_dir
+  # finds the nearest ancestor holding a Cure.toml, bounded at the extraction base so
+  # it can never escape into the CONSUMER's tree.
+  describe "dep_project_dir/2 (edition-per-package, base-bounded)" do
+    defp mk(dir), do: File.mkdir_p!(dir)
+
+    test "finds a NESTED package's own Cure.toml" do
+      base = Path.join(System.tmp_dir!(), "cure_depdir_#{System.unique_integer([:positive])}")
+      pkg = Path.join(base, "foo-1.0")
+      lib = Path.join(pkg, "lib")
+      mk(lib)
+      on_exit(fn -> File.rm_rf!(base) end)
+      File.write!(Path.join(pkg, "Cure.toml"), "[project]\nname = \"foo\"\nedition = \"2026\"\n")
+
+      assert Cure.Project.dep_project_dir(Path.join(lib, "x.cure"), base) == Path.expand(pkg)
+    end
+
+    test "returns base for a FLAT layout (Cure.toml at base)" do
+      base = Path.join(System.tmp_dir!(), "cure_depdir_#{System.unique_integer([:positive])}")
+      lib = Path.join(base, "lib")
+      mk(lib)
+      on_exit(fn -> File.rm_rf!(base) end)
+      File.write!(Path.join(base, "Cure.toml"), "[project]\nname = \"foo\"\nedition = \"2026\"\n")
+
+      assert Cure.Project.dep_project_dir(Path.join(lib, "x.cure"), base) == Path.expand(base)
+    end
+
+    test "returns base (→ default edition) when the dep ships NO Cure.toml" do
+      base = Path.join(System.tmp_dir!(), "cure_depdir_#{System.unique_integer([:positive])}")
+      lib = Path.join([base, "foo-1.0", "lib"])
+      mk(lib)
+      on_exit(fn -> File.rm_rf!(base) end)
+
+      assert Cure.Project.dep_project_dir(Path.join(lib, "x.cure"), base) == Path.expand(base)
+    end
+
+    test "never escapes the base to an ancestor (consumer) Cure.toml" do
+      outer = Path.join(System.tmp_dir!(), "cure_depdir_#{System.unique_integer([:positive])}")
+      base = Path.join(outer, "dep")
+      lib = Path.join(base, "lib")
+      mk(lib)
+      on_exit(fn -> File.rm_rf!(outer) end)
+      # A manifest ABOVE the extraction base (the consumer's) must be ignored.
+      File.write!(Path.join(outer, "Cure.toml"), "[project]\nname = \"consumer\"\nedition = \"9999\"\n")
+
+      assert Cure.Project.dep_project_dir(Path.join(lib, "x.cure"), base) == Path.expand(base)
+    end
+  end
+
   test "loads a validated edition from the [project] table" do
     dir = write_toml("[project]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2026\"\n")
     {:ok, project} = Cure.Project.load(dir)
