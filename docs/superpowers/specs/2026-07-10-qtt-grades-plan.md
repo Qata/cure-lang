@@ -173,7 +173,7 @@ half-migrated tree.
       *Hazard:* a linear binder captured by a non-one-shot closure. `mul/2` is
       what makes that fall out — do not special-case it.
 
-- [ ] **4c. Join points (E layer).** Bind a catch-all body **once** instead of
+- [x] **4c. Join points (E layer).** *(landed `87dcaeb`)* Bind a catch-all body **once** instead of
       re-elaborating it per uncovered constructor. Encoding uses only existing
       Core formers: wrap the `:case` in the `:let` binder slice 1 added, binding
       `j = {:lam, ω, S, e}` at type `{:pi, ω, S, R}` — literally the motive λ with
@@ -187,7 +187,8 @@ half-migrated tree.
       constructor makes a closure a pessimization.
       *Red tests to write first:* a 6-constructor type with one arm covered
       elaborates the catch-all body **once**, not 5×; two nested catch-alls give
-      2 copies, not 25; a named catch-all `x -> g(x)` still sees the scrutinee's
+      1 copy, not 25 (sharing composes — nesting adds a binding rather than
+      multiplying copies); a named catch-all `x -> g(x)` still sees the scrutinee's
       value; each constructor still normalizes to the same result it does today
       (semantics preserved); one uncovered constructor emits **no** join point; a
       dependent-motive match is unchanged and still typechecks.
