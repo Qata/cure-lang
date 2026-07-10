@@ -1022,6 +1022,26 @@ spec: the prerequisite is smaller than claimed (the β-redex is built), and the
 gate that makes it exact is *derived from* the quantity lattice rather than
 preceding it.
 
+**STATUS: step 1 is LANDED** (`a84c454` kernel, `d2054e2` elaborator), by route
+(b) — a Core `:let` binder with ζ, not the §5.4a bridge. Notes for step 2:
+
+- **No `RigCount` was added**, contrary to §5.4b's sketch. Cure's `:pi`/`:lam`
+  carry no quantity (`validator.ex` actively rejects graded binders); quantities
+  live on def params and ctor fields. `{0,1,ω}` must land on all three binders
+  uniformly, not on `:let` alone.
+- **`Context` now stores its NbE environment** instead of deriving it from
+  `length`. `extend/2` pushes a neutral; `extend_def/3` pushes the bound value.
+  That derivation was the sole structural obstacle to ζ, exactly as predicted.
+- **A residual remains, and linearity must not rely on its absence.** Bind-once
+  requires an *inferable* rhs; a bare lambda, `if`, or `pickup` has no inferable
+  type and still elaborates by surface substitution (14 of 30 stdlib `let`s bind
+  once; the rest have a lambda rhs). **A linear handle bound to a check-only rhs
+  would still be duplicated below the check.** Before `{0,1,ω}` lands, either
+  close this with a bidirectional `let` (surface ascription, or propagating the
+  body's demanded type into the rhs) or make the linearity check reject a `1`
+  binder whose rhs took the substitution path. This is the one place §5.4's
+  "prerequisite" is still genuinely unmet.
+
 Deadlock freedom ships as an **out-of-TCB lint** (acyclicity/priority analysis
 over the session-dependency graph), same trust shape as the Z3 guard lint —
 alarms without kernel exposure. Mailbox types (de'Liguoro–Padovani; Pat) remain
