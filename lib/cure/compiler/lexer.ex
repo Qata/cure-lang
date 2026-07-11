@@ -1032,27 +1032,36 @@ defmodule Cure.Compiler.Lexer do
             ?\\ -> {?\\, advance(state, 1)}
             ?' -> {?', advance(state, 1)}
             ?0 -> {0, advance(state, 1)}
-            _ ->
-              case decode_char_at(state) do
-                {cp, state2} -> {cp, state2}
-                :invalid -> {:invalid, state}
-              end
+            # An unrecognized escape must NOT fall through to `decode_char_at`,
+            # which would read the byte *after* the backslash literally and
+            # silently drop the `\` — turning `'\r'` into the codepoint for `r`
+            # (114) with no diagnostic. Cure recognizes only the small escape set
+            # above (mirroring the string lexer, which likewise does not interpret
+            # `\r`/`\b`/…); anything else is a hard error rather than a silent
+            # miscompile.
+            nil -> {:invalid, state}
+            _ -> {:bad_escape, state}
           end
 
-        if value == :invalid do
-          {:error, {:unterminated_char, state.line, start_col}, state}
-        else
-          # Expect closing '
-          case peek(state) do
-            ?' ->
-              state = advance(state, 1)
-              token = Token.new(:char, value, state.line, start_col)
-              maybe_emit_event(state, token)
-              {:ok, %{state | tokens: [token | state.tokens]}}
+        cond do
+          value == :invalid ->
+            {:error, {:unterminated_char, state.line, start_col}, state}
 
-            _ ->
-              {:error, {:unterminated_char, state.line, start_col}, state}
-          end
+          value == :bad_escape ->
+            {:error, {:invalid_char_escape, state.line, start_col}, state}
+
+          true ->
+            # Expect closing '
+            case peek(state) do
+              ?' ->
+                state = advance(state, 1)
+                token = Token.new(:char, value, state.line, start_col)
+                maybe_emit_event(state, token)
+                {:ok, %{state | tokens: [token | state.tokens]}}
+
+              _ ->
+                {:error, {:unterminated_char, state.line, start_col}, state}
+            end
         end
 
       nil ->
