@@ -9,7 +9,7 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
   ANY green module's dependent elaboration would otherwise go uncaught (only a
   handful of modules had individual `*_elaborates_test.exs` guards).
 
-  The `@green` list only ever GROWS. The seven modules NOT listed are the known
+  The `@green` list only ever GROWS. The modules NOT listed are the known
   remaining blockers, documented for the rip-out ledger (do NOT assert they fail —
   that would freeze current brokenness; they are promoted into `@green` as they are
   fixed):
@@ -19,23 +19,24 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
       `is_map`/`is_tuple` tags — a proliferation of unchecked casts that fought
       the type system rather than using it. Removed pending a well-typed redesign;
       not a rip-out blocker.
-    * `show`, `io` — dependent-green WITH `use Std.String` + `use Std.Semigroup`
-      (proven separately), but the committed files omit those imports because the
-      CLASSIC checker breaks on them (String=List(Char) vs binary). They flip green
-      the instant classic is deleted.
-    * `set` — dependent-CAPABLE (proven in `set_dependent_capability_test.exs`:
-      a parameterised `Map(k, v)` with the three fold-seeded functions rewritten
-      as structural recursion elaborates cleanly, bare `Bool`, no kernel change —
-      the foldl-accumulator poly-seed gap is SIDESTEPPED, not required). Not in
-      `@green` only because it is CLASSIC-COEXISTENCE-blocked like show/io/access:
-      the parameterised `Map(k, v)` makes the classic checker reject `from_list`'s
-      match (`E033: no common upper bound Map(k,v) vs Map(t,Bool)`), so the live
-      file keeps its bare-`Map` form until classic is deleted, then flips to the
-      rip-out form.
+    * `io` — dependent-green WITH `use Std.String` + `use Std.Semigroup` (its `<>`
+      routes through `Std.Semigroup.combine`), but the committed file omits those
+      imports because the CLASSIC checker breaks on them (String=List(Char) vs
+      binary). Pinned in the coexistence guard below; flips green the instant
+      classic is deleted. (`show` was in this bucket until it was found that its
+      committed file CAN carry the imports without breaking classic — now `@green`.)
     * `http`, `regex` — AtomVM dead-ends (`:inets`/`:re` absent); excluded from the
       parity target by design.
     * `pair` — bare-`Tuple`/`Any` shaped, slated for retirement in favour of
       `Std.Tuple` + `Std.Match`; excluded.
+
+  Promoted into `@green`: `show` (imports added to the committed file, 5e303da) and
+  `set` (the parameterised `Map(k, v)` that once made the classic checker reject
+  `from_list`'s match with `E033` now joins cleanly — `type.ex` gained a covariant
+  `Map`/same-constructor `{:adt}` subtype rule in bacf772 — so the fold-seeded
+  functions could be rewritten as structural recursion in the committed file, the
+  form `set_dependent_capability_test.exs` proves, and it elaborates on BOTH
+  pipelines).
   """
   use ExUnit.Case, async: true
 
@@ -44,8 +45,8 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
   @green ~w(
     actor app atom binary bool bounded char comparable core crdt decision equatable
     equivalent float fsm functor gen int iter json list map match math nat
-    non_empty optic option process proof result semigroup sigma string supervisor
-    system telescope test time tuple unit vector
+    non_empty optic option process proof result semigroup set show sigma string
+    supervisor system telescope test time tuple unit vector
   )
 
   test "every dependent-green stdlib module elaborates on the dependent pipeline" do
@@ -73,18 +74,19 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
              Enum.map_join(Enum.reverse(failures), "\n", fn {n, e} -> "  Std.#{n}: #{e}" end)
   end
 
-  # The classic-coexistence contract: `show`/`io` elaborate cleanly on the
-  # dependent pipeline the instant they can carry their held-out imports
-  # (`use Std.String` + `use Std.Semigroup`). The committed files omit those
-  # imports ONLY because the CLASSIC checker breaks on them (String=List(Char) vs
-  # binary), so they cannot appear in the `@green` scan above — but they flip green
-  # the moment classic is deleted (#18). This guard locks that "green-on-deletion"
-  # property in as a regression: a future break in `show`/`io`'s dependent side is
-  # caught HERE rather than only at rip-out time. `io` genuinely needs BOTH imports
-  # (its `<>` routes through `Std.Semigroup.combine`).
-  @coexistence [{"show", ~w(Std.String Std.Semigroup)}, {"io", ~w(Std.String Std.Semigroup)}]
+  # The classic-coexistence contract: `io` elaborates cleanly on the dependent
+  # pipeline the instant it can carry its held-out imports (`use Std.String` +
+  # `use Std.Semigroup`). The committed file omits those imports ONLY because the
+  # CLASSIC checker breaks on them (String=List(Char) vs binary), so it cannot
+  # appear in the `@green` scan above — but it flips green the moment classic is
+  # deleted (#18). This guard locks that "green-on-deletion" property in as a
+  # regression: a future break in `io`'s dependent side is caught HERE rather than
+  # only at rip-out time. `io` genuinely needs BOTH imports (its `<>` routes
+  # through `Std.Semigroup.combine`). `show` graduated OUT of this bucket into
+  # `@green` — its committed file carries the imports without breaking classic.
+  @coexistence [{"io", ~w(Std.String Std.Semigroup)}]
 
-  test "classic-coexistence modules (show/io) elaborate once their held-out imports are added" do
+  test "classic-coexistence modules (io) elaborate once their held-out imports are added" do
     failures =
       Enum.reduce(@coexistence, [], fn {name, uses}, acc ->
         src = inject_uses(Path.join("lib/std", name <> ".cure"), uses)
