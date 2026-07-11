@@ -560,6 +560,17 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
+      # Numeric negation. Type-directed exactly like binary arithmetic: infer the
+      # operand's primitive kind, then lower to `int_neg`/`float_neg` (both return
+      # their operand type). A non-numeric operand rejects as unsupported.
+      :- ->
+        with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
+             {:ok, g} <- neg_global(o_type, ctx),
+             term = {:app, {:global, g}, o_core},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
       _ ->
         {:error, {:unsupported_expression, expr}}
     end
@@ -976,6 +987,16 @@ defmodule Cure.Elab.Elaborator do
     else
       g = if op_sym == :==, do: :struct_eq, else: :struct_ne
       {:ok, {:app, app2(g, ty, l), r}}
+    end
+  end
+
+  # Pick the type-directed negation builtin from the operand's primitive kind,
+  # mirroring `build_binop`'s Int→int_*/Float→float_* dispatch for unary `-x`.
+  defp neg_global(o_type, ctx) do
+    case primitive_scrut_kind(o_type, Context.signature(ctx)) do
+      {:ok, :int} -> {:ok, :int_neg}
+      {:ok, :float} -> {:ok, :float_neg}
+      _ -> {:error, {:unsupported_operand_type, :-}}
     end
   end
 
