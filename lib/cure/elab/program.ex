@@ -48,10 +48,52 @@ defmodule Cure.Elab.Program do
     with :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast),
-         :ok <- check_no_fn_ctor_collision(ast) do
+         :ok <- check_no_fn_ctor_collision(ast),
+         :ok <- check_proof_shapes(ast) do
       check_no_sibling_collision(ast)
     end
   end
+
+  # A top-level container the dependent pipeline elaborates as a module. Classic
+  # codegen compiles a `proof` container "exactly like a regular module"; the
+  # dependent pipeline now does the same, so both container types are unwrapped
+  # and their declarations elaborated identically.
+  defp module_like_container?(meta), do: Keyword.get(meta, :container_type) in [:module, :proof]
+
+  # E026 proof-shape discipline: every binding inside a `proof` container must
+  # inhabit a propositional-equality type (`Equivalent(T, a, b)`) — proof
+  # containers are exclusively for propositions, not ordinary code. A non-proof
+  # return type is rejected here, before elaboration.
+  defp check_proof_shapes(ast) do
+    ast
+    |> proof_container_fns()
+    |> Enum.find_value(:ok, fn {:function_def, meta, _body} ->
+      if proof_shape_return?(Keyword.get(meta, :return_type)) do
+        nil
+      else
+        {:error, {:proof_shape_mismatch, Keyword.get(meta, :name)}}
+      end
+    end)
+  end
+
+  defp proof_container_fns({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &proof_container_fns/1)
+
+  defp proof_container_fns({:container, meta, body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :proof do
+      body |> List.wrap() |> Enum.filter(&match?({:function_def, m, _} when is_list(m), &1))
+    else
+      []
+    end
+  end
+
+  defp proof_container_fns(_other), do: []
+
+  # A proof return type is an application of the propositional-equality family.
+  defp proof_shape_return?({:function_call, meta, _args}) when is_list(meta),
+    do: Keyword.get(meta, :name) in ["Equivalent", "Eq"]
+
+  defp proof_shape_return?(_other), do: false
 
   # Two sibling `mod` blocks in ONE compilation unit may not bind the same name.
   #
@@ -141,7 +183,7 @@ defmodule Cure.Elab.Program do
     do: Enum.flat_map(items, &top_modules/1)
 
   defp top_modules({:container, meta, _body} = node) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module, do: [node], else: []
+    if module_like_container?(meta), do: [node], else: []
   end
 
   defp top_modules(_), do: []
@@ -548,7 +590,9 @@ defmodule Cure.Elab.Program do
 
   def dependent?({:container, meta, body}) when is_list(meta) do
     case Keyword.get(meta, :container_type) do
-      :proof -> false
+      # A proof container inhabits propositional-equality types — inherently
+      # dependent, and now elaborated into Core (routed like a module below).
+      :proof -> true
       _other -> dependent?(body)
     end
   end
@@ -584,7 +628,7 @@ defmodule Cure.Elab.Program do
   def module_atom(ast), do: String.to_atom("Cure." <> (find_module_name(ast) || "Main"))
 
   defp find_module_name({:container, meta, _body}) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module, do: Keyword.get(meta, :name)
+    if module_like_container?(meta), do: Keyword.get(meta, :name)
   end
 
   defp find_module_name({_tag, _meta, children}) when is_list(children),
@@ -645,7 +689,7 @@ defmodule Cure.Elab.Program do
     do: Enum.flat_map(items, &declarations/1)
 
   defp declarations({:container, meta, body}) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module do
+    if module_like_container?(meta) do
       body |> List.wrap() |> Enum.flat_map(&declarations/1)
     else
       [{:container, meta, body}]
@@ -677,7 +721,7 @@ defmodule Cure.Elab.Program do
     do: Enum.flat_map(items, &imports/1)
 
   defp imports({:container, meta, body}) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module do
+    if module_like_container?(meta) do
       body |> List.wrap() |> Enum.flat_map(&imports/1)
     else
       []
