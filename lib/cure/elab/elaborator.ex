@@ -2172,7 +2172,13 @@ defmodule Cure.Elab.Elaborator do
           k = length(family.indices)
           motive = if carried, do: wrap_motive_carried_eq(motive0, k, carried), else: motive0
 
-          with {:ok, branches, join} <-
+          # Anonymous-union elimination. Runs LATE — unlike the other desugarings,
+          # which fire before the scrutinee is even elaborated — because it needs the
+          # scrutinee's family key, which is only known here. Typed-pattern arms
+          # (`n: Int`) become ordinary ctor-pattern arms, so coverage, exhaustiveness
+          # and totality all come from the existing machinery below.
+          with {:ok, arms} <- desugar_union_arms(arms, dname, names, env),
+               {:ok, branches, join} <-
                  elaborate_branches(
                    arms, names, ctx, env, dname,
                    idx_vals, param_vals, scrut_term, result_type_term, carried, motive
@@ -2184,6 +2190,94 @@ defmodule Cure.Elab.Elaborator do
         _ ->
           {:error, :match_scrutinee_not_data}
       end
+    end
+  end
+
+  # ── Anonymous-union elimination ────────────────────────────────────────────
+
+  # Rewrite typed-pattern and literal arms into ordinary constructor-pattern arms
+  # against the union family `dname`, so everything downstream — `partition_arms/4`,
+  # coverage, exhaustiveness, totality — works unchanged.
+  #
+  # A no-op when the scrutinee is not a generated union, so an ordinary `match` over
+  # a user ADT is untouched.
+  defp desugar_union_arms(arms, dname, names, env) do
+    if Cure.Elab.Union.union_family?(dname) do
+      Enum.reduce_while(arms, {:ok, []}, fn arm, {:ok, acc} ->
+        case expand_union_arm(arm, dname, names, env) do
+          {:ok, expanded} -> {:cont, {:ok, acc ++ expanded}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+    else
+      {:ok, arms}
+    end
+  end
+
+  defp expand_union_arm({:match_arm, meta, body} = arm, dname, names, env) do
+    case Keyword.get(meta, :pattern) do
+      # `n: Int` — a type member, or `rest: Bool | Atom` — a SUB-UNION, which expands
+      # into one arm per member of the sub-union.
+      {:typed_pattern, pm, [name, type_ast]} ->
+        with {:ok, members} <- Cure.Elab.Union.canonicalise([type_ast], names, env) do
+          sub_union? = length(members) > 1
+
+          arms =
+            Enum.map(members, fn m ->
+              cname = Cure.Elab.Union.ctor_key(dname, m)
+              expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body)
+            end)
+
+          {:ok, arms}
+        end
+
+      # `:north` — a literal member, matched bare, binding nothing.
+      {:literal, lm, value} ->
+        case Cure.Elab.Union.literal_key(Keyword.get(lm, :subtype), value) do
+          {:ok, key} ->
+            cname = Cure.Elab.Union.ctor_key(dname, %{key: key})
+            pattern = {:function_call, [name: Atom.to_string(cname)], []}
+            {:ok, [{:match_arm, Keyword.put(meta, :pattern, pattern), body}]}
+
+          :error ->
+            {:ok, [arm]}
+        end
+
+      _ ->
+        {:ok, [arm]}
+    end
+  end
+
+  # A single member of a typed-pattern arm.
+  #
+  # For a plain member the bound name IS the payload, so the ctor pattern binds it
+  # directly.
+  #
+  # For a SUB-UNION member (`rest: Bool | Atom`) the bound name must carry the
+  # SUB-UNION's type, not this one member's payload type. So the ctor pattern binds a
+  # FRESH name, and every occurrence of the surface name in the body is replaced by
+  # `assert_type <fresh> : <sub-union>` — an ascription, which elaborates the fresh
+  # payload in CHECK position against the sub-union and therefore re-injects it via
+  # the ordinary union coercion. (A `let`-block cannot be used here: `:block` has no
+  # infer-mode clause, and branch bodies are elaborated in infer mode.)
+  defp expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body) do
+    cond do
+      m.payload == nil ->
+        pattern = {:function_call, [name: Atom.to_string(cname)], []}
+        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
+
+      sub_union? ->
+        fresh = "__u" <> Integer.to_string(:erlang.phash2({name, m.key}))
+        pattern = {:function_call, [name: Atom.to_string(cname)], [{:variable, pm, fresh}]}
+
+        ascription = {:assert_type, pm, [{:variable, pm, fresh}, type_ast]}
+        rebound = Enum.map(body, &subst_surface_var(&1, name, ascription))
+
+        {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}
+
+      true ->
+        pattern = {:function_call, [name: Atom.to_string(cname)], [{:variable, pm, name}]}
+        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
     end
   end
 
@@ -4562,8 +4656,16 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_branch_body({:list, _, _} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
-  defp elaborate_branch_body(expr, _expected, names, ctx, env) do
-    with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
+  # The general branch body: inferred. `maybe_inject_union/5` is a strict no-op unless
+  # this branch's goal is a generated anonymous-union family — in which case the
+  # inferred body is injected (a member value) or widened (a narrower union, as
+  # produced by a sub-union arm's `assert_type` ascription) into the goal. Without it
+  # a sub-union arm's body has the SUB-union's type while the motive demands the wide
+  # one, and the kernel rejects the branch with `:branch_type`.
+  defp elaborate_branch_body(expr, expected, names, ctx, env) do
+    with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+      {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+    end
   end
 
   # A `let x = e ⏎ …` block elaborates to the Core `:let` binder:

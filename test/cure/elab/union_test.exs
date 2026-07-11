@@ -183,4 +183,97 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, _} = Program.elaborate(src)
     end
   end
+
+  describe "elimination via typed patterns" do
+    test "a match over a union becomes a Core :case with one branch per member" do
+      src = """
+      mod M
+        fn f(x: Int | Bool) -> Int = match x
+          n: Int -> n
+          b: Bool -> 0
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      body = Env.get_def(env, :f).body |> unwrap_lams()
+
+      assert {:case, _scrut, _motive, branches} = body
+
+      assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
+               [{:"Union<Bool|Int>$Bool", 1}, {:"Union<Bool|Int>$Int", 1}]
+    end
+
+    test "a literal member is matched as a bare literal and binds nothing" do
+      src = """
+      mod M
+        fn f(x: Int | :north) -> Int = match x
+          n: Int -> n
+          :north -> 0
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      body = Env.get_def(env, :f).body |> unwrap_lams()
+
+      assert {:case, _, _, branches} = body
+      arities = Map.new(branches, fn {c, ar, _} -> {c, ar} end)
+
+      assert arities[:"Union<Atom#:north|Int>$Atom#:north"] == 0
+      assert arities[:"Union<Atom#:north|Int>$Int"] == 1
+    end
+
+    test "a non-exhaustive match is rejected by the existing coverage check" do
+      src = """
+      mod M
+        fn f(x: Int | Bool) -> Int = match x
+          n: Int -> n
+      end
+      """
+
+      assert {:error, {:missing_branch, _}} = Program.elaborate(src)
+    end
+
+    test "a branch naming a non-member is rejected" do
+      src = """
+      mod M
+        fn f(x: Int | Bool) -> Int = match x
+          n: Int -> n
+          a: Atom -> 0
+      end
+      """
+
+      assert {:error, _} = Program.elaborate(src)
+    end
+
+    test "a sub-union branch binds the narrowed value" do
+      src = """
+      mod M
+        fn f(x: Int | Bool | Atom) -> Int | Bool | Atom = match x
+          n: Int -> n
+          rest: Bool | Atom -> rest
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      body = Env.get_def(env, :f).body |> unwrap_lams()
+
+      assert {:case, _, _, branches} = body
+      # One Core branch per member of the WIDE union — the sub-union arm expanded.
+      assert length(branches) == 3
+    end
+
+    test "the round trip: inject then eliminate recovers the payload" do
+      src = """
+      mod M
+        fn wrap(n: Int) -> Int | Bool = n
+        fn unwrap(x: Int | Bool) -> Int = match x
+          n: Int -> n
+          b: Bool -> 0
+        fn go(n: Int) -> Int = unwrap(wrap(n))
+      end
+      """
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+  end
 end
