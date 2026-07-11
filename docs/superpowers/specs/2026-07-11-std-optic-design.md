@@ -155,10 +155,43 @@ whole record via `Name{…}`. Per-record **deriving** (generate one lens per fie
 is the ergonomic answer; the mechanism (`@derive(:optics)` on `rec`, or a macro)
 is a planning decision. Manual `lens(get, set)` construction is always available.
 
-### Surface composition ergonomics
-The old runtime path list `[key(:a), all(), key(:b)]` becomes a typed
-composition. Whether that reads as nested `compose(…)`, a `path3(…)` helper, or a
-custom left-assoc operator (if the surface permits one) is a planning-phase call.
+### Surface composition — the dot-path operator `.`
+The old runtime path list `[key(:a), all(), key(:b)]` becomes a typed composition
+written with **`.`**, so optic paths read like native field access:
+
+```
+key(:langs).each.key(:name)        # == compose(compose(key(:langs), each), key(:name))
+```
+
+`.` is left-associative and binds tightest (it already does, as projection), so a
+path is a single primary expression. `compose(o1, o2)` remains the underlying
+function; `.` is surface sugar for it.
+
+**Disambiguation is type-directed** — identical to how Cure already resolves
+`.i`/`tproj` from the left operand's type (memory: `.i` via `tproj`, type-directed
+projection). At the `{:dot, left, right}` node the elaborator inspects the
+inferred head type of `left`:
+
+- `left : Tuple` / `Sigma` and `right` a numeric literal → positional projection
+  (`sigma_first` / `sigma_second` / `tproj_i`), unchanged.
+- `left : rec` and `right` a bare field label → record field projection, unchanged.
+- `left : Optic(k1, s, x)` → **composition**: `right` must elaborate to an
+  `Optic(k2, x, y)`, yielding `Optic(join(k1,k2), s, y)`.
+
+A value has exactly one type, so the three cases never overlap — a field named
+`each` on a record still projects (left is a record, not an optic). Resolution
+requires the left operand's head type to be known at the dot (the same
+precondition `tproj` already imposes); a fully-unresolved metavariable left is a
+deferred/elaboration error, as today.
+
+**Parser change:** the right side of `.` must accept a general optic *expression*,
+not only a bare label/index — `key(:langs).key(:name)` has a *call* (`key(:name)`)
+after the dot, and `.each` / `._1` have bare optic identifiers. The postfix-`.`
+rule is widened to parse `left . primary` (identifier, call, or numeric index),
+producing the same `{:dot, …}` node the elaborator then resolves by type.
+
+Note the tuple lenses are named `_1`, `_2`, … (underscore), never `.1`, so they
+never collide with numeric projection: `t.1` projects, `_1` is the lens value.
 
 ## 6. Migration from `Std.Access`
 
@@ -182,7 +215,7 @@ container operation (`Std.Map`), not a lens.
 Headline example:
 ```
 # old:  update_in(data, [key(:langs), all(), key(:name)], upcase)
-over(compose(key(:langs), compose(each, key(:name))), Std.String.upcase, data)
+over(key(:langs).each.key(:name), Std.String.upcase, data)
 ```
 Type-checks only when leaves line up (`data : Map(Atom, List(Map(Atom, String)))`
 or a record equivalent) — the honest cost of dropping `Any`.
@@ -204,10 +237,16 @@ explicit-pathspec staging, one build at a time.
 5. Affine (`key`, `at`) + `preview`.
 6. Traversal (`each`, `filtered`) + `to_list_of` + the `Vector (m+n)` rebuild.
 7. `compose` + `join`-computed result kind — a test per kind pair.
-8. Field-lens deriving for `rec`.
-9. Migration-parity tests + an oracle cluster mirroring `idris2-lens`
-   view/set/over/compose behavior.
-10. **Optic laws** as properties: lens get-put / put-get / put-put; traversal
+8. **Dot-path `.` resolution** (P + E): widen the postfix-`.` parser to accept an
+   optic expression on the right; type-directed elaboration routes `Optic`-headed
+   `.` to `compose`. Collision tests: `t.1`/`r.field` projection still works; a
+   `rec` field named `each` still projects; chained `key(:a).each.key(:b)`
+   left-associates into nested `compose`; an unresolved-left metavariable errors
+   as today.
+9. Field-lens deriving for `rec`.
+10. Migration-parity tests + an oracle cluster mirroring `idris2-lens`
+    view/set/over/compose behavior.
+11. **Optic laws** as properties: lens get-put / put-get / put-put; traversal
     identity / composition. Antigen antibody **only** if the kernel is touched in
     task 1 (then: termination + no-distinct-NF-equated + full Antigen suite).
 
@@ -225,7 +264,8 @@ explicit-pathspec staging, one build at a time.
    layer: elaborator-only, or kernel)? Task 1 answers this and sets the risk.
 2. **Deriving mechanism** for record field lenses: `@derive(:optics)` decorator
    vs macro vs manual-only for v1.
-3. **Composition surface**: nested `compose`, `pathN` helper, or a custom
-   operator.
-4. **`Json` escape-hatch type**: ship it in v1, or defer and land only the
+3. **`Json` escape-hatch type**: ship it in v1, or defer and land only the
    record/collection optics first.
+
+**Decided during brainstorming:** composition surface is the dot-path operator
+`.` (type-directed, §5) — not a new glyph or `pathN` helper.
