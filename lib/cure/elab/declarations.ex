@@ -1360,65 +1360,15 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp idx_to_core({:function_call, fmeta, args}, scope, fam, env, ctx) do
-    if Keyword.get(fmeta, :function_type) do
-      arrow_to_pi(args, scope, fam, env)
-    else
-      name = Keyword.fetch!(fmeta, :name)
-      atom = String.to_atom(name)
+    cond do
+      Keyword.get(fmeta, :function_type) ->
+        arrow_to_pi(args, scope, fam, env)
 
-      # Type-position implicit insertion (spec §7): a term-level global whose
-      # signature carries erased (implicit) parameters cannot lower as a bare
-      # explicit-args spine — the kernel would see an under-applied application
-      # (the `b(first(p))` motive gap). With a typing context threaded in
-      # (return-type lowering only), delegate the whole application to the
-      # term-position machinery. A local binder of the same name shadows the
-      # global (mirrors the applied-bound-var cond branch below), and families/
-      # ctors never carry def quantities, so this misses them by construction.
-      if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
-           implicit_global?(env, atom) do
-        with {:ok, term, _result_type} <-
-               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
-          {:ok, term}
-        end
-      else
-        with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
-          qualified =
-            if String.contains?(name, ".") do
-              Cure.Elab.Resolution.resolve_qualified(env, name, :type)
-            else
-              :error
-            end
+      Keyword.fetch!(fmeta, :name) == "Effect" ->
+        lower_effect_former(args, scope, fam, env, ctx)
 
-          cond do
-            match?({:ok, _}, qualified) ->
-              {:ok, key} = qualified
-              {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
-              {:ok, {:data, key, params, indices}}
-
-            # An applied BOUND variable — e.g. a higher-order parameter used as
-            # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
-            # the head against the de Bruijn scope; a local binder shadows a global,
-            # so this is checked first. Without it `F(n)` became a dangling
-            # `{:global, :F}`, and the call site's implicit substitution could never
-            # turn `F` into a solvable metavariable (ledger #10 prerequisite).
-            idx = Enum.find_index(scope, &(&1 == name)) ->
-              {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
-
-            atom == fam or Inductive.family?(env, atom) ->
-              # Split the applied arguments into the family's parameters (prefix) and
-              # indices (suffix); the kernel checks each slot against its own
-              # telescope. param_count is 0 for parameter-free families (all indices).
-              {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
-              {:ok, {:data, atom, params, indices}}
-
-            Inductive.get_ctor(env, atom) ->
-              {:ok, {:ctor, atom, core_args}}
-
-            true ->
-              {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
-          end
-        end
-      end
+      true ->
+        lower_applied_type(fmeta, args, scope, fam, env, ctx)
     end
   end
 
@@ -1506,6 +1456,87 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  # Surface `Effect(T)` lowers to the kernel's inert effect type former
+  # `{:effect_type, ⟦T⟧}` (design 2026-07-09-effect-type-former §3). `Effect` is a
+  # kernel PRIMITIVE type former (`Type ℓ → Type ℓ`), NOT an inductive family, so —
+  # unlike List/Bounded/Sigma — there is no family-id to bind under the `@builtin`
+  # tag registry (`Inductive.register_builtin` maps a key to a family-id validated
+  # by `Core.Builtins`). It is therefore recognised by NAME here, mirroring the
+  # dedicated `:sigma_type` / `:tuple_type` / `:pi_type` surface forms that hardcode
+  # their target Core node. The single argument is lowered through the SAME
+  # `idx_to_core` (so `Effect(List(Int))` recurses); a non-type argument is caught
+  # downstream by the kernel's `Effect : Type ℓ → Type ℓ` formation rule, not here.
+  defp lower_effect_former([arg], scope, fam, env, ctx) do
+    with {:ok, core} <- idx_to_core(arg, scope, fam, env, ctx) do
+      {:ok, {:effect_type, core}}
+    end
+  end
+
+  defp lower_effect_former(args, _scope, _fam, _env, _ctx),
+    do: {:error, {:effect_arity, length(args)}}
+
+  # The general applied-type spine lowering (`Name(args)`): a qualified family, an
+  # applied bound var, a family/ctor, or an opaque global. Split out of the
+  # `{:function_call, …}` clause so the `Effect` special-case can sit beside it.
+  defp lower_applied_type(fmeta, args, scope, fam, env, ctx) do
+    name = Keyword.fetch!(fmeta, :name)
+    atom = String.to_atom(name)
+
+    # Type-position implicit insertion (spec §7): a term-level global whose
+    # signature carries erased (implicit) parameters cannot lower as a bare
+    # explicit-args spine — the kernel would see an under-applied application
+    # (the `b(first(p))` motive gap). With a typing context threaded in
+    # (return-type lowering only), delegate the whole application to the
+    # term-position machinery. A local binder of the same name shadows the
+    # global (mirrors the applied-bound-var cond branch below), and families/
+    # ctors never carry def quantities, so this misses them by construction.
+    if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
+         implicit_global?(env, atom) do
+      with {:ok, term, _result_type} <-
+             Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+        {:ok, term}
+      end
+    else
+      with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+        qualified =
+          if String.contains?(name, ".") do
+            Cure.Elab.Resolution.resolve_qualified(env, name, :type)
+          else
+            :error
+          end
+
+        cond do
+          match?({:ok, _}, qualified) ->
+            {:ok, key} = qualified
+            {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
+            {:ok, {:data, key, params, indices}}
+
+          # An applied BOUND variable — e.g. a higher-order parameter used as
+          # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+          # the head against the de Bruijn scope; a local binder shadows a global,
+          # so this is checked first. Without it `F(n)` became a dangling
+          # `{:global, :F}`, and the call site's implicit substitution could never
+          # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+          idx = Enum.find_index(scope, &(&1 == name)) ->
+            {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
+
+          atom == fam or Inductive.family?(env, atom) ->
+            # Split the applied arguments into the family's parameters (prefix) and
+            # indices (suffix); the kernel checks each slot against its own
+            # telescope. param_count is 0 for parameter-free families (all indices).
+            {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+            {:ok, {:data, atom, params, indices}}
+
+          Inductive.get_ctor(env, atom) ->
+            {:ok, {:ctor, atom, core_args}}
+
+          true ->
+            {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+        end
+      end
+    end
+  end
 
   defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}
 
