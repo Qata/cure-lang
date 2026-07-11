@@ -5813,18 +5813,35 @@ defmodule Cure.Elab.Elaborator do
     atom = String.to_atom(name)
 
     with {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
-      if Inductive.get_ctor(env, atom) do
-        # A constructor head applied to arguments is a saturated constructor, not
-        # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:
-        # this saturated-call clause builds the saturated ctor directly, while
-        # `resolve_free` eta-expands bare positive-arity ctors (all-present,
-        # unindexed) into lambdas and yields the nullary `{:ctor, atom, []}`
-        # form otherwise.
-        {:ok, {:ctor, atom, core_args}}
-      else
-        with {:ok, head} <- elaborate_expr({:variable, [], name}, scope, env) do
-          {:ok, Enum.reduce(core_args, head, fn arg, acc -> {:app, acc, arg} end)}
-        end
+      cond do
+        Inductive.get_ctor(env, atom) ->
+          # A constructor head applied to arguments is a saturated constructor, not
+          # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:
+          # this saturated-call clause builds the saturated ctor directly, while
+          # `resolve_free` eta-expands bare positive-arity ctors (all-present,
+          # unindexed) into lambdas and yields the nullary `{:ctor, atom, []}`
+          # form otherwise.
+          {:ok, {:ctor, atom, core_args}}
+
+        # A type FAMILY applied in EXPRESSION position — a type-level function body
+        # such as `fn F(a) -> Type = Option(a)`, or a large-elim selector branch
+        # returning a per-kind representation type over the ambient parameters
+        # (`FocusShape(k, a, s)`). Split the arguments into the family's parameters
+        # (prefix) and indices (suffix) and build the saturated `{:data, …}` node,
+        # exactly as the type path does (`declarations.ex` `idx_to_core`). A local
+        # binder shadows a family, so only take this branch when the name is NOT in
+        # scope (an applied bound variable stays an `{:app, …}` chain below). Without
+        # this the head resolved to `{:data, atom, [], []}` and the arguments were
+        # `{:app}`-chained OUTSIDE it, so the kernel saw a 0-parameter data node
+        # where the family needs parameters → a false `:arg_arity`.
+        name not in scope and Inductive.family?(env, atom) ->
+          {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+          {:ok, {:data, atom, params, indices}}
+
+        true ->
+          with {:ok, head} <- elaborate_expr({:variable, [], name}, scope, env) do
+            {:ok, Enum.reduce(core_args, head, fn arg, acc -> {:app, acc, arg} end)}
+          end
       end
     end
   end

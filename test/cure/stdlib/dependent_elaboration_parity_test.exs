@@ -44,7 +44,7 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
   @green ~w(
     actor app atom binary bool bounded char comparable core crdt decision equatable
     equivalent float fsm functor gen int iter json list map match math nat
-    non_empty option process proof result semigroup sigma string supervisor
+    non_empty optic option process proof result semigroup sigma string supervisor
     system telescope test time tuple unit vector
   )
 

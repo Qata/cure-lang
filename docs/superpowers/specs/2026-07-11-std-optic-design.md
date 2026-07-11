@@ -76,7 +76,7 @@ total by length-matching — a guarantee Haskell/Idris cannot state.
   to BEAM maps. There is **no `{r with f: v}` update syntax**, so field-lens `set`
   reconstructs via `Name{…}` (drives the deriving decision in §5).
 - **Large elimination** (a value-scrutinee `match` that *returns a `Type`*, i.e.
-  `Kind → Type`) has **no precedent** in the stdlib or tests. It is the one
+  `OpticKind → Type`) has **no precedent** in the stdlib or tests. It is the one
   feasibility risk and is gated by an early probe (§7, task 1).
 
 ## 4. Core representation
@@ -97,21 +97,31 @@ length by construction.
 
 ### Kinds as a static index (approach 2A — the committed design)
 
-The optic kinds form an ordered lattice `KLens < KAffine < KTraversal`. The kind
-is a **static index** on the optic, and a type-level **representation selector**
-`Foci : Kind → Type → Type → Type` (a large elimination) chooses the rep:
+The optic kinds form an ordered lattice `LensKind < AffineKind < TraversalKind`.
+The kind is a **static index** on the optic, and a type-level **representation
+selector** `FocusShape : OpticKind → Type → Type → Type` (a large elimination)
+chooses the rep:
 
 ```
-type Kind = KLens() | KAffine() | KTraversal()
+type OpticKind = LensKind() | AffineKind() | TraversalKind()
 
-Foci(KLens,      a, s) = Tuple(a, (a) -> s)                                    # exactly 1
-Foci(KAffine,    a, s) = Option(Tuple(a, (a) -> s))                            # 0 or 1
-Foci(KTraversal, a, s) = Sigma(n: Nat, Tuple(Vector(a, n), (Vector(a, n)) -> s))  # any n
+FocusShape(LensKind,      a, s) = Tuple(a, (a) -> s)                                    # exactly 1
+FocusShape(AffineKind,    a, s) = Option(Tuple(a, (a) -> s))                            # 0 or 1
+FocusShape(TraversalKind, a, s) = Sigma(n: Nat, Tuple(Vector(a, n), (Vector(a, n)) -> s))  # any n
 
-type Optic(k: Kind, s: Type, a: Type) = MkOptic((s) -> Foci(k, a, s))
+type Optic(k: OpticKind, s: Type, a: Type) = MkOptic((s) -> FocusShape(k, a, s))
 ```
 
-The index **is** the kind: `view` is total on a `KLens` *by construction*, and
+Users never write `OpticKind`/`FocusShape` directly — three **friendly aliases**
+carry the kind, and these are what appear in signatures:
+
+```
+Lens(s, a)      = Optic(LensKind, s, a)
+Affine(s, a)    = Optic(AffineKind, s, a)
+Traversal(s, a) = Optic(TraversalKind, s, a)
+```
+
+The index **is** the kind: `view` is total on a `Lens` *by construction*, and
 `compose` computes its result kind as the lattice join. This is approach **2A**.
 There is **no fallback to separate concrete types** — if the probe (§7, task 1)
 shows large elimination is unavailable, *enabling* it is the plan's job (large
@@ -121,10 +131,11 @@ aligned TCB task with the full gate — not a reason to change the design).
 ## 5. The optic zoo, eliminators, composition
 
 ### Kind lattice
-`join : Kind → Kind → Kind` — the max under `KLens < KAffine < KTraversal`.
+`join : OpticKind → OpticKind → OpticKind` — the max under
+`LensKind < AffineKind < TraversalKind`.
 
 ### Eliminators (each total at its kind, dispatching on the static `k`)
-- `view : Optic(KLens, s, a) → (s) → a` — **Lens-only, total.** No `Option`, no
+- `view : Lens(s, a) → (s) → a` — **Lens-only, total.** No `Option`, no
   default — the concrete win over `get_in` returning `nil`.
 - `preview : {k} → Optic(k, s, a) → (s) → Option(a)` — first focus, any kind.
 - `to_list_of : {k} → Optic(k, s, a) → (s) → List(a)` — all foci.
@@ -267,12 +278,13 @@ Layer **E** (elaborator) + `lib/std/optic.cure`; escalates to **K** only if task
 explicit-pathspec staging, one build at a time.
 
 1. **Probe: large elimination.** Minimal paired `.cure`/`.idr` for
-   `Foci : Kind → Type → Type → Type` returning distinct reps per kind plus a
+   `FocusShape : OpticKind → Type → Type → Type` returning distinct reps per kind plus a
    consumer. `mix cure.oracle`. Cure-rejects/Idris-accepts ⇒ enable large
    elimination (TCB gate, real-language-aligned) *before* the library. De-risks
    everything; it is task 1.
 2. Kind lattice + `join` (pure).
-3. `Foci` selector + `Optic` + `MkOptic`.
+3. `OpticKind` + `FocusShape` selector + `Optic` + `MkOptic` + friendly aliases
+   (`Lens`/`Affine`/`Traversal`).
 4. Lens primitives (`_i`, field lenses) + `view` / `set` / `over`.
 5. Affine (`key`, `at`) + `preview`.
 6. Traversal (`each`, `filtered`) + `to_list_of` + the `Vector (m+n)` rebuild.
