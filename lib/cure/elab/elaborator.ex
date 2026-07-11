@@ -527,6 +527,12 @@ defmodule Cure.Elab.Elaborator do
       :string when is_binary(value) ->
         elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
+      # A byte binary literal `<<1, 2, 3>>` desugars to `Std.Binary.of_bytes/1`.
+      :bytes when is_list(value) ->
+        with {:ok, surface} <- desugar_bytes(value, Keyword.get(meta, :line, 0)) do
+          elaborate_expr_typed(surface, names, ctx, env)
+        end
+
       # A symbol literal `:ok` is a value of the Int-tier primitive `Atom` base
       # type — a BEAM atom is its own canonical value (Core `{:atom_lit, a}`).
       :symbol when is_atom(value) ->
@@ -648,8 +654,8 @@ defmodule Cure.Elab.Elaborator do
   # motive it builds is effectively constant — correct for inference position.
   def elaborate_expr_typed({:pattern_match, meta, [scrut | arms]} = expr, names, ctx, env)
       when is_list(meta) do
-    if map_match_arms?(arms) do
-      with {:ok, desugared} <- desugar_map_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+    if special_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
         elaborate_expr_typed(desugared, names, ctx, env)
       end
     else
@@ -1412,8 +1418,8 @@ defmodule Cure.Elab.Elaborator do
   # expected type) stays unimplemented (a separate aux-function lift).
   def elaborate_expr_checked({:pattern_match, meta, [scrut | arms]}, expected_core, names, ctx, env)
       when is_list(meta) do
-    if map_match_arms?(arms) do
-      with {:ok, desugared} <- desugar_map_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+    if special_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
         elaborate_expr_checked(desugared, expected_core, names, ctx, env)
       end
     else
@@ -1548,12 +1554,19 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
     string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
+    bytes? = Keyword.get(meta, :subtype) == :bytes and is_list(value)
 
     cond do
       # A string literal checks as its `List(Char)` desugaring (see the typed
       # clause), so the expected `List(Char)`/`String` type drives each char.
       string? ->
         elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+
+      # A byte binary literal checks as its `Std.Binary.of_bytes/1` desugaring.
+      bytes? ->
+        with {:ok, surface} <- desugar_bytes(value, Keyword.get(meta, :line, 0)) do
+          elaborate_expr_checked(surface, expected_core, names, ctx, env)
+        end
 
       int? and nat_expected?(expected_core, ctx) ->
         {:ok, {:nat_lit, value}}
@@ -4884,6 +4897,35 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  # A binary pattern arm is a `:bytes` literal used as a match pattern.
+  def binary_match_arms?(arms) do
+    Enum.any?(arms, fn
+      {:match_arm, meta, _body} when is_list(meta) ->
+        case Keyword.get(meta, :pattern) do
+          {:literal, lmeta, segs} when is_list(lmeta) and is_list(segs) ->
+            Keyword.get(lmeta, :subtype) == :bytes
+
+          _ ->
+            false
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  # Map and byte-binary patterns are not Cure inductives, so a `match` carrying
+  # them desugars (surface → surface) to guarded conditionals rather than going
+  # through the constructor-match machinery. Both entry-point modes share this.
+  def special_match_arms?(arms), do: map_match_arms?(arms) or binary_match_arms?(arms)
+
+  def desugar_special_match(scrut, arms, line) do
+    cond do
+      map_match_arms?(arms) -> desugar_map_arms(scrut, arms, line)
+      binary_match_arms?(arms) -> desugar_binary_arms(scrut, arms, line)
+    end
+  end
+
   def desugar_map_match(scrut, arms, line), do: desugar_map_arms(scrut, arms, line)
 
   # A wildcard/variable arm terminates the chain: `_` yields its body directly, a
@@ -4976,6 +5018,155 @@ defmodule Cure.Elab.Elaborator do
     do: {:binary_op, [category: :boolean, operator: :and, line: line], [g, conjoin(rest, line)]}
 
   defp mk_call(name, args, line), do: {:function_call, [name: name, line: line], args}
+
+  # Byte-binary patterns, the destructuring twin of `desugar_map_arms`. A match
+  # whose arms are `<<…>>` patterns desugars to `byte_size`-guarded conditionals
+  # over `Std.Binary`: the length guard (`==` for a fixed pattern, `>=` when a
+  # `rest/binary` tail is present) gates the byte reads, then literal byte
+  # positions add `byte_at(b, i) == lit` guards and variable positions bind
+  # `byte_at(b, i)` / `drop_bytes(b, k)`. Open-ended, so a trailing default arm is
+  # required. Sized/typed segments (`x/float`) are rejected, not mislowered.
+  defp desugar_binary_arms(_scrut, [], _line), do: {:error, {:binary_match_needs_default}}
+
+  defp desugar_binary_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
+    case Keyword.get(meta, :pattern) do
+      {:literal, lmeta, segs} = pat ->
+        if Keyword.get(lmeta, :subtype) == :bytes do
+          with {:ok, length_guard, value_guards, binds} <- binary_arm_guard_binds(scrut, segs, line),
+               {:ok, else_expr} <- desugar_binary_arms(scrut, rest, line) do
+            then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+
+            inner =
+              case value_guards do
+                [] -> then_body
+                _ -> {:conditional, [line: line], [conjoin(value_guards, line), then_body, else_expr]}
+              end
+
+            {:ok, {:conditional, [line: line], [length_guard, inner, else_expr]}}
+          end
+        else
+          {:error, {:unsupported_binary_match_arm, pat}}
+        end
+
+      {:variable, _vm, "_"} ->
+        {:ok, body}
+
+      {:variable, vm, name} ->
+        bind = {:assignment, [let: true, line: line], [{:variable, vm, name}, scrut]}
+        {:ok, {:block, [line: line], [bind, body]}}
+
+      other ->
+        {:error, {:unsupported_binary_match_arm, other}}
+    end
+  end
+
+  # Split a byte pattern's segments into (a) the length guard, (b) literal-byte
+  # equality guards, and (c) the variable/tail `let` bindings. The optional
+  # `rest/binary` tail must come last; any other typed segment is rejected.
+  defp binary_arm_guard_binds(scrut, segs, line) do
+    {fixed, tail} = split_binary_tail(segs)
+
+    with {:ok, value_guards, binds} <- fixed_byte_guards(scrut, fixed, line),
+         {:ok, tail_binds} <- tail_bind(scrut, tail, length(fixed), line) do
+      n = {:literal, [subtype: :integer, line: line], length(fixed)}
+      size = mk_call("byte_size", [scrut], line)
+
+      op = if tail == :none, do: :==, else: :>=
+      length_guard = {:binary_op, [category: :comparison, operator: op, line: line], [size, n]}
+
+      {:ok, length_guard, value_guards, binds ++ tail_binds}
+    end
+  end
+
+  # The last segment is a tail iff it is a `_v/binary` (division-marker) segment.
+  defp split_binary_tail(segs) do
+    case List.last(segs) do
+      {:bin_segment, _sm, [{:binary_op, opm, [v, {:variable, _tm, "binary"}]}]} = seg ->
+        if Keyword.get(opm, :operator) == :/ do
+          {segs |> Enum.reverse() |> tl() |> Enum.reverse(), {:tail, v, seg}}
+        else
+          {segs, :none}
+        end
+
+      _ ->
+        {segs, :none}
+    end
+  end
+
+  defp fixed_byte_guards(scrut, segs, line) do
+    segs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, [], []}, fn {seg, i}, {:ok, guards, binds} ->
+      idx = {:literal, [subtype: :integer, line: line], i}
+
+      case seg do
+        {:bin_segment, _sm, [{:variable, _vm, "_"}]} ->
+          {:cont, {:ok, guards, binds}}
+
+        {:bin_segment, _sm, [{:variable, _vm, _name} = v]} ->
+          bind = {:assignment, [let: true, line: line], [v, mk_call("byte_at", [scrut, idx], line)]}
+          {:cont, {:ok, guards, binds ++ [bind]}}
+
+        {:bin_segment, _sm, [{:literal, _lm, byteval} = lit]} when is_integer(byteval) ->
+          eq =
+            {:binary_op, [category: :comparison, operator: :==, line: line],
+             [mk_call("byte_at", [scrut, idx], line), lit]}
+
+          {:cont, {:ok, guards ++ [eq], binds}}
+
+        other ->
+          {:halt, {:error, {:unsupported_binary_segment, other}}}
+      end
+    end)
+  end
+
+  defp tail_bind(_scrut, :none, _n, _line), do: {:ok, []}
+
+  defp tail_bind(scrut, {:tail, tailvar, seg}, n, line) do
+    case tailvar do
+      {:variable, _tm, "_"} ->
+        {:ok, []}
+
+      {:variable, _tm, _name} ->
+        nlit = {:literal, [subtype: :integer, line: line], n}
+        {:ok, [{:assignment, [let: true, line: line], [tailvar, mk_call("drop_bytes", [scrut, nlit], line)]}]}
+
+      _ ->
+        {:error, {:unsupported_binary_segment, seg}}
+    end
+  end
+
+  # `<<b1, b2, …>>` → `Std.Binary.of_bytes([b1, b2, …])`: a byte binary literal is
+  # a list of byte values packed into a BEAM binary. Only default 8-bit-integer
+  # segments are supported here; a `/type` segment (`x/float`, `x/binary`) is a
+  # deferred rich-bit-syntax case and is rejected rather than mislowered. The
+  # module must `use Std.Binary`.
+  def desugar_bytes(segments, line) do
+    Enum.reduce_while(segments, {:ok, []}, fn
+      {:bin_segment, _sm, [expr]}, {:ok, acc} ->
+        case typed_segment?(expr) do
+          true -> {:halt, {:error, {:unsupported_binary_segment, expr}}}
+          false -> {:cont, {:ok, acc ++ [expr]}}
+        end
+
+      other, _acc ->
+        {:halt, {:error, {:unsupported_binary_segment, other}}}
+    end)
+    |> case do
+      {:ok, values} ->
+        {:ok, mk_call("of_bytes", [{:list, [line: line], values}], line)}
+
+      {:error, _} = e ->
+        e
+    end
+  end
+
+  # A `/type` segment parses as a division `value / type_name` (`<<x/float>>`,
+  # `<<rest/binary>>`); the sole surface marker for a non-default segment.
+  defp typed_segment?({:binary_op, meta, [_v, {:variable, _vm, _type}]}),
+    do: Keyword.get(meta, :operator) == :/
+
+  defp typed_segment?(_), do: false
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly

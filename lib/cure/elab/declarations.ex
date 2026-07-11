@@ -586,7 +586,7 @@ defmodule Cure.Elab.Declarations do
   # A `match` body needs the declared return type to build its motive (checking
   # mode); every other body is elaborated in inference mode.
   defp elaborate_body({:pattern_match, meta, [scrut | arms]} = expr, return_core, scope, ctx, env, _params) do
-    if Elaborator.map_match_arms?(arms) do
+    if Elaborator.special_match_arms?(arms) do
       Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
     else
       _ = meta
