@@ -646,27 +646,34 @@ defmodule Cure.Elab.Elaborator do
   # so every arm is checked against the one synthesised type. That reuses all the
   # coverage/motive/index machinery and, since `T` is non-scrutinee-dependent, the
   # motive it builds is effectively constant — correct for inference position.
-  def elaborate_expr_typed({:pattern_match, _meta, [scrut | arms]} = expr, names, ctx, env) do
-    with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
-           elaborate_expr_typed(scrut, names, ctx, env),
-         {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
-         %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
-         arity = length(telescope),
-         pc = Inductive.param_count(env, dname),
-         {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
-         branch_names = branch_scope(quantities, pattern_vars) ++ names,
-         branch_ctx = extend_context(ctx, telescope, param_vals),
-         {:ok, _b_term, t_branch_val} <-
-           elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
-         t_branch = Quote.reify(t_branch_val, Context.length(branch_ctx)),
-         {:ok, result_type_term} <- strengthen_inferred_type(t_branch, arity),
-         {:ok, term} <- elaborate_match(scrut, arms, result_type_term, names, ctx, env),
-         result_type_val = Eval.eval(result_type_term, Context.env(ctx)),
-         :ok <- Kernel.check(ctx, term, result_type_val) do
-      {:ok, term, result_type_val}
+  def elaborate_expr_typed({:pattern_match, meta, [scrut | arms]} = expr, names, ctx, env)
+      when is_list(meta) do
+    if map_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_map_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+        elaborate_expr_typed(desugared, names, ctx, env)
+      end
     else
-      {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
-      {:error, _} = err -> err
+      with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
+             elaborate_expr_typed(scrut, names, ctx, env),
+           {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
+           %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
+           arity = length(telescope),
+           pc = Inductive.param_count(env, dname),
+           {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
+           branch_names = branch_scope(quantities, pattern_vars) ++ names,
+           branch_ctx = extend_context(ctx, telescope, param_vals),
+           {:ok, _b_term, t_branch_val} <-
+             elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
+           t_branch = Quote.reify(t_branch_val, Context.length(branch_ctx)),
+           {:ok, result_type_term} <- strengthen_inferred_type(t_branch, arity),
+           {:ok, term} <- elaborate_match(scrut, arms, result_type_term, names, ctx, env),
+           result_type_val = Eval.eval(result_type_term, Context.env(ctx)),
+           :ok <- Kernel.check(ctx, term, result_type_val) do
+        {:ok, term, result_type_val}
+      else
+        {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
+        {:error, _} = err -> err
+      end
     end
   end
 
@@ -1403,10 +1410,17 @@ defmodule Cure.Elab.Elaborator do
   # bodies (`elaborate_branch_body`). `let`-blocks are now handled in checking
   # mode (the `{:block, …}` clause below); inference-position inline match (no
   # expected type) stays unimplemented (a separate aux-function lift).
-  def elaborate_expr_checked({:pattern_match, _meta, [scrut | arms]}, expected_core, names, ctx, env) do
-    with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
-         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-      {:ok, term}
+  def elaborate_expr_checked({:pattern_match, meta, [scrut | arms]}, expected_core, names, ctx, env)
+      when is_list(meta) do
+    if map_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_map_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+        elaborate_expr_checked(desugared, expected_core, names, ctx, env)
+      end
+    else
+      with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
     end
   end
 
@@ -4842,6 +4856,126 @@ defmodule Cure.Elab.Elaborator do
         {:function_call, [name: "put", line: line], [key, value, acc]}
     end)
   end
+
+  # A `match` whose arms are map patterns cannot go through the constructor-match
+  # machinery (an Erlang map is not a Cure inductive). Map matching is OPEN — keys
+  # absent from the pattern are ignored — so it desugars to `has_key`-guarded
+  # conditionals over `Std.Map`, exactly the shape a hand-written lookup takes:
+  #
+  #   match m
+  #     %{a: v, tag: :hit} -> body
+  #     _                  -> default
+  #
+  #   ⇒ if has_key(:a, m) and has_key(:tag, m) and get(:tag, m) == :hit
+  #        then (let v = get(:a, m); body)
+  #        else default
+  #
+  # Because matching is open it is non-exhaustive, so the arm list MUST end in a
+  # wildcard/variable default. Value positions are variable binders, `_`, or
+  # literals (an equality guard). The enclosing module must `use Std.Map` so the
+  # emitted `has_key`/`get` resolve, like map literals.
+  def map_match_arms?(arms) do
+    Enum.any?(arms, fn
+      {:match_arm, meta, _body} when is_list(meta) ->
+        match?({:map, _m, _pairs}, Keyword.get(meta, :pattern))
+
+      _ ->
+        false
+    end)
+  end
+
+  def desugar_map_match(scrut, arms, line), do: desugar_map_arms(scrut, arms, line)
+
+  # A wildcard/variable arm terminates the chain: `_` yields its body directly, a
+  # named binder binds the whole scrutinee first.
+  defp desugar_map_arms(_scrut, [], _line), do: {:error, {:map_match_needs_default}}
+
+  defp desugar_map_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
+    case Keyword.get(meta, :pattern) do
+      {:map, _mm, pairs} ->
+        with {:ok, presence, value_eqs, binds} <- map_arm_guard_binds(scrut, pairs, line),
+             {:ok, else_expr} <- desugar_map_arms(scrut, rest, line) do
+          # Cure's `and` is strict, so a value `get` must never run on an absent
+          # key: gate all `get`s behind the (total) presence guard structurally.
+          # Only once every listed key is present are the value-equality checks
+          # and the binding `get`s evaluated.
+          then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+
+          inner =
+            case value_eqs do
+              [] -> then_body
+              _ -> {:conditional, [line: line], [conjoin(value_eqs, line), then_body, else_expr]}
+            end
+
+          {:ok, {:conditional, [line: line], [conjoin(presence, line), inner, else_expr]}}
+        end
+
+      {:variable, _vm, "_"} ->
+        {:ok, body}
+
+      {:variable, vm, name} ->
+        bind = {:assignment, [let: true, line: line], [{:variable, vm, name}, scrut]}
+        {:ok, {:block, [line: line], [bind, body]}}
+
+      other ->
+        {:error, {:unsupported_map_match_arm, other}}
+    end
+  end
+
+  # Fold a map pattern's pairs into (a) presence guards — every listed key must be
+  # present (`has_key`, total), (b) value-equality guards for literal positions
+  # (`get(k) == lit`, evaluated only after presence holds), and (c) the `let`
+  # bindings for variable value positions.
+  defp map_arm_guard_binds(scrut, pairs, line) do
+    Enum.reduce_while(pairs, {:ok, [], [], []}, fn
+      {:pair, _pm, [{:literal, kmeta, key}, valpat]}, {:ok, presence, value_eqs, binds}
+      when is_atom(key) ->
+        if Keyword.get(kmeta, :subtype) in [:symbol, :atom] do
+          key_lit = {:literal, [subtype: :symbol], key}
+          present = mk_call("has_key", [key_lit, scrut], line)
+
+          case valpat do
+            {:variable, _vm, "_"} ->
+              {:cont, {:ok, presence ++ [present], value_eqs, binds}}
+
+            {:variable, _vm, _name} ->
+              bind =
+                {:assignment, [let: true, line: line],
+                 [valpat, mk_call("get", [key_lit, scrut], line)]}
+
+              {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind]}}
+
+            {:literal, _lm, _lv} = lit ->
+              eq =
+                {:binary_op, [category: :comparison, operator: :==, line: line],
+                 [mk_call("get", [key_lit, scrut], line), lit]}
+
+              {:cont, {:ok, presence ++ [present], value_eqs ++ [eq], binds}}
+
+            other ->
+              {:halt, {:error, {:unsupported_map_value_pattern, other}}}
+          end
+        else
+          {:halt, {:error, {:unsupported_map_key_pattern, key}}}
+        end
+
+      {:pair, _pm, [other_key, _v]}, _acc ->
+        {:halt, {:error, {:unsupported_map_key_pattern, other_key}}}
+    end)
+    |> case do
+      {:ok, presence, value_eqs, binds} -> {:ok, presence, value_eqs, binds}
+      {:error, _} = e -> e
+    end
+  end
+
+  # An empty pattern `%{}` matches any map, so an absent guard is `true`.
+  defp conjoin([], _line), do: {:literal, [subtype: :boolean], true}
+  defp conjoin([g], _line), do: g
+
+  defp conjoin([g | rest], line),
+    do: {:binary_op, [category: :boolean, operator: :and, line: line], [g, conjoin(rest, line)]}
+
+  defp mk_call(name, args, line), do: {:function_call, [name: name, line: line], args}
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
