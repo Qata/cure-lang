@@ -1363,7 +1363,31 @@ defmodule Cure.Elab.Declarations do
     if Keyword.get(fmeta, :function_type) do
       arrow_to_pi(args, scope, fam, env)
     else
-      name = Keyword.fetch!(fmeta, :name)
+      raw_name = Keyword.fetch!(fmeta, :name)
+
+      # A qualified head (`Std.Map`, from `Mod.Name(args)`) is first offered to the
+      # module-aware type resolver. When it places the name we emit `{:data, key, …}`
+      # in the cond below. When it can't — e.g. `Std.Option`, which lowers to a plain
+      # `{:global, :Option}` rather than a registered inductive family — the name
+      # DEGRADES to its bare tail (`Std.Option` → `Option`) so every downstream check
+      # (implicit-global, family, ctor, global) resolves it EXACTLY as the unqualified
+      # spelling would. Without this degrade a qualified applied type lowered to an
+      # opaque `{:global, :"Std.Option"}` that never converts against the unqualified
+      # `{:global, :Option}` — a silent qualified-vs-unqualified type split. For an
+      # unqualified name `String.split/2` returns `[name]`, so this is a no-op there.
+      qualified_key =
+        if String.contains?(raw_name, ".") do
+          Cure.Elab.Resolution.resolve_qualified(env, raw_name, :type)
+        else
+          :error
+        end
+
+      name =
+        case qualified_key do
+          {:ok, _} -> raw_name
+          :error -> raw_name |> String.split(".") |> List.last()
+        end
+
       atom = String.to_atom(name)
 
       # Type-position implicit insertion (spec §7): a term-level global whose
@@ -1382,16 +1406,9 @@ defmodule Cure.Elab.Declarations do
         end
       else
         with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
-          qualified =
-            if String.contains?(name, ".") do
-              Cure.Elab.Resolution.resolve_qualified(env, name, :type)
-            else
-              :error
-            end
-
           cond do
-            match?({:ok, _}, qualified) ->
-              {:ok, key} = qualified
+            match?({:ok, _}, qualified_key) ->
+              {:ok, key} = qualified_key
               {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
               {:ok, {:data, key, params, indices}}
 
