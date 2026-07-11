@@ -41,3 +41,6 @@ fn `and`(a: Bool, b: Bool) -> Bool =
   match a
     True() -> b
     False() -> False()
+
+# Anonymous union type in type-expression position (:union_type).
+typealias UnionFixture = Int | String | Bool

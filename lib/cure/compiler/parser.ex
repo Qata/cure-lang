@@ -3282,9 +3282,15 @@ defmodule Cure.Compiler.Parser do
 
         {%Token{type: :lparen}, _} ->
           # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
-          # The full type-expression parser handles the arrow; the result is a plain
-          # type alias (`:type_annotation`).
-          {rhs, state} = parse_type_expr(state)
+          # The arrow ladder handles the arrow; the result is a plain type alias
+          # (`:type_annotation`).
+          #
+          # `parse_type_arrow/1`, NOT `parse_type_expr/1`: this branch has no
+          # bar-continuation logic of its own, so a stray `|` here is a parse error
+          # today. Routing it through the `|`-aware entry point would silently start
+          # accepting `type Endo = (Nat) -> Nat | X` as a union-typed alias RHS — a
+          # semantics change to this branch. Keep the strict, conservative behaviour.
+          {rhs, state} = parse_type_arrow(state)
           meta = [name: name, line: token.line, col: token.col]
           meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
           {{:type_annotation, meta, [rhs]}, state}
@@ -4676,9 +4682,89 @@ defmodule Cure.Compiler.Parser do
 
   # -- Enhanced Type Expression Parser ----------------------------------------
 
-  # Replaces the simple version from Milestone 2.
-  # Handles: PascalCase, Type(A, B), A -> B, (A, B) -> C, {x: T | pred}
+  # Type-expression entry point. `|` binds LOOSER than `->`, so `A -> B | C` is
+  # `(A -> B) | C`. A leading `|` is permitted.
+  #
+  # Members are collected in SOURCE order; canonicalisation (flatten, dedupe,
+  # sort) is the elaborator's job — see `Cure.Elab.Union`.
   defp parse_type_expr(state) do
+    state =
+      case peek(state) do
+        %Token{type: :bar} -> advance(state) |> skip_newlines()
+        _ -> state
+      end
+
+    {first, state} = parse_union_first_member(state)
+    {rest, state} = parse_union_members(state)
+
+    case rest do
+      [] -> {first, state}
+      _ -> {{:union_type, [], [first | rest]}, state}
+    end
+  end
+
+  # The first candidate member of a possible union. A literal-shaped token is ONLY
+  # treated as a literal member if a `|` immediately follows — e.g. the `3` in
+  # `3 | String`. If no `|` follows, fall through to `parse_type_arrow/1` unchanged,
+  # so every existing non-union numeral-in-type-position use (`Bounded(3)`,
+  # `Bounded(1114112)`, `Equivalent(Int, 3, 3)`) keeps parsing to
+  # `{:variable, [scope: :local], "N"}` and keeps working through idx_to_core's
+  # existing numeric_index_value path.
+  defp parse_union_first_member(state) do
+    token = peek(state)
+    next = peek_at(state, 1)
+
+    if literal_token?(token) and match?(%Token{type: :bar}, next) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
+
+  # A subsequent member, reached only after a `|` has already been consumed — so,
+  # unlike the first member, we already KNOW we are inside a union. A literal-shaped
+  # token is unconditionally a literal member; no lookahead needed (this covers the
+  # `4` in `3 | 4`, which is not itself followed by another `|`).
+  defp parse_union_member(state) do
+    token = peek(state)
+
+    if literal_token?(token) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
+
+  # NOTE: no `skip_newlines` before peeking for `:bar`. That is deliberate — a
+  # newline terminates the type annotation, and skipping it would let the parser
+  # swallow the `|` of a following ADT variant.
+  defp parse_union_members(state) do
+    case peek(state) do
+      %Token{type: :bar} ->
+        state = advance(state) |> skip_newlines()
+        {member, state} = parse_union_member(state)
+        {rest, state} = parse_union_members(state)
+        {[member | rest], state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp literal_token?(%Token{type: t}), do: t in [:integer, :float, :string, :atom, :char, :bool]
+  defp literal_token?(_), do: false
+
+  defp literal_subtype(:integer), do: :integer
+  defp literal_subtype(:float), do: :float
+  defp literal_subtype(:string), do: :string
+  defp literal_subtype(:atom), do: :symbol
+  defp literal_subtype(:char), do: :char
+  defp literal_subtype(:bool), do: :boolean
+
+  # The arrow ladder. Handles: PascalCase, Type(A, B), A -> B, (A, B) -> C.
+  # Callers that must NOT absorb a `|` (arrow codomains, the ADT alias-RHS probe)
+  # call this directly rather than `parse_type_expr/1`.
+  defp parse_type_arrow(state) do
     token = peek(state)
 
     case token.type do
@@ -4693,7 +4779,7 @@ defmodule Cure.Compiler.Parser do
         case peek(state) do
           %Token{type: :arrow} ->
             state = advance(state)
-            {ret, state} = parse_type_expr(state)
+            {ret, state} = parse_type_arrow(state)
             binders = Enum.map(inner, &elem(&1, 0))
             doms = Enum.map(inner, &elem(&1, 1))
 
@@ -4739,7 +4825,7 @@ defmodule Cure.Compiler.Parser do
           match?(%Token{type: :arrow}, peek(state)) ->
             # A -> B  (unary function type)
             state = advance(state)
-            {ret, state} = parse_type_expr(state)
+            {ret, state} = parse_type_arrow(state)
             base = {:variable, [scope: :local], base_name}
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
@@ -4868,7 +4954,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {ret, state} = parse_type_expr(state)
+        {ret, state} = parse_type_arrow(state)
 
         params =
           case left do

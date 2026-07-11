@@ -996,6 +996,14 @@ defmodule Cure.Compiler.Printer do
       ", " <> render(body_type, depth, indent) <> ")"
   end
 
+  # -- Anonymous union type ---------------------------------------------------
+
+  # `Int | String`. Members print in SOURCE order — canonicalisation (sort, dedupe,
+  # flatten) happens in the elaborator, not here, so printing stays lossless.
+  defp to_string({:union_type, _meta, members}, depth, indent) do
+    Enum.map_join(members, " | ", &render(&1, depth, indent))
+  end
+
   # -- GADT constructor signature --------------------------------------------
   #
   # `Name : Dom -> ... -> Result`. The third slot is a single `{:arrow_chain,
