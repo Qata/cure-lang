@@ -92,7 +92,7 @@ defmodule Antigen.Generators.Equality do
     Gen.bind(inhabitant(), fn {a, ty} ->
       spine_refl = {:ctor, :reflexive, [ty, a]}
       eq_ty = {:data, :Equivalent, [ty], [a, a]}
-      Gen.return({{:app, {:lam, eq_ty, {:var, 0}}, spine_refl}, eq_ty, []})
+      Gen.return({{:app, {:lam, Cure.Core.Grade.unrestricted(), eq_ty, {:var, 0}}, spine_refl}, eq_ty, []})
     end)
   end
 
@@ -111,7 +111,7 @@ defmodule Antigen.Generators.Equality do
     Gen.bind(inhabitant(), fn {a, ty} ->
       Gen.bind(nat_numeral(), fn n ->
         proof = {:ctor, :reflexive, [ty, a]}
-        {{:app, transport(proof, ty, {:lam, ty, @nat}, a), n}, @nat, []}
+        {{:app, transport(proof, ty, {:lam, Cure.Core.Grade.unrestricted(), ty, @nat}, a), n}, @nat, []}
         |> Gen.return()
       end)
     end)
@@ -124,7 +124,7 @@ defmodule Antigen.Generators.Equality do
     Gen.bind(inhabitant(), fn {a, ty} ->
       proof = {:ctor, :reflexive, [ty, a]}
       eq_ty = {:data, :Equivalent, [ty], [a, a]}
-      motive = {:lam, ty, eq_ty}
+      motive = {:lam, Cure.Core.Grade.unrestricted(), ty, eq_ty}
       body = {:ctor, :reflexive, [a]}
       # The claimed type uses the SPLIT `params`/`indices` spelling: since B1
       # (signature-aware readback), `Normalise.quote` recovers the split, so the
@@ -138,7 +138,7 @@ defmodule Antigen.Generators.Equality do
   # conversion compares `s` with itself, driving Conv's neutral machinery
   # (same_neutral_no_delta? / conv_neutral? / conv_branches?). One-binder ctx.
   @int {:int_type}
-  @sig_nat {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+  @sig_nat {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
 
   defp neutral_eq_prop_term do
     Gen.frequency([
@@ -153,8 +153,8 @@ defmodule Antigen.Generators.Equality do
        end)},
       {1, neutral_eq_prop({:app, {:global, :int_neg}, {:var, 0}}, @int, [@int])},
       # projections of a Σ variable, now single-branch ι-on-case over mk_pair
-      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, @sig_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]}, @nat, [@sig_nat])},
-      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, @sig_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]}, @nat, [@sig_nat])},
+      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @sig_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]}, @nat, [@sig_nat])},
+      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @sig_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]}, @nat, [@sig_nat])},
       # stuck case over a Bd variable → :ncase + conv_branches? + conv_branch_bodies?
       {2, neutral_case_eq_prop()}
     ])
@@ -166,7 +166,7 @@ defmodule Antigen.Generators.Equality do
   defp neutral_case_eq_prop do
     Gen.bind(nat_numeral(), fn a ->
       Gen.bind(nat_numeral(), fn b ->
-        cse = {:case, {:var, 0}, {:lam, @bd, @nat}, [{:T, 0, a}, {:F, 0, b}]}
+        cse = {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @bd, @nat}, [{:T, 0, a}, {:F, 0, b}]}
         neutral_eq_prop(cse, @nat, [@bd])
       end)
     end)
@@ -176,9 +176,9 @@ defmodule Antigen.Generators.Equality do
   # elided) — mirrors the elaborator's `transport_case/4`.
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
-    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
+    arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   # -- closed inhabitants paired with their type ------------------------------

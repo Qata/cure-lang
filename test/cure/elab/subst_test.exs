@@ -28,9 +28,9 @@ defmodule Cure.Elab.SubstTest do
 
   test "respects inner binders when instantiating a Pi codomain" do
     # Π(Dec). #1   with [a]   ⇒   the telescope var #1 becomes a (shifted over the Π binder)
-    type = {:pi, {:data, :Dec, [], []}, {:var, 1}}
+    type = {:pi, Cure.Core.Grade.unrestricted(), {:data, :Dec, [], []}, {:var, 1}}
     a = {:ctor, :Causal, []}
-    assert Subst.instantiate(type, [a]) == {:pi, {:data, :Dec, [], []}, a}
+    assert Subst.instantiate(type, [a]) == {:pi, Cure.Core.Grade.unrestricted(), {:data, :Dec, [], []}, a}
   end
 
   test "shift lifts free variables above the cutoff" do

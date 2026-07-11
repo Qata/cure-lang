@@ -145,8 +145,8 @@ defmodule Antigen.Assays.Unifier do
   defp occurs_raw?(id, {:ctor, _c, args}), do: Enum.any?(args, &occurs_raw?(id, &1))
   defp occurs_raw?(id, {:data, _f, ps, is}), do: Enum.any?(ps ++ is, &occurs_raw?(id, &1))
   defp occurs_raw?(id, {:app, f, x}), do: occurs_raw?(id, f) or occurs_raw?(id, x)
-  defp occurs_raw?(id, {:pi, d, c}), do: occurs_raw?(id, d) or occurs_raw?(id, c)
-  defp occurs_raw?(id, {:lam, d, b}), do: occurs_raw?(id, d) or occurs_raw?(id, b)
+  defp occurs_raw?(id, {:pi, _g, d, c}), do: occurs_raw?(id, d) or occurs_raw?(id, c)
+  defp occurs_raw?(id, {:lam, _g, d, b}), do: occurs_raw?(id, d) or occurs_raw?(id, b)
   defp occurs_raw?(_id, _), do: false
 
   # local, independent of Elab.Unify's private meta_free?/1
@@ -154,7 +154,7 @@ defmodule Antigen.Assays.Unifier do
   defp meta_free?({:data, _f, ps, is}), do: Enum.all?(ps ++ is, &meta_free?/1)
   defp meta_free?({:ctor, _c, args}), do: Enum.all?(args, &meta_free?/1)
   defp meta_free?({:app, f, x}), do: meta_free?(f) and meta_free?(x)
-  defp meta_free?({:pi, d, c}), do: meta_free?(d) and meta_free?(c)
-  defp meta_free?({:lam, d, b}), do: meta_free?(d) and meta_free?(b)
+  defp meta_free?({:pi, _g, d, c}), do: meta_free?(d) and meta_free?(c)
+  defp meta_free?({:lam, _g, d, b}), do: meta_free?(d) and meta_free?(b)
   defp meta_free?(_), do: true
 end

@@ -68,8 +68,8 @@ defmodule Cure.Elab.EraseTest do
   test "erase is idempotent on an application-spine with an erased-before-present def" do
     # g : (@0 Int) -> Int -> Int  (param 0 erased, param 1 present)
     env =
-      Env.add_def(Env.empty(), :g, {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}},
-        {:int_lit, 0}, [:erased, :present])
+      Env.add_def(Env.empty(), :g, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}},
+        {:int_lit, 0}, [:erased, :unrestricted])
 
     app = {:app, {:app, {:global, :g}, {:int_lit, 1}}, {:int_lit, 2}}
     once = Erase.erase(env, app)
@@ -77,7 +77,7 @@ defmodule Cure.Elab.EraseTest do
   end
 
   test "detects holes in a term" do
-    assert Erase.has_hole?({:lam, {:type, 0}, {:hole, "body"}})
+    assert Erase.has_hole?({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:hole, "body"}})
     assert Erase.has_hole?({:ctor, :seq, [{:hole, "x"}]})
     refute Erase.has_hole?({:ctor, :prim, []})
   end

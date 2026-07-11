@@ -270,6 +270,14 @@ defmodule Cure.Compiler.Codegen do
   end
 
   defp compile_module_body(stmts, state) do
+    # v0.34: normalize the `interface`/`implementation` surface (the successor
+    # to `proto`/`impl`) onto classic's existing `:protocol`/`:trait`
+    # dispatcher machinery. Classic codegen has no handling for the new
+    # container tags, so it silently dropped them — leaving any top-level
+    # helper that dispatches an interface method referencing a function it
+    # never emitted. Runs first so the collected protocol context is complete.
+    stmts = normalize_typeclass_containers(stmts)
+
     # v0.19.0: expand @derive(...) on records into synthetic function
     # defs. This runs before any other analysis so the derived functions
     # participate in signature collection, protocol dispatch, etc.
@@ -506,6 +514,45 @@ defmodule Cure.Compiler.Codegen do
   end
 
   # -- Protocol / Impl Collection and Compilation
+
+  # Rewrite `interface`/`implementation` nodes into the `:protocol`/`:trait`
+  # `:container` shapes classic's proto machinery already consumes. The two
+  # surfaces are structurally identical — an interface is a definition block of
+  # method signatures; an implementation is a definition block of method bodies
+  # for a concrete head type — so the mapping is a straight meta rename. Named
+  # implementations (`as Name`) and impl-level `where` constraints carry no
+  # classic-runtime meaning (dispatch is by argument type at run time) and are
+  # dropped here. Throwaway plumbing: it is removed with the classic pipeline (#18).
+  defp normalize_typeclass_containers(stmts) do
+    Enum.map(stmts, fn
+      {:interface, meta, body} ->
+        {:container,
+         [
+           container_type: :protocol,
+           name: Keyword.get(meta, :name, "Unknown"),
+           type_params: Keyword.get(meta, :params, []),
+           line: Keyword.get(meta, :line, 1),
+           col: Keyword.get(meta, :col, 1)
+         ], body}
+
+      {:implementation, meta, body} ->
+        proto_name = Keyword.get(meta, :interface, "Unknown")
+        for_name = Keyword.get(meta, :for, "Unknown")
+
+        {:container,
+         [
+           container_type: :trait,
+           name: "#{proto_name}.#{for_name}",
+           protocol: proto_name,
+           for: for_name,
+           line: Keyword.get(meta, :line, 1),
+           col: Keyword.get(meta, :col, 1)
+         ], body}
+
+      other ->
+        other
+    end)
+  end
 
   defp collect_protocol_context(stmts) do
     Enum.reduce(stmts, Protocol.new(), fn stmt, ctx ->

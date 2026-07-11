@@ -18,7 +18,7 @@ defmodule Cure.Core.SizeChangeTest do
   # -- Nat as an inductive, plus term constructors ----------------------------
 
   @nat {:data, :Nat, [], []}
-  @nat_motive {:lam, @nat, @nat}
+  @nat_motive {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
   defp z, do: {:ctor, :Z, []}
   defp s(t), do: {:ctor, :S, [t]}
@@ -56,10 +56,10 @@ defmodule Cure.Core.SizeChangeTest do
         call2(:ack, v(0), s(z()))
       )
 
-    {:lam, @nat, {:lam, @nat, ncase(v(1), inner, s(v(0)))}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, s(v(0)))}}
   end
 
-  defp ack_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp ack_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
   # swap f(a,b): a=var1, b=var0.
   #   Z a -> Z
@@ -76,10 +76,10 @@ defmodule Cure.Core.SizeChangeTest do
         call2(:f, v(0), v(0))
       )
 
-    {:lam, @nat, {:lam, @nat, ncase(v(1), inner, z())}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, z())}}
   end
 
-  defp swap_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp swap_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
   # lexicographic with a PASS-THROUGH first coordinate (needs only literal-equal,
   # no reconstruction): lex(a,b): a=var1, b=var0.
@@ -98,10 +98,10 @@ defmodule Cure.Core.SizeChangeTest do
         call2(:lex, v(0), v(0))
       )
 
-    {:lam, @nat, {:lam, @nat, ncase(v(1), inner, z())}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, z())}}
   end
 
-  defp lex_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp lex_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
   # course-of-values style: cov(a,b): a=var1, b=var0.
   #   Z a -> Z
@@ -119,26 +119,26 @@ defmodule Cure.Core.SizeChangeTest do
         call2(:cov, v(0), s(v(0)))
       )
 
-    {:lam, @nat, {:lam, @nat, ncase(v(1), inner, z())}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, z())}}
   end
 
-  defp cov_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp cov_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
   # loop(a,b) = loop(S a, S b): a=var1, b=var0. NO case — a and b are unmatched.
   # The rebuilt S a / S b do NOT reconstruct any matched form (a,b unmatched),
   # so reconstruct-equal must NOT fire; all arcs unknown -> rejected.
   defp loop_body do
-    {:lam, @nat, {:lam, @nat, call2(:loop, s(v(1)), s(v(0)))}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, call2(:loop, s(v(1)), s(v(0)))}}
   end
 
-  defp loop_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp loop_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
   # plus(a,b): single fixed decreasing position (regression / no-regression).
   #   Z a -> b
   #   S x -> S(plus(x, b))    [x=var0 < a, b shifted to var1]
   defp plus_body do
-    {:lam, @nat,
-     {:lam, @nat,
+    {:lam, Cure.Core.Grade.unrestricted(), @nat,
+     {:lam, Cure.Core.Grade.unrestricted(), @nat,
       ncase(
         v(1),
         # S x: x=var0, b=var1
@@ -148,7 +148,7 @@ defmodule Cure.Core.SizeChangeTest do
       )}}
   end
 
-  defp plus_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp plus_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
   alias Cure.Core.Certificate
 

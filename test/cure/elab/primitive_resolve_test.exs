@@ -14,7 +14,7 @@ defmodule Cure.Elab.PrimitiveResolveTest do
         Program.elaborate("mod M\n  fn f(x: #{unquote(name)}) -> #{unquote(name)} = x\nend\n")
 
       assert env.defs[:f].type ==
-               {:pi, unquote(Macro.escape(node)), unquote(Macro.escape(node))}
+               {:pi, Cure.Core.Grade.unrestricted(), unquote(Macro.escape(node)), unquote(Macro.escape(node))}
     end
   end
 

@@ -16,19 +16,19 @@ defmodule Antigen.Generators.ErasureTerm do
 
   defp il(n), do: {:int_lit, n}
 
-  # ctor :MkQ present-first [:present,:erased] (erase idempotent — CLEAN);
-  # :MkP erased-first [:erased,:present] is declared too (used only by test fixtures).
+  # ctor :MkQ present-first [:unrestricted,:erased] (erase idempotent — CLEAN);
+  # :MkP erased-first [:erased,:unrestricted] is declared too (used only by test fixtures).
   defp ctor_env do
     Env.empty()
     |> Inductive.declare(Inductive.family(:P, [], [], 0), [
-         Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:present, :erased]),
-         Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :present])
+         Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:unrestricted, :erased]),
+         Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :unrestricted])
        ])
   end
 
   defp app_env(env) do
-    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
-    env |> Env.add_def(:f, ty, {:int_lit, 0}, [:present, :erased])
+    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+    env |> Env.add_def(:f, ty, {:int_lit, 0}, [:unrestricted, :erased])
   end
 
   defp app2(head, x0, x1), do: {:app, {:app, head, x0}, x1}

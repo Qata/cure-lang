@@ -36,8 +36,8 @@ defmodule Antigen.Generators.DepMatch do
     @bd,
     {:int_type},
     {:float_type},
-    {:pi, @nat, @nat},
-    {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []},
+    {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat},
+    {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []},
     {:data, :Vec, [@z], []}
   ]
   @ty_branches [
@@ -90,18 +90,18 @@ defmodule Antigen.Generators.DepMatch do
       # refinement specializes it via specialize_branch_context, driving
       # replace_branch_vars over Equivalent-data / Σ / Π type shapes.
       {2, var_index_extra({:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]})},
-      {2, var_index_extra({:data, :Sigma, [@nat, {:lam, @nat, vec({:var, 2})}], []})},
-      {2, var_index_extra({:pi, @nat, vec({:var, 2})})},
+      {2, var_index_extra({:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, vec({:var, 2})}], []})},
+      {2, var_index_extra({:pi, Cure.Core.Grade.unrestricted(), @nat, vec({:var, 2})})},
       # extra context types carrying stuck value-level subterms (λ / pair / reflexive)
       # so specialize_branch_context's replace_branch_vars descends those arms.
-      {2, var_index_extra({:data, :Equivalent, [{:pi, @nat, @nat}], [{:lam, @nat, {:var, 0}}, {:lam, @nat, {:var, 0}}]})},
-      {2, var_index_extra({:data, :Equivalent, [{:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}], [{:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}]})},
+      {2, var_index_extra({:data, :Equivalent, [{:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}], [{:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}]})},
+      {2, var_index_extra({:data, :Equivalent, [{:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}], [{:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}, {:ctor, :mk_pair, [{:var, 1}, {:var, 1}]}]})},
       {2, var_index_extra({:data, :Equivalent, [{:data, :Equivalent, [@nat], [{:var, 1}, {:var, 1}]}], [{:ctor, :reflexive, [{:var, 1}]}, {:ctor, :reflexive, [{:var, 1}]}]})},
       # two-var frame: a helper context var lets extra_ty carry a STUCK app /
       # projection / builtin-op spine (K2) — replace_branch_vars' app/fst/snd arms.
-      {2, var_index_extra2({:pi, @nat, @nat}, {:data, :Equivalent, [@nat], [{:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}]})},
-      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}]})},
-      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}, {:case, {:var, 1}, {:lam, {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}]})},
+      {2, var_index_extra2({:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, {:data, :Equivalent, [@nat], [{:app, {:var, 1}, {:var, 3}}, {:app, {:var, 1}, {:var, 3}}]})},
+      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 1}}]}]})},
+      {2, var_index_extra2({:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, {:data, :Equivalent, [@nat], [{:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, @nat}, [{:mk_pair, 2, {:var, 0}}]}]})},
       {2, var_index_extra2({:int_type}, {:data, :Equivalent, [{:int_type}], [{:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}}, {:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}}]})},
       # a STUCK case over a Bool helper var in an index position — the case arm of
       # replace_branch_vars. Inner motive λb:Bool.Nat; both branches yield Z.
@@ -157,7 +157,7 @@ defmodule Antigen.Generators.DepMatch do
   # `Kernel.infer` on the `{:nat_lit,n}` scrutinee itself resolves via
   # `nat_type_value`; `Eval.eval`'s `:case` clause peels it via `nat_to_ctor_if`.
   defp nat_case(n) do
-    term = {:case, {:nat_lit, n}, {:lam, @nat, @nat}, [{:Z, 0, @z}, {:S, 1, {:var, 0}}]}
+    term = {:case, {:nat_lit, n}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}, {:S, 1, {:var, 0}}]}
     Gen.return({[], term, @nat})
   end
 
@@ -173,10 +173,10 @@ defmodule Antigen.Generators.DepMatch do
   @spec compact_nat_probes() :: [Challenge.t()]
   def compact_nat_probes do
     specs = [
-      {"compact_nat/case_zero", {[], {:case, {:nat_lit, 0}, {:lam, @nat, @nat},
+      {"compact_nat/case_zero", {[], {:case, {:nat_lit, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat},
         [{:Z, 0, @z}, {:S, 1, {:var, 0}}]}, @nat},
        "case on {:nat_lit,0} — Eval.nat_to_ctor(0) / nat_to_ctor_if"},
-      {"compact_nat/case_succ", {[], {:case, {:nat_lit, 4}, {:lam, @nat, @nat},
+      {"compact_nat/case_succ", {[], {:case, {:nat_lit, 4}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat},
         [{:Z, 0, @z}, {:S, 1, {:var, 0}}]}, @nat},
        "case on {:nat_lit,4} — Eval.nat_to_ctor(n>0) / nat_to_ctor_if"},
       {"compact_nat/vec_closed_zero",
@@ -232,7 +232,7 @@ defmodule Antigen.Generators.DepMatch do
 
   defp tg_motive(fname, kind) do
     ity = if kind == :int, do: {:int_type}, else: {:float_type}
-    {:lam, ity, {:lam, {:data, fname, [], [{:var, 0}]}, @nat}}
+    {:lam, Cure.Core.Grade.unrestricted(), ity, {:lam, Cure.Core.Grade.unrestricted(), {:data, fname, [], [{:var, 0}]}, @nat}}
   end
 
   # Closed scrutinee x : Ty T for a random concrete type index T. The matching ctor
@@ -257,7 +257,7 @@ defmodule Antigen.Generators.DepMatch do
 
   defp ty(a), do: {:data, :Ty, [], [a]}
   # λa. λv:Ty a. Nat
-  defp ty_motive, do: {:lam, {:type, 0}, {:lam, ty({:var, 0}), @nat}}
+  defp ty_motive, do: {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:lam, Cure.Core.Grade.unrestricted(), ty({:var, 0}), @nat}}
   # vary the reachable-branch body without disturbing the fixed ctor set
   defp replace_first_body([{c, ar, _} | rest], body), do: [{c, ar, body} | rest]
 
@@ -280,7 +280,7 @@ defmodule Antigen.Generators.DepMatch do
 
   defp sq(i, j), do: {:data, :Sq, [], [i, j]}
   # λi.λj.λv:Sq i j. Nat  (v's frame: i = var 2, j = var 1)
-  defp sq_motive, do: {:lam, @nat, {:lam, @nat, {:lam, sq({:var, 2}, {:var, 1}), @nat}}}
+  defp sq_motive, do: {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), sq({:var, 2}, {:var, 1}), @nat}}}
 
   # Γ = [ p : extra_ty (idx 0), xs : Vec n (idx 1), n : Nat (idx 2) ] where
   # extra_ty mentions n (var 1 from p's frame). Scrutinee is xs (var 1). When a
@@ -306,14 +306,14 @@ defmodule Antigen.Generators.DepMatch do
   defp stuck_case_helper, do: {:data, :Bool, [], []}
 
   defp stuck_case,
-    do: {:case, {:var, 1}, {:lam, {:data, :Bool, [], []}, @nat}, [{:False, 0, @z}, {:True, 0, @z}]}
+    do: {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, @nat}, [{:False, 0, @z}, {:True, 0, @z}]}
 
   # Γ = [n:Nat (idx0), x:a (idx1), a:Type0 (idx2)]; case n of Z→x | S→x with a
   # constant motive λv:Nat. a. Result type is the Type-var a (var 2). Fixed shape.
   defp tyvar_motive_case do
     Gen.return(
       {[@nat, {:var, 0}, {:type, 0}],
-       {:case, {:var, 0}, {:lam, @nat, {:var, 3}}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]},
+       {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 3}}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]},
        {:var, 2}}
     )
   end
@@ -334,7 +334,7 @@ defmodule Antigen.Generators.DepMatch do
     # recover the split, so the inferred type reads back flat)
     eqty_flat = {:data, :Equivalent, [@list_nat, @nil_ln, @nil_ln], []}
     Gen.return(
-      {[], {:case, @z, {:lam, @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty_flat}
+      {[], {:case, @z, {:lam, Cure.Core.Grade.unrestricted(), @nat, eqty}, [{:Z, 0, refl_ln}, {:S, 1, refl_ln}]}, eqty_flat}
     )
   end
 
@@ -367,7 +367,7 @@ defmodule Antigen.Generators.DepMatch do
     eq_ty = fn m -> {:data, :Equivalent, [@nat], [m, m]} end
     # claimed type in FLAT params++indices form (reify reads back flat)
     eq_ty_flat = fn m -> {:data, :Equivalent, [@nat, m, m], []} end
-    motive_eq = {:lam, @nat, {:lam, vec({:var, 0}), eq_ty.({:var, 1})}}
+    motive_eq = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), vec({:var, 0}), eq_ty.({:var, 1})}}
     nil_body = {:ctor, :reflexive, [@z]}
     cons_body = {:ctor, :reflexive, [{:ctor, :S, [{:var, 2}]}]}
     term = mk_case({:var, 0}, motive_eq, [{:vnil, 0, nil_body}, {:vcons, 3, cons_body}])
@@ -398,11 +398,11 @@ defmodule Antigen.Generators.DepMatch do
   #                             the only var already bound at that point)
   #   2 = b  : (Nat) -> Type
   defp neutral_app_motive_case do
-    b_ty = {:pi, @nat, {:type, 0}}
+    b_ty = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:type, 0}}
     w_ty = {:app, {:var, 0}, @z}
     # under the motive's 2 own binders (m, v), ambient var k reads as {:var, 2+k}:
     # b is ambient index 2 -> {:var, 4}; m is the motive's own outer binder -> {:var, 1}.
-    motive_napp = {:lam, @nat, {:lam, vec({:var, 0}), {:app, {:var, 4}, {:var, 1}}}}
+    motive_napp = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), vec({:var, 0}), {:app, {:var, 4}, {:var, 1}}}}
     term = mk_case({:var, 0}, motive_napp, [{:vnil, 0, {:var, 1}}, {:vcons, 3, @z}])
     Gen.return({[vec(@z), w_ty, b_ty], term, {:app, {:var, 2}, @z}})
   end
@@ -418,9 +418,9 @@ defmodule Antigen.Generators.DepMatch do
   end
 
   # motive λm. λv:Vec m. <ty>  (constant result type)
-  defp motive(ty), do: {:lam, @nat, {:lam, vec({:var, 0}), ty}}
+  defp motive(ty), do: {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), vec({:var, 0}), ty}}
   # dependent motive λm. λv:Vec m. Vec m
-  defp dep_motive, do: {:lam, @nat, {:lam, vec({:var, 0}), vec({:var, 1})}}
+  defp dep_motive, do: {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), vec({:var, 0}), vec({:var, 1})}}
 
   defp mk_case(scrut, motive, branches), do: {:case, scrut, motive, branches}
 

@@ -143,15 +143,15 @@ defmodule Antigen.Shrink do
   defp rule4({:case, scrut, _m, branches}) do
     [scrut | for({_c, 0, body} <- branches, do: body)]   # scrut + arity-0 branch bodies only
   end
-  defp rule4({:lam, _dom, body}) do
+  defp rule4({:lam, _g, _dom, body}) do
     if occurs?(body, 0), do: [], else: [Term.shift(body, -1, 0)]
   end
   defp rule4(_), do: []
 
   # child slots: {rebuild_fn, child} for every immediate sub-term (all Core formers)
   defp child_slots({:app, f, a}), do: [{&{:app, &1, a}, f}, {&{:app, f, &1}, a}]
-  defp child_slots({:lam, d, b}), do: [{&{:lam, &1, b}, d}, {&{:lam, d, &1}, b}]
-  defp child_slots({:pi, d, c}), do: [{&{:pi, &1, c}, d}, {&{:pi, d, &1}, c}]
+  defp child_slots({:lam, g, d, b}), do: [{&{:lam, g, &1, b}, d}, {&{:lam, g, d, &1}, b}]
+  defp child_slots({:pi, g, d, c}), do: [{&{:pi, g, &1, c}, d}, {&{:pi, g, d, &1}, c}]
   defp child_slots({:ctor, n, args}), do: slot_list(args, &{:ctor, n, &1})
   defp child_slots({:data, n, ps, is}) do
     slot_list(ps, &{:data, n, &1, is}) ++ slot_list(is, &{:data, n, ps, &1})
@@ -194,8 +194,8 @@ defmodule Antigen.Shrink do
   # free-occurrence of de-Bruijn index k (crosses binders, incrementing) — mirrors Runner.occurs?/2
   def occurs?({:var, k}, k), do: true
   def occurs?({:var, _}, _k), do: false
-  def occurs?({:lam, d, b}, k), do: occurs?(d, k) or occurs?(b, k + 1)
-  def occurs?({:pi, d, c}, k), do: occurs?(d, k) or occurs?(c, k + 1)
+  def occurs?({:lam, _g, d, b}, k), do: occurs?(d, k) or occurs?(b, k + 1)
+  def occurs?({:pi, _g, d, c}, k), do: occurs?(d, k) or occurs?(c, k + 1)
   def occurs?({:case, s, m, brs}, k) do
     occurs?(s, k) or occurs?(m, k) or
       Enum.any?(brs, fn {_c, ar, body} -> occurs?(body, k + ar) end)
@@ -226,8 +226,8 @@ defmodule Antigen.Shrink do
   # highest free index (relative to `depth` binders already entered), or -1 if closed-at-depth
   defp max_index_below({:var, k}, depth) when k >= depth, do: k - depth
   defp max_index_below({:var, _}, _depth), do: -1
-  defp max_index_below({:lam, d, b}, depth), do: max(max_index_below(d, depth), max_index_below(b, depth + 1))
-  defp max_index_below({:pi, d, c}, depth), do: max(max_index_below(d, depth), max_index_below(c, depth + 1))
+  defp max_index_below({:lam, _g, d, b}, depth), do: max(max_index_below(d, depth), max_index_below(b, depth + 1))
+  defp max_index_below({:pi, _g, d, c}, depth), do: max(max_index_below(d, depth), max_index_below(c, depth + 1))
   defp max_index_below({:case, s, m, brs}, depth) do
     [max_index_below(s, depth), max_index_below(m, depth) |
      Enum.map(brs, fn {_c, ar, body} -> max_index_below(body, depth + ar) end)] |> Enum.max()

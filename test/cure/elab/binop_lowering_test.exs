@@ -14,7 +14,7 @@ defmodule Cure.Elab.BinopLoweringTest do
 
   defp seeded, do: Builtins.seed(Env.empty())
 
-  @int2 {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
+  @int2 {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
 
   # Body of a top-level fn `name`.
   defp body(src, name) do
@@ -38,35 +38,35 @@ defmodule Cure.Elab.BinopLoweringTest do
 
   test "Int `+` lowers to an int_add global spine, no prim" do
     b = body("  fn f(x: Int) -> Int = x + 1\n", :f)
-    assert {:lam, {:int_type}, app2(:int_add, {:var, 0}, {:int_lit, 1})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_add, {:var, 0}, {:int_lit, 1})} == b
     assert no_prim?(b)
   end
 
   test "Float `+` lowers to float_add" do
     b = body("  fn g(x: Float) -> Float = x + 1.0\n", :g)
-    assert {:lam, {:float_type}, app2(:float_add, {:var, 0}, {:float_lit, 1.0})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(:float_add, {:var, 0}, {:float_lit, 1.0})} == b
     assert no_prim?(b)
   end
 
   test "Int `==` lowers to int_eq (guard-position shape)" do
     b = body("  fn eq0(n: Int) -> Bool = n == 0\n", :eq0)
-    assert {:lam, {:int_type}, app2(:int_eq, {:var, 0}, {:int_lit, 0})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_eq, {:var, 0}, {:int_lit, 0})} == b
     assert no_prim?(b)
   end
 
   test "Int `!=` lowers to int_ne; Float `==` to float_eq" do
-    assert {:lam, {:int_type}, app2(:int_ne, {:var, 0}, {:int_lit, 3})} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_ne, {:var, 0}, {:int_lit, 3})} ==
              body("  fn t(n: Int) -> Bool = n != 3\n", :t)
 
-    assert {:lam, {:float_type}, app2(:float_eq, {:var, 0}, {:float_lit, 2.0})} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(:float_eq, {:var, 0}, {:float_lit, 2.0})} ==
              body("  fn u(x: Float) -> Bool = x == 2.0\n", :u)
   end
 
   test "A1: ADT `==` lowers to struct_eq applied to the quoted operand type (not prim, not error)" do
     b = body("  fn t(a: Nat, b: Nat) -> Bool = a == b\n", :t)
 
-    assert {:lam, {:data, :Nat, [], []},
-            {:lam, {:data, :Nat, [], []},
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
+            {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
              app3(:struct_eq, {:data, :Nat, [], []}, {:var, 1}, {:var, 0})}} == b
 
     assert no_prim?(b)
@@ -75,8 +75,8 @@ defmodule Cure.Elab.BinopLoweringTest do
   test "A1: ADT `!=` lowers to struct_ne" do
     b = body("  fn t(a: Nat, b: Nat) -> Bool = a != b\n", :t)
 
-    assert {:lam, {:data, :Nat, [], []},
-            {:lam, {:data, :Nat, [], []},
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
+            {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
              app3(:struct_ne, {:data, :Nat, [], []}, {:var, 1}, {:var, 0})}} == b
   end
 
@@ -93,7 +93,7 @@ defmodule Cure.Elab.BinopLoweringTest do
     # emits a call to a nonexistent `int_add/0` — compile error (the red).
     test "bare builtin-op global as a value runs via a curried wrapper" do
       body =
-        {:app, {:lam, @int2, {:app, {:app, {:var, 0}, {:int_lit, 3}}, {:int_lit, 4}}},
+        {:app, {:lam, Cure.Core.Grade.unrestricted(), @int2, {:app, {:app, {:var, 0}, {:int_lit, 3}}, {:int_lit, 4}}},
          {:global, :int_add}}
 
       env = Env.add_def(seeded(), :use_bare, {:int_type}, body, [])
@@ -103,7 +103,7 @@ defmodule Cure.Elab.BinopLoweringTest do
 
     test "1-arg PARTIAL builtin-op spine runs via wrapper + curried application" do
       body =
-        {:app, {:lam, {:pi, {:int_type}, {:int_type}}, {:app, {:var, 0}, {:int_lit, 4}}},
+        {:app, {:lam, Cure.Core.Grade.unrestricted(), {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}, {:app, {:var, 0}, {:int_lit, 4}}},
          {:app, {:global, :int_add}, {:int_lit, 3}}}
 
       env = Env.add_def(seeded(), :use_partial, {:int_type}, body, [])

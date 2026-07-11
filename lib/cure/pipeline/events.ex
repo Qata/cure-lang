@@ -61,7 +61,15 @@ defmodule Cure.Pipeline.Events do
           # instrumentation (K11a); every other stage maps to a compilation phase.
           | :kernel
   @type event_type :: atom()
-  @type metadata :: %{file: String.t(), line: pos_integer(), timestamp: integer()}
+  # Every field is optional: callers with source context populate file/line/
+  # timestamp, but stages without one (e.g. the kernel's post-elaboration
+  # `:final_core_violation`) legitimately pass `%{}`. `emit/4`'s map clause
+  # accepts any map, so the type documents the recognised keys, not a floor.
+  @type metadata :: %{
+          optional(:file) => String.t(),
+          optional(:line) => pos_integer(),
+          optional(:timestamp) => integer()
+        }
 
   @registry Cure.Pipeline.Events.Registry
 

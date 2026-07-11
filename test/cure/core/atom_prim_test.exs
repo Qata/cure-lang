@@ -53,6 +53,10 @@ defmodule Cure.Core.AtomPrimTest do
     assert back == {:atom_type}
     {:ok, back2} = Serialize.decode(Serialize.encode({:atom_lit, :ok}))
     assert back2 == {:atom_lit, :ok}
+    # A name that is not a bareword is emitted quoted; it must read back through
+    # the `{:str, _}` symbol position too, not only the bareword `{:atom, _}` one.
+    {:ok, back3} = Serialize.decode(Serialize.encode({:atom_lit, :"has space"}))
+    assert back3 == {:atom_lit, :"has space"}
   end
 
   test "Atom nodes round-trip through external JSON form" do
@@ -62,6 +66,6 @@ defmodule Cure.Core.AtomPrimTest do
 
   test "an `Atom` signature elaborates to the primitive, not a free global :Atom" do
     {:ok, env} = Program.elaborate("mod M\n  fn f(a: Atom) -> Atom = a\nend\n")
-    assert env.defs[:f].type == {:pi, {:atom_type}, {:atom_type}}
+    assert env.defs[:f].type == {:pi, Cure.Core.Grade.unrestricted(), {:atom_type}, {:atom_type}}
   end
 end

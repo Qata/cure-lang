@@ -1,5 +1,6 @@
 @group(:collections)
 mod Std.NonEmpty
+  use Std.List
   ## A list that is *guaranteed* to hold at least one element.
   ##
   ## A `NonEmpty(T)` is a first element (its `head`) followed by an ordinary

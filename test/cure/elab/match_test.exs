@@ -30,7 +30,7 @@ defmodule Cure.Elab.MatchTest do
     end)
   end
 
-  defp unwrap_lams({:lam, _dom, body}), do: unwrap_lams(body)
+  defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
   defp unwrap_lams(term), do: term
 
   test "tag pattern-matches on SF and kernel-checks (coverage + branch arities)" do

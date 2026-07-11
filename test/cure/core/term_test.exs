@@ -5,8 +5,8 @@ defmodule Cure.Core.TermTest do
   test "constructs and recognises core nodes" do
     assert Term.term?({:type, 0})
     assert Term.term?({:var, 0})
-    assert Term.term?({:pi, {:type, 0}, {:var, 0}})
-    assert Term.term?({:app, {:lam, {:type, 0}, {:var, 0}}, {:type, 0}})
+    assert Term.term?({:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}})
+    assert Term.term?({:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}})
     refute Term.term?({:type, 3})
     refute Term.term?({:var, -1})
     refute Term.term?(:not_a_term)
@@ -17,7 +17,7 @@ defmodule Cure.Core.TermTest do
 
   test "shift lifts free vars at/above the cutoff, leaves bound vars" do
     # closed term (body var #0 is bound by the λ) is unchanged by shifting
-    assert {:lam, {:type, 0}, {:var, 0}} == Term.shift({:lam, {:type, 0}, {:var, 0}}, 1, 0)
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}} == Term.shift({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, 1, 0)
     # a free var at/above the cutoff is lifted by the amount
     assert {:var, 2} == Term.shift({:var, 0}, 2, 0)
   end
@@ -26,13 +26,13 @@ defmodule Cure.Core.TermTest do
     # `λ. #1`: the body var #1 refers to the OUTER binder. Substituting index 0
     # with a CLOSED replacement must descend under the one binder (target -> 1)
     # and replace #1.
-    assert {:lam, {:type, 0}, {:type, 1}} ==
-             Term.subst({:lam, {:type, 0}, {:var, 1}}, 0, {:type, 1})
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 1}} ==
+             Term.subst({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 1}}, 0, {:type, 1})
 
     # `λ. #0`: body var #0 is bound by the λ itself, so substituting outer index 0
     # must NOT touch it (capture-avoidance via binder-depth shift).
-    assert {:lam, {:type, 0}, {:var, 0}} ==
-             Term.subst({:lam, {:type, 0}, {:var, 0}}, 0, {:type, 1})
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}} ==
+             Term.subst({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, 0, {:type, 1})
 
     # no-op when the target index does not occur.
     assert {:type, 0} == Term.subst({:type, 0}, 0, {:type, 1})
@@ -42,17 +42,17 @@ defmodule Cure.Core.TermTest do
     terms = [
       {:type, 1},
       {:var, 3},
-      {:pi, {:type, 0}, {:var, 0}},
-      {:lam, {:type, 0}, {:var, 0}},
+      {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}},
+      {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}},
       {:app, {:var, 0}, {:var, 1}},
       # Inductive Sigma (D2): the dependent pair is `{:data, :Sigma}` / `{:ctor,
       # :mk_pair}` / projection-`:case`, all covered by the data/ctor/case rows
       # below — no primitive sigma/pair/fst/snd term nodes remain.
-      {:data, :Sigma, [{:type, 0}, {:lam, {:type, 0}, {:var, 0}}], []},
+      {:data, :Sigma, [{:type, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}], []},
       {:ctor, :mk_pair, [{:type, 0}, {:type, 1}]},
       {:data, :SF, [{:type, 0}], [{:var, 0}]},
       {:ctor, :seq, [{:var, 0}, {:var, 1}]},
-      {:case, {:var, 0}, {:lam, {:type, 0}, {:type, 0}},
+      {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}},
        [{:prim, 0, {:type, 0}}, {:seq, 2, {:var, 1}}]},
       {:global, :and},
     ]

@@ -270,7 +270,11 @@ defmodule Mix.Tasks.Antigen do
       # table in `Antigen.Runner` is indexed by POSITION, so inserting mid-list
       # silently renumbers every generator after it and adaptive reweighting then
       # bumps the wrong ones. Group `f` (fixed menu).
-      {2, Antigen.Generators.ZetaSubst.gen()}
+      {2, Antigen.Generators.ZetaSubst.gen()},
+
+      # 34. A binder's GRADE is part of type identity (Idris Convert.idr:328).
+      # APPENDED, like ZetaSubst: `@group_table` is indexed by POSITION.
+      {2, Antigen.Generators.GradeConv.gen()}
     ])
   end
 

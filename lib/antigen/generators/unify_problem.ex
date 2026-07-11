@@ -63,7 +63,7 @@ defmodule Antigen.Generators.UnifyProblem do
     [
       {m(0), s(z0()), [0]},
       {pair(m(0), z0()), pair(s(z0()), m(1)), [0, 1]},
-      {{:pi, z0(), m(0)}, {:pi, z0(), s(z0())}, [0]},
+      {{:pi, Cure.Core.Grade.unrestricted(), z0(), m(0)}, {:pi, Cure.Core.Grade.unrestricted(), z0(), s(z0())}, [0]},
       # no-metavar reflexive pair — soundness only (NOT intrinsic: meta-closed would be vacuous)
       {s(z0()), s(z0()), []}
     ]
@@ -77,7 +77,7 @@ defmodule Antigen.Generators.UnifyProblem do
     [
       {m(0), s(z0()), [0]},
       {pair(m(0), z0()), pair(s(z0()), m(1)), [0, 1]},
-      {{:pi, z0(), m(0)}, {:pi, z0(), s(z0())}, [0]}
+      {{:pi, Cure.Core.Grade.unrestricted(), z0(), m(0)}, {:pi, Cure.Core.Grade.unrestricted(), z0(), s(z0())}, [0]}
     ]
     |> Enum.with_index()
     |> Enum.map(fn {{t1, t2, ids}, i} -> elab_ch("unify/intrinsic", t1, t2, ids, i) end)

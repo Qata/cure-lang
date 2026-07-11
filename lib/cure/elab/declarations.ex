@@ -16,7 +16,7 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Quote}
+  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote}
   alias Cure.Elab.{Elaborator, Relevance}
 
   @ceiling 2
@@ -149,6 +149,82 @@ defmodule Cure.Elab.Declarations do
 
   def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
 
+  @doc """
+  Register a type family's HEADER — its name and parameter/index telescopes with
+  an EMPTY constructor list — WITHOUT elaborating its constructor bodies.
+
+  `Program.register_pass` runs this over every declaration in a module before it
+  elaborates any constructor body, so a field type may name a sibling declared
+  later (forward reference) or a mutually-recursive partner. The authoritative
+  declaration — same header, real constructors — still happens in the main pass
+  via `elaborate/2`, which re-declares the family (`Inductive.declare` is a plain
+  keyed put, so re-registering the header with the real ctors simply overwrites
+  the empty placeholder).
+
+  Only the ctor-bearing enum / record / indexed families need this: their bodies
+  are what reference siblings. `@builtin` containers are skipped (the canonical
+  builtin registration owns them). Everything else — aliases, opaque carriers,
+  interfaces, primitives, functions — is returned unchanged; their
+  forward-reference cases are out of scope for this pass and handled (or rejected)
+  in the main pass exactly as before.
+  """
+  @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
+  def declare_header({:container, meta, _variants}, env) when is_list(meta) do
+    cond do
+      match?({:builtin, _}, Keyword.get(meta, :decorator)) ->
+        {:ok, env}
+
+      Keyword.get(meta, :container_type) in [:enum, :struct] ->
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+        register_header(name, params, [], env)
+
+      true ->
+        {:ok, env}
+    end
+  end
+
+  def declare_header({:indexed_type, meta, _ctor_sigs}, env) when is_list(meta) do
+    if match?({:builtin, _}, Keyword.get(meta, :decorator)) do
+      {:ok, env}
+    else
+      name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+      params = Keyword.get(meta, :params, [])
+      index_params = Keyword.get(meta, :indices, [])
+      register_header(name, params, index_params, env)
+    end
+  end
+
+  # A bare single right-hand side (`type B = MkB`) parses as `:type_annotation`
+  # and is a single-constructor enum when the RHS names no existing type (the
+  # same disambiguation `elaborate/2` makes). Register its header so an earlier
+  # sibling may forward-reference it; a genuine typealias (`type MyNat = Nat`)
+  # binds a nullary def, not a ctor-bearing family, so it is left to the main
+  # pass.
+  def declare_header({:type_annotation, meta, [rhs]}, env) when is_list(meta) do
+    if single_variant_enum?(rhs, env) do
+      name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+      params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+      register_header(name, params, [], env)
+    else
+      {:ok, env}
+    end
+  end
+
+  def declare_header(_decl, env), do: {:ok, env}
+
+  # Elaborate the parameter/index telescopes (mirroring `declare_parameterized`'s
+  # prefix) and register the family with an empty constructor list.
+  defp register_header(name, params, index_params, env) do
+    param_scope = params |> Enum.map(fn {:param, _m, n} -> n end) |> Enum.reverse()
+
+    with {:ok, param_tele} <-
+           elaborate_index_telescope(params, name, env, [], :duplicate_parameter),
+         {:ok, index_tele} <- elaborate_index_telescope(index_params, name, env, param_scope) do
+      {:ok, Inductive.declare(env, Inductive.family(name, param_tele, index_tele, 0), [])}
+    end
+  end
+
   defp single_variant_enum?({:variable, rmeta, name}, env) when is_list(rmeta) and is_binary(name),
     do: Keyword.get(rmeta, :variant, false) and not type_name?(env, name)
 
@@ -259,7 +335,11 @@ defmodule Cure.Elab.Declarations do
   # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
   # it. Rejecting the mismatch is the only reading under which the number means one thing.
   defp check_extern_arity(sig, arity) do
-    present = Enum.count(sig.quantities || [], &(&1 == :present))
+    # PRESENT, not unrestricted. Slice 4a's rename left `== :unrestricted` here, which
+    # excludes `:linear`/`:affine` parameters — they have runtime values and DO reach
+    # the BEAM, so they must be counted. Same trap 4a fixed in `Erase`/`Emit` and 4b
+    # fixed in `Relevance`.
+    present = Enum.count(sig.quantities || [], &Grade.present?/1)
 
     if arity == present do
       :ok
@@ -288,9 +368,26 @@ defmodule Cure.Elab.Declarations do
            # slots, so reject any body that uses one relevantly (returned / passed
            # in a present position / scrutinised / applied). E-layer; the kernel
            # stays quantity-blind. See `Cure.Elab.Relevance`.
-           :ok <- Relevance.check(env, sig.name, quantities, body_term) do
-        lambda = wrap_binders(:lam, sig.telescope, body_term)
-        final = Env.add_def(env, sig.name, sig.pi, lambda, quantities)
+           :ok <- Relevance.check(env, sig.name, quantities, body_term),
+           # The Pi is the single source of truth (slice 6). `sig.pi` was built from
+           # the ORIGINAL quantities; `demote_unused_dicts/3` may have lowered a dict
+           # since, so rebuild the stored type from the DEMOTED vector — otherwise the
+           # stored Pi (dict `ω`) and λ (dict `:erased`) would disagree, a pairing the
+           # graded `Conv` forbids. Both now come from one vector.
+           final_pi = wrap_binders(:pi, sig.telescope, quantities, sig.return_core),
+           lambda = wrap_binders(:lam, sig.telescope, quantities, body_term),
+           # The assertion that would have caught the whole dichotomy class: the stored
+           # Π and λ must agree on every binder's grade. Compare the two grade spines
+           # STRUCTURALLY — do NOT re-run a full `Kernel.check` of the body. The body
+           # already type-checked at `:284` against `build_context`'s WHNF'd context; a
+           # second kernel check here would rebuild the context WITHOUT that whnf (the
+           # `:lam` rule's `Context.extend` does not normalise `exp_dom`), so a
+           # parameter whose type is a δ-unfoldable alias reaches the kernel as an
+           # opaque neutral and a `match` on it fails `:case_scrutinee_not_data` — a
+           # regression the first cut of this slice shipped (adversarial review F1).
+           # The grade check is all slice 6 needs, and it is O(telescope depth).
+           :ok <- assert_binder_grades_agree(final_pi, lambda, sig.name) do
+        final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
@@ -336,7 +433,11 @@ defmodule Cure.Elab.Declarations do
          scope: scope,
          return_core: return_core,
          constraints: constraint_specs,
-         pi: wrap_binders(:pi, telescope, return_core)
+         # The PRE-REGISTRATION type, honest about the ORIGINAL quantities (implicit
+         # ⇒ erased). `demote_unused_dicts/3` may lower a dict below this after the
+         # body is seen; the final stored Pi is rebuilt from the demoted vector so it
+         # agrees with the λ (see `elaborate_function_body`).
+         pi: wrap_binders(:pi, telescope, quantities, return_core)
        }}
     end
   end
@@ -543,21 +644,30 @@ defmodule Cure.Elab.Declarations do
 
   # A pair `%[a, b]` is a dependent-pair introduction; the kernel checks it
   # against the declared Σ return type.
-  defp elaborate_body({:tuple, _meta, [a_ast, b_ast]} = expr, return_core, scope, ctx, env, _params) do
-    # Check the pair against the declared return type first, so a *dependent* pair
+  defp elaborate_body({:tuple, _meta, elems} = expr, return_core, scope, ctx, env, _params)
+       when is_list(elems) and length(elems) >= 2 do
+    # Check the tuple against the declared return type first, so a *dependent* pair
     # (`Sigma(n: Nat, Vector(a, n))`) elaborates its second component against the
     # codomain instantiated at the first — otherwise a component like
     # `prepend(x, empty())` is inferred and its underdetermined parts are left as
-    # unsolved metavariables. Fall back to inferring both components when the
+    # unsolved metavariables. A flat telescope `Tuple(T1,…,Tn)` = `%[e1,…,en]`
+    # likewise checks each element against its Σ layer (`check_tuple_against/5`).
+    # For an arity-2 pair only, fall back to inferring both components when the
     # return type is not a Σ the checker can use (preserving the prior behaviour).
     case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
       {:ok, term} ->
         {:ok, term}
 
-      {:error, _} ->
-        with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
-             {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
-          {:ok, {:ctor, sigma_mk_pair(env), [a_term, b_term]}}
+      {:error, _} = err ->
+        case elems do
+          [a_ast, b_ast] ->
+            with {:ok, a_term, _} <- Elaborator.elaborate_expr_typed(a_ast, scope, ctx, env),
+                 {:ok, b_term, _} <- Elaborator.elaborate_expr_typed(b_ast, scope, ctx, env) do
+              {:ok, {:ctor, sigma_mk_pair(env), [a_term, b_term]}}
+            end
+
+          _ ->
+            err
         end
     end
   end
@@ -687,6 +797,10 @@ defmodule Cure.Elab.Declarations do
     Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
   end
 
+  defp collect_type_vars({:tuple_type, _m, children}, bound, env, acc) when is_list(children) do
+    Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
+  end
+
   defp collect_type_vars(_other, _bound, _env, acc), do: acc
 
   defp type_var_name?(<<c, _::binary>>) when c in ?a..?z, do: true
@@ -748,6 +862,15 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # The quantity a parameter binds at: an explicit surface grade wins, else the
+  # position's default (`:erased` for an implicit, `ω` for an explicit).
+  defp param_quantity(pmeta) do
+    case Keyword.get(pmeta, :grade) do
+      nil -> if Keyword.get(pmeta, :implicit), do: Grade.zero(), else: Grade.unrestricted()
+      g -> g
+    end
+  end
+
   defp elaborate_param_telescope_rec(params, env) do
     params
     |> Enum.reduce_while({:ok, [], [], []}, fn {:param, pmeta, pname}, {:ok, tele, quants, scope} ->
@@ -764,7 +887,11 @@ defmodule Cure.Elab.Declarations do
         type_expr ->
           case idx_to_core(type_expr, scope, nil, env) do
             {:ok, core} ->
-              q = if Keyword.get(pmeta, :implicit), do: :erased, else: :present
+              # A surface grade (`c :linear T`, plan slice 5) overrides the position's
+              # default: an implicit defaults to `:erased`, an explicit to `ω`. `ω`
+              # itself has no spelling — it is written by omitting the grade — so each
+              # grade has exactly one surface form.
+              q = param_quantity(pmeta)
               {:cont, {:ok, tele ++ [{String.to_atom(pname), core}], quants ++ [q], [pname | scope]}}
 
             {:error, _} = err ->
@@ -794,8 +921,46 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
-  defp wrap_binders(tag, telescope, inner) do
-    Enum.reduce(Enum.reverse(telescope), inner, fn {_name, type}, acc -> {tag, type, acc} end)
+  # Builds a `:pi`/`:lam` chain from a telescope, each binder carrying the grade at
+  # its position in `quantities` (slice 6 — the Pi is the single source of truth). A
+  # `nil` vector, or one shorter than the telescope, defaults the remainder to `ω`.
+  # The binder tuple is assembled from a TAG, so no textual pass can see it — the
+  # grade must be threaded here explicitly; `Term.term?/1` caught this during the
+  # reshape.
+  defp wrap_binders(tag, telescope, quantities, inner) do
+    grades = binder_grades(quantities, length(telescope))
+
+    telescope
+    |> Enum.zip(grades)
+    |> Enum.reverse()
+    |> Enum.reduce(inner, fn {{_name, type}, g}, acc -> {tag, g, type, acc} end)
+  end
+
+  # Slice-6 guard: the stored Π and λ must carry the same grade at every binder
+  # position. Both are built from one `quantities` vector by `wrap_binders/4`, so on
+  # correct code this always holds; it fires only if a future change sources the two
+  # from different vectors (mutation-validated: build the final Pi from the ORIGINAL
+  # instead of the demoted vector → `{:grade_mismatch, %{pi:, lam:}}`). Structural,
+  # so it never inspects a binder's TYPE — no whnf, no body re-check.
+  defp assert_binder_grades_agree(pi, lam, name) do
+    case grade_spine_mismatch(pi, lam) do
+      nil -> :ok
+      {pg, lg} -> {:error, {:grade_mismatch, %{def: name, pi: pg, lam: lg}}}
+    end
+  end
+
+  defp grade_spine_mismatch({:pi, pg, _pd, pc}, {:lam, lg, _ld, lb}) do
+    if pg == lg, do: grade_spine_mismatch(pc, lb), else: {pg, lg}
+  end
+
+  # Spines exhausted in lockstep (both built from the same telescope) — agreed.
+  defp grade_spine_mismatch(_pi_cod, _lam_body), do: nil
+
+  defp binder_grades(nil, n), do: List.duplicate(Cure.Core.Grade.unrestricted(), n)
+
+  defp binder_grades(quantities, n) do
+    pad = n - length(quantities)
+    if pad > 0, do: quantities ++ List.duplicate(Cure.Core.Grade.unrestricted(), pad), else: Enum.take(quantities, n)
   end
 
   # -- indexed families -------------------------------------------------------
@@ -888,7 +1053,7 @@ defmodule Cure.Elab.Declarations do
             # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
-                List.duplicate(:present, length(expl_tele))
+                List.duplicate(:unrestricted, length(expl_tele))
 
             {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
           end
@@ -1078,7 +1243,7 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp pi_domains({:pi, dom, cod}), do: [dom | pi_domains(cod)]
+  defp pi_domains({:pi, _g, dom, cod}), do: [dom | pi_domains(cod)]
   defp pi_domains(_), do: []
 
   # The positional index types of family `name` (self or already registered).
@@ -1261,14 +1426,25 @@ defmodule Cure.Elab.Declarations do
   # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
   # `bname` in scope, so it is already in the frame of one new lambda binder, and
-  # wrapping it under `{:lam, dom, body}` is exactly that frame. `:Sigma` is the
+  # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame. `:Sigma` is the
   # canonical family name (only Std.Sigma registers `@builtin(:sigma)`), used as a
   # literal so `Sigma(..)` lowers even in a raw-`Env.empty()` elaboration.
   defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, dom, body}], []}}
+      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
     end
+  end
+
+  # A flat tuple TYPE `Tuple(T1, …, Tn)` unfolds to the UNIT-TERMINATED nested Σ
+  # telescope `Sigma(T1, λb1. Sigma(T2, λb2. … Sigma(Tn, λbn. Unit)))` — reusing the
+  # kernel's binary Σ (no new kernel surface). The terminating `Unit` is what emit
+  # keys on to flatten the whole spine to a flat BEAM tuple (spec §3.4). Each binder
+  # `bi` is threaded into scope so a later position may depend on an earlier one
+  # (dependent telescope); anonymous positions carry `"_"`.
+  defp idx_to_core({:tuple_type, meta, type_asts}, scope, fam, env, _ctx) do
+    binders = Keyword.get(meta, :binders) || List.duplicate("_", length(type_asts))
+    build_telescope_type(Enum.zip(binders, type_asts), scope, fam, env)
   end
 
   # A dependent function type `(x1: D1, …, xn: Dn) -> R` becomes the Π
@@ -1291,7 +1467,7 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, rev_doms, inner_scope} <- folded,
          {:ok, ret} <- idx_to_core(ret_ast, inner_scope, fam, env) do
-      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, dom, acc} end)}
+      {:ok, Enum.reduce(rev_doms, ret, fn dom, acc -> {:pi, Cure.Core.Grade.unrestricted(), dom, acc} end)}
     end
   end
 
@@ -1331,6 +1507,15 @@ defmodule Cure.Elab.Declarations do
 
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
 
+  defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}
+
+  defp build_telescope_type([{bname, ast} | rest], scope, fam, env) do
+    with {:ok, dom} <- idx_to_core(ast, scope, fam, env),
+         {:ok, body} <- build_telescope_type(rest, [bname | scope], fam, env) do
+      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
+    end
+  end
+
   # `(D1, …, Dn) -> R` (surface `Function(D1,…,Dn,R)`, tagged `function_type`)
   # becomes the non-dependent Π `Π(_:D1). … Π(_:Dn). R` — the native Core arrow the
   # kernel applies (`f(x)`) and checks lambdas against. Each type is elaborated in
@@ -1347,7 +1532,7 @@ defmodule Cure.Elab.Declarations do
         |> Enum.with_index()
         |> Enum.reverse()
         |> Enum.reduce(Cure.Core.Term.shift(ret_core, length(dom_cores), 0), fn {dom, i}, acc ->
-          {:pi, Cure.Core.Term.shift(dom, i, 0), acc}
+          {:pi, Cure.Core.Grade.unrestricted(), Cure.Core.Term.shift(dom, i, 0), acc}
         end)
 
       {:ok, pi}

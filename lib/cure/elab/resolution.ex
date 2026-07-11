@@ -44,8 +44,8 @@ defmodule Cure.Elab.Resolution do
       {:case, rekey_term(s, m, d), rekey_term(mo, m, d),
        Enum.map(brs, fn {cn, ar, b} -> {Map.get(m, cn, cn), ar, rekey_term(b, m, d)} end)}
 
-  def rekey_term({:pi, dom, cod}, m, d), do: {:pi, rekey_term(dom, m, d), rekey_term(cod, m, d)}
-  def rekey_term({:lam, dom, body}, m, d), do: {:lam, rekey_term(dom, m, d), rekey_term(body, m, d)}
+  def rekey_term({:pi, g, dom, cod}, m, d), do: {:pi, g, rekey_term(dom, m, d), rekey_term(cod, m, d)}
+  def rekey_term({:lam, g, dom, body}, m, d), do: {:lam, g, rekey_term(dom, m, d), rekey_term(body, m, d)}
   def rekey_term({:app, f, a}, m, d), do: {:app, rekey_term(f, m, d), rekey_term(a, m, d)}
 
   def rekey_term({:global, n}, _m, d), do: {:global, Map.get(d, n, n)}

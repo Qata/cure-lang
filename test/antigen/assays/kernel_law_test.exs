@@ -3,7 +3,7 @@ defmodule Antigen.Assays.KernelLawTest do
   alias Antigen.Generators.Term, as: TermGen
   alias Antigen.Runner
 
-  @law_ids ~w(kernel/shift_subst kernel/weakening kernel/confluence kernel/beta_subst kernel/zeta_subst elab/shift_agrees)
+  @law_ids ~w(kernel/shift_subst kernel/weakening kernel/confluence kernel/beta_subst kernel/zeta_subst kernel/grade_conv elab/shift_agrees)
 
   test "typed_term/1 accepts every kernel-law assay-id (guard widened)" do
     for id <- @law_ids do
@@ -29,7 +29,7 @@ defmodule Antigen.Assays.KernelLawTest do
   @sz {:ctor, :S, [{:ctor, :Z, []}]}
 
   test "shift_subst: a well-formed term satisfies all four laws" do
-    assert :ok = KernelLaw.run(ch("kernel/shift_subst", {:lam, {:data, :Nat, [], []}, {:ctor, :S, [{:var, 0}]}}))
+    assert :ok = KernelLaw.run(ch("kernel/shift_subst", {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:ctor, :S, [{:var, 0}]}}))
   end
 
   test "shift_subst: the checker is not tautological (independently re-derive laws 2 and 3)" do
@@ -65,7 +65,7 @@ defmodule Antigen.Assays.KernelLawTest do
   end
 
   test "confluence: a redex normalizes identically via nf and whnf→nf" do
-    assert :ok = KernelLaw.run(ch("kernel/confluence", {:app, {:lam, {:data, :Nat, [], []}, {:var, 0}}, @sz}))
+    assert :ok = KernelLaw.run(ch("kernel/confluence", {:app, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:var, 0}}, @sz}))
   end
 
   # spec §4 item 3 calls for both a positive AND a vacuous (fuel-exhausted)
@@ -91,7 +91,7 @@ defmodule Antigen.Assays.KernelLawTest do
   test "beta_subst: a capture-trap redex — β lands on the same nf as subst" do
     # (λx:Nat. λ_:Nat. x) {:var,0} over a one-Nat context; x sits under the inner
     # λ, so the substituted var-0 must shift by 1.
-    redex = {:app, {:lam, @nat, {:lam, @nat, {:var, 1}}}, {:var, 0}}
+    redex = {:app, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}}}, {:var, 0}}
     assert :ok = KernelLaw.run(ch("kernel/beta_subst", redex, [@nat]))
   end
 
@@ -101,16 +101,16 @@ defmodule Antigen.Assays.KernelLawTest do
   end
 
   test "shift_agrees: elaborator Subst.shift matches kernel Term.shift" do
-    assert :ok = KernelLaw.run(ch("elab/shift_agrees", {:lam, @nat, {:app, {:var, 0}, {:var, 1}}}))
+    assert :ok = KernelLaw.run(ch("elab/shift_agrees", {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:var, 0}, {:var, 1}}}))
   end
 
   test "shift_agrees: the check is not tautological — a cutoff-blind shift WOULD disagree" do
     # If Subst.shift ever regressed to NOT bumping the cutoff under a binder, the
     # identity lambda's bound var would be wrongly shifted. Prove the kernel's own
     # shift distinguishes that mutant, so the agreement law has teeth.
-    t = {:lam, @nat, {:var, 0}}
+    t = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}
     correct = Cure.Core.Term.shift(t, 1, 0)
-    mutant = {:lam, @nat, Cure.Core.Term.shift({:var, 0}, 1, 0)}  # forgot cutoff+1 under λ
+    mutant = {:lam, Cure.Core.Grade.unrestricted(), @nat, Cure.Core.Term.shift({:var, 0}, 1, 0)}  # forgot cutoff+1 under λ
     assert correct != mutant
     assert :ok = KernelLaw.run(ch("elab/shift_agrees", t))
   end

@@ -20,7 +20,7 @@ defmodule Cure.Core.CaseTypingTest do
 
   test "checks and infers a dependent case on Dec" do
     ctx = ctx_with(Eval.eval(@dec, []))
-    motive = {:lam, @dec, @dec}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}
     branches = [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]
     cas = {:case, {:var, 0}, motive, branches}
 
@@ -31,7 +31,7 @@ defmodule Cure.Core.CaseTypingTest do
   test "checks a case with per-branch index refinement (Box)" do
     ctx = ctx_with(Eval.eval({:data, :Box, [], [{:ctor, :Causal, []}]}, []))
     # motive = λ(d:Dec). λ(bx : Box d). Dec
-    motive = {:lam, @dec, {:lam, {:data, :Box, [], [{:var, 0}]}, @dec}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, @dec}}
     # mk branch: the body is the stored value x, whose type Dec matches the motive
     # after the index d is refined to x.
     branches = [{:mk, 1, {:var, 0}}]
@@ -42,7 +42,7 @@ defmodule Cure.Core.CaseTypingTest do
 
   test "negative: a branch body of the wrong type" do
     ctx = ctx_with(Eval.eval(@dec, []))
-    motive = {:lam, @dec, @dec}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}
     branches = [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]
     cas = {:case, {:var, 0}, motive, branches}
 
@@ -51,7 +51,7 @@ defmodule Cure.Core.CaseTypingTest do
 
   test "negative: a non-exhaustive case" do
     ctx = ctx_with(Eval.eval(@dec, []))
-    motive = {:lam, @dec, @dec}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}
     branches = [{:Dcoupled, 0, {:ctor, :Causal, []}}]
     cas = {:case, {:var, 0}, motive, branches}
 

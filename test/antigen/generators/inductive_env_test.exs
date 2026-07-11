@@ -27,7 +27,7 @@ defmodule Antigen.Generators.InductiveEnvTest do
 
       assert ctor.name == :antigenA
       assert ctor.args == [{:x, {:var, 0}}, {:y, {:var, 1}}]
-      assert ctor.quantities == [:erased, :present]
+      assert ctor.quantities == [:erased, :unrestricted]
       assert ctor.result_params == [{:var, 2}]
       assert match?([{:int_lit, _}], ctor.result_indices)
     end

@@ -538,6 +538,26 @@ defmodule Cure.Compiler.Printer do
 
   # -- Function Call ---------------------------------------------------------
 
+  # `Tuple(T1, …, Tn)` type surface (n-ary telescope, `parse_tuple_type`). Each
+  # position's binder is retained: an anonymous position (binder `"_"`) prints
+  # just its type; a named position prints `b: T`, so a dependent telescope
+  # (`Tuple(n: Nat, Vector(a, n))`) round-trips losslessly.
+  defp to_string({:tuple_type, meta, types}, depth, indent) do
+    binders = Keyword.get(meta, :binders, [])
+
+    positions =
+      types
+      |> Enum.with_index()
+      |> Enum.map_join(", ", fn {t, i} ->
+        case Enum.at(binders, i) do
+          b when is_binary(b) and b != "_" -> "#{b}: #{render(t, depth, indent)}"
+          _ -> render(t, depth, indent)
+        end
+      end)
+
+    "Tuple(#{positions})"
+  end
+
   defp to_string({:function_call, meta, args}, depth, indent) do
     name = Keyword.get(meta, :name, "unknown")
 
@@ -1617,11 +1637,12 @@ defmodule Cure.Compiler.Printer do
 
   # -- Opaque type (`opaque type Name(params)`) ------------------------------
   #
-  # A constructor-less, non-eliminable carrier type. The body is empty and the
-  # optional head params come from `:type_params`. Without this case the
-  # container catch-all `inspect/1`-ed the raw tuple, producing output that fails
-  # to reparse — which surfaced as `cure migrate` aborting any file containing an
-  # `opaque type` (the whole-file verify reprint could not round-trip).
+  # A constructor-less, non-eliminable carrier type (Agda `postulate`). The body
+  # is empty and the optional head params come from `:type_params`. Without this
+  # case the container catch-all `inspect/1`-ed the raw tuple, producing output
+  # that fails to reparse — which surfaced as `cure migrate` aborting any file
+  # containing an `opaque type` (the whole-file verify reprint could not
+  # round-trip).
   defp opaque_to_string(meta, _body, _depth, _indent) do
     tp = Keyword.get(meta, :type_params)
     tp_str = if tp && tp != [], do: "(#{Enum.join(tp, ", ")})", else: ""

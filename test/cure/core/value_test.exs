@@ -5,13 +5,13 @@ defmodule Cure.Core.ValueTest do
   test "recognises each value shape" do
     cl = {:closure, [], {:var, 0}}
     assert Value.value?({:vtype, 0})
-    assert Value.value?({:vpi, {:vtype, 0}, cl})
-    assert Value.value?({:vlam, {:vtype, 0}, cl})
+    assert Value.value?({:vpi, Cure.Core.Grade.unrestricted(), {:vtype, 0}, cl})
+    assert Value.value?({:vlam, Cure.Core.Grade.unrestricted(), {:vtype, 0}, cl})
     assert Value.value?({:vneutral, {:nvar, 0}})
     # Inductive Sigma (D2): the dependent pair value is an ordinary `{:vdata,
     # :Sigma}` former and `{:vctor, :mk_pair}` intro — the `{:vdata}`/`{:vctor}`
     # rows below cover it; no `{:vsigma}`/`{:vpair}` value shapes remain.
-    assert Value.value?({:vdata, :Sigma, [{:vtype, 0}, {:vlam, {:vtype, 0}, cl}]})
+    assert Value.value?({:vdata, :Sigma, [{:vtype, 0}, {:vlam, Cure.Core.Grade.unrestricted(), {:vtype, 0}, cl}]})
     assert Value.value?({:vctor, :mk_pair, [{:vtype, 0}, {:vtype, 1}]})
     assert Value.value?({:vdata, :SF, [{:vtype, 0}]})
     assert Value.value?({:vctor, :seq, [{:vtype, 0}]})

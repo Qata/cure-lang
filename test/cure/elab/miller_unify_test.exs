@@ -9,35 +9,35 @@ defmodule Cure.Elab.MillerUnifyTest do
 
   @nat {:data, :Nat, [], []}
   # ?m : (Nat) -> Type
-  defp fam_ctx, do: MetaCtx.fresh(MetaCtx.new(), {:pi, @nat, {:type, 0}})
+  defp fam_ctx, do: MetaCtx.fresh(MetaCtx.new(), {:pi, Cure.Core.Grade.unrestricted(), @nat, {:type, 0}})
   # ?m : (Nat) -> Nat — for solutions that are Nat *values* (index inference)
-  defp fam_ctx_nn, do: MetaCtx.fresh(MetaCtx.new(), {:pi, @nat, @nat})
+  defp fam_ctx_nn, do: MetaCtx.fresh(MetaCtx.new(), {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat})
 
   # `Vec (?m n) =? Vec <rhs>` under a binder: the index arg forces `?m(n) =? rhs`,
   # so mabs abstracts a Nat-VALUED rhs — the dependent index-inference path.
   defp solve_index(m_ctx, m, rhs) do
-    t1 = {:pi, @nat, {:data, :Vec, [], [{:app, {:meta, m}, {:var, 0}}]}}
-    t2 = {:pi, @nat, {:data, :Vec, [], [rhs]}}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:data, :Vec, [], [{:app, {:meta, m}, {:var, 0}}]}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:data, :Vec, [], [rhs]}}
     {:ok, ctx2} = Unify.unify(t1, t2, m_ctx, nil)
     Unify.zonk({:meta, m}, ctx2)
   end
 
   test "constant solution: ?m(n) =? Nat  ⇒  ?m := λ_:Nat. Nat" do
     {ctx, m} = fam_ctx()
-    t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, @nat}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:app, {:meta, m}, {:var, 0}}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, @nat} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "identity solution: ?m(n) =? n  ⇒  ?m := λn:Nat. n" do
     {ctx, m} = fam_ctx()
-    t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, {:var, 0}}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:app, {:meta, m}, {:var, 0}}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, {:var, 0}} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "escape: ?m() applied to no bound var is not a Miller pattern (falls through)" do
@@ -51,8 +51,8 @@ defmodule Cure.Elab.MillerUnifyTest do
     # fresh/1 records nil type; peel_pi_domains cannot supply domains, so the
     # higher-order case falls through to the first-order rules and fails cleanly.
     {ctx, m} = MetaCtx.fresh(MetaCtx.new())
-    t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, @nat}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:app, {:meta, m}, {:var, 0}}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}
     assert {:error, _} = Unify.unify(t1, t2, ctx, nil)
   end
 
@@ -63,22 +63,22 @@ defmodule Cure.Elab.MillerUnifyTest do
 
   test "Pi solution: ?m(n) =? (Πk:Nat. Nat)  ⇒  ?m := λn. Πk:Nat. Nat" do
     {ctx, m} = fam_ctx()
-    t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, {:pi, @nat, @nat}}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:app, {:meta, m}, {:var, 0}}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, {:pi, @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "Sigma solution: ?m(n) =? Sigma(Nat, λ_.Nat)  ⇒  ?m := λn. Sigma(Nat, λ_.Nat)" do
     {ctx, m} = fam_ctx()
     # Inductive Sigma (D2): the non-dependent pair type is `Sigma(Nat, λ_.Nat)`.
-    sig = {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
-    t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, sig}
+    sig = {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:app, {:meta, m}, {:var, 0}}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, sig}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, sig} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, sig} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "Equivalent solution binding the pattern var: ?m(n) =? Eq Nat n n  ⇒  ?m := λn. Eq Nat n n" do
@@ -89,11 +89,11 @@ defmodule Cure.Elab.MillerUnifyTest do
     # dedicated mabs {:eq} clause retired with it.)
     {ctx, m} = fam_ctx()
     eqv = {:data, :Equivalent, [@nat], [{:var, 0}, {:var, 0}]}
-    t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, eqv}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:app, {:meta, m}, {:var, 0}}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, eqv}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, eqv} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, eqv} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "indexed-family solution: ?m(n) =? Vec n  ⇒  ?m := λn. Vec n (index abstracted)" do
@@ -101,16 +101,16 @@ defmodule Cure.Elab.MillerUnifyTest do
     # recurse into the index list and abstract n there — the dependent-inference case
     # (a metavariable resolved to an indexed type).
     {ctx, m} = fam_ctx()
-    t1 = {:pi, @nat, {:app, {:meta, m}, {:var, 0}}}
-    t2 = {:pi, @nat, {:data, :Vec, [], [{:var, 0}]}}
+    t1 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:app, {:meta, m}, {:var, 0}}}
+    t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:data, :Vec, [], [{:var, 0}]}}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, @nat, {:data, :Vec, [], [{:var, 0}]}} == Unify.zonk({:meta, m}, ctx2)
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, {:data, :Vec, [], [{:var, 0}]}} == Unify.zonk({:meta, m}, ctx2)
   end
 
   test "ctor-valued index: Vec(?m n) =? Vec(S n)  ⇒  ?m := λn. S n" do
     {ctx, m} = fam_ctx_nn()
-    assert {:lam, @nat, {:ctor, :S, [{:var, 0}]}} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, {:ctor, :S, [{:var, 0}]}} ==
              solve_index(ctx, m, {:ctor, :S, [{:var, 0}]})
   end
 
@@ -119,14 +119,14 @@ defmodule Cure.Elab.MillerUnifyTest do
     # {:app} clause abstracts it; same solution shape).
     {ctx, m} = fam_ctx_nn()
     spine = {:app, {:app, {:global, :int_add}, {:var, 0}}, {:var, 0}}
-    assert {:lam, @nat, spine} == solve_index(ctx, m, spine)
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, spine} == solve_index(ctx, m, spine)
   end
 
   test "case-valued index: Vec(?m n) =? Vec(case n {Z→Z; S k→k})  ⇒  ?m := λn. case n {…}" do
     # The scrutinee is the pattern var n; mabs's :case clause must abstract it and
     # descend into each branch body at depth + ctor-arity (the S branch adds 1).
-    rhs = {:case, {:var, 0}, {:lam, @nat, @nat}, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:var, 0}}]}
+    rhs = {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:var, 0}}]}
     {ctx, m} = fam_ctx_nn()
-    assert solve_index(ctx, m, rhs) == {:lam, @nat, rhs}
+    assert solve_index(ctx, m, rhs) == {:lam, Cure.Core.Grade.unrestricted(), @nat, rhs}
   end
 end

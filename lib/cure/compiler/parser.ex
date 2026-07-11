@@ -561,12 +561,23 @@ defmodule Cure.Compiler.Parser do
   # -- Grouping ( ... ) ------------------------------------------------------
 
   defp parse_grouped(state) do
+    open = peek(state)
     state = advance(state)
     state = skip_newlines(state)
-    {expr, state} = parse_expr(state, 0)
-    state = skip_newlines(state)
-    state = expect(state, :rparen)
-    {expr, state}
+
+    case peek(state) do
+      %Token{type: :rparen} ->
+        # `()` — the unit value (Swift-style): the sole inhabitant of `Unit`. It
+        # is NOT an empty tuple; it lowers to the nullary `unit` constructor.
+        state = advance(state)
+        {{:unit_value, [line: open.line, col: open.col]}, state}
+
+      _ ->
+        {expr, state} = parse_expr(state, 0)
+        state = skip_newlines(state)
+        state = expect(state, :rparen)
+        {expr, state}
+    end
   end
 
   # -- Infix Operators -------------------------------------------------------
@@ -1417,16 +1428,23 @@ defmodule Cure.Compiler.Parser do
     # Assignment has BP 5, so parsing at BP 6 stops before `=`
     {pattern, state} = parse_expr(state, 6)
 
-    # Check for type annotation
-    {type_ann, state} =
-      case peek(state) do
-        %Token{type: :colon} ->
-          state = advance(state)
-          {type_expr, state} = parse_type_expr(state)
-          {type_expr, state}
+    # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
+    # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
+    let_name = case pattern do
+      {:variable, _, n} -> n
+      _ -> "let binding"
+    end
+    {grade, type_ann, state} = parse_binder_annotation(state, let_name, [:assign])
 
-        _ ->
-          {nil, state}
+    # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
+    # to a `case`, whose binders take their grades from the constructor's field
+    # quantities, so there is no single Core binder for this grade to land on. Reject
+    # it here rather than parse it and silently ignore the annotation.
+    state =
+      if grade && not match?({:variable, _, _}, pattern) do
+        add_error(state, {:graded_let_requires_variable, grade, token.line, token.col})
+      else
+        state
       end
 
     # Expect =
@@ -1438,6 +1456,7 @@ defmodule Cure.Compiler.Parser do
 
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
+    meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -2589,26 +2608,107 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # QTT grades (plan slice 5). A grade REPLACES the binder's colon and sits at the
+  # binding site: `c :linear Chan(Cmd)`, `{n :erased Nat}`. An absent grade means
+  # `ω`, so every existing program is unchanged.
+  #
+  # The grade belongs to the ARROW, not to the name and not to the type: Core spells
+  # it `{:pi, g, dom, cod}` and `Conv` compares `g` as part of the Pi while `dom` is
+  # an ordinary type. `linear c` would decorate the name; `c: linear T` would claim
+  # `linear T` is a type, and Core has no modality former.
+  #
+  # Idris spells quantities as bare numerals (`Idris/Parser.idr:647-653`) and Cure
+  # cannot: `fn f(x: 1)` already parses with `1` as a literal type, and `?` is
+  # already the hole token, so neither `:1` nor `1?` is free. Idris has no affine
+  # grade to port a spelling from anyway. These atoms already lex as single tokens,
+  # are unambiguous after a binder name, and — being atoms, not keywords — steal no
+  # identifiers.
+  #
+  # `:unrestricted` is deliberately NOT a spelling: `ω` is written by omission, so
+  # each grade has exactly ONE surface form.
+  @grade_atoms [:erased, :linear, :affine]
+
+  # After a binder NAME, an ATOM token is unambiguously a grade slot — a type
+  # annotation needs a colon first (`x: :ok`), whereas the grade's fused `:name`
+  # form lexes as one atom. So `:erased/:linear/:affine` → that grade; any OTHER
+  # atom (`:bogus`, or `:unrestricted`, which has no spelling) → a NAMED
+  # `{:unknown_grade, …}` rather than a silent no-op that desyncs the param list.
+  defp parse_grade(state) do
+    case peek(state) do
+      %Token{type: :atom, value: g} when g in @grade_atoms ->
+        {:grade, g, advance(state)}
+
+      %Token{type: :atom, value: bad} = tok ->
+        {:unknown, bad, tok, advance(state)}
+
+      _ ->
+        {:none, state}
+    end
+  end
+
+  # Tokens that cannot begin a type — after a grade, one of these means the required
+  # type is missing, so name THAT rather than let `parse_type_expr` swallow the token.
+  @non_type_tokens [:rparen, :rbrace, :rbracket, :comma, :assign, :newline, :indent, :dedent, :eof]
+
+  # A binder's annotation: `: Type`, or the graded `:g Type`. `name` labels the binder
+  # for diagnostics.
+  #
+  # `stop_on` names the tokens that may legally FOLLOW a grade in place of a type. A
+  # parameter has none, so `c :linear` is an error — there is nothing to grade. A
+  # `let` stops on `=`, because Idris's `letBinder` leaves the type optional even when
+  # graded (`Idris/Parser.idr:821-824`) and `let_inferred/8` will synthesise it.
+  defp parse_binder_annotation(state, name, stop_on \\ []) do
+    case parse_grade(state) do
+      {:none, state} ->
+        case peek(state) do
+          %Token{type: :colon} ->
+            {type_ast, state} = parse_type_expr(advance(state))
+            {nil, type_ast, state}
+
+          _ ->
+            {nil, nil, state}
+        end
+
+      {:unknown, bad, tok, state} ->
+        # Consume the stray atom (already advanced past it) and name it, so the error
+        # points at the grade rather than cascading onto the next real token.
+        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col})}
+
+      {:grade, grade, state} ->
+        cond do
+          peek(state).type in stop_on ->
+            {grade, nil, state}
+
+          peek(state).type in @non_type_tokens ->
+            tok = peek(state)
+            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col})}
+
+          true ->
+            {type_ast, state} = parse_type_expr(state)
+            {grade, type_ast, state}
+        end
+    end
+  end
+
+  defp put_binder_meta(meta, grade, type_ast) do
+    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
+    if grade, do: Keyword.put(meta, :grade, grade), else: meta
+  end
+
   # `{name}` or `{name: Type}` — an implicit, erased argument (design spec §6).
   # Its type may be omitted and inferred by the elaborator from later parameter
-  # types / the return type.
+  # types / the return type. `{name :g Type}` overrides the erased default.
   defp parse_implicit_param(state) do
     state = advance(state)
     name_token = peek(state)
     name = to_string(name_token.value)
     state = advance(state)
 
-    {type_ast, state} =
-      case peek(state) do
-        %Token{type: :colon} -> parse_type_expr(advance(state))
-        _ -> {nil, state}
-      end
+    {grade, type_ast, state} = parse_binder_annotation(state, name)
 
     state = expect(state, :rbrace)
 
-    meta = [implicit: true]
-    meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
-    {{:param, meta, name}, state}
+    {{:param, put_binder_meta([implicit: true], grade, type_ast), name}, state}
   end
 
   defp parse_explicit_param(state) do
@@ -2634,16 +2734,8 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    # Optional type annotation: : Type
-    {type_ast, state} =
-      case peek(state) do
-        %Token{type: :colon} ->
-          state = advance(state)
-          parse_type_expr(state)
-
-        _ ->
-          {nil, state}
-      end
+    # Optional type annotation `: Type`, or a graded one `:g Type`.
+    {grade, type_ast, state} = parse_binder_annotation(state, name)
 
     # Optional default value: = expr
     {default, state} =
@@ -2658,8 +2750,7 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    param_meta = []
-    param_meta = if type_ast, do: Keyword.put(param_meta, :type, type_ast), else: param_meta
+    param_meta = put_binder_meta([], grade, type_ast)
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
@@ -3169,8 +3260,27 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
 
     {ast, state} =
-      case peek(state) do
-        %Token{type: :lparen} ->
+      case {peek(state), peek_at(state, 1)} do
+        {%Token{type: :lparen}, %Token{type: :rparen}} ->
+          # `type Unit = ()` — the Swift-style unit type: `Unit` is the type, `()`
+          # its sole value. `= ()` is RESERVED to `Unit`; `()` names the one
+          # built-in unit type and is not a spelling other types may borrow, so
+          # any other name declared as `()` is a hard error. When permitted, this
+          # builds exactly the nullary single-`unit`-ctor family the compiler
+          # seeds into every module (see program.ex seed_with_telescope_support/1).
+          state = advance(advance(state))
+
+          meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+
+          if name == "Unit" do
+            {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
+          else
+            state = add_error(state, {:unit_type_reserved, name})
+            {{:container, meta, []}, state}
+          end
+
+        {%Token{type: :lparen}, _} ->
           # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
           # The full type-expression parser handles the arrow; the result is a plain
           # type alias (`:type_annotation`).
@@ -4673,15 +4783,30 @@ defmodule Cure.Compiler.Parser do
     {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
   end
 
-  # Tuple(T, U) — the honest arity-2 surface tuple (spec §3.3). It aliases the
-  # non-dependent Sigma: `Tuple(T, U)` => `sigma_type` with the unused binder "_",
-  # `Tuple(x: T, U)` => `sigma_type` binding `x` so a later position may name it.
-  # Both reuse `type_to_core`/`idx_to_core`'s existing `sigma_type` clauses, so no
-  # elaborator change is needed. Arity != 2 is handled by the n-ary path (a later
-  # increment); until then a third position falls through to `expect(:rparen)`.
+  # Tuple(T1, …, Tn) — the honest surface tuple (spec 2026-07-09-unified-tuple §3).
+  # Parse a comma-separated list of `[binder?:] type` positions (≥ 2). EVERY arity
+  # (including 2) becomes `{:tuple_type, [arity: n, binders: bs], [t1…tn]}` — the
+  # elaborator unfolds it to a UNIT-TERMINATED nested Σ telescope
+  # (`Sigma(T1, λb1. … Sigma(Tn, λbn. Unit))`) which emit flattens to a flat BEAM
+  # tuple. This is DELIBERATELY distinct from bare `Sigma(x:T, U)` (`:sigma_type`,
+  # NOT unit-terminated): the terminator is what lets emit tell "flatten the whole
+  # spine" from "this element is itself a nested tuple". Per-position binders are
+  # retained so a later position may depend on an earlier one (dependent telescope);
+  # an anonymous position is binder `"_"`.
   defp parse_tuple_type(state) do
     state = advance(state)
+    {positions, state} = parse_tuple_positions(state, [])
+    state = expect(state, :rparen)
 
+    binders = Enum.map(positions, &elem(&1, 0))
+    types = Enum.map(positions, &elem(&1, 1))
+    ast = {:tuple_type, [arity: length(positions), binders: binders], types}
+
+    {ast, state}
+  end
+
+  # A `[binder?:] type` position list, comma-separated, terminated by `:rparen`.
+  defp parse_tuple_positions(state, acc) do
     {binder, state} =
       case {peek(state), peek_at(state, 1)} do
         {%Token{} = t, %Token{type: :colon}} ->
@@ -4691,11 +4816,13 @@ defmodule Cure.Compiler.Parser do
           {"_", state}
       end
 
-    {dom_type, state} = parse_type_expr(state)
-    state = expect(state, :comma)
-    {body_type, state} = parse_type_expr(state)
-    state = expect(state, :rparen)
-    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
+    {type, state} = parse_type_expr(state)
+    acc = [{binder, type} | acc]
+
+    case peek(state) do
+      %Token{type: :comma} -> parse_tuple_positions(advance(state), acc)
+      _ -> {Enum.reverse(acc), state}
+    end
   end
 
   defp maybe_parse_function_type(state, left) do

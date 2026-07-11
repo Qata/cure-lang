@@ -31,7 +31,7 @@ defmodule Antigen.Generators.DepMatchTest do
     # a dependent (type-former) motive: λm.λv. Vec m  → drives check_motive_wf/infer_type_value_sort
     assert Enum.any?(sample, fn c ->
              {:case, _s, motive, _b} = c.payload.term
-             match?({:lam, _, {:lam, _, {:data, :Vec, _, _}}}, motive)
+             match?({:lam, _g1, _, {:lam, _g2, _, {:data, :Vec, _, _}}}, motive)
            end)
 
     # a closed-index scrutinee (Vec Z or Vec (S Z)) → forces an :impossible branch.

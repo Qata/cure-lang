@@ -21,10 +21,10 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
 
   # Test 1 — Positive refinement (4.3 core): reusing h : Ix n as Ix Causal.
   test "Test 1: an outer hypothesis h : Ix n is reusable as Ix Causal in the wrap branch" do
-    def_type = {:pi, @dec, {:pi, @ix0, {:pi, @ix1, @ix2}}}
-    motive = {:lam, @dec, {:lam, @ix0, @ix1}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), @ix0, {:pi, Cure.Core.Grade.unrestricted(), @ix1, @ix2}}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, @ix1}}
     # wrap branch adds one binder (p), so h (was var1 before the case) is var2 inside.
-    body = {:lam, @dec, {:lam, @ix0, {:lam, @ix1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+    body = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, {:lam, Cure.Core.Grade.unrestricted(), @ix1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
   end
@@ -41,9 +41,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
   # program now accepts; this shows the same machinery does not go on to fabricate
   # an equation the match never actually established.
   test "Test 2: a body relying on an unentailed index equation is still rejected" do
-    def_type = {:pi, @dec, {:pi, @ix0, {:pi, @ix1, {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}}}}
-    motive = {:lam, @dec, {:lam, @ix0, {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}}}
-    body = {:lam, @dec, {:lam, @ix0, {:lam, @ix1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), @ix0, {:pi, Cure.Core.Grade.unrestricted(), @ix1, {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}}}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}}}
+    body = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, {:lam, Cure.Core.Grade.unrestricted(), @ix1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert {:error, _} = Kernel.check_def(env, :probe)
   end
@@ -71,9 +71,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
       |> Inductive.declare(Inductive.family(:Two, [], [{:i, @dec}], 0),
            [Inductive.ctor(:pack, [{:y, @dec}], [{:var, 0}])])
     two0 = {:data, :Two, [], [{:var, 0}]}
-    def_type = {:pi, @dec, {:pi, two0, @dec}}          # Π(m:Dec). Π(t:Two m). Dec
-    motive = {:lam, @dec, {:lam, two0, @dec}}          # λm'.λt'. Dec
-    body = {:lam, @dec, {:lam, two0, {:case, {:var, 0}, motive, [{:pack, 1, {:var, 0}}]}}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), two0, @dec}}          # Π(m:Dec). Π(t:Two m). Dec
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), two0, @dec}}          # λm'.λt'. Dec
+    body = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), two0, {:case, {:var, 0}, motive, [{:pack, 1, {:var, 0}}]}}}
     env = Env.add_def(env, :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
   end
@@ -101,9 +101,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
            [Inductive.ctor(:mkStray, [{:p, @dec}], [{:global, :h}])])
       |> Env.add_def(:g, @dec, {:ctor, :Causal, []})
     stray_g = {:data, :Stray, [], [{:global, :g}]}
-    motive = {:lam, @dec, {:lam, {:data, :Stray, [], [{:var, 0}]}, @dec}}
-    def_type = {:pi, stray_g, @dec}                    # Π(s: Stray(global g)). Dec
-    body = {:lam, stray_g, {:case, {:var, 0}, motive, [{:mkStray, 1, {:type, 0}}]}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Stray, [], [{:var, 0}]}, @dec}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), stray_g, @dec}                    # Π(s: Stray(global g)). Dec
+    body = {:lam, Cure.Core.Grade.unrestricted(), stray_g, {:case, {:var, 0}, motive, [{:mkStray, 1, {:type, 0}}]}}
     env = Env.add_def(env, :probe, def_type, body)
     assert {:error, :branch_type} = Kernel.check_def(env, :probe)
   end
@@ -118,9 +118,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
       |> Inductive.declare(Inductive.family(:Box, [], [{:d, @dec}], 0),
            [Inductive.ctor(:mk, [{:x, @dec}], [{:var, 0}])])
     box_causal = {:data, :Box, [], [{:ctor, :Causal, []}]}
-    motive = {:lam, @dec, {:lam, {:data, :Box, [], [{:var, 0}]}, @dec}}
-    def_type = {:pi, box_causal, @dec}                 # Π(b:Box Causal). Dec
-    body = {:lam, box_causal, {:case, {:var, 0}, motive, [{:mk, 1, {:var, 0}}]}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, @dec}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), box_causal, @dec}                 # Π(b:Box Causal). Dec
+    body = {:lam, Cure.Core.Grade.unrestricted(), box_causal, {:case, {:var, 0}, motive, [{:mk, 1, {:var, 0}}]}}
     env = Env.add_def(env, :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
   end
@@ -131,19 +131,19 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
   # is still rejected (discharge is not a blanket bypass).
   test "Test 3: an impossible wrap branch is discharged without checking its body" do
     ix_dcoupled = {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}
-    motive = {:lam, @dec, {:lam, @ix0, @dec}}                 # λn'.λix'. Dec
-    def_type = {:pi, ix_dcoupled, @dec}                        # Π(s:Ix Dcoupled). Dec
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, @dec}}                 # λn'.λix'. Dec
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), ix_dcoupled, @dec}                        # Π(s:Ix Dcoupled). Dec
     # body is {:type,0} where Dec is expected — only accepted because the branch is dead.
-    body = {:lam, ix_dcoupled, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
+    body = {:lam, Cure.Core.Grade.unrestricted(), ix_dcoupled, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
   end
 
   test "Test 3 companion: the SAME ill-typed body in a REACHABLE branch is rejected" do
     ix_causal = {:data, :Ix, [], [{:ctor, :Causal, []}]}
-    motive = {:lam, @dec, {:lam, @ix0, @dec}}
-    def_type = {:pi, ix_causal, @dec}                          # Π(s:Ix Causal). Dec — wrap IS reachable
-    body = {:lam, ix_causal, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, @dec}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), ix_causal, @dec}                          # Π(s:Ix Causal). Dec — wrap IS reachable
+    body = {:lam, Cure.Core.Grade.unrestricted(), ix_causal, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert {:error, :branch_type} = Kernel.check_def(env, :probe)
   end
@@ -166,9 +166,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
       |> Inductive.declare(Inductive.family(:Foo, [], [{:a, @dec}, {:b, @dec}], 0),
            [Inductive.ctor(:mk2, [{:y, @dec}], [{:ctor, :Causal, []}, {:var, 0}])])
     foo_dd = {:data, :Foo, [], [{:ctor, :Dcoupled, []}, {:ctor, :Dcoupled, []}]}
-    motive = {:lam, @dec, {:lam, @dec, {:lam, {:data, :Foo, [], [{:var, 1}, {:var, 0}]}, @dec}}}
-    def_type = {:pi, foo_dd, @dec}
-    body = {:lam, foo_dd, {:case, {:var, 0}, motive, [{:mk2, 1, {:type, 0}}]}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Foo, [], [{:var, 1}, {:var, 0}]}, @dec}}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), foo_dd, @dec}
+    body = {:lam, Cure.Core.Grade.unrestricted(), foo_dd, {:case, {:var, 0}, motive, [{:mk2, 1, {:type, 0}}]}}
     env = Env.add_def(env, :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)   # mk2 can only build Foo(Causal,_) ⇒ discharged
   end
@@ -180,9 +180,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
   # OMITS the dead wrap branch instead of giving it a placeholder body.
   test "K4: an all-impossible family admits an empty-branch case (ex-falso)" do
     ix_dcoupled = {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}
-    motive = {:lam, @dec, {:lam, @ix0, @dec}}
-    def_type = {:pi, ix_dcoupled, @dec}
-    body = {:lam, ix_dcoupled, {:case, {:var, 0}, motive, []}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, @dec}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), ix_dcoupled, @dec}
+    body = {:lam, Cure.Core.Grade.unrestricted(), ix_dcoupled, {:case, {:var, 0}, motive, []}}
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
   end
@@ -192,9 +192,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
   # invalid ex-falso and must be rejected (not a blanket "empty case is fine").
   test "K4: an empty-branch case is rejected when a constructor is still reachable" do
     ix_causal = {:data, :Ix, [], [{:ctor, :Causal, []}]}
-    motive = {:lam, @dec, {:lam, @ix0, @dec}}
-    def_type = {:pi, ix_causal, @dec}
-    body = {:lam, ix_causal, {:case, {:var, 0}, motive, []}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @ix0, @dec}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), ix_causal, @dec}
+    body = {:lam, Cure.Core.Grade.unrestricted(), ix_causal, {:case, {:var, 0}, motive, []}}
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert {:error, _} = Kernel.check_def(env, :probe)
   end
@@ -214,9 +214,9 @@ defmodule Cure.Core.CaseSoundnessIndexTest do
       |> Inductive.declare(Inductive.family(:Foo, [], [{:a, @dec}, {:b, @dec}], 0),
            [Inductive.ctor(:mk, [{:p, @dec}], [{:var, 0}, {:var, 0}])])
     foo_cd = {:data, :Foo, [], [{:ctor, :Causal, []}, {:ctor, :Dcoupled, []}]}
-    motive = {:lam, @dec, {:lam, @dec, {:lam, {:data, :Foo, [], [{:var, 1}, {:var, 0}]}, @dec}}}
-    def_type = {:pi, foo_cd, @dec}
-    body = {:lam, foo_cd, {:case, {:var, 0}, motive, [{:mk, 1, {:type, 0}}]}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Foo, [], [{:var, 1}, {:var, 0}]}, @dec}}}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), foo_cd, @dec}
+    body = {:lam, Cure.Core.Grade.unrestricted(), foo_cd, {:case, {:var, 0}, motive, [{:mk, 1, {:type, 0}}]}}
     env = Env.add_def(env, :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
   end

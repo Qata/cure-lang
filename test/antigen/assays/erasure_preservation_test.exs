@@ -19,7 +19,7 @@ defmodule Antigen.Assays.ErasurePreservationTest do
   # matches Vec(n_redex_value) = Vec(Z)) even though `n` is syntactically
   # unreduced. This is essential: it's what makes the witness term exercise
   # `nf`'s actual reduction machinery instead of being a no-op no-redex value.
-  defp n_redex, do: {:app, {:lam, {:data, :Nat, [], []}, {:var, 0}}, {:ctor, :Z, []}}
+  defp n_redex, do: {:app, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:var, 0}}, {:ctor, :Z, []}}
   defp t, do: {:ctor, :vcons, [n_redex(), {:ctor, :S, [{:ctor, :Z, []}]}, {:ctor, :vnil, []}]}
   defp ty, do: {:data, :Vec, [], [{:ctor, :S, [{:ctor, :Z, []}]}]}
 

@@ -53,7 +53,7 @@ defmodule Antigen.Generators.IndexedTest do
     # `Ix n` (the SAME shape the wrap branch requires, `Ix _`), differing only in
     # which index term fills the hole; only the dropped n:=Causal equation could
     # ever bridge `Ix n` (h's declared type) to `Ix Causal` (the branch's goal).
-    {:pi, _dec, {:pi, h_dom, {:pi, _ix_dom, _cod}}} = c.payload.def_type
+    {:pi, _g1, _dec, {:pi, _g2, h_dom, {:pi, _g3, _ix_dom, _cod}}} = c.payload.def_type
     assert h_dom == {:data, :Ix, [], [{:var, 0}]}
   end
 
@@ -66,10 +66,10 @@ defmodule Antigen.Generators.IndexedTest do
   test "4.4 ill-typed motive has an extra lambda layer (over-applied)" do
     good = Indexed.motive_wf(:well_typed)
     bad = Indexed.motive_wf(:ill_typed)
-    {:case, _s, {:lam, _, good_inner}, _} = good.payload.def_body
-    {:case, _s2, {:lam, _, bad_inner}, _} = bad.payload.def_body
+    {:case, _s, {:lam, _g, _, good_inner}, _} = good.payload.def_body
+    {:case, _s2, {:lam, _g, _, bad_inner}, _} = bad.payload.def_body
     # good_inner is a plain type; bad_inner is itself another lambda (the extra layer).
-    refute match?({:lam, _, _}, good_inner)
-    assert match?({:lam, _, _}, bad_inner)
+    refute match?({:lam, _g, _, _}, good_inner)
+    assert match?({:lam, _g, _, _}, bad_inner)
   end
 end

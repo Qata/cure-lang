@@ -69,7 +69,7 @@ defmodule Antigen.OpaqueFormerAntibodyTest do
     # branch list — the ex-falso shape a zero-ctor family would otherwise admit.
     effect_val = data_val(sig, :Effect, [@nat], [])
     ctx = Context.extend(Context.empty(sig), effect_val)
-    motive = {:lam, {:data, :Effect, [@nat], []}, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), {:data, :Effect, [@nat], []}, @nat}
 
     assert {:error, :opaque_not_eliminable} =
              Kernel.infer(ctx, {:case, {:var, 0}, motive, []}),
@@ -87,7 +87,7 @@ defmodule Antigen.OpaqueFormerAntibodyTest do
 
     void_val = data_val(sig, :Void, [], [])
     ctx = Context.extend(Context.empty(sig), void_val)
-    motive = {:lam, {:data, :Void, [], []}, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), {:data, :Void, [], []}, @nat}
 
     result = Kernel.infer(ctx, {:case, {:var, 0}, motive, []})
 
@@ -136,7 +136,7 @@ defmodule Antigen.OpaqueFormerAntibodyTest do
     sig = sig()
     effect_val = data_val(sig, :Effect, [@nat], [])
     ctx = Context.extend(Context.empty(sig), effect_val)
-    motive = {:lam, {:data, :Effect, [@nat], []}, @nat}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), {:data, :Effect, [@nat], []}, @nat}
 
     jobs = [
       fn -> Kernel.infer(ctx, {:case, {:var, 0}, motive, []}) end,

@@ -15,12 +15,12 @@ defmodule Cure.Core.StuckElimDeltaTest do
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
   # Σ(Nat). Nat as the inductive Sigma (D2): non-dependent second component.
-  @sigma_nat {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
+  @sigma_nat {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
   defp s(x), do: {:ctor, :S, [x]}
 
   # First/second projection of a Σ(Nat,Nat)-valued target `t`, as a projection case.
-  defp proj1(t), do: {:case, t, {:lam, @sigma_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]}
-  defp proj2(t), do: {:case, t, {:lam, @sigma_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]}
+  defp proj1(t), do: {:case, t, {:lam, Cure.Core.Grade.unrestricted(), @sigma_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]}
+  defp proj2(t), do: {:case, t, {:lam, Cure.Core.Grade.unrestricted(), @sigma_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]}
 
   # plus a b = case a of Z => b | S k => S (plus k b)   (recursion on 1st arg)
   # de Bruijn at the case: a = var 1, b = var 0.
@@ -28,14 +28,14 @@ defmodule Cure.Core.StuckElimDeltaTest do
     z_branch = {:Z, 0, {:var, 0}}
     # inside S-branch (arity 1): k = var 0, b = var 1
     s_branch = {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}
-    {:lam, @nat, {:lam, @nat, {:case, {:var, 1}, {:lam, @nat, @nat}, [z_branch, s_branch]}}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
   end
 
-  defp plus_type, do: {:pi, @nat, {:pi, @nat, @nat}}
+  defp plus_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
   # g x = mk_pair(x, S x) : Nat -> Σ(Nat). Nat
-  defp g_body, do: {:lam, @nat, {:ctor, :mk_pair, [{:var, 0}, s({:var, 0})]}}
-  defp g_type, do: {:pi, @nat, @sigma_nat}
+  defp g_body, do: {:lam, Cure.Core.Grade.unrestricted(), @nat, {:ctor, :mk_pair, [{:var, 0}, s({:var, 0})]}}
+  defp g_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, @sigma_nat}
 
   defp env do
     # Builtins.seed provides Nat (Z | S) and the inductive Sigma family + mk_pair.

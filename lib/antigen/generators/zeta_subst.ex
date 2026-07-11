@@ -4,7 +4,7 @@ defmodule Antigen.Generators.ZetaSubst do
   (`Antigen.Assays.KernelLaw`): ζ-reduction of a Core `:let` agrees with
   capture-avoiding substitution. Each challenge is a `:typed_term` carrying
 
-      L = {:let, T, e, body}
+      L = {:let, Cure.Core.Grade.unrestricted(), T, e, body}
 
   where `e` holds a free `{:var, k}` pointing into the ambient context and `body`
   places the bound occurrence of `x` UNDER one or more binders.
@@ -28,34 +28,51 @@ defmodule Antigen.Generators.ZetaSubst do
   and a divergence between them is attributable to the `:let` node alone.
   """
   alias Antigen.{Gen, Challenge}
+  alias Cure.Core.Grade
 
   @nat {:data, :Nat, [], []}
   @ty0 {:type, 0}
 
   # {ctx_types, result_type, T (let's ascription), e (has a free ambient var), body, note}
   @cases [
-    {[@nat], {:pi, @nat, @nat}, @nat, {:var, 0}, {:lam, @nat, {:var, 1}},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
      "lam depth 1: x under one λ — subst shifts e by 1, ζ shifts nothing"},
-    {[@nat], {:pi, @nat, {:pi, @nat, @nat}}, @nat, {:var, 0},
-     {:lam, @nat, {:lam, @nat, {:var, 2}}},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 2}}},
      "lam depth 2: x under two λ — subst shifts e by 2, ζ shifts nothing"},
-    {[@nat], {:pi, @nat, {:pi, @nat, {:pi, @nat, @nat}}}, @nat, {:var, 0},
-     {:lam, @nat, {:lam, @nat, {:lam, @nat, {:var, 3}}}},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 3}}}},
      "lam depth 3: x under three λ — subst shifts e by 3, ζ shifts nothing"},
-    {[@ty0], @ty0, @ty0, {:var, 0}, {:pi, @nat, {:var, 1}},
+    {[@ty0], @ty0, @ty0, {:var, 0}, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
      "pi codomain: x under a Π binder — the let-bound TYPE var must be transparent"},
-    {[@ty0], @ty0, @ty0, {:var, 0}, {:data, :Sigma, [@nat, {:lam, @nat, {:var, 1}}], []},
+    {[@ty0], @ty0, @ty0, {:var, 0}, {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}}], []},
      "sigma codomain: x under a Σ binder"},
     {[@nat], @nat, @nat, {:var, 0},
-     {:case, {:var, 1}, {:lam, @nat, @nat}, [{:Z, 0, {:var, 0}}, {:S, 1, {:var, 1}}]},
+     {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, {:var, 0}}, {:S, 1, {:var, 1}}]},
      "case branch: x under the S branch's arity-1 binder"},
     # `x` used THREE times under a binder — scrutinee plus both branches, at two
     # different depths. This is the shape where surface substitution duplicates
     # `e`; ζ must agree with `subst` on it while binding `e` exactly once.
-    {[@nat], {:pi, @nat, @nat}, @nat, {:var, 0},
-     {:lam, @nat,
-      {:case, {:var, 1}, {:lam, @nat, @nat}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]}},
-     "multi-use trap: x as scrutinee and in both branches, at two depths"}
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat,
+      {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, {:var, 1}}, {:S, 1, {:var, 2}}]}},
+     "multi-use trap: x as scrutinee and in both branches, at two depths"},
+    # The `:let` binder's GRADE (slice 2+3). The kernel deliberately ignores it —
+    # `infer`/`check` bind it as `_g`, and Idris's `sameBinders` lists only `Pi` and
+    # `Lam`, so a `Let`'s rig never enters conversion there either. What must hold is
+    # that ζ is grade-INDEPENDENT and that `Term.shift`/`Term.subst` PRESERVE the
+    # grade: the law compares `nf(let)` against `nf(subst(body, 0, e))`, and the
+    # substituted side never carries the grade at all. Before these cells every
+    # generated `:let` was `ω`, so the 5th field was never varied.
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
+     "erased let: ζ agrees with subst regardless of the binder's grade"},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
+     "linear let: ζ agrees with subst regardless of the binder's grade"},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
+     "affine let: ζ agrees with subst regardless of the binder's grade"}
   ]
 
   @cells [
@@ -65,7 +82,10 @@ defmodule Antigen.Generators.ZetaSubst do
     :pi_codomain,
     :sigma_codomain,
     :case_branch,
-    :used_twice
+    :used_twice,
+    :grade_erased,
+    :grade_linear,
+    :grade_affine
   ]
 
   @doc """
@@ -76,6 +96,13 @@ defmodule Antigen.Generators.ZetaSubst do
   @spec cover_cells() :: [{String.t(), atom()}]
   def cover_cells, do: for(cell <- @cells, do: {"kernel/zeta_subst", cell})
 
+  # The grade the `:let` binder carries, per cell. Everything else defaults to `ω`,
+  # which is what every cell used before the graded cells were added.
+  defp let_grade(:grade_erased), do: Grade.zero()
+  defp let_grade(:grade_linear), do: Grade.one()
+  defp let_grade(:grade_affine), do: Grade.affine()
+  defp let_grade(_cell), do: Grade.unrestricted()
+
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
     Gen.bind(Gen.member_of(Enum.zip(@cases, @cells)), fn {{ctx, type, t, e, body, note}, cell} ->
@@ -84,7 +111,7 @@ defmodule Antigen.Generators.ZetaSubst do
           kind: :typed_term,
           assay: "kernel/zeta_subst",
           label: :well_typed,
-          payload: %{sig: :v1, ctx: ctx, type: type, term: {:let, t, e, body}},
+          payload: %{sig: :v1, ctx: ctx, type: type, term: {:let, let_grade(cell), t, e, body}},
           note: note,
           cover_tag: cell
         )

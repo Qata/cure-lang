@@ -16,7 +16,7 @@ defmodule Cure.Core.StuckCaseMotiveConvTest do
 
   # motive λ(_ : Foo). <captured var 0> — the body references the closure's
   # captured environment (de Bruijn 1 = index 0 of env, under the λ binder).
-  @motive_term {:lam, {:data, :Foo, [], []}, {:var, 1}}
+  @motive_term {:lam, Cure.Core.Grade.unrestricted(), {:data, :Foo, [], []}, {:var, 1}}
 
   defp ncase_with_capture(captured) do
     motive_cl = {:closure, [captured], @motive_term}

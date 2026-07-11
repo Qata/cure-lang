@@ -3,7 +3,7 @@ defmodule Antigen.CoverageTest do
   alias Antigen.{Challenge, Coverage}
 
   test "constructor set and depth bucket for a small term" do
-    c = Challenge.stub({:app, {:lam, {:type, 0}, {:var, 0}}, {:type, 0}})
+    c = Challenge.stub({:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}})
     {ctors, bucket, _flags, label} = Coverage.key(c)
     assert :app in ctors and :lam in ctors and :type in ctors and :var in ctors
     assert bucket == :b0_2
@@ -30,11 +30,11 @@ defmodule Antigen.CoverageTest do
   end
 
   test "has_shadowing flag fires for a binder nested under another binder, not for a single binder" do
-    single = {:lam, {:type, 0}, {:var, 0}}
+    single = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}
     {_c, _b, flags1, _l} = Coverage.key(Challenge.stub(single))
     refute :has_shadowing in flags1
 
-    curried_pi = {:pi, {:type, 0}, {:pi, {:type, 0}, {:type, 0}}}
+    curried_pi = {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}}
     {_c, _b, flags2, _l} = Coverage.key(Challenge.stub(curried_pi))
     assert :has_shadowing in flags2
   end
@@ -43,7 +43,7 @@ defmodule Antigen.CoverageTest do
     dec = {:data, :Dec, [], []}
     fam = Cure.Core.Inductive.family(:Box, [], [{:d, dec}], 0)
     ctors = [Cure.Core.Inductive.ctor(:mk, [{:x, dec}], [{:var, 0}])]
-    body = {:case, {:ctor, :mk, [{:ctor, :Causal, []}]}, {:lam, dec, {:lam, {:data, :Box, [], [{:var, 0}]}, dec}},
+    body = {:case, {:ctor, :mk, [{:ctor, :Causal, []}]}, {:lam, Cure.Core.Grade.unrestricted(), dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, dec}},
             [{:mk, 1, {:var, 0}}]}
 
     c = Antigen.Challenge.new(kind: :indexed_case, assay: "indexed/case", label: :well_typed,
@@ -59,7 +59,7 @@ defmodule Antigen.CoverageTest do
     # "fst on a Nat" spelled inductively (D2): projection case over mk_pair.
     fault_term =
       {:case, {:ctor, :Z, []},
-       {:lam, {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
        [{:mk_pair, 2, {:var, 1}}]}
 
     c = Antigen.Challenge.new(

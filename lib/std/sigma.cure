@@ -36,3 +36,47 @@ mod Std.Sigma
   ## users write `p.2`; lowered to this global (inlined to `element(2, p)`).
   fn sigma_second({a: Type}, {b: (a) -> Type}, p: Sigma(x: a, b(x))) -> b(sigma_first(p)) = match p
     mk_pair(x, y) -> y
+
+  ## --- flat-telescope positional projections `tproj2 … tproj8` ---------------
+  ##
+  ## A flat n-ary tuple `Tuple(T1, …, Tn)` is the unit-terminated telescope
+  ## `Sigma(T1, … Sigma(Tn, Unit))` and lowers to a FLAT BEAM tuple `{e1, …, en}`.
+  ## Its intermediate tails have no contiguous runtime representation (only leaf
+  ## `element(i)` slots do), so `.i` (for `i ≥ 2`) cannot go through
+  ## `sigma_second` — that projects the TAIL, whose type is a shorter telescope,
+  ## not the i-th component. These globals give the i-th component its true type
+  ## `Ti` (the body is the well-typed `sigma_first ∘ sigma_second^(i-1)`
+  ## composition, checked but never run) while INLINING at codegen to
+  ## `element(i, p)` — the same trick `sigma_first`/`sigma_second` use to stay
+  ## zero-cost on the BEAM tuple ABI. The prefix `{r: Type}` absorbs the tail, so
+  ## `tproj_i` accepts any telescope of arity ≥ i (`.2` on an arity-5 tuple binds
+  ## `r := Sigma(T3, … Unit)`). Arity ≥ 3 telescopes are non-dependent products,
+  ## so the component types do not depend on earlier elements. `.1` stays
+  ## `sigma_first` (already correct for any telescope); `Tuple` arity caps at 8.
+  fn tproj2({a: Type}, {b: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, r))) -> b =
+    sigma_first(sigma_second(p))
+
+  fn tproj3({a: Type}, {b: Type}, {c: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, r)))) -> c =
+    sigma_first(sigma_second(sigma_second(p)))
+
+  fn tproj4({a: Type}, {b: Type}, {c: Type}, {d: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, r))))) -> d =
+    sigma_first(sigma_second(sigma_second(sigma_second(p))))
+
+  fn tproj5({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, r)))))) -> e =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(p)))))
+
+  fn tproj6({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, r))))))) -> f =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p))))))
+
+  fn tproj7({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {g: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, Sigma(x7: g, r)))))))) -> g =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p)))))))
+
+  fn tproj8({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {g: Type}, {h: Type}, {r: Type},
+            p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, Sigma(x7: g, Sigma(x8: h, r))))))))) -> h =
+    sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p))))))))

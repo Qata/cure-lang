@@ -122,9 +122,9 @@ defmodule Antigen.EqInductiveAntibodyTest do
   # ty/motive/l (de Bruijn shifts of closed terms elided).
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
-    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
+    arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   test ":case transport over an inductive Equivalent(Nat,Z,S Z) hypothesis lands at motive @ b (not motive @ a)" do
@@ -132,7 +132,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
 
     # Endpoint-distinguishing motive:  λ x:Nat. Equivalent(Nat, x, Z)
-    motive = {:lam, @nat, {:data, :Equivalent, [@nat], [{:var, 0}, z()]}}
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:data, :Equivalent, [@nat], [{:var, 0}, z()]}}
 
     # transport (h : Eq Nat Z (S Z)) : (motive @ Z) -> (motive @ S Z), applied
     # to (refl Z : motive @ Z) — result must be motive @ b, never motive @ a.
@@ -162,7 +162,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
     fake_val = Eval.eval({:data, :Fake, [@nat], [z(), z()]}, Context.env(Context.empty(sig)))
     ctx = Context.extend(Context.empty(sig), fake_val)
 
-    node = {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()}
+    node = {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()}
 
     assert {:error, _} = Kernel.infer(ctx, node),
            "SOUNDNESS VIOLATION: a reflexive-branch :case eliminated the non-Eq family Fake — " <>
@@ -172,7 +172,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_eq = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), z()))
 
     assert {:ok, _} =
-             Kernel.infer(ctx_eq, {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()}),
+             Kernel.infer(ctx_eq, {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()}),
            "a genuine Eq hypothesis should transport through the :case vehicle"
   end
 
@@ -181,7 +181,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_h = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), z()))
 
     job = fn ->
-      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()})
+      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()})
     end
 
     task = Task.async(job)
@@ -269,7 +269,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_h = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
 
     job = fn ->
-      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, @nat, @nat}, z()), z()})
+      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()})
     end
 
     task = Task.async(job)
@@ -290,7 +290,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_h = Context.extend(ctx, eq_ty(sig, @nat, z(), z()))
 
     assert_raise FunctionClauseError, fn ->
-      Kernel.infer(ctx_h, opaque({:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}))
+      Kernel.infer(ctx_h, opaque({:rewrite, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()}))
     end
   end
 end

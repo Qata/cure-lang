@@ -24,7 +24,7 @@ defmodule Antigen.ChallengeTest do
       families: [{fam, ctors}],
       def_name: :probe,
       def_type: dec,
-      def_body: {:case, {:ctor, :Causal, []}, {:lam, dec, dec},
+      def_body: {:case, {:ctor, :Causal, []}, {:lam, Cure.Core.Grade.unrestricted(), dec, dec},
                  [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
     }
 
@@ -49,7 +49,7 @@ defmodule Antigen.ChallengeTest do
                  # "fst on a Nat" spelled inductively (D2): projection case over
                  # mk_pair scrutinising a Nat — same :proj_non_pair fault.
                  term: {:case, {:ctor, :Z, []},
-                        {:lam, {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
+                        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
                         [{:mk_pair, 2, {:var, 1}}]}, fault: fault}
     )
 

@@ -18,16 +18,16 @@ defmodule Antigen.Generators.ClosureEnv do
   alias Cure.Core.Env
 
   # -- env helpers -------------------------------------------------------------
-  defp int_arrow, do: {:pi, {:int_type}, {:int_type}}
+  defp int_arrow, do: {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}
 
   # diverging: loop = λx. loop x   (bare unconditional self-call)
-  defp loop_def(env), do: Env.add_def(env, :loop, int_arrow(), {:lam, {:int_type}, {:app, {:global, :loop}, {:var, 0}}})
+  defp loop_def(env), do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :loop}, {:var, 0}}})
   # total: total_id = λx. x   (no self-call -> terminating? fast path)
-  defp total_def(env), do: Env.add_def(env, :total_id, int_arrow(), {:lam, {:int_type}, {:var, 0}})
+  defp total_def(env), do: Env.add_def(env, :total_id, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
   # transitive: callee = λx. x ; loop = λx. callee x
-  defp callee_def(env), do: Env.add_def(env, :callee, int_arrow(), {:lam, {:int_type}, {:var, 0}})
+  defp callee_def(env), do: Env.add_def(env, :callee, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
   defp loop_calls_callee(env),
-    do: Env.add_def(env, :loop, int_arrow(), {:lam, {:int_type}, {:app, {:global, :callee}, {:var, 0}}})
+    do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :callee}, {:var, 0}}})
 
   defp with_family_index(env, fam, g),
     do: %{env | families: Map.put(env.families, fam, %{name: fam, params: [], indices: [{:i, {:app, {:global, g}, {:int_lit, 0}}}], level: 0})}

@@ -16,9 +16,9 @@ defmodule Antigen.BuiltinBoolMigrationTest do
   test "a self-call hidden in a :case-on-Bool branch is NOT certified terminating" do
     # f = λn:Int. case (n == 0) of { True -> 0 ; False -> f n }  (diverges for n != 0)
     body =
-      {:lam, {:int_type},
+      {:lam, Cure.Core.Grade.unrestricted(), {:int_type},
        {:case, {:app, {:app, {:global, :int_eq}, {:var, 0}}, {:int_lit, 0}},
-        {:lam, {:data, :Bool, [], []}, {:int_type}},
+        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:int_type}},
         [{:True, 0, {:int_lit, 0}}, {:False, 0, {:app, {:global, :f}, {:var, 0}}}]}}
 
     refute Certificate.terminating?(:f, body, Builtins.seed(Env.empty()))

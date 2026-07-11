@@ -45,7 +45,7 @@ defmodule Cure.Core.BuiltinOpBoolCodomainTest do
   test "a comparison op's codomain names the real Bool family even when :bool is excluded" do
     env = Builtins.seed(Env.empty(), MapSet.new([:Bool]))
 
-    assert %{type: {:pi, _, {:pi, _, {:data, fam, [], []}}}} = Env.get_def(env, :int_lt)
+    assert %{type: {:pi, _g1, _, {:pi, _g2, _, {:data, fam, [], []}}}} = Env.get_def(env, :int_lt)
     refute is_nil(fam)
     assert fam == :Bool
   end
@@ -54,7 +54,7 @@ defmodule Cure.Core.BuiltinOpBoolCodomainTest do
     env = Builtins.seed(Env.empty(), MapSet.new([:Bool]))
 
     for op <- [:struct_eq, :struct_ne] do
-      assert %{type: {:pi, _, {:pi, _, {:pi, _, {:data, fam, [], []}}}}} = Env.get_def(env, op)
+      assert %{type: {:pi, _g1, _, {:pi, _g2, _, {:pi, _g3, _, {:data, fam, [], []}}}}} = Env.get_def(env, op)
       assert fam == :Bool
     end
   end

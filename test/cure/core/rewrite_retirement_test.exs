@@ -30,24 +30,24 @@ defmodule Cure.Core.RewriteRetirementTest do
       Eval.eval({:data, :Equivalent, [@nat], [z(), z()]}, Context.env(Context.empty(sig)))
 
     ctx = Context.extend(Context.empty(sig), eq_val)
-    node = {:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}
+    node = {:rewrite, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()}
 
     assert_raise FunctionClauseError, fn -> Kernel.infer(ctx, opaque(node)) end
   end
 
   test "Term.term?/1 rejects {:rewrite}" do
-    refute Term.term?({:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()})
+    refute Term.term?({:rewrite, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()})
   end
 
   test "Term.to_external/1 refuses {:rewrite}" do
     assert_raise FunctionClauseError, fn ->
-      Term.to_external(opaque({:rewrite, {:var, 0}, {:lam, @nat, @nat}, z()}))
+      Term.to_external(opaque({:rewrite, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()}))
     end
   end
 
   test "serializer neither encodes nor decodes {:rewrite}" do
     assert_raise FunctionClauseError, fn ->
-      Serialize.encode(opaque({:rewrite, {:var, 0}, {:lam, {:int_type}, {:int_type}}, {:int_lit, 1}}))
+      Serialize.encode(opaque({:rewrite, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}, {:int_lit, 1}}))
     end
 
     assert {:error, _} =

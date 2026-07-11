@@ -1,7 +1,7 @@
 defmodule Antigen.Generators.TypeFormer do
   @moduledoc """
   Structure-directed generator for **type-former** terms used in type position —
-  universes `{:type, N}`, dependent function/pair types `{:pi, A, B}` /
+  universes `{:type, N}`, dependent function/pair types `{:pi, Cure.Core.Grade.unrestricted(), A, B}` /
   `{:data, :Sigma, [A, λ.B], []}`, and indexed data types `Vec n`. The ordinary value-term
   generators build INHABITANTS, not the type-formers themselves, so these
   exercise `infer`'s and (measured) `Normalise`'s type-former paths (nf of Π/Σ/
@@ -58,10 +58,10 @@ defmodule Antigen.Generators.TypeFormer do
       # universe ceiling rejects Type 2's sort (Type 3).
       {2, Gen.bind(Gen.int(0, 1), fn n -> Gen.return({{:type, n}, {:type, n + 1}, :universe}) end)},
       # Π/Σ over base types → Type 0
-      {3, Gen.bind(small(), fn a -> Gen.bind(small(), fn b -> Gen.return({{:pi, a, b}, {:type, 0}, :pi_base}) end) end)},
-      {3, Gen.bind(small(), fn a -> Gen.bind(small(), fn b -> Gen.return({{:data, :Sigma, [a, {:lam, a, b}], []}, {:type, 0}, :sigma_base}) end) end)},
+      {3, Gen.bind(small(), fn a -> Gen.bind(small(), fn b -> Gen.return({{:pi, Cure.Core.Grade.unrestricted(), a, b}, {:type, 0}, :pi_base}) end) end)},
+      {3, Gen.bind(small(), fn a -> Gen.bind(small(), fn b -> Gen.return({{:data, :Sigma, [a, {:lam, Cure.Core.Grade.unrestricted(), a, b}], []}, {:type, 0}, :sigma_base}) end) end)},
       # dependent Π with a universe codomain → Type 1
-      {2, Gen.bind(small(), fn a -> Gen.return({{:pi, a, {:type, 0}}, {:type, 1}, :pi_universe}) end)},
+      {2, Gen.bind(small(), fn a -> Gen.return({{:pi, Cure.Core.Grade.unrestricted(), a, {:type, 0}}, {:type, 1}, :pi_universe}) end)},
       # indexed data type Vec n → Type 0
       {2, Gen.bind(nat_numeral(), fn n -> Gen.return({{:data, :Vec, [], [n]}, {:type, 0}, :vec_indexed}) end)},
       # a bare base type in type position (Int/Float/Nat/Bd) → Type 0

@@ -4,9 +4,9 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
   alias Antigen.Generators.ClosureEnv
   alias Cure.Core.Env
 
-  defp int_arrow, do: {:pi, {:int_type}, {:int_type}}
-  defp loop_def(env), do: Env.add_def(env, :loop, int_arrow(), {:lam, {:int_type}, {:app, {:global, :loop}, {:var, 0}}})
-  defp total_def(env), do: Env.add_def(env, :total_id, int_arrow(), {:lam, {:int_type}, {:var, 0}})
+  defp int_arrow, do: {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}
+  defp loop_def(env), do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :loop}, {:var, 0}}})
+  defp total_def(env), do: Env.add_def(env, :total_id, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
   defp with_family_index(env, fam, g),
     do: %{env | families: Map.put(env.families, fam, %{name: fam, params: [], indices: [{:i, {:app, {:global, g}, {:int_lit, 0}}}], level: 0})}
   defp with_ctor_index(env, ct, g),
@@ -58,9 +58,9 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
     end
 
     # direct: :loop in a family index. transitive: :loop's body calls :callee, both must be reached.
-    defp callee_def(env), do: Env.add_def(env, :callee, int_arrow(), {:lam, {:int_type}, {:var, 0}})
+    defp callee_def(env), do: Env.add_def(env, :callee, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
     defp loop_calls_callee(env),
-      do: Env.add_def(env, :loop, int_arrow(), {:lam, {:int_type}, {:app, {:global, :callee}, {:var, 0}}})
+      do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :callee}, {:var, 0}}})
 
     test "baseline: direct type-position global is in type_level_fns" do
       env = Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop)

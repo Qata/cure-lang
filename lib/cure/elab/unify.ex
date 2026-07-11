@@ -123,8 +123,8 @@ defmodule Cure.Elab.Unify do
   #     through unchanged; reducing there is a documented future extension.
   defp whnf_pre(t, _ctx, nil, _depth), do: t
   defp whnf_pre(t, _ctx, _sig, depth) when depth != 0, do: t
-  defp whnf_pre({:pi, _, _} = t, _ctx, _sig, _depth), do: t
-  defp whnf_pre({:lam, _, _} = t, _ctx, _sig, _depth), do: t
+  defp whnf_pre({:pi, _g, _, _} = t, _ctx, _sig, _depth), do: t
+  defp whnf_pre({:lam, _g, _, _} = t, _ctx, _sig, _depth), do: t
 
   defp whnf_pre(t, ctx, sig, depth) do
     r = whnf_meta_aware(t, ctx, sig, depth)
@@ -137,7 +137,7 @@ defmodule Cure.Elab.Unify do
     # on), so KEEP the original there. Every ι-reduction WIN this feature targets
     # (`plus(Z, ?m)` → `?m`, `plus(Z, S(Z))` → `S(Z)`) produces a ctor/meta/neutral,
     # never a lambda, so this guard preserves them all.
-    if match?({:lam, _, _}, r), do: t, else: r
+    if match?({:lam, _g, _, _}, r), do: t, else: r
   end
 
   # Resolve a metavariable's solution and lift it from the ambient frame into the
@@ -215,14 +215,14 @@ defmodule Cure.Elab.Unify do
 
   defp peel_pi_domains(_type, 0), do: {:ok, []}
 
-  defp peel_pi_domains({:pi, d, c}, n) when n > 0 do
+  defp peel_pi_domains({:pi, _g, d, c}, n) when n > 0 do
     with {:ok, rest} <- peel_pi_domains(c, n - 1), do: {:ok, [d | rest]}
   end
 
   defp peel_pi_domains(_type, _n), do: :error
 
   defp wrap_lams([], body), do: body
-  defp wrap_lams([d | ds], body), do: {:lam, d, wrap_lams(ds, body)}
+  defp wrap_lams([d | ds], body), do: {:lam, Cure.Core.Grade.unrestricted(), d, wrap_lams(ds, body)}
 
   # Abstract `rhs` (at binder `depth`) over the pattern vars: a pattern var `x_k`
   # becomes the k-th solution-lambda binder; an ambient var is shifted up by `n`
@@ -247,8 +247,8 @@ defmodule Cure.Elab.Unify do
     end
   end
 
-  defp mabs({:pi, d, c}, dep, vs, n, l), do: {:pi, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
-  defp mabs({:lam, d, b}, dep, vs, n, l), do: {:lam, mabs(d, dep, vs, n, l), mabs(b, dep, vs, n, l + 1)}
+  defp mabs({:pi, g, d, c}, dep, vs, n, l), do: {:pi, g, mabs(d, dep, vs, n, l), mabs(c, dep, vs, n, l + 1)}
+  defp mabs({:lam, g, d, b}, dep, vs, n, l), do: {:lam, g, mabs(d, dep, vs, n, l), mabs(b, dep, vs, n, l + 1)}
   defp mabs({:app, f, x}, dep, vs, n, l), do: {:app, mabs(f, dep, vs, n, l), mabs(x, dep, vs, n, l)}
 
   defp mabs({:data, nm, ps, is}, dep, vs, n, l),
@@ -282,12 +282,12 @@ defmodule Cure.Elab.Unify do
     with {:ok, ctx} <- unify_d(f1, f2, ctx, sig, depth), do: unify_d(x1, x2, ctx, sig, depth)
   end
 
-  defp do_unify_struct({:pi, d1, c1}, {:pi, d2, c2}, ctx, sig, depth) do
+  defp do_unify_struct({:pi, _g1, d1, c1}, {:pi, _g2, d2, c2}, ctx, sig, depth) do
     with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
          do: unify_d(c1, c2, ctx, sig, depth + 1)
   end
 
-  defp do_unify_struct({:lam, d1, b1}, {:lam, d2, b2}, ctx, sig, depth) do
+  defp do_unify_struct({:lam, _g1, d1, b1}, {:lam, _g2, d2, b2}, ctx, sig, depth) do
     with {:ok, ctx} <- unify_d(d1, d2, ctx, sig, depth),
          do: unify_d(b1, b2, ctx, sig, depth + 1)
   end
@@ -392,8 +392,8 @@ defmodule Cure.Elab.Unify do
 
   # Binders. `:case` binds `ar` fields in each branch body; the motive is already a
   # lambda, so it is walked at `local` (mirrors `Subst.shift`'s `:case` clause).
-  defp escapes?({:pi, d, c}, depth, local), do: escapes?(d, depth, local) or escapes?(c, depth, local + 1)
-  defp escapes?({:lam, d, b}, depth, local), do: escapes?(d, depth, local) or escapes?(b, depth, local + 1)
+  defp escapes?({:pi, _g, d, c}, depth, local), do: escapes?(d, depth, local) or escapes?(c, depth, local + 1)
+  defp escapes?({:lam, _g, d, b}, depth, local), do: escapes?(d, depth, local) or escapes?(b, depth, local + 1)
 
   defp escapes?({:case, s, m, brs}, depth, local) do
     escapes?(s, depth, local) or escapes?(m, depth, local) or

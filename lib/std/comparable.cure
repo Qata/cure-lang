@@ -1,0 +1,86 @@
+@group(:core)
+mod Std.Comparable
+  ## `Std.Char` supplies `code_point` (Char -> Int) for the `Char` instance's
+  ## code-point ordering; `Std.String` makes `String` the transparent
+  ## `List(Char)` synonym the lexicographic `String` comparison folds over.
+  use Std.Char
+  use Std.String
+  ## Total-ordering interface: three-way `compare`, returning an `Ordering`.
+  ##
+  ## `compare/2` is the single method; the comparison *operators* `<`, `>`,
+  ## `<=`, `>=` are the surface — on a non-primitive operand they route through
+  ## `compare` automatically (`a < b` desugars to `compare(a, b) == LessThan`),
+  ## so there are no `lt`/`le`/`gt`/`ge` named helpers to call.
+  ##
+  ## ## Examples
+  ##
+  ## ```cure
+  ## use Std.Comparable
+  ##
+  ## compare(1, 2)                           # => LessThan
+  ## 'a' < 'b'                               # => true
+  ## "ada" < "grace"                         # => true
+  ## ```
+
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
+  ## Three-way ordering result.
+  type Ordering = LessThan | EqualTo | GreaterThan
+
+  ## Total ordering over `T`.
+  interface Comparable(t)
+    ## `LessThan` when `a < b`, `GreaterThan` when `a > b`, `EqualTo` otherwise.
+    fn compare(a: t, b: t) -> Ordering
+
+  ## `Comparable` impl for `Int`.
+  implementation Comparable for Int
+    ## Integer three-way compare.
+    fn compare(a: Int, b: Int) -> Ordering =
+      pickup
+        a < b -> LessThan
+        a > b -> GreaterThan
+        else  -> EqualTo
+
+  ## `Comparable` impl for `Float`.
+  implementation Comparable for Float
+    ## Float three-way compare (NaNs follow BEAM's term-order).
+    fn compare(a: Float, b: Float) -> Ordering =
+      pickup
+        a < b -> LessThan
+        a > b -> GreaterThan
+        else  -> EqualTo
+
+  ## `Comparable` impl for `Char`: compare Unicode code points. `code_point` is
+  ## the `Char -> Int` coercion (Char erases to its code point), so this is an
+  ## `Int` comparison — no method dispatch, works on both pipelines.
+  implementation Comparable for Char
+    ## Character three-way compare on code points.
+    fn compare(a: Char, b: Char) -> Ordering =
+      pickup
+        code_point(a) < code_point(b) -> LessThan
+        code_point(a) > code_point(b) -> GreaterThan
+        else                          -> EqualTo
+
+  ## Lexicographic three-way compare over `String = List(Char)`: compare heads
+  ## by code point, and on a tie recurse into the tails. A prefix sorts before
+  ## its extension (`"ad" < "ada"`). Written as a plain top-level recursion (not
+  ## a self-recursive interface method) so the impl body carries no nested
+  ## method dispatch.
+  fn compare_string(a: String, b: String) -> Ordering =
+    match a
+      [] ->
+        match b
+          []      -> EqualTo
+          [_ | _] -> LessThan
+      [ha | ta] ->
+        match b
+          []        -> GreaterThan
+          [hb | tb] ->
+            pickup
+              code_point(ha) < code_point(hb) -> LessThan
+              code_point(ha) > code_point(hb) -> GreaterThan
+              else                            -> compare_string(ta, tb)
+
+  ## `Comparable` impl for `String`. Delegates to lexicographic `compare_string`.
+  implementation Comparable for String
+    ## String three-way compare, character by character.
+    fn compare(a: String, b: String) -> Ordering = compare_string(a, b)

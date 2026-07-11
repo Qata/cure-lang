@@ -7,7 +7,7 @@ defmodule Cure.Elab.BoolAlwaysResolvesTest do
     {:ok, env} = Cure.Elab.Program.elaborate(src)
     assert Inductive.builtin(env, :bool) == :Bool
 
-    assert %{type: {:pi, {:data, :Bool, [], []}, {:data, :Bool, [], []}}} =
+    assert %{type: {:pi, _g, {:data, :Bool, [], []}, {:data, :Bool, [], []}}} =
              Cure.Core.Env.get_def(env, :id)
   end
 

@@ -22,29 +22,29 @@ mod Std.Show
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   ## Convert a value of any `Show`-able type to its string representation.
-  proto Show(t)
+  interface Show(t)
     ## Canonical string form of `x`.
     fn show(x: t) -> String
 
   # -- Implementations for primitive types ---------------------------
 
   ## `Show` impl for `Int`: the canonical decimal string.
-  impl Show for Int
+  implementation Show for Int
     ## Render an integer as decimal digits.
     fn show(x: Int) -> String = int_to_string(x)
 
   ## `Show` impl for `Float`: the canonical decimal-with-point string.
-  impl Show for Float
+  implementation Show for Float
     ## Render a float as a decimal string.
     fn show(x: Float) -> String = float_to_string(x)
 
   ## `Show` impl for `String`: wraps the value in double quotes.
-  impl Show for String
+  implementation Show for String
     ## Render a string with surrounding quotes; does not escape.
     fn show(x: String) -> String = "\"" <> x <> "\""
 
   ## `Show` impl for `Bool`: "true" or "false".
-  impl Show for Bool
+  implementation Show for Bool
     ## Render a boolean as the literal words `true` or `false`.
     fn show(x: Bool) -> String =
       pickup
@@ -52,7 +52,7 @@ mod Std.Show
         else -> "false"
 
   ## `Show` impl for `Atom`: prefixed with `:` to match source syntax.
-  impl Show for Atom
+  implementation Show for Atom
     ## Render an atom as `":" <> name`.
     fn show(x: Atom) -> String = ":" <> atom_to_string(x)
 
@@ -73,4 +73,6 @@ mod Std.Show
   # -- Convenience functions -----------------------------------------
 
   ## Same as `show/1` but append a trailing newline. Useful for logging.
-  fn show_line(x: t) -> String = show(x) <> "\n"
+  ## The `where Show(t)` constraint threads the dictionary that
+  ## dispatches `show` at the caller's type.
+  fn show_line(x: t) -> String where Show(t) = show(x) <> "\n"

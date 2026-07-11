@@ -4,9 +4,9 @@ defmodule Cure.Core.ProgressTest do
 
   # Closed, well-typed, inferable terms; each normalizes to a canonical head.
   @corpus [
-    {:app, {:lam, {:type, 0}, {:var, 0}}, {:int_type}},    # -> {:int_type} (canonical)
-    {:app, {:lam, {:int_type}, {:var, 0}}, {:int_lit, 7}}, # -> {:int_lit, 7}
-    {:lam, {:type, 0}, {:var, 0}}                          # already canonical (lam head)
+    {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:int_type}},    # -> {:int_type} (canonical)
+    {:app, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}}, {:int_lit, 7}}, # -> {:int_lit, 7}
+    {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}                          # already canonical (lam head)
   ]
 
   test "the harness rejects an ill-typed term (detection works)" do
