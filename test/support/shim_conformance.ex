@@ -374,6 +374,10 @@ defmodule Cure.Audit.ShimConformance do
     Task.await(task, 5_000)
   end
 
+  # Blind spot, accepted: a call that creates AND deletes a table within itself
+  # leaves the before/after owned set identical. No shim touches ETS at all
+  # (grep `:ets` in lib/cure/stdlib/*.ex is empty), so this cannot mask a live
+  # finding today; a shim that used ETS transiently would need a heavier probe.
   defp owned_tables(pid) do
     :ets.all()
     |> Enum.filter(fn t ->

@@ -42,13 +42,13 @@ These were confirmed by running the real elaborator. Tasks depend on them.
 | Extern body sentinel | `{:extern, {m, f, a}}` — not a `Core.Term` |
 | Builtin-op body sentinel | Every `builtin_op`-tagged def has **`body: nil`** (confirmed: exactly the 31 `Builtins.seed_ops`-registered defs, e.g. `int_add`, `struct_eq`, in `Std.List`'s env — none untagged). `def.type` is always a real `Core.Term` for these; only `body` is `nil`. Reproduced by running the plan's own code: without a walker clause for `nil`, `Cure.Audit.Refs.walk/2` raises `unknown Core term in Audit.Refs: nil` — and it fires on **both** Task 3's `x + x` divergence test and the Task 7 `Std.List` golden test, because Ledger's reachability walk (unlike codegen's) does not skip `builtin_op` defs and calls `Refs.globals/scan` directly on every reachable def's `body`. Task 2 must add a `nil` clause to `Refs.walk/2` before Task 3 can pass. |
 
-**Roots strategy (resolves a gap in the spec).** The spec says the ledger reports axioms "reachable from a module" but never defines the roots. `env.defs` for a single module also contains the 42 prelude defs, including two externs (`unicode:characters_to_list/1`, `unicode:characters_to_binary/1`) that `Std.List` does not declare. Roots are therefore:
+**Roots strategy (resolves a gap in the spec).** The spec says the ledger reports axioms "reachable from a module" but never defines the roots. `env.defs` for a single module also contains the 42 prelude defs, including two externs (`unicode:characters_to_list/1`, `unicode:characters_to_binary/1`) that `Std.List` does not declare. Roots diff the module env against a prelude-only env:
 
 ```
-roots(module_env) = Map.keys(module_env.defs) -- Map.keys(prelude_env.defs)
+roots(module_env) = { name | (name, body) in module_env.defs, (name, body) not in prelude_env.defs }
 ```
 
-This keeps the collector reading `Core.Env` (a macro-emitted def appears in the diff, exactly as intended) and reproduces both spec-mandated outputs for `Std.List`.
+**As-built correction (`ad6f5fb`):** the original plan diffed on NAME alone (`Map.keys(module_env.defs) -- Map.keys(prelude_env.defs)`). That is fail-open — a module redefining a prelude name (e.g. `fn eq(...) = @extern(...)`), if unreferenced elsewhere, vanished from the report. The diff keys on `(name, body)`; a shadowing redefinition has a different body while a genuine prelude def is byte-identical across the two (deterministic) elaborations. Keeps the collector reading `Core.Env` and reproduces both spec-mandated outputs for `Std.List`.
 
 ## File Structure
 
@@ -752,14 +752,18 @@ defmodule Cure.Audit.Ledger do
   The defs the audited module owns: everything in its env that the prelude env
   does not already have. A macro-emitted def appears here, which is the point.
   """
+  # As-built (ad6f5fb): diff on (name, body), NOT name alone — a module
+  # redefining a prelude name with an @extern body would otherwise vanish.
   @spec roots(Env.t()) :: [atom()]
   def roots(%Env{defs: defs}) do
-    prelude = MapSet.new(Map.keys(prelude_env().defs))
+    prelude = prelude_env().defs
 
-    defs
-    |> Map.keys()
-    |> Enum.reject(&MapSet.member?(prelude, &1))
-    |> Enum.sort()
+    names =
+      for {name, d} <- defs,
+          Map.get(prelude, name) == nil or Map.get(prelude, name).body != d.body,
+          do: name
+
+    Enum.sort(names)
   end
 
   @spec bucket({atom(), atom(), non_neg_integer()}) :: :otp | :cure_runtime | :cure_bridge

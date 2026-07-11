@@ -43,11 +43,31 @@ defmodule Cure.Audit.Format do
   end
 
   @spec to_json(Ledger.Report.t(), keyword()) :: String.t()
-  def to_json(report, _opts) do
+  def to_json(report, opts) do
+    target = Keyword.get(opts, :target)
+
     axioms =
       Enum.map(report.axioms, fn a ->
         ~s({"mfa":#{jstr(mfa(a))},"type":#{jstr(a.type)},"via":#{jstr(a.via)},"bucket":#{jstr(a.bucket)}})
       end)
+
+    # `--target` must reach the JSON payload too, not just the text report; a
+    # consumer that only reads JSON otherwise can't see target filtering ran.
+    # The key is present (as `null`) when no target was given, so its absence
+    # never has to be guessed.
+    unavailable =
+      case target do
+        nil ->
+          ~s("unavailable_on_target":null)
+
+        t ->
+          rows =
+            report.axioms
+            |> Enum.filter(&Targets.unavailable?(t, &1.mfa))
+            |> Enum.map_join(",", &jstr(mfa(&1)))
+
+          ~s("unavailable_on_target":{"target":#{jstr(t)},"mfas":[#{rows}]})
+      end
 
     ~s({"schema":1,"axioms":[#{Enum.join(axioms, ",")}],) <>
       ~s("opaque":[#{Enum.map_join(report.opaque, ",", &jstr/1)}],) <>
@@ -56,8 +76,9 @@ defmodule Cure.Audit.Format do
       ~s("absurd":#{report.absurd},) <>
       ~s("not_proven_total":[#{Enum.map_join(report.not_proven_total, ",", &jstr/1)}],) <>
       ~s("unresolved":[#{Enum.map_join(report.unresolved, ",", &jstr/1)}],) <>
-      ~s("unaudited":[#{Enum.map_join(report.unaudited, ",", fn {l, _} -> jstr(l) end)}]}) <>
-      "\n"
+      ~s("unaudited":[#{Enum.map_join(report.unaudited, ",", fn {l, _} -> jstr(l) end)}],) <>
+      unavailable <>
+      "}\n"
   end
 
   # -- sections --------------------------------------------------------------

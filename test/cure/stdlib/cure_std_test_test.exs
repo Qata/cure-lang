@@ -57,6 +57,18 @@ defmodule :cure_std_test_test do
     assert {:Ok, :ok} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, 0)
   end
 
+  test "shrinking agrees with detection: a non-true property still minimises" do
+    # `find_counterexample` treats any non-`true` result as a failure, but
+    # `shrink_loop` used to treat only literal `false` as still-failing — so a
+    # property returning a non-boolean reported the raw first draw unshrunk. The
+    # two must agree. Here the property is never `true`, so the counterexample
+    # must shrink toward the minimum, not stay at the initial 100.
+    assert {:Error, value} =
+             :cure_std_test.forall_shrunk(fn _ -> 100 end, fn _ -> :not_a_bool end, 5)
+
+    assert value < 100, "expected a shrunk value, got the raw first draw #{value}"
+  end
+
   test "a negative run count is vacuously Ok, not a FunctionClauseError" do
     # `runs: Int` admits negatives; `find_counterexample` only claused 0 and n>0.
     assert {:Ok, :ok} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, -1)

@@ -10,6 +10,24 @@ defmodule Cure.Audit.TrustCLITest do
     assert Path.basename(path) == "crdt.cure"
   end
 
+  test "std_dir is an absolute compile-time path to the real lib/std" do
+    # The CLI seeds this into the import resolver so `use Std.X` imports resolve
+    # from any CWD; if it were relative, auditing from outside the repo would
+    # silently drop a module into UNAUDITED and look like a clean zero-axiom
+    # report.
+    dir = Source.std_dir()
+    assert Path.type(dir) == :absolute
+    assert File.exists?(Path.join(dir, "list.cure"))
+  end
+
+  test "--target reaches the JSON payload, not only the text report" do
+    {:ok, json} = CLI.run("Std.List", format: "json", target: :atomvm)
+    assert json =~ ~s("unavailable_on_target":{"target":"atomvm")
+
+    {:ok, plain} = CLI.run("Std.List", format: "json")
+    assert plain =~ ~s("unavailable_on_target":null)
+  end
+
   test "an unknown module is not found" do
     assert Source.locate("Std.NoSuchModule") == {:error, :not_found}
   end

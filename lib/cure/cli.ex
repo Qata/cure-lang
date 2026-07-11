@@ -141,6 +141,10 @@ defmodule Cure.CLI do
         ["audit", "trust", module] ->
           cmd_audit_trust(module, opts)
 
+        ["audit" | _] ->
+          IO.puts(:stderr, "Usage: cure audit trust <Module> [--format text|json] [--strict] [--target <t>]")
+          System.halt(1)
+
         ["migrate" | paths] ->
           case cmd_migrate(paths, opts) do
             :ok -> :ok
@@ -1210,6 +1214,17 @@ defmodule Cure.CLI do
   # `cure audit trust <Module>` — print the unproved assumptions reachable from a
   # module. `Cure.Audit.CLI.run/2` is pure; the `System.halt/1` lives here.
   defp cmd_audit_trust(module, opts) do
+    # `Source.locate/1` finds the module via a compile-time-baked absolute path,
+    # but the elaborator resolves a module's `use Std.X` imports through
+    # `Cure.Stdlib.Paths`, whose search chain is empty for a plain dev checkout
+    # invoked from outside the repo — so the module would locate but silently
+    # fail to elaborate and land in UNAUDITED, looking like a clean zero-axiom
+    # report. Seed the resolver with the known stdlib dir when nothing else is
+    # configured, so `cure audit trust` is CWD-independent.
+    if is_nil(Cure.Stdlib.Paths.configured_source_dir()) do
+      Application.put_env(:cure, :stdlib_source_dir, Cure.Audit.Source.std_dir())
+    end
+
     audit_opts = [
       strict: Keyword.get(opts, :strict, false),
       format: Keyword.get(opts, :format, "text")

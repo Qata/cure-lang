@@ -55,10 +55,11 @@ defmodule :cure_std_test do
 
     failing =
       Enum.find(candidates, fn cand ->
-        case safe_invoke(property, cand) do
-          false -> true
-          _ -> false
-        end
+        # A candidate still fails unless the property holds (`true`). This must
+        # agree with `find_counterexample`, which treats any non-`true` return as
+        # a failure — otherwise a property that returns a non-boolean would
+        # shrink to nothing and report the raw first draw as the counterexample.
+        safe_invoke(property, cand) != true
       end)
 
     case failing do
