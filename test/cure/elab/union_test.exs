@@ -151,4 +151,36 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, _} = Program.elaborate(src)
     end
   end
+
+  describe "widening" do
+    test "a narrower union is widened into a wider one" do
+      src = """
+      mod M
+        fn narrow(n: Int) -> Int | Bool = n
+        fn wide(n: Int) -> Int | Bool | Atom = narrow(n)
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      body = Env.get_def(env, :wide).body |> unwrap_lams()
+
+      assert {:case, _scrut, _motive, branches} = body
+
+      # One branch per ctor of the NARROW family, each remapped to its counterpart
+      # in the wide one. This is a real function, not a cast.
+      assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
+               [{:"Union<Bool|Int>$Bool", 1}, {:"Union<Bool|Int>$Int", 1}]
+    end
+
+    test "widening to a union that lacks a source member is rejected" do
+      src = """
+      mod M
+        fn narrow(n: Int) -> Int | Atom = n
+        fn wide(n: Int) -> Int | Bool = narrow(n)
+      end
+      """
+
+      assert {:error, _} = Program.elaborate(src)
+    end
+  end
 end

@@ -668,8 +668,12 @@ defmodule Cure.Elab.Declarations do
         # `:unsolved_metavariables`, and the original error is surfaced if it too
         # fails, so every currently-accepted or -rejected body is unchanged.
         case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-          {:ok, term, _type} ->
-            {:ok, term}
+          {:ok, term, type} ->
+            # `coerce_union/5` is a strict no-op unless the declared return type is a
+            # generated anonymous-union family. This branch discards `return_core`, so
+            # without it a call body like `fn wide(n: Int) -> Int | Bool | Atom =
+            # narrow(n)` would never be injected or widened.
+            {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
 
           {:error, {:unsolved_metavariables, _}} = orig ->
             case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do

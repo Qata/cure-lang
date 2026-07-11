@@ -1726,14 +1726,61 @@ defmodule Cure.Elab.Elaborator do
   # injection is caught, not silently accepted.
   defp maybe_inject_union(term, type, expected_core, ctx, env) do
     with {:data, ukey, [], []} <- Kernel.normalize(ctx, expected_core),
-         true <- Cure.Elab.Union.union_family?(ukey),
-         member_term <- Quote.reify(type, Context.length(ctx), Context.signature(ctx)),
-         cname <-
-           Cure.Elab.Union.ctor_key(ukey, %{key: Cure.Elab.Union.member_key(member_term)}),
-         true <- Inductive.get_ctor(env, cname) != nil do
-      {:ctor, cname, [term]}
+         true <- Cure.Elab.Union.union_family?(ukey) do
+      member_term = Quote.reify(type, Context.length(ctx), Context.signature(ctx))
+
+      cond do
+        # (a) The term's type is ITSELF a narrower union — widen it.
+        match?({:data, _, [], []}, member_term) and
+            Cure.Elab.Union.union_family?(elem(member_term, 1)) ->
+          widen_union(term, elem(member_term, 1), ukey, expected_core, ctx, env)
+
+        # (b) The term's type is a plain member — inject it.
+        true ->
+          cname =
+            Cure.Elab.Union.ctor_key(ukey, %{key: Cure.Elab.Union.member_key(member_term)})
+
+          if Inductive.get_ctor(env, cname), do: {:ctor, cname, [term]}, else: term
+      end
     else
       _ -> term
+    end
+  end
+
+  # Widen a narrower union into a wider one by remapping each of its constructors to
+  # the counterpart with the same member key in the target family. This is a REAL
+  # function — a Core `:case` — not a cast: the two families are genuinely distinct
+  # types, so there is nothing to reinterpret.
+  #
+  # If any source member is absent from the target, the term is returned untouched
+  # and the kernel rejects it with an ordinary conversion failure.
+  defp widen_union(term, from_key, to_key, to_core, _ctx, env) do
+    from_prefix = Atom.to_string(from_key) <> "$"
+
+    branches =
+      env
+      |> Inductive.ctors_of(from_key)
+      |> Enum.map(fn ctor ->
+        suffix = ctor.name |> Atom.to_string() |> String.replace_prefix(from_prefix, "")
+        target = String.to_atom(Atom.to_string(to_key) <> "$" <> suffix)
+
+        cond do
+          Inductive.get_ctor(env, target) == nil -> :missing
+          ctor.args == [] -> {ctor.name, 0, {:ctor, target, []}}
+          true -> {ctor.name, 1, {:ctor, target, [{:var, 0}]}}
+        end
+      end)
+
+    if Enum.any?(branches, &(&1 == :missing)) do
+      term
+    else
+      # The source family is parameterless and index-free, so its motive is a single
+      # lambda over the scrutinee. `to_core` is a closed `{:data, key, [], []}`, so it
+      # needs no weakening under that binder.
+      motive =
+        {:lam, Cure.Core.Grade.unrestricted(), {:data, from_key, [], []}, to_core}
+
+      {:case, term, motive, branches}
     end
   end
 
