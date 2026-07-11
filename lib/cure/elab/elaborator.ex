@@ -740,6 +740,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # String interpolation `"a#{e}b"` desugars to a right fold of `str_concat` over
+  # the segments (see `desugar_interpolation`). String-valued holes only; a
+  # non-string hole fails as an ordinary type error against `str_concat`'s
+  # `List(Char)` parameter.
+  def elaborate_expr_typed({:string_interpolation, meta, segments}, names, ctx, env) do
+    elaborate_expr_typed(
+      desugar_interpolation(segments, Keyword.get(meta, :line, 0)),
+      names,
+      ctx,
+      env
+    )
+  end
+
   # Map literal `%{k: v, …}`. Desugars (before Core) to nested `Std.Map.put`
   # calls over `Std.Map.new()` — the same shape a hand-written builder has, so
   # nothing new reaches the kernel. `Std.Map` is a thin `@extern` wrapper over
@@ -1539,6 +1552,16 @@ defmodule Cure.Elab.Elaborator do
     do:
       elaborate_expr_checked(
         desugar_map(pairs, Keyword.get(meta, :line, 0)),
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+
+  def elaborate_expr_checked({:string_interpolation, meta, segments}, expected_core, names, ctx, env),
+    do:
+      elaborate_expr_checked(
+        desugar_interpolation(segments, Keyword.get(meta, :line, 0)),
         expected_core,
         names,
         ctx,
@@ -5141,6 +5164,22 @@ defmodule Cure.Elab.Elaborator do
   # segments are supported here; a `/type` segment (`x/float`, `x/binary`) is a
   # deferred rich-bit-syntax case and is rejected rather than mislowered. The
   # module must `use Std.Binary`.
+  # `"a#{e}b"` → `str_concat("a", str_concat(e, "b"))`: a right fold over the
+  # segments. Literal chunks stay `:string` literals (each desugars to its
+  # `List(Char)`); holes are the segment expressions unchanged, so a hole is
+  # elaborated against `str_concat`'s `List(Char)` parameter — a String hole
+  # checks, a non-String hole is a type error (Show-based conversion is #21).
+  # `str_concat` is auto-preluded (`Std.Binary`), so no import is required.
+  defp desugar_interpolation(segments, line) do
+    case Enum.reverse(segments) do
+      [] ->
+        {:literal, [subtype: :string, line: line], ""}
+
+      [last | rest] ->
+        Enum.reduce(rest, last, fn seg, acc -> mk_call("str_concat", [seg, acc], line) end)
+    end
+  end
+
   def desugar_bytes(segments, line) do
     Enum.reduce_while(segments, {:ok, []}, fn
       {:bin_segment, _sm, [expr]}, {:ok, acc} ->
