@@ -35,8 +35,9 @@ only where leaf types line up. The primary targets become:
 - **Records** (`rec`) — known fields → *total* lenses.
 - **Homogeneous collections** — `List` / `Vector` / `Map(K,V)` → traversals and
   (fallible) affines.
-- A **`Json`-style sum** as the deliberate, typed escape hatch for genuinely
-  mixed/dynamic data — matched, not `believe_me`d.
+- A standalone **`Std.Dynamic`** sum (`Dyn`, over BEAM value shapes) as the
+  deliberate, typed escape hatch for genuinely mixed/dynamic data — matched, not
+  `believe_me`d. Optic-agnostic; `Std.Optic` imports it (§5a).
 
 The runtime-crashing accessors (`fetch_bang`, raise-on-miss) and the
 domain-changing ones (`pop`) leave the optics surface; see §6.
@@ -193,6 +194,45 @@ producing the same `{:dot, …}` node the elaborator then resolves by type.
 Note the tuple lenses are named `_1`, `_2`, … (underscore), never `.1`, so they
 never collide with numeric projection: `t.1` projects, `_1` is the lens value.
 
+### 5a. The escape hatch: `Std.Dynamic` (v1)
+
+Optics compose only where leaf types line up, so genuinely heterogeneous data
+(`%{langs: [...], count: 5, active: true}` — the old dynamic-map case) needs a
+representation. The honest, well-typed stand-in for `Any` is a **standalone,
+optic-agnostic** module — a single homogeneous tagged sum over Cure's real BEAM
+value shapes:
+
+```
+# module Std.Dynamic — knows nothing about optics
+type Dyn =
+    DAtom(Atom)  | DInt(Int)   | DFloat(Float)
+  | DStr(String) | DList(List(Dyn))
+  | DTuple(List(Dyn)) | DMap(Map(Dyn, Dyn))
+```
+
+This is a **general stdlib citizen**, usable on its own by anyone who wants a
+typed `Any` (pattern-match it directly); optics is only one consumer. The
+dependency is strictly one-way: `Std.Optic` **imports** `Std.Dynamic`, never the
+reverse.
+
+Everything is a `Dyn`, so `Map(Dyn, Dyn)` typechecks and optics traverse it.
+Narrowing to a concrete leaf is an **affine** (case optic) provided *by
+`Std.Optic`*, never a cast — one per constructor:
+
+```
+dyn_atom  : Affine(Dyn, Atom)    dyn_int   : Affine(Dyn, Int)
+dyn_float : Affine(Dyn, Float)   dyn_str   : Affine(Dyn, String)
+dyn_list  : Affine(Dyn, List(Dyn))  dyn_tuple : Affine(Dyn, List(Dyn))
+dyn_map   : Affine(Dyn, Map(Dyn, Dyn))
+```
+
+`preview(key(k).dyn_str, doc) : Option(String)` answers "is this a string?" with
+an honest runtime tag match; the affine's `set` rebuilds via the ordinary
+`DStr(_)` constructor (no Prism-*review* needed). These are ordinary Affines, so
+they fit the existing `Lens < Affine < Traversal` lattice with no new kind.
+`DMap`'s map is homogeneous (`Dyn` values), so `key`/`each` compose straight
+through.
+
 ## 6. Migration from `Std.Access`
 
 | Old | New |
@@ -244,16 +284,22 @@ explicit-pathspec staging, one build at a time.
    left-associates into nested `compose`; an unresolved-left metavariable errors
    as today.
 9. Field-lens deriving for `rec`.
-10. Migration-parity tests + an oracle cluster mirroring `idris2-lens`
+10. **`Std.Dynamic` (`Dyn` sum) + its case affines** (`dyn_str`/`dyn_int`/… in
+    `Std.Optic`, importing `Std.Dynamic`) + a heterogeneous-document parity test
+    (`preview`/`set`/`over` through a mixed `DMap`, replacing an old `Any`-map
+    access). `Std.Dynamic` lands as its own module with direct pattern-match
+    tests independent of optics.
+11. Migration-parity tests + an oracle cluster mirroring `idris2-lens`
     view/set/over/compose behavior.
-11. **Optic laws** as properties: lens get-put / put-get / put-put; traversal
+12. **Optic laws** as properties: lens get-put / put-get / put-put; traversal
     identity / composition. Antigen antibody **only** if the kernel is touched in
     task 1 (then: termination + no-distinct-NF-equated + full Antigen suite).
 
 ## 8. Scope boundaries (YAGNI)
 
-- **In:** monomorphic Lens/Affine/Traversal, the primitives in §5, composition,
-  the five eliminators, record field-lens deriving, `Json`-sum escape hatch.
+- **In:** monomorphic Lens/Affine/Traversal, the primitives in §5, the dot-path
+  `.` composition surface, the five eliminators, record field-lens deriving, and
+  the standalone `Std.Dynamic` escape-hatch sum with its case affines (§5a).
 - **Out (v1):** type-changing optics (`s t a b`); Prism-*review* (building a sum
   from a branch — the old module never did it); the pure `Σ(M:Type)` coend and
   universe polymorphism (own initiative); `pop`/domain-changing operations.
@@ -264,8 +310,10 @@ explicit-pathspec staging, one build at a time.
    layer: elaborator-only, or kernel)? Task 1 answers this and sets the risk.
 2. **Deriving mechanism** for record field lenses: `@derive(:optics)` decorator
    vs macro vs manual-only for v1.
-3. **`Json` escape-hatch type**: ship it in v1, or defer and land only the
-   record/collection optics first.
 
-**Decided during brainstorming:** composition surface is the dot-path operator
-`.` (type-directed, §5) — not a new glyph or `pathN` helper.
+**Decided during brainstorming:**
+- Composition surface is the dot-path operator `.` (type-directed, §5) — not a
+  new glyph or `pathN` helper.
+- The escape hatch ships in v1 as a standalone `Std.Dynamic` module (`Dyn` over
+  BEAM value shapes), optic-agnostic, with case affines living in `Std.Optic`
+  (§5a).
