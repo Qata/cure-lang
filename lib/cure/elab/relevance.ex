@@ -247,13 +247,41 @@ defmodule Cure.Elab.Relevance do
   # position regardless of whether the body uses the binder; that is the honest
   # dual of `Emit`'s unconditional bind. The body inherits the let's own site and
   # binds one more variable. Value and body both run, so their usages sum.
+  #
+  # JOIN POINT (slice 4c). When the value is a λ and the body is a `case` that
+  # applies the binder AT MOST ONCE PER BRANCH and nowhere else — the shape
+  # `wrap_join/2` produces — this `:let` is a shared branch continuation, not an
+  # escaping closure. Idris never materialises such a shape: it usage-checks each
+  # case alternative INDEPENDENTLY and combines by agreement (`LinearCheck.idr`
+  # `getArgUsage`, `traverse getPUsage pats; combine us`). So the generic ω-scale of
+  # a λ body (which assumes the closure may be entered any number of times) is wrong
+  # here: the continuation runs at most once on any path, so its captured variables
+  # are used at most once — the same count the un-joined per-branch form gives via
+  # `alt`. `walk_joined_case/7` reproduces that: it walks the shared body's captures
+  # ONCE, unscaled, and injects them as one more alternative into the branch `alt`.
   defp walk({:let, g, _ty, val, body}, depth, site, st) do
-    with {:ok, uv} <- walk(val, depth, :present_arg, st),
-         {:ok, ub} <- walk(body, depth + 1, site, track_erased(st, g, depth)),
-         :ok <- check_binder(st, depth, g, ub, :let) do
-      {:ok, seq(uv, Map.delete(ub, depth))}
+    # The un-join inlines the let binder, so it never records the binder's OWN usage
+    # — it must therefore only fire when the binder carries NO obligation, i.e. an
+    # unrestricted grade. `wrap_join/2` always emits `ω`, so every compiler join
+    # qualifies. A user-written `let g :linear = λ …` that happens to match the join
+    # shape has a restricted grade `g`, so it takes the generic path below, where
+    # `check_binder(st, depth, g, …)` enforces g's own obligation (found by the
+    # un-join red-team: skipping it accepted a linear closure dropped in some branch).
+    join = if Grade.restricted?(g), do: :not_join, else: join_view(val, body, depth)
+
+    case join do
+      {:join, lg, jbody, scrut, branches} ->
+        walk_joined_case(lg, jbody, scrut, branches, depth, site, st)
+
+      :not_join ->
+        with {:ok, uv} <- walk(val, depth, :present_arg, st),
+             {:ok, ub} <- walk(body, depth + 1, site, track_erased(st, g, depth)),
+             :ok <- check_binder(st, depth, g, ub, :let) do
+          {:ok, seq(uv, Map.delete(ub, depth))}
+        end
     end
   end
+
 
   # Application spine: the head is `:applied`; an argument is walked iff a runtime
   # value exists for it (`Grade.present?/1` — the dual of `Erase.erase`'s
@@ -318,6 +346,166 @@ defmodule Cure.Elab.Relevance do
   # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no
   # occurrence to account for. Mirrors `Erase`'s leaf clause.
   defp walk(_leaf, _depth, _site, _st), do: {:ok, %{}}
+
+  # Recognise the join idiom AND prove it is sound to un-join: the `:let` value is a
+  # λ, the body is a `case`, and the let binder (de Bruijn level `depth`) occurs in
+  # that case ONLY as an application head `{:app, {:var, →depth}, _}`, AT MOST ONCE in
+  # any single branch, and NOWHERE in the scrutinee or motive. Under those conditions
+  # the continuation is one-shot per execution path, so counting its captures once
+  # (not ω) never under-counts. Any other shape → `:not_join`, keeping the sound,
+  # conservative ω-scale of the generic `:let`/`:lam` path.
+  defp join_view({:lam, lg, _dom, jbody}, {:case, scrut, motive, branches}, depth) do
+    # The continuation's parameter grade `lg` must be unrestricted. The un-join scales
+    # a branch argument by `lg` (`scale(us0, lg)`); a RESTRICTED `lg` — in particular
+    # `:erased` — would annihilate that argument's usage (`mul(:erased, _) = :erased`)
+    # while `Erase` still keeps the call argument (`{:var}`-headed apps are never
+    # dropped), an under-rejection. Today every `:lam` is `ω` (no surface syntax grades
+    # a lambda parameter), so this is belt-and-suspenders — but making it STRUCTURAL
+    # keeps a future lambda-grade slice from silently re-opening the hole (both round-3
+    # red-team agents flagged this exact landmine). A restricted `lg` → the sound
+    # generic `:let` path (which ω-scales the whole lambda value).
+    if not Grade.restricted?(lg) and join_binder_safe?(scrut, motive, branches, depth) do
+      {:join, lg, jbody, scrut, branches}
+    else
+      :not_join
+    end
+  end
+
+  defp join_view(_val, _body, _depth), do: :not_join
+
+  # The join binder is at level `depth`. The `case` sits one binder deeper
+  # (`case_depth`); inside a branch it is under `arity` more pattern binders. Safe to
+  # un-join iff it does not occur in the scrutinee or motive, and EVERY branch is
+  # either free of it entirely (a matched arm) OR is EXACTLY a bare tail application
+  # `{:app, {:var, →depth}, s}` with the binder absent from `s` (a defaulted branch
+  # that runs the shared continuation exactly once). This is precisely the shape
+  # `wrap_join/2` emits, and precisely the shape `walk_join_branches/5` inlines — a
+  # branch that applied the binder in ANY other position (`sink(j(x))`, `j(a)+j(b)`)
+  # would be walked as a matched arm, dropping the binder and LOSING the shared
+  # continuation's captures (an under-count). Anything else → `:not_join` → the sound
+  # ω-scale of the generic `:lam`/`:let` path.
+  defp join_binder_safe?(scrut, motive, branches, depth) do
+    case_depth = depth + 1
+
+    count_level(scrut, case_depth, depth) == 0 and
+      count_level(motive, case_depth, depth) == 0 and
+      Enum.all?(branches, fn {_c, arity, body} ->
+        bd = case_depth + arity
+
+        case body do
+          {:app, {:var, idx}, s} when bd - 1 - idx == depth ->
+            count_level(s, bd, depth) == 0
+
+          _ ->
+            count_level(body, bd, depth) == 0
+        end
+      end)
+  end
+
+  # Count free occurrences of de Bruijn LEVEL `target` in `term` (walked at `depth`).
+  defp count_level({:var, i}, depth, target), do: if(depth - 1 - i == target, do: 1, else: 0)
+  defp count_level({:lam, _g, d, b}, depth, t), do: count_level(d, depth, t) + count_level(b, depth + 1, t)
+  defp count_level({:pi, _g, d, c}, depth, t), do: count_level(d, depth, t) + count_level(c, depth + 1, t)
+
+  defp count_level({:let, _g, ty, v, b}, depth, t),
+    do: count_level(ty, depth, t) + count_level(v, depth, t) + count_level(b, depth + 1, t)
+
+  defp count_level({:app, f, x}, depth, t), do: count_level(f, depth, t) + count_level(x, depth, t)
+  defp count_level({:ctor, _n, args}, depth, t), do: Enum.sum(Enum.map(args, &count_level(&1, depth, t)))
+
+  defp count_level({:data, _n, ps, is}, depth, t),
+    do: Enum.sum(Enum.map(ps ++ is, &count_level(&1, depth, t)))
+
+  defp count_level({:case, s, m, brs}, depth, t) do
+    count_level(s, depth, t) + count_level(m, depth, t) +
+      Enum.sum(Enum.map(brs, fn {_c, ar, b} -> count_level(b, depth + ar, t) end))
+  end
+
+  defp count_level(_leaf, _depth, _t), do: 0
+
+
+  # Un-join: check the shared continuation ONCE (unscaled), then combine it as one
+  # alternative with the matched-arm usages. `alt` (agreement) then counts a captured
+  # variable at most once across all branches — the Idris per-alternative result.
+  defp walk_joined_case(lg, jbody, scrut, branches, depth, _site, st) do
+    with {:ok, uj} <- walk(jbody, depth + 1, :returned, track_erased(st, lg, depth)),
+         :ok <- check_binder(st, depth, lg, uj, :lambda) do
+      jbody_captures = Map.delete(uj, depth)
+      case_depth = depth + 1
+
+      scrut_usage =
+        if collapsible_case?(st.env, branches),
+          do: {:ok, %{}},
+          else: walk(scrut, case_depth, :scrutinee, st)
+
+      with {:ok, us} <- scrut_usage,
+           {:ok, ubs} <-
+             walk_join_branches(branches, case_depth, depth, jbody_captures, lg, st) do
+        {:ok, seq(us, alt(ubs)) |> Map.delete(depth)}
+      end
+    end
+  end
+
+
+  # Like `walk_branches/3`, but a branch that IS a join application `{:app, {:var,
+  # arity}, s}` contributes the shared continuation's captures (already computed,
+  # unscaled) seq'd with the usage of its scrutinee argument — never counting the
+  # join binder itself (it is inlined). Matched arms walk normally.
+  defp walk_join_branches(branches, depth, join_level, jbody_captures, lg, st) do
+    branches
+    |> Enum.reduce_while({:ok, []}, fn {cname, arity, body}, {:ok, acc} ->
+      ctor_qs =
+        Inductive.ctor_quantities(st.env, cname) || List.duplicate(Grade.unrestricted(), arity)
+
+      branch_erased =
+        ctor_qs
+        |> Enum.with_index()
+        |> Enum.filter(fn {q, _p} -> Grade.erased?(q) end)
+        |> Enum.map(fn {_q, p} -> depth + p end)
+
+      st2 = %{st | erased: Enum.into(branch_erased, st.erased)}
+      drop_levels = for(p <- 0..(arity - 1)//1, do: depth + p)
+
+      result =
+        case body do
+          {:app, {:var, idx}, s} when depth + arity - 1 - idx == join_level ->
+            # Defaulted branch: it runs the shared continuation. Its usage is that
+            # continuation's captures plus the usage of the scrutinee it is applied
+            # to; the join binder is inlined, never counted. `check_fields` still
+            # polices this branch's OWN pattern-bound constructor fields, uniformly
+            # with the matched-arm clause below — currently a no-op (ctor fields are
+            # only `:erased`/`:unrestricted`), but the invariant must not depend on
+            # that (red-team Finding 3).
+            with {:ok, us0} <- walk(s, depth + arity, :present_arg, st2) do
+              # `s` is an ARGUMENT to the continuation, so it is scaled by the
+              # continuation's DECLARED parameter grade `lg` — exactly as a normal
+              # application scales an argument by the callee's grade (Idris `checkRig =
+              # rigf |*| rig`). Today every lambda is `ω`, so `s` is ω-scaled. It must
+              # NOT be scaled by how many times the parameter is USED: that models
+              # call-by-NAME (an unused parameter skips evaluating the argument), but
+              # the BEAM is call-by-VALUE — `s` is always evaluated, so a resource it
+              # consumes can never be annihilated by the continuation ignoring its
+              # parameter (three round-2 red-team agents all found that hole).
+              bu = seq(scale(us0, lg), jbody_captures)
+
+              with :ok <- check_fields(st2, ctor_qs, depth, bu) do
+                {:ok, Map.drop(bu, drop_levels)}
+              end
+            end
+
+          _ ->
+            with {:ok, u} <- walk(body, depth + arity, :returned, st2),
+                 :ok <- check_fields(st2, ctor_qs, depth, u) do
+              {:ok, Map.drop(u, drop_levels)}
+            end
+        end
+
+      case result do
+        {:ok, bu} -> {:cont, {:ok, acc ++ [bu]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
 
   # Each branch binds its constructor's fields at levels `depth + p`. An erased
   # field joins the position check's tracked set (spec 2026-07-08 §2.3, a named

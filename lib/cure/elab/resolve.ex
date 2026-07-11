@@ -125,7 +125,11 @@ defmodule Cure.Elab.Resolve do
 
   defp classify(_env, {:vint_type}, _seen), do: {:concrete, :Int}
   defp classify(_env, {:vfloat_type}, _seen), do: {:concrete, :Float}
-  defp classify(_env, {:vstring_type}, _seen), do: {:concrete, :String}
+  # String has no primitive value former: `String = List(Char)` (the landed
+  # value-surface design), so it reaches dispatch as the `nglobal` alias `String`
+  # and is unfolded to `List(Char)` by the neutral-global clause below — it never
+  # arrives as a `{:vstring_type}`. (`{:string_type}` is only an E-layer head-atom
+  # sentinel in `head_type_core`/`Implementation.head_atom`; it is never evaluated.)
   defp classify(_env, {:vdata, name, _vs}, _seen), do: {:concrete, name}
   defp classify(_env, {:vneutral, {:nvar, lvl}}, _seen), do: {:rigid, lvl}
 
