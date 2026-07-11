@@ -274,7 +274,15 @@ defmodule Mix.Tasks.Antigen do
 
       # 34. A binder's GRADE is part of type identity (Idris Convert.idr:328).
       # APPENDED, like ZetaSubst: `@group_table` is indexed by POSITION.
-      {2, Antigen.Generators.GradeConv.gen()}
+      {2, Antigen.Generators.GradeConv.gen()},
+
+      # 35. `Effect` inertness invariance — the inert `Effect`/`pure`/`bind`
+      # signature must NEVER reduce (no monad laws): `nf` preserves the effect
+      # skeleton and `bind(pure(a), k) ≢ k(a)`. APPENDED, like GradeConv: the
+      # `@group_table` is indexed by POSITION, so a mid-list insert renumbers
+      # every generator after it and adaptive reweighting bumps the wrong ones.
+      # Group `f` (fixed menu).
+      {2, Antigen.Generators.EffectInert.gen()}
     ])
   end
 

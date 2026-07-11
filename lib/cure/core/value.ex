@@ -69,6 +69,9 @@ defmodule Cure.Core.Value do
           | {:vbinary_type}
           | {:vatom_type}
           | {:vatom, atom()}
+          | {:veffect_type, t()}
+          | {:veffect_pure, t()}
+          | {:veffect_bind, t(), t()}
 
   @doc "True when `value` is a structurally well-formed semantic value."
   @spec value?(term()) :: boolean()
@@ -90,6 +93,10 @@ defmodule Cure.Core.Value do
   def value?({:vatom_type}), do: true
   def value?({:vatom, a}), do: is_atom(a)
   def value?({:vfloat, f}), do: is_float(f)
+  # Inert effect value forms — the read-back targets of `{:effect_*}` terms.
+  def value?({:veffect_type, v}), do: value?(v)
+  def value?({:veffect_pure, v}), do: value?(v)
+  def value?({:veffect_bind, ve, vk}), do: value?(ve) and value?(vk)
   def value?(_), do: false
 
   @doc "True when `neutral` is a structurally well-formed neutral (stuck) value."

@@ -91,6 +91,15 @@ defmodule Cure.Core.Eval do
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
+  # Inert effect nodes: map each to its value form and evaluate SUBTERMS only —
+  # never the effect structure. In particular `bind` evaluates `e` and `k` and
+  # wraps them; it does NOT `apply` `k` to anything, so `bind(pure(a), k)` never
+  # reduces to `k(a)` (zero monad laws, design §3.2). `k` evaluates to whatever
+  # ordinary function value it is (typically a `{:vlam, …}`).
+  def eval({:effect_type, t}, env), do: {:veffect_type, eval(t, env)}
+  def eval({:effect_pure, a}, env), do: {:veffect_pure, eval(a, env)}
+  def eval({:effect_bind, e, k}, env), do: {:veffect_bind, eval(e, env), eval(k, env)}
+
 
   # `rewrite e at (x.M) in t` is erased at runtime to `t` (the proof and motive
   # are computationally irrelevant — `rewrite e _ t ⇝ t`, §4.6).

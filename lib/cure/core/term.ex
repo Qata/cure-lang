@@ -36,6 +36,16 @@ defmodule Cure.Core.Term do
                                              Agda BUILTIN NATURAL — a compact
                                              literal form for `Nat` values, not a
                                              separate primitive type)
+    * `{:effect_type, t}`                    `Effect(T)` — the inert effect type
+                                             former (Lean `IO`, Idris `PrimIO`)
+    * `{:effect_pure, a}`                    `pure(a)` — trivial computation
+    * `{:effect_bind, e, k}`                 `bind(e, k)` — sequencing; `k` is an
+                                             ordinary function term, so the node
+                                             itself binds NOTHING. All three are
+                                             uninterpreted: zero reduction rules,
+                                             not even the monad laws (design
+                                             `2026-07-09-effect-type-former-design.md`
+                                             §3.2).
     (Bool and Nat are real inductive families, not primitive term forms.)
   """
 
@@ -77,6 +87,9 @@ defmodule Cure.Core.Term do
           | {:binary_type}
           | {:atom_type}
           | {:atom_lit, atom()}
+          | {:effect_type, t()}
+          | {:effect_pure, t()}
+          | {:effect_bind, t(), t()}
           | {:hole, atom() | String.t()}
           | {:absurd}
 
@@ -123,6 +136,13 @@ defmodule Cure.Core.Term do
   def term?({:binary_type}), do: true
   def term?({:atom_type}), do: true
   def term?({:atom_lit, a}), do: is_atom(a)
+
+  # Inert effect nodes. None binds a variable, so `term?` is a plain arity +
+  # recursive shape check; a stale 2-tuple `bind`/1-tuple `type` falls through
+  # to the catch-all and is (correctly) not a term.
+  def term?({:effect_type, t}), do: term?(t)
+  def term?({:effect_pure, a}), do: term?(a)
+  def term?({:effect_bind, e, k}), do: term?(e) and term?(k)
 
   # A hole is a live Core node — `Kernel.check/3` accepts one at any type, and a definition
   # mid-development legitimately contains them (only the release/emit boundary rejects
@@ -177,6 +197,11 @@ defmodule Cure.Core.Term do
 
   def shift({:case, s, m, brs}, a, c),
     do: {:case, shift(s, a, c), shift(m, a, c), Enum.map(brs, fn {cn, ar, b} -> {cn, ar, shift(b, a, c + ar)} end)}
+
+  # Effect nodes bind nothing: recurse into every child at the SAME cutoff.
+  def shift({:effect_type, t}, a, c), do: {:effect_type, shift(t, a, c)}
+  def shift({:effect_pure, x}, a, c), do: {:effect_pure, shift(x, a, c)}
+  def shift({:effect_bind, e, k}, a, c), do: {:effect_bind, shift(e, a, c), shift(k, a, c)}
 
 
 
@@ -262,6 +287,11 @@ defmodule Cure.Core.Term do
       {:case, subst(s, j, r), subst(m, j, r),
        Enum.map(brs, fn {cn, ar, b} -> {cn, ar, subst(b, j + ar, shift(r, ar, 0))} end)}
 
+  # Effect nodes bind nothing: substitute index `j` in every child, no shift.
+  def subst({:effect_type, t}, j, r), do: {:effect_type, subst(t, j, r)}
+  def subst({:effect_pure, x}, j, r), do: {:effect_pure, subst(x, j, r)}
+  def subst({:effect_bind, e, k}, j, r), do: {:effect_bind, subst(e, j, r), subst(k, j, r)}
+
 
   # -- serialization (commitment C2) ------------------------------------------
   #
@@ -324,6 +354,13 @@ defmodule Cure.Core.Term do
   def to_external({:binary_type}), do: %{"node" => "binary_type"}
   def to_external({:atom_type}), do: %{"node" => "atom_type"}
   def to_external({:atom_lit, a}), do: %{"node" => "atom_lit", "value" => Atom.to_string(a)}
+
+  def to_external({:effect_type, t}), do: %{"node" => "effect_type", "arg" => to_external(t)}
+  def to_external({:effect_pure, a}), do: %{"node" => "effect_pure", "arg" => to_external(a)}
+
+  def to_external({:effect_bind, e, k}),
+    do: %{"node" => "effect_bind", "effect" => to_external(e), "cont" => to_external(k)}
+
   def to_external({:hole, name}), do: %{"node" => "hole", "name" => name}
 
   @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
@@ -367,6 +404,13 @@ defmodule Cure.Core.Term do
   def from_external(%{"node" => "binary_type"}), do: {:binary_type}
   def from_external(%{"node" => "atom_type"}), do: {:atom_type}
   def from_external(%{"node" => "atom_lit", "value" => a}), do: {:atom_lit, String.to_atom(a)}
+
+  def from_external(%{"node" => "effect_type", "arg" => t}), do: {:effect_type, from_external(t)}
+  def from_external(%{"node" => "effect_pure", "arg" => a}), do: {:effect_pure, from_external(a)}
+
+  def from_external(%{"node" => "effect_bind", "effect" => e, "cont" => k}),
+    do: {:effect_bind, from_external(e), from_external(k)}
+
   def from_external(%{"node" => "hole", "name" => name}) when is_binary(name), do: {:hole, name}
 
   # -- helpers ----------------------------------------------------------------

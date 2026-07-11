@@ -146,6 +146,19 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth, sig),
     do: n1 == n2 and conv_spine?(coerce_fields(n1, vs1, sig), coerce_fields(n2, vs2, sig), depth, sig)
 
+  # Inert effect values: congruence ONLY — same node, pointwise-convertible
+  # children. No reduction, no monad laws (design §3.2). Because these are
+  # distinct value constructors, `bind(pure(a),k)` and `k(a)` (or `pure(a)`)
+  # land on the `_, _` fallback below and compare unequal, which is the point.
+  defp conv_struct?({:veffect_type, a}, {:veffect_type, b}, depth, sig),
+    do: conv_val?(a, b, depth, sig)
+
+  defp conv_struct?({:veffect_pure, a}, {:veffect_pure, b}, depth, sig),
+    do: conv_val?(a, b, depth, sig)
+
+  defp conv_struct?({:veffect_bind, e1, k1}, {:veffect_bind, e2, k2}, depth, sig),
+    do: conv_val?(e1, e2, depth, sig) and conv_val?(k1, k2, depth, sig)
+
   defp conv_struct?(_, _, _, _), do: false
 
   # -- η / β-under-binder -----------------------------------------------------
