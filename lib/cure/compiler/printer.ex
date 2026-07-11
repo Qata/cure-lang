@@ -1988,17 +1988,27 @@ defmodule Cure.Compiler.Printer do
         ""
       end
 
-    # A `:type_annotation` node is a `typealias` (a transparent synonym). Emitting
-    # the `type` keyword reparses it to a nominal single-constructor `:container`,
-    # flipping the node kind and its semantics.
+    # A `:type_annotation` is produced by BOTH `type X = BareName` / `type X =
+    # (Nat) -> Nat` (a plain synonym) and `typealias X = RHS`. The two keywords
+    # are interchangeable EXCEPT when the RHS is an applied type `Foo(args)`:
+    # under `type`, `Foo(args)` reparses as a nominal single-constructor
+    # `:container` (an ADT), flipping the node kind, whereas `typealias` keeps it a
+    # transparent synonym. Such a `{:function_call, …}` RHS therefore MUST reprint
+    # with `typealias`; every other shape keeps the `type` spelling that all
+    # non-alias code round-trips through.
+    keyword = if applied_type_rhs?(children), do: "typealias", else: "type"
+
     case children do
       [type_expr] ->
-        "typealias #{name}#{tp_str} = #{render(type_expr, depth, indent)}"
+        "#{keyword} #{name}#{tp_str} = #{render(type_expr, depth, indent)}"
 
       _ ->
-        "typealias #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
+        "#{keyword} #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
     end
   end
+
+  defp applied_type_rhs?([{:function_call, _, _}]), do: true
+  defp applied_type_rhs?(_), do: false
 
   # -- Literal helpers -------------------------------------------------------
 
