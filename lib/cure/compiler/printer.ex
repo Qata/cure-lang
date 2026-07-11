@@ -1843,7 +1843,9 @@ defmodule Cure.Compiler.Printer do
       params_str = Enum.map_join(params, ", ", &render(&1, depth, indent))
       "#{name}(#{params_str})"
     else
-      name
+      # A nullary constructor `Foo()` keeps its parens: bare `Foo` reparses to a
+      # `{:variable, …}` type reference, not a constructor.
+      "#{name}()"
     end
   end
 
@@ -1964,12 +1966,15 @@ defmodule Cure.Compiler.Printer do
         ""
       end
 
+    # A `:type_annotation` node is a `typealias` (a transparent synonym). Emitting
+    # the `type` keyword reparses it to a nominal single-constructor `:container`,
+    # flipping the node kind and its semantics.
     case children do
       [type_expr] ->
-        "type #{name}#{tp_str} = #{render(type_expr, depth, indent)}"
+        "typealias #{name}#{tp_str} = #{render(type_expr, depth, indent)}"
 
       _ ->
-        "type #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
+        "typealias #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
     end
   end
 
