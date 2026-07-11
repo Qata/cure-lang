@@ -3346,10 +3346,17 @@ defmodule Cure.Elab.Elaborator do
   # followed by a single variable/wildcard catch-all.
   defp literal_chain?(pats, prim) when length(pats) >= 1 do
     {lits, [{last_pat, _}]} = Enum.split(pats, length(pats) - 1)
-    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) end) and catchall_pat?(last_pat)
+    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) or pin_var?(p) end) and catchall_pat?(last_pat)
   end
 
   defp literal_chain?(_pats, _prim), do: false
+
+  # A pin arm `^x` on a primitive scrutinee behaves like a literal arm whose
+  # compared value is the current value of the bound variable `x` (an equality
+  # constraint, not a fresh binding). It always needs a trailing catch-all — a pin
+  # is never known to be exhaustive.
+  defp pin_var?({:pin, _m, [{:variable, _vm, _name}]}), do: true
+  defp pin_var?(_p), do: false
 
   defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
   defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
@@ -3392,7 +3399,20 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
-      test = lit_eq_test(prim, scrut_term, v, scrut_type, ctx)
+      test = eq_test_core(prim, scrut_term, lit_core(v, prim), scrut_type, ctx)
+      {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
+    end
+  end
+
+  # A pin arm `^x`: same as a literal arm, but the compared value is the current
+  # value of the bound variable `x` (elaborated to its core term) rather than a
+  # constant. `scrut == x` picks the identical type-directed equality twin.
+  defp literal_chain(scrut_expr, scrut_term, scrut_type, prim, [{{:pin, _m, [{:variable, _vm, name}]}, body} | rest], expected, names, ctx, env) do
+    with {:ok, x_core, _x_type} <- elaborate_expr_typed({:variable, [], name}, names, ctx, env),
+         {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
+         {:ok, rest_core} <-
+           literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
+      test = eq_test_core(prim, scrut_term, x_core, scrut_type, ctx)
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
   end
@@ -3401,12 +3421,17 @@ defmodule Cure.Elab.Elaborator do
   # `:bounded` scrutinee (Char) has no monomorphic eq twin, so it uses the
   # polymorphic `struct_eq` applied to the signature-aware readback of the
   # scrutinee type (its type argument is erased at emit).
-  defp lit_eq_test(:bounded, scrut_term, v, scrut_type, ctx) do
+  # The per-arm equality test `scrut == rhs` yielding the inductive Bool, where
+  # `rhs` is an already-built core term (a literal for a literal arm, the pinned
+  # variable's term for a pin arm). A `:bounded` scrutinee (Char) has no monomorphic
+  # eq twin, so it uses the polymorphic `struct_eq` applied to the signature-aware
+  # readback of the scrutinee type (its type argument is erased at emit).
+  defp eq_test_core(:bounded, scrut_term, rhs_core, scrut_type, ctx) do
     ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
-    {:app, app2(:struct_eq, ty, scrut_term), lit_core(v, :bounded)}
+    {:app, app2(:struct_eq, ty, scrut_term), rhs_core}
   end
 
-  defp lit_eq_test(prim, scrut_term, v, _scrut_type, _ctx) do
+  defp eq_test_core(prim, scrut_term, rhs_core, _scrut_type, _ctx) do
     eq_global =
       case prim do
         :int -> :int_eq
@@ -3414,7 +3439,7 @@ defmodule Cure.Elab.Elaborator do
         :bool -> :eq
       end
 
-    app2(eq_global, scrut_term, lit_core(v, prim))
+    app2(eq_global, scrut_term, rhs_core)
   end
 
   # A flat n-element tuple projects POSITIONALLY: `%[e1, …, en]` binds
