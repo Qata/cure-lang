@@ -165,11 +165,41 @@ defmodule Cure.Elab.Resolution do
   # set changes under the re-key, and return the family/ctor key-sets that therefore
   # need MOVING (not merely rewriting). A union that mentions nothing being re-keyed
   # recomputes to its own key and is left completely alone.
+  #
+  # NESTED unions require this to be a FIXPOINT, not one pass. A union's member is
+  # never DIRECTLY another union (`Cure.Elab.Union.lower_member/3` always flattens
+  # that at construction time), but it CAN be another union NESTED inside a
+  # container — `List(Union<Atom|Bool>)` — which is not the top-level member type
+  # and so is not flattened. If the OUTER union (`Union<Int|List(Union<Atom|Bool>)>`)
+  # is visited before the INNER one in `Map.keys(env.families)` — which is not
+  # insertion order and not guaranteed to visit nesting inside-out — its new key
+  # would be computed against a STALE `amap` still missing the inner union's own
+  # rename, and (since that stale recomputation happens to equal the outer's OLD
+  # key) the outer family would be left registered under a name that lies about its
+  # own, correctly-rewritten content. Looping until a full pass changes nothing
+  # converges regardless of visitation order; `length(union_keys) + 1` bounds the
+  # iterations (nesting cannot cycle — a family can only reference EARLIER, already-
+  # declared families — so depth is finite and bounded by the union count).
   defp union_renames(%Env{} = env, amap, def_map) do
-    env.families
-    |> Map.keys()
-    |> Enum.filter(&Cure.Elab.Union.union_family?/1)
-    |> Enum.reduce({amap, MapSet.new(), MapSet.new()}, fn old_key, {amap, fams, ctors} ->
+    union_keys = env.families |> Map.keys() |> Enum.filter(&Cure.Elab.Union.union_family?/1)
+    union_renames_fixpoint(env, union_keys, amap, def_map, MapSet.new(), MapSet.new(), length(union_keys) + 1)
+  end
+
+  defp union_renames_fixpoint(_env, _union_keys, amap, _def_map, fams, ctors, 0),
+    do: {amap, fams, ctors}
+
+  defp union_renames_fixpoint(env, union_keys, amap, def_map, fams, ctors, fuel) do
+    {amap2, fams2, ctors2} = union_renames_pass(env, union_keys, amap, def_map, fams, ctors)
+
+    if amap2 == amap do
+      {amap2, fams2, ctors2}
+    else
+      union_renames_fixpoint(env, union_keys, amap2, def_map, fams2, ctors2, fuel - 1)
+    end
+  end
+
+  defp union_renames_pass(env, union_keys, amap, def_map, fams, ctors) do
+    Enum.reduce(union_keys, {amap, fams, ctors}, fn old_key, {amap, fams, ctors} ->
       old_prefix = Atom.to_string(old_key) <> "$"
 
       members =

@@ -134,4 +134,85 @@ defmodule Cure.Elab.UnionIdentityTest do
       assert Map.has_key?(out.ctors, :"Union<Bool|Int>$Int")
     end
   end
+
+  # `union_renames/3` (resolution.ex) makes ONE pass over `Map.keys(env.families)`,
+  # accumulating renames into `amap` as it goes. If a union family (the OUTER union)
+  # has a member whose payload type embeds ANOTHER union family's type (the INNER
+  # union, nested inside e.g. a `List(...)`, not flattened because it is not the
+  # top-level member type), and the fold visits the OUTER union BEFORE the INNER one,
+  # the outer's new key is computed against a STALE `amap` that does not yet contain
+  # the inner union's rename — so the outer union's computed "new key" is wrongly
+  # identical to its OLD key (no rename recorded), even though its constructor
+  # argument type IS correctly rewritten afterward (by the unconditional
+  # `rekey_ctors`/`rekey_term` pass, which runs with the FINAL, complete `amap`). The
+  # family ends up registered under a NAME that lies about its own content.
+  #
+  # `Map.keys/1` order is not insertion order — empirically, interning the OUTER
+  # union's atom before the INNER union's atom (regardless of which `Inductive.declare`
+  # call runs first) reliably produces the outer-before-inner fold order needed to
+  # observe this.
+  describe "nested unions: a union family embeds ANOTHER union family as a member payload" do
+    alias Cure.Core.{Env, Grade}
+    alias Cure.Elab.Resolution
+
+    setup do
+      # Intern the OUTER key's atom BEFORE the inner one (see module comment).
+      outer_key = :"Union<AAA|MyList(Union<Atom#:x|Shadowed>)>"
+      inner_key = :"Union<Atom#:x|Shadowed>"
+
+      env =
+        %Env{}
+        |> Inductive.declare(Inductive.family(:Shadowed, [], [], 0), [
+          Inductive.ctor(:ShadowedMk, [], [])
+        ])
+        |> Inductive.declare(Inductive.family(:AAA, [], [], 0), [
+          Inductive.ctor(:AAAMk, [], [])
+        ])
+        |> Inductive.declare(Inductive.family(:MyList, [{:a, {:type, 0}}], [], 1), [])
+        |> Inductive.declare(Inductive.family(outer_key, [], [], 0), [
+          Inductive.ctor(:"#{outer_key}$AAA", [{:v, {:data, :AAA, [], []}}], [], [
+            Grade.unrestricted()
+          ]),
+          Inductive.ctor(
+            :"#{outer_key}$MyList(#{inner_key})",
+            [{:v, {:data, :MyList, [{:data, inner_key, [], []}], []}}],
+            [],
+            [Grade.unrestricted()]
+          )
+        ])
+        |> Inductive.declare(Inductive.family(inner_key, [], [], 0), [
+          Inductive.ctor(:"Union<Atom#:x|Shadowed>$Atom#:x", [], []),
+          Inductive.ctor(:"Union<Atom#:x|Shadowed>$Shadowed", [{:v, {:data, :Shadowed, [], []}}], [], [
+            Grade.unrestricted()
+          ])
+        ])
+
+      # Confirms this fixture actually reproduces the outer-first fold order this
+      # test targets (a change in map internals would silently invalidate the test
+      # otherwise, rather than failing loudly for the intended reason).
+      assert [^outer_key, ^inner_key] =
+               env.families |> Map.keys() |> Enum.filter(&Union.union_family?/1)
+
+      %{env: env, outer_key: outer_key, inner_key: inner_key}
+    end
+
+    test "the OUTER union's stored key matches its own rewritten content", %{
+      env: env,
+      outer_key: outer_key
+    } do
+      out = Resolution.rekey_module_env(env, "M", MapSet.new([:Shadowed]))
+
+      new_inner_key = :"Union<Atom#:x|M#Shadowed>"
+      new_outer_key = :"Union<AAA|MyList(#{new_inner_key})>"
+
+      # The old, un-renamed outer key must be GONE...
+      refute Map.has_key?(out.families, outer_key)
+      # ...replaced by a family whose NAME reflects the fully-transitively-rewritten
+      # inner union, not a stale reference to the inner union's OLD key.
+      assert Map.has_key?(out.families, new_outer_key)
+
+      ctor = out.ctors[:"#{new_outer_key}$MyList(#{new_inner_key})"]
+      assert [{:v, {:data, :MyList, [{:data, ^new_inner_key, [], []}], []}}] = ctor.args
+    end
+  end
 end
