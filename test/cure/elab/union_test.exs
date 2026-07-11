@@ -377,4 +377,97 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, _} = Cure.Compiler.compile_and_load(src)
     end
   end
+
+  describe "sub-union arm substitution respects inner shadowing" do
+    # `expand_member_arm` (elaborator.ex) rewrites a sub-union arm's bound name
+    # (`rest` below) to `assert_type <fresh> : <sub-union>` via a plain textual
+    # walk (`subst_surface_var/3` originally; now `subst_respecting_shadowing/3`)
+    # over the arm's SURFACE body. That walk must not descend into a nested
+    # binder that rebinds the SAME name — a nested `match` arm whose own pattern
+    # is also named `rest`, or a lambda parameter named `rest` — because that
+    # inner occurrence refers to the INNER binding (with the inner's own,
+    # narrower type), not the outer sub-union value.
+    #
+    # This is not confined to union code: `pattern_binders/1` (elaborator.ex)
+    # backs `binds_any?/2`, the general capture-avoidance guard `elaborate_let_block`
+    # and ~10 other surface-substitution call sites rely on throughout the whole
+    # elaborator. It recognises a binder only via a `{:variable, _, v}` node — but
+    # `:typed_pattern`'s bound name is a bare STRING in its children
+    # (`{:typed_pattern, _, [name, type_ast]}`), so a typed pattern was invisible to
+    # every one of those guards. Proven independently of any union sub-arm logic:
+    test "a `let`'s capture-avoidance guard sees a typed-pattern's shadowing" do
+      # `ok/1`'s argument is elaborated in CHECK position against its declared
+      # `Bool` parameter type, so a wrongly-substituted lambda fails there with
+      # `{:lambda_expected_pi, _}` — a DIFFERENT, later, more confusing error than
+      # the correct, immediate `{:unsupported_expression, lambda}` rejection that
+      # `elaborate_let_block` gives for a non-inferable `let` rhs shadowed before
+      # its only "use". Before the `pattern_binders/1` fix this test observed
+      # `{:error, {:lambda_expected_pi, {:data, :Bool, [], []}}}` — proof the
+      # outer `let`'s lambda was spliced into `ok(n)`'s argument position instead
+      # of the inner, freshly-matched Bool `n` — even though `n: Bool -> ok(n)`'s
+      # `n` is a completely ordinary (non-sub-union) type-member pattern.
+      src = """
+      mod LBD
+        fn ok(b: Bool) -> Bool = b
+
+        fn f(x: Int | Bool) -> Bool =
+          let n = fn(y) -> y
+          match x
+            n: Int -> true
+            n: Bool -> ok(n)
+      end
+      """
+
+      assert {:error, {:unsupported_expression, {:lambda, _, _}}} = Program.elaborate(src)
+    end
+
+    test "a nested match rebinding the sub-union arm's name is refused, not silently corrupted" do
+      src = """
+      mod SH2
+        fn describe(x: Int | Bool | Atom) -> Bool =
+          match x
+            n: Int -> true
+            rest: Bool | Atom ->
+              match rest
+                rest: Bool -> not rest
+                a: Atom -> false
+      end
+      """
+
+      # Before the fix: the inner `rest: Bool -> not rest` arm's body `rest` got
+      # SILENTLY rewritten to the OUTER `assert_type <outer-fresh> : Bool | Atom`
+      # ascription (the substitution could not see that the inner match's own
+      # pattern rebinds `rest`), so `not` was applied to a Bool|Atom UNION value
+      # instead of the freshly-bound inner Bool — failing with the confusing
+      # `{:foreign_ctor, :"Union<Atom|Bool>$Atom"}`, whose shape gives no hint
+      # that shadowing is the actual cause.
+      #
+      # After the fix: the same class of shadowing this codebase's OTHER
+      # surface-substitution sites refuse outright (`:shadowed_as`,
+      # `:shadowed_tuple`, `:shadowed_catchall`, …) is refused here too, with an
+      # honest, correctly-labelled diagnostic instead of a confusing downstream
+      # type error.
+      assert {:error, {:unsupported_pattern, :shadowed_sub_union}} = Program.elaborate(src)
+    end
+
+    test "a lambda parameter rebinding the sub-union arm's name is refused, not silently corrupted" do
+      src = """
+      mod SH3
+        fn describe(x: Int | Bool | Atom) -> Bool =
+          match x
+            n: Int -> true
+            rest: Bool | Atom ->
+              let g : (Bool) -> Bool = fn(rest) -> not rest
+              g(true)
+      end
+      """
+
+      # The lambda's own parameter `rest` shadows the outer sub-union binding
+      # inside the lambda body; before the fix, `not rest` there was silently
+      # rewritten to reference the OUTER Bool|Atom union value instead of the
+      # lambda's own Bool parameter. Refused outright, for the same reason as
+      # the nested-match case above.
+      assert {:error, {:unsupported_pattern, :shadowed_sub_union}} = Program.elaborate(src)
+    end
+  end
 end

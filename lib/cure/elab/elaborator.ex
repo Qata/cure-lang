@@ -2222,13 +2222,18 @@ defmodule Cure.Elab.Elaborator do
         with {:ok, members} <- Cure.Elab.Union.canonicalise([type_ast], names, env) do
           sub_union? = length(members) > 1
 
-          arms =
-            Enum.map(members, fn m ->
-              cname = Cure.Elab.Union.ctor_key(dname, m)
-              expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body)
-            end)
+          Enum.reduce_while(members, {:ok, []}, fn m, {:ok, acc} ->
+            cname = Cure.Elab.Union.ctor_key(dname, m)
 
-          {:ok, arms}
+            case expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body) do
+              {:ok, arm} -> {:cont, {:ok, [arm | acc]}}
+              {:error, _} = err -> {:halt, err}
+            end
+          end)
+          |> case do
+            {:ok, arms} -> {:ok, Enum.reverse(arms)}
+            {:error, _} = err -> err
+          end
         end
 
       # `:north` — a literal member, matched bare, binding nothing.
@@ -2260,11 +2265,23 @@ defmodule Cure.Elab.Elaborator do
   # payload in CHECK position against the sub-union and therefore re-injects it via
   # the ordinary union coercion. (A `let`-block cannot be used here: `:block` has no
   # infer-mode clause, and branch bodies are elaborated in infer mode.)
+  #
+  # `subst_surface_var/3` is a blind textual walk with no notion of scope, so it must
+  # not run if `body` contains a NESTED binder that rebinds `name` — a nested `match`
+  # arm whose own pattern is also `name`, or a lambda parameter named `name`. Left
+  # unguarded, the inner (correctly narrower-typed) occurrence would be silently
+  # overwritten by the outer sub-union ascription. `binds_any?/2` is the same
+  # capture-avoidance guard `elaborate_let_block` and friends use for the identical
+  # class of problem; when it fires here, refuse rather than attempt a smarter
+  # rewrite, matching that established idiom.
   defp expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body) do
     cond do
       m.payload == nil ->
         pattern = {:function_call, [name: Atom.to_string(cname)], []}
-        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
+        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), body}}
+
+      sub_union? and binds_any?(body, [name]) ->
+        {:error, {:unsupported_pattern, :shadowed_sub_union}}
 
       sub_union? ->
         fresh = "__u" <> Integer.to_string(:erlang.phash2({name, m.key}))
@@ -2273,11 +2290,11 @@ defmodule Cure.Elab.Elaborator do
         ascription = {:assert_type, pm, [{:variable, pm, fresh}, type_ast]}
         rebound = Enum.map(body, &subst_surface_var(&1, name, ascription))
 
-        {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}
+        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}}
 
       true ->
         pattern = {:function_call, [name: Atom.to_string(cname)], [{:variable, pm, name}]}
-        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
+        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), body}}
     end
   end
 
@@ -4916,6 +4933,19 @@ defmodule Cure.Elab.Elaborator do
   # patterns. Constructor NAMES live in meta (`name:`), never as children, so this
   # never mistakes a constructor for a binder.
   defp pattern_binders({:variable, _meta, v}), do: [v]
+
+  # `n: Int` (a UNION type member) or `rest: Bool | Atom` (a sub-union) — the bound
+  # name is a bare STRING in the child list (`parser.ex` `maybe_wrap_as/2`'s `:colon`
+  # clause), not a `{:variable, …}` node, so the generic clause below would silently
+  # miss it: `Enum.flat_map(["n", type_ast], &pattern_binders/1)` finds nothing for the
+  # bare string "n" and instead picks up names from `type_ast` (e.g. "Int"), which are
+  # TYPE references, not binders. Without this clause, `binds_any?/2` — the capture
+  # guard `elaborate_let_block` and every other surface-substitution site relies on —
+  # silently fails to see a typed-pattern's shadowing, letting `let n = <check-only
+  # rhs>` substitute straight through a later `n: Int -> n` arm and rewrite the INNER,
+  # freshly-matched `n` into the OUTER let-bound expression.
+  defp pattern_binders({:typed_pattern, _meta, [name, _type_ast]}) when is_binary(name),
+    do: [name]
 
   defp pattern_binders({_tag, _meta, children}) when is_list(children),
     do: Enum.flat_map(children, &pattern_binders/1)
