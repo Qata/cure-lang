@@ -71,7 +71,12 @@ defmodule Cure.Elab.Program do
       if proof_shape_return?(Keyword.get(meta, :return_type)) do
         nil
       else
-        {:error, {:proof_shape_mismatch, Keyword.get(meta, :name)}}
+        name = Keyword.get(meta, :name)
+
+        {:error,
+         {:proof_shape_mismatch,
+          "E026: binding '#{name}' in a proof container must inhabit a " <>
+            "propositional-equality type Equivalent(T, a, b)", name}}
       end
     end)
   end

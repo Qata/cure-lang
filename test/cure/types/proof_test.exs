@@ -1,6 +1,16 @@
 defmodule Cure.Types.ProofTest do
   use ExUnit.Case, async: true
 
+  @moduledoc """
+  Proof containers via the CLASSIC entry points (`Cure.Compiler.compile_and_load`
+  and `Cure.Types.Checker.check_module`). Both now delegate `proof` containers to
+  the sole (dependent) pipeline, so the witness is the inductive `reflexive`, not
+  the legacy `:cure_refl` atom, and E026 surfaces as a dependent type error. These
+  tests pin that the classic API surface still handles proof containers correctly
+  after the port (see memory pre18-surface-construct-gaps); the dependent-entry
+  coverage lives in `Cure.Elab.ProofContainerTest`.
+  """
+
   alias Cure.Compiler
 
   defp compile(source) do
@@ -11,23 +21,23 @@ defmodule Cure.Types.ProofTest do
     test "compile as modules with proof-shaped functions" do
       source = """
       proof ProofTest.Basic
-        fn id_law(_n: Int) -> Equivalent(Int, n, n) = :cure_refl
+        fn id_law(n: Int) -> Equivalent(Int, n, n) = reflexive(n)
       """
 
-      {:ok, mod} = compile(source)
-      assert mod.id_law(42) == :cure_refl
+      assert {:ok, mod} = compile(source)
+      assert function_exported?(mod, :id_law, 1)
     end
 
     test "allow multiple propositions in one container" do
       source = """
       proof ProofTest.Several
-        fn plus_zero(_n: Int) -> Equivalent(Int, n, n) = :cure_refl
-        fn zero_plus(_n: Int) -> Equivalent(Int, n, n) = :cure_refl
+        fn plus_zero(n: Int) -> Equivalent(Int, n, n) = reflexive(n)
+        fn zero_plus(n: Int) -> Equivalent(Int, n, n) = reflexive(n)
       """
 
-      {:ok, mod} = compile(source)
-      assert mod.plus_zero(5) == :cure_refl
-      assert mod.zero_plus(5) == :cure_refl
+      assert {:ok, mod} = compile(source)
+      assert function_exported?(mod, :plus_zero, 1)
+      assert function_exported?(mod, :zero_plus, 1)
     end
   end
 
@@ -45,11 +55,7 @@ defmodule Cure.Types.ProofTest do
       {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
 
       assert {:error, errors} = Cure.Types.Checker.check_module(ast, emit_events: false)
-
-      assert Enum.any?(errors, fn
-               {:proof_shape_mismatch, msg, _} -> msg =~ "E026"
-               _ -> false
-             end)
+      assert inspect(errors) =~ "E026"
     end
   end
 end
