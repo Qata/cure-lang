@@ -1577,3 +1577,61 @@ NOT clean → streak reset to 0. Cron **left in place**. Full suite green:
 Commits this cycle: `7f6e1f1`, plus this record.
 
 ---
+
+## Iteration 21
+
+**Scope of fresh audit:** iteration 20's only code change — `lib/cure/compiler/printer.ex`
+(7f6e1f1, the `render_program/3` top-level decorator-hug). No Outstanding findings
+from iteration 20, so no TDD fixes this cycle. Full suite run at cycle start:
+**3975 passed, 0 failures**, Antigen 309/309 (unchanged — no code edits this cycle).
+
+**Audit mechanics note:** the first two dispatched review agents hung (~10 min, a
+142-byte launch-only transcript = zero tool calls; one died fumbling Cure `fn` syntax).
+I stopped both (TaskStop), then ran a comprehensive INLINE adversarial audit myself AND
+dispatched one fresh cross-check agent with explicit Cure-syntax guidance + a working
+probe harness. Both my inline probes and the cross-check agent independently reached the
+same verdict.
+
+**CLEAN — zero confirmed bugs in 7f6e1f1.** Verified (idempotent `o1==o2` AND structural
+round-trip `parse ≡ parse∘print∘parse`) across every adversarial input:
+- Off-by-one after `flatten_top_level`: none. `nodes = flatten_top_level(exprs)` is the
+  SAME list that `Enum.with_index` numbers and `Enum.at(nodes, i-1)` indexes, so a
+  bare-`mod` wrapper expansion cannot mis-point the predecessor. Confirmed on multi-`mod`
+  files and decorators at block boundaries.
+- Standalone top-level decorator siblings (EOF decorator, stacked decorators, decorator
+  separated from its target by a fn, decorator-only file, in-body `@group` between a
+  `mod` and a `fn`): all render tight, all text-fixpoints — the intended behavior; the
+  hug matches the parser-absorbed form.
+- Trivia lossless: doc `##` above a decorated mod, trailing `# tail` on a decorator,
+  leading comment before an EOF decorator, comment between a decorator and its target —
+  none dropped/duplicated; all idempotent. (The between-decorator-and-mod comment
+  re-emits ABOVE the decorator: pre-existing `Trivia.attach` reattachment, NOT the
+  blank-rule change; lossless + idempotent, contract intact.)
+- `join_statements` with `blank?==false` yields exactly one `\n` (never zero — decorator
+  and item never collapse onto one line).
+
+### Outstanding findings (after iteration 21)
+
+**None.** First clean audit since the iteration-19/20 reset → **streak = 1**. Iteration
+20 was NOT clean, so this is only ONE consecutive clean audit; convergence needs iteration
+22 to also come back clean. Cron **left in place**.
+
+**Latent / adjacent (carried, NOT blocking bugs; two re-confirmed this cycle):**
+- Parser drops a decorator on a `type` declaration (`@derive(:Eq)\ntype T = Int` → the
+  decorator is absorbed but not re-rendered). Re-observed this cycle; pre-existing
+  absorption behavior, idempotent, out of scope for the printer blank-rule. Feature/design
+  question for the operator.
+- `cure test` / project-lib load (`cli.ex` ~1001/1070) still `File.read!` the wildcard
+  corpus (chmod-000 file in your own tree → raw File.Error). Pre-existing, defensible.
+- Duplicate `[project]` divergence; `comment_texts` non-quote-aware; migrate engine no
+  rule-rescue; `edition = ""` fails load; uppercase-type-var CTX false-positive;
+  package-manager scope items (UNCHANGED).
+
+**Loop status:** iteration 21 confirmed iteration 20's printer fix is sound — the first
+clean audit of the streak. No bugs found or fixed this cycle. Streak = 1 (need one more).
+Cron left in place. Full suite green: **3975 passed, 0 failures**; Antigen 309/309. Do
+NOT merge.
+
+Commits this cycle: this record only (audit found nothing to fix).
+
+---
