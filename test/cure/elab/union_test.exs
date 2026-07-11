@@ -470,4 +470,38 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, {:unsupported_pattern, :shadowed_sub_union}} = Program.elaborate(src)
     end
   end
+
+  describe "dependent-pipeline routing sees a union wherever it appears" do
+    # Program.dependent?/1's generic fallback (`{_tag, _meta, children} when
+    # is_list(children)`) only recurses into a node's CHILDREN, never its META —
+    # which is exactly why `:param`'s type (`Keyword.get(meta, :type)`) needed its
+    # own dedicated clause. A union type can ALSO appear in two other meta-only
+    # positions this branch's two new dependent?/1 clauses (:union_type,
+    # :typed_pattern) do not, by themselves, make reachable:
+    #
+    #   * a `let`'s type ascription (`type_annotation:` in `:assignment`'s meta,
+    #     not its children — parser.ex's `let_ascribed`/`maybe_wrap_as`);
+    #   * a match arm's OWN PATTERN (`pattern:` in `:match_arm`'s meta, not its
+    #     children — parser.ex `parse_match_arm/1`).
+    #
+    # A module using a union ONLY in one of those two positions (no function
+    # param/return type ever names the union) is silently routed to the CLASSIC
+    # pipeline, which has no union machinery at all — not a clean
+    # `:unsupported_container`-style rejection, but whatever confusing error
+    # falls out of classic's ordinary (non-union-aware) match-arm handling.
+    test "a union named only in a `let` ascription still routes to the dependent pipeline" do
+      src = """
+      mod LetOnly
+        fn f() -> Int =
+          let x : Int | Bool = 5
+          match x
+            n: Int -> n
+            b: Bool -> 0
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+      assert apply(:"Cure.LetOnly", :f, []) == 5
+    end
+  end
 end

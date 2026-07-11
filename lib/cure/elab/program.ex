@@ -563,6 +563,28 @@ defmodule Cure.Elab.Program do
   def dependent?({:union_type, _meta, _members}), do: true
   def dependent?({:typed_pattern, _meta, _children}), do: true
 
+  # The generic fallback below only recurses into a node's CHILDREN, never its
+  # META — which is why `:param`'s type needed its own dedicated clause further
+  # down. A union can ALSO appear in two other meta-only positions:
+  #
+  #   * a `let`'s type ascription (`type_annotation:` in `:assignment`'s meta —
+  #     parser.ex `let_ascribed`), and
+  #   * a match arm's OWN PATTERN (`pattern:` in `:match_arm`'s meta — parser.ex
+  #     `parse_match_arm/1`, `{:match_arm, [pattern: p], [body]}`).
+  #
+  # Left unhandled, a module using a union ONLY in one of these two positions
+  # (no function param/return type ever names the union) is silently routed to
+  # the classic pipeline, which has no union machinery — not a clean
+  # `:unsupported_container`-style rejection but a confusing, unrelated error
+  # out of classic's ordinary (non-union-aware) pattern handling.
+  def dependent?({:assignment, meta, children}) when is_list(meta) do
+    dependent?(Keyword.get(meta, :type_annotation)) or dependent?(children)
+  end
+
+  def dependent?({:match_arm, meta, children}) when is_list(meta) do
+    dependent?(Keyword.get(meta, :pattern)) or dependent?(children)
+  end
+
   def dependent?({:function_call, meta, children}) when is_list(meta) do
     Keyword.get(meta, :name) in ["Equivalent", "reflexive"] or Enum.any?(children, &dependent?/1)
   end
