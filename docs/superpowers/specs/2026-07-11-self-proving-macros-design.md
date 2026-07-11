@@ -21,9 +21,11 @@ soundness by generation) — the load-bearing analogy of §4.
 2. **Exhaustiveness is lenient** — one reusable `describe` may cover many failure
    points; the bar is "every point covered *by something*," preserving the
    copy-one-example floor (§3.2).
-3. **The generative proof is bounded-on-compile + deep-on-demand** — a fast smoke
-   fuzz gates every macro compile; a deep `cure <macro> prove` run is the CI/on-demand
-   gate (§4.2).
+3. **The generative proof is the FULL fuzz on every macro compile** (operator,
+   2026-07-12) — a macro is not "compiled" until its full Antigen-budget expansion
+   proof passes; slower macro compiles are an accepted cost for an always-fully-proven
+   guarantee, with no shallow/deep split (§4.2). (An unchanged macro's result may be
+   cached — that is not-redoing-identical-work, not a weaker gate.)
 4. Defaults confirmed: first-class `region delimited by { }` is an optional later
    slice (custom layout works via Tier-3 `raw until` now); example-equality is the
    author's per-rule choice of exact-Core vs type-only; this extension sequences
@@ -196,14 +198,19 @@ with the offending generated input, the expansion, and the kernel error (shrunk,
 Antigen's existing shrinker). The author fixes the expansion before shipping; the DSL
 *user* never meets it as a confusing kernel error at use-time.
 
-**Two run depths (settled decision 3).** A **bounded smoke fuzz** (a small,
-deterministic seed budget) gates *every* macro compile, so obvious expansion bugs
-fail fast and compiling a macro stays cheap. A **deep run** — `cure <macro> prove`,
-the full Antigen budget with the coverage manifest — is the CI/on-demand gate that
-drives the residual toward Antigen's ceiling. The smoke run is a subset of the deep
-run's generators, so a green smoke run is a true (if shallow) sample, never a
-different check. A macro's manifest records which rules and `fail` points the deep
-run has exercised, so coverage gaps are visible, not silent.
+**Full run on every compile (settled decision 3).** The **full Antigen-budget** run —
+with the coverage manifest — gates *every* macro compile: a macro is not considered
+compiled until its expansion proof passes at full depth. Slower macro compiles are an
+accepted, deliberate cost (operator, 2026-07-12) — the guarantee is that a macro that
+compiles has been fully proven, not smoke-tested, so there is no shallow/deep split to
+reason about and no "it passed the quick check but the deep check finds bugs" gap. The
+one legitimate optimization is **caching by macro definition**: an unchanged macro
+(same grammar + elabs) reuses its prior passing result rather than re-fuzzing —
+not-redoing-identical-work, never a weaker gate; editing the macro re-runs the full
+proof. The manifest still records which rules and `fail` points were exercised, so
+coverage is visible, and a macro whose grammar admits shapes the generator cannot yet
+build (a hole type outside type-directed generation's reach, §4.4) reports that gap
+rather than passing silently.
 
 ### 4.3 Why this is sound to reuse Antigen
 
