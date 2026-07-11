@@ -334,10 +334,11 @@ defmodule Cure.Migrate do
     (Cure.Types.Env.new().types |> Map.keys()) |> Enum.concat(@builtin_sorts) |> MapSet.new()
   end
 
-  # Every type name this file introduces, gathered by a full pre-order walk:
-  #   * `{:container, [container_type: :struct | :enum, name: n], _}` — records/enums
+  # Every type name this file introduces or imports, gathered by a full pre-order walk:
+  #   * `{:container, [container_type: :struct | :enum | :opaque | :primitive, name: n], _}`
   #   * `{:type_annotation, [name: n], _}` — `typealias N = …`
   #   * `{:indexed_type, [name: n], _}` — indexed families (defensive; carries :name)
+  #   * `{:import, [items: [...], alias: a], _}` — `use Mod.{A, B}` / `use Mod as A`
   defp declared_type_names(ast) do
     ast |> collect_type_names([]) |> MapSet.new()
   end
@@ -345,11 +346,35 @@ defmodule Cure.Migrate do
   defp collect_type_names({:container, meta, ch}, acc) when is_list(ch) do
     acc =
       case Keyword.get(meta, :container_type) do
-        t when t in [:struct, :enum] -> maybe_name(meta, acc)
+        # `:opaque` (`opaque type Name`) and `:primitive` (`primitive Name`) each
+        # introduce a nominal type name just as `:struct`/`:enum` do; omitting them
+        # let UppercaseTypeVar misread the declared name as a free type variable and
+        # lowercase it (`Word` → `word`, `Handle` → `handle`) — a semantic corruption
+        # that the reprint-only verify does not catch.
+        t when t in [:struct, :enum, :opaque, :primitive] -> maybe_name(meta, acc)
         _ -> acc
       end
 
     Enum.reduce(ch, acc, &collect_type_names/2)
+  end
+
+  # `use Mod.{A, B}` / `use Mod as Alias` bring type constructors into scope; their
+  # names must be treated as declared, not as free type variables. The import node's
+  # body is empty, so this is the only place the selectively-imported items and the
+  # alias enter `ctx`.
+  defp collect_type_names({:import, meta, _}, acc) do
+    items = Keyword.get(meta, :items, [])
+
+    names =
+      case Keyword.get(meta, :alias) do
+        a when is_binary(a) -> [a | items]
+        _ -> items
+      end
+
+    Enum.reduce(names, acc, fn
+      n, a when is_binary(n) -> [n | a]
+      _, a -> a
+    end)
   end
 
   defp collect_type_names({:type_annotation, meta, ch}, acc) when is_list(ch) do

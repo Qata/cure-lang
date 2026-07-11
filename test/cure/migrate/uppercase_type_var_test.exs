@@ -194,6 +194,43 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
   defp flatten_nodes(list) when is_list(list), do: Enum.flat_map(list, &flatten_nodes/1)
   defp flatten_nodes(other), do: [other]
 
+  test "a selectively-imported type constructor is left alone, not lowercased" do
+    # `build_ctx` never inspected `{:import, …}` nodes, so a `use`-imported type
+    # constructor was absent from ctx and UppercaseTypeVar misread it as a free
+    # type variable — rewriting `Vec` to the unbound `vec`, a corruption the
+    # reprint-only verify accepts and `cure migrate` would write to disk.
+    {out, warns} = migrate("mod M\nuse Std.Vector.{Vec}\nfn f(x: Vec) -> Vec = x\n", "imp.cure")
+    assert out =~ "x: Vec"
+    assert out =~ "-> Vec"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a locally-declared primitive type is left alone, not lowercased" do
+    # `collect_type_names` whitelisted only :struct/:enum, so `primitive Word`'s
+    # name never entered ctx and `Word` was rewritten to `word`.
+    {out, warns} = migrate("mod M\nprimitive Word\nfn w(x: Word) -> Word = x\n", "prim.cure")
+    assert out =~ "x: Word"
+    assert out =~ "-> Word"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "an opaque type name is left alone, not lowercased" do
+    {out, warns} = migrate("mod M\nopaque type Handle\nfn h(x: Handle) -> Handle = x\n", "op.cure")
+    assert out =~ "x: Handle"
+    assert out =~ "-> Handle"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a file containing an opaque type migrates instead of aborting the whole run" do
+    # The opaque type is untouched; the only trigger is the legitimate `use Std.Eq`
+    # module rename. Previously the whole-file verify reprint could not render the
+    # opaque container, so `run_to_fixpoint` aborted with a spurious
+    # {:verify_failed, _} blamed on an innocent rule.
+    out = migrate_fixpoint("mod M\nopaque type Handle\nfn f(x: Int) -> Int = x\n", "opfix.cure")
+    assert out =~ "opaque type Handle"
+    assert out =~ "fn f(x: Int) -> Int = x"
+  end
+
   test "a renamed type var is also renamed in a body type application" do
     # `empty_of(T)` in the body passes the bound type var as a type argument;
     # it must track the signature rename to `t`, not stay `T`.
