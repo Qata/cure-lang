@@ -711,6 +711,22 @@ defmodule Cure.Elab.Elaborator do
     elaborate_expr_typed(call, names, ctx, env)
   end
 
+  # List comprehension `[e for x <- xs, cond, y <- ys]`. Desugars (before Core) to
+  # the textbook Wadler translation over already-supported constructs — nothing new
+  # reaches the kernel:
+  #   * no qualifiers left        -> `[e]`               (singleton list)
+  #   * generator `x <- src`      -> `flat_map(src, fn(x) -> <rest>)`
+  #   * filter `cond`             -> `if cond then <rest> else []`
+  # The sole library dependency is `flat_map` (Std.List; `use`d or, at #18, the
+  # dependent-compiled stdlib). Generator patterns must currently be a plain
+  # variable — a destructuring generator is rejected rather than silently mistyped.
+  def elaborate_expr_typed({:comprehension, meta, [body | quals]}, names, ctx, env) do
+    case desugar_comprehension(quals, body, Keyword.get(meta, :line, 0)) do
+      {:ok, desugared} -> elaborate_expr_typed(desugared, names, ctx, env)
+      {:error, _} = err -> err
+    end
+  end
+
   # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
   # `let` rhs, any sub-term the checked tuple clause at line ~1137 doesn't reach).
   # Synthesizes the non-dependent Σ `Sigma(A, λ_:A. B)` from the inferred component
@@ -4764,6 +4780,36 @@ defmodule Cure.Elab.Elaborator do
 
   defp desugar_list({:list, m, elems}), do: fold_list_literal(elems, m)
   defp desugar_list(other), do: other
+
+  # Wadler comprehension translation, right-folded over the qualifier list. The
+  # body of an exhausted qualifier list is a singleton `[e]`; a generator wraps
+  # the remainder in a `flat_map` lambda; a filter guards it with `if … else []`.
+  defp desugar_comprehension([], body, line), do: {:ok, {:list, [line: line], [body]}}
+
+  defp desugar_comprehension([{:generator, _gm, [pat, source]} | rest], body, line) do
+    with {:ok, param} <- generator_param(pat),
+         {:ok, inner} <- desugar_comprehension(rest, body, line) do
+      lambda = {:lambda, [params: [param], line: line], [inner]}
+      {:ok, {:function_call, [name: "flat_map", line: line], [source, lambda]}}
+    end
+  end
+
+  defp desugar_comprehension([qual | rest], body, line) do
+    cond_ast =
+      case qual do
+        {:filter, _fm, [c]} -> c
+        other -> other
+      end
+
+    with {:ok, inner} <- desugar_comprehension(rest, body, line) do
+      {:ok, {:conditional, [line: line], [cond_ast, inner, {:list, [line: line], []}]}}
+    end
+  end
+
+  # A generator binds a single variable in this first port; a destructuring
+  # generator (`{a, b} <- xs`) is rejected rather than silently mistyped.
+  defp generator_param({:variable, _m, name}), do: {:ok, {:param, [], name}}
+  defp generator_param(other), do: {:error, {:unsupported_comprehension_pattern, other}}
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
