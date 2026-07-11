@@ -1635,3 +1635,131 @@ NOT merge.
 Commits this cycle: this record only (audit found nothing to fix).
 
 ---
+
+## Iteration 22
+
+**Scope of fresh audit:** the convergence-confirming cycle (iteration 21 was
+clean → streak 1). Fresh adversarial audit dispatched over four changed slices
+(edition/project, migrate engine, lexer/parser/printer, CLI). It was **NOT
+clean** — it surfaced five real bugs, all reproduced and fixed via strict TDD.
+A follow-up confirming re-audit over those five fixes then surfaced two more.
+**Seven confirmed bugs fixed this cycle. Streak reset to 0.**
+
+### Fixed (all ghost-authored, red-test-first)
+
+1. **Printer — typealias reprinted as `type`, flipping node kind** (`b6e71d4`,
+   refined `76045d6`). A `typealias X = Foo(args)` (a transparent `:type_annotation`)
+   reprinted with the keyword `type` reparses to a nominal single-constructor
+   `:container` (an ADT) — a node-kind + semantics flip. Hit `lib/std/char.cure`
+   and `lib/std/string.cure`. Fix: a `:type_annotation` whose RHS is an applied
+   type (`{:function_call, …}`) MUST reprint as `typealias`; every other shape
+   (bare-name, arrow) keeps `type`. (The first commit was too broad — it
+   reprinted ALL `:type_annotation` as `typealias`, breaking `Cure.QuoteTest`'s
+   `type Name = String`; caught by the full-suite gate and narrowed in `76045d6`.)
+
+2. **Printer — nullary constructor lost its parens** (`b6e71d4`). `None()` in a
+   sum type (`{:function_def, …, []}` variant) reprinted to bare `None`, which
+   reparses to a `{:variable}` type reference, not a constructor. Hit
+   `lib/std/option.cure`. Fix: emit `name <> "()"`.
+
+3. **Migrate — proto/interface/impl HEAD type vars not lowercased** (`610dd49`).
+   `uppercase_type_var` lowercased method `:function_def` signatures but left the
+   declaration HEAD's binders (a proto/interface's type-param list, an impl's
+   for-type + where-constraints) uppercase, desyncing every binder from its uses;
+   the reparse-only `verify/3` accepted it silently. Fix: head-bearing walk
+   clauses (`:interface`, `:implementation`, `:container` protocol/trait) that
+   rename the head fields (string-list `:params`/`:type_params` and expression
+   `:for_type`/`:constraints`) and thread the rename into the body walk.
+
+4. **CLI — nine fixed-arity commands misblamed extra args** (`5a3a9f1`). `lsp`,
+   `stdlib`, `version`, `test`, `repl`, `doctor`, `fix`, `top`, `john` had only an
+   exact `["cmd"]` arm; an extra positional arg fell through to the generic
+   catch-all and printed "Unknown command: <cmd>", blaming a valid command. All
+   nine take zero positional args. Fix: `["cmd" | _] -> usage_error(...)` fallbacks
+   (mirrors the run/check/init/deps/keys precedent), which also reject the stray
+   arg before the command runs (no accidental lsp-server / repl / stdlib-compile).
+
+5. **Printer — leading comment on an inline lambda body drifted** (`b99b92c`). A
+   lambda body carrying a `# c` leading comment rendered inline after `-> `,
+   splicing `# c\nbody` mid-line; on reparse the stranded comment jumped to the
+   file top — `print∘reparse∘print ≠ print∘reparse`. Fix: break the body to its
+   own indented line when it carries a leading comment (inline path byte-for-byte
+   unchanged otherwise). The analogous if/then-branch drift is UNREACHABLE — a
+   then-branch must be an inline expression, so no valid source can put a leading
+   comment there (confirmed: `if x then\n…` is a parse error).
+
+**Found by the confirming re-audit of fixes 1–5, then fixed:**
+
+6. **Migrate — head type var re-freshened per method, re-desyncing** (`5ec6edb`).
+   Fix 3 freshened a head var against every name the WHOLE body uses, but each
+   method `:function_def` still re-derived its own rename against only ITS
+   signature. So when the class var's lowercase form `t` was taken by a local in
+   ONE method, the head freshened to `t1` while a method WITHOUT that local
+   independently picked `t` — desyncing again (and colliding onto the unrelated
+   `t`). Fix: thread the enclosing rename map (`active`) into
+   `rewrite_signature`/`build_rename_map` so a head-bound candidate REUSES the
+   head's target verbatim, and method-locals reserve the head targets.
+
+7. **CLI — `cure help extra` misblamed `help` as unknown** (`cdbe3ea`). `["help"]`
+   was the last exact arm with no `| _` fallback → "Unknown command: help". Fix:
+   `["help" | _] -> help()` (extra args to help just show help).
+
+### Fresh audit — what the confirming re-audit verified
+
+Two parallel general-purpose Opus agents audited the seven fixes' changed slices
+(printer; migrate head-walk + CLI arms). Every claim was verified against source /
+reproduced before counting:
+- **Printer fixes 1, 2, 5: SOUND.** All round-trip + idempotence probes pass,
+  including the three targeted std files (`option`/`char`/`string` idempotent) and
+  the full `printer_fidelity` + `lossless_roundtrip` suites. `applied_type_rhs?`
+  discriminator is required and correct (verified `type X = Foo(args)` → container
+  vs `typealias X = Foo(args)` → type_annotation directly); nullary-ctor clause has
+  no over-reach (bare `None` is a separate `{:variable, variant: true}` node);
+  `has_leading?` reads both 3- and 4-tuple meta and the `depth+1` pad is correct at
+  nesting.
+- **Migrate fix 3: sound EXCEPT the multi-method collision (→ fix 6).** Constraint
+  and for-type vars rename in sync; `defaults` staleness is benign (printer renders
+  interfaces from `body`, not `defaults`, and migrate reparses); no over-reach on
+  plain `mod`/`rec`/`enum` containers.
+- **CLI fix 4: sound.** All nine `cmd_*` verified zero-positional; no arm shadowed;
+  `usage_error/1` exits nonzero. One residual misblame (`help`) → fix 7.
+
+### Outstanding findings (after iteration 22)
+
+**None blocking.** All seven confirmed bugs are fixed; the confirming re-audit's
+only remaining items are the two carried below.
+
+**Latent / adjacent (carried, NOT blocking bugs):**
+- **NEW — qualified-name applied-alias garble (parser, pre-existing).**
+  `typealias X = Std.Map(K, V)` (a qualified name applied to args) parses to a
+  garbage node (`{:function_call, callee: {:type_annotation…}, name: "unknown"}`)
+  that the printer faithfully renders as `unknown(K, V)`, dropping `typealias X =`.
+  VERIFIED it is INVALID surface — the same `Std.Map(K, V)` is a hard **parse
+  error** in a signature (`expected :rparen, got :lparen`); it only slips through
+  in the typealias RHS. So this is garbage-in on unsupported surface (the parser
+  should reject it, as it does elsewhere), NOT corruption of a valid program.
+  Pre-existing, independent of all seven fixes, same class as the carried
+  @derive-on-`type` drop. A parser-hardening (reject, don't garble) is a separate
+  targeted effort — deferred, not forced inside this editions cycle.
+- **Commit-message inaccuracy (not a code bug).** `76045d6`'s message example
+  claims `type X = (Nat) -> Nat` "keeps `type`". It actually flips to
+  `typealias Endo = Function(Nat, Nat)` — which is CORRECT (arrow types render as
+  `Function(...)`, so the old `type` spelling would have reparsed to a container).
+  The code behavior is right; only the message example is wrong.
+- Carried unchanged: parser drops `@derive` on a `type` declaration; `cure test` /
+  project-lib load `File.read!` the wildcard corpus; duplicate `[project]`
+  divergence; `comment_texts` non-quote-aware; migrate engine no rule-rescue;
+  `edition = ""` fails load; uppercase-type-var CTX false-positive; package-manager
+  scope items.
+
+**Loop status:** iteration 22 was the convergence-confirming cycle but came back
+**NOT clean** — seven real bugs found + fixed (five in the fresh audit, two in the
+confirming re-audit). **Streak reset to 0.** Convergence needs two consecutive
+clean audits; the next cycle must be clean to reach streak 1 again. Cron **left in
+place**. Full suite green: **3991 passed, 0 failures**; Antigen 309/309. Do NOT
+merge.
+
+Commits this cycle: `b6e71d4`, `610dd49`, `5a3a9f1`, `b99b92c`, `76045d6`,
+`5ec6edb`, `cdbe3ea`, plus this record.
+
+---
