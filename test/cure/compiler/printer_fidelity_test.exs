@@ -34,6 +34,20 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     out
   end
 
+  test "opaque type round-trips instead of inspecting the raw container tuple" do
+    # `container_to_string`'s catch-all `inspect/1`-ed the `:opaque` container into
+    # a raw Elixir tuple that fails to reparse, so `cure migrate` aborted any file
+    # containing an `opaque type`. It must reprint as surface `opaque type Name`.
+    out = assert_roundtrips("mod M\n  opaque type Handle\n")
+    assert out =~ "opaque type Handle"
+    refute out =~ ":container"
+  end
+
+  test "parameterized opaque type keeps its head params on round-trip" do
+    out = assert_roundtrips("mod M\n  opaque type Box(a)\n")
+    assert out =~ "opaque type Box(a)"
+  end
+
   test "prefix bnot keeps the separating space (bnot a, not bnota)" do
     out = assert_roundtrips("mod M\n  fn f(a: Int) -> Int = bnot a\n")
     assert out =~ "bnot a"

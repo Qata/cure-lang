@@ -1599,6 +1599,7 @@ defmodule Cure.Compiler.Printer do
         :app -> app_to_string(meta, body, depth, indent)
         :proof -> proof_to_string(meta, body, depth, indent)
         :primitive -> primitive_to_string(meta, body, depth, indent)
+        :opaque -> opaque_to_string(meta, body, depth, indent)
         _ -> inspect({:container, meta, body})
       end
 
@@ -1613,6 +1614,19 @@ defmodule Cure.Compiler.Printer do
   # module home. The body is empty; a `@builtin(:tag)` decorator (in meta) prints
   # on the preceding line via `maybe_prepend_decorator/5` in `container_to_string`.
   defp primitive_to_string(meta, _body, _depth, _indent), do: "primitive #{Keyword.get(meta, :name)}"
+
+  # -- Opaque type (`opaque type Name(params)`) ------------------------------
+  #
+  # A constructor-less, non-eliminable carrier type. The body is empty and the
+  # optional head params come from `:type_params`. Without this case the
+  # container catch-all `inspect/1`-ed the raw tuple, producing output that fails
+  # to reparse — which surfaced as `cure migrate` aborting any file containing an
+  # `opaque type` (the whole-file verify reprint could not round-trip).
+  defp opaque_to_string(meta, _body, _depth, _indent) do
+    tp = Keyword.get(meta, :type_params)
+    tp_str = if tp && tp != [], do: "(#{Enum.join(tp, ", ")})", else: ""
+    "opaque type #{Keyword.get(meta, :name)}#{tp_str}"
+  end
 
   # -- Supervisor container (`sup Name`) -------------------------------------
   #
