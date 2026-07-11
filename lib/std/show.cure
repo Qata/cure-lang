@@ -21,6 +21,13 @@ mod Std.Show
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
+
+  ## `String` is `List(Char)`; its module supplies the type alias the
+  ## signatures below name. `<>` in the instance bodies desugars to
+  ## `Std.Semigroup.combine`, so that interface must be in scope too.
+  use Std.String
+  use Std.Semigroup
+
   ## Convert a value of any `Show`-able type to its string representation.
   interface Show(t)
     ## Canonical string form of `x`.
@@ -58,16 +65,19 @@ mod Std.Show
 
   # -- FFI helpers ---------------------------------------------------
 
-  ## Private: integer -> binary.
-  @extern(:erlang, :integer_to_binary, 1)
+  ## Private: integer -> code-point list (`String` is `List(Char)`, which
+  ## erases to a charlist, so the `*_to_list` BIFs are the coherent choice —
+  ## `*_to_binary` would yield a `Binary`, not the `List(Char)` these signatures
+  ## promise).
+  @extern(:erlang, :integer_to_list, 1)
   local fn int_to_string(n: Int) -> String
 
-  ## Private: float -> binary.
-  @extern(:erlang, :float_to_binary, 1)
+  ## Private: float -> code-point list.
+  @extern(:erlang, :float_to_list, 1)
   local fn float_to_string(f: Float) -> String
 
-  ## Private: atom -> binary.
-  @extern(:erlang, :atom_to_binary, 1)
+  ## Private: atom -> code-point list.
+  @extern(:erlang, :atom_to_list, 1)
   local fn atom_to_string(a: Atom) -> String
 
   # -- Convenience functions -----------------------------------------
