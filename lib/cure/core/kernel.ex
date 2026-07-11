@@ -420,34 +420,34 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-  # Checking-mode `bind` against goal `Effect(B)`: get `A` from `e`, then check
-  # `k` against the NON-dependent `Π (_:A) -> Effect(B)`. Building the Π as a term
-  # and evaluating it lets `check` propagate the domain/codomain into a literal
-  # `λ` continuation. A goal that is not `Effect(_)` falls to infer-then-convert.
-  def check(ctx, {:effect_bind, e, k}, expected) do
+  # Checking-mode `bind` against goal `Effect(B)`: INFER the bind and convert its
+  # inferred `Effect(B')` against the goal. Inference reads the continuation's
+  # type via `ensure_pi`, which takes the Π's domain/codomain and IGNORES its
+  # grade — so a continuation of ANY multiplicity (`λ (r :linear A). …`, the
+  # graded-effect-binder case) is accepted, and the grade is the relevance
+  # checker's obligation, not a fixed value the kernel invents here. (The prior
+  # cut built the Π with a hardcoded ω grade and rejected a graded continuation
+  # on `Conv`'s grade-equality.) A goal that is not `Effect(_)` falls to the
+  # generic infer-then-convert.
+  def check(ctx, {:effect_bind, _e, _k} = term, expected) do
     sig = Context.signature(ctx)
-    depth = Context.length(ctx)
 
     case ensure_effect(Normalise.whnf_value(expected, sig), :effect_bind_goal_not_effect) do
-      {:ok, b_goal} ->
-        with {:ok, e_type} <- infer(ctx, e),
-             {:ok, a_val} <-
-               ensure_effect(Normalise.whnf_value(e_type, sig), :effect_bind_not_effect) do
-          # Reify A and B at the ambient depth; the codomain `Effect(B)` sits one
-          # binder deeper than `B` was reified, so shift it by 1. Non-dependent:
-          # the Π's bound variable never occurs in the codomain.
-          a_term = Quote.reify(a_val, depth, sig)
-          b_term = Quote.reify(b_goal, depth, sig)
-
-          pi_term =
-            {:pi, Cure.Core.Grade.unrestricted(), a_term,
-             {:effect_type, Term.shift(b_term, 1, 0)}}
-
-          check(ctx, k, Eval.eval(pi_term, Context.env(ctx)))
+      {:ok, _b_goal} ->
+        with {:ok, inferred} <- infer(ctx, term),
+             :ok <-
+               ensure_conv(
+                 inferred,
+                 Normalise.whnf_value(expected, sig),
+                 Context.length(ctx),
+                 sig,
+                 :effect_bind_result_mismatch
+               ) do
+          :ok
         end
 
       {:error, _} ->
-        check_via_infer(ctx, {:effect_bind, e, k}, expected)
+        check_via_infer(ctx, term, expected)
     end
   end
 

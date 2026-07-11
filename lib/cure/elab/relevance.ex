@@ -345,6 +345,36 @@ defmodule Cure.Elab.Relevance do
 
   # Leaves (`:global`, `:type`, `:hole`, literals) and any other form: no
   # occurrence to account for. Mirrors `Erase`'s leaf clause.
+  # `bind(e, λx. body)` runs `e` once, producing `x`, then runs the continuation
+  # ONCE — so it is a one-shot graded `let` over the effect's result, NOT the
+  # generic ω-scaling `:lam` closure (which assumes a λ may be entered any number
+  # of times). Mirror the `:let` `:not_join` branch: `seq` `e`'s uses with the
+  # continuation's captures counted ONCE, and `check_binder` enforces the
+  # continuation grade `g` on the result binder `x` (linear exactly-once, affine
+  # at-most-once). Without this clause an effectful body hit the `_leaf` catch-all
+  # and NO usage inside it — erased or graded — was ever counted.
+  defp walk({:effect_bind, e, {:lam, g, _dom, body}}, depth, site, st) do
+    with {:ok, ue} <- walk(e, depth, :present_arg, st),
+         {:ok, ub} <- walk(body, depth + 1, site, track_erased(st, g, depth)),
+         :ok <- check_binder(st, depth, g, ub, :lambda) do
+      {:ok, seq(ue, Map.delete(ub, depth))}
+    end
+  end
+
+  # A `bind` with a non-λ (first-class) continuation: seq both children. Not
+  # produced by the elaborator today (the let-lowering always emits a literal λ),
+  # but keeps the walk total and sound.
+  defp walk({:effect_bind, e, k}, depth, site, st) do
+    with {:ok, ue} <- walk(e, depth, :present_arg, st),
+         {:ok, uk} <- walk(k, depth, site, st) do
+      {:ok, seq(ue, uk)}
+    end
+  end
+
+  # `pure(a)` returns `a`; `Effect(T)` in a term position walks its payload.
+  defp walk({:effect_pure, a}, depth, site, st), do: walk(a, depth, site, st)
+  defp walk({:effect_type, t}, depth, site, st), do: walk(t, depth, site, st)
+
   defp walk(_leaf, _depth, _site, _st), do: {:ok, %{}}
 
   # Recognise the join idiom AND prove it is sound to un-join: the `:let` value is a

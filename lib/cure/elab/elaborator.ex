@@ -4511,13 +4511,11 @@ defmodule Cure.Elab.Elaborator do
           # design 2026-07-09-effect-type-former §5.1). The kernel re-checks the
           # emitted `effect_bind`.
           {:veffect_type, payload_val} ->
-            if Keyword.has_key?(meta, :grade) do
-              # Grades on an effect binder are a later concern; refuse rather than
-              # silently drop the grade.
-              {:error, {:graded_effect_let_unsupported, name, meta}}
-            else
-              effectful_let_bind(name, rhs_core, payload_val, rest, expected_core, names, ctx, env)
-            end
+            # A surface grade (`let r :linear = eff()`) rides onto the `bind`
+            # continuation's binder — the effect's RESULT `r` is used per `grade`
+            # (linear channels: used exactly once). Relevance enforces it; the
+            # kernel's `bind` accepts the continuation's own grade.
+            effectful_let_bind(name, rhs_core, payload_val, grade, rest, expected_core, names, ctx, env)
 
           # A PURE rhs — the existing path. SIGNATURE-AWARE reify: a
           # `{:vdata, name, args}` value flattens a family's params and indices
@@ -4601,14 +4599,14 @@ defmodule Cure.Elab.Elaborator do
   # so it is reified at the current depth `Context.length(ctx)`. `rest` is the
   # lambda BODY, elaborated under one new binder (`ctx1`, `names1`), so the block's
   # expected type is shifted by one (`expected1`). The kernel re-checks the node.
-  defp effectful_let_bind(name, rhs_core, payload_val, rest, expected_core, names, ctx, env) do
+  defp effectful_let_bind(name, rhs_core, payload_val, grade, rest, expected_core, names, ctx, env) do
     t_core = Quote.reify(payload_val, Context.length(ctx), Context.signature(ctx))
     ctx1 = Context.extend(ctx, payload_val)
     names1 = [name | names]
     expected1 = Subst.shift(expected_core, 1, 0)
 
     with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
-      {:ok, {:effect_bind, rhs_core, {:lam, Grade.unrestricted(), t_core, body_core}}}
+      {:ok, {:effect_bind, rhs_core, {:lam, grade, t_core, body_core}}}
     end
   end
 
