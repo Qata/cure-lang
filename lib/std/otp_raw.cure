@@ -1,0 +1,52 @@
+@group(:concurrency)
+mod Std.Otp.Raw
+  ## SEALED unsafe raw base for the typed BEAM process algebra.
+  ##
+  ## Honest, permissive, effect-typed externs over stock Erlang/OTP BIFs — the
+  ## only trust boundary for concurrency. `Std.Otp` narrows these into a typed
+  ## algebra (`Pid(m)`, session channels) and is the sanctioned surface; nothing
+  ## here is meant for direct use. Every operation that performs a BEAM side
+  ## effect returns `Effect(T)` (design 2026-07-09-effect-type-former §3.3,
+  ## 2026-07-10-checked-beam-concurrency §2): the effect discipline forbids
+  ## duplicating, dropping, or reordering a `send`/`call`, which the old pure
+  ## `@extern` types (the "purity lie") silently allowed.
+  ##
+  ## Messages and replies are POLYMORPHIC, not `Any`: the type variable is the
+  ## narrow point where `Std.Otp` supplies the message-set code `m`. Payloads must
+  ## be first-order serialisable data (the BEAM copies messages); the typed layer
+  ## enforces that.
+  ##
+  ## NOT here: `spawn`/`start_link`. Spawning a process wraps a process-FUNCTION
+  ## call in a fresh nullary BEAM fun for `erlang:spawn/1` (`spawn(Account.serve,
+  ## init)`, §4) — a bespoke lowering, not a plain extern — so it lives in the
+  ## typed/macro layer. The process body is passed as a FUNCTION, never as a bare
+  ## `Effect` value, so no operation here takes an `Effect` as an argument.
+
+  ## An opaque process identifier — the raw `erlang:pid()`. `Std.Otp` refines it
+  ## to `Pid(m)` carrying the accepted message-set code.
+  opaque type Pid
+
+  ## An opaque monitor/timer reference — the raw `erlang:reference()`.
+  opaque type Ref
+
+  ## The calling process's own pid.
+  @extern(:erlang, :self, 0)
+  fn raw_self() -> Effect(Pid)
+
+  ## Send `msg` to `dest`. Fire-and-forget; the effect is performing the send.
+  @extern(:erlang, :send, 2)
+  fn raw_send(dest: Pid, msg: m) -> Effect(Unit)
+
+  ## Asynchronous `gen_server` cast — no reply.
+  @extern(:gen_server, :cast, 2)
+  fn raw_cast(server: Pid, msg: m) -> Effect(Unit)
+
+  ## Synchronous `gen_server` call — the reply type is where `Std.Otp` threads
+  ## the dependent `ReplyOf(req)`; here it is a free (return-polymorphic) result.
+  @extern(:gen_server, :call, 2)
+  fn raw_call(server: Pid, req: q) -> Effect(r)
+
+  ## Establish a monitor on `pid`; the returned `Ref` tags the `DOWN` message.
+  @extern(:erlang, :monitor, 2)
+  fn raw_monitor(kind: Atom, pid: Pid) -> Effect(Ref)
+end
