@@ -382,6 +382,18 @@ defmodule Cure.CLITest do
     end
   end
 
+  describe "cure help with extra args" do
+    test "shows help instead of misblaming 'help' as an unknown command" do
+      # `["help"]` was an exact arm with no `| _` fallback, so `cure help extra`
+      # fell through to the generic catch-all and printed "Unknown command: help"
+      # — blaming the help command itself. Extra args to `help` should just show
+      # help (standard CLI behavior), never misblame.
+      output = capture_io(fn -> Cure.CLI.main(["help", "bogus"]) end)
+      assert output =~ "Usage: cure"
+      refute output =~ "Unknown command"
+    end
+  end
+
   describe "unknown-command suggestions" do
     # `migrate` is a real dispatch command (cli.ex) but was absent from the
     # known_commands list the "did you mean" suggester searches, so a near-miss

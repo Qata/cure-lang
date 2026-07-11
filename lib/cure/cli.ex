@@ -289,7 +289,9 @@ defmodule Cure.CLI do
         ["story" | _] ->
           cmd_story(opts)
 
-        ["help"] ->
+        ["help" | _] ->
+          # Extra args to `help` show help (standard CLI behavior), never fall
+          # through to the catch-all and misblame `help` as an unknown command.
           help()
 
         [] ->
