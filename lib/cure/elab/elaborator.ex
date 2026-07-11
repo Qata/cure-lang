@@ -527,6 +527,12 @@ defmodule Cure.Elab.Elaborator do
       :string when is_binary(value) ->
         elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
+      # A byte binary literal `<<1, 2, 3>>` desugars to `Std.Binary.of_bytes/1`.
+      :bytes when is_list(value) ->
+        with {:ok, surface} <- desugar_bytes(value, Keyword.get(meta, :line, 0)) do
+          elaborate_expr_typed(surface, names, ctx, env)
+        end
+
       # A symbol literal `:ok` is a value of the Int-tier primitive `Atom` base
       # type — a BEAM atom is its own canonical value (Core `{:atom_lit, a}`).
       :symbol when is_atom(value) ->
@@ -646,27 +652,34 @@ defmodule Cure.Elab.Elaborator do
   # so every arm is checked against the one synthesised type. That reuses all the
   # coverage/motive/index machinery and, since `T` is non-scrutinee-dependent, the
   # motive it builds is effectively constant — correct for inference position.
-  def elaborate_expr_typed({:pattern_match, _meta, [scrut | arms]} = expr, names, ctx, env) do
-    with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
-           elaborate_expr_typed(scrut, names, ctx, env),
-         {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
-         %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
-         arity = length(telescope),
-         pc = Inductive.param_count(env, dname),
-         {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
-         branch_names = branch_scope(quantities, pattern_vars) ++ names,
-         branch_ctx = extend_context(ctx, telescope, param_vals),
-         {:ok, _b_term, t_branch_val} <-
-           elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
-         t_branch = Quote.reify(t_branch_val, Context.length(branch_ctx)),
-         {:ok, result_type_term} <- strengthen_inferred_type(t_branch, arity),
-         {:ok, term} <- elaborate_match(scrut, arms, result_type_term, names, ctx, env),
-         result_type_val = Eval.eval(result_type_term, Context.env(ctx)),
-         :ok <- Kernel.check(ctx, term, result_type_val) do
-      {:ok, term, result_type_val}
+  def elaborate_expr_typed({:pattern_match, meta, [scrut | arms]} = expr, names, ctx, env)
+      when is_list(meta) do
+    if special_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+        elaborate_expr_typed(desugared, names, ctx, env)
+      end
     else
-      {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
-      {:error, _} = err -> err
+      with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
+             elaborate_expr_typed(scrut, names, ctx, env),
+           {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
+           %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
+           arity = length(telescope),
+           pc = Inductive.param_count(env, dname),
+           {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
+           branch_names = branch_scope(quantities, pattern_vars) ++ names,
+           branch_ctx = extend_context(ctx, telescope, param_vals),
+           {:ok, _b_term, t_branch_val} <-
+             elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
+           t_branch = Quote.reify(t_branch_val, Context.length(branch_ctx)),
+           {:ok, result_type_term} <- strengthen_inferred_type(t_branch, arity),
+           {:ok, term} <- elaborate_match(scrut, arms, result_type_term, names, ctx, env),
+           result_type_val = Eval.eval(result_type_term, Context.env(ctx)),
+           :ok <- Kernel.check(ctx, term, result_type_val) do
+        {:ok, term, result_type_val}
+      else
+        {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
+        {:error, _} = err -> err
+      end
     end
   end
 
@@ -692,6 +705,13 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
 
+  # `return e` — in tail position it IS the value of the enclosing function or
+  # branch, so it elaborates as the identity on `e`. The classic throw/catch
+  # unwind is dropped (a total language has no such escape); the STRUCTURED
+  # tail-position meaning is all that survives.
+  def elaborate_expr_typed({:early_return, _meta, [e]}, names, ctx, env),
+    do: elaborate_expr_typed(e, names, ctx, env)
+
   # Integer range `a..b` (exclusive) / `a..=b` (inclusive). Desugars to a call to
   # the total structurally-recursive helper `Std.Nat.range_upto{,_incl}` (auto-
   # prelude, so no `use` is needed) — the honest analog of Idris's `enumFromTo`.
@@ -702,6 +722,44 @@ defmodule Cure.Elab.Elaborator do
     line = Keyword.get(meta, :line, 0)
     call = {:function_call, [name: fname, line: line], [from_ast, to_ast]}
     elaborate_expr_typed(call, names, ctx, env)
+  end
+
+  # List comprehension `[e for x <- xs, cond, y <- ys]`. Desugars (before Core) to
+  # the textbook Wadler translation over already-supported constructs — nothing new
+  # reaches the kernel:
+  #   * no qualifiers left        -> `[e]`               (singleton list)
+  #   * generator `x <- src`      -> `flat_map(src, fn(x) -> <rest>)`
+  #   * filter `cond`             -> `if cond then <rest> else []`
+  # The sole library dependency is `flat_map` (Std.List; `use`d or, at #18, the
+  # dependent-compiled stdlib). Generator patterns must currently be a plain
+  # variable — a destructuring generator is rejected rather than silently mistyped.
+  def elaborate_expr_typed({:comprehension, meta, [body | quals]}, names, ctx, env) do
+    case desugar_comprehension(quals, body, Keyword.get(meta, :line, 0)) do
+      {:ok, desugared} -> elaborate_expr_typed(desugared, names, ctx, env)
+      {:error, _} = err -> err
+    end
+  end
+
+  # String interpolation `"a#{e}b"` desugars to a right fold of `str_concat` over
+  # the segments (see `desugar_interpolation`). String-valued holes only; a
+  # non-string hole fails as an ordinary type error against `str_concat`'s
+  # `List(Char)` parameter.
+  def elaborate_expr_typed({:string_interpolation, meta, segments}, names, ctx, env) do
+    elaborate_expr_typed(
+      desugar_interpolation(segments, Keyword.get(meta, :line, 0)),
+      names,
+      ctx,
+      env
+    )
+  end
+
+  # Map literal `%{k: v, …}`. Desugars (before Core) to nested `Std.Map.put`
+  # calls over `Std.Map.new()` — the same shape a hand-written builder has, so
+  # nothing new reaches the kernel. `Std.Map` is a thin `@extern` wrapper over
+  # Erlang `:maps`, so this is seam-free (the runtime value is always a raw map);
+  # the caller must have `use Std.Map` in scope for `put`/`new` to resolve.
+  def elaborate_expr_typed({:map, meta, pairs}, names, ctx, env) do
+    elaborate_expr_typed(desugar_map(pairs, Keyword.get(meta, :line, 0)), names, ctx, env)
   end
 
   # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
@@ -1371,10 +1429,17 @@ defmodule Cure.Elab.Elaborator do
   # bodies (`elaborate_branch_body`). `let`-blocks are now handled in checking
   # mode (the `{:block, …}` clause below); inference-position inline match (no
   # expected type) stays unimplemented (a separate aux-function lift).
-  def elaborate_expr_checked({:pattern_match, _meta, [scrut | arms]}, expected_core, names, ctx, env) do
-    with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
-         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-      {:ok, term}
+  def elaborate_expr_checked({:pattern_match, meta, [scrut | arms]}, expected_core, names, ctx, env)
+      when is_list(meta) do
+    if special_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+        elaborate_expr_checked(desugared, expected_core, names, ctx, env)
+      end
+    else
+      with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
     end
   end
 
@@ -1401,6 +1466,11 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:block, _meta, stmts}, expected_core, names, ctx, env) do
     elaborate_let_block(stmts, expected_core, names, ctx, env)
   end
+
+  # `return e` in a checking position (e.g. an `if`/`match` branch tail): the
+  # identity on `e`, checked against the expected type. See the inference clause.
+  def elaborate_expr_checked({:early_return, _meta, [e]}, expected_core, names, ctx, env),
+    do: elaborate_expr_checked(e, expected_core, names, ctx, env)
 
   # Dependent-pair introduction `%[a, b]` in checking mode. The expected type must
   # be the builtin inductive Sigma; elaborate `a` against its domain, then `b`
@@ -1474,6 +1544,30 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env),
     do: elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
 
+  # Map literal in checked position: desugar to the `put`/`new` chain and re-check
+  # against the expected type. This is what lets an empty `%{}` (a bare `new()`
+  # with nothing to pin its key/value metavariables in synthesis) solve them from
+  # an expected `Map(k, v)`.
+  def elaborate_expr_checked({:map, meta, pairs}, expected_core, names, ctx, env),
+    do:
+      elaborate_expr_checked(
+        desugar_map(pairs, Keyword.get(meta, :line, 0)),
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+
+  def elaborate_expr_checked({:string_interpolation, meta, segments}, expected_core, names, ctx, env),
+    do:
+      elaborate_expr_checked(
+        desugar_interpolation(segments, Keyword.get(meta, :line, 0)),
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+
   # Type-directed compact-Nat literal: a non-negative integer literal checked
   # against the `Nat` family lowers to a compact `{:nat_lit, n}` — the surface
   # payoff of the compact-Nat kernel path, so a numeric literal at `Nat` (and
@@ -1483,6 +1577,7 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
     string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
+    bytes? = Keyword.get(meta, :subtype) == :bytes and is_list(value)
     union_ctor = union_literal_ctor(meta, value, expected_core, ctx, env)
 
     cond do
@@ -1499,6 +1594,12 @@ defmodule Cure.Elab.Elaborator do
       # clause), so the expected `List(Char)`/`String` type drives each char.
       string? ->
         elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+
+      # A byte binary literal checks as its `Std.Binary.of_bytes/1` desugaring.
+      bytes? ->
+        with {:ok, surface} <- desugar_bytes(value, Keyword.get(meta, :line, 0)) do
+          elaborate_expr_checked(surface, expected_core, names, ctx, env)
+        end
 
       int? and nat_expected?(expected_core, ctx) ->
         {:ok, {:nat_lit, value}}
@@ -3570,10 +3671,17 @@ defmodule Cure.Elab.Elaborator do
   # followed by a single variable/wildcard catch-all.
   defp literal_chain?(pats, prim) when length(pats) >= 1 do
     {lits, [{last_pat, _}]} = Enum.split(pats, length(pats) - 1)
-    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) end) and catchall_pat?(last_pat)
+    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) or pin_var?(p) end) and catchall_pat?(last_pat)
   end
 
   defp literal_chain?(_pats, _prim), do: false
+
+  # A pin arm `^x` on a primitive scrutinee behaves like a literal arm whose
+  # compared value is the current value of the bound variable `x` (an equality
+  # constraint, not a fresh binding). It always needs a trailing catch-all — a pin
+  # is never known to be exhaustive.
+  defp pin_var?({:pin, _m, [{:variable, _vm, _name}]}), do: true
+  defp pin_var?(_p), do: false
 
   defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
   defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
@@ -3616,7 +3724,20 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
-      test = lit_eq_test(prim, scrut_term, v, scrut_type, ctx)
+      test = eq_test_core(prim, scrut_term, lit_core(v, prim), scrut_type, ctx)
+      {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
+    end
+  end
+
+  # A pin arm `^x`: same as a literal arm, but the compared value is the current
+  # value of the bound variable `x` (elaborated to its core term) rather than a
+  # constant. `scrut == x` picks the identical type-directed equality twin.
+  defp literal_chain(scrut_expr, scrut_term, scrut_type, prim, [{{:pin, _m, [{:variable, _vm, name}]}, body} | rest], expected, names, ctx, env) do
+    with {:ok, x_core, _x_type} <- elaborate_expr_typed({:variable, [], name}, names, ctx, env),
+         {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
+         {:ok, rest_core} <-
+           literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
+      test = eq_test_core(prim, scrut_term, x_core, scrut_type, ctx)
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
   end
@@ -3625,12 +3746,17 @@ defmodule Cure.Elab.Elaborator do
   # `:bounded` scrutinee (Char) has no monomorphic eq twin, so it uses the
   # polymorphic `struct_eq` applied to the signature-aware readback of the
   # scrutinee type (its type argument is erased at emit).
-  defp lit_eq_test(:bounded, scrut_term, v, scrut_type, ctx) do
+  # The per-arm equality test `scrut == rhs` yielding the inductive Bool, where
+  # `rhs` is an already-built core term (a literal for a literal arm, the pinned
+  # variable's term for a pin arm). A `:bounded` scrutinee (Char) has no monomorphic
+  # eq twin, so it uses the polymorphic `struct_eq` applied to the signature-aware
+  # readback of the scrutinee type (its type argument is erased at emit).
+  defp eq_test_core(:bounded, scrut_term, rhs_core, scrut_type, ctx) do
     ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
-    {:app, app2(:struct_eq, ty, scrut_term), lit_core(v, :bounded)}
+    {:app, app2(:struct_eq, ty, scrut_term), rhs_core}
   end
 
-  defp lit_eq_test(prim, scrut_term, v, _scrut_type, _ctx) do
+  defp eq_test_core(prim, scrut_term, rhs_core, _scrut_type, _ctx) do
     eq_global =
       case prim do
         :int -> :int_eq
@@ -3638,7 +3764,7 @@ defmodule Cure.Elab.Elaborator do
         :bool -> :eq
       end
 
-    app2(eq_global, scrut_term, lit_core(v, prim))
+    app2(eq_global, scrut_term, rhs_core)
   end
 
   # A flat n-element tuple projects POSITIONALLY: `%[e1, …, en]` binds
@@ -4972,6 +5098,359 @@ defmodule Cure.Elab.Elaborator do
 
   defp desugar_list({:list, m, elems}), do: fold_list_literal(elems, m)
   defp desugar_list(other), do: other
+
+  # Wadler comprehension translation, right-folded over the qualifier list. The
+  # body of an exhausted qualifier list is a singleton `[e]`; a generator wraps
+  # the remainder in a `flat_map` lambda; a filter guards it with `if … else []`.
+  defp desugar_comprehension([], body, line), do: {:ok, {:list, [line: line], [body]}}
+
+  defp desugar_comprehension([{:generator, _gm, [pat, source]} | rest], body, line) do
+    with {:ok, param} <- generator_param(pat),
+         {:ok, inner} <- desugar_comprehension(rest, body, line) do
+      lambda = {:lambda, [params: [param], line: line], [inner]}
+      {:ok, {:function_call, [name: "flat_map", line: line], [source, lambda]}}
+    end
+  end
+
+  defp desugar_comprehension([qual | rest], body, line) do
+    cond_ast =
+      case qual do
+        {:filter, _fm, [c]} -> c
+        other -> other
+      end
+
+    with {:ok, inner} <- desugar_comprehension(rest, body, line) do
+      {:ok, {:conditional, [line: line], [cond_ast, inner, {:list, [line: line], []}]}}
+    end
+  end
+
+  # A generator binds a single variable in this first port; a destructuring
+  # generator (`{a, b} <- xs`) is rejected rather than silently mistyped.
+  defp generator_param({:variable, _m, name}), do: {:ok, {:param, [], name}}
+  defp generator_param(other), do: {:error, {:unsupported_comprehension_pattern, other}}
+
+  # `%{k: v, …}` → nested `Std.Map.put(k, v, …)` over `Std.Map.new()`. `%{}`
+  # folds to a bare `new()`. Shared by the typed and checked map clauses.
+  defp desugar_map(pairs, line) do
+    Enum.reduce(Enum.reverse(pairs), {:function_call, [name: "new", line: line], []}, fn
+      {:pair, _pm, [key, value]}, acc ->
+        {:function_call, [name: "put", line: line], [key, value, acc]}
+    end)
+  end
+
+  # A `match` whose arms are map patterns cannot go through the constructor-match
+  # machinery (an Erlang map is not a Cure inductive). Map matching is OPEN — keys
+  # absent from the pattern are ignored — so it desugars to `has_key`-guarded
+  # conditionals over `Std.Map`, exactly the shape a hand-written lookup takes:
+  #
+  #   match m
+  #     %{a: v, tag: :hit} -> body
+  #     _                  -> default
+  #
+  #   ⇒ if has_key(:a, m) and has_key(:tag, m) and get(:tag, m) == :hit
+  #        then (let v = get(:a, m); body)
+  #        else default
+  #
+  # Because matching is open it is non-exhaustive, so the arm list MUST end in a
+  # wildcard/variable default. Value positions are variable binders, `_`, or
+  # literals (an equality guard). The enclosing module must `use Std.Map` so the
+  # emitted `has_key`/`get` resolve, like map literals.
+  def map_match_arms?(arms) do
+    Enum.any?(arms, fn
+      {:match_arm, meta, _body} when is_list(meta) ->
+        match?({:map, _m, _pairs}, Keyword.get(meta, :pattern))
+
+      _ ->
+        false
+    end)
+  end
+
+  # A binary pattern arm is a `:bytes` literal used as a match pattern.
+  def binary_match_arms?(arms) do
+    Enum.any?(arms, fn
+      {:match_arm, meta, _body} when is_list(meta) ->
+        case Keyword.get(meta, :pattern) do
+          {:literal, lmeta, segs} when is_list(lmeta) and is_list(segs) ->
+            Keyword.get(lmeta, :subtype) == :bytes
+
+          _ ->
+            false
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  # Map and byte-binary patterns are not Cure inductives, so a `match` carrying
+  # them desugars (surface → surface) to guarded conditionals rather than going
+  # through the constructor-match machinery. Both entry-point modes share this.
+  def special_match_arms?(arms), do: map_match_arms?(arms) or binary_match_arms?(arms)
+
+  def desugar_special_match(scrut, arms, line) do
+    cond do
+      map_match_arms?(arms) -> desugar_map_arms(scrut, arms, line)
+      binary_match_arms?(arms) -> desugar_binary_arms(scrut, arms, line)
+    end
+  end
+
+  def desugar_map_match(scrut, arms, line), do: desugar_map_arms(scrut, arms, line)
+
+  # A wildcard/variable arm terminates the chain: `_` yields its body directly, a
+  # named binder binds the whole scrutinee first.
+  defp desugar_map_arms(_scrut, [], _line), do: {:error, {:map_match_needs_default}}
+
+  defp desugar_map_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
+    case Keyword.get(meta, :pattern) do
+      {:map, _mm, pairs} ->
+        with {:ok, presence, value_eqs, binds} <- map_arm_guard_binds(scrut, pairs, line),
+             {:ok, else_expr} <- desugar_map_arms(scrut, rest, line) do
+          # Cure's `and` is strict, so a value `get` must never run on an absent
+          # key: gate all `get`s behind the (total) presence guard structurally.
+          # Only once every listed key is present are the value-equality checks
+          # and the binding `get`s evaluated.
+          then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+
+          inner =
+            case value_eqs do
+              [] -> then_body
+              _ -> {:conditional, [line: line], [conjoin(value_eqs, line), then_body, else_expr]}
+            end
+
+          {:ok, {:conditional, [line: line], [conjoin(presence, line), inner, else_expr]}}
+        end
+
+      {:variable, _vm, "_"} ->
+        {:ok, body}
+
+      {:variable, vm, name} ->
+        bind = {:assignment, [let: true, line: line], [{:variable, vm, name}, scrut]}
+        {:ok, {:block, [line: line], [bind, body]}}
+
+      other ->
+        {:error, {:unsupported_map_match_arm, other}}
+    end
+  end
+
+  # Fold a map pattern's pairs into (a) presence guards — every listed key must be
+  # present (`has_key`, total), (b) value-equality guards for literal positions
+  # (`get(k) == lit`, evaluated only after presence holds), and (c) the `let`
+  # bindings for variable value positions.
+  defp map_arm_guard_binds(scrut, pairs, line) do
+    Enum.reduce_while(pairs, {:ok, [], [], []}, fn
+      {:pair, _pm, [{:literal, kmeta, key}, valpat]}, {:ok, presence, value_eqs, binds}
+      when is_atom(key) ->
+        if Keyword.get(kmeta, :subtype) in [:symbol, :atom] do
+          key_lit = {:literal, [subtype: :symbol], key}
+          present = mk_call("has_key", [key_lit, scrut], line)
+
+          case valpat do
+            {:variable, _vm, "_"} ->
+              {:cont, {:ok, presence ++ [present], value_eqs, binds}}
+
+            {:variable, _vm, _name} ->
+              bind =
+                {:assignment, [let: true, line: line],
+                 [valpat, mk_call("get", [key_lit, scrut], line)]}
+
+              {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind]}}
+
+            {:literal, _lm, _lv} = lit ->
+              eq =
+                {:binary_op, [category: :comparison, operator: :==, line: line],
+                 [mk_call("get", [key_lit, scrut], line), lit]}
+
+              {:cont, {:ok, presence ++ [present], value_eqs ++ [eq], binds}}
+
+            other ->
+              {:halt, {:error, {:unsupported_map_value_pattern, other}}}
+          end
+        else
+          {:halt, {:error, {:unsupported_map_key_pattern, key}}}
+        end
+
+      {:pair, _pm, [other_key, _v]}, _acc ->
+        {:halt, {:error, {:unsupported_map_key_pattern, other_key}}}
+    end)
+    |> case do
+      {:ok, presence, value_eqs, binds} -> {:ok, presence, value_eqs, binds}
+      {:error, _} = e -> e
+    end
+  end
+
+  # An empty pattern `%{}` matches any map, so an absent guard is `true`.
+  defp conjoin([], _line), do: {:literal, [subtype: :boolean], true}
+  defp conjoin([g], _line), do: g
+
+  defp conjoin([g | rest], line),
+    do: {:binary_op, [category: :boolean, operator: :and, line: line], [g, conjoin(rest, line)]}
+
+  defp mk_call(name, args, line), do: {:function_call, [name: name, line: line], args}
+
+  # Byte-binary patterns, the destructuring twin of `desugar_map_arms`. A match
+  # whose arms are `<<…>>` patterns desugars to `byte_size`-guarded conditionals
+  # over `Std.Binary`: the length guard (`==` for a fixed pattern, `>=` when a
+  # `rest/binary` tail is present) gates the byte reads, then literal byte
+  # positions add `byte_at(b, i) == lit` guards and variable positions bind
+  # `byte_at(b, i)` / `drop_bytes(b, k)`. Open-ended, so a trailing default arm is
+  # required. Sized/typed segments (`x/float`) are rejected, not mislowered.
+  defp desugar_binary_arms(_scrut, [], _line), do: {:error, {:binary_match_needs_default}}
+
+  defp desugar_binary_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
+    case Keyword.get(meta, :pattern) do
+      {:literal, lmeta, segs} = pat ->
+        if Keyword.get(lmeta, :subtype) == :bytes do
+          with {:ok, length_guard, value_guards, binds} <- binary_arm_guard_binds(scrut, segs, line),
+               {:ok, else_expr} <- desugar_binary_arms(scrut, rest, line) do
+            then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+
+            inner =
+              case value_guards do
+                [] -> then_body
+                _ -> {:conditional, [line: line], [conjoin(value_guards, line), then_body, else_expr]}
+              end
+
+            {:ok, {:conditional, [line: line], [length_guard, inner, else_expr]}}
+          end
+        else
+          {:error, {:unsupported_binary_match_arm, pat}}
+        end
+
+      {:variable, _vm, "_"} ->
+        {:ok, body}
+
+      {:variable, vm, name} ->
+        bind = {:assignment, [let: true, line: line], [{:variable, vm, name}, scrut]}
+        {:ok, {:block, [line: line], [bind, body]}}
+
+      other ->
+        {:error, {:unsupported_binary_match_arm, other}}
+    end
+  end
+
+  # Split a byte pattern's segments into (a) the length guard, (b) literal-byte
+  # equality guards, and (c) the variable/tail `let` bindings. The optional
+  # `rest/binary` tail must come last; any other typed segment is rejected.
+  defp binary_arm_guard_binds(scrut, segs, line) do
+    {fixed, tail} = split_binary_tail(segs)
+
+    with {:ok, value_guards, binds} <- fixed_byte_guards(scrut, fixed, line),
+         {:ok, tail_binds} <- tail_bind(scrut, tail, length(fixed), line) do
+      n = {:literal, [subtype: :integer, line: line], length(fixed)}
+      size = mk_call("byte_size", [scrut], line)
+
+      op = if tail == :none, do: :==, else: :>=
+      length_guard = {:binary_op, [category: :comparison, operator: op, line: line], [size, n]}
+
+      {:ok, length_guard, value_guards, binds ++ tail_binds}
+    end
+  end
+
+  # The last segment is a tail iff it is a `_v/binary` (division-marker) segment.
+  defp split_binary_tail(segs) do
+    case List.last(segs) do
+      {:bin_segment, _sm, [{:binary_op, opm, [v, {:variable, _tm, "binary"}]}]} = seg ->
+        if Keyword.get(opm, :operator) == :/ do
+          {segs |> Enum.reverse() |> tl() |> Enum.reverse(), {:tail, v, seg}}
+        else
+          {segs, :none}
+        end
+
+      _ ->
+        {segs, :none}
+    end
+  end
+
+  defp fixed_byte_guards(scrut, segs, line) do
+    segs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, [], []}, fn {seg, i}, {:ok, guards, binds} ->
+      idx = {:literal, [subtype: :integer, line: line], i}
+
+      case seg do
+        {:bin_segment, _sm, [{:variable, _vm, "_"}]} ->
+          {:cont, {:ok, guards, binds}}
+
+        {:bin_segment, _sm, [{:variable, _vm, _name} = v]} ->
+          bind = {:assignment, [let: true, line: line], [v, mk_call("byte_at", [scrut, idx], line)]}
+          {:cont, {:ok, guards, binds ++ [bind]}}
+
+        {:bin_segment, _sm, [{:literal, _lm, byteval} = lit]} when is_integer(byteval) ->
+          eq =
+            {:binary_op, [category: :comparison, operator: :==, line: line],
+             [mk_call("byte_at", [scrut, idx], line), lit]}
+
+          {:cont, {:ok, guards ++ [eq], binds}}
+
+        other ->
+          {:halt, {:error, {:unsupported_binary_segment, other}}}
+      end
+    end)
+  end
+
+  defp tail_bind(_scrut, :none, _n, _line), do: {:ok, []}
+
+  defp tail_bind(scrut, {:tail, tailvar, seg}, n, line) do
+    case tailvar do
+      {:variable, _tm, "_"} ->
+        {:ok, []}
+
+      {:variable, _tm, _name} ->
+        nlit = {:literal, [subtype: :integer, line: line], n}
+        {:ok, [{:assignment, [let: true, line: line], [tailvar, mk_call("drop_bytes", [scrut, nlit], line)]}]}
+
+      _ ->
+        {:error, {:unsupported_binary_segment, seg}}
+    end
+  end
+
+  # `<<b1, b2, …>>` → `Std.Binary.of_bytes([b1, b2, …])`: a byte binary literal is
+  # a list of byte values packed into a BEAM binary. Only default 8-bit-integer
+  # segments are supported here; a `/type` segment (`x/float`, `x/binary`) is a
+  # deferred rich-bit-syntax case and is rejected rather than mislowered. The
+  # module must `use Std.Binary`.
+  # `"a#{e}b"` → `str_concat("a", str_concat(e, "b"))`: a right fold over the
+  # segments. Literal chunks stay `:string` literals (each desugars to its
+  # `List(Char)`); holes are the segment expressions unchanged, so a hole is
+  # elaborated against `str_concat`'s `List(Char)` parameter — a String hole
+  # checks, a non-String hole is a type error (Show-based conversion is #21).
+  # `str_concat` is auto-preluded (`Std.Binary`), so no import is required.
+  defp desugar_interpolation(segments, line) do
+    case Enum.reverse(segments) do
+      [] ->
+        {:literal, [subtype: :string, line: line], ""}
+
+      [last | rest] ->
+        Enum.reduce(rest, last, fn seg, acc -> mk_call("str_concat", [seg, acc], line) end)
+    end
+  end
+
+  def desugar_bytes(segments, line) do
+    Enum.reduce_while(segments, {:ok, []}, fn
+      {:bin_segment, _sm, [expr]}, {:ok, acc} ->
+        case typed_segment?(expr) do
+          true -> {:halt, {:error, {:unsupported_binary_segment, expr}}}
+          false -> {:cont, {:ok, acc ++ [expr]}}
+        end
+
+      other, _acc ->
+        {:halt, {:error, {:unsupported_binary_segment, other}}}
+    end)
+    |> case do
+      {:ok, values} ->
+        {:ok, mk_call("of_bytes", [{:list, [line: line], values}], line)}
+
+      {:error, _} = e ->
+        e
+    end
+  end
+
+  # A `/type` segment parses as a division `value / type_name` (`<<x/float>>`,
+  # `<<rest/binary>>`); the sole surface marker for a non-default segment.
+  defp typed_segment?({:binary_op, meta, [_v, {:variable, _vm, _type}]}),
+    do: Keyword.get(meta, :operator) == :/
+
+  defp typed_segment?(_), do: false
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly

@@ -183,6 +183,22 @@ defmodule Cure.Types.Type do
   def subtype?({:tuple, _}, {:adt, :tuple, _}), do: true
   def subtype?({:adt, :tuple, _}, {:tuple, _}), do: true
 
+  # Parameterized `Map(k, v)` (resolved to `{:map, k, v}`) compares its key and
+  # value arguments pairwise, covariantly — consistent with the `{:list, a}` and
+  # `{:tuple, as}` rules above. Combined with the universal `{:type_var, _}` rules,
+  # a fully-generic result (`Map(k, v)`, e.g. from the return-polymorphic
+  # `Std.Map.new()` extern) is a subtype of a more-specific declaration
+  # (`Map(t, Bool)`, i.e. `Std.Set`), while a concrete argument stays strict.
+  # This is what lets the parameterized `Std.Map` and its `Std.Set` consumer
+  # type-check under the (loose, gradual) classic checker.
+  def subtype?({:map, k1, v1}, {:map, k2, v2}), do: subtype?(k1, k2) and subtype?(v1, v2)
+
+  # Same-constructor parameterized ADTs (a user `Pair(a, b)` etc.) compare their
+  # arguments pairwise, covariantly, on the same rationale as `{:map, _, _}` above.
+  def subtype?({:adt, key, as}, {:adt, key, bs}) when length(as) == length(bs) do
+    Enum.zip(as, bs) |> Enum.all?(fn {a, b} -> subtype?(a, b) end)
+  end
+
   # Sigma subtyping (delegates to the Sigma module)
   def subtype?({:sigma, _, _, _} = a, b), do: Cure.Types.Sigma.subtype?(a, b)
   def subtype?(a, {:sigma, _, _, _} = b), do: Cure.Types.Sigma.subtype?(a, b)
