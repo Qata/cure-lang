@@ -19,6 +19,8 @@
 - Union family key format: `:"Union<k1|k2|...|kn>"` where `k1..kn` are the sorted member keys. The `<`, `>` and `|` characters are **not producible by the type-name lexer**, so a generated key can never collide with a user-declared type.
 - Union constructor name format: `:"<union_key>$<member_key>"`, e.g. `:"Union<Int|String>$Int"`.
 - **Numeric-literal defaulting:** a bare numeral in a type-expression member position defaults to `Int` (keyed `Int#3`). `Nat` members are only produced by an explicit `Nat`-typed context, which v1 does not provide — so `Nat#n` keys are unreachable in v1 and Task 3's test pins that.
+- **Strict TDD, non-negotiable.** Every task that adds or changes production behaviour (Tasks 1-8) is structured red→green: Step 1 writes the test(s) for that step's behaviour, Step 2 runs them and states the expected failure mode, and only the step(s) after that add implementation — write the minimum code needed to turn that step's tests green, not more. Do not write or edit implementation code before its corresponding test exists and has been observed to fail for the stated reason. The two exceptions are explicit and self-declared in their own task text, not silent: Task 9 ("a pin, not a feature") and the round-trip portion of Task 10 add no new production code, so their tests are written and are expected to pass immediately, pinning existing behaviour rather than driving new behaviour — that is not a violation of red-green, it is the correct shape for a regression pin. Tests assert observable behaviour (elaboration result, parsed AST shape as the parser's actual output contract, emitted/erased runtime value) through the project's public entry points (`Program.elaborate/1`, `Parser.parse/1`, `Cure.Compiler.compile_and_load/1`, `Cure.Elab.Union`'s public API) — never private call counts or internal-only state.
+- **Tests are immutable once green-confirmed correct.** Once a test in this plan passes for the right reason, the only way to keep it passing through a later change is to fix the implementation — never delete, skip, loosen, or rewrite the test to match new code. The sole exception is a test later proven to itself encode wrong behaviour; if that happens, state explicitly what the correct behaviour is and where the test diverges from it before changing it. "The test is inconvenient" or "editing the test is the fastest path to green" are never valid reasons.
 
 ---
 
@@ -83,10 +85,10 @@ So two modules independently declaring the identical family produce **no BEAM-le
 - Produces: `parse_type_arrow/1` — the old `parse_type_expr/1`, renamed. Callers that must **not** absorb `|` call this.
 
 **Background you need:**
-- `parse_type_expr/1` is the single entry point for every type annotation (14 call sites). It is a hand-written recursive-descent ladder; there is no precedence table for types.
+- `parse_type_expr/1` is the single entry point for every type annotation (**17 real call sites** — verified by `grep -n 'parse_type_expr' lib/cure/compiler/parser.ex`, which returns 20 hits: the 1 definition, 2 prose-comment mentions, and 17 actual invocations). It is a hand-written recursive-descent ladder; there is no precedence table for types.
 - The `:bar` token is `%Token{type: :bar, value: "|"}` (`lexer.ex:1432-1443`).
-- **The landmine:** `parse_type_def_adt`'s alias-RHS path calls `parse_type_expr` at `parser.ex:3287`, and a `|` there means "next ADT variant" (`type Foo = (Int) -> Bool | Bar`). If the new production absorbs `|` at that call site, every existing ADT declaration with a parenthesised first variant breaks. That call site **must** switch to `parse_type_arrow/1`.
-- **The second landmine:** arrow *codomain* recursion (`parser.ex:4696`, `:4742`, `:4871`) must also call `parse_type_arrow/1`, so that `A -> B | C` parses as `(A -> B) | C` — i.e. `|` binds **looser** than `->`, per spec §5.1.
+- **The landmine:** `parser.ex:3287` sits in `parse_type_def_adt`'s `{:lparen, _}` branch — the RHS-starts-with-`(` case (`type Endo = (Nat) -> Nat`). **Correction (verified against the real branch):** this branch has *no* existing bar-continuation logic of its own — the "`|` means next ADT variant" behaviour actually lives in the separate catch-all branch a few lines below (`parser.ex:3319-3326`, `parse_more_variants`), which parses the first variant via `parse_type_variant`, not `parse_type_expr`, and never reaches this call site. The real reason line 3287 **must** switch to `parse_type_arrow/1` is narrower but still binding: today, `type Endo = (Nat) -> Nat | X` hitting this branch has no bar-continuation logic at all, so a stray `|` here is a parse error; that is the strict, conservative behaviour to preserve. If the new `|`-aware `parse_type_expr` is left in place at 3287 instead, `type Endo = (Nat) -> Nat | X` would silently start parsing as a union-typed alias RHS rather than erroring or falling through to variant-parsing — a **silent semantics change** to this branch, not a break of an already-working "next variant" feature. Switch it to `parse_type_arrow/1` to preserve current behaviour; do not carry forward the "it protects ADT variant continuation" rationale in commit messages or comments, since that description does not match this branch.
+- **The second landmine:** arrow *codomain* recursion (`parser.ex:4696`, `:4742`, `:4871`) must also call `parse_type_arrow/1`, so that `A -> B | C` parses as `(A -> B) | C` — i.e. `|` binds **looser** than `->`, per spec §5.1. (Independently re-enumerated: these three plus 3287 are the complete and correct "must switch" set — no other call site among the 17 sits adjacent to a following token that a leading/infix `|` would collide with.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -242,7 +244,7 @@ Insert immediately **above** the (now-renamed) `parse_type_arrow/1` in `lib/cure
         _ -> state
       end
 
-    {first, state} = parse_type_arrow(state)
+    {first, state} = parse_union_first_member(state)
     {rest, state} = parse_union_members(state)
 
     case rest do
@@ -250,12 +252,37 @@ Insert immediately **above** the (now-renamed) `parse_type_arrow/1` in `lib/cure
       _ -> {{:union_type, [], [first | rest]}, state}
     end
   end
+```
+
+**Literal members — corrected during plan review (regression risk found).** The plan originally proposed adding an unconditional literal-token guard at the very top of `parse_type_arrow/1` itself. **That is wrong and would be a severe regression**: `parse_type_arrow/1` is the SHARED function underneath all 17 real call sites of the old `parse_type_expr/1`, not just union members — including every dependent type-index argument (`Bounded(3)`, `typealias Char = Bounded(1114112)` in `lib/std/char.cure:17`, `Equivalent(Int, 3, 3)`). Verified against the real `idx_to_core/5` (`lib/cure/elab/declarations.ex`): today, a bare numeral in type position parses to `{:variable, [scope: :local], "3"}`, and `idx_to_core`'s `{:variable, _meta, name}` clause recovers the integer via `numeric_index_value(name)` — there is **no** `idx_to_core` clause for `{:literal, ...}`. Making `parse_type_arrow/1` unconditionally emit `{:literal, [subtype: :integer], 3}` for *every* caller would send that node straight to `idx_to_core`'s catch-all, `{:error, {:unsupported_index_expr, {:literal, ...}}}` — silently breaking `Bounded(3)`, `Bounded(1114112)`, and every other existing numeral-in-type-index declaration in the tree and the standard library.
+
+**The fix: scope literal-recognition to union-member parsing only, and leave `parse_type_arrow/1` byte-for-byte unchanged from today's `parse_type_expr/1` body** (do not add anything to its `case token.type do` — the rename in Step 3 is the *only* change to that function). Two new functions carry the literal logic instead:
+
+```elixir
+  # The first candidate member of a possible union. A literal-shaped token is
+  # ONLY treated as a literal member if a `|` immediately follows — e.g. the
+  # `3` in `3 | String`. If no `|` follows, fall through to parse_type_arrow/1
+  # UNCHANGED, so every existing non-union numeral-in-type-position use
+  # (Bounded(3), Equivalent(Int, 3, 3), Bounded(1114112)) keeps parsing to
+  # {:variable, [scope: :local], "N"} exactly as it does today and keeps
+  # working through idx_to_core's existing numeric_index_value path — this
+  # function never needs to change.
+  defp parse_union_first_member(state) do
+    token = peek(state)
+    next = peek_at(state, 1)
+
+    if literal_token?(token) and match?(%Token{type: :bar}, next) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
 
   defp parse_union_members(state) do
     case peek(state) do
       %Token{type: :bar} ->
         state = advance(state) |> skip_newlines()
-        {member, state} = parse_type_arrow(state)
+        {member, state} = parse_union_member(state)
         {rest, state} = parse_union_members(state)
         {[member | rest], state}
 
@@ -263,33 +290,35 @@ Insert immediately **above** the (now-renamed) `parse_type_arrow/1` in `lib/cure
         {[], state}
     end
   end
+
+  # A subsequent member, reached only after a `|` has already been consumed —
+  # so, unlike the first member, we already KNOW we're inside a union here.
+  # A literal-shaped token is unconditionally a literal member; no lookahead
+  # needed (this covers the `4` in `3 | 4`, which is not itself followed by
+  # another `|`).
+  defp parse_union_member(state) do
+    token = peek(state)
+
+    if literal_token?(token) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
+
+  defp literal_token?(%Token{type: t}), do: t in [:integer, :float, :string, :atom, :char, :bool]
+
+  defp literal_subtype(:integer), do: :integer
+  defp literal_subtype(:float), do: :float
+  defp literal_subtype(:string), do: :string
+  defp literal_subtype(:atom), do: :symbol
+  defp literal_subtype(:char), do: :char
+  defp literal_subtype(:bool), do: :boolean
 ```
 
 Note: `parse_union_members/1` does **not** `skip_newlines` before peeking for `:bar`. That is deliberate — a newline terminates the type annotation, and skipping it would let the parser swallow the `|` of a following ADT variant.
 
-Literal members parse for free: `parse_type_arrow`'s default branch does `state = advance(state); base_name = to_string(token.value)`, which turns the token `3` into `{:variable, [scope: :local], "3"}`. **That is wrong for our purposes** — we need real literal nodes. Add a literal guard at the very top of `parse_type_arrow/1`, before the `case token.type do`:
-
-```elixir
-  defp parse_type_arrow(state) do
-    token = peek(state)
-
-    case token.type do
-      t when t in [:integer, :float, :string, :atom, :char, :bool] ->
-        subtype =
-          case t do
-            :integer -> :integer
-            :float -> :float
-            :string -> :string
-            :atom -> :symbol
-            :char -> :char
-            :bool -> :boolean
-          end
-
-        {literal(subtype, token), advance(state)}
-
-      :lparen ->
-        # ... existing body unchanged from here down
-```
+`peek_at/2` (`parser.ex:5652-5664`, alongside `peek/1` and `peek_ahead/2`) is the existing nil-safe 1-token-lookahead helper — the same one `parse_map_pair/1` uses for its own `identifier`-then-`:colon` lookahead. Always guard with a `match?`/`!= nil` check before reading `next.type`, since it returns `nil` past end-of-stream.
 
 - [ ] **Step 5: Run the parser test**
 
@@ -352,8 +381,8 @@ arrow codomain now call parse_type_arrow/1 so they do not absorb the bar."
 - Produces: AST node `{:typed_pattern, meta, [name_string, type_ast]}` where `meta` carries `line`/`col`.
 
 **Background:**
-- `parse_match_arm/1` (`parser.ex:2076`) parses the pattern with the ordinary expression parser, then calls `maybe_wrap_as/2` (`parser.ex:2088`), which already handles the `x @ pat` as-pattern by peeking for `:at`. **A `:colon` clause slots in beside it with zero disruption**, because `:colon` has no infix binding power, so `parse_expr(state, 0)` already stops cleanly at it.
-- Scope, per spec §5.1: match-arm top level **and** constructor-pattern arguments. **Brace-delimited record/map patterns are excluded** — `parse_map_pair/1`'s first branch (`parser.ex:967-977`) already unconditionally claims `identifier :` inside braces as a field-punning key. Do not touch it.
+- `parse_match_arm/1` (`parser.ex:2076`) parses the pattern with the ordinary expression parser, then calls `maybe_wrap_as/2` at `parser.ex:2079` (the function itself is defined at `parser.ex:2088-2101`), which already handles the `x @ pat` as-pattern by peeking for `:at`. **A `:colon` clause slots in beside it with zero disruption**, because `:colon` has no infix binding power, so `parse_expr(state, 0)` already stops cleanly at it.
+- Scope, per spec §5.1: match-arm top level **and** constructor-pattern arguments. **Brace-delimited record/map patterns are excluded.** `parse_map_pair/1` (`parser.ex:967`) has two relevant branches: the **explicit key:value** branch (`identifier` immediately followed by `:colon`, `parser.ex:972-979`) and the separate **field-punning** branch (`identifier` followed by `,`/`}`/newline, i.e. *no* colon, `parser.ex:981-991`). It is the explicit key:value branch — not the punning branch, despite the plan's original text conflating the two — that already unconditionally claims `identifier :` inside braces; do not touch either branch.
 - **Hazard:** `parse_match_arm_tail/2` calls `expect(state, :arrow)`. A pattern annotation whose type is a *function type* (`x: A -> B`) would have its `->` stolen by the arm. Require parens for that case; do not attempt to disambiguate.
 
 - [ ] **Step 1: Write the failing test**
@@ -410,13 +439,23 @@ Append to `test/cure/compiler/union_parse_test.exs`:
 
       assert collect(ast, []) |> Enum.find(&match?({:typed_pattern, _, _}, &1)) == nil
     end
+
+    test "a typed pattern also parses inside a constructor-pattern argument list" do
+      # Cons(n: Int, rest) — this is NOT a separate parser change (see Step 4):
+      # parse_call_args/1 and parse_more_args/1 (parser.ex:692-720) already call
+      # maybe_wrap_as/2 on every parsed argument, the same helper parse_match_arm/1
+      # uses, so this comes free once Step 3's :colon clause lands.
+      ast = parse!("mod M\n  fn f(x) -> Int = match x\n    Cons(n: Int, rest) -> 1\n    _ -> 2\nend\n")
+
+      assert collect(ast, []) |> Enum.any?(&match?({:typed_pattern, _, ["n", {:variable, _, "Int"}]}, &1))
+    end
   end
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `mix test test/cure/compiler/union_parse_test.exs -k "typed patterns"`
-Expected: FAIL — no `:typed_pattern` node is produced; the pattern parses as a bare `{:variable, _, "n"}` and the trailing `: Int` derails the arm.
+Expected: FAIL — no `:typed_pattern` node is produced; the pattern parses as a bare `{:variable, _, "n"}` and the trailing `: Int` derails the arm (all four tests in this `describe` block fail, including the constructor-argument one — `maybe_wrap_as/2` doesn't yet have a `:colon` clause anywhere it's called from).
 
 - [ ] **Step 3: Add the `:colon` clause to `maybe_wrap_as/2`**
 
@@ -446,16 +485,11 @@ In `lib/cure/compiler/parser.ex`, add a clause **before** the existing `{:variab
 
 (Merge the two `:colon` / `:at` branches into the single existing clause; do not add a second `maybe_wrap_as({:variable, ...})` head, which would be unreachable.)
 
-- [ ] **Step 4: Extend typed patterns to constructor-pattern arguments**
+- [ ] **Step 4: Confirm constructor-pattern arguments already get typed patterns for free**
 
-Constructor pattern arguments are parsed by `parse_call/2` (`parser.ex:202`), whose args come from `parse_expr(state, 0)`. Locate the argument-list loop it uses and wrap each parsed argument with `maybe_wrap_as/2`, exactly as `parse_match_arm/1` does:
+**Correction, found during plan review: no new parser code is needed here.** The plan originally assumed the argument-list loop needed to be located and a `maybe_wrap_as/2` call added to it. That is not so: `parse_call_args/1` and `parse_more_args/1` (`lib/cure/compiler/parser.ex:692-720`, invoked from `parse_call/2` at `parser.ex:671`, itself reached from the postfix-call branch at `parser.ex:202`) **already** call `maybe_wrap_as/2` on every parsed argument today, at lines 701 and 716 — the exact same helper `parse_match_arm/1` calls at line 2079. So once Step 3's `:colon` clause lands in `maybe_wrap_as/2`, `Cons(n: Int, rest)` parses to a `:typed_pattern` node for `n` with **zero additional production-code changes** — Step 1's "constructor-pattern argument list" test above already exercises and proves this. This step is therefore just verification, not implementation: read `parser.ex:692-720` and confirm the two `maybe_wrap_as/2` call sites are there before moving on; do not add a duplicate call.
 
-```elixir
-    {arg, state} = parse_expr(state, 0)
-    {arg, state} = maybe_wrap_as(arg, state)
-```
-
-This makes `Cons(n: Int, rest)` parse. It is safe in expression position because `f(x: 1)` is not valid Cure surface syntax today (argument labels are a separate, deferred feature).
+It is safe in expression position because `f(x: 1)` is not valid Cure surface syntax today (argument labels are a separate, deferred feature).
 
 - [ ] **Step 5: Add the printer clause and register the node kind**
 
@@ -834,12 +868,13 @@ defmodule Cure.Elab.Union do
 
   # A member is ground iff its Core term contains no free variables and no
   # metavariables. Union members are lowered in an empty scope, so any `{:var, _}`
-  # is by definition free.
+  # is by definition free. Metavariables are the 2-tuple `{:meta, id}`
+  # (`lib/cure/elab/unify.ex`, `lib/cure/elab/subst.ex:20`) — there is no 3-tuple
+  # `{:meta, _, _}` form anywhere in this codebase, so no clause for it is needed.
   defp ground?(term) do
     not has?(term, fn
       {:var, _} -> true
       {:meta, _} -> true
-      {:meta, _, _} -> true
       _ -> false
     end)
   end
@@ -906,7 +941,7 @@ so a bare :Int ctor would collide across unions and corrupt ctor_to_family."
   - `Cure.Elab.Union.declare(member_asts, scope, env) :: {:ok, Env.t(), atom()} | {:ok, Env.t(), tuple()} | {:error, term()}` — declares the family (idempotently) and returns its key. **On a one-member union it returns the member's Core term directly instead of a key** (spec §6 step 6: a one-member union *is* that member; no family is generated).
   - `Cure.Elab.Union.predeclare_all(decl_ast, env) :: {:ok, Env.t()} | {:error, term()}` — walks a declaration's AST for `{:union_type, …}` nodes and declares each family.
 
-**The architectural constraint (discovered during planning):** `idx_to_core/5` returns `{:ok, term}` and **cannot thread a mutated `Env` back out** — every one of its ~8 call sites expects that shape. So the family cannot be declared as a side-effect of lowering. Instead:
+**The architectural constraint (discovered during planning):** `idx_to_core/5` returns `{:ok, term}` and **cannot thread a mutated `Env` back out** — every one of its call sites expects that shape (verified: ~13 direct call sites plus 4 more via the `map_idx_to_core/5` wrapper, all consuming a bare `{:ok, term}` / `{:error, reason}`, never `{:ok, env, term}`). So the family cannot be declared as a side-effect of lowering. Instead:
 
 1. **Pre-pass:** at the top of `Declarations.elaborate/2`, walk the declaration's AST, find every `{:union_type, …}`, and declare its family into `env`. `Declarations.elaborate/2` *does* return `{:ok, Env.t()}`, so it can thread the env.
 2. **Lowering:** `idx_to_core`'s new `{:union_type, …}` clause then only has to *look the key up* and return `{:ok, {:data, key, [], []}}`.
@@ -1132,7 +1167,7 @@ Append to `lib/cure/elab/union.ex`:
 
 - [ ] **Step 5: Add the pre-pass to `Declarations.elaborate/2`**
 
-`Declarations.elaborate/2` (`lib/cure/elab/declarations.ex:32`) has several clauses. Rename the existing public head to `do_elaborate/2` and add a single new public head that runs the pre-pass first:
+`Declarations.elaborate/2` is a **multi-clause function with SIX existing clauses** (`lib/cure/elab/declarations.ex:26, 32, 131, 139, 146, 150` — the plan's earlier citation of line 32 is only one of the six, the `{:container, meta, variants}` clause; line 26, the `{:function_def, ...}` clause, is the first). **Rename the function name on ALL SIX existing clause headers from `elaborate` to `do_elaborate`** (change `def elaborate(` to `defp do_elaborate(` — or `def do_elaborate(` if any caller outside this module depends on it directly — at each of the six `def elaborate(...)` lines; do not rename only the clause nearest line 32, or the other five clauses remain named `elaborate/2` and collide with the new wrapper head below). Then add ONE new public head, placed before or after the renamed clauses (Elixir dispatches multi-clause functions by pattern match, not declaration order across a rename boundary, but keep it adjacent to the old clauses for readability), that runs the pre-pass first and delegates to `do_elaborate/2`:
 
 ```elixir
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -1462,7 +1497,12 @@ Extend `maybe_inject_union/5` in `lib/cure/elab/elaborator.ex` with a widening b
     if Enum.any?(branches, &(&1 == :missing)) do
       term
     else
-      motive = {:lam, :unrestricted, {:data, from_key, [], []}, to_core}
+      # `Cure.Core.Grade.unrestricted()` (not the bare atom) to match the
+      # established `:lam`/`:pi` idiom elsewhere in elaborator.ex (see bool_case/4)
+      # — grade.ex's own doc asks callers to go through the module's API rather
+      # than write grade atoms literally. `Grade.unrestricted() == :unrestricted`
+      # by definition, so this is a style match, not a behaviour change.
+      motive = {:lam, Cure.Core.Grade.unrestricted(), {:data, from_key, [], []}, to_core}
       {:case, term, motive, branches}
     end
   end
@@ -1592,7 +1632,7 @@ Expected: FAIL — `partition_arms/4` does not recognise `{:typed_pattern, …}`
 
 - [ ] **Step 3: Desugar typed-pattern arms into constructor-pattern arms**
 
-Add a desugaring pass in `lib/cure/elab/elaborator.ex`, called from `elaborate_match/6` **immediately after** `desugar_list_patterns/1` and **before** `try_guard_match/6` (so every downstream stage sees ordinary constructor arms). It needs the scrutinee's union family key, which is known only after the scrutinee is elaborated — so the pass runs on the arms with `dname` threaded in, inside the `{:vdata, dname, …}` branch, just before `elaborate_branches/11` is called:
+Add a desugaring pass in `lib/cure/elab/elaborator.ex`. **Placement, precisely:** it does NOT slot in next to `desugar_list_patterns/1` (`elaborator.ex:4752`) or `try_guard_match/6` (`elaborator.ex:3104`) — those two calls are not adjacent in `elaborate_match/6` (`elaborator.ex:1994`); several other desugaring passes (`desugar_tuple_scrutinee`, `desugar_as_patterns`, `desugar_tuple_args`, `desugar_nested_arms`, `desugar_ctor_guards`) and the scrutinee's own elaboration run between them. The pass needs the scrutinee's union family key, which is known only *after* the scrutinee is elaborated and only inside the `{:vdata, dname, …}` branch — so, unlike the other desugarings (which run early, before the scrutinee is even elaborated), this one **must** run late: inside the `{:vdata, dname, combined_vals}` branch, on the arms, with `dname` threaded in, immediately before the `elaborate_branches/11` call (see the wiring at the end of this step):
 
 ```elixir
   # Rewrite `{:typed_pattern, _, [name, type_ast]}` arms into ordinary ctor-pattern
@@ -1645,18 +1685,32 @@ Add a desugaring pass in `lib/cure/elab/elaborator.ex`, called from `elaborate_m
   end
 ```
 
-**Note on the sub-union arm's binder.** When a sub-union arm expands into several arms, each bound `rest` is the *payload of one member*, not a value of the sub-union — so the body, which expects `rest : String | Bool`, would be ill-typed. Wrap the binder: the expanded pattern binds a fresh variable, and the body is rewritten to `let rest = <inject fresh into the sub-union> in body`. Implement this by emitting, for a sub-union arm, a pattern binding a fresh name and a body wrapped in a surface `let`:
+**Note on the sub-union arm's binder.** When a sub-union arm expands into several arms, each bound `rest` is the *payload of one member*, not a value of the sub-union — so the body, which expects `rest : String | Bool`, would be ill-typed. Wrap the binder: the expanded pattern binds a fresh variable, and the body is rewritten to `let rest = <inject fresh into the sub-union> in body`.
+
+**The real `let`-node shape (verified against `parse_let/1`, `lib/cure/compiler/parser.ex:1423`, and its consumer `elaborate_let_block/5`, `lib/cure/elab/elaborator.ex:4475` — there is no `:let_binding` tag anywhere in the tree; grepping for it turns up nothing but unrelated REPL helper function names).** A `let` is `{:assignment, meta, [pattern, value]}`:
+
+- **Tag:** `:assignment`, not `:let_binding`.
+- **`meta`:** a keyword list carrying `:line`, `:col`, the flag `let: true`, and — only when the surface source has an annotation — `:type_annotation` (the type AST). There is **no** `:name` or `:type` meta key; the bound name lives in the `pattern` child, not in meta.
+- **Children:** exactly `[pattern, value]` — the LHS pattern (here, `{:variable, pm, name}`) and the RHS value expression. This is *not* `[value_expr, body_expr]`; the body is not a child of the assignment at all.
+- **Sequencing:** `let x = e` followed by more statements is just the bare `{:assignment, ...}` node as one statement in an enclosing block/list — there is no single node that bundles "bind" with "body". To get `let x = e in body` behaviour here, wrap the assignment and the body together in a `{:block, meta, [assignment, body]}` node (mirroring how `parse_let/1` itself builds the inline `let ... in ...` form).
+
+Implement this by emitting, for a sub-union arm, a pattern binding a fresh name and a body wrapped in a real `:assignment` inside a `:block`:
 
 ```elixir
                   _ ->
                     fresh = "__u" <> Integer.to_string(:erlang.phash2({name, m.key}))
                     inner_pat = {:function_call, [name: Atom.to_string(cname)], [{:variable, pm, fresh}]}
                     # `rest` is re-injected into the SUB-union so the body typechecks.
-                    wrapped_body = [{:let_binding, [name: name, type: type_ast], [{:variable, pm, fresh}, hd(body)]}]
+                    # Real node shape: {:assignment, meta, [pattern, value]}, meta carries
+                    # `let: true` + `:type_annotation` (NOT `:name`/`:type`); the bound name
+                    # lives in the pattern child, not in meta. See parse_let/1, parser.ex:1423.
+                    assignment_meta = pm |> Keyword.put(:let, true) |> Keyword.put(:type_annotation, type_ast)
+                    assignment = {:assignment, assignment_meta, [{:variable, pm, name}, {:variable, pm, fresh}]}
+                    wrapped_body = [{:block, pm, [assignment, hd(body)]}]
                     {:match_arm, Keyword.put(meta, :pattern, inner_pat), wrapped_body}
 ```
 
-The `let`'s type annotation is the sub-union, so Task 5's check-position injection fires and re-injects the payload. **Verify the exact `:let_binding` node shape against the parser before writing this** — grep `parse_let` in `lib/cure/compiler/parser.ex` and match its meta keys exactly.
+The assignment's `:type_annotation` is the sub-union, so Task 5's check-position injection fires and re-injects the payload when `elaborate_let_block/5` checks the RHS against it.
 
 Wire the pass in, inside `elaborate_match/6`'s `{:vdata, dname, combined_vals}` branch, before the `elaborate_branches/11` call:
 
@@ -2066,7 +2120,7 @@ Append to `test/cure/elab/union_test.exs`:
   end
 ```
 
-**Verify `compile_and_load/1`'s real name and arity before writing this** — grep `compile_and_load` in `lib/cure/compiler.ex` and match the actual signature. Per the project's memory, it auto-selects dependent codegen once a module elaborates dependently, which is what we want here.
+**Verified during plan review:** `Cure.Compiler.compile_and_load/2` (`lib/cure/compiler.ex:216`, `def compile_and_load(source, opts \\ [])`, `@spec compile_and_load(String.t(), keyword()) :: {:ok, module()} | {:error, term()}`). The plan's 1-arg call is valid (the default `opts \\ []` gives a real `/1` clause). It takes a raw source string, compiles through to forms, and — for a plain-function module like this test's — calls `BeamWriter.compile_and_load/1` (`beam_writer.ex:81-92`), which does `:code.load_binary(module, ~c"nofile", binary)`, genuinely loading the module into the running BEAM so the immediately-following `apply/3` works. Per the project's memory, it auto-selects dependent codegen once a module elaborates dependently, which is what we want here.
 
 - [ ] **Step 5: Run the tests**
 
@@ -2125,6 +2179,7 @@ the AtomVM loop lives in the parent esp32-beam repo)."
 **Type consistency:** `member()` is `%{key, payload, lit_type_key}` throughout. `Union.literal_key/2` is the single source of truth for literal keys, called from both `Union.lower_member/3` (Task 3) and the elaborator's literal clause (Task 5, Step 5 extracts it). `Union.family_key/1` and `Union.ctor_key/2` are used identically in Tasks 3, 4, 5, 6, 7, 8.
 
 **Riskiest steps, flagged for the implementer:**
-- Task 1, Step 3: the four call sites that must switch to `parse_type_arrow/1`. Getting `parser.ex:3287` wrong silently breaks every existing ADT declaration — the regression tests in Step 1 are the guard.
-- Task 7, Step 3: the sub-union binder re-injection. The `:let_binding` node shape **must** be verified against the parser before writing it.
+- Task 1, Step 3: the four call sites that must switch to `parse_type_arrow/1`. Getting `parser.ex:3287` wrong silently changes the behaviour of a parenthesised-first-variant alias RHS (`type Endo = (Nat) -> Nat | X`) from today's parse error into a silently-accepted union-typed alias — the regression tests in Step 1 (including the `Handler = Cb(Int) | Nope` case) are the guard.
+- Task 1, Step 4 — **the single highest-severity finding of this review, found and fixed during plan review.** The plan originally proposed an unconditional literal-token guard at the top of `parse_type_arrow/1` — the function underlying all 17 real `parse_type_expr` call sites, not just union members. Verified against the real `idx_to_core/5`: today a bare numeral in type position parses to `{:variable, [scope: :local], "N"}` and is lowered via `numeric_index_value/1`; there is no `idx_to_core` clause for `{:literal, ...}`. The original design would have silently broken `Bounded(3)`, `Bounded(1114112)` (`lib/std/char.cure:17`), `Equivalent(Int, 3, 3)`, and every other existing numeral-in-type-index declaration in the tree — with no test in the plan catching it, since none of Task 1-10's tests exercise a standalone dependent numeral index. **Fixed:** literal-recognition now lives only in `parse_union_first_member/1` (gated on a `|` lookahead via the existing `peek_at/2` helper) and `parse_union_member/1` (unconditional, reached only after a `|` is already consumed) — `parse_type_arrow/1` itself is untouched beyond the Step 3 rename. If you are executing this plan and see a version of Task 1 Step 4 with the guard inside `parse_type_arrow/1`, that is the pre-review draft; use the corrected version.
+- Task 7, Step 3: the sub-union binder re-injection. **Resolved during plan review:** the real node is `{:assignment, meta, [pattern, value]}` (not `:let_binding`) — see the corrected snippet and node-shape writeup in this task.
 - Task 8, Step 3: ordering inside `rekey_module_env/6` — the union pass extends `amap` and must run before the existing rewriters consume it.
