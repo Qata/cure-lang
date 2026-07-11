@@ -569,8 +569,24 @@ defmodule Cure.Elab.Program do
 
   def dependent?({:container, meta, body}) when is_list(meta) do
     case Keyword.get(meta, :container_type) do
-      :proof -> false
-      _other -> dependent?(body)
+      :proof ->
+        false
+
+      container_type when container_type in [:enum, :struct, :opaque] ->
+        # A user-declared family whose name COLLIDES with the generated-union
+        # namespace (`Cure.Elab.Union.union_family?/1` — reachable only via a
+        # backtick-quoted identifier, e.g. `` `Union<Bool|Int>` ``) must be
+        # routed to the DEPENDENT pipeline even when nothing else in the module
+        # is dependent, so `Cure.Elab.Declarations`'s reserved-name rejection
+        # actually runs. The classic pipeline never calls into
+        # `Cure.Elab.Union` at all, so left classic-routed, such a name would
+        # sail through unrejected and remain indistinguishable from a real
+        # generated family to any OTHER dependent-routed module compiled into
+        # the same program.
+        reserved_family_name?(meta) or dependent?(body)
+
+      _other ->
+        dependent?(body)
     end
   end
 
@@ -596,6 +612,13 @@ defmodule Cure.Elab.Program do
 
   defp dependent_params?(params) when is_list(params), do: Enum.any?(params, &dependent?/1)
   defp dependent_params?(_other), do: false
+
+  defp reserved_family_name?(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> name |> String.to_atom() |> Cure.Elab.Union.union_family?()
+      _ -> false
+    end
+  end
 
   @doc """
   Extract the `Cure.<Name>` module atom from a parsed `mod … end` program,

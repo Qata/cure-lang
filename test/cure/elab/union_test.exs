@@ -324,4 +324,57 @@ defmodule Cure.Elab.UnionTest do
                :"Union<Atom#:north|Atom#:south>$Atom#:north"
     end
   end
+
+  describe "the generated-family namespace is reserved" do
+    # `Union.union_family?/1` recognises a generated family purely by testing
+    # whether its atom starts with the literal prefix "Union<" (union.ex:45-47).
+    # The design's own safety argument for every check-position injection
+    # (elaborator.ex `maybe_inject_union/5`) rests on the claim that this prefix
+    # is *unproducible* by a user-authored type name. Backtick-quoted
+    # identifiers (`lexer.ex:652`, `lex_quoted_identifier/1`) admit ARBITRARY
+    # characters, including `<`, `>`, and `|`, and `parse_type_def/2`
+    # (`parser.ex:3226`) accepts any identifier-token name with no restriction
+    # on which lexing form produced it — so a user CAN declare a real ADT named
+    # `` `Union<Bool|Int>` ``. Once that name is registered, `union_family?/1`
+    # can no longer tell it apart from a compiler-generated family, which
+    # breaks flattening (a member that happens to normalise to that name gets
+    # wrongly "exploded" as if its own constructors were union members) and
+    # would equally confuse injection/widening for any function whose declared
+    # return type is that user type.
+    #
+    # A user type declared with a name in this namespace must therefore be
+    # rejected at declaration time — that is what actually keeps the namespace
+    # reserved, rather than merely asserting that it is.
+    test "declaring a user type whose name collides with the generated namespace is rejected" do
+      src = """
+      mod RSV
+        type `Union<Bool|Int>` = A | B
+      end
+      """
+
+      assert {:error, _} = Cure.Compiler.compile_and_load(src)
+    end
+
+    test "using such a colliding type as a union member does not corrupt flattening" do
+      # Before the fix: `P`'s constructors A/B get wrongly spliced in as if they
+      # were union members of `P | Atom`, producing a bogus 3-member family
+      # `Union<A|Atom|B>` instead of a legitimate 2-member union whose members
+      # are `Atom` and the opaque payload type `P`.
+      src = """
+      mod RSV2
+        type `Union<Bool|Int>` = A | B
+
+        typealias P = `Union<Bool|Int>`
+
+        fn f(x: P | Atom) -> Int = 1
+      end
+      """
+
+      # Whatever the outcome, the collision must not silently produce a
+      # 3-member family whose keys are the colliding type's own constructor
+      # names. The declaration itself is rejected (see the test above), so this
+      # program can never reach that corrupted state.
+      assert {:error, _} = Cure.Compiler.compile_and_load(src)
+    end
+  end
 end

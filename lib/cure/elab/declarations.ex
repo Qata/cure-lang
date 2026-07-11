@@ -59,10 +59,12 @@ defmodule Cure.Elab.Declarations do
         # accepted it. That was duplication producing an arbitrary feature gap, not a
         # deliberate restriction; a negative occurrence is still rejected, by
         # `Inductive.positive?/2` where it belongs.
-        type_params = Keyword.get(meta, :type_params, [])
-        params = Enum.map(type_params, fn p -> {:param, [], p} end)
-        sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
-        declare_parameterized(name, params, [], sigs, env)
+        with :ok <- reject_reserved_family_name(name) do
+          type_params = Keyword.get(meta, :type_params, [])
+          params = Enum.map(type_params, fn p -> {:param, [], p} end)
+          sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
+          declare_parameterized(name, params, [], sigs, env)
+        end
 
       :struct ->
         # A record `rec Point\n  x: T\n  y: U` is a single-constructor family whose
@@ -73,7 +75,8 @@ defmodule Cure.Elab.Declarations do
         # argument names as plain labels.
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        with :ok <- check_no_duplicate_fields(variants) do
+        with :ok <- reject_reserved_family_name(name),
+             :ok <- check_no_duplicate_fields(variants) do
           case Keyword.get(meta, :type_params, []) do
             [] ->
               # Route through the GADT-ctor machinery with NAMED field domains so a
@@ -103,7 +106,8 @@ defmodule Cure.Elab.Declarations do
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
         params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
 
-        with {:ok, param_tele} <-
+        with :ok <- reject_reserved_family_name(name),
+             {:ok, param_tele} <-
                elaborate_index_telescope(params, name, env, [], :duplicate_parameter) do
           declare_opaque_at_min_level(env, name, param_tele, 0)
         end
@@ -151,9 +155,12 @@ defmodule Cure.Elab.Declarations do
 
   defp do_elaborate({:indexed_type, meta, ctor_sigs}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    params = Keyword.get(meta, :params, [])
-    index_params = Keyword.get(meta, :indices, [])
-    declare_parameterized(name, params, index_params, ctor_sigs, env)
+
+    with :ok <- reject_reserved_family_name(name) do
+      params = Keyword.get(meta, :params, [])
+      index_params = Keyword.get(meta, :indices, [])
+      declare_parameterized(name, params, index_params, ctor_sigs, env)
+    end
   end
 
   defp do_elaborate({:interface, _meta, _methods} = decl, env) do
@@ -161,6 +168,26 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp do_elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  # `Cure.Elab.Union.union_family?/1` recognises a generated union family purely
+  # by a name-prefix test ("Union<…>"). That is safe only if the prefix is truly
+  # unproducible by a user-authored type name — but backtick-quoted identifiers
+  # (`lexer.ex` `lex_quoted_identifier/1`) admit ANY character, including `<`,
+  # `>`, and `|`, and nothing upstream of here restricts which lexing form
+  # produced a type-declaration name. Left unchecked, a user type named e.g.
+  # `` `Union<Bool|Int>` `` would be indistinguishable from a compiler-generated
+  # family to every union-aware code path (flattening in `Cure.Elab.Union`,
+  # injection/widening in the elaborator) — reject it here, at the one point
+  # every user-declared family name passes through, so the reserved namespace is
+  # actually enforced rather than merely assumed.
+  @spec reject_reserved_family_name(atom()) :: :ok | {:error, {:reserved_union_type_name, atom()}}
+  defp reject_reserved_family_name(name) do
+    if Cure.Elab.Union.union_family?(name) do
+      {:error, {:reserved_union_type_name, name}}
+    else
+      :ok
+    end
+  end
 
   @doc """
   Register a type family's HEADER — its name and parameter/index telescopes with
@@ -189,8 +216,11 @@ defmodule Cure.Elab.Declarations do
 
       Keyword.get(meta, :container_type) in [:enum, :struct] ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
-        register_header(name, params, [], env)
+
+        with :ok <- reject_reserved_family_name(name) do
+          params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+          register_header(name, params, [], env)
+        end
 
       true ->
         {:ok, env}
