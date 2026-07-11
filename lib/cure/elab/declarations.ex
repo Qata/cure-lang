@@ -759,9 +759,15 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_body({:literal, _meta, _value} = expr, return_core, scope, ctx, env, _params),
     do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
-  defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
-    with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-      {:ok, term}
+  # The general body: elaborated in INFER mode. `coerce_union/5` is a strict no-op
+  # unless the declared return type is a generated anonymous-union family — in which
+  # case the inferred term is injected into the matching member constructor. Without
+  # it, `fn f(n: Int) -> Int | Bool = n` never reaches check-position at all (this
+  # clause discards `return_core`), so the injection would never fire and the kernel
+  # would reject `Int` at the union type.
+  defp elaborate_body(expr, return_core, scope, ctx, env, _params) do
+    with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+      {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
     end
   end
 

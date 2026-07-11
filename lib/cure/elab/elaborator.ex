@@ -1483,8 +1483,18 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
     string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
+    union_ctor = union_literal_ctor(meta, value, expected_core, ctx, env)
 
     cond do
+      # A literal checked against a union that has that literal as a MEMBER is the
+      # member's NULLARY constructor: the value is fully determined by the ctor, so
+      # there is nothing to store.
+      #
+      # This must precede the `string?` branch — otherwise a `"north"` member would
+      # be desugared to its List(Char) spine and never reach the injection.
+      union_ctor != nil ->
+        {:ok, {:ctor, union_ctor, []}}
+
       # A string literal checks as its `List(Char)` desugaring (see the typed
       # clause), so the expected `List(Char)`/`String` type drives each char.
       string? ->
@@ -1664,10 +1674,66 @@ defmodule Cure.Elab.Elaborator do
     if Unify.has_meta?(expected_core) do
       {:error, {:unsolved_metavariable_in_type, expected_core}}
     else
-      with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),
-           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-        {:ok, term}
+      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+        term = maybe_inject_union(term, type, expected_core, ctx, env)
+
+        with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+          {:ok, term}
+        end
       end
+    end
+  end
+
+  # The nullary constructor for a LITERAL member of the expected union, or nil if the
+  # expected type is not a union or the literal is not one of its members.
+  #
+  # The key comes from `Union.literal_key/2` — the same single source of truth the
+  # canonicaliser uses when it builds the family. Duplicating the key format here
+  # instead would let the two drift and silently produce a ctor name that does not
+  # exist, turning the injection into a no-op conversion failure.
+  defp union_literal_ctor(meta, value, expected_core, ctx, env) do
+    with {:data, ukey, [], []} <- Kernel.normalize(ctx, expected_core),
+         true <- Cure.Elab.Union.union_family?(ukey),
+         {:ok, key} <- Cure.Elab.Union.literal_key(Keyword.get(meta, :subtype), value),
+         cname <- Cure.Elab.Union.ctor_key(ukey, %{key: key}),
+         true <- Inductive.get_ctor(env, cname) != nil do
+      cname
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Coerce an already-inferred term into an expected anonymous-union type.
+
+  A STRICT no-op unless `expected_core` normalises to a generated union family, so it
+  is safe to apply anywhere a term has been inferred but the expected type is known.
+  `Declarations.elaborate_body/6`'s catch-all needs it: that clause elaborates in
+  INFER mode and discards the declared return type, so a body like `fn f(n: Int) ->
+  Int | Bool = n` never reaches check-position and would never be injected.
+  """
+  @spec coerce_union(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) :: term()
+  def coerce_union(term, type, expected_core, ctx, env),
+    do: maybe_inject_union(term, type, expected_core, ctx, env)
+
+  # Anonymous-union subsumption: a coercion inserted by the ELABORATOR in check mode
+  # only — never a kernel rule. If the expected type is a generated union family and
+  # the term's inferred type is one of its members, inject that member's constructor.
+  #
+  # Otherwise the term passes through untouched and the kernel rejects it with an
+  # ordinary conversion failure. Note the injected `{:ctor, …}` is independently
+  # re-verified by `Kernel.check/3`, so the elaborator stays untrusted: a wrong
+  # injection is caught, not silently accepted.
+  defp maybe_inject_union(term, type, expected_core, ctx, env) do
+    with {:data, ukey, [], []} <- Kernel.normalize(ctx, expected_core),
+         true <- Cure.Elab.Union.union_family?(ukey),
+         member_term <- Quote.reify(type, Context.length(ctx), Context.signature(ctx)),
+         cname <-
+           Cure.Elab.Union.ctor_key(ukey, %{key: Cure.Elab.Union.member_key(member_term)}),
+         true <- Inductive.get_ctor(env, cname) != nil do
+      {:ctor, cname, [term]}
+    else
+      _ -> term
     end
   end
 

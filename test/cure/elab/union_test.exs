@@ -5,8 +5,11 @@ defmodule Cure.Elab.UnionTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Core.Inductive
+  alias Cure.Core.{Env, Inductive}
   alias Cure.Elab.{Program, Union}
+
+  defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
+  defp unwrap_lams(term), do: term
 
   defp union_families(env) do
     env.families |> Map.keys() |> Enum.filter(&Union.union_family?/1) |> Enum.sort()
@@ -109,6 +112,43 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:error, {:union_member_overlap, "Int#3", "Int"}} = Program.elaborate(src)
+    end
+  end
+
+  describe "injection at check-position" do
+    test "a member value is injected when checked against the union" do
+      src = """
+      mod M
+        fn f(n: Int) -> Int | Bool = n
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      body = Env.get_def(env, :f).body |> unwrap_lams()
+
+      assert {:ctor, :"Union<Bool|Int>$Int", [{:var, 0}]} = body
+    end
+
+    test "a literal is injected into its literal member constructor" do
+      src = """
+      mod M
+        fn f() -> 3 | 4 = 3
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+
+      assert {:ctor, :"Union<Int#3|Int#4>$Int#3", []} = Env.get_def(env, :f).body
+    end
+
+    test "a value whose type is not a member is rejected" do
+      src = """
+      mod M
+        fn f(b: Bool) -> Int | Atom = b
+      end
+      """
+
+      assert {:error, _} = Program.elaborate(src)
     end
   end
 end
