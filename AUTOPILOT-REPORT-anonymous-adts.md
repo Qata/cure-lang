@@ -2,8 +2,8 @@
 
 **Branch:** `autopilot/anonymous-adts` (15 commits, working tree clean)
 **Status:** ✅ Complete — ready for review & merge. **Not auto-merged.**
-**Suite:** 4421 passed, 2 skipped (baseline 4412/2; the 2 skips are the pre-existing
-`#18`-paused pins, unchanged).
+**Suite:** 4466 passed, 2 skipped (the 2 skips are the pre-existing `#18`-paused pins,
+unchanged). Includes the merge of `autopilot/kernel-parity-batch` (redesigned `Map(k, v)`).
 **TCB:** **zero change** — `git diff 49a7d47..HEAD -- lib/cure/core/` is empty.
 
 ## What landed
@@ -105,12 +105,39 @@ Fixed in `9052df5`; the round-trip test now pins the tagged erasure.
 - Unions live in **check mode only**: `let xs = [1, "a"]` needs an annotation.
 - **Uniform tagged erasure**, no transparent erasure for all-literal unions.
 - `@extern` cannot return a union directly.
-- **The spec's headline heterogeneous-`Map` example is not yet exercisable end-to-end** —
-  not because of this branch, but because `Std.Map` itself does not yet elaborate in the
-  dependent pipeline. Pre-existing, separate gap.
 - **AtomVM validation is a follow-up outside this repo.** `cure-lang` is the compiler; the
   generic-unix AtomVM loop lives in the parent `esp32-beam` repo. The in-repo equivalent
   (a real BEAM round-trip) is done and green.
+
+## The heterogeneous Map — now working (post-merge)
+
+`autopilot/kernel-parity-batch` is merged in, bringing the redesigned `Map(k, v)`. That
+exposed one last ordering bug, now fixed, and the spec's **headline motivation** works
+end-to-end:
+
+```cure
+fn build() -> Map(Atom, Int | Bool | Atom) = %{a: 1, b: true, c: :other}
+fn describe(v: Int | Bool | Atom) -> Int = match v
+  n: Int  -> n
+  b: Bool -> 100
+  a: Atom -> 200
+```
+
+Three unrelated types in one map, **no throwaway ADT declared**, discriminated at runtime:
+`look(:a) == 1`, `look(:b) == 100`, `look(:c) == 200`.
+
+**The bug it exposed was an ordering bug, not a union bug.** Arguments are elaborated and
+then merely *unified* against their domains, with the codomain unified against the goal only
+afterwards. So `Std.Map.put(:a, 1, …)` at `Map(Atom, Int | Bool)` solved the map's implicit
+`v := Int` **from the first value argument**; by the time the goal was consulted,
+`Map(Atom, Int)` no longer matched, and there is deliberately no container covariance to
+rescue it. Inference did not *fail* — it succeeded *wrongly*, so the existing
+`:unsolved_metavariables` retry (which does thread the goal in) never fired.
+
+The fix solves the codomain against the goal **before** the present arguments, which is how
+Idris and Agda elaborate an application. It is **gated on the goal mentioning a union**, so
+no non-union program's inference can change; ungating it is the natural generalisation but
+reorders solving for every call in the language and deserves its own change.
 
 ## Next
 
