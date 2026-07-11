@@ -230,6 +230,19 @@ defmodule Cure.Compiler.Printer do
   defp trivia_meta({_k, meta, _, _}) when is_list(meta), do: meta
   defp trivia_meta(_), do: []
 
+  # True when a node carries a `:leading` comment. Splicing such a node into an
+  # INLINE position (after `-> ` in a lambda) strands its `# c\n…` rendering
+  # mid-line, where the reparser reattaches the comment elsewhere — breaking
+  # reprint idempotence. Callers that render a body inline break to a fresh line
+  # when this is true.
+  defp has_leading?(node) do
+    case Keyword.get(trivia_meta(node), :leading) do
+      nil -> false
+      [] -> false
+      _ -> true
+    end
+  end
+
   # `:leading` items become full lines emitted before the node. The first line
   # takes the pad supplied by the parent join site; every subsequent line (and
   # the node itself) is re-padded here. Blank lines are emitted empty.
@@ -670,8 +683,17 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:lambda, meta, [body]}, depth, indent) do
     params = Keyword.get(meta, :params, [])
     params_str = Enum.map_join(params, ", ", fn {:param, _, name} -> name end)
-    body_str = lambda_body_to_string(body, depth, indent)
-    "fn(#{params_str}) -> #{body_str}"
+
+    if has_leading?(body) do
+      # A leading comment on the body can't ride inline after `-> ` — it would
+      # strand `# c\nbody` mid-line and drift to the file top on reparse. Break to
+      # an indented line so the comment stays attached to the body it precedes.
+      pad = String.duplicate(indent, depth + 1)
+      "fn(#{params_str}) ->\n" <> pad <> lambda_body_to_string(body, depth + 1, indent)
+    else
+      body_str = lambda_body_to_string(body, depth, indent)
+      "fn(#{params_str}) -> #{body_str}"
+    end
   end
 
   # -- Function Definition ---------------------------------------------------
