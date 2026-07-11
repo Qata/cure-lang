@@ -21,15 +21,28 @@ defmodule Cure.Elab.Declarations do
 
   @ceiling 2
 
-  @doc "Elaborate one declaration AST, returning the augmented signature."
+  @doc """
+  Elaborate one declaration AST, returning the augmented signature.
+
+  Runs the anonymous-union pre-pass first: every `{:union_type, …}` node anywhere in
+  this declaration has its generated family declared into `env` BEFORE lowering, so
+  that `idx_to_core/5` — which returns `{:ok, term}` and cannot thread a mutated
+  `Env` back out — only has to look the content-derived key up.
+  """
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
-  def elaborate({:function_def, _meta, _body} = decl, env) do
+  def elaborate(decl, env) do
+    with {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
+      do_elaborate(decl, env)
+    end
+  end
+
+  defp do_elaborate({:function_def, _meta, _body} = decl, env) do
     with {:ok, env1} <- register_signature(decl, env) do
       elaborate_function_body(decl, env1)
     end
   end
 
-  def elaborate({:container, meta, variants}, env) do
+  defp do_elaborate({:container, meta, variants}, env) do
     case Keyword.get(meta, :container_type) do
       :enum ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
@@ -128,7 +141,7 @@ defmodule Cure.Elab.Declarations do
   # to be invisible: the alias branch installed `Unit := {:data, :MkUnit, [], []}` with a
   # hardcoded kind and nothing ever checked it, so a one-constructor enum silently became
   # an alias to a family that does not exist.
-  def elaborate({:type_annotation, meta, [rhs]} = decl, env) do
+  defp do_elaborate({:type_annotation, meta, [rhs]} = decl, env) do
     if single_variant_enum?(rhs, env) do
       elaborate({:container, Keyword.put(meta, :container_type, :enum), [rhs]}, env)
     else
@@ -136,18 +149,18 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  def elaborate({:indexed_type, meta, ctor_sigs}, env) do
+  defp do_elaborate({:indexed_type, meta, ctor_sigs}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
     params = Keyword.get(meta, :params, [])
     index_params = Keyword.get(meta, :indices, [])
     declare_parameterized(name, params, index_params, ctor_sigs, env)
   end
 
-  def elaborate({:interface, _meta, _methods} = decl, env) do
+  defp do_elaborate({:interface, _meta, _methods} = decl, env) do
     Cure.Elab.Interface.elaborate(decl, env)
   end
 
-  def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+  defp do_elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
 
   @doc """
   Register a type family's HEADER — its name and parameter/index telescopes with
@@ -287,7 +300,21 @@ defmodule Cure.Elab.Declarations do
   # placeholder body) so that later-defined functions and mutually-recursive peers
   # resolve as globals. Called for every function in a first pass, before any body
   # is elaborated (see `Program.elaborate_declarations`).
-  def register_signature({:function_def, meta, _body}, env) do
+  #
+  # Runs the anonymous-union pre-pass first. `Program.body_register_pass/3` routes
+  # `{:function_def, …}` here rather than through `elaborate/2`, and a function
+  # signature is the commonest place a union appears — so the pre-pass must hook
+  # BOTH entry points. It walks the whole declaration AST, so a union in a `let`
+  # annotation inside the body is covered here too, and it is idempotent (the
+  # content-derived key is guarded by `Inductive.family?`), so the double hook is
+  # free.
+  def register_signature({:function_def, _meta, _body} = decl, env) do
+    with {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
+      do_register_signature(decl, env)
+    end
+  end
+
+  defp do_register_signature({:function_def, meta, _body}, env) do
     with {:ok, sig} <- function_signature(meta, env) do
       env1 = Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
 
@@ -505,6 +532,20 @@ defmodule Cure.Elab.Declarations do
   # ctor telescope by the fields (so construction/projection find them) while
   # threading each field into scope for the following field types (a dependent
   # record — `rec Box(a)\n  n: Nat\n  v: Vec(a, n)`).
+  @doc """
+  Declare a compiler-GENERATED, parameterless, index-free inductive family from
+  pre-built Core constructor records. The public entry `Cure.Elab.Union` uses to
+  realise an anonymous union (`Int | String`) as a real discriminated family.
+
+  Goes through the same kernel gate as every surface declaration —
+  `Kernel.check_family`, `check_all_ctors`, `Inductive.positive?` — so a generated
+  family cannot bypass the TCB.
+  """
+  @spec declare_generated_family(Env.t(), atom(), [map()]) :: {:ok, Env.t()} | {:error, term()}
+  def declare_generated_family(env, name, ctors) do
+    declare_indexed_at_min_level(env, name, [], [], ctors, 0)
+  end
+
   @doc """
   Declare a single-constructor record family `name(type_params)` whose fields are
   `[{:param, [type: ast], fname}]`. This is the public entry the typeclass
@@ -1519,6 +1560,19 @@ defmodule Cure.Elab.Declarations do
 
       true ->
         {:error, {:bad_projection, attr}}
+    end
+  end
+
+  # An anonymous union. Its family was already declared by the pre-pass in
+  # `elaborate/2` (idx_to_core cannot thread a mutated Env back out), so this only
+  # recomputes the content-derived key and looks it up. A one-member union of a TYPE
+  # member collapses to that member's Core term — no family exists for it.
+  defp idx_to_core({:union_type, _meta, members}, scope, _fam, env, _ctx) do
+    with {:ok, ms} <- Cure.Elab.Union.canonicalise(members, scope, env) do
+      case ms do
+        [%{payload: payload}] when payload != nil -> {:ok, payload}
+        _ -> {:ok, {:data, Cure.Elab.Union.family_key(ms), [], []}}
+      end
     end
   end
 

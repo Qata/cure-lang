@@ -129,6 +129,82 @@ defmodule Cure.Elab.Union do
   def member_key({:ctor, name, []}), do: Atom.to_string(name)
   def member_key({:global, name}), do: Atom.to_string(name)
 
+  # ── Family generation ──────────────────────────────────────────────────────
+
+  @doc """
+  Declare the generated family for a union's surface members, idempotently.
+
+  Returns `{:ok, env, {:data, key, [], []}}` for a real union, or `{:ok, env, core}`
+  for a one-member union of a TYPE member, which collapses to that member itself —
+  no family is generated. A one-member union of a LITERAL member still needs a
+  family: there is no Core term for a bare literal in type position.
+  """
+  @spec declare([tuple()], [String.t()], Env.t()) :: {:ok, Env.t(), tuple()} | {:error, term()}
+  def declare(asts, scope, env) do
+    with {:ok, members} <- canonicalise(asts, scope, env) do
+      case members do
+        [%{payload: payload}] when payload != nil -> {:ok, env, payload}
+        _ -> declare_family(members, env)
+      end
+    end
+  end
+
+  defp declare_family(members, env) do
+    key = family_key(members)
+
+    if Inductive.family?(env, key) do
+      # Idempotent: the key is content-derived, so re-declaring an identical family
+      # would be an identical Map.put.
+      {:ok, env, {:data, key, [], []}}
+    else
+      ctors =
+        Enum.map(members, fn m ->
+          cname = ctor_key(key, m)
+
+          case m.payload do
+            nil -> Inductive.ctor(cname, [], [], [], [])
+            ty -> Inductive.ctor(cname, [{:v, ty}], [], [Cure.Core.Grade.unrestricted()], [])
+          end
+        end)
+
+      case Cure.Elab.Declarations.declare_generated_family(env, key, ctors) do
+        {:ok, env2} -> {:ok, env2, {:data, key, [], []}}
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  @doc """
+  Walk a declaration's AST, declaring the family for every `{:union_type, …}` in it.
+
+  This exists as a PRE-PASS because `idx_to_core/5` returns `{:ok, term}` and cannot
+  thread a mutated `Env` back out to its callers — so a union family cannot be
+  declared as a side-effect of type lowering. `Declarations.elaborate/2` *does*
+  return `{:ok, Env.t()}`, so the declaration happens there and lowering merely looks
+  the key up.
+  """
+  @spec predeclare_all(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
+  def predeclare_all(ast, env) do
+    ast
+    |> collect_unions()
+    |> Enum.reduce_while({:ok, env}, fn {:union_type, _meta, members}, {:ok, env} ->
+      case declare(members, [], env) do
+        {:ok, env2, _core} -> {:cont, {:ok, env2}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  # Innermost-first, so a nested union has its inner family declared before the outer
+  # one tries to splice it in.
+  defp collect_unions(node) when is_tuple(node) do
+    inner = node |> Tuple.to_list() |> Enum.flat_map(&collect_unions/1)
+    if match?({:union_type, _, _}, node), do: inner ++ [node], else: inner
+  end
+
+  defp collect_unions(list) when is_list(list), do: Enum.flat_map(list, &collect_unions/1)
+  defp collect_unions(_other), do: []
+
   # ── Lowering ───────────────────────────────────────────────────────────────
 
   defp lower_members(asts, scope, env) do
