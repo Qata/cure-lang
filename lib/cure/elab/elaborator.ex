@@ -4424,8 +4424,45 @@ defmodule Cure.Elab.Elaborator do
   # elaborator's own context gets the same treatment via `Context.extend_def/3`,
   # so `elaborate_expr_typed` on the remainder sees `x` as its value and dependent
   # lets keep checking. The kernel re-checks the emitted `:let` regardless.
-  defp elaborate_let_block([final], expected_core, names, ctx, env),
-    do: elaborate_expr_checked(final, expected_core, names, ctx, env)
+  defp elaborate_let_block([final], expected_core, names, ctx, env) do
+    sig = Context.signature(ctx)
+
+    case Normalise.whnf_value(Eval.eval(expected_core, Context.env(ctx)), sig) do
+      # The block's result type is `Effect(R)`. The final expression is either
+      # already effectful (return it, checked against `Effect(R)`) or a plain
+      # value to lift with `pure` — Idris's `do`-block whose last statement is a
+      # value gets an implicit `pure` (design 2026-07-09-effect-type-former §5.1).
+      {:veffect_type, r_val} ->
+        r_reified = Quote.reify(r_val, Context.length(ctx), sig)
+
+        case elaborate_expr_typed(final, names, ctx, env) do
+          {:ok, _core, ty} ->
+            case Normalise.whnf_value(ty, sig) do
+              # Already effectful — check against `Effect(R)` and keep it.
+              {:veffect_type, _} ->
+                elaborate_expr_checked(final, expected_core, names, ctx, env)
+
+              # A pure value — check at `R` and wrap in `pure`.
+              _ ->
+                with {:ok, r_core} <- elaborate_expr_checked(final, r_reified, names, ctx, env) do
+                  {:ok, {:effect_pure, r_core}}
+                end
+            end
+
+          # Non-inferable final: try the pure-wrap; if THAT fails too, surface the
+          # original inference error rather than the (likely less informative) one.
+          {:error, _} = err ->
+            case elaborate_expr_checked(final, r_reified, names, ctx, env) do
+              {:ok, r_core} -> {:ok, {:effect_pure, r_core}}
+              {:error, _} -> err
+            end
+        end
+
+      # A pure block — the existing behaviour.
+      _ ->
+        elaborate_expr_checked(final, expected_core, names, ctx, env)
+    end
+  end
 
   defp elaborate_let_block(
          [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
@@ -4466,14 +4503,32 @@ defmodule Cure.Elab.Elaborator do
   defp let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env) do
     case elaborate_expr_typed(rhs, names, ctx, env) do
       {:ok, rhs_core, rhs_type} ->
-        # SIGNATURE-AWARE reify. A `{:vdata, name, args}` value flattens a
-        # family's params and indices into one list; without the signature the
-        # split is not recoverable and the read-back puts them all in `params`,
-        # so a `{:let, Cure.Core.Grade.unrestricted(), T, …}` over an indexed family fails the kernel's arity
-        # check (`:arg_arity`). Agda `getNumberOfParameters` / Lean
-        # `inductive_val.get_nparams`.
-        ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
-        bind_once_let(name, rhs_core, ty_core, rhs_type, grade, rest, expected_core, names, ctx, env)
+        case Normalise.whnf_value(rhs_type, Context.signature(ctx)) do
+          # An EFFECTFUL rhs: `let x = eff()` where `eff() : Effect(T)`. Do NOT
+          # bind `x : Effect(T)` via `:let`; sequence with `bind`, whose
+          # continuation binds `x : T` — the UNWRAPPED payload the effect
+          # produces (Idris's `x <- eff; rest` ⟶ `bind eff (λ x:T. rest)`,
+          # design 2026-07-09-effect-type-former §5.1). The kernel re-checks the
+          # emitted `effect_bind`.
+          {:veffect_type, payload_val} ->
+            if Keyword.has_key?(meta, :grade) do
+              # Grades on an effect binder are a later concern; refuse rather than
+              # silently drop the grade.
+              {:error, {:graded_effect_let_unsupported, name, meta}}
+            else
+              effectful_let_bind(name, rhs_core, payload_val, rest, expected_core, names, ctx, env)
+            end
+
+          # A PURE rhs — the existing path. SIGNATURE-AWARE reify: a
+          # `{:vdata, name, args}` value flattens a family's params and indices
+          # into one list; without the signature the split is not recoverable and
+          # the read-back puts them all in `params`, so a `:let` over an indexed
+          # family fails the kernel's arity check (`:arg_arity`). Agda
+          # `getNumberOfParameters` / Lean `inductive_val.get_nparams`.
+          _ ->
+            ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+            bind_once_let(name, rhs_core, ty_core, rhs_type, grade, rest, expected_core, names, ctx, env)
+        end
 
       # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
       # check-only shape. Surface substitution never had to infer it: it
@@ -4532,6 +4587,28 @@ defmodule Cure.Elab.Elaborator do
 
     with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
       {:ok, {:let, grade, ty_core, rhs_core, body_core}}
+    end
+  end
+
+  # `let x = eff  ⏎ rest`  where `eff : Effect(T)`  ⟶  `bind(eff, λ x:T. rest)`.
+  #
+  # The continuation binds the UNWRAPPED payload `x : T` as an OPAQUE binder
+  # (`extend/2`, not `extend_def/3`): the effect's result is NOT definitionally
+  # known — it is whatever the effect will produce at run time — so `x` must stay
+  # a variable, unlike a pure `let` whose value is transparent (ζ).
+  #
+  # de Bruijn: `t_core` is the lambda's DOMAIN, well-formed OUTSIDE its own binder,
+  # so it is reified at the current depth `Context.length(ctx)`. `rest` is the
+  # lambda BODY, elaborated under one new binder (`ctx1`, `names1`), so the block's
+  # expected type is shifted by one (`expected1`). The kernel re-checks the node.
+  defp effectful_let_bind(name, rhs_core, payload_val, rest, expected_core, names, ctx, env) do
+    t_core = Quote.reify(payload_val, Context.length(ctx), Context.signature(ctx))
+    ctx1 = Context.extend(ctx, payload_val)
+    names1 = [name | names]
+    expected1 = Subst.shift(expected_core, 1, 0)
+
+    with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
+      {:ok, {:effect_bind, rhs_core, {:lam, Grade.unrestricted(), t_core, body_core}}}
     end
   end
 
