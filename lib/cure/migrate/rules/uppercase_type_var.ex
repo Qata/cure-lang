@@ -71,7 +71,12 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     # free type var the body introduces (`let y: t = …`) and silently merge two
     # variables — the very merge the rule's freshening exists to prevent.
     body_names = var_names_deep(body, [])
-    {new_meta, rename_map} = rewrite_signature(meta, ctx, body_names)
+    # Pass `active` so a var already renamed by an enclosing binder (a proto/
+    # interface/impl HEAD) REUSES that decision instead of re-freshening it here.
+    # Without this, a head var freshened to `t1` (because some sibling method's
+    # local `t` forced the bump) is independently re-lowercased to `t` by a method
+    # that lacks that local — desyncing the method's uses from the head binder.
+    {new_meta, rename_map} = rewrite_signature(meta, ctx, body_names, active)
     lines = if rename_map != %{}, do: [Keyword.get(meta, :line) | lines], else: lines
     # A nested signature's own binders shadow an outer variable of the same name.
     inner = Map.merge(active, rename_map)
@@ -164,9 +169,10 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
       head_names
       |> Enum.reject(&rename?(&1, ctx))
       |> Enum.concat(body_names)
+      |> Enum.concat(Map.values(active))
       |> MapSet.new()
 
-    rename_map = build_rename_map(candidates, reserved)
+    rename_map = build_rename_map(candidates, reserved, active)
 
     new_meta =
       meta
@@ -211,7 +217,7 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   # Returns {new_meta, rename_map}. `rename_map` is %{} when nothing changed;
   # otherwise it maps each renamed uppercase binder to its lowercased target so
   # the caller can propagate the same rename into the function body.
-  defp rewrite_signature(meta, ctx, body_names) do
+  defp rewrite_signature(meta, ctx, body_names, active) do
     params = Keyword.get(meta, :params, [])
     return_type = Keyword.get(meta, :return_type)
 
@@ -232,13 +238,16 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     # collides with a name the body already uses.
     candidates = names |> Enum.filter(&rename?(&1, ctx)) |> Enum.uniq()
 
+    # Reserve the enclosing renames' TARGETS too, so a method-local var that is
+    # NOT head-bound never freshens onto a name the head already claimed.
     reserved =
       names
       |> Enum.reject(&rename?(&1, ctx))
       |> Enum.concat(body_names)
+      |> Enum.concat(Map.values(active))
       |> MapSet.new()
 
-    rename_map = build_rename_map(candidates, reserved)
+    rename_map = build_rename_map(candidates, reserved, active)
 
     if rename_map == %{} do
       {meta, %{}}
@@ -291,11 +300,19 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   end
 
   # Assign each candidate its lowercased (freshened) target, threading the
-  # reserved set so later candidates avoid earlier targets too.
-  defp build_rename_map(candidates, reserved) do
+  # reserved set so later candidates avoid earlier targets too. A candidate that
+  # an enclosing binder already renamed (present in `active`) REUSES that target
+  # verbatim rather than freshening independently — this keeps a method's uses of
+  # a head-bound type var spelled exactly as the head binder.
+  defp build_rename_map(candidates, reserved, active) do
     {map, _used} =
       Enum.reduce(candidates, {%{}, reserved}, fn name, {map, used} ->
-        target = fresh_lower(name, used)
+        target =
+          case Map.fetch(active, name) do
+            {:ok, existing} -> existing
+            :error -> fresh_lower(name, used)
+          end
+
         {Map.put(map, name, target), MapSet.put(used, target)}
       end)
 

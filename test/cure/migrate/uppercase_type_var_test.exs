@@ -161,6 +161,23 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute out =~ "Ord(T)"
   end
 
+  test "a class type var stays in lockstep with EVERY method even when it collides with a local var in one" do
+    # The head freshens `T` against every var the WHOLE body uses, but each method
+    # re-derived its own rename against only ITS signature. So when `T`'s lowercase
+    # form `t` is taken by a local in ONE method (`f`), the head freshened to `t1`
+    # while a method WITHOUT that local (`g`) independently picked `t` — desyncing
+    # `g`'s class-param uses from the head binder (and colliding onto `f`'s
+    # unrelated `t`). Every class-param use must equal the head binder.
+    out =
+      migrate_fixpoint("proto Foo(T)\n  fn f(x: t) -> T\n  fn g(x: T) -> T\n", "collide.cure")
+
+    assert out =~ ~r/interface Foo\(t1\)/
+    # g's class-param uses track the head binder t1, not the unrelated t
+    assert out =~ ~r/fn g\(x: t1\) -> t1/
+    # f's class-param return is t1; its distinct local x stays t
+    assert out =~ ~r/fn f\(x: t\) -> t1/
+  end
+
   defp find_fn(ast) do
     ast
     |> flatten_nodes()
