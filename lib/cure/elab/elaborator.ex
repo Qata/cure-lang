@@ -489,6 +489,17 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
+  # `assert_type expr : T` — a compile-time ascription. Lower `T`, then elaborate
+  # `expr` in CHECKING mode against it (so the assertion can also steer inference).
+  # The wrapper carries no runtime content: the result IS the checked term at type
+  # `T`, so emit sees only `expr`. Mirrors the classic codegen, which strips it.
+  def elaborate_expr_typed({:assert_type, _meta, [expr, type_ast]}, names, ctx, env) do
+    with {:ok, expected_core} <- elaborate_type(type_ast, names, env),
+         {:ok, term} <- elaborate_expr_checked(expr, expected_core, names, ctx, env) do
+      {:ok, term, Eval.eval(expected_core, Context.env(ctx))}
+    end
+  end
+
   def elaborate_expr_typed({:literal, meta, value} = expr, names, ctx, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) ->
@@ -556,6 +567,17 @@ defmodule Cure.Elab.Elaborator do
       :bnot ->
         with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
              term = {:app, {:global, :int_bnot}, o_core},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
+      # Numeric negation. Type-directed exactly like binary arithmetic: infer the
+      # operand's primitive kind, then lower to `int_neg`/`float_neg` (both return
+      # their operand type). A non-numeric operand rejects as unsupported.
+      :- ->
+        with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
+             {:ok, g} <- neg_global(o_type, ctx),
+             term = {:app, {:global, g}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
@@ -669,6 +691,18 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
+
+  # Integer range `a..b` (exclusive) / `a..=b` (inclusive). Desugars to a call to
+  # the total structurally-recursive helper `Std.Nat.range_upto{,_incl}` (auto-
+  # prelude, so no `use` is needed) — the honest analog of Idris's `enumFromTo`.
+  # The list construction is genuine recursion; only the `Int -> Nat` count cast
+  # (`Std.Nat.of_int`) is a trusted primitive boundary.
+  def elaborate_expr_typed({:range, meta, [from_ast, to_ast]}, names, ctx, env) do
+    fname = if Keyword.get(meta, :inclusive, false), do: "range_upto_incl", else: "range_upto"
+    line = Keyword.get(meta, :line, 0)
+    call = {:function_call, [name: fname, line: line], [from_ast, to_ast]}
+    elaborate_expr_typed(call, names, ctx, env)
+  end
 
   # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
   # `let` rhs, any sub-term the checked tuple clause at line ~1137 doesn't reach).
@@ -976,6 +1010,16 @@ defmodule Cure.Elab.Elaborator do
     else
       g = if op_sym == :==, do: :struct_eq, else: :struct_ne
       {:ok, {:app, app2(g, ty, l), r}}
+    end
+  end
+
+  # Pick the type-directed negation builtin from the operand's primitive kind,
+  # mirroring `build_binop`'s Int→int_*/Float→float_* dispatch for unary `-x`.
+  defp neg_global(o_type, ctx) do
+    case primitive_scrut_kind(o_type, Context.signature(ctx)) do
+      {:ok, :int} -> {:ok, :int_neg}
+      {:ok, :float} -> {:ok, :float_neg}
+      _ -> {:error, {:unsupported_operand_type, :-}}
     end
   end
 
