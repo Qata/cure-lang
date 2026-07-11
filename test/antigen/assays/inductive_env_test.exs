@@ -9,7 +9,7 @@ defmodule Antigen.Assays.InductiveEnvTest do
       :antigenA,
       [{:x, {:var, 0}}, {:y, {:var, 1}}],
       result_indices,
-      [:erased, :present],
+      [:erased, :unrestricted],
       [{:var, 2}]
     )
   end

@@ -25,7 +25,7 @@ The documentation below is organised by topic:
   `Std.System`, `Std.Test`.
 - [Containers and data](#containers-and-data)  -- `Std.List`, `Std.Map`,
   `Std.Set`, `Std.Bounded`, `Std.Vector`, `Std.Pair`, `Std.Option`,
-  `Std.Result`, `Std.Match`, `Std.Access`.
+  `Std.Result`, `Std.Match`.
 - [Protocols](#protocols)  -- `Std.Equatable`, `Std.Ord`, `Std.Functor`.
 - [Value-shaped modules](#value-shaped-modules)  -- `Std.String`,
   `Std.Math`, `Std.Regex`, `Std.Json`, `Std.Http`, `Std.Time`.
@@ -75,7 +75,7 @@ for `Cure.Stdlib.Preload.known_groups/0`):
   containers only admit legacy proof-shaped returns, so no explicit
   `@group` decorator lives in its source.
 - `:collections` -- `Std.List`, `Std.Map`, `Std.Set`, `Std.Vector`,
-  `Std.Pair`, `Std.Match`, `Std.Access`, `Std.Iter`.
+  `Std.Pair`, `Std.Match`, `Std.Iter`.
 - `:text` -- `Std.String`, `Std.Regex`, `Std.Json`.
 - `:numeric` -- `Std.Math`.
 - `:system` -- `Std.Io`, `Std.System`, `Std.Time`, `Std.App`,
@@ -327,65 +327,6 @@ smoke test for the pattern engine.
   `first_two(l, default) -> Tuple`.
 #### Options / Results
 - `unwrap_ok(r, default) -> T`, `unwrap_some(o, default) -> T`.
-### Std.Access
-Key-based access to containers and composable lenses, modelled on
-Elixir's [`Access`](https://hexdocs.pm/elixir/Access.html) behaviour.
-The module has four layers.
-#### Protocol
-```cure path=null start=null
-proto Access(C)
-  fn fetch(container: C, key: Any) -> Option(Any)
-  fn get_and_update(container: C, key: Any,
-                    f: Option(Any) -> Any) -> Tuple
-  fn pop(container: C, key: Any) -> Tuple
-```
-Implementations ship for:
-- `Map`  -- covers Cure records, which compile to maps with a
-  `__struct__` discriminator. `pop/2` on such a record raises
-  `:struct_pop_not_allowed`, matching Elixir's struct semantics.
-- `List` used keyword-style, i.e. a list of `%[key, value]` pairs.
-
-`get_and_update` callbacks must return either `%[got, new_value]` or
-the atom `:pop`; `pop/2` returns `%[popped_or_nil, new_container]`.
-#### Direct helpers
-- `fetch(c, k) -> Option(Any)`.
-- `fetch_bang(c, k) -> Any`  -- raises `:key_error` on miss.
-- `get(c, k, default) -> Any`.
-- `get_and_update(c, k, f) -> Tuple`, `pop(c, k) -> Tuple`.
-#### Accessor ADT and factories
-`Accessor` values are plain ADT constructors; they compose into
-`List(Accessor)` paths that `get_in`, `put_in`, and friends walk.
-- `key(k)`  -- plain key accessor; missing keys collapse to `nil`.
-- `key_default(k, default)`  -- substitutes `default` on miss.
-- `key_bang(k)`  -- required key; raises `:key_error` on miss.
-- `elem_at(i)`  -- 0-based tuple element accessor (translated to
-  BEAM's 1-based `element/2`).
-- `at(i)`  -- 0-based list index accessor.
-- `all()`  -- traverses every element of a list.
-- `filter(pred)`  -- traverses list elements that satisfy `pred`.
-#### Nested traversal
-All of the following accept `List(Accessor)`:
-- `fetch_in(c, keys) -> Option(Any)`  -- `None()` on any miss.
-- `get_in(c, keys) -> Any`  -- `nil` on any miss.
-- `put_in(c, keys, value)`  -- replace the leaf.
-- `update_in(c, keys, f)`  -- apply `f` to the leaf.
-- `get_and_update_in(c, keys, f)`  -- the full workhorse; `f`
-  receives the leaf and returns `%[got, new_leaf]` or `:pop`.
-- `pop_in(c, keys) -> Tuple`  -- remove the leaf, returning
-  `%[popped, rebuilt]`.
-#### Example
-```cure path=null start=null
-let data = %{
-  langs: [
-    %{name: "elixir"},
-    %{name: "cure"}
-  ]
-}
-
-update_in(data, [key(:langs), all(), key(:name)],
-  fn(n) -> Std.String.upcase(n))
-## => %{langs: [%{name: "ELIXIR"}, %{name: "CURE"}]}
-```
 
 ## Protocols
 ### Std.Equatable

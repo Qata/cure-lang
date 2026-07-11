@@ -65,9 +65,25 @@ defmodule Cure.Core.Conv do
     conv_struct?(Normalise.whnf_value(v1, sig), Normalise.whnf_value(v2, sig), depth, sig)
   end
 
-  # η first: a λ on either side, compared by applying both to a fresh neutral.
-  defp conv_struct?({:vlam, _, _} = l, r, depth, sig), do: eta_eq?(l, r, depth, sig)
-  defp conv_struct?(l, {:vlam, _, _} = r, depth, sig), do: eta_eq?(r, l, depth, sig)
+  # A λ's GRADE is part of the term's identity, exactly as a Π's is part of the type's.
+  # Idris reaches `convBinders` — which compares `multiplicity` — from `convGen` on
+  # Bind-vs-Bind, and `sameBinders (Lam {}) (Lam {}) = True`
+  # (`Core/Normalise/Convert.idr:328-337`). Its η clause (`:351`) only ever fires for
+  # Lam-vs-**non**-Bind.
+  #
+  # This clause must therefore precede the η clauses below, which match *any* `:vlam`
+  # on either side and so swallowed λ-vs-λ entirely: `{:vlam, :linear, …}` and
+  # `{:vlam, :unrestricted, …}` were convertible, and `Conv` accepted terms Idris
+  # rejects. Grades are compared by EQUALITY, never by `Grade.leq/2` — the preorder
+  # belongs to the usage check, and a `Conv` that consulted it would make the whole
+  # discipline decorative. Everything past the grade stays with η, so this adds the
+  # missing check and changes nothing else.
+  defp conv_struct?({:vlam, g1, _, _} = l, {:vlam, g2, _, _} = r, depth, sig),
+    do: g1 == g2 and eta_eq?(l, r, depth, sig)
+
+  # η: a λ against a NON-λ, compared by applying both to a fresh neutral.
+  defp conv_struct?({:vlam, _, _, _} = l, r, depth, sig), do: eta_eq?(l, r, depth, sig)
+  defp conv_struct?(l, {:vlam, _, _, _} = r, depth, sig), do: eta_eq?(r, l, depth, sig)
 
   defp conv_struct?({:vtype, l1}, {:vtype, l2}, _depth, _sig), do: l1 == l2
 
@@ -113,8 +129,16 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)
 
-  defp conv_struct?({:vpi, d1, c1}, {:vpi, d2, c2}, depth, sig),
-    do: conv_val?(d1, d2, depth, sig) and conv_closure?(c1, c2, depth, sig)
+  # Π types compare their GRADES, by equality. Idris does the same
+  # (`Core/Normalise/Convert.idr:328`: `sameBinders bx by && multiplicity bx ==
+  # multiplicity by`), so `(1 x : A) -> B` is a DIFFERENT TYPE from
+  # `(x : A) -> B`. Never use the subusaging preorder here: `Grade.leq/2` says a
+  # linear value is acceptable where an affine one is demanded, which is a fact
+  # about USAGE, not about type identity. Comparing by `leq` would let a linear
+  # function be passed where an unrestricted one is expected and the whole
+  # discipline would be decorative.
+  defp conv_struct?({:vpi, g1, d1, c1}, {:vpi, g2, d2, c2}, depth, sig),
+    do: g1 == g2 and conv_val?(d1, d2, depth, sig) and conv_closure?(c1, c2, depth, sig)
 
   defp conv_struct?({:vdata, n1, vs1}, {:vdata, n2, vs2}, depth, sig),
     do: n1 == n2 and conv_spine?(vs1, vs2, depth, sig)
@@ -126,7 +150,7 @@ defmodule Cure.Core.Conv do
 
   # -- η / β-under-binder -----------------------------------------------------
 
-  defp eta_eq?(lam, {:vlam, _, _} = other, depth, sig), do: apply_eq?(lam, other, depth, sig)
+  defp eta_eq?(lam, {:vlam, _, _, _} = other, depth, sig), do: apply_eq?(lam, other, depth, sig)
   defp eta_eq?(lam, {:vneutral, _} = other, depth, sig), do: apply_eq?(lam, other, depth, sig)
   defp eta_eq?(_lam, _other, _depth, _sig), do: false
 

@@ -369,11 +369,57 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  # -- Edition Errors ----------------------------------------------------------
+
+  def format_error({:edition_pragma_placement, line, col}, file) do
+    format_diagnostic(
+      "error",
+      "misplaced edition pragma",
+      file,
+      line,
+      "the `@edition(\"YYYY\")` pragma must be the first thing in the file, " <>
+        "before any statement or decorated definition (column #{col})"
+    )
+  end
+
+  def format_error({:edition_pragma_malformed, line, col}, file) do
+    format_diagnostic(
+      "error",
+      "malformed edition pragma",
+      file,
+      line,
+      "the `@edition` argument must be a single 4-digit year string on one line, " <>
+        "e.g. `@edition(\"#{Cure.Edition.current()}\")` (column #{col})"
+    )
+  end
+
+  def format_error({:edition_pragma_unknown, line, col}, file) do
+    format_diagnostic(
+      "error",
+      "unknown edition",
+      file,
+      line,
+      "not a known edition (column #{col}); known editions: #{known_editions_hint()}"
+    )
+  end
+
+  def format_error({:edition_error, {:unknown_edition, edition}}, file) do
+    format_diagnostic(
+      "error",
+      "unknown edition",
+      file,
+      0,
+      "#{inspect(edition)} is not a known edition; known editions: #{known_editions_hint()}"
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
     format_diagnostic("error", "compilation error", file, 0, inspect(error))
   end
+
+  defp known_editions_hint, do: Enum.join(Cure.Edition.all(), ", ")
 
   # -- "Did you mean?" Suggestions ---------------------------------------------
 

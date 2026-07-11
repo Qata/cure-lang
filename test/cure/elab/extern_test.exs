@@ -89,7 +89,7 @@ defmodule Cure.Elab.ExternTest do
   describe "the @extern arity is the target's arity, i.e. the def's PRESENT arity" do
     # `extern_form/3` used to build the emitted function's BEAM arity, and the number of
     # arguments it passed to the remote call, from the raw integer literal — never from the
-    # def's own `:present` quantities, the way `real_function_form/3` and every CALL SITE
+    # def's own `:unrestricted` quantities, the way `real_function_form/3` and every CALL SITE
     # (`present_arity/2`) do. Nothing cross-checked the two, so they were free to diverge.
     #
     # An extern with an erased implicit has a present arity strictly below its surface

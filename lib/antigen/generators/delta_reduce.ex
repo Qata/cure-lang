@@ -36,7 +36,7 @@ defmodule Antigen.Generators.DeltaReduce do
 
   @z {:ctor, :Z, []}
   @nat {:data, :Nat, [], []}
-  @motive {:lam, @nat, @nat}
+  @motive {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}
   @int_type {:int_type}
 
   # `kpair : Sigma(Nat, const-Nat) = mk_pair(Z, S Z)` (the inductive dependent pair,
@@ -45,9 +45,9 @@ defmodule Antigen.Generators.DeltaReduce do
   # (`case (mk_pair x y) of mk_pair(x,y) -> x|y` ι-reduces exactly as nfst/nsnd did).
   # Motive is the constant `Nat` (the pair is non-dependent); fields bind x=`{:var,1}`,
   # y=`{:var,0}` in the branch frame.
-  @kpair_sigma {:data, :Sigma, [@nat, {:lam, @nat, @nat}], []}
-  @kfst {:case, {:global, :kpair}, {:lam, @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 1}}]}
-  @ksnd {:case, {:global, :kpair}, {:lam, @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 0}}]}
+  @kpair_sigma {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
+  @kfst {:case, {:global, :kpair}, {:lam, Cure.Core.Grade.unrestricted(), @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 1}}]}
+  @ksnd {:case, {:global, :kpair}, {:lam, Cure.Core.Grade.unrestricted(), @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 0}}]}
 
   # A direct `case` whose scrutinee is a certified global's application (neutral
   # at eval-time, resolves to `S Z` only once forced) and whose branch menu is

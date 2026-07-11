@@ -42,7 +42,22 @@ defmodule Cure.Core.Env do
   must `check_def/2` it before it may be referenced; certification (M7.2) gates
   whether δ-reduction may unfold it.
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t()) :: t()
+  @typedoc """
+  What a definition's body slot may actually hold.
+
+  Three inhabitants, and only the first is a Core term:
+
+    * a `Cure.Core.Term.t()` — an ordinary definition;
+    * `nil` — a builtin, seeded with a type but no body (`Cure.Core.Builtins`);
+    * `{:extern, {mod, fun, arity}}` — an `@extern` FFI binding, whose body lives
+      on the BEAM, not in Core.
+
+  The spec used to claim this was always a term. Dialyzer disagreed, and it was
+  right: `Declarations` passes the `:extern` tuple and `Builtins` passes `nil`.
+  """
+  @type def_body :: Cure.Core.Term.t() | nil | {:extern, {module(), atom(), arity()}}
+
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body()) :: t()
   def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil)
 
   @doc """
@@ -50,7 +65,7 @@ defmodule Cure.Core.Env do
   (`nil` = unspecified/all runtime-relevant). Erased parameters are dropped by
   erasure (M8.3 / M9).
   """
-  @spec add_def(t(), atom(), Cure.Core.Term.t(), Cure.Core.Term.t(), [atom()] | nil) :: t()
+  @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body(), [atom()] | nil) :: t()
   def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities),
     do: %{
       env
@@ -197,6 +212,7 @@ defmodule Cure.Core.Env do
 end
 
 defmodule Cure.Core.Inductive do
+  alias Cure.Core.Grade
   @moduledoc """
   Representation of indexed inductive families and their constructors
   (design spec §4.4; mirrors Idris `Core/Context/Data.idr` and Lean
@@ -215,8 +231,21 @@ defmodule Cure.Core.Inductive do
   alias Cure.Core.Env
 
   @type telescope :: [{atom(), Cure.Core.Term.t()}]
-  @type quantity :: :erased | :present
-  @type family :: %{name: atom(), params: telescope(), indices: telescope(), level: non_neg_integer()}
+  @typedoc """
+  A definition's or constructor's per-argument quantity. This is the **grade
+  carrier** (`Cure.Core.Grade.t/0`), not a bespoke pair: `:erased` is `0`, and
+  the other three inhabitants all denote a runtime-present argument.
+  """
+  @type quantity :: Grade.t()
+  @type family :: %{
+          :name => atom(),
+          :params => telescope(),
+          :indices => telescope(),
+          :level => non_neg_integer(),
+          # Set (to `true`) only by `opaque_family/3` for postulate families the
+          # kernel refuses to eliminate; absent on ordinary inductive families.
+          optional(:opaque) => boolean()
+        }
   @type ctor :: %{
           name: atom(),
           args: telescope(),
@@ -271,12 +300,12 @@ defmodule Cure.Core.Inductive do
 
   @doc """
   Build a constructor signature. Every argument defaults to runtime-relevant
-  (`:present`, quantity ω); use `ctor/4` to mark inferred index arguments
+  (`:unrestricted`, quantity ω); use `ctor/4` to mark inferred index arguments
   `:erased` (quantity 0) so they are dropped by erasure (M8.3 / M9).
   """
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()]) :: ctor()
   def ctor(name, arg_tele, result_indices),
-    do: ctor(name, arg_tele, result_indices, List.duplicate(:present, length(arg_tele)))
+    do: ctor(name, arg_tele, result_indices, List.duplicate(:unrestricted, length(arg_tele)))
 
   @doc "Build a constructor signature with explicit {0,ω} argument quantities."
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()]) :: ctor()
@@ -377,7 +406,7 @@ defmodule Cure.Core.Inductive do
     end
   end
 
-  @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:present`)."
+  @doc "A constructor's per-argument {0,ω} quantities (`:erased` / `:unrestricted`)."
   @spec ctor_quantities(Env.t(), atom()) :: [quantity()] | nil
   def ctor_quantities(env, cname) do
     case get_ctor(env, cname) do
@@ -452,9 +481,14 @@ defmodule Cure.Core.Inductive do
   # declared family's constructor fields (the through-constructor rule) — and
   # the codomain stays strictly positive. Σ is covariant in both components. A
   # field headed by ANOTHER family is checked by expanding that family's
-  # constructor fields (`seen` breaks family cycles); `fname` occurring in
-  # another family's parameters/indices is conservatively rejected.
-  defp strictly_positive?(env, fname, {:pi, dom, cod}, seen),
+  # constructor fields (`seen` breaks family cycles). When `fname` occurs inside
+  # another family's ARGUMENTS (nested positivity — `Node (List Rose)`), the
+  # other family's constructor fields are INSTANTIATED with those arguments and
+  # re-checked: a strictly-positive parameter (`List`, `Option`) keeps `fname`
+  # positive, a negative one (`Neg t = t -> Empty`) drops it left of an arrow and
+  # is rejected. An opaque/constructorless carrier has unknowable polarity and is
+  # conservatively rejected.
+  defp strictly_positive?(env, fname, {:pi, _g, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
   # A recursive occurrence of the family itself is strictly positive ONLY when
@@ -466,21 +500,61 @@ defmodule Cure.Core.Inductive do
     do: not Enum.any?(ps ++ is, &occurs?(env, fname, &1))
 
   defp strictly_positive?(env, fname, {:data, other, ps, is}, seen) do
-    cond do
-      Enum.any?(ps ++ is, &occurs?(env, fname, &1)) ->
-        false
+    args = ps ++ is
+    fname_in_args = Enum.any?(args, &occurs?(env, fname, &1))
 
+    cond do
+      # Re-entering a family already on the expansion stack — a recursive or
+      # mutual occurrence. Greatest-fixpoint: accept (its fields are being
+      # verified further up the stack). This is what makes a nested self-call
+      # like `Lst(Rose(a))` terminate and admit.
       MapSet.member?(seen, other) ->
         true
 
-      true ->
+      # `fname` is not passed into `other`. Only a direct/mutual reference to
+      # `fname` inside `other`'s OWN fields could break positivity; expand and
+      # check them (parameters stay bound variables — no instantiation needed).
+      not fname_in_args ->
         seen2 = MapSet.put(seen, other)
 
         env
         |> ctors_of(other)
-        |> Enum.all?(fn %{args: args} ->
-          Enum.all?(args, fn {_n, ty} -> strictly_positive?(env, fname, ty, seen2) end)
+        |> Enum.all?(fn %{args: fields} ->
+          Enum.all?(fields, fn {_n, ty} -> strictly_positive?(env, fname, ty, seen2) end)
         end)
+
+      # `fname` flows into `other`'s arguments, but `other` is opaque
+      # (postulate) or constructorless: its parameter polarity is unknowable,
+      # so no positive certificate can be issued. Reject (soundly incomplete).
+      opaque_or_ctorless?(env, other) ->
+        false
+
+      # NESTED positivity (Agda `Positivity.hs` / Coq's "check the instantiated
+      # constructors" rule): instantiate `other`'s constructor fields with the
+      # ACTUAL arguments and require `fname` to remain strictly positive in each.
+      # This drops `fname` into exactly the structural slots where `other` uses
+      # each parameter — a negative parameter (`Neg t = t -> Empty`) lands
+      # `fname` left of an arrow and is rejected; a positive parameter (`List`,
+      # `Option`) keeps it positive.
+      true ->
+        nt =
+          length(param_telescope(env, other) || []) + length(index_telescope(env, other) || [])
+
+        if nt == length(args) do
+          seen2 = MapSet.put(seen, other)
+
+          env
+          |> ctors_of(other)
+          |> Enum.all?(fn ctor ->
+            ctor
+            |> instantiate_fields(nt, args)
+            |> Enum.all?(&strictly_positive?(env, fname, &1, seen2))
+          end)
+        else
+          # Argument arity does not match the declared telescope — the term is
+          # malformed for this family; cannot align args to binders. Reject.
+          false
+        end
     end
   end
 
@@ -493,6 +567,30 @@ defmodule Cure.Core.Inductive do
   # false-open here admits `False`). An occurrence in a genuinely positive but
   # unanalyzable spot is rejected — soundly incomplete, never unsound.
   defp strictly_positive?(env, fname, other, _seen), do: not occurs?(env, fname, other)
+
+  # An opaque (postulate) or constructorless carrier exposes no constructor
+  # fields, so the polarity of its parameters cannot be established. Conservative.
+  defp opaque_or_ctorless?(env, other),
+    do: opaque?(env, other) or ctors_of(env, other) == []
+
+  # Instantiate a constructor's field telescope by substituting the family's
+  # `nt` parameter/index binders with the ACTUAL arguments. Parameters are the
+  # outermost binders, so at field position `i` the binder for argument `t`
+  # (0-indexed, outermost = 0) sits at de Bruijn index `i + (nt - 1 - t)`; the
+  # argument is shifted over the `i` preceding-field binders. `Term.subst` is
+  # targeted (it does not renumber the untouched binders) — exactly what the
+  # positivity predicates, which match `fname` by head and inspect arrow
+  # structure (index-insensitive), require.
+  defp instantiate_fields(%{args: field_tele}, nt, args) do
+    field_tele
+    |> Enum.with_index()
+    |> Enum.map(fn {{_n, ty}, i} ->
+      Enum.reduce(0..(nt - 1)//1, ty, fn t, acc ->
+        j = i + (nt - 1 - t)
+        Cure.Core.Term.subst(acc, j, Cure.Core.Term.shift(Enum.at(args, t), i, 0))
+      end)
+    end)
+  end
 
   # Does `fname` occur anywhere in `ty`, including inside the constructor fields
   # of other families referenced by `ty`? Used for arrow DOMAINS, where any

@@ -54,7 +54,7 @@ defmodule Cure.Core.HoleAndDeBruijnTest do
     end
 
     test "shift descends through :app and :case into a nested hole without crashing" do
-      branch = {:reflexive, 1, {:lam, {:type, 0}, {:var, 0}}}
+      branch = {:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}}
       term = {:app, {:case, {:hole, "p"}, {:type, 0}, [branch]}, {:int_lit, 0}}
 
       assert Term.shift(term, 1, 0) == term

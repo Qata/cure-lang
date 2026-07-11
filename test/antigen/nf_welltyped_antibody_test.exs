@@ -67,7 +67,7 @@ defmodule Antigen.NfWellTypedAntibodyTest do
     sig = base_sig()
     ctx = Context.empty(sig)
     # λx:Nat. Equivalent(Nat, x, x) : Nat -> Type
-    lam = {:lam, @nat, {:data, :Equivalent, [@nat], [{:var, 0}, {:var, 0}]}}
+    lam = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:data, :Equivalent, [@nat], [{:var, 0}, {:var, 0}]}}
     {:ok, ty} = Kernel.infer(ctx, lam)
     normal = Normalise.nf(ctx, lam)
     assert Kernel.check(ctx, normal, ty) == :ok

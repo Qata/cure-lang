@@ -12,7 +12,7 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
+  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.
@@ -210,7 +210,7 @@ defmodule Antigen.Runner do
   def conv_carrier_of(%Challenge{kind: :typed_term, payload: %{term: t}}) do
     case t do
       {:ctor, :vcons, [{:app, {:app, {:global, :plus}, _}, _}, _, _]} -> :conv_index
-      {:case, _, {:lam, _, {:data, :Vec, _, [{:app, {:app, {:global, :plus}, _}, _}]}}, _} -> :conv_motive
+      {:case, _, {:lam, _g, _, {:data, :Vec, _, [{:app, {:app, {:global, :plus}, _}, _}]}}, _} -> :conv_motive
       _ -> nil
     end
   end
@@ -242,7 +242,7 @@ defmodule Antigen.Runner do
   # Count binders (lam / case-branch) and how many bind a variable that occurs.
   defp binder_stats(t), do: binder_stats(t, {0, 0})
 
-  defp binder_stats({:lam, _dom, body}, {u, tot}) do
+  defp binder_stats({:lam, _g, _dom, body}, {u, tot}) do
     used = if occurs?(body, 0), do: 1, else: 0
     binder_stats(body, {u + used, tot + 1})
   end
@@ -271,8 +271,8 @@ defmodule Antigen.Runner do
   # Does de Bruijn index `k` occur free in `t`? (crosses binders by incrementing k)
   defp occurs?({:var, k}, k), do: true
   defp occurs?({:var, _}, _k), do: false
-  defp occurs?({:lam, dom, body}, k), do: occurs?(dom, k) or occurs?(body, k + 1)
-  defp occurs?({:pi, dom, cod}, k), do: occurs?(dom, k) or occurs?(cod, k + 1)
+  defp occurs?({:lam, _g, dom, body}, k), do: occurs?(dom, k) or occurs?(body, k + 1)
+  defp occurs?({:pi, _g, dom, cod}, k), do: occurs?(dom, k) or occurs?(cod, k + 1)
 
   defp occurs?({:case, scrut, motive, branches}, k) do
     # `motive` is itself a `:lam`-headed term (spec §6.5's constant-motive
@@ -354,6 +354,7 @@ defmodule Antigen.Runner do
     "kernel/confluence",
     "kernel/beta_subst",
     "kernel/zeta_subst",
+    "kernel/grade_conv",
     "elab/shift_agrees",
     "elab/completeness",
     "elab/metamorphic",
@@ -411,6 +412,7 @@ defmodule Antigen.Runner do
   defp assay_module("kernel/confluence"), do: Antigen.Assays.KernelLaw
   defp assay_module("kernel/beta_subst"), do: Antigen.Assays.KernelLaw
   defp assay_module("kernel/zeta_subst"), do: Antigen.Assays.KernelLaw
+  defp assay_module("kernel/grade_conv"), do: Antigen.Assays.KernelLaw
   defp assay_module("elab/shift_agrees"), do: Antigen.Assays.KernelLaw
   defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab

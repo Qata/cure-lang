@@ -53,10 +53,10 @@ defmodule Cure.CLITest do
       File.rm_rf!("_build/test_cli_ebin")
     end
 
-    test "no path shows error" do
+    test "no path shows a usage error and exits nonzero" do
       output =
         capture_io(:stderr, fn ->
-          Cure.CLI.main(["compile"])
+          assert catch_exit(Cure.CLI.main(["compile"])) == {:shutdown, 1}
         end)
 
       assert output =~ "Usage"
@@ -64,6 +64,20 @@ defmodule Cure.CLITest do
   end
 
   describe "cure run" do
+    test "a wrong argument count is a usage error, not 'Unknown command'" do
+      # `["run" | [path]]` matches exactly one arg; 0 or 2+ used to fall through
+      # to the generic catch-all and get misblamed as an unknown command.
+      for args <- [["run"], ["run", "a.cure", "b.cure"]] do
+        output =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main(args)) == {:shutdown, 1}
+          end)
+
+        assert output =~ "Usage: cure run"
+        refute output =~ "Unknown command"
+      end
+    end
+
     test "compiles and runs a .cure file with main/0" do
       # Create a temp file with main
       path = Path.join(System.tmp_dir!(), "cure_cli_test.cure")
@@ -121,13 +135,16 @@ defmodule Cure.CLITest do
   end
 
   describe "unknown command" do
-    test "prints error" do
-      output =
+    test "prints error and exits nonzero" do
+      # A mistyped command must not exit 0 — `cure foobar && next` should stop.
+      # Mirrors the `cure deps` no-Cure.toml contract (this describe's sibling),
+      # which already asserts {:shutdown, 1} on an error path.
+      stderr =
         capture_io(:stderr, fn ->
-          Cure.CLI.main(["foobar"])
+          assert catch_exit(Cure.CLI.main(["foobar"])) == {:shutdown, 1}
         end)
 
-      assert output =~ "Unknown command"
+      assert stderr =~ "Unknown command"
     end
   end
 
@@ -163,14 +180,41 @@ defmodule Cure.CLITest do
       assert File.exists?("acme/test/main_test.cure")
     end
 
-    test "prints a usage hint when called without a project name" do
+    test "prints a usage hint (and exits nonzero) when called without a project name" do
       output =
         capture_io(:stderr, fn ->
-          Cure.CLI.main(["new"])
+          assert catch_exit(Cure.CLI.main(["new"])) == {:shutdown, 1}
         end)
 
       assert output =~ "Usage"
       assert output =~ "cure new"
+    end
+  end
+
+  describe "cure explain (unknown code)" do
+    test "an unknown error code fails instead of silently exiting 0" do
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["explain", "E99999"])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "Unknown error code"
+    end
+  end
+
+  describe "cure fmt --aggressive (failure)" do
+    test "an unparseable file makes the command fail, not report success" do
+      path = Path.join(System.tmp_dir!(), "cure_fmt_bad_#{System.unique_integer([:positive])}.cure")
+      # A lexically/syntactically broken source the parser rejects.
+      File.write!(path, "mod M\n  fn f( -> = )(\n")
+      on_exit(fn -> File.rm_rf!(path) end)
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["fmt", "--aggressive", path])) == {:shutdown, 1}
+        end)
+
+      assert output =~ Path.basename(path)
     end
   end
 
@@ -214,6 +258,153 @@ defmodule Cure.CLITest do
         end)
 
       assert stderr =~ "No Cure.toml found"
+    end
+
+    test "an unknown deps subcommand names the bad subcommand and exits nonzero", %{tmp: tmp} do
+      # `cure deps frobnicate` used to fall through to the generic catch-all,
+      # which bound `unknown = "deps"` — blaming a valid command, suggesting an
+      # unrelated one, and exiting 0. It must instead name the real offender
+      # (`frobnicate`) and fail.
+      File.cd!(tmp)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["deps", "frobnicate"])) == {:shutdown, 1}
+        end)
+
+      assert stderr =~ "Unknown deps subcommand: frobnicate"
+      refute stderr =~ "Unknown command: deps"
+    end
+  end
+
+  describe "cure keys (malformed subcommands)" do
+    # `keys` has arms for `generate <handle>` and `list` but no `[keys | rest]`
+    # fallback, so any malformed invocation fell through to the generic catch-all
+    # — misblaming `keys` as an unknown top-level command (and the fuzzy matcher
+    # even suggested `deps`). Same defect class as the deps fix.
+    for {args, label} <- [
+          {["keys"], "bare"},
+          {["keys", "generate"], "missing handle"},
+          {["keys", "bogus"], "unknown subcommand"},
+          {["keys", "list", "extra"], "extra arg"}
+        ] do
+      @args args
+      test "an unusable keys invocation (#{label}) fails without blaming a top-level command" do
+        stderr =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main(@args)) == {:shutdown, 1}
+          end)
+
+        assert stderr =~ "keys"
+        refute stderr =~ "Unknown command: keys"
+      end
+    end
+  end
+
+  describe "missing-file handling for fmt / doc" do
+    # `cure fmt typo.cure` is an everyday mistake. fmt/doc read each target with
+    # File.read!, which raised an uncaught File.Error (BEAM stacktrace) on a
+    # missing file — unlike run/check/compile, which report + exit 1. A missing
+    # explicit target must be a clean non-zero exit, never a crash.
+    test "cure fmt on a missing file exits 1 without crashing" do
+      capture_io(:stderr, fn ->
+        assert catch_exit(Cure.CLI.main(["fmt", "/no/such/missing_fmt_xyz.cure"])) ==
+                 {:shutdown, 1}
+      end)
+    end
+
+    test "cure fmt --check on a missing file exits 1 without crashing" do
+      capture_io(:stderr, fn ->
+        assert catch_exit(Cure.CLI.main(["fmt", "--check", "/no/such/missing_fmtc_xyz.cure"])) ==
+                 {:shutdown, 1}
+      end)
+    end
+
+    test "cure doc on a missing file exits 1 without crashing" do
+      capture_io(:stderr, fn ->
+        assert catch_exit(Cure.CLI.main(["doc", "/no/such/missing_doc_xyz.cure"])) ==
+                 {:shutdown, 1}
+      end)
+    end
+
+    # `File.exists?` returns true for a file that exists but is unreadable
+    # (chmod 000), so the missing-file guard let it through to a worker whose
+    # `File.read!` then raised a raw File.Error stacktrace. A permission error
+    # must degrade to a clean exit 1, exactly as run/check (which read with
+    # File.read) already do.
+    for {cmd, label} <- [{"fmt", "fmt"}, {"fmt --check", "fmt --check"}, {"doc", "doc"}] do
+      @cmd_args String.split(cmd)
+      test "cure #{label} on an unreadable (existing) file exits 1 without crashing" do
+        path =
+          Path.join(
+            System.tmp_dir!(),
+            "cure_noperm_#{System.unique_integer([:positive])}.cure"
+          )
+
+        File.write!(path, "mod M\n  fn f() -> Int = 1\n")
+        File.chmod!(path, 0o000)
+        on_exit(fn ->
+          File.chmod(path, 0o644)
+          File.rm_rf!(path)
+        end)
+
+        # Root (and some CI) can read a 0o000 file; only meaningful when the
+        # permission bits actually deny this process a read.
+        if match?({:error, _}, File.read(path)) do
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main(@cmd_args ++ [path])) == {:shutdown, 1}
+          end)
+        end
+      end
+    end
+  end
+
+  describe "fixed-arity commands reject extra args (not misblamed as unknown)" do
+    # These commands take zero positional args. An extra positional one matched
+    # neither the exact `["cmd"]` arm nor any other, so it fell through to the
+    # generic catch-all — which bound `unknown = "<cmd>"` and printed
+    # "Unknown command: <cmd>", blaming a VALID command (and the fuzzy matcher
+    # even suggested an unrelated one). Same defect class as the run/check/deps/keys
+    # fixes: name the misuse and fail, never misblame. The fallback also means the
+    # extra arg is rejected BEFORE the command runs, so a stray arg can't start the
+    # lsp server / repl / a stdlib compile.
+    for cmd <- ~w(lsp stdlib version test repl doctor fix top john) do
+      @cmd cmd
+      test "cure #{cmd} with an extra positional arg is a usage error" do
+        stderr =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main([@cmd, "bogus_extra"])) == {:shutdown, 1}
+          end)
+
+        assert stderr =~ "Usage: cure #{@cmd}"
+        refute stderr =~ "Unknown command"
+      end
+    end
+  end
+
+  describe "cure help with extra args" do
+    test "shows help instead of misblaming 'help' as an unknown command" do
+      # `["help"]` was an exact arm with no `| _` fallback, so `cure help extra`
+      # fell through to the generic catch-all and printed "Unknown command: help"
+      # — blaming the help command itself. Extra args to `help` should just show
+      # help (standard CLI behavior), never misblame.
+      output = capture_io(fn -> Cure.CLI.main(["help", "bogus"]) end)
+      assert output =~ "Usage: cure"
+      refute output =~ "Unknown command"
+    end
+  end
+
+  describe "unknown-command suggestions" do
+    # `migrate` is a real dispatch command (cli.ex) but was absent from the
+    # known_commands list the "did you mean" suggester searches, so a near-miss
+    # typo never proposed it.
+    test "a typo near 'migrate' suggests migrate" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["migrat"])) == {:shutdown, 1}
+        end)
+
+      assert stderr =~ "migrate"
     end
   end
 end

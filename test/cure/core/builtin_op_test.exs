@@ -16,7 +16,7 @@ defmodule Cure.Core.BuiltinOpTest do
   defp app3(g, ty, a, b), do: {:app, app2(g, ty, a), b}
 
   test "int_add types as an ordinary global Pi" do
-    assert {:ok, {:vpi, _, _}} = Kernel.infer(ctx(), {:global, :int_add})
+    assert {:ok, {:vpi, _g, _, _}} = Kernel.infer(ctx(), {:global, :int_add})
   end
 
   # NB Normalise.nf/3 returns a reified TERM, not a value (normalise.ex:36-44;
@@ -56,8 +56,8 @@ defmodule Cure.Core.BuiltinOpTest do
     # Register int_add as an ORDINARY def (constant-42 body) in a NON-seeded env:
     # the builtin marker comes only from Builtins.seed, so this def has none.
     # Env.certify/2 accepts it (closed lam body — inductive.ex:68-82).
-    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
-    body = {:lam, {:int_type}, {:lam, {:int_type}, {:int_lit, 42}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+    body = {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
     env = Env.empty() |> Env.add_def(:int_add, ty, body) |> Env.certify(:int_add)
     ctx = Context.empty(env)
     t = Normalise.nf(ctx, app2(:int_add, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
@@ -70,7 +70,7 @@ defmodule Cure.Core.BuiltinOpTest do
   # everything else (ADT equality stays kernel-neutral — R8c). Type arg ignored.
   describe "Amendment A1: struct_eq/struct_ne" do
     test "struct_eq types as a global Pi" do
-      assert {:ok, {:vpi, _, _}} = Kernel.infer(ctx(), {:global, :struct_eq})
+      assert {:ok, {:vpi, _g, _, _}} = Kernel.infer(ctx(), {:global, :struct_eq})
     end
 
     test "struct_eq folds on two int literals (polymorphic instantiation)" do
@@ -95,8 +95,8 @@ defmodule Cure.Core.BuiltinOpTest do
     end
 
     test "R1 pin: a user-registered struct_eq with its OWN body is never builtin-folded" do
-      ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
-      body = {:lam, {:int_type}, {:lam, {:int_type}, {:int_lit, 42}}}
+      ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+      body = {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
       env = Env.empty() |> Env.add_def(:struct_eq, ty, body) |> Env.certify(:struct_eq)
       ctx = Context.empty(env)
       t = Normalise.nf(ctx, app2(:struct_eq, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)

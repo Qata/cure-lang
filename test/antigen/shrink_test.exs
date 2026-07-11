@@ -45,9 +45,9 @@ defmodule Antigen.ShrinkTest do
     # `size`/`node_count` helpers). The predicate must exclude the minimal
     # atoms so only a `:var`/`:lam`-shaped result is accepted, isolating rule
     # 4's behavior.
-    keep_var_or_lam = fn ch -> match?({:var, _}, ch.payload.term) or match?({:lam, _, _}, ch.payload.term) end
+    keep_var_or_lam = fn ch -> match?({:var, _}, ch.payload.term) or match?({:lam, _g, _, _}, ch.payload.term) end
     # λx:Nat. (var 1)  — body does NOT use var 0 ⇒ unwrap to (var 0) after shift
-    a = art({:lam, {:data, :Nat, [], []}, {:var, 1}}, [{:data, :Nat, [], []}])
+    a = art({:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:var, 1}}, [{:data, :Nat, [], []}])
     out = Shrink.minimize(a, keep_var_or_lam, 1000)
     assert out.payload.term == {:var, 0}           # shifted down by 1
   end
@@ -256,7 +256,7 @@ defmodule Antigen.ShrinkTest do
     defp bloated_family_ch do
       bloated = {:app, {:app, {:global, :plus}, {:ctor, :S, [{:ctor, :Z, []}]}}, {:ctor, :Z, []}}
       fam = Cure.Core.Inductive.family(:F, [], [], 0)
-      ctor = Cure.Core.Inductive.ctor(:MkF, [{:x, bloated}], [], [:present], [])
+      ctor = Cure.Core.Inductive.ctor(:MkF, [{:x, bloated}], [], [:unrestricted], [])
       Challenge.new(kind: :family, assay: "positivity", label: :well_typed,
                     payload: %{family: fam, ctors: [ctor]}, seed: 1)
     end

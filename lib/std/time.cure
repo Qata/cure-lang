@@ -1,5 +1,7 @@
 @group(:system)
 mod Std.Time
+  use Std.Result
+  use Std.String
   ## Time primitives for Cure (v0.27.0).
   ##
   ## `Instant` is a point in time represented as Unix microseconds since

@@ -26,7 +26,7 @@ defmodule Cure.Core.MotiveRobustnessTest do
     # motive λ(_ : Foo). Type0 — a genuine type family; the branch body must then
     # inhabit Type0, so use Foo itself ({:data,:Foo,[],[]} : Type0).
     foo = {:data, :Foo, [], []}
-    node = {:case, {:ctor, :foo, []}, {:lam, foo, {:type, 0}}, [{:foo, 0, foo}]}
+    node = {:case, {:ctor, :foo, []}, {:lam, Cure.Core.Grade.unrestricted(), foo, {:type, 0}}, [{:foo, 0, foo}]}
     assert {:ok, _} = Kernel.infer(ctx(), node)
   end
 end

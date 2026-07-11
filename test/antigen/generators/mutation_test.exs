@@ -12,7 +12,7 @@ defmodule Antigen.Generators.MutationTest do
   defp proj_on_nat do
     nat = {:data, :Nat, [], []}
 
-    {:case, {:ctor, :Z, []}, {:lam, {:data, :Sigma, [nat, {:lam, nat, nat}], []}, nat},
+    {:case, {:ctor, :Z, []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, nat},
      [{:mk_pair, 2, {:var, 1}}]}
   end
 
@@ -148,7 +148,7 @@ defmodule Antigen.Generators.MutationTest do
     # well-typed mk_pair — the same check-embedded shape as the operator's output.
     nat = {:data, :Nat, [], []}
 
-    good = {:app, {:lam, {:data, :Sigma, [nat, {:lam, nat, nat}], []}, {:var, 0}},
+    good = {:app, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, {:var, 0}},
             {:ctor, :mk_pair, [{:ctor, :Z, []}, {:ctor, :Z, []}]}}
 
     assert {:ok, _} = Kernel.infer(ctx, good)
@@ -165,9 +165,9 @@ defmodule Antigen.Generators.MutationTest do
   test "app_result's well-typed analog is accepted (operator genuinely ill-types)" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
-    good_fun = {:lam, {:data, :Nat, [], []}, {:ctor, :Z, []}}
-    pi_t = {:pi, {:data, :Nat, [], []}, {:data, :Nat, [], []}}
-    good = {:app, {:lam, pi_t, {:app, {:var, 0}, {:ctor, :Z, []}}}, good_fun}
+    good_fun = {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:ctor, :Z, []}}
+    pi_t = {:pi, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}
+    good = {:app, {:lam, Cure.Core.Grade.unrestricted(), pi_t, {:app, {:var, 0}, {:ctor, :Z, []}}}, good_fun}
     assert {:ok, _} = Kernel.infer(ctx, good)
   end
 
@@ -186,7 +186,7 @@ defmodule Antigen.Generators.MutationTest do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
     list_nat = {:data, :List, [{:data, :Nat, [], []}], []}
-    good = {:app, {:lam, list_nat, {:var, 0}},
+    good = {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}},
             {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
     assert {:ok, _} = Kernel.infer(ctx, good)
   end

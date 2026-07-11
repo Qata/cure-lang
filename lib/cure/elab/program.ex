@@ -8,7 +8,7 @@ defmodule Cure.Elab.Program do
   """
 
   alias Cure.Compiler.{Lexer, Parser}
-  alias Cure.Core.{Env, Validator}
+  alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{Coherence, Declarations, Erase, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
@@ -250,7 +250,7 @@ defmodule Cure.Elab.Program do
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast_elixir_core(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
-         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         seeded = seed_with_telescope_support(ast),
          {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -276,6 +276,28 @@ defmodule Cure.Elab.Program do
       _ ->
         []
     end)
+  end
+
+  # The seeded base env plus telescope support. `Unit` (the empty telescope `%[]`
+  # / `Tuple()`, the terminator of the unit-terminated Σ chain a flat `Tuple(…)`
+  # unfolds to — spec 2026-07-09-unified-tuple §3.4) is declared here in the
+  # E-LAYER via the ordinary `Inductive.declare/3` that `type`/`rec` use, NOT in
+  # the trusted `Core.Builtins` seed: it needs no `@builtin` schema and carries no
+  # kernel-judgement change, so it stays out of the TCB. A module declaring its own
+  # `Unit` shadows this (the local declaration overwrites the same key), same as any
+  # seeded builtin. `unit : Unit` is a plain nullary inductive.
+  defp seed_with_telescope_support(ast) do
+    seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast))
+
+    if MapSet.member?(declared_type_names(ast), :Unit) do
+      seeded
+    else
+      Inductive.declare(
+        seeded,
+        Inductive.family(:Unit, [], [], 0),
+        [Inductive.ctor(:unit, [], [])]
+      )
+    end
   end
 
   # Family/type names the module declares itself. A builtin (Bool/Nat) is NOT
@@ -400,6 +422,31 @@ defmodule Cure.Elab.Program do
   end
 
   @doc """
+  Map each `use`-imported function name to the BEAM module atom that DEFINES it,
+  so dependent codegen can emit a REMOTE call for a cross-module reference rather
+  than an (undefined) local one. Built from the module's transitive import
+  closure (direct `use` + the auto-prelude), keyed by bare function name to the
+  `Cure.<Module>` atom that owns it; the first owner in import-BFS order wins.
+  This module's OWN local definitions are dropped from the map — a local
+  definition shadows an imported one, so a call to a locally-defined name stays
+  local. `Cure.Elab.Emit` consults this to route `{:global, name}` references
+  (the #18 dependent-only codegen enabler). A self-contained module (no
+  cross-module calls) yields an empty map and the old all-local behaviour.
+  """
+  @spec import_origins(tuple() | list()) :: %{atom() => module()}
+  def import_origins(ast) do
+    local = MapSet.new(local_def_names(ast))
+    sources = imports(ast) ++ auto_prelude_imports(ast)
+
+    transitive_import_modules(sources)
+    |> Enum.reduce(%{}, fn {mod_id, path}, acc ->
+      module = String.to_atom("Cure." <> mod_id)
+      Enum.reduce(owned_def_names(path), acc, &Map.put_new(&2, &1, module))
+    end)
+    |> Map.drop(MapSet.to_list(local))
+  end
+
+  @doc """
   Names of the globals synthesised by `implementation` declarations (the mangled
   per-method impl bodies + any dictionary values). Codegen must emit these as
   module locals; `Cure.Elab.Resolve` references them by name.
@@ -477,8 +524,8 @@ defmodule Cure.Elab.Program do
   defp global_refs({:case, s, mo, brs}),
     do: global_refs(s) ++ global_refs(mo) ++ Enum.flat_map(brs, fn {_c, _a, b} -> global_refs(b) end)
 
-  defp global_refs({:pi, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
-  defp global_refs({:lam, dom, body}), do: global_refs(dom) ++ global_refs(body)
+  defp global_refs({:pi, _g, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
+  defp global_refs({:lam, _g, dom, body}), do: global_refs(dom) ++ global_refs(body)
   defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
   defp global_refs(_leaf), do: []
 
@@ -561,7 +608,7 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp split_pi({:pi, dom, cod}, acc), do: split_pi(cod, [dom | acc])
+  defp split_pi({:pi, _g, dom, cod}, acc), do: split_pi(cod, [dom | acc])
   defp split_pi(goal, acc), do: {Enum.reverse(acc), goal}
 
   @doc """
@@ -755,7 +802,7 @@ defmodule Cure.Elab.Program do
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
          :ok <- check_declarations(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
-         seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+         seeded = seed_with_telescope_support(ast),
          {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -901,7 +948,7 @@ defmodule Cure.Elab.Program do
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
            :ok <- check_declarations(ast),
            {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
-           seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast)),
+           seeded = seed_with_telescope_support(ast),
            {:ok, env0} <- merge_env(seeded, imported),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -921,7 +968,17 @@ defmodule Cure.Elab.Program do
   # see `Env.register_inline_hint/3`).
   @inline_hints %{
     "Std.Bool" => [and: :and, or: :or, not: :not, eq: :eq, ne: :ne],
-    "Std.Sigma" => [sigma_first: :sigma_first, sigma_second: :sigma_second]
+    "Std.Sigma" => [
+      sigma_first: :sigma_first,
+      sigma_second: :sigma_second,
+      tproj2: :tproj2,
+      tproj3: :tproj3,
+      tproj4: :tproj4,
+      tproj5: :tproj5,
+      tproj6: :tproj6,
+      tproj7: :tproj7,
+      tproj8: :tproj8
+    ]
   }
 
   defp mark_inline_hints(env, module_name) do
@@ -1039,6 +1096,26 @@ defmodule Cure.Elab.Program do
   end
 
   defp register_pass(items, env, prelude?) do
+    with {:ok, env_h} <- declare_type_headers(items, env) do
+      body_register_pass(items, env_h, prelude?)
+    end
+  end
+
+  # Header pre-pass: register every ctor-bearing type family's HEADER (name +
+  # telescopes, empty ctors) before any constructor body is elaborated, so a
+  # field type may forward-reference a sibling declared later or a
+  # mutually-recursive partner (standard `data`-block scoping). `declare_header`
+  # is a no-op for non-type decls and for `@builtin` containers.
+  defp declare_type_headers(items, env) do
+    Enum.reduce_while(items, {:ok, env}, fn decl, {:ok, acc} ->
+      case Declarations.declare_header(decl, acc) do
+        {:ok, acc2} -> {:cont, {:ok, acc2}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp body_register_pass(items, env, prelude?) do
     Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
       case decl do
         {:function_def, _meta, _body} ->

@@ -43,8 +43,28 @@ defmodule Cure.Migrate do
       Cure.Migrate.Rules.UppercaseTypeVar.rule(),
       Cure.Migrate.Rules.GroupHoist.rule(),
       Cure.Migrate.Rules.ModuleRename.rule(),
-      Cure.Migrate.Rules.RemovedModule.rule()
+      Cure.Migrate.Rules.RemovedModule.rule(),
+      Cure.Migrate.Rules.ProtoToInterface.rule()
     ]
+
+  @doc "Rules to apply when crossing to `target` (spec §7.2)."
+  @spec rules_for_crossing(Cure.Edition.t(), [Rule.t()]) :: [Rule.t()]
+  def rules_for_crossing(target, rules \\ rules()) do
+    Enum.filter(rules, fn r ->
+      mandatory = r.enforced_in != nil and Cure.Edition.compare(r.enforced_in, target) in [:lt, :eq]
+      proactive = r.tier in [:machine, :review] and Cure.Edition.compare(r.since, target) in [:lt, :eq]
+      mandatory or proactive
+    end)
+  end
+
+  @doc "The :manual rules whose old form is illegal at `target` (block the bump)."
+  @spec blocking_manual(Cure.Edition.t(), [Rule.t()]) :: [Rule.t()]
+  def blocking_manual(target, rules \\ rules()) do
+    Enum.filter(rules, fn r ->
+      r.tier == :manual and r.enforced_in != nil and
+        Cure.Edition.compare(r.enforced_in, target) in [:lt, :eq]
+    end)
+  end
 
   @doc """
   Run `rules` over `ast` as an ordered fold. Each rule sees the AST as left by
@@ -58,45 +78,181 @@ defmodule Cure.Migrate do
     * `:rules` — override the registry (default `rules/0`).
     * `:apply` — which rewrites to fold into the returned AST:
         * `:all` (default) — every rule's rewrite; used by `cure migrate`.
-        * `:safe_only` — only the rewrites of rules flagged `tolerate_safe?`;
-          used by `cure build`, so an unsafe rule *warns* but leaves the legacy
-          form as-is in the compiled AST (spec's "normalize in-memory where
-          safe"). Warnings are emitted for every fired rule in both modes.
+        * `:safe_only` — only the rewrites of `:machine`-tier rules; used by
+          `cure build`, so a `:review`/`:manual` rule *warns* but leaves the
+          legacy form as-is in the compiled AST (spec's "normalize in-memory
+          where safe"). Warnings are emitted for every fired rule in both modes.
   """
   @spec run(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()]}
   def run(ast, opts \\ []) do
+    {new_ast, warns, _rewriters} = fold_rules(ast, opts)
+    {new_ast, warns}
+  end
+
+  # Shared fold behind `run/2` and `run_to_fixpoint/2`. Threads the AST through
+  # the rule set as `run/2` documents, and additionally reports `rewriters` — the
+  # ordered ids of rules whose committed rewrite actually changed the AST this
+  # pass. `run_to_fixpoint/2` needs that: a pass whose rewrites net to identity
+  # (e.g. a non-monotone `x->y`/`y->x` pair) leaves the AST equal yet is still
+  # actively rewriting, so AST-equality alone cannot tell "done" from "thrashing"
+  # — while a pure `:warn` rule must NOT count as a rewrite (it never converges
+  # away, so counting it would loop forever). The list (not just a boolean) also
+  # lets a verify failure be attributed to a *rewriter* rather than a warner.
+  @spec fold_rules(Rule.ast(), keyword()) :: {Rule.ast(), [Warning.t()], [atom()]}
+  defp fold_rules(ast, opts) do
     file = Keyword.get(opts, :file, "nofile")
     rule_set = Keyword.get(opts, :rules, rules())
     apply_mode = Keyword.get(opts, :apply, :all)
     ctx = build_ctx(ast)
 
-    Enum.reduce(rule_set, {ast, []}, fn %Rule{} = rule, {acc_ast, warns} ->
-      case rule.detect_and_rewrite.(acc_ast, ctx) do
-        {:rewrite, new_ast} ->
-          {commit(rule, apply_mode, acc_ast, new_ast), warns ++ warnings_for(rule, file, [nil])}
+    {ast, warns, rev_rewriters} =
+      Enum.reduce(rule_set, {ast, [], []}, fn %Rule{} = rule, {acc_ast, warns, rewriters} ->
+        case rule.detect_and_rewrite.(acc_ast, ctx) do
+          {:rewrite, new_ast} ->
+            committed = commit(rule, apply_mode, acc_ast, new_ast)
+            {committed, warns ++ warnings_for(rule, file, [nil]), maybe_rewriter(rewriters, rule, committed, acc_ast)}
 
-        {:rewrite, new_ast, lines} ->
-          {commit(rule, apply_mode, acc_ast, new_ast), warns ++ warnings_for(rule, file, lines)}
+          {:rewrite, new_ast, lines} ->
+            committed = commit(rule, apply_mode, acc_ast, new_ast)
+            {committed, warns ++ warnings_for(rule, file, lines), maybe_rewriter(rewriters, rule, committed, acc_ast)}
 
-        {:warn, lines} ->
-          {acc_ast, warns ++ warnings_for(rule, file, lines)}
+          {:warn, lines} ->
+            {acc_ast, warns ++ warnings_for(rule, file, lines), rewriters}
 
-        :no_change ->
-          {acc_ast, warns}
-      end
-    end)
+          :no_change ->
+            {acc_ast, warns, rewriters}
+        end
+      end)
+
+    {ast, warns, Enum.reverse(rev_rewriters)}
   end
 
-  # Fold the rewrite (`:all` mode, or a `tolerate_safe?` rule) or keep the legacy
-  # AST while still having warned (`:safe_only` mode, unsafe rule).
+  # Prepend the rule's id to the (reversed) rewriter list iff its commit actually
+  # changed the AST — a `:safe_only`-suppressed rewrite is not a rewriter.
+  defp maybe_rewriter(rewriters, %Rule{id: id}, committed, old_ast) do
+    if committed != old_ast, do: [id | rewriters], else: rewriters
+  end
+
+  # Fold the rewrite (`:all` mode, or a `:machine`-tier rule) or keep the legacy
+  # AST while still having warned (`:safe_only` mode, `:review`/`:manual` rule).
   defp commit(_rule, :all, _old_ast, new_ast), do: new_ast
-  defp commit(%Rule{tolerate_safe?: true}, :safe_only, _old_ast, new_ast), do: new_ast
-  defp commit(%Rule{tolerate_safe?: false}, :safe_only, old_ast, _new_ast), do: old_ast
+  defp commit(%Rule{tier: :machine}, :safe_only, _old_ast, new_ast), do: new_ast
+  defp commit(%Rule{}, :safe_only, old_ast, _new_ast), do: old_ast
 
   defp warnings_for(%Rule{} = rule, file, lines) do
     Enum.map(lines, fn line ->
       %Warning{rule: rule.id, message: rule.warning_template, file: file, line: line}
     end)
+  end
+
+  @max_passes 8
+
+  @doc """
+  Run the registry to a fixpoint (spec §6.1): repeatedly apply `run/2` until a
+  full pass changes nothing. After each changing pass, verify the reprinted
+  output reparses and preserves every comment; a verify failure aborts. If the
+  AST is still changing at `:max_passes`, return `{:error, {:no_convergence,
+  culprit_rule_ids}}` (a rule-set bug, not a user error).
+  """
+  @spec run_to_fixpoint(Rule.ast(), keyword()) ::
+          {:ok, Rule.ast(), [Warning.t()]}
+          | {:error, {:no_convergence, [atom()]}}
+          | {:error, {:verify_failed, atom() | nil}}
+  def run_to_fixpoint(ast, opts \\ []) do
+    max = Keyword.get(opts, :max_passes, @max_passes)
+    # The target edition governs the verify reparse (F12): output valid only under
+    # the crossing target must parse under it, not the compiler default.
+    edition = Keyword.get(opts, :edition) || Cure.Edition.current()
+
+    case safe_print(ast) do
+      {:ok, src} -> do_fixpoint(ast, opts, max, [], comment_texts(src), edition)
+      # An input the Printer can't render can't be migrated cleanly — report it as
+      # a verify failure (no culprit rule) rather than crashing the caller.
+      {:error, _} -> {:error, {:verify_failed, nil}}
+    end
+  end
+
+  defp do_fixpoint(ast, opts, passes_left, warns, baseline, edition) do
+    {new_ast, pass_warns, rewriters} = fold_rules(ast, opts)
+
+    cond do
+      # Fixpoint reached: nothing rewrote the AST this pass. Pure `:warn` rules
+      # may still have fired (they warn every pass and never converge away) —
+      # that is expected and does NOT block convergence. Deduplicate the
+      # accumulated warnings (F2): a rule that fires on N passes must surface its
+      # warning once, not once per pass.
+      new_ast == ast and rewriters == [] ->
+        {:ok, ast, Enum.uniq(warns ++ pass_warns)}
+
+      # Still rewriting at the pass budget → the rule set does not converge
+      # (a rule-set bug, not a user error). Report the rules that fired last.
+      passes_left <= 1 ->
+        {:error, {:no_convergence, pass_warns |> Enum.map(& &1.rule) |> Enum.uniq()}}
+
+      true ->
+        case verify(new_ast, baseline, edition) do
+          :ok ->
+            do_fixpoint(new_ast, opts, passes_left - 1, warns ++ pass_warns, baseline, edition)
+
+          {:error, _reason} ->
+            # Attribute to a rule that actually REWROTE this pass (F-culprit): a
+            # verify break is caused by a rewrite, never by a pure-warn rule.
+            {:error, {:verify_failed, List.last(rewriters)}}
+        end
+    end
+  end
+
+  # Reprint → reparse (fail if the output no longer parses) AND diff comments
+  # against `baseline` — the ORIGINAL input's comment texts, captured once by
+  # `run_to_fixpoint/2` before the first pass, not the previous pass's output.
+  # Checking against the true original (not pass-to-pass) is what makes this
+  # catch a comment a rule drops on pass 3 even though passes 1-2 preserved
+  # everything — re-basing to each intermediate pass would let that slip
+  # through as "no *new* loss this pass". Reparse uses the target `edition` so
+  # output valid only under it is not spuriously rejected (F12). The whole body
+  # is guarded (F3b): a rule that yields unrenderable/unparseable output must
+  # surface a clean {:error, …}, never crash the migration.
+  defp verify(ast, baseline_comments, edition) do
+    with {:ok, src} <- safe_print(ast),
+         {:ok, toks} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false, edition: edition),
+         {:ok, _} <- Cure.Compiler.Parser.parse(toks, emit_events: false, edition: edition) do
+      if baseline_comments -- comment_texts(src) == [] do
+        :ok
+      else
+        {:error, :comment_dropped}
+      end
+    else
+      _ -> {:error, :reparse}
+    end
+  rescue
+    _ -> {:error, :verify_crashed}
+  end
+
+  # Render an AST to source, converting a Printer exception (e.g. an unrenderable
+  # node a buggy rule produced) into a value rather than a propagating crash.
+  defp safe_print(ast) do
+    {:ok, Cure.Compiler.Printer.quoted_to_string(ast)}
+  rescue
+    _ -> {:error, :unprintable}
+  end
+
+  # The lossless-comment check for `verify/3`: every `#`-led comment body, trimmed,
+  # sorted. Coarse-but-adequate — KNOWN latent limitation: the scan is not
+  # quote-aware, so a `#` inside a string literal is misread as a comment. Harmless
+  # today (no migrate rule rewrites string-literal contents, so the bogus entry is
+  # stable across baseline/output and never trips `:comment_dropped`); make this
+  # quote-aware before adding any rule that edits inside string literals.
+  defp comment_texts(src) do
+    src
+    |> String.split("\n")
+    |> Enum.flat_map(fn line ->
+      case Regex.run(~r/#+\s?(.*)$/, line) do
+        [_, txt] -> [String.trim(txt)]
+        _ -> []
+      end
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.sort()
   end
 
   @typedoc "Why a path failed the git preflight."
@@ -166,14 +322,23 @@ defmodule Cure.Migrate do
     MapSet.union(builtin_type_names(), declared_type_names(ast))
   end
 
+  # `Type` — the kind universe / sort — is a built-in name that lives in every
+  # scope but is not an entry in `Cure.Types.Env`'s `types` map (it classifies
+  # types rather than being one). It appears pervasively in dependent signatures
+  # (`{a: Type}`, `(a) -> Type`), and there is no reading of it as a user type
+  # variable, so it is seeded here explicitly to keep the uppercase-type-var rule
+  # from downgrading it to a free `type`.
+  @builtin_sorts ["Type"]
+
   defp builtin_type_names do
-    Cure.Types.Env.new().types |> Map.keys() |> MapSet.new()
+    (Cure.Types.Env.new().types |> Map.keys()) |> Enum.concat(@builtin_sorts) |> MapSet.new()
   end
 
-  # Every type name this file introduces, gathered by a full pre-order walk:
-  #   * `{:container, [container_type: :struct | :enum, name: n], _}` — records/enums
+  # Every type name this file introduces or imports, gathered by a full pre-order walk:
+  #   * `{:container, [container_type: :struct | :enum | :opaque | :primitive, name: n], _}`
   #   * `{:type_annotation, [name: n], _}` — `typealias N = …`
   #   * `{:indexed_type, [name: n], _}` — indexed families (defensive; carries :name)
+  #   * `{:import, [items: [...], alias: a], _}` — `use Mod.{A, B}` / `use Mod as A`
   defp declared_type_names(ast) do
     ast |> collect_type_names([]) |> MapSet.new()
   end
@@ -181,11 +346,35 @@ defmodule Cure.Migrate do
   defp collect_type_names({:container, meta, ch}, acc) when is_list(ch) do
     acc =
       case Keyword.get(meta, :container_type) do
-        t when t in [:struct, :enum] -> maybe_name(meta, acc)
+        # `:opaque` (`opaque type Name`) and `:primitive` (`primitive Name`) each
+        # introduce a nominal type name just as `:struct`/`:enum` do; omitting them
+        # let UppercaseTypeVar misread the declared name as a free type variable and
+        # lowercase it (`Word` → `word`, `Handle` → `handle`) — a semantic corruption
+        # that the reprint-only verify does not catch.
+        t when t in [:struct, :enum, :opaque, :primitive] -> maybe_name(meta, acc)
         _ -> acc
       end
 
     Enum.reduce(ch, acc, &collect_type_names/2)
+  end
+
+  # `use Mod.{A, B}` / `use Mod as Alias` bring type constructors into scope; their
+  # names must be treated as declared, not as free type variables. The import node's
+  # body is empty, so this is the only place the selectively-imported items and the
+  # alias enter `ctx`.
+  defp collect_type_names({:import, meta, _}, acc) do
+    items = Keyword.get(meta, :items, [])
+
+    names =
+      case Keyword.get(meta, :alias) do
+        a when is_binary(a) -> [a | items]
+        _ -> items
+      end
+
+    Enum.reduce(names, acc, fn
+      n, a when is_binary(n) -> [n | a]
+      _, a -> a
+    end)
   end
 
   defp collect_type_names({:type_annotation, meta, ch}, acc) when is_list(ch) do

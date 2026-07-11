@@ -36,7 +36,7 @@ defmodule Cure.Core.PositivityAppHeadSoundnessTest do
 
   test "family under a type-level lambda is rejected" do
     # λ(t : Type). (Bad -> Empty) — a negative occurrence hidden under a binder.
-    field = {:lam, {:type, 0}, {:pi, @bad, @empty}}
+    field = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:pi, Cure.Core.Grade.unrestricted(), @bad, @empty}}
     assert {:error, {:non_strictly_positive, :mk}} == positive_of(field)
   end
 

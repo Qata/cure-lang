@@ -30,6 +30,8 @@ mod Std.Test
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
+  use Std.Comparable
+
   ## Private: raise `reason` as an Erlang error.
   @extern(:erlang, :error, 1)
   local fn raise_error(reason: Atom) -> Atom
@@ -53,13 +55,13 @@ mod Std.Test
       else   -> raise_error(:unexpectedly_equal)
 
   ## Assert `a > b`; raises `:not_greater` otherwise.
-  fn assert_gt(a: t, b: t) -> Atom =
+  fn assert_gt(a: t, b: t) -> Atom where Comparable(t) =
     pickup
       a > b -> :ok
       else  -> raise_error(:not_greater)
 
   ## Assert `a < b`; raises `:not_less` otherwise.
-  fn assert_lt(a: t, b: t) -> Atom =
+  fn assert_lt(a: t, b: t) -> Atom where Comparable(t) =
     pickup
       a < b -> :ok
       else  -> raise_error(:not_less)

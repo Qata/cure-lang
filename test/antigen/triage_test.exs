@@ -3,7 +3,7 @@ defmodule Antigen.TriageTest do
   alias Antigen.{Triage, Challenge}
 
   @nat {:data, :Nat, [], []}
-  defp d(name, body), do: %{name: name, type: {:pi, @nat, @nat}, body: body}
+  defp d(name, body), do: %{name: name, type: {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body: body}
 
   # bloated in BOTH dimensions: 3 defs (2 droppable) + an S-tower body to shrink
   defp both_dims_ch do

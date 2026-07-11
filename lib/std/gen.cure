@@ -1,5 +1,6 @@
 @group(:test)
 mod Std.Gen
+  use Std.List
   ## Tiny stateless generator API for property-based testing (v0.19.0).
   ##
   ## Generators are plain zero-argument lambdas returning a fresh

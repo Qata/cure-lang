@@ -1,6 +1,6 @@
 defmodule Cure.Core.LetBinderTest do
   @moduledoc """
-  The Core `{:let, ty, val, body}` binder (Idris `Core/TT/Binder.idr:93-98`
+  The Core `{:let, Cure.Core.Grade.unrestricted(), ty, val, body}` binder (Idris `Core/TT/Binder.idr:93-98`
   `Let : FC -> RigCount -> val -> ty -> Binder`; Lean `Expr.letE` +
   `kernel/type_checker.cpp:475`).
 
@@ -18,32 +18,32 @@ defmodule Cure.Core.LetBinderTest do
   alias Cure.Core.{Context, Eval, Kernel, Serialize, Term, Validator}
 
   # `let T : Type 0 := Int in <body>`
-  defp let_int(body), do: {:let, {:type, 0}, {:int_type}, body}
+  defp let_int(body), do: {:let, Cure.Core.Grade.unrestricted(), {:type, 0}, {:int_type}, body}
 
   describe "shape" do
     test "term?/1 accepts a well-formed let and rejects a malformed one" do
       assert Term.term?(let_int({:var, 0}))
-      refute Term.term?({:let, {:type, 0}, {:int_type}})
-      refute Term.term?({:let, {:type, 0}, {:int_type}, {:var, -1}})
+      refute Term.term?({:let, Cure.Core.Grade.unrestricted(), {:type, 0}, {:int_type}})
+      refute Term.term?({:let, Cure.Core.Grade.unrestricted(), {:type, 0}, {:int_type}, {:var, -1}})
     end
   end
 
   describe "de Bruijn" do
     test "shift/3 treats body as one binder deeper than ty and val" do
       # ty and val at cutoff c; body at c + 1.
-      assert Term.shift({:let, {:var, 0}, {:var, 0}, {:var, 1}}, 1, 0) ==
-               {:let, {:var, 1}, {:var, 1}, {:var, 2}}
+      assert Term.shift({:let, Cure.Core.Grade.unrestricted(), {:var, 0}, {:var, 0}, {:var, 1}}, 1, 0) ==
+               {:let, Cure.Core.Grade.unrestricted(), {:var, 1}, {:var, 1}, {:var, 2}}
     end
 
     test "shift/3 leaves the body's own binder alone" do
-      assert Term.shift({:let, {:int_type}, {:int_lit, 1}, {:var, 0}}, 5, 0) ==
-               {:let, {:int_type}, {:int_lit, 1}, {:var, 0}}
+      assert Term.shift({:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 1}, {:var, 0}}, 5, 0) ==
+               {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 1}, {:var, 0}}
     end
 
     test "subst/3 goes under the body's binder and lifts the replacement" do
       # subst j=0, r={:var,7}: ty/val get r; body's index 1 is the outer 0.
-      assert Term.subst({:let, {:var, 0}, {:var, 0}, {:var, 1}}, 0, {:var, 7}) ==
-               {:let, {:var, 7}, {:var, 7}, {:var, 8}}
+      assert Term.subst({:let, Cure.Core.Grade.unrestricted(), {:var, 0}, {:var, 0}, {:var, 1}}, 0, {:var, 7}) ==
+               {:let, Cure.Core.Grade.unrestricted(), {:var, 7}, {:var, 7}, {:var, 8}}
     end
   end
 
@@ -69,19 +69,19 @@ defmodule Cure.Core.LetBinderTest do
     end
 
     test "eval/2 ζ-reduces a let to its body under the bound value" do
-      assert Eval.eval({:let, {:int_type}, {:int_lit, 3}, {:var, 0}}, []) == {:vint, 3}
+      assert Eval.eval({:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 3}, {:var, 0}}, []) == {:vint, 3}
     end
 
     test "a let never survives evaluation into a value" do
       # The body is a lambda; the result is a closure, never a `let` value form.
-      assert {:vlam, _, _} = Eval.eval(let_int({:lam, {:var, 0}, {:var, 0}}), [])
+      assert {:vlam, _g, _, _} = Eval.eval(let_int({:lam, Cure.Core.Grade.unrestricted(), {:var, 0}, {:var, 0}}), [])
     end
   end
 
   describe "typing" do
     test "infer/2 types a let by its body's type" do
       assert {:ok, {:vint_type}} =
-               Kernel.infer(Context.empty(), {:let, {:int_type}, {:int_lit, 3}, {:var, 0}})
+               Kernel.infer(Context.empty(), {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 3}, {:var, 0}})
     end
 
     test "a let-bound TYPE variable is transparent in the body (the dependent let)" do
@@ -90,8 +90,8 @@ defmodule Cure.Core.LetBinderTest do
       # This is the discriminating case. With ζ the λ's domain evaluates to
       # `{:vint_type}`; with an opaque λ-binder it would be a neutral, and the
       # inferred Π would have a stuck domain.
-      assert {:ok, {:vpi, {:vint_type}, _cod}} =
-               Kernel.infer(Context.empty(), let_int({:lam, {:var, 0}, {:var, 0}}))
+      assert {:ok, {:vpi, _g, {:vint_type}, _cod}} =
+               Kernel.infer(Context.empty(), let_int({:lam, Cure.Core.Grade.unrestricted(), {:var, 0}, {:var, 0}}))
     end
 
     test "check/3 propagates the expected type into the body" do
@@ -102,18 +102,18 @@ defmodule Cure.Core.LetBinderTest do
 
     test "the value is checked against the ascribed type" do
       assert {:error, _} =
-               Kernel.infer(Context.empty(), {:let, {:int_type}, {:type, 0}, {:int_lit, 1}})
+               Kernel.infer(Context.empty(), {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:type, 0}, {:int_lit, 1}})
     end
 
     test "the ascribed type must be a sort" do
       assert {:error, _} =
-               Kernel.infer(Context.empty(), {:let, {:int_lit, 1}, {:int_lit, 1}, {:int_lit, 1}})
+               Kernel.infer(Context.empty(), {:let, Cure.Core.Grade.unrestricted(), {:int_lit, 1}, {:int_lit, 1}, {:int_lit, 1}})
     end
   end
 
   describe "round-trips" do
     test "serialize/deserialize preserves a let" do
-      t = let_int({:lam, {:var, 0}, {:var, 0}})
+      t = let_int({:lam, Cure.Core.Grade.unrestricted(), {:var, 0}, {:var, 0}})
       assert {:ok, ^t} = t |> Serialize.encode() |> Serialize.decode()
     end
 

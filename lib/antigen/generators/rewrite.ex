@@ -101,9 +101,9 @@ defmodule Antigen.Generators.Rewrite do
   # mirrors the elaborator's `transport_case/4`.
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
-    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
+    arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   # -- 4.1 Equivalent formation ------------------------------------------------
@@ -115,14 +115,14 @@ defmodule Antigen.Generators.Rewrite do
   def eq_formation(:well_typed) do
     eq = {:data, :Equivalent, [@dec], [@causal, @dcoupled]}
     challenge(:well_typed, [dec_family(), eq_family()], :eq_formation,
-      {:pi, eq, @dec}, {:lam, eq, @causal},
+      {:pi, Cure.Core.Grade.unrestricted(), eq, @dec}, {:lam, Cure.Core.Grade.unrestricted(), eq, @causal},
       "Equivalent Dec Causal Dcoupled — both endpoints : Dec", :eq_formation_well_typed)
   end
 
   def eq_formation(:ill_typed) do
     eq = {:data, :Equivalent, [@dec], [@causal, {:ctor, :MkFoo, []}]}
     challenge(:ill_typed, [dec_family(), foo_family(), eq_family()], :eq_formation,
-      {:pi, eq, @dec}, {:lam, eq, @causal},
+      {:pi, Cure.Core.Grade.unrestricted(), eq, @dec}, {:lam, Cure.Core.Grade.unrestricted(), eq, @causal},
       "ill-typed: Equivalent Dec Causal MkFoo — MkFoo : Foo, not Dec", :eq_formation_ill_typed)
   end
 
@@ -138,7 +138,7 @@ defmodule Antigen.Generators.Rewrite do
 
   # redex: endpoint is a redex that normalizes to Causal — conv is up-to-nf.
   def refl_typing(:redex) do
-    redex = {:app, {:lam, @dec, {:var, 0}}, @causal}
+    redex = {:app, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:var, 0}}, @causal}
     eq = {:data, :Equivalent, [@dec], [@causal, redex]}
     challenge(:well_typed, [dec_family(), eq_family()], :refl_typing,
       eq, {:ctor, :reflexive, [@causal]},
@@ -171,18 +171,18 @@ defmodule Antigen.Generators.Rewrite do
   # Bruijn under `[p, h]`: `h`=var0, `p`=var1.
   @p_causal {:data, :P, [], [{:ctor, :Causal, []}]}
   @p_dcoupled {:data, :P, [], [{:ctor, :Dcoupled, []}]}
-  @motive {:lam, @dec, {:data, :P, [], [{:var, 0}]}}
+  @motive {:lam, Cure.Core.Grade.unrestricted(), @dec, {:data, :P, [], [{:var, 0}]}}
   @eq_cd {:data, :Equivalent, [@dec], [{:ctor, :Causal, []}, {:ctor, :Dcoupled, []}]}
 
   @spec rewrite_premise(:well_typed | :proof_not_eq | :body_mismatch) :: Challenge.t()
   # def : Π(p:Equivalent Dec Causal Dcoupled). Π(h:P Causal). P Dcoupled
   #     = λp.λh. transport p (λx.P x) @ h
   def rewrite_premise(:well_typed) do
-    dt = {:pi, @eq_cd, {:pi, @p_causal, @p_dcoupled}}
+    dt = {:pi, Cure.Core.Grade.unrestricted(), @eq_cd, {:pi, Cure.Core.Grade.unrestricted(), @p_causal, @p_dcoupled}}
 
     body =
-      {:lam, @eq_cd,
-       {:lam, @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @eq_cd,
+       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
     challenge(:well_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
       "transport p (λx.P x) h : P Dcoupled from h : P Causal", :rewrite_premise_well_typed)
@@ -191,10 +191,10 @@ defmodule Antigen.Generators.Rewrite do
   # proof is `h : P Causal`, not an equality → the reflexive branch cannot
   # eliminate a P scrutinee (:foreign_ctor — the :case analog of ensure_eq).
   def rewrite_premise(:proof_not_eq) do
-    dt = {:pi, @p_causal, @p_causal}
+    dt = {:pi, Cure.Core.Grade.unrestricted(), @p_causal, @p_causal}
 
     body =
-      {:lam, @p_causal, {:app, transport({:var, 0}, @dec, @motive, @causal), {:var, 0}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 0}, @dec, @motive, @causal), {:var, 0}}}
 
     challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
       "ill-typed: transport proof is h : P Causal, not an Equivalent — reflexive branch is foreign",
@@ -204,10 +204,10 @@ defmodule Antigen.Generators.Rewrite do
   # proof IS a genuine equality (so we reach the argument check), but the body
   # `Causal : Dec` does not check at M a = P Causal.
   def rewrite_premise(:body_mismatch) do
-    dt = {:pi, @eq_cd, @p_dcoupled}
+    dt = {:pi, Cure.Core.Grade.unrestricted(), @eq_cd, @p_dcoupled}
 
     body =
-      {:lam, @eq_cd, {:app, transport({:var, 0}, @dec, @motive, @causal), {:ctor, :Causal, []}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @eq_cd, {:app, transport({:var, 0}, @dec, @motive, @causal), {:ctor, :Causal, []}}}
 
     challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
       "ill-typed: transported body Causal:Dec, not P Causal — premise check fails at the app",
@@ -218,11 +218,11 @@ defmodule Antigen.Generators.Rewrite do
   @spec transport_type(:transport_correct | :refl_coherence | :left_at_source) :: Challenge.t()
   # identical body to 4.3 well-typed; the point is the DECLARED codomain P Dcoupled.
   def transport_type(:transport_correct) do
-    dt = {:pi, @eq_cd, {:pi, @p_causal, @p_dcoupled}}
+    dt = {:pi, Cure.Core.Grade.unrestricted(), @eq_cd, {:pi, Cure.Core.Grade.unrestricted(), @p_causal, @p_dcoupled}}
 
     body =
-      {:lam, @eq_cd,
-       {:lam, @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @eq_cd,
+       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
     challenge(:well_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
       "declared P Dcoupled; the transport's Π moves the type to M b", :transport_type_transport_correct)
@@ -234,11 +234,11 @@ defmodule Antigen.Generators.Rewrite do
   # inference-position-only artifact — `check` now subsumes infer+conv on the
   # spine arity, so a params-on-spine reflexive is also checkable directly.
   def transport_type(:refl_coherence) do
-    dt = {:pi, @p_causal, @p_causal}
+    dt = {:pi, Cure.Core.Grade.unrestricted(), @p_causal, @p_causal}
     proof = {:ctor, :reflexive, [@dec, {:ctor, :Causal, []}]}
 
     body =
-      {:lam, @p_causal, {:app, transport(proof, @dec, @motive, @causal), {:var, 0}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport(proof, @dec, @motive, @causal), {:var, 0}}}
 
     challenge(:well_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
       "transport (reflexive Causal) M h : P Causal — vacuous transport", :transport_type_refl_coherence)
@@ -247,11 +247,11 @@ defmodule Antigen.Generators.Rewrite do
   # left-at-source: SAME transport body but declared codomain P Causal (= M a).
   # The kernel must reject: the transport yields P Dcoupled ≢ P Causal.
   def transport_type(:left_at_source) do
-    dt = {:pi, @eq_cd, {:pi, @p_causal, @p_causal}}
+    dt = {:pi, Cure.Core.Grade.unrestricted(), @eq_cd, {:pi, Cure.Core.Grade.unrestricted(), @p_causal, @p_causal}}
 
     body =
-      {:lam, @eq_cd,
-       {:lam, @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @eq_cd,
+       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
     challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
       "ill-typed: declared P Causal but the transport yields P Dcoupled — accepting = no transport",

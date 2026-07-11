@@ -45,6 +45,9 @@ defmodule Cure.Migrate.Rules.ModuleRename do
       id: :W_module_rename,
       description: "a reference to a renamed stdlib module is updated to its new name",
       phase: :syntactic,
+      tier: :machine,
+      since: "2026",
+      enforced_in: "2026",
       detect_and_rewrite: &detect_and_rewrite/2,
       warning_template: "renamed stdlib module: reference updated to its new name"
     }

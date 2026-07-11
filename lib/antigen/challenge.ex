@@ -67,7 +67,7 @@ defmodule Antigen.Challenge do
     :terminating, :diverging, :positive, :negative, :none,
     # generator-produced names
     :f, :g, :h, :plus, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
-    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :present, :erased,
+    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :unrestricted, :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
     :indexed_case, :well_typed, :ill_typed,
     # reify / data-split verticals (lean-shape-matching): indexed-case def names
@@ -85,7 +85,7 @@ defmodule Antigen.Challenge do
     # universes vertical
     :u,
     # erasure quantities: the ω annotation `:many` on a ctor field (siblings
-    # `:present`/`:erased` already interned). Family seeds carry it as text in the
+    # `:unrestricted`/`:erased` already interned). Family seeds carry it as text in the
     # scaffold and reconstruct it via `to_existing_atom`, so it must be interned or
     # a fresh-VM decode raises "not an already existing atom" (found banking
     # universes/family seeds — see many_quantity_decode_test).
@@ -211,7 +211,10 @@ defmodule Antigen.Challenge do
     :unify_rigid_value_heads, :opaque_family_positivity, :positivity_alias_expansion,
     :occurs_bare_global, :whnf_arity2_direct, :whnf_nested_fuel_restore,
     :cert_unknown_tuple_node, :cert_unknown_list_node, :cert_nontuple_call_arg,
-    :cert_nontuple_list_elem, :cert_calls_nontuple_head
+    :cert_nontuple_list_elem, :cert_calls_nontuple_head,
+    # Editions-facility probes (Cure.Edition.retired_keywords/2 keyword set +
+    # Cure.Migrate.run_to_fixpoint/2 convergence).
+    :edition_retired_keywords, :migrate_fixpoint_converges
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

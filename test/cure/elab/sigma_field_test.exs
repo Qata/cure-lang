@@ -5,7 +5,7 @@ defmodule Cure.Elab.SigmaFieldTest do
   (`:unsupported_field_type`) because the field-type mapper `type_to_core` had no
   `{:sigma_type}` clause. Constructor field telescopes are non-dependent here, so
   a Σ field's codomain carries no free binder and maps straight to the inductive
-  Core former `{:data, :Sigma, [dom, {:lam, dom, body}], []}` (D2), validated by
+  Core former `{:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}` (D2), validated by
   the kernel's `check_family`. This composes
   with pair construction (`%[…]`) and projection (`.2`) for a full
   build-a-record / read-a-field round trip. Oracle `match/mt15_sigma_field` pins

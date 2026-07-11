@@ -43,7 +43,7 @@ defmodule Cure.Elab.Resolve do
     # instance. The remaining arguments (which may be lambdas needing checking mode)
     # are elaborated by the application machinery once the callee is fixed.
     with {:ok, _term, tval} <- Elaborator.elaborate_expr_typed(head_ast, names, ctx, env) do
-      case classify(tval) do
+      case classify(env, tval, MapSet.new()) do
         {:concrete, hc} -> concrete(env, desc, method, hc, args, names, ctx)
         {:rigid, lvl} -> abstract(env, desc, method, args, lvl, names, ctx)
         {:unknown, tval2} -> {:error, {:no_instance, desc.name, tval2}}
@@ -123,12 +123,37 @@ defmodule Cure.Elab.Resolve do
   defp applied_head?({:function_call, fmeta, _args}, hv), do: Keyword.get(fmeta, :name) == hv
   defp applied_head?(_type, _hv), do: false
 
-  defp classify({:vint_type}), do: {:concrete, :Int}
-  defp classify({:vfloat_type}), do: {:concrete, :Float}
-  defp classify({:vstring_type}), do: {:concrete, :String}
-  defp classify({:vdata, name, _vs}), do: {:concrete, name}
-  defp classify({:vneutral, {:nvar, lvl}}), do: {:rigid, lvl}
-  defp classify(other), do: {:unknown, other}
+  defp classify(_env, {:vint_type}, _seen), do: {:concrete, :Int}
+  defp classify(_env, {:vfloat_type}, _seen), do: {:concrete, :Float}
+  # String has no primitive value former: `String = List(Char)` (the landed
+  # value-surface design), so it reaches dispatch as the `nglobal` alias `String`
+  # and is unfolded to `List(Char)` by the neutral-global clause below — it never
+  # arrives as a `{:vstring_type}`. (`{:string_type}` is only an E-layer head-atom
+  # sentinel in `head_type_core`/`Implementation.head_atom`; it is never evaluated.)
+  defp classify(_env, {:vdata, name, _vs}, _seen), do: {:concrete, name}
+  defp classify(_env, {:vneutral, {:nvar, lvl}}, _seen), do: {:rigid, lvl}
+
+  # A transparent type synonym in head position (`String = List(Char)`) reaches
+  # dispatch as a neutral global, because delta-reduction is on-demand. Unfold it
+  # to its normal form and re-classify, so `combine` on a `String` finds the
+  # `List` instance — the same alias-normalisation the coherence *registration*
+  # side does (`Implementation.normalize_head`). Only nullary type-level defs
+  # unfold; `seen` guards a cyclic alias chain.
+  defp classify(env, {:vneutral, {:nglobal, name}} = v, seen) do
+    if MapSet.member?(seen, name) do
+      {:unknown, v}
+    else
+      case Env.get_def(env, name) do
+        %{type: {:type, _}, body: body} when not is_nil(body) ->
+          classify(env, Eval.eval(body, []), MapSet.put(seen, name))
+
+        _ ->
+          {:unknown, v}
+      end
+    end
+  end
+
+  defp classify(_env, other, _seen), do: {:unknown, other}
 
   # -- concrete (static) dispatch ---------------------------------------------
   # Inline the instance's mangled method global and elaborate the call through the
@@ -204,7 +229,7 @@ defmodule Cure.Elab.Resolve do
 
       case Elaborator.elaborate_expr_typed(head_ast, names, ctx, env) do
         {:ok, _term, tval} ->
-          case classify(tval) do
+          case classify(env, tval, MapSet.new()) do
             {:concrete, head} ->
               {:cont, {:ok, acc ++ [{:dict_value, spec.iface, head}]}}
 
@@ -280,11 +305,11 @@ defmodule Cure.Elab.Resolve do
         {:app, acc, {:var, arity - 1 - i}}
       end)
 
-    Enum.reduce(Enum.reverse(domains), body, fn dom, acc -> {:lam, dom, acc} end)
+    Enum.reduce(Enum.reverse(domains), body, fn dom, acc -> {:lam, Cure.Core.Grade.unrestricted(), dom, acc} end)
   end
 
   defp peel_domains(_pi, 0), do: []
-  defp peel_domains({:pi, dom, cod}, n), do: [dom | peel_domains(cod, n - 1)]
+  defp peel_domains({:pi, _g, dom, cod}, n), do: [dom | peel_domains(cod, n - 1)]
   defp peel_domains(_other, _n), do: []
 
   defp head_type_core(:Int), do: {:int_type}

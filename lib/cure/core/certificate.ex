@@ -194,7 +194,7 @@ defmodule Cure.Core.Certificate do
     end)
   end
 
-  defp walk_node(emit, {:lam, d, b}, st, acc),
+  defp walk_node(emit, {:lam, _g, d, b}, st, acc),
     do: walk(emit, b, shift_state(st, 1), walk(emit, d, st, acc))
 
   # `:let` binds one variable in `body` only.
@@ -205,10 +205,10 @@ defmodule Cure.Core.Certificate do
   # anyway found by `gather_globals/2`, which walks any tuple. Verified: deleting
   # this clause changes no `terminating?/3` verdict I could construct. It is here
   # because a traversal must not silently skip a binder's children.
-  defp walk_node(emit, {:let, t, v, b}, st, acc),
+  defp walk_node(emit, {:let, _g, t, v, b}, st, acc),
     do: walk(emit, b, shift_state(st, 1), walk(emit, v, st, walk(emit, t, st, acc)))
 
-  defp walk_node(emit, {:pi, d, c}, st, acc),
+  defp walk_node(emit, {:pi, _g, d, c}, st, acc),
     do: walk(emit, c, shift_state(st, 1), walk(emit, d, st, acc))
 
   defp walk_node(emit, {:data, _n, ps, is}, st, acc) do
@@ -621,15 +621,15 @@ defmodule Cure.Core.Certificate do
   defp spine(head, acc), do: {head, acc}
 
   # Count leading lambdas and return the wrapped body.
-  defp peel_lams({:lam, _d, b}, n), do: peel_lams(b, n + 1)
+  defp peel_lams({:lam, _g, _d, b}, n), do: peel_lams(b, n + 1)
   defp peel_lams(term, n), do: {n, term}
 
   # -- self-call detection (fast path) ----------------------------------------
 
   defp calls?(name, {:global, n}), do: n == name
-  defp calls?(name, {:pi, d, c}), do: calls?(name, d) or calls?(name, c)
-  defp calls?(name, {:lam, d, b}), do: calls?(name, d) or calls?(name, b)
-  defp calls?(name, {:let, t, v, b}), do: calls?(name, t) or calls?(name, v) or calls?(name, b)
+  defp calls?(name, {:pi, _g, d, c}), do: calls?(name, d) or calls?(name, c)
+  defp calls?(name, {:lam, _g, d, b}), do: calls?(name, d) or calls?(name, b)
+  defp calls?(name, {:let, _g, t, v, b}), do: calls?(name, t) or calls?(name, v) or calls?(name, b)
   defp calls?(name, {:app, f, a}), do: calls?(name, f) or calls?(name, a)
 
   defp calls?(name, {:data, _n, ps, is}),

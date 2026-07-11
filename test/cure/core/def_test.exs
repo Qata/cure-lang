@@ -5,7 +5,7 @@ defmodule Cure.Core.DefTest do
   @dec {:data, :Dec, [], []}
   @dcoupled {:ctor, :Dcoupled, []}
   @causal {:ctor, :Causal, []}
-  @dec_motive {:lam, @dec, @dec}
+  @dec_motive {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}
 
   defp base do
     Env.empty()
@@ -16,26 +16,26 @@ defmodule Cure.Core.DefTest do
   end
 
   # and : Dec -> Dec -> Dec ; and(Causal, Causal) = Causal, else Dcoupled.
-  defp and_type, do: {:pi, @dec, {:pi, @dec, @dec}}
+  defp and_type, do: {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}}
 
   defp and_body do
     inner =
       {:case, {:var, 0}, @dec_motive, [{:Dcoupled, 0, @dcoupled}, {:Causal, 0, @causal}]}
 
-    {:lam, @dec,
-     {:lam, @dec,
+    {:lam, Cure.Core.Grade.unrestricted(), @dec,
+     {:lam, Cure.Core.Grade.unrestricted(), @dec,
       {:case, {:var, 1}, @dec_motive, [{:Dcoupled, 0, @dcoupled}, {:Causal, 0, inner}]}}}
   end
 
   test "checks and registers a well-typed global definition" do
     env = Env.add_def(base(), :and, and_type(), and_body())
     assert :ok == Kernel.check_def(env, :and)
-    assert {:ok, {:vpi, {:vdata, :Dec, []}, _cod}} = Kernel.infer(Context.empty(env), {:global, :and})
+    assert {:ok, {:vpi, _g, {:vdata, :Dec, []}, _cod}} = Kernel.infer(Context.empty(env), {:global, :and})
   end
 
   test "negative: a body whose type differs from the declared type" do
     # body : Dec -> Type1, but declared Dec -> Dec
-    env = Env.add_def(base(), :bad, {:pi, @dec, @dec}, {:lam, @dec, {:type, 0}})
+    env = Env.add_def(base(), :bad, {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:type, 0}})
     assert {:error, {:conversion_failure, _, _}} = Kernel.check_def(env, :bad)
   end
 

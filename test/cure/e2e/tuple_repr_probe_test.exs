@@ -122,14 +122,19 @@ defmodule Cure.E2E.TupleReprProbeTest do
 
   # ================= GAPS (pinned to current behavior) =================
 
+  # P2b (formerly a GAP): flat n-ary `%[1, 2, 3]` now elaborates. Against a bare
+  # nested `Sigma(a, Sigma(b, Int))` it checks column-by-column into the
+  # right-nested pair `mk_pair(1, mk_pair(2, 3))` (emitted nested `{1, {2, 3}}`);
+  # against a `Tuple(…)` telescope it builds the flat form (see flat_telescope_test).
   @p2b """
   mod P2b
     fn triple() -> Sigma(a: Int, Sigma(b: Int, Int)) = %[1, 2, 3]
-    fn start() -> Int = triple().1
+    fn first_of() -> Int = triple().1
+    fn start() -> Int = first_of()
   """
-  test "P2b GAP: flat n-ary tuple %[1,2,3] is :unsupported_expression" do
-    assert {:error, {:unsupported_expression, {:tuple, _, elems}}} = elab(@p2b)
-    assert length(elems) == 3
+  test "P2b (closed): flat n-ary tuple %[1,2,3] elaborates and projects" do
+    assert {:ok, mod} = build(@p2b, :"Cure.P2bProbe", [:triple, :first_of, :start])
+    assert apply(mod, :first_of, []) == 1
   end
 
   @p3 """
@@ -154,8 +159,18 @@ defmodule Cure.E2E.TupleReprProbeTest do
     fn one() -> Tele = Ext(Int, Empty())
     fn start() -> Tele = one()
   """
-  test "P5 BY-DESIGN: Type-typed field as a runtime value => :unknown_global" do
-    # Types are not first-class runtime values; `Tele` must stay an erased index.
-    assert {:error, :unknown_global} = build(@p5, :"Cure.P5Probe", [:one, :start])
+  test "P5: a type is a first-class VALUE term (elaborates); the runtime boundary is emit" do
+    # Types ARE first-class values of type `Type` (Idris/Agda/Lean parity): `Int`
+    # in a `Type`-typed field position elaborates fine — it no longer dies
+    # `:unknown_global` (that was a bug, fixed in resolve_free). The remaining
+    # boundary is purely RUNTIME: a type kept as a NON-erased constructor field
+    # has no BEAM representation, so emit reports `cannot emit {:int_type}`.
+    #
+    # This is the P4/P5 split made precise: types belong in ERASED index
+    # positions (P4's `NonDep(shape)` / the HVect `shape` index emit cleanly),
+    # NOT as runtime value fields. `Tele` must stay an erased index.
+    assert {:ok, _env} = elab(@p5)
+    assert {:raise, msg} = build(@p5, :"Cure.P5Probe", [:one, :start])
+    assert msg =~ "cannot emit"
   end
 end

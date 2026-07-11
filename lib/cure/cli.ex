@@ -67,6 +67,7 @@ defmodule Cure.CLI do
           token: :string,
           cover: :boolean,
           strict: :boolean,
+          edition: :string,
           registry: :string,
           include_erts: :boolean,
           overwrite: :boolean,
@@ -79,7 +80,15 @@ defmodule Cure.CLI do
           record_profile: :boolean,
           profile_dir: :string,
           module: :string,
-          top: :integer
+          top: :integer,
+          # export-types / snap / story output + target. Without these declared,
+          # OptionParser cannot tell they take a value: `--out` with a missing or
+          # flag-following value collapses to boolean `true`, which then leaks into
+          # the argv handed to the delegated Mix task in place of a filename.
+          out: :string,
+          target: :string,
+          diagrams: :boolean,
+          step: :boolean
         ],
         aliases: [o: :output_dir, v: :verbose, h: :help, f: :filter, t: :template]
       )
@@ -94,20 +103,44 @@ defmodule Cure.CLI do
         ["run" | [path]] ->
           cmd_run(path, opts)
 
+        # Wrong argument count for a fixed-arity command is a usage error, not an
+        # unknown command — without this fallback it fell through to the generic
+        # catch-all and misblamed `run` (a valid command) as unknown.
+        ["run" | _] ->
+          usage_error("Usage: cure run <file>")
+
         ["check" | [path]] ->
           cmd_check(path, opts)
+
+        ["check" | _] ->
+          usage_error("Usage: cure check <file>")
 
         ["lsp"] ->
           cmd_lsp()
 
+        # A fixed-arity command's extra positional arg is a usage error, not an
+        # unknown command — without this fallback it fell through to the generic
+        # catch-all and misblamed the (valid) command as unknown.
+        ["lsp" | _] ->
+          usage_error("Usage: cure lsp")
+
         ["stdlib"] ->
           cmd_stdlib(opts)
+
+        ["stdlib" | _] ->
+          usage_error("Usage: cure stdlib")
 
         ["version"] ->
           cmd_version()
 
+        ["version" | _] ->
+          usage_error("Usage: cure version")
+
         ["init" | [name]] ->
           cmd_init(name)
+
+        ["init" | _] ->
+          usage_error("Usage: cure init <name>")
 
         ["deps"] ->
           cmd_deps()
@@ -118,8 +151,18 @@ defmodule Cure.CLI do
         ["deps", "tree"] ->
           cmd_deps_tree()
 
+        # A `deps` invocation with an unrecognised subcommand must name the real
+        # offender and fail, not fall through to the generic catch-all (which
+        # would bind `unknown = "deps"`, blame a valid command, and exit 0).
+        ["deps" | rest] ->
+          error("Unknown deps subcommand: #{Enum.join(rest, " ")}. Known: update, tree.")
+          exit({:shutdown, 1})
+
         ["test"] ->
           cmd_test(opts)
+
+        ["test" | _] ->
+          usage_error("Usage: cure test")
 
         ["explain"] ->
           cmd_explain_all()
@@ -127,11 +170,17 @@ defmodule Cure.CLI do
         ["explain" | [code]] ->
           cmd_explain(code)
 
+        ["explain" | _] ->
+          usage_error("Usage: cure explain [<error-code>]")
+
         ["doc" | paths] ->
           cmd_doc(paths, opts)
 
         ["repl"] ->
           cmd_repl()
+
+        ["repl" | _] ->
+          usage_error("Usage: cure repl")
 
         ["fmt" | paths] ->
           cmd_fmt(paths, opts)
@@ -157,11 +206,20 @@ defmodule Cure.CLI do
         ["why" | [code]] ->
           cmd_explain(code)
 
+        ["why" | _] ->
+          usage_error("Usage: cure why [<error-code>]")
+
         ["doctor"] ->
           cmd_doctor(opts)
 
+        ["doctor" | _] ->
+          usage_error("Usage: cure doctor")
+
         ["fix"] ->
           cmd_fix(opts)
+
+        ["fix" | _] ->
+          usage_error("Usage: cure fix")
 
         ["publish" | _] ->
           cmd_publish(opts)
@@ -169,8 +227,14 @@ defmodule Cure.CLI do
         ["search" | [query]] ->
           cmd_search(query, opts)
 
+        ["search" | _] ->
+          usage_error("Usage: cure search <query>")
+
         ["info" | [name]] ->
           cmd_info(name, opts)
+
+        ["info" | _] ->
+          usage_error("Usage: cure info <name>")
 
         ["keys", "generate", handle] ->
           cmd_keys_generate(handle)
@@ -178,14 +242,27 @@ defmodule Cure.CLI do
         ["keys", "list"] ->
           cmd_keys_list()
 
+        # Any other `keys` shape (bare, missing handle, unknown/extra subcommand)
+        # must give a keys-specific usage error and fail — not fall through to the
+        # generic catch-all, which would misblame `keys` as an unknown command.
+        ["keys" | _rest] ->
+          error("Usage: cure keys generate <handle> | cure keys list")
+          exit({:shutdown, 1})
+
         ["release" | rest] ->
           cmd_release(rest, opts)
 
         ["top"] ->
           cmd_top(opts)
 
+        ["top" | _] ->
+          usage_error("Usage: cure top")
+
         ["john"] ->
           cmd_john(opts)
+
+        ["john" | _] ->
+          usage_error("Usage: cure john")
 
         ["trace" | rest] ->
           cmd_trace(rest, opts)
@@ -220,7 +297,9 @@ defmodule Cure.CLI do
         ["story" | _] ->
           cmd_story(opts)
 
-        ["help"] ->
+        ["help" | _] ->
+          # Extra args to `help` show help (standard CLI behavior), never fall
+          # through to the catch-all and misblame `help` as an unknown command.
           help()
 
         [] ->
@@ -229,7 +308,7 @@ defmodule Cure.CLI do
         [unknown | _] ->
           known_commands = ~w(
             compile run check lsp stdlib version init deps test
-            explain doc repl fmt watch new bench why doctor fix
+            explain doc repl fmt watch new bench why doctor fix migrate
             publish search info keys release top trace synth bless replay
             john profile draw verify export-types snap story help
           )
@@ -241,6 +320,9 @@ defmodule Cure.CLI do
             end
 
           error("Unknown command: #{unknown}.#{suffix} Run 'cure help' for usage.")
+          # A mistyped command must not exit 0, or `cure <typo> && next` proceeds
+          # and CI wrappers cannot detect the mistake.
+          exit({:shutdown, 1})
       end
     end
   end
@@ -341,7 +423,7 @@ defmodule Cure.CLI do
     end
   end
 
-  defp cmd_trace([], _opts), do: error("Usage: cure trace Module.fun/arity")
+  defp cmd_trace([], _opts), do: usage_error("Usage: cure trace Module.fun/arity")
 
   defp cmd_trace([target | _], opts) do
     duration = Keyword.get(opts, :duration, 10) * 1000
@@ -441,7 +523,7 @@ defmodule Cure.CLI do
 
   # -- compile -----------------------------------------------------------------
 
-  defp cmd_compile([], _opts), do: error("Usage: cure compile <file|directory>")
+  defp cmd_compile([], _opts), do: usage_error("Usage: cure compile <file|directory>")
 
   defp cmd_compile(paths, opts) do
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
@@ -795,16 +877,26 @@ defmodule Cure.CLI do
     else
       info("Compiling Cure standard library (#{length(cure_files)} modules)")
 
-      Enum.each(cure_files, fn path ->
-        name = Path.basename(path, ".cure")
+      outcomes =
+        Enum.map(cure_files, fn path ->
+          name = Path.basename(path, ".cure")
 
-        case Cure.Compiler.compile_file(path, output_dir: output_dir, emit_events: false) do
-          {:ok, module, _} -> info("  #{name} -> #{module}")
-          {:error, reason} -> error("  #{name}: #{inspect(reason)}")
-        end
-      end)
+          case Cure.Compiler.compile_file(path, output_dir: output_dir, emit_events: false) do
+            {:ok, module, _} ->
+              info("  #{name} -> #{module}")
+              :ok
+
+            {:error, reason} ->
+              error("  #{name}: #{inspect(reason)}")
+              :error
+          end
+        end)
 
       info("Output: #{output_dir}")
+
+      # A module that failed to compile must make the command fail — otherwise a
+      # broken stdlib build reports success and a CI wrapper reads exit 0.
+      if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
     end
   end
 
@@ -867,13 +959,19 @@ defmodule Cure.CLI do
             info("Updating #{length(deps)} dependency(ies) for #{project.name}...")
 
             Enum.each(deps, fn dep ->
-              # `resolve_git_dep/2` clones into `_build/deps/<name>` and
-              # compiles the dep's `lib/`. Today it always returns
-              # `:ok` (it raises on failure), so the bare assignment
-              # below is sufficient; if it ever grows an `{:error, _}`
-              # tag we will get a `MatchError` here and notice.
+              # `resolve_git_dep/2` clones into `_build/deps/<name>` and compiles
+              # the dep's `lib/`. It now returns `{:error, _}` for a dep whose own
+              # edition is unknown (dependency_edition_error) — report and abort
+              # like `cmd_deps` rather than crashing with a MatchError.
               if Map.get(dep, :git) do
-                :ok = Cure.Project.resolve_git_dep(dep, project.root)
+                case Cure.Project.resolve_git_dep(dep, project.root) do
+                  :ok ->
+                    :ok
+
+                  {:error, reason} ->
+                    error("Failed to update dependency #{Map.get(dep, :name, "?")}: #{inspect(reason)}")
+                    exit({:shutdown, 1})
+                end
               end
             end)
 
@@ -1072,9 +1170,7 @@ defmodule Cure.CLI do
           Path.wildcard("lib/**/*.cure") ++ Path.wildcard("lib/std/*.cure")
 
         _ ->
-          Enum.flat_map(paths, fn p ->
-            if File.dir?(p), do: Path.wildcard(Path.join(p, "**/*.cure")), else: [p]
-          end)
+          expand_cure_targets(paths)
       end
 
     if cure_files == [] do
@@ -1084,7 +1180,7 @@ defmodule Cure.CLI do
 
       modules =
         Enum.flat_map(cure_files, fn file ->
-          source = File.read!(file)
+          source = read_source_or_exit(file)
 
           with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
                {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do
@@ -1166,6 +1262,37 @@ defmodule Cure.CLI do
   #
   #   * `--check`: dry-run that prints which files would change without
   #     rewriting them. Uses the algebra formatter in v0.21.0.
+  # Expand explicit path arguments (for `fmt`/`doc`) to a list of .cure files: a
+  # directory expands to its .cure files, a plain path is kept. A path that does
+  # not exist is a user error (a typo'd filename) — report it and exit non-zero,
+  # rather than passing it to a worker whose File.read! would crash with a raw
+  # BEAM stacktrace. Mirrors how `run`/`check`/`compile` treat a missing file.
+  defp expand_cure_targets(paths) do
+    case Enum.reject(paths, &File.exists?/1) do
+      [] ->
+        Enum.flat_map(paths, fn p ->
+          if File.dir?(p), do: Path.wildcard(Path.join(p, "**/*.cure")), else: [p]
+        end)
+
+      missing ->
+        error("Cannot read #{Enum.join(missing, ", ")}: no such file or directory")
+        exit({:shutdown, 1})
+    end
+  end
+
+  # Read a source file for a fmt/doc worker, degrading ANY read error to a clean
+  # non-zero exit instead of a raw File.Error stacktrace. `expand_cure_targets`
+  # rejects a *missing* explicit target up front, but `File.exists?` is true for
+  # a file that exists yet is unreadable (chmod 000), and the no-argument
+  # wildcard scan does not go through that guard at all — so the workers still
+  # need a tolerant read. Mirrors how run/check/compile read with File.read.
+  defp read_source_or_exit(file) do
+    case File.read(file) do
+      {:ok, source} -> source
+      {:error, reason} -> error("Cannot read #{file}: #{reason}") && exit({:shutdown, 1})
+    end
+  end
+
   defp cmd_fmt(paths, opts) do
     cure_files =
       case paths do
@@ -1173,9 +1300,7 @@ defmodule Cure.CLI do
           Path.wildcard("lib/**/*.cure") ++ Path.wildcard("test/**/*.cure")
 
         _ ->
-          Enum.flat_map(paths, fn p ->
-            if File.dir?(p), do: Path.wildcard(Path.join(p, "**/*.cure")), else: [p]
-          end)
+          expand_cure_targets(paths)
       end
 
     cond do
@@ -1214,18 +1339,175 @@ defmodule Cure.CLI do
     print? = Keyword.get(opts, :print, false)
     strict? = Keyword.get(opts, :strict, false)
 
-    case migrate_targets(paths) do
-      [] ->
-        info("No .cure files found")
-        :ok
+    # Resolve the crossing target: `--edition YYYY` when given, else the compiler
+    # default edition (`Cure.Edition.current/0`) — which is deliberately DECOUPLED
+    # from the newest *known* edition (staged rollout), so with no flag `migrate`
+    # targets the default, NOT necessarily the newest minted edition. A
+    # user-supplied value is validated through
+    # Cure.Edition.parse/1 BEFORE it can reach plan_migration_source/2 or the
+    # phase-2 bump — set_edition/2 writes whatever string it is handed verbatim,
+    # so an unvalidated typo would only surface much later on the next project
+    # load. plan_migration/1 then refuses a downgrade target before any file is
+    # read.
+    # Measure the downgrade guard against the PROJECT's declared edition, not
+    # always the latest minted one (F4), and print a diagnostic on refusal
+    # instead of a silent nonzero exit (F5). An invalid edition DECLARED in the
+    # project aborts here (I4) rather than being masked as the compiler default.
+    with {:ok, target} <- migrate_resolve_edition(opts),
+         {:ok, project_edition} <- migrate_project_edition(".") do
+      case plan_migration(target: target, current: project_edition) do
+        {:error, :downgrade} ->
+          error(
+            "refusing to downgrade: target edition #{inspect(target)} is older than " <>
+              "the project edition #{inspect(project_edition)}"
+          )
 
-      files ->
-        with :ok <- migrate_git_guard(files, check?, print?),
-             {:ok, results} <- migrate_preflight_all(files),
-             :ok <- migrate_strict_gate(results, strict?) do
-          migrate_apply(results, check?, print?)
+          {:error, :downgrade}
+
+        {:ok, ^target} ->
+          case migrate_targets(paths) do
+            [] ->
+              info("No .cure files found")
+              :ok
+
+            files ->
+              with :ok <- migrate_git_guard(files, check?, print?),
+                   {:ok, results} <- migrate_preflight_all(files, target, project_edition),
+                   :ok <- migrate_strict_gate(results, target, strict?) do
+                migrate_apply_and_bump(results, target, paths, check?, print?)
+              end
+          end
+      end
+    end
+  end
+
+  @doc false
+  # The project's declared edition (Cure.toml [project].edition), or the compiler
+  # default when there is no project / it declares none. The downgrade guard
+  # measures the target against THIS, not always the latest minted edition (F4).
+  #
+  # An INVALID declared edition (a Cure.toml naming an edition the compiler does
+  # not know) is surfaced as `{:error, {:unknown_edition, _}}` — NOT masked as
+  # the default (I4). Masking would silently defeat the downgrade guard: a broken
+  # project edition would read as `current()` and wave through a real downgrade.
+  # Only a genuinely absent/unreadable project falls back to the default.
+  def migrate_project_edition(dir \\ ".") do
+    case Cure.Edition.resolve(%{project_dir: dir}) do
+      {:ok, ed} ->
+        {:ok, ed}
+
+      {:error, {:unknown_edition, ed}} = err ->
+        error("invalid edition #{inspect(ed)} declared in #{Path.join(dir, "Cure.toml")}")
+        err
+
+      {:error, _} ->
+        {:ok, Cure.Edition.current()}
+    end
+  end
+
+  # `--edition YYYY` (validated against the known-editions allow-list) or the
+  # compiler default edition (`Cure.Edition.current/0`) when the flag is absent.
+  # NB: the default is decoupled from the newest *known* edition (staged rollout),
+  # so an absent flag targets the default, not necessarily the newest minted one.
+  defp migrate_resolve_edition(opts) do
+    case Keyword.get(opts, :edition) do
+      nil ->
+        {:ok, Cure.Edition.current()}
+
+      raw ->
+        case Cure.Edition.parse(raw) do
+          {:ok, _} ->
+            {:ok, raw}
+
+          {:error, {:unknown_edition, _}} = err ->
+            error("unknown edition: #{inspect(raw)}")
+            err
         end
     end
+  end
+
+  @doc false
+  # Pure planning: refuse a downgrade target (target older than the project's
+  # current declared edition).
+  def plan_migration(opts) do
+    target = Keyword.fetch!(opts, :target)
+    current = Keyword.get(opts, :current, Cure.Edition.current())
+    if Cure.Edition.compare(target, current) == :lt, do: {:error, :downgrade}, else: {:ok, target}
+  end
+
+  @doc false
+  # Pure planning for one source: run the crossing rule set to a fixpoint; if a
+  # blocking :manual item fired, report it; else return the migrated source and
+  # the pending edition bump. The :blocked clause is checked BEFORE strict?, so a
+  # :manual item is never promoted to a :strict_violation — it stays a block
+  # (spec §8: --strict does not promote :manual).
+  def plan_migration_source(src, opts) do
+    target = Keyword.fetch!(opts, :target)
+    # Parse the INPUT under the SOURCE edition (`:from`, the file's current
+    # edition), NOT the target (F-B). A keyword retired *at* target is still a
+    # keyword below it; parsing the input under target would lex the to-be-removed
+    # construct as a bare identifier, the crossing rule would never match, and the
+    # bump would fire on an unrewritten file. Defaults to `target` for callers
+    # that predate the split (behaviourally identical while only one edition
+    # exists). The verify reparse (below) stays on `target` — the OUTPUT is target
+    # syntax (I2/F12).
+    from = Keyword.get(opts, :from, target)
+
+    # A file whose current edition (`from`, from its own @edition pragma) is NEWER
+    # than the migration target is a per-file DOWNGRADE. The project-level guard
+    # (plan_migration/1) only measures the target against the project edition, so a
+    # file that pins a newer edition would otherwise be "migrated" downward onto an
+    # older keyword set (Finding 2). Refuse it here, mirroring plan_migration/1.
+    if Cure.Edition.compare(from, target) == :gt do
+      {:error, :downgrade}
+    else
+      plan_migration_source_crossing(src, target, from, opts)
+    end
+  end
+
+  defp plan_migration_source_crossing(src, target, from, opts) do
+    {:ok, toks, trivia} = Cure.Compiler.Lexer.tokenize(src, trivia: true, edition: from)
+    {:ok, ast} = Cure.Compiler.Parser.parse(toks, emit_events: false, edition: from)
+    attached = Cure.Compiler.Trivia.attach(ast, trivia)
+    rules = Cure.Migrate.rules_for_crossing(target)
+
+    case Cure.Migrate.run_to_fixpoint(attached, rules: rules, edition: target) do
+      {:ok, out_ast, warns} ->
+        blocking =
+          Cure.Migrate.blocking_manual(target)
+          |> Enum.map(& &1.id)
+          |> Enum.filter(fn id -> Enum.any?(warns, &(&1.rule == id)) end)
+
+        strict? = Keyword.get(opts, :strict, false)
+        fixable_fired = fixable_tier_warnings(warns, target)
+
+        cond do
+          blocking != [] ->
+            # :manual blocks the bump regardless of --strict (never promoted, §8)
+            {:blocked, blocking}
+
+          strict? and fixable_fired != [] ->
+            # --strict promotes fixable-tier (:machine/:review) warnings to errors
+            {:error, {:strict_violation, fixable_fired}}
+
+          true ->
+            {:ok, Cure.Compiler.Printer.quoted_to_string(out_ast), warns, target}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The ids of fired warnings whose rule is a fixable tier (:machine/:review).
+  defp fixable_tier_warnings(warns, target) do
+    fixable_ids =
+      Cure.Migrate.rules_for_crossing(target)
+      |> Enum.filter(&(&1.tier in [:machine, :review]))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    warns |> Enum.map(& &1.rule) |> Enum.filter(&MapSet.member?(fixable_ids, &1)) |> Enum.uniq()
   end
 
   # Target selection mirrors cmd_fmt/2 exactly (explicit paths with dir
@@ -1258,88 +1540,130 @@ defmodule Cure.CLI do
     end
   end
 
-  # In-memory batch preflight (spec §5.8): run every file through
-  # lex→parse→attach→Migrate.run→print→reparse+comment-preservation. Only if
-  # ALL files pass is anything written; on any failure, write nothing and report
-  # the failing file(s).
-  defp migrate_preflight_all(files) do
-    results = Enum.map(files, &migrate_preflight_file/1)
+  # In-memory batch preflight (spec §5.8 / §6.1): run every file through the
+  # crossing rule set to a fixpoint (which itself verifies reparse + comment
+  # preservation on every pass). Only if ALL files pass is anything written; on
+  # any failure, write nothing and report the failing file(s). A file whose
+  # migration is blocked by a fired :manual rule is reported per-file (with the
+  # hand-port rule ids) as a phase-1 block that skips the write — NOT as a bare
+  # parse failure. The :blocked routing here (and in plan_migration_source/2) is
+  # what keeps a :manual item from ever reaching the --strict gate, so it is
+  # never promoted to a :strict_violation (spec §8).
+  defp migrate_preflight_all(files, target, source_edition) do
+    results = Enum.map(files, &migrate_preflight_file(&1, target, source_edition))
     failed = for {:error, path} <- results, do: path
+    blocked = for {:blocked, path, ids} <- results, do: {path, ids}
+    downgraded = for {:downgrade, path, from, tgt} <- results, do: {path, from, tgt}
 
-    if failed == [] do
-      {:ok, Enum.map(results, fn {:ok, r} -> r end)}
-    else
-      Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
-      {:error, {:preflight_failed, failed}}
+    cond do
+      downgraded != [] ->
+        # A file pins an edition newer than the target — refuse the whole run
+        # rather than silently downgrade any file (Finding 2), mirroring the
+        # project-level downgrade guard in plan_migration/1.
+        Enum.each(downgraded, fn {path, from, tgt} ->
+          error("#{path}: edition #{from} is newer than the migration target #{tgt} — refusing to downgrade")
+        end)
+
+        {:error, {:downgrade, downgraded}}
+
+      failed != [] ->
+        Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
+        {:error, {:preflight_failed, failed}}
+
+      blocked != [] ->
+        Enum.each(blocked, fn {path, ids} ->
+          error("#{path}: manual migration required — #{Enum.map_join(ids, ", ", &to_string/1)}")
+        end)
+
+        {:error, {:blocked, blocked}}
+
+      true ->
+        {:ok, for({:ok, r} <- results, do: r)}
     end
   end
 
-  defp migrate_preflight_file(file) do
+  defp migrate_preflight_file(file, target, source_edition) do
     with {:ok, source} <- File.read(file),
+         # Parse the input under the file's CURRENT edition (its own pragma if it
+         # carries one, else the project's edition) — see plan_migration_source/2
+         # (F-B). The verify reparse inside the fixpoint stays on `target`.
+         from = Cure.Edition.pragma_edition(source) || source_edition,
          {:ok, toks, trivia} <-
-           Cure.Compiler.Lexer.tokenize(source, file: file, trivia: true),
-         {:ok, ast} <- Cure.Compiler.Parser.parse(toks, file: file, emit_events: false) do
-      attached = Cure.Compiler.Trivia.attach(ast, trivia)
-      {new_ast, warnings} = Cure.Migrate.run(attached, file: file)
-      output = migrate_render(new_ast)
+           Cure.Compiler.Lexer.tokenize(source, file: file, trivia: true, edition: from),
+         {:ok, in_ast} <-
+           Cure.Compiler.Parser.parse(toks, file: file, emit_events: false, edition: from) do
+      # Baseline = the un-migrated input reprinted the same way plan_migration_source/2
+      # prints the migrated AST, so `changed?` reflects a real rule rewrite (the old
+      # `new_ast != attached`), not incidental reformatting.
+      baseline =
+        Cure.Compiler.Printer.quoted_to_string(Cure.Compiler.Trivia.attach(in_ast, trivia))
 
-      if migrate_output_ok?(source, output, file) do
-        {:ok,
-         %{path: file, output: output, changed?: new_ast != attached, warnings: warnings}}
-      else
-        {:error, file}
+      case plan_migration_source(source, target: target, from: from) do
+        {:ok, printed, warnings, bump} ->
+          output = if String.ends_with?(printed, "\n"), do: printed, else: printed <> "\n"
+
+          {:ok,
+           %{
+             path: file,
+             output: output,
+             changed?: printed != baseline,
+             warnings: warnings,
+             bump: bump
+           }}
+
+        {:blocked, ids} ->
+          {:blocked, file, ids}
+
+        {:error, :downgrade} ->
+          {:downgrade, file, from, target}
+
+        {:error, _reason} ->
+          {:error, file}
       end
     else
       _ -> {:error, file}
     end
   end
 
-  # Canonical file text: the printer output with the §5.4 rule-2 single trailing
-  # newline applied at write time.
-  defp migrate_render(ast) do
-    out = Cure.Compiler.Printer.quoted_to_string(ast)
-    if String.ends_with?(out, "\n"), do: out, else: out <> "\n"
-  end
+  # --strict promotes fixable-tier (:machine/:review) warnings to errors; write
+  # nothing. A file blocked only by a :manual rule never reaches here — it is
+  # already reported by migrate_preflight_all/2's :blocked path (spec §8:
+  # --strict does not promote :manual).
+  defp migrate_strict_gate(_results, _target, false), do: :ok
 
-  # The migrated output must reparse AND preserve every source comment (spec
-  # §5.2: a migration never silently drops a comment).
-  defp migrate_output_ok?(source, output, file) do
-    migrate_reparses?(output, file) and migrate_comments(source) -- migrate_comments(output) == []
-  end
+  defp migrate_strict_gate(results, target, true) do
+    violators =
+      for r <- results,
+          ids = fixable_tier_warnings(r.warnings, target),
+          ids != [],
+          do: {r.path, ids}
 
-  defp migrate_reparses?(source, file) do
-    with {:ok, toks} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
-         {:ok, _ast} <- Cure.Compiler.Parser.parse(toks, file: file, emit_events: false) do
-      true
+    if violators == [] do
+      :ok
     else
-      _ -> false
+      Enum.each(violators, fn {path, ids} ->
+        error("#{path}: fixable migration warnings present (--strict) — #{Enum.map_join(ids, ", ", &to_string/1)}")
+      end)
+
+      {:error, {:strict_violation, violators}}
     end
   end
 
-  defp migrate_comments(src) do
-    src
-    |> String.split("\n")
-    |> Enum.flat_map(fn line ->
-      case Regex.run(~r/#+\s?(.*)$/, line) do
-        [_, txt] -> [String.trim(txt)]
-        _ -> []
-      end
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.sort()
-  end
+  # Phase 2 of the two-phase migrate: write the rewritten files (unless
+  # --check/--print), then, only if every targeted file succeeded, bump the
+  # edition marker toward `target`. The bump writes only when it actually raises
+  # the edition (target strictly greater than the current marker), so a routine
+  # `cure migrate` at the latest edition never gratuitously stamps a pragma or
+  # rewrites Cure.toml.
+  defp migrate_apply_and_bump(results, target, paths, check?, print?) do
+    case migrate_apply(results, check?, print?) do
+      :ok ->
+        # Propagate a bump failure (e.g. Cure.toml could not be stamped) so the
+        # command exits non-zero instead of falsely reporting success.
+        migrate_bump(results, target, paths, check?, print?)
 
-  # --strict: any fired migration warning becomes an error; write nothing.
-  defp migrate_strict_gate(_results, false), do: :ok
-
-  defp migrate_strict_gate(results, true) do
-    warned = for r <- results, r.warnings != [], do: r.path
-
-    if warned == [] do
-      :ok
-    else
-      Enum.each(warned, fn path -> error("#{path}: migration warnings present (--strict)") end)
-      {:error, {:strict_warnings, warned}}
+      other ->
+        other
     end
   end
 
@@ -1368,6 +1692,120 @@ defmodule Cure.CLI do
     :ok
   end
 
+  # Bump the edition marker to `target` (phase 2). A whole-project run (no
+  # explicit paths) with a resolvable Cure.toml bumps its `edition` key; a
+  # standalone-file run splices/replaces each file's leading `@edition` pragma.
+  # In every mode the bump only writes when `target` is strictly newer than the
+  # existing marker. --check/--print never write; they only report the pending
+  # bump when it would raise the edition.
+  defp migrate_bump(results, target, paths, check?, print?) do
+    # The cond's value is the command result: :ok everywhere except a project
+    # edition-stamp failure, which returns {:error, reason} so the caller fails.
+    cond do
+      check? ->
+        if migrate_project_bump?(paths, target) or Enum.any?(results, &migrate_file_bump?(&1.path, target)),
+          do: info("would bump edition to #{target}")
+
+        :ok
+
+      print? ->
+        if migrate_project_bump?(paths, target) or Enum.any?(results, &migrate_file_bump?(&1.path, target)),
+          do: IO.puts("# pending edition bump: #{target}")
+
+        :ok
+
+      paths == [] and migrate_project_bump?(paths, target) ->
+        case Cure.Project.set_edition(Path.join(".", "Cure.toml"), target) do
+          :ok ->
+            info("bumped project edition to #{target}")
+            :ok
+
+          {:error, reason} ->
+            error("could not bump project edition: #{inspect(reason)}")
+            {:error, reason}
+        end
+
+      true ->
+        Enum.each(results, fn r ->
+          if migrate_file_bump?(r.path, target) do
+            File.write!(r.path, migrate_splice_edition(File.read!(r.path), target))
+            info("bumped #{r.path} to edition #{target}")
+          end
+        end)
+
+        :ok
+    end
+  end
+
+  # A whole-project run whose Cure.toml declares an edition strictly older than
+  # `target` (an absent marker means the current edition — no bump).
+  defp migrate_project_bump?([], target) do
+    case Cure.Project.load(".") do
+      {:ok, %{edition: ed}} when is_binary(ed) -> Cure.Edition.compare(target, ed) == :gt
+      _ -> false
+    end
+  end
+
+  defp migrate_project_bump?(_paths, _target), do: false
+
+  # A standalone file whose leading `@edition` pragma (if any) is strictly older
+  # than `target`. No pragma means the current edition — no bump.
+  defp migrate_file_bump?(path, target) do
+    case File.read(path) do
+      {:ok, body} ->
+        case migrate_edition_pragma(body) do
+          nil -> false
+          ed -> Cure.Edition.compare(target, ed) == :gt
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  @doc false
+  # Extract a FILE-LEADING `@edition("YYYY")` marker for the phase-2 bump. Routed
+  # through Cure.Edition.pragma_edition so detection is anchored to the first
+  # substantive line (skipping leading blank/comment trivia) — an `@edition(...)`
+  # buried in a comment or string is NOT a pragma and must not trigger a bump
+  # (Finding 1). That helper also mirrors the parser's interior whitespace (F-C)
+  # and restricts the capture to a 4-digit year (F9), so a malformed value reads
+  # as "no marker" (nil) rather than flowing into compare/2.
+  def migrate_edition_pragma(body), do: Cure.Edition.pragma_edition(body)
+
+  @doc false
+  # Replace an existing file-leading `@edition("…")` pragma in place, or splice a
+  # new one at the very top (the pragma must precede any statement, spec §4). The
+  # leading pragma is the first substantive line (Cure.Edition.pragma_edition
+  # agrees), so we replace THAT line rather than a whole-body regex match — a
+  # global-less regex would otherwise rewrite an earlier in-comment mention
+  # (Finding 1). No leading pragma → prepend one at the very top.
+  def migrate_splice_edition(body, target) do
+    if migrate_edition_pragma(body) do
+      replace_leading_pragma_line(body, target)
+    else
+      "@edition(\"#{target}\")\n" <> body
+    end
+  end
+
+  # The leading pragma sits on the first substantive line. We locate THAT line
+  # via Cure.Edition.leading_line_index/1 — the same fence-aware scan the resolver
+  # uses — rather than a local trivia test, so a `###`-fenced doc comment before
+  # the pragma (whose body lines need not start with `#`) is skipped identically
+  # and we never rewrite a line buried in a comment. Rewrite only the `@edition(…)`
+  # TOKEN on that line — NOT the whole line — so anything after the `)` (a trailing
+  # comment) survives (A3-F2), and a lone-CR file whose "first line" is the whole
+  # body keeps its body (A3-F1). The token regex mirrors Cure.Edition.pragma_capture
+  # (anchored `^@`, interior whitespace tolerated); the trailing "\r" of a CRLF/CR
+  # line lands after the match and is preserved for free — no separate EOL fixup.
+  @edition_token ~r/^@\s*edition\s*\(\s*"\d{4}"\s*\)/
+  defp replace_leading_pragma_line(body, target) do
+    lines = String.split(body, "\n")
+    idx = Cure.Edition.leading_line_index(body)
+    rewritten = Regex.replace(@edition_token, Enum.at(lines, idx), "@edition(\"#{target}\")", global: false)
+    lines |> List.replace_at(idx, rewritten) |> Enum.join("\n")
+  end
+
   # v0.21.0: algebra formatter is now the default. It renders the
   # buffer from the AST using `Cure.Compiler.Algebra` and
   # `Cure.Compiler.AlgebraFormatter`, with round-trip verification that
@@ -1375,7 +1813,7 @@ defmodule Cure.CLI do
   # program structure.
   defp fmt_algebra(files) do
     Enum.each(files, fn file ->
-      source = File.read!(file)
+      source = read_source_or_exit(file)
 
       case Cure.Compiler.Formatter.format_algebra(source) do
         {:ok, ^source} ->
@@ -1390,7 +1828,7 @@ defmodule Cure.CLI do
 
   defp fmt_safe(files) do
     Enum.each(files, fn file ->
-      source = File.read!(file)
+      source = read_source_or_exit(file)
 
       case Cure.Compiler.Formatter.format(source) do
         {:ok, ^source} ->
@@ -1409,7 +1847,7 @@ defmodule Cure.CLI do
   defp fmt_diff(files) do
     changed =
       Enum.reduce(files, 0, fn file, count ->
-        source = File.read!(file)
+        source = read_source_or_exit(file)
         {:ok, formatted} = Cure.Compiler.Formatter.format_algebra(source)
 
         if formatted == source do
@@ -1467,7 +1905,7 @@ defmodule Cure.CLI do
   defp fmt_check(files) do
     mismatched =
       Enum.filter(files, fn file ->
-        source = File.read!(file)
+        source = read_source_or_exit(file)
         {:ok, formatted} = Cure.Compiler.Formatter.format_algebra(source)
         formatted != source
       end)
@@ -1489,19 +1927,26 @@ defmodule Cure.CLI do
         "files are committed before continuing."
     )
 
-    Enum.each(files, fn file ->
-      source = File.read!(file)
+    outcomes =
+      Enum.map(files, fn file ->
+        source = read_source_or_exit(file)
 
-      with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
-           {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do
-        formatted = Cure.Compiler.Printer.quoted_to_string(ast)
-        File.write!(file, formatted <> "\n")
-        info("  formatted #{file}")
-      else
-        {:error, reason} ->
-          error("  #{file}: #{inspect(reason)}")
-      end
-    end)
+        with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false),
+             {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false) do
+          formatted = Cure.Compiler.Printer.quoted_to_string(ast)
+          File.write!(file, formatted <> "\n")
+          info("  formatted #{file}")
+          :ok
+        else
+          {:error, reason} ->
+            error("  #{file}: #{inspect(reason)}")
+            :error
+        end
+      end)
+
+    # A file the formatter could not parse must fail the command, not be
+    # reported as a successful format run.
+    if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
   end
 
   # -- watch ---------------------------------------------------------------------
@@ -1532,7 +1977,7 @@ defmodule Cure.CLI do
 
   # -- new -----------------------------------------------------------------------
 
-  defp cmd_new([], _opts), do: error("Usage: cure new <name> [--lib | --app | --fsm]")
+  defp cmd_new([], _opts), do: usage_error("Usage: cure new <name> [--lib | --app | --fsm]")
 
   defp cmd_new([name | _], opts) do
     template =
@@ -1560,31 +2005,39 @@ defmodule Cure.CLI do
     if files == [] do
       info("No benchmark files found. Place benchmarks under bench/*.cure")
     else
-      Enum.each(files, fn f ->
-        case File.read(f) do
-          {:ok, src} ->
-            case Cure.Compiler.compile_and_load(src, file: f, emit_events: false) do
-              {:ok, mod} ->
-                exports = mod.module_info(:exports)
+      outcomes =
+        Enum.map(files, fn f ->
+          case File.read(f) do
+            {:ok, src} ->
+              case Cure.Compiler.compile_and_load(src, file: f, emit_events: false) do
+                {:ok, mod} ->
+                  exports = mod.module_info(:exports)
 
-                bench_fns =
-                  Enum.filter(exports, fn {n, a} ->
-                    String.starts_with?(Atom.to_string(n), "bench") and a == 0
+                  bench_fns =
+                    Enum.filter(exports, fn {n, a} ->
+                      String.starts_with?(Atom.to_string(n), "bench") and a == 0
+                    end)
+
+                  Enum.each(bench_fns, fn {name, _} ->
+                    {us, _} = :timer.tc(fn -> apply(mod, name, []) end)
+                    info("  #{f}:#{name}  #{us / 1000} ms")
                   end)
 
-                Enum.each(bench_fns, fn {name, _} ->
-                  {us, _} = :timer.tc(fn -> apply(mod, name, []) end)
-                  info("  #{f}:#{name}  #{us / 1000} ms")
-                end)
+                  :ok
 
-              {:error, reason} ->
-                error("  #{f}: #{inspect(reason)}")
-            end
+                {:error, reason} ->
+                  error("  #{f}: #{inspect(reason)}")
+                  :error
+              end
 
-          {:error, reason} ->
-            error("  #{f}: #{reason}")
-        end
-      end)
+            {:error, reason} ->
+              error("  #{f}: #{reason}")
+              :error
+          end
+        end)
+
+      # A benchmark file that failed to read or compile must fail the command.
+      if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
     end
   end
 
@@ -1606,7 +2059,7 @@ defmodule Cure.CLI do
   defp cmd_explain(code) do
     case Cure.Compiler.Errors.explain(code) do
       {:ok, text} -> info(text)
-      :error -> error("Unknown error code: #{code}. Run 'cure explain' for a list.")
+      :error -> usage_error("Unknown error code: #{code}. Run 'cure explain' for a list.")
     end
   end
 
@@ -1765,11 +2218,17 @@ defmodule Cure.CLI do
   defp cmd_keys_generate(handle) do
     try do
       case Cure.Project.Signing.generate_keypair(handle) do
-        {:ok, ^handle} -> info("Generated keypair for '#{handle}' under ~/.cure/keys/")
-        other -> error("key generation returned unexpected: #{inspect(other)}")
+        {:ok, ^handle} ->
+          info("Generated keypair for '#{handle}' under ~/.cure/keys/")
+
+        other ->
+          error("key generation returned unexpected: #{inspect(other)}")
+          exit({:shutdown, 1})
       end
     rescue
-      e -> error("key generation failed: #{Exception.message(e)}")
+      e ->
+        error("key generation failed: #{Exception.message(e)}")
+        exit({:shutdown, 1})
     end
   end
 
@@ -1955,6 +2414,13 @@ defmodule Cure.CLI do
   defp info(msg), do: IO.puts(msg)
   defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
   defp error(msg), do: IO.puts(:stderr, "error: #{msg}")
+
+  # A user-facing usage/lookup error that must fail the command: print to stderr
+  # and exit non-zero, so `cure <misuse> && next` stops and CI wrappers see it.
+  defp usage_error(msg) do
+    error(msg)
+    exit({:shutdown, 1})
+  end
 
   # Print a pre-formatted multi-line diagnostic (e.g. from
   # `Cure.Compiler.Errors`) verbatim. The string already contains its own

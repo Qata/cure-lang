@@ -99,8 +99,9 @@ defmodule Cure.Compiler do
       file: file
     ]
 
-    with {:ok, tokens} <- lex(source, file, emit?),
-         {:ok, ast} <- parse(tokens, file, emit?),
+    with {:ok, edition} <- resolve_edition(source, opts),
+         {:ok, tokens} <- lex(source, file, emit?, edition),
+         {:ok, ast} <- parse(tokens, file, emit?, edition),
          {:ok, ast} <- migrate_warn(ast, file),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
@@ -171,7 +172,9 @@ defmodule Cure.Compiler do
 
   - `:file` -- filename for error messages (default: `"nofile"`)
 
-  Returns `{:ok, ast}` or `{:error, {:lex_error | :parse_error, reason}}`.
+  Returns `{:ok, ast}` or `{:error, {:lex_error | :parse_error | :edition_error, reason}}`.
+  An `:edition_error` is returned when the resolved edition (file pragma or project
+  `Cure.toml`) is unknown — surfaced rather than silently degraded to the default.
 
   ## Examples
 
@@ -183,8 +186,23 @@ defmodule Cure.Compiler do
   def parse_source(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
 
-    with {:ok, tokens} <- lex(source, file, false) do
-      parse(tokens, file, false)
+    # Tooling entry: resolve the file's edition so inspection sees the same keyword
+    # set the compiler would — pragma > project Cure.toml > default, matching the
+    # compile path (A3-F2). A real :file discovers its project root so a manifest-
+    # pinned edition is honoured; a genuine no-file source stays headless (nil dir
+    # → default). An unknown edition is surfaced, not swallowed (iteration 8, F1):
+    # a manifest edition error can't be re-caught by the parser (the manifest isn't
+    # in the source), so degrading to current() would hide a real §3.1 error.
+    project_dir = if file in [nil, "nofile"], do: nil, else: Cure.Project.find_root(file)
+
+    case Cure.Edition.resolve(%{source: source, project_dir: project_dir}) do
+      {:ok, edition} ->
+        with {:ok, tokens} <- lex(source, file, false, edition) do
+          parse(tokens, file, false, edition)
+        end
+
+      {:error, reason} ->
+        {:error, {:edition_error, reason}}
     end
   end
 
@@ -212,8 +230,9 @@ defmodule Cure.Compiler do
       file: file
     ]
 
-    with {:ok, tokens} <- lex(source, file, emit?),
-         {:ok, ast} <- parse(tokens, file, emit?),
+    with {:ok, edition} <- resolve_edition(source, opts),
+         {:ok, tokens} <- lex(source, file, emit?, edition),
+         {:ok, ast} <- parse(tokens, file, emit?, edition),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
          {:ok, forms, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
@@ -242,17 +261,50 @@ defmodule Cure.Compiler do
 
   # -- Pipeline Steps ----------------------------------------------------------
 
-  defp lex(source, file, emit?) do
-    case Lexer.tokenize(source, file: file, emit_events: emit?) do
+  defp lex(source, file, emit?, edition) do
+    case Lexer.tokenize(source, file: file, emit_events: emit?, edition: edition) do
       {:ok, tokens} -> {:ok, tokens}
       {:error, reason} -> {:error, {:lex_error, reason}}
     end
   end
 
-  defp parse(tokens, file, emit?) do
-    case Parser.parse(tokens, file: file, emit_events: emit?) do
+  defp parse(tokens, file, emit?, edition) do
+    case Parser.parse(tokens, file: file, emit_events: emit?, edition: edition) do
       {:ok, ast} -> {:ok, ast}
       {:error, errors} -> {:error, {:parse_error, errors}}
+    end
+  end
+
+  # Resolve the edition this source compiles under (spec §3.2 precedence: file
+  # `@edition` pragma > `Cure.toml` `[project].edition` > compiler default). The
+  # resolved edition drives the lexer's keyword set (§4), so a file pinned to an
+  # older edition still parses a since-retired keyword under `cure build` — the
+  # feature's headline purpose (F-A). The project root is taken from `:project_dir`
+  # when a caller supplies it, else discovered from the file's path (see below); a
+  # bare source with no file and no manifest resolves to the file pragma alone,
+  # else default (§3.2 point 3). An unknown edition (typo'd pragma / bad manifest)
+  # fails loudly HERE (§3.1) rather than compiling silently under the default.
+  defp resolve_edition(source, opts) do
+    input = %{source: source}
+
+    # A caller that knows the project root passes `:project_dir`; otherwise it is
+    # DISCOVERED from the file's own path — the nearest ancestor `Cure.toml`. This
+    # is what lets `cure build`/`run` honour a project's `[project].edition`
+    # without every CLI caller threading a dir, while a file deep in a dependency
+    # tree still binds to its own manifest (nearest wins), not a far-away app's.
+    project_dir =
+      Keyword.get(opts, :project_dir) ||
+        Cure.Project.find_root(Keyword.get(opts, :file))
+
+    input =
+      case project_dir do
+        nil -> input
+        dir -> Map.put(input, :project_dir, dir)
+      end
+
+    case Cure.Edition.resolve(input) do
+      {:ok, edition} -> {:ok, edition}
+      {:error, reason} -> {:error, {:edition_error, reason}}
     end
   end
 
@@ -368,8 +420,16 @@ defmodule Cure.Compiler do
   # A dependent module is lowered by the kernel: elaborate to `Cure.Core`, erase
   # its {0,ω} index arguments, and emit the erased residue as real BEAM forms.
   defp dependent_codegen(ast) do
+    origins = Cure.Elab.Program.import_origins(ast)
+
     with {:ok, env, local_defs} <- Cure.Elab.Program.check_ast_with_locals(ast),
-         {:ok, forms} <- Cure.Elab.Emit.compile_forms(env, Cure.Elab.Program.module_atom(ast), local_defs) do
+         {:ok, forms} <-
+           Cure.Elab.Emit.compile_forms(
+             env,
+             Cure.Elab.Program.module_atom(ast),
+             local_defs,
+             origins
+           ) do
       {:ok, forms}
     else
       {:error, reason} -> {:error, {:codegen_error, reason}}

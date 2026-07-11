@@ -26,21 +26,21 @@ defmodule Cure.Core.SerializeTest do
     {:ctor, :True, []},
     {:ctor, :False, []},
     {:hole, "body"},
-    {:pi, {:int_type}, {:type, 0}},
-    {:lam, {:int_type}, {:var, 0}},
+    {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:type, 0}},
+    {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}},
     {:app, {:global, :f}, {:int_lit, 3}},
     # Inductive Sigma (D2): the dependent pair round-trips as `{:data, :Sigma}` /
     # `{:ctor, :mk_pair}` / projection-`:case` (covered by the data/ctor/case rows).
     # Primitive sigma/pair/fst/snd nodes no longer encode; their *rejection* on
     # decode is pinned as a negative test once the codec clauses are stripped.
-    {:data, :Sigma, [{:int_type}, {:lam, {:int_type}, {:type, 0}}], []},
+    {:data, :Sigma, [{:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:type, 0}}], []},
     {:ctor, :mk_pair, [{:int_lit, 1}, {:ctor, :True, []}]},
     # K2: arithmetic round-trips as builtin-op GLOBAL spines (ordinary app
     # chains); the {:prim} wire tag no longer decodes (negative test below).
     {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}},
     {:ctor, :seq, [{:global, :l}, {:global, :r}]},
     {:data, :SF, [{:global, :a}], [{:global, :b}, {:global, :c}]},
-    {:case, {:var, 0}, {:lam, {:int_type}, {:type, 0}},
+    {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:type, 0}},
      [{:prim, 2, {:ctor, :True, []}}, {:seq, 7, {:global, :x}}]}
   ]
 

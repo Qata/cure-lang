@@ -59,6 +59,8 @@ defmodule Cure.Compiler.Lexer do
 
   @keyword_strings Enum.map(@keywords, &Atom.to_string/1)
 
+  @keyword_string_set MapSet.new(@keyword_strings)
+
   # -- Lexer state -----------------------------------------------------------
 
   defstruct [
@@ -74,7 +76,8 @@ defmodule Cure.Compiler.Lexer do
     fsm_transition_depth: 0,
     preserve_comments: false,
     collect_trivia: false,
-    trivia: []
+    trivia: [],
+    keyword_set: @keyword_string_set
   ]
 
   @type t :: %__MODULE__{}
@@ -103,6 +106,11 @@ defmodule Cure.Compiler.Lexer do
     `{:comment, text, line, col} | {:doc_comment, text, line, col} | {:blank, count, line}`.
     Default `false`, in which case the return shape is the usual `{:ok, tokens}`.
     Independent of `:preserve_comments` (which governs the main token stream).
+  - `:edition` -- the Cure edition the source is read against (default
+    `Cure.Edition.current/0`). Keywords retired at/before this edition (per the
+    migration registry) are lexed as plain identifiers instead.
+  - `:migrate_rules` -- the migration rule list used to derive the retired-keyword
+    set (default `Cure.Migrate.rules/0`); overridable for testing.
   """
   @spec tokenize(String.t(), keyword()) ::
           {:ok, [Token.t()]} | {:ok, [Token.t()], [tuple()]} | {:error, term()}
@@ -112,11 +120,17 @@ defmodule Cure.Compiler.Lexer do
     preserve? = Keyword.get(opts, :preserve_comments, false)
     trivia? = Keyword.get(opts, :trivia, false)
 
+    edition = Keyword.get(opts, :edition, Cure.Edition.current())
+    migrate_rules = Keyword.get(opts, :migrate_rules, Cure.Migrate.rules())
+    retired = MapSet.new(Cure.Edition.retired_keywords(edition, migrate_rules))
+    keyword_set = MapSet.difference(@keyword_string_set, retired)
+
     state = %__MODULE__{
       source: source,
       file: file,
       preserve_comments: preserve?,
-      collect_trivia: trivia?
+      collect_trivia: trivia?,
+      keyword_set: keyword_set
     }
 
     case do_tokenize(state) do
@@ -688,7 +702,7 @@ defmodule Cure.Compiler.Lexer do
     # effect annotations and FSM hard events.
     {word, state} =
       cond do
-        state.fsm_transition_depth > 0 and word not in @keyword_strings ->
+        state.fsm_transition_depth > 0 and not MapSet.member?(state.keyword_set, word) ->
           case peek(state) do
             c when c in [?!, ??] ->
               {word <> <<c::utf8>>, advance(state, 1)}
@@ -697,7 +711,7 @@ defmodule Cure.Compiler.Lexer do
               {word, state}
           end
 
-        word not in @keyword_strings and peek(state) == ?? ->
+        not MapSet.member?(state.keyword_set, word) and peek(state) == ?? ->
           # `?` immediately followed by an identifier-starter is a *hole*
           # prefix (`?name`), so only consume the `?` when it is a
           # proper suffix (followed by something that can't begin a
@@ -715,7 +729,7 @@ defmodule Cure.Compiler.Lexer do
       end
 
     {type, value} =
-      if word in @keyword_strings do
+      if MapSet.member?(state.keyword_set, word) do
         kw = String.to_atom(word)
 
         case kw do
@@ -762,10 +776,14 @@ defmodule Cure.Compiler.Lexer do
         c in ?0..?9 or c in ?a..?f or c in ?A..?F or c == ?_
       end)
 
-    if digits == "" do
+    clean = String.replace(digits, "_", "")
+
+    # Reject both an empty digit run (`0x`) and an all-underscore run (`0x_`):
+    # the latter passes `digits != ""` but strips to "", and String.to_integer
+    # would then raise ArgumentError. Guard on `clean` so both surface cleanly.
+    if clean == "" do
       {:error, {:invalid_hex_literal, state.line, start_col}, state}
     else
-      clean = String.replace(digits, "_", "")
       value = String.to_integer(clean, 16)
       token = Token.new(:integer, value, state.line, start_col)
       maybe_emit_event(state, token)
@@ -781,10 +799,13 @@ defmodule Cure.Compiler.Lexer do
         c in [?0, ?1, ?_]
       end)
 
-    if digits == "" do
+    clean = String.replace(digits, "_", "")
+
+    # Reject `0b` (empty) and `0b_` (all-underscore, strips to ""); the latter
+    # would otherwise reach String.to_integer/2 and raise. See lex_hex.
+    if clean == "" do
       {:error, {:invalid_binary_literal, state.line, start_col}, state}
     else
-      clean = String.replace(digits, "_", "")
       value = String.to_integer(clean, 2)
       token = Token.new(:integer, value, state.line, start_col)
       maybe_emit_event(state, token)
@@ -802,19 +823,13 @@ defmodule Cure.Compiler.Lexer do
         {frac_part, state} = consume_while(state, fn c -> c in ?0..?9 or c == ?_ end)
         {exp_part, state} = lex_exponent(state)
         raw = "#{int_part}.#{frac_part}#{exp_part}" |> String.replace("_", "")
-        value = String.to_float(raw)
-        token = Token.new(:float, value, state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]}}
+        finish_float(raw, state, start_col)
 
       # Scientific notation without dot: 1e3
       peek(state) in [?e, ?E] ->
         {exp_part, state} = lex_exponent(state)
         raw = "#{int_part}.0#{exp_part}" |> String.replace("_", "")
-        value = String.to_float(raw)
-        token = Token.new(:float, value, state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]}}
+        finish_float(raw, state, start_col)
 
       true ->
         clean = String.replace(int_part, "_", "")
@@ -823,6 +838,19 @@ defmodule Cure.Compiler.Lexer do
         maybe_emit_event(state, token)
         {:ok, %{state | tokens: [token | state.tokens]}}
     end
+  end
+
+  # Build a float token from an assembled numeric string, converting a raw that
+  # String.to_float/1 rejects — a truncated exponent (`1.0e`, from `1e`/`1e+`)
+  # or an out-of-range magnitude (`1.0e400`, which overflows the IEEE double) —
+  # into a clean lexer error instead of a raised ArgumentError that would crash
+  # the whole tokenize.
+  defp finish_float(raw, state, start_col) do
+    token = Token.new(:float, String.to_float(raw), state.line, start_col)
+    maybe_emit_event(state, token)
+    {:ok, %{state | tokens: [token | state.tokens]}}
+  rescue
+    ArgumentError -> {:error, {:invalid_float_literal, state.line, start_col}, state}
   end
 
   defp lex_exponent(state) do
@@ -1004,27 +1032,36 @@ defmodule Cure.Compiler.Lexer do
             ?\\ -> {?\\, advance(state, 1)}
             ?' -> {?', advance(state, 1)}
             ?0 -> {0, advance(state, 1)}
-            _ ->
-              case decode_char_at(state) do
-                {cp, state2} -> {cp, state2}
-                :invalid -> {:invalid, state}
-              end
+            # An unrecognized escape must NOT fall through to `decode_char_at`,
+            # which would read the byte *after* the backslash literally and
+            # silently drop the `\` — turning `'\r'` into the codepoint for `r`
+            # (114) with no diagnostic. Cure recognizes only the small escape set
+            # above (mirroring the string lexer, which likewise does not interpret
+            # `\r`/`\b`/…); anything else is a hard error rather than a silent
+            # miscompile.
+            nil -> {:invalid, state}
+            _ -> {:bad_escape, state}
           end
 
-        if value == :invalid do
-          {:error, {:unterminated_char, state.line, start_col}, state}
-        else
-          # Expect closing '
-          case peek(state) do
-            ?' ->
-              state = advance(state, 1)
-              token = Token.new(:char, value, state.line, start_col)
-              maybe_emit_event(state, token)
-              {:ok, %{state | tokens: [token | state.tokens]}}
+        cond do
+          value == :invalid ->
+            {:error, {:unterminated_char, state.line, start_col}, state}
 
-            _ ->
-              {:error, {:unterminated_char, state.line, start_col}, state}
-          end
+          value == :bad_escape ->
+            {:error, {:invalid_char_escape, state.line, start_col}, state}
+
+          true ->
+            # Expect closing '
+            case peek(state) do
+              ?' ->
+                state = advance(state, 1)
+                token = Token.new(:char, value, state.line, start_col)
+                maybe_emit_event(state, token)
+                {:ok, %{state | tokens: [token | state.tokens]}}
+
+              _ ->
+                {:error, {:unterminated_char, state.line, start_col}, state}
+            end
         end
 
       nil ->
@@ -1105,9 +1142,19 @@ defmodule Cure.Compiler.Lexer do
             {name, state}
           end
 
-        token = Token.new(:atom, String.to_atom(name), state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]}}
+        # The BEAM caps atoms at 255 characters; String.to_atom/1 raises an
+        # UNCAUGHT SystemLimitError past that (not the ArgumentError the numeric
+        # paths rescue, and do_tokenize's catch only catches throws), so a
+        # 256-char `:atom` literal would crash tokenize. Guard the length and
+        # return a clean error instead. `name` is ASCII (consume_while accepts
+        # only [A-Za-z0-9_] plus a trailing ?/!), so byte_size == char count.
+        if byte_size(name) > 255 do
+          {:error, {:atom_too_long, state.line, start_col}, state}
+        else
+          token = Token.new(:atom, String.to_atom(name), state.line, start_col)
+          maybe_emit_event(state, token)
+          {:ok, %{state | tokens: [token | state.tokens]}}
+        end
 
       # `::` is the binary-segment specifier operator introduced in
       # v0.20.0. It is distinct from `:` (type annotations) and from

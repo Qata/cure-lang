@@ -60,7 +60,7 @@ defmodule Antigen.Generators.ConversionTest do
   defp detect({:ctor, :vcons, _}), do: :conv_index
   defp detect({:case, _, _, _}), do: :conv_motive
   defp idx_depth({:ctor, :vcons, [{:app, {:app, {:global, :plus}, a}, b}, _, _]}), do: nat(a) + nat(b)
-  defp idx_depth({:case, _, {:lam, _, {:data, :Vec, _, [{:app, {:app, {:global, :plus}, a}, b}]}}, _}),
+  defp idx_depth({:case, _, {:lam, _g, _, {:data, :Vec, _, [{:app, {:app, {:global, :plus}, a}, b}]}}, _}),
     do: nat(a) + nat(b)
   defp nat({:ctor, :Z, []}), do: 0
   defp nat({:ctor, :S, [n]}), do: 1 + nat(n)
@@ -87,7 +87,7 @@ defmodule Antigen.Generators.ConversionTest do
   end
 
   defp redex?(:conv_index, {:ctor, :vcons, [n, _, _]}), do: is_plus(n)
-  defp redex?(:conv_motive, {:case, _, {:lam, _, {:data, :Vec, _, [idx]}}, _}), do: is_plus(idx)
+  defp redex?(:conv_motive, {:case, _, {:lam, _g, _, {:data, :Vec, _, [idx]}}, _}), do: is_plus(idx)
   defp is_plus({:app, {:app, {:global, :plus}, _}, _}), do: true
   defp is_plus(_), do: false
 end

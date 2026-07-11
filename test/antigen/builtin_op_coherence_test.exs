@@ -69,8 +69,8 @@ defmodule Antigen.BuiltinOpCoherenceTest do
   end
 
   test "R1: a user-registered int_add normalizes by its OWN body, never the builtin table" do
-    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
-    body = {:lam, {:int_type}, {:lam, {:int_type}, {:int_lit, 42}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+    body = {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
     user_env = Env.empty() |> Env.add_def(:int_add, ty, body) |> Env.certify(:int_add)
     user_ctx = Context.empty(user_env)
 

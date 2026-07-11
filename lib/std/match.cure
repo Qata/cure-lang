@@ -1,11 +1,20 @@
 @group(:collections)
 mod Std.Match
+  use Std.Result
+  use Std.Option
+
   ## Convenience helpers built on top of v0.18.0 deep destructuring.
   ##
   ## Every function here is implemented with nested patterns and
   ## serves as a smoke test for the pattern engine. They also double
   ## as lightweight convenience utilities when you want a single-call
-  ## `unwrap`, `head/tail`, etc.
+  ## `fst`/`snd`, `uncons`, etc.
+  ##
+  ## Tuples are the parameterised `Tuple(...)` of `Std.Tuple`: a pair
+  ## is `Tuple(a, b)`, so `fst`/`snd` are total projections at their
+  ## true component types. List splitters that can fail on a short list
+  ## return an `Option` rather than a padded tuple, matching the
+  ## Haskell-style `uncons`.
   ##
   ## ## Examples
   ##
@@ -13,9 +22,9 @@ mod Std.Match
   ## use Std.Match
   ##
   ## fst(%[42, "x"])                         # => 42
-  ## head_tail([1, 2, 3], 0)                 # => %[1, [2, 3]]
-  ## head_tail([], 0)                        # => %[0, []]
-  ## first_two([1, 2, 3, 4], 0)              # => %[1, 2, [3, 4]]
+  ## uncons([1, 2, 3])                       # => Some(%[1, [2, 3]])
+  ## uncons([])                              # => None()
+  ## first_two([1, 2, 3, 4])                 # => Some(%[1, 2, [3, 4]])
   ## ```
   ##
   ## ```cure
@@ -27,52 +36,47 @@ mod Std.Match
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  # -- Pair / Tuple -----------------------------------------------------------
+  # -- Pair -------------------------------------------------------------------
 
-  ## Return a pair unchanged when it destructures as `%[a, b]`;
-  ## otherwise return the argument as-is.
-  fn unpack_pair(t: Tuple) -> Tuple =
+  ## Return a pair unchanged (identity destructure of a `Tuple(a, b)`).
+  fn unpack_pair(t: Tuple(a, b)) -> Tuple(a, b) =
     match t
-      %[a, b] -> %[a, b]
-      _       -> t
+      %[x, y] -> %[x, y]
 
-  ## First element of a tuple; handles pairs and singletons.
-  fn fst(t: Tuple) -> a =
+  ## First component of a pair.
+  fn fst(t: Tuple(a, b)) -> a =
     match t
-      %[a, _] -> a
-      %[a]    -> a
+      %[x, _] -> x
 
-  ## Second element of a tuple; handles pairs and triples (returning
-  ## the middle entry for the latter).
-  fn snd(t: Tuple) -> a =
+  ## Second component of a pair.
+  fn snd(t: Tuple(a, b)) -> b =
     match t
-      %[_, b]    -> b
-      %[_, b, _] -> b
+      %[_, y] -> y
 
   # -- Lists ------------------------------------------------------------------
 
   ## Split `list` into `%[head, tail]`, falling back to
   ## `%[default, []]` for an empty list.
-  fn head_tail(list: List(a), default: a) -> Tuple =
+  fn head_tail(list: List(a), default: a) -> Tuple(a, List(a)) =
     match list
       [h | t] -> %[h, t]
       []      -> %[default, []]
 
-  ## `%[head, tail]` for non-empty lists; `%[[], []]` for empty.
-  fn uncons(list: List(a)) -> Tuple =
+  ## `Some(%[head, tail])` for a non-empty list; `None()` when empty.
+  fn uncons(list: List(a)) -> Option(Tuple(a, List(a))) =
     match list
-      [h | t] -> %[h, t]
-      []      -> %[[], []]
+      [h | t] -> Some(%[h, t])
+      []      -> None()
 
-  ## Extract the first two elements of `list` as `%[h1, h2, rest]`,
-  ## padding with `default` when there are fewer.
-  fn first_two(list: List(a), default: a) -> Tuple =
+  ## `Some(%[h1, h2, rest])` with the first two elements of `list` and
+  ## the remainder; `None()` when the list has fewer than two.
+  fn first_two(list: List(a)) -> Option(Tuple(a, a, List(a))) =
     match list
       [h1 | t1] ->
         match t1
-          [h2 | rest] -> %[h1, h2, rest]
-          []          -> %[h1, default, []]
-      []        -> %[default, default, []]
+          [h2 | rest] -> Some(%[h1, h2, rest])
+          []          -> None()
+      []        -> None()
 
   # -- Options / Results ------------------------------------------------------
 

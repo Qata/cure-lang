@@ -1,5 +1,9 @@
 @group(:core)
 mod Std.Core
+  use Std.Comparable
+  use Std.Result
+  use Std.Option
+
   ## Identity, composition, booleans, comparison, and the `Result` /
   ## `Option` sum types.
   ##
@@ -89,39 +93,27 @@ mod Std.Core
       else -> y
 
   # -- Comparison operations --------------------------------------------------
+  #
+  # There are no `eq`/`ne`/`lt`/`le`/`gt`/`ge` named helpers: the operators
+  # `==`/`!=`/`<`/`<=`/`>`/`>=` are the surface. Equality/inequality are
+  # polymorphic (structural), and the ordering operators resolve through the
+  # `Std.Comparable` interface, so `min`/`max`/`clamp` carry a
+  # `where Comparable(t)` constraint that threads the ordering dictionary.
 
-  ## Structural equality (`x == y`).
-  fn eq(x: t, y: t) -> Bool = x == y
-
-  ## Structural inequality (`x != y`).
-  fn ne(x: t, y: t) -> Bool = x != y
-
-  ## Strict less-than (`x < y`).
-  fn lt(x: t, y: t) -> Bool = x < y
-
-  ## Less-than-or-equal (`x <= y`).
-  fn le(x: t, y: t) -> Bool = x <= y
-
-  ## Strict greater-than (`x > y`).
-  fn gt(x: t, y: t) -> Bool = x > y
-
-  ## Greater-than-or-equal (`x >= y`).
-  fn ge(x: t, y: t) -> Bool = x >= y
-
-  ## Pointwise minimum using the primitive `<=` ordering.
-  fn min(x: t, y: t) -> t =
+  ## Pointwise minimum under the `Comparable` ordering.
+  fn min(x: t, y: t) -> t where Comparable(t) =
     pickup
       x <= y -> x
       else   -> y
 
-  ## Pointwise maximum using the primitive `>=` ordering.
-  fn max(x: t, y: t) -> t =
+  ## Pointwise maximum under the `Comparable` ordering.
+  fn max(x: t, y: t) -> t where Comparable(t) =
     pickup
       x >= y -> x
       else   -> y
 
   ## Clamp `value` into the inclusive range `[lo, hi]`.
-  fn clamp(value: t, lo: t, hi: t) -> t =
+  fn clamp(value: t, lo: t, hi: t) -> t where Comparable(t) =
     pickup
       value < lo -> lo
       value > hi -> hi

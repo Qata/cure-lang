@@ -48,33 +48,32 @@ mod Std.CRDT
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
+  # Every CRDT value is an opaque handle to runtime state owned by the
+  # `:cure_std_crdt` backend: the whole module is `@extern`, and no Cure code
+  # constructs or projects these types. They are therefore `opaque type`
+  # carriers (Agda `postulate` — inhabited, non-eliminable), not records. The
+  # earlier `rec X\n field: t` spelling left `t` a free, undeclared type
+  # variable, which the dependent elaborator (correctly) rejects.
+
   ## Grow-only counter. Per-replica counts are summed on read.
-  rec GCounter
-    counts: t
+  opaque type GCounter
 
   ## Positive/negative counter -- two `GCounter`s, one for increments
   ## and one for decrements. `pn_value` returns `sum(p) - sum(n)`.
-  rec PNCounter
-    p: GCounter
-    n: GCounter
+  opaque type PNCounter
 
   ## Observed-remove set: each element carries the set of unique tags
   ## attributed to its addition; removals drop exactly the tags the
   ## remover has observed.
-  rec ORSet
-    entries: t
+  opaque type ORSet
 
   ## Last-write-wins register. Merges pick the side with the higher
   ## timestamp; ties break on node id.
-  rec LWWRegister
-    value: t
-    stamp: Int
-    node: Atom
+  opaque type LWWRegister
 
   ## Multi-value register. When two writes are concurrent, both are
   ## retained so the caller can resolve the conflict.
-  rec MVRegister
-    writes: t
+  opaque type MVRegister
 
   # -- GCounter ---------------------------------------------------------------
 

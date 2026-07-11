@@ -6,7 +6,7 @@ defmodule Cure.Core.NormaliseTest do
   @dec {:data, :Dec, [], []}
   @dcoupled {:ctor, :Dcoupled, []}
   @causal {:ctor, :Causal, []}
-  @dec_motive {:lam, @dec, @dec}
+  @dec_motive {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}
 
   defp base do
     Env.empty()
@@ -16,11 +16,11 @@ defmodule Cure.Core.NormaliseTest do
     ])
   end
 
-  defp id_type, do: {:pi, {:type, 1}, {:type, 1}}
-  defp id_body, do: {:lam, {:type, 1}, {:var, 0}}
+  defp id_type, do: {:pi, Cure.Core.Grade.unrestricted(), {:type, 1}, {:type, 1}}
+  defp id_body, do: {:lam, Cure.Core.Grade.unrestricted(), {:type, 1}, {:var, 0}}
 
   test "beta normalizes applications" do
-    term = {:app, {:lam, {:type, 1}, {:var, 0}}, {:type, 0}}
+    term = {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 1}, {:var, 0}}, {:type, 0}}
     assert {:type, 0} == Normalise.nf(Context.empty(), term)
   end
 
@@ -76,7 +76,7 @@ defmodule Cure.Core.NormaliseTest do
 
   defp step_env do
     body =
-      {:lam, @dec,
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
        {:case, {:var, 0}, @dec_motive,
         [
           {:Dcoupled, 0, @dcoupled},
@@ -84,7 +84,7 @@ defmodule Cure.Core.NormaliseTest do
         ]}}
 
     base()
-    |> Env.add_def(:step, {:pi, @dec, @dec}, body)
+    |> Env.add_def(:step, {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}, body)
     |> Env.certify(:step)
   end
 
@@ -113,7 +113,7 @@ defmodule Cure.Core.NormaliseTest do
   end
 
   test "Kernel.normalize delegates to the shared normalizer" do
-    term = {:app, {:lam, {:type, 1}, {:var, 0}}, {:type, 0}}
+    term = {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 1}, {:var, 0}}, {:type, 0}}
     assert Normalise.nf(Context.empty(), term) == Kernel.normalize(Context.empty(), term)
   end
 
@@ -129,7 +129,7 @@ defmodule Cure.Core.NormaliseTest do
         Context.extend(c, {:vtype, 0})
       end)
 
-    t = {:lam, {:type, 0}, {:var, 1}}
+    t = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 1}}
     nf1 = Normalise.nf(ctx, t)
     assert nf1 == t, "nf reflected the free var: #{inspect(nf1)}"
     assert Normalise.nf(ctx, nf1) == nf1, "nf is not idempotent (oscillation)"

@@ -43,7 +43,7 @@ breaking changes behind one boundary rather than minting an edition per rename.
    ordered, deliberately not per-change.
 3. **Declaration precedence: file pragma > `Cure.toml` > compiler default.** A
    `@edition("2026")` pragma at the top of a `.cure` file wins; else the
-   project's `[package].edition`; else the compiler's built-in current edition.
+   project's `[project].edition`; else the compiler's built-in current edition.
 4. **Default when undeclared = latest** (the compiler's current edition). Cure
    has no pre-edition install base to protect (pre-1.0). This default **freezes**
    post-1.0 so it never silently reinterprets code once real legacy exists.
@@ -83,10 +83,18 @@ A new module `Cure.Edition` owns the edition type and its total order.
 {:error, reason}` applies precedence:
 
 1. **File pragma.** If `src` begins (after leading trivia) with
-   `@edition("YYYY")`, that wins. The pragma is a top-of-file decorator parsed
-   like `@group` (it must be the first non-comment item; a pragma elsewhere is a
-   parse error, so its scope is unambiguously whole-file).
-2. **`Cure.toml`.** Else `Cure.Project.load(dir)` and read `[package].edition`.
+   `@edition("YYYY")`, that wins. The pragma reuses `@group`'s decorator-node
+   syntax but is **stricter on placement**: `@group` misplacement is only a
+   soft deprecation (`emit_group_placement_deprecation/3` in `parser.ex`, still
+   parses, later hoisted by `cure migrate`'s `@group`-hoist rule), whereas
+   `@edition(...)` elsewhere than file-leading is a **hard parse error**, not a
+   deprecation — it must be the first non-comment item. This is deliberately
+   not "like `@group`" on placement: edition resolution must be decidable
+   before any migration rule can run, so there is no analogous rewrite rule
+   that could relocate a misplaced pragma the way `@group`-hoist relocates a
+   misplaced `@group`. A pragma elsewhere failing to parse is what makes its
+   scope unambiguously whole-file.
+2. **`Cure.toml`.** Else `Cure.Project.load(dir)` and read `[project].edition`.
    A project with a `Cure.toml` but no `edition` key resolves to the default
    (4) **and emits a one-time advisory** to add one (so projects converge on
    explicit editions without hard-failing).
@@ -98,7 +106,7 @@ file), which is what enables incremental one-file-at-a-time migration.
 
 ### 3.3 `Cure.toml` and pragma surface
 
-- `Cure.toml` `[package]` table gains an optional `edition = "2026"` string.
+- `Cure.toml` `[project]` table gains an optional `edition = "2026"` string.
   `Cure.Project` (`lib/cure/project.ex`) gains an `:edition` field, parsed and
   validated through `Cure.Edition`. Absent ⇒ `nil` ⇒ default path.
 - The `@edition("2026")` pragma is a new recognized top-of-file decorator. It is
@@ -170,12 +178,28 @@ wherever a token's keyword-ness is (re)checked. The Pratt structure is unchanged
   - `:review` — a candidate rewrite exists but may shift meaning / is
     context-dependent. `cure migrate` applies **and lists it in the run report
     as needing review**; `cure build` warns and does *not* normalize. Returns
-    `{:rewrite, …}`. (Reserved; may have no members at first.)
+    `{:rewrite, …}`. Has one member at launch: `uppercase-type-var →
+    lowercase` (§5.3) — its rewrite is unsafe to fold into `cure build`'s
+    in-memory AST because lowering a dependently-typed signature's binder can
+    break metavar solving (the exact reason `Cure.Migrate.Rule`'s moduledoc
+    gives today for shipping it `tolerate_safe?: false`); `:review` is what
+    preserves that non-normalizing behavior under the new tier scheme.
   - `:manual` — no rewrite possible; warn-only with a porting hint. Returns
     `{:warn, lines}`.
 - `tolerate_safe?` is removed; `commit/4` in `Cure.Migrate` keys off `tier`
   (`:machine` normalizes in `:safe_only`/build mode; `:review`/`:manual` do
-  not).
+  not). **This is not a pure rename of the old flag.** Every rule in today's
+  registry ships `tolerate_safe?: false` (`cure build` never normalizes any of
+  them). Retagging `if/elif→pickup`, `@group` hoist, and module rename to
+  `:machine` (§5.3) is a **deliberate capability upgrade**, not a like-for-like
+  translation: `cure build` will now normalize those three in-memory where it
+  never did before. That upgrade is safe to grant them specifically because
+  each is independently semantics-preserving per its own moduledoc (a pure
+  spelling rename, a no-op-when-already-canonical relocation, and a mechanical
+  rename respectively) — it is not true of every currently-`tolerate_safe?:
+  false` rule, which is why `uppercase-type-var→lowercase` is retagged
+  `:review`, not `:machine` (above), rather than swept into `:machine` along
+  with the other four.
 - **`retires_keywords`** is the bridge to §4.1: only keyword-class deprecations
   set it. Its `enforced_in` is what the lexer reads.
 
@@ -194,7 +218,7 @@ wherever a token's keyword-ness is (re)checked. The Pratt structure is unchanged
 | rule | tier | since | enforced_in | retires_keywords |
 |---|---|---|---|---|
 | if/elif → pickup | `:machine` | 2026 | nil | — |
-| uppercase type var → lowercase | `:machine` | 2026 | nil | — |
+| uppercase type var → lowercase | `:review` | 2026 | nil | — |
 | `@group` hoist | `:machine` | 2026 | nil | — |
 | module rename (`Std.Eq`→`Equatable`) | `:machine` | 2026 | 2026 | — |
 | removed module (`Refine`/`Equal`) | `:manual` | 2026 | 2026 | — |
@@ -262,7 +286,16 @@ Apply every rule that is **relevant to reaching Y**:
 
 - rules with `enforced_in != nil and enforced_in <= Y` — **mandatory** (their
   old form is illegal at Y);
-- plus all `:machine` rules with `since <= Y` — safe to clear proactively.
+- plus all `:machine`/`:review` rules with `since <= Y` — proactively applied.
+  This must include `:review`, not just `:machine`: §5.1 already says
+  "`:review` — … `cure migrate` applies" — a rule-selection formula that only
+  named `:machine` here would silently drop `:review`-tier rewrites (currently
+  `uppercase-type-var → lowercase`, §5.3) from every `cure migrate` invocation,
+  contradicting §5.1 and regressing today's `cure migrate`, which applies that
+  rewrite unconditionally. `:machine` and `:review` differ only in whether
+  `cure build` may also normalize (§5.1) and in the run-report annotation
+  (§5.1's "needing review" flag carries through here) — not in whether
+  `cure migrate` applies them.
 
 `:manual` rules never rewrite; if any `:manual` item with `enforced_in <= Y`
 remains after phase 1, the bump (phase 2) is **refused** with the list of
@@ -275,7 +308,7 @@ hand-port sites — bumping would produce code that errors at Y.
   rewrites remove exactly the forms that differ). Write the reprinted files
   (respecting the git-guard and atomic batch write, facility §5.8).
 - **Phase 2 — bump the declared edition.** Update the edition marker to Y:
-  - whole-project migrate ⇒ set `[package].edition = "Y"` in `Cure.toml`
+  - whole-project migrate ⇒ set `[project].edition = "Y"` in `Cure.toml`
     (via `Cure.Project`, lossless TOML edit);
   - single standalone file ⇒ insert/update its `@edition("Y")` pragma.
   Phase 2 runs only if phase 1 fully succeeded and no blocking `:manual` item
@@ -315,8 +348,17 @@ bump in their report.
   (`enforced_in: nil`); the removed set is derived from the registry, not
   hardcoded (change the fixture rule's `enforced_in`, the keyword set follows).
 - **Tier refactor:** `:machine` normalizes in build mode, `:review`/`:manual` do
-  not; `{:warn}`/`{:rewrite}` result kinds follow tier; the retagged existing
-  rules keep their prior warn/rewrite behavior (regression pin).
+  not; `{:warn}`/`{:rewrite}` result kinds follow tier. The regression pin
+  covers each rule's warning text and `cure migrate` rewrite output
+  (unchanged by the refactor) and, separately, `cure build`'s normalization
+  decision for the two rules whose tier keeps it non-normalizing
+  (`uppercase-type-var→lowercase` at `:review`, `removed-module` at
+  `:manual` — both pin to their prior `tolerate_safe?: false` behavior
+  exactly). It does **not** claim `cure build`'s normalization decision is
+  unchanged for the three rules retagged `:machine`
+  (`if/elif→pickup`, `@group` hoist, module rename): that is a deliberate,
+  disclosed upgrade from `tolerate_safe?: false` (§5.1) — assert instead that
+  `cure build` normalizes those three post-refactor and did not pre-refactor.
 - **Fixpoint + verify:** a two-rule chain (rule B's trigger exposed only by rule
   A) converges in one `run_to_fixpoint`; a deliberately non-monotone fixture
   rule set hits `@max_passes` and errors with the offending rules; verify
@@ -341,7 +383,13 @@ bump in their report.
    parse. (No behavior change yet — nothing consumes the edition.)
 2. **Rule model refactor.** Add `tier`/`since`/`enforced_in`/`retires_keywords`;
    remove `tolerate_safe?`; re-tag the five existing rules; repoint
-   `commit/4`. Pure refactor, suite stays green.
+   `commit/4`. Existing test suite stays green, but this is **not** behavior-neutral
+   for `cure build`: retagging `if/elif→pickup`, `@group` hoist, and module
+   rename to `:machine` (§5.1) turns on in-memory normalization for those three
+   that was off under `tolerate_safe?: false` — add a regression test per rule
+   asserting the new normalized-in-build behavior before merging this phase, not
+   just "suite stays green" on the pre-existing tests (which never exercised
+   this path in the first place, since nothing was normalized before it).
 3. **Edition-parameterized lexer/parser.** `:edition` option, registry-derived
    keyword set, pragma placement enforcement.
 4. **Fixpoint + verify engine.** `run_to_fixpoint/2`, monotone property test,

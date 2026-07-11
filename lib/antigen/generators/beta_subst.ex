@@ -4,7 +4,7 @@ defmodule Antigen.Generators.BetaSubst do
   (`Antigen.Assays.KernelLaw`): β-reduction agrees with capture-avoiding
   substitution. Each challenge is a `:typed_term` carrying a redex
 
-      R = {:app, {:lam, T, body}, e}
+      R = {:app, {:lam, Cure.Core.Grade.unrestricted(), T, body}, e}
 
   where `e` holds a free `{:var, k}` pointing into the ambient context and `body`
   places the bound occurrence of `x` UNDER one or more binders, so substituting
@@ -29,20 +29,20 @@ defmodule Antigen.Generators.BetaSubst do
 
   # {ctx_types, result_type, T (redex binder), e (has a free ambient var), body, note}
   @cases [
-    {[@nat], {:pi, @nat, @nat}, @nat, {:var, 0}, {:lam, @nat, {:var, 1}},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, @nat, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
      "lam depth 1: x under one λ — e shifts by 1"},
-    {[@nat], {:pi, @nat, {:pi, @nat, @nat}}, @nat, {:var, 0},
-     {:lam, @nat, {:lam, @nat, {:var, 2}}},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 2}}},
      "lam depth 2: x under two λ — e shifts by 2"},
-    {[@nat], {:pi, @nat, {:pi, @nat, {:pi, @nat, @nat}}}, @nat, {:var, 0},
-     {:lam, @nat, {:lam, @nat, {:lam, @nat, {:var, 3}}}},
+    {[@nat], {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}}, @nat, {:var, 0},
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 3}}}},
      "lam depth 3: x under three λ — e shifts by 3"},
-    {[@ty0], @ty0, @ty0, {:var, 0}, {:pi, @nat, {:var, 1}},
+    {[@ty0], @ty0, @ty0, {:var, 0}, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}},
      "pi codomain: x under a Π binder — e shifts by 1"},
-    {[@ty0], @ty0, @ty0, {:var, 0}, {:data, :Sigma, [@nat, {:lam, @nat, {:var, 1}}], []},
+    {[@ty0], @ty0, @ty0, {:var, 0}, {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}}], []},
      "sigma codomain: x under a Σ binder — e shifts by 1"},
     {[@nat], @nat, @nat, {:var, 0},
-     {:case, {:var, 1}, {:lam, @nat, @nat}, [{:Z, 0, {:var, 0}}, {:S, 1, {:var, 1}}]},
+     {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, {:var, 0}}, {:S, 1, {:var, 1}}]},
      "case branch: x under the S branch's arity-1 binder — e shifts by 1 there"}
   ]
 
@@ -73,7 +73,7 @@ defmodule Antigen.Generators.BetaSubst do
           kind: :typed_term,
           assay: "kernel/beta_subst",
           label: :well_typed,
-          payload: %{sig: :v1, ctx: ctx, type: type, term: {:app, {:lam, t, body}, e}},
+          payload: %{sig: :v1, ctx: ctx, type: type, term: {:app, {:lam, Cure.Core.Grade.unrestricted(), t, body}, e}},
           note: note,
           cover_tag: cell
         )

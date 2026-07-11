@@ -16,6 +16,6 @@ defmodule Cure.Stdlib.AtomStdTest do
   test "a program that uses Std.Atom resolves Atom to the primitive" do
     src = "mod M\n  use Std.Atom\n  fn tag(a: Atom) -> Atom = a\nend\n"
     {:ok, env} = Program.elaborate(src)
-    assert env.defs[:tag].type == {:pi, {:atom_type}, {:atom_type}}
+    assert env.defs[:tag].type == {:pi, Cure.Core.Grade.unrestricted(), {:atom_type}, {:atom_type}}
   end
 end

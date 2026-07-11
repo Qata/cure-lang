@@ -109,6 +109,38 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
     # integration-style tests in `test/cure/stdlib/preload_test.exs`
     # already cover end-to-end. Keeping this test module focused on
     # the pure helpers keeps it fast and isolated.
+
+    test "a later module can cross-call an @extern fn of an earlier module" do
+      # Regression: `bundle/2` compiles files in sorted order and each
+      # module's import resolver (`module_exports?`) probes the *loaded*
+      # version of an imported module. If a freshly-compiled beam is not
+      # loaded into the VM before the next module compiles, the probe hits
+      # a stale/absent module and the cross-module @extern call falls back
+      # to a local call -> `{:undefined_function, ...}` -> the dependent
+      # module fails to compile. The bundle must load each fresh beam so
+      # later modules see its exports. (Std.Comparable -> Std.Char.code_point.)
+      src = make_tmp!()
+      dst = make_tmp!()
+
+      write_cure!(src, "a_helper.cure", """
+      mod Std.TcaHelper
+        @extern(:erlang, :abs, 1)
+        fn ext_helper(x: Int) -> Int
+      """)
+
+      write_cure!(src, "b_user.cure", """
+      mod Std.TcaUser
+        use Std.TcaHelper
+        fn use_it(x: Int) -> Int = ext_helper(x)
+      """)
+
+      assert {:ok, %{errors: 0}} = BundleStdlibBeams.bundle(src, dst)
+      assert File.exists?(Path.join(dst, "Cure.Std.TcaUser.beam"))
+    after
+      :code.purge(:"Cure.Std.TcaHelper")
+      :code.delete(:"Cure.Std.TcaHelper")
+      cleanup_tmps()
+    end
   end
 
   # ---------------------------------------------------------------------------

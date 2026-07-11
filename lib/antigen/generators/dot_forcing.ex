@@ -49,7 +49,7 @@ defmodule Antigen.Generators.DotForcing do
   @z {:ctor, :Z, []}
   # (λx:Nat. x) Z — β-reduces to Z: convertible to a forced Z WITHOUT being
   # syntactically equal, so Conv.conv? must actually decide (not just `==`).
-  @lam_id_z {:app, {:lam, {:data, :Nat, [], []}, {:var, 0}}, @z}
+  @lam_id_z {:app, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:var, 0}}, @z}
 
   # {ctx_vars, family, cname, scrut_index_terms, name, written_value, label, note}.
   # Coverage cells are kept OUT of this tuple (in @case_cells, positionally aligned)

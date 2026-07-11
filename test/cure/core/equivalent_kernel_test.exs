@@ -37,13 +37,13 @@ defmodule Cure.Core.EquivalentKernelTest do
   # mirrors the elaborator's `transport_case/4` and the antibody's twin helper.
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
-    arrow = {:pi, {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, ty, {:lam, ty, {:lam, scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, {:app, motive, l}, {:var, 0}}}]}
+    arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
+    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   # motive (x.M) = λx. Box(x)
-  @motive {:lam, @dec, {:data, :Box, [], [{:var, 0}]}}
+  @motive {:lam, Cure.Core.Grade.unrestricted(), @dec, {:data, :Box, [], [{:var, 0}]}}
 
   # ---- formation / introduction (eq_test twins) ------------------------------
 
@@ -63,7 +63,7 @@ defmodule Cure.Core.EquivalentKernelTest do
 
   test "reflexive uses real conversion (beta), not name matching" do
     # Equivalent(Dec, (λx:Dec.x) Causal, Causal) — endpoints equal only after β.
-    lhs = {:app, {:lam, @dec, {:var, 0}}, @causal}
+    lhs = {:app, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:var, 0}}, @causal}
 
     assert :ok ==
              Kernel.check(

@@ -123,6 +123,40 @@ defmodule Cure.Compiler.LexerTest do
     end
   end
 
+  # A malformed numeric literal must return a clean {:error, reason} — never
+  # crash the lexer with a raised ArgumentError from String.to_integer/2 or
+  # String.to_float/1. These are reachable from any source the compiler reads.
+  describe "malformed numeric literals return errors, not crashes" do
+    test "an all-underscore radix literal (0x_/0b_) errors instead of raising" do
+      assert {:error, {:invalid_hex_literal, _, _}} = Lexer.tokenize("0x_", emit_events: false)
+      assert {:error, {:invalid_binary_literal, _, _}} =
+               Lexer.tokenize("0b_", emit_events: false)
+    end
+
+    test "an out-of-range exponent (float overflow) errors instead of raising" do
+      assert {:error, {:invalid_float_literal, _, _}} = Lexer.tokenize("1e400", emit_events: false)
+
+      assert {:error, {:invalid_float_literal, _, _}} =
+               Lexer.tokenize("1.5e400", emit_events: false)
+    end
+
+    test "a truncated exponent (no digits after e/e+/e-) errors instead of raising" do
+      assert {:error, {:invalid_float_literal, _, _}} = Lexer.tokenize("1e", emit_events: false)
+      assert {:error, {:invalid_float_literal, _, _}} = Lexer.tokenize("1e+", emit_events: false)
+      assert {:error, {:invalid_float_literal, _, _}} = Lexer.tokenize("1e-", emit_events: false)
+    end
+
+    test "an over-long atom literal (>255 chars) errors instead of raising SystemLimitError" do
+      # The BEAM caps atoms at 255 characters; String.to_atom/1 raises
+      # SystemLimitError past that. A 255-char atom is fine; 256 must be a clean
+      # error, not an uncaught crash escaping tokenize/2.
+      assert {:ok, _} = Lexer.tokenize(":" <> String.duplicate("a", 255), emit_events: false)
+
+      assert {:error, {:atom_too_long, _, _}} =
+               Lexer.tokenize(":" <> String.duplicate("a", 256), emit_events: false)
+    end
+  end
+
   # ── String Literals ──────────────────────────────────────────────────
 
   describe "strings" do

@@ -70,6 +70,14 @@ defmodule Antigen.Generators.Serialization do
     ])
   end
 
+  # `:pi`/`:lam` are BINDERS and carry a QTT grade; `:app` does not. The tuple is
+  # assembled from a tag, so no textual migration can see it.
+  defp binary(tag, d) when tag in [:pi, :lam] do
+    Gen.bind(term(d), fn a ->
+      Gen.bind(term(d), fn b -> Gen.return({tag, Cure.Core.Grade.unrestricted(), a, b}) end)
+    end)
+  end
+
   defp binary(tag, d),
     do: Gen.bind(term(d), fn a -> Gen.bind(term(d), fn b -> Gen.return({tag, a, b}) end) end)
 

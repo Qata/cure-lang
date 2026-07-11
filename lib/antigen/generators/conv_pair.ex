@@ -76,9 +76,9 @@ defmodule Antigen.Generators.ConvPair do
   # Σ(Nat, const-Nat) and its single-branch ι-on-case projections (replacing the
   # retired primitive {:fst,_}/{:snd,_}). conv? is type-free, so the closed Sigma
   # motive only supplies the mk_pair branch shape the projection eliminates.
-  defp sig, do: {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}
-  defp pfst(p), do: {:case, p, {:lam, sig(), {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 1}}]}
-  defp psnd(p), do: {:case, p, {:lam, sig(), {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 0}}]}
+  defp sig, do: {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}
+  defp pfst(p), do: {:case, p, {:lam, Cure.Core.Grade.unrestricted(), sig(), {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 1}}]}
+  defp psnd(p), do: {:case, p, {:lam, Cure.Core.Grade.unrestricted(), sig(), {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 0}}]}
 
   defp shape do
     Gen.frequency([
@@ -95,9 +95,9 @@ defmodule Antigen.Generators.ConvPair do
          :prim_spine_distinct
        )},
       # -- η (conv_struct? RHS-λ + eta_eq?) --
-      {2, ret(v(0), {:lam, {:type, 0}, {:app, v(1), v(0)}}, true, "η neutral-vs-λ (70,108)", :eta_neutral_lam)},
-      {2, ret({:lam, {:type, 0}, v(1)}, {:lam, {:type, 0}, v(1)}, true, "λ-vs-λ η (107)", :eta_lam_lam)},
-      {2, ret({:lam, {:type, 0}, v(1)}, {:type, 0}, false, "λ-vs-non-λ (109)", :lam_vs_nonlam)},
+      {2, ret(v(0), {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:app, v(1), v(0)}}, true, "η neutral-vs-λ (70,108)", :eta_neutral_lam)},
+      {2, ret({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, v(1)}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, v(1)}, true, "λ-vs-λ η (107)", :eta_lam_lam)},
+      {2, ret({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, v(1)}, {:type, 0}, false, "λ-vs-non-λ (109)", :lam_vs_nonlam)},
       # -- Σ-pair / refl (conv_struct?) --
       {2, ret({:ctor, :mk_pair, [v(0), v(1)]}, {:ctor, :mk_pair, [v(0), v(1)]}, true, "mk_pair reflexive (83)", :mk_pair_refl)},
       {2, ret({:ctor, :reflexive, [v(0)]}, {:ctor, :reflexive, [v(0)]}, true, "reflexive-ctor reflexive (102)", :reflexive_refl)},
@@ -114,7 +114,7 @@ defmodule Antigen.Generators.ConvPair do
       {1, Gen.bind(Gen.int(-9, 9), fn k -> app_refl({:float_lit, k / 2}, "vfloat (191)", :app_arg_float) end)},
       {1, app_refl({:data, :Nat, [], []}, "vdata (193)", :app_arg_data)},
       {1, app_refl({:ctor, :Z, []}, "vctor (196)", :app_arg_ctor)},
-      {1, app_refl({:lam, {:type, 0}, {:type, 0}}, "vλ fallback → conv_struct η (199)", :app_arg_lam)},
+      {1, app_refl({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}, "vλ fallback → conv_struct η (199)", :app_arg_lam)},
       # -- compact-Nat conversion (conv_struct? 85/88/91, same_value_no_delta? 194) --
       # The definitional-equality bridge between a compact `{:nat_lit,n}` and its
       # n-fold S/Z tower, both directions, plus the neutral-spine no-δ fast path on

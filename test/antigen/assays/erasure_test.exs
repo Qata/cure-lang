@@ -8,8 +8,8 @@ defmodule Antigen.Assays.ErasureTest do
   defp ctor_env do
     Env.empty()
     |> Inductive.declare(Inductive.family(:P, [], [], 0), [
-         Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:present, :erased]),
-         Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :present])
+         Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:unrestricted, :erased]),
+         Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :unrestricted])
        ])
   end
 
@@ -22,10 +22,10 @@ defmodule Antigen.Assays.ErasureTest do
   # once here at module level (NOT re-declared by Task 2's describe block) so both
   # this task's app-head known-finding test and Task 2's selective tests share it.
   defp app_env(env) do
-    ty = {:pi, {:int_type}, {:pi, {:int_type}, {:int_type}}}
+    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
     env
-    |> Env.add_def(:f, ty, {:int_lit, 0}, [:present, :erased])
-    |> Env.add_def(:g, ty, {:int_lit, 0}, [:erased, :present])
+    |> Env.add_def(:f, ty, {:int_lit, 0}, [:unrestricted, :erased])
+    |> Env.add_def(:g, ty, {:int_lit, 0}, [:erased, :unrestricted])
   end
   defp app2(head, x0, x1), do: {:app, {:app, head, x0}, x1}
 
@@ -76,23 +76,23 @@ defmodule Antigen.Assays.ErasureTest do
         payload: %{env: env, term: t, surface: surface}, seed: 1)
     end
 
-    test "ctor selective baseline: keeps exactly the :present positions (leaf args)" do
+    test "ctor selective baseline: keeps exactly the :unrestricted positions (leaf args)" do
       env = ctor_env()
       assert Erasure.run(sel_ch(env, {:ctor, :MkQ, [il(1), il(2)]}, :ctor)) == :ok
     end
 
-    test "app-head selective baseline: keeps exactly the :present def positions (leaf args)" do
+    test "app-head selective baseline: keeps exactly the :unrestricted def positions (leaf args)" do
       env = app_env(ctor_env())
       assert Erasure.run(sel_ch(env, app2({:global, :f}, il(1), il(2)), :app)) == :ok
     end
 
-    test "ctor selective negative control: an erase stub dropping the :present position" do
+    test "ctor selective negative control: an erase stub dropping the :unrestricted position" do
       env = ctor_env()
       k = %{Erasure.__real__() | erase: fn _e, {:ctor, c, _args} -> {:ctor, c, []} end}
       assert {:violation, {:wrong_positions_kept, :MkQ}} = Erasure.run(sel_ch(env, {:ctor, :MkQ, [il(1), il(2)]}, :ctor), k)
     end
 
-    test "app-head selective negative control: an erase stub dropping a :present arg" do
+    test "app-head selective negative control: an erase stub dropping a :unrestricted arg" do
       env = app_env(ctor_env())
       k = %{Erasure.__real__() | erase: fn _e, _t -> {:global, :f} end}  # drops all args
       assert {:violation, {:wrong_positions_kept, :f}} = Erasure.run(sel_ch(env, app2({:global, :f}, il(1), il(2)), :app), k)
@@ -136,9 +136,9 @@ defmodule Antigen.Assays.ErasureTest do
       assert Erasure.run(rel_ch(Env.empty(), {:case, {:var, 0}, {:int_lit, 0}, []}, :scrutinee)) == :ok
     end
 
-    test "present_arg site: erased binder passed in a :present ctor position — rejected" do
+    test "present_arg site: erased binder passed in a :unrestricted ctor position — rejected" do
       env = ctor_env()
-      # MkQ position 0 is :present; putting {:var,0} there is a relevant use of an erased binder
+      # MkQ position 0 is :unrestricted; putting {:var,0} there is a relevant use of an erased binder
       assert Erasure.run(rel_ch(env, {:ctor, :MkQ, [{:var, 0}, {:int_lit, 0}]}, :present_arg)) == :ok
     end
 

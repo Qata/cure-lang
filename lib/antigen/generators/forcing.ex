@@ -38,7 +38,7 @@ defmodule Antigen.Generators.Forcing do
     body_f = Enum.find(defs, &(&1.name == :f)).body
 
     # β step: apply f's body (a lambda) to n by substituting de Bruijn 0.
-    {:lam, _dom, inner} = body_f
+    {:lam, _g, _dom, inner} = body_f
     t = {:app, {:global, :f}, @n}
     tprime = Term.subst(inner, 0, @n)
 

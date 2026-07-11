@@ -65,15 +65,15 @@ defmodule Cure.Elab.ParamIndexElabTest do
         wrap(v) -> v
   """
 
-  # All the `{:lam, dom, …}` domains of a nested lambda, outermost first.
-  defp lam_domains({:lam, dom, body}), do: [dom | lam_domains(body)]
+  # All the `{:lam, Cure.Core.Grade.unrestricted(), dom, …}` domains of a nested lambda, outermost first.
+  defp lam_domains({:lam, _g, dom, body}), do: [dom | lam_domains(body)]
   defp lam_domains(_), do: []
 
   test "match motive carries the scrutinee's actual parameter (not [])" do
     assert {:ok, env} = Program.elaborate(@src2)
 
     # probe = λ(t). case t of … ; the motive is the case's third element.
-    assert {:lam, _t_type, {:case, _scrut, motive, _branches}} =
+    assert {:lam, _g, _t_type, {:case, _scrut, motive, _branches}} =
              Cure.Core.Env.get_def(env, :probe).body
 
     # The motive abstracts index_arity(2) + 1 = 3 binders; its innermost (last)

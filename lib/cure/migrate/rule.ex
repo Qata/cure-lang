@@ -31,30 +31,36 @@ defmodule Cure.Migrate.Rule do
           the paren-context skip in spec §5.5), so warn but leave the AST as-is.
         * `:no_change` — nothing found; transparent.
     * `:warning_template` — the message body emitted when the rule fires.
-    * `:tolerate_safe?` — the spec's "where safe" knob for the `cure build`
-      consumer. `false` (default): the rule *warns* during build but its rewrite
-      is NOT folded into the compiled AST — the legacy form compiles as-is. Only
-      `true` when the rewrite is certified semantics-preserving-and-compilable,
-      so that `cure build` may normalize it in-memory. `cure migrate` always
-      applies every rule's rewrite regardless of this flag.
-
-      All three day-one rules are `false`: each legacy form still compiles today,
-      so folding the rewrite is unnecessary, and doing so is either unsafe
-      (lowercasing a dependently-typed signature breaks metavar solving),
-      redundant (`if/elif` still compiles), or cosmetic (decorator relocation).
-      A rule opts in only once its rewrite is proven safe AND the legacy form has
-      actually stopped compiling (the "warn-now → error-later" transition).
+    * `:tier` — the single warn/rewrite/normalize authority (spec §5.3),
+      replacing the old binary `tolerate_safe?`:
+        * `:machine` — the rewrite is certified semantics-preserving; `cure build`
+          may normalize it in-memory (`:safe_only` mode folds it).
+        * `:review` — warn only; `cure build` must NOT normalize it (e.g.
+          lowercasing a dependently-typed signature is not always safe).
+        * `:manual` — no auto-migration; the reference must be ported by hand.
+      `cure migrate` always applies every rule's rewrite regardless of `tier`.
+    * `:since` — the edition this rule was introduced in.
+    * `:enforced_in` — the edition at which the legacy form stops being a keyword
+      / stops compiling (drives the lexer's edition-derived keyword set); `nil`
+      when the legacy form is still accepted.
+    * `:retires_keywords` — the keywords this rule retires at `enforced_in`
+      (single source of truth for the lexer); `[]` when it retires none.
   """
 
-  @enforce_keys [:id, :description, :phase, :detect_and_rewrite, :warning_template]
+  @enforce_keys [:id, :description, :phase, :detect_and_rewrite, :warning_template, :tier, :since]
   defstruct [
     :id,
     :description,
     :phase,
     :detect_and_rewrite,
     :warning_template,
-    tolerate_safe?: false
+    :tier,
+    :since,
+    enforced_in: nil,
+    retires_keywords: []
   ]
+
+  @type tier :: :machine | :review | :manual
 
   @typedoc "The whole-file AST a rule receives and returns (a `{:block, …}` node)."
   @type ast :: term()
@@ -78,6 +84,9 @@ defmodule Cure.Migrate.Rule do
           phase: :syntactic | :needs_resolution,
           detect_and_rewrite: (ast(), ctx() -> result()),
           warning_template: String.t(),
-          tolerate_safe?: boolean()
+          tier: tier(),
+          since: Cure.Edition.t(),
+          enforced_in: Cure.Edition.t() | nil,
+          retires_keywords: [String.t()]
         }
 end
