@@ -489,6 +489,17 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
+  # `assert_type expr : T` — a compile-time ascription. Lower `T`, then elaborate
+  # `expr` in CHECKING mode against it (so the assertion can also steer inference).
+  # The wrapper carries no runtime content: the result IS the checked term at type
+  # `T`, so emit sees only `expr`. Mirrors the classic codegen, which strips it.
+  def elaborate_expr_typed({:assert_type, _meta, [expr, type_ast]}, names, ctx, env) do
+    with {:ok, expected_core} <- elaborate_type(type_ast, names, env),
+         {:ok, term} <- elaborate_expr_checked(expr, expected_core, names, ctx, env) do
+      {:ok, term, Eval.eval(expected_core, Context.env(ctx))}
+    end
+  end
+
   def elaborate_expr_typed({:literal, meta, value} = expr, names, ctx, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) ->
