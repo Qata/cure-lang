@@ -2087,6 +2087,21 @@ defmodule Cure.Compiler.Parser do
   # arguments (`Cons(h, t @ Cons(x, y))`), so as-patterns nest.
   defp maybe_wrap_as({:variable, vm, name}, state) do
     case peek(state) do
+      # A TYPED pattern: `n: Int`. Binds `name` at the annotated type — the
+      # elimination form for anonymous unions (`match x { n: Int -> … }`). The
+      # annotation may itself be a union (`rest: String | Bool`), which is why it
+      # goes through the `|`-aware parse_type_expr/1.
+      #
+      # `:colon` has no infix binding power, so parse_expr(state, 0) already stops
+      # cleanly here — this clause is purely additive.
+      #
+      # Brace-delimited record/map patterns are NOT covered: parse_map_pair/1's
+      # explicit key:value branch already claims `identifier :` inside braces.
+      %Token{type: :colon} ->
+        state = advance(state)
+        {type_ast, state} = parse_pattern_type(state)
+        {{:typed_pattern, vm, [name, type_ast]}, state}
+
       %Token{type: :at} ->
         state = advance(state)
         {inner, state} = parse_expr(state, 0)
@@ -2099,6 +2114,51 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp maybe_wrap_as(pattern, state), do: {pattern, state}
+
+  # The type annotation of a typed pattern (`n: Int`, `rest: String | Bool`).
+  #
+  # This is NOT `parse_type_expr/1`, and the difference is load-bearing. A match
+  # arm is `pattern -> body`, and `parse_match_arm_tail/2` expects that `->`. But
+  # `parse_type_arrow/1` is greedy: given `n: Int -> 1` it would read `Int -> 1` as
+  # a FUNCTION TYPE, swallow the arm's arrow, and parse the body `1` as a codomain.
+  # So a pattern annotation must not absorb a top-level `->`.
+  #
+  # Members are therefore parsed with `parse_type_atom/1` (`Name`, `Name(args)`,
+  # `(T)`), which never consumes an arrow — the same restricted type grammar GADT
+  # constructor signatures use. A function-typed annotation is consequently not
+  # expressible here; that is out of scope (union members must be ground types).
+  defp parse_pattern_type(state) do
+    {first, state} = parse_pattern_type_member(state)
+    {rest, state} = parse_pattern_type_members(state)
+
+    case rest do
+      [] -> {first, state}
+      _ -> {{:union_type, [], [first | rest]}, state}
+    end
+  end
+
+  defp parse_pattern_type_members(state) do
+    case peek(state) do
+      %Token{type: :bar} ->
+        state = advance(state) |> skip_newlines()
+        {member, state} = parse_pattern_type_member(state)
+        {rest, state} = parse_pattern_type_members(state)
+        {[member | rest], state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp parse_pattern_type_member(state) do
+    token = peek(state)
+
+    if literal_token?(token) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_atom(state)
+    end
+  end
 
   # The tail of a match arm after its pattern has been parsed: optional `when`
   # guard, the `->`, and the body (or `impossible`). Factored out so with-clause

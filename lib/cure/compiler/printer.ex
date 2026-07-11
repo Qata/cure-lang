@@ -996,6 +996,14 @@ defmodule Cure.Compiler.Printer do
       ", " <> render(body_type, depth, indent) <> ")"
   end
 
+  # -- Typed pattern ----------------------------------------------------------
+
+  # `n: Int` in a match arm — binds `n` at the annotated type. The annotation may
+  # itself be a union (`rest: String | Bool`).
+  defp to_string({:typed_pattern, _meta, [name, type_ast]}, depth, indent) do
+    name <> ": " <> render(type_ast, depth, indent)
+  end
+
   # -- Anonymous union type ---------------------------------------------------
 
   # `Int | String`. Members print in SOURCE order — canonicalisation (sort, dedupe,

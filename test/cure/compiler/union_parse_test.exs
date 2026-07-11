@@ -106,4 +106,97 @@ defmodule Cure.Compiler.UnionParseTest do
       assert find_union(ast) == nil
     end
   end
+
+  # Guards the highest-severity risk in this feature: literal-token recognition must
+  # be scoped to union members only. A bare numeral in a type INDEX (not followed by
+  # `|`) must keep parsing to {:variable, _, "N"} — idx_to_core recovers the integer
+  # from that via numeric_index_value/1 and has NO clause for {:literal, ...}, so
+  # emitting a literal node here would silently break every dependent numeral index
+  # in the tree, including `typealias Char = Bounded(1114112)` in lib/std/char.cure.
+  describe "regression: a numeral in type-index position is NOT a literal node" do
+    test "Bounded(1114112) — the real Std.Char definition — stays a :variable" do
+      ast = parse!("mod M\n  typealias Char = Bounded(1114112)\nend\n")
+
+      assert {:function_call, fm, [arg]} =
+               collect(ast, [])
+               |> Enum.find(&match?({:function_call, m, _} when m != [], &1))
+
+      assert fm[:name] == "Bounded"
+      assert {:variable, [scope: :local], "1114112"} = arg
+      assert collect(ast, []) |> Enum.find(&match?({:literal, _, _}, &1)) == nil
+    end
+
+    test "a multi-argument literal index telescope stays :variable" do
+      ast = parse!("mod M\n  typealias E = Equivalent(Int, 3, 3)\nend\n")
+
+      assert collect(ast, []) |> Enum.find(&match?({:literal, _, _}, &1)) == nil
+      assert collect(ast, []) |> Enum.any?(&match?({:variable, _, "3"}, &1))
+    end
+  end
+
+  describe "typed patterns in match arms" do
+    defp arm_patterns(ast) do
+      ast
+      |> collect([])
+      |> Enum.filter(&match?({:match_arm, _, _}, &1))
+      |> Enum.map(fn {:match_arm, meta, _} -> meta[:pattern] end)
+    end
+
+    test "binds a name at a member type" do
+      ast =
+        parse!("""
+        mod M
+          fn f(x: Int | String) -> Int = match x
+            n: Int -> 1
+            s: String -> 2
+        end
+        """)
+
+      pats = arm_patterns(ast) |> Enum.sort_by(fn {_, _, [n, _]} -> n end)
+
+      assert [
+               {:typed_pattern, _, ["n", {:variable, _, "Int"}]},
+               {:typed_pattern, _, ["s", {:variable, _, "String"}]}
+             ] = pats
+    end
+
+    test "a typed pattern's annotation may itself be a union (sub-union branch)" do
+      ast =
+        parse!("""
+        mod M
+          fn f(x: Int | String | Bool) -> Int = match x
+            n: Int -> 1
+            rest: String | Bool -> 2
+        end
+        """)
+
+      assert Enum.any?(arm_patterns(ast), fn
+               {:typed_pattern, _, ["rest", {:union_type, [], ms}]} -> length(ms) == 2
+               _ -> false
+             end)
+    end
+
+    test "literal patterns in match arms are untouched" do
+      ast =
+        parse!("""
+        mod M
+          fn f(x: Int) -> Int = match x
+            3 -> 1
+            _ -> 2
+        end
+        """)
+
+      assert collect(ast, []) |> Enum.find(&match?({:typed_pattern, _, _}, &1)) == nil
+    end
+
+    test "a typed pattern also parses inside a constructor-pattern argument list" do
+      # Cons(n: Int, rest) — NOT a separate parser change: parse_call_args/1 and
+      # parse_more_args/1 already call maybe_wrap_as/2 on every parsed argument,
+      # the same helper parse_match_arm/1 uses, so this comes free.
+      ast = parse!("mod M\n  fn f(x) -> Int = match x\n    Cons(n: Int, rest) -> 1\n    _ -> 2\nend\n")
+
+      assert collect(ast, [])
+             |> Enum.any?(&match?({:typed_pattern, _, ["n", {:variable, _, "Int"}]}, &1))
+    end
+  end
 end
