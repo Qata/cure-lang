@@ -504,4 +504,54 @@ defmodule Cure.Elab.UnionTest do
       assert apply(:"Cure.LetOnly", :f, []) == 5
     end
   end
+  # The headline motivation (spec §1.3): put three unrelated types into a Map without
+  # declaring a throwaway public ADT. Requires goal-directed solving — Std.Map.put's
+  # `v` must be solved from the EXPECTED map type, not inferred from the first value
+  # argument, or `v` locks to Int and the union never gets a chance to inject.
+  describe "heterogeneous Map (the motivating case)" do
+    test "a map literal at a union value type injects each element" do
+      src = """
+      mod HM
+        use Std.Map
+        fn build() -> Map(Atom, Int | Bool | Atom) = %{a: 1, b: true, c: :other}
+      end
+      """
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+
+    test "round-trip: build a heterogeneous map, read it back, and discriminate" do
+      src = """
+      mod HMR
+        use Std.Map
+
+        fn build() -> Map(Atom, Int | Bool | Atom) = %{a: 1, b: true, c: :other}
+
+        fn describe(v: Int | Bool | Atom) -> Int = match v
+          n: Int -> n
+          b: Bool -> 100
+          a: Atom -> 200
+
+        fn look(k: Atom) -> Int = describe(Std.Map.get(k, build()))
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      assert apply(:"Cure.HMR", :look, [:a]) == 1
+      assert apply(:"Cure.HMR", :look, [:b]) == 100
+      assert apply(:"Cure.HMR", :look, [:c]) == 200
+    end
+
+    test "Std.Map.put at a union value type also injects" do
+      src = """
+      mod HMP
+        use Std.Map
+        fn build() -> Map(Atom, Int | Bool) = Std.Map.put(:a, 1, Std.Map.new())
+      end
+      """
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+  end
 end

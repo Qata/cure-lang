@@ -1360,7 +1360,37 @@ defmodule Cure.Elab.Elaborator do
         # errored with `:unsolved_metavariables`, and the retry surfaces that
         # original error if it too fails, so inference-position behaviour (no
         # expected type) is byte-for-byte unchanged.
-        case elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+        #
+        # EXCEPTION — an anonymous-union goal must thread the expected type in FROM THE
+        # START rather than inferring first. Inferring `Std.Map.put(:a, 1, …)` succeeds;
+        # it just succeeds WRONGLY, solving the map's implicit `v := Int` from the value
+        # argument. The retry below only fires on `:unsolved_metavariables`, and a
+        # wrong-but-solved implicit is not that — it surfaces as a `:conversion_failure`
+        # against the goal, with no container covariance to rescue it. Threading the goal
+        # first solves `v` from the GOAL, so each value is checked against the union and
+        # injected. Falls back to the ordinary path if it does not pan out.
+        union_first =
+          if union_goal?(expected_core) and not Unify.has_meta?(expected_core) do
+            case elaborate_global_app_expected(
+                   env,
+                   resolve_def_key(env, name, atom),
+                   args,
+                   names,
+                   ctx,
+                   expected_core
+                 ) do
+              {:ok, term, _type} ->
+                case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+                  :ok -> {:ok, term}
+                  {:error, _} -> nil
+                end
+
+              {:error, _} ->
+                nil
+            end
+          end
+
+        case union_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
           {:ok, _} = ok ->
             ok
 
@@ -5873,10 +5903,41 @@ defmodule Cure.Elab.Elaborator do
     expected = Subst.instantiate(type_term, chosen)
 
     case Unify.unify(expected, arg_type_term, mctx, env) do
-      {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [arg], rest}}
-      {:error, reason} -> {:halt, {:error, {:index_mismatch, reason}}}
+      {:ok, mctx} ->
+        {:cont, {:ok, mctx, chosen ++ [arg], rest}}
+
+      {:error, reason} ->
+        # The domain may be a generated anonymous-union family that goal-directed
+        # solving has already pinned (see `elaborate_global_app`). Unification has no
+        # coercion, so a MEMBER argument fails against it — inject the member's
+        # constructor and retry. This is the same check-position coercion applied
+        # everywhere else, at the one place where the argument's domain is only known
+        # after the goal has been solved.
+        case inject_arg_into_union(arg, arg_type_term, Unify.zonk(expected, mctx), env) do
+          nil ->
+            {:halt, {:error, {:index_mismatch, reason}}}
+
+          injected ->
+            case Unify.unify(expected, Unify.zonk(expected, mctx), mctx, env) do
+              {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [injected], rest}}
+              {:error, _} -> {:halt, {:error, {:index_mismatch, reason}}}
+            end
+        end
     end
   end
+
+  # Inject a TERM whose inferred type is a member of the (already-solved) union domain.
+  # Term-level, not value-level: at this point everything is a Core term, so no Context
+  # is needed. Returns nil when the domain is not a union or the argument is not one of
+  # its members — the caller then reports the ordinary unification failure.
+  defp inject_arg_into_union(arg, arg_type_term, {:data, ukey, [], []}, env) do
+    if Cure.Elab.Union.union_family?(ukey) do
+      cname = Cure.Elab.Union.ctor_key(ukey, %{key: Cure.Elab.Union.member_key(arg_type_term)})
+      if Inductive.get_ctor(env, cname), do: {:ctor, cname, [arg]}, else: nil
+    end
+  end
+
+  defp inject_arg_into_union(_arg, _arg_type_term, _expected, _env), do: nil
 
   defp finish_ctor_app({:error, _} = err, _cname, _family, _ctor, _pc, _ctx), do: err
 
@@ -5931,12 +5992,63 @@ defmodule Cure.Elab.Elaborator do
     %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
-    domains
-    |> Enum.zip(quantities)
-    |> Enum.reduce_while({:ok, MetaCtx.new(), [], arg_asts, []}, &bidir_app_slot(&1, &2, names, ctx, env))
+    slots = Enum.zip(domains, quantities)
+    init = {:ok, MetaCtx.new(), [], arg_asts, []}
+
+    # GOAL-DIRECTED solving for an anonymous-union goal — the same reason as in
+    # `elaborate_global_app/5`, and needed here too because this is the path taken when
+    # an argument cannot be inferred standalone (`Std.Map.put(:a, 1, Std.Map.new())` —
+    # `new()`'s implicits have nothing to fix them).
+    #
+    # Without it, the value slot's domain `?v` is still an unsolved meta, so the slot is
+    # DEFERRED and later resolved by inferring the argument — locking `?v := Int` and
+    # losing the union. Solving the codomain against the goal first pins
+    # `?v := Union<…>`, so the slot is no longer deferred: the argument is CHECKED
+    # against the union and the literal/member injection fires normally.
+    {erased, rest} = Enum.split_while(slots, fn {_d, q} -> q == :erased end)
+
+    {init, slots} =
+      if union_goal?(expected) do
+        seeded =
+          erased
+          |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
+          |> bidir_solve_codomain_from_goal(codomain, expected, env, rest)
+
+        {seeded, rest}
+      else
+        {init, slots}
+      end
+
+    slots
+    |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
     |> resolve_deferred_slots(names, ctx, env)
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
+
+  # `solve_codomain_from_goal/5` for the bidirectional accumulator's 5-tuple. Same
+  # contract: pad `chosen` to the full binder stack (Subst.instantiate indexes against
+  # all of it), unify the codomain with the goal, and swallow failure so the ordinary
+  # path still produces the honest error.
+  defp bidir_solve_codomain_from_goal(
+         {:ok, mctx, chosen, args, deferred},
+         codomain,
+         expected,
+         env,
+         remaining
+       ) do
+    {mctx_padded, padded} =
+      Enum.reduce(remaining, {mctx, chosen}, fn {dom, _q}, {m, acc} ->
+        {m, id} = MetaCtx.fresh(m, Subst.instantiate(dom, acc))
+        {m, acc ++ [{:meta, id}]}
+      end)
+
+    case Unify.unify(Subst.instantiate(codomain, padded), expected, mctx_padded, env) do
+      {:ok, mctx2} -> {:ok, mctx2, chosen, args, deferred}
+      {:error, _} -> {:ok, mctx, chosen, args, deferred}
+    end
+  end
+
+  defp bidir_solve_codomain_from_goal({:error, _} = err, _cod, _exp, _env, _rem), do: err
 
   @doc """
   Type-position entry for implicit insertion (spec 2026-07-08 §7): elaborate an
@@ -6417,10 +6529,95 @@ defmodule Cure.Elab.Elaborator do
     telescope = Enum.zip(Enum.map(domains, &{:_, &1}), quantities)
     init = {:ok, MetaCtx.new(), [], present_args}
 
+    # GOAL-DIRECTED solving, for an anonymous-union goal only.
+    #
+    # `solve_arg` receives arguments already elaborated and merely UNIFIES each domain
+    # against the argument's inferred type. So for `Std.Map.put(:a, 1, …)` checked at
+    # `Map(Atom, Int | Bool)`, the value slot's domain is the still-unsolved implicit
+    # `?v`, and unifying it with the argument's `Int` locks `?v := Int`. The codomain
+    # is only unified with the goal afterwards (in `finish_global_app`), by which point
+    # `Map(Atom, Int)` no longer matches `Map(Atom, Union<Bool|Int>)` — and there is no
+    # container covariance to rescue it. The union never got a chance to inject.
+    #
+    # Implicit (erased) slots come FIRST in the telescope, so their metavariables exist
+    # before any present argument is processed. Solving the codomain against the goal at
+    # that point pins `?v := Union<Bool|Int>`, and `solve_arg` can then coerce each value
+    # into it (see the union clause there). This is how Idris/Agda elaborate an
+    # application: the goal flows in before the arguments.
+    #
+    # GATED on the goal mentioning a generated union family. Doing it for EVERY checked
+    # call is the fully Idris-faithful behaviour and is the natural generalisation, but
+    # it reorders solving for every call in the language — a broad regression surface
+    # that deserves its own change. Gated, no non-union program's inference can differ.
+    {erased, rest} = Enum.split_while(telescope, fn {_d, q} -> q == :erased end)
+
+    init =
+      if union_goal?(expected) do
+        erased
+        |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
+        |> solve_codomain_from_goal(codomain, expected, env, rest)
+      else
+        init
+      end
+
+    telescope = if union_goal?(expected), do: rest, else: telescope
+
     telescope
     |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
+
+  @doc """
+  True iff `expected` is a Core type mentioning a generated anonymous-union family.
+
+  `Declarations.elaborate_body/6` uses this to route a union-goal body through CHECK
+  mode. Its default is infer, which never threads the declared return type into the
+  application — so goal-directed solving (see `elaborate_global_app`) would never see a
+  goal, and a value destined for a union member would lock the union's implicit to its
+  own type instead.
+  """
+  @spec union_goal?(term()) :: boolean()
+  def union_goal?(nil), do: false
+
+  def union_goal?(term) when is_tuple(term) do
+    case term do
+      {:data, name, _p, _i} ->
+        Cure.Elab.Union.union_family?(name) or
+          term |> Tuple.to_list() |> Enum.any?(&union_goal?/1)
+
+      _ ->
+        term |> Tuple.to_list() |> Enum.any?(&union_goal?/1)
+    end
+  end
+
+  def union_goal?(list) when is_list(list), do: Enum.any?(list, &union_goal?/1)
+  def union_goal?(_other), do: false
+
+  # Unify the codomain against the goal so goal-determined implicits are solved BEFORE
+  # the present arguments are matched. A failure is swallowed: the ordinary path then
+  # produces the honest error, and the kernel independently re-checks the assembled
+  # term, so this can only SOLVE metavariables — never cause an unsound accept.
+  #
+  # `chosen` holds only the ERASED prefix, but `Subst.instantiate/2` indexes the codomain
+  # against the FULL binder stack — instantiating with a short list mis-indexes and the
+  # unify then fails silently, leaving the implicit unsolved (which is the whole bug this
+  # exists to fix). So pad to full arity with placeholder metas for the not-yet-processed
+  # present slots. They are used only to index the substitution and are discarded: the
+  # real arguments are unified against their domains by `solve_arg` as usual.
+  defp solve_codomain_from_goal({:ok, mctx, chosen, present}, codomain, expected, env, remaining) do
+    {mctx_padded, padded} =
+      Enum.reduce(remaining, {mctx, chosen}, fn {{_n, ty}, _q}, {m, acc} ->
+        {m, id} = MetaCtx.fresh(m, Subst.instantiate(ty, acc))
+        {m, acc ++ [{:meta, id}]}
+      end)
+
+    case Unify.unify(Subst.instantiate(codomain, padded), expected, mctx_padded, env) do
+      {:ok, mctx2} -> {:ok, mctx2, chosen, present}
+      {:error, _} -> {:ok, mctx, chosen, present}
+    end
+  end
+
+  defp solve_codomain_from_goal({:error, _} = err, _codomain, _expected, _env, _remaining), do: err
 
   defp peel_pi(type, 0), do: {[], type}
 

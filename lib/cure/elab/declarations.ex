@@ -686,6 +686,15 @@ defmodule Cure.Elab.Declarations do
       name == "reflexive" ->
         Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
+      # A call whose declared return type mentions a generated anonymous-union family
+      # must be CHECKED, not inferred. Inferring `Std.Map.put(:a, 1, …)` solves the
+      # map's implicit `v := Int` from the first value argument, and only then compares
+      # `Map(Atom, Int)` against the goal `Map(Atom, Int | Bool)` — which fails, since
+      # there is no container covariance. Checking threads the goal into the
+      # application, so `v` is solved from the GOAL and each value is injected instead.
+      Elaborator.union_goal?(return_core) ->
+        Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
       atom && Inductive.get_ctor(env, atom) ->
         # A constructor body is checked against the declared return type, so a
         # nullary or otherwise underdetermined constructor (`Nil()` at
@@ -805,8 +814,16 @@ defmodule Cure.Elab.Declarations do
   # clause discards `return_core`), so the injection would never fire and the kernel
   # would reject `Int` at the union type.
   defp elaborate_body(expr, return_core, scope, ctx, env, _params) do
-    with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-      {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
+    # A union-goal body (e.g. a map literal at `Map(Atom, Int | Bool)`) is CHECKED, so
+    # the goal reaches the application and its implicits are solved from the goal rather
+    # than from the first value. Everything else keeps the historical infer-first path;
+    # `coerce_union/5` is a strict no-op unless the goal is a union family.
+    if Elaborator.union_goal?(return_core) do
+      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+    else
+      with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+        {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
+      end
     end
   end
 
