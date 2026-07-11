@@ -26,9 +26,15 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
       (proven separately), but the committed files omit those imports because the
       CLASSIC checker breaks on them (String=List(Char) vs binary). They flip green
       the instant classic is deleted.
-    * `set` — needs a parameterised `Map(k, v)` (breaks classic) plus the
-      foldl-accumulator poly-seed elaborator fix
-      (`fold_accumulator_poly_seed_reach_test.exs`).
+    * `set` — dependent-CAPABLE (proven in `set_dependent_capability_test.exs`:
+      a parameterised `Map(k, v)` with the three fold-seeded functions rewritten
+      as structural recursion elaborates cleanly, bare `Bool`, no kernel change —
+      the foldl-accumulator poly-seed gap is SIDESTEPPED, not required). Not in
+      `@green` only because it is CLASSIC-COEXISTENCE-blocked like show/io/access:
+      the parameterised `Map(k, v)` makes the classic checker reject `from_list`'s
+      match (`E033: no common upper bound Map(k,v) vs Map(t,Bool)`), so the live
+      file keeps its bare-`Map` form until classic is deleted, then flips to the
+      rip-out form.
     * `http`, `regex` — AtomVM dead-ends (`:inets`/`:re` absent); excluded from the
       parity target by design.
     * `pair` — bare-`Tuple`/`Any` shaped, slated for retirement in favour of

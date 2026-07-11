@@ -42,16 +42,28 @@ defmodule Cure.Elab.FoldAccumulatorPolySeedReachTest do
   # no single in-order, non-threading pass makes either domain concrete before its
   # arg's turn.
   #
-  # FIX SKETCH (deliberate spine-inference rework — NOT a safe additive tick edit;
-  # high regression risk across all applications, greens no committable module
-  # since Std.Set is classic-coexistence-blocked anyway): make deferred resolution
-  # (a) unify a deferred FUNCTION arg's instantiated codomain shape into its domain
-  # at defer time (parallel to `solve_deferred_domain`'s constructor branch, which
-  # today only handles ctors), AND (b) iterate to a fixpoint with mctx-threading
-  # re-checking so a later arg can solve an earlier arg's domain. Then delete the
-  # `@tag :skip` and this must pass. The other Std.Set blocker is that the classic
-  # checker cannot instantiate the parameterised `Map(k,v)` at all — see
-  # [[dep-pipeline-survey-2026-07-11]].
+  # NO LONGER MOTIVATED BY Std.Set (2026-07-11). This gap was thought to be the
+  # last thing blocking Std.Set's dependent capability, requiring an operator-level
+  # architectural decision. It is not: Std.Set does not need the fold. Rewritten
+  # with ordinary structural recursion over the element list (each `match` branch
+  # checked against the declared return type, so `[] -> new()` is pinned by the
+  # expected type — no polymorphic accumulator seeded through a fold), EVERY
+  # Std.Set operation elaborates dependent against a parameterised `Map(k, v)`.
+  # Proven + locked in `test/cure/stdlib/set_dependent_capability_test.exs`. So
+  # this pin no longer gates any module; Std.Set is dependent-capable and merely
+  # classic-coexistence-blocked (the classic checker cannot instantiate the
+  # parameterised `Map(k,v)` across match branches — `E033`).
+  #
+  # This remains a GENUINE, general elaborator inference limitation worth pinning
+  # (any `foldl(list, poly_seed(), lambda)` where the seed's params are determined
+  # only through the lambda), so the test stays. FIX SKETCH (deliberate
+  # spine-inference rework — NOT a safe additive tick edit; high regression risk
+  # across all applications): make deferred resolution (a) unify a deferred
+  # FUNCTION arg's instantiated codomain shape into its domain at defer time
+  # (parallel to `solve_deferred_domain`'s constructor branch, which today only
+  # handles ctors), AND (b) iterate to a fixpoint with mctx-threading re-checking
+  # so a later arg can solve an earlier arg's domain. Then delete the `@tag :skip`
+  # and this must pass. See [[dep-pipeline-survey-2026-07-11]].
   @tag :skip
   test "polymorphic seed in foldl accumulator position is solved from the lambda" do
     src = """
