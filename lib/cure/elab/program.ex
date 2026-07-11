@@ -550,6 +550,19 @@ defmodule Cure.Elab.Program do
   def dependent?({:sigma_type, _meta, _body}), do: true
   def dependent?({:rewrite_expr, _meta, _body}), do: true
 
+  # An anonymous union (`Int | String`) and its elimination form (`n: Int -> …`) are
+  # DEPENDENT-pipeline constructs: they elaborate to a generated inductive family whose
+  # constructors carry the member tag.
+  #
+  # Without these two clauses a module using only unions is judged non-dependent and
+  # compiled by the CLASSIC pipeline, where `Type.resolve/1` maps the union to `:any`
+  # and the value is emitted UNTAGGED — silently giving the erasure the design
+  # explicitly rejected as unsound (`String` is `List(Char)`, so members are not
+  # runtime-distinguishable). The feature would type-check correctly and then never be
+  # used at codegen.
+  def dependent?({:union_type, _meta, _members}), do: true
+  def dependent?({:typed_pattern, _meta, _children}), do: true
+
   def dependent?({:function_call, meta, children}) when is_list(meta) do
     Keyword.get(meta, :name) in ["Equivalent", "reflexive"] or Enum.any?(children, &dependent?/1)
   end

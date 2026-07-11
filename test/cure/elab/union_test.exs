@@ -276,4 +276,52 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Program.elaborate(src)
     end
   end
+
+  # The end-to-end proof: a union is not just well-typed, it RUNS. Construct, match,
+  # recover the value on a real BEAM.
+  #
+  # (Spec §13 asks for this on generic-unix AtomVM. That is not runnable from this
+  # repo — cure-lang is the compiler; the AtomVM loop lives in the parent esp32-beam
+  # repo. This is the in-repo equivalent; AtomVM validation is a follow-up there.)
+  describe "BEAM round-trip" do
+    test "construct, match, and recover the payload" do
+      src = """
+      mod URT
+        fn wrap(n: Int) -> Int | Bool = n
+        fn unwrap(x: Int | Bool) -> Int = match x
+          n: Int -> n
+          b: Bool -> 0
+        fn go(n: Int) -> Int = unwrap(wrap(n))
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+      assert apply(:"Cure.URT", :go, [7]) == 7
+    end
+
+    test "a type member erases to a tagged 2-tuple under its family-qualified ctor" do
+      src = """
+      mod UTM
+        fn wrap(n: Int) -> Int | Bool = n
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      assert apply(:"Cure.UTM", :wrap, [7]) == {:"Union<Bool|Int>$Int", 7}
+    end
+
+    test "a literal member erases to its family-qualified NULLARY ctor atom" do
+      src = """
+      mod ULT
+        fn pick() -> :north | :south = :north
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      assert apply(:"Cure.ULT", :pick, []) ==
+               :"Union<Atom#:north|Atom#:south>$Atom#:north"
+    end
+  end
 end
