@@ -1763,3 +1763,55 @@ Commits this cycle: `b6e71d4`, `610dd49`, `5a3a9f1`, `b99b92c`, `76045d6`,
 `5ec6edb`, `cdbe3ea`, plus this record.
 
 ---
+
+## Iteration 23 (final — loop wound down by operator)
+
+**Operator ended the loop.** Mid-cycle the operator instructed: cancel the cron,
+address the findings from the in-flight audit agents, and stop. The cron
+(`7e672a7d`) was **CronDelete'd**. This is a manual conclusion, not a
+two-clean-audit convergence.
+
+Fresh audit ran 4 parallel read-only Opus agents over the changed slices
+(edition/project, migrate, lexer/parser/printer, CLI). Every returned claim was
+verified against source before fixing.
+
+**edition/project:** clean — no field-reachable bug. (Two non-field-reachable
+guard asymmetries noted: `Edition.resolve/1` crashes on a non-binary `:source`;
+`leading_line_index/1` has no nil-guard. All in-tree callers pass binaries, so
+neither is reachable; left as-is.)
+
+**Four real bugs found + fixed (each verified, ghost-authored, with regression
+tests except CLI):**
+- `be5fab0` — lexer: unknown char escape (`'\r'`, `'\z'`) fell through to
+  `decode_char_at`, silently dropping the backslash and yielding the letter's
+  codepoint (114 for `r`) with no diagnostic. Now a hard `:invalid_char_escape`.
+- `ac7e1fe` — printer: `container_to_string` had no `:opaque` case, so an
+  `opaque type` reprinted via the `inspect/1` catch-all as a raw tuple that fails
+  to reparse. Added `opaque_to_string` (preserves head params).
+- `d838540` — migrate: `build_ctx`/`collect_type_names` registered only
+  `:struct`/`:enum` and ignored imports, so `opaque`/`primitive`/`use Mod.{T}`
+  names were misread as free type vars and lowercased (semantic corruption the
+  reprint-only verify accepts; the opaque case also aborted the whole migration
+  via the printer gap above). Added `:opaque`/`:primitive` + an `{:import,…}`
+  clause folding selective items + alias into ctx.
+- `106e179` — CLI: `--out`/`--target` were read as typed strings by
+  export-types/snap/story but absent from the `switches:` list, so a
+  missing/flag-following value collapsed to boolean `true` and leaked into the
+  delegated Mix task's argv. Declared `out`/`target` (`:string`) +
+  `diagrams`/`step` (`:boolean`). No bespoke test — the only seam delegates into
+  Mix tasks (`:mix`-undef / side-effect risk); fix is a trivially-correct switch
+  declaration.
+
+**Flagged, not fixed (unverifiable read-only / out of scope):** the four
+Mix-delegating CLI commands call `Mix.shell()` but `:mix` may not be bundled in
+the built escript — a possible `:undef` at runtime the agent could not confirm
+without building the escript. Worth a follow-up build check.
+
+Full suite green: **3998 passed, 0 failures** (+7 new regression tests over
+iteration 22's 3991); Antigen 309/309. Cron deleted; branch **not merged**.
+
+Commits this cycle: `be5fab0`, `ac7e1fe`, `d838540`, `106e179`, plus this record.
+
+## LOOP CONCLUDED — operator-directed wind-down (not a two-clean-audit convergence)
+
+---
