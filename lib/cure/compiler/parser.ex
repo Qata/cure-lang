@@ -4763,10 +4763,49 @@ defmodule Cure.Compiler.Parser do
         node = {:attribute_access, [attribute: attr], [inner]}
         maybe_parse_type_projection(node, state)
 
+      # `Mod.Name(args)` — a qualified type constructor applied to type arguments.
+      # The dotted projection above yields the qualified name; without this branch
+      # the trailing `(args)` dangled unconsumed, a hard parse error in a signature
+      # and a garbled `name: "unknown"` call in a `typealias` RHS. Only a chain of
+      # NAME attributes (not a numeric index projection like `p.1`) can head a type
+      # application; anything else leaves the `(` for the caller.
+      %Token{type: :lparen} ->
+        case qualified_type_name(inner) do
+          {:ok, name} ->
+            state = advance(state)
+            {params, state} = parse_type_param_list(state)
+            state = expect(state, :rparen)
+            ast = {:function_call, [name: name, qualified: true], params}
+            maybe_parse_function_type(state, ast)
+
+          :error ->
+            {inner, state}
+        end
+
       _ ->
         {inner, state}
     end
   end
+
+  # A dotted chain of NAME attributes over a base variable is a qualified type
+  # name: `A.B.C` → "A.B.C". A chain containing a numeric projection (`p.1`) is a
+  # dependent index projection, not a type constructor, and returns `:error`.
+  defp qualified_type_name({:variable, _, n}) when is_binary(n), do: {:ok, n}
+
+  defp qualified_type_name({:attribute_access, meta, [inner]}) do
+    attr = Keyword.get(meta, :attribute)
+
+    if is_binary(attr) and attr =~ ~r/^[A-Za-z_]/ do
+      case qualified_type_name(inner) do
+        {:ok, prefix} -> {:ok, prefix <> "." <> attr}
+        :error -> :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp qualified_type_name(_), do: :error
 
   # Sigma(x: DomType, BodyType) — a dependent-pair type (design spec §4.7). The
   # body type may mention the binder `x`.
