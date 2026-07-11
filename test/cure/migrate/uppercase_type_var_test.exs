@@ -120,6 +120,47 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute out =~ "T"
   end
 
+  # Drives the real `cure migrate` path (`run_to_fixpoint` runs proto_to_interface
+  # AND uppercase_type_var together), reprinting the converged AST.
+  defp migrate_fixpoint(src, file) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: file, trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: file, emit_events: false)
+
+    {:ok, final, _warns} =
+      Migrate.run_to_fixpoint(Cure.Compiler.Trivia.attach(ast, trivia), edition: "2026")
+
+    Printer.quoted_to_string(final)
+  end
+
+  test "a proto/interface HEAD type var lowercases in lockstep with its method bodies" do
+    # The rule lowercased type vars in method signatures but never touched the
+    # proto/interface HEAD's own type-parameter binder, so `proto Foo(T)` migrated
+    # to `interface Foo(T)` (head `T`) with a body `fn f(a: t) -> t` (body `t`):
+    # the binder desynced from every use. Head and body must move together.
+    out = migrate_fixpoint("proto Foo(T)\n  fn f(a: T) -> T\n", "iface.cure")
+
+    assert out =~ ~r/interface Foo\(t\)/
+    assert out =~ "a: t"
+    assert out =~ "-> t"
+    refute out =~ "T"
+  end
+
+  test "an impl HEAD (for-type + where-constraint) lowercases in lockstep with its body" do
+    # The impl head carries its type vars in `for_type` (`List(T)`) and
+    # `constraints` (`Ord(T)`) — meta-borne expressions the rule skipped, leaving
+    # the head uppercase while the method body lowercased.
+    out =
+      migrate_fixpoint(
+        "impl Ord for List(T) where Ord(T)\n  fn compare(a: List(T), b: List(T)) -> Int = 0\n",
+        "impl.cure"
+      )
+
+    assert out =~ "List(t)"
+    assert out =~ "Ord(t)"
+    refute out =~ "List(T)"
+    refute out =~ "Ord(T)"
+  end
+
   defp find_fn(ast) do
     ast
     |> flatten_nodes()

@@ -83,6 +83,39 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     {{:variable, meta, Map.get(active, name, name)}, lines}
   end
 
+  # ── Head-bearing declarations (proto/interface, impl/implementation) ─────────
+  #
+  # These bind type variables in their HEAD, not in a `:function_def` signature —
+  # a proto/interface's type-parameter list, an impl's for-type and where-clause
+  # constraints. Their methods reference those same variables, so head and body
+  # must rename in lockstep or the binder desyncs from every use (`proto Foo(T)`
+  # → `interface Foo(T)` with a body `fn f(a: t)`). We compute the head's rename
+  # map, apply it to the head fields, and thread it into the body walk as `active`
+  # so method references follow. Both the legacy `:container` (protocol/trait) and
+  # the migrated `:interface`/`:implementation` shapes are handled, since
+  # `proto_to_interface` may or may not have run first within a fixpoint pass.
+  defp walk({:interface, meta, body}, ctx, active, lines) do
+    walk_head(:interface, meta, body, ctx, active, lines, [:params], [])
+  end
+
+  defp walk({:implementation, meta, body}, ctx, active, lines) do
+    walk_head(:implementation, meta, body, ctx, active, lines, [], [:for_type, :constraints])
+  end
+
+  defp walk({:container, meta, body}, ctx, active, lines) do
+    case Keyword.get(meta, :container_type) do
+      :protocol ->
+        walk_head(:container, meta, body, ctx, active, lines, [:type_params], [])
+
+      :trait ->
+        walk_head(:container, meta, body, ctx, active, lines, [], [:for_type, :constraints])
+
+      _ ->
+        {new_body, lines} = walk(body, ctx, active, lines)
+        {{:container, rename_meta(meta, active), new_body}, lines}
+    end
+  end
+
   defp walk({k, meta, ch}, ctx, active, lines) when is_list(ch) do
     {new_ch, lines} = walk(ch, ctx, active, lines)
     {{k, rename_meta(meta, active), new_ch}, lines}
@@ -109,6 +142,69 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   defp rename_meta(meta, active) do
     Enum.map(meta, fn {k, v} -> {k, rename_in_type(v, active)} end)
   end
+
+  # ── Head rewrite (proto/interface/impl) ─────────────────────────────────────
+  #
+  # `str_fields` name meta entries holding a plain list of type-variable NAMES
+  # (`:params`, `:type_params` — bare strings); `expr_fields` name entries holding
+  # type EXPRESSIONS with `{:variable, …}` nodes (`:for_type`, `:constraints`).
+  # We gather every head type-var name, build one rename map (ctx-filtered, and
+  # freshened against both the head's own non-renamed names and every name the
+  # body uses), rewrite each head field, then thread the map into the body walk.
+  defp walk_head(tag, meta, body, ctx, active, lines, str_fields, expr_fields) do
+    str_names = Enum.flat_map(str_fields, &head_string_names(Keyword.get(meta, &1)))
+    expr_names = Enum.flat_map(expr_fields, &type_var_names(Keyword.get(meta, &1)))
+    head_names = str_names ++ expr_names
+
+    body_names = var_names_deep(body, [])
+
+    candidates = head_names |> Enum.filter(&rename?(&1, ctx)) |> Enum.uniq()
+
+    reserved =
+      head_names
+      |> Enum.reject(&rename?(&1, ctx))
+      |> Enum.concat(body_names)
+      |> MapSet.new()
+
+    rename_map = build_rename_map(candidates, reserved)
+
+    new_meta =
+      meta
+      |> rewrite_str_fields(str_fields, rename_map)
+      |> rewrite_expr_fields(expr_fields, rename_map)
+
+    lines = if rename_map != %{}, do: [Keyword.get(meta, :line) | lines], else: lines
+    inner = Map.merge(active, rename_map)
+    {new_body, lines} = walk(body, ctx, inner, lines)
+    {{tag, new_meta, new_body}, lines}
+  end
+
+  defp head_string_names(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
+  defp head_string_names(_), do: []
+
+  defp rewrite_str_fields(meta, fields, map) do
+    Enum.reduce(fields, meta, fn f, m ->
+      case Keyword.fetch(m, f) do
+        {:ok, v} -> Keyword.put(m, f, rename_strings(v, map))
+        :error -> m
+      end
+    end)
+  end
+
+  defp rewrite_expr_fields(meta, fields, map) do
+    Enum.reduce(fields, meta, fn f, m ->
+      case Keyword.fetch(m, f) do
+        {:ok, v} -> Keyword.put(m, f, rename_in_type(v, map))
+        :error -> m
+      end
+    end)
+  end
+
+  defp rename_strings(list, map) when is_list(list) do
+    Enum.map(list, fn s -> if(is_binary(s), do: Map.get(map, s, s), else: s) end)
+  end
+
+  defp rename_strings(other, _map), do: other
 
   # ── Signature rewrite ──────────────────────────────────────────────────────
 
