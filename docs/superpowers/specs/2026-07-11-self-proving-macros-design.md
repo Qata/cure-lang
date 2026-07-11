@@ -13,6 +13,22 @@ adds the machinery that turns those from *conventions with a default floor* into
 `syntax-parse` (error-quality ceiling); the project's own **Antigen** (kernel
 soundness by generation) — the load-bearing analogy of §4.
 
+**Settled decisions (2026-07-12, operator):**
+1. **`Diagnosis` is author-extensible, not purely grammar-derived** — an author
+   declares *semantic* failure points (protocol/state rules that aren't grammar
+   violations) alongside the derived structural ones; all are required-described and
+   routed identically (§3.4). This is where DSL error quality actually lives.
+2. **Exhaustiveness is lenient** — one reusable `describe` may cover many failure
+   points; the bar is "every point covered *by something*," preserving the
+   copy-one-example floor (§3.2).
+3. **The generative proof is bounded-on-compile + deep-on-demand** — a fast smoke
+   fuzz gates every macro compile; a deep `cure <macro> prove` run is the CI/on-demand
+   gate (§4.2).
+4. Defaults confirmed: first-class `region delimited by { }` is an optional later
+   slice (custom layout works via Tier-3 `raw until` now); example-equality is the
+   author's per-rule choice of exact-Core vs type-only; this extension sequences
+   **after** the base macro facility is implemented.
+
 ---
 
 ## 1. Goal and the one-sentence thesis
@@ -115,6 +131,44 @@ convention to a *derived-and-required* property: the macro **cannot compile** wi
 undescribed failure point, so the region **cannot** produce an undescribed parse
 error.
 
+### 3.4 Author-declared semantic failures (Diagnosis is extensible)
+
+Structural failures (§3.1) are grammar violations. But most real DSLs also enforce
+*semantic* rules that parse fine and are still illegal — a state-machine DSL where a
+transition names an undeclared state, a protocol DSL where a `reply` precedes its
+`request`. These live as `check`s in a Tier-3 elab. The author declares them as their
+own failure points, and the facility folds them into the same `Diagnosis` sum:
+
+```
+macro protocol
+  ...
+  # a semantic failure the grammar cannot express — the author names and raises it
+  fail ReplyBeforeRequest(state: Code)     # extends Diagnosis with one constructor
+  ...
+  elab computed by fn(rules) =
+    check request_precedes_reply(rules)
+      else fail ReplyBeforeRequest(offending_state(rules))
+
+  explain
+    ReplyBeforeRequest(s) =>
+      "a reply must follow a request — `" <> show(s) <> "` replies with none open"
+```
+
+`fail C(args)` declares an author failure point `C`; raising it in an elab
+(`else fail C(…)`) is the only way to produce it. The exhaustiveness check of §3.2
+covers **both** the derived structural points **and** every author-declared `C` — a
+`fail` constructor with no matching `explain` clause is the same
+`missing_diagnosis` compile error. So "the creator defines what a failure *is*" is
+literal: authors introduce failure modes their DSL's meaning requires, and the type
+system forces each to be described and routes it through the DSL's vocabulary,
+identically to a grammar failure. Semantic checks therefore do **not** fall back to
+the general never-raw path unless the author deliberately leaves them undeclared;
+declared ones are first-class, described diagnostics.
+
+A `fail` point can be **generated** too (§4): the fuzzer that hits a `check … else
+fail C` path exercises `C`'s `explain`, so an author-declared failure with a crashing
+or ill-typed description is caught at macro-compile like any other.
+
 ## 4. Mechanism 2 — generative expansion safety (Antigen for DSLs)
 
 This is the fix for the soft spot: "a program that parses expands soundly" must be
@@ -141,6 +195,15 @@ the macro's `becomes`/`elab`**, and it makes the **macro fail to compile**, repo
 with the offending generated input, the expansion, and the kernel error (shrunk, via
 Antigen's existing shrinker). The author fixes the expansion before shipping; the DSL
 *user* never meets it as a confusing kernel error at use-time.
+
+**Two run depths (settled decision 3).** A **bounded smoke fuzz** (a small,
+deterministic seed budget) gates *every* macro compile, so obvious expansion bugs
+fail fast and compiling a macro stays cheap. A **deep run** — `cure <macro> prove`,
+the full Antigen budget with the coverage manifest — is the CI/on-demand gate that
+drives the residual toward Antigen's ceiling. The smoke run is a subset of the deep
+run's generators, so a green smoke run is a true (if shallow) sample, never a
+different check. A macro's manifest records which rules and `fail` points the deep
+run has exercised, so coverage gaps are visible, not silent.
 
 ### 4.3 Why this is sound to reuse Antigen
 
@@ -232,8 +295,9 @@ capability; it can ship after the safety core.
 
 | Concern | Author writes | Facility derives / enforces |
 |---|---|---|
-| Grammar | `syntax` rules (examples-with-holes) | the `Diagnosis` failure enumeration (§3.1) |
-| Parse errors | `explain` clauses / category `describe` | exhaustiveness over `Diagnosis` (§3.2); interception (§3.3) |
+| Grammar | `syntax` rules (examples-with-holes) | the *structural* `Diagnosis` points (§3.1) |
+| Semantic failures | `fail C(args)` declarations + `check … else fail C` | folds `C` into `Diagnosis` (§3.4) |
+| Failure descriptions | `explain` clauses / category `describe` | exhaustiveness over the *whole* `Diagnosis` (§3.2/§3.4); interception (§3.3) |
 | Expansion | `becomes` / `computed by f` | generative valid-parse fuzz + kernel-check gate (§4) |
 | Intent | one `example … expands …` per rule | parse+expand+check the examples (§5) |
 | Layout | `region delimited by …` (or default) | hand the span to the macro (§6) |
