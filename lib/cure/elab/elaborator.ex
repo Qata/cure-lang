@@ -692,6 +692,13 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
 
+  # `return e` — in tail position it IS the value of the enclosing function or
+  # branch, so it elaborates as the identity on `e`. The classic throw/catch
+  # unwind is dropped (a total language has no such escape); the STRUCTURED
+  # tail-position meaning is all that survives.
+  def elaborate_expr_typed({:early_return, _meta, [e]}, names, ctx, env),
+    do: elaborate_expr_typed(e, names, ctx, env)
+
   # Integer range `a..b` (exclusive) / `a..=b` (inclusive). Desugars to a call to
   # the total structurally-recursive helper `Std.Nat.range_upto{,_incl}` (auto-
   # prelude, so no `use` is needed) — the honest analog of Idris's `enumFromTo`.
@@ -1401,6 +1408,11 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:block, _meta, stmts}, expected_core, names, ctx, env) do
     elaborate_let_block(stmts, expected_core, names, ctx, env)
   end
+
+  # `return e` in a checking position (e.g. an `if`/`match` branch tail): the
+  # identity on `e`, checked against the expected type. See the inference clause.
+  def elaborate_expr_checked({:early_return, _meta, [e]}, expected_core, names, ctx, env),
+    do: elaborate_expr_checked(e, expected_core, names, ctx, env)
 
   # Dependent-pair introduction `%[a, b]` in checking mode. The expected type must
   # be the builtin inductive Sigma; elaborate `a` against its domain, then `b`
