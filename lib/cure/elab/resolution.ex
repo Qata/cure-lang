@@ -129,16 +129,85 @@ defmodule Cure.Elab.Resolution do
     def_map =
       Enum.reduce(owned_def_names, %{}, fn d, acc -> Map.put(acc, d, rekey_atom(module_id, d)) end)
 
+    # A compiler-generated anonymous-union family (`Union<Int|Point>`) is not "owned"
+    # by any surface declaration, so it is in neither `owned_family_names` nor
+    # `rekeyed_ctor_names` — yet its ctor payload types may reference a type that IS
+    # being re-keyed. `rekey_ctors/4` already rewrites every ctor's ARG TYPES via
+    # `amap`, so the payload follows for free; what does not follow is the family's
+    # own CONTENT-DERIVED key and its ctor names (whose prefix is that key).
+    #
+    # Left alone, the imported module's `Union<Int|Point>` would keep a key naming a
+    # `Point` that no longer exists under that name, and would silently unify with the
+    # importing program's own, unrelated `Union<Int|Point>`. Recompute the key from
+    # the re-keyed members and fold the renames into `amap`, so the existing rewriters
+    # move every `{:data,…}` / `{:ctor,…}` / `{:case,…}` occurrence for us.
+    {amap, union_families, union_ctors} = union_renames(env, amap, def_map)
+
     %Env{
       env
-      | families: rekey_families(env.families, owned_family_names, amap, def_map),
-        ctors: rekey_ctors(env.ctors, rekeyed_ctor_names, amap, def_map),
+      | families:
+          rekey_families(
+            env.families,
+            MapSet.union(owned_family_names, union_families),
+            amap,
+            def_map
+          ),
+        ctors:
+          rekey_ctors(env.ctors, MapSet.union(rekeyed_ctor_names, union_ctors), amap, def_map),
         ctor_to_family: rekey_c2f(env.ctor_to_family, amap),
         defs: rekey_defs(env.defs, owned_def_names, module_id, amap, def_map),
         certified: rekey_certified(env.certified, owned_def_names, module_id),
         builtins: rekey_builtins(env.builtins, amap)
     }
   end
+
+  # Extend `amap` with old -> new names for every generated union family whose member
+  # set changes under the re-key, and return the family/ctor key-sets that therefore
+  # need MOVING (not merely rewriting). A union that mentions nothing being re-keyed
+  # recomputes to its own key and is left completely alone.
+  defp union_renames(%Env{} = env, amap, def_map) do
+    env.families
+    |> Map.keys()
+    |> Enum.filter(&Cure.Elab.Union.union_family?/1)
+    |> Enum.reduce({amap, MapSet.new(), MapSet.new()}, fn old_key, {amap, fams, ctors} ->
+      old_prefix = Atom.to_string(old_key) <> "$"
+
+      members =
+        env
+        |> Inductive.ctors_of(old_key)
+        |> Enum.map(fn c ->
+          case c.args do
+            # A nullary ctor is a LITERAL member — its key is a value, never a type
+            # name, so nothing can re-key it.
+            [] ->
+              %{key: strip_prefix(c.name, old_prefix), old_ctor: c.name}
+
+            [{_n, ty}] ->
+              %{
+                key: Cure.Elab.Union.member_key(rekey_term(ty, amap, def_map)),
+                old_ctor: c.name
+              }
+          end
+        end)
+        |> Enum.sort_by(& &1.key)
+
+      new_key = Cure.Elab.Union.family_key(members)
+
+      if new_key == old_key do
+        {amap, fams, ctors}
+      else
+        {amap, ctors} =
+          Enum.reduce(members, {Map.put(amap, old_key, new_key), ctors}, fn m, {a, cs} ->
+            {Map.put(a, m.old_ctor, Cure.Elab.Union.ctor_key(new_key, m)), MapSet.put(cs, m.old_ctor)}
+          end)
+
+        {amap, MapSet.put(fams, old_key), ctors}
+      end
+    end)
+  end
+
+  defp strip_prefix(name, prefix),
+    do: name |> Atom.to_string() |> String.replace_prefix(prefix, "")
 
   defp rekey_atom(module_id, bare), do: String.to_atom(module_id <> "#" <> Atom.to_string(bare))
 

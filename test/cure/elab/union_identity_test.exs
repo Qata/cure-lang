@@ -1,0 +1,137 @@
+defmodule Cure.Elab.UnionIdentityTest do
+  @moduledoc """
+  The load-bearing soundness property of anonymous unions.
+
+  Because a union's family name is CONTENT-DERIVED, two modules writing the same
+  union must land on the same family (or a value built in one will not typecheck in
+  the other) — and two modules whose members merely SHARE A BARE NAME but are
+  unrelated types must NOT (or the two collapse into one family and the type system
+  silently conflates them).
+  """
+  use ExUnit.Case, async: true
+
+  alias Cure.Core.Inductive
+  alias Cure.Elab.{Program, Union}
+
+  defp union_families(env) do
+    env.families |> Map.keys() |> Enum.filter(&Union.union_family?/1) |> Enum.sort()
+  end
+
+  describe "cross-module identity" do
+    test "two modules writing the same union share ONE family" do
+      src = """
+      mod A
+        fn mk(n: Int) -> Int | Bool = n
+      end
+
+      mod B
+        fn mk2(n: Int) -> Bool | Int = n
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert union_families(env) == [:"Union<Bool|Int>"]
+    end
+
+    test "a union value built in A typechecks and eliminates in B" do
+      src = """
+      mod A
+        fn mk(n: Int) -> Int | Bool = n
+      end
+
+      mod B
+        use A
+        fn out(n: Int) -> Int = match A.mk(n)
+          i: Int -> i
+          b: Bool -> 0
+      end
+      """
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+  end
+
+  # Two SIBLING modules in one source may not both declare `Point` — that is a hard
+  # `:sibling_module_collision`. The shadowing hazard is reachable only across an
+  # IMPORT boundary: a local declaration shadows an imported module's type, and
+  # `Resolution.rekey_module_env/3` re-keys the imported (loser) module's `Point` to
+  # `:"Mod#Point"`.
+  #
+  # A compiler-GENERATED union family is not "owned" by any surface declaration, so it
+  # is not in the rekey pass's owned-names set. These tests pin that its ctor payload
+  # types and its own content-derived key are nonetheless rewritten — otherwise the
+  # imported module's `Union<Int|Point>` would keep a DANGLING bare `:Point` payload
+  # and would collide with the importing program's own, unrelated `Union<Int|Point>`.
+  describe "shadowing across an import: a generated union family must be rekeyed too" do
+    alias Cure.Core.{Env, Grade}
+    alias Cure.Elab.Resolution
+
+    setup do
+      point = {:data, :Point, [], []}
+      ukey = :"Union<Int|Point>"
+
+      env =
+        %Env{}
+        |> Inductive.declare(Inductive.family(:Point, [], [], 0), [
+          Inductive.ctor(:APoint, [], [])
+        ])
+        |> Inductive.declare(Inductive.family(ukey, [], [], 0), [
+          Inductive.ctor(:"Union<Int|Point>$Int", [{:v, {:int_type}}], [], [Grade.unrestricted()]),
+          Inductive.ctor(:"Union<Int|Point>$Point", [{:v, point}], [], [Grade.unrestricted()])
+        ])
+        |> Env.add_def(
+          :mk,
+          {:pi, Grade.unrestricted(), point, {:data, ukey, [], []}},
+          {:ctor, :"Union<Int|Point>$Point", [{:var, 0}]}
+        )
+
+      %{env: env}
+    end
+
+    test "the union family's KEY is recomputed from the rekeyed member", %{env: env} do
+      out = Resolution.rekey_module_env(env, "M", MapSet.new([:Point]))
+
+      assert Map.has_key?(out.families, :"Union<Int|M#Point>")
+
+      # The stale, bare-Point key must be GONE — leaving it would let this imported
+      # union be conflated with an unrelated local `Point | Int`.
+      refute Map.has_key?(out.families, :"Union<Int|Point>")
+    end
+
+    test "the union ctor's payload type is rewritten to the qualified member", %{env: env} do
+      out = Resolution.rekey_module_env(env, "M", MapSet.new([:Point]))
+
+      ctor = out.ctors[:"Union<Int|M#Point>$M#Point"]
+      assert [{:v, {:data, :"M#Point", [], []}}] = ctor.args
+      assert out.ctor_to_family[:"Union<Int|M#Point>$M#Point"] == :"Union<Int|M#Point>"
+
+      refute Map.has_key?(out.ctors, :"Union<Int|Point>$Point")
+    end
+
+    test "occurrences in def bodies and types follow the rename", %{env: env} do
+      out = Resolution.rekey_module_env(env, "M", MapSet.new([:Point]))
+
+      assert {:ctor, :"Union<Int|M#Point>$M#Point", [{:var, 0}]} = out.defs[:mk].body
+
+      assert {:pi, _, {:data, :"M#Point", [], []}, {:data, :"Union<Int|M#Point>", [], []}} =
+               out.defs[:mk].type
+    end
+
+    test "a union with NO rekeyed member is left completely alone", %{env: env} do
+      # Union<Bool|Int> mentions nothing being rekeyed, so it must keep its key and
+      # its ctors untouched — the pass must not churn unrelated generated families.
+      bool = {:data, :Bool, [], []}
+
+      env =
+        Inductive.declare(env, Inductive.family(:"Union<Bool|Int>", [], [], 0), [
+          Inductive.ctor(:"Union<Bool|Int>$Bool", [{:v, bool}], [], [Grade.unrestricted()]),
+          Inductive.ctor(:"Union<Bool|Int>$Int", [{:v, {:int_type}}], [], [Grade.unrestricted()])
+        ])
+
+      out = Resolution.rekey_module_env(env, "M", MapSet.new([:Point]))
+
+      assert Map.has_key?(out.families, :"Union<Bool|Int>")
+      assert Map.has_key?(out.ctors, :"Union<Bool|Int>$Int")
+    end
+  end
+end
