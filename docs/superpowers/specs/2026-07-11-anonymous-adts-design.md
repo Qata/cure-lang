@@ -125,6 +125,25 @@ ADT with constructors `A` and `B`" and always will. Unions exist only in type-*e
 position. `typealias Payload = Int | String` names one; being an alias, it introduces no
 constructors.
 
+**A second, smaller grammar addition: typed patterns in `match` arms.** §9's elimination
+syntax (`n: Int => …`, `s: String => …`) needs a pattern shape — `identifier : TypeExpr`
+— that does not exist today at the *top level* of a match arm's pattern. Patterns are
+parsed by reusing the expression grammar (`parse_match_arm` calls `parse_expr/2`,
+`parser.ex:2076-2079`), and the only existing `identifier`-then-`:` handling is
+`parse_map_pair`'s field-punning shorthand (`key: value`, `parser.ex:973`), which is
+reachable in pattern position only *nested inside* a record/map pattern's braces
+(`Point{x: 1, y}`) — it associates a field name with a sub-pattern, not a bare binder
+with a type. A top-level `n: Int` pattern needs a genuinely new production. This is
+new, but small and consistent with the rest of this design: one new pattern-parse
+rule, no new pattern grammar for anything *other* than a bare identifier followed by a
+type expression, and it elaborates to an ordinary bind-then-check (a checked `case`
+branch pattern), so it stays inside the "Surface + elaborator" scope and does not
+touch the kernel. The rule belongs at the level `parse_expr` recurses through for
+*any* sub-pattern (so it also works nested inside a constructor argument, e.g.
+`Cons(n: Int, rest)`), not as a special case wired only into `parse_match_arm`'s
+top-level entry — a union member can appear anywhere a type can, so its pattern
+counterpart should be admissible anywhere a pattern can.
+
 ### 5.2 Admission rules
 
 Both are compile errors, and both are deliberate narrowings that keep this a zero-TCB
@@ -142,19 +161,57 @@ A union's **identity is its canonical member list**, computed by:
 
 1. **Flatten** — `(A | B) | C` ≡ `A | B | C`. `typealias` members are unfolded first,
    so with `typealias P = Int | String`, the type `P | Bool` is a three-member union.
-2. **Normalise** each member (unfold `typealias`, whnf) to a ground Core type or a
-   literal.
+2. **Normalise** each member (unfold `typealias`, then reduce to **full normal
+   form** via `Cure.Core.Normalise.nf/3` — not `Normalise.whnf/3`) to a ground Core
+   type or a literal. This must be `nf`, not `whnf`: `Normalise` (`lib/cure/core/
+   normalise.ex:1-9`) is explicit that the two are different reduction *policies*
+   (`whnf/3` at `normalise.ex:24-33`, `nf/3` at `normalise.ex:35-44`, selected by a
+   `:mode, :whnf | :nf` option), and plain `eval` (`lib/cure/core/eval.ex:62-63`)
+   evaluates a `{:data, name, params, indices}` node's params/indices as *values* but
+   leaves a neutral global application inside an index (`{:app, {:global, :+}, …}`,
+   e.g. an index written `1+1`) as a stuck neutral rather than the literal `2` —
+   folding that requires the certified-δ pass `Normalise` gates behind its `:delta`
+   option (`normalise.ex:15-22`; the literal-spine folder is `Eval.fold/2`,
+   `eval.ex:266-320`, referenced from `eval.ex:68-69`). Without full nf, two ground,
+   closed, *definitionally equal* members — `Bounded(1+1)` and `Bounded(2)`, or two
+   `typealias`es that unfold to the same type through different arithmetic — could
+   print as different keys and silently produce two distinct generated families for
+   what the kernel considers one type, breaking the cross-module identity property
+   in §13.
 3. **Key** each member by its **type-distinguishing canonical printing**: `Int`,
    `List(Int)`, `"4"`, `:4`, `4`. The key carries the syntax that identifies the
    *type*, not merely the value — this is what keeps `"4"` (a `String`) and `:4` (an
    `Atom`) distinct rather than colliding on `4`. **Numerals key as `(type, value)`**,
    so `4 : Int` and `4 : Nat` are different members; the union-member position defers
    to the existing numeric-literal defaulting rule rather than inventing one.
+   **The key is derived from the *resolved* family identity, not the bare surface
+   name.** Cure already has a case where two distinct types can carry the same bare
+   display name — a local declaration shadowing an imported one — and the existing
+   E-layer fix (`Resolution.rekey_module_env`, Approach B, `lib/cure/elab/resolution.ex`)
+   re-keys the loser to a qualified `:"Mod#Name"` atom precisely so the two stay
+   distinguishable. Canonicalisation must key off that *already-disambiguated* atom
+   (post-rekeying, qualified when the member is a shadowed or module-private type),
+   not a naive `display/1`-style name. Keying off the bare name would let two modules
+   that each declare an unrelated local `Point` collide into one generated
+   `Union⟨…,Point,…⟩` family and be treated as definitionally equal — the same shape
+   of provenance bug this codebase already has an open, unfixed instance of elsewhere:
+   anonymous typeclass-implementation names are mangled from `iface`/`head`/`method`
+   only, with no module component (`:"__impl_#{iface}_#{head}_#{method}"`,
+   `lib/cure/elab/implementation.ex:306`), so two modules' unrelated anonymous
+   `impl Show for Int` blocks generate the identical atom and a cross-module overlap
+   goes undetected. This design must not repeat that mistake for union family names.
 4. **Dedupe** by key.
 5. **Sort** keys lexicographically. `Int | String` and `String | Int` therefore produce
    the identical list.
 6. **Collapse** — a one-member union *is* that member (`Int | Int` is just `Int`; no
    family is generated). A zero-member union is unwritable by construction.
+
+**Ordering note.** §5.2's admission checks (ground/closed, literal-type overlap) run
+*after* step 2's normalisation, not on the raw surface member list — otherwise
+`typealias T = Int` followed by `T | 3` would slip past the literal/type-overlap
+rejection, since the checker would see an opaque alias name `T` rather than `Int` at
+the point of comparison. Both admission rules in §5.2 are defined over the
+*canonical* (post-normalisation) member list.
 
 The sorted key list **names** the generated family: `Union⟨Int,String⟩`.
 
@@ -178,7 +235,7 @@ Int | String
   ⟶  data Union⟨Int,String⟩ = Int(Int) | String(String)
 
 3 | :north | List(Int)
-  ⟶  data Union⟨3,:north,List(Int)⟩ = 3 | north | List(Int)(List(Int))
+  ⟶  data Union⟨3,:north,List(Int)⟩ = 3 | :north | List(Int)(List(Int))
 ```
 
 - **Type members carry a payload** of that type.
@@ -267,6 +324,16 @@ match x {
 This is §8's widening remap run backwards. It is what makes wide unions bearable to
 consume, and is in scope for v1.
 
+A sub-union branch's constructor set may overlap an earlier branch's (e.g. `n: Int`
+then `m: Int | Bool`) — no new overlap rule is needed, but this must be resolved at
+*elaboration* time, not deferred to runtime: Core's `:case` takes one branch per
+constructor name (`branch :: {atom(), non_neg_integer(), t()}`, `term.ex:49`), so it
+cannot express two competing branches for the same member. The elaborator assigns
+each member to exactly one generated Core branch — the first surface branch (in
+source order) that names it — before lowering, exactly as ordinary overlapping
+`match`/`case` patterns are already resolved to a single-branch-per-constructor
+`:case` today.
+
 ## 10. Erasure and emit
 
 **One uniform tagged rule. No exceptions.**
@@ -323,13 +390,25 @@ generated family.
 
 ## 12. Classic-pipeline coexistence
 
-The parser is shared, so the classic checker will encounter `{:union_type, members}` in
-type-expression position and must not crash.
+The parser is shared, so the classic checker will encounter `{:union_type, meta, members}`
+in type-expression position and must not crash.
 
 Classic **already has** a structural `{:union, [...]}` type with real subtyping
-(`lib/cure/types/type.ex:24-29`, `212-219`) that no `.cure` source currently exercises.
-Classic maps the new node onto that existing union and gets a serviceable approximation
-for free.
+(`lib/cure/types/type.ex:24-29`, `212-219`), produced today only from the
+declaration-body path (`checker.ex:484`, classifying `type X = A | B` as a union of
+pre-existing aliases) — no `.cure` source exercises it from type-*expression*
+position. `Type.resolve/1`, which *does* dispatch on type-expression AST, has no
+clause for the new `{:union_type, meta, members}` node, so it falls through to the
+existing catch-all `def resolve(_), do: :any` (`type.ex:362`). That catch-all is what
+makes "must not crash" true — it is a **pre-existing, unconditional fallback**, not a
+new lowering path, so this really does cost zero new classic code. But it does **not**
+map the new node onto `{:union, [...]}` — an anonymous union is opaque to classic as
+`:any` (Cure's top type), not a real structural union with the subtyping described
+above. "Serviceable approximation" overstates it: classic's approximation is the
+*coarsest* one available, not the tailored `{:union,…}` type. Wiring the new node to
+the real `{:union,…}` type would need one new `Type.resolve/1` clause — small, but not
+zero, and not required, since classic's role here is only to not crash while the
+dependent pipeline does the real checking.
 
 No new classic work, and no coupling to the #18 rip-out in either direction.
 
@@ -341,6 +420,15 @@ No new classic work, and no coupling to the #18 rip-out in either direction.
   - `(A | B) | C` flattens to three members.
   - `"4"` and `:4` do not collide.
   - `typealias` members unfold before keying.
+  - **Full-nf soundness** (§6 step 2): two definitionally-equal-but-syntactically-distinct
+    ground members (e.g. a `Bounded` index written as a reducible arithmetic expression
+    vs. its already-reduced literal) key identically, not as two distinct families.
+  - **Resolved-identity soundness** (§6 step 3): two unrelated same-named local types
+    declared in two different, non-importing modules (the shadowing case) key
+    *differently* — they must NOT be merged into one cross-module family.
+  - **Admission-order soundness**: `typealias T = Int` followed by `T | 3` is still
+    rejected as a literal/type overlap (the admission check sees the unfolded `Int`,
+    not the opaque alias name `T`).
 - **Cross-module identity** — the load-bearing property. Two modules independently
   writing `Int | String` must produce the same `{:data, name}` and interoperate. A
   link-tier test in the shape of the existing `dependent_emit_link_test`.
