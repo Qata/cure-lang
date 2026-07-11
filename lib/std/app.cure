@@ -8,6 +8,13 @@ mod Std.App
   ## `:application` BIFs, so Cure code sees plain atoms and values
   ## rather than OTP's tagged-tuple return shapes.
   ##
+  ## Application environment values are heterogeneous (OTP `term()`), so
+  ## the accessors are polymorphic in the stored/returned value type:
+  ## `get_env`/`get_env_or` return the value at the caller's expected
+  ## type, and `put_env` stores a value of any type. This is the typed
+  ## FFI boundary — the `@extern` wrapper is the trust point, exactly as
+  ## `application:get_env` returns an untyped `term()`.
+  ##
   ## ## Examples
   ##
   ## ```cure
@@ -15,7 +22,7 @@ mod Std.App
   ##
   ## ensure_all_started(:cure)
   ## put_env(:my_app, :port, 4000)
-  ## get_env(:my_app, :port, 8080)           # => 4000
+  ## get_env_or(:my_app, :port, 8080)         # => 4000
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
@@ -32,23 +39,24 @@ mod Std.App
   @extern(Elixir.Cure.App.Builtins, :stop, 1)
   fn stop(name: Atom) -> Atom
 
-  ## Fetch an environment variable. Returns `nil` when unset.
+  ## Fetch an environment variable at the caller's expected type.
+  ## Returns `nil` when unset.
   @extern(Elixir.Cure.App.Builtins, :get_env, 2)
-  fn get_env(name: Atom, key: Atom) -> Any
+  fn get_env(name: Atom, key: Atom) -> a
 
   ## Fetch an environment variable, falling back to `default` when
-  ## unset.
+  ## unset. The default and the result share the caller's value type.
   @extern(Elixir.Cure.App.Builtins, :get_env, 3)
-  fn get_env(name: Atom, key: Atom, default: Any) -> Any
+  fn get_env_or(name: Atom, key: Atom, default: a) -> a
 
   ## Set an environment variable for an application.
   @extern(Elixir.Cure.App.Builtins, :put_env, 3)
-  fn put_env(name: Atom, key: Atom, value: Any) -> Atom
+  fn put_env(name: Atom, key: Atom, value: a) -> Atom
 
   ## Return a list of `%[name, description, vsn]` tuples for every
   ## currently-running application.
   @extern(Elixir.Cure.App.Builtins, :which_applications, 0)
-  fn which_applications() -> List(Tuple)
+  fn which_applications() -> List(Tuple(Atom, a, b))
 
   ## Return a list of every loaded application's name atom.
   @extern(Elixir.Cure.App.Builtins, :loaded_applications, 0)
@@ -58,4 +66,4 @@ mod Std.App
   ## Normally the OTP boot script drives this; exposed here for
   ## tests and scripted scenarios.
   @extern(Elixir.Cure.App.Builtins, :start_phase, 3)
-  fn start_phase(name: Atom, phase: Atom, phase_args: Any) -> Atom
+  fn start_phase(name: Atom, phase: Atom, phase_args: a) -> Atom

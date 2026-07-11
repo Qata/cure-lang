@@ -11,12 +11,12 @@ defmodule Cure.Stdlib.PreloadClosureTest do
     assert :"Cure.Std.Nat" in Map.fetch!(deps, :"Cure.Std.Bounded")
   end
 
-  test "baked closure deps carry qualified-call targets (Access -> List/Map/Pair)" do
+  test "baked closure deps carry qualified-call targets (Vector -> Nat/Bounded)" do
     deps = Preload.module_closure_deps()
-    access = Map.fetch!(deps, :"Cure.Std.Access")
+    vector = Map.fetch!(deps, :"Cure.Std.Vector")
 
-    for m <- [:"Cure.Std.List", :"Cure.Std.Map", :"Cure.Std.Pair"] do
-      assert m in access, "expected #{m} in Access closure, got #{inspect(access)}"
+    for m <- [:"Cure.Std.Nat", :"Cure.Std.Bounded"] do
+      assert m in vector, "expected #{m} in Vector closure, got #{inspect(vector)}"
     end
   end
 

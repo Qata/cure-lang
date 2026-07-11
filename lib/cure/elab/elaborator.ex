@@ -1263,8 +1263,17 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, {:unsolved_metavariables, _}} = orig ->
-            if implicit_def?(env, atom) and not Unify.has_meta?(expected_core) do
-              case elaborate_global_app_expected(env, atom, args, names, ctx, expected_core) do
+            # Resolve a qualified (`Std.Map.keys`) or bare-shadowed name to its
+            # registry key BEFORE the implicit-def retry, mirroring the inference
+            # dispatch (`resolved` at the top of `elaborate_named_call_scoped`).
+            # Without this, a dotted call's `atom` (`:"Std.Map.keys"`) is not a def
+            # key, so `implicit_def?` is false and the expected return type is never
+            # threaded in — leaving a return-only implicit (e.g. `keys : {k} -> ... ->
+            # List(k)`) unsolved even though the goal `List(t)` determines it.
+            resolved = resolve_def_key(env, name, atom)
+
+            if implicit_def?(env, resolved) and not Unify.has_meta?(expected_core) do
+              case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
                 {:ok, term, _type} ->
                   with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
                     {:ok, term}
@@ -1891,6 +1900,25 @@ defmodule Cure.Elab.Elaborator do
     case Env.get_def(env, atom) do
       %{quantities: q} when is_list(q) -> :erased in q
       _ -> false
+    end
+  end
+
+  # Map a surface call name to its def-registry key: a qualified (`Std.Map.keys`)
+  # name resolves through the value namespace, a bare name through bare-shadowing;
+  # either falls back to the raw atom. Mirrors the `resolved` computation at the
+  # top of `elaborate_named_call_scoped` so the checked-mode retry looks up the
+  # same def the inference path does.
+  defp resolve_def_key(env, name, atom) do
+    if String.contains?(name, ".") do
+      case Cure.Elab.Resolution.resolve_qualified(env, name, :value) do
+        {:ok, key} -> key
+        :error -> atom
+      end
+    else
+      case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+        {:ok, key} -> key
+        _ -> atom
+      end
     end
   end
 
@@ -4357,13 +4385,18 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A pair `%[a, b]` (dependent-pair introduction) as a branch body: a
-  # checking-mode expression against this branch's (index-refined) Σ type — the
-  # expected type pins the components' erased indices (an FRP `step`'s `prim()`
-  # continuation has no other way to solve its index metas). Without this a
-  # Σ-returning eliminator fails its arms with `:unsupported_expression`.
-  defp elaborate_branch_body({:tuple, _meta, [_a, _b]} = expr, expected, names, ctx, env),
-    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+  # A tuple `%[a, b, …]` (dependent-pair / flat Σ-telescope introduction) as a
+  # branch body: a checking-mode expression against this branch's (index-refined)
+  # Σ type — the expected type pins the components' erased indices (an FRP `step`'s
+  # `prim()` continuation has no other way to solve its index metas; likewise a
+  # flat n-ary tuple whose last component is a bare `[]` needs the goal's `List(_)`
+  # to solve the inner `Nil` element). Without this a Σ-returning eliminator fails
+  # its arms with `:unsupported_expression`, or an inner `[]` fails infer-only with
+  # `{:unsolved_metavariables, :Nil}`. Matches ANY arity ≥ 2: the 2-tuple is a bare
+  # dependent pair, arity ≥ 3 is the flat telescope (#35) — both check identically.
+  defp elaborate_branch_body({:tuple, _meta, elems} = expr, expected, names, ctx, env)
+       when length(elems) >= 2,
+       do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
   # A `[] -> []` (or `[a,b] -> [...]`) arm body: check it against the branch goal
   # so a bare `[]` arm pins its element type from the goal instead of failing

@@ -422,6 +422,31 @@ defmodule Cure.Elab.Program do
   end
 
   @doc """
+  Map each `use`-imported function name to the BEAM module atom that DEFINES it,
+  so dependent codegen can emit a REMOTE call for a cross-module reference rather
+  than an (undefined) local one. Built from the module's transitive import
+  closure (direct `use` + the auto-prelude), keyed by bare function name to the
+  `Cure.<Module>` atom that owns it; the first owner in import-BFS order wins.
+  This module's OWN local definitions are dropped from the map — a local
+  definition shadows an imported one, so a call to a locally-defined name stays
+  local. `Cure.Elab.Emit` consults this to route `{:global, name}` references
+  (the #18 dependent-only codegen enabler). A self-contained module (no
+  cross-module calls) yields an empty map and the old all-local behaviour.
+  """
+  @spec import_origins(tuple() | list()) :: %{atom() => module()}
+  def import_origins(ast) do
+    local = MapSet.new(local_def_names(ast))
+    sources = imports(ast) ++ auto_prelude_imports(ast)
+
+    transitive_import_modules(sources)
+    |> Enum.reduce(%{}, fn {mod_id, path}, acc ->
+      module = String.to_atom("Cure." <> mod_id)
+      Enum.reduce(owned_def_names(path), acc, &Map.put_new(&2, &1, module))
+    end)
+    |> Map.drop(MapSet.to_list(local))
+  end
+
+  @doc """
   Names of the globals synthesised by `implementation` declarations (the mangled
   per-method impl bodies + any dictionary values). Codegen must emit these as
   module locals; `Cure.Elab.Resolve` references them by name.
