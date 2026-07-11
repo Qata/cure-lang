@@ -692,6 +692,18 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
 
+  # Integer range `a..b` (exclusive) / `a..=b` (inclusive). Desugars to a call to
+  # the total structurally-recursive helper `Std.Nat.range_upto{,_incl}` (auto-
+  # prelude, so no `use` is needed) — the honest analog of Idris's `enumFromTo`.
+  # The list construction is genuine recursion; only the `Int -> Nat` count cast
+  # (`Std.Nat.of_int`) is a trusted primitive boundary.
+  def elaborate_expr_typed({:range, meta, [from_ast, to_ast]}, names, ctx, env) do
+    fname = if Keyword.get(meta, :inclusive, false), do: "range_upto_incl", else: "range_upto"
+    line = Keyword.get(meta, :line, 0)
+    call = {:function_call, [name: fname, line: line], [from_ast, to_ast]}
+    elaborate_expr_typed(call, names, ctx, env)
+  end
+
   # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
   # `let` rhs, any sub-term the checked tuple clause at line ~1137 doesn't reach).
   # Synthesizes the non-dependent Σ `Sigma(A, λ_:A. B)` from the inferred component
