@@ -386,7 +386,13 @@ defmodule Cure.Elab.Declarations do
            # opaque neutral and a `match` on it fails `:case_scrutinee_not_data` — a
            # regression the first cut of this slice shipped (adversarial review F1).
            # The grade check is all slice 6 needs, and it is O(telescope depth).
-           :ok <- assert_binder_grades_agree(final_pi, lambda, sig.name) do
+           :ok <- assert_binder_grades_agree(final_pi, lambda, sig.name),
+           # §5.3: an `Effect`-typed binder may not be `:erased`. Erasure deletes
+           # erased binders, so an erased `Effect(T)` binder would silently drop a
+           # computation the type says must run. Walk the final Pi spine and reject.
+           # (Syntactic head-check; the `no_effect_in_erased_position` Validator
+           # clause is the trusted backstop for an aliased effect type, §8.)
+           :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
         final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
@@ -955,6 +961,20 @@ defmodule Cure.Elab.Declarations do
 
   # Spines exhausted in lockstep (both built from the same telescope) — agreed.
   defp grade_spine_mismatch(_pi_cod, _lam_body), do: nil
+
+  # §5.3: reject an `:erased` binder whose domain is `Effect`-headed — erasure
+  # would delete a computation the type says must run. Walks the Pi spine like
+  # `grade_spine_mismatch`; a non-Pi tail (the return type) ends the walk.
+  defp assert_no_erased_effect_binder({:pi, g, dom, cod}, name) do
+    if Grade.erased?(g) and effect_headed?(dom),
+      do: {:error, {:effect_binder_erased, name}},
+      else: assert_no_erased_effect_binder(cod, name)
+  end
+
+  defp assert_no_erased_effect_binder(_non_pi, _name), do: :ok
+
+  defp effect_headed?({:effect_type, _}), do: true
+  defp effect_headed?(_), do: false
 
   defp binder_grades(nil, n), do: List.duplicate(Cure.Core.Grade.unrestricted(), n)
 
