@@ -37,9 +37,10 @@ defmodule Cure.Elab.Emit do
   def compile_and_load(%Env{} = env, opts) do
     module = Keyword.fetch!(opts, :module)
     names = Keyword.fetch!(opts, :functions)
+    origins = Keyword.get(opts, :origins, %{})
 
     with :ok <- reject_holes(env, names) do
-      BeamWriter.compile_and_load(module_forms(env, module, names))
+      BeamWriter.compile_and_load(module_forms(env, module, names, origins))
     end
   end
 
@@ -69,10 +70,20 @@ defmodule Cure.Elab.Emit do
   them, but an importing module should emit only its own local definitions.
   """
   @spec compile_forms(Env.t(), module(), [atom()]) :: {:ok, [tuple()]} | {:error, term()}
-  def compile_forms(%Env{} = env, module, names) do
+  def compile_forms(%Env{} = env, module, names), do: compile_forms(env, module, names, %{})
+
+  @doc """
+  As `compile_forms/3`, but with an `origins` map (`%{fun_atom => Cure.<Module>}`,
+  from `Cure.Elab.Program.import_origins/1`) routing `use`-imported cross-module
+  `{:global, name}` references to REMOTE calls instead of undefined local ones.
+  An empty map (the /3 default) preserves the all-local behaviour of a
+  self-contained module.
+  """
+  @spec compile_forms(Env.t(), module(), [atom()], map()) :: {:ok, [tuple()]} | {:error, term()}
+  def compile_forms(%Env{} = env, module, names, origins) do
     with :ok <- reject_holes(env, names) do
       try do
-        {:ok, module_forms(env, module, names)}
+        {:ok, module_forms(env, module, names, origins)}
       rescue
         e in ArgumentError -> {:error, {:cannot_emit, Exception.message(e)}}
       end
@@ -81,15 +92,55 @@ defmodule Cure.Elab.Emit do
 
   @doc "The Erlang abstract forms for `functions` in `env`, as module `module`."
   @spec module_forms(Env.t(), module(), [atom()]) :: [tuple()]
-  def module_forms(%Env{} = env, module, names) do
-    fn_forms = Enum.map(names, &function_form(env, &1))
-    exports = Enum.map(fn_forms, fn {:function, _l, name, arity, _cls} -> {name, arity} end)
+  def module_forms(%Env{} = env, module, names), do: module_forms(env, module, names, %{})
 
-    [
-      {:attribute, @line, :module, module},
-      {:attribute, @line, :export, exports}
-      | fn_forms
-    ]
+  @doc "As `module_forms/3`, with an import-`origins` map (see `compile_forms/4`)."
+  @spec module_forms(Env.t(), module(), [atom()], map()) :: [tuple()]
+  def module_forms(%Env{} = env, module, names, origins) do
+    # Stash the import origins for the two `{:global, name}` lowering sites; the
+    # de Bruijn `ctx` list threaded through `lower/3` has no room for a
+    # module-level constant, and the Core `Env` is TCB. Reset on every call
+    # (the /3 default passes `%{}`) so a self-contained module never inherits a
+    # previous module's origins.
+    Process.put(:cure_emit_origins, origins)
+
+    try do
+      fn_forms = Enum.map(names, &function_form(env, &1))
+      exports = Enum.map(fn_forms, fn {:function, _l, name, arity, _cls} -> {name, arity} end)
+
+      [
+        {:attribute, @line, :module, module},
+        {:attribute, @line, :export, exports}
+        | fn_forms
+      ]
+    after
+      Process.delete(:cure_emit_origins)
+    end
+  end
+
+  # The import-origins map for the module currently being emitted (see
+  # `module_forms/4`); `%{}` outside an emit or for a self-contained module.
+  defp emit_origins, do: Process.get(:cure_emit_origins, %{})
+
+  # Resolve a source `{:global, name}` to a REMOTE `{module, fun}` target or
+  # `:local`. A `#`-mangled qualified name (`Std.List#map`, from a qualified
+  # call or an `implementation` method body) carries its owner in the name; a
+  # bare name is looked up in the import `origins`; everything else stays local
+  # (this module's own def, or an auto-imported BEAM BIF).
+  defp remote_target(name, origins) do
+    s = Atom.to_string(name)
+
+    cond do
+      String.contains?(s, "#") ->
+        [mod, fun] = String.split(s, "#", parts: 2)
+        {String.to_atom("Cure." <> mod), String.to_atom(fun)}
+
+      (mod = Map.get(origins, name)) != nil ->
+        {mod, name}
+
+      true ->
+        :local
+    end
   end
 
   # -- functions --------------------------------------------------------------
@@ -292,8 +343,21 @@ defmodule Cure.Elab.Emit do
     case Env.builtin_op(env, name) do
       nil ->
         case present_arity(env, name) do
-          0 -> {:call, @line, {:atom, @line, name}, []}
-          n -> {:fun, @line, {:function, name, n}}
+          0 ->
+            case remote_target(name, emit_origins()) do
+              :local -> {:call, @line, {:atom, @line, name}, []}
+              {mod, fun} -> {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, []}
+            end
+
+          n ->
+            case remote_target(name, emit_origins()) do
+              :local ->
+                {:fun, @line, {:function, name, n}}
+
+              {mod, fun} ->
+                {:fun, @line,
+                 {:function, {:atom, @line, mod}, {:atom, @line, fun}, {:integer, @line, n}}}
+            end
         end
 
       op ->
@@ -447,7 +511,14 @@ defmodule Cure.Elab.Emit do
       # arguments apply (curried) to the function it returns — `mk()(z)`.
       {:global, name} ->
         {direct, extra} = Enum.split(args, present_arity(env, name))
-        base = {:call, @line, {:atom, @line, name}, Enum.map(direct, &lower(env, &1, ctx))}
+
+        callee =
+          case remote_target(name, emit_origins()) do
+            :local -> {:atom, @line, name}
+            {mod, fun} -> {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}
+          end
+
+        base = {:call, @line, callee, Enum.map(direct, &lower(env, &1, ctx))}
         Enum.reduce(extra, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
 
       # Applying a closure value (a lambda or a function-typed binder) is curried:
