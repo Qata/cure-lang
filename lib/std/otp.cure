@@ -1,0 +1,44 @@
+@group(:concurrency)
+mod Std.Otp
+  ## The typed BEAM process algebra — the sanctioned concurrency surface.
+  ##
+  ## A `Pid(m)` is a process handle that accepts messages of type `m`. The phantom
+  ## `m` is erased at runtime (a `Pid(m)` IS a raw `erlang:pid()`); its whole job is
+  ## static: sending the WRONG message type to a process is a COMPILE error — the
+  ## guarantee `Std.Otp.Raw`'s untyped `Pid` cannot give (design
+  ## 2026-07-10-checked-beam-concurrency §2, 2026-07-09-typed-beam-process-algebra).
+  ## Every operation performs a BEAM side effect, so it returns `Effect(T)`: the
+  ## effect discipline forbids duplicating, dropping, or reordering a `tell`/`cast`.
+  ##
+  ## This is the flat, one-way "typed channels" floor: `m` is a plain message ADT.
+  ## Synchronous `call` (request → reply) is NOT here — its reply is the dependent
+  ## `ReplyOf(req)` of a message-set CODE (a free reply cannot be solved from the
+  ## goal through an effectful extern), so it lands with the session-code ceiling:
+  ## `m` as a CODE with `subset`/`reply_of`, protocol-state evolution, and
+  ## `spawn`/`start_link` minting a typed channel. That rung-2/3 layer needs the
+  ## message-codes machinery + the macro facility to compile `process` behaviours,
+  ## and builds on exactly this typed one-way-messaging pair.
+  ## v1 declares the typed operations as effect-typed externs over the same stock
+  ## BEAM BIFs `Std.Otp.Raw` wraps; the sealing is that `Std.Otp.Raw` is `unsafe`
+  ## and `Std.Otp` is the sanctioned surface.
+
+  ## A typed process handle accepting messages of type `m`. Opaque + phantom: the
+  ## runtime value is a bare `erlang:pid()`; `m` exists only for the type checker.
+  opaque type Pid(m)
+
+  ## The calling process's own typed pid. `m` — the message set this process
+  ## accepts — is inferred from how the result is used.
+  @extern(:erlang, :self, 0)
+  fn self() -> Effect(Pid(m))
+
+  ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
+  ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
+  ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
+  ## the `p ! msg` surface and lower it to this.)
+  @extern(:erlang, :send, 2)
+  fn tell(dest: Pid(m), msg: m) -> Effect(Unit)
+
+  ## Asynchronous `gen_server` cast — a typed fire-and-forget message.
+  @extern(:gen_server, :cast, 2)
+  fn cast(server: Pid(m), msg: m) -> Effect(Unit)
+end
