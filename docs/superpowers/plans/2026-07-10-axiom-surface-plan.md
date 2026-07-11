@@ -31,7 +31,7 @@ These were confirmed by running the real elaborator. Tasks depend on them.
 | Fact | Value |
 |---|---|
 | `Cure.Core.Term.term?/1` clauses | `type, var, pi, lam, let, app, data, ctor, case, global, int_type, int_lit, nat_lit, bounded_lit, float_type, float_lit, binary_type, atom_type, atom_lit, hole, absurd` (`lib/cure/core/term.ex:61-97`) |
-| `Program.global_refs/1` | has **no `:let` clause**; falls through `defp global_refs(_leaf), do: []` (`program.ex:483`) |
+| `Program.global_refs/1` | **had no `:let` clause** (fixed `9166433`); still ends in a fail-open `defp global_refs(_leaf), do: []` — which is exactly why `Audit.Refs` raises instead |
 | Prelude-only env (`"mod Probe.Empty\nend\n"`) | 42 defs |
 | `Std.List` full env | 82 defs, 31 `builtin_op`, 3 externs |
 | `Std.List` **own** defs (env minus prelude) | 40 |
@@ -353,7 +353,7 @@ git commit -m "feat(core): add an untrusted Core.Term pretty-printer"
 
 ### Task 2: `Cure.Audit.Refs` — the fail-closed walker
 
-`Program.global_refs/1` ends in `defp global_refs(_leaf), do: []`. For codegen that is benign. For a ledger it is fatal: when the Core grammar grows a node, reachability silently under-reports and the ledger stops finding axioms. **This is not hypothetical — `global_refs/1` has no `:let` clause today**, so any global referenced only inside a `let` is already invisible to it.
+`Program.global_refs/1` ends in `defp global_refs(_leaf), do: []`. For codegen that is benign. For a ledger it is fatal: when the Core grammar grows a node, reachability silently under-reports and the ledger stops finding axioms. **This was not hypothetical — `global_refs/1` had no `:let` clause** (fixed `9166433` after `reachability_let_test.exs` reproduced it), so any global referenced only inside a `let` was invisible to it. The fail-open catch-all remains, which is why the ledger uses the fail-closed `Audit.Refs` instead.
 
 `Audit.Refs` enumerates every clause of `Core.Term.term?/1` explicitly and **raises** on anything else.
 
@@ -465,8 +465,9 @@ defmodule Cure.Audit.Refs do
   `Cure.Elab.Program.global_refs/1` ends in a catch-all `_leaf -> []`. That is
   benign for codegen and fatal for an audit: when the Core grammar grows a
   former, reachability silently under-reports and the ledger quietly stops
-  finding axioms. (It has already happened — `global_refs/1` has no `:let`
-  clause.)
+  finding axioms. (It had already happened — `global_refs/1` had no `:let`
+  clause until `9166433`; the fail-open catch-all it still ends in is why the
+  ledger uses this fail-closed walker instead.)
 
   Every clause of `Cure.Core.Term.term?/1` is enumerated here explicitly, and
   anything else raises. Untrusted; outside the TCB.

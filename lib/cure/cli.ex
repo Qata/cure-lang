@@ -1219,15 +1219,17 @@ defmodule Cure.CLI do
     # `Cure.Stdlib.Paths`, whose search chain is empty for a plain dev checkout
     # invoked from outside the repo — so the module would locate but silently
     # fail to elaborate and land in UNAUDITED, looking like a clean zero-axiom
-    # report. Seed the resolver with the known stdlib dir when nothing else is
-    # configured, so `cure audit trust` is CWD-independent.
-    if is_nil(Cure.Stdlib.Paths.configured_source_dir()) do
-      Application.put_env(:cure, :stdlib_source_dir, Cure.Audit.Source.std_dir())
+    # report. Seed the resolver with the known stdlib dir ONLY when nothing else
+    # already resolves (so a user's CURE_HOME/CURE_LIB is never shadowed).
+    case Cure.Audit.Source.import_seed_dir() do
+      nil -> :ok
+      dir -> Application.put_env(:cure, :stdlib_source_dir, dir)
     end
 
     audit_opts = [
       strict: Keyword.get(opts, :strict, false),
-      format: Keyword.get(opts, :format, "text")
+      format: Keyword.get(opts, :format, "text"),
+      verbose: Keyword.get(opts, :verbose, false)
     ]
 
     audit_opts =

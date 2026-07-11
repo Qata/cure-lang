@@ -51,6 +51,32 @@ defmodule Cure.Audit.FormatTest do
     assert text =~ ":re absent on atomvm"
   end
 
+  test "json carries the target-unavailable MFAs, not just the text report" do
+    # The Std.List CLI test can't exercise this — its axioms never match a
+    # target. Pin the actual content with an axiom that does.
+    r = %Report{
+      axioms: [%Axiom{mfa: {:re, :run, 3}, type: "Binary -> Binary", via: :run, bucket: :otp}]
+    }
+
+    with_target = Format.to_json(r, target: :atomvm)
+    assert with_target =~ ~s("unavailable_on_target":{"target":"atomvm","mfas":["re:run/3"]})
+
+    without = Format.to_json(r, [])
+    assert without =~ ~s("unavailable_on_target":null)
+  end
+
+  test "verbose surfaces the elaboration-failure reason for UNAUDITED modules" do
+    r = %Report{unaudited: [{"Std.Io", {:type_error, "no Semigroup String instance"}}]}
+
+    plain = Format.to_text(r, [])
+    assert plain =~ "UNAUDITED (1)"
+    refute plain =~ "Semigroup", "default report must not carry the reason"
+
+    verbose = Format.to_text(r, verbose: true)
+    assert verbose =~ "Std.Io"
+    assert verbose =~ "Semigroup String", "verbose must surface the reason"
+  end
+
   test "output is byte-identical across runs" do
     assert Format.to_text(report(), []) == Format.to_text(report(), [])
     assert Format.to_json(report(), []) == Format.to_json(report(), [])

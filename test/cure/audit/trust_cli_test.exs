@@ -20,6 +20,16 @@ defmodule Cure.Audit.TrustCLITest do
     assert File.exists?(Path.join(dir, "list.cure"))
   end
 
+  test "import_seed_dir seeds only when NOTHING already resolves the stdlib" do
+    # The CLI seeds the baked stdlib dir into the import resolver, but ONLY when
+    # no source dir already resolves — otherwise it would outrank (shadow) a
+    # stdlib the user configured via CURE_HOME/CURE_LIB, silently auditing the
+    # wrong code. `import_seed_dir/1` takes the RESOLVED dir, not just the
+    # Application-env override.
+    assert Source.import_seed_dir("/some/resolved/stdlib") == nil
+    assert Source.import_seed_dir(nil) == Source.std_dir()
+  end
+
   test "--target reaches the JSON payload, not only the text report" do
     {:ok, json} = CLI.run("Std.List", format: "json", target: :atomvm)
     assert json =~ ~s("unavailable_on_target":{"target":"atomvm")

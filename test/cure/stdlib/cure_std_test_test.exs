@@ -66,7 +66,9 @@ defmodule :cure_std_test_test do
     assert {:Error, value} =
              :cure_std_test.forall_shrunk(fn _ -> 100 end, fn _ -> :not_a_bool end, 5)
 
-    assert value < 100, "expected a shrunk value, got the raw first draw #{value}"
+    # Not merely "< 100" (which a single shrink step would satisfy): the property
+    # is never true, so shrinking must run all the way to the minimum, 0.
+    assert value == 0, "expected full minimisation to 0, got #{value}"
   end
 
   test "a negative run count is vacuously Ok, not a FunctionClauseError" do

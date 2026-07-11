@@ -35,7 +35,7 @@ defmodule Cure.Audit.Format do
       not_total_section(report.not_proven_total),
       target_section(report.axioms, target),
       unresolved_section(report.unresolved),
-      list_section("UNAUDITED", Enum.map(report.unaudited, fn {label, _} -> label end))
+      unaudited_section(report.unaudited, Keyword.get(opts, :verbose, false))
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
@@ -97,6 +97,24 @@ defmodule Cure.Audit.Format do
 
   defp list_section(title, items),
     do: "#{title} (#{length(items)})\n" <> Enum.map_join(items, "\n", &"  #{&1}")
+
+  # A module lands in UNAUDITED when it fails to elaborate. The reason is
+  # computed but noise in the default report; `--verbose` surfaces it, since
+  # ~40% of the stdlib is UNAUDITED today and "why" is exactly what a debugger
+  # of the audit wants.
+  defp unaudited_section([], _verbose), do: "UNAUDITED (0)"
+
+  defp unaudited_section(entries, false),
+    do: list_section("UNAUDITED", Enum.map(entries, fn {label, _} -> label end))
+
+  defp unaudited_section(entries, true) do
+    rows =
+      Enum.map_join(entries, "\n", fn {label, reason} ->
+        "  #{label}   — #{String.slice(inspect(reason), 0, 160)}"
+      end)
+
+    "UNAUDITED (#{length(entries)})\n" <> rows
+  end
 
   defp not_total_section([]),
     do: "NOT PROVEN TOTAL (0)   — cannot be used in proofs; not assumptions"
