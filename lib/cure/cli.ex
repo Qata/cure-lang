@@ -80,7 +80,15 @@ defmodule Cure.CLI do
           record_profile: :boolean,
           profile_dir: :string,
           module: :string,
-          top: :integer
+          top: :integer,
+          # export-types / snap / story output + target. Without these declared,
+          # OptionParser cannot tell they take a value: `--out` with a missing or
+          # flag-following value collapses to boolean `true`, which then leaks into
+          # the argv handed to the delegated Mix task in place of a filename.
+          out: :string,
+          target: :string,
+          diagrams: :boolean,
+          step: :boolean
         ],
         aliases: [o: :output_dir, v: :verbose, h: :help, f: :filter, t: :template]
       )
