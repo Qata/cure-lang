@@ -359,6 +359,29 @@ defmodule Cure.CLITest do
     end
   end
 
+  describe "fixed-arity commands reject extra args (not misblamed as unknown)" do
+    # These commands take zero positional args. An extra positional one matched
+    # neither the exact `["cmd"]` arm nor any other, so it fell through to the
+    # generic catch-all — which bound `unknown = "<cmd>"` and printed
+    # "Unknown command: <cmd>", blaming a VALID command (and the fuzzy matcher
+    # even suggested an unrelated one). Same defect class as the run/check/deps/keys
+    # fixes: name the misuse and fail, never misblame. The fallback also means the
+    # extra arg is rejected BEFORE the command runs, so a stray arg can't start the
+    # lsp server / repl / a stdlib compile.
+    for cmd <- ~w(lsp stdlib version test repl doctor fix top john) do
+      @cmd cmd
+      test "cure #{cmd} with an extra positional arg is a usage error" do
+        stderr =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main([@cmd, "bogus_extra"])) == {:shutdown, 1}
+          end)
+
+        assert stderr =~ "Usage: cure #{@cmd}"
+        refute stderr =~ "Unknown command"
+      end
+    end
+  end
+
   describe "unknown-command suggestions" do
     # `migrate` is a real dispatch command (cli.ex) but was absent from the
     # known_commands list the "did you mean" suggester searches, so a near-miss

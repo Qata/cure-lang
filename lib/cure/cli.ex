@@ -110,11 +110,23 @@ defmodule Cure.CLI do
         ["lsp"] ->
           cmd_lsp()
 
+        # A fixed-arity command's extra positional arg is a usage error, not an
+        # unknown command — without this fallback it fell through to the generic
+        # catch-all and misblamed the (valid) command as unknown.
+        ["lsp" | _] ->
+          usage_error("Usage: cure lsp")
+
         ["stdlib"] ->
           cmd_stdlib(opts)
 
+        ["stdlib" | _] ->
+          usage_error("Usage: cure stdlib")
+
         ["version"] ->
           cmd_version()
+
+        ["version" | _] ->
+          usage_error("Usage: cure version")
 
         ["init" | [name]] ->
           cmd_init(name)
@@ -141,6 +153,9 @@ defmodule Cure.CLI do
         ["test"] ->
           cmd_test(opts)
 
+        ["test" | _] ->
+          usage_error("Usage: cure test")
+
         ["explain"] ->
           cmd_explain_all()
 
@@ -155,6 +170,9 @@ defmodule Cure.CLI do
 
         ["repl"] ->
           cmd_repl()
+
+        ["repl" | _] ->
+          usage_error("Usage: cure repl")
 
         ["fmt" | paths] ->
           cmd_fmt(paths, opts)
@@ -186,8 +204,14 @@ defmodule Cure.CLI do
         ["doctor"] ->
           cmd_doctor(opts)
 
+        ["doctor" | _] ->
+          usage_error("Usage: cure doctor")
+
         ["fix"] ->
           cmd_fix(opts)
+
+        ["fix" | _] ->
+          usage_error("Usage: cure fix")
 
         ["publish" | _] ->
           cmd_publish(opts)
@@ -223,8 +247,14 @@ defmodule Cure.CLI do
         ["top"] ->
           cmd_top(opts)
 
+        ["top" | _] ->
+          usage_error("Usage: cure top")
+
         ["john"] ->
           cmd_john(opts)
+
+        ["john" | _] ->
+          usage_error("Usage: cure john")
 
         ["trace" | rest] ->
           cmd_trace(rest, opts)
