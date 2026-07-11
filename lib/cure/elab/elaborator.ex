@@ -727,6 +727,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Map literal `%{k: v, …}`. Desugars (before Core) to nested `Std.Map.put`
+  # calls over `Std.Map.new()` — the same shape a hand-written builder has, so
+  # nothing new reaches the kernel. `Std.Map` is a thin `@extern` wrapper over
+  # Erlang `:maps`, so this is seam-free (the runtime value is always a raw map);
+  # the caller must have `use Std.Map` in scope for `put`/`new` to resolve.
+  def elaborate_expr_typed({:map, meta, pairs}, names, ctx, env) do
+    line = Keyword.get(meta, :line, 0)
+
+    desugared =
+      Enum.reduce(Enum.reverse(pairs), {:function_call, [name: "new", line: line], []}, fn
+        {:pair, _pm, [key, value]}, acc ->
+          {:function_call, [name: "put", line: line], [key, value, acc]}
+      end)
+
+    elaborate_expr_typed(desugared, names, ctx, env)
+  end
+
   # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
   # `let` rhs, any sub-term the checked tuple clause at line ~1137 doesn't reach).
   # Synthesizes the non-dependent Σ `Sigma(A, λ_:A. B)` from the inferred component
