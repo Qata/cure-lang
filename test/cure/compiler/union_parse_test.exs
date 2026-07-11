@@ -198,5 +198,45 @@ defmodule Cure.Compiler.UnionParseTest do
       assert collect(ast, [])
              |> Enum.any?(&match?({:typed_pattern, _, ["n", {:variable, _, "Int"}]}, &1))
     end
+
+    test "a typed pattern's annotation may be a QUALIFIED (dotted) type name" do
+      # `parse_pattern_type_member` restricts to `parse_type_atom/1` (bare `Name`
+      # / `Name(args)`) so it never swallows the arm's `->` — but that grammar
+      # alone does not know about `.`, so `n: Std.Nat.Nat -> ...` used to fail
+      # with a hard parse error (`{:expected, :arrow, :got, :dot, ...}`) even
+      # though the identical qualified name parses fine as an ordinary parameter
+      # annotation via parse_type_arrow/1's maybe_parse_type_projection/2.
+      ast =
+        parse!("""
+        mod M
+          fn f(x: Int) -> Int = match x
+            n: Std.Nat.Nat -> 1
+            _ -> 2
+        end
+        """)
+
+      assert {:typed_pattern, _, ["n", type_ast]} =
+               collect(ast, []) |> Enum.find(&match?({:typed_pattern, _, _}, &1))
+
+      assert {:attribute_access, [attribute: "Nat"],
+              [{:attribute_access, [attribute: "Nat"], [{:variable, _, "Std"}]}]} = type_ast
+    end
+
+    test "a typed pattern's annotation may be a qualified type applied to arguments" do
+      ast =
+        parse!("""
+        mod M
+          fn f(x: Int) -> Int = match x
+            n: Std.List.List(Int) -> 1
+            _ -> 2
+        end
+        """)
+
+      assert {:typed_pattern, _, ["n", type_ast]} =
+               collect(ast, []) |> Enum.find(&match?({:typed_pattern, _, _}, &1))
+
+      assert {:function_call, [name: "Std.List.List", qualified: true], [{:variable, _, "Int"}]} =
+               type_ast
+    end
   end
 end

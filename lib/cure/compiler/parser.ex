@@ -2156,7 +2156,49 @@ defmodule Cure.Compiler.Parser do
     if literal_token?(token) do
       {literal(literal_subtype(token.type), token), advance(state)}
     else
-      parse_type_atom(state)
+      # `parse_type_atom/1` alone stops at a bare `Name`/`Name(args)` and does not
+      # know about `.` — so a QUALIFIED member (`n: Std.Nat.Nat`) failed with a hard
+      # parse error (the `.` was left for `parse_match_arm_tail/2`, which expects
+      # `->` and got `:dot` instead), even though the exact same qualified name
+      # parses fine in ordinary parameter/return position via `parse_type_arrow/1`
+      # (`maybe_parse_type_projection/2`). Chain the SAME dot-projection logic here
+      # — deliberately NOT `maybe_parse_type_projection/2` itself, whose
+      # `Mod.Name(args)` branch also calls `maybe_parse_function_type/2` and would
+      # reintroduce exactly the arrow-swallowing hazard `parse_type_atom` was
+      # chosen to avoid (`n: Std.List.List(Int) -> 1` would otherwise absorb the
+      # arm's own `->` as a second application layer).
+      {atom, state} = parse_type_atom(state)
+      parse_pattern_type_projection(atom, state)
+    end
+  end
+
+  # As `maybe_parse_type_projection/2`, but stops at the qualified application —
+  # no `maybe_parse_function_type/2` call — so a pattern annotation never absorbs
+  # the arm's `->`. See `parse_pattern_type_member/1`.
+  defp parse_pattern_type_projection(inner, state) do
+    case peek(state) do
+      %Token{type: :dot} ->
+        state = advance(state)
+        attr_token = peek(state)
+        attr = to_string(attr_token.value)
+        state = advance(state)
+        node = {:attribute_access, [attribute: attr], [inner]}
+        parse_pattern_type_projection(node, state)
+
+      %Token{type: :lparen} ->
+        case qualified_type_name(inner) do
+          {:ok, name} ->
+            state = advance(state)
+            {params, state} = parse_type_atom_args(state)
+            state = expect(state, :rparen)
+            {{:function_call, [name: name, qualified: true], params}, state}
+
+          :error ->
+            {inner, state}
+        end
+
+      _ ->
+        {inner, state}
     end
   end
 
