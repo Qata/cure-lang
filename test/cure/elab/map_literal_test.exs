@@ -37,12 +37,20 @@ defmodule Cure.Elab.MapLiteralTest do
   end
 
   test "a map literal builds the corresponding Erlang map" do
-    m = compile!("  fn build() -> Map = %{a: 1, b: 2}", :"Cure.Test.MapLit")
+    m = compile!("  fn build() -> Map(Atom, Int) = %{a: 1, b: 2}", :"Cure.Test.MapLit")
     assert apply(m, :build, []) == %{a: 1, b: 2}
   end
 
-  test "an empty map literal builds the empty map" do
-    m = compile!("  fn build() -> Map = %{}", :"Cure.Test.MapEmpty")
-    assert apply(m, :build, []) == %{}
+  # `%{}` is a bare `new()` with no arguments to pin its key/value types, so it
+  # needs an expected type from context (check mode) — here, `merge`'s parameter.
+  test "an empty map literal solves its type from a checked position" do
+    m =
+      compile!(
+        "  fn build(base: Map(Atom, Int)) -> Map(Atom, Int) = merge(%{}, base)",
+        :"Cure.Test.MapEmpty"
+      )
+
+    assert apply(m, :build, [%{a: 5}]) == %{a: 5}
+    assert apply(m, :build, [%{}]) == %{}
   end
 end

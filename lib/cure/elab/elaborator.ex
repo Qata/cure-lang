@@ -733,15 +733,7 @@ defmodule Cure.Elab.Elaborator do
   # Erlang `:maps`, so this is seam-free (the runtime value is always a raw map);
   # the caller must have `use Std.Map` in scope for `put`/`new` to resolve.
   def elaborate_expr_typed({:map, meta, pairs}, names, ctx, env) do
-    line = Keyword.get(meta, :line, 0)
-
-    desugared =
-      Enum.reduce(Enum.reverse(pairs), {:function_call, [name: "new", line: line], []}, fn
-        {:pair, _pm, [key, value]}, acc ->
-          {:function_call, [name: "put", line: line], [key, value, acc]}
-      end)
-
-    elaborate_expr_typed(desugared, names, ctx, env)
+    elaborate_expr_typed(desugar_map(pairs, Keyword.get(meta, :line, 0)), names, ctx, env)
   end
 
   # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
@@ -1518,6 +1510,20 @@ defmodule Cure.Elab.Elaborator do
   # against the same expected type.
   def elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env),
     do: elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
+
+  # Map literal in checked position: desugar to the `put`/`new` chain and re-check
+  # against the expected type. This is what lets an empty `%{}` (a bare `new()`
+  # with nothing to pin its key/value metavariables in synthesis) solve them from
+  # an expected `Map(k, v)`.
+  def elaborate_expr_checked({:map, meta, pairs}, expected_core, names, ctx, env),
+    do:
+      elaborate_expr_checked(
+        desugar_map(pairs, Keyword.get(meta, :line, 0)),
+        expected_core,
+        names,
+        ctx,
+        env
+      )
 
   # Type-directed compact-Nat literal: a non-negative integer literal checked
   # against the `Nat` family lowers to a compact `{:nat_lit, n}` — the surface
@@ -4827,6 +4833,15 @@ defmodule Cure.Elab.Elaborator do
   # generator (`{a, b} <- xs`) is rejected rather than silently mistyped.
   defp generator_param({:variable, _m, name}), do: {:ok, {:param, [], name}}
   defp generator_param(other), do: {:error, {:unsupported_comprehension_pattern, other}}
+
+  # `%{k: v, …}` → nested `Std.Map.put(k, v, …)` over `Std.Map.new()`. `%{}`
+  # folds to a bare `new()`. Shared by the typed and checked map clauses.
+  defp desugar_map(pairs, line) do
+    Enum.reduce(Enum.reverse(pairs), {:function_call, [name: "new", line: line], []}, fn
+      {:pair, _pm, [key, value]}, acc ->
+        {:function_call, [name: "put", line: line], [key, value, acc]}
+    end)
+  end
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
