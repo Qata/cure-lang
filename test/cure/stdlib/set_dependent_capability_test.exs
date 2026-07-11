@@ -39,7 +39,8 @@ defmodule Cure.Stdlib.SetDependentCapabilityTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Elab.Program
+  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Elab.{Program, Emit}
 
   @set_ripout_form """
   mod Std.SetDep
@@ -96,5 +97,18 @@ defmodule Cure.Stdlib.SetDependentCapabilityTest do
 
   test "Std.Set's rip-out form (parameterised Map + structural recursion) elaborates dependent" do
     assert {:ok, _env} = Program.elaborate(@set_ripout_form)
+  end
+
+  test "Std.Set's rip-out form also lowers to BEAM forms via the dependent emitter" do
+    # Rip-out readiness is decided by the emitter, not just the elaborator (see
+    # dependent_emit_parity_test.exs). Prove the target form completes the full
+    # dependent codegen path and produces real function forms, so Std.Set is
+    # emit-ready the moment its rewrite lands at teardown.
+    {:ok, tokens} = Lexer.tokenize(@set_ripout_form, emit_events: false)
+    {:ok, ast} = Parser.parse(tokens, emit_events: false)
+    {:ok, env, locals} = Program.check_ast_with_locals(ast)
+    assert {:ok, forms} = Emit.compile_forms(env, Program.module_atom(ast), locals)
+    fun_count = Enum.count(forms, &match?({:function, _, _, _, _}, &1))
+    assert fun_count >= 8, "expected Std.Set's surface to emit >= 8 functions, got #{fun_count}"
   end
 end

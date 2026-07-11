@@ -88,4 +88,54 @@ defmodule Cure.Stdlib.DependentEmitParityTest do
                "  Std.#{n}: emitted #{got} functions, expected >= #{floor}"
              end)
   end
+
+  # The classic-coexistence contract, EMIT tier. `show`/`io` cannot appear in
+  # `@green` because their committed files omit `use Std.String` + `use
+  # Std.Semigroup` (the classic checker breaks on List(Char) strings). Their
+  # elaboration side is guarded in dependent_elaboration_parity_test.exs; this
+  # locks the stronger property that once those held-out imports are supplied
+  # (as `Cure.Stdlib.Preload` would at rip-out) the dependent emitter lowers them
+  # to real BEAM forms — so they are emit-ready, not merely type-correct, when
+  # classic is deleted.
+  @coexistence [{"show", ~w(Std.String Std.Semigroup)}, {"io", ~w(Std.String Std.Semigroup)}]
+
+  test "classic-coexistence modules (show/io) emit once their held-out imports are added" do
+    failures =
+      Enum.reduce(@coexistence, [], fn {name, uses}, acc ->
+        src = inject_uses(Path.join("lib/std", name <> ".cure"), uses)
+
+        result =
+          try do
+            with {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+                 {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+                 {:ok, env, locals} <- Program.check_ast_with_locals(ast),
+                 {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(ast), locals) do
+              {:ok, Enum.count(forms, &match?({:function, _, _, _, _}, &1))}
+            end
+          rescue
+            e -> {:raise, Exception.message(e)}
+          catch
+            kind, value -> {:raise, "#{inspect(kind)}: #{inspect(value)}"}
+          end
+
+        case result do
+          {:ok, n} when n > 0 -> acc
+          other -> [{name, inspect(other, limit: 5)} | acc]
+        end
+      end)
+
+    assert failures == [],
+           "classic-coexistence modules no longer emit with imports (emit green-on-" <>
+             "deletion contract broken):\n" <>
+             Enum.map_join(Enum.reverse(failures), "\n", fn {n, e} -> "  Std.#{n}: #{e}" end)
+  end
+
+  # Insert `use <mod>` lines immediately after the `mod …` header, mirroring the
+  # elaboration firewall's helper and how Preload supplies them at rip-out.
+  defp inject_uses(path, uses) do
+    lines = String.split(File.read!(path), "\n")
+    {pre, [mod_line | post]} = Enum.split_while(lines, &(not String.match?(&1, ~r/^\s*mod\s/)))
+    use_lines = Enum.map(uses, &("  use " <> &1))
+    Enum.join(pre ++ [mod_line] ++ use_lines ++ post, "\n")
+  end
 end
