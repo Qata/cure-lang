@@ -81,14 +81,42 @@ defmodule Cure.Elab.Emit do
   """
   @spec compile_forms(Env.t(), module(), [atom()], map()) :: {:ok, [tuple()]} | {:error, term()}
   def compile_forms(%Env{} = env, module, names, origins) do
+    # Type-level definitions — those whose type ends in a universe (`… -> Type`) —
+    # are type synonyms / type-level computations (a large-elim kind selector, a
+    # `Lens(s, a) = Optic(LensKind, s, a)` alias). They are computationally
+    # irrelevant: their body is a type value (`{:data, LensOptic, …}`) with no BEAM
+    # representation, so lowering one crashes emission. Erase them wholesale — no
+    # BEAM function, no export — exactly as Idris/Agda/Lean drop type-level
+    # definitions. Ordinary value functions that merely MENTION those types in
+    # their signatures are unaffected (their codomain is a data type, not `Type`).
+    # Hole-check the FULL name set first — an unfilled obligation in a type-level
+    # def is still refused (#102 firewall) — then drop the type-level defs from the
+    # set that actually reaches emission.
     with :ok <- reject_holes(env, names) do
+      emit_names = Enum.reject(names, &type_level_def?(env, &1))
+
       try do
-        {:ok, module_forms(env, module, names, origins)}
+        {:ok, module_forms(env, module, emit_names, origins)}
       rescue
         e in ArgumentError -> {:error, {:cannot_emit, Exception.message(e)}}
       end
     end
   end
+
+  # A definition is TYPE-LEVEL when its type's ultimate codomain (after peeling the
+  # parameter Π telescope) is a universe `{:type, _}` — i.e. it RETURNS a type. A
+  # value function returns a value, so its codomain is a data type / Π / primitive,
+  # never a universe.
+  defp type_level_def?(env, name) do
+    case Env.get_def(env, name) do
+      %{type: type} -> universe_codomain?(type)
+      _ -> false
+    end
+  end
+
+  defp universe_codomain?({:pi, _g, _dom, cod}), do: universe_codomain?(cod)
+  defp universe_codomain?({:type, _}), do: true
+  defp universe_codomain?(_), do: false
 
   @doc "The Erlang abstract forms for `functions` in `env`, as module `module`."
   @spec module_forms(Env.t(), module(), [atom()]) :: [tuple()]
@@ -301,7 +329,8 @@ defmodule Cure.Elab.Emit do
   # takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:lam, _g, _dom, body}, ctx) do
     var = :"Fn#{length(ctx)}"
-    clause = {:clause, @line, [{:var, @line, var}], [], [lower(env, body, [var | ctx])]}
+    body_form = lower(env, body, [var | ctx])
+    clause = {:clause, @line, [{:var, @line, unused_underscore(var, body_form)}], [], [body_form]}
     {:fun, @line, {:clauses, [clause]}}
   end
 
@@ -311,8 +340,9 @@ defmodule Cure.Elab.Emit do
   # zero uses). Its parameter takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:let, _g, _ty, val, body}, ctx) do
     var = :"L#{length(ctx)}"
-    bind = {:match, @line, {:var, @line, var}, lower(env, val, ctx)}
-    {:block, @line, [bind, lower(env, body, [var | ctx])]}
+    body_form = lower(env, body, [var | ctx])
+    bind = {:match, @line, {:var, @line, unused_underscore(var, body_form)}, lower(env, val, ctx)}
+    {:block, @line, [bind, body_form]}
   end
 
   defp lower(env, {:app, _, _} = app, ctx) do
@@ -373,6 +403,20 @@ defmodule Cure.Elab.Emit do
     do: {:call, @line, {:atom, @line, :error}, [{:atom, @line, :absurd}]}
 
   defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
+
+  # An emit-generated binder (lambda param `Fn<n>` / let binder `L<n>`) that never
+  # appears in its lowered body — e.g. a catch-all `match` branch whose join-point
+  # ignores the scrutinee — must be spelled `_Fn<n>` so `erl_lint` does not flag it
+  # as an unused variable (which the stdlib gate treats as a failure). Renaming is
+  # sound precisely because the var is absent from the body: no reference to rewrite.
+  defp unused_underscore(var, body_form) do
+    if var_in_form?(body_form, var), do: var, else: :"_#{var}"
+  end
+
+  defp var_in_form?({:var, _, v}, v), do: true
+  defp var_in_form?(t, v) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&var_in_form?(&1, v))
+  defp var_in_form?(l, v) when is_list(l), do: Enum.any?(l, &var_in_form?(&1, v))
+  defp var_in_form?(_, _), do: false
 
   # Builtin-op global spines (K2 spec 2026-07-09 §1.5 + A1 §1-A), keyed via the
   # def-record registry (`Env.builtin_op/2`) — a user def named int_add carries

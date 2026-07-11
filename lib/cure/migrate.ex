@@ -164,8 +164,14 @@ defmodule Cure.Migrate do
     MapSet.union(builtin_type_names(), declared_type_names(ast))
   end
 
+  # `Type` (the universe) is a built-in kind keyword, never a type variable: a
+  # dependent signature like `fn F(a: Type) -> Type` mentions it in type position
+  # but must NOT be lowercased. The classic `Cure.Types.Env` predates the universe
+  # and omits it, so add it explicitly.
+  @universe_names ~w(Type)
+
   defp builtin_type_names do
-    Cure.Types.Env.new().types |> Map.keys() |> MapSet.new()
+    (Cure.Types.Env.new().types |> Map.keys()) ++ @universe_names |> MapSet.new()
   end
 
   # Every type name this file introduces, gathered by a full pre-order walk:

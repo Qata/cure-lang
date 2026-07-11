@@ -1,0 +1,113 @@
+@group(:collections)
+mod Std.Optic
+  ## Statically-typed optics: lenses, affine traversals, and traversals.
+  ##
+  ## An optic is a first-class, composable "path" into a data structure. Unlike the
+  ## deleted `Std.Access` — which leaned on `believe_me` and runtime `is_map`/
+  ## `is_tuple` dispatch over an opaque `Any` — every optic here is checked by the
+  ## dependent kernel. The kind of an optic (how many foci it has, whether focusing
+  ## can fail) is a STATIC index, so `view` on a lens is total, `preview` on an
+  ## affine returns `Option`, and a traversal rebuilds a structure from EXACTLY the
+  ## foci it produced (a length-indexed `Vector`, so the rebuild can never be given
+  ## the wrong number of elements).
+  ##
+  ## The representation follows the Agda existential/coend encoding: an optic is a
+  ## function from the whole structure `s` to a "focus bundle" — the focus value(s)
+  ## plus a total rebuilder back to `s`. The bundle's shape is chosen per kind by a
+  ## large-elimination selector (`Optic(k, s, a)`), which is what makes one uniform
+  ## `compose` possible across kinds while keeping each eliminator's result type
+  ## precise.
+
+  use Std.Nat
+  use Std.Vector
+  use Std.Sigma
+  use Std.Option
+
+  # ---- kinds --------------------------------------------------------------
+
+  ## The kind of an optic, used as a static index. `LensKind` focuses exactly one
+  ## value; `AffineKind` focuses zero-or-one; `TraversalKind` focuses any number.
+  type OpticKind = LensKind | AffineKind | TraversalKind
+
+  ## The least-upper-bound of two kinds under composition: composing optics of
+  ## kinds `k1` and `k2` yields an optic of kind `join(k1, k2)`. A lens composed
+  ## with a lens stays a lens; anything touching a traversal becomes a traversal;
+  ## anything touching an affine (but no traversal) becomes an affine.
+  fn join(k1: OpticKind, k2: OpticKind) -> OpticKind = match k1
+    LensKind -> k2
+    AffineKind -> match k2
+      TraversalKind -> TraversalKind
+      other -> AffineKind
+    TraversalKind -> TraversalKind
+
+  # ---- focus bundles (post-extraction) ------------------------------------
+
+  ## A lens focus bundle: the focus value `a`, and a total rebuilder `a -> s` that
+  ## puts a (possibly new) focus back into the original structure.
+  type LensRep(a: Type, s: Type) = MkLensRep(a, a -> s)
+
+  ## An affine focus bundle: a lens bundle if the focus is present, else nothing
+  ## (the structure has no focus, e.g. the missing key of a map).
+  type AffineRep(a: Type, s: Type) = MkAffineRep(Option(LensRep(a, s)))
+
+  ## A traversal focus bundle: existentially, SOME count `n`, a `Vector` of exactly
+  ## `n` foci, and a rebuilder that consumes exactly `n` replacements to rebuild the
+  ## structure. The length index is what makes the rebuild total — it can only be
+  ## applied to a vector of the same length it produced.
+  # NOTE the parentheses around the rebuilder's domain `(Vector(a, n))`: a bare
+  # `Vector(a, n) -> s` is mis-parsed as `Function(a, n, s)` (the parser splices the
+  # type application's arguments into the arrow's domain list), and `n : Nat` is not
+  # a type, so it fails as `:not_a_type`. Parenthesising the domain keeps it one type.
+  type TravRep(a: Type, s: Type) =
+    MkTravRep(Sigma(n: Nat, Sigma(v: Vector(a, n), (Vector(a, n)) -> s)))
+
+  # ---- optics (extraction functions) --------------------------------------
+
+  ## A lens: extract the single focus bundle from any structure.
+  type LensOptic(s: Type, a: Type) = MkLens(s -> LensRep(a, s))
+
+  ## An affine traversal: extract a possibly-absent focus bundle.
+  type AffineOptic(s: Type, a: Type) = MkAffine(s -> AffineRep(a, s))
+
+  ## A traversal: extract all foci plus a length-matched rebuilder.
+  type TravOptic(s: Type, a: Type) = MkTraversal(s -> TravRep(a, s))
+
+  ## `Optic(k, s, a)` is the optic type for kind `k` over structure `s` with focus
+  ## `a`, selected by large elimination. This is the single family `compose` ranges
+  ## over; the friendly aliases below name the three concrete kinds.
+  fn Optic(k: OpticKind, s: Type, a: Type) -> Type = match k
+    LensKind -> LensOptic(s, a)
+    AffineKind -> AffineOptic(s, a)
+    TraversalKind -> TravOptic(s, a)
+
+  ## `Lens(s, a)` — an optic focusing exactly one `a` inside `s`.
+  fn Lens(s: Type, a: Type) -> Type = Optic(LensKind, s, a)
+
+  ## `Affine(s, a)` — an optic focusing zero-or-one `a` inside `s`.
+  fn Affine(s: Type, a: Type) -> Type = Optic(AffineKind, s, a)
+
+  ## `Traversal(s, a)` — an optic focusing any number of `a`s inside `s`.
+  fn Traversal(s: Type, a: Type) -> Type = Optic(TraversalKind, s, a)
+
+  # ---- lens: constructor + eliminators ------------------------------------
+
+  ## Build a lens from a getter and a setter. `get(x)` reads the focus; `put(y)(x)`
+  ## writes `y` as the new focus of `x`.
+  fn lens({s: Type}, {a: Type}, get: s -> a, put: a -> s -> s) -> LensOptic(s, a) =
+    MkLens(fn(x) -> MkLensRep(get(x), fn(y) -> put(y)(x)))
+
+  ## Read the focus of a lens. Total: a lens always has exactly one focus.
+  fn view({s: Type}, {a: Type}, l: LensOptic(s, a), x: s) -> a = match l
+    MkLens(f) -> match f(x)
+      MkLensRep(focus, rebuild) -> focus
+
+  ## Replace the focus of a lens with `new`.
+  fn set({s: Type}, {a: Type}, l: LensOptic(s, a), new: a, x: s) -> s = match l
+    MkLens(f) -> match f(x)
+      MkLensRep(focus, rebuild) -> rebuild(new)
+
+  ## Transform the focus of a lens by applying `g`.
+  fn over({s: Type}, {a: Type}, l: LensOptic(s, a), g: a -> a, x: s) -> s = match l
+    MkLens(f) -> match f(x)
+      MkLensRep(focus, rebuild) -> rebuild(g(focus))
+end
