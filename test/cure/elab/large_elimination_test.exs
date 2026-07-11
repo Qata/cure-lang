@@ -51,4 +51,46 @@ defmodule Cure.Elab.LargeEliminationTest do
 
     assert {:error, _} = Program.elaborate(src)
   end
+
+  # A type FAMILY applied to an argument in a Type-returning function BODY (a
+  # type-level function). The signature path already splits a family application
+  # into its param/index slots (`declarations.ex` `idx_to_core`), but the
+  # EXPRESSION path (`elaborate_named_call_scoped`) did not — it resolved the head
+  # to `{:data, Option, [], []}` and `{:app}`-chained the argument OUTSIDE the data
+  # node, so the kernel saw a 0-param `Option` where the family needs one param and
+  # rejected it with a false `:arg_arity`. This is the keystone that Std.Optic's
+  # `FocusShape(k, a, s)` selector rests on: every branch returns a per-kind
+  # representation type built by applying a family to the ambient type parameters.
+  test "a parameterised family applied in a Type-returning body elaborates" do
+    src = """
+    mod TyFnBody
+      use Std.Option
+      fn F(a: Type) -> Type = Option(a)
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "large-elim selector whose branches apply a family to an ambient parameter" do
+    # The le02 oracle twin (test/oracle/largeelim/le02_selector_ambient_param):
+    # `FocusShape(k, a)` matches on `k` but each branch returns a type built from
+    # the other parameter `a`. Idris accepts the analogue routinely; Cure rejected
+    # with `:arg_arity` until the expression-path family split landed.
+    src = """
+    mod LEAmbient
+      use Std.Option
+      type OpticKind = LensKind | AffineKind | TraversalKind
+      type Pair(a: Type) = MkPair(a, a)
+      fn FocusShape(k: OpticKind, a: Type) -> Type = match k
+        LensKind -> Option(a)
+        AffineKind -> Pair(a)
+        TraversalKind -> Option(a)
+      fn mk_lens(x: a) -> FocusShape(LensKind, a) = Some(x)
+      fn mk_affine(x: a) -> FocusShape(AffineKind, a) = MkPair(x, x)
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
 end
