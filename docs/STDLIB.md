@@ -711,7 +711,7 @@ Last-write-wins register. Merges pick the side with the higher
 timestamp; ties break on node id.
 - `lww_empty(node: Atom) -> LWWRegister`.
 - `lww_set(r, value: T, stamp: Int, node: Atom) -> LWWRegister`.
-- `lww_value(r) -> T`, `lww_merge(a, b) -> LWWRegister`.
+- `lww_value(r) -> Option(T)` (`None()` if nothing has been written), `lww_merge(a, b) -> LWWRegister`.
 ### MVRegister
 Multi-value register that retains every concurrent write so the
 caller can resolve the conflict manually.

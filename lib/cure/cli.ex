@@ -68,6 +68,8 @@ defmodule Cure.CLI do
           cover: :boolean,
           strict: :boolean,
           edition: :string,
+          target: :string,
+          format: :string,
           registry: :string,
           include_erts: :boolean,
           overwrite: :boolean,
@@ -184,6 +186,13 @@ defmodule Cure.CLI do
 
         ["fmt" | paths] ->
           cmd_fmt(paths, opts)
+
+        ["audit", "trust", module] ->
+          cmd_audit_trust(module, opts)
+
+        ["audit" | _] ->
+          IO.puts(:stderr, "Usage: cure audit trust <Module> [--format text|json] [--strict] [--target <t>]")
+          exit({:shutdown, 1})
 
         ["migrate" | paths] ->
           case cmd_migrate(paths, opts) do
@@ -1324,6 +1333,54 @@ defmodule Cure.CLI do
         # `--algebra` flag is kept for symmetry with `--safe` but
         # otherwise a no-op.
         fmt_algebra(cure_files)
+    end
+  end
+
+  # `cure audit trust <Module>` — print the unproved assumptions reachable from a
+  # module. `Cure.Audit.CLI.run/2` is pure; the `System.halt/1` lives here.
+  defp cmd_audit_trust(module, opts) do
+    # `Source.locate/1` finds the module via a compile-time-baked absolute path,
+    # but the elaborator resolves a module's `use Std.X` imports through
+    # `Cure.Stdlib.Paths`, whose search chain is empty for a plain dev checkout
+    # invoked from outside the repo — so the module would locate but silently
+    # fail to elaborate and land in UNAUDITED, looking like a clean zero-axiom
+    # report. Seed the resolver with the known stdlib dir ONLY when nothing else
+    # already resolves (so a user's CURE_HOME/CURE_LIB is never shadowed).
+    case Cure.Audit.Source.import_seed_dir() do
+      nil -> :ok
+      dir -> Application.put_env(:cure, :stdlib_source_dir, dir)
+    end
+
+    audit_opts = [
+      strict: Keyword.get(opts, :strict, false),
+      format: Keyword.get(opts, :format, "text"),
+      verbose: Keyword.get(opts, :verbose, false)
+    ]
+
+    audit_opts =
+      case Keyword.get(opts, :target) do
+        nil ->
+          audit_opts
+
+        t ->
+          # `to_existing_atom/1` would raise on an unrecognized target, but
+          # `Targets.unavailable/1` already answers "nothing unavailable" for an
+          # unknown one. CLI argv is bounded input, not untrusted network input.
+          Keyword.put(audit_opts, :target, String.to_atom(t))
+      end
+
+    case Cure.Audit.CLI.run(module, audit_opts) do
+      {:ok, text} ->
+        IO.write(text)
+        :ok
+
+      {:strict_failure, text} ->
+        IO.write(text)
+        exit({:shutdown, 1})
+
+      {:error, :not_found} ->
+        IO.puts(:stderr, "no such module: #{module}")
+        exit({:shutdown, 1})
     end
   end
 

@@ -89,13 +89,18 @@ mod Std.Test
 
   # -- Shrinking-aware property runner (v0.23.0) -----------------------------
 
-  ## Run `property` against `runs` random samples. On the first
-  ## failure, shrink the counterexample using `Std.Gen.shrink/1`
-  ## until no smaller value also fails; raise
-  ## `:property_failed_with_shrunk` carrying the minimised value.
+  ## Run `property` against `runs` random samples. On the first failure,
+  ## shrink the counterexample until no smaller value also fails.
+  ##
+  ## Returns `Ok(:ok)` when every sample satisfied the property, and
+  ## `Error(minimal)` carrying the minimised counterexample otherwise.
+  ## Unlike `forall/3`, a failing property is a value, not a raise — including a
+  ## property that itself throws (treated as a failure). Given a total generator
+  ## and property this never raises; a generator that throws has no witness
+  ## value to return and is a caller error.
   @extern(:cure_std_test, :forall_shrunk, 3)
-  fn forall_shrunk(gen: Atom -> t, property: t -> Bool, runs: Int) -> t
+  fn forall_shrunk(gen: Atom -> t, property: t -> Bool, runs: Int) -> Result(Atom, t)
 
   ## Same as `forall_shrunk/3` but with a 100-run default.
-  fn forall_shrunk_default(gen: Atom -> t, property: t -> Bool) -> t =
+  fn forall_shrunk_default(gen: Atom -> t, property: t -> Bool) -> Result(Atom, t) =
     forall_shrunk(gen, property, 100)

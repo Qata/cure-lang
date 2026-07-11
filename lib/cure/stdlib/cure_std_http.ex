@@ -2,12 +2,14 @@ defmodule :cure_std_http do
   @moduledoc """
   Runtime helpers for `Std.Http` (v0.23.0).
 
-  Wraps OTP's `:httpc` into the `Result(Response, HttpError)` shape
-  Cure expects.
+  Wraps OTP's `:httpc` into `Result(Response, HttpError)`.
 
-  Response is a Cure record compiled to a map with a `__struct__` of
-  `:response`; errors are tagged variants (`:timeout`,
-  `{:bad_status, n}`, `{:network_error, msg}`).
+  Runtime shapes are the DEPENDENT-pipeline erasure:
+
+    * `Result` → `{:Ok, response}` / `{:Error, httpError}`
+    * `rec Response(status, headers, body)` → `{:Response, status, headers, body}`
+    * `HttpError = Timeout | BadStatus(Int) | NetworkError(String) | DecodeError(String)`
+      → `:Timeout` / `{:BadStatus, n}` / `{:NetworkError, msg}` / `{:DecodeError, msg}`
   """
 
   @default_timeout 30_000
@@ -48,29 +50,27 @@ defmodule :cure_std_http do
     opts = [timeout: @default_timeout, connect_timeout: @connect_timeout, autoredirect: true]
     resp_opts = [body_format: :binary]
 
+    # The `{:ok, …}` / `{:error, …}` matched here are `:httpc.request/4`'s own
+    # results; the outer tuples are the Cure `Result`.
     case :httpc.request(method, request, opts, resp_opts) do
       {:ok, {{_proto, status, _reason}, resp_headers, rbody}} ->
         wire_headers =
           Enum.map(resp_headers, fn {k, v} -> {to_string(k), to_string(v)} end)
 
-        response = %{
-          __struct__: :response,
-          status: status,
-          headers: wire_headers,
-          body: IO.iodata_to_binary(rbody)
-        }
+        # rec Response(status, headers, body) → {:Response, …} in field order.
+        response = {:Response, status, wire_headers, IO.iodata_to_binary(rbody)}
 
         if status >= 200 and status < 400 do
-          {:ok, response}
+          {:Ok, response}
         else
-          {:error, {:bad_status, status}}
+          {:Error, {:BadStatus, status}}
         end
 
       {:error, :timeout} ->
-        {:error, :timeout}
+        {:Error, :Timeout}
 
       {:error, reason} ->
-        {:error, {:network_error, inspect(reason)}}
+        {:Error, {:NetworkError, inspect(reason)}}
     end
   end
 

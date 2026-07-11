@@ -407,4 +407,41 @@ defmodule Cure.CLITest do
       assert stderr =~ "migrate"
     end
   end
+
+  describe "cure audit trust" do
+    test "a malformed audit invocation prints usage and exits non-zero" do
+      # Round 3 found these fell through to a wrong 'Unknown command: audit'
+      # with exit 0. Each must print usage and exit {:shutdown, 1}.
+      for argv <- [["audit"], ["audit", "trust"], ["audit", "bogus", "X"], ["audit", "trust", "A", "B"]] do
+        stderr =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main(argv)) == {:shutdown, 1}, "argv=#{inspect(argv)}"
+          end)
+
+        assert stderr =~ "Usage: cure audit trust", "argv=#{inspect(argv)}"
+      end
+    end
+
+    test "an unknown module exits non-zero" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["audit", "trust", "Std.NoSuchModule"])) ==
+                   {:shutdown, 1}
+        end)
+
+      assert stderr =~ "no such module"
+    end
+
+    test "--strict on an unauditable module exits non-zero; a clean one exits 0" do
+      # Std.Io does not elaborate → UNAUDITED → --strict fails.
+      capture_io(fn ->
+        assert catch_exit(Cure.CLI.main(["audit", "trust", "Std.Io", "--strict"])) ==
+                 {:shutdown, 1}
+      end)
+
+      # Std.List is clean → --strict returns normally (no exit).
+      out = capture_io(fn -> Cure.CLI.main(["audit", "trust", "Std.List", "--strict"]) end)
+      assert out =~ "AXIOMS — OTP (1)"
+    end
+  end
 end

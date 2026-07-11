@@ -150,9 +150,11 @@ mod Std.CRDT
   @extern(:cure_std_crdt, :lww_set, 4)
   fn lww_set(r: LWWRegister, value: t, stamp: Int, node: Atom) -> LWWRegister
 
-  ## Current value of the register.
+  ## Current value of the register, or `None()` if nothing has been written.
+  ## An empty register has no `t` to return; it used to hand back the atom
+  ## `:empty` under a declared `-> t`.
   @extern(:cure_std_crdt, :lww_value, 1)
-  fn lww_value(r: LWWRegister) -> t
+  fn lww_value(r: LWWRegister) -> Option(t)
 
   ## Merge by selecting the side with the higher timestamp; ties
   ## break on node id.
