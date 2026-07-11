@@ -110,7 +110,11 @@ defmodule Cure.Audit.Format do
   defp unaudited_section(entries, true) do
     rows =
       Enum.map_join(entries, "\n", fn {label, reason} ->
-        "  #{label}   — #{String.slice(inspect(reason), 0, 160)}"
+        # Show the reason in FULL. `--verbose` is opt-in debug output, and a
+        # fixed-width cut drops exactly the tail that explains the failure (and
+        # reads as a malformed term). `inspect/1` is single-line and escapes any
+        # control chars, so the row stays on one line and the report layout holds.
+        "  #{label}   — #{inspect(reason, limit: :infinity, printable_limit: :infinity)}"
       end)
 
     "UNAUDITED (#{length(entries)})\n" <> rows

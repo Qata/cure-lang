@@ -143,7 +143,7 @@ defmodule Cure.CLI do
 
         ["audit" | _] ->
           IO.puts(:stderr, "Usage: cure audit trust <Module> [--format text|json] [--strict] [--target <t>]")
-          System.halt(1)
+          exit({:shutdown, 1})
 
         ["migrate" | paths] ->
           case cmd_migrate(paths, opts) do
@@ -1251,11 +1251,11 @@ defmodule Cure.CLI do
 
       {:strict_failure, text} ->
         IO.write(text)
-        System.halt(1)
+        exit({:shutdown, 1})
 
       {:error, :not_found} ->
         IO.puts(:stderr, "no such module: #{module}")
-        System.halt(1)
+        exit({:shutdown, 1})
     end
   end
 

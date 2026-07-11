@@ -77,6 +77,18 @@ defmodule Cure.Audit.FormatTest do
     assert verbose =~ "Semigroup String", "verbose must surface the reason"
   end
 
+  test "verbose surfaces the WHOLE reason, not a truncated head" do
+    # A real elaboration-failure term is ~200+ chars; a fixed 160-char cut drops
+    # exactly the tail that explains the failure and looks like malformed output.
+    # `--verbose` is opt-in debug, so it must show the reason in full.
+    tail = "SECOND_OPERAND_THAT_EXPLAINS_THE_FAILURE"
+    reason = {:unsupported_expression, {:binary_op, String.duplicate("x", 200), tail}}
+    r = %Report{unaudited: [{"Std.Io", reason}]}
+
+    verbose = Format.to_text(r, verbose: true)
+    assert verbose =~ tail, "verbose truncated away the reason's tail"
+  end
+
   test "output is byte-identical across runs" do
     assert Format.to_text(report(), []) == Format.to_text(report(), [])
     assert Format.to_json(report(), []) == Format.to_json(report(), [])
