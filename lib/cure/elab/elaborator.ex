@@ -1345,6 +1345,16 @@ defmodule Cure.Elab.Elaborator do
     elaborate_with(scrut, arms, proof, expected_core, names, ctx, env, [])
   end
 
+  # A semantic macro failure is a typed `Std.Syntax.Failure` value. The
+  # computed-macro expansion pass recognizes this constructor after
+  # normalization and turns it into the author-facing Diagnosis error.
+  def elaborate_expr_checked({:macro_fail, meta, args}, expected_core, names, ctx, env) do
+    with {:ok, term} <- elaborate_macro_failure(meta, args, names, ctx, env),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
   # A `let x = e ⏎ body` block, in checking mode. There is no `:let` in Core, so
   # each binding is eliminated by *surface substitution* (`elaborate_let_block`):
   # every free `x` in the remaining statements is replaced by the rhs expression
@@ -4465,6 +4475,21 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_let_block(
+         [{:macro_check, _meta, [condition, failure]} | rest],
+         expected_core,
+         names,
+         ctx,
+         env
+       ) when rest != [] do
+    with {:ok, condition_core} <-
+           elaborate_expr_checked(condition, bool_type_term(Context.signature(ctx)), names, ctx, env),
+         {:ok, failure_core} <- elaborate_expr_checked(failure, expected_core, names, ctx, env),
+         {:ok, body_core} <- elaborate_let_block(rest, expected_core, names, ctx, env) do
+      {:ok, bool_case(condition_core, expected_core, body_core, failure_core, ctx)}
+    end
+  end
+
+  defp elaborate_let_block(
          [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
          expected_core,
          names,
@@ -4486,6 +4511,26 @@ defmodule Cure.Elab.Elaborator do
 
   defp elaborate_let_block(other, _expected_core, _names, _ctx, _env),
     do: {:error, {:unsupported_block, other}}
+
+  defp elaborate_macro_failure(meta, args, names, ctx, env) do
+    syntax_type = {:data, :Syntax, [], []}
+
+    with {:ok, arg_terms} <-
+           Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
+             case elaborate_expr_checked(arg, syntax_type, names, ctx, env) do
+               {:ok, term} -> {:cont, {:ok, [term | acc]}}
+               {:error, _} = error -> {:halt, error}
+             end
+           end),
+         %{name: :Failure} <- Inductive.get_ctor(env, :Failure) do
+      name = Keyword.get(meta, :name, "?")
+      {:ok, {:ctor, :Failure, [{:atom_lit, String.to_atom(name)}, core_list(Enum.reverse(arg_terms))]}}
+    else
+      nil -> {:error, {:unknown_macro_failure, Keyword.get(meta, :name, "?")}}
+    end
+  end
+
+  defp core_list(items), do: Enum.reduce(Enum.reverse(items), {:ctor, :Nil, []}, &{:ctor, :Cons, [&1, &2]})
 
   # `let x : T = e` — BIDIRECTIONAL. The ascription supplies the type a
   # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode

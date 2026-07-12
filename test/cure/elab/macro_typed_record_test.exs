@@ -46,4 +46,43 @@ defmodule Cure.Elab.MacroTypedRecordTest do
 
     assert {:error, {:unknown_field, :MkSyntax, "missing"}} = Program.elaborate(source)
   end
+
+  test "a computed elab can guard its continuation with check and fail" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Mk
+        fail BadInput(input: Code)
+        syntax mk <x: Code> computed by build_it
+
+      fn build_it(a: MkSyntax) -> Syntax =
+        check true else fail BadInput(a.x)
+        a.x
+
+      fn f(n: Int) -> Int = mk n
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  test "a false computed guard reports the declared author failure" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Mk
+        fail BadInput(input: Code)
+        syntax mk <x: Code> computed by build_it
+
+      fn build_it(a: MkSyntax) -> Syntax =
+        check false else fail BadInput(a.x)
+        a.x
+
+      fn f(n: Int) -> Int = mk n
+    """
+
+    assert {:error, {:computed_macro_error, _, {:author_failure, "BadInput", [_]}}} =
+             Program.elaborate(source)
+  end
 end

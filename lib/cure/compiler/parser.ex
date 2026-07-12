@@ -777,6 +777,9 @@ defmodule Cure.Compiler.Parser do
           "assert_type" ->
             parse_assert_type(state, token)
 
+          "check" ->
+            parse_macro_check(state, token)
+
           "rewrite" ->
             parse_rewrite(state, token)
 
@@ -948,6 +951,45 @@ defmodule Cure.Compiler.Parser do
     {type_ast, state} = parse_type_expr(state)
     ast = {:assert_type, [line: token.line, col: token.col], [expr, type_ast]}
     {ast, state}
+  end
+
+  # Tier-3 semantic guard: `check predicate else fail Name(args)`. The guard is
+  # represented explicitly so the dependent elaborator can turn it into a
+  # boolean case whose false branch carries the typed Syntax failure value.
+  defp parse_macro_check(state, token) do
+    state = advance(state)
+    {condition, state} = parse_expr(state, 0)
+
+    state =
+      case peek(state) do
+        %Token{type: :keyword, value: :else} ->
+          advance(state)
+
+        t ->
+          add_error(state, {:expected, :else, :got, t.type, t.line, t.col})
+      end
+
+    {failure_kw, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "fail"} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
+    {failure_call, state} = parse_expr(state, 0)
+
+    case {failure_kw, failure_call} do
+      {true, {:function_call, failure_meta, args}} ->
+        name = Keyword.get(failure_meta, :name, "?")
+        check_meta = [line: token.line, col: token.col, failure: name]
+        failure_meta = [line: token.line, col: token.col, name: name]
+        {{:macro_check, check_meta, [condition, {:macro_fail, failure_meta, args}]}, state}
+
+      _ ->
+        state =
+          add_error(state, {:expected, :failure_constructor, :got, peek(state).type, peek(state).line, peek(state).col})
+
+        {{:macro_check, [line: token.line, col: token.col], [condition, {:macro_fail, [name: "?"], []}]}, state}
+    end
   end
 
   # -- Propositional equality rewrite ---------------------------------------

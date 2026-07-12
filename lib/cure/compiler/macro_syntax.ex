@@ -21,6 +21,7 @@ defmodule Cure.Compiler.MacroSyntax do
           {:syn_node, atom, [{atom, synlit}], [repr]}
           | {:syn_leaf, atom, [{atom, synlit}], synlit}
           | {:syn_raw, synlit}
+          | {:syn_failure, atom, [repr]}
 
   # -- to_syntax: parser AST -> repr -----------------------------------------
 
@@ -90,6 +91,9 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def from_syntax({:syn_raw, lit}), do: from_synlit(lit)
 
+  def from_syntax({:syn_failure, name, args}),
+    do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
+
   defp from_attrs(attrs), do: for({k, lit} <- attrs, do: {k, from_synlit(lit)})
 
   defp from_synlit({:s_int, n}), do: n
@@ -116,6 +120,9 @@ defmodule Cure.Compiler.MacroSyntax do
     do: ctor(:Leaf, [atom(tag), to_core_attrs(attrs), to_core_synlit(lit)])
 
   def to_core({:syn_raw, lit}), do: ctor(:Raw, [to_core_synlit(lit)])
+
+  def to_core({:syn_failure, name, args}),
+    do: ctor(:Failure, [atom(name), to_core_list(Enum.map(args, &to_core/1))])
 
   @doc "Encode the ordered children of a macro input as a derived syntax record."
   @spec to_core_record(String.t() | atom(), repr()) :: Cure.Core.Term.t()
@@ -150,6 +157,16 @@ defmodule Cure.Compiler.MacroSyntax do
     case from_core_synlit(lit) do
       {:ok, lit} -> {:syn_raw, lit}
       error -> error
+    end
+  end
+
+  def from_core({:ctor, :Failure, [{:atom_lit, name}, args]}) do
+    with {:ok, args} <- from_core_list(args),
+         {:ok, args} <- map_results(args, &from_core/1),
+         true <- Enum.all?(args, &syntax_repr?/1) do
+      {:syn_failure, name, args}
+    else
+      _ -> {:error, {:invalid_syntax_failure, name}}
     end
   end
 
@@ -252,6 +269,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp syntax_repr?({:syn_node, _, _, _}), do: true
   defp syntax_repr?({:syn_leaf, _, _, _}), do: true
   defp syntax_repr?({:syn_raw, _}), do: true
+  defp syntax_repr?({:syn_failure, _, _}), do: true
   defp syntax_repr?(_), do: false
 
   defp map_results(items, fun) do

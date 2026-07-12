@@ -157,6 +157,13 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
   end
 
+  test "Core bridge preserves an author failure carrying reflected syntax arguments" do
+    repr =
+      {:syn_failure, :BadInput, [{:syn_leaf, :variable, [], {:s_str, "n"}}]}
+
+    assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
+  end
+
   test "a derived rule record encodes reflected syntax fields as a Core constructor" do
     input = {:syn_node, :macro_input, [], [{:syn_leaf, :variable, [], {:s_str, "n"}}]}
 
