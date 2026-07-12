@@ -36,8 +36,8 @@ defmodule Cure.Compiler.MacroValidate do
     ast
     |> collect_macro_defs()
     |> Enum.reduce_while(:ok, fn macro_def, :ok ->
-      with :ok <- check_explain_exhaustive(macro_def),
-           :ok <- check_rules_pinned(macro_def),
+      with :ok <- check_explain_if_declared(macro_def),
+           :ok <- check_pins_if_explainable(macro_def),
            :ok <- check_examples(macro_def, env),
            :ok <- check_computed_examples(macro_def, env),
            :ok <- check_expansion_proof(macro_def, env) do
@@ -46,6 +46,18 @@ defmodule Cure.Compiler.MacroValidate do
         {:error, _} = error -> {:halt, error}
       end
     end)
+  end
+
+  # A handwritten macro may intentionally use the lightweight compatibility
+  # surface without an `explain` block. When the author declares that block,
+  # enforce the complete self-proving contract; all macros still receive the
+  # expansion soundness gate below.
+  defp check_explain_if_declared({:macro_def, _meta, rules} = macro_def) do
+    if Enum.any?(rules, &(&1[:kind] == :explain)), do: check_explain_exhaustive(macro_def), else: :ok
+  end
+
+  defp check_pins_if_explainable({:macro_def, _meta, rules} = macro_def) do
+    if Enum.any?(rules, &(&1[:kind] == :explain)), do: check_rules_pinned(macro_def), else: :ok
   end
 
   # StreamData is a test-only dependency. Structural macro validation remains

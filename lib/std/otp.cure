@@ -35,16 +35,18 @@ mod Std.Otp
   ## parsed again by the normal Cure parser and lowered by the generic OTP
   ## backend; the compiler has no actor/fsm/supervisor/application classes.
   macro OtpContainers
-    syntax actor <name: Identifier> <body: raw until dedent> becomes __otp_container(:actor, name, body)
+    syntax actor <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:actor, name, payload, body)
       example actor Cure.Example expands actor Cure.Example
-    syntax fsm <name: Identifier> <body: raw until dedent> becomes __otp_container(:fsm, name, body)
+    syntax fsm <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:fsm, name, payload, body)
       example fsm Cure.Example expands fsm Cure.Example
-    syntax sup <name: Identifier> <body: raw until dedent> becomes __otp_container(:sup, name, body)
+    syntax sup <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:sup, name, payload, body)
       example sup Cure.Example expands sup Cure.Example
-    syntax app <name: Identifier> <body: raw until dedent> becomes __otp_container(:app, name, body)
+    syntax app <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:app, name, payload, body)
       example app Cure.Example expands app Cure.Example
     explain
       Identifier => "a container name is required"
+      Code => "a container payload must be a Cure expression"
+      keyword "with" => "payloads are introduced with the with keyword"
       keyword "actor" => "starts an OTP actor container"
       keyword "fsm" => "starts an OTP state-machine container"
       keyword "sup" => "starts an OTP supervisor container"

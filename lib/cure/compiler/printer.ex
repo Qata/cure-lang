@@ -1183,13 +1183,79 @@ defmodule Cure.Compiler.Printer do
     "rewrite " <> render(proof, depth, indent) <> " in " <> render(body, depth, indent)
   end
 
-  # -- Fallback --------------------------------------------------------------
+  # -- Macro definitions -----------------------------------------------------
+
+  defp to_string({:macro_def, meta, rules}, depth, indent) do
+    name = Keyword.get(meta, :name)
+    pad = String.duplicate(indent, depth + 1)
+
+    body =
+      rules
+      |> Enum.flat_map(&macro_rule_lines(&1, depth + 1, indent))
+      |> Enum.join("\n#{pad}")
+      |> String.split("\n")
+      |> Enum.reject(&(String.trim(&1) == ""))
+      |> Enum.join("\n")
+
+    "macro #{name}\n#{pad}#{body}"
+  end
 
   defp to_string(other, _depth, _indent) when is_binary(other), do: other
 
   defp to_string(other, _depth, _indent) do
     raise Cure.Compiler.Printer.UnprintableNodeError, node: other
   end
+
+  defp macro_rule_lines(%{kind: kind, keyword: keyword, segments: segments, template: template} = rule, depth, indent)
+       when kind in [:syntax, :computed] do
+    verb = if kind == :computed, do: "computed by", else: "becomes"
+    head = "syntax #{keyword} #{macro_segments_to_string(segments)} #{verb} #{render(template, depth, indent)}"
+
+    examples =
+      rule
+      |> Map.get(:examples, [])
+      |> Enum.map(fn example ->
+        use_site = macro_use_site_to_string(example.use_site)
+        expected = render(elem(example.expected, 1), depth + 1, indent)
+        "#{String.duplicate(indent, max(depth - 1, 0))}example #{use_site} expands #{expected}"
+      end)
+
+    [head | examples]
+  end
+
+  defp macro_rule_lines(%{kind: :literal, segments: segments, template: template}, depth, indent),
+    do: ["literal #{macro_segments_to_string(segments)} becomes #{render(template, depth, indent)}"]
+
+  defp macro_rule_lines(%{kind: :explain, clauses: clauses}, depth, indent) do
+    pad = String.duplicate(indent, depth + 1)
+    lines = Enum.map(clauses, fn %{point: point, body: body} -> "#{macro_point_to_string(point)} => #{render(body, depth + 1, indent)}" end)
+    ["explain\n#{pad}" <> Enum.join(lines, "\n#{pad}")]
+  end
+
+  defp macro_rule_lines(_rule, _depth, _indent), do: []
+
+  defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
+  defp macro_segment_to_string({:lit, word}), do: word
+  defp macro_segment_to_string({:hole, %{name: name, kind: kind}}), do: "<#{name}: #{kind}>"
+  defp macro_segment_to_string({:raw_hole, %{name: name, delimiter: delimiter}}), do: "<#{name}: raw until #{delimiter}>"
+  defp macro_segment_to_string({:repeat, segment}), do: macro_segment_to_string(segment) <> "..."
+  defp macro_segment_to_string({:optional, segments}), do: "(#{macro_segments_to_string(segments)})?"
+  defp macro_segment_to_string(other), do: to_string(other)
+
+  defp macro_token_to_string(%Cure.Compiler.Token{value: value}) when is_binary(value), do: value
+  defp macro_token_to_string(%Cure.Compiler.Token{value: value}) when is_atom(value), do: Atom.to_string(value)
+  defp macro_token_to_string(%Cure.Compiler.Token{value: value}), do: to_string(value)
+  defp macro_token_to_string(other), do: to_string(other)
+
+  defp macro_use_site_to_string(tokens) do
+    tokens
+    |> Enum.map(&macro_token_to_string/1)
+    |> Enum.join(" ")
+    |> String.replace(" . ", ".")
+  end
+
+  defp macro_point_to_string({:category, category}), do: category
+  defp macro_point_to_string({:keyword, keyword}), do: "keyword \"#{keyword}\""
 
   # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1681,19 +1747,7 @@ defmodule Cure.Compiler.Printer do
         "#{key} = #{render(val, depth + 1, indent)}"
       end
 
-    children_block =
-      case body do
-        [] ->
-          []
-
-        specs ->
-          specs_str =
-            specs
-            |> Enum.map(&render(&1, depth + 2, indent))
-            |> Enum.join("\n#{child_pad}")
-
-          ["children\n#{child_pad}#{specs_str}"]
-      end
+    children_block = supervisor_children_to_string(body, depth, indent, child_pad)
 
     lines = settings ++ children_block
 
@@ -1701,6 +1755,30 @@ defmodule Cure.Compiler.Printer do
       [] -> "sup #{name}"
       _ -> "sup #{name}\n#{pad}" <> Enum.join(lines, "\n#{pad}")
     end
+  end
+
+  defp supervisor_children_to_string([], _depth, _indent, _child_pad), do: []
+
+  defp supervisor_children_to_string([{:variable, _, "children"}, {:block, _, items}], depth, indent, child_pad) do
+    grouped =
+      items
+      |> Enum.group_by(fn
+        {_tag, meta, _value} when is_list(meta) -> Keyword.get(meta, :line, 0)
+        _ -> 0
+      end)
+      |> Enum.sort_by(&elem(&1, 0))
+
+    lines =
+      Enum.map(grouped, fn {_line, nodes} ->
+        Enum.map_join(nodes, " ", &render(&1, depth + 2, indent))
+      end)
+
+    ["children\n#{child_pad}" <> Enum.join(lines, "\n#{child_pad}")]
+  end
+
+  defp supervisor_children_to_string(specs, depth, indent, child_pad) do
+    specs_str = Enum.map_join(specs, "\n#{child_pad}", &render(&1, depth + 2, indent))
+    ["children\n#{child_pad}#{specs_str}"]
   end
 
   # -- Actor container (`actor Name [with Init]`) ----------------------------

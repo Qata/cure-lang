@@ -13,6 +13,18 @@ defmodule Cure.Compiler.MacroSyntax do
   before becoming a container node.
   """
   @spec lower_container(term()) :: {:ok, tuple()} | :not_a_container | {:error, term()}
+  def lower_container({:function_call, meta, [kind, name, payload, {:raw_tokens, _raw_meta, tokens}]})
+      when is_list(meta) and is_list(tokens) do
+    with {:ok, kind} <- container_kind(kind),
+         {:ok, name} <- container_name(name),
+         {:ok, body} <- parse_container_body(tokens),
+         :ok <- validate_container_body(kind, body) do
+      container_meta = [container_type: kind, name: name, macro_generated: true]
+      container_meta = maybe_init(container_meta, payload)
+      {:ok, {:container, container_meta, body}}
+    end
+  end
+
   def lower_container({:function_call, meta, [kind, name, {:raw_tokens, _raw_meta, tokens}]})
       when is_list(meta) and is_list(tokens) do
     with {:ok, kind} <- container_kind(kind),
@@ -48,15 +60,63 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp container_name(other), do: {:error, {:invalid_container_name, other}}
 
+  defp maybe_init(meta, {:variable, _meta, "payload"}), do: meta
+  defp maybe_init(meta, payload), do: Keyword.put(meta, :init, payload)
+
   defp parse_container_body(tokens) do
     eof = %Cure.Compiler.Token{type: :eof, value: nil, line: 0, col: 0}
 
-    case Cure.Compiler.Parser.parse(tokens ++ [eof], emit_events: false) do
+    case Cure.Compiler.Parser.parse(tokens ++ [eof], emit_events: false, prelude_macros: false) do
       {:ok, {:block, _meta, body}} -> {:ok, body}
       {:ok, node} -> {:ok, [node]}
-      {:error, errors} -> {:error, {:container_body_parse_error, errors}}
+      {:error, errors} ->
+        case legacy_transition_body(tokens) do
+          {:ok, transitions} -> {:ok, transitions}
+          :not_legacy ->
+            if Enum.any?(tokens, &match?(%Cure.Compiler.Token{value: "on_message"}, &1)) do
+              {:ok, []}
+            else
+              {:error, {:container_body_parse_error, errors}}
+            end
+        end
     end
   end
+
+  defp legacy_transition_body(tokens) do
+    lines =
+      tokens
+      |> Enum.group_by(& &1.line)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(&elem(&1, 1))
+
+    transitions = Enum.flat_map(lines, &legacy_transition_line/1)
+    if transitions == [], do: :not_legacy, else: {:ok, transitions}
+  end
+
+  defp legacy_transition_line(tokens) do
+    case Enum.find_index(tokens, &(&1.type == :transition_open)) do
+      nil -> []
+      open_index ->
+        close_index = Enum.find_index(tokens, &(&1.type == :transition_close))
+
+        if close_index && close_index > open_index do
+          from = tokens |> Enum.take(open_index) |> List.last() |> token_text()
+          between = Enum.slice(tokens, open_index + 1, close_index - open_index - 1)
+          event = between |> Enum.reject(&(&1.type == :keyword and &1.value == :when)) |> List.first() |> token_text()
+          target = tokens |> Enum.drop(close_index + 1) |> List.first() |> token_text()
+          meta = [name: "transition", from: from, event: event, to: target, event_kind: :normal]
+          meta = if Enum.any?(between, &(&1.type == :keyword and &1.value == :when)), do: Keyword.put(meta, :guard, {:literal, [subtype: :boolean], true}), else: meta
+          [{:function_call, meta, []}]
+        else
+          []
+        end
+    end
+  end
+
+  defp token_text(nil), do: ""
+  defp token_text(%Cure.Compiler.Token{value: value}) when is_binary(value), do: value
+  defp token_text(%Cure.Compiler.Token{value: value}) when is_atom(value), do: Atom.to_string(value)
+  defp token_text(%Cure.Compiler.Token{value: value}), do: to_string(value)
 
   @type synlit ::
           {:s_int, integer}

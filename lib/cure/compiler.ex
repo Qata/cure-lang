@@ -259,6 +259,7 @@ defmodule Cure.Compiler do
         :not_a_container ->
           case dependent_codegen(ast) do
             {:ok, forms} -> {:ok, forms, []}
+            {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
             {:error, _} = err -> err
           end
 
