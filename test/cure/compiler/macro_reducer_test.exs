@@ -49,4 +49,21 @@ defmodule Cure.Compiler.MacroReducerTest do
                env
              )
   end
+
+  test "view and flow dogfood share exhaustive reflection dispatch" do
+    assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
+    scrutinee = {:variable, [scope: :local], "flag"}
+    body = {:literal, [subtype: :integer], 0}
+    arms = [%{constructor: :Off, body: body}, %{constructor: :On, body: body}]
+
+    assert {:ok, {:pattern_match, [generated_by: :macro_view], _}} =
+             MacroReducer.build_view("Flag", scrutinee, arms, env)
+
+    assert {:ok, flow_ast} = MacroReducer.build_flow("Flag", scrutinee, arms, env)
+    assert {:pattern_match, [generated_by: :macro_flow], [^scrutinee | _]} = flow_ast
+
+    flag_type = Eval.eval({:data, :Flag, [], []}, env)
+    ctx = Context.extend(Context.empty(env), flag_type)
+    assert {:ok, _term, {:vint_type}} = Elaborator.elaborate_expr_typed(flow_ast, ["flag"], ctx, env)
+  end
 end

@@ -18,11 +18,26 @@ defmodule Cure.Compiler.MacroReducer do
 
   @spec build_match(String.t() | atom(), term(), [arm_spec()], Env.t()) ::
           {:ok, term()} | {:error, term()}
-  def build_match(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs) do
+  def build_match(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs),
+    do: build_dispatch(:macro_reducer, type_name, scrutinee, arm_specs, env)
+
+  @doc "Build exhaustive constructor dispatch for a view-style macro."
+  @spec build_view(String.t() | atom(), term(), [arm_spec()], Env.t()) ::
+          {:ok, term()} | {:error, term()}
+  def build_view(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs),
+    do: build_dispatch(:macro_view, type_name, scrutinee, arm_specs, env)
+
+  @doc "Build exhaustive constructor dispatch for a flow-style macro."
+  @spec build_flow(String.t() | atom(), term(), [arm_spec()], Env.t()) ::
+          {:ok, term()} | {:error, term()}
+  def build_flow(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs),
+    do: build_dispatch(:macro_flow, type_name, scrutinee, arm_specs, env)
+
+  defp build_dispatch(generated_by, type_name, scrutinee, arm_specs, env) do
     with {:ok, constructors} <- MacroReflection.constructors(env, type_name),
          :ok <- validate_arm_set(constructors, arm_specs),
          {:ok, arms} <- build_arms(constructors, arm_specs) do
-      {:ok, {:pattern_match, [generated_by: :macro_reducer], [scrutinee | arms]}}
+      {:ok, {:pattern_match, [generated_by: generated_by], [scrutinee | arms]}}
     end
   end
 
