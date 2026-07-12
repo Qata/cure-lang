@@ -548,17 +548,29 @@ M1+M3 checks coexist on one macro; use-site expansion unaffected. 668 tests, war
 `b7836c3` parse examples + `15c36fc` `check_rules_pinned/1`. Two of SP2's 3 gate errors now have live (unwired)
 checks: **M1 `missing_diagnosis`** ✅ + **M3 `rule_unpinned`** ✅. TCB delta ZERO.
 
-**NEXT: SP2 slice 2b = M3 expansion-equality (`example_mismatch`)** — Stage 2 plan. The ONE genuinely new
-algorithmic piece: for each `syntax` rule's example, feed the captured `use_site` tokens THROUGH the rule
-(reuse the two-phase parse so nested literal/`<fresh>` expansion runs), then check the result EQUALS the
-`{:expansion, ast}` **up to α-renaming** (normalise `<fresh>` gensyms `x$N` → positional), OR (for `{:type,
-ast}`) that the expansion elaborates to that type (reuse `Program.elaborate`, T8-style). GROUND FIRST: how to
-drive expansion of the use_site tokens (build a token stream `macro-def + fn __ex() = <use_site>` and parse it
-with the macro active → extract `__ex` body? or reuse `expand_rule` directly with hole bindings?); the
-α-equality comparator (walk both ASTs, map each `$`-suffixed gensym consistently, compare modulo that). Then
-Stages 3-5. After 2b: §3.4 `fail C` (needs Tier-3), Tier-3 `computed by`, then the WIRING slice (invoke all
-checks in the compile pipeline + pin SP1's own macros). When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3.
-Deferred post-gate SP1: T9, T7b.
+SP2 slice-2b (M3 expansion-equality, `example_mismatch`) Stage 2 DONE — plan committed at
+`docs/superpowers/plans/2026-07-12-macro-facility-sp2c-plan.md`. Grounded LIVE: expansion of `every 500` =
+`{:function_call, [name: "Timer.repeat", line:2, col:50], [{:literal, [subtype: :integer, line:3,col:16], 500}]}`
+vs standalone `Timer.repeat(500)` — differ ONLY in `:line`/`:col` (semantic meta name/subtype identical). So
+the α-comparator = **strip :line/:col from all meta + collapse `<fresh>` gensym suffix (`x$0`→`x`), then `==`**.
+Two tasks: T1 `Parser.expand_example/2` (public driver — seeds `active_macros`/`literal_macros` from the rules
+via a synthetic `[{:macro_def,[],rules}]`, builds a `%Parser{}` state on `use_site_tokens ++ [eof]`, calls
+`parse_expr(state,0)` → the same expansion a real use-site gets, nested literal/`<fresh>` included); T2
+`MacroValidate.check_examples/1` + `normalize/1` (strip_pos + degensym, mirrors subst_holes meta walk) →
+`{:example_mismatch, [%{keyword,expected,actual}]}` + render clause. Scope: `{:expansion,ast}` pins only;
+`{:type,ast}` type-only pins (§5.2, needs `Program.elaborate`) DEFERRED. Honest limit noted: gensym-suffix
+strip is a first-cut α, not capture-aware de Bruijn. TCB delta ZERO, unwired.
+
+**NEXT:** SP2 slice-2b Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2c plan (plan-for-code:
+falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: does `expand_example`'s
+hand-built `%Parser{}` + `parse_expr(state,0)` actually expand the use-site (patch it in + run — highest risk;
+does harvest on `[{:macro_def,[],rules}]` seed correctly; does the eof token suffice)? the `normalize` walk vs
+subst_holes (does it strip enough / too much meta — e.g. `name`/`subtype`/`operator` semantic keys MUST survive;
+`scope` on variables — keep or strip?); degensym false-positive risk (two fresh names → same base); the `for`
+comprehension multi-generator + `actual = ...` binding form is valid Elixir; `check_examples` handles a rule
+with NO examples (2a's rule_unpinned covers presence; here empty → no mismatch); clause grouping. Then Stage 4
+execute, Stage 5 review. After 2b: `{:type}` pin check, §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done →
+SP2 Stage 6 → SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
