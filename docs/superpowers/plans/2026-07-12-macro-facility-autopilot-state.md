@@ -548,6 +548,23 @@ M1+M3 checks coexist on one macro; use-site expansion unaffected. 668 tests, war
 `b7836c3` parse examples + `15c36fc` `check_rules_pinned/1`. Two of SP2's 3 gate errors now have live (unwired)
 checks: **M1 `missing_diagnosis`** ✅ + **M3 `rule_unpinned`** ✅. TCB delta ZERO.
 
+## OPERATOR DESIGN DECISION (2026-07-12): SP3 generator architecture — `Generator` typeclass + middle-path engine
+Full spec: `docs/superpowers/specs/2026-07-12-generator-typeclass-pbt-architecture.md`. Decided across a design
+session: (1) a `Generator(a)` TYPECLASS with stdlib conformance + `deriving` = the user-facing PBT magic
+(`forall` on any type, generator auto-resolved) — lives in Cure `Std.Gen`/`Std.Test`, RUNTIME, unaffected by
+any SP3 engine choice. (2) **MIDDLE PATH (Hegel pattern), chosen "for now":** separate ENGINE (drive-loop +
+shrink + example-DB) from DOMAIN (the one shared `Generator` typeclass). SP3's macro fuzzer = compile-time
+Antigen (host engine) invoking the SAME Cure `Generator` instances to fill typed holes → assert each expansion
+elaborates. User PBT = `Std.Test` at runtime. ONE generator system, two runners by phase. REJECTED: reimplement
+Hypothesis-in-Cure (Hegel's warned-against waste) AND literal-Hegel external-Python-Hypothesis server (breaks
+self-contained BEAM toolchain). (3) **Phase 2 (later, operator: "rewrite on top of a ported conjecture"):** port
+Hypothesis's choice-sequence CONJECTURE model → internal/free composable shrinking for every conforming type
+(incl. derived), + example-DB unified with Antigen's corpus/replay; re-base both runners; `Generator` interface
+survives unchanged. Enabler = SP2 Tier-3 (run Cure gens at compile time) + SP4 reflection (Code-hole gen) —
+already SP3's prereqs, no reorder. OPEN Qs to verify before the foundation slice: Antigen's current shrinking
+model; can the host engine invoke a Cure `Generator` at compile time; how much `deriving` is built; `Gen(a)`
+repr that survives the re-base. Committed as a spec (this firing).
+
 SP2 slice-2b (M3 expansion-equality, `example_mismatch`) Stage 2 DONE — plan committed at
 `docs/superpowers/plans/2026-07-12-macro-facility-sp2c-plan.md`. Grounded LIVE: expansion of `every 500` =
 `{:function_call, [name: "Timer.repeat", line:2, col:50], [{:literal, [subtype: :integer, line:3,col:16], 500}]}`
