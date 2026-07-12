@@ -68,7 +68,14 @@ defmodule Cure.Compiler.MacroHygieneTest do
     Parser.parse(tokens, emit_events: false)
   end
 
-  # Find the first {:fresh_name, _, _} anywhere in an AST.
+  # Find the first {:fresh_name, _, _} anywhere in an AST. A macro's rule is
+  # stored as a plain Elixir map (`%{template: ..., segments: ..., ...}`),
+  # not an AST tuple, so the generic tuple-recursion clause below can never
+  # reach a rule's `:template` on its own (verified live: without this clause,
+  # find_fresh/1 returns nil even after <fresh Name> parses correctly, because
+  # {:macro_def, _, [%{...}]}'s child is a bare map, which matches neither the
+  # :fresh_name clause nor the {_t,_m,ch} tuple clause). Unwrap it explicitly.
+  defp find_fresh(%{template: t}), do: find_fresh(t)
   defp find_fresh({:fresh_name, _, _} = f), do: f
   defp find_fresh({_t, _m, ch}) when is_list(ch), do: Enum.find_value(ch, &find_fresh/1)
   defp find_fresh(_), do: nil
@@ -84,6 +91,16 @@ end
 - [ ] **Step 2: Run it — expect FAIL** (no `:lt` prefix case; `<fresh h>` errors, so `parse` returns `{:error, …}` and the `{:ok, ast} =` match raises / no fresh_name node).
 
 Run: `mix test test/cure/compiler/macro_hygiene_test.exs` → FAIL.
+
+**Verified live (with Task 1's Step 3 diff temporarily applied, then reverted):**
+parsing `"mod M\n  macro G\n    syntax g becomes let <fresh h> = 100 in h\n"` correctly
+yields `{:fresh_name, [line: 3, col: 26], "h"}` nested inside the rule map's
+`:template` — confirming the implementation below is correct — but `find_fresh/1`
+without the `%{template: t}` clause returns `nil` for this AST regardless of
+whether Task 1 is implemented (a macro rule's fields live in a bare Elixir map,
+not an AST tuple, so the generic recursion never reaches `:template`). The
+`find_fresh` fix above is therefore load-bearing, not cosmetic: without it Step 4
+below cannot pass no matter how Step 3 is implemented.
 
 - [ ] **Step 3: Add the `:lt` prefix case**
 
@@ -129,7 +146,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
 ### Task 2: Freshen `<fresh Name>` to a per-expansion gensym (capture-free)
 
 **Files:**
-- Modify: `lib/cure/compiler/parser.ex` (defstruct `:45`; `parse_macro_use/2` and `expand_rule/2` at `:195`; add `freshen/2`, `collect_fresh_names/1`, `apply_freshening/2`)
+- Modify: `lib/cure/compiler/parser.ex` (defstruct `:45`; `parse_macro_use/2` and `expand_rule/2` at `:195`; add `freshen/2`, `collect_fresh_names/1` + `collect_fresh_names_meta/1` + `collect_fresh_names_value/1`, `apply_freshening/2` + `apply_freshening_meta/2` + `apply_freshening_value/2`)
 - Test: `test/cure/compiler/macro_hygiene_test.exs` (extend)
 
 **Interfaces:**
@@ -167,10 +184,21 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
     assert lhs == "g"
     # the template's own reference `g` was freshened to match the binder
     assert rhs == binder
-    # and there is no leftover unexpanded marker
-    refute match?({:fresh_name, _, _}, assign)
+    # and there is no leftover unexpanded marker ANYWHERE in the expanded body
+    # (not just at the binder position destructured above — reuses Task 1's
+    # find_fresh/1, which walks the full tree including node meta).
+    refute find_fresh(body)
   end
 ```
+
+Note: the prior destructure (`{:assignment, _, [{:variable, _, binder}, _]} = assign`)
+already forces a `MatchError` — i.e. a red failure — if the binder position still
+holds a raw `{:fresh_name, _, _}` marker, so this is not the only guard against a
+leftover marker. But that destructure only inspects the binder's position; `find_fresh`
+additionally covers markers hiding elsewhere in the tree (e.g. under node `meta`,
+mirroring how Task 1's helper already looks past plain children). Keeping both keeps
+the test's failure mode precise (a MatchError pinpoints the binder; a bare `refute`
+failure at the last line means the marker survived somewhere else).
 
 - [ ] **Step 2: Run it — expect FAIL** (Task 1 parses `<fresh g>` to a `{:fresh_name}` marker but expansion does not freshen yet: the binder stays a `{:fresh_name, _, "g"}` node, so `{:assignment, _, [{:variable, _, binder}, _]}` does not match / `binder == "g"` is not established).
 
@@ -245,15 +273,33 @@ Thread state through `parse_macro_use/2`'s success arm and rewrite `expand_rule`
   defp collect_fresh_names(_), do: MapSet.new()
 
   # Fresh markers can hide in meta (e.g. a match-arm guard), same reason
-  # subst_holes walks meta (T8 review 6e01715).
+  # subst_holes walks meta (T8 review 6e01715). A meta VALUE can itself be a
+  # raw list of AST nodes rather than a single tuple -- e.g. a `with`
+  # rematch-arm's `:parent_patterns` (`{:with_rematch_arm, [parent_patterns:
+  # [pat1, pat2, ...], pattern: p], [body]}`, confirmed real and exercised by
+  # test/cure/compiler/with_parse_test.exs:121 -- `Keyword.fetch!(m1,
+  # :parent_patterns)` returns a bare list). subst_holes_meta_value splits on
+  # is_tuple/is_list for exactly this reason; mirror it here via
+  # collect_fresh_names_value, or a `<fresh Name>` used as a with-rematch
+  # parent pattern is invisible to collection (never gets a gensym) and its
+  # raw marker then leaks unrewritten into the final AST -- the kernel has no
+  # `:fresh_name` node, so this would silently violate the "zero TCB delta,
+  # still surface-AST-to-surface-AST" invariant for that one construct.
   defp collect_fresh_names_meta(meta) when is_list(meta) do
     Enum.reduce(meta, MapSet.new(), fn
-      {_k, v}, acc -> MapSet.union(acc, collect_fresh_names(v))
+      {_k, v}, acc -> MapSet.union(acc, collect_fresh_names_value(v))
       _, acc -> acc
     end)
   end
 
   defp collect_fresh_names_meta(_), do: MapSet.new()
+
+  defp collect_fresh_names_value(v) when is_tuple(v), do: collect_fresh_names(v)
+
+  defp collect_fresh_names_value(v) when is_list(v),
+    do: Enum.reduce(v, MapSet.new(), &MapSet.union(&2, collect_fresh_names_value(&1)))
+
+  defp collect_fresh_names_value(_), do: MapSet.new()
 
   # Rewrite: a marker becomes a variable of its gensym; a plain variable whose
   # name is a declared fresh name becomes its gensym; everything else recurses
@@ -275,15 +321,38 @@ Thread state through `parse_macro_use/2`'s success arm and rewrite `expand_rule`
 
   defp apply_freshening_meta(meta, rename) when is_list(meta) do
     Enum.map(meta, fn
-      {k, v} -> {k, apply_freshening(v, rename)}
+      {k, v} -> {k, apply_freshening_value(v, rename)}
       other -> other
     end)
   end
 
   defp apply_freshening_meta(meta, _rename), do: meta
+
+  defp apply_freshening_value(v, rename) when is_tuple(v), do: apply_freshening(v, rename)
+
+  defp apply_freshening_value(v, rename) when is_list(v),
+    do: Enum.map(v, &apply_freshening_value(&1, rename))
+
+  defp apply_freshening_value(v, _rename), do: v
 ```
 
 Note: a fresh name that collides with a hole name (e.g. `<fresh e>` when `e` is also a hole) would freshen the hole's references before substitution — an author error. This is out of scope for T7 (single trailing holes, distinct names in all tests); T7b's grounding should add a collision diagnostic. Do NOT silently mis-handle: leave a plan note, do not add speculative code.
+
+**Reviewer addendum (verified live):** `collect_fresh_names_meta`/`apply_freshening_meta`
+now delegate to `collect_fresh_names_value`/`apply_freshening_value`, mirroring
+`subst_holes_meta_value`'s `is_tuple`/`is_list` split exactly (parser.ex:237-239) —
+without this split, a meta value that is itself a raw list of AST nodes (confirmed
+real: `with`-rematch's `:parent_patterns`, per `with_parse_test.exs:121`) bypasses
+both collection and rewriting, since neither the `{:fresh_name,...}` clause nor the
+`{t, meta, ch}` tuple clause of `apply_freshening`/`collect_fresh_names` can match a
+bare Elixir list. A `<fresh Name>` written as a with-rematch parent pattern inside a
+template would otherwise reach the elaborator as a raw, unrecognized `:fresh_name`
+node. No new dedicated test is added for this specific edge case (constructing a
+typed with-rematch scenario purely inside a one-line `becomes` template is disproportionate
+scope for T7); the fix is a direct structural mirror of already-proven code
+(`subst_holes_meta_value`), not new speculative logic, and Task 2's existing
+`refute find_fresh(body)` assertion (added above) would catch a regression in the
+common case even though it doesn't exercise this specific list-meta path.
 
 - [ ] **Step 4: Run the test — expect PASS**
 
