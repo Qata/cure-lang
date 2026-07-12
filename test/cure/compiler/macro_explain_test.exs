@@ -36,4 +36,48 @@ defmodule Cure.Compiler.MacroExplainTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
     assert Enum.any?(errors, &match?({:expected, :explain_point, :got, _, _, _}, &1))
   end
+
+  alias Cure.Compiler.{MacroValidate, Errors}
+
+  defp macro_def!(src) do
+    node = parse!(src)
+    find = fn find, n ->
+      case n do
+        {:macro_def, _, _} = m -> m
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+    find.(find, node)
+  end
+
+  test "a macro whose explain omits a hole's category is missing_diagnosis" do
+    md =
+      macro_def!(
+        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n  explain\n    keyword \"every\" =>\n      \"starts with every\"\n"
+      )
+
+    assert {:error, {:missing_diagnosis, points}} = MacroValidate.check_explain_exhaustive(md)
+    assert {:hole_kind, "Duration"} in points
+
+    rendered = Errors.format_error({:missing_diagnosis, points}, "m.cure")
+    assert rendered =~ "Duration"
+    refute rendered =~ ":missing_diagnosis"
+  end
+
+  test "a macro whose explain covers every structural point checks clean" do
+    md =
+      macro_def!(
+        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n  explain\n    Duration =>\n      \"needs a duration\"\n    keyword \"every\" =>\n      \"starts with every\"\n"
+      )
+
+    assert :ok = MacroValidate.check_explain_exhaustive(md)
+  end
+
+  test "a macro with NO explain block reports every structural point as missing" do
+    md = macro_def!("macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n")
+    assert {:error, {:missing_diagnosis, points}} = MacroValidate.check_explain_exhaustive(md)
+    assert {:hole_kind, "Duration"} in points
+    assert {:keyword, "every"} in points
+  end
 end

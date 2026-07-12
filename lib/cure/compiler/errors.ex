@@ -393,11 +393,27 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:missing_diagnosis, points}, file) do
+    listed = points |> Enum.map(&describe_point/1) |> Enum.join(", ")
+
+    format_diagnostic(
+      "error",
+      "macro is missing a failure description",
+      file,
+      0,
+      "this macro can fail in ways it does not describe: #{listed}. Add an `explain` " <>
+        "clause for each (a `Category =>` covers a typed hole, `keyword \"w\" =>` a literal)."
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
     format_diagnostic("error", "compilation error", file, 0, inspect(error))
   end
+
+  defp describe_point({:hole_kind, k}), do: "a `#{k}` hole"
+  defp describe_point({:keyword, w}), do: "the keyword `#{w}`"
 
   # Grammatical article for the macro hole-kind diagnostic ("a Duration" / "an
   # Int"). Placed after the format_error/2 clause group to keep those contiguous.
