@@ -135,14 +135,17 @@ defmodule Cure.Elab.Union do
   The ERASED runtime shape of a member, as the Erlang guard that recognises it.
 
   This is what makes a union-returning `@extern` possible: Erlang hands back an untagged
-  value, and the boundary can only re-tag it if each member is recognisable. Members that
-  erase into the same shape are indistinguishable — `Int`/`Nat`/`Char` are all Erlang
-  integers, `Bool` erases to the atoms `true`/`false` so it collides with `Atom`, and
-  `String` IS `List(Char)` so it collides with any list.
+  value, and the boundary can only re-tag it if each member is recognisable.
 
-  `:unsupported` for anything whose erasure is not a single recognisable shape (a
-  user ADT erases to a bare atom when nullary and a tagged tuple otherwise, so it is
-  BOTH shapes and cannot be guarded).
+  Note `Bool` is `:boolean`, NOT `:atom`. It erases to the atoms `true`/`false`, but
+  `is_boolean/1` is a real, total Erlang guard that strictly REFINES `is_atom/1` — so
+  `Bool | Atom` is perfectly discriminable *by order* (see `refines?/2`). The question is
+  never "do two members share a class", it is "can one member's guard be ordered before
+  the other's".
+
+  `:unsupported` for anything whose erasure is not a single recognisable shape — a user
+  ADT erases to a bare atom when nullary and a tagged tuple otherwise, so it is BOTH
+  shapes at once and no single guard recognises it.
   """
   @spec runtime_class(member()) :: atom()
   def runtime_class(%{payload: nil, lit_type_key: t}), do: class_of_type_key(t)
@@ -152,7 +155,7 @@ defmodule Cure.Elab.Union do
   defp class_of_core({:float_type}), do: :float
   defp class_of_core({:binary_type}), do: :binary
   defp class_of_core({:atom_type}), do: :atom
-  defp class_of_core({:data, :Bool, _p, _i}), do: :atom
+  defp class_of_core({:data, :Bool, _p, _i}), do: :boolean
   defp class_of_core({:data, :Nat, _p, _i}), do: :integer
   defp class_of_core({:data, :Bounded, _p, _i}), do: :integer
   defp class_of_core({:data, :List, _p, _i}), do: :list
@@ -164,48 +167,79 @@ defmodule Cure.Elab.Union do
   defp class_of_type_key("Float"), do: :float
   defp class_of_type_key("Binary"), do: :binary
   defp class_of_type_key("Atom"), do: :atom
-  defp class_of_type_key("Bool"), do: :atom
+  defp class_of_type_key("Bool"), do: :boolean
   defp class_of_type_key("String"), do: :list
   defp class_of_type_key(_other), do: :unsupported
 
   @doc """
+  Does guard class `a` strictly REFINE class `b` — i.e. is every value `a` accepts also
+  accepted by `b`, so that ordering `a` first discriminates them?
+
+  `is_boolean/1` ⊂ `is_atom/1` is the only such pair among Cure's erased shapes.
+
+  Deliberately NOT extended to `Nat`/`Char` ⊂ `Int`: those would need a range predicate,
+  and the resulting precedence ("a small non-negative integer is ALWAYS a Nat, never an
+  Int") is surprising in a way "`true` is always a Bool" is not. They stay rejected.
+  """
+  @spec refines?(atom(), atom()) :: boolean()
+  def refines?(:boolean, :atom), do: true
+  def refines?(_a, _b), do: false
+
+  @doc """
   Can every member of this union be told apart from an untagged Erlang value?
 
-  Returns `:ok`, or `{:error, reason}` naming the colliding members.
+  Returns `:ok`, or `{:error, reason}` naming the members that cannot be separated.
 
-  TYPE members must occupy pairwise-distinct runtime classes. LITERAL members are
-  discriminated by EXACT VALUE, so several literals may share a class (`3 | 4` are both
-  integers but `=:= 3` and `=:= 4` tell them apart) — but a literal must not share a
-  class with a TYPE member, or a raw `3` could be either the literal `3` or an
-  arbitrary `Nat`.
+  Discrimination is ORDERED, most-specific-first:
+
+    1. **Literal** members test the exact value (`R =:= north`). An exact test refines
+       every class guard, so a literal may freely share a class with a type member — the
+       sentinel pattern `3 | Nat` ("a raw 3 is the sentinel, any other integer is a Nat")
+       is admissible and total.
+    2. **Type** members test their class guard, ordered so that a refining guard comes
+       first — `Bool` (`is_boolean`) before `Atom` (`is_atom`).
+
+  Two TYPE members conflict only when they share a class and neither refines the other:
+  `Int | Nat` (both integers), `String | List(Int)` (both lists). No order separates
+  those, so they are rejected.
   """
   @spec discriminable([member()]) :: :ok | {:error, term()}
   def discriminable(members) do
     {lits, types} = Enum.split_with(members, &(&1.payload == nil))
 
-    type_classes = Enum.map(types, &{&1.key, runtime_class(&1)})
-    lit_classes = Enum.map(lits, &{&1.key, runtime_class(&1)})
+    classes = Enum.map(types ++ lits, &{&1.key, runtime_class(&1)})
+    unsupported = for {k, :unsupported} <- classes, do: k
 
-    unsupported = for {k, :unsupported} <- type_classes ++ lit_classes, do: k
-
-    dup_types =
-      type_classes
-      |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
-      |> Enum.filter(fn {_c, ks} -> length(ks) > 1 end)
-
-    type_class_set = for {_k, c} <- type_classes, into: MapSet.new(), do: c
-
-    lit_vs_type =
-      for {k, c} <- lit_classes,
-          MapSet.member?(type_class_set, c),
-          do: k
+    # Only TYPE members can collide: a literal is an exact-value test, which refines any
+    # class guard and is emitted first.
+    collisions =
+      for {ka, ca} <- Enum.map(types, &{&1.key, runtime_class(&1)}),
+          {kb, cb} <- Enum.map(types, &{&1.key, runtime_class(&1)}),
+          ka < kb,
+          ca == cb or (not refines?(ca, cb) and not refines?(cb, ca) and ca == cb),
+          do: {ka, kb, ca}
 
     cond do
       unsupported != [] -> {:error, {:unsupported_member_shape, unsupported}}
-      dup_types != [] -> {:error, {:same_runtime_shape, dup_types}}
-      lit_vs_type != [] -> {:error, {:literal_shadowed_by_type, lit_vs_type}}
+      collisions != [] -> {:error, {:same_runtime_shape, collisions}}
       true -> :ok
     end
+  end
+
+  @doc """
+  Members ordered for runtime discrimination: literals (exact value) first, then type
+  members with refining guards ahead of the guards they refine.
+  """
+  @spec discrimination_order([member()]) :: [member()]
+  def discrimination_order(members) do
+    {lits, types} = Enum.split_with(members, &(&1.payload == nil))
+
+    sorted_types =
+      Enum.sort(types, fn a, b ->
+        refines?(runtime_class(a), runtime_class(b))
+      end)
+
+    lits ++ sorted_types
   end
 
   @doc """

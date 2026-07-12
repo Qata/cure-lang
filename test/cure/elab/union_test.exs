@@ -561,9 +561,13 @@ defmodule Cure.Elab.UnionTest do
   # union is a real tagged union everywhere in Cure; the untagging exists only at the FFI
   # seam.
   #
-  # Sound IFF the members are pairwise distinguishable by an Erlang guard. Members that
-  # share an erased representation (Int/Nat/Char all integers; Bool/Atom both atoms;
-  # String/List both lists) cannot be told apart and are REJECTED at the declaration.
+  # Sound IFF the members can be told apart from an untagged value by an ORDERED guard
+  # chain, most-specific-first: literals test the exact value, and a refining guard is
+  # emitted ahead of the guard it refines (`is_boolean` before `is_atom`, so `Bool | Atom`
+  # works — true/false take the Bool clause, every other atom falls through to Atom).
+  #
+  # Only members sharing a guard that neither refines are rejected: `Int | Nat` (both
+  # Erlang integers), `List(Int) | List(Bool)` (both lists). No order separates those.
   describe "@extern returning a union: discriminating wrapper" do
     test "distinguishable members are accepted and tagged at runtime" do
       src = """
@@ -610,7 +614,15 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
     end
 
-    test "REJECTS Bool | Atom — Bool erases to the atoms true/false" do
+    # SUPERSEDED. This originally asserted `Bool | Atom` was REJECTED, on the grounds
+    # that Bool erases to the atoms true/false and so "collides" with Atom. That
+    # encoded WRONG behaviour: `is_boolean/1` is a real, total Erlang guard that
+    # strictly REFINES `is_atom/1`, so the two are perfectly discriminable by ORDER —
+    # true/false take the Bool clause, every other atom falls through to Atom. The
+    # question is never "do two members share a class", it is "can one member's guard
+    # be ordered before the other's". Rejecting this lost real safety: the author's
+    # only alternative was to type the extern as a bare Atom and hand-check.
+    test "ACCEPTS Bool | Atom — is_boolean refines is_atom, so order discriminates" do
       src = """
       mod EXN2
         @extern(:erlang, :hd, 1)
@@ -618,14 +630,55 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      # true/false take the more specific Bool clause...
+      assert apply(:"Cure.EXN2", :raw, [[true]]) == {:"Union<Atom|Bool>$Bool", true}
+      assert apply(:"Cure.EXN2", :raw, [[false]]) == {:"Union<Atom|Bool>$Bool", false}
+      # ...and every other atom falls through to Atom.
+      assert apply(:"Cure.EXN2", :raw, [[:other]]) == {:"Union<Atom|Bool>$Atom", :other}
     end
 
-    test "REJECTS a literal whose class collides with a type member: 3 | Nat" do
+    # NOT admissible — and for a reason that has nothing to do with the FFI. `:north`'s
+    # type IS Atom, so `let x: :north | Atom = :north` admits TWO injections and there is
+    # no subtyping to break the tie. The design's literal/type overlap rule rejects it at
+    # canonicalisation, before runtime discrimination is even asked about.
+    #
+    # Worth stating plainly: INJECTION ambiguity and RUNTIME discrimination are different
+    # questions. Order resolves the second (`Bool | Atom`); it can never resolve the first.
+    test "REJECTS :north | Atom — a literal may not overlap its OWN type (injection, not FFI)" do
+      src = """
+      mod EXN2b
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Atom)) -> :north | Atom
+      end
+      """
+
+      assert {:error, {:union_member_overlap, "Atom#:north", "Atom"}} = Program.elaborate(src)
+    end
+
+    test "ACCEPTS a literal over a class member: 3 | Nat (the sentinel pattern)" do
       src = """
       mod EXN3
         @extern(:erlang, :abs, 1)
         fn raw(n: Int) -> 3 | Nat
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      assert apply(:"Cure.EXN3", :raw, [-3]) == :"Union<Int#3|Nat>$Int#3"
+      assert apply(:"Cure.EXN3", :raw, [-7]) == {:"Union<Int#3|Nat>$Nat", 7}
+    end
+
+    test "STILL REJECTS two class members that share a guard: List(Int) | List(Bool)" do
+      # Both erase to Erlang lists and neither guard refines the other — no order separates
+      # them, so no wrapper can exist.
+      src = """
+      mod EXN4
+        use Std.List
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Binary)) -> List(Int) | List(Bool)
       end
       """
 

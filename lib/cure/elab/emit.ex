@@ -266,10 +266,13 @@ defmodule Cure.Elab.Emit do
   # Literal members are matched by EXACT VALUE and come first — they are strictly more
   # specific than a type member's guard.
   defp union_dispatch(remote, members) do
-    {lits, types} = Enum.split_with(members, &(&1.payload == nil))
-
     clauses =
-      Enum.map(lits, &literal_clause/1) ++ Enum.map(types, &type_clause/1)
+      members
+      |> Cure.Elab.Union.discrimination_order()
+      |> Enum.map(fn
+        %{payload: nil} = lit -> literal_clause(lit)
+        type -> type_clause(type)
+      end)
 
     {:case, @line, remote, clauses}
   end
@@ -293,10 +296,14 @@ defmodule Cure.Elab.Emit do
     {:clause, @line, [{:var, @line, :R}], [[guard]], [body]}
   end
 
+  # `is_boolean` strictly refines `is_atom`, and `Union.discrimination_order/1` puts it
+  # first — so `true`/`false` take the Bool clause and every other atom falls through to
+  # Atom. That is why `Bool | Atom` is admissible rather than a collision.
+  defp class_guard(:boolean), do: :is_boolean
+  defp class_guard(:atom), do: :is_atom
   defp class_guard(:integer), do: :is_integer
   defp class_guard(:float), do: :is_float
   defp class_guard(:binary), do: :is_binary
-  defp class_guard(:atom), do: :is_atom
   defp class_guard(:list), do: :is_list
 
   defp literal_form(v) when is_integer(v), do: {:integer, @line, v}
