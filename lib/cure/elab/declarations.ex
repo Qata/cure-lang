@@ -304,7 +304,9 @@ defmodule Cure.Elab.Declarations do
   # Elaborate a function's body against its (already registered) signature and
   # replace the placeholder with the real lambda. The environment already carries
   # every function's signature, so forward references and mutual recursion resolve.
-  def elaborate_function_body({:function_def, meta, body}, env) do
+  def elaborate_function_body({:function_def, _meta, _body} = decl, env) do
+    {:function_def, meta, body} = desugar_clause_fn(decl)
+
     case Keyword.get(meta, :extern) do
       {mod, fun, arity} when is_atom(mod) and is_atom(fun) and is_integer(arity) ->
         # Wave-3: a bodyless @extern is a typed FFI postulate — the signature IS
@@ -346,6 +348,44 @@ defmodule Cure.Elab.Declarations do
     else
       {:error, {:extern_arity_mismatch, sig.name, arity, present}}
     end
+  end
+
+  # Multi-clause function-head syntax — `fn f(n) | 0 -> a | n -> b` — parses to a
+  # `{:function_def, [clauses: [...]], []}` whose body lives in `meta[:clauses]`
+  # (one `%{guard, params, body}` per clause) and whose top-level body is empty.
+  # The dependent pipeline elaborates a single body, so desugar the clauses into a
+  # `match` over the formal parameters: the scrutinee is the sole parameter (or a
+  # flat tuple `%[p1, …, pN]` of them), each clause becomes a `:match_arm` whose
+  # pattern is the clause's parameter pattern (or their tuple) and whose optional
+  # `when`-guard rides through as the arm guard. A def with no `clauses:` key is
+  # returned unchanged, so ordinary `fn f(x) = …` bodies are untouched. Signature
+  # registration reads `meta[:params]`/`:return_type`/`:name` and ignores the body,
+  # so it needs no desugaring.
+  defp desugar_clause_fn({:function_def, meta, _body} = decl) do
+    case Keyword.get(meta, :clauses) do
+      [_ | _] = clauses ->
+        formals = Keyword.get(meta, :params, [])
+        fmeta = Keyword.take(meta, [:line, :col])
+        scrut = clause_scrutinee(formals, fmeta)
+        arms = Enum.map(clauses, &clause_to_arm(&1, length(formals), fmeta))
+        match_expr = {:pattern_match, fmeta, [scrut | arms]}
+        {:function_def, Keyword.delete(meta, :clauses), [match_expr]}
+
+      _ ->
+        decl
+    end
+  end
+
+  defp clause_scrutinee([{:param, _pm, pname}], fmeta),
+    do: {:variable, [scope: :local] ++ fmeta, pname}
+
+  defp clause_scrutinee(formals, fmeta),
+    do: {:tuple, fmeta, Enum.map(formals, fn {:param, _pm, pname} -> {:variable, [scope: :local] ++ fmeta, pname} end)}
+
+  defp clause_to_arm(%{guard: guard, params: pats, body: cbody}, arity, fmeta) do
+    pattern = if arity == 1, do: hd(pats), else: {:tuple, fmeta, pats}
+    arm_meta = [pattern: pattern] ++ if(guard, do: [guard: guard], else: [])
+    {:match_arm, arm_meta, cbody}
   end
 
   defp elaborate_real_body(meta, body, env) do
