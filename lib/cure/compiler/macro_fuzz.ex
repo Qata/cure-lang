@@ -96,6 +96,17 @@ defmodule Cure.Compiler.MacroFuzz do
              ])
          }}
 
+      "Identifier" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :identifier,
+           env: generation_env,
+           ctx: ctx,
+           goal: nil,
+           generator: Gen.member_of([{:ctor, :Example, []}, {:ctor, :Worker, []}])
+         }}
+
       "Kind" ->
         {:ok,
          %{
@@ -347,6 +358,20 @@ defmodule Cure.Compiler.MacroFuzz do
   end
 
   defp check_expansion(keyword, input, expansion, env) do
+    case expansion do
+      {:container, _meta, _body} ->
+        case Cure.Compiler.ContainerMacro.descriptor(expansion) do
+          {:ok, _descriptor} -> :ok
+          {:error, reason} ->
+            {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+        end
+
+      _ ->
+        check_expression_expansion(keyword, input, expansion, env)
+    end
+  end
+
+  defp check_expression_expansion(keyword, input, expansion, env) do
     case Elaborator.elaborate_expr_typed(expansion, [], Context.empty(env), env) do
       {:ok, _term, _type} ->
         :ok
@@ -569,6 +594,13 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp check_samples(%{domain: :raw}, terms) do
     case Enum.find(terms, &(not match?({:raw_text, text} when is_binary(text), &1))) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: :identifier}, terms) do
+    case Enum.find(terms, &(not match?({:ctor, name, []} when is_atom(name), &1))) do
       nil -> :ok
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end

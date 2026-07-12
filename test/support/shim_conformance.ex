@@ -1,4 +1,6 @@
 defmodule Cure.Audit.ShimConformance do
+  @compile {:no_warn_undefined, :cure_std_regex}
+
   @moduledoc """
   Phase 1 of the axiom-surface program: mechanically check the `CURE RUNTIME`
   axioms against the Elixir that implements them.

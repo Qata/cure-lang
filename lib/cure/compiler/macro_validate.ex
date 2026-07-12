@@ -40,12 +40,19 @@ defmodule Cure.Compiler.MacroValidate do
            :ok <- check_rules_pinned(macro_def),
            :ok <- check_examples(macro_def, env),
            :ok <- check_computed_examples(macro_def, env),
-           :ok <- MacroFuzz.check_expansion_proof(macro_def, env) do
+           :ok <- check_expansion_proof(macro_def, env) do
         {:cont, :ok}
       else
         {:error, _} = error -> {:halt, error}
       end
     end)
+  end
+
+  # StreamData is a test-only dependency. Structural macro validation remains
+  # active in development/release builds; the generative gate runs whenever
+  # the optional backend is present (the test environment and CI).
+  defp check_expansion_proof(macro_def, env) do
+    if Code.ensure_loaded?(StreamData), do: MacroFuzz.check_expansion_proof(macro_def, env), else: :ok
   end
 
   @doc "Run only the generated expansion gate for transitional classic compiles."

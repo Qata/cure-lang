@@ -45,12 +45,11 @@ defmodule Cure.Compiler.Lexer do
   # `parse_app_container/1` when the token is followed by an identifier
   # at block-prefix position.
   @keywords ~w(
-    mod fn let type typealias opaque primitive indexed indices rec proto impl fsm local use as
+    mod fn let type typealias opaque primitive indexed indices rec proto impl local use as
     interface implementation deriving
     match pickup if elif else then for do end
     in try catch finally throw return yield
     spawn send receive after
-    actor
     when where and or not
     band bor bxor bsl bsr bnot
     true false nil
@@ -73,7 +72,6 @@ defmodule Cure.Compiler.Lexer do
     indent_stack: [0],
     at_line_start: true,
     paren_depth: 0,
-    fsm_transition_depth: 0,
     preserve_comments: false,
     collect_trivia: false,
     trivia: [],
@@ -695,22 +693,10 @@ defmodule Cure.Compiler.Lexer do
         c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c == ?_
       end)
 
-    # Inside FSM transition bodies, allow trailing ! or ? on identifiers
-    # to support determined (event!) and soft (event?) event suffixes.
-    # Everywhere else, allow a trailing `?` for predicate-style names
-    # (Elixir convention, e.g. `is_empty?`, `even?`). `!` is reserved for
-    # effect annotations and FSM hard events.
+    # Allow a trailing `?` for predicate-style names (Elixir convention,
+    # e.g. `is_empty?`, `even?`).
     {word, state} =
       cond do
-        state.fsm_transition_depth > 0 and not MapSet.member?(state.keyword_set, word) ->
-          case peek(state) do
-            c when c in [?!, ??] ->
-              {word <> <<c::utf8>>, advance(state, 1)}
-
-            _ ->
-              {word, state}
-          end
-
         not MapSet.member?(state.keyword_set, word) and peek(state) == ?? ->
           # `?` immediately followed by an identifier-starter is a *hole*
           # prefix (`?name`), so only consume the `?` when it is a
@@ -1310,47 +1296,14 @@ defmodule Cure.Compiler.Lexer do
         {:ok, %{state | tokens: [token | state.tokens]} |> advance(2)}
 
       ?- ->
-        # FSM transition: --event--> or --event when guard-->
-        lex_fsm_transition(state, start_col)
+        token = Token.new(:minus, "-", state.line, start_col)
+        maybe_emit_event(state, token)
+        {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
 
       _ ->
         token = Token.new(:minus, "-", state.line, start_col)
         maybe_emit_event(state, token)
         {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
-    end
-  end
-
-  defp lex_fsm_transition(state, start_col) do
-    # FSM transition: --event--> or --event when guard-->
-    # We emit: :transition_open (--), then let the parser handle the event name,
-    # and :transition_close (-->)
-    state = advance(state, 2)
-    token = Token.new(:transition_open, "--", state.line, start_col)
-    maybe_emit_event(state, token)
-    state = %{state | tokens: [token | state.tokens], fsm_transition_depth: state.fsm_transition_depth + 1}
-
-    # Now lex until we find -->
-    lex_fsm_transition_body(state)
-  end
-
-  defp lex_fsm_transition_body(state) do
-    case {peek(state), peek_at(state, 1), peek_at(state, 2)} do
-      {?-, ?-, ?>} ->
-        close_col = state.col
-        state = advance(state, 3)
-        token = Token.new(:transition_close, "-->", state.line, close_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens], fsm_transition_depth: max(state.fsm_transition_depth - 1, 0)}}
-
-      {nil, _, _} ->
-        {:error, {:unterminated_fsm_transition, state.line, state.col}, state}
-
-      _ ->
-        # Tokenize one token inside the transition
-        case lex_next(state) do
-          {:ok, state} -> lex_fsm_transition_body(state)
-          error -> error
-        end
     end
   end
 

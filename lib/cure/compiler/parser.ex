@@ -50,6 +50,7 @@ defmodule Cure.Compiler.Parser do
     emit_events: false,
     edition: nil,
     seen_stmt?: false,
+    builtin_macros: %{},
     active_macros: %{},
     computed_macros: %{},
     fresh_counter: 0,
@@ -82,7 +83,7 @@ defmodule Cure.Compiler.Parser do
   # collision would silently disable the existing form for the rest of the
   # module with no error raised. Reserved names simply keep today's
   # soft-keyword behavior; they are never macro-usable.
-  @reserved_macro_keywords ~w(assert_type rewrite sup app with macro)
+  @reserved_macro_keywords ~w(assert_type rewrite with macro)
 
   # Decorators that describe the *module*, not the declaration that follows.
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
@@ -114,6 +115,7 @@ defmodule Cure.Compiler.Parser do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, true)
     edition = Keyword.get(opts, :edition, Cure.Edition.current())
+    prelude? = Keyword.get(opts, :prelude_macros, true)
 
     # Phase 1 (harvest): parse once with NO active macros, keep only the local
     # macro grammars. Use-sites may mis-parse here; we discard everything but
@@ -130,6 +132,7 @@ defmodule Cure.Compiler.Parser do
       file: file,
       emit_events: emit?,
       edition: edition,
+      builtin_macros: if(prelude?, do: prelude_macros(), else: %{}),
       active_macros: active,
       computed_macros: computed,
       literal_macros: literal
@@ -153,6 +156,47 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp prelude_macros do
+    case {Process.get(:cure_loading_prelude), :persistent_term.get({__MODULE__, :prelude_macros}, :missing)} do
+      {true, _} -> %{}
+      {_, rules} when is_map(rules) -> rules
+      _ -> load_prelude_macros()
+    end
+  end
+
+  defp load_prelude_macros do
+    Process.put(:cure_loading_prelude, true)
+
+    rules =
+      case Application.get_env(:cure, :stdlib_macro_rules) do
+      rules when is_map(rules) -> rules
+        _ ->
+          path = Path.expand("../../std/otp.cure", __DIR__)
+
+          with {:ok, source} <- File.read(path),
+               {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
+               {:ok, ast} <- parse(tokens, file: path, emit_events: false, prelude_macros: false) do
+            ast
+            |> collect_macro_defs()
+            |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
+              Enum.reduce(rules, acc, fn
+                %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
+                  Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
+
+                _, acc2 ->
+                  acc2
+              end)
+            end)
+          else
+            _ -> %{}
+          end
+      end
+
+    :persistent_term.put({__MODULE__, :prelude_macros}, rules)
+    Process.delete(:cure_loading_prelude)
+    rules
+  end
+
   @doc """
   Expand a macro example's captured use-site tokens through the macro's own
   rules — the same expansion a real use-site gets (nested literal/`<fresh>`
@@ -172,6 +216,7 @@ defmodule Cure.Compiler.Parser do
       tokens: use_site_tokens ++ [eof],
       file: "example",
       emit_events: false,
+      builtin_macros: %{},
       active_macros: active,
       computed_macros: computed,
       literal_macros: literal
@@ -295,8 +340,10 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_macro_use(state, keyword) do
-    [rule | _] = Map.fetch!(state.active_macros, keyword)
+  defp parse_macro_use(state, keyword), do: parse_macro_use(state, keyword, state.active_macros)
+
+  defp parse_macro_use(state, keyword, registry) do
+    [rule | _] = Map.fetch!(registry, keyword)
     # consume the keyword token
     state = advance(state)
 
@@ -474,6 +521,15 @@ defmodule Cure.Compiler.Parser do
         raw = {:raw_tokens, [line: raw_line(captured, state), delimiter: delimiter], captured}
         match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
 
+      {:error, {:missing_raw_delimiter, "dedent"}} ->
+        # A top-level built-in macro may end at EOF without an indentation
+        # delimiter. Treat the remaining newline/trivia as an empty body and
+        # leave EOF for the enclosing program parser.
+        captured = Enum.take_while(remaining, &match?(%Token{type: :newline}, &1))
+        state = advance_n(state, length(captured))
+        raw = {:raw_tokens, [line: raw_line(captured, state), delimiter: delimiter], captured}
+        match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
+
       {:error, _} ->
         {:error, progress, state}
     end
@@ -542,8 +598,18 @@ defmodule Cure.Compiler.Parser do
   # then substitute the bound holes. Returns `{expanded_ast, state}` — the
   # freshening counter threads back out to the caller.
   defp expand_rule(rule, bindings, state) do
+    expand_template_rule(rule, bindings, state)
+  end
+
+  defp expand_template_rule(rule, bindings, state) do
     {freshened, state} = freshen(rule.template, state)
-    {subst_holes(freshened, bindings), state}
+    expanded = subst_holes(freshened, bindings)
+
+    case Cure.Compiler.MacroSyntax.lower_container(expanded) do
+      {:ok, ast} -> {ast, state}
+      :not_a_container -> {expanded, state}
+      {:error, reason} -> {{:macro_error, [reason: reason], []}, state}
+    end
   end
 
   # Mint one deterministic gensym per distinct declared fresh name, then rewrite
@@ -837,6 +903,11 @@ defmodule Cure.Compiler.Parser do
       # Variables / identifiers
       :identifier ->
         case token.value do
+          # Standard-library container macros use the same segment matcher as
+          # user macros. Their raw body is parsed again by MacroSyntax.
+          name when is_map_key(state.builtin_macros, name) ->
+            parse_macro_use(state, name, state.builtin_macros)
+
           # A use-site of a locally-defined macro keyword. Checked FIRST so a
           # macro keyword wins, but guarded so non-macro identifiers are
           # untouched. (Reserved soft-keyword names are excluded below.)
@@ -854,32 +925,6 @@ defmodule Cure.Compiler.Parser do
 
           "rewrite" ->
             parse_rewrite(state, token)
-
-          # Soft keyword: `sup Name ...` at statement-prefix position is
-          # the supervisor container. When `sup` is followed by anything
-          # other than an identifier (`:`, `,`, `}`, `)`, etc.) we treat
-          # it as a plain variable, preserving legacy field/local uses.
-          "sup" ->
-            case peek_at(state, 1) do
-              %Token{type: :identifier} ->
-                parse_supervisor(state)
-
-              _ ->
-                {variable(token), advance(state)}
-            end
-
-          # Soft keyword: `app Name ...` at statement-prefix position is
-          # the application container. Everywhere else `app` remains a
-          # plain identifier, so pre-existing code that happens to use
-          # the name keeps parsing.
-          "app" ->
-            case peek_at(state, 1) do
-              %Token{type: :identifier} ->
-                parse_app_container(state)
-
-              _ ->
-                {variable(token), advance(state)}
-            end
 
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
@@ -2034,12 +2079,6 @@ defmodule Cure.Compiler.Parser do
 
       :implementation ->
         parse_implementation(state)
-
-      :fsm ->
-        parse_fsm(state)
-
-      :actor ->
-        parse_actor(state)
 
       :use ->
         parse_use(state)
@@ -5200,785 +5239,6 @@ defmodule Cure.Compiler.Parser do
       end)
 
     result == true
-  end
-
-  defp parse_fsm(state) do
-    token = peek(state)
-    state = advance(state)
-
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-
-    # Expect `with`
-    {payload, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :in} ->
-          # `with` is not a keyword; reuse `in` or handle identifier
-          state = advance(state)
-          {p, state} = parse_expr(state, 0)
-          {p, state}
-
-        %Token{type: :identifier, value: "with"} ->
-          state = advance(state)
-          {p, state} = parse_expr(state, 0)
-          {p, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    state = skip_newlines(state)
-
-    # Parse indented body: transitions, @terminal, @invariant, @verify
-    {fsm_body, meta_additions, state} = parse_fsm_block(state)
-
-    meta =
-      [container_type: :fsm, name: name, line: token.line, col: token.col] ++ meta_additions
-
-    meta = if payload, do: Keyword.put(meta, :payload, payload), else: meta
-    ast = {:container, meta, fsm_body}
-    {ast, state}
-  end
-
-  defp parse_fsm_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_fsm_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  @fsm_callback_names ~w(on_transition on_enter on_exit on_failure on_timer on_start on_stop)
-
-  defp parse_fsm_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :at} ->
-        # @terminal, @invariant, @verify, @timer
-        {new_meta, state} = parse_fsm_annotation(state)
-        state = skip_newlines(state)
-        parse_fsm_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: cb_name} when cb_name in @fsm_callback_names ->
-        # Callback block: on_transition, on_enter, on_exit, on_failure, on_timer
-        {new_meta, state} = parse_fsm_callback(state)
-        state = skip_newlines(state)
-        parse_fsm_items(state, items_acc, meta_acc ++ new_meta)
-
-      _ ->
-        # Transition line: Source --event--> Target
-        {transition, state} = parse_fsm_transition(state)
-        state = skip_newlines(state)
-        parse_fsm_items(state, [transition | items_acc], meta_acc)
-    end
-  end
-
-  defp parse_fsm_annotation(state) do
-    state = advance(state)
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-
-    case name do
-      "terminal" ->
-        val_token = peek(state)
-        state = advance(state)
-        {[terminal_states: [to_string(val_token.value)]], state}
-
-      "invariant" ->
-        {expr, state} = parse_expr(state, 0)
-        {[invariants: [expr]], state}
-
-      "verify" ->
-        {expr, state} = parse_expr(state, 0)
-        {[verify: [expr]], state}
-
-      "timer" ->
-        val_token = peek(state)
-        state = advance(state)
-
-        ms =
-          case val_token do
-            %Token{type: :integer, value: v} -> v
-            _ -> String.to_integer(to_string(val_token.value))
-          end
-
-        {[timer: ms], state}
-
-      "initial" ->
-        # @initial :state_name  (optional: payload: expr, meta: expr)
-        state_name_token = peek(state)
-
-        initial_name =
-          case state_name_token do
-            %Token{type: :symbol, value: v} -> to_string(v)
-            _ -> to_string(state_name_token.value)
-          end
-
-        state = advance(state)
-        {[initial_state: initial_name], state}
-
-      "notify_transitions" ->
-        {[notify_transitions: true], state}
-
-      "auto_caller" ->
-        {[auto_caller: true], state}
-
-      _ ->
-        {[], state}
-    end
-  end
-
-  # -- FSM callback blocks: on_transition, on_enter, on_exit, on_failure, on_timer
-  #
-  # Clauses are written as:
-  #   (pattern1, pattern2, ...) -> body
-  # or with a guard:
-  #   (pattern1, pattern2, ...) when guard -> body
-  #
-  # The parenthesized patterns are parsed as comma-separated expressions and
-  # assembled into a {:tuple, [], [patterns...]} node to match the callback arity.
-
-  defp parse_fsm_callback(state) do
-    name_token = peek(state)
-    cb_name = String.to_atom(name_token.value)
-    state = advance(state)
-    state = skip_newlines(state)
-
-    {clauses, state} =
-      case peek(state) do
-        %Token{type: :indent} ->
-          state = advance(state)
-          {arms, state} = parse_fsm_callback_clauses(state)
-          state = expect_dedent(state)
-          {arms, state}
-
-        _ ->
-          {arm, state} = parse_fsm_callback_clause(state)
-          {[arm], state}
-      end
-
-    {[{cb_name, clauses}], state}
-  end
-
-  defp parse_fsm_callback_clauses(state) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {[], state}
-
-      _ ->
-        {arm, state} = parse_fsm_callback_clause(state)
-        state = skip_newlines(state)
-        {rest, state} = parse_fsm_callback_clauses(state)
-        {[arm | rest], state}
-    end
-  end
-
-  # Parse a single FSM callback clause: (pat1, pat2, ...) [when guard] -> body
-  defp parse_fsm_callback_clause(state) do
-    # Expect opening paren
-    state = expect(state, :lparen)
-
-    # Parse comma-separated pattern expressions
-    {patterns, state} = parse_fsm_callback_params(state)
-
-    # Expect closing paren
-    state = expect(state, :rparen)
-    state = skip_newlines(state)
-
-    # Optional guard: when expr
-    {guard, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :when} ->
-          state = advance(state)
-          {g, state} = parse_expr(state, 0)
-          {g, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    # Expect ->
-    state = expect(state, :arrow)
-    state = skip_newlines(state)
-
-    # Parse body
-    {body, state} = parse_expr_or_block(state)
-
-    # Assemble patterns into a tuple node
-    pattern = {:tuple, [], patterns}
-    meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
-
-    {{:match_arm, meta, [body]}, state}
-  end
-
-  defp parse_fsm_callback_params(state) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: :rparen} ->
-        {[], state}
-
-      _ ->
-        {expr, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-
-        case peek(state) do
-          %Token{type: :comma} ->
-            state = advance(state)
-            state = skip_newlines(state)
-            {rest, state} = parse_fsm_callback_params(state)
-            {[expr | rest], state}
-
-          _ ->
-            {[expr], state}
-        end
-    end
-  end
-
-  defp parse_fsm_transition(state) do
-    # Source --event[!?] [when guard] [do actions]--> Target
-    # or * --event--> Target (wildcard)
-    from_token = peek(state)
-
-    from =
-      case from_token.type do
-        :star -> "*"
-        _ -> to_string(from_token.value)
-      end
-
-    state = advance(state)
-
-    # Expect transition_open (--)
-    state = expect(state, :transition_open)
-
-    # Event name and optional guard/action are lexed as tokens between -- and -->
-    {event, guard, action, state} = parse_transition_body(state)
-
-    # Detect event kind from suffix: ! = hard, ? = soft, otherwise normal
-    {event_base, event_kind} = classify_event(event)
-
-    # After transition_close (-->), parse target
-    target_token = peek(state)
-    target = to_string(target_token.value)
-    state = advance(state)
-
-    meta = [name: "transition", from: from, event: event_base, to: target, event_kind: event_kind]
-    meta = if guard, do: Keyword.put(meta, :guard, guard), else: meta
-    meta = if action, do: Keyword.put(meta, :action, action), else: meta
-
-    ast = {:function_call, meta, []}
-    {ast, state}
-  end
-
-  defp classify_event(event) when is_binary(event) do
-    cond do
-      String.ends_with?(event, "!") -> {String.trim_trailing(event, "!"), :hard}
-      String.ends_with?(event, "?") -> {String.trim_trailing(event, "?"), :soft}
-      true -> {event, :normal}
-    end
-  end
-
-  defp classify_event(event), do: {to_string(event), :normal}
-
-  defp parse_transition_body(state) do
-    # Read tokens until :transition_close
-    {event_name, state} = read_transition_event(state)
-
-    # Check for guard: when ...
-    {guard, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :when} ->
-          state = advance(state)
-          {g, state} = parse_until_transition_close_or_do(state)
-          {g, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    # Check for action: do ...
-    {action, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :do} ->
-          state = advance(state)
-          {a, state} = parse_until_transition_close(state)
-          {a, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    # Consume transition_close
-    state = expect(state, :transition_close)
-    state = skip_newlines(state)
-
-    {event_name, guard, action, state}
-  end
-
-  defp read_transition_event(state) do
-    token = peek(state)
-
-    case token.type do
-      :transition_close -> {"", state}
-      :keyword -> {to_string(token.value), advance(state)}
-      :identifier -> {token.value, advance(state)}
-      _ -> {to_string(token.value), advance(state)}
-    end
-  end
-
-  defp parse_until_transition_close_or_do(state) do
-    # Parse an expression, stopping before --> or `do`
-    {expr, state} = parse_expr(state, 0)
-    {expr, state}
-  end
-
-  defp parse_until_transition_close(state) do
-    {expr, state} = parse_expr(state, 0)
-    {expr, state}
-  end
-
-  # -- Actor container  actor Name [with InitExpr] --------------------------
-  #
-  # An `actor` introduces a typed process. The minimal grammar is:
-  #
-  #     actor Counter
-  #       on_start
-  #         (state) -> notify(:ready); state
-  #       on_message
-  #         (:inc, n) -> n + 1
-  #         (:dec, n) -> n - 1
-  #         (:get, n) -> notify(n); n
-  #       on_stop
-  #         (reason, state) -> ok
-  #
-  # Callback blocks are parsed with the existing `parse_fsm_callback/1`
-  # machinery so patterns, guards, and bodies behave exactly as they do
-  # for FSM lifecycle hooks. `@initial` (or `with Expr` after the
-  # header) selects the initial payload. The Cure.Actor.Compiler
-  # translates this container into a GenServer via string-template
-  # codegen, mirroring the FSM callback-mode path.
-  defp parse_actor(state) do
-    token = peek(state)
-    state = advance(state)
-
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-
-    # Optional initial payload: `with expr`.
-    {init, state} =
-      case peek(state) do
-        %Token{type: :identifier, value: "with"} ->
-          state = advance(state)
-          parse_expr(state, 0)
-
-        _ ->
-          {nil, state}
-      end
-
-    state = skip_newlines(state)
-    {body, meta_additions, state} = parse_actor_block(state)
-
-    meta =
-      [container_type: :actor, name: name, line: token.line, col: token.col] ++ meta_additions
-
-    meta = if init, do: Keyword.put(meta, :init, init), else: meta
-    ast = {:container, meta, body}
-    {ast, state}
-  end
-
-  @actor_callback_names ~w(on_message on_start on_stop)
-
-  defp parse_actor_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_actor_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  defp parse_actor_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :at} ->
-        # `@initial expr` and the same annotations an FSM supports.
-        {new_meta, state} = parse_fsm_annotation(state)
-        state = skip_newlines(state)
-        parse_actor_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: cb_name} when cb_name in @actor_callback_names ->
-        {new_meta, state} = parse_fsm_callback(state)
-        state = skip_newlines(state)
-        parse_actor_items(state, items_acc, meta_acc ++ new_meta)
-
-      _ ->
-        # Tolerate unknown top-level lines by consuming a single expression
-        # and discarding it. This keeps the parser forward-compatible
-        # with future actor directives (e.g. `inbox = A | B`, `state: T`).
-        {_expr, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-        parse_actor_items(state, items_acc, meta_acc)
-    end
-  end
-
-  # -- Supervisor container  sup Name ---------------------------------------
-  #
-  # Declares a supervisor module. The minimal grammar is:
-  #
-  #     sup MyApp.Root
-  #       strategy = :one_for_one
-  #       intensity = 3
-  #       period = 5
-  #       children
-  #         Counter as counter
-  #         Gateway as gateway (restart: :transient)
-  #         sup Workers as workers
-  #
-  # `strategy`, `intensity`, `period` are parsed as `name = value` lines
-  # and hoisted onto the container meta. The `children` block contains
-  # one `child_spec` node per line, each emitted as
-  # `{:child_spec, [module:, id:, restart:, shutdown:, ...], []}`.
-  defp parse_supervisor(state) do
-    token = peek(state)
-    state = advance(state)
-
-    {name, state} = parse_dotted_name(state)
-    state = skip_newlines(state)
-    {body, meta_additions, state} = parse_sup_block(state)
-
-    meta =
-      [container_type: :supervisor, name: name, line: token.line, col: token.col] ++
-        meta_additions
-
-    ast = {:container, meta, body}
-    {ast, state}
-  end
-
-  defp parse_sup_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_sup_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  @sup_settings ~w(strategy intensity period)
-
-  defp parse_sup_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :identifier, value: setting} when setting in @sup_settings ->
-        {new_meta, state} = parse_sup_setting(state, setting)
-        state = skip_newlines(state)
-        parse_sup_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: "children"} ->
-        state = advance(state)
-        state = skip_newlines(state)
-        {specs, state} = parse_sup_children_block(state)
-        state = skip_newlines(state)
-        parse_sup_items(state, Enum.reverse(specs) ++ items_acc, meta_acc)
-
-      _ ->
-        # Unknown leading token inside a supervisor body -- skip one
-        # expression and keep going so we don't deadlock.
-        {_, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-        parse_sup_items(state, items_acc, meta_acc)
-    end
-  end
-
-  defp parse_sup_setting(state, name) do
-    # Consume the identifier and the `=`.
-    state = advance(state)
-    state = expect(state, :assign)
-    state = skip_newlines(state)
-    {value, state} = parse_expr(state, 0)
-    {[{String.to_atom(name), value}], state}
-  end
-
-  defp parse_sup_children_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {specs, state} = parse_sup_child_specs(state, [])
-        state = expect_dedent(state)
-        {specs, state}
-
-      _ ->
-        {[], state}
-    end
-  end
-
-  defp parse_sup_child_specs(state, acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(acc), state}
-
-      _ ->
-        {spec, state} = parse_sup_child_spec(state)
-        state = skip_newlines(state)
-        parse_sup_child_specs(state, [spec | acc])
-    end
-  end
-
-  # A child spec line takes one of the forms:
-  #
-  #     Counter as counter
-  #     Counter as counter (restart: :transient, shutdown: 5000)
-  #     sup Workers as workers
-  #
-  # Emits `{:child_spec, meta, []}` where `meta` carries the child's
-  # `:module`, `:id`, and any options parsed from the trailing
-  # parenthesised keyword list.
-  defp parse_sup_child_spec(state) do
-    token = peek(state)
-
-    {module_kind, state} =
-      case token do
-        %Token{type: :identifier, value: "sup"} ->
-          {:supervisor, advance(state)}
-
-        _ ->
-          {:worker, state}
-      end
-
-    {module_path, state} = parse_dotted_name(state)
-
-    # Expect `as child_id`.
-    state = expect_keyword(state, :as)
-    id_token = peek(state)
-    id_name = to_string(id_token.value)
-    state = advance(state)
-
-    # Optional options: `(restart: :transient, shutdown: 5000)`.
-    {opts, state} =
-      case peek(state) do
-        %Token{type: :lparen} ->
-          state = advance(state)
-          {pairs, state} = parse_sup_child_opts(state)
-          state = expect(state, :rparen)
-          {pairs, state}
-
-        _ ->
-          {[], state}
-      end
-
-    meta =
-      [
-        module: module_path,
-        id: id_name,
-        kind: module_kind,
-        line: token.line,
-        col: token.col
-      ] ++ opts
-
-    {{:child_spec, meta, []}, state}
-  end
-
-  defp parse_sup_child_opts(state) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: :rparen} ->
-        {[], state}
-
-      _ ->
-        {pair, state} = parse_sup_child_opt(state)
-        state = skip_newlines(state)
-
-        case peek(state) do
-          %Token{type: :comma} ->
-            state = advance(state)
-            state = skip_newlines(state)
-            {rest, state} = parse_sup_child_opts(state)
-            {[pair | rest], state}
-
-          _ ->
-            {[pair], state}
-        end
-    end
-  end
-
-  defp parse_sup_child_opt(state) do
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-    state = expect(state, :colon)
-    state = skip_newlines(state)
-    {value, state} = parse_expr(state, 0)
-    {{String.to_atom(name), value}, state}
-  end
-
-  # -- Application container  app Name.Path ---------------------------------
-  #
-  # Declares an OTP application. The minimal grammar is:
-  #
-  #     app MyApp
-  #       vsn          = "0.1.0"
-  #       description  = "My humble application"
-  #       root         = sup MyApp.Root
-  #       applications = [:logger, :crypto]
-  #       env          = %{port: 4000, name: "dev"}
-  #       on_start
-  #         (type, args) -> do_start(type, args)
-  #       on_stop
-  #         (state) -> cleanup(state)
-  #       on_phase :init
-  #         (args, type, start_args) -> init_phase(args)
-  #       on_phase :warm_cache
-  #         (_args, _type, _start_args) -> Std.Cache.warm()
-  #
-  # `vsn`, `description`, `root`, `applications`, `included_applications`,
-  # `env`, and `registered` are parsed as `name = value` lines and hoisted
-  # onto the container meta. `on_start`, `on_stop`, and `on_phase :name`
-  # reuse the `parse_fsm_callback/1` machinery so patterns, guards, and
-  # bodies behave exactly as they do for FSM/actor lifecycle hooks.
-  #
-  # Compilation is handled by `Cure.App.Compiler` and produces an Elixir
-  # module `:"Cure.App.<Name>"` that `use Application` with `start/2`,
-  # `stop/1`, and `start_phase/3` callbacks.
-  defp parse_app_container(state) do
-    token = peek(state)
-    state = advance(state)
-
-    {name, state} = parse_dotted_name(state)
-    state = skip_newlines(state)
-    {body, meta_additions, state} = parse_app_block(state)
-
-    meta =
-      [container_type: :app, name: name, line: token.line, col: token.col] ++
-        meta_additions
-
-    ast = {:container, meta, body}
-    {ast, state}
-  end
-
-  defp parse_app_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_app_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  @app_settings ~w(vsn description root applications included_applications env registered)
-  @app_callback_names ~w(on_start on_stop)
-
-  defp parse_app_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :identifier, value: setting} when setting in @app_settings ->
-        {new_meta, state} = parse_app_setting(state, setting)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: cb_name} when cb_name in @app_callback_names ->
-        {new_meta, state} = parse_fsm_callback(state)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: "on_phase"} ->
-        {new_meta, state} = parse_app_on_phase(state)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc ++ new_meta)
-
-      _ ->
-        # Unknown leading token inside an app body -- skip one expression
-        # and keep going so we don't deadlock.
-        {_, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc)
-    end
-  end
-
-  defp parse_app_setting(state, name) do
-    # Consume the identifier and the `=`.
-    state = advance(state)
-    state = expect(state, :assign)
-    state = skip_newlines(state)
-    {value, state} = parse_expr(state, 0)
-    {[{String.to_atom(name), value}], state}
-  end
-
-  # `on_phase :phase_name` introduces a single callback whose arity is
-  # three: `(args, start_type, start_args)`. The phase atom is hoisted
-  # onto the container meta under `:on_phase => [{phase_atom, [clauses]}]`
-  # so verifier and compiler can dispatch by phase.
-  defp parse_app_on_phase(state) do
-    state = advance(state)
-    state = skip_newlines(state)
-
-    {phase_atom, state} =
-      case peek(state) do
-        %Token{type: :atom, value: v} ->
-          {String.to_atom(to_string(v)), advance(state)}
-
-        %Token{type: :identifier, value: v} ->
-          {String.to_atom(to_string(v)), advance(state)}
-
-        other ->
-          {String.to_atom(to_string(other.value)), advance(state)}
-      end
-
-    state = skip_newlines(state)
-
-    {clauses, state} =
-      case peek(state) do
-        %Token{type: :indent} ->
-          state = advance(state)
-          {arms, state} = parse_fsm_callback_clauses(state)
-          state = expect_dedent(state)
-          {arms, state}
-
-        _ ->
-          {arm, state} = parse_fsm_callback_clause(state)
-          {[arm], state}
-      end
-
-    {[{:on_phase, [{phase_atom, clauses}]}], state}
   end
 
   # -- Enhanced Type Expression Parser ----------------------------------------

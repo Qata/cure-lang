@@ -31,6 +31,25 @@ mod Std.Otp
   ## (a bespoke proc-fn lowering, not a plain extern). This floor is what they
   ## build on; a handle is obtained today by being passed one.
 
+  ## OTP container syntax is a standard-library macro surface. The raw body is
+  ## parsed again by the normal Cure parser and lowered by the generic OTP
+  ## backend; the compiler has no actor/fsm/supervisor/application classes.
+  macro OtpContainers
+    syntax actor <name: Identifier> <body: raw until dedent> becomes __otp_container(:actor, name, body)
+      example actor Cure.Example expands actor Cure.Example
+    syntax fsm <name: Identifier> <body: raw until dedent> becomes __otp_container(:fsm, name, body)
+      example fsm Cure.Example expands fsm Cure.Example
+    syntax sup <name: Identifier> <body: raw until dedent> becomes __otp_container(:sup, name, body)
+      example sup Cure.Example expands sup Cure.Example
+    syntax app <name: Identifier> <body: raw until dedent> becomes __otp_container(:app, name, body)
+      example app Cure.Example expands app Cure.Example
+    explain
+      Identifier => "a container name is required"
+      keyword "actor" => "starts an OTP actor container"
+      keyword "fsm" => "starts an OTP state-machine container"
+      keyword "sup" => "starts an OTP supervisor container"
+      keyword "app" => "starts an OTP application container"
+
   ## A typed process handle accepting messages of type `m`.
   opaque type Pid(m)
 

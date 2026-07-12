@@ -7,6 +7,50 @@ defmodule Cure.Compiler.MacroSyntax do
   maps it to Core values of `Std.Syntax` and runs the elab.
   """
 
+  @doc """
+  Lower the standard-library OTP container constructor used by the prelude
+  macros. The body is raw macro input, so it is parsed by the ordinary parser
+  before becoming a container node.
+  """
+  @spec lower_container(term()) :: {:ok, tuple()} | :not_a_container | {:error, term()}
+  def lower_container({:function_call, meta, [kind, name, {:raw_tokens, _raw_meta, tokens}]})
+      when is_list(meta) and is_list(tokens) do
+    with {:ok, kind} <- container_kind(kind),
+         {:ok, name} <- container_name(name),
+         {:ok, body} <- parse_container_body(tokens) do
+      {:ok, {:container, [container_type: kind, name: name, macro_generated: true], body}}
+    end
+  end
+
+  def lower_container(_), do: :not_a_container
+
+  defp container_kind({:literal, _meta, kind}) when kind in [:actor, :fsm, :sup, :app], do: {:ok, if(kind == :sup, do: :supervisor, else: kind)}
+  defp container_kind({:variable, _meta, kind}) when kind in ["actor", "fsm", "sup", "app"], do: container_kind({:literal, [], String.to_atom(kind)})
+  defp container_kind(other), do: {:error, {:invalid_container_kind, other}}
+
+  defp container_name({:variable, _meta, name}) when is_binary(name), do: {:ok, name}
+  defp container_name({:literal, _meta, name}) when is_binary(name), do: {:ok, name}
+  defp container_name({:literal, _meta, name}) when is_atom(name), do: {:ok, Atom.to_string(name)}
+  defp container_name({:attribute_access, meta, [base]}) when is_list(meta) do
+    with {:ok, base} <- container_name(base),
+         attr when is_binary(attr) <- Keyword.get(meta, :attribute) do
+      {:ok, base <> "." <> attr}
+    else
+      _ -> {:error, {:invalid_container_name, {base, meta}}}
+    end
+  end
+  defp container_name(other), do: {:error, {:invalid_container_name, other}}
+
+  defp parse_container_body(tokens) do
+    eof = %Cure.Compiler.Token{type: :eof, value: nil, line: 0, col: 0}
+
+    case Cure.Compiler.Parser.parse(tokens ++ [eof], emit_events: false) do
+      {:ok, {:block, _meta, body}} -> {:ok, body}
+      {:ok, node} -> {:ok, [node]}
+      {:error, errors} -> {:error, {:container_body_parse_error, errors}}
+    end
+  end
+
   @type synlit ::
           {:s_int, integer}
           | {:s_float, float}

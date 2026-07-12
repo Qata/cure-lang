@@ -252,9 +252,15 @@ defmodule Cure.Compiler do
     # Single pipeline: every module is lowered by the kernel (dependent codegen).
     # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
     result =
-      case dependent_codegen(ast) do
+      case Cure.Compiler.ContainerMacro.forms(ast) do
         {:ok, forms} -> {:ok, forms, []}
-        {:error, _} = err -> err
+        :not_a_container ->
+          case dependent_codegen(ast) do
+            {:ok, forms} -> {:ok, forms, []}
+            {:error, _} = err -> err
+          end
+
+        {:error, reason} -> {:error, {:codegen_error, reason}}
       end
 
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
