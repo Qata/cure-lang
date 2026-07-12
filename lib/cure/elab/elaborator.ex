@@ -555,6 +555,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A `let … ⏎ body` block in INFERENCE position — the counterpart to the
+  # check-mode `{:block}` clause (`elaborate_let_block/5`). Enables annotation-free
+  # function bodies (`fn f() = let a = 1 ⏎ a + 1`) and any inference-position block.
+  # There is no `:let` desugaring to guess a type for: build the `:let` Core chain
+  # by inferring each binding's rhs, then let the kernel infer the whole term's type
+  # (which sidesteps hand-managing the de Bruijn depth of the body's type).
+  def elaborate_expr_typed({:block, _meta, stmts}, names, ctx, env) do
+    with {:ok, term} <- infer_block_term(stmts, names, ctx, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    end
+  end
+
   # A surface unary operator. `not` is retired as a kernel primitive: it lowers to
   # an application of the `Std.Bool` prelude def `not` (a `case`-eliminating
   # function over the inductive Bool). The kernel checks the operand against Bool
@@ -4619,6 +4632,58 @@ defmodule Cure.Elab.Elaborator do
 
   defp elaborate_let_block(other, _expected_core, _names, _ctx, _env),
     do: {:error, {:unsupported_block, other}}
+
+  # INFERENCE-mode block: build the `:let` Core chain (the final statement is
+  # inferred, each `let` binds its rhs with a ζ definition so a later statement
+  # sees the concrete value) and return only the term — the `{:block}` clause of
+  # `elaborate_expr_typed/4` hands it to `Kernel.infer` for its type. Mirrors
+  # `elaborate_let_block/5`/`bind_once_let/10`, minus the threaded expected type.
+  defp infer_block_term([final], names, ctx, env) do
+    with {:ok, term, _type} <- elaborate_expr_typed(final, names, ctx, env), do: {:ok, term}
+  end
+
+  defp infer_block_term(
+         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         names,
+         ctx,
+         env
+       ) do
+    if not Keyword.get(meta, :let, false) do
+      {:error, {:unsupported_block_statement, meta}}
+    else
+      grade = Keyword.get(meta, :grade, Grade.unrestricted())
+
+      with {:ok, rhs_core, ty_core, ty_value} <- block_rhs(rhs, meta, names, ctx, env) do
+        rhs_value = Eval.eval(rhs_core, Context.env(ctx))
+        ctx1 = Context.extend_def(ctx, ty_value, rhs_value)
+
+        with {:ok, body_core} <- infer_block_term(rest, [name | names], ctx1, env) do
+          {:ok, {:let, grade, ty_core, rhs_core, body_core}}
+        end
+      end
+    end
+  end
+
+  defp infer_block_term(other, _names, _ctx, _env), do: {:error, {:unsupported_block, other}}
+
+  # A `let` binding's rhs, settled to `{rhs_core, ty_core, ty_value}`. An
+  # unannotated `let x = e` synthesises `e`'s type (SIGNATURE-AWARE reify, as
+  # `let_inferred/9`); an ascribed `let x : T = e` checks `e` against `T`.
+  defp block_rhs(rhs, meta, names, ctx, env) do
+    case Keyword.get(meta, :type_annotation) do
+      nil ->
+        with {:ok, rhs_core, rhs_type} <- elaborate_expr_typed(rhs, names, ctx, env) do
+          ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+          {:ok, rhs_core, ty_core, rhs_type}
+        end
+
+      ann ->
+        with {:ok, ty_core} <- elaborate_type(ann, names, env),
+             {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+          {:ok, rhs_core, ty_core, Eval.eval(ty_core, Context.env(ctx))}
+        end
+    end
+  end
 
   # `let x : T = e` — BIDIRECTIONAL. The ascription supplies the type a
   # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
