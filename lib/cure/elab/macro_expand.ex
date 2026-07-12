@@ -26,7 +26,10 @@ defmodule Cure.Elab.MacroExpand do
     do: term |> Tuple.to_list() |> Enum.any?(&contains_computed_use?/1)
 
   def contains_computed_use?(term) when is_list(term), do: Enum.any?(term, &contains_computed_use?/1)
-  def contains_computed_use?(term) when is_map(term), do: Enum.any?(term, fn {k, v} -> contains_computed_use?(k) or contains_computed_use?(v) end)
+
+  def contains_computed_use?(term) when is_map(term),
+    do: Enum.any?(term, fn {k, v} -> contains_computed_use?(k) or contains_computed_use?(v) end)
+
   def contains_computed_use?(_), do: false
 
   defp expand_node({:computed_use, meta, [elab, input]}, env, fuel) when fuel > 0 do
@@ -66,14 +69,17 @@ defmodule Cure.Elab.MacroExpand do
 
   defp execute(meta, elab_ast, input_ast, env) do
     context = Context.empty(env)
-    input_core = input_ast |> MacroSyntax.to_syntax() |> MacroSyntax.to_core()
+    input_repr = MacroSyntax.to_syntax(input_ast)
+
+    input_cores =
+      case Keyword.get(meta, :syntax_type) do
+        nil -> [MacroSyntax.to_core(input_repr)]
+        syntax_type -> [MacroSyntax.to_core_record(syntax_type, input_repr), MacroSyntax.to_core(input_repr)]
+      end
 
     with {:ok, elab_core, _elab_type} <-
            Elaborator.elaborate_expr_typed(elab_ast, [], context, env),
-         application = {:app, elab_core, input_core},
-         {:ok, _result_type} <- Kernel.infer(context, application),
-         result <- Normalise.nf(context, application, fuel: @normalise_fuel),
-         {:ok, result_ast} <- decode_result(result) do
+         {:ok, result_ast} <- execute_application(context, elab_core, input_cores) do
       {:ok, result_ast}
     else
       {:error, reason} -> {:error, {:computed_macro_error, meta, reason}}
@@ -82,6 +88,25 @@ defmodule Cure.Elab.MacroExpand do
   rescue
     error -> {:error, {:computed_macro_error, meta, {:host_exception, error.__struct__}}}
   end
+
+  defp execute_application(context, elab_core, [input_core | fallback]) do
+    application = {:app, elab_core, input_core}
+
+    case Kernel.infer(context, application) do
+      {:ok, _result_type} ->
+        result = Normalise.nf(context, application, fuel: @normalise_fuel)
+        decode_result(result)
+
+      {:error, {:foreign_ctor, _}} when fallback != [] ->
+        execute_application(context, elab_core, fallback)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp execute_application(_context, _elab_core, []),
+    do: {:error, :no_compatible_macro_input}
 
   defp decode_result(result) do
     if result == :fuel_exhausted do
