@@ -41,7 +41,9 @@ defmodule Cure.Compiler.MacroBoard do
   defp validate_capabilities(capabilities, pins) when is_map(capabilities) do
     case Enum.reduce_while(capabilities, :ok, fn {pin, caps}, :ok ->
            cond do
-             not MapSet.member?(pins, pin) -> {:halt, {:unknown_board_pin, pin}}
+             not MapSet.member?(pins, pin) ->
+               {:halt, {:unknown_board_pin, pin}}
+
              not is_list(caps) or Enum.any?(caps, &(&1 not in @capabilities)) ->
                {:halt, {:invalid_board_capability, pin}}
 
@@ -63,8 +65,12 @@ defmodule Cure.Compiler.MacroBoard do
            assigned = wiring |> Map.values() |> Enum.uniq()
 
            cond do
-             not is_atom(name) -> {:halt, {:invalid_board_bus, name}}
-             Enum.any?(assigned, &(not MapSet.member?(pins, &1))) -> {:halt, {:unknown_bus_pin, name}}
+             not is_atom(name) ->
+               {:halt, {:invalid_board_bus, name}}
+
+             Enum.any?(assigned, &(not MapSet.member?(pins, &1))) ->
+               {:halt, {:unknown_bus_pin, name}}
+
              Enum.any?(assigned, &(not Map.has_key?(capabilities, &1))) ->
                {:halt, {:missing_bus_capability, name}}
 
