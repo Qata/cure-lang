@@ -86,15 +86,32 @@ noted subsequent increments:
   `{:lit}`/`{:hole}` segments, binds holes via `parse_expr`, records progress (syntax-parse
   maximal-by-progress hook), substitutes. `every <t: Code>` → `Timer.repeat(t)`.
 
-**NEXT:** SP1 milestone 2 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` subagent
-on the sp1b plan (plan-for-code: falsifiability + testing-discipline pass; two consecutive
-clean passes; commit hardened). Note for the reviewer: the plan flags two soft spots to
-scrutinize — (a) harvest-pass fragility (a use-site mis-parse in phase 1 swallowing a later
-`macro` def under error recovery); (b) `find_fn_body`/`def` body shape is asserted-then-
-verify — the plan says confirm the real `function_def` shape before running. Then Stage 4
-(execute T5/T6a/T6b TDD), Stage 5 (code review). T4/T7/T8/T9 are subsequent Stage-2/4 rounds
-before SP1's Stage 6. When ALL SP1 tasks are executed + code-reviewed, do Stage 6 (full
-`mix test` once) for SP1, update this file, start SP2.
+SP1 milestone 2 Stage 3 DONE — sp1b plan HARDENED + committed `e6883fe` (6 passes, 2
+consecutive clean). Reviewer verified every claim against the REAL parser (ran `Parser.parse/2`
+on live source) and caught 2 real defects + added coverage:
+- **CRITICAL fixed:** Cure has NO `def` keyword (it's `fn`). The Task 2/3 fixtures `def f() = …`
+  parse to a bare `{:variable,_,"def"}` + `{:assignment}`, never `{:function_def}`. All fixtures
+  changed to `fn f() = …`; `find_fn_body` pinned to the CONFIRMED shape (no more asserted-then-
+  verify hedge).
+- **HIGH fixed:** the macro-use dispatch clause is checked FIRST in `parse_prefix/1`'s
+  `case token.value do`, ahead of `sup`/`app`/`macro`/`with`/`assert_type`/`rewrite`. A local
+  macro named `sup` would silently disable the supervisor container module-wide. Guarded with
+  `@reserved_macro_keywords` (`name not in @reserved_macro_keywords`) + a red collision test.
+- **Coverage added:** Task 3 shipped 3 behaviors (hole-bind, literal-match, literal-mismatch
+  error) with only 1 named red test → added 2 more (two-literal-segment match; literal mismatch
+  asserting `:macro_use_mismatch`), each verified genuinely red against baseline.
+- Harvest-pass fragility (soft spot a) reviewed: judged acceptable for v1 (recovery surfaces the
+  `{:macro_def}` nodes); constrain-def-before-use / structural-prescan is the noted enhancement.
+
+Use the HARDENED plan (`e6883fe`) for execution — its code snippets were mechanically
+syntax-checked (`Code.string_to_quoted!`) and the reserved-keyword guard is in the plan.
+
+**NEXT:** SP1 milestone 2 Stage 4 — execute Task 1 (T5 two-phase parse) → Task 2 (T6a zero-hole
+expansion) → Task 3 (T6b hole matching + progress) inline TDD on Opus, strict red→green, commit
+per task (ghost author, explicit pathspec). Then Stage 5 (Sonnet code review over the diff,
+red-test-first fixes). T4/T7/T8/T9 are subsequent Stage-2/4 rounds before SP1's Stage 6. When
+ALL SP1 tasks are executed + code-reviewed, do Stage 6 (full `mix test` once) for SP1, update
+this file, start SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
