@@ -61,14 +61,30 @@ committed `c381e7a` (container skeleton), `8f07931` (bare-keyword syntax rules),
 macro-definition front-end is live: `macro Name` → `syntax kw <hole: Kind> becomes tmpl`
 → `{:macro_def, [name,line,col], [%{kind: :syntax, keyword, segments: [{:lit,_}|{:hole,%{name,kind,line}}], template, progress: nil, line}]}`.
 
-**NEXT:** Stage 5 — code review (Sonnet subagent, recursive-skeptical-review over the
-diff `git diff 39e6d82..HEAD`, red-test-first fixes) of the milestone-1 parser changes.
-The Stage-3 reviewer already ran this exact code (6/6 + 625 green), so expect a light
-pass. THEN Stage 6 — verify (full `mix test` once). THEN the next Stage-2 increment: write
-the plan for SP1 tasks T4 (literal/suffix lexer) → T5 two-phase parse → T6 use-site
-matching (thread progress; port syntax-parse maximal-by-progress) → T7 hygienic expansion
-→ T8 kernel re-check → T9 scoping, and run that plan through Stages 3-6. When SP1 is fully
-executed + code-reviewed + suite-green, update this file and start SP2.
+Stage 5 milestone-1 code review DONE — 7 passes (6 clean). Found + fixed ONE real defect:
+`##` doc-comments (always `:doc_comment` tokens, not gated by preserve_comments) broke the
+container — a doc-comment as first body line silently emptied the rule list; between rules
+it threw spuriously. Fix `4295479`: `skip_macro_trivia/1` (newline + doc/line comments) at
+every container-body skip point + 2 red tests. `test/cure/compiler/` = 627 passed;
+`--warnings-as-errors` clean; macro non-breaking in all positions verified.
+
+MILESTONE 1 (macro-definition front-end, SP1 tasks 1-3) is COMPLETE through Stage 5:
+commits `c381e7a` `8f07931` `77cbd6d` `4295479`.
+
+**NEXT:** SP1 milestone 2 — write the Stage-2 plan for tasks T4-T9, then run it through
+Stages 3-5:
+- T4 `literal` rules + numeric-suffix lexer (`500ms`) — the one lexer change SP1 needs.
+- T5 two-phase parse: parser-state `active_macros` seeded by a pre-pass from `use` + local
+  `macro` defs (architectural core, grounding doc).
+- T6 use-site matching: at a keyword in `active_macros`, walk the rule `segments`, bind
+  holes, RECORD progress; port syntax-parse maximal-by-progress when rules compete.
+- T7 hygienic `becomes` expansion (`<fresh Name>` gensym) → surface AST.
+- T8 feed expansion back through parse→elaborate; assert it kernel-checks (green + a red
+  ill-typed-expansion fixture → rejected-not-unsound).
+- T9 import scoping + same-keyword conflict; two-pass name resolution.
+Plan file: `docs/superpowers/plans/2026-07-12-macro-facility-sp1b-plan.md`. Ground it in
+the SP1 grounding doc + the parser anchors already verified. When ALL SP1 tasks (1-9) are
+executed + code-reviewed, do Stage 6 (full `mix test` once) for SP1, update this file, start SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
