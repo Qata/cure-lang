@@ -114,8 +114,21 @@ defmodule Cure.Compiler.MacroValidate do
   # α-normalise for example comparison: drop source positions, then collapse
   # `<fresh>` gensym suffixes (`x$0` → `x`) so a template binder and its pin
   # compare equal.
-  defp normalize({:variable, meta, name}) when is_binary(name) do
-    {:variable, strip_pos(meta), degensym(name)}
+  #
+  # A `:variable` node's meta is dropped ENTIRELY (not just line/col): it is
+  # provenance about how the identifier was parsed (`scope: :local`,
+  # `variant: true`, ...), not part of what the reference denotes. This
+  # matters because a `<fresh Name>` marker in BINDER position parses to
+  # `{:fresh_name, [line:, col:], name}` (no `scope` key -- that key is only
+  # ever attached by the ordinary-identifier parse path) and `freshen/2`'s
+  # `apply_freshening` reuses that meta verbatim when rewriting the marker to
+  # `{:variable, meta, gensym}`. A hand-written pin's ordinary `h` always
+  # carries `scope: :local`. Comparing full meta made every correctly-pinned
+  # `<fresh>`-as-binder example spuriously mismatch; the only content that
+  # participates in α-equivalence for a variable reference is its (degensym'd)
+  # name.
+  defp normalize({:variable, _meta, name}) when is_binary(name) do
+    {:variable, [], degensym(name)}
   end
 
   defp normalize({t, meta, children}) when is_list(children) do

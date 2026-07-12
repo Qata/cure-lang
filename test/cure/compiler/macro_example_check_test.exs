@@ -64,4 +64,24 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
 
     assert :ok = MacroValidate.check_examples(md)
   end
+
+  test "a correct example pinning a <fresh> BINDER (not just a reference) checks clean" do
+    # The template's `<fresh h>` marker sits in BINDER position (the LHS of
+    # `let`). Its own {:fresh_name, meta, name} node was parsed with only
+    # line/col in its meta (no `scope: :local` -- that key only gets attached
+    # by the ordinary-identifier parse path, e.g. `variable/1`). freshen/2's
+    # apply_freshening reuses that meta verbatim when rewriting the marker to
+    # {:variable, meta, gensym}, so the *binder* occurrence in the actual
+    # expansion has no `scope` key at all, while the hand-written pin's `h`
+    # (an ordinary identifier) always carries `scope: :local` from normal
+    # parsing. Comparing full variable meta (as normalize/1 did) makes every
+    # <fresh>-as-binder example spuriously mismatch, even when perfectly
+    # pinned -- this defeats the headline <fresh> self-proving case.
+    md =
+      macro_def!(
+        "macro FreshBinder\n  syntax fb <e: Code> becomes let <fresh h> = 100 in e + h\n    example fb 1 expands let h = 100 in 1 + h\n"
+      )
+
+    assert :ok = MacroValidate.check_examples(md)
+  end
 end
