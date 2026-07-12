@@ -888,7 +888,20 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp imports({:import, meta, _}) when is_list(meta), do: [Keyword.fetch!(meta, :source)]
+  # `use Std.{List, Core}` is grouping sugar: the brace `:items` name a set of
+  # sibling modules under the `:source` namespace, each expanded to its own full
+  # `source.item` import. A plain `use Std.List` (no `:items`) yields just the source.
+  # (`:exposing` — the selective-name form `use M exposing (a, b)` — is a filter on
+  # WHICH of the module's names come in unqualified, not a different module list, so
+  # it does not affect the source expansion here.)
+  defp imports({:import, meta, _}) when is_list(meta) do
+    source = Keyword.fetch!(meta, :source)
+
+    case Keyword.get(meta, :items, []) do
+      [] -> [source]
+      items -> Enum.map(items, &(source <> "." <> to_string(&1)))
+    end
+  end
 
   defp imports({_tag, _meta, children}) when is_list(children),
     do: Enum.flat_map(children, &imports/1)
@@ -1137,7 +1150,14 @@ defmodule Cure.Elab.Program do
         |> MapSet.union(local)
         |> Enum.reduce(merged, fn name, e -> drop_bare_family(e, name) end)
 
-      {:ok, cleaned, ambiguous}
+      # Record the DIRECT import set so bare-name resolution can prefer a direct
+      # owner over a name reachable only through a module's transitive re-export
+      # (`use Std.List` + `use Std.Core`: `map` resolves to Std.List's own `map`,
+      # not the Std.Option `map` that Core merely re-exports). `modules` is the
+      # direct list (explicit `use` + auto-prelude); transitive-only modules are
+      # deliberately excluded.
+      direct_ids = MapSet.new(modules, fn {mod_id, _path} -> mod_id end)
+      {:ok, %{cleaned | import_modules: direct_ids}, ambiguous}
     end
   end
 
@@ -1228,7 +1248,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained)a
+                      primitives interfaces coherence constrained import_modules)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -1254,7 +1274,8 @@ defmodule Cure.Elab.Program do
          primitives: Map.merge(left.primitives, right.primitives),
          interfaces: Map.merge(left.interfaces, right.interfaces),
          coherence: coherence,
-         constrained: Map.merge(left.constrained, right.constrained)
+         constrained: Map.merge(left.constrained, right.constrained),
+         import_modules: MapSet.union(left.import_modules, right.import_modules)
        }}
     end
   end

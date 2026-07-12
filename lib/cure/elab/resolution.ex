@@ -276,7 +276,7 @@ defmodule Cure.Elab.Resolution do
   key) never reaches this fallback (preserving R1).
   """
   @spec resolve_bare_shadowed(Env.t(), atom()) :: {:ok, atom()} | :none | {:ambiguous, [String.t()]}
-  def resolve_bare_shadowed(%Env{families: families, ctors: ctors, defs: defs}, bare) do
+  def resolve_bare_shadowed(%Env{families: families, ctors: ctors, defs: defs} = env, bare) do
     suffix = "#" <> Atom.to_string(bare)
 
     matches =
@@ -286,10 +286,22 @@ defmodule Cure.Elab.Resolution do
         if String.ends_with?(s, suffix), do: [{String.trim_trailing(s, suffix), k}], else: []
       end)
 
-    case matches do
+    case prefer_direct(matches, env.import_modules) do
       [{_mod, key}] -> {:ok, key}
       [] -> :none
       many -> {:ambiguous, Enum.map(many, fn {mod, _k} -> mod end)}
+    end
+  end
+
+  # A directly-imported module's own name wins the unqualified spelling over a
+  # name reachable only through another module's transitive re-export. If ANY
+  # matched provider is a direct import, restrict to the direct ones (so a lone
+  # direct owner resolves cleanly and only ≥2 DIRECT owners stay ambiguous);
+  # otherwise keep every match (a purely transitive/shadowed name is unchanged).
+  defp prefer_direct(matches, direct_modules) do
+    case Enum.filter(matches, fn {mod, _k} -> MapSet.member?(direct_modules, mod) end) do
+      [] -> matches
+      directs -> directs
     end
   end
 
@@ -342,18 +354,27 @@ defmodule Cure.Elab.Resolution do
   makes a cross-namespace spelling coincidence practically impossible (§3.4).
   """
   @spec ambiguous_modules(Env.t(), atom()) :: [String.t()]
-  def ambiguous_modules(%Env{families: families, defs: defs}, bare) do
+  def ambiguous_modules(%Env{families: families, defs: defs} = env, bare) do
     if Map.has_key?(families, bare) or Map.has_key?(defs, bare) do
       []
     else
       suffix = "#" <> Atom.to_string(bare)
 
-      (Map.keys(families) ++ Map.keys(defs))
-      |> Enum.flat_map(fn k ->
-        s = Atom.to_string(k)
-        if String.ends_with?(s, suffix), do: [String.trim_trailing(s, suffix)], else: []
-      end)
-      |> Enum.uniq()
+      mods =
+        (Map.keys(families) ++ Map.keys(defs))
+        |> Enum.flat_map(fn k ->
+          s = Atom.to_string(k)
+          if String.ends_with?(s, suffix), do: [String.trim_trailing(s, suffix)], else: []
+        end)
+        |> Enum.uniq()
+
+      # Direct owners win the unqualified name over transitive-re-export owners:
+      # if any provider is a direct import, only they can make the name ambiguous
+      # (a single direct owner is unambiguous). Mirrors `prefer_direct/2`.
+      case Enum.filter(mods, &MapSet.member?(env.import_modules, &1)) do
+        [] -> mods
+        directs -> directs
+      end
     end
   end
 

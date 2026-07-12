@@ -86,9 +86,12 @@ defmodule Cure.Compiler.ImportTest do
 
   describe "imports with qualified calls" do
     test "qualified calls still work alongside imports" do
+      # Must-import: a qualified `Std.String.length` requires `Std.String` in
+      # scope. Both List and String define `length`, so bare `length` is
+      # ambiguous — the qualified spelling is exactly how you disambiguate.
       source = """
       mod ImportMixed
-        use Std.List
+        use Std.{List, String}
 
         fn doubled(xs: List(Int)) -> List(Int) = map(xs, fn(x) -> x * 2)
         fn str_len(s: String) -> Int = Std.String.length(s)
