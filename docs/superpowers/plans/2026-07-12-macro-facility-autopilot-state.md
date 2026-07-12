@@ -397,14 +397,31 @@ SP1 §2 error-floor Stage 4 DONE — both tasks executed inline TDD (red→green
 **SP1 GATE MET** (pending Stage-5 review): Tier-1 ✓ (T4) + Tier-2 ✓ (`syntax`) + expansions kernel-check ✓
 (T8 firewall) + default-machinery diagnostics ✓ (this floor). TCB delta ZERO throughout.
 
-**NEXT:** SP1 §2 error-floor Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
-(`2d9e7e9..HEAD` code = `e926038`+`34fb3ab`: `parser.ex`+`errors.ex`+2 tests). Focus: the enriched tuple's
-`got` desc for non-identifier tokens (number/operator/EOF at the mismatch); `article/1` on empty/edge kinds;
-that the render clauses can't crash on any real emitted tuple; no other test coupled to the old shape; the
-`format_error` clause ORDER (macro clauses before catch-all). Then SP1 **Stage 6** — ONE full `mix test` —
-→ **SP1 COMPLETE** → start **SP2** (Tier-3 `computed by` + type-enforced `Diagnosis`/`explain` exhaustiveness
-+ required per-rule examples; the self-proving headline). Deferred post-gate SP1: T9 import-scoping §7 +
-two-pass §6, T7b auto-hygiene.
+SP1 §2 error-floor Stage 5 DONE — Sonnet code review over the floor diff, converged (4 finding-passes +
+2 clean). Found + fixed FOUR real `macro_got_desc/1` defects, all red-test-first (the "found X" desc
+corrupting `format_diagnostic`'s single-line message): `1fe7ef8` structural tokens (newline/indent/dedent
+splice raw values), `98d4957` `nil` keyword → empty backticks, `9846f65` `:char` → codepoint not spelling,
+`f421887` ROOT CAUSE = no control-char sanitization → all descs now route through `escape_for_diagnostic/1`.
+Plus 2 test-only hardening commits (`0a94a90` direct-tuple coverage of the dead-but-total `{:hole_kind}`/
+`:nothing_more` render arms; `74c3a4b` dedent case via real parse). Verified: `macro_expected_at` reachability
+claim correct (hole segments never fail in `match_segments`); T6b assertion matches the real tuple; clause
+ordering + grouping clean; no other consumer of the old shape. 8 floor tests + all macro suites green,
+warnings-clean, antigen untouched.
+
+**OUT-OF-SCOPE FINDING (reviewer, pre-existing — fix before SP1 gate is honestly met):** `match_segments/4`'s
+`{:lit, w}` clause `to_string(tok.value) == w` (T6b code, `parser.ex` ~line 190s) CRASHES
+(`Protocol.UndefinedError`/`ArgumentError`) when a use-site token's value is a tuple/list — a `:regex` token
+value is `{body, flags}`, a `:string_interpolation` value is a list of parts. So `say /foo/` or `say "x#{y}"`
+at a macro mismatch THROWS instead of producing a diagnostic — worse than the raw error the gate forbids.
+Small fix: guard the comparison so a non-binary token value simply doesn't match (fall to the `{:error,
+progress}` mismatch path → the friendly diagnostic). Pre-dates the floor diff (old `:at_segment` code hit it
+too); it's in T6b's `match_segments`, not the error-floor.
+
+**NEXT:** fix the `match_segments` non-scalar-token crash — Stage 4-style red→green micro-task (its own plan is
+overkill; it's a 1-clause guard + a red test `say /foo/` → expect a `:macro_use_mismatch` diagnostic, not a
+crash). Commit ghost-authored. THEN SP1 **Stage 6** — ONE full `mix test` — → **SP1 COMPLETE** → start **SP2**
+(Tier-3 `computed by` + type-enforced `Diagnosis`/`explain` exhaustiveness + required per-rule examples; the
+self-proving headline). Deferred post-gate SP1: T9 import-scoping §7 + two-pass §6, T7b auto-hygiene.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
