@@ -951,3 +951,24 @@ well-typed Core, and its expansion runs. Then CronDelete + PushNotification.
 Hard blocker or a review loop hitting pass 15 without convergence → update THIS file with
 the blocker + what's needed, PushNotification, STOP. Never guess or accept an unconverged
 artifact.
+
+## Live implementation state — 2026-07-12
+
+The following slices have now landed in this worktree:
+
+- SP2 type-only example pins and dependent-pipeline validation wiring are complete.
+- SP3 slices A–F are implemented in `Cure.Compiler.MacroFuzz`: typed-hole generation, use-site assembly, generated expansion checking, shrinking, proof manifests, persistent cache reuse, and computed-rule coverage are present. The current lexical-domain bridge uses the certified closed Nat generator for categories without native module-aware generators; this remains a domain-adapter gap rather than a formal claim that every category has native coverage.
+- SP4 has an advisory reflection foundation in `Cure.Compiler.MacroReflection`: definition/type resolution, constructor inspection, dependent type inference, macro expansion, and pure declaration lifting.
+- SP5 has a closed OTP callback vocabulary and pure module-value lifting foundation in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
+- SP6 has delimited raw-hole parsing and pure capture helpers in `Cure.Compiler.MacroRaw`.
+
+The remaining work before the DONE criterion is genuinely satisfied is:
+
+- Replace the temporary lexical-domain generator bridge with native, module-aware generators and explicit coverage reporting for every supported hole category.
+- Verify or complete the generated-proof gate across every real macro compilation path, including the transitional classic compiler path where the architecture requires it.
+- Extend SP4 from the base reflection API to the reducer/view/flow dogfood surface and its integration tests.
+- Extend SP5 to the complete `behaviour`/`callback`/`lift module` surface, closed callback ADTs, and the AtomVM execution gate.
+- Extend SP6 from parser/capture primitives to raw-hole use-site integration, module rules, open categories, and the concrete DSLs specified by the macro design.
+- Perform the required skeptical review, full test gate, Antigen verification, and final end-to-end proof before declaring completion.
+
+Do not mark the DONE criterion complete until every item above is implemented and verified.
