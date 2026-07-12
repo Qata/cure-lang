@@ -93,6 +93,7 @@ defmodule Cure.Compiler.MacroValidate do
   defp covered?({:failure, name}, covered), do: MapSet.member?(covered, {:category, name})
 
   alias Cure.Compiler.Parser
+  alias Cure.Elab.MacroExpand
 
   @doc """
   Check every `syntax` rule's `{:expansion, _}` example actually expands to its
@@ -115,6 +116,50 @@ defmodule Cure.Compiler.MacroValidate do
     case mismatches do
       [] -> :ok
       ms -> {:error, {:example_mismatch, ms}}
+    end
+  end
+
+  @doc """
+  Execute expansion pins attached to `computed by` rules in a module environment.
+
+  The parser deliberately leaves computed uses deferred. This check supplies the
+  environment needed by the compile-time executor and reports either a pin
+  mismatch or an execution failure without collapsing the latter into a false
+  success.
+  """
+  @spec check_computed_examples(tuple(), Cure.Core.Env.t()) ::
+          :ok
+          | {:error, {:computed_example_error, [map()]}}
+          | {:error, {:example_mismatch, [map()]}}
+  def check_computed_examples({:macro_def, _meta, rules}, env) do
+    results =
+      rules
+      |> Enum.filter(&(&1[:kind] == :computed))
+      |> Enum.flat_map(fn rule ->
+        for %{use_site: use_site, expected: {:expansion, expected}} <- Map.get(rule, :examples, []) do
+          actual = Parser.expand_example(rules, use_site)
+
+          case MacroExpand.expand(actual, env) do
+            {:ok, expanded} ->
+              if normalize(expanded) == normalize(expected) do
+                :ok
+              else
+                {:mismatch, %{keyword: rule.keyword, expected: expected, actual: expanded}}
+              end
+
+            {:error, reason} ->
+              {:failure, %{keyword: rule.keyword, reason: reason}}
+          end
+        end
+      end)
+
+    failures = for {:failure, details} <- results, do: details
+    mismatches = for {:mismatch, details} <- results, do: details
+
+    cond do
+      failures != [] -> {:error, {:computed_example_error, failures}}
+      mismatches != [] -> {:error, {:example_mismatch, mismatches}}
+      true -> :ok
     end
   end
 

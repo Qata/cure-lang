@@ -34,6 +34,7 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
   end
 
   alias Cure.Compiler.{MacroValidate, Errors}
+  alias Cure.Elab.Program
 
   test "an example whose expansion matches its pin checks clean" do
     md =
@@ -99,5 +100,64 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
 
     assert {:error, {:example_mismatch, [m]}} = MacroValidate.check_examples(md)
     assert m.keyword == "every2"
+  end
+
+  test "a computed example executes against the module environment" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Mk
+        syntax mk <x: Code> computed by build_it
+          example mk 1 expands 1
+
+      fn build_it(a: MkSyntax) -> Syntax = a.x
+    """
+
+    md = macro_def!(source)
+    assert {:ok, env} = Program.elaborate(source)
+    assert :ok = MacroValidate.check_computed_examples(md, env)
+  end
+
+  test "a computed example with the wrong pin is example_mismatch" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Mk
+        syntax mk <x: Code> computed by build_it
+          example mk 1 expands 2
+
+      fn build_it(a: MkSyntax) -> Syntax = a.x
+    """
+
+    md = macro_def!(source)
+    assert {:ok, env} = Program.elaborate(source)
+    assert {:error, {:example_mismatch, [m]}} = MacroValidate.check_computed_examples(md, env)
+    assert m.keyword == "mk"
+  end
+
+  test "a computed example reports an elab execution failure" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Mk
+        syntax mk computed by build_it
+          example mk expands 1
+
+      fn build_it(a: MkSyntax) -> Int = 0
+    """
+
+    md = macro_def!(source)
+    assert {:ok, env} = Program.elaborate(source)
+
+    assert {:error, {:computed_example_error, [failure]}} =
+             MacroValidate.check_computed_examples(md, env)
+
+    assert failure.keyword == "mk"
+    rendered = Errors.format_error({:computed_example_error, [failure]}, "m.cure")
+    assert rendered =~ "computed macro example failed"
+    assert rendered =~ "mk"
   end
 end

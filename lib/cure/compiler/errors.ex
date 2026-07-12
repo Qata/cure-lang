@@ -432,6 +432,22 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:computed_example_error, failures}, file) do
+    listed =
+      failures
+      |> Enum.map_join(", ", fn failure ->
+        "`#{failure.keyword}` (#{inspect(failure.reason)})"
+      end)
+
+    format_diagnostic(
+      "error",
+      "computed macro example failed",
+      file,
+      0,
+      "these computed rules could not execute their pinned examples: #{listed}"
+    )
+  end
+
   def format_error({:computed_macro_error, meta, reason}, file) do
     line = Keyword.get(meta, :line, 0)
     keyword = Keyword.get(meta, :keyword, "computed")
