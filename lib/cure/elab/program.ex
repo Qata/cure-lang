@@ -38,7 +38,8 @@ defmodule Cure.Elab.Program do
     |> Enum.find_value(:ok, fn source ->
       case import_source_path(source) do
         {:ok, module_name, _path} ->
-          if :code.ensure_loaded(String.to_atom("Cure." <> module_name)) == {:module, String.to_atom("Cure." <> module_name)} do
+          if :code.ensure_loaded(String.to_atom("Cure." <> module_name)) ==
+               {:module, String.to_atom("Cure." <> module_name)} do
             nil
           else
             missing_stdlib_error(module_name)

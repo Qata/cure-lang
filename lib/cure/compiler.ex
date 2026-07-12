@@ -270,7 +270,7 @@ defmodule Cure.Compiler do
         end
       else
         {:error, reason} -> {:error, {:codegen_error, reason}}
-    end
+      end
 
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
     # attribute. This runs once here so BOTH the classic and dependent
