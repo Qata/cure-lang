@@ -215,10 +215,28 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp subst_holes({t, meta, children}, bindings) when is_list(children) do
-    {t, meta, Enum.map(children, &subst_holes(&1, bindings))}
+    {t, subst_holes_meta(meta, bindings), Enum.map(children, &subst_holes(&1, bindings))}
   end
 
   defp subst_holes(other, _bindings), do: other
+
+  # Not every child AST lives in a node's `children` list: `match_arm` stashes
+  # its `pattern`/`guard` in the node's `meta` keyword list instead. A hole
+  # referenced from one of those would otherwise survive expansion unbound.
+  # Walk meta's values too, substituting into anything AST-shaped and leaving
+  # plain data (lines/cols/names/flags) untouched.
+  defp subst_holes_meta(meta, bindings) when is_list(meta) do
+    Enum.map(meta, fn
+      {k, v} -> {k, subst_holes_meta_value(v, bindings)}
+      other -> other
+    end)
+  end
+
+  defp subst_holes_meta(meta, _bindings), do: meta
+
+  defp subst_holes_meta_value(v, bindings) when is_tuple(v), do: subst_holes(v, bindings)
+  defp subst_holes_meta_value(v, bindings) when is_list(v), do: Enum.map(v, &subst_holes_meta_value(&1, bindings))
+  defp subst_holes_meta_value(v, _bindings), do: v
 
   # -- Program (top-level sequence) ------------------------------------------
 

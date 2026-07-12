@@ -102,4 +102,23 @@ defmodule Cure.Compiler.MacroUseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
     assert Enum.any?(errors, &match?({:macro_use_mismatch, "say", :at_segment, 0, _, _}, &1))
   end
+
+  test "a hole referenced inside a template match-arm's guard is substituted" do
+    # `match_arm`'s pattern/guard live in the node's *meta* keyword list, not
+    # its children list. subst_holes/2 must still reach them: a hole bound at
+    # the use-site referenced from a guard must not survive expansion as a
+    # dangling {:variable, _, "x"}.
+    node =
+      parse!(
+        "mod M\n  macro Check\n    syntax check <x: Code> becomes match 1 { y when x -> 1, _ -> 0 }\n  fn f() = check true\n"
+      )
+
+    body = find_fn_body(node, "f")
+    assert {:pattern_match, _, [_scrutinee, first_arm, _second_arm]} = body
+    assert {:match_arm, arm_meta, _} = first_arm
+
+    guard = Keyword.fetch!(arm_meta, :guard)
+    refute match?({:variable, _, "x"}, guard)
+    assert {:literal, _, true} = guard
+  end
 end
