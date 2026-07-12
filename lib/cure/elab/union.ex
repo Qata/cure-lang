@@ -129,6 +129,106 @@ defmodule Cure.Elab.Union do
   def member_key({:ctor, name, []}), do: Atom.to_string(name)
   def member_key({:global, name}), do: Atom.to_string(name)
 
+  # ── FFI boundary: runtime discrimination ───────────────────────────────────
+
+  @doc """
+  The ERASED runtime shape of a member, as the Erlang guard that recognises it.
+
+  This is what makes a union-returning `@extern` possible: Erlang hands back an untagged
+  value, and the boundary can only re-tag it if each member is recognisable. Members that
+  erase into the same shape are indistinguishable — `Int`/`Nat`/`Char` are all Erlang
+  integers, `Bool` erases to the atoms `true`/`false` so it collides with `Atom`, and
+  `String` IS `List(Char)` so it collides with any list.
+
+  `:unsupported` for anything whose erasure is not a single recognisable shape (a
+  user ADT erases to a bare atom when nullary and a tagged tuple otherwise, so it is
+  BOTH shapes and cannot be guarded).
+  """
+  @spec runtime_class(member()) :: atom()
+  def runtime_class(%{payload: nil, lit_type_key: t}), do: class_of_type_key(t)
+  def runtime_class(%{payload: ty}), do: class_of_core(ty)
+
+  defp class_of_core({:int_type}), do: :integer
+  defp class_of_core({:float_type}), do: :float
+  defp class_of_core({:binary_type}), do: :binary
+  defp class_of_core({:atom_type}), do: :atom
+  defp class_of_core({:data, :Bool, _p, _i}), do: :atom
+  defp class_of_core({:data, :Nat, _p, _i}), do: :integer
+  defp class_of_core({:data, :Bounded, _p, _i}), do: :integer
+  defp class_of_core({:data, :List, _p, _i}), do: :list
+  defp class_of_core(_other), do: :unsupported
+
+  defp class_of_type_key("Int"), do: :integer
+  defp class_of_type_key("Nat"), do: :integer
+  defp class_of_type_key("Char"), do: :integer
+  defp class_of_type_key("Float"), do: :float
+  defp class_of_type_key("Binary"), do: :binary
+  defp class_of_type_key("Atom"), do: :atom
+  defp class_of_type_key("Bool"), do: :atom
+  defp class_of_type_key("String"), do: :list
+  defp class_of_type_key(_other), do: :unsupported
+
+  @doc """
+  Can every member of this union be told apart from an untagged Erlang value?
+
+  Returns `:ok`, or `{:error, reason}` naming the colliding members.
+
+  TYPE members must occupy pairwise-distinct runtime classes. LITERAL members are
+  discriminated by EXACT VALUE, so several literals may share a class (`3 | 4` are both
+  integers but `=:= 3` and `=:= 4` tell them apart) — but a literal must not share a
+  class with a TYPE member, or a raw `3` could be either the literal `3` or an
+  arbitrary `Nat`.
+  """
+  @spec discriminable([member()]) :: :ok | {:error, term()}
+  def discriminable(members) do
+    {lits, types} = Enum.split_with(members, &(&1.payload == nil))
+
+    type_classes = Enum.map(types, &{&1.key, runtime_class(&1)})
+    lit_classes = Enum.map(lits, &{&1.key, runtime_class(&1)})
+
+    unsupported = for {k, :unsupported} <- type_classes ++ lit_classes, do: k
+
+    dup_types =
+      type_classes
+      |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+      |> Enum.filter(fn {_c, ks} -> length(ks) > 1 end)
+
+    type_class_set = for {_k, c} <- type_classes, into: MapSet.new(), do: c
+
+    lit_vs_type =
+      for {k, c} <- lit_classes,
+          MapSet.member?(type_class_set, c),
+          do: k
+
+    cond do
+      unsupported != [] -> {:error, {:unsupported_member_shape, unsupported}}
+      dup_types != [] -> {:error, {:same_runtime_shape, dup_types}}
+      lit_vs_type != [] -> {:error, {:literal_shadowed_by_type, lit_vs_type}}
+      true -> :ok
+    end
+  end
+
+  @doc """
+  The literal value behind a LITERAL member's key, for building an equality guard.
+
+  The key format is `<TypeKey>#<printed>` and we generated it, so this is a total inverse
+  for the six literal type-keys. Only ever called on a NULLARY ctor's key, so a rekeyed
+  module-qualified TYPE name (`Std.Foo#Foo`, which also contains `#`) can never reach it.
+  """
+  @spec literal_value(String.t()) :: {:ok, atom(), term()} | :error
+  def literal_value(key) do
+    case String.split(key, "#", parts: 2) do
+      ["Int", v] -> {:ok, :integer, String.to_integer(v)}
+      ["Nat", v] -> {:ok, :integer, String.to_integer(v)}
+      ["Float", v] -> {:ok, :float, String.to_float(v)}
+      ["Bool", v] -> {:ok, :atom, v == "true"}
+      ["Atom", ":" <> v] -> {:ok, :atom, String.to_atom(v)}
+      ["Char", <<?', c::utf8, ?'>>] -> {:ok, :integer, c}
+      ["String", <<?", rest::binary>>] -> {:ok, :string, String.trim_trailing(rest, "\"")}
+      _ -> :error
+    end
+  end
+
   # ── Family generation ──────────────────────────────────────────────────────
 
   @doc """
@@ -259,9 +359,14 @@ defmodule Cure.Elab.Union do
     end
   end
 
-  # Recover a union family's canonical members from its registered constructors: a
-  # nullary ctor is a literal member, a 1-ary ctor is a type member whose payload is
-  # its single argument's type.
+  @doc """
+  Recover a union family's canonical members from its registered constructors: a nullary
+  ctor is a literal member, a 1-ary ctor is a type member whose payload is its single
+  argument's type.
+  """
+  @spec members_of(Env.t(), atom()) :: [member()]
+  def members_of(env, family_key), do: explode(env, family_key)
+
   defp explode(env, family_key) do
     prefix = Atom.to_string(family_key) <> "$"
 

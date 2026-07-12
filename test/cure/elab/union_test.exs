@@ -554,4 +554,94 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Program.elaborate(src)
     end
   end
+
+  # An @extern hands back a RAW Erlang value with no constructor tag. Rather than
+  # forbidding union-returning externs outright, the boundary GENERATES a discriminating
+  # wrapper: call the raw function, guard on the result, inject the matching ctor. The
+  # union is a real tagged union everywhere in Cure; the untagging exists only at the FFI
+  # seam.
+  #
+  # Sound IFF the members are pairwise distinguishable by an Erlang guard. Members that
+  # share an erased representation (Int/Nat/Char all integers; Bool/Atom both atoms;
+  # String/List both lists) cannot be told apart and are REJECTED at the declaration.
+  describe "@extern returning a union: discriminating wrapper" do
+    test "distinguishable members are accepted and tagged at runtime" do
+      src = """
+      mod EXD
+        @extern(:erlang, :abs, 1)
+        fn raw(n: Int) -> Int | Binary
+
+        fn use_it(n: Int) -> Int = match raw(n)
+          i: Int -> i
+          b: Binary -> 0
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      # erlang:abs/1 returns a raw integer; the wrapper must tag it.
+      assert apply(:"Cure.EXD", :raw, [-5]) == {:"Union<Binary|Int>$Int", 5}
+      # ...and the ordinary union elimination must then discriminate it.
+      assert apply(:"Cure.EXD", :use_it, [-5]) == 5
+    end
+
+    test "a literal member is discriminated by exact value" do
+      src = """
+      mod EXL
+        @extern(:erlang, :hd, 1)
+        fn head(xs: List(Atom)) -> :north | Int
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      assert apply(:"Cure.EXL", :head, [[:north]]) ==
+               :"Union<Atom#:north|Int>$Atom#:north"
+    end
+
+    test "REJECTS members that share an erased representation: Int | Nat" do
+      src = """
+      mod EXN1
+        @extern(:erlang, :abs, 1)
+        fn raw(n: Int) -> Int | Nat
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "REJECTS Bool | Atom — Bool erases to the atoms true/false" do
+      src = """
+      mod EXN2
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Atom)) -> Bool | Atom
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "REJECTS a literal whose class collides with a type member: 3 | Nat" do
+      src = """
+      mod EXN3
+        @extern(:erlang, :abs, 1)
+        fn raw(n: Int) -> 3 | Nat
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "a union in an @extern's ARGUMENT position is unaffected" do
+      # Passing a union INTO Erlang is honest: the tagged tuple is a fine Erlang term.
+      src = """
+      mod EXA
+        @extern(:erlang, :term_to_binary, 1)
+        fn enc(v: Int | Bool) -> Binary
+      end
+      """
+
+      assert {:ok, _} = Program.elaborate(src)
+    end
+  end
 end

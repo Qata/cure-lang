@@ -203,10 +203,33 @@ defmodule Cure.Elab.Emit do
 
   defp function_form(env, name) do
     case Env.get_def(env, name) do
-      %{body: {:extern, {mod, fun, _arity}}} -> extern_form(name, {mod, fun}, present_arity(env, name))
-      def -> real_function_form(name, def, env)
+      %{body: {:extern, {mod, fun, _arity}}} = def ->
+        extern_form(name, {mod, fun}, present_arity(env, name), extern_union_members(env, def))
+
+      def ->
+        real_function_form(name, def, env)
     end
   end
+
+  # The members of an `@extern`'s union return type, tagged with their constructor names,
+  # or nil when it does not return a union. Drives the discriminating wrapper below.
+  defp extern_union_members(env, %{type: pi, quantities: quantities}) do
+    case codomain_of(pi, length(quantities || [])) do
+      {:data, ukey, [], []} ->
+        if Cure.Elab.Union.union_family?(ukey) do
+          env
+          |> Cure.Elab.Union.members_of(ukey)
+          |> Enum.map(&Map.put(&1, :ctor, Cure.Elab.Union.ctor_key(ukey, &1)))
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp codomain_of(type, 0), do: type
+  defp codomain_of({:pi, _g, _dom, cod}, n), do: codomain_of(cod, n - 1)
+  defp codomain_of(type, _n), do: type
 
   # Wave-3: emit a direct Erlang remote call, mirroring codegen.ex:691-705 (NOT
   # calling it). Params are synthesized from the arity — a bodyless extern has no
@@ -218,11 +241,68 @@ defmodule Cure.Elab.Emit do
   # reaches the BEAM. `Declarations.check_extern_arity/2` rejects a literal that disagrees, so
   # the two agree by construction; reading the quantities here keeps that true by construction
   # rather than by convention.
-  defp extern_form(fn_atom, {mod, fun}, arity) do
+  defp extern_form(fn_atom, {mod, fun}, arity, union_members) do
     param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
     remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
-    {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [remote]}]}
+
+    body =
+      case union_members do
+        nil -> remote
+        members -> union_dispatch(remote, members)
+      end
+
+    {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [body]}]}
   end
+
+  # An `@extern` whose return type is an anonymous union: Erlang hands back an UNTAGGED
+  # value, so the boundary re-tags it. Guard on the raw result and inject the matching
+  # constructor, turning the FFI value into a real tagged union the moment it enters Cure.
+  #
+  # `Declarations.check_extern_not_union/2` has already established that the members are
+  # pairwise distinguishable, so exactly one clause can match. There is deliberately NO
+  # catch-all: if Erlang returns a shape outside the declared union, the extern's type was
+  # a lie, and a `CaseClauseError` naming the offending value is the honest outcome.
+  #
+  # Literal members are matched by EXACT VALUE and come first — they are strictly more
+  # specific than a type member's guard.
+  defp union_dispatch(remote, members) do
+    {lits, types} = Enum.split_with(members, &(&1.payload == nil))
+
+    clauses =
+      Enum.map(lits, &literal_clause/1) ++ Enum.map(types, &type_clause/1)
+
+    {:case, @line, remote, clauses}
+  end
+
+  # `R when R =:= <lit> -> :'Union<…>$<key>'` — a literal member is a NULLARY ctor, so it
+  # erases to the bare constructor atom with no payload.
+  defp literal_clause(%{key: key, ctor: ctor}) do
+    {:ok, _kind, value} = Cure.Elab.Union.literal_value(key)
+
+    guard = {:op, @line, :"=:=", {:var, @line, :R}, literal_form(value)}
+    {:clause, @line, [{:var, @line, :R}], [[guard]], [{:atom, @line, ctor}]}
+  end
+
+  # `R when is_integer(R) -> {:'Union<…>$Int', R}` — a type member is a 1-ary ctor, so it
+  # erases to a tagged 2-tuple carrying the raw value.
+  defp type_clause(%{ctor: ctor} = member) do
+    test = class_guard(Cure.Elab.Union.runtime_class(member))
+    guard = {:call, @line, {:atom, @line, test}, [{:var, @line, :R}]}
+    body = {:tuple, @line, [{:atom, @line, ctor}, {:var, @line, :R}]}
+
+    {:clause, @line, [{:var, @line, :R}], [[guard]], [body]}
+  end
+
+  defp class_guard(:integer), do: :is_integer
+  defp class_guard(:float), do: :is_float
+  defp class_guard(:binary), do: :is_binary
+  defp class_guard(:atom), do: :is_atom
+  defp class_guard(:list), do: :is_list
+
+  defp literal_form(v) when is_integer(v), do: {:integer, @line, v}
+  defp literal_form(v) when is_float(v), do: {:float, @line, v}
+  defp literal_form(v) when is_atom(v), do: {:atom, @line, v}
+  defp literal_form(v) when is_binary(v), do: {:string, @line, String.to_charlist(v)}
 
   defp real_function_form(name, %{body: body, quantities: quantities}, env) do
     qs = quantities || []

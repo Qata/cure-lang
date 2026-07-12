@@ -371,7 +371,8 @@ defmodule Cure.Elab.Declarations do
         # TotalityClosure skips it. Do NOT call elaborate_body / Kernel.check /
         # Relevance.check (no term exists).
         with {:ok, sig} <- function_signature(meta, env),
-             :ok <- check_extern_arity(sig, arity) do
+             :ok <- check_extern_arity(sig, arity),
+             :ok <- check_extern_not_union(sig, env) do
           {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
         end
 
@@ -391,6 +392,48 @@ defmodule Cure.Elab.Declarations do
   # `Emit` then generated `head/2` calling `erlang:hd(V0, V1)` while every Cure caller invoked
   # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
   # it. Rejecting the mismatch is the only reading under which the number means one thing.
+  # An `@extern` is a typed FFI postulate: Erlang hands back a RAW value carrying no
+  # constructor tag. A union-returning extern is therefore only meaningful if the boundary
+  # RE-TAGS the value — which `Emit.extern_form/4` does, by guarding on the raw result and
+  # injecting the matching constructor.
+  #
+  # That is sound only when the members are pairwise distinguishable from an untagged
+  # value. Members sharing an erased shape (`Int`/`Nat`/`Char` are all Erlang integers;
+  # `Bool` erases to `true`/`false` so it collides with `Atom`; `String` IS `List(Char)`)
+  # cannot be told apart, and are rejected HERE, at the declaration the author can see,
+  # rather than miscompiling into a CaseClauseError at the first use.
+  #
+  # The ARGUMENT direction needs no check: passing a union INTO Erlang hands it an
+  # ordinary tagged tuple, which is a perfectly good Erlang term.
+  defp check_extern_not_union(sig, env) do
+    codomain = extern_codomain(sig.pi, length(sig.quantities || []))
+
+    case codomain do
+      {:data, ukey, [], []} ->
+        if Cure.Elab.Union.union_family?(ukey) do
+          case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey)) do
+            :ok -> :ok
+            {:error, reason} -> {:error, {:extern_union_indistinct, sig.name, reason}}
+          end
+        else
+          :ok
+        end
+
+      _ ->
+        # A union NESTED inside the return type (`List(Int | Bool)`) cannot be re-tagged:
+        # the boundary would have to walk an arbitrary structure. Reject.
+        if Elaborator.union_goal?(codomain) do
+          {:error, {:extern_returns_union, sig.name, codomain}}
+        else
+          :ok
+        end
+    end
+  end
+
+  defp extern_codomain(type, 0), do: type
+  defp extern_codomain({:pi, _g, _dom, cod}, n), do: extern_codomain(cod, n - 1)
+  defp extern_codomain(type, _n), do: type
+
   defp check_extern_arity(sig, arity) do
     # PRESENT, not unrestricted. Slice 4a's rename left `== :unrestricted` here, which
     # excludes `:linear`/`:affine` parameters — they have runtime values and DO reach
