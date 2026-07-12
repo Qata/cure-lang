@@ -42,11 +42,13 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
 
   alias Cure.Elab.Program
 
+  # actor/app/fsm/process/supervisor were removed with the container compilers
+  # (#18); concurrency is now pure `@extern` wrappers, not their own modules.
   @green ~w(
-    actor app atom binary bool bounded char comparable core crdt decision equatable
-    equivalent float fsm functor gen int iter json list map match math nat
-    non_empty optic option process proof result semigroup set show sigma string
-    supervisor system telescope test time tuple unit vector
+    atom binary bool bounded char comparable core crdt decision equatable
+    equivalent float functor gen int iter json list map match math nat
+    non_empty optic option proof result semigroup set show sigma string
+    system telescope test time tuple unit vector
   )
 
   test "every dependent-green stdlib module elaborates on the dependent pipeline" do
