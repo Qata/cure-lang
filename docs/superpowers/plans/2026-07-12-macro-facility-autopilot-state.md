@@ -1000,18 +1000,13 @@ user until the following work is genuinely complete and verified end to end:
 - Merge the kernel-parity worktree (currently named
   `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`,
   branch `autopilot/kernel-parity-batch`; it contains user changes that must be
-  preserved) only after understanding its deletion of the bespoke container
-  types, then resolve all integration conflicts and verify the merged result.
+  preserved) into `idris-parity` first, resolve and verify that merge, then merge
+  `idris-parity` into `core-let-binder`. Do not merge it directly into
+  `core-let-binder`; understand its deletion of the bespoke container types and
+  resolve all integration conflicts before the second merge.
 - Do not declare DONE while any replacement, merge conflict, failing legacy test,
   missing new test, or end-to-end runtime proof remains.
 
 This directive applies for the entirety of the session and every context
 compaction. Commit every implementation phase with a highly descriptive commit
 message and keep the worktree clean between phases.
-
-## CRITICAL MERGE-ORDER CORRECTION — 2026-07-13
-
-The required merge sequence supersedes any earlier shorthand: first merge
-`autopilot/kernel-parity-batch` into the `idris-parity` branch, resolve and
-verify that result, then merge `idris-parity` into `core-let-binder`. Do not
-merge the kernel-parity worktree directly into `core-let-binder`.
