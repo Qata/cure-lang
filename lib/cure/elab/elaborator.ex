@@ -278,10 +278,23 @@ defmodule Cure.Elab.Elaborator do
       # fresh metavariables for them and solve from the present arguments, the
       # same way constructor indices are inferred (§5.2). Without this, the
       # explicit args would be bound to the implicit positions.
-      implicit_def?(env, atom) ->
+      #
+      # Key on the raw `atom` whenever it names a LOCAL def (which must shadow any
+      # same-named import), otherwise on `resolved`. An IMPORTED implicit def is
+      # registered under a re-keyed import key (`Std.List#map`), so
+      # `implicit_def?(env, :map)` is false and the raw atom is not a def; without
+      # resolving, a bare `map(xs, fn(x) -> ...)` skips implicit insertion, falls to
+      # the lambda clause below, and mis-binds `xs : List(Int)` against the erased
+      # `{t} : Type` slot (a `:conversion_failure`). Preferring `atom` when it is a
+      # local def keeps a module's own `map`/`filter` bound to itself;
+      # `resolve_bare_shadowed` (which feeds `resolved`) resolves toward imports and
+      # would otherwise redirect a recursive self-call to a same-named import.
+      implicit_def?(env, if(Env.get_def(env, atom), do: atom, else: resolved)) ->
+        key = if Env.get_def(env, atom), do: atom, else: resolved
+
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_global_app(env, atom, present, ctx)
+            elaborate_global_app(env, key, present, ctx)
           end
 
         # When up-front inference of the arguments fails — an argument that is
@@ -294,7 +307,7 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx) do
+            case elaborate_implicit_app_bidirectional(env, key, args, names, ctx) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> orig
             end
