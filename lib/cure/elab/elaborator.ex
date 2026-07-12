@@ -57,13 +57,30 @@ defmodule Cure.Elab.Elaborator do
 
       ctor ->
         order = Enum.map(ctor.args, fn {n, _t} -> n end)
+        defaults = Map.get(ctor, :field_defaults, %{})
         provided = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
 
-        if map_size(provided) == length(order) and
-             Enum.all?(order, &Map.has_key?(provided, &1)) do
-          {:ok, {:function_call, [name: name], Enum.map(order, &Map.fetch!(provided, &1))}}
-        else
-          {:error, {:record_field_mismatch, atom}}
+        cond do
+          # A named field is not a field of this record.
+          not Enum.all?(Map.keys(provided), &(&1 in order)) ->
+            {:error, {:record_field_mismatch, atom}}
+
+          # Every field must be supplied by the caller or carry a declared default
+          # (`name: String = "Anonymous"`); an omitted field with no default is a
+          # genuine mismatch.
+          not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
+            {:error, {:record_field_mismatch, atom}}
+
+          true ->
+            values =
+              Enum.map(order, fn f ->
+                case Map.fetch(provided, f) do
+                  {:ok, val} -> val
+                  :error -> Map.fetch!(defaults, f)
+                end
+              end)
+
+            {:ok, {:function_call, [name: name], values}}
         end
     end
   end
@@ -278,10 +295,23 @@ defmodule Cure.Elab.Elaborator do
       # fresh metavariables for them and solve from the present arguments, the
       # same way constructor indices are inferred (§5.2). Without this, the
       # explicit args would be bound to the implicit positions.
-      implicit_def?(env, atom) ->
+      #
+      # Key on the raw `atom` whenever it names a LOCAL def (which must shadow any
+      # same-named import), otherwise on `resolved`. An IMPORTED implicit def is
+      # registered under a re-keyed import key (`Std.List#map`), so
+      # `implicit_def?(env, :map)` is false and the raw atom is not a def; without
+      # resolving, a bare `map(xs, fn(x) -> ...)` skips implicit insertion, falls to
+      # the lambda clause below, and mis-binds `xs : List(Int)` against the erased
+      # `{t} : Type` slot (a `:conversion_failure`). Preferring `atom` when it is a
+      # local def keeps a module's own `map`/`filter` bound to itself;
+      # `resolve_bare_shadowed` (which feeds `resolved`) resolves toward imports and
+      # would otherwise redirect a recursive self-call to a same-named import.
+      implicit_def?(env, if(Env.get_def(env, atom), do: atom, else: resolved)) ->
+        key = if Env.get_def(env, atom), do: atom, else: resolved
+
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_global_app(env, atom, present, ctx)
+            elaborate_global_app(env, key, present, ctx)
           end
 
         # When up-front inference of the arguments fails — an argument that is
@@ -294,7 +324,7 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx) do
+            case elaborate_implicit_app_bidirectional(env, key, args, names, ctx) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> orig
             end
@@ -489,6 +519,17 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
+  # `assert_type expr : T` — a compile-time ascription. Lower `T`, then elaborate
+  # `expr` in CHECKING mode against it (so the assertion can also steer inference).
+  # The wrapper carries no runtime content: the result IS the checked term at type
+  # `T`, so emit sees only `expr`. Mirrors the classic codegen, which strips it.
+  def elaborate_expr_typed({:assert_type, _meta, [expr, type_ast]}, names, ctx, env) do
+    with {:ok, expected_core} <- elaborate_type(type_ast, names, env),
+         {:ok, term} <- elaborate_expr_checked(expr, expected_core, names, ctx, env) do
+      {:ok, term, Eval.eval(expected_core, Context.env(ctx))}
+    end
+  end
+
   def elaborate_expr_typed({:literal, meta, value} = expr, names, ctx, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) ->
@@ -516,6 +557,12 @@ defmodule Cure.Elab.Elaborator do
       :string when is_binary(value) ->
         elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
+      # A byte binary literal `<<1, 2, 3>>` desugars to `Std.Binary.of_bytes/1`.
+      :bytes when is_list(value) ->
+        with {:ok, surface} <- desugar_bytes(value, Keyword.get(meta, :line, 0)) do
+          elaborate_expr_typed(surface, names, ctx, env)
+        end
+
       # A symbol literal `:ok` is a value of the Int-tier primitive `Atom` base
       # type — a BEAM atom is its own canonical value (Core `{:atom_lit, a}`).
       :symbol when is_atom(value) ->
@@ -538,6 +585,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A `let … ⏎ body` block in INFERENCE position — the counterpart to the
+  # check-mode `{:block}` clause (`elaborate_let_block/5`). Enables annotation-free
+  # function bodies (`fn f() = let a = 1 ⏎ a + 1`) and any inference-position block.
+  # There is no `:let` desugaring to guess a type for: build the `:let` Core chain
+  # by inferring each binding's rhs, then let the kernel infer the whole term's type
+  # (which sidesteps hand-managing the de Bruijn depth of the body's type).
+  def elaborate_expr_typed({:block, _meta, stmts}, names, ctx, env) do
+    with {:ok, term} <- infer_block_term(stmts, names, ctx, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    end
+  end
+
   # A surface unary operator. `not` is retired as a kernel primitive: it lowers to
   # an application of the `Std.Bool` prelude def `not` (a `case`-eliminating
   # function over the inductive Bool). The kernel checks the operand against Bool
@@ -556,6 +616,17 @@ defmodule Cure.Elab.Elaborator do
       :bnot ->
         with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
              term = {:app, {:global, :int_bnot}, o_core},
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
+      # Numeric negation. Type-directed exactly like binary arithmetic: infer the
+      # operand's primitive kind, then lower to `int_neg`/`float_neg` (both return
+      # their operand type). A non-numeric operand rejects as unsupported.
+      :- ->
+        with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
+             {:ok, g} <- neg_global(o_type, ctx),
+             term = {:app, {:global, g}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
@@ -624,27 +695,34 @@ defmodule Cure.Elab.Elaborator do
   # so every arm is checked against the one synthesised type. That reuses all the
   # coverage/motive/index machinery and, since `T` is non-scrutinee-dependent, the
   # motive it builds is effectively constant — correct for inference position.
-  def elaborate_expr_typed({:pattern_match, _meta, [scrut | arms]} = expr, names, ctx, env) do
-    with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
-           elaborate_expr_typed(scrut, names, ctx, env),
-         {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
-         %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
-         arity = length(telescope),
-         pc = Inductive.param_count(env, dname),
-         {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
-         branch_names = branch_scope(quantities, pattern_vars) ++ names,
-         branch_ctx = extend_context(ctx, telescope, param_vals),
-         {:ok, _b_term, t_branch_val} <-
-           elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
-         t_branch = Quote.reify(t_branch_val, Context.length(branch_ctx)),
-         {:ok, result_type_term} <- strengthen_inferred_type(t_branch, arity),
-         {:ok, term} <- elaborate_match(scrut, arms, result_type_term, names, ctx, env),
-         result_type_val = Eval.eval(result_type_term, Context.env(ctx)),
-         :ok <- Kernel.check(ctx, term, result_type_val) do
-      {:ok, term, result_type_val}
+  def elaborate_expr_typed({:pattern_match, meta, [scrut | arms]} = expr, names, ctx, env)
+      when is_list(meta) do
+    if special_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+        elaborate_expr_typed(desugared, names, ctx, env)
+      end
     else
-      {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
-      {:error, _} = err -> err
+      with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
+             elaborate_expr_typed(scrut, names, ctx, env),
+           {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
+           %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
+           arity = length(telescope),
+           pc = Inductive.param_count(env, dname),
+           {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
+           branch_names = branch_scope(quantities, pattern_vars) ++ names,
+           branch_ctx = extend_context(ctx, telescope, param_vals),
+           {:ok, _b_term, t_branch_val} <-
+             elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
+           t_branch = Quote.reify(t_branch_val, Context.length(branch_ctx)),
+           {:ok, result_type_term} <- strengthen_inferred_type(t_branch, arity),
+           {:ok, term} <- elaborate_match(scrut, arms, result_type_term, names, ctx, env),
+           result_type_val = Eval.eval(result_type_term, Context.env(ctx)),
+           :ok <- Kernel.check(ctx, term, result_type_val) do
+        {:ok, term, result_type_val}
+      else
+        {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
+        {:error, _} = err -> err
+      end
     end
   end
 
@@ -669,6 +747,63 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
     do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
+
+  # `return e` — in tail position it IS the value of the enclosing function or
+  # branch, so it elaborates as the identity on `e`. The classic throw/catch
+  # unwind is dropped (a total language has no such escape); the STRUCTURED
+  # tail-position meaning is all that survives.
+  def elaborate_expr_typed({:early_return, _meta, [e]}, names, ctx, env),
+    do: elaborate_expr_typed(e, names, ctx, env)
+
+  # Integer range `a..b` (exclusive) / `a..=b` (inclusive). Desugars to a call to
+  # the total structurally-recursive helper `Std.Nat.range_upto{,_incl}` (auto-
+  # prelude, so no `use` is needed) — the honest analog of Idris's `enumFromTo`.
+  # The list construction is genuine recursion; only the `Int -> Nat` count cast
+  # (`Std.Nat.of_int`) is a trusted primitive boundary.
+  def elaborate_expr_typed({:range, meta, [from_ast, to_ast]}, names, ctx, env) do
+    fname = if Keyword.get(meta, :inclusive, false), do: "range_upto_incl", else: "range_upto"
+    line = Keyword.get(meta, :line, 0)
+    call = {:function_call, [name: fname, line: line], [from_ast, to_ast]}
+    elaborate_expr_typed(call, names, ctx, env)
+  end
+
+  # List comprehension `[e for x <- xs, cond, y <- ys]`. Desugars (before Core) to
+  # the textbook Wadler translation over already-supported constructs — nothing new
+  # reaches the kernel:
+  #   * no qualifiers left        -> `[e]`               (singleton list)
+  #   * generator `x <- src`      -> `flat_map(src, fn(x) -> <rest>)`
+  #   * filter `cond`             -> `if cond then <rest> else []`
+  # The sole library dependency is `flat_map` (Std.List; `use`d or, at #18, the
+  # dependent-compiled stdlib). Generator patterns must currently be a plain
+  # variable — a destructuring generator is rejected rather than silently mistyped.
+  def elaborate_expr_typed({:comprehension, meta, [body | quals]}, names, ctx, env) do
+    case desugar_comprehension(quals, body, Keyword.get(meta, :line, 0)) do
+      {:ok, desugared} -> elaborate_expr_typed(desugared, names, ctx, env)
+      {:error, _} = err -> err
+    end
+  end
+
+  # String interpolation `"a#{e}b"` desugars to a right fold of `str_concat` over
+  # the segments (see `desugar_interpolation`). String-valued holes only; a
+  # non-string hole fails as an ordinary type error against `str_concat`'s
+  # `List(Char)` parameter.
+  def elaborate_expr_typed({:string_interpolation, meta, segments}, names, ctx, env) do
+    elaborate_expr_typed(
+      desugar_interpolation(segments, Keyword.get(meta, :line, 0)),
+      names,
+      ctx,
+      env
+    )
+  end
+
+  # Map literal `%{k: v, …}`. Desugars (before Core) to nested `Std.Map.put`
+  # calls over `Std.Map.new()` — the same shape a hand-written builder has, so
+  # nothing new reaches the kernel. `Std.Map` is a thin `@extern` wrapper over
+  # Erlang `:maps`, so this is seam-free (the runtime value is always a raw map);
+  # the caller must have `use Std.Map` in scope for `put`/`new` to resolve.
+  def elaborate_expr_typed({:map, meta, pairs}, names, ctx, env) do
+    elaborate_expr_typed(desugar_map(pairs, Keyword.get(meta, :line, 0)), names, ctx, env)
+  end
 
   # Pair introduction `%[a, b]` in typed-synthesis position (a ctor argument, a
   # `let` rhs, any sub-term the checked tuple clause at line ~1137 doesn't reach).
@@ -980,6 +1115,16 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Pick the type-directed negation builtin from the operand's primitive kind,
+  # mirroring `build_binop`'s Int→int_*/Float→float_* dispatch for unary `-x`.
+  defp neg_global(o_type, ctx) do
+    case primitive_scrut_kind(o_type, Context.signature(ctx)) do
+      {:ok, :int} -> {:ok, :int_neg}
+      {:ok, :float} -> {:ok, :float_neg}
+      _ -> {:error, {:unsupported_operand_type, :-}}
+    end
+  end
+
   # A saturated `f(a)(b)` application of a global by name, most-recently-applied
   # argument outermost — the shape the kernel + emit expect for a curried def.
   defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
@@ -1266,7 +1411,37 @@ defmodule Cure.Elab.Elaborator do
         # errored with `:unsolved_metavariables`, and the retry surfaces that
         # original error if it too fails, so inference-position behaviour (no
         # expected type) is byte-for-byte unchanged.
-        case elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+        #
+        # EXCEPTION — an anonymous-union goal must thread the expected type in FROM THE
+        # START rather than inferring first. Inferring `Std.Map.put(:a, 1, …)` succeeds;
+        # it just succeeds WRONGLY, solving the map's implicit `v := Int` from the value
+        # argument. The retry below only fires on `:unsolved_metavariables`, and a
+        # wrong-but-solved implicit is not that — it surfaces as a `:conversion_failure`
+        # against the goal, with no container covariance to rescue it. Threading the goal
+        # first solves `v` from the GOAL, so each value is checked against the union and
+        # injected. Falls back to the ordinary path if it does not pan out.
+        union_first =
+          if union_goal?(expected_core) and not Unify.has_meta?(expected_core) do
+            case elaborate_global_app_expected(
+                   env,
+                   resolve_def_key(env, name, atom),
+                   args,
+                   names,
+                   ctx,
+                   expected_core
+                 ) do
+              {:ok, term, _type} ->
+                case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+                  :ok -> {:ok, term}
+                  {:error, _} -> nil
+                end
+
+              {:error, _} ->
+                nil
+            end
+          end
+
+        case union_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
           {:ok, _} = ok ->
             ok
 
@@ -1335,10 +1510,17 @@ defmodule Cure.Elab.Elaborator do
   # bodies (`elaborate_branch_body`). `let`-blocks are now handled in checking
   # mode (the `{:block, …}` clause below); inference-position inline match (no
   # expected type) stays unimplemented (a separate aux-function lift).
-  def elaborate_expr_checked({:pattern_match, _meta, [scrut | arms]}, expected_core, names, ctx, env) do
-    with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
-         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-      {:ok, term}
+  def elaborate_expr_checked({:pattern_match, meta, [scrut | arms]}, expected_core, names, ctx, env)
+      when is_list(meta) do
+    if special_match_arms?(arms) do
+      with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
+        elaborate_expr_checked(desugared, expected_core, names, ctx, env)
+      end
+    else
+      with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
     end
   end
 
@@ -1375,6 +1557,11 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:block, _meta, stmts}, expected_core, names, ctx, env) do
     elaborate_let_block(stmts, expected_core, names, ctx, env)
   end
+
+  # `return e` in a checking position (e.g. an `if`/`match` branch tail): the
+  # identity on `e`, checked against the expected type. See the inference clause.
+  def elaborate_expr_checked({:early_return, _meta, [e]}, expected_core, names, ctx, env),
+    do: elaborate_expr_checked(e, expected_core, names, ctx, env)
 
   # Dependent-pair introduction `%[a, b]` in checking mode. The expected type must
   # be the builtin inductive Sigma; elaborate `a` against its domain, then `b`
@@ -1448,6 +1635,30 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env),
     do: elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
 
+  # Map literal in checked position: desugar to the `put`/`new` chain and re-check
+  # against the expected type. This is what lets an empty `%{}` (a bare `new()`
+  # with nothing to pin its key/value metavariables in synthesis) solve them from
+  # an expected `Map(k, v)`.
+  def elaborate_expr_checked({:map, meta, pairs}, expected_core, names, ctx, env),
+    do:
+      elaborate_expr_checked(
+        desugar_map(pairs, Keyword.get(meta, :line, 0)),
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+
+  def elaborate_expr_checked({:string_interpolation, meta, segments}, expected_core, names, ctx, env),
+    do:
+      elaborate_expr_checked(
+        desugar_interpolation(segments, Keyword.get(meta, :line, 0)),
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+
   # Type-directed compact-Nat literal: a non-negative integer literal checked
   # against the `Nat` family lowers to a compact `{:nat_lit, n}` — the surface
   # payoff of the compact-Nat kernel path, so a numeric literal at `Nat` (and
@@ -1457,12 +1668,29 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
     string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
+    bytes? = Keyword.get(meta, :subtype) == :bytes and is_list(value)
+    union_ctor = union_literal_ctor(meta, value, expected_core, ctx, env)
 
     cond do
+      # A literal checked against a union that has that literal as a MEMBER is the
+      # member's NULLARY constructor: the value is fully determined by the ctor, so
+      # there is nothing to store.
+      #
+      # This must precede the `string?` branch — otherwise a `"north"` member would
+      # be desugared to its List(Char) spine and never reach the injection.
+      union_ctor != nil ->
+        {:ok, {:ctor, union_ctor, []}}
+
       # A string literal checks as its `List(Char)` desugaring (see the typed
       # clause), so the expected `List(Char)`/`String` type drives each char.
       string? ->
         elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+
+      # A byte binary literal checks as its `Std.Binary.of_bytes/1` desugaring.
+      bytes? ->
+        with {:ok, surface} <- desugar_bytes(value, Keyword.get(meta, :line, 0)) do
+          elaborate_expr_checked(surface, expected_core, names, ctx, env)
+        end
 
       int? and nat_expected?(expected_core, ctx) ->
         {:ok, {:nat_lit, value}}
@@ -1638,10 +1866,113 @@ defmodule Cure.Elab.Elaborator do
     if Unify.has_meta?(expected_core) do
       {:error, {:unsolved_metavariable_in_type, expected_core}}
     else
-      with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env),
-           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-        {:ok, term}
+      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+        term = maybe_inject_union(term, type, expected_core, ctx, env)
+
+        with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+          {:ok, term}
+        end
       end
+    end
+  end
+
+  # The nullary constructor for a LITERAL member of the expected union, or nil if the
+  # expected type is not a union or the literal is not one of its members.
+  #
+  # The key comes from `Union.literal_key/2` — the same single source of truth the
+  # canonicaliser uses when it builds the family. Duplicating the key format here
+  # instead would let the two drift and silently produce a ctor name that does not
+  # exist, turning the injection into a no-op conversion failure.
+  defp union_literal_ctor(meta, value, expected_core, ctx, env) do
+    with {:data, ukey, [], []} <- Kernel.normalize(ctx, expected_core),
+         true <- Cure.Elab.Union.union_family?(ukey),
+         {:ok, key} <- Cure.Elab.Union.literal_key(Keyword.get(meta, :subtype), value),
+         cname <- Cure.Elab.Union.ctor_key(ukey, %{key: key}),
+         true <- Inductive.get_ctor(env, cname) != nil do
+      cname
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Coerce an already-inferred term into an expected anonymous-union type.
+
+  A STRICT no-op unless `expected_core` normalises to a generated union family, so it
+  is safe to apply anywhere a term has been inferred but the expected type is known.
+  `Declarations.elaborate_body/6`'s catch-all needs it: that clause elaborates in
+  INFER mode and discards the declared return type, so a body like `fn f(n: Int) ->
+  Int | Bool = n` never reaches check-position and would never be injected.
+  """
+  @spec coerce_union(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) :: term()
+  def coerce_union(term, type, expected_core, ctx, env),
+    do: maybe_inject_union(term, type, expected_core, ctx, env)
+
+  # Anonymous-union subsumption: a coercion inserted by the ELABORATOR in check mode
+  # only — never a kernel rule. If the expected type is a generated union family and
+  # the term's inferred type is one of its members, inject that member's constructor.
+  #
+  # Otherwise the term passes through untouched and the kernel rejects it with an
+  # ordinary conversion failure. Note the injected `{:ctor, …}` is independently
+  # re-verified by `Kernel.check/3`, so the elaborator stays untrusted: a wrong
+  # injection is caught, not silently accepted.
+  defp maybe_inject_union(term, type, expected_core, ctx, env) do
+    with {:data, ukey, [], []} <- Kernel.normalize(ctx, expected_core),
+         true <- Cure.Elab.Union.union_family?(ukey) do
+      member_term = Quote.reify(type, Context.length(ctx), Context.signature(ctx))
+
+      cond do
+        # (a) The term's type is ITSELF a narrower union — widen it.
+        match?({:data, _, [], []}, member_term) and
+            Cure.Elab.Union.union_family?(elem(member_term, 1)) ->
+          widen_union(term, elem(member_term, 1), ukey, expected_core, ctx, env)
+
+        # (b) The term's type is a plain member — inject it.
+        true ->
+          cname =
+            Cure.Elab.Union.ctor_key(ukey, %{key: Cure.Elab.Union.member_key(member_term)})
+
+          if Inductive.get_ctor(env, cname), do: {:ctor, cname, [term]}, else: term
+      end
+    else
+      _ -> term
+    end
+  end
+
+  # Widen a narrower union into a wider one by remapping each of its constructors to
+  # the counterpart with the same member key in the target family. This is a REAL
+  # function — a Core `:case` — not a cast: the two families are genuinely distinct
+  # types, so there is nothing to reinterpret.
+  #
+  # If any source member is absent from the target, the term is returned untouched
+  # and the kernel rejects it with an ordinary conversion failure.
+  defp widen_union(term, from_key, to_key, to_core, _ctx, env) do
+    from_prefix = Atom.to_string(from_key) <> "$"
+
+    branches =
+      env
+      |> Inductive.ctors_of(from_key)
+      |> Enum.map(fn ctor ->
+        suffix = ctor.name |> Atom.to_string() |> String.replace_prefix(from_prefix, "")
+        target = String.to_atom(Atom.to_string(to_key) <> "$" <> suffix)
+
+        cond do
+          Inductive.get_ctor(env, target) == nil -> :missing
+          ctor.args == [] -> {ctor.name, 0, {:ctor, target, []}}
+          true -> {ctor.name, 1, {:ctor, target, [{:var, 0}]}}
+        end
+      end)
+
+    if Enum.any?(branches, &(&1 == :missing)) do
+      term
+    else
+      # The source family is parameterless and index-free, so its motive is a single
+      # lambda over the scrutinee. `to_core` is a closed `{:data, key, [], []}`, so it
+      # needs no weakening under that binder.
+      motive =
+        {:lam, Cure.Core.Grade.unrestricted(), {:data, from_key, [], []}, to_core}
+
+      {:case, term, motive, branches}
     end
   end
 
@@ -2043,7 +2374,13 @@ defmodule Cure.Elab.Elaborator do
           k = length(family.indices)
           motive = if carried, do: wrap_motive_carried_eq(motive0, k, carried), else: motive0
 
-          with {:ok, branches, join} <-
+          # Anonymous-union elimination. Runs LATE — unlike the other desugarings,
+          # which fire before the scrutinee is even elaborated — because it needs the
+          # scrutinee's family key, which is only known here. Typed-pattern arms
+          # (`n: Int`) become ordinary ctor-pattern arms, so coverage, exhaustiveness
+          # and totality all come from the existing machinery below.
+          with {:ok, arms} <- desugar_union_arms(arms, dname, names, env),
+               {:ok, branches, join} <-
                  elaborate_branches(
                    arms,
                    names,
@@ -2064,6 +2401,132 @@ defmodule Cure.Elab.Elaborator do
         _ ->
           {:error, :match_scrutinee_not_data}
       end
+    end
+  end
+
+  # ── Anonymous-union elimination ────────────────────────────────────────────
+
+  # Rewrite typed-pattern and literal arms into ordinary constructor-pattern arms
+  # against the union family `dname`, so everything downstream — `partition_arms/4`,
+  # coverage, exhaustiveness, totality — works unchanged.
+  #
+  # A no-op when the scrutinee is not a generated union, so an ordinary `match` over
+  # a user ADT is untouched.
+  defp desugar_union_arms(arms, dname, names, env) do
+    if Cure.Elab.Union.union_family?(dname) do
+      Enum.reduce_while(arms, {:ok, []}, fn arm, {:ok, acc} ->
+        case expand_union_arm(arm, dname, names, env) do
+          {:ok, expanded} -> {:cont, {:ok, acc ++ expanded}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+    else
+      {:ok, arms}
+    end
+  end
+
+  defp expand_union_arm({:match_arm, meta, body} = arm, dname, names, env) do
+    case Keyword.get(meta, :pattern) do
+      # `n: Int` — a type member, or `rest: Bool | Atom` — a SUB-UNION, which expands
+      # into one arm per member of the sub-union.
+      {:typed_pattern, pm, [name, type_ast]} ->
+        with {:ok, members} <- Cure.Elab.Union.canonicalise([type_ast], names, env) do
+          sub_union? = length(members) > 1
+
+          Enum.reduce_while(members, {:ok, []}, fn m, {:ok, acc} ->
+            cname = Cure.Elab.Union.ctor_key(dname, m)
+
+            case expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body) do
+              {:ok, arm} -> {:cont, {:ok, [arm | acc]}}
+              {:error, _} = err -> {:halt, err}
+            end
+          end)
+          |> case do
+            {:ok, arms} -> {:ok, Enum.reverse(arms)}
+            {:error, _} = err -> err
+          end
+        end
+
+      # `:north` — a literal member, matched bare, binding nothing.
+      {:literal, lm, value} ->
+        case Cure.Elab.Union.literal_key(Keyword.get(lm, :subtype), value) do
+          {:ok, key} ->
+            cname = Cure.Elab.Union.ctor_key(dname, %{key: key})
+            pattern = {:function_call, [name: Atom.to_string(cname)], []}
+            {:ok, [{:match_arm, Keyword.put(meta, :pattern, pattern), body}]}
+
+          :error ->
+            {:ok, [arm]}
+        end
+
+      _ ->
+        {:ok, [arm]}
+    end
+  end
+
+  # A single member of a typed-pattern arm.
+  #
+  # For a plain member the bound name IS the payload, so the ctor pattern binds it
+  # directly.
+  #
+  # For a SUB-UNION member (`rest: Bool | Atom`) the bound name must carry the
+  # SUB-UNION's type, not this one member's payload type. So the ctor pattern binds a
+  # FRESH name, and every occurrence of the surface name in the body is replaced by
+  # `assert_type <fresh> : <sub-union>` — an ascription, which elaborates the fresh
+  # payload in CHECK position against the sub-union and therefore re-injects it via
+  # the ordinary union coercion. (A `let`-block cannot be used here: `:block` has no
+  # infer-mode clause, and branch bodies are elaborated in infer mode.)
+  #
+  # `subst_surface_var/3` is a blind textual walk with no notion of scope, so it must
+  # not run if `body` contains a NESTED binder that rebinds `name` — a nested `match`
+  # arm whose own pattern is also `name`, or a lambda parameter named `name`. Left
+  # unguarded, the inner (correctly narrower-typed) occurrence would be silently
+  # overwritten by the outer sub-union ascription. `binds_any?/2` is the same
+  # capture-avoidance guard `elaborate_let_block` and friends use for the identical
+  # class of problem; when it fires here, refuse rather than attempt a smarter
+  # rewrite, matching that established idiom.
+  defp expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body) do
+    cond do
+      # A LITERAL member binds no payload — the value IS the constructor. But the arm still
+      # gave it a NAME (`n: 3`, or the literal arm of `rest: Bool | 3`), and the body may
+      # use it. Passing `body` through untouched leaves that name resolving to whatever it
+      # means in the ENCLOSING scope — it typechecks, compiles, and returns the wrong
+      # value. So substitute the name with the literal itself, ascribed to the arm's type,
+      # exactly as the sub-union branch substitutes its fresh payload binder. And run the
+      # SAME capture guard: this branch was skipping it entirely.
+      m.payload == nil and binds_any?(body, [name]) ->
+        {:error, {:unsupported_pattern, :shadowed_literal_member}}
+
+      m.payload == nil ->
+        pattern = {:function_call, [name: Atom.to_string(cname)], []}
+
+        rebound =
+          case Cure.Elab.Union.literal_surface(m.key) do
+            {:ok, lit} ->
+              ascription = {:assert_type, pm, [lit, type_ast]}
+              Enum.map(body, &subst_surface_var(&1, name, ascription))
+
+            :error ->
+              body
+          end
+
+        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}}
+
+      sub_union? and binds_any?(body, [name]) ->
+        {:error, {:unsupported_pattern, :shadowed_sub_union}}
+
+      sub_union? ->
+        fresh = "__u" <> Integer.to_string(:erlang.phash2({name, m.key}))
+        pattern = {:function_call, [name: Atom.to_string(cname)], [{:variable, pm, fresh}]}
+
+        ascription = {:assert_type, pm, [{:variable, pm, fresh}, type_ast]}
+        rebound = Enum.map(body, &subst_surface_var(&1, name, ascription))
+
+        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}}
+
+      true ->
+        pattern = {:function_call, [name: Atom.to_string(cname)], [{:variable, pm, name}]}
+        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), body}}
     end
   end
 
@@ -3396,10 +3859,17 @@ defmodule Cure.Elab.Elaborator do
   # followed by a single variable/wildcard catch-all.
   defp literal_chain?(pats, prim) when length(pats) >= 1 do
     {lits, [{last_pat, _}]} = Enum.split(pats, length(pats) - 1)
-    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) end) and catchall_pat?(last_pat)
+    Enum.all?(lits, fn {p, _} -> literal_of?(p, prim) or pin_var?(p) end) and catchall_pat?(last_pat)
   end
 
   defp literal_chain?(_pats, _prim), do: false
+
+  # A pin arm `^x` on a primitive scrutinee behaves like a literal arm whose
+  # compared value is the current value of the bound variable `x` (an equality
+  # constraint, not a fresh binding). It always needs a trailing catch-all — a pin
+  # is never known to be exhaustive.
+  defp pin_var?({:pin, _m, [{:variable, _vm, _name}]}), do: true
+  defp pin_var?(_p), do: false
 
   defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
   defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
@@ -3452,7 +3922,20 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
-      test = lit_eq_test(prim, scrut_term, v, scrut_type, ctx)
+      test = eq_test_core(prim, scrut_term, lit_core(v, prim), scrut_type, ctx)
+      {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
+    end
+  end
+
+  # A pin arm `^x`: same as a literal arm, but the compared value is the current
+  # value of the bound variable `x` (elaborated to its core term) rather than a
+  # constant. `scrut == x` picks the identical type-directed equality twin.
+  defp literal_chain(scrut_expr, scrut_term, scrut_type, prim, [{{:pin, _m, [{:variable, _vm, name}]}, body} | rest], expected, names, ctx, env) do
+    with {:ok, x_core, _x_type} <- elaborate_expr_typed({:variable, [], name}, names, ctx, env),
+         {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
+         {:ok, rest_core} <-
+           literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
+      test = eq_test_core(prim, scrut_term, x_core, scrut_type, ctx)
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
   end
@@ -3461,12 +3944,17 @@ defmodule Cure.Elab.Elaborator do
   # `:bounded` scrutinee (Char) has no monomorphic eq twin, so it uses the
   # polymorphic `struct_eq` applied to the signature-aware readback of the
   # scrutinee type (its type argument is erased at emit).
-  defp lit_eq_test(:bounded, scrut_term, v, scrut_type, ctx) do
+  # The per-arm equality test `scrut == rhs` yielding the inductive Bool, where
+  # `rhs` is an already-built core term (a literal for a literal arm, the pinned
+  # variable's term for a pin arm). A `:bounded` scrutinee (Char) has no monomorphic
+  # eq twin, so it uses the polymorphic `struct_eq` applied to the signature-aware
+  # readback of the scrutinee type (its type argument is erased at emit).
+  defp eq_test_core(:bounded, scrut_term, rhs_core, scrut_type, ctx) do
     ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
-    {:app, app2(:struct_eq, ty, scrut_term), lit_core(v, :bounded)}
+    {:app, app2(:struct_eq, ty, scrut_term), rhs_core}
   end
 
-  defp lit_eq_test(prim, scrut_term, v, _scrut_type, _ctx) do
+  defp eq_test_core(prim, scrut_term, rhs_core, _scrut_type, _ctx) do
     eq_global =
       case prim do
         :int -> :int_eq
@@ -3474,7 +3962,7 @@ defmodule Cure.Elab.Elaborator do
         :bool -> :eq
       end
 
-    app2(eq_global, scrut_term, lit_core(v, prim))
+    app2(eq_global, scrut_term, rhs_core)
   end
 
   # A flat n-element tuple projects POSITIONALLY: `%[e1, …, en]` binds
@@ -4578,8 +5066,16 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_branch_body({:list, _, _} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
 
-  defp elaborate_branch_body(expr, _expected, names, ctx, env) do
-    with {:ok, term, _type} <- elaborate_expr_typed(expr, names, ctx, env), do: {:ok, term}
+  # The general branch body: inferred. `maybe_inject_union/5` is a strict no-op unless
+  # this branch's goal is a generated anonymous-union family — in which case the
+  # inferred body is injected (a member value) or widened (a narrower union, as
+  # produced by a sub-union arm's `assert_type` ascription) into the goal. Without it
+  # a sub-union arm's body has the SUB-union's type while the motive demands the wide
+  # one, and the kernel rejects the branch with `:branch_type`.
+  defp elaborate_branch_body(expr, expected, names, ctx, env) do
+    with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+      {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+    end
   end
 
   # A `let x = e ⏎ …` block elaborates to the Core `:let` binder:
@@ -4695,6 +5191,58 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp core_list(items), do: Enum.reduce(Enum.reverse(items), {:ctor, :Nil, []}, &{:ctor, :Cons, [&1, &2]})
+
+  # INFERENCE-mode block: build the `:let` Core chain (the final statement is
+  # inferred, each `let` binds its rhs with a ζ definition so a later statement
+  # sees the concrete value) and return only the term — the `{:block}` clause of
+  # `elaborate_expr_typed/4` hands it to `Kernel.infer` for its type. Mirrors
+  # `elaborate_let_block/5`/`bind_once_let/10`, minus the threaded expected type.
+  defp infer_block_term([final], names, ctx, env) do
+    with {:ok, term, _type} <- elaborate_expr_typed(final, names, ctx, env), do: {:ok, term}
+  end
+
+  defp infer_block_term(
+         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         names,
+         ctx,
+         env
+       ) do
+    if not Keyword.get(meta, :let, false) do
+      {:error, {:unsupported_block_statement, meta}}
+    else
+      grade = Keyword.get(meta, :grade, Grade.unrestricted())
+
+      with {:ok, rhs_core, ty_core, ty_value} <- block_rhs(rhs, meta, names, ctx, env) do
+        rhs_value = Eval.eval(rhs_core, Context.env(ctx))
+        ctx1 = Context.extend_def(ctx, ty_value, rhs_value)
+
+        with {:ok, body_core} <- infer_block_term(rest, [name | names], ctx1, env) do
+          {:ok, {:let, grade, ty_core, rhs_core, body_core}}
+        end
+      end
+    end
+  end
+
+  defp infer_block_term(other, _names, _ctx, _env), do: {:error, {:unsupported_block, other}}
+
+  # A `let` binding's rhs, settled to `{rhs_core, ty_core, ty_value}`. An
+  # unannotated `let x = e` synthesises `e`'s type (SIGNATURE-AWARE reify, as
+  # `let_inferred/9`); an ascribed `let x : T = e` checks `e` against `T`.
+  defp block_rhs(rhs, meta, names, ctx, env) do
+    case Keyword.get(meta, :type_annotation) do
+      nil ->
+        with {:ok, rhs_core, rhs_type} <- elaborate_expr_typed(rhs, names, ctx, env) do
+          ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+          {:ok, rhs_core, ty_core, rhs_type}
+        end
+
+      ann ->
+        with {:ok, ty_core} <- elaborate_type(ann, names, env),
+             {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+          {:ok, rhs_core, ty_core, Eval.eval(ty_core, Context.env(ctx))}
+        end
+    end
+  end
 
   # `let x : T = e` — BIDIRECTIONAL. The ascription supplies the type a
   # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
@@ -4942,6 +5490,19 @@ defmodule Cure.Elab.Elaborator do
   # never mistakes a constructor for a binder.
   defp pattern_binders({:variable, _meta, v}), do: [v]
 
+  # `n: Int` (a UNION type member) or `rest: Bool | Atom` (a sub-union) — the bound
+  # name is a bare STRING in the child list (`parser.ex` `maybe_wrap_as/2`'s `:colon`
+  # clause), not a `{:variable, …}` node, so the generic clause below would silently
+  # miss it: `Enum.flat_map(["n", type_ast], &pattern_binders/1)` finds nothing for the
+  # bare string "n" and instead picks up names from `type_ast` (e.g. "Int"), which are
+  # TYPE references, not binders. Without this clause, `binds_any?/2` — the capture
+  # guard `elaborate_let_block` and every other surface-substitution site relies on —
+  # silently fails to see a typed-pattern's shadowing, letting `let n = <check-only
+  # rhs>` substitute straight through a later `n: Int -> n` arm and rewrite the INNER,
+  # freshly-matched `n` into the OUTER let-bound expression.
+  defp pattern_binders({:typed_pattern, _meta, [name, _type_ast]}) when is_binary(name),
+    do: [name]
+
   defp pattern_binders({_tag, _meta, children}) when is_list(children),
     do: Enum.flat_map(children, &pattern_binders/1)
 
@@ -4967,6 +5528,373 @@ defmodule Cure.Elab.Elaborator do
 
   defp desugar_list({:list, m, elems}), do: fold_list_literal(elems, m)
   defp desugar_list(other), do: other
+
+  # Wadler comprehension translation, right-folded over the qualifier list. The
+  # body of an exhausted qualifier list is a singleton `[e]`; a generator wraps
+  # the remainder in a `flat_map` lambda; a filter guards it with `if … else []`.
+  defp desugar_comprehension([], body, line), do: {:ok, {:list, [line: line], [body]}}
+
+  defp desugar_comprehension([{:generator, _gm, [pat, source]} | rest], body, line) do
+    with {:ok, param} <- generator_param(pat),
+         {:ok, inner} <- desugar_comprehension(rest, body, line) do
+      lambda = {:lambda, [params: [param], line: line], [inner]}
+      {:ok, {:function_call, [name: "flat_map", line: line], [source, lambda]}}
+    end
+  end
+
+  defp desugar_comprehension([qual | rest], body, line) do
+    cond_ast =
+      case qual do
+        {:filter, _fm, [c]} -> c
+        other -> other
+      end
+
+    with {:ok, inner} <- desugar_comprehension(rest, body, line) do
+      {:ok, {:conditional, [line: line], [cond_ast, inner, {:list, [line: line], []}]}}
+    end
+  end
+
+  # A generator binds a single variable in this first port; a destructuring
+  # generator (`{a, b} <- xs`) is rejected rather than silently mistyped.
+  defp generator_param({:variable, _m, name}), do: {:ok, {:param, [], name}}
+  defp generator_param(other), do: {:error, {:unsupported_comprehension_pattern, other}}
+
+  # `%{k: v, …}` → nested `Std.Map.put(k, v, …)` over `Std.Map.new()`. `%{}`
+  # folds to a bare `new()`. Shared by the typed and checked map clauses.
+  defp desugar_map(pairs, line) do
+    Enum.reduce(Enum.reverse(pairs), {:function_call, [name: "new", line: line], []}, fn
+      {:pair, _pm, [key, value]}, acc ->
+        {:function_call, [name: "put", line: line], [key, value, acc]}
+    end)
+  end
+
+  # A `match` whose arms are map patterns cannot go through the constructor-match
+  # machinery (an Erlang map is not a Cure inductive). Map matching is OPEN — keys
+  # absent from the pattern are ignored — so it desugars to `has_key`-guarded
+  # conditionals over `Std.Map`, exactly the shape a hand-written lookup takes:
+  #
+  #   match m
+  #     %{a: v, tag: :hit} -> body
+  #     _                  -> default
+  #
+  #   ⇒ if has_key(:a, m) and has_key(:tag, m) and get(:tag, m) == :hit
+  #        then (let v = get(:a, m); body)
+  #        else default
+  #
+  # Because matching is open it is non-exhaustive, so the arm list MUST end in a
+  # wildcard/variable default. Value positions are variable binders, `_`, or
+  # literals (an equality guard). The enclosing module must `use Std.Map` so the
+  # emitted `has_key`/`get` resolve, like map literals.
+  def map_match_arms?(arms) do
+    Enum.any?(arms, fn
+      {:match_arm, meta, _body} when is_list(meta) ->
+        match?({:map, _m, _pairs}, Keyword.get(meta, :pattern))
+
+      _ ->
+        false
+    end)
+  end
+
+  # A binary pattern arm is a `:bytes` literal used as a match pattern.
+  def binary_match_arms?(arms) do
+    Enum.any?(arms, fn
+      {:match_arm, meta, _body} when is_list(meta) ->
+        case Keyword.get(meta, :pattern) do
+          {:literal, lmeta, segs} when is_list(lmeta) and is_list(segs) ->
+            Keyword.get(lmeta, :subtype) == :bytes
+
+          _ ->
+            false
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  # Map and byte-binary patterns are not Cure inductives, so a `match` carrying
+  # them desugars (surface → surface) to guarded conditionals rather than going
+  # through the constructor-match machinery. Both entry-point modes share this.
+  def special_match_arms?(arms), do: map_match_arms?(arms) or binary_match_arms?(arms)
+
+  def desugar_special_match(scrut, arms, line) do
+    cond do
+      map_match_arms?(arms) -> desugar_map_arms(scrut, arms, line)
+      binary_match_arms?(arms) -> desugar_binary_arms(scrut, arms, line)
+    end
+  end
+
+  def desugar_map_match(scrut, arms, line), do: desugar_map_arms(scrut, arms, line)
+
+  # A wildcard/variable arm terminates the chain: `_` yields its body directly, a
+  # named binder binds the whole scrutinee first.
+  defp desugar_map_arms(_scrut, [], _line), do: {:error, {:map_match_needs_default}}
+
+  defp desugar_map_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
+    case Keyword.get(meta, :pattern) do
+      {:map, _mm, pairs} ->
+        with {:ok, presence, value_eqs, binds} <- map_arm_guard_binds(scrut, pairs, line),
+             {:ok, else_expr} <- desugar_map_arms(scrut, rest, line) do
+          # Cure's `and` is strict, so a value `get` must never run on an absent
+          # key: gate all `get`s behind the (total) presence guard structurally.
+          # Only once every listed key is present are the value-equality checks
+          # and the binding `get`s evaluated.
+          then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+
+          inner =
+            case value_eqs do
+              [] -> then_body
+              _ -> {:conditional, [line: line], [conjoin(value_eqs, line), then_body, else_expr]}
+            end
+
+          {:ok, {:conditional, [line: line], [conjoin(presence, line), inner, else_expr]}}
+        end
+
+      {:variable, _vm, "_"} ->
+        {:ok, body}
+
+      {:variable, vm, name} ->
+        bind = {:assignment, [let: true, line: line], [{:variable, vm, name}, scrut]}
+        {:ok, {:block, [line: line], [bind, body]}}
+
+      other ->
+        {:error, {:unsupported_map_match_arm, other}}
+    end
+  end
+
+  # Fold a map pattern's pairs into (a) presence guards — every listed key must be
+  # present (`has_key`, total), (b) value-equality guards for literal positions
+  # (`get(k) == lit`, evaluated only after presence holds), and (c) the `let`
+  # bindings for variable value positions.
+  defp map_arm_guard_binds(scrut, pairs, line) do
+    Enum.reduce_while(pairs, {:ok, [], [], []}, fn
+      {:pair, _pm, [{:literal, kmeta, key}, valpat]}, {:ok, presence, value_eqs, binds}
+      when is_atom(key) ->
+        if Keyword.get(kmeta, :subtype) in [:symbol, :atom] do
+          key_lit = {:literal, [subtype: :symbol], key}
+          present = mk_call("has_key", [key_lit, scrut], line)
+
+          case valpat do
+            {:variable, _vm, "_"} ->
+              {:cont, {:ok, presence ++ [present], value_eqs, binds}}
+
+            {:variable, _vm, _name} ->
+              bind =
+                {:assignment, [let: true, line: line],
+                 [valpat, mk_call("get", [key_lit, scrut], line)]}
+
+              {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind]}}
+
+            {:literal, _lm, _lv} = lit ->
+              eq =
+                {:binary_op, [category: :comparison, operator: :==, line: line],
+                 [mk_call("get", [key_lit, scrut], line), lit]}
+
+              {:cont, {:ok, presence ++ [present], value_eqs ++ [eq], binds}}
+
+            other ->
+              {:halt, {:error, {:unsupported_map_value_pattern, other}}}
+          end
+        else
+          {:halt, {:error, {:unsupported_map_key_pattern, key}}}
+        end
+
+      {:pair, _pm, [other_key, _v]}, _acc ->
+        {:halt, {:error, {:unsupported_map_key_pattern, other_key}}}
+    end)
+    |> case do
+      {:ok, presence, value_eqs, binds} -> {:ok, presence, value_eqs, binds}
+      {:error, _} = e -> e
+    end
+  end
+
+  # An empty pattern `%{}` matches any map, so an absent guard is `true`.
+  defp conjoin([], _line), do: {:literal, [subtype: :boolean], true}
+  defp conjoin([g], _line), do: g
+
+  defp conjoin([g | rest], line),
+    do: {:binary_op, [category: :boolean, operator: :and, line: line], [g, conjoin(rest, line)]}
+
+  defp mk_call(name, args, line), do: {:function_call, [name: name, line: line], args}
+
+  # Byte-binary patterns, the destructuring twin of `desugar_map_arms`. A match
+  # whose arms are `<<…>>` patterns desugars to `byte_size`-guarded conditionals
+  # over `Std.Binary`: the length guard (`==` for a fixed pattern, `>=` when a
+  # `rest/binary` tail is present) gates the byte reads, then literal byte
+  # positions add `byte_at(b, i) == lit` guards and variable positions bind
+  # `byte_at(b, i)` / `drop_bytes(b, k)`. Open-ended, so a trailing default arm is
+  # required. Sized/typed segments (`x/float`) are rejected, not mislowered.
+  defp desugar_binary_arms(_scrut, [], _line), do: {:error, {:binary_match_needs_default}}
+
+  defp desugar_binary_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
+    case Keyword.get(meta, :pattern) do
+      {:literal, lmeta, segs} = pat ->
+        if Keyword.get(lmeta, :subtype) == :bytes do
+          with {:ok, length_guard, value_guards, binds} <- binary_arm_guard_binds(scrut, segs, line),
+               {:ok, else_expr} <- desugar_binary_arms(scrut, rest, line) do
+            then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+
+            inner =
+              case value_guards do
+                [] -> then_body
+                _ -> {:conditional, [line: line], [conjoin(value_guards, line), then_body, else_expr]}
+              end
+
+            {:ok, {:conditional, [line: line], [length_guard, inner, else_expr]}}
+          end
+        else
+          {:error, {:unsupported_binary_match_arm, pat}}
+        end
+
+      {:variable, _vm, "_"} ->
+        {:ok, body}
+
+      {:variable, vm, name} ->
+        bind = {:assignment, [let: true, line: line], [{:variable, vm, name}, scrut]}
+        {:ok, {:block, [line: line], [bind, body]}}
+
+      other ->
+        {:error, {:unsupported_binary_match_arm, other}}
+    end
+  end
+
+  # Split a byte pattern's segments into (a) the length guard, (b) literal-byte
+  # equality guards, and (c) the variable/tail `let` bindings. The optional
+  # `rest/binary` tail must come last; any other typed segment is rejected.
+  defp binary_arm_guard_binds(scrut, segs, line) do
+    {fixed, tail} = split_binary_tail(segs)
+
+    with {:ok, value_guards, binds} <- fixed_byte_guards(scrut, fixed, line),
+         {:ok, tail_binds} <- tail_bind(scrut, tail, length(fixed), line) do
+      n = {:literal, [subtype: :integer, line: line], length(fixed)}
+      size = mk_call("byte_size", [scrut], line)
+
+      op = if tail == :none, do: :==, else: :>=
+      length_guard = {:binary_op, [category: :comparison, operator: op, line: line], [size, n]}
+
+      {:ok, length_guard, value_guards, binds ++ tail_binds}
+    end
+  end
+
+  # The last segment is a tail iff it is a `_v/binary` (division-marker) segment.
+  defp split_binary_tail(segs) do
+    case List.last(segs) do
+      {:bin_segment, _sm, [{:binary_op, opm, [v, {:variable, _tm, "binary"}]}]} = seg ->
+        if Keyword.get(opm, :operator) == :/ do
+          {segs |> Enum.reverse() |> tl() |> Enum.reverse(), {:tail, v, seg}}
+        else
+          {segs, :none}
+        end
+
+      _ ->
+        {segs, :none}
+    end
+  end
+
+  defp fixed_byte_guards(scrut, segs, line) do
+    segs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, [], []}, fn {seg, i}, {:ok, guards, binds} ->
+      idx = {:literal, [subtype: :integer, line: line], i}
+
+      case seg do
+        {:bin_segment, _sm, [{:variable, _vm, "_"}]} ->
+          {:cont, {:ok, guards, binds}}
+
+        {:bin_segment, _sm, [{:variable, _vm, _name} = v]} ->
+          bind = {:assignment, [let: true, line: line], [v, mk_call("byte_at", [scrut, idx], line)]}
+          {:cont, {:ok, guards, binds ++ [bind]}}
+
+        {:bin_segment, _sm, [{:literal, _lm, byteval} = lit]} when is_integer(byteval) ->
+          eq =
+            {:binary_op, [category: :comparison, operator: :==, line: line],
+             [mk_call("byte_at", [scrut, idx], line), lit]}
+
+          {:cont, {:ok, guards ++ [eq], binds}}
+
+        other ->
+          {:halt, {:error, {:unsupported_binary_segment, other}}}
+      end
+    end)
+  end
+
+  defp tail_bind(_scrut, :none, _n, _line), do: {:ok, []}
+
+  defp tail_bind(scrut, {:tail, tailvar, seg}, n, line) do
+    case tailvar do
+      {:variable, _tm, "_"} ->
+        {:ok, []}
+
+      {:variable, _tm, _name} ->
+        nlit = {:literal, [subtype: :integer, line: line], n}
+        {:ok, [{:assignment, [let: true, line: line], [tailvar, mk_call("drop_bytes", [scrut, nlit], line)]}]}
+
+      _ ->
+        {:error, {:unsupported_binary_segment, seg}}
+    end
+  end
+
+  # `<<b1, b2, …>>` → `Std.Binary.of_bytes([b1, b2, …])`: a byte binary literal is
+  # a list of byte values packed into a BEAM binary. Only default 8-bit-integer
+  # segments are supported here; a `/type` segment (`x/float`, `x/binary`) is a
+  # deferred rich-bit-syntax case and is rejected rather than mislowered. The
+  # module must `use Std.Binary`.
+  # `"a#{e}b"` → `str_concat("a", str_concat(e, "b"))`: a right fold over the
+  # segments. Literal chunks stay `:string` literals (each desugars to its
+  # `List(Char)`); holes are the segment expressions unchanged, so a hole is
+  # elaborated against `str_concat`'s `List(Char)` parameter — a String hole
+  # checks, a non-String hole is a type error (Show-based conversion is #21).
+  # `str_concat` is auto-preluded (`Std.Binary`), so no import is required.
+  defp desugar_interpolation(segments, line) do
+    case Enum.reverse(segments) do
+      [] ->
+        {:literal, [subtype: :string, line: line], ""}
+
+      [last | rest] ->
+        Enum.reduce(rest, last, fn seg, acc -> mk_call("str_concat", [seg, acc], line) end)
+    end
+  end
+
+  # Rich bit-syntax specifiers (`::16`, `/float`, `::size(n)`, unit/signedness/
+  # endianness) live in the segment meta after parsing. `of_bytes` packs a list
+  # of 8-bit bytes and cannot express any of them, so a sized/typed segment is
+  # REJECTED here rather than silently mislowered — dropping a `::16` size would
+  # feed a >255 value to `list_to_binary` and crash at runtime. Rich bit-syntax
+  # construction is a deferred value-surface case in the dependent pipeline.
+  @rich_segment_keys [:size, :type, :unit, :signedness, :endianness]
+
+  def desugar_bytes(segments, line) do
+    Enum.reduce_while(segments, {:ok, []}, fn
+      {:bin_segment, sm, [expr]} = seg, {:ok, acc} ->
+        cond do
+          Enum.any?(@rich_segment_keys, &(Keyword.get(sm, &1) != nil)) ->
+            {:halt, {:error, {:unsupported_binary_segment, seg}}}
+
+          typed_segment?(expr) ->
+            {:halt, {:error, {:unsupported_binary_segment, expr}}}
+
+          true ->
+            {:cont, {:ok, acc ++ [expr]}}
+        end
+
+      other, _acc ->
+        {:halt, {:error, {:unsupported_binary_segment, other}}}
+    end)
+    |> case do
+      {:ok, values} ->
+        {:ok, mk_call("of_bytes", [{:list, [line: line], values}], line)}
+
+      {:error, _} = e ->
+        e
+    end
+  end
+
+  # A `/type` segment parses as a division `value / type_name` (`<<x/float>>`,
+  # `<<rest/binary>>`); the sole surface marker for a non-default segment.
+  defp typed_segment?({:binary_op, meta, [_v, {:variable, _vm, _type}]}),
+    do: Keyword.get(meta, :operator) == :/
+
+  defp typed_segment?(_), do: false
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
@@ -5395,10 +6323,41 @@ defmodule Cure.Elab.Elaborator do
     expected = Subst.instantiate(type_term, chosen)
 
     case Unify.unify(expected, arg_type_term, mctx, env) do
-      {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [arg], rest}}
-      {:error, reason} -> {:halt, {:error, {:index_mismatch, reason}}}
+      {:ok, mctx} ->
+        {:cont, {:ok, mctx, chosen ++ [arg], rest}}
+
+      {:error, reason} ->
+        # The domain may be a generated anonymous-union family that goal-directed
+        # solving has already pinned (see `elaborate_global_app`). Unification has no
+        # coercion, so a MEMBER argument fails against it — inject the member's
+        # constructor and retry. This is the same check-position coercion applied
+        # everywhere else, at the one place where the argument's domain is only known
+        # after the goal has been solved.
+        case inject_arg_into_union(arg, arg_type_term, Unify.zonk(expected, mctx), env) do
+          nil ->
+            {:halt, {:error, {:index_mismatch, reason}}}
+
+          injected ->
+            case Unify.unify(expected, Unify.zonk(expected, mctx), mctx, env) do
+              {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [injected], rest}}
+              {:error, _} -> {:halt, {:error, {:index_mismatch, reason}}}
+            end
+        end
     end
   end
+
+  # Inject a TERM whose inferred type is a member of the (already-solved) union domain.
+  # Term-level, not value-level: at this point everything is a Core term, so no Context
+  # is needed. Returns nil when the domain is not a union or the argument is not one of
+  # its members — the caller then reports the ordinary unification failure.
+  defp inject_arg_into_union(arg, arg_type_term, {:data, ukey, [], []}, env) do
+    if Cure.Elab.Union.union_family?(ukey) do
+      cname = Cure.Elab.Union.ctor_key(ukey, %{key: Cure.Elab.Union.member_key(arg_type_term)})
+      if Inductive.get_ctor(env, cname), do: {:ctor, cname, [arg]}, else: nil
+    end
+  end
+
+  defp inject_arg_into_union(_arg, _arg_type_term, _expected, _env), do: nil
 
   defp finish_ctor_app({:error, _} = err, _cname, _family, _ctor, _pc, _ctx), do: err
 
@@ -5453,12 +6412,63 @@ defmodule Cure.Elab.Elaborator do
     %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
-    domains
-    |> Enum.zip(quantities)
-    |> Enum.reduce_while({:ok, MetaCtx.new(), [], arg_asts, []}, &bidir_app_slot(&1, &2, names, ctx, env))
+    slots = Enum.zip(domains, quantities)
+    init = {:ok, MetaCtx.new(), [], arg_asts, []}
+
+    # GOAL-DIRECTED solving for an anonymous-union goal — the same reason as in
+    # `elaborate_global_app/5`, and needed here too because this is the path taken when
+    # an argument cannot be inferred standalone (`Std.Map.put(:a, 1, Std.Map.new())` —
+    # `new()`'s implicits have nothing to fix them).
+    #
+    # Without it, the value slot's domain `?v` is still an unsolved meta, so the slot is
+    # DEFERRED and later resolved by inferring the argument — locking `?v := Int` and
+    # losing the union. Solving the codomain against the goal first pins
+    # `?v := Union<…>`, so the slot is no longer deferred: the argument is CHECKED
+    # against the union and the literal/member injection fires normally.
+    {erased, rest} = Enum.split_while(slots, fn {_d, q} -> q == :erased end)
+
+    {init, slots} =
+      if union_goal?(expected) do
+        seeded =
+          erased
+          |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
+          |> bidir_solve_codomain_from_goal(codomain, expected, env, rest)
+
+        {seeded, rest}
+      else
+        {init, slots}
+      end
+
+    slots
+    |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
     |> resolve_deferred_slots(names, ctx, env)
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
+
+  # `solve_codomain_from_goal/5` for the bidirectional accumulator's 5-tuple. Same
+  # contract: pad `chosen` to the full binder stack (Subst.instantiate indexes against
+  # all of it), unify the codomain with the goal, and swallow failure so the ordinary
+  # path still produces the honest error.
+  defp bidir_solve_codomain_from_goal(
+         {:ok, mctx, chosen, args, deferred},
+         codomain,
+         expected,
+         env,
+         remaining
+       ) do
+    {mctx_padded, padded} =
+      Enum.reduce(remaining, {mctx, chosen}, fn {dom, _q}, {m, acc} ->
+        {m, id} = MetaCtx.fresh(m, Subst.instantiate(dom, acc))
+        {m, acc ++ [{:meta, id}]}
+      end)
+
+    case Unify.unify(Subst.instantiate(codomain, padded), expected, mctx_padded, env) do
+      {:ok, mctx2} -> {:ok, mctx2, chosen, args, deferred}
+      {:error, _} -> {:ok, mctx, chosen, args, deferred}
+    end
+  end
+
+  defp bidir_solve_codomain_from_goal({:error, _} = err, _cod, _exp, _env, _rem), do: err
 
   @doc """
   Type-position entry for implicit insertion (spec 2026-07-08 §7): elaborate an
@@ -5481,7 +6491,16 @@ defmodule Cure.Elab.Elaborator do
     do: {:halt, {:error, :too_few_arguments}}
 
   defp bidir_app_slot({dom, :unrestricted}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
-    dom_inst = dom |> Subst.instantiate(chosen) |> Unify.zonk(mctx)
+    # ZONK-then-instantiate, not instantiate-then-zonk: `Subst.instantiate` shifts a
+    # substituted term across binders, `Unify.zonk` does not. A domain that is a Π
+    # (a function-typed argument, `(a) -> a`) whose earlier sibling already solved the
+    # metavariable to a term with FREE de Bruijn variables would otherwise reach the
+    # checking mode below with the codomain occurrence unshifted (`{:var,2}` where
+    # `{:var,3}` is due). Resolving the metavariables into the substitution first lets
+    # `instantiate` place them at the right depth. See the twin fix in
+    # `resolve_deferred_slots`; a closed solution shifts to a no-op, so scalar/data
+    # domains are unaffected.
+    dom_inst = Enum.map(chosen, &Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
 
     if has_meta?(dom_inst) do
       # Domain still unsolved — infer the argument and unify to solve metavariables.
@@ -5595,7 +6614,19 @@ defmodule Cure.Elab.Elaborator do
 
   defp resolve_deferred_slots({:ok, mctx, chosen, args, deferred}, names, ctx, env) do
     Enum.reduce_while(deferred, {:ok, mctx}, fn {ph, arg, dom, k}, {:ok, mctx} ->
-      dom_inst = dom |> Subst.instantiate(Enum.take(chosen, k)) |> Unify.zonk(mctx)
+      # ZONK the chosen prefix FIRST, THEN instantiate — not instantiate-then-zonk.
+      # `Subst.instantiate` is binder-aware (it shifts a substituted term when it
+      # crosses a binder), but `Unify.zonk` is NOT: it replaces a solved `{:meta,id}`
+      # with its solution verbatim. When a deferred domain is a Π (`(a) -> a`, a lambda
+      # argument's type) and the metavariable a later sibling solved to a term with
+      # FREE de Bruijn variables (a rigid parameter, `?a := {:var,2}`), the occurrence
+      # in the codomain sits UNDER the domain binder and must shift to `{:var,3}`.
+      # Instantiate-then-zonk left it at `{:var,2}` (`conversion_failure {:var,3}
+      # {:var,2}`); resolving the metavariables into the substitution and letting
+      # `instantiate` place them restores the shift. A closed solution (`Nat`, `Z` —
+      # every constructor-domain deferral) shifts to a no-op, so those are unaffected.
+      dom_inst =
+        Enum.take(chosen, k) |> Enum.map(&Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
 
       # If a later sibling argument did not fully determine this deferred domain,
       # the deferred argument may still determine it FROM ITS OWN constructor
@@ -5957,10 +6988,95 @@ defmodule Cure.Elab.Elaborator do
     telescope = Enum.zip(Enum.map(domains, &{:_, &1}), quantities)
     init = {:ok, MetaCtx.new(), [], present_args}
 
+    # GOAL-DIRECTED solving, for an anonymous-union goal only.
+    #
+    # `solve_arg` receives arguments already elaborated and merely UNIFIES each domain
+    # against the argument's inferred type. So for `Std.Map.put(:a, 1, …)` checked at
+    # `Map(Atom, Int | Bool)`, the value slot's domain is the still-unsolved implicit
+    # `?v`, and unifying it with the argument's `Int` locks `?v := Int`. The codomain
+    # is only unified with the goal afterwards (in `finish_global_app`), by which point
+    # `Map(Atom, Int)` no longer matches `Map(Atom, Union<Bool|Int>)` — and there is no
+    # container covariance to rescue it. The union never got a chance to inject.
+    #
+    # Implicit (erased) slots come FIRST in the telescope, so their metavariables exist
+    # before any present argument is processed. Solving the codomain against the goal at
+    # that point pins `?v := Union<Bool|Int>`, and `solve_arg` can then coerce each value
+    # into it (see the union clause there). This is how Idris/Agda elaborate an
+    # application: the goal flows in before the arguments.
+    #
+    # GATED on the goal mentioning a generated union family. Doing it for EVERY checked
+    # call is the fully Idris-faithful behaviour and is the natural generalisation, but
+    # it reorders solving for every call in the language — a broad regression surface
+    # that deserves its own change. Gated, no non-union program's inference can differ.
+    {erased, rest} = Enum.split_while(telescope, fn {_d, q} -> q == :erased end)
+
+    init =
+      if union_goal?(expected) do
+        erased
+        |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
+        |> solve_codomain_from_goal(codomain, expected, env, rest)
+      else
+        init
+      end
+
+    telescope = if union_goal?(expected), do: rest, else: telescope
+
     telescope
     |> Enum.reduce_while(init, &solve_arg(&1, &2, env))
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
+
+  @doc """
+  True iff `expected` is a Core type mentioning a generated anonymous-union family.
+
+  `Declarations.elaborate_body/6` uses this to route a union-goal body through CHECK
+  mode. Its default is infer, which never threads the declared return type into the
+  application — so goal-directed solving (see `elaborate_global_app`) would never see a
+  goal, and a value destined for a union member would lock the union's implicit to its
+  own type instead.
+  """
+  @spec union_goal?(term()) :: boolean()
+  def union_goal?(nil), do: false
+
+  def union_goal?(term) when is_tuple(term) do
+    case term do
+      {:data, name, _p, _i} ->
+        Cure.Elab.Union.union_family?(name) or
+          term |> Tuple.to_list() |> Enum.any?(&union_goal?/1)
+
+      _ ->
+        term |> Tuple.to_list() |> Enum.any?(&union_goal?/1)
+    end
+  end
+
+  def union_goal?(list) when is_list(list), do: Enum.any?(list, &union_goal?/1)
+  def union_goal?(_other), do: false
+
+  # Unify the codomain against the goal so goal-determined implicits are solved BEFORE
+  # the present arguments are matched. A failure is swallowed: the ordinary path then
+  # produces the honest error, and the kernel independently re-checks the assembled
+  # term, so this can only SOLVE metavariables — never cause an unsound accept.
+  #
+  # `chosen` holds only the ERASED prefix, but `Subst.instantiate/2` indexes the codomain
+  # against the FULL binder stack — instantiating with a short list mis-indexes and the
+  # unify then fails silently, leaving the implicit unsolved (which is the whole bug this
+  # exists to fix). So pad to full arity with placeholder metas for the not-yet-processed
+  # present slots. They are used only to index the substitution and are discarded: the
+  # real arguments are unified against their domains by `solve_arg` as usual.
+  defp solve_codomain_from_goal({:ok, mctx, chosen, present}, codomain, expected, env, remaining) do
+    {mctx_padded, padded} =
+      Enum.reduce(remaining, {mctx, chosen}, fn {{_n, ty}, _q}, {m, acc} ->
+        {m, id} = MetaCtx.fresh(m, Subst.instantiate(ty, acc))
+        {m, acc ++ [{:meta, id}]}
+      end)
+
+    case Unify.unify(Subst.instantiate(codomain, padded), expected, mctx_padded, env) do
+      {:ok, mctx2} -> {:ok, mctx2, chosen, present}
+      {:error, _} -> {:ok, mctx, chosen, present}
+    end
+  end
+
+  defp solve_codomain_from_goal({:error, _} = err, _codomain, _expected, _env, _remaining), do: err
 
   defp peel_pi(type, 0), do: {[], type}
 

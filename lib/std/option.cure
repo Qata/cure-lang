@@ -4,8 +4,8 @@ mod Std.Option
   ##
   ## Parallel to the Option half of `Std.Core`, kept separate so that
   ## callers can `use Std.Option` without pulling in the rest of the
-  ## core combinators. `Option(T)` lowers to `{:some, v}` / `{:none}`
-  ## on the BEAM.
+  ## core combinators. `Some(v)` lowers to `{:Some, v}` and the nullary
+  ## `None()` to the bare atom `:None` on the BEAM.
   ##
   ## ## Examples
   ##
@@ -28,7 +28,8 @@ mod Std.Option
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   ## An optional value: either present (`Some`) or absent (`None`). `Some(v)`
-  ## erases to `{:Some, v}` and `None()` to `{:None}` on the BEAM.
+  ## erases to `{:Some, v}` and the nullary `None()` to the bare atom `:None`
+  ## on the BEAM.
   type Option(t) = Some(t) | None()
 
   ## Build a `Some(value)` Option.

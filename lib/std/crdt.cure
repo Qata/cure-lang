@@ -41,8 +41,9 @@ mod Std.CRDT
   ## use Std.CRDT
   ##
   ## # Add-then-remove is commutative under concurrent updates.
-  ## let s0 = or_add(or_empty(), :n1, "x")
-  ## let s1 = or_add(s0, :n1, "y")
+  ## # Each add on replica :n1 carries a tag :n1 has not used before.
+  ## let s0 = or_add(or_empty(), :n1, 1, "x")
+  ## let s1 = or_add(s0, :n1, 2, "y")
   ## or_value(or_remove(s1, "x"))            # => ["y"]
   ## ```
 
@@ -120,10 +121,11 @@ mod Std.CRDT
   @extern(:cure_std_crdt, :or_empty, 0)
   fn or_empty() -> ORSet
 
-  ## Add `elem` to the set on replica `node`; tags the addition with a
-  ## fresh unique identifier so it survives a concurrent remove.
-  @extern(:cure_std_crdt, :or_add, 3)
-  fn or_add(s: ORSet, node: Atom, elem: t) -> ORSet
+  ## Add `elem` to the set on replica `node`, identifying the addition
+  ## with `tag` so it survives a concurrent remove. `tag` must never be
+  ## reused for the same `node` — see `lww_set`'s `stamp`.
+  @extern(:cure_std_crdt, :or_add, 4)
+  fn or_add(s: ORSet, node: Atom, tag: Int, elem: t) -> ORSet
 
   ## Remove `elem` from the set; only removes tags this replica has
   ## observed, so concurrent re-adds from other replicas are retained.
@@ -148,9 +150,11 @@ mod Std.CRDT
   @extern(:cure_std_crdt, :lww_set, 4)
   fn lww_set(r: LWWRegister, value: t, stamp: Int, node: Atom) -> LWWRegister
 
-  ## Current value of the register.
+  ## Current value of the register, or `None()` if nothing has been written.
+  ## An empty register has no `t` to return; it used to hand back the atom
+  ## `:empty` under a declared `-> t`.
   @extern(:cure_std_crdt, :lww_value, 1)
-  fn lww_value(r: LWWRegister) -> t
+  fn lww_value(r: LWWRegister) -> Option(t)
 
   ## Merge by selecting the side with the higher timestamp; ties
   ## break on node id.

@@ -129,16 +129,123 @@ defmodule Cure.Elab.Resolution do
     def_map =
       Enum.reduce(owned_def_names, %{}, fn d, acc -> Map.put(acc, d, rekey_atom(module_id, d)) end)
 
+    # A compiler-generated anonymous-union family (`Union<Int|Point>`) is not "owned"
+    # by any surface declaration, so it is in neither `owned_family_names` nor
+    # `rekeyed_ctor_names` — yet its ctor payload types may reference a type that IS
+    # being re-keyed. `rekey_ctors/4` already rewrites every ctor's ARG TYPES via
+    # `amap`, so the payload follows for free; what does not follow is the family's
+    # own CONTENT-DERIVED key and its ctor names (whose prefix is that key).
+    #
+    # Left alone, the imported module's `Union<Int|Point>` would keep a key naming a
+    # `Point` that no longer exists under that name, and would silently unify with the
+    # importing program's own, unrelated `Union<Int|Point>`. Recompute the key from
+    # the re-keyed members and fold the renames into `amap`, so the existing rewriters
+    # move every `{:data,…}` / `{:ctor,…}` / `{:case,…}` occurrence for us.
+    {amap, union_families, union_ctors} = union_renames(env, amap, def_map)
+
     %Env{
       env
-      | families: rekey_families(env.families, owned_family_names, amap, def_map),
-        ctors: rekey_ctors(env.ctors, rekeyed_ctor_names, amap, def_map),
+      | families:
+          rekey_families(
+            env.families,
+            MapSet.union(owned_family_names, union_families),
+            amap,
+            def_map
+          ),
+        ctors:
+          rekey_ctors(env.ctors, MapSet.union(rekeyed_ctor_names, union_ctors), amap, def_map),
         ctor_to_family: rekey_c2f(env.ctor_to_family, amap),
         defs: rekey_defs(env.defs, owned_def_names, module_id, amap, def_map),
         certified: rekey_certified(env.certified, owned_def_names, module_id),
         builtins: rekey_builtins(env.builtins, amap)
     }
   end
+
+  # Extend `amap` with old -> new names for every generated union family whose member
+  # set changes under the re-key, and return the family/ctor key-sets that therefore
+  # need MOVING (not merely rewriting). A union that mentions nothing being re-keyed
+  # recomputes to its own key and is left completely alone.
+  #
+  # NESTED unions require this to be a FIXPOINT, not one pass. A union's member is
+  # never DIRECTLY another union (`Cure.Elab.Union.lower_member/3` always flattens
+  # that at construction time), but it CAN be another union NESTED inside a
+  # container — `List(Union<Atom|Bool>)` — which is not the top-level member type
+  # and so is not flattened. If the OUTER union (`Union<Int|List(Union<Atom|Bool>)>`)
+  # is visited before the INNER one in `Map.keys(env.families)` — which is not
+  # insertion order and not guaranteed to visit nesting inside-out — its new key
+  # would be computed against a STALE `amap` still missing the inner union's own
+  # rename, and (since that stale recomputation happens to equal the outer's OLD
+  # key) the outer family would be left registered under a name that lies about its
+  # own, correctly-rewritten content. Looping until a full pass changes nothing
+  # converges regardless of visitation order; `length(union_keys) + 1` bounds the
+  # iterations (nesting cannot cycle — a family can only reference EARLIER, already-
+  # declared families — so depth is finite and bounded by the union count).
+  defp union_renames(%Env{} = env, amap, def_map) do
+    union_keys = env.families |> Map.keys() |> Enum.filter(&Cure.Elab.Union.union_family?/1)
+    union_renames_fixpoint(env, union_keys, amap, def_map, MapSet.new(), MapSet.new(), length(union_keys) + 1)
+  end
+
+  defp union_renames_fixpoint(_env, _union_keys, amap, _def_map, fams, ctors, 0),
+    do: {amap, fams, ctors}
+
+  defp union_renames_fixpoint(env, union_keys, amap, def_map, fams, ctors, fuel) do
+    {amap2, fams2, ctors2} = union_renames_pass(env, union_keys, amap, def_map, fams, ctors)
+
+    if amap2 == amap do
+      {amap2, fams2, ctors2}
+    else
+      union_renames_fixpoint(env, union_keys, amap2, def_map, fams2, ctors2, fuel - 1)
+    end
+  end
+
+  defp union_renames_pass(env, union_keys, amap, def_map, fams, ctors) do
+    Enum.reduce(union_keys, {amap, fams, ctors}, fn old_key, {amap, fams, ctors} ->
+      old_prefix = Atom.to_string(old_key) <> "$"
+
+      members =
+        env
+        |> Inductive.ctors_of(old_key)
+        |> Enum.map(fn c ->
+          case c.args do
+            # A nullary ctor is a LITERAL member — its key is a value, never a type name,
+            # so nothing can re-key it. Rebuild the CANONICAL member shape (payload +
+            # lit_type_key): `Union.family_key/1` now inspects it to decide the
+            # `Union<…>` vs `Disjoint<…>` prefix.
+            [] ->
+              key = strip_prefix(c.name, old_prefix)
+              [lit_type | _] = String.split(key, "#", parts: 2)
+              %{key: key, payload: nil, lit_type_key: lit_type, old_ctor: c.name}
+
+            [{_n, ty}] ->
+              ty2 = rekey_term(ty, amap, def_map)
+
+              %{
+                key: Cure.Elab.Union.member_key(ty2),
+                payload: ty2,
+                lit_type_key: nil,
+                old_ctor: c.name
+              }
+          end
+        end)
+        |> Enum.sort_by(& &1.key)
+
+      new_key = Cure.Elab.Union.family_key(members)
+
+      if new_key == old_key do
+        {amap, fams, ctors}
+      else
+        {amap, ctors} =
+          Enum.reduce(members, {Map.put(amap, old_key, new_key), ctors}, fn m, {a, cs} ->
+            {Map.put(a, m.old_ctor, Cure.Elab.Union.ctor_key(new_key, m)), MapSet.put(cs, m.old_ctor)}
+          end)
+
+        {amap, MapSet.put(fams, old_key), ctors}
+      end
+    end)
+  end
+
+  defp strip_prefix(name, prefix),
+    do: name |> Atom.to_string() |> String.replace_prefix(prefix, "")
 
   defp rekey_atom(module_id, bare), do: String.to_atom(module_id <> "#" <> Atom.to_string(bare))
 
@@ -281,7 +388,7 @@ defmodule Cure.Elab.Resolution do
   key) never reaches this fallback (preserving R1).
   """
   @spec resolve_bare_shadowed(Env.t(), atom()) :: {:ok, atom()} | :none | {:ambiguous, [String.t()]}
-  def resolve_bare_shadowed(%Env{families: families, ctors: ctors, defs: defs}, bare) do
+  def resolve_bare_shadowed(%Env{families: families, ctors: ctors, defs: defs} = env, bare) do
     suffix = "#" <> Atom.to_string(bare)
 
     matches =
@@ -291,10 +398,22 @@ defmodule Cure.Elab.Resolution do
         if String.ends_with?(s, suffix), do: [{String.trim_trailing(s, suffix), k}], else: []
       end)
 
-    case matches do
+    case prefer_direct(matches, env.import_modules) do
       [{_mod, key}] -> {:ok, key}
       [] -> :none
       many -> {:ambiguous, Enum.map(many, fn {mod, _k} -> mod end)}
+    end
+  end
+
+  # A directly-imported module's own name wins the unqualified spelling over a
+  # name reachable only through another module's transitive re-export. If ANY
+  # matched provider is a direct import, restrict to the direct ones (so a lone
+  # direct owner resolves cleanly and only ≥2 DIRECT owners stay ambiguous);
+  # otherwise keep every match (a purely transitive/shadowed name is unchanged).
+  defp prefer_direct(matches, direct_modules) do
+    case Enum.filter(matches, fn {mod, _k} -> MapSet.member?(direct_modules, mod) end) do
+      [] -> matches
+      directs -> directs
     end
   end
 
@@ -347,18 +466,27 @@ defmodule Cure.Elab.Resolution do
   makes a cross-namespace spelling coincidence practically impossible (§3.4).
   """
   @spec ambiguous_modules(Env.t(), atom()) :: [String.t()]
-  def ambiguous_modules(%Env{families: families, defs: defs}, bare) do
+  def ambiguous_modules(%Env{families: families, defs: defs} = env, bare) do
     if Map.has_key?(families, bare) or Map.has_key?(defs, bare) do
       []
     else
       suffix = "#" <> Atom.to_string(bare)
 
-      (Map.keys(families) ++ Map.keys(defs))
-      |> Enum.flat_map(fn k ->
-        s = Atom.to_string(k)
-        if String.ends_with?(s, suffix), do: [String.trim_trailing(s, suffix)], else: []
-      end)
-      |> Enum.uniq()
+      mods =
+        (Map.keys(families) ++ Map.keys(defs))
+        |> Enum.flat_map(fn k ->
+          s = Atom.to_string(k)
+          if String.ends_with?(s, suffix), do: [String.trim_trailing(s, suffix)], else: []
+        end)
+        |> Enum.uniq()
+
+      # Direct owners win the unqualified name over transitive-re-export owners:
+      # if any provider is a direct import, only they can make the name ambiguous
+      # (a single direct owner is unambiguous). Mirrors `prefer_direct/2`.
+      case Enum.filter(mods, &MapSet.member?(env.import_modules, &1)) do
+        [] -> mods
+        directs -> directs
+      end
     end
   end
 

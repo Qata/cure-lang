@@ -434,7 +434,10 @@ defmodule Antigen.Challenge do
     :cert_unknown_list_node,
     :cert_nontuple_call_arg,
     :cert_nontuple_list_elem,
-    :cert_calls_nontuple_head
+    :cert_calls_nontuple_head,
+    # Editions-facility probes (Cure.Edition.retired_keywords/2 keyword set +
+    # Cure.Migrate.run_to_fixpoint/2 convergence).
+    :edition_retired_keywords, :migrate_fixpoint_converges
   ]
   @doc false
   def __known_atoms__, do: @known_atoms

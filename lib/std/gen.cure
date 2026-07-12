@@ -92,7 +92,26 @@ mod Std.Gen
   @extern(:cure_std_gen, :shrink_list, 1)
   fn shrink_list(xs: List(Int)) -> List(List(Int))
 
-  ## Default polymorphic shrinker; dispatches on the runtime shape of
-  ## `v` and returns the empty list for types with no defined shrink.
-  @extern(:cure_std_gen, :shrink, 1)
-  fn shrink(v: t) -> List(t)
+  ## `Shrink(t)` produces progressively smaller candidates for a value of
+  ## type `t`, most aggressive first. An empty list means "already minimal".
+  ##
+  ## This is an interface rather than a `fn shrink(v: t) -> List(t)`, and the
+  ## difference is not cosmetic. No parametric inhabitant of `∀t. t -> List(t)`
+  ## can inspect its argument — the free theorem forces
+  ## `shrink(g x) == map(g, shrink x)` for every `g` — yet shrinking must
+  ## inspect. A typeclass method may dispatch on `t`, because the dictionary is
+  ## a real argument. Applying `shrink` at a type with no implementation is now
+  ## a compile error instead of a silent `[]`.
+  interface Shrink(t)
+    ## Smaller candidates for `v`, most aggressive first.
+    fn shrink(v: t) -> List(t)
+
+  ## Shrink an integer by halving toward zero, then by subtracting one.
+  implementation Shrink for Int
+    ## Smaller candidates for `v`.
+    fn shrink(v: Int) -> List(Int) = shrink_int(v)
+
+  ## Shrink a list of integers by dropping elements; shortest first.
+  implementation Shrink for List(Int)
+    ## Smaller candidates for `xs`.
+    fn shrink(xs: List(Int)) -> List(List(Int)) = shrink_list(xs)

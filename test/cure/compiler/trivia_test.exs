@@ -110,6 +110,94 @@ defmodule Cure.Compiler.TriviaTest do
     end
   end
 
+  alias Cure.Compiler.Printer
+
+  defp reprint(src) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: "d.cure", trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: "d.cure", emit_events: false)
+    ast |> Trivia.attach(trivia) |> Printer.quoted_to_string()
+  end
+
+  # A fenced doc comment with no blank body line (`### tail\n###`) carries a
+  # trailing "\n" in its token text (the opening-tail prepend over an empty
+  # body). Splitting on "\n" naively yielded a spurious empty `## ` line, which
+  # reparses as an extra doc comment the source never had. The reprint must not
+  # invent that empty line, and formatting must be idempotent.
+  test "a fenced doc comment with no blank body line does not gain a spurious empty ## line" do
+    out = reprint("### tail\n###\nmod M\n  fn f() -> Int = 1\n")
+
+    refute out |> String.split("\n") |> Enum.any?(&(String.trim_trailing(&1) == "##")),
+           "reprint invented an empty `## ` doc line: #{inspect(out)}"
+
+    assert reprint(out) == out, "doc-comment reprint is not idempotent"
+  end
+
+  # Two-or-more trailing blank body lines leave two-or-more trailing "\n" in the
+  # token text. Dropping only ONE (String.replace_suffix) still leaves a trailing
+  # "\n", so the split yields a spurious empty `## ` line — the same defect as the
+  # single-newline case, one blank line deeper. Trailing blanks carry no meaning
+  # in a doc comment, so every trailing newline must be dropped.
+  test "a fenced doc comment with multiple trailing blank body lines gains no spurious ## line" do
+    out = reprint("### tail\nline1\n\n\n###\nmod M\n  fn f() -> Int = 1\n")
+
+    refute out |> String.split("\n") |> Enum.any?(&(String.trim_trailing(&1) == "##")),
+           "reprint invented an empty `## ` doc line: #{inspect(out)}"
+
+    assert reprint(out) == out, "doc-comment reprint is not idempotent"
+  end
+
+  # A function call's argument list is the one comma-separated construct whose
+  # delimiters can span newlines and still reparse, so a comment CAN legally sit
+  # inside it. The single-line span form has nowhere to put such a comment and
+  # dropped it silently — a lossless-reprint violation (and, in `cure migrate`,
+  # a spurious `:comment_dropped` rejection). A leading comment on an argument
+  # must survive the round-trip and reprint idempotently.
+  test "a leading comment on a call argument survives the reprint" do
+    src = "mod M\n  fn g(a: Int, b: Int) -> Int = a\n  fn f() -> Int = g(\n    # keep me\n    1,\n    2)\n"
+    out = reprint(src)
+
+    assert out =~ "keep me", "call-argument comment was dropped: #{inspect(out)}"
+    assert reparses?(out), "reprint no longer parses: #{inspect(out)}"
+    assert reprint(out) == out, "call-argument-comment reprint is not idempotent"
+  end
+
+  # A trailing comment attaches to the PRECEDING argument, so the separating
+  # comma must be emitted before the comment — otherwise the `#` swallows the
+  # comma and the argument list reparses one element short.
+  test "a trailing comment on a call argument survives without eating the comma" do
+    src = "mod M\n  fn g(a: Int, b: Int) -> Int = a\n  fn f() -> Int = g(1, # inline\n    2)\n"
+    out = reprint(src)
+
+    assert out =~ "inline", "trailing call-argument comment was dropped: #{inspect(out)}"
+    assert reparses?(out), "reprint no longer parses (comma likely eaten): #{inspect(out)}"
+    assert reprint(out) == out, "trailing-comment reprint is not idempotent"
+  end
+
+  # A comment between `=` and an inline body attaches as a LEADING comment on the
+  # body. Rendered inline (`= # note`) the `#` comments out the body, so the
+  # printer shoved the body to the next line and the comment drifted — from
+  # body-leading, to `=`-trailing, to fn-leading — across successive reprints
+  # (non-idempotent, and a relocation `cure fmt` must never do). When the body
+  # carries a leading comment the whole body must break to the next line, exactly
+  # as the source wrote it.
+  test "a comment between = and an inline body round-trips idempotently without relocating" do
+    src = "mod M\n  fn f() -> Int =\n    # note\n    1\n"
+    out = reprint(src)
+
+    assert out =~ "# note", "body-leading comment was dropped: #{inspect(out)}"
+    assert reparses?(out), "reprint no longer parses: #{inspect(out)}"
+    assert reprint(out) == out, "= / inline-body comment reprint is not idempotent: #{inspect(out)}"
+  end
+
+  defp reparses?(src) do
+    with {:ok, toks} <- Lexer.tokenize(src, file: "r.cure", emit_events: false),
+         {:ok, _ast} <- Parser.parse(toks, file: "r.cure", emit_events: false) do
+      true
+    else
+      _ -> false
+    end
+  end
+
   # helper: collect all values of a given meta key across the AST
   defp collect_meta(ast, key, acc \\ [])
 

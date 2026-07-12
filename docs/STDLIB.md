@@ -699,10 +699,11 @@ returns `sum(p) - sum(n)`.
 - `pn_decrement(c, node, by) -> PNCounter`.
 - `pn_value(c) -> Int`, `pn_merge(a, b) -> PNCounter`.
 ### ORSet
-Observed-remove set. Each addition carries a unique tag; removals
-drop exactly the tags the remover has observed.
+Observed-remove set. Each addition carries a caller-supplied tag, which
+`node` must never reuse; removals drop exactly the tags the remover has
+observed.
 - `or_empty() -> ORSet`.
-- `or_add(s, node: Atom, elem: T) -> ORSet`.
+- `or_add(s, node: Atom, tag: Int, elem: T) -> ORSet`.
 - `or_remove(s, elem: T) -> ORSet`.
 - `or_value(s) -> List(T)`, `or_merge(a, b) -> ORSet`.
 ### LWWRegister
@@ -710,7 +711,7 @@ Last-write-wins register. Merges pick the side with the higher
 timestamp; ties break on node id.
 - `lww_empty(node: Atom) -> LWWRegister`.
 - `lww_set(r, value: T, stamp: Int, node: Atom) -> LWWRegister`.
-- `lww_value(r) -> T`, `lww_merge(a, b) -> LWWRegister`.
+- `lww_value(r) -> Option(T)` (`None()` if nothing has been written), `lww_merge(a, b) -> LWWRegister`.
 ### MVRegister
 Multi-value register that retains every concurrent write so the
 caller can resolve the conflict manually.

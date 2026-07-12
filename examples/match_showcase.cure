@@ -1,4 +1,7 @@
 mod MatchShowcase
+  use Std.String
+  use Std.Semigroup
+
   ###
   Comprehensive tour of every pattern shape supported by Cure's match
   engine as of v0.21.0.

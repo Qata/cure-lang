@@ -48,10 +48,57 @@ defmodule Cure.Elab.Program do
     with :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast),
-         :ok <- check_no_fn_ctor_collision(ast) do
+         :ok <- check_no_fn_ctor_collision(ast),
+         :ok <- check_proof_shapes(ast) do
       check_no_sibling_collision(ast)
     end
   end
+
+  # A top-level container the dependent pipeline elaborates as a module. Classic
+  # codegen compiles a `proof` container "exactly like a regular module"; the
+  # dependent pipeline now does the same, so both container types are unwrapped
+  # and their declarations elaborated identically.
+  defp module_like_container?(meta), do: Keyword.get(meta, :container_type) in [:module, :proof]
+
+  # E026 proof-shape discipline: every binding inside a `proof` container must
+  # inhabit a propositional-equality type (`Equivalent(T, a, b)`) — proof
+  # containers are exclusively for propositions, not ordinary code. A non-proof
+  # return type is rejected here, before elaboration.
+  defp check_proof_shapes(ast) do
+    ast
+    |> proof_container_fns()
+    |> Enum.find_value(:ok, fn {:function_def, meta, _body} ->
+      if proof_shape_return?(Keyword.get(meta, :return_type)) do
+        nil
+      else
+        name = Keyword.get(meta, :name)
+
+        {:error,
+         {:proof_shape_mismatch,
+          "E026: binding '#{name}' in a proof container must inhabit a " <>
+            "propositional-equality type Equivalent(T, a, b)", name}}
+      end
+    end)
+  end
+
+  defp proof_container_fns({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &proof_container_fns/1)
+
+  defp proof_container_fns({:container, meta, body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :proof do
+      body |> List.wrap() |> Enum.filter(&match?({:function_def, m, _} when is_list(m), &1))
+    else
+      []
+    end
+  end
+
+  defp proof_container_fns(_other), do: []
+
+  # A proof return type is an application of the propositional-equality family.
+  defp proof_shape_return?({:function_call, meta, _args}) when is_list(meta),
+    do: Keyword.get(meta, :name) in ["Equivalent", "Eq"]
+
+  defp proof_shape_return?(_other), do: false
 
   # Two sibling `mod` blocks in ONE compilation unit may not bind the same name.
   #
@@ -141,7 +188,7 @@ defmodule Cure.Elab.Program do
     do: Enum.flat_map(items, &top_modules/1)
 
   defp top_modules({:container, meta, _body} = node) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module, do: [node], else: []
+    if module_like_container?(meta), do: [node], else: []
   end
 
   defp top_modules(_), do: []
@@ -250,8 +297,10 @@ defmodule Cure.Elab.Program do
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast_elixir_core(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
+         {:ok, prelude} <- prelude_slice_env(ast),
          seeded = seed_with_telescope_support(ast),
-         {:ok, env0} <- merge_env(seeded, imported),
+         {:ok, base} <- merge_env(seeded, prelude),
+         {:ok, env0} <- merge_env(base, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          :ok <- MacroValidate.check_program(ast, env),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -405,6 +454,159 @@ defmodule Cure.Elab.Program do
     end)
   end
 
+  # ── `@prelude` decorator ───────────────────────────────────────────────────
+  #
+  # A stdlib item marked `@prelude` (see `lib/std/string.cure`'s `String` alias)
+  # joins the IMPLICIT prelude: its name resolves in every module with no `use`.
+  # Unlike the hard-coded `@auto_prelude` whitelist (whole modules), `@prelude` is
+  # declared at the DEFINITION site and is item-granular — preluding `type String`
+  # brings the alias without dragging `Std.String`'s whole function surface (which
+  # would shadow user `length`/`reverse`/…). Discovery scans the stdlib sources for
+  # the marker; the resulting slice is merged UNDER the explicit imports (so a
+  # `use` still wins) and under the module's own declarations.
+  defp prelude_slice_env(ast) do
+    self = find_module_name(ast)
+    local = declared_names(ast)
+
+    prelude_manifest()
+    |> Enum.reject(fn entry -> entry.source == self end)
+    |> Enum.reduce_while({:ok, Env.empty()}, fn entry, {:ok, acc} ->
+      case prelude_entry_env(entry, local) do
+        {:ok, slice} ->
+          case merge_env(acc, slice) do
+            {:ok, merged} -> {:cont, {:ok, merged}}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
+  # Elaborate one prelude-contributing module and restrict its env to the
+  # `@prelude`-marked names (minus any the importer declares locally — a local
+  # decl shadows the prelude). A whole-module `@prelude` keeps everything.
+  defp prelude_entry_env(%{source: source, path: path, names: names}, local) do
+    with {:ok, full} <- import_source_env({:ok, source, path}, MapSet.new()) do
+      keep =
+        case names do
+          :all -> :all
+          set -> MapSet.difference(set, local)
+        end
+
+      {:ok, restrict_env_to(full, keep)}
+    end
+  end
+
+  # Keep only the named defs/families/constructors from an elaborated env. List /
+  # Char and the other seeded builtins stay ambient via the base seed, so a
+  # type-alias slice (`String := List(Char)`) needs only its def entry; a
+  # `@prelude type` also keeps its family and constructors. `certified` is kept
+  # whole — it is a totality whitelist, so a superset is harmless.
+  defp restrict_env_to(%Env{}, :all = _keep), do: raise("whole-module @prelude unimplemented")
+
+  defp restrict_env_to(%Env{} = env, %MapSet{} = names) do
+    name_list = MapSet.to_list(names)
+    fam_names = Enum.filter(name_list, &Map.has_key?(env.families, &1))
+    kept_ctors = for {c, f} <- env.ctor_to_family, f in fam_names, into: %{}, do: {c, f}
+
+    %Env{
+      Env.empty()
+      | defs: Map.take(env.defs, name_list ++ Map.keys(kept_ctors)),
+        families: Map.take(env.families, fam_names),
+        ctors: Map.take(env.ctors, Map.keys(kept_ctors)),
+        ctor_to_family: kept_ctors,
+        primitives: Map.take(env.primitives, name_list),
+        certified: env.certified
+    }
+  end
+
+  # `@prelude`-marked items across the stdlib tree, as a list of
+  # `%{source, path, names}` (names = a `MapSet` of item names, or `:all` for a
+  # whole-module mark). Discovered by scanning the stdlib sources for the marker —
+  # membership lives at the definition site, not in a hand-kept list. Cached in
+  # `:persistent_term`: the stdlib is fixed for a compiler build, and this runs
+  # only in the HOST compiler, never on AtomVM (where `persistent_term` is absent).
+  defp prelude_manifest do
+    case Paths.source_dir() do
+      nil ->
+        []
+
+      dir ->
+        key = {__MODULE__, :prelude_manifest, dir}
+
+        case :persistent_term.get(key, :miss) do
+          :miss ->
+            manifest = scan_prelude_manifest(dir)
+            :persistent_term.put(key, manifest)
+            manifest
+
+          cached ->
+            cached
+        end
+    end
+  end
+
+  defp scan_prelude_manifest(dir) do
+    dir
+    |> Path.join("*.cure")
+    |> Path.wildcard()
+    |> Enum.flat_map(fn path ->
+      with {:ok, src} <- File.read(path),
+           {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+           {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+           source when is_binary(source) <- find_module_name(ast),
+           names when names != [] <- prelude_marked_names(ast) do
+        [%{source: source, path: path, names: MapSet.new(names)}]
+      else
+        _ -> []
+      end
+    end)
+  end
+
+  # The names of `@prelude`-marked declarations in a module's AST. A `typealias`
+  # (`{:type_annotation}`), `fn` (`{:function_def}`), and enum/indexed `type`
+  # container all carry the decorator in their meta once the parser attached it.
+  defp prelude_marked_names(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(fn decl ->
+      if prelude_decorated?(decl), do: List.wrap(declaration_name(decl)), else: []
+    end)
+  end
+
+  defp prelude_decorated?({_tag, meta, _}) when is_list(meta),
+    do: match?({:prelude, _}, Keyword.get(meta, :decorator))
+
+  defp prelude_decorated?(_), do: false
+
+  defp declaration_name({:type_annotation, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name({:function_def, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name({:container, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name({:indexed_type, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name(_), do: nil
+
+  defp to_name_atom(name) when is_binary(name), do: String.to_atom(name)
+  defp to_name_atom(_), do: nil
+
+  # Every function/type/constructor NAME a module declares locally, as a MapSet —
+  # used so a `@prelude` item is not imported into a module that redefines the same
+  # name (the local declaration is canonical). Reuses the existing scanners.
+  defp declared_names(ast) do
+    MapSet.new(local_def_names(ast))
+    |> MapSet.union(declared_type_names(ast))
+    |> MapSet.union(declared_ctor_names(ast))
+  end
+
   @doc """
   Elaborate a module and return the definitions declared directly by that
   module. Imported stdlib definitions remain in the env for type checking and
@@ -528,6 +730,14 @@ defmodule Cure.Elab.Program do
   defp global_refs({:pi, _g, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
   defp global_refs({:lam, _g, dom, body}), do: global_refs(dom) ++ global_refs(body)
   defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
+
+  # The `:let` binder is the seventh Core former. Without this clause it fell
+  # through to the catch-all below, and every global referenced only inside a
+  # `let` vanished from `reachable_def_names/2` — co-emitting such a closure
+  # produced a module that called a function it never defined.
+  defp global_refs({:let, _g, ty, val, body}),
+    do: global_refs(ty) ++ global_refs(val) ++ global_refs(body)
+
   defp global_refs(_leaf), do: []
 
   @doc """
@@ -543,14 +753,76 @@ defmodule Cure.Elab.Program do
   def dependent?({:sigma_type, _meta, _body}), do: true
   def dependent?({:rewrite_expr, _meta, _body}), do: true
 
+  # An anonymous union (`Int | String`) and its elimination form (`n: Int -> …`) are
+  # DEPENDENT-pipeline constructs: they elaborate to a generated inductive family whose
+  # constructors carry the member tag.
+  #
+  # Without these two clauses a module using only unions is judged non-dependent and
+  # compiled by the CLASSIC pipeline, where `Type.resolve/1` maps the union to `:any`
+  # and the value is emitted UNTAGGED — silently giving the erasure the design
+  # explicitly rejected as unsound (`String` is `List(Char)`, so members are not
+  # runtime-distinguishable). The feature would type-check correctly and then never be
+  # used at codegen.
+  def dependent?({:union_type, _meta, _members}), do: true
+  def dependent?({:typed_pattern, _meta, _children}), do: true
+
+  # The generic fallback below only recurses into a node's CHILDREN, never its
+  # META — which is why `:param`'s type needed its own dedicated clause further
+  # down. A union can ALSO appear in two other meta-only positions:
+  #
+  #   * a `let`'s type ascription (`type_annotation:` in `:assignment`'s meta —
+  #     parser.ex `let_ascribed`), and
+  #   * a match arm's OWN PATTERN (`pattern:` in `:match_arm`'s meta — parser.ex
+  #     `parse_match_arm/1`, `{:match_arm, [pattern: p], [body]}`).
+  #
+  # Left unhandled, a module using a union ONLY in one of these two positions
+  # (no function param/return type ever names the union) is silently routed to
+  # the classic pipeline, which has no union machinery — not a clean
+  # `:unsupported_container`-style rejection but a confusing, unrelated error
+  # out of classic's ordinary (non-union-aware) pattern handling.
+  # A union can hide in META, which the generic fallback (children-only) never visits: a
+  # `let`'s `:type_annotation`, and a match arm's `:pattern` (typed patterns live there).
+  #
+  # These scan the meta for UNION SYNTAX ONLY — deliberately NOT the full `dependent?/1`
+  # walk. `dependent?/1` decides which COMPILER PIPELINE builds a module, and the two erase
+  # constructors differently. Running the full predicate over a match arm's pattern exposes
+  # ordinary constructor patterns to the pre-existing name-based `"Equivalent"`/`"reflexive"`
+  # heuristic below — so a program with an ADT constructor merely NAMED `Equivalent`, and no
+  # `|` anywhere, was silently rerouted to the dependent pipeline.
+  def dependent?({:assignment, meta, children}) when is_list(meta) do
+    union_syntax?(Keyword.get(meta, :type_annotation)) or dependent?(children)
+  end
+
+  def dependent?({:match_arm, meta, children}) when is_list(meta) do
+    union_syntax?(Keyword.get(meta, :pattern)) or dependent?(children)
+  end
+
   def dependent?({:function_call, meta, children}) when is_list(meta) do
     Keyword.get(meta, :name) in ["Equivalent", "reflexive"] or Enum.any?(children, &dependent?/1)
   end
 
   def dependent?({:container, meta, body}) when is_list(meta) do
     case Keyword.get(meta, :container_type) do
-      :proof -> false
-      _other -> dependent?(body)
+      # A proof container inhabits propositional-equality types — inherently
+      # dependent, and now elaborated into Core (routed like a module below).
+      :proof ->
+        true
+
+      container_type when container_type in [:enum, :struct, :opaque] ->
+        # A user-declared family whose name COLLIDES with the generated-union
+        # namespace (`Cure.Elab.Union.union_family?/1` — reachable only via a
+        # backtick-quoted identifier, e.g. `` `Union<Bool|Int>` ``) must be
+        # routed to the DEPENDENT pipeline even when nothing else in the module
+        # is dependent, so `Cure.Elab.Declarations`'s reserved-name rejection
+        # actually runs. The classic pipeline never calls into
+        # `Cure.Elab.Union` at all, so left classic-routed, such a name would
+        # sail through unrejected and remain indistinguishable from a real
+        # generated family to any OTHER dependent-routed module compiled into
+        # the same program.
+        reserved_family_name?(meta) or dependent?(body)
+
+      _other ->
+        dependent?(body)
     end
   end
 
@@ -574,8 +846,25 @@ defmodule Cure.Elab.Program do
   def dependent?(list) when is_list(list), do: Enum.any?(list, &dependent?/1)
   def dependent?(_other), do: false
 
+  # Union syntax, and nothing else. Kept deliberately narrow — see the meta clauses above.
+  defp union_syntax?({:union_type, _meta, _members}), do: true
+  defp union_syntax?({:typed_pattern, _meta, _children}), do: true
+
+  defp union_syntax?(node) when is_tuple(node),
+    do: node |> Tuple.to_list() |> Enum.any?(&union_syntax?/1)
+
+  defp union_syntax?(list) when is_list(list), do: Enum.any?(list, &union_syntax?/1)
+  defp union_syntax?(_other), do: false
+
   defp dependent_params?(params) when is_list(params), do: Enum.any?(params, &dependent?/1)
   defp dependent_params?(_other), do: false
+
+  defp reserved_family_name?(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> name |> String.to_atom() |> Cure.Elab.Union.union_family?()
+      _ -> false
+    end
+  end
 
   @doc """
   Extract the `Cure.<Name>` module atom from a parsed `mod … end` program,
@@ -585,7 +874,7 @@ defmodule Cure.Elab.Program do
   def module_atom(ast), do: String.to_atom("Cure." <> (find_module_name(ast) || "Main"))
 
   defp find_module_name({:container, meta, _body}) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module, do: Keyword.get(meta, :name)
+    if module_like_container?(meta), do: Keyword.get(meta, :name)
   end
 
   defp find_module_name({_tag, _meta, children}) when is_list(children),
@@ -648,7 +937,7 @@ defmodule Cure.Elab.Program do
     do: Enum.flat_map(items, &declarations/1)
 
   defp declarations({:container, meta, body}) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module do
+    if module_like_container?(meta) do
       body |> List.wrap() |> Enum.flat_map(&declarations/1)
     else
       [{:container, meta, body}]
@@ -704,14 +993,27 @@ defmodule Cure.Elab.Program do
     do: Enum.flat_map(items, &imports/1)
 
   defp imports({:container, meta, body}) when is_list(meta) do
-    if Keyword.get(meta, :container_type) == :module do
+    if module_like_container?(meta) do
       body |> List.wrap() |> Enum.flat_map(&imports/1)
     else
       []
     end
   end
 
-  defp imports({:import, meta, _}) when is_list(meta), do: [Keyword.fetch!(meta, :source)]
+  # `use Std.{List, Core}` is grouping sugar: the brace `:items` name a set of
+  # sibling modules under the `:source` namespace, each expanded to its own full
+  # `source.item` import. A plain `use Std.List` (no `:items`) yields just the source.
+  # (`:exposing` — the selective-name form `use M exposing (a, b)` — is a filter on
+  # WHICH of the module's names come in unqualified, not a different module list, so
+  # it does not affect the source expansion here.)
+  defp imports({:import, meta, _}) when is_list(meta) do
+    source = Keyword.fetch!(meta, :source)
+
+    case Keyword.get(meta, :items, []) do
+      [] -> [source]
+      items -> Enum.map(items, &(source <> "." <> to_string(&1)))
+    end
+  end
 
   defp imports({_tag, _meta, children}) when is_list(children),
     do: Enum.flat_map(children, &imports/1)
@@ -962,7 +1264,14 @@ defmodule Cure.Elab.Program do
         |> MapSet.union(local)
         |> Enum.reduce(merged, fn name, e -> drop_bare_family(e, name) end)
 
-      {:ok, cleaned, ambiguous}
+      # Record the DIRECT import set so bare-name resolution can prefer a direct
+      # owner over a name reachable only through a module's transitive re-export
+      # (`use Std.List` + `use Std.Core`: `map` resolves to Std.List's own `map`,
+      # not the Std.Option `map` that Core merely re-exports). `modules` is the
+      # direct list (explicit `use` + auto-prelude); transitive-only modules are
+      # deliberately excluded.
+      direct_ids = MapSet.new(modules, fn {mod_id, _path} -> mod_id end)
+      {:ok, %{cleaned | import_modules: direct_ids}, ambiguous}
     end
   end
 
@@ -1053,7 +1362,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained)a
+                      primitives interfaces coherence constrained import_modules)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -1079,7 +1388,8 @@ defmodule Cure.Elab.Program do
          primitives: Map.merge(left.primitives, right.primitives),
          interfaces: Map.merge(left.interfaces, right.interfaces),
          coherence: coherence,
-         constrained: Map.merge(left.constrained, right.constrained)
+         constrained: Map.merge(left.constrained, right.constrained),
+         import_modules: MapSet.union(left.import_modules, right.import_modules)
        }}
     end
   end

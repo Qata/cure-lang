@@ -120,12 +120,14 @@ defmodule Cure.StdlibTest do
       assert m.atom_to_string(:hello) == "hello"
     end
 
+    # A Cure `String` is `List(Char)` (#29), which at the Erlang boundary is a
+    # charlist — so pass `~c"test"`, not the Elixir binary `"test"`.
     test "println returns ok", %{m: m} do
-      assert m.println("test") == :ok
+      assert m.println(~c"test") == :ok
     end
 
     test "print returns ok", %{m: m} do
-      assert m.print("test") == :ok
+      assert m.print(~c"test") == :ok
     end
   end
 
@@ -203,22 +205,32 @@ defmodule Cure.StdlibTest do
     # operators `==`/`!=`/`<`/`<=`/`>`/`>=` are the surface (equality is
     # structural; ordering routes through `Std.Comparable`). Only the
     # ordering-derived combinators `min`/`max`/`clamp` remain, now carrying a
-    # `where Comparable(t)` constraint.
-    setup do
-      m = compile_stdlib("core")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+    # `where Comparable(t)` constraint. Because that constraint compiles to an
+    # interface-dictionary parameter, they can't be called directly from Elixir
+    # at the surface arity — the dictionary is resolved by the elaborator at the
+    # Cure call site. So exercise them through a small Cure program instead.
+    defp run_core_fn(body) do
+      src = """
+      mod ComparisonProbe
+        use Std.Core
+        fn probe() -> Int = #{body}
+      """
+
+      {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+      result = mod.probe()
+      purge(mod)
+      result
     end
 
-    test "min and max", %{m: m} do
-      assert m.min(3, 7) == 3
-      assert m.max(3, 7) == 7
+    test "min and max" do
+      assert run_core_fn("min(3, 7)") == 3
+      assert run_core_fn("max(3, 7)") == 7
     end
 
-    test "clamp", %{m: m} do
-      assert m.clamp(5, 1, 10) == 5
-      assert m.clamp(-5, 1, 10) == 1
-      assert m.clamp(15, 1, 10) == 10
+    test "clamp" do
+      assert run_core_fn("clamp(5, 1, 10)") == 5
+      assert run_core_fn("clamp(-5, 1, 10)") == 1
+      assert run_core_fn("clamp(15, 1, 10)") == 10
     end
   end
 
@@ -281,34 +293,34 @@ defmodule Cure.StdlibTest do
 
     test "some and none constructors", %{m: m} do
       assert m.some(42) == {:some, 42}
-      assert m.none() == {:none}
+      assert m.none() == :none
     end
 
     test "is_some and is_none", %{m: m} do
       assert m.is_some({:some, 42}) == true
-      assert m.is_some({:none}) == false
-      assert m.is_none({:none}) == true
+      assert m.is_some(:none) == false
+      assert m.is_none(:none) == true
       assert m.is_none({:some, 42}) == false
     end
 
     test "unwrap", %{m: m} do
       assert m.unwrap({:some, 42}, 0) == 42
-      assert m.unwrap({:none}, 0) == 0
+      assert m.unwrap(:none, 0) == 0
     end
 
     test "map_option", %{m: m} do
       assert m.map_option({:some, 5}, fn x -> x * 2 end) == {:some, 10}
-      assert m.map_option({:none}, fn x -> x * 2 end) == {:none}
+      assert m.map_option(:none, fn x -> x * 2 end) == :none
     end
 
     test "flat_map_option", %{m: m} do
       assert m.flat_map_option({:some, 5}, fn x -> {:some, x * 2} end) == {:some, 10}
-      assert m.flat_map_option({:none}, fn x -> {:some, x * 2} end) == {:none}
+      assert m.flat_map_option(:none, fn x -> {:some, x * 2} end) == :none
     end
 
     test "option_or", %{m: m} do
       assert m.option_or({:some, 42}, 0) == 42
-      assert m.option_or({:none}, 0) == 0
+      assert m.option_or(:none, 0) == 0
     end
   end
 
@@ -511,43 +523,9 @@ defmodule Cure.StdlibTest do
     end
   end
 
-  # ============================================================================
-  # Std.Pair
-  # ============================================================================
-
-  describe "Std.Pair" do
-    setup do
-      m = compile_stdlib("pair")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
-    end
-
-    test "first and second", %{m: m} do
-      assert m.first({:a, :b}) == :a
-      assert m.second({:a, :b}) == :b
-    end
-
-    test "swap", %{m: m} do
-      assert m.swap({1, 2}) == {2, 1}
-    end
-
-    test "map_first", %{m: m} do
-      assert m.map_first({5, :b}, fn x -> x * 2 end) == {10, :b}
-    end
-
-    test "map_second", %{m: m} do
-      assert m.map_second({:a, 5}, fn x -> x * 2 end) == {:a, 10}
-    end
-
-    test "map_both", %{m: m} do
-      result = m.map_both({1, 2}, fn x -> x * 10 end, fn x -> x * 100 end)
-      assert result == {10, 200}
-    end
-
-    test "to_list", %{m: m} do
-      assert [_, _] = m.to_list({:a, :b})
-    end
-  end
+  # Std.Pair was retired with the unified-tuple work (#23): `pair.cure` no
+  # longer exists — a pair is the flat surface `Tuple(A, B)`, and its
+  # combinators live on `Tuple`. The former Std.Pair describe block was removed.
 
   # ============================================================================
   # Std.System

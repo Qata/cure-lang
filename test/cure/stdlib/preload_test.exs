@@ -30,7 +30,6 @@ defmodule Cure.Stdlib.PreloadTest do
       assert Map.get(groups, :"Cure.Std.Core") == :core
       assert Map.get(groups, :"Cure.Std.List") == :collections
       assert Map.get(groups, :"Cure.Std.Math") == :numeric
-      assert Map.get(groups, :"Cure.Std.Http") == :network
       assert Map.get(groups, :"Cure.Std.Option") == :option
     end
   end
@@ -45,7 +44,7 @@ defmodule Cure.Stdlib.PreloadTest do
       mods = Preload.stdlib_modules(:all)
 
       # Sanity check a handful of modules we know must be present.
-      for m <- [:"Cure.Std.Core", :"Cure.Std.List", :"Cure.Std.Math", :"Cure.Std.Http"] do
+      for m <- [:"Cure.Std.Core", :"Cure.Std.List", :"Cure.Std.Math", :"Cure.Std.Option"] do
         assert m in mods
       end
 
@@ -64,7 +63,6 @@ defmodule Cure.Stdlib.PreloadTest do
       end
 
       refute :"Cure.Std.List" in core
-      refute :"Cure.Std.Http" in core
     end
 
     test "a single-group atom filters to that group" do

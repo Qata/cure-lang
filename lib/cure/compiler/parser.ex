@@ -48,6 +48,8 @@ defmodule Cure.Compiler.Parser do
     pos: 0,
     errors: [],
     emit_events: false,
+    edition: nil,
+    seen_stmt?: false,
     active_macros: %{},
     computed_macros: %{},
     fresh_counter: 0,
@@ -111,11 +113,12 @@ defmodule Cure.Compiler.Parser do
   def parse(tokens, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, true)
+    edition = Keyword.get(opts, :edition, Cure.Edition.current())
 
     # Phase 1 (harvest): parse once with NO active macros, keep only the local
     # macro grammars. Use-sites may mis-parse here; we discard everything but
     # the {:macro_def, …} nodes and their (recovered) errors.
-    harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false}
+    harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false, edition: edition}
     {harvest_exprs, _harvest_state} = parse_program(harvest_state)
     active = harvest_active_macros(harvest_exprs)
     computed = harvest_computed_macros(harvest_exprs)
@@ -126,6 +129,7 @@ defmodule Cure.Compiler.Parser do
       tokens: tokens,
       file: file,
       emit_events: emit?,
+      edition: edition,
       active_macros: active,
       computed_macros: computed,
       literal_macros: literal
@@ -684,6 +688,7 @@ defmodule Cure.Compiler.Parser do
             {Enum.reverse(acc), state}
 
           _ ->
+            state = mark_seen_if_stmt(state)
             prev_errors = length(state.errors)
             {expr, state} = parse_expr(state, 0)
             expr = attach_doc(expr, doc_text)
@@ -698,6 +703,7 @@ defmodule Cure.Compiler.Parser do
         end
 
       _ ->
+        state = mark_seen_if_stmt(state)
         prev_errors = length(state.errors)
         {expr, state} = parse_expr(state, 0)
         # Recovery: synchronize after a broken top-level statement so subsequent
@@ -2715,6 +2721,21 @@ defmodule Cure.Compiler.Parser do
   # arguments (`Cons(h, t @ Cons(x, y))`), so as-patterns nest.
   defp maybe_wrap_as({:variable, vm, name}, state) do
     case peek(state) do
+      # A TYPED pattern: `n: Int`. Binds `name` at the annotated type — the
+      # elimination form for anonymous unions (`match x { n: Int -> … }`). The
+      # annotation may itself be a union (`rest: String | Bool`), which is why it
+      # goes through the `|`-aware parse_type_expr/1.
+      #
+      # `:colon` has no infix binding power, so parse_expr(state, 0) already stops
+      # cleanly here — this clause is purely additive.
+      #
+      # Brace-delimited record/map patterns are NOT covered: parse_map_pair/1's
+      # explicit key:value branch already claims `identifier :` inside braces.
+      %Token{type: :colon} ->
+        state = advance(state)
+        {type_ast, state} = parse_pattern_type(state)
+        {{:typed_pattern, vm, [name, type_ast]}, state}
+
       %Token{type: :at} ->
         state = advance(state)
         {inner, state} = parse_expr(state, 0)
@@ -2727,6 +2748,93 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp maybe_wrap_as(pattern, state), do: {pattern, state}
+
+  # The type annotation of a typed pattern (`n: Int`, `rest: String | Bool`).
+  #
+  # This is NOT `parse_type_expr/1`, and the difference is load-bearing. A match
+  # arm is `pattern -> body`, and `parse_match_arm_tail/2` expects that `->`. But
+  # `parse_type_arrow/1` is greedy: given `n: Int -> 1` it would read `Int -> 1` as
+  # a FUNCTION TYPE, swallow the arm's arrow, and parse the body `1` as a codomain.
+  # So a pattern annotation must not absorb a top-level `->`.
+  #
+  # Members are therefore parsed with `parse_type_atom/1` (`Name`, `Name(args)`,
+  # `(T)`), which never consumes an arrow — the same restricted type grammar GADT
+  # constructor signatures use. A function-typed annotation is consequently not
+  # expressible here; that is out of scope (union members must be ground types).
+  defp parse_pattern_type(state) do
+    {first, state} = parse_pattern_type_member(state)
+    {rest, state} = parse_pattern_type_members(state)
+
+    case rest do
+      [] -> {first, state}
+      _ -> {{:union_type, [], [first | rest]}, state}
+    end
+  end
+
+  defp parse_pattern_type_members(state) do
+    case peek(state) do
+      %Token{type: :bar} ->
+        state = advance(state) |> skip_newlines()
+        {member, state} = parse_pattern_type_member(state)
+        {rest, state} = parse_pattern_type_members(state)
+        {[member | rest], state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp parse_pattern_type_member(state) do
+    token = peek(state)
+
+    if literal_token?(token) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      # `parse_type_atom/1` alone stops at a bare `Name`/`Name(args)` and does not
+      # know about `.` — so a QUALIFIED member (`n: Std.Nat.Nat`) failed with a hard
+      # parse error (the `.` was left for `parse_match_arm_tail/2`, which expects
+      # `->` and got `:dot` instead), even though the exact same qualified name
+      # parses fine in ordinary parameter/return position via `parse_type_arrow/1`
+      # (`maybe_parse_type_projection/2`). Chain the SAME dot-projection logic here
+      # — deliberately NOT `maybe_parse_type_projection/2` itself, whose
+      # `Mod.Name(args)` branch also calls `maybe_parse_function_type/2` and would
+      # reintroduce exactly the arrow-swallowing hazard `parse_type_atom` was
+      # chosen to avoid (`n: Std.List.List(Int) -> 1` would otherwise absorb the
+      # arm's own `->` as a second application layer).
+      {atom, state} = parse_type_atom(state)
+      parse_pattern_type_projection(atom, state)
+    end
+  end
+
+  # As `maybe_parse_type_projection/2`, but stops at the qualified application —
+  # no `maybe_parse_function_type/2` call — so a pattern annotation never absorbs
+  # the arm's `->`. See `parse_pattern_type_member/1`.
+  defp parse_pattern_type_projection(inner, state) do
+    case peek(state) do
+      %Token{type: :dot} ->
+        state = advance(state)
+        attr_token = peek(state)
+        attr = to_string(attr_token.value)
+        state = advance(state)
+        node = {:attribute_access, [attribute: attr], [inner]}
+        parse_pattern_type_projection(node, state)
+
+      %Token{type: :lparen} ->
+        case qualified_type_name(inner) do
+          {:ok, name} ->
+            state = advance(state)
+            {params, state} = parse_type_atom_args(state)
+            state = expect(state, :rparen)
+            {{:function_call, [name: name, qualified: true], params}, state}
+
+          :error ->
+            {inner, state}
+        end
+
+      _ ->
+        {inner, state}
+    end
+  end
 
   # The tail of a match arm after its pattern has been parsed: optional `when`
   # guard, the `->`, and the body (or `impossible`). Factored out so with-clause
@@ -3910,9 +4018,15 @@ defmodule Cure.Compiler.Parser do
 
         {%Token{type: :lparen}, _} ->
           # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
-          # The full type-expression parser handles the arrow; the result is a plain
-          # type alias (`:type_annotation`).
-          {rhs, state} = parse_type_expr(state)
+          # The arrow ladder handles the arrow; the result is a plain type alias
+          # (`:type_annotation`).
+          #
+          # `parse_type_arrow/1`, NOT `parse_type_expr/1`: this branch has no
+          # bar-continuation logic of its own, so a stray `|` here is a parse error
+          # today. Routing it through the `|`-aware entry point would silently start
+          # accepting `type Endo = (Nat) -> Nat | X` as a union-typed alias RHS — a
+          # semantics change to this branch. Keep the strict, conservative behaviour.
+          {rhs, state} = parse_type_arrow(state)
           meta = [name: name, line: token.line, col: token.col]
           meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
           {{:type_annotation, meta, [rhs]}, state}
@@ -4351,6 +4465,7 @@ defmodule Cure.Compiler.Parser do
       name: "#{proto_name}.#{for_name}",
       protocol: proto_name,
       for: for_name,
+      for_type: for_type,
       line: token.line,
       col: token.col
     ]
@@ -5868,9 +5983,89 @@ defmodule Cure.Compiler.Parser do
 
   # -- Enhanced Type Expression Parser ----------------------------------------
 
-  # Replaces the simple version from Milestone 2.
-  # Handles: PascalCase, Type(A, B), A -> B, (A, B) -> C, {x: T | pred}
+  # Type-expression entry point. `|` binds LOOSER than `->`, so `A -> B | C` is
+  # `(A -> B) | C`. A leading `|` is permitted.
+  #
+  # Members are collected in SOURCE order; canonicalisation (flatten, dedupe,
+  # sort) is the elaborator's job — see `Cure.Elab.Union`.
   defp parse_type_expr(state) do
+    state =
+      case peek(state) do
+        %Token{type: :bar} -> advance(state) |> skip_newlines()
+        _ -> state
+      end
+
+    {first, state} = parse_union_first_member(state)
+    {rest, state} = parse_union_members(state)
+
+    case rest do
+      [] -> {first, state}
+      _ -> {{:union_type, [], [first | rest]}, state}
+    end
+  end
+
+  # The first candidate member of a possible union. A literal-shaped token is ONLY
+  # treated as a literal member if a `|` immediately follows — e.g. the `3` in
+  # `3 | String`. If no `|` follows, fall through to `parse_type_arrow/1` unchanged,
+  # so every existing non-union numeral-in-type-position use (`Bounded(3)`,
+  # `Bounded(1114112)`, `Equivalent(Int, 3, 3)`) keeps parsing to
+  # `{:variable, [scope: :local], "N"}` and keeps working through idx_to_core's
+  # existing numeric_index_value path.
+  defp parse_union_first_member(state) do
+    token = peek(state)
+    next = peek_at(state, 1)
+
+    if literal_token?(token) and match?(%Token{type: :bar}, next) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
+
+  # A subsequent member, reached only after a `|` has already been consumed — so,
+  # unlike the first member, we already KNOW we are inside a union. A literal-shaped
+  # token is unconditionally a literal member; no lookahead needed (this covers the
+  # `4` in `3 | 4`, which is not itself followed by another `|`).
+  defp parse_union_member(state) do
+    token = peek(state)
+
+    if literal_token?(token) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
+
+  # NOTE: no `skip_newlines` before peeking for `:bar`. That is deliberate — a
+  # newline terminates the type annotation, and skipping it would let the parser
+  # swallow the `|` of a following ADT variant.
+  defp parse_union_members(state) do
+    case peek(state) do
+      %Token{type: :bar} ->
+        state = advance(state) |> skip_newlines()
+        {member, state} = parse_union_member(state)
+        {rest, state} = parse_union_members(state)
+        {[member | rest], state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp literal_token?(%Token{type: t}), do: t in [:integer, :float, :string, :atom, :char, :bool]
+  defp literal_token?(_), do: false
+
+  defp literal_subtype(:integer), do: :integer
+  defp literal_subtype(:float), do: :float
+  defp literal_subtype(:string), do: :string
+  defp literal_subtype(:atom), do: :symbol
+  defp literal_subtype(:char), do: :char
+  defp literal_subtype(:bool), do: :boolean
+
+  # The arrow ladder. Handles: PascalCase, Type(A, B), A -> B, (A, B) -> C.
+  # Callers that must NOT absorb a `|` (arrow codomains, the ADT alias-RHS probe)
+  # call this directly rather than `parse_type_expr/1`.
+  defp parse_type_arrow(state) do
     token = peek(state)
 
     case token.type do
@@ -5885,7 +6080,7 @@ defmodule Cure.Compiler.Parser do
         case peek(state) do
           %Token{type: :arrow} ->
             state = advance(state)
-            {ret, state} = parse_type_expr(state)
+            {ret, state} = parse_type_arrow(state)
             binders = Enum.map(inner, &elem(&1, 0))
             doms = Enum.map(inner, &elem(&1, 1))
 
@@ -5931,7 +6126,7 @@ defmodule Cure.Compiler.Parser do
           match?(%Token{type: :arrow}, peek(state)) ->
             # A -> B  (unary function type)
             state = advance(state)
-            {ret, state} = parse_type_expr(state)
+            {ret, state} = parse_type_arrow(state)
             base = {:variable, [scope: :local], base_name}
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
@@ -5955,10 +6150,49 @@ defmodule Cure.Compiler.Parser do
         node = {:attribute_access, [attribute: attr], [inner]}
         maybe_parse_type_projection(node, state)
 
+      # `Mod.Name(args)` — a qualified type constructor applied to type arguments.
+      # The dotted projection above yields the qualified name; without this branch
+      # the trailing `(args)` dangled unconsumed, a hard parse error in a signature
+      # and a garbled `name: "unknown"` call in a `typealias` RHS. Only a chain of
+      # NAME attributes (not a numeric index projection like `p.1`) can head a type
+      # application; anything else leaves the `(` for the caller.
+      %Token{type: :lparen} ->
+        case qualified_type_name(inner) do
+          {:ok, name} ->
+            state = advance(state)
+            {params, state} = parse_type_param_list(state)
+            state = expect(state, :rparen)
+            ast = {:function_call, [name: name, qualified: true], params}
+            maybe_parse_function_type(state, ast)
+
+          :error ->
+            {inner, state}
+        end
+
       _ ->
         {inner, state}
     end
   end
+
+  # A dotted chain of NAME attributes over a base variable is a qualified type
+  # name: `A.B.C` → "A.B.C". A chain containing a numeric projection (`p.1`) is a
+  # dependent index projection, not a type constructor, and returns `:error`.
+  defp qualified_type_name({:variable, _, n}) when is_binary(n), do: {:ok, n}
+
+  defp qualified_type_name({:attribute_access, meta, [inner]}) do
+    attr = Keyword.get(meta, :attribute)
+
+    if is_binary(attr) and attr =~ ~r/^[A-Za-z_]/ do
+      case qualified_type_name(inner) do
+        {:ok, prefix} -> {:ok, prefix <> "." <> attr}
+        :error -> :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp qualified_type_name(_), do: :error
 
   # Sigma(x: DomType, BodyType) — a dependent-pair type (design spec §4.7). The
   # body type may mention the binder `x`.
@@ -6021,7 +6255,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {ret, state} = parse_type_expr(state)
+        {ret, state} = parse_type_arrow(state)
 
         params =
           case left do
@@ -6322,19 +6556,66 @@ defmodule Cure.Compiler.Parser do
     # the old placement unparseable — and therefore un-migratable — so we mirror
     # the `if`→`pickup` path (emit a deprecation event, keep the decorator node)
     # and let `cure migrate`'s @group-hoist rule relocate it to the canonical spot.
-    if dec_name in @module_level_decorators do
-      case peek(state) do
-        %Token{type: :keyword, value: :mod} ->
-          {mod_ast, state} = parse_module(state)
-          {attach_decorator(mod_ast, dec_name, args), state}
+    # `@edition("YYYY")` is a standalone file-leading pragma, not a decorator
+    # that attaches to a following declaration. It must appear before any
+    # substantive statement; a misplaced one is a HARD parse error (stricter
+    # than @group's soft-deprecation path, because the edition selects the
+    # keyword set and cannot be honoured once parsing is underway). A
+    # well-placed pragma carries its edition value on the {:decorator, …} node's
+    # args (the "2026" string literal).
+    if dec_name == "edition" do
+      # Placement first (F1/F3: must be file-leading; a second pragma is no longer
+      # leading), then argument validation (F7: must be a "YYYY" string literal, not
+      # an unquoted int / non-year string / bare pragma). Mark the file as past its
+      # leading position afterwards so a subsequent `@edition` is caught as misplaced.
+      state =
+        cond do
+          not file_leading?(state) ->
+            add_error(state, {:edition_pragma_placement, token.line, token.col})
 
-        _ ->
-          state = emit_group_placement_deprecation(state, token, dec_name)
-          ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
-          {ast, state}
-      end
+          not valid_edition_pragma_arg?(args) ->
+            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+
+          not single_line_edition_pragma?(token, args) ->
+            # Canonical pragma is a single line. The pre-parse resolver
+            # (Cure.Edition.pragma_edition) reads the pragma with a single-line
+            # regex, so a multi-line pragma is invisible to it — honouring it here
+            # would lex under the resolver's (default) edition while accepting a
+            # different declared one (F1, audit iteration 4). Reject it as malformed.
+            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+
+          not known_edition_pragma_arg?(args) ->
+            # Well-formed "YYYY" but not a minted edition. The compile entrypoints
+            # (compiler.ex compile_string/compile_and_load) resolve the edition via
+            # Cure.Edition.resolve BEFORE lex/parse and already reject a typo there,
+            # so on that path this branch never fires. It remains the allow-list
+            # gate for DIRECT Parser.parse callers that skip resolve_edition
+            # (detect_app, parse_source) — spec §3.1 ("a typo'd edition must fail
+            # loudly") / §3.3 ("its argument is validated as an edition").
+            add_error(state, {:edition_pragma_unknown, token.line, token.col})
+
+          true ->
+            state
+        end
+
+      state = %{state | seen_stmt?: true}
+      ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+      {ast, state}
     else
-      parse_at_attach(state, token, dec_name, args)
+      if dec_name in @module_level_decorators do
+        case peek(state) do
+          %Token{type: :keyword, value: :mod} ->
+            {mod_ast, state} = parse_module(state)
+            {attach_decorator(mod_ast, dec_name, args), state}
+
+          _ ->
+            state = emit_group_placement_deprecation(state, token, dec_name)
+            ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+            {ast, state}
+        end
+      else
+        parse_at_attach(state, token, dec_name, args)
+      end
     end
   end
 
@@ -6373,6 +6654,15 @@ defmodule Cure.Compiler.Parser do
         {prim_ast, state} = parse_primitive_def(state)
         prim_ast = attach_decorator(prim_ast, dec_name, args)
         {prim_ast, state}
+
+      # `@prelude typealias Name = RHS` attaches the decorator to the
+      # `{:type_annotation}` synonym node (see attach_decorator's clause). Used so
+      # a transparent alias like `String = List(Char)` can join the implicit
+      # prelude at its definition site.
+      %Token{type: :keyword, value: :typealias} ->
+        {ta_ast, state} = parse_typealias(state)
+        ta_ast = attach_decorator(ta_ast, dec_name, args)
+        {ta_ast, state}
 
       _ ->
         # Standalone decorator or property
@@ -6430,6 +6720,12 @@ defmodule Cure.Compiler.Parser do
           end
 
         {:function_def, meta ++ decoration, body}
+
+      # `@prelude typealias Name = RHS` — a transparent type synonym. Thread the
+      # decorator into the `{:type_annotation}` meta so program.ex's prelude
+      # discovery can see it (mirrors the `{:container}`/`{:indexed_type}` clauses).
+      {:type_annotation, meta, rhs} ->
+        {:type_annotation, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), rhs}
 
       other ->
         other
@@ -6761,6 +7057,9 @@ defmodule Cure.Compiler.Parser do
 
   defp peek(%{tokens: tokens, pos: pos}), do: Enum.at(tokens, pos)
 
+  # Look n tokens past the current position (peek_ahead(state, 0) == peek(state)).
+  defp peek_ahead(%{tokens: tokens, pos: pos}, n), do: Enum.at(tokens, pos + n)
+
   defp peek_at(%{tokens: tokens, pos: pos}, offset) do
     idx = pos + offset
     if idx >= 0 and idx < length(tokens), do: Enum.at(tokens, idx), else: nil
@@ -6807,6 +7106,75 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :dedent} -> advance(state)
       _ -> state
+    end
+  end
+
+  # File-leading = no substantive (non-decorator, non-comment) top-level
+  # statement has yet been consumed. `@edition` must be the first thing in a
+  # file (comments/blanks aside); this flag is what the pragma-placement check
+  # in parse_at/1 reads.
+  defp file_leading?(state), do: not state.seen_stmt?
+
+  # A well-formed `@edition` argument is exactly one string literal holding a
+  # 4-digit year (matching Cure.Edition's pre-parse `pragma_capture` regex).
+  # Anything else — unquoted int, non-year string, missing arg — is malformed.
+  defp valid_edition_pragma_arg?([{:literal, meta, val}]) do
+    # `\A..\z` (not `^..$`): `$` also matches just before a trailing newline, so
+    # `^\d{4}$` would accept "2026\n". A pragma literal has no embedded newline
+    # today, so this is belt-and-suspenders — but the intent is exactly-4-digits.
+    Keyword.get(meta, :subtype) == :string and is_binary(val) and
+      Regex.match?(~r/\A\d{4}\z/, val)
+  end
+
+  defp valid_edition_pragma_arg?(_), do: false
+
+  # A well-formed pragma arg whose value is a KNOWN edition (allow-list membership
+  # via Cure.Edition — the single source of truth). Presupposes the format check
+  # (`valid_edition_pragma_arg?`) already passed; a non-known "YYYY" string is an
+  # :edition_pragma_unknown error rather than a silent accept.
+  defp known_edition_pragma_arg?([{:literal, _meta, val}]) when is_binary(val),
+    do: Cure.Edition.valid?(val)
+
+  defp known_edition_pragma_arg?(_), do: false
+
+  # The canonical `@edition("YYYY")` pragma is a single line: the string literal
+  # sits on the same line as the `@`. A pragma split across lines is invisible to
+  # the single-line pre-parse resolver (Cure.Edition.pragma_edition), so it must
+  # not be honoured here (F1). Presupposes valid_edition_pragma_arg? passed, so
+  # args is a one-element literal list; a non-literal arg is treated as single-line
+  # (it will already have failed the format check).
+  defp single_line_edition_pragma?(token, [{:literal, meta, _}]),
+    do: Keyword.get(meta, :line) == token.line
+
+  defp single_line_edition_pragma?(_token, _args), do: true
+
+  # Mark that a substantive top-level statement is about to be parsed. Comments
+  # are NOT substantive. A decorator prefix (`:at`) is substantive UNLESS it is a
+  # leading `@edition(...)` pragma — every other decorator (`@extern`, `@derive`,
+  # `@builtin`, `@group`, ...) leads a real definition and must flip the flag, so
+  # an `@edition` that follows a decorated definition is correctly seen as
+  # misplaced (audit F1). Called just before a top-level `parse_expr`, so the
+  # flag is set BEFORE descending into a module body, letting an in-body
+  # `@edition` be detected as misplaced.
+  defp mark_seen_if_stmt(state) do
+    case peek(state) do
+      %Token{type: type} when type in [:line_comment, :doc_comment] ->
+        state
+
+      %Token{type: :at} ->
+        if edition_pragma_next?(state), do: state, else: %{state | seen_stmt?: true}
+
+      _ ->
+        %{state | seen_stmt?: true}
+    end
+  end
+
+  # True when the upcoming `@name` decorator is specifically `@edition` — the one
+  # non-substantive decorator (a file-leading pragma, not a definition prefix).
+  defp edition_pragma_next?(state) do
+    case peek_ahead(state, 1) do
+      %Token{value: v} -> to_string(v) == "edition"
+      _ -> false
     end
   end
 

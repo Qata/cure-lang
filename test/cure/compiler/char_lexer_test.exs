@@ -27,6 +27,16 @@ defmodule Cure.Compiler.CharLexerTest do
     assert [?\n] = char_tokens(~S"fn f() = '\n'")
   end
 
+  test "an unrecognized escape is a hard error, not a silently dropped backslash" do
+    # Before the fix, `'\r'` fell through to `decode_char_at`, which read the byte
+    # AFTER the backslash literally — silently yielding the codepoint for `r` (114)
+    # instead of a carriage return, with no diagnostic. That corruption then
+    # round-tripped stably as `'r'`. Cure recognizes only `\n \t \\ \' \0`; any
+    # other escape must error rather than miscompile.
+    assert {:error, {:invalid_char_escape, _, _}} = Lexer.tokenize(~S"fn f() = '\r'", emit_events: false)
+    assert {:error, {:invalid_char_escape, _, _}} = Lexer.tokenize(~S"fn f() = '\z'", emit_events: false)
+  end
+
   test "a truncated multi-byte tail at EOF is an unterminated-char error, not a crash" do
     # Opening quote then a lone UTF-8 lead byte, no closing quote.
     assert {:error, {:unterminated_char, _, _}} = Lexer.tokenize(<<"fn f() = '", 0xF0>>)

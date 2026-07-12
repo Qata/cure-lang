@@ -165,14 +165,37 @@ defmodule Cure.CLI.MigrateCliTest do
     assert File.read!(f) == before
   end
 
-  test "--strict promotes a migration warning to an error and writes nothing", %{dir: dir} do
+  test "--strict promotes a fixable-tier migration warning to an error and writes nothing",
+       %{dir: dir} do
+    # Spec §8 (Task 11): --strict now promotes only FIXABLE-tier
+    # (:machine/:review) warnings, replacing the old "any warning blocks"
+    # contract. The `if/then/else` here fires the :machine `:W_if_elif_pickup`
+    # rule, so it is promoted to a {:strict_violation, _} error.
     f = Path.join(dir, "a.cure")
     File.write!(f, "mod A\nfn f(x: Int) -> Int = if x > 0 then 1 else 2\n")
     {_, 0} = System.cmd("git", ["-C", dir, "add", "a.cure"])
     {_, 0} = System.cmd("git", ["-C", dir, "commit", "-qm", "x"])
     before = File.read!(f)
 
-    assert {:error, {:strict_warnings, [^f]}} = CLI.cmd_migrate([f], strict: true)
+    assert {:error, {:strict_violation, violators}} = CLI.cmd_migrate([f], strict: true)
+    assert Enum.any?(violators, fn {p, ids} -> p == f and :W_if_elif_pickup in ids end)
+    assert File.read!(f) == before
+  end
+
+  test "--strict does NOT promote a :manual warning — it stays a block, not a strict error",
+       %{dir: dir} do
+    # Spec §8: a lone :manual warning (a removed-module reference) is never
+    # promoted by --strict. It is reported through the ordinary :blocked path
+    # (phase-2 refusal), never as {:strict_violation, _}.
+    f = Path.join(dir, "m.cure")
+    File.write!(f, "mod M\n  use Std.Refine\n  fn f(x: Int) -> Int = x\n")
+    {_, 0} = System.cmd("git", ["-C", dir, "add", "m.cure"])
+    {_, 0} = System.cmd("git", ["-C", dir, "commit", "-qm", "x"])
+    before = File.read!(f)
+
+    assert {:error, {:blocked, blocked}} = CLI.cmd_migrate([f], strict: true)
+    assert Enum.any?(blocked, fn {p, ids} -> p == f and :W_removed_module in ids end)
+    refute match?({:error, {:strict_violation, _}}, CLI.cmd_migrate([f], strict: true))
     assert File.read!(f) == before
   end
 

@@ -35,6 +35,20 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 
+  test "the kind universe `Type` in an implicit binder is not lowercased" do
+    # `{a: Type}` is a dependently-typed implicit parameter: `a` is the binder,
+    # `Type` its kind (the universe). `Type` is a built-in sort, not a free type
+    # variable — there is no reading of it as a user variable — yet it is absent
+    # from `Cure.Types.Env`'s `types` map, so without an explicit ctx seed the
+    # rule downgrades it to a distinct free var `type`, corrupting what `a` binds
+    # against. This shape pervades the dependently-typed stdlib (vector, sigma,
+    # equivalent, …); it must be left untouched.
+    {out, warns} = migrate("mod M\nfn f({a: Type}, x: a) -> a = x\n", "kind.cure")
+    assert out =~ "{a: Type}"
+    refute out =~ "type"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
   test "T and t in the same signature freshen rather than merge" do
     {out, _} = migrate("mod M\nfn f(x: T, y: t) -> T = x\n", "c.cure")
     # every occurrence of the freshened `T` binder becomes `t1` consistently...
@@ -54,5 +68,278 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert out =~ "y: t,"
     assert out =~ "z: t1)"
     refute out =~ "T"
+  end
+
+  test "a renamed type var is also renamed where it recurs in the body (let annotation)" do
+    # The binder `T` is bound by the signature and referenced again in a body
+    # `let y: T = x` type annotation. Renaming only the signature leaves the
+    # body annotation dangling on an unbound `T`; the rename must propagate.
+    {out, _} = migrate("mod M\nfn id(x: T) -> T =\n  let y: T = x\n  y\n", "f.cure")
+    assert out =~ "x: t"
+    assert out =~ "-> t"
+    assert out =~ "let y: t ="
+    refute out =~ "T"
+  end
+
+  test "an implicit type-parameter binder is renamed in sync with its references" do
+    # `{T: Type}` introduces the type variable via the param NAME `T`. Renaming
+    # only the references (`x: T`, `-> T`) while leaving the binder spelled `T`
+    # leaves those references bound to nothing — a working file turned broken
+    # that the reparse-only verify still accepts. Binder and references must
+    # move together.
+    {out, _} = migrate("mod M\nfn id({T: Type}, x: T) -> T = x\n", "impl.cure")
+
+    # Reparse and pull the implicit binder name and the reference names back out.
+    {:ok, toks} = Lexer.tokenize(out, file: "impl.cure", emit_events: false)
+    {:ok, ast} = Parser.parse(toks, file: "impl.cure", emit_events: false)
+    fdef = find_fn(ast)
+    params = Keyword.get(elem(fdef, 1), :params)
+    return_type = Keyword.get(elem(fdef, 1), :return_type)
+
+    [{:param, binder_meta, binder_name}, {:param, xmeta, _}] = params
+    assert Keyword.get(binder_meta, :implicit), "the implicit param lost its :implicit flag"
+    {:variable, _, xtype} = Keyword.get(xmeta, :type)
+    {:variable, _, rtype} = return_type
+
+    # All three must be the SAME (lowercased) name — no binder/reference desync.
+    assert binder_name == xtype
+    assert binder_name == rtype
+    assert binder_name == String.downcase(binder_name)
+  end
+
+  test "a freshened signature binder avoids a distinct lowercase type var used only in the body" do
+    # `T` in the signature lowercases to `t`, but the body already uses a
+    # distinct free type var `t` in a `let` annotation. Freshening consulted
+    # only signature names, so `T`→`t` silently MERGED onto the body's `t` —
+    # violating the rule's own "T and t freshen rather than merge" guarantee.
+    # The freshener must see the body's `t` and pick `t1`, leaving body `t`.
+    {out, _} = migrate("mod M\nfn f(x: T) -> T =\n  let y: t = g(x)\n  y\n", "bodyfresh.cure")
+    assert out =~ "x: t1"
+    assert out =~ "-> t1"
+    assert out =~ "let y: t ="
+    refute out =~ "T"
+  end
+
+  # Drives the real `cure migrate` path (`run_to_fixpoint` runs proto_to_interface
+  # AND uppercase_type_var together), reprinting the converged AST.
+  defp migrate_fixpoint(src, file) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: file, trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: file, emit_events: false)
+
+    {:ok, final, _warns} =
+      Migrate.run_to_fixpoint(Cure.Compiler.Trivia.attach(ast, trivia), edition: "2026")
+
+    Printer.quoted_to_string(final)
+  end
+
+  test "a proto/interface HEAD type var lowercases in lockstep with its method bodies" do
+    # The rule lowercased type vars in method signatures but never touched the
+    # proto/interface HEAD's own type-parameter binder, so `proto Foo(T)` migrated
+    # to `interface Foo(T)` (head `T`) with a body `fn f(a: t) -> t` (body `t`):
+    # the binder desynced from every use. Head and body must move together.
+    out = migrate_fixpoint("proto Foo(T)\n  fn f(a: T) -> T\n", "iface.cure")
+
+    assert out =~ ~r/interface Foo\(t\)/
+    assert out =~ "a: t"
+    assert out =~ "-> t"
+    refute out =~ "T"
+  end
+
+  test "an impl HEAD (for-type + where-constraint) lowercases in lockstep with its body" do
+    # The impl head carries its type vars in `for_type` (`List(T)`) and
+    # `constraints` (`Ord(T)`) — meta-borne expressions the rule skipped, leaving
+    # the head uppercase while the method body lowercased.
+    out =
+      migrate_fixpoint(
+        "impl Ord for List(T) where Ord(T)\n  fn compare(a: List(T), b: List(T)) -> Int = 0\n",
+        "impl.cure"
+      )
+
+    assert out =~ "List(t)"
+    assert out =~ "Ord(t)"
+    refute out =~ "List(T)"
+    refute out =~ "Ord(T)"
+  end
+
+  test "a class type var stays in lockstep with EVERY method even when it collides with a local var in one" do
+    # The head freshens `T` against every var the WHOLE body uses, but each method
+    # re-derived its own rename against only ITS signature. So when `T`'s lowercase
+    # form `t` is taken by a local in ONE method (`f`), the head freshened to `t1`
+    # while a method WITHOUT that local (`g`) independently picked `t` — desyncing
+    # `g`'s class-param uses from the head binder (and colliding onto `f`'s
+    # unrelated `t`). Every class-param use must equal the head binder.
+    out =
+      migrate_fixpoint("proto Foo(T)\n  fn f(x: t) -> T\n  fn g(x: T) -> T\n", "collide.cure")
+
+    assert out =~ ~r/interface Foo\(t1\)/
+    # g's class-param uses track the head binder t1, not the unrelated t
+    assert out =~ ~r/fn g\(x: t1\) -> t1/
+    # f's class-param return is t1; its distinct local x stays t
+    assert out =~ ~r/fn f\(x: t\) -> t1/
+  end
+
+  defp find_fn(ast) do
+    ast
+    |> flatten_nodes()
+    |> Enum.find(fn
+      {:function_def, _, _} -> true
+      _ -> false
+    end)
+  end
+
+  defp flatten_nodes({_tag, _meta, kids} = node) when is_list(kids) do
+    [node | Enum.flat_map(kids, &flatten_nodes/1)]
+  end
+
+  defp flatten_nodes(list) when is_list(list), do: Enum.flat_map(list, &flatten_nodes/1)
+  defp flatten_nodes(other), do: [other]
+
+  test "a selectively-imported type constructor is left alone, not lowercased" do
+    # `build_ctx` never inspected `{:import, …}` nodes, so a `use`-imported type
+    # constructor was absent from ctx and UppercaseTypeVar misread it as a free
+    # type variable — rewriting `Vec` to the unbound `vec`, a corruption the
+    # reprint-only verify accepts and `cure migrate` would write to disk.
+    {out, warns} = migrate("mod M\nuse Std.Vector.{Vec}\nfn f(x: Vec) -> Vec = x\n", "imp.cure")
+    assert out =~ "x: Vec"
+    assert out =~ "-> Vec"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a locally-declared primitive type is left alone, not lowercased" do
+    # `collect_type_names` whitelisted only :struct/:enum, so `primitive Word`'s
+    # name never entered ctx and `Word` was rewritten to `word`.
+    {out, warns} = migrate("mod M\nprimitive Word\nfn w(x: Word) -> Word = x\n", "prim.cure")
+    assert out =~ "x: Word"
+    assert out =~ "-> Word"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "an opaque type name is left alone, not lowercased" do
+    {out, warns} = migrate("mod M\nopaque type Handle\nfn h(x: Handle) -> Handle = x\n", "op.cure")
+    assert out =~ "x: Handle"
+    assert out =~ "-> Handle"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a file containing an opaque type migrates instead of aborting the whole run" do
+    # The opaque type is untouched; the only trigger is the legitimate `use Std.Eq`
+    # module rename. Previously the whole-file verify reprint could not render the
+    # opaque container, so `run_to_fixpoint` aborted with a spurious
+    # {:verify_failed, _} blamed on an innocent rule.
+    out = migrate_fixpoint("mod M\nopaque type Handle\nfn f(x: Int) -> Int = x\n", "opfix.cure")
+    assert out =~ "opaque type Handle"
+    assert out =~ "fn f(x: Int) -> Int = x"
+  end
+
+  test "a renamed type var is also renamed in a body type application" do
+    # `empty_of(T)` in the body passes the bound type var as a type argument;
+    # it must track the signature rename to `t`, not stay `T`.
+    {out, _} = migrate("mod M\nfn wrap(x: T) -> List(T) =\n  cons(x, empty_of(T))\n", "g.cure")
+    assert out =~ "x: t"
+    assert out =~ "List(t)"
+    assert out =~ "empty_of(t)"
+    refute out =~ "T"
+  end
+
+  test "a declared nullary data constructor used as an index is left alone" do
+    # `KA` is a nullary variant of the enum `K`, and appears as an *argument*
+    # of a type application (`Pair(Int, KA)`) exactly as an optic kind index
+    # like `Optic(s, a, LensKind)` does. It parses as a bare `{:variable}` node
+    # indistinguishable from a free type var, so it only stays untouched if
+    # `build_ctx/1` seeds this file's declared *constructor* names, not just
+    # its declared *type* names.
+    src = "mod M\ntype K = KA | KB\nfn f(x: Pair(Int, KA)) -> Int = 0\n"
+    {out, warns} = migrate(src, "ctor.cure")
+    assert out =~ "KA"
+    refute out =~ "ka"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a declared opaque type is left alone" do
+    # `opaque type Counter` has no body, so it is a `container_type: :opaque`
+    # node. `build_ctx/1` must collect opaque type names alongside struct/enum
+    # ones, or the opaque handle used in a signature is misread as a type var.
+    src = "mod M\nopaque type Counter\nfn f(x: Counter) -> Counter = x\n"
+    {out, warns} = migrate(src, "opaque.cure")
+    assert out =~ "x: Counter"
+    assert out =~ "-> Counter"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a BEAM/container built-in type (Pid) is left alone" do
+    # `Pid`/`Ref`/`Binary`/`Bitstring`/`Map`/`Tuple`/`Nat` are real Cure types
+    # (never free type variables), so — like `Type` — the lint's owned
+    # `@builtin_type_names` set must list them explicitly, or every signature that
+    # mentions them warns spuriously and `cure migrate --all` would corrupt them
+    # (`Pid` -> `pid`).
+    for ty <- ~w(Pid Ref Binary Bitstring Map Tuple Nat) do
+      src = "mod M\nfn f(x: #{ty}) -> #{ty} = x\n"
+      {out, warns} = migrate(src, "builtin.cure")
+      assert out =~ "x: #{ty}", "#{ty} should be left as-is"
+      refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var)),
+             "#{ty} should not warn"
+    end
+  end
+
+  test "an imported type or constructor (from `use Std.X`) is left alone" do
+    # `Z` is `Std.Nat`'s zero constructor (`type Nat = Z | S(Nat)`), used here as
+    # an index. It is neither a builtin nor declared in THIS file — only the
+    # imported module knows it — so `build_ctx/1` must resolve `use Std.Nat` and
+    # read its exported type/constructor names, or `Z` is misread as a free type
+    # variable and lowercased to `z`.
+    src = "mod M\nuse Std.Nat\nfn f(v: Pair(Int, Z)) -> Int = 0\n"
+    {out, warns} = migrate(src, "imported.cure")
+    assert out =~ "Z"
+    refute out =~ "Pair(Int, z)"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "an auto-prelude constructor used with no `use` statement is left alone" do
+    # `proof.cure` references `Nat`/`Z`/`S` with NO import node — it gets them
+    # from the elaborator's implicit auto-prelude (`Std.Nat` et al. imported into
+    # every module). `build_ctx/1` must seed the auto-prelude's exported names
+    # unconditionally, or `Z` in a file that never wrote `use Std.Nat` is misread
+    # as a free type var and lowercased to `z`.
+    src = "mod M\nfn f(v: Pair(Int, Z)) -> Int = 0\n"
+    {out, warns} = migrate(src, "auto_prelude.cure")
+    assert out =~ "Z"
+    refute out =~ "Pair(Int, z)"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  @tag :tmp_dir
+  test "an imported USER-module constructor (non-Std sibling) is left alone", %{tmp_dir: dir} do
+    # The fix must generalise past `Std.*`. `MyApp.Kinds` is a USER module with
+    # NO name→path convention — Cure resolves user modules only by co-compiling
+    # all inputs together, a registry this per-file lint lacks — so the only
+    # handle is a sibling `.cure` file next to the consumer, matched by its
+    # declared `mod` name. Here `KA` is a constructor of `MyApp.Kinds`, used as a
+    # type-application index; with the sibling present on disk it must resolve to
+    # a real name and NOT be lowercased to `ka`.
+    File.write!(Path.join(dir, "kinds.cure"), "mod MyApp.Kinds\ntype K = KA | KB\n")
+
+    src = "mod Consumer\nuse MyApp.Kinds\nfn f(v: Pair(Int, KA)) -> Int = 0\n"
+    {out, warns} = migrate(src, Path.join(dir, "consumer.cure"))
+
+    assert out =~ "KA"
+    refute out =~ "Pair(Int, ka)"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  @tag :tmp_dir
+  test "an unresolvable user import does NOT blanket-suppress — real type vars still warn",
+       %{tmp_dir: dir} do
+    # Guards against the resolution being a no-op that merely suppresses every
+    # uppercase name. The consumer imports `MyApp.Kinds`, but NO sibling declares
+    # that module (only an unrelated `Other` sits in the directory), so `KA` is
+    # genuinely unknown and MUST still warn. If this ever goes quiet, the fix has
+    # degenerated into "ignore all uppercase names near a user import".
+    File.write!(Path.join(dir, "other.cure"), "mod Other\ntype Q = QA | QB\n")
+
+    src = "mod Consumer\nuse MyApp.Kinds\nfn f(v: Pair(Int, KA)) -> Int = 0\n"
+    {out, warns} = migrate(src, Path.join(dir, "consumer.cure"))
+
+    assert out =~ "Pair(Int, ka)"
+    assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 end

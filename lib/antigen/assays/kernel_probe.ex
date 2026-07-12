@@ -16,7 +16,6 @@ defmodule Antigen.Assays.KernelProbe do
   the term-well-formedness gate (like `check/verdict`, `serialize/decode`).
   """
   alias Antigen.Challenge
-
   alias Cure.Core.{
     Kernel,
     Builtins,
@@ -32,6 +31,8 @@ defmodule Antigen.Assays.KernelProbe do
     Certificate,
     Validator
   }
+  alias Cure.Migrate.Rule
+  alias Cure.Compiler.{Lexer, Parser, Trivia}
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
@@ -553,6 +554,89 @@ defmodule Antigen.Assays.KernelProbe do
   defp evaluate(:cert_calls_nontuple_head),
     do: cert_terminates?({:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, 7, {:global, :f}}})
 
+  # -- editions-facility probes: the edition-derived keyword set and the migrate --
+  # fixpoint loop (Editions initiative), driven through their real public entry
+  # points (`Cure.Edition.retired_keywords/2`, `Cure.Migrate.run_to_fixpoint/2`).
+  # No term-shaped generator reaches this non-kernel migration surface.
+
+  # `retired_keywords/2` over a fixture rule set: a rule enforced AT the queried
+  # edition retires its keyword (`compare == :eq`), one enforced at a FUTURE edition
+  # does not yet (`:lt`), and an `enforced_in: nil` rule never does. Only "proto"
+  # qualifies at "2027".
+  defp evaluate(:edition_retired_keywords) do
+    rules = [
+      fixture_rule(:W_fx_proto, "2027", ["proto"]),
+      fixture_rule(:W_fx_future, "2099", ["impl"]),
+      fixture_rule(:W_fx_never, nil, ["receive"])
+    ]
+
+    Cure.Edition.retired_keywords("2027", rules)
+  end
+
+  # `run_to_fixpoint/2` on a two-rule chain whose second rule (append `:b`) is
+  # exposed only after the first (append `:a`) fires: convergence requires a
+  # re-scan pass, then a no-rewrite pass — driving `do_fixpoint`'s changing-pass →
+  # verify → recurse arm and its fixpoint-reached arm. Reports whether both marks
+  # landed.
+  defp evaluate(:migrate_fixpoint_converges) do
+    rules = [append_marker_rule(:b, "a", "b"), append_marker_rule(:a, nil, "a")]
+
+    case Cure.Migrate.run_to_fixpoint(fixpoint_ast(), rules: rules) do
+      {:ok, {:block, _m, ex}, _warns} ->
+        {Enum.any?(ex, &match?({:literal, _, "a"}, &1)),
+         Enum.any?(ex, &match?({:literal, _, "b"}, &1))}
+
+      other ->
+        other
+    end
+  end
+
+  # A minimal migration `Rule` fixture carrying only the fields `retired_keywords/2`
+  # reads (`enforced_in` + `retires_keywords`); its rewrite is inert.
+  defp fixture_rule(id, enforced_in, retires) do
+    %Rule{
+      id: id,
+      description: "fixture",
+      phase: :syntactic,
+      tier: :review,
+      since: "2026",
+      warning_template: "m",
+      enforced_in: enforced_in,
+      retires_keywords: retires,
+      detect_and_rewrite: fn _ast, _ctx -> :no_change end
+    }
+  end
+
+  # A `:machine`-tier fixture rule that appends the string literal `mark` to the
+  # top-level block once `needle` is present (`needle == nil` ⇒ unconditional),
+  # and only once — so the rule set reaches a genuine fixpoint.
+  defp append_marker_rule(id, needle, mark) do
+    %Rule{
+      id: id,
+      description: "fixture",
+      phase: :syntactic,
+      tier: :machine,
+      since: "2026",
+      warning_template: "m",
+      detect_and_rewrite: fn {:block, m, ex}, _ctx ->
+        has = needle == nil or Enum.any?(ex, &match?({:literal, _, ^needle}, &1))
+        already = Enum.any?(ex, &match?({:literal, _, ^mark}, &1))
+
+        if has and not already,
+          do: {:rewrite, {:block, m, ex ++ [{:literal, [subtype: :string], mark}]}},
+          else: :no_change
+      end
+    }
+  end
+
+  # A real, printable + reparseable whole-file AST (with trivia attached) for the
+  # fixpoint probe — the verify step reprints and reparses each changing pass.
+  defp fixpoint_ast do
+    {:ok, toks, trivia} = Lexer.tokenize("mod M\nfn f(x: Int) -> Int = 1\n", trivia: true)
+    {:ok, ast} = Parser.parse(toks, emit_events: false)
+    Trivia.attach(ast, trivia)
+  end
+
   # round-trip a term through the s-expression serializer.
   defp roundtrip(term), do: {term, Serialize.decode(IO.iodata_to_binary(Serialize.encode(term)))}
 
@@ -662,6 +746,12 @@ defmodule Antigen.Assays.KernelProbe do
   defp matches?(:occurs_bare_global, r), do: r == {:error, {:non_strictly_positive, :mkN}}
   defp matches?(:whnf_arity2_direct, r), do: r == {:nat_lit, 3}
   defp matches?(:whnf_nested_fuel_restore, r), do: r == {{:nat_lit, 3}, {:nat_lit, 5}}
+
+  # -- editions-facility oracles --
+  # Only the rule enforced at (≤) "2027" retires its keyword; future/nil rules do not.
+  defp matches?(:edition_retired_keywords, r), do: r == ["proto"]
+  # The chained rule set converges with both marks appended (no divergence / verify abort).
+  defp matches?(:migrate_fixpoint_converges, r), do: r == {true, true}
 
   # every malformed body is soundly rejected (not certified terminating), never a crash.
   defp matches?(cert, r)

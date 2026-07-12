@@ -45,7 +45,11 @@ defmodule Cure.Compiler.DependentProofSurfaceTest do
     end
     """
 
-    assert {:error, {:type_error, [{:dependent_type_error, _message, _meta}]}} =
+    # `reflexive(Z)` proves `Equivalent(Nat, Z, Z)`, which the kernel's
+    # conversion check refuses to unify with the declared goal
+    # `Equivalent(Nat, Z, S(Z))`. The sole (dependent) pipeline surfaces that as
+    # a `conversion_failure` rather than the classic `dependent_type_error`.
+    assert {:error, {:codegen_error, {:conversion_failure, _lhs, _rhs}}} =
              Cure.Compiler.compile_and_load(src, emit_events: false)
   end
 end

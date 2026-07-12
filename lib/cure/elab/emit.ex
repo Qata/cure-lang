@@ -139,10 +139,26 @@ defmodule Cure.Elab.Emit do
       [
         {:attribute, @line, :module, module},
         {:attribute, @line, :export, exports}
-        | fn_forms
+        | no_auto_import_attr(exports) ++ fn_forms
       ]
     after
       Process.delete(:cure_emit_origins)
+    end
+  end
+
+  # A module that defines a function whose `{name, arity}` matches an Erlang
+  # auto-imported BIF (e.g. `size/1`, `byte_size/1`, `length/1` — common `@extern`
+  # wrapper or stdlib helper names) shadows that BIF. An unqualified call to it
+  # then trips `erl_lint`'s `call_to_redefined_bif` warning. Emit an explicit
+  # `-compile({no_auto_import, […]}).` so the local definition unambiguously wins
+  # and the warning is silenced — exactly how a hand-written Erlang module handles
+  # a BIF-named export. Safe here because every such wrapper's body is a *qualified*
+  # remote call (`:erlang.byte_size/1`, `:maps.size/1`), never an unqualified
+  # self-call, so re-binding the bare name to the local def cannot loop.
+  defp no_auto_import_attr(exports) do
+    case Enum.filter(exports, fn {name, arity} -> :erl_internal.bif(name, arity) end) do
+      [] -> []
+      bifs -> [{:attribute, @line, :compile, {:no_auto_import, bifs}}]
     end
   end
 
@@ -203,10 +219,33 @@ defmodule Cure.Elab.Emit do
 
   defp function_form(env, name) do
     case Env.get_def(env, name) do
-      %{body: {:extern, {mod, fun, _arity}}} -> extern_form(name, {mod, fun}, present_arity(env, name))
-      def -> real_function_form(name, def, env)
+      %{body: {:extern, {mod, fun, _arity}}} = def ->
+        extern_form(name, {mod, fun}, present_arity(env, name), extern_union_members(env, def))
+
+      def ->
+        real_function_form(name, def, env)
     end
   end
+
+  # The members of an `@extern`'s union return type, tagged with their constructor names,
+  # or nil when it does not return a union. Drives the discriminating wrapper below.
+  defp extern_union_members(env, %{type: pi, quantities: quantities}) do
+    case codomain_of(pi, length(quantities || [])) do
+      {:data, ukey, [], []} ->
+        if Cure.Elab.Union.union_family?(ukey) do
+          env
+          |> Cure.Elab.Union.members_of(ukey)
+          |> Enum.map(&Map.put(&1, :ctor, Cure.Elab.Union.ctor_key(ukey, &1)))
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp codomain_of(type, 0), do: type
+  defp codomain_of({:pi, _g, _dom, cod}, n), do: codomain_of(cod, n - 1)
+  defp codomain_of(type, _n), do: type
 
   # Wave-3: emit a direct Erlang remote call, mirroring codegen.ex:691-705 (NOT
   # calling it). Params are synthesized from the arity — a bodyless extern has no
@@ -218,11 +257,97 @@ defmodule Cure.Elab.Emit do
   # reaches the BEAM. `Declarations.check_extern_arity/2` rejects a literal that disagrees, so
   # the two agree by construction; reading the quantities here keeps that true by construction
   # rather than by convention.
-  defp extern_form(fn_atom, {mod, fun}, arity) do
+  defp extern_form(fn_atom, {mod, fun}, arity, union_members) do
     param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
     remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
-    {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [remote]}]}
+
+    body =
+      case union_members do
+        nil -> remote
+        members -> union_dispatch(remote, members)
+      end
+
+    {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [body]}]}
   end
+
+  # An `@extern` whose return type is an anonymous union: Erlang hands back an UNTAGGED
+  # value, so the boundary re-tags it. Guard on the raw result and inject the matching
+  # constructor, turning the FFI value into a real tagged union the moment it enters Cure.
+  #
+  # `Declarations.check_extern_not_union/2` has already established that the members are
+  # pairwise distinguishable, so exactly one clause can match. There is deliberately NO
+  # catch-all: if Erlang returns a shape outside the declared union, the extern's type was
+  # a lie, and a `CaseClauseError` naming the offending value is the honest outcome.
+  #
+  # Literal members are matched by EXACT VALUE and come first — they are strictly more
+  # specific than a type member's guard.
+  defp union_dispatch(remote, members) do
+    clauses =
+      members
+      |> Cure.Elab.Union.discrimination_order()
+      |> Enum.map(fn
+        %{payload: nil} = lit -> literal_clause(lit)
+        type -> type_clause(type)
+      end)
+
+    {:case, @line, remote, clauses}
+  end
+
+  # `R when R =:= <lit> -> :'Union<…>$<key>'` — a literal member is a NULLARY ctor, so it
+  # erases to the bare constructor atom with no payload.
+  defp literal_clause(%{key: key, ctor: ctor}) do
+    {:ok, _kind, value} = Cure.Elab.Union.literal_value(key)
+
+    guard = {:op, @line, :"=:=", {:var, @line, :R}, literal_form(value)}
+    {:clause, @line, [{:var, @line, :R}], [[guard]], [{:atom, @line, ctor}]}
+  end
+
+  # `R when is_integer(R) -> {:'Union<…>$Int', R}` — a type member is a 1-ary ctor, so it
+  # erases to a tagged 2-tuple carrying the raw value.
+  defp type_clause(%{ctor: ctor} = member) do
+    body = {:tuple, @line, [{:atom, @line, ctor}, {:var, @line, :R}]}
+
+    # The guard sequence is a CONJUNCTION. A class test alone is not always enough: it must
+    # never be WIDER than the member's value set, or the wrapper fabricates a value the
+    # author never asserted. `Nat` erases to a plain integer, but `is_integer` also accepts
+    # negatives — a raw -7 was being tagged Nat(-7). `Bounded(n)` (hence `Char`) is an
+    # integer confined to 0..n-1.
+    guards =
+      [class_test(member) | bound_tests(Cure.Elab.Union.value_bounds(member))]
+
+    {:clause, @line, [{:var, @line, :R}], [guards], [body]}
+  end
+
+  defp class_test(member) do
+    test = class_guard(Cure.Elab.Union.runtime_class(member))
+    {:call, @line, {:atom, @line, test}, [{:var, @line, :R}]}
+  end
+
+  defp bound_tests(nil), do: []
+
+  defp bound_tests({min, :infinity}),
+    do: [{:op, @line, :>=, {:var, @line, :R}, {:integer, @line, min}}]
+
+  defp bound_tests({min, max}),
+    do: [
+      {:op, @line, :>=, {:var, @line, :R}, {:integer, @line, min}},
+      {:op, @line, :<, {:var, @line, :R}, {:integer, @line, max}}
+    ]
+
+  # `is_boolean` strictly refines `is_atom`, and `Union.discrimination_order/1` puts it
+  # first — so `true`/`false` take the Bool clause and every other atom falls through to
+  # Atom. That is why `Bool | Atom` is admissible rather than a collision.
+  defp class_guard(:boolean), do: :is_boolean
+  defp class_guard(:atom), do: :is_atom
+  defp class_guard(:integer), do: :is_integer
+  defp class_guard(:float), do: :is_float
+  defp class_guard(:binary), do: :is_binary
+  defp class_guard(:list), do: :is_list
+
+  defp literal_form(v) when is_integer(v), do: {:integer, @line, v}
+  defp literal_form(v) when is_float(v), do: {:float, @line, v}
+  defp literal_form(v) when is_atom(v), do: {:atom, @line, v}
+  defp literal_form(v) when is_binary(v), do: {:string, @line, String.to_charlist(v)}
 
   defp real_function_form(name, %{body: body, quantities: quantities}, env) do
     qs = quantities || []
@@ -302,14 +427,16 @@ defmodule Cure.Elab.Emit do
 
       true ->
         case Enum.map(args, &lower(env, &1, ctx)) do
-          [] -> {:atom, @line, name}
-          forms -> {:tuple, @line, [{:atom, @line, name} | forms]}
+          [] -> {:atom, @line, otp_tag(name)}
+          forms -> {:tuple, @line, [{:atom, @line, otp_tag(name)} | forms]}
         end
     end
   end
 
   defp lower(env, {:case, scrut, _motive, branches}, ctx) do
-    {:case, @line, lower(env, scrut, ctx), Enum.map(branches, &branch_clause(env, &1, ctx))}
+    scrut_form = lower(env, scrut, ctx)
+    clauses = Enum.map(branches, &branch_clause(env, &1, ctx))
+    irrefutable_projection(scrut_form, clauses) || {:case, @line, scrut_form, clauses}
   end
 
   defp lower(_env, {:int_lit, n}, _ctx), do: {:integer, @line, n}
@@ -417,6 +544,31 @@ defmodule Cure.Elab.Emit do
   defp lower(env, {:effect_pure, a}, ctx), do: lower(env, a, ctx)
 
   defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
+
+  # A single-clause `case` whose one clause is a tuple pattern and whose body is
+  # exactly a variable bound by that pattern is an irrefutable field projection —
+  # e.g. the dictionary-method extraction the typeclass elaborator emits
+  # (`case Dict of {Comparable, Compare} -> Compare end`). Lowered as a `case`, the
+  # bound variable is "exported" from the case, and when that case sits inside an
+  # operator subexpression (`compare(x, y) == LessThan`, from `min`/`max`/`clamp`)
+  # `erl_lint` raises `export_var_subexpr`. Emit `erlang:element(Idx, Scrut)`
+  # instead: a pure call that binds nothing — same value, no warning, no needless
+  # case. Semantics-preserving because the match is irrefutable (single, total
+  # clause over a well-typed value).
+  defp irrefutable_projection(scrut_form, [
+         {:clause, _, [{:tuple, _, elems}], [], [{:var, _, v}]}
+       ]) do
+    case Enum.find_index(elems, &match?({:var, _, ^v}, &1)) do
+      nil ->
+        nil
+
+      idx ->
+        {:call, @line, {:remote, @line, {:atom, @line, :erlang}, {:atom, @line, :element}},
+         [{:integer, @line, idx + 1}, scrut_form]}
+    end
+  end
+
+  defp irrefutable_projection(_scrut_form, _clauses), do: nil
 
   # An emit-generated binder (lambda param `Fn<n>` / let binder `L<n>`) that never
   # appears in its lowered body — e.g. a catch-all `match` branch whose join-point
@@ -764,8 +916,8 @@ defmodule Cure.Elab.Emit do
 
     pattern =
       case present do
-        [] -> {:atom, @line, bool_atom_or_self(env, cname)}
-        _ -> {:tuple, @line, [{:atom, @line, cname} | present]}
+        [] -> {:atom, @line, otp_tag(bool_atom_or_self(env, cname))}
+        _ -> {:tuple, @line, [{:atom, @line, otp_tag(cname)} | present]}
       end
 
     {:clause, @line, [pattern], [], [body_form]}
@@ -851,4 +1003,17 @@ defmodule Cure.Elab.Emit do
   defp bool_atom_or_self(env, name) do
     if bool_ctor?(env, name), do: bool_atom(name), else: name
   end
+
+  # The OTP-conventional constructors erase to their lowercase BEAM atoms so a
+  # Cure `Result`/`Option` value is a native `{:ok, _}` / `{:error, _}` /
+  # `{:some, _}` / `:none` term — the shape Erlang, Elixir, and (critically)
+  # AtomVM FFI expect. `lib/std/core.cure` documents exactly this representation
+  # (`Ok(value) -> {:ok, value}`, `None() -> :none`). Applied at BOTH the
+  # construction and the pattern site so the tags agree. Every other constructor
+  # keeps its declared (PascalCase) tag; records stay tagged tuples `{:Point,…}`.
+  defp otp_tag(:Ok), do: :ok
+  defp otp_tag(:Error), do: :error
+  defp otp_tag(:Some), do: :some
+  defp otp_tag(:None), do: :none
+  defp otp_tag(name), do: name
 end

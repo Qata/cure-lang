@@ -64,12 +64,22 @@ defmodule Cure.Compiler.Printer do
   # block carries no trivia (the corpus fixpoint gate, and every file the plain
   # Printer sees) is byte-identical to before.
   defp render_program(exprs, meta, indent) do
+    nodes = flatten_top_level(exprs)
+
     body =
-      exprs
-      |> flatten_top_level()
+      nodes
       |> Enum.map(&render(&1, 0, indent))
       |> Enum.with_index()
-      |> Enum.map(fn {rendered, i} -> {rendered, i > 0} end)
+      # Rule 3 puts one blank between top-level items — EXCEPT a decorator hugs
+      # the item it decorates (no blank between them). The parser absorbs a
+      # decorator written directly above its `mod`/`def` into that node, so a
+      # decorator only survives as a standalone top-level sibling when a rule
+      # (e.g. group-hoist) relocates it; rendering it tight matches the absorbed
+      # form, so `print∘reparse∘print` is a fixpoint and `cure migrate` is
+      # text-idempotent instead of shedding a blank line on its second run.
+      |> Enum.map(fn {rendered, i} ->
+        {rendered, i > 0 and not match?({:decorator, _, _}, Enum.at(nodes, i - 1))}
+      end)
       |> join_statements("")
 
     body
@@ -219,6 +229,19 @@ defmodule Cure.Compiler.Printer do
   defp trivia_meta({_k, meta, _, _}) when is_list(meta), do: meta
   defp trivia_meta(_), do: []
 
+  # True when a node carries a `:leading` comment. Splicing such a node into an
+  # INLINE position (after `-> ` in a lambda) strands its `# c\n…` rendering
+  # mid-line, where the reparser reattaches the comment elsewhere — breaking
+  # reprint idempotence. Callers that render a body inline break to a fresh line
+  # when this is true.
+  defp has_leading?(node) do
+    case Keyword.get(trivia_meta(node), :leading) do
+      nil -> false
+      [] -> false
+      _ -> true
+    end
+  end
+
   # `:leading` items become full lines emitted before the node. The first line
   # takes the pad supplied by the parent join site; every subsequent line (and
   # the node itself) is re-padded here. Blank lines are emitted empty.
@@ -267,7 +290,16 @@ defmodule Cure.Compiler.Printer do
   defp trivia_lines({:comment, text, _, _}), do: ["# " <> text]
 
   defp trivia_lines({:doc_comment, text, _, _}) do
-    text |> String.split("\n") |> Enum.map(&("## " <> &1))
+    # A fenced doc token's text can carry trailing "\n"s — an artifact of its
+    # construction (an `### tail` opening-tail prepended over an empty body) and
+    # any genuine trailing blank body lines, which carry no meaning in a doc
+    # comment. Splitting them verbatim would emit spurious empty `## ` lines that
+    # reparse as extra doc comments, so drop every trailing newline first.
+    # Internal blank lines are preserved.
+    text
+    |> String.trim_trailing("\n")
+    |> String.split("\n")
+    |> Enum.map(&("## " <> &1))
   end
 
   defp comment_text({:comment, text, _, _}), do: "# " <> text
@@ -335,18 +367,33 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:binary_op, meta, [left, right]}, depth, indent) do
     op = Keyword.get(meta, :operator)
     op_str = operator_to_string(op)
-    "#{render(left, depth, indent)} #{op_str} #{render(right, depth, indent)}"
+    parent = op_prec(op)
+    left_s = operand_str(left, depth, indent, parent, :left)
+    right_s = operand_str(right, depth, indent, parent, :right)
+    "#{left_s} #{op_str} #{right_s}"
   end
 
   # -- Unary Operators -------------------------------------------------------
 
   defp to_string({:unary_op, meta, [operand]}, depth, indent) do
     op = Keyword.get(meta, :operator)
+    # A prefix operator binds at level 90 (see the precedence table below): its
+    # operand needs parentheses whenever it is a lower-precedence expression, or
+    # `-(x + 1)` would reprint as `-x + 1` (= `(-x) + 1`) and `not (a and b)` as
+    # `not a and b` (= `(not a) and b`) — both meaning-changing.
+    inner = operand_str(operand, depth, indent, {90, :right}, :right)
 
     case op do
-      :not -> "not #{render(operand, depth, indent)}"
-      :- -> "-#{render(operand, depth, indent)}"
-      _ -> "#{op}#{render(operand, depth, indent)}"
+      :not -> "not #{inner}"
+      # A leading `-` on the operand would abut into `--`, which the lexer reads
+      # as the start of an FSM transition (`-->`/`--|`) and fails on — so `-(-x)`
+      # must reprint as `- -x`, not `--x`. Separate only when the operand's own
+      # rendering starts with `-` (a nested unary minus / negative literal).
+      :- -> if String.starts_with?(inner, "-"), do: "- #{inner}", else: "-#{inner}"
+      # Word-spelled prefix operators (e.g. `bnot`) need a separating space, or
+      # `bnot a` reprints as the single identifier `bnota`. Only symbolic
+      # single-character operators like `-` may abut their operand.
+      _ -> "#{op}#{unary_sep(op)}#{inner}"
     end
   end
 
@@ -526,28 +573,32 @@ defmodule Cure.Compiler.Printer do
             "send #{render(target, depth, indent)}, #{render(message, depth, indent)}"
 
           _ ->
-            "#{name}(#{args_to_string(args, depth, indent)})"
+            "#{name}(#{call_args_to_string(args, depth, indent)})"
         end
 
       # FSM transition
       Keyword.get(meta, :from) != nil ->
         fsm_transition_to_string(meta, depth, indent)
 
-      # Pipe call
+      # Pipe call. `|>` binds loosest (level 10, left-assoc), so a left operand
+      # whose own precedence is lower — a bare `<-|` send, a conditional — must
+      # be parenthesised or the reprint reparses differently.
       Keyword.get(meta, :pipe) == true ->
+        pipe_parent = {10, :left}
+
         case args do
           [piped | rest] when rest != [] ->
-            "#{render(piped, depth, indent)} |> #{name}(#{args_to_string(rest, depth, indent)})"
+            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{call_args_to_string(rest, depth, indent)})"
 
           [piped] ->
-            "#{render(piped, depth, indent)} |> #{name}"
+            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}"
 
           [] ->
             name
         end
 
       true ->
-        "#{quote_if_reserved(name)}(#{args_to_string(args, depth, indent)})"
+        "#{quote_if_reserved(name)}(#{call_args_to_string(args, depth, indent)})"
     end
   end
 
@@ -564,14 +615,20 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:attribute_access, meta, [parent]}, depth, indent) do
     attr = Keyword.get(meta, :attribute)
-    "#{render(parent, depth, indent)}.#{attr}"
+    # Dot access binds at level 100 (highest); a lower-precedence base needs
+    # parens or `(a + b).x` reprints as `a + b.x` (= `a + (b.x)`).
+    "#{operand_str(parent, depth, indent, {100, :left}, :left)}.#{attr}"
   end
 
   # -- Range -----------------------------------------------------------------
 
   defp to_string({:range, meta, [left, right]}, depth, indent) do
     op = if Keyword.get(meta, :inclusive), do: "..=", else: ".."
-    "#{render(left, depth, indent)}#{op}#{render(right, depth, indent)}"
+    # Range binds at level 50 (non-associative); operands that bind looser need
+    # parens or `(a == b)..c` reprints as `a == b..c` (= `a == (b .. c)`).
+    parent = {50, :none}
+
+    "#{operand_str(left, depth, indent, parent, :left)}#{op}#{operand_str(right, depth, indent, parent, :right)}"
   end
 
   # -- Collections -----------------------------------------------------------
@@ -645,8 +702,17 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:lambda, meta, [body]}, depth, indent) do
     params = Keyword.get(meta, :params, [])
     params_str = Enum.map_join(params, ", ", fn {:param, _, name} -> name end)
-    body_str = lambda_body_to_string(body, depth, indent)
-    "fn(#{params_str}) -> #{body_str}"
+
+    if has_leading?(body) do
+      # A leading comment on the body can't ride inline after `-> ` — it would
+      # strand `# c\nbody` mid-line and drift to the file top on reparse. Break to
+      # an indented line so the comment stays attached to the body it precedes.
+      pad = String.duplicate(indent, depth + 1)
+      "fn(#{params_str}) ->\n" <> pad <> lambda_body_to_string(body, depth + 1, indent)
+    else
+      body_str = lambda_body_to_string(body, depth, indent)
+      "fn(#{params_str}) -> #{body_str}"
+    end
   end
 
   # -- Function Definition ---------------------------------------------------
@@ -705,8 +771,12 @@ defmodule Cure.Compiler.Printer do
   #
   # Any other value falls back to the ASCII operator form.
   defp to_string({:send, meta, [target, message]}, depth, indent) do
-    target_str = render(target, depth, indent)
-    message_str = render(message, depth, indent)
+    # The Melquiades send operator binds at level 8 (non-associative); operands
+    # that bind looser need parens or `(pid <-| msg) + 1` reprints as
+    # `pid <-| msg + 1` (= `pid <-| (msg + 1)`).
+    parent = {8, :none}
+    target_str = operand_str(target, depth, indent, parent, :left)
+    message_str = operand_str(message, depth, indent, parent, :right)
 
     case Keyword.get(meta, :melquiades_form, :ascii) do
       :unicode -> "#{target_str} ✉ #{message_str}"
@@ -923,6 +993,22 @@ defmodule Cure.Compiler.Printer do
       ": " <>
       render(dom_type, depth, indent) <>
       ", " <> render(body_type, depth, indent) <> ")"
+  end
+
+  # -- Typed pattern ----------------------------------------------------------
+
+  # `n: Int` in a match arm — binds `n` at the annotated type. The annotation may
+  # itself be a union (`rest: String | Bool`).
+  defp to_string({:typed_pattern, _meta, [name, type_ast]}, depth, indent) do
+    name <> ": " <> render(type_ast, depth, indent)
+  end
+
+  # -- Anonymous union type ---------------------------------------------------
+
+  # `Int | String`. Members print in SOURCE order — canonicalisation (sort, dedupe,
+  # flatten) happens in the elaborator, not here, so printing stays lossless.
+  defp to_string({:union_type, _meta, members}, depth, indent) do
+    Enum.map_join(members, " | ", &render(&1, depth, indent))
   end
 
   # -- GADT constructor signature --------------------------------------------
@@ -1151,8 +1237,157 @@ defmodule Cure.Compiler.Printer do
   defp operator_to_string(:=), do: "="
   defp operator_to_string(other), do: Atom.to_string(other)
 
+  # -- Precedence-aware parenthesisation -------------------------------------
+  #
+  # The parser is a Pratt parser (Cure.Compiler.Parser.Precedence). Reprinting
+  # must re-insert exactly the parentheses needed to recover the SAME parse — no
+  # more (over-parenthesising is ugly and breaks the print-fixpoint), no fewer
+  # (under-parenthesising silently changes meaning). The table below mirrors
+  # Precedence but is keyed by the operator ATOM the printer sees (`:+`) rather
+  # than the token type Precedence uses (`:plus`); the two MUST stay in
+  # agreement — any precedence change in the parser must be mirrored here.
+
+  # Render `child` as an operand of a parent operator of precedence `parent`
+  # (`{level, assoc}` or `:unknown`) on the given `side`, wrapping in parens only
+  # when the parse would otherwise change.
+  defp operand_str(child, depth, indent, parent, side) do
+    s = render(child, depth, indent)
+    if needs_parens?(child_prec(child), parent, side), do: "(#{s})", else: s
+  end
+
+  # An atomic/primary operand (variable, literal, call, access, …) never needs
+  # parens; a control-flow operand (`if`/`match`/lambda/assignment) always does.
+  defp needs_parens?(:atom, _parent, _side), do: false
+  defp needs_parens?(:lowest, _parent, _side), do: true
+  # Unknown parent operator: be conservative and parenthesise any compound child.
+  defp needs_parens?(_child, :unknown, _side), do: true
+
+  defp needs_parens?({clevel, _cassoc}, {plevel, passoc}, side) do
+    cond do
+      clevel < plevel -> true
+      clevel > plevel -> false
+      # Equal precedence: parens needed unless the child sits on the parent's
+      # associative side (`a - b - c` = `(a - b) - c`, so a left child of a
+      # left-assoc op needs none; its right child does).
+      true -> not associates?(passoc, side)
+    end
+  end
+
+  defp associates?(:left, :left), do: true
+  defp associates?(:right, :right), do: true
+  defp associates?(_assoc, _side), do: false
+
+  # Precedence of a child node, as it matters for operand parenthesisation.
+  defp child_prec({:binary_op, meta, _}) do
+    case op_prec(Keyword.get(meta, :operator)) do
+      :unknown -> :lowest
+      prec -> prec
+    end
+  end
+
+  defp child_prec({:unary_op, _meta, _}), do: {90, :right}
+  # Infix operators the parser lowers to their own node types (not :binary_op).
+  defp child_prec({:range, _meta, _}), do: {50, :none}
+  defp child_prec({:send, _meta, _}), do: {8, :none}
+  defp child_prec({:attribute_access, _meta, _}), do: {100, :left}
+  # `|>` lowers to a pipe-tagged :function_call, binding loosest (level 10); an
+  # ordinary call is a primary (atom) and never needs parens.
+  defp child_prec({:function_call, meta, _}) do
+    if Keyword.get(meta, :pipe) == true, do: {10, :left}, else: :atom
+  end
+
+  # Right-extending prefix keywords (`throw`/`yield`/`return`/`spawn`) grab
+  # everything to their right, so as a left operand they must be parenthesised.
+  defp child_prec({:throw, _meta, _}), do: :lowest
+  defp child_prec({:yield, _meta, _}), do: :lowest
+  defp child_prec({:early_return, _meta, _}), do: :lowest
+  defp child_prec({:async_operation, _meta, _}), do: :lowest
+  defp child_prec({:conditional, _meta, _}), do: :lowest
+  defp child_prec({:pattern_match, _meta, _}), do: :lowest
+  defp child_prec({:pickup, _meta, _}), do: :lowest
+  defp child_prec({:lambda, _meta, _}), do: :lowest
+  defp child_prec({:assignment, _meta, _}), do: :lowest
+  defp child_prec({:augmented_assignment, _meta, _}), do: :lowest
+  defp child_prec(_other), do: :atom
+
+  # {level, assoc} per operator atom, mirroring Cure.Compiler.Parser.Precedence.
+  defp op_prec(:|>), do: {10, :left}
+  defp op_prec(:or), do: {20, :left}
+  defp op_prec(:and), do: {30, :left}
+  defp op_prec(op) when op in [:==, :!=, :<, :>, :<=, :>=], do: {40, :none}
+  defp op_prec(op) when op in [:.., :"..="], do: {50, :none}
+  defp op_prec(:<>), do: {60, :right}
+  defp op_prec(op) when op in [:+, :-, :bor, :bxor, :bsl, :bsr], do: {70, :left}
+  defp op_prec(op) when op in [:*, :/, :rem, :%, :band], do: {80, :left}
+  defp op_prec(:.), do: {100, :left}
+  defp op_prec(op) when op in [:=, :"+=", :"-=", :"*=", :"/="], do: {5, :right}
+  defp op_prec(:melquiades), do: {8, :none}
+  defp op_prec(_other), do: :unknown
+
   defp args_to_string(args, depth, indent) do
     render_span(args, ",", depth, indent)
+  end
+
+  # A function call's argument list is the ONE comma-separated construct whose
+  # delimiters (`(` … `)`) can span newlines and still reparse -- list (`[…]`),
+  # tuple (`%[…]`), and map (`%{…}`) literals cannot, so a comment never attaches
+  # to their elements. When an argument carries its own leading/trailing comment,
+  # the single-line span has nowhere to put it and would drop it (a lossless-
+  # reprint violation, and a spurious `:comment_dropped` migration rejection), so
+  # the argument list is rendered one-per-line -- the only layout that both keeps
+  # the comment and reparses. With no argument comment, this is byte-for-byte the
+  # single-line span, so the common path is untouched.
+  defp call_args_to_string(args, depth, indent) do
+    if Enum.any?(args, &has_comment_trivia?/1) do
+      render_call_args_multiline(args, depth, indent)
+    else
+      render_span(args, ",", depth, indent)
+    end
+  end
+
+  defp has_comment_trivia?(node) do
+    meta = trivia_meta(node)
+    comment_item?(Keyword.get(meta, :leading)) or comment_item?(Keyword.get(meta, :trailing))
+  end
+
+  defp comment_item?(nil), do: false
+
+  defp comment_item?(items) do
+    Enum.any?(items, fn
+      {:comment, _, _, _} -> true
+      {:doc_comment, _, _, _} -> true
+      _ -> false
+    end)
+  end
+
+  # One argument per line: leading comment lines (at the inner pad), then the
+  # value with its separating comma emitted BEFORE any trailing comment (else the
+  # `#` swallows the comma and the list reparses one element short), and the
+  # closing `)` returns to the caller's indent.
+  defp render_call_args_multiline(args, depth, indent) do
+    inner_pad = String.duplicate(indent, depth + 1)
+    close_pad = String.duplicate(indent, depth)
+    last = length(args) - 1
+
+    body =
+      args
+      |> Enum.with_index()
+      |> Enum.map_join("\n", fn {arg, i} ->
+        meta = trivia_meta(arg)
+        comma = if i == last, do: "", else: ","
+        value_line = append_trailing(inner_pad <> to_string(arg, depth + 1, indent) <> comma, Keyword.get(meta, :trailing))
+
+        (leading_comment_lines(Keyword.get(meta, :leading), inner_pad) ++ [value_line])
+        |> Enum.join("\n")
+      end)
+
+    "\n" <> body <> "\n" <> close_pad
+  end
+
+  defp leading_comment_lines(nil, _pad), do: []
+
+  defp leading_comment_lines(items, pad) do
+    items |> Enum.flat_map(&trivia_lines/1) |> Enum.map(&pad_or_empty(&1, pad))
   end
 
   defp pairs_to_string(pairs, depth, indent) do
@@ -1215,7 +1450,20 @@ defmodule Cure.Compiler.Printer do
     "\n#{pad}" <> render_stmt_list(exprs, depth + 1, indent)
   end
 
-  defp rhs_to_string(ast, depth, indent), do: render(ast, depth, indent)
+  # A body carrying its OWN leading comment cannot be rendered inline after `=`:
+  # `= # note` would comment the body out. Break it to the next line — the form
+  # the source used — so the comment sits above the body and the reprint is both
+  # lossless and idempotent (rendering inline drifted the comment across passes:
+  # body-leading → `=`-trailing → statement-leading). No leading comment ⇒ the
+  # inline form, byte-for-byte as before.
+  defp rhs_to_string(ast, depth, indent) do
+    if comment_item?(Keyword.get(trivia_meta(ast), :leading)) do
+      pad = String.duplicate(indent, depth + 1)
+      "\n#{pad}" <> render(ast, depth + 1, indent)
+    else
+      render(ast, depth, indent)
+    end
+  end
 
   # -- Function Definition ---------------------------------------------------
 
@@ -1352,7 +1600,12 @@ defmodule Cure.Compiler.Printer do
 
       type_str = if type_ast, do: ": #{render(type_ast, depth, indent)}", else: ""
       default_str = if default, do: " = #{render(default, depth, indent)}", else: ""
-      "#{prefix}#{name}#{type_str}#{default_str}"
+      rendered = "#{prefix}#{name}#{type_str}#{default_str}"
+
+      # An implicit parameter (`{n: Nat}`, `{T: Type}`) is brace-delimited; the
+      # braces are what mark it implicit, so dropping them silently turns it into
+      # an ordinary positional parameter (an arity/calling-convention change).
+      if Keyword.get(meta, :implicit), do: "{#{rendered}}", else: rendered
     end)
   end
 
@@ -1397,16 +1650,18 @@ defmodule Cure.Compiler.Printer do
   # on the preceding line via `maybe_prepend_decorator/5` in `container_to_string`.
   defp primitive_to_string(meta, _body, _depth, _indent), do: "primitive #{Keyword.get(meta, :name)}"
 
-  # `opaque type Name` / `opaque type Name(p1, …)` — a constructor-less,
-  # non-eliminable carrier (Agda `postulate`). No body; head params, if any,
-  # round-trip from `:type_params`.
+  # -- Opaque type (`opaque type Name(params)`) ------------------------------
+  #
+  # A constructor-less, non-eliminable carrier type (Agda `postulate`). The body
+  # is empty and the optional head params come from `:type_params`. Without this
+  # case the container catch-all `inspect/1`-ed the raw tuple, producing output
+  # that fails to reparse — which surfaced as `cure migrate` aborting any file
+  # containing an `opaque type` (the whole-file verify reprint could not
+  # round-trip).
   defp opaque_to_string(meta, _body, _depth, _indent) do
-    name = Keyword.get(meta, :name)
-
-    case Keyword.get(meta, :type_params, []) do
-      [] -> "opaque type #{name}"
-      ps -> "opaque type #{name}(#{Enum.join(ps, ", ")})"
-    end
+    tp = Keyword.get(meta, :type_params)
+    tp_str = if tp && tp != [], do: "(#{Enum.join(tp, ", ")})", else: ""
+    "opaque type #{Keyword.get(meta, :name)}#{tp_str}"
   end
 
   # -- Supervisor container (`sup Name`) -------------------------------------
@@ -1660,7 +1915,9 @@ defmodule Cure.Compiler.Printer do
       params_str = Enum.map_join(params, ", ", &render(&1, depth, indent))
       "#{name}(#{params_str})"
     else
-      name
+      # A nullary constructor `Foo()` keeps its parens: bare `Foo` reparses to a
+      # `{:variable, …}` type reference, not a constructor.
+      "#{name}()"
     end
   end
 
@@ -1781,14 +2038,27 @@ defmodule Cure.Compiler.Printer do
         ""
       end
 
+    # A `:type_annotation` is produced by BOTH `type X = BareName` / `type X =
+    # (Nat) -> Nat` (a plain synonym) and `typealias X = RHS`. The two keywords
+    # are interchangeable EXCEPT when the RHS is an applied type `Foo(args)`:
+    # under `type`, `Foo(args)` reparses as a nominal single-constructor
+    # `:container` (an ADT), flipping the node kind, whereas `typealias` keeps it a
+    # transparent synonym. Such a `{:function_call, …}` RHS therefore MUST reprint
+    # with `typealias`; every other shape keeps the `type` spelling that all
+    # non-alias code round-trips through.
+    keyword = if applied_type_rhs?(children), do: "typealias", else: "type"
+
     case children do
       [type_expr] ->
-        "type #{name}#{tp_str} = #{render(type_expr, depth, indent)}"
+        "#{keyword} #{name}#{tp_str} = #{render(type_expr, depth, indent)}"
 
       _ ->
-        "type #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
+        "#{keyword} #{name}#{tp_str} = #{args_to_string(children, depth, indent)}"
     end
   end
+
+  defp applied_type_rhs?([{:function_call, _, _}]), do: true
+  defp applied_type_rhs?(_), do: false
 
   # -- Literal helpers -------------------------------------------------------
 
@@ -1949,7 +2219,19 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
+  # A `with`-abstraction rematch arm (`Parent | WithPat -> …`, spec §4) carries
+  # its patterns in meta: the enclosing `parent_patterns` and the `pattern`
+  # matched against the with-scrutinee, joined by `|` in surface syntax.
+  defp match_arm_head({:with_rematch_arm, meta, [_body]}, depth, indent) do
+    rematch_patterns(meta)
+    |> Enum.map_join(" | ", &render(&1, depth, indent))
+  end
+
   defp match_arm_rhs_inline({:match_arm, meta, [body]}, depth, indent) do
+    arm_body_to_string(meta, body, depth, indent)
+  end
+
+  defp match_arm_rhs_inline({:with_rematch_arm, meta, [body]}, depth, indent) do
     arm_body_to_string(meta, body, depth, indent)
   end
 
@@ -1960,6 +2242,26 @@ defmodule Cure.Compiler.Printer do
       inner_pad = String.duplicate(indent, depth + 1)
       body_str = wrapped_body_to_string(body, depth, indent)
       head <> " ->\n" <> inner_pad <> body_str
+    end
+  end
+
+  defp render_match_arm_wrapped({:with_rematch_arm, _meta, [body]}, head, depth, indent) do
+    inner_pad = String.duplicate(indent, depth + 1)
+    body_str = wrapped_body_to_string(body, depth, indent)
+    head <> " ->\n" <> inner_pad <> body_str
+  end
+
+  defp rematch_patterns(meta) do
+    Keyword.get(meta, :parent_patterns, []) ++ [Keyword.get(meta, :pattern)]
+  end
+
+  # A space after a prefix operator unless it is a purely symbolic
+  # (non-alphabetic) spelling like `-` that can safely abut its operand;
+  # word-spelled operators such as `bnot` must not fuse into the operand.
+  defp unary_sep(op) do
+    case Atom.to_string(op) do
+      <<c, _::binary>> when c in ?a..?z or c in ?A..?Z -> " "
+      _ -> ""
     end
   end
 

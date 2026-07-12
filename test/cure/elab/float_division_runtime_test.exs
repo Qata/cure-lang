@@ -23,7 +23,6 @@ defmodule Cure.Elab.FloatDivisionRuntimeTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{BeamWriter, Codegen, Lexer, Parser}
   alias Cure.Core.{Builtins, Env}
   alias Cure.Elab.{Emit, Program}
 
@@ -71,9 +70,9 @@ defmodule Cure.Elab.FloatDivisionRuntimeTest do
     end
   end
 
-  describe "classic pipeline (Codegen)" do
-    # Codegen has no operand types at the `/` site, so it dispatches at runtime on
-    # is_float/1. Both operands are bound once, so neither is evaluated twice.
+  describe "runtime division (end-to-end through the sole pipeline)" do
+    # `/` dispatches at runtime on is_float/1. Both operands are bound once, so
+    # neither is evaluated twice — these outcomes are pipeline-independent.
     test "float division on variable operands computes the quotient" do
       assert eval!(
                """
@@ -115,10 +114,7 @@ defmodule Cure.Elab.FloatDivisionRuntimeTest do
   end
 
   defp eval!(source, fun, args) do
-    {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
-    {:ok, ast} = Parser.parse(tokens, emit_events: false)
-    {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
-    {:ok, module} = BeamWriter.compile_and_load(forms)
+    {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     apply(module, fun, args)
   end
 end

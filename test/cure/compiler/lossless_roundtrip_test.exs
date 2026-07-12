@@ -82,4 +82,28 @@ defmodule Cure.Compiler.LosslessRoundtripTest do
     refute out =~ ~r/\n[ ]*\n[ ]*\n/, "an uncapped multi-blank run survived: #{inspect(out)}"
     assert _ = parse!(out, "body.cure")
   end
+
+  defp reprint(src, file) do
+    {:ok, toks, trivia} = Lexer.tokenize(src, file: file, trivia: true)
+    {:ok, ast} = Parser.parse(toks, file: file, emit_events: false)
+    ast |> Trivia.attach(trivia) |> Printer.quoted_to_string()
+  end
+
+  test "a leading comment on an inline lambda body does not drift across reprint (idempotent)" do
+    # A lambda body `y + 1` carrying a `# inner` leading comment was rendered
+    # inline after `-> `, splicing `# inner\ny + 1` mid-line. On reparse the
+    # stranded comment reattached elsewhere (jumped to the file top), so
+    # print∘reparse∘print ≠ print∘reparse — the printer's idempotence contract
+    # broke and the comment silently moved. The body must break to its own
+    # indented line so the comment stays attached to it.
+    src = "fn f() -> Int =\n  fn(y) ->\n    # inner\n    y + 1\n"
+    o1 = reprint(src, "lam.cure")
+    o2 = reprint(o1, "lam.cure")
+
+    assert o1 == o2, "reprint not idempotent:\n  o1: #{inspect(o1)}\n  o2: #{inspect(o2)}"
+    # and the comment stays with the lambda body, never drifting to the file top
+    refute String.starts_with?(o1, "# inner")
+    assert o1 =~ "# inner"
+    assert _ = parse!(o1, "lam.cure")
+  end
 end

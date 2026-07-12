@@ -22,6 +22,8 @@ defmodule Cure.Migrate.RuleRegistryTest do
       id: :W_test_append_marker,
       description: "test-only: appends marker-1 to the top-level block",
       phase: :syntactic,
+      tier: :machine,
+      since: "2026",
       detect_and_rewrite: fn {:block, m, exprs}, _ctx ->
         {:rewrite, {:block, m, exprs ++ [@marker1]}}
       end,
@@ -36,6 +38,8 @@ defmodule Cure.Migrate.RuleRegistryTest do
       id: :W_test_require_marker,
       description: "test-only: appends marker-2 iff marker-1 is present",
       phase: :syntactic,
+      tier: :machine,
+      since: "2026",
       detect_and_rewrite: fn {:block, m, exprs}, _ctx ->
         if @marker1 in exprs do
           {:rewrite, {:block, m, exprs ++ [@marker2]}}

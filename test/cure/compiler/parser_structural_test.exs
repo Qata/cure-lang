@@ -280,4 +280,42 @@ defmodule Cure.Compiler.ParserStructuralTest do
       assert {:lambda, _, _} = ast
     end
   end
+
+  describe "qualified applied type constructor (Mod.Name(args))" do
+    defp type_alias_rhs(module_src) do
+      ast = parse!(module_src)
+      {:container, _, body} = ast
+      {:type_annotation, _, [rhs]} = Enum.find(body, &match?({:type_annotation, _, _}, &1))
+      rhs
+    end
+
+    test "a qualified applied type in a typealias RHS parses as an application, not a garbled `unknown` call" do
+      # Regression: the type grammar parsed `Mod.Name` (dotted projection) and
+      # `Name(args)` (application) but had no production for `Mod.Name(args)`, so
+      # the `(args)` dangled and the postfix parser swallowed the whole typealias
+      # into a `{:function_call, name: "unknown", …}`. It must now be the qualified
+      # type application `Std.Map(k, v)`.
+      rhs = type_alias_rhs("mod M\n  typealias Q(k, v) = Std.Map(k, v)\n")
+
+      assert {:function_call, meta, args} = rhs
+      assert Keyword.get(meta, :name) == "Std.Map"
+      assert [{:variable, _, "k"}, {:variable, _, "v"}] = args
+    end
+
+    test "a qualified applied type parses in a function signature" do
+      # Previously this was a hard parse error (the dangling `(` closed the param
+      # list early). It must now parse to a well-formed function_def.
+      ast = parse!("mod M\n  fn f(m: Std.Map(k, v)) -> Int = 0\n")
+      assert {:container, _, [{:function_def, fmeta, _} | _]} = ast
+      [{:param, pmeta, "m"}] = Keyword.get(fmeta, :params)
+      assert {:function_call, tmeta, _} = Keyword.get(pmeta, :type)
+      assert Keyword.get(tmeta, :name) == "Std.Map"
+    end
+
+    test "a deeper qualification (A.B.C(x)) keeps the full dotted name" do
+      rhs = type_alias_rhs("mod M\n  typealias Q(x) = A.B.C(x)\n")
+      assert {:function_call, meta, [{:variable, _, "x"}]} = rhs
+      assert Keyword.get(meta, :name) == "A.B.C"
+    end
+  end
 end
