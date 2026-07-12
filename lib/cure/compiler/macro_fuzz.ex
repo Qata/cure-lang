@@ -12,7 +12,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Compiler.{Lexer, Parser, Token}
   alias Cure.Core.{Context, Eval, Kernel, Normalise}
-  alias Cure.Elab.Elaborator
+  alias Cure.Elab.{Elaborator, MacroExpand}
 
   @default_draws 32
   @cache_key :cure_macro_fuzz_cache_state
@@ -105,7 +105,7 @@ defmodule Cure.Compiler.MacroFuzz do
         status = if result == :ok, do: :passed, else: :failed
 
         manifest =
-          for rule <- Enum.filter(rules, &(&1[:kind] == :syntax)) do
+          for rule <- Enum.filter(rules, &(&1[:kind] in [:syntax, :computed])) do
             %{
               keyword: rule.keyword,
               hole_kinds: for({:hole, %{kind: kind}} <- rule.segments, do: kind),
@@ -124,7 +124,7 @@ defmodule Cure.Compiler.MacroFuzz do
     seed = Keyword.get(opts, :seed, 1)
 
     rules
-    |> Enum.filter(&(&1[:kind] == :syntax))
+    |> Enum.filter(&(&1[:kind] in [:syntax, :computed]))
     |> Enum.reduce_while(:ok, fn rule, :ok ->
       case prove_rule(rule, rules, env, draws, seed) do
         :ok -> {:cont, :ok}
@@ -139,7 +139,7 @@ defmodule Cure.Compiler.MacroFuzz do
     case holes do
       [] ->
         with {:ok, input} <- assemble_use_site(rule, %{}),
-             expansion = Parser.expand_example(rules, input) do
+             {:ok, expansion} <- expand_generated(rule, rules, input, env) do
           check_expansion(rule.keyword, input, expansion, env)
         end
 
@@ -148,15 +148,20 @@ defmodule Cure.Compiler.MacroFuzz do
           Enum.reduce_while(terms, :ok, fn term, :ok ->
             case assemble_use_site(rule, %{name => term}) do
               {:ok, input} ->
-                expansion = Parser.expand_example(rules, input)
+                case expand_generated(rule, rules, input, env) do
+                  {:ok, expansion} ->
+                    case check_expansion(rule.keyword, input, expansion, env) do
+                      :ok ->
+                        {:cont, :ok}
 
-                case check_expansion(rule.keyword, input, expansion, env) do
-                  :ok ->
-                    {:cont, :ok}
+                      {:error, {:expansion_ill_typed, details}} ->
+                        shrunk = shrink_counterexample(rule, rules, env, name, kind, term, details)
+                        {:halt, {:error, {:expansion_ill_typed, shrunk}}}
+                    end
 
-                  {:error, {:expansion_ill_typed, details}} ->
-                    shrunk = shrink_counterexample(rule, rules, env, name, kind, term, details)
-                    {:halt, {:error, {:expansion_ill_typed, shrunk}}}
+                  {:error, reason} ->
+                    {:halt,
+                     {:error, {:expansion_ill_typed, %{keyword: rule.keyword, input: input, kernel_error: reason}}}}
                 end
 
               {:error, _} = error ->
@@ -168,6 +173,15 @@ defmodule Cure.Compiler.MacroFuzz do
       many ->
         {:error, {:unsupported_hole_arity, length(many)}}
     end
+  end
+
+  defp expand_generated(%{kind: :syntax}, rules, input, _env),
+    do: {:ok, Parser.expand_example(rules, input)}
+
+  defp expand_generated(%{kind: :computed}, rules, input, env) do
+    rules
+    |> Parser.expand_example(input)
+    |> MacroExpand.expand(env)
   end
 
   defp check_expansion(keyword, input, expansion, env) do
@@ -196,7 +210,7 @@ defmodule Cure.Compiler.MacroFuzz do
       candidate_term = candidate.payload.term
 
       with {:ok, input} <- assemble_use_site(rule, %{name => candidate_term}),
-           expansion = Parser.expand_example(rules, input),
+           {:ok, expansion} <- expand_generated(rule, rules, input, env),
            {:error, {:expansion_ill_typed, _}} <- check_expansion(rule.keyword, input, expansion, env) do
         true
       else
