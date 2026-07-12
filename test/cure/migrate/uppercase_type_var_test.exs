@@ -121,4 +121,40 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute out =~ "Pair(Int, z)"
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
+
+  @tag :tmp_dir
+  test "an imported USER-module constructor (non-Std sibling) is left alone", %{tmp_dir: dir} do
+    # The fix must generalise past `Std.*`. `MyApp.Kinds` is a USER module with
+    # NO name→path convention — Cure resolves user modules only by co-compiling
+    # all inputs together, a registry this per-file lint lacks — so the only
+    # handle is a sibling `.cure` file next to the consumer, matched by its
+    # declared `mod` name. Here `KA` is a constructor of `MyApp.Kinds`, used as a
+    # type-application index; with the sibling present on disk it must resolve to
+    # a real name and NOT be lowercased to `ka`.
+    File.write!(Path.join(dir, "kinds.cure"), "mod MyApp.Kinds\ntype K = KA | KB\n")
+
+    src = "mod Consumer\nuse MyApp.Kinds\nfn f(v: Pair(Int, KA)) -> Int = 0\n"
+    {out, warns} = migrate(src, Path.join(dir, "consumer.cure"))
+
+    assert out =~ "KA"
+    refute out =~ "Pair(Int, ka)"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  @tag :tmp_dir
+  test "an unresolvable user import does NOT blanket-suppress — real type vars still warn",
+       %{tmp_dir: dir} do
+    # Guards against the resolution being a no-op that merely suppresses every
+    # uppercase name. The consumer imports `MyApp.Kinds`, but NO sibling declares
+    # that module (only an unrelated `Other` sits in the directory), so `KA` is
+    # genuinely unknown and MUST still warn. If this ever goes quiet, the fix has
+    # degenerated into "ignore all uppercase names near a user import".
+    File.write!(Path.join(dir, "other.cure"), "mod Other\ntype Q = QA | QB\n")
+
+    src = "mod Consumer\nuse MyApp.Kinds\nfn f(v: Pair(Int, KA)) -> Int = 0\n"
+    {out, warns} = migrate(src, Path.join(dir, "consumer.cure"))
+
+    assert out =~ "Pair(Int, ka)"
+    assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
 end

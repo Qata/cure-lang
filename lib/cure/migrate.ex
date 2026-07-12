@@ -66,7 +66,7 @@ defmodule Cure.Migrate do
     file = Keyword.get(opts, :file, "nofile")
     rule_set = Keyword.get(opts, :rules, rules())
     apply_mode = Keyword.get(opts, :apply, :all)
-    ctx = build_ctx(ast)
+    ctx = build_ctx(ast, file)
 
     Enum.reduce(rule_set, {ast, []}, fn %Rule{} = rule, {acc_ast, warns} ->
       case rule.detect_and_rewrite.(acc_ast, ctx) do
@@ -157,14 +157,20 @@ defmodule Cure.Migrate do
   type names (as strings) in scope for `ast`. Seeded with Cure's built-in
   primitive type names — derived from `Cure.Types.Env`, never hardcoded — and
   unioned with the type names this file declares (structs, enums, type aliases,
-  and indexed families).
+  and indexed families) and those it imports.
+
+  `file` is the consuming source's path; it is needed to resolve USER-module
+  imports (a `use MyApp.Foo` has no path convention — see `imported_names/2` —
+  so the only handle is a sibling `.cure` file next to `file`). Callers with no
+  path may use the arity-1 form, which resolves only `Std.*` + auto-prelude
+  imports (a user import then contributes nothing rather than crashing).
   """
-  @spec build_ctx(Rule.ast()) :: MapSet.t()
-  def build_ctx(ast) do
+  @spec build_ctx(Rule.ast(), Path.t()) :: MapSet.t()
+  def build_ctx(ast, file \\ "nofile") do
     builtin_type_names()
     |> MapSet.union(declared_type_names(ast))
     |> MapSet.union(declared_ctor_names(ast))
-    |> MapSet.union(imported_names(ast))
+    |> MapSet.union(imported_names(ast, file))
   end
 
   # Built-in type names the legacy non-dependent `Cure.Types.Env` never
@@ -277,12 +283,23 @@ defmodule Cure.Migrate do
   # elaborator's private attr; keep in sync with program.ex if the prelude grows.
   @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary Std.Bounded)
 
-  defp imported_names(ast) do
-    (collect_import_sources(ast, []) ++ @auto_prelude)
-    |> Enum.uniq()
-    |> Enum.reduce(MapSet.new(), fn source, acc ->
-      case module_exported_names(source) do
-        {:ok, names} -> MapSet.union(acc, names)
+  defp imported_names(ast, file) do
+    sources = Enum.uniq(collect_import_sources(ast, []) ++ @auto_prelude)
+    # User (non-`Std.*`) imports have no path convention — Cure resolves them by
+    # co-compilation, not by name→path — so they cannot be read the way a stdlib
+    # source is. The only handle a single-file lint has is the sibling `.cure`
+    # files next to `file`; build a mod-name→exports map from them once, up front.
+    sibling_exports = sibling_module_exports(file, sources)
+
+    Enum.reduce(sources, MapSet.new(), fn source, acc ->
+      names =
+        case stdlib_source_path(source) do
+          {:ok, path} -> exported_names_of_file(path)
+          :error -> {:ok, Map.get(sibling_exports, source, MapSet.new())}
+        end
+
+      case names do
+        {:ok, ns} -> MapSet.union(acc, ns)
         :error -> acc
       end
     end)
@@ -306,9 +323,10 @@ defmodule Cure.Migrate do
 
   defp collect_import_sources(_other, acc), do: acc
 
-  defp module_exported_names(source) do
-    with {:ok, path} <- stdlib_source_path(source),
-         {:ok, src} <- File.read(path),
+  # The type + constructor names a `.cure` source at `path` exports. Fail-open:
+  # any read/lex/parse failure yields `:error` and contributes nothing.
+  defp exported_names_of_file(path) do
+    with {:ok, src} <- File.read(path),
          {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
          {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false) do
       {:ok, MapSet.union(declared_type_names(ast), declared_ctor_names(ast))}
@@ -316,6 +334,66 @@ defmodule Cure.Migrate do
       _ -> :error
     end
   end
+
+  # Resolve USER-module imports (`use MyApp.Foo`, i.e. any non-`Std.*` source)
+  # by scanning the consuming file's directory. Cure has no name→path convention
+  # for user modules — the real compiler resolves them by co-compiling all input
+  # files together, a registry this per-file lint does not have — so the only
+  # sound handle is the sibling `.cure` sources next to `file`. Each sibling is
+  # matched to an import by its declared `mod` NAME (robust to arbitrary
+  # filenames), and only the requested sources are kept. Returns a
+  # `mod-name-string => exported-names` map. Scans nothing (returns `%{}`) when
+  # there is no file path or no user import — so the pure-`Std` case pays zero
+  # directory I/O. Fail-open throughout.
+  defp sibling_module_exports(file, sources) do
+    user_sources =
+      sources
+      |> Enum.reject(&match?({:ok, _}, stdlib_source_path(&1)))
+      |> MapSet.new()
+
+    if file in [nil, "", "nofile"] or MapSet.size(user_sources) == 0 do
+      %{}
+    else
+      Path.dirname(file)
+      |> Path.join("*.cure")
+      |> Path.wildcard()
+      |> Enum.reduce(%{}, fn path, acc ->
+        with {:ok, name} <- module_name_of_file(path),
+             true <- MapSet.member?(user_sources, name),
+             {:ok, names} <- exported_names_of_file(path) do
+          Map.put(acc, name, names)
+        else
+          _ -> acc
+        end
+      end)
+    end
+  end
+
+  # The declared `mod`/`proof`-container name of the source at `path`, as a
+  # string, mirroring `Cure.Elab.Program.find_module_name/1`. Fail-open.
+  defp module_name_of_file(path) do
+    with {:ok, src} <- File.read(path),
+         {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
+         {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false),
+         name when is_binary(name) <- module_name(ast) do
+      {:ok, name}
+    else
+      _ -> :error
+    end
+  end
+
+  defp module_name({:container, meta, _body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) in [:module, :proof],
+      do: Keyword.get(meta, :name)
+  end
+
+  defp module_name({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &module_name/1)
+
+  defp module_name(list) when is_list(list),
+    do: Enum.find_value(list, &module_name/1)
+
+  defp module_name(_other), do: nil
 
   # Resolve a `Std.<Name>` import source to its `.cure` file, searching the same
   # stdlib source directories the elaborator uses (`import_source_path/1`). Only
