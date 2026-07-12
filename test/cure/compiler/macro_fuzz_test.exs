@@ -92,4 +92,34 @@ defmodule Cure.Compiler.MacroFuzzTest do
 
     assert is_tuple(generated)
   end
+
+  test "proof manifests list every rule and cache identical proof work" do
+    source = """
+    mod M
+      macro Pair
+        syntax a becomes 1
+          example a expands 1
+        syntax b becomes 2
+          example b expands 2
+        explain
+          keyword "a" =>
+            "starts with a"
+          keyword "b" =>
+            "starts with b"
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))
+
+    assert {:ok, %{cached?: false, rules: rules}} =
+             MacroFuzz.proof_manifest(macro_def, env, draws: 1, seed: 37)
+
+    assert Enum.map(rules, & &1.keyword) == ["a", "b"]
+    assert Enum.all?(rules, &(&1.status == :passed))
+
+    assert {:ok, %{cached?: true, rules: ^rules}} =
+             MacroFuzz.proof_manifest(macro_def, env, draws: 1, seed: 37)
+  end
 end

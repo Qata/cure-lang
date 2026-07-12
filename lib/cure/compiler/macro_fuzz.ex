@@ -15,6 +15,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Cure.Elab.Elaborator
 
   @default_draws 32
+  @cache_table :cure_macro_fuzz_cache
 
   @type generator_info :: %{
           category: String.t(),
@@ -64,7 +65,53 @@ defmodule Cure.Compiler.MacroFuzz do
           | {:error, {:unsupported_hole_type, String.t()}}
           | {:error, {:unsupported_hole_arity, non_neg_integer()}}
           | {:error, term()}
-  def check_expansion_proof({:macro_def, _meta, rules}, env, opts \\ []) do
+  def check_expansion_proof(macro_def, env, opts \\ []) do
+    {result, _manifest, _cached?} = cached_proof(macro_def, env, opts)
+    result
+  end
+
+  @doc "Return the proof manifest and whether this lookup reused cached work."
+  @spec proof_manifest(tuple(), Cure.Core.Env.t(), keyword()) ::
+          {:ok, %{cached?: boolean(), rules: [map()]}}
+          | {:error, term(), %{cached?: boolean(), rules: [map()]}}
+  def proof_manifest(macro_def, env, opts \\ []) do
+    {result, manifest, cached?} = cached_proof(macro_def, env, opts)
+    report = %{cached?: cached?, rules: manifest}
+
+    case result do
+      :ok -> {:ok, report}
+      {:error, _} = error -> {:error, error, report}
+    end
+  end
+
+  defp cached_proof({:macro_def, _meta, rules} = macro_def, env, opts) do
+    ensure_cache_table()
+    key = :erlang.phash2({macro_def, env, Keyword.get(opts, :draws, @default_draws), Keyword.get(opts, :seed, 1)})
+
+    case :ets.lookup(@cache_table, key) do
+      [{^key, result, manifest}] ->
+        {result, manifest, true}
+
+      [] ->
+        result = run_expansion_proof(rules, env, opts)
+        status = if result == :ok, do: :passed, else: :failed
+
+        manifest =
+          for rule <- Enum.filter(rules, &(&1[:kind] == :syntax)) do
+            %{
+              keyword: rule.keyword,
+              hole_kinds: for({:hole, %{kind: kind}} <- rule.segments, do: kind),
+              draws: Keyword.get(opts, :draws, @default_draws),
+              status: status
+            }
+          end
+
+        :ets.insert(@cache_table, {key, result, manifest})
+        {result, manifest, false}
+    end
+  end
+
+  defp run_expansion_proof(rules, env, opts) do
     draws = Keyword.get(opts, :draws, @default_draws)
     seed = Keyword.get(opts, :seed, 1)
 
@@ -76,6 +123,20 @@ defmodule Cure.Compiler.MacroFuzz do
         {:error, _} = error -> {:halt, error}
       end
     end)
+  end
+
+  defp ensure_cache_table do
+    case :ets.whereis(@cache_table) do
+      :undefined ->
+        try do
+          :ets.new(@cache_table, [:named_table, :public, :set, read_concurrency: true])
+        rescue
+          ArgumentError -> @cache_table
+        end
+
+      _tid ->
+        @cache_table
+    end
   end
 
   defp prove_rule(rule, rules, env, draws, seed) do
