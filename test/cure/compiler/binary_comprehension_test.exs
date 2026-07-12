@@ -10,7 +10,7 @@ defmodule Cure.Compiler.BinaryComprehensionTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Codegen, Lexer, Parser}
+  alias Cure.Compiler.{Lexer, Parser}
 
   defp parse!(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
@@ -41,12 +41,8 @@ defmodule Cure.Compiler.BinaryComprehensionTest do
     end
   end
 
-  describe "codegen" do
-    test "binary generator lowers to b_generate qualifier" do
-      ast = parse!("[b for <<b <- buf>>]")
-      {:ok, form} = Codegen.compile_expr(ast)
-      {:lc, _, _body, qs} = form
-      assert [{:b_generate, _, _pat, _src}] = qs
-    end
-  end
+  # The classic "codegen" describe block (asserting the `{:lc, …}` /
+  # `:b_generate` Erlang abstract form emitted by `Codegen.compile_expr/1`) was
+  # removed with the classic pathway (#18); it was white-box-coupled to that
+  # deleted lowerer. The parser coverage above stands.
 end

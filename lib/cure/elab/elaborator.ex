@@ -5180,12 +5180,26 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Rich bit-syntax specifiers (`::16`, `/float`, `::size(n)`, unit/signedness/
+  # endianness) live in the segment meta after parsing. `of_bytes` packs a list
+  # of 8-bit bytes and cannot express any of them, so a sized/typed segment is
+  # REJECTED here rather than silently mislowered — dropping a `::16` size would
+  # feed a >255 value to `list_to_binary` and crash at runtime. Rich bit-syntax
+  # construction is a deferred value-surface case in the dependent pipeline.
+  @rich_segment_keys [:size, :type, :unit, :signedness, :endianness]
+
   def desugar_bytes(segments, line) do
     Enum.reduce_while(segments, {:ok, []}, fn
-      {:bin_segment, _sm, [expr]}, {:ok, acc} ->
-        case typed_segment?(expr) do
-          true -> {:halt, {:error, {:unsupported_binary_segment, expr}}}
-          false -> {:cont, {:ok, acc ++ [expr]}}
+      {:bin_segment, sm, [expr]} = seg, {:ok, acc} ->
+        cond do
+          Enum.any?(@rich_segment_keys, &(Keyword.get(sm, &1) != nil)) ->
+            {:halt, {:error, {:unsupported_binary_segment, seg}}}
+
+          typed_segment?(expr) ->
+            {:halt, {:error, {:unsupported_binary_segment, expr}}}
+
+          true ->
+            {:cont, {:ok, acc ++ [expr]}}
         end
 
       other, _acc ->

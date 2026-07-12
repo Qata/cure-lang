@@ -1,19 +1,11 @@
 defmodule Cure.Compiler.InterfaceDispatchCodegenTest do
   @moduledoc """
-  Classic codegen predates the `interface`/`implementation` surface (the
-  successor to `proto`/`impl`). It had no handling for the new container
-  tags and silently dropped them — so a top-level helper that dispatches
-  an interface method (`compare(a, b)`) referenced a function classic never
-  emitted, and the module failed `erl_lint` with `undefined_function`.
-
-  Until the classic pipeline is removed (#18), the new surface normalizes
-  onto classic's existing `:protocol`/`:trait` dispatcher machinery. This is
-  an end-to-end check: an interface + implementation + a top-level derived
-  helper must compile through to a loadable BEAM binary.
+  End-to-end check that an `interface` + `implementation` plus a top-level
+  derived helper (`strictly_before` dispatching `cmp`) compiles through the sole
+  (dependent) pipeline to a loadable BEAM module. A dropped interface would leave
+  `cmp` undefined and the module would fail to load.
   """
   use ExUnit.Case, async: false
-
-  alias Cure.Compiler.{Codegen, Lexer, Parser}
 
   @src """
   mod IfaceDispatch
@@ -28,12 +20,10 @@ defmodule Cure.Compiler.InterfaceDispatchCodegenTest do
   """
 
   test "a top-level helper dispatching an interface method compiles to loadable BEAM" do
-    {:ok, toks} = Lexer.tokenize(@src, emit_events: false)
-    {:ok, ast} = Parser.parse(toks, emit_events: false)
-    {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
-
-    # `:compile.forms` runs erl_lint; a dropped interface leaves `cmp`
-    # undefined and this returns `{:error, ...}`.
-    assert {:ok, _mod, _bin} = :compile.forms(forms, [:return_errors])
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(@src, emit_events: false)
+    assert is_atom(mod)
+    # `strictly_before` carries `where Ordf(t)`, so the dependent pipeline emits
+    # it with an explicit interface-dictionary parameter — arity 3, not 2.
+    assert function_exported?(mod, :strictly_before, 3)
   end
 end
