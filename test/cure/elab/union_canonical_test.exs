@@ -134,14 +134,24 @@ defmodule Cure.Elab.UnionCanonicalTest do
       assert {:error, {:union_member_not_ground, _}} = members("a | Int", env)
     end
 
-    test "rejects a literal that overlaps its own type" do
+    # A literal unioned with its OWN type is ADMITTED — most-specific-wins, not
+    # prohibition. A literal EXPRESSION injects into the literal member; anything else
+    # injects via its inferred type. They never compete, so there is nothing to reject.
+    test "a literal may be unioned with its own type — both members survive" do
       env = base_env()
-      assert {:error, {:union_member_overlap, "Int#3", "Int"}} = members("Int | 3", env)
+      {:ok, ms} = members("Int | 3", env)
+
+      assert Enum.map(ms, & &1.key) == ["Int", "Int#3"]
     end
 
-    test "the overlap check sees through a typealias (admission runs AFTER normalisation)" do
+    # The reason this case used to be interesting: it proves admission runs AFTER
+    # normalisation. The alias must unfold to `Int` BEFORE keying, or the union would key
+    # as `T2` and be a different family from `Int | 3`.
+    test "a typealias member unfolds before keying, so T2 | 3 IS Int | 3" do
       env = env_for("typealias T2 = Int\n")
-      assert {:error, {:union_member_overlap, "Int#3", "Int"}} = members("T2 | 3", env)
+
+      assert key("T2 | 3", env) == key("Int | 3", env)
+      assert key("T2 | 3", env) == :"Union<Int|Int#3>"
     end
   end
 

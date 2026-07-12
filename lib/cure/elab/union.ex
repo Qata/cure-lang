@@ -15,8 +15,7 @@ defmodule Cure.Elab.Union do
 
   A **literal** member keys as `<TypeKey>#<printed value>`: `Int#3`, `String#"4"`,
   `Atom#:4`, `Char#'c'`, `Bool#true`, `Float#4.0`. The `<TypeKey>#` prefix is what
-  keeps `"4"` (a `String`) and `:4` (an `Atom`) from colliding on `4`, and it makes
-  the literal/type-overlap check a pure string comparison.
+  keeps `"4"` (a `String`) and `:4` (an `Atom`) from colliding on `4`.
 
   ## Constructor names are family-qualified
 
@@ -86,9 +85,10 @@ defmodule Cure.Elab.Union do
   Canonicalise a list of surface member ASTs into a sorted, deduped member list.
 
   Returns `{:error, {:union_member_not_ground, ast}}` for a member with a free type
-  variable or an unsolved metavariable, and
-  `{:error, {:union_member_overlap, lit_key, type_key}}` for a literal that is
-  subsumed by a type member (`Int | 3`).
+  variable or an unsolved metavariable.
+
+  A literal unioned with its OWN type (`Int | 3`) is ADMITTED — see the note at the
+  bottom of this module. It is disambiguated by most-specific-wins, not rejected.
   """
   @spec canonicalise([tuple()], [String.t()], Env.t()) :: {:ok, [member()]} | {:error, term()}
   def canonicalise(asts, scope, env) do
@@ -99,10 +99,7 @@ defmodule Cure.Elab.Union do
         |> Enum.uniq_by(& &1.key)
         |> Enum.sort_by(& &1.key)
 
-      case overlap(members) do
-        nil -> {:ok, members}
-        {lit_key, type_key} -> {:error, {:union_member_overlap, lit_key, type_key}}
-      end
+      {:ok, members}
     end
   end
 
@@ -455,23 +452,23 @@ defmodule Cure.Elab.Union do
   defp has?(list, pred) when is_list(list), do: Enum.any?(list, &has?(&1, pred))
   defp has?(_other, _pred), do: false
 
-  # ── Admission: literal/type overlap ────────────────────────────────────────
-
-  # Reject iff some literal member's type is itself a type member: `Int | 3` admits
-  # two distinct injections for `3` and there is no subtyping to break the tie.
+  # ── A literal unioned with its OWN type ────────────────────────────────────
   #
-  # Runs on the CANONICAL (post-normalisation) member list, so `typealias T = Int`
-  # followed by `T | 3` is caught too — the checker sees the unfolded `Int`, not the
-  # opaque alias name.
-  defp overlap(members) do
-    type_keys = for %{lit_type_key: nil, key: k} <- members, into: MapSet.new(), do: k
-
-    Enum.find_value(members, fn
-      %{lit_type_key: nil} ->
-        nil
-
-      %{lit_type_key: lt, key: k} ->
-        if MapSet.member?(type_keys, lt), do: {k, lt}, else: nil
-    end)
-  end
+  # `Int | 3` and `:north | Atom` are ADMITTED. They were once rejected as an ambiguous
+  # injection ("does `3` become the literal member or the `Int` member?"), but that
+  # ambiguity does not exist. The two are disambiguated by MOST-SPECIFIC-WINS — the same
+  # precedence the FFI boundary uses:
+  #
+  #   * a LITERAL expression injects into the literal member. `union_literal_ctor/5` is
+  #     the FIRST clause of the elaborator's literal `cond`, so it wins outright.
+  #   * anything else injects via its inferred TYPE. `maybe_inject_union/5` keys off the
+  #     term's type, which is `Int` — never the singleton.
+  #
+  # They never compete, so there is nothing to reject.
+  #
+  # The consequence to internalise: the union is a genuine DISJOINT SUM, not a set union.
+  # `Int(3)` and `Lit3` are distinct values of `Int | 3`, and which one you get is decided
+  # by how the value was WRITTEN, not by what it equals. That is exactly what makes the
+  # sentinel pattern work (`-1 | Int`, `:north | Atom`), and at the FFI boundary the same
+  # precedence re-tags a raw `3` as the sentinel and any other integer as an `Int`.
 end

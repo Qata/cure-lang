@@ -103,15 +103,83 @@ defmodule Cure.Elab.UnionTest do
     end
   end
 
-  describe "admission errors surface from elaboration" do
-    test "rejects a literal overlapping its own type" do
+  # A literal MAY be unioned with its own type. The two are disambiguated by
+  # MOST-SPECIFIC-WINS, the same precedence the FFI boundary uses:
+  #
+  #   * a LITERAL expression injects into the literal member  (`3` -> `Int#3`)
+  #   * anything else injects via its inferred TYPE            (`n : Int` -> `Int`)
+  #
+  # These never compete — the literal check-clause is tried before the general one — so
+  # there is no ambiguity to reject. `Int | 3` is the sentinel/refinement pattern.
+  describe "a literal unioned with its own type" do
+    test "the union is admitted and has BOTH members" do
       src = """
       mod M
         fn f(x: Int | 3) -> Int = 1
       end
       """
 
-      assert {:error, {:union_member_overlap, "Int#3", "Int"}} = Program.elaborate(src)
+      assert {:ok, env} = Program.elaborate(src)
+
+      names =
+        env |> Inductive.ctors_of(:"Union<Int|Int#3>") |> Enum.map(& &1.name) |> Enum.sort()
+
+      assert names == [:"Union<Int|Int#3>$Int", :"Union<Int|Int#3>$Int#3"]
+    end
+
+    test "a LITERAL expression injects into the literal member" do
+      src = """
+      mod ML
+        fn f() -> Int | 3 = 3
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert {:ctor, :"Union<Int|Int#3>$Int#3", []} = Env.get_def(env, :f).body
+    end
+
+    test "a non-literal term injects via its TYPE, even when its value is the literal" do
+      src = """
+      mod MT
+        fn f(n: Int) -> Int | 3 = n
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      body = Env.get_def(env, :f).body |> unwrap_lams()
+
+      assert {:ctor, :"Union<Int|Int#3>$Int", [{:var, 0}]} = body
+    end
+
+    test "both members are eliminable, and the literal arm is distinct from the type arm" do
+      src = """
+      mod ME
+        fn f(x: Int | 3) -> Int = match x
+          3 -> 0
+          n: Int -> n
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      body = Env.get_def(env, :f).body |> unwrap_lams()
+
+      assert {:case, _, _, branches} = body
+      arities = Map.new(branches, fn {c, ar, _} -> {c, ar} end)
+
+      assert arities[:"Union<Int|Int#3>$Int#3"] == 0
+      assert arities[:"Union<Int|Int#3>$Int"] == 1
+    end
+
+    test "an atom literal with Atom: :north | Atom" do
+      src = """
+      mod MA
+        fn f(x: :north | Atom) -> Int = match x
+          :north -> 0
+          a: Atom -> 1
+      end
+      """
+
+      assert {:ok, _} = Program.elaborate(src)
     end
   end
 
@@ -646,7 +714,11 @@ defmodule Cure.Elab.UnionTest do
     #
     # Worth stating plainly: INJECTION ambiguity and RUNTIME discrimination are different
     # questions. Order resolves the second (`Bool | Atom`); it can never resolve the first.
-    test "REJECTS :north | Atom — a literal may not overlap its OWN type (injection, not FFI)" do
+    test "a literal over its OWN type discriminates at the FFI boundary: :north | Atom" do
+      # Superseded: this originally asserted rejection, on the grounds that `let x:
+      # :north | Atom = :north` was an ambiguous injection. It is not — a literal
+      # expression takes the literal member, anything else injects via its type. At the
+      # boundary the same precedence applies: exact value first, then the class guard.
       src = """
       mod EXN2b
         @extern(:erlang, :hd, 1)
@@ -654,7 +726,10 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:union_member_overlap, "Atom#:north", "Atom"}} = Program.elaborate(src)
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      assert apply(:"Cure.EXN2b", :raw, [[:north]]) == :"Union<Atom|Atom#:north>$Atom#:north"
+      assert apply(:"Cure.EXN2b", :raw, [[:other]]) == {:"Union<Atom|Atom#:north>$Atom", :other}
     end
 
     test "ACCEPTS a literal over a class member: 3 | Nat (the sentinel pattern)" do
