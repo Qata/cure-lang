@@ -18,6 +18,13 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     find.(find, ast)
   end
 
+  # Parse a bare statement (e.g. `match ... { ... }`) standalone, no `fn` wrapper.
+  defp parse_stmt!(src) do
+    {:ok, tokens} = Lexer.tokenize(src <> "\n", emit_events: false)
+    {:ok, ast} = Parser.parse(tokens, emit_events: false)
+    ast
+  end
+
   # Recursively drop :line/:col so round-trip equality is position-insensitive.
   defp strip(t) when is_list(t),
     do: Enum.reject(t, &match?({k, _} when k in [:line, :col], &1)) |> Enum.map(&strip/1)
@@ -55,5 +62,79 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:subtype, {:s_atom, :regex}} in attrs
     # round-trips to a literal leaf (value not faithfully recovered — opaque this slice)
     assert {:literal, _, nil} = MacroSyntax.from_syntax(repr)
+  end
+
+  test "a binary-segment size expression (an AST, not a scalar) round-trips faithfully" do
+    ast = expr!("<<x::size(n)>>")
+    # {:literal, [subtype: :bytes,...], [{:bin_segment, [size: {:variable,...,"n"}, ...], [{:variable,...,"x"}]}]}
+    repr = MacroSyntax.to_syntax(ast)
+    back = MacroSyntax.from_syntax(repr)
+
+    assert {:literal, _, [{:bin_segment, seg_meta, [{:variable, _, "x"}]}]} = back
+    assert {:variable, _, "n"} = Keyword.fetch!(seg_meta, :size)
+  end
+
+  test "a match_arm with an `impossible` body (third = [nil], not [ast]) does not crash" do
+    ast = parse_stmt!("match v { vcons(h, r) -> impossible }")
+    # {:pattern_match, _, [_scrutinee, {:match_arm, meta, [nil]}]}
+    assert {:pattern_match, _, [_scrutinee, arm]} = ast
+    assert {:match_arm, _, [nil]} = arm
+
+    repr = MacroSyntax.to_syntax(arm)
+    back = MacroSyntax.from_syntax(repr)
+    assert {:match_arm, _, [nil]} = back
+  end
+
+  test "a named_implicit_pat node (a 4-tuple, not {tag,meta,third}) does not crash" do
+    ast = parse_stmt!("match v { vcons({k = .m}, h, r) -> h }")
+    assert {:pattern_match, _, [_scrutinee, arm]} = ast
+    assert {:match_arm, ameta, _body} = arm
+    assert {:function_call, _cmeta, [arg0 | _]} = Keyword.get(ameta, :pattern)
+    assert {:named_implicit_pat, _, "k", _inner} = arg0
+
+    # Must not raise (FunctionClauseError) -- reflecting the whole arm walks
+    # into arg0 via the pattern= meta attr.
+    repr = MacroSyntax.to_syntax(arm)
+    assert is_tuple(MacroSyntax.from_syntax(repr))
+  end
+
+  test "a list-valued meta attr (selective-import item list) round-trips faithfully" do
+    ast = {:import,
+           [items: ["foo", "bar"], source: "Std.String", import_type: :use, language: :cure],
+           []}
+
+    repr = MacroSyntax.to_syntax(ast)
+    back = MacroSyntax.from_syntax(repr)
+
+    assert {:import, meta, []} = back
+    assert Keyword.fetch!(meta, :items) == ["foo", "bar"]
+  end
+
+  test "a map-valued meta attr (interface default-method table) round-trips faithfully" do
+    parsed = parse_stmt!("""
+    interface Equatable(a)
+      fn eq(x: a, y: a) -> Bool
+      fn ne(x: a, y: a) -> Bool = true
+    end
+    """)
+
+    # A top-level `interface` (no `mod` wrapper) parses as a `:block` with the
+    # trailing stray `end` token as a sibling -- dig out the interface node.
+    ast =
+      case parsed do
+        {:block, _, items} -> Enum.find(items, &match?({:interface, _, _}, &1))
+        other -> other
+      end
+
+    assert {:interface, imeta, _methods} = ast
+    assert %{"ne" => _} = Keyword.fetch!(imeta, :defaults)
+
+    repr = MacroSyntax.to_syntax(ast)
+    back = MacroSyntax.from_syntax(repr)
+
+    assert {:interface, bmeta, _} = back
+    defaults = Keyword.fetch!(bmeta, :defaults)
+    assert is_map(defaults)
+    assert {:literal, _, true} = Map.fetch!(defaults, "ne")
   end
 end
