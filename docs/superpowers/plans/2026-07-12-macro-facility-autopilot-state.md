@@ -699,12 +699,20 @@ field holds underneath → slice 2 UNCHANGED + un-wasted; what's rejected is shi
 the elab API. Recorded in the Tier-3 execution design note (Decision B + slice 6, elevated to "land with/right
 after execution"). Type-derivation-from-grammar = the new machinery (leans on landed dependent records).
 
-**NEXT:** SP2 Tier-3 slice-2 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2e plan
-(plan-for-code: falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: does
-`Std.Syntax` actually elaborate (nested `List(Syntax)` positivity like `Json.Value`; needed imports); the
-`to_syntax`/`from_syntax` round-trip covers real node shapes incl. attrs-preservation (function names/operators);
-the SOpaque exotic path doesn't crash; `strip`-based round-trip equality is sound. Then Stage 4 execute, Stage 5
-review. After slice 2: slice 3 (BIG execution pass), then the TYPED-RECORD derivation (per the steer above),
+SP2 Tier-3 slice-2 Stage 3 DONE — plan hardened + committed `ae0fa62` (4 passes, 2 clean, high confidence).
+Reviewer patched the exact code into scratch + RAN it, fixing 3 grounding errors: (1) CRITICAL — the regex test
+asserted tag `:regex`, but `~r/foo/` parses to `{:literal, [subtype: :regex], {body,flags}}` (tag `:literal`);
+test fixed to `{:syn_leaf, :literal, attrs, :s_opaque}` + `{:subtype,{:s_atom,:regex}}` attr. (2) `@group(:syntax)`
+isn't a recognized Preload group → `@group(:core)` (like sigma/proof). (3) stale `strip_pos/1`→`strip/1` xref.
+VERIFIED LIVE: `Std.Syntax` elaborates `{:ok}` with just `use Std.String` (nested `List(Syntax)` positivity fine,
+forward refs fine, `SOpaque` nullary ctor fine); round-trip preserves function NAMES + attr key ORDER (strip==
+non-vacuous); `:string_interpolation` recurses cleanly (parts are real nodes, no crash). 1021 tests pass.
+
+**NEXT:** SP2 Tier-3 slice-2 Stage 4 — execute Task 1 (`lib/std/syntax.cure` `Std.Syntax`/`Attr`/`SynLit` ADT,
+`@group(:core)`, elaborates-test) then Task 2 (`Cure.Compiler.MacroSyntax.to_syntax`/`from_syntax` bridge + lossless
+round-trip test incl. the corrected `:literal`/`:regex` SOpaque case) inline TDD on Opus, strict red→green, commit
+per task (ghost author, explicit pathspec, mix from worktree root). Then Stage 5 code review. After slice 2: slice
+3 (BIG execution pass — elaborate+normalise+splice), then TYPED-RECORD derivation (operator steer, `a.name`),
 `check…else fail C`, WIRING. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass arch).
 Deferred post-gate SP1: T9, T7b. (`actor` end-state = §14.6, `a.name` typed reflection; north star for SP5.)
 
