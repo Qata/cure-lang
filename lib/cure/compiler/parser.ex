@@ -4828,18 +4828,28 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       %Token{type: :lt} ->
-        with %Token{type: :identifier, value: name} <- peek_at(state, 1),
-             %Token{type: :colon} <- peek_at(state, 2),
-             %Token{type: :identifier, value: kind} <- peek_at(state, 3),
-             %Token{type: :gt} <- peek_at(state, 4) do
-          hole = {:hole, %{name: name, kind: kind, line: peek(state).line}}
-          state = state |> advance() |> advance() |> advance() |> advance() |> advance()
-          parse_rule_segments(state, [hole | acc])
-        else
+        case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3), peek_at(state, 4), peek_at(state, 5),
+              peek_at(state, 6)} do
+          {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "raw"},
+           %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}} ->
+            hole = {:raw_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
+            state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc])
+
           _ ->
-            t = peek(state)
-            state = add_error(state, {:malformed_hole, t.line, t.col})
-            {Enum.reverse(acc), advance(state)}
+            with %Token{type: :identifier, value: name} <- peek_at(state, 1),
+                 %Token{type: :colon} <- peek_at(state, 2),
+                 %Token{type: :identifier, value: kind} <- peek_at(state, 3),
+                 %Token{type: :gt} <- peek_at(state, 4) do
+              hole = {:hole, %{name: name, kind: kind, line: peek(state).line}}
+              state = state |> advance() |> advance() |> advance() |> advance() |> advance()
+              parse_rule_segments(state, [hole | acc])
+            else
+              _ ->
+                t = peek(state)
+                state = add_error(state, {:malformed_hole, t.line, t.col})
+                {Enum.reverse(acc), advance(state)}
+            end
         end
 
       %Token{value: v} ->
