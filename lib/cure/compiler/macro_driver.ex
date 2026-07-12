@@ -35,7 +35,8 @@ defmodule Cure.Compiler.MacroDriver do
   end
 
   defp valid_register?(%{name: name, offset: offset, width: width, access: access})
-       when (is_atom(name) or is_binary(name)) and is_integer(offset) and offset >= 0 and width in @widths and access in @access,
+       when (is_atom(name) or is_binary(name)) and is_integer(offset) and offset >= 0 and width in @widths and
+              access in @access,
        do: true
 
   defp valid_register?(_), do: false
@@ -43,6 +44,10 @@ defmodule Cure.Compiler.MacroDriver do
   defp overlapping?(registers) do
     ranges = Enum.map(registers, fn %{offset: offset, width: width} -> {offset, offset + div(width, 8)} end)
 
-    Enum.any?(ranges, fn {start, finish} -> Enum.any?(ranges, fn {other_start, other_finish} -> start != other_start and start < other_finish and other_start < finish end) end)
+    Enum.any?(ranges, fn {start, finish} ->
+      Enum.any?(ranges, fn {other_start, other_finish} ->
+        start != other_start and start < other_finish and other_start < finish
+      end)
+    end)
   end
 end

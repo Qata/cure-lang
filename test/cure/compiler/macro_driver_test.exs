@@ -17,7 +17,11 @@ defmodule Cure.Compiler.MacroDriverTest do
   end
 
   test "rejects duplicate and overlapping register ranges" do
-    duplicate = [%{name: :status, offset: 0, width: 8, access: :read}, %{name: :status, offset: 2, width: 8, access: :write}]
+    duplicate = [
+      %{name: :status, offset: 0, width: 8, access: :read},
+      %{name: :status, offset: 2, width: 8, access: :write}
+    ]
+
     assert {:error, :duplicate_driver_register} = MacroDriver.build(:Sensor, duplicate)
 
     overlap = [%{name: :a, offset: 0, width: 16, access: :read}, %{name: :b, offset: 1, width: 8, access: :read}]
