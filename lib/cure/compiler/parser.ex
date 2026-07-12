@@ -42,7 +42,7 @@ defmodule Cure.Compiler.Parser do
 
   # -- Parser State ----------------------------------------------------------
 
-  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, active_macros: %{}]
+  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, active_macros: %{}, fresh_counter: 0]
 
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
@@ -158,7 +158,7 @@ defmodule Cure.Compiler.Parser do
 
     case match_segments(state, rule.segments, %{}, 0) do
       {:ok, bindings, _progress, state} ->
-        {expand_rule(rule, bindings), state}
+        expand_rule(rule, bindings, state)
 
       {:error, progress, state} ->
         t = peek(state)
@@ -200,12 +200,92 @@ defmodule Cure.Compiler.Parser do
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
 
-  # Substitute hole bindings into a rule's template: replace any
-  # `{:variable, _, name}` whose `name` is a bound hole with its bound AST.
-  # A zero-hole rule (empty bindings) returns the template unchanged.
-  defp expand_rule(rule, bindings) do
-    subst_holes(rule.template, bindings)
+  # Expand a rule: freshen its `<fresh Name>` markers to per-expansion gensyms
+  # BEFORE substituting holes (so use-site hole material is never freshened),
+  # then substitute the bound holes. Returns `{expanded_ast, state}` — the
+  # freshening counter threads back out to the caller.
+  defp expand_rule(rule, bindings, state) do
+    {freshened, state} = freshen(rule.template, state)
+    {subst_holes(freshened, bindings), state}
   end
+
+  # Mint one deterministic gensym per distinct declared fresh name, then rewrite
+  # markers and plain references of those names. Counter lives in parser state so
+  # gensyms are stable within a build (design §5) and unique across use-sites.
+  defp freshen(template, state) do
+    names = collect_fresh_names(template) |> MapSet.to_list() |> Enum.sort()
+
+    {rename, state} =
+      Enum.reduce(names, {%{}, state}, fn n, {m, s} ->
+        {Map.put(m, n, "#{n}$#{s.fresh_counter}"), %{s | fresh_counter: s.fresh_counter + 1}}
+      end)
+
+    {apply_freshening(template, rename), state}
+  end
+
+  defp collect_fresh_names({:fresh_name, _meta, name}), do: MapSet.new([name])
+
+  defp collect_fresh_names({_t, meta, ch}) when is_list(ch) do
+    Enum.reduce(ch, collect_fresh_names_meta(meta), fn c, acc ->
+      MapSet.union(acc, collect_fresh_names(c))
+    end)
+  end
+
+  defp collect_fresh_names(_), do: MapSet.new()
+
+  # Fresh markers can hide in meta (e.g. a match-arm guard), same reason
+  # subst_holes walks meta. A meta VALUE can itself be a raw list of AST nodes
+  # rather than a single tuple (e.g. a `with`-rematch arm's `:parent_patterns`),
+  # so split on is_tuple/is_list exactly like subst_holes_meta_value.
+  defp collect_fresh_names_meta(meta) when is_list(meta) do
+    Enum.reduce(meta, MapSet.new(), fn
+      {_k, v}, acc -> MapSet.union(acc, collect_fresh_names_value(v))
+      _, acc -> acc
+    end)
+  end
+
+  defp collect_fresh_names_meta(_), do: MapSet.new()
+
+  defp collect_fresh_names_value(v) when is_tuple(v), do: collect_fresh_names(v)
+
+  defp collect_fresh_names_value(v) when is_list(v),
+    do: Enum.reduce(v, MapSet.new(), &MapSet.union(&2, collect_fresh_names_value(&1)))
+
+  defp collect_fresh_names_value(_), do: MapSet.new()
+
+  # Rewrite: a marker becomes a variable of its gensym; a plain variable whose
+  # name is a declared fresh name becomes its gensym; everything else recurses
+  # (children AND meta, mirroring subst_holes).
+  defp apply_freshening({:fresh_name, meta, name}, rename),
+    do: {:variable, meta, Map.get(rename, name, name)}
+
+  defp apply_freshening({:variable, meta, name} = v, rename) do
+    case Map.fetch(rename, name) do
+      {:ok, g} -> {:variable, meta, g}
+      :error -> v
+    end
+  end
+
+  defp apply_freshening({t, meta, ch}, rename) when is_list(ch),
+    do: {t, apply_freshening_meta(meta, rename), Enum.map(ch, &apply_freshening(&1, rename))}
+
+  defp apply_freshening(other, _rename), do: other
+
+  defp apply_freshening_meta(meta, rename) when is_list(meta) do
+    Enum.map(meta, fn
+      {k, v} -> {k, apply_freshening_value(v, rename)}
+      other -> other
+    end)
+  end
+
+  defp apply_freshening_meta(meta, _rename), do: meta
+
+  defp apply_freshening_value(v, rename) when is_tuple(v), do: apply_freshening(v, rename)
+
+  defp apply_freshening_value(v, rename) when is_list(v),
+    do: Enum.map(v, &apply_freshening_value(&1, rename))
+
+  defp apply_freshening_value(v, _rename), do: v
 
   defp subst_holes({:variable, _meta, name} = v, bindings) do
     case Map.fetch(bindings, name) do

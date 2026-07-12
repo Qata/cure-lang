@@ -22,4 +22,35 @@ defmodule Cure.Compiler.MacroHygieneTest do
       parse("mod M\n  macro G\n    syntax g becomes let <fresh h> = 100 in h\n")
     assert {:fresh_name, _meta, "h"} = find_fresh(ast)
   end
+
+  # Find fn body by name (function_def carries name in meta, body as [body]).
+  defp fn_body({:function_def, meta, [body]}, name),
+    do: if(to_string(Keyword.get(meta, :name)) == name, do: body)
+  defp fn_body({_t, _m, ch}, name) when is_list(ch), do: Enum.find_value(ch, &fn_body(&1, name))
+  defp fn_body(_, _), do: nil
+
+  test "a <fresh> template binder is gensym'd so it cannot capture a same-named use-site arg" do
+    # addg's template binds `g` via <fresh g>; the use-site passes its own `g`
+    # (the parameter) as the hole. After expansion the binder must be a fresh
+    # name (not "g"), distinct from the substituted parameter `g`, so no capture.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro AddG\n    syntax addg <e: Code> becomes let <fresh g> = 100 in e + g\n  fn f(g: Int) -> Int = addg g\n"
+      )
+
+    body = fn_body(ast, "f")
+    # body = let <gensym> = 100 in g + <gensym>
+    {:block, _, [assign, plus]} = body
+    {:assignment, _, [{:variable, _, binder}, _]} = assign
+    {:binary_op, _, [{:variable, _, lhs}, {:variable, _, rhs}]} = plus
+
+    # binder was freshened away from "g"
+    refute binder == "g"
+    # the hole-substituted param stays "g" (NOT captured/freshened)
+    assert lhs == "g"
+    # the template's own reference `g` was freshened to match the binder
+    assert rhs == binder
+    # and there is no leftover unexpanded marker ANYWHERE in the expanded body
+    refute find_fresh(body)
+  end
 end
