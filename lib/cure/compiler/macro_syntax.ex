@@ -8,6 +8,28 @@ defmodule Cure.Compiler.MacroSyntax do
   """
 
   @doc """
+  Lower internal standard-library macro markers into ordinary parser AST.
+
+  The marker keeps a macro template from recursively matching its own public
+  keyword. It disappears here; downstream elaboration sees an ordinary call.
+  """
+  @spec lower_internal(term()) :: {:ok, tuple()} | :not_internal | {:error, term()}
+  def lower_internal({:function_call, meta, []}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      "__optic_lens_first" -> {:ok, {:function_call, Keyword.put(meta, :name, "first_lens"), []}}
+      "__optic_lens_second" -> {:ok, {:function_call, Keyword.put(meta, :name, "second_lens"), []}}
+      _ -> lower_container({:function_call, meta, []})
+    end
+  end
+
+  def lower_internal(ast) do
+    case lower_container(ast) do
+      :not_a_container -> :not_internal
+      result -> result
+    end
+  end
+
+  @doc """
   Lower the standard-library OTP container constructor used by the prelude
   macros. The body is raw macro input, so it is parsed by the ordinary parser
   before becoming a container node.

@@ -151,4 +151,23 @@ mod Std.Optic
   ## is fixed by the later `x` argument, so it elaborates in checking mode.)
   fn set({s: Type}, {a: Type}, {k: OpticKind}, o: Optic(s, a, k), new: a, x: s) -> s =
     over(o, fn(ignored) -> new, x)
+
+  ## Common tuple lenses exposed through the `lens` syntax macro. The macro is
+  ## only surface sugar; these are ordinary typed Std.Optic functions.
+  fn first_get_int(x: Tuple(Int, Int)) -> Int = x.1
+  fn first_put_int(y: Int) -> (Tuple(Int, Int)) -> Tuple(Int, Int) = fn(x) -> %[y, x.2]
+  fn second_get_int(x: Tuple(Int, Int)) -> Int = x.2
+  fn second_put_int(y: Int) -> (Tuple(Int, Int)) -> Tuple(Int, Int) = fn(x) -> %[x.1, y]
+
+  fn first_lens() -> Optic(Tuple(Int, Int), Int, LensKind) =
+    lens(first_get_int, first_put_int)
+
+  fn second_lens() -> Optic(Tuple(Int, Int), Int, LensKind) =
+    lens(second_get_int, second_put_int)
+
+  macro TupleLenses
+    syntax lens first becomes __optic_lens_first()
+      example lens first expands first_lens()
+    syntax lens second becomes __optic_lens_second()
+      example lens second expands second_lens()
 end

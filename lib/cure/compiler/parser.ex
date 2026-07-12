@@ -173,25 +173,27 @@ defmodule Cure.Compiler.Parser do
           rules
 
         _ ->
-          path = Path.expand("../../std/otp.cure", __DIR__)
+          stdlib_macro_paths = Path.wildcard(Path.expand("../../std/*.cure", __DIR__))
 
-          with {:ok, source} <- File.read(path),
-               {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
-               {:ok, ast} <- parse(tokens, file: path, emit_events: false, prelude_macros: false) do
-            ast
-            |> collect_macro_defs()
-            |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
-              Enum.reduce(rules, acc, fn
-                %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
-                  Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
+          Enum.reduce(stdlib_macro_paths, %{}, fn path, acc ->
+            with {:ok, source} <- File.read(path),
+                 {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
+                 {:ok, ast} <- parse(tokens, file: path, emit_events: false, prelude_macros: false) do
+              ast
+              |> collect_macro_defs()
+              |> Enum.reduce(acc, fn {:macro_def, _meta, rules}, macro_acc ->
+                Enum.reduce(rules, macro_acc, fn
+                  %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
+                    Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
 
-                _, acc2 ->
-                  acc2
+                  _, acc2 ->
+                    acc2
+                end)
               end)
-            end)
-          else
-            _ -> %{}
-          end
+            else
+              _ -> acc
+            end
+          end)
       end
 
     :persistent_term.put({__MODULE__, :prelude_macros}, rules)
@@ -345,7 +347,8 @@ defmodule Cure.Compiler.Parser do
   defp parse_macro_use(state, keyword), do: parse_macro_use(state, keyword, state.active_macros)
 
   defp parse_macro_use(state, keyword, registry) do
-    [rule | _] = Map.fetch!(registry, keyword)
+    rules = Map.fetch!(registry, keyword)
+    rule = select_macro_rule(rules, state)
     # consume the keyword token
     state = advance(state)
 
@@ -371,6 +374,16 @@ defmodule Cure.Compiler.Parser do
          }), state}
     end
   end
+
+  defp select_macro_rule([first | rest], state) do
+    Enum.find(rest, first, fn rule -> macro_rule_head_matches?(rule, state) end)
+  end
+
+  defp macro_rule_head_matches?(%{segments: [{:lit, literal} | _]}, state) do
+    lit_token_matches?(peek_at(state, 1), literal)
+  end
+
+  defp macro_rule_head_matches?(_rule, _state), do: false
 
   # Tier-3 use-sites are matched at parse time, but their elab runs only after
   # the dependent environment exists. Preserve the elab reference and the
@@ -607,9 +620,12 @@ defmodule Cure.Compiler.Parser do
     {freshened, state} = freshen(rule.template, state)
     expanded = subst_holes(freshened, bindings)
 
-    case Cure.Compiler.MacroSyntax.lower_container(expanded) do
+    case Cure.Compiler.MacroSyntax.lower_internal(expanded) do
       {:ok, ast} ->
         {ast, state}
+
+      :not_internal ->
+        {expanded, state}
 
       :not_a_container ->
         {expanded, state}
@@ -914,7 +930,7 @@ defmodule Cure.Compiler.Parser do
           # Standard-library container macros use the same segment matcher as
           # user macros. Their raw body is parsed again by MacroSyntax.
           name when is_map_key(state.builtin_macros, name) ->
-            if container_macro_head?(state) do
+            if prelude_macro_head?(state, name) do
               parse_macro_use(state, name, state.builtin_macros)
             else
               {variable(token), advance(state)}
@@ -924,7 +940,11 @@ defmodule Cure.Compiler.Parser do
           # macro keyword wins, but guarded so non-macro identifiers are
           # untouched. (Reserved soft-keyword names are excluded below.)
           name when is_map_key(state.active_macros, name) and name not in @reserved_macro_keywords ->
-            parse_macro_use(state, name)
+            if macro_use_head?(state, name) do
+              parse_macro_use(state, name)
+            else
+              {variable(token), advance(state)}
+            end
 
           name when is_map_key(state.computed_macros, name) and name not in @reserved_macro_keywords ->
             parse_computed_use(state, name)
@@ -2121,6 +2141,18 @@ defmodule Cure.Compiler.Parser do
       _ -> false
     end
   end
+
+  defp prelude_macro_head?(state, "lens") do
+    case peek_at(state, 1) do
+      %Token{type: :identifier, value: value} when value in ["first", "second"] -> true
+      _ -> false
+    end
+  end
+
+  defp prelude_macro_head?(state, _name), do: container_macro_head?(state)
+
+  defp macro_use_head?(state, "lens"), do: prelude_macro_head?(state, "lens")
+  defp macro_use_head?(_state, _name), do: true
 
   # -- Let Binding -----------------------------------------------------------
 
