@@ -15,19 +15,22 @@
 - **One build at a time.** Scoped `mix test test/cure/compiler/macro_explain_test.exs`; `mix test test/cure/compiler/` for regression.
 - **Run mix from the worktree root** (`.claude/worktrees/core-let-binder`), NEVER the parent clone.
 - **Locked AST:** keep `{:macro_def, meta, rules}` — `explain` is a `rules`-list entry, not a new node arity.
+- **Tests immutable once green.** Once a step's red test passes, make later changes go green by editing implementation code only — never by deleting, skipping, loosening, or rewriting a passing test. The sole exception is a test that is itself provably wrong (wrong expected shape, typo, etc.); if you believe a test is wrong, state exactly why before touching it. (Matches the convention in every sibling SP1 plan in this series.)
 
 ## Verified grounding (probed live)
 
 - Tokenization: `explain` → `:identifier "explain"` (a soft keyword like `syntax`/`literal`); `Duration =>` → `:identifier "Duration"`, `:fat_arrow`; `keyword "every"` → `:identifier "keyword"`, `:string "every"`; `=>` → `:fat_arrow`.
 - `parse_macro_rules/2` (`parser.ex:4184`) is the macro-body loop: dispatches `%Token{type: :identifier, value: "syntax"}` → `parse_macro_rule/1` and `value: "literal"` → `parse_literal_rule/1`, else `{:expected, :syntax_rule, …}`. Add an `"explain"` clause.
-- A `syntax` rule map is `%{kind: :syntax, keyword, segments: [{:lit,w}|{:hole,%{name,kind,line}}], template, …}`; a `literal` rule is `%{kind: :literal, segments: [{:hole,_}, {:lit, suffix}], …}`. `harvest_active_macros/1`/`harvest_literal_macros/1` filter by `kind: :syntax`/`:literal` — an `%{kind: :explain, …}` entry is ignored by both (no use-site dispatch), exactly right.
-- `errors.ex` `format_error/2` dispatch + `format_diagnostic/5` renderer (SP1 §2 floor established the pattern); place a `:missing_diagnosis` clause before the catch-all.
+- A `syntax` rule map is `%{kind: :syntax, keyword: kw, segments: [{:lit,w}|{:hole,%{name,kind,line}}], template, …}`; a `literal` rule is `%{kind: :literal, keyword: nil, segments: [{:hole,_}, {:lit, suffix}], suffix: s, …}`. `harvest_active_macros/1`/`harvest_literal_macros/1` filter by `kind: :syntax`/`:literal` — an `%{kind: :explain, …}` entry is ignored by both (no use-site dispatch), exactly right.
+- **A `syntax` rule's own dispatch keyword lives OUTSIDE `segments`, in the separate `keyword` field — `segments` is only what follows it.** Probed live (`Cure.Compiler.Parser.parse/2` on `"macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n"`): the parsed rule is `%{kind: :syntax, keyword: "every", segments: [hole: %{line: 2, name: "t", kind: "Duration"}], ...}` — **zero `{:lit, _}` entries in `segments`** even though `every` is a literal token the use-site must match. Probed a second rule with a trailing literal word (`syntax every <t: Duration> minutes becomes …`) to confirm `segments` DOES carry literal words that come *after* the leading keyword: `segments: [hole: %{...}, lit: "minutes"]`. So a naive `derive_points` that only walks `rule.segments` silently drops the rule's own dispatch keyword as a failure point — see Task 2 Step 3 below, which special-cases it.
+- `errors.ex` `format_error/2` dispatch + `format_diagnostic/5` renderer (SP1 §2 floor established the pattern); place a `:missing_diagnosis` clause before the catch-all (`errors.ex:398`) and `describe_point/1` after it, matching the existing `article/1` helper's placement/comment at the same spot — confirmed by reading the file.
 
 ## Failure-point derivation (the structural `Diagnosis`)
 
 From a macro's `:syntax`/`:literal` rules, the set of structural points (deduped) is:
 - for each `{:hole, %{kind: k}}` segment → `{:hole_kind, k}` ("this position expected a `k`");
-- for each `{:lit, w}` segment → `{:keyword, w}` ("expected `w` here").
+- for each `{:lit, w}` segment → `{:keyword, w}` ("expected `w` here");
+- **for a `:syntax` rule, its own dispatch keyword `rule.keyword` → `{:keyword, kw}` too** — it is not a `segments` entry (see the probed rule shape in "Verified grounding" above), so it must be derived separately or it silently escapes the exhaustiveness check entirely. This is the common case: a bare `syntax every <t: Duration> becomes …` rule has ONE literal token (`every`) and it lives only in `rule.keyword`.
 
 An `explain` clause covers a point iff: a `Category =>` clause (point form `{:category, c}`) covers every `{:hole_kind, c}`; a `keyword "w" =>` clause (point form `{:keyword, w}`) covers `{:keyword, w}`. Exhaustive ⇔ every derived point is covered. Uncovered → `{:missing_diagnosis, [point, …]}`.
 
@@ -72,12 +75,23 @@ defmodule Cure.Compiler.MacroExplainTest do
     assert {:category, "Duration"} in points
     assert {:keyword, "every"} in points
   end
+
+  test "a malformed explain point (stray '=>' with no preceding point) is a recorded parse error, not a crash" do
+    {:ok, tokens} =
+      Lexer.tokenize(
+        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n  explain\n    => \"oops\"\n",
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    assert Enum.any?(errors, &match?({:expected, :explain_point, :got, _, _, _}, &1))
+  end
 end
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (`parse_macro_rules` records `{:expected, :syntax_rule, …}` on the `explain` line → `Parser.parse` returns `{:error, …}`, `{:ok, ast} =` raises).
+- [ ] **Step 2: Run it — expect FAIL** (`parse_macro_rules` records `{:expected, :syntax_rule, …}` on the `explain` line → `Parser.parse` returns `{:error, …}`, `{:ok, ast} =` raises for the first test. Probed live: WITHOUT the `parse_explain_point/1` fallback added in Step 3 below, the second test doesn't merely fail an assertion — it CRASHES the whole run with an uncaught `** (CaseClauseError) no case clause matching: %Cure.Compiler.Token{type: :fat_arrow, ...}` raised from `parse_explain_point/1`, propagating up through `parse_explain_clauses/2` → `parse_explain_block/1` → `parse_macro_rules/2` → `Parser.parse/2`. Both are expected-red for this step; Step 3's fallback clause is what turns the crash into a clean `{:error, [...]}`.).
 
-Run: `mix test test/cure/compiler/macro_explain_test.exs` → FAIL.
+Run: `mix test test/cure/compiler/macro_explain_test.exs` → FAIL (first test fails an assertion; second test's own process crashes with `CaseClauseError` until Step 3 lands the fallback).
 
 - [ ] **Step 3: Add the `explain` dispatch + parsers**
 
@@ -135,6 +149,19 @@ Add near `parse_literal_rule/1` (uses `expect/2`, `expect_dedent/1`, `skip_macro
   # A point is `keyword "w"` (a literal-token failure) or a bare `Category`
   # identifier (a typed-hole failure). Backticked/qualified categories are out
   # of scope for this slice.
+  #
+  # A total fallback is REQUIRED here, not optional polish: probed live, a
+  # malformed point (e.g. `explain\n    => "oops"`, a stray `=>` with no
+  # preceding point) reaches this function with `peek(state)` a `:fat_arrow`
+  # token, and the two-clause `case` above (without this fallback) raises
+  # `** (CaseClauseError) no case clause matching: %Cure.Compiler.Token{type: :fat_arrow, ...}`
+  # UNCAUGHT all the way up through `Parser.parse/2` — crashing the whole parse
+  # instead of recording a recoverable diagnostic the way every other malformed
+  # construct in this parser does (e.g. `parse_macro_rules/2`'s `other ->`
+  # clause, which calls `add_error` and skips a token). Record the error and
+  # recover by treating the point as unnamed and NOT advancing past the
+  # offending token (so `expect(state, :fat_arrow)` in the caller either
+  # matches it directly or reports its own clean `:expected` error next).
   defp parse_explain_point(state) do
     case peek(state) do
       %Token{type: :identifier, value: "keyword"} ->
@@ -145,6 +172,11 @@ Add near `parse_literal_rule/1` (uses `expect/2`, `expect_dedent/1`, `skip_macro
 
       %Token{type: :identifier, value: cat} ->
         {{:category, cat}, advance(state)}
+
+      other ->
+        error = {:expected, :explain_point, :got, other.type, other.line, other.col}
+        state = add_error(state, error)
+        {{:category, "?"}, state}
     end
   end
 ```
@@ -260,12 +292,29 @@ defmodule Cure.Compiler.MacroValidate do
     end
   end
 
-  # Structural Diagnosis: one point per typed hole and per literal segment across
-  # all syntax/literal rules, deduped and order-stable.
+  # Structural Diagnosis: one point per typed hole, per literal segment, AND
+  # (for `:syntax` rules) the rule's own dispatch keyword — across all
+  # syntax/literal rules, deduped and order-stable.
+  #
+  # NOTE: a `:syntax` rule's dispatch keyword lives in `rule.keyword`, NOT in
+  # `rule.segments` (`segments` is only what follows it — verified live, see
+  # "Verified grounding"). Omitting this would mean the single most common
+  # macro-use failure (typing the wrong keyword) could never be required to
+  # have an `explain` clause, defeating the exhaustiveness guarantee for the
+  # plan's own headline example (`syntax every <t: Duration> becomes …` has
+  # NO literal `segments` entries at all).
   defp derive_points(rules) do
     rules
     |> Enum.filter(&(&1[:kind] in [:syntax, :literal]))
-    |> Enum.flat_map(fn rule -> Enum.map(rule.segments, &segment_point/1) end)
+    |> Enum.flat_map(fn rule ->
+      keyword_points =
+        case rule do
+          %{kind: :syntax, keyword: kw} when is_binary(kw) -> [{:keyword, kw}]
+          _ -> []
+        end
+
+      keyword_points ++ Enum.map(rule.segments, &segment_point/1)
+    end)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end
