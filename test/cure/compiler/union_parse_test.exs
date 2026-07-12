@@ -218,8 +218,8 @@ defmodule Cure.Compiler.UnionParseTest do
       assert {:typed_pattern, _, ["n", type_ast]} =
                collect(ast, []) |> Enum.find(&match?({:typed_pattern, _, _}, &1))
 
-      assert {:attribute_access, [attribute: "Nat"],
-              [{:attribute_access, [attribute: "Nat"], [{:variable, _, "Std"}]}]} = type_ast
+      assert {:attribute_access, [attribute: "Nat"], [{:attribute_access, [attribute: "Nat"], [{:variable, _, "Std"}]}]} =
+               type_ast
     end
 
     test "a typed pattern's annotation may be a qualified type applied to arguments" do

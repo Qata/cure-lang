@@ -343,6 +343,7 @@ defmodule Cure.CLITest do
 
         File.write!(path, "mod M\n  fn f() -> Int = 1\n")
         File.chmod!(path, 0o000)
+
         on_exit(fn ->
           File.chmod(path, 0o644)
           File.rm_rf!(path)

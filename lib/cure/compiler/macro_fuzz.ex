@@ -361,9 +361,12 @@ defmodule Cure.Compiler.MacroFuzz do
     case expansion do
       {:container, _meta, _body} ->
         case Cure.Compiler.ContainerMacro.descriptor(expansion) do
-          {:ok, _descriptor} -> :ok
+          {:ok, _descriptor} ->
+            :ok
+
           {:error, reason} ->
-            {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+            {:error,
+             {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
         end
 
       _ ->

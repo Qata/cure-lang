@@ -16,6 +16,7 @@ defmodule Antigen.Assays.KernelProbe do
   the term-well-formedness gate (like `check/verdict`, `serialize/decode`).
   """
   alias Antigen.Challenge
+
   alias Cure.Core.{
     Kernel,
     Builtins,
@@ -31,6 +32,7 @@ defmodule Antigen.Assays.KernelProbe do
     Certificate,
     Validator
   }
+
   alias Cure.Migrate.Rule
   alias Cure.Compiler.{Lexer, Parser, Trivia}
 
@@ -583,8 +585,7 @@ defmodule Antigen.Assays.KernelProbe do
 
     case Cure.Migrate.run_to_fixpoint(fixpoint_ast(), rules: rules) do
       {:ok, {:block, _m, ex}, _warns} ->
-        {Enum.any?(ex, &match?({:literal, _, "a"}, &1)),
-         Enum.any?(ex, &match?({:literal, _, "b"}, &1))}
+        {Enum.any?(ex, &match?({:literal, _, "a"}, &1)), Enum.any?(ex, &match?({:literal, _, "b"}, &1))}
 
       other ->
         other

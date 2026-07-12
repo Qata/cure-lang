@@ -1035,8 +1035,11 @@ defmodule Cure.Compiler.Lexer do
             # above (mirroring the string lexer, which likewise does not interpret
             # `\r`/`\b`/…); anything else is a hard error rather than a silent
             # miscompile.
-            nil -> {:invalid, state}
-            _ -> {:bad_escape, state}
+            nil ->
+              {:invalid, state}
+
+            _ ->
+              {:bad_escape, state}
           end
 
         cond do

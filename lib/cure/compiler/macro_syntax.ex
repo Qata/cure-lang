@@ -24,13 +24,18 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def lower_container(_), do: :not_a_container
 
-  defp container_kind({:literal, _meta, kind}) when kind in [:actor, :fsm, :sup, :app], do: {:ok, if(kind == :sup, do: :supervisor, else: kind)}
-  defp container_kind({:variable, _meta, kind}) when kind in ["actor", "fsm", "sup", "app"], do: container_kind({:literal, [], String.to_atom(kind)})
+  defp container_kind({:literal, _meta, kind}) when kind in [:actor, :fsm, :sup, :app],
+    do: {:ok, if(kind == :sup, do: :supervisor, else: kind)}
+
+  defp container_kind({:variable, _meta, kind}) when kind in ["actor", "fsm", "sup", "app"],
+    do: container_kind({:literal, [], String.to_atom(kind)})
+
   defp container_kind(other), do: {:error, {:invalid_container_kind, other}}
 
   defp container_name({:variable, _meta, name}) when is_binary(name), do: {:ok, name}
   defp container_name({:literal, _meta, name}) when is_binary(name), do: {:ok, name}
   defp container_name({:literal, _meta, name}) when is_atom(name), do: {:ok, Atom.to_string(name)}
+
   defp container_name({:attribute_access, meta, [base]}) when is_list(meta) do
     with {:ok, base} <- container_name(base),
          attr when is_binary(attr) <- Keyword.get(meta, :attribute) do
@@ -39,6 +44,7 @@ defmodule Cure.Compiler.MacroSyntax do
       _ -> {:error, {:invalid_container_name, {base, meta}}}
     end
   end
+
   defp container_name(other), do: {:error, {:invalid_container_name, other}}
 
   defp parse_container_body(tokens) do

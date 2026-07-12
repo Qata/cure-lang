@@ -203,7 +203,6 @@ defmodule Cure.MCP.Server do
     end
   end
 
-
   defp call_tool("validate_syntax", %{"source" => source}) do
     with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, _ast} <- Parser.parse(tokens, emit_events: false) do
@@ -244,7 +243,6 @@ defmodule Cure.MCP.Server do
   end
 
   defp summarize_ast(_), do: "(expression)"
-
 
   # -- Error Formatting --------------------------------------------------------
 

@@ -169,7 +169,9 @@ defmodule Cure.Compiler.Parser do
 
     rules =
       case Application.get_env(:cure, :stdlib_macro_rules) do
-      rules when is_map(rules) -> rules
+        rules when is_map(rules) ->
+          rules
+
         _ ->
           path = Path.expand("../../std/otp.cure", __DIR__)
 

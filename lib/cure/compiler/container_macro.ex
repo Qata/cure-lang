@@ -108,6 +108,7 @@ defmodule Cure.Compiler.ContainerMacro do
 
   defp validate_descriptor(%{kind: :application} = descriptor) do
     callbacks = [%{name: :start, arity: 2}, %{name: :stop, arity: 1}, %{name: :start_phase, arity: 3}]
+
     case OtpMacro.validate_callbacks(:Application, callbacks) do
       :ok -> {:ok, descriptor}
       {:error, _} = error -> error
@@ -116,9 +117,12 @@ defmodule Cure.Compiler.ContainerMacro do
 
   defp validate_descriptor(%{kind: :actor} = descriptor) do
     callbacks =
-      Enum.map([{:init, 1}, {:handle_call, 3}, {:handle_cast, 2}, {:handle_info, 2}, {:terminate, 2}, {:code_change, 3}], fn {name, arity} ->
-        %{name: name, arity: arity}
-      end)
+      Enum.map(
+        [{:init, 1}, {:handle_call, 3}, {:handle_cast, 2}, {:handle_info, 2}, {:terminate, 2}, {:code_change, 3}],
+        fn {name, arity} ->
+          %{name: name, arity: arity}
+        end
+      )
 
     case OtpMacro.validate_callbacks(:GenServer, callbacks) do
       :ok -> {:ok, descriptor}
@@ -128,6 +132,7 @@ defmodule Cure.Compiler.ContainerMacro do
 
   defp validate_descriptor(%{kind: :fsm} = descriptor) do
     callbacks = [%{name: :callback_mode, arity: 0}, %{name: :init, arity: 1}, %{name: :handle_event, arity: 4}]
+
     case OtpMacro.validate_callbacks(:GenStatem, callbacks) do
       :ok -> {:ok, descriptor}
       {:error, _} = error -> error
@@ -144,7 +149,9 @@ defmodule Cure.Compiler.ContainerMacro do
     exports = [{:start_link, 0}, {:init, 1}]
     start = remote_call(:supervisor, :start_link, [tuple([atom(:local), atom(module)]), atom(module), nil_form()])
     child_specs = list(Enum.map(d.children, &child_spec_form/1))
-    init_result = tuple([atom(:ok), tuple([tuple([atom(d.strategy), integer(d.intensity), integer(d.period)]), child_specs])])
+
+    init_result =
+      tuple([atom(:ok), tuple([tuple([atom(d.strategy), integer(d.intensity), integer(d.period)]), child_specs])])
 
     module_forms(module, :supervisor, exports, [
       function(:start_link, 0, [clause([], [start])]),
@@ -155,6 +162,7 @@ defmodule Cure.Compiler.ContainerMacro do
   defp application_forms(d) do
     module = module_atom(d.module)
     exports = [{:start, 2}, {:stop, 1}, {:start_phase, 3}]
+
     start_body =
       case d.root do
         nil -> tuple([atom(:ok), remote_call(:erlang, :self, [])])
@@ -170,13 +178,31 @@ defmodule Cure.Compiler.ContainerMacro do
 
   defp actor_forms(d) do
     module = module_atom(d.module)
-    exports = [{:start_link, 1}, {:init, 1}, {:handle_call, 3}, {:handle_cast, 2}, {:handle_info, 2}, {:terminate, 2}, {:code_change, 3}]
-    start = remote_call(:gen_server, :start_link, [tuple([atom(:local), atom(module)]), atom(module), list([var(:Initial)]), nil_form()])
+
+    exports = [
+      {:start_link, 1},
+      {:init, 1},
+      {:handle_call, 3},
+      {:handle_cast, 2},
+      {:handle_info, 2},
+      {:terminate, 2},
+      {:code_change, 3}
+    ]
+
+    start =
+      remote_call(:gen_server, :start_link, [
+        tuple([atom(:local), atom(module)]),
+        atom(module),
+        list([var(:Initial)]),
+        nil_form()
+      ])
 
     module_forms(module, :gen_server, exports, [
       function(:start_link, 1, [clause([var(:Initial)], [start])]),
       function(:init, 1, [clause([list([var(:State)])], [tuple([atom(:ok), var(:State)])])]),
-      function(:handle_call, 3, [clause([var(:_Request), var(:_From), var(:State)], [tuple([atom(:reply), var(:State), var(:State)])])]),
+      function(:handle_call, 3, [
+        clause([var(:_Request), var(:_From), var(:State)], [tuple([atom(:reply), var(:State), var(:State)])])
+      ]),
       function(:handle_cast, 2, [clause([var(:_Message), var(:State)], [tuple([atom(:noreply), var(:State)])])]),
       function(:handle_info, 2, [clause([var(:_Info), var(:State)], [tuple([atom(:noreply), var(:State)])])]),
       function(:terminate, 2, [clause([var(:_Reason), var(:_State)], [atom(:ok)])]),
@@ -187,23 +213,37 @@ defmodule Cure.Compiler.ContainerMacro do
   defp fsm_forms(d) do
     module = module_atom(d.module)
     exports = [{:start_link, 1}, {:callback_mode, 0}, {:init, 1}, {:handle_event, 4}, {:terminate, 3}]
-    start = remote_call(:gen_statem, :start_link, [tuple([atom(:local), atom(module)]), atom(module), list([var(:Initial)]), nil_form()])
+
+    start =
+      remote_call(:gen_statem, :start_link, [
+        tuple([atom(:local), atom(module)]),
+        atom(module),
+        list([var(:Initial)]),
+        nil_form()
+      ])
 
     module_forms(module, :gen_statem, exports, [
       function(:start_link, 1, [clause([var(:Initial)], [start])]),
       function(:callback_mode, 0, [clause([], [atom(:handle_event_function)])]),
       function(:init, 1, [clause([list([var(:State)])], [tuple([atom(:ok), atom(:initial), var(:State)])])]),
-      function(:handle_event, 4, [clause([var(:_Type), var(:_Event), var(:State), var(:Data)], [tuple([atom(:keep_state), var(:Data)])])]),
+      function(:handle_event, 4, [
+        clause([var(:_Type), var(:_Event), var(:State), var(:Data)], [tuple([atom(:keep_state), var(:Data)])])
+      ]),
       function(:terminate, 3, [clause([var(:_Reason), var(:_State), var(:_Data)], [atom(:ok)])])
     ])
   end
 
   defp module_forms(module, behaviour, exports, functions) do
-    [{:attribute, 1, :module, module}, {:attribute, 1, :behaviour, behaviour}, {:attribute, 1, :export, exports} | functions]
+    [
+      {:attribute, 1, :module, module},
+      {:attribute, 1, :behaviour, behaviour},
+      {:attribute, 1, :export, exports} | functions
+    ]
   end
 
   defp child_spec_form(child) do
     module = module_atom(child.module)
+
     tuple([
       atom(child.id),
       tuple([tuple([atom(module), atom(:start_link), nil_form()])]),
@@ -259,7 +299,9 @@ defmodule Cure.Compiler.ContainerMacro do
     if String.starts_with?(name, "Elixir."), do: String.to_atom(name), else: String.to_atom("Elixir." <> name)
   end
 
-  defp root_module({:function_call, meta, _}) when is_list(meta), do: normalize_name(Keyword.get(meta, :name)) |> module_atom()
+  defp root_module({:function_call, meta, _}) when is_list(meta),
+    do: normalize_name(Keyword.get(meta, :name)) |> module_atom()
+
   defp root_module({:variable, _, name}), do: module_atom(name)
   defp root_module(name) when is_binary(name), do: module_atom(name)
   defp root_module(_), do: nil
@@ -279,7 +321,7 @@ defmodule Cure.Compiler.ContainerMacro do
   defp atom(value), do: {:atom, 1, value}
   defp integer(value), do: {:integer, 1, value}
   defp var(value), do: {:var, 1, value}
-  defp nil_form, do: {:nil, 1}
+  defp nil_form, do: {nil, 1}
   defp list(items), do: Enum.reduce(Enum.reverse(items), nil_form(), fn item, tail -> {:cons, 1, item, tail} end)
   defp tuple(items), do: {:tuple, 1, items}
   defp clause(patterns, body), do: {:clause, 1, patterns, [], body}

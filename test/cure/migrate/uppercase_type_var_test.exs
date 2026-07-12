@@ -276,6 +276,7 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
       src = "mod M\nfn f(x: #{ty}) -> #{ty} = x\n"
       {out, warns} = migrate(src, "builtin.cure")
       assert out =~ "x: #{ty}", "#{ty} should be left as-is"
+
       refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var)),
              "#{ty} should not warn"
     end

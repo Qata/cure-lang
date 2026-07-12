@@ -48,8 +48,7 @@ defmodule Cure.Migrate.Rules.RemovedModule do
       since: "2026",
       enforced_in: "2026",
       detect_and_rewrite: &detect_and_rewrite/2,
-      warning_template:
-        "removed stdlib module: no automatic migration — port this reference by hand"
+      warning_template: "removed stdlib module: no automatic migration — port this reference by hand"
     }
   end
 

@@ -21,8 +21,7 @@ defmodule Cure.Core.PrinterTest do
   test "renders a type parameter as an implicit forall" do
     # (a : Type) -> List(a) -> Int   ==>  ∀ {a}. List(a) -> Int
     ty =
-      {:pi, :unrestricted, {:type, 0},
-       {:pi, :unrestricted, {:data, :List, [{:var, 0}], []}, {:int_type}}}
+      {:pi, :unrestricted, {:type, 0}, {:pi, :unrestricted, {:data, :List, [{:var, 0}], []}, {:int_type}}}
 
     assert Printer.print(ty) == "∀ {a}. List(a) -> Int"
   end

@@ -34,8 +34,7 @@ defmodule :cure_std_json_test do
       # magnitudes (|f| >= ~1e254) and silently lost precision (fixed digits
       # after the point, not significant digits). `[:short]` is crash-free and
       # round-trips exactly.
-      for f <- [1.0e300, 1.7976931348623157e308, 1.0e-16, 5.0e-324,
-                0.30000000000000004, 1.0000000000000002] do
+      for f <- [1.0e300, 1.7976931348623157e308, 1.0e-16, 5.0e-324, 0.30000000000000004, 1.0000000000000002] do
         s = :cure_std_json.encode({:Num, f})
         assert is_binary(s)
         # `decode(encode(f))` must recover the same float.

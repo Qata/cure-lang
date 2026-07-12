@@ -6,8 +6,13 @@ defmodule Cure.Compiler.EditionLexerTest do
   # A fixture rule that retires the keyword "fsm" starting at edition "2027".
   defp retire_fsm_2027 do
     %Rule{
-      id: :W_test_retire, description: "retire fsm", phase: :syntactic,
-      tier: :machine, since: "2026", enforced_in: "2027", retires_keywords: ["fsm"],
+      id: :W_test_retire,
+      description: "retire fsm",
+      phase: :syntactic,
+      tier: :machine,
+      since: "2026",
+      enforced_in: "2027",
+      retires_keywords: ["fsm"],
       detect_and_rewrite: fn _ast, _ctx -> :no_change end,
       warning_template: "fsm retired"
     }

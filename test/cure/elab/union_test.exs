@@ -572,6 +572,7 @@ defmodule Cure.Elab.UnionTest do
       assert apply(:"Cure.LetOnly", :f, []) == 5
     end
   end
+
   # The headline motivation (spec §1.3): put three unrelated types into a Map without
   # declaring a throwaway public ADT. Requires goal-directed solving — Std.Map.put's
   # `v` must be solved from the EXPECTED map type, not inferred from the first value

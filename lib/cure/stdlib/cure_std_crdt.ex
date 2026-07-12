@@ -207,5 +207,4 @@ defmodule :cure_std_crdt do
 
     %{@k => :mv_register, writes: merged}
   end
-
 end

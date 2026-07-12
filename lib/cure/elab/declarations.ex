@@ -1795,79 +1795,79 @@ defmodule Cure.Elab.Declarations do
   # it carries the qualified-name degrade (`Std.Option` -> `Option`) that the
   # extracted base body did not have.
   defp lower_applied_type(fmeta, args, scope, fam, env, ctx) do
-        raw_name = Keyword.fetch!(fmeta, :name)
+    raw_name = Keyword.fetch!(fmeta, :name)
 
-        # A qualified head (`Std.Map`, from `Mod.Name(args)`) is first offered to the
-        # module-aware type resolver. When it places the name we emit `{:data, key, …}`
-        # in the cond below. When it can't — e.g. `Std.Option`, which lowers to a plain
-        # `{:global, :Option}` rather than a registered inductive family — the name
-        # DEGRADES to its bare tail (`Std.Option` → `Option`) so every downstream check
-        # (implicit-global, family, ctor, global) resolves it EXACTLY as the unqualified
-        # spelling would. Without this degrade a qualified applied type lowered to an
-        # opaque `{:global, :"Std.Option"}` that never converts against the unqualified
-        # `{:global, :Option}` — a silent qualified-vs-unqualified type split. For an
-        # unqualified name `String.split/2` returns `[name]`, so this is a no-op there.
-        qualified_key =
-          if String.contains?(raw_name, ".") do
-            Cure.Elab.Resolution.resolve_qualified(env, raw_name, :type)
-          else
-            :error
-          end
+    # A qualified head (`Std.Map`, from `Mod.Name(args)`) is first offered to the
+    # module-aware type resolver. When it places the name we emit `{:data, key, …}`
+    # in the cond below. When it can't — e.g. `Std.Option`, which lowers to a plain
+    # `{:global, :Option}` rather than a registered inductive family — the name
+    # DEGRADES to its bare tail (`Std.Option` → `Option`) so every downstream check
+    # (implicit-global, family, ctor, global) resolves it EXACTLY as the unqualified
+    # spelling would. Without this degrade a qualified applied type lowered to an
+    # opaque `{:global, :"Std.Option"}` that never converts against the unqualified
+    # `{:global, :Option}` — a silent qualified-vs-unqualified type split. For an
+    # unqualified name `String.split/2` returns `[name]`, so this is a no-op there.
+    qualified_key =
+      if String.contains?(raw_name, ".") do
+        Cure.Elab.Resolution.resolve_qualified(env, raw_name, :type)
+      else
+        :error
+      end
 
-        name =
-          case qualified_key do
-            {:ok, _} -> raw_name
-            :error -> raw_name |> String.split(".") |> List.last()
-          end
+    name =
+      case qualified_key do
+        {:ok, _} -> raw_name
+        :error -> raw_name |> String.split(".") |> List.last()
+      end
 
-        atom = String.to_atom(name)
+    atom = String.to_atom(name)
 
-        # Type-position implicit insertion (spec §7): a term-level global whose
-        # signature carries erased (implicit) parameters cannot lower as a bare
-        # explicit-args spine — the kernel would see an under-applied application
-        # (the `b(first(p))` motive gap). With a typing context threaded in
-        # (return-type lowering only), delegate the whole application to the
-        # term-position machinery. A local binder of the same name shadows the
-        # global (mirrors the applied-bound-var cond branch below), and families/
-        # ctors never carry def quantities, so this misses them by construction.
-        if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
-             implicit_global?(env, atom) do
-          with {:ok, term, _result_type} <-
-                 Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
-            {:ok, term}
-          end
-        else
-          with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
-            cond do
-              match?({:ok, _}, qualified_key) ->
-                {:ok, key} = qualified_key
-                {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
-                {:ok, {:data, key, params, indices}}
+    # Type-position implicit insertion (spec §7): a term-level global whose
+    # signature carries erased (implicit) parameters cannot lower as a bare
+    # explicit-args spine — the kernel would see an under-applied application
+    # (the `b(first(p))` motive gap). With a typing context threaded in
+    # (return-type lowering only), delegate the whole application to the
+    # term-position machinery. A local binder of the same name shadows the
+    # global (mirrors the applied-bound-var cond branch below), and families/
+    # ctors never carry def quantities, so this misses them by construction.
+    if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
+         implicit_global?(env, atom) do
+      with {:ok, term, _result_type} <-
+             Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+        {:ok, term}
+      end
+    else
+      with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+        cond do
+          match?({:ok, _}, qualified_key) ->
+            {:ok, key} = qualified_key
+            {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
+            {:ok, {:data, key, params, indices}}
 
-              # An applied BOUND variable — e.g. a higher-order parameter used as
-              # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
-              # the head against the de Bruijn scope; a local binder shadows a global,
-              # so this is checked first. Without it `F(n)` became a dangling
-              # `{:global, :F}`, and the call site's implicit substitution could never
-              # turn `F` into a solvable metavariable (ledger #10 prerequisite).
-              idx = Enum.find_index(scope, &(&1 == name)) ->
-                {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
+          # An applied BOUND variable — e.g. a higher-order parameter used as
+          # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+          # the head against the de Bruijn scope; a local binder shadows a global,
+          # so this is checked first. Without it `F(n)` became a dangling
+          # `{:global, :F}`, and the call site's implicit substitution could never
+          # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+          idx = Enum.find_index(scope, &(&1 == name)) ->
+            {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
 
-              atom == fam or Inductive.family?(env, atom) ->
-                # Split the applied arguments into the family's parameters (prefix) and
-                # indices (suffix); the kernel checks each slot against its own
-                # telescope. param_count is 0 for parameter-free families (all indices).
-                {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
-                {:ok, {:data, atom, params, indices}}
+          atom == fam or Inductive.family?(env, atom) ->
+            # Split the applied arguments into the family's parameters (prefix) and
+            # indices (suffix); the kernel checks each slot against its own
+            # telescope. param_count is 0 for parameter-free families (all indices).
+            {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+            {:ok, {:data, atom, params, indices}}
 
-              Inductive.get_ctor(env, atom) ->
-                {:ok, {:ctor, atom, core_args}}
+          Inductive.get_ctor(env, atom) ->
+            {:ok, {:ctor, atom, core_args}}
 
-              true ->
-                {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
-            end
-          end
+          true ->
+            {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
         end
+      end
+    end
   end
 
   defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}

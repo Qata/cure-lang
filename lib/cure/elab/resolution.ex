@@ -152,8 +152,7 @@ defmodule Cure.Elab.Resolution do
             amap,
             def_map
           ),
-        ctors:
-          rekey_ctors(env.ctors, MapSet.union(rekeyed_ctor_names, union_ctors), amap, def_map),
+        ctors: rekey_ctors(env.ctors, MapSet.union(rekeyed_ctor_names, union_ctors), amap, def_map),
         ctor_to_family: rekey_c2f(env.ctor_to_family, amap),
         defs: rekey_defs(env.defs, owned_def_names, module_id, amap, def_map),
         certified: rekey_certified(env.certified, owned_def_names, module_id),

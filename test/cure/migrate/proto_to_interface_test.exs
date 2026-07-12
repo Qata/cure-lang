@@ -11,7 +11,7 @@ defmodule Cure.Migrate.ProtoToInterfaceTest do
   end
 
   defp reparses?(src) do
-    match?({:ok, _}, (with {:ok, t} <- Lexer.tokenize(src, emit_events: false), do: Parser.parse(t, emit_events: false)))
+    match?({:ok, _}, with({:ok, t} <- Lexer.tokenize(src, emit_events: false), do: Parser.parse(t, emit_events: false)))
   end
 
   test "proto/impl are rewritten to interface/implementation and the output reparses" do

@@ -3930,7 +3930,17 @@ defmodule Cure.Elab.Elaborator do
   # A pin arm `^x`: same as a literal arm, but the compared value is the current
   # value of the bound variable `x` (elaborated to its core term) rather than a
   # constant. `scrut == x` picks the identical type-directed equality twin.
-  defp literal_chain(scrut_expr, scrut_term, scrut_type, prim, [{{:pin, _m, [{:variable, _vm, name}]}, body} | rest], expected, names, ctx, env) do
+  defp literal_chain(
+         scrut_expr,
+         scrut_term,
+         scrut_type,
+         prim,
+         [{{:pin, _m, [{:variable, _vm, name}]}, body} | rest],
+         expected,
+         names,
+         ctx,
+         env
+       ) do
     with {:ok, x_core, _x_type} <- elaborate_expr_typed({:variable, [], name}, names, ctx, env),
          {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
          {:ok, rest_core} <-
@@ -5680,8 +5690,7 @@ defmodule Cure.Elab.Elaborator do
 
             {:variable, _vm, _name} ->
               bind =
-                {:assignment, [let: true, line: line],
-                 [valpat, mk_call("get", [key_lit, scrut], line)]}
+                {:assignment, [let: true, line: line], [valpat, mk_call("get", [key_lit, scrut], line)]}
 
               {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind]}}
 

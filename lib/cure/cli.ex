@@ -519,7 +519,6 @@ defmodule Cure.CLI do
     end
   end
 
-
   # -- draw (v0.31.0) ----------------------------------------------------------
 
   defp cmd_draw([], _opts) do
@@ -1383,7 +1382,10 @@ defmodule Cure.CLI do
         {:error, {:downgrade, downgraded}}
 
       failed != [] ->
-        Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
+        Enum.each(failed, fn path ->
+          error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)")
+        end)
+
         {:error, {:preflight_failed, failed}}
 
       blocked != [] ->

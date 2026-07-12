@@ -1375,7 +1375,9 @@ defmodule Cure.Compiler.Printer do
       |> Enum.map_join("\n", fn {arg, i} ->
         meta = trivia_meta(arg)
         comma = if i == last, do: "", else: ","
-        value_line = append_trailing(inner_pad <> to_string(arg, depth + 1, indent) <> comma, Keyword.get(meta, :trailing))
+
+        value_line =
+          append_trailing(inner_pad <> to_string(arg, depth + 1, indent) <> comma, Keyword.get(meta, :trailing))
 
         (leading_comment_lines(Keyword.get(meta, :leading), inner_pad) ++ [value_line])
         |> Enum.join("\n")

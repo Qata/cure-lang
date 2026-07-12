@@ -129,6 +129,7 @@ defmodule Cure.Compiler.LexerTest do
   describe "malformed numeric literals return errors, not crashes" do
     test "an all-underscore radix literal (0x_/0b_) errors instead of raising" do
       assert {:error, {:invalid_hex_literal, _, _}} = Lexer.tokenize("0x_", emit_events: false)
+
       assert {:error, {:invalid_binary_literal, _, _}} =
                Lexer.tokenize("0b_", emit_events: false)
     end

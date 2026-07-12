@@ -250,7 +250,10 @@ defmodule Cure.Edition do
 
       false ->
         :persistent_term.put(@advisory_key, true)
-        Logger.warning("no `edition` declared in Cure.toml — add `edition = \"#{current()}\"` under [project] to pin the language surface this project reads against")
+
+        Logger.warning(
+          "no `edition` declared in Cure.toml — add `edition = \"#{current()}\"` under [project] to pin the language surface this project reads against"
+        )
     end
   end
 

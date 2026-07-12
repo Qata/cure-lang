@@ -132,6 +132,7 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
 
   test "Finding 2: plan_migration_source still migrates when :from is at or below :target" do
     src = "mod M\n  fn f() -> Int = 1\n"
+
     assert {:ok, _printed, _warns, "2026"} =
              Cure.CLI.plan_migration_source(src, target: "2026", from: "2026")
   end
@@ -143,8 +144,10 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
   # any trailing content. Preserve everything after the `)`.
   test "A3-F2: splicing preserves a trailing comment on the pragma line" do
     spliced = Cure.CLI.migrate_splice_edition("@edition(\"2026\")  # pin the surface\nmod M\n", "2026")
+
     assert String.contains?(spliced, "# pin the surface"),
            "trailing comment on the pragma line must survive the bump, got: #{inspect(spliced)}"
+
     assert String.starts_with?(spliced, "@edition(\"2026\")")
     assert String.contains?(spliced, "mod M")
   end
@@ -156,8 +159,10 @@ defmodule Cure.CLI.MigrateEditionHardeningTest do
   test "A3-F1: splicing a lone-CR file does not destroy the body" do
     body = "@edition(\"2026\")\rmod M\r  fn f() -> Int = 1\r"
     spliced = Cure.CLI.migrate_splice_edition(body, "2026")
+
     assert String.contains?(spliced, "mod M"),
            "lone-CR body must survive the bump, got: #{inspect(spliced)}"
+
     assert String.contains?(spliced, "fn f()")
     assert String.starts_with?(spliced, "@edition(\"2026\")")
   end
