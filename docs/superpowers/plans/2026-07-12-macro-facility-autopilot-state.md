@@ -45,17 +45,23 @@ with complete anchored code (soft-keyword `macro`, `syntax` rules, typed holes �
 the plan's Global Constraints (Token/state/helpers, soft-keyword dispatch at
 parser.ex:292-340, parse_fsm template at :3894).
 
-**NEXT:** Stage 3 — plan review of `…-sp1-plan.md` (Sonnet subagent,
-recursive-skeptical-review, plan-for-code testing-discipline pass, to two clean passes,
-fixes committed). THEN Stage 4 — execute tasks 1-3 inline TDD on Opus (commit per task),
-scoped `mix test test/cure/compiler/macro_def_parse_test.exs` + `test/cure/compiler/`.
-THEN write the next Stage-2 increment: SP1 tasks T4 (literal/suffix lexer) → T5 two-phase
-parse → T6 use-site matching (thread progress; port syntax-parse maximal-by-progress) →
-T7 hygienic expansion → T8 kernel re-check → T9 scoping. When SP1 is fully executed +
-code-reviewed + suite-green, update this file and start SP2.
+Stage 3 DONE — plan hardened + committed `6dedd96` (4 passes, 2 clean). Reviewer caught
+& fixed two CRITICAL defects and VERIFIED the corrected code for real (scratch-applied,
+6/6 new tests pass, `test/cure/compiler/` suite = 625 passed, then reverted):
+- `Parser.parse/2` returns the BARE node, never a list → tests use `node = parse!(...)`.
+- `end` is a reserved keyword no container consumes; Cure containers close by DEDENT →
+  the macro sources have NO trailing `end` (`macro Every\n`, not `macro Every\nend\n`).
+- Token atoms `:lt`/`:gt`/`:colon` confirmed correct; all anchors verified exact.
+Use the HARDENED plan (`6dedd96`) for execution — it is proven to work.
 
-One code note for T3 execution: confirm the lexer's token atoms for `<`/`>`/`:` (grep
-lexer.ex for `:lt`/`:gt`/`:colon`); the plan flags using the real atoms, not invented ones.
+**NEXT:** Stage 4 — execute tasks 1-3 inline TDD on **Opus**, commit per task, scoped
+`mix test test/cure/compiler/macro_def_parse_test.exs` then `test/cure/compiler/`. The
+reviewer already proved the code green, so expect smooth TDD; still follow red→green per
+step. THEN Stage 5 code review (Sonnet) over the diff → Stage 6 verify. THEN the next
+Stage-2 increment: SP1 tasks T4 (literal/suffix lexer) → T5 two-phase parse → T6 use-site
+matching (thread progress; port syntax-parse maximal-by-progress) → T7 hygienic expansion
+→ T8 kernel re-check → T9 scoping. When SP1 is fully executed + code-reviewed +
+suite-green, update this file and start SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
