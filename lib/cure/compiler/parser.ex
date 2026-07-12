@@ -4345,6 +4345,10 @@ defmodule Cure.Compiler.Parser do
         {rule, state} = parse_literal_rule(state)
         parse_macro_rules(state, [rule | acc])
 
+      %Token{type: :identifier, value: "explain"} ->
+        {entry, state} = parse_explain_block(state)
+        parse_macro_rules(state, [entry | acc])
+
       other ->
         state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
         # Recover: skip a token so one bad line does not eat the block.
@@ -4419,6 +4423,70 @@ defmodule Cure.Compiler.Parser do
   # skips it, Task 2); T4 does not diagnose that (error-floor task).
   defp literal_suffix([{:hole, _}, {:lit, s} | _]), do: s
   defp literal_suffix(_), do: nil
+
+  # `explain` <INDENT> (<point> => <message>)+ <DEDENT> — the author's failure
+  # descriptions (self-proving §3.2). Attached to the macro_def as one entry;
+  # exhaustiveness over the derived Diagnosis is checked separately (MacroValidate).
+  defp parse_explain_block(state) do
+    kw = peek(state)
+    state = advance(state)
+    state = skip_macro_trivia(state)
+
+    {clauses, state} =
+      case peek(state) do
+        %Token{type: :indent} ->
+          state = advance(state)
+          {cs, state} = parse_explain_clauses(state, [])
+          state = expect_dedent(state)
+          {cs, state}
+
+        _ ->
+          {[], state}
+      end
+
+    {%{kind: :explain, clauses: clauses, line: kw.line}, state}
+  end
+
+  defp parse_explain_clauses(state, acc) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        {point, state} = parse_explain_point(state)
+        state = expect(state, :fat_arrow)
+        state = skip_macro_trivia(state)
+        {body, state} = parse_expr(state, 0)
+        clause = %{point: point, body: body, line: peek(state).line}
+        parse_explain_clauses(state, [clause | acc])
+    end
+  end
+
+  # A point is `keyword "w"` (a literal-token failure) or a bare `Category`
+  # identifier (a typed-hole failure). Backticked/qualified categories are out
+  # of scope for this slice. A total fallback is REQUIRED: a malformed point
+  # (a stray `=>` with no preceding point) would otherwise crash the whole parse
+  # with a CaseClauseError — record a recoverable diagnostic instead and do NOT
+  # advance past the offending token (so the caller's expect/2 reports cleanly).
+  defp parse_explain_point(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "keyword"} ->
+        state = advance(state)
+        w = peek(state)
+        state = advance(state)
+        {{:keyword, to_string(w.value)}, state}
+
+      %Token{type: :identifier, value: cat} ->
+        {{:category, cat}, advance(state)}
+
+      other ->
+        error = {:expected, :explain_point, :got, other.type, other.line, other.col}
+        state = add_error(state, error)
+        {{:category, "?"}, state}
+    end
+  end
 
   # Ordered segments between a rule's keyword and `becomes`: literal tokens and
   # typed holes `<name: Kind>` (window: :lt identifier :colon identifier :gt).
