@@ -4655,6 +4655,16 @@ defmodule Cure.Compiler.Parser do
       # Stop at either tier verb — `becomes` (Tier-2 template) or `computed`
       # (Tier-3 elab). Without stopping at `computed`, it (and `by`) would be
       # swallowed as literal segments and the verb branch could never fire.
+      #
+      # Deliberate restriction (parity with the pre-existing `becomes`
+      # behaviour, not new to this change): a rule's OWN segments can no
+      # longer contain a literal token spelled `computed` (e.g.
+      # `syntax do computed becomes X` used to parse `computed` as a plain
+      # `{:lit, "computed"}` segment; it now mis-stops and reports
+      # `{:expected, :by, ...}`). `becomes`/`computed`/`by` are reserved verbs
+      # across the whole rule grammar, not just after a rule's segments —
+      # same trade-off `becomes` already made alone. No known `.cure` source
+      # relies on `computed` as a matched token.
       %Token{type: :identifier, value: v} when v in ["becomes", "computed"] ->
         {Enum.reverse(acc), state}
 
