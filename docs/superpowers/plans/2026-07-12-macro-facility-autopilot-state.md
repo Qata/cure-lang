@@ -499,17 +499,26 @@ still expands). Full `mix test` 4133 passed / 2 skipped, antigen 328/328, warnin
 A macro that omits a failure-point description → structured `missing_diagnosis` diagnostic. TCB delta ZERO.
 Standalone (unwired) by design; the wiring slice enforces it in real compiles.
 
-**NEXT: SP2 slice 2 = M3 required per-rule examples (§5)** — Stage 2 plan. Build as a STANDALONE check (same
-pattern as M1: no pipeline wiring yet — defer the SP1-macro-breaking wiring to ONE later slice that wires ALL
-checks + pins SP1 macros). Scope: parse `example <filled> expands <expected>` (or `expands : <Type>` §5.2)
-attached to a `syntax` rule; `MacroValidate.check_rules_pinned/1` → every `:syntax` rule has ≥1 example else
-`{:rule_unpinned, rule}`; the example CHECK parses the filled example THROUGH the rule, expands it (reuse
-`expand_rule`/the two-phase parse), and asserts it equals `expands` up to hygiene (α/gensym) → else
-`{:example_mismatch, …}`; type-only pin checks the expansion elaborates (reuse `Program.elaborate`, T8-style).
-GROUND FIRST: how `example`/`expands` tokenize + attach (a sub-line under a `syntax` rule, indented); how to
-compare expansions up to `<fresh>` gensym α-renaming. Delivers 2 of SP2's 3 gate errors (`rule_unpinned`,
-example-mismatch). Then §3.4 `fail C` (needs Tier-3), Tier-3 `computed by`, then the WIRING slice. When ALL
-SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (generative). Deferred post-gate SP1: T9, T7b.
+SP2 slice-2a (M3 presence, `rule_unpinned`) Stage 2 DONE — plan committed at
+`docs/superpowers/plans/2026-07-12-macro-facility-sp2b-plan.md`. **Split M3 into 2a (presence) + 2b
+(expansion-equality), since the α-renaming comparator + mini-expansion is substantial.** Grounded (probed
+tokenization + §5.1/§5.2): `example`/`expands` = soft-kw identifiers; the `example` line is INDENTED under the
+`syntax` rule (attach point = `parse_macro_rule` after `parse_expr` template); `expands : <Type>` = type-only
+pin. Slice 2a = 2 tasks: T1 parse `example <use-site> expands <expected>` sub-blocks → capture use-site as RAW
+TOKENS (names the macro's own keyword, can't expand at def-parse) + expected AST `{:expansion,ast}`/`{:type,ast}`,
+attach `examples: [...]` to the `:syntax` rule map; T2 `MacroValidate.check_rules_pinned/1` → `{:rule_unpinned,
+[keyword]}` for syntax rules with no example + `format_error` clause. `:literal` rules exempt (design §5.1 says
+"every syntax rule"). TCB delta ZERO, standalone (unwired).
+
+**NEXT:** SP2 slice-2a Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2b plan (plan-for-code:
+falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: the indented-example
+attach after `parse_expr` template (does the template's trailing newline + INDENT sequence work; does a
+NO-example rule leave the outer `parse_macro_rules` loop at the right position — the highest-risk item); does
+adding `examples: []` to EVERY syntax rule break any existing test asserting the exact rule-map shape;
+`collect_until_expands` termination + a missing-`expands` example; `expands : Type` vs `expands <expr>` branch;
+`rule_unpinned` reports keywords in order; clause grouping. Then Stage 4 execute, Stage 5 review. After 2a:
+slice 2b (example_mismatch α-check), §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done → SP2 Stage 6 →
+SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
