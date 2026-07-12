@@ -20,8 +20,9 @@
 
 - **Meta is load-bearing (design flaw in the note's sketch, corrected here):** semantic info lives in a node's META, not just tag/children — `{:function_call, [name: "g", …], [args]}` (name in meta), `{:binary_op, [operator: :+, …], […]}` (operator), `{:literal, [subtype: :integer, …], 5}` (subtype). So `Syntax` MUST carry an `attrs` field or reflection loses function names/operators. Positions (`:line`/`:col`) may drop (K3 re-elaborates the expansion — design note §3).
 - Parser node shape: `{tag :: atom, meta :: keyword, third}` where `third` is a **list of child nodes** (`:binary_op`, `:function_call`, `:list`, `:tuple`, `:block`, `:hole`→`[]`, …) OR a **scalar** (`:literal` → int/float/string/bool/atom/char; `:variable` → string name).
-- **Exotic shapes to scope out (probed via the M3 `expand_example` crash work):** a `:regex` value is a `{body, flags}` TUPLE, a `:string_interpolation` value is a LIST of parts — neither a clean child-list nor a scalar-lit. This slice's bridge covers the common shapes and represents an unrecognised `third` opaquely (`SOpaque`), losslessly enough to round-trip without crashing; faithful regex/interpolation reflection is a later refinement.
+- **Exotic shapes to scope out (probed via the M3 `expand_example` crash work; re-probed live for this plan):** a regex literal's node is `{:literal, [subtype: :regex, …], {body, flags}}` — tag is `:literal` like any other literal, NOT a bare `:regex` tag; only its scalar `third` is the exotic `{body, flags}` TUPLE (confirmed live: `~r/foo/` parses to `{:literal, [subtype: :regex, line: 1, col: 10], {"foo", ""}}`). A `:string_interpolation` node's `third` IS a LIST of proper `{tag, meta, val}` child nodes (confirmed live: `"hi #{x}"` → `{:string_interpolation, [...], [{:literal, [subtype: :string], "hi "}, {:variable, [...], "x"}]}`), so it recurses through the ordinary `Node` branch cleanly — no special-casing needed. Only the regex leaf's scalar value is exotic; this slice's bridge represents an unrecognised scalar opaquely (`SOpaque`), losslessly enough to round-trip without crashing; faithful regex-value reflection is a later refinement.
 - Stdlib ADT pattern (`lib/std/json.cure` `type Value`): `type Name = | Ctor | Ctor(FieldType, …)` inside `mod Std.X`, `@group(:x)` header, `use Std.String`/etc. for referenced types. `Node(Atom, List(Attr), List(Syntax))` nests the family in `List`'s (strictly-positive) parameter — the SAME nested-positivity `Std.Json`'s `Arr(List(Value))` already proves the kernel accepts.
+- **`@group` header must be one of `Cure.Stdlib.Preload`'s closed set, not a free-form atom:** `lib/cure/stdlib/preload.ex` regex-scrapes `@group(:<atom>)` for its `%{module => group}` map, but `known_groups/0` and `stdlib_modules/1`'s `validate_kind!/1` only accept the fixed `@known_groups` list — `[:core, :collections, :text, :numeric, :system, :concurrency, :option, :test, :network]` (`lib/cure/stdlib/preload.ex:72-82`). A group NOT in that list (e.g. `:syntax`) silently loads fine under `stdlib_modules(:all)` but `stdlib_modules(:syntax)`/`stdlib_modules([:syntax])` raises `ArgumentError, "unknown stdlib group: :syntax"` (confirmed by reading `validate_kind!/1`, `preload.ex:347-358`) — a trap for slice 3 or any future caller that wants to selectively preload just the syntax pieces. Preload itself is `lib/cure/stdlib/*`, outside this plan's allowed file scope (`lib/std/*` + `lib/cure/compiler/*` only), so the fix is to reuse an EXISTING group rather than invent one. `Std.Syntax` is a foundational reflection/value type like `sigma`/`telescope`/`proof`/`equatable` (all tagged `:core`), so `Std.Syntax` uses `@group(:core)`.
 - Elaborates-test pattern (`test/cure/stdlib/json_elaborates_test.exs`): `assert {:ok, _env} = Program.elaborate(File.read!("lib/std/<mod>.cure"))`.
 
 ## The `Std.Syntax` ADT
@@ -76,7 +77,7 @@ Run: `mix test test/cure/stdlib/syntax_elaborates_test.exs` → FAIL.
 - [ ] **Step 3: Write `lib/std/syntax.cure`**
 
 ```cure
-@group(:syntax)
+@group(:core)
 mod Std.Syntax
   ## The generic quoted-AST value a Tier-3 `computed by` elab receives and
   ## returns (macro-facility design §3, generic layer). Reflects the parser's
@@ -125,7 +126,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(st
 - Test: `test/cure/compiler/macro_syntax_test.exs`
 
 **Interfaces:**
-- `Cure.Compiler.MacroSyntax.to_syntax(parser_ast) :: repr` and `from_syntax(repr) :: parser_ast`, where `repr` is the Elixir mirror above. `from_syntax(to_syntax(ast))` equals `ast` up to `:line`/`:col` (proven by `strip_pos/1`).
+- `Cure.Compiler.MacroSyntax.to_syntax(parser_ast) :: repr` and `from_syntax(repr) :: parser_ast`, where `repr` is the Elixir mirror above. `from_syntax(to_syntax(ast))` equals `ast` up to `:line`/`:col` (proven by the test's `strip/1` helper, below).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -172,12 +173,15 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     end
   end
 
-  test "an exotic third element (regex tuple) reflects opaquely without crashing" do
+  test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do
     ast = expr!("~r/foo/")
+    # Node tag is :literal (subtype: :regex in meta), NOT a bare :regex tag —
+    # only the scalar VALUE ({body, flags}) is exotic.
     repr = MacroSyntax.to_syntax(ast)
-    assert {:syn_leaf, :regex, _, :s_opaque} = repr
-    # round-trips to a regex leaf (value not faithfully recovered — opaque this slice)
-    assert {:regex, _, _} = MacroSyntax.from_syntax(repr)
+    assert {:syn_leaf, :literal, attrs, :s_opaque} = repr
+    assert {:subtype, {:s_atom, :regex}} in attrs
+    # round-trips to a literal leaf (value not faithfully recovered — opaque this slice)
+    assert {:literal, _, nil} = MacroSyntax.from_syntax(repr)
   end
 end
 ```
@@ -254,7 +258,7 @@ defmodule Cure.Compiler.MacroSyntax do
 end
 ```
 
-Note on the regex round-trip test: `~r/foo/`'s value is a `{body, flags}` tuple → `synlit` returns `:s_opaque`; `from_synlit(:s_opaque)` → `nil`, so `from_syntax` yields `{:regex, [], nil}` — round-trips to a regex leaf (structure), value not recovered. This is the honest opaque behaviour (faithful regex reflection deferred). The round-trip test asserts only the `{:regex, _, _}` shape, not value fidelity.
+Note on the regex round-trip test: `~r/foo/` parses to `{:literal, [subtype: :regex, line:, col:], {"foo", ""}}` — the node's tag is `:literal` (like any other literal); its scalar `third` is the exotic `{body, flags}` tuple. `to_syntax` hits the leaf branch, `attrs/1` keeps `subtype: :regex` (dropping only `:line`/`:col`), and `synlit/1` on the tuple falls through to `:s_opaque`. `from_synlit(:s_opaque)` → `nil`, so `from_syntax` yields `{:literal, [subtype: :regex], nil}` — round-trips to a `:literal` leaf carrying the `regex` subtype (structure + subtype preserved), scalar value not recovered. This is the honest opaque behaviour (faithful regex-value reflection deferred). The round-trip test asserts the `{:literal, _, nil}` shape plus the `subtype: :regex` attr, not value fidelity.
 
 - [ ] **Step 4: Run the test — expect PASS**
 
