@@ -8,8 +8,12 @@ defmodule Cure.Compiler.MacroCheck do
     names = Enum.map(properties, &Map.get(&1, :name))
 
     cond do
-      Enum.any?(properties, fn property -> not valid_property?(property) end) -> {:error, :invalid_check_property}
-      length(names) != MapSet.size(MapSet.new(names)) -> {:error, :duplicate_check_property}
+      Enum.any?(properties, fn property -> not valid_property?(property) end) ->
+        {:error, :invalid_check_property}
+
+      length(names) != MapSet.size(MapSet.new(names)) ->
+        {:error, :duplicate_check_property}
+
       true ->
         {:ok,
          %{
