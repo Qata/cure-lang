@@ -34,7 +34,7 @@ defmodule Cure.Compiler.MacroPacket do
   defp validate_endian(endian), do: {:error, {:invalid_packet_endian, endian}}
 
   defp validate_fields(fields, packet_endian) do
-    names = Enum.map(fields, &Map.get(&1, :name))
+    names = Enum.map(fields, fn field -> if is_map(field), do: Map.get(field, :name), else: nil end)
 
     cond do
       not Enum.all?(fields, &is_map/1) -> {:error, :invalid_packet_field}

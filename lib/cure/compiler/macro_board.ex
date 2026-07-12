@@ -62,9 +62,12 @@ defmodule Cure.Compiler.MacroBoard do
     capabilities = Map.get(definition, :capabilities, %{})
 
     case Enum.reduce_while(buses, :ok, fn {name, wiring}, :ok ->
-           assigned = wiring |> Map.values() |> Enum.uniq()
+           assigned = if is_map(wiring), do: wiring |> Map.values() |> Enum.uniq(), else: :invalid
 
            cond do
+             assigned == :invalid ->
+               {:halt, {:invalid_board_bus, name}}
+
              not is_atom(name) ->
                {:halt, {:invalid_board_bus, name}}
 

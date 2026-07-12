@@ -5066,22 +5066,25 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp optional_group_start?(%{tokens: tokens, pos: pos}) do
-    tokens
-    |> Enum.drop(pos + 1)
-    |> Enum.with_index()
-    |> Enum.find_value(false, fn
-      {%Token{type: :rparen}, index} ->
-        case Enum.at(tokens, pos + index + 2) do
-          %Token{type: :hole, value: ""} -> true
-          _ -> false
-        end
+    result =
+      tokens
+      |> Enum.drop(pos + 1)
+      |> Enum.with_index()
+      |> Enum.find_value(:not_found, fn
+        {%Token{type: :rparen}, index} ->
+          case Enum.at(tokens, pos + index + 2) do
+            %Token{type: :hole, value: ""} -> true
+            _ -> false
+          end
 
-      {%Token{type: type}, _index} when type in [:newline, :dedent, :eof] ->
-        true
+        {%Token{type: type}, _index} when type in [:newline, :dedent, :eof] ->
+          :stop
 
-      _ ->
-        false
-    end)
+        _ ->
+          false
+      end)
+
+    result == true
   end
 
   defp parse_fsm(state) do

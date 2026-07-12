@@ -42,9 +42,11 @@ defmodule Cure.Compiler.MacroModule do
       |> Enum.filter(fn {_keyword, count} -> count > 1 end)
       |> Enum.map(&elem(&1, 0))
 
+    invalid_closed = closed |> Enum.reject(&(&1 in extensions)) |> Enum.uniq()
+
     cond do
-      extensions == [] and closed != [] ->
-        {:error, {:closed_category_extension, Enum.map(closed, & &1.category) |> Enum.uniq()}}
+      invalid_closed != [] ->
+        {:error, {:closed_category_extension, Enum.map(invalid_closed, & &1.category) |> Enum.uniq()}}
 
       duplicate_keywords != [] ->
         {:error, {:ambiguous_macro_extension, duplicate_keywords}}
