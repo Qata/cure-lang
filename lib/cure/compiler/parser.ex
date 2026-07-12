@@ -42,7 +42,7 @@ defmodule Cure.Compiler.Parser do
 
   # -- Parser State ----------------------------------------------------------
 
-  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, active_macros: %{}, fresh_counter: 0]
+  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, active_macros: %{}, fresh_counter: 0, literal_macros: %{}]
 
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
@@ -108,9 +108,16 @@ defmodule Cure.Compiler.Parser do
     harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false}
     {harvest_exprs, _harvest_state} = parse_program(harvest_state)
     active = harvest_active_macros(harvest_exprs)
+    literal = harvest_literal_macros(harvest_exprs)
 
-    # Phase 2 (authoritative): parse with active_macros seeded so use-sites expand.
-    state = %__MODULE__{tokens: tokens, file: file, emit_events: emit?, active_macros: active}
+    # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
+    state = %__MODULE__{
+      tokens: tokens,
+      file: file,
+      emit_events: emit?,
+      active_macros: active,
+      literal_macros: literal
+    }
     {exprs, state} = parse_program(state)
 
     ast =
@@ -136,8 +143,28 @@ defmodule Cure.Compiler.Parser do
     exprs
     |> collect_macro_defs()
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
-      Enum.reduce(rules, acc, fn rule, acc2 ->
-        Map.update(acc2, rule.keyword, [rule], &(&1 ++ [rule]))
+      Enum.reduce(rules, acc, fn
+        %{kind: :syntax, keyword: kw} = rule, acc2 when is_binary(kw) ->
+          Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
+
+        _rule, acc2 ->
+          acc2
+      end)
+    end)
+  end
+
+  # Sibling of harvest_active_macros for Tier-1 `literal` rules, keyed by their
+  # dispatch suffix. Malformed literal rules (no suffix) are skipped.
+  defp harvest_literal_macros(exprs) do
+    exprs
+    |> collect_macro_defs()
+    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
+      Enum.reduce(rules, acc, fn
+        %{kind: :literal, suffix: s} = rule, acc2 when is_binary(s) ->
+          Map.update(acc2, s, [rule], &(&1 ++ [rule]))
+
+        _rule, acc2 ->
+          acc2
       end)
     end)
   end
@@ -152,6 +179,42 @@ defmodule Cure.Compiler.Parser do
   # holes, then substituted into the template. `progress` (segments consumed) is
   # the syntax-parse "how far did we get" carried for maximal-failure selection
   # once multiple rules per keyword arrive.
+  # After a number literal is read (state already past it), check whether the
+  # next token is a registered literal-rule suffix; if so, expand that rule with
+  # the number bound to its leading hole. Otherwise return the plain number.
+  defp maybe_literal_macro(state, num) do
+    case peek(state) do
+      %Token{type: :identifier, value: suffix} ->
+        case Map.fetch(state.literal_macros, suffix) do
+          {:ok, [rule | _]} -> expand_literal_rule(rule, num, state)
+          :error -> {num, state}
+        end
+
+      _ ->
+        {num, state}
+    end
+  end
+
+  # Bind the already-read number to the rule's leading hole, then match the
+  # remaining segments (the suffix, consumed here) and expand. Reuses
+  # match_segments/expand_rule so <fresh> + hole-subst + the soundness firewall
+  # all apply identically to keyword-triggered rules.
+  defp expand_literal_rule(rule, num, state) do
+    [{:hole, %{name: hole_name}} | rest] = rule.segments
+
+    case match_segments(state, rest, %{hole_name => num}, 1) do
+      {:ok, bindings, _progress, state} ->
+        expand_rule(rule, bindings, state)
+
+      {:error, _progress, state} ->
+        # Only reachable for an out-of-scope malformed literal rule with segments
+        # after the suffix; the suffix segment `match_segments` matched is already
+        # consumed here. T4 does not diagnose malformed literal rules (error-floor
+        # task); this branch exists only so expand_literal_rule is total.
+        {num, state}
+    end
+  end
+
   defp parse_macro_use(state, keyword) do
     [rule | _] = Map.fetch!(state.active_macros, keyword)
     state = advance(state)  # consume the keyword token
@@ -464,10 +527,10 @@ defmodule Cure.Compiler.Parser do
     case token.type do
       # Literals
       :integer ->
-        {literal(:integer, token), advance(state)}
+        maybe_literal_macro(advance(state), literal(:integer, token))
 
       :float ->
-        {literal(:float, token), advance(state)}
+        maybe_literal_macro(advance(state), literal(:float, token))
 
       :string ->
         {literal(:string, token), advance(state)}
