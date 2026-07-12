@@ -258,13 +258,36 @@ SP1 T7 Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
   `test/cure/compiler/` 642 passed / 1 skipped; `macro_use_test` (milestone-2) still green (freshen is
   identity for non-`<fresh>` templates); `mix compile --warnings-as-errors` clean. TCB delta ZERO.
 
-**NEXT:** SP1 T7 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the T7 code diff
-(`5c903d3..HEAD` code = `af005b0`+`cddf534`, only `lib/cure/compiler/parser.ex` + `macro_hygiene_test.exs`).
-Review focus: does freshening handle nested `<fresh>`/shadowing, multiple distinct fresh names in one rule,
-a fresh name equal to a hole name (plan notes out-of-scope — confirm not silently unsound), the counter's
-uniqueness across MULTIPLE use-sites of the same macro (two `addg` calls → g$0 vs g$1?), and that plain
-non-macro `<` expressions are untouched. Then SP1 T7 done. After T7: T4 (literal lexer) + T9 (cross-module)
-+ T7b (auto-hygiene). When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
+SP1 T7 Stage 5 DONE — Sonnet code review over the T7 diff (`5c903d3..HEAD`), converged CLEAN (5 passes,
+2 consecutive clean, NO code changes). Core logic VERIFIED correct via live probes: two use-sites of the
+same macro mint distinct `g$0`/`g$1`; harvest phase-1 never expands (counter untouched); repeated parse of
+identical source → byte-identical ASTs (determinism); multiple fresh names sorted+independent (`a$0`,`b$1`);
+all refs of one fresh name converge on one gensym; nested `addg(addg(1))` distinct inner/outer; two macros
+same fresh spelling don't collide; freshening traversal mirrors `subst_holes` exactly (children+meta+list-meta);
+non-`<fresh>` templates byte-identical; comparisons `a < b` unaffected. Full suite 4113 passed / 2 skipped,
+antigen 328/328, warnings-clean.
+
+**SP1 T7 COMPLETE** (`af005b0`+`cddf534`): `<fresh Name>` explicit hygiene primitive prevents ACCIDENTAL
+capture (the proven `let tmp` capture bug is fixed). Two gaps found + characterized (NOT fixed — deferred to
+**T7b** by design):
+- **Fresh-name = hole-name silent-drop:** `syntax m <e> becomes let <fresh e> = 0 in e` called `m(99)`
+  silently drops `99` — freshen rewrites the template `e`→`e$0` before `subst_holes` (keyed on "e") can bind
+  it → `let e$0 = 0 in e$0`, no error. Genuinely silently wrong. T7b must add a fresh∩hole-name collision
+  diagnostic (reject at parse, or freshen-after-subst ordering).
+- **Backtick-gensym spoofing:** `` `g$0` `` (backtick ident accepts arbitrary chars incl `$`) as a use-site
+  arg to a macro's FIRST invocation collides with minted `g$0` → real capture. Fundamental limit of STRING
+  gensyms; robust fix = Racket-style uncopyable scope marks (T7b). Note: a NON-backtick user cannot produce
+  `$`, so accidental capture IS prevented; only deliberate exact-gensym backtick-spelling defeats it. Connects
+  to the general backtick-spoof trap ([[anonymous-adts-landed]]).
+- Minor pre-existing (not T7): a stray `<fresh h>` OUTSIDE a template parses to an unhandled `{:fresh_name}`
+  node and `cure compile` fails exit-1 with no diagnostic — general unrecognized-node-type gap, not T7-specific.
+
+**NEXT:** SP1 continues — remaining tasks **T4** (literal/suffix lexer `500ms`), **T9** (cross-module/imported
+macros + import scoping), **T7b** (automatic full hygiene + the two gaps above + `<capture>`). Pick T4 next
+(smallest, unblocks bounded hole+literal segment matching): Stage 2 write
+`docs/superpowers/plans/2026-07-12-macro-facility-sp1e-plan.md` grounding the lexer change (lex_decimal has
+NO suffix support — `lexer.ex:795-826`), then Stages 3-5. When ALL SP1 tasks (incl T7b/T4/T9) done+reviewed →
+SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
