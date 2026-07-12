@@ -310,10 +310,21 @@ defmodule Cure.Elab.Union do
       ["Bool", v] -> {:ok, :atom, v == "true"}
       ["Atom", ":" <> v] -> {:ok, :atom, String.to_atom(v)}
       ["Char", <<?', c::utf8, ?'>>] -> {:ok, :integer, c}
-      ["String", <<?", rest::binary>>] -> {:ok, :string, String.trim_trailing(rest, "\"")}
+      ["String", <<?", rest::binary>>] -> {:ok, :string, strip_one_trailing_quote(rest)}
       _ -> :error
     end
   end
+
+  # `literal_key(:string, v)` builds the key as `"String#\"" <> v <> "\""` with NO
+  # escaping of `v` — so `rest` here is always exactly `v <> "\""`, regardless of what
+  # characters `v` itself contains (including a trailing `"`). The correct inverse is
+  # "drop exactly the one closing quote byte we know is there by construction", NOT
+  # `String.trim_trailing(rest, "\"")`, which strips EVERY trailing `"` and so silently
+  # truncates a value that itself ends in one or more quote characters (e.g. `v = ~s(ab")`
+  # round-tripped to `"ab"`, dropping the trailing quote that is part of the value).
+  # The closing quote is a single ASCII byte, so a byte-precise drop is always exact,
+  # including when `v` contains multi-byte UTF-8 content earlier in the string.
+  defp strip_one_trailing_quote(rest), do: binary_part(rest, 0, byte_size(rest) - 1)
 
   # ── Family generation ──────────────────────────────────────────────────────
 

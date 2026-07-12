@@ -788,5 +788,28 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Program.elaborate(src)
     end
+
+    # `Union.literal_key/2` builds a String literal's key as `"String#\"" <> v <> "\""`
+    # with NO escaping of `v`. `Union.literal_value/1` must invert that exactly: strip
+    # one leading and one trailing `"`. It instead used `String.trim_trailing(rest, "\"")`,
+    # which strips *every* trailing `"` — so a String literal member that itself ends in
+    # one or more `"` characters is recovered truncated, and the FFI wrapper's generated
+    # guard tests the wrong value.
+    test "a String literal member ending in a quote round-trips through the FFI wrapper" do
+      src = ~s'''
+      mod EXQ
+        @extern(:erlang, :hd, 1)
+        fn head(xs: List(Binary)) -> "ab\\"" | Atom
+      end
+      '''
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      # `xs = [["ab\""]]` so `erlang:hd/1` hands back the exact charlist for `ab"` —
+      # the literal the union member was declared for. The wrapper must tag it as the
+      # literal member, not crash.
+      exact = [?a, ?b, ?"]
+      assert apply(:"Cure.EXQ", :head, [[exact]]) == :"Union<Atom|String#\"ab\"\">$String#\"ab\"\""
+    end
   end
 end
