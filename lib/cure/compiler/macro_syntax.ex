@@ -122,6 +122,7 @@ defmodule Cure.Compiler.MacroSyntax do
   def from_core({:ctor, :Node, [{:atom_lit, tag}, attrs, kids]}) do
     with {:ok, attrs} <- from_core_attrs(attrs),
          {:ok, kids} <- from_core_list(kids),
+         {:ok, kids} <- map_results(kids, &from_core/1),
          true <- Enum.all?(kids, &syntax_repr?/1) do
       {:syn_node, tag, attrs, kids}
     else
