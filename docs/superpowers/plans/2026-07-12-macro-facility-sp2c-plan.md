@@ -27,6 +27,8 @@
 
 `normalize(ast)` = (1) recursively drop `:line`/`:col` from every meta keyword list; (2) rewrite any `{:variable, meta, name}` whose `name` matches `~r/^(.+)\$\d+$/` (a `<fresh>` gensym like `x$0`) to its base name (`x`). Then `normalize(actual) == normalize(expected)`. For non-`<fresh>` templates (the common case) step 2 is a no-op and this is structural-equality-modulo-position. **Honest limit:** the gensym-suffix rewrite is a *first-cut* α-approximation, not capture-aware de Bruijn α — two distinct fresh names both stripping to the same base could theoretically mis-compare; a fully capture-aware comparator is a noted follow-on. All tests here use a single fresh name or none.
 
+> **CRITICAL — caught by recursive-skeptical-review, fixed in Task 2 Step 3 below.** The two-clause `normalize/1` originally drafted here (recurse-with-list-children, else pass through unchanged) only strips `:line`/`:col` from a node whose **third element is a list** (real AST children). `Parser`'s own `literal/2` (`parser.ex:924-926`) builds every `:literal` node as `{:literal, [subtype: s, line:, col:], token.value}` — the third element is the **scalar** `token.value` (an integer/string/bool/atom/char), never a list. Such nodes fell through to the catch-all `normalize(other), do: other`, which returns them **completely unchanged** — their `:line`/`:col` never gets stripped. Verified live: patching the original two-clause `normalize/1` into the tree and running exactly the three Task-2 Step-1 tests below gives `mix test` → `2/4 passed` — the very tests the plan asserts should pass (`"an example whose expansion matches its pin checks clean"` and `"a matching example modulo source position still checks clean"`) both FAIL, because the driven expansion's `:literal` sits at the rule-template's column while the captured pin's `:literal` sits at the `expands` clause's column, and neither gets stripped. Since virtually every real macro example's expansion contains at least one literal argument (numbers, strings, atoms, bools — the design's own headline `every 500ms` example included), the unpatched comparator would reject essentially every correct macro rule as `example_mismatch`. The fix is a third `normalize/1` clause for scalar-valued nodes, added to Task 2 Step 3's code below; verified green (`4/4` on the scoped file, `672 passed, 1 skipped` — no regression — on the full `test/cure/compiler/` suite) with the fix in place, and confirmed to fail exactly the same two tests when the fix is removed again.
+
 ---
 
 ### Task 1: `Parser.expand_example/2` — drive an example's use-site through the macro's rules
@@ -224,6 +226,17 @@ Run: `mix test test/cure/compiler/macro_example_check_test.exs` → the three ne
     {t, strip_pos(meta), Enum.map(children, &normalize/1)}
   end
 
+  # A scalar-valued node (`:literal`'s {subtype, value} shape — `value` is a
+  # raw integer/float/string/bool/atom/char, NOT a list of children) still
+  # carries `:line`/`:col` in its meta that must be stripped, exactly like any
+  # other node. Without this clause every `:literal` falls through to the
+  # catch-all below UNCHANGED, so its source position never gets stripped and
+  # `check_examples` rejects almost every real macro example (see the CRITICAL
+  # note above "The α-comparator").
+  defp normalize({t, meta, value}) when is_list(meta) do
+    {t, strip_pos(meta), value}
+  end
+
   defp normalize(other), do: other
 
   defp strip_pos(meta) when is_list(meta) do
@@ -271,7 +284,7 @@ Run: `mix test test/cure/compiler/macro_example_check_test.exs` → the three ne
 
 - [ ] **Step 5: Run the tests — expect PASS**
 
-Run: `mix test test/cure/compiler/macro_example_check_test.exs` → PASS (driver + the three check tests).
+Run: `mix test test/cure/compiler/macro_example_check_test.exs` → PASS (driver + the three check tests). This requires the third `normalize/1` scalar-node clause above — verified live (recursive-skeptical-review): with only the first two clauses, this run is `2/4 passed` (the "checks clean" and "checks clean modulo position" tests fail); with all three clauses, `4/4`.
 
 - [ ] **Step 6: Full suite + warnings**
 
