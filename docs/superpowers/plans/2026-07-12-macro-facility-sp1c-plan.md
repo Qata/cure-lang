@@ -155,11 +155,120 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(ma
 
 ---
 
+### Task 2: Transitional classic-pipeline soundness firewall
+
+**Files:**
+- Create: `test/cure/compiler/macro_expansion_classic_soundness_test.exs`
+
+**Interfaces:**
+- Consumes: `Cure.Compiler.compile_string/2` — `{:ok, module_atom, forms} | {:error, term()}` (the CLI/`cure build` entry). Accept is a **3-tuple** `{:ok, _mod, _forms}`, NOT `{:ok, _}`.
+- Produces: a test module. **Transitional:** delete this file when the classic-pipeline-deletion initiative removes `Cure.Types.Checker`/classic `Codegen`. The file header must say so.
+
+**Why line-stripping:** classic error terms embed `[line: N]` (verified: `bad` → `{:type_error, [{:unbound_variable, "undefined variable 'nonexistent_thing'", [line: 3]}]}`; the macro version sits on the template's line). Macro vs hand-written verdicts are equal only after stripping `:line`/`:col` — confirmed live that all four pairs are then `equal=true`.
+
+- [ ] **Step 1: Write the classic-pipeline firewall test file**
+
+```elixir
+# test/cure/compiler/macro_expansion_classic_soundness_test.exs
+defmodule Cure.Compiler.MacroExpansionClassicSoundnessTest do
+  # TRANSITIONAL SOUNDNESS FIREWALL for the CLASSIC pipeline entry that
+  # `cure build`/the CLI actually calls (`Cure.Compiler.compile_string/2`) on
+  # non-dependent macro-using programs. Same property as the dependent firewall
+  # (`test/cure/elab/macro_expansion_soundness_test.exs`): a macro's expansion
+  # is type-checked identically to hand-written code — verdict-equality, here
+  # with `[line:/col:]` metadata stripped since the classic error vocabulary is
+  # position-bearing. DELETE THIS FILE when the classic-pipeline-deletion
+  # initiative removes Cure.Types.Checker + classic Codegen; the dependent
+  # firewall is the permanent guard.
+  use ExUnit.Case, async: true
+  alias Cure.Compiler
+
+  # Recursively drop :line/:col pairs so macro (template-line) and hand-written
+  # (source-line) verdicts compare equal. Leaves every other term shape intact.
+  defp strip(t) when is_list(t) do
+    t |> Enum.reject(&match?({k, _} when k in [:line, :col], &1)) |> Enum.map(&strip/1)
+  end
+
+  defp strip(t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.map(&strip/1) |> List.to_tuple()
+
+  defp strip(t), do: t
+
+  defp verdict(src) do
+    case Compiler.compile_string(src, []) do
+      {:ok, _mod, _forms} -> :accept
+      {:error, term} -> {:reject, strip(term)}
+    end
+  end
+
+  @cases [
+    {"zero-hole accept: zero => 0",
+     "mod M\n  macro Zero\n    syntax zero becomes 0\n  fn f() -> Int = zero\n",
+     "mod M\n  fn f() -> Int = 0\n"},
+    {"one-hole accept: inc <x> => x + 1",
+     "mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n  fn f(n: Int) -> Int = inc n\n",
+     "mod M\n  fn f(n: Int) -> Int = n + 1\n"},
+    {"reject (unbound var): bad => nonexistent_thing",
+     "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n  fn f() -> Int = bad\n",
+     "mod M\n  fn f() -> Int = nonexistent_thing\n"},
+    {"reject (type mismatch): tt => true used as Int",
+     "mod M\n  macro T\n    syntax tt becomes true\n  fn f() -> Int = tt\n",
+     "mod M\n  fn f() -> Int = true\n"}
+  ]
+
+  for {label, macro_src, hand_src} <- @cases do
+    test "classic macro verdict equals hand-written verdict — #{label}" do
+      assert verdict(unquote(macro_src)) == verdict(unquote(hand_src))
+    end
+  end
+
+  test "the two well-typed cases genuinely accept (classic)" do
+    assert verdict("mod M\n  macro Zero\n    syntax zero becomes 0\n  fn f() -> Int = zero\n") == :accept
+    assert verdict("mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n  fn f(n: Int) -> Int = inc n\n") == :accept
+  end
+
+  test "the two ill-typed cases genuinely reject (classic)" do
+    assert {:reject, _} = verdict("mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n  fn f() -> Int = bad\n")
+    assert {:reject, _} = verdict("mod M\n  macro T\n    syntax tt becomes true\n  fn f() -> Int = tt\n")
+  end
+end
+```
+
+- [ ] **Step 2: Prove teeth (negative control, red-first) — then delete**
+
+Add a throwaway that forces the macro side to `:accept`; run, confirm it FAILS on an ill-typed pair (proving the equality is non-trivial), then delete it:
+
+```elixir
+  test "NEGATIVE CONTROL classic (delete me)" do
+    hand = verdict("mod M\n  fn f() -> Int = true\n")   # {:reject, {:type_error, ...}}
+    assert :accept == hand                               # FAILS
+  end
+```
+
+Run: `mix test test/cure/compiler/macro_expansion_classic_soundness_test.exs` → NEGATIVE CONTROL fails, all 6 real tests pass. **Delete the negative control.**
+
+- [ ] **Step 3: Run the committed file — expect 6 green**
+
+Run: `mix test test/cure/compiler/macro_expansion_classic_soundness_test.exs` → 6 passed.
+
+- [ ] **Step 4: Confirm zero production delta**
+
+`git status --porcelain` shows ONLY the two new untracked test files (Task 1's + Task 2's). No `lib/**` change.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -- test/cure/compiler/macro_expansion_classic_soundness_test.exs
+git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(macros): transitional classic-pipeline soundness firewall (SP1 T8)"
+```
+
+---
+
 ## Task boundary + what remains in SP1
 
 T8 locks the DONE-criterion clause **"expands to well-typed Core"** with a permanent guard: macro output is proven indistinguishable from hand-written code at the elaborator, so it cannot smuggle an ill-typed (or well-formed-but-mistyped) term past the kernel — **for callers of `Program.elaborate/1`**. SP3's generative expansion proof will *fuzz* this same `Program.elaborate` primitive across randomly-generated use-sites; T8 is the hand-picked, position-exact anchor that fuzzing generalizes.
 
-**Open question surfaced by review (needs an operator decision, not resolved here):** `cure build`/the CLI compiles via `Cure.Compiler.compile_string/2`, which for non-dependent programs (verified: all four T8 examples classify as non-dependent per `Program.dependent?/1`) type-checks through the classic `Cure.Types.Checker.check_module/2` + `Cure.Compiler.Codegen.compile_module/2`, never touching `Program.elaborate/1`. T8 therefore does not firewall the classic-pipeline route that `cure build` actually takes for these programs today. Options: (a) add a companion classic-pipeline firewall task (parallel test asserting verdict equality via `Cure.Compiler.compile_string/2`, normalizing away the `[line: N]` metadata the classic error terms carry — confirmed feasible, the property holds there too); or (b) explicitly accept the gap as transitional, since the classic-pipeline-deletion initiative intends macros to be dependent-pathway-only long term. Neither option is executed by this plan.
+**Gap surfaced by review — RESOLVED here by Task 2 (driver decision, recorded in prose per project convention):** `cure build`/the CLI compiles via `Cure.Compiler.compile_string/2`, which for non-dependent programs (verified: all four examples classify as non-dependent per `Program.dependent?/1`) type-checks through the classic `Cure.Types.Checker.check_module/2` + `Cure.Compiler.Codegen.compile_module/2`, never touching `Program.elaborate/1`. Task 1 alone therefore does not firewall the classic-pipeline route `cure build` actually takes for these programs today. **Decision:** firewall BOTH entry points. Task 1 guards the dependent `Program.elaborate/1` path (the permanent guard — this is the "well-typed Core" path the DONE criterion names, and it survives the classic-pipeline rip-out). Task 2 adds a **transitional** classic-pipeline firewall via `compile_string/2` (line-stripped verdict-equality — confirmed live that the property holds there too, all four `equal=true`). Task 2 is explicitly marked to be deleted alongside the classic pipeline when the classic-pipeline-deletion initiative lands; until then it gives `cure build` real regression protection. Both tasks are test-only (zero production delta). Rationale for doing both rather than accepting the gap: cheap, zero-risk, and it closes the "a user's macro run via `cure build` is soundness-guarded" hole in the DONE criterion's spirit today; rationale for keeping Task 1 as the permanent one: the DONE criterion says "Core," which only the dependent path produces.
 
 **Remaining SP1 tasks** (subsequent Stage-2 rounds, in priority order):
 - **T7 — hygiene:** `<fresh Name>` gensym in templates + capture-avoidance, so a template-introduced binder cannot capture a use-site name and vice-versa. Milestone-2 expansion is deliberately unhygienic; T7 makes name-binding templates safe. Needs its own grounding (a template-binder example, a capture repro) and its own plan `…-sp1d-plan.md`. This is a real red-green feature (capture repro → red → gensym fix → green).
