@@ -42,7 +42,7 @@ defmodule Cure.Compiler.Parser do
 
   # -- Parser State ----------------------------------------------------------
 
-  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false]
+  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, active_macros: %{}]
 
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
@@ -92,8 +92,16 @@ defmodule Cure.Compiler.Parser do
   def parse(tokens, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, true)
-    state = %__MODULE__{tokens: tokens, file: file, emit_events: emit?}
 
+    # Phase 1 (harvest): parse once with NO active macros, keep only the local
+    # macro grammars. Use-sites may mis-parse here; we discard everything but
+    # the {:macro_def, …} nodes and their (recovered) errors.
+    harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false}
+    {harvest_exprs, _harvest_state} = parse_program(harvest_state)
+    active = harvest_active_macros(harvest_exprs)
+
+    # Phase 2 (authoritative): parse with active_macros seeded so use-sites expand.
+    state = %__MODULE__{tokens: tokens, file: file, emit_events: emit?, active_macros: active}
     {exprs, state} = parse_program(state)
 
     ast =
@@ -111,6 +119,24 @@ defmodule Cure.Compiler.Parser do
       errors -> {:error, Enum.reverse(errors)}
     end
   end
+
+  # Collect every local macro rule, indexed by the rule's leading keyword, from
+  # a parsed top-level expr list. Descends into containers (a `macro` inside a
+  # `mod` is still a local macro of that module).
+  defp harvest_active_macros(exprs) do
+    exprs
+    |> collect_macro_defs()
+    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
+      Enum.reduce(rules, acc, fn rule, acc2 ->
+        Map.update(acc2, rule.keyword, [rule], &(&1 ++ [rule]))
+      end)
+    end)
+  end
+
+  defp collect_macro_defs(node) when is_list(node), do: Enum.flat_map(node, &collect_macro_defs/1)
+  defp collect_macro_defs({:macro_def, _, _} = m), do: [m]
+  defp collect_macro_defs({_t, _m, children}) when is_list(children), do: collect_macro_defs(children)
+  defp collect_macro_defs(_), do: []
 
   # -- Program (top-level sequence) ------------------------------------------
 
