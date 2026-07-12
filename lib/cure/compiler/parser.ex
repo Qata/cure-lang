@@ -4192,6 +4192,10 @@ defmodule Cure.Compiler.Parser do
         {rule, state} = parse_macro_rule(state)
         parse_macro_rules(state, [rule | acc])
 
+      %Token{type: :identifier, value: "literal"} ->
+        {rule, state} = parse_literal_rule(state)
+        parse_macro_rules(state, [rule | acc])
+
       other ->
         state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
         # Recover: skip a token so one bad line does not eat the block.
@@ -4228,6 +4232,44 @@ defmodule Cure.Compiler.Parser do
 
     {rule, state}
   end
+
+  # `literal <n: Number> ms becomes <template>` — a Tier-1 units rule (base
+  # §111). Unlike `syntax`, there is NO leading keyword; the rule is triggered
+  # at a use-site by a NUMBER followed by the suffix (Task 2). Segments reuse
+  # parse_rule_segments (a leading number-hole + a `{:lit, suffix}`).
+  defp parse_literal_rule(state) do
+    kw_token = peek(state)
+    state = advance(state)
+
+    {segments, state} = parse_rule_segments(state, [])
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "becomes"} -> advance(state)
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+      end
+
+    {template, state} = parse_expr(state, 0)
+
+    rule = %{
+      kind: :literal,
+      keyword: nil,
+      segments: segments,
+      suffix: literal_suffix(segments),
+      template: template,
+      progress: nil,
+      line: kw_token.line
+    }
+
+    {rule, state}
+  end
+
+  # The dispatch suffix is the first literal segment following the leading
+  # number-hole (`[{:hole,_}, {:lit, s} | _]`). A malformed literal rule
+  # (no hole-then-lit prefix) has no suffix and is un-triggerable (harvest
+  # skips it, Task 2); T4 does not diagnose that (error-floor task).
+  defp literal_suffix([{:hole, _}, {:lit, s} | _]), do: s
+  defp literal_suffix(_), do: nil
 
   # Ordered segments between a rule's keyword and `becomes`: literal tokens and
   # typed holes `<name: Kind>` (window: :lt identifier :colon identifier :gt).
