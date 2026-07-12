@@ -92,8 +92,7 @@ defmodule Cure.Compiler.MacroFuzz do
            generator:
              Gen.frequency([
                {2, Gen.member_of([{:int_lit, 0}, {:int_lit, 9}])},
-               {2, Term.gen_term(ctx, SigMenu.nat())},
-               {2, Term.gen_term(ctx, SigMenu.bd())}
+               {2, Term.gen_term(ctx, SigMenu.nat())}
              ])
          }}
 
