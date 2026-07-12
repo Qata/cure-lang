@@ -959,12 +959,14 @@ The following slices have now landed in this worktree:
 - SP2 type-only example pins and dependent-pipeline validation wiring are complete.
 - SP3 slices A–F are implemented in `Cure.Compiler.MacroFuzz`: typed-hole generation, use-site assembly, generated expansion checking, shrinking, proof manifests, persistent cache reuse, and computed-rule coverage are present. The current lexical-domain bridge uses the certified closed Nat generator for categories without native module-aware generators; this remains a domain-adapter gap rather than a formal claim that every category has native coverage.
 - SP4 has an advisory reflection foundation in `Cure.Compiler.MacroReflection`: definition/type resolution, constructor inspection, dependent type inference, macro expansion, and pure declaration lifting.
-- SP5 has a closed OTP callback vocabulary and pure module-value lifting foundation in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
-- SP6 has delimited raw-hole parsing and pure capture helpers in `Cure.Compiler.MacroRaw`.
+- SP4 also has a reflection-backed reducer dogfood builder in `Cure.Compiler.MacroReducer`; it emits ordinary `pattern_match` AST and proves it through the dependent elaborator.
+- SP5 has a closed OTP callback vocabulary, callback ADT-shaped values, declaration validation, and pure `QuotedModule` lifting in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
+- SP6 has delimited raw-hole parsing, pure capture helpers, computed use-site integration, `is Category` rule metadata, and explicit module-rule markers.
+- SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
 The remaining work before the DONE criterion is genuinely satisfied is:
 
-- Replace the temporary lexical-domain generator bridge with native, module-aware generators and explicit coverage reporting for every supported hole category.
+- Extend native generation from the current closed built-in domains to module-aware/custom category declarations and explicit open-category coverage reporting.
 - Verify or complete the generated-proof gate across every real macro compilation path, including the transitional classic compiler path where the architecture requires it.
 - Extend SP4 from the base reflection API to the reducer/view/flow dogfood surface and its integration tests.
 - Extend SP5 to the complete `behaviour`/`callback`/`lift module` surface, closed callback ADTs, and the AtomVM execution gate.
