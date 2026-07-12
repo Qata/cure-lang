@@ -44,6 +44,34 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert Enum.all?(terms, &match?({:ctor, name, []} when name in [:Off, :On], &1))
   end
 
+  test "category coverage reports module domains and open extensions" do
+    assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
+
+    source = """
+    macro Extension
+      open Flag
+      syntax flag <value: Flag> is Flag becomes value
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, _} = macro_def} = Parser.parse(tokens, emit_events: false)
+    assert {:ok, report} = MacroFuzz.category_coverage(macro_def, env)
+
+    assert report.complete?
+    assert report.open_categories == ["Flag"]
+    assert [%{category: "Flag", domain: :core, open: true, status: :supported}] = report.categories
+  end
+
+  test "category coverage names unsupported domains without hiding them" do
+    source = "macro M\n  syntax m <value: Missing> becomes value\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, _} = macro_def} = Parser.parse(tokens, emit_events: false)
+    assert {:ok, report} = MacroFuzz.category_coverage(macro_def, Cure.Core.Env.empty())
+
+    refute report.complete?
+    assert [%{category: "Missing", status: :unsupported}] = report.unsupported
+  end
+
   test "generated scalar fillers assemble into fully consumed macro uses" do
     source = """
     macro Inc

@@ -198,6 +198,47 @@ defmodule Cure.Compiler.MacroFuzz do
     end
   end
 
+  @doc "Report every typed hole domain and open category used by a macro."
+  @spec category_coverage(tuple(), Cure.Core.Env.t()) :: {:ok, map()}
+  def category_coverage({:macro_def, _meta, rules}, env) do
+    open_categories =
+      rules
+      |> Enum.filter(&(&1[:kind] == :open_category))
+      |> Enum.map(& &1.name)
+      |> Enum.uniq()
+
+    categories =
+      rules
+      |> Enum.filter(&(&1[:kind] in [:syntax, :computed]))
+      |> Enum.flat_map(fn rule ->
+        Enum.flat_map(rule.segments, fn
+          {:hole, %{kind: category}} -> [{category, rule.keyword}]
+          {:raw_hole, %{delimiter: delimiter}} -> [{"raw until " <> delimiter, rule.keyword}]
+          _ -> []
+        end)
+      end)
+      |> Enum.uniq()
+      |> Enum.map(fn {category, keyword} ->
+        status =
+          case hole_generator(category, env) do
+            {:ok, info} -> %{status: :supported, domain: info.domain}
+            {:error, {:unsupported_hole_type, ^category}} -> %{status: :unsupported, domain: nil}
+          end
+
+        Map.merge(%{category: category, keyword: keyword, open: category in open_categories}, status)
+      end)
+
+    unsupported = Enum.filter(categories, &(&1.status == :unsupported))
+
+    {:ok,
+     %{
+       categories: categories,
+       open_categories: open_categories,
+       unsupported: unsupported,
+       complete?: unsupported == []
+     }}
+  end
+
   defp cached_proof({:macro_def, _meta, rules} = macro_def, env, opts) do
     key = :erlang.phash2({macro_def, env, Keyword.get(opts, :draws, @default_draws), Keyword.get(opts, :seed, 1)})
     cache = :persistent_term.get(@cache_key, %{})
