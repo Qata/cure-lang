@@ -349,7 +349,7 @@ defmodule Cure.Migrate do
   defp builtin_type_names, do: MapSet.new(@builtin_type_names)
 
   # Every type name this file introduces, gathered by a full pre-order walk:
-  #   * `{:container, [container_type: :struct | :enum | :opaque, name: n], _}` —
+  #   * `{:container, [container_type: :struct | :enum | :opaque | :primitive, name: n], _}` —
   #     records, enums, and bodyless opaque handles (`opaque type GCounter`)
   #   * `{:type_annotation, [name: n], _}` — `typealias N = …`
   #   * `{:indexed_type, [name: n], _}` — indexed families (defensive; carries :name)
@@ -361,7 +361,7 @@ defmodule Cure.Migrate do
   defp collect_type_names({:container, meta, ch}, acc) when is_list(ch) do
     acc =
       case Keyword.get(meta, :container_type) do
-        t when t in [:struct, :enum, :opaque] -> maybe_name(meta, acc)
+        t when t in [:struct, :enum, :opaque, :primitive] -> maybe_name(meta, acc)
         _ -> acc
       end
 
