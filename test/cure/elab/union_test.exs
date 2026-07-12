@@ -94,10 +94,10 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, env} = Program.elaborate(src)
 
-      assert Inductive.family?(env, :"Union<Atom|Bool|Int>")
+      assert Inductive.family?(env, :"Disjoint<Atom|Bool|Int>")
 
       ctors =
-        env |> Inductive.ctors_of(:"Union<Atom|Bool|Int>") |> Enum.map(& &1.name) |> Enum.sort()
+        env |> Inductive.ctors_of(:"Disjoint<Atom|Bool|Int>") |> Enum.map(& &1.name) |> Enum.sort()
 
       assert length(ctors) == 3
     end
@@ -122,9 +122,9 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
 
       names =
-        env |> Inductive.ctors_of(:"Union<Int|Int#3>") |> Enum.map(& &1.name) |> Enum.sort()
+        env |> Inductive.ctors_of(:"Disjoint<Int|Int#3>") |> Enum.map(& &1.name) |> Enum.sort()
 
-      assert names == [:"Union<Int|Int#3>$Int", :"Union<Int|Int#3>$Int#3"]
+      assert names == [:"Disjoint<Int|Int#3>$Int", :"Disjoint<Int|Int#3>$Int#3"]
     end
 
     test "a LITERAL expression injects into the literal member" do
@@ -135,7 +135,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert {:ctor, :"Union<Int|Int#3>$Int#3", []} = Env.get_def(env, :f).body
+      assert {:ctor, :"Disjoint<Int|Int#3>$Int#3", []} = Env.get_def(env, :f).body
     end
 
     test "a non-literal term injects via its TYPE, even when its value is the literal" do
@@ -148,7 +148,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
       body = Env.get_def(env, :f).body |> unwrap_lams()
 
-      assert {:ctor, :"Union<Int|Int#3>$Int", [{:var, 0}]} = body
+      assert {:ctor, :"Disjoint<Int|Int#3>$Int", [{:var, 0}]} = body
     end
 
     test "both members are eliminable, and the literal arm is distinct from the type arm" do
@@ -166,8 +166,8 @@ defmodule Cure.Elab.UnionTest do
       assert {:case, _, _, branches} = body
       arities = Map.new(branches, fn {c, ar, _} -> {c, ar} end)
 
-      assert arities[:"Union<Int|Int#3>$Int#3"] == 0
-      assert arities[:"Union<Int|Int#3>$Int"] == 1
+      assert arities[:"Disjoint<Int|Int#3>$Int#3"] == 0
+      assert arities[:"Disjoint<Int|Int#3>$Int"] == 1
     end
 
     test "an atom literal with Atom: :north | Atom" do
@@ -507,7 +507,7 @@ defmodule Cure.Elab.UnionTest do
       # ascription (the substitution could not see that the inner match's own
       # pattern rebinds `rest`), so `not` was applied to a Bool|Atom UNION value
       # instead of the freshly-bound inner Bool — failing with the confusing
-      # `{:foreign_ctor, :"Union<Atom|Bool>$Atom"}`, whose shape gives no hint
+      # `{:foreign_ctor, :"Disjoint<Atom|Bool>$Atom"}`, whose shape gives no hint
       # that shadowing is the actual cause.
       #
       # After the fix: the same class of shadowing this codebase's OTHER
@@ -701,10 +701,10 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
       # true/false take the more specific Bool clause...
-      assert apply(:"Cure.EXN2", :raw, [[true]]) == {:"Union<Atom|Bool>$Bool", true}
-      assert apply(:"Cure.EXN2", :raw, [[false]]) == {:"Union<Atom|Bool>$Bool", false}
+      assert apply(:"Cure.EXN2", :raw, [[true]]) == {:"Disjoint<Atom|Bool>$Bool", true}
+      assert apply(:"Cure.EXN2", :raw, [[false]]) == {:"Disjoint<Atom|Bool>$Bool", false}
       # ...and every other atom falls through to Atom.
-      assert apply(:"Cure.EXN2", :raw, [[:other]]) == {:"Union<Atom|Bool>$Atom", :other}
+      assert apply(:"Cure.EXN2", :raw, [[:other]]) == {:"Disjoint<Atom|Bool>$Atom", :other}
     end
 
     # NOT admissible — and for a reason that has nothing to do with the FFI. `:north`'s
@@ -728,8 +728,8 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.EXN2b", :raw, [[:north]]) == :"Union<Atom|Atom#:north>$Atom#:north"
-      assert apply(:"Cure.EXN2b", :raw, [[:other]]) == {:"Union<Atom|Atom#:north>$Atom", :other}
+      assert apply(:"Cure.EXN2b", :raw, [[:north]]) == :"Disjoint<Atom|Atom#:north>$Atom#:north"
+      assert apply(:"Cure.EXN2b", :raw, [[:other]]) == {:"Disjoint<Atom|Atom#:north>$Atom", :other}
     end
 
     test "ACCEPTS a literal over a class member: 3 | Nat (the sentinel pattern)" do
@@ -742,8 +742,8 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.EXN3", :raw, [-3]) == :"Union<Int#3|Nat>$Int#3"
-      assert apply(:"Cure.EXN3", :raw, [-7]) == {:"Union<Int#3|Nat>$Nat", 7}
+      assert apply(:"Cure.EXN3", :raw, [-3]) == :"Disjoint<Int#3|Nat>$Int#3"
+      assert apply(:"Cure.EXN3", :raw, [-7]) == {:"Disjoint<Int#3|Nat>$Nat", 7}
     end
 
     test "STILL REJECTS two class members that share a guard: List(Int) | List(Bool)" do

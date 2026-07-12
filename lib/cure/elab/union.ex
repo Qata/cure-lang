@@ -35,29 +35,77 @@ defmodule Cure.Elab.Union do
           lit_type_key: nil | String.t()
         }
 
-  @prefix "Union<"
+  @union_prefix "Union<"
+  @disjoint_prefix "Disjoint<"
+  @prefixes [@union_prefix, @disjoint_prefix]
 
   # ── Public API ─────────────────────────────────────────────────────────────
 
-  @doc "True iff `atom` is a generated union family key."
+  @doc "True iff `atom` is a generated family key — `Union<…>` or `Disjoint<…>`."
   @spec union_family?(atom()) :: boolean()
   def union_family?(atom) when is_atom(atom) do
-    atom |> Atom.to_string() |> String.starts_with?(@prefix)
+    s = Atom.to_string(atom)
+    Enum.any?(@prefixes, &String.starts_with?(s, &1))
   end
 
   def union_family?(_), do: false
 
-  @doc """
-  The generated family key for a canonical member list: `:"Union<k1|k2|...>"`.
+  @doc "The reserved prefixes a user-declared type name may not take."
+  @spec reserved_prefixes() :: [String.t()]
+  def reserved_prefixes, do: @prefixes
 
-  `<`, `>` and `|` are not producible by the type-name lexer, so a generated key can
-  never collide with a user-declared type.
+  @doc """
+  The generated family key for a canonical member list.
+
+  The PREFIX is not cosmetic — it says whether the constructor tag is LOAD-BEARING:
+
+    * `Union<k1|k2|…>` — the members' erased value sets are pairwise DISJOINT, so the
+      tagged sum and a set union coincide. Nothing can be both an `Int` and a `String`,
+      so the tag is an implementation detail you could not observe.
+
+    * `Disjoint<k1|k2|…>` — two members' value sets OVERLAP (`{3} ⊆ Int`, `true`/`false`
+      ⊆ atoms), so this is ONLY a disjoint sum. The tag is precisely what keeps `Int(3)`
+      and `Lit3` apart, and which one a value carries depends on how it was WRITTEN, not
+      on what it equals. Calling that a "union" would be a lie.
+
+  `<`, `>` and `|` are not producible by the type-name lexer, so neither key can collide
+  with a user-declared type.
   """
   @spec family_key([member()]) :: atom()
   def family_key(members) do
+    prefix = if disjoint_only?(members), do: @disjoint_prefix, else: @union_prefix
     inner = members |> Enum.map(& &1.key) |> Enum.join("|")
-    String.to_atom(@prefix <> inner <> ">")
+
+    String.to_atom(prefix <> inner <> ">")
   end
+
+  @doc """
+  Do any two members' ERASED value sets overlap — i.e. is this a disjoint sum that a set
+  union cannot model?
+
+  Two LITERALS never overlap (distinct values; canonicalisation dedupes). Otherwise the
+  members overlap when their runtime classes coincide, when one refines the other
+  (`Bool` ⊂ `Atom`), or when a literal falls inside a type member's class (`3` ∈ `Int`).
+  """
+  @spec disjoint_only?([member()]) :: boolean()
+  def disjoint_only?(members) do
+    Enum.any?(members, fn a ->
+      Enum.any?(members, fn b -> a.key < b.key and members_overlap?(a, b) end)
+    end)
+  end
+
+  defp members_overlap?(%{payload: nil}, %{payload: nil}), do: false
+  defp members_overlap?(a, b), do: class_overlap?(runtime_class(a), runtime_class(b))
+
+  # A user ADT (`:unsupported`) erases to a bare atom when nullary, so it overlaps `Atom`.
+  # Two DIFFERENT ADTs never overlap — constructor names are globally unique — and an ADT
+  # collides with neither integer/float/binary/list nor `Bool`, whose only inhabitants are
+  # the atoms `true`/`false`, which no ADT constructor can be named.
+  defp class_overlap?(:unsupported, :unsupported), do: false
+  defp class_overlap?(:unsupported, :atom), do: true
+  defp class_overlap?(:atom, :unsupported), do: true
+  defp class_overlap?(c, c), do: true
+  defp class_overlap?(a, b), do: refines?(a, b) or refines?(b, a)
 
   @doc "The constructor name for `member` within family `family_key`."
   @spec ctor_key(atom(), member() | %{key: String.t()}) :: atom()

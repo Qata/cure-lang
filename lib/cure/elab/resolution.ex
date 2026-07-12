@@ -207,14 +207,22 @@ defmodule Cure.Elab.Resolution do
         |> Inductive.ctors_of(old_key)
         |> Enum.map(fn c ->
           case c.args do
-            # A nullary ctor is a LITERAL member — its key is a value, never a type
-            # name, so nothing can re-key it.
+            # A nullary ctor is a LITERAL member — its key is a value, never a type name,
+            # so nothing can re-key it. Rebuild the CANONICAL member shape (payload +
+            # lit_type_key): `Union.family_key/1` now inspects it to decide the
+            # `Union<…>` vs `Disjoint<…>` prefix.
             [] ->
-              %{key: strip_prefix(c.name, old_prefix), old_ctor: c.name}
+              key = strip_prefix(c.name, old_prefix)
+              [lit_type | _] = String.split(key, "#", parts: 2)
+              %{key: key, payload: nil, lit_type_key: lit_type, old_ctor: c.name}
 
             [{_n, ty}] ->
+              ty2 = rekey_term(ty, amap, def_map)
+
               %{
-                key: Cure.Elab.Union.member_key(rekey_term(ty, amap, def_map)),
+                key: Cure.Elab.Union.member_key(ty2),
+                payload: ty2,
+                lit_type_key: nil,
                 old_ctor: c.name
               }
           end

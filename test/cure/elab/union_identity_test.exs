@@ -157,8 +157,8 @@ defmodule Cure.Elab.UnionIdentityTest do
 
     setup do
       # Intern the OUTER key's atom BEFORE the inner one (see module comment).
-      outer_key = :"Union<AAA|MyList(Union<Atom#:x|Shadowed>)>"
-      inner_key = :"Union<Atom#:x|Shadowed>"
+      outer_key = :"Union<AAA|MyList(Union<Int|Shadowed>)>"
+      inner_key = :"Union<Int|Shadowed>"
 
       env =
         %Env{}
@@ -181,8 +181,8 @@ defmodule Cure.Elab.UnionIdentityTest do
           )
         ])
         |> Inductive.declare(Inductive.family(inner_key, [], [], 0), [
-          Inductive.ctor(:"Union<Atom#:x|Shadowed>$Atom#:x", [], []),
-          Inductive.ctor(:"Union<Atom#:x|Shadowed>$Shadowed", [{:v, {:data, :Shadowed, [], []}}], [], [
+          Inductive.ctor(:"Union<Int|Shadowed>$Int", [{:v, {:int_type}}], [], [Grade.unrestricted()]),
+          Inductive.ctor(:"Union<Int|Shadowed>$Shadowed", [{:v, {:data, :Shadowed, [], []}}], [], [
             Grade.unrestricted()
           ])
         ])
@@ -202,7 +202,7 @@ defmodule Cure.Elab.UnionIdentityTest do
     } do
       out = Resolution.rekey_module_env(env, "M", MapSet.new([:Shadowed]))
 
-      new_inner_key = :"Union<Atom#:x|M#Shadowed>"
+      new_inner_key = :"Union<Int|M#Shadowed>"
       new_outer_key = :"Union<AAA|MyList(#{new_inner_key})>"
 
       # The old, un-renamed outer key must be GONE...

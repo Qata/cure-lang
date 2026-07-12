@@ -151,7 +151,58 @@ defmodule Cure.Elab.UnionCanonicalTest do
       env = env_for("typealias T2 = Int\n")
 
       assert key("T2 | 3", env) == key("Int | 3", env)
-      assert key("T2 | 3", env) == :"Union<Int|Int#3>"
+      assert key("T2 | 3", env) == :"Disjoint<Int|Int#3>"
+    end
+  end
+
+  # The generated family's PREFIX is not cosmetic: it records whether the constructor tag
+  # is load-bearing.
+  #
+  #   Union<…>    — members' erased value sets are pairwise DISJOINT, so the tagged sum
+  #                 and a set union coincide and the tag is unobservable.
+  #   Disjoint<…> — two members OVERLAP ({3} ⊆ Int; true/false ⊆ atoms), so this is ONLY
+  #                 a disjoint sum: the tag is what keeps Int(3) and Lit3 apart.
+  describe "Union<…> vs Disjoint<…>" do
+    test "disjoint value sets keep the Union prefix" do
+      env = base_env()
+
+      # Int / Bool  — integers vs the atoms true/false. Nothing is both.
+      assert key("Int | Bool", env) == :"Union<Bool|Int>"
+      # Int / List(Int) — integers vs lists.
+      assert key("Int | List(Int)", env) == :"Union<Int|List(Int)>"
+      # a literal whose class no type member occupies
+      assert key(":north | Int", env) == :"Union<Atom#:north|Int>"
+    end
+
+    test "a literal inside a type member's class is Disjoint" do
+      env = base_env()
+
+      # {3} subset-of Int: a value can be BOTH, so the tag is what separates them.
+      assert key("Int | 3", env) == :"Disjoint<Int|Int#3>"
+      assert key("3 | Nat", env) == :"Disjoint<Int#3|Nat>"
+      assert key(":north | Atom", env) == :"Disjoint<Atom|Atom#:north>"
+    end
+
+    test "a refining type member is Disjoint: Bool inside Atom" do
+      env = base_env()
+
+      # true/false are atoms, so Bool and Atom overlap.
+      assert key("Bool | Atom", env) == :"Disjoint<Atom|Bool>"
+      # ...and it propagates through a wider union.
+      assert key("Int | Bool | Atom", env) == :"Disjoint<Atom|Bool|Int>"
+    end
+
+    test "two type members sharing a class are Disjoint" do
+      env = base_env()
+
+      # Both erase to Erlang integers.
+      assert key("Int | Nat", env) == :"Disjoint<Int|Nat>"
+    end
+
+    test "union_family?/1 recognises BOTH prefixes" do
+      assert Union.union_family?(:"Union<Bool|Int>")
+      assert Union.union_family?(:"Disjoint<Int|Int#3>")
+      refute Union.union_family?(:Option)
     end
   end
 
