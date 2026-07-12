@@ -31,6 +31,7 @@ defmodule Cure.Compiler.MacroProtocolTest do
     assert {:ok, _} = MacroProtocol.build(:P, [:phone, :device], @steps, choices: choices)
 
     bad_choices = [%{decider: :phone, branches: [[%{sender: :device, receiver: :phone, message: %{name: :wrong}}]]}]
+
     assert {:error, {:unprojectable_choice, :phone}} =
              MacroProtocol.build(:P, [:phone, :device], @steps, choices: bad_choices)
   end

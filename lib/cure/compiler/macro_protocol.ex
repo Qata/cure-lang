@@ -56,8 +56,12 @@ defmodule Cure.Compiler.MacroProtocol do
       branches = Map.get(choice, :branches, [])
 
       cond do
-        decider not in roles -> {:halt, {:unknown_choice_decider, decider}}
-        not is_list(branches) or branches == [] -> {:halt, {:invalid_protocol_branches, decider}}
+        decider not in roles ->
+          {:halt, {:unknown_choice_decider, decider}}
+
+        not is_list(branches) or branches == [] ->
+          {:halt, {:invalid_protocol_branches, decider}}
+
         Enum.any?(branches, fn branch -> not branch_starts_with?(branch, decider) end) ->
           {:halt, {:unprojectable_choice, decider}}
 
