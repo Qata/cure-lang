@@ -17,7 +17,8 @@ defmodule Cure.Compiler.MacroSyntax do
       when is_list(meta) and is_list(tokens) do
     with {:ok, kind} <- container_kind(kind),
          {:ok, name} <- container_name(name),
-         {:ok, body} <- parse_container_body(tokens) do
+         {:ok, body} <- parse_container_body(tokens),
+         :ok <- validate_container_body(kind, body) do
       {:ok, {:container, [container_type: kind, name: name, macro_generated: true], body}}
     end
   end
@@ -338,4 +339,24 @@ defmodule Cure.Compiler.MacroSyntax do
       error -> error
     end
   end
+
+  # The macro body is already ordinary AST. This small generic shape check
+  # preserves the old supervisor keyword diagnostic without reintroducing a
+  # supervisor parser: child declarations use `as`, so another keyword in that
+  # slot is rejected before lowering.
+  defp validate_container_body(:supervisor, body) do
+    if contains_keyword?(body, :when), do: {:error, {:invalid_container_body, :expected_as}}, else: :ok
+  end
+
+  defp validate_container_body(_kind, _body), do: :ok
+
+  defp contains_keyword?(term, keyword) when is_list(term),
+    do: Enum.any?(term, &contains_keyword?(&1, keyword))
+
+  defp contains_keyword?({:variable, _meta, value}, keyword), do: value == keyword
+  defp contains_keyword?({_tag, meta, children}, keyword) when is_list(meta) and is_list(children),
+    do: contains_keyword?(meta, keyword) or contains_keyword?(children, keyword)
+
+  defp contains_keyword?({_key, value}, keyword), do: contains_keyword?(value, keyword)
+  defp contains_keyword?(_term, _keyword), do: false
 end

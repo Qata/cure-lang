@@ -610,7 +610,9 @@ defmodule Cure.Compiler.Parser do
     case Cure.Compiler.MacroSyntax.lower_container(expanded) do
       {:ok, ast} -> {ast, state}
       :not_a_container -> {expanded, state}
-      {:error, reason} -> {{:macro_error, [reason: reason], []}, state}
+      {:error, reason} ->
+        state = add_error(state, {:macro_expansion_error, reason})
+        {{:macro_error, [reason: reason], []}, state}
     end
   end
 
@@ -908,7 +910,11 @@ defmodule Cure.Compiler.Parser do
           # Standard-library container macros use the same segment matcher as
           # user macros. Their raw body is parsed again by MacroSyntax.
           name when is_map_key(state.builtin_macros, name) ->
-            parse_macro_use(state, name, state.builtin_macros)
+            if container_macro_head?(state) do
+              parse_macro_use(state, name, state.builtin_macros)
+            else
+              {variable(token), advance(state)}
+            end
 
           # A use-site of a locally-defined macro keyword. Checked FIRST so a
           # macro keyword wins, but guarded so non-macro identifiers are
@@ -2082,12 +2088,32 @@ defmodule Cure.Compiler.Parser do
       :implementation ->
         parse_implementation(state)
 
+      keyword when keyword in [:actor, :fsm] ->
+        if container_macro_head?(state) do
+          keyword = Atom.to_string(keyword)
+          registry = if Map.has_key?(state.builtin_macros, keyword), do: state.builtin_macros, else: state.active_macros
+          if Map.has_key?(registry, keyword) do
+            parse_macro_use(state, keyword, registry)
+          else
+            {variable(token), advance(state)}
+          end
+        else
+          {variable(token), advance(state)}
+        end
+
       :use ->
         parse_use(state)
 
       _ ->
         # Treat unknown keywords as identifiers (e.g., type names used as values)
         {variable(token), advance(state)}
+    end
+  end
+
+  defp container_macro_head?(state) do
+    case peek_at(state, 1) do
+      %Token{type: type} when type in [:identifier, :atom, :quoted_identifier] -> true
+      _ -> false
     end
   end
 
