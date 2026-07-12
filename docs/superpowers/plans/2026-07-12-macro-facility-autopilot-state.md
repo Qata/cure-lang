@@ -128,13 +128,36 @@ SP1 milestone 2 Stage 4 DONE — all three tasks executed inline TDD (red→gree
   — the parent lacks the macro code, so running there gives phantom "macro front-end regressed"
   failures. Never `cd` out of the worktree for a build.
 
-**NEXT:** SP1 milestone 2 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` subagent over
-the Stage-4 diff (`git diff e6883fe..HEAD` is plan+state; the code diff is `754e8d0..HEAD`, i.e.
-commits d66bf57/0bd320f/94c33a6 touching only `lib/cure/compiler/parser.ex` +
-`test/cure/compiler/macro_use_test.exs`). Code review = falsifiability in full force, red-test-first
-fixes, two consecutive clean passes. Then Stage 6 (full `mix test` once) for milestone 2.
-T4/T7/T8/T9 remain subsequent Stage-2/4 rounds before SP1's own Stage 6 + SP2. When ALL SP1 tasks
-are executed + code-reviewed, do SP1 Stage 6, update this file, start SP2.
+SP1 milestone 2 Stage 5 DONE — Sonnet code review over the Stage-4 code diff (`754e8d0..94c33a6`),
+converged 3 passes (2 clean). Found + fixed ONE genuine defect red-test-first:
+- **`6e01715`** — `subst_holes/2` only recursed into a node's `children` (3rd tuple elem), never
+  its `meta` (2nd elem). `match_arm` stores pattern/guard in META, so a hole referenced from a
+  template's match-arm guard (`check <x> becomes match 1 { y when x -> 1, ... }`) survived
+  expansion as a dangling `{:variable,_,"x"}`. Fix walks meta values too (`subst_holes_meta/2` +
+  `subst_holes_meta_value/2`), scalar-safe. Red test `"a hole referenced inside a template
+  match-arm's guard is substituted"` added.
+- Reviewer cleared the other scrutiny points: harvest is order-independent module-wide by design
+  (use-before-def works); reserved-keyword list exactly matches the 6 hard-coded soft-keyword
+  clauses; greedy hole-then-literal either just-works or errors loudly (T4-deferred, not silent
+  corruption); error-recovery arm has guaranteed forward progress (no infinite loop); the
+  Stage-4 `has_supervisor?` helper fix confirmed legitimate.
+
+SP1 milestone 2 Stage 6 DONE — **full `mix test` green: 4099 passed / 2 skipped, 3 doctests**,
+159 expected immune responses, antigen shape-coverage 328/328 ✓. Parser change globally safe.
+
+**MILESTONE 2 (local macro use-site expansion) COMPLETE** through review+verify: a locally-defined
+macro now parses, and its use-site EXPANDS to substituted surface AST (zero-hole, single-hole, and
+literal-segment forms), re-checked by the existing elaborator/kernel (TCB delta zero). Commits
+`d66bf57` `0bd320f` `94c33a6` `6e01715`.
+
+**NEXT:** SP1 remaining tasks — Stage 2 plan round for **T7 (hygiene) + T8 (elaborate re-check)**,
+the spine to the DONE criterion ("expands to well-typed Core"). T8 feeds an expansion through
+parse→elaborate and asserts it kernel-checks (green + a red ill-typed-expansion fixture →
+rejected-not-unsound) — this is the soundness proof that TCB delta is truly zero. T7 adds
+`<fresh Name>` gensym hygiene (templates that bind names). T4 (literal/suffix lexer) + T9
+(cross-module/import scoping) are lower-priority orthogonal rounds. Write
+`docs/superpowers/plans/2026-07-12-macro-facility-sp1c-plan.md` (T7+T8), Stage 3 review, Stage 4
+execute, Stage 5 review. When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
