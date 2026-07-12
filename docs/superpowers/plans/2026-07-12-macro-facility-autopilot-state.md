@@ -307,13 +307,34 @@ number-hole + `{:lit, suffix}` segment (reuses `parse_rule_segments`), but dispa
 +T8 firewall apply). Anchors verified: `parse_macro_rules` only knows `"syntax"` today; `harvest_active_macros`
 now guarded to `:syntax`-only + sibling `harvest_literal_macros`. TCB delta ZERO.
 
-**NEXT:** SP1 T4 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp1e plan (plan-for-code:
-falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: verify `500ms`
-tokenization + the two-token dispatch (does `maybe_literal_macro` peeking after `advance` see the suffix?);
-confirm the `:integer`/`:float` dispatch can't break array-index/normal-number parsing (numbers followed by a
-non-registered identifier); verify the two-phase harvest seeds `literal_macros` in BOTH parse passes; confirm
-the blank-line-separated `macro`+`fn` top-level shape in Task-2's test actually parses as expected (run it).
-Then Stage 4 execute, Stage 5 review. After T4: error-floor (§2), T9 (import scoping §7 + two-pass §6), T7b.
+SP1 T4 Stage 3 DONE — plan hardened + committed `8b2ab36` (5 passes, 2 clean). Reviewer fixed a stale
+line-number citation (`:integer`/`:float` at `:466-470` not `:386-390`), added a `:float` dispatch test + a
+non-empty-map regression (`500 + 3` with `ms` macro defined), and TRACED suffix-consumption live (consumed
+exactly once by `match_segments`, never double).
+
+SP1 T4 Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
+- **T1 `8c217da`** — `"literal"` clause in `parse_macro_rules/2` + `parse_literal_rule/1`/`literal_suffix/1` →
+  `%{kind: :literal, keyword: nil, segments: [hole, {:lit,suffix}], suffix, template}`. 643 passed.
+- **T2 `dfcf315`** — `literal_macros` state map seeded in authoritative `parse/2`; `harvest_literal_macros/1`
+  (by suffix) + `harvest_active_macros/1` guarded to `:syntax`; `:integer`/`:float` dispatch →
+  `maybe_literal_macro` → `expand_literal_rule` (binds number to hole, reuses `match_segments`/`expand_rule`).
+  `500ms`→`Duration.ms(500)`, `3.5s`→`Duration.s(3.5)`; bare numbers + `500 + 3` unaffected. 647 passed /
+  1 skipped, warnings-clean. TCB delta ZERO.
+- **BUG CAUGHT BY TDD (flag for Stage-5 reviewer):** the hardened plan's harvester code had a latent
+  `BadArityError` — the multi-clause inner `Enum.reduce` reducer `fn %{...} = rule -> ... ; _ -> acc end`
+  dropped the accumulator param (a reducer needs `(element, acc2)`) and referenced the outer `acc`. Elixir
+  doesn't catch mismatched anon-fn arity at compile time; the red test surfaced it immediately. Fixed to
+  `fn %{...} = rule, acc2 when guard -> Map.update(acc2,...) ; _rule, acc2 -> acc2 end` in BOTH harvesters.
+  This would have broken ALL parsing (harvest runs every parse) had it shipped — the Stage-3 review missed it
+  (valid-looking multi-clause code), Stage-4 TDD caught it. Stage-5 should confirm the fix + look for similar
+  arity issues.
+
+**NEXT:** SP1 T4 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the T4 code diff
+(`8b2ab36..HEAD` code = `8c217da`+`dfcf315`, only `lib/cure/compiler/parser.ex` + `macro_literal_test.exs`).
+Focus: the arity fix correctness; does the `:integer`/`:float` hot-path dispatch add measurable overhead or
+edge-case breakage (number at EOF, number-dot-number, negative numbers, number in a list/tuple/index); does
+`expand_literal_rule` handle a suffix that's ALSO a registered `syntax` keyword; multi-use-site + `<fresh>` in
+a literal template. Then SP1 T4 done. After T4: error-floor (§2), T9 (import scoping §7 + two-pass §6), T7b.
 When ALL SP1 scope done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
