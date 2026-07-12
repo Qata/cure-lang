@@ -150,14 +150,31 @@ macro now parses, and its use-site EXPANDS to substituted surface AST (zero-hole
 literal-segment forms), re-checked by the existing elaborator/kernel (TCB delta zero). Commits
 `d66bf57` `0bd320f` `94c33a6` `6e01715`.
 
-**NEXT:** SP1 remaining tasks — Stage 2 plan round for **T7 (hygiene) + T8 (elaborate re-check)**,
-the spine to the DONE criterion ("expands to well-typed Core"). T8 feeds an expansion through
-parse→elaborate and asserts it kernel-checks (green + a red ill-typed-expansion fixture →
-rejected-not-unsound) — this is the soundness proof that TCB delta is truly zero. T7 adds
-`<fresh Name>` gensym hygiene (templates that bind names). T4 (literal/suffix lexer) + T9
-(cross-module/import scoping) are lower-priority orthogonal rounds. Write
-`docs/superpowers/plans/2026-07-12-macro-facility-sp1c-plan.md` (T7+T8), Stage 3 review, Stage 4
-execute, Stage 5 review. When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
+SP1 T8 Stage 2 DONE — plan committed at `docs/superpowers/plans/2026-07-12-macro-facility-sp1c-plan.md`.
+**Scoping decision:** split the planned "T7+T8" round — this plan is **T8 alone** (the soundness
+firewall, the DONE-criterion spine "expands to well-typed Core"); T7 (hygiene) is deferred to its
+own plan `…-sp1d-plan.md` because it is a distinct red-green feature (gensym + capture-avoidance)
+needing its own grounding. Keeps each plan a coherent testable unit.
+
+T8 grounding is LIVE-PROBED, not assumed — ran `Cure.Elab.Program.elaborate/1` (`program.ex:16`,
+returns `{:ok, Env}` / `{:error, term}`) on real macro programs. Because expansion is a PARSE-TIME
+surface rewrite, expanded AST flows through the unchanged elaborator+kernel, and macro programs get
+the IDENTICAL verdict to their hand-written equivalents:
+- `zero`→`0` as Int ⇒ accept (== hand-written `fn f() -> Int = 0`).
+- `inc <x>`→`x + 1` on Int param ⇒ accept.
+- `bad`→`nonexistent_thing` ⇒ reject `:unknown_global` (== hand-written, identical term).
+- `tt`→`true` as Int ⇒ reject `{:conversion_failure, {:data,:Bool,[],[]}, {:int_type}}` (== hand-written).
+Error terms are position-free → exact `==`. T8 = a firewall test (`test/cure/elab/macro_expansion_
+soundness_test.exs`) asserting verdict-equality, **zero production delta** (expansion already re-
+elaborates). Honestly framed as characterization/firewall (green-from-green, like the milestone-2
+Task-1 pin + `emit_hole_firewall_test`), with a red-first NEGATIVE CONTROL step proving the equality
+has teeth. Flagged for the Stage-3 reviewer: validate the firewall-not-red-green TDD framing and that
+verdict-equality can't pass trivially (accept-sense + reject-sense pins guard that).
+
+**NEXT:** SP1 T8 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` subagent on the sp1c plan
+(plan-for-code: falsifiability + testing-discipline; note the firewall framing above; two clean
+passes; commit hardened). Then Stage 4 execute, Stage 5 review. After T8: T7 (hygiene) plan round,
+then T4/T9. When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
