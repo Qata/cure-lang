@@ -4373,17 +4373,96 @@ defmodule Cure.Compiler.Parser do
       end
 
     {template, state} = parse_expr(state, 0)
+    {examples, state} = parse_rule_examples(state)
 
     rule = %{
       kind: :syntax,
       keyword: keyword,
       segments: segments,
       template: template,
+      examples: examples,
       progress: nil,
       line: kw_token.line
     }
 
     {rule, state}
+  end
+
+  # After a syntax rule's template, an OPTIONAL indented block of `example …`
+  # lines (self-proving §5). Consumes the nested indent/dedent so the macro-body
+  # loop stays at the rule level. Returns [] when no example block follows.
+  defp parse_rule_examples(state) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        state = advance(state)
+        {examples, state} = parse_example_lines(state, [])
+        state = expect_dedent(state)
+        {examples, state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp parse_example_lines(state, acc) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :identifier, value: "example"} ->
+        {ex, state} = parse_one_example(state)
+        parse_example_lines(state, [ex | acc])
+
+      other ->
+        state = add_error(state, {:expected, :example, :got, other.type, other.line, other.col})
+        # Recover: skip one token so a bad line does not eat the block.
+        parse_example_lines(advance(state), acc)
+    end
+  end
+
+  # `example <use-site tokens…> expands <expected>` where <expected> is either
+  # `: <Type>` (a type-only pin, §5.2) or an expansion expression. The use-site
+  # is captured as raw tokens — it names the macro's own keyword and cannot be
+  # expanded at macro-def parse time; slice 2b feeds these tokens through the
+  # rule to check the expansion.
+  defp parse_one_example(state) do
+    kw = peek(state)
+    state = advance(state)
+    {use_site, state} = collect_until_expands(state, [])
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "expands"} -> advance(state)
+        t -> add_error(state, {:expected, :expands, :got, t.type, t.line, t.col})
+      end
+
+    {expected, state} =
+      case peek(state) do
+        %Token{type: :colon} ->
+          {ty, state} = parse_expr(advance(state), 0)
+          {{:type, ty}, state}
+
+        _ ->
+          {ast, state} = parse_expr(state, 0)
+          {{:expansion, ast}, state}
+      end
+
+    {%{use_site: Enum.reverse(use_site), expected: expected, line: kw.line}, state}
+  end
+
+  # Collect the filled use-site tokens up to the `expands` keyword (or end of
+  # line). Guards on :newline/:dedent/:eof so a missing `expands` cannot run off
+  # the block.
+  defp collect_until_expands(state, acc) do
+    case peek(state) do
+      %Token{type: :identifier, value: "expands"} -> {acc, state}
+      %Token{type: type} when type in [:newline, :dedent, :eof] -> {acc, state}
+      tok -> collect_until_expands(advance(state), [tok | acc])
+    end
   end
 
   # `literal <n: Number> ms becomes <template>` — a Tier-1 units rule (base
