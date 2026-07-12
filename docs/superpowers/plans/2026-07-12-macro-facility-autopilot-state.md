@@ -578,16 +578,35 @@ via a synthetic `[{:macro_def,[],rules}]`, builds a `%Parser{}` state on `use_si
 `{:type,ast}` type-only pins (§5.2, needs `Program.elaborate`) DEFERRED. Honest limit noted: gensym-suffix
 strip is a first-cut α, not capture-aware de Bruijn. TCB delta ZERO, unwired.
 
-**NEXT:** SP2 slice-2b Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2c plan (plan-for-code:
-falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: does `expand_example`'s
-hand-built `%Parser{}` + `parse_expr(state,0)` actually expand the use-site (patch it in + run — highest risk;
-does harvest on `[{:macro_def,[],rules}]` seed correctly; does the eof token suffice)? the `normalize` walk vs
-subst_holes (does it strip enough / too much meta — e.g. `name`/`subtype`/`operator` semantic keys MUST survive;
-`scope` on variables — keep or strip?); degensym false-positive risk (two fresh names → same base); the `for`
-comprehension multi-generator + `actual = ...` binding form is valid Elixir; `check_examples` handles a rule
-with NO examples (2a's rule_unpinned covers presence; here empty → no mismatch); clause grouping. Then Stage 4
-execute, Stage 5 review. After 2b: `{:type}` pin check, §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done →
-SP2 Stage 6 → SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
+SP2 slice-2b Stage 3 DONE — plan hardened + committed `16e0c2a` (3 passes, 2 clean). Reviewer patched the code
+into the tree + ran it, catching a CRITICAL `normalize/1` bug: the two-clause version only stripped `:line`/`:col`
+from nodes whose 3rd element is a LIST — but `:literal` nodes carry a SCALAR value (`{:literal, [subtype,line,col],
+500}`), so they fell to the catch-all UNCHANGED, positions un-stripped → `check_examples` would reject virtually
+every correct example (`2/4` tests failed live). Fixed with a third `normalize/1` clause for scalar-valued nodes
+(`{t, meta, value} when is_list(meta)`); re-verified `4/4` + `672 passed`. Also confirmed live: `expand_example`
+genuinely drives expansion (`every 500`→`Timer.repeat(500)`; nested `every 500ms`→`Timer.repeat(Duration.ms(500))`);
+`normalize` keeps name/subtype/scope (so `f(1)`≠`g(1)`) while dropping positions; `$` not a legal Cure ident char
+(degensym can't false-positive); the `for`-comprehension is valid; no-example/`{:type}` rules skip cleanly.
+
+SP2 slice-2b Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
+- **T1 `e9acf58`** — `Parser.expand_example/2` (public): seeds `active_macros`/`literal_macros` from a synthetic
+  `[{:macro_def,[],rules}]`, parses `use_site ++ [eof]` via `parse_expr` → the real expansion. 669 parser tests.
+- **T2 `f76de41`** — `MacroValidate.check_examples/1` + `normalize/1` (3-clause, scalar-node fix) →
+  `{:example_mismatch, [%{keyword,expected,actual}]}`; `format_error` clause. `every 500 expands Timer.repeat(500)`
+  ✓, `…expands Timer.repeat(999)` → mismatch, position-modulo match ✓. 672 tests, warnings-clean. TCB delta ZERO.
+
+**M3 FUNCTIONALLY COMPLETE (unwired):** `rule_unpinned` (2a) + `example_mismatch` (2b). SP2 now has live checks
+for ALL THREE gate errors: `missing_diagnosis` (M1) + `rule_unpinned` + `example_mismatch` (M3).
+
+**NEXT:** SP2 slice-2b Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
+(`16e0c2a..HEAD` code = `e9acf58`+`f76de41`: `parser.ex`+`macro_validate.ex`+`errors.ex`+`macro_example_check_test`).
+Focus: `expand_example` edge cases (a use-site that mis-matches the rule; a use-site nesting `<fresh>`; multiple
+examples on one rule); `normalize` on binary_op/match_arm/nested meta (does the 3-clause version handle every node
+shape — esp. meta-embedded ASTs like match_arm guards); degensym on a real `<fresh>` example; `check_examples`
+ordering + the `for` filter semantics; clause grouping; non-interference. Then SP2 slice-2b done. After: `{:type}`
+pin check (small), §3.4 `fail C` (needs Tier-3), Tier-3 `computed by`, then the WIRING slice. When ALL SP2 done →
+SP2 Stage 6 → SP2 COMPLETE → SP3 (uses the `Generator`-typeclass architecture per `2026-07-12-generator-typeclass-
+pbt-architecture.md`). Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
