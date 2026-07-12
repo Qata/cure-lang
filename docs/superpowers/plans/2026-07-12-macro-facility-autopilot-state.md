@@ -246,10 +246,25 @@ tokenization; `parse_prefix` has no `:lt` case + infix `<` non-interference; par
 expanded AST (for Task-2 assertions): `{:block,_,[{:assignment,[let: true,...],[{:variable,_,"tmp"},
 {:literal,_,100}]}, {:binary_op,[operator: :+,...],[{:variable,[line:4],"tmp"}, {:variable,[line:3],"tmp"}]}]}`.
 
-**NEXT:** SP1 T7 Stage 4 — execute Task 1 (parse `<fresh Name>` → `{:fresh_name,meta,name}`) then Task 2
-(freshen at expansion) inline TDD on Opus, strict red→green, commit per task (ghost author, explicit
-pathspec, run mix from worktree root). Then Stage 5 code review. After T7: T4/T9 (+ T7b auto-hygiene).
-When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
+SP1 T7 Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
+- **T1 `af005b0`** — `:lt` case in `parse_prefix/1` recognizing the `<fresh Name>` window
+  (`:lt id("fresh") id(name) :gt`) → `{:fresh_name, meta, name}`; else keeps `{:unexpected_token}`.
+  `test/cure/compiler/` 641 passed.
+- **T2 `cddf534`** — `fresh_counter` on state; `expand_rule/3` runs `freshen` BEFORE `subst_holes`;
+  `freshen`/`collect_fresh_names(+_meta/_value)`/`apply_freshening(+_meta/_value)` mint one deterministic
+  gensym `name$N` per distinct fresh name, rewrite markers + plain refs, walk children AND meta+list-meta.
+  The capture repro is FIXED: `addg <e> becomes let <fresh g> = 100 in e + g` + `f(g) = addg g` expands so
+  the binder is `g$0` (freshened), the param `g` stays uncaptured, template ref = `g$0`, no leftover marker.
+  `test/cure/compiler/` 642 passed / 1 skipped; `macro_use_test` (milestone-2) still green (freshen is
+  identity for non-`<fresh>` templates); `mix compile --warnings-as-errors` clean. TCB delta ZERO.
+
+**NEXT:** SP1 T7 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the T7 code diff
+(`5c903d3..HEAD` code = `af005b0`+`cddf534`, only `lib/cure/compiler/parser.ex` + `macro_hygiene_test.exs`).
+Review focus: does freshening handle nested `<fresh>`/shadowing, multiple distinct fresh names in one rule,
+a fresh name equal to a hole name (plan notes out-of-scope — confirm not silently unsound), the counter's
+uniqueness across MULTIPLE use-sites of the same macro (two `addg` calls → g$0 vs g$1?), and that plain
+non-macro `<` expressions are untouched. Then SP1 T7 done. After T7: T4 (literal lexer) + T9 (cross-module)
++ T7b (auto-hygiene). When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
