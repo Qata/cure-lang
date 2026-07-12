@@ -210,17 +210,31 @@ pre-existing inert last-write-wins convention, nothing reads it back); ran an ad
 `52b997c`, plan `99b8be6`/`2f878af`/`36a3289`. The DONE-criterion clause "expands to well-typed Core"
 is now permanently guarded on both pipelines with the zero-production-delta proof of TCB-delta-zero.
 
-**NEXT:** SP1 **T7 (hygiene)** Stage 2 — write `docs/superpowers/plans/2026-07-12-macro-facility-sp1d-plan.md`.
-This is a REAL red-green feature (unlike the T8 firewall): milestone-2 expansion is deliberately
-unhygienic, so a template that INTRODUCES a binder can capture a use-site name (or a use-site arg can
-be captured by a template binder). Grounding needed FIRST (probe, don't assume): (1) find a template
-form that binds a name (`let`/lambda/`match`-arm binder in a `becomes` template) and construct a
-capture repro — a use-site whose hole arg mentions a name the template also binds — showing the wrong
-binding wins; (2) design `<fresh Name>` gensym syntax in templates (parser: extend the hole/segment
-grammar or a template-side marker) + a rename pass in `expand_rule`/`subst_holes` that alpha-renames
-template-introduced binders to gensyms before substitution. Red test = the capture repro; green = gensym
-fixes it. TCB delta ZERO (still parse-time surface rewrite). After T7: T4 (literal/suffix lexer) + T9
-(cross-module). When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
+SP1 T7 Stage 2 DONE — plan committed at `docs/superpowers/plans/2026-07-12-macro-facility-sp1d-plan.md`.
+Grounded LIVE (not assumed): capture bug PROVEN — `addtmp <e> becomes let tmp = 100 in e + tmp` +
+`fn f(tmp) = addtmp tmp` expands to `let tmp = 100 in tmp + tmp` where the hole-substituted param `tmp`
+is CAPTURED by the template's `let tmp` (computes 100+100 regardless of arg). Parser facts probed:
+`<fresh g>` tokenizes `:lt id("fresh") id("g") :gt` (`fresh` not reserved); template parsed via
+`parse_expr` at `parser.ex:4120`; `parse_prefix/1` (now at `:381`) has no `:lt` case, bare `:lt`
+hits default `{:unexpected_token}` at `:560`; infix `<` never reaches prefix (comparisons safe); the
+`:lbrace` case `:545` is the window-lookahead idiom to mirror; expansion at `parse_macro_use`/
+`expand_rule`/`subst_holes` `:195-221`.
+
+**Scoping:** T7 = the EXPLICIT `<fresh Name>` primitive (design §5's named mechanism, deterministic
+gensym `name$N` via a `fresh_counter` in parser state; freshen BEFORE hole-subst so use-site material
+is never freshened; walks meta too, mirroring the T8-review `subst_holes` fix). AUTOMATIC full hygiene
+(auto-rename every template binder, no annotation — §5 headline) needs template scope analysis → deferred
+to **T7b** own plan. `<capture>` escape also deferred. Two tasks: T1 parse `<fresh Name>` → `{:fresh_name,
+meta,name}`; T2 freshen at expansion (red = the capture repro with `<fresh g>`; green = binder gensym'd,
+param `g` uncaptured). TCB delta ZERO.
+
+**NEXT:** SP1 T7 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp1d plan (plan-for-code:
+falsifiability + testing-discipline; two clean passes; commit hardened). Scrutiny hints for reviewer:
+verify the `:lt`-prefix window can't shadow a real construct (confirm no valid `<ident ident>` prefix
+today); verify `freshen`-before-`subst_holes` ordering is correct + that a fresh name colliding with a
+hole name is genuinely out-of-scope-noted not silently broken; verify determinism of `fresh_counter`
+(phase-2-only; harvest phase doesn't expand). Then Stage 4 execute, Stage 5 review. After T7: T4/T9 (+ T7b).
+When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
