@@ -7,7 +7,7 @@ defmodule Cure.Compiler.MacroFuzz do
   inhabitant of a different type.
   """
 
-  alias Antigen.{Challenge, Shrink}
+  alias Antigen.{Challenge, Gen, Shrink}
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Compiler.{Lexer, Parser, Token}
@@ -21,22 +21,15 @@ defmodule Cure.Compiler.MacroFuzz do
           category: String.t(),
           env: Cure.Core.Env.t(),
           ctx: Context.t(),
-          goal: Cure.Core.Term.t(),
+          goal: Cure.Core.Term.t() | nil,
+          domain: atom(),
           generator: Antigen.Gen.t()
         }
 
   @category_goals %{
     "Nat" => {:data, :Nat, [], []},
     "Bd" => {:data, :Bd, [], []},
-    "Vec" => {:data, :Vec, [], [{:ctor, :Z, []}]},
-    # These surface categories are intentionally seeded with closed Nat code
-    # until the module-aware generator menu grows their native domains. They
-    # still exercise real parse/expand/elaborate paths; the manifest records
-    # the category so the domain upgrade remains visible.
-    "Code" => {:data, :Nat, [], []},
-    "Duration" => {:data, :Nat, [], []},
-    "Number" => {:data, :Nat, [], []},
-    "Kind" => {:data, :Nat, [], []}
+    "Vec" => {:data, :Vec, [], [{:ctor, :Z, []}]}
   }
 
   @spec hole_generator(String.t()) ::
@@ -46,9 +39,68 @@ defmodule Cure.Compiler.MacroFuzz do
       {:ok, goal} ->
         env = SigMenu.env_of(:v1)
         ctx = Context.empty(env)
-        {:ok, %{category: category, env: env, ctx: ctx, goal: goal, generator: Term.gen_term(ctx, goal)}}
+        {:ok, %{category: category, domain: :core, env: env, ctx: ctx, goal: goal, generator: Term.gen_term(ctx, goal)}}
 
       :error ->
+        native_hole_generator(category)
+    end
+  end
+
+  defp native_hole_generator(category) do
+    env = SigMenu.env_of(:v1)
+    ctx = Context.empty(env)
+
+    case category do
+      "Number" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :number,
+           env: env,
+           ctx: ctx,
+           goal: nil,
+           generator: Gen.member_of([{:int_lit, -2}, {:int_lit, 0}, {:int_lit, 42}, {:float_lit, 0.5}])
+         }}
+
+      "Duration" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :duration,
+           env: env,
+           ctx: ctx,
+           goal: {:int_type},
+           generator: Gen.member_of([{:int_lit, 1}, {:int_lit, 500}, {:int_lit, 1_000_000}])
+         }}
+
+      "Code" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :code,
+           env: env,
+           ctx: ctx,
+           goal: nil,
+           generator:
+             Gen.frequency([
+               {2, Gen.member_of([{:int_lit, -1}, {:int_lit, 0}, {:int_lit, 9}])},
+               {2, Term.gen_term(ctx, SigMenu.nat())},
+               {2, Term.gen_term(ctx, SigMenu.bd())}
+             ])
+         }}
+
+      "Kind" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :core,
+           env: env,
+           ctx: ctx,
+           goal: {:type, 0},
+           generator: Term.gen_term(ctx, {:type, 0})
+         }}
+
+      _ ->
         {:error, {:unsupported_hole_type, category}}
     end
   end
@@ -279,6 +331,8 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp surface_filler_normal({:ctor, :T, []}), do: {:ok, "true"}
   defp surface_filler_normal({:ctor, :F, []}), do: {:ok, "false"}
+  defp surface_filler_normal({:data, :Nat, [], []}), do: {:ok, "Nat"}
+  defp surface_filler_normal({:data, :Bd, [], []}), do: {:ok, "Bd"}
   defp surface_filler_normal({:int_lit, n}) when is_integer(n), do: {:ok, Integer.to_string(n)}
   defp surface_filler_normal({:float_lit, n}) when is_float(n), do: {:ok, Float.to_string(n)}
 
@@ -293,10 +347,30 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp surface_nat(_other), do: {:error, :not_a_nat}
 
-  defp check_samples(%{ctx: ctx, goal: goal}, terms) do
+  defp check_samples(%{ctx: ctx, goal: goal, domain: :core}, terms) do
     goal_value = Eval.eval(goal, Context.env(ctx))
 
     case Enum.find(terms, &(Kernel.check(ctx, &1, goal_value) != :ok)) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: domain}, terms) when domain in [:number, :duration] do
+    case Enum.find(terms, fn
+           {:int_lit, _} -> false
+           {:float_lit, _} -> domain != :number
+           _ -> true
+         end) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{ctx: ctx, domain: :code}, terms) do
+    case Enum.find(terms, fn term ->
+           not (match?({:ok, _}, Kernel.infer(ctx, term)) and match?({:ok, _}, surface_filler(term)))
+         end) do
       nil -> :ok
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end

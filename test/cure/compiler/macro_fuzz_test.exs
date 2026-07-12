@@ -21,6 +21,20 @@ defmodule Cure.Compiler.MacroFuzzTest do
              MacroFuzz.hole_generator("UnknownCategory")
   end
 
+  test "surface categories use native literal and syntax-domain generators" do
+    assert {:ok, %{domain: :number}, numbers} = MacroFuzz.sample_holes("Number", 12, 19)
+    assert Enum.all?(numbers, fn term -> match?({:int_lit, _}, term) or match?({:float_lit, _}, term) end)
+
+    assert {:ok, %{domain: :duration}, durations} = MacroFuzz.sample_holes("Duration", 12, 19)
+    assert Enum.all?(durations, &match?({:int_lit, _}, &1))
+
+    assert {:ok, %{domain: :code}, code} = MacroFuzz.sample_holes("Code", 12, 19)
+    assert Enum.all?(code, &is_tuple/1)
+
+    assert {:ok, %{goal: {:type, 0}}, kinds} = MacroFuzz.sample_holes("Kind", 12, 19)
+    assert Enum.all?(kinds, &match?({:data, _, _, _}, &1))
+  end
+
   test "generated scalar fillers assemble into fully consumed macro uses" do
     source = """
     macro Inc
