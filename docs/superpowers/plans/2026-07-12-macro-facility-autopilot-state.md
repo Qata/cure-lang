@@ -485,14 +485,31 @@ SP2 slice-1 (M1 structural) Stage 4 DONE — both tasks executed inline TDD (red
 `MacroValidate.check_explain_exhaustive` returns `{:missing_diagnosis, [...]}` rendering a friendly diagnostic.
 Not yet invoked by the compile pipeline (SP1 macros have no `explain`) — the wiring slice adds that.
 
-**NEXT:** SP2 slice-1 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
-(`8c4ab17..HEAD` code = `f3fb1f1`+`8166c25`: `parser.ex`+`macro_validate.ex`+`errors.ex`+`macro_explain_test`).
-Focus: `derive_points` across MULTIPLE rules + literal rules (does the literal-rule suffix/hole derive right?);
-dedup order-stability; `covered?` when an explain covers a point NOT derived (spurious clause — currently
-ignored, is that right?); the malformed-point recovery doesn't infinite-loop; multi-clause/same-category explain;
-`describe_point`/clause grouping; empty-explain-block (`explain` with no INDENT). Then SP2 slice-1 done. After:
-M1 §3.4 `fail C`, wiring slice, M3 examples, Tier-3. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3.
-Deferred post-gate SP1: T9, T7b.
+SP2 slice-1 Stage 5 DONE — Sonnet code review over the diff, converged CLEAN (3 passes, NO defects, no code
+changes). Verified LIVE: multi-rule + literal-rule (`keyword: nil` correctly skips keyword point; suffix+hole
+derived) + trailing-literal derivation all correct; dedup deterministic (identical output twice; shared
+hole-kind → one point); spurious explain clause ignored (matches design §3.2 exhaustiveness-only intent);
+`covered?/2` total (only 2 point shapes producible); **malformed-point recovery tested vs 8 hostile inputs
+under a 5s timeout — NONE hung** (`parse_expr` always consumes ≥1 token → loop progresses to dedent/eof);
+empty explain block clean; `:explain` entry skipped by both harvesters + doesn't break expansion (`say hello`
+still expands). Full `mix test` 4133 passed / 2 skipped, antigen 328/328, warnings-clean. High confidence.
+
+## ═══ SP2 slice 1 (M1 structural exhaustive-explain) COMPLETE ═══
+`f3fb1f1` parse explain + `8166c25` `MacroValidate.check_explain_exhaustive/1` + `missing_diagnosis` render.
+A macro that omits a failure-point description → structured `missing_diagnosis` diagnostic. TCB delta ZERO.
+Standalone (unwired) by design; the wiring slice enforces it in real compiles.
+
+**NEXT: SP2 slice 2 = M3 required per-rule examples (§5)** — Stage 2 plan. Build as a STANDALONE check (same
+pattern as M1: no pipeline wiring yet — defer the SP1-macro-breaking wiring to ONE later slice that wires ALL
+checks + pins SP1 macros). Scope: parse `example <filled> expands <expected>` (or `expands : <Type>` §5.2)
+attached to a `syntax` rule; `MacroValidate.check_rules_pinned/1` → every `:syntax` rule has ≥1 example else
+`{:rule_unpinned, rule}`; the example CHECK parses the filled example THROUGH the rule, expands it (reuse
+`expand_rule`/the two-phase parse), and asserts it equals `expands` up to hygiene (α/gensym) → else
+`{:example_mismatch, …}`; type-only pin checks the expansion elaborates (reuse `Program.elaborate`, T8-style).
+GROUND FIRST: how `example`/`expands` tokenize + attach (a sub-line under a `syntax` rule, indented); how to
+compare expansions up to `<fresh>` gensym α-renaming. Delivers 2 of SP2's 3 gate errors (`rule_unpinned`,
+example-mismatch). Then §3.4 `fail C` (needs Tier-3), Tier-3 `computed by`, then the WIRING slice. When ALL
+SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (generative). Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
