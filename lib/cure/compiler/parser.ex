@@ -63,6 +63,15 @@ defmodule Cure.Compiler.Parser do
     :proof
   ]
 
+  # Names parse_prefix/1's :identifier case already dispatches on via a
+  # hard-coded clause (the soft-keyword container forms sup/app/macro/with,
+  # plus the assert_type/rewrite builtins). A local macro can never claim one
+  # of these: the guarded macro-use clause is checked FIRST, so an unguarded
+  # collision would silently disable the existing form for the rest of the
+  # module with no error raised. Reserved names simply keep today's
+  # soft-keyword behavior; they are never macro-usable.
+  @reserved_macro_keywords ~w(assert_type rewrite sup app with macro)
+
   # Decorators that describe the *module*, not the declaration that follows.
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
   # it always parses as a standalone `{:decorator, ...}` node so downstream
@@ -137,6 +146,36 @@ defmodule Cure.Compiler.Parser do
   defp collect_macro_defs({:macro_def, _, _} = m), do: [m]
   defp collect_macro_defs({_t, _m, children}) when is_list(children), do: collect_macro_defs(children)
   defp collect_macro_defs(_), do: []
+
+  # A use-site of an active macro keyword. Milestone-2 handles a single rule per
+  # keyword with zero holes; multi-rule / hole matching is Task 3.
+  defp parse_macro_use(state, keyword) do
+    [rule | _] = Map.fetch!(state.active_macros, keyword)
+    state = advance(state)  # consume the keyword token
+    # Zero-hole rule: no segments to match; expand the template with no bindings.
+    expanded = expand_rule(rule, %{})
+    {expanded, state}
+  end
+
+  # Substitute hole bindings into a rule's template: replace any
+  # `{:variable, _, name}` whose `name` is a bound hole with its bound AST.
+  # A zero-hole rule (empty bindings) returns the template unchanged.
+  defp expand_rule(rule, bindings) do
+    subst_holes(rule.template, bindings)
+  end
+
+  defp subst_holes({:variable, _meta, name} = v, bindings) do
+    case Map.fetch(bindings, name) do
+      {:ok, arg} -> arg
+      :error -> v
+    end
+  end
+
+  defp subst_holes({t, meta, children}, bindings) when is_list(children) do
+    {t, meta, Enum.map(children, &subst_holes(&1, bindings))}
+  end
+
+  defp subst_holes(other, _bindings), do: other
 
   # -- Program (top-level sequence) ------------------------------------------
 
@@ -317,6 +356,12 @@ defmodule Cure.Compiler.Parser do
       # Variables / identifiers
       :identifier ->
         case token.value do
+          # A use-site of a locally-defined macro keyword. Checked FIRST so a
+          # macro keyword wins, but guarded so non-macro identifiers are
+          # untouched. (Reserved soft-keyword names are excluded below.)
+          name when is_map_key(state.active_macros, name) and name not in @reserved_macro_keywords ->
+            parse_macro_use(state, name)
+
           "assert_type" ->
             parse_assert_type(state, token)
 
