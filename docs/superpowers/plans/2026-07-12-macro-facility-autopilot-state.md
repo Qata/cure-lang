@@ -720,16 +720,191 @@ explicit pathspec, mix from worktree root):
   compiler+stdlib regression 1021 pass / 1 skip; `mix compile --warnings-as-errors` clean (vector.cure `.cure`
   warnings pre-existing, not Elixir).
 
-SP2 Tier-3 slice-2 Stage 5 code review DISPATCHED — Sonnet subagent running `recursive-skeptical-review` on the
-Stage 4 diff `2faf559..HEAD` (falsifiability in full force, two-pipeline steer given, TCB-zero guard, ghost+pathspec
-rules). Running in background; self-commits its fixes. On return: record summary here, then SP2 Tier-3 slice-2
-Stage 6 (`mix test test/cure/compiler/ test/cure/stdlib/` green once) → slice 2 COMPLETE.
+SP2 Tier-3 slice-2 Stage 5 code review DONE — Sonnet subagent converged after 7 passes (4 consecutive clean) over
+diff `2faf559..HEAD`, committed `6eaf70d` (ghost author, explicit pathspec). Found + red-tested + fixed 2 real
+defects: (A) composite-meta blind spot — `synlit/1` collapsed list/map/AST-valued meta (binary-segment `size`/`unit`,
+selective-`use` item lists, an interface's `defaults` table) to `:s_opaque`; fixed by adding `{:s_list,_}`,
+`{:s_syntax,_}`, `{:s_map,_}` variants + `SList`/`SSyntax`/`SMap`/`SynPair` ctors on the ADT. (B) `to_syntax/1`
+raised `FunctionClauseError` on non-3-tuple parser output (`impossible` arm body `nil`, 4-tuple `named_implicit_pat`);
+fixed by a total `{:syn_raw,_}` catch-all + `Raw` ctor (reflect opaquely, matching regex precedent). Stale moduledoc
+fixed. All 9 tests green; **Stage 6 gate run by the reviewer: `mix test test/cure/compiler/ test/cure/stdlib/` =
+1026 passed / 1 skip (pre-existing)**. NO seeds/corpus noise. Out-of-scope note (NOT fixed, pre-existing, flagged
+for later): parser.ex's own `subst_holes_meta_value`/`collect_fresh_names_value` Tier-1 hole walkers have the same
+map-valued-meta blind spot if ever fed one.
 
-**NEXT (after slice 2 Stage 6 green):** SP2 Tier-3 slice 3 (BIG execution pass — harvest `:computed` + emit
-`{:computed_use}`; elaboration-time pass: elaborate elab → `normalise(app(elab, input))` → `from_syntax` → splice →
-re-elaborate; end-to-end a `computed by` macro expands). Then TYPED-RECORD derivation (operator steer, `a.name`),
-`check…else fail C`, WIRING. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass arch).
-Deferred post-gate SP1: T9, T7b. (`actor` end-state = §14.6, `a.name` typed reflection; north star for SP5.)
+## ═══ SP2 Tier-3 slice 2 (`Std.Syntax` value + reflection bridge) COMPLETE ═══ (Stages 2–6 done; `6eaf70d`)
+Reflection substrate live: `lib/std/syntax.cure` (`Syntax`/`Attr`/`SynLit` ADT, now incl. `Raw`/`SList`/`SSyntax`/
+`SMap`/`SynPair`) + `lib/cure/compiler/macro_syntax.ex` (`to_syntax`/`from_syntax`, total + lossless up to line/col).
+TCB delta ZERO. This is the VALUE a typed derived field holds underneath (operator steer, `a.name`) — NOT wasted.
+
+**NEXT (SP2 continues):** SP2 Tier-3 slice 3 (BIG execution pass — harvest `:computed` + emit `{:computed_use}`;
+elaboration-time pass: elaborate elab → `normalise(app(elab, input))` → `from_syntax` → splice → re-elaborate;
+end-to-end a `computed by` macro expands). Then TYPED-RECORD derivation (`a.name`), `check…else fail C`, WIRING
+(thread `MacroValidate` — incl. the future SP3 fuzz gate — into every compile). When ALL SP2 done → SP2 Stage 6 →
+SP2 COMPLETE → **SP3 (read the SP3 GROUNDING section below FIRST)**. Deferred post-gate SP1: T9, T7b.
+
+## ═══ SP3 GROUNDING — READ THIS WHOLE SECTION BEFORE TOUCHING SP3 ═══
+(Written 2026-07-12 by the prior agent with full machinery probed live, for a fresh/less-context
+agent. Every path, module, and function name below was verified against the tree on this date. Re-verify
+line numbers before editing — they drift — but the module + function NAMES are load-bearing and correct.)
+
+### SP3 mission (one sentence)
+Make **every macro compile run a full Antigen-style fuzz of its own expansion**: generate a statistically
+thorough sample of the DSL programs the macro's grammar accepts (by filling each typed hole with a generated
+well-typed Core term of that hole's type), expand each, kernel-check the expansion, and **fail the MACRO's
+compile** (with a shrunk counterexample) if any valid parse expands to ill-typed Core. Spec = self-proving
+design **§4** (`docs/superpowers/specs/2026-07-11-self-proving-macros-design.md`, lines 174–241) — read §4.1–§4.5
+verbatim; program-doc SP3 (`…-program.md`, "### SP3"). This is the **self-proving headline** and the clause of
+the DONE criterion that reads "generatively proven to expand to well-typed Core." SP3 is the ONLY sub-project
+that closes that clause — SP4/SP5/SP6 do not.
+
+### Layer & TCB posture (NON-NEGOTIABLE)
+SP3 is an **A + E/P-layer feature (untrusted): Antigen engine (`lib/antigen/*`) + the macro compile path
+(`lib/cure/compiler/*`) + re-elaboration via the elaborator (`lib/cure/elab/*`).** TCB delta MUST be ZERO — do
+NOT touch `lib/cure/core/*`. Soundness argument (spec §4.3): the generator emits well-typed Core, we assemble it
+through the grammar, expand, and hand the expansion to the SAME trusted kernel checker that guards every other
+program. A generator bug or a false "valid parse" can only make a macro **wrongly fail to compile** (a rejected,
+not an unsound, program) — it can never admit ill-typed Core. If SP3 ever seems to need a kernel/core change, it
+is mis-scoped → HALT and update this file.
+
+### THE BIG WIN — the "one new engine" §4.4 calls for MOSTLY ALREADY EXISTS
+Spec §4.4 says the single implementation cost is *type-directed* generation ("give me a well-typed term of type
+`T`", stronger than "give me some well-typed term"). **That generator already exists and is callable:**
+- `Antigen.Generators.Term.gen_term(ctx, goal)` (`lib/antigen/generators/term.ex:28`) → returns an
+  `Antigen.Gen.t()` that samples a **well-typed Core term of type `goal`** in context `ctx`. It is mode-directed
+  inversion of the kernel's bidirectional rules with a canonical-inhabitant fallback (`SigMenu.canon/2`) so it is
+  **total** (never fails to produce *a* term). `@max_size 12`, fuel `@gen_fuel 500`.
+- So SP3's real work is **WIRING** `gen_term` into per-hole filling — NOT building type-directed generation from
+  scratch. The remaining generator work is only mapping a grammar hole `<n: Category>` → the Core `goal` type to
+  pass to `gen_term`, and only for the hole categories a DSL actually uses (spec §4.4: base value/data types
+  first; higher-order/dependent hole types a later increment; a hole type outside reach must be REPORTED as a
+  coverage gap, per §4.2, not silently passed).
+
+### Reusable machinery inventory (all verified present — do NOT reinvent)
+- **Type-directed term gen:** `Antigen.Generators.Term.gen_term(ctx, goal)` (above). Context generation:
+  `Antigen.Generators.Context.gen/1`; signature menu `Antigen.Generators.SigMenu` (`env_of/1`, `rebuild_context/2`,
+  `canon/2`).
+- **Gen monad combinators:** `Antigen.Gen` (`lib/antigen/gen.ex`): `return/1`, `member_of/1`, `one_of/1`,
+  `frequency/1`, `bind/2`, `sized/1`. Interpreted by backend `Antigen.Backend.StreamData` (`sample/2`,
+  `sample_seeded/3`). Use `bind`/`sized`/`return` to assemble a whole-program generator from per-hole `gen_term`s.
+- **Shrinker (for the counterexample):** `Antigen.Shrink.minimize(challenge, pred, budget)`
+  (`lib/antigen/shrink.ex:13`); `candidates/1`, `size/1`. It already shrinks `:typed_term` payloads — the
+  counterexample a macro reports should be shrunk through this so the author sees the SMALLEST offending input.
+- **Challenge record:** `Antigen.Challenge.new(kind:, assay:, label:, payload:, seed:)`. SP3 likely adds a new
+  `kind` (e.g. `:macro_expansion`) with payload `%{macro: <name>, rule: <kw>, input: <generated parse>, expansion:
+  <Core>, ...}` — or fuzzes OUTSIDE the Challenge/assay registry entirely (a per-macro-compile loop). DECIDE which
+  (see Open Questions).
+- **Coverage manifest:** `Antigen.CoverManifest` (`lib/antigen/cover_manifest.ex`): `expected/0`, `hit_points/1`,
+  `missing/1`, `summary/1`, `report/1`. SP3 needs a **per-macro** manifest (which rules + which `fail`/`explain`
+  points were exercised, at what depth). Model it on CoverManifest but keyed by macro definition, per spec §4.2.
+- **Runner/campaign:** `Antigen.Runner` (`generate/1`, `replay/2`, `@registered_assays`). Relevant if SP3 registers
+  an assay; skippable if SP3 runs its own per-compile loop.
+
+### The expansion path SP3 must call (what "expand `p`" means concretely)
+- **Tier-1/2 (template `becomes`, built in SP1):** `Cure.Compiler.Parser.expand_example(rules, use_site_tokens)`
+  (`lib/cure/compiler/parser.ex:146`) parses a use-site token stream against a macro's `rules` and returns the
+  expansion AST (it wraps a sentinel `{:example_use_site_not_fully_consumed,…}` if the input isn't a single full
+  use — reuse that discipline). This is the exact function `MacroValidate.check_examples` uses to expand the
+  worked examples; SP3 does the same but with GENERATED inputs instead of author examples. **A generated program
+  is a token stream** (or an AST you can render to tokens) — the generator's job is to produce hole-fillers, splice
+  them into the rule's use-site shape, and hand tokens to `expand_example`.
+- **Tier-3 (`computed by`, SP2 slice 3 — NOT YET BUILT):** its expansion is the compile-time execution pass
+  (`elaborate elab → normalise(app(elab, input)) → from_syntax → splice → re-elaborate`, see the SP2 NEXT block
+  above and `…-tier3-computed-by-execution-design.md`). **SP3 CANNOT fuzz Tier-3 macros until SP2 slice 3 lands.**
+  Program-doc confirms: SP3 "Depends on SP2 (needs Tier-3 elabs + the grammar to fuzz)." → **Sequence: finish SP2
+  (incl. slice 3) FIRST.** SP3 CAN be prototyped against Tier-1/2 macros (which fully exist) to build the generator
+  wiring + gate + manifest, then extended to Tier-3 once slice 3 exists.
+- **Kernel-check the expansion:** re-elaborate the expansion on the dependent pipeline —
+  `Cure.Elab.Program.elaborate/1` (returns `{:ok, env}` | `{:error, …}`). SP1 T8 already built the
+  "expansion expands to WELL-TYPED Core" dependent firewall (commit `3a7383d`; see the transitional classic one
+  in `test/cure/compiler/macro_expansion_classic_soundness_test.exs`). SP3 generalizes that single firewall to
+  the fuzzed-input population. A kernel `{:error, …}` on a valid generated parse == the SP3 counterexample.
+
+### The check host & the wiring seam (where the gate fires)
+- SP2's self-proving checks live in **`Cure.Compiler.MacroValidate`** (`lib/cure/compiler/macro_validate.ex`):
+  `check_explain_exhaustive/1` → `{:error,{:missing_diagnosis,points}}`, `check_rules_pinned/1` →
+  `{:error,{:rule_unpinned,names}}`, `check_examples/1` → `{:error,{:example_mismatch,details}}`. **SP3 adds a
+  fourth sibling here:** `check_expansion_proof/1 :: (macro_def) -> :ok | {:error,{:expansion_ill_typed, %{input, expansion, kernel_error, shrunk}}}`.
+  Error atoms/formatting go in `lib/cure/compiler/errors.ex` alongside the other three.
+- **WIRING CAVEAT (shared with SP2):** these `MacroValidate` checks are currently STANDALONE — grep shows only
+  comments reference them from the compile pipeline; they are not yet invoked on every real compile. SP2's own
+  "WIRING slice" (see SP2 NEXT block) is what threads `MacroValidate` into the compile path. **SP3's full-fuzz
+  gate needs that SAME wiring seam.** Coordinate: either SP2's wiring slice lands the seam and SP3 hangs its
+  check on it, or SP3's first slice builds the seam. Do NOT assume the checks auto-run — verify with a red test
+  that a bad macro actually FAILS TO COMPILE (not just that `check_*` returns an error in isolation).
+
+### Proposed SP3 slice decomposition (each slice = full autopilot Stage 2–6, red-test-first, committed)
+Order chosen so each slice has a runnable red test and builds on the last. Adjust if grounding contradicts.
+1. **Slice A — hole-type → Core-goal mapping + single-hole generation.** Given one rule with one typed hole
+   `<n: Category>`, produce a `Gen` of a well-typed filler via `gen_term(ctx, goal)`. RED TEST: for a hole of a
+   base type (e.g. `Int`/`Bool`/a simple ADT), the generator yields N terms that each `elaborate`/infer to that
+   type. Report `:unsupported_hole_type` for a category outside reach (coverage gap, not a pass).
+2. **Slice B — whole-parse assembly.** Splice per-hole fillers into a rule's use-site shape → a full generated
+   use-site token stream; feed `expand_example` → an expansion AST. RED TEST: a generated parse for a known-good
+   Tier-2 macro expands without the not-fully-consumed sentinel.
+3. **Slice C — the property + gate.** For a batch of generated parses: expand each, `elaborate/1` the expansion,
+   collect kernel errors. RED TEST (the headline): a **deliberately broken** macro whose `becomes` drops a hole's
+   type (so a valid parse expands to ill-typed Core) is REJECTED at compile with a counterexample; a correct macro
+   PASSES. This is the program-doc SP3 gate. Use a hand-written broken fixture macro as the negative control.
+4. **Slice D — shrink the counterexample.** Route the failing generated input through `Antigen.Shrink.minimize/3`
+   so the reported counterexample is minimal. RED TEST: the reported input for the broken macro is the minimal
+   failing shape (assert size ≤ a bound, or equals a known minimal witness).
+5. **Slice E — per-macro coverage manifest + caching.** Manifest records rules/`fail`/`explain` points exercised
+   and depth; cache keyed by macro definition (same grammar+elabs ⇒ reuse prior PASS; edit ⇒ re-run full).
+   RED TESTS: manifest lists all rules of a multi-rule macro; an unchanged macro's second compile does not re-fuzz
+   (observable via a call counter/flag), an edited one does. Caching is "don't redo identical work," NEVER a
+   weaker gate (spec §4.2).
+6. **Slice F — wire the full-budget gate into every macro compile** (or hang on SP2's wiring seam) + extend to
+   Tier-3 `computed by` macros once SP2 slice 3 exists. RED TEST: end-to-end, a user macro in a `.cure` source
+   with a latent expansion bug fails `Cure.Elab.Program.elaborate/1` of the whole program with the SP3 error.
+
+### SP3 GATE (from program-doc — the acceptance bar)
+"A macro whose `becomes`/elab drops a hole's type is REJECTED at macro-compile with a shrunk counterexample; a
+correct macro passes; the manifest reports coverage. Full suite green; Antigen campaign green." Plus the
+DONE-criterion end-to-end proof: a user macro parses, expands, is generatively proven, and its expansion runs.
+
+### Open questions to DECIDE early (don't guess silently — record the decision in this file)
+1. **Assay-registered vs standalone loop?** Register a new `:macro_expansion` assay in `Antigen.Runner`
+   (`@registered_assays`) and reuse the campaign/replay/corpus banking, OR run a self-contained per-macro-compile
+   fuzz loop that only borrows `gen_term`/`Shrink`/manifest. Standalone is simpler and matches "gates every macro
+   compile"; assay-registration buys corpus replay + the existing coverage campaign. Prior lean: **standalone loop
+   that borrows the pieces** (macro fuzz is per-compile, not part of the kernel campaign) — but confirm against how
+   heavy the full-budget run is and whether corpus banking is wanted. NOTE the standing rule: **revert
+   `test/antigen/seeds.sexp` + `corpus.sexp` banking noise before committing** — if SP3 runs anything that banks
+   seeds, scrub that diff.
+2. **Grammar-hole → Core-type bridge.** How does a rule declare a hole's TYPE, and where is it stored on the
+   `{:macro_def, meta, rules}` AST? Probe the harvested rule shape (`harvest_active_macros`, parser.ex:183) and the
+   Tier-2 `syntax` rule's hole-kind field before Slice A — the mapping from a hole's declared Category to the Core
+   `goal` term is the crux and is under-specified here.
+3. **Budget/perf.** "Full budget on every compile" is a deliberate cost (spec §4.2). Pick a default draw count
+   (Antigen defaults `count: 200`, `gen_term` size ≤ 12). Caching (Slice E) is the escape valve.
+
+### Two-pipeline steer (put this in EVERY SP3 subagent brief — verbatim)
+Dependent machinery lives ONLY in `lib/cure/elab/*` + `lib/cure/core/*`. IGNORE `lib/cure/types/*`
+(`checker.ex`, `unify.ex`) and the codegen half of `lib/cure/compiler/*` (`codegen.ex`, `pattern_compiler.ex`) —
+non-dependent lowering; same-named functions are decoys. For SP3 the RIGHT anchors are: the generator
+`lib/antigen/generators/term.ex` (`gen_term/2`), the expansion entry `lib/cure/compiler/parser.ex`
+(`expand_example/2`, `harvest_active_macros`), the check host `lib/cure/compiler/macro_validate.ex`, and the
+kernel-check via `Cure.Elab.Program.elaborate/1`. A read-only scouting agent that greps by name will land in the
+wrong pipeline and report phantom "type-directed generation missing" — it is NOT missing (`gen_term/2` is it).
+
+### Standing rules recap (same as the rest of this run)
+Ghost commits `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, no Co-Authored-By. Explicit pathspec
+`git add -- <path>`, never `-A`. Revert `test/antigen/seeds.sexp`/`corpus.sexp` banking noise before committing.
+ONE `mix` suite at a time (prefer scoped `mix test <file>`; full suite once, alone, at the gate). Commit per
+stage/task. Reviews on Sonnet (`model: sonnet`, recursive-skeptical-review to two clean passes), implementation on
+Opus. STOP + update this file + PushNotification on a hard blocker or pass-15 non-convergence — never accept an
+unconverged artifact. Tests immutable once green.
+
+### Cross-refs
+- Spec §4: `docs/superpowers/specs/2026-07-11-self-proving-macros-design.md:174-241`.
+- Program-doc SP3: `docs/superpowers/plans/2026-07-12-macro-facility-program.md` ("### SP3").
+- Tier-3 execution design (needed before SP3 can fuzz Tier-3): `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`.
+- SP1 T8 expansion firewall (the single-case ancestor of SP3's fuzz): commit `3a7383d`,
+  `test/cure/compiler/macro_expansion_classic_soundness_test.exs`.
+- Antigen metatheory engine + coverage discipline: project memory `[[antigen-metatheory-engine]]`,
+  `[[antigen-coverage-manifest]]`, `[[antigen-coverage-plateau]]` (~95% honest ceiling — SP3 inherits the same
+  "statistical, not a formal proof for an infinite grammar" residual, spec §4.5; state it, don't overclaim).
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
