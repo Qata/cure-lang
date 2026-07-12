@@ -282,12 +282,25 @@ capture (the proven `let tmp` capture bug is fixed). Two gaps found + characteri
 - Minor pre-existing (not T7): a stray `<fresh h>` OUTSIDE a template parses to an unhandled `{:fresh_name}`
   node and `cure compile` fails exit-1 with no diagnostic — general unrecognized-node-type gap, not T7-specific.
 
-**NEXT:** SP1 continues — remaining tasks **T4** (literal/suffix lexer `500ms`), **T9** (cross-module/imported
-macros + import scoping), **T7b** (automatic full hygiene + the two gaps above + `<capture>`). Pick T4 next
-(smallest, unblocks bounded hole+literal segment matching): Stage 2 write
-`docs/superpowers/plans/2026-07-12-macro-facility-sp1e-plan.md` grounding the lexer change (lex_decimal has
-NO suffix support — `lexer.ex:795-826`), then Stages 3-5. When ALL SP1 tasks (incl T7b/T4/T9) done+reviewed →
-SP1 Stage 6 full verify, then SP2.
+**SP1 SCOPE (re-confirmed against program-doc SP1 definition + GATE — do NOT skip to SP2):** SP1 explicitly
+includes, beyond the done milestone1/2/T7/T8: **Tier-1 literal rules** (T4), **import scoping + same-keyword
+conflict error** §7 (T9), **two-pass name resolution** §6, and the **default error-machinery FLOOR** §2 —
+wrong-arity/unknown-category macro uses must produce a DIAGNOSTIC, not a raw parser error (currently
+`:macro_use_mismatch` is raw-ish). SP1 GATE: a Tier-1 AND a Tier-2 macro compile+expand+kernel-check, bad
+uses give a default-machinery diagnostic, full `mix test` green. So SP1 is NOT near-done; jumping to SP2
+(self-proving typed errors) would skip real SP1 scope. Architecture note (T9 grounding, probed): cross-module
+resolution (`import_source_env`/`module_slice_env`, program.ex:699/799) runs at ELABORATION, but macro
+expansion is at PARSE time — so imported-macro grammars need the PARSER to locate+parse imported modules
+(couples parser to import resolution). T9 is the hard architectural piece; sequence it after the tractable T4
++ error-floor.
+
+**NEXT:** SP1 **T4** (Tier-1 literal rules + numeric-suffix lexer) Stage 2 — write
+`docs/superpowers/plans/2026-07-12-macro-facility-sp1e-plan.md`. Ground the lexer change first: `lex_decimal`
+has NO suffix support (`lexer.ex:795-826`); decide `500ms`→`{:literal}` with a unit tag vs a macro-hole
+`literal` rule kind. Program-doc calls the Tier-1 exemplar a `units`-style macro. Then Stages 3-5. After T4:
+the error-machinery floor (§2), then T9 (import scoping) + two-pass resolution (§6), then T7b (auto-hygiene +
+the fresh∩hole + backtick-spoof gaps + `<capture>`). When ALL SP1 scope done+reviewed → SP1 Stage 6 full
+verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
