@@ -333,7 +333,14 @@ defmodule Cure.Compiler.Parser do
 
         input = {:macro_input, [keyword: keyword], inputs}
 
-        {{:computed_use, [keyword: keyword, line: keyword_token.line, col: keyword_token.col],
+        {{:computed_use,
+          [
+            keyword: keyword,
+            syntax_type: macro_syntax_type(keyword),
+            syntax_fields: macro_syntax_fields(rule.segments),
+            line: keyword_token.line,
+            col: keyword_token.col
+          ],
           [rule.elab, input]}, state}
 
       {:error, progress, state} ->
@@ -4534,6 +4541,8 @@ defmodule Cure.Compiler.Parser do
       kind: :computed,
       keyword: keyword,
       segments: segments,
+      syntax_type: macro_syntax_type(keyword),
+      syntax_fields: macro_syntax_fields(segments),
       elab: elab,
       examples: examples,
       progress: nil,
@@ -4541,6 +4550,17 @@ defmodule Cure.Compiler.Parser do
     }
 
     {rule, state}
+  end
+
+  defp macro_syntax_type(keyword), do: String.capitalize(keyword) <> "Syntax"
+
+  defp macro_syntax_fields(segments) do
+    segments
+    |> Enum.flat_map(fn
+      {:hole, %{name: name}} -> [name]
+      _ -> []
+    end)
+    |> Enum.uniq()
   end
 
   # After a syntax rule's template, an OPTIONAL indented block of `example …`

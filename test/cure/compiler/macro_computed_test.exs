@@ -38,7 +38,8 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use, [keyword: "mk", line: _, col: _], _} = find.(find, node)
+    assert {:computed_use, [keyword: "mk", syntax_type: "MkSyntax", syntax_fields: [], line: _, col: _], _} =
+             find.(find, node)
   end
 
   test "a zero-hole computed use is deferred with its elab and synthetic input" do
@@ -59,7 +60,8 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use, [keyword: "mk", line: _, col: _],
+    assert {:computed_use,
+            [keyword: "mk", syntax_type: "MkSyntax", syntax_fields: [], line: _, col: _],
             [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
              find.(find, node)
   end
@@ -86,5 +88,12 @@ defmodule Cure.Compiler.MacroComputedTest do
 
     assert {:variable, _, "a"} = first
     assert {:variable, _, "b"} = second
+  end
+
+  test "computed rules derive a typed record name and ordered hole fields" do
+    [rule] = rules(parse!("macro Mk\n  syntax mk <first: Code> then <second: Code> computed by build_it\n"))
+
+    assert rule.syntax_type == "MkSyntax"
+    assert rule.syntax_fields == ["first", "second"]
   end
 end

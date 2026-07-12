@@ -655,6 +655,30 @@ defmodule Cure.Elab.Program do
   defp declarations({:function_def, meta, body}) when is_list(meta),
     do: [{:function_def, meta, body}]
 
+  # A computed macro rule owns a typed record for its elab input. Keep the
+  # record in the ordinary declaration stream so the existing header pass,
+  # constructor registration, and projection checker remain authoritative.
+  defp declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
+    rules
+    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.uniq_by(&Map.get(&1, :syntax_type))
+    |> Enum.map(fn rule ->
+      fields =
+        Enum.map(Map.get(rule, :syntax_fields, []), fn field ->
+          {:param, [type: {:variable, [scope: :local], "Syntax"}], field}
+        end)
+
+      {:container,
+       [
+         container_type: :struct,
+         name: Map.fetch!(rule, :syntax_type),
+         macro_generated: true,
+         line: Keyword.get(meta, :line, 0),
+         col: Keyword.get(meta, :col, 0)
+       ], fields}
+    end)
+  end
+
   defp declarations({tag, _meta, _body} = node) when tag in [:container, :indexed_type], do: [node]
 
   # Compile-time typeclass declarations (Task 21). Both are top-level
