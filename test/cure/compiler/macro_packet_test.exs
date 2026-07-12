@@ -26,7 +26,10 @@ defmodule Cure.Compiler.MacroPacketTest do
              MacroPacket.build(:Frame, [%{name: :value, kind: :scalar, type: :u16}])
 
     assert {:error, :duplicate_packet_field} =
-             MacroPacket.build(:Frame, [%{name: :x, kind: :scalar, type: :byte}, %{name: :x, kind: :scalar, type: :byte}])
+             MacroPacket.build(:Frame, [
+               %{name: :x, kind: :scalar, type: :byte},
+               %{name: :x, kind: :scalar, type: :byte}
+             ])
   end
 
   test "crc coverage names undeclared fields" do

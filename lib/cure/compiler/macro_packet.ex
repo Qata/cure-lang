@@ -60,11 +60,14 @@ defmodule Cure.Compiler.MacroPacket do
   defp validate_field(%{name: _name, kind: :scalar, type: type} = field, packet_endian, _seen)
        when is_atom(type) do
     cond do
-      not Map.has_key?(@scalar_widths, type) -> {:error, {:unknown_packet_scalar, type}}
+      not Map.has_key?(@scalar_widths, type) ->
+        {:error, {:unknown_packet_scalar, type}}
+
       @scalar_widths[type] > 1 and Map.get(field, :endian, packet_endian) not in @endian_values ->
         {:error, {:missing_packet_endian, field.name}}
 
-      true -> :ok
+      true ->
+        :ok
     end
   end
 
