@@ -654,15 +654,29 @@ build_it` → `:computed` rule capturing `{:variable,_,"build_it"}` elab; `:comp
 as bare var, not harvested); `becomes` rules byte-identical. 677 parser tests / 1 skipped, warnings-clean. TCB
 delta ZERO. Parse-only — a computed macro can't EXPAND yet (execution is a later slice).
 
-**NEXT:** SP2 Tier-3 slice-1 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
-(`3c3fed7..HEAD` code = `ce62b17`: only `parser.ex` + `macro_computed_test.exs`). Focus: the segment-stop-word
-change doesn't alter literal-rule parsing (`parse_literal_rule` reuses `parse_rule_segments` — does a `literal`
-rule ever legitimately have `computed`/`becomes` as a suffix/literal? no, but confirm); `becomes`-extraction
-byte-identical across zero-hole/example/missing-becomes cases; `parse_expr` elab-capture over-consume; `:computed`
-inert (harvest + MacroValidate exclude); `by`-missing recovery; a rule whose template legitimately starts with the
-word `computed` in an EXPRESSION position isn't misrouted. Then Tier-3 slice-1 done. After: Tier-3 quoted-AST
-`Syntax` model + compile-time EXECUTION (the big one), `fail C`, WIRING slice. When ALL SP2 done → SP2 Stage 6 →
-SP2 COMPLETE → SP3 (Generator-typeclass architecture). Deferred post-gate SP1: T9, T7b.
+SP2 Tier-3 slice-1 Stage 5 DONE — Sonnet code review over the diff, converged (4 passes, high confidence). One
+minor finding: the new `computed` reserved tier verb means a `literal`/`syntax` rule can no longer match the
+literal word `computed` as a token (exact parity with the pre-existing `becomes` restriction; nothing in-tree
+relies on it) → doc-only comment `a23fb70`. Verified SOUND via real probes: `becomes`-extraction byte-identical
+(zero-hole/hole+lit/missing-becomes); `:computed` inert + excluded by ALL harvest/MacroValidate filters (probed
+against a real `:computed`+unpinned-`:syntax` macro — no cross-contamination); malformed `computed`/`by`/EOF
+recover cleanly; `parse_expr` elab-capture no over-consume. 677 tests / 58 macro tests, warnings-clean, antigen
+untouched.
+
+## ═══ SP2 Tier-3 slice 1 (parse `computed by`) COMPLETE ═══
+`ce62b17` (verb-branch split + segment stop-word) + `a23fb70` (doc). Tier-3 front-end live: `syntax … computed
+by <fn>` → `%{kind: :computed, elab}`, inert until execution. TCB delta ZERO.
+
+**NEXT: SP2 Tier-3 slice 2 = quoted-AST `Syntax` value model** — Stage 2 plan. GROUND FIRST (this is the hardest
+region of the whole facility — take a full grounding firing if needed): read base design §3 (quoted-AST model,
+`quote` builds syntax values, `$( )` splices) + §2 notation; decide the `Syntax` representation an elab receives
+(reflect the parser's `{tag,meta,children}` AST as a Cure value — likely a `Std.Syntax` ADT / opaque type) and
+how `quote`/`$()` parse+lower. This is the prerequisite for the BIG slice (compile-time elab EXECUTION: quote the
+matched input → run the elab staged-on-host → splice its returned `Syntax` as the expansion; K3 firewall re-checks
+output, TCB-zero). Then `check … else fail C` (§3.4), computed-rule example checks, then the WIRING slice (absorbs
+example-kernel-check + `{:type}` pins + firing-checks-in-compiles + pin SP1 macros). When ALL SP2 done → SP2
+Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass architecture, `2026-07-12-generator-typeclass-pbt-architecture.md`).
+Deferred post-gate SP1: T9, T7b. (`actor`-as-macro end-state sketched from design §14.6 — north star for SP5.)
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
