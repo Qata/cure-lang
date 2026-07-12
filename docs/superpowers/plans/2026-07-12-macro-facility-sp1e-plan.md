@@ -22,7 +22,7 @@
 - `parse_macro_rules/2` (`parser.ex:4184`) dispatches ONLY on `%Token{type: :identifier, value: "syntax"}` → `parse_macro_rule/1` (`:4202`); anything else records `{:expected, :syntax_rule, …}`. Add a `"literal"` clause.
 - `parse_macro_rule/1` (`:4202`) consumes the rule-kind word, then a **keyword** (2nd token), then `parse_rule_segments/2` (`:4234`, already parses `<n: Number>` holes + `{:lit, w}` literals), then `becomes`, then `parse_expr(state, 0)`. Rule = `%{kind: :syntax, keyword, segments, template, progress, line}`. A `literal` rule has NO keyword — it parses segments directly after the `literal` word.
 - Expansion: `parse_macro_use/2` (`:155`) → `match_segments/4` (binds holes / matches `{:lit}`) → `expand_rule/3` (`freshen` then `subst_holes`). Parser state `defstruct` at `:45` (`[…, active_macros: %{}, fresh_counter: 0]`). `harvest_active_macros/1` + `collect_macro_defs/1` index `syntax` rules by `rule.keyword`.
-- `parse_prefix/1`'s `:integer`/`:float` cases (`:386-390`) currently do `{literal(:integer, token), advance(state)}` with no lookahead.
+- `parse_prefix/1`'s `:integer`/`:float` cases (`:466-470`) currently do `{literal(:integer, token), advance(state)}` with no lookahead.
 
 ## Scope note
 
@@ -140,7 +140,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
 ### Task 2: Harvest literal rules by suffix + dispatch a number use-site
 
 **Files:**
-- Modify: `lib/cure/compiler/parser.ex` (defstruct `:45`; `parse/2` harvest; `harvest_active_macros/1`; `parse_prefix/1` `:integer`/`:float` at `:386`; add `maybe_literal_macro/2`, `expand_literal_rule/3`)
+- Modify: `lib/cure/compiler/parser.ex` (defstruct `:45`; `parse/2` harvest; `harvest_active_macros/1`; `parse_prefix/1` `:integer`/`:float` at `:466-470`; add `maybe_literal_macro/2`, `expand_literal_rule/3`)
 - Test: `test/cure/compiler/macro_literal_test.exs` (extend)
 
 **Interfaces:**
@@ -162,10 +162,40 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
     assert {:literal, _, 500} = arg
   end
 
+  test "a float number use-site with a registered suffix expands the literal rule" do
+    node =
+      parse!(
+        "macro Dur\n  literal <n: Number> s becomes Duration.s(n)\n\nfn f() -> Float = 3.5s\n"
+      )
+    body = find_fn_body(node, "f")
+    # 3.5s  ==>  Duration.s(3.5)  — the :float parse_prefix clause dispatches
+    # through the same maybe_literal_macro/2 as :integer; this proves that
+    # clause is patched too, not just :integer (they are edited together).
+    assert {:function_call, meta, [arg]} = body
+    assert Keyword.get(meta, :name) in ["Duration.s", "s"]
+    assert {:literal, _, 3.5} = arg
+  end
+
   test "a bare number without a registered suffix is unaffected" do
     node = parse!("fn f() -> Int = 500\n")
     body = find_fn_body(node, "f")
     assert {:literal, _, 500} = body
+  end
+
+  test "an unrelated numeric expression is unaffected even when a literal macro IS registered elsewhere in the file" do
+    # Distinct from the previous test: here state.literal_macros is NON-empty
+    # (has an "ms" entry), so this exercises the real Map.fetch-miss path
+    # (suffix key present in the map, but this use-site's next token doesn't
+    # match it), not just the trivially-empty-map case.
+    node =
+      parse!(
+        "macro Dur\n  literal <n: Number> ms becomes Duration.ms(n)\n\nfn f() -> Int = 500 + 3\n"
+      )
+    body = find_fn_body(node, "f")
+    assert {:binary_op, meta, [left, right]} = body
+    assert Keyword.get(meta, :operator) == :+
+    assert {:literal, _, 500} = left
+    assert {:literal, _, 3} = right
   end
 
   defp find_fn_body({:function_def, meta, [body]}, name),
@@ -174,11 +204,11 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
   defp find_fn_body(_, _), do: nil
 ```
 
-Note: the two macro+fn top-level forms are separated by a blank line so the `macro` block's dedent closes before `fn` (mirrors the milestone-2 tests' structure — confirm the exact top-level shape by running; the `find_fn_body` walker tolerates a `{:block, …}` wrapper if `parse/2` wraps the two forms).
+Note: this is a bare top-level `macro Dur` + `fn f()` (no `mod` wrapper) — a DIFFERENT shape from the milestone-2 tests, which wrap both inside `mod M\n  macro Now\n    syntax …\n  fn f() = …\n` (`test/cure/compiler/macro_use_test.exs`). Verified live both ways: `"macro Dur\n  syntax dms becomes Duration.ms(500)\n\nfn f() -> Int = dms\n"` and the same source WITHOUT the blank line both parse to the identical `{:block, [line: 1, col: 1], [{:macro_def, ...}, {:function_def, ...}]}` — the `macro` block's indent/dedent closes on its own regardless of whether a blank line follows; the blank line is not load-bearing, just readability. `find_fn_body`'s second clause (`{_t, _m, ch} when is_list(ch) -> Enum.find_value(...)`) already handles the `{:block, …}` wrapper.
 
-- [ ] **Step 2: Run it — expect FAIL** (first test: `500ms` parses as a bare `{:literal, _, 500}` then a stray `{:variable, _, "ms"}`, so `body` is not a `Duration.ms` call. Second test passes already — it is the regression guard.)
+- [ ] **Step 2: Run it — expect FAIL** (integer-suffix test: `500ms` parses as a bare `{:literal, _, 500}` then a stray `{:variable, _, "ms"}`, so `body` is not a `Duration.ms` call. Float-suffix test: `3.5s` fails identically — bare `{:literal, _, 3.5}` then a stray `{:variable, _, "s"}`. The two "unaffected" tests — bare `500` with no macro def at all, and `500 + 3` in a program that DOES define the `ms` literal macro — both pass already; they are the regression guards for, respectively, the trivially-empty `literal_macros` map and the non-empty-map Map.fetch-miss path.)
 
-Run: `mix test test/cure/compiler/macro_literal_test.exs` → the suffix test FAILs.
+Run: `mix test test/cure/compiler/macro_literal_test.exs` → the two suffix-expansion tests (`ms` integer, `s` float) FAIL; the two regression-guard tests already pass.
 
 - [ ] **Step 3: Add the literal_macros index + number dispatch**
 
@@ -188,7 +218,7 @@ Add `literal_macros: %{}` to the defstruct (`:45`):
   defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, active_macros: %{}, fresh_counter: 0, literal_macros: %{}]
 ```
 
-In `parse/2` (both harvest→seed and authoritative), seed `literal_macros` from the same harvested defs. Change `harvest_active_macros/1` to return BOTH maps, and thread the literal one onto state. Simplest: add a sibling `harvest_literal_macros/1` and set both fields:
+In `parse/2`, seed `literal_macros` alongside `active_macros` — on the SECOND (authoritative) `state = %__MODULE__{...}` construction only. (Verified live: the first, harvest-phase `harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false}` does not set `active_macros` either — it relies on the defstruct default `%{}` — so `literal_macros` needs no explicit seeding there either; the harvest pass never expands anything, macro or literal, so a populated map would be inert there anyway.) Add a sibling `harvest_literal_macros/1` alongside `harvest_active_macros/1` and set both fields on the authoritative state:
 
 ```elixir
     active = harvest_active_macros(harvest_exprs)
@@ -200,7 +230,7 @@ In `parse/2` (both harvest→seed and authoritative), seed `literal_macros` from
     }
 ```
 
-(Apply the same two fields wherever the authoritative `state` is built in `parse/2`.) Add the harvester (mirrors `harvest_active_macros/1` but for `:literal` rules keyed by suffix, skipping suffix-less malformed rules):
+(There is exactly one authoritative-state construction site in `parse/2` — verified live, see Step 3 note above.) Add the harvester (mirrors `harvest_active_macros/1` but for `:literal` rules keyed by suffix, skipping suffix-less malformed rules):
 
 ```elixir
   defp harvest_literal_macros(exprs) do
@@ -236,7 +266,7 @@ Guard `harvest_active_macros/1` so it only indexes `syntax` rules (literal rules
   end
 ```
 
-Dispatch in `parse_prefix/1`'s `:integer`/`:float` cases (`:386-390`):
+Dispatch in `parse_prefix/1`'s `:integer`/`:float` cases (`:466-470`):
 
 ```elixir
       :integer ->
@@ -277,8 +307,17 @@ Add the dispatch + expansion helpers (near `parse_macro_use/2`):
         expand_rule(rule, bindings, state)
 
       {:error, _progress, state} ->
-        # Suffix present but trailing segments didn't match: yield the plain
-        # number, leaving the suffix token for normal parsing.
+        # Unreachable for the in-scope one-hole+one-suffix shape: the `peek`
+        # that selected this rule via `state.literal_macros` IS the token
+        # `{:lit, suffix}` in `rest` is matched against, so the single-segment
+        # match always succeeds. This branch only fires for an out-of-scope
+        # malformed rule with segments after the suffix (¶Scope note); in that
+        # case `state` here has ALREADY advanced past the leading segments
+        # `match_segments` did match (e.g. the suffix itself) before the
+        # later segment failed to match — so returning `{num, state}` does
+        # NOT "leave the suffix token for normal parsing", it is already
+        # consumed. T4 does not diagnose malformed literal rules (error-floor
+        # task); this branch exists only so `expand_literal_rule` is total.
         {num, state}
     end
   end
@@ -286,9 +325,9 @@ Add the dispatch + expansion helpers (near `parse_macro_use/2`):
 
 - [ ] **Step 4: Run the tests — expect PASS**
 
-Run: `mix test test/cure/compiler/macro_literal_test.exs` → PASS (both suffix expansion and bare-number regression).
+Run: `mix test test/cure/compiler/macro_literal_test.exs` → PASS (integer-suffix expansion, float-suffix expansion, empty-map bare-number regression, and non-empty-map unrelated-expression regression — all four).
 
-- [ ] **Step 5: Full parser suite — no regression** (numbers not followed by a registered suffix are unchanged; `literal_macros` is empty for all existing code). Also confirm milestone-2 + T7 macro tests still pass:
+- [ ] **Step 5: Full parser suite — no regression** (numbers not followed by a registered suffix are unchanged whether or not `literal_macros` is empty for the compiling file). Also confirm milestone-2 + T7 macro tests still pass:
 
 Run: `mix test test/cure/compiler/` → all pass.
 
