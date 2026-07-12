@@ -27,16 +27,18 @@ defmodule Cure.Elab.MacroExpansionSoundnessTest do
   # {label, macro_program, hand_written_equivalent}. Each macro_program's
   # expansion is textually the hand_written_equivalent's body.
   @cases [
-    {"zero-hole accept: zero => 0", "mod M\n  macro Zero\n    syntax zero becomes 0\n  fn f() -> Int = zero\n",
+    {"zero-hole accept: zero => 0",
+     "mod M\n  macro Zero\n    syntax zero becomes 0\n      example zero expands 0\n    explain\n      keyword \"zero\" =>\n        \"starts with zero\"\n  fn f() -> Int = zero\n",
      "mod M\n  fn f() -> Int = 0\n"},
     {"one-hole accept: inc <x> => x + 1",
-     "mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n  fn f(n: Int) -> Int = inc n\n",
+     "mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n      example inc 1 expands 1 + 1\n    explain\n      Code =>\n        \"expects code\"\n      keyword \"inc\" =>\n        \"starts with inc\"\n  fn f(n: Int) -> Int = inc n\n",
      "mod M\n  fn f(n: Int) -> Int = n + 1\n"},
     {"reject (unknown global): bad => nonexistent_thing",
-     "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n  fn f() -> Int = bad\n",
+     "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n      example bad expands nonexistent_thing\n    explain\n      keyword \"bad\" =>\n        \"starts with bad\"\n  fn f() -> Int = bad\n",
      "mod M\n  fn f() -> Int = nonexistent_thing\n"},
     {"reject (type mismatch): tt => true used as Int",
-     "mod M\n  macro T\n    syntax tt becomes true\n  fn f() -> Int = tt\n", "mod M\n  fn f() -> Int = true\n"}
+     "mod M\n  macro T\n    syntax tt becomes true\n      example tt expands true\n    explain\n      keyword \"tt\" =>\n        \"starts with tt\"\n  fn f() -> Int = tt\n",
+     "mod M\n  fn f() -> Int = true\n"}
   ]
 
   for {label, macro_src, hand_src} <- @cases do
@@ -48,17 +50,25 @@ defmodule Cure.Elab.MacroExpansionSoundnessTest do
   # Pin the accept/reject SENSE too, so an implementation that made *both* sides
   # equally broken (e.g. every program rejects) can't pass by trivial equality.
   test "the two well-typed cases genuinely accept" do
-    assert verdict("mod M\n  macro Zero\n    syntax zero becomes 0\n  fn f() -> Int = zero\n") == :accept
+    assert verdict(
+             "mod M\n  macro Zero\n    syntax zero becomes 0\n      example zero expands 0\n    explain\n      keyword \"zero\" =>\n        \"starts with zero\"\n  fn f() -> Int = zero\n"
+           ) == :accept
 
-    assert verdict("mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n  fn f(n: Int) -> Int = inc n\n") ==
+    assert verdict(
+             "mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n      example inc 1 expands 1 + 1\n    explain\n      Code =>\n        \"expects code\"\n      keyword \"inc\" =>\n        \"starts with inc\"\n  fn f(n: Int) -> Int = inc n\n"
+           ) ==
              :accept
   end
 
   test "the two ill-typed cases genuinely reject with a position-free error term" do
     assert {:reject, :unknown_global} =
-             verdict("mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n  fn f() -> Int = bad\n")
+             verdict(
+               "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n      example bad expands nonexistent_thing\n    explain\n      keyword \"bad\" =>\n        \"starts with bad\"\n  fn f() -> Int = bad\n"
+             )
 
     assert {:reject, {:conversion_failure, {:data, :Bool, [], []}, {:int_type}}} =
-             verdict("mod M\n  macro T\n    syntax tt becomes true\n  fn f() -> Int = tt\n")
+             verdict(
+               "mod M\n  macro T\n    syntax tt becomes true\n      example tt expands true\n    explain\n      keyword \"tt\" =>\n        \"starts with tt\"\n  fn f() -> Int = tt\n"
+             )
   end
 end

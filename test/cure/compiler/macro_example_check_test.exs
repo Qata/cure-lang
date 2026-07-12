@@ -132,7 +132,8 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
     """
 
     md = macro_def!(source)
-    assert {:ok, env} = Program.elaborate(source)
+    env_source = String.replace(source, "example mk 1 expands 2", "example mk 1 expands 1")
+    assert {:ok, env} = Program.elaborate(env_source)
     assert {:error, {:example_mismatch, [m]}} = MacroValidate.check_computed_examples(md, env)
     assert m.keyword == "mk"
   end
@@ -150,7 +151,18 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
     """
 
     md = macro_def!(source)
-    assert {:ok, env} = Program.elaborate(source)
+
+    env_source = """
+    mod M
+      use Std.Syntax
+
+      rec MkSyntax
+        x: Syntax
+
+      fn build_it(a: MkSyntax) -> Int = 0
+    """
+
+    assert {:ok, env} = Program.elaborate(env_source)
 
     assert {:error, {:computed_example_error, [failure]}} =
              MacroValidate.check_computed_examples(md, env)

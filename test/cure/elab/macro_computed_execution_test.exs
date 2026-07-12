@@ -9,6 +9,10 @@ defmodule Cure.Elab.MacroComputedExecutionTest do
 
     macro Mk
       syntax mk computed by build_it
+        example mk expands 0
+      explain
+        keyword "mk" =>
+          "starts with mk"
 
     fn build_it(input: Syntax) -> Syntax =
       Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(0))
@@ -22,6 +26,10 @@ defmodule Cure.Elab.MacroComputedExecutionTest do
 
     macro Bad
       syntax bad computed by build_bad
+        example bad expands 0
+      explain
+        keyword "bad" =>
+          "starts with bad"
 
     fn build_bad(input: Syntax) -> Syntax =
       Leaf(:literal, [KV(:subtype, SAtom(:boolean))], SInt(0))
@@ -35,6 +43,12 @@ defmodule Cure.Elab.MacroComputedExecutionTest do
 
     macro Mk
       syntax mk <x: Code> computed by build_it
+        example mk 1 expands 0
+      explain
+        Code =>
+          "expects code"
+        keyword "mk" =>
+          "starts with mk"
 
     fn build_it(input: Syntax) -> Syntax =
       Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(0))

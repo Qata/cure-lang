@@ -7,7 +7,7 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Lexer, MacroValidate, Parser}
   alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
@@ -253,6 +253,7 @@ defmodule Cure.Elab.Program do
          seeded = seed_with_telescope_support(ast),
          {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
+         :ok <- MacroValidate.check_program(ast, env),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
       # defs so their intra-module uses keep inlining; any other module name

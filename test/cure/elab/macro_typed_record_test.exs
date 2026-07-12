@@ -10,9 +10,17 @@ defmodule Cure.Elab.MacroTypedRecordTest do
 
       macro Mk
         syntax mk <x: Code> computed by build_it
+          example mk 1 expands 1
+        explain
+          Code =>
+            "expects code"
+          keyword "mk" =>
+            "starts with mk"
 
       fn helper(a: MkSyntax) -> Syntax =
         Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(0))
+
+      fn build_it(a: MkSyntax) -> Syntax = a.x
     """
 
     assert {:ok, _env} = Program.elaborate(source)
@@ -25,6 +33,12 @@ defmodule Cure.Elab.MacroTypedRecordTest do
 
       macro Mk
         syntax mk <x: Code> computed by build_it
+          example mk 1 expands 1
+        explain
+          Code =>
+            "expects code"
+          keyword "mk" =>
+            "starts with mk"
 
       fn build_it(a: MkSyntax) -> Syntax = a.x
       fn f(n: Int) -> Int = mk n
@@ -40,6 +54,12 @@ defmodule Cure.Elab.MacroTypedRecordTest do
 
       macro Mk
         syntax mk <x: Code> computed by build_it
+          example mk 1 expands 1
+        explain
+          Code =>
+            "expects code"
+          keyword "mk" =>
+            "starts with mk"
 
       fn build_it(a: MkSyntax) -> Syntax = a.missing
     """
@@ -55,6 +75,14 @@ defmodule Cure.Elab.MacroTypedRecordTest do
       macro Mk
         fail BadInput(input: Code)
         syntax mk <x: Code> computed by build_it
+          example mk 1 expands 1
+        explain
+          Code =>
+            "expects code"
+          keyword "mk" =>
+            "starts with mk"
+          BadInput =>
+            "input is not valid"
 
       fn build_it(a: MkSyntax) -> Syntax =
         check true else fail BadInput(a.x)
@@ -74,6 +102,14 @@ defmodule Cure.Elab.MacroTypedRecordTest do
       macro Mk
         fail BadInput(input: Code)
         syntax mk <x: Code> computed by build_it
+          example mk 1 expands 1
+        explain
+          Code =>
+            "expects code"
+          keyword "mk" =>
+            "starts with mk"
+          BadInput =>
+            "input is not valid"
 
       fn build_it(a: MkSyntax) -> Syntax =
         check false else fail BadInput(a.x)

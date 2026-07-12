@@ -25,6 +25,27 @@ defmodule Cure.Compiler.MacroValidate do
   end
 
   @doc """
+  Enforce all self-proving obligations for the macro definitions in a parsed
+  program. The environment is supplied after declaration elaboration so
+  computed examples can execute against the module's real signatures.
+  """
+  @spec check_program(tuple() | list(), Cure.Core.Env.t()) :: :ok | {:error, term()}
+  def check_program(ast, env) do
+    ast
+    |> collect_macro_defs()
+    |> Enum.reduce_while(:ok, fn macro_def, :ok ->
+      with :ok <- check_explain_exhaustive(macro_def),
+           :ok <- check_rules_pinned(macro_def),
+           :ok <- check_examples(macro_def),
+           :ok <- check_computed_examples(macro_def, env) do
+        {:cont, :ok}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  @doc """
   Check every `syntax` rule carries at least one worked example (design §5.1).
   Returns `:ok` or `{:error, {:rule_unpinned, unpinned_keywords}}`.
   """
@@ -91,6 +112,16 @@ defmodule Cure.Compiler.MacroValidate do
   defp covered?({:hole_kind, k}, covered), do: MapSet.member?(covered, {:category, k})
   defp covered?({:keyword, w}, covered), do: MapSet.member?(covered, {:keyword, w})
   defp covered?({:failure, name}, covered), do: MapSet.member?(covered, {:category, name})
+
+  defp collect_macro_defs({:macro_def, _meta, _rules} = macro_def), do: [macro_def]
+
+  defp collect_macro_defs({_, _, children}) when is_list(children),
+    do: Enum.flat_map(children, &collect_macro_defs/1)
+
+  defp collect_macro_defs(list) when is_list(list),
+    do: Enum.flat_map(list, &collect_macro_defs/1)
+
+  defp collect_macro_defs(_other), do: []
 
   alias Cure.Compiler.Parser
   alias Cure.Elab.MacroExpand
