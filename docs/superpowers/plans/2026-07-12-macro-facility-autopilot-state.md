@@ -471,13 +471,28 @@ plan's code into the tree + ran its own tests, fixing 3 findings:
 - CONFIRMED SOUND (no change): the indented `explain`-body parse works — `:indent` → `parse_block` unwraps a
   single-statement body to the bare expression; the clause loop lands on the next point/dedent correctly.
 
-**NEXT:** SP2 slice-1 Stage 4 — execute Task 1 (parse `explain` blocks → `%{kind: :explain, clauses}` entry +
-malformed-point fallback) then Task 2 (`MacroValidate.check_explain_exhaustive/1` with the keyword-field fix +
-`missing_diagnosis` render) inline TDD on Opus, strict red→green, commit per task (ghost author, explicit
-pathspec, mix from worktree root). NOTE for implementer: `derive_points` MUST include `rule.keyword` for
-`:syntax` rules (per the CRITICAL fix); `describe_point/1` goes AFTER the catch-all (clause grouping). Then
-Stage 5 code review. After slice 1: M1 §3.4 `fail C`, wiring slice, M3 examples, Tier-3. When ALL SP2 done →
-SP2 Stage 6 → SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
+SP2 slice-1 (M1 structural) Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
+- **T1 `f3fb1f1`** — `parse_explain_block/1`/`parse_explain_clauses/2`/`parse_explain_point/1` (with the total
+  malformed-point fallback → `{:expected, :explain_point, …}` not a crash); `explain` dispatch in
+  `parse_macro_rules/2` → `%{kind: :explain, clauses: [%{point, body}]}` entry. 659 parser tests.
+- **T2 `8166c25`** — `lib/cure/compiler/macro_validate.ex`: `check_explain_exhaustive/1` derives structural
+  points (holes + literals + the `:syntax` rule KEYWORD field per the Stage-3 CRITICAL fix), checks coverage,
+  emits `{:missing_diagnosis, uncovered}`; `format_error` clause + `describe_point/1` (after catch-all). The
+  "no explain block" test confirms BOTH `{:hole_kind,"Duration"}` AND `{:keyword,"every"}` are reported missing
+  — the keyword-field fix works. 662 parser tests, warnings-clean. TCB delta ZERO.
+
+**M1 structural mechanism LIVE (unwired):** a macro whose `explain` omits a failure point →
+`MacroValidate.check_explain_exhaustive` returns `{:missing_diagnosis, [...]}` rendering a friendly diagnostic.
+Not yet invoked by the compile pipeline (SP1 macros have no `explain`) — the wiring slice adds that.
+
+**NEXT:** SP2 slice-1 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
+(`8c4ab17..HEAD` code = `f3fb1f1`+`8166c25`: `parser.ex`+`macro_validate.ex`+`errors.ex`+`macro_explain_test`).
+Focus: `derive_points` across MULTIPLE rules + literal rules (does the literal-rule suffix/hole derive right?);
+dedup order-stability; `covered?` when an explain covers a point NOT derived (spurious clause — currently
+ignored, is that right?); the malformed-point recovery doesn't infinite-loop; multi-clause/same-category explain;
+`describe_point`/clause grouping; empty-explain-block (`explain` with no INDENT). Then SP2 slice-1 done. After:
+M1 §3.4 `fail C`, wiring slice, M3 examples, Tier-3. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3.
+Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
