@@ -9,7 +9,8 @@ defmodule Cure.Compiler.MacroFuzz do
 
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
-  alias Cure.Core.{Context, Eval, Kernel}
+  alias Cure.Compiler.{Lexer, Token}
+  alias Cure.Core.{Context, Eval, Kernel, Normalise}
 
   @type generator_info :: %{
           category: String.t(),
@@ -51,6 +52,77 @@ defmodule Cure.Compiler.MacroFuzz do
       {:ok, info, terms}
     end
   end
+
+  @doc "Assemble a rule's keyword, literals, and named hole fillers into tokens."
+  @spec assemble_use_site(map(), %{String.t() => Cure.Core.Term.t()}) ::
+          {:ok, [Token.t()]} | {:error, {:unsupported_surface_filler, term()}} | {:error, term()}
+  def assemble_use_site(%{keyword: keyword, segments: segments}, bindings)
+      when is_binary(keyword) and is_map(bindings) do
+    with {:ok, words} <- assemble_words(segments, bindings),
+         {:ok, tokens} <- Lexer.tokenize(Enum.join([keyword | words], " "), emit_events: false) do
+      {:ok, Enum.reject(tokens, &(&1.type == :eof))}
+    end
+  end
+
+  defp assemble_words(segments, bindings) do
+    Enum.reduce_while(segments, {:ok, []}, fn
+      {:lit, word}, {:ok, acc} ->
+        {:cont, {:ok, acc ++ [word]}}
+
+      {:hole, %{name: name}}, {:ok, acc} ->
+        case Map.fetch(bindings, name) do
+          {:ok, term} ->
+            case surface_filler(term) do
+              {:ok, text} -> {:cont, {:ok, acc ++ [text]}}
+              {:error, _} = error -> {:halt, error}
+            end
+
+          :error ->
+            {:halt, {:error, {:missing_hole_filler, name}}}
+        end
+
+      other, {:ok, _acc} ->
+        {:halt, {:error, {:invalid_macro_segment, other}}}
+    end)
+  end
+
+  defp surface_filler(term) do
+    case surface_filler_normal(term) do
+      {:error, _} = error ->
+        normalized = Normalise.nf(Context.empty(SigMenu.env_of(:v1)), term)
+
+        if normalized == term or normalized == :fuel_exhausted do
+          error
+        else
+          surface_filler_normal(normalized)
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp surface_filler_normal({:ctor, :Z, []}), do: {:ok, "0"}
+
+  defp surface_filler_normal({:ctor, :S, [inner]}) do
+    with {:ok, n} <- surface_nat(inner), do: {:ok, Integer.to_string(n + 1)}
+  end
+
+  defp surface_filler_normal({:ctor, :T, []}), do: {:ok, "true"}
+  defp surface_filler_normal({:ctor, :F, []}), do: {:ok, "false"}
+  defp surface_filler_normal({:int_lit, n}) when is_integer(n), do: {:ok, Integer.to_string(n)}
+  defp surface_filler_normal({:float_lit, n}) when is_float(n), do: {:ok, Float.to_string(n)}
+
+  defp surface_filler_normal({:ctor, name, []}) when is_atom(name), do: {:ok, Atom.to_string(name)}
+  defp surface_filler_normal(other), do: {:error, {:unsupported_surface_filler, other}}
+
+  defp surface_nat({:ctor, :Z, []}), do: {:ok, 0}
+
+  defp surface_nat({:ctor, :S, [inner]}) do
+    with {:ok, n} <- surface_nat(inner), do: {:ok, n + 1}
+  end
+
+  defp surface_nat(_other), do: {:error, :not_a_nat}
 
   defp check_samples(%{ctx: ctx, goal: goal}, terms) do
     goal_value = Eval.eval(goal, Context.env(ctx))
