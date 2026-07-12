@@ -272,6 +272,11 @@ defmodule Cure.Compiler.Parser do
   # reads as meaningless ("found `2`"). These are common mismatches (e.g. a
   # macro keyword used bare, with nothing supplied before the line ends).
   defp macro_got_desc(%Token{type: :eof}), do: "end of input"
+  # The `nil` keyword lexes as %Token{type: nil, value: nil} (unlike every
+  # other keyword, which lexes as {:keyword, atom}) -- neither field carries
+  # displayable text, so without this clause it falls through to
+  # `to_string(nil)` (a literal "" empty string), rendering `found ``` .
+  defp macro_got_desc(%Token{type: nil}), do: "nil"
   defp macro_got_desc(%Token{type: :newline}), do: "end of line"
   defp macro_got_desc(%Token{type: :indent}), do: "an indent"
   defp macro_got_desc(%Token{type: :dedent}), do: "a dedent"

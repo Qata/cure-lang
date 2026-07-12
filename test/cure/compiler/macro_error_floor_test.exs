@@ -68,6 +68,24 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     assert rendered =~ "found `a dedent`"
   end
 
+  test "a macro-use mismatch against the `nil` keyword names it, not an empty string" do
+    # `nil` is lexed as %Token{type: nil, value: nil} (unlike every other
+    # keyword, which lexes as {:keyword, atom}) -- so it carries no source
+    # text in either field for macro_got_desc's generic fallbacks to find.
+    # Without a dedicated clause it renders as `found ``` (empty backticks).
+    errors =
+      errors_of(
+        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say nil\n"
+      )
+
+    mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
+    assert mismatch, "expected a :macro_use_mismatch error"
+
+    rendered = Errors.format_error(mismatch, "f.cure")
+    assert rendered =~ "found `nil`"
+    refute rendered =~ "found ``"
+  end
+
   test "the hole-kind and nothing-more mismatch renders are total and grammatical" do
     # `{:hole_kind, _}` and `:nothing_more` are not reachable through today's
     # match_segments/4 (a `{:hole, _}` segment never fails to match, so the
