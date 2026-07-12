@@ -520,13 +520,29 @@ as normal sibling with `examples: []`, not swallowed). Same indent/consume/`expe
 is ~line 409-411). Confirmed `examples: []` key doesn't break existing tests (they use `%{kind: :syntax}`
 pattern-match, not full-map equality); `collect_until_expands` terminates; `expands : Type` branch correct.
 
-**NEXT:** SP2 slice-2a Stage 4 — execute Task 1 (parse `example … expands …` sub-blocks → `examples: [...]` on
-`:syntax` rule; use-site as raw tokens + `{:expansion,ast}`/`{:type,ast}`) then Task 2
-(`MacroValidate.check_rules_pinned/1` → `{:rule_unpinned, [keyword]}` + `format_error` clause) inline TDD on
-Opus, strict red→green, commit per task (ghost author, explicit pathspec, mix from worktree root). NOTE:
-`format_error` `:rule_unpinned` clause BEFORE catch-all, helper AFTER (clause grouping). Then Stage 5 review.
-After 2a: slice 2b (example_mismatch α-check), §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done → SP2
-Stage 6 → SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
+SP2 slice-2a (M3 presence) Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
+- **T1 `b7836c3`** — `parse_rule_examples/1`/`parse_example_lines/2`/`parse_one_example/1`/`collect_until_expands/2`;
+  `example <use-site> expands <expected>` sub-blocks attach `examples: [%{use_site: [tokens], expected:
+  {:expansion,ast}|{:type,ast}, line}]` to the `:syntax` rule map. 665 parser tests (the new `examples: []` key
+  broke nothing, as the reviewer predicted).
+- **T2 `15c36fc`** — `MacroValidate.check_rules_pinned/1` → `{:rule_unpinned, [keyword]}` for unexampled syntax
+  rules (mixed-macro test: only `b` reported); `format_error` clause. 668 parser tests, warnings-clean. TCB delta ZERO.
+- (Wrinkle: a background formatter kept re-touching `parser.ex` timestamps triggering stale Edit-state errors;
+  `git status` showed parser.ex clean vs HEAD so content was intact — resolved by re-reading before editing.)
+
+**M3 presence LIVE (unwired):** a syntax rule with no `example` → `check_rules_pinned` returns
+`{:rule_unpinned, [...]}` rendering a friendly diagnostic. Standalone, same as M1 — the wiring slice enforces it.
+
+**NEXT:** SP2 slice-2a Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
+(`9617d16..HEAD` code = `b7836c3`+`15c36fc`: `parser.ex`+`macro_validate.ex`+`errors.ex`+`macro_example_test`).
+Focus: example-block edge cases (multiple examples under one rule; example under a `literal` rule — does
+`parse_rule_examples` only run for `:syntax`? NO — it runs in `parse_macro_rule` (syntax only), `literal` has
+its own parser with no example support — confirm that's intended/consistent); `collect_until_expands` on a
+missing `expands`; `expands :` with a complex type `Effect(Unit)`; `check_rules_pinned` `.keyword` safety +
+ordering; interaction with `check_explain_exhaustive` (both on same macro); non-interference with expansion
+(a macro with examples still expands at use-sites). Then SP2 slice-2a done. After: slice 2b (example_mismatch
+α-check), §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3.
+Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
