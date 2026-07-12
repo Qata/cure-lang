@@ -53,7 +53,7 @@ defmodule Cure.Compiler.BeamWriter do
     file = Keyword.get(opts, :file, "nofile")
 
     File.mkdir_p!(output_dir)
-    beam_path = Path.join(output_dir, "#{module}.beam")
+    beam_path = Path.join(output_dir, "#{beam_basename(module)}.beam")
 
     case File.write(beam_path, binary) do
       :ok ->
@@ -89,5 +89,11 @@ defmodule Cure.Compiler.BeamWriter do
       {:error, errors, _warnings} ->
         {:error, {:compilation_failed, errors}}
     end
+  end
+
+  defp beam_basename(module) when is_atom(module) do
+    module
+    |> Atom.to_string()
+    |> String.replace_prefix("Elixir.", "")
   end
 end

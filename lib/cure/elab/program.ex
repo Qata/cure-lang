@@ -30,6 +30,42 @@ defmodule Cure.Elab.Program do
   @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast), do: check_ast(ast, [])
 
+  @doc "Validate that every `use Std.X` import names an available stdlib source."
+  @spec validate_stdlib_imports(tuple() | list()) :: :ok | {:error, term()}
+  def validate_stdlib_imports(ast) do
+    ast
+    |> imports()
+    |> Enum.find_value(:ok, fn source ->
+      case import_source_path(source) do
+        {:ok, module_name, _path} ->
+          if :code.ensure_loaded(String.to_atom("Cure." <> module_name)) == {:module, String.to_atom("Cure." <> module_name)} do
+            nil
+          else
+            missing_stdlib_error(module_name)
+          end
+
+        {:error, {:missing_stdlib_source, source, _path}} ->
+          missing_stdlib_error(source)
+
+        {:error, {:missing_stdlib_source_dir, source}} ->
+          missing_stdlib_error(source)
+
+        :not_stdlib ->
+          nil
+      end
+    end)
+  end
+
+  defp missing_stdlib_error(source) do
+    module = String.to_atom("Cure." <> source)
+    user_name = String.replace_prefix(source, "Cure.", "")
+
+    {:error,
+     {:missing_stdlib_module, module,
+      "use #{user_name}: module '#{module}' not found. " <>
+        "Set [compiler] stdlib_path in Cure.toml or export CURE_LIB."}}
+  end
+
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast, _opts) do
     with :ok <- check_declarations(ast) do

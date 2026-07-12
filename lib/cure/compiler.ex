@@ -58,7 +58,8 @@ defmodule Cure.Compiler do
   """
   @spec load_emitted(module(), Path.t()) :: :ok | {:error, term()}
   def load_emitted(module, output_dir) when is_atom(module) and is_binary(output_dir) do
-    path = Path.join(output_dir, "#{module}.beam")
+    module_name = module |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
+    path = Path.join(output_dir, "#{module_name}.beam")
 
     with {:ok, binary} <- File.read(path),
          {:module, ^module} <- :code.load_binary(module, String.to_charlist(path), binary) do
@@ -252,20 +253,24 @@ defmodule Cure.Compiler do
     # Single pipeline: every module is lowered by the kernel (dependent codegen).
     # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
     result =
-      case Cure.Compiler.ContainerMacro.forms(ast) do
-        {:ok, forms} ->
-          {:ok, forms, []}
+      with :ok <- Cure.Elab.Program.validate_stdlib_imports(ast) do
+        case Cure.Compiler.ContainerMacro.forms(ast) do
+          {:ok, forms} ->
+            {:ok, forms, []}
 
-        :not_a_container ->
-          case dependent_codegen(ast) do
-            {:ok, forms} -> {:ok, forms, []}
-            {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
-            {:error, _} = err -> err
-          end
+          :not_a_container ->
+            case dependent_codegen(ast) do
+              {:ok, forms} -> {:ok, forms, []}
+              {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
+              {:error, _} = err -> err
+            end
 
-        {:error, reason} ->
-          {:error, {:codegen_error, reason}}
-      end
+          {:error, reason} ->
+            {:error, {:codegen_error, reason}}
+        end
+      else
+        {:error, reason} -> {:error, {:codegen_error, reason}}
+    end
 
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
     # attribute. This runs once here so BOTH the classic and dependent

@@ -965,12 +965,11 @@ defmodule Cure.Project do
     String.to_atom("Cure.App." <> name)
   end
 
-  # The `app` container feature (and its `.app`-resource writer) was removed with
-  # the classic pathway rip-out (#18). An `app` container no longer reaches a
-  # resource: it fails at dependent codegen as an unsupported container. This
-  # stays a no-op so the project builder does not error on the vestigial detect
-  # step; it is deleted wholesale when `app` detection is torn out.
-  defp maybe_write_app_resource(_app_info, _modules, _project, _output_dir), do: :ok
+  defp maybe_write_app_resource(nil, _modules, _project, _output_dir), do: :ok
+
+  defp maybe_write_app_resource(app_info, modules, project, output_dir) do
+    Cure.App.Resource.write(app_info, modules, project, output_dir: output_dir)
+  end
 
   # -- TOML Parser (minimal subset) -------------------------------------------
 

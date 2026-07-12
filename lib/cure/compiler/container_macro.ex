@@ -161,7 +161,7 @@ defmodule Cure.Compiler.ContainerMacro do
   end
 
   defp application_forms(d) do
-    module = module_atom(d.module)
+    module = application_module_atom(d.module)
     exports = [{:start, 2}, {:stop, 1}, {:start_phase, 3}]
 
     start_body =
@@ -342,6 +342,16 @@ defmodule Cure.Compiler.ContainerMacro do
   defp module_atom(name) do
     name = normalize_name(name)
     if String.starts_with?(name, "Elixir."), do: String.to_atom(name), else: String.to_atom("Elixir." <> name)
+  end
+
+  defp application_module_atom(name) do
+    name = normalize_name(name)
+
+    cond do
+      String.starts_with?(name, "Elixir.") -> String.to_atom(name)
+      String.starts_with?(name, "Cure.") -> String.to_atom("Elixir." <> name)
+      true -> String.to_atom("Elixir.Cure.App." <> name)
+    end
   end
 
   defp root_module({:function_call, meta, _}) when is_list(meta),
