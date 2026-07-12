@@ -36,7 +36,7 @@ defmodule Cure.Compiler.Parser do
       {:ok, ast} = Cure.Compiler.Parser.parse(tokens)
   """
 
-  alias Cure.Compiler.Token
+  alias Cure.Compiler.{MacroRaw, Token}
   alias Cure.Compiler.Parser.Precedence
   alias Cure.Pipeline.Events
 
@@ -329,6 +329,7 @@ defmodule Cure.Compiler.Parser do
         inputs =
           Enum.flat_map(rule.segments, fn
             {:hole, %{name: name}} -> [Map.fetch!(bindings, name)]
+            {:raw_hole, %{name: name}} -> [Map.fetch!(bindings, name)]
             _ -> []
           end)
 
@@ -456,6 +457,32 @@ defmodule Cure.Compiler.Parser do
     {arg, state} = parse_expr(state, 0)
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
+
+  # Raw holes are the reader-tier escape hatch: capture the token span without
+  # asking the ordinary expression parser to interpret it. Structural
+  # delimiters belong to the enclosing parser, so `dedent`/`newline` remain in
+  # the stream while punctuation delimiters are consumed by the macro rule.
+  defp match_segments(state, [{:raw_hole, %{name: name, delimiter: delimiter}} | rest], bindings, progress) do
+    remaining = Enum.drop(state.tokens, state.pos)
+
+    case MacroRaw.capture(remaining, delimiter) do
+      {:ok, captured, _rest} ->
+        state = advance_n(state, length(captured) + if(consume_raw_delimiter?(delimiter), do: 1, else: 0))
+        raw = {:raw_tokens, [line: raw_line(captured, state), delimiter: delimiter], captured}
+        match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
+
+      {:error, _} ->
+        {:error, progress, state}
+    end
+  end
+
+  defp advance_n(state, 0), do: state
+  defp advance_n(state, count), do: advance_n(advance(state), count - 1)
+
+  defp consume_raw_delimiter?(delimiter), do: delimiter not in ["dedent", "newline"]
+
+  defp raw_line([%Token{line: line} | _], _state), do: line
+  defp raw_line([], state), do: peek(state).line
 
   # A literal segment matches a token whose text equals the segment word. Only
   # scalar token values (binary/atom/number) have text; a structured value —
@@ -4620,6 +4647,7 @@ defmodule Cure.Compiler.Parser do
     segments
     |> Enum.flat_map(fn
       {:hole, %{name: name}} -> [name]
+      {:raw_hole, %{name: name}} -> [name]
       _ -> []
     end)
     |> Enum.uniq()

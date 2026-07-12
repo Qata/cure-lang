@@ -30,4 +30,22 @@ defmodule Cure.Compiler.MacroRawTest do
     token = %Token{type: :identifier, value: "a", line: 1, col: 1}
     assert {:error, {:missing_raw_delimiter, "dedent"}} = MacroRaw.capture([token], "dedent")
   end
+
+  test "computed macro uses bind raw spans without consuming the enclosing dedent" do
+    source = """
+    macro Datalog
+      syntax datalog <rules: raw until dedent> computed by build
+    datalog
+      rule one
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:block, _, children}} = Parser.parse(tokens, emit_events: false)
+
+    assert [{:computed_use, _, [_elab, {:macro_input, _, [{:raw_tokens, meta, captured}]}]}] =
+             Enum.filter(children, &match?({:computed_use, _, _}, &1))
+
+    assert Keyword.get(meta, :delimiter) == "dedent"
+    assert Enum.any?(captured, &(&1.value == "rule"))
+  end
 end
