@@ -146,14 +146,26 @@ counterpart should be admissible anywhere a pattern can.
 
 ### 5.2 Admission rules
 
-Both are compile errors, and both are deliberate narrowings that keep this a zero-TCB
-feature:
-
 - **Members must be ground and closed** — no free type variables, no unsolved
-  metavariables. `a | Int` is rejected (see §3.2).
-- **No overlap between a literal and its own type.** `Int | 3` is rejected, because
-  `let x: Int | 3 = 3` admits two distinct injections and there is no subtyping to
-  break the tie. TypeScript silently collapses this to `Int`; we will not.
+  metavariables. `a | Int` is rejected (see §3.2), and is a compile error.
+
+**REVISED (post-implementation, commit `583fafe`): a literal unioned with its own
+type is ADMITTED, not rejected.** The original design above rejected `Int | 3` on
+the theory that `let x: Int | 3 = 3` "admits two distinct injections and there is no
+subtyping to break the tie." That theory does not hold: the two paths never compete.
+`union_literal_ctor/5` is the *first* clause of the elaborator's literal `cond`, so a
+literal *expression* always wins the literal member outright; anything else injects
+via its *inferred type* (`maybe_inject_union/5`), which for a bare `3` is `Int` —
+never the singleton `3` member. There is no ambiguity to break a tie for, so the
+overlap check was defensive, not load-bearing, and was removed.
+
+This unlocks the sentinel/refinement pattern generally — `-1 | Int`, `:north | Atom`
+— and the union is a genuine **disjoint sum**, not a set union: `Int(3)` and the
+literal `3` member are distinct values of `Int | 3`, and which one a given value is
+depends on how it was *written* (a literal expression vs. an `Int`-typed term), not
+on what it equals. The same most-specific-wins precedence governs the FFI boundary
+(§10): an exact-value guard for the literal is emitted before the class guard for its
+own type, so a raw `3` re-tags as the sentinel and any other integer as `Int`.
 
 ## 6. Canonical form and family identity
 
@@ -347,40 +359,48 @@ This is exactly the existing dependent-ctor erasure rule (`emit.ex:12-14`) with 
 special-casing. Anonymous unions deliberately do **not** join the
 `Bool`/`Nat`/`Bounded`/`List` transparent-erasure club at `emit.ex:263-300` — see §3.3.
 
-**FFI consequence, stated plainly.** An `@extern` cannot *directly* return an anonymous
-union, because Erlang hands back a raw untagged value and a union-typed `@extern` would
-be a lie — the runtime value would carry no constructor tag.
-
-Where the Erlang function returns a value that *is* uniformly typed, the existing
-`@extern` route is unchanged and a wrapper can inject into a union:
+**REVISED (post-implementation, commit `06be19e`): an `@extern` CAN directly return an
+anonymous union.** The original design above reasoned that this would be a lie — Erlang
+hands back a raw, untagged value, so a union-typed `@extern` would claim a constructor
+tag that is not there. The revision does not weaken that claim; it closes the gap a
+different way: **the compiler generates the discriminating wrapper itself**, at the
+`@extern` boundary, rather than requiring the author to hand-write one.
+`Declarations.check_extern_not_union/2` requires every member to be pairwise
+distinguishable from an untagged value (`Union.discriminable/1` — literals by exact
+value, type members by an ORDERED class guard, most-specific first, e.g. `is_boolean`
+before `is_atom` so `Bool | Atom` is admissible) *before* accepting the declaration;
+`Emit.union_dispatch/2` then emits a `case` on the raw result, guarding and re-tagging
+each recognisable member, with **no catch-all** — an Erlang value outside the declared
+union is a broken FFI contract, and the honest outcome is a `CaseClauseError`, not a
+silent miscompile. This is mechanically the same "discriminating shim" the original
+design already endorsed (a guard-ordered dispatch over the raw value) — the change is
+*who writes it*: the compiler, from the declaration, rather than the author, by hand.
+No `believe_me`, no opaque `Any`; the discriminability check is exactly what makes this
+zero-TCB — an indistinguishable pair (`Int | Nat`, both raw Erlang integers) is rejected
+at the declaration the author can see, never silently miscompiled.
 
 ```cure
-@extern(:erlang, :system_time, 1)
-fn raw_time(unit: Atom) -> Int
-
-fn timestamp(unit: Atom) -> Int | :unsupported =
-  ...                                    -- inspects and injects
+@extern(:erlang, :abs, 1)
+fn raw(n: Int) -> Int | Binary        -- compiler-generated discriminating wrapper
 ```
 
-Where the Erlang function is *genuinely* heterogeneous (`pid() | port()`), typing it
-requires a discriminating shim — a monomorphic `@extern` per possible shape plus an
-`is_X`-guarded dispatch — which is the same technique already used elsewhere in the
-tree. **This design does not add a new escape hatch for that case**, and does not
-reintroduce `believe_me` or an opaque `Any` to paper over it (§2). Motivation 1 (§1) is
-fully served; motivation 2 is served only where the boundary is already well-typed, and
-that limitation is accepted rather than hidden.
+A union **nested** inside the return type (`List(Int | Bool)`) remains rejected
+(`Declarations.check_extern_not_union/2`'s `_ -> if Elaborator.union_goal?(codomain) ...`
+branch) — the boundary would have to walk an arbitrary structure to re-tag it, which is
+still out of scope.
 
 Generated families are emitted once per program into a synthetic module and referenced
 remotely (§6).
 
 ## 11. Error taxonomy
 
-Five new diagnostics, each naming the offending member(s):
+Four new diagnostics, each naming the offending member(s). **A fifth — "literal/type
+overlap" (`Int | 3`) — is NOT a diagnostic** as of `583fafe` (§5.2): it is admitted,
+disambiguated by most-specific-wins, not rejected.
 
 | Condition | Diagnostic |
 |---|---|
 | Non-ground member | `a \| Int` — member `a` is not a ground type; unions cannot be parameterised |
-| Literal/type overlap | `Int \| 3` — member `3` is subsumed by member `Int` |
 | Ambiguous numeral | a numeral in member position that the existing numeric-literal defaulting rule cannot resolve to a single type (`Int` vs `Nat`). If defaulting always resolves, this diagnostic is unreachable and its test asserts that. |
 | No matching member | value of type `Bool` checked against `Int \| String` |
 | Non-member branch | `match` branch names `Bool`, not a member of `Int \| String` |
@@ -426,9 +446,10 @@ No new classic work, and no coupling to the #18 rip-out in either direction.
   - **Resolved-identity soundness** (§6 step 3): two unrelated same-named local types
     declared in two different, non-importing modules (the shadowing case) key
     *differently* — they must NOT be merged into one cross-module family.
-  - **Admission-order soundness**: `typealias T = Int` followed by `T | 3` is still
-    rejected as a literal/type overlap (the admission check sees the unfolded `Int`,
-    not the opaque alias name `T`).
+  - **Admission-order soundness**: `typealias T2 = Int` followed by `T2 | 3` keys
+    identically to `Int | 3` — alias unfolding happens *before* keying, so the two
+    are the same family (not "rejected"; see the §5.2 revision — a literal unioned
+    with its own type is admitted, so this now pins identity, not rejection).
 - **Cross-module identity** — the load-bearing property. Two modules independently
   writing `Int | String` must produce the same `{:data, name}` and interoperate. A
   link-tier test in the shape of the existing `dependent_emit_link_test`.
@@ -436,7 +457,7 @@ No new classic work, and no coupling to the #18 rip-out in either direction.
   `Map`, a literal-sentinel union, and an FFI discriminating wrapper.
 - **Round-trip**: construct → match → recover the value, executed on **generic-unix
   AtomVM** (the real target; per repo convention, validate on host before hardware).
-- **Negative tests** for all five diagnostics in §11.
+- **Negative tests** for all four diagnostics in §11 (§5.2's revision retired the fifth).
 - **Non-regression**: existing `type Foo = A | B` declarations still elaborate as named
   ADTs.
 
@@ -448,5 +469,7 @@ Deliberately excluded, each recoverable later:
 - Transparent erasure for literal unions — §3.3; may return as an explicit opt-in.
 - Union members in *inference* position — §8.
 - Container covariance (`Map(String, Int) <: Map(String, Int | String)`) — §8.
-- `@extern` returning a union directly — §10.
+- A union **nested** inside an `@extern`'s return type (`List(Int | Bool)`) — §10.
+  (`@extern` returning a union *directly* is IN scope as of `06be19e`; see §10's
+  revision.)
 - Typeclass instances declared *on* an anonymous union.
