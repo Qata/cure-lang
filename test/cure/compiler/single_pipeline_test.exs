@@ -17,11 +17,7 @@ defmodule Cure.Compiler.SinglePipelineTest do
     assert apply(mod, :add3, [4]) == 7
   end
 
-  # END-STATE pin for #18 (the classic-pathway rip-out): the classic
-  # `Codegen.dispatch_container/6` `:fsm`/`:actor`/`:supervisor`/`:app` cases are
-  # gone, so a legacy `fsm` container now falls to the dependent pipeline's
-  # `unsupported_container` catch-all instead of being silently classic-compiled.
-  test "an fsm container is rejected with unsupported_container" do
+  test "an fsm container is lowered by the auto-preluded macro" do
     src = """
     mod F
       fsm Light
@@ -31,7 +27,7 @@ defmodule Cure.Compiler.SinglePipelineTest do
     end
     """
 
-    assert {:error, reason} = Cure.Compiler.compile_and_load(src, emit_events: false)
-    assert inspect(reason) =~ "unsupported_container"
+    assert {:ok, module} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert match?({:ok, _pid}, apply(module, :start_link, [0]))
   end
 end
