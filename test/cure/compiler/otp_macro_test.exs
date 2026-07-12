@@ -45,4 +45,29 @@ defmodule Cure.Compiler.OtpMacroTest do
     assert {:error, :invalid_lift_declaration} =
              OtpMacro.lift_module("Cure.Generated.Supervisor", :Supervisor, [], [:not_a_declaration])
   end
+
+  test "supervisor builder emits a pure validated init callback module value" do
+    children = [%{id: :worker, start: {:"Cure.Worker", :start_link, []}}]
+
+    assert {:ok, module_value} = OtpMacro.supervisor_module("Cure.Generated.Root", children)
+    assert module_value.container == :supervisor
+    assert [callback] = module_value.callbacks
+    assert callback.constructor == :Init
+    assert {:supervisor_init, [strategy: :one_for_one, intensity: 3, period: 5], ^children} = callback.body
+  end
+
+  test "supervisor builder rejects unsafe declarative child shapes" do
+    assert {:error, :invalid_supervisor_child} =
+             OtpMacro.supervisor_module("Cure.Generated.Root", [%{id: :worker}])
+
+    child = %{id: :worker, start: {:"Cure.Worker", :start_link, []}}
+
+    assert {:error, :duplicate_supervisor_child} =
+             OtpMacro.supervisor_module("Cure.Generated.Root", [child, child])
+  end
+
+  test "AtomVM gate reports a missing runtime without executing generated code" do
+    assert {:error, {:atomvm_unavailable, "__missing_atomvm__"}} =
+             OtpMacro.atomvm_gate(executable: "__missing_atomvm__")
+  end
 end

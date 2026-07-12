@@ -108,6 +108,40 @@ defmodule Cure.Compiler.OtpMacro do
     lift_module(name, behaviour, callbacks, declarations)
   end
 
+  @doc "Build a pure supervisor module value from declarative child specs."
+  @spec supervisor_module(String.t(), [map()], keyword()) :: {:ok, map()} | {:error, term()}
+  def supervisor_module(name, children, opts \\ []) when is_binary(name) and is_list(children) do
+    strategy = Keyword.get(opts, :strategy, :one_for_one)
+    intensity = Keyword.get(opts, :intensity, 3)
+    period = Keyword.get(opts, :period, 5)
+
+    with :ok <- validate_strategy(strategy),
+         :ok <- validate_positive(:intensity, intensity),
+         :ok <- validate_positive(:period, period),
+         :ok <- validate_child_specs(children),
+         {:ok, callback} <-
+           callback_value(
+             :Supervisor,
+             :init,
+             [{:variable, [scope: :local], "children"}],
+             {:supervisor_init, [strategy: strategy, intensity: intensity, period: period], children}
+           ),
+         {:ok, module} <- lift_module(name, :Supervisor, [callback], []) do
+      {:ok, Map.put(module, :container, :supervisor)}
+    end
+  end
+
+  @doc "Report whether an AtomVM executable is available for the runtime gate."
+  @spec atomvm_gate(keyword()) :: :ok | {:error, {:atomvm_unavailable, String.t()}}
+  def atomvm_gate(opts \\ []) do
+    executable = Keyword.get(opts, :executable, "atomvm")
+
+    case System.find_executable(executable) do
+      nil -> {:error, {:atomvm_unavailable, executable}}
+      _path -> :ok
+    end
+  end
+
   @doc "Validate and lift the parser's pure `lift module` AST node."
   @spec lift_module_ast(tuple()) :: {:ok, map()} | {:error, term()}
   def lift_module_ast({:lift_module, meta, []}) when is_list(meta) do
@@ -142,4 +176,23 @@ defmodule Cure.Compiler.OtpMacro do
   defp validate_declarations(declarations) do
     if Enum.all?(declarations, &is_tuple/1), do: :ok, else: {:error, :invalid_lift_declaration}
   end
+
+  defp validate_strategy(strategy) when strategy in [:one_for_one, :one_for_all, :rest_for_one], do: :ok
+  defp validate_strategy(strategy), do: {:error, {:invalid_supervisor_strategy, strategy}}
+
+  defp validate_positive(_name, value) when is_integer(value) and value > 0, do: :ok
+  defp validate_positive(name, value), do: {:error, {:invalid_supervisor_option, name, value}}
+
+  defp validate_child_specs(children) do
+    ids = Enum.map(children, &Map.get(&1, :id))
+
+    cond do
+      not Enum.all?(children, &valid_child_spec?/1) -> {:error, :invalid_supervisor_child}
+      length(ids) != MapSet.size(MapSet.new(ids)) -> {:error, :duplicate_supervisor_child}
+      true -> :ok
+    end
+  end
+
+  defp valid_child_spec?(%{id: id, start: start}) when is_atom(id) and is_tuple(start), do: true
+  defp valid_child_spec?(_), do: false
 end
