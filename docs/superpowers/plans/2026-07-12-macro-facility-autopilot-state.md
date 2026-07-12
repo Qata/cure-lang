@@ -38,11 +38,24 @@ DONE for the shared specs (self-reviewed); each SP plan still gets Stage 3.
   architectural core (grounding doc). Soft-keyword `macro`; `{:macro_def,meta,rules}` AST.
 
 ## CURRENT POSITION
-SP1, Stage 2 (write SP1's task-by-task plan). Prereq before complete-code tasks: read the
-exact parser anchors — `parse_fsm/1` (parser.ex:3894) + block helpers + peek/advance/
-expect/Token API; lexer `@keywords`/`lex_identifier`/`lex_decimal`. Then write
-`docs/superpowers/plans/2026-07-12-macro-facility-sp1-plan.md` (two-phase parse +
-progress-threading from task 1).
+SP1, Stage 2 DONE for milestone 1 (macro-definition front-end): plan committed at
+`docs/superpowers/plans/2026-07-12-macro-facility-sp1-plan.md` (`6f76a94`), tasks 1-3
+with complete anchored code (soft-keyword `macro`, `syntax` rules, typed holes →
+`{:macro_def, meta, rules}` progress-slotted AST). Parser anchors verified & recorded in
+the plan's Global Constraints (Token/state/helpers, soft-keyword dispatch at
+parser.ex:292-340, parse_fsm template at :3894).
+
+**NEXT:** Stage 3 — plan review of `…-sp1-plan.md` (Sonnet subagent,
+recursive-skeptical-review, plan-for-code testing-discipline pass, to two clean passes,
+fixes committed). THEN Stage 4 — execute tasks 1-3 inline TDD on Opus (commit per task),
+scoped `mix test test/cure/compiler/macro_def_parse_test.exs` + `test/cure/compiler/`.
+THEN write the next Stage-2 increment: SP1 tasks T4 (literal/suffix lexer) → T5 two-phase
+parse → T6 use-site matching (thread progress; port syntax-parse maximal-by-progress) →
+T7 hygienic expansion → T8 kernel re-check → T9 scoping. When SP1 is fully executed +
+code-reviewed + suite-green, update this file and start SP2.
+
+One code note for T3 execution: confirm the lexer's token atoms for `<`/`>`/`:` (grep
+lexer.ex for `:lt`/`:gt`/`:colon`); the plan flags using the real atoms, not invented ones.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
