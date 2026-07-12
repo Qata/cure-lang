@@ -352,15 +352,33 @@ syntax-parse machinery (failure-set → maximal-by-PROGRESS [already threaded fr
 message/context/at/within — see `macros/2026-07-12-racket-syntax-parse-comparison.md`). This is the SP1
 FLOOR (default messages); SP2 adds the type-ENFORCED author-defined `Diagnosis`.
 
-**NEXT:** SP1 **error-machinery floor (§2)** Stage 2 — write
-`docs/superpowers/plans/2026-07-12-macro-facility-sp1f-plan.md`. Ground FIRST (probe, don't assume): enumerate
-the raw error tuples a bad macro use currently emits (`:macro_use_mismatch` from `parse_macro_use`, the
-`literal`/`syntax`-rule `:expected` errors, unknown-suffix-that-looked-like-a-unit); read the syntax-parse
-comparison doc for the report shape to port; decide the Diagnosis node/format (a `{:diagnostic, …}` with a
-human message, keyed off the threaded `progress`). Then Stages 3-5. AFTER the gate is met (Tier-1+Tier-2+
-diagnostics+full-suite-green): SP1's Stage 6 full verify → SP1 COMPLETE → SP2. (T9 import-scoping §7 +
-two-pass §6 + T7b auto-hygiene are in SP1's "Includes" but NOT in the gate's pass criteria — sequence them as
-post-gate SP1 enhancements OR fold into a later pass; the gate is the completion bar.)
+**OPERATOR DECISION (2026-07-12): Elm-style error rewrite — DON'T stage, PARK.** Operator asked whether to
+stage the macro error work behind an Elm-style error-system rewrite. Decided NO: the existing renderer
+(`Errors.format_error/2` + `format_diagnostic/5` at `errors.ex:1730` + `suggest/2`/`levenshtein` typo hints) is
+already partway to Elm (structured `severity: category` / `--> file:line` hyperlink / `| message`). Every
+diagnostic routes through the ONE `format_diagnostic`, so a future Elm rewrite (source snippets + carets +
+regions) upgrades ALL errors — macro included — for free; building the floor on it now is forward-compatible,
+not throwaway. A full Elm rewrite is cross-cutting (every error site), its own initiative — PARKED at
+`docs/superpowers/specs/2026-07-12-elm-style-error-rendering-PARKED.md` (committed `82d64a8`), with a
+forward-compat contract the floor obeys (route through the central renderer; message content in the
+`format_error` clause).
+
+SP1 §2 error-floor Stage 2 DONE — plan committed at `docs/superpowers/plans/2026-07-12-macro-facility-sp1f-plan.md`.
+Grounded: the RAW tuples (fall to catch-all `errors.ex:374`) are `{:macro_use_mismatch, …}` (single emit site
+`parse_macro_use/1` `parser.ex:232`, `rule` in scope) + `{:malformed_hole, …}` (`parser.ex:4358`);
+`{:expected, :syntax_rule/:becomes}` already renders (`errors.ex:86`, not raw). Two tasks: T1 ENRICH
+`:macro_use_mismatch` to `{…, keyword, expected, got, line, col}` (`expected` = `{:literal,w}`/`{:hole_kind,k}`/
+`:nothing_more` via `Enum.at(rule.segments, progress)`) + add a friendly `format_error` clause (routes through
+`format_diagnostic`; updates the T6b shape-assertion in `macro_use_test.exs` — legit shape evolution); T2 a
+`:malformed_hole` clause explaining `<name: Kind>`. TCB delta ZERO.
+
+**NEXT:** SP1 §2 error-floor Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp1f plan
+(plan-for-code: falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny:
+confirm `:macro_use_mismatch` has exactly ONE emit site (the enrichment won't miss another); verify the T6b
+shape-assertion change is the only test coupled to the old tuple; confirm `Enum.at(rule.segments, progress)`
+indexing is correct (progress semantics from `match_segments`); verify the render tests actually distinguish
+"diagnostic" from "raw tuple". Then Stage 4 execute, Stage 5 review, then SP1 **Stage 6** (full `mix test`) →
+**SP1 COMPLETE** → SP2. (Deferred post-gate: T9 import-scoping §7 + two-pass §6, T7b auto-hygiene.)
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
