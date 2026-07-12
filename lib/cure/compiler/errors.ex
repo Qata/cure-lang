@@ -419,6 +419,19 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:example_mismatch, mismatches}, file) do
+    listed = mismatches |> Enum.map(&"`#{&1.keyword}`") |> Enum.join(", ")
+
+    format_diagnostic(
+      "error",
+      "macro example does not match its expansion",
+      file,
+      0,
+      "these rules have an `example … expands …` whose stated result is not what the rule " <>
+        "actually produces: #{listed}. Fix the `expands` side to the real expansion (or the rule)."
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do

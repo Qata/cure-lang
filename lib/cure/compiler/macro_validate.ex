@@ -84,4 +84,78 @@ defmodule Cure.Compiler.MacroValidate do
   # clause covers a `{:keyword, w}` point.
   defp covered?({:hole_kind, k}, covered), do: MapSet.member?(covered, {:category, k})
   defp covered?({:keyword, w}, covered), do: MapSet.member?(covered, {:keyword, w})
+
+  alias Cure.Compiler.Parser
+
+  @doc """
+  Check every `syntax` rule's `{:expansion, _}` example actually expands to its
+  pinned result, up to α-renaming (design §5.1). `{:type, _}` pins are skipped
+  (deferred). Returns `:ok` or `{:error, {:example_mismatch, mismatches}}`.
+  """
+  @spec check_examples(tuple()) :: :ok | {:error, {:example_mismatch, [map()]}}
+  def check_examples({:macro_def, _meta, rules}) do
+    mismatches =
+      rules
+      |> Enum.filter(&(&1[:kind] == :syntax))
+      |> Enum.flat_map(fn rule ->
+        for %{use_site: use_site, expected: {:expansion, expected}} <- Map.get(rule, :examples, []),
+            actual = Parser.expand_example(rules, use_site),
+            normalize(actual) != normalize(expected) do
+          %{keyword: rule.keyword, expected: expected, actual: actual}
+        end
+      end)
+
+    case mismatches do
+      [] -> :ok
+      ms -> {:error, {:example_mismatch, ms}}
+    end
+  end
+
+  # α-normalise for example comparison: drop source positions, then collapse
+  # `<fresh>` gensym suffixes (`x$0` → `x`) so a template binder and its pin
+  # compare equal.
+  defp normalize({:variable, meta, name}) when is_binary(name) do
+    {:variable, strip_pos(meta), degensym(name)}
+  end
+
+  defp normalize({t, meta, children}) when is_list(children) do
+    {t, strip_pos(meta), Enum.map(children, &normalize/1)}
+  end
+
+  # A scalar-valued node (`:literal`'s {subtype, value} shape — `value` is a raw
+  # integer/float/string/bool/atom/char, NOT a list of children) still carries
+  # `:line`/`:col` in its meta that must be stripped, exactly like any other node.
+  # Without this clause every `:literal` falls through to the catch-all UNCHANGED,
+  # so its source position never gets stripped and check_examples rejects almost
+  # every real macro example.
+  defp normalize({t, meta, value}) when is_list(meta) do
+    {t, strip_pos(meta), value}
+  end
+
+  defp normalize(other), do: other
+
+  defp strip_pos(meta) when is_list(meta) do
+    meta
+    |> Enum.reject(fn
+      {k, _} when k in [:line, :col] -> true
+      _ -> false
+    end)
+    |> Enum.map(fn
+      {k, v} -> {k, normalize_meta_value(v)}
+      other -> other
+    end)
+  end
+
+  defp strip_pos(meta), do: meta
+
+  defp normalize_meta_value(v) when is_tuple(v), do: normalize(v)
+  defp normalize_meta_value(v) when is_list(v), do: Enum.map(v, &normalize_meta_value/1)
+  defp normalize_meta_value(v), do: v
+
+  defp degensym(name) do
+    case Regex.run(~r/^(.+)\$\d+$/, name) do
+      [_, base] -> base
+      _ -> name
+    end
+  end
 end

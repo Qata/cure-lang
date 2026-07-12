@@ -30,4 +30,38 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
     assert {:function_call, meta, [{:literal, _, 500}]} = result
     assert Keyword.get(meta, :name) == "Timer.repeat"
   end
+
+  alias Cure.Compiler.{MacroValidate, Errors}
+
+  test "an example whose expansion matches its pin checks clean" do
+    md =
+      macro_def!(
+        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n    example every 500 expands Timer.repeat(500)\n"
+      )
+
+    assert :ok = MacroValidate.check_examples(md)
+  end
+
+  test "an example whose pin is WRONG is example_mismatch" do
+    md =
+      macro_def!(
+        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n    example every 500 expands Timer.repeat(999)\n"
+      )
+
+    assert {:error, {:example_mismatch, [m]}} = MacroValidate.check_examples(md)
+    assert m.keyword == "every"
+
+    rendered = Errors.format_error({:example_mismatch, [m]}, "m.cure")
+    assert rendered =~ "every"
+    refute rendered =~ ":example_mismatch"
+  end
+
+  test "a matching example modulo source position still checks clean (α: positions ignored)" do
+    md =
+      macro_def!(
+        "macro M\n  syntax m <x: Code> becomes f(x)\n    example m 1 expands f(1)\n"
+      )
+
+    assert :ok = MacroValidate.check_examples(md)
+  end
 end
