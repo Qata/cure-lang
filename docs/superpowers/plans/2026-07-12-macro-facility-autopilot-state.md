@@ -171,10 +171,37 @@ Task-1 pin + `emit_hole_firewall_test`), with a red-first NEGATIVE CONTROL step 
 has teeth. Flagged for the Stage-3 reviewer: validate the firewall-not-red-green TDD framing and that
 verdict-equality can't pass trivially (accept-sense + reject-sense pins guard that).
 
-**NEXT:** SP1 T8 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` subagent on the sp1c plan
-(plan-for-code: falsifiability + testing-discipline; note the firewall framing above; two clean
-passes; commit hardened). Then Stage 4 execute, Stage 5 review. After T8: T7 (hygiene) plan round,
-then T4/T9. When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
+SP1 T8 Stage 3 DONE — plan hardened + committed `2f878af` (4 passes, 2 clean). Reviewer verified
+all four verdicts live and surfaced a CRITICAL scoping finding: `Program.elaborate/1` is the
+DEPENDENT entry, but `cure build`/CLI (`Cure.Compiler.compile_string/2`) routes NON-dependent
+programs (all four T8 examples classify non-dependent per `dependent?/1`) through the CLASSIC
+`Types.Checker` + classic Codegen — so Task 1 alone doesn't firewall what `cure build` does today.
+Reviewer honestly rescoped the plan + flagged it as a driver/operator decision (did NOT silently
+patch).
+
+**FORK RESOLVED (driver decision `36a3289`, prose per convention):** firewall BOTH entry points.
+Live-probed that classic `compile_string` verdict-equality ALSO holds (line-stripped, all four
+`equal=true`). Task 1 = permanent dependent firewall (the "well-typed Core" path the DONE criterion
+names; survives classic rip-out). Task 2 = TRANSITIONAL classic firewall (delete when
+classic-pipeline-deletion lands) giving `cure build` real protection now. Both test-only, zero
+production risk.
+
+SP1 T8 Stage 4 DONE — both firewalls executed, negative-control-proven teeth, then committed:
+- **`3a7383d`** `test/cure/elab/macro_expansion_soundness_test.exs` — dependent firewall, 6 tests
+  (4 verdict-equality + accept-sense + reject-sense). Negative control failed as predicted (`:accept`
+  ≠ `{:reject, conversion_failure}`) then deleted.
+- **`52b997c`** `test/cure/compiler/macro_expansion_classic_soundness_test.exs` — transitional classic
+  firewall, 6 tests, line-stripped verdict-equality. Negative control failed then deleted.
+- **ZERO production delta confirmed** (`git status` showed only the 2 new test files; no `lib/**`) —
+  this IS the empirical proof of TCB-delta-zero: macro expansion re-elaborates on BOTH pipelines with
+  no code change. Full `mix test` **4111 passed / 2 skipped**, antigen 328/328, seeds/corpus untouched.
+
+**NEXT:** SP1 T8 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the T8 test diff
+(`36a3289..HEAD` code = commits `3a7383d`+`52b997c`, two test files only). Review = is the property
+actually tested / non-trivial / behavioral; are the four examples faithful; does line-stripping in
+Task 2 over- or under-strip; any brittleness. Then SP1 T8 done. After T8: **T7 (hygiene)** plan round
+(own grounding + `…-sp1d-plan.md`; real red-green: capture repro → gensym), then T4/T9. When ALL SP1
+tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
