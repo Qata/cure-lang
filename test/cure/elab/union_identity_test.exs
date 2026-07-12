@@ -135,6 +135,42 @@ defmodule Cure.Elab.UnionIdentityTest do
     end
   end
 
+  # `Union.family_key/1`'s `Union<…>` vs `Disjoint<…>` PREFIX is computed from each
+  # member's `runtime_class/1`, which recognises well-known erasure shapes (`Nat`,
+  # `Bool`, `Bounded`, `List`) by matching their BARE, unqualified family atom
+  # (`:Nat`). `Resolution.rekey_module_env/3` rewrites a shadowed member's payload
+  # type to a QUALIFIED atom (`:"M#Nat"`) and then RECOMPUTES the family key from
+  # that rewritten member set — so `runtime_class` sees `:"M#Nat"`, fails every bare
+  # pattern, and falls through to `:unsupported`. `Nat` and `Int` both genuinely
+  # erase to Erlang integers and OVERLAP, so the prefix must stay `Disjoint<…>`
+  # (tag load-bearing) after rekeying, exactly as it was before. `:unsupported`
+  # does not overlap `:integer` (only `:atom`/itself get that treatment), so the
+  # recomputed key silently flips to `Union<…>` — misclassifying a union whose tag
+  # IS load-bearing as one whose tag is not.
+  describe "shadowing across an import: a well-known runtime class survives rekeying" do
+    alias Cure.Core.{Env, Grade}
+    alias Cure.Elab.Resolution
+
+    test "Nat | Int stays Disjoint<...> after Nat is rekeyed to a qualified name" do
+      nat = {:data, :Nat, [], []}
+      ukey = :"Disjoint<Int|Nat>"
+
+      env =
+        %Env{}
+        |> Inductive.declare(Inductive.family(:Nat, [], [], 0), [Inductive.ctor(:Z, [], [])])
+        |> Inductive.declare(Inductive.family(ukey, [], [], 0), [
+          Inductive.ctor(:"Disjoint<Int|Nat>$Int", [{:v, {:int_type}}], [], [Grade.unrestricted()]),
+          Inductive.ctor(:"Disjoint<Int|Nat>$Nat", [{:v, nat}], [], [Grade.unrestricted()])
+        ])
+
+      out = Resolution.rekey_module_env(env, "M", MapSet.new([:Nat]))
+
+      new_key = :"Disjoint<Int|M#Nat>"
+      assert Map.has_key?(out.families, new_key)
+      refute Map.has_key?(out.families, :"Union<Int|M#Nat>")
+    end
+  end
+
   # `union_renames/3` (resolution.ex) makes ONE pass over `Map.keys(env.families)`,
   # accumulating renames into `amap` as it goes. If a union family (the OUTER union)
   # has a member whose payload type embeds ANOTHER union family's type (the INNER

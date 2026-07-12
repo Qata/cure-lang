@@ -200,11 +200,34 @@ defmodule Cure.Elab.Union do
   defp class_of_core({:float_type}), do: :float
   defp class_of_core({:binary_type}), do: :binary
   defp class_of_core({:atom_type}), do: :atom
-  defp class_of_core({:data, :Bool, _p, _i}), do: :boolean
-  defp class_of_core({:data, :Nat, _p, _i}), do: :integer
-  defp class_of_core({:data, :Bounded, _p, _i}), do: :integer
-  defp class_of_core({:data, :List, _p, _i}), do: :list
+  defp class_of_core({:data, name, _p, _i}), do: class_of_data_name(bare_family_name(name))
   defp class_of_core(_other), do: :unsupported
+
+  defp class_of_data_name(:Bool), do: :boolean
+  defp class_of_data_name(:Nat), do: :integer
+  defp class_of_data_name(:Bounded), do: :integer
+  defp class_of_data_name(:List), do: :list
+  defp class_of_data_name(_other), do: :unsupported
+
+  # `Resolution.rekey_module_env/3` re-keys a SHADOWED family to a qualified
+  # `:"<module_id>#<name>"` atom (`rekey_atom/2`) and then recomputes this union's
+  # `family_key/1` from the rewritten member set — so `class_of_core/1` must
+  # recognise a rekeyed `Bool`/`Nat`/`Bounded`/`List` as itself, or the recomputed
+  # `disjoint_only?/1` sees `:unsupported` instead of the family's real erasure
+  # class. That silently FLIPS the `Union<…>`/`Disjoint<…>` prefix on rekey: `Nat`
+  # and `Int` both erase to Erlang integers and genuinely overlap (`Disjoint<…>`,
+  # tag load-bearing), but `class_overlap?(:unsupported, :integer)` is `false`, so
+  # a rekeyed `Nat | Int` would silently reclassify as `Union<…>` — claiming the
+  # erased value sets are disjoint when they are not. Rekeying changes a family's
+  # NAME, never its own runtime erasure, so the classification must see through
+  # the qualifier. `module_id` (built by `rekey_atom/2` from a dotted module path)
+  # never itself contains `#`, so splitting on the FIRST `#` is exact.
+  defp bare_family_name(name) do
+    case name |> Atom.to_string() |> String.split("#", parts: 2) do
+      [_module_id, bare] -> String.to_atom(bare)
+      [bare] -> String.to_atom(bare)
+    end
+  end
 
   defp class_of_type_key("Int"), do: :integer
   defp class_of_type_key("Nat"), do: :integer
