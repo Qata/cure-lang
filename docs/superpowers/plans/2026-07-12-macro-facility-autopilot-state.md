@@ -968,6 +968,7 @@ The following slices have now landed in this worktree:
 - SP6 grammar segments now support line-oriented repetition (`...`) and optional groups, including generated-proof assembly and list-valued substitutions.
 - SP6 module rules now execute to ordinary AST through `Cure.Compiler.MacroModule`, and open categories compose with duplicate-keyword and closed-category checks.
 - SP6 has pure packet, board, and protocol library builders with dependency, capability, flash, role, and projectability validation.
+- SP6 also has pure driver/register-map, units/literal, and property-check plan helpers for the next concrete DSL layer.
 - The generated expansion-proof gate now runs for the dependent pipeline and the transitional classic `compile_string` path; the classic soundness negative control and the full suite pass.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
@@ -977,7 +978,7 @@ The remaining work before the DONE criterion is genuinely satisfied is:
 - Extend the generated-proof gate to any future macro compilation path introduced after the current dependent and transitional classic paths.
 - Extend SP4 dogfood from constructor dispatch to full reducer/view/flow declaration lowering and integration with concrete library builders.
 - Extend SP5 from pure callback/module values to execution of a generated supervisor on a generic-unix AtomVM runtime; install or provide that external executable before claiming this gate.
-- Extend SP6 concrete libraries beyond packet, board, and protocol to the remaining DSL specifications, including driver, parse, units, checks, and the embedded surface families.
+- Extend SP6 concrete libraries beyond the current packet, board, protocol, driver, units, and checks helpers to the remaining parse and embedded surface families.
 - Perform the required skeptical review, full test gate, Antigen verification, and final end-to-end proof before declaring completion.
 
 Do not mark the DONE criterion complete until every item above is implemented and verified.
