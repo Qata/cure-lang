@@ -196,12 +196,31 @@ SP1 T8 Stage 4 DONE — both firewalls executed, negative-control-proven teeth, 
   this IS the empirical proof of TCB-delta-zero: macro expansion re-elaborates on BOTH pipelines with
   no code change. Full `mix test` **4111 passed / 2 skipped**, antigen 328/328, seeds/corpus untouched.
 
-**NEXT:** SP1 T8 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the T8 test diff
-(`36a3289..HEAD` code = commits `3a7383d`+`52b997c`, two test files only). Review = is the property
-actually tested / non-trivial / behavioral; are the four examples faithful; does line-stripping in
-Task 2 over- or under-strip; any brittleness. Then SP1 T8 done. After T8: **T7 (hygiene)** plan round
-(own grounding + `…-sp1d-plan.md`; real red-green: capture repro → gensym), then T4/T9. When ALL SP1
-tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
+SP1 T8 Stage 5 DONE — Sonnet code review over the T8 test diff (`36a3289..HEAD`, two files),
+converged CLEAN (2 consecutive clean, zero findings, no commits). Reviewer EXERCISED not just read:
+parsed each macro_src to confirm the expansion is textually faithful to the hand-written body (proved
+`bad`→`nonexistent_thing` genuinely expands to `{:variable,_,"nonexistent_thing"}` — rejection driven
+by the EXPANSION, not a coincidental both-sides parse failure); traced `strip/1` (no over/under-strip);
+confirmed async-safety (`Program.elaborate` Process-local; `compile_string`'s `Cure.M.beam` write is a
+pre-existing inert last-write-wins convention, nothing reads it back); ran an adversarial 5th case
+(`inc true` vs `true + 1`) — verdicts matched both pipelines. 12/12 pass across seeds {0,1,42,999};
+`test/cure/compiler`+`test/cure/elab` together = 1481 passed. Confidence high.
+
+**SP1 T8 COMPLETE** (all stages): dependent firewall `3a7383d` + transitional classic firewall
+`52b997c`, plan `99b8be6`/`2f878af`/`36a3289`. The DONE-criterion clause "expands to well-typed Core"
+is now permanently guarded on both pipelines with the zero-production-delta proof of TCB-delta-zero.
+
+**NEXT:** SP1 **T7 (hygiene)** Stage 2 — write `docs/superpowers/plans/2026-07-12-macro-facility-sp1d-plan.md`.
+This is a REAL red-green feature (unlike the T8 firewall): milestone-2 expansion is deliberately
+unhygienic, so a template that INTRODUCES a binder can capture a use-site name (or a use-site arg can
+be captured by a template binder). Grounding needed FIRST (probe, don't assume): (1) find a template
+form that binds a name (`let`/lambda/`match`-arm binder in a `becomes` template) and construct a
+capture repro — a use-site whose hole arg mentions a name the template also binds — showing the wrong
+binding wins; (2) design `<fresh Name>` gensym syntax in templates (parser: extend the hole/segment
+grammar or a template-side marker) + a rename pass in `expand_rule`/`subst_holes` that alpha-renames
+template-introduced binders to gensyms before substitution. Red test = the capture repro; green = gensym
+fixes it. TCB delta ZERO (still parse-time surface rewrite). After T7: T4 (literal/suffix lexer) + T9
+(cross-module). When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
