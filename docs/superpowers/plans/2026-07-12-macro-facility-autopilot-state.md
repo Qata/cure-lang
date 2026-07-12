@@ -961,6 +961,7 @@ The following slices have now landed in this worktree:
 - SP4 has an advisory reflection foundation in `Cure.Compiler.MacroReflection`: definition/type resolution, constructor inspection, dependent type inference, macro expansion, and pure declaration lifting.
 - SP4 also has a reflection-backed reducer dogfood builder in `Cure.Compiler.MacroReducer`; it emits ordinary `pattern_match` AST and proves it through the dependent elaborator.
 - SP4 reducer dogfood now shares exhaustive reflection dispatch with explicit `view` and `flow` builders.
+- SP4 has a declaration-level reducer/view/flow bundle builder that derives all three ordinary AST outputs from one reflected constructor set.
 - SP5 has a closed OTP callback vocabulary, callback ADT-shaped values, declaration validation, and pure `QuotedModule` lifting in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
 - SP5 also has a pure supervisor module builder with child/strategy validation and an explicit AtomVM availability probe; this worktree has no `atomvm` executable, so the runtime execution gate is not claimed.
 - SP6 has delimited raw-hole parsing, pure capture helpers, computed use-site integration, `is Category` rule metadata, and explicit module-rule markers.
@@ -969,6 +970,7 @@ The following slices have now landed in this worktree:
 - SP6 module rules now execute to ordinary AST through `Cure.Compiler.MacroModule`, and open categories compose with duplicate-keyword and closed-category checks.
 - SP6 has pure packet, board, and protocol library builders with dependency, capability, flash, role, and projectability validation.
 - SP6 also has pure driver/register-map, units/literal, and property-check plan helpers for the next concrete DSL layer.
+- SP6 has a pure parse-grammar builder with duplicate and left-recursion validation.
 - The generated expansion-proof gate now runs for the dependent pipeline and the transitional classic `compile_string` path; the classic soundness negative control and the full suite pass.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
@@ -976,9 +978,9 @@ The remaining work before the DONE criterion is genuinely satisfied is:
 
 - Extend native generation from closed custom enum families to parameterized/indexed module categories; open-category coverage reporting is implemented.
 - Extend the generated-proof gate to any future macro compilation path introduced after the current dependent and transitional classic paths.
-- Extend SP4 dogfood from constructor dispatch to full reducer/view/flow declaration lowering and integration with concrete library builders.
+- Extend SP4 from the current declaration bundle to index-aware reducer/view/flow lowering and end-to-end concrete-library integration.
 - Extend SP5 from pure callback/module values to execution of a generated supervisor on a generic-unix AtomVM runtime; install or provide that external executable before claiming this gate.
-- Extend SP6 concrete libraries beyond the current packet, board, protocol, driver, units, and checks helpers to the remaining parse and embedded surface families.
+- Extend SP6 concrete libraries beyond the current packet, board, protocol, driver, units, checks, and parse helpers to the remaining embedded surface families.
 - Perform the required skeptical review, full test gate, Antigen verification, and final end-to-end proof before declaring completion.
 
 Do not mark the DONE criterion complete until every item above is implemented and verified.
