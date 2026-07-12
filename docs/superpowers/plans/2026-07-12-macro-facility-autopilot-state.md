@@ -972,6 +972,7 @@ The following slices have now landed in this worktree:
 - SP6 has pure packet, board, and protocol library builders with dependency, capability, flash, role, and projectability validation.
 - SP6 also has pure driver/register-map, units/literal, and property-check plan helpers for the next concrete DSL layer.
 - SP6 has a pure parse-grammar builder with duplicate and left-recursion validation.
+- The standard library now auto-preludes a `lens first`/`lens second` macro surface from `Std.Optic`; both expand to ordinary typed optic calls and are covered by parser and runtime tests.
 - The generated expansion-proof gate now runs for the dependent pipeline and the transitional classic `compile_string` path; the classic soundness negative control and the full suite pass.
 - Final verification in this worktree: `mix compile --warnings-as-errors` passed; `mix test` passed with `4239 passed (3 doctests, 4236 tests), 2 skipped`, `141` immune responses, and Antigen shape coverage `328/328` across 36 manifests.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
