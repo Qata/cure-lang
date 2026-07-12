@@ -1228,7 +1228,12 @@ defmodule Cure.Compiler.Printer do
 
   defp macro_rule_lines(%{kind: :explain, clauses: clauses}, depth, indent) do
     pad = String.duplicate(indent, depth + 1)
-    lines = Enum.map(clauses, fn %{point: point, body: body} -> "#{macro_point_to_string(point)} => #{render(body, depth + 1, indent)}" end)
+
+    lines =
+      Enum.map(clauses, fn %{point: point, body: body} ->
+        "#{macro_point_to_string(point)} => #{render(body, depth + 1, indent)}"
+      end)
+
     ["explain\n#{pad}" <> Enum.join(lines, "\n#{pad}")]
   end
 
@@ -1237,7 +1242,10 @@ defmodule Cure.Compiler.Printer do
   defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
   defp macro_segment_to_string({:lit, word}), do: word
   defp macro_segment_to_string({:hole, %{name: name, kind: kind}}), do: "<#{name}: #{kind}>"
-  defp macro_segment_to_string({:raw_hole, %{name: name, delimiter: delimiter}}), do: "<#{name}: raw until #{delimiter}>"
+
+  defp macro_segment_to_string({:raw_hole, %{name: name, delimiter: delimiter}}),
+    do: "<#{name}: raw until #{delimiter}>"
+
   defp macro_segment_to_string({:repeat, segment}), do: macro_segment_to_string(segment) <> "..."
   defp macro_segment_to_string({:optional, segments}), do: "(#{macro_segments_to_string(segments)})?"
   defp macro_segment_to_string(other), do: to_string(other)

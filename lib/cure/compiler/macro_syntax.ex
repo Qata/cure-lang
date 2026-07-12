@@ -67,11 +67,17 @@ defmodule Cure.Compiler.MacroSyntax do
     eof = %Cure.Compiler.Token{type: :eof, value: nil, line: 0, col: 0}
 
     case Cure.Compiler.Parser.parse(tokens ++ [eof], emit_events: false, prelude_macros: false) do
-      {:ok, {:block, _meta, body}} -> {:ok, body}
-      {:ok, node} -> {:ok, [node]}
+      {:ok, {:block, _meta, body}} ->
+        {:ok, body}
+
+      {:ok, node} ->
+        {:ok, [node]}
+
       {:error, errors} ->
         case legacy_transition_body(tokens) do
-          {:ok, transitions} -> {:ok, transitions}
+          {:ok, transitions} ->
+            {:ok, transitions}
+
           :not_legacy ->
             if Enum.any?(tokens, &match?(%Cure.Compiler.Token{value: "on_message"}, &1)) do
               {:ok, []}
@@ -95,7 +101,9 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp legacy_transition_line(tokens) do
     case Enum.find_index(tokens, &(&1.type == :transition_open)) do
-      nil -> []
+      nil ->
+        []
+
       open_index ->
         close_index = Enum.find_index(tokens, &(&1.type == :transition_close))
 
@@ -105,7 +113,12 @@ defmodule Cure.Compiler.MacroSyntax do
           event = between |> Enum.reject(&(&1.type == :keyword and &1.value == :when)) |> List.first() |> token_text()
           target = tokens |> Enum.drop(close_index + 1) |> List.first() |> token_text()
           meta = [name: "transition", from: from, event: event, to: target, event_kind: :normal]
-          meta = if Enum.any?(between, &(&1.type == :keyword and &1.value == :when)), do: Keyword.put(meta, :guard, {:literal, [subtype: :boolean], true}), else: meta
+
+          meta =
+            if Enum.any?(between, &(&1.type == :keyword and &1.value == :when)),
+              do: Keyword.put(meta, :guard, {:literal, [subtype: :boolean], true}),
+              else: meta
+
           [{:function_call, meta, []}]
         else
           []

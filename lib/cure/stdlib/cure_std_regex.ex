@@ -152,4 +152,3 @@ defmodule :cure_std_regex do
   # position}` tuples, so that is the only shape we need to format.
   defp format_reason({reason, _position}), do: to_string(reason)
 end
-
