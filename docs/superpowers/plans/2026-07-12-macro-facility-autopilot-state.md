@@ -737,10 +737,24 @@ Reflection substrate live: `lib/std/syntax.cure` (`Syntax`/`Attr`/`SynLit` ADT, 
 `SMap`/`SynPair`) + `lib/cure/compiler/macro_syntax.ex` (`to_syntax`/`from_syntax`, total + lossless up to line/col).
 TCB delta ZERO. This is the VALUE a typed derived field holds underneath (operator steer, `a.name`) — NOT wasted.
 
-**NEXT (SP2 continues):** SP2 Tier-3 slice 3 (BIG execution pass — harvest `:computed` + emit `{:computed_use}`;
-elaboration-time pass: elaborate elab → `normalise(app(elab, input))` → `from_syntax` → splice → re-elaborate;
-end-to-end a `computed by` macro expands). Then TYPED-RECORD derivation (`a.name`), `check…else fail C`, WIRING
-(thread `MacroValidate` — incl. the future SP3 fuzz gate — into every compile). When ALL SP2 done → SP2 Stage 6 →
+SP2 Tier-3 slice 3 Stage 2–6 DONE — plan committed `4ba6189`; implementation committed in phases:
+- **`57c3a00`** — parser harvests `:computed` rules and emits deferred
+  `{:computed_use, meta, [elab_ref, {:macro_input, meta, ordered_hole_inputs}]}` nodes. Parser tests cover
+  zero-hole and hole-bearing rules; the parse-time harvest never executes an elab.
+- **`7fa0a51`** — `MacroSyntax.to_core/1` + `from_core/1` encode/decode the complete generic `Std.Syntax`
+  mirror (constructors, lists, strings, nested syntax, maps, opaque values).
+- **`45b4157`** — `Cure.Elab.MacroExpand` elaborates the elab reference, kernel-infers the application,
+  normalizes it through the existing trusted normalizer, decodes the result, and recursively splices it before
+  ordinary body elaboration. Function bodies containing computed uses are ordered after plain bodies so a
+  referenced total elab is checked/certified before execution. Structured error formatting and end-to-end
+  tests cover valid zero/hole inputs and invalid output.
+- **`20e8880`** — review fix: recursively decode `Node` children from Core instead of only decoding the list
+  spine. Scoped compiler/elab/stdlib gate: **1874 passed / 2 skipped**.
+- Full gate: **`mix test` = 4165 passed (3 doctests) / 2 skipped**, 151 expected immune responses,
+  Antigen shape coverage **328/328**, no seed/corpus noise, `mix compile --warnings-as-errors` clean.
+
+**NEXT (SP2 continues):** typed per-rule derived record (`a.name`) plan/implementation, then
+`check … else fail C` + computed example execution, then the MacroValidate wiring slice. When ALL SP2 done →
 SP2 COMPLETE → **SP3 (read the SP3 GROUNDING section below FIRST)**. Deferred post-gate SP1: T9, T7b.
 
 ## ═══ SP3 GROUNDING — READ THIS WHOLE SECTION BEFORE TOUCHING SP3 ═══
