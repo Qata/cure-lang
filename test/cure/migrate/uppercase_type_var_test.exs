@@ -95,4 +95,30 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
              "#{ty} should not warn"
     end
   end
+
+  test "an imported type or constructor (from `use Std.X`) is left alone" do
+    # `Z` is `Std.Nat`'s zero constructor (`type Nat = Z | S(Nat)`), used here as
+    # an index. It is neither a builtin nor declared in THIS file — only the
+    # imported module knows it — so `build_ctx/1` must resolve `use Std.Nat` and
+    # read its exported type/constructor names, or `Z` is misread as a free type
+    # variable and lowercased to `z`.
+    src = "mod M\nuse Std.Nat\nfn f(v: Pair(Int, Z)) -> Int = 0\n"
+    {out, warns} = migrate(src, "imported.cure")
+    assert out =~ "Z"
+    refute out =~ "Pair(Int, z)"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "an auto-prelude constructor used with no `use` statement is left alone" do
+    # `proof.cure` references `Nat`/`Z`/`S` with NO import node — it gets them
+    # from the elaborator's implicit auto-prelude (`Std.Nat` et al. imported into
+    # every module). `build_ctx/1` must seed the auto-prelude's exported names
+    # unconditionally, or `Z` in a file that never wrote `use Std.Nat` is misread
+    # as a free type var and lowercased to `z`.
+    src = "mod M\nfn f(v: Pair(Int, Z)) -> Int = 0\n"
+    {out, warns} = migrate(src, "auto_prelude.cure")
+    assert out =~ "Z"
+    refute out =~ "Pair(Int, z)"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
 end

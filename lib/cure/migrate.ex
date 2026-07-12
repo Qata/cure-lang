@@ -164,6 +164,7 @@ defmodule Cure.Migrate do
     builtin_type_names()
     |> MapSet.union(declared_type_names(ast))
     |> MapSet.union(declared_ctor_names(ast))
+    |> MapSet.union(imported_names(ast))
   end
 
   # Built-in type names the legacy non-dependent `Cure.Types.Env` never
@@ -257,4 +258,81 @@ defmodule Cure.Migrate do
   defp collect_ctor_names({_k, _meta, _name, inner}, acc), do: collect_ctor_names(inner, acc)
   defp collect_ctor_names(l, acc) when is_list(l), do: Enum.reduce(l, acc, &collect_ctor_names/2)
   defp collect_ctor_names(_other, acc), do: acc
+
+  # The type + constructor names each `use`d module exports, resolved by reading
+  # the imported module's source and collecting its declarations (the same walk
+  # used for this file). An imported type or constructor spelled in a signature
+  # (`Vector(a, Z)` — `Z` from `Std.Nat`) is a real name, not a free type
+  # variable, but only the imported module knows it. DIRECT imports only (no
+  # transitive walk): a name used in this file's signatures is either declared
+  # here, a builtin, or directly imported. Best-effort and FAIL-OPEN — an
+  # unresolvable import (non-stdlib module, missing source dir, read/parse
+  # failure) contributes nothing rather than crashing the warn-only lint.
+  # The stdlib modules the elaborator auto-imports into EVERY module with no
+  # `use` statement (`Cure.Elab.Program.@auto_prelude`). A file like `proof.cure`
+  # references `Nat`/`Z`/`S` with no import node at all — it gets them from this
+  # implicit prelude — so their exported names must seed the ctx exactly as a
+  # direct `use` would, or the auto-imported `Z` is misread as a free type var.
+  # Duplicated (not imported) to keep the warn-only lint decoupled from the
+  # elaborator's private attr; keep in sync with program.ex if the prelude grows.
+  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary Std.Bounded)
+
+  defp imported_names(ast) do
+    (collect_import_sources(ast, []) ++ @auto_prelude)
+    |> Enum.uniq()
+    |> Enum.reduce(MapSet.new(), fn source, acc ->
+      case module_exported_names(source) do
+        {:ok, names} -> MapSet.union(acc, names)
+        :error -> acc
+      end
+    end)
+  end
+
+  defp collect_import_sources({:import, meta, _}, acc) do
+    case Keyword.get(meta, :source) do
+      s when is_binary(s) -> [s | acc]
+      _ -> acc
+    end
+  end
+
+  defp collect_import_sources({_k, _meta, ch}, acc) when is_list(ch),
+    do: Enum.reduce(ch, acc, &collect_import_sources/2)
+
+  defp collect_import_sources({_k, _meta, _name, inner}, acc),
+    do: collect_import_sources(inner, acc)
+
+  defp collect_import_sources(l, acc) when is_list(l),
+    do: Enum.reduce(l, acc, &collect_import_sources/2)
+
+  defp collect_import_sources(_other, acc), do: acc
+
+  defp module_exported_names(source) do
+    with {:ok, path} <- stdlib_source_path(source),
+         {:ok, src} <- File.read(path),
+         {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
+         {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false) do
+      {:ok, MapSet.union(declared_type_names(ast), declared_ctor_names(ast))}
+    else
+      _ -> :error
+    end
+  end
+
+  # Resolve a `Std.<Name>` import source to its `.cure` file, searching the same
+  # stdlib source directories the elaborator uses (`import_source_path/1`). Only
+  # `Std.*` is handled — a bare/user module resolves to `:error` and is skipped.
+  defp stdlib_source_path(source) do
+    case String.split(source, ".") do
+      ["Std", name] ->
+        Cure.Stdlib.Paths.source_dirs()
+        |> Enum.map(&Path.join(&1, String.downcase(name) <> ".cure"))
+        |> Enum.find(&File.exists?/1)
+        |> case do
+          nil -> :error
+          path -> {:ok, path}
+        end
+
+      _ ->
+        :error
+    end
+  end
 end
