@@ -26,6 +26,13 @@ mod Std.Set
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
+
+  ## The representation type and the list reducer this module delegates to.
+  ## Both are needed in scope for the dependent pipeline (the `Map` type alias
+  ## and the qualified calls below).
+  use Std.Map
+  use Std.List
+
   ## New empty set.
   fn new() -> Map(t, Bool) = Std.Map.new()
 
@@ -48,24 +55,43 @@ mod Std.Set
   fn to_list(set: Map(t, Bool)) -> List(t) = Std.Map.keys(set)
 
   ## Build a set from a list of elements; duplicates collapse.
+  ##
+  ## Structural recursion rather than a fold: each `match` branch is checked
+  ## against the declared `Map(t, Bool)` return type, so `[] -> new()` has its
+  ## metavariables pinned by that type. Seeding `new()` through a `foldl`
+  ## accumulator instead leaves the polymorphic seed's metavariables unsolved
+  ## on the dependent pipeline (see
+  ## `test/cure/elab/fold_accumulator_poly_seed_reach_test.exs`).
   fn from_list(list: List(t)) -> Map(t, Bool) =
-    Std.List.foldl(list, new(), fn(elem) -> fn(acc) -> add(elem, acc))
+    match list
+      [] -> new()
+      [elem | rest] -> add(elem, from_list(rest))
 
   ## Set union.
   fn union(a: Map(t, Bool), b: Map(t, Bool)) -> Map(t, Bool) = Std.Map.merge(a, b)
 
+  ## Accumulate the elements of `elems` that ARE members of `b` onto `acc`.
+  local fn intersect_go(elems: List(t), b: Map(t, Bool), acc: Map(t, Bool)) -> Map(t, Bool) =
+    match elems
+      [] -> acc
+      [elem | rest] ->
+        pickup
+          member(elem, b) -> intersect_go(rest, b, add(elem, acc))
+          else            -> intersect_go(rest, b, acc)
+
   ## Set intersection.
   fn intersection(a: Map(t, Bool), b: Map(t, Bool)) -> Map(t, Bool) =
-    let keep = fn(elem) -> fn(acc) ->
-      pickup
-        member(elem, b) -> add(elem, acc)
-        else            -> acc
-    Std.List.foldl(to_list(a), new(), keep)
+    intersect_go(to_list(a), b, new())
+
+  ## Accumulate the elements of `elems` that are NOT members of `b` onto `acc`.
+  local fn diff_go(elems: List(t), b: Map(t, Bool), acc: Map(t, Bool)) -> Map(t, Bool) =
+    match elems
+      [] -> acc
+      [elem | rest] ->
+        pickup
+          member(elem, b) -> diff_go(rest, b, acc)
+          else            -> diff_go(rest, b, add(elem, acc))
 
   ## Set difference `a \ b`.
   fn difference(a: Map(t, Bool), b: Map(t, Bool)) -> Map(t, Bool) =
-    let drop = fn(elem) -> fn(acc) ->
-      pickup
-        member(elem, b) -> acc
-        else            -> add(elem, acc)
-    Std.List.foldl(to_list(a), new(), drop)
+    diff_go(to_list(a), b, new())

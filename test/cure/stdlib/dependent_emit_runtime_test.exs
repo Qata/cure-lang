@@ -9,13 +9,11 @@ defmodule Cure.Stdlib.DependentEmitRuntimeTest do
   LOADS the BEAM, and RUNS its functions, asserting concrete results.
 
   It locks in the actual post-rip-out runtime behavior, including the canonical
-  DEPENDENT constructor representation the classic delete converges on: PascalCase
-  tags and a bare atom for nullary constructors (`some(42) == {:Some, 42}`,
-  `none() == :None`), NOT the classic snake_case/tuple-wrapped form
-  (`{:some, 42}` / `{:none}`). Those classic-era assertions live in the
-  classic-pipeline tests and migrate at rip-out; this file is their dependent
-  counterpart, proving the replacement pipeline produces working code before the
-  swap.
+  constructor representation: the OTP-conventional `Option`/`Result` constructors
+  erase to lowercase BEAM tags (`some(42) == {:some, 42}`, `none() == :none`,
+  `ok(7) == {:ok, 7}`, `error(:bad) == {:error, :bad}`) so a Cure value is a
+  native OTP term that Erlang/Elixir and AtomVM FFI consume directly. Non-OTP
+  constructors keep their declared (PascalCase) tag; records stay tagged tuples.
 
   The chosen modules are self-contained (no cross-module runtime dependency that
   would need separate loading): `option`/`result` exercise the ADT tag
@@ -44,8 +42,8 @@ defmodule Cure.Stdlib.DependentEmitRuntimeTest do
     some = apply(m, :some, [42])
     none = apply(m, :none, [])
 
-    assert some == {:Some, 42}
-    assert none == :None
+    assert some == {:some, 42}
+    assert none == :none
     assert apply(m, :is_some, [some]) == true
     assert apply(m, :is_none, [none]) == true
     assert apply(m, :unwrap, [some, 0]) == 42
@@ -57,8 +55,8 @@ defmodule Cure.Stdlib.DependentEmitRuntimeTest do
     ok = apply(m, :ok, [7])
     err = apply(m, :error, [:bad])
 
-    assert ok == {:Ok, 7}
-    assert err == {:Error, :bad}
+    assert ok == {:ok, 7}
+    assert err == {:error, :bad}
     assert apply(m, :is_ok, [ok]) == true
     assert apply(m, :is_error, [err]) == true
     assert apply(m, :unwrap, [ok, 0]) == 7

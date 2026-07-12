@@ -297,8 +297,10 @@ defmodule Cure.Elab.Program do
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast_elixir_core(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
+         {:ok, prelude} <- prelude_slice_env(ast),
          seeded = seed_with_telescope_support(ast),
-         {:ok, env0} <- merge_env(seeded, imported),
+         {:ok, base} <- merge_env(seeded, prelude),
+         {:ok, env0} <- merge_env(base, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
@@ -449,6 +451,159 @@ defmodule Cure.Elab.Program do
     Enum.reject(@auto_prelude, fn src ->
       src == self or MapSet.member?(declared, Map.get(@auto_prelude_types, src))
     end)
+  end
+
+  # ── `@prelude` decorator ───────────────────────────────────────────────────
+  #
+  # A stdlib item marked `@prelude` (see `lib/std/string.cure`'s `String` alias)
+  # joins the IMPLICIT prelude: its name resolves in every module with no `use`.
+  # Unlike the hard-coded `@auto_prelude` whitelist (whole modules), `@prelude` is
+  # declared at the DEFINITION site and is item-granular — preluding `type String`
+  # brings the alias without dragging `Std.String`'s whole function surface (which
+  # would shadow user `length`/`reverse`/…). Discovery scans the stdlib sources for
+  # the marker; the resulting slice is merged UNDER the explicit imports (so a
+  # `use` still wins) and under the module's own declarations.
+  defp prelude_slice_env(ast) do
+    self = find_module_name(ast)
+    local = declared_names(ast)
+
+    prelude_manifest()
+    |> Enum.reject(fn entry -> entry.source == self end)
+    |> Enum.reduce_while({:ok, Env.empty()}, fn entry, {:ok, acc} ->
+      case prelude_entry_env(entry, local) do
+        {:ok, slice} ->
+          case merge_env(acc, slice) do
+            {:ok, merged} -> {:cont, {:ok, merged}}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
+  # Elaborate one prelude-contributing module and restrict its env to the
+  # `@prelude`-marked names (minus any the importer declares locally — a local
+  # decl shadows the prelude). A whole-module `@prelude` keeps everything.
+  defp prelude_entry_env(%{source: source, path: path, names: names}, local) do
+    with {:ok, full} <- import_source_env({:ok, source, path}, MapSet.new()) do
+      keep =
+        case names do
+          :all -> :all
+          set -> MapSet.difference(set, local)
+        end
+
+      {:ok, restrict_env_to(full, keep)}
+    end
+  end
+
+  # Keep only the named defs/families/constructors from an elaborated env. List /
+  # Char and the other seeded builtins stay ambient via the base seed, so a
+  # type-alias slice (`String := List(Char)`) needs only its def entry; a
+  # `@prelude type` also keeps its family and constructors. `certified` is kept
+  # whole — it is a totality whitelist, so a superset is harmless.
+  defp restrict_env_to(%Env{}, :all = _keep), do: raise("whole-module @prelude unimplemented")
+
+  defp restrict_env_to(%Env{} = env, %MapSet{} = names) do
+    name_list = MapSet.to_list(names)
+    fam_names = Enum.filter(name_list, &Map.has_key?(env.families, &1))
+    kept_ctors = for {c, f} <- env.ctor_to_family, f in fam_names, into: %{}, do: {c, f}
+
+    %Env{
+      Env.empty()
+      | defs: Map.take(env.defs, name_list ++ Map.keys(kept_ctors)),
+        families: Map.take(env.families, fam_names),
+        ctors: Map.take(env.ctors, Map.keys(kept_ctors)),
+        ctor_to_family: kept_ctors,
+        primitives: Map.take(env.primitives, name_list),
+        certified: env.certified
+    }
+  end
+
+  # `@prelude`-marked items across the stdlib tree, as a list of
+  # `%{source, path, names}` (names = a `MapSet` of item names, or `:all` for a
+  # whole-module mark). Discovered by scanning the stdlib sources for the marker —
+  # membership lives at the definition site, not in a hand-kept list. Cached in
+  # `:persistent_term`: the stdlib is fixed for a compiler build, and this runs
+  # only in the HOST compiler, never on AtomVM (where `persistent_term` is absent).
+  defp prelude_manifest do
+    case Paths.source_dir() do
+      nil ->
+        []
+
+      dir ->
+        key = {__MODULE__, :prelude_manifest, dir}
+
+        case :persistent_term.get(key, :miss) do
+          :miss ->
+            manifest = scan_prelude_manifest(dir)
+            :persistent_term.put(key, manifest)
+            manifest
+
+          cached ->
+            cached
+        end
+    end
+  end
+
+  defp scan_prelude_manifest(dir) do
+    dir
+    |> Path.join("*.cure")
+    |> Path.wildcard()
+    |> Enum.flat_map(fn path ->
+      with {:ok, src} <- File.read(path),
+           {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+           {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+           source when is_binary(source) <- find_module_name(ast),
+           names when names != [] <- prelude_marked_names(ast) do
+        [%{source: source, path: path, names: MapSet.new(names)}]
+      else
+        _ -> []
+      end
+    end)
+  end
+
+  # The names of `@prelude`-marked declarations in a module's AST. A `typealias`
+  # (`{:type_annotation}`), `fn` (`{:function_def}`), and enum/indexed `type`
+  # container all carry the decorator in their meta once the parser attached it.
+  defp prelude_marked_names(ast) do
+    ast
+    |> declarations()
+    |> Enum.flat_map(fn decl ->
+      if prelude_decorated?(decl), do: List.wrap(declaration_name(decl)), else: []
+    end)
+  end
+
+  defp prelude_decorated?({_tag, meta, _}) when is_list(meta),
+    do: match?({:prelude, _}, Keyword.get(meta, :decorator))
+
+  defp prelude_decorated?(_), do: false
+
+  defp declaration_name({:type_annotation, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name({:function_def, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name({:container, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name({:indexed_type, meta, _}) when is_list(meta),
+    do: meta |> Keyword.get(:name) |> to_name_atom()
+
+  defp declaration_name(_), do: nil
+
+  defp to_name_atom(name) when is_binary(name), do: String.to_atom(name)
+  defp to_name_atom(_), do: nil
+
+  # Every function/type/constructor NAME a module declares locally, as a MapSet —
+  # used so a `@prelude` item is not imported into a module that redefines the same
+  # name (the local declaration is canonical). Reuses the existing scanners.
+  defp declared_names(ast) do
+    MapSet.new(local_def_names(ast))
+    |> MapSet.union(declared_type_names(ast))
+    |> MapSet.union(declared_ctor_names(ast))
   end
 
   @doc """

@@ -70,4 +70,42 @@ defmodule Cure.Elab.LambdaArgumentOrderTest do
     # `:unsolved_metavariables` — the dispatch head was found; the lambda's domain was not.
     assert {:error, {:unsolved_metavariables, :deferred_argument}} = Program.elaborate(src)
   end
+
+  # DISTINCT from the pinned gap above. Here the lambda's domain type has a SINGLE
+  # type parameter that a LATER argument fully determines (`g: (a) -> a`, with `x: a`
+  # fixing `a`) — so once the metavariable is solved the domain is fully concrete
+  # `(a) -> a`, with NOTHING left to infer from the lambda body. This is exactly the
+  # `set = over(o, fn(_) -> new, x)` shape in `Std.Optic`, which had to fall back to a
+  # curried `const` helper. Unlike the `a -> b` cases, this is not the ordering
+  # limitation — the deferred re-check simply mis-shifted the solved domain's de Bruijn
+  # levels under the arrow binder (a `conversion_failure {:var,3} {:var,2}`), which is a
+  # bug, not an inherent gap. With that fixed, the inline lambda elaborates.
+  test "a lambda whose monomorphic domain a later argument fully fixes elaborates" do
+    src = """
+    mod M
+    fn over2({a: Type}, g: (a) -> a, x: a) -> a = g(x)
+    fn set3({a: Type}, new: a, x: a) -> a = over2(fn(ignored) -> new, x)
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  # The same monomorphic `(a) -> a` lambda, but with its domain fixed by an EARLIER
+  # argument (`x: a` before `g`), so the metavariable is already solved when the lambda
+  # slot is reached — the "domain fully known" branch, a DIFFERENT code path than the
+  # deferred one above. Both had the same de Bruijn mis-shift when the solved domain
+  # carried free variables. This is the exact shape of `Std.Optic`'s
+  # `set = over(o, fn(_) -> new, x)`, whose `over(o, g, x)` fixes the lambda's `a` from
+  # the earlier `o : Optic(s, a, k)`.
+  test "a lambda whose monomorphic domain an earlier argument fixes elaborates" do
+    src = """
+    mod M
+    fn over3({a: Type}, x: a, g: (a) -> a) -> a = g(x)
+    fn set4({a: Type}, new: a, x: a) -> a = over3(x, fn(ignored) -> new)
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
 end

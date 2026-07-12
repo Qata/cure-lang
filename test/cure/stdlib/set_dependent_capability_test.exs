@@ -22,20 +22,18 @@ defmodule Cure.Stdlib.SetDependentCapabilityTest do
   expected type; there is no polymorphic accumulator seeded through a fold. No
   kernel (`lib/cure/core/*`) change, no elaborator change — a pure surface form.
 
-  So `Std.Set` is dependent-CAPABLE. It is not in the live-file `@green` firewall
-  (`dependent_elaboration_parity_test.exs`) only because it is
-  CLASSIC-COEXISTENCE-blocked exactly like `show`/`io`/`access`: the classic
-  checker (`lib/cure/types/*`) cannot instantiate a parameterised `Map(k, v)`
-  across `from_list`'s match branches — `compile_string` on this same source
-  fails `E033: match branches have no common upper bound: Map(k, v) vs
-  Map(t, Bool)`. So the committed `lib/std/set.cure` must keep its
-  classic-compatible bare-`Map` form until the classic pipeline is deleted (#18),
-  at which point it is rewritten to the form proven here.
+  So `Std.Set` is dependent-CAPABLE. The classic-coexistence block that once kept
+  it out of the live-file `@green` firewall (`dependent_elaboration_parity_test.exs`)
+  is GONE: the classic checker used to reject `from_list`'s match branches with
+  `E033: no common upper bound Map(k, v) vs Map(t, Bool)`, but `type.ex` gained a
+  covariant `Map`/same-constructor `{:adt}` subtype rule (bacf772) that joins them.
+  So the committed `lib/std/set.cure` was migrated to the structural-recursion form
+  and now elaborates on BOTH pipelines — `set` is in `@green`.
 
-  The source below is `lib/std/set.cure`'s rip-out target form: the same eleven
-  operations, `Map` parameterised as `Map(t, Bool)`, and the three fold-seeded
-  functions rewritten with structural recursion. Keep it in lock-step with
-  `lib/std/set.cure` when that file is migrated at rip-out.
+  The source below is a self-contained restatement of that form (the same eleven
+  operations over inline `@extern` map primitives rather than `Std.Map` delegation),
+  kept as an independent elaborate+emit proof. Keep it in lock-step with
+  `lib/std/set.cure`.
   """
   use ExUnit.Case, async: true
 

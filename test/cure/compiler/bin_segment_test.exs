@@ -1,7 +1,7 @@
 defmodule Cure.Compiler.BinSegmentTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser, Codegen, BeamWriter}
+  alias Cure.Compiler.{Lexer, Parser}
 
   # -- Lexer -----------------------------------------------------------------
 
@@ -80,14 +80,30 @@ defmodule Cure.Compiler.BinSegmentTest do
              """) == 3
     end
 
-    test "<<x::16, rest::binary>> accepts an explicit size" do
-      assert eval_module_main!("""
-             mod BinSize
-               fn main() -> Int =
-                 let v = 258
-                 let bytes = <<v::16>>
-                 byte_size(bytes)
-             """) == 2
+    # Rich bit-syntax construction (`::16`, `/float`, `::size(n)`, …) is a
+    # deferred value-surface case in the sole (dependent) pipeline: `of_bytes`
+    # packs a list of 8-bit bytes and cannot express a wider segment. The
+    # elaborator REJECTS a sized segment rather than silently dropping the size
+    # and feeding a >255 value to `list_to_binary` (which crashed at runtime).
+    test "a sized segment <<v::16>> is rejected, not mislowered" do
+      assert {:error, reason} =
+               Cure.Compiler.compile_and_load(
+                 """
+                 mod BinSize
+                   fn main() -> Int =
+                     let v = 258
+                     let bytes = <<v::16>>
+                     byte_size(bytes)
+                 """,
+                 emit_events: false
+               )
+
+      # Rejected at compile time (no BEAM emitted), naming the sized segment —
+      # not silently lowered to `of_bytes([258])`, which crashed in
+      # `list_to_binary` at runtime.
+      rendered = inspect(reason)
+      assert rendered =~ "bin_segment"
+      assert rendered =~ "size:"
     end
   end
 
@@ -100,10 +116,7 @@ defmodule Cure.Compiler.BinSegmentTest do
   end
 
   defp eval_module_main!(source) do
-    {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
-    {:ok, ast} = Parser.parse(tokens, emit_events: false)
-    {:ok, forms, _warnings} = Codegen.compile_module(ast, emit_events: false)
-    {:ok, module} = BeamWriter.compile_and_load(forms)
+    {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     apply(module, :main, [])
   end
 end

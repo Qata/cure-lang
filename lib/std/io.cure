@@ -23,6 +23,11 @@ mod Std.Io
   ##   println("Hello, " <> name <> "!")
   ## ```
 
+  ## `<>` on `String = List(Char)` desugars to `Std.Semigroup.combine`;
+  ## the `List` instance rides `Std.String`'s value surface.
+  use Std.String
+  use Std.Semigroup
+
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   ## Print a string to stdout without a trailing newline.
   ## Wraps `:io.put_chars/1`.

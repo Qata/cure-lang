@@ -1,4 +1,7 @@
 mod JsonDerive
+  use Std.String
+  use Std.Semigroup
+
   ###
   `@derive(JSON)` generates `to_json/1` that renders a record as a
   JSON object string (v0.21.0).

@@ -98,10 +98,14 @@ mod Std.Vector
     match xs
       empty() -> false
       prepend(x, rest) ->
-        if pred(x) then true else any(rest, pred)
+        pickup
+          pred(x) -> true
+          else -> any(rest, pred)
 
   fn all({a: Type}, {n: Nat}, xs: Vector(a, n), pred: a -> Bool) -> Bool =
     match xs
       empty() -> true
       prepend(x, rest) ->
-        if pred(x) then all(rest, pred) else false
+        pickup
+          pred(x) -> all(rest, pred)
+          else -> false

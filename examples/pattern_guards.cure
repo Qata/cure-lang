@@ -1,4 +1,7 @@
 mod PatternGuards
+  use Std.String
+  use Std.Semigroup
+
   # Multi-clause function with pattern matching
   fn describe(x: Int) -> String
     | 0 -> "zero"

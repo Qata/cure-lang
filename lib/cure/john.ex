@@ -444,28 +444,10 @@ defmodule Cure.John do
   # Runtime
   # ==========================================================================
 
-  defp runtime_info do
-    if Code.ensure_loaded?(Cure.Observe.Top) do
-      safe(
-        fn ->
-          snap = Cure.Observe.Top.snapshot()
-
-          %{
-            supervisors: length(snap.supervisors),
-            actors: length(snap.actors),
-            fsms: length(snap.fsms),
-            sample:
-              snap.supervisors
-              |> Enum.take(5)
-              |> Enum.map(fn s -> "#{s.module} (#{length(s.children)} children)" end)
-          }
-        end,
-        nil
-      )
-    else
-      nil
-    end
-  end
+  # The runtime snapshot came from `Cure.Observe.Top`, which tracked the
+  # supervisor/actor/fsm container runtimes. Those containers were removed with
+  # the classic pathway rip-out (#18), so there is no live topology to report.
+  defp runtime_info, do: nil
 
   defp runtime_md(nil) do
     section("Runtime", ["  *(Cure runtime not available in this context)*"])

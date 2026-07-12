@@ -375,7 +375,9 @@ defmodule Cure.Elab.Declarations do
   # Elaborate a function's body against its (already registered) signature and
   # replace the placeholder with the real lambda. The environment already carries
   # every function's signature, so forward references and mutual recursion resolve.
-  def elaborate_function_body({:function_def, meta, body}, env) do
+  def elaborate_function_body({:function_def, _meta, _body} = decl, env) do
+    {:function_def, meta, body} = desugar_clause_fn(decl)
+
     case Keyword.get(meta, :extern) do
       {mod, fun, arity} when is_atom(mod) and is_atom(fun) and is_integer(arity) ->
         # Wave-3: a bodyless @extern is a typed FFI postulate — the signature IS
@@ -462,16 +464,52 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # Multi-clause function-head syntax — `fn f(n) | 0 -> a | n -> b` — parses to a
+  # `{:function_def, [clauses: [...]], []}` whose body lives in `meta[:clauses]`
+  # (one `%{guard, params, body}` per clause) and whose top-level body is empty.
+  # The dependent pipeline elaborates a single body, so desugar the clauses into a
+  # `match` over the formal parameters: the scrutinee is the sole parameter (or a
+  # flat tuple `%[p1, …, pN]` of them), each clause becomes a `:match_arm` whose
+  # pattern is the clause's parameter pattern (or their tuple) and whose optional
+  # `when`-guard rides through as the arm guard. A def with no `clauses:` key is
+  # returned unchanged, so ordinary `fn f(x) = …` bodies are untouched. Signature
+  # registration reads `meta[:params]`/`:return_type`/`:name` and ignores the body,
+  # so it needs no desugaring.
+  defp desugar_clause_fn({:function_def, meta, _body} = decl) do
+    case Keyword.get(meta, :clauses) do
+      [_ | _] = clauses ->
+        formals = Keyword.get(meta, :params, [])
+        fmeta = Keyword.take(meta, [:line, :col])
+        scrut = clause_scrutinee(formals, fmeta)
+        arms = Enum.map(clauses, &clause_to_arm(&1, length(formals), fmeta))
+        match_expr = {:pattern_match, fmeta, [scrut | arms]}
+        {:function_def, Keyword.delete(meta, :clauses), [match_expr]}
+
+      _ ->
+        decl
+    end
+  end
+
+  defp clause_scrutinee([{:param, _pm, pname}], fmeta),
+    do: {:variable, [scope: :local] ++ fmeta, pname}
+
+  defp clause_scrutinee(formals, fmeta),
+    do: {:tuple, fmeta, Enum.map(formals, fn {:param, _pm, pname} -> {:variable, [scope: :local] ++ fmeta, pname} end)}
+
+  defp clause_to_arm(%{guard: guard, params: pats, body: cbody}, arity, fmeta) do
+    pattern = if arity == 1, do: hd(pats), else: {:tuple, fmeta, pats}
+    arm_meta = [pattern: pattern] ++ if(guard, do: [guard: guard], else: [])
+    {:match_arm, arm_meta, cbody}
+  end
+
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
 
     with {:ok, sig} <- function_signature(meta, env) do
       ctx = build_context(env, sig.telescope)
-      return_value = Eval.eval(sig.return_core, Context.env(ctx))
 
-      with {:ok, body_term} <-
-             elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
-           :ok <- Kernel.check(ctx, body_term, return_value),
+      with {:ok, body_term, return_core, _return_value} <-
+             elaborate_body_typed(body_expr, sig, ctx, env),
            # A `where`-introduced dictionary parameter is present by default but
            # SAFELY demoted to `:erased` when the body never uses it relevantly (an
            # `ignore`-style constrained function): the same criterion the relevance
@@ -488,7 +526,7 @@ defmodule Cure.Elab.Declarations do
            # since, so rebuild the stored type from the DEMOTED vector — otherwise the
            # stored Pi (dict `ω`) and λ (dict `:erased`) would disagree, a pairing the
            # graded `Conv` forbids. Both now come from one vector.
-           final_pi = wrap_binders(:pi, sig.telescope, quantities, sig.return_core),
+           final_pi = wrap_binders(:pi, sig.telescope, quantities, return_core),
            lambda = wrap_binders(:lam, sig.telescope, quantities, body_term),
            # The assertion that would have caught the whole dichotomy class: the stored
            # Π and λ must agree on every binder's grade. Compare the two grade spines
@@ -513,13 +551,54 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # Elaborate the body and settle the return type + its Core form. With a DECLARED
+  # return, check the body against it (the long-standing behavior). With NONE
+  # (annotation-free `fn f() = expr`, which the parser accepts), INFER the body's
+  # type and adopt it as the codomain — `function_signature/2` left a `{:type, 0}`
+  # placeholder that this replaces. Inference carries no expected-type flow, so an
+  # annotation-free body whose type is pinned only by a return-only implicit still
+  # needs an explicit signature; every REPL/`:let` wrapper returns a concrete type,
+  # which is exactly the case this serves. Returns `{body_term, return_core,
+  # return_value}` so the caller rebuilds the final Π from the settled codomain.
+  defp elaborate_body_typed(body_expr, %{inferred_return: true} = sig, ctx, env) do
+    with {:ok, body_term, ret_val} <-
+           Elaborator.elaborate_expr_typed(body_expr, sig.scope, ctx, env) do
+      ret_core = Quote.reify(ret_val, length(sig.telescope))
+      {:ok, body_term, ret_core, ret_val}
+    end
+  end
+
+  defp elaborate_body_typed(body_expr, sig, ctx, env) do
+    return_value = Eval.eval(sig.return_core, Context.env(ctx))
+
+    with {:ok, body_term} <-
+           elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+         :ok <- Kernel.check(ctx, body_term, return_value) do
+      {:ok, body_term, sig.return_core, return_value}
+    end
+  end
+
+  # The signature's codomain Core term. A declared `-> T` is elaborated normally; an
+  # omitted return (annotation-free `fn`) gets a `{:type, 0}` placeholder that
+  # `elaborate_body_typed/4` overwrites with the inferred body type.
+  defp signature_return_core(nil, _scope, _env, _ctx), do: {:ok, {:type, 0}}
+
+  defp signature_return_core(return_expr, scope, env, ctx),
+    do: idx_to_core(return_expr, scope, nil, env, ctx)
+
   # Shared signature elaboration: auto-generalize free type variables, build the
   # parameter telescope and the Π type. Deterministic in the type environment, so
   # the signature computed in the registration pass and the body pass agree.
   defp function_signature(meta, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
     params0 = Keyword.get(meta, :params, [])
-    return_expr = Keyword.fetch!(meta, :return_type)
+    # The parser makes `-> Type` optional (`fn f() = expr`); when omitted the
+    # `:return_type` key is absent. An annotation-free function's codomain is
+    # INFERRED from its body in `elaborate_real_body/3`; here it gets a placeholder
+    # so `sig.pi` is well-formed for the pre-body registration pass (the final Pi is
+    # rebuilt from the inferred return once the body is elaborated). `inferred_return`
+    # flags that path.
+    return_expr = Keyword.get(meta, :return_type)
 
     # Idris-style auto-generalization: a free lowercase type variable in the
     # signature (`fn id(x: a) -> a`) is bound as a leading implicit `{a: Type}`
@@ -537,7 +616,7 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
-         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env, ctx) do
+         {:ok, return_core} <- signature_return_core(return_expr, scope, env, ctx) do
       {:ok,
        %{
          name: name,
@@ -546,6 +625,7 @@ defmodule Cure.Elab.Declarations do
          quantities: quantities,
          scope: scope,
          return_core: return_core,
+         inferred_return: is_nil(return_expr),
          constraints: constraint_specs,
          # The PRE-REGISTRATION type, honest about the ORIGINAL quantities (implicit
          # ⇒ erased). `demote_unused_dicts/3` may lower a dict below this after the

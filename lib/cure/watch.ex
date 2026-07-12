@@ -143,7 +143,7 @@ defmodule Cure.Watch do
         {:ok, src} ->
           with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, file: p, emit_events: false),
                {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: p, emit_events: false),
-               {:ok, _} <- Cure.Types.Checker.check_module(ast, file: p, emit_events: false) do
+               {:ok, _env} <- Cure.Elab.Program.check_ast(ast) do
             info("  #{p}: OK")
           else
             {:error, reason} -> error("  #{p}: #{inspect(reason)}")

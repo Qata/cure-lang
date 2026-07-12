@@ -278,10 +278,23 @@ defmodule Cure.Elab.Elaborator do
       # fresh metavariables for them and solve from the present arguments, the
       # same way constructor indices are inferred (§5.2). Without this, the
       # explicit args would be bound to the implicit positions.
-      implicit_def?(env, atom) ->
+      #
+      # Key on the raw `atom` whenever it names a LOCAL def (which must shadow any
+      # same-named import), otherwise on `resolved`. An IMPORTED implicit def is
+      # registered under a re-keyed import key (`Std.List#map`), so
+      # `implicit_def?(env, :map)` is false and the raw atom is not a def; without
+      # resolving, a bare `map(xs, fn(x) -> ...)` skips implicit insertion, falls to
+      # the lambda clause below, and mis-binds `xs : List(Int)` against the erased
+      # `{t} : Type` slot (a `:conversion_failure`). Preferring `atom` when it is a
+      # local def keeps a module's own `map`/`filter` bound to itself;
+      # `resolve_bare_shadowed` (which feeds `resolved`) resolves toward imports and
+      # would otherwise redirect a recursive self-call to a same-named import.
+      implicit_def?(env, if(Env.get_def(env, atom), do: atom, else: resolved)) ->
+        key = if Env.get_def(env, atom), do: atom, else: resolved
+
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_global_app(env, atom, present, ctx)
+            elaborate_global_app(env, key, present, ctx)
           end
 
         # When up-front inference of the arguments fails — an argument that is
@@ -294,7 +307,7 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx) do
+            case elaborate_implicit_app_bidirectional(env, key, args, names, ctx) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> orig
             end
@@ -552,6 +565,19 @@ defmodule Cure.Elab.Elaborator do
          t_type_core = Quote.reify(t_type, Context.length(ctx)),
          {:ok, e_core} <- elaborate_expr_checked(e, t_type_core, names, ctx, env) do
       {:ok, bool_case(c_core, t_type_core, t_core, e_core, ctx), t_type}
+    end
+  end
+
+  # A `let … ⏎ body` block in INFERENCE position — the counterpart to the
+  # check-mode `{:block}` clause (`elaborate_let_block/5`). Enables annotation-free
+  # function bodies (`fn f() = let a = 1 ⏎ a + 1`) and any inference-position block.
+  # There is no `:let` desugaring to guess a type for: build the `:let` Core chain
+  # by inferring each binding's rhs, then let the kernel infer the whole term's type
+  # (which sidesteps hand-managing the de Bruijn depth of the body's type).
+  def elaborate_expr_typed({:block, _meta, stmts}, names, ctx, env) do
+    with {:ok, term} <- infer_block_term(stmts, names, ctx, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
     end
   end
 
@@ -4903,6 +4929,58 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_let_block(other, _expected_core, _names, _ctx, _env),
     do: {:error, {:unsupported_block, other}}
 
+  # INFERENCE-mode block: build the `:let` Core chain (the final statement is
+  # inferred, each `let` binds its rhs with a ζ definition so a later statement
+  # sees the concrete value) and return only the term — the `{:block}` clause of
+  # `elaborate_expr_typed/4` hands it to `Kernel.infer` for its type. Mirrors
+  # `elaborate_let_block/5`/`bind_once_let/10`, minus the threaded expected type.
+  defp infer_block_term([final], names, ctx, env) do
+    with {:ok, term, _type} <- elaborate_expr_typed(final, names, ctx, env), do: {:ok, term}
+  end
+
+  defp infer_block_term(
+         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         names,
+         ctx,
+         env
+       ) do
+    if not Keyword.get(meta, :let, false) do
+      {:error, {:unsupported_block_statement, meta}}
+    else
+      grade = Keyword.get(meta, :grade, Grade.unrestricted())
+
+      with {:ok, rhs_core, ty_core, ty_value} <- block_rhs(rhs, meta, names, ctx, env) do
+        rhs_value = Eval.eval(rhs_core, Context.env(ctx))
+        ctx1 = Context.extend_def(ctx, ty_value, rhs_value)
+
+        with {:ok, body_core} <- infer_block_term(rest, [name | names], ctx1, env) do
+          {:ok, {:let, grade, ty_core, rhs_core, body_core}}
+        end
+      end
+    end
+  end
+
+  defp infer_block_term(other, _names, _ctx, _env), do: {:error, {:unsupported_block, other}}
+
+  # A `let` binding's rhs, settled to `{rhs_core, ty_core, ty_value}`. An
+  # unannotated `let x = e` synthesises `e`'s type (SIGNATURE-AWARE reify, as
+  # `let_inferred/9`); an ascribed `let x : T = e` checks `e` against `T`.
+  defp block_rhs(rhs, meta, names, ctx, env) do
+    case Keyword.get(meta, :type_annotation) do
+      nil ->
+        with {:ok, rhs_core, rhs_type} <- elaborate_expr_typed(rhs, names, ctx, env) do
+          ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
+          {:ok, rhs_core, ty_core, rhs_type}
+        end
+
+      ann ->
+        with {:ok, ty_core} <- elaborate_type(ann, names, env),
+             {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+          {:ok, rhs_core, ty_core, Eval.eval(ty_core, Context.env(ctx))}
+        end
+    end
+  end
+
   # `let x : T = e` — BIDIRECTIONAL. The ascription supplies the type a
   # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
   # (exactly what surface substitution did at each use site) and bound ONCE.
@@ -5476,12 +5554,26 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Rich bit-syntax specifiers (`::16`, `/float`, `::size(n)`, unit/signedness/
+  # endianness) live in the segment meta after parsing. `of_bytes` packs a list
+  # of 8-bit bytes and cannot express any of them, so a sized/typed segment is
+  # REJECTED here rather than silently mislowered — dropping a `::16` size would
+  # feed a >255 value to `list_to_binary` and crash at runtime. Rich bit-syntax
+  # construction is a deferred value-surface case in the dependent pipeline.
+  @rich_segment_keys [:size, :type, :unit, :signedness, :endianness]
+
   def desugar_bytes(segments, line) do
     Enum.reduce_while(segments, {:ok, []}, fn
-      {:bin_segment, _sm, [expr]}, {:ok, acc} ->
-        case typed_segment?(expr) do
-          true -> {:halt, {:error, {:unsupported_binary_segment, expr}}}
-          false -> {:cont, {:ok, acc ++ [expr]}}
+      {:bin_segment, sm, [expr]} = seg, {:ok, acc} ->
+        cond do
+          Enum.any?(@rich_segment_keys, &(Keyword.get(sm, &1) != nil)) ->
+            {:halt, {:error, {:unsupported_binary_segment, seg}}}
+
+          typed_segment?(expr) ->
+            {:halt, {:error, {:unsupported_binary_segment, expr}}}
+
+          true ->
+            {:cont, {:ok, acc ++ [expr]}}
         end
 
       other, _acc ->
@@ -6092,7 +6184,16 @@ defmodule Cure.Elab.Elaborator do
     do: {:halt, {:error, :too_few_arguments}}
 
   defp bidir_app_slot({dom, :unrestricted}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
-    dom_inst = dom |> Subst.instantiate(chosen) |> Unify.zonk(mctx)
+    # ZONK-then-instantiate, not instantiate-then-zonk: `Subst.instantiate` shifts a
+    # substituted term across binders, `Unify.zonk` does not. A domain that is a Π
+    # (a function-typed argument, `(a) -> a`) whose earlier sibling already solved the
+    # metavariable to a term with FREE de Bruijn variables would otherwise reach the
+    # checking mode below with the codomain occurrence unshifted (`{:var,2}` where
+    # `{:var,3}` is due). Resolving the metavariables into the substitution first lets
+    # `instantiate` place them at the right depth. See the twin fix in
+    # `resolve_deferred_slots`; a closed solution shifts to a no-op, so scalar/data
+    # domains are unaffected.
+    dom_inst = Enum.map(chosen, &Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
 
     if has_meta?(dom_inst) do
       # Domain still unsolved — infer the argument and unify to solve metavariables.
@@ -6200,7 +6301,19 @@ defmodule Cure.Elab.Elaborator do
 
   defp resolve_deferred_slots({:ok, mctx, chosen, args, deferred}, names, ctx, env) do
     Enum.reduce_while(deferred, {:ok, mctx}, fn {ph, arg, dom, k}, {:ok, mctx} ->
-      dom_inst = dom |> Subst.instantiate(Enum.take(chosen, k)) |> Unify.zonk(mctx)
+      # ZONK the chosen prefix FIRST, THEN instantiate — not instantiate-then-zonk.
+      # `Subst.instantiate` is binder-aware (it shifts a substituted term when it
+      # crosses a binder), but `Unify.zonk` is NOT: it replaces a solved `{:meta,id}`
+      # with its solution verbatim. When a deferred domain is a Π (`(a) -> a`, a lambda
+      # argument's type) and the metavariable a later sibling solved to a term with
+      # FREE de Bruijn variables (a rigid parameter, `?a := {:var,2}`), the occurrence
+      # in the codomain sits UNDER the domain binder and must shift to `{:var,3}`.
+      # Instantiate-then-zonk left it at `{:var,2}` (`conversion_failure {:var,3}
+      # {:var,2}`); resolving the metavariables into the substitution and letting
+      # `instantiate` place them restores the shift. A closed solution (`Nat`, `Z` —
+      # every constructor-domain deferral) shifts to a no-op, so those are unaffected.
+      dom_inst =
+        Enum.take(chosen, k) |> Enum.map(&Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
 
       # If a later sibling argument did not fully determine this deferred domain,
       # the deferred argument may still determine it FROM ITS OWN constructor
