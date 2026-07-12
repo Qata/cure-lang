@@ -61,4 +61,45 @@ defmodule Cure.Compiler.MacroUseTest do
   defp has_supervisor?({_t, _m, children}) when is_list(children),
     do: Enum.any?(children, &has_supervisor?/1)
   defp has_supervisor?(_), do: false
+
+  test "a one-hole local macro use-site binds the hole and substitutes it" do
+    node =
+      parse!(
+        "mod M\n  macro Every\n    syntax every <t: Code> becomes Timer.repeat(t)\n  fn f() = every 500\n"
+      )
+    body = find_fn_body(node, "f")
+    # every 500  ==>  Timer.repeat(500)
+    assert {:function_call, meta, [arg]} = body
+    assert Keyword.get(meta, :name) in ["Timer.repeat", "repeat"]
+    assert {:literal, _, 500} = arg
+  end
+
+  test "a two-literal-segment local macro use-site matches both literals" do
+    # `say hello` has no hole: keyword "say", one literal segment "hello".
+    # Without segment matching, "hello" is left unconsumed and becomes a stray
+    # third sibling; segment matching must consume it so the container has
+    # exactly the two real top-level forms (macro_def and fn f()).
+    node =
+      parse!(
+        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say hello\n"
+      )
+    {:container, _meta, children} = node
+    assert length(children) == 2
+    body = find_fn_body(node, "f")
+    assert {:function_call, meta, []} = body
+    assert Keyword.get(meta, :name) in ["Clock.now", "now"]
+  end
+
+  test "a macro use-site literal-segment mismatch records a :macro_use_mismatch error" do
+    # `say` expects the literal "hello" next; using it with "goodbye" must fail
+    # the segment match and record an error rather than silently mis-expanding.
+    {:ok, tokens} =
+      Lexer.tokenize(
+        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say goodbye\n",
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    assert Enum.any?(errors, &match?({:macro_use_mismatch, "say", :at_segment, 0, _, _}, &1))
+  end
 end

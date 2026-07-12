@@ -148,13 +148,56 @@ defmodule Cure.Compiler.Parser do
   defp collect_macro_defs(_), do: []
 
   # A use-site of an active macro keyword. Milestone-2 handles a single rule per
-  # keyword with zero holes; multi-rule / hole matching is Task 3.
+  # keyword; the rule's segments are matched against the use-site tokens, binding
+  # holes, then substituted into the template. `progress` (segments consumed) is
+  # the syntax-parse "how far did we get" carried for maximal-failure selection
+  # once multiple rules per keyword arrive.
   defp parse_macro_use(state, keyword) do
     [rule | _] = Map.fetch!(state.active_macros, keyword)
     state = advance(state)  # consume the keyword token
-    # Zero-hole rule: no segments to match; expand the template with no bindings.
-    expanded = expand_rule(rule, %{})
-    {expanded, state}
+
+    case match_segments(state, rule.segments, %{}, 0) do
+      {:ok, bindings, _progress, state} ->
+        {expand_rule(rule, bindings), state}
+
+      {:error, progress, state} ->
+        t = peek(state)
+
+        state =
+          add_error(
+            state,
+            {:macro_use_mismatch, keyword, :at_segment, progress, t.line, t.col}
+          )
+
+        # Recover: yield the bare keyword variable so the outer parse continues.
+        {variable(%Cure.Compiler.Token{
+           type: :identifier,
+           value: keyword,
+           line: t.line,
+           col: t.col
+         }), state}
+    end
+  end
+
+  # Walk a rule's segments against the use-site tokens. A `{:lit, w}` must match
+  # the next token's value; a `{:hole, %{name}}` binds `name` to a parsed
+  # expression. Returns `{:ok, bindings, progress, state}` or
+  # `{:error, progress, state}` (progress = segments consumed before the miss).
+  defp match_segments(state, [], bindings, progress), do: {:ok, bindings, progress, state}
+
+  defp match_segments(state, [{:lit, w} | rest], bindings, progress) do
+    tok = peek(state)
+
+    if to_string(tok.value) == w do
+      match_segments(advance(state), rest, bindings, progress + 1)
+    else
+      {:error, progress, state}
+    end
+  end
+
+  defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
+    {arg, state} = parse_expr(state, 0)
+    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
 
   # Substitute hole bindings into a rule's template: replace any
