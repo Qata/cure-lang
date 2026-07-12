@@ -86,6 +86,25 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     refute rendered =~ "found ``"
   end
 
+  test "a macro-use mismatch against a char literal names the character, not its codepoint" do
+    # A `:char` token's value is the decoded Unicode codepoint (e.g. 97 for
+    # 'a'), not its source spelling. Without a dedicated clause,
+    # macro_got_desc's generic `to_string(v)` fallback renders the bare
+    # integer -- `found `97`` -- which doesn't look like anything the user
+    # typed.
+    errors =
+      errors_of(
+        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say 'a'\n"
+      )
+
+    mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
+    assert mismatch, "expected a :macro_use_mismatch error"
+
+    rendered = Errors.format_error(mismatch, "f.cure")
+    assert rendered =~ "found `'a'`"
+    refute rendered =~ "found `97`"
+  end
+
   test "the hole-kind and nothing-more mismatch renders are total and grammatical" do
     # `{:hole_kind, _}` and `:nothing_more` are not reachable through today's
     # match_segments/4 (a `{:hole, _}` segment never fails to match, so the

@@ -280,6 +280,14 @@ defmodule Cure.Compiler.Parser do
   defp macro_got_desc(%Token{type: :newline}), do: "end of line"
   defp macro_got_desc(%Token{type: :indent}), do: "an indent"
   defp macro_got_desc(%Token{type: :dedent}), do: "a dedent"
+  # A :char token's value is the decoded Unicode codepoint (e.g. 97 for 'a'),
+  # not its source spelling -- render the character itself rather than the
+  # bare integer. Falls through to the generic clause (numeric render) for a
+  # codepoint outside the valid Unicode scalar range, so this can never raise.
+  defp macro_got_desc(%Token{type: :char, value: v})
+       when is_integer(v) and (v in 0..0xD7FF or v in 0xE000..0x10FFFF),
+       do: "'#{<<v::utf8>>}'"
+
   defp macro_got_desc(%Token{value: v}) when not is_nil(v), do: to_string(v)
   defp macro_got_desc(%Token{type: t}), do: to_string(t)
 
