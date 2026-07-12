@@ -708,11 +708,26 @@ VERIFIED LIVE: `Std.Syntax` elaborates `{:ok}` with just `use Std.String` (neste
 forward refs fine, `SOpaque` nullary ctor fine); round-trip preserves function NAMES + attr key ORDER (strip==
 non-vacuous); `:string_interpolation` recurses cleanly (parts are real nodes, no crash). 1021 tests pass.
 
-**NEXT:** SP2 Tier-3 slice-2 Stage 4 — execute Task 1 (`lib/std/syntax.cure` `Std.Syntax`/`Attr`/`SynLit` ADT,
-`@group(:core)`, elaborates-test) then Task 2 (`Cure.Compiler.MacroSyntax.to_syntax`/`from_syntax` bridge + lossless
-round-trip test incl. the corrected `:literal`/`:regex` SOpaque case) inline TDD on Opus, strict red→green, commit
-per task (ghost author, explicit pathspec, mix from worktree root). Then Stage 5 code review. After slice 2: slice
-3 (BIG execution pass — elaborate+normalise+splice), then TYPED-RECORD derivation (operator steer, `a.name`),
+SP2 Tier-3 slice-2 Stage 4 DONE — executed inline on Opus, strict red→green, 2 tasks committed (ghost author,
+explicit pathspec, mix from worktree root):
+- Task 1 `f66db9f` — `lib/std/syntax.cure` (`Syntax`/`Attr`/`SynLit` ADT, `@group(:core)`, `use Std.String`) +
+  `test/cure/stdlib/syntax_elaborates_test.exs`. Red (no file) → green; stdlib suite 340 pass.
+- Task 2 `979fb36` — `lib/cure/compiler/macro_syntax.ex` (`to_syntax`/`from_syntax` mirror-repr bridge) +
+  `test/cure/compiler/macro_syntax_test.exs` (3 tests: attr-preserving to_syntax, lossless round-trip over 7
+  exprs, exotic regex-tuple → `:s_opaque`). Re-probed all parser shapes LIVE before writing (tests immutable):
+  `g(1,x)`→`{:function_call,[name:"g",…],[…]}`, `~r/foo/`→`{:literal,[subtype: :regex,…],{"foo",""}}`,
+  `x+2`→`{:binary_op,[operator: :+,…],…}`, `:ok`→`{:literal,[subtype: :symbol],:ok}`. Red → green;
+  compiler+stdlib regression 1021 pass / 1 skip; `mix compile --warnings-as-errors` clean (vector.cure `.cure`
+  warnings pre-existing, not Elixir).
+
+SP2 Tier-3 slice-2 Stage 5 code review DISPATCHED — Sonnet subagent running `recursive-skeptical-review` on the
+Stage 4 diff `2faf559..HEAD` (falsifiability in full force, two-pipeline steer given, TCB-zero guard, ghost+pathspec
+rules). Running in background; self-commits its fixes. On return: record summary here, then SP2 Tier-3 slice-2
+Stage 6 (`mix test test/cure/compiler/ test/cure/stdlib/` green once) → slice 2 COMPLETE.
+
+**NEXT (after slice 2 Stage 6 green):** SP2 Tier-3 slice 3 (BIG execution pass — harvest `:computed` + emit
+`{:computed_use}`; elaboration-time pass: elaborate elab → `normalise(app(elab, input))` → `from_syntax` → splice →
+re-elaborate; end-to-end a `computed by` macro expands). Then TYPED-RECORD derivation (operator steer, `a.name`),
 `check…else fail C`, WIRING. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass arch).
 Deferred post-gate SP1: T9, T7b. (`actor` end-state = §14.6, `a.name` typed reflection; north star for SP5.)
 
