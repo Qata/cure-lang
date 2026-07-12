@@ -1008,3 +1008,10 @@ user until the following work is genuinely complete and verified end to end:
 This directive applies for the entirety of the session and every context
 compaction. Commit every implementation phase with a highly descriptive commit
 message and keep the worktree clean between phases.
+
+## CRITICAL MERGE-ORDER CORRECTION — 2026-07-13
+
+The required merge sequence supersedes any earlier shorthand: first merge
+`autopilot/kernel-parity-batch` into the `idris-parity` branch, resolve and
+verify that result, then merge `idris-parity` into `core-let-binder`. Do not
+merge the kernel-parity worktree directly into `core-let-binder`.
