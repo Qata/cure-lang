@@ -1,13 +1,15 @@
 defmodule Cure.Elab.NestedReturnPolyInferenceTest do
   @moduledoc """
-  A return-ONLY lowercase type variable NESTED under a constructor (`List(k)`)
-  must be solvable from the caller's expected type, exactly as a BARE return-only
-  var already is (`Std.Map.get(...) -> v`). The expected type `List(t)` should pin
-  `k := t` by descending structurally into `List(?k) ~ List(t)`.
+  A return-ONLY lowercase type variable NESTED under a constructor (`List(t)`)
+  must be solvable from the caller's expected type. `empty() -> List(t)` has `t`
+  appearing only in the return type; calling it where `List(Int)` is expected must
+  pin `t := Int` by descending structurally into `List(?t) ~ List(Int)`. Without
+  that descent the call previously failed with `{:unsolved_metavariables, ...}`.
 
-  Regression repro: `Std.Map.keys(map: Map) -> List(k)` — `k` appears only nested
-  in the return type. Calling it where `List(t)` is expected previously failed with
-  `{:error, {:unsolved_metavariables, :keys}}`.
+  This is kept self-contained (a local `empty`/`use` pair) rather than routed
+  through `Std.Map`: parameterizing `Std.Map` to `Map(k, v)` means `keys`/`values`
+  now pin their element type from the *argument*, so they no longer exercise the
+  return-only-from-expected path this regression guards.
   """
   use ExUnit.Case, async: true
 
@@ -15,8 +17,8 @@ defmodule Cure.Elab.NestedReturnPolyInferenceTest do
 
   @repro """
   mod P
-    use Std.Map
-    fn to_list(set: Map) -> List(t) = Std.Map.keys(set)
+    fn empty() -> List(t) = []
+    fn use() -> List(Int) = empty()
   end
   """
 

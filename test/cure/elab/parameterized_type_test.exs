@@ -72,7 +72,9 @@ defmodule Cure.Elab.ParameterizedTypeTest do
     {:ok, env} = Program.elaborate(src)
     {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.PEmpty", functions: [:empty, :g])
 
-    assert apply(mod, :empty, []) == :None
+    # `None` erases to the OTP-lowercase tag `:none` (the otp_tag rule applies
+    # to the constructor name wherever it is declared, not just in the stdlib).
+    assert apply(mod, :empty, []) == :none
     assert apply(mod, :g, []) == :Z
   end
 

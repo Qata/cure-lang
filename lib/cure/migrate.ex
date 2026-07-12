@@ -103,7 +103,7 @@ defmodule Cure.Migrate do
     file = Keyword.get(opts, :file, "nofile")
     rule_set = Keyword.get(opts, :rules, rules())
     apply_mode = Keyword.get(opts, :apply, :all)
-    ctx = build_ctx(ast)
+    ctx = build_ctx(ast, file)
 
     {ast, warns, rev_rewriters} =
       Enum.reduce(rule_set, {ast, [], []}, fn %Rule{} = rule, {acc_ast, warns, rewriters} ->
@@ -313,29 +313,44 @@ defmodule Cure.Migrate do
   @doc """
   Build the per-file context consulted by `:needs_resolution` rules: the set of
   type names (as strings) in scope for `ast`. Seeded with Cure's built-in
-  primitive type names — derived from `Cure.Types.Env`, never hardcoded — and
+  primitive type names (`@builtin_type_names`, owned by the lint) — and
   unioned with the type names this file declares (structs, enums, type aliases,
-  and indexed families).
+  and indexed families) and those it imports.
+
+  `file` is the consuming source's path; it is needed to resolve USER-module
+  imports (a `use MyApp.Foo` has no path convention — see `imported_names/2` —
+  so the only handle is a sibling `.cure` file next to `file`). Callers with no
+  path may use the arity-1 form, which resolves only `Std.*` + auto-prelude
+  imports (a user import then contributes nothing rather than crashing).
   """
-  @spec build_ctx(Rule.ast()) :: MapSet.t()
-  def build_ctx(ast) do
-    MapSet.union(builtin_type_names(), declared_type_names(ast))
+  @spec build_ctx(Rule.ast(), Path.t()) :: MapSet.t()
+  def build_ctx(ast, file \\ "nofile") do
+    builtin_type_names()
+    |> MapSet.union(declared_type_names(ast))
+    |> MapSet.union(declared_ctor_names(ast))
+    |> MapSet.union(imported_names(ast, file))
   end
 
-  # `Type` — the kind universe / sort — is a built-in name that lives in every
-  # scope but is not an entry in `Cure.Types.Env`'s `types` map (it classifies
-  # types rather than being one). It appears pervasively in dependent signatures
-  # (`{a: Type}`, `(a) -> Type`), and there is no reading of it as a user type
-  # variable, so it is seeded here explicitly to keep the uppercase-type-var rule
-  # from downgrading it to a free `type`.
-  @builtin_sorts ["Type"]
+  # The built-in type names in scope for every module — real Cure types (never
+  # free type variables) that must NOT be lowercased. The lint owns this surface
+  # vocabulary directly (the classic type-checker Env, which formerly supplied
+  # the first group, was deleted in the #18 rip-out). Group 1 = the surface
+  # primitive types (`Int`/`Float`/`String`/`Bool`/`Atom`/`Unit`/`Any`/`Never`/
+  # `Char`). Group 2: `Type` is the universe kind (`fn F(a: Type) -> Type`);
+  # `Pid`/`Ref`/`Binary`/`Bitstring` are BEAM primitive types; `Map`/`Tuple` are
+  # built-in containers; `Nat` is the Int-tier foundational numeric (dedicated
+  # kernel literal forms). Without these, container/kind signatures warn
+  # spuriously and `cure migrate --all` would corrupt them (`Pid` -> `pid`). Data
+  # *constructors* of imported inductives (e.g. `Std.Nat`'s `Z`/`S`) are a
+  # different category — resolved per-import (`imported_names/2`), not here.
+  @builtin_type_names ~w(Int Float String Bool Atom Unit Any Never Char
+                         Type Pid Ref Binary Bitstring Map Tuple Nat)
 
-  defp builtin_type_names do
-    (Cure.Types.Env.new().types |> Map.keys()) |> Enum.concat(@builtin_sorts) |> MapSet.new()
-  end
+  defp builtin_type_names, do: MapSet.new(@builtin_type_names)
 
-  # Every type name this file introduces or imports, gathered by a full pre-order walk:
-  #   * `{:container, [container_type: :struct | :enum | :opaque | :primitive, name: n], _}`
+  # Every type name this file introduces, gathered by a full pre-order walk:
+  #   * `{:container, [container_type: :struct | :enum | :opaque | :primitive, name: n], _}` —
+  #     records, enums, and bodyless opaque handles (`opaque type GCounter`)
   #   * `{:type_annotation, [name: n], _}` — `typealias N = …`
   #   * `{:indexed_type, [name: n], _}` — indexed families (defensive; carries :name)
   #   * `{:import, [items: [...], alias: a], _}` — `use Mod.{A, B}` / `use Mod as A`
@@ -346,11 +361,6 @@ defmodule Cure.Migrate do
   defp collect_type_names({:container, meta, ch}, acc) when is_list(ch) do
     acc =
       case Keyword.get(meta, :container_type) do
-        # `:opaque` (`opaque type Name`) and `:primitive` (`primitive Name`) each
-        # introduce a nominal type name just as `:struct`/`:enum` do; omitting them
-        # let UppercaseTypeVar misread the declared name as a free type variable and
-        # lowercase it (`Word` → `word`, `Handle` → `handle`) — a semantic corruption
-        # that the reprint-only verify does not catch.
         t when t in [:struct, :enum, :opaque, :primitive] -> maybe_name(meta, acc)
         _ -> acc
       end
@@ -397,6 +407,189 @@ defmodule Cure.Migrate do
     case Keyword.get(meta, :name) do
       n when is_binary(n) -> [n | acc]
       _ -> acc
+    end
+  end
+
+  # Every data-constructor name this file introduces. A constructor spelled in an
+  # index/argument position (`Optic(s, a, LensKind)`) parses as a bare
+  # `{:variable}` node indistinguishable from a free type var, so its name must
+  # be in `ctx` too — otherwise the rule lowercases it (`LensKind` -> `lenskind`),
+  # corrupting the family index. Three surface spellings carry constructors:
+  #   * `{:variable, [variant: true], name}` — nullary enum variant (`LensKind`)
+  #   * `{:function_def, [variant: true, name: n], _}` — field-carrying variant
+  #     (`MkLensRep(a, (a) -> s)`), a constructor decl reusing the fn-def node
+  #   * `{:gadt_ctor, [name: n], _}` — an `indices`-form GADT constructor
+  defp declared_ctor_names(ast) do
+    ast |> collect_ctor_names([]) |> MapSet.new()
+  end
+
+  defp collect_ctor_names({:variable, meta, name}, acc) when is_binary(name) do
+    if Keyword.get(meta, :variant) == true, do: [name | acc], else: acc
+  end
+
+  defp collect_ctor_names({:function_def, meta, ch}, acc) when is_list(ch) do
+    acc = if Keyword.get(meta, :variant) == true, do: maybe_name(meta, acc), else: acc
+    Enum.reduce(ch, acc, &collect_ctor_names/2)
+  end
+
+  defp collect_ctor_names({:gadt_ctor, meta, ch}, acc) when is_list(ch) do
+    Enum.reduce(ch, maybe_name(meta, acc), &collect_ctor_names/2)
+  end
+
+  defp collect_ctor_names({_k, _meta, ch}, acc) when is_list(ch) do
+    Enum.reduce(ch, acc, &collect_ctor_names/2)
+  end
+
+  defp collect_ctor_names({_k, _meta, _name, inner}, acc), do: collect_ctor_names(inner, acc)
+  defp collect_ctor_names(l, acc) when is_list(l), do: Enum.reduce(l, acc, &collect_ctor_names/2)
+  defp collect_ctor_names(_other, acc), do: acc
+
+  # The type + constructor names each `use`d module exports, resolved by reading
+  # the imported module's source and collecting its declarations (the same walk
+  # used for this file). An imported type or constructor spelled in a signature
+  # (`Vector(a, Z)` — `Z` from `Std.Nat`) is a real name, not a free type
+  # variable, but only the imported module knows it. DIRECT imports only (no
+  # transitive walk): a name used in this file's signatures is either declared
+  # here, a builtin, or directly imported. Best-effort and FAIL-OPEN — an
+  # unresolvable import (non-stdlib module, missing source dir, read/parse
+  # failure) contributes nothing rather than crashing the warn-only lint.
+  # The stdlib modules the elaborator auto-imports into EVERY module with no
+  # `use` statement (`Cure.Elab.Program.@auto_prelude`). A file like `proof.cure`
+  # references `Nat`/`Z`/`S` with no import node at all — it gets them from this
+  # implicit prelude — so their exported names must seed the ctx exactly as a
+  # direct `use` would, or the auto-imported `Z` is misread as a free type var.
+  # Duplicated (not imported) to keep the warn-only lint decoupled from the
+  # elaborator's private attr; keep in sync with program.ex if the prelude grows.
+  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary Std.Bounded)
+
+  defp imported_names(ast, file) do
+    sources = Enum.uniq(collect_import_sources(ast, []) ++ @auto_prelude)
+    # User (non-`Std.*`) imports have no path convention — Cure resolves them by
+    # co-compilation, not by name→path — so they cannot be read the way a stdlib
+    # source is. The only handle a single-file lint has is the sibling `.cure`
+    # files next to `file`; build a mod-name→exports map from them once, up front.
+    sibling_exports = sibling_module_exports(file, sources)
+
+    Enum.reduce(sources, MapSet.new(), fn source, acc ->
+      names =
+        case stdlib_source_path(source) do
+          {:ok, path} -> exported_names_of_file(path)
+          :error -> {:ok, Map.get(sibling_exports, source, MapSet.new())}
+        end
+
+      case names do
+        {:ok, ns} -> MapSet.union(acc, ns)
+        :error -> acc
+      end
+    end)
+  end
+
+  defp collect_import_sources({:import, meta, _}, acc) do
+    case Keyword.get(meta, :source) do
+      s when is_binary(s) -> [s | acc]
+      _ -> acc
+    end
+  end
+
+  defp collect_import_sources({_k, _meta, ch}, acc) when is_list(ch),
+    do: Enum.reduce(ch, acc, &collect_import_sources/2)
+
+  defp collect_import_sources({_k, _meta, _name, inner}, acc),
+    do: collect_import_sources(inner, acc)
+
+  defp collect_import_sources(l, acc) when is_list(l),
+    do: Enum.reduce(l, acc, &collect_import_sources/2)
+
+  defp collect_import_sources(_other, acc), do: acc
+
+  # The type + constructor names a `.cure` source at `path` exports. Fail-open:
+  # any read/lex/parse failure yields `:error` and contributes nothing.
+  defp exported_names_of_file(path) do
+    with {:ok, src} <- File.read(path),
+         {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
+         {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false) do
+      {:ok, MapSet.union(declared_type_names(ast), declared_ctor_names(ast))}
+    else
+      _ -> :error
+    end
+  end
+
+  # Resolve USER-module imports (`use MyApp.Foo`, i.e. any non-`Std.*` source)
+  # by scanning the consuming file's directory. Cure has no name→path convention
+  # for user modules — the real compiler resolves them by co-compiling all input
+  # files together, a registry this per-file lint does not have — so the only
+  # sound handle is the sibling `.cure` sources next to `file`. Each sibling is
+  # matched to an import by its declared `mod` NAME (robust to arbitrary
+  # filenames), and only the requested sources are kept. Returns a
+  # `mod-name-string => exported-names` map. Scans nothing (returns `%{}`) when
+  # there is no file path or no user import — so the pure-`Std` case pays zero
+  # directory I/O. Fail-open throughout.
+  defp sibling_module_exports(file, sources) do
+    user_sources =
+      sources
+      |> Enum.reject(&match?({:ok, _}, stdlib_source_path(&1)))
+      |> MapSet.new()
+
+    if file in [nil, "", "nofile"] or MapSet.size(user_sources) == 0 do
+      %{}
+    else
+      Path.dirname(file)
+      |> Path.join("*.cure")
+      |> Path.wildcard()
+      |> Enum.reduce(%{}, fn path, acc ->
+        with {:ok, name} <- module_name_of_file(path),
+             true <- MapSet.member?(user_sources, name),
+             {:ok, names} <- exported_names_of_file(path) do
+          Map.put(acc, name, names)
+        else
+          _ -> acc
+        end
+      end)
+    end
+  end
+
+  # The declared `mod`/`proof`-container name of the source at `path`, as a
+  # string, mirroring `Cure.Elab.Program.find_module_name/1`. Fail-open.
+  defp module_name_of_file(path) do
+    with {:ok, src} <- File.read(path),
+         {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
+         {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false),
+         name when is_binary(name) <- module_name(ast) do
+      {:ok, name}
+    else
+      _ -> :error
+    end
+  end
+
+  defp module_name({:container, meta, _body}) when is_list(meta) do
+    if Keyword.get(meta, :container_type) in [:module, :proof],
+      do: Keyword.get(meta, :name)
+  end
+
+  defp module_name({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &module_name/1)
+
+  defp module_name(list) when is_list(list),
+    do: Enum.find_value(list, &module_name/1)
+
+  defp module_name(_other), do: nil
+
+  # Resolve a `Std.<Name>` import source to its `.cure` file, searching the same
+  # stdlib source directories the elaborator uses (`import_source_path/1`). Only
+  # `Std.*` is handled — a bare/user module resolves to `:error` and is skipped.
+  defp stdlib_source_path(source) do
+    case String.split(source, ".") do
+      ["Std", name] ->
+        Cure.Stdlib.Paths.source_dirs()
+        |> Enum.map(&Path.join(&1, String.downcase(name) <> ".cure"))
+        |> Enum.find(&File.exists?/1)
+        |> case do
+          nil -> :error
+          path -> {:ok, path}
+        end
+
+      _ ->
+        :error
     end
   end
 end

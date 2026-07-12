@@ -1,4 +1,7 @@
 mod Destructuring
+  use Std.String
+  use Std.Semigroup
+
   # ---------------------------------------------------------------------------
   # Deep destructuring in `match` -- v0.18.0
   #

@@ -27,7 +27,7 @@ defmodule Cure.Stdlib.NonEmptyTest do
   end
 
   test "from_list on the empty list is None" do
-    assert @ne.from_list([]) == {:none}
+    assert @ne.from_list([]) == :none
   end
 
   test "push prepends a new head" do

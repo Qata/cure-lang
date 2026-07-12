@@ -37,6 +37,11 @@ defmodule Cure.Core.Serialize do
   defp enc({:binary_type}), do: "(binary-type)"
   defp enc({:atom_type}), do: "(atom-type)"
   defp enc({:atom_lit, a}), do: ["(atom ", sym(a), ")"]
+  # Inert effect nodes: preserve shape; children encode recursively. `k` is an
+  # ordinary term (a `{:lam, …}`), so no special binder handling.
+  defp enc({:effect_type, t}), do: node("effect-type", [t])
+  defp enc({:effect_pure, a}), do: node("effect-pure", [a])
+  defp enc({:effect_bind, e, k}), do: node("effect-bind", [e, k])
   defp enc({:int_lit, n}), do: ["(int ", Integer.to_string(n), ")"]
   defp enc({:nat_lit, n}), do: ["(nat ", Integer.to_string(n), ")"]
   defp enc({:bounded_lit, n}), do: ["(bounded ", Integer.to_string(n), ")"]
@@ -230,6 +235,10 @@ defmodule Cure.Core.Serialize do
       {:ok, {:case, cs, cm, cbs}}
     end
   end
+
+  defp build_node("effect-type", [t]), do: with({:ok, ct} <- build(t), do: {:ok, {:effect_type, ct}})
+  defp build_node("effect-pure", [a]), do: with({:ok, ca} <- build(a), do: {:ok, {:effect_pure, ca}})
+  defp build_node("effect-bind", [e, k]), do: binary(:effect_bind, e, k)
 
   defp build_node(_tag, _args), do: {:error, :unknown_node}
 

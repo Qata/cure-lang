@@ -30,6 +30,7 @@ defmodule Antigen.Assays.KernelLaw do
   def run(%Challenge{assay: "kernel/beta_subst", payload: p}), do: beta_subst(p)
   def run(%Challenge{assay: "kernel/zeta_subst", payload: p}), do: zeta_subst(p)
   def run(%Challenge{assay: "kernel/grade_conv", payload: p}), do: grade_conv(p)
+  def run(%Challenge{assay: "kernel/effect_inert", payload: p}), do: effect_inert(p)
   def run(%Challenge{assay: "elab/shift_agrees", payload: p}), do: shift_agrees(p.term)
 
   defp ctx_of(p), do: SigMenu.rebuild_context(SigMenu.env_of(p.sig), p.ctx)
@@ -269,6 +270,92 @@ defmodule Antigen.Assays.KernelLaw do
       end)
     end
   end
+
+  # ── 3g. `Effect` inertness invariance ──────────────────────────────────────
+  #
+  # `Effect`/`pure`/`bind` are an INERT uninterpreted signature (effect-type-
+  # former design §3.2, §9). Two obligations, both structural:
+  #
+  #   (a) inertness — `nf(t)` preserves the effect SKELETON (the arrangement and
+  #       nesting of `effect_type`/`effect_pure`/`effect_bind` nodes). nf may still
+  #       reduce ordinary *sub*terms — `pure((λx.x) 3)` normalizes its payload to
+  #       `pure(3)` — so the comparison is on the skeleton (payloads collapsed to a
+  #       hole), not the whole term. A monad law or a commuting conversion would
+  #       rearrange that skeleton; nothing else can.
+  #
+  #   (b) left identity is DEFINITIONALLY FALSE — for `bind(pure(a), k)`, neither
+  #       `k(a)` (`{:app, k, a}`, which β-reduces to `k`'s body) nor `pure(a)` is
+  #       convertible with it. This is the equation whose accidental introduction
+  #       into `Eval`/`Conv`/`Normalise` this antibody exists to catch.
+  #
+  # Reflexivity is checked first (as in `grade_conv`) so a `Conv` that rejected
+  # everything cannot make (b) pass vacuously.
+  defp effect_inert(%{term: t} = p) do
+    ctx = ctx_of(p)
+    env = Context.env(ctx)
+    depth = Context.length(ctx)
+    sig = SigMenu.env_of(p.sig)
+
+    with :ok <- effect_reflexive(t, env, depth, sig),
+         :ok <- effect_nf_preserves_skeleton(ctx, t),
+         do: effect_left_identity_distinct(t, env, depth, sig)
+  end
+
+  defp effect_reflexive(t, env, depth, sig) do
+    if Conv.conv?(t, t, env, depth, sig),
+      do: :ok,
+      else: {:violation, {:effect_not_reflexive, t}}
+  end
+
+  defp effect_nf_preserves_skeleton(ctx, t) do
+    case Normalise.nf(ctx, t, fuel: TermAssay.assay_fuel()) do
+      :fuel_exhausted ->
+        :ok
+
+      nf ->
+        before = effect_skeleton(t)
+        aft = effect_skeleton(nf)
+
+        if before == aft do
+          :ok
+        else
+          {:violation,
+           {:effect_structure_changed, %{term: t, nf: nf, skeleton_before: before, skeleton_after: aft}}}
+        end
+    end
+  end
+
+  # `bind(pure(a), k)` must be convertible with NEITHER `k(a)` nor `pure(a)`.
+  # Any other effect shape has no left-identity obligation — vacuously :ok.
+  defp effect_left_identity_distinct({:effect_bind, {:effect_pure, a}, {:lam, _g, _dom, _body} = k}, env, depth, sig) do
+    t = {:effect_bind, {:effect_pure, a}, k}
+    k_of_a = {:app, k, a}
+    pure_a = {:effect_pure, a}
+
+    cond do
+      Conv.conv?(t, k_of_a, env, depth, sig) ->
+        {:violation, {:effect_left_identity_leaked, %{term: t, k_of_a: k_of_a}}}
+
+      Conv.conv?(t, pure_a, env, depth, sig) ->
+        {:violation, {:effect_bind_pure_collapsed, %{term: t, pure_a: pure_a}}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp effect_left_identity_distinct(_t, _env, _depth, _sig), do: :ok
+
+  # The effect skeleton: keep every `effect_type`/`effect_pure`/`effect_bind`
+  # node and the `λ` binders that carry `k`, but collapse every maximal
+  # non-effect subterm (payloads, domains, redexes) to `:hole`. Two terms have
+  # the same skeleton iff they arrange their effect nodes identically, regardless
+  # of how their ordinary subterms normalize.
+  defp effect_skeleton({:effect_type, t}), do: {:effect_type, effect_skeleton(t)}
+  defp effect_skeleton({:effect_pure, a}), do: {:effect_pure, effect_skeleton(a)}
+  defp effect_skeleton({:effect_bind, e, k}), do: {:effect_bind, effect_skeleton(e), effect_skeleton(k)}
+  defp effect_skeleton({:lam, _g, dom, body}), do: {:lam, effect_skeleton(dom), effect_skeleton(body)}
+  defp effect_skeleton(_leaf), do: :hole
 
   # (a) β-reduction ≡ substitution. Normalized under the same fuel so a divergent
   # (fuel-exhausting) case abstains rather than false-positives.

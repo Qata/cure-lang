@@ -212,16 +212,10 @@ defmodule Cure.REPLTest do
       assert stdout =~ "type Color"
     end
 
-    test ":t reports the real return type for a session function" do
-      state =
-        REPL.__new_state__()
-        |> submit("fn add1(a: Int, b: Int) -> Int = a + b")
-
-      {_state, stdout, _stderr} = submit_capture(state, ":t add1(1, 2)")
-
-      assert stdout =~ "add1(1, 2) : Int"
-      refute stdout =~ ": Any"
-    end
+    # The `:t` command relied on classic expression-level type inference
+    # (`Cure.Types.Checker.infer_expr/2`), removed with the pathway rip-out (#18).
+    # The dependent pipeline has no surface type-renderer, so the command — and its
+    # test — are gone (mirrors the dropped `: () -> T` suffix on `:let`).
   end
 
   describe "bare `use` sugar" do
@@ -288,10 +282,10 @@ defmodule Cure.REPLTest do
       {state, stdout, _stderr} =
         submit_capture(REPL.__new_state__(), ":let answer = 42")
 
-      assert [%{key: {:fn, "answer", 0, :public}, source: "fn answer() -> Any = 42"}] =
+      assert [%{key: {:fn, "answer", 0, :public}, source: "fn answer() = 42"}] =
                state.defs
 
-      assert stdout =~ "pinned answer/0 : () -> Int"
+      assert stdout =~ "pinned answer/0"
       assert function_exported?(Session.module_atom(), :answer, 0)
       # `apply/3` keeps the dynamic call off the compiler's radar so it does
       # not warn about `:"Cure.Repl.Session"` (which is defined at runtime).
@@ -317,7 +311,7 @@ defmodule Cure.REPLTest do
 
       assert stdout =~ "redefined x/0"
 
-      assert [%{key: {:fn, "x", 0, :public}, source: "fn x() -> Any = 99"}] = state.defs
+      assert [%{key: {:fn, "x", 0, :public}, source: "fn x() = 99"}] = state.defs
 
       {_state, stdout, _stderr} = submit_capture(state, "x()")
       assert stdout =~ "=> 99"
@@ -403,7 +397,7 @@ defmodule Cure.REPLTest do
 
     test "a multi-line editor buffer evaluates the whole body, not just the first line" do
       # Regression test: the old evaluator spliced the source inline after
-      # `fn main() -> Any = `, which left every line past the first at
+      # `fn main() = `, which left every line past the first at
       # column 0 -- siblings of `mod` instead of body statements of
       # `main/0`. Indenting the body under `main/0` lets the parser read
       # the whole thing as a block, so the REPL prints the result of the

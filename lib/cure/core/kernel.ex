@@ -166,6 +166,47 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # -- inert effects (design 2026-07-09 §3.1) ---------------------------------
+  #
+  # `Effect : Type ℓ → Type ℓ` — level-preserving formation. `t` must be a type;
+  # `Effect(t)` lives in the same universe. No reduction is ever attached to any
+  # of these nodes: the kernel TYPES them, `Conv`/`Normalise` compare them by
+  # structural congruence, and nothing else.
+  def infer(ctx, {:effect_type, t}) do
+    with {:ok, level} <- infer_sort(ctx, t) do
+      {:ok, {:vtype, level}}
+    end
+  end
+
+  # `pure(a) : Effect(A)` where `a : A`. Inference synthesises `A` from `a`.
+  def infer(ctx, {:effect_pure, a}) do
+    with {:ok, a_type} <- infer(ctx, a) do
+      {:ok, {:veffect_type, a_type}}
+    end
+  end
+
+  # `bind(e, k) : Effect(B)` for `e : Effect(A)` and `k : A -> Effect(B)`
+  # (NON-dependent in v1, matching Lean's `Bind.bind`). Infer `e`, whnf its type
+  # to `Effect(A)`; infer `k`, whnf to a `Π A -> Effect(B)`, require its domain
+  # convertible with `A`, then read `B` off the codomain (instantiated at a fresh
+  # neutral — non-dependent, so `B` does not mention it). The `bind` node itself
+  # binds nothing and is never reduced.
+  def infer(ctx, {:effect_bind, e, k}) do
+    sig = Context.signature(ctx)
+    depth = Context.length(ctx)
+
+    with {:ok, e_type} <- infer(ctx, e),
+         {:ok, a_val} <- ensure_effect(Normalise.whnf_value(e_type, sig), :effect_bind_not_effect),
+         {:ok, k_type} <- infer(ctx, k),
+         {:ok, kdom, kcod_closure} <- ensure_pi(Normalise.whnf_value(k_type, sig)),
+         :ok <- ensure_conv(kdom, a_val, depth, sig, :effect_bind_domain_mismatch),
+         cod_value = Eval.apply_closure(kcod_closure, {:vneutral, {:nvar, depth}}),
+         {:ok, b_val} <-
+           ensure_effect(Normalise.whnf_value(cod_value, sig), :effect_bind_cont_not_effect) do
+      {:ok, {:veffect_type, b_val}}
+    end
+  end
+
   def infer(ctx, {:data, name, params, indices}) do
     case Inductive.get_family(Context.signature(ctx), name) do
       nil ->
@@ -366,6 +407,47 @@ defmodule Cure.Core.Kernel do
 
       other ->
         {:error, {:conversion_failure, {:bounded_lit, k}, Quote.reify(other, depth, sig)}}
+    end
+  end
+
+  # Checking-mode `pure`: when the goal whnf's to `Effect(G)`, push `G` into `a`
+  # (so a check-only `a` is admitted, mirroring the `let`/`ctor` clauses). A goal
+  # that is not an `Effect(_)` falls to the infer-then-convert path.
+  def check(ctx, {:effect_pure, a}, expected) do
+    case Normalise.whnf_value(expected, Context.signature(ctx)) do
+      {:veffect_type, g} -> check(ctx, a, g)
+      _ -> check_via_infer(ctx, {:effect_pure, a}, expected)
+    end
+  end
+
+  # Checking-mode `bind` against goal `Effect(B)`: INFER the bind and convert its
+  # inferred `Effect(B')` against the goal. Inference reads the continuation's
+  # type via `ensure_pi`, which takes the Π's domain/codomain and IGNORES its
+  # grade — so a continuation of ANY multiplicity (`λ (r :linear A). …`, the
+  # graded-effect-binder case) is accepted, and the grade is the relevance
+  # checker's obligation, not a fixed value the kernel invents here. (The prior
+  # cut built the Π with a hardcoded ω grade and rejected a graded continuation
+  # on `Conv`'s grade-equality.) A goal that is not `Effect(_)` falls to the
+  # generic infer-then-convert.
+  def check(ctx, {:effect_bind, _e, _k} = term, expected) do
+    sig = Context.signature(ctx)
+
+    case ensure_effect(Normalise.whnf_value(expected, sig), :effect_bind_goal_not_effect) do
+      {:ok, _b_goal} ->
+        with {:ok, inferred} <- infer(ctx, term),
+             :ok <-
+               ensure_conv(
+                 inferred,
+                 Normalise.whnf_value(expected, sig),
+                 Context.length(ctx),
+                 sig,
+                 :effect_bind_result_mismatch
+               ) do
+          :ok
+        end
+
+      {:error, _} ->
+        check_via_infer(ctx, term, expected)
     end
   end
 
@@ -654,6 +736,17 @@ defmodule Cure.Core.Kernel do
   # Require a type value to be a Π; return its domain value + codomain closure.
   defp ensure_pi({:vpi, _g, dom, cod_closure}), do: {:ok, dom, cod_closure}
   defp ensure_pi(_), do: {:error, :not_a_function}
+
+  # Require a (whnf'd) type value to be `Effect(A)`; return `A`. `tag` names the
+  # position so a `bind` failure reports which side was not an effect.
+  defp ensure_effect({:veffect_type, a}, _tag), do: {:ok, a}
+  defp ensure_effect(_value, tag), do: {:error, tag}
+
+  # Require two type values convertible; `:ok` or a tagged error. Grades/types
+  # are compared by `Conv` (definitional equality), never a preorder.
+  defp ensure_conv(v1, v2, depth, sig, tag) do
+    if Conv.conv_values?(v1, v2, depth, sig), do: :ok, else: {:error, tag}
+  end
 
   # Check `args` against a dependent telescope, threading each evaluated arg so
   # later telescope types can depend on earlier args. Returns the arg values

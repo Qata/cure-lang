@@ -42,7 +42,18 @@ defmodule Cure.Compiler.Parser do
 
   # -- Parser State ----------------------------------------------------------
 
-  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, edition: nil, seen_stmt?: false]
+  defstruct [
+    :tokens,
+    :file,
+    pos: 0,
+    errors: [],
+    emit_events: false,
+    edition: nil,
+    seen_stmt?: false,
+    active_macros: %{},
+    fresh_counter: 0,
+    literal_macros: %{}
+  ]
 
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
@@ -62,6 +73,15 @@ defmodule Cure.Compiler.Parser do
     :implementation,
     :proof
   ]
+
+  # Names parse_prefix/1's :identifier case already dispatches on via a
+  # hard-coded clause (the soft-keyword container forms sup/app/macro/with,
+  # plus the assert_type/rewrite builtins). A local macro can never claim one
+  # of these: the guarded macro-use clause is checked FIRST, so an unguarded
+  # collision would silently disable the existing form for the rest of the
+  # module with no error raised. Reserved names simply keep today's
+  # soft-keyword behavior; they are never macro-usable.
+  @reserved_macro_keywords ~w(assert_type rewrite sup app with macro)
 
   # Decorators that describe the *module*, not the declaration that follows.
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
@@ -93,8 +113,24 @@ defmodule Cure.Compiler.Parser do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, true)
     edition = Keyword.get(opts, :edition, Cure.Edition.current())
-    state = %__MODULE__{tokens: tokens, file: file, emit_events: emit?, edition: edition}
 
+    # Phase 1 (harvest): parse once with NO active macros, keep only the local
+    # macro grammars. Use-sites may mis-parse here; we discard everything but
+    # the {:macro_def, …} nodes and their (recovered) errors.
+    harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false, edition: edition}
+    {harvest_exprs, _harvest_state} = parse_program(harvest_state)
+    active = harvest_active_macros(harvest_exprs)
+    literal = harvest_literal_macros(harvest_exprs)
+
+    # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
+    state = %__MODULE__{
+      tokens: tokens,
+      file: file,
+      emit_events: emit?,
+      edition: edition,
+      active_macros: active,
+      literal_macros: literal
+    }
     {exprs, state} = parse_program(state)
 
     ast =
@@ -112,6 +148,363 @@ defmodule Cure.Compiler.Parser do
       errors -> {:error, Enum.reverse(errors)}
     end
   end
+
+  @doc """
+  Expand a macro example's captured use-site tokens through the macro's own
+  rules — the same expansion a real use-site gets (nested literal/`<fresh>`
+  expansion included). Used by MacroValidate to check `example … expands …`
+  pins (self-proving §5). Returns the expanded surface AST.
+  """
+  @spec expand_example([map()], [Token.t()]) :: ast()
+  def expand_example(rules, use_site_tokens) do
+    synthetic = [{:macro_def, [], rules}]
+    active = harvest_active_macros(synthetic)
+    literal = harvest_literal_macros(synthetic)
+
+    eof = %Token{type: :eof, value: nil, line: 0, col: 0}
+
+    state = %__MODULE__{
+      tokens: use_site_tokens ++ [eof],
+      file: "example",
+      emit_events: false,
+      active_macros: active,
+      literal_macros: literal
+    }
+
+    {ast, _state} = parse_expr(state, 0)
+    ast
+  end
+
+  # Collect every local macro rule, indexed by the rule's leading keyword, from
+  # a parsed top-level expr list. Descends into containers (a `macro` inside a
+  # `mod` is still a local macro of that module).
+  defp harvest_active_macros(exprs) do
+    exprs
+    |> collect_macro_defs()
+    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
+      Enum.reduce(rules, acc, fn
+        %{kind: :syntax, keyword: kw} = rule, acc2 when is_binary(kw) ->
+          Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
+
+        _rule, acc2 ->
+          acc2
+      end)
+    end)
+  end
+
+  # Sibling of harvest_active_macros for Tier-1 `literal` rules, keyed by their
+  # dispatch suffix. Malformed literal rules (no suffix) are skipped.
+  defp harvest_literal_macros(exprs) do
+    exprs
+    |> collect_macro_defs()
+    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
+      Enum.reduce(rules, acc, fn
+        %{kind: :literal, suffix: s} = rule, acc2 when is_binary(s) ->
+          Map.update(acc2, s, [rule], &(&1 ++ [rule]))
+
+        _rule, acc2 ->
+          acc2
+      end)
+    end)
+  end
+
+  defp collect_macro_defs(node) when is_list(node), do: Enum.flat_map(node, &collect_macro_defs/1)
+  defp collect_macro_defs({:macro_def, _, _} = m), do: [m]
+  defp collect_macro_defs({_t, _m, children}) when is_list(children), do: collect_macro_defs(children)
+  defp collect_macro_defs(_), do: []
+
+  # A use-site of an active macro keyword. Milestone-2 handles a single rule per
+  # keyword; the rule's segments are matched against the use-site tokens, binding
+  # holes, then substituted into the template. `progress` (segments consumed) is
+  # the syntax-parse "how far did we get" carried for maximal-failure selection
+  # once multiple rules per keyword arrive.
+  # After a number literal is read (state already past it), check whether the
+  # next token is a registered literal-rule suffix; if so, expand that rule with
+  # the number bound to its leading hole. Otherwise return the plain number.
+  defp maybe_literal_macro(state, num) do
+    case peek(state) do
+      %Token{type: :identifier, value: suffix} ->
+        case Map.fetch(state.literal_macros, suffix) do
+          {:ok, [rule | _]} -> expand_literal_rule(rule, num, state)
+          :error -> {num, state}
+        end
+
+      _ ->
+        {num, state}
+    end
+  end
+
+  # Bind the already-read number to the rule's leading hole, then match the
+  # remaining segments (the suffix, consumed here) and expand. Reuses
+  # match_segments/expand_rule so <fresh> + hole-subst + the soundness firewall
+  # all apply identically to keyword-triggered rules.
+  defp expand_literal_rule(rule, num, state) do
+    [{:hole, %{name: hole_name}} | rest] = rule.segments
+
+    case match_segments(state, rest, %{hole_name => num}, 1) do
+      {:ok, bindings, _progress, state} ->
+        expand_rule(rule, bindings, state)
+
+      {:error, _progress, state} ->
+        # Only reachable for an out-of-scope malformed literal rule with segments
+        # after the suffix; the suffix segment `match_segments` matched is already
+        # consumed here. T4 does not diagnose malformed literal rules (error-floor
+        # task); this branch exists only so expand_literal_rule is total.
+        {num, state}
+    end
+  end
+
+  defp parse_macro_use(state, keyword) do
+    [rule | _] = Map.fetch!(state.active_macros, keyword)
+    state = advance(state)  # consume the keyword token
+
+    case match_segments(state, rule.segments, %{}, 0) do
+      {:ok, bindings, _progress, state} ->
+        expand_rule(rule, bindings, state)
+
+      {:error, progress, state} ->
+        t = peek(state)
+
+        state =
+          add_error(
+            state,
+            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress),
+             macro_got_desc(t), t.line, t.col}
+          )
+
+        # Recover: yield the bare keyword variable so the outer parse continues.
+        {variable(%Cure.Compiler.Token{
+           type: :identifier,
+           value: keyword,
+           line: t.line,
+           col: t.col
+         }), state}
+    end
+  end
+
+  # Describe the segment a macro rule expected at the failed position, for the
+  # default mismatch diagnostic (SP1 §2 floor). A literal segment names the exact
+  # word; a hole names its declared kind; past the end means the use supplied
+  # tokens the rule did not call for.
+  #
+  # NOTE (reviewed): under today's match_segments/4, a {:hole, _} segment NEVER
+  # fails to match (it unconditionally parses an expr and binds it), so the only
+  # way parse_macro_use's single call site reaches this function is via a
+  # {:lit, w} mismatch. The {:hole_kind, k} and :nothing_more arms are
+  # defensive/forward-looking (for when match_segments gains hole-content
+  # validation, or T9's maximal-progress selection makes a hole-position failure
+  # possible) and are not reachable by any input today.
+  defp macro_expected_at(rule, progress) do
+    case Enum.at(rule.segments, progress) do
+      {:lit, w} -> {:literal, w}
+      {:hole, %{kind: k}} -> {:hole_kind, k}
+      _ -> :nothing_more
+    end
+  end
+
+  # A short human description of the token actually found at the mismatch.
+  #
+  # This is the single choke point for the "found `...`" clause, so its
+  # result is escaped for control characters (see escape_for_diagnostic/1)
+  # regardless of which case below produced it: a *content-bearing* token
+  # (string, char, ...) can carry a raw newline/tab in its decoded `value`
+  # just as easily as the structural tokens below carry one directly, and
+  # either would splice a raw control byte into format_diagnostic's
+  # single-line `| message` convention.
+  defp macro_got_desc(token), do: token |> macro_got_desc_raw() |> escape_for_diagnostic()
+
+  # Structural/whitespace tokens (:newline, :indent, :dedent) are named in
+  # words rather than falling through to their raw `value` (a literal "\n"
+  # byte, or a bare indentation-level integer): splicing either into the
+  # message reads as meaningless ("found `2`"), even once escaped. These are
+  # common mismatches (e.g. a macro keyword used bare, with nothing supplied
+  # before the line ends).
+  defp macro_got_desc_raw(%Token{type: :eof}), do: "end of input"
+  # The `nil` keyword lexes as %Token{type: nil, value: nil} (unlike every
+  # other keyword, which lexes as {:keyword, atom}) -- neither field carries
+  # displayable text, so without this clause it falls through to
+  # `to_string(nil)` (a literal "" empty string), rendering `found ``` .
+  defp macro_got_desc_raw(%Token{type: nil}), do: "nil"
+  defp macro_got_desc_raw(%Token{type: :newline}), do: "end of line"
+  defp macro_got_desc_raw(%Token{type: :indent}), do: "an indent"
+  defp macro_got_desc_raw(%Token{type: :dedent}), do: "a dedent"
+  # A :char token's value is the decoded Unicode codepoint (e.g. 97 for 'a'),
+  # not its source spelling -- render the character itself rather than the
+  # bare integer. Falls through to the generic clause (numeric render) for a
+  # codepoint outside the valid Unicode scalar range, so this can never raise.
+  defp macro_got_desc_raw(%Token{type: :char, value: v})
+       when is_integer(v) and (v in 0..0xD7FF or v in 0xE000..0x10FFFF),
+       do: "'#{<<v::utf8>>}'"
+
+  # Some tokens carry a STRUCTURED value that `to_string/1` cannot render and
+  # would raise on: a :regex value is `{body, flags}`, a :string_interpolation
+  # value is a list of parts. Name them by kind. The final `is_tuple/is_list`
+  # guard is a future-proof backstop for any other structured-value token.
+  defp macro_got_desc_raw(%Token{type: :regex}), do: "a regex literal"
+  defp macro_got_desc_raw(%Token{type: :string_interpolation}), do: "an interpolated string"
+  defp macro_got_desc_raw(%Token{value: v}) when is_tuple(v) or is_list(v), do: "a complex token"
+
+  defp macro_got_desc_raw(%Token{value: v}) when not is_nil(v), do: to_string(v)
+  defp macro_got_desc_raw(%Token{type: t}), do: to_string(t)
+
+  # Escape control characters that would otherwise corrupt format_diagnostic's
+  # single-line `| message` convention (e.g. a plain string literal's decoded
+  # value, or a char literal's decoded value, can carry a raw "\n"/"\t" from a
+  # source escape sequence such as "a\nb" or '\n').
+  defp escape_for_diagnostic(s) do
+    s
+    |> String.replace("\r\n", "\\n")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
+  end
+
+  # Walk a rule's segments against the use-site tokens. A `{:lit, w}` must match
+  # the next token's value; a `{:hole, %{name}}` binds `name` to a parsed
+  # expression. Returns `{:ok, bindings, progress, state}` or
+  # `{:error, progress, state}` (progress = segments consumed before the miss).
+  defp match_segments(state, [], bindings, progress), do: {:ok, bindings, progress, state}
+
+  defp match_segments(state, [{:lit, w} | rest], bindings, progress) do
+    if lit_token_matches?(peek(state), w) do
+      match_segments(advance(state), rest, bindings, progress + 1)
+    else
+      {:error, progress, state}
+    end
+  end
+
+  defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
+    {arg, state} = parse_expr(state, 0)
+    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+  end
+
+  # A literal segment matches a token whose text equals the segment word. Only
+  # scalar token values (binary/atom/number) have text; a structured value —
+  # a :regex is `{body, flags}`, a :string_interpolation is a list of parts —
+  # can never equal a literal word AND crashes `to_string/1`, so it simply does
+  # not match (falling to the mismatch path → the default diagnostic).
+  defp lit_token_matches?(%Token{value: v}, w) when is_binary(v), do: v == w
+  defp lit_token_matches?(%Token{value: v}, w) when is_atom(v) and not is_nil(v), do: to_string(v) == w
+  defp lit_token_matches?(%Token{value: v}, w) when is_number(v), do: to_string(v) == w
+  defp lit_token_matches?(_tok, _w), do: false
+
+  # Expand a rule: freshen its `<fresh Name>` markers to per-expansion gensyms
+  # BEFORE substituting holes (so use-site hole material is never freshened),
+  # then substitute the bound holes. Returns `{expanded_ast, state}` — the
+  # freshening counter threads back out to the caller.
+  defp expand_rule(rule, bindings, state) do
+    {freshened, state} = freshen(rule.template, state)
+    {subst_holes(freshened, bindings), state}
+  end
+
+  # Mint one deterministic gensym per distinct declared fresh name, then rewrite
+  # markers and plain references of those names. Counter lives in parser state so
+  # gensyms are stable within a build (design §5) and unique across use-sites.
+  defp freshen(template, state) do
+    names = collect_fresh_names(template) |> MapSet.to_list() |> Enum.sort()
+
+    {rename, state} =
+      Enum.reduce(names, {%{}, state}, fn n, {m, s} ->
+        {Map.put(m, n, "#{n}$#{s.fresh_counter}"), %{s | fresh_counter: s.fresh_counter + 1}}
+      end)
+
+    {apply_freshening(template, rename), state}
+  end
+
+  defp collect_fresh_names({:fresh_name, _meta, name}), do: MapSet.new([name])
+
+  defp collect_fresh_names({_t, meta, ch}) when is_list(ch) do
+    Enum.reduce(ch, collect_fresh_names_meta(meta), fn c, acc ->
+      MapSet.union(acc, collect_fresh_names(c))
+    end)
+  end
+
+  defp collect_fresh_names(_), do: MapSet.new()
+
+  # Fresh markers can hide in meta (e.g. a match-arm guard), same reason
+  # subst_holes walks meta. A meta VALUE can itself be a raw list of AST nodes
+  # rather than a single tuple (e.g. a `with`-rematch arm's `:parent_patterns`),
+  # so split on is_tuple/is_list exactly like subst_holes_meta_value.
+  defp collect_fresh_names_meta(meta) when is_list(meta) do
+    Enum.reduce(meta, MapSet.new(), fn
+      {_k, v}, acc -> MapSet.union(acc, collect_fresh_names_value(v))
+      _, acc -> acc
+    end)
+  end
+
+  defp collect_fresh_names_meta(_), do: MapSet.new()
+
+  defp collect_fresh_names_value(v) when is_tuple(v), do: collect_fresh_names(v)
+
+  defp collect_fresh_names_value(v) when is_list(v),
+    do: Enum.reduce(v, MapSet.new(), &MapSet.union(&2, collect_fresh_names_value(&1)))
+
+  defp collect_fresh_names_value(_), do: MapSet.new()
+
+  # Rewrite: a marker becomes a variable of its gensym; a plain variable whose
+  # name is a declared fresh name becomes its gensym; everything else recurses
+  # (children AND meta, mirroring subst_holes).
+  defp apply_freshening({:fresh_name, meta, name}, rename),
+    do: {:variable, meta, Map.get(rename, name, name)}
+
+  defp apply_freshening({:variable, meta, name} = v, rename) do
+    case Map.fetch(rename, name) do
+      {:ok, g} -> {:variable, meta, g}
+      :error -> v
+    end
+  end
+
+  defp apply_freshening({t, meta, ch}, rename) when is_list(ch),
+    do: {t, apply_freshening_meta(meta, rename), Enum.map(ch, &apply_freshening(&1, rename))}
+
+  defp apply_freshening(other, _rename), do: other
+
+  defp apply_freshening_meta(meta, rename) when is_list(meta) do
+    Enum.map(meta, fn
+      {k, v} -> {k, apply_freshening_value(v, rename)}
+      other -> other
+    end)
+  end
+
+  defp apply_freshening_meta(meta, _rename), do: meta
+
+  defp apply_freshening_value(v, rename) when is_tuple(v), do: apply_freshening(v, rename)
+
+  defp apply_freshening_value(v, rename) when is_list(v),
+    do: Enum.map(v, &apply_freshening_value(&1, rename))
+
+  defp apply_freshening_value(v, _rename), do: v
+
+  defp subst_holes({:variable, _meta, name} = v, bindings) do
+    case Map.fetch(bindings, name) do
+      {:ok, arg} -> arg
+      :error -> v
+    end
+  end
+
+  defp subst_holes({t, meta, children}, bindings) when is_list(children) do
+    {t, subst_holes_meta(meta, bindings), Enum.map(children, &subst_holes(&1, bindings))}
+  end
+
+  defp subst_holes(other, _bindings), do: other
+
+  # Not every child AST lives in a node's `children` list: `match_arm` stashes
+  # its `pattern`/`guard` in the node's `meta` keyword list instead. A hole
+  # referenced from one of those would otherwise survive expansion unbound.
+  # Walk meta's values too, substituting into anything AST-shaped and leaving
+  # plain data (lines/cols/names/flags) untouched.
+  defp subst_holes_meta(meta, bindings) when is_list(meta) do
+    Enum.map(meta, fn
+      {k, v} -> {k, subst_holes_meta_value(v, bindings)}
+      other -> other
+    end)
+  end
+
+  defp subst_holes_meta(meta, _bindings), do: meta
+
+  defp subst_holes_meta_value(v, bindings) when is_tuple(v), do: subst_holes(v, bindings)
+  defp subst_holes_meta_value(v, bindings) when is_list(v), do: Enum.map(v, &subst_holes_meta_value(&1, bindings))
+  defp subst_holes_meta_value(v, _bindings), do: v
 
   # -- Program (top-level sequence) ------------------------------------------
 
@@ -261,10 +654,10 @@ defmodule Cure.Compiler.Parser do
     case token.type do
       # Literals
       :integer ->
-        {literal(:integer, token), advance(state)}
+        maybe_literal_macro(advance(state), literal(:integer, token))
 
       :float ->
-        {literal(:float, token), advance(state)}
+        maybe_literal_macro(advance(state), literal(:float, token))
 
       :string ->
         {literal(:string, token), advance(state)}
@@ -294,6 +687,12 @@ defmodule Cure.Compiler.Parser do
       # Variables / identifiers
       :identifier ->
         case token.value do
+          # A use-site of a locally-defined macro keyword. Checked FIRST so a
+          # macro keyword wins, but guarded so non-macro identifiers are
+          # untouched. (Reserved soft-keyword names are excluded below.)
+          name when is_map_key(state.active_macros, name) and name not in @reserved_macro_keywords ->
+            parse_macro_use(state, name)
+
           "assert_type" ->
             parse_assert_type(state, token)
 
@@ -336,6 +735,18 @@ defmodule Cure.Compiler.Parser do
               parse_with_abs(state, token)
             else
               {variable(token), advance(state)}
+            end
+
+          # Soft keyword: `macro Name …` at statement-prefix position is the
+          # macro container. `macro` followed by anything other than an
+          # identifier stays a plain variable (non-breaking, like sup/app).
+          "macro" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier} ->
+                parse_macro_def(state)
+
+              _ ->
+                {variable(token), advance(state)}
             end
 
           _ ->
@@ -415,6 +826,24 @@ defmodule Cure.Compiler.Parser do
       # Indent starts a block
       :indent ->
         parse_block(state)
+
+      # `<fresh Name>` — a template hygiene marker minting a per-expansion
+      # gensym (design §5). Only this exact window is special; every other
+      # leading `<` keeps its previous unexpected-token error. Infix `<`
+      # (comparisons) never reaches this prefix clause.
+      :lt ->
+        case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3)} do
+          {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name},
+           %Token{type: :gt}} ->
+            node = {:fresh_name, [line: token.line, col: token.col], name}
+            state = state |> advance() |> advance() |> advance() |> advance()
+            {node, state}
+
+          _ ->
+            error = {:unexpected_token, token.type, token.line, token.col}
+            state = add_error(state, error)
+            {error_node(token), advance(state)}
+        end
 
       _ ->
         error = {:unexpected_token, token.type, token.line, token.col}
@@ -2087,6 +2516,21 @@ defmodule Cure.Compiler.Parser do
   # arguments (`Cons(h, t @ Cons(x, y))`), so as-patterns nest.
   defp maybe_wrap_as({:variable, vm, name}, state) do
     case peek(state) do
+      # A TYPED pattern: `n: Int`. Binds `name` at the annotated type — the
+      # elimination form for anonymous unions (`match x { n: Int -> … }`). The
+      # annotation may itself be a union (`rest: String | Bool`), which is why it
+      # goes through the `|`-aware parse_type_expr/1.
+      #
+      # `:colon` has no infix binding power, so parse_expr(state, 0) already stops
+      # cleanly here — this clause is purely additive.
+      #
+      # Brace-delimited record/map patterns are NOT covered: parse_map_pair/1's
+      # explicit key:value branch already claims `identifier :` inside braces.
+      %Token{type: :colon} ->
+        state = advance(state)
+        {type_ast, state} = parse_pattern_type(state)
+        {{:typed_pattern, vm, [name, type_ast]}, state}
+
       %Token{type: :at} ->
         state = advance(state)
         {inner, state} = parse_expr(state, 0)
@@ -2099,6 +2543,93 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp maybe_wrap_as(pattern, state), do: {pattern, state}
+
+  # The type annotation of a typed pattern (`n: Int`, `rest: String | Bool`).
+  #
+  # This is NOT `parse_type_expr/1`, and the difference is load-bearing. A match
+  # arm is `pattern -> body`, and `parse_match_arm_tail/2` expects that `->`. But
+  # `parse_type_arrow/1` is greedy: given `n: Int -> 1` it would read `Int -> 1` as
+  # a FUNCTION TYPE, swallow the arm's arrow, and parse the body `1` as a codomain.
+  # So a pattern annotation must not absorb a top-level `->`.
+  #
+  # Members are therefore parsed with `parse_type_atom/1` (`Name`, `Name(args)`,
+  # `(T)`), which never consumes an arrow — the same restricted type grammar GADT
+  # constructor signatures use. A function-typed annotation is consequently not
+  # expressible here; that is out of scope (union members must be ground types).
+  defp parse_pattern_type(state) do
+    {first, state} = parse_pattern_type_member(state)
+    {rest, state} = parse_pattern_type_members(state)
+
+    case rest do
+      [] -> {first, state}
+      _ -> {{:union_type, [], [first | rest]}, state}
+    end
+  end
+
+  defp parse_pattern_type_members(state) do
+    case peek(state) do
+      %Token{type: :bar} ->
+        state = advance(state) |> skip_newlines()
+        {member, state} = parse_pattern_type_member(state)
+        {rest, state} = parse_pattern_type_members(state)
+        {[member | rest], state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp parse_pattern_type_member(state) do
+    token = peek(state)
+
+    if literal_token?(token) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      # `parse_type_atom/1` alone stops at a bare `Name`/`Name(args)` and does not
+      # know about `.` — so a QUALIFIED member (`n: Std.Nat.Nat`) failed with a hard
+      # parse error (the `.` was left for `parse_match_arm_tail/2`, which expects
+      # `->` and got `:dot` instead), even though the exact same qualified name
+      # parses fine in ordinary parameter/return position via `parse_type_arrow/1`
+      # (`maybe_parse_type_projection/2`). Chain the SAME dot-projection logic here
+      # — deliberately NOT `maybe_parse_type_projection/2` itself, whose
+      # `Mod.Name(args)` branch also calls `maybe_parse_function_type/2` and would
+      # reintroduce exactly the arrow-swallowing hazard `parse_type_atom` was
+      # chosen to avoid (`n: Std.List.List(Int) -> 1` would otherwise absorb the
+      # arm's own `->` as a second application layer).
+      {atom, state} = parse_type_atom(state)
+      parse_pattern_type_projection(atom, state)
+    end
+  end
+
+  # As `maybe_parse_type_projection/2`, but stops at the qualified application —
+  # no `maybe_parse_function_type/2` call — so a pattern annotation never absorbs
+  # the arm's `->`. See `parse_pattern_type_member/1`.
+  defp parse_pattern_type_projection(inner, state) do
+    case peek(state) do
+      %Token{type: :dot} ->
+        state = advance(state)
+        attr_token = peek(state)
+        attr = to_string(attr_token.value)
+        state = advance(state)
+        node = {:attribute_access, [attribute: attr], [inner]}
+        parse_pattern_type_projection(node, state)
+
+      %Token{type: :lparen} ->
+        case qualified_type_name(inner) do
+          {:ok, name} ->
+            state = advance(state)
+            {params, state} = parse_type_atom_args(state)
+            state = expect(state, :rparen)
+            {{:function_call, [name: name, qualified: true], params}, state}
+
+          :error ->
+            {inner, state}
+        end
+
+      _ ->
+        {inner, state}
+    end
+  end
 
   # The tail of a match arm after its pattern has been parsed: optional `when`
   # guard, the `->`, and the body (or `impossible`). Factored out so with-clause
@@ -3282,9 +3813,15 @@ defmodule Cure.Compiler.Parser do
 
         {%Token{type: :lparen}, _} ->
           # A function-type (or grouped/tuple) alias RHS: `type Endo = (Nat) -> Nat`.
-          # The full type-expression parser handles the arrow; the result is a plain
-          # type alias (`:type_annotation`).
-          {rhs, state} = parse_type_expr(state)
+          # The arrow ladder handles the arrow; the result is a plain type alias
+          # (`:type_annotation`).
+          #
+          # `parse_type_arrow/1`, NOT `parse_type_expr/1`: this branch has no
+          # bar-continuation logic of its own, so a stray `|` here is a parse error
+          # today. Routing it through the `|`-aware entry point would silently start
+          # accepting `type Endo = (Nat) -> Nat | X` as a union-typed alias RHS — a
+          # semantics change to this branch. Keep the strict, conservative behaviour.
+          {rhs, state} = parse_type_arrow(state)
           meta = [name: name, line: token.line, col: token.col]
           meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
           {{:type_annotation, meta, [rhs]}, state}
@@ -3894,6 +4431,321 @@ defmodule Cure.Compiler.Parser do
   end
 
   # -- FSM  fsm Name with Payload{...} --------------------------------------
+
+  # -- macro container (SP1) --------------------------------------------------
+  # `macro Name` … indented `syntax`/`literal` rules. Soft-keyword; closes by
+  # dedent (no `end`). Mirrors parse_fsm/parse_fsm_block; emits {:macro_def, …}.
+  defp parse_macro_def(state) do
+    token = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    state = skip_macro_trivia(state)
+    {rules, state} = parse_macro_block(state)
+
+    meta = [name: name, line: token.line, col: token.col]
+    {{:macro_def, meta, rules}, state}
+  end
+
+  defp parse_macro_block(state) do
+    case peek(state) do
+      %Token{type: :indent} ->
+        state = advance(state)
+        {rules, state} = parse_macro_rules(state, [])
+        state = expect_dedent(state)
+        {rules, state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  # `##`/`###` doc-comments are ALWAYS emitted as `:doc_comment` tokens
+  # (independent of `preserve_comments`; see Lexer moduledoc), and plain `#`
+  # comments surface as `:line_comment` tokens whenever the caller sets
+  # `preserve_comments: true` (e.g. the source formatter). Neither is captured
+  # as a rule-attached AST node in this milestone — they are trivia here — but
+  # they MUST be skipped rather than mistaken for the end of the macro's
+  # indented block (would silently empty it) or for a malformed rule line
+  # (would raise a spurious :expected/:syntax_rule error).
+  defp skip_macro_trivia(state) do
+    case peek(state) do
+      %Token{type: :newline} -> skip_macro_trivia(advance(state))
+      %Token{type: :doc_comment} -> skip_macro_trivia(advance(state))
+      %Token{type: :line_comment} -> skip_macro_trivia(advance(state))
+      _ -> state
+    end
+  end
+
+  defp parse_macro_rules(state, acc) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :identifier, value: "syntax"} ->
+        {rule, state} = parse_macro_rule(state)
+        parse_macro_rules(state, [rule | acc])
+
+      %Token{type: :identifier, value: "literal"} ->
+        {rule, state} = parse_literal_rule(state)
+        parse_macro_rules(state, [rule | acc])
+
+      %Token{type: :identifier, value: "explain"} ->
+        {entry, state} = parse_explain_block(state)
+        parse_macro_rules(state, [entry | acc])
+
+      other ->
+        state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
+        # Recover: skip a token so one bad line does not eat the block.
+        parse_macro_rules(advance(state), acc)
+    end
+  end
+
+  defp parse_macro_rule(state) do
+    kw_token = peek(state)
+    state = advance(state)
+
+    keyword_token = peek(state)
+    keyword = to_string(keyword_token.value)
+    state = advance(state)
+
+    {segments, state} = parse_rule_segments(state, [])
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "becomes"} -> advance(state)
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+      end
+
+    {template, state} = parse_expr(state, 0)
+    {examples, state} = parse_rule_examples(state)
+
+    rule = %{
+      kind: :syntax,
+      keyword: keyword,
+      segments: segments,
+      template: template,
+      examples: examples,
+      progress: nil,
+      line: kw_token.line
+    }
+
+    {rule, state}
+  end
+
+  # After a syntax rule's template, an OPTIONAL indented block of `example …`
+  # lines (self-proving §5). Consumes the nested indent/dedent so the macro-body
+  # loop stays at the rule level. Returns [] when no example block follows.
+  defp parse_rule_examples(state) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        state = advance(state)
+        {examples, state} = parse_example_lines(state, [])
+        state = expect_dedent(state)
+        {examples, state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp parse_example_lines(state, acc) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :identifier, value: "example"} ->
+        {ex, state} = parse_one_example(state)
+        parse_example_lines(state, [ex | acc])
+
+      other ->
+        state = add_error(state, {:expected, :example, :got, other.type, other.line, other.col})
+        # Recover: skip one token so a bad line does not eat the block.
+        parse_example_lines(advance(state), acc)
+    end
+  end
+
+  # `example <use-site tokens…> expands <expected>` where <expected> is either
+  # `: <Type>` (a type-only pin, §5.2) or an expansion expression. The use-site
+  # is captured as raw tokens — it names the macro's own keyword and cannot be
+  # expanded at macro-def parse time; slice 2b feeds these tokens through the
+  # rule to check the expansion.
+  defp parse_one_example(state) do
+    kw = peek(state)
+    state = advance(state)
+    {use_site, state} = collect_until_expands(state, [])
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "expands"} -> advance(state)
+        t -> add_error(state, {:expected, :expands, :got, t.type, t.line, t.col})
+      end
+
+    {expected, state} =
+      case peek(state) do
+        %Token{type: :colon} ->
+          {ty, state} = parse_expr(advance(state), 0)
+          {{:type, ty}, state}
+
+        _ ->
+          {ast, state} = parse_expr(state, 0)
+          {{:expansion, ast}, state}
+      end
+
+    {%{use_site: Enum.reverse(use_site), expected: expected, line: kw.line}, state}
+  end
+
+  # Collect the filled use-site tokens up to the `expands` keyword (or end of
+  # line). Guards on :newline/:dedent/:eof so a missing `expands` cannot run off
+  # the block.
+  defp collect_until_expands(state, acc) do
+    case peek(state) do
+      %Token{type: :identifier, value: "expands"} -> {acc, state}
+      %Token{type: type} when type in [:newline, :dedent, :eof] -> {acc, state}
+      tok -> collect_until_expands(advance(state), [tok | acc])
+    end
+  end
+
+  # `literal <n: Number> ms becomes <template>` — a Tier-1 units rule (base
+  # §111). Unlike `syntax`, there is NO leading keyword; the rule is triggered
+  # at a use-site by a NUMBER followed by the suffix (Task 2). Segments reuse
+  # parse_rule_segments (a leading number-hole + a `{:lit, suffix}`).
+  defp parse_literal_rule(state) do
+    kw_token = peek(state)
+    state = advance(state)
+
+    {segments, state} = parse_rule_segments(state, [])
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "becomes"} -> advance(state)
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+      end
+
+    {template, state} = parse_expr(state, 0)
+
+    rule = %{
+      kind: :literal,
+      keyword: nil,
+      segments: segments,
+      suffix: literal_suffix(segments),
+      template: template,
+      progress: nil,
+      line: kw_token.line
+    }
+
+    {rule, state}
+  end
+
+  # The dispatch suffix is the first literal segment following the leading
+  # number-hole (`[{:hole,_}, {:lit, s} | _]`). A malformed literal rule
+  # (no hole-then-lit prefix) has no suffix and is un-triggerable (harvest
+  # skips it, Task 2); T4 does not diagnose that (error-floor task).
+  defp literal_suffix([{:hole, _}, {:lit, s} | _]), do: s
+  defp literal_suffix(_), do: nil
+
+  # `explain` <INDENT> (<point> => <message>)+ <DEDENT> — the author's failure
+  # descriptions (self-proving §3.2). Attached to the macro_def as one entry;
+  # exhaustiveness over the derived Diagnosis is checked separately (MacroValidate).
+  defp parse_explain_block(state) do
+    kw = peek(state)
+    state = advance(state)
+    state = skip_macro_trivia(state)
+
+    {clauses, state} =
+      case peek(state) do
+        %Token{type: :indent} ->
+          state = advance(state)
+          {cs, state} = parse_explain_clauses(state, [])
+          state = expect_dedent(state)
+          {cs, state}
+
+        _ ->
+          {[], state}
+      end
+
+    {%{kind: :explain, clauses: clauses, line: kw.line}, state}
+  end
+
+  defp parse_explain_clauses(state, acc) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        {point, state} = parse_explain_point(state)
+        state = expect(state, :fat_arrow)
+        state = skip_macro_trivia(state)
+        {body, state} = parse_expr(state, 0)
+        clause = %{point: point, body: body, line: peek(state).line}
+        parse_explain_clauses(state, [clause | acc])
+    end
+  end
+
+  # A point is `keyword "w"` (a literal-token failure) or a bare `Category`
+  # identifier (a typed-hole failure). Backticked/qualified categories are out
+  # of scope for this slice. A total fallback is REQUIRED: a malformed point
+  # (a stray `=>` with no preceding point) would otherwise crash the whole parse
+  # with a CaseClauseError — record a recoverable diagnostic instead and do NOT
+  # advance past the offending token (so the caller's expect/2 reports cleanly).
+  defp parse_explain_point(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "keyword"} ->
+        state = advance(state)
+        w = peek(state)
+        state = advance(state)
+        {{:keyword, to_string(w.value)}, state}
+
+      %Token{type: :identifier, value: cat} ->
+        {{:category, cat}, advance(state)}
+
+      other ->
+        error = {:expected, :explain_point, :got, other.type, other.line, other.col}
+        state = add_error(state, error)
+        {{:category, "?"}, state}
+    end
+  end
+
+  # Ordered segments between a rule's keyword and `becomes`: literal tokens and
+  # typed holes `<name: Kind>` (window: :lt identifier :colon identifier :gt).
+  defp parse_rule_segments(state, acc) do
+    case peek(state) do
+      %Token{type: :identifier, value: "becomes"} ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: type} when type in [:newline, :dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :lt} ->
+        with %Token{type: :identifier, value: name} <- peek_at(state, 1),
+             %Token{type: :colon} <- peek_at(state, 2),
+             %Token{type: :identifier, value: kind} <- peek_at(state, 3),
+             %Token{type: :gt} <- peek_at(state, 4) do
+          hole = {:hole, %{name: name, kind: kind, line: peek(state).line}}
+          state = state |> advance() |> advance() |> advance() |> advance() |> advance()
+          parse_rule_segments(state, [hole | acc])
+        else
+          _ ->
+            t = peek(state)
+            state = add_error(state, {:malformed_hole, t.line, t.col})
+            {Enum.reverse(acc), advance(state)}
+        end
+
+      %Token{value: v} ->
+        parse_rule_segments(advance(state), [{:lit, to_string(v)} | acc])
+    end
+  end
 
   defp parse_fsm(state) do
     token = peek(state)
@@ -4676,9 +5528,89 @@ defmodule Cure.Compiler.Parser do
 
   # -- Enhanced Type Expression Parser ----------------------------------------
 
-  # Replaces the simple version from Milestone 2.
-  # Handles: PascalCase, Type(A, B), A -> B, (A, B) -> C, {x: T | pred}
+  # Type-expression entry point. `|` binds LOOSER than `->`, so `A -> B | C` is
+  # `(A -> B) | C`. A leading `|` is permitted.
+  #
+  # Members are collected in SOURCE order; canonicalisation (flatten, dedupe,
+  # sort) is the elaborator's job — see `Cure.Elab.Union`.
   defp parse_type_expr(state) do
+    state =
+      case peek(state) do
+        %Token{type: :bar} -> advance(state) |> skip_newlines()
+        _ -> state
+      end
+
+    {first, state} = parse_union_first_member(state)
+    {rest, state} = parse_union_members(state)
+
+    case rest do
+      [] -> {first, state}
+      _ -> {{:union_type, [], [first | rest]}, state}
+    end
+  end
+
+  # The first candidate member of a possible union. A literal-shaped token is ONLY
+  # treated as a literal member if a `|` immediately follows — e.g. the `3` in
+  # `3 | String`. If no `|` follows, fall through to `parse_type_arrow/1` unchanged,
+  # so every existing non-union numeral-in-type-position use (`Bounded(3)`,
+  # `Bounded(1114112)`, `Equivalent(Int, 3, 3)`) keeps parsing to
+  # `{:variable, [scope: :local], "N"}` and keeps working through idx_to_core's
+  # existing numeric_index_value path.
+  defp parse_union_first_member(state) do
+    token = peek(state)
+    next = peek_at(state, 1)
+
+    if literal_token?(token) and match?(%Token{type: :bar}, next) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
+
+  # A subsequent member, reached only after a `|` has already been consumed — so,
+  # unlike the first member, we already KNOW we are inside a union. A literal-shaped
+  # token is unconditionally a literal member; no lookahead needed (this covers the
+  # `4` in `3 | 4`, which is not itself followed by another `|`).
+  defp parse_union_member(state) do
+    token = peek(state)
+
+    if literal_token?(token) do
+      {literal(literal_subtype(token.type), token), advance(state)}
+    else
+      parse_type_arrow(state)
+    end
+  end
+
+  # NOTE: no `skip_newlines` before peeking for `:bar`. That is deliberate — a
+  # newline terminates the type annotation, and skipping it would let the parser
+  # swallow the `|` of a following ADT variant.
+  defp parse_union_members(state) do
+    case peek(state) do
+      %Token{type: :bar} ->
+        state = advance(state) |> skip_newlines()
+        {member, state} = parse_union_member(state)
+        {rest, state} = parse_union_members(state)
+        {[member | rest], state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp literal_token?(%Token{type: t}), do: t in [:integer, :float, :string, :atom, :char, :bool]
+  defp literal_token?(_), do: false
+
+  defp literal_subtype(:integer), do: :integer
+  defp literal_subtype(:float), do: :float
+  defp literal_subtype(:string), do: :string
+  defp literal_subtype(:atom), do: :symbol
+  defp literal_subtype(:char), do: :char
+  defp literal_subtype(:bool), do: :boolean
+
+  # The arrow ladder. Handles: PascalCase, Type(A, B), A -> B, (A, B) -> C.
+  # Callers that must NOT absorb a `|` (arrow codomains, the ADT alias-RHS probe)
+  # call this directly rather than `parse_type_expr/1`.
+  defp parse_type_arrow(state) do
     token = peek(state)
 
     case token.type do
@@ -4693,7 +5625,7 @@ defmodule Cure.Compiler.Parser do
         case peek(state) do
           %Token{type: :arrow} ->
             state = advance(state)
-            {ret, state} = parse_type_expr(state)
+            {ret, state} = parse_type_arrow(state)
             binders = Enum.map(inner, &elem(&1, 0))
             doms = Enum.map(inner, &elem(&1, 1))
 
@@ -4739,7 +5671,7 @@ defmodule Cure.Compiler.Parser do
           match?(%Token{type: :arrow}, peek(state)) ->
             # A -> B  (unary function type)
             state = advance(state)
-            {ret, state} = parse_type_expr(state)
+            {ret, state} = parse_type_arrow(state)
             base = {:variable, [scope: :local], base_name}
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
@@ -4868,7 +5800,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {ret, state} = parse_type_expr(state)
+        {ret, state} = parse_type_arrow(state)
 
         params =
           case left do
@@ -5268,6 +6200,15 @@ defmodule Cure.Compiler.Parser do
         prim_ast = attach_decorator(prim_ast, dec_name, args)
         {prim_ast, state}
 
+      # `@prelude typealias Name = RHS` attaches the decorator to the
+      # `{:type_annotation}` synonym node (see attach_decorator's clause). Used so
+      # a transparent alias like `String = List(Char)` can join the implicit
+      # prelude at its definition site.
+      %Token{type: :keyword, value: :typealias} ->
+        {ta_ast, state} = parse_typealias(state)
+        ta_ast = attach_decorator(ta_ast, dec_name, args)
+        {ta_ast, state}
+
       _ ->
         # Standalone decorator or property
         if args != [] do
@@ -5324,6 +6265,12 @@ defmodule Cure.Compiler.Parser do
           end
 
         {:function_def, meta ++ decoration, body}
+
+      # `@prelude typealias Name = RHS` — a transparent type synonym. Thread the
+      # decorator into the `{:type_annotation}` meta so program.ex's prelude
+      # discovery can see it (mirrors the `{:container}`/`{:indexed_type}` clauses).
+      {:type_annotation, meta, rhs} ->
+        {:type_annotation, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), rhs}
 
       other ->
         other

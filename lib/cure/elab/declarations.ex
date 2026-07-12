@@ -21,15 +21,28 @@ defmodule Cure.Elab.Declarations do
 
   @ceiling 2
 
-  @doc "Elaborate one declaration AST, returning the augmented signature."
+  @doc """
+  Elaborate one declaration AST, returning the augmented signature.
+
+  Runs the anonymous-union pre-pass first: every `{:union_type, …}` node anywhere in
+  this declaration has its generated family declared into `env` BEFORE lowering, so
+  that `idx_to_core/5` — which returns `{:ok, term}` and cannot thread a mutated
+  `Env` back out — only has to look the content-derived key up.
+  """
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
-  def elaborate({:function_def, _meta, _body} = decl, env) do
+  def elaborate(decl, env) do
+    with {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
+      do_elaborate(decl, env)
+    end
+  end
+
+  defp do_elaborate({:function_def, _meta, _body} = decl, env) do
     with {:ok, env1} <- register_signature(decl, env) do
       elaborate_function_body(decl, env1)
     end
   end
 
-  def elaborate({:container, meta, variants}, env) do
+  defp do_elaborate({:container, meta, variants}, env) do
     case Keyword.get(meta, :container_type) do
       :enum ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
@@ -46,10 +59,12 @@ defmodule Cure.Elab.Declarations do
         # accepted it. That was duplication producing an arbitrary feature gap, not a
         # deliberate restriction; a negative occurrence is still rejected, by
         # `Inductive.positive?/2` where it belongs.
-        type_params = Keyword.get(meta, :type_params, [])
-        params = Enum.map(type_params, fn p -> {:param, [], p} end)
-        sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
-        declare_parameterized(name, params, [], sigs, env)
+        with :ok <- reject_reserved_family_name(name) do
+          type_params = Keyword.get(meta, :type_params, [])
+          params = Enum.map(type_params, fn p -> {:param, [], p} end)
+          sigs = Enum.map(variants, &variant_to_gadt_sig(&1, name, type_params))
+          declare_parameterized(name, params, [], sigs, env)
+        end
 
       :struct ->
         # A record `rec Point\n  x: T\n  y: U` is a single-constructor family whose
@@ -60,7 +75,8 @@ defmodule Cure.Elab.Declarations do
         # argument names as plain labels.
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-        with :ok <- check_no_duplicate_fields(variants) do
+        with :ok <- reject_reserved_family_name(name),
+             :ok <- check_no_duplicate_fields(variants) do
           case Keyword.get(meta, :type_params, []) do
             [] ->
               # Route through the GADT-ctor machinery with NAMED field domains so a
@@ -73,7 +89,7 @@ defmodule Cure.Elab.Declarations do
               working_env = Inductive.declare(env, Inductive.family(name, [], [], 0), [])
 
               with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
-                declare_at_min_level(env, name, [ctor], 0)
+                declare_at_min_level(env, name, [attach_field_defaults(ctor, variants)], 0)
               end
 
             type_params ->
@@ -90,7 +106,8 @@ defmodule Cure.Elab.Declarations do
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
         params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
 
-        with {:ok, param_tele} <-
+        with :ok <- reject_reserved_family_name(name),
+             {:ok, param_tele} <-
                elaborate_index_telescope(params, name, env, [], :duplicate_parameter) do
           declare_opaque_at_min_level(env, name, param_tele, 0)
         end
@@ -128,7 +145,7 @@ defmodule Cure.Elab.Declarations do
   # to be invisible: the alias branch installed `Unit := {:data, :MkUnit, [], []}` with a
   # hardcoded kind and nothing ever checked it, so a one-constructor enum silently became
   # an alias to a family that does not exist.
-  def elaborate({:type_annotation, meta, [rhs]} = decl, env) do
+  defp do_elaborate({:type_annotation, meta, [rhs]} = decl, env) do
     if single_variant_enum?(rhs, env) do
       elaborate({:container, Keyword.put(meta, :container_type, :enum), [rhs]}, env)
     else
@@ -136,18 +153,54 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  def elaborate({:indexed_type, meta, ctor_sigs}, env) do
+  defp do_elaborate({:indexed_type, meta, ctor_sigs}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    params = Keyword.get(meta, :params, [])
-    index_params = Keyword.get(meta, :indices, [])
-    declare_parameterized(name, params, index_params, ctor_sigs, env)
+
+    with :ok <- reject_reserved_family_name(name) do
+      params = Keyword.get(meta, :params, [])
+      index_params = Keyword.get(meta, :indices, [])
+      declare_parameterized(name, params, index_params, ctor_sigs, env)
+    end
   end
 
-  def elaborate({:interface, _meta, _methods} = decl, env) do
+  defp do_elaborate({:interface, _meta, _methods} = decl, env) do
     Cure.Elab.Interface.elaborate(decl, env)
   end
 
-  def elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+  defp do_elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  # `Cure.Elab.Union.union_family?/1` recognises a generated union family purely
+  # by a name-prefix test ("Union<…>"). That is safe only if the prefix is truly
+  # unproducible by a user-authored type name — but backtick-quoted identifiers
+  # (`lexer.ex` `lex_quoted_identifier/1`) admit ANY character, including `<`,
+  # `>`, and `|`, and nothing upstream of here restricts which lexing form
+  # produced a type-declaration name. Left unchecked, a user type named e.g.
+  # `` `Union<Bool|Int>` `` would be indistinguishable from a compiler-generated
+  # family to every union-aware code path (flattening in `Cure.Elab.Union`,
+  # injection/widening in the elaborator) — reject it here, at the one point
+  # every user-declared family name passes through, so the reserved namespace is
+  # actually enforced rather than merely assumed.
+  @spec reject_reserved_family_name(atom()) :: :ok | {:error, {:reserved_union_type_name, atom()}}
+  defp reject_reserved_family_name(name) do
+    if Cure.Elab.Union.reserved_name?(name) do
+      {:error, {:reserved_union_type_name, name}}
+    else
+      :ok
+    end
+  end
+
+  # Every constructor a declaration introduces shares ONE global flat namespace with the
+  # generated union constructors (`env.ctors`, an unconditional Map.put). A backtick ctor
+  # named `Union<Int|String>$Int` would silently overwrite the real one.
+  defp reject_reserved_ctor_names(sigs) do
+    Enum.find_value(sigs, :ok, fn {:gadt_ctor, cmeta, _chain} ->
+      cname = Keyword.fetch!(cmeta, :name)
+
+      if Cure.Elab.Union.reserved_name?(cname) do
+        {:error, {:reserved_union_type_name, String.to_atom(cname)}}
+      end
+    end)
+  end
 
   @doc """
   Register a type family's HEADER — its name and parameter/index telescopes with
@@ -176,8 +229,11 @@ defmodule Cure.Elab.Declarations do
 
       Keyword.get(meta, :container_type) in [:enum, :struct] ->
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
-        register_header(name, params, [], env)
+
+        with :ok <- reject_reserved_family_name(name) do
+          params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+          register_header(name, params, [], env)
+        end
 
       true ->
         {:ok, env}
@@ -261,7 +317,8 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env),
+    with :ok <- reject_reserved_family_name(name),
+         {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env),
          {:ok, level} <- typealias_universe(env, name, rhs_core) do
       env1 = Env.add_def(env, name, {:type, level}, rhs_core, [])
       {:ok, maybe_certify(env1, name)}
@@ -287,7 +344,21 @@ defmodule Cure.Elab.Declarations do
   # placeholder body) so that later-defined functions and mutually-recursive peers
   # resolve as globals. Called for every function in a first pass, before any body
   # is elaborated (see `Program.elaborate_declarations`).
-  def register_signature({:function_def, meta, _body}, env) do
+  #
+  # Runs the anonymous-union pre-pass first. `Program.body_register_pass/3` routes
+  # `{:function_def, …}` here rather than through `elaborate/2`, and a function
+  # signature is the commonest place a union appears — so the pre-pass must hook
+  # BOTH entry points. It walks the whole declaration AST, so a union in a `let`
+  # annotation inside the body is covered here too, and it is idempotent (the
+  # content-derived key is guarded by `Inductive.family?`), so the double hook is
+  # free.
+  def register_signature({:function_def, _meta, _body} = decl, env) do
+    with {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
+      do_register_signature(decl, env)
+    end
+  end
+
+  defp do_register_signature({:function_def, meta, _body}, env) do
     with {:ok, sig} <- function_signature(meta, env) do
       env1 = Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
 
@@ -304,7 +375,9 @@ defmodule Cure.Elab.Declarations do
   # Elaborate a function's body against its (already registered) signature and
   # replace the placeholder with the real lambda. The environment already carries
   # every function's signature, so forward references and mutual recursion resolve.
-  def elaborate_function_body({:function_def, meta, body}, env) do
+  def elaborate_function_body({:function_def, _meta, _body} = decl, env) do
+    {:function_def, meta, body} = desugar_clause_fn(decl)
+
     case Keyword.get(meta, :extern) do
       {mod, fun, arity} when is_atom(mod) and is_atom(fun) and is_integer(arity) ->
         # Wave-3: a bodyless @extern is a typed FFI postulate — the signature IS
@@ -314,7 +387,8 @@ defmodule Cure.Elab.Declarations do
         # TotalityClosure skips it. Do NOT call elaborate_body / Kernel.check /
         # Relevance.check (no term exists).
         with {:ok, sig} <- function_signature(meta, env),
-             :ok <- check_extern_arity(sig, arity) do
+             :ok <- check_extern_arity(sig, arity),
+             :ok <- check_extern_not_union(sig, env) do
           {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
         end
 
@@ -334,6 +408,48 @@ defmodule Cure.Elab.Declarations do
   # `Emit` then generated `head/2` calling `erlang:hd(V0, V1)` while every Cure caller invoked
   # `head/1`. Each form compiled in isolation; the module was broken the moment anything called
   # it. Rejecting the mismatch is the only reading under which the number means one thing.
+  # An `@extern` is a typed FFI postulate: Erlang hands back a RAW value carrying no
+  # constructor tag. A union-returning extern is therefore only meaningful if the boundary
+  # RE-TAGS the value — which `Emit.extern_form/4` does, by guarding on the raw result and
+  # injecting the matching constructor.
+  #
+  # That is sound only when the members are pairwise distinguishable from an untagged
+  # value. Members sharing an erased shape (`Int`/`Nat`/`Char` are all Erlang integers;
+  # `Bool` erases to `true`/`false` so it collides with `Atom`; `String` IS `List(Char)`)
+  # cannot be told apart, and are rejected HERE, at the declaration the author can see,
+  # rather than miscompiling into a CaseClauseError at the first use.
+  #
+  # The ARGUMENT direction needs no check: passing a union INTO Erlang hands it an
+  # ordinary tagged tuple, which is a perfectly good Erlang term.
+  defp check_extern_not_union(sig, env) do
+    codomain = extern_codomain(sig.pi, length(sig.quantities || []))
+
+    case codomain do
+      {:data, ukey, [], []} ->
+        if Cure.Elab.Union.union_family?(ukey) do
+          case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey)) do
+            :ok -> :ok
+            {:error, reason} -> {:error, {:extern_union_indistinct, sig.name, reason}}
+          end
+        else
+          :ok
+        end
+
+      _ ->
+        # A union NESTED inside the return type (`List(Int | Bool)`) cannot be re-tagged:
+        # the boundary would have to walk an arbitrary structure. Reject.
+        if Elaborator.union_goal?(codomain) do
+          {:error, {:extern_returns_union, sig.name, codomain}}
+        else
+          :ok
+        end
+    end
+  end
+
+  defp extern_codomain(type, 0), do: type
+  defp extern_codomain({:pi, _g, _dom, cod}, n), do: extern_codomain(cod, n - 1)
+  defp extern_codomain(type, _n), do: type
+
   defp check_extern_arity(sig, arity) do
     # PRESENT, not unrestricted. Slice 4a's rename left `== :unrestricted` here, which
     # excludes `:linear`/`:affine` parameters — they have runtime values and DO reach
@@ -348,16 +464,52 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # Multi-clause function-head syntax — `fn f(n) | 0 -> a | n -> b` — parses to a
+  # `{:function_def, [clauses: [...]], []}` whose body lives in `meta[:clauses]`
+  # (one `%{guard, params, body}` per clause) and whose top-level body is empty.
+  # The dependent pipeline elaborates a single body, so desugar the clauses into a
+  # `match` over the formal parameters: the scrutinee is the sole parameter (or a
+  # flat tuple `%[p1, …, pN]` of them), each clause becomes a `:match_arm` whose
+  # pattern is the clause's parameter pattern (or their tuple) and whose optional
+  # `when`-guard rides through as the arm guard. A def with no `clauses:` key is
+  # returned unchanged, so ordinary `fn f(x) = …` bodies are untouched. Signature
+  # registration reads `meta[:params]`/`:return_type`/`:name` and ignores the body,
+  # so it needs no desugaring.
+  defp desugar_clause_fn({:function_def, meta, _body} = decl) do
+    case Keyword.get(meta, :clauses) do
+      [_ | _] = clauses ->
+        formals = Keyword.get(meta, :params, [])
+        fmeta = Keyword.take(meta, [:line, :col])
+        scrut = clause_scrutinee(formals, fmeta)
+        arms = Enum.map(clauses, &clause_to_arm(&1, length(formals), fmeta))
+        match_expr = {:pattern_match, fmeta, [scrut | arms]}
+        {:function_def, Keyword.delete(meta, :clauses), [match_expr]}
+
+      _ ->
+        decl
+    end
+  end
+
+  defp clause_scrutinee([{:param, _pm, pname}], fmeta),
+    do: {:variable, [scope: :local] ++ fmeta, pname}
+
+  defp clause_scrutinee(formals, fmeta),
+    do: {:tuple, fmeta, Enum.map(formals, fn {:param, _pm, pname} -> {:variable, [scope: :local] ++ fmeta, pname} end)}
+
+  defp clause_to_arm(%{guard: guard, params: pats, body: cbody}, arity, fmeta) do
+    pattern = if arity == 1, do: hd(pats), else: {:tuple, fmeta, pats}
+    arm_meta = [pattern: pattern] ++ if(guard, do: [guard: guard], else: [])
+    {:match_arm, arm_meta, cbody}
+  end
+
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
 
     with {:ok, sig} <- function_signature(meta, env) do
       ctx = build_context(env, sig.telescope)
-      return_value = Eval.eval(sig.return_core, Context.env(ctx))
 
-      with {:ok, body_term} <-
-             elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
-           :ok <- Kernel.check(ctx, body_term, return_value),
+      with {:ok, body_term, return_core, _return_value} <-
+             elaborate_body_typed(body_expr, sig, ctx, env),
            # A `where`-introduced dictionary parameter is present by default but
            # SAFELY demoted to `:erased` when the body never uses it relevantly (an
            # `ignore`-style constrained function): the same criterion the relevance
@@ -374,7 +526,7 @@ defmodule Cure.Elab.Declarations do
            # since, so rebuild the stored type from the DEMOTED vector — otherwise the
            # stored Pi (dict `ω`) and λ (dict `:erased`) would disagree, a pairing the
            # graded `Conv` forbids. Both now come from one vector.
-           final_pi = wrap_binders(:pi, sig.telescope, quantities, sig.return_core),
+           final_pi = wrap_binders(:pi, sig.telescope, quantities, return_core),
            lambda = wrap_binders(:lam, sig.telescope, quantities, body_term),
            # The assertion that would have caught the whole dichotomy class: the stored
            # Π and λ must agree on every binder's grade. Compare the two grade spines
@@ -386,7 +538,13 @@ defmodule Cure.Elab.Declarations do
            # opaque neutral and a `match` on it fails `:case_scrutinee_not_data` — a
            # regression the first cut of this slice shipped (adversarial review F1).
            # The grade check is all slice 6 needs, and it is O(telescope depth).
-           :ok <- assert_binder_grades_agree(final_pi, lambda, sig.name) do
+           :ok <- assert_binder_grades_agree(final_pi, lambda, sig.name),
+           # §5.3: an `Effect`-typed binder may not be `:erased`. Erasure deletes
+           # erased binders, so an erased `Effect(T)` binder would silently drop a
+           # computation the type says must run. Walk the final Pi spine and reject.
+           # (Syntactic head-check; the `no_effect_in_erased_position` Validator
+           # clause is the trusted backstop for an aliased effect type, §8.)
+           :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
         final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
@@ -399,13 +557,54 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # Elaborate the body and settle the return type + its Core form. With a DECLARED
+  # return, check the body against it (the long-standing behavior). With NONE
+  # (annotation-free `fn f() = expr`, which the parser accepts), INFER the body's
+  # type and adopt it as the codomain — `function_signature/2` left a `{:type, 0}`
+  # placeholder that this replaces. Inference carries no expected-type flow, so an
+  # annotation-free body whose type is pinned only by a return-only implicit still
+  # needs an explicit signature; every REPL/`:let` wrapper returns a concrete type,
+  # which is exactly the case this serves. Returns `{body_term, return_core,
+  # return_value}` so the caller rebuilds the final Π from the settled codomain.
+  defp elaborate_body_typed(body_expr, %{inferred_return: true} = sig, ctx, env) do
+    with {:ok, body_term, ret_val} <-
+           Elaborator.elaborate_expr_typed(body_expr, sig.scope, ctx, env) do
+      ret_core = Quote.reify(ret_val, length(sig.telescope))
+      {:ok, body_term, ret_core, ret_val}
+    end
+  end
+
+  defp elaborate_body_typed(body_expr, sig, ctx, env) do
+    return_value = Eval.eval(sig.return_core, Context.env(ctx))
+
+    with {:ok, body_term} <-
+           elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+         :ok <- Kernel.check(ctx, body_term, return_value) do
+      {:ok, body_term, sig.return_core, return_value}
+    end
+  end
+
+  # The signature's codomain Core term. A declared `-> T` is elaborated normally; an
+  # omitted return (annotation-free `fn`) gets a `{:type, 0}` placeholder that
+  # `elaborate_body_typed/4` overwrites with the inferred body type.
+  defp signature_return_core(nil, _scope, _env, _ctx), do: {:ok, {:type, 0}}
+
+  defp signature_return_core(return_expr, scope, env, ctx),
+    do: idx_to_core(return_expr, scope, nil, env, ctx)
+
   # Shared signature elaboration: auto-generalize free type variables, build the
   # parameter telescope and the Π type. Deterministic in the type environment, so
   # the signature computed in the registration pass and the body pass agree.
   defp function_signature(meta, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
     params0 = Keyword.get(meta, :params, [])
-    return_expr = Keyword.fetch!(meta, :return_type)
+    # The parser makes `-> Type` optional (`fn f() = expr`); when omitted the
+    # `:return_type` key is absent. An annotation-free function's codomain is
+    # INFERRED from its body in `elaborate_real_body/3`; here it gets a placeholder
+    # so `sig.pi` is well-formed for the pre-body registration pass (the final Pi is
+    # rebuilt from the inferred return once the body is elaborated). `inferred_return`
+    # flags that path.
+    return_expr = Keyword.get(meta, :return_type)
 
     # Idris-style auto-generalization: a free lowercase type variable in the
     # signature (`fn id(x: a) -> a`) is bound as a leading implicit `{a: Type}`
@@ -423,7 +622,7 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
-         {:ok, return_core} <- idx_to_core(return_expr, scope, nil, env, ctx) do
+         {:ok, return_core} <- signature_return_core(return_expr, scope, env, ctx) do
       {:ok,
        %{
          name: name,
@@ -432,6 +631,7 @@ defmodule Cure.Elab.Declarations do
          quantities: quantities,
          scope: scope,
          return_core: return_core,
+         inferred_return: is_nil(return_expr),
          constraints: constraint_specs,
          # The PRE-REGISTRATION type, honest about the ORIGINAL quantities (implicit
          # ⇒ erased). `demote_unused_dicts/3` may lower a dict below this after the
@@ -506,6 +706,20 @@ defmodule Cure.Elab.Declarations do
   # threading each field into scope for the following field types (a dependent
   # record — `rec Box(a)\n  n: Nat\n  v: Vec(a, n)`).
   @doc """
+  Declare a compiler-GENERATED, parameterless, index-free inductive family from
+  pre-built Core constructor records. The public entry `Cure.Elab.Union` uses to
+  realise an anonymous union (`Int | String`) as a real discriminated family.
+
+  Goes through the same kernel gate as every surface declaration —
+  `Kernel.check_family`, `check_all_ctors`, `Inductive.positive?` — so a generated
+  family cannot bypass the TCB.
+  """
+  @spec declare_generated_family(Env.t(), atom(), [map()]) :: {:ok, Env.t()} | {:error, term()}
+  def declare_generated_family(env, name, ctors) do
+    declare_indexed_at_min_level(env, name, [], [], ctors, 0)
+  end
+
+  @doc """
   Declare a single-constructor record family `name(type_params)` whose fields are
   `[{:param, [type: ast], fname}]`. This is the public entry the typeclass
   elaborator uses to realise an interface as its dictionary record type former
@@ -513,8 +727,14 @@ defmodule Cure.Elab.Declarations do
   """
   @spec declare_record(atom(), [String.t()], [tuple()], Env.t()) ::
           {:ok, Env.t()} | {:error, term()}
-  def declare_record(name, type_params, fields, env),
-    do: declare_parameterized_struct(name, type_params, fields, env)
+  def declare_record(name, type_params, fields, env) do
+    # `interface` reaches family declaration through HERE, not through the container
+    # clauses — so without this it bypassed the reserved-namespace guard entirely and a
+    # backtick-named interface could overwrite a generated union family.
+    with :ok <- reject_reserved_family_name(name) do
+      declare_parameterized_struct(name, type_params, fields, env)
+    end
+  end
 
   defp declare_parameterized_struct(name, type_params, fields, env) do
     params = Enum.map(type_params, fn p -> {:param, [], p} end)
@@ -540,6 +760,32 @@ defmodule Cure.Elab.Declarations do
     {:gadt_ctor, [name: Atom.to_string(name)], {:arrow_chain, named_doms ++ [family_app(name, type_params)]}}
   end
 
+  # A record field may declare a default (`name: String = "Anonymous"`), carried in
+  # the field param's `:default` meta. Stash the defaults, keyed by field-name atom
+  # (matching the ctor's `args` telescope labels), on the constructor map as
+  # `:field_defaults` so `desugar_record_construction` can fill any field the caller
+  # omits. Purely an E-layer annotation — a plain extra key on the ctor map that the
+  # kernel never reads. A ctor with no defaulted field is left untouched.
+  defp attach_field_defaults(ctor, fields) do
+    case record_field_defaults(fields) do
+      defaults when map_size(defaults) == 0 -> ctor
+      defaults -> Map.put(ctor, :field_defaults, defaults)
+    end
+  end
+
+  defp record_field_defaults(fields) do
+    Enum.reduce(fields, %{}, fn
+      {:param, m, fname}, acc ->
+        case Keyword.get(m, :default) do
+          nil -> acc
+          expr -> Map.put(acc, String.to_atom(fname), expr)
+        end
+
+      _, acc ->
+        acc
+    end)
+  end
+
   # A positional enum variant, seen as a GADT constructor signature that returns
   # the family applied to its own parameters. `Nil` → `Nil : List(a)`;
   # `Cons(a, List(a))` → `Cons : a -> List(a) -> List(a)`.
@@ -562,6 +808,12 @@ defmodule Cure.Elab.Declarations do
   # telescope from GADT-style constructor signatures. Shared by indexed types and
   # parameterized enums (the latter pass no indices).
   defp declare_parameterized(name, params, index_params, ctor_sigs, env) do
+    with :ok <- reject_reserved_ctor_names(ctor_sigs) do
+      do_declare_parameterized(name, params, index_params, ctor_sigs, env)
+    end
+  end
+
+  defp do_declare_parameterized(name, params, index_params, ctor_sigs, env) do
     # Parameters are the outer binders: elaborate the param telescope first, then
     # the index telescope in the scope of the parameters (most-recent first).
     param_scope = params |> Enum.map(fn {:param, _m, n} -> n end) |> Enum.reverse()
@@ -585,8 +837,13 @@ defmodule Cure.Elab.Declarations do
 
   # A `match` body needs the declared return type to build its motive (checking
   # mode); every other body is elaborated in inference mode.
-  defp elaborate_body({:pattern_match, _meta, [scrut | arms]}, return_core, scope, ctx, env, _params) do
-    Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
+  defp elaborate_body({:pattern_match, meta, [scrut | arms]} = expr, return_core, scope, ctx, env, _params) do
+    if Elaborator.special_match_arms?(arms) do
+      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+    else
+      _ = meta
+      Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
+    end
   end
 
   # A `with <expr>` body (capability A): like `match`, but its motive
@@ -610,6 +867,15 @@ defmodule Cure.Elab.Declarations do
       name == "reflexive" ->
         Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
+      # A call whose declared return type mentions a generated anonymous-union family
+      # must be CHECKED, not inferred. Inferring `Std.Map.put(:a, 1, …)` solves the
+      # map's implicit `v := Int` from the first value argument, and only then compares
+      # `Map(Atom, Int)` against the goal `Map(Atom, Int | Bool)` — which fails, since
+      # there is no container covariance. Checking threads the goal into the
+      # application, so `v` is solved from the GOAL and each value is injected instead.
+      Elaborator.union_goal?(return_core) ->
+        Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
       atom && Inductive.get_ctor(env, atom) ->
         # A constructor body is checked against the declared return type, so a
         # nullary or otherwise underdetermined constructor (`Nil()` at
@@ -627,8 +893,12 @@ defmodule Cure.Elab.Declarations do
         # `:unsolved_metavariables`, and the original error is surfaced if it too
         # fails, so every currently-accepted or -rejected body is unchanged.
         case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-          {:ok, term, _type} ->
-            {:ok, term}
+          {:ok, term, type} ->
+            # `coerce_union/5` is a strict no-op unless the declared return type is a
+            # generated anonymous-union family. This branch discards `return_core`, so
+            # without it a call body like `fn wide(n: Int) -> Int | Bool | Atom =
+            # narrow(n)` would never be injected or widened.
+            {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
 
           {:error, {:unsolved_metavariables, _}} = orig ->
             case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
@@ -718,9 +988,23 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_body({:literal, _meta, _value} = expr, return_core, scope, ctx, env, _params),
     do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
-  defp elaborate_body(expr, _return_core, scope, ctx, env, _params) do
-    with {:ok, term, _type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-      {:ok, term}
+  # The general body: elaborated in INFER mode. `coerce_union/5` is a strict no-op
+  # unless the declared return type is a generated anonymous-union family — in which
+  # case the inferred term is injected into the matching member constructor. Without
+  # it, `fn f(n: Int) -> Int | Bool = n` never reaches check-position at all (this
+  # clause discards `return_core`), so the injection would never fire and the kernel
+  # would reject `Int` at the union type.
+  defp elaborate_body(expr, return_core, scope, ctx, env, _params) do
+    # A union-goal body (e.g. a map literal at `Map(Atom, Int | Bool)`) is CHECKED, so
+    # the goal reaches the application and its implicits are solved from the goal rather
+    # than from the first value. Everything else keeps the historical infer-first path;
+    # `coerce_union/5` is a strict no-op unless the goal is a union family.
+    if Elaborator.union_goal?(return_core) do
+      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+    else
+      with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+        {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
+      end
     end
   end
 
@@ -955,6 +1239,20 @@ defmodule Cure.Elab.Declarations do
 
   # Spines exhausted in lockstep (both built from the same telescope) — agreed.
   defp grade_spine_mismatch(_pi_cod, _lam_body), do: nil
+
+  # §5.3: reject an `:erased` binder whose domain is `Effect`-headed — erasure
+  # would delete a computation the type says must run. Walks the Pi spine like
+  # `grade_spine_mismatch`; a non-Pi tail (the return type) ends the walk.
+  defp assert_no_erased_effect_binder({:pi, g, dom, cod}, name) do
+    if Grade.erased?(g) and effect_headed?(dom),
+      do: {:error, {:effect_binder_erased, name}},
+      else: assert_no_erased_effect_binder(cod, name)
+  end
+
+  defp assert_no_erased_effect_binder(_non_pi, _name), do: :ok
+
+  defp effect_headed?({:effect_type, _}), do: true
+  defp effect_headed?(_), do: false
 
   defp binder_grades(nil, n), do: List.duplicate(Cure.Core.Grade.unrestricted(), n)
 
@@ -1360,82 +1658,15 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp idx_to_core({:function_call, fmeta, args}, scope, fam, env, ctx) do
-    if Keyword.get(fmeta, :function_type) do
-      arrow_to_pi(args, scope, fam, env)
-    else
-      raw_name = Keyword.fetch!(fmeta, :name)
+    cond do
+      Keyword.get(fmeta, :function_type) ->
+        arrow_to_pi(args, scope, fam, env)
 
-      # A qualified head (`Std.Map`, from `Mod.Name(args)`) is first offered to the
-      # module-aware type resolver. When it places the name we emit `{:data, key, …}`
-      # in the cond below. When it can't — e.g. `Std.Option`, which lowers to a plain
-      # `{:global, :Option}` rather than a registered inductive family — the name
-      # DEGRADES to its bare tail (`Std.Option` → `Option`) so every downstream check
-      # (implicit-global, family, ctor, global) resolves it EXACTLY as the unqualified
-      # spelling would. Without this degrade a qualified applied type lowered to an
-      # opaque `{:global, :"Std.Option"}` that never converts against the unqualified
-      # `{:global, :Option}` — a silent qualified-vs-unqualified type split. For an
-      # unqualified name `String.split/2` returns `[name]`, so this is a no-op there.
-      qualified_key =
-        if String.contains?(raw_name, ".") do
-          Cure.Elab.Resolution.resolve_qualified(env, raw_name, :type)
-        else
-          :error
-        end
+      Keyword.fetch!(fmeta, :name) == "Effect" ->
+        lower_effect_former(args, scope, fam, env, ctx)
 
-      name =
-        case qualified_key do
-          {:ok, _} -> raw_name
-          :error -> raw_name |> String.split(".") |> List.last()
-        end
-
-      atom = String.to_atom(name)
-
-      # Type-position implicit insertion (spec §7): a term-level global whose
-      # signature carries erased (implicit) parameters cannot lower as a bare
-      # explicit-args spine — the kernel would see an under-applied application
-      # (the `b(first(p))` motive gap). With a typing context threaded in
-      # (return-type lowering only), delegate the whole application to the
-      # term-position machinery. A local binder of the same name shadows the
-      # global (mirrors the applied-bound-var cond branch below), and families/
-      # ctors never carry def quantities, so this misses them by construction.
-      if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
-           implicit_global?(env, atom) do
-        with {:ok, term, _result_type} <-
-               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
-          {:ok, term}
-        end
-      else
-        with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
-          cond do
-            match?({:ok, _}, qualified_key) ->
-              {:ok, key} = qualified_key
-              {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
-              {:ok, {:data, key, params, indices}}
-
-            # An applied BOUND variable — e.g. a higher-order parameter used as
-            # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
-            # the head against the de Bruijn scope; a local binder shadows a global,
-            # so this is checked first. Without it `F(n)` became a dangling
-            # `{:global, :F}`, and the call site's implicit substitution could never
-            # turn `F` into a solvable metavariable (ledger #10 prerequisite).
-            idx = Enum.find_index(scope, &(&1 == name)) ->
-              {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
-
-            atom == fam or Inductive.family?(env, atom) ->
-              # Split the applied arguments into the family's parameters (prefix) and
-              # indices (suffix); the kernel checks each slot against its own
-              # telescope. param_count is 0 for parameter-free families (all indices).
-              {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
-              {:ok, {:data, atom, params, indices}}
-
-            Inductive.get_ctor(env, atom) ->
-              {:ok, {:ctor, atom, core_args}}
-
-            true ->
-              {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
-          end
-        end
-      end
+      true ->
+        lower_applied_type(fmeta, args, scope, fam, env, ctx)
     end
   end
 
@@ -1522,7 +1753,121 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # An anonymous union. Its family was already declared by the pre-pass in
+  # `elaborate/2` (idx_to_core cannot thread a mutated Env back out), so this only
+  # recomputes the content-derived key and looks it up. A one-member union of a TYPE
+  # member collapses to that member's Core term — no family exists for it.
+  defp idx_to_core({:union_type, _meta, members}, scope, _fam, env, _ctx) do
+    with {:ok, ms} <- Cure.Elab.Union.canonicalise(members, scope, env) do
+      case ms do
+        [%{payload: payload}] when payload != nil -> {:ok, payload}
+        _ -> {:ok, {:data, Cure.Elab.Union.family_key(ms), [], []}}
+      end
+    end
+  end
+
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  # Surface `Effect(T)` lowers to the kernel's inert effect type former
+  # `{:effect_type, ⟦T⟧}` (design 2026-07-09-effect-type-former §3). `Effect` is a
+  # kernel PRIMITIVE type former (`Type ℓ → Type ℓ`), NOT an inductive family, so —
+  # unlike List/Bounded/Sigma — there is no family-id to bind under the `@builtin`
+  # tag registry (`Inductive.register_builtin` maps a key to a family-id validated
+  # by `Core.Builtins`). It is therefore recognised by NAME here, mirroring the
+  # dedicated `:sigma_type` / `:tuple_type` / `:pi_type` surface forms that hardcode
+  # their target Core node. The single argument is lowered through the SAME
+  # `idx_to_core` (so `Effect(List(Int))` recurses); a non-type argument is caught
+  # downstream by the kernel's `Effect : Type ℓ → Type ℓ` formation rule, not here.
+  defp lower_effect_former([arg], scope, fam, env, ctx) do
+    with {:ok, core} <- idx_to_core(arg, scope, fam, env, ctx) do
+      {:ok, {:effect_type, core}}
+    end
+  end
+
+  defp lower_effect_former(args, _scope, _fam, _env, _ctx),
+    do: {:error, {:effect_arity, length(args)}}
+
+  # The general applied-type spine lowering (`Name(args)`): a qualified family, an
+  # applied bound var, a family/ctor, or an opaque global. Split out of the
+  # `{:function_call, …}` clause so the `Effect` special-case can sit beside it.
+  # Extracted by core-let-binder's `cond` dispatch. Body is THIS branch's version:
+  # it carries the qualified-name degrade (`Std.Option` -> `Option`) that the
+  # extracted base body did not have.
+  defp lower_applied_type(fmeta, args, scope, fam, env, ctx) do
+        raw_name = Keyword.fetch!(fmeta, :name)
+
+        # A qualified head (`Std.Map`, from `Mod.Name(args)`) is first offered to the
+        # module-aware type resolver. When it places the name we emit `{:data, key, …}`
+        # in the cond below. When it can't — e.g. `Std.Option`, which lowers to a plain
+        # `{:global, :Option}` rather than a registered inductive family — the name
+        # DEGRADES to its bare tail (`Std.Option` → `Option`) so every downstream check
+        # (implicit-global, family, ctor, global) resolves it EXACTLY as the unqualified
+        # spelling would. Without this degrade a qualified applied type lowered to an
+        # opaque `{:global, :"Std.Option"}` that never converts against the unqualified
+        # `{:global, :Option}` — a silent qualified-vs-unqualified type split. For an
+        # unqualified name `String.split/2` returns `[name]`, so this is a no-op there.
+        qualified_key =
+          if String.contains?(raw_name, ".") do
+            Cure.Elab.Resolution.resolve_qualified(env, raw_name, :type)
+          else
+            :error
+          end
+
+        name =
+          case qualified_key do
+            {:ok, _} -> raw_name
+            :error -> raw_name |> String.split(".") |> List.last()
+          end
+
+        atom = String.to_atom(name)
+
+        # Type-position implicit insertion (spec §7): a term-level global whose
+        # signature carries erased (implicit) parameters cannot lower as a bare
+        # explicit-args spine — the kernel would see an under-applied application
+        # (the `b(first(p))` motive gap). With a typing context threaded in
+        # (return-type lowering only), delegate the whole application to the
+        # term-position machinery. A local binder of the same name shadows the
+        # global (mirrors the applied-bound-var cond branch below), and families/
+        # ctors never carry def quantities, so this misses them by construction.
+        if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
+             implicit_global?(env, atom) do
+          with {:ok, term, _result_type} <-
+                 Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+            {:ok, term}
+          end
+        else
+          with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+            cond do
+              match?({:ok, _}, qualified_key) ->
+                {:ok, key} = qualified_key
+                {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
+                {:ok, {:data, key, params, indices}}
+
+              # An applied BOUND variable — e.g. a higher-order parameter used as
+              # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+              # the head against the de Bruijn scope; a local binder shadows a global,
+              # so this is checked first. Without it `F(n)` became a dangling
+              # `{:global, :F}`, and the call site's implicit substitution could never
+              # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+              idx = Enum.find_index(scope, &(&1 == name)) ->
+                {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
+
+              atom == fam or Inductive.family?(env, atom) ->
+                # Split the applied arguments into the family's parameters (prefix) and
+                # indices (suffix); the kernel checks each slot against its own
+                # telescope. param_count is 0 for parameter-free families (all indices).
+                {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+                {:ok, {:data, atom, params, indices}}
+
+              Inductive.get_ctor(env, atom) ->
+                {:ok, {:ctor, atom, core_args}}
+
+              true ->
+                {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+            end
+          end
+        end
+  end
 
   defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}
 

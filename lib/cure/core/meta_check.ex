@@ -55,5 +55,10 @@ defmodule Cure.Core.MetaCheck do
   defp canonical_head?({:atom_type}), do: true
   defp canonical_head?({:atom_lit, _}), do: true
   defp canonical_head?({:float_lit, _}), do: true
+  # Inert effect values are canonical heads (never stuck eliminators): a
+  # well-typed `Effect`/`pure`/`bind` normal form progresses, it is not stuck.
+  defp canonical_head?({:effect_type, _}), do: true
+  defp canonical_head?({:effect_pure, _}), do: true
+  defp canonical_head?({:effect_bind, _, _}), do: true
   defp canonical_head?(_), do: false
 end

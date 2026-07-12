@@ -12,7 +12,7 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
+  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.
@@ -355,6 +355,7 @@ defmodule Antigen.Runner do
     "kernel/beta_subst",
     "kernel/zeta_subst",
     "kernel/grade_conv",
+    "kernel/effect_inert",
     "elab/shift_agrees",
     "elab/completeness",
     "elab/metamorphic",
@@ -363,13 +364,6 @@ defmodule Antigen.Runner do
     "elab/guard_lint",
     "elab/nat_rep",
     "elab/soundness",
-    "normalizer/differential",
-    "normalizer/equal",
-    "normalizer/intrinsic",
-    "unify/soundness",
-    "unify/intrinsic",
-    "unify_types/fixpoint",
-    "unify_types/intrinsic",
     "totality_closure/soundness",
     "totality_closure/completeness",
     "erasure/idempotent",
@@ -413,6 +407,7 @@ defmodule Antigen.Runner do
   defp assay_module("kernel/beta_subst"), do: Antigen.Assays.KernelLaw
   defp assay_module("kernel/zeta_subst"), do: Antigen.Assays.KernelLaw
   defp assay_module("kernel/grade_conv"), do: Antigen.Assays.KernelLaw
+  defp assay_module("kernel/effect_inert"), do: Antigen.Assays.KernelLaw
   defp assay_module("elab/shift_agrees"), do: Antigen.Assays.KernelLaw
   defp assay_module("elab/completeness"), do: Antigen.Assays.Elab
   defp assay_module("elab/metamorphic"), do: Antigen.Assays.Elab
@@ -421,13 +416,6 @@ defmodule Antigen.Runner do
   defp assay_module("elab/guard_lint"), do: Antigen.Assays.Elab
   defp assay_module("elab/nat_rep"), do: Antigen.Assays.Elab
   defp assay_module("elab/soundness"), do: Antigen.Assays.Elab
-  defp assay_module("normalizer/differential"), do: Antigen.Assays.Normalizer
-  defp assay_module("normalizer/equal"), do: Antigen.Assays.Normalizer
-  defp assay_module("normalizer/intrinsic"), do: Antigen.Assays.Normalizer
-  defp assay_module("unify/soundness"), do: Antigen.Assays.Unifier
-  defp assay_module("unify/intrinsic"), do: Antigen.Assays.Unifier
-  defp assay_module("unify_types/fixpoint"), do: Antigen.Assays.Unifier
-  defp assay_module("unify_types/intrinsic"), do: Antigen.Assays.Unifier
   defp assay_module("totality_closure/soundness"), do: Antigen.Assays.TotalityClosureAssay
   defp assay_module("totality_closure/completeness"), do: Antigen.Assays.TotalityClosureAssay
   defp assay_module("erasure/idempotent"), do: Antigen.Assays.Erasure

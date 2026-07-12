@@ -8,6 +8,28 @@
 
 **Tech Stack:** Elixir, git. Executor: Opus.
 
+---
+
+## ⚑ DISPOSITION REFRESH — 2026-07-12 (authoritative; overrides stale rows below)
+
+A Task-0 re-scout on the current tree (baseline suite **4082/0**, 2 skipped) found this plan (2026-07-09) materially stale: #21 (typeclass migration) + #23 (value surface) landed after it. Where this block conflicts with a row below, **this block wins**. Nothing was deleted during the scout.
+
+**Concurrency family — DELETE THE WHOLE FAMILY (fork resolved).** The 5 std wrappers (fsm/actor/supervisor/app/process) elaborate clean as pure `@extern`, but they are NOT an independent raw base: `Std.Actor.spawn(actor_module: Atom)` / `fsm_spawn(module_atom)` take a callback-module atom that ONLY the classic container compiler produces. Remove container syntax → no valid module to spawn → the wrappers are a dead API. So the plan's original scope stands: delete `lib/cure/{fsm,actor,sup,app}` (compiler + runtime + builtins together), `lib/cure/process/builtins.ex`, the 5 std wrappers, and their tests. The future typed-process-algebra `Std.Otp.Raw` base is rebuilt kernel-founded later (not these).
+
+**Stdlib disposition (replaces the plan's stale known-dead list `{fsm actor supervisor app process access equatable functor ord show}`):**
+- **KEEP — elaborate dependent-clean (36):** atom, binary, bool, bounded, char, comparable, core, crdt, decision, equivalent, float, gen, int, iter, json, list, map, match, math, nat, non_empty, optic, option, proof, result, semigroup, set, **show**, sigma, string, system, telescope, test, time, tuple, unit, vector. ⚠️ **`show`/`equatable`/`functor` are KEEP** — they migrated to `interface`/`implementation` (NOT proto); the plan's list wrongly marks them dead. DO NOT delete show.cure/equatable.cure/functor.cure or their tests. (`ord.cure`/`access.cure` already gone from disk — optic replaced access, comparable replaced ord.)
+- **KEEP-after-rewrite (1): `io`** — fails now only on `put_chars(text <> "\n")` (`<>`-on-String Semigroup wall) because io.cure has no `use`. Rip-out edit: add `use Std.Semigroup` to io.cure (the "lands at rip-out" rewrite; mirrors the @coexistence emit test's injected imports). Verify it then elaborates.
+- **DELETE — dead-ends/retirement (3):** http (no :inets), regex (no :re), pair (retired — sole consumer was access→optic).
+
+**Additional drift items (fold into the tasks named):**
+- **NEW CUT-DOWN (Task 2): `lib/cure/migrate.ex`** — postdates the plan; `builtin_type_names/0` consumes `Cure.Types.Env.new().types |> Map.keys()` (just 9 name strings). Rewire: inline `~w(Int Float String Bool Atom Unit Any Never Char)` into the lint's own builtin set (it should own its surface vocab post-#18); reword the two `Cure.Types.Env` comments. Reword the 2 stale comments in `test/cure/migrate/uppercase_type_var_test.exs` (coverage-preserving, ledgered).
+- **NEW TEST DELETIONS (Task 1.4):** `test/cure/core/no_gradual_any_test.exs` (aliases `Cure.Types.CoreBridge`; subject is the classic checker), `test/cure/compiler/codegen_binding_test.exs`, `test/cure/compiler/pattern_shape_test.exs` (classic PatternCompiler/Codegen tests).
+- **SURVIVOR (no edit): `test/cure/dependent_pipeline_firewall_test.exs`** — classic names appear only inside its `@forbidden` regex; it's the firewall that PROVES the rip-out. Must stay green.
+- **Optional reword:** `lib/cure/compiler/printer.ex:1316` stale `Cure.Actor.Builtins` comment example (printer round-trips any dotted atom generically — not a dep).
+- **Tag-flip:** value modules (option/result/list/…) currently classic-compile (`dependent?`=false) → after rip-out route through Emit → ctor tags flip to canonical-(A) PascalCase (`{:Some,42}`, `:None`). The ~56 tag-asserting assertions migrate at the Task 4 gate (coverage-preserving, ledgered), per [[stdlib-ripout-readiness-locked]].
+
+---
+
 ## Global Constraints
 
 - Working dir: `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch` (branch `autopilot/kernel-parity-batch`). NEVER read/touch the parent checkout `/Users/ch/Develop/esp32-beam/cure-lang/lib/...`.

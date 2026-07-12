@@ -17,15 +17,10 @@ defmodule Cure.Compiler.SinglePipelineTest do
     assert apply(mod, :add3, [4]) == 7
   end
 
-  # Anticipatory pin for the END-STATE of #18 (the classic-pathway rip-out): once
-  # the `:fsm`/`:actor`/`:supervisor`/`:app` cases are deleted from
-  # `Codegen.dispatch_container/6`, a legacy `fsm` container falls to the
-  # `unsupported_container` catch-all. Skipped until that rip-out runs — today
-  # those four cases are still live AND still exercised by ~25 tests + the whole
-  # `test/cure/{fsm,actor,sup,app}/` tree (all through this same `compile_and_load`
-  # path), so rejecting `fsm` here would turn that surface red. Un-skip as the
-  # first green step of the #18 teardown.
-  @tag :skip
+  # END-STATE pin for #18 (the classic-pathway rip-out): the classic
+  # `Codegen.dispatch_container/6` `:fsm`/`:actor`/`:supervisor`/`:app` cases are
+  # gone, so a legacy `fsm` container now falls to the dependent pipeline's
+  # `unsupported_container` catch-all instead of being silently classic-compiled.
   test "an fsm container is rejected with unsupported_container" do
     src = """
     mod F
