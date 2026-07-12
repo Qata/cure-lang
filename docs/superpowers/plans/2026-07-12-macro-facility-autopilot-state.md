@@ -985,3 +985,26 @@ The remaining work before the DONE criterion is genuinely satisfied is:
 - Perform the final end-to-end proof after the AtomVM runtime gate and remaining embedded surface families land; skeptical review, full test gate, and Antigen verification are complete for the current implementation.
 
 Do not mark the DONE criterion complete until every item above is implemented and verified.
+
+## CRITICAL CONTINUATION DIRECTIVE — 2026-07-13
+
+ABSOLUTELY CRITICAL: Continue this autopilot without returning control to the
+user until the following work is genuinely complete and verified end to end:
+
+- Build macro replacements for the `actor`, `fsm`, `sup`, and `app` containers,
+  removing the need for bespoke compiler object classes for those containers.
+- Preserve and extend the existing actor/fsm/supervisor/application test suites;
+  add new macro replacement and runtime tests.
+- Build and run the generic-unix AtomVM from `/Users/ch/Develop/esp32-beam/AtomVM`
+  and execute the generated supervisor/application proof on it.
+- Merge the kernel-parity worktree (currently named
+  `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`,
+  branch `autopilot/kernel-parity-batch`; it contains user changes that must be
+  preserved) only after understanding its deletion of the bespoke container
+  types, then resolve all integration conflicts and verify the merged result.
+- Do not declare DONE while any replacement, merge conflict, failing legacy test,
+  missing new test, or end-to-end runtime proof remains.
+
+This directive applies for the entirety of the session and every context
+compaction. Commit every implementation phase with a highly descriptive commit
+message and keep the worktree clean between phases.
