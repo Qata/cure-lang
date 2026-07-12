@@ -646,14 +646,23 @@ all 3 tests pass + `test/cure/compiler/` 677 + soundness 6, zero regressions. Al
 captures the elab ref without over-consuming (bare + dotted + example-after + last-rule); `:computed` inert
 (harvest/MacroValidate all exclude it); `by`-missing recovers cleanly; example sub-blocks attach.
 
-**NEXT:** SP2 Tier-3 slice-1 Stage 4 — execute Task 1 (split verb branch → `parse_becomes_rule`/`parse_computed_rule`
-+ the `parse_rule_segments` `computed` stop-word fix) inline TDD on Opus, strict red→green, commit per task (ghost
-author, explicit pathspec, mix from worktree root). NOTE: the `parse_rule_segments` stop-word change is
-LOAD-BEARING (without it the `computed` branch never fires) — apply BOTH the verb-branch split AND that one-line
-segment-stop fix. Then Stage 5 code review. After: Tier-3 quoted-AST + execution slices, `fail C`, WIRING (absorbs
-example-kernel-check + `{:type}` pins + firing-checks-in-compiles + pin SP1 macros). When ALL SP2 done → SP2
-Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass architecture, `2026-07-12-generator-typeclass-pbt-architecture.md`).
-Deferred post-gate SP1: T9, T7b.
+SP2 Tier-3 slice-1 Stage 4 DONE — Task 1 (only task) executed inline TDD (red→green), committed **`ce62b17`**:
+`parse_macro_rule/1` splits the tier verb after `parse_rule_segments` → `parse_computed_rule/4` (new,
+`%{kind: :computed, keyword, segments, elab, examples}`) / `parse_becomes_rule/4` (extracted, unchanged);
+`parse_rule_segments/2` stop-word extended to `v in ["becomes","computed"]` (the load-bearing fix). `computed by
+build_it` → `:computed` rule capturing `{:variable,_,"build_it"}` elab; `:computed` inert at use-sites (parses
+as bare var, not harvested); `becomes` rules byte-identical. 677 parser tests / 1 skipped, warnings-clean. TCB
+delta ZERO. Parse-only — a computed macro can't EXPAND yet (execution is a later slice).
+
+**NEXT:** SP2 Tier-3 slice-1 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
+(`3c3fed7..HEAD` code = `ce62b17`: only `parser.ex` + `macro_computed_test.exs`). Focus: the segment-stop-word
+change doesn't alter literal-rule parsing (`parse_literal_rule` reuses `parse_rule_segments` — does a `literal`
+rule ever legitimately have `computed`/`becomes` as a suffix/literal? no, but confirm); `becomes`-extraction
+byte-identical across zero-hole/example/missing-becomes cases; `parse_expr` elab-capture over-consume; `:computed`
+inert (harvest + MacroValidate exclude); `by`-missing recovery; a rule whose template legitimately starts with the
+word `computed` in an EXPRESSION position isn't misrouted. Then Tier-3 slice-1 done. After: Tier-3 quoted-AST
+`Syntax` model + compile-time EXECUTION (the big one), `fail C`, WIRING slice. When ALL SP2 done → SP2 Stage 6 →
+SP2 COMPLETE → SP3 (Generator-typeclass architecture). Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
