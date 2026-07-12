@@ -3914,7 +3914,7 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    state = skip_newlines(state)
+    state = skip_macro_trivia(state)
     {rules, state} = parse_macro_block(state)
 
     meta = [name: name, line: token.line, col: token.col]
@@ -3934,8 +3934,25 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # `##`/`###` doc-comments are ALWAYS emitted as `:doc_comment` tokens
+  # (independent of `preserve_comments`; see Lexer moduledoc), and plain `#`
+  # comments surface as `:line_comment` tokens whenever the caller sets
+  # `preserve_comments: true` (e.g. the source formatter). Neither is captured
+  # as a rule-attached AST node in this milestone — they are trivia here — but
+  # they MUST be skipped rather than mistaken for the end of the macro's
+  # indented block (would silently empty it) or for a malformed rule line
+  # (would raise a spurious :expected/:syntax_rule error).
+  defp skip_macro_trivia(state) do
+    case peek(state) do
+      %Token{type: :newline} -> skip_macro_trivia(advance(state))
+      %Token{type: :doc_comment} -> skip_macro_trivia(advance(state))
+      %Token{type: :line_comment} -> skip_macro_trivia(advance(state))
+      _ -> state
+    end
+  end
+
   defp parse_macro_rules(state, acc) do
-    state = skip_newlines(state)
+    state = skip_macro_trivia(state)
 
     case peek(state) do
       %Token{type: type} when type in [:dedent, :eof] ->

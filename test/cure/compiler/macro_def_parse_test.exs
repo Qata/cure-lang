@@ -57,4 +57,25 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
     assert Enum.any?(errors, &match?({:malformed_hole, _, _}, &1))
   end
+
+  # `##` doc-comments are ALWAYS emitted by the lexer as `:doc_comment` tokens
+  # regardless of `preserve_comments` (see Lexer moduledoc) — unlike plain `#`
+  # comments, they are present under default parse options too. The macro
+  # container must not mistake one for end-of-block content.
+  test "a doc-comment before the first rule does not empty the macro block" do
+    node = parse!("macro Foo\n  ## explains the rule\n  syntax now becomes Clock.now()\n")
+    assert {:macro_def, _meta, [rule]} = node
+    assert rule.keyword == "now"
+  end
+
+  test "a doc-comment between two rules does not break parsing" do
+    node =
+      parse!(
+        "macro Foo\n  syntax now becomes Clock.now()\n  ## another rule doc\n  syntax later becomes Clock.later()\n"
+      )
+
+    assert {:macro_def, _meta, [rule1, rule2]} = node
+    assert rule1.keyword == "now"
+    assert rule2.keyword == "later"
+  end
 end
