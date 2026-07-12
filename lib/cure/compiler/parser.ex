@@ -4407,6 +4407,17 @@ defmodule Cure.Compiler.Parser do
 
     {segments, state} = parse_rule_segments(state, [])
 
+    case peek(state) do
+      %Token{type: :identifier, value: "computed"} ->
+        parse_computed_rule(state, kw_token, keyword, segments)
+
+      _ ->
+        parse_becomes_rule(state, kw_token, keyword, segments)
+    end
+  end
+
+  # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
+  defp parse_becomes_rule(state, kw_token, keyword, segments) do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
@@ -4421,6 +4432,35 @@ defmodule Cure.Compiler.Parser do
       keyword: keyword,
       segments: segments,
       template: template,
+      examples: examples,
+      progress: nil,
+      line: kw_token.line
+    }
+
+    {rule, state}
+  end
+
+  # Tier-3: `computed by <elab-fn>` (base design §3). Captures the elab
+  # reference; running it is a later slice. NOT harvested into active_macros
+  # (harvest filters kind: :syntax), so a computed macro's use-site is inert
+  # until the execution slice lands.
+  defp parse_computed_rule(state, kw_token, keyword, segments) do
+    state = advance(state)
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "by"} -> advance(state)
+        t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col})
+      end
+
+    {elab, state} = parse_expr(state, 0)
+    {examples, state} = parse_rule_examples(state)
+
+    rule = %{
+      kind: :computed,
+      keyword: keyword,
+      segments: segments,
+      elab: elab,
       examples: examples,
       progress: nil,
       line: kw_token.line
@@ -4612,7 +4652,10 @@ defmodule Cure.Compiler.Parser do
   # typed holes `<name: Kind>` (window: :lt identifier :colon identifier :gt).
   defp parse_rule_segments(state, acc) do
     case peek(state) do
-      %Token{type: :identifier, value: "becomes"} ->
+      # Stop at either tier verb — `becomes` (Tier-2 template) or `computed`
+      # (Tier-3 elab). Without stopping at `computed`, it (and `by`) would be
+      # swallowed as literal segments and the verb branch could never fire.
+      %Token{type: :identifier, value: v} when v in ["becomes", "computed"] ->
         {Enum.reverse(acc), state}
 
       %Token{type: type} when type in [:newline, :dedent, :eof] ->
