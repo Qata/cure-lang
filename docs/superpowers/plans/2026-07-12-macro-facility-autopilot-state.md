@@ -329,13 +329,38 @@ SP1 T4 Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
   (valid-looking multi-clause code), Stage-4 TDD caught it. Stage-5 should confirm the fix + look for similar
   arity issues.
 
-**NEXT:** SP1 T4 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the T4 code diff
-(`8b2ab36..HEAD` code = `8c217da`+`dfcf315`, only `lib/cure/compiler/parser.ex` + `macro_literal_test.exs`).
-Focus: the arity fix correctness; does the `:integer`/`:float` hot-path dispatch add measurable overhead or
-edge-case breakage (number at EOF, number-dot-number, negative numbers, number in a list/tuple/index); does
-`expand_literal_rule` handle a suffix that's ALSO a registered `syntax` keyword; multi-use-site + `<fresh>` in
-a literal template. Then SP1 T4 done. After T4: error-floor (§2), T9 (import scoping §7 + two-pass §6), T7b.
-When ALL SP1 scope done+reviewed → SP1 Stage 6 full verify, then SP2.
+SP1 T4 Stage 5 DONE — Sonnet code review over the T4 diff (`8b2ab36..HEAD`), converged CLEAN (2 passes,
+NO fixes). Verified LIVE against a byte-for-byte pre-diff comparison worktree (`8b2ab36` snapshot): hot-path
+`:integer`/`:float` dispatch byte-identical for EOF/index/list/negative/float/empty-map cases (the `{1,2,3}`
+tuple-literal failure is PRE-EXISTING, not a regression); arity fix correct in both harvesters (no similar
+latent mistakes); suffix/keyword collision deterministic (`500foo`→literal, bare `foo`→syntax, no crash);
+reserved-word suffix inert; token consumed exactly once, multi-segment ok; malformed nil-suffix rules skipped;
+two-phase harvest seeds `literal_macros` on authoritative state only, deterministic; `<fresh>` in a literal
+template threads distinct gensyms (`x$0`/`x$1`); existing `syntax` rules had `kind: :syntax` pre-diff so the
+guard is safe by construction. Full suite 647 passed. High confidence. (Minor cosmetic non-finding: the
+`in ["Duration.ms","ms"]` test alternative's `"ms"` branch is dead — always `"Duration.ms"`; left as-is.)
+
+**SP1 T4 COMPLETE** (`8c217da`+`dfcf315`, plan `a2c6d10`/`8b2ab36`). Tier-1 `literal` units rule live:
+`500ms`→`Duration.ms(500)`, `<fresh>`+T8-firewall apply.
+
+**SP1 GATE STATUS** (program-doc): Tier-1 ✓ (T4) + Tier-2 ✓ (milestone-2 `syntax`) + expansions kernel-check ✓
+(T8 firewall) — the ONE remaining GATE-CRITICAL piece is the **default error-machinery floor (§2)**:
+"wrong-arity/unknown-category macro uses produce a (default-machinery) DIAGNOSTIC, not a raw parser error."
+Currently a bad macro use emits raw `{:macro_use_mismatch, kw, :at_segment, progress, l, c}` /
+`{:expected, :syntax_rule, …}` tuples — must become structured diagnostics with a MESSAGE, using the
+syntax-parse machinery (failure-set → maximal-by-PROGRESS [already threaded from T6b] → report
+message/context/at/within — see `macros/2026-07-12-racket-syntax-parse-comparison.md`). This is the SP1
+FLOOR (default messages); SP2 adds the type-ENFORCED author-defined `Diagnosis`.
+
+**NEXT:** SP1 **error-machinery floor (§2)** Stage 2 — write
+`docs/superpowers/plans/2026-07-12-macro-facility-sp1f-plan.md`. Ground FIRST (probe, don't assume): enumerate
+the raw error tuples a bad macro use currently emits (`:macro_use_mismatch` from `parse_macro_use`, the
+`literal`/`syntax`-rule `:expected` errors, unknown-suffix-that-looked-like-a-unit); read the syntax-parse
+comparison doc for the report shape to port; decide the Diagnosis node/format (a `{:diagnostic, …}` with a
+human message, keyed off the threaded `progress`). Then Stages 3-5. AFTER the gate is met (Tier-1+Tier-2+
+diagnostics+full-suite-green): SP1's Stage 6 full verify → SP1 COMPLETE → SP2. (T9 import-scoping §7 +
+two-pass §6 + T7b auto-hygiene are in SP1's "Includes" but NOT in the gate's pass criteria — sequence them as
+post-gate SP1 enhancements OR fold into a later pass; the gate is the completion bar.)
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
