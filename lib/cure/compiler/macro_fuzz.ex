@@ -9,8 +9,11 @@ defmodule Cure.Compiler.MacroFuzz do
 
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
-  alias Cure.Compiler.{Lexer, Token}
+  alias Cure.Compiler.{Lexer, Parser, Token}
   alias Cure.Core.{Context, Eval, Kernel, Normalise}
+  alias Cure.Elab.Elaborator
+
+  @default_draws 32
 
   @type generator_info :: %{
           category: String.t(),
@@ -50,6 +53,65 @@ defmodule Cure.Compiler.MacroFuzz do
          terms = Backend.sample_seeded(info.generator, count, seed),
          :ok <- check_samples(info, terms) do
       {:ok, info, terms}
+    end
+  end
+
+  @doc "Proof-check supported syntax rules against generated use-sites."
+  @spec check_expansion_proof(tuple(), Cure.Core.Env.t(), keyword()) ::
+          :ok
+          | {:error, {:expansion_ill_typed, map()}}
+          | {:error, {:unsupported_hole_type, String.t()}}
+          | {:error, {:unsupported_hole_arity, non_neg_integer()}}
+          | {:error, term()}
+  def check_expansion_proof({:macro_def, _meta, rules}, env, opts \\ []) do
+    draws = Keyword.get(opts, :draws, @default_draws)
+    seed = Keyword.get(opts, :seed, 1)
+
+    rules
+    |> Enum.filter(&(&1[:kind] == :syntax))
+    |> Enum.reduce_while(:ok, fn rule, :ok ->
+      case prove_rule(rule, rules, env, draws, seed) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp prove_rule(rule, rules, env, draws, seed) do
+    holes = for {:hole, %{name: name, kind: kind}} <- rule.segments, do: {name, kind}
+
+    case holes do
+      [] ->
+        with {:ok, input} <- assemble_use_site(rule, %{}),
+             expansion = Parser.expand_example(rules, input) do
+          check_expansion(rule.keyword, input, expansion, env)
+        end
+
+      [{name, kind}] ->
+        with {:ok, _info, terms} <- sample_holes(kind, draws, seed) do
+          Enum.reduce_while(terms, :ok, fn term, :ok ->
+            with {:ok, input} <- assemble_use_site(rule, %{name => term}),
+                 expansion = Parser.expand_example(rules, input),
+                 :ok <- check_expansion(rule.keyword, input, expansion, env) do
+              {:cont, :ok}
+            else
+              {:error, _} = error -> {:halt, error}
+            end
+          end)
+        end
+
+      many ->
+        {:error, {:unsupported_hole_arity, length(many)}}
+    end
+  end
+
+  defp check_expansion(keyword, input, expansion, env) do
+    case Elaborator.elaborate_expr_typed(expansion, [], Context.empty(env), env) do
+      {:ok, _term, _type} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
     end
   end
 

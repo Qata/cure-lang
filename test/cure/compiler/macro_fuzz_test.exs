@@ -3,6 +3,7 @@ defmodule Cure.Compiler.MacroFuzzTest do
 
   alias Cure.Compiler.MacroFuzz
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Elab.Program
   alias Cure.Core.{Context, Eval, Kernel}
 
   test "samples well-typed Core fillers for supported grammar categories" do
@@ -45,5 +46,48 @@ defmodule Cure.Compiler.MacroFuzzTest do
 
     assert {:error, {:unsupported_surface_filler, _}} =
              MacroFuzz.assemble_use_site(rule, %{"x" => {:global, :missing_surface}})
+  end
+
+  test "a well-typed expansion passes the generated proof batch" do
+    source = """
+    mod M
+      macro Inc
+        syntax inc <n: Nat> becomes n + 1
+          example inc 0 expands 0 + 1
+        explain
+          Nat =>
+            "expects a Nat"
+          keyword "inc" =>
+            "starts with inc"
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    {:macro_def, _, _} = macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))
+
+    assert :ok = MacroFuzz.check_expansion_proof(macro_def, env, draws: 8, seed: 31)
+  end
+
+  test "an ill-typed generated expansion is reported by the proof batch" do
+    source = """
+    mod M
+      macro Bad
+        syntax bad <n: Nat> becomes n + true
+          example bad 0 expands 0 + true
+        explain
+          Nat =>
+            "expects a Nat"
+          keyword "bad" =>
+            "starts with bad"
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    {:macro_def, _, _} = macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))
+
+    assert {:error, {:expansion_ill_typed, %{keyword: "bad"}}} =
+             MacroFuzz.check_expansion_proof(macro_def, env, draws: 8, seed: 31)
   end
 end
