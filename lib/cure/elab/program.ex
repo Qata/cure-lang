@@ -624,12 +624,21 @@ defmodule Cure.Elab.Program do
   # the classic pipeline, which has no union machinery — not a clean
   # `:unsupported_container`-style rejection but a confusing, unrelated error
   # out of classic's ordinary (non-union-aware) pattern handling.
+  # A union can hide in META, which the generic fallback (children-only) never visits: a
+  # `let`'s `:type_annotation`, and a match arm's `:pattern` (typed patterns live there).
+  #
+  # These scan the meta for UNION SYNTAX ONLY — deliberately NOT the full `dependent?/1`
+  # walk. `dependent?/1` decides which COMPILER PIPELINE builds a module, and the two erase
+  # constructors differently. Running the full predicate over a match arm's pattern exposes
+  # ordinary constructor patterns to the pre-existing name-based `"Equivalent"`/`"reflexive"`
+  # heuristic below — so a program with an ADT constructor merely NAMED `Equivalent`, and no
+  # `|` anywhere, was silently rerouted to the dependent pipeline.
   def dependent?({:assignment, meta, children}) when is_list(meta) do
-    dependent?(Keyword.get(meta, :type_annotation)) or dependent?(children)
+    union_syntax?(Keyword.get(meta, :type_annotation)) or dependent?(children)
   end
 
   def dependent?({:match_arm, meta, children}) when is_list(meta) do
-    dependent?(Keyword.get(meta, :pattern)) or dependent?(children)
+    union_syntax?(Keyword.get(meta, :pattern)) or dependent?(children)
   end
 
   def dependent?({:function_call, meta, children}) when is_list(meta) do
@@ -680,6 +689,16 @@ defmodule Cure.Elab.Program do
 
   def dependent?(list) when is_list(list), do: Enum.any?(list, &dependent?/1)
   def dependent?(_other), do: false
+
+  # Union syntax, and nothing else. Kept deliberately narrow — see the meta clauses above.
+  defp union_syntax?({:union_type, _meta, _members}), do: true
+  defp union_syntax?({:typed_pattern, _meta, _children}), do: true
+
+  defp union_syntax?(node) when is_tuple(node),
+    do: node |> Tuple.to_list() |> Enum.any?(&union_syntax?/1)
+
+  defp union_syntax?(list) when is_list(list), do: Enum.any?(list, &union_syntax?/1)
+  defp union_syntax?(_other), do: false
 
   defp dependent_params?(params) when is_list(params), do: Enum.any?(params, &dependent?/1)
   defp dependent_params?(_other), do: false

@@ -182,11 +182,24 @@ defmodule Cure.Elab.Declarations do
   # actually enforced rather than merely assumed.
   @spec reject_reserved_family_name(atom()) :: :ok | {:error, {:reserved_union_type_name, atom()}}
   defp reject_reserved_family_name(name) do
-    if Cure.Elab.Union.union_family?(name) do
+    if Cure.Elab.Union.reserved_name?(name) do
       {:error, {:reserved_union_type_name, name}}
     else
       :ok
     end
+  end
+
+  # Every constructor a declaration introduces shares ONE global flat namespace with the
+  # generated union constructors (`env.ctors`, an unconditional Map.put). A backtick ctor
+  # named `Union<Int|String>$Int` would silently overwrite the real one.
+  defp reject_reserved_ctor_names(sigs) do
+    Enum.find_value(sigs, :ok, fn {:gadt_ctor, cmeta, _chain} ->
+      cname = Keyword.fetch!(cmeta, :name)
+
+      if Cure.Elab.Union.reserved_name?(cname) do
+        {:error, {:reserved_union_type_name, String.to_atom(cname)}}
+      end
+    end)
   end
 
   @doc """
@@ -304,7 +317,8 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
 
-    with {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env),
+    with :ok <- reject_reserved_family_name(name),
+         {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env),
          {:ok, level} <- typealias_universe(env, name, rhs_core) do
       env1 = Env.add_def(env, name, {:type, level}, rhs_core, [])
       {:ok, maybe_certify(env1, name)}
@@ -627,8 +641,14 @@ defmodule Cure.Elab.Declarations do
   """
   @spec declare_record(atom(), [String.t()], [tuple()], Env.t()) ::
           {:ok, Env.t()} | {:error, term()}
-  def declare_record(name, type_params, fields, env),
-    do: declare_parameterized_struct(name, type_params, fields, env)
+  def declare_record(name, type_params, fields, env) do
+    # `interface` reaches family declaration through HERE, not through the container
+    # clauses — so without this it bypassed the reserved-namespace guard entirely and a
+    # backtick-named interface could overwrite a generated union family.
+    with :ok <- reject_reserved_family_name(name) do
+      declare_parameterized_struct(name, type_params, fields, env)
+    end
+  end
 
   defp declare_parameterized_struct(name, type_params, fields, env) do
     params = Enum.map(type_params, fn p -> {:param, [], p} end)
@@ -676,6 +696,12 @@ defmodule Cure.Elab.Declarations do
   # telescope from GADT-style constructor signatures. Shared by indexed types and
   # parameterized enums (the latter pass no indices).
   defp declare_parameterized(name, params, index_params, ctor_sigs, env) do
+    with :ok <- reject_reserved_ctor_names(ctor_sigs) do
+      do_declare_parameterized(name, params, index_params, ctor_sigs, env)
+    end
+  end
+
+  defp do_declare_parameterized(name, params, index_params, ctor_sigs, env) do
     # Parameters are the outer binders: elaborate the param telescope first, then
     # the index telescope in the scope of the parameters (most-recent first).
     param_scope = params |> Enum.map(fn {:param, _m, n} -> n end) |> Enum.reverse()

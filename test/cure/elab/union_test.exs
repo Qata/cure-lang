@@ -828,4 +828,90 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, {:extern_returns_union, :head, _}} = Program.elaborate(src)
     end
   end
+
+  # Two LITERAL members can share an ERASED value even though their keys differ: Char 'A'
+  # and Int 65 are both the Erlang integer 65; Bool `true` and Atom `:true` are both the
+  # atom `true`. `members_overlap?/2` assumed "two literals never overlap", which is only
+  # true of distinct VALUES — not of distinct literal TYPES with a common erasure.
+  #
+  # The consequence was silent and severe: the FFI wrapper emitted two clauses with the
+  # SAME guard, so the second constructor was permanently dead — a raw 65 always came back
+  # tagged Char, never Int, though the type promised both.
+  describe "two literals that erase to the same value" do
+    test "the family is DISJOINT, not Union — the tag is load-bearing" do
+      src = """
+      mod LD
+        fn f(x: 'A' | 65) -> Int = 1
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+
+      # NOT Union<…>: the members' erased value sets overlap (both are the integer 65).
+      assert Inductive.family?(env, :"Disjoint<Char#'A'|Int#65>")
+      refute Inductive.family?(env, :"Union<Char#'A'|Int#65>")
+    end
+
+    test "an @extern over them is REJECTED — no guard order can separate them" do
+      src = """
+      mod LX
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Int)) -> 'A' | 65
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "Bool true and Atom :true collide too" do
+      src = """
+      mod LB
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Atom)) -> true | :true
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "but INSIDE Cure they stay distinct — injection is by literal SYNTAX" do
+      # No FFI, no untagged value to re-tag: the two literals inject into different
+      # constructors and are perfectly distinguishable. Only re-tagging a RAW value is
+      # ambiguous, so only the extern is rejected.
+      src = """
+      mod LI
+        fn from_char() -> 'A' | 65 = 'A'
+        fn from_int() -> 'A' | 65 = 65
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+
+      assert {:ctor, :"Disjoint<Char#'A'|Int#65>$Char#'A'", []} = Env.get_def(env, :from_char).body
+      assert {:ctor, :"Disjoint<Char#'A'|Int#65>$Int#65", []} = Env.get_def(env, :from_int).body
+    end
+  end
+
+  # A member's guard must not be WIDER than its value set, or the wrapper manufactures a
+  # value the user never asserted. `Nat` erases to a non-negative integer, but `is_integer`
+  # also accepts negatives — so a raw -7 was being tagged `Nat(-7)`.
+  describe "a guard must not be wider than the member's value set" do
+    test "a Nat member's guard rejects a negative integer" do
+      src = """
+      mod NG
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Int)) -> Nat | Binary
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      # non-negative: tagged Nat
+      assert apply(:"Cure.NG", :raw, [[7]]) == {:"Union<Binary|Nat>$Nat", 7}
+
+      # negative: NOT a Nat, and not a Binary either — the extern lied, so the honest
+      # outcome is a CaseClauseError, not a fabricated Nat(-7).
+      assert_raise CaseClauseError, fn -> apply(:"Cure.NG", :raw, [[-7]]) end
+    end
+  end
 end

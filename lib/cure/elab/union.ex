@@ -39,6 +39,9 @@ defmodule Cure.Elab.Union do
   @disjoint_prefix "Disjoint<"
   @prefixes [@union_prefix, @disjoint_prefix]
 
+  # Structural separators of the generated key grammar: `Union<a|b>$Int#3`.
+  @key_separators ["<", ">", "|", "$", "#"]
+
   # ── Public API ─────────────────────────────────────────────────────────────
 
   @doc "True iff `atom` is a generated family key — `Union<…>` or `Disjoint<…>`."
@@ -53,6 +56,31 @@ defmodule Cure.Elab.Union do
   @doc "The reserved prefixes a user-declared type name may not take."
   @spec reserved_prefixes() :: [String.t()]
   def reserved_prefixes, do: @prefixes
+
+  @doc """
+  Is `name` reserved — i.e. would a user declaration of it be able to collide with, absorb,
+  or overwrite a compiler-generated family or constructor?
+
+  Two ways it can:
+
+    * it carries a generated PREFIX (`Union<…>`, `Disjoint<…>`), so it can be the family
+      atom itself; or
+    * it contains a SEPARATOR of the key grammar. Family keys join member keys with `|`
+      inside `<…>`; constructors are `<family>$<member_key>`; a literal member keys as
+      `<TypeKey>#<value>`. So `< > | $ #` are all structural. A type named `` `Int#3` ``
+      keys as `"Int#3"` — byte-identical to the literal `3` — and the two silently dedupe
+      against each other, dropping a member from the union with no diagnostic.
+
+  None of these characters is producible by an ordinary identifier; all are reachable in a
+  BACKTICK-quoted one, which is the whole attack surface.
+  """
+  @spec reserved_name?(atom() | String.t()) :: boolean()
+  def reserved_name?(name) when is_atom(name), do: reserved_name?(Atom.to_string(name))
+
+  def reserved_name?(name) when is_binary(name) do
+    Enum.any?(@prefixes, &String.starts_with?(name, &1)) or
+      String.contains?(name, @key_separators)
+  end
 
   @doc """
   The generated family key for a canonical member list.
@@ -94,7 +122,14 @@ defmodule Cure.Elab.Union do
     end)
   end
 
-  defp members_overlap?(%{payload: nil}, %{payload: nil}), do: false
+  # Two LITERALS overlap iff they ERASE to the same Erlang value. Distinct KEYS are not
+  # enough: different literal TYPES can share an erasure — Char `'A'` and Int `65` are both
+  # the integer 65; Bool `true` and Atom `:true` are both the atom `true`. Assuming
+  # "two literals never overlap" made `discriminable/1` certify a union it cannot
+  # discriminate, and named it `Union<…>` when the tag was in fact load-bearing.
+  defp members_overlap?(%{payload: nil} = a, %{payload: nil} = b),
+    do: literal_value(a.key) == literal_value(b.key)
+
   defp members_overlap?(a, b), do: class_overlap?(runtime_class(a), runtime_class(b))
 
   # A user ADT (`:unsupported`) erases to a bare atom when nullary, so it overlaps `Atom`.
@@ -287,12 +322,72 @@ defmodule Cure.Elab.Union do
           ca == cb or (not refines?(ca, cb) and not refines?(cb, ca) and ca == cb),
           do: {ka, kb, ca}
 
+    # Two literals that ERASE to the same value cannot be told apart by any guard — their
+    # exact-value tests are byte-identical, so the second clause is dead and the second
+    # constructor is unreachable. `'A' | 65`, `true | :true`.
+    lit_collisions =
+      for a <- lits,
+          b <- lits,
+          a.key < b.key,
+          literal_value(a.key) == literal_value(b.key),
+          do: {a.key, b.key}
+
     cond do
       unsupported != [] -> {:error, {:unsupported_member_shape, unsupported}}
       collisions != [] -> {:error, {:same_runtime_shape, collisions}}
+      lit_collisions != [] -> {:error, {:same_erased_literal, lit_collisions}}
       true -> :ok
     end
   end
+
+  @doc """
+  Rebuild the SURFACE literal node behind a literal member's key.
+
+  Needed by the elaborator: a literal member binds no payload, so an arm that NAMES it
+  (`n: 3`) must substitute that name with the literal itself.
+  """
+  @spec literal_surface(String.t()) :: {:ok, tuple()} | :error
+  def literal_surface(key) do
+    case String.split(key, "#", parts: 2) do
+      ["Int", v] -> {:ok, {:literal, [subtype: :integer], String.to_integer(v)}}
+      ["Nat", v] -> {:ok, {:literal, [subtype: :integer], String.to_integer(v)}}
+      ["Float", v] -> {:ok, {:literal, [subtype: :float], String.to_float(v)}}
+      ["Bool", v] -> {:ok, {:literal, [subtype: :boolean], v == "true"}}
+      ["Atom", ":" <> v] -> {:ok, {:literal, [subtype: :symbol], String.to_atom(v)}}
+      ["Char", <<?', c::utf8, ?'>>] -> {:ok, {:literal, [subtype: :char], c}}
+      ["String", <<?", rest::binary>>] -> {:ok, {:literal, [subtype: :string], strip_one_trailing_quote(rest)}}
+      _ -> :error
+    end
+  end
+
+  @doc """
+  The VALUE RANGE a type member's erased representation must satisfy, beyond its guard —
+  `nil` when the guard alone is exact.
+
+  A guard must never be WIDER than the member's value set, or the FFI wrapper manufactures
+  a value the author never asserted. `Nat` erases to a plain integer, but `is_integer` also
+  accepts negatives, so a raw `-7` was being tagged `Nat(-7)`. `Bounded(n)` (hence `Char`)
+  is likewise an integer confined to `0..n-1`.
+  """
+  @spec value_bounds(member()) :: nil | {non_neg_integer(), non_neg_integer() | :infinity}
+  def value_bounds(%{payload: {:data, name, _params, indices}}) do
+    case bare_family_name(name) do
+      :Nat ->
+        {0, :infinity}
+
+      :Bounded ->
+        case indices do
+          [{:nat_lit, n}] -> {0, n}
+          # An unknown bound still cannot be negative.
+          _ -> {0, :infinity}
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  def value_bounds(_member), do: nil
 
   @doc """
   Members ordered for runtime discrimination: literals (exact value) first, then type

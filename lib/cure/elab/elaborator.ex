@@ -2407,9 +2407,30 @@ defmodule Cure.Elab.Elaborator do
   # rewrite, matching that established idiom.
   defp expand_member_arm(meta, pm, name, type_ast, cname, m, sub_union?, body) do
     cond do
+      # A LITERAL member binds no payload — the value IS the constructor. But the arm still
+      # gave it a NAME (`n: 3`, or the literal arm of `rest: Bool | 3`), and the body may
+      # use it. Passing `body` through untouched leaves that name resolving to whatever it
+      # means in the ENCLOSING scope — it typechecks, compiles, and returns the wrong
+      # value. So substitute the name with the literal itself, ascribed to the arm's type,
+      # exactly as the sub-union branch substitutes its fresh payload binder. And run the
+      # SAME capture guard: this branch was skipping it entirely.
+      m.payload == nil and binds_any?(body, [name]) ->
+        {:error, {:unsupported_pattern, :shadowed_literal_member}}
+
       m.payload == nil ->
         pattern = {:function_call, [name: Atom.to_string(cname)], []}
-        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), body}}
+
+        rebound =
+          case Cure.Elab.Union.literal_surface(m.key) do
+            {:ok, lit} ->
+              ascription = {:assert_type, pm, [lit, type_ast]}
+              Enum.map(body, &subst_surface_var(&1, name, ascription))
+
+            :error ->
+              body
+          end
+
+        {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}}
 
       sub_union? and binds_any?(body, [name]) ->
         {:error, {:unsupported_pattern, :shadowed_sub_union}}

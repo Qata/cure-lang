@@ -289,12 +289,34 @@ defmodule Cure.Elab.Emit do
   # `R when is_integer(R) -> {:'Union<…>$Int', R}` — a type member is a 1-ary ctor, so it
   # erases to a tagged 2-tuple carrying the raw value.
   defp type_clause(%{ctor: ctor} = member) do
-    test = class_guard(Cure.Elab.Union.runtime_class(member))
-    guard = {:call, @line, {:atom, @line, test}, [{:var, @line, :R}]}
     body = {:tuple, @line, [{:atom, @line, ctor}, {:var, @line, :R}]}
 
-    {:clause, @line, [{:var, @line, :R}], [[guard]], [body]}
+    # The guard sequence is a CONJUNCTION. A class test alone is not always enough: it must
+    # never be WIDER than the member's value set, or the wrapper fabricates a value the
+    # author never asserted. `Nat` erases to a plain integer, but `is_integer` also accepts
+    # negatives — a raw -7 was being tagged Nat(-7). `Bounded(n)` (hence `Char`) is an
+    # integer confined to 0..n-1.
+    guards =
+      [class_test(member) | bound_tests(Cure.Elab.Union.value_bounds(member))]
+
+    {:clause, @line, [{:var, @line, :R}], [guards], [body]}
   end
+
+  defp class_test(member) do
+    test = class_guard(Cure.Elab.Union.runtime_class(member))
+    {:call, @line, {:atom, @line, test}, [{:var, @line, :R}]}
+  end
+
+  defp bound_tests(nil), do: []
+
+  defp bound_tests({min, :infinity}),
+    do: [{:op, @line, :>=, {:var, @line, :R}, {:integer, @line, min}}]
+
+  defp bound_tests({min, max}),
+    do: [
+      {:op, @line, :>=, {:var, @line, :R}, {:integer, @line, min}},
+      {:op, @line, :<, {:var, @line, :R}, {:integer, @line, max}}
+    ]
 
   # `is_boolean` strictly refines `is_atom`, and `Union.discrimination_order/1` puts it
   # first — so `true`/`false` take the Bool clause and every other atom falls through to
