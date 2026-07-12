@@ -104,4 +104,160 @@ defmodule Cure.Compiler.MacroSyntax do
     do: Map.new(pairs, fn {k, v} -> {from_synlit(k), from_synlit(v)} end)
 
   defp from_synlit(:s_opaque), do: nil
+
+  # -- mirror repr <-> Core Std.Syntax values -------------------------------
+
+  @doc "Encode the Elixir mirror representation as a closed Core value."
+  @spec to_core(repr()) :: Cure.Core.Term.t()
+  def to_core({:syn_node, tag, attrs, kids}),
+    do: ctor(:Node, [atom(tag), to_core_attrs(attrs), to_core_list(kids)])
+
+  def to_core({:syn_leaf, tag, attrs, lit}),
+    do: ctor(:Leaf, [atom(tag), to_core_attrs(attrs), to_core_synlit(lit)])
+
+  def to_core({:syn_raw, lit}), do: ctor(:Raw, [to_core_synlit(lit)])
+
+  @doc "Decode a normalized Core value of Std.Syntax into the mirror representation."
+  @spec from_core(Cure.Core.Term.t()) :: repr() | {:error, term()}
+  def from_core({:ctor, :Node, [{:atom_lit, tag}, attrs, kids]}) do
+    with {:ok, attrs} <- from_core_attrs(attrs),
+         {:ok, kids} <- from_core_list(kids),
+         true <- Enum.all?(kids, &syntax_repr?/1) do
+      {:syn_node, tag, attrs, kids}
+    else
+      _ -> {:error, {:invalid_syntax_node, attrs, kids}}
+    end
+  end
+
+  def from_core({:ctor, :Leaf, [{:atom_lit, tag}, attrs, lit]}) do
+    with {:ok, attrs} <- from_core_attrs(attrs),
+         {:ok, lit} <- from_core_synlit(lit) do
+      {:syn_leaf, tag, attrs, lit}
+    else
+      _ -> {:error, {:invalid_syntax_leaf, tag}}
+    end
+  end
+
+  def from_core({:ctor, :Raw, [lit]}) do
+    case from_core_synlit(lit) do
+      {:ok, lit} -> {:syn_raw, lit}
+      error -> error
+    end
+  end
+
+  def from_core(other), do: {:error, {:unsupported_syntax_core, other}}
+
+  defp ctor(name, args), do: {:ctor, name, args}
+  defp atom(value), do: {:atom_lit, value}
+
+  defp to_core_attrs(attrs),
+    do: to_core_list(Enum.map(attrs, fn {key, lit} -> ctor(:KV, [atom(key), to_core_synlit(lit)]) end))
+
+  defp to_core_list(items), do: Enum.reduce(Enum.reverse(items), ctor(:Nil, []), &ctor(:Cons, [&1, &2]))
+
+  defp to_core_synlit({:s_int, n}), do: ctor(:SInt, [{:int_lit, n}])
+  defp to_core_synlit({:s_float, f}), do: ctor(:SFloat, [{:float_lit, f}])
+  defp to_core_synlit({:s_str, s}), do: ctor(:SStr, [to_core_list(Enum.map(String.to_charlist(s), &{:bounded_lit, &1}))])
+  defp to_core_synlit({:s_bool, true}), do: ctor(:SBool, [ctor(:True, [])])
+  defp to_core_synlit({:s_bool, false}), do: ctor(:SBool, [ctor(:False, [])])
+  defp to_core_synlit({:s_atom, a}), do: ctor(:SAtom, [atom(a)])
+  defp to_core_synlit({:s_list, items}), do: ctor(:SList, [to_core_list(Enum.map(items, &to_core_synlit/1))])
+  defp to_core_synlit({:s_syntax, syntax}), do: ctor(:SSyntax, [to_core(syntax)])
+
+  defp to_core_synlit({:s_map, pairs}) do
+    values = Enum.map(pairs, fn {key, value} -> ctor(:SPair, [to_core_synlit(key), to_core_synlit(value)]) end)
+    ctor(:SMap, [to_core_list(values)])
+  end
+
+  defp to_core_synlit(:s_opaque), do: ctor(:SOpaque, [])
+
+  defp from_core_attrs(core) do
+    with {:ok, entries} <- from_core_list(core),
+         {:ok, attrs} <-
+           map_results(entries, fn
+             {:ctor, :KV, [{:atom_lit, key}, lit]} ->
+               with {:ok, lit} <- from_core_synlit(lit), do: {key, lit}
+
+             _ ->
+               {:error, :invalid_syntax_attr}
+           end) do
+      {:ok, attrs}
+    else
+      _ -> {:error, {:invalid_syntax_attrs, core}}
+    end
+  end
+
+  defp from_core_list({:ctor, :Nil, []}), do: {:ok, []}
+
+  defp from_core_list({:ctor, :Cons, [head, tail]}) do
+    with {:ok, rest} <- from_core_list(tail), do: {:ok, [head | rest]}
+  end
+
+  defp from_core_list(_), do: {:error, :invalid_syntax_list}
+
+  defp from_core_synlit({:ctor, :SInt, [{:int_lit, n}]}), do: {:ok, {:s_int, n}}
+  defp from_core_synlit({:ctor, :SFloat, [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
+
+  defp from_core_synlit({:ctor, :SStr, [chars]}) do
+    with {:ok, chars} <- from_core_list(chars),
+         true <- Enum.all?(chars, &match?({:bounded_lit, n} when is_integer(n), &1)) do
+      {:ok, {:s_str, chars |> Enum.map(fn {:bounded_lit, n} -> n end) |> List.to_string()}}
+    else
+      _ -> {:error, :invalid_syntax_string}
+    end
+  end
+
+  defp from_core_synlit({:ctor, :SBool, [{:ctor, :True, []}]}), do: {:ok, {:s_bool, true}}
+  defp from_core_synlit({:ctor, :SBool, [{:ctor, :False, []}]}), do: {:ok, {:s_bool, false}}
+  defp from_core_synlit({:ctor, :SAtom, [{:atom_lit, a}]}), do: {:ok, {:s_atom, a}}
+
+  defp from_core_synlit({:ctor, :SList, [items]}) do
+    with {:ok, items} <- from_core_list(items),
+         {:ok, items} <- map_results(items, &from_core_synlit/1) do
+      {:ok, {:s_list, items}}
+    end
+  end
+
+  defp from_core_synlit({:ctor, :SSyntax, [syntax]}) do
+    case from_core(syntax) do
+      {:error, _} = error -> error
+      syntax -> {:ok, {:s_syntax, syntax}}
+    end
+  end
+
+  defp from_core_synlit({:ctor, :SMap, [pairs]}) do
+    with {:ok, pairs} <- from_core_list(pairs),
+         {:ok, pairs} <- map_results(pairs, &from_core_pair/1) do
+      {:ok, {:s_map, pairs}}
+    end
+  end
+
+  defp from_core_synlit({:ctor, :SOpaque, []}), do: {:ok, :s_opaque}
+  defp from_core_synlit(_), do: {:error, :invalid_syntax_literal}
+
+  defp from_core_pair({:ctor, :SPair, [key, value]}) do
+    with {:ok, key} <- from_core_synlit(key), {:ok, value} <- from_core_synlit(value), do: {key, value}
+  end
+
+  defp from_core_pair(_), do: {:error, :invalid_syntax_pair}
+
+  defp syntax_repr?({:syn_node, _, _, _}), do: true
+  defp syntax_repr?({:syn_leaf, _, _, _}), do: true
+  defp syntax_repr?({:syn_raw, _}), do: true
+  defp syntax_repr?(_), do: false
+
+  defp map_results(items, fun) do
+    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
+      case fun.(item) do
+        {:ok, value} -> {:cont, {:ok, [value | acc]}}
+        {:error, _} = error -> {:halt, error}
+        value -> {:cont, {:ok, [value | acc]}}
+      end
+    end)
+    |> case do
+      {:ok, values} -> {:ok, Enum.reverse(values)}
+      error -> error
+    end
+  end
+
 end

@@ -137,4 +137,23 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert is_map(defaults)
     assert {:literal, _, true} = Map.fetch!(defaults, "ne")
   end
+
+  test "Std.Syntax mirror values encode to and decode from Core constructors" do
+    repr =
+      {:syn_node, :literal, [{:subtype, {:s_atom, :integer}}],
+       [{:syn_leaf, :literal, [], {:s_int, 7}}]}
+
+    core = MacroSyntax.to_core(repr)
+    assert {:ctor, :Node, [{:atom_lit, :literal}, {:ctor, :Cons, _}, {:ctor, :Cons, _}]} = core
+    assert MacroSyntax.from_core(core) == repr
+  end
+
+  test "Core bridge preserves strings, nested syntax, maps, and opaque values" do
+    repr =
+      {:syn_leaf, :raw,
+       [{:payload, {:s_map, [{{:s_str, "k"}, {:s_syntax, {:syn_leaf, :x, [], :s_opaque}}}]}}],
+       {:s_list, [{:s_str, "hi"}, :s_opaque]}}
+
+    assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
+  end
 end
