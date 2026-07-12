@@ -636,14 +636,24 @@ checks; then the WIRING slice. Grounded: `computed by build_it` = 3 identifiers;
 verb after `parse_rule_segments`; `:computed` kind excluded by all harvest/MacroValidate filters (auto-inert).
 One task: split the verb branch → `parse_becomes_rule`/`parse_computed_rule`. TCB delta ZERO.
 
-**NEXT:** SP2 Tier-3 slice-1 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2d plan
-(plan-for-code: falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: the
-`becomes`-path extraction is byte-identical (no regression); `parse_expr(state,0)` captures the elab ref without
-over-consuming (bare name + dotted `Mod.fn`); `:computed` genuinely inert at use-sites (not harvested); `by`
-missing → clean error not crash; examples under a computed rule parse. Then Stage 4 execute, Stage 5 review.
-After: Tier-3 quoted-AST + execution slices, `fail C`, WIRING (absorbs example-kernel-check + `{:type}` pins +
-firing-checks-in-compiles + pin SP1 macros). When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-
-typeclass architecture, `2026-07-12-generator-typeclass-pbt-architecture.md`). Deferred post-gate SP1: T9, T7b.
+SP2 Tier-3 slice-1 Stage 3 DONE — plan hardened + committed `3c3fed7` (5 passes, 2+ clean). Reviewer patched
+the Task-1 code into a scratch build + RAN it, catching a CRITICAL bug the plan missed: `parse_rule_segments/2`
+swallows `computed`/`by` as `{:lit,…}` SEGMENTS before the verb branch runs (its stop clause matched only
+`"becomes"`), so the `%Token{value: "computed"}` branch NEVER fired — the plan's own tests 1+3 failed live
+(`{:expected,:becomes,:got,:newline,…}`). FIX folded in: extend `parse_rule_segments/2` stop-word to
+`v in ["becomes","computed"]` (shared helper; `parse_literal_rule` never uses `computed` so safe). With it,
+all 3 tests pass + `test/cure/compiler/` 677 + soundness 6, zero regressions. Also verified: `parse_expr(state,0)`
+captures the elab ref without over-consuming (bare + dotted + example-after + last-rule); `:computed` inert
+(harvest/MacroValidate all exclude it); `by`-missing recovers cleanly; example sub-blocks attach.
+
+**NEXT:** SP2 Tier-3 slice-1 Stage 4 — execute Task 1 (split verb branch → `parse_becomes_rule`/`parse_computed_rule`
++ the `parse_rule_segments` `computed` stop-word fix) inline TDD on Opus, strict red→green, commit per task (ghost
+author, explicit pathspec, mix from worktree root). NOTE: the `parse_rule_segments` stop-word change is
+LOAD-BEARING (without it the `computed` branch never fires) — apply BOTH the verb-branch split AND that one-line
+segment-stop fix. Then Stage 5 code review. After: Tier-3 quoted-AST + execution slices, `fail C`, WIRING (absorbs
+example-kernel-check + `{:type}` pins + firing-checks-in-compiles + pin SP1 macros). When ALL SP2 done → SP2
+Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass architecture, `2026-07-12-generator-typeclass-pbt-architecture.md`).
+Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
