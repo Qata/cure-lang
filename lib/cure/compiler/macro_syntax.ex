@@ -110,7 +110,7 @@ defmodule Cure.Compiler.MacroSyntax do
   @doc "Encode the Elixir mirror representation as a closed Core value."
   @spec to_core(repr()) :: Cure.Core.Term.t()
   def to_core({:syn_node, tag, attrs, kids}),
-    do: ctor(:Node, [atom(tag), to_core_attrs(attrs), to_core_list(kids)])
+    do: ctor(:Node, [atom(tag), to_core_attrs(attrs), to_core_list(Enum.map(kids, &to_core/1))])
 
   def to_core({:syn_leaf, tag, attrs, lit}),
     do: ctor(:Leaf, [atom(tag), to_core_attrs(attrs), to_core_synlit(lit)])

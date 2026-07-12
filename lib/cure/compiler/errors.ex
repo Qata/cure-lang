@@ -432,6 +432,19 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:computed_macro_error, meta, reason}, file) do
+    line = Keyword.get(meta, :line, 0)
+    keyword = Keyword.get(meta, :keyword, "computed")
+
+    format_diagnostic(
+      "error",
+      "computed macro failed",
+      file,
+      line,
+      "the `#{keyword}` computed macro could not produce a valid Syntax expansion: #{inspect(reason)}"
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do

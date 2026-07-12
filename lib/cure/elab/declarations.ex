@@ -17,7 +17,7 @@ defmodule Cure.Elab.Declarations do
   """
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote}
-  alias Cure.Elab.{Elaborator, Relevance}
+  alias Cure.Elab.{Elaborator, MacroExpand, Relevance}
 
   @ceiling 2
 
@@ -351,7 +351,8 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
 
-    with {:ok, sig} <- function_signature(meta, env) do
+    with {:ok, body_expr} <- MacroExpand.expand(body_expr, env),
+         {:ok, sig} <- function_signature(meta, env) do
       ctx = build_context(env, sig.telescope)
       return_value = Eval.eval(sig.return_core, Context.env(ctx))
 

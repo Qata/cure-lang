@@ -9,7 +9,7 @@ defmodule Cure.Elab.Program do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Core.{Env, Inductive, Validator}
-  alias Cure.Elab.{Coherence, Declarations, Erase, Resolution, TotalityClosure}
+  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -1225,7 +1225,9 @@ defmodule Cure.Elab.Program do
   defp builtin_key([key]) when is_atom(key), do: key
 
   defp body_pass(fn_decls, env) do
-    Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
+    {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
+
+    Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
       case Declarations.elaborate_function_body(decl, acc) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
         {:error, _} = err -> {:halt, err}
