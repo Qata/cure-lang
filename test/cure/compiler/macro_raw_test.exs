@@ -1,7 +1,7 @@
 defmodule Cure.Compiler.MacroRawTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, MacroRaw, Parser, Token}
+  alias Cure.Compiler.{Lexer, MacroModule, MacroRaw, Parser, Token}
 
   test "parser preserves a delimited raw hole" do
     source = """
@@ -56,5 +56,33 @@ defmodule Cure.Compiler.MacroRawTest do
     assert {:ok, use_site} = Cure.Compiler.MacroFuzz.assemble_use_site(rule, %{"rules" => {:raw_text, "item"}})
     assert {:raw_tokens, _, captured} = Parser.expand_example([rule], use_site)
     assert Enum.map(captured, & &1.value) == ["item"]
+  end
+
+  test "module rules execute to ordinary AST without loading a module" do
+    source = """
+    macro Board
+      syntax module <decl: Code> becomes decl
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, rules}} = Parser.parse(tokens, emit_events: false)
+    rule = Enum.find(rules, &(&1[:module_rule] == true))
+
+    assert {:ok, {:literal, _meta, 1}} =
+             MacroModule.execute_module_rule(rule, rules, %{"decl" => {:int_lit, 1}})
+
+    assert {:error, :not_a_module_rule} =
+             MacroModule.execute_module_rule(%{kind: :syntax, module_rule: false}, rules, %{})
+  end
+
+  test "open categories compose extensions and reject closed categories" do
+    base = [%{kind: :open_category, name: "Clause"}, %{kind: :syntax, keyword: "base", category: "Clause"}]
+    extension = [%{kind: :syntax, keyword: "extra", category: "Clause"}]
+    assert {:ok, rules} = MacroModule.compose_open_categories(base, extension)
+    assert Enum.map(rules, & &1[:keyword]) == [nil, "base", "extra"]
+
+    closed = [%{kind: :syntax, keyword: "other", category: "Other"}]
+    assert {:error, {:closed_category_extension, ["Other"]}} =
+             MacroModule.compose_open_categories(base, closed)
   end
 end
