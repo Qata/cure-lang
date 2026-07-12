@@ -974,7 +974,7 @@ The following slices have now landed in this worktree:
 
 The remaining work before the DONE criterion is genuinely satisfied is:
 
-- Extend native generation from the current closed built-in domains to module-aware/custom category declarations and explicit open-category coverage reporting.
+- Extend native generation from closed custom enum families to parameterized/indexed module categories; open-category coverage reporting is implemented.
 - Extend the generated-proof gate to any future macro compilation path introduced after the current dependent and transitional classic paths.
 - Extend SP4 dogfood from constructor dispatch to full reducer/view/flow declaration lowering and integration with concrete library builders.
 - Extend SP5 from pure callback/module values to execution of a generated supervisor on a generic-unix AtomVM runtime; install or provide that external executable before claiming this gate.
