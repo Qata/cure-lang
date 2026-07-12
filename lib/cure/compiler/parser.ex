@@ -136,6 +136,32 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  @doc """
+  Expand a macro example's captured use-site tokens through the macro's own
+  rules — the same expansion a real use-site gets (nested literal/`<fresh>`
+  expansion included). Used by MacroValidate to check `example … expands …`
+  pins (self-proving §5). Returns the expanded surface AST.
+  """
+  @spec expand_example([map()], [Token.t()]) :: ast()
+  def expand_example(rules, use_site_tokens) do
+    synthetic = [{:macro_def, [], rules}]
+    active = harvest_active_macros(synthetic)
+    literal = harvest_literal_macros(synthetic)
+
+    eof = %Token{type: :eof, value: nil, line: 0, col: 0}
+
+    state = %__MODULE__{
+      tokens: use_site_tokens ++ [eof],
+      file: "example",
+      emit_events: false,
+      active_macros: active,
+      literal_macros: literal
+    }
+
+    {ast, _state} = parse_expr(state, 0)
+    ast
+  end
+
   # Collect every local macro rule, indexed by the rule's leading keyword, from
   # a parsed top-level expr list. Descends into containers (a `macro` inside a
   # `mod` is still a local macro of that module).
