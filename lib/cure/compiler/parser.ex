@@ -335,6 +335,18 @@ defmodule Cure.Compiler.Parser do
               {variable(token), advance(state)}
             end
 
+          # Soft keyword: `macro Name …` at statement-prefix position is the
+          # macro container. `macro` followed by anything other than an
+          # identifier stays a plain variable (non-breaking, like sup/app).
+          "macro" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier} ->
+                parse_macro_def(state)
+
+              _ ->
+                {variable(token), advance(state)}
+            end
+
           _ ->
             {variable(token), advance(state)}
         end
@@ -3890,6 +3902,50 @@ defmodule Cure.Compiler.Parser do
   end
 
   # -- FSM  fsm Name with Payload{...} --------------------------------------
+
+  # -- macro container (SP1) --------------------------------------------------
+  # `macro Name` … indented `syntax`/`literal` rules. Soft-keyword; closes by
+  # dedent (no `end`). Mirrors parse_fsm/parse_fsm_block; emits {:macro_def, …}.
+  defp parse_macro_def(state) do
+    token = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+
+    state = skip_newlines(state)
+    {rules, state} = parse_macro_block(state)
+
+    meta = [name: name, line: token.line, col: token.col]
+    {{:macro_def, meta, rules}, state}
+  end
+
+  defp parse_macro_block(state) do
+    case peek(state) do
+      %Token{type: :indent} ->
+        state = advance(state)
+        {rules, state} = parse_macro_rules(state, [])
+        state = expect_dedent(state)
+        {rules, state}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  # Task 2 fills this in; Task 1 leaves the body empty (skip to block end).
+  defp parse_macro_rules(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        parse_macro_rules(advance(state), acc)
+    end
+  end
 
   defp parse_fsm(state) do
     token = peek(state)
