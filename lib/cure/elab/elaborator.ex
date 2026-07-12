@@ -57,13 +57,30 @@ defmodule Cure.Elab.Elaborator do
 
       ctor ->
         order = Enum.map(ctor.args, fn {n, _t} -> n end)
+        defaults = Map.get(ctor, :field_defaults, %{})
         provided = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
 
-        if map_size(provided) == length(order) and
-             Enum.all?(order, &Map.has_key?(provided, &1)) do
-          {:ok, {:function_call, [name: name], Enum.map(order, &Map.fetch!(provided, &1))}}
-        else
-          {:error, {:record_field_mismatch, atom}}
+        cond do
+          # A named field is not a field of this record.
+          not Enum.all?(Map.keys(provided), &(&1 in order)) ->
+            {:error, {:record_field_mismatch, atom}}
+
+          # Every field must be supplied by the caller or carry a declared default
+          # (`name: String = "Anonymous"`); an omitted field with no default is a
+          # genuine mismatch.
+          not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
+            {:error, {:record_field_mismatch, atom}}
+
+          true ->
+            values =
+              Enum.map(order, fn f ->
+                case Map.fetch(provided, f) do
+                  {:ok, val} -> val
+                  :error -> Map.fetch!(defaults, f)
+                end
+              end)
+
+            {:ok, {:function_call, [name: name], values}}
         end
     end
   end

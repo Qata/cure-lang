@@ -73,7 +73,7 @@ defmodule Cure.Elab.Declarations do
               working_env = Inductive.declare(env, Inductive.family(name, [], [], 0), [])
 
               with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
-                declare_at_min_level(env, name, [ctor], 0)
+                declare_at_min_level(env, name, [attach_field_defaults(ctor, variants)], 0)
               end
 
             type_params ->
@@ -618,6 +618,32 @@ defmodule Cure.Elab.Declarations do
       end)
 
     {:gadt_ctor, [name: Atom.to_string(name)], {:arrow_chain, named_doms ++ [family_app(name, type_params)]}}
+  end
+
+  # A record field may declare a default (`name: String = "Anonymous"`), carried in
+  # the field param's `:default` meta. Stash the defaults, keyed by field-name atom
+  # (matching the ctor's `args` telescope labels), on the constructor map as
+  # `:field_defaults` so `desugar_record_construction` can fill any field the caller
+  # omits. Purely an E-layer annotation — a plain extra key on the ctor map that the
+  # kernel never reads. A ctor with no defaulted field is left untouched.
+  defp attach_field_defaults(ctor, fields) do
+    case record_field_defaults(fields) do
+      defaults when map_size(defaults) == 0 -> ctor
+      defaults -> Map.put(ctor, :field_defaults, defaults)
+    end
+  end
+
+  defp record_field_defaults(fields) do
+    Enum.reduce(fields, %{}, fn
+      {:param, m, fname}, acc ->
+        case Keyword.get(m, :default) do
+          nil -> acc
+          expr -> Map.put(acc, String.to_atom(fname), expr)
+        end
+
+      _, acc ->
+        acc
+    end)
   end
 
   # A positional enum variant, seen as a GADT constructor signature that returns
