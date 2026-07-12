@@ -18,7 +18,8 @@ defmodule Cure.Core.Env do
             interfaces: %{},
             coherence: nil,
             constrained: %{},
-            primitives: %{}
+            primitives: %{},
+            import_modules: MapSet.new()
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
@@ -30,7 +31,13 @@ defmodule Cure.Core.Env do
           interfaces: %{atom() => map()},
           coherence: term(),
           constrained: %{atom() => [map()]},
-          primitives: %{String.t() => tuple()}
+          primitives: %{String.t() => tuple()},
+          # Inert elaborator metadata (the kernel never reads it): the set of
+          # module-ids DIRECTLY imported by the module this env belongs to
+          # (explicit `use` + auto-prelude). Bare-name resolution prefers a
+          # direct owner over a name reachable only via a module's transitive
+          # re-export, matching must-import semantics (Haskell/Elm/Idris/Swift).
+          import_modules: MapSet.t(String.t())
         }
 
   @doc "An empty signature."
