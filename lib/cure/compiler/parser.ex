@@ -42,7 +42,17 @@ defmodule Cure.Compiler.Parser do
 
   # -- Parser State ----------------------------------------------------------
 
-  defstruct [:tokens, :file, pos: 0, errors: [], emit_events: false, active_macros: %{}, fresh_counter: 0, literal_macros: %{}]
+  defstruct [
+    :tokens,
+    :file,
+    pos: 0,
+    errors: [],
+    emit_events: false,
+    active_macros: %{},
+    computed_macros: %{},
+    fresh_counter: 0,
+    literal_macros: %{}
+  ]
 
   # Keywords that can open a new top-level definition. Used by the
   # synchronize_to_statement/1 recovery helper to know when to stop
@@ -108,6 +118,7 @@ defmodule Cure.Compiler.Parser do
     harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false}
     {harvest_exprs, _harvest_state} = parse_program(harvest_state)
     active = harvest_active_macros(harvest_exprs)
+    computed = harvest_computed_macros(harvest_exprs)
     literal = harvest_literal_macros(harvest_exprs)
 
     # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
@@ -116,6 +127,7 @@ defmodule Cure.Compiler.Parser do
       file: file,
       emit_events: emit?,
       active_macros: active,
+      computed_macros: computed,
       literal_macros: literal
     }
     {exprs, state} = parse_program(state)
@@ -146,6 +158,7 @@ defmodule Cure.Compiler.Parser do
   def expand_example(rules, use_site_tokens) do
     synthetic = [{:macro_def, [], rules}]
     active = harvest_active_macros(synthetic)
+    computed = harvest_computed_macros(synthetic)
     literal = harvest_literal_macros(synthetic)
 
     eof = %Token{type: :eof, value: nil, line: 0, col: 0}
@@ -155,6 +168,7 @@ defmodule Cure.Compiler.Parser do
       file: "example",
       emit_events: false,
       active_macros: active,
+      computed_macros: computed,
       literal_macros: literal
     }
 
@@ -186,6 +200,23 @@ defmodule Cure.Compiler.Parser do
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
       Enum.reduce(rules, acc, fn
         %{kind: :syntax, keyword: kw} = rule, acc2 when is_binary(kw) ->
+          Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
+
+        _rule, acc2 ->
+          acc2
+      end)
+    end)
+  end
+
+  # Tier-3 sibling of the parse-time syntax harvester. Computed rules are kept
+  # separate because their use-sites emit deferred AST nodes; they must not be
+  # mistaken for Tier-2 templates that can expand before elaboration.
+  defp harvest_computed_macros(exprs) do
+    exprs
+    |> collect_macro_defs()
+    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
+      Enum.reduce(rules, acc, fn
+        %{kind: :computed, keyword: kw} = rule, acc2 when is_binary(kw) ->
           Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
 
         _rule, acc2 ->
@@ -275,6 +306,46 @@ defmodule Cure.Compiler.Parser do
           )
 
         # Recover: yield the bare keyword variable so the outer parse continues.
+        {variable(%Cure.Compiler.Token{
+           type: :identifier,
+           value: keyword,
+           line: t.line,
+           col: t.col
+         }), state}
+    end
+  end
+
+  # Tier-3 use-sites are matched at parse time, but their elab runs only after
+  # the dependent environment exists. Preserve the elab reference and the
+  # matched inputs in a generic syntax-shaped node for the elaboration pass.
+  defp parse_computed_use(state, keyword) do
+    [rule | _] = Map.fetch!(state.computed_macros, keyword)
+    keyword_token = peek(state)
+    state = advance(state)
+
+    case match_segments(state, rule.segments, %{}, 0) do
+      {:ok, bindings, _progress, state} ->
+        inputs =
+          Enum.flat_map(rule.segments, fn
+            {:hole, %{name: name}} -> [Map.fetch!(bindings, name)]
+            _ -> []
+          end)
+
+        input = {:macro_input, [keyword: keyword], inputs}
+
+        {{:computed_use, [keyword: keyword, line: keyword_token.line, col: keyword_token.col],
+          [rule.elab, input]}, state}
+
+      {:error, progress, state} ->
+        t = peek(state)
+
+        state =
+          add_error(
+            state,
+            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress),
+             macro_got_desc(t), t.line, t.col}
+          )
+
         {variable(%Cure.Compiler.Token{
            type: :identifier,
            value: keyword,
@@ -692,6 +763,9 @@ defmodule Cure.Compiler.Parser do
           # untouched. (Reserved soft-keyword names are excluded below.)
           name when is_map_key(state.active_macros, name) and name not in @reserved_macro_keywords ->
             parse_macro_use(state, name)
+
+          name when is_map_key(state.computed_macros, name) and name not in @reserved_macro_keywords ->
+            parse_computed_use(state, name)
 
           "assert_type" ->
             parse_assert_type(state, token)

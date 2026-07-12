@@ -27,7 +27,7 @@ defmodule Cure.Compiler.MacroComputedTest do
     assert {:function_call, _, _} = rule.template
   end
 
-  test "a :computed rule is NOT dispatched at a use-site yet (inert until execution slice)" do
+  test "a :computed rule dispatches to a deferred use-site node" do
     node = parse!("mod M\n  macro Mk\n    syntax mk computed by build_it\n  fn f() = mk\n")
 
     find = fn find, n ->
@@ -38,6 +38,53 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:variable, _, "mk"} = find.(find, node)
+    assert {:computed_use, [keyword: "mk", line: _, col: _], _} = find.(find, node)
+  end
+
+  test "a zero-hole computed use is deferred with its elab and synthetic input" do
+    node = parse!("""
+    mod M
+      macro Mk
+        syntax mk computed by build_it
+      fn build_it(input: Syntax) -> Syntax = input
+      fn f() -> Syntax = mk
+    """)
+
+    find = fn find, n ->
+      case n do
+        {:function_def, meta, [body]} ->
+          if Keyword.get(meta, :name) == "f", do: body
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+
+    assert {:computed_use, [keyword: "mk", line: _, col: _],
+            [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
+             find.(find, node)
+  end
+
+  test "a computed use preserves matched hole inputs in segment order" do
+    node = parse!("""
+    mod M
+      macro Mk
+        syntax mk <first: Code> then <second: Code> computed by build_it
+      fn f(a: Int, b: Int) -> Syntax = mk a then b
+    """)
+
+    find = fn find, n ->
+      case n do
+        {:function_def, meta, [body]} ->
+          if Keyword.get(meta, :name) == "f", do: body
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+
+    assert {:computed_use, _, [{:variable, _, "build_it"}, {:macro_input, _, [first, second]}]} =
+             find.(find, node)
+
+    assert {:variable, _, "a"} = first
+    assert {:variable, _, "b"} = second
   end
 end
