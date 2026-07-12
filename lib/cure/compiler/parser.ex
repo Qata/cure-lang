@@ -3982,12 +3982,33 @@ defmodule Cure.Compiler.Parser do
     {rule, state}
   end
 
-  # Task 3 replaces this to recognize `<name: Kind>` holes; Task 2 has none.
+  # Ordered segments between a rule's keyword and `becomes`: literal tokens and
+  # typed holes `<name: Kind>` (window: :lt identifier :colon identifier :gt).
   defp parse_rule_segments(state, acc) do
     case peek(state) do
-      %Token{type: :identifier, value: "becomes"} -> {Enum.reverse(acc), state}
-      %Token{type: type} when type in [:newline, :dedent, :eof] -> {Enum.reverse(acc), state}
-      _ -> {Enum.reverse(acc), state}
+      %Token{type: :identifier, value: "becomes"} ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: type} when type in [:newline, :dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :lt} ->
+        with %Token{type: :identifier, value: name} <- peek_at(state, 1),
+             %Token{type: :colon} <- peek_at(state, 2),
+             %Token{type: :identifier, value: kind} <- peek_at(state, 3),
+             %Token{type: :gt} <- peek_at(state, 4) do
+          hole = {:hole, %{name: name, kind: kind, line: peek(state).line}}
+          state = state |> advance() |> advance() |> advance() |> advance() |> advance()
+          parse_rule_segments(state, [hole | acc])
+        else
+          _ ->
+            t = peek(state)
+            state = add_error(state, {:malformed_hole, t.line, t.col})
+            {Enum.reverse(acc), advance(state)}
+        end
+
+      %Token{value: v} ->
+        parse_rule_segments(advance(state), [{:lit, to_string(v)} | acc])
     end
   end
 

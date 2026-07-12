@@ -40,4 +40,21 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
     assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _}, &1))
   end
+
+  test "a syntax rule with a typed hole captures name + kind in order" do
+    node = parse!("macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n")
+    assert {:macro_def, _m, [rule]} = node
+    assert rule.keyword == "every"
+    assert [{:hole, hole}] = rule.segments
+    assert hole.name == "t"
+    assert hole.kind == "Duration"
+  end
+
+  test "a malformed hole (missing closing `>`) records a :malformed_hole error" do
+    {:ok, tokens} =
+      Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    assert Enum.any?(errors, &match?({:malformed_hole, _, _}, &1))
+  end
 end
