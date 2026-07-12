@@ -5714,7 +5714,16 @@ defmodule Cure.Elab.Elaborator do
     do: {:halt, {:error, :too_few_arguments}}
 
   defp bidir_app_slot({dom, :unrestricted}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
-    dom_inst = dom |> Subst.instantiate(chosen) |> Unify.zonk(mctx)
+    # ZONK-then-instantiate, not instantiate-then-zonk: `Subst.instantiate` shifts a
+    # substituted term across binders, `Unify.zonk` does not. A domain that is a Π
+    # (a function-typed argument, `(a) -> a`) whose earlier sibling already solved the
+    # metavariable to a term with FREE de Bruijn variables would otherwise reach the
+    # checking mode below with the codomain occurrence unshifted (`{:var,2}` where
+    # `{:var,3}` is due). Resolving the metavariables into the substitution first lets
+    # `instantiate` place them at the right depth. See the twin fix in
+    # `resolve_deferred_slots`; a closed solution shifts to a no-op, so scalar/data
+    # domains are unaffected.
+    dom_inst = Enum.map(chosen, &Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
 
     if has_meta?(dom_inst) do
       # Domain still unsolved — infer the argument and unify to solve metavariables.
@@ -5822,7 +5831,19 @@ defmodule Cure.Elab.Elaborator do
 
   defp resolve_deferred_slots({:ok, mctx, chosen, args, deferred}, names, ctx, env) do
     Enum.reduce_while(deferred, {:ok, mctx}, fn {ph, arg, dom, k}, {:ok, mctx} ->
-      dom_inst = dom |> Subst.instantiate(Enum.take(chosen, k)) |> Unify.zonk(mctx)
+      # ZONK the chosen prefix FIRST, THEN instantiate — not instantiate-then-zonk.
+      # `Subst.instantiate` is binder-aware (it shifts a substituted term when it
+      # crosses a binder), but `Unify.zonk` is NOT: it replaces a solved `{:meta,id}`
+      # with its solution verbatim. When a deferred domain is a Π (`(a) -> a`, a lambda
+      # argument's type) and the metavariable a later sibling solved to a term with
+      # FREE de Bruijn variables (a rigid parameter, `?a := {:var,2}`), the occurrence
+      # in the codomain sits UNDER the domain binder and must shift to `{:var,3}`.
+      # Instantiate-then-zonk left it at `{:var,2}` (`conversion_failure {:var,3}
+      # {:var,2}`); resolving the metavariables into the substitution and letting
+      # `instantiate` place them restores the shift. A closed solution (`Nat`, `Z` —
+      # every constructor-domain deferral) shifts to a no-op, so those are unaffected.
+      dom_inst =
+        Enum.take(chosen, k) |> Enum.map(&Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
 
       # If a later sibling argument did not fully determine this deferred domain,
       # the deferred argument may still determine it FROM ITS OWN constructor
