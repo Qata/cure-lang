@@ -239,10 +239,10 @@ defmodule Cure.Compiler.MacroFuzz do
           check_expansion(rule.keyword, input, expansion, env)
         end
 
-      [{name, kind}] ->
-        with {:ok, _info, terms} <- sample_holes(kind, draws, seed, env) do
-          Enum.reduce_while(terms, :ok, fn term, :ok ->
-            case assemble_use_site(rule, %{name => term}) do
+      _ ->
+        with {:ok, bindings} <- sample_bindings(holes, draws, seed, env) do
+          Enum.reduce_while(bindings, :ok, fn binding, :ok ->
+            case assemble_use_site(rule, binding) do
               {:ok, input} ->
                 case expand_generated(rule, rules, input, env) do
                   {:ok, expansion} ->
@@ -251,7 +251,7 @@ defmodule Cure.Compiler.MacroFuzz do
                         {:cont, :ok}
 
                       {:error, {:expansion_ill_typed, details}} ->
-                        shrunk = shrink_counterexample(rule, rules, env, name, kind, term, details)
+                        shrunk = shrink_counterexample(rule, rules, env, binding, details)
                         {:halt, {:error, {:expansion_ill_typed, shrunk}}}
                     end
 
@@ -265,10 +265,26 @@ defmodule Cure.Compiler.MacroFuzz do
             end
           end)
         end
-
-      many ->
-        {:error, {:unsupported_hole_arity, length(many)}}
     end
+  end
+
+  defp sample_bindings(holes, draws, seed, env) do
+    initial = List.duplicate(%{}, draws)
+
+    Enum.reduce_while(holes, {:ok, initial}, fn {name, kind}, {:ok, bindings} ->
+      case sample_holes(kind, draws, seed, env) do
+        {:ok, _info, terms} ->
+          next =
+            bindings
+            |> Enum.with_index()
+            |> Enum.map(fn {binding, index} -> Map.put(binding, name, Enum.at(terms, index)) end)
+
+          {:cont, {:ok, next}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
   end
 
   defp expand_generated(%{kind: :syntax}, rules, input, _env),
@@ -290,9 +306,17 @@ defmodule Cure.Compiler.MacroFuzz do
     end
   end
 
-  defp shrink_counterexample(rule, rules, env, name, kind, term, details) do
-    {:ok, info} = hole_generator(kind, env)
+  defp shrink_counterexample(rule, rules, env, bindings, details) do
+    {name, term, info} = first_shrinkable_binding(bindings, env)
 
+    if is_nil(info) do
+      Map.put(details, :generated_bindings, bindings)
+    else
+      shrink_counterexample(rule, rules, env, bindings, details, name, term, info)
+    end
+  end
+
+  defp shrink_counterexample(rule, rules, env, bindings, details, name, term, info) do
     challenge =
       Challenge.new(
         kind: :typed_term,
@@ -305,7 +329,7 @@ defmodule Cure.Compiler.MacroFuzz do
     pred = fn candidate ->
       candidate_term = candidate.payload.term
 
-      with {:ok, input} <- assemble_use_site(rule, %{name => candidate_term}),
+      with {:ok, input} <- assemble_use_site(rule, Map.put(bindings, name, candidate_term)),
            {:ok, expansion} <- expand_generated(rule, rules, input, env),
            {:error, {:expansion_ill_typed, _}} <- check_expansion(rule.keyword, input, expansion, env) do
         true
@@ -315,8 +339,38 @@ defmodule Cure.Compiler.MacroFuzz do
     end
 
     shrunk = Shrink.minimize(challenge, pred, 128)
-    Map.merge(details, %{generated_term: term, shrunk_term: shrunk.payload.term})
+
+    result =
+      Map.merge(details, %{
+        generated_bindings: bindings,
+        generated_term: term,
+        shrunk_term: shrunk.payload.term
+      })
+
+    if map_size(bindings) == 1, do: result, else: Map.put(result, :shrunk_hole, name)
   end
+
+  defp first_shrinkable_binding(bindings, env) do
+    Enum.find_value(bindings, fn {name, term} ->
+      case term do
+        {:ctor, _, _} ->
+          {:ok, info} = hole_generator_for_term(term, env)
+
+          case info do
+            %{goal: goal} when not is_nil(goal) -> {name, term, info}
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+    end) || {nil, nil, nil}
+  end
+
+  defp hole_generator_for_term({:ctor, :Z, []}, env), do: hole_generator("Nat", env)
+  defp hole_generator_for_term({:ctor, :S, _}, env), do: hole_generator("Nat", env)
+  defp hole_generator_for_term({:ctor, name, []}, env) when name in [:T, :F], do: hole_generator("Bd", env)
+  defp hole_generator_for_term(_term, _env), do: {:ok, %{goal: nil}}
 
   @doc "Assemble a rule's keyword, literals, and named hole fillers into tokens."
   @spec assemble_use_site(map(), %{String.t() => Cure.Core.Term.t()}) ::

@@ -93,6 +93,28 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert :ok = MacroFuzz.check_expansion_proof(macro_def, env, draws: 8, seed: 31)
   end
 
+  test "generated proof assembles and checks multiple typed holes per rule" do
+    source = """
+    mod M
+      macro Pair
+        syntax pair <a: Nat> then <b: Nat> becomes a + b
+          example pair 0 then 0 expands 0 + 0
+        explain
+          Nat =>
+            "expects Nat operands"
+          keyword "pair" =>
+            "starts with pair"
+          keyword "then" =>
+            "separates the operands"
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))
+    assert :ok = MacroFuzz.check_expansion_proof(macro_def, env, draws: 8, seed: 41)
+  end
+
   test "an ill-typed generated expansion is reported by the proof batch" do
     source = """
     mod M
