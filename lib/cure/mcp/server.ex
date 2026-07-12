@@ -9,7 +9,6 @@ defmodule Cure.MCP.Server do
   - `compile_cure` -- compile Cure source code, return result or errors
   - `parse_cure` -- parse source and return AST summary
   - `type_check_cure` -- type-check source, return errors/warnings
-  - `analyze_fsm` -- analyze an FSM definition (states, transitions, verification)
   - `validate_syntax` -- quick syntax validation (lex + parse only)
   - `get_syntax_help` -- get help on a Cure syntax topic
   - `get_examples` -- list or show example programs
@@ -48,15 +47,6 @@ defmodule Cure.MCP.Server do
       "inputSchema" => %{
         "type" => "object",
         "properties" => %{"source" => %{"type" => "string", "description" => "Cure source code"}},
-        "required" => ["source"]
-      }
-    },
-    %{
-      "name" => "analyze_fsm",
-      "description" => "Analyze a Cure FSM definition. Returns states, transitions, and verification results.",
-      "inputSchema" => %{
-        "type" => "object",
-        "properties" => %{"source" => %{"type" => "string", "description" => "Cure FSM source code"}},
         "required" => ["source"]
       }
     },
@@ -204,8 +194,8 @@ defmodule Cure.MCP.Server do
   defp call_tool("type_check_cure", %{"source" => source}) do
     with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      case Cure.Types.Checker.check_module(ast, emit_events: false) do
-        {:ok, _} -> "Type check passed: no errors."
+      case Cure.Elab.Program.check_ast(ast) do
+        {:ok, _env} -> "Type check passed: no errors."
         {:error, errors} -> "Type errors:\n" <> format_errors(errors)
       end
     else
@@ -213,23 +203,6 @@ defmodule Cure.MCP.Server do
     end
   end
 
-  defp call_tool("analyze_fsm", %{"source" => source}) do
-    with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      fsm_ast = find_fsm(ast)
-
-      if fsm_ast do
-        case Cure.FSM.Verifier.verify(fsm_ast, emit_events: false) do
-          {:ok, _} -> "FSM verification passed.\n" <> describe_fsm(fsm_ast)
-          {:error, errors} -> "FSM issues:\n" <> format_errors(errors)
-        end
-      else
-        "No FSM definition found in the source."
-      end
-    else
-      {:error, reason} -> "Parse error: #{inspect(reason)}"
-    end
-  end
 
   defp call_tool("validate_syntax", %{"source" => source}) do
     with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
@@ -272,77 +245,6 @@ defmodule Cure.MCP.Server do
 
   defp summarize_ast(_), do: "(expression)"
 
-  # -- FSM Helpers -------------------------------------------------------------
-
-  defp find_fsm({:container, meta, _body} = ast) do
-    if Keyword.get(meta, :container_type) == :fsm, do: ast, else: nil
-  end
-
-  defp find_fsm({:block, _, children}) do
-    Enum.find_value(children, &find_fsm/1)
-  end
-
-  defp find_fsm(_), do: nil
-
-  defp describe_fsm({:container, meta, transitions}) do
-    name = Keyword.get(meta, :name, "unnamed")
-
-    # Compilation mode
-    mode =
-      if Keyword.has_key?(meta, :on_transition),
-        do: "callback mode (GenServer with on_transition)",
-        else: "simple mode (gen_statem)"
-
-    # Timer
-    timer_info =
-      case Keyword.get(meta, :timer) do
-        ms when is_integer(ms) -> "\nTimer: #{ms}ms"
-        _ -> ""
-      end
-
-    # Transitions with event suffixes
-    trans =
-      Enum.flat_map(transitions, fn
-        {:function_call, m, _} ->
-          if Keyword.get(m, :name) == "transition" do
-            event = Keyword.get(m, :event, "?")
-            event_kind = Keyword.get(m, :event_kind, :normal)
-
-            suffix =
-              case event_kind do
-                :hard -> "!"
-                :soft -> "?"
-                _ -> ""
-              end
-
-            kind_tag = if event_kind != :normal, do: " (#{event_kind})", else: ""
-            ["  #{Keyword.get(m, :from)} --#{event}#{suffix}--> #{Keyword.get(m, :to)}#{kind_tag}"]
-          else
-            []
-          end
-
-        _ ->
-          []
-      end)
-
-    # Callback blocks
-    callbacks =
-      ~w(on_transition on_enter on_exit on_failure on_timer)a
-      |> Enum.flat_map(fn cb ->
-        case Keyword.get(meta, cb) do
-          clauses when is_list(clauses) and clauses != [] ->
-            ["  #{cb}: #{length(clauses)} clause(s)"]
-
-          _ ->
-            []
-        end
-      end)
-
-    callback_section =
-      if callbacks != [], do: "\nCallbacks:\n#{Enum.join(callbacks, "\n")}", else: ""
-
-    "FSM: #{name}\nMode: #{mode}#{timer_info}\nTransitions:\n#{Enum.join(trans, "\n")}#{callback_section}"
-  end
 
   # -- Error Formatting --------------------------------------------------------
 

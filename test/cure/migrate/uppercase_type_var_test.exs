@@ -81,12 +81,12 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 
-  test "a built-in type the legacy classic Env omits (Pid) is left alone" do
+  test "a BEAM/container built-in type (Pid) is left alone" do
     # `Pid`/`Ref`/`Binary`/`Bitstring`/`Map`/`Tuple`/`Nat` are real Cure types
-    # that the legacy non-dependent `Cure.Types.Env` never registered, so — like
-    # `Type` — they must be supplemented explicitly or every concurrency/container
-    # signature that mentions them warns spuriously and `cure migrate --all` would
-    # corrupt them (`Pid` -> `pid`).
+    # (never free type variables), so — like `Type` — the lint's owned
+    # `@builtin_type_names` set must list them explicitly, or every signature that
+    # mentions them warns spuriously and `cure migrate --all` would corrupt them
+    # (`Pid` -> `pid`).
     for ty <- ~w(Pid Ref Binary Bitstring Map Tuple Nat) do
       src = "mod M\nfn f(x: #{ty}) -> #{ty} = x\n"
       {out, warns} = migrate(src, "builtin.cure")

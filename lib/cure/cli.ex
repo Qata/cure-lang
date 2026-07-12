@@ -15,8 +15,6 @@ defmodule Cure.CLI do
   ## Options
 
       --output-dir DIR    Output directory for .beam files (default: _build/cure/ebin)
-      --no-type-check     Skip type checking
-      --optimize          Enable optimization passes
       --verbose           Show detailed compilation output
   """
 
@@ -181,29 +179,14 @@ defmodule Cure.CLI do
         ["release" | rest] ->
           cmd_release(rest, opts)
 
-        ["top"] ->
-          cmd_top(opts)
-
         ["john"] ->
           cmd_john(opts)
 
         ["trace" | rest] ->
           cmd_trace(rest, opts)
 
-        ["synth" | rest] ->
-          cmd_synth(rest, opts)
-
-        ["bless" | rest] ->
-          cmd_bless(rest)
-
         ["replay" | rest] ->
           cmd_replay(rest, opts)
-
-        ["profile"] ->
-          cmd_profile(["show"], opts)
-
-        ["profile" | rest] ->
-          cmd_profile(rest, opts)
 
         ["draw" | rest] ->
           cmd_draw(rest, opts)
@@ -230,8 +213,8 @@ defmodule Cure.CLI do
           known_commands = ~w(
             compile run check lsp stdlib version init deps test
             explain doc repl fmt watch new bench why doctor fix
-            publish search info keys release top trace synth bless replay
-            john profile draw verify export-types snap story help
+            publish search info keys release trace replay
+            john draw verify export-types snap story help
           )
 
           suffix =
@@ -288,41 +271,7 @@ defmodule Cure.CLI do
     end
   end
 
-  # -- bless (v0.28.0) ---------------------------------------------------------
-
-  defp cmd_bless([]) do
-    error("Usage: cure bless path/to/file.cure")
-    exit({:shutdown, 1})
-  end
-
-  defp cmd_bless(paths) do
-    Enum.each(paths, fn path ->
-      info("Blessing #{path}...")
-
-      case Cure.Bless.bless_file(path) do
-        :nothing_to_fix ->
-          info("  No type errors found.")
-
-        :all_fixed ->
-          info("  All errors fixed.")
-
-        :some_skipped ->
-          info("  Some errors remain (skipped or declined).")
-
-        {:error, reason} ->
-          error("  #{reason}")
-          exit({:shutdown, 1})
-      end
-    end)
-  end
-
-  # -- top / trace / synth (v0.27.0) -------------------------------------------
-
-  defp cmd_top(opts) do
-    width = Keyword.get(opts, :width, 80)
-    snapshot = Cure.Observe.Top.snapshot()
-    IO.puts(Cure.Observe.Top.render(snapshot, width: width))
-  end
+  # -- trace (v0.27.0) ---------------------------------------------------------
 
   # -- john (everything, all at once) ------------------------------------------
 
@@ -360,51 +309,6 @@ defmodule Cure.CLI do
     end
   end
 
-  defp cmd_synth(_rest, opts) do
-    case Keyword.get(opts, :goal) do
-      nil ->
-        error("Usage: cure synth --goal T [--ctx name=T[,...]] [--effects io,state]")
-        exit({:shutdown, 1})
-
-      goal ->
-        do_synth(goal, opts)
-    end
-  end
-
-  defp do_synth(goal, opts) do
-    ctx = parse_synth_ctx(Keyword.get(opts, :ctx, ""))
-    effects = parse_synth_effects(Keyword.get(opts, :effects, ""))
-    max_results = Keyword.get(opts, :max, 3)
-    depth = Keyword.get(opts, :depth, 3)
-
-    info("goal: #{goal}")
-    info("ctx:  #{inspect(ctx, pretty: true)}")
-
-    candidates =
-      Cure.Types.Synth.synthesise(goal, ctx, %{},
-        effects: effects,
-        max: max_results,
-        depth: depth
-      )
-
-    case candidates do
-      [] ->
-        info("No candidates found within the budget (E061).")
-
-      _ ->
-        info("\nCandidates:")
-
-        candidates
-        |> Enum.with_index(1)
-        |> Enum.each(fn {c, i} ->
-          tag =
-            if c.effects == [], do: "pure", else: "! " <> Enum.map_join(c.effects, ",", &to_string/1)
-
-          info("  #{i}. #{c.expr}  (cost #{c.cost}, #{tag})")
-        end)
-    end
-  end
-
   defp parse_mfa(target) when is_binary(target) do
     case Regex.run(~r/^([\w\.]+)\.(\w+)\/(\d+)$/, target) do
       [_, mod, fun, arity] ->
@@ -416,41 +320,13 @@ defmodule Cure.CLI do
     end
   end
 
-  defp parse_synth_ctx(""), do: %{}
-
-  defp parse_synth_ctx(str) do
-    str
-    |> String.split(",", trim: true)
-    |> Enum.flat_map(fn binding ->
-      case String.split(binding, "=", parts: 2) do
-        [name, type] -> [{String.trim(name), String.trim(type)}]
-        _ -> []
-      end
-    end)
-    |> Map.new()
-  end
-
-  defp parse_synth_effects(""), do: []
-
-  defp parse_synth_effects(str) do
-    str
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.map(&String.to_atom/1)
-  end
-
   # -- compile -----------------------------------------------------------------
 
   defp cmd_compile([], _opts), do: error("Usage: cure compile <file|directory>")
 
   defp cmd_compile(paths, opts) do
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
-    check? = Keyword.get(opts, :type_check, true)
-    optimize? = Keyword.get(opts, :optimize, false)
     verbose? = Keyword.get(opts, :verbose, false)
-    monomorphise? = Keyword.get(opts, :monomorphise, true)
-    pgo? = Keyword.get(opts, :pgo, false)
-    profile_dir = Keyword.get(opts, :profile_dir, Cure.PGO.Recorder.default_dir())
 
     # Preload the stdlib so sources that `use Std.Iter`, `use Std.Gen`,
     # etc. can resolve their imports at compile time. Without this, a
@@ -467,30 +343,10 @@ defmodule Cure.CLI do
 
     preload_stdlib(project)
 
-    base_compile_opts = [
+    compile_opts = [
       output_dir: output_dir,
-      check_types: check?,
-      optimize: optimize?,
-      monomorphise: monomorphise?,
       emit_events: false
     ]
-
-    compile_opts =
-      if pgo? do
-        case Cure.PGO.load(profile_dir, emit_events: false) do
-          {:ok, pgo} ->
-            if verbose?,
-              do: info("PGO loaded from #{profile_dir}: #{MapSet.size(pgo.hot)} hot, #{MapSet.size(pgo.cold)} cold")
-
-            Keyword.put(base_compile_opts, :pgo, pgo)
-
-          {:error, reason} ->
-            warn("--pgo: cannot load #{profile_dir}: #{inspect(reason)}; continuing without PGO")
-            base_compile_opts
-        end
-      else
-        base_compile_opts
-      end
 
     files =
       Enum.flat_map(paths, fn path ->
@@ -544,14 +400,7 @@ defmodule Cure.CLI do
   # -- run ---------------------------------------------------------------------
 
   @dialyzer {:nowarn_function, cmd_run: 2}
-  defp cmd_run(path, opts) do
-    # Type checking runs by default; use `--no-type-check` to opt out.
-    check? = Keyword.get(opts, :type_check, true)
-    optimize? = Keyword.get(opts, :optimize, false)
-    monomorphise? = Keyword.get(opts, :monomorphise, true)
-    record_profile? = Keyword.get(opts, :record_profile, false)
-    profile_dir = Keyword.get(opts, :profile_dir, Cure.PGO.Recorder.default_dir())
-
+  defp cmd_run(path, _opts) do
     project =
       case Cure.Project.load() do
         {:ok, p} -> p
@@ -560,41 +409,19 @@ defmodule Cure.CLI do
 
     preload_stdlib(project)
 
-    if record_profile? do
-      case Cure.PGO.Recorder.start_link([]) do
-        {:ok, _} -> :ok
-        {:error, {:already_started, _}} -> :ok
-        other -> warn("--record-profile: failed to start recorder: #{inspect(other)}")
-      end
-    end
-
     source =
       case File.read(path) do
         {:ok, s} -> s
         {:error, reason} -> error("Cannot read #{path}: #{reason}") && exit({:shutdown, 1})
       end
 
-    case Cure.Compiler.compile_and_load(source,
-           file: path,
-           check_types: check?,
-           optimize: optimize?,
-           monomorphise: monomorphise?,
-           emit_events: false
-         ) do
+    case Cure.Compiler.compile_and_load(source, file: path, emit_events: false) do
       {:ok, module} ->
         if function_exported?(module, :main, 0) do
           result = module.main()
           if result != :ok and result != nil, do: IO.inspect(result)
         else
           info("Module #{module} compiled (no main/0 function)")
-        end
-
-        if record_profile? do
-          case Cure.PGO.Recorder.flush(profile_dir) do
-            {:ok, []} -> info("--record-profile: no profile entries collected")
-            {:ok, paths} -> info("--record-profile: wrote #{length(paths)} profile(s) to #{profile_dir}")
-            {:error, reason} -> warn("--record-profile: flush failed: #{inspect(reason)}")
-          end
         end
 
       {:error, reason} ->
@@ -604,69 +431,6 @@ defmodule Cure.CLI do
     end
   end
 
-  # -- profile (v0.31.0) -------------------------------------------------------
-
-  defp cmd_profile(["show" | _rest], opts) do
-    dir = Keyword.get(opts, :profile_dir, Cure.PGO.Recorder.default_dir())
-    top_n = Keyword.get(opts, :top, 10)
-
-    case Cure.PGO.load(dir, emit_events: false) do
-      {:error, reason} ->
-        error("cannot load profiles from #{dir}: #{inspect(reason)}")
-        exit({:shutdown, 1})
-
-      {:ok, pgo} ->
-        info("PGO summary (#{dir})")
-        info("  hot:  #{MapSet.size(pgo.hot)} function(s)")
-        info("  cold: #{MapSet.size(pgo.cold)} function(s)")
-        info("  threshold: #{pgo.hot_threshold}")
-
-        if MapSet.size(pgo.hot) > 0 do
-          info("\nHot (top #{top_n}):")
-
-          pgo.hot
-          |> Enum.take(top_n)
-          |> Enum.each(fn {m, f, a} -> info("  #{m}.#{f}/#{a}") end)
-        end
-    end
-  end
-
-  defp cmd_profile(["clear" | _rest], opts) do
-    dir = Keyword.get(opts, :profile_dir, Cure.PGO.Recorder.default_dir())
-
-    case File.ls(dir) do
-      {:error, _} ->
-        info("profile dir #{dir} is empty or missing")
-
-      {:ok, files} ->
-        removed =
-          files
-          |> Enum.filter(&String.ends_with?(&1, ".profile"))
-          |> Enum.map(fn f ->
-            path = Path.join(dir, f)
-            File.rm!(path)
-            path
-          end)
-
-        info("removed #{length(removed)} profile(s) from #{dir}")
-    end
-  end
-
-  defp cmd_profile(["run" | rest], opts) do
-    case rest do
-      [path | _] ->
-        cmd_run(path, Keyword.put(opts, :record_profile, true))
-
-      [] ->
-        error("Usage: cure profile run <file.cure>")
-        exit({:shutdown, 1})
-    end
-  end
-
-  defp cmd_profile([unknown | _], _opts) do
-    error("Unknown profile subcommand: #{unknown}. Use one of: run, show, clear")
-    exit({:shutdown, 1})
-  end
 
   # -- draw (v0.31.0) ----------------------------------------------------------
 
@@ -754,14 +518,12 @@ defmodule Cure.CLI do
 
     with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
          {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: path, emit_events: false),
-         {:ok, _} <- Cure.Types.Checker.check_module(ast, file: path, emit_events: false) do
+         {:ok, _env} <- Cure.Elab.Program.check_ast(ast) do
       info("#{path}: OK")
     else
       {:error, reason} ->
-        # `Checker.check_module/2` returns a bare list of diagnostics;
-        # every other pipeline stage returns a tagged tuple. Funnel both
-        # through `format_error/2` (which now accepts raw lists) and
-        # print the already-formatted string directly to stderr.
+        # The dependent checker returns a tagged `{:error, term}`; funnel it
+        # through `format_error/2` and print the formatted string to stderr.
         formatted = Cure.Compiler.Errors.format_error(reason, path)
         diagnostic(formatted)
         exit({:shutdown, 1})
@@ -1858,18 +1620,13 @@ defmodule Cure.CLI do
       keys generate <h>    Generate an Ed25519 signing keypair
       keys list            List trusted publisher keys
       release              Build a BEAM release (requires `app`)
-      top                  Print a runtime snapshot (supervisors / actors / FSMs)
       trace <M.f/a>        Typed tracer over :dbg (--duration N)
-      synth                Synthesise typed-hole candidates (--goal T --ctx x=T)
       john                 Print everything: VM stats, tooling, project, logs
       version              Show version
       help                 Show this help
 
     Options:
       -o, --output-dir DIR   Output directory (default: _build/cure/ebin)
-      --no-type-check        Skip the type checker (compile/run only; check
-                             always type-checks). Type checking is ON by default.
-      --optimize             Enable optimization passes
       --action ACTION        Watch action: compile (default) | check | test
       --poll-ms N            Watch poll interval (default 500)
       --debounce N           Watch coalesce window (default 200)

@@ -155,7 +155,7 @@ defmodule Cure.Migrate do
   @doc """
   Build the per-file context consulted by `:needs_resolution` rules: the set of
   type names (as strings) in scope for `ast`. Seeded with Cure's built-in
-  primitive type names — derived from `Cure.Types.Env`, never hardcoded — and
+  primitive type names (`@builtin_type_names`, owned by the lint) — and
   unioned with the type names this file declares (structs, enums, type aliases,
   and indexed families) and those it imports.
 
@@ -173,21 +173,22 @@ defmodule Cure.Migrate do
     |> MapSet.union(imported_names(ast, file))
   end
 
-  # Built-in type names the legacy non-dependent `Cure.Types.Env` never
-  # registered, but which are real Cure types (never free type variables) and so
-  # must NOT be lowercased. `Type` is the universe kind (`fn F(a: Type) -> Type`).
-  # `Pid`/`Ref`/`Binary`/`Bitstring` are BEAM primitive types and `Map`/`Tuple`
-  # are built-in containers; `Nat` is the Int-tier foundational numeric type (it
-  # carries dedicated kernel literal forms). Without this supplement, every
-  # concurrency or container signature mentioning them warns spuriously — and
-  # `cure migrate --all` would corrupt them (`Pid` -> `pid`). Data *constructors*
-  # of imported inductives (e.g. `Std.Nat`'s `Z`/`S`) are a different category —
-  # they need per-import resolution and stay out of this fixed set.
-  @builtin_supplement ~w(Type Pid Ref Binary Bitstring Map Tuple Nat)
+  # The built-in type names in scope for every module — real Cure types (never
+  # free type variables) that must NOT be lowercased. The lint owns this surface
+  # vocabulary directly (the classic type-checker Env, which formerly supplied
+  # the first group, was deleted in the #18 rip-out). Group 1 = the surface
+  # primitive types (`Int`/`Float`/`String`/`Bool`/`Atom`/`Unit`/`Any`/`Never`/
+  # `Char`). Group 2: `Type` is the universe kind (`fn F(a: Type) -> Type`);
+  # `Pid`/`Ref`/`Binary`/`Bitstring` are BEAM primitive types; `Map`/`Tuple` are
+  # built-in containers; `Nat` is the Int-tier foundational numeric (dedicated
+  # kernel literal forms). Without these, container/kind signatures warn
+  # spuriously and `cure migrate --all` would corrupt them (`Pid` -> `pid`). Data
+  # *constructors* of imported inductives (e.g. `Std.Nat`'s `Z`/`S`) are a
+  # different category — resolved per-import (`imported_names/2`), not here.
+  @builtin_type_names ~w(Int Float String Bool Atom Unit Any Never Char
+                         Type Pid Ref Binary Bitstring Map Tuple Nat)
 
-  defp builtin_type_names do
-    (Cure.Types.Env.new().types |> Map.keys()) ++ @builtin_supplement |> MapSet.new()
-  end
+  defp builtin_type_names, do: MapSet.new(@builtin_type_names)
 
   # Every type name this file introduces, gathered by a full pre-order walk:
   #   * `{:container, [container_type: :struct | :enum | :opaque, name: n], _}` —

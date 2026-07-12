@@ -23,9 +23,7 @@ defmodule Cure.Compiler do
       {:ok, module} = Cure.Compiler.compile_and_load(source)
   """
 
-  alias Cure.Compiler.{Lexer, Parser, Codegen, BeamWriter}
-  alias Cure.Types.Checker
-  alias Cure.Optimizer
+  alias Cure.Compiler.{Lexer, Parser, BeamWriter}
 
   @doc """
   Compile a `.cure` source file to BEAM bytecode.
@@ -85,50 +83,13 @@ defmodule Cure.Compiler do
     file = Keyword.get(opts, :file, "nofile")
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
     emit? = Keyword.get(opts, :emit_events, true)
-    check? = Keyword.get(opts, :check_types, true)
-
-    optimize? = Keyword.get(opts, :optimize, false)
-    monomorph? = Keyword.get(opts, :monomorphise, true)
-    monomorph_budget = Keyword.get(opts, :monomorph_budget, 16)
     declared_phases = Keyword.get(opts, :declared_phases)
-
-    optimize_opts = [
-      monomorphise: monomorph?,
-      monomorph_budget: monomorph_budget,
-      emit_events: emit?,
-      file: file
-    ]
 
     with {:ok, tokens} <- lex(source, file, emit?),
          {:ok, ast} <- parse(tokens, file, emit?),
          {:ok, ast} <- migrate_warn(ast, file),
-         {:ok, _} <- maybe_check(ast, file, emit?, check?),
-         {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
          {:ok, forms, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
-      # Callback-mode FSMs, typed actors, supervisors, and
-      # applications are already compiled, loaded, *and* persisted to
-      # `<output_dir>/<mod>.beam` by the codegen step (the dispatcher
-      # passed `output_dir` through to the respective compilers). In
-      # that case `forms` is one of the `{:callback_mode, module}`,
-      # `{:actor, module}`, `{:supervisor, module}`, or `{:app,
-      # module}` markers, and there is nothing left for this
-      # orchestrator to write.
-      case forms do
-        {:callback_mode, mod_atom} ->
-          {:ok, mod_atom, []}
-
-        {:actor, mod_atom} ->
-          {:ok, mod_atom, []}
-
-        {:supervisor, mod_atom} ->
-          {:ok, mod_atom, []}
-
-        {:app, mod_atom} ->
-          {:ok, mod_atom, []}
-
-        forms when is_list(forms) ->
-          write_beam_forms(forms, output_dir, emit?, file, cg_warnings)
-      end
+      write_beam_forms(forms, output_dir, emit?, file, cg_warnings)
     end
   end
 
@@ -198,45 +159,14 @@ defmodule Cure.Compiler do
   def compile_and_load(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, false)
-    check? = Keyword.get(opts, :check_types, true)
-
-    optimize? = Keyword.get(opts, :optimize, false)
-    monomorph? = Keyword.get(opts, :monomorphise, true)
-    monomorph_budget = Keyword.get(opts, :monomorph_budget, 16)
     declared_phases = Keyword.get(opts, :declared_phases)
-
-    optimize_opts = [
-      monomorphise: monomorph?,
-      monomorph_budget: monomorph_budget,
-      emit_events: emit?,
-      file: file
-    ]
 
     with {:ok, tokens} <- lex(source, file, emit?),
          {:ok, ast} <- parse(tokens, file, emit?),
-         {:ok, _} <- maybe_check(ast, file, emit?, check?),
-         {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
          {:ok, forms, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
       # compile_and_load/2 intentionally does NOT persist bytecode to
-      # disk -- it only loads into the current VM -- so we pass `nil`
-      # for `output_dir` and the container compilers skip their
-      # `BeamWriter.write_beam/4` calls.
-      case forms do
-        {:callback_mode, mod_atom} ->
-          {:ok, mod_atom}
-
-        {:actor, mod_atom} ->
-          {:ok, mod_atom}
-
-        {:supervisor, mod_atom} ->
-          {:ok, mod_atom}
-
-        {:app, mod_atom} ->
-          {:ok, mod_atom}
-
-        forms when is_list(forms) ->
-          BeamWriter.compile_and_load(forms)
-      end
+      # disk -- it only loads into the current VM.
+      BeamWriter.compile_and_load(forms)
     end
   end
 
@@ -266,49 +196,13 @@ defmodule Cure.Compiler do
     {:ok, ast}
   end
 
-  defp maybe_optimize(ast, false, _opts), do: {:ok, ast}
-
-  defp maybe_optimize(ast, true, opts) do
-    {:ok, optimized, _stats} = Optimizer.optimize(ast, opts)
-    {:ok, optimized}
-  end
-
-  defp maybe_check(_ast, _file, _emit?, false), do: {:ok, :skipped}
-
-  defp maybe_check(ast, file, emit?, true) do
-    # Proof-collect mode: when `Cure.Project.Proof.collect/1` sets up the
-    # `cure_proof_certs` ETS table before invoking the compiler, any proof
-    # certificates discharged inside `Cure.Types.Checker` are expected to
-    # be deposited directly via `Cure.Project.Proof.deposit/1`. The
-    # compiler pipeline itself does not intercept the checker's return
-    # value for this purpose -- the checker's public API always returns
-    # `{:ok, term()}` and the side-channel ETS table is the handshake.
-    case Checker.check_module(ast, file: file, emit_events: emit?) do
-      {:ok, _} = ok -> ok
-      {:error, errors} -> {:error, {:type_error, errors}}
-    end
-  end
-
-  defp codegen(ast, file, emit?, output_dir, declared_phases) do
+  defp codegen(ast, _file, _emit?, _output_dir, _declared_phases) do
+    # Single pipeline: every module is lowered by the kernel (dependent codegen).
+    # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
     result =
-      if Cure.Elab.Program.dependent?(ast) do
-        # The kernel-lowering path never produces codegen warnings.
-        case dependent_codegen(ast) do
-          {:ok, forms} -> {:ok, forms, []}
-          {:error, _} = err -> err
-        end
-      else
-        opts = [file: file, emit_events: emit?, output_dir: output_dir]
-
-        opts =
-          if is_list(declared_phases),
-            do: Keyword.put(opts, :declared_phases, declared_phases),
-            else: opts
-
-        case Codegen.compile_module(ast, opts) do
-          {:ok, forms, cg_warnings} -> {:ok, forms, cg_warnings}
-          {:error, reason} -> {:error, {:codegen_error, reason}}
-        end
+      case dependent_codegen(ast) do
+        {:ok, forms} -> {:ok, forms, []}
+        {:error, _} = err -> err
       end
 
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`

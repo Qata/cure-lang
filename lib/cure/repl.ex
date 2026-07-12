@@ -46,7 +46,6 @@ defmodule Cure.REPL do
   alias Cure.Compiler.Printer
   alias Cure.REPL.{Config, Docs, History, LineEditor, Markdown, Render, Search, Session, Snap, Terminal, Theme}
   alias Cure.Stdlib.Preload
-  alias Cure.Types.{Checker, Holes}
 
   defstruct n: 1,
             loaded: [],
@@ -751,8 +750,8 @@ defmodule Cure.REPL do
         render_info(state, "(no holes recorded)")
 
       holes ->
-        Enum.each(holes, fn {label, goal, ctx} ->
-          render_info(state, Holes.render(label, goal, ctx))
+        Enum.each(holes, fn {label, goal, _ctx} ->
+          render_info(state, "#{label} : #{inspect(goal)}")
         end)
     end
 
@@ -807,12 +806,7 @@ defmodule Cure.REPL do
   defp handle_meta(state, ":john"), do: cmd_john(state)
   defp handle_meta(state, ":john " <> _), do: cmd_john(state)
 
-  defp handle_meta(state, ":t " <> expr), do: cmd_type(state, expr)
-  defp handle_meta(state, ":type " <> expr), do: cmd_type(state, expr)
-  defp handle_meta(state, ":bless"), do: cmd_bless(state, nil)
-  defp handle_meta(state, ":bless " <> path), do: cmd_bless(state, String.trim(path))
   defp handle_meta(state, ":doc " <> name), do: cmd_doc(state, name)
-  defp handle_meta(state, ":effects " <> expr), do: cmd_effects(state, expr)
   defp handle_meta(state, ":load " <> path), do: cmd_load(state, String.trim(path))
   defp handle_meta(state, ":use " <> mod), do: cmd_use(state, String.trim(mod))
   defp handle_meta(state, ":fmt " <> expr), do: cmd_fmt(state, expr)
@@ -838,51 +832,8 @@ defmodule Cure.REPL do
     state
   end
 
-  defp cmd_type(state, expr) do
-    case Cure.quote(expr) do
-      {:ok, ast} ->
-        case Checker.infer_expr(ast, extra_bindings: Session.signatures(state.defs)) do
-          {:ok, type} -> render_info(state, "#{expr} : #{Cure.Types.Type.display(type)}")
-          {:error, reason} -> render_error(state, format_error(reason))
-        end
-
-      {:error, reason} ->
-        render_error(state, format_error(reason))
-    end
-
-    state
-  end
-
   defp cmd_doc(state, name) do
     Docs.render(name, state)
-    state
-  end
-
-  defp cmd_effects(state, expr) do
-    case Cure.quote(expr) do
-      {:ok, ast} ->
-        env =
-          Enum.reduce(Session.signatures(state.defs), Cure.Types.Env.new(), fn {name, sig}, e ->
-            Cure.Types.Env.extend(e, name, sig)
-          end)
-
-        effects = Cure.Types.Effects.infer_effects(ast, env)
-
-        if Enum.empty?(effects) do
-          render_info(state, "#{expr} :: (pure)")
-        else
-          eff_str =
-            effects
-            |> Enum.sort()
-            |> Enum.map_join(", ", &Cure.Types.Type.display_effect/1)
-
-          render_info(state, "#{expr} :: ! #{eff_str}")
-        end
-
-      {:error, reason} ->
-        render_error(state, format_error(reason))
-    end
-
     state
   end
 
@@ -913,11 +864,10 @@ defmodule Cure.REPL do
       state
     else
       # If the module is unknown to the stdlib, warn and suggest the closest.
-      bundle = Cure.Types.Stdlib.all()
-      known = Map.keys(bundle.short_by_module)
+      known = stdlib_module_names()
 
       state =
-        if known != [] and not Map.has_key?(bundle.short_by_module, mod) do
+        if known != [] and mod not in known do
           suffix =
             case Cure.Compiler.Errors.suggest(mod, known) do
               nil -> ""
@@ -935,6 +885,21 @@ defmodule Cure.REPL do
     end
   end
 
+  # Known stdlib module names, derived from the `lib/std/*.cure` source
+  # filenames (e.g. `non_empty.cure` -> `Std.NonEmpty`). Replaces the classic
+  # `Cure.Types.Stdlib.all/0` signature bundle, removed with the rip-out (#18).
+  defp stdlib_module_names do
+    case File.ls(Cure.Stdlib.Paths.source_dir()) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&String.ends_with?(&1, ".cure"))
+        |> Enum.map(fn f -> "Std." <> Macro.camelize(Path.rootname(f)) end)
+
+      _ ->
+        []
+    end
+  end
+
   defp strip_cure_prefix("Cure." <> rest), do: rest
   defp strip_cure_prefix(other), do: other
 
@@ -942,29 +907,6 @@ defmodule Cure.REPL do
     case Cure.quote(expr) do
       {:ok, ast} -> render_info(state, Printer.quoted_to_string(ast))
       {:error, reason} -> render_error(state, format_error(reason))
-    end
-
-    state
-  end
-
-  defp cmd_bless(state, nil) do
-    render_error(state, "Usage: :bless path/to/file.cure")
-    state
-  end
-
-  defp cmd_bless(state, path) do
-    case Cure.Bless.bless_file(path) do
-      :nothing_to_fix ->
-        render_info(state, "No type errors found in #{path}.")
-
-      :all_fixed ->
-        render_info(state, "All errors fixed.")
-
-      :some_skipped ->
-        render_info(state, "Some errors remain (skipped or declined).")
-
-      {:error, reason} ->
-        render_error(state, reason)
     end
 
     state
@@ -1233,15 +1175,11 @@ defmodule Cure.REPL do
     end
   end
 
-  defp describe_let_type(state, expr_src) do
-    with {:ok, ast} <- Cure.quote(expr_src),
-         {:ok, type} <-
-           Checker.infer_expr(ast, extra_bindings: Session.signatures(state.defs)) do
-      Cure.Types.Type.display(type)
-    else
-      _ -> "Any"
-    end
-  end
+  # Classic expression-level type inference (`Cure.Types.Checker.infer_expr/2`)
+  # was removed with the pathway rip-out (#18); the REPL no longer annotates a
+  # `let` binding with an inferred type. Kept as a stub so the `let` display
+  # path is unchanged apart from the (now absent) type suffix.
+  defp describe_let_type(_state, _expr_src), do: "Any"
 
   defp cmd_time(state, expr) do
     expr = String.trim(expr)
