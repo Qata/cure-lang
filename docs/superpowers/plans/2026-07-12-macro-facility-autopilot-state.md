@@ -753,9 +753,31 @@ SP2 Tier-3 slice 3 Stage 2–6 DONE — plan committed `4ba6189`; implementation
 - Full gate: **`mix test` = 4165 passed (3 doctests) / 2 skipped**, 151 expected immune responses,
   Antigen shape coverage **328/328**, no seed/corpus noise, `mix compile --warnings-as-errors` clean.
 
-**NEXT (SP2 continues):** typed per-rule derived record (`a.name`) plan/implementation, then
-`check … else fail C` + computed example execution, then the MacroValidate wiring slice. When ALL SP2 done →
-SP2 COMPLETE → **SP3 (read the SP3 GROUNDING section below FIRST)**. Deferred post-gate SP1: T9, T7b.
+**NEXT (SP2 continues):** `check … else fail C` + computed-rule example execution, then the MacroValidate
+wiring slice. When ALL SP2 done → SP2 COMPLETE → **SP3 (read the SP3 GROUNDING section below FIRST)**.
+Deferred post-gate SP1: T9, T7b.
+
+## ═══ SP2 Tier-3 typed derived records (Stages 2–6) COMPLETE ═══
+Plan `docs/superpowers/plans/2026-07-12-macro-facility-sp2g-plan.md` committed as `769f124`.
+The typed-record implementation is complete in three committed phases:
+- **`4db5ca9`** — parser metadata records `syntax_type` (`MkSyntax`) and ordered unique
+  `syntax_fields` for each computed rule; `Program.declarations/1` synthesizes the ordinary
+  `rec MkSyntax` declaration with each field typed as generic `Syntax`.
+- **`c3f2393`** — `MacroSyntax.to_core_record/2` encodes the reflected macro-input children as
+  the generated record constructor, with direct empty/populated Core-constructor tests.
+- **`a8e4588`** — `MacroExpand` supplies the generated record to typed computed elabs, runs the
+  existing Core type/infer/normalize/decode firewall, and retains a generic-`Syntax` fallback for
+  existing computed elabs. End-to-end tests cover `a.x` projection, expansion back to the use-site
+  AST, and `unknown_field` rejection.
+
+This slice deliberately keeps fields at `Syntax` rather than category-indexed types, and does not
+implement repeated groups, quote syntax, `check … else fail C`, computed-rule example execution, or
+MacroValidate wiring. TCB delta remains ZERO: no `lib/cure/core/*` changes.
+
+Verification after the slice: `mix test test/cure/compiler/` = 692 passed / 1 skipped;
+`mix test test/cure/elab/` = 847 passed / 1 skipped; `mix test test/cure/stdlib/` = 340 passed;
+`mix compile --warnings-as-errors` passed; full `mix test` = 4170 passed (3 doctests) / 2 skipped;
+Antigen shape coverage 328/328; worktree clean.
 
 ## ═══ SP3 GROUNDING — READ THIS WHOLE SECTION BEFORE TOUCHING SP3 ═══
 (Written 2026-07-12 by the prior agent with full machinery probed live, for a fresh/less-context
