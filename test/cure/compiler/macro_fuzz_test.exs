@@ -87,7 +87,9 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
     {:macro_def, _, _} = macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))
 
-    assert {:error, {:expansion_ill_typed, %{keyword: "bad"}}} =
+    assert {:error, {:expansion_ill_typed, %{keyword: "bad", generated_term: generated, shrunk_term: {:ctor, :Z, []}}}} =
              MacroFuzz.check_expansion_proof(macro_def, env, draws: 8, seed: 31)
+
+    assert is_tuple(generated)
   end
 end

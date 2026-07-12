@@ -7,6 +7,7 @@ defmodule Cure.Compiler.MacroFuzz do
   inhabitant of a different type.
   """
 
+  alias Antigen.{Challenge, Shrink}
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Compiler.{Lexer, Parser, Token}
@@ -90,12 +91,21 @@ defmodule Cure.Compiler.MacroFuzz do
       [{name, kind}] ->
         with {:ok, _info, terms} <- sample_holes(kind, draws, seed) do
           Enum.reduce_while(terms, :ok, fn term, :ok ->
-            with {:ok, input} <- assemble_use_site(rule, %{name => term}),
-                 expansion = Parser.expand_example(rules, input),
-                 :ok <- check_expansion(rule.keyword, input, expansion, env) do
-              {:cont, :ok}
-            else
-              {:error, _} = error -> {:halt, error}
+            case assemble_use_site(rule, %{name => term}) do
+              {:ok, input} ->
+                expansion = Parser.expand_example(rules, input)
+
+                case check_expansion(rule.keyword, input, expansion, env) do
+                  :ok ->
+                    {:cont, :ok}
+
+                  {:error, {:expansion_ill_typed, details}} ->
+                    shrunk = shrink_counterexample(rule, rules, env, name, kind, term, details)
+                    {:halt, {:error, {:expansion_ill_typed, shrunk}}}
+                end
+
+              {:error, _} = error ->
+                {:halt, error}
             end
           end)
         end
@@ -113,6 +123,34 @@ defmodule Cure.Compiler.MacroFuzz do
       {:error, reason} ->
         {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
     end
+  end
+
+  defp shrink_counterexample(rule, rules, env, name, kind, term, details) do
+    {:ok, info} = hole_generator(kind)
+
+    challenge =
+      Challenge.new(
+        kind: :typed_term,
+        assay: "macro/expansion",
+        label: :well_typed,
+        seed: 0,
+        payload: %{sig: :v1, ctx: [], type: info.goal, term: term}
+      )
+
+    pred = fn candidate ->
+      candidate_term = candidate.payload.term
+
+      with {:ok, input} <- assemble_use_site(rule, %{name => candidate_term}),
+           expansion = Parser.expand_example(rules, input),
+           {:error, {:expansion_ill_typed, _}} <- check_expansion(rule.keyword, input, expansion, env) do
+        true
+      else
+        _ -> false
+      end
+    end
+
+    shrunk = Shrink.minimize(challenge, pred, 128)
+    Map.merge(details, %{generated_term: term, shrunk_term: shrunk.payload.term})
   end
 
   @doc "Assemble a rule's keyword, literals, and named hole fillers into tokens."
