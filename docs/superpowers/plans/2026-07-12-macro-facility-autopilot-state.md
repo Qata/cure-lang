@@ -533,15 +533,31 @@ SP2 slice-2a (M3 presence) Stage 4 DONE — both tasks executed inline TDD (red�
 **M3 presence LIVE (unwired):** a syntax rule with no `example` → `check_rules_pinned` returns
 `{:rule_unpinned, [...]}` rendering a friendly diagnostic. Standalone, same as M1 — the wiring slice enforces it.
 
-**NEXT:** SP2 slice-2a Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
-(`9617d16..HEAD` code = `b7836c3`+`15c36fc`: `parser.ex`+`macro_validate.ex`+`errors.ex`+`macro_example_test`).
-Focus: example-block edge cases (multiple examples under one rule; example under a `literal` rule — does
-`parse_rule_examples` only run for `:syntax`? NO — it runs in `parse_macro_rule` (syntax only), `literal` has
-its own parser with no example support — confirm that's intended/consistent); `collect_until_expands` on a
-missing `expands`; `expands :` with a complex type `Effect(Unit)`; `check_rules_pinned` `.keyword` safety +
-ordering; interaction with `check_explain_exhaustive` (both on same macro); non-interference with expansion
-(a macro with examples still expands at use-sites). Then SP2 slice-2a done. After: slice 2b (example_mismatch
-α-check), §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3.
+SP2 slice-2a Stage 5 DONE — Sonnet code review over the diff, converged CLEAN (6 passes, NO defects, no code
+changes). Verified LIVE all 8 items: multiple examples + syntax/literal/explain siblings after an example block
+parse correctly (no dedent-swallow); missing-`expands`/empty-use-site/dangling — no crash/hang; `expands :ok`
+correctly captured as `{:expansion, atom}` NOT a type pin (lexer makes `:ok` an `:atom`); `expands : Effect(Unit)`/
+`List(Int)` full-type captured; `check_rules_pinned` exempts `:literal`-only macros (design §5.1 syntax-only);
+M1+M3 checks coexist on one macro; use-site expansion unaffected. 668 tests, warnings-clean. High confidence.
+- **Noted (not a bug, future polish):** an `example` line indented under a `:literal` rule → cascade of
+  `{:expected, :syntax_rule}` errors (pre-existing one-token recovery), not a clean "literal rules take no
+  example" diagnostic and not a crash. Out of scope. Also `expands :Int` (colon+uppercase, no space) lexes as
+  atom `:Int` not a type pin — pre-existing whitespace-sensitive lexer behavior.
+
+## ═══ SP2 slice 2a (M3 presence, `rule_unpinned`) COMPLETE ═══
+`b7836c3` parse examples + `15c36fc` `check_rules_pinned/1`. Two of SP2's 3 gate errors now have live (unwired)
+checks: **M1 `missing_diagnosis`** ✅ + **M3 `rule_unpinned`** ✅. TCB delta ZERO.
+
+**NEXT: SP2 slice 2b = M3 expansion-equality (`example_mismatch`)** — Stage 2 plan. The ONE genuinely new
+algorithmic piece: for each `syntax` rule's example, feed the captured `use_site` tokens THROUGH the rule
+(reuse the two-phase parse so nested literal/`<fresh>` expansion runs), then check the result EQUALS the
+`{:expansion, ast}` **up to α-renaming** (normalise `<fresh>` gensyms `x$N` → positional), OR (for `{:type,
+ast}`) that the expansion elaborates to that type (reuse `Program.elaborate`, T8-style). GROUND FIRST: how to
+drive expansion of the use_site tokens (build a token stream `macro-def + fn __ex() = <use_site>` and parse it
+with the macro active → extract `__ex` body? or reuse `expand_rule` directly with hole bindings?); the
+α-equality comparator (walk both ASTs, map each `$`-suffixed gensym consistently, compare modulo that). Then
+Stages 3-5. After 2b: §3.4 `fail C` (needs Tier-3), Tier-3 `computed by`, then the WIRING slice (invoke all
+checks in the compile pipeline + pin SP1's own macros). When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3.
 Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
