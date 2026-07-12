@@ -52,33 +52,34 @@ defmodule Cure.Compiler.ContainerMacro do
   defp descriptor_for(kind, _meta, _body), do: {:error, {:unsupported_container, kind}}
 
   defp build_descriptor(:supervisor, name, meta, body) do
+    settings = body_settings(body)
+
     children =
-      body
-      |> List.wrap()
-      |> Enum.filter(&match?({:child_spec, _, _}, &1))
-      |> Enum.map(&child_descriptor/1)
+      body_child_specs(body)
 
     {:ok,
      %{
        kind: :supervisor,
        module: name,
-       strategy: value(Keyword.get(meta, :strategy, :one_for_one)),
-       intensity: value(Keyword.get(meta, :intensity, 3)),
-       period: value(Keyword.get(meta, :period, 5)),
+       strategy: value(Keyword.get(meta, :strategy, Map.get(settings, :strategy, :one_for_one))),
+       intensity: value(Keyword.get(meta, :intensity, Map.get(settings, :intensity, 3))),
+       period: value(Keyword.get(meta, :period, Map.get(settings, :period, 5))),
        children: children
      }}
   end
 
-  defp build_descriptor(:application, name, meta, _body) do
+  defp build_descriptor(:application, name, meta, body) do
+    settings = body_settings(body)
+
     {:ok,
      %{
        kind: :application,
        module: name,
-       root: root_module(Keyword.get(meta, :root)),
-       vsn: value(Keyword.get(meta, :vsn)),
-       description: value(Keyword.get(meta, :description)),
-       applications: value(Keyword.get(meta, :applications, [])),
-       env: value(Keyword.get(meta, :env, %{}))
+       root: root_module(Keyword.get(meta, :root, Map.get(settings, :root))),
+       vsn: value(Keyword.get(meta, :vsn, Map.get(settings, :vsn))),
+       description: value(Keyword.get(meta, :description, Map.get(settings, :description))),
+       applications: value(Keyword.get(meta, :applications, Map.get(settings, :applications, []))),
+       env: value(Keyword.get(meta, :env, Map.get(settings, :env, %{})))
      }}
   end
 
@@ -263,6 +264,47 @@ defmodule Cure.Compiler.ContainerMacro do
       shutdown: value(Keyword.get(meta, :shutdown, 5000))
     }
   end
+
+  defp body_settings(body) do
+    body
+    |> List.wrap()
+    |> Enum.flat_map(fn
+      {:assignment, _meta, [{:variable, _, name}, rhs]} -> [{String.to_atom(name), value(rhs)}]
+      _ -> []
+    end)
+    |> Map.new()
+  end
+
+  defp body_child_specs(body) do
+    case Enum.find(body, &match?({:block, _, _}, &1)) do
+      {:block, _meta, items} ->
+        items
+        |> Enum.group_by(fn
+          {_tag, meta, _value} when is_list(meta) -> Keyword.get(meta, :line, 0)
+          _ -> 0
+        end)
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.flat_map(fn {_line, nodes} -> child_spec_from_nodes(nodes) end)
+
+      _ ->
+        body |> List.wrap() |> Enum.filter(&match?({:child_spec, _, _}, &1)) |> Enum.map(&child_descriptor/1)
+    end
+  end
+
+  defp child_spec_from_nodes([module, {:variable, _, "as"}, id | _]) do
+    [%{module: ast_name(module), id: ast_name(id), kind: :worker, restart: :permanent, shutdown: 5000}]
+  end
+
+  defp child_spec_from_nodes([{:variable, _, "sup"}, module, {:variable, _, "as"}, id | _]) do
+    [%{module: ast_name(module), id: ast_name(id), kind: :supervisor, restart: :permanent, shutdown: 5000}]
+  end
+
+  defp child_spec_from_nodes(_), do: []
+
+  defp ast_name({:variable, _meta, name}) when is_binary(name), do: name
+  defp ast_name({:attribute_access, meta, [base]}) when is_list(meta), do: ast_name(base) <> "." <> Keyword.get(meta, :attribute)
+  defp ast_name({:literal, _meta, value}), do: to_string(value)
+  defp ast_name(other), do: to_string(other)
 
   defp callbacks(meta), do: Keyword.get(meta, :callbacks, [])
 

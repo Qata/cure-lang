@@ -60,22 +60,22 @@ defmodule :cure_std_regex do
     case resolve(regex) do
       {:ok, re} ->
         case :re.run(input, re, [{:capture, :all, :binary}]) do
-          {:match, [whole | groups]} ->
-            {:some, new_match(whole, groups)}
+            {:match, [whole | groups]} ->
+            {:Some, new_match(whole, groups)}
 
           {:match, []} ->
-            :none
+            :None
 
           :nomatch ->
-            :none
+            :None
         end
 
       :error ->
-        :none
+      :None
     end
   end
 
-  def run(_, _), do: :none
+  def run(_, _), do: :None
 
   # -- All matches ------------------------------------------------------------
 
@@ -134,7 +134,7 @@ defmodule :cure_std_regex do
   end
 
   defp new_match(whole, groups) when is_binary(whole) and is_list(groups) do
-    %{@struct_key => :matched, whole: whole, groups: groups}
+    {:Matched, whole, groups}
   end
 
   defp resolve(%{@struct_key => :regex, handle: re}), do: {:ok, re}
