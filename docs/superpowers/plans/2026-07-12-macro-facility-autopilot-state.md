@@ -618,16 +618,32 @@ Found + fixed TWO real defects red-test-first:
 **M3 COMPLETE** (`rule_unpinned` presence + `example_mismatch` equality). SP2 now has live (unwired) checks for
 ALL THREE gate errors: `missing_diagnosis` (M1) ✅ + `rule_unpinned` + `example_mismatch` (M3) ✅. TCB delta ZERO.
 
-**NEXT: SP2 slice 2c = M3 kernel-check + `{:type}` pins (small)** — Stage 2 plan. Closes the SP2 gate clause
-"example expansions **kernel-check**": for each example, elaborate the driven expansion via `Program.elaborate`
-(T8-style) and assert it is well-typed (not just α-equal to the pin); for `{:type, T}` pins (§5.2, currently
-skipped) assert the expansion elaborates to type `T`. GROUND FIRST: `expand_example` returns surface AST — wrap
-it in a minimal module/fn so `Program.elaborate` accepts it, extract the verdict; how a `{:type}` pin's type
-compares to the elaborated type. Then Stages 3-5. After 2c → **M3 fully gate-complete**. Then the big remaining
-SP2 pieces: **Tier-3 `computed by`** (total compile-time Cure elabs — SP2's headline capability, unblocks `fail C`
-+ containers), §3.4 author `fail C`, then the **WIRING slice** (invoke all checks in the compile pipeline + pin
-SP1's own macros). When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (uses the `Generator`-typeclass
-architecture per `2026-07-12-generator-typeclass-pbt-architecture.md`). Deferred post-gate SP1: T9, T7b.
+**SEQUENCING CORRECTION (this firing, grounded):** the planned standalone "slice 2c = example kernel-check +
+`{:type}` pins" is FOLDED INTO THE WIRING SLICE instead. Probed live: a self-contained expansion (`x + x`)
+elaborates OK via `Program.elaborate`, but a real example's expansion referencing the macro's target functions
+(`Timer.repeat(500)`) fails `:unknown_global` in isolation — the macro's IMPORT CONTEXT isn't in scope. So a
+standalone example-kernel-check would false-reject nearly every real macro; kernel-checking examples needs the
+elaborate-in-module-env machinery the wiring slice builds anyway. → next = **Tier-3** (independent, headline).
+
+SP2 Tier-3 slice 1 (parse `computed by`) Stage 2 DONE — plan committed at
+`docs/superpowers/plans/2026-07-12-macro-facility-sp2d-plan.md`. Tier-3 (`computed by` = expansion COMPUTED by a
+compile-time Cure elab fn over quoted input, vs `becomes`'s template subst — design §3, tier row 3) decomposes:
+**slice 1 (this) parse `computed by <fn>`** → `%{kind: :computed, keyword, segments, elab, examples}` (NOT
+harvested → inert until execution); then **quoted-AST `Syntax` value model** (§3, `quote`/`$()`); then
+**compile-time elab EXECUTION** (quote input → run elab staged-on-host → splice output; K3 firewall re-checks
+output, TCB-zero — the big one); then **`check … else fail C`** (§3.4, ties to M1); then computed-rule example
+checks; then the WIRING slice. Grounded: `computed by build_it` = 3 identifiers; `parse_macro_rule` branches on
+verb after `parse_rule_segments`; `:computed` kind excluded by all harvest/MacroValidate filters (auto-inert).
+One task: split the verb branch → `parse_becomes_rule`/`parse_computed_rule`. TCB delta ZERO.
+
+**NEXT:** SP2 Tier-3 slice-1 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2d plan
+(plan-for-code: falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: the
+`becomes`-path extraction is byte-identical (no regression); `parse_expr(state,0)` captures the elab ref without
+over-consuming (bare name + dotted `Mod.fn`); `:computed` genuinely inert at use-sites (not harvested); `by`
+missing → clean error not crash; examples under a computed rule parse. Then Stage 4 execute, Stage 5 review.
+After: Tier-3 quoted-AST + execution slices, `fail C`, WIRING (absorbs example-kernel-check + `{:type}` pins +
+firing-checks-in-compiles + pin SP1 macros). When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-
+typeclass architecture, `2026-07-12-generator-typeclass-pbt-architecture.md`). Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
