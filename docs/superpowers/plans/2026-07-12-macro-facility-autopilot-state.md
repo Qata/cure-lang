@@ -384,12 +384,27 @@ impossible test); (b) Architecture prose promised `suggest/2` hints neither clau
 "out of scope for this floor". `:macro_use_mismatch` confirmed SINGLE emit site; T6b shape-assertion the ONLY
 test coupled to the old shape.
 
-**NEXT:** SP1 §2 error-floor Stage 4 — execute Task 1 (enrich `:macro_use_mismatch` emit + `format_error`
-clause + update the T6b shape-assertion) then Task 2 (`:malformed_hole` clause) inline TDD on Opus, strict
-red→green, commit per task (ghost author, explicit pathspec, mix from worktree root). NOTE for implementer:
-`macro_expected_at/2`'s non-`{:lit}` branches are dead-but-total (keep for safety, don't write tests for them);
-only the `{:literal, w}` diagnostic path is reachable/testable. Then Stage 5 code review, then SP1 **Stage 6**
-(full `mix test`) → **SP1 COMPLETE** → SP2. (Deferred post-gate: T9 import-scoping §7 + two-pass §6, T7b auto-hygiene.)
+SP1 §2 error-floor Stage 4 DONE — both tasks executed inline TDD (red→green), committed:
+- **T1 `e926038`** — enriched `:macro_use_mismatch` emit (`{…, keyword, macro_expected_at(rule,progress),
+  macro_got_desc(t), line, col}`) + `format_error` clause → "the `say` macro expected `hello` here, but found
+  `goodbye`"; updated the T6b shape-assertion. `macro_expected_at/2`'s non-`{:lit}` branches kept (dead-but-total).
+- **T2 `34fb3ab`** — `:malformed_hole` clause → "a macro hole is written `<name: Kind>` …". Both route through
+  `format_diagnostic` (parked-Elm forward-compat contract honored). 649 parser tests, warnings-clean.
+- **Execution wrinkle fixed:** placing `defp article/1` BETWEEN the new `format_error` clause and the catch-all
+  split the `format_error/2` clause group → `--warnings-as-errors` "clauses not grouped". Moved `article/1`
+  AFTER the catch-all (clauses contiguous). A reminder: non-adjacent same-name/arity `def` clauses warn.
+
+**SP1 GATE MET** (pending Stage-5 review): Tier-1 ✓ (T4) + Tier-2 ✓ (`syntax`) + expansions kernel-check ✓
+(T8 firewall) + default-machinery diagnostics ✓ (this floor). TCB delta ZERO throughout.
+
+**NEXT:** SP1 §2 error-floor Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
+(`2d9e7e9..HEAD` code = `e926038`+`34fb3ab`: `parser.ex`+`errors.ex`+2 tests). Focus: the enriched tuple's
+`got` desc for non-identifier tokens (number/operator/EOF at the mismatch); `article/1` on empty/edge kinds;
+that the render clauses can't crash on any real emitted tuple; no other test coupled to the old shape; the
+`format_error` clause ORDER (macro clauses before catch-all). Then SP1 **Stage 6** — ONE full `mix test` —
+→ **SP1 COMPLETE** → start **SP2** (Tier-3 `computed by` + type-enforced `Diagnosis`/`explain` exhaustiveness
++ required per-rule examples; the self-proving headline). Deferred post-gate SP1: T9 import-scoping §7 +
+two-pass §6, T7b auto-hygiene.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
