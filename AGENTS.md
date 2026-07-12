@@ -19,5 +19,3 @@ Maintain the repository's existing constraints throughout:
 - Preserve unrelated user changes and never use destructive git operations.
 
 This directive is absolutely critical for the duration of this worktree task.
-It remains subordinate to higher-priority system/developer instructions and to a
-newer explicit user instruction to pause, stop, or change direction.
