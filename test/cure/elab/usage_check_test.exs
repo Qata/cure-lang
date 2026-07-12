@@ -108,6 +108,7 @@ defmodule Cure.Elab.UsageCheckTest do
     test "a linear lambda binder used twice is rejected" do
       # `fn(x) -> fn(1 y) -> let _ = y in y`
       body = {:lam, :linear, @nat, uses_twice()}
+
       assert {:error, {:usage_violation, %{declared: :linear, used: :unrestricted}}} =
                check([:unrestricted], body)
     end

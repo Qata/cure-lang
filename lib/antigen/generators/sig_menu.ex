@@ -26,10 +26,18 @@ defmodule Antigen.Generators.SigMenu do
   the Pi seeds are re-enabled and the differential trio is green over them at
   scale.
   """
-  def goal_types, do: [nat(), bd(), vec(z()), vec(s(z())),
-                       {:data, :List, [nat()], []}, {:data, :List, [bd()], []},
-                       {:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}, {:pi, Cure.Core.Grade.unrestricted(), nat(), bd()},
-                       {:data, :Sigma, [nat(), {:lam, Cure.Core.Grade.unrestricted(), nat(), nat()}], []}]
+  def goal_types,
+    do: [
+      nat(),
+      bd(),
+      vec(z()),
+      vec(s(z())),
+      {:data, :List, [nat()], []},
+      {:data, :List, [bd()], []},
+      {:pi, Cure.Core.Grade.unrestricted(), nat(), nat()},
+      {:pi, Cure.Core.Grade.unrestricted(), nat(), bd()},
+      {:data, :Sigma, [nat(), {:lam, Cure.Core.Grade.unrestricted(), nat(), nat()}], []}
+    ]
 
   # -- the v1 environment -----------------------------------------------------
   @doc "Declare families, add plus/dbl, and certify them through the kernel."
@@ -37,27 +45,33 @@ defmodule Antigen.Generators.SigMenu do
   def env_of(:v1) do
     env =
       Env.empty()
-      |> Inductive.declare(Inductive.family(:Nat, [], [], 0),
-        [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, nat()}], [])])
+      |> Inductive.declare(
+        Inductive.family(:Nat, [], [], 0),
+        [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, nat()}], [])]
+      )
       # The :nat builtin binding — the SAME canonical family real Cure seeds via
       # `Cure.Core.Builtins.seed/2` (mirrors the :bool binding below). Required so
       # a bare compact `{:nat_lit, n}` term typechecks: `Kernel.infer`'s nat_lit
       # clause resolves its type via `nat_type_value` (reads the :nat builtin),
       # which raises "builtin :nat not seeded" without this registration.
       |> Inductive.register_builtin(:nat, :Nat)
-      |> Inductive.declare(Inductive.family(:Bd, [], [], 0),
-        [Inductive.ctor(:T, [], []), Inductive.ctor(:F, [], [])])
+      |> Inductive.declare(
+        Inductive.family(:Bd, [], [], 0),
+        [Inductive.ctor(:T, [], []), Inductive.ctor(:F, [], [])]
+      )
       # SList : Type0 — a snoc-free cons list of Nat, backing the carried-index
       # forced-check seeds (dot-forcing vertical #24, spec 2026-07-08). Its
       # `app` def (added below, mirroring `plus`) is the stuck function whose
       # application forms `H`'s second, carried index.
-      |> Inductive.declare(Inductive.family(:SList, [], [], 0),
+      |> Inductive.declare(
+        Inductive.family(:SList, [], [], 0),
         [
           Inductive.ctor(:SNil, [], []),
-          Inductive.ctor(:SCons, [{:h, nat()}, {:t, {:data, :SList, [], []}}], [],
-            [:unrestricted, :unrestricted])
-        ])
-      |> Inductive.declare(Inductive.family(:Vec, [], [{:n, nat()}], 0),
+          Inductive.ctor(:SCons, [{:h, nat()}, {:t, {:data, :SList, [], []}}], [], [:unrestricted, :unrestricted])
+        ]
+      )
+      |> Inductive.declare(
+        Inductive.family(:Vec, [], [{:n, nat()}], 0),
         [
           Inductive.ctor(:vnil, [], [z()]),
           # vcons : (n:Nat) -> Nat -> Vec(n) -> Vec(S(n))
@@ -67,10 +81,15 @@ defmodule Antigen.Generators.SigMenu do
           # it carries no runtime content. This is what makes {0,ω} erasure
           # non-vacuous on the v1 menu (the erasure_preservation assay, Task 5),
           # and the paradigmatic forced-argument case. Arity/types are unchanged.
-          Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})],
-            [:erased, :unrestricted, :unrestricted])
-        ])
-      |> Inductive.declare(Inductive.family(:List, [{:A, {:type, 0}}], [], 0),
+          Inductive.ctor(:vcons, [{:n, nat()}, {:x, nat()}, {:xs, vec({:var, 1})}], [s({:var, 2})], [
+            :erased,
+            :unrestricted,
+            :unrestricted
+          ])
+        ]
+      )
+      |> Inductive.declare(
+        Inductive.family(:List, [{:A, {:type, 0}}], [], 0),
         [
           # Nil : List(A). result_params = [{:var,0}]: with 0 ctor args bound, the
           # family param A sits at var 0 in the checking frame — required so
@@ -82,9 +101,15 @@ defmodule Antigen.Generators.SigMenu do
           # shifting A down one). result_params = [{:var,2}]: with both args bound
           # (hd, tl), A sits at var 2. Convention confirmed against
           # elab_soundness_test's F(a)/Mk(x:a) and check_uniform_params.
-          Inductive.ctor(:Cons, [{:hd, {:var, 0}}, {:tl, {:data, :List, [{:var, 1}], []}}], [],
-            [:unrestricted, :unrestricted], [{:var, 2}])
-        ])
+          Inductive.ctor(
+            :Cons,
+            [{:hd, {:var, 0}}, {:tl, {:data, :List, [{:var, 1}], []}}],
+            [],
+            [:unrestricted, :unrestricted],
+            [{:var, 2}]
+          )
+        ]
+      )
       # Bool + the :bool builtin binding — the SAME canonical family real Cure
       # seeds via `Cure.Core.Builtins.seed/2` (ctor order `False | True`), which
       # the v1 menu was previously missing. Required so prim comparisons/
@@ -93,8 +118,10 @@ defmodule Antigen.Generators.SigMenu do
       # the canonical `:True`/`:False` ctor values. The prims are the elaborator's
       # native-BEAM-op lowering target (emit.ex), not migration debris — Bool's
       # *type* is inductive; the decidable *operations* producing it stay prim.
-      |> Inductive.declare(Inductive.family(:Bool, [], [], 0),
-        [Inductive.ctor(:False, [], []), Inductive.ctor(:True, [], [])])
+      |> Inductive.declare(
+        Inductive.family(:Bool, [], [], 0),
+        [Inductive.ctor(:False, [], []), Inductive.ctor(:True, [], [])]
+      )
       |> Inductive.register_builtin(:bool, :Bool)
       # Sq : (i:Nat)(j:Nat) -> Type0, ctor mksq : (n:Nat) -> Sq n n. A TWO-index
       # family with a DIAGONAL constructor — matching `s : Sq a b` on mksq unifies
@@ -103,8 +130,10 @@ defmodule Antigen.Generators.SigMenu do
       # unification tail: `unify_spine` (2-index spine), `bind_index`'s merge/
       # resolve-before-bind path, and `head_key` (index refinement, not just Vec's
       # single Nat index). Consumed by Generators.DepMatch's Sq variant.
-      |> Inductive.declare(Inductive.family(:Sq, [], [{:i, nat()}, {:j, nat()}], 0),
-        [Inductive.ctor(:mksq, [{:n, nat()}], [{:var, 0}, {:var, 0}])])
+      |> Inductive.declare(
+        Inductive.family(:Sq, [], [{:i, nat()}, {:j, nat()}], 0),
+        [Inductive.ctor(:mksq, [{:n, nat()}], [{:var, 0}, {:var, 0}])]
+      )
       # Ty : (a:Type0) -> Type0 — a family indexed BY A TYPE, with constructors
       # pinned at concrete type indices (Nat / Bd / Int / Float / Π / Σ / Vec Z).
       # Matching a closed scrutinee `x : Ty T` unifies T against each ctor's rigid
@@ -112,7 +141,8 @@ defmodule Antigen.Generators.SigMenu do
       # NON-Nat rigid heads — the lever for rigid_index?'s data/type-former/int/
       # float clauses, head_key's :data clause, and unify_one's data-spine /
       # syntactic-equal clauses. Consumed by Generators.DepMatch's Ty variant.
-      |> Inductive.declare(Inductive.family(:Ty, [], [{:a, {:type, 0}}], 0),
+      |> Inductive.declare(
+        Inductive.family(:Ty, [], [{:a, {:type, 0}}], 0),
         [
           Inductive.ctor(:tnat, [], [nat()]),
           Inductive.ctor(:tbd, [], [bd()]),
@@ -121,15 +151,20 @@ defmodule Antigen.Generators.SigMenu do
           Inductive.ctor(:tpi, [], [{:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}]),
           Inductive.ctor(:tsig, [], [{:data, :Sigma, [nat(), {:lam, Cure.Core.Grade.unrestricted(), nat(), nat()}], []}]),
           Inductive.ctor(:tvec, [], [{:data, :Vec, [{:ctor, :Z, []}], []}])
-        ])
+        ]
+      )
       # Tg : (i:Int) -> Type0 / Tgf : (i:Float) -> Type0 — families indexed by a
       # builtin VALUE type, with constructors at literal indices. Matching unifies
       # literal indices, the only v1 shape reaching rigid_index?'s int_lit/float_lit
       # clauses. Consumed by Generators.DepMatch's tg/tgf variants.
-      |> Inductive.declare(Inductive.family(:Tg, [], [{:i, {:int_type}}], 0),
-        [Inductive.ctor(:tg0, [], [{:int_lit, 0}]), Inductive.ctor(:tg1, [], [{:int_lit, 1}])])
-      |> Inductive.declare(Inductive.family(:Tgf, [], [{:i, {:float_type}}], 0),
-        [Inductive.ctor(:tgf0, [], [{:float_lit, 0.0}]), Inductive.ctor(:tgf1, [], [{:float_lit, 1.5}])])
+      |> Inductive.declare(
+        Inductive.family(:Tg, [], [{:i, {:int_type}}], 0),
+        [Inductive.ctor(:tg0, [], [{:int_lit, 0}]), Inductive.ctor(:tg1, [], [{:int_lit, 1}])]
+      )
+      |> Inductive.declare(
+        Inductive.family(:Tgf, [], [{:i, {:float_type}}], 0),
+        [Inductive.ctor(:tgf0, [], [{:float_lit, 0.0}]), Inductive.ctor(:tgf1, [], [{:float_lit, 1.5}])]
+      )
       # Equivalent : (a:Type) -> a -> a -> Type, sole ctor reflexive (erased
       # witness) — the SAME canonical identity family real Cure seeds via
       # `Cure.Core.Builtins.seed/2` (byte-mirror of core/builtins.ex's
@@ -149,7 +184,12 @@ defmodule Antigen.Generators.SigMenu do
       # the generators now emit inductive Sigma / mk_pair / ι-on-case projections,
       # which need the family in the menu signature.
       |> Inductive.declare(
-        Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, Cure.Core.Grade.unrestricted(), {:var, 0}, {:type, 0}}], [], 0),
+        Inductive.family(
+          :Sigma,
+          [a: {:type, 0}, b: {:pi, Cure.Core.Grade.unrestricted(), {:var, 0}, {:type, 0}}],
+          [],
+          0
+        ),
         [
           Inductive.ctor(
             :mk_pair,
@@ -164,11 +204,12 @@ defmodule Antigen.Generators.SigMenu do
 
     # plus m n = case m of Z -> n | S(k) -> S(plus(k, n))   (structural on arg 1)
     plus_type = {:pi, Cure.Core.Grade.unrestricted(), nat(), {:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}}
+
     plus_body =
-      {:lam, Cure.Core.Grade.unrestricted(), nat(), {:lam, Cure.Core.Grade.unrestricted(), nat(),
+      {:lam, Cure.Core.Grade.unrestricted(), nat(),
+       {:lam, Cure.Core.Grade.unrestricted(), nat(),
         {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), nat(), nat()},
-         [{:Z, 0, {:var, 0}},
-          {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}]}}}
+         [{:Z, 0, {:var, 0}}, {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}]}}}
 
     # dbl m = plus m m
     dbl_type = {:pi, Cure.Core.Grade.unrestricted(), nat(), nat()}
@@ -190,9 +231,7 @@ defmodule Antigen.Generators.SigMenu do
         {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), slist, slist},
          [
            {:SNil, 0, {:var, 0}},
-           {:SCons, 2,
-            {:ctor, :SCons,
-             [{:var, 1}, {:app, {:app, {:global, :app}, {:var, 0}}, {:var, 2}}]}}
+           {:SCons, 2, {:ctor, :SCons, [{:var, 1}, {:app, {:app, {:global, :app}, {:var, 0}}, {:var, 2}}]}}
          ]}}}
 
     env = Env.add_def(env, :app, app_type, app_body)
@@ -208,14 +247,21 @@ defmodule Antigen.Generators.SigMenu do
     # don't cover. All of hmk's telescope (m, as, bs) is erased (index witnesses).
     env =
       env
-      |> Inductive.declare(Inductive.family(:H, [], [{:n, nat()}, {:xs, slist}], 0),
+      |> Inductive.declare(
+        Inductive.family(:H, [], [{:n, nat()}, {:xs, slist}], 0),
         [
-          Inductive.ctor(:hmk, [{:m, nat()}, {:as, slist}, {:bs, slist}],
+          Inductive.ctor(
+            :hmk,
+            [{:m, nat()}, {:as, slist}, {:bs, slist}],
             [s({:var, 2}), {:app, {:app, {:global, :app}, {:var, 1}}, {:var, 0}}],
-            [:erased, :erased, :erased])
-        ])
-      |> Inductive.declare(Inductive.family(:G, [], [{:cs, slist}], 0),
-        [Inductive.ctor(:gwrap, [{:cs, slist}], [{:var, 0}], [:erased])])
+            [:erased, :erased, :erased]
+          )
+        ]
+      )
+      |> Inductive.declare(
+        Inductive.family(:G, [], [{:cs, slist}], 0),
+        [Inductive.ctor(:gwrap, [{:cs, slist}], [{:var, 0}], [:erased])]
+      )
 
     # K2 (spec 2026-07-09): the 25 builtin-op globals (int_*/float_* twins +
     # A1 struct_eq/struct_ne), seeded via the SAME public seeder real Cure uses.
@@ -238,40 +284,65 @@ defmodule Antigen.Generators.SigMenu do
   @spec inhabitable?(Context.t(), Cure.Core.Term.t()) :: boolean()
   def inhabitable?(ctx, goal) do
     case whnf(ctx, goal) do
-      {:data, :Nat, _, _} -> true
-      {:data, :Bd, _, _} -> true
-      {:type, _} -> true
-      {:pi, _g, dom, cod} -> inhabitable?(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)
+      {:data, :Nat, _, _} ->
+        true
+
+      {:data, :Bd, _, _} ->
+        true
+
+      {:type, _} ->
+        true
+
+      {:pi, _g, dom, cod} ->
+        inhabitable?(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)
+
       {:data, :Sigma, [a, {:lam, _g, _a, b}], []} ->
         inhabitable?(ctx, a) and
           inhabitable?(Context.extend(ctx, Eval.eval(a, Context.env(ctx))), b)
+
       {:data, :Vec, p, idx} ->
         i = vec_index(p, idx)
         closed_numeral?(whnf(ctx, i)) or has_var_of_type?(ctx, vec(i))
-      {:data, :List, [a], _} -> inhabitable?(ctx, a)
-      _ -> false
+
+      {:data, :List, [a], _} ->
+        inhabitable?(ctx, a)
+
+      _ ->
+        false
     end
   end
 
   @spec canon(Context.t(), Cure.Core.Term.t()) :: Cure.Core.Term.t()
   def canon(ctx, goal) do
     case whnf(ctx, goal) do
-      {:data, :Nat, _, _} -> z()
-      {:data, :Bd, _, _} -> {:ctor, :T, []}
-      {:type, _} -> nat()
+      {:data, :Nat, _, _} ->
+        z()
+
+      {:data, :Bd, _, _} ->
+        {:ctor, :T, []}
+
+      {:type, _} ->
+        nat()
+
       {:pi, _g, dom, cod} ->
         {:lam, Cure.Core.Grade.unrestricted(), dom, canon(Context.extend(ctx, Eval.eval(dom, Context.env(ctx))), cod)}
+
       {:data, :Sigma, [a, {:lam, _g, _a, b}], []} ->
         av = canon(ctx, a)
         {:ctor, :mk_pair, [av, canon(ctx, subst0(b, av, ctx))]}
+
       {:data, :Vec, p, idx} ->
         i = vec_index(p, idx)
+
         case whnf(ctx, i) do
           {:ctor, :Z, []} -> {:ctor, :vnil, []}
           {:ctor, :S, [j]} -> {:ctor, :vcons, [j, z(), canon(ctx, vec(j))]}
-          _ -> var_of_type(ctx, vec(i))   # stuck index: a Γ-var by the invariant
+          # stuck index: a Γ-var by the invariant
+          _ -> var_of_type(ctx, vec(i))
         end
-      {:data, :List, [_a], _} -> {:ctor, :Nil, []}
+
+      {:data, :List, [_a], _} ->
+        {:ctor, :Nil, []}
     end
   end
 

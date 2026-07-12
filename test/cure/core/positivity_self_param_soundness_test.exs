@@ -23,8 +23,9 @@ defmodule Cure.Core.PositivitySelfParamSoundnessTest do
 
   test "negative occurrence under ANOTHER family's head is rejected (control)" do
     env =
-      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0),
-        [Inductive.ctor(:mk, [{:f, {:data, :Other, [@neg], []}}], [])])
+      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0), [
+        Inductive.ctor(:mk, [{:f, {:data, :Other, [@neg], []}}], [])
+      ])
 
     assert {:error, {:non_strictly_positive, :mk}} ==
              Inductive.positive?(env, Inductive.get_family(env, :Bad))
@@ -32,8 +33,9 @@ defmodule Cure.Core.PositivitySelfParamSoundnessTest do
 
   test "the SAME negative occurrence under the family's OWN head is also rejected" do
     env =
-      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0),
-        [Inductive.ctor(:mk, [{:f, {:data, :Bad, [@neg], []}}], [])])
+      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0), [
+        Inductive.ctor(:mk, [{:f, {:data, :Bad, [@neg], []}}], [])
+      ])
 
     # THE FIX: the self-family field must inspect its own params/indices too.
     assert {:error, {:non_strictly_positive, :mk}} ==
@@ -43,8 +45,9 @@ defmodule Cure.Core.PositivitySelfParamSoundnessTest do
   test "a genuinely strictly-positive recursive field is still accepted" do
     # Bad (Unit) -- self-head, argument is inert, no negative occurrence.
     env =
-      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0),
-        [Inductive.ctor(:mk, [{:f, {:data, :Bad, [@unit], []}}], [])])
+      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0), [
+        Inductive.ctor(:mk, [{:f, {:data, :Bad, [@unit], []}}], [])
+      ])
 
     assert :ok == Inductive.positive?(env, Inductive.get_family(env, :Bad))
   end

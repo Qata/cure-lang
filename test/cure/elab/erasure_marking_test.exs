@@ -7,7 +7,12 @@ defmodule Cure.Elab.ErasureMarkingTest do
   defp elaborate_all(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
-    items = case ast do {:block, _, xs} -> xs; x -> [x] end
+
+    items =
+      case ast do
+        {:block, _, xs} -> xs
+        x -> [x]
+      end
 
     Enum.reduce_while(items, {:ok, Env.empty()}, fn decl, {:ok, env} ->
       case Declarations.elaborate(decl, env) do

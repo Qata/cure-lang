@@ -146,8 +146,12 @@ defmodule Cure.Elab.Resolution do
     Map.new(families, fn {k, fam} ->
       if MapSet.member?(owned, k) do
         {Map.fetch!(amap, k),
-         %{fam | name: Map.fetch!(amap, k),
-                 params: rekey_tele(fam.params, amap, def_map), indices: rekey_tele(fam.indices, amap, def_map)}}
+         %{
+           fam
+           | name: Map.fetch!(amap, k),
+             params: rekey_tele(fam.params, amap, def_map),
+             indices: rekey_tele(fam.indices, amap, def_map)
+         }}
       else
         {k, %{fam | params: rekey_tele(fam.params, amap, def_map), indices: rekey_tele(fam.indices, amap, def_map)}}
       end
@@ -156,11 +160,12 @@ defmodule Cure.Elab.Resolution do
 
   defp rekey_ctors(ctors, owned_ctor_names, amap, def_map) do
     Map.new(ctors, fn {k, c} ->
-      c2 = %{c |
-        name: Map.get(amap, c.name, c.name),
-        args: rekey_tele(c.args, amap, def_map),
-        result_indices: Enum.map(c.result_indices, &rekey_term(&1, amap, def_map)),
-        result_params: Enum.map(c.result_params, &rekey_term(&1, amap, def_map))
+      c2 = %{
+        c
+        | name: Map.get(amap, c.name, c.name),
+          args: rekey_tele(c.args, amap, def_map),
+          result_indices: Enum.map(c.result_indices, &rekey_term(&1, amap, def_map)),
+          result_params: Enum.map(c.result_params, &rekey_term(&1, amap, def_map))
       }
 
       if MapSet.member?(owned_ctor_names, k), do: {Map.fetch!(amap, k), c2}, else: {k, c2}

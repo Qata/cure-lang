@@ -67,7 +67,9 @@ defmodule Cure.Elab.MillerUnifyTest do
     t2 = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
 
     assert {:ok, ctx2} = Unify.unify(t1, t2, ctx, nil)
-    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}} == Unify.zonk({:meta, m}, ctx2)
+
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}} ==
+             Unify.zonk({:meta, m}, ctx2)
   end
 
   test "Sigma solution: ?m(n) =? Sigma(Nat, λ_.Nat)  ⇒  ?m := λn. Sigma(Nat, λ_.Nat)" do
@@ -110,6 +112,7 @@ defmodule Cure.Elab.MillerUnifyTest do
 
   test "ctor-valued index: Vec(?m n) =? Vec(S n)  ⇒  ?m := λn. S n" do
     {ctx, m} = fam_ctx_nn()
+
     assert {:lam, Cure.Core.Grade.unrestricted(), @nat, {:ctor, :S, [{:var, 0}]}} ==
              solve_index(ctx, m, {:ctor, :S, [{:var, 0}]})
   end
@@ -125,7 +128,10 @@ defmodule Cure.Elab.MillerUnifyTest do
   test "case-valued index: Vec(?m n) =? Vec(case n {Z→Z; S k→k})  ⇒  ?m := λn. case n {…}" do
     # The scrutinee is the pattern var n; mabs's :case clause must abstract it and
     # descend into each branch body at depth + ctor-arity (the S branch adds 1).
-    rhs = {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:var, 0}}]}
+    rhs =
+      {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat},
+       [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:var, 0}}]}
+
     {ctx, m} = fam_ctx_nn()
     assert solve_index(ctx, m, rhs) == {:lam, Cure.Core.Grade.unrestricted(), @nat, rhs}
   end

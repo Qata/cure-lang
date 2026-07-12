@@ -17,15 +17,18 @@ defmodule Antigen.Generators.ConversionTest do
         f = p.fault
         assert f.carrier in Conversion.carriers()
         assert f.witness == :conv and f.reduction == :required
-        assert f.actual_index == f.expected_index + 1     # kernel-free non-convertibility witness
+        # kernel-free non-convertibility witness
+        assert f.actual_index == f.expected_index + 1
         assert f.depth == f.expected_index
         # the discriminating index position is a plus REDEX, not a numeral (conversion-at-depth)
         assert redex?(f.carrier, p.term)
-        assert {:error, _} = Kernel.infer(ctx, p.term)     # construction guarantee (+ totality)
+        # construction guarantee (+ totality)
+        assert {:error, _} = Kernel.infer(ctx, p.term)
         f.depth
       end
 
-    assert Enum.member?(depths, 0) and Enum.max(depths) >= 4   # depth reached; d=0 exercised
+    # depth reached; d=0 exercised
+    assert Enum.member?(depths, 0) and Enum.max(depths) >= 4
     assert length(Enum.uniq(depths)) >= 3
   end
 
@@ -38,7 +41,8 @@ defmodule Antigen.Generators.ConversionTest do
       for assay <- assays, c <- sample(Conversion.conv_accept(assay), 60) do
         assert %Antigen.Challenge{kind: :typed_term, label: :well_typed} = c
         assert {:ok, _} = Kernel.infer(ctx, c.payload.term)
-        assert Antigen.Assays.Term.run(c) == :ok        # reduces to accept
+        # reduces to accept
+        assert Antigen.Assays.Term.run(c) == :ok
         # accept term also carries a plus redex at its index (reduction-required)
         assert redex?(detect(c.payload.term), c.payload.term)
         idx_depth(c.payload.term)
@@ -60,15 +64,23 @@ defmodule Antigen.Generators.ConversionTest do
   defp detect({:ctor, :vcons, _}), do: :conv_index
   defp detect({:case, _, _, _}), do: :conv_motive
   defp idx_depth({:ctor, :vcons, [{:app, {:app, {:global, :plus}, a}, b}, _, _]}), do: nat(a) + nat(b)
+
   defp idx_depth({:case, _, {:lam, _g, _, {:data, :Vec, _, [{:app, {:app, {:global, :plus}, a}, b}]}}, _}),
     do: nat(a) + nat(b)
+
   defp nat({:ctor, :Z, []}), do: 0
   defp nat({:ctor, :S, [n]}), do: 1 + nat(n)
 
   test "default_gen produces both conversion polarities" do
     cs = sample(Mix.Tasks.Antigen.default_gen(), 800)
     rej = Enum.filter(cs, fn c -> c.kind == :mutant_term and Map.get(c.payload.fault, :witness) == :conv end)
-    acc = Enum.filter(cs, fn c -> c.kind == :typed_term and match?({:ctor, :vcons, [{:app, {:app, {:global, :plus}, _}, _}, _, _]}, c.payload.term) end)
+
+    acc =
+      Enum.filter(cs, fn c ->
+        c.kind == :typed_term and
+          match?({:ctor, :vcons, [{:app, {:app, {:global, :plus}, _}, _}, _, _]}, c.payload.term)
+      end)
+
     assert rej != [] and acc != []
   end
 

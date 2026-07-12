@@ -25,10 +25,11 @@ defmodule Cure.Elab.TupleTypeNaryTest do
   defp deep(elems, tag) when is_list(elems), do: Enum.flat_map(elems, &nodes_of(&1, tag))
 
   test "Tuple(Int, Int, Int) parses to {:tuple_type, arity: 3, [_,_,_]}" do
-    ast = parse("""
-    mod M
-      fn mk(a: Int, b: Int, c: Int) -> Tuple(Int, Int, Int) = a
-    """)
+    ast =
+      parse("""
+      mod M
+        fn mk(a: Int, b: Int, c: Int) -> Tuple(Int, Int, Int) = a
+      """)
 
     assert [{:tuple_type, meta, elems}] = nodes_of(ast, :tuple_type)
     assert Keyword.get(meta, :arity) == 3
@@ -36,10 +37,11 @@ defmodule Cure.Elab.TupleTypeNaryTest do
   end
 
   test "arity-2 Tuple(Int, Int) parses to {:tuple_type, arity: 2, [_,_]} (Option B: uniform)" do
-    ast = parse("""
-    mod M
-      fn mk(a: Int, b: Int) -> Tuple(Int, Int) = a
-    """)
+    ast =
+      parse("""
+      mod M
+        fn mk(a: Int, b: Int) -> Tuple(Int, Int) = a
+      """)
 
     assert [{:tuple_type, meta, elems}] = nodes_of(ast, :tuple_type)
     assert Keyword.get(meta, :arity) == 2
@@ -49,10 +51,11 @@ defmodule Cure.Elab.TupleTypeNaryTest do
   end
 
   test "the bare Sigma(x: T, U) surface still parses to {:sigma_type, …}" do
-    ast = parse("""
-    mod M
-      fn mk(a: Int, b: Int) -> Sigma(x: Int, Int) = a
-    """)
+    ast =
+      parse("""
+      mod M
+        fn mk(a: Int, b: Int) -> Sigma(x: Int, Int) = a
+      """)
 
     assert [{:sigma_type, _, [_, _]} | _] = nodes_of(ast, :sigma_type)
     assert nodes_of(ast, :tuple_type) == []

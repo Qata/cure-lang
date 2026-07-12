@@ -20,6 +20,7 @@ defmodule Cure.Stdlib.ListTupleSurfaceTest do
           Some(p) -> p.1
           None()  -> d
     """
+
     assert {:ok, env} = Program.elaborate(src)
     # uncons is a cross-module (Std.List) call lowered to a local reference, so emit
     # it into the same module as head_or to keep the loaded BEAM self-contained.

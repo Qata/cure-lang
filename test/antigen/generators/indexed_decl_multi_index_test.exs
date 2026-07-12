@@ -40,8 +40,7 @@ defmodule Antigen.Generators.IndexedDeclMultiIndexTest do
 
   test "V4: Type param, var repeated across THREE indices → accepted" do
     fam =
-      Inductive.family(:MyEq4, [{:a, {:type, 0}}],
-        [{:x, {:var, 0}}, {:y, {:var, 1}}, {:z, {:var, 2}}], 0)
+      Inductive.family(:MyEq4, [{:a, {:type, 0}}], [{:x, {:var, 0}}, {:y, {:var, 1}}, {:z, {:var, 2}}], 0)
 
     ctor =
       Inductive.ctor(:mrefl4, [{:w, {:var, 0}}], [{:var, 0}, {:var, 0}, {:var, 0}], [:many], [{:var, 1}])

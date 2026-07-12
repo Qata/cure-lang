@@ -123,8 +123,13 @@ defmodule Antigen.EqInductiveAntibodyTest do
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
     arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
+
+    arrow_motive =
+      {:lam, Cure.Core.Grade.unrestricted(), ty,
+       {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+
+    {:case, proof, arrow_motive,
+     [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   test ":case transport over an inductive Equivalent(Nat,Z,S Z) hypothesis lands at motive @ b (not motive @ a)" do
@@ -172,7 +177,10 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_eq = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), z()))
 
     assert {:ok, _} =
-             Kernel.infer(ctx_eq, {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()}),
+             Kernel.infer(
+               ctx_eq,
+               {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()}
+             ),
            "a genuine Eq hypothesis should transport through the :case vehicle"
   end
 
@@ -181,7 +189,10 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_h = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), z()))
 
     job = fn ->
-      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()})
+      Kernel.infer(
+        ctx_h,
+        {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()}
+      )
     end
 
     task = Task.async(job)
@@ -206,6 +217,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
 
     for {job, i} <- Enum.with_index(jobs) do
       task = Task.async(job)
+
       assert Task.yield(task, 5_000) || Task.shutdown(task),
              "job #{i} (inductive Eq refl/rewrite) did not return within budget"
     end
@@ -269,7 +281,10 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx_h = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
 
     job = fn ->
-      Kernel.infer(ctx_h, {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()})
+      Kernel.infer(
+        ctx_h,
+        {:app, transport({:var, 0}, @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, z()), z()}
+      )
     end
 
     task = Task.async(job)

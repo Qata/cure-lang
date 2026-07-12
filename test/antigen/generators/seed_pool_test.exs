@@ -6,7 +6,8 @@ defmodule Antigen.Generators.SeedPoolTest do
 
   @tmp "tmp/seedpool_test"
   setup do
-    File.rm_rf!(@tmp); File.mkdir_p!(@tmp)
+    File.rm_rf!(@tmp)
+    File.mkdir_p!(@tmp)
     on_exit(fn -> File.rm_rf!(@tmp) end)
     :ok
   end
@@ -16,16 +17,38 @@ defmodule Antigen.Generators.SeedPoolTest do
   test "pool indexes only closed typed_term seeds, keyed by recorded type" do
     path = Path.join(@tmp, "seeds.sexp")
     nat = {:data, :Nat, [], []}
-    bank(path, Challenge.new(kind: :typed_term, assay: "term/infer_check", label: :well_typed,
-      payload: %{sig: :v1, ctx: [], type: nat, term: {:ctor, :S, [{:ctor, :Z, []}]}}))
+
+    bank(
+      path,
+      Challenge.new(
+        kind: :typed_term,
+        assay: "term/infer_check",
+        label: :well_typed,
+        payload: %{sig: :v1, ctx: [], type: nat, term: {:ctor, :S, [{:ctor, :Z, []}]}}
+      )
+    )
+
     # a mutant with a nominal type MUST NOT enter the pool
     # (term: "fst on a Nat" spelled inductively — D2 projection case over mk_pair)
-    bank(path, Challenge.new(kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
-      payload: %{sig: :v1, ctx: [], type: nat,
-                 term: {:case, {:ctor, :Z, []},
-                        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, nat},
-                        [{:mk_pair, 2, {:var, 1}}]},
-                 fault: %{kind: :proj_non_pair}}))
+    bank(
+      path,
+      Challenge.new(
+        kind: :mutant_term,
+        assay: "mutation/rejection",
+        label: :ill_typed,
+        payload: %{
+          sig: :v1,
+          ctx: [],
+          type: nat,
+          term:
+            {:case, {:ctor, :Z, []},
+             {:lam, Cure.Core.Grade.unrestricted(),
+              {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, nat},
+             [{:mk_pair, 2, {:var, 1}}]},
+          fault: %{kind: :proj_non_pair}
+        }
+      )
+    )
 
     pool = SeedPool.load(path)
     assert [{:ctor, :S, [{:ctor, :Z, []}]}] = Map.get(pool, nat)
@@ -48,8 +71,16 @@ defmodule Antigen.Generators.SeedPoolTest do
     # site, so closedness must be checked on the term itself.
     path = Path.join(@tmp, "seeds_open.sexp")
     nat = {:data, :Nat, [], []}
-    bank(path, Challenge.new(kind: :typed_term, assay: "term/infer_check", label: :well_typed,
-      payload: %{sig: :v1, ctx: [], type: nat, term: {:var, 0}}))
+
+    bank(
+      path,
+      Challenge.new(
+        kind: :typed_term,
+        assay: "term/infer_check",
+        label: :well_typed,
+        payload: %{sig: :v1, ctx: [], type: nat, term: {:var, 0}}
+      )
+    )
 
     pool = SeedPool.load(path)
     assert pool == %{}

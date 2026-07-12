@@ -68,6 +68,6 @@ defmodule Antigen.CorpusReplayTest do
     seeds = Antigen.Corpus.stream(@seeds) |> Enum.map(fn {:ok, c} -> c end)
     mutants = Enum.filter(seeds, &(&1.kind == :mutant_term))
     assert mutants != [], "no :mutant_term seeds banked yet"
-    for c <- mutants, do: assert Antigen.Assays.Mutation.run(c) == :ok
+    for c <- mutants, do: assert(Antigen.Assays.Mutation.run(c) == :ok)
   end
 end

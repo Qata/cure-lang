@@ -163,5 +163,4 @@ defmodule Cure.Types.Reduce do
   end
 
   defp do_substitute(other, _bindings), do: other
-
 end

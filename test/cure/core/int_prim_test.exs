@@ -46,8 +46,7 @@ defmodule Cure.Core.IntPrimTest do
     assert Quote.reify({:vint, 8}) == {:int_lit, 8}
 
     stuck =
-      {:vneutral,
-       {:napp, {:napp, {:nglobal, :int_add}, {:vneutral, {:nvar, 0}}}, {:vint, 1}}}
+      {:vneutral, {:napp, {:napp, {:nglobal, :int_add}, {:vneutral, {:nvar, 0}}}, {:vint, 1}}}
 
     assert Quote.reify(stuck, 1) == app2(:int_add, {:var, 0}, {:int_lit, 1})
   end

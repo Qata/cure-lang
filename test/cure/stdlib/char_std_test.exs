@@ -9,7 +9,7 @@ defmodule Cure.Stdlib.CharStdTest do
   use ExUnit.Case, async: true
   alias Cure.Elab.Program
 
-  @char_body {:data, :Bounded, [], [nat_lit: 1114112]}
+  @char_body {:data, :Bounded, [], [nat_lit: 1_114_112]}
 
   test "Std.Char elaborates and owns the Char alias" do
     assert {:ok, env} = Program.elaborate(File.read!("lib/std/char.cure"))

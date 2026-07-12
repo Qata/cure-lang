@@ -35,8 +35,7 @@ defmodule Antigen.Generators.GradeConv do
   @cases [
     {[], @ty0, {:pi, :erased, @nat, @nat}, "erased Pi: distinct from 1, <=1 and w"},
     {[], @ty0, {:pi, :linear, @nat, @nat}, "linear Pi: the QTT `1`"},
-    {[], @ty0, {:pi, :affine, @nat, @nat},
-     "affine Pi: leq(:linear, :affine) holds, yet the TYPES differ"},
+    {[], @ty0, {:pi, :affine, @nat, @nat}, "affine Pi: leq(:linear, :affine) holds, yet the TYPES differ"},
     {[], @ty0, {:pi, :unrestricted, @nat, @nat}, "unrestricted Pi: the default `w`"},
     {[], @ty0, {:pi, :linear, @ty0, @ty0}, "linear Pi over a universe domain"},
     {[], @ty0, {:pi, :linear, @nat, {:pi, :unrestricted, @nat, @nat}},
@@ -50,14 +49,11 @@ defmodule Antigen.Generators.GradeConv do
     # The η clause at `:351` only ever fires for Lam-vs-NON-Bind. Cure's `Conv` routed
     # EVERY `{:vlam, …}` on the left straight to η, so two λs differing only in grade
     # were convertible — and this generator emitted no λ cell, so nothing noticed.
-    {[], {:pi, :erased, @nat, @nat}, {:lam, :erased, @nat, {:var, 0}},
-     "erased λ: distinct from 1, <=1 and w"},
-    {[], {:pi, :linear, @nat, @nat}, {:lam, :linear, @nat, {:var, 0}},
-     "linear λ: the QTT `1` on a term binder"},
+    {[], {:pi, :erased, @nat, @nat}, {:lam, :erased, @nat, {:var, 0}}, "erased λ: distinct from 1, <=1 and w"},
+    {[], {:pi, :linear, @nat, @nat}, {:lam, :linear, @nat, {:var, 0}}, "linear λ: the QTT `1` on a term binder"},
     {[], {:pi, :affine, @nat, @nat}, {:lam, :affine, @nat, {:var, 0}},
      "affine λ: leq(:linear, :affine) holds, yet the TERMS differ"},
-    {[], {:pi, :unrestricted, @nat, @nat}, {:lam, :unrestricted, @nat, {:var, 0}},
-     "unrestricted λ: the default `w`"},
+    {[], {:pi, :unrestricted, @nat, @nat}, {:lam, :unrestricted, @nat, {:var, 0}}, "unrestricted λ: the default `w`"},
     {[], {:pi, :unrestricted, @nat, {:pi, :linear, @nat, @nat}},
      {:lam, :unrestricted, @nat, {:lam, :linear, @nat, {:var, 0}}},
      "nested λ: the INNER grade differs, the outer agrees"}

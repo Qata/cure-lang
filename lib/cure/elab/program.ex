@@ -624,7 +624,9 @@ defmodule Cure.Elab.Program do
     finding =
       Enum.find_value(defs, fn {name, %{body: body}} ->
         case Validator.validate(body, Validator.release_config()) do
-          {:ok, _warnings} -> nil
+          {:ok, _warnings} ->
+            nil
+
           {:error, rejections} ->
             if Enum.any?(rejections, &(&1.clause == :no_hole)), do: {name, rejections}
         end
@@ -726,7 +728,9 @@ defmodule Cure.Elab.Program do
             {:ok, merged} -> {:cont, {:ok, merged}}
             {:error, _} = err -> {:halt, err}
           end
-        {:error, _} = err -> {:halt, err}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
   end

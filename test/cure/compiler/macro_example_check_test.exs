@@ -6,6 +6,7 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
   defp macro_def!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
+
     find = fn find, n ->
       case n do
         {:macro_def, _, _} = m -> m
@@ -13,6 +14,7 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
         _ -> nil
       end
     end
+
     find.(find, ast)
   end
 
@@ -58,9 +60,7 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
 
   test "a matching example modulo source position still checks clean (α: positions ignored)" do
     md =
-      macro_def!(
-        "macro M\n  syntax m <x: Code> becomes f(x)\n    example m 1 expands f(1)\n"
-      )
+      macro_def!("macro M\n  syntax m <x: Code> becomes f(x)\n    example m 1 expands f(1)\n")
 
     assert :ok = MacroValidate.check_examples(md)
   end

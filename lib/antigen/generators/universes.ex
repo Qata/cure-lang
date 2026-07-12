@@ -57,15 +57,19 @@ defmodule Antigen.Generators.Universes do
   end
 
   defp nat_family,
-    do:
-      {Inductive.family(:Nat, [], [], 0),
-       [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, @nat}], [])]}
+    do: {Inductive.family(:Nat, [], [], 0), [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, @nat}], [])]}
 
   @doc "Girard guard: `def u : Type 0 = Type 0` must be rejected — Type 0 inhabits Type 1 only."
   @spec type_in_type(:ill_typed) :: Challenge.t()
   def type_in_type(:ill_typed) do
-    def_challenge(:ill_typed, [], {:type, 0}, {:type, 0},
-      "Type-in-Type: Type 0 : Type 0 must reject (Type 0 : Type 1)", :type_in_type)
+    def_challenge(
+      :ill_typed,
+      [],
+      {:type, 0},
+      {:type, 0},
+      "Type-in-Type: Type 0 : Type 0 must reject (Type 0 : Type 1)",
+      :type_in_type
+    )
   end
 
   @doc """
@@ -76,22 +80,33 @@ defmodule Antigen.Generators.Universes do
   """
   @spec ceiling(:ill_typed) :: Challenge.t()
   def ceiling(:ill_typed) do
-    def_challenge(:ill_typed, [], {:type, 2}, {:type, 1},
-      "ceiling: Type 2 has no sort — a def cannot be annotated AT Type 2", :ceiling_def)
+    def_challenge(
+      :ill_typed,
+      [],
+      {:type, 2},
+      {:type, 1},
+      "ceiling: Type 2 has no sort — a def cannot be annotated AT Type 2",
+      :ceiling_def
+    )
   end
 
   @doc "Cumulativity: `Nat : Type 0` accepted at `Type 1` (`Type 0 <: Type 1`)."
   @spec cumulativity(:well_typed) :: Challenge.t()
   def cumulativity(:well_typed) do
-    def_challenge(:well_typed, [nat_family()], {:type, 1}, @nat,
-      "cumulativity: Nat (level 0) accepted at Type 1", :cumulativity)
+    def_challenge(
+      :well_typed,
+      [nat_family()],
+      {:type, 1},
+      @nat,
+      "cumulativity: Nat (level 0) accepted at Type 1",
+      :cumulativity
+    )
   end
 
   @doc "Exact stratification: `def u : Type 1 = Type 0` accepted."
   @spec stratification(:well_typed) :: Challenge.t()
   def stratification(:well_typed) do
-    def_challenge(:well_typed, [], {:type, 1}, {:type, 0},
-      "stratification: Type 0 : Type 1 accepted", :stratification)
+    def_challenge(:well_typed, [], {:type, 1}, {:type, 0}, "stratification: Type 0 : Type 1 accepted", :stratification)
   end
 
   @doc """

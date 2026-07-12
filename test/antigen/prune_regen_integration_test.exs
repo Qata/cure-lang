@@ -23,8 +23,10 @@ defmodule Antigen.PruneRegenIntegrationTest do
     retired = Path.join(@tmp, "retired.sexp")
 
     keep = Corpus.encode_record(Challenge.stub({:type, 0}))
-    bad = Regex.replace(~r/pieces=.*$/, Corpus.encode_record(Challenge.stub({:type, 1})),
-                        "pieces=t::(zzz_unknown_node 1)")
+
+    bad =
+      Regex.replace(~r/pieces=.*$/, Corpus.encode_record(Challenge.stub({:type, 1})), "pieces=t::(zzz_unknown_node 1)")
+
     File.write!(corpus, keep <> "\n" <> bad <> "\n")
 
     assert %{kept: 1, retired: 1} = Prune.prune(corpus, retired)

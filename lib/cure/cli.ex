@@ -1269,7 +1269,10 @@ defmodule Cure.CLI do
     if failed == [] do
       {:ok, Enum.map(results, fn {:ok, r} -> r end)}
     else
-      Enum.each(failed, fn path -> error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)") end)
+      Enum.each(failed, fn path ->
+        error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)")
+      end)
+
       {:error, {:preflight_failed, failed}}
     end
   end
@@ -1284,8 +1287,7 @@ defmodule Cure.CLI do
       output = migrate_render(new_ast)
 
       if migrate_output_ok?(source, output, file) do
-        {:ok,
-         %{path: file, output: output, changed?: new_ast != attached, warnings: warnings}}
+        {:ok, %{path: file, output: output, changed?: new_ast != attached, warnings: warnings}}
       else
         {:error, file}
       end

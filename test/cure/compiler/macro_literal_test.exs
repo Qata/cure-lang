@@ -20,9 +20,8 @@ defmodule Cure.Compiler.MacroLiteralTest do
 
   test "a number use-site with a registered suffix expands the literal rule" do
     node =
-      parse!(
-        "macro Dur\n  literal <n: Number> ms becomes Duration.ms(n)\n\nfn f() -> Int = 500ms\n"
-      )
+      parse!("macro Dur\n  literal <n: Number> ms becomes Duration.ms(n)\n\nfn f() -> Int = 500ms\n")
+
     body = find_fn_body(node, "f")
     # 500ms  ==>  Duration.ms(500)
     assert {:function_call, meta, [arg]} = body
@@ -32,9 +31,8 @@ defmodule Cure.Compiler.MacroLiteralTest do
 
   test "a float number use-site with a registered suffix expands the literal rule" do
     node =
-      parse!(
-        "macro Dur\n  literal <n: Number> s becomes Duration.s(n)\n\nfn f() -> Float = 3.5s\n"
-      )
+      parse!("macro Dur\n  literal <n: Number> s becomes Duration.s(n)\n\nfn f() -> Float = 3.5s\n")
+
     body = find_fn_body(node, "f")
     # 3.5s  ==>  Duration.s(3.5)  — the :float parse_prefix clause dispatches
     # through the same maybe_literal_macro/2 as :integer.
@@ -53,9 +51,8 @@ defmodule Cure.Compiler.MacroLiteralTest do
     # state.literal_macros is NON-empty (has an "ms" entry), so this exercises
     # the real Map.fetch-miss path, not just the trivially-empty-map case.
     node =
-      parse!(
-        "macro Dur\n  literal <n: Number> ms becomes Duration.ms(n)\n\nfn f() -> Int = 500 + 3\n"
-      )
+      parse!("macro Dur\n  literal <n: Number> ms becomes Duration.ms(n)\n\nfn f() -> Int = 500 + 3\n")
+
     body = find_fn_body(node, "f")
     assert {:binary_op, meta, [left, right]} = body
     assert Keyword.get(meta, :operator) == :+
@@ -65,6 +62,7 @@ defmodule Cure.Compiler.MacroLiteralTest do
 
   defp find_fn_body({:function_def, meta, [body]}, name),
     do: if(to_string(Keyword.get(meta, :name)) == name, do: body)
+
   defp find_fn_body({_t, _m, ch}, name) when is_list(ch), do: Enum.find_value(ch, &find_fn_body(&1, name))
   defp find_fn_body(_, _), do: nil
 end

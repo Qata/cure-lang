@@ -61,7 +61,7 @@ defmodule Cure.Types.CoreBridge do
   # Reverse maps for from_core's dedicated builtin-op spine clauses: a stuck
   # spine must read back as the surface OPERATOR node, never as a
   # `function_call "int_add"` (the generic {:app,…} unwind would mis-render it).
-  @from_builtin (for {surface, core} <- @int_binops, into: %{}, do: {core, surface})
+  @from_builtin for({surface, core} <- @int_binops, into: %{}, do: {core, surface})
                 |> Map.merge(for {surface, core} <- @float_binops, into: %{}, do: {core, surface})
 
   @from_unop_builtin %{int_neg: :-, float_neg: :-}
@@ -72,6 +72,7 @@ defmodule Cure.Types.CoreBridge do
   @spec to_core(term()) :: {:ok, Cure.Core.Term.t()} | :error
   def to_core({:literal, _meta, n}) when is_integer(n), do: {:ok, {:int_lit, n}}
   def to_core({:literal, _meta, f}) when is_float(f), do: {:ok, {:float_lit, f}}
+
   def to_core({:literal, _meta, b}) when is_boolean(b),
     do: {:ok, {:ctor, if(b, do: :True, else: :False), []}}
 

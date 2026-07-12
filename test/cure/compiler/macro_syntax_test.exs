@@ -99,9 +99,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
   end
 
   test "a list-valued meta attr (selective-import item list) round-trips faithfully" do
-    ast = {:import,
-           [items: ["foo", "bar"], source: "Std.String", import_type: :use, language: :cure],
-           []}
+    ast = {:import, [items: ["foo", "bar"], source: "Std.String", import_type: :use, language: :cure], []}
 
     repr = MacroSyntax.to_syntax(ast)
     back = MacroSyntax.from_syntax(repr)
@@ -111,12 +109,13 @@ defmodule Cure.Compiler.MacroSyntaxTest do
   end
 
   test "a map-valued meta attr (interface default-method table) round-trips faithfully" do
-    parsed = parse_stmt!("""
-    interface Equatable(a)
-      fn eq(x: a, y: a) -> Bool
-      fn ne(x: a, y: a) -> Bool = true
-    end
-    """)
+    parsed =
+      parse_stmt!("""
+      interface Equatable(a)
+        fn eq(x: a, y: a) -> Bool
+        fn ne(x: a, y: a) -> Bool = true
+      end
+      """)
 
     # A top-level `interface` (no `mod` wrapper) parses as a `:block` with the
     # trailing stray `end` token as a sibling -- dig out the interface node.
@@ -140,8 +139,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
 
   test "Std.Syntax mirror values encode to and decode from Core constructors" do
     repr =
-      {:syn_node, :literal, [{:subtype, {:s_atom, :integer}}],
-       [{:syn_leaf, :literal, [], {:s_int, 7}}]}
+      {:syn_node, :literal, [{:subtype, {:s_atom, :integer}}], [{:syn_leaf, :literal, [], {:s_int, 7}}]}
 
     core = MacroSyntax.to_core(repr)
     assert {:ctor, :Node, [{:atom_lit, :literal}, {:ctor, :Cons, _}, {:ctor, :Cons, _}]} = core
@@ -150,8 +148,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
 
   test "Core bridge preserves strings, nested syntax, maps, and opaque values" do
     repr =
-      {:syn_leaf, :raw,
-       [{:payload, {:s_map, [{{:s_str, "k"}, {:s_syntax, {:syn_leaf, :x, [], :s_opaque}}}]}}],
+      {:syn_leaf, :raw, [{:payload, {:s_map, [{{:s_str, "k"}, {:s_syntax, {:syn_leaf, :x, [], :s_opaque}}}]}}],
        {:s_list, [{:s_str, "hi"}, :s_opaque]}}
 
     assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr

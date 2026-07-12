@@ -111,6 +111,7 @@ defmodule Antigen.Generators.Equality do
     Gen.bind(inhabitant(), fn {a, ty} ->
       Gen.bind(nat_numeral(), fn n ->
         proof = {:ctor, :reflexive, [ty, a]}
+
         {{:app, transport(proof, ty, {:lam, Cure.Core.Grade.unrestricted(), ty, @nat}, a), n}, @nat, []}
         |> Gen.return()
       end)
@@ -153,8 +154,18 @@ defmodule Antigen.Generators.Equality do
        end)},
       {1, neutral_eq_prop({:app, {:global, :int_neg}, {:var, 0}}, @int, [@int])},
       # projections of a Σ variable, now single-branch ι-on-case over mk_pair
-      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @sig_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]}, @nat, [@sig_nat])},
-      {1, neutral_eq_prop({:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @sig_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]}, @nat, [@sig_nat])},
+      {1,
+       neutral_eq_prop(
+         {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @sig_nat, @nat}, [{:mk_pair, 2, {:var, 1}}]},
+         @nat,
+         [@sig_nat]
+       )},
+      {1,
+       neutral_eq_prop(
+         {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @sig_nat, @nat}, [{:mk_pair, 2, {:var, 0}}]},
+         @nat,
+         [@sig_nat]
+       )},
       # stuck case over a Bd variable → :ncase + conv_branches? + conv_branch_bodies?
       {2, neutral_case_eq_prop()}
     ])
@@ -177,8 +188,13 @@ defmodule Antigen.Generators.Equality do
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
     arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
+
+    arrow_motive =
+      {:lam, Cure.Core.Grade.unrestricted(), ty,
+       {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+
+    {:case, proof, arrow_motive,
+     [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   # -- closed inhabitants paired with their type ------------------------------

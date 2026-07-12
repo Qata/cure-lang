@@ -13,9 +13,18 @@ defmodule Antigen.Generators.Mutation do
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Core.Context
 
-  @operators [:head_swap, :ctor_arg, :index_mismatch, :app_domain,
-              :out_of_scope_var, :proj_non_pair, :universe,
-              :pair_component, :app_result, :type_param_mismatch]
+  @operators [
+    :head_swap,
+    :ctor_arg,
+    :index_mismatch,
+    :app_domain,
+    :out_of_scope_var,
+    :proj_non_pair,
+    :universe,
+    :pair_component,
+    :app_result,
+    :type_param_mismatch
+  ]
   def operators, do: @operators
 
   # Self-wrapped operators for the new type formers (Σ/Π/List): each already
@@ -51,57 +60,79 @@ defmodule Antigen.Generators.Mutation do
         fresh
     end
   end
-  defp gvec0(ctx), do: Term.gen_term(ctx, vec(z()))       # : Vec Z
-  defp gvec_sz(ctx), do: Term.gen_term(ctx, vec(s(z())))  # : Vec (S Z)
+
+  # : Vec Z
+  defp gvec0(ctx), do: Term.gen_term(ctx, vec(z()))
+  # : Vec (S Z)
+  defp gvec_sz(ctx), do: Term.gen_term(ctx, vec(s(z())))
 
   @doc "Build `{Gen.t(term), fault}` for `kind` in the local context `ctx`."
   @spec build(Context.t(), atom()) :: {Gen.t(), map()}
   def build(ctx, :head_swap) do
-    g = Gen.bind(gvec0(ctx), fn v ->
-          Gen.bind(gnat(ctx), fn n ->
-            Gen.return({:app, {:app, {:global, :plus}, v}, n})  # plus expects Nat, given Vec
-          end)
+    g =
+      Gen.bind(gvec0(ctx), fn v ->
+        Gen.bind(gnat(ctx), fn n ->
+          # plus expects Nat, given Vec
+          Gen.return({:app, {:app, {:global, :plus}, v}, n})
         end)
+      end)
+
     {g, %{kind: :head_swap, witness: :head, expected_head: :Nat, injected_head: :Vec, scope: nil}}
   end
 
   def build(ctx, :ctor_arg) do
-    g = Gen.bind(gnat(ctx), fn n ->
-          Gen.bind(gvec0(ctx), fn v ->
-            Gen.return({:ctor, :vcons, [n, v, vnil()]})  # x should be Nat, given Vec
-          end)
+    g =
+      Gen.bind(gnat(ctx), fn n ->
+        Gen.bind(gvec0(ctx), fn v ->
+          # x should be Nat, given Vec
+          Gen.return({:ctor, :vcons, [n, v, vnil()]})
         end)
+      end)
+
     {g, %{kind: :ctor_arg, witness: :head, expected_head: :Nat, injected_head: :Vec, scope: nil}}
   end
 
   def build(ctx, :index_mismatch) do
-    g = Gen.bind(gnat(ctx), fn n ->
-          Gen.bind(gvec_sz(ctx), fn tail ->
-            Gen.return({:ctor, :vcons, [z(), n, tail]})  # n=Z ⇒ tail must be Vec Z; given Vec (S Z)
-          end)
+    g =
+      Gen.bind(gnat(ctx), fn n ->
+        Gen.bind(gvec_sz(ctx), fn tail ->
+          # n=Z ⇒ tail must be Vec Z; given Vec (S Z)
+          Gen.return({:ctor, :vcons, [z(), n, tail]})
         end)
+      end)
+
     {g, %{kind: :index_mismatch, witness: :index, expected_head: :Z, injected_head: :S, scope: nil}}
   end
 
   def build(ctx, :app_domain) do
-    g = Gen.bind(gvec0(ctx), fn v ->
-          Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), nat_t(), {:var, 0}}, v})  # (λx:Nat.x) applied to Vec
-        end)
+    g =
+      Gen.bind(gvec0(ctx), fn v ->
+        # (λx:Nat.x) applied to Vec
+        Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), nat_t(), {:var, 0}}, v})
+      end)
+
     {g, %{kind: :app_domain, witness: :head, expected_head: :Nat, injected_head: :Vec, scope: nil}}
   end
 
   def build(ctx, :out_of_scope_var) do
     gamma_len = Context.length(ctx)
-    g = Gen.bind(Gen.int(0, 3), fn d -> Gen.return({:var, gamma_len + d}) end)  # always ≥ |Γ|
+    # always ≥ |Γ|
+    g = Gen.bind(Gen.int(0, 3), fn d -> Gen.return({:var, gamma_len + d}) end)
     # witness records the minimal certain out-of-scope index (d = 0).
-    {g, %{kind: :out_of_scope_var, witness: :scope, expected_head: nil,
-          injected_head: nil, scope: {gamma_len, gamma_len}}}
+    {g,
+     %{kind: :out_of_scope_var, witness: :scope, expected_head: nil, injected_head: nil, scope: {gamma_len, gamma_len}}}
   end
 
   def build(_ctx, :proj_non_pair) do
     # fst on a Nat: a :case with a Sigma motive + mk_pair branch scrutinising a
     # Nat is ill-typed (case on a non-Sigma) — the same proj-non-pair fault.
-    g = Gen.bind(Gen.int(0, 3), fn k -> Gen.return({:case, nat_numeral(k), {:lam, Cure.Core.Grade.unrestricted(), sig(), nat_t()}, [{:mk_pair, 2, {:var, 1}}]}) end)
+    g =
+      Gen.bind(Gen.int(0, 3), fn k ->
+        Gen.return(
+          {:case, nat_numeral(k), {:lam, Cure.Core.Grade.unrestricted(), sig(), nat_t()}, [{:mk_pair, 2, {:var, 1}}]}
+        )
+      end)
+
     {g, %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma, injected_head: :Nat, scope: nil}}
   end
 
@@ -111,8 +142,7 @@ defmodule Antigen.Generators.Mutation do
     # (whose sort is Type₁ ⋠ Type₀) is the universe fault, carried by the
     # inductive identity former (the retired primitive {:eq} carried it before).
     g = Gen.return({:data, :Equivalent, [t0], [t0, t0]})
-    {g, %{kind: :universe, witness: :level, expected_head: {:type, 0},
-          injected_head: {:type, 1}, scope: nil}}
+    {g, %{kind: :universe, witness: :level, expected_head: {:type, 0}, injected_head: {:type, 1}, scope: nil}}
   end
 
   # ── Tier-B new-type-former operators (self-wrapped, spec §5) ──────────────────
@@ -123,7 +153,8 @@ defmodule Antigen.Generators.Mutation do
   def build(_ctx, :pair_component) do
     # Σ Nat. Nat expects both components Nat; a Bd (T) in the first slot violates
     # it. The identity-app forces Kernel.infer to CHECK the pair against Σ Nat.Nat.
-    bad_pair = {:ctor, :mk_pair, [{:ctor, :T, []}, z()]}   # T : Bd, not Nat
+    # T : Bd, not Nat
+    bad_pair = {:ctor, :mk_pair, [{:ctor, :T, []}, z()]}
     g = Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), sig(), {:var, 0}}, bad_pair})
     {g, %{kind: :pair_component, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
   end
@@ -132,7 +163,8 @@ defmodule Antigen.Generators.Mutation do
     # (λ x:Nat. T) has body T : Bd, violating the declared codomain Nat. Applied
     # through an identity-Pi wrapper so `check` compares the Bd body against Nat
     # (distinct fault class from app_domain, which breaks the domain).
-    bad_fun = {:lam, Cure.Core.Grade.unrestricted(), nat_t(), {:ctor, :T, []}}       # body T : Bd, not Nat
+    # body T : Bd, not Nat
+    bad_fun = {:lam, Cure.Core.Grade.unrestricted(), nat_t(), {:ctor, :T, []}}
     pi_t = {:pi, Cure.Core.Grade.unrestricted(), nat_t(), nat_t()}
     g = Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), pi_t, {:app, {:var, 0}, z()}}, bad_fun})
     {g, %{kind: :app_result, witness: :head, expected_head: :Nat, injected_head: :Bd, scope: nil}}
@@ -188,7 +220,9 @@ defmodule Antigen.Generators.Mutation do
   def wrap(inner, :ctor_nat, _filler), do: {:ctor, :S, [inner]}
   def wrap(inner, :case_scrut, _filler), do: {:case, inner, motive(), nat_branches(z())}
   def wrap(inner, :case_branch, filler), do: {:case, filler, motive(), nat_branches(inner)}
-  def wrap(inner, :pair, filler), do: {:app, {:lam, Cure.Core.Grade.unrestricted(), sig(), z()}, {:ctor, :mk_pair, [inner, filler]}}
+
+  def wrap(inner, :pair, filler),
+    do: {:app, {:lam, Cure.Core.Grade.unrestricted(), sig(), z()}, {:ctor, :mk_pair, [inner, filler]}}
 
   # Each wrapper places `inner` at a Nat-checked hole; filler is a well-typed Nat.
   # :app_arg/:case_branch/:pair draw a well-typed Nat filler; :ctor_nat/:case_scrut ignore it.

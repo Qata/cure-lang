@@ -45,7 +45,9 @@ defmodule Cure.Types.DependentCheckerIntegrationTest do
   end
 
   test "a non-total function used in a dependent type is rejected via the kernel" do
-    bad = String.replace(@dependent, "fn andd(x: Dec, y: Dec) -> Dec = x", "fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)")
+    bad =
+      String.replace(@dependent, "fn andd(x: Dec, y: Dec) -> Dec = x", "fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)")
+
     assert {:error, _} = check(bad)
   end
 end

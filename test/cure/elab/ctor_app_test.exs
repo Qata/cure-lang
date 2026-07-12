@@ -17,7 +17,13 @@ defmodule Cure.Elab.CtorAppTest do
   defp build_env do
     {:ok, toks} = Lexer.tokenize(@src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
-    items = case ast do {:block, _, xs} -> xs; x -> [x] end
+
+    items =
+      case ast do
+        {:block, _, xs} -> xs
+        x -> [x]
+      end
+
     Enum.reduce(items, Env.empty(), fn decl, e ->
       {:ok, e2} = Declarations.elaborate(decl, e)
       e2
@@ -56,11 +62,13 @@ defmodule Cure.Elab.CtorAppTest do
     env = build_env()
     # l : SF(SVNil, SVNil, Causal); r : SF(SVCons(..), SVNil, Causal)
     # l's bs (SVNil) must equal r's first index (SVCons ..) — it does not.
-    r_bs = {:data, :SF, [], [
-      {:ctor, :SVCons, [{:ctor, :CSig, []}, {:ctor, :SVNil, []}]},
-      {:ctor, :SVNil, []},
-      {:ctor, :Causal, []}
-    ]}
+    r_bs =
+      {:data, :SF, [],
+       [
+         {:ctor, :SVCons, [{:ctor, :CSig, []}, {:ctor, :SVNil, []}]},
+         {:ctor, :SVNil, []},
+         {:ctor, :Causal, []}
+       ]}
 
     lspec = {{:global, :l}, sf_term(:SVNil, :SVNil, :Causal)}
     rspec = {{:global, :r}, r_bs}

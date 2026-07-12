@@ -18,30 +18,39 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
   # Pre-impl: {:error, :coverage}. Post: {:ok, _} — prepend is unreachable at Z,
   # so the elaborator discharges it and the kernel's coverage check passes.
   test "(A) a match omitting an impossible constructor elaborates" do
-    src = @vec <> """
-    fn only_empty({a: Type}, xs: Vector(a, Z)) -> Nat = match xs
-      empty() -> Z()
-    """
+    src =
+      @vec <>
+        """
+        fn only_empty({a: Type}, xs: Vector(a, Z)) -> Nat = match xs
+          empty() -> Z()
+        """
+
     assert {:ok, _env} = Program.elaborate(src)
   end
 
   # Pre-impl: {:error, :coverage} (kernel). Post: {:error, {:missing_branch, :prepend}}.
   test "(A) a match omitting a REACHABLE constructor is a missing-branch error" do
-    src = @vec <> """
-    fn bad({a: Type}, {n: Nat}, xs: Vector(a, n)) -> Nat = match xs
-      empty() -> Z()
-    """
+    src =
+      @vec <>
+        """
+        fn bad({a: Type}, {n: Nat}, xs: Vector(a, n)) -> Nat = match xs
+          empty() -> Z()
+        """
+
     assert {:error, {:missing_branch, :prepend}} = Program.elaborate(src)
   end
 
   # Pre-impl: {:error, :unknown_global} (impossible lexes as an identifier body).
   # Post: {:ok, _} — the branch is genuinely unreachable and accepted.
   test "(A) an explicit `-> impossible` on an unreachable branch elaborates" do
-    src = @vec <> """
-    fn ei({a: Type}, xs: Vector(a, Z)) -> Nat = match xs
-      empty() -> Z()
-      prepend(x, rest) -> impossible
-    """
+    src =
+      @vec <>
+        """
+        fn ei({a: Type}, xs: Vector(a, Z)) -> Nat = match xs
+          empty() -> Z()
+          prepend(x, rest) -> impossible
+        """
+
     assert {:ok, _env} = Program.elaborate(src)
   end
 
@@ -49,27 +58,33 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
   # {:absurd} placeholder body. The kernel's partial-coverage (step 1) accepts the
   # omission; no {:absurd} node should survive into the elaborated Core term.
   test "(A) an impossible constructor is omitted from Core, not marked {:absurd}" do
-    src = @vec <> """
-    fn only_empty({a: Type}, xs: Vector(a, Z)) -> Nat = match xs
-      empty() -> Z()
-    """
+    src =
+      @vec <>
+        """
+        fn only_empty({a: Type}, xs: Vector(a, Z)) -> Nat = match xs
+          empty() -> Z()
+        """
 
     assert {:ok, env} = Program.elaborate(src)
     nodes = env |> Env.get_def(:only_empty) |> Map.fetch!(:body) |> Validator.nodes()
     refute Enum.any?(nodes, &match?({:absurd}, &1)), "impossible branch must be omitted, not {:absurd}"
 
     case_nodes = Enum.filter(nodes, &match?({:case, _, _, _}, &1))
+
     assert Enum.any?(case_nodes, fn {:case, _, _, brs} -> Enum.map(brs, &elem(&1, 0)) == [:empty] end),
            "the case should carry only the reachable :empty branch"
   end
 
   # Pre-impl: {:error, :unknown_global}. Post: {:error, {:reachable_impossible, :prepend}}.
   test "(A) a mis-marked `-> impossible` on a reachable branch is rejected" do
-    src = @vec <> """
-    fn mi({a: Type}, {n: Nat}, xs: Vector(a, n)) -> Nat = match xs
-      empty() -> Z()
-      prepend(x, rest) -> impossible
-    """
+    src =
+      @vec <>
+        """
+        fn mi({a: Type}, {n: Nat}, xs: Vector(a, n)) -> Nat = match xs
+          empty() -> Z()
+          prepend(x, rest) -> impossible
+        """
+
     assert {:error, {:reachable_impossible, :prepend}} = Program.elaborate(src)
   end
 end

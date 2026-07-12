@@ -83,6 +83,7 @@ defmodule Antigen.IndexedSeedTest do
 
     indexed = Enum.filter(results, fn r -> match?(%Antigen.Challenge{assay: "indexed/case"}, r.entry) end)
     refute indexed == []
+
     assert Enum.all?(indexed, fn r -> r.verdict == :ok end),
            "indexed/case replay produced a non-:ok verdict: " <>
              inspect(indexed |> Enum.reject(&(&1.verdict == :ok)) |> Enum.map(& &1.verdict))

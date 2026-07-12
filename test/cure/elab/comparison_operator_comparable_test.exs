@@ -33,6 +33,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
       fn go() -> Bool = 'a' < 'b'
     end
     """
+
     assert eval(src, :go, :"Cure.CmpCharLt") == true
   end
 
@@ -44,6 +45,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
       fn go() -> Bool = 'a' > 'b'
     end
     """
+
     assert eval(src, :go, :"Cure.CmpCharGt") == false
   end
 
@@ -55,6 +57,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
       fn go() -> Bool = 'a' <= 'a'
     end
     """
+
     assert eval(src, :go, :"Cure.CmpCharLe") == true
   end
 
@@ -66,6 +69,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
       fn go() -> Bool = 'b' >= 'a'
     end
     """
+
     assert eval(src, :go, :"Cure.CmpCharGe") == true
   end
 
@@ -77,6 +81,7 @@ defmodule Cure.Elab.ComparisonOperatorOrdTest do
       fn go() -> Bool = "ada" < "grace"
     end
     """
+
     assert eval(src, :go, :"Cure.CmpStrLt") == true
   end
 

@@ -213,6 +213,7 @@ end
 
 defmodule Cure.Core.Inductive do
   alias Cure.Core.Grade
+
   @moduledoc """
   Representation of indexed inductive families and their constructors
   (design spec §4.4; mirrors Idris `Core/Context/Data.idr` and Lean

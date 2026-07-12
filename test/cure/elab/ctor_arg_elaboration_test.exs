@@ -20,9 +20,10 @@ defmodule Cure.Elab.CtorArgElaborationTest do
   """
 
   defp with_body(body) do
-    @preamble <> """
-    fn probe(n: Nat) -> Nat = #{body}
-    """
+    @preamble <>
+      """
+      fn probe(n: Nat) -> Nat = #{body}
+      """
   end
 
   # FAIL cases (pre-fix: {:error, :ctor_arity}).

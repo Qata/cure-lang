@@ -30,17 +30,13 @@ defmodule Antigen.BuiltinOpCoherenceTest do
              Normalise.nf(ctx(), app2(:int_mul, {:int_lit, 2}, {:int_lit, -3}), delta: :certified)
 
     assert {:float_lit, 3.5} =
-             Normalise.nf(ctx(), app2(:float_add, {:float_lit, 1.5}, {:float_lit, 2.0}),
-               delta: :certified
-             )
+             Normalise.nf(ctx(), app2(:float_add, {:float_lit, 1.5}, {:float_lit, 2.0}), delta: :certified)
 
     assert {:ctor, :True, []} =
              Normalise.nf(ctx(), app2(:int_le, {:int_lit, 2}, {:int_lit, 2}), delta: :certified)
 
     assert {:ctor, :False, []} =
-             Normalise.nf(ctx(), app2(:float_gt, {:float_lit, 1.0}, {:float_lit, 2.0}),
-               delta: :certified
-             )
+             Normalise.nf(ctx(), app2(:float_gt, {:float_lit, 1.0}, {:float_lit, 2.0}), delta: :certified)
   end
 
   test "§G.1 rule 1: div/rem by literal zero stays NEUTRAL (partial ops never fold or crash)" do
@@ -69,14 +65,18 @@ defmodule Antigen.BuiltinOpCoherenceTest do
   end
 
   test "R1: a user-registered int_add normalizes by its OWN body, never the builtin table" do
-    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
-    body = {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
+    ty =
+      {:pi, Cure.Core.Grade.unrestricted(), {:int_type},
+       {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), {:int_type},
+       {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
+
     user_env = Env.empty() |> Env.add_def(:int_add, ty, body) |> Env.certify(:int_add)
     user_ctx = Context.empty(user_env)
 
     assert {:int_lit, 42} =
-             Normalise.nf(user_ctx, app2(:int_add, {:int_lit, 3}, {:int_lit, 5}),
-               delta: :certified
-             )
+             Normalise.nf(user_ctx, app2(:int_add, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
   end
 end

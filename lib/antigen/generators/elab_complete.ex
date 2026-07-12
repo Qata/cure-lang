@@ -82,8 +82,7 @@ defmodule Antigen.Generators.ElabComplete do
     # (control) goal mentions ONLY the index; plain var scrutinee. build_motive's
     # index generalization + var abstraction already handle this — expected
     # ACCEPT, so it anchors that an infection elsewhere is shape-specific.
-    {"idx_only/var/rebuild", :idx_only_var_rebuild, :nat_nv,
-     "goal NV(n), var scrutinee, rebuild constructor",
+    {"idx_only/var/rebuild", :idx_only_var_rebuild, :nat_nv, "goal NV(n), var scrutinee, rebuild constructor",
      """
        fn f({n: Nat}, v: NV(n)) -> NV(n) =
          match v
@@ -104,8 +103,7 @@ defmodule Antigen.Generators.ElabComplete do
 
     # same goal, but branch bodies return `reflexive(v)` (the scrutinee value) rather
     # than rebuilding the constructor — isolates value-occurrence refinement.
-    {"eq_value/var/refl_scrut", :eq_value_var_refl_scrut, :nat_nv,
-     "goal Equivalent(NV(n), v, v), reflexive(v)",
+    {"eq_value/var/refl_scrut", :eq_value_var_refl_scrut, :nat_nv, "goal Equivalent(NV(n), v, v), reflexive(v)",
      """
        fn f({n: Nat}, v: NV(n)) -> Equivalent(NV(n), v, v) =
          match v
@@ -125,8 +123,7 @@ defmodule Antigen.Generators.ElabComplete do
 
     # computed-index family: goal mentions the scrutinee's stuck computed index
     # through a rebuild (the FRP `app`-style crux, generalized). Covered by 3a.
-    {"computed_idx/rebuild", :computed_idx_rebuild, :slist_f,
-     "goal F(app(p,q)) rebuild — computed result index",
+    {"computed_idx/rebuild", :computed_idx_rebuild, :slist_f, "goal F(app(p,q)) rebuild — computed result index",
      """
        fn g({p: SList}, {q: SList}, v: F(app(p, q))) -> F(app(p, q)) =
          match v
@@ -159,9 +156,7 @@ defmodule Antigen.Generators.ElabComplete do
   """
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
-    Gen.member_of(
-      completeness_challenges() ++ soundness_challenges() ++ metamorphic_challenges()
-    )
+    Gen.member_of(completeness_challenges() ++ soundness_challenges() ++ metamorphic_challenges())
   end
 
   @doc "All completeness challenges as `%Challenge{}` structs (deterministic)."

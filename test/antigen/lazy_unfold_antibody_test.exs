@@ -40,7 +40,10 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
   defp plus_body do
     z_branch = {:Z, 0, {:var, 0}}
     s_branch = {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}
-    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
+
+    {:lam, Cure.Core.Grade.unrestricted(), @nat,
+     {:lam, Cure.Core.Grade.unrestricted(), @nat,
+      {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
   end
 
   defp env do
@@ -49,7 +52,11 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
       Inductive.ctor(:Z, [], []),
       Inductive.ctor(:S, [{:n, @nat}], [])
     ])
-    |> Env.add_def(:plus, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, plus_body())
+    |> Env.add_def(
+      :plus,
+      {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}},
+      plus_body()
+    )
     |> Env.certify(:plus)
   end
 
@@ -122,7 +129,9 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
     # The soundness control. `plus n Z` and `n` are only PROPOSITIONALLY equal;
     # a bug that equated them definitionally would flip these to {:ok, true}.
     assert {:ok, false} = Conv.conv_within?(plus(neutral_n(), @z), neutral_n(), open_env(), open_depth(), env(), @fuel)
-    assert {:ok, false} = Conv.conv_within?(plus(neutral_n(), @z), plus(neutral_n(), s(@z)), open_env(), open_depth(), env(), @fuel)
+
+    assert {:ok, false} =
+             Conv.conv_within?(plus(neutral_n(), @z), plus(neutral_n(), s(@z)), open_env(), open_depth(), env(), @fuel)
   end
 
   # f n = match n { Z -> Z ; S k -> match (f k) { Z -> Z ; S m -> Z } }
@@ -133,9 +142,12 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
   # Θ(2ᵈ). Deciding productiveness and firing ι must share ONE whnf of `f k`.
   defp f_env do
     inner_case =
-      {:case, {:app, {:global, :f}, {:var, 0}}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}, {:S, 1, @z}]}
+      {:case, {:app, {:global, :f}, {:var, 0}}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat},
+       [{:Z, 0, @z}, {:S, 1, @z}]}
 
-    body = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}, {:S, 1, inner_case}]}}
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}, {:S, 1, inner_case}]}}
 
     Env.empty()
     |> Inductive.declare(Inductive.family(:Nat, [], [], 0), [
@@ -163,7 +175,8 @@ defmodule Antigen.LazyUnfoldAntibodyTest do
   test "reflexivity terminates: a stuck recursive call is convertible with itself, bounded" do
     # `same_neutral_no_delta?` must short-circuit identical stuck calls before δ,
     # so reflexivity resolves without unfolding the recursion forever.
-    assert {:ok, true} = Conv.conv_within?(plus(neutral_n(), @z), plus(neutral_n(), @z), open_env(), open_depth(), env(), @fuel)
+    assert {:ok, true} =
+             Conv.conv_within?(plus(neutral_n(), @z), plus(neutral_n(), @z), open_env(), open_depth(), env(), @fuel)
 
     assert {:ok, true} =
              Conv.conv_within?(

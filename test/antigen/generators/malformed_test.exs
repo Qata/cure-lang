@@ -11,6 +11,7 @@ defmodule Antigen.Generators.MalformedTest do
       assert c.kind == :malformed
       assert c.assay == "term/rejection"
       assert c.label == :ill_typed
+
       assert Assays.Malformed.run(c) == :ok,
              "kernel accepted a malformed term: #{inspect(c.payload.term)}"
     end

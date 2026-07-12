@@ -20,7 +20,7 @@ defmodule Cure.Migrate.WarnTolerateParityTest do
     fired = warnings |> Enum.map(& &1.rule) |> Enum.sort()
 
     # rewrite happened iff a rule fired
-    assert (rewritten != ast) == (fired != [])
+    assert rewritten != ast == (fired != [])
     # both seed rules fired for this input
     assert :W_if_elif_pickup in fired
     assert :W_uppercase_type_var in fired

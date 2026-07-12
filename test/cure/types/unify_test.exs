@@ -98,7 +98,6 @@ defmodule Cure.Types.UnifyTest do
       assert {:ok, _, _} = Unify.unify({:named, "Point"}, adt)
       assert {:ok, _, _} = Unify.unify(adt, {:named, "Point"})
     end
-
   end
 
   describe "occurs check" do

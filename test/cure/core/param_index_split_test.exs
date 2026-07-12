@@ -18,8 +18,7 @@ defmodule Cure.Core.ParamIndexSplitTest do
     |> Inductive.declare(
       Inductive.family(:P, [{:a, @type0}], [{:n, @dec}], 1),
       [
-        Inductive.ctor(:wrap, [{:p, {:var, 0}}], [{:ctor, :Causal, []}],
-          [:unrestricted], [{:var, 1}])
+        Inductive.ctor(:wrap, [{:p, {:var, 0}}], [{:ctor, :Causal, []}], [:unrestricted], [{:var, 1}])
       ]
     )
   end
@@ -59,8 +58,10 @@ defmodule Cure.Core.ParamIndexSplitTest do
     # the parameter variable a. Use Dcoupled-indexed Dec as a stand-in rigid term.
     env = param_env()
     fam = Ind.get_family(env, :P)
+
     bad =
       Ind.ctor(:oddball, [], [{:ctor, :Causal, []}], [], [{:data, :Dec, [], []}])
+
     assert {:error, {:non_uniform_parameter, info}} = Kernel.check_ctor(env, fam, bad)
     assert info.family == :P and info.ctor == :oddball and info.position == 0
   end
@@ -136,17 +137,21 @@ defmodule Cure.Core.ParamIndexSplitTest do
     # and body's third lambda domain — no shift between them.
     p_ac = {:data, :P, [{:var, 1}], [{:ctor, :Causal, []}]}
 
-    def_type = {:pi, Cure.Core.Grade.unrestricted(), @type0, {:pi, Cure.Core.Grade.unrestricted(), {:var, 0}, {:pi, Cure.Core.Grade.unrestricted(), p_ac, {:var, 2}}}}
+    def_type =
+      {:pi, Cure.Core.Grade.unrestricted(), @type0,
+       {:pi, Cure.Core.Grade.unrestricted(), {:var, 0}, {:pi, Cure.Core.Grade.unrestricted(), p_ac, {:var, 2}}}}
 
     # motive : λ(n:Dec). λ(x:P(a,n)). a — abstracts index_arity+1 = 2 args.
     # Case context here is [v,h,a] (v=0/h=1/a=2); adding the motive's [x,n]
     # binders gives [x,n,v,h,a]: a is var4, the index binder n is var0.
     motive =
-      {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :P, [{:var, 3}], [{:var, 0}]}, {:var, 4}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :P, [{:var, 3}], [{:var, 0}]}, {:var, 4}}}
 
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @type0,
-       {:lam, Cure.Core.Grade.unrestricted(), {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), p_ac, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+       {:lam, Cure.Core.Grade.unrestricted(), {:var, 0},
+        {:lam, Cure.Core.Grade.unrestricted(), p_ac, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
 
     env = Env.add_def(env, :probe, def_type, body)
     assert :ok == Kernel.check_def(env, :probe)
@@ -156,12 +161,21 @@ defmodule Cure.Core.ParamIndexSplitTest do
   test "param-free family case is unchanged" do
     env =
       Env.empty()
-      |> Inductive.declare(Inductive.family(:Dec, [], [], 0),
-           [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])])
-      |> Inductive.declare(Inductive.family(:Box, [], [{:d, @dec}], 0),
-           [Inductive.ctor(:mk, [{:x, @dec}], [{:var, 0}])])
+      |> Inductive.declare(
+        Inductive.family(:Dec, [], [], 0),
+        [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]
+      )
+      |> Inductive.declare(
+        Inductive.family(:Box, [], [{:d, @dec}], 0),
+        [Inductive.ctor(:mk, [{:x, @dec}], [{:var, 0}])]
+      )
+
     box_causal = {:data, :Box, [], [{:ctor, :Causal, []}]}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, @dec}}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, @dec}}
+
     def_type = {:pi, Cure.Core.Grade.unrestricted(), box_causal, @dec}
     body = {:lam, Cure.Core.Grade.unrestricted(), box_causal, {:case, {:var, 0}, motive, [{:mk, 1, {:var, 0}}]}}
     env = Env.add_def(env, :probe2, def_type, body)
@@ -176,9 +190,15 @@ defmodule Cure.Core.ParamIndexSplitTest do
     # def probe3 : Π(a:Type). Π(v:P(a,Causal)). a = λa.λv. case v of wrap(p) -> p
     p_ac0 = {:data, :P, [{:var, 0}], [{:ctor, :Causal, []}]}
     def_type = {:pi, Cure.Core.Grade.unrestricted(), @type0, {:pi, Cure.Core.Grade.unrestricted(), p_ac0, {:var, 1}}}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :P, [{:var, 2}], [{:var, 0}]}, {:var, 3}}}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :P, [{:var, 2}], [{:var, 0}]}, {:var, 3}}}
+
     body =
-      {:lam, Cure.Core.Grade.unrestricted(), @type0, {:lam, Cure.Core.Grade.unrestricted(), p_ac0, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 0}}]}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @type0,
+       {:lam, Cure.Core.Grade.unrestricted(), p_ac0, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 0}}]}}}
+
     env = Env.add_def(env, :probe3, def_type, body)
     assert :ok == Kernel.check_def(env, :probe3)
   end

@@ -25,7 +25,10 @@ defmodule Cure.Core.NestedRedexConvTest do
   defp plus_body do
     z_branch = {:Z, 0, {:var, 0}}
     s_branch = {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}
-    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
+
+    {:lam, Cure.Core.Grade.unrestricted(), @nat,
+     {:lam, Cure.Core.Grade.unrestricted(), @nat,
+      {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
   end
 
   # app xs ys = case xs of SNil => ys | SCons x r => SCons x (app r ys)
@@ -33,10 +36,11 @@ defmodule Cure.Core.NestedRedexConvTest do
     nil_branch = {:SNil, 0, {:var, 0}}
 
     cons_branch =
-      {:SCons, 2,
-       {:ctor, :SCons, [{:var, 1}, {:app, {:app, {:global, :append}, {:var, 0}}, {:var, 2}}]}}
+      {:SCons, 2, {:ctor, :SCons, [{:var, 1}, {:app, {:app, {:global, :append}, {:var, 0}}, {:var, 2}}]}}
 
-    {:lam, Cure.Core.Grade.unrestricted(), @slist, {:lam, Cure.Core.Grade.unrestricted(), @slist, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @slist, @slist}, [nil_branch, cons_branch]}}}
+    {:lam, Cure.Core.Grade.unrestricted(), @slist,
+     {:lam, Cure.Core.Grade.unrestricted(), @slist,
+      {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @slist, @slist}, [nil_branch, cons_branch]}}}
   end
 
   defp env do
@@ -49,9 +53,17 @@ defmodule Cure.Core.NestedRedexConvTest do
       Inductive.ctor(:SNil, [], []),
       Inductive.ctor(:SCons, [{:x, @nat}, {:r, @slist}], [])
     ])
-    |> Env.add_def(:plus, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, plus_body())
+    |> Env.add_def(
+      :plus,
+      {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}},
+      plus_body()
+    )
     |> Env.certify(:plus)
-    |> Env.add_def(:append, {:pi, Cure.Core.Grade.unrestricted(), @slist, {:pi, Cure.Core.Grade.unrestricted(), @slist, @slist}}, app_body())
+    |> Env.add_def(
+      :append,
+      {:pi, Cure.Core.Grade.unrestricted(), @slist, {:pi, Cure.Core.Grade.unrestricted(), @slist, @slist}},
+      app_body()
+    )
     |> Env.certify(:append)
   end
 

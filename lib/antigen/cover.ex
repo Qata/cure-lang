@@ -1,9 +1,16 @@
 defmodule Antigen.Cover do
   @moduledoc "Erlang :cover harness for kernel code coverage (Antigen tooling; no TCB changes)."
 
-  @cover_modules [Cure.Core.Kernel, Cure.Core.Normalise, Cure.Core.Conv,
-                  Cure.Core.Eval, Cure.Core.Quote, Cure.Core.Inductive,
-                  Cure.Core.Serialize, Cure.Core.Certificate]
+  @cover_modules [
+    Cure.Core.Kernel,
+    Cure.Core.Normalise,
+    Cure.Core.Conv,
+    Cure.Core.Eval,
+    Cure.Core.Quote,
+    Cure.Core.Inductive,
+    Cure.Core.Serialize,
+    Cure.Core.Certificate
+  ]
   def cover_modules, do: @cover_modules
 
   @doc """
@@ -155,8 +162,7 @@ defmodule Antigen.Cover do
   Returns `{status, banked_challenge | nil, updated_seen_sets}` where `status` is
   `:appended | :duplicate | :skipped`.
   """
-  def bank_interesting(challenge, new_lines, edge_corpus_path, seen_sets, pred,
-        budget \\ @edge_shrink_budget) do
+  def bank_interesting(challenge, new_lines, edge_corpus_path, seen_sets, pred, budget \\ @edge_shrink_budget) do
     key = MapSet.new(new_lines)
 
     if MapSet.member?(seen_sets, key) do
@@ -258,8 +264,12 @@ defmodule Antigen.Cover do
 
   defp guided_rounds(opts, modules, edge_path, count, round_size, plateau_limit, st) do
     cond do
-      st.plateau >= plateau_limit -> st
-      st.rounds * round_size >= count -> st
+      st.plateau >= plateau_limit ->
+        st
+
+      st.rounds * round_size >= count ->
+        st
+
       true ->
         round_start = st.covered
         challenges = Antigen.Runner.draw_n(st.gen, round_size)

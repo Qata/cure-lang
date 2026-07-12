@@ -237,8 +237,12 @@ defmodule Cure.Elab.Unify do
 
   defp mabs({:var, v}, depth, vars, n, local) do
     cond do
-      v < local -> {:var, v}
-      v - local >= depth -> {:var, n + v - depth}
+      v < local ->
+        {:var, v}
+
+      v - local >= depth ->
+        {:var, n + v - depth}
+
       true ->
         case Enum.find_index(vars, &(&1 == v - local)) do
           nil -> throw(:miller_escape)

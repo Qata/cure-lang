@@ -44,7 +44,10 @@ defmodule Cure.Core.SigmaTest do
     pair = {:ctor, :mk_pair, [@causal, {:ctor, :mk, [@causal]}]}
 
     fst = {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, @dec}, [{:mk_pair, 2, {:var, 1}}]}
-    snd = {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, {:data, :Box, [], [@causal]}}, [{:mk_pair, 2, {:var, 0}}]}
+
+    snd =
+      {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, {:data, :Box, [], [@causal]}},
+       [{:mk_pair, 2, {:var, 0}}]}
 
     assert Normalise.nf(ctx, fst) == @causal
     assert Normalise.nf(ctx, snd) == {:ctor, :mk, [@causal]}

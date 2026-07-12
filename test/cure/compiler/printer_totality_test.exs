@@ -30,8 +30,10 @@ defmodule Cure.Compiler.PrinterTotalityTest do
   )a
 
   defp node_kinds(ast, acc \\ MapSet.new())
+
   defp node_kinds({k, _m, ch}, acc) when is_atom(k) and is_list(ch),
     do: Enum.reduce(ch, MapSet.put(acc, k), &node_kinds/2)
+
   defp node_kinds({k, _m, _v}, acc) when is_atom(k), do: MapSet.put(acc, k)
   defp node_kinds(l, acc) when is_list(l), do: Enum.reduce(l, acc, &node_kinds/2)
   defp node_kinds(_, acc), do: acc
@@ -327,6 +329,7 @@ defmodule Cure.Compiler.PrinterTotalityTest do
 
   test "every node kind the parser can construct has a matching Printer clause (static, corpus-independent)" do
     missing = MapSet.difference(MapSet.new(@all_node_kinds), printer_handled_kinds())
+
     assert MapSet.to_list(missing) == [],
            "Printer is missing a to_string/3 clause for: #{inspect(MapSet.to_list(missing))}"
   end

@@ -23,20 +23,14 @@ defmodule Antigen.Assays.PositivityTest do
   # become its permanent regression guards.
 
   test "W4: double negation ((Bad -> Dec) -> Dec) is rejected" do
-    assert :ok == Antigen.Assays.Positivity.run(
-             Antigen.Generators.Positivity.double_negation_family()
-           )
+    assert :ok == Antigen.Assays.Positivity.run(Antigen.Generators.Positivity.double_negation_family())
   end
 
   test "W4: negative occurrence hidden under a sigma is rejected" do
-    assert :ok == Antigen.Assays.Positivity.run(
-             Antigen.Generators.Positivity.sigma_negative_family()
-           )
+    assert :ok == Antigen.Assays.Positivity.run(Antigen.Generators.Positivity.sigma_negative_family())
   end
 
   test "W4: through-constructor negative occurrence (Bad -> via Box) is rejected" do
-    assert :ok == Antigen.Assays.Positivity.run(
-             Antigen.Generators.Positivity.through_constructor_negative()
-           )
+    assert :ok == Antigen.Assays.Positivity.run(Antigen.Generators.Positivity.through_constructor_negative())
   end
 end

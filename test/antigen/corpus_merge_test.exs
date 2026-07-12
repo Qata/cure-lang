@@ -89,7 +89,8 @@ defmodule Antigen.CorpusMergeTest do
     a = rec({:type, 0})
     c = rec({:type, 2})
     dest = path("dest.sexp")
-    File.write!(dest, a)  # no trailing newline
+    # no trailing newline
+    File.write!(dest, a)
     src = write("src.sexp", [c])
 
     assert %{added: 1} = Corpus.merge(dest, [src])

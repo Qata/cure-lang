@@ -147,8 +147,7 @@ defmodule Cure.Types.Checker do
             line = Keyword.get(meta, :line, 0)
 
             [
-              {:proof_shape_mismatch,
-               "function '#{name}' inside a proof container must return Eq(...) (E026)",
+              {:proof_shape_mismatch, "function '#{name}' inside a proof container must return Eq(...) (E026)",
                line: line}
             ]
           end
@@ -2386,5 +2385,4 @@ defmodule Cure.Types.Checker do
   defp resolve_with_env(env, type_ast) do
     Env.deref(env, Type.resolve(type_ast))
   end
-
 end

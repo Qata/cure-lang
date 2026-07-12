@@ -32,8 +32,7 @@ defmodule Antigen.Generators.ElabLiteralTyping do
   alias Antigen.{Challenge, Gen}
 
   @catalog [
-    {"lit_typing/bool_infer", :bool_infer,
-     "boolean literal in inference position — Kernel.bool_type_value/1",
+    {"lit_typing/bool_infer", :bool_infer, "boolean literal in inference position — Kernel.bool_type_value/1",
      "mod P\n  fn flag() -> Bool = true\nend\n"},
     {"lit_typing/nat_checked", :nat_checked,
      "Nat-checked integer literal — Kernel.nat_type_value/1 (via elab/soundness re-check)",
@@ -43,8 +42,7 @@ defmodule Antigen.Generators.ElabLiteralTyping do
   @doc "Coverage-manifest cells: each catalog id under both assays."
   @spec cover_cells() :: [{String.t(), atom()}]
   def cover_cells do
-    for assay <- ["elab/completeness", "elab/soundness"], {_id, cell, _note, _src} <- @catalog,
-        do: {assay, cell}
+    for assay <- ["elab/completeness", "elab/soundness"], {_id, cell, _note, _src} <- @catalog, do: {assay, cell}
   end
 
   @doc "Sampleable generator over every declared challenge (coverage-manifest gate)."

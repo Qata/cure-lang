@@ -146,8 +146,7 @@ defmodule Cure.Compiler.Printer do
 
       [first | rest] ->
         {pairs, _prev} =
-          Enum.reduce(rest, {[{render(first, child_depth, indent), false}], first}, fn e,
-                                                                                       {acc, prev} ->
+          Enum.reduce(rest, {[{render(first, child_depth, indent), false}], first}, fn e, {acc, prev} ->
             blank? = trailer_blank?(prev) or leading_blank?(e)
             {[{render(e, child_depth, indent), blank?} | acc], e}
           end)

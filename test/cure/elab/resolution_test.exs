@@ -18,8 +18,10 @@ defmodule Cure.Elab.ResolutionTest do
     end
 
     test "rewrites a :case branch TAG (the position distinct from {:ctor,…})", %{map: m} do
-      term = {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:type, 0}},
-              [{:Z, 0, {:var, 0}}, {:S, 1, {:ctor, :Z, []}}]}
+      term =
+        {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:type, 0}},
+         [{:Z, 0, {:var, 0}}, {:S, 1, {:ctor, :Z, []}}]}
+
       assert Resolution.rekey_term(term, m) ==
                {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:type, 0}},
                 [{:"Std.Nat#Z", 0, {:var, 0}}, {:"Std.Nat#S", 1, {:ctor, :"Std.Nat#Z", []}}]}
@@ -31,7 +33,9 @@ defmodule Cure.Elab.ResolutionTest do
 
     test "recurses through structural nodes and leaves unmapped atoms alone", %{map: m} do
       term = {:pi, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Other, [], []}}
-      assert Resolution.rekey_term(term, m) == {:pi, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:data, :Other, [], []}}
+
+      assert Resolution.rekey_term(term, m) ==
+               {:pi, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:data, :Other, [], []}}
     end
   end
 
@@ -81,13 +85,17 @@ defmodule Cure.Elab.ResolutionTest do
       out = Cure.Elab.Resolution.rekey_module_env(env, "Std.Nat", MapSet.new([:Nat]))
       body = out.defs[:plus].body
       assert {:case, _, _, [{:"Std.Nat#Z", 0, _}, {:"Std.Nat#S", 1, _}]} = body
-      assert out.defs[:plus].type == {:pi, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:data, :"Std.Nat#Nat", [], []}}
+
+      assert out.defs[:plus].type ==
+               {:pi, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []}, {:data, :"Std.Nat#Nat", [], []}}
     end
 
     test "leaves a non-owned family in the same env untouched", %{env: env} do
       env2 =
-        Cure.Core.Inductive.declare(env, Cure.Core.Inductive.family(:Bool, [], [], 0),
-          [Cure.Core.Inductive.ctor(:True, [], []), Cure.Core.Inductive.ctor(:False, [], [])])
+        Cure.Core.Inductive.declare(env, Cure.Core.Inductive.family(:Bool, [], [], 0), [
+          Cure.Core.Inductive.ctor(:True, [], []),
+          Cure.Core.Inductive.ctor(:False, [], [])
+        ])
 
       out = Cure.Elab.Resolution.rekey_module_env(env2, "Std.Nat", MapSet.new([:Nat]))
       assert Map.has_key?(out.families, :Bool)
@@ -139,11 +147,17 @@ defmodule Cure.Elab.ResolutionTest do
       # env where Std.Nat has been re-keyed (loser), and an unshadowed Std.Bool.
       env =
         %Cure.Core.Env{}
-        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:"Std.Nat#Nat", [], [], 0),
-             [Cure.Core.Inductive.ctor(:"Std.Nat#Z", [], []),
-              Cure.Core.Inductive.ctor(:"Std.Nat#S", [{:n, {:data, :"Std.Nat#Nat", [], []}}], [])])
-        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:Bool, [], [], 0),
-             [Cure.Core.Inductive.ctor(:True, [], []), Cure.Core.Inductive.ctor(:False, [], [])])
+        |> Cure.Core.Inductive.declare(
+          Cure.Core.Inductive.family(:"Std.Nat#Nat", [], [], 0),
+          [
+            Cure.Core.Inductive.ctor(:"Std.Nat#Z", [], []),
+            Cure.Core.Inductive.ctor(:"Std.Nat#S", [{:n, {:data, :"Std.Nat#Nat", [], []}}], [])
+          ]
+        )
+        |> Cure.Core.Inductive.declare(
+          Cure.Core.Inductive.family(:Bool, [], [], 0),
+          [Cure.Core.Inductive.ctor(:True, [], []), Cure.Core.Inductive.ctor(:False, [], [])]
+        )
 
       %{env: env}
     end
@@ -174,10 +188,14 @@ defmodule Cure.Elab.ResolutionTest do
     test "reports ≥2 origins for a name re-keyed off the bare atom" do
       env =
         %Cure.Core.Env{}
-        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:"Std.Foo#Nat", [], [], 0),
-             [Cure.Core.Inductive.ctor(:"Std.Foo#FZero", [], [])])
-        |> Cure.Core.Inductive.declare(Cure.Core.Inductive.family(:"Std.Bar#Nat", [], [], 0),
-             [Cure.Core.Inductive.ctor(:"Std.Bar#BZero", [], [])])
+        |> Cure.Core.Inductive.declare(
+          Cure.Core.Inductive.family(:"Std.Foo#Nat", [], [], 0),
+          [Cure.Core.Inductive.ctor(:"Std.Foo#FZero", [], [])]
+        )
+        |> Cure.Core.Inductive.declare(
+          Cure.Core.Inductive.family(:"Std.Bar#Nat", [], [], 0),
+          [Cure.Core.Inductive.ctor(:"Std.Bar#BZero", [], [])]
+        )
 
       mods = Cure.Elab.Resolution.ambiguous_modules(env, :Nat)
       assert Enum.sort(mods) == ["Std.Bar", "Std.Foo"]

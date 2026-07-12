@@ -126,5 +126,4 @@ defmodule Cure.E2E.FlatTelescopeTest do
     assert apply(mod, :swap, [{10, 20}]) == {20, 10}
     assert apply(mod, :third, [{1, 2, 3}]) == 3
   end
-
 end

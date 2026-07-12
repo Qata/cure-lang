@@ -154,7 +154,6 @@ defmodule Cure.Compiler.ParserStructuralTest do
       assert {:type_annotation, meta, [_type_expr]} = ast
       assert meta[:name] == "Name"
     end
-
   end
 
   # ── Protocols ────────────────────────────────────────────────────────

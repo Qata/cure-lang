@@ -55,13 +55,31 @@ defmodule Antigen.Generators.SurfaceExpr do
   # CoreBridge.to_core no longer bridges them (`:error` — Reduce folds Boolean
   # literal connectives surface-side) and no catalog row used them.
   @int_ops %{
-    +: :int_add, -: :int_sub, *: :int_mul, /: :int_div, %: :int_rem,
-    ==: :int_eq, !=: :int_ne, <: :int_lt, <=: :int_le, >: :int_gt, >=: :int_ge
+    +: :int_add,
+    -: :int_sub,
+    *: :int_mul,
+    /: :int_div,
+    %: :int_rem,
+    ==: :int_eq,
+    !=: :int_ne,
+    <: :int_lt,
+    <=: :int_le,
+    >: :int_gt,
+    >=: :int_ge
   }
 
   @float_ops %{
-    +: :float_add, -: :float_sub, *: :float_mul, /: :float_div, %: :int_rem,
-    ==: :float_eq, !=: :float_ne, <: :float_lt, <=: :float_le, >: :float_gt, >=: :float_ge
+    +: :float_add,
+    -: :float_sub,
+    *: :float_mul,
+    /: :float_div,
+    %: :int_rem,
+    ==: :float_eq,
+    !=: :float_ne,
+    <: :float_lt,
+    <=: :float_le,
+    >: :float_gt,
+    >=: :float_ge
   }
 
   @doc "Independent surface->Core encoder (folds `bindings` in directly)."
@@ -73,7 +91,7 @@ defmodule Antigen.Generators.SurfaceExpr do
   end
 
   def encode({:literal, _m, n}, _b) when is_integer(n), do: {:int_lit, n}
-  def encode({:literal, _m, x}, _b) when is_boolean(x), do: {:ctor, (if x, do: :True, else: :False), []}
+  def encode({:literal, _m, x}, _b) when is_boolean(x), do: {:ctor, if(x, do: :True, else: :False), []}
 
   def encode({:binary_op, meta, [l, r]}, b) do
     cl = encode(l, b)
@@ -108,9 +126,14 @@ defmodule Antigen.Generators.SurfaceExpr do
     ]
     |> Enum.with_index()
     |> Enum.map(fn {{ast, bindings}, i} ->
-      Challenge.new(kind: :surface_expr, assay: "normalizer/differential", label: :translatable,
-        payload: %{ast: ast, bindings: bindings, core_expected: encode(ast, bindings)}, seed: i,
-        cover_tag: :translatable)
+      Challenge.new(
+        kind: :surface_expr,
+        assay: "normalizer/differential",
+        label: :translatable,
+        payload: %{ast: ast, bindings: bindings, core_expected: encode(ast, bindings)},
+        seed: i,
+        cover_tag: :translatable
+      )
     end)
   end
 
@@ -125,9 +148,14 @@ defmodule Antigen.Generators.SurfaceExpr do
     ]
     |> Enum.with_index()
     |> Enum.map(fn {{a, b, label}, i} ->
-      Challenge.new(kind: :surface_expr, assay: "normalizer/equal", label: label,
-        payload: %{a: a, b: b, bindings: %{}, core_a: encode(a, %{}), core_b: encode(b, %{})}, seed: i,
-        cover_tag: label)
+      Challenge.new(
+        kind: :surface_expr,
+        assay: "normalizer/equal",
+        label: label,
+        payload: %{a: a, b: b, bindings: %{}, core_a: encode(a, %{}), core_b: encode(b, %{})},
+        seed: i,
+        cover_tag: label
+      )
     end)
   end
 
@@ -139,8 +167,14 @@ defmodule Antigen.Generators.SurfaceExpr do
     ]
     |> Enum.with_index()
     |> Enum.map(fn {ast, i} ->
-      Challenge.new(kind: :surface_expr, assay: "normalizer/intrinsic", label: :untranslatable,
-        payload: %{ast: ast}, seed: i, cover_tag: :untranslatable)
+      Challenge.new(
+        kind: :surface_expr,
+        assay: "normalizer/intrinsic",
+        label: :untranslatable,
+        payload: %{ast: ast},
+        seed: i,
+        cover_tag: :untranslatable
+      )
     end)
   end
 end

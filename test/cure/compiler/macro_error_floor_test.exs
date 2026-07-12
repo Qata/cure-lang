@@ -13,9 +13,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
   test "a macro-use literal mismatch renders a friendly diagnostic naming the macro + what it expected" do
     # `say hello` is the rule; `say goodbye` mismatches on the literal segment.
     errors =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say goodbye\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say goodbye\n")
 
     mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
     assert mismatch, "expected a :macro_use_mismatch error"
@@ -37,9 +35,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     # and visually corrupts the error (a blank continuation line with no `|`
     # prefix, and the closing "(at column N)" left dangling on its own line).
     errors =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say\n  fn g() = 1\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say\n  fn g() = 1\n")
 
     mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
     assert mismatch, "expected a :macro_use_mismatch error"
@@ -74,9 +70,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     # text in either field for macro_got_desc's generic fallbacks to find.
     # Without a dedicated clause it renders as `found ``` (empty backticks).
     errors =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say nil\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say nil\n")
 
     mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
     assert mismatch, "expected a :macro_use_mismatch error"
@@ -93,9 +87,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     # integer -- `found `97`` -- which doesn't look like anything the user
     # typed.
     errors =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say 'a'\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say 'a'\n")
 
     mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
     assert mismatch, "expected a :macro_use_mismatch error"
@@ -114,9 +106,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     # through the generic to_string(v) (string) and the dedicated :char
     # clause (char) fallbacks -- both must come out escaped, not raw.
     string_with_escape =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say \"a\\nb\"\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say \"a\\nb\"\n")
 
     string_mismatch =
       Enum.find(string_with_escape, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
@@ -132,9 +122,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
            "a string literal's embedded newline must not corrupt the diagnostic:\n#{rendered_string}"
 
     char_newline =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say '\\n'\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say '\\n'\n")
 
     char_mismatch =
       Enum.find(char_newline, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
@@ -185,9 +173,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     # on a tuple — so `say ~r/foo/` (rule `say hello`) crashed the parser
     # instead of producing a mismatch. Must yield the friendly diagnostic.
     errors =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say ~r/foo/\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say ~r/foo/\n")
 
     mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
     assert mismatch, "expected a :macro_use_mismatch error"
@@ -202,9 +188,7 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     # `to_string(tok.value)` path raises on a list. `\#{name}` keeps the
     # interpolation literal in the Cure source (Elixir would otherwise expand it).
     errors =
-      errors_of(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say \"hi \#{name}\"\n"
-      )
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say \"hi \#{name}\"\n")
 
     mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
     assert mismatch, "expected a :macro_use_mismatch error"

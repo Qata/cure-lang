@@ -30,6 +30,7 @@ defmodule Cure.Elab.ForcedCheckProbeTest do
 
   test "reject: written value is a rigidly-distinct constructor" do
     {env, ctx, subst} = setup()
+
     assert {:forced_pattern_mismatch, _t, _d} =
              Elaborator.forced_check_probe(env, ctx, :vcons, [], subst, "n", s(@z))
   end

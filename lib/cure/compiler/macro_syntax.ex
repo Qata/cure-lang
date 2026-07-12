@@ -182,7 +182,10 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp to_core_synlit({:s_int, n}), do: ctor(:SInt, [{:int_lit, n}])
   defp to_core_synlit({:s_float, f}), do: ctor(:SFloat, [{:float_lit, f}])
-  defp to_core_synlit({:s_str, s}), do: ctor(:SStr, [to_core_list(Enum.map(String.to_charlist(s), &{:bounded_lit, &1}))])
+
+  defp to_core_synlit({:s_str, s}),
+    do: ctor(:SStr, [to_core_list(Enum.map(String.to_charlist(s), &{:bounded_lit, &1}))])
+
   defp to_core_synlit({:s_bool, true}), do: ctor(:SBool, [ctor(:True, [])])
   defp to_core_synlit({:s_bool, false}), do: ctor(:SBool, [ctor(:False, [])])
   defp to_core_synlit({:s_atom, a}), do: ctor(:SAtom, [atom(a)])
@@ -285,5 +288,4 @@ defmodule Cure.Compiler.MacroSyntax do
       error -> error
     end
   end
-
 end

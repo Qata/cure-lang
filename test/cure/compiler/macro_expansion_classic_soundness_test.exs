@@ -31,8 +31,7 @@ defmodule Cure.Compiler.MacroExpansionClassicSoundnessTest do
   end
 
   @cases [
-    {"zero-hole accept: zero => 0",
-     "mod M\n  macro Zero\n    syntax zero becomes 0\n  fn f() -> Int = zero\n",
+    {"zero-hole accept: zero => 0", "mod M\n  macro Zero\n    syntax zero becomes 0\n  fn f() -> Int = zero\n",
      "mod M\n  fn f() -> Int = 0\n"},
     {"one-hole accept: inc <x> => x + 1",
      "mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n  fn f(n: Int) -> Int = inc n\n",
@@ -41,8 +40,7 @@ defmodule Cure.Compiler.MacroExpansionClassicSoundnessTest do
      "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n  fn f() -> Int = bad\n",
      "mod M\n  fn f() -> Int = nonexistent_thing\n"},
     {"reject (type mismatch): tt => true used as Int",
-     "mod M\n  macro T\n    syntax tt becomes true\n  fn f() -> Int = tt\n",
-     "mod M\n  fn f() -> Int = true\n"}
+     "mod M\n  macro T\n    syntax tt becomes true\n  fn f() -> Int = tt\n", "mod M\n  fn f() -> Int = true\n"}
   ]
 
   for {label, macro_src, hand_src} <- @cases do
@@ -53,11 +51,15 @@ defmodule Cure.Compiler.MacroExpansionClassicSoundnessTest do
 
   test "the two well-typed cases genuinely accept (classic)" do
     assert verdict("mod M\n  macro Zero\n    syntax zero becomes 0\n  fn f() -> Int = zero\n") == :accept
-    assert verdict("mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n  fn f(n: Int) -> Int = inc n\n") == :accept
+
+    assert verdict("mod M\n  macro Inc\n    syntax inc <x: Code> becomes x + 1\n  fn f(n: Int) -> Int = inc n\n") ==
+             :accept
   end
 
   test "the two ill-typed cases genuinely reject (classic)" do
-    assert {:reject, _} = verdict("mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n  fn f() -> Int = bad\n")
+    assert {:reject, _} =
+             verdict("mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n  fn f() -> Int = bad\n")
+
     assert {:reject, _} = verdict("mod M\n  macro T\n    syntax tt becomes true\n  fn f() -> Int = tt\n")
   end
 end

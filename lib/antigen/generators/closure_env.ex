@@ -21,19 +21,56 @@ defmodule Antigen.Generators.ClosureEnv do
   defp int_arrow, do: {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}
 
   # diverging: loop = λx. loop x   (bare unconditional self-call)
-  defp loop_def(env), do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :loop}, {:var, 0}}})
+  defp loop_def(env),
+    do:
+      Env.add_def(
+        env,
+        :loop,
+        int_arrow(),
+        {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :loop}, {:var, 0}}}
+      )
+
   # total: total_id = λx. x   (no self-call -> terminating? fast path)
-  defp total_def(env), do: Env.add_def(env, :total_id, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+  defp total_def(env),
+    do: Env.add_def(env, :total_id, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+
   # transitive: callee = λx. x ; loop = λx. callee x
-  defp callee_def(env), do: Env.add_def(env, :callee, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+  defp callee_def(env),
+    do: Env.add_def(env, :callee, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+
   defp loop_calls_callee(env),
-    do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :callee}, {:var, 0}}})
+    do:
+      Env.add_def(
+        env,
+        :loop,
+        int_arrow(),
+        {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :callee}, {:var, 0}}}
+      )
 
   defp with_family_index(env, fam, g),
-    do: %{env | families: Map.put(env.families, fam, %{name: fam, params: [], indices: [{:i, {:app, {:global, g}, {:int_lit, 0}}}], level: 0})}
+    do: %{
+      env
+      | families:
+          Map.put(env.families, fam, %{
+            name: fam,
+            params: [],
+            indices: [{:i, {:app, {:global, g}, {:int_lit, 0}}}],
+            level: 0
+          })
+    }
 
   defp with_ctor_index(env, ct, g),
-    do: %{env | ctors: Map.put(env.ctors, ct, %{name: ct, args: [], result_indices: [{:app, {:global, g}, {:int_lit, 0}}], result_params: [], quantities: []})}
+    do: %{
+      env
+      | ctors:
+          Map.put(env.ctors, ct, %{
+            name: ct,
+            args: [],
+            result_indices: [{:app, {:global, g}, {:int_lit, 0}}],
+            result_params: [],
+            quantities: []
+          })
+    }
 
   # -- coverage manifest -------------------------------------------------------
 
@@ -76,8 +113,14 @@ defmodule Antigen.Generators.ClosureEnv do
     ]
     |> Enum.with_index()
     |> Enum.map(fn {{env, expect, cell}, i} ->
-      Challenge.new(kind: :closure_env, assay: "totality_closure/soundness", label: :diverging,
-        payload: %{env: env, expect: expect}, seed: i, cover_tag: cell)
+      Challenge.new(
+        kind: :closure_env,
+        assay: "totality_closure/soundness",
+        label: :diverging,
+        payload: %{env: env, expect: expect},
+        seed: i,
+        cover_tag: cell
+      )
     end)
   end
 
@@ -90,8 +133,14 @@ defmodule Antigen.Generators.ClosureEnv do
     ]
     |> Enum.with_index()
     |> Enum.map(fn {{env, cell}, i} ->
-      Challenge.new(kind: :closure_env, assay: "totality_closure/completeness", label: :positive,
-        payload: %{env: env}, seed: i, cover_tag: cell)
+      Challenge.new(
+        kind: :closure_env,
+        assay: "totality_closure/completeness",
+        label: :positive,
+        payload: %{env: env},
+        seed: i,
+        cover_tag: cell
+      )
     end)
   end
 end

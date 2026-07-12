@@ -31,9 +31,24 @@ defmodule Antigen.Generators.DecodeProbe do
   # (with an escaped quote and an escaped backslash) reach `take_string`'s escape clauses; the
   # structured leaves `hole`/`absurd` are tuple terms, so the assay re-encodes them and reaches
   # `enc`'s hole/absurd clauses that the well_formed? gate keeps out of the roundtrip gen.
-  @valid ["(int 5)", "(int -3)", "(int 0)", "(float 1.5)", "(float -2.0)", "(type 0)",
-          "(var 0)", "(nat 0)", "(bounded 0)", "(global foo)", "(global Nat)", "(int-type)",
-          "(hole \"h\")", "(hole \"a\\\"b\")", "(hole \"a\\\\b\")", "(absurd)"]
+  @valid [
+    "(int 5)",
+    "(int -3)",
+    "(int 0)",
+    "(float 1.5)",
+    "(float -2.0)",
+    "(type 0)",
+    "(var 0)",
+    "(nat 0)",
+    "(bounded 0)",
+    "(global foo)",
+    "(global Nat)",
+    "(int-type)",
+    "(hole \"h\")",
+    "(hole \"a\\\"b\")",
+    "(hole \"a\\\\b\")",
+    "(absurd)"
+  ]
 
   # Decode to {:error, _}: unbalanced / non-atom-headed / truncated S-expressions, trailing
   # tokens, an unterminated string, an unknown node head, and case/ctor bodies whose sub-terms
@@ -44,12 +59,34 @@ defmodule Antigen.Generators.DecodeProbe do
   # as a plain integer — a universe level outside `0..Universe.ceiling()`, a negative de Bruijn
   # index, a negative compact `nat`/`bounded` literal, a negative case-branch arity. Each of
   # these once rebuilt a term the kernel's own grammar rejects.
-  @invalid ["", ")", "(", "(foo", "(5 6)", "(int", "( )", "((", "))",
-            "5 6", "\"abc", "(zzz)", "(ctor Foo (zzz))",
-            "(case (var 0) (var 0) foo)", "(case (var 0) (var 0) (branch Z 0 (zzz)))",
-            "5", "foo", "\"hi\"", "(ctor Z 5)", "(app foo (int 5))",
-            "(type -1)", "(type 999)", "(var -1)", "(nat -5)", "(bounded -5)",
-            "(case (var 0) (type 0) (branch Z -3 (var 0)))"]
+  @invalid [
+    "",
+    ")",
+    "(",
+    "(foo",
+    "(5 6)",
+    "(int",
+    "( )",
+    "((",
+    "))",
+    "5 6",
+    "\"abc",
+    "(zzz)",
+    "(ctor Foo (zzz))",
+    "(case (var 0) (var 0) foo)",
+    "(case (var 0) (var 0) (branch Z 0 (zzz)))",
+    "5",
+    "foo",
+    "\"hi\"",
+    "(ctor Z 5)",
+    "(app foo (int 5))",
+    "(type -1)",
+    "(type 999)",
+    "(var -1)",
+    "(nat -5)",
+    "(bounded -5)",
+    "(case (var 0) (type 0) (branch Z -3 (var 0)))"
+  ]
 
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do

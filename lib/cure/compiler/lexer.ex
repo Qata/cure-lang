@@ -999,11 +999,21 @@ defmodule Cure.Compiler.Lexer do
 
         {value, state} =
           case peek(state) do
-            ?n -> {?\n, advance(state, 1)}
-            ?t -> {?\t, advance(state, 1)}
-            ?\\ -> {?\\, advance(state, 1)}
-            ?' -> {?', advance(state, 1)}
-            ?0 -> {0, advance(state, 1)}
+            ?n ->
+              {?\n, advance(state, 1)}
+
+            ?t ->
+              {?\t, advance(state, 1)}
+
+            ?\\ ->
+              {?\\, advance(state, 1)}
+
+            ?' ->
+              {?', advance(state, 1)}
+
+            ?0 ->
+              {0, advance(state, 1)}
+
             _ ->
               case decode_char_at(state) do
                 {cp, state2} -> {cp, state2}

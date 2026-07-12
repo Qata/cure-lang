@@ -10,7 +10,15 @@ defmodule Antigen.ReportTest do
   end
 
   test "write_infection writes a full report and updates latest.txt before returning" do
-    c = Challenge.new(kind: :stub, assay: "totality/diverging", label: :diverging, payload: %{term: {:type, 0}}, seed: 12345)
+    c =
+      Challenge.new(
+        kind: :stub,
+        assay: "totality/diverging",
+        label: :diverging,
+        payload: %{term: {:type, 0}},
+        seed: 12345
+      )
+
     assert {:ok, path} = Report.write_infection(@tmp, c, {:violation, :wrongly_certified}, %{discard_rate: 0.0})
     assert File.exists?(path)
     body = File.read!(path)
@@ -21,7 +29,15 @@ defmodule Antigen.ReportTest do
   end
 
   test "breadcrumb is a single grep-surviving line naming the assay, seed, and file" do
-    c = Challenge.new(kind: :stub, assay: "totality/diverging", label: :diverging, payload: %{term: {:type, 0}}, seed: 999)
+    c =
+      Challenge.new(
+        kind: :stub,
+        assay: "totality/diverging",
+        label: :diverging,
+        payload: %{term: {:type, 0}},
+        seed: 999
+      )
+
     line = Report.breadcrumb(c, "tmp/antigen/failure-999-totality_diverging-1.txt")
     refute line =~ "\n"
     assert line =~ "ANTIGEN INFECTION" and line =~ "totality/diverging" and line =~ "seed=999"
@@ -32,15 +48,19 @@ defmodule Antigen.ReportTest.TriageLine do
   use ExUnit.Case, async: false
   alias Antigen.{Report, Challenge}
 
-  defp ch, do: Challenge.new(kind: :stub, assay: "stub", label: :none,
-                 payload: %{term: {:ctor, :Z, []}}, seed: 3)
+  defp ch, do: Challenge.new(kind: :stub, assay: "stub", label: :none, payload: %{term: {:ctor, :Z, []}}, seed: 3)
 
   test "render includes a triage line when the health map carries :triage" do
     tmp = Path.join(System.tmp_dir!(), "antigen-report-#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     on_exit(fn -> File.rm_rf!(tmp) end)
-    health = %{discard_rate: 0.0, coverage: MapSet.new(),
-               triage: %{orig_size: 27, min_size: 9, bisect_drops: 2, shrink_rewrites: 11}}
+
+    health = %{
+      discard_rate: 0.0,
+      coverage: MapSet.new(),
+      triage: %{orig_size: 27, min_size: 9, bisect_drops: 2, shrink_rewrites: 11}
+    }
+
     {:ok, path} = Report.write_infection(tmp, ch(), {:boom, :x}, health)
     body = File.read!(path)
     # Assert the DISTINCTIVE formatted triage line, not substrings that `inspect(health)`

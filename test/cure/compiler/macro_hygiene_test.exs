@@ -20,12 +20,14 @@ defmodule Cure.Compiler.MacroHygieneTest do
   test "a <fresh Name> in a becomes template parses to a {:fresh_name, meta, name} marker" do
     {:ok, ast} =
       parse("mod M\n  macro G\n    syntax g becomes let <fresh h> = 100 in h\n")
+
     assert {:fresh_name, _meta, "h"} = find_fresh(ast)
   end
 
   # Find fn body by name (function_def carries name in meta, body as [body]).
   defp fn_body({:function_def, meta, [body]}, name),
     do: if(to_string(Keyword.get(meta, :name)) == name, do: body)
+
   defp fn_body({_t, _m, ch}, name) when is_list(ch), do: Enum.find_value(ch, &fn_body(&1, name))
   defp fn_body(_, _), do: nil
 

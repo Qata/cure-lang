@@ -84,8 +84,13 @@ defmodule Antigen.Generators.UnifyProblem do
   end
 
   defp elab_ch(assay, t1, t2, meta_ids, seed) do
-    Challenge.new(kind: :unify_problem, assay: assay, label: :translatable,
-      payload: %{t1: t1, t2: t2, ctx: MetaCtx.new(), sig: nil, meta_ids: meta_ids}, seed: seed)
+    Challenge.new(
+      kind: :unify_problem,
+      assay: assay,
+      label: :translatable,
+      payload: %{t1: t1, t2: t2, ctx: MetaCtx.new(), sig: nil, meta_ids: meta_ids},
+      seed: seed
+    )
   end
 
   # -- Types.Unify catalogs (V2b) ---------------------------------------------
@@ -103,8 +108,14 @@ defmodule Antigen.Generators.UnifyProblem do
     ]
     |> Enum.with_index()
     |> Enum.map(fn {{t1, t2, cell}, i} ->
-      Challenge.new(kind: :unify_problem, assay: "unify_types/fixpoint", label: :translatable,
-        payload: %{t1: t1, t2: t2}, seed: i, cover_tag: cell)
+      Challenge.new(
+        kind: :unify_problem,
+        assay: "unify_types/fixpoint",
+        label: :translatable,
+        payload: %{t1: t1, t2: t2},
+        seed: i,
+        cover_tag: cell
+      )
     end)
   end
 
@@ -119,8 +130,14 @@ defmodule Antigen.Generators.UnifyProblem do
     ]
     |> Enum.with_index()
     |> Enum.map(fn {{t1, t2, expect}, i} ->
-      Challenge.new(kind: :unify_problem, assay: "unify_types/intrinsic", label: :translatable,
-        payload: %{t1: t1, t2: t2, expect: expect}, seed: i, cover_tag: expect)
+      Challenge.new(
+        kind: :unify_problem,
+        assay: "unify_types/intrinsic",
+        label: :translatable,
+        payload: %{t1: t1, t2: t2, expect: expect},
+        seed: i,
+        cover_tag: expect
+      )
     end)
   end
 end

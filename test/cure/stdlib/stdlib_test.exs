@@ -580,5 +580,4 @@ defmodule Cure.StdlibTest do
       assert count > 0
     end
   end
-
 end

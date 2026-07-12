@@ -172,7 +172,6 @@ defmodule Cure.Core.Normalise do
   defp nf_struct({:vctor, name, args}, sig, depth, opts),
     do: {:vctor, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
 
-
   defp nf_struct({:vneutral, neutral}, sig, depth, opts),
     do: {:vneutral, nf_neutral(neutral, sig, depth, opts)}
 
@@ -212,8 +211,7 @@ defmodule Cure.Core.Normalise do
   defp nf_branch({c, arity, {:closure, env, body}}, sig, depth, opts),
     do:
       {c, arity,
-       {:closure, id_env(depth),
-        quote_nf(Eval.open_branch(env, body, arity, depth), sig, depth + arity, opts)}}
+       {:closure, id_env(depth), quote_nf(Eval.open_branch(env, body, arity, depth), sig, depth + arity, opts)}}
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth, sig)
 

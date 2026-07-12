@@ -46,7 +46,8 @@ defmodule Antigen.Generators.IndexedTest do
     c = Indexed.refinement(:well_typed)
     env = Indexed.env_of(c)
     [ridx] = Inductive.get_ctor(env, :wrap).result_indices
-    refute match?({:var, _}, ridx)          # it's {:ctor, :Causal, []}, so refinement is DROPPED
+    # it's {:ctor, :Causal, []}, so refinement is DROPPED
+    refute match?({:var, _}, ridx)
     assert ridx == {:ctor, :Causal, []}
 
     # def_type: Π(n:Dec). Π(h:Ix n). Π(ix:Ix n). Ix n — h's declared domain is

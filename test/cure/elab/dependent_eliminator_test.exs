@@ -77,6 +77,7 @@ defmodule Cure.Elab.DependentEliminatorTest do
         module: :"Cure.DependentEliminatorProbe",
         functions: [:run_second, :second, :first, :mk]
       )
+
     # Runtime ctor encoding verified against test/cure/elab/auto_generalize_test.exs
     # and conditional_test.exs: nullary ctors compile to bare atoms (Z -> :Z),
     # ctors with args to tagged tuples (S(Z()) -> {:S, :Z}).

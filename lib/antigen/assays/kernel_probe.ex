@@ -16,7 +16,22 @@ defmodule Antigen.Assays.KernelProbe do
   the term-well-formedness gate (like `check/verdict`, `serialize/decode`).
   """
   alias Antigen.Challenge
-  alias Cure.Core.{Kernel, Builtins, Env, Context, Eval, Conv, Inductive, Universe, Normalise, Quote, Serialize, Certificate, Validator}
+
+  alias Cure.Core.{
+    Kernel,
+    Builtins,
+    Env,
+    Context,
+    Eval,
+    Conv,
+    Inductive,
+    Universe,
+    Normalise,
+    Quote,
+    Serialize,
+    Certificate,
+    Validator
+  }
 
   @nat {:data, :Nat, [], []}
   @z {:ctor, :Z, []}
@@ -112,10 +127,22 @@ defmodule Antigen.Assays.KernelProbe do
   defp evaluate(:positivity_through_ctor) do
     env =
       base_env()
-      |> Inductive.declare(Inductive.family(:Wrap, [], [], 0),
-        [Inductive.ctor(:wrapB, [{:a, {:data, :Bad, [], []}}], [], [:unrestricted], [])])
-      |> Inductive.declare(Inductive.family(:Bad, [], [], 0),
-        [Inductive.ctor(:mkA, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Wrap, [], []}, @nat}}], [], [:unrestricted], [])])
+      |> Inductive.declare(
+        Inductive.family(:Wrap, [], [], 0),
+        [Inductive.ctor(:wrapB, [{:a, {:data, :Bad, [], []}}], [], [:unrestricted], [])]
+      )
+      |> Inductive.declare(
+        Inductive.family(:Bad, [], [], 0),
+        [
+          Inductive.ctor(
+            :mkA,
+            [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Wrap, [], []}, @nat}}],
+            [],
+            [:unrestricted],
+            []
+          )
+        ]
+      )
 
     Inductive.positive?(env, Inductive.family(:Bad, [], [], 0))
   end
@@ -132,8 +159,18 @@ defmodule Antigen.Assays.KernelProbe do
   # (`f(a,b) = f(a)`): the change-matrix row for the missing argument is `nil`,
   # so `arg_relation(nil, _)` yields `:unknown` and the def is (soundly) rejected.
   defp evaluate(:cert_under_application) do
-    body = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :f}, {:var, 1}}}}
-    env = Env.add_def(base_env(), :f, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, body)
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :f}, {:var, 1}}}}
+
+    env =
+      Env.add_def(
+        base_env(),
+        :f,
+        {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}},
+        body
+      )
+
     Certificate.terminating?(:f, body, env)
   end
 
@@ -143,6 +180,7 @@ defmodule Antigen.Assays.KernelProbe do
   defp evaluate(:cert_dangling_callee) do
     body_f = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :g}, {:var, 0}}}
     body_g = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:global, :h}, {:var, 0}}}
+
     env =
       base_env()
       |> Env.add_def(:f, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, body_f)
@@ -161,12 +199,18 @@ defmodule Antigen.Assays.KernelProbe do
   # A `case` whose data scrutinee's constructor is absent from the branch set
   # (coverage would reject this upstream): `Eval.eval`'s ι-rule hits `nil` → raise.
   defp evaluate(:eval_no_branch),
-    do: catch_raise(fn -> Eval.eval({:case, {:ctor, :S, [@z]}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}]}, []) end)
+    do:
+      catch_raise(fn ->
+        Eval.eval({:case, {:ctor, :S, [@z]}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}]}, [])
+      end)
 
   # A `case` whose scrutinee evaluates to a non-data value (`{:vint, 3}`): the
   # ι-rule's `other ->` arm raises (an ill-typed case reached eval).
   defp evaluate(:eval_nondata_scrutinee),
-    do: catch_raise(fn -> Eval.eval({:case, {:int_lit, 3}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}]}, []) end)
+    do:
+      catch_raise(fn ->
+        Eval.eval({:case, {:int_lit, 3}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [{:Z, 0, @z}]}, [])
+      end)
 
   # β-reducing an argument into a non-function value (over-applied ctor / term
   # that should have been rejected): `Eval.apply`'s catch-all raises.
@@ -191,7 +235,9 @@ defmodule Antigen.Assays.KernelProbe do
       env = Env.add_def(base_env(), :holey_body, @nat, {:hole, :h})
       Kernel.check_def(env, :holey_body)
     after
-      if prev, do: Application.put_env(:cure, :final_core_config, prev), else: Application.delete_env(:cure, :final_core_config)
+      if prev,
+        do: Application.put_env(:cure, :final_core_config, prev),
+        else: Application.delete_env(:cure, :final_core_config)
     end
   end
 
@@ -212,6 +258,7 @@ defmodule Antigen.Assays.KernelProbe do
   defp evaluate(:eval_bounded_iota) do
     motive = {:lam, Cure.Core.Grade.unrestricted(), @bounded_ty, @nat}
     branches = [{:First, 1, @z}, {:Next, 2, {:var, 0}}]
+
     {Eval.eval({:case, {:bounded_lit, 0}, motive, branches}, []),
      Eval.eval({:case, {:bounded_lit, 2}, motive, branches}, [])}
   end
@@ -242,7 +289,14 @@ defmodule Antigen.Assays.KernelProbe do
   # absent from the branch set: the bounded ι-arm's nil-guard raises the same legible
   # "ι: no branch" coverage-violation as the `vctor` arm (an ill-typed case reached eval).
   defp evaluate(:eval_bounded_no_branch),
-    do: catch_raise(fn -> Eval.eval({:case, {:bounded_lit, 0}, {:lam, Cure.Core.Grade.unrestricted(), @bounded_ty, @nat}, [{:Next, 2, {:var, 0}}]}, []) end)
+    do:
+      catch_raise(fn ->
+        Eval.eval(
+          {:case, {:bounded_lit, 0}, {:lam, Cure.Core.Grade.unrestricted(), @bounded_ty, @nat},
+           [{:Next, 2, {:var, 0}}]},
+          []
+        )
+      end)
 
   # reify each new value form back to its term: compact `Bounded`, `Binary`/`Atom`
   # type formers, and an atom literal — the read-back half of the value surface.
@@ -307,8 +361,8 @@ defmodule Antigen.Assays.KernelProbe do
   # holes only in checking position).
   defp evaluate(:infer_value_type_formers),
     do:
-      {Kernel.infer(ctx(), {:binary_type}), Kernel.infer(ctx(), {:atom_type}),
-       Kernel.infer(ctx(), {:atom_lit, :foo}), Kernel.infer(ctx(), {:hole, :h})}
+      {Kernel.infer(ctx(), {:binary_type}), Kernel.infer(ctx(), {:atom_type}), Kernel.infer(ctx(), {:atom_lit, :foo}),
+       Kernel.infer(ctx(), {:hole, :h})}
 
   # infer of a `{:bounded_lit, _}` when the `Bounded` builtin is NOT registered:
   # the guard fires with `:bounded_family_unregistered` rather than minting a witness.
@@ -357,16 +411,21 @@ defmodule Antigen.Assays.KernelProbe do
     c = Context.extend(ctx(), {:vdata, :Bool, []})
     branches = [{:False, 0, {:hole, :h}}, {:True, 0, {:hole, :h}}]
 
-    {Kernel.infer(c, {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:binary_type}}, branches}),
-     Kernel.infer(c, {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:atom_type}}, branches})}
+    {Kernel.infer(
+       c,
+       {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:binary_type}}, branches}
+     ),
+     Kernel.infer(
+       c,
+       {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bool, [], []}, {:atom_type}}, branches}
+     )}
   end
 
   # The index-unifier's compact-`Bounded`↔`First`/`Next` bridge: equal literals and
   # matching towers unify (`:trivial`); every cross-constructor / off-by-one pairing
   # is rejected (`:impossible`) — both directions, driven through `branch_unify/5`.
   defp evaluate(:unify_bounded_bridge) do
-    {unify_index([{:bounded_lit, 2}], [{:vbounded, 2}]),
-     unify_index([{:bounded_lit, 2}], [{:vbounded, 3}]),
+    {unify_index([{:bounded_lit, 2}], [{:vbounded, 2}]), unify_index([{:bounded_lit, 2}], [{:vbounded, 3}]),
      unify_index([{:bounded_lit, 0}], [{:vctor, :First, [{:vnat, 0}]}]),
      unify_index([{:ctor, :First, [{:nat_lit, 0}]}], [{:vbounded, 0}]),
      unify_index([{:bounded_lit, 1}], [{:vctor, :Next, [{:vnat, 1}, {:vbounded, 0}]}]),
@@ -410,12 +469,24 @@ defmodule Antigen.Assays.KernelProbe do
       |> Env.add_def(:Syn, {:type, 0}, {:data, :Foo, [], []})
       |> Inductive.declare(Inductive.family(:Foo, [], [], 0), [])
       |> Inductive.declare(Inductive.family(:Host, [], [], 0), [
-        Inductive.ctor(:mkH, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Syn}, @nat}}], [], [:unrestricted], [])
+        Inductive.ctor(
+          :mkH,
+          [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Syn}, @nat}}],
+          [],
+          [:unrestricted],
+          []
+        )
       ])
 
     ec =
       Inductive.declare(base_env(), Inductive.family(:HU, [], [], 0), [
-        Inductive.ctor(:mkU, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Unknown}, @nat}}], [], [:unrestricted], [])
+        Inductive.ctor(
+          :mkU,
+          [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:global, :Unknown}, @nat}}],
+          [],
+          [:unrestricted],
+          []
+        )
       ])
 
     {Inductive.positive?(ea, Inductive.family(:HS, [], [], 0)),
@@ -444,7 +515,11 @@ defmodule Antigen.Assays.KernelProbe do
   # bound. Both a nested and the subsequent outer reduction complete normally.
   defp evaluate(:whnf_nested_fuel_restore) do
     Normalise.with_fuel(8, fn ->
-      inner = Normalise.with_fuel(4, fn -> Normalise.whnf(ctx(), {:app, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}, {:nat_lit, 3}}) end)
+      inner =
+        Normalise.with_fuel(4, fn ->
+          Normalise.whnf(ctx(), {:app, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}, {:nat_lit, 3}})
+        end)
+
       {inner, Normalise.whnf(ctx(), {:nat_lit, 5})}
     end)
   end
@@ -531,8 +606,8 @@ defmodule Antigen.Assays.KernelProbe do
   defp matches?(:eval_bitwise_fold, r),
     do:
       r ==
-        {{:ok, {:vint, 8}}, {:ok, {:vint, 14}}, {:ok, {:vint, 6}}, {:ok, {:vint, 16}},
-         {:ok, {:vint, 8}}, {:ok, {:vint, -6}}}
+        {{:ok, {:vint, 8}}, {:ok, {:vint, 14}}, {:ok, {:vint, 6}}, {:ok, {:vint, 16}}, {:ok, {:vint, 8}},
+         {:ok, {:vint, -6}}}
 
   defp matches?(:quote_value_surface, r),
     do: r == {{:bounded_lit, 4}, {:binary_type}, {:atom_type}, {:atom_lit, :ok}}
@@ -542,10 +617,16 @@ defmodule Antigen.Assays.KernelProbe do
   defp matches?(:conv_no_delta_value_surface, r), do: r == {true, true, true, true}
 
   defp matches?(:serialize_value_surface, r),
-    do: r == [{{:binary_type}, {:ok, {:binary_type}}}, {{:atom_type}, {:ok, {:atom_type}}}, {{:atom_lit, :ok}, {:ok, {:atom_lit, :ok}}}]
+    do:
+      r == [
+        {{:binary_type}, {:ok, {:binary_type}}},
+        {{:atom_type}, {:ok, {:atom_type}}},
+        {{:atom_lit, :ok}, {:ok, {:atom_lit, :ok}}}
+      ]
 
   defp matches?(:serialize_special_atoms, r),
-    do: r == {{{:atom_lit, :"has space"}, {:ok, {:atom_lit, :"has space"}}}, {{:atom_lit, :""}, {:ok, {:atom_lit, :""}}}}
+    do:
+      r == {{{:atom_lit, :"has space"}, {:ok, {:atom_lit, :"has space"}}}, {{:atom_lit, :""}, {:ok, {:atom_lit, :""}}}}
 
   defp matches?(:serialize_malformed_symbol, r), do: r == {:error, :malformed_symbol}
 
@@ -570,7 +651,10 @@ defmodule Antigen.Assays.KernelProbe do
 
   # equal literals / matching towers unify (`:trivial`); every clash is `:impossible`.
   defp matches?(:unify_bounded_bridge, r),
-    do: r == {:trivial, :impossible, :trivial, :trivial, :trivial, :trivial, :impossible, :impossible, :impossible, :impossible}
+    do:
+      r ==
+        {:trivial, :impossible, :trivial, :trivial, :trivial, :trivial, :impossible, :impossible, :impossible,
+         :impossible}
 
   defp matches?(:unify_rigid_value_heads, r), do: r == {:impossible, :impossible, :impossible, :impossible}
   defp matches?(:opaque_family_positivity, r), do: match?({%{opaque: true}, true}, r)

@@ -17,7 +17,9 @@ defmodule Cure.Core.TermTest do
 
   test "shift lifts free vars at/above the cutoff, leaves bound vars" do
     # closed term (body var #0 is bound by the λ) is unchanged by shifting
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}} == Term.shift({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, 1, 0)
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}} ==
+             Term.shift({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, 1, 0)
+
     # a free var at/above the cutoff is lifted by the amount
     assert {:var, 2} == Term.shift({:var, 0}, 2, 0)
   end
@@ -54,7 +56,7 @@ defmodule Cure.Core.TermTest do
       {:ctor, :seq, [{:var, 0}, {:var, 1}]},
       {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}},
        [{:prim, 0, {:type, 0}}, {:seq, 2, {:var, 1}}]},
-      {:global, :and},
+      {:global, :and}
     ]
 
     for t <- terms do

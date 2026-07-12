@@ -59,6 +59,7 @@ defmodule Antigen.Assays.KernelLaw do
   # commutation, for c ≤ j: shift(subst(t,j,r),a,c) == subst(shift(t,a,c), j+a, shift(r,a,c))
   defp law3(t) do
     combos = for j <- [0, 1], c <- [0, 1], a <- [1, 2], r <- [@z, @sz], c <= j, do: {j, c, a, r}
+
     case Enum.find_value(combos, fn {j, c, a, r} ->
            lhs = Term.shift(Term.subst(t, j, r), a, c)
            rhs = Term.subst(Term.shift(t, a, c), j + a, Term.shift(r, a, c))
@@ -319,8 +320,7 @@ defmodule Antigen.Assays.KernelLaw do
         if before == aft do
           :ok
         else
-          {:violation,
-           {:effect_structure_changed, %{term: t, nf: nf, skeleton_before: before, skeleton_after: aft}}}
+          {:violation, {:effect_structure_changed, %{term: t, nf: nf, skeleton_before: before, skeleton_after: aft}}}
         end
     end
   end
@@ -365,11 +365,14 @@ defmodule Antigen.Assays.KernelLaw do
     rhs = Normalise.nf(ctx, subst_term, fuel: fuel)
 
     cond do
-      lhs == :fuel_exhausted or rhs == :fuel_exhausted -> :ok
-      lhs == rhs -> :ok
+      lhs == :fuel_exhausted or rhs == :fuel_exhausted ->
+        :ok
+
+      lhs == rhs ->
+        :ok
+
       true ->
-        {:violation,
-         {:beta_subst_mismatch, %{redex: redex, subst: subst_term, beta_nf: lhs, subst_nf: rhs}}}
+        {:violation, {:beta_subst_mismatch, %{redex: redex, subst: subst_term, beta_nf: lhs, subst_nf: rhs}}}
     end
   end
 

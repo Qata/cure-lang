@@ -404,9 +404,7 @@ defmodule Cure.Compiler.DepGraph do
     nodes = edges |> Map.keys() |> Enum.sort()
 
     {_state, sccs} =
-      Enum.reduce(nodes, {%{index: %{}, low: %{}, stack: [], on: MapSet.new(), n: 0}, []}, fn v,
-                                                                                             {st,
-                                                                                              acc} ->
+      Enum.reduce(nodes, {%{index: %{}, low: %{}, stack: [], on: MapSet.new(), n: 0}, []}, fn v, {st, acc} ->
         if Map.has_key?(st.index, v), do: {st, acc}, else: strongconnect(v, edges, st, acc)
       end)
 

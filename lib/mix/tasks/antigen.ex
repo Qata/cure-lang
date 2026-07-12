@@ -41,10 +41,22 @@ defmodule Mix.Tasks.Antigen do
   @default_count 20_000
   @rounds_per_minute 2000
 
-  @switches [count: :integer, budget: :string, bias: :boolean, corpus: :string, seeds: :string,
-             report_dir: :string, out: :string, guided: :boolean, precise: :boolean,
-             edge_corpus: :string, plateau: :integer, guided_round: :integer, seed: :integer,
-             record_new_coverage_baseline: :boolean]
+  @switches [
+    count: :integer,
+    budget: :string,
+    bias: :boolean,
+    corpus: :string,
+    seeds: :string,
+    report_dir: :string,
+    out: :string,
+    guided: :boolean,
+    precise: :boolean,
+    edge_corpus: :string,
+    plateau: :integer,
+    guided_round: :integer,
+    seed: :integer,
+    record_new_coverage_baseline: :boolean
+  ]
 
   @impl Mix.Task
   def run(argv) do
@@ -56,6 +68,7 @@ defmodule Mix.Tasks.Antigen do
         match?(["generate" | _], rest) -> :generate
         true -> :explore
       end
+
     count = resolve_count(opts)
 
     seeds_path = opts[:seeds] || "test/antigen/seeds.sexp"
@@ -80,7 +93,10 @@ defmodule Mix.Tasks.Antigen do
     case mode do
       :explore ->
         r = Antigen.Runner.explore(runner_opts)
-        IO.puts("antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked#{rejected_note(r)} (seed=#{r.seed})")
+
+        IO.puts(
+          "antigen: #{r.infections} infection(s), #{r.seeds_banked} seed(s) banked#{rejected_note(r)} (seed=#{r.seed})"
+        )
 
       :generate ->
         install_sigterm_trap()

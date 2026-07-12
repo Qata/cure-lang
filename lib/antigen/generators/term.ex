@@ -27,8 +27,7 @@ defmodule Antigen.Generators.Term do
   @spec gen_term(Context.t(), Cure.Core.Term.t()) :: Gen.t()
   def gen_term(ctx, goal), do: Gen.sized(fn size -> gen(ctx, goal, min(size, @max_size)) end)
 
-  @assay_ids ["term/infer_check", "term/subject_reduction", "term/normalization",
-              "term/erasure_preservation"]
+  @assay_ids ["term/infer_check", "term/subject_reduction", "term/normalization", "term/erasure_preservation"]
   def assay_ids, do: @assay_ids
 
   @doc "A `Gen` of a `:typed_term` challenge tagged for `assay_id`."
@@ -63,7 +62,9 @@ defmodule Antigen.Generators.Term do
   # the overall type reduces back to `goal`, so downstream use of `inferred` is
   # unaffected. Every other v1 top-level shape already has a working infer path.
   defp top_level_term(ctx, goal, term) do
-    if check_mode_only?(ctx, term), do: {:app, {:lam, Cure.Core.Grade.unrestricted(), goal, {:var, 0}}, term}, else: term
+    if check_mode_only?(ctx, term),
+      do: {:app, {:lam, Cure.Core.Grade.unrestricted(), goal, {:var, 0}}, term},
+      else: term
   end
 
   # The Sigma pair `mk_pair` is check-mode-only (a ctor of a params-carrying family),
@@ -90,7 +91,7 @@ defmodule Antigen.Generators.Term do
     depth = Context.length(ctx)
 
     vec_var_goals =
-      for k <- (if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))),
+      for k <- if(depth == 0, do: [], else: Enum.to_list(0..(depth - 1))),
           ty = Normalise.quote(Context.lookup(ctx, k), depth),
           match?({:data, :Vec, _, _}, ty),
           do: {1, Gen.return(ty)}
@@ -129,21 +130,27 @@ defmodule Antigen.Generators.Term do
   # -- check-mode introductions ----------------------------------------------
   defp intro_rules(ctx, _goal, {:pi, _g, dom, cod}, size) do
     body_ctx = Context.extend(ctx, Eval.eval(dom, Context.env(ctx)))
-    [{3, Gen.bind(gen(body_ctx, cod, size - 1), fn b -> Gen.return({:lam, Cure.Core.Grade.unrestricted(), dom, b}) end)}]
+
+    [
+      {3,
+       Gen.bind(gen(body_ctx, cod, size - 1), fn b -> Gen.return({:lam, Cure.Core.Grade.unrestricted(), dom, b}) end)}
+    ]
   end
 
   defp intro_rules(ctx, _goal, {:data, :Sigma, [a, {:lam, _g, _a, b}], []}, size) do
-    [{3,
-      Gen.bind(gen(ctx, a, size - 1), fn av ->
-        # `b` is the Σ codomain body, one binder deeper than `ctx` (the `{:lam, Cure.Core.Grade.unrestricted(), a, b}`
-        # binds the first component); the second component inside `{:ctor, :mk_pair,
-        # [av, bv]}` must be a term in the UNEXTENDED `ctx`, so β-substitute `av` for
-        # `b`'s own bound variable via `SigMenu.subst0/3` (same reasoning as
-        # `SigMenu.canon`'s Sigma clause). Unreachable in v1 but must stay correct.
-        Gen.bind(gen(ctx, SigMenu.subst0(b, av, ctx), size - 1), fn bv ->
-          Gen.return({:ctor, :mk_pair, [av, bv]})
-        end)
-      end)}]
+    [
+      {3,
+       Gen.bind(gen(ctx, a, size - 1), fn av ->
+         # `b` is the Σ codomain body, one binder deeper than `ctx` (the `{:lam, Cure.Core.Grade.unrestricted(), a, b}`
+         # binds the first component); the second component inside `{:ctor, :mk_pair,
+         # [av, bv]}` must be a term in the UNEXTENDED `ctx`, so β-substitute `av` for
+         # `b`'s own bound variable via `SigMenu.subst0/3` (same reasoning as
+         # `SigMenu.canon`'s Sigma clause). Unreachable in v1 but must stay correct.
+         Gen.bind(gen(ctx, SigMenu.subst0(b, av, ctx), size - 1), fn bv ->
+           Gen.return({:ctor, :mk_pair, [av, bv]})
+         end)
+       end)}
+    ]
   end
 
   # The kernel's reified data normal form places Vec's sole (index) argument in
@@ -174,12 +181,14 @@ defmodule Antigen.Generators.Term do
 
     cons_rules =
       if SigMenu.inhabitable?(ctx, a) do
-        [{2,
-          Gen.bind(gen(ctx, a, size - 1), fn hd ->
-            Gen.bind(gen(ctx, {:data, :List, [a], []}, size - 1), fn tl ->
-              Gen.return({:ctor, :Cons, [hd, tl]})
-            end)
-          end)}]
+        [
+          {2,
+           Gen.bind(gen(ctx, a, size - 1), fn hd ->
+             Gen.bind(gen(ctx, {:data, :List, [a], []}, size - 1), fn tl ->
+               Gen.return({:ctor, :Cons, [hd, tl]})
+             end)
+           end)}
+        ]
       else
         []
       end
@@ -197,23 +206,27 @@ defmodule Antigen.Generators.Term do
 
       {:ctor, :S, [j]} ->
         if SigMenu.inhabitable?(ctx, SigMenu.vec(j)) do
-          [{2,
-            Gen.bind(gen(ctx, SigMenu.nat(), size - 1), fn x ->
-              Gen.bind(gen(ctx, SigMenu.vec(j), size - 1), fn tail ->
-                Gen.return({:ctor, :vcons, [j, x, tail]})
-              end)
-            end)}]
+          [
+            {2,
+             Gen.bind(gen(ctx, SigMenu.nat(), size - 1), fn x ->
+               Gen.bind(gen(ctx, SigMenu.vec(j), size - 1), fn tail ->
+                 Gen.return({:ctor, :vcons, [j, x, tail]})
+               end)
+             end)}
+          ]
         else
           []
         end
 
       _stuck ->
-        []   # stuck index: only eliminations apply (Task 4); intros offer nothing
+        # stuck index: only eliminations apply (Task 4); intros offer nothing
+        []
     end
   end
 
   # A small closed Nat generator (numerals), for variety at Nat goals.
   defp gen_nat(0), do: Gen.return({:ctor, :Z, []})
+
   defp gen_nat(size) do
     Gen.frequency([
       {2, Gen.return({:ctor, :Z, []})},
@@ -236,7 +249,7 @@ defmodule Antigen.Generators.Term do
   defp var_rules(ctx, goal) do
     depth = Context.length(ctx)
 
-    for k <- (if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))),
+    for k <- if(depth == 0, do: [], else: Enum.to_list(0..(depth - 1))),
         accept_infer?(ctx, {:var, k}, goal) do
       {3, Gen.return({:var, k})}
     end
@@ -272,15 +285,21 @@ defmodule Antigen.Generators.Term do
       {:data, :Nat, _, _} ->
         dom = SigMenu.nat()
         body_ctx = Context.extend(ctx, Eval.eval(dom, Context.env(ctx)))
-        [{@redex_weight,
-          Gen.bind(gen_referencing(body_ctx, shift_goal(goal), size - 1, 0), fn body ->
-            Gen.bind(gen(ctx, dom, size - 1), fn arg ->
-              Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), dom, body}, arg})
-            end)
-          end)}]
-      _ -> []
+
+        [
+          {@redex_weight,
+           Gen.bind(gen_referencing(body_ctx, shift_goal(goal), size - 1, 0), fn body ->
+             Gen.bind(gen(ctx, dom, size - 1), fn arg ->
+               Gen.return({:app, {:lam, Cure.Core.Grade.unrestricted(), dom, body}, arg})
+             end)
+           end)}
+        ]
+
+      _ ->
+        []
     end
   end
+
   defp app_rule(_ctx, _goal, _size), do: []
 
   # A generator biased to REFERENCE de Bruijn index `k` (a Nat variable in
@@ -332,18 +351,21 @@ defmodule Antigen.Generators.Term do
         case_for(ctx, :Bd, goal, size)
     end
   end
+
   defp case_rule(_ctx, _goal, _size), do: []
 
   defp case_for(ctx, fam, goal, size) do
     scrut_ty = {:data, fam, [], []}
     motive = {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, shift_goal(goal)}
 
-    [{@redex_weight,
-      Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
-        Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
-          Gen.return({:case, scrut, motive, brs})
-        end)
-      end)}]
+    [
+      {@redex_weight,
+       Gen.bind(gen(ctx, scrut_ty, size - 1), fn scrut ->
+         Gen.bind(branches(ctx, fam, goal, size - 1), fn brs ->
+           Gen.return({:case, scrut, motive, brs})
+         end)
+       end)}
+    ]
   end
 
   # Projection (via single-branch ι-on-case over mk_pair) of a Γ-variable of Sigma
@@ -352,7 +374,7 @@ defmodule Antigen.Generators.Term do
   defp proj_rules(ctx, goal) do
     depth = Context.length(ctx)
 
-    Enum.flat_map((if depth == 0, do: [], else: Enum.to_list(0..(depth - 1))), fn k ->
+    Enum.flat_map(if(depth == 0, do: [], else: Enum.to_list(0..(depth - 1))), fn k ->
       case whnf(ctx, Normalise.quote(Context.lookup(ctx, k), depth)) do
         {:data, :Sigma, [a, {:lam, _g, _a, b}], []} = st ->
           fst_t = {:case, {:var, k}, {:lam, Cure.Core.Grade.unrestricted(), st, a}, [{:mk_pair, 2, {:var, 1}}]}
@@ -374,11 +396,13 @@ defmodule Antigen.Generators.Term do
   defp saturate(ctx, head_term, head_ty, goal, size) do
     args_gen = gen_args(ctx, head_ty, size, [])
 
-    [{@redex_weight,
-      Gen.bind(args_gen, fn args ->
-        term = Enum.reduce(args, head_term, fn a, acc -> {:app, acc, a} end)
-        if accept_infer?(ctx, term, goal), do: Gen.return(term), else: Gen.return(SigMenu.canon(ctx, goal))
-      end)}]
+    [
+      {@redex_weight,
+       Gen.bind(args_gen, fn args ->
+         term = Enum.reduce(args, head_term, fn a, acc -> {:app, acc, a} end)
+         if accept_infer?(ctx, term, goal), do: Gen.return(term), else: Gen.return(SigMenu.canon(ctx, goal))
+       end)}
+    ]
   end
 
   # Walk a Π-telescope, generating each domain argument.
@@ -390,7 +414,9 @@ defmodule Antigen.Generators.Term do
           cod_ctx_ty = subst_cod(cod, a, ctx)
           gen_args(ctx, cod_ctx_ty, size, [a | acc])
         end)
-      _ -> Gen.return(Enum.reverse(acc))
+
+      _ ->
+        Gen.return(Enum.reverse(acc))
     end
   end
 
@@ -407,6 +433,7 @@ defmodule Antigen.Generators.Term do
   defp branches(ctx, :Nat, goal, size) do
     Gen.bind(gen(ctx, goal, size), fn zbody ->
       kctx = Context.extend(ctx, Eval.eval(SigMenu.nat(), Context.env(ctx)))
+
       Gen.bind(gen_referencing(kctx, shift_goal(goal), size, 0), fn sbody ->
         Gen.return([{:Z, 0, zbody}, {:S, 1, sbody}])
       end)
@@ -429,13 +456,20 @@ defmodule Antigen.Generators.Term do
         depth = Context.length(ctx)
         inferred_term = Normalise.quote(inferred_val, depth)
 
-        case Cure.Core.Conv.conv_within?(inferred_term, goal, Context.env(ctx), depth,
-               Context.signature(ctx), @gen_fuel) do
+        case Cure.Core.Conv.conv_within?(
+               inferred_term,
+               goal,
+               Context.env(ctx),
+               depth,
+               Context.signature(ctx),
+               @gen_fuel
+             ) do
           {:ok, true} -> true
           _ -> false
         end
 
-      {:error, _} -> false
+      {:error, _} ->
+        false
     end
   end
 

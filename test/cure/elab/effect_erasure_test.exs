@@ -18,6 +18,7 @@ defmodule Cure.Elab.EffectErasureTest do
     """
 
     assert {:error, err} = Program.elaborate(src)
+
     assert match?({:effect_binder_erased, :f}, err) or
              (is_tuple(err) and elem(err, 0) == :effect_binder_erased),
            "expected :effect_binder_erased, got #{inspect(err)}"

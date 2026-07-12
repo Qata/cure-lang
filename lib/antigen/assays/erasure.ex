@@ -40,7 +40,14 @@ defmodule Antigen.Assays.Erasure do
     end
   end
 
-  def run(%Challenge{kind: :erasure_term, assay: "erasure/selective", payload: %{env: env, term: {:ctor, c, args} = t, surface: :ctor}}, k) do
+  def run(
+        %Challenge{
+          kind: :erasure_term,
+          assay: "erasure/selective",
+          payload: %{env: env, term: {:ctor, c, args} = t, surface: :ctor}
+        },
+        k
+      ) do
     qs = k.ctor_quantities.(env, c) || List.duplicate(:unrestricted, length(args))
     expected = present_args(args, qs)
 
@@ -75,14 +82,28 @@ defmodule Antigen.Assays.Erasure do
     end
   end
 
-  def run(%Challenge{kind: :erasure_term, assay: "relevance/soundness", payload: %{env: env, name: n, quantities: qs, body: body, site: nil}}, k) do
+  def run(
+        %Challenge{
+          kind: :erasure_term,
+          assay: "relevance/soundness",
+          payload: %{env: env, name: n, quantities: qs, body: body, site: nil}
+        },
+        k
+      ) do
     case k.relevance_check.(env, n, qs, body) do
       :ok -> :ok
       {:error, _} -> {:violation, {:clean_body_rejected, n}}
     end
   end
 
-  def run(%Challenge{kind: :erasure_term, assay: "relevance/soundness", payload: %{env: env, name: n, quantities: qs, body: body, site: site}}, k) do
+  def run(
+        %Challenge{
+          kind: :erasure_term,
+          assay: "relevance/soundness",
+          payload: %{env: env, name: n, quantities: qs, body: body, site: site}
+        },
+        k
+      ) do
     case k.relevance_check.(env, n, qs, body) do
       {:error, {:erased_used_relevantly, %{site: ^site}}} -> :ok
       {:error, {:erased_used_relevantly, %{site: other}}} -> {:violation, {:relevance_wrong_site, site, other}}

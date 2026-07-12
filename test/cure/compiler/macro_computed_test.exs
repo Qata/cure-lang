@@ -43,43 +43,52 @@ defmodule Cure.Compiler.MacroComputedTest do
   end
 
   test "a zero-hole computed use is deferred with its elab and synthetic input" do
-    node = parse!("""
-    mod M
-      macro Mk
-        syntax mk computed by build_it
-      fn build_it(input: Syntax) -> Syntax = input
-      fn f() -> Syntax = mk
-    """)
+    node =
+      parse!("""
+      mod M
+        macro Mk
+          syntax mk computed by build_it
+        fn build_it(input: Syntax) -> Syntax = input
+        fn f() -> Syntax = mk
+      """)
 
     find = fn find, n ->
       case n do
         {:function_def, meta, [body]} ->
           if Keyword.get(meta, :name) == "f", do: body
-        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
-        _ -> nil
+
+        {_t, _m, ch} when is_list(ch) ->
+          Enum.find_value(ch, &find.(find, &1))
+
+        _ ->
+          nil
       end
     end
 
-    assert {:computed_use,
-            [keyword: "mk", syntax_type: "MkSyntax", syntax_fields: [], line: _, col: _],
+    assert {:computed_use, [keyword: "mk", syntax_type: "MkSyntax", syntax_fields: [], line: _, col: _],
             [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
              find.(find, node)
   end
 
   test "a computed use preserves matched hole inputs in segment order" do
-    node = parse!("""
-    mod M
-      macro Mk
-        syntax mk <first: Code> then <second: Code> computed by build_it
-      fn f(a: Int, b: Int) -> Syntax = mk a then b
-    """)
+    node =
+      parse!("""
+      mod M
+        macro Mk
+          syntax mk <first: Code> then <second: Code> computed by build_it
+        fn f(a: Int, b: Int) -> Syntax = mk a then b
+      """)
 
     find = fn find, n ->
       case n do
         {:function_def, meta, [body]} ->
           if Keyword.get(meta, :name) == "f", do: body
-        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
-        _ -> nil
+
+        {_t, _m, ch} when is_list(ch) ->
+          Enum.find_value(ch, &find.(find, &1))
+
+        _ ->
+          nil
       end
     end
 

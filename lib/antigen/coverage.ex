@@ -2,8 +2,7 @@ defmodule Antigen.Coverage do
   @moduledoc "The coverage key: a plateauing feature vector for dedup + the health gate (spec §7.2, §9)."
   alias Antigen.Challenge
 
-  @elim_flags %{app: :app_present, case: :case_present, fst: :fst_present,
-                snd: :snd_present, rewrite: :rewrite_present}
+  @elim_flags %{app: :app_present, case: :case_present, fst: :fst_present, snd: :snd_present, rewrite: :rewrite_present}
 
   @spec key(Challenge.t()) :: {MapSet.t(atom()), atom(), MapSet.t(atom()), Challenge.label()}
   def key(%Challenge{} = c) do
@@ -141,12 +140,18 @@ defmodule Antigen.Coverage do
   end
 
   defp binder_depth({t, _dom, body}) when t in [:lam, :pi, :sigma], do: 1 + binder_depth(body)
+
   defp binder_depth({:case, s, m, brs}) do
-    Enum.max([binder_depth(s), binder_depth(m) |
-              Enum.map(brs, fn {_c, ar, b} -> (if ar > 0, do: 1, else: 0) + binder_depth(b) end)])
+    Enum.max([
+      binder_depth(s),
+      binder_depth(m)
+      | Enum.map(brs, fn {_c, ar, b} -> if(ar > 0, do: 1, else: 0) + binder_depth(b) end)
+    ])
   end
+
   defp binder_depth(t) when is_tuple(t),
     do: t |> Tuple.to_list() |> tl() |> Enum.map(&binder_depth/1) |> Enum.max(fn -> 0 end)
+
   defp binder_depth(l) when is_list(l), do: l |> Enum.map(&binder_depth/1) |> Enum.max(fn -> 0 end)
   defp binder_depth(_), do: 0
 

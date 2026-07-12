@@ -44,8 +44,10 @@ defmodule Antigen.Generators.BetaSubstTest do
       assert c.kind == :typed_term
       assert c.assay == "kernel/beta_subst"
       assert match?({:app, {:lam, _g, _, _}, _}, c.payload.term)
+
       assert match?({:ok, _}, Kernel.infer(ctx_of(c.payload.ctx), c.payload.term)),
              "redex not well-typed: #{c.note}"
+
       assert Assays.KernelLaw.run(c) == :ok, "β/subst disagreed on #{c.note}"
     end
   end
@@ -58,6 +60,7 @@ defmodule Antigen.Generators.BetaSubstTest do
       ctx = ctx_of(ctx_types)
       beta_nf = Normalise.nf(ctx, {:app, {:lam, Cure.Core.Grade.unrestricted(), t, body}, e})
       broken_nf = Normalise.nf(ctx, broke(body, e, 0))
+
       assert beta_nf != broken_nf,
              "capture trap #{note} does NOT distinguish an unshifted subst — no teeth"
     end
@@ -90,6 +93,7 @@ defmodule Antigen.Generators.BetaSubstTest do
       depth = Cure.Core.Context.length(ctx)
       {:ok, vr} = Kernel.infer(ctx, {:app, {:lam, Cure.Core.Grade.unrestricted(), t, body}, e})
       {:ok, vs} = Kernel.infer(ctx, Subst.instantiate(body, [e]))
+
       assert Normalise.quote(vr, depth) == Normalise.quote(vs, depth),
              "substitution lemma failed on #{note}"
     end
@@ -105,6 +109,7 @@ defmodule Antigen.Generators.BetaSubstTest do
 
   test "the menu spans lam depths 1–3, a Π/Σ codomain, and a case branch" do
     notes = BetaSubst.cases() |> Enum.map(&elem(&1, 5))
+
     for frag <- ["depth 1", "depth 2", "depth 3", "pi codomain", "sigma codomain", "case branch"] do
       assert Enum.any?(notes, &String.contains?(&1, frag)), "missing arm: #{frag}"
     end

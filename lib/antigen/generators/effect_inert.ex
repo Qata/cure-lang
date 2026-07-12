@@ -55,12 +55,10 @@ defmodule Antigen.Generators.EffectInert do
   @cases [
     {@effect_int, @effect_int, "bare Effect(Int): the type former is inert"},
     {@effect_int, @pure3, "pure(3): a trivial computation"},
-    {@effect_int, {:effect_pure, @payload_redex},
-     "pure((λx.x) 3): nf reduces the PAYLOAD, leaves `pure` intact"},
+    {@effect_int, {:effect_pure, @payload_redex}, "pure((λx.x) 3): nf reduces the PAYLOAD, leaves `pure` intact"},
     {@effect_int, {:effect_bind, @pure3, @k_pure},
      "bind(pure(3), λx. pure(x)): the left-identity redex that must NOT reduce"},
-    {@effect_int,
-     {:effect_bind, @pure3, {:lam, @omega, @int, {:effect_bind, @pure_var0, @k_pure}}},
+    {@effect_int, {:effect_bind, @pure3, {:lam, @omega, @int, {:effect_bind, @pure_var0, @k_pure}}},
      "bind(pure(3), λx. bind(pure(x), λy. pure(y))): k(a) ≠ pure(a), a distinct check"},
     {@effect_int, {:effect_bind, {:effect_bind, @pure3, @k_pure}, @k_pure},
      "bind(bind(pure(3), λx. pure(x)), λy. pure(y)): nesting (commuting-conversion catcher)"}

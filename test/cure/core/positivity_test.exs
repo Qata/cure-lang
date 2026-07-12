@@ -41,7 +41,13 @@ defmodule Cure.Core.PositivityTest do
   test "a constructor with the family in a negative position is rejected" do
     bad = Inductive.family(:Bad, [], [], 0)
     # mk : (Bad -> Dec) -> Bad — Bad occurs to the left of an arrow (negative)
-    mk = Inductive.ctor(:mk, [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Bad, [], []}, {:data, :Dec, [], []}}}], [])
+    mk =
+      Inductive.ctor(
+        :mk,
+        [{:f, {:pi, Cure.Core.Grade.unrestricted(), {:data, :Bad, [], []}, {:data, :Dec, [], []}}}],
+        []
+      )
+
     env = Inductive.declare(env_with_dec_sf(), bad, [mk])
 
     assert {:error, {:non_strictly_positive, :mk}} ==

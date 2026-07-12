@@ -37,8 +37,15 @@ defmodule Cure.Stdlib.PreloadClosureTest do
 
   test "kind API and groups are untouched" do
     assert Preload.known_groups() == [
-             :core, :collections, :text, :numeric, :system,
-             :concurrency, :option, :test, :network
+             :core,
+             :collections,
+             :text,
+             :numeric,
+             :system,
+             :concurrency,
+             :option,
+             :test,
+             :network
            ]
 
     assert Preload.stdlib_modules(:none) == []

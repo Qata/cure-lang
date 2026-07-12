@@ -100,7 +100,6 @@ defmodule Cure.Core.Eval do
   def eval({:effect_pure, a}, env), do: {:veffect_pure, eval(a, env)}
   def eval({:effect_bind, e, k}, env), do: {:veffect_bind, eval(e, env), eval(k, env)}
 
-
   # `rewrite e at (x.M) in t` is erased at runtime to `t` (the proof and motive
   # are computationally irrelevant — `rewrite e _ t ⇝ t`, §4.6).
 

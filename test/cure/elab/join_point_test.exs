@@ -146,6 +146,7 @@ defmodule Cure.Elab.JoinPointTest do
 
       {:ok, mod} =
         Emit.compile_and_load(env, module: :"Cure.JPNamed", functions: [:rank, :f, :t_b, :t_d])
+
       assert mod.t_b() == 20
       assert mod.t_d() == 30
     end
@@ -166,6 +167,7 @@ defmodule Cure.Elab.JoinPointTest do
       """
 
       {:ok, env} = Program.elaborate(src)
+
       {:ok, mod} =
         Emit.compile_and_load(env, module: :"Cure.JPLazy", functions: [:loop, :f, :t_a])
 

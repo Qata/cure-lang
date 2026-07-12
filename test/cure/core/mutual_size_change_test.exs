@@ -85,11 +85,12 @@ defmodule Cure.Core.MutualSizeChangeTest do
   defp perm_f_body do
     {:lam, Cure.Core.Grade.unrestricted(), @nat,
      {:lam, Cure.Core.Grade.unrestricted(), @nat,
-      {:case, v(1), @nat_motive,
-       [{:Z, 0, v(0)}, {:S, 1, call2(:g, v(1), v(0))}]}}}
+      {:case, v(1), @nat_motive, [{:Z, 0, v(0)}, {:S, 1, call2(:g, v(1), v(0))}]}}}
   end
 
-  defp perm_g_body, do: {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, call2(:f, v(0), v(1))}}
+  defp perm_g_body,
+    do:
+      {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, call2(:f, v(0), v(1))}}
 
   # Ackermann (single-function, lexicographic) — #14 no-regression control.
   defp ack_body do
@@ -100,7 +101,8 @@ defmodule Cure.Core.MutualSizeChangeTest do
         call2(:ack, v(0), s(z()))
       )
 
-    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, s(v(0)))}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat,
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, s(v(0)))}}
   end
 
   # -- Positive: well-founded mutual groups must certify total ----------------
@@ -160,7 +162,14 @@ defmodule Cure.Core.MutualSizeChangeTest do
   # -- #14 no-regression: single-function group delegates unchanged -----------
 
   test "Ackermann (single-function lexicographic) still certifies total (no #14 regression)" do
-    env = Env.add_def(base_env(), :ack, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, ack_body())
+    env =
+      Env.add_def(
+        base_env(),
+        :ack,
+        {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}},
+        ack_body()
+      )
+
     assert terminating?(env, :ack)
   end
 
@@ -168,15 +177,19 @@ defmodule Cure.Core.MutualSizeChangeTest do
     # h calls plus (a plain subroutine that does NOT call back); h's own recursion
     # is structural. Group of h is {h} alone → #14 delegate certifies.
     plus =
-      {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), s(call2(:plus, v(0), v(1))), v(0))}}
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), s(call2(:plus, v(0), v(1))), v(0))}}
 
     h =
-      {:lam, Cure.Core.Grade.unrestricted(), @nat,
-       ncase(v(0), call1(:h, v(0)), call2(:plus, z(), z()))}
+      {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(0), call1(:h, v(0)), call2(:plus, z(), z()))}
 
     env =
       base_env()
-      |> Env.add_def(:plus, {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}, plus)
+      |> Env.add_def(
+        :plus,
+        {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}},
+        plus
+      )
       |> Env.add_def(:h, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, h)
 
     assert terminating?(env, :h)

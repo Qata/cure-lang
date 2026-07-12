@@ -10,6 +10,7 @@ defmodule Antigen.Generators.CheckModeTest do
     for %Challenge{} = c <- B.interp(CheckMode.gen()) |> Enum.take(@sample) do
       assert c.kind == :check_mode
       assert c.label in [:accept, :reject]
+
       assert Assays.CheckMode.run(c) == :ok,
              "verdict oracle disagreed on #{c.note} (#{c.label})"
     end

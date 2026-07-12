@@ -22,7 +22,8 @@ defmodule Antigen.MutationHealthGateTest do
     cs = sample(Mutation.mutant(), 30)
     # health_metrics filters :typed_term only ⇒ no mutant terms counted
     hm = Runner.health_metrics(cs)
-    assert hm.binder_usage == 1.0   # safe_ratio(0,0) ⇒ 1.0 (empty :typed_term subset)
+    # safe_ratio(0,0) ⇒ 1.0 (empty :typed_term subset)
+    assert hm.binder_usage == 1.0
     assert hm.reduction_activity == 1.0
     assert hm.fuel_exhausted_count == 0
   end
@@ -38,14 +39,31 @@ defmodule Antigen.MutationHealthGateTest do
   test "mutation_metrics reads legacy faults (no depth/wrap_path) without crashing" do
     legacy =
       Antigen.Challenge.new(
-        kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+        kind: :mutant_term,
+        assay: "mutation/rejection",
+        label: :ill_typed,
         # term: "fst on a Nat" spelled inductively (D2, projection case over mk_pair)
-        payload: %{sig: :v1, ctx: [], type: {:data, :Nat, [], []},
-                   term: {:case, {:ctor, :Z, []},
-                          {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
-                          [{:mk_pair, 2, {:var, 1}}]},
-                   fault: %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma,
-                            injected_head: :Nat, scope: nil}}   # no :depth / :wrap_path keys
+        payload: %{
+          sig: :v1,
+          ctx: [],
+          type: {:data, :Nat, [], []},
+          term:
+            {:case, {:ctor, :Z, []},
+             {:lam, Cure.Core.Grade.unrestricted(),
+              {:data, :Sigma,
+               [
+                 {:data, :Nat, [], []},
+                 {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}
+               ], []}, {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 1}}]},
+          fault: %{
+            kind: :proj_non_pair,
+            witness: :head,
+            expected_head: :Sigma,
+            # no :depth / :wrap_path keys
+            injected_head: :Nat,
+            scope: nil
+          }
+        }
       )
 
     m = Runner.mutation_metrics([legacy])

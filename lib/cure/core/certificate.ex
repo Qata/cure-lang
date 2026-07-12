@@ -356,6 +356,7 @@ defmodule Cure.Core.Certificate do
   # closed under composition regardless of this convention's orientation.
   defp compose(a, b) do
     k = length(a)
+
     if k == 0 do
       []
     else
@@ -593,7 +594,11 @@ defmodule Cure.Core.Certificate do
     %{
       roots: Enum.map(st.roots, &(&1 + by)),
       smallers: Enum.map(st.smallers, &shift(&1, by)),
-      recons: Enum.map(st.recons, fn nil -> nil; t -> shift_term(t, by) end)
+      recons:
+        Enum.map(st.recons, fn
+          nil -> nil
+          t -> shift_term(t, by)
+        end)
     }
   end
 
@@ -641,7 +646,6 @@ defmodule Cure.Core.Certificate do
     do:
       calls?(name, s) or calls?(name, m) or
         Enum.any?(brs, fn {_c, _ar, b} -> calls?(name, b) end)
-
 
   # Same fail-closed fallback as `walk_node/4`: an unrecognized node is searched, not
   # assumed call-free. This is the fast path that decides whether `size_change_total?/2`

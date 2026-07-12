@@ -80,7 +80,6 @@ defmodule Cure.Types.StdlibTest do
       # rather than looping.
       assert {:named, _} = Env.deref(env, {:named, "A"})
     end
-
   end
 
   describe "path resolution" do

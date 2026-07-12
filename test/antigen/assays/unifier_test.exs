@@ -10,8 +10,13 @@ defmodule Antigen.Assays.UnifierTest do
   defp m(n), do: {:meta, n}
 
   defp sound_ch(t1, t2, meta_ids) do
-    Challenge.new(kind: :unify_problem, assay: "unify/soundness", label: :translatable,
-      payload: %{t1: t1, t2: t2, ctx: MetaCtx.new(), sig: nil, meta_ids: meta_ids}, seed: 1)
+    Challenge.new(
+      kind: :unify_problem,
+      assay: "unify/soundness",
+      label: :translatable,
+      payload: %{t1: t1, t2: t2, ctx: MetaCtx.new(), sig: nil, meta_ids: meta_ids},
+      seed: 1
+    )
   end
 
   test "V2a soundness baseline: ?0 vs S Z solves and zonked sides are Conv-equal" do
@@ -39,8 +44,13 @@ defmodule Antigen.Assays.UnifierTest do
 
   describe "unify/intrinsic (V2a)" do
     defp intr_ch(t1, t2, meta_ids) do
-      Challenge.new(kind: :unify_problem, assay: "unify/intrinsic", label: :translatable,
-        payload: %{t1: t1, t2: t2, ctx: MetaCtx.new(), sig: nil, meta_ids: meta_ids}, seed: 1)
+      Challenge.new(
+        kind: :unify_problem,
+        assay: "unify/intrinsic",
+        label: :translatable,
+        payload: %{t1: t1, t2: t2, ctx: MetaCtx.new(), sig: nil, meta_ids: meta_ids},
+        seed: 1
+      )
     end
 
     test "baseline: occurs-clean, zonk idempotent, metas eliminated" do
@@ -51,7 +61,14 @@ defmodule Antigen.Assays.UnifierTest do
     test "occurs negative control: a cyclic eu_solution stub infects" do
       ch = intr_ch(m(0), s(z0()), [0])
       # id 0's 'solution' contains {:meta, 0} -> cyclic
-      k = %{Unifier.__real__() | eu_solution: fn _ctx, 0 -> s(m(0)); _ctx, _ -> nil end}
+      k = %{
+        Unifier.__real__()
+        | eu_solution: fn
+            _ctx, 0 -> s(m(0))
+            _ctx, _ -> nil
+          end
+      }
+
       assert {:violation, {:occurs, _}} = Unifier.run(ch, k)
     end
 
@@ -74,52 +91,71 @@ defmodule Antigen.Assays.UnifierTest do
 
   describe "unify_types/fixpoint (V2b)" do
     defp tv(n), do: {:type_var, n}
+
     defp fix_ch(t1, t2) do
-      Challenge.new(kind: :unify_problem, assay: "unify_types/fixpoint", label: :translatable,
-        payload: %{t1: t1, t2: t2}, seed: 1)
+      Challenge.new(
+        kind: :unify_problem,
+        assay: "unify_types/fixpoint",
+        label: :translatable,
+        payload: %{t1: t1, t2: t2},
+        seed: 1
+      )
     end
 
     test "baseline: substituted sides re-unify with no new bindings" do
       assert Unifier.run(fix_ch(tv("T"), :int)) == :ok
       assert Unifier.run(fix_ch({:list, tv("T")}, {:list, :int})) == :ok
-      assert Unifier.run(fix_ch(:int, :float)) == :ok  # widening; note the (:int,:float) direction
+      # widening; note the (:int,:float) direction
+      assert Unifier.run(fix_ch(:int, :float)) == :ok
       assert Unifier.run(fix_ch({:named, "foo"}, {:record, :foo, []})) == :ok
     end
 
     test "negative control: a tu_unify solve that drops a needed binding infects (real re-check catches it)" do
       ch = fix_ch(tv("T"), :int)
       # solve stub deletes T; the REAL tu_reunify rediscovers T:=int, so s' != s
-      k = %{Unifier.__real__() | tu_unify: fn t1, t2, s ->
-        case Cure.Types.Unify.unify(t1, t2, s) do
-          {:ok, sub, tr} -> {:ok, Map.delete(sub, "T"), tr}
-          other -> other
-        end
-      end}
+      k = %{
+        Unifier.__real__()
+        | tu_unify: fn t1, t2, s ->
+            case Cure.Types.Unify.unify(t1, t2, s) do
+              {:ok, sub, tr} -> {:ok, Map.delete(sub, "T"), tr}
+              other -> other
+            end
+          end
+      }
+
       assert {:violation, {:solution_unstable, _, _}} = Unifier.run(ch, k)
     end
   end
 
   describe "unify_types/intrinsic (V2b)" do
     defp itc(t1, t2, expect) do
-      Challenge.new(kind: :unify_problem, assay: "unify_types/intrinsic", label: :translatable,
-        payload: %{t1: t1, t2: t2, expect: expect}, seed: 1)
+      Challenge.new(
+        kind: :unify_problem,
+        assay: "unify_types/intrinsic",
+        label: :translatable,
+        payload: %{t1: t1, t2: t2, expect: expect},
+        seed: 1
+      )
     end
 
     test "baseline: occurs rejects cyclic; apply idempotent; solved var eliminated" do
       assert Unifier.run(itc(tv("T"), :int, :ok)) == :ok
       assert Unifier.run(itc({:list, tv("T")}, {:list, :int}, :ok)) == :ok
-      assert Unifier.run(itc(tv("a"), {:list, tv("a")}, :error)) == :ok  # occurs -> engine errors
+      # occurs -> engine errors
+      assert Unifier.run(itc(tv("a"), {:list, tv("a")}, :error)) == :ok
     end
 
     test "occurs negative control: a tu_unify stub that ACCEPTS a cyclic constraint infects" do
       ch = itc(tv("a"), {:list, tv("a")}, :error)
-      k = %{Unifier.__real__() | tu_unify: fn _t1, _t2, s -> {:ok, s, []} end}  # wrongly accepts
+      # wrongly accepts
+      k = %{Unifier.__real__() | tu_unify: fn _t1, _t2, s -> {:ok, s, []} end}
       assert {:violation, {:occurs_not_detected, _, _}} = Unifier.run(ch, k)
     end
 
     test "var-elim negative control: a leaky tu_apply stub leaves a solved var in place" do
       ch = itc(tv("T"), :int, :ok)
-      k = %{Unifier.__real__() | tu_apply: fn type, _s -> type end}  # identity: never substitutes
+      # identity: never substitutes
+      k = %{Unifier.__real__() | tu_apply: fn type, _s -> type end}
       assert {:violation, {:var_not_eliminated, _}} = Unifier.run(ch, k)
     end
 
@@ -142,15 +178,18 @@ defmodule Antigen.Assays.UnifierTest do
       assert UnifyProblem.elab_intrinsic_challenges() != []
       assert UnifyProblem.types_fixpoint_challenges() != []
       assert UnifyProblem.types_intrinsic_challenges() != []
-      assert Enum.all?(UnifyProblem.elab_soundness_challenges(), & &1.assay == "unify/soundness")
-      assert Enum.all?(UnifyProblem.elab_intrinsic_challenges(), & &1.assay == "unify/intrinsic")
-      assert Enum.all?(UnifyProblem.types_fixpoint_challenges(), & &1.assay == "unify_types/fixpoint")
-      assert Enum.all?(UnifyProblem.types_intrinsic_challenges(), & &1.assay == "unify_types/intrinsic")
+      assert Enum.all?(UnifyProblem.elab_soundness_challenges(), &(&1.assay == "unify/soundness"))
+      assert Enum.all?(UnifyProblem.elab_intrinsic_challenges(), &(&1.assay == "unify/intrinsic"))
+      assert Enum.all?(UnifyProblem.types_fixpoint_challenges(), &(&1.assay == "unify_types/fixpoint"))
+      assert Enum.all?(UnifyProblem.types_intrinsic_challenges(), &(&1.assay == "unify_types/intrinsic"))
     end
 
     test "runner dispatches every unify*/ id and the whole clean catalog is :ok under real ops" do
-      all = UnifyProblem.elab_soundness_challenges() ++ UnifyProblem.elab_intrinsic_challenges() ++
-            UnifyProblem.types_fixpoint_challenges() ++ UnifyProblem.types_intrinsic_challenges()
+      all =
+        UnifyProblem.elab_soundness_challenges() ++
+          UnifyProblem.elab_intrinsic_challenges() ++
+          UnifyProblem.types_fixpoint_challenges() ++ UnifyProblem.types_intrinsic_challenges()
+
       assert Enum.all?(all, fn c -> Runner.replay_one(c) == :ok end)
     end
   end

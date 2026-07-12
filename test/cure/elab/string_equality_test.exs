@@ -35,6 +35,7 @@ defmodule Cure.Elab.StringEqualityTest do
       use Std.Char
       fn streq(a: List(Char), b: List(Char)) -> Bool = a == b
     """
+
     {:ok, env} = Program.elaborate(src)
     fns = Program.reachable_def_names(env, [:streq])
     {:ok, m} = Emit.compile_and_load(env, module: :"Cure.StrEq", functions: fns)

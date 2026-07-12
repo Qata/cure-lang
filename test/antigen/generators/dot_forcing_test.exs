@@ -10,6 +10,7 @@ defmodule Antigen.Generators.DotForcingTest do
     for %Challenge{} = c <- B.interp(DotForcing.gen()) |> Enum.take(@sample) do
       assert c.kind == :dot_forcing
       assert c.label in [:accept, :reject, :unforced]
+
       assert Assays.DotForcing.run(c) == :ok,
              "verdict oracle disagreed on #{c.note} (#{c.label})"
     end

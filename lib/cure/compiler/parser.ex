@@ -130,6 +130,7 @@ defmodule Cure.Compiler.Parser do
       computed_macros: computed,
       literal_macros: literal
     }
+
     {exprs, state} = parse_program(state)
 
     ast =
@@ -289,7 +290,8 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_macro_use(state, keyword) do
     [rule | _] = Map.fetch!(state.active_macros, keyword)
-    state = advance(state)  # consume the keyword token
+    # consume the keyword token
+    state = advance(state)
 
     case match_segments(state, rule.segments, %{}, 0) do
       {:ok, bindings, _progress, state} ->
@@ -301,8 +303,7 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress),
-             macro_got_desc(t), t.line, t.col}
+            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
           )
 
         # Recover: yield the bare keyword variable so the outer parse continues.
@@ -340,8 +341,7 @@ defmodule Cure.Compiler.Parser do
             syntax_fields: macro_syntax_fields(rule.segments),
             line: keyword_token.line,
             col: keyword_token.col
-          ],
-          [rule.elab, input]}, state}
+          ], [rule.elab, input]}, state}
 
       {:error, progress, state} ->
         t = peek(state)
@@ -349,8 +349,7 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress),
-             macro_got_desc(t), t.line, t.col}
+            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
           )
 
         {variable(%Cure.Compiler.Token{
@@ -715,8 +714,8 @@ defmodule Cure.Compiler.Parser do
 
     if chained? do
       error =
-        {:non_associative, Precedence.operator_symbol(token.type), :chained_with,
-         Precedence.operator_symbol(next.type), next.line, next.col}
+        {:non_associative, Precedence.operator_symbol(token.type), :chained_with, Precedence.operator_symbol(next.type),
+         next.line, next.col}
 
       add_error(state, error)
     else
@@ -917,8 +916,7 @@ defmodule Cure.Compiler.Parser do
       # (comparisons) never reaches this prefix clause.
       :lt ->
         case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3)} do
-          {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name},
-           %Token{type: :gt}} ->
+          {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name}, %Token{type: :gt}} ->
             node = {:fresh_name, [line: token.line, col: token.col], name}
             state = state |> advance() |> advance() |> advance() |> advance()
             {node, state}
@@ -1982,10 +1980,12 @@ defmodule Cure.Compiler.Parser do
 
     # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
     # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
-    let_name = case pattern do
-      {:variable, _, n} -> n
-      _ -> "let binding"
-    end
+    let_name =
+      case pattern do
+        {:variable, _, n} -> n
+        _ -> "let binding"
+      end
+
     {grade, type_ann, state} = parse_binder_annotation(state, let_name, [:assign])
 
     # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers

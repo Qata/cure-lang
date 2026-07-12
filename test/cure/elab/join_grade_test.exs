@@ -24,12 +24,18 @@ defmodule Cure.Elab.JoinGradeTest do
   alias Cure.Elab.Program
 
   defp lets(env, name) do
-    env |> Env.get_def(name) |> Map.fetch!(:body) |> Validator.nodes()
+    env
+    |> Env.get_def(name)
+    |> Map.fetch!(:body)
+    |> Validator.nodes()
     |> Enum.count(&match?({:let, _, _, _, _}, &1))
   end
 
   defp calls(env, name, callee) do
-    env |> Env.get_def(name) |> Map.fetch!(:body) |> Validator.nodes()
+    env
+    |> Env.get_def(name)
+    |> Map.fetch!(:body)
+    |> Validator.nodes()
     |> Enum.count(&match?({:global, ^callee}, &1))
   end
 

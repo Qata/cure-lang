@@ -25,11 +25,13 @@ defmodule Antigen.Shrink do
 
   defp first_accepted(_cands, _pred, 0), do: {:none, 0}
   defp first_accepted([], _pred, b), do: {:none, b}
+
   defp first_accepted([k | rest], pred, b) do
     if well_formed?(k) do
       if safe_pred(pred, k), do: {:accepted, k, b - 1}, else: first_accepted(rest, pred, b - 1)
     else
-      first_accepted(rest, pred, b)   # shape-invalid: no pred call, no budget spent
+      # shape-invalid: no pred call, no budget spent
+      first_accepted(rest, pred, b)
     end
   end
 
@@ -51,7 +53,8 @@ defmodule Antigen.Shrink do
     ctx_candidates(ch) ++ field_cands(ch, :type, p.type) ++ field_cands(ch, :term, p.term)
   end
 
-  def candidates(%Challenge{kind: :elab_program}), do: []   # no Term pieces (spec §3/§5.3)
+  # no Term pieces (spec §3/§5.3)
+  def candidates(%Challenge{kind: :elab_program}), do: []
 
   def candidates(%Challenge{} = ch), do: piece_candidates(ch)
 
@@ -102,13 +105,13 @@ defmodule Antigen.Shrink do
         |> Enum.with_index()
         |> Enum.reject(fn {_e, pos} -> pos == d end)
         |> Enum.map(fn
-          {e, pos} when pos < d -> Term.shift(e, -1, d - pos)   # local k>=d-pos shift down
-          {e, _pos} -> e                                         # pos>d: content unchanged
+          # local k>=d-pos shift down
+          {e, pos} when pos < d -> Term.shift(e, -1, d - pos)
+          # pos>d: content unchanged
+          {e, _pos} -> e
         end)
 
-      %{ch | payload: %{p | ctx: new_ctx,
-                            term: Term.shift(p.term, -1, d + 1),
-                            type: Term.shift(p.type, -1, d + 1)}}
+      %{ch | payload: %{p | ctx: new_ctx, term: Term.shift(p.term, -1, d + 1), type: Term.shift(p.type, -1, d + 1)}}
     end
   end
 
@@ -121,10 +124,12 @@ defmodule Antigen.Shrink do
   # all single-edit variants of a term, pre-order (edits AT this node before children)
   defp term_candidates(t) do
     here = rule1(t) ++ rule2(t) ++ rule4(t)
+
     deeper =
       Enum.flat_map(child_slots(t), fn {rebuild, child} ->
         Enum.map(term_candidates(child), rebuild)
       end)
+
     here ++ deeper
   end
 
@@ -140,12 +145,16 @@ defmodule Antigen.Shrink do
   # rule 4: structural unwrap (Task 1: non-ctx rules incl. lam/case de Bruijn)
   defp rule4({:app, f, a}), do: [f, a]
   defp rule4({:ctor, _n, args}), do: args
+
   defp rule4({:case, scrut, _m, branches}) do
-    [scrut | for({_c, 0, body} <- branches, do: body)]   # scrut + arity-0 branch bodies only
+    # scrut + arity-0 branch bodies only
+    [scrut | for({_c, 0, body} <- branches, do: body)]
   end
+
   defp rule4({:lam, _g, _dom, body}) do
     if occurs?(body, 0), do: [], else: [Term.shift(body, -1, 0)]
   end
+
   defp rule4(_), do: []
 
   # child slots: {rebuild_fn, child} for every immediate sub-term (all Core formers)
@@ -153,9 +162,11 @@ defmodule Antigen.Shrink do
   defp child_slots({:lam, g, d, b}), do: [{&{:lam, g, &1, b}, d}, {&{:lam, g, d, &1}, b}]
   defp child_slots({:pi, g, d, c}), do: [{&{:pi, g, &1, c}, d}, {&{:pi, g, d, &1}, c}]
   defp child_slots({:ctor, n, args}), do: slot_list(args, &{:ctor, n, &1})
+
   defp child_slots({:data, n, ps, is}) do
     slot_list(ps, &{:data, n, &1, is}) ++ slot_list(is, &{:data, n, ps, &1})
   end
+
   defp child_slots({:case, s, m, brs}) do
     [{&{:case, &1, m, brs}, s}, {&{:case, s, &1, brs}, m}] ++
       (Enum.with_index(brs)
@@ -163,6 +174,7 @@ defmodule Antigen.Shrink do
          {fn nb -> {:case, s, m, List.replace_at(brs, i, {c, ar, nb})} end, body}
        end))
   end
+
   # (The former :prim child-slot clause retired with the {:prim} node, K2:
   # builtin-op spines are ordinary :app chains, covered by the :app clause.
   # The former :rewrite clause retired with the primitive identity forms,
@@ -182,12 +194,15 @@ defmodule Antigen.Shrink do
 
   defp node_count(t) when is_tuple(t),
     do: 1 + (t |> Tuple.to_list() |> tl() |> Enum.map(&node_count/1) |> Enum.sum())
+
   defp node_count(l) when is_list(l), do: l |> Enum.map(&node_count/1) |> Enum.sum()
   defp node_count(_), do: 0
 
   defp numeral_magnitude({:ctor, :S, [n]}), do: 1 + numeral_magnitude(n)
+
   defp numeral_magnitude(t) when is_tuple(t),
     do: t |> Tuple.to_list() |> tl() |> Enum.map(&numeral_magnitude/1) |> Enum.sum()
+
   defp numeral_magnitude(l) when is_list(l), do: l |> Enum.map(&numeral_magnitude/1) |> Enum.sum()
   defp numeral_magnitude(_), do: 0
 
@@ -196,10 +211,12 @@ defmodule Antigen.Shrink do
   def occurs?({:var, _}, _k), do: false
   def occurs?({:lam, _g, d, b}, k), do: occurs?(d, k) or occurs?(b, k + 1)
   def occurs?({:pi, _g, d, c}, k), do: occurs?(d, k) or occurs?(c, k + 1)
+
   def occurs?({:case, s, m, brs}, k) do
     occurs?(s, k) or occurs?(m, k) or
       Enum.any?(brs, fn {_c, ar, body} -> occurs?(body, k + ar) end)
   end
+
   def occurs?(t, k) when is_tuple(t), do: t |> Tuple.to_list() |> tl() |> Enum.any?(&occurs?(&1, k))
   def occurs?(l, k) when is_list(l), do: Enum.any?(l, &occurs?(&1, k))
   def occurs?(_leaf, _k), do: false
@@ -228,14 +245,22 @@ defmodule Antigen.Shrink do
   defp max_index_below({:var, _}, _depth), do: -1
   defp max_index_below({:lam, _g, d, b}, depth), do: max(max_index_below(d, depth), max_index_below(b, depth + 1))
   defp max_index_below({:pi, _g, d, c}, depth), do: max(max_index_below(d, depth), max_index_below(c, depth + 1))
+
   defp max_index_below({:case, s, m, brs}, depth) do
-    [max_index_below(s, depth), max_index_below(m, depth) |
-     Enum.map(brs, fn {_c, ar, body} -> max_index_below(body, depth + ar) end)] |> Enum.max()
+    [
+      max_index_below(s, depth),
+      max_index_below(m, depth)
+      | Enum.map(brs, fn {_c, ar, body} -> max_index_below(body, depth + ar) end)
+    ]
+    |> Enum.max()
   end
+
   defp max_index_below(t, depth) when is_tuple(t),
     do: t |> Tuple.to_list() |> tl() |> Enum.map(&max_index_below(&1, depth)) |> max_or(-1)
+
   defp max_index_below(l, depth) when is_list(l),
     do: l |> Enum.map(&max_index_below(&1, depth)) |> max_or(-1)
+
   defp max_index_below(_leaf, _depth), do: -1
   defp max_or([], default), do: default
   defp max_or(xs, _default), do: Enum.max(xs)

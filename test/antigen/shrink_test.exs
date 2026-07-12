@@ -7,8 +7,12 @@ defmodule Antigen.ShrinkTest do
 
   # a well-typed-ish artifact whose predicate is purely structural for these unit tests
   defp art(term, ctx \\ []) do
-    Challenge.new(kind: :typed_term, assay: "term/infer_check", label: :well_typed,
-      payload: %{sig: :v1, ctx: ctx, type: {:data, :Nat, [], []}, term: term})
+    Challenge.new(
+      kind: :typed_term,
+      assay: "term/infer_check",
+      label: :well_typed,
+      payload: %{sig: :v1, ctx: ctx, type: {:data, :Nat, [], []}, term: term}
+    )
   end
 
   defp s(n), do: {:ctor, :S, [n]}
@@ -16,10 +20,12 @@ defmodule Antigen.ShrinkTest do
   defp num(k), do: s(num(k - 1))
 
   test "numeral shrink + subterm→atom reduces under a 'contains an S' predicate to a single S Z" do
-    a = art(s(s(s(num(0)))))                       # S(S(S Z)))
+    # S(S(S Z)))
+    a = art(s(s(s(num(0)))))
     pred = fn ch -> match?({:ctor, :S, _}, ch.payload.term) end
     out = Shrink.minimize(a, pred, 1000)
-    assert out.payload.term == s(num(0))           # minimal term still headed by S
+    # minimal term still headed by S
+    assert out.payload.term == s(num(0))
     assert pred.(out)
   end
 
@@ -49,7 +55,8 @@ defmodule Antigen.ShrinkTest do
     # λx:Nat. (var 1)  — body does NOT use var 0 ⇒ unwrap to (var 0) after shift
     a = art({:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:var, 1}}, [{:data, :Nat, [], []}])
     out = Shrink.minimize(a, keep_var_or_lam, 1000)
-    assert out.payload.term == {:var, 0}           # shifted down by 1
+    # shifted down by 1
+    assert out.payload.term == {:var, 0}
   end
 
   test "deterministic + monotone + idempotent" do
@@ -59,7 +66,8 @@ defmodule Antigen.ShrinkTest do
     o2 = Shrink.minimize(a, pred, 1000)
     assert o1 == o2
     assert Shrink.size(o1) <= Shrink.size(a)
-    assert Shrink.minimize(o1, pred, 1000) == o1   # idempotent
+    # idempotent
+    assert Shrink.minimize(o1, pred, 1000) == o1
   end
 
   test "budget caps cost (pred calls), not accepted edits — spec §3" do
@@ -73,12 +81,16 @@ defmodule Antigen.ShrinkTest do
     # makes ZERO progress (the cost cap bites first — correct behavior); a
     # large budget reaches the fixpoint S Z. Rewritten to the spec-faithful
     # behavior (test-encodes-wrong-behavior exception, justified by §3).
-    a = art(num(5))                                       # size 11
+    # size 11
+    a = art(num(5))
     pred = fn ch -> match?({:ctor, :S, _}, ch.payload.term) end
-    assert Shrink.minimize(a, pred, 3).payload.term == num(5)   # 3 pred calls all reject ⇒ no progress
+    # 3 pred calls all reject ⇒ no progress
+    assert Shrink.minimize(a, pred, 3).payload.term == num(5)
     out_full = Shrink.minimize(a, pred, 1000)
-    assert out_full.payload.term == s(num(0))             # fixpoint: S Z
-    assert Shrink.size(out_full) < Shrink.size(a)         # enough budget minimizes
+    # fixpoint: S Z
+    assert out_full.payload.term == s(num(0))
+    # enough budget minimizes
+    assert Shrink.size(out_full) < Shrink.size(a)
   end
 
   test "a predicate that raises is safely treated as reject (LOCKED: pred crashes are rescued)" do
@@ -89,7 +101,9 @@ defmodule Antigen.ShrinkTest do
     # out-of-scope candidate `pred` builds from. Here `pred` raises
     # specifically on `Z`, so the sweep must safely skip over it (not crash)
     # and settle at the last candidate where `pred` holds without raising.
-    a = art(s(s(num(0))))   # S(S(Z))
+    # S(S(Z))
+    a = art(s(s(num(0))))
+
     pred = fn ch ->
       case ch.payload.term do
         {:ctor, :S, _} -> true
@@ -97,8 +111,11 @@ defmodule Antigen.ShrinkTest do
         _ -> false
       end
     end
-    out = Shrink.minimize(a, pred, 1000)   # must not raise
-    assert out.payload.term == s(num(0))   # settles at S Z: Z is reachable but pred raises there
+
+    # must not raise
+    out = Shrink.minimize(a, pred, 1000)
+    # settles at S Z: Z is reachable but pred raises there
+    assert out.payload.term == s(num(0))
     assert pred.(out)
   end
 
@@ -121,8 +138,12 @@ defmodule Antigen.ShrinkTest do
   end
 
   test "every ctx-drop candidate is de-Bruijn closed (regression guard for §7.3)" do
-    a = art({:app, {:var, 0}, {:var, 2}},
-            [{:data, :Nat, [], []}, {:data, :Nat, [], []}, {:data, :Nat, [], []}])
+    a =
+      art(
+        {:app, {:var, 0}, {:var, 2}},
+        [{:data, :Nat, [], []}, {:data, :Nat, [], []}, {:data, :Nat, [], []}]
+      )
+
     for c <- Antigen.Shrink.candidates_for_test(a) do
       assert Antigen.Shrink.closed?(c), "candidate not closed: #{inspect(c.payload)}"
     end
@@ -139,18 +160,29 @@ defmodule Antigen.ShrinkTest do
     # (and mechanically probe-)verified expected output before writing this
     # assertion.
     ctx = [
-      {:data, :Equivalent, [{:type, 0}], [{:var, 0}, {:var, 2}]},   # pos0: local 0 -> abs 1 (pos1); local 2 -> abs 3 (pos3)
-      {:data, :Vec, [], [{:var, 1}]},             # pos1: local 1 -> abs 3 (pos3)
-      {:data, :Nat, [], []},                      # pos2: unreferenced — the sole droppable entry
-      {:data, :Nat, [], []}                       # pos3
+      # pos0: local 0 -> abs 1 (pos1); local 2 -> abs 3 (pos3)
+      {:data, :Equivalent, [{:type, 0}], [{:var, 0}, {:var, 2}]},
+      # pos1: local 1 -> abs 3 (pos3)
+      {:data, :Vec, [], [{:var, 1}]},
+      # pos2: unreferenced — the sole droppable entry
+      {:data, :Nat, [], []},
+      # pos3
+      {:data, :Nat, [], []}
     ]
+
     a = art({:var, 0}, ctx)
-    assert [c] = Antigen.Shrink.candidates_for_test(a)   # only pos2 is unreferenced
+    # only pos2 is unreferenced
+    assert [c] = Antigen.Shrink.candidates_for_test(a)
+
     assert c.payload.ctx == [
-      {:data, :Equivalent, [{:type, 0}], [{:var, 0}, {:var, 1}]},    # pos0: local 2 -> local 1 (target abs shifted 3 -> 2)
-      {:data, :Vec, [], [{:var, 0}]},             # pos1: local 1 -> local 0 (target abs shifted 3 -> 2)
-      {:data, :Nat, [], []}                       # old pos3, now pos2, content unchanged
-    ]
+             # pos0: local 2 -> local 1 (target abs shifted 3 -> 2)
+             {:data, :Equivalent, [{:type, 0}], [{:var, 0}, {:var, 1}]},
+             # pos1: local 1 -> local 0 (target abs shifted 3 -> 2)
+             {:data, :Vec, [], [{:var, 0}]},
+             # old pos3, now pos2, content unchanged
+             {:data, :Nat, [], []}
+           ]
+
     assert Antigen.Shrink.closed?(c)
   end
 
@@ -162,6 +194,7 @@ defmodule Antigen.ShrinkTest do
       c = SigMenu.rebuild_context(env, ch.payload.ctx)
       match?({:ok, _}, Kernel.infer(c, ch.payload.term))
     end
+
     pred = fn ch -> infer_ok?.(ch) and contains_vcons?(ch.payload.term) end
 
     # find a generated well-typed term containing a vcons, then shrink
@@ -197,7 +230,8 @@ defmodule Antigen.ShrinkTest do
       # — this assay fakes a buggy kernel purely to exercise the shrink machinery.
       case Antigen.Assays.Mutation.run(c, fn ctx, t ->
              case Kernel.infer(ctx, t) do
-               {:error, _} -> {:ok, {:type, 0}}   # pretend it type-checks ⇒ wrongly accepted
+               # pretend it type-checks ⇒ wrongly accepted
+               {:error, _} -> {:ok, {:type, 0}}
                ok -> ok
              end
            end) do
@@ -224,12 +258,21 @@ defmodule Antigen.ShrinkTest do
     assert deep, "no deep head_swap mutant sampled"
 
     Antigen.Runner.explore(
-      challenges: [deep], count: 1, assay: BuggyMutationAssay,
-      corpus_path: corpus, seeds_path: Path.join(tmp, "seeds_ignore.sexp"),
+      challenges: [deep],
+      count: 1,
+      assay: BuggyMutationAssay,
+      corpus_path: corpus,
+      seeds_path: Path.join(tmp, "seeds_ignore.sexp"),
       report_dir: tmp
     )
 
-    banked = Antigen.Corpus.stream(corpus) |> Enum.flat_map(fn {:ok, c} -> [c]; _ -> [] end)
+    banked =
+      Antigen.Corpus.stream(corpus)
+      |> Enum.flat_map(fn
+        {:ok, c} -> [c]
+        _ -> []
+      end)
+
     assert [ab] = banked
     # NOTE on what this does/doesn't prove: `Antigen.Assays.Mutation.run/2`
     # (unmodified) treats ANY `{:ok, _}` from `infer_fun` as a violation, and
@@ -257,8 +300,14 @@ defmodule Antigen.ShrinkTest do
       bloated = {:app, {:app, {:global, :plus}, {:ctor, :S, [{:ctor, :Z, []}]}}, {:ctor, :Z, []}}
       fam = Cure.Core.Inductive.family(:F, [], [], 0)
       ctor = Cure.Core.Inductive.ctor(:MkF, [{:x, bloated}], [], [:unrestricted], [])
-      Challenge.new(kind: :family, assay: "positivity", label: :well_typed,
-                    payload: %{family: fam, ctors: [ctor]}, seed: 1)
+
+      Challenge.new(
+        kind: :family,
+        assay: "positivity",
+        label: :well_typed,
+        payload: %{family: fam, ctors: [ctor]},
+        seed: 1
+      )
     end
 
     test "a family's bloated ctor-arg term is shrunk (all-kinds via pieces)" do
@@ -269,6 +318,7 @@ defmodule Antigen.ShrinkTest do
       pred = fn c ->
         match?(%Challenge{kind: :family, payload: %{ctors: [_ | _]}}, c)
       end
+
       out = Shrink.minimize(ch, pred, 500)
       # candidates are produced for a :family now (was []/unsupported before)
       assert Shrink.candidates(ch) != []
@@ -279,8 +329,15 @@ defmodule Antigen.ShrinkTest do
 
     test "typed_term candidate set is unchanged by the generalization" do
       # a representative typed_term; candidates/1 must still include ctx-drop + type/term rewrites
-      ch = Challenge.new(kind: :typed_term, assay: "term/infer_check", label: :well_typed,
-             payload: %{sig: :v1, ctx: [], type: @nat, term: {:ctor, :S, [{:ctor, :Z, []}]}}, seed: 1)
+      ch =
+        Challenge.new(
+          kind: :typed_term,
+          assay: "term/infer_check",
+          label: :well_typed,
+          payload: %{sig: :v1, ctx: [], type: @nat, term: {:ctor, :S, [{:ctor, :Z, []}]}},
+          seed: 1
+        )
+
       cands = Shrink.candidates(ch)
       # S(Z) → Z is rule2; must still be offered on the typed_term term field
       assert Enum.any?(cands, fn c -> c.payload.term == {:ctor, :Z, []} end)
@@ -301,9 +358,20 @@ defmodule Antigen.ShrinkTest do
       # kind (t/tprime committed as convertible); irrelevant to well_formed?/candidates
       # (neither reads `label`), but kept realistic rather than borrowing :def_group's
       # :terminating label.
-      ch = Challenge.new(kind: :stuck_elim, assay: "stuck_elim_delta", label: :positive,
-             payload: %{defs: [%{name: :f, type: @nat, body: {:ctor, :S, [{:ctor, :Z, []}]}}],
-                        focus: [:f], t: {:ctor, :Z, []}, tprime: {:ctor, :Z, []}}, seed: 1)
+      ch =
+        Challenge.new(
+          kind: :stuck_elim,
+          assay: "stuck_elim_delta",
+          label: :positive,
+          payload: %{
+            defs: [%{name: :f, type: @nat, body: {:ctor, :S, [{:ctor, :Z, []}]}}],
+            focus: [:f],
+            t: {:ctor, :Z, []},
+            tprime: {:ctor, :Z, []}
+          },
+          seed: 1
+        )
+
       assert Shrink.well_formed?(ch)
       assert Shrink.candidates(ch) != []
     end

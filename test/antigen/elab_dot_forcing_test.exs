@@ -80,8 +80,8 @@ defmodule Antigen.ElabDotForcingTest do
         )
 
       assert {:violation,
-              {:dot_forcing_relation_wrong, "f1", "identity",
-               %{relation: :flip, base: :accept, variant: :accept}}} = Elab.run(c)
+              {:dot_forcing_relation_wrong, "f1", "identity", %{relation: :flip, base: :accept, variant: :accept}}} =
+               Elab.run(c)
     end
 
     test "relation clause: :same with agreeing sources is :ok" do

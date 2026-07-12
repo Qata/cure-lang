@@ -25,11 +25,13 @@ defmodule Cure.Compiler.MacroUseTest do
     # `now` is defined as a macro; a later `now` use-site expands to Clock.now().
     node =
       parse!("mod M\n  macro Now\n    syntax now becomes Clock.now()\n  fn f() = now\n")
+
     # Find `f`'s body; it must be the expanded Clock.now() call, not a bare
     # `{:variable, _, "now"}`.
     body = find_fn_body(node, "f")
     assert {:function_call, meta, _} = body
-    assert Keyword.get(meta, :name) in ["Clock.now", "now"]  # Clock.now() call shape
+    # Clock.now() call shape
+    assert Keyword.get(meta, :name) in ["Clock.now", "now"]
     refute match?({:variable, _, "now"}, body)
   end
 
@@ -37,8 +39,10 @@ defmodule Cure.Compiler.MacroUseTest do
   defp find_fn_body({:function_def, meta, [body]}, name) do
     if to_string(Keyword.get(meta, :name)) == name, do: body, else: nil
   end
+
   defp find_fn_body({_t, _m, children}, name) when is_list(children),
     do: Enum.find_value(children, &find_fn_body(&1, name))
+
   defp find_fn_body(_, _), do: nil
 
   test "a local macro cannot claim a reserved dispatch keyword (sup stays the supervisor container)" do
@@ -58,15 +62,16 @@ defmodule Cure.Compiler.MacroUseTest do
     Keyword.get(meta, :container_type) == :supervisor or
       (is_list(children) and Enum.any?(children, &has_supervisor?/1))
   end
+
   defp has_supervisor?({_t, _m, children}) when is_list(children),
     do: Enum.any?(children, &has_supervisor?/1)
+
   defp has_supervisor?(_), do: false
 
   test "a one-hole local macro use-site binds the hole and substitutes it" do
     node =
-      parse!(
-        "mod M\n  macro Every\n    syntax every <t: Code> becomes Timer.repeat(t)\n  fn f() = every 500\n"
-      )
+      parse!("mod M\n  macro Every\n    syntax every <t: Code> becomes Timer.repeat(t)\n  fn f() = every 500\n")
+
     body = find_fn_body(node, "f")
     # every 500  ==>  Timer.repeat(500)
     assert {:function_call, meta, [arg]} = body
@@ -80,9 +85,8 @@ defmodule Cure.Compiler.MacroUseTest do
     # third sibling; segment matching must consume it so the container has
     # exactly the two real top-level forms (macro_def and fn f()).
     node =
-      parse!(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say hello\n"
-      )
+      parse!("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say hello\n")
+
     {:container, _meta, children} = node
     assert length(children) == 2
     body = find_fn_body(node, "f")

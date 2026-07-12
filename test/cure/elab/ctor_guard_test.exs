@@ -84,9 +84,12 @@ defmodule Cure.Elab.CtorGuardTest do
       )
 
     g = fn b -> apply(mod, :g, [apply(mod, b, [])]) end
-    assert g.(:mk0) == apply(mod, :one, [])   # guard fires
-    assert g.(:mk1) == apply(mod, :zero, [])  # guard fails ⇒ wildcard default
-    assert g.(:mkE) == apply(mod, :zero, [])  # Nil ⇒ wildcard default
+    # guard fires
+    assert g.(:mk0) == apply(mod, :one, [])
+    # guard fails ⇒ wildcard default
+    assert g.(:mk1) == apply(mod, :zero, [])
+    # Nil ⇒ wildcard default
+    assert g.(:mkE) == apply(mod, :zero, [])
   end
 
   # A constructor whose arms are ALL guarded, with no unguarded arm and no outer

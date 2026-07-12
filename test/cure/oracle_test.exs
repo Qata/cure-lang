@@ -24,7 +24,12 @@ defmodule Cure.OracleTest do
 
     test "cure_stricter without a reason is inconsistent" do
       assert {:error, _} =
-               Oracle.consistent(%{"cure" => "reject", "idris" => "accept", "relation" => "cure_stricter", "reason" => ""})
+               Oracle.consistent(%{
+                 "cure" => "reject",
+                 "idris" => "accept",
+                 "relation" => "cure_stricter",
+                 "reason" => ""
+               })
     end
 
     test "cure-accept/idris-reject is never benign — no relation label rescues it" do

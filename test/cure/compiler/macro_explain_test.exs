@@ -41,6 +41,7 @@ defmodule Cure.Compiler.MacroExplainTest do
 
   defp macro_def!(src) do
     node = parse!(src)
+
     find = fn find, n ->
       case n do
         {:macro_def, _, _} = m -> m
@@ -48,6 +49,7 @@ defmodule Cure.Compiler.MacroExplainTest do
         _ -> nil
       end
     end
+
     find.(find, node)
   end
 

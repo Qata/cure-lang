@@ -385,8 +385,7 @@ defmodule Cure.Elab.Emit do
                 {:fun, @line, {:function, name, n}}
 
               {mod, fun} ->
-                {:fun, @line,
-                 {:function, {:atom, @line, mod}, {:atom, @line, fun}, {:integer, @line, n}}}
+                {:fun, @line, {:function, {:atom, @line, mod}, {:atom, @line, fun}, {:integer, @line, n}}}
             end
         end
 
@@ -615,7 +614,7 @@ defmodule Cure.Elab.Emit do
   defp erl_binop(:lt), do: :<
   defp erl_binop(:le), do: :"=<"
   defp erl_binop(:gt), do: :>
-  defp erl_binop(:ge), do: :">="
+  defp erl_binop(:ge), do: :>=
   defp erl_binop(:and), do: :and
   defp erl_binop(:or), do: :or
 

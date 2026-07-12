@@ -68,9 +68,9 @@ defmodule Cure.Elab.Erase do
           args
           |> Enum.zip(padded)
           # A runtime value exists for every grade EXCEPT `0`. Asking
-        # `q == :unrestricted` would silently drop `:linear` and `:affine`
-        # arguments — the grade carrier is not a two-point lattice any more.
-        |> Enum.filter(fn {_arg, q} -> Grade.present?(q) end)
+          # `q == :unrestricted` would silently drop `:linear` and `:affine`
+          # arguments — the grade carrier is not a two-point lattice any more.
+          |> Enum.filter(fn {_arg, q} -> Grade.present?(q) end)
           |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
           |> Enum.reduce({:global, name}, fn arg, acc -> {:app, acc, arg} end)
         else
@@ -101,9 +101,9 @@ defmodule Cure.Elab.Erase do
             fields
             |> Enum.zip(quantities)
             # A runtime value exists for every grade EXCEPT `0`. Asking
-        # `q == :unrestricted` would silently drop `:linear` and `:affine`
-        # arguments — the grade carrier is not a two-point lattice any more.
-        |> Enum.filter(fn {_arg, q} -> Grade.present?(q) end)
+            # `q == :unrestricted` would silently drop `:linear` and `:affine`
+            # arguments — the grade carrier is not a two-point lattice any more.
+            |> Enum.filter(fn {_arg, q} -> Grade.present?(q) end)
             |> Enum.map(fn {arg, _q} -> erase(env, arg) end)
 
           extra

@@ -12,8 +12,13 @@ defmodule Antigen.Assays.NormalizerTest do
   defp add(a, b), do: {:binary_op, [operator: :+], [a, b]}
 
   defp diff_ch(ast, bindings, core_expected) do
-    Challenge.new(kind: :surface_expr, assay: "normalizer/differential",
-      label: :translatable, payload: %{ast: ast, bindings: bindings, core_expected: core_expected}, seed: 1)
+    Challenge.new(
+      kind: :surface_expr,
+      assay: "normalizer/differential",
+      label: :translatable,
+      payload: %{ast: ast, bindings: bindings, core_expected: core_expected},
+      seed: 1
+    )
   end
 
   test "V1a baseline: normalize(3+5) agrees with the kernel norm of the independent encoding" do
@@ -23,7 +28,8 @@ defmodule Antigen.Assays.NormalizerTest do
 
   test "V1a from_core-style negative control: a normalize stub with a corrupted result infects" do
     ch = diff_ch(add(lit(3), lit(5)), %{}, {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}})
-    k = %{Normalizer.__real__() | normalize: fn _ast, _b -> lit(7) end}  # wrong: says 7, not 8
+    # wrong: says 7, not 8
+    k = %{Normalizer.__real__() | normalize: fn _ast, _b -> lit(7) end}
     assert {:violation, {:normalize_disagrees_with_kernel, _, _}} = Normalizer.run(ch, k)
   end
 
@@ -33,7 +39,8 @@ defmodule Antigen.Assays.NormalizerTest do
     # {:global,:n} the kernel norm of core_expected (5) is not convertible to.
     ast = add({:variable, [], "n"}, lit(1))
     ch = diff_ch(ast, %{"n" => lit(4)}, {:app, {:app, {:global, :int_add}, {:int_lit, 4}}, {:int_lit, 1}})
-    k = %{Normalizer.__real__() | normalize: fn a, _b -> a end}  # identity: never substitutes
+    # identity: never substitutes
+    k = %{Normalizer.__real__() | normalize: fn a, _b -> a end}
     assert {:violation, {:normalize_disagrees_with_kernel, _, _}} = Normalizer.run(ch, k)
   end
 
@@ -44,27 +51,58 @@ defmodule Antigen.Assays.NormalizerTest do
     # fragment for a translatable input; only a broken stub can violate that).
     ch = diff_ch(add(lit(3), lit(5)), %{}, {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}})
     k = %{Normalizer.__real__() | normalize: fn _ast, _b -> {:untranslatable_probe, [], [lit(8)]} end}
+
     assert {:violation, {:normalize_disagrees_with_kernel, _, {:untranslatable_result, _}}} =
              Normalizer.run(ch, k)
   end
 
   describe "normalizer/equal (V1b soundness)" do
     defp eq_ch(a, ca, b, cb, label) do
-      Challenge.new(kind: :surface_expr, assay: "normalizer/equal", label: label,
-        payload: %{a: a, b: b, bindings: %{}, core_a: ca, core_b: cb}, seed: 1)
+      Challenge.new(
+        kind: :surface_expr,
+        assay: "normalizer/equal",
+        label: label,
+        payload: %{a: a, b: b, bindings: %{}, core_a: ca, core_b: cb},
+        seed: 1
+      )
     end
 
     # Same spine-not-`:+` note as above applies to every hand-built core_a/core_b here.
     test "baseline: equal?(3+5, 8)=true and kernel agrees; equal?(3+5, 9)=false and kernel agrees" do
-      t = eq_ch(add(lit(3), lit(5)), {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}}, lit(8), {:int_lit, 8}, :kernel_equal)
-      f = eq_ch(add(lit(3), lit(5)), {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}}, lit(9), {:int_lit, 9}, :kernel_unequal)
+      t =
+        eq_ch(
+          add(lit(3), lit(5)),
+          {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}},
+          lit(8),
+          {:int_lit, 8},
+          :kernel_equal
+        )
+
+      f =
+        eq_ch(
+          add(lit(3), lit(5)),
+          {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}},
+          lit(9),
+          {:int_lit, 9},
+          :kernel_unequal
+        )
+
       assert Normalizer.run(t) == :ok
       assert Normalizer.run(f) == :ok
     end
 
     test "unsound negative control: equal? returns true for a kernel-unequal pair infects" do
-      f = eq_ch(add(lit(3), lit(5)), {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}}, lit(9), {:int_lit, 9}, :kernel_unequal)
-      k = %{Normalizer.__real__() | equal: fn _a, _b, _bnd -> true end}  # unsound: claims 8 == 9
+      f =
+        eq_ch(
+          add(lit(3), lit(5)),
+          {:app, {:app, {:global, :int_add}, {:int_lit, 3}}, {:int_lit, 5}},
+          lit(9),
+          {:int_lit, 9},
+          :kernel_unequal
+        )
+
+      # unsound: claims 8 == 9
+      k = %{Normalizer.__real__() | equal: fn _a, _b, _bnd -> true end}
       assert {:violation, {:equal_unsound, _, _}} = Normalizer.run(f, k)
     end
   end
@@ -72,9 +110,15 @@ defmodule Antigen.Assays.NormalizerTest do
   describe "normalizer/intrinsic (V1c)" do
     # {:untranslatable_probe, ...} is outside CoreBridge's grammar (to_core -> :error).
     defp intr_ch(ast) do
-      Challenge.new(kind: :surface_expr, assay: "normalizer/intrinsic", label: :untranslatable,
-        payload: %{ast: ast}, seed: 1)
+      Challenge.new(
+        kind: :surface_expr,
+        assay: "normalizer/intrinsic",
+        label: :untranslatable,
+        payload: %{ast: ast},
+        seed: 1
+      )
     end
+
     defp untranslatable(inner), do: {:untranslatable_probe, [], [inner]}
 
     test "baseline: normalize is a fixpoint and does not grow the term" do
@@ -88,16 +132,21 @@ defmodule Antigen.Assays.NormalizerTest do
       # count each call (term_size is tag-blind), so the size guard passes and
       # the oscillation exposes genuine non-idempotence: once != p.ast's shape,
       # twice flips back, so twice != once.
-      k = %{Normalizer.__real__() | normalize: fn
-        {:untranslatable_probe, m, [inner]}, _b -> {:not_fixed, m, [inner]}
-        {:not_fixed, m, [inner]}, _b -> {:untranslatable_probe, m, [inner]}
-        ast, _b -> ast
-      end}
+      k = %{
+        Normalizer.__real__()
+        | normalize: fn
+            {:untranslatable_probe, m, [inner]}, _b -> {:not_fixed, m, [inner]}
+            {:not_fixed, m, [inner]}, _b -> {:untranslatable_probe, m, [inner]}
+            ast, _b -> ast
+          end
+      }
+
       assert {:violation, {:not_idempotent, _, _}} = Normalizer.run(intr_ch(untranslatable(lit(1))), k)
     end
 
     test "size-increase negative control" do
-      k = %{Normalizer.__real__() | normalize: fn ast, _b -> {:dup, [], [ast, ast]} end}  # strictly larger
+      # strictly larger
+      k = %{Normalizer.__real__() | normalize: fn ast, _b -> {:dup, [], [ast, ast]} end}
       assert {:violation, {:size_increased, _, _}} = Normalizer.run(intr_ch(untranslatable(lit(1))), k)
     end
   end
@@ -107,13 +156,15 @@ defmodule Antigen.Assays.NormalizerTest do
 
     test "each catalog is non-empty and correctly tagged" do
       assert SurfaceExpr.differential_challenges() != []
-      assert Enum.all?(SurfaceExpr.differential_challenges(), & &1.assay == "normalizer/differential")
-      assert Enum.all?(SurfaceExpr.equal_challenges(), & &1.assay == "normalizer/equal")
-      assert Enum.all?(SurfaceExpr.intrinsic_challenges(), & &1.assay == "normalizer/intrinsic")
+      assert Enum.all?(SurfaceExpr.differential_challenges(), &(&1.assay == "normalizer/differential"))
+      assert Enum.all?(SurfaceExpr.equal_challenges(), &(&1.assay == "normalizer/equal"))
+      assert Enum.all?(SurfaceExpr.intrinsic_challenges(), &(&1.assay == "normalizer/intrinsic"))
     end
 
     test "runner dispatches each normalizer/* id and every catalog entry is clean under the real kernel" do
-      all = SurfaceExpr.differential_challenges() ++ SurfaceExpr.equal_challenges() ++ SurfaceExpr.intrinsic_challenges()
+      all =
+        SurfaceExpr.differential_challenges() ++ SurfaceExpr.equal_challenges() ++ SurfaceExpr.intrinsic_challenges()
+
       assert Enum.all?(all, fn c -> Runner.replay_one(c) == :ok end)
     end
   end

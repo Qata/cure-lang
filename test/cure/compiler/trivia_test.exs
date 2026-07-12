@@ -46,8 +46,10 @@ defmodule Cure.Compiler.TriviaTest do
 
   test "leading comment attaches to the following definition" do
     ast = attach("mod M\n\n# doc\nfn f() -> Int = 1\n", "a.cure")
+
     leadings =
       ast |> collect_meta(:leading) |> List.flatten() |> Enum.map(&elem(&1, 1)) |> Enum.map(&String.trim/1)
+
     assert "doc" in leadings
   end
 
@@ -59,9 +61,12 @@ defmodule Cure.Compiler.TriviaTest do
       x
       # nested trailer
     """
+
     ast = attach(src, "b.cure")
+
     trailers =
       ast |> collect_meta(:trailer) |> List.flatten() |> Enum.map(&elem(&1, 1)) |> Enum.map(&String.trim/1)
+
     assert "nested trailer" in trailers
   end
 
@@ -71,8 +76,10 @@ defmodule Cure.Compiler.TriviaTest do
     # value child's position, not read off the pair node itself.
     src = "mod M\nfn f() -> Int =\n  let m = %{x: 1, y: 2}  # tail comment\n  1\n"
     ast = attach(src, "pair.cure")
+
     trailings =
       ast |> collect_meta(:trailing) |> List.flatten() |> Enum.map(&elem(&1, 1)) |> Enum.map(&String.trim/1)
+
     assert "tail comment" in trailings
   end
 
@@ -83,10 +90,12 @@ defmodule Cure.Compiler.TriviaTest do
     # own and must not be recursed into.
     src = "mod M\nfn f() -> Int =\n  let g = fn (x) -> x\n  # after the let\n  g(1)\n"
     ast = attach(src, "lambda.cure")
+
     texts =
       ((ast |> collect_meta(:trailer) |> List.flatten()) ++ (ast |> collect_meta(:leading) |> List.flatten()))
       |> Enum.map(&elem(&1, 1))
       |> Enum.map(&String.trim/1)
+
     assert "after the let" in texts
   end
 
@@ -103,13 +112,16 @@ defmodule Cure.Compiler.TriviaTest do
 
   # helper: collect all values of a given meta key across the AST
   defp collect_meta(ast, key, acc \\ [])
+
   defp collect_meta({_k, m, ch}, key, acc) when is_list(m) and is_list(ch) do
     acc = if v = Keyword.get(m, key), do: [v | acc], else: acc
     Enum.reduce(ch, acc, &collect_meta(&1, key, &2))
   end
+
   defp collect_meta({_k, m, _v}, key, acc) when is_list(m) do
     if v = Keyword.get(m, key), do: [v | acc], else: acc
   end
+
   defp collect_meta(l, key, acc) when is_list(l), do: Enum.reduce(l, acc, &collect_meta(&1, key, &2))
   defp collect_meta(_, _key, acc), do: acc
 end

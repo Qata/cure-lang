@@ -13,10 +13,14 @@ defmodule Cure.Core.BranchUnifyTest do
 
   defp sig do
     Env.empty()
-    |> Inductive.declare(Inductive.family(:Dec, [], [], 0),
-         [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])])
-    |> Inductive.declare(Inductive.family(:Ix, [], [{:n, @dec}], 0),
-         [Inductive.ctor(:wrap, [{:p, @dec}], [{:ctor, :Causal, []}])])
+    |> Inductive.declare(
+      Inductive.family(:Dec, [], [], 0),
+      [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]
+    )
+    |> Inductive.declare(
+      Inductive.family(:Ix, [], [{:n, @dec}], 0),
+      [Inductive.ctor(:wrap, [{:p, @dec}], [{:ctor, :Causal, []}])]
+    )
   end
 
   defp causal_val, do: Eval.eval({:ctor, :Causal, []}, [])

@@ -12,8 +12,9 @@ defmodule Antigen.Generators.MutationTest do
   defp proj_on_nat do
     nat = {:data, :Nat, [], []}
 
-    {:case, {:ctor, :Z, []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, nat},
-     [{:mk_pair, 2, {:var, 1}}]}
+    {:case, {:ctor, :Z, []},
+     {:lam, Cure.Core.Grade.unrestricted(),
+      {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, nat}, [{:mk_pair, 2, {:var, 1}}]}
   end
 
   test "every operator produces a term the kernel REJECTS under infer (construction guarantee)" do
@@ -23,6 +24,7 @@ defmodule Antigen.Generators.MutationTest do
     for kind <- Mutation.operators() do
       {gen, fault} = Mutation.build(ctx, kind)
       assert fault.kind == kind
+
       for term <- sample(gen, 20) do
         assert {:error, _} = Kernel.infer(ctx, term),
                "operator #{kind} produced an infer-ACCEPTED term: #{inspect(term)}"
@@ -41,15 +43,18 @@ defmodule Antigen.Generators.MutationTest do
         :head ->
           assert f.expected_head != f.injected_head,
                  "#{kind}: heads must differ (#{inspect(f.expected_head)} vs #{inspect(f.injected_head)})"
+
         :index ->
           # distinct closed index constructors ⇒ non-convertible, decided syntactically.
           # Laundered through heads_differ?/2 so the 1.20 checker doesn't fold this
           # (deliberately disjoint) comparison to a constant — the runtime check is real.
           assert heads_differ?(f.expected_head, f.injected_head)
+
         :level ->
           {:type, req} = f.expected_head
           {:type, act} = f.injected_head
           assert act > req, "#{kind}: injected level must exceed required (predicativity)"
+
         :scope ->
           {k, gamma_len} = f.scope
           assert k >= gamma_len, "#{kind}: var index must be out of scope"
@@ -59,24 +64,29 @@ defmodule Antigen.Generators.MutationTest do
 
   test "mutant/0 emits a well-formed :mutant_term challenge that the kernel rejects" do
     alias Antigen.Challenge
+
     for c <- sample(Mutation.mutant(), 60) do
       assert %Challenge{kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed, payload: p} = c
       assert p.sig == :v1
       assert p.fault.kind in Mutation.operators()
       env = SigMenu.env_of(:v1)
       ctx = SigMenu.rebuild_context(env, p.ctx)
-      assert {:error, _} = Kernel.infer(ctx, p.term)   # generation totality + rejection
+      # generation totality + rejection
+      assert {:error, _} = Kernel.infer(ctx, p.term)
     end
   end
 
   test "each wrapper is non-contaminating and fault-driven (deterministic, fixed filler)" do
     ctx = Context.empty(SigMenu.env_of(:v1))
-    wt = {:ctor, :Z, []}                 # well-typed Nat
-    fault = proj_on_nat()                # intrinsically ill-typed
+    # well-typed Nat
+    wt = {:ctor, :Z, []}
+    # intrinsically ill-typed
+    fault = proj_on_nat()
 
     for kind <- Mutation.wrappers() do
       assert {:ok, _} = Kernel.infer(ctx, Mutation.wrap(wt, kind, wt)),
              "wrapper #{kind} contaminated a well-typed inner"
+
       assert {:error, _} = Kernel.infer(ctx, Mutation.wrap(fault, kind, wt)),
              "wrapper #{kind} did not propagate the inner fault"
     end
@@ -121,7 +131,8 @@ defmodule Antigen.Generators.MutationTest do
         p.fault.depth
       end
 
-    assert Enum.max(depths) >= 4   # deep mutants actually generated
+    # deep mutants actually generated
+    assert Enum.max(depths) >= 4
   end
 
   # -- Tier-B reach expansion: new-type-former mutation operators --------------
@@ -135,8 +146,10 @@ defmodule Antigen.Generators.MutationTest do
     ctx = Context.empty(env)
     {gen, fault} = Mutation.build(ctx, :pair_component)
     assert fault.kind == :pair_component
+
     for mutant <- sample(gen, 5) do
-      refute match?({:pair, _, _}, mutant)   # never a bare :pair (would crash Kernel.infer)
+      # never a bare :pair (would crash Kernel.infer)
+      refute match?({:pair, _, _}, mutant)
       assert {:error, _} = Kernel.infer(ctx, mutant)
     end
   end
@@ -148,8 +161,11 @@ defmodule Antigen.Generators.MutationTest do
     # well-typed mk_pair — the same check-embedded shape as the operator's output.
     nat = {:data, :Nat, [], []}
 
-    good = {:app, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, {:var, 0}},
-            {:ctor, :mk_pair, [{:ctor, :Z, []}, {:ctor, :Z, []}]}}
+    good =
+      {:app,
+       {:lam, Cure.Core.Grade.unrestricted(),
+        {:data, :Sigma, [nat, {:lam, Cure.Core.Grade.unrestricted(), nat, nat}], []}, {:var, 0}},
+       {:ctor, :mk_pair, [{:ctor, :Z, []}, {:ctor, :Z, []}]}}
 
     assert {:ok, _} = Kernel.infer(ctx, good)
   end
@@ -159,7 +175,7 @@ defmodule Antigen.Generators.MutationTest do
     ctx = Context.empty(env)
     {gen, fault} = Mutation.build(ctx, :app_result)
     assert fault.kind == :app_result
-    for mutant <- sample(gen, 5), do: assert {:error, _} = Kernel.infer(ctx, mutant)
+    for mutant <- sample(gen, 5), do: assert({:error, _} = Kernel.infer(ctx, mutant))
   end
 
   test "app_result's well-typed analog is accepted (operator genuinely ill-types)" do
@@ -176,8 +192,10 @@ defmodule Antigen.Generators.MutationTest do
     ctx = Context.empty(env)
     {gen, fault} = Mutation.build(ctx, :type_param_mismatch)
     assert fault.kind == :type_param_mismatch
+
     for mutant <- sample(gen, 5) do
-      refute match?({:ctor, :Cons, _}, mutant)   # never bare (→ :ctor_requires_checking_mode)
+      # never bare (→ :ctor_requires_checking_mode)
+      refute match?({:ctor, :Cons, _}, mutant)
       assert {:error, _} = Kernel.infer(ctx, mutant)
     end
   end
@@ -186,8 +204,11 @@ defmodule Antigen.Generators.MutationTest do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
     list_nat = {:data, :List, [{:data, :Nat, [], []}], []}
-    good = {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}},
-            {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
+
+    good =
+      {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}},
+       {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
+
     assert {:ok, _} = Kernel.infer(ctx, good)
   end
 

@@ -169,6 +169,7 @@ defmodule Cure.Elab.Interface do
 
   defp method_type_asts({:function_def, m, _body}) do
     param_types = m |> Keyword.get(:params, []) |> Enum.map(fn {:param, pm, _} -> Keyword.fetch!(pm, :type) end)
+
     case Keyword.get(m, :return_type) do
       nil -> param_types
       rt -> param_types ++ [rt]

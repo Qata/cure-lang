@@ -71,6 +71,7 @@ defmodule Cure.Compiler.DepGraphTest do
 
       {:ok, graph} = DepGraph.scan([a])
       assert {:ok, [^a], []} = DepGraph.order(graph)
+
       assert graph.nodes[a].order_deps == [] or
                Enum.all?(graph.nodes[a].order_deps, &(&1.target in ["Std.List", "NotInSet"]))
     end

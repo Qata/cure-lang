@@ -8,7 +8,10 @@ defmodule Cure.Core.QuoteTest do
   end
 
   test "round-trips a neutral applied under binders (level->index correct)" do
-    t = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:app, {:var, 1}, {:var, 0}}}}
+    t =
+      {:lam, Cure.Core.Grade.unrestricted(), {:type, 0},
+       {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:app, {:var, 1}, {:var, 0}}}}
+
     assert t == Quote.reify(Eval.eval(t, []), 0)
   end
 

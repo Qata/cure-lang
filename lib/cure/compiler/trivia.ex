@@ -157,8 +157,13 @@ defmodule Cure.Compiler.Trivia do
 
   defp node_span(node) do
     case points(node) do
-      [] -> nil
-      pts -> {sl, _} = Enum.min(pts); {el, _} = Enum.max(pts); {sl, el}
+      [] ->
+        nil
+
+      pts ->
+        {sl, _} = Enum.min(pts)
+        {el, _} = Enum.max(pts)
+        {sl, el}
     end
   end
 

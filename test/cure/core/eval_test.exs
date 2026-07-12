@@ -3,7 +3,8 @@ defmodule Cure.Core.EvalTest do
   alias Cure.Core.Eval
 
   test "beta-reduces an application" do
-    assert {:vtype, 0} == Eval.eval({:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}}, [])
+    assert {:vtype, 0} ==
+             Eval.eval({:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}}, [])
   end
 
   test "iota-reduces mk_pair projections via a single-branch case" do
@@ -25,6 +26,7 @@ defmodule Cure.Core.EvalTest do
   test "a stuck projection on a neutral stays neutral" do
     # Inductive Sigma (D2): a projection case on a neutral scrutinee is a stuck ncase.
     motive = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}
+
     assert {:vneutral, {:ncase, {:nvar, 0}, _, _}} =
              Eval.eval({:case, {:var, 0}, motive, [{:mk_pair, 2, {:var, 1}}]}, [{:vneutral, {:nvar, 0}}])
   end

@@ -176,12 +176,25 @@ defmodule Cure.Core.ValidatorTest do
 
     test "a clean def still admits under the default (non-breaking)" do
       # idty : Type 0 -> Type 0  ;  body = λx. x  (clean, admits)
-      env = Env.add_def(Env.empty(), :idty, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}})
+      env =
+        Env.add_def(
+          Env.empty(),
+          :idty,
+          {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}},
+          {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}
+        )
+
       assert :ok == Kernel.check_def(env, :idty)
     end
 
     test "with a reject-override config, a hole-bearing def fails admission" do
-      env = Env.add_def(Env.empty(), :withhole, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:hole, :h}})
+      env =
+        Env.add_def(
+          Env.empty(),
+          :withhole,
+          {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}},
+          {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:hole, :h}}
+        )
 
       Application.put_env(:cure, :final_core_config, Map.put(Validator.wave0_config(), :no_hole, :reject))
       on_exit(fn -> Application.delete_env(:cure, :final_core_config) end)

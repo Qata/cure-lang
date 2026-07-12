@@ -171,7 +171,7 @@ defmodule Cure.Migrate do
   @universe_names ~w(Type)
 
   defp builtin_type_names do
-    (Cure.Types.Env.new().types |> Map.keys()) ++ @universe_names |> MapSet.new()
+    ((Cure.Types.Env.new().types |> Map.keys()) ++ @universe_names) |> MapSet.new()
   end
 
   # Every type name this file introduces, gathered by a full pre-order walk:

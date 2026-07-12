@@ -158,6 +158,7 @@ defmodule Cure.Core.CompactNatTest do
       # `Bounded` is unregistered here, so the head falls to a global spine — the
       # point is the ARGUMENT: it is `{:nat_lit, 5}`, not the old `{:global, :\"5\"}`.
       ast = {:function_call, [name: "Bounded"], [num(5)]}
+
       assert {:ok, {:app, {:global, :Bounded}, {:nat_lit, 5}}} =
                Declarations.lower_type(ast, [], env)
     end

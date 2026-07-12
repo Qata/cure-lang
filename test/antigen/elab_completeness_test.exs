@@ -18,8 +18,14 @@ defmodule Antigen.ElabCompletenessTest do
       # sanity: this control program really does elaborate today
       assert {:ok, _} = Program.elaborate(src)
 
-      c = Challenge.new(kind: :elab_program, assay: "elab/completeness", label: :well_typed,
-                        payload: %{id: "control", src: src})
+      c =
+        Challenge.new(
+          kind: :elab_program,
+          assay: "elab/completeness",
+          label: :well_typed,
+          payload: %{id: "control", src: src}
+        )
+
       assert :ok = Elab.run(c)
     end
 
@@ -44,8 +50,13 @@ defmodule Antigen.ElabCompletenessTest do
       end
       """
 
-      c = Challenge.new(kind: :elab_program, assay: "elab/completeness", label: :well_typed,
-                        payload: %{id: "known_reject", src: bad_src})
+      c =
+        Challenge.new(
+          kind: :elab_program,
+          assay: "elab/completeness",
+          label: :well_typed,
+          payload: %{id: "known_reject", src: bad_src}
+        )
 
       assert {:violation, {:rejected_well_typed, "known_reject", _}} = Elab.run(c)
     end
@@ -53,14 +64,27 @@ defmodule Antigen.ElabCompletenessTest do
     test "metamorphic assay is :ok when base and variant agree, fires when they diverge" do
       src = ElabComplete.source("idx_only/var/rebuild")
 
-      agree = Challenge.new(kind: :elab_program, assay: "elab/metamorphic", label: :none,
-                            payload: %{id: "x", transform: "identity", base_src: src, variant_src: src})
+      agree =
+        Challenge.new(
+          kind: :elab_program,
+          assay: "elab/metamorphic",
+          label: :none,
+          payload: %{id: "x", transform: "identity", base_src: src, variant_src: src}
+        )
+
       assert :ok = Elab.run(agree)
 
       # Force a divergence: an accepting base vs a deliberately broken variant.
       broken = String.replace(src, "match v", "match nonexistent_var")
-      diverge = Challenge.new(kind: :elab_program, assay: "elab/metamorphic", label: :none,
-                              payload: %{id: "x", transform: "break", base_src: src, variant_src: broken})
+
+      diverge =
+        Challenge.new(
+          kind: :elab_program,
+          assay: "elab/metamorphic",
+          label: :none,
+          payload: %{id: "x", transform: "break", base_src: src, variant_src: broken}
+        )
+
       assert {:violation, {:verdict_not_invariant, "x", "break", _}} = Elab.run(diverge)
     end
   end

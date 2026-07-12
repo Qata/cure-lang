@@ -25,6 +25,7 @@ defmodule Cure.Elab.SemigroupConcatTest do
       fn go() -> List(Int) = [1, 2] <> [3, 4]
     end
     """
+
     assert eval(src, :go, :"Cure.SgAngle") == [1, 2, 3, 4]
   end
 
@@ -36,6 +37,7 @@ defmodule Cure.Elab.SemigroupConcatTest do
       fn go() -> List(Int) = [1, 2] + [3, 4]
     end
     """
+
     assert eval(src, :go, :"Cure.SgPlus") == [1, 2, 3, 4]
   end
 
@@ -47,6 +49,7 @@ defmodule Cure.Elab.SemigroupConcatTest do
       fn go() -> String = "ab" <> "cd"
     end
     """
+
     assert eval(src, :go, :"Cure.SgStr") == ~c"abcd"
   end
 
@@ -66,6 +69,7 @@ defmodule Cure.Elab.SemigroupConcatTest do
       fn go() -> Int = length([1, 2] <> [3])
     end
     """
+
     assert eval(src, :go, :"Cure.SgChecked") == 3
   end
 end

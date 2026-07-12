@@ -5,28 +5,38 @@ defmodule Antigen.Assays.ErasureTest do
   alias Cure.Core.{Env, Inductive}
 
   defp il(n), do: {:int_lit, n}
+
   defp ctor_env do
     Env.empty()
     |> Inductive.declare(Inductive.family(:P, [], [], 0), [
-         Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:unrestricted, :erased]),
-         Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :unrestricted])
-       ])
+      Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:unrestricted, :erased]),
+      Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :unrestricted])
+    ])
   end
 
   defp idem_ch(env, t) do
-    Challenge.new(kind: :erasure_term, assay: "erasure/idempotent", label: :positive,
-      payload: %{env: env, term: t}, seed: 1)
+    Challenge.new(
+      kind: :erasure_term,
+      assay: "erasure/idempotent",
+      label: :positive,
+      payload: %{env: env, term: t},
+      seed: 1
+    )
   end
 
   # app-head defs: f present-first (clean), g erased-first (the finding). Defined
   # once here at module level (NOT re-declared by Task 2's describe block) so both
   # this task's app-head known-finding test and Task 2's selective tests share it.
   defp app_env(env) do
-    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+    ty =
+      {:pi, Cure.Core.Grade.unrestricted(), {:int_type},
+       {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+
     env
     |> Env.add_def(:f, ty, {:int_lit, 0}, [:unrestricted, :erased])
     |> Env.add_def(:g, ty, {:int_lit, 0}, [:erased, :unrestricted])
   end
+
   defp app2(head, x0, x1), do: {:app, {:app, head, x0}, x1}
 
   test "idempotent baseline: present-first ctor erases idempotently" do
@@ -72,8 +82,13 @@ defmodule Antigen.Assays.ErasureTest do
 
   describe "erasure/selective (V4a)" do
     defp sel_ch(env, t, surface) do
-      Challenge.new(kind: :erasure_term, assay: "erasure/selective", label: :positive,
-        payload: %{env: env, term: t, surface: surface}, seed: 1)
+      Challenge.new(
+        kind: :erasure_term,
+        assay: "erasure/selective",
+        label: :positive,
+        payload: %{env: env, term: t, surface: surface},
+        seed: 1
+      )
     end
 
     test "ctor selective baseline: keeps exactly the :unrestricted positions (leaf args)" do
@@ -89,20 +104,30 @@ defmodule Antigen.Assays.ErasureTest do
     test "ctor selective negative control: an erase stub dropping the :unrestricted position" do
       env = ctor_env()
       k = %{Erasure.__real__() | erase: fn _e, {:ctor, c, _args} -> {:ctor, c, []} end}
-      assert {:violation, {:wrong_positions_kept, :MkQ}} = Erasure.run(sel_ch(env, {:ctor, :MkQ, [il(1), il(2)]}, :ctor), k)
+
+      assert {:violation, {:wrong_positions_kept, :MkQ}} =
+               Erasure.run(sel_ch(env, {:ctor, :MkQ, [il(1), il(2)]}, :ctor), k)
     end
 
     test "app-head selective negative control: an erase stub dropping a :unrestricted arg" do
       env = app_env(ctor_env())
-      k = %{Erasure.__real__() | erase: fn _e, _t -> {:global, :f} end}  # drops all args
-      assert {:violation, {:wrong_positions_kept, :f}} = Erasure.run(sel_ch(env, app2({:global, :f}, il(1), il(2)), :app), k)
+      # drops all args
+      k = %{Erasure.__real__() | erase: fn _e, _t -> {:global, :f} end}
+
+      assert {:violation, {:wrong_positions_kept, :f}} =
+               Erasure.run(sel_ch(env, app2({:global, :f}, il(1), il(2)), :app), k)
     end
   end
 
   describe "erasure/wellformed (V4a)" do
     defp wf_ch(env, t) do
-      Challenge.new(kind: :erasure_term, assay: "erasure/wellformed", label: :positive,
-        payload: %{env: env, term: t}, seed: 1)
+      Challenge.new(
+        kind: :erasure_term,
+        assay: "erasure/wellformed",
+        label: :positive,
+        payload: %{env: env, term: t},
+        seed: 1
+      )
     end
 
     test "baseline: term?(t) => term?(erase t)" do
@@ -120,8 +145,13 @@ defmodule Antigen.Assays.ErasureTest do
   describe "relevance/soundness (V4b)" do
     # quantities = [:erased] — binder 0 is erased; a body using {:var, 0} relevantly must be rejected.
     defp rel_ch(env, body, site) do
-      Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :negative,
-        payload: %{env: env, name: :d, quantities: [:erased], body: body, site: site}, seed: 1)
+      Challenge.new(
+        kind: :erasure_term,
+        assay: "relevance/soundness",
+        label: :negative,
+        payload: %{env: env, name: :d, quantities: [:erased], body: body, site: site},
+        seed: 1
+      )
     end
 
     test "returned site: erased binder is the body result — rejected" do
@@ -143,8 +173,15 @@ defmodule Antigen.Assays.ErasureTest do
     end
 
     test "clean-body control: erased binder unused is accepted" do
-      ch = Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :positive,
-        payload: %{env: Env.empty(), name: :d, quantities: [:erased], body: {:int_lit, 7}, site: nil}, seed: 1)
+      ch =
+        Challenge.new(
+          kind: :erasure_term,
+          assay: "relevance/soundness",
+          label: :positive,
+          payload: %{env: Env.empty(), name: :d, quantities: [:erased], body: {:int_lit, 7}, site: nil},
+          seed: 1
+        )
+
       assert Erasure.run(ch) == :ok
     end
 
@@ -154,18 +191,33 @@ defmodule Antigen.Assays.ErasureTest do
     end
 
     test "clean-body negative control: a relevance_check stub that rejects a clean body" do
-      ch = Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :positive,
-        payload: %{env: Env.empty(), name: :d, quantities: [:erased], body: {:int_lit, 7}, site: nil}, seed: 1)
-      k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b ->
-        {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :returned}}}
-      end}
+      ch =
+        Challenge.new(
+          kind: :erasure_term,
+          assay: "relevance/soundness",
+          label: :positive,
+          payload: %{env: Env.empty(), name: :d, quantities: [:erased], body: {:int_lit, 7}, site: nil},
+          seed: 1
+        )
+
+      k = %{
+        Erasure.__real__()
+        | relevance_check: fn _e, _n, _q, _b ->
+            {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :returned}}}
+          end
+      }
+
       assert {:violation, {:clean_body_rejected, :d}} = Erasure.run(ch, k)
     end
 
     test "wrong-site negative control: a relevance_check stub reporting a mismatched site" do
-      k = %{Erasure.__real__() | relevance_check: fn _e, _n, _q, _b ->
-        {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :applied}}}
-      end}
+      k = %{
+        Erasure.__real__()
+        | relevance_check: fn _e, _n, _q, _b ->
+            {:error, {:erased_used_relevantly, %{def: :d, binder: 0, site: :applied}}}
+          end
+      }
+
       assert {:violation, {:relevance_wrong_site, :returned, :applied}} =
                Erasure.run(rel_ch(Env.empty(), {:var, 0}, :returned), k)
     end
@@ -179,7 +231,7 @@ defmodule Antigen.Assays.ErasureTest do
       assert length(ErasureTerm.relevance_challenges()) > 0
       ids = MapSet.new(ErasureTerm.erase_challenges(), & &1.assay)
       assert "erasure/idempotent" in ids and "erasure/selective" in ids and "erasure/wellformed" in ids
-      assert Enum.all?(ErasureTerm.relevance_challenges(), & &1.assay == "relevance/soundness")
+      assert Enum.all?(ErasureTerm.relevance_challenges(), &(&1.assay == "relevance/soundness"))
     end
 
     test "runner dispatches all four ids and the whole clean catalog is :ok" do

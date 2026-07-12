@@ -47,7 +47,9 @@ defmodule Cure.Core.RewriteRetirementTest do
 
   test "serializer neither encodes nor decodes {:rewrite}" do
     assert_raise FunctionClauseError, fn ->
-      Serialize.encode(opaque({:rewrite, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}, {:int_lit, 1}}))
+      Serialize.encode(
+        opaque({:rewrite, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}, {:int_lit, 1}})
+      )
     end
 
     assert {:error, _} =

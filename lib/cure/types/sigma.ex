@@ -156,5 +156,4 @@ defmodule Cure.Types.Sigma do
   def display({:sigma, v, f, s}) do
     "Sigma(#{v}: #{Type.display(f)}, #{Type.display(Type.resolve(s))})"
   end
-
 end

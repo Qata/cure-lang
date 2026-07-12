@@ -29,7 +29,8 @@ defmodule Cure.Elab.EffectBindTest do
   describe "let x = eff() ⏎ rest  ⟶  bind(eff, λ x:T. rest)" do
     test "sequencing with an effectful final expression" do
       src =
-        "mod M\n" <> @externs <>
+        "mod M\n" <>
+          @externs <>
           "  fn f() -> Effect(Int) =\n    let x = mkref()\n    eff_abs(x)\n" <>
           "end\n"
 
@@ -43,7 +44,8 @@ defmodule Cure.Elab.EffectBindTest do
 
     test "pure insertion: a plain-value final is wrapped in pure" do
       src =
-        "mod M\n" <> @externs <>
+        "mod M\n" <>
+          @externs <>
           "  fn g() -> Effect(Int) =\n    let x = mkref()\n    x\n" <>
           "end\n"
 
@@ -55,15 +57,15 @@ defmodule Cure.Elab.EffectBindTest do
 
     test "two binds nest into two effect_binds" do
       src =
-        "mod M\n" <> @externs <>
+        "mod M\n" <>
+          @externs <>
           "  fn h() -> Effect(Int) =\n    let x = mkref()\n    let y = mkref()\n    eff_add(x, y)\n" <>
           "end\n"
 
       assert {:ok, env} = Program.elaborate(src)
 
       assert {:effect_bind, _mkref1,
-              {:lam, @omega, {:int_type},
-               {:effect_bind, _mkref2, {:lam, @omega, {:int_type}, _inner}}}} = body(env, :h)
+              {:lam, @omega, {:int_type}, {:effect_bind, _mkref2, {:lam, @omega, {:int_type}, _inner}}}} = body(env, :h)
     end
   end
 
@@ -72,7 +74,8 @@ defmodule Cure.Elab.EffectBindTest do
       # The block elaborates to `bind(mkref, λ x:Int. x) : Effect(Int)`, which the
       # kernel checks against the declared `Int` and rejects.
       src =
-        "mod M\n" <> @externs <>
+        "mod M\n" <>
+          @externs <>
           "  fn bad() -> Int =\n    let x = mkref()\n    x\n" <>
           "end\n"
 

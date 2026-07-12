@@ -38,6 +38,7 @@ defmodule Antigen.Generators.PositivityTest do
   test "the richer single-family negatives are correctly labeled and rejected" do
     for c <- [Positivity.double_negation_family(), Positivity.sigma_negative_family()] do
       assert c.label == :negative
+
       assert {:error, {:non_strictly_positive, _}} = verdict(c),
              "checker should reject #{c.note}"
     end
@@ -54,10 +55,13 @@ defmodule Antigen.Generators.PositivityTest do
     # correct-by-construction claim, verified against the real oracle
     for c <- sample do
       expected = if c.label == :positive, do: :ok, else: :error
-      actual = case verdict(c) do
-        :ok -> :ok
-        {:error, _} -> :error
-      end
+
+      actual =
+        case verdict(c) do
+          :ok -> :ok
+          {:error, _} -> :error
+        end
+
       assert actual == expected,
              "parametric label #{c.label} disagrees with oracle for ctors #{inspect(c.payload.ctors)}"
     end
@@ -88,10 +92,13 @@ defmodule Antigen.Generators.PositivityTest do
     # every drawn family's label agrees with the real checker verdict
     for c <- sample do
       expected = if c.label == :positive, do: :ok, else: :error
-      actual = case verdict(c) do
-        :ok -> :ok
-        {:error, _} -> :error
-      end
+
+      actual =
+        case verdict(c) do
+          :ok -> :ok
+          {:error, _} -> :error
+        end
+
       assert actual == expected, "label/verdict disagree for #{c.note}"
     end
   end

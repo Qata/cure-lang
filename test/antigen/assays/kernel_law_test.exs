@@ -22,14 +22,25 @@ defmodule Antigen.Assays.KernelLawTest do
   alias Antigen.Challenge
 
   defp ch(assay, term, ctx \\ []),
-    do: Challenge.new(kind: :typed_term, assay: assay, label: :well_typed,
-                      payload: %{sig: :v1, ctx: ctx, type: {:data, :Nat, [], []}, term: term})
+    do:
+      Challenge.new(
+        kind: :typed_term,
+        assay: assay,
+        label: :well_typed,
+        payload: %{sig: :v1, ctx: ctx, type: {:data, :Nat, [], []}, term: term}
+      )
 
   @z {:ctor, :Z, []}
   @sz {:ctor, :S, [{:ctor, :Z, []}]}
 
   test "shift_subst: a well-formed term satisfies all four laws" do
-    assert :ok = KernelLaw.run(ch("kernel/shift_subst", {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:ctor, :S, [{:var, 0}]}}))
+    assert :ok =
+             KernelLaw.run(
+               ch(
+                 "kernel/shift_subst",
+                 {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:ctor, :S, [{:var, 0}]}}
+               )
+             )
   end
 
   test "shift_subst: the checker is not tautological (independently re-derive laws 2 and 3)" do
@@ -44,13 +55,15 @@ defmodule Antigen.Assays.KernelLawTest do
     law2_lhs = Cure.Core.Term.shift(Cure.Core.Term.shift(t, 1, 0), 1, 0)
     law2_rhs = Cure.Core.Term.shift(t, 2, 0)
     assert law2_lhs == law2_rhs
-    assert law2_lhs != t   # shift actually changed something
+    # shift actually changed something
+    assert law2_lhs != t
 
     # law 3 (shift/subst commutation): shift(subst(t,j,r),a,c) == subst(shift(t,a,c),j+a,shift(r,a,c))
     law3_lhs = Cure.Core.Term.shift(Cure.Core.Term.subst(t, 0, @sz), 1, 0)
     law3_rhs = Cure.Core.Term.subst(Cure.Core.Term.shift(t, 1, 0), 1, Cure.Core.Term.shift(@sz, 1, 0))
     assert law3_lhs == law3_rhs
-    assert law3_lhs != Cure.Core.Term.shift(t, 1, 0)   # subst actually changed something
+    # subst actually changed something
+    assert law3_lhs != Cure.Core.Term.shift(t, 1, 0)
 
     assert :ok = KernelLaw.run(ch("kernel/shift_subst", t))
   end
@@ -65,7 +78,13 @@ defmodule Antigen.Assays.KernelLawTest do
   end
 
   test "confluence: a redex normalizes identically via nf and whnf→nf" do
-    assert :ok = KernelLaw.run(ch("kernel/confluence", {:app, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:var, 0}}, @sz}))
+    assert :ok =
+             KernelLaw.run(
+               ch(
+                 "kernel/confluence",
+                 {:app, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:var, 0}}, @sz}
+               )
+             )
   end
 
   # spec §4 item 3 calls for both a positive AND a vacuous (fuel-exhausted)
@@ -91,7 +110,10 @@ defmodule Antigen.Assays.KernelLawTest do
   test "beta_subst: a capture-trap redex — β lands on the same nf as subst" do
     # (λx:Nat. λ_:Nat. x) {:var,0} over a one-Nat context; x sits under the inner
     # λ, so the substituted var-0 must shift by 1.
-    redex = {:app, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}}}, {:var, 0}}
+    redex =
+      {:app, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 1}}},
+       {:var, 0}}
+
     assert :ok = KernelLaw.run(ch("kernel/beta_subst", redex, [@nat]))
   end
 
@@ -101,7 +123,10 @@ defmodule Antigen.Assays.KernelLawTest do
   end
 
   test "shift_agrees: elaborator Subst.shift matches kernel Term.shift" do
-    assert :ok = KernelLaw.run(ch("elab/shift_agrees", {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:var, 0}, {:var, 1}}}))
+    assert :ok =
+             KernelLaw.run(
+               ch("elab/shift_agrees", {:lam, Cure.Core.Grade.unrestricted(), @nat, {:app, {:var, 0}, {:var, 1}}})
+             )
   end
 
   test "shift_agrees: the check is not tautological — a cutoff-blind shift WOULD disagree" do
@@ -110,7 +135,8 @@ defmodule Antigen.Assays.KernelLawTest do
     # shift distinguishes that mutant, so the agreement law has teeth.
     t = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}
     correct = Cure.Core.Term.shift(t, 1, 0)
-    mutant = {:lam, Cure.Core.Grade.unrestricted(), @nat, Cure.Core.Term.shift({:var, 0}, 1, 0)}  # forgot cutoff+1 under λ
+    # forgot cutoff+1 under λ
+    mutant = {:lam, Cure.Core.Grade.unrestricted(), @nat, Cure.Core.Term.shift({:var, 0}, 1, 0)}
     assert correct != mutant
     assert :ok = KernelLaw.run(ch("elab/shift_agrees", t))
   end

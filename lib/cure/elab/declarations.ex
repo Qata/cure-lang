@@ -1717,7 +1717,6 @@ defmodule Cure.Elab.Declarations do
   defp declare_opaque_at_min_level(_env, _name, _param_tele, _level),
     do: {:error, :universe_ceiling}
 
-
   # -- declaration at the least well-formed universe level --------------------
 
   defp declare_at_min_level(env, name, ctors, level) when level <= @ceiling do

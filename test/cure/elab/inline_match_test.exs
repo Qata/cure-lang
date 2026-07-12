@@ -18,13 +18,15 @@ defmodule Cure.Elab.InlineMatchTest do
   # the inner match falls through to inference and is unsupported.
   # GREEN (post-impl): {:ok, _} — the nested match elaborates in checking mode.
   test "a nested-arm match (arm body is itself a match) elaborates in checking mode" do
-    src = @nat <> """
-    fn combine(n: Nat, m: Nat) -> Nat = match n
-      Z() -> m
-      S(k) -> match m
-        Z() -> k
-        S(j) -> S(j)
-    """
+    src =
+      @nat <>
+        """
+        fn combine(n: Nat, m: Nat) -> Nat = match n
+          Z() -> m
+          S(k) -> match m
+            Z() -> k
+            S(j) -> S(j)
+        """
 
     assert {:ok, _env} = Program.elaborate(src)
   end
