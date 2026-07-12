@@ -156,4 +156,11 @@ defmodule Cure.Compiler.MacroSyntaxTest do
 
     assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
   end
+
+  test "a derived rule record encodes reflected syntax fields as a Core constructor" do
+    input = {:syn_node, :macro_input, [], [{:syn_leaf, :variable, [], {:s_str, "n"}}]}
+
+    assert {:ctor, :MkSyntax, [{:ctor, :Leaf, _}]} = MacroSyntax.to_core_record("MkSyntax", input)
+    assert {:ctor, :EmptySyntax, []} = MacroSyntax.to_core_record("EmptySyntax", {:syn_node, :macro_input, [], []})
+  end
 end

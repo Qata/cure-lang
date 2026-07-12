@@ -117,6 +117,13 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def to_core({:syn_raw, lit}), do: ctor(:Raw, [to_core_synlit(lit)])
 
+  @doc "Encode the ordered children of a macro input as a derived syntax record."
+  @spec to_core_record(String.t() | atom(), repr()) :: Cure.Core.Term.t()
+  def to_core_record(type_name, {:syn_node, _tag, _attrs, kids}) do
+    name = if is_binary(type_name), do: String.to_atom(type_name), else: type_name
+    {:ctor, name, Enum.map(kids, &to_core/1)}
+  end
+
   @doc "Decode a normalized Core value of Std.Syntax into the mirror representation."
   @spec from_core(Cure.Core.Term.t()) :: repr() | {:error, term()}
   def from_core({:ctor, :Node, [{:atom_lit, tag}, attrs, kids]}) do
