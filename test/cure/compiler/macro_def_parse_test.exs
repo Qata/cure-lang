@@ -59,6 +59,18 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert rule.module_rule
   end
 
+  test "an open category and qualified category extension are retained" do
+    node =
+      parse!(
+        "macro Reducer\n  open Reducer.ClauseModifier\n  syntax within <d: Duration> is Reducer.ClauseModifier becomes d\n"
+      )
+
+    assert {:macro_def, _meta, [open, rule]} = node
+    assert open.kind == :open_category
+    assert open.name == "Reducer.ClauseModifier"
+    assert rule.category == "Reducer.ClauseModifier"
+  end
+
   test "a malformed hole (missing closing `>`) records a :malformed_hole error" do
     {:ok, tokens} =
       Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)

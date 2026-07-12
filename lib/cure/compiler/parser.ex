@@ -4624,6 +4624,10 @@ defmodule Cure.Compiler.Parser do
         {entry, state} = parse_fail_declaration(state)
         parse_macro_rules(state, [entry | acc])
 
+      %Token{type: :identifier, value: "open"} ->
+        {entry, state} = parse_open_category(state)
+        parse_macro_rules(state, [entry | acc])
+
       other ->
         state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
         # Recover: skip a token so one bad line does not eat the block.
@@ -4645,6 +4649,12 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :rparen)
 
     {%{kind: :fail, name: name, params: params, line: token.line}, state}
+  end
+
+  defp parse_open_category(state) do
+    token = peek(state)
+    {name, state} = parse_dotted_name(advance(state))
+    {%{kind: :open_category, name: name, line: token.line}, state}
   end
 
   defp parse_macro_rule(state) do
