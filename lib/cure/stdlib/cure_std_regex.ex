@@ -60,7 +60,7 @@ defmodule :cure_std_regex do
     case resolve(regex) do
       {:ok, re} ->
         case :re.run(input, re, [{:capture, :all, :binary}]) do
-            {:match, [whole | groups]} ->
+          {:match, [whole | groups]} ->
             {:Some, new_match(whole, groups)}
 
           {:match, []} ->
@@ -71,7 +71,7 @@ defmodule :cure_std_regex do
         end
 
       :error ->
-      :None
+        :None
     end
   end
 

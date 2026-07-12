@@ -302,7 +302,10 @@ defmodule Cure.Compiler.ContainerMacro do
   defp child_spec_from_nodes(_), do: []
 
   defp ast_name({:variable, _meta, name}) when is_binary(name), do: name
-  defp ast_name({:attribute_access, meta, [base]}) when is_list(meta), do: ast_name(base) <> "." <> Keyword.get(meta, :attribute)
+
+  defp ast_name({:attribute_access, meta, [base]}) when is_list(meta),
+    do: ast_name(base) <> "." <> Keyword.get(meta, :attribute)
+
   defp ast_name({:literal, _meta, value}), do: to_string(value)
   defp ast_name(other), do: to_string(other)
 
