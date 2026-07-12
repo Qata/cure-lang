@@ -54,6 +54,26 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     assert rendered =~ "end of line"
   end
 
+  test "the hole-kind and nothing-more mismatch renders are total and grammatical" do
+    # `{:hole_kind, _}` and `:nothing_more` are not reachable through today's
+    # match_segments/4 (a `{:hole, _}` segment never fails to match, so the
+    # parser's own call site only ever supplies `{:literal, _}`) -- confirmed
+    # by reading match_segments/4 in parser.ex. Exercise format_error/2 on
+    # these shapes directly so the render arms (and `article/1`'s vowel
+    # check) stay covered and total even though no live input reaches them
+    # today; the tuple shape itself is part of format_error's contract.
+    assert Errors.format_error({:macro_use_mismatch, "every", {:hole_kind, "Int"}, "x", 1, 1}, "f") =~
+             "expected an Int here"
+
+    assert Errors.format_error(
+             {:macro_use_mismatch, "every", {:hole_kind, "Duration"}, "x", 1, 1},
+             "f"
+           ) =~ "expected a Duration here"
+
+    assert Errors.format_error({:macro_use_mismatch, "every", :nothing_more, "x", 1, 1}, "f") =~
+             "has no more to match here"
+  end
+
   test "a malformed hole in a macro definition renders a diagnostic explaining the hole syntax" do
     # Missing the closing `>` — the milestone-1 :malformed_hole path.
     errors = errors_of("macro Bad\n  syntax every <t: Duration becomes x\n")
