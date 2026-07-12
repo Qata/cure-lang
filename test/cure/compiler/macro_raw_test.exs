@@ -82,6 +82,7 @@ defmodule Cure.Compiler.MacroRawTest do
     assert Enum.map(rules, & &1[:keyword]) == [nil, "base", "extra"]
 
     closed = [%{kind: :syntax, keyword: "other", category: "Other"}]
+
     assert {:error, {:closed_category_extension, ["Other"]}} =
              MacroModule.compose_open_categories(base, closed)
   end
