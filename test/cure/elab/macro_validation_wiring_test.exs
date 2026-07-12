@@ -63,4 +63,32 @@ defmodule Cure.Elab.MacroValidationWiringTest do
 
     assert {:ok, _env} = Program.elaborate(source)
   end
+
+  test "compilation accepts a type-only syntax example pin" do
+    source = """
+    mod M
+      macro One
+        syntax one becomes 1
+          example one expands : Int
+        explain
+          keyword "one" =>
+            "starts with one"
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  test "compilation rejects a type-only syntax example pin with the wrong type" do
+    source = """
+    mod M
+      macro One
+        syntax one becomes 1
+          example one expands : String
+        explain
+          keyword "one" =>
+            "starts with one"
+    """
+
+    assert {:error, {:example_type_mismatch, [%{keyword: "one"}]}} = Program.elaborate(source)
+  end
 end

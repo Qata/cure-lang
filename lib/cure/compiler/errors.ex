@@ -432,6 +432,22 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:example_type_mismatch, failures}, file) do
+    listed =
+      failures
+      |> Enum.map_join(", ", fn failure ->
+        "`#{failure.keyword}` (expected #{inspect(failure.expected)}, got #{inspect(failure.reason)})"
+      end)
+
+    format_diagnostic(
+      "error",
+      "macro example has the wrong type",
+      file,
+      0,
+      "these rules have a type-only example pin that their expansion does not satisfy: #{listed}"
+    )
+  end
+
   def format_error({:computed_example_error, failures}, file) do
     listed =
       failures

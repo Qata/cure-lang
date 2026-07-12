@@ -36,7 +36,7 @@ defmodule Cure.Compiler.MacroValidate do
     |> Enum.reduce_while(:ok, fn macro_def, :ok ->
       with :ok <- check_explain_exhaustive(macro_def),
            :ok <- check_rules_pinned(macro_def),
-           :ok <- check_examples(macro_def),
+           :ok <- check_examples(macro_def, env),
            :ok <- check_computed_examples(macro_def, env) do
         {:cont, :ok}
       else
@@ -133,21 +133,63 @@ defmodule Cure.Compiler.MacroValidate do
   (deferred). Returns `:ok` or `{:error, {:example_mismatch, mismatches}}`.
   """
   @spec check_examples(tuple()) :: :ok | {:error, {:example_mismatch, [map()]}}
-  def check_examples({:macro_def, _meta, rules}) do
-    mismatches =
+  def check_examples(macro_def), do: check_examples(macro_def, nil)
+
+  @doc """
+  Check exact and type-only example pins in a module environment.
+
+  Exact pins compare α-normalized surface ASTs. Type-only pins lower their
+  expected type and check the expanded expression through the ordinary
+  expression elaborator, preserving the module's imports and declarations.
+  """
+  @spec check_examples(tuple(), Cure.Core.Env.t() | nil) ::
+          :ok
+          | {:error, {:example_mismatch, [map()]}}
+          | {:error, {:example_type_mismatch, [map()]}}
+  def check_examples({:macro_def, _meta, rules}, env) do
+    results =
       rules
       |> Enum.filter(&(&1[:kind] == :syntax))
       |> Enum.flat_map(fn rule ->
-        for %{use_site: use_site, expected: {:expansion, expected}} <- Map.get(rule, :examples, []),
-            actual = Parser.expand_example(rules, use_site),
-            normalize(actual) != normalize(expected) do
-          %{keyword: rule.keyword, expected: expected, actual: actual}
-        end
+        Enum.map(Map.get(rule, :examples, []), fn %{use_site: use_site, expected: expected} ->
+          actual = Parser.expand_example(rules, use_site)
+          check_example_pin(rule.keyword, actual, expected, env)
+        end)
       end)
 
-    case mismatches do
-      [] -> :ok
-      ms -> {:error, {:example_mismatch, ms}}
+    mismatches = for {:mismatch, details} <- results, do: details
+    type_failures = for {:type_failure, details} <- results, do: details
+
+    cond do
+      type_failures != [] -> {:error, {:example_type_mismatch, type_failures}}
+      mismatches != [] -> {:error, {:example_mismatch, mismatches}}
+      true -> :ok
+    end
+  end
+
+  defp check_example_pin(keyword, actual, {:expansion, expected}, _env) do
+    if normalize(actual) == normalize(expected) do
+      :ok
+    else
+      {:mismatch, %{keyword: keyword, expected: expected, actual: actual}}
+    end
+  end
+
+  defp check_example_pin(_keyword, _actual, {:type, _expected}, nil), do: :ok
+
+  defp check_example_pin(keyword, actual, {:type, expected}, env) do
+    alias Cure.Core.Context
+    alias Cure.Elab.{Declarations, Elaborator}
+
+    case Declarations.lower_type(expected, [], env) do
+      {:ok, expected_core} ->
+        case Elaborator.elaborate_expr_checked(actual, expected_core, [], Context.empty(env), env) do
+          {:ok, _term} -> :ok
+          {:error, reason} -> {:type_failure, %{keyword: keyword, expected: expected, actual: actual, reason: reason}}
+        end
+
+      {:error, reason} ->
+        {:type_failure, %{keyword: keyword, expected: expected, actual: actual, reason: reason}}
     end
   end
 
