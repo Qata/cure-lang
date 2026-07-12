@@ -859,6 +859,15 @@ defmodule Cure.Compiler.Parser do
                 {variable(token), advance(state)}
             end
 
+          "lift" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier, value: "module"} ->
+                parse_lift_module(state, token)
+
+              _ ->
+                {variable(token), advance(state)}
+            end
+
           _ ->
             {variable(token), advance(state)}
         end
@@ -4489,6 +4498,77 @@ defmodule Cure.Compiler.Parser do
 
     meta = [name: name, line: token.line, col: token.col]
     {{:macro_def, meta, rules}, state}
+  end
+
+  # Pure surface representation for §14's `lift module` value. The resulting
+  # node contains quoted callback bodies and declarations; the OTP frontend
+  # validates it later and the compiler remains the only code-loading boundary.
+  defp parse_lift_module(state, token) do
+    state = advance(state)
+    state = advance(state)
+    {name, state} = parse_dotted_name(state)
+    state = skip_newlines(state)
+
+    {behaviour, callbacks, declarations, state} =
+      case peek(state) do
+        %Token{type: :indent} ->
+          parse_lift_module_block(advance(state), nil, [], [])
+
+        _ ->
+          {nil, [], [], state}
+      end
+
+    meta = [
+      module: name,
+      behaviour: behaviour,
+      callbacks: callbacks,
+      declarations: declarations,
+      line: token.line,
+      col: token.col
+    ]
+
+    {{:lift_module, meta, []}, state}
+  end
+
+  defp parse_lift_module_block(state, behaviour, callbacks, declarations) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :dedent} ->
+        {behaviour, Enum.reverse(callbacks), Enum.reverse(declarations), advance(state)}
+
+      %Token{type: :eof} ->
+        {behaviour, Enum.reverse(callbacks), Enum.reverse(declarations), state}
+
+      %Token{type: :identifier, value: "behaviour"} ->
+        state = advance(state)
+        behaviour_token = peek(state)
+        behaviour = String.to_atom(to_string(behaviour_token.value))
+        parse_lift_module_block(advance(state), behaviour, callbacks, declarations)
+
+      %Token{type: :identifier, value: "callback"} ->
+        {callback, state} = parse_lift_callback(state)
+        parse_lift_module_block(state, behaviour, [callback | callbacks], declarations)
+
+      _ ->
+        {declaration, state} = parse_expr_or_block(state)
+        parse_lift_module_block(state, behaviour, callbacks, [declaration | declarations])
+    end
+  end
+
+  defp parse_lift_callback(state) do
+    token = peek(state)
+    state = advance(state)
+    name_token = peek(state)
+    name = String.to_atom(to_string(name_token.value))
+    state = advance(state)
+    state = expect(state, :lparen)
+    {params, state} = parse_typed_params(state)
+    state = expect(state, :rparen)
+    state = expect(state, :arrow)
+    {body, state} = parse_expr_or_block(state)
+
+    {%{name: name, arity: length(params), params: params, body: body, line: token.line}, state}
   end
 
   defp parse_macro_block(state) do
