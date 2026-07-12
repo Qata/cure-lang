@@ -106,12 +106,35 @@ on live source) and caught 2 real defects + added coverage:
 Use the HARDENED plan (`e6883fe`) for execution — its code snippets were mechanically
 syntax-checked (`Code.string_to_quoted!`) and the reserved-keyword guard is in the plan.
 
-**NEXT:** SP1 milestone 2 Stage 4 — execute Task 1 (T5 two-phase parse) → Task 2 (T6a zero-hole
-expansion) → Task 3 (T6b hole matching + progress) inline TDD on Opus, strict red→green, commit
-per task (ghost author, explicit pathspec). Then Stage 5 (Sonnet code review over the diff,
-red-test-first fixes). T4/T7/T8/T9 are subsequent Stage-2/4 rounds before SP1's Stage 6. When
-ALL SP1 tasks are executed + code-reviewed, do Stage 6 (full `mix test` once) for SP1, update
-this file, start SP2.
+SP1 milestone 2 Stage 4 DONE — all three tasks executed inline TDD (red→green), committed:
+- **T5 `d66bf57`** — `active_macros: %{}` on parser state; two-phase `parse/2` (harvest pass →
+  `harvest_active_macros/1`/`collect_macro_defs/1` → authoritative pass). `test/cure/compiler/`
+  628 passed.
+- **T6a `0bd320f`** — guarded `:identifier` dispatch (`is_map_key(active_macros,name) and name
+  not in @reserved_macro_keywords`) → `parse_macro_use/2` → `expand_rule/2`/`subst_holes/2`.
+  `now` → `Clock.now()`. Reserved-keyword collision (`sup`) test proves the guard. 630 passed.
+- **T6b `94c33a6`** — `match_segments/4` walks `{:lit}`/`{:hole}` segments, binds via
+  `parse_expr`, records progress, `{:error,progress,state}` recovery emits `:macro_use_mismatch`.
+  `every <t>` → `Timer.repeat(500)`; `say hello` literal match; `say goodbye` mismatch error.
+  633 passed / 1 skipped, `mix compile --warnings-as-errors` clean.
+- **Test-helper fix during execution (flag for reviewer):** the plan-provided `has_supervisor?/1`
+  helper had a provably-wrong first clause — `{:container, meta, _}` matched the enclosing MODULE
+  container and short-circuited to `false` without recursing into children (where the supervisor
+  lived). The behavior under test (parser produces the supervisor despite the macro collision) was
+  CORRECT — verified by raw-tree probe. Fixed the helper to check container_type AND recurse. This
+  is a legitimate immutability exception (test helper wrong, not the impl); Stage-5 should confirm.
+- **Wrong-directory hazard recorded:** `mix` MUST run from the worktree root
+  (`.claude/worktrees/core-let-binder`), NOT the parent clone `/Users/ch/Develop/esp32-beam/cure-lang`
+  — the parent lacks the macro code, so running there gives phantom "macro front-end regressed"
+  failures. Never `cd` out of the worktree for a build.
+
+**NEXT:** SP1 milestone 2 Stage 5 — dispatch a Sonnet `recursive-skeptical-review` subagent over
+the Stage-4 diff (`git diff e6883fe..HEAD` is plan+state; the code diff is `754e8d0..HEAD`, i.e.
+commits d66bf57/0bd320f/94c33a6 touching only `lib/cure/compiler/parser.ex` +
+`test/cure/compiler/macro_use_test.exs`). Code review = falsifiability in full force, red-test-first
+fixes, two consecutive clean passes. Then Stage 6 (full `mix test` once) for milestone 2.
+T4/T7/T8/T9 remain subsequent Stage-2/4 rounds before SP1's own Stage 6 + SP2. When ALL SP1 tasks
+are executed + code-reviewed, do SP1 Stage 6, update this file, start SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
