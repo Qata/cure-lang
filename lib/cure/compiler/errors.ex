@@ -453,6 +453,7 @@ defmodule Cure.Compiler.Errors do
 
   defp describe_point({:hole_kind, k}), do: "a `#{k}` hole"
   defp describe_point({:keyword, w}), do: "the keyword `#{w}`"
+  defp describe_point({:failure, name}), do: "the author failure `#{name}`"
 
   # Grammatical article for the macro hole-kind diagnostic ("a Duration" / "an
   # Int"). Placed after the format_error/2 clause group to keep those contiguous.

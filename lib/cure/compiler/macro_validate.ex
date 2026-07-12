@@ -6,7 +6,7 @@ defmodule Cure.Compiler.MacroValidate do
   parsed `{:macro_def, …}` AST, upstream of the elaborator.
   """
 
-  @type point :: {:hole_kind, String.t()} | {:keyword, String.t()}
+  @type point :: {:hole_kind, String.t()} | {:keyword, String.t()} | {:failure, String.t()}
 
   @doc """
   Check a macro's `explain` block covers every structural failure point derived
@@ -53,15 +53,21 @@ defmodule Cure.Compiler.MacroValidate do
   # example (`syntax every <t: Duration> becomes …`) has NO literal `segments`.
   defp derive_points(rules) do
     rules
-    |> Enum.filter(&(&1[:kind] in [:syntax, :literal]))
+    |> Enum.filter(&(&1[:kind] in [:syntax, :literal, :fail]))
     |> Enum.flat_map(fn rule ->
+      failure_points =
+        case rule do
+          %{kind: :fail, name: name} when is_binary(name) -> [{:failure, name}]
+          _ -> []
+        end
+
       keyword_points =
         case rule do
           %{kind: :syntax, keyword: kw} when is_binary(kw) -> [{:keyword, kw}]
           _ -> []
         end
 
-      keyword_points ++ Enum.map(rule.segments, &segment_point/1)
+      failure_points ++ keyword_points ++ Enum.map(Map.get(rule, :segments, []), &segment_point/1)
     end)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
@@ -84,6 +90,7 @@ defmodule Cure.Compiler.MacroValidate do
   # clause covers a `{:keyword, w}` point.
   defp covered?({:hole_kind, k}, covered), do: MapSet.member?(covered, {:category, k})
   defp covered?({:keyword, w}, covered), do: MapSet.member?(covered, {:keyword, w})
+  defp covered?({:failure, name}, covered), do: MapSet.member?(covered, {:category, name})
 
   alias Cure.Compiler.Parser
 

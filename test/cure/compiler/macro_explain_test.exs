@@ -80,4 +80,30 @@ defmodule Cure.Compiler.MacroExplainTest do
     assert {:hole_kind, "Duration"} in points
     assert {:keyword, "every"} in points
   end
+
+  test "a fail declaration adds an author diagnosis point and keeps typed params" do
+    md =
+      macro_def!("""
+      macro Protocol
+        fail ReplyBeforeRequest(state: Code)
+        explain
+          ReplyBeforeRequest => "a reply needs an open request"
+      """)
+
+    assert [%{kind: :fail, name: "ReplyBeforeRequest", params: [param]}, %{kind: :explain}] = elem(md, 2)
+
+    assert {:param, [type: {:variable, [scope: :local], "Code"}], "state"} = param
+    assert :ok = MacroValidate.check_explain_exhaustive(md)
+  end
+
+  test "a fail declaration without a matching explain clause is missing_diagnosis" do
+    md = macro_def!("macro Protocol\n  fail ReplyBeforeRequest(state: Code)\n")
+
+    assert {:error, {:missing_diagnosis, [{:failure, "ReplyBeforeRequest"}]}} =
+             MacroValidate.check_explain_exhaustive(md)
+
+    rendered = Errors.format_error({:missing_diagnosis, [{:failure, "ReplyBeforeRequest"}]}, "m.cure")
+    assert rendered =~ "author failure `ReplyBeforeRequest`"
+    refute rendered =~ ":missing_diagnosis"
+  end
 end

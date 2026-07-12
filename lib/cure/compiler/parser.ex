@@ -4471,11 +4471,31 @@ defmodule Cure.Compiler.Parser do
         {entry, state} = parse_explain_block(state)
         parse_macro_rules(state, [entry | acc])
 
+      %Token{type: :identifier, value: "fail"} ->
+        {entry, state} = parse_fail_declaration(state)
+        parse_macro_rules(state, [entry | acc])
+
       other ->
         state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
         # Recover: skip a token so one bad line does not eat the block.
         parse_macro_rules(advance(state), acc)
     end
+  end
+
+  # `fail Name(args)` declares an author-defined semantic Diagnosis point for
+  # a Tier-3 computed elab. Retain its typed argument declarations in the
+  # macro AST; execution/lowering consumes them in the check/fail slice.
+  defp parse_fail_declaration(state) do
+    token = peek(state)
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = expect(state, :lparen)
+    {params, state} = parse_typed_params(state)
+    state = expect(state, :rparen)
+
+    {%{kind: :fail, name: name, params: params, line: token.line}, state}
   end
 
   defp parse_macro_rule(state) do
