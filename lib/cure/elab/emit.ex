@@ -302,8 +302,8 @@ defmodule Cure.Elab.Emit do
 
       true ->
         case Enum.map(args, &lower(env, &1, ctx)) do
-          [] -> {:atom, @line, name}
-          forms -> {:tuple, @line, [{:atom, @line, name} | forms]}
+          [] -> {:atom, @line, otp_tag(name)}
+          forms -> {:tuple, @line, [{:atom, @line, otp_tag(name)} | forms]}
         end
     end
   end
@@ -750,8 +750,8 @@ defmodule Cure.Elab.Emit do
 
     pattern =
       case present do
-        [] -> {:atom, @line, bool_atom_or_self(env, cname)}
-        _ -> {:tuple, @line, [{:atom, @line, cname} | present]}
+        [] -> {:atom, @line, otp_tag(bool_atom_or_self(env, cname))}
+        _ -> {:tuple, @line, [{:atom, @line, otp_tag(cname)} | present]}
       end
 
     {:clause, @line, [pattern], [], [body_form]}
@@ -837,4 +837,17 @@ defmodule Cure.Elab.Emit do
   defp bool_atom_or_self(env, name) do
     if bool_ctor?(env, name), do: bool_atom(name), else: name
   end
+
+  # The OTP-conventional constructors erase to their lowercase BEAM atoms so a
+  # Cure `Result`/`Option` value is a native `{:ok, _}` / `{:error, _}` /
+  # `{:some, _}` / `:none` term — the shape Erlang, Elixir, and (critically)
+  # AtomVM FFI expect. `lib/std/core.cure` documents exactly this representation
+  # (`Ok(value) -> {:ok, value}`, `None() -> :none`). Applied at BOTH the
+  # construction and the pattern site so the tags agree. Every other constructor
+  # keeps its declared (PascalCase) tag; records stay tagged tuples `{:Point,…}`.
+  defp otp_tag(:Ok), do: :ok
+  defp otp_tag(:Error), do: :error
+  defp otp_tag(:Some), do: :some
+  defp otp_tag(:None), do: :none
+  defp otp_tag(name), do: name
 end

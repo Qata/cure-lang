@@ -16,7 +16,7 @@ defmodule Cure.Stdlib.OpticDependentRunTest do
   Implicit type/kind arguments erase, so the runtime arities are `lens/2`,
   `view/2`, `over/3`, `set/3`, `preview/2`. A nullary constructor erases to a
   bare PascalCase atom and a unary one to a tagged tuple, so `preview` yields
-  `{:Some, focus}` / `:None` (the dependent-pipeline representation).
+  `{:some, focus}` / `:none` (the OTP-lowercase Option representation).
   """
   use ExUnit.Case, async: true
 
@@ -57,6 +57,6 @@ defmodule Cure.Stdlib.OpticDependentRunTest do
   end
 
   test "preview on a lens is always Some(focus)", %{m: m, fst: fst} do
-    assert apply(m, :preview, [fst, {41, 0}]) == {:Some, 41}
+    assert apply(m, :preview, [fst, {41, 0}]) == {:some, 41}
   end
 end
