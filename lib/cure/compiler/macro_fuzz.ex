@@ -15,7 +15,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Cure.Elab.Elaborator
 
   @default_draws 32
-  @cache_table :cure_macro_fuzz_cache
+  @cache_key :cure_macro_fuzz_cache_state
 
   @type generator_info :: %{
           category: String.t(),
@@ -93,14 +93,14 @@ defmodule Cure.Compiler.MacroFuzz do
   end
 
   defp cached_proof({:macro_def, _meta, rules} = macro_def, env, opts) do
-    ensure_cache_table()
     key = :erlang.phash2({macro_def, env, Keyword.get(opts, :draws, @default_draws), Keyword.get(opts, :seed, 1)})
+    cache = :persistent_term.get(@cache_key, %{})
 
-    case :ets.lookup(@cache_table, key) do
-      [{^key, result, manifest}] ->
+    case Map.fetch(cache, key) do
+      {:ok, {result, manifest}} ->
         {result, manifest, true}
 
-      [] ->
+      :error ->
         result = run_expansion_proof(rules, env, opts)
         status = if result == :ok, do: :passed, else: :failed
 
@@ -114,7 +114,7 @@ defmodule Cure.Compiler.MacroFuzz do
             }
           end
 
-        :ets.insert(@cache_table, {key, result, manifest})
+        :persistent_term.put(@cache_key, Map.put(cache, key, {result, manifest}))
         {result, manifest, false}
     end
   end
@@ -131,20 +131,6 @@ defmodule Cure.Compiler.MacroFuzz do
         {:error, _} = error -> {:halt, error}
       end
     end)
-  end
-
-  defp ensure_cache_table do
-    case :ets.whereis(@cache_table) do
-      :undefined ->
-        try do
-          :ets.new(@cache_table, [:named_table, :public, :set, read_concurrency: true])
-        rescue
-          ArgumentError -> @cache_table
-        end
-
-      _tid ->
-        @cache_table
-    end
   end
 
   defp prove_rule(rule, rules, env, draws, seed) do
