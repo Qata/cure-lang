@@ -557,6 +557,24 @@ defmodule Cure.Compiler.Parser do
       :indent ->
         parse_block(state)
 
+      # `<fresh Name>` — a template hygiene marker minting a per-expansion
+      # gensym (design §5). Only this exact window is special; every other
+      # leading `<` keeps its previous unexpected-token error. Infix `<`
+      # (comparisons) never reaches this prefix clause.
+      :lt ->
+        case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3)} do
+          {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name},
+           %Token{type: :gt}} ->
+            node = {:fresh_name, [line: token.line, col: token.col], name}
+            state = state |> advance() |> advance() |> advance() |> advance()
+            {node, state}
+
+          _ ->
+            error = {:unexpected_token, token.type, token.line, token.col}
+            state = add_error(state, error)
+            {error_node(token), advance(state)}
+        end
+
       _ ->
         error = {:unexpected_token, token.type, token.line, token.col}
         state = add_error(state, error)
