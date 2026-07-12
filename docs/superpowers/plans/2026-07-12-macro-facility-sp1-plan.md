@@ -13,12 +13,13 @@
 - **TCB delta ZERO.** No `lib/cure/core/*` change. This milestone touches only `lib/cure/compiler/parser.ex` (+ tests). If a task seems to need a kernel or lexer change beyond what a task names, STOP — it is mis-scoped.
 - **Ghost commits:** `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, no Co-Authored-By. Explicit pathspec `git add -- <path>`, never `-A`.
 - **One build at a time.** Never run concurrent `mix test`. Prefer scoped `mix test <file>`; full suite once at the end.
+- **Tests are immutable once green.** Once a step's red test passes, make later changes go green by editing implementation code only — never by deleting, skipping, loosening, or rewriting a passing test. The sole exception is a test that is itself provably wrong (wrong expected shape, typo, etc.); if you believe a test is wrong, state exactly why before touching it.
 - **User-facing syntax is DEFERRED** — the spellings here (`macro`, `syntax`, `becomes`, `<name: Kind>`) are the design's current notation, used as placeholders; the AST shape is what matters, not the surface words.
 - **Token/state/helpers (verified anchors):** `%Cure.Compiler.Token{type, value, line, col}` (`token.ex:16`); parser state `%{tokens, file, pos, errors, emit_events}` (`parser.ex:45`); helpers `peek/1` (`:5562`, eof-safe), `peek_at/2` (`:5568`), `advance/1` (`:5573`), `skip_newlines/1` (`:5581`), `expect/2` (`:5588`), `expect_dedent/1` (`:5610`), `add_error/2` (`:5617`); `variable/1` builds `{:variable, meta, name}`. Soft-keyword dispatch site: `parse_prefix/1`'s `:identifier` case (`parser.ex:292-340`). Container template: `parse_fsm/1` (`:3894`) + `parse_fsm_block/1` (`:3933`).
 
 ---
 
-### Task 1: Recognize `macro Name … end` as a soft keyword and parse the container skeleton
+### Task 1: Recognize `macro Name` as a soft keyword and parse the container skeleton (dedent-closed, no `end`)
 
 **Files:**
 - Modify: `lib/cure/compiler/parser.ex` (the `:identifier` prefix case at `:292-340`; add `parse_macro_def/1` + `parse_macro_block/1` near `parse_fsm/1` `:3894`)
@@ -41,27 +42,48 @@ defmodule Cure.Compiler.MacroDefParseTest do
     ast
   end
 
+  # NOTE on both sources below: Cure's containers (fsm/sup/app, confirmed at
+  # parse_fsm_block/parse_sup_block/parse_app_block, all via expect_dedent/1)
+  # close purely by DEDENT — no literal `end` is ever consumed by a container
+  # parser. `end` IS a reserved keyword (`Token{type: :keyword, value: :end}`),
+  # so writing a trailing `end` line here would lex as a real token that no
+  # macro-container code consumes, and it would be re-parsed as a second,
+  # stray top-level `{:variable, _, :end}` node. Real fixtures (e.g.
+  # examples/traffic_light.cure, examples/cure_colony/.../colony.cure) confirm
+  # containers never write `end`. So there is no trailing `end` below.
+  #
+  # NOTE on `parse!/1`'s return shape: `Parser.parse/2` (parser.ex:99-103)
+  # returns the bare AST node directly when there is exactly one top-level
+  # form (`case exprs do [single] -> single; many -> {:block, ...} end`) —
+  # NEVER a list. So each test below binds `node = parse!(...)` directly
+  # (matching the idiom already used elsewhere, e.g.
+  # test/cure/compiler/dot_pattern_parse_test.exs's `ast = parse!(source)`),
+  # not `[node] = parse!(...)`.
+
   test "an empty macro container parses to a {:macro_def, meta, []} node" do
     # A macro with no rules yet — just the container shell.
-    [node] = parse!("macro Every\nend\n")
+    node = parse!("macro Every\n")
     assert {:macro_def, meta, []} = node
     assert meta[:name] == "Every"
   end
 
   test "`macro` NOT followed by an identifier stays a plain variable (non-breaking)" do
-    # `macro` used as an ordinary local must keep parsing as a variable.
-    [node] = parse!("macro + 1\n")
-    assert {:function_call, _, _} = node or match?({:variable, _, "macro"}, elem_head(node))
+    # `macro` used as an ordinary local must keep parsing as a variable: the
+    # dispatch clause added in Step 3 falls through to `{variable(token),
+    # advance(state)}` whenever `macro` isn't followed by an identifier, so
+    # `macro + 1` still parses as the binary `+` over a `macro` variable and
+    # an integer literal — confirmed against the real parser's output shape
+    # (`{:binary_op, [category: :arithmetic, operator: :+, ...], [left, right]}`).
+    node = parse!("macro + 1\n")
+    assert {:binary_op, _, [{:variable, _, "macro"}, _rhs]} = node
   end
-
-  defp elem_head({_t, _m, _c} = n), do: n
 end
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
 
 Run: `mix test test/cure/compiler/macro_def_parse_test.exs`
-Expected: FAIL — `macro Every` currently parses as `variable "macro"` then errors / mis-parses; no `{:macro_def, …}` node exists.
+Expected: the first test FAILs — `macro Every` currently parses as two bare `{:variable, ...}` nodes (`"macro"` then `"Every"`), never a `{:macro_def, …}` node. The second test (`macro` as a plain variable) already PASSes before this task's implementation — it's a non-regression pin on today's existing fallback behavior, not a new red test.
 
 - [ ] **Step 3: Add the soft-keyword dispatch clause**
 
@@ -110,7 +132,9 @@ Near `parse_fsm/1` (`parser.ex:3894`), add (mirrors `parse_fsm`/`parse_fsm_block
         {rules, state}
 
       _ ->
-        # No body (`macro Name end` with nothing indented) — empty rule set.
+        # No body (e.g. `macro Name` immediately followed by newline/eof,
+        # nothing indented underneath) — empty rule set. Containers close
+        # purely by dedent; there is no `end` keyword to consume here.
         {[], state}
     end
   end
@@ -144,7 +168,7 @@ Expected: PASS (soft-keyword addition is non-breaking; `macro` as a variable sti
 
 ```bash
 git add -- lib/cure/compiler/parser.ex test/cure/compiler/macro_def_parse_test.exs
-git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(parser): parse `macro Name … end` container skeleton (SP1 task 1)"
+git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(parser): parse macro container skeleton (SP1 task 1)"
 ```
 
 ---
@@ -162,7 +186,9 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
 
 ```elixir
   test "a bare-keyword syntax rule captures its keyword and template" do
-    [node] = parse!("macro Now\n  syntax now becomes Clock.now()\nend\n")
+    # No trailing `end` (see the note on Task 1's tests — containers close by
+    # dedent only); `node` is the bare top-level node, not a 1-list.
+    node = parse!("macro Now\n  syntax now becomes Clock.now()\n")
     assert {:macro_def, _meta, [rule]} = node
     assert rule.kind == :syntax
     assert rule.keyword == "now"
@@ -170,12 +196,24 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
     assert {:function_call, _, _} = rule.template   # Clock.now()
     assert Map.has_key?(rule, :progress)            # progress slot present from the start
   end
+
+  test "a body line that isn't a recognized rule keyword records a parse error" do
+    # New behaviour introduced by this task's `parse_macro_rules` recovery
+    # clause: a macro-body statement that isn't `syntax ...` must record an
+    # `{:expected, :syntax_rule, ...}` error rather than silently vanishing.
+    # Any recorded error makes the overall parse `{:error, _}` (parser.ex:109-112:
+    # `case state.errors do [] -> {:ok, ast}; errors -> {:error, ...} end`), so
+    # this can't be observed via `parse!/1` — it must assert on the raw result.
+    {:ok, tokens} = Lexer.tokenize("macro Bad\n  oops\n", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _}, &1))
+  end
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (`parse_macro_rules` currently skips tokens, yields `[]`).
+- [ ] **Step 2: Run it — expect FAIL**
 
 Run: `mix test test/cure/compiler/macro_def_parse_test.exs`
-Expected: FAIL — `rules` is `[]`, no rule map.
+Expected: both new tests FAIL — the first because `parse_macro_rules` (Task 1's placeholder) skips tokens and yields `rules = []`, no rule map; the second because nothing yet calls `add_error/2` for an unrecognized body statement, so `Parser.parse` returns `{:ok, ast}` and the test's `{:error, errors} = ...` match raises.
 
 - [ ] **Step 3: Implement rule parsing**
 
@@ -273,19 +311,34 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(pa
 
 ```elixir
   test "a syntax rule with a typed hole captures name + kind in order" do
-    [node] = parse!("macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\nend\n")
+    # No trailing `end` (dedent-only closing, per Task 1's note); `node` is
+    # the bare top-level node, not a 1-list.
+    node = parse!("macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n")
     assert {:macro_def, _m, [rule]} = node
     assert rule.keyword == "every"
     assert [{:hole, hole}] = rule.segments
     assert hole.name == "t"
     assert hole.kind == "Duration"
   end
+
+  test "a malformed hole (missing closing `>`) records a :malformed_hole error" do
+    # New behaviour introduced by this task's :lt branch's `else`: a `<...`
+    # window that doesn't close with `identifier :colon identifier :gt` must
+    # record `{:malformed_hole, line, col}`. Same reasoning as Task 2's error
+    # test: any recorded error flips the whole parse to `{:error, _}`
+    # (parser.ex:109-112), so assert on the raw result, not `parse!/1`.
+    {:ok, tokens} =
+      Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    assert Enum.any?(errors, &match?({:malformed_hole, _, _}, &1))
+  end
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (segments come back `[]`; the hole is not recognized).
+- [ ] **Step 2: Run it — expect FAIL**
 
 Run: `mix test test/cure/compiler/macro_def_parse_test.exs`
-Expected: FAIL.
+Expected: both new tests FAIL — the first because `parse_rule_segments`'s catch-all branch (Task 2) treats `<` as an ordinary literal token, so `rule.segments` comes back as `[{:lit, "<"}, ...]` instead of a `{:hole, ...}`; the second because nothing yet calls `add_error/2` for a malformed hole, so `Parser.parse` returns `{:ok, ast}` and the test's `{:error, errors} = ...` match raises.
 
 - [ ] **Step 3: Implement hole recognition in `parse_rule_segments/2`**
 
