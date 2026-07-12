@@ -54,6 +54,20 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     assert rendered =~ "end of line"
   end
 
+  test "a macro-use mismatch against a bare keyword at true end-of-block names the dedent" do
+    # `say` as the very last thing in its block, with nothing after it: the
+    # closing `dedent` token (whose value is a bare indentation-level
+    # integer, not source text) is the mismatch token. It must be named in
+    # words, not rendered as the meaningless raw integer.
+    errors = errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say")
+
+    mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
+    assert mismatch, "expected a :macro_use_mismatch error"
+
+    rendered = Errors.format_error(mismatch, "f.cure")
+    assert rendered =~ "found `a dedent`"
+  end
+
   test "the hole-kind and nothing-more mismatch renders are total and grammatical" do
     # `{:hole_kind, _}` and `:nothing_more` are not reachable through today's
     # match_segments/4 (a `{:hole, _}` segment never fails to match, so the
