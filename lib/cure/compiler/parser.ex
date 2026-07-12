@@ -493,7 +493,9 @@ defmodule Cure.Compiler.Parser do
 
   defp match_repeated_segment(state, {:hole, %{name: name}}, bindings, acc) do
     case peek(state) do
-      %Token{type: type} when type in [:newline, :dedent, :eof] -> {Enum.reverse(acc), state}
+      %Token{type: type} when type in [:newline, :dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
       _ ->
         {arg, state} = parse_expr(state, 0)
         match_repeated_segment(state, {:hole, %{name: name}}, bindings, [arg | acc])
@@ -5074,8 +5076,11 @@ defmodule Cure.Compiler.Parser do
           _ -> false
         end
 
-      {%Token{type: type}, _index} when type in [:newline, :dedent, :eof] -> true
-      _ -> false
+      {%Token{type: type}, _index} when type in [:newline, :dedent, :eof] ->
+        true
+
+      _ ->
+        false
     end)
   end
 
