@@ -55,4 +55,44 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert out =~ "z: t1)"
     refute out =~ "T"
   end
+
+  test "a declared nullary data constructor used as an index is left alone" do
+    # `KA` is a nullary variant of the enum `K`, and appears as an *argument*
+    # of a type application (`Pair(Int, KA)`) exactly as an optic kind index
+    # like `Optic(s, a, LensKind)` does. It parses as a bare `{:variable}` node
+    # indistinguishable from a free type var, so it only stays untouched if
+    # `build_ctx/1` seeds this file's declared *constructor* names, not just
+    # its declared *type* names.
+    src = "mod M\ntype K = KA | KB\nfn f(x: Pair(Int, KA)) -> Int = 0\n"
+    {out, warns} = migrate(src, "ctor.cure")
+    assert out =~ "KA"
+    refute out =~ "ka"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a declared opaque type is left alone" do
+    # `opaque type Counter` has no body, so it is a `container_type: :opaque`
+    # node. `build_ctx/1` must collect opaque type names alongside struct/enum
+    # ones, or the opaque handle used in a signature is misread as a type var.
+    src = "mod M\nopaque type Counter\nfn f(x: Counter) -> Counter = x\n"
+    {out, warns} = migrate(src, "opaque.cure")
+    assert out =~ "x: Counter"
+    assert out =~ "-> Counter"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a built-in type the legacy classic Env omits (Pid) is left alone" do
+    # `Pid`/`Ref`/`Binary`/`Bitstring`/`Map`/`Tuple`/`Nat` are real Cure types
+    # that the legacy non-dependent `Cure.Types.Env` never registered, so — like
+    # `Type` — they must be supplemented explicitly or every concurrency/container
+    # signature that mentions them warns spuriously and `cure migrate --all` would
+    # corrupt them (`Pid` -> `pid`).
+    for ty <- ~w(Pid Ref Binary Bitstring Map Tuple Nat) do
+      src = "mod M\nfn f(x: #{ty}) -> #{ty} = x\n"
+      {out, warns} = migrate(src, "builtin.cure")
+      assert out =~ "x: #{ty}", "#{ty} should be left as-is"
+      refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var)),
+             "#{ty} should not warn"
+    end
+  end
 end

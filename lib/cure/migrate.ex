@@ -161,21 +161,30 @@ defmodule Cure.Migrate do
   """
   @spec build_ctx(Rule.ast()) :: MapSet.t()
   def build_ctx(ast) do
-    MapSet.union(builtin_type_names(), declared_type_names(ast))
+    builtin_type_names()
+    |> MapSet.union(declared_type_names(ast))
+    |> MapSet.union(declared_ctor_names(ast))
   end
 
-  # `Type` (the universe) is a built-in kind keyword, never a type variable: a
-  # dependent signature like `fn F(a: Type) -> Type` mentions it in type position
-  # but must NOT be lowercased. The classic `Cure.Types.Env` predates the universe
-  # and omits it, so add it explicitly.
-  @universe_names ~w(Type)
+  # Built-in type names the legacy non-dependent `Cure.Types.Env` never
+  # registered, but which are real Cure types (never free type variables) and so
+  # must NOT be lowercased. `Type` is the universe kind (`fn F(a: Type) -> Type`).
+  # `Pid`/`Ref`/`Binary`/`Bitstring` are BEAM primitive types and `Map`/`Tuple`
+  # are built-in containers; `Nat` is the Int-tier foundational numeric type (it
+  # carries dedicated kernel literal forms). Without this supplement, every
+  # concurrency or container signature mentioning them warns spuriously — and
+  # `cure migrate --all` would corrupt them (`Pid` -> `pid`). Data *constructors*
+  # of imported inductives (e.g. `Std.Nat`'s `Z`/`S`) are a different category —
+  # they need per-import resolution and stay out of this fixed set.
+  @builtin_supplement ~w(Type Pid Ref Binary Bitstring Map Tuple Nat)
 
   defp builtin_type_names do
-    (Cure.Types.Env.new().types |> Map.keys()) ++ @universe_names |> MapSet.new()
+    (Cure.Types.Env.new().types |> Map.keys()) ++ @builtin_supplement |> MapSet.new()
   end
 
   # Every type name this file introduces, gathered by a full pre-order walk:
-  #   * `{:container, [container_type: :struct | :enum, name: n], _}` — records/enums
+  #   * `{:container, [container_type: :struct | :enum | :opaque, name: n], _}` —
+  #     records, enums, and bodyless opaque handles (`opaque type GCounter`)
   #   * `{:type_annotation, [name: n], _}` — `typealias N = …`
   #   * `{:indexed_type, [name: n], _}` — indexed families (defensive; carries :name)
   defp declared_type_names(ast) do
@@ -185,7 +194,7 @@ defmodule Cure.Migrate do
   defp collect_type_names({:container, meta, ch}, acc) when is_list(ch) do
     acc =
       case Keyword.get(meta, :container_type) do
-        t when t in [:struct, :enum] -> maybe_name(meta, acc)
+        t when t in [:struct, :enum, :opaque] -> maybe_name(meta, acc)
         _ -> acc
       end
 
@@ -214,4 +223,38 @@ defmodule Cure.Migrate do
       _ -> acc
     end
   end
+
+  # Every data-constructor name this file introduces. A constructor spelled in an
+  # index/argument position (`Optic(s, a, LensKind)`) parses as a bare
+  # `{:variable}` node indistinguishable from a free type var, so its name must
+  # be in `ctx` too — otherwise the rule lowercases it (`LensKind` -> `lenskind`),
+  # corrupting the family index. Three surface spellings carry constructors:
+  #   * `{:variable, [variant: true], name}` — nullary enum variant (`LensKind`)
+  #   * `{:function_def, [variant: true, name: n], _}` — field-carrying variant
+  #     (`MkLensRep(a, (a) -> s)`), a constructor decl reusing the fn-def node
+  #   * `{:gadt_ctor, [name: n], _}` — an `indices`-form GADT constructor
+  defp declared_ctor_names(ast) do
+    ast |> collect_ctor_names([]) |> MapSet.new()
+  end
+
+  defp collect_ctor_names({:variable, meta, name}, acc) when is_binary(name) do
+    if Keyword.get(meta, :variant) == true, do: [name | acc], else: acc
+  end
+
+  defp collect_ctor_names({:function_def, meta, ch}, acc) when is_list(ch) do
+    acc = if Keyword.get(meta, :variant) == true, do: maybe_name(meta, acc), else: acc
+    Enum.reduce(ch, acc, &collect_ctor_names/2)
+  end
+
+  defp collect_ctor_names({:gadt_ctor, meta, ch}, acc) when is_list(ch) do
+    Enum.reduce(ch, maybe_name(meta, acc), &collect_ctor_names/2)
+  end
+
+  defp collect_ctor_names({_k, _meta, ch}, acc) when is_list(ch) do
+    Enum.reduce(ch, acc, &collect_ctor_names/2)
+  end
+
+  defp collect_ctor_names({_k, _meta, _name, inner}, acc), do: collect_ctor_names(inner, acc)
+  defp collect_ctor_names(l, acc) when is_list(l), do: Enum.reduce(l, acc, &collect_ctor_names/2)
+  defp collect_ctor_names(_other, acc), do: acc
 end
