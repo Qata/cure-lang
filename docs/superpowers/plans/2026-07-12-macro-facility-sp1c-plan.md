@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans (autopilot Stage 4). Steps use `- [ ]`. Builds on milestone 2 (local macro use-site expansion, commits d66bf57/0bd320f/94c33a6/6e01715).
 
-**Goal:** Lock the central safety claim of the whole macro facility — **a macro's expansion is type-checked exactly like hand-written code, with no bypass** — as a permanent regression firewall. Concretely: for a battery of macro programs, `Program.elaborate/1` returns the *identical* verdict (accept, or reject with the identical error term) as the hand-written program the macro expands to.
+**Goal:** Lock a central safety claim about the **dependent-elaboration entry point** — **a macro's expansion is type-checked exactly like hand-written code, with no bypass, at `Program.elaborate/1`** — as a permanent regression firewall. Concretely: for a battery of macro programs, `Program.elaborate/1` returns the *identical* verdict (accept, or reject with the identical error term) as the hand-written program the macro expands to. **Scope note (see "Known gap" below): this locks the property only for callers of `Program.elaborate/1` — it is NOT, by itself, an end-to-end guarantee about `cure build`/the CLI, which for non-dependent programs (including all four of this task's own examples) is checked by a wholly separate code path this task does not touch.**
 
-**Architecture:** Macro expansion happens at **parse time** (`Parser.parse` substitutes the template in place), so a macro use-site produces ordinary surface AST that flows through the *unchanged* elaborator+kernel — `Cure.Elab.Program.elaborate/1` (`lib/cure/elab/program.ex:16`) neither knows nor cares that a macro was involved. This task adds **no production code**: it is a soundness firewall test that proves — and forever guards — that this is true. If any future change let macro output reach codegen without full elaboration, this test breaks.
+**Architecture:** Macro expansion happens at **parse time** (`Parser.parse` substitutes the template in place), so a macro use-site produces ordinary surface AST that flows through the *unchanged* elaborator+kernel — `Cure.Elab.Program.elaborate/1` (`lib/cure/elab/program.ex:16`) neither knows nor cares that a macro was involved. This task adds **no production code**: it is a soundness firewall test that proves — and forever guards — that this is true *for `Program.elaborate/1` itself*. If any future change let macro output reach `Program.elaborate/1`'s codegen consumer (`check_ast_with_locals/1`, used by `Cure.Compiler`'s dependent-codegen branch, `lib/cure/compiler.ex:373`) without full elaboration, this test breaks. It does **not** guard the classic-pipeline branch — see "Known gap" immediately below.
+
+**Known gap (surfaced by plan review — verified against this tree, HALT-flagged for the operator, not silently patched over):** `Cure.Compiler.compile_string/2` (the function `cure build`/the CLI/`mix cure.compile` actually call) type-checks a parsed AST via `Cure.Types.Checker.check_module/2` (classic) whenever `Cure.Elab.Program.dependent?(ast)` is `false`, and only then dispatches to the classic `Cure.Compiler.Codegen.compile_module/2` — entirely bypassing `Program.elaborate/1` and `check_ast_with_locals/1`. Verified live against this worktree: parsing all four of this task's sample programs and calling `Program.dependent?/1` on each returns `false` for all four (`zero`, `inc`, `bad`, `tt`). Compiling them via the real `Cure.Compiler.compile_string/2` confirms the classic path is what actually runs, and it produces an entirely different, line-numbered error vocabulary — e.g. for `bad` (`nonexistent_thing`): `{:error, {:type_error, [{:unbound_variable, "undefined variable 'nonexistent_thing'", [line: 3]}]}}`; for `tt` (`true` as `Int`): `{:error, {:type_error, [{:type_mismatch, "function 'f' declared return type Int but body has type Bool", [line: 4]}]}}` — vs. `Program.elaborate/1`'s `:unknown_global` / `{:conversion_failure, {:data, :Bool, [], []}, {:int_type}}`. (For what it's worth, the underlying soundness property does appear to hold on the classic route too — macro and hand-written verdicts are equal once the `[line: N]` key is stripped — but **this task's test never exercises that path**, so a regression there would go undetected.) **This task, as scoped, provides no regression protection for `cure build` on non-dependent macro-using programs.** Whether to (a) add a companion classic-pipeline firewall as a follow-up task, or (b) explicitly accept this as acceptable given the classic-pipeline-deletion roadmap (macros are intended to be dependent-pathway-only long term), is an operator decision — not resolved by this plan-hardening pass. See also the "Task boundary" section at the end.
 
 **Tech Stack:** Elixir; ExUnit; `Cure.Elab.Program.elaborate/1`.
 
@@ -44,15 +46,20 @@ The core property is `verdict(macro_src) == verdict(handwritten_src)`, where `ve
 ```elixir
 # test/cure/elab/macro_expansion_soundness_test.exs
 defmodule Cure.Elab.MacroExpansionSoundnessTest do
-  # SOUNDNESS FIREWALL. The entire macro facility rests on one claim: a macro's
-  # expansion is type-checked exactly like hand-written code — expansion is a
-  # parse-time surface-AST rewrite, so the *unchanged* elaborator+kernel judge
-  # it, and nothing reaches codegen unelaborated (TCB delta zero). This test
-  # proves it by verdict-equality: each macro program elaborates to the IDENTICAL
-  # result as the hand-written program it expands to — accepting when well-typed,
-  # and rejecting with the SAME error term when ill-typed (well-formed-but-
-  # mistyped included). If a future change ever lets macro output bypass
-  # elaboration, one of these equalities breaks.
+  # SOUNDNESS FIREWALL for the Program.elaborate/1 entry point: a macro's
+  # expansion is type-checked exactly like hand-written code there — expansion
+  # is a parse-time surface-AST rewrite, so the *unchanged* elaborator+kernel
+  # judges it (TCB delta zero for this call). This test proves it by
+  # verdict-equality: each macro program elaborates to the IDENTICAL result as
+  # the hand-written program it expands to — accepting when well-typed, and
+  # rejecting with the SAME error term when ill-typed (well-formed-but-mistyped
+  # included). If a future change ever lets macro output reach
+  # check_ast_with_locals/1 (Cure.Compiler's dependent-codegen consumer)
+  # without going through this same elaboration, one of these equalities
+  # breaks. NOTE: this does NOT cover `cure build`'s classic-pipeline route
+  # (Cure.Types.Checker.check_module/2 + Cure.Compiler.Codegen.compile_module/2),
+  # which is what actually runs for non-dependent programs — see the plan's
+  # "Known gap" section.
   use ExUnit.Case, async: true
   alias Cure.Elab.Program
 
@@ -137,7 +144,7 @@ Expected: the ONLY change is the new untracked `test/cure/elab/macro_expansion_s
 
 - [ ] **Step 5: Full suite — no regression**
 
-Run: `mix test` (once, alone). Expected: green at the milestone-2 baseline + the new tests (~4103 passed / 2 skipped, antigen coverage intact). Confirm `test/antigen/seeds.sexp` and `corpus.sexp` are untouched.
+Run: `mix test` (once, alone). Expected: green at the milestone-2 baseline (4099, per commit `c835de1`) + the 6 new tests in this file = ~4105 passed (exact count may drift slightly with unrelated concurrent work; treat `~` as approximate), antigen coverage intact. Confirm `test/antigen/seeds.sexp` and `corpus.sexp` are untouched.
 
 - [ ] **Step 6: Commit**
 
@@ -150,7 +157,9 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(ma
 
 ## Task boundary + what remains in SP1
 
-T8 locks the DONE-criterion clause **"expands to well-typed Core"** with a permanent guard: macro output is proven indistinguishable from hand-written code at the elaborator, so it cannot smuggle an ill-typed (or well-formed-but-mistyped) term past the kernel. SP3's generative expansion proof will *fuzz* this same `Program.elaborate` primitive across randomly-generated use-sites; T8 is the hand-picked, position-exact anchor that fuzzing generalizes.
+T8 locks the DONE-criterion clause **"expands to well-typed Core"** with a permanent guard: macro output is proven indistinguishable from hand-written code at the elaborator, so it cannot smuggle an ill-typed (or well-formed-but-mistyped) term past the kernel — **for callers of `Program.elaborate/1`**. SP3's generative expansion proof will *fuzz* this same `Program.elaborate` primitive across randomly-generated use-sites; T8 is the hand-picked, position-exact anchor that fuzzing generalizes.
+
+**Open question surfaced by review (needs an operator decision, not resolved here):** `cure build`/the CLI compiles via `Cure.Compiler.compile_string/2`, which for non-dependent programs (verified: all four T8 examples classify as non-dependent per `Program.dependent?/1`) type-checks through the classic `Cure.Types.Checker.check_module/2` + `Cure.Compiler.Codegen.compile_module/2`, never touching `Program.elaborate/1`. T8 therefore does not firewall the classic-pipeline route that `cure build` actually takes for these programs today. Options: (a) add a companion classic-pipeline firewall task (parallel test asserting verdict equality via `Cure.Compiler.compile_string/2`, normalizing away the `[line: N]` metadata the classic error terms carry — confirmed feasible, the property holds there too); or (b) explicitly accept the gap as transitional, since the classic-pipeline-deletion initiative intends macros to be dependent-pathway-only long term. Neither option is executed by this plan.
 
 **Remaining SP1 tasks** (subsequent Stage-2 rounds, in priority order):
 - **T7 — hygiene:** `<fresh Name>` gensym in templates + capture-avoidance, so a template-introduced binder cannot capture a use-site name and vice-versa. Milestone-2 expansion is deliberately unhygienic; T7 makes name-binding templates safe. Needs its own grounding (a template-binder example, a capture repro) and its own plan `…-sp1d-plan.md`. This is a real red-green feature (capture repro → red → gensym fix → green).
