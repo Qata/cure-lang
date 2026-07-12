@@ -228,12 +228,27 @@ to **T7b** own plan. `<capture>` escape also deferred. Two tasks: T1 parse `<fre
 meta,name}`; T2 freshen at expansion (red = the capture repro with `<fresh g>`; green = binder gensym'd,
 param `g` uncaptured). TCB delta ZERO.
 
-**NEXT:** SP1 T7 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp1d plan (plan-for-code:
-falsifiability + testing-discipline; two clean passes; commit hardened). Scrutiny hints for reviewer:
-verify the `:lt`-prefix window can't shadow a real construct (confirm no valid `<ident ident>` prefix
-today); verify `freshen`-before-`subst_holes` ordering is correct + that a fresh name colliding with a
-hole name is genuinely out-of-scope-noted not silently broken; verify determinism of `fresh_counter`
-(phase-2-only; harvest phase doesn't expand). Then Stage 4 execute, Stage 5 review. After T7: T4/T9 (+ T7b).
+SP1 T7 Stage 3 DONE — plan hardened + committed `5c903d3` (4 passes, 2 clean). Reviewer verified live
+(patched parser.ex, ran, reverted) and caught 3 real TEST-CODE defects that would have caused false
+failures at execution:
+- **HIGH:** `find_fresh/1` helper couldn't reach the template — a macro rule is stored as a plain Elixir
+  MAP (`%{template:...}`), not an AST tuple, so the generic tuple-recursion never descends. Test could
+  never go green. Fixed: added `defp find_fresh(%{template: t}), do: find_fresh(t)` clause.
+- **MEDIUM:** freshening walker didn't mirror the real `subst_holes_meta_value`'s `is_tuple`/`is_list`
+  split — a `<fresh>` inside a raw-list meta value (e.g. `with`'s `:parent_patterns`) would leak
+  unrewritten. Fixed: added `collect_fresh_names_value`/`apply_freshening_value`.
+- **LOW:** vacuous `refute match?({:fresh_name,_,_}, assign)` (outer tuple can't match) → replaced with
+  `refute find_fresh(body)`.
+Verified SOUND (no finding): capture-bug AST shape is EXACTLY as planned (byte-for-byte); `<fresh g>`
+tokenization; `parse_prefix` has no `:lt` case + infix `<` non-interference; parse paths; determinism
+(harvest phase-1 never expands, `active_macros` defaults `%{}`); `expand_rule/2` has exactly one caller.
+**Executor: trust the hardened plan `5c903d3` — its test code is now live-verified.** The real capture-repro
+expanded AST (for Task-2 assertions): `{:block,_,[{:assignment,[let: true,...],[{:variable,_,"tmp"},
+{:literal,_,100}]}, {:binary_op,[operator: :+,...],[{:variable,[line:4],"tmp"}, {:variable,[line:3],"tmp"}]}]}`.
+
+**NEXT:** SP1 T7 Stage 4 — execute Task 1 (parse `<fresh Name>` → `{:fresh_name,meta,name}`) then Task 2
+(freshen at expansion) inline TDD on Opus, strict red→green, commit per task (ghost author, explicit
+pathspec, run mix from worktree root). Then Stage 5 code review. After T7: T4/T9 (+ T7b auto-hygiene).
 When ALL SP1 tasks done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
