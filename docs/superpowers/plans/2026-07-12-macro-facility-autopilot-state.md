@@ -972,6 +972,7 @@ The following slices have now landed in this worktree:
 - SP6 also has pure driver/register-map, units/literal, and property-check plan helpers for the next concrete DSL layer.
 - SP6 has a pure parse-grammar builder with duplicate and left-recursion validation.
 - The generated expansion-proof gate now runs for the dependent pipeline and the transitional classic `compile_string` path; the classic soundness negative control and the full suite pass.
+- Final verification in this worktree: `mix compile --warnings-as-errors` passed; `mix test` passed with `4239 passed (3 doctests, 4236 tests), 2 skipped`, `141` immune responses, and Antigen shape coverage `328/328` across 36 manifests.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
 The remaining work before the DONE criterion is genuinely satisfied is:
@@ -981,6 +982,6 @@ The remaining work before the DONE criterion is genuinely satisfied is:
 - Extend SP4 from the current declaration bundle to index-aware reducer/view/flow lowering and end-to-end concrete-library integration.
 - Extend SP5 from pure callback/module values to execution of a generated supervisor on a generic-unix AtomVM runtime; install or provide that external executable before claiming this gate.
 - Extend SP6 concrete libraries beyond the current packet, board, protocol, driver, units, checks, and parse helpers to the remaining embedded surface families.
-- Perform the required skeptical review, full test gate, Antigen verification, and final end-to-end proof before declaring completion.
+- Perform the final end-to-end proof after the AtomVM runtime gate and remaining embedded surface families land; skeptical review, full test gate, and Antigen verification are complete for the current implementation.
 
 Do not mark the DONE criterion complete until every item above is implemented and verified.
