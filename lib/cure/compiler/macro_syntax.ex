@@ -354,6 +354,7 @@ defmodule Cure.Compiler.MacroSyntax do
     do: Enum.any?(term, &contains_keyword?(&1, keyword))
 
   defp contains_keyword?({:variable, _meta, value}, keyword), do: value == keyword
+
   defp contains_keyword?({_tag, meta, children}, keyword) when is_list(meta) and is_list(children),
     do: contains_keyword?(meta, keyword) or contains_keyword?(children, keyword)
 

@@ -608,8 +608,12 @@ defmodule Cure.Compiler.Parser do
     expanded = subst_holes(freshened, bindings)
 
     case Cure.Compiler.MacroSyntax.lower_container(expanded) do
-      {:ok, ast} -> {ast, state}
-      :not_a_container -> {expanded, state}
+      {:ok, ast} ->
+        {ast, state}
+
+      :not_a_container ->
+        {expanded, state}
+
       {:error, reason} ->
         state = add_error(state, {:macro_expansion_error, reason})
         {{:macro_error, [reason: reason], []}, state}
@@ -2092,6 +2096,7 @@ defmodule Cure.Compiler.Parser do
         if container_macro_head?(state) do
           keyword = Atom.to_string(keyword)
           registry = if Map.has_key?(state.builtin_macros, keyword), do: state.builtin_macros, else: state.active_macros
+
           if Map.has_key?(registry, keyword) do
             parse_macro_use(state, keyword, registry)
           else
