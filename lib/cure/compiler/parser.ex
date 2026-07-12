@@ -188,6 +188,9 @@ defmodule Cure.Compiler.Parser do
     # silently accepting a garbage-suffixed example.
     case peek(state) do
       %Token{type: :eof} -> ast
+      # Generated raw-hole proofs preserve the structural delimiter for the
+      # enclosing parser, so no ordinary example continuation remains.
+      %Token{type: :dedent} -> ast
       _leftover -> {:example_use_site_not_fully_consumed, [], [ast]}
     end
   end

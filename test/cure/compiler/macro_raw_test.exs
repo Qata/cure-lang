@@ -48,4 +48,13 @@ defmodule Cure.Compiler.MacroRawTest do
     assert Keyword.get(meta, :delimiter) == "dedent"
     assert Enum.any?(captured, &(&1.value == "rule"))
   end
+
+  test "generated raw fillers assemble through the reader-tier delimiter" do
+    source = "macro Datalog\n  syntax datalog <rules: raw until dedent> becomes rules\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, [rule]}} = Parser.parse(tokens, emit_events: false)
+    assert {:ok, use_site} = Cure.Compiler.MacroFuzz.assemble_use_site(rule, %{"rules" => {:raw_text, "item"}})
+    assert {:raw_tokens, _, captured} = Parser.expand_example([rule], use_site)
+    assert Enum.map(captured, & &1.value) == ["item"]
+  end
 end

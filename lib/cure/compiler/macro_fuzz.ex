@@ -107,6 +107,17 @@ defmodule Cure.Compiler.MacroFuzz do
            generator: Term.gen_term(ctx, {:type, 0})
          }}
 
+      "raw until " <> _delimiter ->
+        {:ok,
+         %{
+           category: category,
+           domain: :raw,
+           env: generation_env,
+           ctx: ctx,
+           goal: nil,
+           generator: Gen.member_of([{:raw_text, "0"}, {:raw_text, "item"}, {:raw_text, "item 1"}])
+         }}
+
       _ ->
         {:error, {:unsupported_hole_type, category}}
     end
@@ -229,7 +240,12 @@ defmodule Cure.Compiler.MacroFuzz do
   end
 
   defp prove_rule(rule, rules, env, draws, seed) do
-    holes = for {:hole, %{name: name, kind: kind}} <- rule.segments, do: {name, kind}
+    holes =
+      Enum.flat_map(rule.segments, fn
+        {:hole, %{name: name, kind: kind}} -> [{name, kind}]
+        {:raw_hole, %{name: name, delimiter: delimiter}} -> [{name, "raw until " <> delimiter}]
+        _ -> []
+      end)
 
     case holes do
       [] ->
@@ -378,8 +394,15 @@ defmodule Cure.Compiler.MacroFuzz do
       when is_binary(keyword) and is_map(bindings) do
     with {:ok, words} <- assemble_words(segments, bindings),
          {:ok, tokens} <- Lexer.tokenize(Enum.join([keyword | words], " "), emit_events: false) do
-      {:ok, Enum.reject(tokens, &(&1.type == :eof))}
+      tokens = Enum.reject(tokens, &(&1.type == :eof))
+      {:ok, append_raw_delimiters(tokens, segments)}
     end
+  end
+
+  defp append_raw_delimiters(tokens, segments) do
+    if Enum.any?(segments, &match?({:raw_hole, %{delimiter: "dedent"}}, &1)),
+      do: tokens ++ [Token.new(:dedent, nil, 1, 1)],
+      else: tokens
   end
 
   defp assemble_words(segments, bindings) do
@@ -388,6 +411,18 @@ defmodule Cure.Compiler.MacroFuzz do
         {:cont, {:ok, acc ++ [word]}}
 
       {:hole, %{name: name}}, {:ok, acc} ->
+        case Map.fetch(bindings, name) do
+          {:ok, term} ->
+            case surface_filler(term) do
+              {:ok, text} -> {:cont, {:ok, acc ++ [text]}}
+              {:error, _} = error -> {:halt, error}
+            end
+
+          :error ->
+            {:halt, {:error, {:missing_hole_filler, name}}}
+        end
+
+      {:raw_hole, %{name: name}}, {:ok, acc} ->
         case Map.fetch(bindings, name) do
           {:ok, term} ->
             case surface_filler(term) do
@@ -430,6 +465,7 @@ defmodule Cure.Compiler.MacroFuzz do
   defp surface_filler_normal({:ctor, :F, []}), do: {:ok, "false"}
   defp surface_filler_normal({:data, :Nat, [], []}), do: {:ok, "Nat"}
   defp surface_filler_normal({:data, :Bd, [], []}), do: {:ok, "Bd"}
+  defp surface_filler_normal({:raw_text, text}) when is_binary(text), do: {:ok, text}
   defp surface_filler_normal({:int_lit, n}) when is_integer(n), do: {:ok, Integer.to_string(n)}
   defp surface_filler_normal({:float_lit, n}) when is_float(n), do: {:ok, Float.to_string(n)}
 
@@ -468,6 +504,13 @@ defmodule Cure.Compiler.MacroFuzz do
     case Enum.find(terms, fn term ->
            not (match?({:ok, _}, Kernel.infer(ctx, term)) and match?({:ok, _}, surface_filler(term)))
          end) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: :raw}, terms) do
+    case Enum.find(terms, &(not match?({:raw_text, text} when is_binary(text), &1))) do
       nil -> :ok
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end
