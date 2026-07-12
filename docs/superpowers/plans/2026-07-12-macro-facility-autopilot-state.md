@@ -459,14 +459,25 @@ Two tasks: T1 parse `explain` blocks → `%{kind: :explain, clauses: [%{point, b
 rules (harvest ignores non-syntax/literal kinds); T2 `MacroValidate.check_explain_exhaustive/1` derives structural
 points, checks coverage, emits `{:missing_diagnosis, uncovered}` + a friendly `format_error` clause. TCB delta ZERO.
 
-**NEXT:** SP2 slice-1 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2a plan (plan-for-code:
-falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: the `explain`-clause
-body parse (single `parse_expr` — does a multi-line/indented string body parse or need a block?); `explain`
-entry doesn't break the two harvesters (kind filter); `parse_explain_point` handles the two forms + won't crash
-on a malformed point; `covered?` category/keyword matching; `describe_point`/clause-grouping (SP1 §2 lesson);
-the check function's `{:macro_def, _, rules}` destructure matches real shape. Then Stage 4 execute, Stage 5
-review. After slice 1: M1 §3.4 `fail C` slice, then wiring slice, then M3 examples, then Tier-3. When ALL SP2
-mechanisms done+reviewed → SP2 Stage 6 → SP2 COMPLETE → SP3 (generative). Deferred post-gate SP1: T9, T7b.
+SP2 slice-1 Stage 3 DONE — plan hardened + committed `8c4ab17` (3 passes, 2 clean). Reviewer patched the
+plan's code into the tree + ran its own tests, fixing 3 findings:
+- **CRITICAL:** `derive_points` only walked `rule.segments`, but a `:syntax` rule's DISPATCH KEYWORD (`every`)
+  lives in the separate `keyword` field, NOT segments (probed: `%{kind: :syntax, keyword: "every", segments:
+  [hole: …]}` — zero `{:lit}` for `every`). So the headline example derived ZERO keyword points → the check
+  would pass vacuously. Fixed `derive_points` to special-case `%{kind: :syntax, keyword: kw}` → `{:keyword, kw}`.
+- `parse_explain_point/1` had no fallback → `CaseClauseError` crashed the whole parse on a malformed point
+  (`=> "x"`). Added total fallback (`add_error {:expected, :explain_point, …}` + non-advancing recovery) + a red test.
+- Added "Tests immutable once green" to Global Constraints (matched sibling plans).
+- CONFIRMED SOUND (no change): the indented `explain`-body parse works — `:indent` → `parse_block` unwraps a
+  single-statement body to the bare expression; the clause loop lands on the next point/dedent correctly.
+
+**NEXT:** SP2 slice-1 Stage 4 — execute Task 1 (parse `explain` blocks → `%{kind: :explain, clauses}` entry +
+malformed-point fallback) then Task 2 (`MacroValidate.check_explain_exhaustive/1` with the keyword-field fix +
+`missing_diagnosis` render) inline TDD on Opus, strict red→green, commit per task (ghost author, explicit
+pathspec, mix from worktree root). NOTE for implementer: `derive_points` MUST include `rule.keyword` for
+`:syntax` rules (per the CRITICAL fix); `describe_point/1` goes AFTER the catch-all (clause grouping). Then
+Stage 5 code review. After slice 1: M1 §3.4 `fail C`, wiring slice, M3 examples, Tier-3. When ALL SP2 done →
+SP2 Stage 6 → SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
