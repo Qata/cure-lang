@@ -264,7 +264,17 @@ defmodule Cure.Compiler.Parser do
   end
 
   # A short human description of the token actually found at the mismatch.
+  #
+  # Structural/whitespace tokens (:newline, :indent, :dedent) are named in
+  # words rather than falling through to their raw `value` (a literal "\n"
+  # byte, or a bare indentation-level integer): splicing either into the
+  # message breaks format_diagnostic's single-line `| message` convention or
+  # reads as meaningless ("found `2`"). These are common mismatches (e.g. a
+  # macro keyword used bare, with nothing supplied before the line ends).
   defp macro_got_desc(%Token{type: :eof}), do: "end of input"
+  defp macro_got_desc(%Token{type: :newline}), do: "end of line"
+  defp macro_got_desc(%Token{type: :indent}), do: "an indent"
+  defp macro_got_desc(%Token{type: :dedent}), do: "a dedent"
   defp macro_got_desc(%Token{value: v}) when not is_nil(v), do: to_string(v)
   defp macro_got_desc(%Token{type: t}), do: to_string(t)
 
