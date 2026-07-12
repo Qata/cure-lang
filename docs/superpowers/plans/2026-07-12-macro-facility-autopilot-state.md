@@ -598,15 +598,36 @@ SP2 slice-2b Stage 4 DONE — both tasks executed inline TDD (red→green), comm
 **M3 FUNCTIONALLY COMPLETE (unwired):** `rule_unpinned` (2a) + `example_mismatch` (2b). SP2 now has live checks
 for ALL THREE gate errors: `missing_diagnosis` (M1) + `rule_unpinned` + `example_mismatch` (M3).
 
-**NEXT:** SP2 slice-2b Stage 5 — dispatch a Sonnet `recursive-skeptical-review` over the diff
-(`16e0c2a..HEAD` code = `e9acf58`+`f76de41`: `parser.ex`+`macro_validate.ex`+`errors.ex`+`macro_example_check_test`).
-Focus: `expand_example` edge cases (a use-site that mis-matches the rule; a use-site nesting `<fresh>`; multiple
-examples on one rule); `normalize` on binary_op/match_arm/nested meta (does the 3-clause version handle every node
-shape — esp. meta-embedded ASTs like match_arm guards); degensym on a real `<fresh>` example; `check_examples`
-ordering + the `for` filter semantics; clause grouping; non-interference. Then SP2 slice-2b done. After: `{:type}`
-pin check (small), §3.4 `fail C` (needs Tier-3), Tier-3 `computed by`, then the WIRING slice. When ALL SP2 done →
-SP2 Stage 6 → SP2 COMPLETE → SP3 (uses the `Generator`-typeclass architecture per `2026-07-12-generator-typeclass-
-pbt-architecture.md`). Deferred post-gate SP1: T9, T7b.
+SP2 slice-2b Stage 5 DONE — Sonnet code review over the diff, converged (6 passes; 1 finding-pass + 5 clean).
+Found + fixed TWO real defects red-test-first:
+- **CRITICAL `1fdc661`** — `<fresh>`-BINDER false mismatch: a `<fresh Name>` marker parses to `{:fresh_name,
+  meta, name}` with NO `scope: :local` key (freshen reuses that meta when rewriting to `{:variable,meta,gensym}`),
+  but a hand-written pin's identifier ALWAYS carries `scope: :local` — so `normalize` comparing full variable meta
+  made every correctly-pinned `<fresh>`-as-binder example spuriously mismatch, defeating the headline `<fresh>`
+  self-proving case. Fixed: `normalize` drops `:variable` meta ENTIRELY (α-equivalence for a reference = its
+  degensym'd name alone).
+- **`3cb7bd2`** — `expand_example` discarded the parser state, silently swallowing trailing use-site tokens (a
+  typo'd extra word after the hole), so a garbage example could check `:ok`. Fixed: check `peek(state)` post-parse,
+  wrap in a `{:example_use_site_not_fully_consumed,…}` sentinel when tokens remain.
+- Confirmed sound: `normalize` handles match-arm-with-guard (meta-embedded ASTs stripped via `normalize_meta_value`);
+  multi-example/multi-rule ordering; determinism; `{:type}` pins skip; independent from M1/M3-presence checks.
+  674 passed, warnings-clean, antigen untouched. High confidence.
+
+## ═══ SP2 slice 2b (M3 expansion-equality, `example_mismatch`) COMPLETE ═══
+`e9acf58` `expand_example` + `f76de41` `check_examples`/`normalize` + review fixes `1fdc661`/`3cb7bd2`.
+**M3 COMPLETE** (`rule_unpinned` presence + `example_mismatch` equality). SP2 now has live (unwired) checks for
+ALL THREE gate errors: `missing_diagnosis` (M1) ✅ + `rule_unpinned` + `example_mismatch` (M3) ✅. TCB delta ZERO.
+
+**NEXT: SP2 slice 2c = M3 kernel-check + `{:type}` pins (small)** — Stage 2 plan. Closes the SP2 gate clause
+"example expansions **kernel-check**": for each example, elaborate the driven expansion via `Program.elaborate`
+(T8-style) and assert it is well-typed (not just α-equal to the pin); for `{:type, T}` pins (§5.2, currently
+skipped) assert the expansion elaborates to type `T`. GROUND FIRST: `expand_example` returns surface AST — wrap
+it in a minimal module/fn so `Program.elaborate` accepts it, extract the verdict; how a `{:type}` pin's type
+compares to the elaborated type. Then Stages 3-5. After 2c → **M3 fully gate-complete**. Then the big remaining
+SP2 pieces: **Tier-3 `computed by`** (total compile-time Cure elabs — SP2's headline capability, unblocks `fail C`
++ containers), §3.4 author `fail C`, then the **WIRING slice** (invoke all checks in the compile pipeline + pin
+SP1's own macros). When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (uses the `Generator`-typeclass
+architecture per `2026-07-12-generator-typeclass-pbt-architecture.md`). Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
