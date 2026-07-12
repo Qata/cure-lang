@@ -297,6 +297,14 @@ defmodule Cure.Compiler.Parser do
        when is_integer(v) and (v in 0..0xD7FF or v in 0xE000..0x10FFFF),
        do: "'#{<<v::utf8>>}'"
 
+  # Some tokens carry a STRUCTURED value that `to_string/1` cannot render and
+  # would raise on: a :regex value is `{body, flags}`, a :string_interpolation
+  # value is a list of parts. Name them by kind. The final `is_tuple/is_list`
+  # guard is a future-proof backstop for any other structured-value token.
+  defp macro_got_desc_raw(%Token{type: :regex}), do: "a regex literal"
+  defp macro_got_desc_raw(%Token{type: :string_interpolation}), do: "an interpolated string"
+  defp macro_got_desc_raw(%Token{value: v}) when is_tuple(v) or is_list(v), do: "a complex token"
+
   defp macro_got_desc_raw(%Token{value: v}) when not is_nil(v), do: to_string(v)
   defp macro_got_desc_raw(%Token{type: t}), do: to_string(t)
 
@@ -319,9 +327,7 @@ defmodule Cure.Compiler.Parser do
   defp match_segments(state, [], bindings, progress), do: {:ok, bindings, progress, state}
 
   defp match_segments(state, [{:lit, w} | rest], bindings, progress) do
-    tok = peek(state)
-
-    if to_string(tok.value) == w do
+    if lit_token_matches?(peek(state), w) do
       match_segments(advance(state), rest, bindings, progress + 1)
     else
       {:error, progress, state}
@@ -332,6 +338,16 @@ defmodule Cure.Compiler.Parser do
     {arg, state} = parse_expr(state, 0)
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
+
+  # A literal segment matches a token whose text equals the segment word. Only
+  # scalar token values (binary/atom/number) have text; a structured value —
+  # a :regex is `{body, flags}`, a :string_interpolation is a list of parts —
+  # can never equal a literal word AND crashes `to_string/1`, so it simply does
+  # not match (falling to the mismatch path → the default diagnostic).
+  defp lit_token_matches?(%Token{value: v}, w) when is_binary(v), do: v == w
+  defp lit_token_matches?(%Token{value: v}, w) when is_atom(v) and not is_nil(v), do: to_string(v) == w
+  defp lit_token_matches?(%Token{value: v}, w) when is_number(v), do: to_string(v) == w
+  defp lit_token_matches?(_tok, _w), do: false
 
   # Expand a rule: freshen its `<fresh Name>` markers to per-expansion gensyms
   # BEFORE substituting holes (so use-site hole material is never freshened),
