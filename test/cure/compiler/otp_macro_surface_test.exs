@@ -1,7 +1,7 @@
 defmodule Cure.Compiler.OtpMacroSurfaceTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Lexer, OtpMacro, Parser}
 
   test "lift module parses behaviour and quoted callback bodies as pure data" do
     source = """
@@ -22,5 +22,8 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
            ]
 
     assert {:variable, _, "arg"} = hd(meta[:callbacks]).body
+
+    assert {:ok, %{kind: :quoted_module, behaviour: :GenServer}} =
+             OtpMacro.lift_module_ast({:lift_module, meta, []})
   end
 end

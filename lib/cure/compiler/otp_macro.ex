@@ -108,6 +108,21 @@ defmodule Cure.Compiler.OtpMacro do
     lift_module(name, behaviour, callbacks, declarations)
   end
 
+  @doc "Validate and lift the parser's pure `lift module` AST node."
+  @spec lift_module_ast(tuple()) :: {:ok, map()} | {:error, term()}
+  def lift_module_ast({:lift_module, meta, []}) when is_list(meta) do
+    with module when is_binary(module) <- Keyword.get(meta, :module),
+         behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
+         callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
+         declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []) do
+      lift_module(module, behaviour, callbacks, declarations)
+    else
+      _ -> {:error, :invalid_lift_module_ast}
+    end
+  end
+
+  def lift_module_ast(_other), do: {:error, :invalid_lift_module_ast}
+
   defp fetch_callback(signatures, name) do
     case Enum.find(signatures, &(&1.name == name)) do
       nil -> {:error, {:unknown_callback, name}}
