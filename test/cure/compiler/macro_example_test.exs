@@ -41,4 +41,46 @@ defmodule Cure.Compiler.MacroExampleTest do
     node = parse!("macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n")
     assert syntax_rule(node).examples == []
   end
+
+  alias Cure.Compiler.{MacroValidate, Errors}
+
+  defp macro_def!(src) do
+    node = parse!(src)
+    find = fn find, n ->
+      case n do
+        {:macro_def, _, _} = m -> m
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+    find.(find, node)
+  end
+
+  test "a syntax rule with no example is rule_unpinned" do
+    md = macro_def!("macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n")
+    assert {:error, {:rule_unpinned, ["every"]}} = MacroValidate.check_rules_pinned(md)
+
+    rendered = Errors.format_error({:rule_unpinned, ["every"]}, "m.cure")
+    assert rendered =~ "every"
+    assert rendered =~ "example"
+    refute rendered =~ ":rule_unpinned"
+  end
+
+  test "a syntax rule WITH an example checks clean" do
+    md =
+      macro_def!(
+        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n    example every 500 expands Timer.repeat(500)\n"
+      )
+
+    assert :ok = MacroValidate.check_rules_pinned(md)
+  end
+
+  test "only unpinned syntax rules are reported (mixed macro)" do
+    md =
+      macro_def!(
+        "macro M\n  syntax a becomes X\n    example a expands X\n  syntax b becomes Y\n"
+      )
+
+    assert {:error, {:rule_unpinned, ["b"]}} = MacroValidate.check_rules_pinned(md)
+  end
 end

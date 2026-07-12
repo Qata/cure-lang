@@ -406,6 +406,19 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:rule_unpinned, keywords}, file) do
+    listed = keywords |> Enum.map(&"`#{&1}`") |> Enum.join(", ")
+
+    format_diagnostic(
+      "error",
+      "macro rule has no worked example",
+      file,
+      0,
+      "these rules are not pinned by an example: #{listed}. Add an indented " <>
+        "`example <use> expands <result>` under each rule so its intent is checked, not just its type."
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
