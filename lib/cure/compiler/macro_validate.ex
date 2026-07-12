@@ -48,6 +48,18 @@ defmodule Cure.Compiler.MacroValidate do
     end)
   end
 
+  @doc "Run only the generated expansion gate for transitional classic compiles."
+  @spec check_expansion_proofs(tuple() | list(), Cure.Core.Env.t()) :: :ok | {:error, term()}
+  def check_expansion_proofs(ast, env) do
+    collect_macro_defs(ast)
+    |> Enum.reduce_while(:ok, fn macro_def, :ok ->
+      case MacroFuzz.check_expansion_proof(macro_def, env) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
   @doc """
   Check every `syntax` rule, including `computed by` rules, carries at least one
   worked example (design §5.1).

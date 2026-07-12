@@ -23,7 +23,8 @@ defmodule Cure.Compiler do
       {:ok, module} = Cure.Compiler.compile_and_load(source)
   """
 
-  alias Cure.Compiler.{Lexer, Parser, Codegen, BeamWriter}
+  alias Cure.Compiler.{BeamWriter, Codegen, Lexer, MacroValidate, Parser}
+  alias Antigen.Generators.SigMenu
   alias Cure.Types.Checker
   alias Cure.Optimizer
 
@@ -103,6 +104,7 @@ defmodule Cure.Compiler do
          {:ok, ast} <- parse(tokens, file, emit?),
          {:ok, ast} <- migrate_warn(ast, file),
          {:ok, _} <- maybe_check(ast, file, emit?, check?),
+         {:ok, _} <- maybe_check_classic_macro_proof(ast),
          {:ok, ast} <- maybe_optimize(ast, optimize?, optimize_opts),
          {:ok, forms, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
       # Callback-mode FSMs, typed actors, supervisors, and
@@ -286,6 +288,17 @@ defmodule Cure.Compiler do
     case Checker.check_module(ast, file: file, emit_events: emit?) do
       {:ok, _} = ok -> ok
       {:error, errors} -> {:error, {:type_error, errors}}
+    end
+  end
+
+  defp maybe_check_classic_macro_proof(ast) do
+    if Cure.Elab.Program.dependent?(ast) do
+      {:ok, :dependent_pipeline}
+    else
+      case MacroValidate.check_expansion_proofs(ast, SigMenu.env_of(:v1)) do
+        :ok -> {:ok, :classic_macro_proof}
+        {:error, _} = error -> error
+      end
     end
   end
 
