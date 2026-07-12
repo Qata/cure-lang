@@ -811,5 +811,21 @@ defmodule Cure.Elab.UnionTest do
       exact = [?a, ?b, ?"]
       assert apply(:"Cure.EXQ", :head, [[exact]]) == :"Union<Atom|String#\"ab\"\">$String#\"ab\"\""
     end
+
+    # `check_extern_not_union/2`'s `_ -> if Elaborator.union_goal?(codomain) ...` branch
+    # (declarations.ex) was previously reachable but had NO test anywhere in the tree.
+    # A union NESTED inside the return type cannot be re-tagged by a guard on the raw
+    # top-level result — the boundary would have to walk an arbitrary structure — so it
+    # must still be rejected, distinctly from the top-level `extern_union_indistinct`.
+    test "REJECTS a union NESTED inside an @extern's return type" do
+      src = """
+      mod NestedExt
+        @extern(:erlang, :hd, 1)
+        fn head(xs: List(List(Int | Bool))) -> List(Int | Bool)
+      end
+      """
+
+      assert {:error, {:extern_returns_union, :head, _}} = Program.elaborate(src)
+    end
   end
 end
