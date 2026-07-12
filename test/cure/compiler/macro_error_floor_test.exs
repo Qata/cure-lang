@@ -28,4 +28,17 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     refute rendered =~ ":macro_use_mismatch"
     refute rendered =~ ":at_segment"
   end
+
+  test "a malformed hole in a macro definition renders a diagnostic explaining the hole syntax" do
+    # Missing the closing `>` — the milestone-1 :malformed_hole path.
+    errors = errors_of("macro Bad\n  syntax every <t: Duration becomes x\n")
+
+    mh = Enum.find(errors, &match?({:malformed_hole, _, _}, &1))
+    assert mh, "expected a :malformed_hole error"
+
+    rendered = Errors.format_error(mh, "bad.cure")
+    assert rendered =~ "hole"
+    assert rendered =~ "<name: Kind>"
+    refute rendered =~ ":malformed_hole"
+  end
 end

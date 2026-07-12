@@ -382,6 +382,17 @@ defmodule Cure.Compiler.Errors do
     format_diagnostic("error", "macro syntax", file, line, "#{detail} (at column #{col})")
   end
 
+  def format_error({:malformed_hole, line, col}, file) do
+    format_diagnostic(
+      "error",
+      "macro syntax",
+      file,
+      line,
+      "malformed hole at column #{col} — a macro hole is written `<name: Kind>` " <>
+        "(e.g. `<period: Duration>`); check for a missing `:` or closing `>`"
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
