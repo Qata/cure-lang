@@ -139,10 +139,26 @@ defmodule Cure.Elab.Emit do
       [
         {:attribute, @line, :module, module},
         {:attribute, @line, :export, exports}
-        | fn_forms
+        | no_auto_import_attr(exports) ++ fn_forms
       ]
     after
       Process.delete(:cure_emit_origins)
+    end
+  end
+
+  # A module that defines a function whose `{name, arity}` matches an Erlang
+  # auto-imported BIF (e.g. `size/1`, `byte_size/1`, `length/1` — common `@extern`
+  # wrapper or stdlib helper names) shadows that BIF. An unqualified call to it
+  # then trips `erl_lint`'s `call_to_redefined_bif` warning. Emit an explicit
+  # `-compile({no_auto_import, […]}).` so the local definition unambiguously wins
+  # and the warning is silenced — exactly how a hand-written Erlang module handles
+  # a BIF-named export. Safe here because every such wrapper's body is a *qualified*
+  # remote call (`:erlang.byte_size/1`, `:maps.size/1`), never an unqualified
+  # self-call, so re-binding the bare name to the local def cannot loop.
+  defp no_auto_import_attr(exports) do
+    case Enum.filter(exports, fn {name, arity} -> :erl_internal.bif(name, arity) end) do
+      [] -> []
+      bifs -> [{:attribute, @line, :compile, {:no_auto_import, bifs}}]
     end
   end
 
@@ -309,7 +325,9 @@ defmodule Cure.Elab.Emit do
   end
 
   defp lower(env, {:case, scrut, _motive, branches}, ctx) do
-    {:case, @line, lower(env, scrut, ctx), Enum.map(branches, &branch_clause(env, &1, ctx))}
+    scrut_form = lower(env, scrut, ctx)
+    clauses = Enum.map(branches, &branch_clause(env, &1, ctx))
+    irrefutable_projection(scrut_form, clauses) || {:case, @line, scrut_form, clauses}
   end
 
   defp lower(_env, {:int_lit, n}, _ctx), do: {:integer, @line, n}
@@ -403,6 +421,31 @@ defmodule Cure.Elab.Emit do
     do: {:call, @line, {:atom, @line, :error}, [{:atom, @line, :absurd}]}
 
   defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
+
+  # A single-clause `case` whose one clause is a tuple pattern and whose body is
+  # exactly a variable bound by that pattern is an irrefutable field projection —
+  # e.g. the dictionary-method extraction the typeclass elaborator emits
+  # (`case Dict of {Comparable, Compare} -> Compare end`). Lowered as a `case`, the
+  # bound variable is "exported" from the case, and when that case sits inside an
+  # operator subexpression (`compare(x, y) == LessThan`, from `min`/`max`/`clamp`)
+  # `erl_lint` raises `export_var_subexpr`. Emit `erlang:element(Idx, Scrut)`
+  # instead: a pure call that binds nothing — same value, no warning, no needless
+  # case. Semantics-preserving because the match is irrefutable (single, total
+  # clause over a well-typed value).
+  defp irrefutable_projection(scrut_form, [
+         {:clause, _, [{:tuple, _, elems}], [], [{:var, _, v}]}
+       ]) do
+    case Enum.find_index(elems, &match?({:var, _, ^v}, &1)) do
+      nil ->
+        nil
+
+      idx ->
+        {:call, @line, {:remote, @line, {:atom, @line, :erlang}, {:atom, @line, :element}},
+         [{:integer, @line, idx + 1}, scrut_form]}
+    end
+  end
+
+  defp irrefutable_projection(_scrut_form, _clauses), do: nil
 
   # An emit-generated binder (lambda param `Fn<n>` / let binder `L<n>`) that never
   # appears in its lowered body — e.g. a catch-all `match` branch whose join-point
