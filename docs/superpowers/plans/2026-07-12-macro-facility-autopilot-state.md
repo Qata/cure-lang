@@ -963,12 +963,13 @@ The following slices have now landed in this worktree:
 - SP5 has a closed OTP callback vocabulary, callback ADT-shaped values, declaration validation, and pure `QuotedModule` lifting in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
 - SP6 has delimited raw-hole parsing, pure capture helpers, computed use-site integration, `is Category` rule metadata, and explicit module-rule markers.
 - SP6 raw-hole proof fixtures now generate bounded raw text and preserve a synthetic `dedent` delimiter through `MacroFuzz`/`Parser.expand_example`.
+- The generated expansion-proof gate now runs for the dependent pipeline and the transitional classic `compile_string` path; the classic soundness negative control and the full suite pass.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
 The remaining work before the DONE criterion is genuinely satisfied is:
 
 - Extend native generation from the current closed built-in domains to module-aware/custom category declarations and explicit open-category coverage reporting.
-- Verify or complete the generated-proof gate across every real macro compilation path, including the transitional classic compiler path where the architecture requires it.
+- Extend the generated-proof gate to any future macro compilation path introduced after the current dependent and transitional classic paths.
 - Extend SP4 from the base reflection API to the reducer/view/flow dogfood surface and its integration tests.
 - Extend SP5 to the complete `behaviour`/`callback`/`lift module` surface, closed callback ADTs, and the AtomVM execution gate.
 - Extend SP6 from the current raw integration and metadata to full module-rule execution, open-category composition, repetition/optional grammar groups, and the concrete DSLs specified by the macro design.
