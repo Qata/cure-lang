@@ -940,9 +940,9 @@ defmodule Cure.Compiler.Parser do
 
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
-          # begin a scrutinee. The FSM/actor payload-binder `with` is consumed
-          # inside parse_fsm/parse_actor before it reaches here, so those uses
-          # (and any bare `with` operand) keep their identifier meaning.
+          # begin a scrutinee. The container macro's payload-binder `with` is
+          # consumed before it reaches here, so those uses (and any bare
+          # `with` operand) keep their identifier meaning.
           "with" ->
             if with_scrutinee_ahead?(state) do
               parse_with_abs(state, token)
@@ -4711,7 +4711,7 @@ defmodule Cure.Compiler.Parser do
 
   # -- macro container (SP1) --------------------------------------------------
   # `macro Name` … indented `syntax`/`literal` rules. Soft-keyword; closes by
-  # dedent (no `end`). Mirrors parse_fsm/parse_fsm_block; emits {:macro_def, …}.
+  # dedent (no `end`) and emits a {:macro_def, ...} AST node.
   defp parse_macro_def(state) do
     token = peek(state)
     state = advance(state)

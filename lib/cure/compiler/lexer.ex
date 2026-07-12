@@ -41,9 +41,8 @@ defmodule Cure.Compiler.Lexer do
   #
   # `app` follows the same soft-keyword discipline as `sup`: programs
   # that already use `app` as an identifier (e.g. a field called `app`
-  # or a local variable) keep compiling; the parser only switches into
-  # `parse_app_container/1` when the token is followed by an identifier
-  # at block-prefix position.
+  # or a local variable) keep compiling; the parser only considers the
+  # auto-preluded application macro at block-prefix position.
   @keywords ~w(
     mod fn let type typealias opaque primitive indexed indices rec proto impl fsm local use as
     interface implementation deriving
