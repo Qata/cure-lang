@@ -667,16 +667,27 @@ untouched.
 `ce62b17` (verb-branch split + segment stop-word) + `a23fb70` (doc). Tier-3 front-end live: `syntax … computed
 by <fn>` → `%{kind: :computed, elab}`, inert until execution. TCB delta ZERO.
 
-**NEXT: SP2 Tier-3 slice 2 = quoted-AST `Syntax` value model** — Stage 2 plan. GROUND FIRST (this is the hardest
-region of the whole facility — take a full grounding firing if needed): read base design §3 (quoted-AST model,
-`quote` builds syntax values, `$( )` splices) + §2 notation; decide the `Syntax` representation an elab receives
-(reflect the parser's `{tag,meta,children}` AST as a Cure value — likely a `Std.Syntax` ADT / opaque type) and
-how `quote`/`$()` parse+lower. This is the prerequisite for the BIG slice (compile-time elab EXECUTION: quote the
-matched input → run the elab staged-on-host → splice its returned `Syntax` as the expansion; K3 firewall re-checks
-output, TCB-zero). Then `check … else fail C` (§3.4), computed-rule example checks, then the WIRING slice (absorbs
-example-kernel-check + `{:type}` pins + firing-checks-in-compiles + pin SP1 macros). When ALL SP2 done → SP2
-Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass architecture, `2026-07-12-generator-typeclass-pbt-architecture.md`).
-Deferred post-gate SP1: T9, T7b. (`actor`-as-macro end-state sketched from design §14.6 — north star for SP5.)
+SP2 Tier-3 EXECUTION ARCHITECTURE GROUNDED (this firing) — design note committed:
+`docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`. Decisions (driver, revisable):
+- **A: execute by ELABORATE + NORMALISE, not compile-and-load.** Elaborate the elab ref → apply to the quoted
+  input → `Cure.Core.Normalise.whnf`/normalise → the normal form IS the expansion. Reuses the trusted normaliser
+  (verified callable), Cure-native, terminates (elabs are total), TCB-ZERO (normaliser unchanged; output re-elaborated).
+- **B: GENERIC `Std.Syntax` value FIRST**; typed per-category derived records (§3 ideal) DEFERRED as ergonomic
+  sugar. `Syntax = Node(tag, children) | Leaf(tag, value)` reflecting the parser `{tag,meta,children}` node; a
+  `to_syntax`/`from_syntax` reflection bridge (Elixir) round-trips (positions can drop — K3 re-elaborates output).
+- **C: `:computed` expands at ELABORATION time, NOT parse time** (needs elaborator+normaliser, absent at parse).
+  Parser harvests `:computed` + emits a deferred `{:computed_use, meta, [elab, input_syntax]}` node; a compile-time
+  expansion PASS in `lib/cure/elab/*` (untrusted → TCB-zero) walks + expands them. Phase distinction from Tier-1/2.
+Probed: normaliser `whnf` callable; NO existing Syntax/quote/staging infra (greenfield); elaborator touch OK (untrusted).
+
+**NEXT: SP2 Tier-3 slice 2 = `Std.Syntax` generic value + reflection bridge** — Stage 2 plan (grounded by the note
+above; NO execution yet). Scope: the `Std.Syntax` ADT (`Node`/`Leaf` + `SynLit`) as a Cure stdlib type; a
+`to_syntax(parser_ast)`/`from_syntax(syntax_value)` bridge (Elixir support module) with ROUND-TRIP tests
+(`from_syntax(to_syntax(ast)) ≡ ast` up to meta). GROUND FIRST: does the `Syntax` ADT elaborate + normalise as an
+ordinary inductive value; the exact parser node shapes to cover; where the bridge module lives. Then Stages 3-5.
+Slice 3 = the BIG execution pass (elaborate+normalise+splice); then `quote`/`$()`, `check…else fail C`, typed
+records (deferred), then WIRING. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass arch).
+Deferred post-gate SP1: T9, T7b. (`actor`-as-macro end-state = design §14.6, north star for SP5.)
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
