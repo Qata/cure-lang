@@ -294,13 +294,27 @@ expansion is at PARSE time — so imported-macro grammars need the PARSER to loc
 (couples parser to import resolution). T9 is the hard architectural piece; sequence it after the tractable T4
 + error-floor.
 
-**NEXT:** SP1 **T4** (Tier-1 literal rules + numeric-suffix lexer) Stage 2 — write
-`docs/superpowers/plans/2026-07-12-macro-facility-sp1e-plan.md`. Ground the lexer change first: `lex_decimal`
-has NO suffix support (`lexer.ex:795-826`); decide `500ms`→`{:literal}` with a unit tag vs a macro-hole
-`literal` rule kind. Program-doc calls the Tier-1 exemplar a `units`-style macro. Then Stages 3-5. After T4:
-the error-machinery floor (§2), then T9 (import scoping) + two-pass resolution (§6), then T7b (auto-hygiene +
-the fresh∩hole + backtick-spoof gaps + `<capture>`). When ALL SP1 scope done+reviewed → SP1 Stage 6 full
-verify, then SP2.
+SP1 T4 Stage 2 DONE — plan committed at `docs/superpowers/plans/2026-07-12-macro-facility-sp1e-plan.md`.
+**Key grounding correction (probed live):** NO lexer change needed — `500ms` ALREADY tokenizes
+`[integer: 500, identifier: "ms"]` (`500 ms` identical; whitespace dropped). So T4 is PARSER-ONLY (lower
+risk than the "numeric-suffix lexer" I'd assumed). Design fork resolved: it's a `literal` RULE KIND (base
+§111/§194 `literal <n: Number> ms becomes Duration.ms(n)`), not a lexer unit-tag. A `literal` rule = leading
+number-hole + `{:lit, suffix}` segment (reuses `parse_rule_segments`), but dispatches on a NUMBER use-site
+(not a keyword). Two tasks: T1 parse `literal` rules (add `"literal"` clause to `parse_macro_rules/2` :4184;
+`parse_literal_rule` skips the keyword, `suffix = first lit after hole`); T2 harvest by suffix into new
+`literal_macros` state map + dispatch in `parse_prefix` `:integer`/`:float` (:386) → `maybe_literal_macro`
+→ `expand_literal_rule` (binds number to hole, reuses `match_segments`/`expand_rule` so `<fresh>`+hole-subst
++T8 firewall apply). Anchors verified: `parse_macro_rules` only knows `"syntax"` today; `harvest_active_macros`
+now guarded to `:syntax`-only + sibling `harvest_literal_macros`. TCB delta ZERO.
+
+**NEXT:** SP1 T4 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp1e plan (plan-for-code:
+falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: verify `500ms`
+tokenization + the two-token dispatch (does `maybe_literal_macro` peeking after `advance` see the suffix?);
+confirm the `:integer`/`:float` dispatch can't break array-index/normal-number parsing (numbers followed by a
+non-registered identifier); verify the two-phase harvest seeds `literal_macros` in BOTH parse passes; confirm
+the blank-line-separated `macro`+`fn` top-level shape in Task-2's test actually parses as expected (run it).
+Then Stage 4 execute, Stage 5 review. After T4: error-floor (§2), T9 (import scoping §7 + two-pass §6), T7b.
+When ALL SP1 scope done+reviewed → SP1 Stage 6 full verify, then SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
