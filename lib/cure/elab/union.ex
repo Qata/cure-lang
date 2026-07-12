@@ -279,13 +279,20 @@ defmodule Cure.Elab.Union do
   def discrimination_order(members) do
     {lits, types} = Enum.split_with(members, &(&1.payload == nil))
 
-    sorted_types =
-      Enum.sort(types, fn a, b ->
-        refines?(runtime_class(a), runtime_class(b))
-      end)
-
-    lits ++ sorted_types
+    # Sort by an explicit SPECIFICITY RANK, not by `refines?/2` directly.
+    #
+    # `refines?/2` is not a valid `Enum.sort/2` comparator: it is a STRICT relation, so it
+    # returns false for unrelated pairs, which sort reads as "a > b". The ordering of
+    # unrelated members is then undefined, and the one invariant that MUST hold — a
+    # refining guard precedes the guard it refines — would be guaranteed only by luck of
+    # the merge-sort internals rather than by contract. A rank is a total order, so it is.
+    lits ++ Enum.sort_by(types, &specificity(runtime_class(&1)))
   end
+
+  # Lower rank = tested earlier. `is_boolean` must precede `is_atom`; every other guard is
+  # mutually exclusive of the rest, so its relative rank is immaterial.
+  defp specificity(:boolean), do: 0
+  defp specificity(_other), do: 1
 
   @doc """
   The literal value behind a LITERAL member's key, for building an equality guard.

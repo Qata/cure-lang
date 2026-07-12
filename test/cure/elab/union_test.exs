@@ -760,6 +760,23 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
     end
 
+    test "a THREE-member union with a refining guard orders correctly" do
+      # The 2-member Bool | Atom case can order correctly by accident. This pins that the
+      # refining guard still precedes the guard it refines when other members are present.
+      src = """
+      mod EX3
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Atom)) -> Int | Bool | Atom
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      assert apply(:"Cure.EX3", :raw, [[true]]) == {:"Disjoint<Atom|Bool|Int>$Bool", true}
+      assert apply(:"Cure.EX3", :raw, [[:other]]) == {:"Disjoint<Atom|Bool|Int>$Atom", :other}
+      assert apply(:"Cure.EX3", :raw, [[7]]) == {:"Disjoint<Atom|Bool|Int>$Int", 7}
+    end
+
     test "a union in an @extern's ARGUMENT position is unaffected" do
       # Passing a union INTO Erlang is honest: the tagged tuple is a fine Erlang term.
       src = """
