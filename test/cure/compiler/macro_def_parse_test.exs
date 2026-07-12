@@ -50,6 +50,15 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert hole.kind == "Duration"
   end
 
+  test "a syntax rule records its declared category and module-rule marker" do
+    node =
+      parse!("macro Reducer\n  syntax module <decls: Code> is Reducer.Module becomes decls\n")
+
+    assert {:macro_def, _m, [rule]} = node
+    assert rule.category == "Reducer.Module"
+    assert rule.module_rule
+  end
+
   test "a malformed hole (missing closing `>`) records a :malformed_hole error" do
     {:ok, tokens} =
       Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)

@@ -4576,18 +4576,19 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     {segments, state} = parse_rule_segments(state, [])
+    {category, state} = parse_rule_category(state)
 
     case peek(state) do
       %Token{type: :identifier, value: "computed"} ->
-        parse_computed_rule(state, kw_token, keyword, segments)
+        parse_computed_rule(state, kw_token, keyword, segments, category)
 
       _ ->
-        parse_becomes_rule(state, kw_token, keyword, segments)
+        parse_becomes_rule(state, kw_token, keyword, segments, category)
     end
   end
 
   # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
-  defp parse_becomes_rule(state, kw_token, keyword, segments) do
+  defp parse_becomes_rule(state, kw_token, keyword, segments, category) do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
@@ -4603,6 +4604,8 @@ defmodule Cure.Compiler.Parser do
       segments: segments,
       template: template,
       examples: examples,
+      category: category,
+      module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
     }
@@ -4614,7 +4617,7 @@ defmodule Cure.Compiler.Parser do
   # reference; running it is a later slice. NOT harvested into active_macros
   # (harvest filters kind: :syntax), so a computed macro's use-site is inert
   # until the execution slice lands.
-  defp parse_computed_rule(state, kw_token, keyword, segments) do
+  defp parse_computed_rule(state, kw_token, keyword, segments, category) do
     state = advance(state)
 
     state =
@@ -4634,6 +4637,8 @@ defmodule Cure.Compiler.Parser do
       syntax_fields: macro_syntax_fields(segments),
       elab: elab,
       examples: examples,
+      category: category,
+      module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
     }
@@ -4642,6 +4647,20 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp macro_syntax_type(keyword), do: String.capitalize(keyword) <> "Syntax"
+
+  # A rule may optionally declare the category it produces. Categories are
+  # metadata for the macro grammar; expansion remains ordinary AST rewriting.
+  defp parse_rule_category(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "is"} ->
+        state = advance(state)
+        {category, state} = parse_dotted_name(state)
+        {category, state}
+
+      _ ->
+        {nil, state}
+    end
+  end
 
   defp macro_syntax_fields(segments) do
     segments
@@ -4849,7 +4868,7 @@ defmodule Cure.Compiler.Parser do
       # across the whole rule grammar, not just after a rule's segments —
       # same trade-off `becomes` already made alone. No known `.cure` source
       # relies on `computed` as a matched token.
-      %Token{type: :identifier, value: v} when v in ["becomes", "computed"] ->
+      %Token{type: :identifier, value: v} when v in ["becomes", "computed", "is"] ->
         {Enum.reverse(acc), state}
 
       %Token{type: type} when type in [:newline, :dedent, :eof] ->
