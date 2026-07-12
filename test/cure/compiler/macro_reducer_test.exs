@@ -66,4 +66,17 @@ defmodule Cure.Compiler.MacroReducerTest do
     ctx = Context.extend(Context.empty(env), flag_type)
     assert {:ok, _term, {:vint_type}} = Elaborator.elaborate_expr_typed(flow_ast, ["flag"], ctx, env)
   end
+
+  test "declaration bundle integrates reducer, view, and flow outputs" do
+    assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
+    body = {:literal, [subtype: :integer], 0}
+    arms = [%{constructor: :Off, body: body}, %{constructor: :On, body: body}]
+
+    assert {:ok, %{kind: :macro_dispatch_bundle, reducer: reducer, view: view, flow: flow}} =
+             MacroReducer.build_bundle("Flag", {:variable, [], "flag"}, arms, env)
+
+    assert {:pattern_match, [generated_by: :macro_reducer], _} = reducer
+    assert {:pattern_match, [generated_by: :macro_view], _} = view
+    assert {:pattern_match, [generated_by: :macro_flow], _} = flow
+  end
 end

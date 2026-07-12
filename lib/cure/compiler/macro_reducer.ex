@@ -33,6 +33,17 @@ defmodule Cure.Compiler.MacroReducer do
   def build_flow(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs),
     do: build_dispatch(:macro_flow, type_name, scrutinee, arm_specs, env)
 
+  @doc "Build the reducer/view/flow dispatch bundle used by declaration macros."
+  @spec build_bundle(String.t() | atom(), term(), [arm_spec()], Env.t()) ::
+          {:ok, map()} | {:error, term()}
+  def build_bundle(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs) do
+    with {:ok, reducer} <- build_match(type_name, scrutinee, arm_specs, env),
+         {:ok, view} <- build_view(type_name, scrutinee, arm_specs, env),
+         {:ok, flow} <- build_flow(type_name, scrutinee, arm_specs, env) do
+      {:ok, %{kind: :macro_dispatch_bundle, type: type_name, reducer: reducer, view: view, flow: flow}}
+    end
+  end
+
   defp build_dispatch(generated_by, type_name, scrutinee, arm_specs, env) do
     with {:ok, constructors} <- MacroReflection.constructors(env, type_name),
          :ok <- validate_arm_set(constructors, arm_specs),
