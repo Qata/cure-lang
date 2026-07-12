@@ -54,14 +54,21 @@ Stage 3 DONE — plan hardened + committed `6dedd96` (4 passes, 2 clean). Review
 - Token atoms `:lt`/`:gt`/`:colon` confirmed correct; all anchors verified exact.
 Use the HARDENED plan (`6dedd96`) for execution — it is proven to work.
 
-**NEXT:** Stage 4 — execute tasks 1-3 inline TDD on **Opus**, commit per task, scoped
-`mix test test/cure/compiler/macro_def_parse_test.exs` then `test/cure/compiler/`. The
-reviewer already proved the code green, so expect smooth TDD; still follow red→green per
-step. THEN Stage 5 code review (Sonnet) over the diff → Stage 6 verify. THEN the next
-Stage-2 increment: SP1 tasks T4 (literal/suffix lexer) → T5 two-phase parse → T6 use-site
+Stage 4 milestone-1 DONE — SP1 tasks 1-3 executed inline TDD (red→green per task),
+committed `c381e7a` (container skeleton), `8f07931` (bare-keyword syntax rules),
+`77cbd6d` (typed holes). `test/cure/compiler/macro_def_parse_test.exs` = 6 passed; full
+`test/cure/compiler/` = 625 passed / 1 skipped (baseline, no regression). The
+macro-definition front-end is live: `macro Name` → `syntax kw <hole: Kind> becomes tmpl`
+→ `{:macro_def, [name,line,col], [%{kind: :syntax, keyword, segments: [{:lit,_}|{:hole,%{name,kind,line}}], template, progress: nil, line}]}`.
+
+**NEXT:** Stage 5 — code review (Sonnet subagent, recursive-skeptical-review over the
+diff `git diff 39e6d82..HEAD`, red-test-first fixes) of the milestone-1 parser changes.
+The Stage-3 reviewer already ran this exact code (6/6 + 625 green), so expect a light
+pass. THEN Stage 6 — verify (full `mix test` once). THEN the next Stage-2 increment: write
+the plan for SP1 tasks T4 (literal/suffix lexer) → T5 two-phase parse → T6 use-site
 matching (thread progress; port syntax-parse maximal-by-progress) → T7 hygienic expansion
-→ T8 kernel re-check → T9 scoping. When SP1 is fully executed + code-reviewed +
-suite-green, update this file and start SP2.
+→ T8 kernel re-check → T9 scoping, and run that plan through Stages 3-6. When SP1 is fully
+executed + code-reviewed + suite-green, update this file and start SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
