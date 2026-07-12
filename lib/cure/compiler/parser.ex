@@ -5178,6 +5178,15 @@ defmodule Cure.Compiler.Parser do
         prim_ast = attach_decorator(prim_ast, dec_name, args)
         {prim_ast, state}
 
+      # `@prelude typealias Name = RHS` attaches the decorator to the
+      # `{:type_annotation}` synonym node (see attach_decorator's clause). Used so
+      # a transparent alias like `String = List(Char)` can join the implicit
+      # prelude at its definition site.
+      %Token{type: :keyword, value: :typealias} ->
+        {ta_ast, state} = parse_typealias(state)
+        ta_ast = attach_decorator(ta_ast, dec_name, args)
+        {ta_ast, state}
+
       _ ->
         # Standalone decorator or property
         if args != [] do
@@ -5234,6 +5243,12 @@ defmodule Cure.Compiler.Parser do
           end
 
         {:function_def, meta ++ decoration, body}
+
+      # `@prelude typealias Name = RHS` — a transparent type synonym. Thread the
+      # decorator into the `{:type_annotation}` meta so program.ex's prelude
+      # discovery can see it (mirrors the `{:container}`/`{:indexed_type}` clauses).
+      {:type_annotation, meta, rhs} ->
+        {:type_annotation, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), rhs}
 
       other ->
         other

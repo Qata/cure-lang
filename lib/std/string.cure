@@ -37,7 +37,10 @@ mod Std.String
   use Std.Char
   use Std.Atom
 
-  ## `String` is the value-surface charlist of Unicode code points.
+  ## `String` is the value-surface charlist of Unicode code points. `@prelude`
+  ## makes the bare `String` name resolve in every module without `use Std.String`
+  ## — `List`/`Char` are already ambient, so the alias is all that is needed.
+  @prelude
   typealias String = List(Char)
 
   # -- Input adapter ----------------------------------------------------------
