@@ -47,6 +47,22 @@ says: *"A generic traversal API over any syntax value exists underneath for tool
 per-hole derived records are an **ergonomics + compile-time-safety layer on top**, deferred.
 Rationale: the generic value is tractable and is the substrate the typed layer would derive
 onto anyway; getting execution working end-to-end first is worth more than the typed sugar.
+
+**Operator steer (2026-07-12) — the elab-facing API is the TYPED derived record, NOT a
+generic stringly accessor.** The generic `Std.Syntax` VALUE is the substrate and stays, but
+the interface an elab *author* sees must be the §3 derived record: from a rule's holes, the
+facility synthesises `rec RuleSyntax { <hole>: Syntax(<Kind>), … }` (a `...` group → a
+`List` of a sub-record) and threads it as the elab's parameter type, so the author writes
+`a.name` / `a.messages.map(fn(m) -> m.body)` — typed record projection, **compile-checked**
+(a misspelled field is a compile error, not an elab-run-time failure), self-documenting. A
+typed field like `a.name : Syntax(Name)` is a typed *view* whose value is still a generic
+`Syntax` node underneath — so slice 2's generic value + reflection bridge are unchanged and
+un-wasted; what is explicitly rejected is shipping a generic `field("name")` accessor as the
+elab API. The record derivation (type synthesised from the grammar; leans on the landed
+dependent-records support) is its own slice, landing **with or immediately after** execution
+so authors never touch a stringly form. (Corrects the `a.field("name")` shorthand used in the
+§14.6 `actor` sketch discussions — the real spelling is `a.name`.)
+
 `Std.Syntax` sketch (spelling deferred):
 
 ```
@@ -94,8 +110,11 @@ totally inert; this reverses that — harvest + emit `{:computed_use}` — as it
    slice 3 can construct `Syntax` via ordinary constructors first; `quote` is ergonomics.
 5. **`check … else fail C`** (§3.4) — semantic guards in elabs raising author `Diagnosis`
    points; ties Tier-3 to M1's exhaustiveness.
-6. **Typed per-category derived records** (§3 ideal) — derive a per-rule input record from its
-   holes; type `quote`/`$()` against categories. Ergonomic layer over the generic value.
+6. **Typed per-rule derived records** (§3 ideal, operator-steered elab API — see Decision B) —
+   synthesise a `rec RuleSyntax { <hole>: Syntax(<Kind>), … }` from the rule's holes and thread
+   it as the elab's parameter type, so authors write `a.name` (typed, compile-checked) not
+   `field("name")`. Land WITH or immediately after slice 3 so no throwaway stringly API ships.
+   Type-derivation from the grammar is the new machinery (leans on landed dependent records).
 
 ## 6. Open questions to verify before slice 3 (execution)
 

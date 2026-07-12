@@ -680,14 +680,33 @@ SP2 Tier-3 EXECUTION ARCHITECTURE GROUNDED (this firing) — design note committ
   expansion PASS in `lib/cure/elab/*` (untrusted → TCB-zero) walks + expands them. Phase distinction from Tier-1/2.
 Probed: normaliser `whnf` callable; NO existing Syntax/quote/staging infra (greenfield); elaborator touch OK (untrusted).
 
-**NEXT: SP2 Tier-3 slice 2 = `Std.Syntax` generic value + reflection bridge** — Stage 2 plan (grounded by the note
-above; NO execution yet). Scope: the `Std.Syntax` ADT (`Node`/`Leaf` + `SynLit`) as a Cure stdlib type; a
-`to_syntax(parser_ast)`/`from_syntax(syntax_value)` bridge (Elixir support module) with ROUND-TRIP tests
-(`from_syntax(to_syntax(ast)) ≡ ast` up to meta). GROUND FIRST: does the `Syntax` ADT elaborate + normalise as an
-ordinary inductive value; the exact parser node shapes to cover; where the bridge module lives. Then Stages 3-5.
-Slice 3 = the BIG execution pass (elaborate+normalise+splice); then `quote`/`$()`, `check…else fail C`, typed
-records (deferred), then WIRING. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass arch).
-Deferred post-gate SP1: T9, T7b. (`actor`-as-macro end-state = design §14.6, north star for SP5.)
+SP2 Tier-3 slice-2 (`Std.Syntax` value + reflection bridge) Stage 2 DONE — plan committed at
+`docs/superpowers/plans/2026-07-12-macro-facility-sp2e-plan.md`. Grounded live (found + corrected a design flaw):
+meta is LOAD-BEARING (node names/operators/subtypes live in meta, not just tag/children) → `Syntax` must carry an
+`attrs` field, else reflection loses function names. ADT: `Syntax = Node(Atom, List(Attr), List(Syntax)) |
+Leaf(Atom, List(Attr), SynLit)`, `Attr = KV(Atom, SynLit)`, `SynLit = SInt|SFloat|SStr|SBool|SAtom|SOpaque`
+(exotic regex/interp `third` → SOpaque, round-trips shape-only). Template = `Std.Json` `type Value` (nested
+positivity proven). Two tasks: T1 `lib/std/syntax.cure` (elaborates-test mirrors `json_elaborates_test`); T2
+`Cure.Compiler.MacroSyntax.to_syntax`/`from_syntax` Elixir bridge over a mirror repr, lossless round-trip
+(up to line/col). TCB delta ZERO. NO execution (slice 3).
+
+**OPERATOR STEER (2026-07-12) — elab-facing reflection API = TYPED derived record, NOT stringly `field`.**
+Operator asked: parameterise `Syntax` over the definition so an elab writes `a.name` (typed) not
+`a.field("name")`. YES — that's design §3's typed per-category derived records. From a rule's holes, synthesise
+`rec RuleSyntax { <hole>: Syntax(<Kind>), … }` (`...` group → `List` of sub-record), thread as the elab's param
+type → `a.name` compile-checked, self-documenting. The generic `Syntax` VALUE (slice 2) is the SUBSTRATE a typed
+field holds underneath → slice 2 UNCHANGED + un-wasted; what's rejected is shipping a generic `field` accessor as
+the elab API. Recorded in the Tier-3 execution design note (Decision B + slice 6, elevated to "land with/right
+after execution"). Type-derivation-from-grammar = the new machinery (leans on landed dependent records).
+
+**NEXT:** SP2 Tier-3 slice-2 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2e plan
+(plan-for-code: falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: does
+`Std.Syntax` actually elaborate (nested `List(Syntax)` positivity like `Json.Value`; needed imports); the
+`to_syntax`/`from_syntax` round-trip covers real node shapes incl. attrs-preservation (function names/operators);
+the SOpaque exotic path doesn't crash; `strip`-based round-trip equality is sound. Then Stage 4 execute, Stage 5
+review. After slice 2: slice 3 (BIG execution pass), then the TYPED-RECORD derivation (per the steer above),
+`check…else fail C`, WIRING. When ALL SP2 done → SP2 Stage 6 → SP2 COMPLETE → SP3 (Generator-typeclass arch).
+Deferred post-gate SP1: T9, T7b. (`actor` end-state = §14.6, `a.name` typed reflection; north star for SP5.)
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
