@@ -71,20 +71,30 @@ every container-body skip point + 2 red tests. `test/cure/compiler/` = 627 passe
 MILESTONE 1 (macro-definition front-end, SP1 tasks 1-3) is COMPLETE through Stage 5:
 commits `c381e7a` `8f07931` `77cbd6d` `4295479`.
 
-**NEXT:** SP1 milestone 2 — write the Stage-2 plan for tasks T4-T9, then run it through
-Stages 3-5:
-- T4 `literal` rules + numeric-suffix lexer (`500ms`) — the one lexer change SP1 needs.
-- T5 two-phase parse: parser-state `active_macros` seeded by a pre-pass from `use` + local
-  `macro` defs (architectural core, grounding doc).
-- T6 use-site matching: at a keyword in `active_macros`, walk the rule `segments`, bind
-  holes, RECORD progress; port syntax-parse maximal-by-progress when rules compete.
-- T7 hygienic `becomes` expansion (`<fresh Name>` gensym) → surface AST.
-- T8 feed expansion back through parse→elaborate; assert it kernel-checks (green + a red
-  ill-typed-expansion fixture → rejected-not-unsound).
-- T9 import scoping + same-keyword conflict; two-pass name resolution.
-Plan file: `docs/superpowers/plans/2026-07-12-macro-facility-sp1b-plan.md`. Ground it in
-the SP1 grounding doc + the parser anchors already verified. When ALL SP1 tasks (1-9) are
-executed + code-reviewed, do Stage 6 (full `mix test` once) for SP1, update this file, start SP2.
+SP1 milestone 2 Stage 2 DONE — plan committed at
+`docs/superpowers/plans/2026-07-12-macro-facility-sp1b-plan.md`. It scopes the milestone to
+the **critical path to "a local macro expands"** (the observable spine), with T4/T7/T8/T9 as
+noted subsequent increments:
+- **Task 1 (T5) — two-phase parse:** `active_macros: %{keyword => [rule]}` on parser state;
+  `parse/2` runs a harvest pass (parse once, keep only `{:macro_def}` nodes via
+  `collect_macro_defs/1`) then an authoritative pass seeded with it. LOCAL macros only (`use`
+  inert at parse time → imported grammars deferred to T9). Test pins no single-pass regression.
+- **Task 2 (T6a) — zero-hole use-site expansion:** guarded `:identifier` dispatch
+  (`is_map_key(state.active_macros, name)`) → `parse_macro_use/2` → `expand_rule/2`
+  (`subst_holes/2` walks the template). `now` → `Clock.now()`.
+- **Task 3 (T6b) — hole matching + substitution + progress:** `match_segments/4` walks
+  `{:lit}`/`{:hole}` segments, binds holes via `parse_expr`, records progress (syntax-parse
+  maximal-by-progress hook), substitutes. `every <t: Code>` → `Timer.repeat(t)`.
+
+**NEXT:** SP1 milestone 2 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` subagent
+on the sp1b plan (plan-for-code: falsifiability + testing-discipline pass; two consecutive
+clean passes; commit hardened). Note for the reviewer: the plan flags two soft spots to
+scrutinize — (a) harvest-pass fragility (a use-site mis-parse in phase 1 swallowing a later
+`macro` def under error recovery); (b) `find_fn_body`/`def` body shape is asserted-then-
+verify — the plan says confirm the real `function_def` shape before running. Then Stage 4
+(execute T5/T6a/T6b TDD), Stage 5 (code review). T4/T7/T8/T9 are subsequent Stage-2/4 rounds
+before SP1's Stage 6. When ALL SP1 tasks are executed + code-reviewed, do Stage 6 (full
+`mix test` once) for SP1, update this file, start SP2.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
