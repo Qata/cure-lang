@@ -440,18 +440,33 @@ SP1 (minimal facility, Tiers 1-2) gate MET end-to-end:
 name resolution §6 — cross-module macros, the hard parser/import-resolution lift), T7b (automatic full
 hygiene + the fresh∩hole & backtick-spoof gaps + `<capture>`). Parked: Elm-style error rendering (`82d64a8`).
 
-**NEXT: START SP2** — "Tier 3 + self-proving Mechanisms 1 & 3" (program-doc §SP2, the self-proving HEADLINE).
-Ships: `syntax … computed by f` (total compile-time Cure over quoted decls, `check … else fail`), size-change-
-certified pure elabs; PLUS the type-enforced obligations — **derived + author-extensible `Diagnosis`** (`fail
-C(args)`, self-proving §3.4), **exhaustive `explain`** checked like case-coverage (self-proving §3), **required
-per-rule worked examples** (self-proving §5). GATE: the three new macro-compile errors (`missing_diagnosis`,
-`rule_unpinned`, example-mismatch) fire on red fixtures, absent on green; example expansions kernel-check; full
-suite green. Depends on SP1 (done). SP2 Stage 2 — GROUND FIRST (read self-proving-macros-design.md §3/§3.4/§5 +
-program-doc SP2; probe how `computed by`/`explain`/`example` would parse into the `{:macro_def,…}` rules; decide
-where the type-enforced obligation CHECKS run — a new macro-def validation pass, TCB-zero since it's frontend).
-Then write `docs/superpowers/plans/2026-07-12-macro-facility-sp2-plan.md`, Stages 3-5-6. NOTE: SP2 is large +
-is the operator's headline ("type system REQUIRES the macro author to define each failure's Show") — scope
-carefully, likely multiple plan rounds.
+## ═══ SP2 STARTED ═══ (self-proving headline; large → sliced)
+SP2 = "Tier-3 + self-proving Mechanisms 1 & 3" decomposes into slices (SP1 done). Full SP2 scope:
+**M1** exhaustive `explain` over derived+extensible `Diagnosis` (`missing_diagnosis`) [self-proving §3];
+**M3** required per-rule `example … expands …` (`rule_unpinned` + example-mismatch) [§5]; **Tier-3** `computed
+by fn(...)` total compile-time Cure + `check … else fail` + author `fail C(args)` [§3.4]. GATE (all slices):
+the 3 macro-compile errors fire on red fixtures / absent on green; example expansions kernel-check; suite green.
+
+Grounding done (read self-proving §3.1-§3.4 + §5 + program-doc SP2; probed tokenization): `explain` = soft-kw
+identifier; `Duration =>` = `identifier`+`:fat_arrow`; `keyword "w"` = `identifier`+`string`. `Diagnosis` is
+DERIVED from grammar: one point per typed hole (`{:hole_kind, Cat}`) + per literal (`{:keyword, w}`). Key design
+decision RESOLVED: the obligation CHECKS run in a NEW frontend module `Cure.Compiler.MacroValidate` (TCB-zero),
+NOT the parser — so SP1's explain-less test macros don't break (this slice does NOT wire the check into the
+compile pipeline; wiring + pinning SP1 macros is a later slice).
+
+SP2 slice-1 (M1 structural) Stage 2 DONE — plan committed at `docs/superpowers/plans/2026-07-12-macro-facility-sp2a-plan.md`.
+Two tasks: T1 parse `explain` blocks → `%{kind: :explain, clauses: [%{point, body}]}` entry in `{:macro_def}`
+rules (harvest ignores non-syntax/literal kinds); T2 `MacroValidate.check_explain_exhaustive/1` derives structural
+points, checks coverage, emits `{:missing_diagnosis, uncovered}` + a friendly `format_error` clause. TCB delta ZERO.
+
+**NEXT:** SP2 slice-1 Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2a plan (plan-for-code:
+falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: the `explain`-clause
+body parse (single `parse_expr` — does a multi-line/indented string body parse or need a block?); `explain`
+entry doesn't break the two harvesters (kind filter); `parse_explain_point` handles the two forms + won't crash
+on a malformed point; `covered?` category/keyword matching; `describe_point`/clause-grouping (SP1 §2 lesson);
+the check function's `{:macro_def, _, rules}` destructure matches real shape. Then Stage 4 execute, Stage 5
+review. After slice 1: M1 §3.4 `fail C` slice, then wiring slice, then M3 examples, then Tier-3. When ALL SP2
+mechanisms done+reviewed → SP2 Stage 6 → SP2 COMPLETE → SP3 (generative). Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
