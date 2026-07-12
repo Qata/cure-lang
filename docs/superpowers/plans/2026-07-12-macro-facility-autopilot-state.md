@@ -510,15 +510,23 @@ attach `examples: [...]` to the `:syntax` rule map; T2 `MacroValidate.check_rule
 [keyword]}` for syntax rules with no example + `format_error` clause. `:literal` rules exempt (design §5.1 says
 "every syntax rule"). TCB delta ZERO, standalone (unwired).
 
-**NEXT:** SP2 slice-2a Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp2b plan (plan-for-code:
-falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny: the indented-example
-attach after `parse_expr` template (does the template's trailing newline + INDENT sequence work; does a
-NO-example rule leave the outer `parse_macro_rules` loop at the right position — the highest-risk item); does
-adding `examples: []` to EVERY syntax rule break any existing test asserting the exact rule-map shape;
-`collect_until_expands` termination + a missing-`expands` example; `expands : Type` vs `expands <expr>` branch;
-`rule_unpinned` reports keywords in order; clause grouping. Then Stage 4 execute, Stage 5 review. After 2a:
-slice 2b (example_mismatch α-check), §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done → SP2 Stage 6 →
-SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
+SP2 slice-2a Stage 3 DONE — plan hardened + committed `9617d16` (3 passes, 2 clean). Reviewer LIVE-VERIFIED
+the highest-risk item (patched Task-1 code into real parser.ex, inspected AST): the indented-example attach
+works — after the template's `:newline` the next token is `:indent`(4), `skip_macro_trivia` stops at it, the
+`:indent` branch parses the example + `expect_dedent` consumes the inner dedent, leaving `parse_macro_block`'s
+own `expect_dedent` the outer one; a TWO-rule source (`a` w/ example + sibling `b`) parses BOTH in order (`b`
+as normal sibling with `examples: []`, not swallowed). Same indent/consume/`expect_dedent` idiom as
+`parse_macro_block`/`parse_explain_block`. Only fix: stale `errors.ex:398` citation → content-anchored (catch-all
+is ~line 409-411). Confirmed `examples: []` key doesn't break existing tests (they use `%{kind: :syntax}`
+pattern-match, not full-map equality); `collect_until_expands` terminates; `expands : Type` branch correct.
+
+**NEXT:** SP2 slice-2a Stage 4 — execute Task 1 (parse `example … expands …` sub-blocks → `examples: [...]` on
+`:syntax` rule; use-site as raw tokens + `{:expansion,ast}`/`{:type,ast}`) then Task 2
+(`MacroValidate.check_rules_pinned/1` → `{:rule_unpinned, [keyword]}` + `format_error` clause) inline TDD on
+Opus, strict red→green, commit per task (ghost author, explicit pathspec, mix from worktree root). NOTE:
+`format_error` `:rule_unpinned` clause BEFORE catch-all, helper AFTER (clause grouping). Then Stage 5 review.
+After 2a: slice 2b (example_mismatch α-check), §3.4 `fail C`, Tier-3, WIRING slice. When ALL SP2 done → SP2
+Stage 6 → SP2 COMPLETE → SP3. Deferred post-gate SP1: T9, T7b.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
