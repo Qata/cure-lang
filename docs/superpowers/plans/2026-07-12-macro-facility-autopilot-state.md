@@ -372,13 +372,24 @@ Grounded: the RAW tuples (fall to catch-all `errors.ex:374`) are `{:macro_use_mi
 `format_diagnostic`; updates the T6b shape-assertion in `macro_use_test.exs` — legit shape evolution); T2 a
 `:malformed_hole` clause explaining `<name: Kind>`. TCB delta ZERO.
 
-**NEXT:** SP1 §2 error-floor Stage 3 — dispatch a Sonnet `recursive-skeptical-review` on the sp1f plan
-(plan-for-code: falsifiability + testing-discipline; two clean passes; commit hardened). Reviewer scrutiny:
-confirm `:macro_use_mismatch` has exactly ONE emit site (the enrichment won't miss another); verify the T6b
-shape-assertion change is the only test coupled to the old tuple; confirm `Enum.at(rule.segments, progress)`
-indexing is correct (progress semantics from `match_segments`); verify the render tests actually distinguish
-"diagnostic" from "raw tuple". Then Stage 4 execute, Stage 5 review, then SP1 **Stage 6** (full `mix test`) →
-**SP1 COMPLETE** → SP2. (Deferred post-gate: T9 import-scoping §7 + two-pass §6, T7b auto-hygiene.)
+SP1 §2 error-floor Stage 3 DONE — plan hardened + committed `2d9e7e9` (6 passes, 2 clean). Reviewer
+live-verified the load-bearing facts: for `say goodbye` vs rule `say hello` the emitted tuple is
+`{:macro_use_mismatch, "say", :at_segment, 0, 4, 16}` → `progress = 0`, `Enum.at(segments, 0) = {:lit,"hello"}`
+(plan's indexing EXACT); catch-all `errors.ex:374` = `format_diagnostic("error","compilation error",file,0,
+inspect(error))` so the raw tuple string literally contains `:macro_use_mismatch`/`:malformed_hole` (both
+`refute` assertions genuinely red pre-fix). Two findings fixed: (a) `macro_expected_at/2`'s `{:hole_kind,k}`
++ `:nothing_more` branches are DEAD (a `{:hole,_}` segment never fails in `match_segments` — it unconditionally
+parses+binds — so only `{:lit,w}` mismatch reaches the fn; documented so the implementer doesn't chase an
+impossible test); (b) Architecture prose promised `suggest/2` hints neither clause uses → corrected to
+"out of scope for this floor". `:macro_use_mismatch` confirmed SINGLE emit site; T6b shape-assertion the ONLY
+test coupled to the old shape.
+
+**NEXT:** SP1 §2 error-floor Stage 4 — execute Task 1 (enrich `:macro_use_mismatch` emit + `format_error`
+clause + update the T6b shape-assertion) then Task 2 (`:malformed_hole` clause) inline TDD on Opus, strict
+red→green, commit per task (ghost author, explicit pathspec, mix from worktree root). NOTE for implementer:
+`macro_expected_at/2`'s non-`{:lit}` branches are dead-but-total (keep for safety, don't write tests for them);
+only the `{:literal, w}` diagnostic path is reachable/testable. Then Stage 5 code review, then SP1 **Stage 6**
+(full `mix test`) → **SP1 COMPLETE** → SP2. (Deferred post-gate: T9 import-scoping §7 + two-pass §6, T7b auto-hygiene.)
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
