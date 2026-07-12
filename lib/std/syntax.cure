@@ -1,0 +1,23 @@
+@group(:core)
+mod Std.Syntax
+  ## The generic quoted-AST value a Tier-3 `computed by` elab receives and
+  ## returns (macro-facility design §3, generic layer). Reflects the parser's
+  ## `{tag, meta, third}` node: `Node` for a child list, `Leaf` for a scalar.
+  ## `attrs` carries the semantic meta (a function's name, an operator, a
+  ## literal's subtype) — dropping it would lose those. Source positions are
+  ## not represented (the expansion is re-elaborated, K3 firewall).
+  use Std.String
+
+  type Syntax =
+    | Node(Atom, List(Attr), List(Syntax))
+    | Leaf(Atom, List(Attr), SynLit)
+
+  type Attr = KV(Atom, SynLit)
+
+  type SynLit =
+    | SInt(Int)
+    | SFloat(Float)
+    | SStr(String)
+    | SBool(Bool)
+    | SAtom(Atom)
+    | SOpaque
