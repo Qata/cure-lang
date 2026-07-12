@@ -4,7 +4,7 @@
 
 **Goal:** Meet the SP1 gate clause "wrong-shape macro uses produce a (default-machinery) **diagnostic**, not a raw parser error." Today a mismatched macro use emits `{:macro_use_mismatch, …}` and a malformed hole emits `{:malformed_hole, …}`, both of which fall through `Cure.Compiler.Errors.format_error/2`'s catch-all and render RAW (a tuple inspection). Give them friendly, Elm-spirited default diagnostics routed through the central renderer.
 
-**Architecture:** The default floor (design §2). `explain`/author-defined `Diagnosis` is SP2; this is the DEFAULT message shown when the author wrote no `explain`. Two moves: (1) **enrich** the `:macro_use_mismatch` tuple at its single emit site (`parse_macro_use/1`, `parser.ex:232`, where `rule` is in scope) to carry *what the macro expected* and *what it got*, so a message can name them; (2) add `format_error/2` clauses in `lib/cure/compiler/errors.ex` for `:macro_use_mismatch` and `:malformed_hole` that build friendly messages via the existing `format_diagnostic/5` (+ `suggest/2` for near-miss hints). **Forward-compatible with the parked Elm-rendering initiative** (`docs/superpowers/specs/2026-07-12-elm-style-error-rendering-PARKED.md`): message CONTENT lives in the `format_error` clause and routes through `format_diagnostic`, so a future snippet/caret rewrite upgrades it for free. **TCB delta zero** (parser + error rendering only).
+**Architecture:** The default floor (design §2). `explain`/author-defined `Diagnosis` is SP2; this is the DEFAULT message shown when the author wrote no `explain`. Two moves: (1) **enrich** the `:macro_use_mismatch` tuple at its single emit site (`parse_macro_use/1`, `parser.ex:232`, where `rule` is in scope) to carry *what the macro expected* and *what it got*, so a message can name them; (2) add `format_error/2` clauses in `lib/cure/compiler/errors.ex` for `:macro_use_mismatch` and `:malformed_hole` that build friendly messages via the existing `format_diagnostic/5`. (`suggest/2` near-miss hints are NOT wired into either clause below — the floor's messages name what was expected/got directly, which is sufficient for the SP1 §2 gate; a `suggest`-based "did you mean" is optional future polish, not part of these two tasks.) **Forward-compatible with the parked Elm-rendering initiative** (`docs/superpowers/specs/2026-07-12-elm-style-error-rendering-PARKED.md`): message CONTENT lives in the `format_error` clause and routes through `format_diagnostic`, so a future snippet/caret rewrite upgrades it for free. **TCB delta zero** (parser + error rendering only).
 
 **Tech Stack:** Elixir; `lib/cure/compiler/parser.ex`, `lib/cure/compiler/errors.ex`; ExUnit.
 
@@ -20,7 +20,7 @@
 
 - Raw macro tuples with NO `format_error` clause (fall to catch-all `errors.ex:374`, render raw): `{:macro_use_mismatch, keyword, :at_segment, progress, line, col}` (emitted ONLY at `parser.ex:232` in `parse_macro_use/1`); `{:malformed_hole, line, col}` (`parser.ex:4358`). — `{:expected, :syntax_rule/:becomes, :got, …}` ALREADY renders via the generic `errors.ex:86` clause, so it is not raw (out of scope; optional polish).
 - `parse_macro_use/1` (`parser.ex:218`): `rule` (with `rule.segments`) is in scope at the `{:error, progress, state}` arm; `progress` = count of segments matched before the miss, so the failed segment is `Enum.at(rule.segments, progress)`.
-- `errors.ex`: `format_error/2` dispatch (many clauses) + catch-all `format_error(error, file)` at `:374`; renderer `format_diagnostic(severity, category, file, line, message)` at `:1730` → `severity: category\n --> file:line\n  | message`; `suggest(name, candidates)` at `:1677` + `levenshtein/2` at `:1759` for "did you mean".
+- `errors.ex`: `format_error/2` dispatch (many clauses) + catch-all `format_error(error, file)` at `:374`; renderer `format_diagnostic(severity, category, file, line, message)` at `:1730` → `severity: category\n --> file:line\n  | message`; `suggest(name, candidates)` at `:1678` + `levenshtein/2` at `:1759` exist for "did you mean" but are NOT used by either Task below (out of scope for this floor).
 - Existing test coupling: `test/cure/compiler/macro_use_test.exs` asserts `match?({:macro_use_mismatch, "say", :at_segment, 0, _, _}, &1)` — this SHAPE assertion must update when the tuple is enriched (Task 1 Step 5). The behavioral intent (a mismatch is recorded) is preserved and strengthened.
 
 ---
@@ -104,6 +104,18 @@ Add helpers near `parse_macro_use/1`:
       _ -> :nothing_more
     end
   end
+
+  # NOTE (reviewed): under today's `match_segments/4`, a `{:hole, _}` segment
+  # NEVER fails to match (it unconditionally parses an expr and binds it), so
+  # the only way `parse_macro_use`'s single call site reaches this function is
+  # via a `{:lit, w}` mismatch — `Enum.at(rule.segments, progress)` will always
+  # be a `{:lit, w}` in practice today. The `{:hole_kind, k}` and `:nothing_more`
+  # arms are deliberately-defensive/forward-looking (for when `match_segments`
+  # gains hole-content validation, or T9's multi-rule maximal-progress
+  # selection makes a hole-position failure possible) and are NOT reachable by
+  # any input today. Step 1's red test exercises ONLY the `{:literal, w}` arm —
+  # do not expect (or demand) a red test for the other two arms; there is no
+  # input that reaches them yet.
 
   # A short human description of the token actually found at the mismatch.
   defp macro_got_desc(%Token{type: :eof}), do: "end of input"
