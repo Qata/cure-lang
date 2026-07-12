@@ -24,4 +24,20 @@ defmodule Cure.Compiler.MacroDefParseTest do
     node = parse!("macro + 1\n")
     assert {:binary_op, _, [{:variable, _, "macro"}, _rhs]} = node
   end
+
+  test "a bare-keyword syntax rule captures its keyword and template" do
+    node = parse!("macro Now\n  syntax now becomes Clock.now()\n")
+    assert {:macro_def, _meta, [rule]} = node
+    assert rule.kind == :syntax
+    assert rule.keyword == "now"
+    assert rule.segments == []
+    assert {:function_call, _, _} = rule.template
+    assert Map.has_key?(rule, :progress)
+  end
+
+  test "a body line that isn't a recognized rule keyword records a parse error" do
+    {:ok, tokens} = Lexer.tokenize("macro Bad\n  oops\n", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _}, &1))
+  end
 end

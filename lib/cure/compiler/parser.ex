@@ -3934,7 +3934,6 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # Task 2 fills this in; Task 1 leaves the body empty (skip to block end).
   defp parse_macro_rules(state, acc) do
     state = skip_newlines(state)
 
@@ -3942,8 +3941,53 @@ defmodule Cure.Compiler.Parser do
       %Token{type: type} when type in [:dedent, :eof] ->
         {Enum.reverse(acc), state}
 
-      _ ->
+      %Token{type: :identifier, value: "syntax"} ->
+        {rule, state} = parse_macro_rule(state)
+        parse_macro_rules(state, [rule | acc])
+
+      other ->
+        state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
+        # Recover: skip a token so one bad line does not eat the block.
         parse_macro_rules(advance(state), acc)
+    end
+  end
+
+  defp parse_macro_rule(state) do
+    kw_token = peek(state)
+    state = advance(state)
+
+    keyword_token = peek(state)
+    keyword = to_string(keyword_token.value)
+    state = advance(state)
+
+    {segments, state} = parse_rule_segments(state, [])
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "becomes"} -> advance(state)
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+      end
+
+    {template, state} = parse_expr(state, 0)
+
+    rule = %{
+      kind: :syntax,
+      keyword: keyword,
+      segments: segments,
+      template: template,
+      progress: nil,
+      line: kw_token.line
+    }
+
+    {rule, state}
+  end
+
+  # Task 3 replaces this to recognize `<name: Kind>` holes; Task 2 has none.
+  defp parse_rule_segments(state, acc) do
+    case peek(state) do
+      %Token{type: :identifier, value: "becomes"} -> {Enum.reverse(acc), state}
+      %Token{type: type} when type in [:newline, :dedent, :eof] -> {Enum.reverse(acc), state}
+      _ -> {Enum.reverse(acc), state}
     end
   end
 
