@@ -158,8 +158,23 @@ defmodule Cure.Compiler.Parser do
       literal_macros: literal
     }
 
-    {ast, _state} = parse_expr(state, 0)
-    ast
+    {ast, state} = parse_expr(state, 0)
+
+    # A hole segment unconditionally parses ONE expr and binds it -- match_segments
+    # is satisfied the moment every declared segment is matched, regardless of
+    # whether every captured use-site token was consumed (that is correct for a
+    # REAL use-site, where anything left over is just the start of the next
+    # top-level form). An example's use-site has no such continuation: it is
+    # captured as "every token up to `expands`" specifically so it names ONE
+    # complete macro use. If tokens remain unconsumed here, the example's
+    # use-site does not correspond to a single full expansion -- wrap the
+    # result in a sentinel no hand-written pin can ever equal, so
+    # MacroValidate.check_examples reports example_mismatch instead of
+    # silently accepting a garbage-suffixed example.
+    case peek(state) do
+      %Token{type: :eof} -> ast
+      _leftover -> {:example_use_site_not_fully_consumed, [], [ast]}
+    end
   end
 
   # Collect every local macro rule, indexed by the rule's leading keyword, from

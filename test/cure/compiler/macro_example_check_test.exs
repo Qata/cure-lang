@@ -84,4 +84,20 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
 
     assert :ok = MacroValidate.check_examples(md)
   end
+
+  test "an example whose use-site has unconsumed trailing tokens is example_mismatch, not a false :ok" do
+    # The rule has a single hole and no trailing literal segment, so
+    # match_segments is satisfied the moment the hole is bound -- it does not
+    # require the use-site's captured tokens to be fully consumed. Before the
+    # fix, expand_example silently dropped "wrong garbage" (leftover after the
+    # hole) and returned the same AST as a clean `every2 500` use-site, so a
+    # broken/garbage-suffixed example checked :ok instead of being caught.
+    md =
+      macro_def!(
+        "macro Every2\n  syntax every2 <t: Duration> becomes Timer.repeat(t)\n    example every2 500 wrong garbage expands Timer.repeat(500)\n"
+      )
+
+    assert {:error, {:example_mismatch, [m]}} = MacroValidate.check_examples(md)
+    assert m.keyword == "every2"
+  end
 end
