@@ -20,7 +20,8 @@
 ## Verified grounding (probed live)
 
 - `computed by build_it` tokenizes `[identifier: "computed", identifier: "by", identifier: "build_it"]` — all plain identifiers (soft keywords, like `syntax`/`becomes`/`literal`/`explain`).
-- Current `parse_macro_rule/1` (`parser.ex`): after `{segments, state} = parse_rule_segments(state, [])` it unconditionally expects `becomes`, then `parse_expr` (template), then `parse_rule_examples`, then builds `%{kind: :syntax, keyword, segments, template, examples, progress: nil, line}`. The verb branch goes right after `parse_rule_segments`.
+- Current `parse_macro_rule/1` (`parser.ex`): after `{segments, state} = parse_rule_segments(state, [])` it unconditionally expects `becomes`, then `parse_expr` (template), then `parse_rule_examples`, then builds `%{kind: :syntax, keyword, segments, template, examples, progress: nil, line}`.
+- **CRITICAL, empirically found by patching the exact Task-1 diff into a scratch build and running it:** the verb branch does **not** "go right after `parse_rule_segments`" as originally assumed here. `parse_rule_segments/2`'s stop condition only matches the literal word `"becomes"` (plus `:newline`/`:dedent`/`:eof`/a `<name: Kind>` hole window) — every other identifier, including `"computed"` and `"by"`, falls through to its catch-all `%Token{value: v} -> parse_rule_segments(advance(state), [{:lit, to_string(v)} | acc])` clause and is swallowed as a **literal segment token**. Confirmed on the real (pre-patch) parser: tokenizing+parsing `"macro Mk\n  syntax mk <x: Code> computed by build_it\n"` today does *not* fail with `{:expected, :becomes, :got, :identifier, …}` at the `"computed"` token as this doc originally claimed — it fails with `{:expected, :becomes, :got, :newline, 2, 43}`, i.e. segment-parsing already consumed `computed`, `by`, and `build_it` as three `{:lit, …}` tokens and only stopped at the trailing newline. Patching Task 1's Step 3 code in **verbatim** and running the plan's own three tests reproduces this: test 1 and test 3 still fail (`{:expected, :becomes, :got, :newline, …}` / a cascading `:macro_use_mismatch`) because `peek(state)` right after `parse_rule_segments` is already past `"computed"` by the time `parse_macro_rule/1`'s new verb-branch `case` runs — the branch never matches `"computed"` because segment-parsing consumed it first. **Fix required (folded into Step 3 below): `parse_rule_segments/2` must also stop at `"computed"`** (`%Token{type: :identifier, value: v} when v in ["becomes", "computed"] -> {Enum.reverse(acc), state}`). With that one-line change, the plan's own three tests pass, and the full `mix test test/cure/compiler/` (677 tests) plus `test/cure/elab/macro_expansion_soundness_test.exs` (6 tests) are unaffected — zero regressions. This is a shared helper (also used by `parse_literal_rule/1`, which never uses `"computed"`), so the extra stop-word is safe for the existing literal-rule path.
 - `harvest_active_macros/1` filters `%{kind: :syntax, keyword: kw} when is_binary(kw)`; `harvest_literal_macros/1` filters `%{kind: :literal, …}`. A `:computed` rule matches neither → **not harvested → inert at use-sites** (exactly right for this slice).
 - `MacroValidate` checks filter `kind: :syntax` (`check_rules_pinned`, `check_examples`) or `[:syntax, :literal]` (`derive_points`) — so `:computed` rules are also exempt from the M1/M3 obligations this slice (their examples need the elab to run; that is a later slice's concern).
 - Helpers: `peek/1`, `advance/1`, `add_error/2`, `parse_expr/2`, `parse_rule_examples/1` (from M3). The elab reference (`build_it`, or a dotted `Mod.build_it`) is captured by `parse_expr(state, 0)` — a bare name parses to `{:variable, meta, name}`, a dotted path to its dotted-name AST, and `parse_expr` stops at the newline / examples indent.
@@ -30,7 +31,7 @@
 ### Task 1: Parse `syntax … computed by <fn>` to a `:computed` rule
 
 **Files:**
-- Modify: `lib/cure/compiler/parser.ex` (`parse_macro_rule/1` — split the verb branch; add `parse_becomes_rule/4`, `parse_computed_rule/4`)
+- Modify: `lib/cure/compiler/parser.ex` (`parse_macro_rule/1` — split the verb branch; add `parse_becomes_rule/4`, `parse_computed_rule/4`; **and** `parse_rule_segments/2` — extend its stop-word clause from `"becomes"` alone to `"becomes"`/`"computed"`, see "Verified grounding" above)
 - Test: `test/cure/compiler/macro_computed_test.exs` (create)
 
 **Interfaces:**
@@ -84,13 +85,29 @@ defmodule Cure.Compiler.MacroComputedTest do
 end
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (after `mk <x: Code>`'s segments, `parse_macro_rule` expects `becomes` and hits `computed` → records `{:expected, :becomes, :got, :identifier, …}` → `Parser.parse` returns `{:error, …}`, so `parse!` raises for the first test).
+- [ ] **Step 2: Run it — expect FAIL** (today, before segments even reach a verb check, `parse_rule_segments/2` swallows `computed`/`by`/`build_it` as literal segment tokens — see "Verified grounding" — so `parse_macro_rule` runs out of segment tokens at the trailing newline and its unconditional `becomes` check fires there: `{:expected, :becomes, :got, :newline, 2, 43}` → `Parser.parse` returns `{:error, …}`, so `parse!` raises for the first test).
 
 Run: `mix test test/cure/compiler/macro_computed_test.exs` → FAIL.
 
-- [ ] **Step 3: Split the verb branch in `parse_macro_rule/1`**
+- [ ] **Step 3: Extend `parse_rule_segments/2`'s stop word, then split the verb branch in `parse_macro_rule/1`**
 
-Replace the body after `{segments, state} = parse_rule_segments(state, [])` … through the `rule` map with a verb branch, and extract the two paths:
+First, `parse_rule_segments/2` must stop at `"computed"` too (today it only stops at `"becomes"`), otherwise the verb-branch `case` added below never sees `"computed"` — segment-parsing will have already consumed it as a literal token:
+
+```elixir
+  defp parse_rule_segments(state, acc) do
+    case peek(state) do
+      %Token{type: :identifier, value: v} when v in ["becomes", "computed"] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: type} when type in [:newline, :dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      # ... :lt hole-window clause and catch-all clause unchanged ...
+    end
+  end
+```
+
+Then replace the body after `{segments, state} = parse_rule_segments(state, [])` … through the `rule` map with a verb branch, and extract the two paths:
 
 ```elixir
   defp parse_macro_rule(state) do
