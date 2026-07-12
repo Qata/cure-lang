@@ -417,11 +417,41 @@ Small fix: guard the comparison so a non-binary token value simply doesn't match
 progress}` mismatch path → the friendly diagnostic). Pre-dates the floor diff (old `:at_segment` code hit it
 too); it's in T6b's `match_segments`, not the error-floor.
 
-**NEXT:** fix the `match_segments` non-scalar-token crash — Stage 4-style red→green micro-task (its own plan is
-overkill; it's a 1-clause guard + a red test `say /foo/` → expect a `:macro_use_mismatch` diagnostic, not a
-crash). Commit ghost-authored. THEN SP1 **Stage 6** — ONE full `mix test` — → **SP1 COMPLETE** → start **SP2**
-(Tier-3 `computed by` + type-enforced `Diagnosis`/`explain` exhaustiveness + required per-rule examples; the
-self-proving headline). Deferred post-gate SP1: T9 import-scoping §7 + two-pass §6, T7b auto-hygiene.
+`match_segments` non-scalar-token crash FIXED `eb5c70c` (red→green): reproduced live — `say ~r/foo/`
+(:regex value = `{body,flags}` tuple) and `say "hi #{name}"` (:string_interpolation value = list) CRASHED
+`to_string/1` in BOTH the lit-match (`match_segments`) and the got-desc (`macro_got_desc_raw`). Fixed:
+`lit_token_matches?/2` (only scalar binary/atom/number values compare; structured → no-match → mismatch path)
++ `macro_got_desc_raw` clauses naming :regex/:string_interpolation/any structured value. (Clause-grouping
+warning hit again — moved `lit_token_matches?` after the `match_segments` group.) 657 parser tests, warnings-clean.
+
+## ═══ SP1 COMPLETE ═══ (Stage 6 green: full `mix test` = 4128 passed / 2 skipped, 3 doctests, antigen 328/328)
+SP1 (minimal facility, Tiers 1-2) gate MET end-to-end:
+- **Tier-1 literal units** ✓ (T4 `8c217da`/`dfcf315`): `500ms`→`Duration.ms(500)`.
+- **Tier-2 hygienic `syntax` templates** ✓ (milestone 1 front-end + milestone 2 use-site expansion: `c381e7a`
+  `8f07931` `77cbd6d` `4295479` `d66bf57` `0bd320f` `94c33a6` `6e01715`).
+- **`<fresh Name>` hygiene** ✓ (T7 `af005b0`/`cddf534`): capture-free template binders.
+- **Expansions kernel-check** ✓ (T8 firewall `3a7383d`/`52b997c`): macro output re-elaborated identically to
+  hand-written — TCB delta ZERO proven.
+- **Default error-machinery floor** ✓ (§2 `e926038`/`34fb3ab` + review fixes `1fe7ef8`/`98d4957`/`9846f65`/
+  `f421887` + crash fix `eb5c70c`): bad macro uses render friendly diagnostics, never raw tuples OR crashes.
+- Two-phase parse (harvest local `macro` defs → `active_macros`/`literal_macros`) ✓. All TCB delta ZERO.
+
+**Deferred SP1 "Includes" (NOT gate-blocking; post-gate enhancements):** T9 (import scoping §7 + two-pass
+name resolution §6 — cross-module macros, the hard parser/import-resolution lift), T7b (automatic full
+hygiene + the fresh∩hole & backtick-spoof gaps + `<capture>`). Parked: Elm-style error rendering (`82d64a8`).
+
+**NEXT: START SP2** — "Tier 3 + self-proving Mechanisms 1 & 3" (program-doc §SP2, the self-proving HEADLINE).
+Ships: `syntax … computed by f` (total compile-time Cure over quoted decls, `check … else fail`), size-change-
+certified pure elabs; PLUS the type-enforced obligations — **derived + author-extensible `Diagnosis`** (`fail
+C(args)`, self-proving §3.4), **exhaustive `explain`** checked like case-coverage (self-proving §3), **required
+per-rule worked examples** (self-proving §5). GATE: the three new macro-compile errors (`missing_diagnosis`,
+`rule_unpinned`, example-mismatch) fire on red fixtures, absent on green; example expansions kernel-check; full
+suite green. Depends on SP1 (done). SP2 Stage 2 — GROUND FIRST (read self-proving-macros-design.md §3/§3.4/§5 +
+program-doc SP2; probe how `computed by`/`explain`/`example` would parse into the `{:macro_def,…}` rules; decide
+where the type-enforced obligation CHECKS run — a new macro-def validation pass, TCB-zero since it's frontend).
+Then write `docs/superpowers/plans/2026-07-12-macro-facility-sp2-plan.md`, Stages 3-5-6. NOTE: SP2 is large +
+is the operator's headline ("type system REQUIRES the macro author to define each failure's Show") — scope
+carefully, likely multiple plan rounds.
 
 ## DONE criterion (cancel cron + notify)
 All 6 sub-projects implemented, code-reviewed, full `mix test` green, with an end-to-end
