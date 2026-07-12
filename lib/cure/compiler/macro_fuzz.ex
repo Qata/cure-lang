@@ -139,26 +139,79 @@ defmodule Cure.Compiler.MacroFuzz do
 
     with true <- Inductive.family?(env, family_name),
          family = Inductive.get_family(env, family_name),
-         true <- family.params == [] and family.indices == [],
          ctors = Inductive.ctors_of(env, family_name),
          nullary = Enum.filter(ctors, &(Map.get(&1, :args, []) == [])),
          true <- nullary != [] do
       ctx = Context.empty(env)
-      goal = {:data, family_name, [], []}
-      terms = Enum.map(nullary, &{:ctor, &1.name, []})
 
-      {:ok,
-       %{
-         category: category,
-         domain: :core,
-         env: env,
-         ctx: ctx,
-         goal: goal,
-         generator: Gen.member_of(terms)
-       }}
+      case canonical_parameters(ctx, family.params) do
+        {:ok, params} ->
+          # A single indexed constructor gives the generator one stable goal.
+          # Families with several incompatible indexed result spines are kept
+          # as explicit coverage gaps until a dependent sum generator can carry
+          # each constructor's goal alongside its term.
+          case nullary do
+            [ctor | _] ->
+              result_params = instantiate_result_terms(ctor.result_params, params, 0)
+              result_indices = instantiate_result_terms(ctor.result_indices, params, 0)
+              goal = {:data, family_name, result_params, result_indices}
+
+              {:ok,
+               %{
+                 category: category,
+                 domain: :core,
+                 env: env,
+                 ctx: ctx,
+                 goal: goal,
+                 generator: Gen.return({:ctor, ctor.name, []})
+               }}
+
+            _ ->
+              {:error, {:unsupported_hole_type, category}}
+          end
+
+        :error ->
+          {:error, {:unsupported_hole_type, category}}
+      end
     else
       _ -> {:error, {:unsupported_hole_type, category}}
     end
+  end
+
+  defp canonical_parameters(_ctx, []), do: {:ok, []}
+
+  defp canonical_parameters(ctx, params) do
+    params
+    |> Enum.reduce_while({:ok, []}, fn {_name, type}, {:ok, values} ->
+      case canonical_parameter(ctx, type) do
+        {:ok, value} -> {:cont, {:ok, values ++ [value]}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp canonical_parameter(_ctx, {:type, _level}), do: {:ok, SigMenu.nat()}
+
+  defp canonical_parameter(ctx, type) do
+    try do
+      {:ok, SigMenu.canon(ctx, type)}
+    rescue
+      _ -> :error
+    end
+  end
+
+  defp instantiate_result_terms(terms, params, field_count) do
+    Enum.map(terms, &instantiate_result_term(&1, params, field_count))
+  end
+
+  defp instantiate_result_term(term, params, field_count) do
+    params
+    |> Enum.with_index()
+    |> Enum.reverse()
+    |> Enum.reduce(term, fn {param, index}, acc ->
+      target = field_count + length(params) - index - 1
+      Cure.Core.Term.subst(acc, target, param)
+    end)
   end
 
   @spec sample_holes(String.t(), non_neg_integer(), integer()) ::

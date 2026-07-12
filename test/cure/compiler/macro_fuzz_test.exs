@@ -44,6 +44,23 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert Enum.all?(terms, &match?({:ctor, name, []} when name in [:Off, :On], &1))
   end
 
+  test "module-aware generation resolves nullary parameterized and indexed families" do
+    assert {:ok, env} =
+             Program.elaborate("""
+             mod M
+               type Dec = D | C
+               type Ix(a: Type) indices (d: Dec)
+                 empty : Ix(a, D)
+             """)
+
+    assert {:ok, %{goal: {:data, :Ix, [{:data, :Nat, [], []}], [{:ctor, :D, []}]}}, terms} =
+             MacroFuzz.sample_holes("Ix", 4, 29, env)
+
+    goal = {:data, :Ix, [{:data, :Nat, [], []}], [{:ctor, :D, []}]}
+    assert Enum.all?(terms, &(Kernel.check(Context.empty(env), &1, Eval.eval(goal, env)) == :ok))
+    assert Enum.all?(terms, &match?({:ctor, :empty, []}, &1))
+  end
+
   test "category coverage reports module domains and open extensions" do
     assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
 
