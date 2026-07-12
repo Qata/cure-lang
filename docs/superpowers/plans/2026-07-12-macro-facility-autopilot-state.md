@@ -964,6 +964,7 @@ The following slices have now landed in this worktree:
 - SP4 has a declaration-level reducer/view/flow bundle builder that derives all three ordinary AST outputs from one reflected constructor set.
 - SP5 has a closed OTP callback vocabulary, callback ADT-shaped values, declaration validation, and pure `QuotedModule` lifting in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
 - SP5 also has a pure supervisor module builder with child/strategy validation and an explicit AtomVM availability probe; this worktree has no `atomvm` executable, so the runtime execution gate is not claimed.
+- SP5's generated supervisor/application proof now builds and runs on the generic-unix AtomVM executable built from `/Users/ch/Develop/esp32-beam/AtomVM`, with AtomVM's estdlib runtime beams packaged alongside the generated Cure modules.
 - SP6 has delimited raw-hole parsing, pure capture helpers, computed use-site integration, `is Category` rule metadata, and explicit module-rule markers.
 - SP6 raw-hole proof fixtures now generate bounded raw text and preserve a synthetic `dedent` delimiter through `MacroFuzz`/`Parser.expand_example`.
 - SP6 grammar segments now support line-oriented repetition (`...`) and optional groups, including generated-proof assembly and list-valued substitutions.
@@ -977,10 +978,10 @@ The following slices have now landed in this worktree:
 
 The remaining work before the DONE criterion is genuinely satisfied is:
 
-- Extend native generation from closed custom enum families to parameterized/indexed module categories; open-category coverage reporting is implemented.
+- Parameterized/indexed module-category generation now covers nullary constructors with typed parameter-result substitution; families requiring dependent constructor-field synthesis remain explicit coverage gaps.
 - Extend the generated-proof gate to any future macro compilation path introduced after the current dependent and transitional classic paths.
 - Extend SP4 from the current declaration bundle to index-aware reducer/view/flow lowering and end-to-end concrete-library integration.
-- Extend SP5 from pure callback/module values to execution of a generated supervisor on a generic-unix AtomVM runtime; install or provide that external executable before claiming this gate.
+- Extend SP5 beyond the generic-unix supervisor/application proof to any remaining callback vocabulary and runtime behavior required by the concrete embedded surfaces.
 - Extend SP6 concrete libraries beyond the current packet, board, protocol, driver, units, checks, and parse helpers to the remaining embedded surface families.
 - Perform the final end-to-end proof after the AtomVM runtime gate and remaining embedded surface families land; skeptical review, full test gate, and Antigen verification are complete for the current implementation.
 
