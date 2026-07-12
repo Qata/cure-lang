@@ -81,4 +81,9 @@ defmodule Cure.Compiler.MacroExampleTest do
 
     assert {:error, {:rule_unpinned, ["b"]}} = MacroValidate.check_rules_pinned(md)
   end
+
+  test "an unpinned computed rule is also rule_unpinned" do
+    md = macro_def!("macro Mk\n  syntax mk computed by build_it\n")
+    assert {:error, {:rule_unpinned, ["mk"]}} = MacroValidate.check_rules_pinned(md)
+  end
 end

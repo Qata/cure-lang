@@ -46,14 +46,15 @@ defmodule Cure.Compiler.MacroValidate do
   end
 
   @doc """
-  Check every `syntax` rule carries at least one worked example (design §5.1).
+  Check every `syntax` rule, including `computed by` rules, carries at least one
+  worked example (design §5.1).
   Returns `:ok` or `{:error, {:rule_unpinned, unpinned_keywords}}`.
   """
   @spec check_rules_pinned(tuple()) :: :ok | {:error, {:rule_unpinned, [String.t()]}}
   def check_rules_pinned({:macro_def, _meta, rules}) do
     unpinned =
       rules
-      |> Enum.filter(&(&1[:kind] == :syntax))
+      |> Enum.filter(&(&1[:kind] in [:syntax, :computed]))
       |> Enum.filter(&(Map.get(&1, :examples, []) == []))
       |> Enum.map(& &1.keyword)
 
