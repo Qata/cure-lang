@@ -35,6 +35,15 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert Enum.all?(kinds, &match?({:data, _, _, _}, &1))
   end
 
+  test "module-aware generation resolves closed user enum categories" do
+    assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
+    assert {:ok, %{goal: {:data, :Flag, [], []}}, terms} = MacroFuzz.sample_holes("Flag", 10, 23, env)
+    goal_value = Eval.eval({:data, :Flag, [], []}, env)
+
+    assert Enum.all?(terms, &(Kernel.check(Context.empty(env), &1, goal_value) == :ok))
+    assert Enum.all?(terms, &match?({:ctor, name, []} when name in [:Off, :On], &1))
+  end
+
   test "generated scalar fillers assemble into fully consumed macro uses" do
     source = """
     macro Inc

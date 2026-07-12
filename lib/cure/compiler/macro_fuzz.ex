@@ -11,7 +11,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Compiler.{Lexer, Parser, Token}
-  alias Cure.Core.{Context, Eval, Kernel, Normalise}
+  alias Cure.Core.{Context, Eval, Inductive, Kernel, Normalise}
   alias Cure.Elab.{Elaborator, MacroExpand}
 
   @default_draws 32
@@ -34,21 +34,29 @@ defmodule Cure.Compiler.MacroFuzz do
 
   @spec hole_generator(String.t()) ::
           {:ok, generator_info()} | {:error, {:unsupported_hole_type, String.t()}}
-  def hole_generator(category) when is_binary(category) do
+  def hole_generator(category) when is_binary(category), do: hole_generator(category, SigMenu.env_of(:v1))
+
+  @doc "Resolve a grammar category against a real module environment."
+  @spec hole_generator(String.t(), Cure.Core.Env.t()) ::
+          {:ok, generator_info()} | {:error, {:unsupported_hole_type, String.t()}}
+  def hole_generator(category, env) when is_binary(category) do
     case Map.fetch(@category_goals, category) do
       {:ok, goal} ->
-        env = SigMenu.env_of(:v1)
-        ctx = Context.empty(env)
+        generation_env = SigMenu.env_of(:v1)
+        ctx = Context.empty(generation_env)
         {:ok, %{category: category, domain: :core, env: env, ctx: ctx, goal: goal, generator: Term.gen_term(ctx, goal)}}
 
       :error ->
-        native_hole_generator(category)
+        case native_hole_generator(category, env) do
+          {:error, _} -> module_hole_generator(category, env)
+          result -> result
+        end
     end
   end
 
-  defp native_hole_generator(category) do
-    env = SigMenu.env_of(:v1)
-    ctx = Context.empty(env)
+  defp native_hole_generator(category, _env) do
+    generation_env = SigMenu.env_of(:v1)
+    ctx = Context.empty(generation_env)
 
     case category do
       "Number" ->
@@ -56,7 +64,7 @@ defmodule Cure.Compiler.MacroFuzz do
          %{
            category: category,
            domain: :number,
-           env: env,
+           env: generation_env,
            ctx: ctx,
            goal: nil,
            generator: Gen.member_of([{:int_lit, 0}, {:int_lit, 42}, {:float_lit, 0.5}])
@@ -67,7 +75,7 @@ defmodule Cure.Compiler.MacroFuzz do
          %{
            category: category,
            domain: :duration,
-           env: env,
+           env: generation_env,
            ctx: ctx,
            goal: {:int_type},
            generator: Gen.member_of([{:int_lit, 1}, {:int_lit, 500}, {:int_lit, 1_000_000}])
@@ -78,7 +86,7 @@ defmodule Cure.Compiler.MacroFuzz do
          %{
            category: category,
            domain: :code,
-           env: env,
+           env: generation_env,
            ctx: ctx,
            goal: nil,
            generator:
@@ -94,7 +102,7 @@ defmodule Cure.Compiler.MacroFuzz do
          %{
            category: category,
            domain: :core,
-           env: env,
+           env: generation_env,
            ctx: ctx,
            goal: {:type, 0},
            generator: Term.gen_term(ctx, {:type, 0})
@@ -105,13 +113,49 @@ defmodule Cure.Compiler.MacroFuzz do
     end
   end
 
+  defp module_hole_generator(category, env) do
+    family_name = String.to_atom(category)
+
+    with true <- Inductive.family?(env, family_name),
+         family = Inductive.get_family(env, family_name),
+         true <- family.params == [] and family.indices == [],
+         ctors = Inductive.ctors_of(env, family_name),
+         nullary = Enum.filter(ctors, &(Map.get(&1, :args, []) == [])),
+         true <- nullary != [] do
+      ctx = Context.empty(env)
+      goal = {:data, family_name, [], []}
+      terms = Enum.map(nullary, &{:ctor, &1.name, []})
+
+      {:ok,
+       %{
+         category: category,
+         domain: :core,
+         env: env,
+         ctx: ctx,
+         goal: goal,
+         generator: Gen.member_of(terms)
+       }}
+    else
+      _ -> {:error, {:unsupported_hole_type, category}}
+    end
+  end
+
   @spec sample_holes(String.t(), non_neg_integer(), integer()) ::
           {:ok, generator_info(), [Cure.Core.Term.t()]}
           | {:error, {:unsupported_hole_type, String.t()}}
           | {:error, {:generated_hole_not_well_typed, term()}}
   def sample_holes(category, count, seed)
       when is_binary(category) and is_integer(count) and count >= 0 and is_integer(seed) do
-    with {:ok, info} <- hole_generator(category),
+    sample_holes(category, count, seed, SigMenu.env_of(:v1))
+  end
+
+  @spec sample_holes(String.t(), non_neg_integer(), integer(), Cure.Core.Env.t()) ::
+          {:ok, generator_info(), [Cure.Core.Term.t()]}
+          | {:error, {:unsupported_hole_type, String.t()}}
+          | {:error, {:generated_hole_not_well_typed, term()}}
+  def sample_holes(category, count, seed, env)
+      when is_binary(category) and is_integer(count) and count >= 0 and is_integer(seed) do
+    with {:ok, info} <- hole_generator(category, env),
          terms = Backend.sample_seeded(info.generator, count, seed),
          :ok <- check_samples(info, terms) do
       {:ok, info, terms}
@@ -196,7 +240,7 @@ defmodule Cure.Compiler.MacroFuzz do
         end
 
       [{name, kind}] ->
-        with {:ok, _info, terms} <- sample_holes(kind, draws, seed) do
+        with {:ok, _info, terms} <- sample_holes(kind, draws, seed, env) do
           Enum.reduce_while(terms, :ok, fn term, :ok ->
             case assemble_use_site(rule, %{name => term}) do
               {:ok, input} ->
@@ -247,7 +291,7 @@ defmodule Cure.Compiler.MacroFuzz do
   end
 
   defp shrink_counterexample(rule, rules, env, name, kind, term, details) do
-    {:ok, info} = hole_generator(kind)
+    {:ok, info} = hole_generator(kind, env)
 
     challenge =
       Challenge.new(
