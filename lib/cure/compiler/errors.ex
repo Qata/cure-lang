@@ -413,6 +413,56 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  # -- Macro error floor (SP1 §2) ----------------------------------------------
+
+  def format_error({:macro_use_mismatch, keyword, expected, got, line, col}, file) do
+    detail =
+      case expected do
+        {:literal, w} -> "the `#{keyword}` macro expected `#{w}` here, but found `#{got}`"
+        {:hole_kind, k} -> "the `#{keyword}` macro expected #{article(k)} #{k} here, but found `#{got}`"
+        :nothing_more -> "the `#{keyword}` macro has no more to match here, but found `#{got}`"
+      end
+
+    format_diagnostic("error", "macro syntax", file, line, "#{detail} (at column #{col})")
+  end
+
+  def format_error({:malformed_hole, line, col}, file) do
+    format_diagnostic(
+      "error",
+      "macro syntax",
+      file,
+      line,
+      "malformed hole at column #{col} — a macro hole is written `<name: Kind>` " <>
+        "(e.g. `<period: Duration>`); check for a missing `:` or closing `>`"
+    )
+  end
+
+  def format_error({:missing_diagnosis, points}, file) do
+    listed = points |> Enum.map(&describe_point/1) |> Enum.join(", ")
+
+    format_diagnostic(
+      "error",
+      "macro is missing a failure description",
+      file,
+      0,
+      "this macro can fail in ways it does not describe: #{listed}. Add an `explain` " <>
+        "clause for each (a `Category =>` covers a typed hole, `keyword \"w\" =>` a literal)."
+    )
+  end
+
+  def format_error({:rule_unpinned, keywords}, file) do
+    listed = keywords |> Enum.map(&"`#{&1}`") |> Enum.join(", ")
+
+    format_diagnostic(
+      "error",
+      "macro rule has no worked example",
+      file,
+      0,
+      "these rules are not pinned by an example: #{listed}. Add an indented " <>
+        "`example <use> expands <result>` under each rule so its intent is checked, not just its type."
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
@@ -420,6 +470,14 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp known_editions_hint, do: Enum.join(Cure.Edition.all(), ", ")
+
+  defp describe_point({:hole_kind, k}), do: "a `#{k}` hole"
+  defp describe_point({:keyword, w}), do: "the keyword `#{w}`"
+
+  # Grammatical article for the macro hole-kind diagnostic ("a Duration" / "an
+  # Int"). Placed after the format_error/2 clause group to keep those contiguous.
+  defp article(<<c, _::binary>>) when c in ~c"AEIOUaeiou", do: "an"
+  defp article(_), do: "a"
 
   # -- "Did you mean?" Suggestions ---------------------------------------------
 

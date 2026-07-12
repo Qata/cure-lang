@@ -176,6 +176,18 @@ defmodule Cure.Core.Normalise do
   defp nf_struct({:vneutral, neutral}, sig, depth, opts),
     do: {:vneutral, nf_neutral(neutral, sig, depth, opts)}
 
+  # Inert effect values: read back structurally, normalising SUBTERMS only, so
+  # the shape (`bind`/`pure`/`Effect` and its op spine) is preserved exactly —
+  # the nf-idempotence and inertness-invariance the design (§3.2/§9) requires.
+  defp nf_struct({:veffect_type, v}, sig, depth, opts),
+    do: {:veffect_type, nf_value(v, sig, depth, opts)}
+
+  defp nf_struct({:veffect_pure, v}, sig, depth, opts),
+    do: {:veffect_pure, nf_value(v, sig, depth, opts)}
+
+  defp nf_struct({:veffect_bind, ve, vk}, sig, depth, opts),
+    do: {:veffect_bind, nf_value(ve, sig, depth, opts), nf_value(vk, sig, depth, opts)}
+
   defp nf_struct(value, _sig, _depth, _opts), do: value
 
   defp nf_neutral({:napp, neutral, arg}, sig, depth, opts),

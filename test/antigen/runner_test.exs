@@ -74,9 +74,9 @@ defmodule Antigen.RunnerTest do
     assert r.infections >= 1
   end
 
-  test "default_gen has exactly 34 branches in the documented group order (guard)" do
+  test "default_gen has exactly 35 branches in the documented group order (guard)" do
     {:frequency, ws} = Mix.Tasks.Antigen.default_gen()
-    assert length(ws) == 34
+    assert length(ws) == 35
     # positions 15-18 are the structure-directed Primitive + Equality + TypeFormer
     # + DepMatch generators (:typed_term producers → group `t`); positions 19, 24-28,
     # 30, 31, 32, 33 are the family/index/fixed-menu IndexedDecl + BranchUnify + DotForcing +
@@ -84,12 +84,12 @@ defmodule Antigen.RunnerTest do
     # ZetaSubst probes → group `f`; positions 20-23 & 29 are the Malformed + Serialization +
     # decode + conv + elab/shift_agrees (typed_term) → `t`.
     #
-    # ZetaSubst (33) and GradeConv (34) are APPENDED rather than placed beside their
-    # sibling BetaSubst (28):
+    # ZetaSubst (33), GradeConv (34) and EffectInert (35) are APPENDED rather than
+    # placed beside their sibling BetaSubst (28):
     # `@group_table` is indexed by position, so a mid-list insert renumbers every
     # generator after it and adaptive reweighting silently bumps the wrong ones.
     assert Antigen.Runner.gen_group_table() ==
-             %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
+             %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
   end
 
   test "kernel-law verticals run to completion with 0 infections on the sound kernel" do

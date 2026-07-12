@@ -157,6 +157,14 @@ defmodule Cure.Elab.Erase do
     {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
   end
 
+  # Effect nodes are NEVER dropped (§5.3): erasure recurses into their subterms —
+  # dropping any erased args WITHIN — but keeps the effect structure, since the
+  # runtime must still perform the effect. Without these they hit the identity
+  # catch-all and an erased arg inside an effect would survive to emit.
+  def erase(env, {:effect_type, t}), do: {:effect_type, erase(env, t)}
+  def erase(env, {:effect_pure, a}), do: {:effect_pure, erase(env, a)}
+  def erase(env, {:effect_bind, e, k}), do: {:effect_bind, erase(env, e), erase(env, k)}
+
   def erase(_env, term), do: term
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])

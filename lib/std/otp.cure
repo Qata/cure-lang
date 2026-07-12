@@ -1,0 +1,59 @@
+@group(:concurrency)
+mod Std.Otp
+  ## The typed BEAM process algebra — the sanctioned concurrency surface.
+  ##
+  ## Two typed handles, both opaque phantoms erased to a raw `erlang:pid()` at
+  ## runtime; their whole job is static — using a process at the WRONG message or
+  ## reply type is a COMPILE error, the guarantee `Std.Otp.Raw`'s untyped `Pid`
+  ## cannot give (design 2026-07-10-checked-beam-concurrency §2,
+  ## 2026-07-09-typed-beam-process-algebra):
+  ##
+  ##   * `Pid(m)`            — a plain process accepting messages of type `m`
+  ##                          (raw `erlang:send`, one-way).
+  ##   * `GenServer(q, r)`   — a `gen_server` taking requests `q`; a synchronous
+  ##                          `call` returns a reply `r`. The reply type rides on
+  ##                          the SERVER'S type, so `call` needs no return-only
+  ##                          implicit (which does not resolve through an effectful
+  ##                          extern) — a wrong request AND a wrong reply are both
+  ##                          caught.
+  ##
+  ## Every operation performs a BEAM side effect, so it returns `Effect(T)`: the
+  ## effect discipline forbids duplicating, dropping, or reordering a
+  ## `tell`/`call`/`cast`. Messages are POLYMORPHIC (the narrow point for a message
+  ## set), never `Any`.
+  ##
+  ## v1 declares the typed operations as effect-typed externs over the same stock
+  ## BEAM BIFs `Std.Otp.Raw` wraps; the sealing is that `Std.Otp.Raw` is `unsafe`
+  ## and `Std.Otp` is the sanctioned surface. Still deferred to the session-typed
+  ## ceiling (needs message CODES + the macro facility): `q`/`r` as message-set
+  ## codes with `subset`/`reply_of` and the dependent `ReplyOf(req)` reply lookup,
+  ## protocol-state evolution, and `spawn`/`start_link` MINTING a typed handle
+  ## (a bespoke proc-fn lowering, not a plain extern). This floor is what they
+  ## build on; a handle is obtained today by being passed one.
+
+  ## A typed process handle accepting messages of type `m`.
+  opaque type Pid(m)
+
+  ## A typed `gen_server` taking requests `q`, replying `r`.
+  opaque type GenServer(q, r)
+
+  ## The calling process's own typed pid; `m` inferred from how the result is used.
+  @extern(:erlang, :self, 0)
+  fn self() -> Effect(Pid(m))
+
+  ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
+  ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
+  ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
+  ## the `p ! msg` surface and lower it to this.)
+  @extern(:erlang, :send, 2)
+  fn tell(dest: Pid(m), msg: m) -> Effect(Unit)
+
+  ## Synchronous `gen_server` call: send request `q`, block for reply `r`. Both the
+  ## request AND the reply are checked against the server's type.
+  @extern(:gen_server, :call, 2)
+  fn call(server: GenServer(q, r), request: q) -> Effect(r)
+
+  ## Asynchronous `gen_server` cast — a typed fire-and-forget request (no reply).
+  @extern(:gen_server, :cast, 2)
+  fn cast(server: GenServer(q, r), request: q) -> Effect(Unit)
+end

@@ -73,6 +73,14 @@ defmodule Cure.Core.Quote do
   def reify({:vatom_type}, _depth, _sig), do: {:atom_type}
   def reify({:vatom, a}, _depth, _sig), do: {:atom_lit, a}
 
+  # Inert effect values read back structurally into their term nodes — shape
+  # preserved exactly, subterms reified at the same depth (nothing binds here).
+  def reify({:veffect_type, v}, depth, sig), do: {:effect_type, reify(v, depth, sig)}
+  def reify({:veffect_pure, v}, depth, sig), do: {:effect_pure, reify(v, depth, sig)}
+
+  def reify({:veffect_bind, ve, vk}, depth, sig),
+    do: {:effect_bind, reify(ve, depth, sig), reify(vk, depth, sig)}
+
   def reify({:vneutral, n}, depth, sig), do: reify_neutral(n, depth, sig)
 
   # -- data param/index split -------------------------------------------------

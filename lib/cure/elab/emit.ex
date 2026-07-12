@@ -529,6 +529,21 @@ defmodule Cure.Elab.Emit do
   defp lower(_env, {:absurd}, _ctx),
     do: {:call, @line, {:atom, @line, :error}, [{:atom, @line, :absurd}]}
 
+  # `bind(e, λx. body)` lowers DIRECT-STYLE (design §6): on the strict BEAM `e`
+  # performs its effect the moment it is evaluated, so this is exactly the `:let`
+  # block — `begin Ek = <e>, <body> end`. The elaborator always emits a literal-λ
+  # continuation (slice c: `let x = e ⏎ rest`), the dominant "effect consumed
+  # where produced" case; the emitted shape is byte-for-byte the bespoke path's.
+  defp lower(env, {:effect_bind, e, {:lam, _g, _dom, body}}, ctx) do
+    var = :"E#{length(ctx)}"
+    body_form = lower(env, body, [var | ctx])
+    bind = {:match, @line, {:var, @line, unused_underscore(var, body_form)}, lower(env, e, ctx)}
+    {:block, @line, [bind, body_form]}
+  end
+
+  # `pure(a)` in direct (tail) position is just `a` — no effect to perform.
+  defp lower(env, {:effect_pure, a}, ctx), do: lower(env, a, ctx)
+
   defp lower(_env, term, _ctx), do: raise(ArgumentError, "cannot emit #{inspect(term)}")
 
   # A single-clause `case` whose one clause is a tuple pattern and whose body is
