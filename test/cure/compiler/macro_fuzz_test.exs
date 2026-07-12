@@ -17,7 +17,8 @@ defmodule Cure.Compiler.MacroFuzzTest do
   end
 
   test "unsupported grammar categories are reported as coverage gaps" do
-    assert {:error, {:unsupported_hole_type, "Code"}} = MacroFuzz.hole_generator("Code")
+    assert {:error, {:unsupported_hole_type, "UnknownCategory"}} =
+             MacroFuzz.hole_generator("UnknownCategory")
   end
 
   test "generated scalar fillers assemble into fully consumed macro uses" do
@@ -82,7 +83,12 @@ defmodule Cure.Compiler.MacroFuzzTest do
             "starts with bad"
     """
 
-    assert {:ok, env} = Program.elaborate(source)
+    env_source =
+      source
+      |> String.replace("n + true", "n + 1")
+      |> String.replace("0 + true", "0 + 1")
+
+    assert {:ok, env} = Program.elaborate(env_source)
     assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
     assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
     {:macro_def, _, _} = macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))

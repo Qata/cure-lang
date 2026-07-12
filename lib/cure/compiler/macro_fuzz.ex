@@ -28,7 +28,15 @@ defmodule Cure.Compiler.MacroFuzz do
   @category_goals %{
     "Nat" => {:data, :Nat, [], []},
     "Bd" => {:data, :Bd, [], []},
-    "Vec" => {:data, :Vec, [], [{:ctor, :Z, []}]}
+    "Vec" => {:data, :Vec, [], [{:ctor, :Z, []}]},
+    # These surface categories are intentionally seeded with closed Nat code
+    # until the module-aware generator menu grows their native domains. They
+    # still exercise real parse/expand/elaborate paths; the manifest records
+    # the category so the domain upgrade remains visible.
+    "Code" => {:data, :Nat, [], []},
+    "Duration" => {:data, :Nat, [], []},
+    "Number" => {:data, :Nat, [], []},
+    "Kind" => {:data, :Nat, [], []}
   }
 
   @spec hole_generator(String.t()) ::

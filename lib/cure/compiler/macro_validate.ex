@@ -6,6 +6,8 @@ defmodule Cure.Compiler.MacroValidate do
   parsed `{:macro_def, …}` AST, upstream of the elaborator.
   """
 
+  alias Cure.Compiler.MacroFuzz
+
   @type point :: {:hole_kind, String.t()} | {:keyword, String.t()} | {:failure, String.t()}
 
   @doc """
@@ -37,7 +39,8 @@ defmodule Cure.Compiler.MacroValidate do
       with :ok <- check_explain_exhaustive(macro_def),
            :ok <- check_rules_pinned(macro_def),
            :ok <- check_examples(macro_def, env),
-           :ok <- check_computed_examples(macro_def, env) do
+           :ok <- check_computed_examples(macro_def, env),
+           :ok <- MacroFuzz.check_expansion_proof(macro_def, env) do
         {:cont, :ok}
       else
         {:error, _} = error -> {:halt, error}

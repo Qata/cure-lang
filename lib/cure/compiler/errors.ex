@@ -477,6 +477,19 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:expansion_ill_typed, details}, file) do
+    keyword = Map.get(details, :keyword, "?")
+    reason = Map.get(details, :kernel_error)
+
+    format_diagnostic(
+      "error",
+      "macro expansion proof failed",
+      file,
+      0,
+      "the generated `#{keyword}` expansion was rejected by the dependent elaborator: #{inspect(reason)}"
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do

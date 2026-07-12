@@ -91,4 +91,21 @@ defmodule Cure.Elab.MacroValidationWiringTest do
 
     assert {:error, {:example_type_mismatch, [%{keyword: "one"}]}} = Program.elaborate(source)
   end
+
+  test "compilation rejects a macro whose generated expansion is ill-typed" do
+    source = """
+    mod M
+      macro Bad
+        syntax bad <n: Code> becomes n + true
+          example bad 0 expands 0 + true
+        explain
+          Code =>
+            "expects code"
+          keyword "bad" =>
+            "starts with bad"
+    """
+
+    assert {:error, {:expansion_ill_typed, %{keyword: "bad", shrunk_term: _}}} =
+             Program.elaborate(source)
+  end
 end
