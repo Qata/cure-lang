@@ -211,11 +211,7 @@ defmodule Cure.Compiler.MacroFuzz do
       rules
       |> Enum.filter(&(&1[:kind] in [:syntax, :computed]))
       |> Enum.flat_map(fn rule ->
-        Enum.flat_map(rule.segments, fn
-          {:hole, %{kind: category}} -> [{category, rule.keyword}]
-          {:raw_hole, %{delimiter: delimiter}} -> [{"raw until " <> delimiter, rule.keyword}]
-          _ -> []
-        end)
+        Enum.map(segment_holes(rule.segments), &{&1.kind, rule.keyword})
       end)
       |> Enum.uniq()
       |> Enum.map(fn {category, keyword} ->
@@ -255,7 +251,7 @@ defmodule Cure.Compiler.MacroFuzz do
           for rule <- Enum.filter(rules, &(&1[:kind] in [:syntax, :computed])) do
             %{
               keyword: rule.keyword,
-              hole_kinds: for({:hole, %{kind: kind}} <- rule.segments, do: kind),
+              hole_kinds: rule.segments |> segment_holes() |> Enum.map(& &1.kind),
               draws: Keyword.get(opts, :draws, @default_draws),
               status: status
             }
@@ -281,12 +277,7 @@ defmodule Cure.Compiler.MacroFuzz do
   end
 
   defp prove_rule(rule, rules, env, draws, seed) do
-    holes =
-      Enum.flat_map(rule.segments, fn
-        {:hole, %{name: name, kind: kind}} -> [{name, kind}]
-        {:raw_hole, %{name: name, delimiter: delimiter}} -> [{name, "raw until " <> delimiter}]
-        _ -> []
-      end)
+    holes = segment_holes(rule.segments)
 
     case holes do
       [] ->
@@ -327,13 +318,16 @@ defmodule Cure.Compiler.MacroFuzz do
   defp sample_bindings(holes, draws, seed, env) do
     initial = List.duplicate(%{}, draws)
 
-    Enum.reduce_while(holes, {:ok, initial}, fn {name, kind}, {:ok, bindings} ->
+    Enum.reduce_while(holes, {:ok, initial}, fn %{name: name, kind: kind, repeat: repeat}, {:ok, bindings} ->
       case sample_holes(kind, draws, seed, env) do
         {:ok, _info, terms} ->
           next =
             bindings
             |> Enum.with_index()
-            |> Enum.map(fn {binding, index} -> Map.put(binding, name, Enum.at(terms, index)) end)
+            |> Enum.map(fn {binding, index} ->
+              value = if repeat, do: [Enum.at(terms, index)], else: Enum.at(terms, index)
+              Map.put(binding, name, value)
+            end)
 
           {:cont, {:ok, next}}
 
@@ -475,6 +469,29 @@ defmodule Cure.Compiler.MacroFuzz do
             {:halt, {:error, {:missing_hole_filler, name}}}
         end
 
+      {:repeat, {:hole, %{name: name}}}, {:ok, acc} ->
+        case Map.fetch(bindings, name) do
+          {:ok, values} when is_list(values) ->
+            case Enum.reduce_while(values, {:ok, []}, fn value, {:ok, words} ->
+                   case surface_filler(value) do
+                     {:ok, text} -> {:cont, {:ok, words ++ [text]}}
+                     {:error, _} = error -> {:halt, error}
+                   end
+                 end) do
+              {:ok, words} -> {:cont, {:ok, acc ++ words}}
+              {:error, _} = error -> {:halt, error}
+            end
+
+          :error ->
+            {:halt, {:error, {:missing_hole_filler, name}}}
+        end
+
+      {:optional, group}, {:ok, acc} ->
+        case assemble_words(group, bindings) do
+          {:ok, words} -> {:cont, {:ok, acc ++ words}}
+          {:error, _} = error -> {:halt, error}
+        end
+
       other, {:ok, _acc} ->
         {:halt, {:error, {:invalid_macro_segment, other}}}
     end)
@@ -556,4 +573,18 @@ defmodule Cure.Compiler.MacroFuzz do
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end
   end
+
+  defp segment_holes(segments) when is_list(segments), do: Enum.flat_map(segments, &segment_holes/1)
+
+  defp segment_holes({:hole, %{name: name, kind: kind}}),
+    do: [%{name: name, kind: kind, repeat: false}]
+
+  defp segment_holes({:raw_hole, %{name: name, delimiter: delimiter}}),
+    do: [%{name: name, kind: "raw until " <> delimiter, repeat: false}]
+
+  defp segment_holes({:repeat, {:hole, %{name: name, kind: kind}}}),
+    do: [%{name: name, kind: kind, repeat: true}]
+
+  defp segment_holes({:optional, segments}), do: segment_holes(segments)
+  defp segment_holes(_segment), do: []
 end

@@ -71,6 +71,19 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert rule.category == "Reducer.ClauseModifier"
   end
 
+  test "repetition and optional groups are retained as grammar segments" do
+    node =
+      parse!("""
+      macro Grammar
+        syntax list <item: Nat>... becomes item
+        syntax maybe (<value: Nat>)? becomes value
+      """)
+
+    assert {:macro_def, _meta, [repeated, optional]} = node
+    assert [{:repeat, {:hole, %{name: "item", kind: "Nat"}}}] = repeated.segments
+    assert [{:optional, [{:hole, %{name: "value", kind: "Nat"}}]}] = optional.segments
+  end
+
   test "a malformed hole (missing closing `>`) records a :malformed_hole error" do
     {:ok, tokens} =
       Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)

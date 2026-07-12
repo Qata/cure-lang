@@ -1409,6 +1409,11 @@ defmodule Cure.Compiler.Lexer do
     start_col = state.col
 
     case {peek_at(state, 1), peek_at(state, 2)} do
+      {?., ?.} ->
+        token = Token.new(:ellipsis, "...", state.line, start_col)
+        maybe_emit_event(state, token)
+        {:ok, %{state | tokens: [token | state.tokens]} |> advance(3)}
+
       {?., ?=} ->
         token = Token.new(:range_inclusive, "..=", state.line, start_col)
         maybe_emit_event(state, token)

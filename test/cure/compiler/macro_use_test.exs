@@ -94,6 +94,25 @@ defmodule Cure.Compiler.MacroUseTest do
     assert Keyword.get(meta, :name) in ["Clock.now", "now"]
   end
 
+  test "repeated and optional grammar segments expand as list and single bindings" do
+    source = """
+    macro Grammar
+      syntax list <item: Nat>... becomes item
+      syntax maybe (<value: Nat>)? becomes value
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, rules}} = Parser.parse(tokens, emit_events: false)
+
+    list_rule = Enum.find(rules, &(&1.keyword == "list"))
+    assert {:ok, use_site} = Lexer.tokenize("list 1 2", emit_events: false)
+    assert {:list, [generated_by: :macro_repeat], [_one, _two]} = Parser.expand_example([list_rule], use_site)
+
+    maybe_rule = Enum.find(rules, &(&1.keyword == "maybe"))
+    assert {:ok, optional_use} = Lexer.tokenize("maybe (1)", emit_events: false)
+    assert {:literal, _meta, 1} = Parser.expand_example([maybe_rule], optional_use)
+  end
+
   test "a macro use-site literal-segment mismatch records a :macro_use_mismatch error" do
     # `say` expects the literal "hello" next; using it with "goodbye" must fail
     # the segment match and record an error rather than silently mis-expanding.

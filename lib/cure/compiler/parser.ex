@@ -330,11 +330,7 @@ defmodule Cure.Compiler.Parser do
     case match_segments(state, rule.segments, %{}, 0) do
       {:ok, bindings, _progress, state} ->
         inputs =
-          Enum.flat_map(rule.segments, fn
-            {:hole, %{name: name}} -> [Map.fetch!(bindings, name)]
-            {:raw_hole, %{name: name}} -> [Map.fetch!(bindings, name)]
-            _ -> []
-          end)
+          Enum.flat_map(rule.segments, &segment_inputs(&1, bindings))
 
         input = {:macro_input, [keyword: keyword], inputs}
 
@@ -479,6 +475,44 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp match_segments(state, [{:repeat, segment} | rest], bindings, progress) do
+    {values, state} = match_repeated_segment(state, segment, bindings, [])
+    bindings = put_repeated_binding(bindings, segment, values)
+    match_segments(state, rest, bindings, progress + 1)
+  end
+
+  defp match_segments(state, [{:optional, group} | rest], bindings, progress) do
+    case match_segments(state, group, bindings, progress) do
+      {:ok, bindings, _group_progress, matched_state} ->
+        match_segments(matched_state, rest, bindings, progress + 1)
+
+      {:error, _group_progress, _matched_state} ->
+        match_segments(state, rest, bindings, progress + 1)
+    end
+  end
+
+  defp match_repeated_segment(state, {:hole, %{name: name}}, bindings, acc) do
+    case peek(state) do
+      %Token{type: type} when type in [:newline, :dedent, :eof] -> {Enum.reverse(acc), state}
+      _ ->
+        {arg, state} = parse_expr(state, 0)
+        match_repeated_segment(state, {:hole, %{name: name}}, bindings, [arg | acc])
+    end
+  end
+
+  defp match_repeated_segment(state, {:lit, word}, _bindings, acc) do
+    if lit_token_matches?(peek(state), word) do
+      match_repeated_segment(advance(state), {:lit, word}, %{}, [word | acc])
+    else
+      {Enum.reverse(acc), state}
+    end
+  end
+
+  defp match_repeated_segment(state, _segment, _bindings, acc), do: {Enum.reverse(acc), state}
+
+  defp put_repeated_binding(bindings, {:hole, %{name: name}}, values), do: Map.put(bindings, name, values)
+  defp put_repeated_binding(bindings, _segment, _values), do: bindings
+
   defp advance_n(state, 0), do: state
   defp advance_n(state, count), do: advance_n(advance(state), count - 1)
 
@@ -586,6 +620,7 @@ defmodule Cure.Compiler.Parser do
 
   defp subst_holes({:variable, _meta, name} = v, bindings) do
     case Map.fetch(bindings, name) do
+      {:ok, args} when is_list(args) -> {:list, [generated_by: :macro_repeat], args}
       {:ok, arg} -> arg
       :error -> v
     end
@@ -4756,14 +4791,21 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp macro_syntax_fields(segments) do
-    segments
-    |> Enum.flat_map(fn
-      {:hole, %{name: name}} -> [name]
-      {:raw_hole, %{name: name}} -> [name]
-      _ -> []
-    end)
+    Enum.flat_map(segments, &segment_hole_names/1)
     |> Enum.uniq()
   end
+
+  defp segment_hole_names({:hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:raw_hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:repeat, segment}), do: segment_hole_names(segment)
+  defp segment_hole_names({:optional, segments}), do: Enum.flat_map(segments, &segment_hole_names/1)
+  defp segment_hole_names(_segment), do: []
+
+  defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:repeat, segment}, bindings), do: [segment_inputs(segment, bindings)]
+  defp segment_inputs({:optional, segments}, bindings), do: Enum.flat_map(segments, &segment_inputs(&1, bindings))
+  defp segment_inputs(_segment, _bindings), do: []
 
   # After a syntax rule's template, an OPTIONAL indented block of `example …`
   # lines (self-proving §5). Consumes the nested indent/dedent so the macro-body
@@ -4944,10 +4986,15 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # Ordered segments between a rule's keyword and `becomes`: literal tokens and
-  # typed holes `<name: Kind>` (window: :lt identifier :colon identifier :gt).
-  defp parse_rule_segments(state, acc) do
+  # Ordered segments between a rule's keyword and `becomes`: literal tokens,
+  # typed holes, line-oriented repetitions, and optional groups.
+  defp parse_rule_segments(state, acc), do: parse_rule_segments(state, acc, :rule)
+
+  defp parse_rule_segments(state, acc, mode) do
     case peek(state) do
+      %Token{type: :rparen} when mode == :group ->
+        {Enum.reverse(acc), state}
+
       # Stop at either tier verb — `becomes` (Tier-2 template) or `computed`
       # (Tier-3 elab). Without stopping at `computed`, it (and `by`) would be
       # swallowed as literal segments and the verb branch could never fire.
@@ -4974,7 +5021,7 @@ defmodule Cure.Compiler.Parser do
            %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}} ->
             hole = {:raw_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
             state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
-            parse_rule_segments(state, [hole | acc])
+            parse_rule_segments(state, [hole | acc], mode)
 
           _ ->
             with %Token{type: :identifier, value: name} <- peek_at(state, 1),
@@ -4983,7 +5030,7 @@ defmodule Cure.Compiler.Parser do
                  %Token{type: :gt} <- peek_at(state, 4) do
               hole = {:hole, %{name: name, kind: kind, line: peek(state).line}}
               state = state |> advance() |> advance() |> advance() |> advance() |> advance()
-              parse_rule_segments(state, [hole | acc])
+              parse_rule_segments(state, [hole | acc], mode)
             else
               _ ->
                 t = peek(state)
@@ -4992,9 +5039,44 @@ defmodule Cure.Compiler.Parser do
             end
         end
 
+      %Token{type: :ellipsis} ->
+        case acc do
+          [segment | rest] ->
+            parse_rule_segments(advance(state), [{:repeat, segment} | rest], mode)
+
+          [] ->
+            parse_rule_segments(advance(state), [{:lit, "..."} | acc], mode)
+        end
+
+      %Token{type: :lparen} ->
+        if optional_group_start?(state) do
+          {group, state} = parse_rule_segments(advance(state), [], :group)
+          state = advance(state)
+          state = advance(state)
+          parse_rule_segments(state, [{:optional, group} | acc], mode)
+        else
+          parse_rule_segments(advance(state), [{:lit, "("} | acc], mode)
+        end
+
       %Token{value: v} ->
-        parse_rule_segments(advance(state), [{:lit, to_string(v)} | acc])
+        parse_rule_segments(advance(state), [{:lit, to_string(v)} | acc], mode)
     end
+  end
+
+  defp optional_group_start?(%{tokens: tokens, pos: pos}) do
+    tokens
+    |> Enum.drop(pos + 1)
+    |> Enum.with_index()
+    |> Enum.find_value(false, fn
+      {%Token{type: :rparen}, index} ->
+        case Enum.at(tokens, pos + index + 2) do
+          %Token{type: :hole, value: ""} -> true
+          _ -> false
+        end
+
+      {%Token{type: type}, _index} when type in [:newline, :dedent, :eof] -> true
+      _ -> false
+    end)
   end
 
   defp parse_fsm(state) do
