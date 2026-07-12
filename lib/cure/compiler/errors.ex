@@ -369,11 +369,29 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  # -- Macro error floor (SP1 §2) ----------------------------------------------
+
+  def format_error({:macro_use_mismatch, keyword, expected, got, line, col}, file) do
+    detail =
+      case expected do
+        {:literal, w} -> "the `#{keyword}` macro expected `#{w}` here, but found `#{got}`"
+        {:hole_kind, k} -> "the `#{keyword}` macro expected #{article(k)} #{k} here, but found `#{got}`"
+        :nothing_more -> "the `#{keyword}` macro has no more to match here, but found `#{got}`"
+      end
+
+    format_diagnostic("error", "macro syntax", file, line, "#{detail} (at column #{col})")
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
     format_diagnostic("error", "compilation error", file, 0, inspect(error))
   end
+
+  # Grammatical article for the macro hole-kind diagnostic ("a Duration" / "an
+  # Int"). Placed after the format_error/2 clause group to keep those contiguous.
+  defp article(<<c, _::binary>>) when c in ~c"AEIOUaeiou", do: "an"
+  defp article(_), do: "a"
 
   # -- "Did you mean?" Suggestions ---------------------------------------------
 

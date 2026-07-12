@@ -229,7 +229,8 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:macro_use_mismatch, keyword, :at_segment, progress, t.line, t.col}
+            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress),
+             macro_got_desc(t), t.line, t.col}
           )
 
         # Recover: yield the bare keyword variable so the outer parse continues.
@@ -241,6 +242,31 @@ defmodule Cure.Compiler.Parser do
          }), state}
     end
   end
+
+  # Describe the segment a macro rule expected at the failed position, for the
+  # default mismatch diagnostic (SP1 §2 floor). A literal segment names the exact
+  # word; a hole names its declared kind; past the end means the use supplied
+  # tokens the rule did not call for.
+  #
+  # NOTE (reviewed): under today's match_segments/4, a {:hole, _} segment NEVER
+  # fails to match (it unconditionally parses an expr and binds it), so the only
+  # way parse_macro_use's single call site reaches this function is via a
+  # {:lit, w} mismatch. The {:hole_kind, k} and :nothing_more arms are
+  # defensive/forward-looking (for when match_segments gains hole-content
+  # validation, or T9's maximal-progress selection makes a hole-position failure
+  # possible) and are not reachable by any input today.
+  defp macro_expected_at(rule, progress) do
+    case Enum.at(rule.segments, progress) do
+      {:lit, w} -> {:literal, w}
+      {:hole, %{kind: k}} -> {:hole_kind, k}
+      _ -> :nothing_more
+    end
+  end
+
+  # A short human description of the token actually found at the mismatch.
+  defp macro_got_desc(%Token{type: :eof}), do: "end of input"
+  defp macro_got_desc(%Token{value: v}) when not is_nil(v), do: to_string(v)
+  defp macro_got_desc(%Token{type: t}), do: to_string(t)
 
   # Walk a rule's segments against the use-site tokens. A `{:lit, w}` must match
   # the next token's value; a `{:hole, %{name}}` binds `name` to a parsed

@@ -100,7 +100,7 @@ defmodule Cure.Compiler.MacroUseTest do
       )
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    assert Enum.any?(errors, &match?({:macro_use_mismatch, "say", :at_segment, 0, _, _}, &1))
+    assert Enum.any?(errors, &match?({:macro_use_mismatch, "say", {:literal, "hello"}, "goodbye", _, _}, &1))
   end
 
   test "a hole referenced inside a template match-arm's guard is substituted" do
