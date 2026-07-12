@@ -962,6 +962,7 @@ The following slices have now landed in this worktree:
 - SP4 also has a reflection-backed reducer dogfood builder in `Cure.Compiler.MacroReducer`; it emits ordinary `pattern_match` AST and proves it through the dependent elaborator.
 - SP5 has a closed OTP callback vocabulary, callback ADT-shaped values, declaration validation, and pure `QuotedModule` lifting in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
 - SP6 has delimited raw-hole parsing, pure capture helpers, computed use-site integration, `is Category` rule metadata, and explicit module-rule markers.
+- SP6 raw-hole proof fixtures now generate bounded raw text and preserve a synthetic `dedent` delimiter through `MacroFuzz`/`Parser.expand_example`.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
 The remaining work before the DONE criterion is genuinely satisfied is:
@@ -970,7 +971,7 @@ The remaining work before the DONE criterion is genuinely satisfied is:
 - Verify or complete the generated-proof gate across every real macro compilation path, including the transitional classic compiler path where the architecture requires it.
 - Extend SP4 from the base reflection API to the reducer/view/flow dogfood surface and its integration tests.
 - Extend SP5 to the complete `behaviour`/`callback`/`lift module` surface, closed callback ADTs, and the AtomVM execution gate.
-- Extend SP6 from parser/capture primitives to raw-hole use-site integration, module rules, open categories, and the concrete DSLs specified by the macro design.
+- Extend SP6 from the current raw integration and metadata to full module-rule execution, open-category composition, repetition/optional grammar groups, and the concrete DSLs specified by the macro design.
 - Perform the required skeptical review, full test gate, Antigen verification, and final end-to-end proof before declaring completion.
 
 Do not mark the DONE criterion complete until every item above is implemented and verified.
