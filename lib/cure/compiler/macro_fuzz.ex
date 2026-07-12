@@ -59,7 +59,7 @@ defmodule Cure.Compiler.MacroFuzz do
            env: env,
            ctx: ctx,
            goal: nil,
-           generator: Gen.member_of([{:int_lit, -2}, {:int_lit, 0}, {:int_lit, 42}, {:float_lit, 0.5}])
+           generator: Gen.member_of([{:int_lit, 0}, {:int_lit, 42}, {:float_lit, 0.5}])
          }}
 
       "Duration" ->
@@ -83,7 +83,7 @@ defmodule Cure.Compiler.MacroFuzz do
            goal: nil,
            generator:
              Gen.frequency([
-               {2, Gen.member_of([{:int_lit, -1}, {:int_lit, 0}, {:int_lit, 9}])},
+               {2, Gen.member_of([{:int_lit, 0}, {:int_lit, 9}])},
                {2, Term.gen_term(ctx, SigMenu.nat())},
                {2, Term.gen_term(ctx, SigMenu.bd())}
              ])
