@@ -265,31 +265,52 @@ defmodule Cure.Compiler.Parser do
 
   # A short human description of the token actually found at the mismatch.
   #
+  # This is the single choke point for the "found `...`" clause, so its
+  # result is escaped for control characters (see escape_for_diagnostic/1)
+  # regardless of which case below produced it: a *content-bearing* token
+  # (string, char, ...) can carry a raw newline/tab in its decoded `value`
+  # just as easily as the structural tokens below carry one directly, and
+  # either would splice a raw control byte into format_diagnostic's
+  # single-line `| message` convention.
+  defp macro_got_desc(token), do: token |> macro_got_desc_raw() |> escape_for_diagnostic()
+
   # Structural/whitespace tokens (:newline, :indent, :dedent) are named in
   # words rather than falling through to their raw `value` (a literal "\n"
   # byte, or a bare indentation-level integer): splicing either into the
-  # message breaks format_diagnostic's single-line `| message` convention or
-  # reads as meaningless ("found `2`"). These are common mismatches (e.g. a
-  # macro keyword used bare, with nothing supplied before the line ends).
-  defp macro_got_desc(%Token{type: :eof}), do: "end of input"
+  # message reads as meaningless ("found `2`"), even once escaped. These are
+  # common mismatches (e.g. a macro keyword used bare, with nothing supplied
+  # before the line ends).
+  defp macro_got_desc_raw(%Token{type: :eof}), do: "end of input"
   # The `nil` keyword lexes as %Token{type: nil, value: nil} (unlike every
   # other keyword, which lexes as {:keyword, atom}) -- neither field carries
   # displayable text, so without this clause it falls through to
   # `to_string(nil)` (a literal "" empty string), rendering `found ``` .
-  defp macro_got_desc(%Token{type: nil}), do: "nil"
-  defp macro_got_desc(%Token{type: :newline}), do: "end of line"
-  defp macro_got_desc(%Token{type: :indent}), do: "an indent"
-  defp macro_got_desc(%Token{type: :dedent}), do: "a dedent"
+  defp macro_got_desc_raw(%Token{type: nil}), do: "nil"
+  defp macro_got_desc_raw(%Token{type: :newline}), do: "end of line"
+  defp macro_got_desc_raw(%Token{type: :indent}), do: "an indent"
+  defp macro_got_desc_raw(%Token{type: :dedent}), do: "a dedent"
   # A :char token's value is the decoded Unicode codepoint (e.g. 97 for 'a'),
   # not its source spelling -- render the character itself rather than the
   # bare integer. Falls through to the generic clause (numeric render) for a
   # codepoint outside the valid Unicode scalar range, so this can never raise.
-  defp macro_got_desc(%Token{type: :char, value: v})
+  defp macro_got_desc_raw(%Token{type: :char, value: v})
        when is_integer(v) and (v in 0..0xD7FF or v in 0xE000..0x10FFFF),
        do: "'#{<<v::utf8>>}'"
 
-  defp macro_got_desc(%Token{value: v}) when not is_nil(v), do: to_string(v)
-  defp macro_got_desc(%Token{type: t}), do: to_string(t)
+  defp macro_got_desc_raw(%Token{value: v}) when not is_nil(v), do: to_string(v)
+  defp macro_got_desc_raw(%Token{type: t}), do: to_string(t)
+
+  # Escape control characters that would otherwise corrupt format_diagnostic's
+  # single-line `| message` convention (e.g. a plain string literal's decoded
+  # value, or a char literal's decoded value, can carry a raw "\n"/"\t" from a
+  # source escape sequence such as "a\nb" or '\n').
+  defp escape_for_diagnostic(s) do
+    s
+    |> String.replace("\r\n", "\\n")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
+  end
 
   # Walk a rule's segments against the use-site tokens. A `{:lit, w}` must match
   # the next token's value; a `{:hole, %{name}}` binds `name` to a parsed

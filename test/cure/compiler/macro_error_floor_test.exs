@@ -105,6 +105,47 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     refute rendered =~ "found `97`"
   end
 
+  test "a macro-use mismatch never splices a raw control character into the diagnostic" do
+    # The structural-token (newline/indent/dedent) and char-literal fixes
+    # above special-case specific token *types*, but the real invariant is
+    # about *content*: any token whose decoded value happens to contain a
+    # raw control character must not corrupt format_diagnostic's single-line
+    # `| message` convention. Two content-bearing token kinds reach this
+    # through the generic to_string(v) (string) and the dedicated :char
+    # clause (char) fallbacks -- both must come out escaped, not raw.
+    string_with_escape =
+      errors_of(
+        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say \"a\\nb\"\n"
+      )
+
+    string_mismatch =
+      Enum.find(string_with_escape, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
+
+    assert string_mismatch, "expected a :macro_use_mismatch error"
+    rendered_string = Errors.format_error(string_mismatch, "f.cure")
+
+    # A well-formed 3-line diagnostic (severity, location, message). A raw
+    # embedded newline breaks one non-empty line into two non-empty lines --
+    # "all lines non-empty" would NOT catch that -- so assert the line count
+    # directly.
+    assert length(String.split(rendered_string, "\n")) == 3,
+           "a string literal's embedded newline must not corrupt the diagnostic:\n#{rendered_string}"
+
+    char_newline =
+      errors_of(
+        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say '\\n'\n"
+      )
+
+    char_mismatch =
+      Enum.find(char_newline, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
+
+    assert char_mismatch, "expected a :macro_use_mismatch error"
+    rendered_char = Errors.format_error(char_mismatch, "f.cure")
+
+    assert length(String.split(rendered_char, "\n")) == 3,
+           "a char literal's raw newline value must not corrupt the diagnostic:\n#{rendered_char}"
+  end
+
   test "the hole-kind and nothing-more mismatch renders are total and grammatical" do
     # `{:hole_kind, _}` and `:nothing_more` are not reachable through today's
     # match_segments/4 (a `{:hole, _}` segment never fails to match, so the
