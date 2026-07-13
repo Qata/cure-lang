@@ -1535,7 +1535,7 @@ Suggested commit:
 4. Run skeptical review to two clean passes.
 5. Run `mix compile --warnings-as-errors`, the full `mix test` gate, Antigen
    verification, and formatting checks. Current results: warnings-as-errors
-   clean; full gate `4059 passed` (3 doctests, 4056 tests), `1 skipped`, 128
+   clean; full gate `4060 passed` (3 doctests, 4057 tests), `1 skipped`, 128
    expected immune responses; Antigen-only gate `556 passed`, 141 expected
    immune responses, with `318/318` shape coverage.
 6. Confirm the worktree is clean and update the live state with exact counts.
