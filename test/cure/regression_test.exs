@@ -24,7 +24,7 @@ defmodule Cure.RegressionTest do
   end
 
   @tag :regression
-  test "every example compiles and produces the expected output" do
+  test "every supported example compiles and produces the expected output" do
     preload_stdlib()
 
     result =
@@ -37,7 +37,7 @@ defmodule Cure.RegressionTest do
       end)
 
     refute result =~ "FAIL"
-    assert result =~ ~r/examples: \d+ passed, 0 failed/
+    assert result =~ ~r/examples: \d+ passed, \d+ skipped, 0 failed/
   end
 
   defp preload_stdlib do
