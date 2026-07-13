@@ -95,8 +95,7 @@ defmodule Cure.Compiler.LiftModule do
     by_name = Map.new(requests, &{&1.module, &1})
     names = Enum.map(requests, & &1.module)
 
-    Enum.reduce_while(names, {:ok, [], MapSet.new(), MapSet.new()}, fn name,
-                                                                        {:ok, ordered, visiting, visited} ->
+    Enum.reduce_while(names, {:ok, [], MapSet.new(), MapSet.new()}, fn name, {:ok, ordered, visiting, visited} ->
       case visit(name, by_name, ordered, visiting, visited) do
         {:ok, ordered, visiting, visited} ->
           {:cont, {:ok, ordered, visiting, visited}}
@@ -124,7 +123,10 @@ defmodule Cure.Compiler.LiftModule do
         visiting = MapSet.put(visiting, name)
 
         case Enum.reduce_while(Map.get(request, :dependencies, []), {:ok, ordered, visiting, visited}, fn dependency,
-                                                                                                          {:ok, ordered, visiting, visited} = acc ->
+                                                                                                          {:ok, ordered,
+                                                                                                           visiting,
+                                                                                                           visited} =
+                                                                                                            acc ->
                if Map.has_key?(by_name, dependency) do
                  case visit(dependency, by_name, ordered, visiting, visited) do
                    {:ok, _ordered, _visiting, _visited} = result -> {:cont, result}

@@ -124,9 +124,7 @@ defmodule Cure.Compiler.OtpMacro do
         imports: imports,
         source_provenance: source_provenance
       }) do
-    lift_module(name, behaviour, callbacks, declarations,
-      imports: imports, source_provenance: source_provenance
-    )
+    lift_module(name, behaviour, callbacks, declarations, imports: imports, source_provenance: source_provenance)
   end
 
   def lift_module(%{module: name, behaviour: behaviour, callbacks: callbacks, declarations: declarations}) do

@@ -132,14 +132,15 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
 
   test "lifted module dependency cycles are rejected before emission" do
     ast =
-      {:container, [], [
-        {:lift_module,
-         [module: "Cure.A", behaviour: :GenServer, callbacks: [], declarations: [{:import, [source: "Cure.B"], []}]],
-         []},
-        {:lift_module,
-         [module: "Cure.B", behaviour: :GenServer, callbacks: [], declarations: [{:import, [source: "Cure.A"], []}]],
-         []}
-      ]}
+      {:container, [],
+       [
+         {:lift_module,
+          [module: "Cure.A", behaviour: :GenServer, callbacks: [], declarations: [{:import, [source: "Cure.B"], []}]],
+          []},
+         {:lift_module,
+          [module: "Cure.B", behaviour: :GenServer, callbacks: [], declarations: [{:import, [source: "Cure.A"], []}]],
+          []}
+       ]}
 
     assert {:error, {:lifted_module_dependency_cycle, _}} = LiftModule.collect(ast)
   end
