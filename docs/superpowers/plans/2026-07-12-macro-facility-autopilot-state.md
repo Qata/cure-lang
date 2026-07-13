@@ -1189,7 +1189,10 @@ instead of leaving `m` undetermined:
 2. Expand each operation to ordinary typed `Std.Otp` calls and effect
    sequencing; do not emit raw BEAM forms.
 3. Thread process, request/reply, state, and callback-result context through
-   expansion and elaboration.
+   expansion and elaboration. Declared `Effect(...)` callback results now use
+   the ordinary effect-aware elaborator, and effectful callback binds preserve
+   checked constructor results through an erased Core `let` witness
+   (`7b421759`).
 4. Reject unknown operations, illegal targets/messages, wrong replies, and
    operations used in an invalid callback context.
 5. Prove nested operation arguments and generated operation sequences expand
@@ -1243,8 +1246,11 @@ path.
 
 The actor floor also has explicit `init` and `handle_info` callback-body forms
 with delayed single-expression bodies, sharing the module-local state alias
-and ordinary callback result checking (`92b9ec43`). Full message-code
-derivation and callback effect context remain open. A `call` form now accepts
+and ordinary callback result checking (`92b9ec43`). Callback contracts now use
+erased `Effect(...)` result types, so nested `beam_ops` binds are checked and
+the generated BEAM callback still returns the ordinary OTP tuple
+(`7b421759`). Full message-code derivation and callback context remain open. A
+`call` form now accepts
 independent request and reply types and emits a checked `handle_call` callback
 (`12227f4c`).
 
@@ -1292,9 +1298,9 @@ addition to the bootstrap form, the standard-library macro accepts an
 explicit `state <Type>` clause and emits a module-local `State` alias shared
 by application start and stop; ordinary elaboration rejects mismatched start
 results. Root supervisor startup is now transparent: the `root` form emits an
-ordinary `start/2` callback that calls the checked `Std.Supervisor.start/1`
-operation, with a compiler regression proving the generated callback is
-available through the common lift/emission path (`66302bb2`). Supervisor
+ordinary `start/2` callback through `beam_ops start_supervisor`, with a compiler
+regression proving the generated callback is available through the common
+lift/emission path (`66302bb2`, `7b421759`). Supervisor
 intensity, period, and shutdown timeout values now use `Nat`, so negative
 values cannot pass ordinary elaboration while retaining erased BEAM integer
 representation (`136bb396`). A phase form now
@@ -1312,8 +1318,10 @@ pure values in effectful conditional, literal-match, and nested branch
 positions, and lets an annotated `let pid: Pid(Atom) = beam_ops self` check its
 RHS against `Effect(Pid(Atom))` while binding the payload (`769f2077`). The
 focused transparent-object suite is 41 passing tests and
-`mix compile --warnings-as-errors` is clean. Direct `Effect(T)` case motives
-still expose the existing kernel `:bad_motive` completeness gap; the alias is
+`mix compile --warnings-as-errors` is clean; the focused transparent-object
+suite is now 43 passing tests and the algebra and lifted-module suites pass 16
+and 15 tests respectively. Direct `Effect(T)` case motives still expose the
+existing kernel `:bad_motive` completeness gap; the alias is
 recorded as a transparent compatibility bridge, not as closure of that gate.
 An approved no-workaround resolution and multiple phase declarations remain
 required.
