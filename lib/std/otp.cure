@@ -6,8 +6,7 @@ mod Std.Otp
   ## Transparent process-operation syntax. Each rule produces ordinary Cure
   ## syntax; the checked algebra remains the only semantic implementation.
   macro BeamOps
-    syntax beam_ops self becomes Std.Otp.self()
-      example beam_ops self expands Std.Otp.self()
+    syntax beam_ops self contextual becomes Std.Otp.self()
 
     syntax beam_ops tell <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)
     syntax beam_ops send <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)
@@ -98,70 +97,71 @@ mod Std.Otp
       Empty -> right
       Shape(tag, arity, rest) -> Shape(tag, arity, union(rest, remove_shape(right, tag, arity)))
 
-  ## The calling process's own typed pid; `m` inferred from how the result is used.
-  fn self() -> Effect(Pid(m)) = raw_self()
+  ## The calling process's own typed pid; the erased message index is supplied
+  ## by the enclosing expected result at each use site.
+  fn self({m: Type}) -> Effect(Pid(m)) = raw_self()
 
   ## Spawn a nullary process function and return its indexed handle.
-  fn spawn(thunk: () -> Unit) -> Effect(Pid(m)) = raw_spawn(thunk)
+  fn spawn({m: Type}, thunk: () -> Unit) -> Effect(Pid(m)) = raw_spawn(thunk)
 
   ## Spawn and link a nullary process function to the calling process.
-  fn spawn_link(thunk: () -> Unit) -> Effect(Pid(m)) = raw_spawn_link(thunk)
+  fn spawn_link({m: Type}, thunk: () -> Unit) -> Effect(Pid(m)) = raw_spawn_link(thunk)
 
   ## Start a gen_server callback module. The generic floor preserves OTP's
   ## result tuple; transparent behavior macros provide the typed specialization.
-  fn start_link(module: Atom, args: List(a)) -> Effect(Tuple) =
+  fn start_link({a: Type}, module: Atom, args: List(a)) -> Effect(Tuple) =
     raw_start_link(%[:local, module], module, args, assert_type [] : List(Atom))
 
-  fn start_statem(module: Atom, args: List(a)) -> Effect(Tuple) =
+  fn start_statem({a: Type}, module: Atom, args: List(a)) -> Effect(Tuple) =
     raw_statem_start_link(%[:local, module], module, args, assert_type [] : List(Atom))
 
   fn start_supervisor(module: Atom) -> Effect(Tuple) =
     raw_supervisor_start_link(%[:local, module], module, assert_type [] : List(Atom))
 
-  fn start_supervisor_with(module: Atom, args: List(a)) -> Effect(Tuple) =
+  fn start_supervisor_with({a: Type}, module: Atom, args: List(a)) -> Effect(Tuple) =
     raw_supervisor_start_link(%[:local, module], module, args)
 
   ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
   ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
   ## the `p ! msg` surface and lower it to this.)
-  fn tell(dest: Pid(m), msg: m) -> Effect(Unit) = raw_send(dest, msg)
+  fn tell({m: Type}, dest: Pid(m), msg: m) -> Effect(Unit) = raw_send(dest, msg)
 
   ## Synchronous `gen_server` call: send request `q`, block for reply `r`. Both the
   ## request AND the reply are checked against the server's type.
-  fn call(server: GenServer(q, r), request: q) -> Effect(r) =
+  fn call({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(r) =
     raw_call(server, request)
 
   ## Asynchronous `gen_server` cast — a typed fire-and-forget request (no reply).
-  fn cast(server: GenServer(q, r), request: q) -> Effect(Unit) =
+  fn cast({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(Unit) =
     raw_cast(server, request)
 
   ## Typed lifecycle and observation wrappers over the raw effect boundary.
   typealias MonitorRef = Ref
   typealias TimerRef = Ref
 
-  fn stop(pid: Pid(m)) -> Effect(Unit) = raw_stop(pid)
+  fn stop({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_stop(pid)
 
-  fn send_after(delay: Int, pid: Pid(m), msg: m) -> Effect(Ref) =
+  fn send_after({m: Type}, delay: Int, pid: Pid(m), msg: m) -> Effect(Ref) =
     raw_send_after(delay, pid, msg)
 
   fn cancel_timer(ref: Ref) -> Effect(Unit) = raw_cancel_timer(ref)
 
-  fn monitor(kind: Atom, pid: Pid(m)) -> Effect(Ref) = raw_monitor(kind, pid)
+  fn monitor({m: Type}, kind: Atom, pid: Pid(m)) -> Effect(Ref) = raw_monitor(kind, pid)
 
   fn demonitor(ref: Ref) -> Effect(Unit) = raw_demonitor(ref)
 
-  fn link(pid: Pid(m)) -> Effect(Unit) = raw_link(pid)
+  fn link({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_link(pid)
 
-  fn unlink(pid: Pid(m)) -> Effect(Unit) = raw_unlink(pid)
+  fn unlink({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_unlink(pid)
 
-  fn exit(pid: Pid(m), reason: r) -> Effect(Unit) = raw_exit(pid, reason)
+  fn exit({m: Type}, {r: Type}, pid: Pid(m), reason: r) -> Effect(Unit) = raw_exit(pid, reason)
 
-  fn is_alive(pid: Pid(m)) -> Effect(Bool) = raw_is_alive(pid)
+  fn is_alive({m: Type}, pid: Pid(m)) -> Effect(Bool) = raw_is_alive(pid)
 
-  fn register(name: Atom, pid: Pid(m)) -> Effect(Unit) = raw_register(name, pid)
+  fn register({m: Type}, name: Atom, pid: Pid(m)) -> Effect(Unit) = raw_register(name, pid)
 
   fn unregister(name: Atom) -> Effect(Unit) = raw_unregister(name)
 
-  fn whereis(name: Atom) -> Effect(Pid(m)) = raw_whereis(name)
+  fn whereis({m: Type}, name: Atom) -> Effect(Pid(m)) = raw_whereis(name)
 end

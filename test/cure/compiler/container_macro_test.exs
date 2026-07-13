@@ -141,11 +141,33 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
           {"sup", "Cure.NestedSup"},
           {"app", "Cure.NestedApp"}
         ] do
-      source = "#{keyword} #{name}\n  fn me() -> Effect(Pid(m)) = beam_ops self\n"
+      source = "#{keyword} #{name}\n  fn me() -> Effect(Pid(Atom)) = beam_ops self\n"
 
       assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
       assert is_pid(apply(module, :me, []))
     end
+  end
+
+  test "a concrete Pid goal solves the erased type index of qualified self" do
+    source = """
+    mod Cure.ConcretePid
+      use Std.Otp
+      fn me() -> Effect(Pid(Atom)) = Std.Otp.self()
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert is_pid(apply(module, :me, []))
+  end
+
+  test "a concrete Pid goal solves the erased type index through beam_ops" do
+    source = """
+    mod Cure.ConcreteBeamOps
+      use Std.Otp
+      fn me() -> Effect(Pid(Atom)) = beam_ops self
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert is_pid(apply(module, :me, []))
   end
 
   test "supervisor payload syntax expands to a zero-argument starter" do

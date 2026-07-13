@@ -1463,7 +1463,28 @@ defmodule Cure.Elab.Elaborator do
             end
           end
 
-        case lambda_first || union_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+        implicit_first =
+          if not Unify.has_meta?(expected_core) do
+            resolved = resolve_def_key(env, name, atom)
+
+            if implicit_def?(env, resolved) do
+              result = elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core)
+
+              case result do
+                {:ok, term, _type} ->
+                  case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+                    :ok -> {:ok, term}
+                    {:error, _} -> nil
+                  end
+
+                {:error, _} ->
+                  nil
+              end
+            end
+          end
+
+        case implicit_first || lambda_first || union_first ||
+               elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
           {:ok, _} = ok ->
             ok
 
@@ -7157,9 +7178,17 @@ defmodule Cure.Elab.Elaborator do
     # `:unsolved_metavariables` error is still produced below; the caller's kernel
     # re-check independently gates the assembled term, so this only SOLVES
     # metavariables and cannot cause an unsound accept.
-    mctx =
+    expected_for_unify =
       if expected != nil do
-        case Unify.unify(Subst.instantiate(codomain, chosen), expected, mctx, env) do
+        case Kernel.normalize(ctx, expected) do
+          :fuel_exhausted -> expected
+          normalized -> normalized
+        end
+      end
+
+    mctx =
+      if expected_for_unify != nil do
+        case Unify.unify(Subst.instantiate(codomain, chosen), expected_for_unify, mctx, env) do
           {:ok, mctx2} -> mctx2
           {:error, _} -> mctx
         end

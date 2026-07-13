@@ -1141,9 +1141,14 @@ present (`raw_spawn`/`raw_spawn_link` plus ordinary `Std.Otp` wrappers), along
 with effect-typed `gen_server:start_link/4` and
 `gen_statem:start_link/4` wrappers that
 preserves the OTP result tuple. The elaborator now threads expected result types through
-qualified calls carrying lambda arguments. The remaining operation work must
-introduce an explicit behavior context so those wrappers can mint `Pid(m)` with
-the callback's message code instead of leaving `m` undetermined:
+qualified and effectful calls, including through the `Effect` type former. The
+public and raw OTP wrappers bind every phantom type index as an explicit erased
+parameter, so a concrete `Effect(Pid(Atom))` goal solves the raw operation rather
+than relying on a rigid free type global. `beam_ops self` is contextual because
+an unannotated standalone polymorphic self operation has no sound message index.
+The remaining operation work must introduce an explicit behavior context so those
+wrappers can mint `Pid(m)` with the callback's message code instead of leaving `m`
+undetermined:
 
 1. Add a closed operation vocabulary for `self`, `send`/`tell`, `call`,
    `cast`, `spawn`, `start_link`, `stop`, timers, monitors, and links.
