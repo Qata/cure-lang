@@ -30,9 +30,11 @@ Maintain the repository's existing constraints throughout:
 - Do not restore bespoke OTP container classes deleted by the parity branch;
   resolve integration in favor of the transparent macro architecture.
 - Keep the compiler OTP-agnostic: `actor`, `fsm`, `sup`, `app`, behavior names,
-  callback vocabularies, and OTP lowering belong in ordinary Cure macros and
-  standard-library code, not compiler-owned cases. A user-defined actor-like
-  abstraction must be possible without changing the compiler.
+  callback vocabularies, and OTP lowering must be defined in Cure itself using
+  ordinary language constructs, macros, checked algebra, and explicit foreign
+  primitives. Moving the same knowledge into an Elixir helper is not enough.
+  A user-defined actor-like abstraction must be possible without changing the
+  compiler.
 - Do not declare the work complete while any plan item, merge conflict, legacy
   regression, missing new test, runtime proof, or documented implementation gap
   remains.

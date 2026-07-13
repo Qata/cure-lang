@@ -1118,7 +1118,10 @@ code uses the ordinary checker, lifted modules are emitted without code-server
 side effects, and no `__otp_container` behavior is required by the new path.
 The generic compiler must not acquire knowledge of OTP behavior names,
 callback vocabularies, actor/FSM/supervisor/application semantics, or OTP
-specific lowering while implementing this infrastructure.
+specific lowering while implementing this infrastructure. Those vocabularies
+and lowering rules must be defined in Cure itself through ordinary language
+constructs, macros, checked algebra, and explicit foreign primitives. Moving
+the same knowledge into an Elixir helper outside the compiler is not sufficient.
 
 Suggested commit:
 `feat(compiler): add transparent inside-out macro expansion and lifted modules`
@@ -1250,8 +1253,10 @@ Only after Phase 4 parity is proven:
 6. update tests so they exercise the standard-library macros and common path;
 7. remove compiler-owned OTP behavior maps, callback contracts, behavior-name
    translation, OTP-specific module validation, and any other OTP vocabulary
-   from the generic compiler; the standard library and user-defined macros
-   must be able to define an actor-like abstraction without compiler changes;
+   from the generic compiler; define those vocabularies and their lowering in
+   Cure language code, macros, and checked algebra/foreign primitives. The
+   standard library and user-defined macros must be able to define an
+   actor-like abstraction without compiler changes;
 8. search for forbidden remnants and justify every remaining generic match.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
