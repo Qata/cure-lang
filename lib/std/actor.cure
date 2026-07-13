@@ -4,6 +4,18 @@ mod Std.Actor
   ## ordinary lifted GenServer module; message-code derivation and user
   ## handlers are layered on top of this floor.
   macro ActorContainers
+    syntax actor <name: ModuleName> state <state_type: Type> call <request_type: Type> returns <reply_type: Type> <call_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_server
+      typealias State = state_type
+      callback init(initial: State) returns Tuple(Atom, State) = %[:ok, initial]
+      callback handle_call(request: request_type, from: f, state: State) returns Tuple(Atom, reply_type, State) = call_body
+      callback handle_cast(message: m, state: State) returns Tuple(Atom, State) = %[:noreply, state]
+      callback handle_info(message: i, state: State) returns Tuple(Atom, State) = %[:noreply, state]
+      callback terminate(reason: e, state: State) returns Atom = :ok
+      callback code_change(old: v, state: State, extra: x) returns Tuple(Atom, State) = %[:ok, state]
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name [initial]
+
     syntax actor <name: ModuleName> state <state_type: Type> init <init_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
       behaviour gen_server

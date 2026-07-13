@@ -101,6 +101,25 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :handle_info, [:tick, 7]) == {:noreply, 8}
   end
 
+  test "actor call syntax keeps request and reply types distinct" do
+    source = """
+    actor Cure.TypedCallActor state Int call Int returns Bool
+      %[:reply, true, state]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_call, [7, :from, 11]) == {:reply, true, 11}
+  end
+
+  test "actor call syntax rejects a reply body with the declared wrong type" do
+    source = """
+    actor Cure.InvalidCallActor state Int call Int returns Bool
+      %[:reply, 1, state]
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "actor callback syntax rejects a body with the wrong state result" do
     source = """
     actor Cure.InvalidActor state Int init
