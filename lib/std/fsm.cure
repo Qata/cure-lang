@@ -20,8 +20,9 @@ mod Std.Fsm
       use Std.Otp
       behaviour gen_statem
       typealias State = state_type
+      typealias InitResult = Effect(Tuple(Atom, Atom, State))
       callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = init_body
+      callback init(initial: State) returns InitResult = init_body
       callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
 
@@ -30,18 +31,20 @@ mod Std.Fsm
       behaviour gen_statem
       typealias State = state_type
       typealias Event = event_type
+      typealias EventResult = Effect(Atom)
       callback callback_mode() returns Atom = :handle_event_function
       callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: Event, state: s, data: State) returns Effect(Atom) = event_body
+      callback handle_event(event_type: Atom, event: Event, state: s, data: State) returns EventResult = event_body
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
 
     syntax fsm <name: ModuleName> state <state_type: Type> handle_event <event_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
       behaviour gen_statem
       typealias State = state_type
+      typealias EventResult = Effect(Atom)
       callback callback_mode() returns Atom = :handle_event_function
       callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = event_body
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns EventResult = event_body
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
 
     syntax fsm <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module name

@@ -295,6 +295,18 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :handle_event, [:info, [:ping, 1], :ready, 7]) == :keep_state_and_data
   end
 
+  test "fsm handle_event pickup bodies use the transparent effect result alias" do
+    source = """
+    fsm Cure.MatchEventFsm state Int events Atom handle_event
+      pickup
+        event == :tick -> :keep_state_and_data
+        else -> :keep_state_and_data
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_event, [:info, :tick, :ready, 7]) == :keep_state_and_data
+  end
+
   test "fsm callback syntax rejects a body with a non-atom transition result" do
     source = """
     fsm Cure.InvalidEventFsm state Int handle_event
