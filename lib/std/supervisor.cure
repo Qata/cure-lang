@@ -25,10 +25,48 @@ mod Std.Supervisor
       fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
       body
 
+  type Restart = Permanent | Temporary | Transient
+  type Shutdown = Brutal | Timeout(Int)
+  type ChildType = Worker | Supervisor
+  type Strategy = OneForOne | OneForAll | RestForOne
+
   typealias ChildSpec = Tuple(Atom, Tuple(Atom, Atom, List(Atom)), Atom, Int, Atom, List(Atom))
 
+  fn permanent() -> Restart = Permanent()
+  fn temporary() -> Restart = Temporary()
+  fn transient() -> Restart = Transient()
+
+  fn brutal_shutdown() -> Shutdown = Brutal()
+  fn shutdown_after(timeout: Int) -> Shutdown = Timeout(timeout)
+
+  fn worker() -> ChildType = Worker()
+  fn supervisor() -> ChildType = Supervisor()
+
+  fn one_for_one() -> Strategy = OneForOne()
+  fn one_for_all() -> Strategy = OneForAll()
+  fn rest_for_one() -> Strategy = RestForOne()
+
+  local fn restart_atom(restart: Restart) -> Atom =
+    match restart
+      Permanent() -> :permanent
+      Temporary() -> :temporary
+      Transient() -> :transient
+
+  local fn shutdown_value(shutdown: Shutdown) -> Int =
+    match shutdown
+      Brutal() -> 0
+      Timeout(timeout) -> timeout
+
+  local fn child_type_atom(child_type: ChildType) -> Atom =
+    match child_type
+      Worker() -> :worker
+      Supervisor() -> :supervisor
+
+  fn child_with(module: Atom, id: Atom, restart: Restart, shutdown: Shutdown, child_type: ChildType) -> ChildSpec =
+    %[id, %[module, :start_link, []], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
+
   fn child(module: Atom, id: Atom) -> ChildSpec =
-    %[id, %[module, :start_link, []], :permanent, 5000, :worker, [module]]
+    child_with(module, id, permanent(), shutdown_after(5000), worker())
 
   ## Start, stop, and introspect Cure supervisor trees.
   ##

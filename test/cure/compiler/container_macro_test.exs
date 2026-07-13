@@ -130,6 +130,30 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert [{:worker, {:worker_module, :start_link, []}, :permanent, 5000, :worker, [:worker_module]}] = children
   end
 
+  test "supervisor child policies are closed typed values" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> ChildSpec =
+        Std.Supervisor.child_with(:worker_module, :worker, Std.Supervisor.transient(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :build, []) ==
+             {:worker, {:worker_module, :start_link, []}, :transient, 1000, :worker, [:worker_module]}
+  end
+
+  test "supervisor child policies reject arbitrary restart atoms" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> Std.Supervisor.ChildSpec =
+        Std.Supervisor.child_with(:worker_module, :worker, :permanent, Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "supervisor child constructors reject non-atom modules" do
     source = "sup Cure.InvalidChildRoot children [Std.Supervisor.child(1, :worker)]\n"
 

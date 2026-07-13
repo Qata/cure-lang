@@ -1175,9 +1175,10 @@ ordinary `start_link/0`, dynamic module atoms, a typed `ChildSpec` value, and
 the real checked `supervisor:start_link/3` boundary. The common
 collector/emitter and generic AtomVM packaging path are exercised end to end;
 the child constructor rejects non-atom module identifiers through ordinary
-elaboration. Closed strategy/child validation, restart/shutdown/intensity
-validation, and typed child startup remain to be implemented before this
-sub-phase is complete. Top-level lifted sources now emit the lifted unit as
+elaboration, and restart, shutdown, and child-kind policies are now closed
+Cure values converted by standard-library functions. Closed strategy/child
+validation, intensity/period validation, and typed child startup remain to be
+implemented before this sub-phase is complete. Top-level lifted sources now emit the lifted unit as
 the primary module, imported standard-library calls route remotely through
 the common emitter, and the printer round-trips transparent lift syntax.
 
