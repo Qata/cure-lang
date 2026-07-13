@@ -112,10 +112,10 @@ mod Std.Otp
 
   ## Start a gen_server callback module. The generic floor preserves OTP's
   ## result tuple; transparent behavior macros provide the typed specialization.
-  fn start_link({a: Type}, module: Atom, args: List(a)) -> Effect(Tuple) =
+  fn start_link({a: Type}, module: Atom, args: a) -> Effect(Tuple) =
     raw_start_link(%[:local, module], module, args, assert_type [] : List(Atom))
 
-  fn start_statem({a: Type}, module: Atom, args: List(a)) -> Effect(Tuple) =
+  fn start_statem({a: Type}, module: Atom, args: a) -> Effect(Tuple) =
     raw_statem_start_link(%[:local, module], module, args, assert_type [] : List(Atom))
 
   fn start_supervisor(module: Atom) -> Effect(Tuple) =

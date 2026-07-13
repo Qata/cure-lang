@@ -68,6 +68,13 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :code_change, [:old, 7, :extra]) == {:ok, 7}
   end
 
+  test "typed actor startup passes the scalar state to the OTP init callback" do
+    assert {:ok, module} = Cure.Compiler.compile_and_load("actor Cure.ScalarActor state Int\n", emit_events: false)
+    assert {:ok, pid} = apply(module, :start_link, [7])
+    assert :sys.get_state(pid) == 7
+    :gen_server.stop(pid)
+  end
+
   test "typed actor state annotations reject mismatched callback bodies" do
     source = """
     macro TypedActor
@@ -252,6 +259,14 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
 
     assert apply(module, :handle_event, [:info, :push, :locked, 0]) ==
              {:next_state, :locked, 0}
+  end
+
+  test "typed FSM startup passes the scalar state data to the OTP init callback" do
+    source = "fsm Cure.ScalarFsm state Int transitions [transition :ready :tick :ready]\n"
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, pid} = apply(module, :start_link, [9])
+    assert :sys.get_state(pid) == {:ready, 9}
+    :gen_statem.stop(pid)
   end
 
   test "fsm callback bodies sequence beam operations through an erased effect result" do
