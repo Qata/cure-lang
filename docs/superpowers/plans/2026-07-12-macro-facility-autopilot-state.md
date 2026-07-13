@@ -1295,6 +1295,11 @@ Only after Phase 4 parity is proven:
    actor-like abstraction without compiler changes;
 8. search for forbidden remnants and justify every remaining generic match.
 
+The compiler printer and algebra formatter have now dropped their unreachable
+legacy `actor`/`fsm`/`app`/`supervisor`/`child_spec` rendering branches. The
+totality corpus tracks only parser-constructed generic nodes, and focused
+printer, precedence, `with`, and corpus round-trip verification passes.
+
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
 user-defined behavior/macro must not require adding an OTP-specific compiler

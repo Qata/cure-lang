@@ -131,7 +131,7 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     type_annotation unary_op variable yield
     pin as_pattern assert_type gadt_ctor indexed_type interface
     implementation pi_type sigma_type with_abs hole forced_pattern
-    child_spec binary_generator named_implicit_pat union_type typed_pattern
+    binary_generator named_implicit_pat union_type typed_pattern
   )a
 
   # ── Per-kind round-trip unit tests (Task 3) ──────────────────────────────

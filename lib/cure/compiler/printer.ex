@@ -575,10 +575,6 @@ defmodule Cure.Compiler.Printer do
             "#{name}(#{call_args_to_string(args, depth, indent)})"
         end
 
-      # FSM transition
-      Keyword.get(meta, :from) != nil ->
-        fsm_transition_to_string(meta, depth, indent)
-
       # Pipe call. `|>` binds loosest (level 10, left-assoc), so a left operand
       # whose own precedence is lower — a bare `<-|` send, a conditional — must
       # be parenthesised or the reprint reparses differently.
@@ -1149,32 +1145,6 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
-  # -- Supervisor child spec -------------------------------------------------
-  #
-  # `[sup ]Module as id [(restart: :x, shutdown: N)]`. All data lives in meta;
-  # `meta[:kind]` is `:supervisor` (prefix `sup `) or `:worker` (no prefix).
-
-  defp to_string({:child_spec, meta, _children}, depth, indent) do
-    module = Keyword.get(meta, :module)
-    id = Keyword.get(meta, :id)
-    kind = Keyword.get(meta, :kind)
-    prefix = if kind == :supervisor, do: "sup ", else: ""
-
-    opts = Keyword.drop(meta, [:module, :id, :kind, :line, :col])
-
-    opts_str =
-      if opts == [] do
-        ""
-      else
-        inner =
-          Enum.map_join(opts, ", ", fn {k, v} -> "#{k}: #{render(v, depth, indent)}" end)
-
-        " (#{inner})"
-      end
-
-    "#{prefix}#{module} as #{id}#{opts_str}"
-  end
-
   # -- Binary generator (`<<pat <- source>>`) --------------------------------
   #
   # A comprehension qualifier that iterates a bitstring. The pattern is a
@@ -1730,10 +1700,6 @@ defmodule Cure.Compiler.Printer do
         :enum -> enum_to_string(meta, body, depth, indent)
         :protocol -> protocol_to_string(meta, body, depth, indent)
         :trait -> impl_to_string(meta, body, depth, indent)
-        :fsm -> fsm_to_string(meta, body, depth, indent)
-        :supervisor -> supervisor_to_string(meta, body, depth, indent)
-        :actor -> actor_to_string(meta, body, depth, indent)
-        :app -> app_to_string(meta, body, depth, indent)
         :proof -> proof_to_string(meta, body, depth, indent)
         :primitive -> primitive_to_string(meta, body, depth, indent)
         :opaque -> opaque_to_string(meta, body, depth, indent)
@@ -1766,115 +1732,6 @@ defmodule Cure.Compiler.Printer do
     "opaque type #{Keyword.get(meta, :name)}#{tp_str}"
   end
 
-  # -- Supervisor container (`sup Name`) -------------------------------------
-  #
-  # Settings (`strategy`/`intensity`/`period`) live in meta; the body is a flat
-  # list of `child_spec` nodes that must be re-wrapped in a `children` block.
-  defp supervisor_to_string(meta, body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    pad = String.duplicate(indent, depth + 1)
-    child_pad = String.duplicate(indent, depth + 2)
-
-    settings =
-      for key <- [:strategy, :intensity, :period],
-          (val = Keyword.get(meta, key)) != nil do
-        "#{key} = #{render(val, depth + 1, indent)}"
-      end
-
-    children_block = supervisor_children_to_string(body, depth, indent, child_pad)
-
-    lines = settings ++ children_block
-
-    case lines do
-      [] -> "sup #{name}"
-      _ -> "sup #{name}\n#{pad}" <> Enum.join(lines, "\n#{pad}")
-    end
-  end
-
-  defp supervisor_children_to_string([], _depth, _indent, _child_pad), do: []
-
-  defp supervisor_children_to_string([{:variable, _, "children"}, {:block, _, items}], depth, indent, child_pad) do
-    grouped =
-      items
-      |> Enum.group_by(fn
-        {_tag, meta, _value} when is_list(meta) -> Keyword.get(meta, :line, 0)
-        _ -> 0
-      end)
-      |> Enum.sort_by(&elem(&1, 0))
-
-    lines =
-      Enum.map(grouped, fn {_line, nodes} ->
-        Enum.map_join(nodes, " ", &render(&1, depth + 2, indent))
-      end)
-
-    ["children\n#{child_pad}" <> Enum.join(lines, "\n#{child_pad}")]
-  end
-
-  defp supervisor_children_to_string(specs, depth, indent, child_pad) do
-    specs_str = Enum.map_join(specs, "\n#{child_pad}", &render(&1, depth + 2, indent))
-    ["children\n#{child_pad}#{specs_str}"]
-  end
-
-  # -- Actor container (`actor Name [with Init]`) ----------------------------
-  #
-  # The optional initial payload is in `meta[:init]`; `on_message`/`on_start`/
-  # `on_stop` callbacks are keyword lists of match-arm clauses in meta.
-  defp actor_to_string(meta, _body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    init = Keyword.get(meta, :init)
-    pad = String.duplicate(indent, depth + 1)
-
-    init_str = if init, do: " with #{render(init, depth, indent)}", else: ""
-
-    callbacks =
-      callback_blocks_to_string(meta, [:on_start, :on_message, :on_stop], depth, indent)
-
-    "actor #{name}#{init_str}\n#{pad}#{callbacks}"
-  end
-
-  # -- Application container (`app Name`) ------------------------------------
-  #
-  # Settings and `on_start`/`on_stop`/`on_phase` callbacks all live in meta.
-  defp app_to_string(meta, _body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    pad = String.duplicate(indent, depth + 1)
-
-    settings =
-      for key <- [:vsn, :description, :root, :applications, :included_applications, :env, :registered],
-          (val = Keyword.get(meta, key)) != nil do
-        "#{key} = #{render(val, depth + 1, indent)}"
-      end
-
-    callback_lines =
-      [:on_start, :on_stop]
-      |> Enum.flat_map(fn cb -> callback_block_lines(meta, cb, depth, indent) end)
-
-    phase_lines =
-      case Keyword.get(meta, :on_phase) do
-        phases when is_list(phases) and phases != [] ->
-          child_pad = String.duplicate(indent, depth + 2)
-
-          Enum.map(phases, fn {phase, clauses} ->
-            clauses_str =
-              clauses
-              |> Enum.map(&callback_clause_to_string(&1, depth + 2, indent))
-              |> Enum.join("\n#{child_pad}")
-
-            "on_phase :#{phase}\n#{child_pad}#{clauses_str}"
-          end)
-
-        _ ->
-          []
-      end
-
-    lines = settings ++ callback_lines ++ phase_lines
-
-    case lines do
-      [] -> "app #{name}"
-      _ -> "app #{name}\n#{pad}" <> Enum.join(lines, "\n#{pad}")
-    end
-  end
-
   # -- Proof container (`proof Name`) ----------------------------------------
   #
   # A proof container is a module-like block of function definitions.
@@ -1890,63 +1747,6 @@ defmodule Cure.Compiler.Printer do
     case body do
       [] -> "proof #{name}"
       _ -> "proof #{name}\n#{pad}#{body_str}"
-    end
-  end
-
-  # Render the named callback blocks (`on_message` etc.) that carry lists of
-  # match-arm clauses in meta, joined at the container-body indent.
-  defp callback_blocks_to_string(meta, cb_names, depth, indent) do
-    pad = String.duplicate(indent, depth + 1)
-
-    cb_names
-    |> Enum.flat_map(fn cb -> callback_block_lines(meta, cb, depth, indent) end)
-    |> Enum.join("\n#{pad}")
-  end
-
-  defp callback_block_lines(meta, cb, depth, indent) do
-    case Keyword.get(meta, cb) do
-      clauses when is_list(clauses) and clauses != [] ->
-        child_pad = String.duplicate(indent, depth + 2)
-
-        clauses_str =
-          clauses
-          |> Enum.map(&callback_clause_to_string(&1, depth + 2, indent))
-          |> Enum.join("\n#{child_pad}")
-
-        ["#{cb}\n#{child_pad}#{clauses_str}"]
-
-      _ ->
-        []
-    end
-  end
-
-  # A callback clause `(p1, p2) [when g] -> body`. A multi-statement body is
-  # rendered as an indented block so its later statements do not dedent onto
-  # the callback-clause column (which would reparse as a fresh clause).
-  defp callback_clause_to_string({:match_arm, meta, [body]}, depth, indent) do
-    pattern = Keyword.get(meta, :pattern)
-    guard = Keyword.get(meta, :guard)
-
-    head =
-      if guard do
-        render(pattern, depth, indent) <> " when " <> render(guard, depth, indent)
-      else
-        render(pattern, depth, indent)
-      end
-
-    case body do
-      {:block, _bmeta, exprs} when length(exprs) > 1 ->
-        inner_pad = String.duplicate(indent, depth + 1)
-
-        body_str =
-          exprs
-          |> Enum.map(&render(&1, depth + 1, indent))
-          |> Enum.join("\n#{inner_pad}")
-
-        head <> " ->\n#{inner_pad}#{body_str}"
-
-      _ ->
-        head <> " -> " <> render(body, depth, indent)
     end
   end
 
@@ -2078,65 +1878,6 @@ defmodule Cure.Compiler.Printer do
       |> Enum.join("\n#{pad}")
 
     "impl #{protocol} for #{for_type}#{constraints_str}\n#{pad}#{body_str}"
-  end
-
-  defp fsm_to_string(meta, body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    payload = Keyword.get(meta, :payload)
-    timer = Keyword.get(meta, :timer)
-    pad = String.duplicate(indent, depth + 1)
-
-    payload_str =
-      if payload do
-        " with #{render(payload, depth, indent)}"
-      else
-        ""
-      end
-
-    transitions_str =
-      body
-      |> Enum.map(&render(&1, depth + 1, indent))
-      |> Enum.join("\n#{pad}")
-
-    # Annotations
-    annotations =
-      if timer, do: ["\n#{pad}@timer #{timer}"], else: []
-
-    # Callback blocks
-    callback_blocks =
-      ~w(on_transition on_enter on_exit on_failure on_timer)a
-      |> Enum.flat_map(fn cb_name ->
-        case Keyword.get(meta, cb_name) do
-          clauses when is_list(clauses) and clauses != [] ->
-            clauses_str =
-              clauses
-              |> Enum.map(&render(&1, depth + 2, indent))
-              |> Enum.join("\n#{String.duplicate(indent, depth + 2)}")
-
-            ["\n#{pad}#{cb_name}\n#{String.duplicate(indent, depth + 2)}#{clauses_str}"]
-
-          _ ->
-            []
-        end
-      end)
-
-    "fsm #{name}#{payload_str}\n#{pad}#{transitions_str}#{annotations}#{callback_blocks}"
-  end
-
-  defp fsm_transition_to_string(meta, _depth, _indent) do
-    from = Keyword.get(meta, :from)
-    event = Keyword.get(meta, :event)
-    to = Keyword.get(meta, :to)
-    event_kind = Keyword.get(meta, :event_kind, :normal)
-
-    suffix =
-      case event_kind do
-        :hard -> "!"
-        :soft -> "?"
-        _ -> ""
-      end
-
-    "#{from} --#{event}#{suffix}--> #{to}"
   end
 
   # -- Type Annotation -------------------------------------------------------
