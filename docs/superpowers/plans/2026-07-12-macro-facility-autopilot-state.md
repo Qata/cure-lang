@@ -1403,6 +1403,12 @@ audit is to migrate stale documentation/examples/tests and complete the
 forbidden-remnant search. ASCII/Mermaid documentation now consumes
 lifted-module metadata only, and the story outline no longer walks retired
 actor/FSM/supervisor/application container nodes (`fca7fd18`, `f6c1f340`).
+The user-facing application, FSM, supervision, and language-spec guides now
+describe the transparent `app`, `fsm`, `sup`, and `actor` macros, checked
+`beam_ops`, and lifted modules; the tutorial follows the same callback floor
+(`0984209a`, 31 documentation tests). Remaining legacy examples and replay/
+observation references must either be migrated to that surface or explicitly
+isolated as historical data before the forbidden-remnant gate can close.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
