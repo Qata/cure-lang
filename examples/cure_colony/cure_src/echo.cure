@@ -1,4 +1,4 @@
-## Transparent actor example.
+## Transparent actor example with a typed atom payload.
 
-actor Cure.Echo with nil
-  fn initial_state() -> Atom = :echo
+actor Cure.Echo state Atom initial :nil messages Atom handle_cast
+  %[:noreply, message]

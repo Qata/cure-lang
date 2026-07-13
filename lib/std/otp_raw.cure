@@ -43,11 +43,17 @@ mod Std.Otp.Raw
   @extern(:gen_server, :start_link, 4)
   fn raw_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
 
+  @extern(:gen_server, :start_link, 3)
+  fn raw_start_link_unnamed({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
+
   ## Start a gen_statem through its standard callback module. The raw return is
   ## deliberately the OTP `{ok, pid}`/error tuple; the transparent FSM macro
   ## supplies the behavior-specific callback contract.
   @extern(:gen_statem, :start_link, 4)
   fn raw_statem_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
+
+  @extern(:gen_statem, :start_link, 3)
+  fn raw_statem_start_link_unnamed({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
 
   @extern(:supervisor, :start_link, 3)
   fn raw_supervisor_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(Tuple)

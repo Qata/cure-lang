@@ -84,6 +84,44 @@ mod Std.Actor
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
 
+    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_server
+      typealias State = state_type
+      typealias CastResult = Effect(Tuple(Atom, State))
+      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, assert_type payload : State]
+      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
+      callback handle_cast(message: m, state: State) returns CastResult = cast_body
+      callback handle_info(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
+      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
+      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
+      fn start_link() -> Effect(Tuple) = beam_ops start_link name [payload]
+
+    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> messages <message_type: Type> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_server
+      typealias State = state_type
+      typealias Message = message_type
+      typealias CastResult = Effect(Tuple(Atom, State))
+      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, assert_type payload : State]
+      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
+      callback handle_cast(message: Message, state: State) returns CastResult = cast_body
+      callback handle_info(message: Message, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
+      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
+      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
+      fn start_link() -> Effect(Tuple) = beam_ops start_link name [payload]
+
+    syntax actor <name: ModuleName> initial <payload: Code> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_server
+      callback init(initial: p) returns Effect(Tuple(Atom, p)) = %[:ok, assert_type payload : p]
+      callback handle_call(request: r, from: f, state: p) returns Effect(Tuple(Atom, Atom, p)) = %[:reply, :ok, state]
+      callback handle_cast(message: m, state: p) returns Effect(Tuple(Atom, p)) = cast_body
+      callback handle_info(message: m, state: p) returns Effect(Tuple(Atom, p)) = %[:noreply, state]
+      callback terminate(reason: e, state: p) returns Effect(Atom) = :ok
+      callback code_change(old: v, state: p, extra: x) returns Effect(Tuple(Atom, p)) = %[:ok, state]
+      fn start_link() -> Effect(Tuple) = beam_ops start_link name [payload]
+
     syntax actor <name: ModuleName> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
       behaviour gen_server

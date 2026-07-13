@@ -1,4 +1,13 @@
-## Transparent FSM example with an integer payload.
+## Transparent FSM transaction lifecycle.
 
-fsm Cure.Transaction with 0
-  fn initial_state() -> Atom = :idle
+fsm Cure.Transaction state Int initial :idle events Atom transition
+  pickup
+    `and`(state == :idle, event == :create) -> %[:next_state, :pending, data]
+    `and`(state == :pending, event == :submit) -> %[:next_state, :awaiting, data]
+    `and`(state == :awaiting, event == :confirm) -> %[:next_state, :settled, data]
+    `and`(state == :awaiting, event == :reject) -> %[:next_state, :failed, 0]
+    `and`(state == :awaiting, event == :cancel) -> %[:next_state, :cancelled, data]
+    `and`(state == :failed, event == :retry) -> %[:next_state, :pending, 0]
+    `and`(state == :awaiting, event == :on_timer) -> %[:next_state, :failed, 0]
+    event == :cancel -> %[:next_state, :cancelled, data]
+    else -> %[:next_state, state, data]

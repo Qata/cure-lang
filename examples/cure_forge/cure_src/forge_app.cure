@@ -1,4 +1,3 @@
 ## Transparent application example.
 
-app Cure.CureForge
-  fn application_floor() -> Int = 0
+app Cure.CureForge root Cure.Forge.Root

@@ -51,7 +51,8 @@ fsm Cure.TransactionFlow state Int transitions [
 ```
 
 The transition rows are checked ADT values and dispatch is a normal recursive
-Cure function. No `on_transition` parser or `Cure.FSM.Transaction` generated
+Cure function. No `on_transition` parser or compiler-owned FSM class is involved;
+the generated `Cure.Transaction` module is a transparent lifted module.
 class is involved.
 
 ## Layout

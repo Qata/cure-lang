@@ -4,7 +4,7 @@ defmodule CureMoneta do
 
   The heavy lifting lives in `cure_src/moneta.cure`, which compiles to the
   BEAM module `:"Cure.Moneta"`, and in `cure_src/transaction.cure`, which
-  compiles to `:"Cure.FSM.Transaction"` (a GenServer in callback mode).
+  compiles to `:"Cure.Transaction"` (a gen_statem in callback mode).
 
   This module:
 
@@ -37,7 +37,7 @@ defmodule CureMoneta do
   """
 
   @moneta :"Cure.Moneta"
-  @tx_fsm :"Cure.FSM.Transaction"
+  @tx_fsm :"Cure.Transaction"
 
   @compile {:no_warn_undefined, @moneta}
   @compile {:no_warn_undefined, @tx_fsm}
@@ -169,9 +169,12 @@ defmodule CureMoneta do
 
   @doc "Send `event` to the transaction FSM at `pid` (async cast)."
   @spec tx_event(pid(), atom()) :: :ok
-  def tx_event(pid, event), do: @tx_fsm.send_event(pid, event)
+  def tx_event(pid, event) do
+    :gen_statem.cast(pid, event)
+    :ok
+  end
 
   @doc "Return `{state_atom, payload}` for the transaction FSM at `pid` (synchronous)."
   @spec tx_state(pid()) :: {atom(), term()}
-  def tx_state(pid), do: @tx_fsm.get_state(pid)
+  def tx_state(pid), do: :sys.get_state(pid)
 end

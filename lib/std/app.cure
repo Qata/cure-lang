@@ -40,6 +40,15 @@ mod Std.App
       callback stop(state: s) returns Effect(Atom) = :ok
       body
 
+    syntax app <name: ModuleName> root <root: ModuleName> contextual becomes lift module Cure.App.name
+      use Std.Otp
+      use Std.App
+      use Std.Supervisor
+      behaviour application
+      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
+      callback stop(state: s) returns Effect(Atom) = :ok
+      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
+
     syntax app <name: ModuleName> root <root: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
       use Std.Otp
       use Std.App
@@ -47,6 +56,7 @@ mod Std.App
       behaviour application
       callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
       callback stop(state: s) returns Effect(Atom) = :ok
+      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
       body
 
     syntax app <name: ModuleName> root <root: Code> contextual becomes lift module Cure.App.name
@@ -56,6 +66,7 @@ mod Std.App
       behaviour application
       callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
       callback stop(state: s) returns Effect(Atom) = :ok
+      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
 
     syntax app <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module Cure.App.name
       use Std.Otp

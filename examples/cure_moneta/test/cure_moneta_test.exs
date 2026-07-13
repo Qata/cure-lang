@@ -3,12 +3,12 @@ defmodule CureMonetaTest do
 
   @moduledoc """
   Exercises both the raw `:"Cure.Moneta"` BEAM module (compiled from Cure
-  source), the `:"Cure.FSM.Transaction"` state machine, and the high-level
+  source), the `:"Cure.Transaction"` state machine, and the high-level
   `CureMoneta` Elixir wrapper.
   """
 
   @moneta :"Cure.Moneta"
-  @fsm :"Cure.FSM.Transaction"
+  @fsm :"Cure.Transaction"
 
   # -- Helpers ----------------------------------------------------------------
 
@@ -29,8 +29,8 @@ defmodule CureMonetaTest do
 
   # Advance the FSM through create + submit (dispatch! auto-fires) and sync.
   defp reach_awaiting(pid) do
-    @fsm.send_event(pid, :create)
-    @fsm.send_event(pid, :submit)
+    :gen_statem.cast(pid, :create)
+    :gen_statem.cast(pid, :submit)
     # Ensure the async cast and the handle_continue auto-fire have both been
     # processed before we inspect state.
     _ = :sys.get_state(pid)
@@ -242,101 +242,101 @@ defmodule CureMonetaTest do
   end
 
   # ===========================================================================
-  # 2. Cure.FSM.Transaction raw FSM
+  # 2. Cure.Transaction raw FSM
   # ===========================================================================
 
-  describe "Cure.FSM.Transaction: initial state" do
+  describe "Cure.Transaction: initial state" do
     test "FSM starts in :idle with payload 0" do
       {:ok, pid} = @fsm.start_link(0)
-      assert {:idle, 0} = @fsm.get_state(pid)
+      assert {:idle, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
 
-  describe "Cure.FSM.Transaction: normal lifecycle" do
+  describe "Cure.Transaction: normal lifecycle" do
     test "create transitions :idle -> :pending" do
       {:ok, pid} = @fsm.start_link(0)
-      @fsm.send_event(pid, :create)
+      :gen_statem.cast(pid, :create)
       _ = :sys.get_state(pid)
-      assert {:pending, 0} = @fsm.get_state(pid)
+      assert {:pending, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
     test "submit from :pending transitions to :submitting then dispatch! auto-fires to :awaiting" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      assert {:awaiting, 0} = @fsm.get_state(pid)
+      assert {:awaiting, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
     test "confirm from :awaiting transitions to :settled" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      @fsm.send_event(pid, :confirm)
+      :gen_statem.cast(pid, :confirm)
       _ = :sys.get_state(pid)
-      assert {:settled, _} = @fsm.get_state(pid)
+      assert {:settled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
     test "reject from :awaiting transitions to :failed" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      @fsm.send_event(pid, :reject)
+      :gen_statem.cast(pid, :reject)
       _ = :sys.get_state(pid)
-      assert {:failed, _} = @fsm.get_state(pid)
+      assert {:failed, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
 
-  describe "Cure.FSM.Transaction: soft events" do
+  describe "Cure.Transaction: soft events" do
     test "retry? from :failed resets to :pending" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      @fsm.send_event(pid, :reject)
+      :gen_statem.cast(pid, :reject)
       _ = :sys.get_state(pid)
-      @fsm.send_event(pid, :retry)
+      :gen_statem.cast(pid, :retry)
       _ = :sys.get_state(pid)
-      assert {:pending, 0} = @fsm.get_state(pid)
+      assert {:pending, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
     test "retry? from :settled is silently ignored (soft event)" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      @fsm.send_event(pid, :confirm)
+      :gen_statem.cast(pid, :confirm)
       _ = :sys.get_state(pid)
-      @fsm.send_event(pid, :retry)
+      :gen_statem.cast(pid, :retry)
       _ = :sys.get_state(pid)
       # Still settled -- retry? was a no-op
-      assert {:settled, _} = @fsm.get_state(pid)
+      assert {:settled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
     test "cancel? from :awaiting transitions to :cancelled" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      @fsm.send_event(pid, :cancel)
+      :gen_statem.cast(pid, :cancel)
       _ = :sys.get_state(pid)
-      assert {:cancelled, _} = @fsm.get_state(pid)
+      assert {:cancelled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
     test "cancel? is a wildcard -- it cancels even from :settled (no terminal exclusion in this FSM)" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      @fsm.send_event(pid, :confirm)
+      :gen_statem.cast(pid, :confirm)
       _ = :sys.get_state(pid)
       # The wildcard `* --cancel?--> Cancelled` fires from every state, including :settled.
       # A soft event only silently fails when NO matching transition exists; the wildcard
       # ensures one always does.
-      @fsm.send_event(pid, :cancel)
+      :gen_statem.cast(pid, :cancel)
       _ = :sys.get_state(pid)
-      assert {:cancelled, _} = @fsm.get_state(pid)
+      assert {:cancelled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
 
-  describe "Cure.FSM.Transaction: on_timer" do
+  describe "Cure.Transaction: on_timer" do
     test "timer fires a :reject from :awaiting, moving FSM to :failed" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
@@ -345,66 +345,45 @@ defmodule CureMonetaTest do
       send(pid, :on_timer)
       _ = :sys.get_state(pid)
 
-      assert {:failed, 0} = @fsm.get_state(pid)
+      assert {:failed, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
     test "timer is a no-op from states other than :awaiting" do
       {:ok, pid} = @fsm.start_link(0)
-      @fsm.send_event(pid, :create)
+      :gen_statem.cast(pid, :create)
       _ = :sys.get_state(pid)
 
       send(pid, :on_timer)
       _ = :sys.get_state(pid)
 
       # Still :pending -- timer returned :ok (no-op clause)
-      assert {:pending, 0} = @fsm.get_state(pid)
+      assert {:pending, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
 
-  describe "Cure.FSM.Transaction: retry cycle" do
+  describe "Cure.Transaction: retry cycle" do
     test "failed -> retry -> submit -> awaiting -> confirm -> settled full cycle" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
 
-      @fsm.send_event(pid, :reject)
+      :gen_statem.cast(pid, :reject)
       _ = :sys.get_state(pid)
 
-      @fsm.send_event(pid, :retry)
+      :gen_statem.cast(pid, :retry)
       _ = :sys.get_state(pid)
-      assert {:pending, 0} = @fsm.get_state(pid)
+      assert {:pending, 0} = :sys.get_state(pid)
 
-      @fsm.send_event(pid, :submit)
+      :gen_statem.cast(pid, :submit)
       _ = :sys.get_state(pid)
-      assert {:awaiting, 0} = @fsm.get_state(pid)
+      assert {:awaiting, 0} = :sys.get_state(pid)
 
-      @fsm.send_event(pid, :confirm)
+      :gen_statem.cast(pid, :confirm)
       _ = :sys.get_state(pid)
-      assert {:settled, _} = @fsm.get_state(pid)
+      assert {:settled, _} = :sys.get_state(pid)
 
       GenServer.stop(pid)
-    end
-  end
-
-  describe "Cure.FSM.Transaction: introspection" do
-    test "transitions/0 returns the compiled transition table" do
-      table = @fsm.transitions()
-      assert is_list(table)
-      assert length(table) > 0
-      # Each entry is a 4-tuple {from, event, to, kind}
-      assert [_ | _] = for {_f, _e, _t, _k} <- table, do: true
-    end
-
-    test "responds?/2 confirms valid from-state/event pairs" do
-      assert @fsm.responds?(:idle, :create)
-      assert @fsm.responds?(:pending, :submit)
-      assert @fsm.responds?(:awaiting, :confirm)
-    end
-
-    test "responds?/2 rejects invalid pairs" do
-      refute @fsm.responds?(:idle, :confirm)
-      refute @fsm.responds?(:settled, :submit)
     end
   end
 

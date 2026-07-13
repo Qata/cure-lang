@@ -1,4 +1,3 @@
 ## Transparent application example. Lifecycle callbacks are ordinary Cure.
 
-app Cure.CureColony
-  fn application_floor() -> Int = 0
+app Cure.CureColony root Cure.Colony
