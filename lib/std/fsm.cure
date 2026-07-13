@@ -26,6 +26,28 @@ mod Std.Fsm
       callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
 
+    syntax fsm <name: ModuleName> state <state_type: Type> terminate <terminate_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      typealias TerminateResult = Effect(Atom)
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
+      callback terminate(reason: r, state: s, data: State) returns TerminateResult = terminate_body
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> code_change <code_change_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      typealias CodeChangeResult = Effect(Tuple(Atom, Atom, State))
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
+      callback code_change(old: v, state: s, data: State, extra: x) returns CodeChangeResult = code_change_body
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
     syntax fsm <name: ModuleName> state <state_type: Type> events <event_type: Type> handle_event <event_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
       behaviour gen_statem

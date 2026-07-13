@@ -276,6 +276,35 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :handle_event, [:info, :tick, :ready, 7]) == :keep_state_and_data
   end
 
+  test "fsm terminate syntax emits a checked lifecycle callback body" do
+    source = """
+    fsm Cure.TerminatingFsm state Int terminate
+      :shutdown_complete
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :terminate, [:normal, :ready, 7]) == :shutdown_complete
+  end
+
+  test "fsm code_change syntax emits a checked lifecycle callback body" do
+    source = """
+    fsm Cure.CodeChangingFsm state Int code_change
+      %[:ok, :ready, data + 1]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :code_change, [:old, :ready, 7, :extra]) == {:ok, :ready, 8}
+  end
+
+  test "fsm lifecycle callback syntax rejects a mismatched data result" do
+    source = """
+    fsm Cure.InvalidCodeChangeFsm state Int code_change
+      %[:ok, :ready, true]
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "fsm transition syntax lowers rows and dispatches through ordinary Cure code" do
     source = """
     fsm Cure.TransitionFsm state Int transitions [transition :locked :coin :unlocked, transition :unlocked :push :locked]
