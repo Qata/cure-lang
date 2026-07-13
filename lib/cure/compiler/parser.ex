@@ -3596,8 +3596,8 @@ defmodule Cure.Compiler.Parser do
     # fn followed by identifier or (soft) keyword -> named function definition
     #
     # Some Cure keywords (spawn, send, receive, after) are ordinary
-  # function names in other languages, and standard-library modules may define
-  # similarly named functions. Let those words double as
+    # function names in other languages, and standard-library modules may define
+    # similarly named functions. Let those words double as
     # function-definition names; they still behave as keywords in
     # statement position.
     case peek(state) do
