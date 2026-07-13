@@ -1095,9 +1095,11 @@ invocation provenance through execution, cycle, and finite-budget diagnostics
 (`703e6536`). A generic delayed-slot floor now preserves delayed raw holes,
 threads lexical behavior/callback/arity context through lifted callbacks, and
 reparses delayed bodies after context introduction (`64bf2a79`). Remaining
-Phase 2 work is quoted-syntax opacity and an end-to-end delayed callback body
-that exercises a contextual `beam_ops` operation through ordinary callback
-elaboration; the context plumbing is not that final behavior contract.
+Phase 2 now has an explicit language-level `Std.Syntax.Quoted` opacity boundary
+through the reflection/Core bridge and recursive expander (`79d7ac46`). The
+remaining Phase 2 item is an end-to-end delayed callback body that exercises a
+contextual `beam_ops` operation through ordinary callback elaboration; the
+context plumbing is not that final behavior contract.
 
 Standard-library macro loading now performs a generic harvest pass followed by
 a parse with the complete harvested grammar, so one standard-library macro may
@@ -1106,10 +1108,11 @@ transparent actor, FSM, and supervisor starters to use `beam_ops` directly;
 the startup vocabulary now includes `start_link`, `start_statem`, and both
 zero-argument and argument-bearing supervisor startup forms. The full suite
 after this slice passed 4007 tests, 3 doctests, and 1 skipped test, with
-Antigen coverage 318/318. Computed expansion provenance and delayed callback
-context are now covered by `703e6536` and `64bf2a79`. Remaining Phase 2 work
-is quoted-syntax opacity and an end-to-end delayed callback body that exercises
-a contextual `beam_ops` operation through ordinary callback elaboration.
+Antigen coverage 318/318. Computed expansion provenance, delayed callback
+context, and quoted-syntax opacity are covered by `703e6536`, `64bf2a79`, and
+`79d7ac46`. Remaining Phase 2 work is an end-to-end delayed callback body that
+exercises a contextual `beam_ops` operation through ordinary callback
+elaboration.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
