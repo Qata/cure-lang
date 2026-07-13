@@ -224,6 +224,13 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :build, []) == {:one_for_all, 2, 10}
   end
 
+  test "transparent supervisor templates retain lexical imports for bare helpers" do
+    assert {:ok, module} = Cure.Compiler.compile_and_load("sup Cure.UnqualifiedSup\n", emit_events: false)
+    assert {:ok, {strategy, children}} = apply(module, :init, [[]])
+    assert strategy == {:one_for_one, 3, 5}
+    assert children == []
+  end
+
   test "supervisor strategy conversion rejects arbitrary atoms" do
     source = """
     mod Main

@@ -1125,6 +1125,12 @@ and lowering rules must be defined in Cure itself through ordinary language
 constructs, macros, checked algebra, and explicit foreign primitives. Moving
 the same knowledge into an Elixir helper outside the compiler is not sufficient.
 
+Macro-generated lifted units retain the macro template's lexical `use` imports,
+so bare type and function references are resolved against the defining standard
+library environment and emitted through the ordinary qualified-owner path. This
+keeps macro authors from spelling every helper as `Std.Module.name`; a regression
+now covers bare supervisor strategy helpers across an independent lifted module.
+
 Suggested commit:
 `feat(compiler): add transparent inside-out macro expansion and lifted modules`
 
