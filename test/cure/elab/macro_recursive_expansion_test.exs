@@ -38,7 +38,31 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
   test "the recursive reducer enforces an explicit AST budget" do
     assert {:ok, env} = Program.elaborate("mod M\n  fn f() -> Int = 0\n")
 
-    assert {:error, {:macro_expansion_budget, :node_count}} =
+    assert {:error, {:macro_expansion_budget, :node_count, []}} =
              MacroExpand.expand({:literal, [subtype: :integer], 0}, env, max_nodes: 0)
+  end
+
+  test "computed expansion diagnostics retain the invocation provenance" do
+    assert {:ok, env} = Program.elaborate("mod M\n  fn f() -> Int = 0\n")
+
+    node =
+      {:computed_use, [keyword: "inner", line: 17, col: 5],
+       [{:variable, [scope: :local], "missing_builder"}, {:macro_input, [], []}]}
+
+    assert {:error, {:computed_macro_error, meta, _reason}} = MacroExpand.expand(node, env)
+    assert [%{keyword: "inner", line: 17, col: 5}] = meta[:provenance]
+  end
+
+  test "an expansion budget reports the complete active invocation chain" do
+    assert {:ok, env} = Program.elaborate("mod M\n  fn f() -> Int = 0\n")
+
+    node =
+      {:computed_use, [keyword: "outer", line: 21, col: 2],
+       [{:variable, [scope: :local], "missing_builder"}, {:macro_input, [], []}]}
+
+    assert {:error,
+            {:macro_expansion_budget, :expansion_count,
+             [%{keyword: "outer", line: 21, col: 2}]}} =
+             MacroExpand.expand(node, env, max_expansions: 0)
   end
 end

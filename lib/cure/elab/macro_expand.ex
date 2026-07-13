@@ -22,10 +22,16 @@ defmodule Cure.Elab.MacroExpand do
   def expand(ast, env), do: expand(ast, env, [])
 
   @doc "Expand computed syntax recursively from the inside out under explicit budgets."
+  @type expansion_frame :: %{
+          keyword: String.t() | nil,
+          line: non_neg_integer() | nil,
+          col: non_neg_integer() | nil
+        }
+
   @spec expand(term(), Cure.Core.Env.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def expand(ast, env, opts) when is_list(opts) do
     limits = Keyword.merge(@default_limits, opts)
-    state = %{expansions: 0, nodes: 0, active: MapSet.new(), limits: limits}
+    state = %{expansions: 0, nodes: 0, active: MapSet.new(), path: [], limits: limits}
 
     case expand_node(ast, env, state) do
       {:ok, expanded, _state} -> {:ok, expanded}
@@ -51,6 +57,8 @@ defmodule Cure.Elab.MacroExpand do
     with {:ok, state} <- visit_node(state),
          {:ok, [elab, input], state} <- expand_children([elab, input], env, state),
          {:ok, state} <- begin_expansion(node, state),
+         state = push_expansion(node, state),
+         meta = Keyword.put(meta, :provenance, expansion_chain(state)),
          {:ok, expanded} <- execute(meta, elab, input, env),
          {:ok, expanded, state} <- expand_node(expanded, env, state),
          {:ok, state} <- end_expansion(node, state) do
@@ -95,28 +103,39 @@ defmodule Cure.Elab.MacroExpand do
     nodes = nodes + 1
 
     if over_limit?(nodes, Keyword.fetch!(limits, :max_nodes)),
-      do: {:error, {:macro_expansion_budget, :node_count}},
+      do: {:error, budget_error(:node_count, state)},
       else: {:ok, %{state | nodes: nodes}}
   end
 
   defp begin_expansion(node, %{expansions: expansions, active: active, limits: limits} = state) do
     key = expansion_key(node)
+    frame = expansion_frame(node)
 
     if MapSet.member?(active, key) do
-      {:error, {:macro_expansion_cycle, expansion_origin(node)}}
+      {:error, {:macro_expansion_cycle, Enum.reverse([frame | state.path])}}
     else
       expansions = expansions + 1
 
       if over_limit?(expansions, Keyword.fetch!(limits, :max_expansions)) do
-        {:error, {:macro_expansion_budget, :expansion_count}}
+        {:error, {:macro_expansion_budget, :expansion_count, Enum.reverse([frame | state.path])}}
       else
         {:ok, %{state | expansions: expansions, active: MapSet.put(active, key)}}
       end
     end
   end
 
+  defp push_expansion(node, state),
+    do: %{state | path: [expansion_frame(node) | state.path]}
+
+  defp end_expansion(node, %{active: active, path: [_frame | path]} = state),
+    do: {:ok, %{state | active: MapSet.delete(active, expansion_key(node)), path: path}}
+
   defp end_expansion(node, %{active: active} = state),
     do: {:ok, %{state | active: MapSet.delete(active, expansion_key(node))}}
+
+  defp budget_error(kind, state), do: {:macro_expansion_budget, kind, expansion_chain(state)}
+
+  defp expansion_chain(%{path: path}), do: Enum.reverse(path)
 
   defp over_limit?(_value, :infinity), do: false
   defp over_limit?(value, limit) when is_integer(limit), do: value > limit
@@ -133,10 +152,15 @@ defmodule Cure.Elab.MacroExpand do
 
   defp expansion_key(node), do: node
 
-  defp expansion_origin({:computed_use, meta, _}),
-    do: {Keyword.get(meta, :keyword), Keyword.get(meta, :line), Keyword.get(meta, :col)}
+  defp expansion_frame({:computed_use, meta, _}) do
+    %{
+      keyword: Keyword.get(meta, :keyword),
+      line: Keyword.get(meta, :line),
+      col: Keyword.get(meta, :col)
+    }
+  end
 
-  defp expansion_origin(_), do: :unknown
+  defp expansion_frame(_), do: %{keyword: nil, line: nil, col: nil}
 
   defp execute(meta, elab_ast, input_ast, env) do
     context = Context.empty(env)
