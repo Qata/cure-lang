@@ -645,8 +645,7 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:ok, {_strategy, [child]}} = apply(module, :init, [[]])
 
     assert child ==
-             {:worker, {:"Cure.ArgWorker", :start_link, [1, :boot]}, :permanent, 5000, :worker,
-              [:"Cure.ArgWorker"]}
+             {:worker, {:"Cure.ArgWorker", :start_link, [1, :boot]}, :permanent, 5000, :worker, [:"Cure.ArgWorker"]}
   end
 
   test "supervisor child policies reject arbitrary restart atoms" do
