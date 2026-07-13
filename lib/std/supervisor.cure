@@ -6,7 +6,7 @@ mod Std.Supervisor
   macro SupervisorContainers
     syntax sup <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
       use Std.Otp
-      behaviour Supervisor
+      behaviour supervisor
       callback init(arg: List(Atom)) -> %[:ok, %[%[:one_for_one, 3, 5], assert_type [] : List(Tuple)]]
       fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
       body

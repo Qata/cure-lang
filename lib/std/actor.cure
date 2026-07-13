@@ -6,7 +6,7 @@ mod Std.Actor
   macro ActorContainers
     syntax actor <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
-      behaviour GenServer
+      behaviour gen_server
       callback init(initial: p) -> %[:ok, initial]
       callback handle_call(request: r, from: f, state: p) -> %[:reply, :ok, state]
       callback handle_cast(message: m, state: p) -> %[:noreply, state]
@@ -18,7 +18,7 @@ mod Std.Actor
 
     syntax actor <name: ModuleName> <body: raw until dedent> becomes lift module name
       use Std.Otp
-      behaviour GenServer
+      behaviour gen_server
       callback init(initial: p) -> %[:ok, initial]
       callback handle_call(request: r, from: f, state: p) -> %[:reply, :ok, state]
       callback handle_cast(message: m, state: p) -> %[:noreply, state]

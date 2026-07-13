@@ -6,7 +6,7 @@ mod Std.App
   macro AppContainers
     syntax app <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
       use Std.Otp
-      behaviour Application
+      behaviour application
       callback start(kind: t, args: a) -> %[:ok, :undefined]
       callback stop(state: s) -> :ok
       body

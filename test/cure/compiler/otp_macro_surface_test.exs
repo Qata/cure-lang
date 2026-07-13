@@ -27,6 +27,24 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
              OtpMacro.lift_module_ast({:lift_module, meta, []})
   end
 
+  test "generic lifted modules accept user-defined behavior atoms" do
+    source = """
+    mod M
+      macro Lift
+        syntax custom <name: ModuleName> becomes lift module name
+          behaviour custom_behavior
+          fn ping() -> Int = 1
+      custom Cure.Generated.Custom
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    assert {:lift_module, meta, []} = List.last(children)
+    assert meta[:behaviour] == :custom_behavior
+    assert {:ok, request} = LiftModule.request_ast({:lift_module, meta, []})
+    assert request.behaviour == :custom_behavior
+  end
+
   test "a transparent macro can substitute an identifier into lift module" do
     source = """
     mod M

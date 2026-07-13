@@ -10,7 +10,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Antigen.{Challenge, Gen, Shrink}
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
-  alias Cure.Compiler.{Lexer, OtpMacro, Parser, Token}
+  alias Cure.Compiler.{Lexer, LiftModule, Parser, Token}
   alias Cure.Core.{Context, Eval, Inductive, Kernel, Normalise}
   alias Cure.Elab.{Elaborator, MacroExpand}
 
@@ -438,7 +438,7 @@ defmodule Cure.Compiler.MacroFuzz do
         end
 
       {:lift_module, _meta, []} ->
-        case OtpMacro.lift_module_ast(expansion) do
+        case LiftModule.request_ast(expansion) do
           {:ok, _quoted_module} ->
             :ok
 

@@ -7,7 +7,6 @@ defmodule Cure.Compiler.LiftModule do
   through the same dependent elaborator and emitter as the enclosing module.
   """
 
-  alias Cure.Compiler.OtpMacro
   alias Cure.Elab.{Emit, Program}
 
   @type unit :: %{
@@ -26,6 +25,37 @@ defmodule Cure.Compiler.LiftModule do
       {:ok, requests}
     end
   end
+
+  @doc "Validate and normalize a generic quoted module value."
+  @spec request_ast(tuple()) :: {:ok, map()} | {:error, term()}
+  def request_ast({:lift_module, meta, []}) when is_list(meta) do
+    with module when is_binary(module) <- Keyword.get(meta, :module),
+         behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
+         callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
+         declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
+         :ok <- validate_module_name(module),
+         :ok <- validate_behaviour(behaviour),
+         :ok <- validate_callbacks(callbacks),
+         :ok <- validate_declarations(declarations),
+         imports = Keyword.get(meta, :imports, imports_from_declarations(declarations)),
+         :ok <- validate_imports(imports) do
+      {:ok,
+       %{
+         kind: :quoted_module,
+         module: module,
+         behaviour: behaviour,
+         callbacks: callbacks,
+         declarations: declarations,
+         imports: imports,
+         dependencies: imports,
+         source_provenance: Keyword.get(meta, :source_provenance)
+       }}
+    else
+      _ -> {:error, :invalid_lift_module_ast}
+    end
+  end
+
+  def request_ast(_other), do: {:error, :invalid_lift_module_ast}
 
   @spec strip(term()) :: term()
   def strip({:lift_module, _meta, _children} = node), do: node
@@ -64,7 +94,7 @@ defmodule Cure.Compiler.LiftModule do
   def emit(other), do: {:error, {:invalid_lift_module, other}}
 
   defp collect_node({:lift_module, meta, []}, acc) when is_list(meta) do
-    case OtpMacro.lift_module_ast({:lift_module, meta, []}) do
+    case request_ast({:lift_module, meta, []}) do
       {:ok, request} -> {:ok, [request | acc]}
       {:error, reason} -> {:error, reason}
     end
@@ -200,12 +230,41 @@ defmodule Cure.Compiler.LiftModule do
 
   defp add_behaviour_attribute(forms, behaviour) do
     {attrs, rest} = Enum.split_while(forms, &match?({:attribute, _, _, _}, &1))
-    attrs ++ [{:attribute, 1, :behaviour, beam_behaviour(behaviour)}] ++ rest
+    attrs ++ [{:attribute, 1, :behaviour, behaviour}] ++ rest
   end
 
-  defp beam_behaviour(:GenServer), do: :gen_server
-  defp beam_behaviour(:GenStatem), do: :gen_statem
-  defp beam_behaviour(:Supervisor), do: :supervisor
-  defp beam_behaviour(:Application), do: :application
-  defp beam_behaviour(behaviour), do: behaviour
+  defp validate_module_name(name) do
+    if Regex.match?(~r/^Cure\.[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*$/, name),
+      do: :ok,
+      else: {:error, {:invalid_module_name, name}}
+  end
+
+  defp validate_behaviour(behaviour) when is_atom(behaviour) and not is_nil(behaviour), do: :ok
+  defp validate_behaviour(behaviour), do: {:error, {:invalid_behaviour, behaviour}}
+
+  defp validate_callbacks(callbacks) do
+    if Enum.all?(callbacks, &valid_callback?/1), do: :ok, else: {:error, :invalid_lift_callback}
+  end
+
+  defp valid_callback?(%{name: name, arity: arity}) when is_atom(name) and is_integer(arity) and arity >= 0,
+    do: true
+
+  defp valid_callback?(_), do: false
+
+  defp validate_declarations(declarations) do
+    if Enum.all?(declarations, &is_tuple/1), do: :ok, else: {:error, :invalid_lift_declaration}
+  end
+
+  defp validate_imports(imports) do
+    if Enum.all?(imports, &is_binary/1), do: :ok, else: {:error, :invalid_lift_import}
+  end
+
+  defp imports_from_declarations(declarations) do
+    declarations
+    |> Enum.flat_map(fn
+      {:import, meta, _children} when is_list(meta) -> List.wrap(Keyword.get(meta, :source))
+      _ -> []
+    end)
+    |> Enum.uniq()
+  end
 end

@@ -6,7 +6,7 @@ mod Std.Fsm
   macro FsmContainers
     syntax fsm <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
       use Std.Otp
-      behaviour GenStatem
+      behaviour gen_statem
       callback callback_mode() -> :handle_event_function
       callback init(initial: p) -> %[:ok, :initial, initial]
       callback handle_event(event_type: Atom, event: e, state: s, data: p) -> :keep_state_and_data
