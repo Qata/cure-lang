@@ -1449,6 +1449,10 @@ Suggested commit:
    `/Users/ch/Develop/esp32-beam/AtomVM`.
 2. Package generated Cure modules with the required estdlib beams.
 3. Run generated supervisor/application and all four macro runtime proofs.
+   The generic-unix AtomVM package proof now includes a generated actor child
+   under the generated supervisor and a transition-table FSM, with the typed
+   FSM starter invoked using its initial state (`3cc076b9`, 1 test passed after
+   a clean AtomVM rebuild).
 4. Complete remaining callback vocabulary and embedded surface families.
 5. Complete indexed reducer/view/flow integration and remaining SP6 gaps.
 6. Run skeptical review to two clean passes.
