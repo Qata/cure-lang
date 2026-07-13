@@ -27,10 +27,11 @@ defmodule Cure.Stdlib.OtpTest do
     assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
 
     assert :self in locals and :spawn in locals and :spawn_link in locals and :start_link in locals and
+             :start_statem in locals and
              :start_supervisor in locals and
              :tell in locals and :call in locals and :cast in locals
 
-    for op <- [:spawn, :spawn_link, :start_link, :start_supervisor, :tell, :call, :cast],
+    for op <- [:spawn, :spawn_link, :start_link, :start_statem, :start_supervisor, :tell, :call, :cast],
         do: assert(effect_result?(Env.get_def(env, op).type))
   end
 
@@ -72,6 +73,11 @@ defmodule Cure.Stdlib.OtpTest do
   test "gen_server start_link preserves the raw OTP result tuple" do
     assert {:ok, _} =
              app("  fn start(module: Atom, args: List(Int)) -> Effect(Tuple) = Std.Otp.start_link(module, args)\n")
+  end
+
+  test "gen_statem start_link preserves the raw OTP result tuple" do
+    assert {:ok, _} =
+             app("  fn start(module: Atom, args: List(Int)) -> Effect(Tuple) = Std.Otp.start_statem(module, args)\n")
   end
 
   test "message codes are ordinary checked computations" do

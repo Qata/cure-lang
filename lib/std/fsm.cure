@@ -1,15 +1,17 @@
 @group(:concurrency)
 mod Std.Fsm
-  ## `fsm` is a standard-library macro. Its raw body is reparsed by the
-  ## ordinary Cure parser and lowered by the generic OTP backend.
+  ## `fsm` is a transparent standard-library macro. The base state-machine is
+  ## an ordinary lifted GenStatem module; transition derivation and handlers
+  ## are layered on top of this floor.
   macro FsmContainers
-    syntax fsm <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:fsm, name, payload, body)
-      example fsm Cure.Example expands fsm Cure.Example
-    explain
-      Identifier => "an FSM name is required"
-      Code => "an FSM payload must be a Cure expression"
-      keyword "with" => "FSM payloads are introduced with the with keyword"
-      keyword "fsm" => "starts an OTP state-machine container"
+    syntax fsm <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour GenStatem
+      callback callback_mode() -> :handle_event_function
+      callback init(initial: p) -> %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: p) -> :keep_state_and_data
+      fn start_link(initial: p) -> Effect(Tuple) = Std.Otp.start_statem(name, [initial])
+      body
 
   ## FSM runtime operations: spawn, stop, send events, get state.
   ##

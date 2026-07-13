@@ -97,6 +97,9 @@ mod Std.Otp
   fn start_link(module: Atom, args: List(a)) -> Effect(Tuple) =
     raw_start_link(%[:local, module], module, args, assert_type [] : List(Atom))
 
+  fn start_statem(module: Atom, args: List(a)) -> Effect(Tuple) =
+    raw_statem_start_link(%[:local, module], module, args, assert_type [] : List(Atom))
+
   fn start_supervisor(module: Atom) -> Effect(Tuple) =
     raw_supervisor_start_link(%[:local, module], module, assert_type [] : List(Atom))
 
