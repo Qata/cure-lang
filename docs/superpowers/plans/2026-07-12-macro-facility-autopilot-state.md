@@ -1122,7 +1122,9 @@ Suggested commit:
 
 ### Phase 3 — Implement `beam_ops` over the algebra
 
-Define the operation macro in the standard library. The raw process-creation
+**STATUS: IN PROGRESS (2026-07-13).** `Std.Otp` now defines the first
+transparent `beam_ops` rule: `beam_ops self` expands to ordinary
+`Std.Otp.self()` syntax and is proven marker-free. The raw process-creation
 floor is present (`raw_spawn`/`raw_spawn_link` plus ordinary `Std.Otp`
 wrappers), and the elaborator now threads expected result types through
 qualified calls carrying lambda arguments. The remaining operation work must

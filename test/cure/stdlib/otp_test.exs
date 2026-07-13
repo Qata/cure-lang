@@ -74,6 +74,13 @@ defmodule Cure.Stdlib.OtpTest do
              app("  fn combines(left: MessageCode, right: MessageCode) -> MessageCode = union(left, right)\n")
   end
 
+  test "beam_ops self expands to ordinary Std.Otp syntax" do
+    source = "mod App\n  beam_ops self\n"
+    assert {:ok, ast} = Cure.Compiler.parse_source(source, emit_events: false)
+    assert inspect(ast) =~ "Std.Otp.self"
+    refute inspect(ast) =~ "__otp_container"
+  end
+
   describe "Pid(m) — typed one-way messaging" do
     test "a well-typed message is accepted" do
       assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    tell(p, Inc())\n")

@@ -3,6 +3,12 @@ mod Std.Otp
   use Std.Otp.Raw
   use Std.Bool
 
+  ## Transparent process-operation syntax. Each rule produces ordinary Cure
+  ## syntax; the checked algebra remains the only semantic implementation.
+  macro BeamOps
+    syntax beam_ops self becomes Std.Otp.self()
+      example beam_ops self expands Std.Otp.self()
+
   ## The typed BEAM process algebra — the sanctioned concurrency surface.
   ##
   ## Two typed handles, both opaque phantoms erased to a raw `erlang:pid()` at
