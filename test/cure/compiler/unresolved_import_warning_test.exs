@@ -3,10 +3,11 @@ defmodule Cure.Compiler.UnresolvedImportWarningTest do
 
   @moduletag :tmp_dir
 
-  test "imported-but-unresolvable unqualified call compiles with a W088 warning",
+  test "imported-but-unresolvable unqualified call is rejected by dependent elaboration",
        %{tmp_dir: dir} do
-    # `use Ghost` imports a module that exports no `phantom/0`; the call
-    # falls back to a local call (unchanged behavior) but must WARN now.
+    # `use Ghost` imports a module that exports no `phantom/0`. The old classic
+    # pipeline fell back to a local call and emitted W088; the dependent-only
+    # compiler rejects the unknown global before BEAM emission instead.
     ghost = Path.join(dir, "ghost.cure")
     File.write!(ghost, "mod Ghost\n  fn real() -> Int = 1\n")
 
@@ -26,20 +27,13 @@ defmodule Cure.Compiler.UnresolvedImportWarningTest do
     :ok = Cure.Compiler.load_emitted(:"Cure.Ghost", out)
 
     # `phantom` is neither a local function of GhostUser nor an export of
-    # Ghost, so codegen's fallback emits a local call to an undefined
-    # function; erl_lint always rejects that, so this case surfaces on the
-    # lint-error path (extended to a 3-tuple carrying the codegen warnings)
-    # rather than the {:ok, ...} path. See the plan's Task 7, Step 3.
-    assert {:error, {:beam_lint_error, _lint, warnings}} =
+    # Ghost, so dependent elaboration rejects the unresolved global before
+    # code generation.
+    assert {:error, {:codegen_error, :unknown_global}} =
              Cure.Compiler.compile_file(user,
                output_dir: out,
                emit_events: false,
                check_types: false
              )
-
-    assert Enum.any?(warnings, fn
-             {:unresolved_import, "phantom", 0, mods, _line} -> :"Cure.Ghost" in mods
-             _ -> false
-           end)
   end
 end

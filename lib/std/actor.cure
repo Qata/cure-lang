@@ -1,5 +1,16 @@
 @group(:concurrency)
 mod Std.Actor
+  ## `actor` is a standard-library macro. Its raw body is reparsed by the
+  ## ordinary Cure parser and lowered by the generic OTP backend.
+  macro ActorContainers
+    syntax actor <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:actor, name, payload, body)
+      example actor Cure.Example expands actor Cure.Example
+    explain
+      Identifier => "an actor name is required"
+      Code => "an actor payload must be a Cure expression"
+      keyword "with" => "actor payloads are introduced with the with keyword"
+      keyword "actor" => "starts an OTP actor container"
+
   ## Typed-actor runtime operations: spawn, stop, send, introspect.
   ##
   ## Runtime-facing surface for actor modules compiled from `actor`
@@ -64,4 +75,3 @@ mod Std.Actor
   ## Look up an actor by its registered name; returns its pid.
   @extern(Elixir.Cure.Actor.Builtins, :actor_lookup, 1)
   fn lookup(name: String) -> Pid
-

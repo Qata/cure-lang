@@ -1,5 +1,16 @@
 @group(:system)
 mod Std.App
+  ## `app` is a standard-library macro. Its raw body is reparsed by the
+  ## ordinary Cure parser and lowered by the generic OTP backend.
+  macro AppContainers
+    syntax app <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:app, name, payload, body)
+      example app Cure.Example expands app Cure.Example
+    explain
+      Identifier => "an application name is required"
+      Code => "an application payload must be a Cure expression"
+      keyword "with" => "application payloads are introduced with the with keyword"
+      keyword "app" => "starts an OTP application container"
+
   ## Start, stop, and inspect OTP applications from Cure.
   ##
   ## Each Cure `app` container compiles to a loaded BEAM module that
@@ -67,4 +78,3 @@ mod Std.App
   ## tests and scripted scenarios.
   @extern(Elixir.Cure.App.Builtins, :start_phase, 3)
   fn start_phase(name: Atom, phase: Atom, phase_args: a) -> Atom
-

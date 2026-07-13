@@ -142,7 +142,11 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
   end
 
   defp do_compile(src, dest_dir, counts) do
-    case Cure.Compiler.compile_file(src, output_dir: dest_dir, emit_events: false) do
+    case Cure.Compiler.compile_file(src,
+           output_dir: dest_dir,
+           emit_events: false,
+           source_roots: [Path.dirname(src)]
+         ) do
       {:ok, module, _warnings} ->
         # Load the freshly-compiled beam into the VM so a *later* stdlib
         # module can resolve cross-module calls against it. The classic

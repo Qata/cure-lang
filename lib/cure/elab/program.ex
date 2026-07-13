@@ -45,6 +45,9 @@ defmodule Cure.Elab.Program do
             missing_stdlib_error(module_name)
           end
 
+        {:ok_user, _module_name, _path} ->
+          nil
+
         {:error, {:missing_stdlib_source, source, _path}} ->
           missing_stdlib_error(source)
 
@@ -1084,6 +1087,7 @@ defmodule Cure.Elab.Program do
     |> Enum.map(&import_source_path/1)
     |> Enum.flat_map(fn
       {:ok, module_name, path} -> [{to_string(module_name), path}]
+      {:ok_user, module_name, path} -> [{to_string(module_name), path}]
       _ -> []
     end)
     |> Enum.uniq_by(fn {mod_id, _path} -> mod_id end)
@@ -1104,25 +1108,32 @@ defmodule Cure.Elab.Program do
   defp bfs_import_modules([source | rest], seen, acc) do
     case import_source_path(source) do
       {:ok, module_name, path} ->
-        mod_id = to_string(module_name)
+        bfs_import_modules_for_path(source, module_name, path, rest, seen, acc)
 
-        if MapSet.member?(seen, mod_id) do
-          bfs_import_modules(rest, seen, acc)
-        else
-          nested =
-            with {:ok, src} <- File.read(path),
-                 {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
-                 {:ok, nested_ast} <- Parser.parse(tokens, emit_events: false) do
-              imports(nested_ast)
-            else
-              _ -> []
-            end
-
-          bfs_import_modules(nested ++ rest, MapSet.put(seen, mod_id), [{mod_id, path} | acc])
-        end
+      {:ok_user, module_name, path} ->
+        bfs_import_modules_for_path(source, module_name, path, rest, seen, acc)
 
       _ ->
         bfs_import_modules(rest, seen, acc)
+    end
+  end
+
+  defp bfs_import_modules_for_path(_source, module_name, path, rest, seen, acc) do
+    mod_id = to_string(module_name)
+
+    if MapSet.member?(seen, mod_id) do
+      bfs_import_modules(rest, seen, acc)
+    else
+      nested =
+        with {:ok, src} <- File.read(path),
+             {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+             {:ok, nested_ast} <- Parser.parse(tokens, emit_events: false) do
+          imports(nested_ast)
+        else
+          _ -> []
+        end
+
+      bfs_import_modules(nested ++ rest, MapSet.put(seen, mod_id), [{mod_id, path} | acc])
     end
   end
 
@@ -1314,7 +1325,7 @@ defmodule Cure.Elab.Program do
 
   defp import_source_env(:not_stdlib, _seen), do: {:ok, Env.empty()}
 
-  defp import_source_env({:ok, module_name, path}, seen) do
+  defp import_source_env({kind, module_name, path}, seen) when kind in [:ok, :ok_user] do
     if MapSet.member?(seen, module_name) do
       {:ok, Env.empty()}
     else
@@ -1375,7 +1386,10 @@ defmodule Cure.Elab.Program do
       ["Std", name] ->
         case Paths.source_dir() do
           nil ->
-            {:error, {:missing_stdlib_source_dir, source}}
+            case user_source_path(source) do
+              {:ok, path} -> {:ok_user, source, path}
+              :not_found -> {:error, {:missing_stdlib_source_dir, source}}
+            end
 
           dir ->
             path = Path.join(dir, String.downcase(name) <> ".cure")
@@ -1383,13 +1397,43 @@ defmodule Cure.Elab.Program do
             if File.exists?(path) do
               {:ok, source, path}
             else
-              {:error, {:missing_stdlib_source, source, path}}
+              case user_source_path(source) do
+                {:ok, user_path} -> {:ok_user, source, user_path}
+                :not_found -> {:error, {:missing_stdlib_source, source, path}}
+              end
             end
         end
 
       _ ->
-        :not_stdlib
+        case user_source_path(source) do
+          {:ok, path} -> {:ok_user, source, path}
+          :not_found -> :not_stdlib
+        end
     end
+  end
+
+  # Project modules are source imports too. The dependent pipeline searches
+  # the configured source roots by declared module name rather than filename,
+  # so descriptive filenames such as `zz_lib.cure` remain valid imports.
+  defp user_source_path(source) do
+    Process.get(:cure_source_roots, [])
+    |> Enum.flat_map(fn root -> Path.wildcard(Path.join(root, "**/*.cure")) end)
+    |> Enum.uniq()
+    |> Enum.find_value(:not_found, fn path ->
+      case File.read(path) do
+        {:ok, contents} ->
+          with {:ok, tokens} <- Lexer.tokenize(contents, emit_events: false),
+               {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+               ^source <- find_module_name(ast) do
+            {:ok, path}
+          else
+            _ -> nil
+          end
+
+        {:error, _} ->
+          nil
+      end
+    end)
   end
 
   # Every `Env` field this function knows how to combine. `merge_env/2` builds a

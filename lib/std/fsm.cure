@@ -1,5 +1,16 @@
 @group(:concurrency)
 mod Std.Fsm
+  ## `fsm` is a standard-library macro. Its raw body is reparsed by the
+  ## ordinary Cure parser and lowered by the generic OTP backend.
+  macro FsmContainers
+    syntax fsm <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:fsm, name, payload, body)
+      example fsm Cure.Example expands fsm Cure.Example
+    explain
+      Identifier => "an FSM name is required"
+      Code => "an FSM payload must be a Cure expression"
+      keyword "with" => "FSM payloads are introduced with the with keyword"
+      keyword "fsm" => "starts an OTP state-machine container"
+
   ## FSM runtime operations: spawn, stop, send events, get state.
   ##
   ## Runtime surface for FSM modules compiled from `fsm` containers.
@@ -105,4 +116,3 @@ mod Std.Fsm
   ## Return the caller pid registered for a running FSM, or `nil`.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_caller, 1)
   fn caller(pid: Pid) -> Pid
-

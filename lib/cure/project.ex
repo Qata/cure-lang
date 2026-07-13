@@ -781,7 +781,14 @@ defmodule Cure.Project do
          {:ok, app_info} <- detect_app(cure_files, project),
          :ok <- verify_app_name(app_info, project),
          {:ok, modules} <-
-           compile_all_files(cure_files, output_dir, emit_events?, check?, declared_phases(project)),
+           compile_all_files(
+             cure_files,
+             output_dir,
+             emit_events?,
+             check?,
+             declared_phases(project),
+             extra_paths
+           ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
     end
@@ -927,7 +934,7 @@ defmodule Cure.Project do
 
   defp declared_phases(_), do: nil
 
-  defp compile_all_files(files, output_dir, emit?, check?, declared_phases) do
+  defp compile_all_files(files, output_dir, emit?, check?, declared_phases, source_roots) do
     base_opts = [
       output_dir: output_dir,
       emit_events: emit?,
@@ -938,6 +945,8 @@ defmodule Cure.Project do
       if is_list(declared_phases),
         do: Keyword.put(base_opts, :declared_phases, declared_phases),
         else: base_opts
+
+    opts = Keyword.put(opts, :source_roots, source_roots)
 
     result =
       Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
