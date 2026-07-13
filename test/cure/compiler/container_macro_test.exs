@@ -81,6 +81,35 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "actor init syntax emits a checked user callback body" do
+    source = """
+    actor Cure.InitializedActor state Int init
+      %[:ok, 7]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :init, [0]) == {:ok, 7}
+  end
+
+  test "actor handle_info syntax emits a checked user callback body" do
+    source = """
+    actor Cure.MessageActor state Int handle_info
+      %[:noreply, state + 1]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_info, [:tick, 7]) == {:noreply, 8}
+  end
+
+  test "actor callback syntax rejects a body with the wrong state result" do
+    source = """
+    actor Cure.InvalidActor state Int init
+      %[:ok, true]
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "fsm payload syntax expands to a zero-argument starter" do
     assert {:ok, module} =
              Cure.Compiler.compile_and_load("fsm Cure.PayloadFsm with 0\n", emit_events: false)

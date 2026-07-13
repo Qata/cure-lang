@@ -4,6 +4,30 @@ mod Std.Actor
   ## ordinary lifted GenServer module; message-code derivation and user
   ## handlers are layered on top of this floor.
   macro ActorContainers
+    syntax actor <name: ModuleName> state <state_type: Type> init <init_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_server
+      typealias State = state_type
+      callback init(initial: State) returns Tuple(Atom, State) = init_body
+      callback handle_call(request: r, from: f, state: State) returns Tuple(Atom, Atom, State) = %[:reply, :ok, state]
+      callback handle_cast(message: m, state: State) returns Tuple(Atom, State) = %[:noreply, state]
+      callback handle_info(message: i, state: State) returns Tuple(Atom, State) = %[:noreply, state]
+      callback terminate(reason: e, state: State) returns Atom = :ok
+      callback code_change(old: v, state: State, extra: x) returns Tuple(Atom, State) = %[:ok, state]
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name [initial]
+
+    syntax actor <name: ModuleName> state <state_type: Type> handle_info <info_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_server
+      typealias State = state_type
+      callback init(initial: State) returns Tuple(Atom, State) = %[:ok, initial]
+      callback handle_call(request: r, from: f, state: State) returns Tuple(Atom, Atom, State) = %[:reply, :ok, state]
+      callback handle_cast(message: m, state: State) returns Tuple(Atom, State) = %[:noreply, state]
+      callback handle_info(message: i, state: State) returns Tuple(Atom, State) = info_body
+      callback terminate(reason: e, state: State) returns Atom = :ok
+      callback code_change(old: v, state: State, extra: x) returns Tuple(Atom, State) = %[:ok, state]
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name [initial]
+
     syntax actor <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
       behaviour gen_server
