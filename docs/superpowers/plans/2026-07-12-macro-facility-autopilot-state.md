@@ -1003,6 +1003,13 @@ tests, review, a clean worktree, and a highly descriptive commit.
 
 ### Phase 0 — Integrate the kernel-parity branch sequence
 
+**STATUS: COMPLETE (2026-07-13).** `autopilot/kernel-parity-batch` was already
+an ancestor of `feature/idris-parity` through the existing parity merge, so no
+duplicate merge was created. The verified `feature/idris-parity` result was
+merged into this branch as `9481b3c`; preserved user edits were committed as
+`cd4cdaf`. The focused macro typed-record suite passed 5 tests and the
+worktree was clean at the phase boundary.
+
 This is a prerequisite to implementing against the final compiler shape:
 
 1. Inspect the user changes in
@@ -1019,6 +1026,19 @@ Gate: both merges are complete in the specified order, no conflict markers
 remain, tests identify any expected parity failures, and the worktree is clean.
 
 ### Phase 1 — Establish the checked BEAM algebra
+
+**STATUS: COMPLETE (2026-07-13).** `Std.Otp.Raw` now owns the complete raw
+effect-typed extern inventory currently required by the algebra: indexed raw
+process identity, messaging, calls/casts, lifecycle, timers, monitors, links,
+registry, liveness, and exits. `Std.Otp` is ordinary checked Cure over that
+boundary, with transparent `Pid(m)` and `GenServer(q, r)` aliases, checked
+message-code operations, and typed lifecycle wrappers. Parameterized aliases
+now beta-reduce inside the type elaborator, with a two-parameter regression;
+this is compiler support, not a runtime workaround. Focused coverage is 18
+passing tests, and `mix compile --warnings-as-errors` is clean. No
+`lib/cure/core/*` file changed. Process creation, supervision/application
+descriptors, and raw-import visibility remain explicit Phase 2/3 work where
+their transparent macro and module-context machinery belongs.
 
 Implement the foundation in standard-library code over `Std.Otp.Raw`:
 

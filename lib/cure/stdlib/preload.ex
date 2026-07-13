@@ -522,9 +522,9 @@ defmodule Cure.Stdlib.Preload do
   end
 
   # Derive the stdlib source filename from the module atom. Our
-  # stdlib convention is `lib/std/<lowercased-last-segment>.cure`
-  # (e.g. `Cure.Std.List` -> `list.cure`). No deep search: a missing
-  # source is a hard miss.
+  # stdlib convention is `lib/std/<lowercased-segments-joined-by-underscore>.cure`
+  # (e.g. `Cure.Std.List` -> `list.cure`, `Cure.Std.Otp.Raw` ->
+  # `otp_raw.cure`). No deep search: a missing source is a hard miss.
   defp jit_compile_module(module, source_dir) do
     case source_path_for(module, source_dir) do
       {:ok, path} ->
@@ -569,7 +569,9 @@ defmodule Cure.Stdlib.Preload do
       module
       |> Atom.to_string()
       |> String.split(".")
-      |> List.last()
+      |> Enum.drop_while(&(&1 != "Std"))
+      |> tl()
+      |> Enum.join("_")
       |> String.downcase()
 
     path = Path.join(source_dir, basename <> ".cure")

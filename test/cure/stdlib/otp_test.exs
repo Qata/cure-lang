@@ -29,6 +29,44 @@ defmodule Cure.Stdlib.OtpTest do
     for op <- [:tell, :call, :cast], do: assert(effect_result?(Env.get_def(env, op).type))
   end
 
+  test "the typed layer owns the public algebra; only Raw contains externs" do
+    src = File.read!("lib/std/otp.cure")
+    {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
+    {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+    assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
+
+    for op <- [
+          :self,
+          :tell,
+          :call,
+          :cast,
+          :stop,
+          :send_after,
+          :cancel_timer,
+          :monitor,
+          :demonitor,
+          :link,
+          :unlink,
+          :exit,
+          :is_alive,
+          :register,
+          :unregister,
+          :whereis
+        ] do
+      assert op in locals
+      refute match?({:extern, _}, Env.get_def(env, op).body),
+             "#{op} must be an ordinary checked wrapper"
+    end
+  end
+
+  test "message codes are ordinary checked computations" do
+    assert {:ok, _} =
+             app("  fn accepts(code: MessageCode) -> Bool = handles(code, :ping, 0)\n")
+
+    assert {:ok, _} =
+             app("  fn combines(left: MessageCode, right: MessageCode) -> MessageCode = union(left, right)\n")
+  end
+
   describe "Pid(m) — typed one-way messaging" do
     test "a well-typed message is accepted" do
       assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    tell(p, Inc())\n")

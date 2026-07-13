@@ -1383,7 +1383,7 @@ defmodule Cure.Elab.Program do
 
   defp import_source_path(source) do
     case String.split(source, ".") do
-      ["Std", name] ->
+      ["Std" | segments] when segments != [] ->
         case Paths.source_dir() do
           nil ->
             case user_source_path(source) do
@@ -1392,7 +1392,7 @@ defmodule Cure.Elab.Program do
             end
 
           dir ->
-            path = Path.join(dir, String.downcase(name) <> ".cure")
+            path = Path.join(dir, String.downcase(Enum.join(segments, "_")) <> ".cure")
 
             if File.exists?(path) do
               {:ok, source, path}

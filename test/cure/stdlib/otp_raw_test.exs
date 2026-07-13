@@ -32,12 +32,29 @@ defmodule Cure.Stdlib.OtpRawTest do
     assert :raw_call in locals
   end
 
-  test "raw_self : Effect(Pid)", %{env: env} do
-    assert {:effect_type, {:data, :Pid, [], []}} = Env.get_def(env, :raw_self).type
+  test "raw_self : Effect(RawPid(m, m))", %{env: env} do
+    assert {:effect_type, {:data, :RawPid, [global: :m, global: :m], []}} =
+             Env.get_def(env, :raw_self).type
   end
 
   test "every side-effecting op returns Effect(_) — the purity lie is closed", %{env: env} do
-    for name <- [:raw_send, :raw_cast, :raw_call, :raw_monitor] do
+    for name <- [
+          :raw_send,
+          :raw_cast,
+          :raw_call,
+          :raw_monitor,
+          :raw_stop,
+          :raw_send_after,
+          :raw_cancel_timer,
+          :raw_demonitor,
+          :raw_link,
+          :raw_unlink,
+          :raw_exit,
+          :raw_is_alive,
+          :raw_register,
+          :raw_unregister,
+          :raw_whereis
+        ] do
       assert effect_result?(Env.get_def(env, name).type),
              "#{name} must return Effect(_), got #{inspect(Env.get_def(env, name).type)}"
     end
