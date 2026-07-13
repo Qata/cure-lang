@@ -638,12 +638,6 @@ defmodule Cure.Compiler.Parser do
       :not_internal ->
         {expanded, state}
 
-      :not_a_container ->
-        {expanded, state}
-
-      {:error, reason} ->
-        state = add_error(state, {:macro_expansion_error, reason})
-        {{:macro_error, [reason: reason], []}, state}
     end
   end
 
@@ -1086,8 +1080,8 @@ defmodule Cure.Compiler.Parser do
       # Variables / identifiers
       :identifier ->
         case token.value do
-          # Standard-library container macros use the same segment matcher as
-          # user macros. Their raw body is parsed again by MacroSyntax.
+          # Standard-library syntax macros use the same segment matcher as
+          # user macros. Their raw body is parsed again by the ordinary parser.
           name when is_map_key(state.builtin_macros, name) ->
             if prelude_macro_head?(state, name) do
               parse_macro_use(state, name, state.builtin_macros)

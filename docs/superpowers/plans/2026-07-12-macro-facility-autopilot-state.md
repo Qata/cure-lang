@@ -962,7 +962,7 @@ The following slices have now landed in this worktree:
 - SP4 also has a reflection-backed reducer dogfood builder in `Cure.Compiler.MacroReducer`; it emits ordinary `pattern_match` AST and proves it through the dependent elaborator.
 - SP4 reducer dogfood now shares exhaustive reflection dispatch with explicit `view` and `flow` builders.
 - SP4 has a declaration-level reducer/view/flow bundle builder that derives all three ordinary AST outputs from one reflected constructor set.
-- SP5 has a closed OTP callback vocabulary, callback ADT-shaped values, declaration validation, and pure `QuotedModule` lifting in `Cure.Compiler.OtpMacro`; it does not load or compile generated code.
+- The transparent lift path has generic callback-shape and declaration validation, and pure `QuotedModule` lifting in `Cure.Compiler.LiftModule`; behavior vocabularies are no longer owned by a compiler-side OTP registry.
 - SP5 also has a pure supervisor module builder with child/strategy validation and an explicit AtomVM availability probe; this worktree has no `atomvm` executable, so the runtime execution gate is not claimed.
 - SP5's generated supervisor/application proof now builds and runs on the generic-unix AtomVM executable built from `/Users/ch/Develop/esp32-beam/AtomVM`, with AtomVM's estdlib runtime beams packaged alongside the generated Cure modules.
 - SP6 has delimited raw-hole parsing, pure capture helpers, computed use-site integration, `is Category` rule metadata, and explicit module-rule markers.
@@ -1089,10 +1089,9 @@ emission. Dynamic module-name holes are also substituted as checked atom
 literals inside generated ordinary declarations, which gives transparent
 `start_link`/registry helpers a normal Cure value to consume. The main compiler
 pipeline no longer dispatches through the legacy OTP container lowering branch,
-and macro proof checking no longer consults that branch. Remaining Phase 2 work
-is richer provenance chains, quoted-syntax opacity, delayed callback context,
-removal of the remaining compiler-owned OTP contract registry, and transparent
-replacement of the residual marker/parser path.
+macro proof checking no longer consults that branch, and the OTP container
+parser fallback has been removed. Remaining Phase 2 work is richer provenance
+chains, quoted-syntax opacity, and delayed callback context.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
@@ -1244,6 +1243,14 @@ Suggested commits:
 - `feat(std): replace application container compiler with transparent macro`
 
 ### Phase 5 — Remove bespoke OTP compiler paths and OTP knowledge
+
+**STATUS: IN PROGRESS (2026-07-13).** The active compiler no longer dispatches
+through `ContainerMacro`, the legacy OTP raw-body parser and `__otp_container`
+marker path are gone, and the closed `OtpMacro` behavior registry has been
+deleted. Remaining work is auditing all generic tooling and application
+resource documentation, migrating legacy examples and documentation tests,
+and proving that no OTP-specific compiler case remains while the standard
+library owns the vocabulary and lowering.
 
 Only after Phase 4 parity is proven:
 

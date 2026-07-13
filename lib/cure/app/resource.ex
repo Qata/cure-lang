@@ -2,7 +2,7 @@ defmodule Cure.App.Resource do
   @moduledoc """
   Emits OTP `.app` resource files for a compiled Cure application.
 
-  The application container is lowered by `Cure.Compiler.ContainerMacro`; this
+  The application module is emitted through the ordinary Cure compiler; this
   module only writes the project metadata resource consumed by OTP tooling.
   """
 

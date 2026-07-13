@@ -18,140 +18,11 @@ defmodule Cure.Compiler.MacroSyntax do
     case Keyword.get(meta, :name) do
       "__optic_lens_first" -> {:ok, {:function_call, Keyword.put(meta, :name, "first_lens"), []}}
       "__optic_lens_second" -> {:ok, {:function_call, Keyword.put(meta, :name, "second_lens"), []}}
-      _ -> lower_container({:function_call, meta, []})
+      _ -> :not_internal
     end
   end
 
-  def lower_internal(ast) do
-    case lower_container(ast) do
-      :not_a_container -> :not_internal
-      result -> result
-    end
-  end
-
-  @doc """
-  Lower the standard-library OTP container constructor used by the prelude
-  macros. The body is raw macro input, so it is parsed by the ordinary parser
-  before becoming a container node.
-  """
-  @spec lower_container(term()) :: {:ok, tuple()} | :not_a_container | {:error, term()}
-  def lower_container({:function_call, meta, [kind, name, payload, {:raw_tokens, _raw_meta, tokens}]})
-      when is_list(meta) and is_list(tokens) do
-    with {:ok, kind} <- container_kind(kind),
-         {:ok, name} <- container_name(name),
-         {:ok, body} <- parse_container_body(tokens),
-         :ok <- validate_container_body(kind, body) do
-      container_meta = [container_type: kind, name: name, macro_generated: true]
-      container_meta = maybe_init(container_meta, payload)
-      {:ok, {:container, container_meta, body}}
-    end
-  end
-
-  def lower_container({:function_call, meta, [kind, name, {:raw_tokens, _raw_meta, tokens}]})
-      when is_list(meta) and is_list(tokens) do
-    with {:ok, kind} <- container_kind(kind),
-         {:ok, name} <- container_name(name),
-         {:ok, body} <- parse_container_body(tokens),
-         :ok <- validate_container_body(kind, body) do
-      {:ok, {:container, [container_type: kind, name: name, macro_generated: true], body}}
-    end
-  end
-
-  def lower_container(_), do: :not_a_container
-
-  defp container_kind({:literal, _meta, kind}) when kind in [:actor, :fsm, :sup, :app],
-    do: {:ok, if(kind == :sup, do: :supervisor, else: kind)}
-
-  defp container_kind({:variable, _meta, kind}) when kind in ["actor", "fsm", "sup", "app"],
-    do: container_kind({:literal, [], String.to_atom(kind)})
-
-  defp container_kind(other), do: {:error, {:invalid_container_kind, other}}
-
-  defp container_name({:variable, _meta, name}) when is_binary(name), do: {:ok, name}
-  defp container_name({:literal, _meta, name}) when is_binary(name), do: {:ok, name}
-  defp container_name({:literal, _meta, name}) when is_atom(name), do: {:ok, Atom.to_string(name)}
-
-  defp container_name({:attribute_access, meta, [base]}) when is_list(meta) do
-    with {:ok, base} <- container_name(base),
-         attr when is_binary(attr) <- Keyword.get(meta, :attribute) do
-      {:ok, base <> "." <> attr}
-    else
-      _ -> {:error, {:invalid_container_name, {base, meta}}}
-    end
-  end
-
-  defp container_name(other), do: {:error, {:invalid_container_name, other}}
-
-  defp maybe_init(meta, {:variable, _meta, "payload"}), do: meta
-  defp maybe_init(meta, payload), do: Keyword.put(meta, :init, payload)
-
-  defp parse_container_body(tokens) do
-    eof = %Cure.Compiler.Token{type: :eof, value: nil, line: 0, col: 0}
-
-    case Cure.Compiler.Parser.parse(tokens ++ [eof], emit_events: false, prelude_macros: false) do
-      {:ok, {:block, _meta, body}} ->
-        {:ok, body}
-
-      {:ok, node} ->
-        {:ok, [node]}
-
-      {:error, errors} ->
-        case legacy_transition_body(tokens) do
-          {:ok, transitions} ->
-            {:ok, transitions}
-
-          :not_legacy ->
-            if Enum.any?(tokens, &match?(%Cure.Compiler.Token{value: "on_message"}, &1)) do
-              {:ok, []}
-            else
-              {:error, {:container_body_parse_error, errors}}
-            end
-        end
-    end
-  end
-
-  defp legacy_transition_body(tokens) do
-    lines =
-      tokens
-      |> Enum.group_by(& &1.line)
-      |> Enum.sort_by(&elem(&1, 0))
-      |> Enum.map(&elem(&1, 1))
-
-    transitions = Enum.flat_map(lines, &legacy_transition_line/1)
-    if transitions == [], do: :not_legacy, else: {:ok, transitions}
-  end
-
-  defp legacy_transition_line(tokens) do
-    case Enum.find_index(tokens, &(&1.type == :transition_open)) do
-      nil ->
-        []
-
-      open_index ->
-        close_index = Enum.find_index(tokens, &(&1.type == :transition_close))
-
-        if close_index && close_index > open_index do
-          from = tokens |> Enum.take(open_index) |> List.last() |> token_text()
-          between = Enum.slice(tokens, open_index + 1, close_index - open_index - 1)
-          event = between |> Enum.reject(&(&1.type == :keyword and &1.value == :when)) |> List.first() |> token_text()
-          target = tokens |> Enum.drop(close_index + 1) |> List.first() |> token_text()
-          meta = [name: "transition", from: from, event: event, to: target, event_kind: :normal]
-
-          meta =
-            if Enum.any?(between, &(&1.type == :keyword and &1.value == :when)),
-              do: Keyword.put(meta, :guard, {:literal, [subtype: :boolean], true}),
-              else: meta
-
-          [{:function_call, meta, []}]
-        else
-          []
-        end
-    end
-  end
-
-  defp token_text(nil), do: ""
-  defp token_text(%Cure.Compiler.Token{value: value}) when is_binary(value), do: value
-  defp token_text(%Cure.Compiler.Token{value: value}) when is_atom(value), do: Atom.to_string(value)
-  defp token_text(%Cure.Compiler.Token{value: value}), do: to_string(value)
+  def lower_internal(_ast), do: :not_internal
 
   @type synlit ::
           {:s_int, integer}
@@ -435,24 +306,4 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  # The macro body is already ordinary AST. This small generic shape check
-  # preserves the old supervisor keyword diagnostic without reintroducing a
-  # supervisor parser: child declarations use `as`, so another keyword in that
-  # slot is rejected before lowering.
-  defp validate_container_body(:supervisor, body) do
-    if contains_keyword?(body, :when), do: {:error, {:invalid_container_body, :expected_as}}, else: :ok
-  end
-
-  defp validate_container_body(_kind, _body), do: :ok
-
-  defp contains_keyword?(term, keyword) when is_list(term),
-    do: Enum.any?(term, &contains_keyword?(&1, keyword))
-
-  defp contains_keyword?({:variable, _meta, value}, keyword), do: value == keyword
-
-  defp contains_keyword?({_tag, meta, children}, keyword) when is_list(meta) and is_list(children),
-    do: contains_keyword?(meta, keyword) or contains_keyword?(children, keyword)
-
-  defp contains_keyword?({_key, value}, keyword), do: contains_keyword?(value, keyword)
-  defp contains_keyword?(_term, _keyword), do: false
 end
