@@ -98,6 +98,35 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :init, [0]) == {:ok, 7}
   end
 
+  test "actor terminate syntax emits a checked lifecycle callback body" do
+    source = """
+    actor Cure.TerminatingActor state Int terminate
+      :shutdown_complete
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :terminate, [:normal, 7]) == :shutdown_complete
+  end
+
+  test "actor code_change syntax emits a checked lifecycle callback body" do
+    source = """
+    actor Cure.CodeChangingActor state Int code_change
+      %[:ok, state + 1]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :code_change, [:old, 7, :extra]) == {:ok, 8}
+  end
+
+  test "actor lifecycle callback syntax rejects a mismatched state result" do
+    source = """
+    actor Cure.InvalidCodeChangeActor state Int code_change
+      %[:ok, true]
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "actor handle_info syntax emits a checked user callback body" do
     source = """
     actor Cure.MessageActor state Int handle_info
