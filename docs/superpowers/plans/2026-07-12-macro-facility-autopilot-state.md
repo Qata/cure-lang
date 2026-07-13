@@ -1349,6 +1349,10 @@ ordinary result checking; a focused `handle_event` pickup test covers the
 alias-backed path (`3019b4bc`, 56 focused object tests). The direct
 `Effect(T)` case-motive kernel gap remains open and is not treated as solved by
 these aliases.
+The FSM macro now also exposes delayed-body forms for `terminate/3` and
+`code_change/4`, with state/data result aliases and a negative mismatch test;
+both callbacks execute through the ordinary lifted module (`84d4b30b`, 62
+focused object tests).
 
 #### Phase 4d — `app`
 
