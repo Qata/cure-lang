@@ -155,7 +155,7 @@ Two rules are enforced:
   so a `= ...` is dead code.
 
 Erlang/OTP modules are plain atoms (`:erlang`, `:io`); Elixir modules use their
-dotted `Elixir.` path (`Elixir.Cure.FSM.Builtins`). `@extern` composes with
+dotted `Elixir.` path (`Elixir.MyApp.Native`). `@extern` composes with
 `local` for private bindings.
 
 See `docs/FFI.md` for the full guide (module forms, effects, lowering, and
