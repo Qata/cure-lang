@@ -1234,7 +1234,9 @@ defmodule Cure.Compiler.Printer do
        when kind in [:syntax, :computed] do
     verb = if kind == :computed, do: "computed by", else: "becomes"
     context = if rule[:contextual], do: " contextual", else: ""
-    head = "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(template, depth, indent)}"
+
+    head =
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(template, depth, indent)}"
 
     examples =
       rule
