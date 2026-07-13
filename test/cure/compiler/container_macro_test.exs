@@ -134,6 +134,20 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "nested beam operations are reparsed inside every transparent OTP macro body" do
+    for {keyword, name} <- [
+          {"actor", "Cure.NestedActor"},
+          {"fsm", "Cure.NestedFsm"},
+          {"sup", "Cure.NestedSup"},
+          {"app", "Cure.NestedApp"}
+        ] do
+      source = "#{keyword} #{name}\n  fn me() -> Effect(Pid(m)) = beam_ops self\n"
+
+      assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+      assert is_pid(apply(module, :me, []))
+    end
+  end
+
   test "supervisor payload syntax expands to a zero-argument starter" do
     assert {:ok, module} =
              Cure.Compiler.compile_and_load("sup Cure.PayloadSup with 0\n", emit_events: false)

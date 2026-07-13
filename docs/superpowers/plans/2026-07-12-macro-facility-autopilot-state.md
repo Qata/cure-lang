@@ -1209,7 +1209,9 @@ requires it, and thread callback operation context. `Any` is permitted only at
 an explicitly marked raw BEAM/FFI boundary; it is not a universal callback
 type and must not be used to erase these relationships. Add positive and
 negative tests proving cross-callback state/result mismatches are rejected
-before this sub-phase is complete.
+before this sub-phase is complete. All four transparent object floors now
+also have a nested `beam_ops self` proof: the operation is reparsed inside
+each generated lifted module and executes through the ordinary typed wrapper.
 
 #### Phase 4c — `fsm`
 
