@@ -1090,8 +1090,14 @@ literals inside generated ordinary declarations, which gives transparent
 `start_link`/registry helpers a normal Cure value to consume. The main compiler
 pipeline no longer dispatches through the legacy OTP container lowering branch,
 macro proof checking no longer consults that branch, and the OTP container
-parser fallback has been removed. Remaining Phase 2 work is richer provenance
-chains, quoted-syntax opacity, and full delayed callback context threading.
+parser fallback has been removed. Computed expansion now retains ordered
+invocation provenance through execution, cycle, and finite-budget diagnostics
+(`703e6536`). A generic delayed-slot floor now preserves delayed raw holes,
+threads lexical behavior/callback/arity context through lifted callbacks, and
+reparses delayed bodies after context introduction (`64bf2a79`). Remaining
+Phase 2 work is quoted-syntax opacity and an end-to-end delayed callback body
+that exercises a contextual `beam_ops` operation through ordinary callback
+elaboration; the context plumbing is not that final behavior contract.
 
 Standard-library macro loading now performs a generic harvest pass followed by
 a parse with the complete harvested grammar, so one standard-library macro may
@@ -1100,8 +1106,10 @@ transparent actor, FSM, and supervisor starters to use `beam_ops` directly;
 the startup vocabulary now includes `start_link`, `start_statem`, and both
 zero-argument and argument-bearing supervisor startup forms. The full suite
 after this slice passed 4007 tests, 3 doctests, and 1 skipped test, with
-Antigen coverage 318/318. Remaining Phase 2 work is richer provenance chains,
-quoted-syntax opacity, and full delayed callback context threading.
+Antigen coverage 318/318. Computed expansion provenance and delayed callback
+context are now covered by `703e6536` and `64bf2a79`. Remaining Phase 2 work
+is quoted-syntax opacity and an end-to-end delayed callback body that exercises
+a contextual `beam_ops` operation through ordinary callback elaboration.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
@@ -1336,9 +1344,11 @@ tokens, leaving any higher-level transition vocabulary to Cure macros.
 The compiler diagnostics module also no longer formats the retired application,
 release, or FSM-verifier error families; those are project/runtime concerns and
 must not remain compiler-owned vocabulary. Parser comments and helper names now
-describe generic macro dispatch and lifted-module collection. The remaining
-Phase 5 audit still has to remove stale catalog prose and genericize legacy
-project/documentation tooling that pattern-matches the old AST shapes.
+describe generic macro dispatch and lifted-module collection. The retired
+behavior-verifier stage catalogs and stale OTP-specific compiler comments were
+removed in `f191d8b6`. The remaining Phase 5 audit is to genericize legacy
+project/documentation tooling that pattern-matches the old AST shapes and to
+complete the forbidden-remnant search.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
