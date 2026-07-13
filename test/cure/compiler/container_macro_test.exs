@@ -648,6 +648,12 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
              {:worker, {:"Cure.ArgWorker", :start_link, [1, :boot]}, :permanent, 5000, :worker, [:"Cure.ArgWorker"]}
   end
 
+  test "raw child_spec syntax rejects unwrapped heterogeneous arguments" do
+    source = "sup Cure.InvalidRawArgRoot children [child_spec Cure.ArgWorker :worker raw with [1, :boot]]\n"
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "supervisor child policies reject arbitrary restart atoms" do
     source = """
     mod Main
