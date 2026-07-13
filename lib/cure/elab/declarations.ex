@@ -591,9 +591,17 @@ defmodule Cure.Elab.Declarations do
     return_value = Eval.eval(sig.return_core, Context.env(ctx))
 
     with {:ok, body_term} <-
-           elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+           elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
          :ok <- Kernel.check(ctx, body_term, return_value) do
       {:ok, body_term, sig.return_core, return_value}
+    end
+  end
+
+  defp elaborate_declared_body(body_expr, return_core, scope, ctx, env, params) do
+    if Elaborator.effect_goal?(return_core, ctx) do
+      Elaborator.elaborate_effect_branch(body_expr, return_core, scope, ctx, env)
+    else
+      elaborate_body(body_expr, return_core, scope, ctx, env, params)
     end
   end
 

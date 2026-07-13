@@ -101,6 +101,17 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :handle_info, [:tick, 7]) == {:noreply, 8}
   end
 
+  test "actor callback bodies sequence beam operations through an erased effect result" do
+    source = """
+    actor Cure.EffectActor state Int handle_info
+      let pid: Pid(Atom) = beam_ops self
+      %[:noreply, state]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_info, [:tick, 7]) == {:noreply, 7}
+  end
+
   test "actor call syntax keeps request and reply types distinct" do
     source = """
     actor Cure.TypedCallActor state Int call Int returns Bool
@@ -173,6 +184,17 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
   test "fsm handle_event syntax emits a checked user callback body" do
     source = """
     fsm Cure.EventFsm state Int handle_event
+      :keep_state_and_data
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_event, [:info, :tick, :ready, 7]) == :keep_state_and_data
+  end
+
+  test "fsm callback bodies sequence beam operations through an erased effect result" do
+    source = """
+    fsm Cure.EffectFsm state Int handle_event
+      let pid: Pid(Atom) = beam_ops self
       :keep_state_and_data
     """
 

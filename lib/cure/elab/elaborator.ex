@@ -5159,7 +5159,8 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp effect_goal?(expected, ctx) do
+  @doc false
+  def effect_goal?(expected, ctx) do
     value = Eval.eval(expected, Context.env(ctx))
     whnf = Normalise.whnf_value(value, Context.signature(ctx))
     match?({:veffect_type, _}, whnf)
@@ -5169,7 +5170,8 @@ defmodule Cure.Elab.Elaborator do
   # direct elaboration shows that it is pure. Direct checking comes first: it
   # lets an expected `Effect(Pid(m))` solve the concrete process-index implicit
   # on `beam_ops self` instead of attempting unconstrained inference.
-  defp elaborate_effect_branch(expr, expected, names, ctx, env) do
+  @doc false
+  def elaborate_effect_branch(expr, expected, names, ctx, env) do
     if effect_goal?(expected, ctx) do
       case expr do
         {:pattern_match, _, _} ->
@@ -5251,7 +5253,7 @@ defmodule Cure.Elab.Elaborator do
               # A pure value — check at `R` and wrap in `pure`.
               _ ->
                 with {:ok, r_core} <- elaborate_expr_checked(final, r_reified, names, ctx, env) do
-                  {:ok, {:effect_pure, r_core}}
+                  {:ok, effect_pure_for_bind(r_core, r_reified, ctx)}
                 end
             end
 
@@ -5259,7 +5261,7 @@ defmodule Cure.Elab.Elaborator do
           # original inference error rather than the (likely less informative) one.
           {:error, _} = err ->
             case elaborate_expr_checked(final, r_reified, names, ctx, env) do
-              {:ok, r_core} -> {:ok, {:effect_pure, r_core}}
+              {:ok, r_core} -> {:ok, effect_pure_for_bind(r_core, r_reified, ctx)}
               {:error, _} -> err
             end
         end
@@ -5528,6 +5530,22 @@ defmodule Cure.Elab.Elaborator do
 
     with {:ok, body_core} <- elaborate_let_block(rest, expected1, names1, ctx1, env) do
       {:ok, {:effect_bind, rhs_core, {:lam, grade, t_core, body_core}}}
+    end
+  end
+
+  # `effect_bind` is inferred without a continuation result goal. A pure tuple
+  # therefore cannot be inferred directly inside `effect_pure`, even after it
+  # has been checked against the surrounding effect result. Bind the checked
+  # payload with an ordinary Core let so the continuation infers `pure(var)`
+  # from the let domain. The let is erased by the normal emitter and preserves
+  # the single evaluation of the payload.
+  defp effect_pure_for_bind(core, type_core, ctx) do
+    case Kernel.infer(ctx, {:effect_pure, core}) do
+      {:ok, _} ->
+        {:effect_pure, core}
+
+      {:error, _} ->
+        {:let, Grade.unrestricted(), type_core, core, {:effect_pure, {:var, 0}}}
     end
   end
 

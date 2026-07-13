@@ -9,8 +9,8 @@ mod Std.App
       use Std.App
       behaviour application
       typealias PhaseResult = Effect(Atom)
-      callback start(kind: t, args: a) returns Tuple(Atom, Atom) = %[:ok, :undefined]
-      callback stop(state: s) returns Atom = :ok
+      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
+      callback stop(state: s) returns Effect(Atom) = :ok
       callback start_phase(requested: Atom, kind: t, args: a) returns PhaseResult = match requested == phase
         true -> phase_body
         false -> :ok
@@ -20,8 +20,8 @@ mod Std.App
       use Std.App
       use Std.Supervisor
       behaviour application
-      callback start(kind: t, args: a) returns Tuple(Atom, Pid) = %[:ok, Std.Supervisor.start_with(root, payload)]
-      callback stop(state: s) returns Atom = :ok
+      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root payload
+      callback stop(state: s) returns Effect(Atom) = :ok
       body
 
     syntax app <name: ModuleName> root <root: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
@@ -29,8 +29,8 @@ mod Std.App
       use Std.App
       use Std.Supervisor
       behaviour application
-      callback start(kind: t, args: a) returns Tuple(Atom, Pid) = %[:ok, Std.Supervisor.start(root)]
-      callback stop(state: s) returns Atom = :ok
+      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
+      callback stop(state: s) returns Effect(Atom) = :ok
       body
 
     syntax app <name: ModuleName> root <root: Code> contextual becomes lift module Cure.App.name
@@ -38,30 +38,30 @@ mod Std.App
       use Std.App
       use Std.Supervisor
       behaviour application
-      callback start(kind: t, args: a) returns Tuple(Atom, Pid) = %[:ok, Std.Supervisor.start(root)]
-      callback stop(state: s) returns Atom = :ok
+      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
+      callback stop(state: s) returns Effect(Atom) = :ok
 
     syntax app <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module Cure.App.name
       use Std.Otp
       behaviour application
       typealias State = state_type
-      callback start(kind: t, args: State) returns Tuple(Atom, State) = %[:ok, payload]
-      callback stop(state: State) returns Atom = :ok
+      callback start(kind: t, args: State) returns Effect(Tuple(Atom, State)) = %[:ok, payload]
+      callback stop(state: State) returns Effect(Atom) = :ok
       body
 
     syntax app <name: ModuleName> state <state_type: Type> <body: raw until dedent> becomes lift module Cure.App.name
       use Std.Otp
       behaviour application
       typealias State = state_type
-      callback start(kind: t, args: State) returns Tuple(Atom, State) = %[:ok, args]
-      callback stop(state: State) returns Atom = :ok
+      callback start(kind: t, args: State) returns Effect(Tuple(Atom, State)) = %[:ok, args]
+      callback stop(state: State) returns Effect(Atom) = :ok
       body
 
     syntax app <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module Cure.App.name
       use Std.Otp
       behaviour application
-      callback start(kind: t, args: a) returns Tuple(Atom, Atom) = %[:ok, :undefined]
-      callback stop(state: s) returns Atom = :ok
+      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
+      callback stop(state: s) returns Effect(Atom) = :ok
       body
 
   ## Start, stop, and inspect OTP applications from Cure.

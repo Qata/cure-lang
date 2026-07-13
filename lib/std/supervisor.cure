@@ -8,14 +8,14 @@ mod Std.Supervisor
       use Std.Otp
       use Std.Supervisor
       behaviour supervisor
-      callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(ChildSpec))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), children]]
+      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(ChildSpec)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), children]]
       fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
 
     syntax sup <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
       use Std.Supervisor
       behaviour supervisor
-      callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
+      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
       fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name [payload]
       body
 
@@ -23,7 +23,7 @@ mod Std.Supervisor
       use Std.Otp
       use Std.Supervisor
       behaviour supervisor
-      callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
+      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
       fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
       body
 
