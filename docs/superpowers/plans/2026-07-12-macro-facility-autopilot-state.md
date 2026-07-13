@@ -1222,11 +1222,13 @@ Cure values converted by standard-library functions. Closed strategy/child
 validation now routes strategy lowering through a closed Cure `Strategy` value;
 generated supervisor callbacks explicitly import the standard-library helper
 module so independent lifted units resolve those definitions through the common
-path. Intensity/period validation and typed child startup remain to be
-implemented before this sub-phase is complete. Top-level lifted sources now emit
-the lifted unit as the primary module, imported standard-library calls route
-remotely through the common emitter, and the printer round-trips transparent
-lift syntax.
+path. Restart intensity may be zero while restart period is represented by the
+closed positive `Positive` type and rejects zero through ordinary elaboration
+(`93d71a66`, 48 focused object tests). Typed child startup arguments and full
+runtime supervision parity remain to be implemented before this sub-phase is
+complete. Top-level lifted sources now emit the lifted unit as the primary
+module, imported standard-library calls route remotely through the common
+emitter, and the printer round-trips transparent lift syntax.
 
 Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
 `lift module`. Validate child specs, strategy, intensity, period, restart,
