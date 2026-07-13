@@ -1085,9 +1085,11 @@ imports now carry dependency metadata; generated units are deterministically
 topologically ordered, generated-module cycles are rejected before emission,
 and source provenance is retained on each quoted module. Required callbacks
 are validated against the closed behavior vocabulary before ordinary module
-emission. Remaining Phase 2 work is richer provenance chains, quoted-syntax
-opacity, delayed callback context, and transparent replacement of the OTP
-marker path.
+emission. Dynamic module-name holes are also substituted as checked atom
+literals inside generated ordinary declarations, which gives transparent
+`start_link`/registry helpers a normal Cure value to consume. Remaining Phase 2
+work is richer provenance chains, quoted-syntax opacity, delayed callback
+context, and transparent replacement of the OTP marker path.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:

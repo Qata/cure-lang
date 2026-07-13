@@ -33,6 +33,7 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
       macro Lift
         syntax liftit <name: ModuleName> becomes lift module name
           behaviour GenServer
+          fn module_name() -> Atom = name
       liftit Cure.Generated.Worker
     """
 
@@ -41,6 +42,8 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:lift_module, meta, []} = List.last(children)
     assert meta[:module] == "Cure.Generated.Worker"
     assert meta[:source_provenance].file == "nofile"
+    assert [{:function_def, _, [{:literal, [subtype: :symbol], :"Cure.Generated.Worker"}]}] =
+             meta[:declarations]
   end
 
   test "a transparent macro parses a raw body splice into ordinary declarations" do
@@ -51,6 +54,7 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
         syntax liftit <name: ModuleName> <body: raw until dedent> becomes lift module name
           behaviour GenServer
           callback init(arg: Int) -> arg
+          fn module_name() -> Atom = name
           body
       liftit Cure.Generated.Worker
         fn helper(arg: Int) -> Int = one
@@ -60,8 +64,12 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
     assert {:lift_module, meta, []} = List.last(children)
     assert meta[:module] == "Cure.Generated.Worker"
-    assert [{:function_def, function_meta, [{:literal, _, 42}]}] = meta[:declarations]
-    assert function_meta[:name] == "helper"
+    assert [
+             {:function_def, module_meta, [{:literal, [subtype: :symbol], :"Cure.Generated.Worker"}]},
+             {:function_def, helper_meta, [{:literal, _, 42}]}
+           ] = meta[:declarations]
+    assert module_meta[:name] == "module_name"
+    assert helper_meta[:name] == "helper"
   end
 
   test "a transparent macro can compile a parsed raw body splice" do
@@ -72,6 +80,7 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
         syntax liftit <name: ModuleName> <body: raw until dedent> becomes lift module name
           behaviour GenServer
           callback init(arg: Int) -> arg
+          fn module_name() -> Atom = name
           body
       liftit Cure.Generated.Worker
         fn helper(arg: Int) -> Int = one
@@ -81,6 +90,7 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert main == :"Cure.Main"
     assert function_exported?(:"Cure.Generated.Worker", :init, 1)
     assert apply(:"Cure.Generated.Worker", :init, [42]) == 42
+    assert apply(:"Cure.Generated.Worker", :module_name, []) == :"Cure.Generated.Worker"
   end
 
   test "lifted modules compile as independent units through the common emitter" do

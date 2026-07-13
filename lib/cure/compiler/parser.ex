@@ -723,6 +723,22 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp subst_holes({:lift_module, meta, children}, bindings, state) when is_list(meta) do
+    case Keyword.get(meta, :module) do
+      {:macro_hole, module_hole} ->
+        with {:ok, module_ast} <- Map.fetch(bindings, module_hole),
+             module_name when is_binary(module_name) <- module_name_from_ast(module_ast) do
+          meta = subst_lift_module_meta(meta, bindings, state, module_hole, module_name)
+          {:lift_module, meta, Enum.map(children, &subst_holes(&1, bindings, state))}
+        else
+          _ -> { :lift_module, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state)) }
+        end
+
+      _ ->
+        { :lift_module, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state)) }
+    end
+  end
+
   defp subst_holes({t, meta, children}, bindings, state) when is_list(children) do
     {t, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state))}
   end
@@ -764,6 +780,63 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp subst_holes_meta(meta, _bindings, _state), do: meta
+
+  defp subst_lift_module_meta(meta, bindings, state, module_hole, module_name) do
+    Enum.map(meta, fn
+      {:module, {:macro_hole, ^module_hole}} -> {:module, module_name}
+      {:declarations, declarations} -> {:declarations, subst_lift_module_value(declarations, bindings, state, module_hole, module_name)}
+      {:callbacks, callbacks} -> {:callbacks, subst_lift_module_value(callbacks, bindings, state, module_hole, module_name)}
+      {key, value} -> {key, subst_holes_meta_value(value, bindings, state)}
+      other -> other
+    end)
+  end
+
+  defp subst_lift_module_value({:variable, _meta, name}, _bindings, _state, module_hole, module_name)
+       when name == module_hole do
+    {:literal, [subtype: :symbol], String.to_atom(module_name)}
+  end
+
+  defp subst_lift_module_value({:raw_tokens, _meta, tokens}, _bindings, state, _module_hole, _module_name)
+       when is_list(tokens),
+       do: parse_raw_hole(tokens, state)
+
+  defp subst_lift_module_value({type, meta, children}, bindings, state, module_hole, module_name)
+       when is_list(children) do
+    {type, subst_lift_module_value_meta(meta, bindings, state, module_hole, module_name),
+     Enum.flat_map(children, fn child ->
+       case subst_lift_module_value(child, bindings, state, module_hole, module_name) do
+         {:raw_splice, nodes} -> nodes
+         expanded -> [expanded]
+       end
+     end)}
+  end
+
+  defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_list(value) do
+    Enum.flat_map(value, fn item ->
+      case subst_lift_module_value(item, bindings, state, module_hole, module_name) do
+        {:raw_splice, nodes} -> nodes
+        expanded -> [expanded]
+      end
+    end)
+  end
+
+  defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_map(value) do
+    Map.new(value, fn {key, item} ->
+      {key, subst_lift_module_value(item, bindings, state, module_hole, module_name)}
+    end)
+  end
+
+  defp subst_lift_module_value(value, bindings, state, _module_hole, _module_name),
+    do: subst_holes_meta_value(value, bindings, state)
+
+  defp subst_lift_module_value_meta(meta, bindings, state, module_hole, module_name) when is_list(meta) do
+    Enum.map(meta, fn
+      {key, value} -> {key, subst_lift_module_value(value, bindings, state, module_hole, module_name)}
+      other -> other
+    end)
+  end
+
+  defp subst_lift_module_value_meta(meta, _bindings, _state, _module_hole, _module_name), do: meta
 
   defp subst_holes_meta_value({:macro_hole, name}, bindings, _state) do
     case Map.fetch(bindings, name) do
