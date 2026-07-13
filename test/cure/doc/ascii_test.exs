@@ -92,6 +92,13 @@ defmodule Cure.Doc.AsciiTest do
       assert out =~ "├── logger"
       assert out =~ "├── stdlib"
     end
+
+    test "renders a transparent lifted application module" do
+      assert {:ok, ast} = Cure.Compiler.parse_source("app Cure.DocApp\n", emit_events: false)
+      out = Ascii.render(ast)
+
+      assert out =~ "app Cure.DocApp"
+    end
   end
 
   describe "render/2 -- non-diagram containers" do

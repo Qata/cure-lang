@@ -71,6 +71,17 @@ defmodule Cure.Doc.Mermaid do
     src
   end
 
+  def render({:lift_module, meta, _body}, _opts) when is_list(meta) do
+    name = Keyword.get(meta, :module, "Unknown") |> to_string()
+
+    case Keyword.get(meta, :behaviour) do
+      :gen_statem -> render_fsm(name, [], [])
+      :supervisor -> render_sup(name, [strategy: :one_for_one], [])
+      :application -> render_app(name, [], [])
+      _ -> nil
+    end
+  end
+
   def render(_other, _opts), do: nil
 
   # -- FSM --------------------------------------------------------------------

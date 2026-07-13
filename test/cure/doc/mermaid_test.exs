@@ -77,5 +77,13 @@ defmodule Cure.Doc.MermaidTest do
       assert out =~ "logger"
       assert out =~ "cure"
     end
+
+    test "renders a transparent lifted supervisor module" do
+      assert {:ok, ast} = Cure.Compiler.parse_source("sup Cure.DocSup\n", emit_events: false)
+      out = Mermaid.render(ast)
+
+      assert out =~ "graph TD"
+      assert out =~ "Cure.DocSup"
+    end
   end
 end

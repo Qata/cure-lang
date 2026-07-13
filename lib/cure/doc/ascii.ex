@@ -71,6 +71,17 @@ defmodule Cure.Doc.Ascii do
     src
   end
 
+  def render({:lift_module, meta, _body}, _opts) when is_list(meta) do
+    name = Keyword.get(meta, :module, "Unknown") |> to_string()
+
+    case Keyword.get(meta, :behaviour) do
+      :gen_statem -> render_fsm(name, [], [])
+      :supervisor -> render_sup(name, [strategy: :one_for_one], [])
+      :application -> render_app(name, [], [])
+      _ -> nil
+    end
+  end
+
   def render(_other, _opts), do: nil
 
   @doc """
@@ -108,6 +119,10 @@ defmodule Cure.Doc.Ascii do
     [c]
   end
 
+  defp collect_containers({:lift_module, meta, _body} = module) when is_list(meta) do
+    if Keyword.get(meta, :behaviour) in [:gen_statem, :supervisor, :application], do: [module], else: []
+  end
+
   defp collect_containers({:block, _meta, children}) when is_list(children) do
     Enum.flat_map(children, &collect_containers/1)
   end
@@ -118,6 +133,15 @@ defmodule Cure.Doc.Ascii do
 
   defp filter_kind?({:container, meta, _}, kind) do
     Keyword.get(meta, :container_type) == kind
+  end
+
+  defp filter_kind?({:lift_module, meta, _}, kind) do
+    case Keyword.get(meta, :behaviour) do
+      :gen_statem -> kind == :fsm
+      :supervisor -> kind == :sup
+      :application -> kind == :app
+      _ -> false
+    end
   end
 
   # ============================================================================
