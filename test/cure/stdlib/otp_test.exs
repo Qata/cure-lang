@@ -27,9 +27,10 @@ defmodule Cure.Stdlib.OtpTest do
     assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
 
     assert :self in locals and :spawn in locals and :spawn_link in locals and :start_link in locals and
+             :start_supervisor in locals and
              :tell in locals and :call in locals and :cast in locals
 
-    for op <- [:spawn, :spawn_link, :start_link, :tell, :call, :cast],
+    for op <- [:spawn, :spawn_link, :start_link, :start_supervisor, :tell, :call, :cast],
         do: assert(effect_result?(Env.get_def(env, op).type))
   end
 
@@ -44,6 +45,7 @@ defmodule Cure.Stdlib.OtpTest do
           :spawn,
           :spawn_link,
           :start_link,
+          :start_supervisor,
           :tell,
           :call,
           :cast,

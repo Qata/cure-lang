@@ -31,6 +31,7 @@ defmodule Cure.Stdlib.OtpRawTest do
     assert :raw_spawn in locals
     assert :raw_spawn_link in locals
     assert :raw_start_link in locals
+    assert :raw_supervisor_start_link in locals
     assert :raw_send in locals
     assert :raw_call in locals
   end
@@ -46,6 +47,7 @@ defmodule Cure.Stdlib.OtpRawTest do
           :raw_spawn,
           :raw_spawn_link,
           :raw_start_link,
+          :raw_supervisor_start_link,
           :raw_cast,
           :raw_call,
           :raw_monitor,

@@ -96,6 +96,25 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert apply(:"Cure.Generated.Worker", :module_name, []) == :"Cure.Generated.Worker"
   end
 
+  test "a transparent lift can start its generated gen_server through Std.Otp" do
+    source = """
+    mod Main
+      macro Lift
+        syntax server <name: ModuleName> becomes lift module name
+          use Std.Otp
+          behaviour GenServer
+          callback init(arg: Int) -> %[:ok, arg]
+          fn start_link(arg: Int) -> Effect(Tuple) = Std.Otp.start_link(name, [arg])
+      server Cure.Generated.Server
+    """
+
+    assert {:ok, main} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert main == :"Cure.Main"
+    assert {:ok, pid} = apply(:"Cure.Generated.Server", :start_link, [42])
+    assert is_pid(pid)
+    :gen_server.stop(pid)
+  end
+
   test "lifted modules compile as independent units through the common emitter" do
     source = """
     mod Main
