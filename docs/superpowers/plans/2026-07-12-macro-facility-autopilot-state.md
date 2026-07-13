@@ -1304,6 +1304,9 @@ The compiler printer and algebra formatter have now dropped their unreachable
 legacy `actor`/`fsm`/`app`/`supervisor`/`child_spec` rendering branches. The
 totality corpus tracks only parser-constructed generic nodes, and focused
 printer, precedence, `with`, and corpus round-trip verification passes.
+The compiler lexer also no longer recognizes `--event-->` or carries FSM
+transition state; transition-shaped text is ordinary punctuation and identifier
+tokens, leaving any higher-level transition vocabulary to Cure macros.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new

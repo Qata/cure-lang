@@ -65,7 +65,6 @@ defmodule Cure.Compiler.Lexer do
     indent_stack: [0],
     at_line_start: true,
     paren_depth: 0,
-    fsm_transition_depth: 0,
     preserve_comments: false,
     collect_trivia: false,
     trivia: [],
@@ -1293,40 +1292,14 @@ defmodule Cure.Compiler.Lexer do
         {:ok, %{state | tokens: [token | state.tokens]} |> advance(2)}
 
       ?- ->
-        lex_fsm_transition(state, start_col)
+        token = Token.new(:minus, "-", state.line, start_col)
+        maybe_emit_event(state, token)
+        {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
 
       _ ->
         token = Token.new(:minus, "-", state.line, start_col)
         maybe_emit_event(state, token)
         {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
-    end
-  end
-
-  defp lex_fsm_transition(state, start_col) do
-    state = advance(state, 2)
-    token = Token.new(:transition_open, "--", state.line, start_col)
-    maybe_emit_event(state, token)
-    state = %{state | tokens: [token | state.tokens], fsm_transition_depth: state.fsm_transition_depth + 1}
-    lex_fsm_transition_body(state)
-  end
-
-  defp lex_fsm_transition_body(state) do
-    case {peek(state), peek_at(state, 1), peek_at(state, 2)} do
-      {?-, ?-, ?>} ->
-        close_col = state.col
-        state = advance(state, 3)
-        token = Token.new(:transition_close, "-->", state.line, close_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens], fsm_transition_depth: max(state.fsm_transition_depth - 1, 0)}}
-
-      {nil, _, _} ->
-        {:error, {:unterminated_fsm_transition, state.line, state.col}, state}
-
-      _ ->
-        case lex_next(state) do
-          {:ok, state} -> lex_fsm_transition_body(state)
-          error -> error
-        end
     end
   end
 
