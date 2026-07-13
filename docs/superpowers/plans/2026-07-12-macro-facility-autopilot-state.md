@@ -1291,6 +1291,11 @@ The typed actor/FSM starters now pass scalar initial state data directly to
 the OTP `init/1` callback instead of introducing an extra list layer. Unix
 runtime assertions and the generic-unix AtomVM package proof cover the
 corrected state shape (`dd1afe6b`, 55 focused object tests).
+The actor macro now also exposes transparent delayed-body forms for the
+remaining user lifecycle callbacks, `terminate/2` and `code_change/3`, with
+source-level effect result aliases and negative state-result coverage. These
+callbacks are reparsed, elaborated, and emitted through the same lifted-module
+path (`9a4e47bc`, 59 focused object tests).
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
