@@ -489,18 +489,18 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
              {:worker, {:worker_module, :start_link, []}, :transient, 1000, :worker, [:worker_module]}
   end
 
-  test "supervisor child startup arguments use the checked atom list shape" do
+  test "supervisor child startup arguments preserve their checked element type" do
     source = """
     mod Main
       use Std.Supervisor
-      fn build() -> ChildSpec =
-        Std.Supervisor.child_with_args(:worker_module, :worker, [:boot], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
+      fn build() -> Tuple(Atom, Tuple(Atom, Atom, List(Int)), Atom, Nat, Atom, List(Atom)) =
+        Std.Supervisor.child_with_args(:worker_module, :worker, [1], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
 
     assert apply(module, :build, []) ==
-             {:worker, {:worker_module, :start_link, [:boot]}, :permanent, 1000, :worker, [:worker_module]}
+             {:worker, {:worker_module, :start_link, [1]}, :permanent, 1000, :worker, [:worker_module]}
   end
 
   test "transparent child_spec syntax preserves checked startup arguments" do
@@ -513,12 +513,12 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
              {:worker, {:"Cure.ArgWorker", :start_link, [:boot]}, :permanent, 5000, :worker, [:"Cure.ArgWorker"]}
   end
 
-  test "supervisor child startup rejects non-atom argument lists" do
+  test "supervisor child startup rejects a heterogeneous argument list" do
     source = """
     mod Main
       use Std.Supervisor
       fn build() -> ChildSpec =
-        Std.Supervisor.child_with_args(:worker_module, :worker, [1], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
+        Std.Supervisor.child_with_args(:worker_module, :worker, [1, :boot], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
     """
 
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
