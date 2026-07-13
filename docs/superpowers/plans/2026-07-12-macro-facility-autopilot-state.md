@@ -1315,6 +1315,9 @@ remain open. A direct tuple-destructuring implementation was rejected by the
 existing elaborator with `:escaping_variable`; the supported path intentionally
 uses the checked ADT rather than hiding that language gap behind a compiler
 special case.
+Transition-table `init/1` now derives its initial state from the first checked
+row, and a generic Unix `gen_statem.cast` probe confirms that a table beginning
+at `:locked` enters `:unlocked` on `:coin` (`6d3a29ad`, 53 focused tests).
 
 #### Phase 4d — `app`
 
