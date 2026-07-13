@@ -211,14 +211,14 @@ defmodule Cure.Compiler.LiftModule do
     end
   end
 
-  defp callback_definition(%{name: name, params: params, body: body, line: line})
+  defp callback_definition(%{name: name, params: params, return_type: return_type, body: body, line: line})
        when is_atom(name) and is_list(params) and is_tuple(body) do
     {:ok,
      {:function_def,
       [
         name: Atom.to_string(name),
         params: params,
-        return_type: nil,
+        return_type: return_type,
         visibility: :public,
         arity: length(params),
         line: line,

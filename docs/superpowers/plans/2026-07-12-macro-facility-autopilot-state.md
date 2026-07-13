@@ -1194,15 +1194,16 @@ through the generic Unix runtime path.
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
-inside start, message, and stop bodies. The initial transparent floor must not
-be mistaken for the final callback contract: callback signatures must preserve
-the actor's state type across `init`, `handle_call`, `handle_cast`,
-`handle_info`, `terminate`, and `code_change`, and must keep request, message,
-reply, `from`, reason, version, and extra values distinct where their behavior
-requires it. `Any` is permitted only at an explicitly marked raw BEAM/FFI
-boundary; it is not a universal callback type and must not be used to erase
-these relationships. Add positive and negative tests proving that callback
-state/result mismatches are rejected before this sub-phase is complete.
+inside start, message, and stop bodies. The generic callback floor now carries
+explicit checked return types through `lift module`; the final callback
+contract must still preserve one shared actor state type across `init`,
+`handle_call`, `handle_cast`, `handle_info`, `terminate`, and `code_change`,
+and must keep request, message, reply, `from`, reason, version, and extra
+values distinct where their behavior requires it. `Any` is permitted only at
+an explicitly marked raw BEAM/FFI boundary; it is not a universal callback
+type and must not be used to erase these relationships. Add positive and
+negative tests proving cross-callback state/result mismatches are rejected
+before this sub-phase is complete.
 
 #### Phase 4c — `fsm`
 

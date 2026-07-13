@@ -45,6 +45,28 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert request.behaviour == :custom_behavior
   end
 
+  test "lifted callback return types are preserved as ordinary function annotations" do
+    source = """
+    lift module Cure.Generated.Typed
+      behaviour custom_behavior
+      callback ping(arg: Int) returns Int = arg
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:lift_module, meta, []}} = Parser.parse(tokens, emit_events: false)
+    assert [%{return_type: {:variable, _, "Int"}}] = meta[:callbacks]
+  end
+
+  test "lifted callback return mismatches fail ordinary elaboration" do
+    source = """
+    lift module Cure.Generated.BadCallback
+      behaviour custom_behavior
+      callback ping(arg: Int) returns Bool = arg
+    """
+
+    assert {:error, _} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "a transparent macro can substitute an identifier into lift module" do
     source = """
     mod M

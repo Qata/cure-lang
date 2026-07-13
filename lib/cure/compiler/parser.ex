@@ -4987,10 +4987,28 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :lparen)
     {params, state} = parse_typed_params(state)
     state = expect(state, :rparen)
-    state = expect(state, :arrow)
+
+    {return_type, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "returns"} ->
+          {return_type, state} = parse_type_expr(advance(state))
+          {return_type, state}
+
+        _ ->
+          {nil, state}
+      end
+
+    state = if return_type, do: expect(state, :assign), else: expect(state, :arrow)
     {body, state} = parse_expr_or_block(state)
 
-    {%{name: name, arity: length(params), params: params, body: body, line: token.line}, state}
+    {%{
+       name: name,
+       arity: length(params),
+       params: params,
+       return_type: return_type,
+       body: body,
+       line: token.line
+     }, state}
   end
 
   defp parse_macro_block(state) do

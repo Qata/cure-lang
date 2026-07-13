@@ -7,8 +7,8 @@ mod Std.App
     syntax app <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
       use Std.Otp
       behaviour application
-      callback start(kind: t, args: a) -> %[:ok, :undefined]
-      callback stop(state: s) -> :ok
+      callback start(kind: t, args: a) returns Tuple(Atom, Atom) = %[:ok, :undefined]
+      callback stop(state: s) returns Atom = :ok
       body
 
   ## Start, stop, and inspect OTP applications from Cure.

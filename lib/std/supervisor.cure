@@ -7,14 +7,14 @@ mod Std.Supervisor
     syntax sup <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
       behaviour supervisor
-      callback init(arg: List(p)) -> %[:ok, %[%[:one_for_one, 3, 5], assert_type [] : List(Tuple)]]
+      callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Int, Int), List(Atom))) = %[:ok, %[%[:one_for_one, 3, 5], assert_type [] : List(Atom)]]
       fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor_with(name, [payload])
       body
 
     syntax sup <name: ModuleName> <body: raw until dedent> becomes lift module name
       use Std.Otp
       behaviour supervisor
-      callback init(arg: List(p)) -> %[:ok, %[%[:one_for_one, 3, 5], assert_type [] : List(Tuple)]]
+      callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Int, Int), List(Atom))) = %[:ok, %[%[:one_for_one, 3, 5], assert_type [] : List(Atom)]]
       fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
       body
 
