@@ -637,7 +637,6 @@ defmodule Cure.Compiler.Parser do
 
       :not_internal ->
         {expanded, state}
-
     end
   end
 

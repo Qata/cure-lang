@@ -305,5 +305,4 @@ defmodule Cure.Compiler.MacroSyntax do
       error -> error
     end
   end
-
 end

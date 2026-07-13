@@ -1,4 +1,4 @@
-defmodule Cure.Compiler.ContainerMacroTest do
+defmodule Cure.Compiler.TransparentObjectMacroTest do
   use ExUnit.Case, async: false
 
   @containers [
@@ -78,6 +78,5 @@ defmodule Cure.Compiler.ContainerMacroTest do
     refute Code.ensure_loaded?(Cure.FSM.Compiler)
     refute Code.ensure_loaded?(Cure.Sup.Compiler)
     refute Code.ensure_loaded?(Cure.App.Compiler)
-    refute function_exported?(Cure.Compiler.ContainerMacro, :forms, 1)
   end
 end

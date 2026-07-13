@@ -1,4 +1,4 @@
-defmodule Cure.Compiler.OtpMacroSurfaceTest do
+defmodule Cure.Compiler.LiftModuleSurfaceTest do
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.{Lexer, LiftModule, Parser}

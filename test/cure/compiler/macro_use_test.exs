@@ -55,16 +55,11 @@ defmodule Cure.Compiler.MacroUseTest do
     assert has_supervisor?(node)
   end
 
-  # A container node is either the supervisor itself, or (e.g. the enclosing
-  # module) a container whose children must still be searched — so this clause
-  # must both check container_type AND recurse, never short-circuit.
-  defp has_supervisor?({:container, meta, children}) do
-    Keyword.get(meta, :container_type) == :supervisor or
-      (is_list(children) and Enum.any?(children, &has_supervisor?/1))
-  end
-
   defp has_supervisor?({:lift_module, meta, _children}),
-    do: Keyword.get(meta, :behaviour) == :Supervisor
+    do: Keyword.get(meta, :behaviour) == :supervisor
+
+  defp has_supervisor?({:container, _meta, children}) when is_list(children),
+    do: Enum.any?(children, &has_supervisor?/1)
 
   defp has_supervisor?({_t, _m, children}) when is_list(children),
     do: Enum.any?(children, &has_supervisor?/1)

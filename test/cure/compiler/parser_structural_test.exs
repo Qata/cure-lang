@@ -237,7 +237,7 @@ defmodule Cure.Compiler.ParserStructuralTest do
       ast = parse!(source)
       assert {:lift_module, meta, []} = ast
       assert meta[:module] == "TrafficLight"
-      assert meta[:behaviour] == :GenStatem
+      assert meta[:behaviour] == :gen_statem
       assert Enum.any?(meta[:declarations], &match?({:function_def, _, _}, &1))
     end
 
