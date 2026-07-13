@@ -50,6 +50,7 @@ defmodule Cure.Audit.Refs do
   defp walk({:binary_type}, acc), do: acc
   defp walk({:atom_type}, acc), do: acc
   defp walk({:atom_lit, _}, acc), do: acc
+  defp walk({:effect_type, payload}, acc), do: walk(payload, acc)
 
   # `:pi`/`:lam`/`:let` carry a QTT grade (`:erased`/`:linear`/`:affine`/
   # `:unrestricted`) — an atom with no globals, so it is ignored.
