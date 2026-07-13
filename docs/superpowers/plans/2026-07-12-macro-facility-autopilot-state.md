@@ -1455,6 +1455,10 @@ glossary, and replay reference now use the transparent macro/algebra surface
 changelog and site-post material remains historical release data and is excluded
 from the present-tense forbidden-remnant gate; stale host harnesses in older
 example projects remain an explicit migration surface, not current proofs.
+The Colony and Forge example READMEs and compile tasks now describe lifted
+module emission and no longer advertise source-string compiler loading
+(`b4bf53cb`). Their older Elixir facades/tests still need a full behavioral
+migration before the example-project gate can close.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
