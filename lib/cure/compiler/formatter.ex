@@ -445,7 +445,7 @@ defmodule Cure.Compiler.Formatter do
     next = byte_at(source, pos + 1)
 
     cond do
-      # FSM transition arrow `--event-->` or `-->`: the lexer eats
+      # Transition-shaped punctuation `--event-->` or `-->`: the lexer eats
       # these whole, but our byte scan can land on one of them. Skip
       # if we see `--` either starting here or immediately before.
       next == ?- -> :skip

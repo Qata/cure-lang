@@ -184,7 +184,7 @@ defmodule Cure.Compiler.Parser do
           # First harvest every standard-library macro without any builtin
           # rules. A second parse uses that complete grammar set so one
           # standard-library macro can transparently invoke another (for
-          # example, actor/fsm/sup starters invoking `beam_ops`).
+          # example, standard-library starters invoking another syntax macro).
           harvested = collect_stdlib_macro_rules(stdlib_macro_paths, %{})
           collect_stdlib_macro_rules(stdlib_macro_paths, %{}, harvested)
       end
@@ -324,7 +324,7 @@ defmodule Cure.Compiler.Parser do
   # Macro rules inherit the imports visible where their definition lives. A
   # generated lifted module is a new compilation unit, so those imports must be
   # carried across the quotation boundary before its types and function bodies
-  # are elaborated. This is lexical scope propagation, not an OTP-specific name
+  # are elaborated. This is lexical scope propagation, not a behavior-specific name
   # table: any user-defined macro can use the same mechanism.
   defp collect_macro_defs_with_scope(node, imports \\ [])
 
@@ -3596,8 +3596,8 @@ defmodule Cure.Compiler.Parser do
     # fn followed by identifier or (soft) keyword -> named function definition
     #
     # Some Cure keywords (spawn, send, receive, after) are ordinary
-    # function names in other languages, and `Std.Fsm` defines e.g.
-    # `fn spawn(fsm_module: Atom) -> Pid`. Let those keywords double as
+  # function names in other languages, and standard-library modules may define
+  # similarly named functions. Let those words double as
     # function-definition names; they still behave as keywords in
     # statement position.
     case peek(state) do
@@ -5160,7 +5160,7 @@ defmodule Cure.Compiler.Parser do
     {ast, state}
   end
 
-  # -- FSM  fsm Name with Payload{...} --------------------------------------
+  # -- macro-produced lifted module ------------------------------------------
 
   # -- macro container (SP1) --------------------------------------------------
   # `macro Name` … indented `syntax`/`literal` rules. Soft-keyword; closes by

@@ -385,7 +385,7 @@ defmodule Cure.Compiler.Printer do
     case op do
       :not -> "not #{inner}"
       # A leading `-` on the operand would abut into `--`, which the lexer reads
-      # as the start of an FSM transition (`-->`/`--|`) and fails on — so `-(-x)`
+      # as the start of a transition vocabulary (`-->`/`--|`) and fails on — so `-(-x)`
       # must reprint as `- -x`, not `--x`. Separate only when the operand's own
       # rendering starts with `-` (a nested unary minus / negative literal).
       :- -> if String.starts_with?(inner, "-"), do: "- #{inner}", else: "-#{inner}"
@@ -733,7 +733,7 @@ defmodule Cure.Compiler.Printer do
     "lift module #{name}\n#{pad}#{body}"
   end
 
-  # -- Container (module, record, enum, protocol, trait, fsm) ----------------
+  # -- Container (module, record, enum, protocol, and trait) ----------------
 
   defp to_string({:container, meta, body}, depth, indent) do
     container_to_string(meta, body, depth, indent)

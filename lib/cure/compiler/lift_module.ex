@@ -2,7 +2,7 @@ defmodule Cure.Compiler.LiftModule do
   @moduledoc """
   Generic collection and emission of parsed `lift module` declarations.
 
-  A lifted module is a quoted compilation unit, not an OTP-specific compiler
+  A lifted module is a quoted compilation unit, not a behavior-specific compiler
   object. Callback bodies become ordinary Cure function declarations and pass
   through the same dependent elaborator and emitter as the enclosing module.
   """

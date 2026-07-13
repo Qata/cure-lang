@@ -41,8 +41,8 @@ defmodule Cure.Compiler.DepGraph do
           modules: %{String.t() => Path.t()}
         }
 
-  # OTP-like declarations are standard-library syntax macros and arrive here
-  # as generic `lift_module` values, never as compiler-owned container kinds.
+  # Behavior-shaped declarations are standard-library syntax macros and arrive
+  # here as generic `lift_module` values, never as compiler-owned object kinds.
   @module_container_types [:module, :proof]
   @auto_prelude ["Std.Bool", "Std.Nat"]
   @auto_prelude_types %{"Std.Bool" => "Bool", "Std.Nat" => "Nat"}
