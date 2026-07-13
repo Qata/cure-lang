@@ -1267,6 +1267,11 @@ The actor floor now also accepts an explicit `messages <Type>` clause for
 message type; an illegal send through that typed handle is rejected before
 emission (`8bacfbe2`). The FSM floor has the corresponding explicit `events
 <Type>` clause for `handle_event`, giving callbacks a concrete event type.
+The actor floor now also accepts transparent typed `handle_cast` callback
+bodies. Its callback result is a source-level effect alias, so ordinary
+`pickup` message dispatch can be checked without hiding the body in a
+compiler callback implementation; legal and wrong-state results are covered
+by the focused suite (`94a0540e`, 53 tests).
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
