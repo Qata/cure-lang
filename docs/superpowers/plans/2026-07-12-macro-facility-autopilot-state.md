@@ -1244,7 +1244,9 @@ path.
 The actor floor also has explicit `init` and `handle_info` callback-body forms
 with delayed single-expression bodies, sharing the module-local state alias
 and ordinary callback result checking (`92b9ec43`). Full message-code
-derivation, request/reply handlers, and callback effect context remain open.
+derivation and callback effect context remain open. A `call` form now accepts
+independent request and reply types and emits a checked `handle_call` callback
+(`12227f4c`).
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
