@@ -41,7 +41,9 @@ defmodule Cure.Compiler.DepGraph do
           modules: %{String.t() => Path.t()}
         }
 
-  @module_container_types [:module, :proof, :fsm, :actor, :supervisor, :app]
+  # OTP-like declarations are standard-library syntax macros and arrive here
+  # as generic `lift_module` values, never as compiler-owned container kinds.
+  @module_container_types [:module, :proof]
   @auto_prelude ["Std.Bool", "Std.Nat"]
   @auto_prelude_types %{"Std.Bool" => "Bool", "Std.Nat" => "Nat"}
 
@@ -263,6 +265,10 @@ defmodule Cure.Compiler.DepGraph do
     else
       {nil, nil}
     end
+  end
+
+  defp find_module({:lift_module, meta, _body}) when is_list(meta) do
+    {Keyword.get(meta, :module), Keyword.get(meta, :line)}
   end
 
   defp find_module(list) when is_list(list) do
