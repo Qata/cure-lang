@@ -1091,7 +1091,7 @@ literals inside generated ordinary declarations, which gives transparent
 pipeline no longer dispatches through the legacy OTP container lowering branch,
 macro proof checking no longer consults that branch, and the OTP container
 parser fallback has been removed. Remaining Phase 2 work is richer provenance
-chains, quoted-syntax opacity, and delayed callback context.
+chains, quoted-syntax opacity, and full delayed callback context threading.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
@@ -1130,11 +1130,15 @@ Suggested commit:
 
 ### Phase 3 — Implement `beam_ops` over the algebra
 
-**STATUS: IN PROGRESS (2026-07-13).** `Std.Otp` now defines the first
-transparent `beam_ops` rule: `beam_ops self` expands to ordinary
-`Std.Otp.self()` syntax and is proven marker-free. The raw process-creation
-floor is present (`raw_spawn`/`raw_spawn_link` plus ordinary `Std.Otp`
-wrappers), along with effect-typed `gen_server:start_link/4` and
+**STATUS: IN PROGRESS (2026-07-13).** `Std.Otp` now defines a closed initial
+`beam_ops` vocabulary: `self`, messaging, call/cast, process creation, startup,
+lifecycle, timers, monitors, and links all expand to ordinary checked
+`Std.Otp` calls and are proven marker-free. The generic macro grammar now has a
+`contextual` rule qualifier, which defers only context-free fuzz proofs while
+requiring actual operation use sites to pass ordinary elaboration. The raw
+process-creation floor is
+present (`raw_spawn`/`raw_spawn_link` plus ordinary `Std.Otp` wrappers), along
+with effect-typed `gen_server:start_link/4` and
 `gen_statem:start_link/4` wrappers that
 preserves the OTP result tuple. The elaborator now threads expected result types through
 qualified calls carrying lambda arguments. The remaining operation work must

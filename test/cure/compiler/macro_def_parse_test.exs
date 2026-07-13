@@ -59,6 +59,12 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert rule.module_rule
   end
 
+  test "a contextual syntax rule defers proof until its use-site context" do
+    node = parse!("macro Ops\n  syntax send <pid: Code> <message: Code> contextual becomes tell(pid, message)\n")
+    assert {:macro_def, _m, [rule]} = node
+    assert rule.contextual
+  end
+
   test "an open category and qualified category extension are retained" do
     node =
       parse!(

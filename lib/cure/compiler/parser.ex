@@ -5090,17 +5090,23 @@ defmodule Cure.Compiler.Parser do
     {segments, state} = parse_rule_segments(state, [])
     {category, state} = parse_rule_category(state)
 
+    {contextual, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "contextual"} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
     case peek(state) do
       %Token{type: :identifier, value: "computed"} ->
-        parse_computed_rule(state, kw_token, keyword, segments, category)
+        parse_computed_rule(state, kw_token, keyword, segments, category, contextual)
 
       _ ->
-        parse_becomes_rule(state, kw_token, keyword, segments, category)
+        parse_becomes_rule(state, kw_token, keyword, segments, category, contextual)
     end
   end
 
   # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
-  defp parse_becomes_rule(state, kw_token, keyword, segments, category) do
+  defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual) do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
@@ -5117,6 +5123,7 @@ defmodule Cure.Compiler.Parser do
       template: template,
       examples: examples,
       category: category,
+      contextual: contextual,
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
@@ -5129,7 +5136,7 @@ defmodule Cure.Compiler.Parser do
   # reference; running it is a later slice. NOT harvested into active_macros
   # (harvest filters kind: :syntax), so a computed macro's use-site is inert
   # until the execution slice lands.
-  defp parse_computed_rule(state, kw_token, keyword, segments, category) do
+  defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual) do
     state = advance(state)
 
     state =
@@ -5150,6 +5157,7 @@ defmodule Cure.Compiler.Parser do
       elab: elab,
       examples: examples,
       category: category,
+      contextual: contextual,
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
@@ -5380,7 +5388,9 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       # Stop at either tier verb — `becomes` (Tier-2 template) or `computed`
-      # (Tier-3 elab). Without stopping at `computed`, it (and `by`) would be
+      # (Tier-3 elab). `contextual` declares that proof is deferred until the
+      # use site supplies an enclosing type/context. Without stopping at
+      # `computed`, it (and `by`) would be
       # swallowed as literal segments and the verb branch could never fire.
       #
       # Deliberate restriction (parity with the pre-existing `becomes`
@@ -5392,7 +5402,7 @@ defmodule Cure.Compiler.Parser do
       # across the whole rule grammar, not just after a rule's segments —
       # same trade-off `becomes` already made alone. No known `.cure` source
       # relies on `computed` as a matched token.
-      %Token{type: :identifier, value: v} when v in ["becomes", "computed", "is"] ->
+      %Token{type: :identifier, value: v} when v in ["becomes", "computed", "is", "contextual"] ->
         {Enum.reverse(acc), state}
 
       %Token{type: type} when type in [:newline, :dedent, :eof] ->

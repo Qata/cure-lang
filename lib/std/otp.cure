@@ -9,6 +9,21 @@ mod Std.Otp
     syntax beam_ops self becomes Std.Otp.self()
       example beam_ops self expands Std.Otp.self()
 
+    syntax beam_ops tell <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)
+    syntax beam_ops send <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)
+    syntax beam_ops call <server: Code> <request: Code> contextual becomes Std.Otp.call(server, request)
+    syntax beam_ops cast <server: Code> <request: Code> contextual becomes Std.Otp.cast(server, request)
+    syntax beam_ops spawn <thunk: Code> contextual becomes Std.Otp.spawn(thunk)
+    syntax beam_ops spawn_link <thunk: Code> contextual becomes Std.Otp.spawn_link(thunk)
+    syntax beam_ops start_link <module: Code> <args: Code> contextual becomes Std.Otp.start_link(module, args)
+    syntax beam_ops stop <pid: Code> contextual becomes Std.Otp.stop(pid)
+    syntax beam_ops send_after <delay: Code> <pid: Code> <message: Code> contextual becomes Std.Otp.send_after(delay, pid, message)
+    syntax beam_ops cancel_timer <ref: Code> contextual becomes Std.Otp.cancel_timer(ref)
+    syntax beam_ops monitor <kind: Code> <pid: Code> contextual becomes Std.Otp.monitor(kind, pid)
+    syntax beam_ops demonitor <ref: Code> contextual becomes Std.Otp.demonitor(ref)
+    syntax beam_ops link <pid: Code> contextual becomes Std.Otp.link(pid)
+    syntax beam_ops unlink <pid: Code> contextual becomes Std.Otp.unlink(pid)
+
   ## The typed BEAM process algebra — the sanctioned concurrency surface.
   ##
   ## Two typed handles, both opaque phantoms erased to a raw `erlang:pid()` at

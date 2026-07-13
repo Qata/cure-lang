@@ -1233,7 +1233,8 @@ defmodule Cure.Compiler.Printer do
   defp macro_rule_lines(%{kind: kind, keyword: keyword, segments: segments, template: template} = rule, depth, indent)
        when kind in [:syntax, :computed] do
     verb = if kind == :computed, do: "computed by", else: "becomes"
-    head = "syntax #{keyword} #{macro_segments_to_string(segments)} #{verb} #{render(template, depth, indent)}"
+    context = if rule[:contextual], do: " contextual", else: ""
+    head = "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(template, depth, indent)}"
 
     examples =
       rule

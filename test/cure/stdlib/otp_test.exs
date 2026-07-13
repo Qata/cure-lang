@@ -95,6 +95,32 @@ defmodule Cure.Stdlib.OtpTest do
     refute inspect(ast) =~ "__otp_container"
   end
 
+  test "beam_ops expands every initial operation to ordinary algebra calls" do
+    source = """
+    mod App
+      use Std.Otp
+      type Cmd = Inc | Dec
+      fn send_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops tell p Inc()
+      fn call_it(s: GenServer(Cmd, Int)) -> Effect(Int) = beam_ops call s Dec()
+      fn cast_it(s: GenServer(Cmd, Int)) -> Effect(Unit) = beam_ops cast s Inc()
+      fn stop_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops stop p
+    """
+
+    assert {:ok, _} = Program.elaborate(source)
+    refute inspect(Cure.Compiler.parse_source(source, emit_events: false)) =~ "__otp_container"
+  end
+
+  test "beam_ops rejects a message with the wrong typed target" do
+    source = """
+    mod App
+      use Std.Otp
+      type Cmd = Inc | Dec
+      fn send_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops tell p 5
+    """
+
+    assert {:error, _} = Program.elaborate(source)
+  end
+
   describe "Pid(m) — typed one-way messaging" do
     test "a well-typed message is accepted" do
       assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    tell(p, Inc())\n")

@@ -332,7 +332,7 @@ defmodule Cure.Compiler.MacroFuzz do
               keyword: rule.keyword,
               hole_kinds: rule.segments |> segment_holes() |> Enum.map(& &1.kind),
               draws: Keyword.get(opts, :draws, @default_draws),
-              status: status
+              status: if(rule[:contextual], do: :deferred, else: status)
             }
           end
 
@@ -346,7 +346,7 @@ defmodule Cure.Compiler.MacroFuzz do
     seed = Keyword.get(opts, :seed, 1)
 
     rules
-    |> Enum.filter(&(&1[:kind] in [:syntax, :computed]))
+    |> Enum.filter(&(&1[:kind] in [:syntax, :computed] and not &1[:contextual]))
     |> Enum.reduce_while(:ok, fn rule, :ok ->
       case prove_rule(rule, rules, env, draws, seed) do
         :ok -> {:cont, :ok}
