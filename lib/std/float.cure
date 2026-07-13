@@ -5,4 +5,5 @@ mod Std.Float
   ## `Float` is an irreducible BEAM float — not an inductive, not a postulate.
   ## Floating-point operators (`+.`-style builtin ops) act on it; this module
   ## gives the type itself a visible, documented home.
-  @builtin(:float) primitive Float
+  @builtin(:float)
+  primitive Float

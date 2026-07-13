@@ -894,6 +894,17 @@ defmodule Cure.Project do
     end
   end
 
+  defp find_app_containers({:lift_module, meta, _body}, file) when is_list(meta) do
+    if Keyword.get(meta, :behaviour) == :application do
+      case Keyword.get(meta, :module) do
+        "Cure.App." <> name -> [%{file: file, name: name, meta: meta}]
+        _ -> []
+      end
+    else
+      []
+    end
+  end
+
   defp find_app_containers({:block, _, children}, file) when is_list(children) do
     Enum.flat_map(children, &find_app_containers(&1, file))
   end

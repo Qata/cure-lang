@@ -40,13 +40,16 @@ mod Std.Equivalent
     reflexive : Equivalent(a, w, w)
 
   ## Symmetry: from `x = y` derive `y = x`.
-  fn sym({a: Type}, {x: a}, {y: a}, p: Equivalent(a, x, y)) -> Equivalent(a, y, x) = match p
-    reflexive() -> reflexive(x)
+  fn sym({a: Type}, {x: a}, {y: a}, p: Equivalent(a, x, y)) -> Equivalent(a, y, x) = 
+    match p
+      reflexive() -> reflexive(x)
 
   ## Transitivity: from `x = y` and `y = z` derive `x = z`.
-  fn trans({a: Type}, {x: a}, {y: a}, {z: a}, p: Equivalent(a, x, y), q: Equivalent(a, y, z)) -> Equivalent(a, x, z) = match p
-    reflexive() -> q
+  fn trans({a: Type}, {x: a}, {y: a}, {z: a}, p: Equivalent(a, x, y), q: Equivalent(a, y, z)) -> Equivalent(a, x, z) = 
+    match p
+      reflexive() -> q
 
   ## Congruence: equal inputs give equal `f`-outputs.
-  fn cong({a: Type}, {b: Type}, {x: a}, {y: a}, f: (a) -> b, p: Equivalent(a, x, y)) -> Equivalent(b, f(x), f(y)) = match p
-    reflexive() -> reflexive(f(x))
+  fn cong({a: Type}, {b: Type}, {x: a}, {y: a}, f: (a) -> b, p: Equivalent(a, x, y)) -> Equivalent(b, f(x), f(y)) = 
+    match p
+      reflexive() -> reflexive(f(x))

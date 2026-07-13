@@ -881,7 +881,28 @@ defmodule Cure.Compiler.Parser do
       {:macro_hole, module_hole} ->
         with {:ok, module_ast} <- Map.fetch(bindings, module_hole),
              module_name when is_binary(module_name) <- module_name_from_ast(module_ast) do
-          meta = subst_lift_module_meta(meta, bindings, state, module_hole, module_name)
+          meta = subst_lift_module_meta(meta, bindings, state, {:macro_hole, module_hole}, module_hole, module_name)
+          {:lift_module, meta, Enum.map(children, &subst_holes(&1, bindings, state))}
+        else
+          _ ->
+            {:lift_module, subst_holes_meta(meta, bindings, state),
+             Enum.map(children, &subst_holes(&1, bindings, state))}
+        end
+
+      {:macro_path_hole, prefix, module_hole} ->
+        with {:ok, module_ast} <- Map.fetch(bindings, module_hole),
+             captured_name when is_binary(captured_name) <- module_name_from_ast(module_ast),
+             module_name <- qualify_module_name(prefix, captured_name) do
+          meta =
+            subst_lift_module_meta(
+              meta,
+              bindings,
+              state,
+              {:macro_path_hole, prefix, module_hole},
+              module_hole,
+              module_name
+            )
+
           {:lift_module, meta, Enum.map(children, &subst_holes(&1, bindings, state))}
         else
           _ ->
@@ -936,9 +957,9 @@ defmodule Cure.Compiler.Parser do
 
   defp subst_holes_meta(meta, _bindings, _state), do: meta
 
-  defp subst_lift_module_meta(meta, bindings, state, module_hole, module_name) do
+  defp subst_lift_module_meta(meta, bindings, state, module_marker, module_hole, module_name) do
     Enum.map(meta, fn
-      {:module, {:macro_hole, ^module_hole}} ->
+      {:module, ^module_marker} ->
         {:module, module_name}
 
       {:declarations, declarations} ->
@@ -1046,6 +1067,12 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp module_name_from_ast(other), do: other
+
+  defp qualify_module_name(prefix, captured_name) do
+    if String.starts_with?(captured_name, "Cure."),
+      do: captured_name,
+      else: prefix <> "." <> captured_name
+  end
 
   # -- Program (top-level sequence) ------------------------------------------
 
@@ -5054,7 +5081,14 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     state = advance(state)
     {name, state} = parse_dotted_name(state)
-    name = if macro_module_hole?(name), do: {:macro_hole, name}, else: name
+
+    name =
+      case macro_module_marker(name) do
+        {:single, hole} -> {:macro_hole, hole}
+        {:path, prefix, hole} -> {:macro_path_hole, prefix, hole}
+        :none -> name
+      end
+
     state = skip_newlines(state)
 
     {behaviour, callbacks, declarations, state} =
@@ -5083,10 +5117,24 @@ defmodule Cure.Compiler.Parser do
   # identifier hole (`lift module name`). Ordinary lifted modules require a
   # validated `Cure.X` name, so this marker cannot collide with a valid source
   # module name and keeps the hole visible until macro substitution.
-  defp macro_module_hole?(name) when is_binary(name),
-    do: Regex.match?(~r/^[a-z][A-Za-z0-9_]*$/, name)
+  defp macro_module_marker(name) when is_binary(name) do
+    case String.split(name, ".") do
+      [hole] ->
+        if Regex.match?(~r/^[a-z][A-Za-z0-9_]*$/, hole), do: {:single, hole}, else: :none
 
-  defp macro_module_hole?(_name), do: false
+      segments when length(segments) > 1 ->
+        hole = List.last(segments)
+
+        if hole =~ ~r/^[a-z][A-Za-z0-9_]*$/,
+          do: {:path, Enum.drop(segments, -1) |> Enum.join("."), hole},
+          else: :none
+
+      _ ->
+        :none
+    end
+  end
+
+  defp macro_module_marker(_name), do: :none
 
   defp parse_lift_module_block(state, behaviour, callbacks, declarations) do
     state = skip_newlines(state)
