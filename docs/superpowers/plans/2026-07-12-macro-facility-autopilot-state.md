@@ -1242,6 +1242,11 @@ starts a generated actor under a generated supervisor (`27b3554d`,
 sources now emit the lifted unit as the primary
 module, imported standard-library calls route remotely through the common
 emitter, and the printer round-trips transparent lift syntax.
+The current child-spec argument floor intentionally remains `List(Atom)`: the
+language has no general ordinary-value `Any` type, so widening this field would
+be an unsound workaround rather than a typed raw-term boundary. A first-class
+raw BEAM term boundary is still required before arbitrary typed startup args
+can be admitted.
 
 Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
 `lift module`. Validate child specs, strategy, intensity, period, restart,
