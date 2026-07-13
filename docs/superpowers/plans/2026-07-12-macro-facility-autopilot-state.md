@@ -1301,7 +1301,10 @@ body reparsed under application callback context (`7b13fe7d`). Payload
 preservation, multiple phase declarations, and effectful lifecycle-body
 context remain required. Supervisor child startup now also has a checked
 `child_with_args/6` path whose MFA arguments are `List(Atom)`
-(`12f483b8`).
+(`12f483b8`). Delayed callback bodies now resolve recursively through nested
+AST nodes, phase callbacks guard on their declared phase, and app root payloads
+flow through a polymorphic startup wrapper (`77bee942`). Multiple phase
+declarations and effect sequencing remain required.
 
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
