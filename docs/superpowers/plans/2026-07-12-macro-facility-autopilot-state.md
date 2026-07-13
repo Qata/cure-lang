@@ -1271,7 +1271,10 @@ module-local `State` alias shared by `init/1` and the event callback data
 slot; ordinary elaboration rejects mismatched callback results. The
 bootstrap and typed floors are tested structurally and through the generic
 Unix runtime path. Transition-table lowering, payload preservation,
-event/state derivation, and callback-context typing remain required.
+event/state derivation, and callback-context typing remain required. The FSM
+floor now also has explicit `init` and `handle_event` callback-body forms with
+delayed single-expression bodies and ordinary transition-result checking
+(`43a0b947`).
 
 Define `fsm` in `lib/std/fsm.cure`. Preserve transition-table and callback
 mode compatibility, derive shared message/state information, emit the
