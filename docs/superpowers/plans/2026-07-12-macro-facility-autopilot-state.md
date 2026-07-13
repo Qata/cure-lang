@@ -1301,7 +1301,15 @@ delayed single-expression bodies and ordinary transition-result checking
 Define `fsm` in `lib/std/fsm.cure`. Preserve transition-table and callback
 mode compatibility, derive shared message/state information, emit the
 appropriate closed behavior callbacks, and express dispatch and helpers as
-ordinary declarations.
+ordinary declarations. The first transition-table slice is now language-owned:
+`Transition` is a checked ADT, `transition` rows are transparent syntax, and
+`fsm ... transitions [...]` dispatches through a polymorphic recursive Cure
+function (`7e2f033b`, 51 focused object tests). Full callback event/state
+derivation, payload-preserving transition actions, and lifecycle vocabulary
+remain open. A direct tuple-destructuring implementation was rejected by the
+existing elaborator with `:escaping_variable`; the supported path intentionally
+uses the checked ADT rather than hiding that language gap behind a compiler
+special case.
 
 #### Phase 4d — `app`
 
