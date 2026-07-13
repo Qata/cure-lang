@@ -236,6 +236,17 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "app phase syntax sequences a beam operation before its erased atom result" do
+    source = """
+    app Cure.EffectfulPhaseApp phase :warm_cache
+      let pid: Pid(Atom) = beam_ops self
+      :ok
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :start_phase, [:warm_cache, :normal, []]) == :ok
+  end
+
   test "app phase syntax rejects multi-expression phase bodies" do
     source = """
     app Cure.InvalidPhaseApp phase :warm_cache

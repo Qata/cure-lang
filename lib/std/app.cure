@@ -8,9 +8,10 @@ mod Std.App
       use Std.Otp
       use Std.App
       behaviour application
+      typealias PhaseResult = Effect(Atom)
       callback start(kind: t, args: a) returns Tuple(Atom, Atom) = %[:ok, :undefined]
       callback stop(state: s) returns Atom = :ok
-      callback start_phase(requested: Atom, kind: t, args: a) returns Atom = match requested == phase
+      callback start_phase(requested: Atom, kind: t, args: a) returns PhaseResult = match requested == phase
         true -> phase_body
         false -> :ok
 

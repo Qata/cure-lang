@@ -1658,9 +1658,15 @@ defmodule Cure.Elab.Elaborator do
   # (shifted past the fresh Bool binder). The kernel re-checks the assembled
   # `:case`, so nothing here is trusted.
   def elaborate_expr_checked({:conditional, _meta, [c, t, e]}, expected_core, names, ctx, env) do
+    branch = fn expr ->
+      if effect_goal?(expected_core, ctx),
+        do: elaborate_effect_branch(expr, expected_core, names, ctx, env),
+        else: elaborate_expr_checked(expr, expected_core, names, ctx, env)
+    end
+
     with {:ok, c_core} <- elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env),
-         {:ok, t_core} <- elaborate_expr_checked(t, expected_core, names, ctx, env),
-         {:ok, e_core} <- elaborate_expr_checked(e, expected_core, names, ctx, env) do
+         {:ok, t_core} <- branch.(t),
+         {:ok, e_core} <- branch.(e) do
       {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
     end
   end
@@ -3833,8 +3839,8 @@ defmodule Cure.Elab.Elaborator do
           prim == :bool and bool_exhaustive?(pats) ->
             {tb, fb} = bool_bodies(pats)
 
-            with {:ok, t_core} <- elaborate_expr_checked(tb, expected, names, ctx, env),
-                 {:ok, f_core} <- elaborate_expr_checked(fb, expected, names, ctx, env) do
+            with {:ok, t_core} <- elaborate_match_body(tb, expected, names, ctx, env),
+                 {:ok, f_core} <- elaborate_match_body(fb, expected, names, ctx, env) do
               {:ok, bool_case(scrut_term, expected, t_core, f_core, ctx)}
             end
 
@@ -3898,6 +3904,12 @@ defmodule Cure.Elab.Elaborator do
   defp bool_bodies([{p1, b1}, {_p2, b2}]),
     do: if(bool_pat_value(p1) == true, do: {b1, b2}, else: {b2, b1})
 
+  defp elaborate_match_body(body, expected, names, ctx, env) do
+    if effect_goal?(expected, ctx),
+      do: elaborate_effect_branch(body, expected, names, ctx, env),
+      else: elaborate_expr_checked(body, expected, names, ctx, env)
+  end
+
   # A literal chain is zero or more literal arms of the scrutinee's primitive type
   # followed by a single variable/wildcard catch-all.
   defp literal_chain?(pats, prim) when length(pats) >= 1 do
@@ -3933,13 +3945,13 @@ defmodule Cure.Elab.Elaborator do
   defp literal_chain(scrut_expr, _scrut_term, _scrut_type, _prim, [{pat, body}], expected, names, ctx, env) do
     case pat do
       {:variable, _m, "_"} ->
-        elaborate_expr_checked(body, expected, names, ctx, env)
+        elaborate_match_body(body, expected, names, ctx, env)
 
       {:variable, _m, name} ->
         cond do
           not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
           binds_any?(body, [name]) -> {:error, {:unsupported_pattern, :shadowed_literal_catchall}}
-          true -> elaborate_expr_checked(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
+          true -> elaborate_match_body(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
         end
     end
   end
@@ -3962,7 +3974,7 @@ defmodule Cure.Elab.Elaborator do
          ctx,
          env
        ) do
-    with {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
+    with {:ok, body_core} <- elaborate_match_body(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
       test = eq_test_core(prim, scrut_term, lit_core(v, prim), scrut_type, ctx)
@@ -3985,7 +3997,7 @@ defmodule Cure.Elab.Elaborator do
          env
        ) do
     with {:ok, x_core, _x_type} <- elaborate_expr_typed({:variable, [], name}, names, ctx, env),
-         {:ok, body_core} <- elaborate_expr_checked(body, expected, names, ctx, env),
+         {:ok, body_core} <- elaborate_match_body(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
       test = eq_test_core(prim, scrut_term, x_core, scrut_type, ctx)
@@ -5054,48 +5066,60 @@ defmodule Cure.Elab.Elaborator do
   # A nested `match` arm body is a checking-mode expression: `expected` is the
   # (index-refined) result type for this branch, exactly what its motive needs.
   defp elaborate_branch_body({:pattern_match, _meta, _children} = expr, expected, names, ctx, env),
-    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+    do:
+      if(effect_goal?(expected, ctx),
+        do: elaborate_effect_branch(expr, expected, names, ctx, env),
+        else: elaborate_expr_checked(expr, expected, names, ctx, env)
+      )
 
   # A nested `with` arm body: like a nested `match` body, a checking-mode
   # expression whose `expected` is this branch's (index/value-refined) goal —
   # route to the checked dispatcher so with-abstractions nest and compose.
   defp elaborate_branch_body({:with_abs, _meta, _children} = expr, expected, names, ctx, env),
-    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+    do:
+      if(effect_goal?(expected, ctx),
+        do: elaborate_effect_branch(expr, expected, names, ctx, env),
+        else: elaborate_expr_checked(expr, expected, names, ctx, env)
+      )
 
   defp elaborate_branch_body({:function_call, meta, _args} = expr, expected, names, ctx, env) do
-    name = Keyword.get(meta, :name)
+    if effect_goal?(expected, ctx) do
+      elaborate_effect_branch(expr, expected, names, ctx, env)
+    else
+      name = Keyword.get(meta, :name)
 
-    cond do
-      name == "reflexive" ->
-        elaborate_expr_checked(expr, expected, names, ctx, env)
+      cond do
+        name == "reflexive" ->
+          elaborate_expr_checked(expr, expected, names, ctx, env)
 
-      is_binary(name) and Inductive.get_ctor(env, String.to_atom(name)) != nil ->
-        # A constructor branch body. Infer FIRST — this preserves every case that
-        # already worked, including a reconstruction whose indices the present
-        # arguments determine and the carried-index-Eq transport (which wraps an
-        # inferred body). ONLY when inference cannot pin the erased indices —
-        # `prim()`/`seq(l,r)` reconstructed at a refined index with no present
-        # argument to solve `av`/`bv` from (`:unsolved_metavariables`) — retry in
-        # checking mode, letting the branch's expected type pin them.
-        case elaborate_expr_typed(expr, names, ctx, env) do
-          {:ok, term, _type} -> {:ok, term}
-          {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
-          {:error, _} = err -> err
-        end
+        is_binary(name) and Inductive.get_ctor(env, String.to_atom(name)) != nil ->
+          # A constructor branch body. Infer FIRST — this preserves every case that
+          # already worked, including a reconstruction whose indices the present
+          # arguments determine and the carried-index-Eq transport (which wraps an
+          # inferred body). ONLY when inference cannot pin the erased indices —
+          # `prim()`/`seq(l,r)` reconstructed at a refined index with no present
+          # argument to solve `av`/`bv` from (`:unsolved_metavariables`) — retry in
+          # checking mode, letting the branch's expected type pin them.
+          case elaborate_expr_typed(expr, names, ctx, env) do
+            {:ok, term, _type} -> {:ok, term}
+            {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+            {:error, _} = err -> err
+          end
 
-      true ->
-        # An ordinary (non-constructor) function-call arm body. Infer FIRST to
-        # preserve every case that already worked; ONLY when inference cannot
-        # solve the call's result-type metavariables — a polymorphic nullary
-        # function like `empty() -> Iter(t)` whose `t` has no argument to fix it
-        # — retry in checking mode, letting the branch's expected type pin them
-        # (mirrors the constructor-arm path above; Idris checks arm bodies
-        # against the match's expected type).
-        case elaborate_expr_typed(expr, names, ctx, env) do
-          {:ok, term, _type} -> {:ok, term}
-          {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
-          {:error, _} = err -> err
-        end
+        true ->
+          # An ordinary (non-constructor) function-call arm body. Infer FIRST to
+          # preserve every case that already worked; ONLY when inference cannot
+          # solve the call's result-type metavariables — a polymorphic nullary
+          # function like `empty() -> Iter(t)` whose `t` has no argument to fix it
+          # — retry in checking mode, letting the branch's expected type pin them
+          # (mirrors the constructor-arm path above; Idris checks arm bodies
+          # against the match's expected type).
+          case elaborate_expr_typed(expr, names, ctx, env) do
+            {:ok, term, _type} -> {:ok, term}
+            {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+            {:error, _} = err -> err
+          end
+      end
     end
   end
 
@@ -5126,8 +5150,68 @@ defmodule Cure.Elab.Elaborator do
   # a sub-union arm's body has the SUB-union's type while the motive demands the wide
   # one, and the kernel rejects the branch with `:branch_type`.
   defp elaborate_branch_body(expr, expected, names, ctx, env) do
-    with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
-      {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+    if effect_goal?(expected, ctx) do
+      elaborate_effect_branch(expr, expected, names, ctx, env)
+    else
+      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+        {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+      end
+    end
+  end
+
+  defp effect_goal?(expected, ctx) do
+    value = Eval.eval(expected, Context.env(ctx))
+    whnf = Normalise.whnf_value(value, Context.signature(ctx))
+    match?({:veffect_type, _}, whnf)
+  end
+
+  # Check a branch against its goal, lifting a pure value into `Effect(T)` when
+  # direct elaboration shows that it is pure. Direct checking comes first: it
+  # lets an expected `Effect(Pid(m))` solve the concrete process-index implicit
+  # on `beam_ops self` instead of attempting unconstrained inference.
+  defp elaborate_effect_branch(expr, expected, names, ctx, env) do
+    if effect_goal?(expected, ctx) do
+      case expr do
+        {:pattern_match, _, _} ->
+          elaborate_expr_checked(expr, expected, names, ctx, env)
+
+        {:with_abs, _, _} ->
+          elaborate_expr_checked(expr, expected, names, ctx, env)
+
+        {:conditional, _, _} ->
+          elaborate_expr_checked(expr, expected, names, ctx, env)
+
+        _ ->
+          case elaborate_expr_checked(expr, expected, names, ctx, env) do
+            {:ok, _term} = ok ->
+              ok
+
+            {:error, checked_error} ->
+              case elaborate_expr_typed(expr, names, ctx, env) do
+                {:ok, _term, {:veffect_type, _}} ->
+                  {:error, checked_error}
+
+                {:ok, _term, type} ->
+                  expected_value = Eval.eval(expected, Context.env(ctx))
+                  {:veffect_type, result_value} = Normalise.whnf_value(expected_value, Context.signature(ctx))
+
+                  result_type = Quote.reify(result_value, Context.length(ctx), Context.signature(ctx))
+
+                  with {:ok, pure_term} <- elaborate_expr_checked(expr, result_type, names, ctx, env) do
+                    {:ok, {:effect_pure, maybe_inject_union(pure_term, type, result_type, ctx, env)}}
+                  else
+                    {:error, _} -> {:error, checked_error}
+                  end
+
+                {:error, _} ->
+                  {:error, checked_error}
+              end
+          end
+      end
+    else
+      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+        {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+      end
     end
   end
 
@@ -5303,9 +5387,36 @@ defmodule Cure.Elab.Elaborator do
   # This is the general escape from the check-only residual.
   defp let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env) do
     with {:ok, ty_core} <- elaborate_type(ann, names, env),
-         {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
-      ty_value = Eval.eval(ty_core, Context.env(ctx))
-      bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
+         ty_value = Eval.eval(ty_core, Context.env(ctx)) do
+      case Normalise.whnf_value(ty_value, Context.signature(ctx)) do
+        {:veffect_type, _} ->
+          with {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+            bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
+          end
+
+        _ ->
+          effect_type = {:effect_type, ty_core}
+
+          case elaborate_expr_checked(rhs, effect_type, names, ctx, env) do
+            {:ok, rhs_core} ->
+              effectful_let_bind(
+                name,
+                rhs_core,
+                ty_value,
+                grade,
+                rest,
+                expected_core,
+                names,
+                ctx,
+                env
+              )
+
+            {:error, _} ->
+              with {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+                bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
+              end
+          end
+      end
     end
   end
 
