@@ -1214,10 +1214,13 @@ before this sub-phase is complete.
 
 **STATUS: IN PROGRESS (2026-07-13).** The public `fsm` syntax now expands to
 an ordinary lifted `GenStatem` module and starts through the typed
-`Std.Otp.start_statem` wrapper. The bootstrap floor is tested structurally and
-through the generic Unix runtime path. Transition-table lowering, payload
-preservation, event/state derivation, and callback-context typing remain
-required.
+`Std.Otp.start_statem` wrapper. In addition to the bootstrap form, the
+standard-library macro accepts an explicit `state <Type>` clause and emits a
+module-local `State` alias shared by `init/1` and the event callback data
+slot; ordinary elaboration rejects mismatched callback results. The
+bootstrap and typed floors are tested structurally and through the generic
+Unix runtime path. Transition-table lowering, payload preservation,
+event/state derivation, and callback-context typing remain required.
 
 Define `fsm` in `lib/std/fsm.cure`. Preserve transition-table and callback
 mode compatibility, derive shared message/state information, emit the

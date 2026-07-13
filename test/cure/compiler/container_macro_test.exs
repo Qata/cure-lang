@@ -89,6 +89,29 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert match?({:ok, _}, apply(module, :start_link, []))
   end
 
+  test "typed fsm syntax shares one data type across callbacks" do
+    source = "fsm Cure.TypedFsm state Int\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.TypedFsm"
+    assert apply(module, :callback_mode, []) == :handle_event_function
+    assert apply(module, :init, [7]) == {:ok, :initial, 7}
+    assert apply(module, :handle_event, [:info, :tick, :red, 7]) == :keep_state_and_data
+  end
+
+  test "typed fsm data annotations reject mismatched callback bodies" do
+    source = """
+    macro TypedFsm
+      syntax typed_fsm <name: ModuleName> state <state_type: Type> becomes lift module name
+        behaviour gen_statem
+        typealias State = state_type
+        callback init(initial: State) returns Tuple(Atom, Atom, State) = %[:ok, :initial, true]
+    typed_fsm Cure.InvalidTypedFsm state Int
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "supervisor payload syntax expands to a zero-argument starter" do
     assert {:ok, module} =
              Cure.Compiler.compile_and_load("sup Cure.PayloadSup with 0\n", emit_events: false)
