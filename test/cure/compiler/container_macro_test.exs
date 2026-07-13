@@ -299,6 +299,31 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
              {:worker, {:worker_module, :start_link, []}, :transient, 1000, :worker, [:worker_module]}
   end
 
+  test "supervisor child startup arguments use the checked atom list shape" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> ChildSpec =
+        Std.Supervisor.child_with_args(:worker_module, :worker, [:boot], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert apply(module, :build, []) ==
+             {:worker, {:worker_module, :start_link, [:boot]}, :permanent, 1000, :worker, [:worker_module]}
+  end
+
+  test "supervisor child startup rejects non-atom argument lists" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> ChildSpec =
+        Std.Supervisor.child_with_args(:worker_module, :worker, [1], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "supervisor child policies reject arbitrary restart atoms" do
     source = """
     mod Main

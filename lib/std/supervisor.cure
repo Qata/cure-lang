@@ -73,8 +73,11 @@ mod Std.Supervisor
       Worker() -> :worker
       Supervisor() -> :supervisor
 
+  fn child_with_args(module: Atom, id: Atom, args: List(Atom), restart: Restart, shutdown: Shutdown, child_type: ChildType) -> ChildSpec =
+    %[id, %[module, :start_link, args], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
+
   fn child_with(module: Atom, id: Atom, restart: Restart, shutdown: Shutdown, child_type: ChildType) -> ChildSpec =
-    %[id, %[module, :start_link, []], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
+    child_with_args(module, id, [], restart, shutdown, child_type)
 
   fn child(module: Atom, id: Atom) -> ChildSpec =
     child_with(module, id, permanent(), shutdown_after(5000), worker())
