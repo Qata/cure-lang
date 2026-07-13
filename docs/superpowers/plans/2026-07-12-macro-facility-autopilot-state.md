@@ -1284,7 +1284,10 @@ by application start and stop; ordinary elaboration rejects mismatched start
 results. Root supervisor startup is now transparent: the `root` form emits an
 ordinary `start/2` callback that calls the checked `Std.Supervisor.start/1`
 operation, with a compiler regression proving the generated callback is
-available through the common lift/emission path (`66302bb2`). A phase form now
+available through the common lift/emission path (`66302bb2`). Supervisor
+intensity, period, and shutdown timeout values now use `Nat`, so negative
+values cannot pass ordinary elaboration while retaining erased BEAM integer
+representation (`136bb396`). A phase form now
 emits an ordinary `start_phase/3` callback with a delayed, single-expression
 body reparsed under application callback context (`7b13fe7d`). Payload
 preservation, multiple phase declarations, and effectful lifecycle-body
