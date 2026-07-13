@@ -638,6 +638,17 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
              {:worker, {:worker_module, :start_link, [1, :boot]}, :permanent, 1000, :worker, [:worker_module]}
   end
 
+  test "raw child_spec syntax requires explicit raw arguments" do
+    source = "sup Cure.RawArgRoot children [child_spec Cure.ArgWorker :worker raw with [raw_arg(1), raw_arg(:boot)]]\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, {_strategy, [child]}} = apply(module, :init, [[]])
+
+    assert child ==
+             {:worker, {:"Cure.ArgWorker", :start_link, [1, :boot]}, :permanent, 5000, :worker,
+              [:"Cure.ArgWorker"]}
+  end
+
   test "supervisor child policies reject arbitrary restart atoms" do
     source = """
     mod Main

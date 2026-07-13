@@ -5300,7 +5300,13 @@ defmodule Cure.Compiler.Parser do
       return_type: return_type,
       body: body,
       line: token.line,
-      callback_context: %{behaviour: behaviour, callback: name, arity: length(params)}
+      callback_context: %{
+        behaviour: behaviour,
+        callback: name,
+        arity: length(params),
+        params: params,
+        return_type: return_type
+      }
     }
 
     {callback, state}

@@ -28,6 +28,9 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
              %{behaviour: :GenServer, callback: :handle_info, arity: 2}
            ]
 
+    assert %{params: [{:param, _, _}], return_type: nil} = hd(meta[:callbacks]).callback_context
+    assert %{params: [{:param, _, _}, {:param, _, _}], return_type: nil} = List.last(meta[:callbacks]).callback_context
+
     assert {:variable, _, "arg"} = hd(meta[:callbacks]).body
 
     assert {:ok, %{kind: :quoted_module, behaviour: :GenServer}} =
