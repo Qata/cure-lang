@@ -433,7 +433,7 @@ defmodule Cure.Compiler.MacroFuzz do
             :ok
 
           {:error, reason} ->
-             {:error,
+            {:error,
              {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
         end
 
@@ -444,8 +444,7 @@ defmodule Cure.Compiler.MacroFuzz do
 
           {:error, reason} ->
             {:error,
-             {:expansion_ill_typed,
-              %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+             {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
         end
 
       _ ->
