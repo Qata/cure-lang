@@ -318,6 +318,7 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
     type_params = Keyword.get(meta, :type_params, [])
+
     params =
       Enum.map(type_params, fn p ->
         {:param, [type: {:variable, [scope: :local], "Type"}], p}
@@ -1876,12 +1877,12 @@ defmodule Cure.Elab.Declarations do
         {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
         {:ok, {:data, key, params, indices}}
 
-          # An applied BOUND variable — e.g. a higher-order parameter used as
-          # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
-          # the head against the de Bruijn scope; a local binder shadows a global,
-          # so this is checked first. Without it `F(n)` became a dangling
-          # `{:global, :F}`, and the call site's implicit substitution could never
-          # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+      # An applied BOUND variable — e.g. a higher-order parameter used as
+      # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+      # the head against the de Bruijn scope; a local binder shadows a global,
+      # so this is checked first. Without it `F(n)` became a dangling
+      # `{:global, :F}`, and the call site's implicit substitution could never
+      # turn `F` into a solvable metavariable (ledger #10 prerequisite).
       idx = Enum.find_index(scope, &(&1 == raw_name)) ->
         {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
 

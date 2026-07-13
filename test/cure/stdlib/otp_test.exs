@@ -54,6 +54,7 @@ defmodule Cure.Stdlib.OtpTest do
           :whereis
         ] do
       assert op in locals
+
       refute match?({:extern, _}, Env.get_def(env, op).body),
              "#{op} must be an ordinary checked wrapper"
     end
