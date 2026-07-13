@@ -263,7 +263,8 @@ defmodule Cure.Compiler.LiftModule do
 
   defp validate_known_callbacks(behaviour, callbacks) do
     case Map.get(@callback_contracts, normalize_behaviour(behaviour)) do
-      nil -> :ok
+      nil ->
+        :ok
 
       contract ->
         case Enum.find(callbacks, fn callback -> Map.get(contract, callback.name) != callback.arity end) do
