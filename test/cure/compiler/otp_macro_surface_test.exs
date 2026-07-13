@@ -142,16 +142,14 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
             behaviour: :GenServer,
             callbacks: [%{name: :init, arity: 1}],
             declarations: [{:import, [source: "Cure.B"], []}]
-          ],
-          []},
+          ], []},
          {:lift_module,
           [
             module: "Cure.B",
             behaviour: :GenServer,
             callbacks: [%{name: :init, arity: 1}],
             declarations: [{:import, [source: "Cure.A"], []}]
-          ],
-          []}
+          ], []}
        ]}
 
     assert {:error, {:lifted_module_dependency_cycle, _}} = LiftModule.collect(ast)
