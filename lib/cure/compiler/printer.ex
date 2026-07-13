@@ -19,12 +19,11 @@ defmodule Cure.Compiler.Printer do
   # name must be re-emitted backtick-quoted (`` `not` ``) to round-trip, since
   # the lexer only yields them as an `:identifier` inside backticks.
   @reserved_words ~w(
-    mod fn let type typealias indexed indices rec proto impl fsm local use as
+    mod fn let type typealias indexed indices rec proto impl local use as
     interface implementation deriving
     match pickup if elif else then for do end
     in try catch finally throw return yield
     spawn send receive after
-    actor
     when where and or not
     true false nil
     extern proof

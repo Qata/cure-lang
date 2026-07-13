@@ -34,22 +34,15 @@ defmodule Cure.Compiler.Lexer do
 
   # -- Keywords (Section 3.3) ------------------------------------------------
 
-  # `sup` is intentionally *not* reserved so existing programs that
-  # use it as a field name or local variable (e.g. the superdiagonal
-  # row of a tridiagonal system) keep compiling. The parser recognises
-  # `sup Name` contextually at block-prefix position.
-  #
-  # `app` follows the same soft-keyword discipline as `sup`: programs
-  # that already use `app` as an identifier (e.g. a field called `app`
-  # or a local variable) keep compiling; the parser only considers the
-  # auto-preluded application macro at block-prefix position.
+  # Macro vocabularies are not lexer keywords. Standard-library and user
+  # macros are dispatched from the ordinary identifier path, so adding a
+  # language-level macro never requires changing this list.
   @keywords ~w(
-    mod fn let type typealias opaque primitive indexed indices rec proto impl fsm local use as
+    mod fn let type typealias opaque primitive indexed indices rec proto impl local use as
     interface implementation deriving
     match pickup if elif else then for do end
     in try catch finally throw return yield
     spawn send receive after
-    actor
     when where and or not
     band bor bxor bsl bsr bnot
     true false nil

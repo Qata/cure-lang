@@ -19,7 +19,7 @@ defmodule Cure.Compiler.LexerTest do
 
   describe "keywords" do
     test "all Cure keywords are recognized" do
-      keywords = ~w(mod fn let type rec proto impl fsm local use as
+      keywords = ~w(mod fn let type rec proto impl local use as
                     match if elif else then for do
                     in try catch finally throw return yield
                     spawn send receive after when where extern)

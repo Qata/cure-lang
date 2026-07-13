@@ -68,7 +68,6 @@ defmodule Cure.Compiler.Parser do
     :type,
     :use,
     :sup,
-    :app,
     :proto,
     :impl,
     :interface,
@@ -2268,20 +2267,6 @@ defmodule Cure.Compiler.Parser do
 
       :implementation ->
         parse_implementation(state)
-
-      keyword when keyword in [:actor, :fsm] ->
-        if container_macro_head?(state) do
-          keyword = Atom.to_string(keyword)
-          registry = if Map.has_key?(state.builtin_macros, keyword), do: state.builtin_macros, else: state.active_macros
-
-          if Map.has_key?(registry, keyword) do
-            parse_macro_use(state, keyword, registry)
-          else
-            {variable(token), advance(state)}
-          end
-        else
-          {variable(token), advance(state)}
-        end
 
       :use ->
         parse_use(state)
@@ -6544,7 +6529,7 @@ defmodule Cure.Compiler.Parser do
         false
 
       %Token{type: :keyword, value: value}
-      when value in [:fn, :local, :type, :proto, :impl, :mod, :use, :actor, :fsm, :app, :supervisor] ->
+      when value in [:fn, :local, :type, :proto, :impl, :mod, :use] ->
         false
 
       _ ->

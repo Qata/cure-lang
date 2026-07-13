@@ -1269,7 +1269,9 @@ resource documentation, migrating legacy examples and documentation tests,
 and proving that no OTP-specific compiler case remains while the standard
 library owns the vocabulary and lowering. `DepGraph` now discovers generic
 `lift_module` units and no longer classifies `:actor`, `:fsm`, `:supervisor`,
-or `:app` as compiler module kinds. The in-repo OTP examples have been
+or `:app` as compiler module kinds. `actor` and `fsm` are also no longer
+lexer keywords; they use the same generic identifier macro dispatch as every
+user-defined vocabulary. The in-repo OTP examples have been
 migrated from the removed transition/handler parser to ordinary transparent
 macro bodies with explicit `Cure.*` module names; the remaining example work is
 to restore their full typed callback behavior on top of the planned algebra.
