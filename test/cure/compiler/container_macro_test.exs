@@ -213,6 +213,27 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "supervisor strategies lower from the closed Cure vocabulary" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(Std.Supervisor.one_for_all(), 2, 10)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :build, []) == {:one_for_all, 2, 10}
+  end
+
+  test "supervisor strategy conversion rejects arbitrary atoms" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(:one_for_all, 2, 10)
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "supervisor child constructors reject non-atom modules" do
     source = "sup Cure.InvalidChildRoot children [Std.Supervisor.child(1, :worker)]\n"
 
