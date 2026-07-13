@@ -10,12 +10,19 @@ defmodule Cure.Compiler.LiftModule do
   alias Cure.Compiler.OtpMacro
   alias Cure.Elab.{Emit, Program}
 
-  @type unit :: %{module: module(), forms: [tuple()], behaviour: atom()}
+  @type unit :: %{
+          module: module(),
+          forms: [tuple()],
+          behaviour: atom(),
+          dependencies: [String.t()],
+          source_provenance: map() | nil
+        }
 
   @spec collect(term()) :: {:ok, [map()]} | {:error, term()}
   def collect(ast) do
     with {:ok, requests} <- collect_node(ast, []),
-         :ok <- reject_duplicate_modules(requests) do
+         :ok <- reject_duplicate_modules(requests),
+         {:ok, requests} <- order_requests(requests) do
       {:ok, requests}
     end
   end
@@ -36,7 +43,9 @@ defmodule Cure.Compiler.LiftModule do
        %{
          module: Program.module_atom(module_ast),
          forms: add_behaviour_attribute(forms, behaviour),
-         behaviour: behaviour
+         behaviour: behaviour,
+         dependencies: Map.get(request, :dependencies, []),
+         source_provenance: Map.get(request, :source_provenance)
        }}
     else
       {:error, reason} -> {:error, {:lift_module_error, module, reason}}
@@ -79,6 +88,58 @@ defmodule Cure.Compiler.LiftModule do
     case names -- Enum.uniq(names) do
       [] -> :ok
       [name | _] -> {:error, {:duplicate_lifted_module, name}}
+    end
+  end
+
+  defp order_requests(requests) do
+    by_name = Map.new(requests, &{&1.module, &1})
+    names = Enum.map(requests, & &1.module)
+
+    Enum.reduce_while(names, {:ok, [], MapSet.new(), MapSet.new()}, fn name,
+                                                                        {:ok, ordered, visiting, visited} ->
+      case visit(name, by_name, ordered, visiting, visited) do
+        {:ok, ordered, visiting, visited} ->
+          {:cont, {:ok, ordered, visiting, visited}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, ordered, _visiting, _visited} -> {:ok, ordered}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp visit(name, by_name, ordered, visiting, visited) do
+    cond do
+      MapSet.member?(visited, name) ->
+        {:ok, ordered, visiting, visited}
+
+      MapSet.member?(visiting, name) ->
+        {:error, {:lifted_module_dependency_cycle, name}}
+
+      true ->
+        request = Map.fetch!(by_name, name)
+        visiting = MapSet.put(visiting, name)
+
+        case Enum.reduce_while(Map.get(request, :dependencies, []), {:ok, ordered, visiting, visited}, fn dependency,
+                                                                                                          {:ok, ordered, visiting, visited} = acc ->
+               if Map.has_key?(by_name, dependency) do
+                 case visit(dependency, by_name, ordered, visiting, visited) do
+                   {:ok, _ordered, _visiting, _visited} = result -> {:cont, result}
+                   {:error, _} = error -> {:halt, error}
+                 end
+               else
+                 {:cont, acc}
+               end
+             end) do
+          {:ok, ordered, visiting, visited} ->
+            {:ok, ordered ++ [request], MapSet.delete(visiting, name), MapSet.put(visited, name)}
+
+          {:error, _} = error ->
+            error
+        end
     end
   end
 

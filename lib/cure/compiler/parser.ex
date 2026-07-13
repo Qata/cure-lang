@@ -4847,6 +4847,7 @@ defmodule Cure.Compiler.Parser do
       behaviour: behaviour,
       callbacks: callbacks,
       declarations: declarations,
+      source_provenance: %{file: state.file, line: token.line, col: token.col},
       line: token.line,
       col: token.col
     ]

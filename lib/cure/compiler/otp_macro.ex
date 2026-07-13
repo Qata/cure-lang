@@ -85,25 +85,50 @@ defmodule Cure.Compiler.OtpMacro do
     end
   end
 
-  @spec lift_module(String.t(), atom(), [map()], [tuple()]) :: {:ok, map()} | {:error, term()}
+  @spec lift_module(String.t(), atom(), [map()], [tuple()], keyword()) :: {:ok, map()} | {:error, term()}
   def lift_module(name, behaviour, callbacks, declarations)
       when is_binary(name) and is_list(callbacks) and is_list(declarations) do
+    lift_module(name, behaviour, callbacks, declarations, [])
+  end
+
+  def lift_module(name, behaviour, callbacks, declarations, opts)
+      when is_binary(name) and is_list(callbacks) and is_list(declarations) and is_list(opts) do
+    imports = Keyword.get(opts, :imports, imports_from_declarations(declarations))
+    source_provenance = Keyword.get(opts, :source_provenance)
+
     with :ok <- validate_module_name(name),
          :ok <- validate_callbacks(behaviour, callbacks),
-         :ok <- validate_declarations(declarations) do
+         :ok <- validate_declarations(declarations),
+         :ok <- validate_imports(imports) do
       {:ok,
        %{
          kind: :quoted_module,
          module: name,
          behaviour: behaviour,
          callbacks: callbacks,
-         declarations: declarations
+         declarations: declarations,
+         imports: imports,
+         dependencies: imports,
+         source_provenance: source_provenance
        }}
     end
   end
 
   @doc "Lift a structured module request without compiling or loading it."
   @spec lift_module(map()) :: {:ok, map()} | {:error, term()}
+  def lift_module(%{
+        module: name,
+        behaviour: behaviour,
+        callbacks: callbacks,
+        declarations: declarations,
+        imports: imports,
+        source_provenance: source_provenance
+      }) do
+    lift_module(name, behaviour, callbacks, declarations,
+      imports: imports, source_provenance: source_provenance
+    )
+  end
+
   def lift_module(%{module: name, behaviour: behaviour, callbacks: callbacks, declarations: declarations}) do
     lift_module(name, behaviour, callbacks, declarations)
   end
@@ -149,7 +174,9 @@ defmodule Cure.Compiler.OtpMacro do
          behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
          callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
          declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []) do
-      lift_module(module, behaviour, callbacks, declarations)
+      opts = [source_provenance: Keyword.get(meta, :source_provenance)]
+      opts = if is_list(Keyword.get(meta, :imports)), do: [{:imports, meta[:imports]} | opts], else: opts
+      lift_module(module, behaviour, callbacks, declarations, opts)
     else
       _ -> {:error, :invalid_lift_module_ast}
     end
@@ -175,6 +202,19 @@ defmodule Cure.Compiler.OtpMacro do
 
   defp validate_declarations(declarations) do
     if Enum.all?(declarations, &is_tuple/1), do: :ok, else: {:error, :invalid_lift_declaration}
+  end
+
+  defp validate_imports(imports) do
+    if Enum.all?(imports, &is_binary/1), do: :ok, else: {:error, :invalid_lift_import}
+  end
+
+  defp imports_from_declarations(declarations) do
+    declarations
+    |> Enum.flat_map(fn
+      {:import, meta, _children} when is_list(meta) -> List.wrap(Keyword.get(meta, :source))
+      _ -> []
+    end)
+    |> Enum.uniq()
   end
 
   defp validate_strategy(strategy) when strategy in [:one_for_one, :one_for_all, :rest_for_one], do: :ok
