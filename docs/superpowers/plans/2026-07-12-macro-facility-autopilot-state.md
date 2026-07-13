@@ -1253,6 +1253,11 @@ the generated BEAM callback still returns the ordinary OTP tuple
 `call` form now accepts
 independent request and reply types and emits a checked `handle_call` callback
 (`12227f4c`).
+The actor floor now also accepts an explicit `messages <Type>` clause for
+`handle_info`, so the generated callback and nested algebra use a shared
+message type; an illegal send through that typed handle is rejected before
+emission (`8bacfbe2`). The FSM floor has the corresponding explicit `events
+<Type>` clause for `handle_event`, giving callbacks a concrete event type.
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
