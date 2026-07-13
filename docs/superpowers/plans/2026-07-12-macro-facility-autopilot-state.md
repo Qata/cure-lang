@@ -1354,6 +1354,10 @@ user-defined vocabulary. The in-repo OTP examples have been
 migrated from the removed transition/handler parser to ordinary transparent
 macro bodies with explicit `Cure.*` module names; the remaining example work is
 to restore their full typed callback behavior on top of the planned algebra.
+Project application discovery and LSP tooling now consume lifted-module
+metadata and generic AST nodes rather than retired OTP container shapes, and
+the LSP no longer synthesizes FSM transition or lifecycle symbols
+(`00943ad4`, 26 LSP tests and 11 project tests pass).
 
 Only after Phase 4 parity is proven:
 
@@ -1384,12 +1388,12 @@ release, or FSM-verifier error families; those are project/runtime concerns and
 must not remain compiler-owned vocabulary. Parser comments and helper names now
 describe generic macro dispatch and lifted-module collection. The retired
 behavior-verifier stage catalogs and stale OTP-specific compiler comments were
-removed in `f191d8b6`. The remaining Phase 5 audit is to genericize legacy
-project/documentation tooling that pattern-matches the old AST shapes and to
-complete the forbidden-remnant search. ASCII/Mermaid documentation now
-consumes lifted-module metadata only, and the story outline no longer walks
-retired actor/FSM/supervisor/application container nodes (`fca7fd18`,
-`f6c1f340`).
+removed in `f191d8b6`. Project and LSP tooling that pattern-matched the old
+application/FSM shapes was genericized in `00943ad4`; the remaining Phase 5
+audit is to migrate stale documentation/examples/tests and complete the
+forbidden-remnant search. ASCII/Mermaid documentation now consumes
+lifted-module metadata only, and the story outline no longer walks retired
+actor/FSM/supervisor/application container nodes (`fca7fd18`, `f6c1f340`).
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
