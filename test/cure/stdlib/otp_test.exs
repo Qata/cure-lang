@@ -110,6 +110,22 @@ defmodule Cure.Stdlib.OtpTest do
     refute inspect(Cure.Compiler.parse_source(source, emit_events: false)) =~ "__otp_container"
   end
 
+  test "beam_ops expands lifecycle, timer, monitor, and link operations" do
+    source = """
+    mod App
+      use Std.Otp
+      fn timer(p: Pid(Atom)) -> Effect(Ref) = beam_ops send_after 10 p :tick
+      fn cancel(r: Ref) -> Effect(Unit) = beam_ops cancel_timer r
+      fn observe(p: Pid(Atom)) -> Effect(Ref) = beam_ops monitor :process p
+      fn unobserve(r: Ref) -> Effect(Unit) = beam_ops demonitor r
+      fn connect(p: Pid(Atom)) -> Effect(Unit) = beam_ops link p
+      fn disconnect(p: Pid(Atom)) -> Effect(Unit) = beam_ops unlink p
+    """
+
+    assert {:ok, _} = Program.elaborate(source)
+    refute inspect(Cure.Compiler.parse_source(source, emit_events: false)) =~ "beam_ops"
+  end
+
   test "beam_ops expands behavior-specific startup operations" do
     source = """
     mod App
