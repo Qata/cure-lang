@@ -522,11 +522,11 @@ defmodule Cure.CLI do
   # -- draw (v0.31.0) ----------------------------------------------------------
 
   defp cmd_draw([], _opts) do
-    error("Usage: cure draw <path.cure> [--filter fsm|sup|app]")
+    error("Usage: cure draw <path.cure> [--filter lifted|all]")
     exit({:shutdown, 1})
   end
 
-  defp cmd_draw([kind, path], opts) when kind in ["fsm", "sup", "app"] do
+  defp cmd_draw([kind, path], opts) when kind in ["lifted", "all"] do
     do_draw(path, Keyword.put(opts, :filter, String.to_atom(kind)))
   end
 
@@ -534,9 +534,7 @@ defmodule Cure.CLI do
     filter =
       case Keyword.get(opts, :filter) do
         nil -> :all
-        "fsm" -> :fsm
-        "sup" -> :sup
-        "app" -> :app
+        "lifted" -> :lifted
         "all" -> :all
         atom when is_atom(atom) -> atom
         _ -> :all
@@ -550,7 +548,7 @@ defmodule Cure.CLI do
 
     case Cure.Doc.Ascii.render_file(path, filter: filter) do
       {:ok, ""} ->
-        info("#{path}: no fsm/sup/app containers to draw")
+        info("#{path}: no lifted modules to draw")
 
       {:ok, source} ->
         IO.puts(source)
