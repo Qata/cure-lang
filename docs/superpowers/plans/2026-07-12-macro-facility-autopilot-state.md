@@ -1156,6 +1156,14 @@ Phase 3 operations:
 
 #### Phase 4a — `sup` capability proof
 
+**STATUS: IN PROGRESS (2026-07-13).** `lib/std/supervisor.cure` now expands
+`sup` into a transparent `lift module` with checked `Supervisor.init/1`, an
+ordinary `start_link/0`, dynamic module atoms, and the real checked
+`supervisor:start_link/3` boundary. The common collector/emitter and generic
+AtomVM packaging path are exercised end to end. Closed child-spec parsing,
+strategy/child validation, and typed child startup remain to be implemented
+before this sub-phase is complete.
+
 Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
 `lift module`. Validate child specs, strategy, intensity, period, restart,
 shutdown, and child type through closed values. Prove a generated supervisor

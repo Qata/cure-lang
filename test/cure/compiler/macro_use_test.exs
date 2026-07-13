@@ -45,7 +45,7 @@ defmodule Cure.Compiler.MacroUseTest do
 
   defp find_fn_body(_, _), do: nil
 
-  test "a local macro cannot claim a reserved dispatch keyword (sup stays the supervisor container)" do
+  test "a local macro cannot claim a reserved dispatch keyword (sup stays the supervisor macro)" do
     # `sup` is one of parse_prefix/1's existing :identifier soft-keyword names.
     # A macro rule that claims it must NOT be able to shadow the supervisor
     # container: `sup Worker` must still produce it.
@@ -62,6 +62,9 @@ defmodule Cure.Compiler.MacroUseTest do
     Keyword.get(meta, :container_type) == :supervisor or
       (is_list(children) and Enum.any?(children, &has_supervisor?/1))
   end
+
+  defp has_supervisor?({:lift_module, meta, _children}),
+    do: Keyword.get(meta, :behaviour) == :Supervisor
 
   defp has_supervisor?({_t, _m, children}) when is_list(children),
     do: Enum.any?(children, &has_supervisor?/1)

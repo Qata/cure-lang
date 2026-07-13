@@ -305,6 +305,17 @@ defmodule Cure.Compiler do
   end
 
   defp codegen_modules(original_ast, main_ast, lifted_requests) do
+    if match?({:lift_module, _, _}, main_ast) do
+      case emit_lifted_modules(lifted_requests) do
+        {:ok, lifted_units} -> {:ok, lifted_units, []}
+        {:error, _} = error -> error
+      end
+    else
+      codegen_modules_with_main(original_ast, main_ast, lifted_requests)
+    end
+  end
+
+  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests) do
     # Single pipeline: every module is lowered by the kernel (dependent codegen).
     # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
     result =

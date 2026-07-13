@@ -15,7 +15,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
 
       on_exit(fn -> File.rm_rf!(out) end)
 
-      assert {:ok, Cure.AtomVMTestSup, _} =
+      assert {:ok, :"Cure.AtomVMTestSup", _} =
                Cure.Compiler.compile_string("sup Cure.AtomVMTestSup\n",
                  output_dir: out,
                  emit_events: false
@@ -34,7 +34,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
          [
            {:clause, 1, [], [],
             [
-              remote_call(Elixir.Cure.AtomVMTestSup, :start_link, []),
+              remote_call(:"Cure.AtomVMTestSup", :start_link, []),
               remote_call(Elixir.Cure.AtomVMTestApp, :start, [{:atom, 1, :normal}, {nil, 1}]),
               remote_call(:io, :format, [{:string, 1, ~c"CURE_ATOMVM_PROOF_OK~n"}, {nil, 1}])
             ]}
@@ -46,6 +46,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
       File.write!(probe, binary)
 
       beams = [probe | Path.wildcard(Path.join(estdlib, "*.beam"))]
+      beams = beams ++ Path.wildcard(Path.join(File.cwd!(), "_build/cure/ebin/Cure.Std.*.beam"))
       beams = [Path.join(out, "Cure.AtomVMTestSup.beam"), Path.join(out, "Cure.AtomVMTestApp.beam") | beams]
       archive = Path.join(out, "cure_atomvm_proof.avm")
 

@@ -1,15 +1,15 @@
 @group(:concurrency)
 mod Std.Supervisor
-  ## `sup` is a standard-library macro. Its raw body is reparsed by the
-  ## ordinary Cure parser and lowered by the generic OTP backend.
+  ## `sup` is a transparent standard-library macro. The empty supervisor floor
+  ## is a normal lifted module; child-spec declarations are added as checked
+  ## syntax in the next algebra slice.
   macro SupervisorContainers
-    syntax sup <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:sup, name, payload, body)
-      example sup Cure.Example expands sup Cure.Example
-    explain
-      Identifier => "a supervisor name is required"
-      Code => "a supervisor payload must be a Cure expression"
-      keyword "with" => "supervisor payloads are introduced with the with keyword"
-      keyword "sup" => "starts an OTP supervisor container"
+    syntax sup <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour Supervisor
+      callback init(arg: List(Atom)) -> %[:ok, %[%[:one_for_one, 3, 5], assert_type [] : List(Tuple)]]
+      fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
+      body
 
   ## Start, stop, and introspect Cure supervisor trees.
   ##

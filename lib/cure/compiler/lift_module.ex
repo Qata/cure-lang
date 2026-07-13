@@ -38,7 +38,8 @@ defmodule Cure.Compiler.LiftModule do
   def emit(%{module: module, behaviour: behaviour} = request) do
     with {:ok, module_ast} <- ordinary_module_ast(request),
          {:ok, env, local_defs} <- Program.check_ast_with_locals(module_ast),
-         {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs) do
+         origins = Program.import_origins(module_ast),
+         {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs, origins) do
       {:ok,
        %{
          module: Program.module_atom(module_ast),
@@ -187,6 +188,12 @@ defmodule Cure.Compiler.LiftModule do
 
   defp add_behaviour_attribute(forms, behaviour) do
     {attrs, rest} = Enum.split_while(forms, &match?({:attribute, _, _, _}, &1))
-    attrs ++ [{:attribute, 1, :behaviour, behaviour}] ++ rest
+    attrs ++ [{:attribute, 1, :behaviour, beam_behaviour(behaviour)}] ++ rest
   end
+
+  defp beam_behaviour(:GenServer), do: :gen_server
+  defp beam_behaviour(:GenStatem), do: :gen_statem
+  defp beam_behaviour(:Supervisor), do: :supervisor
+  defp beam_behaviour(:Application), do: :application
+  defp beam_behaviour(behaviour), do: behaviour
 end

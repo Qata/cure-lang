@@ -12,24 +12,36 @@ defmodule Cure.Compiler.ContainerMacroTest do
     for {keyword, name, _fun, _args} <- @containers do
       source = "#{keyword} #{name}\n"
       assert {:ok, ast} = Cure.Compiler.parse_source(source, file: "container_macro.cure")
-      assert {:container, meta, []} = ast
-      assert Keyword.get(meta, :macro_generated)
-      assert Keyword.get(meta, :name) == name
+
+      case keyword do
+        "sup" ->
+          assert {:lift_module, meta, []} = ast
+          assert meta[:module] == name
+
+        _ ->
+          assert {:container, meta, []} = ast
+          assert Keyword.get(meta, :macro_generated)
+          assert Keyword.get(meta, :name) == name
+      end
     end
   end
 
   test "a raw container body is parsed by the ordinary parser" do
-    assert {:ok, {:container, meta, [{:assignment, _, _}]}} =
+    assert {:ok, {:lift_module, meta, []}} =
              Cure.Compiler.parse_source("sup Cure.Body\n  strategy = :one_for_all\n", file: "body.cure")
 
-    assert Keyword.get(meta, :container_type) == :supervisor
+    assert meta[:module] == "Cure.Body"
+    assert Enum.any?(meta[:declarations], &match?({:assignment, _, _}, &1))
   end
 
   test "generic lowering emits runnable OTP modules for every container kind" do
     for {keyword, name, fun, args} <- @containers do
       source = "#{keyword} #{name}\n"
       assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
-      assert module == Module.concat(String.split(name, "."))
+      expected_module =
+        if keyword == "sup", do: String.to_atom(name), else: Module.concat(String.split(name, "."))
+
+      assert module == expected_module
       assert match?({:ok, _}, apply(module, fun, args))
     end
   end

@@ -301,18 +301,16 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     assert parse!(out, "with.cure")
   end
 
-  test "child spec round-trips inside a supervisor" do
+  test "ordinary declarations round-trip inside a lifted supervisor" do
     src = """
     mod M
       sup Root
-        children
-          Counter as counter
-          sup Workers as workers
+        fn helper() -> Int = 1
     """
 
     out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "child.cure"))
-    assert out =~ "Counter as counter"
-    assert out =~ "sup Workers as workers"
+    assert out =~ "lift module Root"
+    assert out =~ "fn helper() -> Int = 1"
     assert parse!(out, "child.cure")
   end
 

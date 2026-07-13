@@ -721,6 +721,23 @@ defmodule Cure.Compiler.Printer do
     fn_def_to_string(meta, body, depth, indent)
   end
 
+  defp to_string({:lift_module, meta, []}, depth, indent) do
+    name = lift_module_name_to_string(Keyword.get(meta, :module))
+    pad = String.duplicate(indent, depth + 1)
+
+    lines =
+      [
+        if(Keyword.get(meta, :behaviour), do: "behaviour #{Keyword.get(meta, :behaviour)}"),
+        Enum.map(Keyword.get(meta, :callbacks, []), &lift_callback_to_string(&1, depth + 1, indent)),
+        Enum.map(Keyword.get(meta, :declarations, []), &render(&1, depth + 1, indent))
+      ]
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+
+    body = Enum.join(lines, "\n#{pad}")
+    "lift module #{name}\n#{pad}#{body}"
+  end
+
   # -- Container (module, record, enum, protocol, trait, fsm) ----------------
 
   defp to_string({:container, meta, body}, depth, indent) do
@@ -1204,6 +1221,13 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string(other, _depth, _indent) do
     raise Cure.Compiler.Printer.UnprintableNodeError, node: other
+  end
+
+  defp lift_module_name_to_string({:macro_hole, name}), do: name
+  defp lift_module_name_to_string(name), do: to_string(name)
+
+  defp lift_callback_to_string(%{name: name, params: params, body: body}, depth, indent) do
+    "callback #{name}(#{typed_params_to_string(params, depth, indent)}) -> #{render(body, depth, indent)}"
   end
 
   defp macro_rule_lines(%{kind: kind, keyword: keyword, segments: segments, template: template} = rule, depth, indent)
