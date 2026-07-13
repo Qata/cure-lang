@@ -2,7 +2,8 @@ defmodule Cure.LSP.Symbols do
   @moduledoc """
   Symbol extraction from Cure AST for LSP features.
 
-  Builds a list of symbols (modules, functions, types, FSMs) from a parsed
+  Builds a list of symbols (modules, functions, types, and lifted behavior
+  modules) from a parsed
   AST, suitable for `textDocument/documentSymbol` responses.
   """
 
@@ -15,10 +16,48 @@ defmodule Cure.LSP.Symbols do
   def extract(ast) do
     case ast do
       {:container, meta, body} -> extract_container(meta, body)
+      {:lift_module, meta, _body} -> extract_lift_module(meta)
       {:block, _, children} -> Enum.flat_map(children, &extract/1)
       _ -> []
     end
   end
+
+  defp extract_lift_module(meta) when is_list(meta) do
+    name = Keyword.get(meta, :module, "unnamed")
+    behavior = Keyword.get(meta, :behaviour, :unknown)
+    line = Keyword.get(meta, :line, 1)
+    declarations = Keyword.get(meta, :declarations, [])
+    callbacks = Keyword.get(meta, :callbacks, [])
+
+    callback_symbols =
+      Enum.map(callbacks, fn callback ->
+        callback_symbol(callback, line)
+      end)
+
+    [
+      %{
+        "name" => to_string(name),
+        "kind" => 2,
+        "range" => lsp_range(line),
+        "selectionRange" => lsp_range(line),
+        "detail" => "lifted #{behavior} module",
+        "children" => callback_symbols ++ Enum.flat_map(declarations, &extract_body_item/1)
+      }
+    ]
+  end
+
+  defp callback_symbol(%{name: name, arity: arity, line: line}, _default_line) do
+    %{
+      "name" => "callback #{name}/#{arity}",
+      "kind" => 12,
+      "detail" => "callback #{name}/#{arity}",
+      "range" => lsp_range(line),
+      "selectionRange" => lsp_range(line)
+    }
+  end
+
+  defp callback_symbol(%{name: name}, default_line),
+    do: callback_symbol(%{name: name, arity: 0, line: default_line}, default_line)
 
   defp extract_container(meta, body) do
     type = Keyword.get(meta, :container_type, :unknown)
