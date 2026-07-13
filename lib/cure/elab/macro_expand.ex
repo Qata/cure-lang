@@ -12,11 +12,26 @@ defmodule Cure.Elab.MacroExpand do
   alias Cure.Core.{Context, Kernel, Normalise}
   alias Cure.Elab.Elaborator
 
-  @max_fuel 32
   @normalise_fuel 10_000
+  # Termination is guaranteed by active-stack cycle detection. Production
+  # expansion therefore has no arbitrary depth/size ceiling; embedders and
+  # tests may still supply defensive finite limits explicitly.
+  @default_limits [max_expansions: :infinity, max_nodes: :infinity]
 
   @spec expand(term(), Cure.Core.Env.t()) :: {:ok, term()} | {:error, term()}
-  def expand(ast, env), do: expand_node(ast, env, @max_fuel)
+  def expand(ast, env), do: expand(ast, env, [])
+
+  @doc "Expand computed syntax recursively from the inside out under explicit budgets."
+  @spec expand(term(), Cure.Core.Env.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def expand(ast, env, opts) when is_list(opts) do
+    limits = Keyword.merge(@default_limits, opts)
+    state = %{expansions: 0, nodes: 0, active: MapSet.new(), limits: limits}
+
+    case expand_node(ast, env, state) do
+      {:ok, expanded, _state} -> {:ok, expanded}
+      {:error, _} = error -> error
+    end
+  end
 
   @doc "True when an AST contains a deferred Tier-3 use-site."
   @spec contains_computed_use?(term()) :: boolean()
@@ -32,40 +47,96 @@ defmodule Cure.Elab.MacroExpand do
 
   def contains_computed_use?(_), do: false
 
-  defp expand_node({:computed_use, meta, [elab, input]}, env, fuel) when fuel > 0 do
-    with {:ok, expanded} <- execute(meta, elab, input, env),
-         {:ok, expanded} <- expand_node(expanded, env, fuel - 1) do
-      {:ok, expanded}
+  defp expand_node({:computed_use, meta, [elab, input]} = node, env, state) do
+    with {:ok, state} <- visit_node(state),
+         {:ok, [elab, input], state} <- expand_children([elab, input], env, state),
+         {:ok, state} <- begin_expansion(node, state),
+         {:ok, expanded} <- execute(meta, elab, input, env),
+         {:ok, expanded, state} <- expand_node(expanded, env, state),
+         {:ok, state} <- end_expansion(node, state) do
+      {:ok, expanded, state}
     end
   end
 
-  defp expand_node({:computed_use, meta, _children}, _env, 0),
-    do: {:error, {:computed_macro_error, meta, :expansion_depth_exceeded}}
-
-  defp expand_node(term, env, fuel) when is_tuple(term) do
-    with {:ok, values} <- expand_list(Tuple.to_list(term), env, fuel), do: {:ok, List.to_tuple(values)}
+  defp expand_node(term, env, state) when is_tuple(term) do
+    with {:ok, values, state} <- expand_children(Tuple.to_list(term), env, state),
+         {:ok, state} <- visit_node(state) do
+      {:ok, List.to_tuple(values), state}
+    end
   end
 
-  defp expand_node(term, env, fuel) when is_list(term), do: expand_list(term, env, fuel)
+  defp expand_node(term, env, state) when is_list(term), do: expand_children(term, env, state)
 
-  defp expand_node(term, env, fuel) when is_map(term) do
-    with {:ok, entries} <- expand_list(Map.to_list(term), env, fuel), do: {:ok, Map.new(entries)}
+  defp expand_node(term, env, state) when is_map(term) do
+    with {:ok, entries, state} <- expand_children(Map.to_list(term), env, state),
+         {:ok, state} <- visit_node(state) do
+      {:ok, Map.new(entries), state}
+    end
   end
 
-  defp expand_node(term, _env, _fuel), do: {:ok, term}
+  defp expand_node(term, _env, state) do
+    with {:ok, state} <- visit_node(state), do: {:ok, term, state}
+  end
 
-  defp expand_list(items, env, fuel) do
-    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
-      case expand_node(item, env, fuel) do
-        {:ok, expanded} -> {:cont, {:ok, [expanded | acc]}}
+  defp expand_children(items, env, state) do
+    Enum.reduce_while(items, {:ok, [], state}, fn item, {:ok, acc, state} ->
+      case expand_node(item, env, state) do
+        {:ok, expanded, state} -> {:cont, {:ok, [expanded | acc], state}}
         {:error, _} = error -> {:halt, error}
       end
     end)
     |> case do
-      {:ok, values} -> {:ok, Enum.reverse(values)}
+      {:ok, values, state} -> {:ok, Enum.reverse(values), state}
       error -> error
     end
   end
+
+  defp visit_node(%{nodes: nodes, limits: limits} = state) do
+    nodes = nodes + 1
+
+    if over_limit?(nodes, Keyword.fetch!(limits, :max_nodes)),
+      do: {:error, {:macro_expansion_budget, :node_count}},
+      else: {:ok, %{state | nodes: nodes}}
+  end
+
+  defp begin_expansion(node, %{expansions: expansions, active: active, limits: limits} = state) do
+    key = expansion_key(node)
+
+    if MapSet.member?(active, key) do
+      {:error, {:macro_expansion_cycle, expansion_origin(node)}}
+    else
+      expansions = expansions + 1
+
+      if over_limit?(expansions, Keyword.fetch!(limits, :max_expansions)) do
+        {:error, {:macro_expansion_budget, :expansion_count}}
+      else
+        {:ok, %{state | expansions: expansions, active: MapSet.put(active, key)}}
+      end
+    end
+  end
+
+  defp end_expansion(node, %{active: active} = state),
+    do: {:ok, %{state | active: MapSet.delete(active, expansion_key(node))}}
+
+  defp over_limit?(_value, :infinity), do: false
+  defp over_limit?(value, limit) when is_integer(limit), do: value > limit
+
+  defp over_limit?(_value, limit),
+    do: raise(ArgumentError, "macro expansion limit must be :infinity or a non-negative integer, got #{inspect(limit)}")
+
+  # Ignore source positions in the active key. A recursive macro that rebuilds
+  # its own use-site with fresh line/column metadata is still the same expansion
+  # node and must be rejected; two sibling nodes remain distinct by their input.
+  defp expansion_key({:computed_use, meta, [elab, input]}) do
+    {Keyword.get(meta, :keyword), MacroSyntax.to_syntax(elab), MacroSyntax.to_syntax(input)}
+  end
+
+  defp expansion_key(node), do: node
+
+  defp expansion_origin({:computed_use, meta, _}),
+    do: {Keyword.get(meta, :keyword), Keyword.get(meta, :line), Keyword.get(meta, :col)}
+
+  defp expansion_origin(_), do: :unknown
 
   defp execute(meta, elab_ast, input_ast, env) do
     context = Context.empty(env)

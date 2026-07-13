@@ -26,4 +26,18 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:ok, %{kind: :quoted_module, behaviour: :GenServer}} =
              OtpMacro.lift_module_ast({:lift_module, meta, []})
   end
+
+  test "a transparent macro can substitute an identifier into lift module" do
+    source = """
+    mod M
+      macro Lift
+        syntax liftit <name: Identifier> becomes lift module name
+      liftit Cure.Generated.Worker
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    assert {:lift_module, meta, []} = List.last(children)
+    assert meta[:module] == "Cure.Generated.Worker"
+  end
 end

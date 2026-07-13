@@ -465,9 +465,13 @@ Recursive expansion needs explicit safeguards:
 - the budget counts both invocations and generated AST size;
 - a successful fixed point resets no hidden global state and is deterministic.
 
-The budget is a diagnostic guard, not a substitute for cycle detection. A
-valid deeply nested program may raise the budget explicitly through the normal
-compiler configuration, but no user program may disable cycle detection.
+The budget is a diagnostic guard, not a substitute for cycle detection. Its
+production default is **infinite**: valid deeply nested or linked-list-shaped
+expansion is bounded by structural cycle detection, not by an arbitrary depth
+constant. Hosts and tests may supply a finite invocation/AST-size budget for
+resource governance, but no user program may disable cycle detection. The
+active identity set is stack-scoped rather than global, so two sibling uses of
+the same macro remain legal and independent.
 
 ### 5.5 Context-introducing outer macros
 
@@ -1073,4 +1077,3 @@ following are true:
 
 Until every criterion is met, the macro replacement is work in progress and
 must not be described as complete.
-

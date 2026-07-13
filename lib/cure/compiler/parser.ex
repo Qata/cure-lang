@@ -742,9 +742,29 @@ defmodule Cure.Compiler.Parser do
 
   defp subst_holes_meta(meta, _bindings), do: meta
 
+  defp subst_holes_meta_value({:macro_hole, name}, bindings) do
+    case Map.fetch(bindings, name) do
+      {:ok, value} -> module_name_from_ast(value)
+      :error -> {:macro_hole, name}
+    end
+  end
+
   defp subst_holes_meta_value(v, bindings) when is_tuple(v), do: subst_holes(v, bindings)
   defp subst_holes_meta_value(v, bindings) when is_list(v), do: Enum.map(v, &subst_holes_meta_value(&1, bindings))
   defp subst_holes_meta_value(v, _bindings), do: v
+
+  defp module_name_from_ast({:variable, _meta, name}), do: name
+  defp module_name_from_ast({:literal, _meta, name}) when is_binary(name), do: name
+  defp module_name_from_ast({:literal, _meta, name}) when is_atom(name), do: Atom.to_string(name)
+
+  defp module_name_from_ast({:attribute_access, meta, [base]}) when is_list(meta) do
+    case {module_name_from_ast(base), Keyword.get(meta, :attribute)} do
+      {base, attr} when is_binary(base) and is_binary(attr) -> base <> "." <> attr
+      _ -> nil
+    end
+  end
+
+  defp module_name_from_ast(other), do: other
 
   # -- Program (top-level sequence) ------------------------------------------
 
@@ -4766,6 +4786,7 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     state = advance(state)
     {name, state} = parse_dotted_name(state)
+    name = if macro_module_hole?(name), do: {:macro_hole, name}, else: name
     state = skip_newlines(state)
 
     {behaviour, callbacks, declarations, state} =
@@ -4788,6 +4809,15 @@ defmodule Cure.Compiler.Parser do
 
     {{:lift_module, meta, []}, state}
   end
+
+  # A lower-case single-segment name in a macro template is a substituted
+  # identifier hole (`lift module name`). Ordinary lifted modules require a
+  # validated `Cure.X` name, so this marker cannot collide with a valid source
+  # module name and keeps the hole visible until macro substitution.
+  defp macro_module_hole?(name) when is_binary(name),
+    do: Regex.match?(~r/^[a-z][A-Za-z0-9_]*$/, name)
+
+  defp macro_module_hole?(_name), do: false
 
   defp parse_lift_module_block(state, behaviour, callbacks, declarations) do
     state = skip_newlines(state)
