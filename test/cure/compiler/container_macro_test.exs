@@ -241,6 +241,15 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :start_phase, [:other_phase, :normal, []]) == :ok
   end
 
+  test "app phases syntax dispatches multiple transparent phase results" do
+    source = "app Cure.MultiPhaseApp phases [:warm_cache, :warmed, :ready, :started]\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :start_phase, [:warm_cache, :normal, []]) == :warmed
+    assert apply(module, :start_phase, [:ready, :normal, []]) == :started
+    assert apply(module, :start_phase, [:other_phase, :normal, []]) == :ok
+  end
+
   test "app root syntax preserves a typed startup payload" do
     source = "app Cure.PayloadRootApp root :root_supervisor with [:boot]\n"
 
