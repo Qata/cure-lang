@@ -1376,7 +1376,10 @@ describe generic macro dispatch and lifted-module collection. The retired
 behavior-verifier stage catalogs and stale OTP-specific compiler comments were
 removed in `f191d8b6`. The remaining Phase 5 audit is to genericize legacy
 project/documentation tooling that pattern-matches the old AST shapes and to
-complete the forbidden-remnant search.
+complete the forbidden-remnant search. ASCII/Mermaid documentation now
+consumes lifted-module metadata only, and the story outline no longer walks
+retired actor/FSM/supervisor/application container nodes (`fca7fd18`,
+`f6c1f340`).
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
