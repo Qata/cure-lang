@@ -78,6 +78,6 @@ defmodule Cure.Compiler.ContainerMacroTest do
     refute Code.ensure_loaded?(Cure.FSM.Compiler)
     refute Code.ensure_loaded?(Cure.Sup.Compiler)
     refute Code.ensure_loaded?(Cure.App.Compiler)
-    assert function_exported?(Cure.Compiler.ContainerMacro, :forms, 1)
+    refute function_exported?(Cure.Compiler.ContainerMacro, :forms, 1)
   end
 end

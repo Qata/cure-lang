@@ -320,29 +320,17 @@ defmodule Cure.Compiler do
     # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
     result =
       with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
-        case Cure.Compiler.ContainerMacro.forms(main_ast) do
-          {:ok, forms} ->
-            {:ok, forms, []}
-
-          :not_a_container ->
-            case dependent_codegen(main_ast) do
-              {:ok, forms} -> {:ok, forms, []}
-              {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
-              {:error, _} = err -> err
-            end
-
-          {:error, reason} ->
-            {:error, {:codegen_error, reason}}
+        case dependent_codegen(main_ast) do
+          {:ok, forms} -> {:ok, forms, []}
+          {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
+          {:error, _} = err -> err
         end
       else
         {:error, reason} -> {:error, {:codegen_error, reason}}
       end
 
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
-    # attribute. This runs once here so BOTH the classic and dependent
-    # pipelines get it from one mechanism. Container compilers that already
-    # emitted/loaded their module (fsm/actor/sup/app) return a marker tuple,
-    # not a forms list, so they pass through untouched.
+    # attribute after the ordinary dependent pipeline has produced forms.
     case result do
       {:ok, forms, warnings} when is_list(forms) ->
         with {:ok, lifted_units} <- emit_lifted_modules(lifted_requests) do

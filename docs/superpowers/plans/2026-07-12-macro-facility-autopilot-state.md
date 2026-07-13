@@ -1087,9 +1087,12 @@ and source provenance is retained on each quoted module. Required callbacks
 are validated against the closed behavior vocabulary before ordinary module
 emission. Dynamic module-name holes are also substituted as checked atom
 literals inside generated ordinary declarations, which gives transparent
-`start_link`/registry helpers a normal Cure value to consume. Remaining Phase 2
-work is richer provenance chains, quoted-syntax opacity, delayed callback
-context, and transparent replacement of the OTP marker path.
+`start_link`/registry helpers a normal Cure value to consume. The main compiler
+pipeline no longer dispatches through the legacy OTP container lowering branch,
+and macro proof checking no longer consults that branch. Remaining Phase 2 work
+is richer provenance chains, quoted-syntax opacity, delayed callback context,
+removal of the remaining compiler-owned OTP contract registry, and transparent
+replacement of the residual marker/parser path.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
