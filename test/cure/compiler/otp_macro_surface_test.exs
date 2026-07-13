@@ -40,4 +40,33 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:lift_module, meta, []} = List.last(children)
     assert meta[:module] == "Cure.Generated.Worker"
   end
+
+  test "lifted modules compile as independent units through the common emitter" do
+    source = """
+    mod Main
+      lift module Cure.Generated.Worker
+        behaviour GenServer
+        callback init(arg: Int) -> arg
+    """
+
+    assert {:ok, main} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert main == :"Cure.Main"
+    assert function_exported?(:"Cure.Generated.Worker", :init, 1)
+    assert apply(:"Cure.Generated.Worker", :init, [42]) == 42
+  end
+
+  test "duplicate lifted module names are rejected before emission" do
+    source = """
+    mod Main
+      lift module Cure.Generated.Worker
+        behaviour GenServer
+        callback init(arg: Int) -> arg
+      lift module Cure.Generated.Worker
+        behaviour GenServer
+        callback init(arg: Int) -> arg
+    """
+
+    assert {:error, {:codegen_error, {:duplicate_lifted_module, "Cure.Generated.Worker"}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
 end

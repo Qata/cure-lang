@@ -1070,9 +1070,12 @@ computed syntax inside out before the outer invocation, uses stack-scoped
 structural cycle identities with source positions removed, defaults resource
 budgets to infinity, and accepts explicit finite budgets for hosts/tests. The
 lift-module parser also preserves a substituted identifier hole instead of
-flattening it into a literal module-name string. Remaining Phase 2 work is the
-generic callback/lift validation and multi-module emission path, provenance,
-quoted-syntax opacity, and transparent replacement of the OTP marker path.
+flattening it into a literal module-name string. A generic lift-module collector
+now turns parsed callbacks into ordinary Cure functions, validates/checks them,
+emits behavior-tagged independent units, rejects duplicate module names, and
+loads/writes them through the common BeamWriter path. Remaining Phase 2 work is
+dependency ordering/collision integration, provenance, quoted-syntax opacity,
+and transparent replacement of the OTP marker path.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
