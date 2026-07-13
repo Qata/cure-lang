@@ -1206,6 +1206,10 @@ AST, and its generated code contains no compiler-only OTP marker.
 
 The operation vocabulary now has focused positive coverage for messaging,
 startup, lifecycle, timers, monitors, and links (`1c40e265`, 17 algebra tests).
+Lifted callback context now carries generic parameter names and whether a
+return annotation was declared, without embedding Core type terms in macro
+metadata (`4daae701`). The generic audit walker and report boundary also
+traverse and render `Effect` types without changing trusted Core code.
 The current public guides and observability/journal docs also describe the
 transparent macro/lifted-module surface rather than retired generated classes
 (`88ba711e`, 33 documentation/observability tests plus the glossary gate).
@@ -1233,24 +1237,20 @@ generated supervisor callbacks explicitly import the standard-library helper
 module so independent lifted units resolve those definitions through the common
 path. Restart intensity may be zero while restart period is represented by the
 closed positive `Positive` type and rejects zero through ordinary elaboration
-(`93d71a66`, 48 focused object tests). Typed child startup arguments and full
-runtime supervision parity remain to be implemented before this sub-phase is
-complete. Transparent `child_spec` syntax now also captures a checked startup
-argument list and lowers it through `child_with_args`; the common runtime proof
-starts a generated actor under a generated supervisor (`27b3554d`,
-`648c75bf`, 50 focused object tests). Top-level lifted
+(`93d71a66`, 48 focused object tests). Transparent `child_spec` syntax captures
+typed startup arguments and the common runtime proof starts a generated actor
+under a generated supervisor (`27b3554d`, `648c75bf`, 50 focused object tests).
+Top-level lifted
 sources now emit the lifted unit as the primary
 module, imported standard-library calls route remotely through the common
 emitter, and the printer round-trips transparent lift syntax.
-The current child-spec argument floor intentionally remains `List(Atom)`: the
-language has no general ordinary-value `Any` type, so widening this field would
-be an unsound workaround rather than a typed raw-term boundary. A first-class
-raw BEAM term boundary is still required before heterogeneous supervisor child
-lists can admit arbitrary typed startup args. The underlying checked
-`child_with_args` constructor now supports a homogeneous `List(a)` directly,
-with a focused non-atom payload proof; the transparent macro child-list floor
-remains intentionally `List(Atom)` until that existential/raw-term boundary is
-implemented (`6ffe5937`, 56 focused object tests).
+The child-spec boundary now distinguishes homogeneous typed arguments from
+explicit raw BEAM terms. `child_spec ... with ...` checks one element type and
+maps each element through `raw_arg`; heterogeneous lists require the distinct
+`child_spec ... raw with [raw_arg(...), ...]` form. `ChildSpec` stores
+`List(RawTerm)`, while direct `child_with_args` remains homogeneous and
+preserves its `List(a)` result for typed callers (`6bd50db9`, `5b4424da`, 82
+focused transparent-object tests).
 
 Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
 `lift module`. Validate child specs, strategy, intensity, period, restart,
@@ -1305,8 +1305,11 @@ form whose checked result is the full `{next_state, state, data}` tuple. These
 forms keep payload-preserving transition actions in Cure source rather than
 requiring a compiler-owned handler representation; focused tests cover both
 the generic actor runtime loop and the explicit FSM transition result. The
-remaining callback work is to derive message codes and complete the example
-behavior migrations.
+Explicit message/request/reply types and polymorphic callback forms are now
+covered through standard-library signatures. Automatic message-code derivation
+from arbitrary handler bodies and richer behavior-specific callback context
+remain source-language work; the compiler must not grow an OTP map to provide
+them.
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
@@ -1524,15 +1527,18 @@ Suggested commit:
    The generic-unix AtomVM package proof now includes a generated actor child
    under the generated supervisor and a transition-table FSM, with the typed
    FSM starter invoked using its initial state (`3cc076b9`, 1 test passed after
-   a clean AtomVM rebuild). The current focused object suite is 62 passing,
-   the algebra suite is 17 passing, the AtomVM package proof is 1 passing, and
-   the full repository gate is 4051 passing with 1 skipped.
-4. Complete remaining callback vocabulary and embedded surface families.
-5. Complete indexed reducer/view/flow integration and remaining SP6 gaps.
-6. Run skeptical review to two clean passes.
-7. Run `mix compile --warnings-as-errors`, the full `mix test` gate, Antigen
-   verification, and formatting checks.
-8. Confirm the worktree is clean and update the live state with exact counts.
+   a clean AtomVM rebuild). The AtomVM proof remains 1 passing after the latest
+   source changes. The source-level four-macro callback floors, indexed
+   reducer/view/flow bundle, and embedded SP6 builders are implemented and
+   covered; automatic message-code derivation and the direct `Effect(T)` motive
+   remain explicitly tracked gaps rather than hidden compiler behavior.
+4. Run skeptical review to two clean passes.
+5. Run `mix compile --warnings-as-errors`, the full `mix test` gate, Antigen
+   verification, and formatting checks. Current results: warnings-as-errors
+   clean; full gate `4059 passed` (3 doctests, 4056 tests), `1 skipped`, 128
+   expected immune responses; Antigen-only gate `556 passed`, 141 expected
+   immune responses, with `318/318` shape coverage.
+6. Confirm the worktree is clean and update the live state with exact counts.
 
 Gate: no replacement, merge conflict, legacy regression, missing new test,
 runtime failure, or implementation gap remains. Only then may the DONE
