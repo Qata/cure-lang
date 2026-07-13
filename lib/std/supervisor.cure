@@ -1,5 +1,6 @@
 @group(:concurrency)
 mod Std.Supervisor
+  use Std.Otp.Raw
   ## `sup` is a transparent standard-library macro. The empty supervisor floor
   ## is a normal lifted module; child-spec declarations are added as checked
   ## syntax in the next algebra slice.
@@ -91,6 +92,14 @@ mod Std.Supervisor
   ## The MFA argument list is polymorphic for direct homogeneous child specs.
   ## Heterogeneous supervisor lists still require the raw BEAM term boundary.
   fn child_with_args({a: Type}, module: Atom, id: Atom, args: List(a), restart: Restart, shutdown: Shutdown, child_type: ChildType) -> Tuple(Atom, Tuple(Atom, Atom, List(a)), Atom, Nat, Atom, List(Atom)) =
+    %[id, %[module, :start_link, args], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
+
+  ## Explicit raw-term child arguments for a heterogeneous BEAM MFA list.
+  ## Every element must cross `raw_arg/1` at the call site; no typed value is
+  ## silently widened by this constructor.
+  fn raw_arg({a: Type}, value: a) -> RawTerm = raw_term(1, %[value, :raw_term])
+
+  fn child_with_raw_args(module: Atom, id: Atom, args: List(RawTerm), restart: Restart, shutdown: Shutdown, child_type: ChildType) -> Tuple(Atom, Tuple(Atom, Atom, List(RawTerm)), Atom, Nat, Atom, List(Atom)) =
     %[id, %[module, :start_link, args], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
 
   fn child_with(module: Atom, id: Atom, restart: Restart, shutdown: Shutdown, child_type: ChildType) -> ChildSpec =

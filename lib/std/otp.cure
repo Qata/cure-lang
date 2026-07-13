@@ -142,6 +142,7 @@ mod Std.Otp
   ## Typed lifecycle and observation wrappers over the raw effect boundary.
   typealias MonitorRef = Ref
   typealias TimerRef = Ref
+  typealias BeamTerm = RawTerm
 
   fn stop({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_stop(pid)
 

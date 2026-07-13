@@ -624,6 +624,20 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "heterogeneous supervisor arguments require explicit raw-term erasure" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> Tuple(Atom, Tuple(Atom, Atom, List(Std.Otp.RawTerm)), Atom, Nat, Atom, List(Atom)) =
+        Std.Supervisor.child_with_raw_args(:worker_module, :worker, [Std.Supervisor.raw_arg(1), Std.Supervisor.raw_arg(:boot)], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert apply(module, :build, []) ==
+             {:worker, {:worker_module, :start_link, [1, :boot]}, :permanent, 1000, :worker, [:worker_module]}
+  end
+
   test "supervisor child policies reject arbitrary restart atoms" do
     source = """
     mod Main

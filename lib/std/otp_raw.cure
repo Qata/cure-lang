@@ -27,6 +27,15 @@ mod Std.Otp.Raw
   ## An opaque monitor/timer reference — the raw `erlang:reference()`.
   opaque type Ref
 
+  ## An explicitly marked erased BEAM term. This is the only standard-library
+  ## boundary that admits a value whose static type is intentionally forgotten;
+  ## callers must construct it explicitly before heterogeneous OTP argument
+  ## lists can be formed.
+  opaque type RawTerm
+
+  @extern(:erlang, :element, 2)
+  fn raw_term({a: Type}, index: Int, boxed: Tuple(a, Atom)) -> RawTerm
+
   ## The calling process's own pid.
   @extern(:erlang, :self, 0)
   fn raw_self({m: Type}) -> Effect(RawPid(m, m))
