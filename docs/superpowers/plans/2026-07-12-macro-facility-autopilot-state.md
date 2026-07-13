@@ -1162,7 +1162,10 @@ ordinary `start_link/0`, dynamic module atoms, and the real checked
 `supervisor:start_link/3` boundary. The common collector/emitter and generic
 AtomVM packaging path are exercised end to end. Closed child-spec parsing,
 strategy/child validation, and typed child startup remain to be implemented
-before this sub-phase is complete.
+before this sub-phase is complete. Top-level lifted sources now emit the
+lifted unit as the primary module, imported standard-library calls route
+remotely through the common emitter, and the printer round-trips transparent
+lift syntax.
 
 Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
 `lift module`. Validate child specs, strategy, intensity, period, restart,
