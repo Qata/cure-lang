@@ -492,7 +492,7 @@ defmodule Cure.Elab.Resolution do
   defp try_keys(env, keys, slot) do
     present? =
       case slot do
-        :type -> fn k -> Inductive.family?(env, k) end
+        :type -> fn k -> Inductive.family?(env, k) or type_definition?(env, k) end
         :value -> fn k -> not is_nil(Inductive.get_ctor(env, k)) or Map.has_key?(env.defs, k) end
       end
 
@@ -500,5 +500,9 @@ defmodule Cure.Elab.Resolution do
       nil -> :error
       key -> {:ok, key}
     end
+  end
+
+  defp type_definition?(%Env{defs: defs}, key) do
+    match?(%{type: {:type, _level}}, Map.get(defs, key))
   end
 end

@@ -151,6 +151,21 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert apply(:"Cure.Generated.BareNames", :build, []) == {:one_for_all, 2, 9}
   end
 
+  test "macro lexical imports preserve aliases in lifted output" do
+    source = """
+    mod Host
+      use Std.Supervisor as Sup
+      macro Lift
+        syntax make <name: ModuleName> becomes lift module name
+          behaviour custom_behavior
+          fn build() -> Sup.StrategySpec = Sup.supervision_strategy(Sup.one_for_all(), 2, 9)
+      make Cure.Generated.AliasedNames
+    """
+
+    assert {:ok, _host} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.AliasedNames", :build, []) == {:one_for_all, 2, 9}
+  end
+
   test "a transparent lift can start its generated gen_server through Std.Otp" do
     source = """
     mod Main

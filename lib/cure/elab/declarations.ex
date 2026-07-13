@@ -1757,7 +1757,12 @@ defmodule Cure.Elab.Declarations do
       # A qualified TYPE reference like Std.Nat / Std.Nat.Nat (no call parens).
       is_binary(dotted) and match?({:ok, _}, Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)) ->
         {:ok, key} = Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)
-        {:ok, {:data, key, [], []}}
+
+        if Inductive.family?(env, key) do
+          {:ok, {:data, key, [], []}}
+        else
+          {:ok, {:global, key}}
+        end
 
       attr in ["1", "2"] and not is_nil(ctx) ->
         gname = if attr == "1", do: :sigma_first, else: :sigma_second

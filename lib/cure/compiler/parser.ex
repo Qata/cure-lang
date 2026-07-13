@@ -315,7 +315,7 @@ defmodule Cure.Compiler.Parser do
   defp collect_macro_defs_with_scope({:container, meta, children}, imports) when is_list(meta) do
     imports =
       case Keyword.get(meta, :container_type) do
-        :module -> imports ++ direct_import_sources(children)
+        :module -> imports ++ direct_import_declarations(children)
         _ -> imports
       end
 
@@ -327,15 +327,14 @@ defmodule Cure.Compiler.Parser do
 
   defp collect_macro_defs_with_scope(_other, _imports), do: []
 
-  defp direct_import_sources(children) when is_list(children) do
-    for {:import, meta, _} <- children,
+  defp direct_import_declarations(children) when is_list(children) do
+    for {:import, meta, _} = declaration <- children,
         is_list(meta),
-        source = Keyword.get(meta, :source),
-        is_binary(source),
-        do: source
+        is_binary(Keyword.get(meta, :source)),
+        do: declaration
   end
 
-  defp direct_import_sources(_children), do: []
+  defp direct_import_declarations(_children), do: []
 
   # A use-site of an active macro keyword. Milestone-2 handles a single rule per
   # keyword; the rule's segments are matched against the use-site tokens, binding
@@ -682,18 +681,113 @@ defmodule Cure.Compiler.Parser do
 
   defp attach_lexical_imports({:lift_module, meta, children}, imports) when is_list(meta) and is_list(imports) do
     declarations = Keyword.get(meta, :declarations, [])
-    existing = MapSet.new(direct_import_sources(declarations))
+    existing = MapSet.new(declarations, &import_declaration_key/1)
 
     generated_imports =
-      for source <- imports,
-          is_binary(source),
-          not MapSet.member?(existing, source),
-          do: {:import, [source: source, import_type: :use, language: :cure], []}
+      for {:import, _meta, _children} = declaration <- imports,
+          not MapSet.member?(existing, import_declaration_key(declaration)),
+          do: declaration
 
-    {:lift_module, Keyword.put(meta, :declarations, generated_imports ++ declarations), children}
+    declarations = generated_imports ++ declarations
+    aliases = import_aliases(imports ++ declarations)
+    node = {:lift_module, Keyword.put(meta, :declarations, declarations), children}
+    qualify_lexical_aliases(node, aliases)
   end
 
   defp attach_lexical_imports(ast, _imports), do: ast
+
+  defp import_aliases(imports) do
+    for {:import, meta, _children} <- imports,
+        is_list(meta),
+        alias_name = Keyword.get(meta, :alias),
+        source = Keyword.get(meta, :source),
+        is_binary(alias_name),
+        is_binary(source),
+        into: %{} do
+      {alias_name, source}
+    end
+  end
+
+  defp qualify_lexical_aliases({:function_call, meta, children}, aliases) when is_list(meta) do
+    meta =
+      case Keyword.get(meta, :name) do
+        name when is_binary(name) -> Keyword.put(meta, :name, qualify_dotted_name(name, aliases))
+        _ -> meta
+      end
+
+    {:function_call, meta, Enum.map(children, &qualify_lexical_aliases(&1, aliases))}
+  end
+
+  defp qualify_lexical_aliases({:attribute_access, meta, [inner]}, aliases) when is_list(meta) do
+    node = {:attribute_access, meta, [qualify_lexical_aliases(inner, aliases)]}
+
+    case dotted_parts(node) do
+      [head | tail] when is_binary(head) and is_map_key(aliases, head) ->
+        build_dotted(String.split(Map.fetch!(aliases, head), ".") ++ tail)
+
+      _ ->
+        node
+    end
+  end
+
+  defp qualify_lexical_aliases({tag, meta, children}, aliases) when is_list(meta) and is_list(children),
+    do: {tag, qualify_lexical_aliases_meta(meta, aliases), Enum.map(children, &qualify_lexical_aliases(&1, aliases))}
+
+  defp qualify_lexical_aliases(list, aliases) when is_list(list),
+    do: Enum.map(list, &qualify_lexical_aliases(&1, aliases))
+
+  defp qualify_lexical_aliases(other, _aliases), do: other
+
+  defp qualify_lexical_aliases_meta(meta, aliases) do
+    Enum.map(meta, fn
+      {key, value} -> {key, qualify_lexical_aliases_meta_value(key, value, aliases)}
+      other -> other
+    end)
+  end
+
+  defp qualify_lexical_aliases_meta_value(:name, value, aliases) when is_binary(value),
+    do: qualify_dotted_name(value, aliases)
+
+  defp qualify_lexical_aliases_meta_value(_key, value, aliases) when is_tuple(value),
+    do: qualify_lexical_aliases(value, aliases)
+
+  defp qualify_lexical_aliases_meta_value(_key, value, aliases) when is_list(value),
+    do: Enum.map(value, &qualify_lexical_aliases_meta_value(nil, &1, aliases))
+
+  defp qualify_lexical_aliases_meta_value(_key, value, _aliases), do: value
+
+  defp qualify_dotted_name(name, aliases) do
+    case String.split(name, ".") do
+      [head | tail] when is_map_key(aliases, head) ->
+        Enum.join(String.split(Map.fetch!(aliases, head), ".") ++ tail, ".")
+
+      _ ->
+        name
+    end
+  end
+
+  defp dotted_parts({:variable, _meta, name}) when is_binary(name), do: [name]
+
+  defp dotted_parts({:attribute_access, meta, [inner]}) when is_list(meta) do
+    case dotted_parts(inner) do
+      nil -> nil
+      parts -> parts ++ [Keyword.get(meta, :attribute)]
+    end
+  end
+
+  defp dotted_parts(_other), do: nil
+
+  defp build_dotted([head | tail]) do
+    Enum.reduce(tail, {:variable, [scope: :local], head}, fn segment, acc ->
+      {:attribute_access, [attribute: segment], [acc]}
+    end)
+  end
+
+  defp import_declaration_key({:import, meta, _children}) when is_list(meta) do
+    {Keyword.get(meta, :source), Keyword.get(meta, :items, []), Keyword.get(meta, :alias)}
+  end
+
+  defp import_declaration_key(other), do: other
 
   # Mint one deterministic gensym per distinct declared fresh name, then rewrite
   # markers and plain references of those names. Counter lives in parser state so
