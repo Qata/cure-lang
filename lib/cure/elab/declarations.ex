@@ -516,7 +516,8 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
 
-    with {:ok, body_expr} <- MacroExpand.expand(body_expr, env),
+    with {:ok, body_expr} <-
+           MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
          {:ok, sig} <- function_signature(meta, env) do
       ctx = build_context(env, sig.telescope)
 

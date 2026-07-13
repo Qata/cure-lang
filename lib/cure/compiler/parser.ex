@@ -54,7 +54,8 @@ defmodule Cure.Compiler.Parser do
     active_macros: %{},
     computed_macros: %{},
     fresh_counter: 0,
-    literal_macros: %{}
+    literal_macros: %{},
+    expansion_context: nil
   ]
 
   # Keywords that can open a new top-level definition. Used by the
@@ -467,14 +468,15 @@ defmodule Cure.Compiler.Parser do
 
         input = {:macro_input, [keyword: keyword], inputs}
 
-        {{:computed_use,
-          [
-            keyword: keyword,
-            syntax_type: macro_syntax_type(keyword),
-            syntax_fields: macro_syntax_fields(rule.segments),
-            line: keyword_token.line,
-            col: keyword_token.col
-          ], [rule.elab, input]}, state}
+        meta = [
+          keyword: keyword,
+          syntax_type: macro_syntax_type(keyword),
+          syntax_fields: macro_syntax_fields(rule.segments),
+          line: keyword_token.line,
+          col: keyword_token.col
+        ]
+
+        {{:computed_use, put_expansion_context(meta, state.expansion_context), [rule.elab, input]}, state}
 
       {:error, progress, state} ->
         t = peek(state)
@@ -599,13 +601,20 @@ defmodule Cure.Compiler.Parser do
   # asking the ordinary expression parser to interpret it. Structural
   # delimiters belong to the enclosing parser, so `dedent`/`newline` remain in
   # the stream while punctuation delimiters are consumed by the macro rule.
-  defp match_segments(state, [{:raw_hole, %{name: name, delimiter: delimiter}} | rest], bindings, progress) do
+  defp match_segments(
+         state,
+         [{:raw_hole, %{name: name, delimiter: delimiter} = hole_meta} | rest],
+         bindings,
+         progress
+       ) do
     remaining = Enum.drop(state.tokens, state.pos)
 
     case MacroRaw.capture(remaining, delimiter) do
       {:ok, captured, _rest} ->
         state = advance_n(state, length(captured) + if(consume_raw_delimiter?(delimiter), do: 1, else: 0))
-        raw = {:raw_tokens, [line: raw_line(captured, state), delimiter: delimiter], captured}
+        raw_meta = [line: raw_line(captured, state), delimiter: delimiter]
+        raw_meta = if hole_meta[:delayed], do: Keyword.put(raw_meta, :delayed, true), else: raw_meta
+        raw = {:raw_tokens, raw_meta, captured}
         match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
 
       {:error, {:missing_raw_delimiter, "dedent"}} ->
@@ -614,7 +623,9 @@ defmodule Cure.Compiler.Parser do
         # leave EOF for the enclosing program parser.
         captured = Enum.take_while(remaining, &match?(%Token{type: :newline}, &1))
         state = advance_n(state, length(captured))
-        raw = {:raw_tokens, [line: raw_line(captured, state), delimiter: delimiter], captured}
+        raw_meta = [line: raw_line(captured, state), delimiter: delimiter]
+        raw_meta = if hole_meta[:delayed], do: Keyword.put(raw_meta, :delayed, true), else: raw_meta
+        raw = {:raw_tokens, raw_meta, captured}
         match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
 
       {:error, _} ->
@@ -944,8 +955,9 @@ defmodule Cure.Compiler.Parser do
 
   defp subst_holes(other, _bindings, _state), do: other
 
-  defp parse_raw_hole(tokens, parser_state) do
+  defp parse_raw_hole(tokens, parser_state, context \\ nil) do
     eof = %Token{type: :eof, value: nil, line: 0, col: 0}
+    context = context || parser_state.expansion_context
 
     state = %__MODULE__{
       tokens: tokens ++ [eof],
@@ -955,7 +967,8 @@ defmodule Cure.Compiler.Parser do
       builtin_macros: parser_state.builtin_macros,
       active_macros: parser_state.active_macros,
       computed_macros: parser_state.computed_macros,
-      literal_macros: parser_state.literal_macros
+      literal_macros: parser_state.literal_macros,
+      expansion_context: context
     }
 
     {exprs, state} = parse_program(state)
@@ -1004,9 +1017,15 @@ defmodule Cure.Compiler.Parser do
     {:literal, [subtype: :symbol], String.to_atom(module_name)}
   end
 
-  defp subst_lift_module_value({:raw_tokens, _meta, tokens}, _bindings, state, _module_hole, _module_name)
-       when is_list(tokens),
-       do: parse_raw_hole(tokens, state)
+  defp subst_lift_module_value({:raw_tokens, raw_meta, tokens}, _bindings, state, _module_hole, _module_name)
+       when is_list(raw_meta) and is_list(tokens) do
+    if Keyword.get(raw_meta, :delayed, false),
+      do: {:delayed_raw_tokens, raw_meta, tokens},
+      else: parse_raw_hole(tokens, state)
+  end
+
+  defp subst_lift_module_value({:delayed_raw_tokens, raw_meta, tokens}, _bindings, _state, _module_hole, _module_name),
+    do: {:delayed_raw_tokens, raw_meta, tokens}
 
   defp subst_lift_module_value({type, meta, children}, bindings, state, module_hole, module_name)
        when is_list(children) do
@@ -1029,9 +1048,19 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_map(value) do
-    Map.new(value, fn {key, item} ->
-      {key, subst_lift_module_value(item, bindings, state, module_hole, module_name)}
-    end)
+    value =
+      Map.new(value, fn {key, item} ->
+        {key, subst_lift_module_value(item, bindings, state, module_hole, module_name)}
+      end)
+
+    case Map.get(value, :body) do
+      {:delayed_raw_tokens, _raw_meta, tokens} when is_list(tokens) ->
+        context = Map.get(value, :callback_context)
+        Map.put(value, :body, parse_raw_hole(tokens, state, context))
+
+      _ ->
+        value
+    end
   end
 
   defp subst_lift_module_value(value, bindings, state, _module_hole, _module_name),
@@ -1055,14 +1084,24 @@ defmodule Cure.Compiler.Parser do
 
   defp subst_holes_meta_value({:variable, _meta, name} = variable, bindings, state) do
     case Map.fetch(bindings, name) do
-      {:ok, {:raw_tokens, _raw_meta, tokens}} -> parse_raw_hole(tokens, state)
-      {:ok, _value} -> subst_holes(variable, bindings, state)
-      :error -> variable
+      {:ok, {:raw_tokens, raw_meta, tokens}} when is_list(raw_meta) and is_list(tokens) ->
+        if Keyword.get(raw_meta, :delayed, false),
+          do: {:delayed_raw_tokens, raw_meta, tokens},
+          else: parse_raw_hole(tokens, state)
+
+      {:ok, _value} ->
+        subst_holes(variable, bindings, state)
+
+      :error ->
+        variable
     end
   end
 
   defp subst_holes_meta_value({:raw_tokens, _raw_meta, tokens}, _bindings, state),
     do: parse_raw_hole(tokens, state)
+
+  defp subst_holes_meta_value({:delayed_raw_tokens, raw_meta, tokens}, _bindings, _state),
+    do: {:delayed_raw_tokens, raw_meta, tokens}
 
   defp subst_holes_meta_value(v, bindings, state) when is_tuple(v),
     do: subst_holes(v, bindings, state)
@@ -1077,6 +1116,9 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp subst_holes_meta_value(v, _bindings, _state), do: v
+
+  defp put_expansion_context(meta, nil), do: meta
+  defp put_expansion_context(meta, context), do: Keyword.put(meta, :expansion_context, context)
 
   defp module_name_from_ast({:variable, _meta, name}), do: name
   defp module_name_from_ast({:literal, _meta, name}) when is_binary(name), do: name
@@ -5176,7 +5218,7 @@ defmodule Cure.Compiler.Parser do
         parse_lift_module_block(advance(state), behaviour, callbacks, declarations)
 
       %Token{type: :identifier, value: "callback"} ->
-        {callback, state} = parse_lift_callback(state)
+        {callback, state} = parse_lift_callback(state, behaviour)
         parse_lift_module_block(state, behaviour, [callback | callbacks], declarations)
 
       _ ->
@@ -5185,7 +5227,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_lift_callback(state) do
+  defp parse_lift_callback(state, behaviour) do
     token = peek(state)
     state = advance(state)
     name_token = peek(state)
@@ -5208,14 +5250,17 @@ defmodule Cure.Compiler.Parser do
     state = if return_type, do: expect(state, :assign), else: expect(state, :arrow)
     {body, state} = parse_expr_or_block(state)
 
-    {%{
-       name: name,
-       arity: length(params),
-       params: params,
-       return_type: return_type,
-       body: body,
-       line: token.line
-     }, state}
+    callback = %{
+      name: name,
+      arity: length(params),
+      params: params,
+      return_type: return_type,
+      body: body,
+      line: token.line,
+      callback_context: %{behaviour: behaviour, callback: name, arity: length(params)}
+    }
+
+    {callback, state}
   end
 
   defp parse_macro_block(state) do
@@ -5635,9 +5680,18 @@ defmodule Cure.Compiler.Parser do
 
       %Token{type: :lt} ->
         case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3), peek_at(state, 4), peek_at(state, 5),
-              peek_at(state, 6)} do
+              peek_at(state, 6), peek_at(state, 7)} do
+          {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "delayed"},
+           %Token{type: :identifier, value: "raw"}, %Token{type: :identifier, value: "until"},
+           %Token{type: :identifier, value: delimiter}, %Token{type: :gt}} ->
+            hole =
+              {:raw_hole, %{name: name, delimiter: delimiter, delayed: true, line: peek(state).line}}
+
+            state = Enum.reduce(1..8, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc], mode)
+
           {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "raw"},
-           %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}} ->
+           %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
             hole = {:raw_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
             state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
             parse_rule_segments(state, [hole | acc], mode)

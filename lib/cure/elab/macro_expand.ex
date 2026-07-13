@@ -31,7 +31,15 @@ defmodule Cure.Elab.MacroExpand do
   @spec expand(term(), Cure.Core.Env.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def expand(ast, env, opts) when is_list(opts) do
     limits = Keyword.merge(@default_limits, opts)
-    state = %{expansions: 0, nodes: 0, active: MapSet.new(), path: [], limits: limits}
+
+    state = %{
+      expansions: 0,
+      nodes: 0,
+      active: MapSet.new(),
+      path: [],
+      context: Keyword.get(opts, :callback_context),
+      limits: limits
+    }
 
     case expand_node(ast, env, state) do
       {:ok, expanded, _state} -> {:ok, expanded}
@@ -58,7 +66,10 @@ defmodule Cure.Elab.MacroExpand do
          {:ok, [elab, input], state} <- expand_children([elab, input], env, state),
          {:ok, state} <- begin_expansion(node, state),
          state = push_expansion(node, state),
-         meta = Keyword.put(meta, :provenance, expansion_chain(state)),
+         meta =
+           meta
+           |> Keyword.put(:provenance, expansion_chain(state))
+           |> put_expansion_context(state.context),
          {:ok, expanded} <- execute(meta, elab, input, env),
          {:ok, expanded, state} <- expand_node(expanded, env, state),
          {:ok, state} <- end_expansion(node, state) do
@@ -136,6 +147,9 @@ defmodule Cure.Elab.MacroExpand do
   defp budget_error(kind, state), do: {:macro_expansion_budget, kind, expansion_chain(state)}
 
   defp expansion_chain(%{path: path}), do: Enum.reverse(path)
+
+  defp put_expansion_context(meta, nil), do: meta
+  defp put_expansion_context(meta, context), do: Keyword.put(meta, :expansion_context, context)
 
   defp over_limit?(_value, :infinity), do: false
   defp over_limit?(value, limit) when is_integer(limit), do: value > limit

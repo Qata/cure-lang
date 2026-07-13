@@ -21,6 +21,13 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
              {:handle_info, 2}
            ]
 
+    assert meta[:callbacks]
+           |> Enum.map(& &1.callback_context)
+           |> Enum.map(&Map.take(&1, [:behaviour, :callback, :arity])) == [
+             %{behaviour: :GenServer, callback: :init, arity: 1},
+             %{behaviour: :GenServer, callback: :handle_info, arity: 2}
+           ]
+
     assert {:variable, _, "arg"} = hd(meta[:callbacks]).body
 
     assert {:ok, %{kind: :quoted_module, behaviour: :GenServer}} =

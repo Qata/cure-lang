@@ -49,8 +49,13 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
       {:computed_use, [keyword: "inner", line: 17, col: 5],
        [{:variable, [scope: :local], "missing_builder"}, {:macro_input, [], []}]}
 
-    assert {:error, {:computed_macro_error, meta, _reason}} = MacroExpand.expand(node, env)
+    assert {:error, {:computed_macro_error, meta, _reason}} =
+             MacroExpand.expand(node, env,
+               callback_context: %{behaviour: :gen_server, callback: :handle_info, arity: 2}
+             )
+
     assert [%{keyword: "inner", line: 17, col: 5}] = meta[:provenance]
+    assert meta[:expansion_context] == %{behaviour: :gen_server, callback: :handle_info, arity: 2}
   end
 
   test "an expansion budget reports the complete active invocation chain" do

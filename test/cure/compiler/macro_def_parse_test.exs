@@ -90,6 +90,14 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert [{:optional, [{:hole, %{name: "value", kind: "Nat"}}]}] = optional.segments
   end
 
+  test "a delayed raw hole retains its delayed-slot marker" do
+    node =
+      parse!("macro Lift\n  syntax lift <body: delayed raw until dedent> becomes body\n")
+
+    assert {:macro_def, _meta, [rule]} = node
+    assert [{:raw_hole, %{name: "body", delimiter: "dedent", delayed: true}}] = rule.segments
+  end
+
   test "a malformed hole (missing closing `>`) records a :malformed_hole error" do
     {:ok, tokens} =
       Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)

@@ -211,7 +211,7 @@ defmodule Cure.Compiler.LiftModule do
     end
   end
 
-  defp callback_definition(%{name: name, params: params, return_type: return_type, body: body, line: line})
+  defp callback_definition(callback = %{name: name, params: params, return_type: return_type, body: body, line: line})
        when is_atom(name) and is_list(params) and is_tuple(body) do
     {:ok,
      {:function_def,
@@ -222,7 +222,8 @@ defmodule Cure.Compiler.LiftModule do
         visibility: :public,
         arity: length(params),
         line: line,
-        col: 1
+        col: 1,
+        callback_context: Map.get(callback, :callback_context)
       ], [body]}}
   end
 
