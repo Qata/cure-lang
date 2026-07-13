@@ -4,6 +4,14 @@ mod Std.App
   ## an ordinary lifted Application module; root-supervisor startup and
   ## lifecycle phases are layered on top of this floor.
   macro AppContainers
+    syntax app <name: ModuleName> phase <phase: Code> <phase_body: delayed raw until dedent> contextual becomes lift module Cure.App.name
+      use Std.Otp
+      use Std.App
+      behaviour application
+      callback start(kind: t, args: a) returns Tuple(Atom, Atom) = %[:ok, :undefined]
+      callback stop(state: s) returns Atom = :ok
+      callback start_phase(phase: Atom, kind: t, args: a) returns Atom = phase_body
+
     syntax app <name: ModuleName> root <root: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
       use Std.Otp
       use Std.App

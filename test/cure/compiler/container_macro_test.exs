@@ -129,6 +129,37 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert function_exported?(module, :start, 2)
   end
 
+  test "app phase syntax emits an ordinary start phase callback" do
+    source = """
+    app Cure.PhasedApp phase :warm_cache
+      :ok
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.PhasedApp"
+    assert function_exported?(module, :start_phase, 3)
+    assert apply(module, :start_phase, [:warm_cache, :normal, []]) == :ok
+  end
+
+  test "app phase syntax rejects an effectful body with an atom callback result" do
+    source = """
+    app Cure.ContextualApp phase :warm_cache
+      beam_ops self
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
+  test "app phase syntax rejects multi-expression phase bodies" do
+    source = """
+    app Cure.InvalidPhaseApp phase :warm_cache
+      :ok
+      :ok
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "typed app lifecycle annotations reject mismatched callback bodies" do
     source = """
     macro TypedApp
