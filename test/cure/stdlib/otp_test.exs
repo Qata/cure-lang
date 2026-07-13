@@ -25,8 +25,10 @@ defmodule Cure.Stdlib.OtpTest do
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
     assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
-    assert :self in locals and :tell in locals and :call in locals and :cast in locals
-    for op <- [:tell, :call, :cast], do: assert(effect_result?(Env.get_def(env, op).type))
+    assert :self in locals and :spawn in locals and :spawn_link in locals and :tell in locals and
+             :call in locals and :cast in locals
+    for op <- [:spawn, :spawn_link, :tell, :call, :cast],
+        do: assert(effect_result?(Env.get_def(env, op).type))
   end
 
   test "the typed layer owns the public algebra; only Raw contains externs" do
@@ -37,6 +39,8 @@ defmodule Cure.Stdlib.OtpTest do
 
     for op <- [
           :self,
+          :spawn,
+          :spawn_link,
           :tell,
           :call,
           :cast,

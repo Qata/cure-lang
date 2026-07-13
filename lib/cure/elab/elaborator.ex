@@ -268,8 +268,12 @@ defmodule Cure.Elab.Elaborator do
       # their existing paths.
       String.contains?(name, ".") and Map.has_key?(env.defs, resolved) ->
         result =
-          with {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_global_app(env, resolved, present, ctx)
+          if Enum.any?(args, &match?({:lambda, _m, _b}, &1)) do
+            elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx)
+          else
+            with {:ok, present} <- map_present_args(args, names, ctx, env) do
+              elaborate_global_app(env, resolved, present, ctx)
+            end
           end
 
         case result do
@@ -1441,7 +1445,25 @@ defmodule Cure.Elab.Elaborator do
             end
           end
 
-        case union_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+        lambda_first =
+          if Enum.any?(args, &match?({:lambda, _m, _b}, &1)) do
+            resolved = resolve_def_key(env, name, atom)
+
+            if Map.has_key?(env.defs, resolved) do
+              case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
+                {:ok, term, _type} ->
+                  case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+                    :ok -> {:ok, term}
+                    {:error, _} -> nil
+                  end
+
+                {:error, _} ->
+                  nil
+              end
+            end
+          end
+
+        case lambda_first || union_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
           {:ok, _} = ok ->
             ok
 

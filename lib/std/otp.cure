@@ -80,6 +80,12 @@ mod Std.Otp
   ## The calling process's own typed pid; `m` inferred from how the result is used.
   fn self() -> Effect(Pid(m)) = raw_self()
 
+  ## Spawn a nullary process function and return its indexed handle.
+  fn spawn(thunk: () -> Unit) -> Effect(Pid(m)) = raw_spawn(thunk)
+
+  ## Spawn and link a nullary process function to the calling process.
+  fn spawn_link(thunk: () -> Unit) -> Effect(Pid(m)) = raw_spawn_link(thunk)
+
   ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
   ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim

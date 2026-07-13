@@ -1038,7 +1038,10 @@ this is compiler support, not a runtime workaround. Focused coverage is 18
 passing tests, and `mix compile --warnings-as-errors` is clean. No
 `lib/cure/core/*` file changed. Process creation, supervision/application
 descriptors, and raw-import visibility remain explicit Phase 2/3 work where
-their transparent macro and module-context machinery belongs.
+their transparent macro and module-context machinery belongs. The raw boundary
+now also declares effect-typed `spawn` and `spawn_link`, with checked wrappers;
+their behavior-specific message index still requires the callback context
+planned for Phase 3.
 
 Implement the foundation in standard-library code over `Std.Otp.Raw`:
 
@@ -1115,7 +1118,12 @@ Suggested commit:
 
 ### Phase 3 — Implement `beam_ops` over the algebra
 
-Define the operation macro in the standard library:
+Define the operation macro in the standard library. The raw process-creation
+floor is present (`raw_spawn`/`raw_spawn_link` plus ordinary `Std.Otp`
+wrappers), and the elaborator now threads expected result types through
+qualified calls carrying lambda arguments. The remaining operation work must
+introduce an explicit behavior context so those wrappers can mint `Pid(m)` with
+the callback's message code instead of leaving `m` undetermined:
 
 1. Add a closed operation vocabulary for `self`, `send`/`tell`, `call`,
    `cast`, `spawn`, `start_link`, `stop`, timers, monitors, and links.

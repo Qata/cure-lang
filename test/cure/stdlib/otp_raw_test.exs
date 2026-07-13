@@ -28,6 +28,8 @@ defmodule Cure.Stdlib.OtpRawTest do
 
   test "the module elaborates on the dependent pipeline", %{locals: locals} do
     assert :raw_self in locals
+    assert :raw_spawn in locals
+    assert :raw_spawn_link in locals
     assert :raw_send in locals
     assert :raw_call in locals
   end
@@ -40,6 +42,8 @@ defmodule Cure.Stdlib.OtpRawTest do
   test "every side-effecting op returns Effect(_) — the purity lie is closed", %{env: env} do
     for name <- [
           :raw_send,
+          :raw_spawn,
+          :raw_spawn_link,
           :raw_cast,
           :raw_call,
           :raw_monitor,
