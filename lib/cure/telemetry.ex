@@ -11,7 +11,7 @@ defmodule Cure.Telemetry do
   ## Event namespace
 
       [:cure, :pipeline, <stage>]  (lexer / parser / type_checker / codegen /
-                                   fsm_verifier / registry)
+                                   registry)
 
   Each event carries:
 
@@ -27,7 +27,7 @@ defmodule Cure.Telemetry do
 
   use GenServer
 
-  @stages [:lexer, :parser, :type_checker, :codegen, :fsm_verifier, :registry]
+  @stages [:lexer, :parser, :type_checker, :codegen, :registry]
 
   # -- Public API -------------------------------------------------------------
 

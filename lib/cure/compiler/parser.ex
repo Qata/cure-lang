@@ -6457,7 +6457,7 @@ defmodule Cure.Compiler.Parser do
 
   defp extract_literal_value({:literal, _, val}), do: val
 
-  # `@extern(Elixir.Cure.FSM.Builtins, :f, 1)` parses the first argument
+  # `@extern(Some.Foreign.Module, :f, 1)` parses the first argument
   # as a chain of attribute accesses rooted in a PascalCase variable.
   # Collapse that chain to an atom so codegen receives a literal atom.
   defp extract_literal_value({:attribute_access, _, _} = ast) do

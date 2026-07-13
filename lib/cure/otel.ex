@@ -55,7 +55,7 @@ defmodule Cure.OTel do
 
   alias Cure.Pipeline.Events
 
-  @stages [:lexer, :parser, :type_checker, :codegen, :fsm_verifier, :sup_verifier, :app_verifier, :registry]
+  @stages [:lexer, :parser, :type_checker, :codegen, :registry]
 
   @ctx_key {__MODULE__, :ctx}
 

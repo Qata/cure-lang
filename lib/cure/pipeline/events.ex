@@ -2,8 +2,8 @@ defmodule Cure.Pipeline.Events do
   @moduledoc """
   PubSub event system for the Cure compilation pipeline.
 
-  Every stage of the compilation pipeline (lexer, parser, type checker, codegen,
-  FSM verifier) emits structured events through this module. External tools such
+  Every stage of the compilation pipeline (lexer, parser, type checker, and
+  codegen) emits structured events through this module. External tools such
   as LSPs, profilers, debuggers, and IDE plugins can subscribe to these events
   to observe compilation in real time.
 
@@ -11,7 +11,7 @@ defmodule Cure.Pipeline.Events do
 
   Events are 4-tuples: `{stage, event_type, payload, metadata}`
 
-  - `stage` -- the pipeline stage (`:lexer`, `:parser`, `:type_checker`, `:codegen`, `:fsm_verifier`)
+  - `stage` -- the pipeline stage (`:lexer`, `:parser`, `:type_checker`, or `:codegen`)
   - `event_type` -- stage-specific atom (e.g. `:token_produced`, `:node_parsed`, `:error`)
   - `payload` -- the data (token, AST node, type, error struct, etc.)
   - `metadata` -- `%{file: String.t(), line: pos_integer(), timestamp: integer()}`
@@ -39,10 +39,8 @@ defmodule Cure.Pipeline.Events do
   """
 
   # `:registry` covers out-of-band lifecycle events from the package
-  # registry and transparency log; `:sup_verifier` covers the structural
-  # verification pass for `sup` containers; `:app_verifier` covers the
-  # structural verification pass for `app` containers (v0.26.0);
-  # `:synthesis` covers the typed-hole candidate-synthesis engine and
+  # registry and transparency log; `:synthesis` covers the typed-hole
+  # candidate-synthesis engine and
   # `:doc_mermaid` the Mermaid diagram emitter for `cure doc`
   # (v0.27.0). Every other stage maps to one of the compilation
   # pipeline phases.
@@ -51,9 +49,6 @@ defmodule Cure.Pipeline.Events do
           | :parser
           | :type_checker
           | :codegen
-          | :fsm_verifier
-          | :sup_verifier
-          | :app_verifier
           | :registry
           | :synthesis
           | :doc_mermaid

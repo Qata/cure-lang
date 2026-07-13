@@ -1633,8 +1633,8 @@ defmodule Cure.Compiler.Printer do
   defp maybe_prepend_decorator(result, _, _, _, _), do: result
 
   # An `@extern` module/function reference. A dotted or PascalCase module atom
-  # (`:"Elixir.Cure.Actor.Builtins"`) came from the bare dotted surface form
-  # `Elixir.Cure.Actor.Builtins` and must round-trip WITHOUT a leading colon
+  # (`:"Some.Foreign.Module"`) came from the bare dotted surface form
+  # `Some.Foreign.Module` and must round-trip WITHOUT a leading colon
   # (rendering `:Elixir.Cure...` would reparse as attribute-access, not an
   # atom). A plain lowercase atom (`:erlang`) keeps its symbol colon.
   defp extern_ref_to_string(ref) when is_atom(ref) do
