@@ -1,4 +1,3 @@
 ## Transparent application example.
 
-app Cure.CureMotif
-  fn application_floor() -> Int = 0
+app Cure.CureMotif root Cure.Motif.Orchestra

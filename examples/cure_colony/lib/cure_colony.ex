@@ -97,21 +97,21 @@ defmodule CureColony do
 
   @doc "Return the current payload for a worker pid."
   @spec worker_state(pid()) :: integer()
-  def worker_state(worker), do: elem(:sys.get_state(worker), 1)
+  def worker_state(worker), do: :sys.get_state(worker)
 
   @doc "Return the echo actor's current payload (the last message it saw)."
   @spec echo_state() :: term()
   def echo_state do
     case echo() do
       nil -> nil
-      pid -> elem(:sys.get_state(pid), 1)
+      pid -> :sys.get_state(pid)
     end
   end
 
   # -- Internals ------------------------------------------------------------
 
   defp send_sync(pid, msg) do
-    send(pid, msg)
+    :gen_server.cast(pid, msg)
     _ = :sys.get_state(pid)
     :ok
   end

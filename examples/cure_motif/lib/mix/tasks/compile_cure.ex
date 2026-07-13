@@ -61,7 +61,7 @@ defmodule Mix.Tasks.CompileCure do
         case Cure.Compiler.compile_file(path,
                output_dir: @output_dir,
                emit_events: false,
-               check_types: false
+               check_types: true
              ) do
           {:ok, module, _warnings} ->
             Mix.shell().info("Compiled #{path} -> #{module}")

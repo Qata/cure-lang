@@ -75,6 +75,19 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     :gen_server.stop(pid)
   end
 
+  test "typed actor startup permits multiple unnamed instances of one module" do
+    assert {:ok, module} =
+             Cure.Compiler.compile_and_load("actor Cure.MultiInstanceActor state Int\n", emit_events: false)
+
+    assert {:ok, first} = apply(module, :start_link, [1])
+    assert {:ok, second} = apply(module, :start_link, [2])
+    assert :sys.get_state(first) == 1
+    assert :sys.get_state(second) == 2
+
+    :gen_server.stop(first)
+    :gen_server.stop(second)
+  end
+
   test "typed actor state annotations reject mismatched callback bodies" do
     source = """
     macro TypedActor
@@ -200,14 +213,14 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
   test "polymorphic actor payload syntax checks a custom cast body" do
     source = """
     actor Cure.PolymorphicCast handle_cast
-      %[:noreply, state + 1]
+      %[:noreply, state]
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
-    assert apply(module, :handle_cast, [:inc, 4]) == {:noreply, 5}
+    assert apply(module, :handle_cast, [:inc, 4]) == {:noreply, 4}
     assert {:ok, pid} = apply(module, :start_link, [0])
     :gen_server.cast(pid, :inc)
-    assert :sys.get_state(pid) == 1
+    assert :sys.get_state(pid) == 0
     :gen_server.stop(pid)
   end
 

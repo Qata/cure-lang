@@ -19,14 +19,15 @@ mix test
 The source files use standard-library syntax directly:
 
 ```cure
-fsm Cure.Envelope with 0
-  fn initial_state() -> Atom = :silent
+fsm Cure.Envelope state Int initial :silent events Atom transition
+  else -> %[:next_state, state, data]
 
-actor Cure.Voice with 0
+actor Cure.Voice state Tuple(Atom, Int, Int) initial %[:silent, 0, 0] messages Tuple(Atom, Int, Int) handle_cast
+  %[:noreply, state]
 
-sup Cure.Motif.Orchestra
+sup Cure.Motif.Orchestra children [child_spec Cure.Clock :clock, child_spec Cure.Sequencer :sequencer, child_spec Cure.Voice :voice]
 
-app Cure.CureMotif
+app Cure.CureMotif root Cure.Motif.Orchestra
 ```
 
 Each form expands recursively to a checked `lift module`. `beam_ops` and the
@@ -36,9 +37,8 @@ ordinary parsed Cure declarations and a generic lifted-module request.
 ## Domain focus
 
 `motif.cure` contains the MIDI-domain aliases, ADTs, and pure rendering
-functions. `Std.Vector` supplies the length-indexed family used by the domain
-tests. The Elixir piano-roll renderer and application harness are conventional
-interop code around the generated modules.
+functions over typed runtime lists. The Elixir piano-roll renderer and
+application harness are conventional interop code around the generated modules.
 
 ## Current boundary
 

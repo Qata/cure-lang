@@ -1,7 +1,7 @@
 # cure_moneta
 
 A money and ledger library written in Cure. The example focuses on ADTs,
-records, protocols, dependent data, and checked foreign calls. Its process
+records, dependent data, and checked foreign calls. Its process
 surface uses the transparent standard-library macros rather than a bespoke
 FSM compiler.
 
@@ -28,8 +28,7 @@ rec Ledger
 ```
 
 The ledger operations are pure and return `Result` values. Currency rendering,
-functional record updates, protocol dispatch, and the float FFI are all ordinary
-Cure declarations.
+functional record updates, and the float FFI are all ordinary Cure declarations.
 
 ## Transparent process floor
 

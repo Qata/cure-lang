@@ -1435,10 +1435,13 @@ library owns the vocabulary and lowering. `DepGraph` now discovers generic
 `lift_module` units and no longer classifies `:actor`, `:fsm`, `:supervisor`,
 or `:app` as compiler module kinds. `actor` and `fsm` are also no longer
 lexer keywords; they use the same generic identifier macro dispatch as every
-user-defined vocabulary. The in-repo OTP examples have been
-migrated from the removed transition/handler parser to ordinary transparent
-macro bodies with explicit `Cure.*` module names; the remaining example work is
-to restore their full typed callback behavior on top of the planned algebra.
+user-defined vocabulary. The in-repo OTP examples have been migrated from the
+removed transition/handler parser to ordinary transparent macro bodies with
+explicit `Cure.*` module names. Colony, Forge, Turnstile, Moneta, and Motif now
+compile with typed callback bodies; their Elixir facades use standard casts,
+statem calls, and `:sys.get_state/1` rather than retired generated helpers.
+Moneta's host facade performs an explicit map-to-Cure-tuple conversion at its
+boundary while its Cure implementation remains ordinary functions.
 Project application discovery and LSP tooling now consume lifted-module
 metadata and generic AST nodes rather than retired OTP container shapes, and
 the LSP no longer synthesizes FSM transition or lifecycle symbols
@@ -1493,17 +1496,16 @@ from the present-tense forbidden-remnant gate; stale host harnesses in older
 example projects remain an explicit migration surface, not current proofs.
 The Colony and Forge example READMEs and compile tasks now describe lifted
 module emission and no longer advertise source-string compiler loading
-(`b4bf53cb`). Their older Elixir facades/tests still need a full behavioral
-migration before the example-project gate can close.
+(`b4bf53cb`). Their Elixir facades/tests and the Motif facade have now been
+migrated to the transparent callback ABI; duplicate unnamed actor starts have
+a compiler regression test.
 The current forbidden-remnant audit confirms that the active compiler path is
 clean: no `__otp_container`, `ContainerMacro`, `OtpMacro`, `Code.compile_string`,
 or direct code-server loading remains in compiler/elaborator modules. The
-remaining non-historical matches are limited to the older Turnstile, Moneta,
-Motif, Colony, and Forge host facades/tests, which still mention retired
-`Cure.FSM.*`, `Cure.Actor.Runtime`, or compiler-owned naming in their prose and
-helpers. The Motif compile task also contained a stale description of eager
-source-string/container compilation. These are the remaining example-project
-migration surface; they are not compiler-path evidence.
+non-historical example references to retired `Cure.FSM.*`, `Cure.Actor.Runtime`,
+old `get_state/1` helpers, and eager source-string/container compilation have
+been removed from the migrated surfaces. Historical documentation and ordinary
+Elixir `@impl` annotations remain unrelated to compiler OTP knowledge.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new

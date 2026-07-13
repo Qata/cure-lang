@@ -1,4 +1,10 @@
-## Transparent FSM example with an integer payload.
+## Transparent FSM envelope lifecycle.
 
-fsm Cure.Envelope with 0
-  fn initial_state() -> Atom = :silent
+fsm Cure.Envelope state Int initial :silent events Atom transition
+  pickup
+    `and`(state == :silent, event == :note_on) -> %[:next_state, :attack, data]
+    `and`(state == :attack, event == :on_timer) -> %[:next_state, :sustain, data]
+    `and`(state == :sustain, event == :note_off) -> %[:next_state, :release, data]
+    `and`(state == :release, event == :on_timer) -> %[:next_state, :silent, data]
+    event == :kill -> %[:next_state, :silent, data]
+    else -> %[:next_state, state, data]

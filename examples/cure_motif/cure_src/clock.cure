@@ -1,4 +1,7 @@
-## Transparent actor example with an integer payload.
+## Transparent actor example with a typed integer payload.
 
-actor Cure.Clock with 0
-  fn initial_count() -> Int = 0
+actor Cure.Clock state Int initial 0 messages Atom handle_cast
+  pickup
+    message == :tick -> %[:noreply, state + 1]
+    message == :reset -> %[:noreply, 0]
+    else -> %[:noreply, state]

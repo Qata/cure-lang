@@ -121,7 +121,7 @@ defmodule CureForge do
           required(:errors) => non_neg_integer()
         }
   def metrics do
-    {r, e} = elem(:sys.get_state(metrics_pid()), 1)
+    {r, e} = :sys.get_state(metrics_pid())
     %{requests: r, errors: e}
   end
 
@@ -154,7 +154,7 @@ defmodule CureForge do
     pid = logger_pid()
     cap = Application.get_env(:cure_forge, :max_log_lines, 16)
 
-    lines = elem(:sys.get_state(pid), 1)
+    lines = :sys.get_state(pid)
     send_sync(pid, :clear)
     lines = Enum.reverse(lines)
 
@@ -168,13 +168,13 @@ defmodule CureForge do
   Return the current logger buffer size without draining it. The
   queue actor does not expose a dedicated `:size` message (we keep
   the Cure source minimal), so the facade reads the buffer directly
-  through the compiled actor's `get_state/1` and returns its length.
+  through the compiled actor's process state and returns its length.
   """
   @spec log_size() :: non_neg_integer()
   def log_size do
     case logger_pid() do
       nil -> 0
-      pid -> elem(:sys.get_state(pid), 1) |> length()
+      pid -> :sys.get_state(pid) |> length()
     end
   end
 
@@ -192,14 +192,14 @@ defmodule CureForge do
   Return the current queue length.
 
   Same approach as `log_size/0`: the facade reads the queue's
-  payload (a plain list) straight from the generated `get_state/1`
+  payload (a plain list) straight from the generated process state
   and reports its length, so the Cure source can stay minimal.
   """
   @spec queue_size() :: non_neg_integer()
   def queue_size do
     case queue_pid() do
       nil -> 0
-      pid -> elem(:sys.get_state(pid), 1) |> length()
+      pid -> :sys.get_state(pid) |> length()
     end
   end
 
@@ -207,8 +207,8 @@ defmodule CureForge do
   Drain every task currently in the queue into the pool.
 
   For each dequeued task `t`, this function sends `{:task, t}` to
-  the pool via the Melquiades Operator (`pid <-| msg` in Cure, which
-  lowers to Erlang's `!`), waits for the pool to notify its outcome,
+  the pool via a standard cast, waits for the pool state to reflect its
+  outcome,
   and forwards that outcome to the metrics actor as an `:observe`
   message. The round trip exercises the full flow:
 
@@ -223,7 +223,7 @@ defmodule CureForge do
     q_pid = queue_pid()
     p_pid = pool_pid()
 
-    tasks = elem(:sys.get_state(q_pid), 1) |> Enum.reverse()
+    tasks = :sys.get_state(q_pid) |> Enum.reverse()
     send_sync(q_pid, :clear)
 
     Enum.each(tasks, fn task ->
@@ -249,7 +249,7 @@ defmodule CureForge do
           required(:failed) => non_neg_integer()
         }
   def pool_state do
-    {done, failed} = elem(:sys.get_state(pool_pid()), 1)
+    {done, failed} = :sys.get_state(pool_pid())
     %{done: done, failed: failed}
   end
 
@@ -267,37 +267,4 @@ defmodule CureForge do
 
   defp send_sync(nil, _msg), do: :no_target
 
-  # Spawn a short-lived child process that becomes the actor's
-  # `:caller`, send the trigger message from that child, and wait for
-  # the matching notification to arrive. The child's mailbox is
-  # isolated from the caller's, so multiple overlapping operations do
-  # not race.
-  defp receive_notification(pid, trigger, matcher) do
-    parent = self()
-
-    spawn_link(fn ->
-      send(pid, trigger)
-      _ = :sys.get_state(pid)
-
-      loop = fn loop ->
-        receive do
-          msg ->
-            case matcher.(msg) do
-              {:ok, value} -> send(parent, {:cure_forge_notify, self(), value})
-              :skip -> loop.(loop)
-            end
-        after
-          1_000 -> send(parent, {:cure_forge_notify, self(), :timeout})
-        end
-      end
-
-      loop.(loop)
-    end)
-
-    receive do
-      {:cure_forge_notify, _child, value} -> value
-    after
-      1_500 -> {:error, :timeout}
-    end
-  end
 end
