@@ -65,6 +65,14 @@ defmodule Cure.Compiler.ContainerMacroTest do
     assert match?({:ok, _}, apply(module, :start_link, []))
   end
 
+  test "supervisor payload syntax expands to a zero-argument starter" do
+    assert {:ok, module} =
+             Cure.Compiler.compile_and_load("sup Cure.PayloadSup with 0\n", emit_events: false)
+
+    assert module == :"Cure.PayloadSup"
+    assert match?({:ok, _}, apply(module, :start_link, []))
+  end
+
   test "no per-container compiler modules remain in the lowering path" do
     refute Code.ensure_loaded?(Cure.Actor.Compiler)
     refute Code.ensure_loaded?(Cure.FSM.Compiler)

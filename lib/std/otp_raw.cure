@@ -50,7 +50,7 @@ mod Std.Otp.Raw
   fn raw_statem_start_link(name: Tuple(Atom, Atom), module: Atom, args: List(a), opts: List(Atom)) -> Effect(Tuple)
 
   @extern(:supervisor, :start_link, 3)
-  fn raw_supervisor_start_link(name: Tuple(Atom, Atom), module: Atom, args: List(Atom)) -> Effect(Tuple)
+  fn raw_supervisor_start_link(name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(Tuple)
 
   ## Send `msg` to `dest`. Fire-and-forget; the effect is performing the send.
   @extern(:erlang, :send, 2)

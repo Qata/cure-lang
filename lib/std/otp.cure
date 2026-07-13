@@ -103,6 +103,9 @@ mod Std.Otp
   fn start_supervisor(module: Atom) -> Effect(Tuple) =
     raw_supervisor_start_link(%[:local, module], module, assert_type [] : List(Atom))
 
+  fn start_supervisor_with(module: Atom, args: List(a)) -> Effect(Tuple) =
+    raw_supervisor_start_link(%[:local, module], module, args)
+
   ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
   ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
