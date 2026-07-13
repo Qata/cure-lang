@@ -1,15 +1,15 @@
 @group(:system)
 mod Std.App
-  ## `app` is a standard-library macro. Its raw body is reparsed by the
-  ## ordinary Cure parser and lowered by the generic OTP backend.
+  ## `app` is a transparent standard-library macro. The base application is
+  ## an ordinary lifted Application module; root-supervisor startup and
+  ## lifecycle phases are layered on top of this floor.
   macro AppContainers
-    syntax app <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:app, name, payload, body)
-      example app Cure.Example expands app Cure.Example
-    explain
-      Identifier => "an application name is required"
-      Code => "an application payload must be a Cure expression"
-      keyword "with" => "application payloads are introduced with the with keyword"
-      keyword "app" => "starts an OTP application container"
+    syntax app <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour Application
+      callback start(kind: t, args: a) -> %[:ok, :undefined]
+      callback stop(state: s) -> :ok
+      body
 
   ## Start, stop, and inspect OTP applications from Cure.
   ##

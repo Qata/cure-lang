@@ -21,7 +21,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
                  emit_events: false
                )
 
-      assert {:ok, Cure.AtomVMTestApp, _} =
+      assert {:ok, :"Cure.AtomVMTestApp", _} =
                Cure.Compiler.compile_string("app Cure.AtomVMTestApp\n",
                  output_dir: out,
                  emit_events: false
@@ -35,7 +35,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
            {:clause, 1, [], [],
             [
               remote_call(:"Cure.AtomVMTestSup", :start_link, []),
-              remote_call(Elixir.Cure.AtomVMTestApp, :start, [{:atom, 1, :normal}, {nil, 1}]),
+              remote_call(:"Cure.AtomVMTestApp", :start, [{:atom, 1, :normal}, {nil, 1}]),
               remote_call(:io, :format, [{:string, 1, ~c"CURE_ATOMVM_PROOF_OK~n"}, {nil, 1}])
             ]}
          ]}
