@@ -57,6 +57,30 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert match?({:ok, _}, apply(module, :start_link, []))
   end
 
+  test "typed actor syntax shares one state type across callbacks" do
+    source = "actor Cure.TypedActor state Int\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.TypedActor"
+    assert apply(module, :init, [7]) == {:ok, 7}
+    assert apply(module, :handle_cast, [:message, 7]) == {:noreply, 7}
+    assert apply(module, :handle_info, [:info, 7]) == {:noreply, 7}
+    assert apply(module, :code_change, [:old, 7, :extra]) == {:ok, 7}
+  end
+
+  test "typed actor state annotations reject mismatched callback bodies" do
+    source = """
+    macro TypedActor
+      syntax typed_actor <name: ModuleName> state <state_type: Type> becomes lift module name
+        behaviour gen_server
+        typealias State = state_type
+        callback init(initial: State) returns Tuple(Atom, State) = %[:ok, true]
+    typed_actor Cure.InvalidTypedActor state Int
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "fsm payload syntax expands to a zero-argument starter" do
     assert {:ok, module} =
              Cure.Compiler.compile_and_load("fsm Cure.PayloadFsm with 0\n", emit_events: false)

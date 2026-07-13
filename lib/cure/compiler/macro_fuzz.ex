@@ -133,6 +133,17 @@ defmodule Cure.Compiler.MacroFuzz do
            generator: Term.gen_term(ctx, {:type, 0})
          }}
 
+      "Type" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :type,
+           env: generation_env,
+           ctx: ctx,
+           goal: nil,
+           generator: Gen.member_of([{:raw_text, "Int"}, {:raw_text, "Bool"}, {:raw_text, "Atom"}])
+         }}
+
       "raw until " <> _delimiter ->
         {:ok,
          %{
@@ -680,6 +691,16 @@ defmodule Cure.Compiler.MacroFuzz do
   defp check_samples(%{domain: :module_name}, terms) do
     case Enum.find(terms, fn
            {:raw_text, name} -> not Regex.match?(~r/^Cure\.[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*$/, name)
+           _ -> true
+         end) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: :type}, terms) do
+    case Enum.find(terms, fn
+           {:raw_text, text} -> not Regex.match?(~r/^[A-Z][A-Za-z0-9_.]*(?:\([^\n]*\))?$/, text)
            _ -> true
          end) do
       nil -> :ok

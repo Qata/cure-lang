@@ -1190,17 +1190,21 @@ module emits and runs through the common path.
 
 **STATUS: IN PROGRESS (2026-07-13).** The public `actor` syntax now expands
 to an ordinary lifted `GenServer` module and starts through the typed
-`Std.Otp.start_link` wrapper. The bootstrap floor is tested structurally and
-through the generic Unix runtime path.
+`Std.Otp.start_link` wrapper. In addition to the bootstrap form, the
+standard-library macro now accepts an explicit `state <Type>` clause and
+emits a module-local `State` alias shared by every state-bearing callback;
+the ordinary checker rejects a mismatched callback result. The bootstrap and
+typed floors are tested structurally and through the generic Unix runtime
+path.
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
 inside start, message, and stop bodies. The generic callback floor now carries
-explicit checked return types through `lift module`; the final callback
-contract must still preserve one shared actor state type across `init`,
-`handle_call`, `handle_cast`, `handle_info`, `terminate`, and `code_change`,
-and must keep request, message, reply, `from`, reason, version, and extra
-values distinct where their behavior requires it. `Any` is permitted only at
+explicit checked return types through `lift module`, and the typed actor floor
+shares one explicit state alias across all state-bearing callbacks. The final
+callback contract must still derive request/message/reply types from handlers,
+keep `from`, reason, version, and extra values distinct where their behavior
+requires it, and thread callback operation context. `Any` is permitted only at
 an explicitly marked raw BEAM/FFI boundary; it is not a universal callback
 type and must not be used to erase these relationships. Add positive and
 negative tests proving cross-callback state/result mismatches are rejected
